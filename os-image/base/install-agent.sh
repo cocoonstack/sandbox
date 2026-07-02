@@ -37,9 +37,10 @@ cat > /etc/systemd/system/cocoon-agent.service <<'EOF'
 Description=Cocoon agent (vsock command exec)
 Documentation=https://github.com/cocoonstack/cocoon-agent
 # Readiness signal for the whole sandbox: start as early as systemd allows.
-# vsock is compiled into the sandbox kernel; /dev/vsock exists via devtmpfs.
+# No After= at all: sandbox-init hands over a fully-assembled rootfs before
+# PID 1 runs and /dev/vsock is devtmpfs — measured, waiting for
+# local-fs.target cost ~140ms of pure ordering delay on the critical chain.
 DefaultDependencies=no
-After=local-fs.target
 Before=basic.target
 
 [Service]
