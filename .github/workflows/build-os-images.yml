@@ -1,10 +1,13 @@
 # Same shape as cocoon's build-os-images (detect changed image dirs, buildx
-# matrix, ghcr push, same-dir *.sh files injected as buildx secrets), with two
-# sandbox-specific changes:
-#   - two-stage build: flavors (FROM base) build only after base has pushed,
-#     with pull:true so they consume the base published in this run;
-#   - base builds receive BOOT_IMAGE pinned to boot/kernel/VERSION, so images
-#     track the kernel pin without hand-editing the Dockerfile default.
+# matrix, ghcr push, same-dir *.sh files injected as buildx secrets), with
+# sandbox-specific input tracking:
+#   - runs after every successful build-boot (workflow_run), rebuilding all
+#     images so kernel/initrd changes always reach the published images and
+#     never race the boot artifact they build FROM;
+#   - a push that also touches boot/** defers entirely to that workflow_run;
+#   - a base change rebuilds every flavor (they are FROM base);
+#   - base builds receive BOOT_IMAGE pinned to boot/kernel/VERSION, flavor
+#     builds receive BASE_IMAGE in this repo's namespace (fork-safe).
 name: build-os-images
 
 on:
@@ -12,6 +15,10 @@ on:
     branches: [main]
     paths:
       - "os-image/**"
+  workflow_run:
+    workflows: [build-boot]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       no-cache:
@@ -19,16 +26,23 @@ on:
         type: boolean
         default: false
 
+concurrency:
+  group: build-os-images-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   packages: write
 
 jobs:
   detect:
+    # workflow_run also fires for failed boot builds — only follow successes.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     outputs:
       base_matrix: ${{ steps.set-matrix.outputs.base_matrix }}
       flavor_matrix: ${{ steps.set-matrix.outputs.flavor_matrix }}
+      boot_changed: ${{ steps.set-matrix.outputs.boot_changed }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -39,26 +53,30 @@ jobs:
         id: set-matrix
         run: |
           MANUAL_NO_CACHE="${{ github.event.inputs.no-cache }}"
+          EVT="${{ github.event_name }}"
 
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            # On manual trigger, build everything
-            declare -A names
+          all_names() {
+            declare -gA names
             while IFS= read -r dockerfile; do
               [[ -z "$dockerfile" ]] && continue
               name=$(echo "$dockerfile" | cut -d'/' -f2)
               names[$name]=1
             done <<< "$(find os-image -name Dockerfile -type f)"
+          }
+
+          boot_changed="false"
+          if [[ "$EVT" == "workflow_dispatch" || "$EVT" == "workflow_run" ]]; then
+            # Manual trigger or fresh boot artifact: rebuild everything.
+            all_names
             all_changed=""
           else
             BEFORE="${{ github.event.before }}"
             if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
-              declare -A names
-              while IFS= read -r dockerfile; do
-                [[ -z "$dockerfile" ]] && continue
-                name=$(echo "$dockerfile" | cut -d'/' -f2)
-                names[$name]=1
-              done <<< "$(find os-image -name Dockerfile -type f)"
+              # First push: build-boot runs on it too — its workflow_run
+              # covers the images once the boot artifact exists.
+              all_names
               all_changed=""
+              boot_changed="true"
             else
               all_changed=$(git diff --name-only "$BEFORE" "${{ github.sha }}" -- 'os-image/' | sort -u)
               declare -A names
@@ -68,6 +86,15 @@ jobs:
                   names[$name]=1
                 fi
               done
+              # A push touching boot/** rebuilds the boot artifact; defer the
+              # image builds to that run's workflow_run instead of racing it.
+              if [[ -n "$(git diff --name-only "$BEFORE" "${{ github.sha }}" -- 'boot/' | head -1)" ]]; then
+                boot_changed="true"
+              fi
+              # Flavors are FROM base: a base change stales every flavor.
+              if [[ -n "${names[base]:-}" ]]; then
+                all_names
+              fi
             fi
           fi
 
@@ -125,12 +152,13 @@ jobs:
           }
           emit base_matrix "${base_entries[@]}"
           emit flavor_matrix "${flavor_entries[@]}"
+          echo "boot_changed=$boot_changed" >> "$GITHUB_OUTPUT"
 
           echo "Generated matrices: $(cat "$GITHUB_OUTPUT")"
 
   build-base:
     needs: detect
-    if: ${{ fromJson(needs.detect.outputs.base_matrix).include[0] != null }}
+    if: ${{ needs.detect.outputs.boot_changed != 'true' && fromJson(needs.detect.outputs.base_matrix).include[0] != null }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -210,7 +238,7 @@ jobs:
   # flavors build against the already-published base.
   build-flavors:
     needs: [detect, build-base]
-    if: ${{ !failure() && !cancelled() && fromJson(needs.detect.outputs.flavor_matrix).include[0] != null }}
+    if: ${{ !failure() && !cancelled() && needs.detect.outputs.boot_changed != 'true' && fromJson(needs.detect.outputs.flavor_matrix).include[0] != null }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -272,6 +300,11 @@ jobs:
           platforms: ${{ matrix.platforms }}
           push: true
           pull: true
+          # Fork-safe: without this, flavors would silently build FROM the
+          # upstream repo's base via the Dockerfile default. Assumes the
+          # single base:24.04 tag; revisit when a second base tag appears.
+          build-args: |
+            BASE_IMAGE=ghcr.io/${{ github.repository }}/base:24.04
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           secret-files: ${{ steps.secrets.outputs.files }}
