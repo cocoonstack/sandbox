@@ -85,10 +85,12 @@ run_once() {
   truncate -s "$COW_SIZE" "$cow"
   mkfs.ext4 -F -m 0 -q -E lazy_itable_init=1,lazy_journal_init=1,discard "$cow"
 
+  # image_type=raw is mandatory: the cocoonstack CH fork blocks sector-0
+  # writes on disks whose image type was autodetected rather than declared.
   local disk_args=() ids=() i=0 f layer_files
   IFS=, read -ra layer_files <<<"$LAYERS"
   for f in "${layer_files[@]}"; do
-    disk_args+=(--disk "path=$f,readonly=on,serial=l$i")
+    disk_args+=(--disk "path=$f,readonly=on,image_type=raw,serial=l$i")
     ids+=("l$i")
     i=$((i + 1))
   done
@@ -103,7 +105,7 @@ run_once() {
   t0=$(ts)
   "$CH_BIN" --cpus "boot=$CPUS" --memory "size=$MEM" \
     --kernel "$KERNEL" --initramfs "$INITRD" --cmdline "$cmdline" \
-    "${disk_args[@]}" --disk "path=$cow,serial=cow" \
+    "${disk_args[@]}" --disk "path=$cow,image_type=raw,serial=cow" \
     --serial "file=$log" --console off "${vsock_args[@]}" >"$work/ch.log" 2>&1 &
   ch=$!
 
