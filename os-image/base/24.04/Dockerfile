@@ -14,6 +14,12 @@ WORKDIR /build
 COPY shim/ .
 RUN cargo build --release && cp target/release/sandbox-shim /sandbox-shim
 
+# Staging so boot files + shim land as ONE image layer — every layer is one
+# more EROFS disk for sandbox-init to resolve and mount (~10-20ms each).
+FROM scratch AS extras
+COPY --from=shimbuild /sandbox-shim /sbin/sandbox-shim
+COPY --from=boot /boot/ /boot/
+
 FROM ubuntu:24.04
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
@@ -53,7 +59,6 @@ RUN --mount=type=secret,id=sandbox_install_agent \
     echo 'root:cocoon' | chpasswd && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=shimbuild /sandbox-shim /sbin/sandbox-shim
-COPY --from=boot /boot/ /boot/
+COPY --from=extras / /
 
 CMD ["/sbin/init"]
