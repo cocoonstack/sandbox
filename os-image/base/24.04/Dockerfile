@@ -9,6 +9,10 @@ FROM ${BOOT_IMAGE} AS boot
 FROM ubuntu:24.04
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
+# Content hash of the image dir's non-Dockerfile inputs (CI computes it).
+# Secret-mounted scripts never participate in layer cache keys — this ARG
+# busts the RUN below exactly when any input actually changes.
+ARG INPUTS_HASH=
 
 RUN --mount=type=secret,id=sandbox_install_agent \
     apt-get update && apt-get install -y --no-install-recommends \

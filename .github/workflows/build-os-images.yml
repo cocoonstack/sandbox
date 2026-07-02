@@ -193,6 +193,12 @@ jobs:
             type=raw,value=${{ matrix.tag }}
             type=sha,prefix=${{ matrix.tag }}-
 
+      - name: Hash image inputs
+        id: inputs
+        run: |
+          hash=$(find "os-image/${{ matrix.name }}" -type f ! -name Dockerfile -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+
       - name: Discover secret files
         id: secrets
         run: |
@@ -226,6 +232,7 @@ jobs:
           pull: true
           build-args: |
             BOOT_IMAGE=ghcr.io/${{ github.repository }}/boot:${{ steps.ver.outputs.kernel }}
+            INPUTS_HASH=${{ steps.inputs.outputs.hash }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           secret-files: ${{ steps.secrets.outputs.files }}
@@ -269,6 +276,12 @@ jobs:
             type=raw,value=${{ matrix.tag }}
             type=sha,prefix=${{ matrix.tag }}-
 
+      - name: Hash image inputs
+        id: inputs
+        run: |
+          hash=$(find "os-image/${{ matrix.name }}" -type f ! -name Dockerfile -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+
       - name: Discover secret files
         id: secrets
         run: |
@@ -305,6 +318,7 @@ jobs:
           # single base:24.04 tag; revisit when a second base tag appears.
           build-args: |
             BASE_IMAGE=ghcr.io/${{ github.repository }}/base:24.04
+            INPUTS_HASH=${{ steps.inputs.outputs.hash }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           secret-files: ${{ steps.secrets.outputs.files }}
