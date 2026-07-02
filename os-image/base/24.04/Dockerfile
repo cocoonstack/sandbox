@@ -17,7 +17,9 @@ RUN cargo build --release && cp target/release/sandbox-shim /sandbox-shim
 # Staging so boot files + shim land as ONE image layer — every layer is one
 # more EROFS disk for sandbox-init to resolve and mount (~10-20ms each).
 FROM scratch AS extras
-COPY --from=shimbuild /sandbox-shim /sbin/sandbox-shim
+# /usr/sbin, not /sbin: ubuntu's /sbin is a usrmerge symlink and a real
+# /sbin directory in this stage would fail the final whole-root COPY.
+COPY --from=shimbuild /sandbox-shim /usr/sbin/sandbox-shim
 COPY --from=boot /boot/ /boot/
 
 FROM ubuntu:24.04
