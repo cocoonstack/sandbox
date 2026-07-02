@@ -6,6 +6,14 @@ ARG BOOT_IMAGE=ghcr.io/cocoonstack/sandbox/boot:6.18.37
 
 FROM ${BOOT_IMAGE} AS boot
 
+# sandbox-shim (WS-3): sandbox-init hands off here; it forks cocoon-agent
+# before exec'ing systemd, so agent-ready doesn't wait for systemd.
+FROM rust:1-alpine AS shimbuild
+RUN apk add --no-cache musl-dev
+WORKDIR /build
+COPY shim/ .
+RUN cargo build --release && cp target/release/sandbox-shim /sandbox-shim
+
 FROM ubuntu:24.04
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
@@ -45,6 +53,7 @@ RUN --mount=type=secret,id=sandbox_install_agent \
     echo 'root:cocoon' | chpasswd && \
     rm -rf /var/lib/apt/lists/*
 
+COPY --from=shimbuild /sandbox-shim /sbin/sandbox-shim
 COPY --from=boot /boot/ /boot/
 
 CMD ["/sbin/init"]

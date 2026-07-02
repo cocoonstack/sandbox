@@ -4,6 +4,9 @@
 use std::time::Duration;
 
 pub const DEFAULT_INIT: &str = "/sbin/init";
+/// Early-agent shim (WS-3): PID 1 for one blink, forks cocoon-agent, execs
+/// systemd. Auto-selected when the assembled rootfs ships it.
+pub const SHIM_INIT: &str = "/sbin/sandbox-shim";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 // Cap: `Instant + Duration` panics on overflow, and a panic in PID 1 with
 // panic=abort is a kernel panic — a hung VM instead of fatal()'s poweroff.
@@ -22,8 +25,9 @@ pub struct BootCfg {
     /// Static per-NIC config from kernel ip= params (cocoon CNI flow).
     /// Persisted as systemd-networkd units, never applied in the initramfs.
     pub ips: Vec<IpParam>,
-    /// Handoff target inside the assembled rootfs.
-    pub init: String,
+    /// Explicit handoff target (sandbox.init=); None = auto-select:
+    /// /sbin/sandbox-shim when the rootfs ships it, else /sbin/init.
+    pub init: Option<String>,
     /// Fatal errors drop to /bin/sh (debug initramfs) instead of poweroff.
     pub debug: bool,
 }
@@ -48,7 +52,7 @@ pub fn parse(cmdline: &str) -> Result<BootCfg, String> {
         timeout: DEFAULT_TIMEOUT,
         hostname: None,
         ips: Vec::new(),
-        init: DEFAULT_INIT.to_string(),
+        init: None,
         debug: false,
     };
     for tok in cmdline.split_ascii_whitespace() {
@@ -75,7 +79,7 @@ pub fn parse(cmdline: &str) -> Result<BootCfg, String> {
                     cfg.ips.push(param);
                 }
             }
-            "sandbox.init" if !val.is_empty() => cfg.init = val.to_string(),
+            "sandbox.init" if !val.is_empty() => cfg.init = Some(val.to_string()),
             _ => {}
         }
     }
@@ -197,7 +201,7 @@ mod tests {
         assert_eq!(cfg.cow, "cow");
         assert_eq!(cfg.timeout, Duration::from_secs(3));
         assert_eq!(cfg.hostname.as_deref(), Some("vm1"));
-        assert_eq!(cfg.init, "/bin/systemd");
+        assert_eq!(cfg.init.as_deref(), Some("/bin/systemd"));
         assert!(cfg.debug);
         assert!(cfg.ips.is_empty());
     }
@@ -207,7 +211,7 @@ mod tests {
         let cfg = parse("cocoon.layers=l0 cocoon.cow=cow").unwrap();
         assert_eq!(cfg.timeout, DEFAULT_TIMEOUT);
         assert_eq!(cfg.hostname, None);
-        assert_eq!(cfg.init, DEFAULT_INIT);
+        assert_eq!(cfg.init, None);
         assert!(!cfg.debug);
     }
 

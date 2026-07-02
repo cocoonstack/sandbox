@@ -35,22 +35,24 @@ pub fn run() -> ! {
         Ok(cfg) => cfg,
         Err(err) => sys::fatal(&err, cfg::debug_requested(&cmdline)),
     };
-    if let Err(err) = assemble(&cfg) {
-        sys::fatal(&err, cfg.debug);
-    }
+    let init = match assemble(&cfg) {
+        Ok(init) => init,
+        Err(err) => sys::fatal(&err, cfg.debug),
+    };
 
     // Single marker line; boot-bench.sh keys on it. Uptime is kernel-relative,
     // directly comparable with printk timestamps on the serial log.
     println!(
-        "sandbox-init: rootfs ready at {}s, handing off to {}",
-        uptime(),
-        cfg.init
+        "sandbox-init: rootfs ready at {}s, handing off to {init}",
+        uptime()
     );
-    let err = sys::exec_init(&cfg.init);
-    sys::fatal(&format!("exec {}: {err}", cfg.init), cfg.debug)
+    let err = sys::exec_init(&init);
+    sys::fatal(&format!("exec {init}: {err}"), cfg.debug)
 }
 
-fn assemble(cfg: &BootCfg) -> Result<(), String> {
+/// Returns the handoff target: explicit sandbox.init= wins, otherwise the
+/// early-agent shim when the assembled rootfs ships one, else /sbin/init.
+fn assemble(cfg: &BootCfg) -> Result<String, String> {
     let mut lower = Vec::with_capacity(cfg.layers.len());
     for (i, id) in cfg.layers.iter().enumerate() {
         let dev = resolve_disk(id, cfg.timeout)?;
@@ -83,13 +85,22 @@ fn assemble(cfg: &BootCfg) -> Result<(), String> {
 
     persist_network(cfg);
 
+    let init = match &cfg.init {
+        Some(explicit) => explicit.clone(),
+        None if fs::metadata(format!("{NEWROOT}{}", cfg::SHIM_INIT)).is_ok() => {
+            cfg::SHIM_INIT.to_string()
+        }
+        None => cfg::DEFAULT_INIT.to_string(),
+    };
+
     for dir in ["dev", "proc", "sys", "run"] {
         let _ = fs::create_dir_all(format!("{NEWROOT}/{dir}"));
     }
     for mnt in ["/dev", "/proc", "/sys"] {
         sys::move_mount(mnt, &format!("{NEWROOT}{mnt}"))?;
     }
-    sys::switch_root(NEWROOT)
+    sys::switch_root(NEWROOT)?;
+    Ok(init)
 }
 
 /// Materializes kernel ip= params (cocoon CNI static flow) as MAC-matched

@@ -47,6 +47,9 @@ Before=basic.target
 Type=simple
 User=root
 Group=root
+# Skips (condition, not failure) when the boot shim already spawned the
+# agent; keeps this unit as the manager on shim-less boots.
+ExecCondition=/bin/sh -c '! pidof cocoon-agent >/dev/null'
 ExecStart=/usr/local/bin/cocoon-agent serve
 Environment=AGENT_LOG_LEVEL=info
 Restart=always
