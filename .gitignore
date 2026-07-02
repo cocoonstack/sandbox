@@ -1,0 +1,4 @@
+dist/
+boot/init/target/
+*.log
+.DS_Store

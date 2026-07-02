@@ -1,0 +1,280 @@
+# Same shape as cocoon's build-os-images (detect changed image dirs, buildx
+# matrix, ghcr push, same-dir *.sh files injected as buildx secrets), with two
+# sandbox-specific changes:
+#   - two-stage build: flavors (FROM base) build only after base has pushed,
+#     with pull:true so they consume the base published in this run;
+#   - base builds receive BOOT_IMAGE pinned to boot/kernel/VERSION, so images
+#     track the kernel pin without hand-editing the Dockerfile default.
+name: build-os-images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "os-image/**"
+  workflow_dispatch:
+    inputs:
+      no-cache:
+        description: "Force rebuild without cache"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      base_matrix: ${{ steps.set-matrix.outputs.base_matrix }}
+      flavor_matrix: ${{ steps.set-matrix.outputs.flavor_matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Find changed Dockerfiles
+        id: set-matrix
+        run: |
+          MANUAL_NO_CACHE="${{ github.event.inputs.no-cache }}"
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # On manual trigger, build everything
+            declare -A names
+            while IFS= read -r dockerfile; do
+              [[ -z "$dockerfile" ]] && continue
+              name=$(echo "$dockerfile" | cut -d'/' -f2)
+              names[$name]=1
+            done <<< "$(find os-image -name Dockerfile -type f)"
+            all_changed=""
+          else
+            BEFORE="${{ github.event.before }}"
+            if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
+              declare -A names
+              while IFS= read -r dockerfile; do
+                [[ -z "$dockerfile" ]] && continue
+                name=$(echo "$dockerfile" | cut -d'/' -f2)
+                names[$name]=1
+              done <<< "$(find os-image -name Dockerfile -type f)"
+              all_changed=""
+            else
+              all_changed=$(git diff --name-only "$BEFORE" "${{ github.sha }}" -- 'os-image/' | sort -u)
+              declare -A names
+              for f in $all_changed; do
+                name=$(echo "$f" | cut -d'/' -f2)
+                if [[ -n "$name" ]]; then
+                  names[$name]=1
+                fi
+              done
+            fi
+          fi
+
+          # Build matrix entries with a per-entry no-cache flag. Cache must be
+          # dropped when any non-Dockerfile input changed: shared files
+          # directly under os-image/{name}/ (depth 3) or tag-specific files
+          # next to the Dockerfile (depth 4) — both are injected as buildx
+          # secrets, which never bust docker layer cache by content.
+          base_entries=()
+          flavor_entries=()
+          for name in "${!names[@]}"; do
+            needs_no_cache="false"
+            if [[ "$MANUAL_NO_CACHE" == "true" ]]; then
+              needs_no_cache="true"
+            elif [[ -n "$all_changed" ]]; then
+              while IFS= read -r f; do
+                [[ -z "$f" ]] && continue
+                depth=$(echo "$f" | awk -F'/' '{print NF}')
+                base_name=$(basename "$f")
+                if [[ "$depth" -eq 3 ]] || { [[ "$depth" -eq 4 ]] && [[ "$base_name" != "Dockerfile" ]]; }; then
+                  needs_no_cache="true"
+                  break
+                fi
+              done <<< "$(echo "$all_changed" | grep "^os-image/$name/")"
+            fi
+
+            platforms="linux/amd64,linux/arm64"
+            if [[ -f "os-image/$name/platforms" ]]; then
+              platforms=$(cat "os-image/$name/platforms")
+            fi
+
+            while IFS= read -r dockerfile; do
+              [[ -z "$dockerfile" ]] && continue
+              tag=$(echo "$dockerfile" | cut -d'/' -f3)
+              if [[ -n "$tag" ]]; then
+                entry="{\"name\":\"$name\",\"tag\":\"$tag\",\"no_cache\":\"$needs_no_cache\",\"platforms\":\"$platforms\"}"
+                if [[ "$name" == "base" ]]; then
+                  base_entries+=("$entry")
+                else
+                  flavor_entries+=("$entry")
+                fi
+              fi
+            done <<< "$(find "os-image/$name" -name Dockerfile -type f)"
+          done
+
+          emit() {
+            local key="$1"; shift
+            if [[ $# -eq 0 ]]; then
+              echo "${key}={\"include\":[]}" >> "$GITHUB_OUTPUT"
+            else
+              local json
+              json=$(IFS=,; echo "$*")
+              echo "${key}={\"include\":[$json]}" >> "$GITHUB_OUTPUT"
+            fi
+          }
+          emit base_matrix "${base_entries[@]}"
+          emit flavor_matrix "${flavor_entries[@]}"
+
+          echo "Generated matrices: $(cat "$GITHUB_OUTPUT")"
+
+  build-base:
+    needs: detect
+    if: ${{ fromJson(needs.detect.outputs.base_matrix).include[0] != null }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.base_matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Read kernel version
+        id: ver
+        run: echo "kernel=$(cat boot/kernel/VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}/${{ matrix.name }}
+          tags: |
+            type=raw,value=${{ matrix.tag }}
+            type=sha,prefix=${{ matrix.tag }}-
+
+      - name: Discover secret files
+        id: secrets
+        run: |
+          base="os-image/${{ matrix.name }}"
+          tag="${{ matrix.tag }}"
+          {
+            echo "files<<EOF"
+            for f in "$base"/*.sh; do
+              [ -f "$f" ] || continue
+              name="$(basename "$f")"
+              id="sandbox_$(echo "${name%.sh}" | tr '.-' '__')"
+              echo "${id}=${f}"
+            done
+            for f in "$base/$tag"/*; do
+              [ -f "$f" ] || continue
+              name="$(basename "$f")"
+              [ "$name" = "Dockerfile" ] && continue
+              id="$(echo "$name" | tr '.-' '__')"
+              echo "${id}=${f}"
+            done
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: os-image/${{ matrix.name }}
+          file: os-image/${{ matrix.name }}/${{ matrix.tag }}/Dockerfile
+          platforms: ${{ matrix.platforms }}
+          push: true
+          pull: true
+          build-args: |
+            BOOT_IMAGE=ghcr.io/${{ github.repository }}/boot:${{ steps.ver.outputs.kernel }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          secret-files: ${{ steps.secrets.outputs.files }}
+          no-cache: ${{ matrix.no_cache == 'true' }}
+          cache-from: type=gha,scope=${{ matrix.name }}-${{ matrix.tag }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}-${{ matrix.tag }}
+
+  # Flavors are FROM base — they run strictly after base has pushed. When the
+  # base matrix is empty (skipped), !failure() && !cancelled() still lets
+  # flavors build against the already-published base.
+  build-flavors:
+    needs: [detect, build-base]
+    if: ${{ !failure() && !cancelled() && fromJson(needs.detect.outputs.flavor_matrix).include[0] != null }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.flavor_matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}/${{ matrix.name }}
+          tags: |
+            type=raw,value=${{ matrix.tag }}
+            type=sha,prefix=${{ matrix.tag }}-
+
+      - name: Discover secret files
+        id: secrets
+        run: |
+          base="os-image/${{ matrix.name }}"
+          tag="${{ matrix.tag }}"
+          {
+            echo "files<<EOF"
+            for f in "$base"/*.sh; do
+              [ -f "$f" ] || continue
+              name="$(basename "$f")"
+              id="sandbox_$(echo "${name%.sh}" | tr '.-' '__')"
+              echo "${id}=${f}"
+            done
+            for f in "$base/$tag"/*; do
+              [ -f "$f" ] || continue
+              name="$(basename "$f")"
+              [ "$name" = "Dockerfile" ] && continue
+              id="$(echo "$name" | tr '.-' '__')"
+              echo "${id}=${f}"
+            done
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: os-image/${{ matrix.name }}
+          file: os-image/${{ matrix.name }}/${{ matrix.tag }}/Dockerfile
+          platforms: ${{ matrix.platforms }}
+          push: true
+          pull: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          secret-files: ${{ steps.secrets.outputs.files }}
+          no-cache: ${{ matrix.no_cache == 'true' }}
+          cache-from: type=gha,scope=${{ matrix.name }}-${{ matrix.tag }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}-${{ matrix.tag }}
