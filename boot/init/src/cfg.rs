@@ -69,13 +69,13 @@ pub fn parse(cmdline: &str) -> Result<BootCfg, String> {
                 }
             }
             "cocoon.hostname" if !val.is_empty() => cfg.hostname = Some(val.to_string()),
+            "sandbox.debug" => cfg.debug = debug_token(val),
             "ip" => {
                 if let Some(param) = parse_ip_param(val) {
                     cfg.ips.push(param);
                 }
             }
             "sandbox.init" if !val.is_empty() => cfg.init = val.to_string(),
-            "sandbox.debug" => cfg.debug = val.is_empty() || val == "1",
             _ => {}
         }
     }
@@ -88,12 +88,23 @@ pub fn parse(cmdline: &str) -> Result<BootCfg, String> {
     Ok(cfg)
 }
 
-/// Exact-token debug check for the path where parse() itself failed and
-/// cfg.debug is unavailable. A substring check would match sandbox.debug=0.
+/// sandbox.debug value semantics, shared by parse() and debug_requested().
+fn debug_token(val: &str) -> bool {
+    val.is_empty() || val == "1"
+}
+
+/// Debug check for the path where parse() itself failed and cfg.debug is
+/// unavailable. Token handling mirrors parse() exactly: same value
+/// predicate, last occurrence wins.
 pub fn debug_requested(cmdline: &str) -> bool {
-    cmdline
-        .split_ascii_whitespace()
-        .any(|tok| tok == "sandbox.debug" || tok == "sandbox.debug=1")
+    let mut debug = false;
+    for tok in cmdline.split_ascii_whitespace() {
+        let (key, val) = tok.split_once('=').unwrap_or((tok, ""));
+        if key == "sandbox.debug" {
+            debug = debug_token(val);
+        }
+    }
+    debug
 }
 
 /// Overlay mount data. Layer mountpoints are index-based (/l/0, /l/1, …) so
@@ -233,9 +244,32 @@ mod tests {
     fn debug_requested_exact_tokens() {
         assert!(debug_requested("a sandbox.debug b"));
         assert!(debug_requested("a sandbox.debug=1 b"));
+        assert!(debug_requested("a sandbox.debug= b"));
         assert!(!debug_requested("a sandbox.debug=0 b"));
         assert!(!debug_requested("a sandbox.debugger b"));
         assert!(!debug_requested(""));
+        // Last occurrence wins, like parse().
+        assert!(!debug_requested("sandbox.debug=1 x sandbox.debug=0"));
+        assert!(debug_requested("sandbox.debug=0 x sandbox.debug"));
+    }
+
+    #[test]
+    fn debug_requested_matches_parse() {
+        for tail in [
+            "",
+            "sandbox.debug",
+            "sandbox.debug=",
+            "sandbox.debug=1",
+            "sandbox.debug=0",
+            "sandbox.debug=1 sandbox.debug=0",
+        ] {
+            let cmdline = format!("cocoon.layers=l0 cocoon.cow=cow {tail}");
+            assert_eq!(
+                parse(&cmdline).unwrap().debug,
+                debug_requested(&cmdline),
+                "divergence for {tail:?}"
+            );
+        }
     }
 
     #[test]
