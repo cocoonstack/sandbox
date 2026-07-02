@@ -9,12 +9,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xz-utils curl ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/*
 ARG KERNEL_VERSION=6.18.37
-# Override for networks where kernel.org tarball paths are unreachable
-# (e.g. KERNEL_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/kernel).
+# Mirror chain: cdn.kernel.org currently 404s /pub/linux/kernel tarball paths
+# (observed from GitHub runners and CN networks alike), while rsync mirrors
+# still carry the tree. Download to a file first — a mid-stream failure must
+# not leave a half-extracted tree.
 ARG KERNEL_MIRROR=https://cdn.kernel.org/pub/linux/kernel
 WORKDIR /linux
-RUN curl -fsSL "${KERNEL_MIRROR}/v${KERNEL_VERSION%%.*}.x/linux-${KERNEL_VERSION}.tar.xz" \
-    | tar -xJ --strip-components=1
+RUN set -e; \
+    rel="v${KERNEL_VERSION%%.*}.x/linux-${KERNEL_VERSION}.tar.xz"; \
+    for m in "${KERNEL_MIRROR}" \
+             https://cdn.kernel.org/pub/linux/kernel \
+             https://mirrors.edge.kernel.org/pub/linux/kernel \
+             https://mirrors.tuna.tsinghua.edu.cn/kernel; do \
+        echo "fetching ${m}/${rel}"; \
+        if curl -fSL --connect-timeout 15 "${m}/${rel}" -o /tmp/linux.tar.xz; then break; fi; \
+    done; \
+    tar -xJf /tmp/linux.tar.xz --strip-components=1 && rm /tmp/linux.tar.xz
 COPY kernel/sandbox.config /tmp/sandbox.config
 RUN make x86_64_defconfig kvm_guest.config \
     && ./scripts/kconfig/merge_config.sh -m .config /tmp/sandbox.config \
