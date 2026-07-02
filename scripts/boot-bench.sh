@@ -13,6 +13,8 @@
 #   CPUS=2 MEM=512M COW_SIZE=1G RUNS=3
 #   AGENT_PORT     also probe cocoon-agent readiness via the CH hybrid vsock
 #                  socket (cocoon-agent default port: 1024)
+#   VSOCK_CID      guest CID for the probe VM; pick one no other VM on the
+#                  node uses (vk-assigned CIDs are low integers)
 #   EXTRA_CMDLINE  appended verbatim (e.g. "sandbox.debug=1")
 #
 # Reported phases (from sandbox-init's self-reported uptime markers, which
@@ -31,6 +33,7 @@ MEM=${MEM:-512M}
 COW_SIZE=${COW_SIZE:-1G}
 RUNS=${RUNS:-3}
 AGENT_PORT=${AGENT_PORT:-}
+VSOCK_CID=${VSOCK_CID:-3088}
 EXTRA_CMDLINE=${EXTRA_CMDLINE:-}
 
 ts() { date +%s.%N; }
@@ -75,6 +78,14 @@ sys.exit(1)
 PY
 }
 
+# Failure path: keep the serial/CH logs for inspection but drop the 1GB COW
+# and disarm the cleanup trap. Sees run_once's locals via dynamic scoping.
+keep_failure() {
+  trap - RETURN
+  rm -f "$work/cow.ext4"
+  kill "$ch" 2>/dev/null || true
+}
+
 run_once() {
   local n="$1" work
   work=$(mktemp -d)
@@ -100,7 +111,7 @@ run_once() {
   local cmdline="console=ttyS0 loglevel=3 reboot=k clocksource=kvm-clock rw cocoon.layers=$layers_csv cocoon.cow=cow $EXTRA_CMDLINE"
 
   local vsock_args=()
-  [ -n "$AGENT_PORT" ] && vsock_args=(--vsock "cid=88,socket=$vsock")
+  [ -n "$AGENT_PORT" ] && vsock_args=(--vsock "cid=$VSOCK_CID,socket=$vsock")
 
   local t0
   t0=$(ts)
@@ -113,11 +124,17 @@ run_once() {
   local deadline line k_init k_handoff
   deadline=$(($(date +%s) + 30))
   line=$(wait_line "$log" 'sandbox-init: start at' "$deadline") \
-    || { echo "run $n: sandbox-init start marker never appeared (logs kept in $work)"; trap - RETURN; kill "$ch" 2>/dev/null || true; return 1; }
+    || { keep_failure; echo "run $n: sandbox-init start marker never appeared (logs kept in $work)"; return 1; }
   k_init=$(echo "$line" | grep -oE 'at [0-9.]+s' | grep -oE '[0-9.]+')
   line=$(wait_line "$log" 'sandbox-init: rootfs ready' "$deadline") \
-    || { echo "run $n: sandbox-init never handed off (logs kept in $work)"; trap - RETURN; kill "$ch" 2>/dev/null || true; return 1; }
+    || { keep_failure; echo "run $n: sandbox-init never handed off (logs kept in $work)"; return 1; }
   k_handoff=$(echo "$line" | grep -oE 'at [0-9.]+s' | grep -oE '[0-9.]+')
+  # Guest /proc/uptime can read "?" — don't let empty values reach the math.
+  if [ -z "$k_init" ] || [ -z "$k_handoff" ]; then
+    keep_failure
+    echo "run $n: marker uptime unparsable (start='$k_init' ready='$k_handoff'; logs kept in $work)"
+    return 1
+  fi
 
   local agent_ms="-"
   if [ -n "$AGENT_PORT" ]; then
