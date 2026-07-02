@@ -26,6 +26,10 @@ pub fn run() -> ! {
     let _ = sys::mount("proc", "/proc", Some("proc"), sys::MNT_SECURE, None);
     let _ = sys::mount("sysfs", "/sys", Some("sysfs"), sys::MNT_SECURE, None);
 
+    // Start marker: kernel-relative and visible at production loglevel,
+    // where the kernel's own boot lines are suppressed. One console write.
+    println!("sandbox-init: start at {}s", uptime());
+
     let cmdline = fs::read_to_string("/proc/cmdline").unwrap_or_default();
     let cfg = match cfg::parse(&cmdline) {
         Ok(cfg) => cfg,

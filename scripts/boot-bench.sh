@@ -15,9 +15,10 @@
 #                  socket (cocoon-agent default port: 1024)
 #   EXTRA_CMDLINE  appended verbatim (e.g. "sandbox.debug=1")
 #
-# Reported phases:
-#   kernel->/init    printk timestamp of "Run /init as init process"
-#   /init->handoff   sandbox-init's own uptime marker minus the above
+# Reported phases (from sandbox-init's self-reported uptime markers, which
+# stay visible at the production loglevel=3 the harness boots with):
+#   kernel->init     uptime at "sandbox-init: start"
+#   init->handoff    "rootfs ready" uptime minus start uptime
 #   spawn->agent     wallclock from CH spawn to first successful vsock CONNECT
 set -euo pipefail
 
@@ -96,7 +97,7 @@ run_once() {
   done
   local layers_csv
   layers_csv=$(IFS=,; echo "${ids[*]}")
-  local cmdline="console=ttyS0 reboot=k clocksource=kvm-clock rw cocoon.layers=$layers_csv cocoon.cow=cow $EXTRA_CMDLINE"
+  local cmdline="console=ttyS0 loglevel=3 reboot=k clocksource=kvm-clock rw cocoon.layers=$layers_csv cocoon.cow=cow $EXTRA_CMDLINE"
 
   local vsock_args=()
   [ -n "$AGENT_PORT" ] && vsock_args=(--vsock "cid=88,socket=$vsock")
@@ -111,9 +112,9 @@ run_once() {
 
   local deadline line k_init k_handoff
   deadline=$(($(date +%s) + 30))
-  line=$(wait_line "$log" 'Run /init as init' "$deadline") \
-    || { echo "run $n: kernel never reached /init (logs kept in $work)"; trap - RETURN; kill "$ch" 2>/dev/null || true; return 1; }
-  k_init=$(echo "$line" | grep -oE '\[ *[0-9]+\.[0-9]+' | head -1 | tr -d '[ ')
+  line=$(wait_line "$log" 'sandbox-init: start at' "$deadline") \
+    || { echo "run $n: sandbox-init start marker never appeared (logs kept in $work)"; trap - RETURN; kill "$ch" 2>/dev/null || true; return 1; }
+  k_init=$(echo "$line" | grep -oE 'at [0-9.]+s' | grep -oE '[0-9.]+')
   line=$(wait_line "$log" 'sandbox-init: rootfs ready' "$deadline") \
     || { echo "run $n: sandbox-init never handed off (logs kept in $work)"; trap - RETURN; kill "$ch" 2>/dev/null || true; return 1; }
   k_handoff=$(echo "$line" | grep -oE 'at [0-9.]+s' | grep -oE '[0-9.]+')
@@ -127,7 +128,7 @@ run_once() {
   fi
 
   awk -v n="$n" -v ki="$k_init" -v kh="$k_handoff" -v am="$agent_ms" 'BEGIN{
-    printf "run %s: kernel->/init %7.1f ms | /init->handoff %6.1f ms | spawn->agent %s ms\n",
+    printf "run %s: kernel->init %7.1f ms | init->handoff %6.1f ms | spawn->agent %s ms\n",
       n, ki*1000, (kh-ki)*1000, am
   }'
 }
