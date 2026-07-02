@@ -18,9 +18,12 @@ ARG KERNEL_VERSION=6.18.37
 ARG KERNEL_MIRROR=https://cdn.kernel.org/pub/linux/kernel
 WORKDIR /linux
 COPY kernel/SHA256 /tmp/SHA256
+# The hash is taken from the exact line naming this kernel version, so a
+# multi-line SHA256 file (e.g. keeping the previous kernel's entry during a
+# bump) can never pair the tarball with the wrong hash.
 RUN set -e; \
-    grep -q " linux-${KERNEL_VERSION}.tar.xz\$" /tmp/SHA256 \
-        || { echo "kernel/SHA256 does not match KERNEL_VERSION=${KERNEL_VERSION}"; exit 1; }; \
+    hash=$(awk -v f="linux-${KERNEL_VERSION}.tar.xz" '$2==f{print $1; exit}' /tmp/SHA256); \
+    [ -n "$hash" ] || { echo "kernel/SHA256 has no entry for linux-${KERNEL_VERSION}.tar.xz"; exit 1; }; \
     rel="v${KERNEL_VERSION%%.*}.x/linux-${KERNEL_VERSION}.tar.xz"; \
     for m in "${KERNEL_MIRROR}" \
              https://cdn.kernel.org/pub/linux/kernel \
@@ -29,12 +32,29 @@ RUN set -e; \
         echo "fetching ${m}/${rel}"; \
         if curl -fSL --connect-timeout 15 --max-time 600 "${m}/${rel}" -o /tmp/linux.tar.xz; then break; fi; \
     done; \
-    echo "$(cut -d' ' -f1 /tmp/SHA256)  /tmp/linux.tar.xz" | sha256sum -c -; \
+    echo "$hash  /tmp/linux.tar.xz" | sha256sum -c -; \
     tar -xJf /tmp/linux.tar.xz --strip-components=1 && rm /tmp/linux.tar.xz /tmp/SHA256
 COPY kernel/sandbox.config /tmp/sandbox.config
-RUN make x86_64_defconfig kvm_guest.config \
-    && ./scripts/kconfig/merge_config.sh -m .config /tmp/sandbox.config \
-    && make olddefconfig
+# merge_config only warns and olddefconfig silently drops renamed or
+# dependency-orphaned symbols — assert the boot- and container-critical set
+# so a kernel bump cannot lose one with a green build.
+RUN set -e; \
+    make x86_64_defconfig kvm_guest.config; \
+    ./scripts/kconfig/merge_config.sh -m .config /tmp/sandbox.config; \
+    make olddefconfig; \
+    for s in PVH DEVTMPFS BLK_DEV_INITRD SERIAL_8250_CONSOLE \
+             VIRTIO_PCI VIRTIO_MMIO_CMDLINE_DEVICES VIRTIO_BLK VIRTIO_NET \
+             VIRTIO_CONSOLE VIRTIO_VSOCKETS \
+             EROFS_FS EROFS_FS_ZIP OVERLAY_FS EXT4_FS \
+             NAMESPACES USER_NS SECCOMP_FILTER \
+             BRIDGE VETH BRIDGE_NETFILTER NF_NAT NFT_COMPAT \
+             NETFILTER_XT_TARGET_MASQUERADE NETFILTER_XTABLES_LEGACY; do \
+        grep -q "^CONFIG_${s}=y" .config \
+            || { echo "CONFIG_${s} lost after olddefconfig"; exit 1; }; \
+    done; \
+    if grep -q "^CONFIG_MODULES=y" .config; then \
+        echo "CONFIG_MODULES must be off"; exit 1; \
+    fi
 # vmlinux only: the uncompressed ELF is the shipped artifact (no bzImage).
 RUN make -j"$(nproc)" vmlinux \
     && gcc usr/gen_init_cpio.c -o /usr/local/bin/gen_init_cpio
