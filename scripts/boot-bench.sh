@@ -78,21 +78,16 @@ sys.exit(1)
 PY
 }
 
-# Failure path: keep the serial/CH logs for inspection but drop the 1GB COW
-# and disarm the cleanup trap. Sees run_once's locals via dynamic scoping.
-keep_failure() {
-  trap - RETURN
-  rm -f "$work/cow.ext4"
-  kill "$ch" 2>/dev/null || true
-}
-
 run_once() {
-  local n="$1" work
+  local n="$1" work keep=
   work=$(mktemp -d)
   local cow="$work/cow.ext4" log="$work/serial.log" vsock="$work/vsock.sock"
-  local ch= # CH pid, visible to the trap before the first spawn
+  local ch= # CH pid; the trap reads ch/keep at fire time
+  # Failure paths set $keep: the serial/CH logs survive for inspection but
+  # the 1GB COW is dropped. Flag-based because a nested function cannot
+  # disarm this trap — bash scopes RETURN traps per function.
   # shellcheck disable=SC2064
-  trap "kill \$ch 2>/dev/null || true; rm -rf '$work'" RETURN
+  trap "kill \$ch 2>/dev/null || true; if [ -n \"\$keep\" ]; then rm -f '$work/cow.ext4'; else rm -rf '$work'; fi" RETURN
 
   truncate -s "$COW_SIZE" "$cow"
   mkfs.ext4 -F -m 0 -q -E lazy_itable_init=1,lazy_journal_init=1,discard "$cow"
@@ -123,15 +118,17 @@ run_once() {
 
   local deadline line k_init k_handoff
   deadline=$(($(date +%s) + 30))
-  line=$(wait_line "$log" 'sandbox-init: start at' "$deadline") \
-    || { keep_failure; echo "run $n: sandbox-init start marker never appeared (logs kept in $work)"; return 1; }
+  # Patterns include the terminated uptime number: CH writes the emulated
+  # UART byte-wise, so a bare-prefix match could grab a half-flushed line.
+  line=$(wait_line "$log" 'sandbox-init: start at [0-9.]+s' "$deadline") \
+    || { keep=1; echo "run $n: sandbox-init start marker never appeared (logs kept in $work)"; return 1; }
   k_init=$(echo "$line" | grep -oE 'at [0-9.]+s' | grep -oE '[0-9.]+')
-  line=$(wait_line "$log" 'sandbox-init: rootfs ready' "$deadline") \
-    || { keep_failure; echo "run $n: sandbox-init never handed off (logs kept in $work)"; return 1; }
+  line=$(wait_line "$log" 'sandbox-init: rootfs ready at [0-9.]+s' "$deadline") \
+    || { keep=1; echo "run $n: sandbox-init never handed off (logs kept in $work)"; return 1; }
   k_handoff=$(echo "$line" | grep -oE 'at [0-9.]+s' | grep -oE '[0-9.]+')
-  # Guest /proc/uptime can read "?" — don't let empty values reach the math.
+  # Belt over the pattern guarantee — never let empty values reach the math.
   if [ -z "$k_init" ] || [ -z "$k_handoff" ]; then
-    keep_failure
+    keep=1
     echo "run $n: marker uptime unparsable (start='$k_init' ready='$k_handoff'; logs kept in $work)"
     return 1
   fi
