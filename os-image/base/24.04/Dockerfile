@@ -29,7 +29,9 @@ RUN --mount=type=secret,id=sandbox_install_agent \
     rm -f /etc/hostname && \
     # [Networking] DHCP on virtio NICs (cocoon-net leases), resolved for DNS.
     systemctl enable systemd-networkd systemd-resolved systemd-timesyncd && \
-    ln -sf ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf && \
+    # Docker bind-mounts /etc/resolv.conf during build (EBUSY on ln), so the
+    # resolved-stub symlink is materialized at first boot via tmpfiles.
+    echo 'L+ /etc/resolv.conf - - - - ../run/systemd/resolve/stub-resolv.conf' > /usr/lib/tmpfiles.d/sandbox-resolv.conf && \
     mkdir -p /etc/systemd/network && \
     printf "[Match]\nName=e* v*\n[Network]\nDHCP=yes\n\n[DHCPv4]\nClientIdentifier=mac\n" > /etc/systemd/network/20-wired.network && \
     # [SSH] Socket-activated: nothing in the boot path, spawned on first connect.
