@@ -20,7 +20,8 @@ cloud-hypervisor / firecracker
 
 ## Layout
 
-- `boot/kernel/` — kernel version pin + config fragment (applied over
+- `boot/kernel/` — kernel version pin (`VERSION` + matching tarball
+  `SHA256`, bump both together) + config fragment (applied over
   `x86_64_defconfig` + `kvm_guest.config`)
 - `boot/init/` — `sandbox-init`, the entire initramfs userland (Rust, static
   musl build; `cargo test` runs the logic tests on any host)

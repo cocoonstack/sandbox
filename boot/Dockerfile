@@ -12,19 +12,25 @@ ARG KERNEL_VERSION=6.18.37
 # Mirror chain: cdn.kernel.org currently 404s /pub/linux/kernel tarball paths
 # (observed from GitHub runners and CN networks alike), while rsync mirrors
 # still carry the tree. Download to a file first — a mid-stream failure must
-# not leave a half-extracted tree.
+# not leave a half-extracted tree — and verify against the pinned SHA256
+# (kernel/SHA256, updated together with VERSION): the fallback mirrors are
+# third parties and this kernel boots untrusted-code sandboxes.
 ARG KERNEL_MIRROR=https://cdn.kernel.org/pub/linux/kernel
 WORKDIR /linux
+COPY kernel/SHA256 /tmp/SHA256
 RUN set -e; \
+    grep -q " linux-${KERNEL_VERSION}.tar.xz\$" /tmp/SHA256 \
+        || { echo "kernel/SHA256 does not match KERNEL_VERSION=${KERNEL_VERSION}"; exit 1; }; \
     rel="v${KERNEL_VERSION%%.*}.x/linux-${KERNEL_VERSION}.tar.xz"; \
     for m in "${KERNEL_MIRROR}" \
              https://cdn.kernel.org/pub/linux/kernel \
              https://mirrors.edge.kernel.org/pub/linux/kernel \
              https://mirrors.tuna.tsinghua.edu.cn/kernel; do \
         echo "fetching ${m}/${rel}"; \
-        if curl -fSL --connect-timeout 15 "${m}/${rel}" -o /tmp/linux.tar.xz; then break; fi; \
+        if curl -fSL --connect-timeout 15 --max-time 600 "${m}/${rel}" -o /tmp/linux.tar.xz; then break; fi; \
     done; \
-    tar -xJf /tmp/linux.tar.xz --strip-components=1 && rm /tmp/linux.tar.xz
+    echo "$(cut -d' ' -f1 /tmp/SHA256)  /tmp/linux.tar.xz" | sha256sum -c -; \
+    tar -xJf /tmp/linux.tar.xz --strip-components=1 && rm /tmp/linux.tar.xz /tmp/SHA256
 COPY kernel/sandbox.config /tmp/sandbox.config
 RUN make x86_64_defconfig kvm_guest.config \
     && ./scripts/kconfig/merge_config.sh -m .config /tmp/sandbox.config \
