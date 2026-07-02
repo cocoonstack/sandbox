@@ -10,15 +10,16 @@
 #     builds receive BASE_IMAGE in this repo's namespace (fork-safe).
 name: build-os-images
 
+# BRANCH-ONLY (ws3-early-agent): builds -ws3 tags; revert before merge.
 on:
   push:
-    branches: [main]
+    branches: [ws3-early-agent]
     paths:
       - "os-image/**"
   workflow_run:
     workflows: [build-boot]
     types: [completed]
-    branches: [main]
+    branches: [ws3-early-agent]
   workflow_dispatch:
     inputs:
       no-cache:
@@ -190,8 +191,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}/${{ matrix.name }}
           tags: |
-            type=raw,value=${{ matrix.tag }}
-            type=sha,prefix=${{ matrix.tag }}-
+            type=raw,value=${{ matrix.tag }}-ws3
 
       - name: Hash image inputs
         id: inputs
@@ -231,7 +231,7 @@ jobs:
           push: true
           pull: true
           build-args: |
-            BOOT_IMAGE=ghcr.io/${{ github.repository }}/boot:${{ steps.ver.outputs.kernel }}
+            BOOT_IMAGE=ghcr.io/${{ github.repository }}/boot:${{ steps.ver.outputs.kernel }}-ws3
             INPUTS_HASH=${{ steps.inputs.outputs.hash }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -273,8 +273,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}/${{ matrix.name }}
           tags: |
-            type=raw,value=${{ matrix.tag }}
-            type=sha,prefix=${{ matrix.tag }}-
+            type=raw,value=${{ matrix.tag }}-ws3
 
       - name: Hash image inputs
         id: inputs
@@ -317,7 +316,7 @@ jobs:
           # upstream repo's base via the Dockerfile default. Assumes the
           # single base:24.04 tag; revisit when a second base tag appears.
           build-args: |
-            BASE_IMAGE=ghcr.io/${{ github.repository }}/base:24.04
+            BASE_IMAGE=ghcr.io/${{ github.repository }}/base:24.04-ws3
             INPUTS_HASH=${{ steps.inputs.outputs.hash }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

@@ -1,8 +1,9 @@
 name: build-boot
 
+# BRANCH-ONLY (ws3-early-agent): builds -ws3 tags; revert before merge.
 on:
   push:
-    branches: [main]
+    branches: [ws3-early-agent]
     paths:
       - "boot/**"
   workflow_dispatch:
@@ -53,9 +54,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}/boot
           tags: |
-            type=raw,value=${{ steps.ver.outputs.kernel }}
-            type=raw,value=latest
-            type=sha,prefix=${{ steps.ver.outputs.kernel }}-
+            type=raw,value=${{ steps.ver.outputs.kernel }}-ws3
 
       - name: Build and push
         uses: docker/build-push-action@v7
