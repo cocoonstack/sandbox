@@ -26,6 +26,8 @@ pub struct BootCfg {
     pub init: String,
     /// Fatal errors drop to /bin/sh (debug initramfs) instead of poweroff.
     pub debug: bool,
+    /// Emit one pre-handoff line with per-phase µs timings (sandbox.trace=1).
+    pub trace: bool,
 }
 
 /// One `ip=<addr>::<gw>:<mask>:<host>:<dev>:off[:dns0[:dns1]]` param
@@ -50,6 +52,7 @@ pub fn parse(cmdline: &str) -> Result<BootCfg, String> {
         ips: Vec::new(),
         init: DEFAULT_INIT.to_string(),
         debug: false,
+        trace: false,
     };
     for tok in cmdline.split_ascii_whitespace() {
         let (key, val) = tok.split_once('=').unwrap_or((tok, ""));
@@ -70,6 +73,7 @@ pub fn parse(cmdline: &str) -> Result<BootCfg, String> {
             }
             "cocoon.hostname" if !val.is_empty() => cfg.hostname = Some(val.to_string()),
             "sandbox.debug" => cfg.debug = debug_token(val),
+            "sandbox.trace" => cfg.trace = debug_token(val),
             "ip" => {
                 if let Some(param) = parse_ip_param(val) {
                     cfg.ips.push(param);
@@ -278,6 +282,15 @@ mod tests {
         assert!(parse(&format!("{base} sandbox.debug")).unwrap().debug);
         assert!(parse(&format!("{base} sandbox.debug=1")).unwrap().debug);
         assert!(!parse(&format!("{base} sandbox.debug=0")).unwrap().debug);
+    }
+
+    #[test]
+    fn parse_trace_forms() {
+        let base = "cocoon.layers=l0 cocoon.cow=cow";
+        assert!(!parse(base).unwrap().trace);
+        assert!(parse(&format!("{base} sandbox.trace=1")).unwrap().trace);
+        assert!(parse(&format!("{base} sandbox.trace")).unwrap().trace);
+        assert!(!parse(&format!("{base} sandbox.trace=0")).unwrap().trace);
     }
 
     #[test]

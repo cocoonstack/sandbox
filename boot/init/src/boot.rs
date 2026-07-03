@@ -11,6 +11,9 @@ const LAYER_DIR: &str = "/l";
 const COW_DIR: &str = "/cow";
 const NEWROOT: &str = "/newroot";
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
+// NICs probe in single-digit ms; a missing one must degrade to the DHCP
+// fallback, not stall rootfs handoff for the full disk budget (10s).
+const NIC_TIMEOUT: Duration = Duration::from_millis(200);
 
 pub fn run() -> ! {
     // Best-effort: if devtmpfs fails there is no console either; later
@@ -35,10 +38,16 @@ pub fn run() -> ! {
         Ok(cfg) => cfg,
         Err(err) => sys::fatal(&err, cfg::debug_requested(&cmdline)),
     };
-    if let Err(err) = assemble(&cfg) {
+    let mut marks = Marks::new();
+    if let Err(err) = assemble(&cfg, &mut marks) {
         sys::fatal(&err, cfg.debug);
     }
 
+    // One deferred trace line (µs, cumulative since sandbox-init start):
+    // per-phase console writes would perturb exactly what they measure.
+    if cfg.trace {
+        println!("sandbox-init: trace{}", marks.render());
+    }
     // Single marker line; boot-bench.sh keys on it. Uptime is kernel-relative,
     // directly comparable with printk timestamps on the serial log.
     println!(
@@ -50,21 +59,54 @@ pub fn run() -> ! {
     sys::fatal(&format!("exec {}: {err}", cfg.init), cfg.debug)
 }
 
-fn assemble(cfg: &BootCfg) -> Result<(), String> {
-    let mut lower = Vec::with_capacity(cfg.layers.len());
-    for (i, id) in cfg.layers.iter().enumerate() {
-        let dev = resolve_disk(id, cfg.timeout)?;
-        let mnt = format!("{LAYER_DIR}/{i}");
-        mkdir_all(&mnt)?;
-        sys::mount(&dev, &mnt, Some("erofs"), libc::MS_RDONLY, None)?;
-        lower.push(mnt);
+/// Cumulative µs checkpoints since sandbox-init start.
+struct Marks {
+    start: Instant,
+    points: Vec<(&'static str, u128)>,
+}
+
+impl Marks {
+    fn new() -> Self {
+        Marks {
+            start: Instant::now(),
+            points: Vec::new(),
+        }
     }
 
-    let cow_dev = resolve_disk(&cfg.cow, cfg.timeout)?;
+    fn mark(&mut self, label: &'static str) {
+        self.points.push((label, self.start.elapsed().as_micros()));
+    }
+
+    fn render(&self) -> String {
+        let mut out = String::new();
+        for (label, us) in &self.points {
+            out.push_str(&format!(" {label}@{us}us"));
+        }
+        out
+    }
+}
+
+fn assemble(cfg: &BootCfg, marks: &mut Marks) -> Result<(), String> {
+    let mut ids: Vec<String> = cfg.layers.clone();
+    ids.push(cfg.cow.clone());
+    let mut devs = resolve_disks(&ids, cfg.timeout)?;
+    let cow_dev = devs.pop().expect("cow id was pushed above");
+    marks.mark("resolve");
+
+    let mut lower = Vec::with_capacity(devs.len());
+    for (i, dev) in devs.iter().enumerate() {
+        let mnt = format!("{LAYER_DIR}/{i}");
+        mkdir_all(&mnt)?;
+        sys::mount(dev, &mnt, Some("erofs"), libc::MS_RDONLY, None)?;
+        lower.push(mnt);
+    }
+    marks.mark("erofs");
+
     mkdir_all(COW_DIR)?;
     sys::mount(&cow_dev, COW_DIR, Some("ext4"), libc::MS_NOATIME, None)?;
     mkdir_all(&format!("{COW_DIR}/upper"))?;
     mkdir_all(&format!("{COW_DIR}/work"))?;
+    marks.mark("cow");
 
     mkdir_all(NEWROOT)?;
     sys::mount(
@@ -74,6 +116,7 @@ fn assemble(cfg: &BootCfg) -> Result<(), String> {
         0,
         Some(&cfg::overlay_data(&lower, COW_DIR)),
     )?;
+    marks.mark("overlay");
 
     if let Some(hostname) = &cfg.hostname {
         sys::sethostname(hostname)?;
@@ -82,6 +125,7 @@ fn assemble(cfg: &BootCfg) -> Result<(), String> {
     let _ = fs::write(format!("{NEWROOT}/etc/machine-id"), "");
 
     persist_network(cfg);
+    marks.mark("net");
 
     for dir in ["dev", "proc", "sys", "run"] {
         let _ = fs::create_dir_all(format!("{NEWROOT}/{dir}"));
@@ -89,7 +133,9 @@ fn assemble(cfg: &BootCfg) -> Result<(), String> {
     for mnt in ["/dev", "/proc", "/sys"] {
         sys::move_mount(mnt, &format!("{NEWROOT}{mnt}"))?;
     }
-    sys::switch_root(NEWROOT)
+    sys::switch_root(NEWROOT)?;
+    marks.mark("switch");
+    Ok(())
 }
 
 /// Materializes kernel ip= params (cocoon CNI static flow) as MAC-matched
@@ -107,7 +153,7 @@ fn persist_network(cfg: &BootCfg) {
         return;
     }
     for ip in &cfg.ips {
-        let Some(mac) = wait_nic_mac(&ip.device, cfg.timeout) else {
+        let Some(mac) = wait_nic_mac(&ip.device, NIC_TIMEOUT) else {
             eprintln!(
                 "sandbox-init: WARN: NIC {} not found, static config skipped",
                 ip.device
@@ -142,28 +188,43 @@ fn mkdir_all(path: &str) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|err| format!("mkdir {path}: {err}"))
 }
 
-/// CH disks carry a virtio-blk serial; FC has no serials, so cocoon passes
-/// /dev/vdX paths there. 2ms polling — virtio probe completes a few ms into
-/// boot, so the first or second try normally hits; the old initramfs hook's
-/// 1s sleep granularity was a visible cost.
-fn resolve_disk(id: &str, timeout: Duration) -> Result<String, String> {
+/// Resolves every disk in one sysfs sweep per poll iteration instead of a
+/// scan per disk. CH disks carry a virtio-blk serial; FC has no serials, so
+/// cocoon passes /dev/vdX paths there. 2ms polling — virtio probe completes
+/// a few ms into boot, so the first or second try normally hits.
+fn resolve_disks(ids: &[String], timeout: Duration) -> Result<Vec<String>, String> {
     let deadline = Instant::now() + timeout;
+    let mut found: Vec<Option<String>> = vec![None; ids.len()];
     loop {
-        if let Some(dev) = try_resolve(id) {
-            return Ok(dev);
+        for (i, id) in ids.iter().enumerate() {
+            if found[i].is_none() && id.starts_with("/dev/") && sys::is_block_dev(id) {
+                found[i] = Some(id.clone());
+            }
+        }
+        if found.iter().any(Option::is_none) {
+            scan_serials(ids, &mut found);
+        }
+        if found.iter().all(Option::is_some) {
+            return Ok(found.into_iter().flatten().collect());
         }
         if Instant::now() >= deadline {
-            return Err(format!("disk {id} not found within {timeout:?}"));
+            let missing: Vec<&str> = ids
+                .iter()
+                .zip(&found)
+                .filter(|(_, f)| f.is_none())
+                .map(|(id, _)| id.as_str())
+                .collect();
+            return Err(format!("disks not found within {timeout:?}: {missing:?}"));
         }
         std::thread::sleep(POLL_INTERVAL);
     }
 }
 
-fn try_resolve(id: &str) -> Option<String> {
-    if id.starts_with("/dev/") {
-        return sys::is_block_dev(id).then(|| id.to_string());
-    }
-    for entry in fs::read_dir("/sys/block").ok()?.flatten() {
+fn scan_serials(ids: &[String], found: &mut [Option<String>]) {
+    let Ok(entries) = fs::read_dir("/sys/block") else {
+        return;
+    };
+    for entry in entries.flatten() {
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
@@ -175,14 +236,18 @@ fn try_resolve(id: &str) -> Option<String> {
             format!("/sys/block/{name}/serial"),
             format!("/sys/block/{name}/device/serial"),
         ];
-        if paths
-            .iter()
-            .any(|p| fs::read_to_string(p).is_ok_and(|s| s.trim_end() == id))
-        {
-            return Some(format!("/dev/{name}"));
+        for path in paths {
+            let Ok(serial) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let serial = serial.trim_end();
+            for (i, id) in ids.iter().enumerate() {
+                if found[i].is_none() && id == serial {
+                    found[i] = Some(format!("/dev/{name}"));
+                }
+            }
         }
     }
-    None
 }
 
 fn uptime() -> String {
