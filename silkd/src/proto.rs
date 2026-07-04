@@ -38,6 +38,18 @@ pub enum Request {
     Logs {
         pid: u32,
     },
+    SessionCreate {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        cwd: Option<String>,
+        #[serde(default)]
+        env: HashMap<String, String>,
+    },
+    SessionList,
+    SessionRm {
+        id: String,
+    },
     Stdin {
         #[serde(with = "b64")]
         data: Vec<u8>,
@@ -71,6 +83,12 @@ pub enum Request {
         from: String,
         to: String,
     },
+    FsPush {
+        dest: String,
+    },
+    FsPull {
+        path: String,
+    },
     Data {
         #[serde(with = "b64")]
         data: Vec<u8>,
@@ -89,6 +107,10 @@ pub struct ExecReq {
     pub user: Option<String>,
     #[serde(default)]
     pub detach: bool,
+    // When set, run inside the named persistent shell session (cwd/env/state
+    // persist across calls) instead of spawning a fresh process.
+    #[serde(default)]
+    pub session: Option<String>,
 }
 
 /// Server → client frames.
@@ -133,6 +155,12 @@ pub enum Response {
     },
     Stat {
         info: FileInfo,
+    },
+    SessionCreated {
+        id: String,
+    },
+    Sessions {
+        sessions: Vec<String>,
     },
 }
 

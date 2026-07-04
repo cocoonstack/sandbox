@@ -2,6 +2,7 @@
 //! user de-escalation, and the one signal syscall — all the crate's unsafe
 //! lives here.
 
+use std::io::Read;
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -23,6 +24,23 @@ pub fn tmp_suffix() -> String {
         std::process::id(),
         TMP_SEQ.fetch_add(1, Ordering::Relaxed)
     )
+}
+
+/// A 128-bit unpredictable hex token from the OS CSPRNG. Used where an
+/// in-sandbox command must not be able to guess or forge the value (the
+/// session-command sentinel). Falls back to the predictable tmp_suffix only if
+/// /dev/urandom is unreadable, which never happens on a normal guest.
+pub fn rand_token() -> String {
+    let mut b = [0u8; 16];
+    match std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)) {
+        Ok(()) => b.iter().map(|x| format!("{x:02x}")).collect(),
+        Err(_) => tmp_suffix(),
+    }
+}
+
+/// SIGKILLs `pid` (a session's shell on teardown).
+pub fn kill(pid: u32) {
+    signal_pid(pid, libc::SIGKILL);
 }
 
 /// Sends `sig` to `pid`, ignoring the result: an ESRCH against a

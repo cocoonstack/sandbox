@@ -9,11 +9,12 @@ use tokio::sync::mpsc;
 
 use crate::proc::{Chunk, Proc, Table};
 use crate::proto::{self, ErrorKind, ProcInfo, Request, Response};
-use crate::{exec, fs};
+use crate::{exec, fs, session, tree};
 
 /// Shared daemon state handed to every connection.
 pub struct State {
     pub table: Table,
+    pub sessions: session::Table,
     pub started: Instant,
 }
 
@@ -21,6 +22,7 @@ impl State {
     pub fn new() -> Self {
         Self {
             table: Table::new(),
+            sessions: session::Table::new(),
             started: Instant::now(),
         }
     }
@@ -53,11 +55,63 @@ impl State {
             Request::Logs { pid } => self.logs(&mut writer, pid).await,
             Request::Attach { pid } => self.attach(&mut writer, pid).await,
             Request::Exec(e) => {
-                let (tx, rx) = mpsc::channel(16);
-                let feeder = tokio::spawn(feed_client(reader, tx));
-                let res = exec::run(&self.table, now_secs(), e, rx, &mut writer).await;
-                feeder.abort();
-                res
+                if let Some(sid) = e.session.clone() {
+                    match self.sessions.get(&sid) {
+                        Some(sess) => {
+                            if !sess.run(&e.argv, &mut writer).await {
+                                self.sessions.remove(&sid);
+                            }
+                            Ok(())
+                        }
+                        None => {
+                            proto::write_frame(
+                                &mut writer,
+                                &Response::error(ErrorKind::NotFound, "no such session"),
+                            )
+                            .await
+                        }
+                    }
+                } else {
+                    let (tx, rx) = mpsc::channel(16);
+                    let feeder = tokio::spawn(feed_client(reader, tx));
+                    let res = exec::run(&self.table, now_secs(), e, rx, &mut writer).await;
+                    feeder.abort();
+                    res
+                }
+            }
+            Request::SessionCreate { id, cwd, env } => {
+                match self.sessions.create(id, cwd, &env).await {
+                    Ok(id) => {
+                        proto::write_frame(&mut writer, &Response::SessionCreated { id }).await
+                    }
+                    Err(e) => {
+                        proto::write_frame(
+                            &mut writer,
+                            &Response::error(ErrorKind::Internal, format!("session create: {e}")),
+                        )
+                        .await
+                    }
+                }
+            }
+            Request::SessionList => {
+                proto::write_frame(
+                    &mut writer,
+                    &Response::Sessions {
+                        sessions: self.sessions.list(),
+                    },
+                )
+                .await
+            }
+            Request::SessionRm { id } => {
+                if self.sessions.remove(&id) {
+                    proto::write_frame(&mut writer, &Response::Done).await
+                } else {
+                    proto::write_frame(
+                        &mut writer,
+                        &Response::error(ErrorKind::NotFound, "no such session"),
+                    )
+                    .await
+                }
             }
             Request::FsWrite { path, mode } => fs::write(reader, &mut writer, path, mode).await,
             Request::FsRead { path } => fs::read(&mut writer, path).await,
@@ -66,6 +120,8 @@ impl State {
             Request::FsMkdir { path, parents } => fs::mkdir(&mut writer, path, parents).await,
             Request::FsRm { path, recursive } => fs::rm(&mut writer, path, recursive).await,
             Request::FsRename { from, to } => fs::rename(&mut writer, from, to).await,
+            Request::FsPush { dest } => tree::push(reader, &mut writer, dest).await,
+            Request::FsPull { path } => tree::pull(&mut writer, path).await,
             Request::Stdin { .. }
             | Request::StdinClose
             | Request::Data { .. }
@@ -87,7 +143,7 @@ impl State {
                 proto: proto::PROTO_VERSION,
                 uptime_secs: self.started.elapsed().as_secs(),
                 procs: self.table.len(),
-                sessions: 0,
+                sessions: self.sessions.len(),
             },
         )
         .await

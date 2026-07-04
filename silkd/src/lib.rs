@@ -7,5 +7,7 @@ pub mod fs;
 pub mod proc;
 pub mod proto;
 pub mod server;
+pub mod session;
 pub mod sysutil;
+pub mod tree;
 pub mod vsock;
