@@ -1,0 +1,30 @@
+# silkd is guest-side and vsock-only on Linux, so the full test suite
+# (including the Linux-gated listener build) must run on a Linux runner;
+# protocol/ fixtures are test inputs, so changes there re-run the suite too.
+name: silkd
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "silkd/**"
+      - "protocol/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: fmt + clippy + test
+        working-directory: silkd
+        run: |
+          rustup component add rustfmt clippy
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test

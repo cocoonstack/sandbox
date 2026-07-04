@@ -1,0 +1,22 @@
+[package]
+name = "silkd"
+version = "0.1.0"
+edition = "2021"
+description = "In-guest sandbox daemon: exec with context, processes, and files over vsock"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "process", "signal", "sync", "time"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tokio-vsock = "0.7"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

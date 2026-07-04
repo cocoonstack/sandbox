@@ -8,9 +8,11 @@ EXTRACT_IMAGE ?= $(BOOT_IMAGE)
 
 test:
 	cd boot/init && cargo test
+	cd silkd && cargo test
 
 lint:
 	cd boot/init && cargo fmt --check && cargo clippy --all-targets -- -D warnings
+	cd silkd && cargo fmt --check && cargo clippy --all-targets -- -D warnings
 
 # --platform: the kernel build is x86-only (x86_64_defconfig, PVH); without
 # the pin, arm64 hosts build an aarch64 stage that dies inside kbuild.
