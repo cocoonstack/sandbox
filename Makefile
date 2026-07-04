@@ -2,9 +2,12 @@ KERNEL_VERSION := $(shell cat boot/kernel/VERSION)
 KERNEL_MIRROR ?= https://cdn.kernel.org/pub/linux/kernel
 BOOT_IMAGE ?= sandbox-boot:$(KERNEL_VERSION)
 
+SILKD_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' silkd/Cargo.toml | head -1)
+SILKD_IMAGE ?= sandbox-silkd:$(SILKD_VERSION)
+
 EXTRACT_IMAGE ?= $(BOOT_IMAGE)
 
-.PHONY: test lint boot boot-debug extract extract-debug base python images
+.PHONY: test lint boot boot-debug extract extract-debug silkd-image base python images
 
 test:
 	cd boot/init && cargo test
@@ -29,9 +32,13 @@ extract:
 extract-debug:
 	$(MAKE) extract EXTRACT_IMAGE=$(BOOT_IMAGE)-debug
 
-base:
+silkd-image:
+	docker build --platform linux/amd64 -t $(SILKD_IMAGE) -f silkd/Dockerfile silkd
+
+base: silkd-image
 	docker build --platform linux/amd64 -t sandbox-base:dev \
 		--build-arg BOOT_IMAGE=$(BOOT_IMAGE) \
+		--build-arg SILKD_IMAGE=$(SILKD_IMAGE) \
 		--secret id=sandbox_install_agent,src=os-image/base/install-agent.sh \
 		-f os-image/base/24.04/Dockerfile os-image/base
 

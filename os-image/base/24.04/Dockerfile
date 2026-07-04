@@ -3,8 +3,12 @@
 # CI overrides BOOT_IMAGE from boot/kernel/VERSION; the default is only a
 # local-build fallback and may lag the pin.
 ARG BOOT_IMAGE=ghcr.io/cocoonstack/sandbox/boot:6.18.37
+# silkd carrier image (built from silkd/Dockerfile). CI overrides with the
+# version-pinned tag; a silkd change refreshes this via the workflow_run chain.
+ARG SILKD_IMAGE=ghcr.io/cocoonstack/sandbox/silkd:0.1.0
 
 FROM ${BOOT_IMAGE} AS boot
+FROM ${SILKD_IMAGE} AS silkd
 
 FROM ubuntu:24.04
 ARG TARGETARCH
@@ -40,11 +44,34 @@ RUN --mount=type=secret,id=sandbox_install_agent \
     printf "[Match]\nName=e* v*\n[Network]\nDHCP=yes\n\n[DHCPv4]\nClientIdentifier=mac\n" > /etc/systemd/network/20-wired.network && \
     # [SSH] Socket-activated: nothing in the boot path, spawned on first connect.
     systemctl disable ssh.service && systemctl enable ssh.socket && \
-    # [Agent] vsock exec daemon, started at sysinit — the readiness signal.
+    # [Agent] vsock exec daemon (VM tier), started at sysinit.
     sh /run/secrets/sandbox_install_agent && \
     echo 'root:cocoon' | chpasswd && \
+    # [silkd] product-tier daemon on vsock 2048, started at sysinit alongside
+    # the agent — this is the sandbox product's readiness signal. Same
+    # measured-fast ordering as the agent unit (no local-fs wait).
+    printf '%s\n' \
+      '[Unit]' \
+      'Description=silkd (sandbox product daemon: exec, files, sessions over vsock)' \
+      'Documentation=https://github.com/cocoonstack/sandbox' \
+      'DefaultDependencies=no' \
+      'Before=basic.target' \
+      '' \
+      '[Service]' \
+      'Type=simple' \
+      'ExecStart=/usr/local/bin/silkd' \
+      'Environment=SILKD_PORT=2048' \
+      'Restart=always' \
+      'RestartSec=2s' \
+      'LimitNOFILE=65536' \
+      '' \
+      '[Install]' \
+      'WantedBy=sysinit.target' \
+      > /etc/systemd/system/silkd.service && \
+    systemctl enable silkd.service && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=boot /boot/ /boot/
+COPY --chmod=0755 --from=silkd /silkd /usr/local/bin/silkd
 
 CMD ["/sbin/init"]

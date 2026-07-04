@@ -16,7 +16,7 @@ on:
     paths:
       - "os-image/**"
   workflow_run:
-    workflows: [build-boot]
+    workflows: [build-boot, build-silkd]
     types: [completed]
     branches: [main]
   workflow_dispatch:
@@ -167,9 +167,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Read kernel version
+      - name: Read versions
         id: ver
-        run: echo "kernel=$(cat boot/kernel/VERSION)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "kernel=$(cat boot/kernel/VERSION)" >> "$GITHUB_OUTPUT"
+          echo "silkd=$(sed -n 's/^version = "\(.*\)"/\1/p' silkd/Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -232,6 +234,7 @@ jobs:
           pull: true
           build-args: |
             BOOT_IMAGE=ghcr.io/${{ github.repository }}/boot:${{ steps.ver.outputs.kernel }}
+            SILKD_IMAGE=ghcr.io/${{ github.repository }}/silkd:${{ steps.ver.outputs.silkd }}
             INPUTS_HASH=${{ steps.inputs.outputs.hash }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
