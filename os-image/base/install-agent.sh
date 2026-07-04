@@ -8,11 +8,11 @@
 #     no `systemctl enable ssh` here.
 set -eu
 
-AGENT_VERSION="${COCOON_AGENT_VERSION:-0.1.5}"
+AGENT_VERSION="${COCOON_AGENT_VERSION:-0.1.8}"
 ARCH="${TARGETARCH:-$(dpkg --print-architecture)}"
 case "$ARCH" in
-    amd64) AGENT_ARCH="x86_64"; AGENT_SHA256="4ca52609076efb4d5091d42b4a41533102766568e91d096e8ed25d2f4250ec25" ;;
-    arm64) AGENT_ARCH="arm64";  AGENT_SHA256="74a7f53282063b60fa2a8288c40df8ac78f479f403751c729b5e761187a3145d" ;;
+    amd64) AGENT_ARCH="x86_64"; AGENT_SHA256="88247fe230e4064fce4515e14aa0d70d0b8d070f876bf3295240392698dfaee0" ;;
+    arm64) AGENT_ARCH="arm64";  AGENT_SHA256="26eb63095eb8d7934d7c7f583002abf70ec363e29d9768c8dfb23a022152429a" ;;
     *) echo "install-agent: unsupported arch '$ARCH'" >&2; exit 1 ;;
 esac
 
