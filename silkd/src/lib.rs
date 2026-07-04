@@ -3,6 +3,7 @@
 //! The binary in `main.rs` is a thin wrapper over `vsock::serve`.
 
 pub mod exec;
+pub mod fs;
 pub mod proc;
 pub mod proto;
 pub mod server;

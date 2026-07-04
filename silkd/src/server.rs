@@ -7,9 +7,9 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufRead, AsyncWrite, BufReader};
 use tokio::sync::mpsc;
 
-use crate::exec;
 use crate::proc::{Chunk, Proc, Table};
 use crate::proto::{self, ErrorKind, ProcInfo, Request, Response};
+use crate::{exec, fs};
 
 /// Shared daemon state handed to every connection.
 pub struct State {
@@ -59,10 +59,20 @@ impl State {
                 feeder.abort();
                 res
             }
-            Request::Stdin { .. } | Request::StdinClose => {
+            Request::FsWrite { path, mode } => fs::write(reader, &mut writer, path, mode).await,
+            Request::FsRead { path } => fs::read(&mut writer, path).await,
+            Request::FsList { path } => fs::list(&mut writer, path).await,
+            Request::FsStat { path } => fs::stat(&mut writer, path).await,
+            Request::FsMkdir { path, parents } => fs::mkdir(&mut writer, path, parents).await,
+            Request::FsRm { path, recursive } => fs::rm(&mut writer, path, recursive).await,
+            Request::FsRename { from, to } => fs::rename(&mut writer, from, to).await,
+            Request::Stdin { .. }
+            | Request::StdinClose
+            | Request::Data { .. }
+            | Request::DataEnd => {
                 proto::write_frame(
                     &mut writer,
-                    &Response::error(ErrorKind::BadRequest, "stdin frame without an exec"),
+                    &Response::error(ErrorKind::BadRequest, "stray data/stdin frame"),
                 )
                 .await
             }

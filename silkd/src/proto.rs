@@ -16,6 +16,9 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
 pub const PROTO_VERSION: u32 = 1;
 
+/// Chunk size for streaming a file back over `fs.read`.
+pub const READ_CHUNK: usize = 32 * 1024;
+
 /// Client → server frames. Unknown JSON fields (e.g. a future `v`) are
 /// ignored by construction, which is the forward-compatibility story.
 #[derive(Debug, Deserialize, Serialize)]
@@ -40,6 +43,39 @@ pub enum Request {
         data: Vec<u8>,
     },
     StdinClose,
+    FsWrite {
+        path: String,
+        #[serde(default)]
+        mode: Option<u32>,
+    },
+    FsRead {
+        path: String,
+    },
+    FsList {
+        path: String,
+    },
+    FsStat {
+        path: String,
+    },
+    FsMkdir {
+        path: String,
+        #[serde(default)]
+        parents: bool,
+    },
+    FsRm {
+        path: String,
+        #[serde(default)]
+        recursive: bool,
+    },
+    FsRename {
+        from: String,
+        to: String,
+    },
+    Data {
+        #[serde(with = "b64")]
+        data: Vec<u8>,
+    },
+    DataEnd,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -88,6 +124,16 @@ pub enum Response {
     Procs {
         procs: Vec<ProcInfo>,
     },
+    Data {
+        #[serde(with = "b64")]
+        data: Vec<u8>,
+    },
+    Entries {
+        entries: Vec<DirEntry>,
+    },
+    Stat {
+        info: FileInfo,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -97,6 +143,30 @@ pub enum ErrorKind {
     NotFound,
     Unimplemented,
     Internal,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileKind {
+    File,
+    Dir,
+    Symlink,
+    Other,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DirEntry {
+    pub name: String,
+    pub kind: FileKind,
+    pub size: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct FileInfo {
+    pub kind: FileKind,
+    pub size: u64,
+    pub mode: u32,
+    pub mtime_epoch_secs: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

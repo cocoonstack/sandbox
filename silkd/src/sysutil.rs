@@ -3,6 +3,7 @@
 //! lives here.
 
 use std::process::ExitStatus;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use tokio::process::Command;
@@ -10,6 +11,19 @@ use tokio::process::Command;
 /// Serializes getpwnam, whose result points into a process-global static
 /// buffer the next call clobbers — not safe across tokio's worker threads.
 static NSS_LOCK: Mutex<()> = Mutex::new(());
+
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// A suffix unique within this process (pid + monotonic counter), enough to
+/// name a temp file a concurrent write in the same directory won't collide
+/// with. Not cryptographic — just unique.
+pub fn tmp_suffix() -> String {
+    format!(
+        "{}-{}",
+        std::process::id(),
+        TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    )
+}
 
 /// Sends `sig` to `pid`, ignoring the result: an ESRCH against a
 /// just-exited pid already satisfies the caller's goal (the process is gone).
