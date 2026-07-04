@@ -86,9 +86,10 @@ jobs:
                   names[$name]=1
                 fi
               done
-              # A push touching boot/** rebuilds the boot artifact; defer the
-              # image builds to that run's workflow_run instead of racing it.
-              if [[ -n "$(git diff --name-only "$BEFORE" "${{ github.sha }}" -- 'boot/' | head -1)" ]]; then
+              # A push touching boot/** or silkd/** rebuilds a carrier artifact
+              # the images COPY --from; defer to that build's workflow_run
+              # instead of racing it (the carrier tag isn't pushed yet).
+              if [[ -n "$(git diff --name-only "$BEFORE" "${{ github.sha }}" -- 'boot/' 'silkd/' | head -1)" ]]; then
                 boot_changed="true"
               fi
               # Flavors are FROM base: a base change stales every flavor.
