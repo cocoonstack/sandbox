@@ -135,6 +135,20 @@ func (m *Mesh) Members() []NodeState {
 	return m.snapshot()
 }
 
+// PeerAddrs returns the data-plane addresses of the other nodes, for a
+// client-side Lookup scatter.
+func (m *Mesh) PeerAddrs() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	addrs := make([]string, 0, len(m.view))
+	for id, st := range m.view {
+		if id != m.self.NodeID {
+			addrs = append(addrs, st.Addr)
+		}
+	}
+	return addrs
+}
+
 // Shutdown leaves the mesh and stops the member.
 func (m *Mesh) Shutdown() error {
 	_ = m.ml.Leave(leaveTimeout)

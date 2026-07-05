@@ -87,6 +87,71 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 	return c.handleFrom(c.addr, cr), nil
 }
 
+// Lookup relocates a sandbox handle whose owner address was lost, given its
+// id and token: it asks the entry node, then scatters across the cluster's
+// peers, and returns a handle bound to whichever node owns it.
+func (c *Client) Lookup(ctx context.Context, id, token string) (*Sandbox, error) {
+	if owner, err := c.ownerAt(ctx, c.addr, id, token); err == nil {
+		return &Sandbox{ID: id, token: token, c: c, owner: owner}, nil
+	}
+	for _, addr := range c.peers(ctx) {
+		if owner, err := c.ownerAt(ctx, addr, id, token); err == nil {
+			return &Sandbox{ID: id, token: token, c: c, owner: owner}, nil
+		}
+	}
+	return nil, fmt.Errorf("lookup %s: no owner found", id)
+}
+
+// ownerAt asks one node whether it owns the sandbox, returning its data-plane
+// address on success.
+func (c *Client) ownerAt(ctx context.Context, addr, id, token string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/v1/sandboxes/"+id+"/owner", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.hc.Do(req) //nolint:gosec // dialing the caller-configured cluster is the SDK's purpose
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", apiError("owner", resp)
+	}
+	var body struct {
+		OwnerAddr string `json:"owner_addr"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", err
+	}
+	owner := body.OwnerAddr
+	if owner == "" {
+		owner = addr
+	}
+	return owner, nil
+}
+
+// peers fetches the cluster's other node addresses from the entry node.
+func (c *Client) peers(ctx context.Context) []string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+c.addr+"/v1/info", nil)
+	if err != nil {
+		return nil
+	}
+	if c.apiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiToken)
+	}
+	resp, err := c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var body struct {
+		Peers []string `json:"peers"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	return body.Peers
+}
+
 // handleFrom builds a sandbox handle, defaulting the data-plane owner to the
 // node that answered when a single-node deployment omits owner_addr.
 func (c *Client) handleFrom(dialed string, cr claimResponse) *Sandbox {

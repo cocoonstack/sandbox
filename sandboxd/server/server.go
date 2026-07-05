@@ -45,16 +45,19 @@ type Dialer interface {
 	DialSilkd(ctx context.Context, vsockSocket string) (net.Conn, error)
 }
 
-// Placer names peers that hold a warm sandbox for a pool key; nil on a
-// single-node deployment (no mesh).
+// Placer names peers for redirect placement and lists the mesh for Lookup;
+// nil on a single-node deployment (no mesh).
 type Placer interface {
 	Candidates(keyHash string) []string
+	PeerAddrs() []string
 }
 
-// InfoResponse is the wire reply of GET /v1/info.
+// InfoResponse is the wire reply of GET /v1/info. Peers lists the other nodes'
+// data-plane addresses so a client can scatter a Lookup across the cluster.
 type InfoResponse struct {
 	Pools   []pool.PoolInfo `json:"pools"`
 	Claimed int             `json:"claimed"`
+	Peers   []string        `json:"peers,omitempty"`
 }
 
 // Server serves the control plane for one node.
@@ -92,6 +95,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/claim", s.requireAPIToken(s.handleClaim))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleRelease)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", s.handleAgent)
+	mux.HandleFunc("GET /v1/sandboxes/{id}/owner", s.handleOwner)
 	mux.HandleFunc("GET /v1/info", s.requireAPIToken(s.handleInfo))
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	return mux
@@ -156,9 +160,29 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleOwner answers whether this node owns the sandbox (used by the SDK's
+// Lookup scatter to relocate a handle whose owner address was lost). The
+// per-sandbox token both authorizes the query and confirms ownership.
+func (s *Server) handleOwner(w http.ResponseWriter, r *http.Request) {
+	token, ok := bearerToken(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "missing bearer token")
+		return
+	}
+	if _, err := s.mgr.AgentSocket(r.PathValue("id"), token); err != nil {
+		writeErr(w, http.StatusNotFound, "not owned here")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"owner_addr": s.advertise})
+}
+
 func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 	pools, claimed := s.mgr.Info()
-	writeJSON(w, http.StatusOK, InfoResponse{Pools: pools, Claimed: claimed})
+	resp := InfoResponse{Pools: pools, Claimed: claimed}
+	if s.placer != nil {
+		resp.Peers = s.placer.PeerAddrs()
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {

@@ -290,6 +290,7 @@ func (f *fakeDialer) DialSilkd(ctx context.Context, sock string) (net.Conn, erro
 type fakePlacer struct{ addrs []string }
 
 func (f *fakePlacer) Candidates(string) []string { return f.addrs }
+func (f *fakePlacer) PeerAddrs() []string        { return f.addrs }
 
 func TestClaimRedirectsOnWarmMiss(t *testing.T) {
 	// Warm miss (fakeManager.warmHit=false) + a placer with candidates → a
@@ -341,5 +342,49 @@ func TestClaimProvisionsWhenNoCandidate(t *testing.T) {
 	_ = json.NewDecoder(resp.Body).Decode(&cr)
 	if cr.ID != "sb_local" || len(cr.Redirect) != 0 {
 		t.Errorf("got %+v, want local sandbox", cr)
+	}
+}
+
+func TestOwnerEndpoint(t *testing.T) {
+	// AgentSocket succeeds → this node owns it → 200 with owner addr.
+	mgr := &fakeManager{socket: func(id, token string) (string, error) {
+		if token == "good" {
+			return "/v/sock", nil
+		}
+		return "", pool.ErrUnknownSandbox
+	}}
+	srv := New("", "node-b:7777", mgr, &fakeDialer{}, nil)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+	// Owned here.
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/owner", nil)
+	req.Header.Set("Authorization", "Bearer good")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("owner: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	var body struct {
+		OwnerAddr string `json:"owner_addr"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if body.OwnerAddr != "node-b:7777" {
+		t.Errorf("owner %q, want node-b:7777", body.OwnerAddr)
+	}
+
+	// Not owned here → 404.
+	req2, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/owner", nil)
+	req2.Header.Set("Authorization", "Bearer wrong")
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("owner: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Errorf("status %d, want 404", resp2.StatusCode)
 	}
 }

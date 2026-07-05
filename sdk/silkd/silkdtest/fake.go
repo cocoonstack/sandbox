@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/cocoonstack/sandbox/sdk/silkd"
@@ -69,12 +70,35 @@ func (f *Fake) ServeConn(conn net.Conn) {
 		f.sessionList(conn)
 	case *silkd.SessionRm:
 		f.sessionRm(conn, req.ID)
+	case *silkd.PtyOpen:
+		ptyEcho(conn, r)
+	case *silkd.PtyResize:
+		send(conn, silkd.Done{})
 	case *silkd.Info:
 		send(conn, &silkd.InfoResp{Version: "silkdtest", Proto: silkd.ProtoVersion})
 	case *silkd.Exec:
 		serveExec(conn, r, req)
 	default:
 		errFrame(conn, "unimplemented", "silkdtest: "+req.Op())
+	}
+}
+
+// ptyEcho fakes a pty: Started, then echo each stdin chunk as stdout until a
+// chunk contains "exit" (→ Exit 0) or the client disconnects.
+func ptyEcho(conn net.Conn, r *bufio.Reader) {
+	send(conn, &silkd.Started{PID: 9999})
+	for {
+		req, err := recvRequest(r)
+		if err != nil {
+			return
+		}
+		if in, ok := req.(*silkd.Stdin); ok {
+			if strings.Contains(string(in.Data), "exit") {
+				send(conn, &silkd.Exit{Code: 0})
+				return
+			}
+			send(conn, &silkd.Stdout{Data: in.Data})
+		}
 	}
 }
 

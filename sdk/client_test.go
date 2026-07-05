@@ -205,3 +205,35 @@ func TestRedirectTriesAllCandidates(t *testing.T) {
 		t.Errorf("id %q, want sb_4 (second candidate)", sb.ID)
 	}
 }
+
+func TestLookupScatter(t *testing.T) {
+	// The owner is node B; the entry node A doesn't own the sandbox but lists
+	// B as a peer. Lookup must scatter to B and bind the handle there.
+	var owner *httptest.Server
+	owner = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/sandboxes/sb_1/owner" && r.Header.Get("Authorization") == "Bearer tok" {
+			_ = json.NewEncoder(w).Encode(map[string]string{"owner_addr": strings.TrimPrefix(owner.URL, "http://")})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(owner.Close)
+
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/sandboxes/sb_1/owner":
+			w.WriteHeader(http.StatusNotFound) // not owned here
+		case "/v1/info":
+			_ = json.NewEncoder(w).Encode(map[string]any{"peers": []string{strings.TrimPrefix(owner.URL, "http://")}})
+		}
+	}))
+	t.Cleanup(entry.Close)
+
+	sb, err := testClient(t, entry).Lookup(t.Context(), "sb_1", "tok")
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	if sb.ID != "sb_1" || sb.owner != strings.TrimPrefix(owner.URL, "http://") {
+		t.Errorf("handle %+v, want owner=B", sb)
+	}
+}
