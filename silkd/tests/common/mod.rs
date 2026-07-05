@@ -64,3 +64,23 @@ pub fn decode(frame: &Value) -> Vec<u8> {
         .decode(frame["data"].as_str().unwrap())
         .unwrap()
 }
+
+/// Concatenated `data` of every frame of the given type (e.g. "stdout", "data").
+pub fn payload(frames: &[Value], frame_type: &str) -> Vec<u8> {
+    frames
+        .iter()
+        .filter(|f| type_of(f) == frame_type)
+        .flat_map(decode)
+        .collect()
+}
+
+/// A `data`-frame stream (16K chunks) terminated by `data_end`, for feeding
+/// fs.write / fs.push.
+pub fn data_frames(bytes: &[u8]) -> Vec<String> {
+    let mut lines: Vec<String> = bytes
+        .chunks(16 * 1024)
+        .map(|c| serde_json::json!({"op":"data","data":b64(c)}).to_string())
+        .collect();
+    lines.push(r#"{"op":"data_end"}"#.to_string());
+    lines
+}

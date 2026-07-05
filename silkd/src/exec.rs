@@ -15,9 +15,10 @@ use crate::proc::{synth_pid, Chunk, Proc, Table};
 use crate::proto::{ErrorKind, ExecReq, Request, Response};
 use crate::sysutil;
 
-/// After the child is reaped, wait at most this long for its pipes to reach
-/// EOF before publishing Exit — bounds a daemonizing child that leaves its
-/// stdout open in a surviving grandchild.
+/// After the child is reaped, wait at most this long for the pump to finish
+/// before publishing Exit. It bounds a daemonizing child that leaves stdout
+/// open in a surviving grandchild; a foreground client stalled past this
+/// window can also lose the not-yet-drained pipe tail (bounded, rare).
 const POST_EXIT_DRAIN: Duration = Duration::from_secs(2);
 const REAP_DELAY: Duration = Duration::from_secs(300);
 /// Foreground output buffer before the child is backpressured. Bounds how far
@@ -76,7 +77,7 @@ where
     };
 
     let pid = child.id().unwrap_or_else(synth_pid);
-    let proc = table.register(pid, req.argv.clone(), req.detach, now_secs);
+    let proc = table.register(pid, req.argv, req.detach, now_secs);
     if let Err(e) = crate::proto::write_frame(out, &Response::Started { pid }).await {
         // The relay never learned this pid, so nothing will ever supervise or
         // reap it: drop the table entry and kill the just-spawned child rather
@@ -101,6 +102,7 @@ where
     drop(fg_tx); // only the pump/supervise clones keep fg_rx open
 
     let pump = tokio::spawn(pump_out(Arc::clone(&proc), stdout, stderr, pump_fg));
+    let pump_abort = pump.abort_handle();
     tokio::spawn(pump_stdin(stdin, client, req.detach));
 
     // One supervisor per exec: reap the child, drain output within a grace
@@ -135,12 +137,12 @@ where
 
     let mut rx = fg_rx;
     if let Err(e) = stream_to_client(&mut rx, out).await {
-        // Client vanished mid-stream: abort supervise (drops the child via
-        // kill_on_drop) and drop our table entry. Aborting may pre-empt
-        // supervise before it published the terminal state, so publish it here
-        // too — otherwise a second connection attached to this pid would wait
-        // forever for an Exit that never comes.
+        // Client gone: abort supervise (kills the child via kill_on_drop) and
+        // the pump (else its handle only detaches, leaking task/fds behind a
+        // silent pipe-holder), then publish the terminal state the abort may
+        // have pre-empted — else an attacher on this pid waits forever.
         supervise.abort();
+        pump_abort.abort();
         let _ = supervise.await;
         if proc.exit_code().is_none() {
             proc.mark_exited(-1);
@@ -197,24 +199,25 @@ where
     R: tokio::io::AsyncRead + Unpin,
 {
     use tokio::io::AsyncReadExt;
-    let mut buf = [0u8; 32 * 1024];
+    let make: fn(Vec<u8>) -> Chunk = if stderr { Chunk::Stderr } else { Chunk::Stdout };
+    let mut buf = [0u8; crate::proto::READ_CHUNK];
     loop {
-        match r.read(&mut buf).await {
+        let n = match r.read(&mut buf).await {
             Ok(0) | Err(_) => break,
-            Ok(n) => {
-                let chunk = if stderr {
-                    Chunk::Stderr(buf[..n].to_vec())
-                } else {
-                    Chunk::Stdout(buf[..n].to_vec())
-                };
+            Ok(n) => n,
+        };
+        let chunk = make(buf[..n].to_vec());
+        match fg {
+            // Foreground: the ring/broadcast copy plus the backpressured client
+            // send need two owners; the client backpressures here.
+            Some(fg) => {
                 proc.emit(chunk.clone());
-                if let Some(fg) = fg {
-                    // The client backpressures here; if it is gone, stop reading.
-                    if fg.send(chunk).await.is_err() {
-                        break;
-                    }
+                if fg.send(chunk).await.is_err() {
+                    break;
                 }
             }
+            // Detached: only the ring/broadcast — no clone.
+            None => proc.emit(chunk),
         }
     }
 }
@@ -243,8 +246,5 @@ async fn pump_stdin(
 }
 
 async fn wait_code(child: &mut tokio::process::Child) -> i32 {
-    match child.wait().await {
-        Ok(status) => sysutil::exit_code(status),
-        Err(_) => -1,
-    }
+    child.wait().await.map(sysutil::exit_code).unwrap_or(-1)
 }

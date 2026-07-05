@@ -6,7 +6,7 @@ mod common;
 use std::path::Path;
 use std::process::Command;
 
-use common::{b64, decode, exchange, type_of};
+use common::{b64, data_frames, exchange, payload, type_of};
 use serde_json::json;
 
 fn sys_tar_create(dir: &Path) -> Vec<u8> {
@@ -32,15 +32,6 @@ fn sys_tar_extract(archive: &[u8], into: &Path) {
         .expect("spawn tar -x");
     child.stdin.take().unwrap().write_all(archive).unwrap();
     assert!(child.wait().unwrap().success(), "tar -x failed");
-}
-
-fn data_frames(bytes: &[u8]) -> Vec<String> {
-    let mut lines: Vec<String> = bytes
-        .chunks(16 * 1024)
-        .map(|c| json!({"op":"data","data":b64(c)}).to_string())
-        .collect();
-    lines.push(json!({"op":"data_end"}).to_string());
-    lines
 }
 
 #[tokio::test]
@@ -80,11 +71,7 @@ async fn pull_streams_a_tar_of_the_path() {
         "done",
         "pull done: {frames:?}"
     );
-    let archive: Vec<u8> = frames
-        .iter()
-        .filter(|f| type_of(f) == "data")
-        .flat_map(decode)
-        .collect();
+    let archive = payload(&frames, "data");
 
     let out = tempfile::tempdir().unwrap();
     sys_tar_extract(&archive, out.path());
@@ -111,15 +98,42 @@ async fn push_then_pull_roundtrips_a_tree() {
 
     let pulled =
         exchange(&[json!({"op":"fs_pull","path":dest.to_str().unwrap()}).to_string()]).await;
-    let out_archive: Vec<u8> = pulled
-        .iter()
-        .filter(|f| type_of(f) == "data")
-        .flat_map(decode)
-        .collect();
+    let out_archive = payload(&pulled, "data");
     let out = tempfile::tempdir().unwrap();
     sys_tar_extract(&out_archive, out.path());
     assert_eq!(std::fs::read(out.path().join("t/f1")).unwrap(), b"one");
     assert_eq!(std::fs::read(out.path().join("t/d/f2")).unwrap(), b"two");
+}
+
+#[tokio::test]
+async fn push_truncated_stream_errors() {
+    // Send fs_push + a data frame but no data_end: tar gets a partial archive
+    // and the handler must report an error, not done.
+    let dest = tempfile::tempdir().unwrap();
+    let frames = exchange(&[
+        json!({"op":"fs_push","dest":dest.path().join("p").to_str().unwrap()}).to_string(),
+        json!({"op":"data","data":b64(b"not-a-real-tar")}).to_string(),
+    ])
+    .await;
+    assert_eq!(
+        type_of(frames.last().unwrap()),
+        "error",
+        "truncated push: {frames:?}"
+    );
+}
+
+#[tokio::test]
+async fn push_bad_archive_reports_tar_failure() {
+    // A complete stream that isn't a valid tar → tar exits nonzero → Internal.
+    let dest = tempfile::tempdir().unwrap();
+    let frames = exchange(&[
+        json!({"op":"fs_push","dest":dest.path().join("p").to_str().unwrap()}).to_string(),
+        json!({"op":"data","data":b64(b"this is not tar data at all\n")}).to_string(),
+        json!({"op":"data_end"}).to_string(),
+    ])
+    .await;
+    assert_eq!(type_of(frames.last().unwrap()), "error");
+    assert_eq!(frames.last().unwrap()["kind"], "internal");
 }
 
 #[tokio::test]

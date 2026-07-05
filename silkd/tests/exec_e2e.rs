@@ -7,16 +7,11 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{decode, one, roundtrip, type_of};
+use common::{decode, exchange, one, roundtrip, type_of};
 use silkd::server::State;
 
 fn body_of(frames: &[serde_json::Value]) -> String {
-    let bytes: Vec<u8> = frames
-        .iter()
-        .filter(|f| type_of(f) == "stdout")
-        .flat_map(decode)
-        .collect();
-    String::from_utf8(bytes).unwrap()
+    String::from_utf8(common::payload(frames, "stdout")).unwrap()
 }
 
 #[tokio::test]
@@ -115,6 +110,125 @@ async fn daemonizer_exit_is_the_last_frame() {
             .any(|f| String::from_utf8_lossy(&decode(f)).contains("late")),
         "grandchild output must not leak after exit"
     );
+}
+
+async fn detached_pid(state: &Arc<State>, script: &str) -> u64 {
+    let argv = serde_json::json!(["/bin/sh", "-c", script]);
+    let started = one(
+        state,
+        &serde_json::json!({"op":"exec","argv":argv,"detach":true}).to_string(),
+    )
+    .await;
+    assert_eq!(type_of(&started[0]), "started");
+    started[0]["pid"].as_u64().unwrap()
+}
+
+#[tokio::test]
+async fn attach_streams_live_output_then_exit() {
+    let state = Arc::new(State::new());
+    let pid = detached_pid(&state, "sleep 0.3; echo live-chunk").await;
+    // Attach before the echo fires: the chunk must arrive live and the stream
+    // must end with exit.
+    let frames = tokio::time::timeout(
+        Duration::from_secs(8),
+        one(&state, &format!(r#"{{"op":"attach","pid":{pid}}}"#)),
+    )
+    .await
+    .expect("attach hung");
+    assert!(
+        body_of(&frames).contains("live-chunk"),
+        "attach missed live output: {frames:?}"
+    );
+    assert_eq!(type_of(frames.last().unwrap()), "exit");
+}
+
+#[tokio::test]
+async fn attach_to_exited_process_returns_exit_immediately() {
+    let state = Arc::new(State::new());
+    let pid = detached_pid(&state, "echo done-fast").await;
+    for _ in 0..100 {
+        let logs = one(&state, &format!(r#"{{"op":"logs","pid":{pid}}}"#)).await;
+        if logs.iter().any(|f| type_of(f) == "exit") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let frames = tokio::time::timeout(
+        Duration::from_secs(3),
+        one(&state, &format!(r#"{{"op":"attach","pid":{pid}}}"#)),
+    )
+    .await
+    .expect("attach to an exited process must not hang");
+    assert!(body_of(&frames).contains("done-fast"));
+    assert_eq!(type_of(frames.last().unwrap()), "exit");
+}
+
+#[tokio::test]
+async fn attach_unknown_pid_is_not_found() {
+    let frames = roundtrip(r#"{"op":"attach","pid":999999}"#).await;
+    assert_eq!(type_of(&frames[0]), "error");
+    assert_eq!(frames[0]["kind"], "not_found");
+}
+
+#[tokio::test]
+async fn kill_actually_terminates_a_live_process() {
+    let state = Arc::new(State::new());
+    let pid = detached_pid(&state, "sleep 30").await;
+    // Wait for it to register, then kill and confirm it reaches exited well
+    // before the 30s sleep would end.
+    for _ in 0..50 {
+        let ps = one(&state, r#"{"op":"ps"}"#).await;
+        if ps[0]["procs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["pid"].as_u64() == Some(pid))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let killed = one(&state, &format!(r#"{{"op":"kill","pid":{pid}}}"#)).await;
+    assert_eq!(type_of(&killed[0]), "done");
+    let mut exited = false;
+    for _ in 0..150 {
+        let logs = one(&state, &format!(r#"{{"op":"logs","pid":{pid}}}"#)).await;
+        if logs.iter().any(|f| type_of(f) == "exit") {
+            exited = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(exited, "killed process never reached exited state");
+}
+
+#[tokio::test]
+async fn exec_unknown_user_is_rejected() {
+    let frames =
+        roundtrip(r#"{"op":"exec","argv":["true"],"user":"definitely-not-a-user-xyz"}"#).await;
+    assert_eq!(type_of(&frames[0]), "error");
+    assert_eq!(frames[0]["kind"], "bad_request");
+}
+
+#[tokio::test]
+async fn exec_missing_binary_is_an_internal_error() {
+    let frames = roundtrip(r#"{"op":"exec","argv":["/no/such/binary-xyz"]}"#).await;
+    assert_eq!(type_of(&frames[0]), "error");
+    assert_eq!(frames[0]["kind"], "internal");
+    assert!(frames[0]["message"].as_str().unwrap().contains("spawn"));
+}
+
+#[tokio::test]
+async fn exec_stdin_is_piped_to_the_child() {
+    // cat echoes its stdin; feed a stdin frame, close it, expect the bytes back.
+    let frames = exchange(&[
+        r#"{"op":"exec","argv":["/bin/cat"]}"#.to_string(),
+        serde_json::json!({"op":"stdin","data":common::b64(b"piped-in\n")}).to_string(),
+        r#"{"op":"stdin_close"}"#.to_string(),
+    ])
+    .await;
+    assert_eq!(body_of(&frames), "piped-in\n");
+    assert_eq!(type_of(frames.last().unwrap()), "exit");
 }
 
 #[tokio::test]

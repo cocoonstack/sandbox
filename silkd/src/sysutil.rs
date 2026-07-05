@@ -38,9 +38,18 @@ pub fn rand_token() -> String {
     }
 }
 
-/// SIGKILLs `pid` (a session's shell on teardown).
-pub fn kill(pid: u32) {
-    signal_pid(pid, libc::SIGKILL);
+/// SIGKILLs the process group led by `pgid` — a session's shell plus its
+/// foreground children, so tearing down a session that is running an external
+/// command actually stops the command (killing only the shell would leave the
+/// child holding the stdout pipe open). The shell is spawned as its own group
+/// leader (pgid == its pid).
+pub fn kill_group(pgid: u32) {
+    // kill(-0) targets the CALLER's group (silkd itself); guard it, and the
+    // synthetic-id range whose pid_t cast would go negative.
+    if pgid == 0 || pgid > i32::MAX as u32 {
+        return;
+    }
+    unsafe { libc::kill(-(pgid as libc::pid_t), libc::SIGKILL) };
 }
 
 /// Sends `sig` to `pid`, ignoring the result: an ESRCH against a

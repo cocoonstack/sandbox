@@ -27,15 +27,13 @@ impl State {
         }
     }
 
-    pub async fn serve<R, W>(self: &Arc<Self>, reader: R, mut writer: W) -> std::io::Result<()>
+    pub async fn serve<R, W>(self: &Arc<Self>, mut reader: R, mut writer: W) -> std::io::Result<()>
     where
         R: AsyncBufRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin,
     {
-        let mut reader = reader;
-        let first = match proto::read_frame(&mut reader).await? {
-            Some(bytes) => bytes,
-            None => return Ok(()),
+        let Some(first) = proto::read_frame(&mut reader).await? else {
+            return Ok(());
         };
         let req: Request = match serde_json::from_slice(&first) {
             Ok(r) => r,
@@ -55,22 +53,18 @@ impl State {
             Request::Logs { pid } => self.logs(&mut writer, pid).await,
             Request::Attach { pid } => self.attach(&mut writer, pid).await,
             Request::Exec(e) => {
-                if let Some(sid) = e.session.clone() {
-                    match self.sessions.get(&sid) {
-                        Some(sess) => {
-                            if !sess.run(&e.argv, &mut writer).await {
-                                self.sessions.remove(&sid);
-                            }
-                            Ok(())
-                        }
-                        None => {
-                            proto::write_frame(
-                                &mut writer,
-                                &Response::error(ErrorKind::NotFound, "no such session"),
-                            )
-                            .await
-                        }
+                if let Some(sid) = e.session.as_deref() {
+                    let Some(sess) = self.sessions.get(sid) else {
+                        return proto::write_frame(
+                            &mut writer,
+                            &Response::error(ErrorKind::NotFound, "no such session"),
+                        )
+                        .await;
+                    };
+                    if !sess.run(&e.argv, &mut writer).await {
+                        self.sessions.remove(sid);
                     }
+                    Ok(())
                 } else {
                     let (tx, rx) = mpsc::channel(16);
                     let feeder = tokio::spawn(feed_client(reader, tx));

@@ -6,6 +6,7 @@
 //! pipe deadlock, which is the conventional interactive-shell behaviour.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::io;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -14,10 +15,9 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
-use crate::proto::{self, ErrorKind, Response};
+use crate::proto::{self, ErrorKind, Response, READ_CHUNK};
 use crate::sysutil;
 
-const READ_CHUNK: usize = 32 * 1024;
 /// Idle sessions (no command run within this window) are reaped so an
 /// abandoned session's shell + fds don't accumulate.
 pub const IDLE_TTL: Duration = Duration::from_secs(30 * 60);
@@ -66,6 +66,9 @@ impl Table {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // Own process group (leader pgid == pid) so teardown can group-kill
+            // the shell together with whatever external command it is running.
+            .process_group(0)
             .kill_on_drop(true)
             .spawn()?;
         let pid = child.id().unwrap_or(0);
@@ -86,10 +89,10 @@ impl Table {
         // real command reads a clean stream.
         let mut init = String::from("exec 2>&1\n");
         if let Some(dir) = cwd {
-            init.push_str(&format!("cd {} || exit 1\n", shell_quote(&dir)));
+            writeln!(init, "cd {} || exit 1", shell_quote(&dir)).unwrap();
         }
         for (k, v) in env {
-            init.push_str(&format!("export {}={}\n", k, shell_quote(v)));
+            writeln!(init, "export {}={}", k, shell_quote(v)).unwrap();
         }
         {
             let mut io = session.io.lock().await;
@@ -126,7 +129,7 @@ impl Table {
     pub fn remove(&self, id: &str) -> bool {
         let removed = self.inner.lock().unwrap().remove(id);
         if let Some(s) = &removed {
-            sysutil::kill(s.pid);
+            sysutil::kill_group(s.pid);
         }
         removed.is_some()
     }
@@ -153,7 +156,7 @@ impl Table {
             .collect();
         for id in &dead {
             if let Some(s) = map.remove(id) {
-                sysutil::kill(s.pid);
+                sysutil::kill_group(s.pid);
             }
         }
         dead.len()
@@ -258,7 +261,14 @@ impl Io {
                     }
                     rest.extend_from_slice(&buf[..m]);
                 }
-                return Ok(String::from_utf8_lossy(&rest).trim().parse().unwrap_or(-1));
+                // Parse only the exit-code line; a command that left a
+                // background writer can land bytes after the newline, which
+                // must not corrupt the code.
+                let end = rest.iter().position(|&b| b == b'\n').unwrap_or(rest.len());
+                return Ok(String::from_utf8_lossy(&rest[..end])
+                    .trim()
+                    .parse()
+                    .unwrap_or(-1));
             }
             if acc.len() > keep {
                 let upto = acc.len() - keep;

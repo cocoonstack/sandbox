@@ -10,7 +10,7 @@ use std::time::UNIX_EPOCH;
 use tokio::fs;
 use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::proto::{self, DirEntry, ErrorKind, FileInfo, FileKind, Request, Response, READ_CHUNK};
+use crate::proto::{self, err_frame, DirEntry, FileInfo, FileKind, Response, READ_CHUNK};
 
 /// Streams `data` frames from the client into `path`, applying `mode` if
 /// given, until a `data_end` frame. Writes go to a sibling temp file that is
@@ -33,27 +33,15 @@ where
         Err(e) => return err_frame(w, &e, "create").await,
     };
 
-    let outcome = stream_into(&mut reader, &mut file).await;
+    let outcome = proto::feed_data_frames(&mut reader, &mut file).await.and(
+        file.flush()
+            .await
+            .map_err(|e| proto::FeedError::Io(e, "flush")),
+    );
     if let Err(fail) = outcome {
         drop(file);
         let _ = fs::remove_file(&tmp).await;
-        return match fail {
-            WriteFail::Io(e, op) => err_frame(w, &e, op).await,
-            WriteFail::Protocol => {
-                proto::write_frame(
-                    w,
-                    &Response::error(ErrorKind::BadRequest, "expected data or data_end"),
-                )
-                .await
-            }
-            WriteFail::Truncated => {
-                proto::write_frame(
-                    w,
-                    &Response::error(ErrorKind::BadRequest, "stream ended before data_end"),
-                )
-                .await
-            }
-        };
+        return proto::write_feed_error(w, fail).await;
     }
 
     // Explicit mode wins; otherwise inherit the destination's mode on an
@@ -83,33 +71,6 @@ where
         return err_frame(w, &e, "commit").await;
     }
     proto::write_frame(w, &Response::Done).await
-}
-
-enum WriteFail {
-    Io(io::Error, &'static str),
-    Protocol,
-    Truncated,
-}
-
-async fn stream_into<R>(reader: &mut R, file: &mut fs::File) -> Result<(), WriteFail>
-where
-    R: AsyncBufRead + Unpin,
-{
-    loop {
-        let frame = proto::read_frame(reader)
-            .await
-            .map_err(|e| WriteFail::Io(e, "read"))?
-            .ok_or(WriteFail::Truncated)?;
-        match serde_json::from_slice::<Request>(&frame) {
-            Ok(Request::Data { data }) => file
-                .write_all(&data)
-                .await
-                .map_err(|e| WriteFail::Io(e, "write"))?,
-            Ok(Request::DataEnd) => break,
-            _ => return Err(WriteFail::Protocol),
-        }
-    }
-    file.flush().await.map_err(|e| WriteFail::Io(e, "flush"))
 }
 
 /// Streams the file at `path` back as `data` frames, then `done`.
@@ -240,15 +201,4 @@ fn file_kind(meta: &std::fs::Metadata) -> FileKind {
     } else {
         FileKind::Other
     }
-}
-
-/// Maps an io error to an Error frame, classifying NotFound so a client can
-/// distinguish a missing path from a real failure.
-async fn err_frame<W: AsyncWrite + Unpin>(w: &mut W, e: &io::Error, op: &str) -> io::Result<()> {
-    let kind = if e.kind() == io::ErrorKind::NotFound {
-        ErrorKind::NotFound
-    } else {
-        ErrorKind::Internal
-    };
-    proto::write_frame(w, &Response::error(kind, format!("{op}: {e}"))).await
 }

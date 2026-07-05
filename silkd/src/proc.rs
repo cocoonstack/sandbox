@@ -174,7 +174,7 @@ impl Proc {
 
 impl Ring {
     fn push(&mut self, stderr: bool, data: &[u8]) {
-        self.buf.extend(data.iter().copied());
+        self.buf.extend(data);
         self.tags.push_back((stderr, data.len()));
         self.trim();
     }

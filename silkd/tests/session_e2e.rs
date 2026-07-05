@@ -11,12 +11,7 @@ use serde_json::{json, Value};
 use silkd::server::State;
 
 fn body(frames: &[Value]) -> String {
-    let bytes: Vec<u8> = frames
-        .iter()
-        .filter(|f| type_of(f) == "stdout")
-        .flat_map(common::decode)
-        .collect();
-    String::from_utf8_lossy(&bytes).into_owned()
+    String::from_utf8_lossy(&common::payload(frames, "stdout")).into_owned()
 }
 
 async fn create(state: &Arc<State>, extra: Value) -> String {
@@ -187,6 +182,49 @@ async fn reap_skips_a_session_running_a_command() {
     assert_eq!(type_of(done.last().unwrap()), "exit");
     // After it finishes it becomes reapable again.
     assert_eq!(state.sessions.reap_idle(Duration::ZERO), 1);
+}
+
+#[tokio::test]
+async fn session_argv_with_metacharacters_is_one_literal_token() {
+    // A single argv element containing shell metacharacters must be passed as
+    // one literal argument, not interpreted — shell_quote must neutralize it.
+    let state = Arc::new(State::new());
+    let id = create(&state, json!({})).await;
+    let evil = "a b; echo INJECTED $(id) `whoami` 'q'";
+    let r = sh(&state, &id, &["printf", "%s", evil]).await;
+    assert_eq!(
+        body(&r),
+        evil,
+        "argv metacharacters were interpreted instead of passed literally: {r:?}"
+    );
+    assert!(
+        !body(&r).contains("INJECTED\n") && !body(&r).to_lowercase().contains("uid="),
+        "command injection through argv: {r:?}"
+    );
+}
+
+#[tokio::test]
+async fn session_rm_unwedges_a_running_external_command() {
+    // A session running a long external command blocks its run() until the
+    // command exits. session_rm must group-kill the shell AND the command so
+    // the blocked run() unwinds — killing only bash would leave the sleep
+    // holding the stdout pipe open.
+    let state = Arc::new(State::new());
+    let id = create(&state, json!({})).await;
+    let busy = {
+        let s = Arc::clone(&state);
+        let sid = id.clone();
+        tokio::spawn(async move { sh(&s, &sid, &["sleep", "3600"]).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let rm = one(&state, &json!({"op":"session_rm","id":id}).to_string()).await;
+    assert_eq!(type_of(&rm[0]), "done");
+    // The blocked command must now return (shell group killed) within a bound.
+    let done = tokio::time::timeout(std::time::Duration::from_secs(5), busy)
+        .await
+        .expect("session_rm did not unwedge the external command");
+    let frames = done.unwrap();
+    assert_eq!(type_of(frames.last().unwrap()), "error");
 }
 
 #[tokio::test]

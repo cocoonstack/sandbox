@@ -254,6 +254,73 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, resp: &Response) -> i
     w.flush().await
 }
 
+/// Maps an io error to an Error frame, classifying NotFound so a client can
+/// tell a missing path from a real failure. Shared by the fs and tree verbs.
+pub async fn err_frame<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    e: &io::Error,
+    op: &str,
+) -> io::Result<()> {
+    let kind = if e.kind() == io::ErrorKind::NotFound {
+        ErrorKind::NotFound
+    } else {
+        ErrorKind::Internal
+    };
+    write_frame(w, &Response::error(kind, format!("{op}: {e}"))).await
+}
+
+/// Why a `data`/`data_end` upload stream ended without a clean `data_end`.
+pub enum FeedError {
+    Io(io::Error, &'static str),
+    Protocol,
+    Truncated,
+}
+
+/// Feeds client `data` frames into `sink` until `data_end`. Shared by fs.write
+/// (sink = temp file) and fs.push (sink = tar stdin); the caller flushes/closes
+/// the sink and, on error, reports via `write_feed_error`.
+pub async fn feed_data_frames<R, S>(reader: &mut R, sink: &mut S) -> Result<(), FeedError>
+where
+    R: AsyncBufRead + Unpin,
+    S: AsyncWrite + Unpin,
+{
+    loop {
+        let frame = read_frame(reader)
+            .await
+            .map_err(|e| FeedError::Io(e, "read"))?
+            .ok_or(FeedError::Truncated)?;
+        match serde_json::from_slice::<Request>(&frame) {
+            Ok(Request::Data { data }) => sink
+                .write_all(&data)
+                .await
+                .map_err(|e| FeedError::Io(e, "write"))?,
+            Ok(Request::DataEnd) => return Ok(()),
+            _ => return Err(FeedError::Protocol),
+        }
+    }
+}
+
+/// Writes the terminal error frame for a failed `feed_data_frames`.
+pub async fn write_feed_error<W: AsyncWrite + Unpin>(w: &mut W, err: FeedError) -> io::Result<()> {
+    match err {
+        FeedError::Io(e, op) => err_frame(w, &e, op).await,
+        FeedError::Protocol => {
+            write_frame(
+                w,
+                &Response::error(ErrorKind::BadRequest, "expected data or data_end"),
+            )
+            .await
+        }
+        FeedError::Truncated => {
+            write_frame(
+                w,
+                &Response::error(ErrorKind::BadRequest, "stream ended before data_end"),
+            )
+            .await
+        }
+    }
+}
+
 mod b64 {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;

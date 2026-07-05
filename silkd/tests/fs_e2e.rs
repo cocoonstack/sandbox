@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{b64, decode, exchange, type_of};
+use common::{b64, exchange, type_of};
 use serde_json::json;
 
 #[tokio::test]
@@ -24,12 +24,7 @@ async fn write_then_read_roundtrips_bytes() {
     );
 
     let read = exchange(&[json!({"op":"fs_read","path":path}).to_string()]).await;
-    let body: Vec<u8> = read
-        .iter()
-        .filter(|f| type_of(f) == "data")
-        .flat_map(decode)
-        .collect();
-    assert_eq!(body, b"silk file body");
+    assert_eq!(common::payload(&read, "data"), b"silk file body");
     assert_eq!(type_of(read.last().unwrap()), "done");
 }
 
@@ -165,6 +160,31 @@ async fn overwrite_preserves_destination_mode() {
     let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o7777;
     assert_eq!(mode, 0o755, "overwrite must preserve the executable bit");
     assert_eq!(std::fs::read(&path).unwrap(), b"new content");
+}
+
+#[tokio::test]
+async fn rm_plain_file_and_missing_and_nonempty_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    // plain file
+    let f = dir.path().join("f");
+    std::fs::write(&f, b"x").unwrap();
+    let r = exchange(&[json!({"op":"fs_rm","path":f.to_str().unwrap()}).to_string()]).await;
+    assert_eq!(type_of(&r[0]), "done");
+    assert!(!f.exists());
+    // missing path → not_found
+    let m = exchange(&[json!({"op":"fs_rm","path":"/no/such/xyz"}).to_string()]).await;
+    assert_eq!(type_of(&m[0]), "error");
+    assert_eq!(m[0]["kind"], "not_found");
+    // non-recursive rm of a non-empty dir → error (not not_found)
+    let sub = dir.path().join("d");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::write(sub.join("inner"), b"y").unwrap();
+    let ne = exchange(&[json!({"op":"fs_rm","path":sub.to_str().unwrap()}).to_string()]).await;
+    assert_eq!(type_of(&ne[0]), "error");
+    assert!(
+        sub.exists(),
+        "non-recursive rm must not remove a non-empty dir"
+    );
 }
 
 #[tokio::test]

@@ -6,12 +6,12 @@
 
 use std::io;
 use std::path::Path;
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 
-use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncWrite};
 use tokio::process::Command;
 
-use crate::proto::{self, ErrorKind, Request, Response, READ_CHUNK};
+use crate::proto::{self, err_frame, ErrorKind, Response, READ_CHUNK};
 
 /// Extracts a client tar stream (`data` frames until `data_end`) into `dest`,
 /// creating it if needed. tar runs with the destination as cwd; a non-zero
@@ -39,41 +39,16 @@ where
     let mut sink = child.stdin.take().expect("stdin piped");
     // Drain stderr concurrently: a noisy tar can fill the stderr pipe and
     // block while we are still writing its stdin, deadlocking both.
-    let stderr = child.stderr.take().expect("stderr piped");
-    let err_task = tokio::spawn(drain(stderr));
+    let err_task = tokio::spawn(drain(child.stderr.take().expect("stderr piped")));
 
-    let feed = feed_tar(&mut reader, &mut sink).await;
+    let feed = proto::feed_data_frames(&mut reader, &mut sink).await;
     drop(sink); // EOF to tar regardless of outcome
     let status = child.wait().await?;
     let msg = err_task.await.unwrap_or_default();
 
-    if let Err(fail) = feed {
-        return match fail {
-            PushFail::Io(e, op) => err_frame(w, &e, op).await,
-            PushFail::Protocol => {
-                proto::write_frame(
-                    w,
-                    &Response::error(ErrorKind::BadRequest, "expected data or data_end"),
-                )
-                .await
-            }
-            PushFail::Truncated => {
-                proto::write_frame(
-                    w,
-                    &Response::error(ErrorKind::BadRequest, "stream ended before data_end"),
-                )
-                .await
-            }
-        };
-    }
-    if status.success() {
-        proto::write_frame(w, &Response::Done).await
-    } else {
-        proto::write_frame(
-            w,
-            &Response::error(ErrorKind::Internal, format!("tar extract: {}", msg.trim())),
-        )
-        .await
+    match feed {
+        Err(fail) => proto::write_feed_error(w, fail).await,
+        Ok(()) => tar_result(w, status, &msg, "tar extract").await,
     }
 }
 
@@ -98,6 +73,8 @@ pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
         .arg("-c")
         .arg("-C")
         .arg(&cwd)
+        // `--` so a basename starting with `-` is a path, not a tar option.
+        .arg("--")
         .arg(&name)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -109,8 +86,7 @@ pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
     let mut out = child.stdout.take().expect("stdout piped");
     // Drain stderr concurrently so a noisy tar can't block on a full stderr
     // pipe while we are reading its stdout.
-    let stderr = child.stderr.take().expect("stderr piped");
-    let err_task = tokio::spawn(drain(stderr));
+    let err_task = tokio::spawn(drain(child.stderr.take().expect("stderr piped")));
 
     let mut buf = vec![0u8; READ_CHUNK];
     loop {
@@ -133,12 +109,23 @@ pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
     }
     let status = child.wait().await?;
     let msg = err_task.await.unwrap_or_default();
+    tar_result(w, status, &msg, "tar create").await
+}
+
+/// Terminal frame for a finished tar: `done` on success, else the captured
+/// stderr under `label`.
+async fn tar_result<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    status: ExitStatus,
+    msg: &str,
+    label: &str,
+) -> io::Result<()> {
     if status.success() {
         proto::write_frame(w, &Response::Done).await
     } else {
         proto::write_frame(
             w,
-            &Response::error(ErrorKind::Internal, format!("tar create: {}", msg.trim())),
+            &Response::error(ErrorKind::Internal, format!("{label}: {}", msg.trim())),
         )
         .await
     }
@@ -159,38 +146,4 @@ async fn drain(mut stderr: tokio::process::ChildStderr) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
-}
-
-enum PushFail {
-    Io(io::Error, &'static str),
-    Protocol,
-    Truncated,
-}
-
-async fn feed_tar<R>(reader: &mut R, sink: &mut tokio::process::ChildStdin) -> Result<(), PushFail>
-where
-    R: AsyncBufRead + Unpin,
-{
-    loop {
-        let frame = proto::read_frame(reader)
-            .await
-            .map_err(|e| PushFail::Io(e, "read"))?
-            .ok_or(PushFail::Truncated)?;
-        match serde_json::from_slice::<Request>(&frame) {
-            Ok(Request::Data { data }) => sink
-                .write_all(&data)
-                .await
-                .map_err(|e| PushFail::Io(e, "tar stdin"))?,
-            Ok(Request::DataEnd) => return Ok(()),
-            _ => return Err(PushFail::Protocol),
-        }
-    }
-}
-
-async fn err_frame<W: AsyncWrite + Unpin>(w: &mut W, e: &io::Error, op: &str) -> io::Result<()> {
-    proto::write_frame(
-        w,
-        &Response::error(ErrorKind::Internal, format!("{op}: {e}")),
-    )
-    .await
 }
