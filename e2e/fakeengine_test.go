@@ -1,0 +1,107 @@
+package e2e
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sdk/silkd/silkdtest"
+)
+
+// fakeEngine replaces only the cocoon CLI: every "VM" it creates is a
+// silkdtest daemon behind a real hybrid-vsock UDS, so probing and the data
+// plane run the production code paths end to end.
+type fakeEngine struct {
+	real *engine.Engine
+	dir  string
+
+	mu        sync.Mutex
+	listeners map[string]io.Closer
+	socks     map[string]string
+	creates   int
+	seq       int
+}
+
+func newFakeEngine(dir string) *fakeEngine {
+	return &fakeEngine{
+		real:      engine.New("cocoon", "", ""),
+		dir:       dir,
+		listeners: map[string]io.Closer{},
+		socks:     map[string]string{},
+	}
+}
+
+func (f *fakeEngine) Clone(_ context.Context, _, name string, _ types.PoolKey) error {
+	return f.create(name)
+}
+
+func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) error {
+	return f.create(name)
+}
+
+func (f *fakeEngine) Remove(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if l := f.listeners[name]; l != nil {
+		_ = l.Close()
+	}
+	delete(f.listeners, name)
+	delete(f.socks, name)
+	return nil
+}
+
+func (f *fakeEngine) SnapshotSave(_ context.Context, _, _ string) error { return nil }
+
+func (f *fakeEngine) SnapshotExport(_ context.Context, _, toDir string) error {
+	if err := os.MkdirAll(toDir, 0o750); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(toDir, "snapshot.json"), []byte("{}"), 0o600)
+}
+
+func (f *fakeEngine) SnapshotRemove(_ context.Context, _ string) error { return nil }
+
+func (f *fakeEngine) List(_ context.Context, filters ...string) ([]types.VMRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var vms []types.VMRecord
+	for name, sock := range f.socks {
+		if len(filters) > 0 && !slices.Contains(filters, name) {
+			continue
+		}
+		vms = append(vms, types.VMRecord{Name: name, State: "running", VsockSocket: sock})
+	}
+	return vms, nil
+}
+
+func (f *fakeEngine) Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error {
+	return f.real.Probe(ctx, vsockSocket, timeout)
+}
+
+func (f *fakeEngine) create(name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seq++
+	f.creates++
+	sock := filepath.Join(f.dir, fmt.Sprintf("v%d.sock", f.seq))
+	l, err := silkdtest.ListenHybrid(sock, 2048)
+	if err != nil {
+		return err
+	}
+	f.listeners[name] = l
+	f.socks[name] = sock
+	return nil
+}
+
+func (f *fakeEngine) createCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.creates
+}
