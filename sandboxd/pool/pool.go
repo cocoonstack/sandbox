@@ -170,7 +170,8 @@ func (m *Manager) Release(ctx context.Context, id, token string) error {
 	if saveErr != nil {
 		log.WithFunc("pool.Release").Errorf(ctx, saveErr, "persist release of %s", id)
 	}
-	return m.eng.Remove(ctx, sb.VMName)
+	// The claim is already dropped; removal must survive the caller hanging up.
+	return m.eng.Remove(context.WithoutCancel(ctx), sb.VMName)
 }
 
 // AgentSocket resolves a claimed sandbox's vsock UDS for the data-plane relay.
@@ -380,7 +381,9 @@ func (m *Manager) reapOnce(ctx context.Context) {
 }
 
 // provision creates one claim-ready VM: clone from a golden when available,
-// cold-boot the template otherwise. The VM is destroyed on any failure.
+// cold-boot the template otherwise. The VM is destroyed on any failure —
+// including create-command failures, which can leave a half-created VM
+// behind (e.g. the CLI killed by timeout after the VMM spawned).
 func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden string) (*types.Sandbox, error) {
 	name := vmName(key)
 	probeTimeout := claimProbeTimeout
@@ -391,18 +394,16 @@ func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden strin
 		err = m.eng.RunCold(ctx, name, key)
 		probeTimeout = coldProbeTimeout
 	}
-	if err != nil {
-		return nil, err
-	}
-	sock, err := m.vsockOf(ctx, name)
 	if err == nil {
-		err = m.eng.Probe(ctx, sock, probeTimeout)
+		var sock string
+		if sock, err = m.vsockOf(ctx, name); err == nil {
+			if err = m.eng.Probe(ctx, sock, probeTimeout); err == nil {
+				return &types.Sandbox{VMName: name, Key: key, VsockSocket: sock}, nil
+			}
+		}
 	}
-	if err != nil {
-		m.destroy(ctx, name)
-		return nil, err
-	}
-	return &types.Sandbox{VMName: name, Key: key, VsockSocket: sock}, nil
+	m.destroy(ctx, name)
+	return nil, err
 }
 
 func (m *Manager) vsockOf(ctx context.Context, name string) (string, error) {
@@ -422,7 +423,11 @@ func (m *Manager) vsockOf(ctx context.Context, name string) (string, error) {
 	return "", fmt.Errorf("vm %s not found after create", name)
 }
 
+// destroy removes a VM on a cancellation-immune ctx: cleanup is usually
+// triggered by a failed or abandoned request, and running `cocoon vm rm` on
+// the caller's canceled ctx would no-op and orphan a live VM.
 func (m *Manager) destroy(ctx context.Context, name string) {
+	ctx = context.WithoutCancel(ctx)
 	if err := m.eng.Remove(ctx, name); err != nil {
 		log.WithFunc("pool.destroy").Errorf(ctx, err, "remove vm %s", name)
 	}

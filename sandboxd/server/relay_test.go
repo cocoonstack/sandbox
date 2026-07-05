@@ -21,6 +21,26 @@ const (
 		"Connection: Upgrade\r\n\r\n"
 )
 
+func TestCloseRelaysRefusesLateRelays(t *testing.T) {
+	ts, srv := newRelayServer(t, func(c net.Conn) {
+		_, _ = io.Copy(io.Discard, c)
+	})
+	srv.CloseRelays()
+
+	conn, err := net.Dial("tcp", ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.WriteString(conn, agentRequest); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	if _, err := io.Copy(io.Discard, conn); err != nil {
+		t.Errorf("late relay not refused promptly: %v", err)
+	}
+}
+
 func TestRelayRoundTrip(t *testing.T) {
 	frames := []string{
 		`{"type":"started","pid":7}` + "\n",
@@ -78,7 +98,7 @@ func TestRelayDeliversPipelinedBytes(t *testing.T) {
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.WriteString(conn, agentRequest+execFrame); err != nil {
+	if _, err = io.WriteString(conn, agentRequest+execFrame); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	r := bufio.NewReader(conn)

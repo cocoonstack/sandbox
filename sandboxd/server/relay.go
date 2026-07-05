@@ -17,10 +17,13 @@ const drainGrace = 30 * time.Second
 
 var switchingProtocols = []byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n")
 
-// CloseRelays force-closes every in-flight relay and waits for them to
-// drain; http.Server.Shutdown does not track hijacked connections.
+// CloseRelays force-closes every in-flight relay, refuses new ones, and
+// waits for the drain; http.Server.Shutdown does not track hijacked
+// connections, and a relay hijacked inside the shutdown window would
+// otherwise register after this snapshot and hang the drain forever.
 func (s *Server) CloseRelays() {
 	s.relayMu.Lock()
+	s.relayClosed = true
 	for client, guest := range s.relays {
 		_ = client.Close()
 		_ = guest.Close()
@@ -66,6 +69,12 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 // finishes (silkd closes after the terminal frame) or the client vanishes.
 func (s *Server) relay(client net.Conn, clientBuf *bufio.Reader, guest net.Conn) {
 	s.relayMu.Lock()
+	if s.relayClosed {
+		s.relayMu.Unlock()
+		_ = client.Close()
+		_ = guest.Close()
+		return
+	}
 	s.relays[client] = guest
 	s.relayWG.Add(1)
 	s.relayMu.Unlock()

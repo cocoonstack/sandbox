@@ -112,6 +112,34 @@ func TestClaimProbeFailureDestroysVM(t *testing.T) {
 	}
 }
 
+func TestClaimCreateFailureDestroysVM(t *testing.T) {
+	eng := newFakeEngine()
+	eng.runColdErr = errors.New("cli killed by timeout")
+	m := newTestManager(t, eng)
+
+	if _, err := m.Claim(t.Context(), testKey, 0); err == nil {
+		t.Fatal("Claim succeeded with failing create")
+	}
+	if len(eng.removes) != 1 {
+		t.Errorf("removes=%v, want the half-created VM destroyed", eng.removes)
+	}
+}
+
+func TestClaimCanceledRequestStillDestroys(t *testing.T) {
+	eng := newFakeEngine()
+	eng.probeErr = errors.New("not ready")
+	m := newTestManager(t, eng)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, err := m.Claim(ctx, testKey, 0); err == nil {
+		t.Fatal("Claim succeeded with failing probe")
+	}
+	if len(eng.removes) != 1 {
+		t.Errorf("removes=%v, want destroy to survive the canceled request", eng.removes)
+	}
+}
+
 func TestClaimEgressNeedsAttachment(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	key := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}
@@ -153,8 +181,8 @@ func TestAgentSocketValidatesToken(t *testing.T) {
 		t.Fatalf("Claim: %v", err)
 	}
 
-	if _, err := m.AgentSocket(sb.ID, "wrong"); !errors.Is(err, ErrUnknownSandbox) {
-		t.Errorf("got %v, want ErrUnknownSandbox", err)
+	if _, wrongErr := m.AgentSocket(sb.ID, "wrong"); !errors.Is(wrongErr, ErrUnknownSandbox) {
+		t.Errorf("got %v, want ErrUnknownSandbox", wrongErr)
 	}
 	sock, err := m.AgentSocket(sb.ID, sb.Token)
 	if err != nil {
@@ -388,7 +416,11 @@ func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) er
 	return nil
 }
 
-func (f *fakeEngine) Remove(_ context.Context, name string) error {
+func (f *fakeEngine) Remove(ctx context.Context, name string) error {
+	// Models exec.CommandContext: a canceled ctx never runs cocoon at all.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.removes = append(f.removes, name)

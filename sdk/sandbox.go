@@ -34,7 +34,12 @@ type Cmd struct {
 	Env  map[string]string
 	User string
 
-	Stdin  io.Reader // nil closes the child's stdin immediately
+	// Stdin is consumed until EOF or until the command exits. A blocking
+	// reader (e.g. os.Stdin) whose command exits first keeps its pump
+	// goroutine parked in Read until the next bytes arrive — do not share
+	// one reader across Runs, the stale pump would swallow them. nil closes
+	// the child's stdin immediately.
+	Stdin  io.Reader
 	Stdout io.Writer // nil discards
 	Stderr io.Writer // nil discards
 }

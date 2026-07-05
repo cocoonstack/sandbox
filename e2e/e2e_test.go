@@ -40,25 +40,26 @@ func TestEndToEnd(t *testing.T) {
 	})
 
 	t.Run("refill then warm claim", func(t *testing.T) {
+		// Warm-hit = zero VM ops is proven by the pool unit tests; asserting
+		// create counts here would race the background refill ticker.
 		waitFor(t, func() bool {
 			infos, _ := stack.mgr.Info()
 			return len(infos) == 1 && infos[0].Warm >= 1
 		})
-		before := stack.eng.createCount()
 		warm, err := stack.client.New(t.Context(), "rt:24.04")
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
 		defer warm.Close()
-		if got := stack.eng.createCount(); got != before {
-			t.Errorf("warm claim created %d VMs, want 0", got-before)
-		}
 		if out, err := warm.Exec(t.Context(), "echo", "warm"); err != nil || out != "warm\n" {
 			t.Errorf("exec on warm claim: %q, %v", out, err)
 		}
 	})
 
 	t.Run("close releases and revokes access", func(t *testing.T) {
+		if sb == nil {
+			t.Skip("cold claim subtest failed")
+		}
 		if err := sb.Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}

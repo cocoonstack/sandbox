@@ -25,7 +25,6 @@ type fakeEngine struct {
 	mu        sync.Mutex
 	listeners map[string]io.Closer
 	socks     map[string]string
-	creates   int
 	seq       int
 }
 
@@ -89,7 +88,6 @@ func (f *fakeEngine) create(name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq++
-	f.creates++
 	sock := filepath.Join(f.dir, fmt.Sprintf("v%d.sock", f.seq))
 	l, err := silkdtest.ListenHybrid(sock, 2048)
 	if err != nil {
@@ -98,10 +96,4 @@ func (f *fakeEngine) create(name string) error {
 	f.listeners[name] = l
 	f.socks[name] = sock
 	return nil
-}
-
-func (f *fakeEngine) createCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.creates
 }

@@ -55,9 +55,10 @@ type Server struct {
 	dialer   Dialer
 	apiToken string
 
-	relayMu sync.Mutex
-	relays  map[net.Conn]net.Conn // client conn → guest conn, for forced shutdown
-	relayWG sync.WaitGroup
+	relayMu     sync.Mutex
+	relays      map[net.Conn]net.Conn // client conn → guest conn, for forced shutdown
+	relayClosed bool
+	relayWG     sync.WaitGroup
 }
 
 // New returns a Server; an empty apiToken leaves the node-level endpoints

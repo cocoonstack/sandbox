@@ -24,6 +24,22 @@ type Request interface{ Op() string }
 // Response is a server→client frame; RespType is its wire tag.
 type Response interface{ RespType() string }
 
+// B64 carries request payload bytes. It exists because silkd's deserializer
+// requires a base64 string and rejects null — which is exactly what
+// encoding/json emits for a nil []byte.
+type B64 []byte
+
+func (b B64) MarshalJSON() ([]byte, error) {
+	if b == nil {
+		b = B64{}
+	}
+	return json.Marshal([]byte(b))
+}
+
+func (b *B64) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, (*[]byte)(b))
+}
+
 // Exec starts a process; with Session set it runs inside that persistent
 // shell instead. Detach is emitted even when false — it is part of the
 // fixture corpus shape.
@@ -75,7 +91,7 @@ type SessionRm struct {
 
 // Stdin carries a chunk of exec stdin.
 type Stdin struct {
-	Data []byte `json:"data"`
+	Data B64 `json:"data"`
 }
 
 // StdinClose signals stdin EOF to the running exec.
@@ -133,7 +149,7 @@ type FsPull struct {
 
 // Data carries one chunk of an upload stream (FsWrite/FsPush payloads).
 type Data struct {
-	Data []byte `json:"data"`
+	Data B64 `json:"data"`
 }
 
 // DataEnd terminates an upload stream.

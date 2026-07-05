@@ -83,6 +83,20 @@ func TestDataFieldsAreBase64(t *testing.T) {
 	}
 }
 
+func TestRequestDataNeverNull(t *testing.T) {
+	// silkd's deserializer wants a base64 string; a nil payload must encode
+	// as "" — encoding/json's null would abort the RPC as a protocol error.
+	for _, req := range []Request{&Stdin{}, &Data{}} {
+		frame, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatalf("%s: %v", req.Op(), err)
+		}
+		if !strings.Contains(string(frame), `"data":""`) {
+			t.Errorf("%s: nil payload encoded as %s", req.Op(), frame)
+		}
+	}
+}
+
 func TestUnknownFieldsIgnored(t *testing.T) {
 	req, err := DecodeRequest([]byte(`{"v":1,"op":"exec","argv":["echo"],"detach":false,"future_field":true}`))
 	if err != nil {
