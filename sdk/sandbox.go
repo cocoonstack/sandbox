@@ -2,7 +2,6 @@ package sandbox
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -116,14 +115,8 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 		stderr = io.Discard
 	}
 	for {
-		resp, err := conn.Recv()
+		resp, err := recv(ctx, conn)
 		if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return 0, ctxErr
-			}
-			if errors.Is(err, io.EOF) {
-				return 0, fmt.Errorf("connection closed before exit")
-			}
 			return 0, err
 		}
 		switch resp := resp.(type) {

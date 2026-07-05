@@ -19,22 +19,7 @@ func (s *Sandbox) Push(ctx context.Context, dest string, tarStream io.Reader) er
 	if err := conn.Send(&silkd.FsPush{Dest: dest}); err != nil {
 		return err
 	}
-	buf := make([]byte, fsChunk)
-	for {
-		n, readErr := tarStream.Read(buf)
-		if n > 0 {
-			if err := conn.Send(&silkd.Data{Data: buf[:n]}); err != nil {
-				return err
-			}
-		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			return readErr
-		}
-	}
-	if err := conn.Send(silkd.DataEnd{}); err != nil {
+	if err := uploadStream(conn, tarStream); err != nil {
 		return err
 	}
 	return terminalErr(ctx, conn)

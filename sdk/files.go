@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -21,7 +22,7 @@ func (s *Sandbox) WriteFile(ctx context.Context, path string, data []byte, mode 
 	if err := conn.Send(&silkd.FsWrite{Path: path, Mode: mode}); err != nil {
 		return err
 	}
-	if err := streamData(conn, data); err != nil {
+	if err := uploadStream(conn, bytes.NewReader(data)); err != nil {
 		return err
 	}
 	return terminalErr(ctx, conn)
@@ -133,16 +134,24 @@ func (s *Sandbox) doneRPC(ctx context.Context, req silkd.Request) error {
 	return terminalErr(ctx, conn)
 }
 
-// streamData chunks data into Data frames terminated by DataEnd.
-func streamData(conn *silkd.Conn, data []byte) error {
-	for len(data) > 0 {
-		n := min(len(data), fsChunk)
-		if err := conn.Send(&silkd.Data{Data: data[:n]}); err != nil {
-			return err
+// uploadStream chunks r into Data frames terminated by DataEnd; shared by the
+// FsWrite payload and the FsPush tar stream.
+func uploadStream(conn *silkd.Conn, r io.Reader) error {
+	buf := make([]byte, fsChunk)
+	for {
+		n, readErr := r.Read(buf)
+		if n > 0 {
+			if err := conn.Send(&silkd.Data{Data: buf[:n]}); err != nil {
+				return err
+			}
 		}
-		data = data[n:]
+		if readErr == io.EOF {
+			return conn.Send(silkd.DataEnd{})
+		}
+		if readErr != nil {
+			return readErr
+		}
 	}
-	return conn.Send(silkd.DataEnd{})
 }
 
 // drainData consumes Data frames into sink until Done; an error frame or an
