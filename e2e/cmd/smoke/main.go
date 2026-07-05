@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -54,6 +55,7 @@ func run(addr, token, template string) error {
 		{"session", smokeSession},
 		{"find", smokeFind},
 		{"git", smokeGit},
+		{"pty", smokePty},
 	}
 	for _, s := range steps {
 		start := time.Now()
@@ -168,6 +170,29 @@ func smokeGit(ctx context.Context, sb *sandbox.Sandbox) error {
 	}
 	if !found {
 		return fmt.Errorf("non-ASCII file not in status: %+v", st2.Files)
+	}
+	return nil
+}
+
+func smokePty(ctx context.Context, sb *sandbox.Sandbox) error {
+	pty, err := sb.OpenPty(ctx, sandbox.PtyOpts{Cols: 80, Rows: 24})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = pty.Close() }()
+
+	if _, err = pty.Write([]byte("echo PTYMARK$((6*7))\nexit\n")); err != nil {
+		return err
+	}
+	out, err := io.ReadAll(pty)
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(string(out), "PTYMARK42") {
+		return fmt.Errorf("pty output missing marker: %q", out)
+	}
+	if code, ok := pty.ExitCode(); !ok || code != 0 {
+		return fmt.Errorf("pty exit code %d ok=%v, want 0 true", code, ok)
 	}
 	return nil
 }
