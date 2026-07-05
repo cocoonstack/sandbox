@@ -47,7 +47,7 @@ func New(cfg *memberlist.Config, nodeID, selfAddr string, secretKey []byte) (*Me
 		// Seed the epoch from wall-clock so a restarted node's fresh counts
 		// aren't rejected by peers still holding its pre-restart (higher)
 		// epoch; epoch++ keeps intra-process monotonicity above that base.
-		epoch: uint64(time.Now().UnixNano()),
+		epoch: uint64(time.Now().UnixNano()), //nolint:gosec // UnixNano is positive for current times
 		self:  NodeState{NodeID: nodeID, Addr: selfAddr, Pools: map[string]int{}},
 		view:  map[string]NodeState{},
 	}
