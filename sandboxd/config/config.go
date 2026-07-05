@@ -50,7 +50,11 @@ type Config struct {
 	Pools []PoolSpec `json:"pools"`
 }
 
-// MeshConfig configures cluster membership.
+// MeshConfig configures cluster membership. Two v1 constraints: all nodes
+// must share the same APIToken (the SDK replays it across a redirect), and a
+// node serving the egress lane can only redirect egress claims to peers if it
+// too has an egress attachment (a no-egress node answers 409 rather than
+// redirecting). Both are acceptable for a homogeneous cluster.
 type MeshConfig struct {
 	NodeID     string   `json:"node_id"`               // unique name; defaults to Bind
 	Bind       string   `json:"bind"`                  // memberlist host:port
