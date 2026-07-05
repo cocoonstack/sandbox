@@ -109,7 +109,7 @@ type FsRead struct {
 	Path string `json:"path"`
 }
 
-// FsList returns a directory's entries.
+// FsList streams a directory as batched Entries frames terminated by Done.
 type FsList struct {
 	Path string `json:"path"`
 }

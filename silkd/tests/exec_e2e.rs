@@ -292,3 +292,60 @@ async fn detached_exec_is_listed_then_logs_replay_output_and_exit() {
     }
     panic!("logs never reported an exit for pid {pid}");
 }
+
+#[tokio::test]
+async fn disconnect_during_drain_publishes_real_exit_code() {
+    // A grandchild holds stdout so the supervisor sits in the post-exit
+    // drain; the foreground client then vanishes mid-drain. The disconnect
+    // fallback must publish the child's real code to attachers, not -1.
+    use silkd::server::buffer;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let state = Arc::new(State::new());
+    let (client, server) = tokio::io::duplex(1 << 20);
+    let st = Arc::clone(&state);
+    let (sr, sw) = tokio::io::split(server);
+    tokio::spawn(async move { st.serve(buffer(sr), sw).await });
+
+    let (cr, mut cw) = tokio::io::split(client);
+    let req = serde_json::json!({
+        "op": "exec",
+        "argv": ["/bin/sh", "-c", "{ sleep 0.5; echo late; sleep 30; } & exit 7"]
+    })
+    .to_string();
+    cw.write_all(req.as_bytes()).await.unwrap();
+    cw.write_all(b"\n").await.unwrap();
+
+    let mut lines = BufReader::new(cr).lines();
+    let started: serde_json::Value =
+        serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(type_of(&started), "started");
+    let pid = started["pid"].as_u64().unwrap();
+
+    // Attach while the proc is live, then drop the exec client: writing the
+    // grandchild's "late" chunk fails and takes the disconnect path while
+    // the supervisor is still mid-drain.
+    let st = Arc::clone(&state);
+    let attach = tokio::spawn(async move {
+        one(
+            &st,
+            &serde_json::json!({"op":"attach","pid":pid}).to_string(),
+        )
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(lines);
+    drop(cw);
+
+    let frames = tokio::time::timeout(Duration::from_secs(8), attach)
+        .await
+        .expect("attach wedged")
+        .unwrap();
+    let last = frames.last().unwrap();
+    assert_eq!(
+        type_of(last),
+        "exit",
+        "attach must end with exit: {frames:?}"
+    );
+    assert_eq!(last["code"], 7, "real exit code, not a fabricated -1");
+}

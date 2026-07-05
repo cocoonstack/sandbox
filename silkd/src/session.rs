@@ -65,7 +65,9 @@ impl Table {
         let mut child = Command::new("bash")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            // Null, not piped: nothing ever reads a stderr pipe, and the init
+            // line `exec 2>&1` repoints fd 2 at the stdout pipe anyway.
+            .stderr(Stdio::null())
             // Own process group (leader pgid == pid) so teardown can group-kill
             // the shell together with whatever external command it is running.
             .process_group(0)

@@ -31,6 +31,7 @@ where
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
     {
         Ok(c) => c,
@@ -78,6 +79,7 @@ pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
         .arg(&name)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
     {
         Ok(c) => c,

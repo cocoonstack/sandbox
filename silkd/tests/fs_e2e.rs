@@ -41,13 +41,39 @@ async fn list_reports_written_entry() {
 
     let listed =
         exchange(&[json!({"op":"fs_list","path":dir.path().to_str().unwrap()}).to_string()]).await;
-    let entries = listed[0]["entries"].as_array().unwrap();
-    let a = entries
+    assert_eq!(type_of(listed.last().unwrap()), "done");
+    let a = listed
         .iter()
+        .filter(|f| type_of(f) == "entries")
+        .flat_map(|f| f["entries"].as_array().unwrap())
         .find(|e| e["name"] == "a.txt")
         .expect("a.txt listed");
     assert_eq!(a["kind"], "file");
     assert_eq!(a["size"], 3);
+}
+
+#[tokio::test]
+async fn list_batches_large_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let total = silkd::fs::LIST_BATCH + 1;
+    for i in 0..total {
+        std::fs::write(dir.path().join(format!("f{i}")), b"").unwrap();
+    }
+
+    let listed =
+        exchange(&[json!({"op":"fs_list","path":dir.path().to_str().unwrap()}).to_string()]).await;
+    let frames: Vec<_> = listed.iter().filter(|f| type_of(f) == "entries").collect();
+    assert_eq!(frames.len(), 2, "one full batch + the remainder");
+    assert_eq!(
+        frames[0]["entries"].as_array().unwrap().len(),
+        silkd::fs::LIST_BATCH
+    );
+    let n: usize = frames
+        .iter()
+        .map(|f| f["entries"].as_array().unwrap().len())
+        .sum();
+    assert_eq!(n, total);
+    assert_eq!(type_of(listed.last().unwrap()), "done");
 }
 
 #[tokio::test]

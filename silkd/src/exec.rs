@@ -3,7 +3,7 @@
 //! execs return after `started` and keep running for later attach/logs.
 
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -92,10 +92,11 @@ where
     let stderr = child.stderr.take();
 
     // Foreground consumes a backpressured mpsc: when the client falls behind,
-    // the sends block, the pipe fills, and the child slows down — output is
-    // never lost. Attachers still ride the best-effort broadcast (a secondary
-    // observer may drop under extreme lag). Detached has no client to pace it,
-    // so it gets no foreground sender.
+    // the sends block, the pipe fills, and the child slows down — nothing
+    // drops while the child lives (POST_EXIT_DRAIN bounds only the post-exit
+    // tail). Attachers still ride the best-effort broadcast (a secondary
+    // observer may drop under extreme lag). Detached has no client to pace
+    // it, so it gets no foreground sender.
     let (fg_tx, fg_rx) = mpsc::channel::<Chunk>(FG_CAP);
     let pump_fg = (!req.detach).then(|| fg_tx.clone());
     let sup_fg = (!req.detach).then(|| fg_tx.clone());
@@ -108,9 +109,15 @@ where
     // One supervisor per exec: reap the child, drain output within a grace
     // window (so a daemonizer holding the pipe can't wedge us), then publish
     // the terminal Exit — to the broadcast (attachers) and the foreground mpsc.
+    // The reaped code is recorded before the drain: a disconnect can abort the
+    // supervisor mid-drain, and its fallback must publish the real code, not
+    // fabricate -1 for a child that already exited cleanly.
+    let reaped: Arc<OnceLock<i32>> = Arc::new(OnceLock::new());
+    let sup_reaped = Arc::clone(&reaped);
     let sup_proc = Arc::clone(&proc);
     let supervise = tokio::spawn(async move {
         let code = wait_code(&mut child).await;
+        let _ = sup_reaped.set(code);
         let mut pump = pump;
         if timeout(POST_EXIT_DRAIN, &mut pump).await.is_err() {
             pump.abort();
@@ -145,8 +152,9 @@ where
         pump_abort.abort();
         let _ = supervise.await;
         if proc.exit_code().is_none() {
-            proc.mark_exited(-1);
-            proc.emit(Chunk::Exit(-1));
+            let code = reaped.get().copied().unwrap_or(-1);
+            proc.mark_exited(code);
+            proc.emit(Chunk::Exit(code));
         }
         table.remove_if(pid, &proc);
         return Err(e);

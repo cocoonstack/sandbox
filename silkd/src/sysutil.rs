@@ -44,8 +44,10 @@ pub fn rand_token() -> String {
 /// child holding the stdout pipe open). The shell is spawned as its own group
 /// leader (pgid == its pid).
 pub fn kill_group(pgid: u32) {
-    // kill(-0) targets the CALLER's group (silkd itself); guard it, and the
-    // synthetic-id range whose pid_t cast would go negative.
+    // kill(-0) targets the CALLER's group (silkd itself), and anything above
+    // i32::MAX would go negative through the pid_t cast — refuse both.
+    // Synthetic ids trip neither guard: synth_pid() keeps them ≤ i32::MAX
+    // and above pid_max, so they reach kill() and miss with ESRCH.
     if pgid == 0 || pgid > i32::MAX as u32 {
         return;
     }
@@ -56,9 +58,9 @@ pub fn kill_group(pgid: u32) {
 /// just-exited pid already satisfies the caller's goal (the process is gone).
 pub fn signal_pid(pid: u32, sig: i32) {
     // pid 0 means "my whole process group" to kill(2) — signalling it would
-    // take down silkd and every child. Above i32::MAX is only a synthetic
-    // fallback id (no real process); casting it to pid_t would go negative and
-    // hit a process group. Neither is ever a real target.
+    // take down silkd and every child; anything above i32::MAX would go
+    // negative through the pid_t cast and hit a process group. Synthetic ids
+    // trip neither guard (see kill_group).
     if pid == 0 || pid > i32::MAX as u32 {
         return;
     }

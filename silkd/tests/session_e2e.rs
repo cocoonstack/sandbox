@@ -234,3 +234,18 @@ async fn exec_in_unknown_session_is_not_found() {
     assert_eq!(type_of(&f[0]), "error");
     assert_eq!(f[0]["kind"], "not_found");
 }
+
+#[tokio::test]
+async fn session_merges_stderr_into_stdout() {
+    // The shell's first init line is `exec 2>&1`: command stderr must arrive
+    // on the session's single output stream.
+    let state = Arc::new(State::new());
+    let id = create(&state, json!({})).await;
+
+    let frames = sh(&state, &id, &["sh", "-c", "echo oops >&2"]).await;
+    assert_eq!(
+        body(&frames).trim(),
+        "oops",
+        "stderr not merged: {frames:?}"
+    );
+}

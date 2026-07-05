@@ -12,6 +12,10 @@ use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::proto::{self, err_frame, DirEntry, FileInfo, FileKind, Response, READ_CHUNK};
 
+/// Entries per `entries` frame. Worst-case entry (255-byte name, fully
+/// JSON-escaped) is ~1.6KiB, so a full batch stays under MAX_FRAME.
+pub const LIST_BATCH: usize = 4096;
+
 /// Streams `data` frames from the client into `path`, applying `mode` if
 /// given, until a `data_end` frame. Writes go to a sibling temp file that is
 /// renamed over `path` only on clean completion, so a mid-stream failure or
@@ -98,7 +102,8 @@ pub async fn read<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
     proto::write_frame(w, &Response::Done).await
 }
 
-/// Lists a directory as `entries`.
+/// Lists a directory as a stream of `entries` frames terminated by `done`,
+/// batched so an arbitrarily large directory can never exceed the frame cap.
 pub async fn list<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<()> {
     let mut rd = match fs::read_dir(&path).await {
         Ok(r) => r,
@@ -118,11 +123,18 @@ pub async fn list<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
                     kind,
                     size,
                 });
+                if entries.len() == LIST_BATCH {
+                    let batch = std::mem::take(&mut entries);
+                    proto::write_frame(w, &Response::Entries { entries: batch }).await?;
+                }
             }
             Err(e) => return err_frame(w, &e, "read_dir").await,
         }
     }
-    proto::write_frame(w, &Response::Entries { entries }).await
+    if !entries.is_empty() {
+        proto::write_frame(w, &Response::Entries { entries }).await?;
+    }
+    proto::write_frame(w, &Response::Done).await
 }
 
 /// Reports metadata for `path` (following symlinks).
