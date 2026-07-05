@@ -111,7 +111,10 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	// this node provision (golden clone or cold boot).
 	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL())
 	if errors.Is(err, pool.ErrNoWarm) {
-		if s.placer != nil {
+		// A claim already redirected to us must warm-or-provision here (confirm
+		// at owner), never bounce again — that avoids a two-node stale-view
+		// ping-pong when both just emptied their pools.
+		if s.placer != nil && !req.NoRedirect {
 			if addrs := s.placer.Candidates(key.Hash()); len(addrs) > 0 {
 				writeJSON(w, http.StatusOK, types.ClaimResponse{Redirect: addrs})
 				return

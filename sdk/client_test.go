@@ -152,18 +152,56 @@ func TestNewFollowsRedirect(t *testing.T) {
 	}
 }
 
-func TestNewRedirectLoopBounded(t *testing.T) {
-	// A node that always redirects to itself must not spin forever.
-	var self *httptest.Server
-	self = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+func TestRedirectSetsNoRedirect(t *testing.T) {
+	// The retry at a redirect target must carry no_redirect so the target
+	// warm-or-provisions instead of bouncing the claim back.
+	var gotNoRedirect bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req claimRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		gotNoRedirect = req.NoRedirect
+		_ = json.NewEncoder(w).Encode(claimResponse{ID: "sb_3", Token: "t"})
+	}))
+	t.Cleanup(target.Close)
+
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(claimResponse{
-			Redirect: []string{strings.TrimPrefix(self.URL, "http://")},
+			Redirect: []string{strings.TrimPrefix(target.URL, "http://")},
 		})
 	}))
-	t.Cleanup(self.Close)
+	t.Cleanup(entry.Close)
 
-	_, err := testClient(t, self).New(t.Context(), "rt:24.04")
-	if err == nil || !strings.Contains(err.Error(), "too many redirects") {
-		t.Errorf("got %v, want too-many-redirects", err)
+	sb, err := testClient(t, entry).New(t.Context(), "rt:24.04")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if sb.ID != "sb_3" {
+		t.Errorf("id %q, want sb_3", sb.ID)
+	}
+	if !gotNoRedirect {
+		t.Error("retry did not set no_redirect")
+	}
+}
+
+func TestRedirectTriesAllCandidates(t *testing.T) {
+	// First candidate is dead; the SDK must fall through to the second.
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(claimResponse{ID: "sb_4", Token: "t"})
+	}))
+	t.Cleanup(good.Close)
+
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(claimResponse{
+			Redirect: []string{"127.0.0.1:1", strings.TrimPrefix(good.URL, "http://")},
+		})
+	}))
+	t.Cleanup(entry.Close)
+
+	sb, err := testClient(t, entry).New(t.Context(), "rt:24.04")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if sb.ID != "sb_4" {
+		t.Errorf("id %q, want sb_4 (second candidate)", sb.ID)
 	}
 }

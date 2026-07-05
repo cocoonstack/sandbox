@@ -11,8 +11,10 @@ use tokio::process::Command;
 
 use crate::proto::{self, ErrorKind, GitBranchOp, GitFileStatus, Response};
 
-/// Runs `git`, capturing output. `auth` (a token) is injected as an in-memory
-/// Authorization header via `-c`, so it never touches the guest filesystem.
+/// Runs `git`, capturing output. Config (an auth token, and quotePath=false so
+/// paths come back raw) rides in `GIT_CONFIG_*` env vars, not `-c` args: the
+/// process environ is root-only, whereas argv is world-readable via
+/// /proc/<pid>/cmdline — a de-escalated exec could otherwise scrape the token.
 async fn git(
     dir: &str,
     auth: Option<&str>,
@@ -20,10 +22,7 @@ async fn git(
 ) -> std::io::Result<std::process::Output> {
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(dir);
-    if let Some(token) = auth {
-        cmd.arg("-c")
-            .arg(format!("http.extraHeader=Authorization: Bearer {token}"));
-    }
+    apply_config(&mut cmd, auth);
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -31,6 +30,19 @@ async fn git(
         .kill_on_drop(true)
         .output()
         .await
+}
+
+/// Injects git config as GIT_CONFIG_COUNT/KEY_n/VALUE_n env pairs.
+fn apply_config(cmd: &mut Command, auth: Option<&str>) {
+    let mut pairs: Vec<(&str, String)> = vec![("core.quotePath", "false".to_string())];
+    if let Some(token) = auth {
+        pairs.push(("http.extraHeader", format!("Authorization: Bearer {token}")));
+    }
+    cmd.env("GIT_CONFIG_COUNT", pairs.len().to_string());
+    for (i, (key, value)) in pairs.iter().enumerate() {
+        cmd.env(format!("GIT_CONFIG_KEY_{i}"), key);
+        cmd.env(format!("GIT_CONFIG_VALUE_{i}"), value);
+    }
 }
 
 async fn fail<W: AsyncWrite + Unpin>(w: &mut W, out: &std::process::Output) -> std::io::Result<()> {
@@ -107,12 +119,22 @@ pub async fn commit<W: AsyncWrite + Unpin>(
     message: String,
     author: String,
 ) -> std::io::Result<()> {
-    let out = git(
-        &path,
-        None,
-        &["commit", "--author", &author, "-m", &message],
-    )
-    .await?;
+    // A fresh guest has no committer identity, so git commit would fail to
+    // auto-detect one; derive the committer from the author.
+    let (name, email) = split_author(&author);
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(&path);
+    apply_config(&mut cmd, None);
+    cmd.env("GIT_COMMITTER_NAME", &name)
+        .env("GIT_COMMITTER_EMAIL", &email);
+    let out = cmd
+        .args(["commit", "--author", &author, "-m", &message])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .output()
+        .await?;
     if !out.status.success() {
         return fail(w, &out).await;
     }
@@ -237,21 +259,31 @@ fn parse_ahead_behind(rest: &str) -> (u32, u32) {
     (ahead, behind)
 }
 
-/// Parses one porcelain-v2 entry. Changed entries carry the 2-char XY code at
-/// field 2 and the path as the 9th field (kept intact even with spaces; a
-/// rename appends "\t<orig>", dropped here). Untracked ("?") is a bare path.
+/// Parses one porcelain-v2 entry. XY is field 2; the path is the last
+/// space-field (kept intact even with spaces — core.quotePath=false keeps it
+/// raw). Ordinary changes ("1") have the path at field 9; renames/copies ("2")
+/// add an Xscore field, so the path is field 10 and carries "<new>\t<orig>",
+/// of which we keep the new path. Untracked ("?") is a bare path.
 fn parse_file_line(line: &str) -> Option<GitFileStatus> {
     let kind = line.split(' ').next()?;
     match kind {
         "1" | "2" => {
-            let mut fields = line.splitn(9, ' ');
+            let mut fields = line.split(' ');
             let xy = fields.nth(1)?; // field 2
             let mut chars = xy.chars();
             let staged = chars.next()?.to_string();
             let unstaged = chars.next()?.to_string();
-            let path = fields.nth(6)?.split('\t').next()?.to_string(); // field 9
+            let skip = if kind == "2" { 7 } else { 6 }; // to reach the path field
+            let path = fields.nth(skip)?;
+            // Rejoin any spaces splitn consumed, then drop a rename's \t<orig>.
+            let rest: Vec<&str> = fields.collect();
+            let full = if rest.is_empty() {
+                path.to_string()
+            } else {
+                format!("{path} {}", rest.join(" "))
+            };
             Some(GitFileStatus {
-                path,
+                path: full.split('\t').next()?.to_string(),
                 staged,
                 unstaged,
             })
@@ -263,4 +295,17 @@ fn parse_file_line(line: &str) -> Option<GitFileStatus> {
         }),
         _ => None,
     }
+}
+
+/// Splits an author "Name <email>" into (name, email); a missing angle form
+/// leaves the whole string as the name.
+fn split_author(author: &str) -> (String, String) {
+    if let Some(open) = author.find('<') {
+        if let Some(close) = author[open..].find('>') {
+            let name = author[..open].trim().to_string();
+            let email = author[open + 1..open + close].to_string();
+            return (name, email);
+        }
+    }
+    (author.trim().to_string(), String::new())
 }

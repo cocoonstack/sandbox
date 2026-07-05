@@ -59,7 +59,9 @@ pub async fn find<W: AsyncWrite + Unpin>(
 /// Rewrites every `pattern` match to `replacement` in each of `files`,
 /// streaming one `replaced` frame per file (with its match count) and a
 /// terminal `done`. A read/write failure on one file ends the stream with an
-/// error; an invalid pattern is rejected before any file is touched.
+/// error — files whose `replaced` frame already went out are committed (each
+/// file is atomic; the list is not). An invalid pattern is rejected before any
+/// file is touched.
 pub async fn replace<W: AsyncWrite + Unpin>(
     w: &mut W,
     files: Vec<String>,

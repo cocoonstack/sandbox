@@ -58,7 +58,6 @@ func TestCandidatesExcludeSelfAndEmpty(t *testing.T) {
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 2}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Pools: map[string]int{"k": 0}}, // no warm
 		{NodeID: "d", Addr: "d:7777", Epoch: 1, Pools: map[string]int{"other": 4}},
-		{NodeID: "e", Addr: "e:7777", Epoch: 1, Draining: true, Pools: map[string]int{"k": 8}}, // draining
 	})
 
 	cands := m.Candidates("k")
@@ -67,6 +66,24 @@ func TestCandidatesExcludeSelfAndEmpty(t *testing.T) {
 	}
 	if got := m.Candidates("missing"); got != nil {
 		t.Errorf("candidates for absent key %v, want nil", got)
+	}
+}
+
+func TestForgetPrunesDeadNode(t *testing.T) {
+	m := newTestMesh(t, "a")
+	m.merge([]NodeState{{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 3}}})
+	if len(m.Candidates("k")) != 1 {
+		t.Fatal("setup: b should be a candidate")
+	}
+	m.forget("b")
+	if got := m.Candidates("k"); got != nil {
+		t.Errorf("candidates after forget %v, want nil (b pruned)", got)
+	}
+	// forgetting self is a no-op.
+	m.UpdateSelf(map[string]int{"k": 1})
+	m.forget("a")
+	if len(m.Members()) != 1 {
+		t.Error("forget removed self")
 	}
 }
 

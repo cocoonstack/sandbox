@@ -65,7 +65,7 @@ func (f *Fake) ServeConn(conn net.Conn) {
 		f.done(conn, os.Rename(f.abs(req.From), f.abs(req.To)))
 	case *silkd.SessionCreate:
 		f.sessionCreate(conn, req)
-	case silkd.SessionList, *silkd.SessionList:
+	case *silkd.SessionList:
 		f.sessionList(conn)
 	case *silkd.SessionRm:
 		f.sessionRm(conn, req.ID)
@@ -211,7 +211,7 @@ func drainUpload(r *bufio.Reader) ([]byte, error) {
 		switch req := req.(type) {
 		case *silkd.Data:
 			out = append(out, req.Data...)
-		case silkd.DataEnd, *silkd.DataEnd:
+		case *silkd.DataEnd:
 			return out, nil
 		default:
 			return nil, os.ErrInvalid

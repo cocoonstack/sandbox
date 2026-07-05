@@ -175,6 +175,27 @@ pub unsafe fn make_controlling_tty() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Reads from a raw fd (the pty master), returning bytes read; a WouldBlock
+/// error is surfaced to the caller's readiness loop.
+pub fn read_fd(fd: RawFd, buf: &mut [u8]) -> std::io::Result<usize> {
+    // SAFETY: fd is a live open fd; buf is a valid mutable slice of buf.len().
+    let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+    if n < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(n as usize)
+}
+
+/// Writes to a raw fd (the pty master), returning bytes written.
+pub fn write_fd(fd: RawFd, buf: &[u8]) -> std::io::Result<usize> {
+    // SAFETY: fd is a live open fd; buf is a valid slice of buf.len().
+    let n = unsafe { libc::write(fd, buf.as_ptr().cast(), buf.len()) };
+    if n < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(n as usize)
+}
+
 fn set_nonblocking(fd: RawFd) -> std::io::Result<()> {
     // SAFETY: fd is open; F_GETFL/F_SETFL only read and set its flags.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };

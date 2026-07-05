@@ -119,3 +119,42 @@ async fn resize_unknown_pid_is_not_found() {
     assert_eq!(common::type_of(&frames[0]), "error");
     assert_eq!(frames[0]["kind"], "not_found");
 }
+
+#[tokio::test]
+async fn pty_disconnect_tears_down_without_spin() {
+    // Client disconnects while the shell is idle. The pty must tear down (kill
+    // the shell, drop the table entry, end the serve task) instead of
+    // busy-spinning on the closed client channel.
+    let state = Arc::new(State::new());
+    let (client, server) = tokio::io::duplex(1 << 20);
+    let st = Arc::clone(&state);
+    let (sr, sw) = tokio::io::split(server);
+    let handle = tokio::spawn(async move { st.serve(buffer(sr), sw).await });
+
+    let (cr, mut cw) = tokio::io::split(client);
+    let mut lines = BufReader::new(cr).lines();
+    send(&mut cw, json!({"op":"pty_open","cols":80,"rows":24})).await;
+    let pid = read_until(&mut lines, |v| v["type"] == "started").await["pid"]
+        .as_u64()
+        .unwrap();
+
+    // Let the shell settle, then disconnect.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(lines);
+    drop(cw);
+
+    // The serve task returns promptly (no spin); the final Exit-write to the
+    // gone client may error, which is fine — the point is it returns.
+    let _ = tokio::time::timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("pty did not tear down on disconnect");
+    let ps = common::one(&state, r#"{"op":"ps"}"#).await;
+    assert!(
+        !ps[0]["procs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["pid"].as_u64() == Some(pid)),
+        "pty still in table after disconnect: {ps:?}"
+    );
+}

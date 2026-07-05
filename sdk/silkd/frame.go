@@ -569,6 +569,8 @@ func decodeAs[T any](line []byte) (*T, error) {
 }
 
 // decodeReq / decodeResp adapt decodeAs to the interface-typed decoder maps.
+// A table entry pairing an op with a non-Request type is caught by the shared
+// fixture round-trip test, not the compiler.
 func decodeReq[T any](line []byte) (Request, error) {
 	v, err := decodeAs[T](line)
 	if err != nil {

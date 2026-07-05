@@ -11,18 +11,22 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/memberlist"
 )
 
+// leaveTimeout bounds the graceful-leave broadcast on shutdown so a wedged
+// network can't hang the exit path.
+const leaveTimeout = time.Second
+
 // NodeState is one node's gossiped placement view. Epoch resolves merges: the
 // higher epoch for a given node wins.
 type NodeState struct {
-	NodeID   string         `json:"node_id"`
-	Addr     string         `json:"addr"` // data-plane advertise address
-	Epoch    uint64         `json:"epoch"`
-	Pools    map[string]int `json:"pools"` // PoolKey hash → warm count
-	Draining bool           `json:"draining"`
+	NodeID string         `json:"node_id"`
+	Addr   string         `json:"addr"` // data-plane advertise address
+	Epoch  uint64         `json:"epoch"`
+	Pools  map[string]int `json:"pools"` // PoolKey hash → warm count
 }
 
 // Mesh is the node's view of the cluster and its own gossiped state.
@@ -40,13 +44,19 @@ type Mesh struct {
 // gossip encryption when non-empty.
 func New(cfg *memberlist.Config, nodeID, selfAddr string, secretKey []byte) (*Mesh, error) {
 	m := &Mesh{
-		self: NodeState{NodeID: nodeID, Addr: selfAddr, Pools: map[string]int{}},
-		view: map[string]NodeState{},
+		// Seed the epoch from wall-clock so a restarted node's fresh counts
+		// aren't rejected by peers still holding its pre-restart (higher)
+		// epoch; epoch++ keeps intra-process monotonicity above that base.
+		epoch: uint64(time.Now().UnixNano()),
+		self:  NodeState{NodeID: nodeID, Addr: selfAddr, Pools: map[string]int{}},
+		view:  map[string]NodeState{},
 	}
+	m.self.Epoch = m.epoch
 	m.view[nodeID] = m.self
 
 	cfg.Name = nodeID
 	cfg.Delegate = (*delegate)(m)
+	cfg.Events = (*eventDelegate)(m)
 	if len(secretKey) > 0 {
 		cfg.SecretKey = secretKey
 	}
@@ -91,7 +101,7 @@ func (m *Mesh) Candidates(keyHash string) []string {
 	}
 	var pool []cand
 	for id, st := range m.view {
-		if id == m.self.NodeID || st.Draining {
+		if id == m.self.NodeID {
 			continue
 		}
 		if st.Pools[keyHash] > 0 {
@@ -122,19 +132,23 @@ func (m *Mesh) Candidates(keyHash string) []string {
 
 // Members returns the current cluster view (for /v1/info and Lookup).
 func (m *Mesh) Members() []NodeState {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]NodeState, 0, len(m.view))
-	for _, st := range m.view {
-		out = append(out, st)
-	}
-	return out
+	return m.snapshot()
 }
 
 // Shutdown leaves the mesh and stops the member.
 func (m *Mesh) Shutdown() error {
-	_ = m.ml.Leave(0)
+	_ = m.ml.Leave(leaveTimeout)
 	return m.ml.Shutdown()
+}
+
+// forget drops a departed node from the placement view so redirects stop
+// targeting a dead peer; SWIM detected the death, the view must follow.
+func (m *Mesh) forget(nodeID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if nodeID != m.self.NodeID {
+		delete(m.view, nodeID)
+	}
 }
 
 // merge absorbs a peer's view, keeping the higher epoch per node and never
@@ -162,6 +176,11 @@ func (m *Mesh) snapshot() []NodeState {
 	return out
 }
 
+var (
+	_ memberlist.Delegate      = (*delegate)(nil)
+	_ memberlist.EventDelegate = (*eventDelegate)(nil)
+)
+
 // delegate carries this node's full view on each memberlist push/pull sync, so
 // state propagates transitively across the cluster.
 type delegate Mesh
@@ -180,4 +199,14 @@ func (d *delegate) MergeRemoteState(buf []byte, _ bool) {
 		return
 	}
 	(*Mesh)(d).merge(states)
+}
+
+// eventDelegate prunes the placement view when SWIM reports a node gone, so a
+// dead peer stops attracting redirects.
+type eventDelegate Mesh
+
+func (e *eventDelegate) NotifyJoin(*memberlist.Node)   {}
+func (e *eventDelegate) NotifyUpdate(*memberlist.Node) {}
+func (e *eventDelegate) NotifyLeave(n *memberlist.Node) {
+	(*Mesh)(e).forget(n.Name)
 }

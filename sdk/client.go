@@ -45,10 +45,6 @@ func Connect(addr string, opts ...ClientOption) (*Client, error) {
 	return c, nil
 }
 
-// maxRedirects bounds the mesh redirect chain so a stale-view loop can't spin
-// forever; the fallback tiers terminate within a hop or two.
-const maxRedirects = 3
-
 // New claims a sandbox for template. Without options the node serves its
 // defaults: the no-network lane and the smallest size tier. New returns when
 // the sandbox's silkd is reachable; a warm pool hit is milliseconds, a cold
@@ -64,25 +60,41 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 		return nil, fmt.Errorf("encode claim: %w", err)
 	}
 
-	addr := c.addr
-	for hop := 0; ; hop++ {
-		cr, err := c.claimAt(ctx, addr, body)
-		if err != nil {
-			return nil, err
-		}
-		if len(cr.Redirect) > 0 {
-			if hop >= maxRedirects {
-				return nil, fmt.Errorf("claim: too many redirects")
-			}
-			addr = cr.Redirect[0] // owner confirms; a stale hint just re-redirects
-			continue
-		}
-		owner := cr.OwnerAddr
-		if owner == "" {
-			owner = addr
-		}
-		return &Sandbox{ID: cr.ID, Deadline: cr.Deadline, c: c, token: cr.Token, owner: owner}, nil
+	cr, err := c.claimAt(ctx, c.addr, body)
+	if err != nil {
+		return nil, err
 	}
+	if len(cr.Redirect) > 0 {
+		// Retry at a peer with no_redirect set: it warm-or-provisions and
+		// cannot bounce us again. Try each candidate so one dead/stale peer
+		// (its addr lingering in a gossip view) doesn't fail the claim.
+		claim.NoRedirect = true
+		body, err = json.Marshal(claim)
+		if err != nil {
+			return nil, fmt.Errorf("encode claim: %w", err)
+		}
+		var lastErr error
+		for _, addr := range cr.Redirect {
+			target, err := c.claimAt(ctx, addr, body)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			return c.handleFrom(addr, target), nil
+		}
+		return nil, fmt.Errorf("claim: all redirect targets failed: %w", lastErr)
+	}
+	return c.handleFrom(c.addr, cr), nil
+}
+
+// handleFrom builds a sandbox handle, defaulting the data-plane owner to the
+// node that answered when a single-node deployment omits owner_addr.
+func (c *Client) handleFrom(dialed string, cr claimResponse) *Sandbox {
+	owner := cr.OwnerAddr
+	if owner == "" {
+		owner = dialed
+	}
+	return &Sandbox{ID: cr.ID, Deadline: cr.Deadline, c: c, token: cr.Token, owner: owner}
 }
 
 func (c *Client) claimAt(ctx context.Context, addr string, body []byte) (claimResponse, error) {
@@ -126,6 +138,7 @@ type claimRequest struct {
 	Net        string `json:"net,omitempty"`
 	Size       string `json:"size,omitempty"`
 	TTLSeconds int    `json:"ttl_seconds,omitempty"`
+	NoRedirect bool   `json:"no_redirect,omitempty"`
 }
 
 type claimResponse struct {

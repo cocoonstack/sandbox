@@ -142,3 +142,58 @@ async fn clone_lane_behavior() {
     assert_eq!(type_of(last(&ok)), "done", "clone failed: {ok:?}");
     assert!(target.join("r.txt").exists());
 }
+
+#[tokio::test]
+async fn status_handles_rename_and_spaces() {
+    let repo = init_repo();
+    let p = repo.path().to_str().unwrap();
+    std::fs::write(repo.path().join("orig name.txt"), "x\n").unwrap();
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-qm", "c"]);
+    std::fs::rename(
+        repo.path().join("orig name.txt"),
+        repo.path().join("new name.txt"),
+    )
+    .unwrap();
+    git(repo.path(), &["add", "-A"]);
+
+    let st = exchange(&[json!({"op":"git_status","path":p}).to_string()]).await;
+    let files = st[0]["files"].as_array().unwrap();
+    let paths: Vec<&str> = files.iter().map(|f| f["path"].as_str().unwrap()).collect();
+    assert!(
+        paths.contains(&"new name.txt"),
+        "rename path with spaces mangled: {paths:?}"
+    );
+    assert!(
+        !paths.iter().any(|p| p.contains("R100")),
+        "score leaked: {paths:?}"
+    );
+}
+
+#[tokio::test]
+async fn commit_works_without_preconfigured_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir.path())
+        .args(["-c", "init.defaultBranch=main", "init", "-q"])
+        .env_remove("GIT_AUTHOR_NAME")
+        .env_remove("GIT_COMMITTER_NAME")
+        .status()
+        .unwrap()
+        .success());
+    std::fs::write(dir.path().join("f"), "x").unwrap();
+    let p = dir.path().to_str().unwrap();
+    let add = exchange(&[json!({"op":"git_add","path":p,"files":["f"]}).to_string()]).await;
+    assert_eq!(type_of(last(&add)), "done");
+    let commit = exchange(&[json!({
+        "op":"git_commit","path":p,"message":"m","author":"Dev <dev@example.com>"
+    })
+    .to_string()])
+    .await;
+    assert_eq!(
+        type_of(&commit[0]),
+        "git_commit_result",
+        "commit failed: {commit:?}"
+    );
+}

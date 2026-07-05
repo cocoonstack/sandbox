@@ -10,6 +10,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -75,7 +76,7 @@ func main() {
 		defer func() { _ = msh.Shutdown() }()
 		placer = msh
 		go gossipWarmCounts(ctx, msh, mgr)
-		logger.Infof(ctx, "mesh %s joined (%d seeds)", cfg.Mesh.NodeID, len(cfg.Mesh.Join))
+		logger.Infof(ctx, "mesh %s joined (%d seeds)", cmp.Or(cfg.Mesh.NodeID, cfg.Mesh.Bind), len(cfg.Mesh.Join))
 	}
 
 	srv := server.New(cfg.APIToken, cfg.AdvertiseAddr, mgr, eng, placer)
@@ -117,10 +118,13 @@ func startMesh(cfg *config.Config) (*mesh.Mesh, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mesh bind port %q: %w", portStr, err)
 	}
+	if host == "" {
+		return nil, fmt.Errorf("mesh bind needs an explicit host (got %q); a wildcard advertises an unroutable address", mc.Bind)
+	}
 	mlCfg.BindAddr, mlCfg.BindPort = host, port
-	mlCfg.AdvertisePort = port
+	mlCfg.AdvertiseAddr, mlCfg.AdvertisePort = host, port
 	mlCfg.PushPullInterval = gossipInterval
-	mlCfg.Logger = nil
+	mlCfg.LogOutput = io.Discard // memberlist's own logs bypass core/log
 
 	nodeID := cmp.Or(mc.NodeID, mc.Bind)
 	var key []byte

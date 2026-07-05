@@ -5,12 +5,15 @@ import (
 	"time"
 )
 
-// ClaimRequest is the wire body of POST /v1/claim.
+// ClaimRequest is the wire body of POST /v1/claim. NoRedirect is set by the
+// SDK on a claim it is retrying at a redirect target, so that node warm-or-
+// provisions locally instead of bouncing the claim back on a stale view.
 type ClaimRequest struct {
 	Template   string   `json:"template"`
 	Net        NetShape `json:"net,omitempty"`
 	Size       Size     `json:"size,omitempty"`
 	TTLSeconds int      `json:"ttl_seconds,omitempty"`
+	NoRedirect bool     `json:"no_redirect,omitempty"`
 }
 
 // ClaimResponse is the wire reply of POST /v1/claim. A successful claim
