@@ -46,9 +46,11 @@ pub fn kill(pid: u32) {
 /// Sends `sig` to `pid`, ignoring the result: an ESRCH against a
 /// just-exited pid already satisfies the caller's goal (the process is gone).
 pub fn signal_pid(pid: u32, sig: i32) {
-    // Above i32::MAX is only a synthetic fallback id with no real OS process;
-    // casting it to pid_t would go negative and signal a process group.
-    if pid > i32::MAX as u32 {
+    // pid 0 means "my whole process group" to kill(2) — signalling it would
+    // take down silkd and every child. Above i32::MAX is only a synthetic
+    // fallback id (no real process); casting it to pid_t would go negative and
+    // hit a process group. Neither is ever a real target.
+    if pid == 0 || pid > i32::MAX as u32 {
         return;
     }
     unsafe { libc::kill(pid as libc::pid_t, sig) };

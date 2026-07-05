@@ -10,8 +10,6 @@ use std::io;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
-// AsyncBufReadExt brings fill_buf/consume, used by read_frame.
-
 /// Mirrors cocoon-agent's frame cap so a malformed peer can't OOM us.
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
 pub const PROTO_VERSION: u32 = 1;

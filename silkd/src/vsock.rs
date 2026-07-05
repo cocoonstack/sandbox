@@ -14,7 +14,17 @@ pub async fn serve(port: u32, state: Arc<State>) -> std::io::Result<()> {
 
     let listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, port))?;
     loop {
-        let (conn, _) = listener.accept().await?;
+        // A transient accept error (e.g. EMFILE under load) must not tear down
+        // the daemon and lose the process table and every session — only a bind
+        // failure above is fatal.
+        let conn = match listener.accept().await {
+            Ok((conn, _)) => conn,
+            Err(e) => {
+                eprintln!("silkd: accept: {e}");
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                continue;
+            }
+        };
         let state = Arc::clone(&state);
         tokio::spawn(async move {
             let (read, write) = tokio::io::split(conn);

@@ -75,6 +75,31 @@ async fn daemonizing_child_does_not_wedge_the_exec() {
 }
 
 #[tokio::test]
+async fn daemonizer_exit_is_the_last_frame() {
+    // A child that leaves a grandchild holding stdout must still end its frame
+    // stream with exit and nothing after it — the post-exit drain aborts the
+    // pump, so no stray stdout can arrive once Exit is sent.
+    let frames = tokio::time::timeout(
+        Duration::from_secs(8),
+        roundtrip(r#"{"op":"exec","argv":["/bin/sh","-c","(sleep 5; echo late) & exit 0"]}"#),
+    )
+    .await
+    .expect("exec wedged on a daemonizing child");
+    assert_eq!(
+        type_of(frames.last().unwrap()),
+        "exit",
+        "exit must be last: {frames:?}"
+    );
+    assert!(
+        !frames
+            .iter()
+            .filter(|f| type_of(f) == "stdout")
+            .any(|f| String::from_utf8_lossy(&decode(f)).contains("late")),
+        "grandchild output must not leak after exit"
+    );
+}
+
+#[tokio::test]
 async fn kill_of_an_exited_process_is_a_noop_success() {
     let state = Arc::new(State::new());
     let started = one(

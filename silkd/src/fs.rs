@@ -56,7 +56,18 @@ where
         };
     }
 
-    if let Some(m) = mode {
+    // Explicit mode wins; otherwise inherit the destination's mode on an
+    // overwrite so replacing an executable script doesn't silently strip its
+    // exec bit (temp+rename would leave the temp's create-default 0644). A new
+    // file with no mode keeps that default.
+    let effective_mode = match mode {
+        Some(m) => Some(m),
+        None => fs::metadata(&path)
+            .await
+            .ok()
+            .map(|meta| meta.permissions().mode() & 0o7777),
+    };
+    if let Some(m) = effective_mode {
         if let Err(e) = file
             .set_permissions(std::fs::Permissions::from_mode(m))
             .await

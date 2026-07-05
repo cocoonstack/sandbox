@@ -74,7 +74,14 @@ where
 
     let pid = child.id().unwrap_or_else(synth_pid);
     let proc = table.register(pid, req.argv.clone(), req.detach, now_secs);
-    crate::proto::write_frame(out, &Response::Started { pid }).await?;
+    if let Err(e) = crate::proto::write_frame(out, &Response::Started { pid }).await {
+        // The relay never learned this pid, so nothing will ever supervise or
+        // reap it: drop the table entry and kill the just-spawned child rather
+        // than leave a permanent Running ghost (and, when detached, an orphan).
+        table.remove_if(pid, &proc);
+        let _ = child.start_kill();
+        return Err(e);
+    }
 
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
@@ -115,9 +122,17 @@ where
 
     let mut rx = rx.expect("foreground subscribed above");
     if let Err(e) = stream_to_client(&mut rx, out).await {
-        // Client vanished mid-stream: aborting supervise drops the child
-        // (kill_on_drop) and we drop our table entry, rather than leak both.
+        // Client vanished mid-stream: abort supervise (drops the child via
+        // kill_on_drop) and drop our table entry. Aborting may pre-empt
+        // supervise before it published the terminal state, so publish it here
+        // too — otherwise a second connection attached to this pid would wait
+        // forever for an Exit that never comes.
         supervise.abort();
+        let _ = supervise.await;
+        if proc.exit_code().is_none() {
+            proc.mark_exited(-1);
+            proc.emit(Chunk::Exit(-1));
+        }
         table.remove_if(pid, &proc);
         return Err(e);
     }
@@ -146,21 +161,25 @@ where
     }
 }
 
+/// Reads stdout and stderr concurrently within this one task, so aborting the
+/// pump (POST_EXIT_DRAIN timeout) cancels both. A nested spawn would survive
+/// the abort and keep emitting a daemonizer's output after Exit.
 async fn pump_out(
     proc: Arc<Proc>,
     stdout: Option<tokio::process::ChildStdout>,
     stderr: Option<tokio::process::ChildStderr>,
 ) {
-    let o = proc.clone();
-    let out_task = tokio::spawn(async move {
+    let out = async {
         if let Some(s) = stdout {
-            copy_stream(s, &o, false).await;
+            copy_stream(s, &proc, false).await;
         }
-    });
-    if let Some(s) = stderr {
-        copy_stream(s, &proc, true).await;
-    }
-    let _ = out_task.await;
+    };
+    let err = async {
+        if let Some(s) = stderr {
+            copy_stream(s, &proc, true).await;
+        }
+    };
+    tokio::join!(out, err);
 }
 
 async fn copy_stream<R>(mut r: R, proc: &Proc, stderr: bool)

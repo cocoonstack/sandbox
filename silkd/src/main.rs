@@ -1,9 +1,10 @@
 //! silkd: the in-guest sandbox daemon. Listens on a hybrid-vsock port for
 //! newline-JSON RPC frames from the host (relayed by sandboxd) and runs
-//! commands with context, tracks processes, and moves files.
+//! commands with context, tracks processes, moves files, and holds sessions.
 //!
-//! v1 verbs: exec, info, ps, kill, attach, logs. Sessions, fs, and the v2
-//! code-agent verbs land per sandbox-silkd.md.
+//! v1 verbs: exec, info, ps, kill, attach, logs, session.{create,list,rm},
+//! fs.{write,read,list,stat,mkdir,rm,rename,push,pull}. The v2 code-agent
+//! verbs (watch, pty, git, find/replace, lsp) land per sandbox-silkd.md.
 
 use std::sync::Arc;
 

@@ -148,6 +148,26 @@ async fn truncated_write_leaves_no_file_and_reports_error() {
 }
 
 #[tokio::test]
+async fn overwrite_preserves_destination_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("script.sh");
+    // Original file is executable (0755); overwrite without specifying a mode.
+    std::fs::write(&path, b"old").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let f = exchange(&[
+        json!({"op":"fs_write","path":path.to_str().unwrap()}).to_string(),
+        json!({"op":"data","data":b64(b"new content")}).to_string(),
+        json!({"op":"data_end"}).to_string(),
+    ])
+    .await;
+    assert_eq!(type_of(&f[0]), "done");
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o7777;
+    assert_eq!(mode, 0o755, "overwrite must preserve the executable bit");
+    assert_eq!(std::fs::read(&path).unwrap(), b"new content");
+}
+
+#[tokio::test]
 async fn failed_overwrite_preserves_original() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("keep.txt");
