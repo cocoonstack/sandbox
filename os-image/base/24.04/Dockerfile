@@ -27,6 +27,7 @@ RUN --mount=type=secret,id=sandbox_install_agent \
     udev \
     iproute2 iputils-ping curl wget ca-certificates \
     openssh-server \
+    git \
     && \
     # [Boot] No fsck/fstab/remount: the root is an overlay assembled pre-init.
     truncate -s 0 /etc/fstab && \
