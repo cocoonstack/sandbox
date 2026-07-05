@@ -62,16 +62,19 @@ itself accounts for ~4 ms (per-phase µs trace via `sandbox.trace=1`).
 Agent-ready ~490 ms nested / ~206–230 ms bare metal. silkd starts in
 parallel at sysinit and adds ~1–10 ms cold / ~3–12 ms on restore paths.
 
-## Hibernate (pending upstream)
+## Hibernate
 
-With cocoon's atomic hibernate
-([cocoonstack/cocoon#87](https://github.com/cocoonstack/cocoon/pull/87)),
-measured bare metal, FC, `small`:
+cocoon's atomic hibernate
+([cocoonstack/cocoon#87](https://github.com/cocoonstack/cocoon/pull/87))
+snapshots and stops in one pause window: capture, persist, and VMM
+termination are atomic — the VMM dies only after the snapshot is durably
+stored, and a failed save (disk full, snapshot DB error) resumes the VM with
+nothing lost. Measured bare metal, FC, `small`:
 
 | op | latency | notes |
 |---|---|---|
-| `vm hibernate` | ~455 ms | pause → snapshot → VMM killed; memory freed, snapshot point and stop coincide |
-| `vm restore` (stopped VM) | ~27–29 ms | machine identity preserved, tmpfs contents intact, in-guest daemons resume |
+| `vm hibernate` | ~330–460 ms | pause → snapshot → persist → VMM killed; memory freed, snapshot point and stop coincide |
+| `vm restore` (stopped VM) | ~27–35 ms | machine identity preserved, tmpfs contents intact, in-guest daemons resume |
 
 ## Method notes
 
