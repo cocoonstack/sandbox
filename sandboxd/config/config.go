@@ -43,7 +43,19 @@ type Config struct {
 	// sandbox-scoped calls regardless.
 	APIToken string `json:"api_token,omitempty"` //nolint:gosec // config field, not a hardcoded credential
 
+	// Mesh, when set, joins this node to a memberlist cluster for redirect
+	// placement; nil is a single node (mesh of one, no gossip).
+	Mesh *MeshConfig `json:"mesh,omitempty"`
+
 	Pools []PoolSpec `json:"pools"`
+}
+
+// MeshConfig configures cluster membership.
+type MeshConfig struct {
+	NodeID     string   `json:"node_id"`               // unique name; defaults to Bind
+	Bind       string   `json:"bind"`                  // memberlist host:port
+	Join       []string `json:"join,omitempty"`        // seed members; empty = mesh of one
+	ClusterKey string   `json:"cluster_key,omitempty"` // base64 gossip-encryption key
 }
 
 // HasEgress reports whether the node can attach egress-lane VMs.

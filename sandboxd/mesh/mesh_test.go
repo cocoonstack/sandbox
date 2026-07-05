@@ -1,0 +1,132 @@
+package mesh
+
+import (
+	"fmt"
+	"io"
+	"log"
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/hashicorp/memberlist"
+)
+
+func discardLogger() *log.Logger { return log.New(io.Discard, "", 0) }
+
+func newTestMesh(t *testing.T, id string) *Mesh {
+	t.Helper()
+	return &Mesh{
+		self: NodeState{NodeID: id, Addr: id + ":7777", Pools: map[string]int{}},
+		view: map[string]NodeState{id: {NodeID: id, Addr: id + ":7777"}},
+	}
+}
+
+func TestMergeKeepsHigherEpoch(t *testing.T) {
+	m := newTestMesh(t, "a")
+	m.merge([]NodeState{{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 2}}})
+	m.merge([]NodeState{{NodeID: "b", Addr: "b:7777", Epoch: 3, Pools: map[string]int{"k": 5}}})
+	m.merge([]NodeState{{NodeID: "b", Addr: "b:7777", Epoch: 2, Pools: map[string]int{"k": 9}}}) // stale
+
+	got := 0
+	for _, st := range m.Members() {
+		if st.NodeID == "b" {
+			got = st.Pools["k"]
+		}
+	}
+	if got != 5 {
+		t.Errorf("warm count %d, want 5 (epoch 3 wins)", got)
+	}
+}
+
+func TestMergeNeverOverwritesSelf(t *testing.T) {
+	m := newTestMesh(t, "a")
+	m.UpdateSelf(map[string]int{"k": 3})
+	// A peer claiming to be "a" must not clobber our authoritative self entry.
+	m.merge([]NodeState{{NodeID: "a", Addr: "evil:9999", Epoch: 999, Pools: map[string]int{"k": 0}}})
+
+	for _, st := range m.Members() {
+		if st.NodeID == "a" && (st.Addr != "a:7777" || st.Pools["k"] != 3) {
+			t.Errorf("self overwritten: %+v", st)
+		}
+	}
+}
+
+func TestCandidatesExcludeSelfAndEmpty(t *testing.T) {
+	m := newTestMesh(t, "a")
+	m.UpdateSelf(map[string]int{"k": 5}) // self has warm, but is never a candidate
+	m.merge([]NodeState{
+		{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 2}},
+		{NodeID: "c", Addr: "c:7777", Epoch: 1, Pools: map[string]int{"k": 0}}, // no warm
+		{NodeID: "d", Addr: "d:7777", Epoch: 1, Pools: map[string]int{"other": 4}},
+		{NodeID: "e", Addr: "e:7777", Epoch: 1, Draining: true, Pools: map[string]int{"k": 8}}, // draining
+	})
+
+	cands := m.Candidates("k")
+	if len(cands) != 1 || cands[0] != "b:7777" {
+		t.Errorf("candidates %v, want [b:7777]", cands)
+	}
+	if got := m.Candidates("missing"); got != nil {
+		t.Errorf("candidates for absent key %v, want nil", got)
+	}
+}
+
+func TestCandidatesPowerOfTwo(t *testing.T) {
+	m := newTestMesh(t, "a")
+	m.merge([]NodeState{
+		{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 1}},
+		{NodeID: "c", Addr: "c:7777", Epoch: 1, Pools: map[string]int{"k": 1}},
+		{NodeID: "d", Addr: "d:7777", Epoch: 1, Pools: map[string]int{"k": 1}},
+	})
+	// With ≥2 warm peers, exactly two distinct candidates come back.
+	for range 20 {
+		cands := m.Candidates("k")
+		if len(cands) != 2 || cands[0] == cands[1] {
+			t.Fatalf("candidates %v, want two distinct", cands)
+		}
+		for _, a := range cands {
+			if !slices.Contains([]string{"b:7777", "c:7777", "d:7777"}, a) {
+				t.Errorf("unexpected candidate %q", a)
+			}
+		}
+	}
+}
+
+func TestTwoNodeClusterGossipsPools(t *testing.T) {
+	a := startNode(t, "127.0.0.1", 0, "node-a")
+	b := startNode(t, "127.0.0.1", 0, "node-b")
+	if err := b.mesh.Join([]string{a.addr}); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	a.mesh.UpdateSelf(map[string]int{"kk": 4})
+
+	// Push/pull sync propagates a's warm counts to b within a few intervals.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if cands := b.mesh.Candidates("kk"); len(cands) == 1 && cands[0] == "node-a:7777" {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("node-b never learned node-a's warm pool: view=%+v", b.mesh.Members())
+}
+
+type node struct {
+	mesh *Mesh
+	addr string
+}
+
+func startNode(t *testing.T, host string, port int, id string) *node {
+	t.Helper()
+	cfg := memberlist.DefaultLocalConfig()
+	cfg.BindAddr = host
+	cfg.BindPort = port
+	cfg.AdvertiseAddr = host
+	cfg.PushPullInterval = 200 * time.Millisecond
+	cfg.Logger = discardLogger()
+	m, err := New(cfg, id, id+":7777", nil)
+	if err != nil {
+		t.Fatalf("new mesh %s: %v", id, err)
+	}
+	t.Cleanup(func() { _ = m.Shutdown() })
+	return &node{mesh: m, addr: fmt.Sprintf("%s:%d", host, m.ml.LocalNode().Port)}
+}

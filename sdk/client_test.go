@@ -121,3 +121,49 @@ func testClient(t *testing.T, ts *httptest.Server, opts ...ClientOption) *Client
 	}
 	return c
 }
+
+func TestNewFollowsRedirect(t *testing.T) {
+	// The first node redirects; the second answers with the claim. The SDK
+	// must follow transparently and end up owning the sandbox at node B.
+	var nodeB *httptest.Server
+	nodeB = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(claimResponse{
+			ID: "sb_2", Token: "tok", OwnerAddr: strings.TrimPrefix(nodeB.URL, "http://"),
+		})
+	}))
+	t.Cleanup(nodeB.Close)
+
+	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(claimResponse{
+			Redirect: []string{strings.TrimPrefix(nodeB.URL, "http://")},
+		})
+	}))
+	t.Cleanup(nodeA.Close)
+
+	sb, err := testClient(t, nodeA).New(t.Context(), "rt:24.04")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if sb.ID != "sb_2" {
+		t.Errorf("id %q, want sb_2 (claimed at the redirect target)", sb.ID)
+	}
+	if sb.owner != strings.TrimPrefix(nodeB.URL, "http://") {
+		t.Errorf("owner %q, want node B", sb.owner)
+	}
+}
+
+func TestNewRedirectLoopBounded(t *testing.T) {
+	// A node that always redirects to itself must not spin forever.
+	var self *httptest.Server
+	self = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(claimResponse{
+			Redirect: []string{strings.TrimPrefix(self.URL, "http://")},
+		})
+	}))
+	t.Cleanup(self.Close)
+
+	_, err := testClient(t, self).New(t.Context(), "rt:24.04")
+	if err == nil || !strings.Contains(err.Error(), "too many redirects") {
+		t.Errorf("got %v, want too-many-redirects", err)
+	}
+}

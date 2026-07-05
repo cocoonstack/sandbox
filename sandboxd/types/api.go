@@ -13,14 +13,16 @@ type ClaimRequest struct {
 	TTLSeconds int      `json:"ttl_seconds,omitempty"`
 }
 
-// ClaimResponse is the wire reply of POST /v1/claim. OwnerAddr is the node
-// that owns the sandbox; on a single node it is the node's own address, and at
-// M2c it is the redirect target the SDK dials for the data plane.
+// ClaimResponse is the wire reply of POST /v1/claim. A successful claim
+// carries ID/Token/Deadline/OwnerAddr; a mesh miss carries Redirect (peer
+// addresses to retry, MOVED-style), and the two are mutually exclusive.
 type ClaimResponse struct {
-	ID        string    `json:"id"`
-	Token     string    `json:"token"`
-	Deadline  time.Time `json:"deadline"`
+	ID        string    `json:"id,omitempty"`
+	Token     string    `json:"token,omitempty"`
+	Deadline  time.Time `json:"deadline,omitzero"`
 	OwnerAddr string    `json:"owner_addr,omitempty"`
+
+	Redirect []string `json:"redirect,omitempty"`
 }
 
 // Key resolves the requested pool key, defaulting to the hardened lane

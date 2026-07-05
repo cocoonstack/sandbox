@@ -45,10 +45,15 @@ func Connect(addr string, opts ...ClientOption) (*Client, error) {
 	return c, nil
 }
 
+// maxRedirects bounds the mesh redirect chain so a stale-view loop can't spin
+// forever; the fallback tiers terminate within a hop or two.
+const maxRedirects = 3
+
 // New claims a sandbox for template. Without options the node serves its
 // defaults: the no-network lane and the smallest size tier. New returns when
 // the sandbox's silkd is reachable; a warm pool hit is milliseconds, a cold
-// key can take the full boot.
+// key can take the full boot. Against a cluster, a warm miss redirects to a
+// peer that holds one, which New follows transparently.
 func (c *Client) New(ctx context.Context, template string, opts ...Option) (*Sandbox, error) {
 	claim := claimRequest{Template: template}
 	for _, opt := range opts {
@@ -58,9 +63,32 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 	if err != nil {
 		return nil, fmt.Errorf("encode claim: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url("/v1/claim"), bytes.NewReader(body))
+
+	addr := c.addr
+	for hop := 0; ; hop++ {
+		cr, err := c.claimAt(ctx, addr, body)
+		if err != nil {
+			return nil, err
+		}
+		if len(cr.Redirect) > 0 {
+			if hop >= maxRedirects {
+				return nil, fmt.Errorf("claim: too many redirects")
+			}
+			addr = cr.Redirect[0] // owner confirms; a stale hint just re-redirects
+			continue
+		}
+		owner := cr.OwnerAddr
+		if owner == "" {
+			owner = addr
+		}
+		return &Sandbox{ID: cr.ID, Deadline: cr.Deadline, c: c, token: cr.Token, owner: owner}, nil
+	}
+}
+
+func (c *Client) claimAt(ctx context.Context, addr string, body []byte) (claimResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/v1/claim", bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return claimResponse{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiToken != "" {
@@ -68,27 +96,17 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 	}
 	resp, err := c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
 	if err != nil {
-		return nil, err
+		return claimResponse{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, apiError("claim", resp)
+		return claimResponse{}, apiError("claim", resp)
 	}
 	var cr claimResponse
 	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		return nil, fmt.Errorf("decode claim response: %w", err)
+		return claimResponse{}, fmt.Errorf("decode claim response: %w", err)
 	}
-	// The data plane dials the owner directly; fall back to the entry node
-	// when a single-node deployment leaves it unset.
-	owner := cr.OwnerAddr
-	if owner == "" {
-		owner = c.addr
-	}
-	return &Sandbox{ID: cr.ID, Deadline: cr.Deadline, c: c, token: cr.Token, owner: owner}, nil
-}
-
-func (c *Client) url(path string) string {
-	return "http://" + c.addr + path
+	return cr, nil
 }
 
 // apiError surfaces the server's {"error": ...} body when present.
@@ -115,6 +133,7 @@ type claimResponse struct {
 	Token     string    `json:"token"`
 	Deadline  time.Time `json:"deadline"`
 	OwnerAddr string    `json:"owner_addr,omitempty"`
+	Redirect  []string  `json:"redirect,omitempty"`
 }
 
 type errorResponse struct {

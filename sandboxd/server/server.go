@@ -33,6 +33,8 @@ const (
 // Manager is the slice of the pool manager the server consumes.
 type Manager interface {
 	Claim(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
+	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
+	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
 	Release(ctx context.Context, id, token string) error
 	AgentSocket(id, token string) (string, error)
 	Info() ([]pool.PoolInfo, int)
@@ -41,6 +43,12 @@ type Manager interface {
 // Dialer opens the hybrid-vsock connection to a VM's silkd.
 type Dialer interface {
 	DialSilkd(ctx context.Context, vsockSocket string) (net.Conn, error)
+}
+
+// Placer names peers that hold a warm sandbox for a pool key; nil on a
+// single-node deployment (no mesh).
+type Placer interface {
+	Candidates(keyHash string) []string
 }
 
 // InfoResponse is the wire reply of GET /v1/info.
@@ -53,6 +61,7 @@ type InfoResponse struct {
 type Server struct {
 	mgr       Manager
 	dialer    Dialer
+	placer    Placer
 	apiToken  string
 	advertise string
 
@@ -64,11 +73,13 @@ type Server struct {
 
 // New returns a Server; an empty apiToken leaves the node-level endpoints
 // open (per-sandbox tokens still guard sandbox-scoped calls). advertise is
-// this node's data-plane address, returned as a claim's owner address.
-func New(apiToken, advertise string, mgr Manager, dialer Dialer) *Server {
+// this node's data-plane address, returned as a claim's owner address. A nil
+// placer disables mesh redirects (single node).
+func New(apiToken, advertise string, mgr Manager, dialer Dialer, placer Placer) *Server {
 	return &Server{
 		mgr:       mgr,
 		dialer:    dialer,
+		placer:    placer,
 		apiToken:  apiToken,
 		advertise: advertise,
 		relays:    map[net.Conn]net.Conn{},
@@ -93,7 +104,21 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := req.Key()
-	sb, err := s.mgr.Claim(r.Context(), key, req.TTL())
+
+	// Warm hit here is ownership transfer only. On a warm miss with a mesh, a
+	// peer that reports a warm sandbox gets the claim via redirect (data plane
+	// must be direct, so redirect beats proxy); only if no peer has one does
+	// this node provision (golden clone or cold boot).
+	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL())
+	if errors.Is(err, pool.ErrNoWarm) {
+		if s.placer != nil {
+			if addrs := s.placer.Candidates(key.Hash()); len(addrs) > 0 {
+				writeJSON(w, http.StatusOK, types.ClaimResponse{Redirect: addrs})
+				return
+			}
+		}
+		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL())
+	}
 	switch {
 	case errors.Is(err, pool.ErrBadKey):
 		writeErr(w, http.StatusBadRequest, err.Error())

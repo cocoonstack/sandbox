@@ -156,7 +156,7 @@ func newRelayServer(t *testing.T, guest func(net.Conn)) (*httptest.Server, *Serv
 		go guest(guestEnd)
 		return relayEnd, nil
 	}}
-	srv := New("", "node:7777", &fakeManager{}, dialer)
+	srv := New("", "node:7777", &fakeManager{}, dialer, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		srv.CloseRelays()

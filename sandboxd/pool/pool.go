@@ -40,6 +40,7 @@ const (
 
 var (
 	ErrBadKey         = errors.New("invalid pool key")
+	ErrNoWarm         = errors.New("no warm sandbox for key")
 	ErrUnknownSandbox = errors.New("unknown sandbox or bad token")
 	ErrNoEgress       = errors.New("node has no egress attachment (bridge or network)")
 )
@@ -110,39 +111,71 @@ func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
 	return m, nil
 }
 
-// Claim hands out a claim-ready sandbox: warm hit is ownership transfer only;
-// a miss clones from the pool's golden (~40ms bare metal); an unpooled or
-// golden-less key cold-boots the template.
+// Claim hands out a claim-ready sandbox: a warm hit when one exists, else a
+// provision (golden clone ~40ms, or a cold boot for an unpooled key). The mesh
+// redirect is layered above this in the server; Claim itself is node-local.
 func (m *Manager) Claim(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
-	if err := key.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrBadKey, err)
+	sb, err := m.ClaimWarm(ctx, key, ttl)
+	if errors.Is(err, ErrNoWarm) {
+		return m.ClaimProvision(ctx, key, ttl)
 	}
-	if key.Net == types.NetEgress && !m.egress {
-		return nil, ErrNoEgress
-	}
-	ttl = clampTTL(ttl)
+	return sb, err
+}
 
+// ClaimWarm transfers ownership of a warm sandbox without provisioning;
+// ErrNoWarm means the pool is empty (the caller may redirect or provision).
+func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
+	if err := m.validate(key); err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
 	var sb *types.Sandbox
-	var golden string
 	if p := m.pools[key]; p != nil {
 		if n := len(p.warm); n > 0 {
 			sb = p.warm[n-1]
 			p.warm = p.warm[:n-1]
-		} else {
-			golden = p.goldenDir
 		}
 	}
 	m.mu.Unlock()
-
 	if sb == nil {
-		var err error
-		if sb, err = m.provision(ctx, key, golden); err != nil {
-			return nil, err
-		}
+		return nil, ErrNoWarm
 	}
-	stampIdentity(sb, ttl)
+	return m.finalize(ctx, sb, ttl)
+}
 
+// ClaimProvision creates a claim-ready sandbox (golden clone or cold boot).
+func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
+	if err := m.validate(key); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	golden := ""
+	if p := m.pools[key]; p != nil {
+		golden = p.goldenDir
+	}
+	m.mu.Unlock()
+
+	sb, err := m.provision(ctx, key, golden)
+	if err != nil {
+		return nil, err
+	}
+	return m.finalize(ctx, sb, ttl)
+}
+
+func (m *Manager) validate(key types.PoolKey) error {
+	if err := key.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrBadKey, err)
+	}
+	if key.Net == types.NetEgress && !m.egress {
+		return ErrNoEgress
+	}
+	return nil
+}
+
+// finalize stamps identity, persists the claim, and destroys the VM if the
+// store write fails so a durable claim always matches a live VM.
+func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Duration) (*types.Sandbox, error) {
+	stampIdentity(sb, clampTTL(ttl))
 	m.mu.Lock()
 	m.claimed[sb.ID] = sb
 	saveErr := m.store.save(m.claimed)
@@ -155,6 +188,17 @@ func (m *Manager) Claim(ctx context.Context, key types.PoolKey, ttl time.Duratio
 		return nil, fmt.Errorf("persist claim: %w", saveErr)
 	}
 	return sb, nil
+}
+
+// WarmCounts is the per-pool-key-hash warm count, for gossiping placement.
+func (m *Manager) WarmCounts() map[string]int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	counts := make(map[string]int, len(m.pools))
+	for key, p := range m.pools {
+		counts[key.Hash()] = len(p.warm)
+	}
+	return counts
 }
 
 // Release destroys a claimed sandbox after validating its token.

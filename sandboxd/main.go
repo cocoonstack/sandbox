@@ -6,19 +6,25 @@ package main
 import (
 	"cmp"
 	"context"
+	"encoding/base64"
 	"errors"
 	"flag"
+	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/hashicorp/memberlist"
 	"github.com/projecteru2/core/log"
 	coretypes "github.com/projecteru2/core/types"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/mesh"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/server"
 )
@@ -60,7 +66,19 @@ func main() {
 	}
 	go mgr.Run(ctx)
 
-	srv := server.New(cfg.APIToken, cfg.AdvertiseAddr, mgr, eng)
+	var placer server.Placer
+	if cfg.Mesh != nil {
+		msh, err := startMesh(cfg)
+		if err != nil {
+			logger.Fatalf(ctx, err, "start mesh")
+		}
+		defer func() { _ = msh.Shutdown() }()
+		placer = msh
+		go gossipWarmCounts(ctx, msh, mgr)
+		logger.Infof(ctx, "mesh %s joined (%d seeds)", cfg.Mesh.NodeID, len(cfg.Mesh.Join))
+	}
+
+	srv := server.New(cfg.APIToken, cfg.AdvertiseAddr, mgr, eng, placer)
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           srv.Handler(),
@@ -83,4 +101,56 @@ func main() {
 	}
 	<-drained
 	logger.Info(ctx, "sandboxd stopped; VMs stay alive for the next reconcile")
+}
+
+const gossipInterval = time.Second
+
+// startMesh builds and joins the memberlist cluster from cfg.Mesh.
+func startMesh(cfg *config.Config) (*mesh.Mesh, error) {
+	mc := cfg.Mesh
+	mlCfg := memberlist.DefaultLANConfig()
+	host, portStr, err := net.SplitHostPort(mc.Bind)
+	if err != nil {
+		return nil, fmt.Errorf("mesh bind %q: %w", mc.Bind, err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, fmt.Errorf("mesh bind port %q: %w", portStr, err)
+	}
+	mlCfg.BindAddr, mlCfg.BindPort = host, port
+	mlCfg.AdvertisePort = port
+	mlCfg.PushPullInterval = gossipInterval
+	mlCfg.Logger = nil
+
+	nodeID := cmp.Or(mc.NodeID, mc.Bind)
+	var key []byte
+	if mc.ClusterKey != "" {
+		if key, err = base64.StdEncoding.DecodeString(mc.ClusterKey); err != nil {
+			return nil, fmt.Errorf("mesh cluster key: %w", err)
+		}
+	}
+	msh, err := mesh.New(mlCfg, nodeID, cfg.AdvertiseAddr, key)
+	if err != nil {
+		return nil, err
+	}
+	if err := msh.Join(mc.Join); err != nil {
+		_ = msh.Shutdown()
+		return nil, err
+	}
+	return msh, nil
+}
+
+// gossipWarmCounts republishes this node's warm-pool counts every tick so the
+// mesh's placement view tracks refill.
+func gossipWarmCounts(ctx context.Context, msh *mesh.Mesh, mgr *pool.Manager) {
+	t := time.NewTicker(gossipInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			msh.UpdateSelf(mgr.WarmCounts())
+		}
+	}
 }

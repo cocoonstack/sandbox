@@ -215,7 +215,7 @@ func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *h
 	if dialer == nil {
 		dialer = &fakeDialer{}
 	}
-	srv := New(apiToken, "node:7777", mgr, dialer)
+	srv := New(apiToken, "node:7777", mgr, dialer, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()
@@ -224,19 +224,36 @@ func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *h
 	return ts
 }
 
-// fakeManager implements Manager with overridable behavior; nil funcs default
-// to success.
+// fakeManager implements Manager with overridable behavior. ClaimWarm reports
+// a miss unless warmHit is set, so the server's warm→redirect→provision path
+// is exercised; the claim hook stands in for the provision result.
 type fakeManager struct {
 	claim   func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
+	warmHit bool
 	release func(id, token string) error
 	socket  func(id, token string) (string, error)
 }
 
-func (f *fakeManager) Claim(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
+func (f *fakeManager) doClaim(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
 	if f.claim == nil {
 		return &types.Sandbox{ID: "sb_1", Token: "tok"}, nil
 	}
 	return f.claim(ctx, key, ttl)
+}
+
+func (f *fakeManager) Claim(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
+	return f.doClaim(ctx, key, ttl)
+}
+
+func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
+	if !f.warmHit {
+		return nil, pool.ErrNoWarm
+	}
+	return f.doClaim(ctx, key, ttl)
+}
+
+func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
+	return f.doClaim(ctx, key, ttl)
 }
 
 func (f *fakeManager) Release(_ context.Context, id, token string) error {
@@ -267,4 +284,62 @@ func (f *fakeDialer) DialSilkd(ctx context.Context, sock string) (net.Conn, erro
 		return c, nil
 	}
 	return f.dial(ctx, sock)
+}
+
+// fakePlacer returns canned candidates.
+type fakePlacer struct{ addrs []string }
+
+func (f *fakePlacer) Candidates(string) []string { return f.addrs }
+
+func TestClaimRedirectsOnWarmMiss(t *testing.T) {
+	// Warm miss (fakeManager.warmHit=false) + a placer with candidates → a
+	// redirect response, and the local manager never provisions.
+	provisioned := false
+	mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+		provisioned = true
+		return &types.Sandbox{ID: "sb_local"}, nil
+	}}
+	srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"node-b:7777", "node-c:7777"}})
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+	resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"rt:24.04"}`))
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	defer resp.Body.Close()
+	var cr types.ClaimResponse
+	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(cr.Redirect) != 2 || cr.Redirect[0] != "node-b:7777" {
+		t.Errorf("redirect %v, want [node-b:7777 node-c:7777]", cr.Redirect)
+	}
+	if cr.ID != "" {
+		t.Errorf("redirect carried a sandbox id %q", cr.ID)
+	}
+	if provisioned {
+		t.Error("provisioned locally despite an available peer")
+	}
+}
+
+func TestClaimProvisionsWhenNoCandidate(t *testing.T) {
+	// Warm miss + a placer with no candidates → local provision.
+	mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+		return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
+	}}
+	srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: nil})
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+	resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"rt:24.04"}`))
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	defer resp.Body.Close()
+	var cr types.ClaimResponse
+	_ = json.NewDecoder(resp.Body).Decode(&cr)
+	if cr.ID != "sb_local" || len(cr.Redirect) != 0 {
+		t.Errorf("got %+v, want local sandbox", cr)
+	}
 }
