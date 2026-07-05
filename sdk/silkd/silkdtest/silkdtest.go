@@ -24,10 +24,14 @@ func Serve(l net.Listener) {
 		if err != nil {
 			return
 		}
-		go func(c net.Conn) {
-			handle(c, bufio.NewReader(c))
-		}(conn)
+		go ServeConn(conn)
 	}
+}
+
+// ServeConn speaks one RPC on an already-open connection and closes it —
+// for tests that produce the conn themselves (e.g. after an HTTP hijack).
+func ServeConn(conn net.Conn) {
+	handle(conn, bufio.NewReader(conn))
 }
 
 // ListenHybrid serves the muxer handshake on a UDS: each connection must
