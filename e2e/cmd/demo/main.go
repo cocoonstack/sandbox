@@ -61,7 +61,7 @@ func run(addr, token, template, netShape string, n, ttl int, leak bool) error {
 		}
 		execDone := time.Now()
 		fmt.Printf("iter=%d id=%s claim=%.1fms exec=%.1fms\n",
-			i, sb.ID, ms(claimed.Sub(start)), ms(execDone.Sub(claimed)))
+			i, sb.ID, claimed.Sub(start).Seconds()*1000, execDone.Sub(claimed).Seconds()*1000)
 		if leak {
 			continue
 		}
@@ -70,8 +70,4 @@ func run(addr, token, template, netShape string, n, ttl int, leak bool) error {
 		}
 	}
 	return nil
-}
-
-func ms(d time.Duration) float64 {
-	return float64(d.Microseconds()) / 1000
 }

@@ -14,6 +14,8 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/silkd/silkdtest"
 )
 
+const upgrade101 = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n"
+
 func TestExecCapturesStdout(t *testing.T) {
 	sb := testSandbox(t, newAgentServer(t))
 
@@ -86,7 +88,7 @@ func TestUpgradeKeepsCoalescedBytes(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		blob := "HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n" +
+		blob := upgrade101 +
 			`{"type":"started","pid":1}` + "\n" +
 			`{"type":"stdout","data":"NDIK"}` + "\n" +
 			`{"type":"exit","code":0}` + "\n"
@@ -138,7 +140,7 @@ func newAgentServer(t *testing.T) *httptest.Server {
 			t.Errorf("hijack: %v", err)
 			return
 		}
-		if _, err := io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n"); err != nil {
+		if _, err := io.WriteString(conn, upgrade101); err != nil {
 			_ = conn.Close()
 			return
 		}

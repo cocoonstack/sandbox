@@ -29,9 +29,10 @@ func (c *Conn) Send(r Request) error {
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", r.Op(), err)
 	}
+	frame = append(frame, '\n') // in-place: EncodeRequest reserves the byte
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
-	_, err = c.rwc.Write(append(frame, '\n'))
+	_, err = c.rwc.Write(frame)
 	return err
 }
 

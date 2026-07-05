@@ -8,6 +8,7 @@
 package engine
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -32,6 +33,8 @@ const (
 	infoMax       = 4096 // info response frame cap
 	outputTail    = 400
 )
+
+var infoProbe = []byte(`{"v":1,"op":"info"}` + "\n")
 
 // Engine runs cocoon commands on the local node.
 type Engine struct {
@@ -141,10 +144,8 @@ func (e *Engine) Probe(ctx context.Context, vsockSocket string, timeout time.Dur
 	defer cancel()
 	var lastErr error
 	for {
-		if err := e.infoRoundTrip(ctx, vsockSocket); err == nil {
+		if lastErr = e.infoRoundTrip(ctx, vsockSocket); lastErr == nil {
 			return nil
-		} else { //nolint:revive // lastErr must survive the loop for the timeout message
-			lastErr = err
 		}
 		select {
 		case <-ctx.Done():
@@ -206,17 +207,19 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 	defer func() { _ = conn.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	if _, err = conn.Write([]byte(`{"v":1,"op":"info"}` + "\n")); err != nil {
+	if _, err = conn.Write(infoProbe); err != nil {
 		return fmt.Errorf("write info: %w", err)
 	}
-	reply, err := readLine(conn, infoMax)
+	// Unlike the handshake reader, buffered over-read is safe here: the conn
+	// is discarded after this one reply.
+	reply, err := bufio.NewReaderSize(io.LimitReader(conn, infoMax), 512).ReadBytes('\n')
 	if err != nil {
 		return fmt.Errorf("read info reply: %w", err)
 	}
 	var frame struct {
 		Type string `json:"type"`
 	}
-	if err := json.Unmarshal([]byte(reply), &frame); err != nil {
+	if err := json.Unmarshal(reply, &frame); err != nil {
 		return fmt.Errorf("parse info reply: %w", err)
 	}
 	if frame.Type != "info" {

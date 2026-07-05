@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -60,7 +61,7 @@ func TestClaimErrorMapping(t *testing.T) {
 		want int
 	}{
 		{"bad json", `{oops`, nil, http.StatusBadRequest},
-		{"bad key", `{"template":"rt:24.04","net":"lan"}`, nil, http.StatusBadRequest},
+		{"bad key", `{"template":"rt:24.04","net":"lan"}`, fmt.Errorf("%w: unknown net", pool.ErrBadKey), http.StatusBadRequest},
 		{"no egress", `{"template":"rt:24.04","net":"egress"}`, pool.ErrNoEgress, http.StatusConflict},
 		{"engine failure", `{"template":"rt:24.04"}`, errors.New("cocoon vm run: boom"), http.StatusInternalServerError},
 	}

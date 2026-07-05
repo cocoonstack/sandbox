@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +39,7 @@ const (
 )
 
 var (
+	ErrBadKey         = errors.New("invalid pool key")
 	ErrUnknownSandbox = errors.New("unknown sandbox or bad token")
 	ErrNoEgress       = errors.New("node has no egress attachment (bridge or network)")
 )
@@ -94,7 +95,7 @@ func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
 	m := &Manager{
 		eng:       eng,
 		dataDir:   cfg.DataDir,
-		egress:    cfg.Bridge != "" || cfg.Network != "",
+		egress:    cfg.HasEgress(),
 		store:     newStore(cfg.DataDir),
 		pools:     make(map[types.PoolKey]*pool, len(cfg.Pools)),
 		claimed:   map[string]*types.Sandbox{},
@@ -114,7 +115,7 @@ func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
 // golden-less key cold-boots the template.
 func (m *Manager) Claim(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
 	if err := key.Validate(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrBadKey, err)
 	}
 	if key.Net == types.NetEgress && !m.egress {
 		return nil, ErrNoEgress
@@ -214,7 +215,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	saveErr := m.store.save(m.claimed)
 	for _, p := range m.pools {
 		dir := filepath.Join(m.goldensDir(), p.key.Hash())
-		if _, statErr := os.Stat(filepath.Join(dir, "snapshot.json")); statErr == nil {
+		if fi, statErr := os.Stat(dir); statErr == nil && fi.IsDir() {
 			p.goldenDir = dir
 		}
 	}
@@ -264,7 +265,7 @@ func (m *Manager) Info() ([]PoolInfo, int) {
 			Golden:    p.goldenDir != "",
 		})
 	}
-	sort.Slice(infos, func(i, j int) bool { return infos[i].Key.Hash() < infos[j].Key.Hash() })
+	slices.SortFunc(infos, func(a, b PoolInfo) int { return strings.Compare(a.Key.Hash(), b.Key.Hash()) })
 	return infos, len(m.claimed)
 }
 
@@ -348,10 +349,20 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
 		return err
 	}
+	// Export lands under a temp name and renames into place, so a crash
+	// mid-export can never leave a half-written dir that Reconcile would
+	// adopt as a valid golden.
+	tmp := final + ".tmp"
+	if err := os.RemoveAll(tmp); err != nil {
+		return fmt.Errorf("clear golden tmp: %w", err)
+	}
+	if err := m.eng.SnapshotExport(ctx, snap, tmp); err != nil {
+		return err
+	}
 	if err := os.RemoveAll(final); err != nil {
 		return fmt.Errorf("clear golden dir: %w", err)
 	}
-	return m.eng.SnapshotExport(ctx, snap, final)
+	return os.Rename(tmp, final)
 }
 
 func (m *Manager) reapOnce(ctx context.Context) {
@@ -394,16 +405,18 @@ func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden strin
 		err = m.eng.RunCold(ctx, name, key)
 		probeTimeout = coldProbeTimeout
 	}
+	var sock string
 	if err == nil {
-		var sock string
-		if sock, err = m.vsockOf(ctx, name); err == nil {
-			if err = m.eng.Probe(ctx, sock, probeTimeout); err == nil {
-				return &types.Sandbox{VMName: name, Key: key, VsockSocket: sock}, nil
-			}
-		}
+		sock, err = m.vsockOf(ctx, name)
 	}
-	m.destroy(ctx, name)
-	return nil, err
+	if err == nil {
+		err = m.eng.Probe(ctx, sock, probeTimeout)
+	}
+	if err != nil {
+		m.destroy(ctx, name)
+		return nil, err
+	}
+	return &types.Sandbox{VMName: name, Key: key, VsockSocket: sock}, nil
 }
 
 func (m *Manager) vsockOf(ctx context.Context, name string) (string, error) {

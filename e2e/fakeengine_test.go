@@ -59,10 +59,7 @@ func (f *fakeEngine) Remove(_ context.Context, name string) error {
 func (f *fakeEngine) SnapshotSave(_ context.Context, _, _ string) error { return nil }
 
 func (f *fakeEngine) SnapshotExport(_ context.Context, _, toDir string) error {
-	if err := os.MkdirAll(toDir, 0o750); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(toDir, "snapshot.json"), []byte("{}"), 0o600)
+	return os.MkdirAll(toDir, 0o750)
 }
 
 func (f *fakeEngine) SnapshotRemove(_ context.Context, _ string) error { return nil }

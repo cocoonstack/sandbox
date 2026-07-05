@@ -41,6 +41,11 @@ type Config struct {
 	Pools []PoolSpec `json:"pools"`
 }
 
+// HasEgress reports whether the node can attach egress-lane VMs.
+func (c *Config) HasEgress() bool {
+	return c.Bridge != "" || c.Network != ""
+}
+
 // Load reads a JSON config file, applies defaults, and validates.
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // path is the operator-supplied -config flag
@@ -83,7 +88,7 @@ func (c *Config) validate() error {
 		if err := p.Validate(); err != nil {
 			return fmt.Errorf("pool %q: %w", p.Template, err)
 		}
-		if p.Net == types.NetEgress && c.Bridge == "" && c.Network == "" {
+		if p.Net == types.NetEgress && !c.HasEgress() {
 			return fmt.Errorf("pool %q: egress lane needs bridge or network", p.Template)
 		}
 		if p.Warm < 0 {

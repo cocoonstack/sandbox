@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
+
+	"github.com/cocoonstack/sandbox/sandboxd/pool"
 )
 
 // drainGrace bounds how long a finished relay waits for the client to
@@ -33,14 +36,20 @@ func (s *Server) CloseRelays() {
 }
 
 func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
+	logger := log.WithFunc("server.handleAgent")
 	token, ok := bearerToken(r)
 	if !ok {
 		writeErr(w, http.StatusUnauthorized, "missing bearer token")
 		return
 	}
 	sock, err := s.mgr.AgentSocket(r.PathValue("id"), token)
-	if err != nil {
+	switch {
+	case errors.Is(err, pool.ErrUnknownSandbox):
 		writeErr(w, http.StatusNotFound, "unknown sandbox")
+		return
+	case err != nil:
+		logger.Errorf(r.Context(), err, "agent socket for %s", r.PathValue("id"))
+		writeErr(w, http.StatusInternalServerError, "sandbox lookup failed")
 		return
 	}
 	if !strings.EqualFold(r.Header.Get("Upgrade"), upgradeProto) {
@@ -48,7 +57,6 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUpgradeRequired, "upgrade to "+upgradeProto+" required")
 		return
 	}
-	logger := log.WithFunc("server.handleAgent")
 	guest, err := s.dialer.DialSilkd(r.Context(), sock)
 	if err != nil {
 		logger.Errorf(r.Context(), err, "dial silkd for %s", r.PathValue("id"))

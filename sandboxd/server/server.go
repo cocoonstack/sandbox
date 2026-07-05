@@ -85,26 +85,23 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	var req types.ClaimRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes)).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	key := req.Key()
-	if err := key.Validate(); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
 	sb, err := s.mgr.Claim(r.Context(), key, req.TTL())
-	if errors.Is(err, pool.ErrNoEgress) {
+	switch {
+	case errors.Is(err, pool.ErrBadKey):
+		writeErr(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, pool.ErrNoEgress):
 		writeErr(w, http.StatusConflict, err.Error())
-		return
-	}
-	if err != nil {
+	case err != nil:
 		log.WithFunc("server.handleClaim").Errorf(r.Context(), err, "claim %s", key.Hash())
 		writeErr(w, http.StatusInternalServerError, "provisioning failed")
-		return
+	default:
+		writeJSON(w, http.StatusOK, types.ClaimResponse{ID: sb.ID, Token: sb.Token, Deadline: sb.Deadline})
 	}
-	writeJSON(w, http.StatusOK, types.ClaimResponse{ID: sb.ID, Token: sb.Token, Deadline: sb.Deadline})
 }
 
 func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {

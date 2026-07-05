@@ -5,8 +5,8 @@ import (
 	"context"
 	"io"
 	"net"
+	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
@@ -183,24 +183,16 @@ func upgradeConn(t *testing.T, ts *httptest.Server) (net.Conn, *bufio.Reader) {
 	return conn, r
 }
 
-// readStatus101 consumes exactly the 101 response head, which the relay
-// writes as one block before any guest bytes.
+// readStatus101 consumes exactly the 101 response head; a 1xx response has
+// no body, so http.ReadResponse stops right where the guest bytes begin.
 func readStatus101(t *testing.T, r *bufio.Reader) {
 	t.Helper()
-	status, err := r.ReadString('\n')
+	resp, err := http.ReadResponse(r, nil)
 	if err != nil {
-		t.Fatalf("read status: %v", err)
+		t.Fatalf("read response: %v", err)
 	}
-	if !strings.HasPrefix(status, "HTTP/1.1 101") {
-		t.Fatalf("status %q, want 101", status)
-	}
-	for {
-		line, err := r.ReadString('\n')
-		if err != nil {
-			t.Fatalf("read headers: %v", err)
-		}
-		if line == "\r\n" {
-			return
-		}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status %d, want 101", resp.StatusCode)
 	}
 }

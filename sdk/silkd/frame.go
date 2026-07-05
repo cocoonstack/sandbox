@@ -8,6 +8,7 @@ package silkd
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 )
 
 const (
@@ -18,6 +19,8 @@ const (
 	MaxFrame = 8 << 20
 )
 
+var requestHead = `{"v":` + strconv.Itoa(ProtoVersion) + `,"op":"`
+
 // Request is a client→server frame; Op is its wire tag.
 type Request interface{ Op() string }
 
@@ -26,7 +29,8 @@ type Response interface{ RespType() string }
 
 // B64 carries request payload bytes. It exists because silkd's deserializer
 // requires a base64 string and rejects null — which is exactly what
-// encoding/json emits for a nil []byte.
+// encoding/json emits for a nil []byte. Decoding needs no counterpart:
+// []byte-kinded types already base64-decode by default.
 type B64 []byte
 
 func (b B64) MarshalJSON() ([]byte, error) {
@@ -34,10 +38,6 @@ func (b B64) MarshalJSON() ([]byte, error) {
 		b = B64{}
 	}
 	return json.Marshal([]byte(b))
-}
-
-func (b *B64) UnmarshalJSON(data []byte) error {
-	return json.Unmarshal(data, (*[]byte)(b))
 }
 
 // Exec starts a process; with Session set it runs inside that persistent
@@ -290,12 +290,12 @@ func (e *ErrorResp) Error() string { return e.Kind + ": " + e.Message }
 
 // EncodeRequest renders {"v":1,"op":...,fields} without a trailing newline.
 func EncodeRequest(r Request) ([]byte, error) {
-	return encodeTagged(fmt.Sprintf(`{"v":%d,"op":%q`, ProtoVersion, r.Op()), r)
+	return encodeTagged(requestHead+r.Op()+`"`, r)
 }
 
 // EncodeResponse renders {"type":...,fields} without a trailing newline.
 func EncodeResponse(r Response) ([]byte, error) {
-	return encodeTagged(fmt.Sprintf(`{"type":%q`, r.RespType()), r)
+	return encodeTagged(`{"type":"`+r.RespType()+`"`, r)
 }
 
 // DecodeRequest parses one frame into its op's concrete type.
@@ -399,16 +399,20 @@ func DecodeResponse(line []byte) (Response, error) {
 }
 
 // encodeTagged marshals v as a flat object and splices the tag head in front
-// of its fields, so wire tags never live on the structs themselves.
+// of its fields, so wire tags never live on the structs themselves. The
+// spare capacity byte lets Conn.Send append the newline without a copy.
 func encodeTagged(head string, v any) ([]byte, error) {
 	body, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
 	}
+	frame := make([]byte, 0, len(head)+len(body)+1)
+	frame = append(frame, head...)
 	if len(body) == 2 { // "{}"
-		return []byte(head + "}"), nil
+		return append(frame, '}'), nil
 	}
-	return append([]byte(head+","), body[1:]...), nil
+	frame = append(frame, ',')
+	return append(frame, body[1:]...), nil
 }
 
 func decodeAs[T any](line []byte) (*T, error) {

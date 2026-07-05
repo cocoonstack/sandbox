@@ -149,6 +149,15 @@ func TestClaimEgressNeedsAttachment(t *testing.T) {
 	}
 }
 
+func TestClaimRejectsBadKey(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	key := types.PoolKey{Template: "rt:24.04", Net: "lan", Size: types.SizeSmall}
+
+	if _, err := m.Claim(t.Context(), key, 0); !errors.Is(err, ErrBadKey) {
+		t.Errorf("got %v, want ErrBadKey", err)
+	}
+}
+
 func TestReleaseValidatesToken(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -234,9 +243,6 @@ func TestReconcile(t *testing.T) {
 	if err := os.MkdirAll(goldenDir, 0o750); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(goldenDir, "snapshot.json"), []byte("{}"), 0o600); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
 
 	if err := m.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -314,7 +320,7 @@ func TestGoldenBuildPipeline(t *testing.T) {
 	m.mu.Lock()
 	golden := m.pools[testKey].goldenDir
 	m.mu.Unlock()
-	if _, err := os.Stat(filepath.Join(golden, "snapshot.json")); err != nil {
+	if fi, err := os.Stat(golden); err != nil || !fi.IsDir() {
 		t.Errorf("golden dir not exported: %v", err)
 	}
 	builder := vmPrefix + "gb-" + testKey.Hash()
@@ -431,10 +437,7 @@ func (f *fakeEngine) Remove(ctx context.Context, name string) error {
 func (f *fakeEngine) SnapshotSave(_ context.Context, _, _ string) error { return nil }
 
 func (f *fakeEngine) SnapshotExport(_ context.Context, _, toDir string) error {
-	if err := os.MkdirAll(toDir, 0o750); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(toDir, "snapshot.json"), []byte("{}"), 0o600)
+	return os.MkdirAll(toDir, 0o750)
 }
 
 func (f *fakeEngine) SnapshotRemove(_ context.Context, _ string) error { return nil }

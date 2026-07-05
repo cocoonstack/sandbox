@@ -1,6 +1,9 @@
 package types
 
-import "time"
+import (
+	"cmp"
+	"time"
+)
 
 // ClaimRequest is the wire body of POST /v1/claim.
 type ClaimRequest struct {
@@ -20,14 +23,11 @@ type ClaimResponse struct {
 // Key resolves the requested pool key, defaulting to the hardened lane
 // (net none → FC) and the smallest tier.
 func (r ClaimRequest) Key() PoolKey {
-	key := PoolKey{Template: r.Template, Net: r.Net, Size: r.Size}
-	if key.Net == "" {
-		key.Net = NetNone
+	return PoolKey{
+		Template: r.Template,
+		Net:      cmp.Or(r.Net, NetNone),
+		Size:     cmp.Or(r.Size, SizeSmall),
 	}
-	if key.Size == "" {
-		key.Size = SizeSmall
-	}
-	return key
 }
 
 // TTL converts the wire seconds to a duration; zero means server default.
