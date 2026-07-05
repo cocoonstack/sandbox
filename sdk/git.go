@@ -14,27 +14,15 @@ func (s *Sandbox) GitClone(ctx context.Context, url, path, branch, auth string) 
 
 // GitStatus returns the structured status of the repo at path.
 func (s *Sandbox) GitStatus(ctx context.Context, path string) (*silkd.GitStatusResult, error) {
-	resp, err := s.oneShot(ctx, &silkd.GitStatus{Path: path})
-	if err != nil {
-		return nil, err
-	}
-	st, ok := resp.(*silkd.GitStatusResult)
-	if !ok {
-		return nil, unexpected(resp)
-	}
-	return st, nil
+	return oneShotRPC[silkd.GitStatusResult](ctx, s, &silkd.GitStatus{Path: path})
 }
 
 // GitCommit stages nothing (call GitAdd first); it commits the index with
 // message and author ("Name <email>") and returns the new commit hash.
 func (s *Sandbox) GitCommit(ctx context.Context, path, message, author string) (string, error) {
-	resp, err := s.oneShot(ctx, &silkd.GitCommit{Path: path, Message: message, Author: author})
+	c, err := oneShotRPC[silkd.GitCommitResult](ctx, s, &silkd.GitCommit{Path: path, Message: message, Author: author})
 	if err != nil {
 		return "", err
-	}
-	c, ok := resp.(*silkd.GitCommitResult)
-	if !ok {
-		return "", unexpected(resp)
 	}
 	return c.Hash, nil
 }
@@ -42,4 +30,35 @@ func (s *Sandbox) GitCommit(ctx context.Context, path, message, author string) (
 // GitAdd stages files under the repo at path.
 func (s *Sandbox) GitAdd(ctx context.Context, path string, files ...string) error {
 	return s.doneRPC(ctx, &silkd.GitAdd{Path: path, Files: files})
+}
+
+// GitPush pushes the current branch. Auth as in GitClone. Needs the egress
+// lane; on the no-network lane it fails with a typed error pointing at Push.
+func (s *Sandbox) GitPush(ctx context.Context, path, auth string) error {
+	return s.doneRPC(ctx, &silkd.GitPush{Path: path, Auth: auth})
+}
+
+// GitPull pulls the current branch; same lane rules as GitPush.
+func (s *Sandbox) GitPull(ctx context.Context, path, auth string) error {
+	return s.doneRPC(ctx, &silkd.GitPull{Path: path, Auth: auth})
+}
+
+// GitBranches lists the repo's branches and the current one.
+func (s *Sandbox) GitBranches(ctx context.Context, path string) (*silkd.GitBranches, error) {
+	return oneShotRPC[silkd.GitBranches](ctx, s, &silkd.GitBranch{Path: path, Action: silkd.BranchList})
+}
+
+// GitCreateBranch creates branch name.
+func (s *Sandbox) GitCreateBranch(ctx context.Context, path, name string) error {
+	return s.doneRPC(ctx, &silkd.GitBranch{Path: path, Action: silkd.BranchCreate, Name: name})
+}
+
+// GitDeleteBranch force-deletes branch name.
+func (s *Sandbox) GitDeleteBranch(ctx context.Context, path, name string) error {
+	return s.doneRPC(ctx, &silkd.GitBranch{Path: path, Action: silkd.BranchDelete, Name: name})
+}
+
+// GitCheckout checks out branch name.
+func (s *Sandbox) GitCheckout(ctx context.Context, path, name string) error {
+	return s.doneRPC(ctx, &silkd.GitBranch{Path: path, Action: silkd.BranchCheckout, Name: name})
 }

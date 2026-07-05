@@ -48,11 +48,12 @@ start_daemon() {
 
 echo "== build"
 # Prebuilt binaries let the script run on nodes without a Go toolchain.
-if [[ -n ${SANDBOXD_BIN:-} && -n ${DEMO_BIN:-} ]]; then
-  cp "$SANDBOXD_BIN" "$DATA/sandboxd" && cp "$DEMO_BIN" "$DATA/demo"
+if [[ -n ${SANDBOXD_BIN:-} && -n ${DEMO_BIN:-} && -n ${SMOKE_BIN:-} ]]; then
+  cp "$SANDBOXD_BIN" "$DATA/sandboxd" && cp "$DEMO_BIN" "$DATA/demo" && cp "$SMOKE_BIN" "$DATA/smoke"
 else
   (cd "$REPO/sandboxd" && GOWORK=off go build -o "$DATA/sandboxd" .)
   (cd "$REPO/e2e" && GOWORK=off go build -o "$DATA/demo" ./cmd/demo)
+  (cd "$REPO/e2e" && GOWORK=off go build -o "$DATA/smoke" ./cmd/smoke)
 fi
 
 echo "== start (pool: $TEMPLATE none/small warm=$WARM)"
@@ -79,6 +80,9 @@ api info | jq .
 
 echo "== claim/exec/release x3 (expect: warm-hit ms-scale, then clone-tier)"
 "$DATA/demo" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -n 3
+
+echo "== v2 smoke: files/session/find/replace/watch/git/pty through the relay"
+"$DATA/smoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE"
 
 echo "== reap: leaked 5s-ttl claim is destroyed by the owner"
 "$DATA/demo" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -n 1 -ttl 5 -leak

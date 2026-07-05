@@ -69,7 +69,7 @@ func handle(conn net.Conn, r *bufio.Reader) {
 		return
 	}
 	if !serveCommon(conn, r, req) {
-		errFrame(conn, "unimplemented", "silkdtest: "+req.Op())
+		errFrame(conn, silkd.KindUnimplemented, "silkdtest: "+req.Op())
 	}
 }
 
@@ -99,7 +99,7 @@ func acceptLoop(l net.Listener, serve func(net.Conn)) {
 
 func serveExec(conn net.Conn, r *bufio.Reader, req *silkd.Exec) {
 	if len(req.Argv) == 0 {
-		errFrame(conn, "bad_request", "empty argv")
+		errFrame(conn, silkd.KindBadRequest, "empty argv")
 		return
 	}
 	send(conn, &silkd.Started{PID: 4242})
@@ -120,7 +120,7 @@ func serveExec(conn net.Conn, r *bufio.Reader, req *silkd.Exec) {
 				send(conn, &silkd.Exit{Code: 0})
 				return
 			default:
-				errFrame(conn, "bad_request", "expected stdin")
+				errFrame(conn, silkd.KindBadRequest, "expected stdin")
 				return
 			}
 		}
@@ -129,7 +129,7 @@ func serveExec(conn net.Conn, r *bufio.Reader, req *silkd.Exec) {
 	case "sleep":
 		_, _ = io.Copy(io.Discard, r) // hold the RPC open until disconnect
 	default:
-		errFrame(conn, "not_found", "silkdtest: no such command "+req.Argv[0])
+		errFrame(conn, silkd.KindNotFound, "silkdtest: no such command "+req.Argv[0])
 	}
 }
 

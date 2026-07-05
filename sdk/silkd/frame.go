@@ -17,6 +17,18 @@ const (
 	ProtoVersion = 1
 	// MaxFrame mirrors silkd's frame cap.
 	MaxFrame = 8 << 20
+
+	// GitBranch.Action values (silkd's GitBranchOp).
+	BranchList     = "list"
+	BranchCreate   = "create"
+	BranchDelete   = "delete"
+	BranchCheckout = "checkout"
+
+	// ErrorResp.Kind values (silkd's ErrorKind).
+	KindBadRequest    = "bad_request"
+	KindNotFound      = "not_found"
+	KindUnimplemented = "unimplemented"
+	KindInternal      = "internal"
 )
 
 var requestHead = `{"v":` + strconv.Itoa(ProtoVersion) + `,"op":"`

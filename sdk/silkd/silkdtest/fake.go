@@ -2,9 +2,13 @@ package silkdtest
 
 import (
 	"bufio"
+	"io"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,11 +26,13 @@ type Fake struct {
 	mu       sync.Mutex
 	sessions map[string]bool
 	seq      int
+	branches []string
+	current  string
 }
 
 // NewFake returns a Fake serving files under root.
 func NewFake(root string) *Fake {
-	return &Fake{Root: root, sessions: map[string]bool{}}
+	return &Fake{Root: root, sessions: map[string]bool{}, branches: []string{"main"}, current: "main"}
 }
 
 // Serve accepts connections until l closes, one RPC per connection.
@@ -64,13 +70,23 @@ func (f *Fake) ServeConn(conn net.Conn) {
 		f.sessionList(conn)
 	case *silkd.SessionRm:
 		f.sessionRm(conn, req.ID)
+	case *silkd.FsFind:
+		f.fsFind(conn, req)
+	case *silkd.FsReplace:
+		f.fsReplace(conn, req)
+	case *silkd.FsWatch:
+		f.fsWatch(conn, r, req)
+	case *silkd.GitPush, *silkd.GitPull:
+		send(conn, silkd.Done{})
+	case *silkd.GitBranch:
+		f.gitBranch(conn, req)
 	case *silkd.PtyOpen:
 		ptyEcho(conn, r)
 	case *silkd.PtyResize:
 		send(conn, silkd.Done{})
 	default:
 		if !serveCommon(conn, r, req) {
-			errFrame(conn, "unimplemented", "silkdtest: "+req.Op())
+			errFrame(conn, silkd.KindUnimplemented, "silkdtest: "+req.Op())
 		}
 	}
 }
@@ -97,7 +113,7 @@ func ptyEcho(conn net.Conn, r *bufio.Reader) {
 func (f *Fake) fsWrite(conn net.Conn, r *bufio.Reader, req *silkd.FsWrite) {
 	data, err := drainUpload(r)
 	if err != nil {
-		errFrame(conn, "internal", err.Error())
+		errFrame(conn, silkd.KindInternal, err.Error())
 		return
 	}
 	mode := os.FileMode(0o644)
@@ -110,7 +126,7 @@ func (f *Fake) fsWrite(conn net.Conn, r *bufio.Reader, req *silkd.FsWrite) {
 func (f *Fake) fsRead(conn net.Conn, path string) {
 	data, err := os.ReadFile(f.abs(path))
 	if err != nil {
-		errFrame(conn, "not_found", err.Error())
+		errFrame(conn, silkd.KindNotFound, err.Error())
 		return
 	}
 	send(conn, &silkd.DataResp{Data: data})
@@ -120,7 +136,7 @@ func (f *Fake) fsRead(conn net.Conn, path string) {
 func (f *Fake) fsList(conn net.Conn, path string) {
 	ents, err := os.ReadDir(f.abs(path))
 	if err != nil {
-		errFrame(conn, "not_found", err.Error())
+		errFrame(conn, silkd.KindNotFound, err.Error())
 		return
 	}
 	var entries []silkd.DirEntry
@@ -143,7 +159,7 @@ func (f *Fake) fsList(conn net.Conn, path string) {
 func (f *Fake) fsStat(conn net.Conn, path string) {
 	info, err := os.Stat(f.abs(path))
 	if err != nil {
-		errFrame(conn, "not_found", err.Error())
+		errFrame(conn, silkd.KindNotFound, err.Error())
 		return
 	}
 	kind := "file"
@@ -193,15 +209,111 @@ func (f *Fake) sessionRm(conn net.Conn, id string) {
 	delete(f.sessions, id)
 	f.mu.Unlock()
 	if !ok {
-		errFrame(conn, "not_found", "no such session")
+		errFrame(conn, silkd.KindNotFound, "no such session")
 		return
 	}
 	send(conn, silkd.Done{})
 }
 
+func (f *Fake) fsFind(conn net.Conn, req *silkd.FsFind) {
+	re, err := regexp.Compile(req.Pattern)
+	if err != nil {
+		errFrame(conn, silkd.KindBadRequest, err.Error())
+		return
+	}
+	walkErr := filepath.WalkDir(f.abs(req.Path), func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if req.Glob != "" && !strings.Contains(d.Name(), req.Glob) {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		for i, line := range strings.Split(strings.TrimSuffix(string(body), "\n"), "\n") {
+			if re.MatchString(line) {
+				send(conn, &silkd.Match{
+					File:    strings.TrimPrefix(path, f.Root),
+					Line:    uint64(i) + 1,
+					Content: line,
+				})
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		errFrame(conn, silkd.KindNotFound, walkErr.Error())
+		return
+	}
+	send(conn, silkd.Done{})
+}
+
+func (f *Fake) fsReplace(conn net.Conn, req *silkd.FsReplace) {
+	re, err := regexp.Compile(req.Pattern)
+	if err != nil {
+		errFrame(conn, silkd.KindBadRequest, err.Error())
+		return
+	}
+	for _, file := range req.Files {
+		body, err := os.ReadFile(f.abs(file))
+		if err != nil {
+			errFrame(conn, silkd.KindNotFound, err.Error())
+			return
+		}
+		count := len(re.FindAll(body, -1))
+		if count > 0 {
+			if err := os.WriteFile(f.abs(file), re.ReplaceAll(body, []byte(req.Replacement)), 0o600); err != nil {
+				errFrame(conn, silkd.KindInternal, err.Error())
+				return
+			}
+		}
+		send(conn, &silkd.Replaced{File: file, Replacements: uint64(count)})
+	}
+	send(conn, silkd.Done{})
+}
+
+// fsWatch fakes a watch: one synthetic created event, then it holds the
+// stream open until the client disconnects — the connection-bound contract.
+func (f *Fake) fsWatch(conn net.Conn, r *bufio.Reader, req *silkd.FsWatch) {
+	if _, err := os.Stat(f.abs(req.Path)); err != nil {
+		errFrame(conn, silkd.KindNotFound, err.Error())
+		return
+	}
+	send(conn, &silkd.Event{Kind: "created", Path: req.Path + "/silkdtest-event"})
+	_, _ = io.Copy(io.Discard, r)
+}
+
+func (f *Fake) gitBranch(conn net.Conn, req *silkd.GitBranch) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch req.Action {
+	case silkd.BranchList:
+		send(conn, &silkd.GitBranches{Current: f.current, Branches: slices.Clone(f.branches)})
+	case silkd.BranchCreate:
+		if !slices.Contains(f.branches, req.Name) {
+			f.branches = append(f.branches, req.Name)
+		}
+		send(conn, silkd.Done{})
+	case silkd.BranchDelete:
+		f.branches = slices.DeleteFunc(f.branches, func(b string) bool { return b == req.Name })
+		send(conn, silkd.Done{})
+	case silkd.BranchCheckout:
+		if !slices.Contains(f.branches, req.Name) {
+			errFrame(conn, silkd.KindInternal, "no such branch "+req.Name)
+			return
+		}
+		f.current = req.Name
+		send(conn, silkd.Done{})
+	default:
+		errFrame(conn, silkd.KindBadRequest, "unknown branch action "+req.Action)
+	}
+}
+
 func (f *Fake) done(conn net.Conn, err error) {
 	if err != nil {
-		errFrame(conn, "internal", err.Error())
+		errFrame(conn, silkd.KindInternal, err.Error())
 		return
 	}
 	send(conn, silkd.Done{})

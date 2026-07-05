@@ -1,5 +1,7 @@
 dist/
 boot/init/target/
 silkd/target/
+e2e/demo
+e2e/smoke
 *.log
 .DS_Store

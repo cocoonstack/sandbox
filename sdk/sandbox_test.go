@@ -44,7 +44,7 @@ func TestExecSurfacesErrorFrame(t *testing.T) {
 
 	_, err := sb.Exec(t.Context(), "no-such-binary")
 	var silkdErr *silkd.ErrorResp
-	if !errors.As(err, &silkdErr) || silkdErr.Kind != "not_found" {
+	if !errors.As(err, &silkdErr) || silkdErr.Kind != silkd.KindNotFound {
 		t.Errorf("got %v, want silkd not_found error", err)
 	}
 }

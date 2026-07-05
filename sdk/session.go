@@ -34,26 +34,18 @@ func (s *Sandbox) NewSession(ctx context.Context, opts ...SessionOption) (*Sessi
 	for _, opt := range opts {
 		opt(req)
 	}
-	resp, err := s.oneShot(ctx, req)
+	created, err := oneShotRPC[silkd.SessionCreated](ctx, s, req)
 	if err != nil {
 		return nil, err
-	}
-	created, ok := resp.(*silkd.SessionCreated)
-	if !ok {
-		return nil, unexpected(resp)
 	}
 	return &Session{ID: created.ID, sb: s}, nil
 }
 
 // Sessions lists the sandbox's live session ids.
 func (s *Sandbox) Sessions(ctx context.Context) ([]string, error) {
-	resp, err := s.oneShot(ctx, silkd.SessionList{})
+	list, err := oneShotRPC[silkd.Sessions](ctx, s, silkd.SessionList{})
 	if err != nil {
 		return nil, err
-	}
-	list, ok := resp.(*silkd.Sessions)
-	if !ok {
-		return nil, unexpected(resp)
 	}
 	return list.Sessions, nil
 }

@@ -29,42 +29,22 @@ func (s *Sandbox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 
 // ListDir returns the entries of a directory (batched frames are concatenated).
 func (s *Sandbox) ListDir(ctx context.Context, path string) ([]silkd.DirEntry, error) {
-	conn, done, err := s.dial(ctx)
+	frames, err := collectRPC[silkd.Entries](ctx, s, &silkd.FsList{Path: path})
 	if err != nil {
 		return nil, err
 	}
-	defer done()
-	if err := conn.Send(&silkd.FsList{Path: path}); err != nil {
-		return nil, err
-	}
 	var entries []silkd.DirEntry
-	for {
-		resp, err := recv(ctx, conn)
-		if err != nil {
-			return nil, err
-		}
-		switch r := resp.(type) {
-		case *silkd.Entries:
-			entries = append(entries, r.Entries...)
-		case *silkd.Done:
-			return entries, nil
-		case *silkd.ErrorResp:
-			return nil, r
-		default:
-			return nil, unexpected(resp)
-		}
+	for _, f := range frames {
+		entries = append(entries, f.Entries...)
 	}
+	return entries, nil
 }
 
 // Stat returns metadata for path.
 func (s *Sandbox) Stat(ctx context.Context, path string) (silkd.FileInfo, error) {
-	resp, err := s.oneShot(ctx, &silkd.FsStat{Path: path})
+	st, err := oneShotRPC[silkd.Stat](ctx, s, &silkd.FsStat{Path: path})
 	if err != nil {
 		return silkd.FileInfo{}, err
-	}
-	st, ok := resp.(*silkd.Stat)
-	if !ok {
-		return silkd.FileInfo{}, unexpected(resp)
 	}
 	return st.Info, nil
 }
@@ -145,6 +125,52 @@ func (s *Sandbox) downloadRPC(ctx context.Context, req silkd.Request, sink func(
 		return err
 	}
 	return drainData(ctx, conn, sink)
+}
+
+// oneShotRPC sends req and returns its single typed reply frame.
+func oneShotRPC[T any](ctx context.Context, s *Sandbox, req silkd.Request) (*T, error) {
+	resp, err := s.oneShot(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	v, ok := any(resp).(*T) // via any: see collectRPC
+	if !ok {
+		return nil, unexpected(resp)
+	}
+	return v, nil
+}
+
+// collectRPC sends req and gathers every streamed frame of type T until Done.
+func collectRPC[T any](ctx context.Context, s *Sandbox, req silkd.Request) ([]T, error) {
+	conn, done, err := s.dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	if err := conn.Send(req); err != nil {
+		return nil, err
+	}
+	var out []T
+	for {
+		resp, err := recv(ctx, conn)
+		if err != nil {
+			return nil, err
+		}
+		// Via any: a direct resp.(*T) assertion is rejected at compile time
+		// (*T is not known to implement Response).
+		if v, ok := any(resp).(*T); ok {
+			out = append(out, *v)
+			continue
+		}
+		switch r := resp.(type) {
+		case *silkd.Done:
+			return out, nil
+		case *silkd.ErrorResp:
+			return nil, r
+		default:
+			return nil, unexpected(resp)
+		}
+	}
 }
 
 // uploadStream chunks r into Data frames terminated by DataEnd; shared by the
