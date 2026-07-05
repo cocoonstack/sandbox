@@ -36,6 +36,9 @@ RUN --mount=type=secret,id=sandbox_install_agent \
     systemctl mask systemd-networkd-wait-online.service && \
     # [Identity] sandbox-init sets the kernel hostname; nothing may override it.
     rm -f /etc/hostname && \
+    # [Identity] Drop the dbus-baked machine-id: systemd silently adopts it
+    # when /etc/machine-id is empty, making every cold-booted VM identical.
+    rm -f /var/lib/dbus/machine-id && truncate -s 0 /etc/machine-id && \
     # [Networking] DHCP on virtio NICs (cocoon-net leases), resolved for DNS.
     systemctl enable systemd-networkd systemd-resolved systemd-timesyncd && \
     # Docker bind-mounts /etc/resolv.conf during build (EBUSY on ln), so the
