@@ -18,6 +18,10 @@ Two network lanes, derived from the claim (never user-selected backend):
 `net=none` → Firecracker, no NIC, vsock-only (hardened default);
 `net=egress` → Cloud Hypervisor with a bridge/CNI NIC.
 
+**Documentation**: [cocoonstack.github.io/sandbox](https://cocoonstack.github.io/sandbox/)
+(deployment, clusters, HTTP API, Go SDK reference, silkd protocol,
+performance) — source in [`docs/`](docs/).
+
 Design docs:
 [sandbox-fast-boot](https://github.com/cocoonstack/cocoon-specs/blob/main/design/sandbox-fast-boot.md) (boot chain),
 [sandbox-control-plane](https://github.com/cocoonstack/cocoon-specs/blob/main/design/sandbox-control-plane.md) (sandboxd, pools, mesh, SDK),
