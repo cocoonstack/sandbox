@@ -2,10 +2,7 @@ module github.com/cocoonstack/sandbox/sandboxd
 
 go 1.26.4
 
-require (
-	github.com/cocoonstack/cocoon-agent v0.1.8
-	github.com/projecteru2/core v0.0.0-20241016125006-ff909eefe04c
-)
+require github.com/projecteru2/core v0.0.0-20241016125006-ff909eefe04c
 
 require (
 	github.com/alphadose/haxmap v1.2.0 // indirect

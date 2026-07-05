@@ -1,5 +1,5 @@
 // Package engine drives VM lifecycle through the cocoon CLI and dials the
-// in-guest agent over hybrid vsock.
+// in-guest silkd over hybrid vsock.
 //
 // cocoon runs as a subprocess deliberately: the CLI is cocoon's stable
 // contract (it exports no lifecycle library), it is the exact interface every
@@ -19,18 +19,18 @@ import (
 	"strings"
 	"time"
 
-	agentclient "github.com/cocoonstack/cocoon-agent/client"
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 const (
-	vsockAgentPort = 1024 // cocoon-agent's fixed vsock port
-	cmdTimeout     = 2 * time.Minute
-	probeInterval  = 20 * time.Millisecond
-	replyMax       = 64
-	outputTail     = 400
+	silkdPort     = 2048 // silkd's fixed guest vsock port, the claim-ready anchor
+	cmdTimeout    = 2 * time.Minute
+	probeInterval = 20 * time.Millisecond
+	connectMax    = 64   // "OK <port>" handshake reply cap
+	infoMax       = 4096 // info response frame cap
+	outputTail    = 400
 )
 
 // Engine runs cocoon commands on the local node.
@@ -105,9 +105,9 @@ func (e *Engine) List(ctx context.Context, filters ...string) ([]types.VMRecord,
 	return vms, nil
 }
 
-// DialAgent connects to a VM's cocoon-agent through the hybrid-vsock UDS:
+// DialSilkd connects to a VM's silkd through the hybrid-vsock UDS:
 // dial, send "CONNECT <port>", expect an "OK" reply.
-func (e *Engine) DialAgent(ctx context.Context, vsockSocket string) (net.Conn, error) {
+func (e *Engine) DialSilkd(ctx context.Context, vsockSocket string) (net.Conn, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", vsockSocket)
 	if err != nil {
@@ -115,11 +115,11 @@ func (e *Engine) DialAgent(ctx context.Context, vsockSocket string) (net.Conn, e
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	if _, err := fmt.Fprintf(conn, "CONNECT %d\n", vsockAgentPort); err != nil {
+	if _, err = fmt.Fprintf(conn, "CONNECT %d\n", silkdPort); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("write CONNECT: %w", err)
 	}
-	reply, err := readReplyLine(conn)
+	reply, err := readLine(conn, connectMax)
 	if err != nil {
 		_ = conn.Close()
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -129,26 +129,26 @@ func (e *Engine) DialAgent(ctx context.Context, vsockSocket string) (net.Conn, e
 	}
 	if !strings.HasPrefix(reply, "OK ") {
 		_ = conn.Close()
-		return nil, fmt.Errorf("hybrid vsock CONNECT %d: %s", vsockAgentPort, strings.TrimSpace(reply))
+		return nil, fmt.Errorf("hybrid vsock CONNECT %d: %s", silkdPort, strings.TrimSpace(reply))
 	}
 	return conn, nil
 }
 
-// Probe polls until the agent completes an end-to-end exec of true — the
-// sandbox readiness signal.
+// Probe polls until silkd completes an info round-trip — the claim-ready
+// signal (probe what the product uses, not cocoon-agent).
 func (e *Engine) Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var lastErr error
 	for {
-		if err := e.execTrue(ctx, vsockSocket); err == nil {
+		if err := e.infoRoundTrip(ctx, vsockSocket); err == nil {
 			return nil
 		} else { //nolint:revive // lastErr must survive the loop for the timeout message
 			lastErr = err
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("agent probe: %w (last: %v)", ctx.Err(), lastErr)
+			return fmt.Errorf("silkd probe: %w (last: %v)", ctx.Err(), lastErr)
 		case <-time.After(probeInterval):
 		}
 	}
@@ -198,28 +198,39 @@ func (e *Engine) run(ctx context.Context, args ...string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
-func (e *Engine) execTrue(ctx context.Context, vsockSocket string) error {
-	conn, err := e.DialAgent(ctx, vsockSocket)
+func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
+	conn, err := e.DialSilkd(ctx, vsockSocket)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
-	code, err := agentclient.Run(ctx, conn, []string{"true"}, nil, strings.NewReader(""), io.Discard, io.Discard)
-	if err != nil {
-		return err
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	if _, err = conn.Write([]byte(`{"v":1,"op":"info"}` + "\n")); err != nil {
+		return fmt.Errorf("write info: %w", err)
 	}
-	if code != 0 {
-		return fmt.Errorf("probe exec exit %d", code)
+	reply, err := readLine(conn, infoMax)
+	if err != nil {
+		return fmt.Errorf("read info reply: %w", err)
+	}
+	var frame struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(reply), &frame); err != nil {
+		return fmt.Errorf("parse info reply: %w", err)
+	}
+	if frame.Type != "info" {
+		return fmt.Errorf("info reply type %q", frame.Type)
 	}
 	return nil
 }
 
-// readReplyLine reads byte-wise so nothing past the newline is consumed —
-// the same conn carries the agent protocol right after the handshake.
-func readReplyLine(conn net.Conn) (string, error) {
+// readLine reads byte-wise so nothing past the newline is consumed —
+// the same conn carries the silkd protocol right after the handshake.
+func readLine(conn net.Conn, max int) (string, error) {
 	var sb strings.Builder
 	buf := make([]byte, 1)
-	for sb.Len() < replyMax {
+	for sb.Len() < max {
 		if _, err := io.ReadFull(conn, buf); err != nil {
 			return "", err
 		}
@@ -228,7 +239,7 @@ func readReplyLine(conn net.Conn) (string, error) {
 		}
 		sb.WriteByte(buf[0])
 	}
-	return "", fmt.Errorf("reply exceeds %d bytes", replyMax)
+	return "", fmt.Errorf("reply exceeds %d bytes", max)
 }
 
 func tail(s string) string {
