@@ -7,6 +7,7 @@ pub mod find;
 pub mod fs;
 pub mod proc;
 pub mod proto;
+pub mod pty;
 pub mod server;
 pub mod session;
 pub mod sysutil;

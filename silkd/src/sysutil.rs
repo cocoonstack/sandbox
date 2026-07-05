@@ -3,6 +3,7 @@
 //! lives here.
 
 use std::io::Read;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -105,6 +106,85 @@ fn lookup_user(user: &str) -> Result<(u32, u32, String), String> {
         .to_string_lossy()
         .into_owned();
     Ok((pw.pw_uid, pw.pw_gid, home))
+}
+
+/// Opens a pseudo-terminal, returning the (master, slave) fds. The master is
+/// set non-blocking for async I/O; the slave becomes the child's controlling
+/// terminal after setsid (see `pty::open`).
+pub fn openpty(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
+    let mut master: libc::c_int = 0;
+    let mut slave: libc::c_int = 0;
+    let mut ws = libc::winsize {
+        ws_row: rows,
+        ws_col: cols,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: openpty writes two valid fds into master/slave on success; ws is a
+    // fully-initialized winsize (openpty only reads it). We take ownership of
+    // both fds immediately.
+    let rc = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut ws,
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: openpty just handed us these fds; wrapping transfers ownership so
+    // they close on drop.
+    let master = unsafe { OwnedFd::from_raw_fd(master) };
+    let slave = unsafe { OwnedFd::from_raw_fd(slave) };
+    set_nonblocking(master.as_raw_fd())?;
+    Ok((master, slave))
+}
+
+/// Resizes a pty via TIOCSWINSZ on its master fd.
+pub fn set_winsize(fd: RawFd, cols: u16, rows: u16) -> std::io::Result<()> {
+    let ws = libc::winsize {
+        ws_row: rows,
+        ws_col: cols,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: fd is an open pty master (held by the Proc); ws is initialized.
+    let rc = unsafe { libc::ioctl(fd, libc::TIOCSWINSZ, &ws) };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Makes the calling process a session leader and adopts fd 0 as its
+/// controlling terminal. Called in the child between fork and exec, so it must
+/// touch nothing but the two syscalls.
+///
+/// # Safety
+/// Only async-signal-safe syscalls; valid in a post-fork child.
+pub unsafe fn make_controlling_tty() -> std::io::Result<()> {
+    if libc::setsid() < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn set_nonblocking(fd: RawFd) -> std::io::Result<()> {
+    // SAFETY: fd is open; F_GETFL/F_SETFL only read and set its flags.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Maps a wait() status to the shell convention (128 + signal when killed).

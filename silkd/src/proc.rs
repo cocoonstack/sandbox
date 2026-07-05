@@ -4,6 +4,7 @@
 //! can replay what already streamed.
 
 use std::collections::{HashMap, VecDeque};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -41,6 +42,8 @@ pub struct Table {
 
 /// One tracked process. `tx` fans out live output; `ring` retains a bounded
 /// tail for replay; `state` flips to exited when the child is reaped.
+/// `pty_master` holds a dup of a pty's master fd (None for a plain exec) so
+/// `pty.resize` can ioctl it without racing the I/O task's own fd.
 pub struct Proc {
     pub pid: u32,
     pub argv: Vec<String>,
@@ -49,6 +52,7 @@ pub struct Proc {
     tx: broadcast::Sender<Chunk>,
     ring: Mutex<Ring>,
     state: Mutex<State>,
+    pty_master: Mutex<Option<OwnedFd>>,
 }
 
 struct Ring {
@@ -80,6 +84,7 @@ impl Table {
                 tags: VecDeque::new(),
             }),
             state: Mutex::new(State::Running),
+            pty_master: Mutex::new(None),
         });
         self.inner.lock().unwrap().insert(pid, Arc::clone(&proc));
         proc
@@ -131,6 +136,22 @@ impl Proc {
 
     pub fn mark_exited(&self, code: i32) {
         *self.state.lock().unwrap() = State::Exited(code);
+    }
+
+    /// Records a pty master fd (a dup, owned here) so `resize` can reach it.
+    pub fn set_pty_master(&self, fd: OwnedFd) {
+        *self.pty_master.lock().unwrap() = Some(fd);
+    }
+
+    /// Resizes the pty's window; errors if this proc is a plain exec.
+    pub fn resize(&self, cols: u16, rows: u16) -> std::io::Result<()> {
+        match &*self.pty_master.lock().unwrap() {
+            Some(fd) => crate::sysutil::set_winsize(fd.as_raw_fd(), cols, rows),
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "not a pty",
+            )),
+        }
     }
 
     /// The exit code if the process has already exited; None while running.

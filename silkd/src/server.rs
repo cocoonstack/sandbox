@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 
 use crate::proc::{Chunk, Proc, Table};
 use crate::proto::{self, ErrorKind, ProcInfo, Request, Response};
-use crate::{exec, find, fs, session, tree, watch};
+use crate::{exec, find, fs, pty, session, tree, watch};
 
 /// Shared daemon state handed to every connection.
 pub struct State {
@@ -128,6 +128,16 @@ impl State {
             } => find::replace(&mut writer, files, pattern, replacement).await,
             Request::FsWatch { path, recursive } => {
                 watch::watch(&mut reader, &mut writer, path, recursive).await
+            }
+            Request::PtyOpen(req) => {
+                let (tx, rx) = mpsc::channel(16);
+                let feeder = tokio::spawn(feed_client(reader, tx));
+                let res = pty::open(&self.table, now_secs(), req, rx, &mut writer).await;
+                feeder.abort();
+                res
+            }
+            Request::PtyResize { pid, cols, rows } => {
+                pty::resize(&self.table, &mut writer, pid, cols, rows).await
             }
             Request::Stdin { .. }
             | Request::StdinClose

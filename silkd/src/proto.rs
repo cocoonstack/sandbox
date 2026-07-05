@@ -103,6 +103,12 @@ pub enum Request {
         #[serde(default)]
         recursive: bool,
     },
+    PtyOpen(PtyReq),
+    PtyResize {
+        pid: u32,
+        cols: u16,
+        rows: u16,
+    },
     Data {
         #[serde(with = "b64")]
         data: Vec<u8>,
@@ -125,6 +131,18 @@ pub struct ExecReq {
     // persist across calls) instead of spawning a fresh process.
     #[serde(default)]
     pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PtyReq {
+    pub cols: u16,
+    pub rows: u16,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    #[serde(default)]
+    pub user: Option<String>,
 }
 
 /// Server → client frames.

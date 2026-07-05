@@ -169,6 +169,23 @@ type FsWatch struct {
 	Recursive bool   `json:"recursive"`
 }
 
+// PtyOpen runs the guest shell under a pseudo-terminal: Started, then Stdout
+// frames out and Stdin frames in, until the shell exits (Exit).
+type PtyOpen struct {
+	Cols uint16            `json:"cols"`
+	Rows uint16            `json:"rows"`
+	Cwd  string            `json:"cwd,omitempty"`
+	Env  map[string]string `json:"env,omitempty"`
+	User string            `json:"user,omitempty"`
+}
+
+// PtyResize resizes a live pty's window by pid.
+type PtyResize struct {
+	PID  uint32 `json:"pid"`
+	Cols uint16 `json:"cols"`
+	Rows uint16 `json:"rows"`
+}
+
 // Data carries one chunk of an upload stream (FsWrite/FsPush payloads).
 type Data struct {
 	Data B64 `json:"data"`
@@ -200,6 +217,8 @@ func (FsPull) Op() string        { return "fs_pull" }
 func (FsFind) Op() string        { return "fs_find" }
 func (FsReplace) Op() string     { return "fs_replace" }
 func (FsWatch) Op() string       { return "fs_watch" }
+func (PtyOpen) Op() string       { return "pty_open" }
+func (PtyResize) Op() string     { return "pty_resize" }
 func (Data) Op() string          { return "data" } //nolint:goconst // wire tag shared with the response type by design
 func (DataEnd) Op() string       { return "data_end" }
 
@@ -400,6 +419,10 @@ func DecodeRequest(line []byte) (Request, error) {
 		return decodeAs[FsReplace](line)
 	case "fs_watch":
 		return decodeAs[FsWatch](line)
+	case "pty_open":
+		return decodeAs[PtyOpen](line)
+	case "pty_resize":
+		return decodeAs[PtyResize](line)
 	case "data":
 		return decodeAs[Data](line)
 	case "data_end":
