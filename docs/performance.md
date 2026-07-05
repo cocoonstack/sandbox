@@ -75,6 +75,7 @@ nothing lost. Measured bare metal, FC, `small`:
 |---|---|---|
 | `vm hibernate` | ~330–460 ms | pause → snapshot → persist → VMM killed; memory freed, snapshot point and stop coincide |
 | `vm restore` (stopped VM) | ~27–35 ms | machine identity preserved, tmpfs contents intact, in-guest daemons resume |
+| SDK hibernate → wake loop | ~440–470 ms | `sb.Hibernate()` + transparent wake on the next exec, through the relay; a live shell session survives with its state intact (smoke-measured, bare metal) |
 
 ## Method notes
 
