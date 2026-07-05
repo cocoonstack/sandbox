@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 
 use crate::proc::{Chunk, Proc, Table};
 use crate::proto::{self, ErrorKind, ProcInfo, Request, Response};
-use crate::{exec, find, fs, pty, session, tree, watch};
+use crate::{exec, find, fs, git, pty, session, tree, watch};
 
 /// Shared daemon state handed to every connection.
 pub struct State {
@@ -138,6 +138,25 @@ impl State {
             }
             Request::PtyResize { pid, cols, rows } => {
                 pty::resize(&self.table, &mut writer, pid, cols, rows).await
+            }
+            Request::GitClone {
+                url,
+                path,
+                branch,
+                depth,
+                auth,
+            } => git::clone(&mut writer, url, path, branch, depth, auth).await,
+            Request::GitStatus { path } => git::status(&mut writer, path).await,
+            Request::GitAdd { path, files } => git::add(&mut writer, path, files).await,
+            Request::GitCommit {
+                path,
+                message,
+                author,
+            } => git::commit(&mut writer, path, message, author).await,
+            Request::GitPush { path, auth } => git::push(&mut writer, path, auth).await,
+            Request::GitPull { path, auth } => git::pull(&mut writer, path, auth).await,
+            Request::GitBranch { path, action, name } => {
+                git::branch(&mut writer, path, action, name).await
             }
             Request::Stdin { .. }
             | Request::StdinClose

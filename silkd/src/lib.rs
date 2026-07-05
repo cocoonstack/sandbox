@@ -5,6 +5,8 @@
 pub mod exec;
 pub mod find;
 pub mod fs;
+pub mod git;
+pub mod net;
 pub mod proc;
 pub mod proto;
 pub mod pty;

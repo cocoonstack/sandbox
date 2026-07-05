@@ -186,6 +186,54 @@ type PtyResize struct {
 	Rows uint16 `json:"rows"`
 }
 
+// GitClone clones a repo; network-lane only. Auth is a token passed as an
+// in-memory Authorization header, never written to guest disk.
+type GitClone struct {
+	URL    string `json:"url"`
+	Path   string `json:"path"`
+	Branch string `json:"branch,omitempty"`
+	Depth  uint32 `json:"depth,omitempty"`
+	Auth   string `json:"auth,omitempty"`
+}
+
+// GitStatus asks for a repo's structured status.
+type GitStatus struct {
+	Path string `json:"path"`
+}
+
+// GitAdd stages files under a repo.
+type GitAdd struct {
+	Path  string   `json:"path"`
+	Files []string `json:"files"`
+}
+
+// GitCommit commits staged changes; Author is "Name <email>".
+type GitCommit struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
+	Author  string `json:"author"`
+}
+
+// GitPush pushes the current branch; network-lane only.
+type GitPush struct {
+	Path string `json:"path"`
+	Auth string `json:"auth,omitempty"`
+}
+
+// GitPull pulls the current branch; network-lane only.
+type GitPull struct {
+	Path string `json:"path"`
+	Auth string `json:"auth,omitempty"`
+}
+
+// GitBranch lists, creates, deletes, or checks out a branch. Action is
+// list|create|delete|checkout ("op" is reserved by the frame tag).
+type GitBranch struct {
+	Path   string `json:"path"`
+	Action string `json:"action"`
+	Name   string `json:"name,omitempty"`
+}
+
 // Data carries one chunk of an upload stream (FsWrite/FsPush payloads).
 type Data struct {
 	Data B64 `json:"data"`
@@ -219,6 +267,13 @@ func (FsReplace) Op() string     { return "fs_replace" }
 func (FsWatch) Op() string       { return "fs_watch" }
 func (PtyOpen) Op() string       { return "pty_open" }
 func (PtyResize) Op() string     { return "pty_resize" }
+func (GitClone) Op() string      { return "git_clone" }
+func (GitStatus) Op() string     { return "git_status" }
+func (GitAdd) Op() string        { return "git_add" }
+func (GitCommit) Op() string     { return "git_commit" }
+func (GitPush) Op() string       { return "git_push" }
+func (GitPull) Op() string       { return "git_pull" }
+func (GitBranch) Op() string     { return "git_branch" }
 func (Data) Op() string          { return "data" } //nolint:goconst // wire tag shared with the response type by design
 func (DataEnd) Op() string       { return "data_end" }
 
@@ -310,6 +365,32 @@ type Event struct {
 	Path string `json:"path"`
 }
 
+// GitStatusResult answers GitStatus.
+type GitStatusResult struct {
+	Branch string          `json:"branch"`
+	Ahead  uint32          `json:"ahead"`
+	Behind uint32          `json:"behind"`
+	Files  []GitFileStatus `json:"files"`
+}
+
+// GitFileStatus is one porcelain-v2 entry; Staged/Unstaged are XY status codes.
+type GitFileStatus struct {
+	Path     string `json:"path"`
+	Staged   string `json:"staged"`
+	Unstaged string `json:"unstaged"`
+}
+
+// GitCommitResult answers GitCommit with the new commit hash.
+type GitCommitResult struct {
+	Hash string `json:"hash"`
+}
+
+// GitBranches answers GitBranch list.
+type GitBranches struct {
+	Current  string   `json:"current"`
+	Branches []string `json:"branches"`
+}
+
 // ProcInfo is one entry of Procs; ExitCode is absent while running.
 type ProcInfo struct {
 	PID                uint32   `json:"pid"`
@@ -335,22 +416,25 @@ type FileInfo struct {
 	MtimeEpochSecs uint64 `json:"mtime_epoch_secs"`
 }
 
-func (Started) RespType() string        { return "started" }
-func (Stdout) RespType() string         { return "stdout" }
-func (Stderr) RespType() string         { return "stderr" }
-func (Exit) RespType() string           { return "exit" }
-func (Done) RespType() string           { return "done" }
-func (ErrorResp) RespType() string      { return "error" }
-func (InfoResp) RespType() string       { return "info" }
-func (Procs) RespType() string          { return "procs" }
-func (DataResp) RespType() string       { return "data" }
-func (Entries) RespType() string        { return "entries" }
-func (Stat) RespType() string           { return "stat" }
-func (SessionCreated) RespType() string { return "session_created" }
-func (Sessions) RespType() string       { return "sessions" }
-func (Match) RespType() string          { return "match" }
-func (Replaced) RespType() string       { return "replaced" }
-func (Event) RespType() string          { return "event" }
+func (Started) RespType() string         { return "started" }
+func (Stdout) RespType() string          { return "stdout" }
+func (Stderr) RespType() string          { return "stderr" }
+func (Exit) RespType() string            { return "exit" }
+func (Done) RespType() string            { return "done" }
+func (ErrorResp) RespType() string       { return "error" }
+func (InfoResp) RespType() string        { return "info" }
+func (Procs) RespType() string           { return "procs" }
+func (DataResp) RespType() string        { return "data" }
+func (Entries) RespType() string         { return "entries" }
+func (Stat) RespType() string            { return "stat" }
+func (SessionCreated) RespType() string  { return "session_created" }
+func (Sessions) RespType() string        { return "sessions" }
+func (Match) RespType() string           { return "match" }
+func (Replaced) RespType() string        { return "replaced" }
+func (Event) RespType() string           { return "event" }
+func (GitStatusResult) RespType() string { return "git_status_result" }
+func (GitCommitResult) RespType() string { return "git_commit_result" }
+func (GitBranches) RespType() string     { return "git_branches" }
 
 func (e *ErrorResp) Error() string { return e.Kind + ": " + e.Message }
 
@@ -423,6 +507,20 @@ func DecodeRequest(line []byte) (Request, error) {
 		return decodeAs[PtyOpen](line)
 	case "pty_resize":
 		return decodeAs[PtyResize](line)
+	case "git_clone":
+		return decodeAs[GitClone](line)
+	case "git_status":
+		return decodeAs[GitStatus](line)
+	case "git_add":
+		return decodeAs[GitAdd](line)
+	case "git_commit":
+		return decodeAs[GitCommit](line)
+	case "git_push":
+		return decodeAs[GitPush](line)
+	case "git_pull":
+		return decodeAs[GitPull](line)
+	case "git_branch":
+		return decodeAs[GitBranch](line)
 	case "data":
 		return decodeAs[Data](line)
 	case "data_end":
@@ -475,6 +573,12 @@ func DecodeResponse(line []byte) (Response, error) {
 		return decodeAs[Replaced](line)
 	case "event":
 		return decodeAs[Event](line)
+	case "git_status_result":
+		return decodeAs[GitStatusResult](line)
+	case "git_commit_result":
+		return decodeAs[GitCommitResult](line)
+	case "git_branches":
+		return decodeAs[GitBranches](line)
 	default:
 		return nil, fmt.Errorf("unknown response type %q", tag.Type)
 	}

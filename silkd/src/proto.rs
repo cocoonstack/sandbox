@@ -109,6 +109,44 @@ pub enum Request {
         cols: u16,
         rows: u16,
     },
+    GitClone {
+        url: String,
+        path: String,
+        #[serde(default)]
+        branch: Option<String>,
+        #[serde(default)]
+        depth: Option<u32>,
+        #[serde(default)]
+        auth: Option<String>,
+    },
+    GitStatus {
+        path: String,
+    },
+    GitAdd {
+        path: String,
+        files: Vec<String>,
+    },
+    GitCommit {
+        path: String,
+        message: String,
+        author: String,
+    },
+    GitPush {
+        path: String,
+        #[serde(default)]
+        auth: Option<String>,
+    },
+    GitPull {
+        path: String,
+        #[serde(default)]
+        auth: Option<String>,
+    },
+    GitBranch {
+        path: String,
+        action: GitBranchOp,
+        #[serde(default)]
+        name: Option<String>,
+    },
     Data {
         #[serde(with = "b64")]
         data: Vec<u8>,
@@ -207,6 +245,19 @@ pub enum Response {
         kind: EventKind,
         path: String,
     },
+    GitStatusResult {
+        branch: String,
+        ahead: u32,
+        behind: u32,
+        files: Vec<GitFileStatus>,
+    },
+    GitCommitResult {
+        hash: String,
+    },
+    GitBranches {
+        current: String,
+        branches: Vec<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -216,6 +267,24 @@ pub enum EventKind {
     Modified,
     Deleted,
     Renamed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GitBranchOp {
+    List,
+    Create,
+    Delete,
+    Checkout,
+}
+
+/// One porcelain-v2 file entry: `staged`/`unstaged` are the XY status codes
+/// (e.g. "M", "A", "?"), `path` the working-tree path.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GitFileStatus {
+    pub path: String,
+    pub staged: String,
+    pub unstaged: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
