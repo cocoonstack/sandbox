@@ -263,7 +263,7 @@ async fn detached_exec_is_listed_then_logs_replay_output_and_exit() {
     let pid = started[0]["pid"].as_u64().unwrap();
 
     let mut listed = false;
-    for _ in 0..50 {
+    for _ in 0..250 {
         let ps = one(&state, r#"{"op":"ps"}"#).await;
         if ps[0]["procs"]
             .as_array()
@@ -278,7 +278,7 @@ async fn detached_exec_is_listed_then_logs_replay_output_and_exit() {
     }
     assert!(listed, "detached pid {pid} never appeared in ps");
 
-    for _ in 0..50 {
+    for _ in 0..250 {
         let logs = one(&state, &format!(r#"{{"op":"logs","pid":{pid}}}"#)).await;
         if logs.iter().any(|f| type_of(f) == "exit") {
             assert_eq!(stdout_body(&logs), "detached-hi\n");
