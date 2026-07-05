@@ -122,14 +122,16 @@ pub fn openpty(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
     };
     // SAFETY: openpty writes two valid fds into master/slave on success; ws is a
     // fully-initialized winsize (openpty only reads it). We take ownership of
-    // both fds immediately.
+    // both fds immediately. A raw `*mut` pointer for winp works across libc's
+    // platform-varying signature (*mut on macOS, *const on Linux) without the
+    // &mut that clippy flags as unnecessary on Linux.
     let rc = unsafe {
         libc::openpty(
             &mut master,
             &mut slave,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &mut ws,
+            std::ptr::addr_of_mut!(ws),
         )
     };
     if rc != 0 {
