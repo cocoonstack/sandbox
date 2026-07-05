@@ -232,15 +232,15 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 // the same conn carries the silkd protocol right after the handshake.
 func readLine(conn net.Conn, max int) (string, error) {
 	var sb strings.Builder
-	buf := make([]byte, 1)
+	var b [1]byte
 	for sb.Len() < max {
-		if _, err := io.ReadFull(conn, buf); err != nil {
+		if _, err := io.ReadFull(conn, b[:]); err != nil {
 			return "", err
 		}
-		if buf[0] == '\n' {
+		if b[0] == '\n' {
 			return sb.String(), nil
 		}
-		sb.WriteByte(buf[0])
+		sb.WriteByte(b[0]) //nolint:gosec // G602 false positive on [1]byte in gosec ≤ v2.9.0
 	}
 	return "", fmt.Errorf("reply exceeds %d bytes", max)
 }
