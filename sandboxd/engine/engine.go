@@ -69,8 +69,13 @@ func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey) er
 	return err
 }
 
-// Remove force-removes a VM.
+// Remove kills and removes a VM. Sandboxes are disposable memory-state, so
+// stop is an immediate `--force` kill: rm's own stop-before-delete waits a
+// 30s graceful window that sandbox guests never answer (no CtrlAltDel
+// path), which would put 30s on every release and reap. The stop error is
+// ignored — the VM may already be stopped or gone; rm is authoritative.
 func (e *Engine) Remove(ctx context.Context, name string) error {
+	_, _ = e.run(ctx, "vm", "stop", "--force", name)
 	_, err := e.run(ctx, "vm", "rm", "--force", name)
 	return err
 }

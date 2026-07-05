@@ -200,7 +200,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 	live := make(map[string]types.VMRecord, len(vms))
 	for _, vm := range vms {
-		live[vm.Name] = vm
+		live[vm.Name()] = vm
 	}
 
 	owned := map[string]bool{}
@@ -425,7 +425,7 @@ func (m *Manager) vsockOf(ctx context.Context, name string) (string, error) {
 		return "", err
 	}
 	for _, vm := range vms {
-		if vm.Name != name {
+		if vm.Name() != name {
 			continue
 		}
 		if vm.VsockSocket == "" {

@@ -21,8 +21,13 @@ cleanup() {
   [[ -n $DAEMON_PID ]] && kill "$DAEMON_PID" 2>/dev/null || true
   wait 2>/dev/null || true
   cocoon vm list --format json 2>/dev/null |
-    jq -r '.[] | select(.name | startswith("sbx-")) | .name' |
-    xargs -r -n1 cocoon vm rm --force >/dev/null || true
+    jq -r '.[] | select(.config.name | startswith("sbx-")) | .config.name' |
+    while read -r vm; do
+      # Force-stop first: rm's stop-before-delete waits a 30s graceful
+      # window these guests never answer.
+      cocoon vm stop --force "$vm" >/dev/null 2>&1 || true
+      cocoon vm rm --force "$vm" >/dev/null 2>&1 || true
+    done
   rm -rf "$DATA"
   exit "$status"
 }
@@ -42,8 +47,13 @@ start_daemon() {
 }
 
 echo "== build"
-(cd "$REPO/sandboxd" && GOWORK=off go build -o "$DATA/sandboxd" .)
-(cd "$REPO/e2e" && GOWORK=off go build -o "$DATA/demo" ./cmd/demo)
+# Prebuilt binaries let the script run on nodes without a Go toolchain.
+if [[ -n ${SANDBOXD_BIN:-} && -n ${DEMO_BIN:-} ]]; then
+  cp "$SANDBOXD_BIN" "$DATA/sandboxd" && cp "$DEMO_BIN" "$DATA/demo"
+else
+  (cd "$REPO/sandboxd" && GOWORK=off go build -o "$DATA/sandboxd" .)
+  (cd "$REPO/e2e" && GOWORK=off go build -o "$DATA/demo" ./cmd/demo)
+fi
 
 echo "== start (pool: $TEMPLATE none/small warm=$WARM)"
 cat >"$DATA/config.json" <<EOF

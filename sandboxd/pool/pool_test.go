@@ -450,7 +450,7 @@ func (f *fakeEngine) List(_ context.Context, filters ...string) ([]types.VMRecor
 		if len(filters) > 0 && !slices.Contains(filters, name) {
 			continue
 		}
-		vms = append(vms, types.VMRecord{Name: name, State: vmStateRunning, VsockSocket: sock})
+		vms = append(vms, types.VMRecord{State: vmStateRunning, VsockSocket: sock, Config: types.VMConfig{Name: name}})
 	}
 	return vms, nil
 }

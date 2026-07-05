@@ -103,10 +103,20 @@ type Sandbox struct {
 }
 
 // VMRecord is the subset of cocoon's `vm list --format json` output the
-// control plane reads.
+// control plane reads; the VM name lives under config.
 type VMRecord struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	State       string `json:"state"`
-	VsockSocket string `json:"vsock_socket"`
+	ID          string   `json:"id"`
+	State       string   `json:"state"`
+	VsockSocket string   `json:"vsock_socket"`
+	Config      VMConfig `json:"config"`
+}
+
+// VMConfig is the config subset of VMRecord.
+type VMConfig struct {
+	Name string `json:"name"`
+}
+
+// Name returns the VM's cocoon name.
+func (v VMRecord) Name() string {
+	return v.Config.Name
 }
