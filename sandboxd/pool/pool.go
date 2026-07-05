@@ -200,7 +200,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 	live := make(map[string]types.VMRecord, len(vms))
 	for _, vm := range vms {
-		live[vm.Name()] = vm
+		live[vm.Config.Name] = vm
 	}
 
 	owned := map[string]bool{}
@@ -349,9 +349,8 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
 		return err
 	}
-	// Export lands under a temp name and renames into place, so a crash
-	// mid-export can never leave a half-written dir that Reconcile would
-	// adopt as a valid golden.
+	// A crash mid-export must never leave a half-written dir that Reconcile
+	// would adopt as a valid golden.
 	tmp := final + ".tmp"
 	if err := os.RemoveAll(tmp); err != nil {
 		return fmt.Errorf("clear golden tmp: %w", err)
@@ -425,7 +424,7 @@ func (m *Manager) vsockOf(ctx context.Context, name string) (string, error) {
 		return "", err
 	}
 	for _, vm := range vms {
-		if vm.Name() != name {
+		if vm.Config.Name != name {
 			continue
 		}
 		if vm.VsockSocket == "" {

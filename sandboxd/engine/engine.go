@@ -69,11 +69,11 @@ func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey) er
 	return err
 }
 
-// Remove kills and removes a VM. Sandboxes are disposable memory-state, so
-// stop is an immediate `--force` kill: rm's own stop-before-delete waits a
-// 30s graceful window that sandbox guests never answer (no CtrlAltDel
-// path), which would put 30s on every release and reap. The stop error is
-// ignored — the VM may already be stopped or gone; rm is authoritative.
+// Remove kills and removes a VM. Stop is an immediate `--force` kill — rm's
+// own stop-before-delete waits a 30s graceful window sandbox guests never
+// answer (no CtrlAltDel path), which would put 30s on every release and
+// reap. The stop error is ignored: the VM may already be stopped or gone;
+// rm is authoritative.
 func (e *Engine) Remove(ctx context.Context, name string) error {
 	_, _ = e.run(ctx, "vm", "stop", "--force", name)
 	_, err := e.run(ctx, "vm", "rm", "--force", name)
@@ -217,7 +217,7 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 	}
 	// Unlike the handshake reader, buffered over-read is safe here: the conn
 	// is discarded after this one reply.
-	reply, err := bufio.NewReaderSize(io.LimitReader(conn, infoMax), 512).ReadBytes('\n')
+	reply, err := bufio.NewReader(io.LimitReader(conn, infoMax)).ReadBytes('\n')
 	if err != nil {
 		return fmt.Errorf("read info reply: %w", err)
 	}

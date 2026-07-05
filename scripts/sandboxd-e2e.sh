@@ -27,7 +27,7 @@ cleanup() {
       # window these guests never answer.
       cocoon vm stop --force "$vm" >/dev/null 2>&1 || true
       cocoon vm rm --force "$vm" >/dev/null 2>&1 || true
-    done
+    done || true
   rm -rf "$DATA"
   exit "$status"
 }
