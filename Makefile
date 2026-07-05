@@ -7,7 +7,12 @@ SILKD_IMAGE ?= sandbox-silkd:$(SILKD_VERSION)
 
 EXTRACT_IMAGE ?= $(BOOT_IMAGE)
 
-.PHONY: test lint boot boot-debug extract extract-debug silkd-image base python images
+# The parent workspace's go.work excludes these modules; GOWORK=off keeps
+# local invocations identical to CI.
+GO_MODULES := sandboxd sdk e2e
+
+.PHONY: test lint boot boot-debug extract extract-debug silkd-image base python images \
+	sandboxd go-test go-lint
 
 test:
 	cd boot/init && cargo test
@@ -16,6 +21,18 @@ test:
 lint:
 	cd boot/init && cargo fmt --check && cargo clippy --all-targets -- -D warnings
 	cd silkd && cargo fmt --check && cargo clippy --all-targets -- -D warnings
+
+sandboxd:
+	mkdir -p dist
+	cd sandboxd && GOWORK=off go build -o ../dist/sandboxd .
+
+go-test:
+	for m in $(GO_MODULES); do (cd $$m && GOWORK=off go test -race ./...) || exit 1; done
+
+go-lint:
+	for m in $(GO_MODULES); do \
+		(cd $$m && GOWORK=off golangci-lint run ./... && GOWORK=off golangci-lint fmt --diff ./...) || exit 1; \
+	done
 
 # --platform: the kernel build is x86-only (x86_64_defconfig, PVH); without
 # the pin, arm64 hosts build an aarch64 stage that dies inside kbuild.

@@ -1,0 +1,46 @@
+# Host-side Go: the sandboxd daemon, the SDK, and the in-process e2e module.
+# protocol/ is in the paths because the SDK's corpus test consumes the
+# fixtures — a fixture change must re-prove the Go round-trip.
+name: sandboxd
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "sandboxd/**"
+      - "sdk/**"
+      - "e2e/**"
+      - "protocol/**"
+      - ".github/workflows/sandboxd.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOLANGCILINT_VERSION: v2.9.0
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: sandboxd/go.mod
+
+      - name: Install golangci-lint
+        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$(go env GOPATH)/bin" "$GOLANGCILINT_VERSION"
+
+      - name: Build sandboxd
+        working-directory: sandboxd
+        run: go build ./...
+
+      - name: Lint
+        run: make go-lint
+
+      - name: Test
+        run: make go-test
