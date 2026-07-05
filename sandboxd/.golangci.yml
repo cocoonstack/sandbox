@@ -76,5 +76,5 @@ formatters:
       extra-rules: true
     goimports:
       local-prefixes:
-        - github.com/cocoonstack/cocoon
+        - github.com/cocoonstack/sandbox
 
