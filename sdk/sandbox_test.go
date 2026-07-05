@@ -153,5 +153,6 @@ func newAgentServer(t *testing.T) *httptest.Server {
 
 func testSandbox(t *testing.T, ts *httptest.Server) *Sandbox {
 	t.Helper()
-	return &Sandbox{ID: "sb_1", c: testClient(t, ts), token: "tok"}
+	c := testClient(t, ts)
+	return &Sandbox{ID: "sb_1", c: c, token: "tok", owner: c.addr}
 }

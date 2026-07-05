@@ -66,6 +66,11 @@ linters:
           - unparam
           - goconst
           - gocyclo
+      # silkdtest is test-support (a silkd fake); its file ops take request
+      # paths by design and are confined by abs() to a temp root.
+      - path: silkdtest/
+        linters:
+          - gosec
 
 formatters:
   enable:

@@ -60,7 +60,7 @@ func main() {
 	}
 	go mgr.Run(ctx)
 
-	srv := server.New(cfg.APIToken, mgr, eng)
+	srv := server.New(cfg.APIToken, cfg.AdvertiseAddr, mgr, eng)
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           srv.Handler(),

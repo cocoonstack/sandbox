@@ -51,9 +51,10 @@ type InfoResponse struct {
 
 // Server serves the control plane for one node.
 type Server struct {
-	mgr      Manager
-	dialer   Dialer
-	apiToken string
+	mgr       Manager
+	dialer    Dialer
+	apiToken  string
+	advertise string
 
 	relayMu     sync.Mutex
 	relays      map[net.Conn]net.Conn // client conn → guest conn, for forced shutdown
@@ -62,13 +63,15 @@ type Server struct {
 }
 
 // New returns a Server; an empty apiToken leaves the node-level endpoints
-// open (per-sandbox tokens still guard sandbox-scoped calls).
-func New(apiToken string, mgr Manager, dialer Dialer) *Server {
+// open (per-sandbox tokens still guard sandbox-scoped calls). advertise is
+// this node's data-plane address, returned as a claim's owner address.
+func New(apiToken, advertise string, mgr Manager, dialer Dialer) *Server {
 	return &Server{
-		mgr:      mgr,
-		dialer:   dialer,
-		apiToken: apiToken,
-		relays:   map[net.Conn]net.Conn{},
+		mgr:       mgr,
+		dialer:    dialer,
+		apiToken:  apiToken,
+		advertise: advertise,
+		relays:    map[net.Conn]net.Conn{},
 	}
 }
 
@@ -100,7 +103,9 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		log.WithFunc("server.handleClaim").Errorf(r.Context(), err, "claim %s", key.Hash())
 		writeErr(w, http.StatusInternalServerError, "provisioning failed")
 	default:
-		writeJSON(w, http.StatusOK, types.ClaimResponse{ID: sb.ID, Token: sb.Token, Deadline: sb.Deadline})
+		writeJSON(w, http.StatusOK, types.ClaimResponse{
+			ID: sb.ID, Token: sb.Token, Deadline: sb.Deadline, OwnerAddr: s.advertise,
+		})
 	}
 }
 

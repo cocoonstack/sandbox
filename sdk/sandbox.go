@@ -25,14 +25,16 @@ type Sandbox struct {
 
 	c     *Client
 	token string
+	owner string // data-plane address (owner node), from the claim
 }
 
 // Cmd describes a streaming Run.
 type Cmd struct {
-	Argv []string
-	Cwd  string
-	Env  map[string]string
-	User string
+	Argv    []string
+	Cwd     string
+	Env     map[string]string
+	User    string
+	Session string // when set, runs inside that persistent shell session
 
 	// Stdin is consumed until EOF or until the command exits. A blocking
 	// reader (e.g. os.Stdin) whose command exits first keeps its pump
@@ -71,22 +73,31 @@ func (s *Sandbox) Exec(ctx context.Context, argv ...string) (string, error) {
 	return stdout.String(), nil
 }
 
+// dial opens one relayed silkd connection and arms ctx cancellation to close
+// it; the returned cleanup must be deferred. One connection carries one RPC.
+func (s *Sandbox) dial(ctx context.Context) (*silkd.Conn, func(), error) {
+	raw, err := s.c.dialAgent(ctx, s.owner, s.ID, s.token)
+	if err != nil {
+		return nil, nil, err
+	}
+	conn := silkd.NewConn(raw)
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	return conn, func() { stop(); _ = conn.Close() }, nil
+}
+
 // Run executes cmd in the sandbox, streaming stdio over one relayed silkd
 // connection, and returns the exit code.
 func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	if len(cmd.Argv) == 0 {
 		return 0, fmt.Errorf("empty argv")
 	}
-	raw, err := s.c.dialAgent(ctx, s.ID, s.token)
+	conn, done, err := s.dial(ctx)
 	if err != nil {
 		return 0, err
 	}
-	conn := silkd.NewConn(raw)
-	defer func() { _ = conn.Close() }()
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stop()
+	defer done()
 
-	if err := conn.Send(&silkd.Exec{Argv: cmd.Argv, Cwd: cmd.Cwd, Env: cmd.Env, User: cmd.User}); err != nil {
+	if err := conn.Send(&silkd.Exec{Argv: cmd.Argv, Cwd: cmd.Cwd, Env: cmd.Env, User: cmd.User, Session: cmd.Session}); err != nil {
 		return 0, fmt.Errorf("send exec: %w", err)
 	}
 	if cmd.Stdin == nil {
@@ -140,7 +151,8 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 func (s *Sandbox) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.c.url("/v1/sandboxes/"+s.ID+"/release"), nil)
+	// Release is owner-scoped: the owning node holds the claim.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+s.owner+"/v1/sandboxes/"+s.ID+"/release", nil)
 	if err != nil {
 		return err
 	}

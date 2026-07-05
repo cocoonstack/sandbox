@@ -9,12 +9,12 @@ import (
 	"time"
 )
 
-// dialAgent opens the data-plane connection: a raw TCP dial plus a
-// hand-rolled HTTP Upgrade, so the result is a real net.Conn with no
+// dialAgent opens the data-plane connection to the owner node: a raw TCP dial
+// plus a hand-rolled HTTP Upgrade, so the result is a real net.Conn with no
 // Transport pooling or proxying underneath a long-lived byte stream.
-func (c *Client) dialAgent(ctx context.Context, id, token string) (net.Conn, error) {
+func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (net.Conn, error) {
 	var d net.Dialer
-	raw, err := d.DialContext(ctx, "tcp", c.addr)
+	raw, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -24,7 +24,7 @@ func (c *Client) dialAgent(ctx context.Context, id, token string) (net.Conn, err
 		_ = raw.SetDeadline(deadline)
 	}
 
-	req, err := http.NewRequest(http.MethodGet, c.url("/v1/sandboxes/"+id+"/agent"), nil)
+	req, err := http.NewRequest(http.MethodGet, "http://"+addr+"/v1/sandboxes/"+id+"/agent", nil)
 	if err != nil {
 		_ = raw.Close()
 		return nil, err

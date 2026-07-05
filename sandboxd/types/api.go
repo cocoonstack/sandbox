@@ -13,11 +13,14 @@ type ClaimRequest struct {
 	TTLSeconds int      `json:"ttl_seconds,omitempty"`
 }
 
-// ClaimResponse is the wire reply of POST /v1/claim.
+// ClaimResponse is the wire reply of POST /v1/claim. OwnerAddr is the node
+// that owns the sandbox; on a single node it is the node's own address, and at
+// M2c it is the redirect target the SDK dials for the data plane.
 type ClaimResponse struct {
-	ID       string    `json:"id"`
-	Token    string    `json:"token"`
-	Deadline time.Time `json:"deadline"`
+	ID        string    `json:"id"`
+	Token     string    `json:"token"`
+	Deadline  time.Time `json:"deadline"`
+	OwnerAddr string    `json:"owner_addr,omitempty"`
 }
 
 // Key resolves the requested pool key, defaulting to the hardened lane

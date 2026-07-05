@@ -100,7 +100,8 @@ func TestCloseReleases(t *testing.T) {
 			}))
 			t.Cleanup(ts.Close)
 
-			sb := &Sandbox{ID: "sb_9", c: testClient(t, ts), token: "tok9"}
+			c := testClient(t, ts)
+			sb := &Sandbox{ID: "sb_9", c: c, token: "tok9", owner: c.addr}
 			err := sb.Close()
 			if tt.ok != (err == nil) {
 				t.Fatalf("err=%v, want ok=%v", err, tt.ok)

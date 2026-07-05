@@ -78,7 +78,13 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
 		return nil, fmt.Errorf("decode claim response: %w", err)
 	}
-	return &Sandbox{ID: cr.ID, Deadline: cr.Deadline, c: c, token: cr.Token}, nil
+	// The data plane dials the owner directly; fall back to the entry node
+	// when a single-node deployment leaves it unset.
+	owner := cr.OwnerAddr
+	if owner == "" {
+		owner = c.addr
+	}
+	return &Sandbox{ID: cr.ID, Deadline: cr.Deadline, c: c, token: cr.Token, owner: owner}, nil
 }
 
 func (c *Client) url(path string) string {
@@ -105,9 +111,10 @@ type claimRequest struct {
 }
 
 type claimResponse struct {
-	ID       string    `json:"id"`
-	Token    string    `json:"token"`
-	Deadline time.Time `json:"deadline"`
+	ID        string    `json:"id"`
+	Token     string    `json:"token"`
+	Deadline  time.Time `json:"deadline"`
+	OwnerAddr string    `json:"owner_addr,omitempty"`
 }
 
 type errorResponse struct {

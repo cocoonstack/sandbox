@@ -448,6 +448,46 @@ func EncodeResponse(r Response) ([]byte, error) {
 	return encodeTagged(`{"type":"`+r.RespType()+`"`, r)
 }
 
+// requestDecoders maps each op tag to a decoder; table dispatch keeps this
+// (and the verb set) flat instead of a switch that grows past the complexity
+// budget as verbs are added.
+var requestDecoders = map[string]func([]byte) (Request, error){
+	"exec":           decodeReq[Exec],
+	"info":           decodeReq[Info],
+	"ps":             decodeReq[Ps],
+	"kill":           decodeReq[Kill],
+	"attach":         decodeReq[Attach],
+	"logs":           decodeReq[Logs],
+	"session_create": decodeReq[SessionCreate],
+	"session_list":   decodeReq[SessionList],
+	"session_rm":     decodeReq[SessionRm],
+	"stdin":          decodeReq[Stdin],
+	"stdin_close":    decodeReq[StdinClose],
+	"fs_write":       decodeReq[FsWrite],
+	"fs_read":        decodeReq[FsRead],
+	"fs_list":        decodeReq[FsList],
+	"fs_stat":        decodeReq[FsStat],
+	"fs_mkdir":       decodeReq[FsMkdir],
+	"fs_rm":          decodeReq[FsRm],
+	"fs_rename":      decodeReq[FsRename],
+	"fs_push":        decodeReq[FsPush],
+	"fs_pull":        decodeReq[FsPull],
+	"fs_find":        decodeReq[FsFind],
+	"fs_replace":     decodeReq[FsReplace],
+	"fs_watch":       decodeReq[FsWatch],
+	"pty_open":       decodeReq[PtyOpen],
+	"pty_resize":     decodeReq[PtyResize],
+	"git_clone":      decodeReq[GitClone],
+	"git_status":     decodeReq[GitStatus],
+	"git_add":        decodeReq[GitAdd],
+	"git_commit":     decodeReq[GitCommit],
+	"git_push":       decodeReq[GitPush],
+	"git_pull":       decodeReq[GitPull],
+	"git_branch":     decodeReq[GitBranch],
+	"data":           decodeReq[Data],
+	"data_end":       decodeReq[DataEnd],
+}
+
 // DecodeRequest parses one frame into its op's concrete type.
 func DecodeRequest(line []byte) (Request, error) {
 	var tag struct {
@@ -456,83 +496,39 @@ func DecodeRequest(line []byte) (Request, error) {
 	if err := json.Unmarshal(line, &tag); err != nil {
 		return nil, fmt.Errorf("parse request frame: %w", err)
 	}
-	switch tag.Op {
-	case "exec":
-		return decodeAs[Exec](line)
-	case "info":
-		return decodeAs[Info](line)
-	case "ps":
-		return decodeAs[Ps](line)
-	case "kill":
-		return decodeAs[Kill](line)
-	case "attach":
-		return decodeAs[Attach](line)
-	case "logs":
-		return decodeAs[Logs](line)
-	case "session_create":
-		return decodeAs[SessionCreate](line)
-	case "session_list":
-		return decodeAs[SessionList](line)
-	case "session_rm":
-		return decodeAs[SessionRm](line)
-	case "stdin":
-		return decodeAs[Stdin](line)
-	case "stdin_close":
-		return decodeAs[StdinClose](line)
-	case "fs_write":
-		return decodeAs[FsWrite](line)
-	case "fs_read":
-		return decodeAs[FsRead](line)
-	case "fs_list":
-		return decodeAs[FsList](line)
-	case "fs_stat":
-		return decodeAs[FsStat](line)
-	case "fs_mkdir":
-		return decodeAs[FsMkdir](line)
-	case "fs_rm":
-		return decodeAs[FsRm](line)
-	case "fs_rename":
-		return decodeAs[FsRename](line)
-	case "fs_push":
-		return decodeAs[FsPush](line)
-	case "fs_pull":
-		return decodeAs[FsPull](line)
-	case "fs_find":
-		return decodeAs[FsFind](line)
-	case "fs_replace":
-		return decodeAs[FsReplace](line)
-	case "fs_watch":
-		return decodeAs[FsWatch](line)
-	case "pty_open":
-		return decodeAs[PtyOpen](line)
-	case "pty_resize":
-		return decodeAs[PtyResize](line)
-	case "git_clone":
-		return decodeAs[GitClone](line)
-	case "git_status":
-		return decodeAs[GitStatus](line)
-	case "git_add":
-		return decodeAs[GitAdd](line)
-	case "git_commit":
-		return decodeAs[GitCommit](line)
-	case "git_push":
-		return decodeAs[GitPush](line)
-	case "git_pull":
-		return decodeAs[GitPull](line)
-	case "git_branch":
-		return decodeAs[GitBranch](line)
-	case "data":
-		return decodeAs[Data](line)
-	case "data_end":
-		return decodeAs[DataEnd](line)
-	default:
+	dec, ok := requestDecoders[tag.Op]
+	if !ok {
 		return nil, fmt.Errorf("unknown op %q", tag.Op)
 	}
+	return dec(line)
 }
 
-// DecodeResponse parses one frame into its type's concrete Go type. The
-// dispatch must be two-stage: the same key can differ in shape across
-// variants (info's procs is a count, ps's procs is a list).
+// responseDecoders maps each type tag to a decoder. Two-stage dispatch is
+// required because the same key differs in shape across variants (info's
+// procs is a count, ps's procs is a list).
+var responseDecoders = map[string]func([]byte) (Response, error){
+	"started":           decodeResp[Started],
+	"stdout":            decodeResp[Stdout],
+	"stderr":            decodeResp[Stderr],
+	"exit":              decodeResp[Exit],
+	"done":              decodeResp[Done],
+	"error":             decodeResp[ErrorResp],
+	"info":              decodeResp[InfoResp],
+	"procs":             decodeResp[Procs],
+	"data":              decodeResp[DataResp],
+	"entries":           decodeResp[Entries],
+	"stat":              decodeResp[Stat],
+	"session_created":   decodeResp[SessionCreated],
+	"sessions":          decodeResp[Sessions],
+	"match":             decodeResp[Match],
+	"replaced":          decodeResp[Replaced],
+	"event":             decodeResp[Event],
+	"git_status_result": decodeResp[GitStatusResult],
+	"git_commit_result": decodeResp[GitCommitResult],
+	"git_branches":      decodeResp[GitBranches],
+}
+
+// DecodeResponse parses one frame into its type's concrete Go type.
 func DecodeResponse(line []byte) (Response, error) {
 	var tag struct {
 		Type string `json:"type"`
@@ -540,48 +536,11 @@ func DecodeResponse(line []byte) (Response, error) {
 	if err := json.Unmarshal(line, &tag); err != nil {
 		return nil, fmt.Errorf("parse response frame: %w", err)
 	}
-	switch tag.Type {
-	case "started":
-		return decodeAs[Started](line)
-	case "stdout":
-		return decodeAs[Stdout](line)
-	case "stderr":
-		return decodeAs[Stderr](line)
-	case "exit":
-		return decodeAs[Exit](line)
-	case "done":
-		return decodeAs[Done](line)
-	case "error":
-		return decodeAs[ErrorResp](line)
-	case "info":
-		return decodeAs[InfoResp](line)
-	case "procs":
-		return decodeAs[Procs](line)
-	case "data":
-		return decodeAs[DataResp](line)
-	case "entries":
-		return decodeAs[Entries](line)
-	case "stat":
-		return decodeAs[Stat](line)
-	case "session_created":
-		return decodeAs[SessionCreated](line)
-	case "sessions":
-		return decodeAs[Sessions](line)
-	case "match":
-		return decodeAs[Match](line)
-	case "replaced":
-		return decodeAs[Replaced](line)
-	case "event":
-		return decodeAs[Event](line)
-	case "git_status_result":
-		return decodeAs[GitStatusResult](line)
-	case "git_commit_result":
-		return decodeAs[GitCommitResult](line)
-	case "git_branches":
-		return decodeAs[GitBranches](line)
-	default:
+	dec, ok := responseDecoders[tag.Type]
+	if !ok {
 		return nil, fmt.Errorf("unknown response type %q", tag.Type)
 	}
+	return dec(line)
 }
 
 // encodeTagged marshals v as a flat object and splices the tag head in front
@@ -607,4 +566,21 @@ func decodeAs[T any](line []byte) (*T, error) {
 		return nil, err
 	}
 	return v, nil
+}
+
+// decodeReq / decodeResp adapt decodeAs to the interface-typed decoder maps.
+func decodeReq[T any](line []byte) (Request, error) {
+	v, err := decodeAs[T](line)
+	if err != nil {
+		return nil, err
+	}
+	return any(v).(Request), nil
+}
+
+func decodeResp[T any](line []byte) (Response, error) {
+	v, err := decodeAs[T](line)
+	if err != nil {
+		return nil, err
+	}
+	return any(v).(Response), nil
 }

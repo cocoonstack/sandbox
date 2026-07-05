@@ -215,7 +215,7 @@ func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *h
 	if dialer == nil {
 		dialer = &fakeDialer{}
 	}
-	srv := New(apiToken, mgr, dialer)
+	srv := New(apiToken, "node:7777", mgr, dialer)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()

@@ -28,6 +28,11 @@ type Config struct {
 	DataDir   string `json:"data_dir"`
 	CocoonBin string `json:"cocoon_bin"`
 
+	// AdvertiseAddr is the host:port the data plane reaches this node at; it
+	// is returned as a claim's owner address (and, at M2c, gossiped). Defaults
+	// to Listen, which is correct when Listen is a routable host:port.
+	AdvertiseAddr string `json:"advertise_addr,omitempty"`
+
 	// Bridge and Network pick the egress-lane attachment (TAP-on-bridge vs
 	// CNI conflist); mutually exclusive. With neither set the node serves
 	// only the no-network lane.
@@ -72,6 +77,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.CocoonBin == "" {
 		c.CocoonBin = defaultCocoonBin
+	}
+	if c.AdvertiseAddr == "" {
+		c.AdvertiseAddr = c.Listen
 	}
 	for i := range c.Pools {
 		if c.Pools[i].Warm == 0 {
