@@ -149,6 +149,26 @@ func smokeGit(ctx context.Context, sb *sandbox.Sandbox) error {
 	if st.Branch != "main" {
 		return fmt.Errorf("branch %q, want main", st.Branch)
 	}
+	// quotePath=false: a non-ASCII filename must come back raw, not C-quoted.
+	if err = sb.WriteFile(ctx, "/work/café.txt", []byte("x"), nil); err != nil {
+		return err
+	}
+	st2, err := sb.GitStatus(ctx, "/work")
+	if err != nil {
+		return err
+	}
+	var found bool
+	for _, f := range st2.Files {
+		if f.Path == "café.txt" {
+			found = true
+		}
+		if strings.Contains(f.Path, `\`) {
+			return fmt.Errorf("path C-quoted (quotePath not disabled): %q", f.Path)
+		}
+	}
+	if !found {
+		return fmt.Errorf("non-ASCII file not in status: %+v", st2.Files)
+	}
 	return nil
 }
 
