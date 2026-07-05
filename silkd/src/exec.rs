@@ -20,6 +20,9 @@ use crate::sysutil;
 /// stdout open in a surviving grandchild.
 const POST_EXIT_DRAIN: Duration = Duration::from_secs(2);
 const REAP_DELAY: Duration = Duration::from_secs(300);
+/// Foreground output buffer before the child is backpressured. Bounds how far
+/// ahead of a slow client the child may run, not a loss threshold.
+const FG_CAP: usize = 256;
 
 /// Runs an exec request to completion (or to `started` when detached),
 /// writing response frames to `out`. `client` yields further client frames
@@ -87,16 +90,22 @@ where
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
-    // Foreground subscribes before any output is emitted so it cannot miss a
-    // chunk; detached attachers replay from the ring buffer instead.
-    let rx = (!req.detach).then(|| proc.subscribe());
+    // Foreground consumes a backpressured mpsc: when the client falls behind,
+    // the sends block, the pipe fills, and the child slows down — output is
+    // never lost. Attachers still ride the best-effort broadcast (a secondary
+    // observer may drop under extreme lag). Detached has no client to pace it,
+    // so it gets no foreground sender.
+    let (fg_tx, fg_rx) = mpsc::channel::<Chunk>(FG_CAP);
+    let pump_fg = (!req.detach).then(|| fg_tx.clone());
+    let sup_fg = (!req.detach).then(|| fg_tx.clone());
+    drop(fg_tx); // only the pump/supervise clones keep fg_rx open
 
-    let pump = tokio::spawn(pump_out(Arc::clone(&proc), stdout, stderr));
+    let pump = tokio::spawn(pump_out(Arc::clone(&proc), stdout, stderr, pump_fg));
     tokio::spawn(pump_stdin(stdin, client, req.detach));
 
     // One supervisor per exec: reap the child, drain output within a grace
     // window (so a daemonizer holding the pipe can't wedge us), then publish
-    // the terminal Exit chunk that unblocks the foreground streamer.
+    // the terminal Exit — to the broadcast (attachers) and the foreground mpsc.
     let sup_proc = Arc::clone(&proc);
     let supervise = tokio::spawn(async move {
         let code = wait_code(&mut child).await;
@@ -106,10 +115,14 @@ where
         }
         sup_proc.mark_exited(code);
         sup_proc.emit(Chunk::Exit(code));
+        if let Some(fg) = sup_fg {
+            let _ = fg.send(Chunk::Exit(code)).await;
+        }
         code
     });
 
     if req.detach {
+        drop(fg_rx);
         let table = table.clone();
         let proc = Arc::clone(&proc);
         tokio::spawn(async move {
@@ -120,7 +133,7 @@ where
         return Ok(());
     }
 
-    let mut rx = rx.expect("foreground subscribed above");
+    let mut rx = fg_rx;
     if let Err(e) = stream_to_client(&mut rx, out).await {
         // Client vanished mid-stream: abort supervise (drops the child via
         // kill_on_drop) and drop our table entry. Aborting may pre-empt
@@ -141,48 +154,45 @@ where
     crate::proto::write_frame(out, &Response::Exit { code }).await
 }
 
-async fn stream_to_client<W>(
-    rx: &mut tokio::sync::broadcast::Receiver<Chunk>,
-    out: &mut W,
-) -> std::io::Result<()>
+async fn stream_to_client<W>(rx: &mut mpsc::Receiver<Chunk>, out: &mut W) -> std::io::Result<()>
 where
     W: AsyncWrite + Unpin,
 {
-    loop {
-        match rx.recv().await {
-            Ok(Chunk::Exit(_)) => return Ok(()),
-            Ok(chunk) => crate::proto::write_frame(out, &chunk.into_response()).await?,
-            // v1 best-effort: a client that stalls long enough to overflow the
-            // fan-out buffer drops the overrun chunks. v2 replaces the
-            // foreground path with a backpressured mpsc so output can't be lost.
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => return Ok(()),
+    while let Some(chunk) = rx.recv().await {
+        match chunk {
+            Chunk::Exit(_) => return Ok(()),
+            c => crate::proto::write_frame(out, &c.into_response()).await?,
         }
     }
+    Ok(())
 }
 
 /// Reads stdout and stderr concurrently within this one task, so aborting the
 /// pump (POST_EXIT_DRAIN timeout) cancels both. A nested spawn would survive
-/// the abort and keep emitting a daemonizer's output after Exit.
+/// the abort and keep emitting a daemonizer's output after Exit. Each chunk
+/// goes to the ring+broadcast (attachers/replay) and, for a foreground exec,
+/// to the backpressured `fg` sender.
 async fn pump_out(
     proc: Arc<Proc>,
     stdout: Option<tokio::process::ChildStdout>,
     stderr: Option<tokio::process::ChildStderr>,
+    fg: Option<mpsc::Sender<Chunk>>,
 ) {
+    let fg = fg.as_ref();
     let out = async {
         if let Some(s) = stdout {
-            copy_stream(s, &proc, false).await;
+            copy_stream(s, &proc, false, fg).await;
         }
     };
     let err = async {
         if let Some(s) = stderr {
-            copy_stream(s, &proc, true).await;
+            copy_stream(s, &proc, true, fg).await;
         }
     };
     tokio::join!(out, err);
 }
 
-async fn copy_stream<R>(mut r: R, proc: &Proc, stderr: bool)
+async fn copy_stream<R>(mut r: R, proc: &Proc, stderr: bool, fg: Option<&mpsc::Sender<Chunk>>)
 where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -192,12 +202,18 @@ where
         match r.read(&mut buf).await {
             Ok(0) | Err(_) => break,
             Ok(n) => {
-                let d = buf[..n].to_vec();
-                proc.emit(if stderr {
-                    Chunk::Stderr(d)
+                let chunk = if stderr {
+                    Chunk::Stderr(buf[..n].to_vec())
                 } else {
-                    Chunk::Stdout(d)
-                });
+                    Chunk::Stdout(buf[..n].to_vec())
+                };
+                proc.emit(chunk.clone());
+                if let Some(fg) = fg {
+                    // The client backpressures here; if it is gone, stop reading.
+                    if fg.send(chunk).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
     }

@@ -156,10 +156,6 @@ impl Proc {
         (ring.drain_view(), self.tx.subscribe())
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<Chunk> {
-        self.tx.subscribe()
-    }
-
     fn info(&self) -> ProcInfo {
         let (state, exit_code) = match *self.state.lock().unwrap() {
             State::Running => ("running".to_string(), None),

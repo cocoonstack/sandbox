@@ -153,6 +153,43 @@ async fn forged_sentinel_in_output_does_not_desync() {
 }
 
 #[tokio::test]
+async fn reap_idle_removes_idle_sessions() {
+    use std::time::Duration;
+    let state = Arc::new(State::new());
+    let id = create(&state, json!({})).await;
+    // Everything is "idle" against a zero TTL.
+    let reaped = state.sessions.reap_idle(Duration::ZERO);
+    assert_eq!(reaped, 1);
+    let gone = sh(&state, &id, &["echo", "hi"]).await;
+    assert_eq!(type_of(&gone[0]), "error");
+    assert_eq!(
+        gone[0]["kind"], "not_found",
+        "reaped session should be gone"
+    );
+}
+
+#[tokio::test]
+async fn reap_skips_a_session_running_a_command() {
+    use std::time::Duration;
+    let state = Arc::new(State::new());
+    let id = create(&state, json!({})).await;
+    // Hold the session busy with a slow command while a zero-TTL reap runs;
+    // an actively-running session must not be reaped.
+    let busy = {
+        let s = Arc::clone(&state);
+        let sid = id.clone();
+        tokio::spawn(async move { sh(&s, &sid, &["sleep", "1"]).await })
+    };
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let reaped = state.sessions.reap_idle(Duration::ZERO);
+    assert_eq!(reaped, 0, "a running session must not be reaped");
+    let done = busy.await.unwrap();
+    assert_eq!(type_of(done.last().unwrap()), "exit");
+    // After it finishes it becomes reapable again.
+    assert_eq!(state.sessions.reap_idle(Duration::ZERO), 1);
+}
+
+#[tokio::test]
 async fn exec_in_unknown_session_is_not_found() {
     let state = Arc::new(State::new());
     let f = one(&state, r#"{"op":"exec","argv":["true"],"session":"nope"}"#).await;

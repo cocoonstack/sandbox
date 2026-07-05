@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::io;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -17,6 +18,10 @@ use crate::proto::{self, ErrorKind, Response};
 use crate::sysutil;
 
 const READ_CHUNK: usize = 32 * 1024;
+/// Idle sessions (no command run within this window) are reaped so an
+/// abandoned session's shell + fds don't accumulate.
+pub const IDLE_TTL: Duration = Duration::from_secs(30 * 60);
+pub const REAP_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Registry of live shell sessions, addressed by id across connections.
 #[derive(Clone, Default)]
@@ -31,6 +36,7 @@ pub struct Session {
     pub id: String,
     pid: u32,
     io: tokio::sync::Mutex<Io>,
+    last_active: Mutex<Instant>,
 }
 
 struct Io {
@@ -73,6 +79,7 @@ impl Table {
                 stdout,
                 _child: child,
             }),
+            last_active: Mutex::new(Instant::now()),
         });
 
         // Merge stderr, then apply cwd/env; sync on a sentinel so the first
@@ -131,6 +138,26 @@ impl Table {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Removes and kills sessions idle longer than `ttl`. A session currently
+    /// running a command (io lock held) is never idle, so it is skipped even
+    /// if its last stamp is old (a long-running command). Returns the count.
+    pub fn reap_idle(&self, ttl: Duration) -> usize {
+        let mut map = self.inner.lock().unwrap();
+        let dead: Vec<String> = map
+            .iter()
+            .filter(|(_, s)| {
+                s.io.try_lock().is_ok() && s.last_active.lock().unwrap().elapsed() > ttl
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &dead {
+            if let Some(s) = map.remove(id) {
+                sysutil::kill(s.pid);
+            }
+        }
+        dead.len()
+    }
 }
 
 impl Session {
@@ -146,7 +173,14 @@ impl Session {
             .collect::<Vec<_>>()
             .join(" ");
         let mut io = self.io.lock().await;
-        match io.converse(&cmdline, Some(w)).await {
+        let outcome = io.converse(&cmdline, Some(w)).await;
+        // Stamp while io is still held: the reaper skips a session whose io lock
+        // is held, so it can't mis-reap in the gap between the command finishing
+        // and the fresh stamp landing (a long-running command isn't idle either
+        // — io stays held for its whole duration).
+        *self.last_active.lock().unwrap() = Instant::now();
+        drop(io);
+        match outcome {
             Ok(code) => {
                 let _ = proto::write_frame(w, &Response::Exit { code }).await;
                 true
@@ -159,6 +193,17 @@ impl Session {
                 .await;
                 false
             }
+        }
+    }
+}
+
+/// Periodically reaps idle sessions until the process exits.
+pub async fn reap_loop(table: Table, ttl: Duration, interval: Duration) {
+    loop {
+        tokio::time::sleep(interval).await;
+        let n = table.reap_idle(ttl);
+        if n > 0 {
+            eprintln!("silkd: reaped {n} idle session(s)");
         }
     }
 }

@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use silkd::server::State;
-use silkd::vsock;
+use silkd::{session, vsock};
 
 const DEFAULT_PORT: u32 = 2048;
 
@@ -21,6 +21,11 @@ async fn main() {
         .unwrap_or(DEFAULT_PORT);
 
     let state = Arc::new(State::new());
+    tokio::spawn(session::reap_loop(
+        state.sessions.clone(),
+        session::IDLE_TTL,
+        session::REAP_INTERVAL,
+    ));
     if let Err(e) = vsock::serve(port, state).await {
         eprintln!("silkd: fatal: {e}");
         std::process::exit(1);

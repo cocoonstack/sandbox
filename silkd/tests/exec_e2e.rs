@@ -30,6 +30,24 @@ async fn exec_streams_stdout_then_exit() {
 }
 
 #[tokio::test]
+async fn large_output_is_delivered_without_loss() {
+    // Exercises the backpressured foreground mpsc with far more chunks than
+    // its buffer; every line must arrive in order, none dropped.
+    let frames = roundtrip(r#"{"op":"exec","argv":["/bin/sh","-c","seq 1 20000"]}"#).await;
+    let body = body_of(&frames);
+    let lines: Vec<&str> = body.lines().collect();
+    assert_eq!(
+        lines.len(),
+        20000,
+        "expected 20000 lines, got {}",
+        lines.len()
+    );
+    assert_eq!(lines.first().copied(), Some("1"));
+    assert_eq!(lines.last().copied(), Some("20000"));
+    assert_eq!(type_of(frames.last().unwrap()), "exit");
+}
+
+#[tokio::test]
 async fn nonzero_exit_is_reported() {
     let frames = roundtrip(r#"{"op":"exec","argv":["/bin/sh","-c","exit 7"]}"#).await;
     let last = frames.last().unwrap();
