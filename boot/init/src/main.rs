@@ -2,6 +2,9 @@
 //! rootfs described on the kernel cmdline and hands off to the real init.
 //! Design: cocoon-specs/design/sandbox-fast-boot.md.
 
+// Off Linux only cfg's own tests use it; the bin compiles it dead so
+// `cargo test` still covers the cmdline parsing on dev hosts.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod cfg;
 
 #[cfg(target_os = "linux")]

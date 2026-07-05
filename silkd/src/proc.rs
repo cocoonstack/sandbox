@@ -15,6 +15,10 @@ use crate::proto::{ProcInfo, Response};
 const LOG_RING_BYTES: usize = 256 * 1024;
 const OUTPUT_FANOUT: usize = 256;
 
+/// Monotonic fallback pids for a spawned child with no reported OS pid; kept
+/// below i32::MAX so a later signal cast to pid_t stays a valid pid.
+static SYNTH: AtomicU64 = AtomicU64::new(1 << 30);
+
 /// A chunk of process output tagged by stream, shared with live attachers.
 #[derive(Clone)]
 pub enum Chunk {
@@ -230,10 +234,6 @@ impl Ring {
         out
     }
 }
-
-/// Monotonic fallback pids for a spawned child with no reported OS pid; kept
-/// below i32::MAX so a later signal cast to pid_t stays a valid pid.
-static SYNTH: AtomicU64 = AtomicU64::new(1 << 30);
 
 pub fn synth_pid() -> u32 {
     (SYNTH.fetch_add(1, Ordering::Relaxed) & (i32::MAX as u64)) as u32

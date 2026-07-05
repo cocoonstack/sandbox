@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use tokio::io::{AsyncBufRead, AsyncWrite, BufReader};
+use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
 
 use crate::proc::{Chunk, Proc, Table};
@@ -293,11 +293,6 @@ where
             Err(_) => return,
         }
     }
-}
-
-/// Wrap any reader in the buffering the frame reader needs.
-pub fn buffer<R: tokio::io::AsyncRead + Unpin>(r: R) -> BufReader<R> {
-    BufReader::new(r)
 }
 
 fn now_secs() -> u64 {

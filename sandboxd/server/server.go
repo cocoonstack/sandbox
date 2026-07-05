@@ -32,7 +32,6 @@ const (
 
 // Manager is the slice of the pool manager the server consumes.
 type Manager interface {
-	Claim(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
 	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
 	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
 	Release(ctx context.Context, id, token string) error

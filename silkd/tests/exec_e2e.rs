@@ -7,18 +7,14 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{decode, exchange, one, roundtrip, type_of};
+use common::{decode, exchange, one, roundtrip, stdout_body, type_of};
 use silkd::server::State;
-
-fn body_of(frames: &[serde_json::Value]) -> String {
-    String::from_utf8(common::payload(frames, "stdout")).unwrap()
-}
 
 #[tokio::test]
 async fn exec_streams_stdout_then_exit() {
     let frames = roundtrip(r#"{"op":"exec","argv":["/bin/echo","-n","hello"]}"#).await;
     assert_eq!(type_of(&frames[0]), "started");
-    assert_eq!(body_of(&frames), "hello");
+    assert_eq!(stdout_body(&frames), "hello");
     let last = frames.last().unwrap();
     assert_eq!(type_of(last), "exit");
     assert_eq!(last["code"], 0);
@@ -29,7 +25,7 @@ async fn large_output_is_delivered_without_loss() {
     // Exercises the backpressured foreground mpsc with far more chunks than
     // its buffer; every line must arrive in order, none dropped.
     let frames = roundtrip(r#"{"op":"exec","argv":["/bin/sh","-c","seq 1 20000"]}"#).await;
-    let body = body_of(&frames);
+    let body = stdout_body(&frames);
     let lines: Vec<&str> = body.lines().collect();
     assert_eq!(
         lines.len(),
@@ -136,7 +132,7 @@ async fn attach_streams_live_output_then_exit() {
     .await
     .expect("attach hung");
     assert!(
-        body_of(&frames).contains("live-chunk"),
+        stdout_body(&frames).contains("live-chunk"),
         "attach missed live output: {frames:?}"
     );
     assert_eq!(type_of(frames.last().unwrap()), "exit");
@@ -159,7 +155,7 @@ async fn attach_to_exited_process_returns_exit_immediately() {
     )
     .await
     .expect("attach to an exited process must not hang");
-    assert!(body_of(&frames).contains("done-fast"));
+    assert!(stdout_body(&frames).contains("done-fast"));
     assert_eq!(type_of(frames.last().unwrap()), "exit");
 }
 
@@ -227,7 +223,7 @@ async fn exec_stdin_is_piped_to_the_child() {
         r#"{"op":"stdin_close"}"#.to_string(),
     ])
     .await;
-    assert_eq!(body_of(&frames), "piped-in\n");
+    assert_eq!(stdout_body(&frames), "piped-in\n");
     assert_eq!(type_of(frames.last().unwrap()), "exit");
 }
 
@@ -285,7 +281,7 @@ async fn detached_exec_is_listed_then_logs_replay_output_and_exit() {
     for _ in 0..50 {
         let logs = one(&state, &format!(r#"{{"op":"logs","pid":{pid}}}"#)).await;
         if logs.iter().any(|f| type_of(f) == "exit") {
-            assert_eq!(body_of(&logs), "detached-hi\n");
+            assert_eq!(stdout_body(&logs), "detached-hi\n");
             return;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -298,16 +294,10 @@ async fn disconnect_during_drain_publishes_real_exit_code() {
     // A grandchild holds stdout so the supervisor sits in the post-exit
     // drain; the foreground client then vanishes mid-drain. The disconnect
     // fallback must publish the child's real code to attachers, not -1.
-    use silkd::server::buffer;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::AsyncWriteExt;
 
     let state = Arc::new(State::new());
-    let (client, server) = tokio::io::duplex(1 << 20);
-    let st = Arc::clone(&state);
-    let (sr, sw) = tokio::io::split(server);
-    tokio::spawn(async move { st.serve(buffer(sr), sw).await });
-
-    let (cr, mut cw) = tokio::io::split(client);
+    let (mut cw, mut lines, _) = common::connect(&state);
     let req = serde_json::json!({
         "op": "exec",
         "argv": ["/bin/sh", "-c", "{ sleep 0.5; echo late; sleep 30; } & exit 7"]
@@ -316,7 +306,6 @@ async fn disconnect_during_drain_publishes_real_exit_code() {
     cw.write_all(req.as_bytes()).await.unwrap();
     cw.write_all(b"\n").await.unwrap();
 
-    let mut lines = BufReader::new(cr).lines();
     let started: serde_json::Value =
         serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
     assert_eq!(type_of(&started), "started");

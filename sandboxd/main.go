@@ -31,7 +31,8 @@ import (
 )
 
 const (
-	shutdownGrace = 5 * time.Second
+	shutdownGrace  = 5 * time.Second
+	gossipInterval = time.Second
 	// Slowloris protection; ReadTimeout/WriteTimeout must stay zero — cold
 	// claims block up to the cold probe timeout and relays stream forever.
 	readHeaderTimeout = 5 * time.Second
@@ -103,8 +104,6 @@ func main() {
 	<-drained
 	logger.Info(ctx, "sandboxd stopped; VMs stay alive for the next reconcile")
 }
-
-const gossipInterval = time.Second
 
 // startMesh builds and joins the memberlist cluster from cfg.Mesh.
 func startMesh(cfg *config.Config) (*mesh.Mesh, error) {

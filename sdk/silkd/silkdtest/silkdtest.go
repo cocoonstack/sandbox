@@ -19,13 +19,7 @@ import (
 // until stdin_close; exec false → exit 1; exec sleep → started, then blocks
 // until the client disconnects; anything else → an error frame.
 func Serve(l net.Listener) {
-	for {
-		conn, err := l.Accept()
-		if err != nil {
-			return
-		}
-		go ServeConn(conn)
-	}
+	acceptLoop(l, ServeConn)
 }
 
 // ServeConn speaks one RPC on an already-open connection and closes it —
@@ -74,19 +68,38 @@ func handle(conn net.Conn, r *bufio.Reader) {
 	if err != nil {
 		return
 	}
+	if !serveCommon(conn, r, req) {
+		errFrame(conn, "unimplemented", "silkdtest: "+req.Op())
+	}
+}
+
+// serveCommon handles the verbs shared by the stateless server and the Fake,
+// reporting whether it recognized the request.
+func serveCommon(conn net.Conn, r *bufio.Reader, req silkd.Request) bool {
 	switch req := req.(type) {
 	case *silkd.Info:
 		send(conn, &silkd.InfoResp{Version: "silkdtest", Proto: silkd.ProtoVersion})
 	case *silkd.Exec:
 		serveExec(conn, r, req)
 	default:
-		send(conn, &silkd.ErrorResp{Kind: "unimplemented", Message: "silkdtest: " + req.Op()})
+		return false
+	}
+	return true
+}
+
+func acceptLoop(l net.Listener, serve func(net.Conn)) {
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			return
+		}
+		go serve(conn)
 	}
 }
 
 func serveExec(conn net.Conn, r *bufio.Reader, req *silkd.Exec) {
 	if len(req.Argv) == 0 {
-		send(conn, &silkd.ErrorResp{Kind: "bad_request", Message: "empty argv"})
+		errFrame(conn, "bad_request", "empty argv")
 		return
 	}
 	send(conn, &silkd.Started{PID: 4242})
@@ -107,7 +120,7 @@ func serveExec(conn net.Conn, r *bufio.Reader, req *silkd.Exec) {
 				send(conn, &silkd.Exit{Code: 0})
 				return
 			default:
-				send(conn, &silkd.ErrorResp{Kind: "bad_request", Message: "expected stdin"})
+				errFrame(conn, "bad_request", "expected stdin")
 				return
 			}
 		}
@@ -116,7 +129,7 @@ func serveExec(conn net.Conn, r *bufio.Reader, req *silkd.Exec) {
 	case "sleep":
 		_, _ = io.Copy(io.Discard, r) // hold the RPC open until disconnect
 	default:
-		send(conn, &silkd.ErrorResp{Kind: "not_found", Message: "silkdtest: no such command " + req.Argv[0]})
+		errFrame(conn, "not_found", "silkdtest: no such command "+req.Argv[0])
 	}
 }
 

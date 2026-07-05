@@ -116,7 +116,7 @@ where
     let sup_reaped = Arc::clone(&reaped);
     let sup_proc = Arc::clone(&proc);
     let supervise = tokio::spawn(async move {
-        let code = wait_code(&mut child).await;
+        let code = sysutil::wait_code(&mut child).await;
         let _ = sup_reaped.set(code);
         let mut pump = pump;
         if timeout(POST_EXIT_DRAIN, &mut pump).await.is_err() {
@@ -251,8 +251,4 @@ async fn pump_stdin(
         }
     }
     let _ = sink.shutdown().await;
-}
-
-async fn wait_code(child: &mut tokio::process::Child) -> i32 {
-    child.wait().await.map(sysutil::exit_code).unwrap_or(-1)
 }

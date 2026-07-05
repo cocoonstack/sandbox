@@ -130,9 +130,15 @@ func (m *Mesh) Candidates(keyHash string) []string {
 	return []string{a.addr, b.addr}
 }
 
-// Members returns the current cluster view (for /v1/info and Lookup).
+// Members returns the current cluster view (self included).
 func (m *Mesh) Members() []NodeState {
-	return m.snapshot()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]NodeState, 0, len(m.view))
+	for _, st := range m.view {
+		out = append(out, st)
+	}
+	return out
 }
 
 // PeerAddrs returns the data-plane addresses of the other nodes, for a
@@ -180,20 +186,7 @@ func (m *Mesh) merge(states []NodeState) {
 	}
 }
 
-func (m *Mesh) snapshot() []NodeState {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]NodeState, 0, len(m.view))
-	for _, st := range m.view {
-		out = append(out, st)
-	}
-	return out
-}
-
-var (
-	_ memberlist.Delegate      = (*delegate)(nil)
-	_ memberlist.EventDelegate = (*eventDelegate)(nil)
-)
+var _ memberlist.Delegate = (*delegate)(nil)
 
 // delegate carries this node's full view on each memberlist push/pull sync, so
 // state propagates transitively across the cluster.
@@ -203,7 +196,7 @@ func (d *delegate) NodeMeta(int) []byte             { return nil }
 func (d *delegate) NotifyMsg([]byte)                {}
 func (d *delegate) GetBroadcasts(int, int) [][]byte { return nil }
 func (d *delegate) LocalState(bool) []byte {
-	buf, _ := json.Marshal((*Mesh)(d).snapshot())
+	buf, _ := json.Marshal((*Mesh)(d).Members())
 	return buf
 }
 
@@ -214,6 +207,8 @@ func (d *delegate) MergeRemoteState(buf []byte, _ bool) {
 	}
 	(*Mesh)(d).merge(states)
 }
+
+var _ memberlist.EventDelegate = (*eventDelegate)(nil)
 
 // eventDelegate prunes the placement view when SWIM reports a node gone, so a
 // dead peer stops attracting redirects.

@@ -31,7 +31,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let tmp = format!("{path}.silkd-{}.tmp", crate::sysutil::tmp_suffix());
+    let tmp = tmp_name(&path);
     let mut file = match fs::File::create(&tmp).await {
         Ok(f) => f,
         Err(e) => return err_frame(w, &e, "create").await,
@@ -42,36 +42,12 @@ where
             .await
             .map_err(|e| proto::FeedError::Io(e, "flush")),
     );
+    drop(file);
     if let Err(fail) = outcome {
-        drop(file);
         let _ = fs::remove_file(&tmp).await;
         return proto::write_feed_error(w, fail).await;
     }
-
-    // Explicit mode wins; otherwise inherit the destination's mode on an
-    // overwrite so replacing an executable script doesn't silently strip its
-    // exec bit (temp+rename would leave the temp's create-default 0644). A new
-    // file with no mode keeps that default.
-    let effective_mode = match mode {
-        Some(m) => Some(m),
-        None => fs::metadata(&path)
-            .await
-            .ok()
-            .map(|meta| meta.permissions().mode() & 0o7777),
-    };
-    if let Some(m) = effective_mode {
-        if let Err(e) = file
-            .set_permissions(std::fs::Permissions::from_mode(m))
-            .await
-        {
-            drop(file);
-            let _ = fs::remove_file(&tmp).await;
-            return err_frame(w, &e, "chmod").await;
-        }
-    }
-    drop(file);
-    if let Err(e) = fs::rename(&tmp, &path).await {
-        let _ = fs::remove_file(&tmp).await;
+    if let Err(e) = commit_tmp(&tmp, &path, mode).await {
         return err_frame(w, &e, "commit").await;
     }
     proto::write_frame(w, &Response::Done).await
@@ -137,31 +113,16 @@ pub async fn list<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
     proto::write_frame(w, &Response::Done).await
 }
 
-/// Writes `bytes` to `path` via a sibling temp file renamed into place, so a
-/// crash never leaves a truncated file; an existing file's mode is inherited
-/// (fs::replace must not strip an executable script's exec bit).
+/// Writes `bytes` to `path` via a sibling temp file committed into place, so
+/// a crash never leaves a truncated file.
 pub async fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
-    let tmp = format!(
-        "{}.silkd-{}.tmp",
-        path.display(),
-        crate::sysutil::tmp_suffix()
-    );
-    let mode = fs::metadata(path)
-        .await
-        .ok()
-        .map(|m| m.permissions().mode() & 0o7777);
-    let outcome = async {
-        fs::write(&tmp, bytes).await?;
-        if let Some(m) = mode {
-            fs::set_permissions(&tmp, std::fs::Permissions::from_mode(m)).await?;
-        }
-        fs::rename(&tmp, path).await
-    }
-    .await;
-    if outcome.is_err() {
+    let path = path.display().to_string();
+    let tmp = tmp_name(&path);
+    if let Err(e) = fs::write(&tmp, bytes).await {
         let _ = fs::remove_file(&tmp).await;
+        return Err(e);
     }
-    outcome
+    commit_tmp(&tmp, &path, None).await
 }
 
 /// Reports metadata for `path` (following symlinks).
@@ -227,6 +188,36 @@ pub async fn rename<W: AsyncWrite + Unpin>(w: &mut W, from: String, to: String) 
         Ok(()) => proto::write_frame(w, &Response::Done).await,
         Err(e) => err_frame(w, &e, "rename").await,
     }
+}
+
+fn tmp_name(path: &str) -> String {
+    format!("{path}.silkd-{}.tmp", crate::sysutil::tmp_suffix())
+}
+
+/// Commits a fully-written temp file over `path`. An explicit mode wins;
+/// otherwise an overwrite inherits the destination's permission bits so
+/// replacing an executable script doesn't silently strip its exec bit
+/// (rename alone would leave the temp's create default). The temp is
+/// removed on any failure.
+async fn commit_tmp(tmp: &str, path: &str, mode: Option<u32>) -> io::Result<()> {
+    let outcome = async {
+        let effective = match mode {
+            Some(m) => Some(m),
+            None => fs::metadata(path)
+                .await
+                .ok()
+                .map(|meta| meta.permissions().mode() & 0o7777),
+        };
+        if let Some(m) = effective {
+            fs::set_permissions(tmp, std::fs::Permissions::from_mode(m)).await?;
+        }
+        fs::rename(tmp, path).await
+    }
+    .await;
+    if outcome.is_err() {
+        let _ = fs::remove_file(tmp).await;
+    }
+    outcome
 }
 
 fn file_kind(meta: &std::fs::Metadata) -> FileKind {

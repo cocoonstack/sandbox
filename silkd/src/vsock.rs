@@ -28,7 +28,7 @@ pub async fn serve(port: u32, state: Arc<State>) -> std::io::Result<()> {
         let state = Arc::clone(&state);
         tokio::spawn(async move {
             let (read, write) = tokio::io::split(conn);
-            if let Err(e) = state.serve(crate::server::buffer(read), write).await {
+            if let Err(e) = state.serve(tokio::io::BufReader::new(read), write).await {
                 eprintln!("silkd: connection: {e}");
             }
         });

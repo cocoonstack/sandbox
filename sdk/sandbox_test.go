@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,7 +18,7 @@ import (
 const upgrade101 = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n"
 
 func TestExecCapturesStdout(t *testing.T) {
-	sb := testSandbox(t, newAgentServer(t))
+	sb := testSandbox(t, newAgentServer(t, silkdtest.ServeConn))
 
 	out, err := sb.Exec(t.Context(), "echo", "42")
 	if err != nil {
@@ -29,7 +30,7 @@ func TestExecCapturesStdout(t *testing.T) {
 }
 
 func TestExecNonZeroExit(t *testing.T) {
-	sb := testSandbox(t, newAgentServer(t))
+	sb := testSandbox(t, newAgentServer(t, silkdtest.ServeConn))
 
 	_, err := sb.Exec(t.Context(), "false")
 	var exitErr *ExitError
@@ -39,7 +40,7 @@ func TestExecNonZeroExit(t *testing.T) {
 }
 
 func TestExecSurfacesErrorFrame(t *testing.T) {
-	sb := testSandbox(t, newAgentServer(t))
+	sb := testSandbox(t, newAgentServer(t, silkdtest.ServeConn))
 
 	_, err := sb.Exec(t.Context(), "no-such-binary")
 	var silkdErr *silkd.ErrorResp
@@ -49,7 +50,7 @@ func TestExecSurfacesErrorFrame(t *testing.T) {
 }
 
 func TestRunStreamsStdin(t *testing.T) {
-	sb := testSandbox(t, newAgentServer(t))
+	sb := testSandbox(t, newAgentServer(t, silkdtest.ServeConn))
 
 	var out strings.Builder
 	code, err := sb.Run(t.Context(), Cmd{
@@ -66,7 +67,7 @@ func TestRunStreamsStdin(t *testing.T) {
 }
 
 func TestRunContextCancel(t *testing.T) {
-	sb := testSandbox(t, newAgentServer(t))
+	sb := testSandbox(t, newAgentServer(t, silkdtest.ServeConn))
 
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
@@ -126,8 +127,9 @@ func TestRunRejectedUpgrade(t *testing.T) {
 }
 
 // newAgentServer serves the agent endpoint by hijacking and handing the conn
-// to the fake silkd, mirroring sandboxd's relay from the SDK's perspective.
-func newAgentServer(t *testing.T) *httptest.Server {
+// to serve (a fake silkd), mirroring sandboxd's relay from the SDK's
+// perspective.
+func newAgentServer(t *testing.T, serve func(net.Conn)) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", func(w http.ResponseWriter, r *http.Request) {
@@ -144,7 +146,7 @@ func newAgentServer(t *testing.T) *httptest.Server {
 			_ = conn.Close()
 			return
 		}
-		silkdtest.ServeConn(conn)
+		serve(conn)
 	})
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)

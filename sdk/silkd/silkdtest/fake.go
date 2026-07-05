@@ -31,13 +31,7 @@ func NewFake(root string) *Fake {
 
 // Serve accepts connections until l closes, one RPC per connection.
 func (f *Fake) Serve(l net.Listener) {
-	for {
-		conn, err := l.Accept()
-		if err != nil {
-			return
-		}
-		go f.ServeConn(conn)
-	}
+	acceptLoop(l, f.ServeConn)
 }
 
 // ServeConn speaks one RPC on an already-open connection (e.g. after an HTTP
@@ -74,12 +68,10 @@ func (f *Fake) ServeConn(conn net.Conn) {
 		ptyEcho(conn, r)
 	case *silkd.PtyResize:
 		send(conn, silkd.Done{})
-	case *silkd.Info:
-		send(conn, &silkd.InfoResp{Version: "silkdtest", Proto: silkd.ProtoVersion})
-	case *silkd.Exec:
-		serveExec(conn, r, req)
 	default:
-		errFrame(conn, "unimplemented", "silkdtest: "+req.Op())
+		if !serveCommon(conn, r, req) {
+			errFrame(conn, "unimplemented", "silkdtest: "+req.Op())
+		}
 	}
 }
 

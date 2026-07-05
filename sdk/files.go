@@ -14,32 +14,16 @@ const fsChunk = 32 * 1024
 // WriteFile writes data to path in the sandbox, atomically (silkd renames a
 // temp file into place). mode, when non-nil, sets the file's permission bits.
 func (s *Sandbox) WriteFile(ctx context.Context, path string, data []byte, mode *uint32) error {
-	conn, done, err := s.dial(ctx)
-	if err != nil {
-		return err
-	}
-	defer done()
-	if err := conn.Send(&silkd.FsWrite{Path: path, Mode: mode}); err != nil {
-		return err
-	}
-	if err := uploadStream(conn, bytes.NewReader(data)); err != nil {
-		return err
-	}
-	return terminalErr(ctx, conn)
+	return s.uploadRPC(ctx, &silkd.FsWrite{Path: path, Mode: mode}, bytes.NewReader(data))
 }
 
 // ReadFile returns the contents of path.
 func (s *Sandbox) ReadFile(ctx context.Context, path string) ([]byte, error) {
-	conn, done, err := s.dial(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer done()
-	if err = conn.Send(&silkd.FsRead{Path: path}); err != nil {
-		return nil, err
-	}
 	var out []byte
-	err = drainData(ctx, conn, func(b []byte) error { out = append(out, b...); return nil })
+	err := s.downloadRPC(ctx, &silkd.FsRead{Path: path}, func(b []byte) error {
+		out = append(out, b...)
+		return nil
+	})
 	return out, err
 }
 
@@ -132,6 +116,35 @@ func (s *Sandbox) doneRPC(ctx context.Context, req silkd.Request) error {
 		return err
 	}
 	return terminalErr(ctx, conn)
+}
+
+// uploadRPC sends req, streams r as Data frames, and expects a terminal Done.
+func (s *Sandbox) uploadRPC(ctx context.Context, req silkd.Request, r io.Reader) error {
+	conn, done, err := s.dial(ctx)
+	if err != nil {
+		return err
+	}
+	defer done()
+	if err := conn.Send(req); err != nil {
+		return err
+	}
+	if err := uploadStream(conn, r); err != nil {
+		return err
+	}
+	return terminalErr(ctx, conn)
+}
+
+// downloadRPC sends req and drains its Data stream into sink until Done.
+func (s *Sandbox) downloadRPC(ctx context.Context, req silkd.Request, sink func([]byte) error) error {
+	conn, done, err := s.dial(ctx)
+	if err != nil {
+		return err
+	}
+	defer done()
+	if err := conn.Send(req); err != nil {
+		return err
+	}
+	return drainData(ctx, conn, sink)
 }
 
 // uploadStream chunks r into Data frames terminated by DataEnd; shared by the

@@ -170,7 +170,7 @@ async fn pump<W: AsyncWrite + Unpin>(
                         if crate::proto::write_frame(out, &Response::Stdout { data }).await.is_err() {
                             // Client gone mid-output: kill and reap for the real code.
                             let _ = child.start_kill();
-                            return child.wait().await.map(sysutil::exit_code).unwrap_or(-1);
+                            return sysutil::wait_code(child).await;
                         }
                     }
                     Err(_would_block) => {}

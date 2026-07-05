@@ -6,23 +6,18 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
+use common::{FrameLines, FrameWriter};
 use serde_json::{json, Value};
-use silkd::server::{buffer, State};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::io::{ReadHalf, WriteHalf};
+use silkd::server::State;
+use tokio::io::AsyncWriteExt;
 
-type Client = tokio::io::DuplexStream;
-
-async fn send(cw: &mut WriteHalf<Client>, frame: Value) {
+async fn send(cw: &mut FrameWriter, frame: Value) {
     cw.write_all(frame.to_string().as_bytes()).await.unwrap();
     cw.write_all(b"\n").await.unwrap();
 }
 
 /// Reads frames until one satisfies `pred` or 5s elapses.
-async fn read_until(
-    lines: &mut Lines<BufReader<ReadHalf<Client>>>,
-    pred: impl Fn(&Value) -> bool,
-) -> Value {
+async fn read_until(lines: &mut FrameLines, pred: impl Fn(&Value) -> bool) -> Value {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let line = lines.next_line().await.unwrap().expect("stream closed");
@@ -39,13 +34,7 @@ async fn read_until(
 #[tokio::test]
 async fn pty_runs_a_shell_and_echoes() {
     let state = Arc::new(State::new());
-    let (client, server) = tokio::io::duplex(1 << 20);
-    let st = Arc::clone(&state);
-    let (sr, sw) = tokio::io::split(server);
-    let handle = tokio::spawn(async move { st.serve(buffer(sr), sw).await });
-
-    let (cr, mut cw) = tokio::io::split(client);
-    let mut lines = BufReader::new(cr).lines();
+    let (mut cw, mut lines, handle) = common::connect(&state);
     send(&mut cw, json!({"op":"pty_open","cols":80,"rows":24})).await;
 
     let started = read_until(&mut lines, |v| v["type"] == "started").await;
@@ -77,13 +66,7 @@ async fn pty_runs_a_shell_and_echoes() {
 #[tokio::test]
 async fn pty_appears_in_ps_and_resizes() {
     let state = Arc::new(State::new());
-    let (client, server) = tokio::io::duplex(1 << 20);
-    let st = Arc::clone(&state);
-    let (sr, sw) = tokio::io::split(server);
-    tokio::spawn(async move { st.serve(buffer(sr), sw).await });
-
-    let (cr, mut cw) = tokio::io::split(client);
-    let mut lines = BufReader::new(cr).lines();
+    let (mut cw, mut lines, _) = common::connect(&state);
     send(&mut cw, json!({"op":"pty_open","cols":80,"rows":24})).await;
     let pid = read_until(&mut lines, |v| v["type"] == "started").await["pid"]
         .as_u64()
@@ -126,13 +109,7 @@ async fn pty_disconnect_tears_down_without_spin() {
     // the shell, drop the table entry, end the serve task) instead of
     // busy-spinning on the closed client channel.
     let state = Arc::new(State::new());
-    let (client, server) = tokio::io::duplex(1 << 20);
-    let st = Arc::clone(&state);
-    let (sr, sw) = tokio::io::split(server);
-    let handle = tokio::spawn(async move { st.serve(buffer(sr), sw).await });
-
-    let (cr, mut cw) = tokio::io::split(client);
-    let mut lines = BufReader::new(cr).lines();
+    let (mut cw, mut lines, handle) = common::connect(&state);
     send(&mut cw, json!({"op":"pty_open","cols":80,"rows":24})).await;
     let pid = read_until(&mut lines, |v| v["type"] == "started").await["pid"]
         .as_u64()

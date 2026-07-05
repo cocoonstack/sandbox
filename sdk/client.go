@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -89,15 +90,27 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 
 // Lookup relocates a sandbox handle whose owner address was lost, given its
 // id and token: it asks the entry node, then scatters across the cluster's
-// peers, and returns a handle bound to whichever node owns it.
+// peers concurrently, and returns a handle bound to whichever node confirms
+// ownership first — one hung peer must not stall the whole lookup.
 func (c *Client) Lookup(ctx context.Context, id, token string) (*Sandbox, error) {
 	if owner, err := c.ownerAt(ctx, c.addr, id, token); err == nil {
 		return &Sandbox{ID: id, token: token, c: c, owner: owner}, nil
 	}
-	for _, addr := range c.peers(ctx) {
-		if owner, err := c.ownerAt(ctx, addr, id, token); err == nil {
-			return &Sandbox{ID: id, token: token, c: c, owner: owner}, nil
-		}
+	peers := c.peers(ctx)
+	scatterCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	owners := make(chan string, len(peers))
+	var wg sync.WaitGroup
+	for _, addr := range peers {
+		wg.Go(func() {
+			if owner, err := c.ownerAt(scatterCtx, addr, id, token); err == nil {
+				owners <- owner
+			}
+		})
+	}
+	go func() { wg.Wait(); close(owners) }()
+	if owner, ok := <-owners; ok {
+		return &Sandbox{ID: id, token: token, c: c, owner: owner}, nil
 	}
 	return nil, fmt.Errorf("lookup %s: no owner found", id)
 }

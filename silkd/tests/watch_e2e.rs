@@ -6,19 +6,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
-use silkd::server::{buffer, State};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use silkd::server::State;
+use tokio::io::AsyncWriteExt;
 
 #[tokio::test]
 async fn watch_streams_events_until_disconnect() {
     let dir = tempfile::tempdir().unwrap();
     let state = Arc::new(State::new());
-    let (client, server) = tokio::io::duplex(1 << 20);
-    let st = Arc::clone(&state);
-    let (sr, sw) = tokio::io::split(server);
-    let handle = tokio::spawn(async move { st.serve(buffer(sr), sw).await });
-
-    let (cr, mut cw) = tokio::io::split(client);
+    let (mut cw, mut lines, handle) = common::connect(&state);
     let req = json!({
         "op": "fs_watch",
         "path": dir.path().to_str().unwrap(),
@@ -34,7 +29,6 @@ async fn watch_streams_events_until_disconnect() {
         .await
         .unwrap();
 
-    let mut lines = BufReader::new(cr).lines();
     let event = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
         .await
         .expect("no event within 5s")

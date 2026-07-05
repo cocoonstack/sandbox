@@ -11,25 +11,29 @@ use tokio::process::Command;
 
 use crate::proto::{self, ErrorKind, GitBranchOp, GitFileStatus, Response};
 
-/// Runs `git`, capturing output. Config (an auth token, and quotePath=false so
-/// paths come back raw) rides in `GIT_CONFIG_*` env vars, not `-c` args: the
-/// process environ is root-only, whereas argv is world-readable via
-/// /proc/<pid>/cmdline — a de-escalated exec could otherwise scrape the token.
+/// Builds a `git -C dir` command with config and stdio policy applied. Config
+/// (an auth token, and quotePath=false so paths come back raw) rides in
+/// `GIT_CONFIG_*` env vars, not `-c` args: the process environ is root-only,
+/// whereas argv is world-readable via /proc/<pid>/cmdline — a de-escalated
+/// exec could otherwise scrape the token.
+fn git_cmd(dir: &str, auth: Option<&str>) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(dir);
+    apply_config(&mut cmd, auth);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    cmd
+}
+
+/// Runs `git`, capturing output.
 async fn git(
     dir: &str,
     auth: Option<&str>,
     args: &[&str],
 ) -> std::io::Result<std::process::Output> {
-    let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(dir);
-    apply_config(&mut cmd, auth);
-    cmd.args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .output()
-        .await
+    git_cmd(dir, auth).args(args).output().await
 }
 
 /// Injects git config as GIT_CONFIG_COUNT/KEY_n/VALUE_n env pairs.
@@ -122,17 +126,11 @@ pub async fn commit<W: AsyncWrite + Unpin>(
     // A fresh guest has no committer identity, so git commit would fail to
     // auto-detect one; derive the committer from the author.
     let (name, email) = split_author(&author);
-    let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(&path);
-    apply_config(&mut cmd, None);
+    let mut cmd = git_cmd(&path, None);
     cmd.env("GIT_COMMITTER_NAME", &name)
         .env("GIT_COMMITTER_EMAIL", &email);
     let out = cmd
         .args(["commit", "--author", &author, "-m", &message])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
         .output()
         .await?;
     if !out.status.success() {

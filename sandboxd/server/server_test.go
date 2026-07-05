@@ -241,10 +241,6 @@ func (f *fakeManager) doClaim(ctx context.Context, key types.PoolKey, ttl time.D
 	return f.claim(ctx, key, ttl)
 }
 
-func (f *fakeManager) Claim(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
-	return f.doClaim(ctx, key, ttl)
-}
-
 func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
 	if !f.warmHit {
 		return nil, pool.ErrNoWarm

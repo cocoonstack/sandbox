@@ -2,14 +2,13 @@ package sandbox
 
 import (
 	"bufio"
-	"context"
 	"io"
 	"testing"
 )
 
 func TestPtyEchoAndExit(t *testing.T) {
 	sb := fakeSandbox(t)
-	pty, err := sb.OpenPty(context.Background(), PtyOpts{Cols: 80, Rows: 24})
+	pty, err := sb.OpenPty(t.Context(), PtyOpts{Cols: 80, Rows: 24})
 	if err != nil {
 		t.Fatalf("OpenPty: %v", err)
 	}
@@ -31,7 +30,7 @@ func TestPtyEchoAndExit(t *testing.T) {
 	}
 
 	// Resize is a separate RPC.
-	if err := pty.Resize(context.Background(), 120, 40); err != nil {
+	if err := pty.Resize(t.Context(), 120, 40); err != nil {
 		t.Fatalf("resize: %v", err)
 	}
 

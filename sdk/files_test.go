@@ -1,9 +1,6 @@
 package sandbox
 
 import (
-	"context"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sdk/silkd/silkdtest"
@@ -14,28 +11,12 @@ import (
 func fakeSandbox(t *testing.T) *Sandbox {
 	t.Helper()
 	fake := silkdtest.NewFake(t.TempDir())
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", func(w http.ResponseWriter, _ *http.Request) {
-		conn, _, err := http.NewResponseController(w).Hijack()
-		if err != nil {
-			t.Errorf("hijack: %v", err)
-			return
-		}
-		if _, err := conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n")); err != nil {
-			_ = conn.Close()
-			return
-		}
-		fake.ServeConn(conn)
-	})
-	ts := httptest.NewServer(mux)
-	t.Cleanup(ts.Close)
-	c := testClient(t, ts)
-	return &Sandbox{ID: "sb_1", c: c, token: "tok", owner: c.addr}
+	return testSandbox(t, newAgentServer(t, fake.ServeConn))
 }
 
 func TestFilesRoundTrip(t *testing.T) {
 	sb := fakeSandbox(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if err := sb.Mkdir(ctx, "/work", true); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -80,14 +61,14 @@ func TestFilesRoundTrip(t *testing.T) {
 
 func TestReadMissingFileErrors(t *testing.T) {
 	sb := fakeSandbox(t)
-	if _, err := sb.ReadFile(context.Background(), "/nope"); err == nil {
+	if _, err := sb.ReadFile(t.Context(), "/nope"); err == nil {
 		t.Error("read of missing file succeeded")
 	}
 }
 
 func TestSessionLifecycle(t *testing.T) {
 	sb := fakeSandbox(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	sess, err := sb.NewSession(ctx, WithSessionCwd("/work"))
 	if err != nil {

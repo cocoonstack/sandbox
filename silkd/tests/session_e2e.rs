@@ -6,13 +6,9 @@ mod common;
 
 use std::sync::Arc;
 
-use common::{one, type_of};
+use common::{one, stdout_body, type_of};
 use serde_json::{json, Value};
 use silkd::server::State;
-
-fn body(frames: &[Value]) -> String {
-    String::from_utf8_lossy(&common::payload(frames, "stdout")).into_owned()
-}
 
 async fn create(state: &Arc<State>, extra: Value) -> String {
     let mut req = json!({"op":"session_create"});
@@ -42,7 +38,11 @@ async fn session_persists_env_across_calls() {
     assert_eq!(type_of(set.last().unwrap()), "exit");
 
     let got = sh(&state, &id, &["sh", "-c", "echo $MARKER"]).await;
-    assert_eq!(body(&got).trim(), "silk123", "env did not persist: {got:?}");
+    assert_eq!(
+        stdout_body(&got).trim(),
+        "silk123",
+        "env did not persist: {got:?}"
+    );
 }
 
 #[tokio::test]
@@ -56,7 +56,7 @@ async fn session_applies_cwd_and_env_at_create() {
     .await;
 
     let g = sh(&state, &id, &["sh", "-c", "echo $GREETING"]).await;
-    assert_eq!(body(&g).trim(), "hello-silk");
+    assert_eq!(stdout_body(&g).trim(), "hello-silk");
 
     // cwd applied: a relative touch lands in the session's directory.
     let t = sh(&state, &id, &["touch", "marker"]).await;
@@ -108,7 +108,7 @@ async fn stdin_reading_command_does_not_wedge_the_session() {
     assert_eq!(type_of(r.last().unwrap()), "exit");
     // The session is still usable afterward.
     let after = sh(&state, &id, &["echo", "alive"]).await;
-    assert_eq!(body(&after).trim(), "alive");
+    assert_eq!(stdout_body(&after).trim(), "alive");
 }
 
 #[tokio::test]
@@ -136,12 +136,12 @@ async fn forged_sentinel_in_output_does_not_desync() {
     )
     .await;
     assert!(
-        body(&r).contains("real-output"),
+        stdout_body(&r).contains("real-output"),
         "output truncated by a forged sentinel: {r:?}"
     );
     let next = sh(&state, &id, &["echo", "next-ok"]).await;
     assert_eq!(
-        body(&next).trim(),
+        stdout_body(&next).trim(),
         "next-ok",
         "stream desynced after forged sentinel"
     );
@@ -193,12 +193,12 @@ async fn session_argv_with_metacharacters_is_one_literal_token() {
     let evil = "a b; echo INJECTED $(id) `whoami` 'q'";
     let r = sh(&state, &id, &["printf", "%s", evil]).await;
     assert_eq!(
-        body(&r),
+        stdout_body(&r),
         evil,
         "argv metacharacters were interpreted instead of passed literally: {r:?}"
     );
     assert!(
-        !body(&r).contains("INJECTED\n") && !body(&r).to_lowercase().contains("uid="),
+        !stdout_body(&r).contains("INJECTED\n") && !stdout_body(&r).to_lowercase().contains("uid="),
         "command injection through argv: {r:?}"
     );
 }
@@ -244,7 +244,7 @@ async fn session_merges_stderr_into_stdout() {
 
     let frames = sh(&state, &id, &["sh", "-c", "echo oops >&2"]).await;
     assert_eq!(
-        body(&frames).trim(),
+        stdout_body(&frames).trim(),
         "oops",
         "stderr not merged: {frames:?}"
     );

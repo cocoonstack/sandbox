@@ -80,9 +80,16 @@ pub async fn replace<W: AsyncWrite + Unpin>(
             Ok(body) => body,
             Err(e) => return err_frame(w, &e, "read").await,
         };
-        let count = re.find_iter(&body).count() as u64;
+        // Closure replacer: counts while replacing in one pass; expand keeps
+        // the &str replacer's $n capture-group semantics.
+        let mut count: u64 = 0;
+        let new = re.replace_all(&body, |caps: &regex::Captures| {
+            count += 1;
+            let mut expanded = String::new();
+            caps.expand(&replacement, &mut expanded);
+            expanded
+        });
         if count > 0 {
-            let new = re.replace_all(&body, replacement.as_str());
             if let Err(e) = crate::fs::write_atomic(Path::new(&file), new.as_bytes()).await {
                 return err_frame(w, &e, "write").await;
             }
