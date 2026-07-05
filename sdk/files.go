@@ -218,18 +218,24 @@ func drainData(ctx context.Context, conn *silkd.Conn, sink func([]byte) error) e
 
 // terminalErr reads one frame and requires it to be Done (else the error).
 func terminalErr(ctx context.Context, conn *silkd.Conn) error {
+	_, err := expect[silkd.Done](ctx, conn)
+	return err
+}
+
+// expect reads one frame and requires it to be a *T, mapping an error frame
+// to a Go error.
+func expect[T any](ctx context.Context, conn *silkd.Conn) (*T, error) {
 	resp, err := recv(ctx, conn)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	switch r := resp.(type) {
-	case *silkd.Done:
-		return nil
-	case *silkd.ErrorResp:
-		return r
-	default:
-		return unexpected(resp)
+	if v, ok := any(resp).(*T); ok {
+		return v, nil
 	}
+	if e, ok := resp.(*silkd.ErrorResp); ok {
+		return nil, e
+	}
+	return nil, unexpected(resp)
 }
 
 // recv reads one frame, translating a canceled ctx and an early EOF.

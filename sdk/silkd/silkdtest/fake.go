@@ -221,11 +221,15 @@ func (f *Fake) fsFind(conn net.Conn, req *silkd.FsFind) {
 		errFrame(conn, silkd.KindBadRequest, err.Error())
 		return
 	}
+	var nameRe *regexp.Regexp
+	if req.Glob != "" {
+		nameRe = globRegexp(req.Glob)
+	}
 	walkErr := filepath.WalkDir(f.abs(req.Path), func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		if req.Glob != "" && !strings.Contains(d.Name(), req.Glob) {
+		if nameRe != nil && !nameRe.MatchString(d.Name()) {
 			return nil
 		}
 		body, err := os.ReadFile(path)
@@ -274,13 +278,15 @@ func (f *Fake) fsReplace(conn net.Conn, req *silkd.FsReplace) {
 	send(conn, silkd.Done{})
 }
 
-// fsWatch fakes a watch: one synthetic created event, then it holds the
-// stream open until the client disconnects — the connection-bound contract.
+// fsWatch fakes a watch: ready, one synthetic created event, then it holds
+// the stream open until the client disconnects — the connection-bound
+// contract.
 func (f *Fake) fsWatch(conn net.Conn, r *bufio.Reader, req *silkd.FsWatch) {
 	if _, err := os.Stat(f.abs(req.Path)); err != nil {
 		errFrame(conn, silkd.KindNotFound, err.Error())
 		return
 	}
+	send(conn, silkd.Ready{})
 	send(conn, &silkd.Event{Kind: "created", Path: req.Path + "/silkdtest-event"})
 	_, _ = io.Copy(io.Discard, r)
 }
@@ -322,6 +328,16 @@ func (f *Fake) done(conn net.Conn, err error) {
 // abs keeps a request path inside Root; an absolute request path is rebased.
 func (f *Fake) abs(path string) string {
 	return filepath.Join(f.Root, filepath.Clean("/"+path))
+}
+
+// globRegexp mirrors silkd's glob translation exactly — `*`/`?` wildcards,
+// everything else literal (never `filepath.Match`, whose char classes silkd
+// does not have). The quoted pattern always compiles.
+func globRegexp(glob string) *regexp.Regexp {
+	pat := regexp.QuoteMeta(glob)
+	pat = strings.ReplaceAll(pat, `\*`, ".*")
+	pat = strings.ReplaceAll(pat, `\?`, ".")
+	return regexp.MustCompile("^" + pat + "$")
 }
 
 func errFrame(conn net.Conn, kind, msg string) {

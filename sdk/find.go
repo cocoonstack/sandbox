@@ -7,7 +7,8 @@ import (
 )
 
 // Find returns the lines under path matching pattern (a regular expression);
-// glob, when non-empty, narrows the walk to file names containing it.
+// glob, when non-empty, narrows the walk to file names matching it (`*` and
+// `?` wildcards).
 func (s *Sandbox) Find(ctx context.Context, path, pattern, glob string) ([]silkd.Match, error) {
 	return collectRPC[silkd.Match](ctx, s, &silkd.FsFind{Path: path, Pattern: pattern, Glob: glob})
 }

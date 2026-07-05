@@ -8,13 +8,15 @@ use tokio::sync::mpsc;
 
 use crate::proto::{self, ErrorKind, EventKind, Response};
 
-/// Watches `path` (recursively when set), streaming `event` frames until the
-/// client disconnects or the watcher dies. The blocking notify watcher runs on
-/// its own thread and forwards frames into an async channel; the client half is
-/// polled concurrently so a disconnect ends the watch even when no event is
-/// pending (otherwise an abandoned quiet watch would leak the task and the
-/// notify thread). A watcher error (inotify overflow, watcher death) arrives as
-/// an `error` frame, which is terminal. Dropping the watcher on return stops it.
+/// Watches `path` (recursively when set): a `ready` frame once the watch is
+/// armed (events after it are guaranteed captured), then `event` frames until
+/// the client disconnects or the watcher dies. The blocking notify watcher
+/// runs on its own thread and forwards frames into an async channel; the
+/// client half is polled concurrently so a disconnect ends the watch even
+/// when no event is pending (otherwise an abandoned quiet watch would leak
+/// the task and the notify thread). A watcher error (inotify overflow,
+/// watcher death) arrives as an `error` frame, which is terminal. Dropping
+/// the watcher on return stops it.
 pub async fn watch<R, W>(
     reader: &mut R,
     w: &mut W,
@@ -47,6 +49,7 @@ where
     if let Err(e) = watcher.watch(std::path::Path::new(&path), mode) {
         return proto::write_frame(w, &Response::error(map_kind(&e), e.to_string())).await;
     }
+    proto::write_frame(w, &Response::Ready).await?;
     loop {
         tokio::select! {
             frame = rx.recv() => match frame {

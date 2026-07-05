@@ -23,17 +23,18 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:7777", "sandboxd address")
 	token := flag.String("token", "", "node api token")
 	template := flag.String("template", "rt:24.04", "template ref")
+	egress := flag.Bool("egress", false, "also claim an egress-lane sandbox and check lane detection")
 	flag.Parse()
 
-	if err := run(*addr, *token, *template); err != nil {
+	if err := run(*addr, *token, *template, *egress); err != nil {
 		fmt.Fprintln(os.Stderr, "smoke:", err)
 		os.Exit(1)
 	}
 	fmt.Println("SMOKE PASS")
 }
 
-func run(addr, token, template string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+func run(addr, token, template string, egress bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	var copts []sandbox.ClientOption
@@ -51,10 +52,11 @@ func run(addr, token, template string) error {
 	}
 	defer func() { _ = sb.Close() }()
 
-	steps := []struct {
+	type step struct {
 		name string
 		fn   func(context.Context, *sandbox.Sandbox) error
-	}{
+	}
+	steps := []step{
 		{"exec", smokeExec},
 		{"files", smokeFiles},
 		{"session", smokeSession},
@@ -63,6 +65,11 @@ func run(addr, token, template string) error {
 		{"watch", smokeWatch},
 		{"git", smokeGit},
 		{"pty", smokePty},
+	}
+	if egress {
+		steps = append(steps, step{"egress", func(ctx context.Context, _ *sandbox.Sandbox) error {
+			return smokeEgress(ctx, client, template)
+		}})
 	}
 	for _, s := range steps {
 		start := time.Now()
@@ -129,7 +136,7 @@ func smokeFind(ctx context.Context, sb *sandbox.Sandbox) error {
 	if err := sb.WriteFile(ctx, "/work/notes.txt", []byte("TODO decoy\n"), nil); err != nil {
 		return err
 	}
-	matches, err := sb.Find(ctx, "/work", "TODO", ".rs")
+	matches, err := sb.Find(ctx, "/work", "TODO", "*.rs")
 	if err != nil {
 		return err
 	}
@@ -163,9 +170,6 @@ func smokeWatch(ctx context.Context, sb *sandbox.Sandbox) error {
 		return err
 	}
 	defer func() { _ = w.Close() }()
-	// fs_watch sends no ready frame (Watch returns before the sandbox
-	// confirms), so arming is only observable by its effects — wait it out.
-	time.Sleep(300 * time.Millisecond)
 	if err := sb.WriteFile(ctx, "/work/w.txt", []byte("x"), nil); err != nil {
 		return err
 	}
@@ -251,6 +255,26 @@ func smokeGit(ctx context.Context, sb *sandbox.Sandbox) error {
 	var e *silkd.ErrorResp
 	if err := sb.GitPush(ctx, "/work", ""); !errors.As(err, &e) || e.Kind != silkd.KindUnimplemented {
 		return fmt.Errorf("push on none lane: %v, want unimplemented", err)
+	}
+	return nil
+}
+
+// smokeEgress claims a second sandbox on the egress lane and pins the
+// positive half of silkd's lane detection: git must actually run there, so a
+// push with no remote fails inside git — never with the none-lane
+// unimplemented guard. Needs no reachable network.
+func smokeEgress(ctx context.Context, client *sandbox.Client, template string) error {
+	sb, err := client.New(ctx, template, sandbox.WithNetwork(sandbox.NetEgress))
+	if err != nil {
+		return fmt.Errorf("claim: %w", err)
+	}
+	defer func() { _ = sb.Close() }()
+	if _, err := sb.Exec(ctx, "git", "init", "-q", "-b", "main", "/tmp/r"); err != nil {
+		return err
+	}
+	var e *silkd.ErrorResp
+	if err := sb.GitPush(ctx, "/tmp/r", ""); !errors.As(err, &e) || e.Kind != silkd.KindInternal {
+		return fmt.Errorf("push on egress lane: %v, want internal git failure (lane misdetected?)", err)
 	}
 	return nil
 }

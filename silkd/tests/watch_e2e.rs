@@ -23,8 +23,14 @@ async fn watch_streams_events_until_disconnect() {
     cw.write_all(req.as_bytes()).await.unwrap();
     cw.write_all(b"\n").await.unwrap();
 
-    // The watcher needs a moment to arm before the create fires.
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    // The ready frame guarantees the watch is armed — no arming sleep needed.
+    let ready = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
+        .await
+        .expect("no ready within 5s")
+        .unwrap()
+        .expect("stream closed before ready");
+    let frame: serde_json::Value = serde_json::from_str(&ready).unwrap();
+    assert_eq!(frame["type"], "ready", "got {frame:?}");
     tokio::fs::write(dir.path().join("new.txt"), b"hi")
         .await
         .unwrap();

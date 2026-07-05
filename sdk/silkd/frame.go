@@ -160,7 +160,7 @@ type FsPull struct {
 }
 
 // FsFind streams Match frames for lines under Path matching Pattern; Glob
-// narrows the walk to file names containing it.
+// narrows the walk to file names matching it (`*` and `?` wildcards).
 type FsFind struct {
 	Path    string `json:"path"`
 	Pattern string `json:"pattern"`
@@ -313,6 +313,10 @@ type Exit struct {
 // Done is the terminal frame of verbs with no payload result.
 type Done struct{}
 
+// Ready acknowledges that a watch is armed: events after it are guaranteed
+// captured, so clients need no arming sleep.
+type Ready struct{}
+
 // ErrorResp is the terminal frame of a failed verb; it implements error.
 type ErrorResp struct {
 	Kind    string `json:"kind"`
@@ -433,6 +437,7 @@ func (Stdout) RespType() string          { return "stdout" }
 func (Stderr) RespType() string          { return "stderr" }
 func (Exit) RespType() string            { return "exit" }
 func (Done) RespType() string            { return "done" }
+func (Ready) RespType() string           { return "ready" }
 func (ErrorResp) RespType() string       { return "error" }
 func (InfoResp) RespType() string        { return "info" }
 func (Procs) RespType() string           { return "procs" }
@@ -524,6 +529,7 @@ var responseDecoders = map[string]func([]byte) (Response, error){
 	"stderr":            decodeResp[Stderr],
 	"exit":              decodeResp[Exit],
 	"done":              decodeResp[Done],
+	"ready":             decodeResp[Ready],
 	"error":             decodeResp[ErrorResp],
 	"info":              decodeResp[InfoResp],
 	"procs":             decodeResp[Procs],

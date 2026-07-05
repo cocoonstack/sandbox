@@ -21,7 +21,7 @@ func TestFindStreamsMatches(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	matches, err := sb.Find(ctx, "/work", "TODO", ".rs")
+	matches, err := sb.Find(ctx, "/work", "TODO", "*.rs")
 	if err != nil {
 		t.Fatalf("Find: %v", err)
 	}

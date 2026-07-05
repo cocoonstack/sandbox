@@ -21,14 +21,18 @@ type Watcher struct {
 }
 
 // Watch streams filesystem events under path (recursively when set). It
-// returns before the sandbox confirms the watch: a bad path surfaces as the
-// event channel closing with Err set, not as an error here.
+// returns once the sandbox acknowledges the watch is armed, so events caused
+// after Watch returns are guaranteed captured.
 func (s *Sandbox) Watch(ctx context.Context, path string, recursive bool) (*Watcher, error) {
 	conn, done, err := s.dial(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err := conn.Send(&silkd.FsWatch{Path: path, Recursive: recursive}); err != nil {
+	if err = conn.Send(&silkd.FsWatch{Path: path, Recursive: recursive}); err != nil {
+		done()
+		return nil, err
+	}
+	if _, err = expect[silkd.Ready](ctx, conn); err != nil {
 		done()
 		return nil, err
 	}

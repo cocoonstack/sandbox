@@ -15,8 +15,8 @@ use crate::proto::{self, err_frame, ErrorKind, Response};
 const FIND_MAX_FILE: u64 = 8 * 1024 * 1024;
 
 /// Streams `match` frames for every line under `path` matching `pattern`,
-/// terminated by `done`. `glob` (a substring of the file name) narrows the
-/// walk; an invalid pattern is a bad-request error.
+/// terminated by `done`. `glob` narrows the walk to file names matching it
+/// (`*` and `?` wildcards); an invalid pattern is a bad-request error.
 pub async fn find<W: AsyncWrite + Unpin>(
     w: &mut W,
     path: String,
@@ -26,6 +26,14 @@ pub async fn find<W: AsyncWrite + Unpin>(
     let re = match Regex::new(&pattern) {
         Ok(re) => re,
         Err(e) => {
+            return proto::write_frame(w, &Response::error(ErrorKind::BadRequest, e.to_string()))
+                .await
+        }
+    };
+    let name_re = match glob.as_deref().filter(|g| !g.is_empty()).map(glob_regex) {
+        None => None,
+        Some(Ok(re)) => Some(re),
+        Some(Err(e)) => {
             return proto::write_frame(w, &Response::error(ErrorKind::BadRequest, e.to_string()))
                 .await
         }
@@ -48,7 +56,7 @@ pub async fn find<W: AsyncWrite + Unpin>(
             let p = ent.path();
             if ft.is_dir() {
                 stack.push(p.to_string_lossy().into_owned());
-            } else if ft.is_file() && name_matches(&p, glob.as_deref()) {
+            } else if ft.is_file() && name_matches(&p, name_re.as_ref()) {
                 scan_file(w, &re, &p).await?;
             }
         }
@@ -134,9 +142,17 @@ async fn scan_file<W: AsyncWrite + Unpin>(
     Ok(())
 }
 
-fn name_matches(path: &Path, glob: Option<&str>) -> bool {
-    let Some(glob) = glob else { return true };
+fn name_matches(path: &Path, name_re: Option<&Regex>) -> bool {
+    let Some(re) = name_re else { return true };
     path.file_name()
-        .map(|n| n.to_string_lossy().contains(glob))
+        .map(|n| re.is_match(&n.to_string_lossy()))
         .unwrap_or(false)
+}
+
+/// Compiles a `*`/`?` glob into an anchored regex over the whole file name;
+/// every other character matches literally. escape() turns the wildcards
+/// into exactly `\*`/`\?`, which the replaces then rewrite.
+fn glob_regex(glob: &str) -> Result<Regex, regex::Error> {
+    let pat = regex::escape(glob).replace(r"\*", ".*").replace(r"\?", ".");
+    Regex::new(&format!("^{pat}$"))
 }

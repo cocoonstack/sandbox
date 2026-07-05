@@ -202,6 +202,9 @@ pub enum Response {
         code: i32,
     },
     Done,
+    /// Acknowledges that a watch is armed: events after it are guaranteed
+    /// captured, so clients need no arming sleep.
+    Ready,
     Error {
         kind: ErrorKind,
         message: String,

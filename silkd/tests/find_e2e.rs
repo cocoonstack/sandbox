@@ -21,19 +21,57 @@ async fn find_streams_line_matches() {
         "op": "fs_find",
         "path": dir.path().to_str().unwrap(),
         "pattern": "TODO",
-        "glob": ".rs"
+        "glob": "*.rs"
     })
     .to_string()])
     .await;
 
     let matches: Vec<_> = frames.iter().filter(|f| type_of(f) == "match").collect();
-    assert_eq!(matches.len(), 2, "recursive .rs matches only: {frames:?}");
+    assert_eq!(matches.len(), 2, "recursive *.rs matches only: {frames:?}");
     assert!(matches
         .iter()
         .all(|m| m["content"].as_str().unwrap().contains("TODO")));
     assert!(matches.iter().any(|m| m["line"] == 2)); // a.rs
     assert!(matches.iter().any(|m| m["line"] == 1)); // sub/c.rs
     assert_eq!(type_of(frames.last().unwrap()), "done");
+}
+
+#[tokio::test]
+async fn find_glob_is_a_real_glob_not_a_substring() {
+    let dir = tempfile::tempdir().unwrap();
+    write_file(dir.path(), "a.rs", "TODO\n").await;
+    write_file(dir.path(), "a.rs.bak", "TODO\n").await;
+
+    // Anchored: "*.rs" must not match the .bak; "?" is a single character.
+    let frames = exchange(&[json!({
+        "op": "fs_find",
+        "path": dir.path().to_str().unwrap(),
+        "pattern": "TODO",
+        "glob": "*.rs"
+    })
+    .to_string()])
+    .await;
+    let files: Vec<_> = frames
+        .iter()
+        .filter(|f| type_of(f) == "match")
+        .map(|m| m["file"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert!(files[0].ends_with("a.rs"));
+
+    let frames = exchange(&[json!({
+        "op": "fs_find",
+        "path": dir.path().to_str().unwrap(),
+        "pattern": "TODO",
+        "glob": "?.rs"
+    })
+    .to_string()])
+    .await;
+    assert_eq!(
+        frames.iter().filter(|f| type_of(f) == "match").count(),
+        1,
+        "{frames:?}"
+    );
 }
 
 #[tokio::test]

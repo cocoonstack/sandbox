@@ -56,24 +56,36 @@ else
   (cd "$REPO/e2e" && GOWORK=off go build -o "$DATA/smoke" ./cmd/smoke)
 fi
 
-echo "== start (pool: $TEMPLATE none/small warm=$WARM)"
+# BRIDGE (optional) attaches the node to an egress bridge, adds a small
+# egress pool, and turns on the smoke's egress-lane check; lane detection
+# needs a NIC, not connectivity, so a plain `ip link add ... type bridge`
+# with no uplink is enough.
+BRIDGE_LINE=""
+EGRESS_POOL=""
+if [[ -n ${BRIDGE:-} ]]; then
+  BRIDGE_LINE="\"bridge\": \"$BRIDGE\","
+  EGRESS_POOL=", {\"template\": \"$TEMPLATE\", \"net\": \"egress\", \"size\": \"small\", \"warm\": 1}"
+fi
+
+echo "== start (pool: $TEMPLATE none/small warm=$WARM${BRIDGE:+, egress via $BRIDGE})"
 cat >"$DATA/config.json" <<EOF
 {
   "listen": "$ADDR",
   "data_dir": "$DATA/state",
   "api_token": "$TOKEN",
-  "pools": [{"template": "$TEMPLATE", "net": "none", "size": "small", "warm": $WARM}]
+  $BRIDGE_LINE
+  "pools": [{"template": "$TEMPLATE", "net": "none", "size": "small", "warm": $WARM}$EGRESS_POOL]
 }
 EOF
 start_daemon
 
-echo "== wait for golden + warm pool (cold boot + snapshot export + refill)"
+echo "== wait for goldens + warm pools (cold boot + snapshot export + refill)"
 for i in $(seq 1 120); do
-  if api info | jq -e --argjson w "$WARM" \
-    '.pools[0].golden and .pools[0].warm >= $w' >/dev/null 2>&1; then
+  if api info | jq -e \
+    '(.pools | length) > 0 and all(.pools[]; .golden and .warm >= .target)' >/dev/null 2>&1; then
     break
   fi
-  [[ $i == 120 ]] && { echo "pool never became ready"; api info | jq . || true; exit 1; }
+  [[ $i == 120 ]] && { echo "pools never became ready"; api info | jq . || true; exit 1; }
   sleep 1
 done
 api info | jq .
@@ -82,7 +94,7 @@ echo "== claim/exec/release x3 (expect: warm-hit ms-scale, then clone-tier)"
 "$DATA/demo" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -n 3
 
 echo "== v2 smoke: files/session/find/replace/watch/git/pty through the relay"
-"$DATA/smoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE"
+"$DATA/smoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" ${BRIDGE:+-egress}
 
 echo "== reap: leaked 5s-ttl claim is destroyed by the owner"
 "$DATA/demo" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -n 1 -ttl 5 -leak

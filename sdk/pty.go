@@ -45,18 +45,10 @@ func (s *Sandbox) OpenPty(ctx context.Context, opts PtyOpts) (*Pty, error) {
 		done()
 		return nil, err
 	}
-	resp, err := recv(ctx, conn)
+	started, err := expect[silkd.Started](ctx, conn)
 	if err != nil {
 		done()
 		return nil, err
-	}
-	started, ok := resp.(*silkd.Started)
-	if !ok {
-		done()
-		if e, isErr := resp.(*silkd.ErrorResp); isErr {
-			return nil, e
-		}
-		return nil, unexpected(resp)
 	}
 
 	pr, pw := io.Pipe()

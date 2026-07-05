@@ -37,19 +37,11 @@ func TestWatchDeliversEventsUntilClose(t *testing.T) {
 	}
 }
 
-func TestWatchMissingPathSurfacesError(t *testing.T) {
+func TestWatchMissingPathFailsSynchronously(t *testing.T) {
 	sb := fakeSandbox(t)
-	w, err := sb.Watch(t.Context(), "/nope", false)
-	if err != nil {
-		t.Fatalf("Watch: %v", err)
-	}
-	defer func() { _ = w.Close() }()
-
-	if ev, ok := <-w.Events(); ok {
-		t.Fatalf("got event %+v from a missing path", ev)
-	}
+	_, err := sb.Watch(t.Context(), "/nope", false)
 	var e *silkd.ErrorResp
-	if !errors.As(w.Err(), &e) || e.Kind != silkd.KindNotFound {
-		t.Errorf("Err = %v, want not_found error frame", w.Err())
+	if !errors.As(err, &e) || e.Kind != silkd.KindNotFound {
+		t.Errorf("Watch = %v, want synchronous not_found (no ready frame)", err)
 	}
 }
