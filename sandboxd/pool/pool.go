@@ -33,9 +33,10 @@ const (
 	defaultTTL           = 5 * time.Minute
 	maxTTL               = 24 * time.Hour
 
-	vmPrefix       = "sbx-"
-	goldenPrefix   = "sbx-golden-"
-	vmStateRunning = "running"
+	vmPrefix        = "sbx-"
+	goldenPrefix    = "sbx-golden-"
+	hibernatePrefix = "sbx-hib-"
+	vmStateRunning  = "running"
 )
 
 var (
@@ -53,6 +54,8 @@ type Engine interface {
 	SnapshotSave(ctx context.Context, vmName, snapName string) error
 	SnapshotExport(ctx context.Context, snapName, toDir string) error
 	SnapshotRemove(ctx context.Context, snapName string) error
+	Hibernate(ctx context.Context, vmName, snapName string) error
+	Restore(ctx context.Context, vmName, snapRef string) error
 	List(ctx context.Context, filters ...string) ([]types.VMRecord, error)
 	Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error
 }
@@ -210,16 +213,20 @@ func (m *Manager) Release(ctx context.Context, id, token string) error {
 		return ErrUnknownSandbox
 	}
 	delete(m.claimed, id)
+	snap := sb.HibernateSnap
 	saveErr := m.store.save(m.claimed)
 	m.mu.Unlock()
 	if saveErr != nil {
 		log.WithFunc("pool.Release").Errorf(ctx, saveErr, "persist release of %s", id)
 	}
 	// The claim is already dropped; removal must survive the caller hanging up.
-	return m.eng.Remove(context.WithoutCancel(ctx), sb.VMName)
+	err := m.eng.Remove(context.WithoutCancel(ctx), sb.VMName)
+	m.dropSnap(ctx, snap)
+	return err
 }
 
-// AgentSocket resolves a claimed sandbox's vsock UDS for the data-plane relay.
+// AgentSocket resolves a claimed sandbox's vsock UDS without waking it (the
+// ownership probe must not restore a hibernated VM).
 func (m *Manager) AgentSocket(id, token string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -230,9 +237,77 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 	return sb.VsockSocket, nil
 }
 
+// Hibernate atomically snapshots a claimed sandbox and stops its VM, freeing
+// memory; the next agent access wakes it. Idempotent on an already-hibernated
+// sandbox. When to hibernate is the caller's policy — the node only provides
+// the transition.
+func (m *Manager) Hibernate(ctx context.Context, id, token string) error {
+	sb, ok := m.claim(id, token)
+	if !ok {
+		return ErrUnknownSandbox
+	}
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	if sb.HibernateSnap != "" {
+		return nil
+	}
+	// A started transition must finish even if the caller hangs up (the
+	// engine bounds every step), or the record would disagree with the VM.
+	ctx = context.WithoutCancel(ctx)
+	snap := hibernatePrefix + strings.TrimPrefix(sb.VMName, vmPrefix)
+	if err := m.eng.Hibernate(ctx, sb.VMName, snap); err != nil {
+		return err
+	}
+	if !m.commitTransition(ctx, sb, snap, sb.VsockSocket) {
+		// Released mid-transition: the VM is gone, drop our snapshot.
+		m.dropSnap(ctx, snap)
+		return ErrUnknownSandbox
+	}
+	return nil
+}
+
+// WakeAgentSocket resolves the sandbox's vsock UDS for the relay, first
+// restoring the VM if it is hibernated; concurrent wakes queue on the
+// transition lock and find the fast path.
+func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string, error) {
+	sb, ok := m.claim(id, token)
+	if !ok {
+		return "", ErrUnknownSandbox
+	}
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	if sb.HibernateSnap == "" {
+		return sb.VsockSocket, nil
+	}
+	// See Hibernate: a half-restored VM is worse than a wasted wake.
+	ctx = context.WithoutCancel(ctx)
+	snap := sb.HibernateSnap
+	if err := m.eng.Restore(ctx, sb.VMName, snap); err != nil {
+		return "", fmt.Errorf("wake %s: %w", id, err)
+	}
+	sock, err := m.vsockOf(ctx, sb.VMName)
+	if err == nil {
+		err = m.eng.Probe(ctx, sock, claimProbeTimeout)
+	}
+	if err != nil {
+		return "", fmt.Errorf("wake %s: %w", id, err)
+	}
+	if !m.commitTransition(ctx, sb, "", sock) {
+		// Released mid-transition: destroy the VM we just resurrected.
+		m.destroy(ctx, sb.VMName)
+		m.dropSnap(ctx, snap)
+		return "", ErrUnknownSandbox
+	}
+	// The memory image is consumed by the resume; drop it to free disk.
+	m.dropSnap(ctx, snap)
+	return sock, nil
+}
+
 // Reconcile aligns state after a daemon restart: re-adopt persisted claims
-// whose VMs are still running, drop the rest, and remove any sbx-prefixed VM
-// nobody owns (stale pool VMs and golden builders from a previous life).
+// whose VMs are still running (or hibernated), drop the rest, and remove any
+// sbx-prefixed VM nobody owns (stale pool VMs and golden builders from a
+// previous life). It must run once at startup, before the server: it swaps
+// in fresh records, which would bypass in-flight Transition locks.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	claims, err := m.store.load()
 	if err != nil {
@@ -250,11 +325,17 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	owned := map[string]bool{}
 	m.mu.Lock()
 	for id, sb := range claims {
-		if rec, ok := live[sb.VMName]; ok && rec.State == vmStateRunning {
+		rec, ok := live[sb.VMName]
+		switch {
+		case ok && rec.State == vmStateRunning:
 			sb.VsockSocket = rec.VsockSocket
-			m.claimed[id] = sb
-			owned[sb.VMName] = true
+		case ok && sb.HibernateSnap != "":
+			// Hibernated: the VM is stopped by design and wakes on demand.
+		default:
+			continue
 		}
+		m.claimed[id] = sb
+		owned[sb.VMName] = true
 	}
 	saveErr := m.store.save(m.claimed)
 	for _, p := range m.pools {
@@ -295,8 +376,9 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
-// Info reports pool states (sorted for stable output) and the claim count.
-func (m *Manager) Info() ([]PoolInfo, int) {
+// Info reports pool states (sorted for stable output), the claim count, and
+// how many claims are hibernated.
+func (m *Manager) Info() ([]PoolInfo, int, int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	infos := make([]PoolInfo, 0, len(m.pools))
@@ -310,7 +392,13 @@ func (m *Manager) Info() ([]PoolInfo, int) {
 		})
 	}
 	slices.SortFunc(infos, func(a, b PoolInfo) int { return strings.Compare(a.Key.Hash(), b.Key.Hash()) })
-	return infos, len(m.claimed)
+	hibernated := 0
+	for _, sb := range m.claimed {
+		if sb.HibernateSnap != "" {
+			hibernated++
+		}
+	}
+	return infos, len(m.claimed), hibernated
 }
 
 func (m *Manager) refillOnce(ctx context.Context) {
@@ -410,11 +498,14 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 
 func (m *Manager) reapOnce(ctx context.Context) {
 	now := time.Now()
+	type victim struct {
+		id, vmName, snap string
+	}
 	m.mu.Lock()
-	var expired []*types.Sandbox
+	var expired []victim
 	for id, sb := range m.claimed {
 		if now.After(sb.Deadline) {
-			expired = append(expired, sb)
+			expired = append(expired, victim{id: id, vmName: sb.VMName, snap: sb.HibernateSnap})
 			delete(m.claimed, id)
 		}
 	}
@@ -428,9 +519,10 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	if saveErr != nil {
 		logger.Errorf(ctx, saveErr, "persist reap")
 	}
-	for _, sb := range expired {
-		m.destroy(ctx, sb.VMName)
-		logger.Infof(ctx, "reaped expired sandbox %s (%s)", sb.ID, sb.VMName)
+	for _, v := range expired {
+		m.destroy(ctx, v.vmName)
+		m.dropSnap(ctx, v.snap)
+		logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
 	}
 }
 
@@ -487,6 +579,45 @@ func (m *Manager) destroy(ctx context.Context, name string) {
 	if err := m.eng.Remove(ctx, name); err != nil {
 		log.WithFunc("pool.destroy").Errorf(ctx, err, "remove vm %s", name)
 	}
+}
+
+// dropSnap deletes a no-longer-needed memory snapshot; empty is a no-op.
+func (m *Manager) dropSnap(ctx context.Context, snap string) {
+	if snap == "" {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	if err := m.eng.SnapshotRemove(ctx, snap); err != nil {
+		log.WithFunc("pool.dropSnap").Warnf(ctx, "drop snapshot %s: %v", snap, err)
+	}
+}
+
+// claim authenticates a sandbox id/token pair and returns its record.
+func (m *Manager) claim(id, token string) (*types.Sandbox, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.authed(id, token)
+}
+
+// commitTransition publishes a hibernate/wake result and persists the
+// journal, but only if the claim is still live — Release and reap do not
+// take the transition lock, so a sandbox can be destroyed mid-transition
+// and publishing then would resurrect state nobody owns. Returns liveness;
+// a failed journal write only warns (the live state is authoritative).
+func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap, sock string) bool {
+	m.mu.Lock()
+	live := m.claimed[sb.ID] == sb
+	var saveErr error
+	if live {
+		sb.HibernateSnap = snap
+		sb.VsockSocket = sock
+		saveErr = m.store.save(m.claimed)
+	}
+	m.mu.Unlock()
+	if saveErr != nil {
+		log.WithFunc("pool.commitTransition").Warnf(ctx, "persist claims: %v", saveErr)
+	}
+	return live
 }
 
 // authed looks up a claim by id and token; callers hold m.mu.

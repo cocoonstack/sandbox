@@ -42,7 +42,16 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "missing bearer token")
 		return
 	}
-	sock, err := s.mgr.AgentSocket(r.PathValue("id"), token)
+	// The cheap header check runs first: waking is expensive and consumes
+	// the hibernate snapshot, so a non-upgrade GET must not trigger it.
+	if !strings.EqualFold(r.Header.Get("Upgrade"), upgradeProto) {
+		w.Header().Set("Upgrade", upgradeProto)
+		writeErr(w, http.StatusUpgradeRequired, "upgrade to "+upgradeProto+" required")
+		return
+	}
+	// WakeAgentSocket restores a hibernated VM first, so the relay is the
+	// transparent wake path: the client's next call just works.
+	sock, err := s.mgr.WakeAgentSocket(r.Context(), r.PathValue("id"), token)
 	switch {
 	case errors.Is(err, pool.ErrUnknownSandbox):
 		writeErr(w, http.StatusNotFound, "unknown sandbox")
@@ -50,11 +59,6 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		logger.Errorf(r.Context(), err, "agent socket for %s", r.PathValue("id"))
 		writeErr(w, http.StatusInternalServerError, "sandbox lookup failed")
-		return
-	}
-	if !strings.EqualFold(r.Header.Get("Upgrade"), upgradeProto) {
-		w.Header().Set("Upgrade", upgradeProto)
-		writeErr(w, http.StatusUpgradeRequired, "upgrade to "+upgradeProto+" required")
 		return
 	}
 	guest, err := s.dialer.DialSilkd(r.Context(), sock)

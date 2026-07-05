@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -100,6 +101,13 @@ type Sandbox struct {
 	Deadline time.Time `json:"deadline,omitzero"`
 
 	VsockSocket string `json:"vsock_socket,omitempty"`
+	// HibernateSnap names the memory snapshot while the VM is hibernated;
+	// empty means running.
+	HibernateSnap string `json:"hibernate_snap,omitempty"`
+
+	// Transition serializes hibernate/wake so concurrent wakes collapse onto
+	// one restore. Lock it before (never under) the manager mutex.
+	Transition sync.Mutex `json:"-"`
 }
 
 // VMRecord is the subset of cocoon's `vm list --format json` output the

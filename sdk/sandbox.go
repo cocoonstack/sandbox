@@ -139,18 +139,28 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	}
 }
 
+// Hibernate atomically snapshots the sandbox and stops its VM, freeing its
+// memory; the next call that reaches the guest wakes it transparently with
+// sessions, processes, and memory state intact. The TTL keeps running — a
+// hibernated sandbox is still reaped at its deadline.
+func (s *Sandbox) Hibernate(ctx context.Context) error {
+	resp, err := s.post(ctx, "hibernate")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		return apiError("hibernate", resp)
+	}
+	return nil
+}
+
 // Close releases the sandbox on its node; releasing one already gone is not
 // an error. It takes no ctx so it stays defer-friendly — bounded internally.
 func (s *Sandbox) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
 	defer cancel()
-	// Release is owner-scoped: the owning node holds the claim.
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+s.owner+"/v1/sandboxes/"+s.ID+"/release", nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+s.token)
-	resp, err := s.c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
+	resp, err := s.post(ctx, "release")
 	if err != nil {
 		return err
 	}
@@ -159,6 +169,16 @@ func (s *Sandbox) Close() error {
 		return nil
 	}
 	return apiError("release", resp)
+}
+
+// post sends a sandbox-scoped verb to the owning node (which holds the claim).
+func (s *Sandbox) post(ctx context.Context, verb string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+s.owner+"/v1/sandboxes/"+s.ID+"/"+verb, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.token)
+	return s.c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
 }
 
 // pumpStdin chunks the reader into stdin frames; Send's own locking keeps

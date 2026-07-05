@@ -107,7 +107,7 @@ func TestClaimProbeFailureDestroysVM(t *testing.T) {
 	if len(eng.removes) != 1 {
 		t.Errorf("removes=%v, want the failed VM destroyed", eng.removes)
 	}
-	if _, n := m.Info(); n != 0 {
+	if _, n, _ := m.Info(); n != 0 {
 		t.Errorf("claimed=%d, want 0", n)
 	}
 }
@@ -217,7 +217,7 @@ func TestReapDestroysExpiredClaims(t *testing.T) {
 	if !slices.Contains(eng.removes, sb.VMName) {
 		t.Errorf("removes=%v, want expired VM reaped", eng.removes)
 	}
-	if _, n := m.Info(); n != 0 {
+	if _, n, _ := m.Info(); n != 0 {
 		t.Errorf("claimed=%d, want 0", n)
 	}
 	if got, _ := newStore(m.dataDir).load(); len(got) != 0 {
@@ -275,7 +275,7 @@ func TestRefillTopsUpToTarget(t *testing.T) {
 
 	m.refillOnce(t.Context())
 	waitFor(t, func() bool {
-		infos, _ := m.Info()
+		infos, _, _ := m.Info()
 		return infos[0].Warm == 2 && infos[0].Refilling == 0
 	})
 	if n := eng.cloneCount(); n != 2 {
@@ -298,12 +298,12 @@ func TestRefillRespectsSemaphore(t *testing.T) {
 
 	close(eng.probeStall)
 	waitFor(t, func() bool {
-		infos, _ := m.Info()
+		infos, _, _ := m.Info()
 		return infos[0].Warm+infos[0].Refilling >= maxConcurrentRefills && infos[0].Refilling == 0
 	})
 	m.refillOnce(t.Context())
 	waitFor(t, func() bool {
-		infos, _ := m.Info()
+		infos, _, _ := m.Info()
 		return infos[0].Warm == 6
 	})
 }
@@ -314,7 +314,7 @@ func TestGoldenBuildPipeline(t *testing.T) {
 
 	m.refillOnce(t.Context())
 	waitFor(t, func() bool {
-		infos, _ := m.Info()
+		infos, _, _ := m.Info()
 		return infos[0].Golden
 	})
 	m.mu.Lock()
@@ -330,7 +330,7 @@ func TestGoldenBuildPipeline(t *testing.T) {
 
 	m.refillOnce(t.Context())
 	waitFor(t, func() bool {
-		infos, _ := m.Info()
+		infos, _, _ := m.Info()
 		return infos[0].Warm == 1
 	})
 }
@@ -392,12 +392,17 @@ type fakeEngine struct {
 	removes       []string
 	probeTimeouts []time.Duration
 
-	cloneErr, runColdErr, probeErr error
-	probeStall                     chan struct{} // non-nil: Probe blocks until closed
+	hibernates, restores, snapRemoves []string
+	stopped                           map[string]bool
+
+	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr error
+
+	probeStall     chan struct{} // non-nil: Probe blocks until closed
+	hibernateStall chan struct{} // non-nil: Hibernate blocks until closed
 }
 
 func newFakeEngine() *fakeEngine {
-	return &fakeEngine{vms: map[string]string{}}
+	return &fakeEngine{vms: map[string]string{}, stopped: map[string]bool{}}
 }
 
 func (f *fakeEngine) Clone(_ context.Context, _, name string, _ types.PoolKey) error {
@@ -440,7 +445,41 @@ func (f *fakeEngine) SnapshotExport(_ context.Context, _, toDir string) error {
 	return os.MkdirAll(toDir, 0o750)
 }
 
-func (f *fakeEngine) SnapshotRemove(_ context.Context, _ string) error { return nil }
+func (f *fakeEngine) SnapshotRemove(_ context.Context, snapName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.snapRemoves = append(f.snapRemoves, snapName)
+	return nil
+}
+
+func (f *fakeEngine) Hibernate(_ context.Context, name, snapName string) error {
+	f.mu.Lock()
+	f.hibernates = append(f.hibernates, snapName)
+	stall := f.hibernateStall
+	err := f.hibernateErr
+	f.mu.Unlock()
+	if stall != nil {
+		<-stall
+	}
+	if err != nil {
+		return err
+	}
+	f.mu.Lock()
+	f.stopped[name] = true
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakeEngine) Restore(_ context.Context, name, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.restores = append(f.restores, name)
+	if f.restoreErr != nil {
+		return f.restoreErr
+	}
+	f.stopped[name] = false
+	return nil
+}
 
 func (f *fakeEngine) List(_ context.Context, filters ...string) ([]types.VMRecord, error) {
 	f.mu.Lock()
@@ -450,7 +489,11 @@ func (f *fakeEngine) List(_ context.Context, filters ...string) ([]types.VMRecor
 		if len(filters) > 0 && !slices.Contains(filters, name) {
 			continue
 		}
-		vms = append(vms, types.VMRecord{State: vmStateRunning, VsockSocket: sock, Config: types.VMConfig{Name: name}})
+		state := vmStateRunning
+		if f.stopped[name] {
+			state = "stopped"
+		}
+		vms = append(vms, types.VMRecord{State: state, VsockSocket: sock, Config: types.VMConfig{Name: name}})
 	}
 	return vms, nil
 }

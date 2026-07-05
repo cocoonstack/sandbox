@@ -43,7 +43,7 @@ func TestEndToEnd(t *testing.T) {
 		// Warm-hit = zero VM ops is proven by the pool unit tests; asserting
 		// create counts here would race the background refill ticker.
 		waitFor(t, func() bool {
-			infos, _ := stack.mgr.Info()
+			infos, _, _ := stack.mgr.Info()
 			return len(infos) == 1 && infos[0].Warm >= 1
 		})
 		warm, err := stack.client.New(t.Context(), "rt:24.04")

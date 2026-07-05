@@ -144,27 +144,6 @@ func (c *Client) ownerAt(ctx context.Context, addr, id, token string) (string, e
 	return owner, nil
 }
 
-// peers fetches the cluster's other node addresses from the entry node.
-func (c *Client) peers(ctx context.Context) []string {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+c.addr+"/v1/info", nil)
-	if err != nil {
-		return nil
-	}
-	if c.apiToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiToken)
-	}
-	resp, err := c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
-	if err != nil {
-		return nil
-	}
-	defer func() { _ = resp.Body.Close() }()
-	var body struct {
-		Peers []string `json:"peers"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&body)
-	return body.Peers
-}
-
 // handleFrom builds a sandbox handle, defaulting the data-plane owner to the
 // node that answered when a single-node deployment omits owner_addr.
 func (c *Client) handleFrom(dialed string, cr claimResponse) *Sandbox {

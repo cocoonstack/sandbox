@@ -59,6 +59,28 @@ a cold key can take the full boot. `Sandbox.ID` and `Sandbox.Deadline` are
 exported; `Close()` releases the sandbox (releasing one already gone is not
 an error, and `Close` is bounded internally so it stays defer-friendly).
 
+## Hibernating
+
+```go
+err := sb.Hibernate(ctx)   // snapshot + stop atomically; memory freed
+// ... any later call wakes it transparently:
+out, err := sb.Exec(ctx, "cat", "/tmp/state")   // sessions & memory intact
+```
+
+`Hibernate` snapshots the VM and stops it in one atomic step — nothing the
+guest does can fall between the snapshot point and the stop. The handle
+stays valid: the first call that reaches the guest restores the VM (adding
+roughly a restore's latency, tens of milliseconds on bare metal). The TTL
+keeps running — a hibernated sandbox is still reaped at its deadline, so
+claim with a `WithTimeout` that covers the idle period. When to hibernate
+is your policy; the node only provides the transition.
+
+## Node info
+
+```go
+info, err := client.Info(ctx)   // *NodeInfo: Pools, Claimed, Hibernated, Peers
+```
+
 ## Running commands
 
 ```go

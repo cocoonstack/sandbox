@@ -70,6 +70,7 @@ curl -s -H "Authorization: Bearer $TOKEN" http://node-a:7777/v1/info | jq .
      "warm": 4, "refilling": 0, "target": 4, "golden": true}
   ],
   "claimed": 2,
+  "hibernated": 0,
   "peers": ["10.0.0.6:7777"]
 }
 ```

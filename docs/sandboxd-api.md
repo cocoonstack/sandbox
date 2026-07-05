@@ -45,6 +45,17 @@ Auth: the sandbox's own token. Destroys the VM. 204 on success, 404 for an
 unknown id or wrong token. Releasing an already-gone sandbox is 404 — the
 SDK treats it as success.
 
+## POST /v1/sandboxes/{id}/hibernate
+
+Auth: the sandbox's own token. Atomically snapshots the VM and stops it,
+freeing its memory; the next agent access restores it transparently
+(sessions, processes, and memory state intact — cocoon's hibernate keeps the
+snapshot point and the stop coincident). Idempotent on an already-hibernated
+sandbox. The TTL keeps running: a hibernated sandbox is still reaped (VM and
+snapshot) at its deadline. When to hibernate is the caller's policy — the
+node only provides the transition. 204 on success, 404 unknown id or wrong
+token.
+
 ## GET /v1/sandboxes/{id}/agent
 
 Auth: the sandbox's own token. Requires `Upgrade: silkd` +
@@ -67,8 +78,12 @@ Auth: api token. Node pools, claim count, and mesh peers:
 {"pools": [{"key": {"template": "base:24.04", "net": "none", "size": "small"},
             "warm": 4, "refilling": 0, "target": 4, "golden": true}],
  "claimed": 2,
+ "hibernated": 1,
  "peers": ["10.0.0.6:7777"]}
 ```
+
+`hibernated` counts claims whose VM is currently hibernated (included in
+`claimed`).
 
 `golden` reports whether the pool's snapshot exists (refill can clone);
 `warm` at `target` with `golden: true` means warm claims are served in

@@ -228,10 +228,11 @@ func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *h
 // a miss unless warmHit is set, so the server's warm→redirect→provision path
 // is exercised; the claim hook stands in for the provision result.
 type fakeManager struct {
-	claim   func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
-	warmHit bool
-	release func(id, token string) error
-	socket  func(id, token string) (string, error)
+	claim     func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
+	warmHit   bool
+	release   func(id, token string) error
+	socket    func(id, token string) (string, error)
+	hibernate func(id, token string) error
 }
 
 func (f *fakeManager) doClaim(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
@@ -266,8 +267,19 @@ func (f *fakeManager) AgentSocket(id, token string) (string, error) {
 	return f.socket(id, token)
 }
 
-func (f *fakeManager) Info() ([]pool.PoolInfo, int) {
-	return []pool.PoolInfo{}, 0
+func (f *fakeManager) WakeAgentSocket(_ context.Context, id, token string) (string, error) {
+	return f.AgentSocket(id, token)
+}
+
+func (f *fakeManager) Hibernate(_ context.Context, id, token string) error {
+	if f.hibernate == nil {
+		return nil
+	}
+	return f.hibernate(id, token)
+}
+
+func (f *fakeManager) Info() ([]pool.PoolInfo, int, int) {
+	return []pool.PoolInfo{}, 0, 0
 }
 
 type fakeDialer struct {

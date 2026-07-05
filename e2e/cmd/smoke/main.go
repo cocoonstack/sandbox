@@ -65,6 +65,9 @@ func run(addr, token, template string, egress bool) error {
 		{"watch", smokeWatch},
 		{"git", smokeGit},
 		{"pty", smokePty},
+		{"hibernate", func(ctx context.Context, sb *sandbox.Sandbox) error {
+			return smokeHibernate(ctx, client, sb)
+		}},
 	}
 	if egress {
 		steps = append(steps, step{"egress", func(ctx context.Context, _ *sandbox.Sandbox) error {
@@ -275,6 +278,45 @@ func smokeEgress(ctx context.Context, client *sandbox.Client, template string) e
 	var e *silkd.ErrorResp
 	if err := sb.GitPush(ctx, "/tmp/r", ""); !errors.As(err, &e) || e.Kind != silkd.KindInternal {
 		return fmt.Errorf("push on egress lane: %v, want internal git failure (lane misdetected?)", err)
+	}
+	return nil
+}
+
+// smokeHibernate proves the full hibernate loop: a session (a live guest
+// process) survives hibernate → transparent wake-on-exec, and the node's
+// hibernated count tracks the transitions.
+func smokeHibernate(ctx context.Context, client *sandbox.Client, sb *sandbox.Sandbox) error {
+	sess, err := sb.NewSession(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sess.Close(context.WithoutCancel(ctx)) }()
+	if _, err = sess.Exec(ctx, "export", "HIBMARK=alive"); err != nil {
+		return err
+	}
+	if err = sb.Hibernate(ctx); err != nil {
+		return err
+	}
+	if err = wantHibernated(ctx, client, 1); err != nil {
+		return err
+	}
+	out, err := sess.Exec(ctx, "sh", "-c", "echo $HIBMARK") // first guest access wakes the VM
+	if err != nil {
+		return fmt.Errorf("exec after hibernate: %w", err)
+	}
+	if err = want(out, "alive\n"); err != nil {
+		return err
+	}
+	return wantHibernated(ctx, client, 0)
+}
+
+func wantHibernated(ctx context.Context, client *sandbox.Client, n int) error {
+	info, err := client.Info(ctx)
+	if err != nil {
+		return err
+	}
+	if info.Hibernated != n {
+		return fmt.Errorf("hibernated count %d, want %d", info.Hibernated, n)
 	}
 	return nil
 }

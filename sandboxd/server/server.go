@@ -35,8 +35,10 @@ type Manager interface {
 	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
 	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
 	Release(ctx context.Context, id, token string) error
+	Hibernate(ctx context.Context, id, token string) error
 	AgentSocket(id, token string) (string, error)
-	Info() ([]pool.PoolInfo, int)
+	WakeAgentSocket(ctx context.Context, id, token string) (string, error)
+	Info() ([]pool.PoolInfo, int, int)
 }
 
 // Dialer opens the hybrid-vsock connection to a VM's silkd.
@@ -54,9 +56,10 @@ type Placer interface {
 // InfoResponse is the wire reply of GET /v1/info. Peers lists the other nodes'
 // data-plane addresses so a client can scatter a Lookup across the cluster.
 type InfoResponse struct {
-	Pools   []pool.PoolInfo `json:"pools"`
-	Claimed int             `json:"claimed"`
-	Peers   []string        `json:"peers,omitempty"`
+	Pools      []pool.PoolInfo `json:"pools"`
+	Claimed    int             `json:"claimed"`
+	Hibernated int             `json:"hibernated"`
+	Peers      []string        `json:"peers,omitempty"`
 }
 
 // Server serves the control plane for one node.
@@ -92,7 +95,8 @@ func New(apiToken, advertise string, mgr Manager, dialer Dialer, placer Placer) 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/claim", s.requireAPIToken(s.handleClaim))
-	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleRelease)
+	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleSandboxVerb("release", s.mgr.Release))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", s.handleAgent)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/owner", s.handleOwner)
 	mux.HandleFunc("GET /v1/info", s.requireAPIToken(s.handleInfo))
@@ -140,22 +144,27 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
-	token, ok := bearerToken(r)
-	if !ok {
-		writeErr(w, http.StatusUnauthorized, "missing bearer token")
-		return
-	}
-	id := r.PathValue("id")
-	err := s.mgr.Release(r.Context(), id, token)
-	switch {
-	case errors.Is(err, pool.ErrUnknownSandbox):
-		writeErr(w, http.StatusNotFound, "unknown sandbox")
-	case err != nil:
-		log.WithFunc("server.handleRelease").Errorf(r.Context(), err, "release %s", id)
-		writeErr(w, http.StatusInternalServerError, "release failed")
-	default:
-		w.WriteHeader(http.StatusNoContent)
+// handleSandboxVerb adapts a sandbox-scoped manager call (release,
+// hibernate) to HTTP: per-sandbox bearer auth, 404 on unknown, 204 on
+// success.
+func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id, token string) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token, ok := bearerToken(r)
+		if !ok {
+			writeErr(w, http.StatusUnauthorized, "missing bearer token")
+			return
+		}
+		id := r.PathValue("id")
+		err := do(r.Context(), id, token)
+		switch {
+		case errors.Is(err, pool.ErrUnknownSandbox):
+			writeErr(w, http.StatusNotFound, "unknown sandbox")
+		case err != nil:
+			log.WithFunc("server.handleSandboxVerb").Errorf(r.Context(), err, "%s %s", verb, id)
+			writeErr(w, http.StatusInternalServerError, verb+" failed")
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
 	}
 }
 
@@ -176,8 +185,8 @@ func (s *Server) handleOwner(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
-	pools, claimed := s.mgr.Info()
-	resp := InfoResponse{Pools: pools, Claimed: claimed}
+	pools, claimed, hibernated := s.mgr.Info()
+	resp := InfoResponse{Pools: pools, Claimed: claimed, Hibernated: hibernated}
 	if s.placer != nil {
 		resp.Peers = s.placer.PeerAddrs()
 	}

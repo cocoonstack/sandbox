@@ -64,6 +64,17 @@ func (f *fakeEngine) SnapshotExport(_ context.Context, _, toDir string) error {
 
 func (f *fakeEngine) SnapshotRemove(_ context.Context, _ string) error { return nil }
 
+// Hibernate closes the VM's silkd listener (the "VMM died") and Restore
+// brings a fresh one up, mirroring the real stop/resume observable from the
+// control plane.
+func (f *fakeEngine) Hibernate(ctx context.Context, name, _ string) error {
+	return f.Remove(ctx, name)
+}
+
+func (f *fakeEngine) Restore(_ context.Context, name, _ string) error {
+	return f.create(name)
+}
+
 func (f *fakeEngine) List(_ context.Context, filters ...string) ([]types.VMRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

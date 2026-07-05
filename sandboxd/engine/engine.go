@@ -86,6 +86,20 @@ func (e *Engine) SnapshotSave(ctx context.Context, vmName, snapName string) erro
 	return err
 }
 
+// Hibernate atomically snapshots a running VM under snapName and stops it,
+// freeing its memory; Restore with the snapshot resumes it.
+func (e *Engine) Hibernate(ctx context.Context, vmName, snapName string) error {
+	_, err := e.run(ctx, "vm", "hibernate", "--name", snapName, vmName)
+	return err
+}
+
+// Restore resumes a VM from a snapshot with its memory state and identity
+// intact (cocoon reseeds entropy only on restore).
+func (e *Engine) Restore(ctx context.Context, vmName, snapRef string) error {
+	_, err := e.run(ctx, "vm", "restore", vmName, snapRef)
+	return err
+}
+
 // SnapshotExport exports a snapshot into toDir (cocoon requires it absent or
 // empty); the result pairs with `vm clone --from-dir`.
 func (e *Engine) SnapshotExport(ctx context.Context, snapName, toDir string) error {
