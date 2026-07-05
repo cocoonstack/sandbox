@@ -137,6 +137,33 @@ pub async fn list<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
     proto::write_frame(w, &Response::Done).await
 }
 
+/// Writes `bytes` to `path` via a sibling temp file renamed into place, so a
+/// crash never leaves a truncated file; an existing file's mode is inherited
+/// (fs::replace must not strip an executable script's exec bit).
+pub async fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
+    let tmp = format!(
+        "{}.silkd-{}.tmp",
+        path.display(),
+        crate::sysutil::tmp_suffix()
+    );
+    let mode = fs::metadata(path)
+        .await
+        .ok()
+        .map(|m| m.permissions().mode() & 0o7777);
+    let outcome = async {
+        fs::write(&tmp, bytes).await?;
+        if let Some(m) = mode {
+            fs::set_permissions(&tmp, std::fs::Permissions::from_mode(m)).await?;
+        }
+        fs::rename(&tmp, path).await
+    }
+    .await;
+    if outcome.is_err() {
+        let _ = fs::remove_file(&tmp).await;
+    }
+    outcome
+}
+
 /// Reports metadata for `path` (following symlinks).
 pub async fn stat<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<()> {
     let meta = match fs::metadata(&path).await {

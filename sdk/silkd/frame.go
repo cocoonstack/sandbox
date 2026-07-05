@@ -147,6 +147,28 @@ type FsPull struct {
 	Path string `json:"path"`
 }
 
+// FsFind streams Match frames for lines under Path matching Pattern; Glob
+// narrows the walk to file names containing it.
+type FsFind struct {
+	Path    string `json:"path"`
+	Pattern string `json:"pattern"`
+	Glob    string `json:"glob,omitempty"`
+}
+
+// FsReplace rewrites Pattern to Replacement in each file, streaming one
+// Replaced frame per file then Done.
+type FsReplace struct {
+	Files       []string `json:"files"`
+	Pattern     string   `json:"pattern"`
+	Replacement string   `json:"replacement"`
+}
+
+// FsWatch streams Event frames under Path until the connection closes.
+type FsWatch struct {
+	Path      string `json:"path"`
+	Recursive bool   `json:"recursive"`
+}
+
 // Data carries one chunk of an upload stream (FsWrite/FsPush payloads).
 type Data struct {
 	Data B64 `json:"data"`
@@ -175,6 +197,9 @@ func (FsRm) Op() string          { return "fs_rm" }
 func (FsRename) Op() string      { return "fs_rename" }
 func (FsPush) Op() string        { return "fs_push" }
 func (FsPull) Op() string        { return "fs_pull" }
+func (FsFind) Op() string        { return "fs_find" }
+func (FsReplace) Op() string     { return "fs_replace" }
+func (FsWatch) Op() string       { return "fs_watch" }
 func (Data) Op() string          { return "data" } //nolint:goconst // wire tag shared with the response type by design
 func (DataEnd) Op() string       { return "data_end" }
 
@@ -247,6 +272,25 @@ type Sessions struct {
 	Sessions []string `json:"sessions"`
 }
 
+// Match is one FsFind hit; Line is 1-based.
+type Match struct {
+	File    string `json:"file"`
+	Line    uint64 `json:"line"`
+	Content string `json:"content"`
+}
+
+// Replaced reports one FsReplace file result.
+type Replaced struct {
+	File         string `json:"file"`
+	Replacements uint64 `json:"replacements"`
+}
+
+// Event is one FsWatch filesystem event; Kind is created|modified|deleted|renamed.
+type Event struct {
+	Kind string `json:"kind"`
+	Path string `json:"path"`
+}
+
 // ProcInfo is one entry of Procs; ExitCode is absent while running.
 type ProcInfo struct {
 	PID                uint32   `json:"pid"`
@@ -285,6 +329,9 @@ func (Entries) RespType() string        { return "entries" }
 func (Stat) RespType() string           { return "stat" }
 func (SessionCreated) RespType() string { return "session_created" }
 func (Sessions) RespType() string       { return "sessions" }
+func (Match) RespType() string          { return "match" }
+func (Replaced) RespType() string       { return "replaced" }
+func (Event) RespType() string          { return "event" }
 
 func (e *ErrorResp) Error() string { return e.Kind + ": " + e.Message }
 
@@ -347,6 +394,12 @@ func DecodeRequest(line []byte) (Request, error) {
 		return decodeAs[FsPush](line)
 	case "fs_pull":
 		return decodeAs[FsPull](line)
+	case "fs_find":
+		return decodeAs[FsFind](line)
+	case "fs_replace":
+		return decodeAs[FsReplace](line)
+	case "fs_watch":
+		return decodeAs[FsWatch](line)
 	case "data":
 		return decodeAs[Data](line)
 	case "data_end":
@@ -393,6 +446,12 @@ func DecodeResponse(line []byte) (Response, error) {
 		return decodeAs[SessionCreated](line)
 	case "sessions":
 		return decodeAs[Sessions](line)
+	case "match":
+		return decodeAs[Match](line)
+	case "replaced":
+		return decodeAs[Replaced](line)
+	case "event":
+		return decodeAs[Event](line)
 	default:
 		return nil, fmt.Errorf("unknown response type %q", tag.Type)
 	}

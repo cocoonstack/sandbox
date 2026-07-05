@@ -1,0 +1,1 @@
+{"v":1,"op":"fs_replace","files":["/work/a.txt","/work/b.txt"],"pattern":"foo","replacement":"bar"}

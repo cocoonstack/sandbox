@@ -87,6 +87,22 @@ pub enum Request {
     FsPull {
         path: String,
     },
+    FsFind {
+        path: String,
+        pattern: String,
+        #[serde(default)]
+        glob: Option<String>,
+    },
+    FsReplace {
+        files: Vec<String>,
+        pattern: String,
+        replacement: String,
+    },
+    FsWatch {
+        path: String,
+        #[serde(default)]
+        recursive: bool,
+    },
     Data {
         #[serde(with = "b64")]
         data: Vec<u8>,
@@ -160,6 +176,28 @@ pub enum Response {
     Sessions {
         sessions: Vec<String>,
     },
+    Match {
+        file: String,
+        line: u64,
+        content: String,
+    },
+    Replaced {
+        file: String,
+        replacements: u64,
+    },
+    Event {
+        kind: EventKind,
+        path: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventKind {
+    Created,
+    Modified,
+    Deleted,
+    Renamed,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
