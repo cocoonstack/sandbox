@@ -100,7 +100,7 @@ func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
 		claimed:   map[string]*types.Sandbox{},
 		refillSem: make(chan struct{}, maxConcurrentRefills),
 	}
-	if err := os.MkdirAll(m.goldensDir(), 0o755); err != nil {
+	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("create goldens dir: %w", err)
 	}
 	for _, spec := range cfg.Pools {
@@ -230,7 +230,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	return saveErr
 }
 
-// Run drives the refill and reap loops until ctx is cancelled.
+// Run drives the refill and reap loops until ctx is canceled.
 func (m *Manager) Run(ctx context.Context) {
 	refill := time.NewTicker(refillInterval)
 	defer refill.Stop()

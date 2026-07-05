@@ -36,14 +36,14 @@ type Config struct {
 
 	// APIToken, when set, guards claim and info; per-sandbox tokens guard
 	// sandbox-scoped calls regardless.
-	APIToken string `json:"api_token,omitempty"`
+	APIToken string `json:"api_token,omitempty"` //nolint:gosec // config field, not a hardcoded credential
 
 	Pools []PoolSpec `json:"pools"`
 }
 
 // Load reads a JSON config file, applies defaults, and validates.
 func Load(path string) (*Config, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // path is the operator-supplied -config flag
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
