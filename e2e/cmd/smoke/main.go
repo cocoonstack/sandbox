@@ -5,6 +5,8 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -13,6 +15,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"testing/iotest"
 	"time"
 
 	sandbox "github.com/cocoonstack/sandbox/sdk"
@@ -72,6 +75,7 @@ func run(addr, token, template string, egress bool) error {
 		{"promote", func(ctx context.Context, sb *sandbox.Sandbox) error {
 			return smokePromote(ctx, client, sb)
 		}},
+		{"tree", smokeTree},
 		{"port", smokePortForward},
 	}
 	if egress {
@@ -397,6 +401,46 @@ func smokePromote(ctx context.Context, client *sandbox.Client, sb *sandbox.Sandb
 // smokePortForward proves the guest-port relay on the no-network lane: sshd
 // (socket-activated in the base image) answers on 22, so its banner must
 // arrive through DialPort; a dead port must fail with the typed not_found.
+// smokeTree pushes a tar into the guest, proves a mid-stream failure leaves
+// the tree untouched (fs_push atomicity), and pulls it back.
+func smokeTree(ctx context.Context, sb *sandbox.Sandbox) error {
+	archive := func(content string) []byte {
+		var buf bytes.Buffer
+		tw := tar.NewWriter(&buf)
+		_ = tw.WriteHeader(&tar.Header{Name: "t.txt", Mode: 0o644, Size: int64(len(content))})
+		_, _ = tw.Write([]byte(content))
+		_ = tw.Close()
+		return buf.Bytes()
+	}
+	if err := sb.Push(ctx, "/root/tree", bytes.NewReader(archive("tree-marker"))); err != nil {
+		return fmt.Errorf("push: %w", err)
+	}
+	if out, err := sb.Exec(ctx, "cat", "/root/tree/t.txt"); err != nil || strings.TrimSpace(out) != "tree-marker" {
+		return fmt.Errorf("pushed file: %q, %v", out, err)
+	}
+
+	full := archive("CLOBBERED")
+	half := io.MultiReader(bytes.NewReader(full[:len(full)/2]), iotest.ErrReader(errors.New("cut")))
+	if err := sb.Push(ctx, "/root/tree", half); err == nil {
+		return fmt.Errorf("truncated push reported success")
+	}
+	if out, err := sb.Exec(ctx, "cat", "/root/tree/t.txt"); err != nil || strings.TrimSpace(out) != "tree-marker" {
+		return fmt.Errorf("tree changed by failed push: %q, %v", out, err)
+	}
+	if out, err := sb.Exec(ctx, "sh", "-c", "ls -a /root/tree"); err != nil || strings.Contains(out, ".silkd-push-") {
+		return fmt.Errorf("staging left behind: %q, %v", out, err)
+	}
+
+	var pulled bytes.Buffer
+	if err := sb.Pull(ctx, "/root/tree", &pulled); err != nil {
+		return fmt.Errorf("pull: %w", err)
+	}
+	if !bytes.Contains(pulled.Bytes(), []byte("tree-marker")) {
+		return fmt.Errorf("pulled tar missing pushed content")
+	}
+	return nil
+}
+
 func smokePortForward(ctx context.Context, sb *sandbox.Sandbox) error {
 	// The step proves the relay, not sshd's readiness SLA: the guest's
 	// socket-activated sshd can transiently refuse, so the positive probe
