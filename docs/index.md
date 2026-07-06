@@ -27,6 +27,10 @@ bridge/CNI NIC. Backends are never user-selected.
   wire types
 - [Go SDK](sdk.md) — connecting (single node and clusters), every option,
   the full sandbox surface, error handling
+- [Python SDK](sdk-python.md) — the same surface for the Python-first
+  agent ecosystem, stdlib-only
+- [MCP server](mcp.md) — sandboxes as Model Context Protocol tools for
+  Claude Code, Cursor, and agent frameworks
 - [silkd](silkd.md) — the in-guest daemon: protocol, verb reference, lanes
   and limits
 - [Performance](performance.md) — measured latencies and the environments

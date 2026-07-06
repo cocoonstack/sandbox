@@ -39,11 +39,13 @@ var poolErrHTTP = []struct {
 	msg  string
 }{
 	{pool.ErrBadKey, http.StatusBadRequest, ""},
+	{pool.ErrBadName, http.StatusBadRequest, ""},
 	{pool.ErrBadCount, http.StatusBadRequest, ""},
 	{pool.ErrNoEgress, http.StatusConflict, ""},
 	{pool.ErrPooledTemplate, http.StatusConflict, ""},
 	{pool.ErrUnknownSandbox, http.StatusNotFound, "unknown sandbox"},
 	{pool.ErrUnknownTemplate, http.StatusNotFound, "unknown template"},
+	{pool.ErrUnknownCheckpoint, http.StatusNotFound, "unknown checkpoint"},
 }
 
 // Manager is the slice of the pool manager the server consumes.
@@ -55,6 +57,10 @@ type Manager interface {
 	Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
 	Promote(ctx context.Context, id, token, template string) (types.PoolKey, error)
 	DeleteTemplate(key types.PoolKey) error
+	Checkpoint(ctx context.Context, id, token, name string) (types.Checkpoint, error)
+	ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration) (*types.Sandbox, error)
+	Checkpoints() ([]types.Checkpoint, error)
+	DeleteCheckpoint(ckptID string) error
 	HasGolden(key types.PoolKey) bool
 	AgentSocket(id, token string) (string, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, error)
@@ -123,6 +129,10 @@ func (s *Server) Handler() http.Handler {
 	// ownership proof.
 	mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.requireAPIToken(s.handleFork))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/promote", s.requireAPIToken(s.handlePromote))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/checkpoint", s.requireAPIToken(s.handleCheckpoint))
+	mux.HandleFunc("POST /v1/checkpoints/{id}/claim", s.requireAPIToken(s.handleClaimCheckpoint))
+	mux.HandleFunc("GET /v1/checkpoints", s.requireAPIToken(s.handleListCheckpoints))
+	mux.HandleFunc("DELETE /v1/checkpoints/{id}", s.requireAPIToken(s.handleDeleteCheckpoint))
 	mux.HandleFunc("DELETE /v1/templates", s.requireAPIToken(s.handleDeleteTemplate))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", s.handleAgent)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/owner", s.handleOwner)
@@ -239,6 +249,66 @@ func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleCheckpoint captures a claimed sandbox's state as a new checkpoint.
+func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeBody[types.CheckpointRequest](w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	ckpt, err := s.mgr.Checkpoint(r.Context(), id, req.Token, req.Name)
+	switch {
+	case writePoolErr(w, err):
+	case err != nil:
+		log.WithFunc("server.handleCheckpoint").Errorf(r.Context(), err, "checkpoint %s", id)
+		writeErr(w, http.StatusInternalServerError, "checkpoint failed")
+	default:
+		writeJSON(w, http.StatusOK, types.CheckpointResponse{Checkpoint: ckpt})
+	}
+}
+
+// handleClaimCheckpoint claims a fresh sandbox branched from a checkpoint.
+func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeBody[types.CheckpointClaimRequest](w, r)
+	if !ok {
+		return
+	}
+	ckptID := r.PathValue("id")
+	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, req.TTL())
+	switch {
+	case writePoolErr(w, err):
+	case err != nil:
+		log.WithFunc("server.handleClaimCheckpoint").Errorf(r.Context(), err, "claim checkpoint %s", ckptID)
+		writeErr(w, http.StatusInternalServerError, "provisioning failed")
+	default:
+		writeJSON(w, http.StatusOK, s.claimResponse(sb))
+	}
+}
+
+// handleListCheckpoints lists this node's checkpoints, newest first.
+func (s *Server) handleListCheckpoints(w http.ResponseWriter, r *http.Request) {
+	ckpts, err := s.mgr.Checkpoints()
+	if err != nil {
+		log.WithFunc("server.handleListCheckpoints").Error(r.Context(), err, "list checkpoints")
+		writeErr(w, http.StatusInternalServerError, "list checkpoints failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, types.CheckpointListResponse{Checkpoints: ckpts})
+}
+
+// handleDeleteCheckpoint removes a checkpoint.
+func (s *Server) handleDeleteCheckpoint(w http.ResponseWriter, r *http.Request) {
+	err := s.mgr.DeleteCheckpoint(r.PathValue("id"))
+	switch {
+	case writePoolErr(w, err):
+	case err != nil:
+		log.WithFunc("server.handleDeleteCheckpoint").Errorf(r.Context(), err, "delete checkpoint %s", r.PathValue("id"))
+		writeErr(w, http.StatusInternalServerError, "delete checkpoint failed")
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // handleDeleteTemplate removes a promoted template; the key axes ride as
 // query parameters, defaulted like a claim's.
 func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
@@ -312,7 +382,10 @@ func (s *Server) requireAPIToken(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) claimResponse(sb *types.Sandbox) types.ClaimResponse {
-	return types.ClaimResponse{ID: sb.ID, Token: sb.Token, Deadline: sb.Deadline, OwnerAddr: s.advertise}
+	return types.ClaimResponse{
+		ID: sb.ID, Token: sb.Token, Deadline: sb.Deadline,
+		OwnerAddr: s.advertise, FromCheckpoint: sb.FromCheckpoint,
+	}
 }
 
 func bearerToken(r *http.Request) (string, bool) {

@@ -8,7 +8,8 @@ on:
     branches: [main]
     paths:
       - "sandboxd/**"
-      - "sdk/**"
+      - "sdk/go/**"
+      - "mcp/**"
       - "e2e/**"
       - "protocol/**"
       - ".github/workflows/sandboxd.yml"

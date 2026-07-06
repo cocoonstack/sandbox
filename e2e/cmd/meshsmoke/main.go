@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	sandbox "github.com/cocoonstack/sandbox/sdk"
+	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
 func main() {

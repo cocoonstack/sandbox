@@ -380,6 +380,74 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 	}
 }
 
+func TestCheckpointFlow(t *testing.T) {
+	mgr := &fakeManager{
+		checkpoint: func(id, token, name string) (types.Checkpoint, error) {
+			if id != "sb_1" || token != "tok" {
+				return types.Checkpoint{}, pool.ErrUnknownSandbox
+			}
+			return types.Checkpoint{ID: "ck_0011223344556677", Name: name, SandboxID: id}, nil
+		},
+		claimCheckpoint: func(ckptID string) (*types.Sandbox, error) {
+			if ckptID != "ck_0011223344556677" {
+				return nil, pool.ErrUnknownCheckpoint
+			}
+			return &types.Sandbox{ID: "sb_branch", Token: "btok", FromCheckpoint: ckptID}, nil
+		},
+		deleteCheckpoint: func(ckptID string) error {
+			if ckptID != "ck_0011223344556677" {
+				return pool.ErrUnknownCheckpoint
+			}
+			return nil
+		},
+	}
+	ts := newTestServer(t, "api", mgr, &fakeDialer{})
+
+	post := func(path, body string) *http.Response {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer api")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		return resp
+	}
+
+	resp := post("/v1/sandboxes/sb_1/checkpoint", `{"token":"tok","name":"step-1"}`)
+	defer resp.Body.Close()
+	var cr types.CheckpointResponse
+	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil || cr.Checkpoint.ID != "ck_0011223344556677" {
+		t.Fatalf("checkpoint: status %d, %+v, %v", resp.StatusCode, cr, err)
+	}
+	if cr.Checkpoint.Name != "step-1" {
+		t.Errorf("name %q, want step-1", cr.Checkpoint.Name)
+	}
+
+	resp2 := post("/v1/checkpoints/"+cr.Checkpoint.ID+"/claim", `{}`)
+	defer resp2.Body.Close()
+	var claim types.ClaimResponse
+	if err := json.NewDecoder(resp2.Body).Decode(&claim); err != nil || claim.ID != "sb_branch" {
+		t.Fatalf("claim from checkpoint: status %d, %+v, %v", resp2.StatusCode, claim, err)
+	}
+
+	resp3 := post("/v1/checkpoints/ck_ffffffffffffffff/claim", `{}`)
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusNotFound {
+		t.Errorf("unknown checkpoint claim: status %d, want 404", resp3.StatusCode)
+	}
+
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/checkpoints/"+cr.Checkpoint.ID, nil)
+	req.Header.Set("Authorization", "Bearer api")
+	resp4, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	defer resp4.Body.Close()
+	if resp4.StatusCode != http.StatusNoContent {
+		t.Errorf("delete checkpoint: status %d, want 204", resp4.StatusCode)
+	}
+}
+
 func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *httptest.Server {
 	t.Helper()
 	if dialer == nil {
@@ -407,6 +475,11 @@ type fakeManager struct {
 
 	deleteGolden func(key types.PoolKey) error
 	hasGolden    bool
+
+	checkpoint       func(id, token, name string) (types.Checkpoint, error)
+	claimCheckpoint  func(ckptID string) (*types.Sandbox, error)
+	checkpoints      []types.Checkpoint
+	deleteCheckpoint func(ckptID string) error
 }
 
 func (f *fakeManager) ClaimWarm(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
@@ -471,6 +544,31 @@ func (f *fakeManager) DeleteTemplate(key types.PoolKey) error {
 
 func (f *fakeManager) HasGolden(types.PoolKey) bool {
 	return f.hasGolden
+}
+
+func (f *fakeManager) Checkpoint(_ context.Context, id, token, name string) (types.Checkpoint, error) {
+	if f.checkpoint == nil {
+		return types.Checkpoint{}, pool.ErrUnknownSandbox
+	}
+	return f.checkpoint(id, token, name)
+}
+
+func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, _ time.Duration) (*types.Sandbox, error) {
+	if f.claimCheckpoint == nil {
+		return nil, pool.ErrUnknownCheckpoint
+	}
+	return f.claimCheckpoint(ckptID)
+}
+
+func (f *fakeManager) Checkpoints() ([]types.Checkpoint, error) {
+	return f.checkpoints, nil
+}
+
+func (f *fakeManager) DeleteCheckpoint(ckptID string) error {
+	if f.deleteCheckpoint == nil {
+		return pool.ErrUnknownCheckpoint
+	}
+	return f.deleteCheckpoint(ckptID)
 }
 
 func (f *fakeManager) Info() ([]pool.PoolInfo, int, int) {

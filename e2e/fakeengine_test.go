@@ -12,7 +12,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
-	"github.com/cocoonstack/sandbox/sdk/silkd/silkdtest"
+	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
 )
 
 // fakeEngine replaces only the cocoon CLI: every "VM" it creates is a

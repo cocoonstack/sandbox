@@ -9,7 +9,7 @@ EXTRACT_IMAGE ?= $(BOOT_IMAGE)
 
 # The parent workspace's go.work excludes these modules; GOWORK=off keeps
 # local invocations identical to CI.
-GO_MODULES := sandboxd sdk e2e
+GO_MODULES := sandboxd sdk/go e2e mcp
 GO_OSES := linux darwin
 
 .PHONY: help test lint boot boot-debug extract extract-debug silkd-image base python images \

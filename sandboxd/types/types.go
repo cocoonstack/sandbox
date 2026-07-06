@@ -108,9 +108,23 @@ type Sandbox struct {
 	// empty means running.
 	HibernateSnap string `json:"hibernate_snap,omitempty"`
 
+	// FromCheckpoint names the checkpoint this sandbox branched from, for
+	// lineage; empty for pool and template claims.
+	FromCheckpoint string `json:"from_checkpoint,omitempty"`
+
 	// Transition serializes hibernate/wake so concurrent wakes collapse onto
 	// one restore. Lock it before (never under) the manager mutex.
 	Transition sync.Mutex `json:"-"`
+}
+
+// Checkpoint is the record of a captured sandbox state: claims cloned from
+// it branch off the exact captured moment. Node-local, like a template.
+type Checkpoint struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name,omitempty"`
+	SandboxID string    `json:"sandbox_id"`
+	Key       PoolKey   `json:"key"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // VMRecord is the subset of cocoon's `vm list --format json` output the

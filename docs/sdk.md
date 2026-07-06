@@ -1,7 +1,7 @@
 # Go SDK
 
 ```go
-import sandbox "github.com/cocoonstack/sandbox/sdk"
+import sandbox "github.com/cocoonstack/sandbox/sdk/go"
 ```
 
 The SDK is stdlib-only. One `Client` talks to one entry node; sandbox
@@ -113,6 +113,24 @@ node, so its `New`/`Delete` always reach it. The name-based calls
 mesh's template gossip; they lag a promote or delete by about a gossip
 tick, so prefer the handle right after promoting (see
 [Templates on a cluster](cluster.md#templates-on-a-cluster)).
+
+## Checkpoints — branching and time travel
+
+```go
+ckpt, err := sb.Checkpoint(ctx, "after-setup")  // source keeps running
+branch, err := ckpt.New(ctx)                     // fresh sandbox at the captured moment
+err = ckpt.Delete(ctx)
+ckpts, err := client.Checkpoints(ctx)            // node's checkpoints, newest first
+```
+
+`Checkpoint` captures the sandbox's full state — memory, disk, running
+processes — without stopping it (the same brief pause a fork takes), and
+`ckpt.New` branches any number of independent sandboxes from that exact
+moment; the checkpoint's key axes apply and `WithTimeout` may set each
+branch's TTL. Successive checkpoints of sources and branches form a tree.
+Checkpoints are node-local and their handles owner-bound, like templates;
+`client.Checkpoints` lists the connected node's. Checkpoint creation is
+resource-creating and takes the api token, like fork.
 
 ## Reaching guest ports
 
@@ -267,7 +285,7 @@ ctx) tears the shell down.
 - `*sandbox.ExitError` — non-zero exit from `Exec` (`Code`, `Stderr`)
 - `*silkd.ErrorResp` — a typed guest-side failure; `Kind` is one of
   `silkd.KindBadRequest`, `KindNotFound`, `KindUnimplemented`,
-  `KindInternal` (import `github.com/cocoonstack/sandbox/sdk/silkd`)
+  `KindInternal` (import `github.com/cocoonstack/sandbox/sdk/go/silkd`)
 
 ```go
 var e *silkd.ErrorResp

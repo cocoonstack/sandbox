@@ -1,10 +1,10 @@
-module github.com/cocoonstack/sandbox/e2e
+module github.com/cocoonstack/sandbox/mcp
 
 go 1.26.4
 
 require (
-	github.com/cocoonstack/sandbox/sandboxd v0.0.0
 	github.com/cocoonstack/sandbox/sdk/go v0.0.0
+	github.com/projecteru2/core v0.0.0-20241016125006-ff909eefe04c
 )
 
 require (
@@ -21,18 +21,14 @@ require (
 	github.com/mattn/go-isatty v0.0.18 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/projecteru2/core v0.0.0-20241016125006-ff909eefe04c // indirect
 	github.com/rogpeppe/go-internal v1.11.0 // indirect
 	github.com/rs/zerolog v1.29.1 // indirect
 	golang.org/x/exp v0.0.0-20230425010034-47ecfdc1ba53 // indirect
-	golang.org/x/sys v0.38.0 // indirect
-	golang.org/x/text v0.31.0 // indirect
+	golang.org/x/sys v0.15.0 // indirect
+	golang.org/x/text v0.14.0 // indirect
 	google.golang.org/grpc v1.60.1 // indirect
 	google.golang.org/protobuf v1.33.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 )
 
-replace (
-	github.com/cocoonstack/sandbox/sandboxd => ../sandboxd
-	github.com/cocoonstack/sandbox/sdk/go => ../sdk/go
-)
+replace github.com/cocoonstack/sandbox/sdk/go => ../sdk/go

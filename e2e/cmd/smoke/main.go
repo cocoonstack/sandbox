@@ -18,8 +18,8 @@ import (
 	"testing/iotest"
 	"time"
 
-	sandbox "github.com/cocoonstack/sandbox/sdk"
-	"github.com/cocoonstack/sandbox/sdk/silkd"
+	sandbox "github.com/cocoonstack/sandbox/sdk/go"
+	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
 func main() {
@@ -83,6 +83,7 @@ func run(addr, token, template string, egress bool) error {
 		{"promote", func(ctx context.Context, sb *sandbox.Sandbox) error {
 			return smokePromote(ctx, client, sb)
 		}},
+		{"checkpoint", smokeCheckpoint},
 		{"tree", smokeTree},
 		{"port", smokePortForward},
 	}
@@ -429,9 +430,66 @@ func smokePty(ctx context.Context, sb *sandbox.Sandbox) error {
 	return nil
 }
 
-// smokePortForward proves the guest-port relay on the no-network lane: sshd
-// (socket-activated in the base image) answers on 22, so its banner must
-// arrive through DialPort; a dead port must fail with the typed not_found.
+// smokeCheckpoint proves the checkpoint tree: a branch carries the exact
+// captured state, the source keeps running unaffected, two branches from one
+// checkpoint are independent, and a deleted checkpoint stops branching.
+func smokeCheckpoint(ctx context.Context, sb *sandbox.Sandbox) error {
+	if _, err := sb.Exec(ctx, "sh", "-c", "echo v1 > /root/ck.txt"); err != nil {
+		return err
+	}
+	ckpt, err := sb.Checkpoint(ctx, "step-1")
+	if err != nil {
+		return fmt.Errorf("checkpoint: %w", err)
+	}
+	if _, err = sb.Exec(ctx, "sh", "-c", "echo v2 > /root/ck.txt"); err != nil {
+		return fmt.Errorf("mutate source after checkpoint: %w", err)
+	}
+
+	branch, err := ckpt.New(ctx)
+	if err != nil {
+		return fmt.Errorf("branch: %w", err)
+	}
+	defer func() { _ = branch.Close() }()
+	out, err := branch.Exec(ctx, "cat", "/root/ck.txt")
+	if err != nil {
+		return fmt.Errorf("read branch: %w", err)
+	}
+	if err = want(out, "v1\n"); err != nil {
+		return fmt.Errorf("branch state: %w", err)
+	}
+	out, err = sb.Exec(ctx, "cat", "/root/ck.txt")
+	if err != nil {
+		return fmt.Errorf("read source: %w", err)
+	}
+	if err = want(out, "v2\n"); err != nil {
+		return fmt.Errorf("source state: %w", err)
+	}
+
+	if _, err = branch.Exec(ctx, "sh", "-c", "echo branched > /root/ck.txt"); err != nil {
+		return err
+	}
+	second, err := ckpt.New(ctx)
+	if err != nil {
+		return fmt.Errorf("second branch: %w", err)
+	}
+	defer func() { _ = second.Close() }()
+	out, err = second.Exec(ctx, "cat", "/root/ck.txt")
+	if err != nil {
+		return fmt.Errorf("read second branch: %w", err)
+	}
+	if err = want(out, "v1\n"); err != nil {
+		return fmt.Errorf("second branch state: %w", err)
+	}
+
+	if err = ckpt.Delete(ctx); err != nil {
+		return fmt.Errorf("delete checkpoint: %w", err)
+	}
+	if _, err = ckpt.New(ctx); err == nil {
+		return fmt.Errorf("branch from deleted checkpoint succeeded")
+	}
+	return nil
+}
+
 // smokeTree pushes a tar into the guest, proves a mid-stream failure leaves
 // the tree untouched (fs_push atomicity), and pulls it back.
 func smokeTree(ctx context.Context, sb *sandbox.Sandbox) error {
@@ -472,6 +530,9 @@ func smokeTree(ctx context.Context, sb *sandbox.Sandbox) error {
 	return nil
 }
 
+// smokePortForward proves the guest-port relay on the no-network lane: sshd
+// (socket-activated in the base image) answers on 22, so its banner must
+// arrive through DialPort; a dead port must fail with the typed not_found.
 func smokePortForward(ctx context.Context, sb *sandbox.Sandbox) error {
 	// The step proves the relay, not sshd's readiness SLA: the guest's
 	// socket-activated sshd can transiently refuse, so the positive probe

@@ -115,6 +115,26 @@ hold the template but sees an owner in gossip answers `200
 delete at the owner. The retry carries `no_redirect=1`, mirroring the claim
 protocol: a node answering a `no_redirect` delete speaks only for itself.
 
+## POST /v1/sandboxes/{id}/checkpoint
+
+Auth: node API token; body `{"token": "<sandbox token>", "name": "..."}`
+(name optional). Captures the sandbox's full state without stopping it and
+answers `200 {"checkpoint": {id, name, sandbox_id, key, created_at}}`.
+
+## POST /v1/checkpoints/{id}/claim
+
+Auth: node API token; body `{"ttl_seconds": 0}`. Claims a fresh sandbox
+branched from the checkpoint (a normal claim response); the checkpoint's
+recorded key applies. 404 for an unknown checkpoint.
+
+## GET /v1/checkpoints
+
+Auth: node API token. Lists this node's checkpoints, newest first.
+
+## DELETE /v1/checkpoints/{id}
+
+Auth: node API token. 204 on success, 404 unknown.
+
 ## GET /v1/sandboxes/{id}/agent
 
 Auth: the sandbox's own token. Requires `Upgrade: silkd` +

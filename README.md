@@ -36,9 +36,13 @@ Design docs:
 - `sandboxd/` — per-node control plane (Go): warm pools refilled from golden
   snapshot exports, claim/release/info HTTP API, the HTTP-upgrade byte relay
   to silkd, reap + restart reconcile, memberlist mesh with redirect placement
-- `sdk/` — Go SDK (stdlib-only): `Connect/New/Lookup`, `Exec/Run`, files,
-  `Push/Pull`, sessions, `Find/Replace`, `Watch`, git verbs, `OpenPty`;
-  `sdk/silkd` is the wire binding, `sdk/silkd/silkdtest` a test fake
+- `sdk/go/` — Go SDK (stdlib-only): `Connect/New/Lookup`, `Exec/Run`, files,
+  `Push/Pull`, sessions, `Find/Replace`, `Watch`, git verbs, `OpenPty`,
+  `Checkpoint`; `sdk/go/silkd` is the wire binding, `silkdtest` a test fake
+- `sdk/python/` — Python SDK (stdlib-only, sync), the same surface for the
+  Python-first agent ecosystem; round-trips the shared fixture corpus
+- `mcp/` — `sandbox-mcp`, an MCP stdio server exposing the surface as tools
+  for Claude Code / Cursor / agent frameworks
 - `protocol/fixtures/` — golden frame corpus; the Rust and Go protocol tests
   both round-trip it, so wire drift fails CI
 - `e2e/` — in-process full-stack tests (real pool/engine/relay/SDK, fake
@@ -59,8 +63,8 @@ Design docs:
 ```bash
 make help          # this list
 make lint test     # Rust: boot/init + silkd (fmt --check, clippy -D warnings, tests)
-make go-lint       # Go: sandboxd + sdk + e2e, GOOS linux AND darwin
-make go-test       # Go: go test -race across the three modules
+make go-lint       # Go: sandboxd + sdk/go + e2e + mcp, GOOS linux AND darwin
+make go-test       # Go: go test -race across the Go modules
 make sandboxd      # build dist/sandboxd
 make boot          # kernel + initramfs artifact image (docker)
                    #   KERNEL_MIRROR=… if kernel.org tarball paths 404 locally

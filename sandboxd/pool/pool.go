@@ -129,8 +129,10 @@ func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
 		claimed:   map[string]*types.Sandbox{},
 		refillSem: make(chan struct{}, maxConcurrentRefills),
 	}
-	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
-		return nil, fmt.Errorf("create goldens dir: %w", err)
+	for _, dir := range []string{m.goldensDir(), m.checkpointsDir()} {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return nil, fmt.Errorf("create %s: %w", filepath.Base(dir), err)
+		}
 	}
 	for _, spec := range cfg.Pools {
 		m.pools[spec.PoolKey] = &pool{key: spec.PoolKey, target: spec.Warm}
@@ -475,6 +477,8 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	// A crash mid-export leaves a *.tmp staging dir no build or promote of
 	// this life will reuse.
 	tmps, _ := filepath.Glob(filepath.Join(m.goldensDir(), "*.tmp"))
+	ckptTmps, _ := filepath.Glob(filepath.Join(m.checkpointsDir(), "*.tmp"))
+	tmps = append(tmps, ckptTmps...)
 	for _, tmp := range tmps {
 		_ = os.RemoveAll(tmp)
 	}

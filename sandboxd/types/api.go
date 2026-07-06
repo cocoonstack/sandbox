@@ -40,6 +40,10 @@ type ClaimResponse struct {
 	Deadline  time.Time `json:"deadline,omitzero"`
 	OwnerAddr string    `json:"owner_addr,omitempty"`
 
+	// FromCheckpoint names the checkpoint a branched claim was born from,
+	// so clients can reconstruct the checkpoint tree.
+	FromCheckpoint string `json:"from_checkpoint,omitempty"`
+
 	Redirect []string `json:"redirect,omitempty"`
 }
 
@@ -63,6 +67,34 @@ func (r ForkRequest) TTL() time.Duration {
 // ForkResponse carries one claim per child.
 type ForkResponse struct {
 	Children []ClaimResponse `json:"children"`
+}
+
+// CheckpointRequest is the wire body of POST /v1/sandboxes/{id}/checkpoint.
+// Auth mirrors fork: api token in Authorization, sandbox token here.
+type CheckpointRequest struct {
+	Token string `json:"token"`
+	Name  string `json:"name,omitempty"`
+}
+
+// CheckpointResponse is its reply.
+type CheckpointResponse struct {
+	Checkpoint Checkpoint `json:"checkpoint"`
+}
+
+// CheckpointClaimRequest is the wire body of POST /v1/checkpoints/{id}/claim.
+// TTLSeconds semantics match a claim's; zero means the server default.
+type CheckpointClaimRequest struct {
+	TTLSeconds int `json:"ttl_seconds,omitempty"`
+}
+
+// TTL converts the requested lease.
+func (r CheckpointClaimRequest) TTL() time.Duration {
+	return time.Duration(r.TTLSeconds) * time.Second
+}
+
+// CheckpointListResponse is the wire reply of GET /v1/checkpoints.
+type CheckpointListResponse struct {
+	Checkpoints []Checkpoint `json:"checkpoints"`
 }
 
 // PromoteRequest is the wire body of POST /v1/sandboxes/{id}/promote; auth

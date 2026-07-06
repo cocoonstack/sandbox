@@ -15,7 +15,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/server"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
-	sandbox "github.com/cocoonstack/sandbox/sdk"
+	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
 var testKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
@@ -141,6 +141,50 @@ func TestPromoteEndToEnd(t *testing.T) {
 	if err := stack.client.DeleteTemplate(t.Context(), "e2e-tpl:1"); err == nil ||
 		!strings.Contains(err.Error(), "unknown template") {
 		t.Errorf("second delete: %v, want unknown template", err)
+	}
+}
+
+func TestCheckpointEndToEnd(t *testing.T) {
+	stack := startStack(t, "node-token")
+	src, err := stack.client.New(t.Context(), "rt:24.04")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer src.Close()
+
+	ckpt, err := src.Checkpoint(t.Context(), "step-1")
+	if err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if ckpt.SandboxID != src.ID || ckpt.Name != "step-1" {
+		t.Errorf("record %+v, want bound to %s", ckpt, src.ID)
+	}
+	if out, execErr := src.Exec(t.Context(), "echo", "still-alive"); execErr != nil || out != "still-alive\n" {
+		t.Fatalf("source after checkpoint: %q, %v", out, execErr)
+	}
+
+	branch, err := ckpt.New(t.Context())
+	if err != nil {
+		t.Fatalf("branch: %v", err)
+	}
+	if branch.ID == src.ID {
+		t.Error("branch reused the source id")
+	}
+	if out, execErr := branch.Exec(t.Context(), "echo", "branched"); execErr != nil || out != "branched\n" {
+		t.Errorf("exec on branch: %q, %v", out, execErr)
+	}
+	_ = branch.Close()
+
+	ckpts, err := stack.client.Checkpoints(t.Context())
+	if err != nil || len(ckpts) != 1 || ckpts[0].ID != ckpt.ID {
+		t.Fatalf("Checkpoints() = %+v, %v; want the one record", ckpts, err)
+	}
+	if err := ckpts[0].Delete(t.Context()); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := ckpt.New(t.Context()); err == nil ||
+		!strings.Contains(err.Error(), "unknown checkpoint") {
+		t.Errorf("branch after delete: %v, want unknown checkpoint", err)
 	}
 }
 
