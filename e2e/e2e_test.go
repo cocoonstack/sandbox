@@ -73,6 +73,40 @@ func TestEndToEnd(t *testing.T) {
 	})
 }
 
+func TestForkEndToEnd(t *testing.T) {
+	stack := startStack(t, "node-token")
+	parent, err := stack.client.New(t.Context(), "rt:24.04")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer parent.Close()
+
+	children, err := parent.Fork(t.Context(), 2, time.Minute)
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	if len(children) != 2 {
+		t.Fatalf("got %d children, want 2", len(children))
+	}
+	for i, child := range children {
+		if out, err := child.Exec(t.Context(), "echo", "kid"); err != nil || out != "kid\n" {
+			t.Fatalf("child %d exec: %q, %v", i, out, err)
+		}
+	}
+	// Children are independent claims: releasing one leaves the sibling and
+	// the parent alive.
+	if err := children[0].Close(); err != nil {
+		t.Fatalf("close child 0: %v", err)
+	}
+	if _, err := children[1].Exec(t.Context(), "echo", "alive"); err != nil {
+		t.Errorf("sibling died with the released child: %v", err)
+	}
+	if _, err := parent.Exec(t.Context(), "echo", "alive"); err != nil {
+		t.Errorf("parent died with the released child: %v", err)
+	}
+	_ = children[1].Close()
+}
+
 func TestWrongAPITokenRejected(t *testing.T) {
 	stack := startStack(t, "node-token")
 

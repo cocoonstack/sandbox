@@ -64,6 +64,8 @@ func (f *fakeEngine) SnapshotExport(_ context.Context, _, toDir string) error {
 
 func (f *fakeEngine) SnapshotRemove(_ context.Context, _ string) error { return nil }
 
+func (f *fakeEngine) SnapshotList(_ context.Context) ([]string, error) { return nil, nil }
+
 // Hibernate closes the VM's silkd listener (the "VMM died") and Restore
 // brings a fresh one up, mirroring the real stop/resume observable from the
 // control plane.

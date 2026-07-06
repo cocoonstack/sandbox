@@ -1,7 +1,9 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -139,12 +141,46 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	}
 }
 
+// Fork clones the sandbox into count children — memory, disk, and guest
+// state (sessions, processes, tmpfs) duplicate at the fork point, and each
+// child gets a fresh machine identity and its own lease. ttl bounds every
+// child's lifetime; zero means the server default. All-or-nothing: on error
+// no child survived. Forking a hibernated sandbox reuses its memory image
+// without waking it.
+func (s *Sandbox) Fork(ctx context.Context, count int, ttl time.Duration) ([]*Sandbox, error) {
+	body, err := json.Marshal(forkRequest{Count: count, TTLSeconds: ttlSeconds(ttl)})
+	if err != nil {
+		return nil, fmt.Errorf("encode fork: %w", err)
+	}
+	resp, err := s.post(ctx, "fork", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, apiError("fork", resp)
+	}
+	var fr forkResponse
+	if err := json.NewDecoder(resp.Body).Decode(&fr); err != nil {
+		return nil, fmt.Errorf("decode fork response: %w", err)
+	}
+	children := make([]*Sandbox, len(fr.Children))
+	for i, c := range fr.Children {
+		owner := c.OwnerAddr
+		if owner == "" {
+			owner = s.owner
+		}
+		children[i] = &Sandbox{ID: c.ID, Deadline: c.Deadline, c: s.c, token: c.Token, owner: owner}
+	}
+	return children, nil
+}
+
 // Hibernate atomically snapshots the sandbox and stops its VM, freeing its
 // memory; the next call that reaches the guest wakes it transparently with
 // sessions, processes, and memory state intact. The TTL keeps running — a
 // hibernated sandbox is still reaped at its deadline.
 func (s *Sandbox) Hibernate(ctx context.Context) error {
-	resp, err := s.post(ctx, "hibernate")
+	resp, err := s.post(ctx, "hibernate", nil)
 	if err != nil {
 		return err
 	}
@@ -160,7 +196,7 @@ func (s *Sandbox) Hibernate(ctx context.Context) error {
 func (s *Sandbox) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
 	defer cancel()
-	resp, err := s.post(ctx, "release")
+	resp, err := s.post(ctx, "release", nil)
 	if err != nil {
 		return err
 	}
@@ -171,11 +207,15 @@ func (s *Sandbox) Close() error {
 	return apiError("release", resp)
 }
 
-// post sends a sandbox-scoped verb to the owning node (which holds the claim).
-func (s *Sandbox) post(ctx context.Context, verb string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+s.owner+"/v1/sandboxes/"+s.ID+"/"+verb, nil)
+// post sends a sandbox-scoped verb to the owning node (which holds the
+// claim); a non-nil body is JSON.
+func (s *Sandbox) post(ctx context.Context, verb string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+s.owner+"/v1/sandboxes/"+s.ID+"/"+verb, body)
 	if err != nil {
 		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Authorization", "Bearer "+s.token)
 	return s.c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose

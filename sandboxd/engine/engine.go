@@ -113,6 +113,32 @@ func (e *Engine) SnapshotRemove(ctx context.Context, snapName string) error {
 	return err
 }
 
+// SnapshotList returns the names of all snapshots in cocoon's local DB.
+func (e *Engine) SnapshotList(ctx context.Context) ([]string, error) {
+	out, err := e.run(ctx, "snapshot", "list", "--format", "json")
+	if err != nil {
+		return nil, err
+	}
+	// An empty store prints a human line ("No snapshots found."), not JSON.
+	out = bytes.TrimSpace(out)
+	if len(out) == 0 || out[0] != '[' {
+		return nil, nil
+	}
+	var snaps []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(out, &snaps); err != nil {
+		return nil, fmt.Errorf("parse snapshot list: %w", err)
+	}
+	names := make([]string, 0, len(snaps))
+	for _, s := range snaps {
+		if s.Name != "" {
+			names = append(names, s.Name)
+		}
+	}
+	return names, nil
+}
+
 // List returns cocoon's view of local VMs, optionally filtered by name.
 func (e *Engine) List(ctx context.Context, filters ...string) ([]types.VMRecord, error) {
 	args := append([]string{"vm", "list", "--format", "json"}, filters...)

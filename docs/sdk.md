@@ -75,6 +75,20 @@ keeps running — a hibernated sandbox is still reaped at its deadline, so
 claim with a `WithTimeout` that covers the idle period. When to hibernate
 is your policy; the node only provides the transition.
 
+## Forking
+
+```go
+children, err := sb.Fork(ctx, 2, 10*time.Minute)   // []*Sandbox, own leases
+```
+
+`Fork` clones the sandbox into fresh, fully independent claims: memory,
+disk, and guest state (sessions, processes, tmpfs) duplicate at the fork
+point, and each child gets a distinct machine identity. The ttl bounds every
+child's lifetime (zero = server default) — children never inherit the
+parent's remaining lease. A running parent pauses briefly for the snapshot;
+a hibernated parent forks from its memory image without waking.
+All-or-nothing: on error no child survived. Count is capped at 16 per call.
+
 ## Node info
 
 ```go

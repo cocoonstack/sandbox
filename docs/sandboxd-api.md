@@ -56,6 +56,28 @@ snapshot) at its deadline. When to hibernate is the caller's policy — the
 node only provides the transition. 204 on success, 404 unknown id or wrong
 token.
 
+## POST /v1/sandboxes/{id}/fork
+
+Auth: the sandbox's own token. Body:
+
+```json
+{"count": 2, "ttl_seconds": 300}
+```
+
+Clones the sandbox into `count` fresh claims (1–16). Memory, disk, and guest
+state (sessions, processes, tmpfs) duplicate at the fork point; cocoon's
+clone reseed gives every child a distinct machine identity. Children get
+their own lease — `ttl_seconds` (0 = server default), never the parent's
+remainder. A running parent is snapshotted in a brief pause window; a
+hibernated parent forks from its existing memory image without waking.
+All-or-nothing: on error no child survived. 200 with one claim per child:
+
+```json
+{"children": [{"id": "sb_…", "token": "…", "deadline": "…", "owner_addr": "…"}]}
+```
+
+400 invalid count or body, 404 unknown id or wrong token.
+
 ## GET /v1/sandboxes/{id}/agent
 
 Auth: the sandbox's own token. Requires `Upgrade: silkd` +

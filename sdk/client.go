@@ -206,6 +206,15 @@ type claimResponse struct {
 	Redirect  []string  `json:"redirect,omitempty"`
 }
 
+type forkRequest struct {
+	Count      int `json:"count"`
+	TTLSeconds int `json:"ttl_seconds,omitempty"`
+}
+
+type forkResponse struct {
+	Children []claimResponse `json:"children"`
+}
+
 type errorResponse struct {
 	Error string `json:"error"`
 }

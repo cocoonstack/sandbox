@@ -37,6 +37,11 @@ func WithSize(s Size) Option {
 // d (rounded up to seconds) even if the client vanishes.
 func WithTimeout(d time.Duration) Option {
 	return func(r *claimRequest) {
-		r.TTLSeconds = int((d + time.Second - 1) / time.Second)
+		r.TTLSeconds = ttlSeconds(d)
 	}
+}
+
+// ttlSeconds rounds a lease up to whole wire seconds.
+func ttlSeconds(d time.Duration) int {
+	return int((d + time.Second - 1) / time.Second)
 }

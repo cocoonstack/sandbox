@@ -230,6 +230,72 @@ func TestAgentErrorPaths(t *testing.T) {
 	}
 }
 
+func TestForkFlow(t *testing.T) {
+	mgr := &fakeManager{fork: func(id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
+		switch {
+		case token != "tok":
+			return nil, pool.ErrUnknownSandbox
+		case count > 16:
+			return nil, fmt.Errorf("%w: %d", pool.ErrBadCount, count)
+		}
+		children := make([]*types.Sandbox, count)
+		for i := range children {
+			children[i] = &types.Sandbox{ID: fmt.Sprintf("sb_c%d", i), Token: "ct", Deadline: time.Unix(42, 0).UTC()}
+		}
+		if ttl != time.Minute {
+			t.Errorf("ttl %v, want 1m", ttl)
+		}
+		return children, nil
+	}}
+	ts := newTestServer(t, "", mgr, nil)
+
+	post := func(auth, body string) *http.Response {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/fork", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do: %v", err)
+		}
+		return resp
+	}
+
+	resp := post("Bearer tok", `{"count":2,"ttl_seconds":60}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	var fr types.ForkResponse
+	if err := json.NewDecoder(resp.Body).Decode(&fr); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(fr.Children) != 2 || fr.Children[0].ID != "sb_c0" || fr.Children[0].OwnerAddr != "node:7777" {
+		t.Errorf("children %+v, want two with this node as owner", fr.Children)
+	}
+
+	for _, tt := range []struct {
+		name, auth, body string
+		want             int
+	}{
+		{"bad count", "Bearer tok", `{"count":17,"ttl_seconds":60}`, http.StatusBadRequest},
+		{"bad body", "Bearer tok", `{oops`, http.StatusBadRequest},
+		{"unknown or bad token", "Bearer bad", `{"count":1}`, http.StatusNotFound},
+		{"missing bearer", "", `{"count":1}`, http.StatusUnauthorized},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := post(tt.auth, tt.body)
+			defer resp.Body.Close()
+			if resp.StatusCode != tt.want {
+				t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
+			}
+		})
+	}
+}
+
 func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *httptest.Server {
 	t.Helper()
 	if dialer == nil {
@@ -252,6 +318,7 @@ type fakeManager struct {
 	release   func(id, token string) error
 	socket    func(id, token string) (string, error)
 	hibernate func(id, token string) error
+	fork      func(id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
 }
 
 func (f *fakeManager) doClaim(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
@@ -292,6 +359,13 @@ func (f *fakeManager) Hibernate(_ context.Context, id, token string) error {
 		return nil
 	}
 	return f.hibernate(id, token)
+}
+
+func (f *fakeManager) Fork(_ context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
+	if f.fork == nil {
+		return nil, pool.ErrUnknownSandbox
+	}
+	return f.fork(id, token, count, ttl)
 }
 
 func (f *fakeManager) Info() ([]pool.PoolInfo, int, int) {

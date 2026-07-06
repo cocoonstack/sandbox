@@ -36,6 +36,7 @@ type Manager interface {
 	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
 	Release(ctx context.Context, id, token string) error
 	Hibernate(ctx context.Context, id, token string) error
+	Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
 	AgentSocket(id, token string) (string, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, error)
 	Info() ([]pool.PoolInfo, int, int)
@@ -97,6 +98,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/claim", s.requireAPIToken(s.handleClaim))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleSandboxVerb("release", s.mgr.Release))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.handleFork)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", s.handleAgent)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/owner", s.handleOwner)
 	mux.HandleFunc("GET /v1/info", s.requireAPIToken(s.handleInfo))
@@ -165,6 +167,38 @@ func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id,
 		default:
 			w.WriteHeader(http.StatusNoContent)
 		}
+	}
+}
+
+// handleFork clones a claimed sandbox into fresh child claims, one
+// ClaimResponse per child; this node owns them all.
+func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
+	token, ok := bearerToken(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "missing bearer token")
+		return
+	}
+	var req types.ForkRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	id := r.PathValue("id")
+	children, err := s.mgr.Fork(r.Context(), id, token, req.Count, req.TTL())
+	switch {
+	case errors.Is(err, pool.ErrBadCount):
+		writeErr(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, pool.ErrUnknownSandbox):
+		writeErr(w, http.StatusNotFound, "unknown sandbox")
+	case err != nil:
+		log.WithFunc("server.handleFork").Errorf(r.Context(), err, "fork %s", id)
+		writeErr(w, http.StatusInternalServerError, "fork failed")
+	default:
+		resp := types.ForkResponse{Children: make([]types.ClaimResponse, len(children))}
+		for i, c := range children {
+			resp.Children[i] = types.ClaimResponse{ID: c.ID, Token: c.Token, Deadline: c.Deadline, OwnerAddr: s.advertise}
+		}
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 

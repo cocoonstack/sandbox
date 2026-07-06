@@ -32,15 +32,20 @@ const (
 	maxConcurrentRefills = 4
 	defaultTTL           = 5 * time.Minute
 	maxTTL               = 24 * time.Hour
+	// maxForkCount bounds one fork call: every child is a full-RAM VM, so an
+	// unbounded count could OOM the node in a single request.
+	maxForkCount = 16
 
 	vmPrefix        = "sbx-"
 	goldenPrefix    = "sbx-golden-"
 	hibernatePrefix = "sbx-hib-"
+	forkPrefix      = "sbx-fork-"
 	vmStateRunning  = "running"
 )
 
 var (
 	ErrBadKey         = errors.New("invalid pool key")
+	ErrBadCount       = errors.New("invalid fork count")
 	ErrNoWarm         = errors.New("no warm sandbox for key")
 	ErrUnknownSandbox = errors.New("unknown sandbox or bad token")
 	ErrNoEgress       = errors.New("node has no egress attachment (bridge or network)")
@@ -54,6 +59,7 @@ type Engine interface {
 	SnapshotSave(ctx context.Context, vmName, snapName string) error
 	SnapshotExport(ctx context.Context, snapName, toDir string) error
 	SnapshotRemove(ctx context.Context, snapName string) error
+	SnapshotList(ctx context.Context) ([]string, error)
 	Hibernate(ctx context.Context, vmName, snapName string) error
 	Restore(ctx context.Context, vmName, snapRef string) error
 	List(ctx context.Context, filters ...string) ([]types.VMRecord, error)
@@ -178,19 +184,37 @@ func (m *Manager) validate(key types.PoolKey) error {
 // finalize stamps identity, persists the claim, and destroys the VM if the
 // store write fails so a durable claim always matches a live VM.
 func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Duration) (*types.Sandbox, error) {
-	stampIdentity(sb, clampTTL(ttl))
+	if err := m.finalizeBatch(ctx, []*types.Sandbox{sb}, ttl); err != nil {
+		return nil, err
+	}
+	return sb, nil
+}
+
+// finalizeBatch stamps identities and persists the claims as one journal
+// write; on a failed write every VM in the batch is destroyed — a durable
+// claim always matches a live VM, and a batch lands all-or-nothing.
+func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration) error {
+	for _, sb := range sbs {
+		stampIdentity(sb, clampTTL(ttl))
+	}
 	m.mu.Lock()
-	m.claimed[sb.ID] = sb
+	for _, sb := range sbs {
+		m.claimed[sb.ID] = sb
+	}
 	saveErr := m.store.save(m.claimed)
 	if saveErr != nil {
-		delete(m.claimed, sb.ID)
+		for _, sb := range sbs {
+			delete(m.claimed, sb.ID)
+		}
 	}
 	m.mu.Unlock()
 	if saveErr != nil {
-		m.destroy(ctx, sb.VMName)
-		return nil, fmt.Errorf("persist claim: %w", saveErr)
+		for _, sb := range sbs {
+			m.destroy(ctx, sb.VMName)
+		}
+		return fmt.Errorf("persist claim: %w", saveErr)
 	}
-	return sb, nil
+	return nil
 }
 
 // WarmCounts is the per-pool-key-hash warm count, for gossiping placement.
@@ -302,6 +326,58 @@ func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string
 	return sock, nil
 }
 
+// Fork clones a claimed sandbox into count children, each a fresh claim with
+// its own lease: memory, disk, and guest state (sessions, processes, tmpfs)
+// duplicate at the snapshot point, and cocoon's clone reseed gives every
+// child a distinct machine identity. All-or-nothing: any child failing
+// destroys the ones already built, so an error means no child survived.
+func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
+	if count < 1 || count > maxForkCount {
+		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, maxForkCount)
+	}
+	sb, ok := m.claim(id, token)
+	if !ok {
+		return nil, ErrUnknownSandbox
+	}
+	// The transition lock serializes fork against hibernate/wake so the
+	// source snapshot cannot be consumed or dropped mid-export.
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	// See Hibernate: a started fork must finish even if the caller hangs up.
+	ctx = context.WithoutCancel(ctx)
+
+	// A hibernated parent's memory image doubles as the fork source — export
+	// it without waking, and leave it in place for the wake. A running parent
+	// gets a transient snapshot (brief pause window) dropped afterwards.
+	snap := sb.HibernateSnap
+	if snap == "" {
+		snap = forkPrefix + strings.TrimPrefix(sb.VMName, vmPrefix) + "-" + randHex(3)
+		if err := m.eng.SnapshotSave(ctx, sb.VMName, snap); err != nil {
+			return nil, fmt.Errorf("fork %s: %w", id, err)
+		}
+		defer m.dropSnap(ctx, snap)
+	}
+
+	dir, err := os.MkdirTemp(m.dataDir, "fork-")
+	if err != nil {
+		return nil, fmt.Errorf("fork %s: %w", id, err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	exportDir := filepath.Join(dir, "export") // cocoon wants the target absent
+	if err = m.eng.SnapshotExport(ctx, snap, exportDir); err != nil {
+		return nil, fmt.Errorf("fork %s: %w", id, err)
+	}
+
+	children, err := m.cloneBatch(ctx, sb.Key, exportDir, count)
+	if err != nil {
+		return nil, fmt.Errorf("fork %s: %w", id, err)
+	}
+	if err := m.finalizeBatch(ctx, children, ttl); err != nil {
+		return nil, err
+	}
+	return children, nil
+}
+
 // Reconcile aligns state after a daemon restart: re-adopt persisted claims
 // whose VMs are still running (or hibernated), drop the rest, and remove any
 // sbx-prefixed VM nobody owns (stale pool VMs and golden builders from a
@@ -322,6 +398,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 
 	owned := map[string]bool{}
+	referenced := map[string]bool{}
 	m.mu.Lock()
 	for id, sb := range claims {
 		rec, ok := live[sb.VMName]
@@ -335,6 +412,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 		m.claimed[id] = sb
 		owned[sb.VMName] = true
+		referenced[sb.HibernateSnap] = true
 	}
 	saveErr := m.store.save(m.claimed)
 	for _, p := range m.pools {
@@ -350,6 +428,23 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		if strings.HasPrefix(name, vmPrefix) && !owned[name] {
 			m.destroy(ctx, name)
 			logger.Infof(ctx, "removed stale VM %s", name)
+		}
+	}
+
+	// Snapshot sweep, symmetric to the VM sweep: a hibernate snapshot no
+	// adopted claim references is an orphan (a crash between `vm hibernate`
+	// and the journal commit), and fork/golden-build snapshots are transient
+	// by construction — none can span a restart. A list failure only skips
+	// the sweep: GC must not brick startup.
+	if snaps, listErr := m.eng.SnapshotList(ctx); listErr != nil {
+		logger.Warnf(ctx, "snapshot sweep skipped: %v", listErr)
+	} else {
+		for _, snap := range snaps {
+			orphanHib := strings.HasPrefix(snap, hibernatePrefix) && !referenced[snap]
+			if orphanHib || strings.HasPrefix(snap, forkPrefix) || strings.HasPrefix(snap, goldenPrefix) {
+				m.dropSnap(ctx, snap)
+				logger.Infof(ctx, "removed orphan snapshot %s", snap)
+			}
 		}
 	}
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
@@ -544,6 +639,32 @@ func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden strin
 		return nil, err
 	}
 	return &types.Sandbox{VMName: name, Key: key, VsockSocket: sock}, nil
+}
+
+// cloneBatch builds count claim-ready clones from an exported snapshot dir,
+// bounded by the refill semaphore — forks and refills contend for the same
+// node resources, so they share one gate. One failure destroys the batch.
+func (m *Manager) cloneBatch(ctx context.Context, key types.PoolKey, dir string, count int) ([]*types.Sandbox, error) {
+	children := make([]*types.Sandbox, count)
+	errs := make([]error, count)
+	var wg sync.WaitGroup
+	for i := range count {
+		m.refillSem <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-m.refillSem }()
+			children[i], errs[i] = m.provision(ctx, key, dir)
+		})
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		for _, child := range children {
+			if child != nil {
+				m.destroy(ctx, child.VMName)
+			}
+		}
+		return nil, err
+	}
+	return children, nil
 }
 
 // probeReady resolves a VM's vsock socket and waits until its silkd answers,

@@ -68,6 +68,7 @@ func run(addr, token, template string, egress bool) error {
 		{"hibernate", func(ctx context.Context, sb *sandbox.Sandbox) error {
 			return smokeHibernate(ctx, client, sb)
 		}},
+		{"fork", smokeFork},
 	}
 	if egress {
 		steps = append(steps, step{"egress", func(ctx context.Context, _ *sandbox.Sandbox) error {
@@ -308,6 +309,58 @@ func smokeHibernate(ctx context.Context, client *sandbox.Client, sb *sandbox.San
 		return err
 	}
 	return wantHibernated(ctx, client, 0)
+}
+
+// smokeFork proves the fork loop: children inherit the parent's disk at the
+// fork point, get fresh distinct machine identities (clone reseed), and are
+// fully independent claims whose writes never reach a sibling or the parent.
+func smokeFork(ctx context.Context, sb *sandbox.Sandbox) error {
+	if err := sb.WriteFile(ctx, "/work/fork-mark.txt", []byte("parent"), nil); err != nil {
+		return err
+	}
+	parentID, err := sb.Exec(ctx, "cat", "/etc/machine-id")
+	if err != nil {
+		return err
+	}
+	children, err := sb.Fork(ctx, 2, 2*time.Minute)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		for _, c := range children {
+			_ = c.Close()
+		}
+	}()
+	ids := map[string]bool{strings.TrimSpace(parentID): true}
+	for i, c := range children {
+		got, err := c.ReadFile(ctx, "/work/fork-mark.txt")
+		if err != nil {
+			return fmt.Errorf("child %d marker: %w", i, err)
+		}
+		if string(got) != "parent" {
+			return fmt.Errorf("child %d marker %q, want the parent's disk state", i, got)
+		}
+		id, err := c.Exec(ctx, "cat", "/etc/machine-id")
+		if err != nil {
+			return err
+		}
+		if id = strings.TrimSpace(id); id == "" || ids[id] {
+			return fmt.Errorf("child %d machine-id %q not distinct", i, id)
+		}
+		ids[id] = true
+		if err := c.WriteFile(ctx, fmt.Sprintf("/work/child-%d.txt", i), []byte("x"), nil); err != nil {
+			return err
+		}
+	}
+	for i := range children {
+		if _, err := children[1-i].Stat(ctx, fmt.Sprintf("/work/child-%d.txt", i)); err == nil {
+			return fmt.Errorf("child %d write visible in sibling — shared disk?", i)
+		}
+	}
+	if _, err := sb.Stat(ctx, "/work/child-0.txt"); err == nil {
+		return errors.New("child write visible in parent — shared disk?")
+	}
+	return nil
 }
 
 func wantHibernated(ctx context.Context, client *sandbox.Client, n int) error {

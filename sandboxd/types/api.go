@@ -42,3 +42,22 @@ func (r ClaimRequest) Key() PoolKey {
 func (r ClaimRequest) TTL() time.Duration {
 	return time.Duration(r.TTLSeconds) * time.Second
 }
+
+// ForkRequest is the wire body of POST /v1/sandboxes/{id}/fork. TTLSeconds
+// applies to every child; zero means the server default — a lease is a
+// per-sandbox resource bound, so children never inherit the parent's
+// remainder.
+type ForkRequest struct {
+	Count      int `json:"count"`
+	TTLSeconds int `json:"ttl_seconds,omitempty"`
+}
+
+// TTL converts the wire seconds to a duration; zero means server default.
+func (r ForkRequest) TTL() time.Duration {
+	return time.Duration(r.TTLSeconds) * time.Second
+}
+
+// ForkResponse carries one claim per child.
+type ForkResponse struct {
+	Children []ClaimResponse `json:"children"`
+}

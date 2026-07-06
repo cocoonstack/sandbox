@@ -393,9 +393,11 @@ type fakeEngine struct {
 	probeTimeouts []time.Duration
 
 	hibernates, restores, snapRemoves []string
+	snapSaves, exports, snapshots     []string
 	stopped                           map[string]bool
 
-	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr error
+	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr, snapSaveErr error
+	cloneFailNth                                                          int // 1-based Clone call to fail; 0 = never
 
 	probeStall     chan struct{} // non-nil: Probe blocks until closed
 	hibernateStall chan struct{} // non-nil: Hibernate blocks until closed
@@ -411,6 +413,9 @@ func (f *fakeEngine) Clone(_ context.Context, _, name string, _ types.PoolKey) e
 	f.clones = append(f.clones, name)
 	if f.cloneErr != nil {
 		return f.cloneErr
+	}
+	if f.cloneFailNth > 0 && len(f.clones) == f.cloneFailNth {
+		return errors.New("clone failed")
 	}
 	f.vms[name] = "/vsock/" + name
 	return nil
@@ -439,10 +444,24 @@ func (f *fakeEngine) Remove(ctx context.Context, name string) error {
 	return nil
 }
 
-func (f *fakeEngine) SnapshotSave(_ context.Context, _, _ string) error { return nil }
+func (f *fakeEngine) SnapshotSave(_ context.Context, _, snapName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.snapSaves = append(f.snapSaves, snapName)
+	return f.snapSaveErr
+}
 
-func (f *fakeEngine) SnapshotExport(_ context.Context, _, toDir string) error {
+func (f *fakeEngine) SnapshotExport(_ context.Context, snapName, toDir string) error {
+	f.mu.Lock()
+	f.exports = append(f.exports, snapName)
+	f.mu.Unlock()
 	return os.MkdirAll(toDir, 0o750)
+}
+
+func (f *fakeEngine) SnapshotList(_ context.Context) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.snapshots), nil
 }
 
 func (f *fakeEngine) SnapshotRemove(_ context.Context, snapName string) error {
