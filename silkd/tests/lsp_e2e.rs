@@ -20,10 +20,14 @@ use common::{b64, connect, decode, one, type_of};
 
 const DEADLINE: Duration = Duration::from_secs(30);
 
+// SILKD_LSP_DIR is process-global; serialize the tests that set it.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 // A fake server that echoes each line it reads, prefixed — enough to prove
 // the round trip without LSP semantics.
 const FAKE_SERVER: &str = r#"#!/bin/sh
-while IFS= read -r line; do printf 'reply:%s\n' "$line"; done
+IFS= read -r line
+printf 'reply:%s\n' "$line"
 "#;
 
 fn manifest_env(server_body: &str) -> TempDir {
@@ -72,6 +76,7 @@ async fn lsp_start_language_name_cannot_escape() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // ENV_LOCK serializes SILKD_LSP_DIR across the whole test
 async fn lsp_broker_relays_to_the_server() {
     // Point the broker at a manifest dir under our control by baking the
     // fake server's argv into a manifest the broker will read. The broker
@@ -79,19 +84,15 @@ async fn lsp_broker_relays_to_the_server() {
     // the Broker directly against a manifest we control via the language arg
     // being an absolute path is disallowed — instead we assert the spawn +
     // relay path through a manifest we plant when running as root, else skip.
+    let _env_lock = ENV_LOCK.lock().unwrap();
     let env = manifest_env(FAKE_SERVER);
     let bin = env.path().join("fake-lsp");
-    // Install a manifest only if we can write the system dir (root in a
-    // container); otherwise this asserts the not-found path, already covered.
-    if std::fs::create_dir_all("/etc/silkd/lsp.d").is_err() {
-        return;
-    }
-    let manifest = "/etc/silkd/lsp.d/faketest".to_string();
-    if std::fs::write(&manifest, bin.to_string_lossy().as_bytes()).is_err() {
-        return;
-    }
-    let cleanup = scopeguard(manifest.clone());
-    let _ = &cleanup;
+    std::fs::write(
+        env.path().join("faketest"),
+        bin.to_string_lossy().as_bytes(),
+    )
+    .unwrap();
+    std::env::set_var("SILKD_LSP_DIR", env.path());
 
     let state = Arc::new(State::new());
     let start = one(
@@ -136,9 +137,50 @@ async fn lsp_broker_relays_to_the_server() {
     assert_eq!(type_of(&frame), "data");
     assert_eq!(decode(&frame), b"reply:ping\n");
 
+    // The fake server exits after one reply: its stdout EOFs, so the request
+    // ends with Done and the broker reaps the server.
+    let done = timeout(DEADLINE, out.next_line())
+        .await
+        .expect("deadline")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        type_of(&serde_json::from_str::<serde_json::Value>(&done).unwrap()),
+        "done"
+    );
     cw.shutdown().await.unwrap();
     let _ = handle.await;
 
+    // Reaped: a later lsp_stop is not_found.
+    let gone = one(
+        &state,
+        &json!({"op":"lsp_stop","server_id":server_id}).to_string(),
+    )
+    .await;
+    assert_eq!(gone.last().unwrap()["kind"], "not_found");
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // ENV_LOCK serializes SILKD_LSP_DIR across the whole test
+async fn lsp_stop_kills_an_idle_server() {
+    let _env_lock = ENV_LOCK.lock().unwrap();
+    let env = manifest_env("#!/bin/sh\nsleep 60\n");
+    std::fs::write(
+        env.path().join("idletest"),
+        env.path().join("fake-lsp").to_string_lossy().as_bytes(),
+    )
+    .unwrap();
+    std::env::set_var("SILKD_LSP_DIR", env.path());
+    let state = Arc::new(State::new());
+    let start = one(
+        &state,
+        &json!({"op":"lsp_start","language":"idletest"}).to_string(),
+    )
+    .await;
+    let server_id = start.last().unwrap()["server_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let stop = one(
         &state,
         &json!({"op":"lsp_stop","server_id":server_id}).to_string(),
@@ -151,14 +193,4 @@ async fn lsp_broker_relays_to_the_server() {
     )
     .await;
     assert_eq!(gone.last().unwrap()["kind"], "not_found");
-}
-
-struct Guard(String);
-impl Drop for Guard {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-fn scopeguard(path: String) -> Guard {
-    Guard(path)
 }

@@ -4,13 +4,15 @@
 //! client and the server's stdio. silkd is a broker, not a gateway: it never
 //! parses LSP method semantics — the server multiplexes, silkd just pipes.
 //!
-//! `lsp_start` spawns and returns an id; `lsp_request` attaches the current
-//! connection's byte stream to that server (one client at a time, the LSP
-//! model) and pumps until either side closes; `lsp_stop` kills it. The base
-//! image ships no manifests, so `lsp_start` for any language there answers a
-//! typed `not_found` naming the flavor that provides one.
+//! `lsp_start` spawns and returns an id; `lsp_request` attaches the byte
+//! stream and pumps until either side closes; `lsp_stop` kills it. A dropped
+//! `lsp_request` ends the session (an LSP stream loses sync on a mid-frame
+//! cut, so there is nothing safe to reattach to) — the server is killed and
+//! reaped. The base image ships no manifests, so `lsp_start` for any language
+//! there answers a typed `not_found` naming the flavor that provides one.
 
 use std::collections::HashMap;
+use std::os::unix::fs::OpenOptionsExt;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,10 +25,15 @@ use crate::proto::{self, ErrorKind, Request, Response, READ_CHUNK};
 
 const MANIFEST_DIR: &str = "/etc/silkd/lsp.d";
 
+// manifest_dir allows tests (and an operator) to relocate the manifest dir
+// via SILKD_LSP_DIR, mirroring silkd's other env overrides.
+fn manifest_dir() -> String {
+    std::env::var("SILKD_LSP_DIR").unwrap_or_else(|_| MANIFEST_DIR.to_string())
+}
+
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Table of running language servers, addressed by server id across
-/// connections so an LSP session survives a dropped `lsp_request`.
+/// Table of running language servers, addressed by server id.
 #[derive(Clone, Default)]
 pub struct Broker {
     inner: Arc<Mutex<HashMap<String, Server>>>,
@@ -51,7 +58,7 @@ impl Broker {
                 return proto::error_frame(
                     w,
                     ErrorKind::NotFound,
-                    format!("no language server for {language:?}; a flavor image provides {MANIFEST_DIR}/{language}"),
+                    format!("no language server for {language:?}; a flavor image provides {}/{language}", manifest_dir()),
                 )
                 .await;
             }
@@ -71,21 +78,45 @@ impl Broker {
         };
         let stdin = child.stdin.take().expect("stdin piped");
         let stdout = child.stdout.take().expect("stdout piped");
-        let id = format!("lsp-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
-        self.inner.lock().unwrap().insert(
-            id.clone(),
-            Server {
-                child: Arc::new(Mutex::new(child)),
-                stdin: Arc::new(tokio::sync::Mutex::new(stdin)),
-                stdout: Arc::new(tokio::sync::Mutex::new(Some(stdout))),
+        let server = Server {
+            child: Arc::new(tokio::sync::Mutex::new(child)),
+            stdin: Arc::new(tokio::sync::Mutex::new(stdin)),
+            stdout: Arc::new(tokio::sync::Mutex::new(Some(stdout))),
+        };
+
+        // Allocate a free id under the map lock so a wrapped counter can't
+        // overwrite a live server.
+        let id = {
+            let mut map = self.inner.lock().unwrap();
+            let id = loop {
+                let candidate = format!("lsp-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
+                if !map.contains_key(&candidate) {
+                    break candidate;
+                }
+            };
+            map.insert(id.clone(), server.clone());
+            id
+        };
+
+        // If the client is already gone, don't leak the server we just spawned.
+        if let Err(e) = proto::write_frame(
+            w,
+            &Response::LspStarted {
+                server_id: id.clone(),
             },
-        );
-        proto::write_frame(w, &Response::LspStarted { server_id: id }).await
+        )
+        .await
+        {
+            self.reap(&id).await;
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// request attaches this connection to the server's stdio: client `data`
-    /// frames feed its stdin, its stdout streams back as `data` frames, until
-    /// either side closes. The server keeps running for a later reattach.
+    /// frames feed its stdin, its stdout streams back as `data` frames. When
+    /// either side closes the session is over — the server is reaped, so a
+    /// dropped connection never leaves a half-written stdin for a next caller.
     pub async fn request<W: AsyncWrite + Unpin>(
         &self,
         client: mpsc::Receiver<Request>,
@@ -107,35 +138,46 @@ impl Broker {
         proto::write_frame(w, &Response::Ready).await?;
 
         let feed = tokio::spawn(feed_stdin(client, server.stdin.clone()));
-        let (res, stdout) = pump_stdout(stdout, w).await;
+        let res = pump_stdout(stdout, w).await;
+        // The session ends with this connection: stop feeding and reap the
+        // server. Aborting is safe here — we are killing the child, so a
+        // partially-written stdin frame goes nowhere.
         feed.abort();
-        // Hand the stdout back so a later lsp_request can reattach.
-        *server.stdout.lock().await = Some(stdout);
+        self.reap(server_id).await;
         res
     }
 
-    /// stop kills a server and drops it from the table.
+    /// stop kills a server and reaps it.
     pub async fn stop<W: AsyncWrite + Unpin>(
         &self,
         w: &mut W,
         server_id: &str,
     ) -> std::io::Result<()> {
+        if self.inner.lock().unwrap().contains_key(server_id) {
+            self.reap(server_id).await;
+            proto::write_frame(w, &Response::Done).await
+        } else {
+            proto::error_frame(w, ErrorKind::NotFound, "no such lsp server").await
+        }
+    }
+
+    /// reap removes a server from the table and kills + waits its child, so no
+    /// zombie survives.
+    async fn reap(&self, server_id: &str) {
         let removed = self.inner.lock().unwrap().remove(server_id);
-        match removed {
-            Some(server) => {
-                let _ = server.child.lock().unwrap().start_kill();
-                proto::write_frame(w, &Response::Done).await
-            }
-            None => proto::error_frame(w, ErrorKind::NotFound, "no such lsp server").await,
+        if let Some(server) = removed {
+            let mut child = server.child.lock().await;
+            let _ = child.start_kill();
+            let _ = child.wait().await;
         }
     }
 }
 
-/// One running language server: its child handle plus stdio, shared so
-/// `lsp_request` can reattach and `lsp_stop` can kill.
+/// One running language server: child + stdio, shared so `lsp_request` reads
+/// stdout, `feed_stdin` writes stdin, and `reap` kills the child.
 #[derive(Clone)]
 struct Server {
-    child: Arc<Mutex<Child>>,
+    child: Arc<tokio::sync::Mutex<Child>>,
     stdin: Arc<tokio::sync::Mutex<ChildStdin>>,
     stdout: Arc<tokio::sync::Mutex<Option<ChildStdout>>>,
 }
@@ -161,34 +203,38 @@ async fn feed_stdin(
 async fn pump_stdout<W: AsyncWrite + Unpin>(
     mut stdout: ChildStdout,
     w: &mut W,
-) -> (std::io::Result<()>, ChildStdout) {
+) -> std::io::Result<()> {
     let mut buf = vec![0u8; READ_CHUNK];
-    let res = loop {
+    loop {
         match stdout.read(&mut buf).await {
-            Ok(0) => break proto::write_frame(w, &Response::Done).await,
+            Ok(0) => return proto::write_frame(w, &Response::Done).await,
             Ok(n) => {
-                if let Err(e) = proto::write_frame(
+                proto::write_frame(
                     w,
                     &Response::Data {
                         data: buf[..n].to_vec(),
                     },
                 )
-                .await
-                {
-                    break Err(e);
-                }
+                .await?
             }
-            Err(e) => break proto::err_frame(w, &e, "read lsp stdout").await,
+            Err(e) => return proto::err_frame(w, &e, "read lsp stdout").await,
         }
-    };
-    (res, stdout)
+    }
 }
 
 fn read_manifest(language: &str) -> Option<Vec<String>> {
-    if language.contains('/') || language.contains("..") {
+    if language.is_empty() || language.contains(['/', '\\', '\0']) || language.contains("..") {
         return None; // never let a language name escape the manifest dir
     }
-    let raw = std::fs::read_to_string(format!("{MANIFEST_DIR}/{language}")).ok()?;
+    // O_NOFOLLOW: a symlink planted inside lsp.d must not read a target
+    // outside it.
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(format!("{}/{language}", manifest_dir()))
+        .ok()?;
+    let mut raw = String::new();
+    std::io::Read::read_to_string(&mut f, &mut raw).ok()?;
     let argv: Vec<String> = raw.split_whitespace().map(str::to_string).collect();
     (!argv.is_empty()).then_some(argv)
 }
