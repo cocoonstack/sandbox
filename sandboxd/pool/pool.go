@@ -174,7 +174,7 @@ func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
 	for _, spec := range cfg.Pools {
 		m.pools[spec.PoolKey] = &pool{key: spec.PoolKey, target: spec.Warm}
 		if spec.IdleHibernateSeconds > 0 {
-			m.idleFor[spec.PoolKey.Hash()] = time.Duration(spec.IdleHibernateSeconds) * time.Second
+			m.idleFor[spec.Hash()] = time.Duration(spec.IdleHibernateSeconds) * time.Second
 		}
 	}
 	return m, nil
