@@ -11,60 +11,6 @@ use tokio::process::Command;
 
 use crate::proto::{self, ErrorKind, GitBranchOp, GitFileStatus, Response};
 
-/// Builds a `git -C dir` command with config and stdio policy applied. Config
-/// (an auth token, and quotePath=false so paths come back raw) rides in
-/// `GIT_CONFIG_*` env vars, not `-c` args: the process environ is root-only,
-/// whereas argv is world-readable via /proc/<pid>/cmdline — a de-escalated
-/// exec could otherwise scrape the token.
-fn git_cmd(dir: &str, auth: Option<&str>) -> Command {
-    let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(dir);
-    apply_config(&mut cmd, auth);
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    cmd
-}
-
-/// Runs `git`, capturing output.
-async fn git(
-    dir: &str,
-    auth: Option<&str>,
-    args: &[&str],
-) -> std::io::Result<std::process::Output> {
-    git_cmd(dir, auth).args(args).output().await
-}
-
-/// Injects git config as GIT_CONFIG_COUNT/KEY_n/VALUE_n env pairs.
-fn apply_config(cmd: &mut Command, auth: Option<&str>) {
-    let mut pairs: Vec<(&str, String)> = vec![("core.quotePath", "false".to_string())];
-    if let Some(token) = auth {
-        pairs.push(("http.extraHeader", format!("Authorization: Bearer {token}")));
-    }
-    cmd.env("GIT_CONFIG_COUNT", pairs.len().to_string());
-    for (i, (key, value)) in pairs.iter().enumerate() {
-        cmd.env(format!("GIT_CONFIG_KEY_{i}"), key);
-        cmd.env(format!("GIT_CONFIG_VALUE_{i}"), value);
-    }
-}
-
-async fn fail<W: AsyncWrite + Unpin>(w: &mut W, out: &std::process::Output) -> std::io::Result<()> {
-    let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    proto::write_frame(
-        w,
-        &Response::error(ErrorKind::Internal, format!("git: {msg}")),
-    )
-    .await
-}
-
-fn no_egress() -> Response {
-    Response::error(
-        ErrorKind::Unimplemented,
-        "no network on this sandbox; use fs.push to move a repository in",
-    )
-}
-
 /// Clones `url` into `path` (optionally a branch, shallow depth), then Done.
 pub async fn clone<W: AsyncWrite + Unpin>(
     w: &mut W,
@@ -209,6 +155,60 @@ pub async fn branch<W: AsyncWrite + Unpin>(
             terminal(w, out).await
         }
     }
+}
+
+/// Builds a `git -C dir` command with config and stdio policy applied. Config
+/// (an auth token, and quotePath=false so paths come back raw) rides in
+/// `GIT_CONFIG_*` env vars, not `-c` args: the process environ is root-only,
+/// whereas argv is world-readable via /proc/<pid>/cmdline — a de-escalated
+/// exec could otherwise scrape the token.
+fn git_cmd(dir: &str, auth: Option<&str>) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(dir);
+    apply_config(&mut cmd, auth);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    cmd
+}
+
+/// Runs `git`, capturing output.
+async fn git(
+    dir: &str,
+    auth: Option<&str>,
+    args: &[&str],
+) -> std::io::Result<std::process::Output> {
+    git_cmd(dir, auth).args(args).output().await
+}
+
+/// Injects git config as GIT_CONFIG_COUNT/KEY_n/VALUE_n env pairs.
+fn apply_config(cmd: &mut Command, auth: Option<&str>) {
+    let mut pairs: Vec<(&str, String)> = vec![("core.quotePath", "false".to_string())];
+    if let Some(token) = auth {
+        pairs.push(("http.extraHeader", format!("Authorization: Bearer {token}")));
+    }
+    cmd.env("GIT_CONFIG_COUNT", pairs.len().to_string());
+    for (i, (key, value)) in pairs.iter().enumerate() {
+        cmd.env(format!("GIT_CONFIG_KEY_{i}"), key);
+        cmd.env(format!("GIT_CONFIG_VALUE_{i}"), value);
+    }
+}
+
+async fn fail<W: AsyncWrite + Unpin>(w: &mut W, out: &std::process::Output) -> std::io::Result<()> {
+    let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    proto::write_frame(
+        w,
+        &Response::error(ErrorKind::Internal, format!("git: {msg}")),
+    )
+    .await
+}
+
+fn no_egress() -> Response {
+    Response::error(
+        ErrorKind::Unimplemented,
+        "no network on this sandbox; use fs.push to move a repository in",
+    )
 }
 
 /// Writes Done on success, else the git stderr as an error frame.

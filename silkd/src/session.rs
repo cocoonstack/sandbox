@@ -29,21 +29,6 @@ pub struct Table {
     inner: Arc<Mutex<HashMap<String, Arc<Session>>>>,
 }
 
-/// One persistent shell. `io` serializes commands so a session runs one at a
-/// time; the child is killed on drop, and `pid` allows an explicit kill to
-/// unwedge a session whose command is blocked while the io lock is held.
-pub struct Session {
-    pid: u32,
-    io: tokio::sync::Mutex<Io>,
-    last_active: Mutex<Instant>,
-}
-
-struct Io {
-    stdin: ChildStdin,
-    stdout: ChildStdout,
-    _child: Child,
-}
-
 impl Table {
     pub fn new() -> Self {
         Self::default()
@@ -163,6 +148,15 @@ impl Table {
     }
 }
 
+/// One persistent shell. `io` serializes commands so a session runs one at a
+/// time; the child is killed on drop, and `pid` allows an explicit kill to
+/// unwedge a session whose command is blocked while the io lock is held.
+pub struct Session {
+    pid: u32,
+    io: tokio::sync::Mutex<Io>,
+    last_active: Mutex<Instant>,
+}
+
 impl Session {
     /// Runs `argv` in the session shell, streaming stdout frames to `w` and
     /// ending with an exit frame. argv is shell-quoted and joined so a fresh
@@ -196,15 +190,10 @@ impl Session {
     }
 }
 
-/// Periodically reaps idle sessions until the process exits.
-pub async fn reap_loop(table: Table, ttl: Duration, interval: Duration) {
-    loop {
-        tokio::time::sleep(interval).await;
-        let n = table.reap_idle(ttl);
-        if n > 0 {
-            eprintln!("silkd: reaped {n} idle session(s)");
-        }
-    }
+struct Io {
+    stdin: ChildStdin,
+    stdout: ChildStdout,
+    _child: Child,
 }
 
 impl Io {
@@ -271,6 +260,17 @@ impl Io {
                 emit(&mut out, &acc[..upto]).await;
                 acc.drain(..upto);
             }
+        }
+    }
+}
+
+/// Periodically reaps idle sessions until the process exits.
+pub async fn reap_loop(table: Table, ttl: Duration, interval: Duration) {
+    loop {
+        tokio::time::sleep(interval).await;
+        let n = table.reap_idle(ttl);
+        if n > 0 {
+            eprintln!("silkd: reaped {n} idle session(s)");
         }
     }
 }

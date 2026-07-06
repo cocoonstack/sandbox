@@ -44,32 +44,6 @@ pub struct Table {
     inner: Arc<Mutex<HashMap<u32, Arc<Proc>>>>,
 }
 
-/// One tracked process. `tx` fans out live output; `ring` retains a bounded
-/// tail for replay; `state` flips to exited when the child is reaped.
-/// `pty_master` holds a dup of a pty's master fd (None for a plain exec) so
-/// `pty.resize` can ioctl it without racing the I/O task's own fd.
-pub struct Proc {
-    pub pid: u32,
-    pub argv: Vec<String>,
-    pub detached: bool,
-    pub started_at_epoch_secs: u64,
-    tx: broadcast::Sender<Chunk>,
-    ring: Mutex<Ring>,
-    state: Mutex<State>,
-    pty_master: Mutex<Option<OwnedFd>>,
-}
-
-struct Ring {
-    buf: VecDeque<u8>,
-    tags: VecDeque<(bool, usize)>, // (is_stderr, len) preserving stream boundaries
-}
-
-#[derive(Clone, Copy)]
-enum State {
-    Running,
-    Exited(i32),
-}
-
 impl Table {
     pub fn new() -> Self {
         Self::default()
@@ -124,6 +98,21 @@ impl Table {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+}
+
+/// One tracked process. `tx` fans out live output; `ring` retains a bounded
+/// tail for replay; `state` flips to exited when the child is reaped.
+/// `pty_master` holds a dup of a pty's master fd (None for a plain exec) so
+/// `pty.resize` can ioctl it without racing the I/O task's own fd.
+pub struct Proc {
+    pub pid: u32,
+    pub argv: Vec<String>,
+    pub detached: bool,
+    pub started_at_epoch_secs: u64,
+    tx: broadcast::Sender<Chunk>,
+    ring: Mutex<Ring>,
+    state: Mutex<State>,
+    pty_master: Mutex<Option<OwnedFd>>,
 }
 
 impl Proc {
@@ -202,6 +191,11 @@ impl Proc {
     }
 }
 
+struct Ring {
+    buf: VecDeque<u8>,
+    tags: VecDeque<(bool, usize)>, // (is_stderr, len) preserving stream boundaries
+}
+
 impl Ring {
     fn push(&mut self, stderr: bool, data: &[u8]) {
         self.buf.extend(data);
@@ -238,6 +232,12 @@ impl Ring {
         }
         out
     }
+}
+
+#[derive(Clone, Copy)]
+enum State {
+    Running,
+    Exited(i32),
 }
 
 pub fn synth_pid() -> u32 {

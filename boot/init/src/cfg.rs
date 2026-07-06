@@ -92,11 +92,6 @@ pub fn parse(cmdline: &str) -> Result<BootCfg, String> {
     Ok(cfg)
 }
 
-/// sandbox.debug value semantics, shared by parse() and debug_requested().
-fn debug_token(val: &str) -> bool {
-    val.is_empty() || val == "1"
-}
-
 /// Debug check for the path where parse() itself failed and cfg.debug is
 /// unavailable. Token handling mirrors parse() exactly: same value
 /// predicate, last occurrence wins.
@@ -118,6 +113,28 @@ pub fn overlay_data(lower: &[String], cow_dir: &str) -> String {
         "lowerdir={},upperdir={cow_dir}/upper,workdir={cow_dir}/work,index=on,redirect_dir=on,metacopy=on,xino=on",
         lower.join(":")
     )
+}
+
+/// systemd-networkd unit for one static NIC. MAC-matched (device names may
+/// change once rootfs udev renames), named 10-<mac>.network so it sorts
+/// before the image's 20-wired.network DHCP fallback.
+pub fn network_unit(ip: &IpParam, mac: &str) -> String {
+    let mut unit = format!(
+        "[Match]\nMACAddress={mac}\n\n[Network]\nAddress={}/{}\n",
+        ip.addr, ip.prefix
+    );
+    if let Some(gw) = &ip.gateway {
+        unit.push_str(&format!("Gateway={gw}\n"));
+    }
+    for dns in &ip.dns {
+        unit.push_str(&format!("DNS={dns}\n"));
+    }
+    unit
+}
+
+/// sandbox.debug value semantics, shared by parse() and debug_requested().
+fn debug_token(val: &str) -> bool {
+    val.is_empty() || val == "1"
 }
 
 /// Kernel ip= fields: client:server:gw:netmask:hostname:device:autoconf[:dns0[:dns1]].
@@ -166,23 +183,6 @@ fn mask_to_prefix(mask: &str) -> Option<u8> {
         return None;
     }
     Some(prefix as u8)
-}
-
-/// systemd-networkd unit for one static NIC. MAC-matched (device names may
-/// change once rootfs udev renames), named 10-<mac>.network so it sorts
-/// before the image's 20-wired.network DHCP fallback.
-pub fn network_unit(ip: &IpParam, mac: &str) -> String {
-    let mut unit = format!(
-        "[Match]\nMACAddress={mac}\n\n[Network]\nAddress={}/{}\n",
-        ip.addr, ip.prefix
-    );
-    if let Some(gw) = &ip.gateway {
-        unit.push_str(&format!("Gateway={gw}\n"));
-    }
-    for dns in &ip.dns {
-        unit.push_str(&format!("DNS={dns}\n"));
-    }
-    unit
 }
 
 #[cfg(test)]

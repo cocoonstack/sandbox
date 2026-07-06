@@ -268,6 +268,15 @@ pub enum Response {
     },
 }
 
+impl Response {
+    pub fn error(kind: ErrorKind, message: impl Into<String>) -> Self {
+        Response::Error {
+            kind,
+            message: message.into(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
@@ -337,15 +346,6 @@ pub struct ProcInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     pub started_at_epoch_secs: u64,
-}
-
-impl Response {
-    pub fn error(kind: ErrorKind, message: impl Into<String>) -> Self {
-        Response::Error {
-            kind,
-            message: message.into(),
-        }
-    }
 }
 
 /// Reads one newline-terminated frame (newline stripped); None on clean EOF.
