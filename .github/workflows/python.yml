@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install tooling
-        run: pip install ruff pytest
+        run: pip install ruff pytest && pip install -e sdk/python
       - name: Lint
         run: cd sdk/python && ruff check .
       - name: Test
