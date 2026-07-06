@@ -23,6 +23,18 @@ type PoolSpec struct {
 	Warm int `json:"warm"`
 }
 
+// MeshConfig configures cluster membership. Two v1 constraints: all nodes
+// must share the same APIToken (the SDK replays it across a redirect), and a
+// node serving the egress lane can only redirect egress claims to peers if it
+// too has an egress attachment (a no-egress node answers 409 rather than
+// redirecting). Both are acceptable for a homogeneous cluster.
+type MeshConfig struct {
+	NodeID     string   `json:"node_id"`               // unique name; defaults to Bind
+	Bind       string   `json:"bind"`                  // memberlist host:port
+	Join       []string `json:"join,omitempty"`        // seed members; empty = mesh of one
+	ClusterKey string   `json:"cluster_key,omitempty"` // base64 gossip-encryption key
+}
+
 // Config is the sandboxd node configuration.
 type Config struct {
 	Listen    string `json:"listen"`
@@ -56,23 +68,6 @@ type Config struct {
 	Pools []PoolSpec `json:"pools"`
 }
 
-// MeshConfig configures cluster membership. Two v1 constraints: all nodes
-// must share the same APIToken (the SDK replays it across a redirect), and a
-// node serving the egress lane can only redirect egress claims to peers if it
-// too has an egress attachment (a no-egress node answers 409 rather than
-// redirecting). Both are acceptable for a homogeneous cluster.
-type MeshConfig struct {
-	NodeID     string   `json:"node_id"`               // unique name; defaults to Bind
-	Bind       string   `json:"bind"`                  // memberlist host:port
-	Join       []string `json:"join,omitempty"`        // seed members; empty = mesh of one
-	ClusterKey string   `json:"cluster_key,omitempty"` // base64 gossip-encryption key
-}
-
-// HasEgress reports whether the node can attach egress-lane VMs.
-func (c *Config) HasEgress() bool {
-	return c.Bridge != "" || c.Network != ""
-}
-
 // Load reads a JSON config file, applies defaults, and validates.
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // path is the operator-supplied -config flag
@@ -88,6 +83,11 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
 	return cfg, nil
+}
+
+// HasEgress reports whether the node can attach egress-lane VMs.
+func (c *Config) HasEgress() bool {
+	return c.Bridge != "" || c.Network != ""
 }
 
 func (c *Config) applyDefaults() {

@@ -398,6 +398,29 @@ func smokePromote(ctx context.Context, client *sandbox.Client, sb *sandbox.Sandb
 	return nil
 }
 
+func smokePty(ctx context.Context, sb *sandbox.Sandbox) error {
+	pty, err := sb.OpenPty(ctx, sandbox.PtyOpts{Cols: 80, Rows: 24})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = pty.Close() }()
+
+	if _, err = pty.Write([]byte("echo PTYMARK$((6*7))\nexit\n")); err != nil {
+		return err
+	}
+	out, err := io.ReadAll(pty)
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(string(out), "PTYMARK42") {
+		return fmt.Errorf("pty output missing marker: %q", out)
+	}
+	if code, ok := pty.ExitCode(); !ok || code != 0 {
+		return fmt.Errorf("pty exit code %d ok=%v, want 0 true", code, ok)
+	}
+	return nil
+}
+
 // smokePortForward proves the guest-port relay on the no-network lane: sshd
 // (socket-activated in the base image) answers on 22, so its banner must
 // arrive through DialPort; a dead port must fail with the typed not_found.
@@ -475,29 +498,6 @@ func wantHibernated(ctx context.Context, client *sandbox.Client, n int) error {
 	}
 	if info.Hibernated != n {
 		return fmt.Errorf("hibernated count %d, want %d", info.Hibernated, n)
-	}
-	return nil
-}
-
-func smokePty(ctx context.Context, sb *sandbox.Sandbox) error {
-	pty, err := sb.OpenPty(ctx, sandbox.PtyOpts{Cols: 80, Rows: 24})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = pty.Close() }()
-
-	if _, err = pty.Write([]byte("echo PTYMARK$((6*7))\nexit\n")); err != nil {
-		return err
-	}
-	out, err := io.ReadAll(pty)
-	if err != nil {
-		return err
-	}
-	if !strings.Contains(string(out), "PTYMARK42") {
-		return fmt.Errorf("pty output missing marker: %q", out)
-	}
-	if code, ok := pty.ExitCode(); !ok || code != 0 {
-		return fmt.Errorf("pty exit code %d ok=%v, want 0 true", code, ok)
 	}
 	return nil
 }

@@ -311,6 +311,10 @@ func (s *Server) requireAPIToken(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func (s *Server) claimResponse(sb *types.Sandbox) types.ClaimResponse {
+	return types.ClaimResponse{ID: sb.ID, Token: sb.Token, Deadline: sb.Deadline, OwnerAddr: s.advertise}
+}
+
 func bearerToken(r *http.Request) (string, bool) {
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	return token, ok && token != ""
@@ -333,10 +337,6 @@ func decodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 		return v, false
 	}
 	return v, true
-}
-
-func (s *Server) claimResponse(sb *types.Sandbox) types.ClaimResponse {
-	return types.ClaimResponse{ID: sb.ID, Token: sb.Token, Deadline: sb.Deadline, OwnerAddr: s.advertise}
 }
 
 // writePoolErr answers a pool-sentinel error per poolErrHTTP, reporting

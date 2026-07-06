@@ -73,26 +73,6 @@ type Engine interface {
 	Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error
 }
 
-// Manager owns the node's pools, claims, and their persistence.
-type Manager struct {
-	eng     Engine
-	dataDir string
-	egress  bool
-	maxFork int
-	store   *store
-
-	// notifyTemplates, when set (before serving starts), fires after a
-	// promote or template delete so the mesh republishes immediately
-	// instead of waiting out a gossip tick.
-	notifyTemplates func()
-
-	mu      sync.Mutex
-	pools   map[types.PoolKey]*pool
-	claimed map[string]*types.Sandbox
-
-	refillSem chan struct{}
-}
-
 // PoolInfo is the ops view of one pool.
 type PoolInfo struct {
 	Key       types.PoolKey `json:"key"`
@@ -111,6 +91,26 @@ type pool struct {
 	nextBuild time.Time
 	warm      []*types.Sandbox
 	refilling int
+}
+
+// Manager owns the node's pools, claims, and their persistence.
+type Manager struct {
+	eng     Engine
+	dataDir string
+	egress  bool
+	maxFork int
+	store   *store
+
+	// notifyTemplates, when set (before serving starts), fires after a
+	// promote or template delete so the mesh republishes immediately
+	// instead of waiting out a gossip tick.
+	notifyTemplates func()
+
+	mu      sync.Mutex
+	pools   map[types.PoolKey]*pool
+	claimed map[string]*types.Sandbox
+
+	refillSem chan struct{}
 }
 
 // NewManager builds a manager from the node config.
@@ -188,94 +188,10 @@ func (m *Manager) SetTemplateNotifier(fn func()) {
 	m.notifyTemplates = fn
 }
 
-// pooledHash reports whether a configured pool occupies this hash — the
-// guard is on the HASH, not the key: goldens are stored by hash, so a
-// colliding key would reach a pool's golden dir even though the keys differ.
-func (m *Manager) pooledHash(hash string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for key := range m.pools {
-		if key.Hash() == hash {
-			return true
-		}
-	}
-	return false
-}
-
 // HasGolden reports whether this node can provision the key without a cold
 // boot — a configured pool golden or a promoted template on disk.
 func (m *Manager) HasGolden(key types.PoolKey) bool {
 	return m.goldenDirFor(key) != ""
-}
-
-// goldenDirFor resolves a key's golden: the pool's when configured, else an
-// on-disk golden a Promote published for an unpooled key; "" cold-boots.
-func (m *Manager) goldenDirFor(key types.PoolKey) string {
-	m.mu.Lock()
-	var dir string
-	if p := m.pools[key]; p != nil {
-		dir = p.goldenDir
-	}
-	m.mu.Unlock()
-	if dir != "" {
-		return dir
-	}
-	if onDisk, ok := m.goldenOnDisk(key.Hash()); ok {
-		return onDisk
-	}
-	return ""
-}
-
-func (m *Manager) goldenOnDisk(hash string) (string, bool) {
-	dir := filepath.Join(m.goldensDir(), hash)
-	fi, err := os.Stat(dir)
-	return dir, err == nil && fi.IsDir()
-}
-
-func (m *Manager) validate(key types.PoolKey) error {
-	if err := key.Validate(); err != nil {
-		return fmt.Errorf("%w: %v", ErrBadKey, err)
-	}
-	if key.Net == types.NetEgress && !m.egress {
-		return ErrNoEgress
-	}
-	return nil
-}
-
-// finalize stamps identity, persists the claim, and destroys the VM if the
-// store write fails so a durable claim always matches a live VM.
-func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Duration) (*types.Sandbox, error) {
-	if err := m.finalizeBatch(ctx, []*types.Sandbox{sb}, ttl); err != nil {
-		return nil, err
-	}
-	return sb, nil
-}
-
-// finalizeBatch stamps identities and persists the claims as one journal
-// write; on a failed write every VM in the batch is destroyed — a durable
-// claim always matches a live VM, and a batch lands all-or-nothing.
-func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration) error {
-	for _, sb := range sbs {
-		stampIdentity(sb, clampTTL(ttl))
-	}
-	m.mu.Lock()
-	for _, sb := range sbs {
-		m.claimed[sb.ID] = sb
-	}
-	saveErr := m.store.save(m.claimed)
-	if saveErr != nil {
-		for _, sb := range sbs {
-			delete(m.claimed, sb.ID)
-		}
-	}
-	m.mu.Unlock()
-	if saveErr != nil {
-		for _, sb := range sbs {
-			m.destroy(ctx, sb.VMName)
-		}
-		return fmt.Errorf("persist claim: %w", saveErr)
-	}
-	return nil
 }
 
 // WarmCounts is the per-pool-key-hash warm count, for gossiping placement.
@@ -446,21 +362,6 @@ func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl tim
 		return nil, fmt.Errorf("fork %s: %w", id, err)
 	}
 	return children, nil
-}
-
-// exportSource captures a claimed sandbox's state into exportDir. Only this
-// window holds the transition lock — it pins the source snapshot against a
-// concurrent wake consuming it; the minutes-long clone fan-out after it must
-// not block the source's own wake/hibernate traffic.
-func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir string) error {
-	sb.Transition.Lock()
-	defer sb.Transition.Unlock()
-	snap, cleanup, err := m.sourceSnap(ctx, sb)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	return m.eng.SnapshotExport(ctx, snap, exportDir)
 }
 
 // Promote publishes a claimed sandbox as a template: its state is exported
@@ -648,6 +549,105 @@ func (m *Manager) Info() ([]PoolInfo, int, int) {
 		}
 	}
 	return infos, len(m.claimed), hibernated
+}
+
+// pooledHash reports whether a configured pool occupies this hash — the
+// guard is on the HASH, not the key: goldens are stored by hash, so a
+// colliding key would reach a pool's golden dir even though the keys differ.
+func (m *Manager) pooledHash(hash string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key := range m.pools {
+		if key.Hash() == hash {
+			return true
+		}
+	}
+	return false
+}
+
+// goldenDirFor resolves a key's golden: the pool's when configured, else an
+// on-disk golden a Promote published for an unpooled key; "" cold-boots.
+func (m *Manager) goldenDirFor(key types.PoolKey) string {
+	m.mu.Lock()
+	var dir string
+	if p := m.pools[key]; p != nil {
+		dir = p.goldenDir
+	}
+	m.mu.Unlock()
+	if dir != "" {
+		return dir
+	}
+	if onDisk, ok := m.goldenOnDisk(key.Hash()); ok {
+		return onDisk
+	}
+	return ""
+}
+
+func (m *Manager) goldenOnDisk(hash string) (string, bool) {
+	dir := filepath.Join(m.goldensDir(), hash)
+	fi, err := os.Stat(dir)
+	return dir, err == nil && fi.IsDir()
+}
+
+func (m *Manager) validate(key types.PoolKey) error {
+	if err := key.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrBadKey, err)
+	}
+	if key.Net == types.NetEgress && !m.egress {
+		return ErrNoEgress
+	}
+	return nil
+}
+
+// finalize stamps identity, persists the claim, and destroys the VM if the
+// store write fails so a durable claim always matches a live VM.
+func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Duration) (*types.Sandbox, error) {
+	if err := m.finalizeBatch(ctx, []*types.Sandbox{sb}, ttl); err != nil {
+		return nil, err
+	}
+	return sb, nil
+}
+
+// finalizeBatch stamps identities and persists the claims as one journal
+// write; on a failed write every VM in the batch is destroyed — a durable
+// claim always matches a live VM, and a batch lands all-or-nothing.
+func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration) error {
+	for _, sb := range sbs {
+		stampIdentity(sb, clampTTL(ttl))
+	}
+	m.mu.Lock()
+	for _, sb := range sbs {
+		m.claimed[sb.ID] = sb
+	}
+	saveErr := m.store.save(m.claimed)
+	if saveErr != nil {
+		for _, sb := range sbs {
+			delete(m.claimed, sb.ID)
+		}
+	}
+	m.mu.Unlock()
+	if saveErr != nil {
+		for _, sb := range sbs {
+			m.destroy(ctx, sb.VMName)
+		}
+		return fmt.Errorf("persist claim: %w", saveErr)
+	}
+	return nil
+}
+
+// exportSource captures a claimed sandbox's state into exportDir. Only this
+// window holds the transition lock — it pins the source snapshot against a
+// concurrent wake consuming it; the minutes-long clone fan-out after it must
+// not block the source's own wake/hibernate traffic.
+func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir string) error {
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	snap, cleanup, err := m.sourceSnap(ctx, sb)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	return m.eng.SnapshotExport(ctx, snap, exportDir)
 }
 
 func (m *Manager) refillOnce(ctx context.Context) {

@@ -146,11 +146,17 @@ type Exec struct {
 	Session string            `json:"session,omitempty"`
 }
 
+func (Exec) Op() string { return "exec" }
+
 // Info asks for the daemon's identity and counters — the readiness probe.
 type Info struct{}
 
+func (Info) Op() string { return "info" } //nolint:goconst // wire tag shared with the response type by design
+
 // Ps lists tracked processes.
 type Ps struct{}
+
+func (Ps) Op() string { return "ps" }
 
 // Kill signals a process; nil Signal means SIGKILL.
 type Kill struct {
@@ -158,15 +164,21 @@ type Kill struct {
 	Signal *int32 `json:"signal,omitempty"`
 }
 
+func (Kill) Op() string { return "kill" }
+
 // Attach streams a running process's buffered and live output.
 type Attach struct {
 	PID uint32 `json:"pid"`
 }
 
+func (Attach) Op() string { return "attach" }
+
 // Logs returns a process's ring-buffered output.
 type Logs struct {
 	PID uint32 `json:"pid"`
 }
+
+func (Logs) Op() string { return "logs" }
 
 // SessionCreate opens a persistent shell; empty ID lets silkd name it.
 type SessionCreate struct {
@@ -175,21 +187,31 @@ type SessionCreate struct {
 	Env map[string]string `json:"env,omitempty"`
 }
 
+func (SessionCreate) Op() string { return "session_create" }
+
 // SessionList lists live session ids.
 type SessionList struct{}
+
+func (SessionList) Op() string { return "session_list" }
 
 // SessionRm kills a session's shell and process group.
 type SessionRm struct {
 	ID string `json:"id"`
 }
 
+func (SessionRm) Op() string { return "session_rm" }
+
 // Stdin carries a chunk of exec stdin.
 type Stdin struct {
 	Data B64 `json:"data"`
 }
 
+func (Stdin) Op() string { return "stdin" }
+
 // StdinClose signals stdin EOF to the running exec.
 type StdinClose struct{}
+
+func (StdinClose) Op() string { return "stdin_close" }
 
 // FsWrite streams Data frames into a file, atomically; nil Mode inherits or
 // defaults.
@@ -198,20 +220,28 @@ type FsWrite struct {
 	Mode *uint32 `json:"mode,omitempty"`
 }
 
+func (FsWrite) Op() string { return "fs_write" }
+
 // FsRead streams a file back as Data frames terminated by Done.
 type FsRead struct {
 	Path string `json:"path"`
 }
+
+func (FsRead) Op() string { return "fs_read" }
 
 // FsList streams a directory as batched Entries frames terminated by Done.
 type FsList struct {
 	Path string `json:"path"`
 }
 
+func (FsList) Op() string { return "fs_list" }
+
 // FsStat returns file metadata.
 type FsStat struct {
 	Path string `json:"path"`
 }
+
+func (FsStat) Op() string { return "fs_stat" }
 
 // FsMkdir creates a directory.
 type FsMkdir struct {
@@ -219,11 +249,15 @@ type FsMkdir struct {
 	Parents bool   `json:"parents"`
 }
 
+func (FsMkdir) Op() string { return "fs_mkdir" }
+
 // FsRm removes a file or directory tree.
 type FsRm struct {
 	Path      string `json:"path"`
 	Recursive bool   `json:"recursive"`
 }
+
+func (FsRm) Op() string { return "fs_rm" }
 
 // FsRename moves a file within the guest.
 type FsRename struct {
@@ -231,15 +265,21 @@ type FsRename struct {
 	To   string `json:"to"`
 }
 
+func (FsRename) Op() string { return "fs_rename" }
+
 // FsPush extracts a client tar stream (Data frames) under dest.
 type FsPush struct {
 	Dest string `json:"dest"`
 }
 
+func (FsPush) Op() string { return "fs_push" }
+
 // FsPull streams a path back as a tar stream (Data frames, then Done).
 type FsPull struct {
 	Path string `json:"path"`
 }
+
+func (FsPull) Op() string { return "fs_pull" }
 
 // FsFind streams Match frames for lines under Path matching Pattern; Glob
 // narrows the walk to file names matching it (`*` and `?` wildcards).
@@ -249,6 +289,8 @@ type FsFind struct {
 	Glob    string `json:"glob,omitempty"`
 }
 
+func (FsFind) Op() string { return "fs_find" }
+
 // FsReplace rewrites Pattern to Replacement in each file, streaming one
 // Replaced frame per file then Done.
 type FsReplace struct {
@@ -257,11 +299,15 @@ type FsReplace struct {
 	Replacement string   `json:"replacement"`
 }
 
+func (FsReplace) Op() string { return "fs_replace" }
+
 // FsWatch streams Event frames under Path until the connection closes.
 type FsWatch struct {
 	Path      string `json:"path"`
 	Recursive bool   `json:"recursive"`
 }
+
+func (FsWatch) Op() string { return "fs_watch" }
 
 // PtyOpen runs the guest shell under a pseudo-terminal: Started, then Stdout
 // frames out and Stdin frames in, until the shell exits (Exit).
@@ -273,6 +319,8 @@ type PtyOpen struct {
 	User string            `json:"user,omitempty"`
 }
 
+func (PtyOpen) Op() string { return "pty_open" }
+
 // PtyResize resizes a live pty's window by pid.
 type PtyResize struct {
 	PID  uint32 `json:"pid"`
@@ -280,12 +328,16 @@ type PtyResize struct {
 	Rows uint16 `json:"rows"`
 }
 
+func (PtyResize) Op() string { return "pty_resize" }
+
 // PortForward relays a guest TCP port over this connection: Ready once
 // connected, then Data both ways (DataEnd half-closes the guest socket);
 // the guest server closing ends the stream with Done.
 type PortForward struct {
 	Port uint16 `json:"port"`
 }
+
+func (PortForward) Op() string { return "port_forward" }
 
 // GitClone clones a repo; network-lane only. Auth is a token passed as an
 // in-memory Authorization header, never written to guest disk.
@@ -297,16 +349,22 @@ type GitClone struct {
 	Auth   string `json:"auth,omitempty"`
 }
 
+func (GitClone) Op() string { return "git_clone" }
+
 // GitStatus asks for a repo's structured status.
 type GitStatus struct {
 	Path string `json:"path"`
 }
+
+func (GitStatus) Op() string { return "git_status" }
 
 // GitAdd stages files under a repo.
 type GitAdd struct {
 	Path  string   `json:"path"`
 	Files []string `json:"files"`
 }
+
+func (GitAdd) Op() string { return "git_add" }
 
 // GitCommit commits staged changes; Author is "Name <email>".
 type GitCommit struct {
@@ -315,17 +373,23 @@ type GitCommit struct {
 	Author  string `json:"author"`
 }
 
+func (GitCommit) Op() string { return "git_commit" }
+
 // GitPush pushes the current branch; network-lane only.
 type GitPush struct {
 	Path string `json:"path"`
 	Auth string `json:"auth,omitempty"`
 }
 
+func (GitPush) Op() string { return "git_push" }
+
 // GitPull pulls the current branch; network-lane only.
 type GitPull struct {
 	Path string `json:"path"`
 	Auth string `json:"auth,omitempty"`
 }
+
+func (GitPull) Op() string { return "git_pull" }
 
 // GitBranch lists, creates, deletes, or checks out a branch. Action is
 // list|create|delete|checkout ("op" is reserved by the frame tag).
@@ -335,64 +399,40 @@ type GitBranch struct {
 	Name   string `json:"name,omitempty"`
 }
 
+func (GitBranch) Op() string { return "git_branch" }
+
 // Data carries one chunk of an upload stream (FsWrite/FsPush payloads).
 type Data struct {
 	Data B64 `json:"data"`
 }
 
+func (Data) Op() string { return "data" } //nolint:goconst // wire tag shared with the response type by design
+
 // DataEnd terminates an upload stream.
 type DataEnd struct{}
 
-func (Exec) Op() string          { return "exec" }
-func (Info) Op() string          { return "info" } //nolint:goconst // wire tag shared with the response type by design
-func (Ps) Op() string            { return "ps" }
-func (Kill) Op() string          { return "kill" }
-func (Attach) Op() string        { return "attach" }
-func (Logs) Op() string          { return "logs" }
-func (SessionCreate) Op() string { return "session_create" }
-func (SessionList) Op() string   { return "session_list" }
-func (SessionRm) Op() string     { return "session_rm" }
-func (Stdin) Op() string         { return "stdin" }
-func (StdinClose) Op() string    { return "stdin_close" }
-func (FsWrite) Op() string       { return "fs_write" }
-func (FsRead) Op() string        { return "fs_read" }
-func (FsList) Op() string        { return "fs_list" }
-func (FsStat) Op() string        { return "fs_stat" }
-func (FsMkdir) Op() string       { return "fs_mkdir" }
-func (FsRm) Op() string          { return "fs_rm" }
-func (FsRename) Op() string      { return "fs_rename" }
-func (FsPush) Op() string        { return "fs_push" }
-func (FsPull) Op() string        { return "fs_pull" }
-func (FsFind) Op() string        { return "fs_find" }
-func (FsReplace) Op() string     { return "fs_replace" }
-func (FsWatch) Op() string       { return "fs_watch" }
-func (PtyOpen) Op() string       { return "pty_open" }
-func (PtyResize) Op() string     { return "pty_resize" }
-func (PortForward) Op() string   { return "port_forward" }
-func (GitClone) Op() string      { return "git_clone" }
-func (GitStatus) Op() string     { return "git_status" }
-func (GitAdd) Op() string        { return "git_add" }
-func (GitCommit) Op() string     { return "git_commit" }
-func (GitPush) Op() string       { return "git_push" }
-func (GitPull) Op() string       { return "git_pull" }
-func (GitBranch) Op() string     { return "git_branch" }
-func (Data) Op() string          { return "data" } //nolint:goconst // wire tag shared with the response type by design
-func (DataEnd) Op() string       { return "data_end" }
+func (DataEnd) Op() string { return "data_end" }
 
 // Started reports the spawned pid (synthetic when the OS pid is unknown).
 type Started struct {
 	PID uint32 `json:"pid"`
 }
 
+func (Started) RespType() string { return "started" }
+
 // Stdout carries a chunk of process stdout.
 type Stdout struct {
 	Data []byte `json:"data"`
 }
 
+func (Stdout) RespType() string { return "stdout" }
+
 // Stderr carries a chunk of process stderr.
 type Stderr struct {
 	Data []byte `json:"data"`
 }
+
+func (Stderr) RespType() string { return "stderr" }
 
 // Exit is the terminal frame of a foreground exec; -1 means killed or
 // unknown.
@@ -400,18 +440,28 @@ type Exit struct {
 	Code int32 `json:"code"`
 }
 
+func (Exit) RespType() string { return "exit" }
+
 // Done is the terminal frame of verbs with no payload result.
 type Done struct{}
+
+func (Done) RespType() string { return "done" }
 
 // Ready acknowledges an armed watch (events after it are guaranteed
 // captured) or a connected port_forward.
 type Ready struct{}
+
+func (Ready) RespType() string { return "ready" }
 
 // ErrorResp is the terminal frame of a failed verb; it implements error.
 type ErrorResp struct {
 	Kind    string `json:"kind"`
 	Message string `json:"message"`
 }
+
+func (ErrorResp) RespType() string { return "error" }
+
+func (e *ErrorResp) Error() string { return e.Kind + ": " + e.Message }
 
 // InfoResp answers Info.
 type InfoResp struct {
@@ -422,35 +472,49 @@ type InfoResp struct {
 	Sessions   int    `json:"sessions"`
 }
 
+func (InfoResp) RespType() string { return "info" }
+
 // Procs answers Ps.
 type Procs struct {
 	Procs []ProcInfo `json:"procs"`
 }
+
+func (Procs) RespType() string { return "procs" }
 
 // DataResp carries one chunk of a download stream (FsRead/FsPull payloads).
 type DataResp struct {
 	Data []byte `json:"data"`
 }
 
+func (DataResp) RespType() string { return "data" }
+
 // Entries answers FsList.
 type Entries struct {
 	Entries []DirEntry `json:"entries"`
 }
+
+func (Entries) RespType() string { return "entries" }
 
 // Stat answers FsStat.
 type Stat struct {
 	Info FileInfo `json:"info"`
 }
 
+func (Stat) RespType() string { return "stat" }
+
 // SessionCreated answers SessionCreate.
 type SessionCreated struct {
 	ID string `json:"id"`
 }
 
+func (SessionCreated) RespType() string { return "session_created" }
+
 // Sessions answers SessionList.
 type Sessions struct {
 	Sessions []string `json:"sessions"`
 }
+
+func (Sessions) RespType() string { return "sessions" }
 
 // Match is one FsFind hit; Line is 1-based.
 type Match struct {
@@ -459,17 +523,23 @@ type Match struct {
 	Content string `json:"content"`
 }
 
+func (Match) RespType() string { return "match" }
+
 // Replaced reports one FsReplace file result.
 type Replaced struct {
 	File         string `json:"file"`
 	Replacements uint64 `json:"replacements"`
 }
 
+func (Replaced) RespType() string { return "replaced" }
+
 // Event is one FsWatch filesystem event; Kind is one of the Event* consts.
 type Event struct {
 	Kind string `json:"kind"`
 	Path string `json:"path"`
 }
+
+func (Event) RespType() string { return "event" }
 
 // GitStatusResult answers GitStatus.
 type GitStatusResult struct {
@@ -478,6 +548,8 @@ type GitStatusResult struct {
 	Behind uint32          `json:"behind"`
 	Files  []GitFileStatus `json:"files"`
 }
+
+func (GitStatusResult) RespType() string { return "git_status_result" }
 
 // GitFileStatus is one porcelain-v2 entry; Staged/Unstaged are XY status codes.
 type GitFileStatus struct {
@@ -491,11 +563,15 @@ type GitCommitResult struct {
 	Hash string `json:"hash"`
 }
 
+func (GitCommitResult) RespType() string { return "git_commit_result" }
+
 // GitBranches answers GitBranch list.
 type GitBranches struct {
 	Current  string   `json:"current"`
 	Branches []string `json:"branches"`
 }
+
+func (GitBranches) RespType() string { return "git_branches" }
 
 // ProcInfo is one entry of Procs; ExitCode is absent while running.
 type ProcInfo struct {
@@ -521,29 +597,6 @@ type FileInfo struct {
 	Mode           uint32 `json:"mode"`
 	MtimeEpochSecs uint64 `json:"mtime_epoch_secs"`
 }
-
-func (Started) RespType() string         { return "started" }
-func (Stdout) RespType() string          { return "stdout" }
-func (Stderr) RespType() string          { return "stderr" }
-func (Exit) RespType() string            { return "exit" }
-func (Done) RespType() string            { return "done" }
-func (Ready) RespType() string           { return "ready" }
-func (ErrorResp) RespType() string       { return "error" }
-func (InfoResp) RespType() string        { return "info" }
-func (Procs) RespType() string           { return "procs" }
-func (DataResp) RespType() string        { return "data" }
-func (Entries) RespType() string         { return "entries" }
-func (Stat) RespType() string            { return "stat" }
-func (SessionCreated) RespType() string  { return "session_created" }
-func (Sessions) RespType() string        { return "sessions" }
-func (Match) RespType() string           { return "match" }
-func (Replaced) RespType() string        { return "replaced" }
-func (Event) RespType() string           { return "event" }
-func (GitStatusResult) RespType() string { return "git_status_result" }
-func (GitCommitResult) RespType() string { return "git_commit_result" }
-func (GitBranches) RespType() string     { return "git_branches" }
-
-func (e *ErrorResp) Error() string { return e.Kind + ": " + e.Message }
 
 // EncodeRequest renders {"v":1,"op":...,fields} without a trailing newline.
 func EncodeRequest(r Request) ([]byte, error) {

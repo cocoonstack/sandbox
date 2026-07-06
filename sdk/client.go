@@ -16,19 +16,19 @@ import (
 	"time"
 )
 
-// Client talks to one sandboxd node.
-type Client struct {
-	addr     string
-	apiToken string
-	hc       *http.Client
-}
-
 // ClientOption configures Connect.
 type ClientOption func(*Client)
 
 // WithAPIToken authenticates node-level calls (claim, info).
 func WithAPIToken(token string) ClientOption {
 	return func(c *Client) { c.apiToken = token }
+}
+
+// Client talks to one sandboxd node.
+type Client struct {
+	addr     string
+	apiToken string
+	hc       *http.Client
 }
 
 // Connect returns a client for a sandboxd node. addr accepts a
@@ -216,15 +216,6 @@ func (c *Client) deleteTemplates(ctx context.Context, addr string, u url.Values)
 	}
 }
 
-// encodeClaim marshals a claim body.
-func encodeClaim(claim claimRequest) ([]byte, error) {
-	body, err := json.Marshal(claim)
-	if err != nil {
-		return nil, fmt.Errorf("encode claim: %w", err)
-	}
-	return body, nil
-}
-
 // roundTrip issues one control-plane request against addr, attaching bearer
 // when non-empty; a non-nil body is JSON.
 func (c *Client) roundTrip(ctx context.Context, method, addr, path string, body io.Reader, bearer string) (*http.Response, error) {
@@ -239,6 +230,15 @@ func (c *Client) roundTrip(ctx context.Context, method, addr, path string, body 
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 	return c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
+}
+
+// encodeClaim marshals a claim body.
+func encodeClaim(claim claimRequest) ([]byte, error) {
+	body, err := json.Marshal(claim)
+	if err != nil {
+		return nil, fmt.Errorf("encode claim: %w", err)
+	}
+	return body, nil
 }
 
 // apiError surfaces the server's {"error": ...} body when present.

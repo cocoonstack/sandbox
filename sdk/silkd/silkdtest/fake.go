@@ -93,52 +93,6 @@ func (f *Fake) ServeConn(conn net.Conn) {
 	}
 }
 
-// portEcho fakes port_forward: port 1 is refused (not_found, mirroring a
-// dead port), anything else answers Ready and echoes Data frames until
-// DataEnd (→ Done, like the server closing after EOF) or disconnect.
-func portEcho(conn net.Conn, r *bufio.Reader, port uint16) {
-	if port == 1 {
-		errFrame(conn, silkd.KindNotFound, "connect refused")
-		return
-	}
-	send(conn, silkd.Ready{})
-	for {
-		req, err := recvRequest(r)
-		if err != nil {
-			return
-		}
-		switch req := req.(type) {
-		case *silkd.Data:
-			send(conn, &silkd.DataResp{Data: req.Data})
-		case *silkd.DataEnd:
-			send(conn, silkd.Done{})
-			return
-		default:
-			errFrame(conn, silkd.KindBadRequest, "expected data or data_end")
-			return
-		}
-	}
-}
-
-// ptyEcho fakes a pty: Started, then echo each stdin chunk as stdout until a
-// chunk contains "exit" (→ Exit 0) or the client disconnects.
-func ptyEcho(conn net.Conn, r *bufio.Reader) {
-	send(conn, &silkd.Started{PID: 9999})
-	for {
-		req, err := recvRequest(r)
-		if err != nil {
-			return
-		}
-		if in, ok := req.(*silkd.Stdin); ok {
-			if strings.Contains(string(in.Data), "exit") {
-				send(conn, &silkd.Exit{Code: 0})
-				return
-			}
-			send(conn, &silkd.Stdout{Data: in.Data})
-		}
-	}
-}
-
 func (f *Fake) fsWrite(conn net.Conn, r *bufio.Reader, req *silkd.FsWrite) {
 	data, err := drainUpload(r)
 	if err != nil {
@@ -357,6 +311,52 @@ func (f *Fake) done(conn net.Conn, err error) {
 // abs keeps a request path inside Root; an absolute request path is rebased.
 func (f *Fake) abs(path string) string {
 	return filepath.Join(f.Root, filepath.Clean("/"+path))
+}
+
+// portEcho fakes port_forward: port 1 is refused (not_found, mirroring a
+// dead port), anything else answers Ready and echoes Data frames until
+// DataEnd (→ Done, like the server closing after EOF) or disconnect.
+func portEcho(conn net.Conn, r *bufio.Reader, port uint16) {
+	if port == 1 {
+		errFrame(conn, silkd.KindNotFound, "connect refused")
+		return
+	}
+	send(conn, silkd.Ready{})
+	for {
+		req, err := recvRequest(r)
+		if err != nil {
+			return
+		}
+		switch req := req.(type) {
+		case *silkd.Data:
+			send(conn, &silkd.DataResp{Data: req.Data})
+		case *silkd.DataEnd:
+			send(conn, silkd.Done{})
+			return
+		default:
+			errFrame(conn, silkd.KindBadRequest, "expected data or data_end")
+			return
+		}
+	}
+}
+
+// ptyEcho fakes a pty: Started, then echo each stdin chunk as stdout until a
+// chunk contains "exit" (→ Exit 0) or the client disconnects.
+func ptyEcho(conn net.Conn, r *bufio.Reader) {
+	send(conn, &silkd.Started{PID: 9999})
+	for {
+		req, err := recvRequest(r)
+		if err != nil {
+			return
+		}
+		if in, ok := req.(*silkd.Stdin); ok {
+			if strings.Contains(string(in.Data), "exit") {
+				send(conn, &silkd.Exit{Code: 0})
+				return
+			}
+			send(conn, &silkd.Stdout{Data: in.Data})
+		}
+	}
 }
 
 // globRegexp mirrors silkd's glob translation exactly — `*`/`?` wildcards,
