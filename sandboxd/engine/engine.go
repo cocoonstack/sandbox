@@ -34,7 +34,13 @@ const (
 	outputTail    = 400
 )
 
-var infoProbe = []byte(`{"v":1,"op":"info"}` + "\n")
+var (
+	infoProbe = []byte(`{"v":1,"op":"info"}` + "\n")
+
+	// errPortClosed signals the guest closed the forwarded port; it maps to
+	// the io.EOF a net.Conn reader expects.
+	errPortClosed = io.EOF
+)
 
 // portForwardMax caps the port_forward handshake reply line; the byte
 // stream follows on the same conn.
@@ -308,7 +314,7 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 		_ = conn.Close()
 		return nil, fmt.Errorf("port_forward %d: %s: %s", port, frame.Kind, frame.Message)
 	}
-	return conn, nil
+	return newGuestPortConn(conn), nil
 }
 
 // readLine reads byte-wise so nothing past the newline is consumed —
