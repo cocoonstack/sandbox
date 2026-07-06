@@ -7,3 +7,9 @@ e2e/smoke
 .DS_Store
 mcp/mcp
 mcp/sandbox-mcp
+
+# Python build artifacts
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
