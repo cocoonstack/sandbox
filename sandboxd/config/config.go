@@ -68,6 +68,14 @@ type Config struct {
 	// pooled keys. Zero disables.
 	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitempty"`
 
+	// MaxClaims caps live claims node-wide; 0 means unlimited. Claim,
+	// fork, and checkpoint-branch requests beyond it answer 429.
+	MaxClaims int `json:"max_claims,omitempty"`
+
+	// AuditLog, when true, appends every relayed request frame's op and
+	// addressing fields (never payloads) to <data_dir>/audit.jsonl.
+	AuditLog bool `json:"audit_log,omitempty"`
+
 	// MaxForkCount caps children per fork call — each child is a full-RAM VM,
 	// so this bounds a single request's memory blast radius to the node's
 	// capacity. Defaults to 16.
@@ -131,6 +139,9 @@ func (c *Config) validate() error {
 	}
 	if c.MaxForkCount < 1 {
 		return fmt.Errorf("max_fork_count must be at least 1, got %d", c.MaxForkCount)
+	}
+	if c.MaxClaims < 0 {
+		return fmt.Errorf("max_claims must not be negative, got %d", c.MaxClaims)
 	}
 	if c.IdleHibernateSeconds < 0 {
 		return fmt.Errorf("idle_hibernate_seconds must not be negative, got %d", c.IdleHibernateSeconds)

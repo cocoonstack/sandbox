@@ -67,6 +67,8 @@ func (m *Manager) Checkpoint(ctx context.Context, id, token, name string) (types
 	if err := os.Rename(staging, filepath.Join(m.checkpointsDir(), ckpt.ID)); err != nil {
 		return types.Checkpoint{}, fmt.Errorf("commit checkpoint: %w", err)
 	}
+	m.counters.checkpoints.Add(1)
+	m.recordUsage(ctx, usageEvent{Event: "checkpoint", ID: sb.ID, VMName: sb.VMName, Reference: ckpt.ID})
 	return ckpt, nil
 }
 

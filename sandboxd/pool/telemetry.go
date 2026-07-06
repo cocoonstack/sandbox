@@ -1,0 +1,121 @@
+package pool
+
+import (
+	"context"
+	"encoding/json"
+	"sync/atomic"
+	"time"
+
+	"github.com/projecteru2/core/log"
+
+	"github.com/cocoonstack/sandbox/sandboxd/types"
+)
+
+// auditLineCap bounds how much of a relayed request frame the audit tap
+// keeps: enough for the op and its addressing fields, never file payloads.
+const auditLineCap = 2048
+
+// Counters is a monotonic snapshot for /metrics; gauges come from Info.
+type Counters struct {
+	ClaimsWarm  uint64
+	ClaimsClone uint64
+	ClaimsCold  uint64
+	Wakes       uint64
+	Hibernates  uint64
+	Forks       uint64
+	Checkpoints uint64
+	Promotes    uint64
+	Releases    uint64
+	Reaps       uint64
+
+	// Nanosecond totals paired with the counters above: avg latency for
+	// dashboards without histogram machinery.
+	ClaimNanos uint64
+	WakeNanos  uint64
+}
+
+// counters is the live atomic set behind Counters.
+type counters struct {
+	claimsWarm, claimsClone, claimsCold atomic.Uint64
+	wakes, hibernates                   atomic.Uint64
+	forks, checkpoints, promotes        atomic.Uint64
+	releases, reaps                     atomic.Uint64
+	claimNanos, wakeNanos               atomic.Uint64
+}
+
+// Counters snapshots the monotonic telemetry counters.
+func (m *Manager) Counters() Counters {
+	c := &m.counters
+	return Counters{
+		ClaimsWarm:  c.claimsWarm.Load(),
+		ClaimsClone: c.claimsClone.Load(),
+		ClaimsCold:  c.claimsCold.Load(),
+		Wakes:       c.wakes.Load(),
+		Hibernates:  c.hibernates.Load(),
+		Forks:       c.forks.Load(),
+		Checkpoints: c.checkpoints.Load(),
+		Promotes:    c.promotes.Load(),
+		Releases:    c.releases.Load(),
+		Reaps:       c.reaps.Load(),
+		ClaimNanos:  c.claimNanos.Load(),
+		WakeNanos:   c.wakeNanos.Load(),
+	}
+}
+
+// Audit records one relayed request frame against a sandbox when the audit
+// journal is enabled: the op plus its addressing fields, payloads dropped.
+func (m *Manager) Audit(ctx context.Context, id string, line []byte) {
+	if m.audit == nil {
+		return
+	}
+	if len(line) > auditLineCap {
+		line = line[:auditLineCap]
+	}
+	var frame struct {
+		Op      string   `json:"op"`
+		Argv    []string `json:"argv,omitempty"`
+		Path    string   `json:"path,omitempty"`
+		Dest    string   `json:"dest,omitempty"`
+		From    string   `json:"from,omitempty"`
+		To      string   `json:"to,omitempty"`
+		URL     string   `json:"url,omitempty"`
+		Session string   `json:"session,omitempty"`
+	}
+	if err := json.Unmarshal(line, &frame); err != nil || frame.Op == "" {
+		return // torn cap boundary or a non-frame first line: nothing to record
+	}
+	event := struct {
+		Time    time.Time `json:"t"`
+		ID      string    `json:"id"`
+		Op      string    `json:"op"`
+		Argv    []string  `json:"argv,omitempty"`
+		Path    string    `json:"path,omitempty"`
+		Dest    string    `json:"dest,omitempty"`
+		From    string    `json:"from,omitempty"`
+		To      string    `json:"to,omitempty"`
+		URL     string    `json:"url,omitempty"`
+		Session string    `json:"session,omitempty"`
+	}{time.Now(), id, frame.Op, frame.Argv, frame.Path, frame.Dest, frame.From, frame.To, frame.URL, frame.Session}
+	if err := m.audit.append(event); err != nil {
+		log.WithFunc("pool.Audit").Errorf(ctx, err, "append audit event")
+	}
+}
+
+// AuditEnabled reports whether the relay should tap request frames at all.
+func (m *Manager) AuditEnabled() bool {
+	return m.audit != nil
+}
+
+// recordUsage appends one billing event; failures are logged, never
+// propagated — a claim must not fail because the meter hiccuped (cocoon's
+// machine-level ledger remains the audit backstop).
+func (m *Manager) recordUsage(ctx context.Context, ev usageEvent) {
+	ev.Time = time.Now()
+	if err := m.usage.append(ev); err != nil {
+		log.WithFunc("pool.recordUsage").Errorf(ctx, err, "append usage event %s %s", ev.Event, ev.ID)
+	}
+}
+
+func claimEvent(sb *types.Sandbox) usageEvent {
+	return usageEvent{Event: "claim", ID: sb.ID, VMName: sb.VMName, KeyHash: sb.Key.Hash()}
+}

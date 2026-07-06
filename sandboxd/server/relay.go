@@ -2,6 +2,8 @@ package server
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -13,7 +15,12 @@ import (
 
 // drainGrace bounds how long a finished relay waits for the client to
 // consume the tail and close; past it the client conn is force-closed.
-const drainGrace = 30 * time.Second
+const (
+	drainGrace = 30 * time.Second
+	// auditTeeCap bounds first-line capture: real request frames are small,
+	// anything larger is a payload stream not worth recording.
+	auditTeeCap = 4096
+)
 
 var switchingProtocols = []byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n")
 
@@ -70,12 +77,12 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "connection cannot be hijacked")
 		return
 	}
-	s.relay(client, bufrw.Reader, guest)
+	s.relay(r.PathValue("id"), client, bufrw.Reader, guest)
 }
 
 // relay writes the 101 and splices the two connections until the guest side
 // finishes (silkd closes after the terminal frame) or the client vanishes.
-func (s *Server) relay(client net.Conn, clientBuf *bufio.Reader, guest net.Conn) {
+func (s *Server) relay(id string, client net.Conn, clientBuf *bufio.Reader, guest net.Conn) {
 	s.relayMu.Lock()
 	if s.relayClosed {
 		s.relayMu.Unlock()
@@ -108,6 +115,13 @@ func (s *Server) relay(client net.Conn, clientBuf *bufio.Reader, guest net.Conn)
 	if n := clientBuf.Buffered(); n > 0 {
 		clientR = io.MultiReader(io.LimitReader(clientBuf, int64(n)), client)
 	}
+	if s.mgr.AuditEnabled() {
+		// One connection is one RPC: the first line client→guest is the
+		// request frame. The tee records it as it flows, then passes through.
+		clientR = &auditTee{r: clientR, record: func(line []byte) {
+			s.mgr.Audit(context.WithoutCancel(context.Background()), id, line)
+		}}
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -126,6 +140,36 @@ func (s *Server) relay(client net.Conn, clientBuf *bufio.Reader, guest net.Conn)
 	// deadline unblocks the splice goroutine if it never does.
 	_ = client.SetReadDeadline(time.Now().Add(drainGrace))
 	<-done
+}
+
+// auditTee captures the first newline-terminated line (capped) flowing
+// through it, hands it to record once, then degrades to a pass-through.
+type auditTee struct {
+	r      io.Reader
+	record func([]byte)
+	buf    []byte
+	done   bool
+}
+
+func (t *auditTee) Read(p []byte) (int, error) {
+	n, err := t.r.Read(p)
+	if t.done || n == 0 {
+		return n, err
+	}
+	chunk := p[:n]
+	if i := bytes.IndexByte(chunk, '\n'); i >= 0 {
+		t.buf = append(t.buf, chunk[:i+1]...)
+		t.done = true
+		t.record(t.buf)
+		t.buf = nil
+		return n, err
+	}
+	t.buf = append(t.buf, chunk...)
+	if len(t.buf) > auditTeeCap {
+		t.done = true // a frame this large is payload, not addressing
+		t.buf = nil
+	}
+	return n, err
 }
 
 // closeWrite signals EOF to the client without tearing down its read

@@ -476,6 +476,7 @@ type fakeManager struct {
 	deleteGolden func(key types.PoolKey) error
 	hasGolden    bool
 
+	audited          func(id string, line []byte)
 	checkpoint       func(id, token, name string) (types.Checkpoint, error)
 	claimCheckpoint  func(ckptID string) (*types.Sandbox, error)
 	checkpoints      []types.Checkpoint
@@ -545,6 +546,18 @@ func (f *fakeManager) DeleteTemplate(key types.PoolKey) error {
 func (f *fakeManager) HasGolden(types.PoolKey) bool {
 	return f.hasGolden
 }
+
+func (f *fakeManager) Counters() pool.Counters { return pool.Counters{} }
+
+func (f *fakeManager) Sandboxes() []pool.SandboxSummary { return nil }
+
+func (f *fakeManager) Audit(_ context.Context, id string, line []byte) {
+	if f.audited != nil {
+		f.audited(id, line)
+	}
+}
+
+func (f *fakeManager) AuditEnabled() bool { return f.audited != nil }
 
 func (f *fakeManager) Checkpoint(_ context.Context, id, token, name string) (types.Checkpoint, error) {
 	if f.checkpoint == nil {

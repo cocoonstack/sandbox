@@ -139,6 +139,21 @@ Auth: node API token. Lists this node's checkpoints, newest first.
 
 Auth: node API token. 204 on success, 404 unknown.
 
+## GET /v1/sandboxes
+
+Auth: node API token. The operator index: `{"sandboxes": [{id, key,
+deadline, hibernated, from_checkpoint?}]}` — never tokens.
+
+## GET /metrics
+
+Auth: node API token. Prometheus text format, hand-rendered: pool
+warm/target gauges, claimed/hibernated gauges, claims by tier
+(warm/clone/cold), wake/hibernate/fork/checkpoint/promote/release/reap
+counters, and claim/wake `*_seconds_total` for average latency. The
+always-on `<data_dir>/usage.jsonl` billing stream (claim/hibernate/wake/
+fork/checkpoint/promote/release/reap events) is the billing source of
+truth; /metrics is a derived ops view.
+
 ## GET /v1/sandboxes/{id}/agent
 
 Auth: the sandbox's own token. Requires `Upgrade: silkd` +

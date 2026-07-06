@@ -52,6 +52,7 @@ var (
 	ErrUnknownTemplate = errors.New("unknown promoted template")
 	ErrPooledTemplate  = errors.New("template belongs to a configured pool")
 	ErrNoEgress        = errors.New("node has no egress attachment (bridge or network)")
+	ErrQuota           = errors.New("node claim quota reached")
 
 	// templateNameRe mirrors cocoon's snapshot-name rule so a promoted
 	// template's derived snapshot and golden names are always accepted.
@@ -71,6 +72,15 @@ type Engine interface {
 	Restore(ctx context.Context, vmName, snapRef string) error
 	List(ctx context.Context, filters ...string) ([]types.VMRecord, error)
 	Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error
+}
+
+// SandboxSummary is the ops view of one live claim — no tokens.
+type SandboxSummary struct {
+	ID             string        `json:"id"`
+	Key            types.PoolKey `json:"key"`
+	Deadline       time.Time     `json:"deadline"`
+	Hibernated     bool          `json:"hibernated"`
+	FromCheckpoint string        `json:"from_checkpoint,omitempty"`
 }
 
 // PoolInfo is the ops view of one pool.
@@ -106,6 +116,13 @@ type Manager struct {
 	idleFor     map[string]time.Duration
 	idleDefault time.Duration
 
+	// maxClaims caps live claims node-wide (0 = unlimited); usage is the
+	// always-on billing event stream, audit the config-gated request tap.
+	maxClaims int
+	usage     *journal
+	audit     *journal
+	counters  counters
+
 	// notifyTemplates, when set (before serving starts), fires after a
 	// promote or template delete so the mesh republishes immediately
 	// instead of waiting out a gossip tick.
@@ -139,6 +156,19 @@ func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
 			return nil, fmt.Errorf("create %s: %w", filepath.Base(dir), err)
 		}
 	}
+	usage, err := newJournal(filepath.Join(cfg.DataDir, "usage.jsonl"))
+	if err != nil {
+		return nil, fmt.Errorf("open usage journal: %w", err)
+	}
+	m.usage = usage
+	if cfg.AuditLog {
+		audit, err := newJournal(filepath.Join(cfg.DataDir, "audit.jsonl"))
+		if err != nil {
+			return nil, fmt.Errorf("open audit journal: %w", err)
+		}
+		m.audit = audit
+	}
+	m.maxClaims = cfg.MaxClaims
 	m.idleFor = make(map[string]time.Duration, len(cfg.Pools))
 	m.idleDefault = time.Duration(cfg.IdleHibernateSeconds) * time.Second
 	for _, spec := range cfg.Pools {
@@ -164,6 +194,7 @@ func (m *Manager) Claim(ctx context.Context, key types.PoolKey, ttl time.Duratio
 // ClaimWarm transfers ownership of a warm sandbox without provisioning;
 // ErrNoWarm means the pool is empty (the caller may redirect or provision).
 func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
+	start := time.Now()
 	if err := m.validate(key); err != nil {
 		return nil, err
 	}
@@ -179,19 +210,35 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	if sb == nil {
 		return nil, ErrNoWarm
 	}
-	return m.finalize(ctx, sb, ttl)
+	out, err := m.finalize(ctx, sb, ttl)
+	if err == nil {
+		m.counters.claimsWarm.Add(1)
+		m.counters.claimNanos.Add(uint64(time.Since(start))) //nolint:gosec // durations are positive
+	}
+	return out, err
 }
 
 // ClaimProvision creates a claim-ready sandbox (golden clone or cold boot).
 func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
+	start := time.Now()
 	if err := m.validate(key); err != nil {
 		return nil, err
 	}
-	sb, err := m.provision(ctx, key, m.goldenDirFor(key))
+	golden := m.goldenDirFor(key)
+	sb, err := m.provision(ctx, key, golden)
 	if err != nil {
 		return nil, err
 	}
-	return m.finalize(ctx, sb, ttl)
+	out, err := m.finalize(ctx, sb, ttl)
+	if err == nil {
+		if golden != "" {
+			m.counters.claimsClone.Add(1)
+		} else {
+			m.counters.claimsCold.Add(1)
+		}
+		m.counters.claimNanos.Add(uint64(time.Since(start))) //nolint:gosec // durations are positive
+	}
+	return out, err
 }
 
 // SetTemplateNotifier wires the immediate-republish hook; call it before
@@ -260,6 +307,8 @@ func (m *Manager) Release(ctx context.Context, id, token string) error {
 	// The claim is already dropped; removal must survive the caller hanging up.
 	err := m.eng.Remove(context.WithoutCancel(ctx), sb.VMName)
 	m.dropSnap(ctx, snap)
+	m.counters.releases.Add(1)
+	m.recordUsage(ctx, usageEvent{Event: "release", ID: id, VMName: sb.VMName})
 	return err
 }
 
@@ -304,6 +353,8 @@ func (m *Manager) Hibernate(ctx context.Context, id, token string) error {
 		m.dropSnap(ctx, snap)
 		return ErrUnknownSandbox
 	}
+	m.counters.hibernates.Add(1)
+	m.recordUsage(ctx, usageEvent{Event: "hibernate", ID: sb.ID, VMName: sb.VMName})
 	return nil
 }
 
@@ -323,6 +374,7 @@ func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string
 	}
 	// See Hibernate: a half-restored VM is worse than a wasted wake.
 	ctx = context.WithoutCancel(ctx)
+	wakeStart := time.Now()
 	snap := sb.HibernateSnap
 	if err := m.eng.Restore(ctx, sb.VMName, snap); err != nil {
 		return "", fmt.Errorf("wake %s: %w", id, err)
@@ -339,6 +391,9 @@ func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string
 	}
 	// The memory image is consumed by the resume; drop it to free disk.
 	m.dropSnap(ctx, snap)
+	m.counters.wakes.Add(1)
+	m.counters.wakeNanos.Add(uint64(time.Since(wakeStart))) //nolint:gosec // durations are positive
+	m.recordUsage(ctx, usageEvent{Event: "wake", ID: sb.ID, VMName: sb.VMName})
 	return sock, nil
 }
 
@@ -375,6 +430,12 @@ func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl tim
 	if err := m.finalizeBatch(ctx, children, ttl); err != nil {
 		return nil, fmt.Errorf("fork %s: %w", id, err)
 	}
+	m.counters.forks.Add(1)
+	ids := make([]string, len(children))
+	for i, c := range children {
+		ids[i] = c.ID
+	}
+	m.recordUsage(ctx, usageEvent{Event: "fork", ID: sb.ID, VMName: sb.VMName, Children: ids})
 	return children, nil
 }
 
@@ -416,6 +477,8 @@ func (m *Manager) Promote(ctx context.Context, id, token, template string) (type
 	if m.notifyTemplates != nil {
 		m.notifyTemplates()
 	}
+	m.counters.promotes.Add(1)
+	m.recordUsage(ctx, usageEvent{Event: "promote", ID: sb.ID, VMName: sb.VMName, Reference: key.Template})
 	return key, nil
 }
 
@@ -572,6 +635,21 @@ func (m *Manager) Info() ([]PoolInfo, int, int) {
 	return infos, len(m.claimed), hibernated
 }
 
+// Sandboxes lists the live claims, for the operator index.
+func (m *Manager) Sandboxes() []SandboxSummary {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]SandboxSummary, 0, len(m.claimed))
+	for _, sb := range m.claimed {
+		out = append(out, SandboxSummary{
+			ID: sb.ID, Key: sb.Key, Deadline: sb.Deadline,
+			Hibernated: sb.HibernateSnap != "", FromCheckpoint: sb.FromCheckpoint,
+		})
+	}
+	slices.SortFunc(out, func(a, b SandboxSummary) int { return strings.Compare(a.ID, b.ID) })
+	return out
+}
+
 // pooledHash reports whether a configured pool occupies this hash — the
 // guard is on the HASH, not the key: goldens are stored by hash, so a
 // colliding key would reach a pool's golden dir even though the keys differ.
@@ -639,6 +717,13 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		sb.LastActivity = now
 	}
 	m.mu.Lock()
+	if m.maxClaims > 0 && len(m.claimed)+len(sbs) > m.maxClaims {
+		m.mu.Unlock()
+		for _, sb := range sbs {
+			m.destroy(ctx, sb.VMName)
+		}
+		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, len(m.claimed), m.maxClaims)
+	}
 	for _, sb := range sbs {
 		m.claimed[sb.ID] = sb
 	}
@@ -654,6 +739,9 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 			m.destroy(ctx, sb.VMName)
 		}
 		return fmt.Errorf("persist claim: %w", saveErr)
+	}
+	for _, sb := range sbs {
+		m.recordUsage(ctx, claimEvent(sb))
 	}
 	return nil
 }
@@ -812,6 +900,8 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	for _, v := range expired {
 		m.destroy(ctx, v.vmName)
 		m.dropSnap(ctx, v.snap)
+		m.counters.reaps.Add(1)
+		m.recordUsage(ctx, usageEvent{Event: "reap", ID: v.id, VMName: v.vmName})
 		logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
 	}
 }

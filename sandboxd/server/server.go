@@ -42,6 +42,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrBadName, http.StatusBadRequest, ""},
 	{pool.ErrBadCount, http.StatusBadRequest, ""},
 	{pool.ErrNoEgress, http.StatusConflict, ""},
+	{pool.ErrQuota, http.StatusTooManyRequests, ""},
 	{pool.ErrPooledTemplate, http.StatusConflict, ""},
 	{pool.ErrUnknownSandbox, http.StatusNotFound, "unknown sandbox"},
 	{pool.ErrUnknownTemplate, http.StatusNotFound, "unknown template"},
@@ -58,6 +59,10 @@ type Manager interface {
 	Promote(ctx context.Context, id, token, template string) (types.PoolKey, error)
 	DeleteTemplate(key types.PoolKey) error
 	Checkpoint(ctx context.Context, id, token, name string) (types.Checkpoint, error)
+	Counters() pool.Counters
+	Sandboxes() []pool.SandboxSummary
+	Audit(ctx context.Context, id string, line []byte)
+	AuditEnabled() bool
 	ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration) (*types.Sandbox, error)
 	Checkpoints() ([]types.Checkpoint, error)
 	DeleteCheckpoint(ckptID string) error
@@ -137,6 +142,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", s.handleAgent)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/owner", s.handleOwner)
 	mux.HandleFunc("GET /v1/info", s.requireAPIToken(s.handleInfo))
+	mux.HandleFunc("GET /v1/sandboxes", s.requireAPIToken(s.handleSandboxes))
+	mux.HandleFunc("GET /metrics", s.requireAPIToken(s.handleMetrics))
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	return mux
 }
