@@ -84,6 +84,9 @@ var (
 		"git_push":       decodeReq[GitPush],
 		"git_pull":       decodeReq[GitPull],
 		"git_branch":     decodeReq[GitBranch],
+		"lsp_start":      decodeReq[LspStart],
+		"lsp_request":    decodeReq[LspRequest],
+		"lsp_stop":       decodeReq[LspStop],
 		"data":           decodeReq[Data],
 		"data_end":       decodeReq[DataEnd],
 	}
@@ -105,6 +108,7 @@ var (
 		"entries":           decodeResp[Entries],
 		"stat":              decodeResp[Stat],
 		"session_created":   decodeResp[SessionCreated],
+		"lsp_started":       decodeResp[LspStarted],
 		"sessions":          decodeResp[Sessions],
 		"match":             decodeResp[Match],
 		"replaced":          decodeResp[Replaced],
@@ -402,6 +406,25 @@ type GitBranch struct {
 func (GitBranch) Op() string { return "git_branch" }
 
 // Data carries one chunk of an upload stream (FsWrite/FsPush payloads).
+type LspStart struct {
+	Language string `json:"language"`
+	Root     string `json:"root,omitempty"`
+}
+
+func (LspStart) Op() string { return "lsp_start" }
+
+type LspRequest struct {
+	ServerID string `json:"server_id"`
+}
+
+func (LspRequest) Op() string { return "lsp_request" }
+
+type LspStop struct {
+	ServerID string `json:"server_id"`
+}
+
+func (LspStop) Op() string { return "lsp_stop" }
+
 type Data struct {
 	Data B64 `json:"data"`
 }
@@ -510,6 +533,12 @@ type SessionCreated struct {
 func (SessionCreated) RespType() string { return "session_created" }
 
 // Sessions answers SessionList.
+type LspStarted struct {
+	ServerID string `json:"server_id"`
+}
+
+func (LspStarted) RespType() string { return "lsp_started" }
+
 type Sessions struct {
 	Sessions []string `json:"sessions"`
 }

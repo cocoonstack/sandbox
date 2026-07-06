@@ -63,8 +63,8 @@ func TestFixtureCorpusRoundTrips(t *testing.T) {
 	// Exact, deliberately: adding a verb means adding its fixture and
 	// bumping this — a new frame type outside the corpus is drift waiting
 	// to happen.
-	if seen != 56 {
-		t.Fatalf("fixture corpus: %d frames, want exactly 56", seen)
+	if seen != 60 {
+		t.Fatalf("fixture corpus: %d frames, want exactly 60", seen)
 	}
 }
 

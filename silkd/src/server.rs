@@ -9,12 +9,13 @@ use tokio::sync::mpsc;
 
 use crate::proc::{Chunk, Proc, Table};
 use crate::proto::{self, ErrorKind, ProcInfo, Request, Response};
-use crate::{exec, find, forward, fs, git, pty, session, tree, watch};
+use crate::{exec, find, forward, fs, git, lsp, pty, session, tree, watch};
 
 /// Shared daemon state handed to every connection.
 pub struct State {
     pub table: Table,
     pub sessions: session::Table,
+    pub lsp: lsp::Broker,
     pub started: Instant,
 }
 
@@ -23,6 +24,7 @@ impl State {
         Self {
             table: Table::new(),
             sessions: session::Table::new(),
+            lsp: lsp::Broker::new(),
             started: Instant::now(),
         }
     }
@@ -138,6 +140,19 @@ impl State {
             Request::PtyResize { pid, cols, rows } => {
                 pty::resize(&self.table, &mut writer, pid, cols, rows).await
             }
+            Request::LspStart { language, root } => {
+                self.lsp
+                    .start(&mut writer, &language, root.as_deref())
+                    .await
+            }
+            Request::LspRequest { server_id } => {
+                let (tx, rx) = mpsc::channel(16);
+                let feeder = tokio::spawn(feed_client(reader, tx));
+                let res = self.lsp.request(rx, &mut writer, &server_id).await;
+                feeder.abort();
+                res
+            }
+            Request::LspStop { server_id } => self.lsp.stop(&mut writer, &server_id).await,
             Request::PortForward { port } => {
                 let (tx, rx) = mpsc::channel(16);
                 let feeder = tokio::spawn(feed_client(reader, tx));

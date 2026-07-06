@@ -152,6 +152,17 @@ pub enum Request {
         #[serde(default)]
         name: Option<String>,
     },
+    LspStart {
+        language: String,
+        #[serde(default)]
+        root: Option<String>,
+    },
+    LspRequest {
+        server_id: String,
+    },
+    LspStop {
+        server_id: String,
+    },
     Data {
         #[serde(with = "b64")]
         data: Vec<u8>,
@@ -236,6 +247,9 @@ pub enum Response {
     },
     SessionCreated {
         id: String,
+    },
+    LspStarted {
+        server_id: String,
     },
     Sessions {
         sessions: Vec<String>,
@@ -634,7 +648,7 @@ mod tests {
         }
         // Exact, mirroring the Go guard: a new verb lands with its fixture.
         assert_eq!(
-            seen, 56,
+            seen, 60,
             "fixture corpus: adding a verb means adding its fixture"
         );
     }

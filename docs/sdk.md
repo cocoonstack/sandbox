@@ -137,6 +137,23 @@ templates;
 `client.Checkpoints` lists the connected node's. Checkpoint creation is
 resource-creating and takes the api token, like fork.
 
+## Language servers (LSP)
+
+```go
+lsp, err := sb.StartLsp(ctx, "python", "/workspace")  // flavor image provides the server
+conn, err := lsp.Request(ctx)                          // JSON-RPC byte stream (frame it yourself)
+// ... speak LSP over conn (Content-Length framed JSON-RPC) ...
+err = lsp.Stop(ctx)
+```
+
+`StartLsp` spawns the language server the flavor image ships for the
+language (its argv in `/etc/silkd/lsp.d/<language>`; the python flavor bakes
+`pylsp`); the base image has none, so it returns silkd's typed `not_found`.
+silkd is a broker — it pipes JSON-RPC bytes between your `Request` stream
+and the server's stdio without parsing LSP semantics, so the caller frames
+(Content-Length) and correlates by request id. The server keeps running
+across `Request` streams until `Stop`.
+
 ## Reaching guest ports
 
 ```go

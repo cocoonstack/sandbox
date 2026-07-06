@@ -12,7 +12,7 @@ checkpoints, release it. stdlib-only.
 from .checkpoint import Checkpoint
 from .client import Client
 from .errors import APIError, ExitError, ProtocolError, SandboxError, SilkdError
-from .sandbox import PortConn, Pty, Sandbox, Session, Watcher
+from .sandbox import Lsp, PortConn, Pty, Sandbox, Session, Watcher
 from .template import Template
 
 __all__ = [
@@ -20,6 +20,7 @@ __all__ = [
     "Checkpoint",
     "Client",
     "ExitError",
+    "Lsp",
     "PortConn",
     "ProtocolError",
     "Pty",

@@ -229,6 +229,15 @@ class Sandbox:
         key = reply["key"]
         return Template(self._client, self.owner, key["template"], key.get("net", ""), key.get("size", ""))
 
+    def start_lsp(self, language: str, root: str = "") -> Lsp:
+        """Spawns the language server the flavor image provides for language;
+        the base image ships none, so it raises SilkdError(kind="not_found").
+        The returned handle streams JSON-RPC over the relay."""
+        with self._dial() as conn:
+            conn.send("lsp_start", language=language, root=root or None)
+            started = _expect(conn, "lsp_started")
+        return Lsp(self, started["server_id"])
+
     def open_pty(self, cols: int = 80, rows: int = 24, cwd: str = "",
                  env: dict | None = None, user: str = "") -> Pty:
         """Runs the guest shell under a pty; returns a byte-stream handle.
@@ -350,6 +359,31 @@ class Pty:
 
     def close(self) -> None:
         self._conn.close()
+
+
+class Lsp:
+    """A language server in the sandbox, spoken to over the relay. silkd is a
+    broker: it pipes JSON-RPC bytes; the caller frames and correlates."""
+
+    def __init__(self, sandbox: Sandbox, server_id: str):
+        self._sandbox = sandbox
+        self.server_id = server_id
+
+    def request(self) -> PortConn:
+        """Opens the JSON-RPC byte stream: writes go to the server's stdin,
+        recv returns its stdout. Close to detach; the server keeps running."""
+        conn = self._sandbox._dial()
+        try:
+            conn.send("lsp_request", server_id=self.server_id)
+            _expect(conn, "ready")
+        except Exception:
+            conn.close()
+            raise
+        return PortConn(conn)
+
+    def stop(self) -> None:
+        """Kills the language server."""
+        self._sandbox._done_rpc("lsp_stop", server_id=self.server_id)
 
 
 class PortConn:
