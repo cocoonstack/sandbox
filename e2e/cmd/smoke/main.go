@@ -397,7 +397,14 @@ func smokePromote(ctx context.Context, client *sandbox.Client, sb *sandbox.Sandb
 // (socket-activated in the base image) answers on 22, so its banner must
 // arrive through DialPort; a dead port must fail with the typed not_found.
 func smokePortForward(ctx context.Context, sb *sandbox.Sandbox) error {
+	// The step proves the relay, not sshd's readiness SLA: the guest's
+	// socket-activated sshd can transiently refuse, so the positive probe
+	// retries briefly; the dead-port negative below stays strict.
 	pc, err := sb.DialPort(ctx, 22)
+	for attempt := 0; err != nil && attempt < 20; attempt++ {
+		time.Sleep(100 * time.Millisecond)
+		pc, err = sb.DialPort(ctx, 22)
+	}
 	if err != nil {
 		return err
 	}
