@@ -1,0 +1,6 @@
+{
+  "error_kind": ["bad_request", "not_found", "unimplemented", "internal"],
+  "event_kind": ["created", "modified", "deleted", "renamed"],
+  "file_kind": ["file", "dir", "symlink", "other"],
+  "git_branch_action": ["list", "create", "delete", "checkout"]
+}

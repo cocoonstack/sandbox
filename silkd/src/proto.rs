@@ -468,6 +468,8 @@ mod b64 {
 mod tests {
     use super::*;
 
+    const FIXTURES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../protocol/fixtures/v1");
+
     #[test]
     fn request_roundtrip_and_unknown_fields_ignored() {
         let raw = br#"{"v":1,"op":"exec","argv":["echo","hi"],"cwd":"/tmp","future_field":true}"#;
@@ -499,9 +501,71 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
+    /// Twin of the Go TestEnumValueSetsMatchFixture: pins each wire enum's
+    /// full value list (order-sensitive) to enums.json — frame fixtures carry
+    /// one representative value per enum, so a rename or an added variant on
+    /// only one side would otherwise drift silently.
+    #[test]
+    fn enum_value_sets_match_fixture() {
+        fn rendered<T: serde::Serialize>(variants: &[T]) -> Vec<String> {
+            variants
+                .iter()
+                .map(|v| {
+                    serde_json::to_value(v)
+                        .expect("encode variant")
+                        .as_str()
+                        .expect("string enum")
+                        .to_string()
+                })
+                .collect()
+        }
+        let raw = std::fs::read(format!("{FIXTURES_DIR}/enums.json")).expect("enums fixture");
+        let fixture: std::collections::BTreeMap<String, Vec<String>> =
+            serde_json::from_slice(&raw).expect("parse enums fixture");
+        let want = std::collections::BTreeMap::from([
+            (
+                "error_kind".to_string(),
+                rendered(&[
+                    ErrorKind::BadRequest,
+                    ErrorKind::NotFound,
+                    ErrorKind::Unimplemented,
+                    ErrorKind::Internal,
+                ]),
+            ),
+            (
+                "event_kind".to_string(),
+                rendered(&[
+                    EventKind::Created,
+                    EventKind::Modified,
+                    EventKind::Deleted,
+                    EventKind::Renamed,
+                ]),
+            ),
+            (
+                "file_kind".to_string(),
+                rendered(&[
+                    FileKind::File,
+                    FileKind::Dir,
+                    FileKind::Symlink,
+                    FileKind::Other,
+                ]),
+            ),
+            (
+                "git_branch_action".to_string(),
+                rendered(&[
+                    GitBranchOp::List,
+                    GitBranchOp::Create,
+                    GitBranchOp::Delete,
+                    GitBranchOp::Checkout,
+                ]),
+            ),
+        ]);
+        assert_eq!(fixture, want);
+    }
+
     #[test]
     fn golden_fixtures_parse() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../protocol/fixtures/v1");
+        let dir = FIXTURES_DIR;
         let mut seen = 0;
         for entry in std::fs::read_dir(dir).expect("fixtures dir") {
             let path = entry.expect("entry").path();

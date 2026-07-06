@@ -254,6 +254,8 @@ func (m *Manager) Hibernate(ctx context.Context, id, token string) error {
 	// A started transition must finish even if the caller hangs up (the
 	// engine bounds every step), or the record would disagree with the VM.
 	ctx = context.WithoutCancel(ctx)
+	// Derived from VMName, not sb.ID: cocoon snapshot names reject the
+	// underscore in the "sb_" prefix.
 	snap := hibernatePrefix + strings.TrimPrefix(sb.VMName, vmPrefix)
 	if err := m.eng.Hibernate(ctx, sb.VMName, snap); err != nil {
 		return err
@@ -285,10 +287,7 @@ func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string
 	if err := m.eng.Restore(ctx, sb.VMName, snap); err != nil {
 		return "", fmt.Errorf("wake %s: %w", id, err)
 	}
-	sock, err := m.vsockOf(ctx, sb.VMName)
-	if err == nil {
-		err = m.eng.Probe(ctx, sock, claimProbeTimeout)
-	}
+	sock, err := m.probeReady(ctx, sb.VMName, claimProbeTimeout)
 	if err != nil {
 		return "", fmt.Errorf("wake %s: %w", id, err)
 	}
@@ -471,11 +470,7 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 	if err := m.eng.RunCold(ctx, name, key); err != nil {
 		return err
 	}
-	sock, err := m.vsockOf(ctx, name)
-	if err != nil {
-		return err
-	}
-	if err := m.eng.Probe(ctx, sock, coldProbeTimeout); err != nil {
+	if _, err := m.probeReady(ctx, name, coldProbeTimeout); err != nil {
 		return err
 	}
 	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
@@ -542,16 +537,26 @@ func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden strin
 	}
 	var sock string
 	if err == nil {
-		sock, err = m.vsockOf(ctx, name)
-	}
-	if err == nil {
-		err = m.eng.Probe(ctx, sock, probeTimeout)
+		sock, err = m.probeReady(ctx, name, probeTimeout)
 	}
 	if err != nil {
 		m.destroy(ctx, name)
 		return nil, err
 	}
 	return &types.Sandbox{VMName: name, Key: key, VsockSocket: sock}, nil
+}
+
+// probeReady resolves a VM's vsock socket and waits until its silkd answers,
+// returning the socket — the claim-ready gate after create, clone, or restore.
+func (m *Manager) probeReady(ctx context.Context, name string, timeout time.Duration) (string, error) {
+	sock, err := m.vsockOf(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	if err := m.eng.Probe(ctx, sock, timeout); err != nil {
+		return "", err
+	}
+	return sock, nil
 }
 
 func (m *Manager) vsockOf(ctx context.Context, name string) (string, error) {

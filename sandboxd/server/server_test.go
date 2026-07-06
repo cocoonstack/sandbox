@@ -127,7 +127,16 @@ func TestAPITokenGuard(t *testing.T) {
 	}
 }
 
-func TestReleaseFlow(t *testing.T) {
+// TestSandboxVerbFlows drives both handleSandboxVerb routes; release and
+// hibernate share auth, error mapping, and id/token plumbing by construction.
+func TestSandboxVerbFlows(t *testing.T) {
+	verbs := []struct {
+		name string
+		hook func(f *fakeManager, h func(id, token string) error)
+	}{
+		{"release", func(f *fakeManager, h func(id, token string) error) { f.release = h }},
+		{"hibernate", func(f *fakeManager, h func(id, token string) error) { f.hibernate = h }},
+	}
 	tests := []struct {
 		name string
 		auth string
@@ -137,28 +146,39 @@ func TestReleaseFlow(t *testing.T) {
 		{"ok", "Bearer tok", nil, http.StatusNoContent},
 		{"unknown or bad token", "Bearer bad", pool.ErrUnknownSandbox, http.StatusNotFound},
 		{"missing bearer", "", nil, http.StatusUnauthorized},
-		{"engine failure", "Bearer tok", errors.New("rm failed"), http.StatusInternalServerError},
+		{"engine failure", "Bearer tok", errors.New("engine failed"), http.StatusInternalServerError},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mgr := &fakeManager{release: func(id, token string) error { return tt.err }}
-			ts := newTestServer(t, "", mgr, nil)
-			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/release", nil)
-			if err != nil {
-				t.Fatalf("request: %v", err)
-			}
-			if tt.auth != "" {
-				req.Header.Set("Authorization", tt.auth)
-			}
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Fatalf("do: %v", err)
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode != tt.want {
-				t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
-			}
-		})
+	for _, v := range verbs {
+		for _, tt := range tests {
+			t.Run(v.name+"/"+tt.name, func(t *testing.T) {
+				var gotID, gotToken string
+				mgr := &fakeManager{}
+				v.hook(mgr, func(id, token string) error {
+					gotID, gotToken = id, token
+					return tt.err
+				})
+				ts := newTestServer(t, "", mgr, nil)
+				req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/"+v.name, nil)
+				if err != nil {
+					t.Fatalf("request: %v", err)
+				}
+				if tt.auth != "" {
+					req.Header.Set("Authorization", tt.auth)
+				}
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatalf("do: %v", err)
+				}
+				defer resp.Body.Close()
+				if resp.StatusCode != tt.want {
+					t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
+				}
+				wantToken := strings.TrimPrefix(tt.auth, "Bearer ")
+				if tt.auth != "" && (gotID != "sb_1" || gotToken != wantToken) {
+					t.Errorf("%s called with (%q, %q), want (sb_1, %q)", v.name, gotID, gotToken, wantToken)
+				}
+			})
+		}
 	}
 }
 
@@ -224,12 +244,11 @@ func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *h
 	return ts
 }
 
-// fakeManager implements Manager with overridable behavior. ClaimWarm reports
-// a miss unless warmHit is set, so the server's warm→redirect→provision path
-// is exercised; the claim hook stands in for the provision result.
+// fakeManager implements Manager with overridable behavior. ClaimWarm always
+// misses, so the server's warm-miss → redirect → provision path is exercised;
+// the claim hook stands in for the provision result.
 type fakeManager struct {
 	claim     func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
-	warmHit   bool
 	release   func(id, token string) error
 	socket    func(id, token string) (string, error)
 	hibernate func(id, token string) error
@@ -242,11 +261,8 @@ func (f *fakeManager) doClaim(ctx context.Context, key types.PoolKey, ttl time.D
 	return f.claim(ctx, key, ttl)
 }
 
-func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
-	if !f.warmHit {
-		return nil, pool.ErrNoWarm
-	}
-	return f.doClaim(ctx, key, ttl)
+func (f *fakeManager) ClaimWarm(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+	return nil, pool.ErrNoWarm
 }
 
 func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
@@ -301,8 +317,8 @@ func (f *fakePlacer) Candidates(string) []string { return f.addrs }
 func (f *fakePlacer) PeerAddrs() []string        { return f.addrs }
 
 func TestClaimRedirectsOnWarmMiss(t *testing.T) {
-	// Warm miss (fakeManager.warmHit=false) + a placer with candidates → a
-	// redirect response, and the local manager never provisions.
+	// Warm miss (fakeManager.ClaimWarm always misses) + a placer with
+	// candidates → a redirect response, and the local manager never provisions.
 	provisioned := false
 	mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
 		provisioned = true

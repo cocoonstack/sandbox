@@ -33,7 +33,6 @@ pub struct Table {
 /// time; the child is killed on drop, and `pid` allows an explicit kill to
 /// unwedge a session whose command is blocked while the io lock is held.
 pub struct Session {
-    pub id: String,
     pid: u32,
     io: tokio::sync::Mutex<Io>,
     last_active: Mutex<Instant>,
@@ -77,7 +76,6 @@ impl Table {
         let stdin = child.stdin.take().expect("stdin piped");
         let stdout = child.stdout.take().expect("stdout piped");
         let session = Arc::new(Session {
-            id: id.clone(),
             pid,
             io: tokio::sync::Mutex::new(Io {
                 stdin,

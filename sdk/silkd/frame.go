@@ -29,6 +29,18 @@ const (
 	KindNotFound      = "not_found"
 	KindUnimplemented = "unimplemented"
 	KindInternal      = "internal"
+
+	// Event.Kind values (silkd's EventKind).
+	EventCreated  = "created"
+	EventModified = "modified"
+	EventDeleted  = "deleted"
+	EventRenamed  = "renamed"
+
+	// DirEntry.Kind and FileInfo.Kind values (silkd's FileKind).
+	FileKindFile    = "file"
+	FileKindDir     = "dir"
+	FileKindSymlink = "symlink"
+	FileKindOther   = "other"
 )
 
 var requestHead = `{"v":` + strconv.Itoa(ProtoVersion) + `,"op":"`
@@ -375,7 +387,7 @@ type Replaced struct {
 	Replacements uint64 `json:"replacements"`
 }
 
-// Event is one FsWatch filesystem event; Kind is created|modified|deleted|renamed.
+// Event is one FsWatch filesystem event; Kind is one of the Event* consts.
 type Event struct {
 	Kind string `json:"kind"`
 	Path string `json:"path"`
@@ -417,7 +429,7 @@ type ProcInfo struct {
 	StartedAtEpochSecs uint64   `json:"started_at_epoch_secs"`
 }
 
-// DirEntry is one entry of Entries; Kind is file|dir|symlink|other.
+// DirEntry is one entry of Entries; Kind is one of the FileKind* consts.
 type DirEntry struct {
 	Name string `json:"name"`
 	Kind string `json:"kind"`

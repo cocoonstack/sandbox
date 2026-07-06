@@ -7,3 +7,8 @@ Golden JSON frames shared by both implementations of the silkd protocol:
 `req_*.json` are client→server frames, `resp_*.json` server→client. A frame
 that only one side can round-trip is a protocol drift bug. See
 `design/sandbox-silkd.md` in cocoon-specs for the verb set.
+
+`enums.json` pins each wire enum's full value set (error/event/file kinds,
+git branch actions). Frame fixtures carry only one representative value per
+enum, so both sides also assert their whole vocabulary against this file —
+renaming or adding a variant on one side alone fails that side's test.

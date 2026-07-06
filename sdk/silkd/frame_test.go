@@ -65,6 +65,30 @@ func TestFixtureCorpusRoundTrips(t *testing.T) {
 	}
 }
 
+// TestEnumValueSetsMatchFixture pins the full enum value lists
+// (order-sensitive): frame fixtures carry one representative value per enum,
+// so a variant renamed or added on only one side would otherwise drift
+// silently. Twin of silkd's enum_value_sets_match_fixture.
+func TestEnumValueSetsMatchFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(fixtureDir, "enums.json"))
+	if err != nil {
+		t.Fatalf("enums fixture: %v", err)
+	}
+	var fixture map[string][]string
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatalf("parse enums fixture: %v", err)
+	}
+	want := map[string][]string{
+		"error_kind":        {KindBadRequest, KindNotFound, KindUnimplemented, KindInternal},
+		"event_kind":        {EventCreated, EventModified, EventDeleted, EventRenamed},
+		"file_kind":         {FileKindFile, FileKindDir, FileKindSymlink, FileKindOther},
+		"git_branch_action": {BranchList, BranchCreate, BranchDelete, BranchCheckout},
+	}
+	if !reflect.DeepEqual(fixture, want) {
+		t.Errorf("enum value sets drifted:\n fixture: %v\n go:      %v", fixture, want)
+	}
+}
+
 func TestDataFieldsAreBase64(t *testing.T) {
 	frame, err := EncodeResponse(&Stdout{Data: []byte("hi")})
 	if err != nil {
