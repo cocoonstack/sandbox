@@ -30,6 +30,65 @@ type PortConn struct {
 	closeOnce sync.Once
 }
 
+func (p *PortConn) Read(b []byte) (int, error) { return p.out.Read(b) }
+
+// Write chunks b so no frame (with its base64 and envelope overhead) can
+// exceed the protocol cap — one oversized frame would kill the relay.
+func (p *PortConn) Write(b []byte) (int, error) {
+	sent := 0
+	for len(b) > 0 {
+		chunk := b[:min(len(b), portWriteChunk)]
+		if err := p.conn.Send(&silkd.Data{Data: chunk}); err != nil {
+			return sent, err
+		}
+		sent += len(chunk)
+		b = b[len(chunk):]
+	}
+	return sent, nil
+}
+
+// CloseWrite half-closes the guest socket (the server sees EOF) while reads
+// keep draining its response.
+func (p *PortConn) CloseWrite() error {
+	return p.conn.Send(silkd.DataEnd{})
+}
+
+func (p *PortConn) Close() error {
+	p.closeOnce.Do(func() {
+		p.stop()
+		// drain can be parked in a pipe write on an unread tail; only the
+		// reader side unblocks it, so teardown must close the pipe too.
+		_ = p.out.CloseWithError(net.ErrClosed)
+	})
+	return nil
+}
+
+// LocalAddr implements net.Conn; the relay has no meaningful socket address.
+func (p *PortConn) LocalAddr() net.Addr { return portAddr("sandbox-relay") }
+
+// RemoteAddr implements net.Conn.
+func (p *PortConn) RemoteAddr() net.Addr { return portAddr("sandbox-guest") }
+
+// SetDeadline implements net.Conn; deadlines are unsupported — bound the
+// DialPort ctx instead.
+func (p *PortConn) SetDeadline(time.Time) error { return errors.ErrUnsupported }
+
+// SetReadDeadline implements net.Conn; unsupported, see SetDeadline.
+func (p *PortConn) SetReadDeadline(time.Time) error { return errors.ErrUnsupported }
+
+// SetWriteDeadline implements net.Conn; unsupported, see SetDeadline.
+func (p *PortConn) SetWriteDeadline(time.Time) error { return errors.ErrUnsupported }
+
+// drain relays guest bytes into the pipe until Done (clean server close →
+// EOF), an error frame, or teardown; a relay dropped before its terminal
+// frame surfaces as drainData's truncation error, not a clean EOF.
+func (p *PortConn) drain(ctx context.Context, pw *io.PipeWriter) {
+	_ = pw.CloseWithError(drainData(ctx, p.conn, func(b []byte) error {
+		_, err := pw.Write(b)
+		return err
+	}))
+}
+
 // DialPort connects to 127.0.0.1:port inside the sandbox. The ctx governs
 // the connection's lifetime: canceling it (or Close) tears the relay down.
 // A port nobody listens on fails here with silkd's not_found error.
@@ -89,65 +148,6 @@ func (s *Sandbox) proxyConn(ctx context.Context, local net.Conn, port uint16) {
 	_, _ = io.Copy(local, guest)
 	closeWrite(local)
 	<-done
-}
-
-func (p *PortConn) Read(b []byte) (int, error) { return p.out.Read(b) }
-
-// Write chunks b so no frame (with its base64 and envelope overhead) can
-// exceed the protocol cap — one oversized frame would kill the relay.
-func (p *PortConn) Write(b []byte) (int, error) {
-	sent := 0
-	for len(b) > 0 {
-		chunk := b[:min(len(b), portWriteChunk)]
-		if err := p.conn.Send(&silkd.Data{Data: chunk}); err != nil {
-			return sent, err
-		}
-		sent += len(chunk)
-		b = b[len(chunk):]
-	}
-	return sent, nil
-}
-
-// CloseWrite half-closes the guest socket (the server sees EOF) while reads
-// keep draining its response.
-func (p *PortConn) CloseWrite() error {
-	return p.conn.Send(silkd.DataEnd{})
-}
-
-func (p *PortConn) Close() error {
-	p.closeOnce.Do(func() {
-		p.stop()
-		// drain can be parked in a pipe write on an unread tail; only the
-		// reader side unblocks it, so teardown must close the pipe too.
-		_ = p.out.CloseWithError(net.ErrClosed)
-	})
-	return nil
-}
-
-// LocalAddr implements net.Conn; the relay has no meaningful socket address.
-func (p *PortConn) LocalAddr() net.Addr { return portAddr("sandbox-relay") }
-
-// RemoteAddr implements net.Conn.
-func (p *PortConn) RemoteAddr() net.Addr { return portAddr("sandbox-guest") }
-
-// SetDeadline implements net.Conn; deadlines are unsupported — bound the
-// DialPort ctx instead.
-func (p *PortConn) SetDeadline(time.Time) error { return errors.ErrUnsupported }
-
-// SetReadDeadline implements net.Conn; unsupported, see SetDeadline.
-func (p *PortConn) SetReadDeadline(time.Time) error { return errors.ErrUnsupported }
-
-// SetWriteDeadline implements net.Conn; unsupported, see SetDeadline.
-func (p *PortConn) SetWriteDeadline(time.Time) error { return errors.ErrUnsupported }
-
-// drain relays guest bytes into the pipe until Done (clean server close →
-// EOF), an error frame, or teardown; a relay dropped before its terminal
-// frame surfaces as drainData's truncation error, not a clean EOF.
-func (p *PortConn) drain(ctx context.Context, pw *io.PipeWriter) {
-	_ = pw.CloseWithError(drainData(ctx, p.conn, func(b []byte) error {
-		_, err := pw.Write(b)
-		return err
-	}))
 }
 
 // closeWrite half-closes conn's write side when it supports it, so the peer

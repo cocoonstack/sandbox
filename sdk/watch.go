@@ -20,27 +20,6 @@ type Watcher struct {
 	err error
 }
 
-// Watch streams filesystem events under path (recursively when set). It
-// returns once the sandbox acknowledges the watch is armed, so events caused
-// after Watch returns are guaranteed captured.
-func (s *Sandbox) Watch(ctx context.Context, path string, recursive bool) (*Watcher, error) {
-	conn, done, err := s.call(ctx, &silkd.FsWatch{Path: path, Recursive: recursive})
-	if err != nil {
-		return nil, err
-	}
-	if _, err = expect[silkd.Ready](ctx, conn); err != nil {
-		done()
-		return nil, err
-	}
-	w := &Watcher{
-		events: make(chan silkd.Event, 16),
-		stop:   done,
-		closed: make(chan struct{}),
-	}
-	go w.drain(ctx, conn)
-	return w, nil
-}
-
 // Events yields filesystem events; the channel closes when the watch ends.
 func (w *Watcher) Events() <-chan silkd.Event { return w.events }
 
@@ -95,4 +74,25 @@ func (w *Watcher) setErr(err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.err = err
+}
+
+// Watch streams filesystem events under path (recursively when set). It
+// returns once the sandbox acknowledges the watch is armed, so events caused
+// after Watch returns are guaranteed captured.
+func (s *Sandbox) Watch(ctx context.Context, path string, recursive bool) (*Watcher, error) {
+	conn, done, err := s.call(ctx, &silkd.FsWatch{Path: path, Recursive: recursive})
+	if err != nil {
+		return nil, err
+	}
+	if _, err = expect[silkd.Ready](ctx, conn); err != nil {
+		done()
+		return nil, err
+	}
+	w := &Watcher{
+		events: make(chan silkd.Event, 16),
+		stop:   done,
+		closed: make(chan struct{}),
+	}
+	go w.drain(ctx, conn)
+	return w, nil
 }

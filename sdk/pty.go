@@ -33,26 +33,6 @@ type Pty struct {
 	exited   bool
 }
 
-// OpenPty starts a shell under a pty. The ctx governs the pty's lifetime:
-// canceling it (or calling Close) tears the session down.
-func (s *Sandbox) OpenPty(ctx context.Context, opts PtyOpts) (*Pty, error) {
-	req := &silkd.PtyOpen{Cols: opts.Cols, Rows: opts.Rows, Cwd: opts.Cwd, Env: opts.Env, User: opts.User}
-	conn, done, err := s.call(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	started, err := expect[silkd.Started](ctx, conn)
-	if err != nil {
-		done()
-		return nil, err
-	}
-
-	pr, pw := io.Pipe()
-	p := &Pty{PID: started.PID, sb: s, conn: conn, stop: done, out: pr}
-	go p.drain(pw)
-	return p, nil
-}
-
 // Read returns terminal output; io.EOF signals the shell has exited (check
 // ExitCode after).
 func (p *Pty) Read(b []byte) (int, error) {
@@ -123,4 +103,24 @@ func (p *Pty) drain(pw *io.PipeWriter) {
 			return
 		}
 	}
+}
+
+// OpenPty starts a shell under a pty. The ctx governs the pty's lifetime:
+// canceling it (or calling Close) tears the session down.
+func (s *Sandbox) OpenPty(ctx context.Context, opts PtyOpts) (*Pty, error) {
+	req := &silkd.PtyOpen{Cols: opts.Cols, Rows: opts.Rows, Cwd: opts.Cwd, Env: opts.Env, User: opts.User}
+	conn, done, err := s.call(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	started, err := expect[silkd.Started](ctx, conn)
+	if err != nil {
+		done()
+		return nil, err
+	}
+
+	pr, pw := io.Pipe()
+	p := &Pty{PID: started.PID, sb: s, conn: conn, stop: done, out: pr}
+	go p.drain(pw)
+	return p, nil
 }

@@ -18,17 +18,6 @@ const (
 	stdinChunk     = 32 * 1024
 )
 
-// Sandbox is a claimed sandbox handle; all data-plane calls dial its owning
-// node directly.
-type Sandbox struct {
-	ID       string
-	Deadline time.Time
-
-	c     *Client
-	token string
-	owner string // data-plane address (owner node), from the claim
-}
-
 // Cmd describes a streaming Run.
 type Cmd struct {
 	Argv    []string
@@ -58,6 +47,17 @@ func (e *ExitError) Error() string {
 		return fmt.Sprintf("exit status %d: %s", e.Code, msg)
 	}
 	return fmt.Sprintf("exit status %d", e.Code)
+}
+
+// Sandbox is a claimed sandbox handle; all data-plane calls dial its owning
+// node directly.
+type Sandbox struct {
+	ID       string
+	Deadline time.Time
+
+	c     *Client
+	token string
+	owner string // data-plane address (owner node), from the claim
 }
 
 // Exec runs argv to completion and returns its stdout; a non-zero exit
