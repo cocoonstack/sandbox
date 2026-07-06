@@ -593,8 +593,8 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 		t.Fatalf("status %d, want 200 redirect", resp.StatusCode)
 	}
 	var cr types.ClaimResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		t.Fatalf("decode: %v", err)
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&cr); decodeErr != nil {
+		t.Fatalf("decode: %v", decodeErr)
 	}
 	if len(cr.Redirect) != 1 || cr.Redirect[0] != "node-b:7777" {
 		t.Errorf("redirect %v, want [node-b:7777]", cr.Redirect)

@@ -144,20 +144,8 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	// this node provision (golden clone or cold boot).
 	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL())
 	if errors.Is(err, pool.ErrNoWarm) {
-		// A claim already redirected to us must warm-or-provision here (confirm
-		// at owner), never bounce again — that avoids a two-node stale-view
-		// ping-pong when both just emptied their pools.
-		if s.placer != nil && !req.NoRedirect {
-			if writeRedirect(w, s.placer.Candidates(key.Hash())) {
-				return
-			}
-			// A promoted template lives only on its owner node: when this
-			// node has no golden for the key but gossip names one, the owner
-			// provisions from it instead of us cold-booting a nonexistent
-			// image ref.
-			if !s.mgr.HasGolden(key) && writeRedirect(w, s.placer.TemplateOwners(key.Hash())) {
-				return
-			}
+		if s.redirectClaim(w, req, key) {
+			return
 		}
 		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL())
 	}
@@ -169,6 +157,23 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusOK, s.claimResponse(sb))
 	}
+}
+
+// redirectClaim answers a warm-miss claim with a redirect when a peer is the
+// better node: one that reports warm sandboxes, or — when this node has no
+// golden for the key — the owner of a promoted template gossip names, which
+// provisions from it instead of us cold-booting a nonexistent image ref. A
+// claim already redirected here carries no_redirect and must warm-or-provision
+// locally, never bounce again — that avoids a two-node stale-view ping-pong
+// when both just emptied their pools.
+func (s *Server) redirectClaim(w http.ResponseWriter, req types.ClaimRequest, key types.PoolKey) bool {
+	if s.placer == nil || req.NoRedirect {
+		return false
+	}
+	if writeRedirect(w, s.placer.Candidates(key.Hash())) {
+		return true
+	}
+	return !s.mgr.HasGolden(key) && writeRedirect(w, s.placer.TemplateOwners(key.Hash()))
 }
 
 // handleSandboxVerb adapts a sandbox-scoped manager call (release,
