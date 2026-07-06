@@ -17,6 +17,12 @@ class Conn:
         self._sock = sock
         self._reader = reader
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
     def send(self, op: str, **fields) -> None:
         self._sock.sendall(encode_request(op, **fields))
 
@@ -51,13 +57,6 @@ class Conn:
             self._reader.close()
         finally:
             self._sock.close()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
-
 
 def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float) -> Conn:
     """Opens the data-plane connection: TCP dial plus a hand-rolled HTTP

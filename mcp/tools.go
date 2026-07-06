@@ -10,15 +10,6 @@ import (
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
-// tool binds one MCP tool's spec to its handler, so a tool can never exist
-// in the listing without a dispatch entry.
-type tool struct {
-	name        string
-	description string
-	schema      map[string]any
-	handler     func(context.Context, *server, json.RawMessage) (string, error)
-}
-
 var tools = []tool{
 	{
 		"create_sandbox", "Claim a fresh microVM sandbox; returns its id. Warm claims are milliseconds.",
@@ -64,6 +55,15 @@ var tools = []tool{
 	},
 	{"release", "Release a sandbox; its VM is destroyed.", schema(props{"sandbox_id": str("")}, "sandbox_id"), toolRelease},
 	{"node_info", "The node's pool and claim counters.", schema(props{}), toolNodeInfo},
+}
+
+// tool binds one MCP tool's spec to its handler, so a tool can never exist
+// in the listing without a dispatch entry.
+type tool struct {
+	name        string
+	description string
+	schema      map[string]any
+	handler     func(context.Context, *server, json.RawMessage) (string, error)
 }
 
 // toolSpecs renders the tools/list payload from the single table.

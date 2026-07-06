@@ -26,7 +26,12 @@ class Sandbox:
         self.deadline = deadline
         self.from_checkpoint = from_checkpoint
 
-    # -- commands ----------------------------------------------------------
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        with contextlib.suppress(Exception):
+            self.close()
 
     def exec(self, *argv: str, cwd: str = "", env: dict | None = None,
              user: str = "", session: str = "", stdin: bytes = b"") -> str:
@@ -59,8 +64,6 @@ class Sandbox:
                 elif frame["type"] == "exit":
                     return frame["code"]
         raise ProtocolError("exec stream ended without an exit frame")
-
-    # -- files --------------------------------------------------------------
 
     def write_file(self, path: str, data: bytes, mode: int | None = None) -> None:
         """Writes data to path atomically (temp + rename on the guest)."""
@@ -100,8 +103,6 @@ class Sandbox:
     def rename(self, src: str, dst: str) -> None:
         self._done_rpc("fs_rename", **{"from": src, "to": dst})
 
-    # -- whole trees ---------------------------------------------------------
-
     def push(self, dest: str, tar_stream: bytes) -> None:
         """Extracts a tar archive into dest — atomic against a truncated
         stream; the only project-ingestion path on the no-network lane."""
@@ -119,8 +120,6 @@ class Sandbox:
             conn.send("fs_pull", path=path)
             return _drain_data(conn)
 
-    # -- search --------------------------------------------------------------
-
     def find(self, path: str, pattern: str, glob: str = "") -> list[dict]:
         with self._dial() as conn:
             conn.send("fs_find", path=path, pattern=pattern, glob=glob or None)
@@ -130,8 +129,6 @@ class Sandbox:
         with self._dial() as conn:
             conn.send("fs_replace", files=files, pattern=pattern, replacement=replacement)
             return [f for f in conn.recv_until("done") if f["type"] == "replaced"]
-
-    # -- git -------------------------------------------------------------
 
     def git_clone(self, url: str, path: str, branch: str = "", depth: int = 0, auth: str = "") -> None:
         """Clones into path (egress lane only; the none lane answers a typed
@@ -167,8 +164,6 @@ class Sandbox:
     def git_checkout(self, path: str, name: str) -> None:
         self._done_rpc("git_branch", path=path, action="checkout", name=name)
 
-    # -- watch -----------------------------------------------------------
-
     def watch(self, path: str, recursive: bool = False) -> Watcher:
         """Streams filesystem events under path; events after the returned
         Watcher exists are guaranteed captured. Close it to stop."""
@@ -180,8 +175,6 @@ class Sandbox:
             conn.close()
             raise
         return Watcher(conn)
-
-    # -- sessions ------------------------------------------------------------
 
     def session(self, cwd: str = "", env: dict | None = None) -> Session:
         """Creates a persistent shell: cd/export/aliases survive across exec
@@ -195,8 +188,6 @@ class Sandbox:
         with self._dial() as conn:
             conn.send("session_list")
             return _expect(conn, "sessions").get("sessions") or []
-
-    # -- lifecycle -----------------------------------------------------------
 
     def fork(self, count: int, ttl_seconds: int = 0) -> list[Sandbox]:
         """Clones this sandbox into count independent children carrying its
@@ -246,13 +237,6 @@ class Sandbox:
         self._client._request(self.owner, "POST", f"/v1/sandboxes/{self.id}/release",
                               None, "release", bearer=self.token)
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        with contextlib.suppress(Exception):
-            self.close()
-
     def _dial(self) -> Conn:
         return dial_agent(self.owner, self.id, self.token, self._client.timeout)
 
@@ -260,7 +244,6 @@ class Sandbox:
         with self._dial() as conn:
             conn.send(op, **fields)
             _expect(conn, "done")
-
 
 class Session:
     """A persistent shell inside the sandbox, addressed by id."""
@@ -275,7 +258,6 @@ class Session:
 
     def close(self) -> None:
         self._sandbox._done_rpc("session_rm", id=self.id)
-
 
 class Watcher:
     """A live filesystem event stream; iterate for {kind, path} events."""
@@ -297,13 +279,18 @@ class Watcher:
     def close(self) -> None:
         self._conn.close()
 
-
 class PortConn:
     """A byte stream to a guest port, relayed over the silkd connection."""
 
     def __init__(self, conn: Conn):
         self._conn = conn
         self._eof = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
 
     def send(self, data: bytes) -> None:
         view = memoryview(data)
@@ -323,19 +310,11 @@ class PortConn:
     def close(self) -> None:
         self._conn.close()
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
-
-
 def _expect(conn: Conn, frame_type: str) -> dict:
     frame = conn.recv()
     if frame["type"] != frame_type:
         raise ProtocolError(f"expected {frame_type}, got {frame['type']}")
     return frame
-
 
 def _drain_data(conn: Conn) -> bytes:
     chunks = []
