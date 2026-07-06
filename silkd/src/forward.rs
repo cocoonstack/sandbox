@@ -32,8 +32,7 @@ pub async fn run<W: AsyncWrite + Unpin>(
             } else {
                 ErrorKind::Internal
             };
-            return proto::write_frame(w, &Response::error(kind, format!("connect {port}: {e}")))
-                .await;
+            return proto::error_frame(w, kind, format!("connect {port}: {e}")).await;
         }
     };
     proto::write_frame(w, &Response::Ready).await?;
@@ -51,9 +50,10 @@ pub async fn run<W: AsyncWrite + Unpin>(
                 // A read failure (RST, server crash) must not pass for a
                 // clean close — the client would mistake truncation for EOF.
                 Err(e) => {
-                    break proto::write_frame(
+                    break proto::error_frame(
                         w,
-                        &Response::error(ErrorKind::Internal, format!("read port {port}: {e}")),
+                        ErrorKind::Internal,
+                        format!("read port {port}: {e}"),
                     )
                     .await
                 }

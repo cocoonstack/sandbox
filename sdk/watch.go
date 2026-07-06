@@ -24,12 +24,8 @@ type Watcher struct {
 // returns once the sandbox acknowledges the watch is armed, so events caused
 // after Watch returns are guaranteed captured.
 func (s *Sandbox) Watch(ctx context.Context, path string, recursive bool) (*Watcher, error) {
-	conn, done, err := s.dial(ctx)
+	conn, done, err := s.call(ctx, &silkd.FsWatch{Path: path, Recursive: recursive})
 	if err != nil {
-		return nil, err
-	}
-	if err = conn.Send(&silkd.FsWatch{Path: path, Recursive: recursive}); err != nil {
-		done()
 		return nil, err
 	}
 	if _, err = expect[silkd.Ready](ctx, conn); err != nil {

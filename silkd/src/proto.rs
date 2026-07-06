@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use std::io;
 
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{
+    AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
+};
 
 /// Mirrors cocoon-agent's frame cap so a malformed peer can't OOM us.
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
@@ -398,6 +400,45 @@ pub async fn err_frame<W: AsyncWrite + Unpin>(
         ErrorKind::Internal
     };
     write_frame(w, &Response::error(kind, format!("{op}: {e}"))).await
+}
+
+/// Writes the terminal Error frame of a failed verb.
+pub async fn error_frame<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    kind: ErrorKind,
+    message: impl Into<String>,
+) -> io::Result<()> {
+    write_frame(w, &Response::error(kind, message)).await
+}
+
+/// Streams `reader` back as `data` frames until EOF — the outbound twin of
+/// `feed_data_frames`, shared by fs.read and fs.pull. A frame-write error
+/// propagates as the outer error; a source read error comes back as the inner
+/// one so the caller can clean up (reap a tar child) before mapping it.
+pub async fn stream_data_frames<R, W>(
+    reader: &mut R,
+    w: &mut W,
+) -> io::Result<Result<(), io::Error>>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut buf = vec![0u8; READ_CHUNK];
+    loop {
+        match reader.read(&mut buf).await {
+            Ok(0) => return Ok(Ok(())),
+            Ok(n) => {
+                write_frame(
+                    w,
+                    &Response::Data {
+                        data: buf[..n].to_vec(),
+                    },
+                )
+                .await?;
+            }
+            Err(e) => return Ok(Err(e)),
+        }
+    }
 }
 
 /// Why a `data`/`data_end` upload stream ended without a clean `data_end`.

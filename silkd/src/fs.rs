@@ -8,9 +8,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::UNIX_EPOCH;
 
 use tokio::fs;
-use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncBufRead, AsyncWrite, AsyncWriteExt};
 
-use crate::proto::{self, err_frame, DirEntry, FileInfo, FileKind, Response, READ_CHUNK};
+use crate::proto::{self, err_frame, DirEntry, FileInfo, FileKind, Response};
 
 /// Entries per `entries` frame. Worst-case entry (255-byte name, fully
 /// JSON-escaped) is ~1.6KiB, so a full batch stays under MAX_FRAME.
@@ -59,21 +59,8 @@ pub async fn read<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
         Ok(f) => f,
         Err(e) => return err_frame(w, &e, "open").await,
     };
-    let mut buf = vec![0u8; READ_CHUNK];
-    loop {
-        match file.read(&mut buf).await {
-            Ok(0) => break,
-            Ok(n) => {
-                proto::write_frame(
-                    w,
-                    &Response::Data {
-                        data: buf[..n].to_vec(),
-                    },
-                )
-                .await?;
-            }
-            Err(e) => return err_frame(w, &e, "read").await,
-        }
+    if let Err(e) = proto::stream_data_frames(&mut file, w).await? {
+        return err_frame(w, &e, "read").await;
     }
     proto::write_frame(w, &Response::Done).await
 }

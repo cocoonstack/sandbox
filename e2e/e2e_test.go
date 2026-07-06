@@ -115,20 +115,28 @@ func TestPromoteEndToEnd(t *testing.T) {
 	}
 	defer parent.Close()
 
-	if err = parent.Promote(t.Context(), "e2e-tpl:1"); err != nil {
+	tpl, err := parent.Promote(t.Context(), "e2e-tpl:1")
+	if err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
-	child, err := stack.client.New(t.Context(), "e2e-tpl:1")
+	// Both claim surfaces must work: the owner-bound handle and the
+	// name-based Client call on the (single) node that holds the template.
+	child, err := tpl.New(t.Context())
 	if err != nil {
-		t.Fatalf("claim promoted template: %v", err)
+		t.Fatalf("claim via template handle: %v", err)
 	}
 	if out, err := child.Exec(t.Context(), "echo", "tpl"); err != nil || out != "tpl\n" {
 		t.Errorf("exec on promoted claim: %q, %v", out, err)
 	}
 	_ = child.Close()
+	byName, nameErr := stack.client.New(t.Context(), "e2e-tpl:1")
+	if nameErr != nil {
+		t.Fatalf("claim promoted template by name: %v", nameErr)
+	}
+	_ = byName.Close()
 
-	if err := stack.client.DeleteTemplate(t.Context(), "e2e-tpl:1"); err != nil {
-		t.Fatalf("DeleteTemplate: %v", err)
+	if err := tpl.Delete(t.Context()); err != nil {
+		t.Fatalf("Template.Delete: %v", err)
 	}
 	if err := stack.client.DeleteTemplate(t.Context(), "e2e-tpl:1"); err == nil ||
 		!strings.Contains(err.Error(), "unknown template") {

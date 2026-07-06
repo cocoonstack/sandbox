@@ -30,6 +30,22 @@ const (
 	maxBodyBytes = 1 << 20
 )
 
+// poolErrHTTP maps pool sentinels to their HTTP replies; an empty msg
+// surfaces err.Error() (4xx detail the caller can act on), a fixed msg
+// avoids echoing internals on lookups.
+var poolErrHTTP = []struct {
+	err  error
+	code int
+	msg  string
+}{
+	{pool.ErrBadKey, http.StatusBadRequest, ""},
+	{pool.ErrBadCount, http.StatusBadRequest, ""},
+	{pool.ErrNoEgress, http.StatusConflict, ""},
+	{pool.ErrPooledTemplate, http.StatusConflict, ""},
+	{pool.ErrUnknownSandbox, http.StatusNotFound, "unknown sandbox"},
+	{pool.ErrUnknownTemplate, http.StatusNotFound, "unknown template"},
+}
+
 // Manager is the slice of the pool manager the server consumes.
 type Manager interface {
 	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
@@ -37,7 +53,7 @@ type Manager interface {
 	Release(ctx context.Context, id, token string) error
 	Hibernate(ctx context.Context, id, token string) error
 	Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
-	Promote(ctx context.Context, id, token, template string) error
+	Promote(ctx context.Context, id, token, template string) (types.PoolKey, error)
 	DeleteTemplate(key types.PoolKey) error
 	AgentSocket(id, token string) (string, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, error)
@@ -138,10 +154,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL())
 	}
 	switch {
-	case errors.Is(err, pool.ErrBadKey):
-		writeErr(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, pool.ErrNoEgress):
-		writeErr(w, http.StatusConflict, err.Error())
+	case writePoolErr(w, err):
 	case err != nil:
 		log.WithFunc("server.handleClaim").Errorf(r.Context(), err, "claim %s", key.Hash())
 		writeErr(w, http.StatusInternalServerError, "provisioning failed")
@@ -162,8 +175,7 @@ func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id,
 		id := r.PathValue("id")
 		err := do(r.Context(), id, token)
 		switch {
-		case errors.Is(err, pool.ErrUnknownSandbox):
-			writeErr(w, http.StatusNotFound, "unknown sandbox")
+		case writePoolErr(w, err):
 		case err != nil:
 			log.WithFunc("server.handleSandboxVerb").Errorf(r.Context(), err, "%s %s", verb, id)
 			writeErr(w, http.StatusInternalServerError, verb+" failed")
@@ -183,10 +195,7 @@ func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	children, err := s.mgr.Fork(r.Context(), id, req.Token, req.Count, req.TTL())
 	switch {
-	case errors.Is(err, pool.ErrBadCount):
-		writeErr(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, pool.ErrUnknownSandbox):
-		writeErr(w, http.StatusNotFound, "unknown sandbox")
+	case writePoolErr(w, err):
 	case err != nil:
 		log.WithFunc("server.handleFork").Errorf(r.Context(), err, "fork %s", id)
 		writeErr(w, http.StatusInternalServerError, "fork failed")
@@ -206,19 +215,14 @@ func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	err := s.mgr.Promote(r.Context(), id, req.Token, req.Template)
+	key, err := s.mgr.Promote(r.Context(), id, req.Token, req.Template)
 	switch {
-	case errors.Is(err, pool.ErrBadKey):
-		writeErr(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, pool.ErrPooledTemplate):
-		writeErr(w, http.StatusConflict, err.Error())
-	case errors.Is(err, pool.ErrUnknownSandbox):
-		writeErr(w, http.StatusNotFound, "unknown sandbox")
+	case writePoolErr(w, err):
 	case err != nil:
 		log.WithFunc("server.handlePromote").Errorf(r.Context(), err, "promote %s", id)
 		writeErr(w, http.StatusInternalServerError, "promote failed")
 	default:
-		w.WriteHeader(http.StatusNoContent)
+		writeJSON(w, http.StatusOK, types.PromoteResponse{Key: key})
 	}
 }
 
@@ -233,10 +237,7 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	err := s.mgr.DeleteTemplate(req.Key())
 	switch {
-	case errors.Is(err, pool.ErrPooledTemplate):
-		writeErr(w, http.StatusConflict, err.Error())
-	case errors.Is(err, pool.ErrUnknownTemplate):
-		writeErr(w, http.StatusNotFound, "unknown template")
+	case writePoolErr(w, err):
 	case err != nil:
 		log.WithFunc("server.handleDeleteTemplate").Errorf(r.Context(), err, "delete template %s", req.Template)
 		writeErr(w, http.StatusInternalServerError, "delete template failed")
@@ -313,9 +314,24 @@ func decodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	return v, true
 }
 
-// claimResponse renders one claimed sandbox with this node as its owner.
 func (s *Server) claimResponse(sb *types.Sandbox) types.ClaimResponse {
 	return types.ClaimResponse{ID: sb.ID, Token: sb.Token, Deadline: sb.Deadline, OwnerAddr: s.advertise}
+}
+
+// writePoolErr answers a pool-sentinel error per poolErrHTTP, reporting
+// whether it handled err; nil and non-sentinel errors stay the caller's.
+func writePoolErr(w http.ResponseWriter, err error) bool {
+	for _, m := range poolErrHTTP {
+		if errors.Is(err, m.err) {
+			msg := m.msg
+			if msg == "" {
+				msg = err.Error()
+			}
+			writeErr(w, m.code, msg)
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

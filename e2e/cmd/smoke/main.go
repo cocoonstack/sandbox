@@ -367,16 +367,17 @@ func smokeFork(ctx context.Context, sb *sandbox.Sandbox) error {
 	return nil
 }
 
-// smokePromote proves promote-to-template: claiming the promoted name must
-// clone the parent's state — on a real node a cold boot of this
-// never-registered image ref would fail, so success itself proves the golden
-// path — and delete removes it.
+// smokePromote proves promote-to-template through the owner-bound handle:
+// claiming from it must clone the parent's state — on a real node a cold
+// boot of this never-registered image ref would fail, so success itself
+// proves the golden path — and delete removes it. The name-based
+// DeleteTemplate covers the node-local Client surface too.
 func smokePromote(ctx context.Context, client *sandbox.Client, sb *sandbox.Sandbox) error {
-	const tpl = "smoke-tpl:v1"
-	if err := sb.Promote(ctx, tpl); err != nil {
+	tpl, err := sb.Promote(ctx, "smoke-tpl:v1")
+	if err != nil {
 		return err
 	}
-	child, err := client.New(ctx, tpl, sandbox.WithNetwork(sandbox.NetNone))
+	child, err := tpl.New(ctx)
 	if err != nil {
 		return fmt.Errorf("claim promoted template: %w", err)
 	}
@@ -384,11 +385,11 @@ func smokePromote(ctx context.Context, client *sandbox.Client, sb *sandbox.Sandb
 	if got, err := child.ReadFile(ctx, "/work/fork-mark.txt"); err != nil || string(got) != "parent" {
 		return fmt.Errorf("promoted state %q, %v — want the parent's disk", got, err)
 	}
-	if err := client.DeleteTemplate(ctx, tpl); err != nil {
+	if err := tpl.Delete(ctx); err != nil {
 		return err
 	}
-	if err := client.DeleteTemplate(ctx, tpl); err == nil {
-		return errors.New("second delete succeeded, want unknown template")
+	if err := client.DeleteTemplate(ctx, tpl.Name); err == nil {
+		return errors.New("delete after delete succeeded, want unknown template")
 	}
 	return nil
 }

@@ -37,11 +37,11 @@ pub async fn open<W: AsyncWrite + Unpin>(
 ) -> std::io::Result<()> {
     let (master, slave) = match sysutil::openpty(req.cols, req.rows) {
         Ok(pair) => pair,
-        Err(e) => return err(out, ErrorKind::Internal, e.to_string()).await,
+        Err(e) => return crate::proto::error_frame(out, ErrorKind::Internal, e.to_string()).await,
     };
     let resize_fd = match master.try_clone() {
         Ok(fd) => fd,
-        Err(e) => return err(out, ErrorKind::Internal, e.to_string()).await,
+        Err(e) => return crate::proto::error_frame(out, ErrorKind::Internal, e.to_string()).await,
     };
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
@@ -53,7 +53,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
     cmd.env_clear().envs(sysutil::base_env()).envs(&req.env);
     if let Some(user) = &req.user {
         if let Err(e) = sysutil::apply_user(&mut cmd, user) {
-            return err(out, ErrorKind::BadRequest, e).await;
+            return crate::proto::error_frame(out, ErrorKind::BadRequest, e).await;
         }
     }
     match (slave.try_clone(), slave.try_clone()) {
@@ -62,7 +62,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
                 .stdout(Stdio::from(out_fd))
                 .stderr(Stdio::from(slave));
         }
-        _ => return err(out, ErrorKind::Internal, "dup pty slave".into()).await,
+        _ => return crate::proto::error_frame(out, ErrorKind::Internal, "dup pty slave").await,
     }
     // SAFETY: make_controlling_tty runs only async-signal-safe syscalls, which
     // is the contract for a post-fork pre_exec hook.
@@ -73,7 +73,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return err(out, ErrorKind::Internal, e.to_string()).await,
+        Err(e) => return crate::proto::error_frame(out, ErrorKind::Internal, e.to_string()).await,
     };
     // Drop cmd so its Stdio dups of the slave close: otherwise silkd keeps the
     // slave open and the master never sees the shell's exit (no EOF/EIO), so
@@ -89,7 +89,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
         Err(e) => {
             child.start_kill().ok();
             table.remove_if(pid, &proc);
-            return err(out, ErrorKind::Internal, e.to_string()).await;
+            return crate::proto::error_frame(out, ErrorKind::Internal, e.to_string()).await;
         }
     };
     if crate::proto::write_frame(out, &Response::Started { pid })
@@ -118,11 +118,11 @@ pub async fn resize<W: AsyncWrite + Unpin>(
     rows: u16,
 ) -> std::io::Result<()> {
     let Some(proc) = table.get(pid) else {
-        return err(w, ErrorKind::NotFound, "no such pid".into()).await;
+        return crate::proto::error_frame(w, ErrorKind::NotFound, "no such pid").await;
     };
     match proc.resize(cols, rows) {
         Ok(()) => crate::proto::write_frame(w, &Response::Done).await,
-        Err(e) => err(w, ErrorKind::BadRequest, e.to_string()).await,
+        Err(e) => crate::proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
     }
 }
 
@@ -143,6 +143,7 @@ async fn pump<W: AsyncWrite + Unpin>(
 
     let mut buf = [0u8; PTY_READ_CHUNK];
     let mut eof = false;
+    let mut disc = false;
     loop {
         tokio::select! {
             status = child.wait() => {
@@ -152,9 +153,9 @@ async fn pump<W: AsyncWrite + Unpin>(
             }
             // Client closed the terminal: kill the shell and let child.wait
             // publish its real (signalled) code on the next iteration.
-            _ = &mut disc_rx => {
+            _ = &mut disc_rx, if !disc => {
+                disc = true;
                 let _ = child.start_kill();
-                disc_rx = oneshot::channel().1; // never fires again
             }
             readable = master.readable(), if !eof => {
                 let mut guard = match readable {
@@ -165,9 +166,9 @@ async fn pump<W: AsyncWrite + Unpin>(
                     // 0 (BSD) and EIO (Linux) both mean the slave is fully closed.
                     Ok(Ok(0)) | Ok(Err(_)) => eof = true,
                     Ok(Ok(n)) => {
-                        let data = buf[..n].to_vec();
-                        proc.emit(Chunk::Stdout(data.clone()));
-                        if crate::proto::write_frame(out, &Response::Stdout { data }).await.is_err() {
+                        let chunk = Chunk::Stdout(buf[..n].to_vec());
+                        proc.emit(&chunk);
+                        if crate::proto::write_frame(out, &chunk.into_response()).await.is_err() {
                             // Client gone mid-output: kill and reap for the real code.
                             let _ = child.start_kill();
                             return sysutil::wait_code(child).await;
@@ -220,9 +221,9 @@ async fn drain<W: AsyncWrite + Unpin>(
             match guard.try_io(|fd| sysutil::read_fd(fd.get_ref().as_raw_fd(), buf)) {
                 Ok(Ok(0)) | Ok(Err(_)) => return,
                 Ok(Ok(n)) => {
-                    let data = buf[..n].to_vec();
-                    proc.emit(Chunk::Stdout(data.clone()));
-                    if crate::proto::write_frame(out, &Response::Stdout { data })
+                    let chunk = Chunk::Stdout(buf[..n].to_vec());
+                    proc.emit(&chunk);
+                    if crate::proto::write_frame(out, &chunk.into_response())
                         .await
                         .is_err()
                     {
@@ -241,7 +242,7 @@ async fn drain<W: AsyncWrite + Unpin>(
 fn finish(proc: &Arc<Proc>, code: i32) {
     if proc.exit_code().is_none() {
         proc.mark_exited(code);
-        proc.emit(Chunk::Exit(code));
+        proc.emit(&Chunk::Exit(code));
     }
 }
 
@@ -255,12 +256,4 @@ async fn write_all(master: &Master, mut data: &[u8]) -> std::io::Result<()> {
         }
     }
     Ok(())
-}
-
-async fn err<W: AsyncWrite + Unpin>(
-    w: &mut W,
-    kind: ErrorKind,
-    msg: String,
-) -> std::io::Result<()> {
-    crate::proto::write_frame(w, &Response::error(kind, msg)).await
 }

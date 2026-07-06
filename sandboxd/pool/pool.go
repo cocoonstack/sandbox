@@ -203,7 +203,6 @@ func (m *Manager) goldenDirFor(key types.PoolKey) string {
 	return ""
 }
 
-// goldenOnDisk reports whether goldens/<hash> exists as a directory.
 func (m *Manager) goldenOnDisk(hash string) (string, bool) {
 	dir := filepath.Join(m.goldensDir(), hash)
 	fi, err := os.Stat(dir)
@@ -420,21 +419,22 @@ func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir
 // as a golden under (template, parent net, parent size), and later claims
 // for that key clone from it — provision-on-demand, no warm pool unless the
 // node config adds one. Re-promoting to the same name replaces the golden.
-// The caller owns the template's lifecycle (DeleteTemplate); it lives only on
-// this node.
-func (m *Manager) Promote(ctx context.Context, id, token, template string) error {
+// The caller owns the template's lifecycle (DeleteTemplate); it lives only
+// on this node, so the returned key is what a cluster client needs to reach
+// it again.
+func (m *Manager) Promote(ctx context.Context, id, token, template string) (types.PoolKey, error) {
 	if !templateNameRe.MatchString(template) {
-		return fmt.Errorf("%w: template %q must match %s", ErrBadKey, template, templateNameRe)
+		return types.PoolKey{}, fmt.Errorf("%w: template %q must match %s", ErrBadKey, template, templateNameRe)
 	}
 	sb, ok := m.claim(id, token)
 	if !ok {
-		return ErrUnknownSandbox
+		return types.PoolKey{}, ErrUnknownSandbox
 	}
 	key := types.PoolKey{Template: template, Net: sb.Key.Net, Size: sb.Key.Size}
 	if m.pooledHash(key.Hash()) {
 		// The same goldens/<hash> path backs a configured pool's golden —
 		// promoting over it would silently change what refills produce.
-		return ErrPooledTemplate
+		return types.PoolKey{}, ErrPooledTemplate
 	}
 	// See Fork: the transition lock pins the source snapshot, and a started
 	// promote must finish even if the caller hangs up.
@@ -444,13 +444,13 @@ func (m *Manager) Promote(ctx context.Context, id, token, template string) error
 
 	snap, cleanup, err := m.sourceSnap(ctx, sb)
 	if err != nil {
-		return fmt.Errorf("promote %s: %w", id, err)
+		return types.PoolKey{}, fmt.Errorf("promote %s: %w", id, err)
 	}
 	defer cleanup()
 	if err := m.exportGolden(ctx, snap, filepath.Join(m.goldensDir(), key.Hash())); err != nil {
-		return fmt.Errorf("promote %s: %w", id, err)
+		return types.PoolKey{}, fmt.Errorf("promote %s: %w", id, err)
 	}
-	return nil
+	return key, nil
 }
 
 // DeleteTemplate removes a promoted template's golden. Configured pools are
@@ -830,7 +830,6 @@ func (m *Manager) destroy(ctx context.Context, name string) {
 	}
 }
 
-// dropSnap deletes a no-longer-needed memory snapshot; empty is a no-op.
 func (m *Manager) dropSnap(ctx context.Context, snap string) {
 	if snap == "" {
 		return
@@ -841,7 +840,6 @@ func (m *Manager) dropSnap(ctx context.Context, snap string) {
 	}
 }
 
-// claim authenticates a sandbox id/token pair and returns its record.
 func (m *Manager) claim(id, token string) (*types.Sandbox, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

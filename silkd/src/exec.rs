@@ -39,11 +39,8 @@ where
     W: AsyncWrite + Unpin,
 {
     if req.argv.is_empty() {
-        return crate::proto::write_frame(
-            out,
-            &Response::error(ErrorKind::BadRequest, "argv must not be empty"),
-        )
-        .await;
+        return crate::proto::error_frame(out, ErrorKind::BadRequest, "argv must not be empty")
+            .await;
     }
 
     let mut cmd = Command::new(&req.argv[0]);
@@ -60,19 +57,15 @@ where
     cmd.envs(&req.env);
     if let Some(ref user) = req.user {
         if let Err(e) = sysutil::apply_user(&mut cmd, user) {
-            return crate::proto::write_frame(out, &Response::error(ErrorKind::BadRequest, e))
-                .await;
+            return crate::proto::error_frame(out, ErrorKind::BadRequest, e).await;
         }
     }
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            return crate::proto::write_frame(
-                out,
-                &Response::error(ErrorKind::Internal, format!("spawn: {e}")),
-            )
-            .await;
+            return crate::proto::error_frame(out, ErrorKind::Internal, format!("spawn: {e}"))
+                .await;
         }
     };
 
@@ -123,7 +116,7 @@ where
             pump.abort();
         }
         sup_proc.mark_exited(code);
-        sup_proc.emit(Chunk::Exit(code));
+        sup_proc.emit(&Chunk::Exit(code));
         if let Some(fg) = sup_fg {
             let _ = fg.send(Chunk::Exit(code)).await;
         }
@@ -154,7 +147,7 @@ where
         if proc.exit_code().is_none() {
             let code = reaped.get().copied().unwrap_or(-1);
             proc.mark_exited(code);
-            proc.emit(Chunk::Exit(code));
+            proc.emit(&Chunk::Exit(code));
         }
         table.remove_if(pid, &proc);
         return Err(e);
@@ -215,17 +208,13 @@ where
             Ok(n) => n,
         };
         let chunk = make(buf[..n].to_vec());
-        match fg {
-            // Foreground: the ring/broadcast copy plus the backpressured client
-            // send need two owners; the client backpressures here.
-            Some(fg) => {
-                proc.emit(chunk.clone());
-                if fg.send(chunk).await.is_err() {
-                    break;
-                }
+        proc.emit(&chunk);
+        if let Some(fg) = fg {
+            // The foreground client backpressures here; emit above is
+            // best-effort fan-out to attachers.
+            if fg.send(chunk).await.is_err() {
+                break;
             }
-            // Detached: only the ring/broadcast — no clone.
-            None => proc.emit(chunk),
         }
     }
 }

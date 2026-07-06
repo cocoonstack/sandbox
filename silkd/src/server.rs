@@ -38,9 +38,10 @@ impl State {
         let req: Request = match serde_json::from_slice(&first) {
             Ok(r) => r,
             Err(e) => {
-                return proto::write_frame(
+                return proto::error_frame(
                     &mut writer,
-                    &Response::error(ErrorKind::BadRequest, format!("parse: {e}")),
+                    ErrorKind::BadRequest,
+                    format!("parse: {e}"),
                 )
                 .await
             }
@@ -55,9 +56,10 @@ impl State {
             Request::Exec(e) => {
                 if let Some(sid) = e.session.as_deref() {
                     let Some(sess) = self.sessions.get(sid) else {
-                        return proto::write_frame(
+                        return proto::error_frame(
                             &mut writer,
-                            &Response::error(ErrorKind::NotFound, "no such session"),
+                            ErrorKind::NotFound,
+                            "no such session",
                         )
                         .await;
                     };
@@ -79,9 +81,10 @@ impl State {
                         proto::write_frame(&mut writer, &Response::SessionCreated { id }).await
                     }
                     Err(e) => {
-                        proto::write_frame(
+                        proto::error_frame(
                             &mut writer,
-                            &Response::error(ErrorKind::Internal, format!("session create: {e}")),
+                            ErrorKind::Internal,
+                            format!("session create: {e}"),
                         )
                         .await
                     }
@@ -100,11 +103,7 @@ impl State {
                 if self.sessions.remove(&id) {
                     proto::write_frame(&mut writer, &Response::Done).await
                 } else {
-                    proto::write_frame(
-                        &mut writer,
-                        &Response::error(ErrorKind::NotFound, "no such session"),
-                    )
-                    .await
+                    proto::error_frame(&mut writer, ErrorKind::NotFound, "no such session").await
                 }
             }
             Request::FsWrite { path, mode } => fs::write(reader, &mut writer, path, mode).await,
@@ -169,11 +168,8 @@ impl State {
             | Request::StdinClose
             | Request::Data { .. }
             | Request::DataEnd => {
-                proto::write_frame(
-                    &mut writer,
-                    &Response::error(ErrorKind::BadRequest, "stray data/stdin frame"),
-                )
-                .await
+                proto::error_frame(&mut writer, ErrorKind::BadRequest, "stray data/stdin frame")
+                    .await
             }
         }
     }
@@ -267,7 +263,7 @@ impl State {
         match self.table.get(pid) {
             Some(proc) => Ok(Some(proc)),
             None => {
-                proto::write_frame(w, &Response::error(ErrorKind::NotFound, "no such pid")).await?;
+                proto::error_frame(w, ErrorKind::NotFound, "no such pid").await?;
                 Ok(None)
             }
         }

@@ -86,21 +86,32 @@ func (s *Sandbox) dial(ctx context.Context) (*silkd.Conn, func(), error) {
 	return conn, func() { stop(); _ = conn.Close() }, nil
 }
 
+// call dials one RPC connection and sends its leading request, cleaning up
+// itself on a send failure; the returned cleanup must be deferred.
+func (s *Sandbox) call(ctx context.Context, req silkd.Request) (*silkd.Conn, func(), error) {
+	conn, done, err := s.dial(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := conn.Send(req); err != nil {
+		done()
+		return nil, nil, err
+	}
+	return conn, done, nil
+}
+
 // Run executes cmd in the sandbox, streaming stdio over one relayed silkd
 // connection, and returns the exit code.
 func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	if len(cmd.Argv) == 0 {
 		return 0, fmt.Errorf("empty argv")
 	}
-	conn, done, err := s.dial(ctx)
+	conn, done, err := s.call(ctx, &silkd.Exec{Argv: cmd.Argv, Cwd: cmd.Cwd, Env: cmd.Env, User: cmd.User, Session: cmd.Session})
 	if err != nil {
 		return 0, err
 	}
 	defer done()
 
-	if err := conn.Send(&silkd.Exec{Argv: cmd.Argv, Cwd: cmd.Cwd, Env: cmd.Env, User: cmd.User, Session: cmd.Session}); err != nil {
-		return 0, fmt.Errorf("send exec: %w", err)
-	}
 	if cmd.Stdin == nil {
 		if err := conn.Send(silkd.StdinClose{}); err != nil {
 			return 0, fmt.Errorf("close stdin: %w", err)
@@ -172,24 +183,30 @@ func (s *Sandbox) Fork(ctx context.Context, count int, ttl time.Duration) ([]*Sa
 }
 
 // Promote publishes the sandbox's current state as a template on its owning
-// node: later claims for template (with this sandbox's network lane and
-// size) clone from it, provision-on-demand. Re-promoting to the same name
-// replaces the template; DeleteTemplate removes it. Like Fork, a hibernated
-// sandbox is promoted from its memory image without waking.
-func (s *Sandbox) Promote(ctx context.Context, template string) error {
+// node: later claims for it (with this sandbox's network lane and size)
+// clone from it, provision-on-demand. Re-promoting to the same name replaces
+// the template. Like Fork, a hibernated sandbox is promoted from its memory
+// image without waking. Templates are node-local — the returned handle is
+// bound to the owning node, and its New/Delete always reach it (name-based
+// Client calls only see the connected node's templates).
+func (s *Sandbox) Promote(ctx context.Context, template string) (*Template, error) {
 	body, err := json.Marshal(promoteRequest{Token: s.token, Template: template})
 	if err != nil {
-		return fmt.Errorf("encode promote: %w", err)
+		return nil, fmt.Errorf("encode promote: %w", err)
 	}
 	resp, err := s.postAsClaimer(ctx, "promote", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusNoContent {
-		return apiError("promote", resp)
+	if resp.StatusCode != http.StatusOK {
+		return nil, apiError("promote", resp)
 	}
-	return nil
+	var pr promoteResponse
+	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+		return nil, fmt.Errorf("decode promote response: %w", err)
+	}
+	return &Template{Name: pr.Key.Template, c: s.c, addr: s.owner, net: pr.Key.Net, size: pr.Key.Size}, nil
 }
 
 // Hibernate atomically snapshots the sandbox and stops its VM, freeing its
@@ -237,17 +254,7 @@ func (s *Sandbox) postAsClaimer(ctx context.Context, verb string, body io.Reader
 }
 
 func (s *Sandbox) postWith(ctx context.Context, verb string, body io.Reader, bearer string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+s.owner+"/v1/sandboxes/"+s.ID+"/"+verb, body)
-	if err != nil {
-		return nil, err
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
-	}
-	return s.c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
+	return s.c.roundTrip(ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/"+verb, body, bearer)
 }
 
 // pumpStdin chunks the reader into stdin frames; Send's own locking keeps

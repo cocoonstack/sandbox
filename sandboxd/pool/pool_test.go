@@ -345,7 +345,6 @@ func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Ma
 	return newTestManagerAt(t, eng, t.TempDir(), pools...)
 }
 
-// mustClaim claims with the default TTL or fails the test.
 func mustClaim(t *testing.T, m *Manager, key types.PoolKey) *types.Sandbox {
 	t.Helper()
 	sb, err := m.Claim(t.Context(), key, 0)

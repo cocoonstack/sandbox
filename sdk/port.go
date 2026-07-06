@@ -34,12 +34,8 @@ type PortConn struct {
 // the connection's lifetime: canceling it (or Close) tears the relay down.
 // A port nobody listens on fails here with silkd's not_found error.
 func (s *Sandbox) DialPort(ctx context.Context, port uint16) (*PortConn, error) {
-	conn, done, err := s.dial(ctx)
+	conn, done, err := s.call(ctx, &silkd.PortForward{Port: port})
 	if err != nil {
-		return nil, err
-	}
-	if err = conn.Send(&silkd.PortForward{Port: port}); err != nil {
-		done()
 		return nil, err
 	}
 	if _, err = expect[silkd.Ready](ctx, conn); err != nil {

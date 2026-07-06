@@ -36,10 +36,7 @@ where
         }
     }) {
         Ok(watcher) => watcher,
-        Err(e) => {
-            return proto::write_frame(w, &Response::error(ErrorKind::Internal, e.to_string()))
-                .await
-        }
+        Err(e) => return proto::error_frame(w, ErrorKind::Internal, e.to_string()).await,
     };
     let mode = if recursive {
         RecursiveMode::Recursive
@@ -47,7 +44,7 @@ where
         RecursiveMode::NonRecursive
     };
     if let Err(e) = watcher.watch(std::path::Path::new(&path), mode) {
-        return proto::write_frame(w, &Response::error(map_kind(&e), e.to_string())).await;
+        return proto::error_frame(w, map_kind(&e), e.to_string()).await;
     }
     proto::write_frame(w, &Response::Ready).await?;
     loop {

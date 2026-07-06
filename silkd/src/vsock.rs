@@ -28,7 +28,10 @@ pub async fn serve(port: u32, state: Arc<State>) -> std::io::Result<()> {
         let state = Arc::clone(&state);
         tokio::spawn(async move {
             let (read, write) = tokio::io::split(conn);
-            if let Err(e) = state.serve(tokio::io::BufReader::new(read), write).await {
+            // Data/stdin frames run 43KB–1.3MB on the wire; the 8KB BufReader
+            // default would cost several read syscalls per frame on bulk paths.
+            let reader = tokio::io::BufReader::with_capacity(64 * 1024, read);
+            if let Err(e) = state.serve(reader, write).await {
                 eprintln!("silkd: connection: {e}");
             }
         });

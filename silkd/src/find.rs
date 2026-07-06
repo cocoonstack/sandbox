@@ -25,18 +25,12 @@ pub async fn find<W: AsyncWrite + Unpin>(
 ) -> std::io::Result<()> {
     let re = match Regex::new(&pattern) {
         Ok(re) => re,
-        Err(e) => {
-            return proto::write_frame(w, &Response::error(ErrorKind::BadRequest, e.to_string()))
-                .await
-        }
+        Err(e) => return proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
     };
     let name_re = match glob.as_deref().filter(|g| !g.is_empty()).map(glob_regex) {
         None => None,
         Some(Ok(re)) => Some(re),
-        Some(Err(e)) => {
-            return proto::write_frame(w, &Response::error(ErrorKind::BadRequest, e.to_string()))
-                .await
-        }
+        Some(Err(e)) => return proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
     };
     let mut stack = vec![path];
     while let Some(dir) = stack.pop() {
@@ -78,10 +72,7 @@ pub async fn replace<W: AsyncWrite + Unpin>(
 ) -> std::io::Result<()> {
     let re = match Regex::new(&pattern) {
         Ok(re) => re,
-        Err(e) => {
-            return proto::write_frame(w, &Response::error(ErrorKind::BadRequest, e.to_string()))
-                .await
-        }
+        Err(e) => return proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
     };
     for file in files {
         let body = match fs::read_to_string(&file).await {

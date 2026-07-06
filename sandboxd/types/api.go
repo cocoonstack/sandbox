@@ -71,3 +71,10 @@ type PromoteRequest struct {
 	Token    string `json:"token"`
 	Template string `json:"template"`
 }
+
+// PromoteResponse returns the template's full key: templates are node-local,
+// so a cluster client needs the exact key (and this node's address) to claim
+// from or delete the template later.
+type PromoteResponse struct {
+	Key PoolKey `json:"key"`
+}

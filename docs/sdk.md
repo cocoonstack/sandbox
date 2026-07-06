@@ -94,17 +94,23 @@ client needs `WithAPIToken` — a sandbox handle alone cannot amplify.
 ## Promoting to a template
 
 ```go
-err := sb.Promote(ctx, "myproj:v1")            // publish current state
-tpl, err := client.New(ctx, "myproj:v1")       // clones the promoted state
-err = client.DeleteTemplate(ctx, "myproj:v1")  // caller owns the lifecycle
+tpl, err := sb.Promote(ctx, "myproj:v1")  // publish current state
+child, err := tpl.New(ctx)                // clones the promoted state
+err = tpl.Delete(ctx)                     // caller owns the lifecycle
 ```
 
 `Promote` publishes the sandbox's state as a template on its owning node,
-keyed by (name, the sandbox's network lane, its size) — claims must use the
-same lane and size. Claims clone on demand (~a golden-clone's latency);
-there is no warm pool for promoted templates unless the node's config adds
-one. Templates are node-local; re-promoting replaces, `DeleteTemplate`
-(with `WithNetwork`/`WithSize` when non-default) removes.
+keyed by (name, the sandbox's network lane, its size). Claims clone on
+demand (~a golden-clone's latency); there is no warm pool for promoted
+templates unless the node's config adds one. Re-promoting to the same name
+replaces the template.
+
+**Templates are node-local**, and on a cluster the parent claim may have
+been redirected — so the returned `Template` handle is bound to the owning
+node, and its `New`/`Delete` always reach it. The name-based calls
+(`client.New("myproj:v1")`, `client.DeleteTemplate(...)` with
+`WithNetwork`/`WithSize` when non-default) work too, but only see the
+templates of the node the client is connected to.
 
 ## Reaching guest ports
 

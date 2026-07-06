@@ -105,7 +105,6 @@ func main() {
 	logger.Info(ctx, "sandboxd stopped; VMs stay alive for the next reconcile")
 }
 
-// startMesh builds and joins the memberlist cluster from cfg.Mesh.
 func startMesh(cfg *config.Config) (*mesh.Mesh, error) {
 	mc := cfg.Mesh
 	mlCfg := memberlist.DefaultLANConfig()

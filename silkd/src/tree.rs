@@ -11,7 +11,7 @@ use std::process::{ExitStatus, Stdio};
 use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncWrite};
 use tokio::process::Command;
 
-use crate::proto::{self, err_frame, ErrorKind, Response, READ_CHUNK};
+use crate::proto::{self, err_frame, ErrorKind, Response};
 
 /// Extracts a client tar stream (`data` frames until `data_end`) into `dest`,
 /// creating it if needed. tar runs with the destination as cwd; a non-zero
@@ -60,10 +60,7 @@ pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
     let p = Path::new(&path);
     let (parent, name) = match (p.parent(), p.file_name()) {
         (Some(par), Some(n)) if !n.is_empty() => (par.to_path_buf(), n.to_os_string()),
-        _ => {
-            return proto::write_frame(w, &Response::error(ErrorKind::BadRequest, "invalid path"))
-                .await
-        }
+        _ => return proto::error_frame(w, ErrorKind::BadRequest, "invalid path").await,
     };
     let cwd = if parent.as_os_str().is_empty() {
         Path::new(".").to_path_buf()
@@ -90,24 +87,9 @@ pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
     // pipe while we are reading its stdout.
     let err_task = tokio::spawn(drain(child.stderr.take().expect("stderr piped")));
 
-    let mut buf = vec![0u8; READ_CHUNK];
-    loop {
-        match out.read(&mut buf).await {
-            Ok(0) => break,
-            Ok(n) => {
-                proto::write_frame(
-                    w,
-                    &Response::Data {
-                        data: buf[..n].to_vec(),
-                    },
-                )
-                .await?
-            }
-            Err(e) => {
-                let _ = child.wait().await;
-                return err_frame(w, &e, "read tar").await;
-            }
-        }
+    if let Err(e) = proto::stream_data_frames(&mut out, w).await? {
+        let _ = child.wait().await;
+        return err_frame(w, &e, "read tar").await;
     }
     let status = child.wait().await?;
     let msg = err_task.await.unwrap_or_default();
@@ -125,11 +107,7 @@ async fn tar_result<W: AsyncWrite + Unpin>(
     if status.success() {
         proto::write_frame(w, &Response::Done).await
     } else {
-        proto::write_frame(
-            w,
-            &Response::error(ErrorKind::Internal, format!("{label}: {}", msg.trim())),
-        )
-        .await
+        proto::error_frame(w, ErrorKind::Internal, format!("{label}: {}", msg.trim())).await
     }
 }
 

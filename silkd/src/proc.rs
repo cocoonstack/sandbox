@@ -130,12 +130,17 @@ impl Proc {
     /// Records output for replay and fans it out to live attachers, holding
     /// the ring lock across the broadcast send so an `attach` racing this
     /// emit sees the chunk in exactly one of replay or the live stream.
-    pub fn emit(&self, chunk: Chunk) {
+    /// The broadcast clone is skipped when nobody listens (the common case
+    /// on the output hot path); `attach_stream` subscribes under this same
+    /// ring lock, so the receiver count cannot change mid-emit.
+    pub fn emit(&self, chunk: &Chunk) {
         let mut ring = self.ring.lock().unwrap();
-        if let Chunk::Stdout(ref d) | Chunk::Stderr(ref d) = chunk {
+        if let Chunk::Stdout(d) | Chunk::Stderr(d) = chunk {
             ring.push(matches!(chunk, Chunk::Stderr(_)), d);
         }
-        let _ = self.tx.send(chunk);
+        if self.tx.receiver_count() > 0 {
+            let _ = self.tx.send(chunk.clone());
+        }
     }
 
     pub fn mark_exited(&self, code: i32) {

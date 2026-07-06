@@ -36,13 +36,9 @@ type Pty struct {
 // OpenPty starts a shell under a pty. The ctx governs the pty's lifetime:
 // canceling it (or calling Close) tears the session down.
 func (s *Sandbox) OpenPty(ctx context.Context, opts PtyOpts) (*Pty, error) {
-	conn, done, err := s.dial(ctx)
-	if err != nil {
-		return nil, err
-	}
 	req := &silkd.PtyOpen{Cols: opts.Cols, Rows: opts.Rows, Cwd: opts.Cwd, Env: opts.Env, User: opts.User}
-	if err = conn.Send(req); err != nil {
-		done()
+	conn, done, err := s.call(ctx, req)
+	if err != nil {
 		return nil, err
 	}
 	started, err := expect[silkd.Started](ctx, conn)

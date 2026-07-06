@@ -2,7 +2,6 @@ package server
 
 import (
 	"bufio"
-	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -10,8 +9,6 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
-
-	"github.com/cocoonstack/sandbox/sandboxd/pool"
 )
 
 // drainGrace bounds how long a finished relay waits for the client to
@@ -53,8 +50,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	// transparent wake path: the client's next call just works.
 	sock, err := s.mgr.WakeAgentSocket(r.Context(), r.PathValue("id"), token)
 	switch {
-	case errors.Is(err, pool.ErrUnknownSandbox):
-		writeErr(w, http.StatusNotFound, "unknown sandbox")
+	case writePoolErr(w, err):
 		return
 	case err != nil:
 		logger.Errorf(r.Context(), err, "agent socket for %s", r.PathValue("id"))

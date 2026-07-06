@@ -93,9 +93,16 @@ Publishes the sandbox's current state as a node-local template under
 (template, this sandbox's net, its size): later claims for that key clone
 from it, provision-on-demand — no warm pool unless the node config adds one.
 Re-promoting to the same name replaces the template. A hibernated sandbox is
-promoted from its memory image without waking. 204 on success, 400 invalid
-name, 401 bad api token, 409 when the name collides with a configured pool,
-404 unknown id or wrong sandbox token.
+promoted from its memory image without waking. 200 returns the template's
+full key — templates are node-local, so a cluster client must claim from and
+delete on this node, under exactly this key:
+
+```json
+{"key": {"template": "myproj:v1", "net": "none", "size": "small"}}
+```
+
+400 invalid name, 401 bad api token, 409 when the name collides with a
+configured pool, 404 unknown id or wrong sandbox token.
 
 ## DELETE /v1/templates?template=…&net=…&size=…
 

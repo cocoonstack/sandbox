@@ -339,7 +339,7 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 		name, auth, body string
 		want             int
 	}{
-		{"ok", "Bearer sekret", `{"token":"tok","template":"tpl:x"}`, http.StatusNoContent},
+		{"ok", "Bearer sekret", `{"token":"tok","template":"tpl:x"}`, http.StatusOK},
 		{"bad name", "Bearer sekret", `{"token":"tok","template":"_bad"}`, http.StatusBadRequest},
 		{"pooled", "Bearer sekret", `{"token":"tok","template":"pooled"}`, http.StatusConflict},
 		{"bad sandbox token", "Bearer sekret", `{"token":"bad","template":"tpl:x"}`, http.StatusNotFound},
@@ -451,11 +451,14 @@ func (f *fakeManager) Fork(_ context.Context, id, token string, count int, ttl t
 	return f.fork(id, token, count, ttl)
 }
 
-func (f *fakeManager) Promote(_ context.Context, id, token, template string) error {
+func (f *fakeManager) Promote(_ context.Context, id, token, template string) (types.PoolKey, error) {
 	if f.promote == nil {
-		return pool.ErrUnknownSandbox
+		return types.PoolKey{}, pool.ErrUnknownSandbox
 	}
-	return f.promote(id, token, template)
+	if err := f.promote(id, token, template); err != nil {
+		return types.PoolKey{}, err
+	}
+	return types.PoolKey{Template: template, Net: types.NetNone, Size: types.SizeSmall}, nil
 }
 
 func (f *fakeManager) DeleteTemplate(key types.PoolKey) error {
@@ -481,7 +484,6 @@ func (f *fakeDialer) DialSilkd(ctx context.Context, sock string) (net.Conn, erro
 	return f.dial(ctx, sock)
 }
 
-// fakePlacer returns canned candidates.
 type fakePlacer struct{ addrs []string }
 
 func (f *fakePlacer) Candidates(string) []string { return f.addrs }
@@ -552,7 +554,6 @@ func TestOwnerEndpoint(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
-	// Owned here.
 	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/owner", nil)
 	req.Header.Set("Authorization", "Bearer good")
 	resp, err := http.DefaultClient.Do(req)
@@ -571,7 +572,6 @@ func TestOwnerEndpoint(t *testing.T) {
 		t.Errorf("owner %q, want node-b:7777", body.OwnerAddr)
 	}
 
-	// Not owned here → 404.
 	req2, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/owner", nil)
 	req2.Header.Set("Authorization", "Bearer wrong")
 	resp2, err := http.DefaultClient.Do(req2)

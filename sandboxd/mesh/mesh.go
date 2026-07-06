@@ -9,7 +9,9 @@ package mesh
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/rand/v2"
+	"slices"
 	"sync"
 	"time"
 
@@ -33,10 +35,9 @@ type NodeState struct {
 type Mesh struct {
 	ml *memberlist.Memberlist
 
-	mu    sync.Mutex
-	self  NodeState
-	view  map[string]NodeState // node_id → latest known state (includes self)
-	epoch uint64
+	mu   sync.Mutex
+	self NodeState
+	view map[string]NodeState // node_id → latest known state (includes self)
 }
 
 // New starts a mesh member listening per cfg. selfAddr is the data-plane
@@ -44,14 +45,17 @@ type Mesh struct {
 // gossip encryption when non-empty.
 func New(cfg *memberlist.Config, nodeID, selfAddr string, secretKey []byte) (*Mesh, error) {
 	m := &Mesh{
-		// Seed the epoch from wall-clock so a restarted node's fresh counts
-		// aren't rejected by peers still holding its pre-restart (higher)
-		// epoch; epoch++ keeps intra-process monotonicity above that base.
-		epoch: uint64(time.Now().UnixNano()), //nolint:gosec // UnixNano is positive for current times
-		self:  NodeState{NodeID: nodeID, Addr: selfAddr, Pools: map[string]int{}},
-		view:  map[string]NodeState{},
+		self: NodeState{
+			NodeID: nodeID,
+			Addr:   selfAddr,
+			// Seed the epoch from wall-clock so a restarted node's fresh counts
+			// aren't rejected by peers still holding its pre-restart (higher)
+			// epoch; Epoch++ keeps intra-process monotonicity above that base.
+			Epoch: uint64(time.Now().UnixNano()), //nolint:gosec // UnixNano is positive for current times
+			Pools: map[string]int{},
+		},
+		view: map[string]NodeState{},
 	}
-	m.self.Epoch = m.epoch
 	m.view[nodeID] = m.self
 
 	cfg.Name = nodeID
@@ -84,8 +88,7 @@ func (m *Mesh) Join(seeds []string) error {
 func (m *Mesh) UpdateSelf(pools map[string]int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.epoch++
-	m.self.Epoch = m.epoch
+	m.self.Epoch++
 	m.self.Pools = pools
 	m.view[m.self.NodeID] = m.self
 }
@@ -134,11 +137,7 @@ func (m *Mesh) Candidates(keyHash string) []string {
 func (m *Mesh) Members() []NodeState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]NodeState, 0, len(m.view))
-	for _, st := range m.view {
-		out = append(out, st)
-	}
-	return out
+	return slices.Collect(maps.Values(m.view))
 }
 
 // PeerAddrs returns the data-plane addresses of the other nodes, for a

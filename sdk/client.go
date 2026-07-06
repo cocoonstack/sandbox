@@ -57,9 +57,9 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 	for _, opt := range opts {
 		opt(&claim)
 	}
-	body, err := json.Marshal(claim)
+	body, err := encodeClaim(claim)
 	if err != nil {
-		return nil, fmt.Errorf("encode claim: %w", err)
+		return nil, err
 	}
 
 	cr, err := c.claimAt(ctx, c.addr, body)
@@ -71,9 +71,9 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 		// cannot bounce us again. Try each candidate so one dead/stale peer
 		// (its addr lingering in a gossip view) doesn't fail the claim.
 		claim.NoRedirect = true
-		body, err = json.Marshal(claim)
+		body, err = encodeClaim(claim)
 		if err != nil {
-			return nil, fmt.Errorf("encode claim: %w", err)
+			return nil, err
 		}
 		var lastErr error
 		for _, addr := range cr.Redirect {
@@ -119,12 +119,7 @@ func (c *Client) Lookup(ctx context.Context, id, token string) (*Sandbox, error)
 // ownerAt asks one node whether it owns the sandbox, returning its data-plane
 // address on success.
 func (c *Client) ownerAt(ctx context.Context, addr, id, token string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/v1/sandboxes/"+id+"/owner", nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := c.hc.Do(req) //nolint:gosec // dialing the caller-configured cluster is the SDK's purpose
+	resp, err := c.roundTrip(ctx, http.MethodGet, addr, "/v1/sandboxes/"+id+"/owner", nil, token)
 	if err != nil {
 		return "", err
 	}
@@ -156,15 +151,7 @@ func (c *Client) handleFrom(dialed string, cr claimResponse) *Sandbox {
 }
 
 func (c *Client) claimAt(ctx context.Context, addr string, body []byte) (claimResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/v1/claim", bytes.NewReader(body))
-	if err != nil {
-		return claimResponse{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.apiToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiToken)
-	}
-	resp, err := c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
+	resp, err := c.roundTrip(ctx, http.MethodPost, addr, "/v1/claim", bytes.NewReader(body), c.apiToken)
 	if err != nil {
 		return claimResponse{}, err
 	}
@@ -179,7 +166,9 @@ func (c *Client) claimAt(ctx context.Context, addr string, body []byte) (claimRe
 	return cr, nil
 }
 
-// DeleteTemplate removes a promoted template from the entry node. The
+// DeleteTemplate removes a promoted template from the CONNECTED node —
+// templates are node-local, and on a cluster the entry node may not be the
+// one holding it; prefer Template.Delete on the handle Promote returned. The
 // options pick the template's key axes exactly as a claim would (network
 // lane, size); the same defaults apply.
 func (c *Client) DeleteTemplate(ctx context.Context, template string, opts ...Option) error {
@@ -187,15 +176,12 @@ func (c *Client) DeleteTemplate(ctx context.Context, template string, opts ...Op
 	for _, opt := range opts {
 		opt(&claim)
 	}
-	u := url.Values{"template": {claim.Template}, "net": {claim.Net}, "size": {claim.Size}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, "http://"+c.addr+"/v1/templates?"+u.Encode(), nil)
-	if err != nil {
-		return err
-	}
-	if c.apiToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiToken)
-	}
-	resp, err := c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
+	return c.deleteTemplates(ctx, c.addr, url.Values{"template": {claim.Template}, "net": {claim.Net}, "size": {claim.Size}})
+}
+
+// deleteTemplates issues the template delete against one node.
+func (c *Client) deleteTemplates(ctx context.Context, addr string, u url.Values) error {
+	resp, err := c.roundTrip(ctx, http.MethodDelete, addr, "/v1/templates?"+u.Encode(), nil, c.apiToken)
 	if err != nil {
 		return err
 	}
@@ -204,6 +190,31 @@ func (c *Client) DeleteTemplate(ctx context.Context, template string, opts ...Op
 		return apiError("delete template", resp)
 	}
 	return nil
+}
+
+// encodeClaim marshals a claim body.
+func encodeClaim(claim claimRequest) ([]byte, error) {
+	body, err := json.Marshal(claim)
+	if err != nil {
+		return nil, fmt.Errorf("encode claim: %w", err)
+	}
+	return body, nil
+}
+
+// roundTrip issues one control-plane request against addr, attaching bearer
+// when non-empty; a non-nil body is JSON.
+func (c *Client) roundTrip(ctx context.Context, method, addr, path string, body io.Reader, bearer string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, "http://"+addr+path, body)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	return c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
 }
 
 // apiError surfaces the server's {"error": ...} body when present.
@@ -247,6 +258,14 @@ type forkResponse struct {
 type promoteRequest struct {
 	Token    string `json:"token"`
 	Template string `json:"template"`
+}
+
+type promoteResponse struct {
+	Key struct {
+		Template string `json:"template"`
+		Net      string `json:"net"`
+		Size     string `json:"size"`
+	} `json:"key"`
 }
 
 type errorResponse struct {

@@ -6,6 +6,7 @@
 package silkd
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -43,7 +44,76 @@ const (
 	FileKindOther   = "other"
 )
 
-var requestHead = `{"v":` + strconv.Itoa(ProtoVersion) + `,"op":"`
+var (
+	requestHead = `{"v":` + strconv.Itoa(ProtoVersion) + `,"op":"`
+
+	// requestDecoders maps each op tag to a decoder; table dispatch keeps this
+	// (and the verb set) flat instead of a switch that grows past the complexity
+	// budget as verbs are added.
+	requestDecoders = map[string]func([]byte) (Request, error){
+		"exec":           decodeReq[Exec],
+		"info":           decodeReq[Info],
+		"ps":             decodeReq[Ps],
+		"kill":           decodeReq[Kill],
+		"attach":         decodeReq[Attach],
+		"logs":           decodeReq[Logs],
+		"session_create": decodeReq[SessionCreate],
+		"session_list":   decodeReq[SessionList],
+		"session_rm":     decodeReq[SessionRm],
+		"stdin":          decodeReq[Stdin],
+		"stdin_close":    decodeReq[StdinClose],
+		"fs_write":       decodeReq[FsWrite],
+		"fs_read":        decodeReq[FsRead],
+		"fs_list":        decodeReq[FsList],
+		"fs_stat":        decodeReq[FsStat],
+		"fs_mkdir":       decodeReq[FsMkdir],
+		"fs_rm":          decodeReq[FsRm],
+		"fs_rename":      decodeReq[FsRename],
+		"fs_push":        decodeReq[FsPush],
+		"fs_pull":        decodeReq[FsPull],
+		"fs_find":        decodeReq[FsFind],
+		"fs_replace":     decodeReq[FsReplace],
+		"fs_watch":       decodeReq[FsWatch],
+		"pty_open":       decodeReq[PtyOpen],
+		"pty_resize":     decodeReq[PtyResize],
+		"port_forward":   decodeReq[PortForward],
+		"git_clone":      decodeReq[GitClone],
+		"git_status":     decodeReq[GitStatus],
+		"git_add":        decodeReq[GitAdd],
+		"git_commit":     decodeReq[GitCommit],
+		"git_push":       decodeReq[GitPush],
+		"git_pull":       decodeReq[GitPull],
+		"git_branch":     decodeReq[GitBranch],
+		"data":           decodeReq[Data],
+		"data_end":       decodeReq[DataEnd],
+	}
+
+	// responseDecoders maps each type tag to a decoder. Two-stage dispatch is
+	// required because the same key differs in shape across variants (info's
+	// procs is a count, ps's procs is a list).
+	responseDecoders = map[string]func([]byte) (Response, error){
+		"started":           decodeResp[Started],
+		"stdout":            decodeResp[Stdout],
+		"stderr":            decodeResp[Stderr],
+		"exit":              decodeResp[Exit],
+		"done":              decodeResp[Done],
+		"ready":             decodeResp[Ready],
+		"error":             decodeResp[ErrorResp],
+		"info":              decodeResp[InfoResp],
+		"procs":             decodeResp[Procs],
+		"data":              decodeResp[DataResp],
+		"entries":           decodeResp[Entries],
+		"stat":              decodeResp[Stat],
+		"session_created":   decodeResp[SessionCreated],
+		"sessions":          decodeResp[Sessions],
+		"match":             decodeResp[Match],
+		"replaced":          decodeResp[Replaced],
+		"event":             decodeResp[Event],
+		"git_status_result": decodeResp[GitStatusResult],
+		"git_commit_result": decodeResp[GitCommitResult],
+		"git_branches":      decodeResp[GitBranches],
+	}
+)
 
 // Request is a client→server frame; Op is its wire tag.
 type Request interface{ Op() string }
@@ -485,99 +555,28 @@ func EncodeResponse(r Response) ([]byte, error) {
 	return encodeTagged(`{"type":"`+r.RespType()+`"`, r)
 }
 
-// requestDecoders maps each op tag to a decoder; table dispatch keeps this
-// (and the verb set) flat instead of a switch that grows past the complexity
-// budget as verbs are added.
-var requestDecoders = map[string]func([]byte) (Request, error){
-	"exec":           decodeReq[Exec],
-	"info":           decodeReq[Info],
-	"ps":             decodeReq[Ps],
-	"kill":           decodeReq[Kill],
-	"attach":         decodeReq[Attach],
-	"logs":           decodeReq[Logs],
-	"session_create": decodeReq[SessionCreate],
-	"session_list":   decodeReq[SessionList],
-	"session_rm":     decodeReq[SessionRm],
-	"stdin":          decodeReq[Stdin],
-	"stdin_close":    decodeReq[StdinClose],
-	"fs_write":       decodeReq[FsWrite],
-	"fs_read":        decodeReq[FsRead],
-	"fs_list":        decodeReq[FsList],
-	"fs_stat":        decodeReq[FsStat],
-	"fs_mkdir":       decodeReq[FsMkdir],
-	"fs_rm":          decodeReq[FsRm],
-	"fs_rename":      decodeReq[FsRename],
-	"fs_push":        decodeReq[FsPush],
-	"fs_pull":        decodeReq[FsPull],
-	"fs_find":        decodeReq[FsFind],
-	"fs_replace":     decodeReq[FsReplace],
-	"fs_watch":       decodeReq[FsWatch],
-	"pty_open":       decodeReq[PtyOpen],
-	"pty_resize":     decodeReq[PtyResize],
-	"port_forward":   decodeReq[PortForward],
-	"git_clone":      decodeReq[GitClone],
-	"git_status":     decodeReq[GitStatus],
-	"git_add":        decodeReq[GitAdd],
-	"git_commit":     decodeReq[GitCommit],
-	"git_push":       decodeReq[GitPush],
-	"git_pull":       decodeReq[GitPull],
-	"git_branch":     decodeReq[GitBranch],
-	"data":           decodeReq[Data],
-	"data_end":       decodeReq[DataEnd],
-}
-
 // DecodeRequest parses one frame into its op's concrete type.
 func DecodeRequest(line []byte) (Request, error) {
-	var tag struct {
-		Op string `json:"op"`
-	}
-	if err := json.Unmarshal(line, &tag); err != nil {
+	op, err := scanTag(line, "op")
+	if err != nil {
 		return nil, fmt.Errorf("parse request frame: %w", err)
 	}
-	dec, ok := requestDecoders[tag.Op]
+	dec, ok := requestDecoders[op]
 	if !ok {
-		return nil, fmt.Errorf("unknown op %q", tag.Op)
+		return nil, fmt.Errorf("unknown op %q", op)
 	}
 	return dec(line)
 }
 
-// responseDecoders maps each type tag to a decoder. Two-stage dispatch is
-// required because the same key differs in shape across variants (info's
-// procs is a count, ps's procs is a list).
-var responseDecoders = map[string]func([]byte) (Response, error){
-	"started":           decodeResp[Started],
-	"stdout":            decodeResp[Stdout],
-	"stderr":            decodeResp[Stderr],
-	"exit":              decodeResp[Exit],
-	"done":              decodeResp[Done],
-	"ready":             decodeResp[Ready],
-	"error":             decodeResp[ErrorResp],
-	"info":              decodeResp[InfoResp],
-	"procs":             decodeResp[Procs],
-	"data":              decodeResp[DataResp],
-	"entries":           decodeResp[Entries],
-	"stat":              decodeResp[Stat],
-	"session_created":   decodeResp[SessionCreated],
-	"sessions":          decodeResp[Sessions],
-	"match":             decodeResp[Match],
-	"replaced":          decodeResp[Replaced],
-	"event":             decodeResp[Event],
-	"git_status_result": decodeResp[GitStatusResult],
-	"git_commit_result": decodeResp[GitCommitResult],
-	"git_branches":      decodeResp[GitBranches],
-}
-
 // DecodeResponse parses one frame into its type's concrete Go type.
 func DecodeResponse(line []byte) (Response, error) {
-	var tag struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(line, &tag); err != nil {
+	typ, err := scanTag(line, "type")
+	if err != nil {
 		return nil, fmt.Errorf("parse response frame: %w", err)
 	}
-	dec, ok := responseDecoders[tag.Type]
+	dec, ok := responseDecoders[typ]
 	if !ok {
-		return nil, fmt.Errorf("unknown response type %q", tag.Type)
+		return nil, fmt.Errorf("unknown response type %q", typ)
 	}
 	return dec(line)
 }
@@ -597,6 +596,59 @@ func encodeTagged(head string, v any) ([]byte, error) {
 	}
 	frame = append(frame, ',')
 	return append(frame, body[1:]...), nil
+}
+
+// scanTag extracts the string value of a top-level key without decoding the
+// whole frame: both producers emit the tag first, so the token walk stops at
+// the frame head on bulk data frames instead of pre-scanning every payload
+// byte before the real decode. A missing tag returns "" (the callers'
+// unknown-tag error); key order never affects correctness, only how early
+// the walk stops.
+func scanTag(line []byte, key string) (string, error) {
+	dec := json.NewDecoder(bytes.NewReader(line))
+	tok, err := dec.Token()
+	if err != nil {
+		return "", err
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return "", fmt.Errorf("frame is not an object")
+	}
+	for dec.More() {
+		if tok, err = dec.Token(); err != nil {
+			return "", err
+		}
+		if k, ok := tok.(string); ok && k == key {
+			if tok, err = dec.Token(); err != nil {
+				return "", err
+			}
+			s, ok := tok.(string)
+			if !ok {
+				return "", fmt.Errorf("%s tag is not a string", key)
+			}
+			return s, nil
+		}
+		if err = skipValue(dec); err != nil {
+			return "", err
+		}
+	}
+	return "", nil
+}
+
+// skipValue consumes one JSON value, recursing into containers.
+func skipValue(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if d, ok := tok.(json.Delim); ok && (d == '{' || d == '[') {
+		for dec.More() {
+			if err = skipValue(dec); err != nil {
+				return err
+			}
+		}
+		_, err = dec.Token()
+	}
+	return err
 }
 
 func decodeAs[T any](line []byte) (*T, error) {

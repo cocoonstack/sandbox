@@ -64,50 +64,23 @@ func (s *Sandbox) Rename(ctx context.Context, from, to string) error {
 	return s.doneRPC(ctx, &silkd.FsRename{From: from, To: to})
 }
 
-// oneShot sends a request and returns its single non-terminal reply frame,
-// mapping an error frame to a Go error.
-func (s *Sandbox) oneShot(ctx context.Context, req silkd.Request) (silkd.Response, error) {
-	conn, done, err := s.dial(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer done()
-	if err = conn.Send(req); err != nil {
-		return nil, err
-	}
-	resp, err := recv(ctx, conn)
-	if err != nil {
-		return nil, err
-	}
-	if e, ok := resp.(*silkd.ErrorResp); ok {
-		return nil, e
-	}
-	return resp, nil
-}
-
 // doneRPC sends a request that answers with Done or an error frame.
 func (s *Sandbox) doneRPC(ctx context.Context, req silkd.Request) error {
-	conn, done, err := s.dial(ctx)
+	conn, done, err := s.call(ctx, req)
 	if err != nil {
 		return err
 	}
 	defer done()
-	if err := conn.Send(req); err != nil {
-		return err
-	}
 	return terminalErr(ctx, conn)
 }
 
 // uploadRPC sends req, streams r as Data frames, and expects a terminal Done.
 func (s *Sandbox) uploadRPC(ctx context.Context, req silkd.Request, r io.Reader) error {
-	conn, done, err := s.dial(ctx)
+	conn, done, err := s.call(ctx, req)
 	if err != nil {
 		return err
 	}
 	defer done()
-	if err := conn.Send(req); err != nil {
-		return err
-	}
 	if err := uploadStream(conn, r); err != nil {
 		return err
 	}
@@ -116,40 +89,31 @@ func (s *Sandbox) uploadRPC(ctx context.Context, req silkd.Request, r io.Reader)
 
 // downloadRPC sends req and drains its Data stream into sink until Done.
 func (s *Sandbox) downloadRPC(ctx context.Context, req silkd.Request, sink func([]byte) error) error {
-	conn, done, err := s.dial(ctx)
+	conn, done, err := s.call(ctx, req)
 	if err != nil {
 		return err
 	}
 	defer done()
-	if err := conn.Send(req); err != nil {
-		return err
-	}
 	return drainData(ctx, conn, sink)
 }
 
 // oneShotRPC sends req and returns its single typed reply frame.
 func oneShotRPC[T any](ctx context.Context, s *Sandbox, req silkd.Request) (*T, error) {
-	resp, err := s.oneShot(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	v, ok := any(resp).(*T) // via any: see collectRPC
-	if !ok {
-		return nil, unexpected(resp)
-	}
-	return v, nil
-}
-
-// collectRPC sends req and gathers every streamed frame of type T until Done.
-func collectRPC[T any](ctx context.Context, s *Sandbox, req silkd.Request) ([]T, error) {
-	conn, done, err := s.dial(ctx)
+	conn, done, err := s.call(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	defer done()
-	if err := conn.Send(req); err != nil {
+	return expect[T](ctx, conn)
+}
+
+// collectRPC sends req and gathers every streamed frame of type T until Done.
+func collectRPC[T any](ctx context.Context, s *Sandbox, req silkd.Request) ([]T, error) {
+	conn, done, err := s.call(ctx, req)
+	if err != nil {
 		return nil, err
 	}
+	defer done()
 	var out []T
 	for {
 		resp, err := recv(ctx, conn)

@@ -189,11 +189,7 @@ impl Session {
                 true
             }
             Err(e) => {
-                let _ = proto::write_frame(
-                    w,
-                    &Response::error(ErrorKind::Internal, format!("session: {e}")),
-                )
-                .await;
+                let _ = proto::error_frame(w, ErrorKind::Internal, format!("session: {e}")).await;
                 false
             }
         }

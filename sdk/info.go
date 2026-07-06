@@ -37,14 +37,7 @@ type PoolStatus struct {
 
 // Info reports the entry node's pools, claim counts, and mesh peers.
 func (c *Client) Info(ctx context.Context) (*NodeInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+c.addr+"/v1/info", nil)
-	if err != nil {
-		return nil, err
-	}
-	if c.apiToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiToken)
-	}
-	resp, err := c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
+	resp, err := c.roundTrip(ctx, http.MethodGet, c.addr, "/v1/info", nil, c.apiToken)
 	if err != nil {
 		return nil, err
 	}
