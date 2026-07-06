@@ -5,3 +5,5 @@ e2e/demo
 e2e/smoke
 *.log
 .DS_Store
+mcp/mcp
+mcp/sandbox-mcp
