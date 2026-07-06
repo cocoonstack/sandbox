@@ -55,6 +55,10 @@ var (
 	ErrNoEgress        = errors.New("node has no egress attachment (bridge or network)")
 	ErrQuota           = errors.New("node claim quota reached")
 
+	// errWokeMeanwhile aborts an idle-hibernate whose victim saw a
+	// data-plane connection after the sweep snapshot; internal only.
+	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
+
 	// templateNameRe mirrors cocoon's snapshot-name rule so a promoted
 	// template's derived snapshot and golden names are always accepted.
 	templateNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`)
@@ -363,7 +367,9 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 	if !ok {
 		return "", ErrUnknownSandbox
 	}
-	sb.LastActivity = time.Now() // under m.mu — the relay's activity stamp
+	// No activity stamp here: owner/Lookup probes use this path, and a
+	// control-plane poll must not keep an idle sandbox awake. The relay's
+	// stamp lives in WakeAgentSocket.
 	return sb.VsockSocket, nil
 }
 
@@ -378,6 +384,11 @@ func (m *Manager) Hibernate(ctx context.Context, id, token string) error {
 	}
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
+	return m.hibernateLocked(ctx, sb)
+}
+
+// hibernateLocked is Hibernate's body; the caller holds sb.Transition.
+func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error {
 	if sb.HibernateSnap != "" {
 		return nil
 	}
@@ -476,6 +487,7 @@ func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl tim
 		return nil, fmt.Errorf("fork %s: %w", id, err)
 	}
 	m.counters.forks.Add(1)
+	m.counters.claimsClone.Add(uint64(len(children))) //nolint:gosec // count is bounded by maxFork
 	ids := make([]string, len(children))
 	for i, c := range children {
 		ids[i] = c.ID
@@ -763,12 +775,12 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		sb.LastActivity = now
 	}
 	m.mu.Lock()
-	if m.maxClaims > 0 && len(m.claimed)+len(sbs) > m.maxClaims {
+	if live := len(m.claimed); m.maxClaims > 0 && live+len(sbs) > m.maxClaims {
 		m.mu.Unlock()
 		for _, sb := range sbs {
 			m.destroy(ctx, sb.VMName)
 		}
-		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, len(m.claimed), m.maxClaims)
+		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, live, m.maxClaims)
 	}
 	for _, sb := range sbs {
 		m.claimed[sb.ID] = sb
@@ -998,14 +1010,33 @@ func (m *Manager) idleOnce(ctx context.Context) {
 		defer m.idleSweep.Store(false)
 		logger := log.WithFunc("pool.idleOnce")
 		for _, v := range victims {
-			switch err := m.Hibernate(ctx, v.id, v.token); {
+			switch err := m.idleHibernate(ctx, v.id, v.token, now); {
 			case err == nil:
 				logger.Infof(ctx, "idle-hibernated %s", v.id)
-			case !errors.Is(err, ErrUnknownSandbox):
+			case !errors.Is(err, ErrUnknownSandbox) && !errors.Is(err, errWokeMeanwhile):
 				logger.Errorf(ctx, err, "idle-hibernate %s", v.id)
 			}
 		}
 	}()
+}
+
+// idleHibernate re-validates a sweep victim under the Transition lock: a
+// data-plane connection that arrived after the sweep's snapshot refreshes
+// LastActivity, and hibernating underneath it would cut a live call.
+func (m *Manager) idleHibernate(ctx context.Context, id, token string, sweepStart time.Time) error {
+	sb, ok := m.claim(id, token)
+	if !ok {
+		return ErrUnknownSandbox
+	}
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	m.mu.Lock()
+	woke := sb.LastActivity.After(sweepStart) || sb.HibernateSnap != ""
+	m.mu.Unlock()
+	if woke {
+		return errWokeMeanwhile
+	}
+	return m.hibernateLocked(ctx, sb)
 }
 
 // provision creates one claim-ready VM: clone from a golden when available,

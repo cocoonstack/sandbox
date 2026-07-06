@@ -84,7 +84,11 @@ func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.D
 		return nil, err
 	}
 	sb.FromCheckpoint = ckpt.ID
-	return m.finalize(ctx, sb, ttl)
+	out, err := m.finalize(ctx, sb, ttl)
+	if err == nil {
+		m.counters.claimsClone.Add(1)
+	}
+	return out, err
 }
 
 // Checkpoints lists the store's checkpoints, newest first — on a shared
