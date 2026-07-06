@@ -96,6 +96,15 @@ type pool struct {
 	key    types.PoolKey
 	target int
 
+	// floor and warmMax bound the demand-adaptive target (watermark.go);
+	// rate/lead/lastArrival are its EWMA inputs, guarded by the manager
+	// mutex like everything else here.
+	floor       int
+	warmMax     int
+	rate        float64
+	lead        time.Duration
+	lastArrival time.Time
+
 	goldenDir string
 	building  bool
 	nextBuild time.Time
@@ -172,7 +181,7 @@ func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
 	m.idleFor = make(map[string]time.Duration, len(cfg.Pools))
 	m.idleDefault = time.Duration(cfg.IdleHibernateSeconds) * time.Second
 	for _, spec := range cfg.Pools {
-		m.pools[spec.PoolKey] = &pool{key: spec.PoolKey, target: spec.Warm}
+		m.pools[spec.PoolKey] = &pool{key: spec.PoolKey, target: spec.Warm, floor: spec.Warm, warmMax: spec.WarmMax}
 		if spec.IdleHibernateSeconds > 0 {
 			m.idleFor[spec.Hash()] = time.Duration(spec.IdleHibernateSeconds) * time.Second
 		}
@@ -201,6 +210,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	m.mu.Lock()
 	var sb *types.Sandbox
 	if p := m.pools[key]; p != nil {
+		p.noteArrival(time.Now())
 		if n := len(p.warm); n > 0 {
 			sb = p.warm[n-1]
 			p.warm = p.warm[:n-1]
@@ -765,6 +775,7 @@ func (m *Manager) refillOnce(ctx context.Context) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, p := range m.pools {
+		p.target = p.effectiveTarget(time.Now())
 		if p.goldenDir == "" {
 			if !p.building && time.Now().After(p.nextBuild) {
 				p.building = true
@@ -787,11 +798,13 @@ func (m *Manager) refillOnce(ctx context.Context) {
 
 func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 	defer func() { <-m.refillSem }()
+	start := time.Now()
 	sb, err := m.provision(ctx, p.key, golden)
 	m.mu.Lock()
 	p.refilling--
 	if err == nil {
 		p.warm = append(p.warm, sb)
+		p.noteLead(time.Since(start))
 	}
 	m.mu.Unlock()
 	if err != nil {

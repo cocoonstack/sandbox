@@ -22,6 +22,11 @@ type PoolSpec struct {
 	types.PoolKey
 	Warm int `json:"warm"`
 
+	// WarmMax, when >0, turns on the demand-adaptive watermark: the warm
+	// target may rise from Warm (the floor) toward WarmMax while claims
+	// arrive faster than the pool provisions, and decays back in silence.
+	WarmMax int `json:"warm_max,omitempty"`
+
 	// IdleHibernateSeconds, when >0, hibernates this pool's idle claims
 	// after that many seconds without a data-plane connection; the next
 	// call wakes them transparently. Zero disables — wake costs latency
@@ -158,6 +163,9 @@ func (c *Config) validate() error {
 		}
 		if p.IdleHibernateSeconds < 0 {
 			return fmt.Errorf("pool %q: idle_hibernate_seconds must not be negative", p.Template)
+		}
+		if p.WarmMax != 0 && p.WarmMax < p.Warm {
+			return fmt.Errorf("pool %q: warm_max %d below warm %d", p.Template, p.WarmMax, p.Warm)
 		}
 	}
 	return nil
