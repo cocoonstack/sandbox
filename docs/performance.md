@@ -97,3 +97,22 @@ gate that measures a different machine class guards nothing. The manual
 harnesses are `scripts/boot-bench.sh` and the e2e smoke's per-step timings;
 re-measure and update this page when touching the boot chain, the relay, or
 snapshot paths.
+
+## Claims-journal write path (M4-6, evidence-gated)
+
+Every claim/release/hibernate persists `claims.json` inside the pool mutex
+(marshal + write + rename). Benchmark (`BenchmarkStoreSaveScaling`, APFS
+SSD), per save:
+
+| live claims | ns/op | B/op |
+|---|---|---|
+| 10 | ~181k (0.18ms) | 4.5k |
+| 100 | ~240k (0.24ms) | 36k |
+| 1000 | ~829k (0.83ms) | 385k |
+
+At realistic scale the in-mutex write is sub-millisecond and dwarfed by the
+provision path (~40ms clone, ~230ms cold); the mutex-held serialization
+does not approach a 2× claim-latency regression. **Decision: keep the
+simple in-mutex write; do not move to a store-owned sequential writer.**
+The benchmark stays as a regression sentinel — revisit only if it crosses
+into the milliseconds at the deployment's real claim count.
