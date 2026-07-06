@@ -32,12 +32,24 @@ var sizeSpecs = map[Size]SizeSpec{
 // NetShape selects the sandbox network lane and derives the backend.
 type NetShape string
 
+// Backend names the hypervisor serving a lane.
+type Backend string
+
 // Size is a T-shirt resource tier. Free-form CPU/memory would fragment the
 // warm pools, so only tiers are accepted.
 type Size string
 
-// Backend names the hypervisor serving a lane.
-type Backend string
+// SizeSpec is the concrete allocation behind a tier, in cocoon flag units.
+type SizeSpec struct {
+	CPU    int
+	Memory string
+}
+
+// Spec resolves a tier to its allocation; ok is false for unknown tiers.
+func (s Size) Spec() (SizeSpec, bool) {
+	spec, ok := sizeSpecs[s]
+	return spec, ok
+}
 
 // PoolKey identifies one warm pool. Every New() parameter that changes VM
 // construction is an axis here.
@@ -80,18 +92,6 @@ func (k PoolKey) Validate() error {
 		return fmt.Errorf("unknown size %q", k.Size)
 	}
 	return nil
-}
-
-// SizeSpec is the concrete allocation behind a tier, in cocoon flag units.
-type SizeSpec struct {
-	CPU    int
-	Memory string
-}
-
-// Spec resolves a tier to its allocation; ok is false for unknown tiers.
-func (s Size) Spec() (SizeSpec, bool) {
-	spec, ok := sizeSpecs[s]
-	return spec, ok
 }
 
 // Sandbox is the node-local record of one pooled or claimed VM.
