@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -145,9 +144,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.PreviewListen != "" && c.PreviewAdvertise == "" {
 		c.PreviewAdvertise = c.PreviewListen
-	}
-	if c.CheckpointDir == "" {
-		c.CheckpointDir = filepath.Join(c.DataDir, "checkpoints")
 	}
 	if c.MaxForkCount == 0 {
 		c.MaxForkCount = defaultMaxForkCount

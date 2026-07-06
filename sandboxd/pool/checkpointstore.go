@@ -22,8 +22,12 @@ type CheckpointStore interface {
 	Stage(id string) (string, error)
 	// Publish atomically turns a staged directory into the checkpoint.
 	Publish(staging, id string) error
-	// ExportDir is the local path of a checkpoint's snapshot export.
-	ExportDir(id string) string
+	// Fetch materializes a checkpoint's snapshot export as a local directory
+	// cocoon can clone from, returning it with a release to call when the
+	// clone is done. A directory backend returns its path with a no-op
+	// release; a future object-store backend downloads to a temp dir and
+	// releases by removing it.
+	Fetch(id string) (dir string, release func(), err error)
 	// ReadMeta returns a checkpoint's metadata record, or an error when the
 	// checkpoint does not exist.
 	ReadMeta(id string) ([]byte, error)
@@ -56,8 +60,8 @@ func (d *dirCheckpointStore) Publish(staging, id string) error {
 	return os.Rename(staging, filepath.Join(d.root, id))
 }
 
-func (d *dirCheckpointStore) ExportDir(id string) string {
-	return filepath.Join(d.root, id, checkpointExport)
+func (d *dirCheckpointStore) Fetch(id string) (string, func(), error) {
+	return filepath.Join(d.root, id, checkpointExport), func() {}, nil
 }
 
 func (d *dirCheckpointStore) ReadMeta(id string) ([]byte, error) {
@@ -71,7 +75,9 @@ func (d *dirCheckpointStore) Metas() ([][]byte, error) {
 	}
 	var metas [][]byte
 	for _, e := range entries {
-		if !e.IsDir() || strings.HasSuffix(e.Name(), ".tmp") {
+		// Only well-formed checkpoint dirs — a planted foo/meta.json is not
+		// a checkpoint.
+		if !e.IsDir() || !checkpointIDRe.MatchString(e.Name()) {
 			continue
 		}
 		if raw, err := d.ReadMeta(e.Name()); err == nil {
@@ -86,13 +92,16 @@ func (d *dirCheckpointStore) Delete(id string) error {
 }
 
 func (d *dirCheckpointStore) SweepStaging() error {
-	stale, err := filepath.Glob(filepath.Join(d.root, "*.tmp"))
+	entries, err := os.ReadDir(d.root)
 	if err != nil {
 		return err
 	}
-	for _, dir := range stale {
-		if err := os.RemoveAll(dir); err != nil {
-			return err
+	// ReadDir + suffix, not Glob: the root path may hold glob metacharacters.
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			if err := os.RemoveAll(filepath.Join(d.root, e.Name())); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -79,7 +79,12 @@ func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.D
 	if err != nil {
 		return nil, err
 	}
-	sb, err := m.provision(ctx, ckpt.Key, m.ckpts.ExportDir(ckpt.ID))
+	dir, release, err := m.ckpts.Fetch(ckpt.ID)
+	if err != nil {
+		return nil, fmt.Errorf("fetch checkpoint: %w", err)
+	}
+	defer release()
+	sb, err := m.provision(ctx, ckpt.Key, dir)
 	if err != nil {
 		return nil, err
 	}

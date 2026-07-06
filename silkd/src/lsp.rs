@@ -5,11 +5,14 @@
 //! parses LSP method semantics — the server multiplexes, silkd just pipes.
 //!
 //! `lsp_start` spawns and returns an id; `lsp_request` attaches the byte
-//! stream and pumps until either side closes; `lsp_stop` kills it. A dropped
-//! `lsp_request` ends the session (an LSP stream loses sync on a mid-frame
-//! cut, so there is nothing safe to reattach to) — the server is killed and
-//! reaped. The base image ships no manifests, so `lsp_start` for any language
-//! there answers a typed `not_found` naming the flavor that provides one.
+//! stream and pumps until either side closes; `lsp_stop` kills it. v1 is
+//! single-shot per server: the stream ending — clean or dropped — reaps the
+//! server, since an LSP stream loses frame sync on any mid-request cut and a
+//! resynced reattach is not worth the failure surface. The id and `lsp_stop`
+//! still earn their place: `lsp_start` for several languages yields several
+//! ids attached concurrently, and `lsp_stop` tears one down early. The base
+//! image ships no manifests, so `lsp_start` for any language there answers a
+//! typed `not_found` naming the flavor that provides one.
 
 use std::collections::HashMap;
 use std::os::unix::fs::OpenOptionsExt;
@@ -143,7 +146,7 @@ impl Broker {
         // server. Aborting is safe here — we are killing the child, so a
         // partially-written stdin frame goes nowhere.
         feed.abort();
-        self.reap(server_id).await;
+        let _ = self.reap(server_id).await;
         res
     }
 
@@ -153,22 +156,24 @@ impl Broker {
         w: &mut W,
         server_id: &str,
     ) -> std::io::Result<()> {
-        if self.inner.lock().unwrap().contains_key(server_id) {
-            self.reap(server_id).await;
+        if self.reap(server_id).await {
             proto::write_frame(w, &Response::Done).await
         } else {
             proto::error_frame(w, ErrorKind::NotFound, "no such lsp server").await
         }
     }
 
-    /// reap removes a server from the table and kills + waits its child, so no
-    /// zombie survives.
-    async fn reap(&self, server_id: &str) {
+    /// reap removes a server from the table and kills + waits its child (no
+    /// zombie survives), reporting whether it was there.
+    async fn reap(&self, server_id: &str) -> bool {
         let removed = self.inner.lock().unwrap().remove(server_id);
         if let Some(server) = removed {
             let mut child = server.child.lock().await;
             let _ = child.start_kill();
             let _ = child.wait().await;
+            true
+        } else {
+            false
         }
     }
 }

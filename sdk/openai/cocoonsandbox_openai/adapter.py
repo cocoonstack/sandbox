@@ -61,7 +61,10 @@ class CocoonSandboxSession(BaseSandboxSession):
         await asyncio.to_thread(sb.mkdir, str(self.state.manifest.root), True)
 
     async def _exec_internal(self, *command: str | Path, timeout: float | None = None) -> ExecResult:
-        sb = self._sandbox()
+        # Bound the blocking SDK call by the socket timeout too, so a
+        # wait_for cancellation is matched by the worker thread actually
+        # unblocking (recv wakes) instead of lingering.
+        sb = self._sandbox(timeout=timeout)
         argv = [str(part) for part in command]
         stdout, stderr = bytearray(), bytearray()
 
@@ -115,9 +118,9 @@ class CocoonSandboxSession(BaseSandboxSession):
             listener.close()  # type: ignore[attr-defined]
         self._proxies.clear()
 
-    def _sandbox(self) -> Sandbox:
+    def _sandbox(self, timeout: float | None = None) -> Sandbox:
         s = self.state
-        client = Client(s.addr, api_token=s.api_token)
+        client = Client(s.addr, api_token=s.api_token, timeout=timeout or 120.0)
         return Sandbox(client=client, id=s.sandbox_id, token=s.sandbox_token, owner=s.owner or s.addr)
 
     def _abs(self, path: Path | str) -> Path:
@@ -162,6 +165,7 @@ class CocoonSandboxClient(BaseSandboxClient[CocoonSandboxClientOptions]):
         inner = session._inner
         if not isinstance(inner, CocoonSandboxSession):
             raise TypeError("CocoonSandboxClient.delete expects a CocoonSandboxSession")
+        await inner._shutdown_backend()  # close any local port proxies
         try:
             await asyncio.to_thread(inner._sandbox().close)
         except APIError as exc:

@@ -18,8 +18,9 @@ type Lsp struct {
 }
 
 // Request opens the JSON-RPC byte stream to the language server: the returned
-// PortConn writes go to the server's stdin, reads come from its stdout. One
-// stream per server at a time; close it to detach (the server keeps running).
+// PortConn writes go to the server's stdin, reads come from its stdout. A
+// server serves one Request for its lifetime — closing the stream ends the
+// session and reaps the server (start a new one to work again).
 func (l *Lsp) Request(ctx context.Context) (*PortConn, error) {
 	conn, done, err := l.s.call(ctx, &silkd.LspRequest{ServerID: l.ServerID})
 	if err != nil {

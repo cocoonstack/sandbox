@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,6 +38,7 @@ type PreviewServer struct {
 	secret    []byte
 	advertise string
 	mgr       PreviewManager
+	transport *http.Transport
 }
 
 // PreviewManager is the slice of the pool manager the preview path needs.
@@ -50,7 +52,25 @@ func NewPreviewServer(secret, advertise string, mgr PreviewManager) *PreviewServ
 	if secret == "" {
 		return nil
 	}
-	return &PreviewServer{secret: []byte(secret), advertise: advertise, mgr: mgr}
+	p := &PreviewServer{secret: []byte(secret), advertise: advertise, mgr: mgr}
+	// One shared transport so a page's sub-resource fan-out reuses kept-alive
+	// guest conns instead of re-dialing per request; the Director keys each
+	// request's host to the sandbox+port so the idle pool never mixes claims.
+	p.transport = &http.Transport{
+		IdleConnTimeout: 90 * time.Second,
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			id, portStr, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			port, err := strconv.ParseUint(portStr, 10, 16)
+			if err != nil {
+				return nil, err
+			}
+			return p.mgr.PreviewDial(ctx, id, uint16(port))
+		},
+	}
+	return p
 }
 
 // Mint returns a preview URL for a guest port, valid for ttl (bounded by the
@@ -97,7 +117,9 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 	rp := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = "http"
-			req.URL.Host = "guest"
+			// Host = sandbox:port so the shared transport's idle pool keys per
+			// claim; DialContext parses it back to PreviewDial.
+			req.URL.Host = fmt.Sprintf("%s:%d", claims.ID, claims.Port)
 			req.URL.Path = "/" + strings.TrimPrefix(req.URL.Path, "/p/"+r.PathValue("token")+"/")
 			// The preview URL is bearer-authorized by its token; never hand
 			// the browser's ambient credentials for the preview domain to
@@ -105,11 +127,7 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 			req.Header.Del("Cookie")
 			req.Header.Del("Authorization")
 		},
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return p.mgr.PreviewDial(ctx, claims.ID, claims.Port)
-			},
-		},
+		Transport: p.transport,
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			log.WithFunc("server.preview").Errorf(context.Background(), err, "proxy %s:%d", claims.ID, claims.Port)
 			http.Error(w, "preview target unreachable", http.StatusBadGateway)

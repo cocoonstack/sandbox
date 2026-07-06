@@ -291,6 +291,41 @@ class Sandbox:
     def _dial(self) -> Conn:
         return dial_agent(self.owner, self.id, self.token, self._client.timeout)
 
+    def _proxy_accept_loop(self, listener: socket.socket, port: int) -> None:
+        with contextlib.suppress(OSError):
+            while True:
+                local, _ = listener.accept()
+                threading.Thread(target=self._proxy_conn,
+                                 args=(local, port), daemon=True).start()
+
+    def _proxy_conn(self, local: socket.socket, port: int) -> None:
+        try:
+            guest = self.dial_port(port)
+        except Exception:
+            local.close()
+            return
+
+        def pump_out():
+            with contextlib.suppress(Exception):
+                while True:
+                    chunk = guest.recv()
+                    if not chunk:
+                        break
+                    local.sendall(chunk)
+            with contextlib.suppress(OSError):
+                local.close()
+
+        threading.Thread(target=pump_out, daemon=True).start()
+        try:
+            while True:
+                chunk = local.recv(FS_CHUNK)
+                if not chunk:
+                    break
+                guest.send(chunk)
+            guest.close_write()
+        except Exception:
+            guest.close()
+
     def _done_rpc(self, op: str, **fields) -> None:
         with self._dial() as conn:
             conn.send(op, **fields)
@@ -371,7 +406,8 @@ class Lsp:
 
     def request(self) -> PortConn:
         """Opens the JSON-RPC byte stream: writes go to the server's stdin,
-        recv returns its stdout. Close to detach; the server keeps running."""
+        recv returns its stdout. A server serves one request for its
+        lifetime; closing the stream ends the session and reaps it."""
         conn = self._sandbox._dial()
         try:
             conn.send("lsp_request", server_id=self.server_id)

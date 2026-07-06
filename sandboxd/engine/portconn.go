@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"time"
 )
 
 // portWriteChunk keeps each data frame (base64 ×4/3 + envelope) well under
@@ -81,7 +80,3 @@ func (g *guestPortConn) Write(p []byte) (int, error) {
 	}
 	return written, nil
 }
-
-func (g *guestPortConn) SetDeadline(t time.Time) error      { return g.Conn.SetDeadline(t) }
-func (g *guestPortConn) SetReadDeadline(t time.Time) error  { return g.Conn.SetReadDeadline(t) }
-func (g *guestPortConn) SetWriteDeadline(t time.Time) error { return g.Conn.SetWriteDeadline(t) }

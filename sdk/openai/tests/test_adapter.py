@@ -83,7 +83,7 @@ def test_exec_maps_stdio_and_exit(node, monkeypatch):
         client = CocoonSandboxClient()
         session = await client.create(options=CocoonSandboxClientOptions(addr=node))
         inner = session._inner
-        monkeypatch.setattr(inner, "_sandbox", lambda: FakeSandbox())
+        monkeypatch.setattr(inner, "_sandbox", lambda timeout=None: FakeSandbox())
         result = await inner._exec_internal("echo", "hi")
         assert result.exit_code == 0 and result.stdout == b"hi\n"
         assert result.ok()
@@ -102,7 +102,7 @@ def test_read_missing_maps_to_filenotfound(node, monkeypatch):
         client = CocoonSandboxClient()
         session = await client.create(options=CocoonSandboxClientOptions(addr=node))
         inner = session._inner
-        monkeypatch.setattr(inner, "_sandbox", lambda: FakeSandbox())
+        monkeypatch.setattr(inner, "_sandbox", lambda timeout=None: FakeSandbox())
         with pytest.raises(FileNotFoundError):
             await inner.read(adapter_path("/nope"))
 
@@ -133,7 +133,7 @@ def test_write_and_persist_use_tree_verbs(node, monkeypatch):
         client = CocoonSandboxClient()
         session = await client.create(options=CocoonSandboxClientOptions(addr=node))
         inner = session._inner
-        monkeypatch.setattr(inner, "_sandbox", lambda: FakeSandbox())
+        monkeypatch.setattr(inner, "_sandbox", lambda timeout=None: FakeSandbox())
         await inner.write(adapter_path("/workspace/a.txt"), io.BytesIO(b"body"))
         assert calls["write"] == ("/workspace/a.txt", b"body")
         tar = await inner.persist_workspace()
