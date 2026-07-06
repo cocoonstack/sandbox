@@ -73,7 +73,10 @@ stays valid: the first call that reaches the guest restores the VM (adding
 roughly a restore's latency, tens of milliseconds on bare metal). The TTL
 keeps running — a hibernated sandbox is still reaped at its deadline, so
 claim with a `WithTimeout` that covers the idle period. When to hibernate
-is your policy; the node only provides the transition.
+is your policy; the node only provides the transition — unless the
+deployment opts into `idle_hibernate_seconds` (see
+[deploy](deploy.md#configuration)), which hibernates idle claims
+automatically with the same transparent wake.
 
 ## Forking
 

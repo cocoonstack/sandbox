@@ -101,6 +101,11 @@ type Manager struct {
 	maxFork int
 	store   *store
 
+	// idleFor maps a pooled key's hash to its idle-hibernate threshold;
+	// idleDefault covers unpooled keys. Zero means disabled.
+	idleFor     map[string]time.Duration
+	idleDefault time.Duration
+
 	// notifyTemplates, when set (before serving starts), fires after a
 	// promote or template delete so the mesh republishes immediately
 	// instead of waiting out a gossip tick.
@@ -134,8 +139,13 @@ func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
 			return nil, fmt.Errorf("create %s: %w", filepath.Base(dir), err)
 		}
 	}
+	m.idleFor = make(map[string]time.Duration, len(cfg.Pools))
+	m.idleDefault = time.Duration(cfg.IdleHibernateSeconds) * time.Second
 	for _, spec := range cfg.Pools {
 		m.pools[spec.PoolKey] = &pool{key: spec.PoolKey, target: spec.Warm}
+		if spec.IdleHibernateSeconds > 0 {
+			m.idleFor[spec.PoolKey.Hash()] = time.Duration(spec.IdleHibernateSeconds) * time.Second
+		}
 	}
 	return m, nil
 }
@@ -262,6 +272,7 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 	if !ok {
 		return "", ErrUnknownSandbox
 	}
+	sb.LastActivity = time.Now() // under m.mu — the relay's activity stamp
 	return sb.VsockSocket, nil
 }
 
@@ -304,6 +315,7 @@ func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string
 	if !ok {
 		return "", ErrUnknownSandbox
 	}
+	m.touch(sb)
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	if sb.HibernateSnap == "" {
@@ -507,6 +519,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			}
 		}
 	}
+	now := time.Now()
+	for _, sb := range m.claimed {
+		sb.LastActivity = now
+	}
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
 	return saveErr
 }
@@ -526,6 +542,7 @@ func (m *Manager) Run(ctx context.Context) {
 			m.refillOnce(ctx)
 		case <-reap.C:
 			m.reapOnce(ctx)
+			m.idleOnce(ctx)
 		}
 	}
 }
@@ -616,8 +633,10 @@ func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Dura
 // write; on a failed write every VM in the batch is destroyed — a durable
 // claim always matches a live VM, and a batch lands all-or-nothing.
 func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration) error {
+	now := time.Now()
 	for _, sb := range sbs {
 		stampIdentity(sb, clampTTL(ttl))
+		sb.LastActivity = now
 	}
 	m.mu.Lock()
 	for _, sb := range sbs {
@@ -794,6 +813,46 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		m.destroy(ctx, v.vmName)
 		m.dropSnap(ctx, v.snap)
 		logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
+	}
+}
+
+// touch records data-plane activity for the idle policy.
+func (m *Manager) touch(sb *types.Sandbox) {
+	m.mu.Lock()
+	sb.LastActivity = time.Now()
+	m.mu.Unlock()
+}
+
+// idleOnce hibernates claims idle past their pool's (or the node's)
+// threshold. Best-effort: a connection racing the sweep may see its sandbox
+// hibernate right after — the next call wakes it transparently.
+func (m *Manager) idleOnce(ctx context.Context) {
+	now := time.Now()
+	type victim struct{ id, token string }
+	var victims []victim
+	m.mu.Lock()
+	for _, sb := range m.claimed {
+		idle, pooledPolicy := m.idleFor[sb.Key.Hash()]
+		if !pooledPolicy {
+			if _, pooled := m.pools[sb.Key]; pooled {
+				continue // pooled key without the policy: never idle-hibernate
+			}
+			idle = m.idleDefault
+		}
+		if idle <= 0 || sb.HibernateSnap != "" || now.Sub(sb.LastActivity) < idle {
+			continue
+		}
+		victims = append(victims, victim{sb.ID, sb.Token})
+	}
+	m.mu.Unlock()
+	logger := log.WithFunc("pool.idleOnce")
+	for _, v := range victims {
+		switch err := m.Hibernate(ctx, v.id, v.token); {
+		case err == nil:
+			logger.Infof(ctx, "idle-hibernated %s", v.id)
+		case !errors.Is(err, ErrUnknownSandbox):
+			logger.Errorf(ctx, err, "idle-hibernate %s", v.id)
+		}
 	}
 }
 

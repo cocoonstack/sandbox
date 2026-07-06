@@ -112,6 +112,11 @@ type Sandbox struct {
 	// lineage; empty for pool and template claims.
 	FromCheckpoint string `json:"from_checkpoint,omitempty"`
 
+	// LastActivity is the last data-plane connection, for the idle policy;
+	// runtime-only and guarded by the manager mutex. A restart resets it to
+	// adoption time.
+	LastActivity time.Time `json:"-"`
+
 	// Transition serializes hibernate/wake so concurrent wakes collapse onto
 	// one restore. Lock it before (never under) the manager mutex.
 	Transition sync.Mutex `json:"-"`

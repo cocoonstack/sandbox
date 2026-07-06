@@ -21,6 +21,13 @@ const (
 type PoolSpec struct {
 	types.PoolKey
 	Warm int `json:"warm"`
+
+	// IdleHibernateSeconds, when >0, hibernates this pool's idle claims
+	// after that many seconds without a data-plane connection; the next
+	// call wakes them transparently. Zero disables — wake costs latency
+	// and the snapshot, so callers with their own idle logic must not
+	// pay twice.
+	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitempty"`
 }
 
 // MeshConfig configures cluster membership. Two v1 constraints: all nodes
@@ -55,6 +62,11 @@ type Config struct {
 	// APIToken, when set, guards claim and info; per-sandbox tokens guard
 	// sandbox-scoped calls regardless.
 	APIToken string `json:"api_token,omitempty"` //nolint:gosec // config field, not a hardcoded credential
+
+	// IdleHibernateSeconds is the idle policy for claims of unpooled keys
+	// (template and checkpoint claims); per-pool settings override it for
+	// pooled keys. Zero disables.
+	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitempty"`
 
 	// MaxForkCount caps children per fork call — each child is a full-RAM VM,
 	// so this bounds a single request's memory blast radius to the node's
@@ -120,6 +132,9 @@ func (c *Config) validate() error {
 	if c.MaxForkCount < 1 {
 		return fmt.Errorf("max_fork_count must be at least 1, got %d", c.MaxForkCount)
 	}
+	if c.IdleHibernateSeconds < 0 {
+		return fmt.Errorf("idle_hibernate_seconds must not be negative, got %d", c.IdleHibernateSeconds)
+	}
 	for _, p := range c.Pools {
 		if err := p.Validate(); err != nil {
 			return fmt.Errorf("pool %q: %w", p.Template, err)
@@ -129,6 +144,9 @@ func (c *Config) validate() error {
 		}
 		if p.Warm < 0 {
 			return fmt.Errorf("pool %q: warm must not be negative", p.Template)
+		}
+		if p.IdleHibernateSeconds < 0 {
+			return fmt.Errorf("pool %q: idle_hibernate_seconds must not be negative", p.Template)
 		}
 	}
 	return nil
