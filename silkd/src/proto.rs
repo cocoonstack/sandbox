@@ -633,6 +633,9 @@ mod tests {
             seen += 1;
         }
         // Exact, mirroring the Go guard: a new verb lands with its fixture.
-        assert_eq!(seen, 56, "fixture corpus: adding a verb means adding its fixture");
+        assert_eq!(
+            seen, 56,
+            "fixture corpus: adding a verb means adding its fixture"
+        );
     }
 }
