@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cocoonstack-sandbox-openai"
+version = "0.1.0"
+description = "OpenAI Agents SDK sandbox provider backed by cocoon microVMs"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = ["openai-agents>=0.17", "cocoonstack-sandbox>=0.1"]
+
+[tool.setuptools.packages.find]
+include = ["cocoonsandbox_openai*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]

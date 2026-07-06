@@ -43,6 +43,8 @@ Design docs:
   Python-first agent ecosystem; round-trips the shared fixture corpus
 - `mcp/` — `sandbox-mcp`, an MCP stdio server exposing the surface as tools
   for Claude Code / Cursor / agent frameworks
+- `sdk/openai/` — `cocoonsandbox-openai`, a custom sandbox provider for the
+  OpenAI Agents SDK (Python, over the Python SDK)
 - `protocol/fixtures/` — golden frame corpus; the Rust and Go protocol tests
   both round-trip it, so wire drift fails CI
 - `e2e/` — in-process full-stack tests (real pool/engine/relay/SDK, fake

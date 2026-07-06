@@ -31,6 +31,8 @@ bridge/CNI NIC. Backends are never user-selected.
   agent ecosystem, stdlib-only
 - [MCP server](mcp.md) — sandboxes as Model Context Protocol tools for
   Claude Code, Cursor, and agent frameworks
+- [OpenAI Agents SDK adapter](openai-adapter.md) — run Agents SDK tools
+  inside cocoon microVMs via the custom sandbox-provider interface
 - [silkd](silkd.md) — the in-guest daemon: protocol, verb reference, lanes
   and limits
 - [Performance](performance.md) — measured latencies and the environments
