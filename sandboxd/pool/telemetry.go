@@ -7,13 +7,13 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
-
-	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// auditLineCap bounds how much of a relayed request frame the audit tap
-// keeps: enough for the op and its addressing fields, never file payloads.
-const auditLineCap = 2048
+// AuditLineCap bounds how much of a relayed request frame the audit tap
+// captures and records: enough for the op and its addressing fields, never
+// file payloads. The relay's tee and Audit share it, so a captured line is
+// always recordable.
+const AuditLineCap = 4096
 
 // Counters is a monotonic snapshot for /metrics; gauges come from Info.
 type Counters struct {
@@ -65,40 +65,33 @@ func (m *Manager) Counters() Counters {
 // Audit records one relayed request frame against a sandbox when the audit
 // journal is enabled: the op plus its addressing fields, payloads dropped.
 func (m *Manager) Audit(ctx context.Context, id string, line []byte) {
-	if m.audit == nil {
+	if m.audit == nil || len(line) > AuditLineCap {
 		return
 	}
-	if len(line) > auditLineCap {
-		line = line[:auditLineCap]
-	}
-	var frame struct {
-		Op      string   `json:"op"`
-		Argv    []string `json:"argv,omitempty"`
-		Path    string   `json:"path,omitempty"`
-		Dest    string   `json:"dest,omitempty"`
-		From    string   `json:"from,omitempty"`
-		To      string   `json:"to,omitempty"`
-		URL     string   `json:"url,omitempty"`
-		Session string   `json:"session,omitempty"`
-	}
+	var frame auditFrame
 	if err := json.Unmarshal(line, &frame); err != nil || frame.Op == "" {
 		return // torn cap boundary or a non-frame first line: nothing to record
 	}
 	event := struct {
-		Time    time.Time `json:"t"`
-		ID      string    `json:"id"`
-		Op      string    `json:"op"`
-		Argv    []string  `json:"argv,omitempty"`
-		Path    string    `json:"path,omitempty"`
-		Dest    string    `json:"dest,omitempty"`
-		From    string    `json:"from,omitempty"`
-		To      string    `json:"to,omitempty"`
-		URL     string    `json:"url,omitempty"`
-		Session string    `json:"session,omitempty"`
-	}{time.Now(), id, frame.Op, frame.Argv, frame.Path, frame.Dest, frame.From, frame.To, frame.URL, frame.Session}
+		Time time.Time `json:"t"`
+		ID   string    `json:"id"`
+		auditFrame
+	}{time.Now(), id, frame}
 	if err := m.audit.append(event); err != nil {
 		log.WithFunc("pool.Audit").Errorf(ctx, err, "append audit event")
 	}
+}
+
+// auditFrame is the addressing slice of a request frame worth auditing.
+type auditFrame struct {
+	Op      string   `json:"op"`
+	Argv    []string `json:"argv,omitempty"`
+	Path    string   `json:"path,omitempty"`
+	Dest    string   `json:"dest,omitempty"`
+	From    string   `json:"from,omitempty"`
+	To      string   `json:"to,omitempty"`
+	URL     string   `json:"url,omitempty"`
+	Session string   `json:"session,omitempty"`
 }
 
 // AuditEnabled reports whether the relay should tap request frames at all.
@@ -114,8 +107,4 @@ func (m *Manager) recordUsage(ctx context.Context, ev usageEvent) {
 	if err := m.usage.append(ev); err != nil {
 		log.WithFunc("pool.recordUsage").Errorf(ctx, err, "append usage event %s %s", ev.Event, ev.ID)
 	}
-}
-
-func claimEvent(sb *types.Sandbox) usageEvent {
-	return usageEvent{Event: "claim", ID: sb.ID, VMName: sb.VMName, KeyHash: sb.Key.Hash()}
 }

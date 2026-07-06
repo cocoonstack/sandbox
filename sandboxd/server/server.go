@@ -166,6 +166,12 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		}
 		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL())
 	}
+	// A full node bounces the claim to a warm peer before answering 429 —
+	// quota is per node, and a peer with capacity is a better answer.
+	if errors.Is(err, pool.ErrQuota) && s.placer != nil && !req.NoRedirect &&
+		writeRedirect(w, s.placer.Candidates(key.Hash())) {
+		return
+	}
 	switch {
 	case writePoolErr(w, err):
 	case err != nil:

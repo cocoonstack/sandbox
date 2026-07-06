@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -21,8 +20,8 @@ var (
 	ErrBadName           = errors.New("invalid checkpoint name")
 	ErrUnknownCheckpoint = errors.New("unknown checkpoint")
 
-	// checkpointIDRe pins the id shape wherever an id reaches the filesystem,
-	// so a crafted id can never escape the checkpoints dir.
+	// checkpointIDRe pins the id shape wherever an id reaches the store,
+	// so a crafted id can never escape the checkpoint root.
 	checkpointIDRe = regexp.MustCompile(`^ck_[0-9a-f]{16}$`)
 )
 
@@ -49,7 +48,7 @@ func (m *Manager) Checkpoint(ctx context.Context, id, token, name string) (types
 		Key:       sb.Key,
 		CreatedAt: time.Now(),
 	}
-	staging, err := os.MkdirTemp(m.checkpointsDir(), ckpt.ID+"-*.tmp")
+	staging, err := m.ckpts.Stage(ckpt.ID)
 	if err != nil {
 		return types.Checkpoint{}, fmt.Errorf("stage checkpoint: %w", err)
 	}
@@ -64,7 +63,7 @@ func (m *Manager) Checkpoint(ctx context.Context, id, token, name string) (types
 	if err := os.WriteFile(filepath.Join(staging, "meta.json"), meta, 0o600); err != nil {
 		return types.Checkpoint{}, fmt.Errorf("write checkpoint meta: %w", err)
 	}
-	if err := os.Rename(staging, filepath.Join(m.checkpointsDir(), ckpt.ID)); err != nil {
+	if err := m.ckpts.Publish(staging, ckpt.ID); err != nil {
 		return types.Checkpoint{}, fmt.Errorf("commit checkpoint: %w", err)
 	}
 	m.counters.checkpoints.Add(1)
@@ -80,7 +79,7 @@ func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.D
 	if err != nil {
 		return nil, err
 	}
-	sb, err := m.provision(ctx, ckpt.Key, filepath.Join(m.checkpointsDir(), ckpt.ID, checkpointExport))
+	sb, err := m.provision(ctx, ckpt.Key, m.ckpts.ExportDir(ckpt.ID))
 	if err != nil {
 		return nil, err
 	}
@@ -88,18 +87,17 @@ func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.D
 	return m.finalize(ctx, sb, ttl)
 }
 
-// Checkpoints lists this node's checkpoints, newest first.
+// Checkpoints lists the store's checkpoints, newest first — on a shared
+// checkpoint_dir (a FUSE mount), that is the cluster's set, not one node's.
 func (m *Manager) Checkpoints() ([]types.Checkpoint, error) {
-	entries, err := os.ReadDir(m.checkpointsDir())
+	metas, err := m.ckpts.Metas()
 	if err != nil {
 		return nil, fmt.Errorf("list checkpoints: %w", err)
 	}
-	var ckpts []types.Checkpoint
-	for _, e := range entries {
-		if !e.IsDir() || strings.HasSuffix(e.Name(), ".tmp") {
-			continue
-		}
-		if ckpt, err := m.loadCheckpoint(e.Name()); err == nil {
+	ckpts := make([]types.Checkpoint, 0, len(metas))
+	for _, raw := range metas {
+		var ckpt types.Checkpoint
+		if err := json.Unmarshal(raw, &ckpt); err == nil {
 			ckpts = append(ckpts, ckpt)
 		}
 	}
@@ -112,7 +110,7 @@ func (m *Manager) DeleteCheckpoint(ckptID string) error {
 	if _, err := m.loadCheckpoint(ckptID); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(filepath.Join(m.checkpointsDir(), ckptID)); err != nil {
+	if err := m.ckpts.Delete(ckptID); err != nil {
 		return fmt.Errorf("delete checkpoint: %w", err)
 	}
 	return nil
@@ -122,7 +120,7 @@ func (m *Manager) loadCheckpoint(ckptID string) (types.Checkpoint, error) {
 	if !checkpointIDRe.MatchString(ckptID) {
 		return types.Checkpoint{}, ErrUnknownCheckpoint
 	}
-	raw, err := os.ReadFile(filepath.Join(m.checkpointsDir(), ckptID, "meta.json")) //nolint:gosec // ckptID pinned by checkpointIDRe above
+	raw, err := m.ckpts.ReadMeta(ckptID)
 	if err != nil {
 		return types.Checkpoint{}, ErrUnknownCheckpoint
 	}
@@ -131,8 +129,4 @@ func (m *Manager) loadCheckpoint(ckptID string) (types.Checkpoint, error) {
 		return types.Checkpoint{}, ErrUnknownCheckpoint
 	}
 	return ckpt, nil
-}
-
-func (m *Manager) checkpointsDir() string {
-	return filepath.Join(m.dataDir, "checkpoints")
 }

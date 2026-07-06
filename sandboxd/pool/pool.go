@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -93,14 +94,14 @@ type PoolInfo struct {
 }
 
 type pool struct {
-	key    types.PoolKey
-	target int
+	key types.PoolKey
 
 	// floor and warmMax bound the demand-adaptive target (watermark.go);
 	// rate/lead/lastArrival are its EWMA inputs, guarded by the manager
 	// mutex like everything else here.
 	floor       int
 	warmMax     int
+	idle        time.Duration
 	rate        float64
 	lead        time.Duration
 	lastArrival time.Time
@@ -120,10 +121,11 @@ type Manager struct {
 	maxFork int
 	store   *store
 
-	// idleFor maps a pooled key's hash to its idle-hibernate threshold;
-	// idleDefault covers unpooled keys. Zero means disabled.
-	idleFor     map[string]time.Duration
+	// idleDefault is the idle-hibernate threshold for unpooled keys; pooled
+	// keys carry theirs on the pool struct. Zero means disabled.
 	idleDefault time.Duration
+	idleEnabled bool
+	idleSweep   atomic.Bool
 
 	// maxClaims caps live claims node-wide (0 = unlimited); usage is the
 	// always-on billing event stream, audit the config-gated request tap.
@@ -131,6 +133,7 @@ type Manager struct {
 	usage     *journal
 	audit     *journal
 	counters  counters
+	ckpts     CheckpointStore
 
 	// notifyTemplates, when set (before serving starts), fires after a
 	// promote or template delete so the mesh republishes immediately
@@ -160,11 +163,19 @@ func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
 		claimed:   map[string]*types.Sandbox{},
 		refillSem: make(chan struct{}, maxConcurrentRefills),
 	}
-	for _, dir := range []string{m.goldensDir(), m.checkpointsDir()} {
-		if err := os.MkdirAll(dir, 0o750); err != nil {
-			return nil, fmt.Errorf("create %s: %w", filepath.Base(dir), err)
-		}
+	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
+		return nil, fmt.Errorf("create goldens dir: %w", err)
 	}
+	// Default here too: tests build Config directly, skipping Load.
+	ckptDir := cfg.CheckpointDir
+	if ckptDir == "" {
+		ckptDir = filepath.Join(cfg.DataDir, "checkpoints")
+	}
+	ckpts, err := newDirCheckpointStore(ckptDir)
+	if err != nil {
+		return nil, err
+	}
+	m.ckpts = ckpts
 	usage, err := newJournal(filepath.Join(cfg.DataDir, "usage.jsonl"))
 	if err != nil {
 		return nil, fmt.Errorf("open usage journal: %w", err)
@@ -178,12 +189,15 @@ func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
 		m.audit = audit
 	}
 	m.maxClaims = cfg.MaxClaims
-	m.idleFor = make(map[string]time.Duration, len(cfg.Pools))
 	m.idleDefault = time.Duration(cfg.IdleHibernateSeconds) * time.Second
+	m.idleEnabled = m.idleDefault > 0
 	for _, spec := range cfg.Pools {
-		m.pools[spec.PoolKey] = &pool{key: spec.PoolKey, target: spec.Warm, floor: spec.Warm, warmMax: spec.WarmMax}
+		m.pools[spec.PoolKey] = &pool{
+			key: spec.PoolKey, floor: spec.Warm, warmMax: spec.WarmMax,
+			idle: time.Duration(spec.IdleHibernateSeconds) * time.Second,
+		}
 		if spec.IdleHibernateSeconds > 0 {
-			m.idleFor[spec.Hash()] = time.Duration(spec.IdleHibernateSeconds) * time.Second
+			m.idleEnabled = true
 		}
 	}
 	return m, nil
@@ -207,10 +221,13 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	if err := m.validate(key); err != nil {
 		return nil, err
 	}
+	if m.overQuota(1) {
+		return nil, fmt.Errorf("%w: cap %d", ErrQuota, m.maxClaims)
+	}
 	m.mu.Lock()
 	var sb *types.Sandbox
 	if p := m.pools[key]; p != nil {
-		p.noteArrival(time.Now())
+		p.noteArrival(start)
 		if n := len(p.warm); n > 0 {
 			sb = p.warm[n-1]
 			p.warm = p.warm[:n-1]
@@ -234,6 +251,9 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	if err := m.validate(key); err != nil {
 		return nil, err
 	}
+	if m.overQuota(1) {
+		return nil, fmt.Errorf("%w: cap %d", ErrQuota, m.maxClaims)
+	}
 	golden := m.goldenDirFor(key)
 	sb, err := m.provision(ctx, key, golden)
 	if err != nil {
@@ -249,6 +269,18 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl tim
 		m.counters.claimNanos.Add(uint64(time.Since(start))) //nolint:gosec // durations are positive
 	}
 	return out, err
+}
+
+// overQuota is the cheap advisory precheck: the authoritative check stays
+// in finalizeBatch (admission races resolve there), this one just spares a
+// doomed request the provision cost.
+func (m *Manager) overQuota(extra int) bool {
+	if m.maxClaims <= 0 {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.claimed)+extra > m.maxClaims
 }
 
 // SetTemplateNotifier wires the immediate-republish hook; call it before
@@ -416,6 +448,9 @@ func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl tim
 	if count < 1 || count > m.maxFork {
 		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, m.maxFork)
 	}
+	if m.overQuota(count) {
+		return nil, fmt.Errorf("%w: cap %d", ErrQuota, m.maxClaims)
+	}
 	sb, ok := m.claim(id, token)
 	if !ok {
 		return nil, ErrUnknownSandbox
@@ -562,8 +597,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	// A crash mid-export leaves a *.tmp staging dir no build or promote of
 	// this life will reuse.
 	tmps, _ := filepath.Glob(filepath.Join(m.goldensDir(), "*.tmp"))
-	ckptTmps, _ := filepath.Glob(filepath.Join(m.checkpointsDir(), "*.tmp"))
-	tmps = append(tmps, ckptTmps...)
+	if err := m.ckpts.SweepStaging(); err != nil {
+		log.WithFunc("pool.Reconcile").Error(ctx, err, "sweep checkpoint staging")
+	}
 	for _, tmp := range tmps {
 		_ = os.RemoveAll(tmp)
 	}
@@ -631,7 +667,7 @@ func (m *Manager) Info() ([]PoolInfo, int, int) {
 			Key:       p.key,
 			Warm:      len(p.warm),
 			Refilling: p.refilling,
-			Target:    p.target,
+			Target:    p.effectiveTarget(time.Now()),
 			Golden:    p.goldenDir != "",
 		})
 	}
@@ -751,7 +787,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		return fmt.Errorf("persist claim: %w", saveErr)
 	}
 	for _, sb := range sbs {
-		m.recordUsage(ctx, claimEvent(sb))
+		m.recordUsage(ctx, usageEvent{Event: "claim", ID: sb.ID, VMName: sb.VMName, KeyHash: sb.Key.Hash()})
 	}
 	return nil
 }
@@ -774,8 +810,9 @@ func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir
 func (m *Manager) refillOnce(ctx context.Context) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	now := time.Now()
 	for _, p := range m.pools {
-		p.target = p.effectiveTarget(time.Now())
+		target := p.effectiveTarget(now)
 		if p.goldenDir == "" {
 			if !p.building && time.Now().After(p.nextBuild) {
 				p.building = true
@@ -784,7 +821,7 @@ func (m *Manager) refillOnce(ctx context.Context) {
 			continue
 		}
 		golden := p.goldenDir
-		for len(p.warm)+p.refilling < p.target {
+		for len(p.warm)+p.refilling < target {
 			select {
 			case m.refillSem <- struct{}{}:
 				p.refilling++
@@ -930,17 +967,20 @@ func (m *Manager) touch(sb *types.Sandbox) {
 // threshold. Best-effort: a connection racing the sweep may see its sandbox
 // hibernate right after — the next call wakes it transparently.
 func (m *Manager) idleOnce(ctx context.Context) {
+	if !m.idleEnabled {
+		return
+	}
+	if !m.idleSweep.CompareAndSwap(false, true) {
+		return // the previous sweep's hibernates are still draining
+	}
 	now := time.Now()
 	type victim struct{ id, token string }
 	var victims []victim
 	m.mu.Lock()
 	for _, sb := range m.claimed {
-		idle, pooledPolicy := m.idleFor[sb.Key.Hash()]
-		if !pooledPolicy {
-			if _, pooled := m.pools[sb.Key]; pooled {
-				continue // pooled key without the policy: never idle-hibernate
-			}
-			idle = m.idleDefault
+		idle := m.idleDefault
+		if p, pooled := m.pools[sb.Key]; pooled {
+			idle = p.idle // pooled keys never take the node default
 		}
 		if idle <= 0 || sb.HibernateSnap != "" || now.Sub(sb.LastActivity) < idle {
 			continue
@@ -948,15 +988,24 @@ func (m *Manager) idleOnce(ctx context.Context) {
 		victims = append(victims, victim{sb.ID, sb.Token})
 	}
 	m.mu.Unlock()
-	logger := log.WithFunc("pool.idleOnce")
-	for _, v := range victims {
-		switch err := m.Hibernate(ctx, v.id, v.token); {
-		case err == nil:
-			logger.Infof(ctx, "idle-hibernated %s", v.id)
-		case !errors.Is(err, ErrUnknownSandbox):
-			logger.Errorf(ctx, err, "idle-hibernate %s", v.id)
-		}
+	if len(victims) == 0 {
+		m.idleSweep.Store(false)
+		return
 	}
+	// Hibernates are seconds-long engine snapshots: run them off the
+	// housekeeping loop so refill ticks keep flowing during a big sweep.
+	go func() {
+		defer m.idleSweep.Store(false)
+		logger := log.WithFunc("pool.idleOnce")
+		for _, v := range victims {
+			switch err := m.Hibernate(ctx, v.id, v.token); {
+			case err == nil:
+				logger.Infof(ctx, "idle-hibernated %s", v.id)
+			case !errors.Is(err, ErrUnknownSandbox):
+				logger.Errorf(ctx, err, "idle-hibernate %s", v.id)
+			}
+		}
+	}()
 }
 
 // provision creates one claim-ready VM: clone from a golden when available,

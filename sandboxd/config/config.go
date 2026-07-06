@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -73,6 +74,12 @@ type Config struct {
 	// pooled keys. Zero disables.
 	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitempty"`
 
+	// CheckpointDir is where checkpoints live; defaults to
+	// <data_dir>/checkpoints. Point it at a shared FUSE mount (JuiceFS over
+	// object storage, NFS) and every node sharing the mount resolves every
+	// checkpoint — the path's filesystem is the operator's choice.
+	CheckpointDir string `json:"checkpoint_dir,omitempty"`
+
 	// MaxClaims caps live claims node-wide; 0 means unlimited. Claim,
 	// fork, and checkpoint-branch requests beyond it answer 429.
 	MaxClaims int `json:"max_claims,omitempty"`
@@ -127,6 +134,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.AdvertiseAddr == "" {
 		c.AdvertiseAddr = c.Listen
+	}
+	if c.CheckpointDir == "" {
+		c.CheckpointDir = filepath.Join(c.DataDir, "checkpoints")
 	}
 	if c.MaxForkCount == 0 {
 		c.MaxForkCount = defaultMaxForkCount

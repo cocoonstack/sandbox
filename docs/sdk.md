@@ -131,7 +131,9 @@ processes — without stopping it (the same brief pause a fork takes), and
 `ckpt.New` branches any number of independent sandboxes from that exact
 moment; the checkpoint's key axes apply and `WithTimeout` may set each
 branch's TTL. Successive checkpoints of sources and branches form a tree.
-Checkpoints are node-local and their handles owner-bound, like templates;
+Checkpoints live in the node's `checkpoint_dir` — on a shared FUSE mount,
+any node sharing the mount can branch them; handles stay owner-bound like
+templates;
 `client.Checkpoints` lists the connected node's. Checkpoint creation is
 resource-creating and takes the api token, like fork.
 

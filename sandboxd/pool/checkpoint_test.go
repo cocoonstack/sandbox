@@ -73,7 +73,7 @@ func TestCheckpointValidation(t *testing.T) {
 func TestReconcileSweepsCheckpointStaging(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	stale := filepath.Join(m.checkpointsDir(), "ck_00ff00ff00ff00ff-1234.tmp")
+	stale := filepath.Join(m.ckpts.(*dirCheckpointStore).root, "ck_00ff00ff00ff00ff-1234.tmp")
 	if err := os.MkdirAll(stale, 0o750); err != nil {
 		t.Fatalf("setup: %v", err)
 	}

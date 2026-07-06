@@ -11,16 +11,13 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
+
+	"github.com/cocoonstack/sandbox/sandboxd/pool"
 )
 
 // drainGrace bounds how long a finished relay waits for the client to
 // consume the tail and close; past it the client conn is force-closed.
-const (
-	drainGrace = 30 * time.Second
-	// auditTeeCap bounds first-line capture: real request frames are small,
-	// anything larger is a payload stream not worth recording.
-	auditTeeCap = 4096
-)
+const drainGrace = 30 * time.Second
 
 var switchingProtocols = []byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n")
 
@@ -119,7 +116,7 @@ func (s *Server) relay(id string, client net.Conn, clientBuf *bufio.Reader, gues
 		// One connection is one RPC: the first line client→guest is the
 		// request frame. The tee records it as it flows, then passes through.
 		clientR = &auditTee{r: clientR, record: func(line []byte) {
-			s.mgr.Audit(context.WithoutCancel(context.Background()), id, line)
+			s.mgr.Audit(context.Background(), id, line)
 		}}
 	}
 
@@ -151,6 +148,30 @@ type auditTee struct {
 	done   bool
 }
 
+// WriteTo hands the splice back to io.Copy's fast path once the first line
+// is captured: it reads through Read until the record fires, then delegates
+// the rest of the stream to a direct copy — an audit-enabled relay only pays
+// the tee for the request frame, not the payload.
+func (t *auditTee) WriteTo(w io.Writer) (int64, error) {
+	var total int64
+	buf := make([]byte, 4096)
+	for !t.done {
+		n, err := t.Read(buf)
+		if n > 0 {
+			wn, werr := w.Write(buf[:n])
+			total += int64(wn)
+			if werr != nil {
+				return total, werr
+			}
+		}
+		if err != nil {
+			return total, err
+		}
+	}
+	n, err := io.Copy(w, t.r)
+	return total + n, err
+}
+
 func (t *auditTee) Read(p []byte) (int, error) {
 	n, err := t.r.Read(p)
 	if t.done || n == 0 {
@@ -165,7 +186,7 @@ func (t *auditTee) Read(p []byte) (int, error) {
 		return n, err
 	}
 	t.buf = append(t.buf, chunk...)
-	if len(t.buf) > auditTeeCap {
+	if len(t.buf) > pool.AuditLineCap {
 		t.done = true // a frame this large is payload, not addressing
 		t.buf = nil
 	}
