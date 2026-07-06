@@ -39,6 +39,7 @@ a frame only one side can parse fails CI.
 | watch | `fs_watch {path, recursive?}` | `ready` once armed (events after it are guaranteed captured), then `event{kind, path}` until the client disconnects; watcher errors arrive as a terminal `error` |
 | pty | `pty_open {cols, rows, cwd?, env?, user?}` / `pty_resize {pid, cols, rows}` | a shell under a pseudo-terminal; output as `stdout` frames, input as `stdin` frames, exit terminal. PTYs register in the proc table like any exec |
 | git | `git_clone {url, path, branch?, depth?, auth?}` / `git_status {path}` / `git_add {path, files}` / `git_commit {path, message, author}` / `git_push {path, auth?}` / `git_pull {path, auth?}` / `git_branch {path, action, name?}` | structured results (porcelain-v2 status, commit hash, branch list). `auth` is injected as an in-memory header, never written to guest disk |
+| port | `port_forward {port}` | relays guest TCP 127.0.0.1:port over this connection: `ready` once connected, then `data` both ways (`data_end` half-closes the guest socket); the server closing ends the stream with `done`. Works on both lanes — the no-network lane's only way in |
 | misc | `info` | `{version, proto, uptime_secs, procs, sessions}` — the readiness probe |
 
 ## Error kinds

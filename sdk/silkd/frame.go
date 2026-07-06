@@ -210,6 +210,13 @@ type PtyResize struct {
 	Rows uint16 `json:"rows"`
 }
 
+// PortForward relays a guest TCP port over this connection: Ready once
+// connected, then Data both ways (DataEnd half-closes the guest socket);
+// the guest server closing ends the stream with Done.
+type PortForward struct {
+	Port uint16 `json:"port"`
+}
+
 // GitClone clones a repo; network-lane only. Auth is a token passed as an
 // in-memory Authorization header, never written to guest disk.
 type GitClone struct {
@@ -291,6 +298,7 @@ func (FsReplace) Op() string     { return "fs_replace" }
 func (FsWatch) Op() string       { return "fs_watch" }
 func (PtyOpen) Op() string       { return "pty_open" }
 func (PtyResize) Op() string     { return "pty_resize" }
+func (PortForward) Op() string   { return "port_forward" }
 func (GitClone) Op() string      { return "git_clone" }
 func (GitStatus) Op() string     { return "git_status" }
 func (GitAdd) Op() string        { return "git_add" }
@@ -506,6 +514,7 @@ var requestDecoders = map[string]func([]byte) (Request, error){
 	"fs_watch":       decodeReq[FsWatch],
 	"pty_open":       decodeReq[PtyOpen],
 	"pty_resize":     decodeReq[PtyResize],
+	"port_forward":   decodeReq[PortForward],
 	"git_clone":      decodeReq[GitClone],
 	"git_status":     decodeReq[GitStatus],
 	"git_add":        decodeReq[GitAdd],

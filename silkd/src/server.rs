@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 
 use crate::proc::{Chunk, Proc, Table};
 use crate::proto::{self, ErrorKind, ProcInfo, Request, Response};
-use crate::{exec, find, fs, git, pty, session, tree, watch};
+use crate::{exec, find, forward, fs, git, pty, session, tree, watch};
 
 /// Shared daemon state handed to every connection.
 pub struct State {
@@ -138,6 +138,13 @@ impl State {
             }
             Request::PtyResize { pid, cols, rows } => {
                 pty::resize(&self.table, &mut writer, pid, cols, rows).await
+            }
+            Request::PortForward { port } => {
+                let (tx, rx) = mpsc::channel(16);
+                let feeder = tokio::spawn(feed_client(reader, tx));
+                let res = forward::run(port, rx, &mut writer).await;
+                feeder.abort();
+                res
             }
             Request::GitClone {
                 url,

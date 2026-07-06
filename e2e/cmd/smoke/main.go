@@ -72,6 +72,7 @@ func run(addr, token, template string, egress bool) error {
 		{"promote", func(ctx context.Context, sb *sandbox.Sandbox) error {
 			return smokePromote(ctx, client, sb)
 		}},
+		{"port", smokePortForward},
 	}
 	if egress {
 		steps = append(steps, step{"egress", func(ctx context.Context, _ *sandbox.Sandbox) error {
@@ -388,6 +389,29 @@ func smokePromote(ctx context.Context, client *sandbox.Client, sb *sandbox.Sandb
 	}
 	if err := client.DeleteTemplate(ctx, tpl); err == nil {
 		return errors.New("second delete succeeded, want unknown template")
+	}
+	return nil
+}
+
+// smokePortForward proves the guest-port relay on the no-network lane: sshd
+// (socket-activated in the base image) answers on 22, so its banner must
+// arrive through DialPort; a dead port must fail with the typed not_found.
+func smokePortForward(ctx context.Context, sb *sandbox.Sandbox) error {
+	pc, err := sb.DialPort(ctx, 22)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = pc.Close() }()
+	banner := make([]byte, 4)
+	if _, err := io.ReadFull(pc, banner); err != nil {
+		return fmt.Errorf("read ssh banner: %w", err)
+	}
+	if string(banner) != "SSH-" {
+		return fmt.Errorf("banner %q, want an SSH greeting", banner)
+	}
+	var e *silkd.ErrorResp
+	if _, err := sb.DialPort(ctx, 9); !errors.As(err, &e) || e.Kind != silkd.KindNotFound {
+		return fmt.Errorf("dead port: %v, want not_found", err)
 	}
 	return nil
 }

@@ -84,9 +84,38 @@ func (f *Fake) ServeConn(conn net.Conn) {
 		ptyEcho(conn, r)
 	case *silkd.PtyResize:
 		send(conn, silkd.Done{})
+	case *silkd.PortForward:
+		portEcho(conn, r, req.Port)
 	default:
 		if !serveCommon(conn, r, req) {
 			errFrame(conn, silkd.KindUnimplemented, "silkdtest: "+req.Op())
+		}
+	}
+}
+
+// portEcho fakes port_forward: port 1 is refused (not_found, mirroring a
+// dead port), anything else answers Ready and echoes Data frames until
+// DataEnd (→ Done, like the server closing after EOF) or disconnect.
+func portEcho(conn net.Conn, r *bufio.Reader, port uint16) {
+	if port == 1 {
+		errFrame(conn, silkd.KindNotFound, "connect refused")
+		return
+	}
+	send(conn, silkd.Ready{})
+	for {
+		req, err := recvRequest(r)
+		if err != nil {
+			return
+		}
+		switch req := req.(type) {
+		case *silkd.Data:
+			send(conn, &silkd.DataResp{Data: req.Data})
+		case *silkd.DataEnd:
+			send(conn, silkd.Done{})
+			return
+		default:
+			errFrame(conn, silkd.KindBadRequest, "expected data or data_end")
+			return
 		}
 	}
 }

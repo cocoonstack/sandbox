@@ -4,6 +4,7 @@
 
 pub mod exec;
 pub mod find;
+pub mod forward;
 pub mod fs;
 pub mod git;
 pub mod net;

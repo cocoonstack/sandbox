@@ -104,6 +104,20 @@ there is no warm pool for promoted templates unless the node's config adds
 one. Templates are node-local; re-promoting replaces, `DeleteTemplate`
 (with `WithNetwork`/`WithSize` when non-default) removes.
 
+## Reaching guest ports
+
+```go
+conn, err := sb.DialPort(ctx, 8080)          // net.Conn to 127.0.0.1:8080 in the guest
+l, err := sb.ProxyPort(ctx, "127.0.0.1:0", 8080)  // local listener piping to it
+```
+
+`DialPort` opens a TCP connection to a port inside the sandbox, relayed over
+the silkd protocol — it works on the no-network lane, where the vsock relay
+is the only way in. The returned `net.Conn` supports half-close
+(`CloseWrite`) but not deadlines; bound the ctx instead. A dead port fails
+with silkd's `not_found`. `ProxyPort` serves it to unmodified local tools
+(browsers, curl) via a local listener.
+
 ## Node info
 
 ```go

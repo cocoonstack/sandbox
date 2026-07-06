@@ -109,6 +109,9 @@ pub enum Request {
         cols: u16,
         rows: u16,
     },
+    PortForward {
+        port: u16,
+    },
     GitClone {
         url: String,
         path: String,
