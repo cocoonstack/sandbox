@@ -25,10 +25,11 @@ const leaveTimeout = time.Second
 // NodeState is one node's gossiped placement view. Epoch resolves merges: the
 // higher epoch for a given node wins.
 type NodeState struct {
-	NodeID string         `json:"node_id"`
-	Addr   string         `json:"addr"` // data-plane advertise address
-	Epoch  uint64         `json:"epoch"`
-	Pools  map[string]int `json:"pools"` // PoolKey hash → warm count
+	NodeID    string         `json:"node_id"`
+	Addr      string         `json:"addr"` // data-plane advertise address
+	Epoch     uint64         `json:"epoch"`
+	Pools     map[string]int `json:"pools"`               // PoolKey hash → warm count
+	Templates []string       `json:"templates,omitempty"` // promoted-template key hashes on disk
 }
 
 // Mesh is the node's view of the cluster and its own gossiped state.
@@ -83,13 +84,14 @@ func (m *Mesh) Join(seeds []string) error {
 	return nil
 }
 
-// UpdateSelf republishes this node's warm-pool counts, bumping the epoch so
-// peers adopt the new view.
-func (m *Mesh) UpdateSelf(pools map[string]int) {
+// UpdateSelf republishes this node's warm-pool counts and promoted-template
+// set, bumping the epoch so peers adopt the new view.
+func (m *Mesh) UpdateSelf(pools map[string]int, templates []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.self.Epoch++
 	m.self.Pools = pools
+	m.self.Templates = templates
 	m.view[m.self.NodeID] = m.self
 }
 
@@ -131,6 +133,27 @@ func (m *Mesh) Candidates(keyHash string) []string {
 		a, b = b, a
 	}
 	return []string{a.addr, b.addr}
+}
+
+// TemplateOwners returns up to two peer addresses whose gossiped template
+// set contains keyHash — the redirect targets for a name-based claim or
+// delete of a template this node does not hold. Self is excluded: the caller
+// has already checked its own disk.
+func (m *Mesh) TemplateOwners(keyHash string) []string {
+	m.mu.Lock()
+	var owners []string
+	for id, st := range m.view {
+		if id != m.self.NodeID && slices.Contains(st.Templates, keyHash) {
+			owners = append(owners, st.Addr)
+		}
+	}
+	m.mu.Unlock()
+	// Which two survive truncation is already jittered by map iteration
+	// order; unlike Candidates there is no warmth to rank by.
+	if len(owners) > 2 {
+		owners = owners[:2]
+	}
+	return owners
 }
 
 // Members returns the current cluster view (self included).

@@ -81,6 +81,11 @@ type Manager struct {
 	maxFork int
 	store   *store
 
+	// notifyTemplates, when set (before serving starts), fires after a
+	// promote or template delete so the mesh republishes immediately
+	// instead of waiting out a gossip tick.
+	notifyTemplates func()
+
 	mu      sync.Mutex
 	pools   map[types.PoolKey]*pool
 	claimed map[string]*types.Sandbox
@@ -177,6 +182,12 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	return m.finalize(ctx, sb, ttl)
 }
 
+// SetTemplateNotifier wires the immediate-republish hook; call it before
+// the server starts serving.
+func (m *Manager) SetTemplateNotifier(fn func()) {
+	m.notifyTemplates = fn
+}
+
 // pooledHash reports whether a configured pool occupies this hash — the
 // guard is on the HASH, not the key: goldens are stored by hash, so a
 // colliding key would reach a pool's golden dir even though the keys differ.
@@ -189,6 +200,12 @@ func (m *Manager) pooledHash(hash string) bool {
 		}
 	}
 	return false
+}
+
+// HasGolden reports whether this node can provision the key without a cold
+// boot — a configured pool golden or a promoted template on disk.
+func (m *Manager) HasGolden(key types.PoolKey) bool {
+	return m.goldenDirFor(key) != ""
 }
 
 // goldenDirFor resolves a key's golden: the pool's when configured, else an
@@ -270,6 +287,31 @@ func (m *Manager) WarmCounts() map[string]int {
 		counts[key.Hash()] = len(p.warm)
 	}
 	return counts
+}
+
+// TemplateHashes lists the promoted-template key hashes on disk — goldens
+// not backing a configured pool — for the mesh's template gossip.
+func (m *Manager) TemplateHashes() []string {
+	entries, err := os.ReadDir(m.goldensDir())
+	if err != nil {
+		return nil
+	}
+	m.mu.Lock()
+	pooled := make(map[string]struct{}, len(m.pools))
+	for key := range m.pools {
+		pooled[key.Hash()] = struct{}{}
+	}
+	m.mu.Unlock()
+	var hashes []string
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasSuffix(e.Name(), ".tmp") {
+			continue
+		}
+		if _, ok := pooled[e.Name()]; !ok {
+			hashes = append(hashes, e.Name())
+		}
+	}
+	return hashes
 }
 
 // Release destroys a claimed sandbox after validating its token.
@@ -456,6 +498,9 @@ func (m *Manager) Promote(ctx context.Context, id, token, template string) (type
 	if err := m.exportGolden(ctx, snap, filepath.Join(m.goldensDir(), key.Hash())); err != nil {
 		return types.PoolKey{}, fmt.Errorf("promote %s: %w", id, err)
 	}
+	if m.notifyTemplates != nil {
+		m.notifyTemplates()
+	}
 	return key, nil
 }
 
@@ -471,6 +516,9 @@ func (m *Manager) DeleteTemplate(key types.PoolKey) error {
 	}
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("delete template: %w", err)
+	}
+	if m.notifyTemplates != nil {
+		m.notifyTemplates()
 	}
 	return nil
 }

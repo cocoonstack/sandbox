@@ -55,6 +55,7 @@ type Manager interface {
 	Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
 	Promote(ctx context.Context, id, token, template string) (types.PoolKey, error)
 	DeleteTemplate(key types.PoolKey) error
+	HasGolden(key types.PoolKey) bool
 	AgentSocket(id, token string) (string, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, error)
 	Info() ([]pool.PoolInfo, int, int)
@@ -69,6 +70,7 @@ type Dialer interface {
 // nil on a single-node deployment (no mesh).
 type Placer interface {
 	Candidates(keyHash string) []string
+	TemplateOwners(keyHash string) []string
 	PeerAddrs() []string
 }
 
@@ -146,8 +148,14 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		// at owner), never bounce again — that avoids a two-node stale-view
 		// ping-pong when both just emptied their pools.
 		if s.placer != nil && !req.NoRedirect {
-			if addrs := s.placer.Candidates(key.Hash()); len(addrs) > 0 {
-				writeJSON(w, http.StatusOK, types.ClaimResponse{Redirect: addrs})
+			if writeRedirect(w, s.placer.Candidates(key.Hash())) {
+				return
+			}
+			// A promoted template lives only on its owner node: when this
+			// node has no golden for the key but gossip names one, the owner
+			// provisions from it instead of us cold-booting a nonexistent
+			// image ref.
+			if !s.mgr.HasGolden(key) && writeRedirect(w, s.placer.TemplateOwners(key.Hash())) {
 				return
 			}
 		}
@@ -235,7 +243,15 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 		Net:      types.NetShape(q.Get("net")),
 		Size:     types.Size(q.Get("size")),
 	}
-	err := s.mgr.DeleteTemplate(req.Key())
+	key := req.Key()
+	err := s.mgr.DeleteTemplate(key)
+	// Unknown here but owned by a peer per gossip: redirect the SDK to the
+	// owner. no_redirect mirrors the claim protocol — a redirected retry
+	// carries it, so the owner answers for itself and never bounces again.
+	if errors.Is(err, pool.ErrUnknownTemplate) && s.placer != nil && q.Get("no_redirect") == "" &&
+		writeRedirect(w, s.placer.TemplateOwners(key.Hash())) {
+		return
+	}
 	switch {
 	case writePoolErr(w, err):
 	case err != nil:
@@ -332,6 +348,16 @@ func writePoolErr(w http.ResponseWriter, err error) bool {
 		}
 	}
 	return false
+}
+
+// writeRedirect answers with the redirect shape of the claim protocol when
+// addrs is non-empty, reporting whether it did.
+func writeRedirect(w http.ResponseWriter, addrs []string) bool {
+	if len(addrs) == 0 {
+		return false
+	}
+	writeJSON(w, http.StatusOK, types.ClaimResponse{Redirect: addrs})
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

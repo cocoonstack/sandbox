@@ -105,12 +105,14 @@ demand (~a golden-clone's latency); there is no warm pool for promoted
 templates unless the node's config adds one. Re-promoting to the same name
 replaces the template.
 
-**Templates are node-local**, and on a cluster the parent claim may have
-been redirected — so the returned `Template` handle is bound to the owning
-node, and its `New`/`Delete` always reach it. The name-based calls
+**Templates live on one node**, and on a cluster the parent claim may have
+been redirected — the returned `Template` handle is bound to the owning
+node, so its `New`/`Delete` always reach it. The name-based calls
 (`client.New("myproj:v1")`, `client.DeleteTemplate(...)` with
-`WithNetwork`/`WithSize` when non-default) work too, but only see the
-templates of the node the client is connected to.
+`WithNetwork`/`WithSize` when non-default) route cluster-wide via the
+mesh's template gossip; they lag a promote or delete by about a gossip
+tick, so prefer the handle right after promoting (see
+[Templates on a cluster](cluster.md#templates-on-a-cluster)).
 
 ## Reaching guest ports
 

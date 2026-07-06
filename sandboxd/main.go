@@ -76,7 +76,8 @@ func main() {
 		}
 		defer func() { _ = msh.Shutdown() }()
 		placer = msh
-		go gossipWarmCounts(ctx, msh, mgr)
+		mgr.SetTemplateNotifier(func() { msh.UpdateSelf(mgr.WarmCounts(), mgr.TemplateHashes()) })
+		go gossipNodeState(ctx, msh, mgr)
 		logger.Infof(ctx, "mesh %s joined (%d seeds)", cmp.Or(cfg.Mesh.NodeID, cfg.Mesh.Bind), len(cfg.Mesh.Join))
 	}
 
@@ -142,9 +143,9 @@ func startMesh(cfg *config.Config) (*mesh.Mesh, error) {
 	return msh, nil
 }
 
-// gossipWarmCounts republishes this node's warm-pool counts every tick so the
-// mesh's placement view tracks refill.
-func gossipWarmCounts(ctx context.Context, msh *mesh.Mesh, mgr *pool.Manager) {
+// gossipNodeState republishes this node's warm-pool counts and template set
+// every tick so the mesh's placement view tracks refill and promotes.
+func gossipNodeState(ctx context.Context, msh *mesh.Mesh, mgr *pool.Manager) {
 	t := time.NewTicker(gossipInterval)
 	defer t.Stop()
 	for {
@@ -152,7 +153,7 @@ func gossipWarmCounts(ctx context.Context, msh *mesh.Mesh, mgr *pool.Manager) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			msh.UpdateSelf(mgr.WarmCounts())
+			msh.UpdateSelf(mgr.WarmCounts(), mgr.TemplateHashes())
 		}
 	}
 }

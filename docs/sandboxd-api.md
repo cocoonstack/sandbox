@@ -109,7 +109,11 @@ configured pool, 404 unknown id or wrong sandbox token.
 Auth: node API token. Removes a promoted template (the query parameters
 default like a claim's: `net=none`, `size=small`). 204 on success, 404
 unknown template, 409 when the key belongs to a configured pool (those
-goldens are owned by the node config).
+goldens are owned by the node config). On a cluster, a node that does not
+hold the template but sees an owner in gossip answers `200
+{"redirect": [addrs]}` — the claim redirect shape — and the SDK retries the
+delete at the owner. The retry carries `no_redirect=1`, mirroring the claim
+protocol: a node answering a `no_redirect` delete speaks only for itself.
 
 ## GET /v1/sandboxes/{id}/agent
 

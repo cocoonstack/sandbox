@@ -60,6 +60,12 @@ type Sandbox struct {
 	owner string // data-plane address (owner node), from the claim
 }
 
+// Owner returns the data-plane address of the node that owns the sandbox —
+// on a cluster the node a redirected claim landed on.
+func (s *Sandbox) Owner() string {
+	return s.owner
+}
+
 // Exec runs argv to completion and returns its stdout; a non-zero exit
 // surfaces as *ExitError carrying stderr, alongside the partial stdout.
 func (s *Sandbox) Exec(ctx context.Context, argv ...string) (string, error) {

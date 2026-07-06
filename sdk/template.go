@@ -5,10 +5,9 @@ import (
 	"net/url"
 )
 
-// Template is a promoted template bound to the node that holds it.
-// Templates are node-local: on a cluster, name-based Client calls only see
-// the connected node's templates, so cross-node lifecycle rides this handle
-// — its New and Delete always reach the owning node.
+// Template is a promoted template bound to the node that holds it. Its New
+// and Delete dial the owner directly — no gossip involved — so unlike the
+// name-based Client calls they are usable the instant Promote returns.
 type Template struct {
 	Name string
 
@@ -40,8 +39,12 @@ func (t *Template) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
 	return t.c.handleFrom(t.addr, cr), nil
 }
 
-// Delete removes the template from its node.
+// Delete removes the template from its node. The handle is owner-bound, so
+// the delete carries no_redirect: the owner answers for itself (404 once the
+// template is gone there) and gossip about same-name templates elsewhere is
+// never consulted.
 func (t *Template) Delete(ctx context.Context) error {
-	u := url.Values{"template": {t.Name}, "net": {t.net}, "size": {t.size}}
-	return t.c.deleteTemplates(ctx, t.addr, u)
+	u := url.Values{"template": {t.Name}, "net": {t.net}, "size": {t.size}, "no_redirect": {"1"}}
+	_, err := t.c.deleteTemplates(ctx, t.addr, u)
+	return err
 }

@@ -116,17 +116,32 @@ func (c *Client) Lookup(ctx context.Context, id, token string) (*Sandbox, error)
 	return nil, fmt.Errorf("lookup %s: no owner found", id)
 }
 
-// DeleteTemplate removes a promoted template from the CONNECTED node —
-// templates are node-local, and on a cluster the entry node may not be the
-// one holding it; prefer Template.Delete on the handle Promote returned. The
-// options pick the template's key axes exactly as a claim would (network
-// lane, size); the same defaults apply.
+// DeleteTemplate removes a promoted template by name. When the entry node
+// does not hold it but the mesh's gossip names an owner, the delete follows
+// the redirect there (one hop); gossip lags a fresh promote by about a tick,
+// so right after promoting prefer Template.Delete on the returned handle.
+// The options pick the template's key axes exactly as a claim would
+// (network lane, size); the same defaults apply.
 func (c *Client) DeleteTemplate(ctx context.Context, template string, opts ...Option) error {
 	claim := claimRequest{Template: template}
 	for _, opt := range opts {
 		opt(&claim)
 	}
-	return c.deleteTemplates(ctx, c.addr, url.Values{"template": {claim.Template}, "net": {claim.Net}, "size": {claim.Size}})
+	u := url.Values{"template": {claim.Template}, "net": {claim.Net}, "size": {claim.Size}}
+	redirect, err := c.deleteTemplates(ctx, c.addr, u)
+	if err != nil || len(redirect) == 0 {
+		return err
+	}
+	// The entry node doesn't hold the template but gossip named its owners.
+	// The retry carries no_redirect, mirroring the claim protocol: the owner
+	// answers for itself, never a second hop.
+	u.Set("no_redirect", "1")
+	for _, addr := range redirect {
+		if _, err = c.deleteTemplates(ctx, addr, u); err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("delete template at owner: %w", err)
 }
 
 // ownerAt asks one node whether it owns the sandbox, returning its data-plane
@@ -179,17 +194,26 @@ func (c *Client) claimAt(ctx context.Context, addr string, body []byte) (claimRe
 	return cr, nil
 }
 
-// deleteTemplates issues the template delete against one node.
-func (c *Client) deleteTemplates(ctx context.Context, addr string, u url.Values) error {
+// deleteTemplates issues the template delete against one node; a 200 with a
+// redirect list names the owners to retry at.
+func (c *Client) deleteTemplates(ctx context.Context, addr string, u url.Values) ([]string, error) {
 	resp, err := c.roundTrip(ctx, http.MethodDelete, addr, "/v1/templates?"+u.Encode(), nil, c.apiToken)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusNoContent {
-		return apiError("delete template", resp)
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return nil, nil
+	case http.StatusOK:
+		var body claimResponse
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			return nil, fmt.Errorf("decode delete redirect: %w", err)
+		}
+		return body.Redirect, nil
+	default:
+		return nil, apiError("delete template", resp)
 	}
-	return nil
 }
 
 // encodeClaim marshals a claim body.

@@ -67,7 +67,7 @@ lane. `SILKD_NET=none|egress` overrides the probe for tests and operators.
 - foreground exec output is backpressured: a slow client paces the child
   rather than losing output; detached observers ride a best-effort broadcast
 - no fsync durability on writes (guest page cache semantics)
-- `fs_push` extraction is streaming, not atomic — a truncated stream errors
-  but may leave partially extracted files. Treat a `Push` error as "the tree
-  may be dirty": clean the destination before retrying. Atomic extraction
-  (stage in a temp dir, then swap) is planned as **M3.1**
+- `fs_push` is network-failure atomic: the stream extracts into a staging
+  dir inside `dest` and merges (local renames) only after the tar terminates
+  cleanly, so a truncated stream or dropped connection leaves `dest`
+  untouched; the residual crash window is the merge itself, microseconds

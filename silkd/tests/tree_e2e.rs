@@ -141,3 +141,81 @@ async fn pull_missing_path_errors() {
     let frames = exchange(&[json!({"op":"fs_pull","path":"/no/such/dir/xyz"}).to_string()]).await;
     assert_eq!(type_of(frames.last().unwrap()), "error");
 }
+
+#[tokio::test]
+async fn push_failure_leaves_dest_untouched() {
+    // Atomicity: a truncated stream must not mutate a populated dest at all —
+    // no partial files, no staging leftovers.
+    let dest = tempfile::tempdir().unwrap();
+    std::fs::write(dest.path().join("keep.txt"), b"KEEP").unwrap();
+    std::fs::create_dir(dest.path().join("sub")).unwrap();
+    std::fs::write(dest.path().join("sub/old.txt"), b"OLD").unwrap();
+
+    let frames = exchange(&[
+        json!({"op":"fs_push","dest":dest.path().to_str().unwrap()}).to_string(),
+        json!({"op":"data","data":b64(b"partial garbage")}).to_string(),
+    ])
+    .await;
+    assert_eq!(type_of(frames.last().unwrap()), "error");
+
+    let names: Vec<String> = std::fs::read_dir(dest.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(sorted, ["keep.txt", "sub"], "dest mutated: {names:?}");
+    assert_eq!(
+        std::fs::read(dest.path().join("keep.txt")).unwrap(),
+        b"KEEP"
+    );
+    assert_eq!(
+        std::fs::read(dest.path().join("sub/old.txt")).unwrap(),
+        b"OLD"
+    );
+}
+
+#[tokio::test]
+async fn push_overlays_existing_tree_and_cleans_staging() {
+    // tar semantics survive the staged merge: dirs merge recursively, an
+    // existing file is replaced, unrelated files survive, staging vanishes.
+    let src = tempfile::tempdir().unwrap();
+    std::fs::create_dir(src.path().join("sub")).unwrap();
+    std::fs::write(src.path().join("sub/new.txt"), b"NEW").unwrap();
+    std::fs::write(src.path().join("replaced.txt"), b"AFTER").unwrap();
+    let archive = sys_tar_create(src.path());
+
+    let dest = tempfile::tempdir().unwrap();
+    std::fs::write(dest.path().join("keep.txt"), b"KEEP").unwrap();
+    std::fs::write(dest.path().join("replaced.txt"), b"BEFORE").unwrap();
+    std::fs::create_dir(dest.path().join("sub")).unwrap();
+    std::fs::write(dest.path().join("sub/old.txt"), b"OLD").unwrap();
+
+    let mut lines = vec![json!({"op":"fs_push","dest":dest.path().to_str().unwrap()}).to_string()];
+    lines.extend(data_frames(&archive));
+    let frames = exchange(&lines).await;
+    assert_eq!(type_of(&frames[0]), "done", "push failed: {frames:?}");
+
+    assert_eq!(
+        std::fs::read(dest.path().join("keep.txt")).unwrap(),
+        b"KEEP"
+    );
+    assert_eq!(
+        std::fs::read(dest.path().join("replaced.txt")).unwrap(),
+        b"AFTER"
+    );
+    assert_eq!(
+        std::fs::read(dest.path().join("sub/old.txt")).unwrap(),
+        b"OLD"
+    );
+    assert_eq!(
+        std::fs::read(dest.path().join("sub/new.txt")).unwrap(),
+        b"NEW"
+    );
+    let staging: Vec<String> = std::fs::read_dir(dest.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(".silkd-push-"))
+        .collect();
+    assert!(staging.is_empty(), "staging left behind: {staging:?}");
+}

@@ -152,6 +152,39 @@ func TestNewFollowsRedirect(t *testing.T) {
 	}
 }
 
+func TestDeleteTemplateFollowsRedirect(t *testing.T) {
+	// The entry node answers with the owner's address; the SDK retries the
+	// delete there, once.
+	var deletedAtB, gotNoRedirect bool
+	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deletedAtB = true
+			gotNoRedirect = r.URL.Query().Get("no_redirect") != ""
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(nodeB.Close)
+
+	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(claimResponse{
+			Redirect: []string{strings.TrimPrefix(nodeB.URL, "http://")},
+		})
+	}))
+	t.Cleanup(nodeA.Close)
+
+	if err := testClient(t, nodeA).DeleteTemplate(t.Context(), "tpl"); err != nil {
+		t.Fatalf("DeleteTemplate: %v", err)
+	}
+	if !deletedAtB {
+		t.Error("delete never reached the owner node")
+	}
+	if !gotNoRedirect {
+		t.Error("redirected delete did not carry no_redirect")
+	}
+}
+
 func TestRedirectSetsNoRedirect(t *testing.T) {
 	// The retry at a redirect target must carry no_redirect so the target
 	// warm-or-provisions instead of bouncing the claim back.

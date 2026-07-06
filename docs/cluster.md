@@ -90,16 +90,21 @@ ownership first.
 ## Templates on a cluster
 
 A promoted template (see the [SDK guide](sdk.md#promoting-to-a-template))
-lives **only on its owner node**. The handle `Sandbox.Promote` returns is
-bound to that node, so `template.New` and `template.Delete` always reach it —
-prefer the handle on a cluster.
+lives **only on its owner node**, and the mesh gossips each node's template
+set alongside its warm counts. Name-based calls route cluster-wide:
 
-The name-based `Client.New("tpl")` and `Client.DeleteTemplate("tpl")` only see
-the node the client is connected to. If the parent claim was redirected to a
-peer, its template was promoted there, and a name-based call at the entry node
-won't find it. Automatic name-based routing (gossiping the template set so a
-claim redirects to the owner) is planned as **M3.1**; until then, use the
-owner-bound handle across nodes.
+- `Client.New("tpl")` at any node redirects to the template's owner when the
+  entry node has no golden for the key (warm peers still win first).
+- `Client.DeleteTemplate("tpl")` at any node follows the same gossip to the
+  owner and deletes there.
+
+Gossip is eventually consistent: a template promoted a moment ago may be
+invisible to name-based calls for about a gossip tick (the claim fails
+cold — retry), and one deleted a moment ago may still redirect to a 404.
+Correctness is never violated; only the name-based convenience lags. The
+handle `Sandbox.Promote` returns is still owner-bound — `template.New` and
+`template.Delete` dial the owner directly, no gossip involved — and is the
+race-free choice immediately after a promote.
 
 ## Cluster checklist
 
