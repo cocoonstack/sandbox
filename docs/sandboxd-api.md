@@ -78,6 +78,29 @@ All-or-nothing: on error no child survived. 200 with one claim per child:
 
 400 invalid count or body, 404 unknown id or wrong token.
 
+## POST /v1/sandboxes/{id}/promote
+
+Auth: the sandbox's own token. Body:
+
+```json
+{"template": "myproj:v1"}
+```
+
+Publishes the sandbox's current state as a node-local template under
+(template, this sandbox's net, its size): later claims for that key clone
+from it, provision-on-demand — no warm pool unless the node config adds one.
+Re-promoting to the same name replaces the template. A hibernated sandbox is
+promoted from its memory image without waking. 204 on success, 400 invalid
+name, 409 when the name collides with a configured pool, 404 unknown id or
+wrong token.
+
+## DELETE /v1/templates?template=…&net=…&size=…
+
+Auth: node API token. Removes a promoted template (the query parameters
+default like a claim's: `net=none`, `size=small`). 204 on success, 404
+unknown template, 409 when the key belongs to a configured pool (those
+goldens are owned by the node config).
+
 ## GET /v1/sandboxes/{id}/agent
 
 Auth: the sandbox's own token. Requires `Upgrade: silkd` +

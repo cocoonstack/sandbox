@@ -175,6 +175,27 @@ func (s *Sandbox) Fork(ctx context.Context, count int, ttl time.Duration) ([]*Sa
 	return children, nil
 }
 
+// Promote publishes the sandbox's current state as a template on its owning
+// node: later claims for template (with this sandbox's network lane and
+// size) clone from it, provision-on-demand. Re-promoting to the same name
+// replaces the template; DeleteTemplate removes it. Like Fork, a hibernated
+// sandbox is promoted from its memory image without waking.
+func (s *Sandbox) Promote(ctx context.Context, template string) error {
+	body, err := json.Marshal(promoteRequest{Template: template})
+	if err != nil {
+		return fmt.Errorf("encode promote: %w", err)
+	}
+	resp, err := s.post(ctx, "promote", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		return apiError("promote", resp)
+	}
+	return nil
+}
+
 // Hibernate atomically snapshots the sandbox and stops its VM, freeing its
 // memory; the next call that reaches the guest wakes it transparently with
 // sessions, processes, and memory state intact. The TTL keeps running — a

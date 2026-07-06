@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -178,6 +179,33 @@ func (c *Client) claimAt(ctx context.Context, addr string, body []byte) (claimRe
 	return cr, nil
 }
 
+// DeleteTemplate removes a promoted template from the entry node. The
+// options pick the template's key axes exactly as a claim would (network
+// lane, size); the same defaults apply.
+func (c *Client) DeleteTemplate(ctx context.Context, template string, opts ...Option) error {
+	claim := claimRequest{Template: template}
+	for _, opt := range opts {
+		opt(&claim)
+	}
+	u := url.Values{"template": {claim.Template}, "net": {claim.Net}, "size": {claim.Size}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, "http://"+c.addr+"/v1/templates?"+u.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	if c.apiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiToken)
+	}
+	resp, err := c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		return apiError("delete template", resp)
+	}
+	return nil
+}
+
 // apiError surfaces the server's {"error": ...} body when present.
 func apiError(verb string, resp *http.Response) error {
 	var er errorResponse
@@ -213,6 +241,10 @@ type forkRequest struct {
 
 type forkResponse struct {
 	Children []claimResponse `json:"children"`
+}
+
+type promoteRequest struct {
+	Template string `json:"template"`
 }
 
 type errorResponse struct {

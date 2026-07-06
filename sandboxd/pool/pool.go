@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -44,11 +45,17 @@ const (
 )
 
 var (
-	ErrBadKey         = errors.New("invalid pool key")
-	ErrBadCount       = errors.New("invalid fork count")
-	ErrNoWarm         = errors.New("no warm sandbox for key")
-	ErrUnknownSandbox = errors.New("unknown sandbox or bad token")
-	ErrNoEgress       = errors.New("node has no egress attachment (bridge or network)")
+	ErrBadKey          = errors.New("invalid pool key")
+	ErrBadCount        = errors.New("invalid fork count")
+	ErrNoWarm          = errors.New("no warm sandbox for key")
+	ErrUnknownSandbox  = errors.New("unknown sandbox or bad token")
+	ErrUnknownTemplate = errors.New("unknown promoted template")
+	ErrPooledTemplate  = errors.New("template belongs to a configured pool")
+	ErrNoEgress        = errors.New("node has no egress attachment (bridge or network)")
+
+	// templateNameRe mirrors cocoon's snapshot-name rule so a promoted
+	// template's derived snapshot and golden names are always accepted.
+	templateNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`)
 )
 
 // Engine is the slice of the cocoon driver the manager consumes.
@@ -157,18 +164,44 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	if err := m.validate(key); err != nil {
 		return nil, err
 	}
-	m.mu.Lock()
-	golden := ""
-	if p := m.pools[key]; p != nil {
-		golden = p.goldenDir
-	}
-	m.mu.Unlock()
-
-	sb, err := m.provision(ctx, key, golden)
+	sb, err := m.provision(ctx, key, m.goldenDirFor(key))
 	if err != nil {
 		return nil, err
 	}
 	return m.finalize(ctx, sb, ttl)
+}
+
+// pooledHash reports whether a configured pool occupies this hash — the
+// guard is on the HASH, not the key: goldens are stored by hash, so a
+// colliding key would reach a pool's golden dir even though the keys differ.
+func (m *Manager) pooledHash(hash string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key := range m.pools {
+		if key.Hash() == hash {
+			return true
+		}
+	}
+	return false
+}
+
+// goldenDirFor resolves a key's golden: the pool's when configured, else an
+// on-disk golden a Promote published for an unpooled key; "" cold-boots.
+func (m *Manager) goldenDirFor(key types.PoolKey) string {
+	m.mu.Lock()
+	var dir string
+	if p := m.pools[key]; p != nil {
+		dir = p.goldenDir
+	}
+	m.mu.Unlock()
+	if dir != "" {
+		return dir
+	}
+	onDisk := filepath.Join(m.goldensDir(), key.Hash())
+	if fi, err := os.Stat(onDisk); err == nil && fi.IsDir() {
+		return onDisk
+	}
+	return ""
 }
 
 func (m *Manager) validate(key types.PoolKey) error {
@@ -346,17 +379,11 @@ func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl tim
 	// See Hibernate: a started fork must finish even if the caller hangs up.
 	ctx = context.WithoutCancel(ctx)
 
-	// A hibernated parent's memory image doubles as the fork source — export
-	// it without waking, and leave it in place for the wake. A running parent
-	// gets a transient snapshot (brief pause window) dropped afterwards.
-	snap := sb.HibernateSnap
-	if snap == "" {
-		snap = forkPrefix + strings.TrimPrefix(sb.VMName, vmPrefix) + "-" + randHex(3)
-		if err := m.eng.SnapshotSave(ctx, sb.VMName, snap); err != nil {
-			return nil, fmt.Errorf("fork %s: %w", id, err)
-		}
-		defer m.dropSnap(ctx, snap)
+	snap, cleanup, err := m.sourceSnap(ctx, sb)
+	if err != nil {
+		return nil, fmt.Errorf("fork %s: %w", id, err)
 	}
+	defer cleanup()
 
 	dir, err := os.MkdirTemp(m.dataDir, "fork-")
 	if err != nil {
@@ -376,6 +403,59 @@ func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl tim
 		return nil, err
 	}
 	return children, nil
+}
+
+// Promote publishes a claimed sandbox as a template: its state is exported
+// as a golden under (template, parent net, parent size), and later claims
+// for that key clone from it — provision-on-demand, no warm pool unless the
+// node config adds one. Re-promoting to the same name replaces the golden.
+// The caller owns the template's lifecycle (DeleteGolden); it lives only on
+// this node.
+func (m *Manager) Promote(ctx context.Context, id, token, template string) error {
+	if !templateNameRe.MatchString(template) {
+		return fmt.Errorf("%w: template %q must match %s", ErrBadKey, template, templateNameRe)
+	}
+	sb, ok := m.claim(id, token)
+	if !ok {
+		return ErrUnknownSandbox
+	}
+	key := types.PoolKey{Template: template, Net: sb.Key.Net, Size: sb.Key.Size}
+	if m.pooledHash(key.Hash()) {
+		// The same goldens/<hash> path backs a configured pool's golden —
+		// promoting over it would silently change what refills produce.
+		return ErrPooledTemplate
+	}
+	// See Fork: the transition lock pins the source snapshot, and a started
+	// promote must finish even if the caller hangs up.
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	ctx = context.WithoutCancel(ctx)
+
+	snap, cleanup, err := m.sourceSnap(ctx, sb)
+	if err != nil {
+		return fmt.Errorf("promote %s: %w", id, err)
+	}
+	defer cleanup()
+	if err := m.exportGolden(ctx, snap, filepath.Join(m.goldensDir(), key.Hash())); err != nil {
+		return fmt.Errorf("promote %s: %w", id, err)
+	}
+	return nil
+}
+
+// DeleteGolden removes a promoted template's golden. Configured pools are
+// refused: their goldens are owned by the node config, not an API caller.
+func (m *Manager) DeleteGolden(key types.PoolKey) error {
+	if m.pooledHash(key.Hash()) {
+		return ErrPooledTemplate
+	}
+	dir := filepath.Join(m.goldensDir(), key.Hash())
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return ErrUnknownTemplate
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("delete golden: %w", err)
+	}
+	return nil
 }
 
 // Reconcile aligns state after a daemon restart: re-adopt persisted claims
@@ -422,6 +502,12 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 	}
 	m.mu.Unlock()
+	// A crash mid-export leaves a *.tmp staging dir no build or promote of
+	// this life will reuse.
+	tmps, _ := filepath.Glob(filepath.Join(m.goldensDir(), "*.tmp"))
+	for _, tmp := range tmps {
+		_ = os.RemoveAll(tmp)
+	}
 
 	logger := log.WithFunc("pool.Reconcile")
 	for name := range live {
@@ -571,8 +657,12 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
 		return err
 	}
-	// A crash mid-export must never leave a half-written dir that Reconcile
-	// would adopt as a valid golden.
+	return m.exportGolden(ctx, snap, final)
+}
+
+// exportGolden exports snap into final through a sibling tmp dir, so a crash
+// mid-export never leaves a half-written dir that would pass for a golden.
+func (m *Manager) exportGolden(ctx context.Context, snap, final string) error {
 	tmp := final + ".tmp"
 	if err := os.RemoveAll(tmp); err != nil {
 		return fmt.Errorf("clear golden tmp: %w", err)
@@ -584,6 +674,20 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 		return fmt.Errorf("clear golden dir: %w", err)
 	}
 	return os.Rename(tmp, final)
+}
+
+// sourceSnap picks the snapshot to export a claimed sandbox from: the wake
+// image of a hibernated one (kept — the wake still needs it), or a transient
+// capture of a running one, dropped by the returned cleanup.
+func (m *Manager) sourceSnap(ctx context.Context, sb *types.Sandbox) (string, func(), error) {
+	if sb.HibernateSnap != "" {
+		return sb.HibernateSnap, func() {}, nil
+	}
+	snap := forkPrefix + strings.TrimPrefix(sb.VMName, vmPrefix) + "-" + randHex(3)
+	if err := m.eng.SnapshotSave(ctx, sb.VMName, snap); err != nil {
+		return "", nil, err
+	}
+	return snap, func() { m.dropSnap(ctx, snap) }, nil
 }
 
 func (m *Manager) reapOnce(ctx context.Context) {

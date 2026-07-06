@@ -37,6 +37,8 @@ type Manager interface {
 	Release(ctx context.Context, id, token string) error
 	Hibernate(ctx context.Context, id, token string) error
 	Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
+	Promote(ctx context.Context, id, token, template string) error
+	DeleteGolden(key types.PoolKey) error
 	AgentSocket(id, token string) (string, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, error)
 	Info() ([]pool.PoolInfo, int, int)
@@ -99,6 +101,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleSandboxVerb("release", s.mgr.Release))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.handleFork)
+	mux.HandleFunc("POST /v1/sandboxes/{id}/promote", s.handlePromote)
+	mux.HandleFunc("DELETE /v1/templates", s.requireAPIToken(s.handleDeleteTemplate))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", s.handleAgent)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/owner", s.handleOwner)
 	mux.HandleFunc("GET /v1/info", s.requireAPIToken(s.handleInfo))
@@ -199,6 +203,58 @@ func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
 			resp.Children[i] = types.ClaimResponse{ID: c.ID, Token: c.Token, Deadline: c.Deadline, OwnerAddr: s.advertise}
 		}
 		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+// handlePromote publishes a claimed sandbox as a node-local template.
+func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request) {
+	token, ok := bearerToken(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "missing bearer token")
+		return
+	}
+	var req types.PromoteRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	id := r.PathValue("id")
+	err := s.mgr.Promote(r.Context(), id, token, req.Template)
+	switch {
+	case errors.Is(err, pool.ErrBadKey):
+		writeErr(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, pool.ErrPooledTemplate):
+		writeErr(w, http.StatusConflict, err.Error())
+	case errors.Is(err, pool.ErrUnknownSandbox):
+		writeErr(w, http.StatusNotFound, "unknown sandbox")
+	case err != nil:
+		log.WithFunc("server.handlePromote").Errorf(r.Context(), err, "promote %s", id)
+		writeErr(w, http.StatusInternalServerError, "promote failed")
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleDeleteTemplate removes a promoted template; the key axes ride as
+// query parameters, defaulted like a claim's.
+func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	req := types.ClaimRequest{
+		Template: q.Get("template"),
+		Net:      types.NetShape(q.Get("net")),
+		Size:     types.Size(q.Get("size")),
+	}
+	err := s.mgr.DeleteGolden(req.Key())
+	switch {
+	case errors.Is(err, pool.ErrPooledTemplate):
+		writeErr(w, http.StatusConflict, err.Error())
+	case errors.Is(err, pool.ErrUnknownTemplate):
+		writeErr(w, http.StatusNotFound, "unknown template")
+	case err != nil:
+		log.WithFunc("server.handleDeleteTemplate").Errorf(r.Context(), err, "delete template %s", req.Template)
+		writeErr(w, http.StatusInternalServerError, "delete template failed")
+	default:
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

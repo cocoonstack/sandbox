@@ -107,6 +107,35 @@ func TestForkEndToEnd(t *testing.T) {
 	_ = children[1].Close()
 }
 
+func TestPromoteEndToEnd(t *testing.T) {
+	stack := startStack(t, "node-token")
+	parent, err := stack.client.New(t.Context(), "rt:24.04")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer parent.Close()
+
+	if err = parent.Promote(t.Context(), "e2e-tpl:1"); err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	child, err := stack.client.New(t.Context(), "e2e-tpl:1")
+	if err != nil {
+		t.Fatalf("claim promoted template: %v", err)
+	}
+	if out, err := child.Exec(t.Context(), "echo", "tpl"); err != nil || out != "tpl\n" {
+		t.Errorf("exec on promoted claim: %q, %v", out, err)
+	}
+	_ = child.Close()
+
+	if err := stack.client.DeleteTemplate(t.Context(), "e2e-tpl:1"); err != nil {
+		t.Fatalf("DeleteTemplate: %v", err)
+	}
+	if err := stack.client.DeleteTemplate(t.Context(), "e2e-tpl:1"); err == nil ||
+		!strings.Contains(err.Error(), "unknown template") {
+		t.Errorf("second delete: %v, want unknown template", err)
+	}
+}
+
 func TestWrongAPITokenRejected(t *testing.T) {
 	stack := startStack(t, "node-token")
 

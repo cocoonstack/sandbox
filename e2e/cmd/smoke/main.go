@@ -69,6 +69,9 @@ func run(addr, token, template string, egress bool) error {
 			return smokeHibernate(ctx, client, sb)
 		}},
 		{"fork", smokeFork},
+		{"promote", func(ctx context.Context, sb *sandbox.Sandbox) error {
+			return smokePromote(ctx, client, sb)
+		}},
 	}
 	if egress {
 		steps = append(steps, step{"egress", func(ctx context.Context, _ *sandbox.Sandbox) error {
@@ -359,6 +362,32 @@ func smokeFork(ctx context.Context, sb *sandbox.Sandbox) error {
 	}
 	if _, err := sb.Stat(ctx, "/work/child-0.txt"); err == nil {
 		return errors.New("child write visible in parent — shared disk?")
+	}
+	return nil
+}
+
+// smokePromote proves promote-to-template: claiming the promoted name must
+// clone the parent's state — on a real node a cold boot of this
+// never-registered image ref would fail, so success itself proves the golden
+// path — and delete removes it.
+func smokePromote(ctx context.Context, client *sandbox.Client, sb *sandbox.Sandbox) error {
+	const tpl = "smoke-tpl:v1"
+	if err := sb.Promote(ctx, tpl); err != nil {
+		return err
+	}
+	child, err := client.New(ctx, tpl, sandbox.WithNetwork(sandbox.NetNone))
+	if err != nil {
+		return fmt.Errorf("claim promoted template: %w", err)
+	}
+	defer func() { _ = child.Close() }()
+	if got, err := child.ReadFile(ctx, "/work/fork-mark.txt"); err != nil || string(got) != "parent" {
+		return fmt.Errorf("promoted state %q, %v — want the parent's disk", got, err)
+	}
+	if err := client.DeleteTemplate(ctx, tpl); err != nil {
+		return err
+	}
+	if err := client.DeleteTemplate(ctx, tpl); err == nil {
+		return errors.New("second delete succeeded, want unknown template")
 	}
 	return nil
 }

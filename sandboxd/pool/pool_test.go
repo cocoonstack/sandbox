@@ -388,6 +388,7 @@ type fakeEngine struct {
 	mu            sync.Mutex
 	vms           map[string]string // VM name → vsock socket path
 	clones        []string
+	cloneFroms    []string
 	colds         []string
 	removes       []string
 	probeTimeouts []time.Duration
@@ -407,10 +408,11 @@ func newFakeEngine() *fakeEngine {
 	return &fakeEngine{vms: map[string]string{}, stopped: map[string]bool{}}
 }
 
-func (f *fakeEngine) Clone(_ context.Context, _, name string, _ types.PoolKey) error {
+func (f *fakeEngine) Clone(_ context.Context, fromDir, name string, _ types.PoolKey) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.clones = append(f.clones, name)
+	f.cloneFroms = append(f.cloneFroms, fromDir)
 	if f.cloneErr != nil {
 		return f.cloneErr
 	}

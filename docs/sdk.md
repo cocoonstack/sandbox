@@ -89,6 +89,21 @@ parent's remaining lease. A running parent pauses briefly for the snapshot;
 a hibernated parent forks from its memory image without waking.
 All-or-nothing: on error no child survived. Count is capped at 16 per call.
 
+## Promoting to a template
+
+```go
+err := sb.Promote(ctx, "myproj:v1")            // publish current state
+tpl, err := client.New(ctx, "myproj:v1")       // clones the promoted state
+err = client.DeleteTemplate(ctx, "myproj:v1")  // caller owns the lifecycle
+```
+
+`Promote` publishes the sandbox's state as a template on its owning node,
+keyed by (name, the sandbox's network lane, its size) — claims must use the
+same lane and size. Claims clone on demand (~a golden-clone's latency);
+there is no warm pool for promoted templates unless the node's config adds
+one. Templates are node-local; re-promoting replaces, `DeleteTemplate`
+(with `WithNetwork`/`WithSize` when non-default) removes.
+
 ## Node info
 
 ```go

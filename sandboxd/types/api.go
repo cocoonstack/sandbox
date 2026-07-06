@@ -61,3 +61,8 @@ func (r ForkRequest) TTL() time.Duration {
 type ForkResponse struct {
 	Children []ClaimResponse `json:"children"`
 }
+
+// PromoteRequest is the wire body of POST /v1/sandboxes/{id}/promote.
+type PromoteRequest struct {
+	Template string `json:"template"`
+}

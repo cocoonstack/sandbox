@@ -57,10 +57,13 @@ func (k PoolKey) Backend() Backend {
 	return BackendCH
 }
 
-// Hash is a short stable digest used in VM, snapshot, and golden-dir naming.
+// Hash is a stable digest used in VM, snapshot, and golden-dir naming.
+// 128 bits, not a short tag: Promote keys goldens by caller-chosen template
+// names, so a targeted collision with a configured pool's hash must stay a
+// second-preimage problem, never a brute-forceable one.
 func (k PoolKey) Hash() string {
 	sum := sha256.Sum256([]byte(k.Template + "|" + string(k.Net) + "|" + string(k.Size)))
-	return hex.EncodeToString(sum[:4])
+	return hex.EncodeToString(sum[:16])
 }
 
 // Validate checks that every axis holds a known value.

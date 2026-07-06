@@ -296,6 +296,87 @@ func TestForkFlow(t *testing.T) {
 	}
 }
 
+func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
+	var gotKey types.PoolKey
+	mgr := &fakeManager{
+		promote: func(id, token, template string) error {
+			switch {
+			case token != "tok":
+				return pool.ErrUnknownSandbox
+			case template == "_bad":
+				return fmt.Errorf("%w: bad template", pool.ErrBadKey)
+			case template == "pooled":
+				return pool.ErrPooledTemplate
+			}
+			return nil
+		},
+		deleteGolden: func(key types.PoolKey) error {
+			gotKey = key
+			if key.Template == "nope" {
+				return pool.ErrUnknownTemplate
+			}
+			return nil
+		},
+	}
+	ts := newTestServer(t, "sekret", mgr, nil)
+
+	promote := func(auth, body string) int {
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/promote", strings.NewReader(body))
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do: %v", err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, tt := range []struct {
+		name, auth, body string
+		want             int
+	}{
+		{"ok", "Bearer tok", `{"template":"tpl:x"}`, http.StatusNoContent},
+		{"bad name", "Bearer tok", `{"template":"_bad"}`, http.StatusBadRequest},
+		{"pooled", "Bearer tok", `{"template":"pooled"}`, http.StatusConflict},
+		{"bad token", "Bearer bad", `{"template":"tpl:x"}`, http.StatusNotFound},
+		{"missing bearer", "", `{"template":"tpl:x"}`, http.StatusUnauthorized},
+	} {
+		t.Run("promote/"+tt.name, func(t *testing.T) {
+			if got := promote(tt.auth, tt.body); got != tt.want {
+				t.Errorf("status %d, want %d", got, tt.want)
+			}
+		})
+	}
+
+	del := func(auth, query string) int {
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts.URL+"/v1/templates?"+query, nil)
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do: %v", err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := del("Bearer sekret", "template=tpl:x&net=none&size=small"); got != http.StatusNoContent {
+		t.Errorf("delete status %d, want 204", got)
+	}
+	want := types.PoolKey{Template: "tpl:x", Net: types.NetNone, Size: types.SizeSmall}
+	if gotKey != want {
+		t.Errorf("delete key %+v, want %+v (claim defaults applied)", gotKey, want)
+	}
+	if got := del("Bearer sekret", "template=nope"); got != http.StatusNotFound {
+		t.Errorf("unknown delete status %d, want 404", got)
+	}
+	// Node-level endpoint: the API token guards it.
+	if got := del("", "template=tpl:x"); got != http.StatusUnauthorized {
+		t.Errorf("unauthenticated delete status %d, want 401", got)
+	}
+}
+
 func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *httptest.Server {
 	t.Helper()
 	if dialer == nil {
@@ -319,6 +400,9 @@ type fakeManager struct {
 	socket    func(id, token string) (string, error)
 	hibernate func(id, token string) error
 	fork      func(id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
+	promote   func(id, token, template string) error
+
+	deleteGolden func(key types.PoolKey) error
 }
 
 func (f *fakeManager) doClaim(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
@@ -366,6 +450,20 @@ func (f *fakeManager) Fork(_ context.Context, id, token string, count int, ttl t
 		return nil, pool.ErrUnknownSandbox
 	}
 	return f.fork(id, token, count, ttl)
+}
+
+func (f *fakeManager) Promote(_ context.Context, id, token, template string) error {
+	if f.promote == nil {
+		return pool.ErrUnknownSandbox
+	}
+	return f.promote(id, token, template)
+}
+
+func (f *fakeManager) DeleteGolden(key types.PoolKey) error {
+	if f.deleteGolden == nil {
+		return pool.ErrUnknownTemplate
+	}
+	return f.deleteGolden(key)
 }
 
 func (f *fakeManager) Info() ([]pool.PoolInfo, int, int) {
