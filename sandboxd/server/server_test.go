@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -100,6 +101,8 @@ func TestAPITokenGuard(t *testing.T) {
 		{"claim right token", "/v1/claim", http.MethodPost, "Bearer sekret", http.StatusOK},
 		{"info no token", "/v1/info", http.MethodGet, "", http.StatusUnauthorized},
 		{"info right token", "/v1/info", http.MethodGet, "Bearer sekret", http.StatusOK},
+		{"put pools no token", "/v1/pools", http.MethodPut, "", http.StatusUnauthorized},
+		{"put pools right token", "/v1/pools", http.MethodPut, "Bearer sekret", http.StatusOK},
 		{"healthz open", "/healthz", http.MethodGet, "", http.StatusOK},
 	}
 	for _, tt := range tests {
@@ -107,6 +110,8 @@ func TestAPITokenGuard(t *testing.T) {
 			var body io.Reader
 			if tt.method == http.MethodPost {
 				body = strings.NewReader(`{"template":"rt:24.04"}`)
+			} else if tt.method == http.MethodPut {
+				body = strings.NewReader(`{"pools":[{"template":"rt:24.04","net":"none","size":"small","warm":1}]}`)
 			}
 			req, err := http.NewRequestWithContext(t.Context(), tt.method, ts.URL+tt.path, body)
 			if err != nil {
@@ -124,6 +129,48 @@ func TestAPITokenGuard(t *testing.T) {
 				t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
 			}
 		})
+	}
+}
+
+func TestPutPoolsUpdatesTargets(t *testing.T) {
+	var got []config.PoolSpec
+	mgr := &fakeManager{
+		setPools: func(pools []config.PoolSpec) error {
+			got = pools
+			return nil
+		},
+		infoPools: []pool.PoolInfo{{
+			Key:    types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall},
+			Target: 2,
+			Warm:   1,
+			Golden: true,
+		}},
+	}
+	ts := newTestServer(t, "sekret", mgr, nil)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, ts.URL+"/v1/pools",
+		strings.NewReader(`{"pools":[{"template":"rt:24.04","net":"none","size":"small","warm":2}]}`))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer sekret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	if len(got) != 1 || got[0].Template != "rt:24.04" || got[0].Warm != 2 {
+		t.Fatalf("SetPools got %+v", got)
+	}
+	var out InfoResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Pools) != 1 || out.Pools[0].Target != 2 || !out.Pools[0].Golden {
+		t.Fatalf("info response %+v, want updated pool", out)
 	}
 }
 
@@ -481,6 +528,8 @@ type fakeManager struct {
 	claimCheckpoint  func(ckptID string) (*types.Sandbox, error)
 	checkpoints      []types.Checkpoint
 	deleteCheckpoint func(ckptID string) error
+	setPools         func(pools []config.PoolSpec) error
+	infoPools        []pool.PoolInfo
 }
 
 func (f *fakeManager) ClaimWarm(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
@@ -594,8 +643,15 @@ func (f *fakeManager) DeleteCheckpoint(ckptID string) error {
 	return f.deleteCheckpoint(ckptID)
 }
 
+func (f *fakeManager) SetPools(_ context.Context, pools []config.PoolSpec) error {
+	if f.setPools == nil {
+		return nil
+	}
+	return f.setPools(pools)
+}
+
 func (f *fakeManager) Info() ([]pool.PoolInfo, int, int) {
-	return []pool.PoolInfo{}, 0, 0
+	return f.infoPools, 0, 0
 }
 
 type fakeDialer struct {

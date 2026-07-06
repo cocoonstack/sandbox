@@ -21,6 +21,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -70,6 +71,7 @@ type Manager interface {
 	HasGolden(key types.PoolKey) bool
 	AgentSocket(id, token string) (string, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, error)
+	SetPools(ctx context.Context, pools []config.PoolSpec) error
 	Info() ([]pool.PoolInfo, int, int)
 }
 
@@ -93,6 +95,12 @@ type InfoResponse struct {
 	Claimed    int             `json:"claimed"`
 	Hibernated int             `json:"hibernated"`
 	Peers      []string        `json:"peers,omitempty"`
+}
+
+// PoolUpdateRequest is the wire body of PUT /v1/pools. It replaces the node's
+// desired warm targets with the supplied list; omitted pools are drained.
+type PoolUpdateRequest struct {
+	Pools []config.PoolSpec `json:"pools"`
 }
 
 // Server serves the control plane for one node.
@@ -143,6 +151,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/checkpoints", s.requireAPIToken(s.handleListCheckpoints))
 	mux.HandleFunc("DELETE /v1/checkpoints/{id}", s.requireAPIToken(s.handleDeleteCheckpoint))
 	mux.HandleFunc("DELETE /v1/templates", s.requireAPIToken(s.handleDeleteTemplate))
+	mux.HandleFunc("PUT /v1/pools", s.requireAPIToken(s.handlePutPools))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", s.handleAgent)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/owner", s.handleOwner)
 	mux.HandleFunc("GET /v1/info", s.requireAPIToken(s.handleInfo))
@@ -368,6 +377,22 @@ func (s *Server) handleOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"owner_addr": s.advertise})
+}
+
+func (s *Server) handlePutPools(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeBody[PoolUpdateRequest](w, r)
+	if !ok {
+		return
+	}
+	err := s.mgr.SetPools(r.Context(), req.Pools)
+	switch {
+	case writePoolErr(w, err):
+	case err != nil:
+		log.WithFunc("server.handlePutPools").Error(r.Context(), err, "set pools")
+		writeErr(w, http.StatusInternalServerError, "set pools failed")
+	default:
+		s.handleInfo(w, r)
+	}
 }
 
 func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {

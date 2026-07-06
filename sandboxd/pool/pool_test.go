@@ -270,6 +270,59 @@ func TestRefillTopsUpToTarget(t *testing.T) {
 	}
 }
 
+func TestSetPoolsGrowShrinkAndDrain(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	goldenDir := filepath.Join(m.goldensDir(), testKey.Hash())
+	if err := os.MkdirAll(goldenDir, 0o750); err != nil {
+		t.Fatalf("setup golden: %v", err)
+	}
+
+	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 2}}); err != nil {
+		t.Fatalf("SetPools grow: %v", err)
+	}
+	waitFor(t, func() bool {
+		infos, _, _ := m.Info()
+		return len(infos) == 1 && infos[0].Target == 2 && infos[0].Warm == 2 && infos[0].Golden
+	})
+	if n := eng.cloneCount(); n != 2 {
+		t.Fatalf("clones=%d, want 2", n)
+	}
+
+	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 1}}); err != nil {
+		t.Fatalf("SetPools shrink: %v", err)
+	}
+	infos, _, _ := m.Info()
+	if len(infos) != 1 || infos[0].Target != 1 || infos[0].Warm != 1 {
+		t.Fatalf("after shrink info=%+v, want target=1 warm=1", infos)
+	}
+	if removed := eng.removedNames(); len(removed) != 1 {
+		t.Fatalf("removed=%v, want one trimmed VM", removed)
+	}
+
+	if err := m.SetPools(t.Context(), nil); err != nil {
+		t.Fatalf("SetPools drain: %v", err)
+	}
+	infos, _, _ = m.Info()
+	if len(infos) != 0 {
+		t.Fatalf("after drain info=%+v, want no configured pools", infos)
+	}
+	if removed := eng.removedNames(); len(removed) != 2 {
+		t.Fatalf("removed=%v, want both warm VMs destroyed", removed)
+	}
+}
+
+func TestSetPoolsRejectsInvalidSpec(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	err := m.SetPools(t.Context(), []config.PoolSpec{{
+		PoolKey: types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall},
+		Warm:    -1,
+	}})
+	if !errors.Is(err, ErrBadCount) {
+		t.Fatalf("got %v, want ErrBadCount", err)
+	}
+}
+
 func TestRefillRespectsSemaphore(t *testing.T) {
 	eng := newFakeEngine()
 	eng.probeStall = make(chan struct{})

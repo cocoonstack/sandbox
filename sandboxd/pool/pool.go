@@ -312,6 +312,91 @@ func (m *Manager) WarmCounts() map[string]int {
 	return counts
 }
 
+// SetPools replaces the node's desired warm targets. Existing claims are not
+// affected; only unclaimed warm VMs are trimmed or refilled.
+func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
+	desired := make(map[types.PoolKey]config.PoolSpec, len(specs))
+	hashes := make(map[string]types.PoolKey, len(specs))
+	enableIdle := false
+	for _, spec := range specs {
+		spec = normalizePoolSpec(spec)
+		if err := m.validate(spec.PoolKey); err != nil {
+			return err
+		}
+		if spec.Warm < 0 {
+			return fmt.Errorf("%w: warm must not be negative", ErrBadCount)
+		}
+		if spec.WarmMax != 0 && spec.WarmMax < spec.Warm {
+			return fmt.Errorf("%w: warm_max %d below warm %d", ErrBadCount, spec.WarmMax, spec.Warm)
+		}
+		if spec.IdleHibernateSeconds < 0 {
+			return fmt.Errorf("%w: idle_hibernate_seconds must not be negative", ErrBadCount)
+		}
+		if spec.IdleHibernateSeconds > 0 {
+			enableIdle = true
+		}
+		if existing, ok := hashes[spec.PoolKey.Hash()]; ok && existing != spec.PoolKey {
+			return fmt.Errorf("%w: pool key hash collision between %q and %q", ErrBadKey, existing.Template, spec.Template)
+		}
+		if _, ok := desired[spec.PoolKey]; ok {
+			return fmt.Errorf("%w: duplicate pool %q", ErrBadKey, spec.Template)
+		}
+		hashes[spec.PoolKey.Hash()] = spec.PoolKey
+		desired[spec.PoolKey] = spec
+	}
+
+	var trim []string
+	m.mu.Lock()
+	if enableIdle {
+		m.idleEnabled = true
+	}
+	now := time.Now()
+	for key, p := range m.pools {
+		spec, ok := desired[key]
+		if !ok {
+			p.floor = 0
+			p.warmMax = 0
+			p.idle = 0
+		} else {
+			p.floor = spec.Warm
+			p.warmMax = spec.WarmMax
+			p.idle = time.Duration(spec.IdleHibernateSeconds) * time.Second
+		}
+		target := p.effectiveTarget(now)
+		for len(p.warm) > target {
+			n := len(p.warm) - 1
+			trim = append(trim, p.warm[n].VMName)
+			p.warm = p.warm[:n]
+		}
+		if !ok && !p.building && p.refilling == 0 {
+			delete(m.pools, key)
+		}
+	}
+	for key, spec := range desired {
+		if p := m.pools[key]; p != nil {
+			continue
+		}
+		p := &pool{
+			key:     key,
+			floor:   spec.Warm,
+			warmMax: spec.WarmMax,
+			idle:    time.Duration(spec.IdleHibernateSeconds) * time.Second,
+		}
+		if dir, ok := m.goldenOnDisk(key.Hash()); ok {
+			p.goldenDir = dir
+		}
+		m.pools[key] = p
+	}
+	m.mu.Unlock()
+
+	runCtx := context.WithoutCancel(ctx)
+	for _, name := range trim {
+		m.destroy(runCtx, name)
+	}
+	m.refillOnce(runCtx)
+	return nil
+}
+
 // TemplateHashes lists the promoted-template key hashes on disk — goldens
 // not backing a configured pool — for the mesh's template gossip.
 func (m *Manager) TemplateHashes() []string {
@@ -796,6 +881,16 @@ func (m *Manager) validate(key types.PoolKey) error {
 	return nil
 }
 
+func normalizePoolSpec(spec config.PoolSpec) config.PoolSpec {
+	if spec.Net == "" {
+		spec.Net = types.NetNone
+	}
+	if spec.Size == "" {
+		spec.Size = types.SizeSmall
+	}
+	return spec
+}
+
 // finalize stamps identity, persists the claim, and destroys the VM if the
 // store write fails so a durable claim always matches a live VM.
 func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Duration) (*types.Sandbox, error) {
@@ -889,15 +984,22 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 	defer func() { <-m.refillSem }()
 	start := time.Now()
 	sb, err := m.provision(ctx, p.key, golden)
+	keep := false
 	m.mu.Lock()
 	p.refilling--
-	if err == nil {
+	target := p.effectiveTarget(time.Now())
+	if err == nil && len(p.warm) < target {
 		p.warm = append(p.warm, sb)
 		p.noteLead(time.Since(start))
+		keep = true
 	}
 	m.mu.Unlock()
 	if err != nil {
 		log.WithFunc("pool.refillOne").Errorf(ctx, err, "refill %s", p.key.Hash())
+		return
+	}
+	if !keep {
+		m.destroy(ctx, sb.VMName)
 	}
 }
 
