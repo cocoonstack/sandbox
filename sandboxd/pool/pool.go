@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -77,6 +78,7 @@ type Engine interface {
 	Restore(ctx context.Context, vmName, snapRef string) error
 	List(ctx context.Context, filters ...string) ([]types.VMRecord, error)
 	Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error
+	DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error)
 }
 
 // SandboxSummary is the ops view of one live claim — no tokens.
@@ -358,6 +360,30 @@ func (m *Manager) Release(ctx context.Context, id, token string) error {
 	return err
 }
 
+// ClaimDeadline authorizes a sandbox by token and returns its lease
+// deadline — the preview mint clamps a URL's life to it.
+func (m *Manager) ClaimDeadline(id, token string) (time.Time, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sb, ok := m.authed(id, token)
+	if !ok {
+		return time.Time{}, ErrUnknownSandbox
+	}
+	return sb.Deadline, nil
+}
+
+// PreviewDial opens a byte stream to a guest port for the preview server. The
+// caller has already verified the signed preview token, so no sandbox token
+// is needed; the live-claim lookup is the revocation check — a released or
+// reaped sandbox is absent and this fails. A hibernated sandbox wakes.
+func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.Conn, error) {
+	sock, err := m.wakeByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return m.eng.DialGuestPort(ctx, sock, port)
+}
+
 // AgentSocket resolves a claimed sandbox's vsock UDS without waking it (the
 // ownership probe must not restore a hibernated VM).
 func (m *Manager) AgentSocket(id, token string) (string, error) {
@@ -414,12 +440,30 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 // WakeAgentSocket resolves the sandbox's vsock UDS for the relay, first
 // restoring the VM if it is hibernated; concurrent wakes queue on the
 // transition lock and find the fast path.
+// wakeByID resolves a live claim's socket by id alone (authorization proven
+// upstream), waking it if hibernated. Mirrors WakeAgentSocket's transition
+// discipline.
+func (m *Manager) wakeByID(ctx context.Context, id string) (string, error) {
+	m.mu.Lock()
+	sb, ok := m.claimed[id]
+	m.mu.Unlock()
+	if !ok {
+		return "", ErrUnknownSandbox
+	}
+	return m.wakeResolved(ctx, sb)
+}
+
 func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string, error) {
 	sb, ok := m.claim(id, token)
 	if !ok {
 		return "", ErrUnknownSandbox
 	}
 	m.touch(sb)
+	return m.wakeResolved(ctx, sb)
+}
+
+// wakeResolved is the wake body shared by the token and id-only entry points.
+func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	if sb.HibernateSnap == "" {
@@ -430,11 +474,11 @@ func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string
 	wakeStart := time.Now()
 	snap := sb.HibernateSnap
 	if err := m.eng.Restore(ctx, sb.VMName, snap); err != nil {
-		return "", fmt.Errorf("wake %s: %w", id, err)
+		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
 	sock, err := m.probeReady(ctx, sb.VMName, claimProbeTimeout)
 	if err != nil {
-		return "", fmt.Errorf("wake %s: %w", id, err)
+		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
 	if !m.commitTransition(ctx, sb, "", sock) {
 		// Released mid-transition: destroy the VM we just resurrected.

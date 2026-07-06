@@ -66,6 +66,7 @@ type Manager interface {
 	ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration) (*types.Sandbox, error)
 	Checkpoints() ([]types.Checkpoint, error)
 	DeleteCheckpoint(ckptID string) error
+	ClaimDeadline(id, token string) (time.Time, error)
 	HasGolden(key types.PoolKey) bool
 	AgentSocket(id, token string) (string, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, error)
@@ -101,6 +102,7 @@ type Server struct {
 	placer    Placer
 	apiToken  string
 	advertise string
+	preview   *PreviewServer
 
 	relayMu     sync.Mutex
 	relays      map[net.Conn]net.Conn // client conn → guest conn, for forced shutdown
@@ -112,13 +114,14 @@ type Server struct {
 // open (per-sandbox tokens still guard sandbox-scoped calls). advertise is
 // this node's data-plane address, returned as a claim's owner address. A nil
 // placer disables mesh redirects (single node).
-func New(apiToken, advertise string, mgr Manager, dialer Dialer, placer Placer) *Server {
+func New(apiToken, advertise string, mgr Manager, dialer Dialer, placer Placer, preview *PreviewServer) *Server {
 	return &Server{
 		mgr:       mgr,
 		dialer:    dialer,
 		placer:    placer,
 		apiToken:  apiToken,
 		advertise: advertise,
+		preview:   preview,
 		relays:    map[net.Conn]net.Conn{},
 	}
 }
@@ -134,6 +137,7 @@ func (s *Server) Handler() http.Handler {
 	// ownership proof.
 	mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.requireAPIToken(s.handleFork))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/promote", s.requireAPIToken(s.handlePromote))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/preview", s.handlePreview)
 	mux.HandleFunc("POST /v1/sandboxes/{id}/checkpoint", s.requireAPIToken(s.handleCheckpoint))
 	mux.HandleFunc("POST /v1/checkpoints/{id}/claim", s.requireAPIToken(s.handleClaimCheckpoint))
 	mux.HandleFunc("GET /v1/checkpoints", s.requireAPIToken(s.handleListCheckpoints))

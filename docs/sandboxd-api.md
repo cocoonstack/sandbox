@@ -119,6 +119,17 @@ hold the template but sees an owner in gossip answers `200
 delete at the owner. The retry carries `no_redirect=1`, mirroring the claim
 protocol: a node answering a `no_redirect` delete speaks only for itself.
 
+## POST /v1/sandboxes/{id}/preview
+
+Auth: the sandbox's own token in the body. Mints a signed URL serving a
+guest HTTP port from a browser: body `{"token": "...", "port": 8080,
+"ttl_seconds": 0}` → `{"url": "http://<preview_advertise>/p/<token>/"}`.
+The URL's life is clamped to the claim's remaining lease. 501 when the node
+has no `preview_listen`. The signed token embeds the sandbox id, port, and
+owner node, so any node's preview listener can serve it (forwarding to the
+owner) and a released sandbox's URL simply stops resolving — no revocation
+list. See [deploy](deploy.md#preview-urls).
+
 ## POST /v1/sandboxes/{id}/checkpoint
 
 Auth: node API token; body `{"token": "<sandbox token>", "name": "..."}`

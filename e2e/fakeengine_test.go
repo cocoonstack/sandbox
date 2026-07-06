@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -92,6 +93,10 @@ func (f *fakeEngine) List(_ context.Context, filters ...string) ([]types.VMRecor
 
 func (f *fakeEngine) Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error {
 	return f.real.Probe(ctx, vsockSocket, timeout)
+}
+
+func (f *fakeEngine) DialGuestPort(context.Context, string, uint16) (net.Conn, error) {
+	return nil, fmt.Errorf("fakeEngine has no guest port")
 }
 
 func (f *fakeEngine) create(name string) error {

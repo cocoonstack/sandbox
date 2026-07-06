@@ -81,12 +81,28 @@ func main() {
 		logger.Infof(ctx, "mesh %s joined (%d seeds)", cmp.Or(cfg.Mesh.NodeID, cfg.Mesh.Bind), len(cfg.Mesh.Join))
 	}
 
-	srv := server.New(cfg.APIToken, cfg.AdvertiseAddr, mgr, eng, placer)
+	preview := server.NewPreviewServer(cfg.PreviewSecret, cfg.PreviewAdvertise, mgr)
+	srv := server.New(cfg.APIToken, cfg.AdvertiseAddr, mgr, eng, placer, preview)
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
+	if preview != nil {
+		previewSrv := &http.Server{Addr: cfg.PreviewListen, Handler: preview.Handler(), ReadHeaderTimeout: readHeaderTimeout}
+		go func() {
+			if err := previewSrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+				logger.Errorf(ctx, err, "preview server")
+			}
+		}()
+		context.AfterFunc(ctx, func() {
+			sctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+			defer cancel()
+			_ = previewSrv.Shutdown(sctx)
+		})
+		logger.Infof(ctx, "preview server on %s", cfg.PreviewListen)
+	}
+
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)

@@ -3,6 +3,8 @@ package pool
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -523,6 +525,10 @@ func (f *fakeEngine) Probe(_ context.Context, _ string, timeout time.Duration) e
 		<-stall
 	}
 	return err
+}
+
+func (f *fakeEngine) DialGuestPort(context.Context, string, uint16) (net.Conn, error) {
+	return nil, fmt.Errorf("fakeEngine has no guest port")
 }
 
 func (f *fakeEngine) cloneCount() int {

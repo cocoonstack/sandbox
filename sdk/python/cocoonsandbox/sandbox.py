@@ -253,6 +253,16 @@ class Sandbox:
                          args=(listener, port), daemon=True).start()
         return listener
 
+    def preview_url(self, port: int, ttl_seconds: int = 0) -> str:
+        """Mints a shareable URL serving the guest HTTP port from a browser,
+        valid for ttl_seconds (the node clamps it to the claim's lease).
+        Requires the node to have preview configured."""
+        body = {"token": self.token, "port": port}
+        if ttl_seconds:
+            body["ttl_seconds"] = ttl_seconds
+        reply = self._client._post_json(self.owner, f"/v1/sandboxes/{self.id}/preview", body, "preview")
+        return reply["url"]
+
     def dial_port(self, port: int) -> PortConn:
         """Opens a byte stream to 127.0.0.1:port inside the guest."""
         conn = self._dial()

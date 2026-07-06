@@ -1,10 +1,14 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -105,6 +109,39 @@ func (s *Sandbox) DialPort(ctx context.Context, port uint16) (*PortConn, error) 
 	p := &PortConn{conn: conn, stop: done, out: pr}
 	go p.drain(ctx, pw)
 	return p, nil
+}
+
+// PreviewURL mints a shareable URL that serves the sandbox's guest HTTP
+// port from a plain browser, valid for ttl (the node clamps it to the
+// claim's lease). Requires the node to have preview configured.
+func (s *Sandbox) PreviewURL(ctx context.Context, port uint16, ttl time.Duration) (string, error) {
+	body, err := json.Marshal(previewRequest{Token: s.token, Port: port, TTLSeconds: ttlSeconds(ttl)})
+	if err != nil {
+		return "", fmt.Errorf("encode preview: %w", err)
+	}
+	resp, err := s.postAsClaimer(ctx, "preview", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", apiError("preview", resp)
+	}
+	var pr previewResponse
+	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+		return "", fmt.Errorf("decode preview response: %w", err)
+	}
+	return pr.URL, nil
+}
+
+type previewRequest struct {
+	Token      string `json:"token"`
+	Port       uint16 `json:"port"`
+	TTLSeconds int    `json:"ttl_seconds,omitempty"`
+}
+
+type previewResponse struct {
+	URL string `json:"url"`
 }
 
 // ProxyPort listens on localAddr (e.g. "127.0.0.1:0") and pipes every

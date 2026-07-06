@@ -224,7 +224,7 @@ func startStack(t *testing.T, apiToken string, pools ...config.PoolSpec) *stack 
 	}
 	go mgr.Run(t.Context())
 
-	ts := httptest.NewServer(server.New(apiToken, "", mgr, eng.real, nil).Handler())
+	ts := httptest.NewServer(server.New(apiToken, "", mgr, eng.real, nil, nil).Handler())
 	t.Cleanup(ts.Close)
 	addr := strings.TrimPrefix(ts.URL, "http://")
 	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(apiToken))

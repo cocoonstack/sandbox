@@ -51,6 +51,9 @@ sandboxd reads one JSON file (`-config`, default
 | `bridge` / `network` | unset | egress-lane attachment: a host bridge device, or a CNI conflist name. Mutually exclusive; with neither set the node serves only the no-network lane |
 | `api_token` | unset | when set, guards `POST /v1/claim` and `GET /v1/info` (Bearer). Per-sandbox tokens guard sandbox-scoped calls regardless |
 | `max_fork_count` | 16 | children a single `fork` may create; each is a full-RAM VM, so this bounds one request's memory blast radius to the node's capacity |
+| `preview_listen` | (off) | address for a preview HTTP server that serves guest ports under signed URLs; needs `preview_secret` |
+| `preview_secret` | — | cluster-shared HMAC secret signing preview tokens (all nodes share one) |
+| `preview_advertise` | = `preview_listen` | the base URL a browser/proxy reaches this node's preview server at |
 | `checkpoint_dir` | `<data_dir>/checkpoints` | where checkpoints live. Point it at a shared FUSE mount (JuiceFS over object storage, NFS) and every node sharing the mount can branch every checkpoint — the path's filesystem is the operator's choice, and the storage backend sits behind an interface for future native object-store support |
 | `warm_max` (pool entry) | 0 (static) | turns on the demand-adaptive watermark for that pool: the warm target rises from `warm` toward `warm_max` while claims arrive faster than the measured provision lead covers, and decays back over ~a minute of silence |
 | `max_claims` | 0 (unlimited) | node-wide cap on live claims; claim/fork/branch requests beyond it answer 429 with the pool state unharmed |
@@ -109,3 +112,24 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7777/v1/info | jq .
 The repository's `scripts/sandboxd-e2e.sh` runs the full loop on a real node
 (golden build → warm pool → claim tiers → the complete verb smoke → reap →
 restart reconcile); set `BRIDGE=<dev>` to include the egress lane.
+
+## Preview URLs
+
+`preview_listen` starts a second HTTP server that serves a sandbox's guest
+HTTP port under a signed, expiring URL — the E2B-style shareable preview.
+The whole mechanism is in sandboxd:
+
+- **Minting** (`sb.PreviewURL(port, ttl)`): the owner node signs a token
+  embedding `{sandbox, port, owner, exp}` with `preview_secret`; the URL's
+  life is clamped to the claim's lease.
+- **Serving**: any node's preview listener verifies the token (no shared
+  state), then reverse-proxies to the guest port over the relay if it owns
+  the sandbox, or forwards to the owner node otherwise. A released sandbox
+  is gone from the claim map, so its URL stops resolving — revocation is
+  the liveness lookup, not a list.
+- **The public entry point is a commodity dumb proxy.** Because any node
+  can accept and forward, front the nodes with whatever terminates TLS and
+  round-robins: a cloud HTTPS load balancer with a managed wildcard cert
+  (GCP/AWS) in production, or a plain nginx/Caddy for self-hosting. It
+  understands nothing about tokens — not sandboxd's code. Dev and e2e hit
+  `preview_listen` directly over HTTP.

@@ -74,6 +74,14 @@ type Config struct {
 	// pooled keys. Zero disables.
 	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitempty"`
 
+	// PreviewListen, when set, starts a preview HTTP server on that address
+	// serving guest ports under signed URLs. PreviewSecret (cluster-shared)
+	// signs the tokens; PreviewAdvertise is the base a browser/proxy reaches
+	// this node's preview server at, defaulting to PreviewListen.
+	PreviewListen    string `json:"preview_listen,omitempty"`
+	PreviewSecret    string `json:"preview_secret,omitempty"` //nolint:gosec // config field, not a hardcoded credential
+	PreviewAdvertise string `json:"preview_advertise,omitempty"`
+
 	// CheckpointDir is where checkpoints live; defaults to
 	// <data_dir>/checkpoints. Point it at a shared FUSE mount (JuiceFS over
 	// object storage, NFS) and every node sharing the mount resolves every
@@ -135,6 +143,9 @@ func (c *Config) applyDefaults() {
 	if c.AdvertiseAddr == "" {
 		c.AdvertiseAddr = c.Listen
 	}
+	if c.PreviewListen != "" && c.PreviewAdvertise == "" {
+		c.PreviewAdvertise = c.PreviewListen
+	}
 	if c.CheckpointDir == "" {
 		c.CheckpointDir = filepath.Join(c.DataDir, "checkpoints")
 	}
@@ -157,6 +168,9 @@ func (c *Config) validate() error {
 	}
 	if c.MaxClaims < 0 {
 		return fmt.Errorf("max_claims must not be negative, got %d", c.MaxClaims)
+	}
+	if c.PreviewListen != "" && c.PreviewSecret == "" {
+		return fmt.Errorf("preview_listen needs preview_secret")
 	}
 	if c.IdleHibernateSeconds < 0 {
 		return fmt.Errorf("idle_hibernate_seconds must not be negative, got %d", c.IdleHibernateSeconds)

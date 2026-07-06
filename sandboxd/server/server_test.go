@@ -453,7 +453,7 @@ func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *h
 	if dialer == nil {
 		dialer = &fakeDialer{}
 	}
-	srv := New(apiToken, "node:7777", mgr, dialer, nil)
+	srv := New(apiToken, "node:7777", mgr, dialer, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()
@@ -547,6 +547,16 @@ func (f *fakeManager) HasGolden(types.PoolKey) bool {
 	return f.hasGolden
 }
 
+func (f *fakeManager) ClaimDeadline(id, token string) (time.Time, error) {
+	if f.socket == nil {
+		return time.Now().Add(time.Hour), nil
+	}
+	if _, err := f.socket(id, token); err != nil {
+		return time.Time{}, pool.ErrUnknownSandbox
+	}
+	return time.Now().Add(time.Hour), nil
+}
+
 func (f *fakeManager) Counters() pool.Counters { return pool.Counters{} }
 
 func (f *fakeManager) Sandboxes() []pool.SandboxSummary { return nil }
@@ -617,7 +627,7 @@ func TestClaimRedirectsOnWarmMiss(t *testing.T) {
 		provisioned = true
 		return &types.Sandbox{ID: "sb_local"}, nil
 	}}
-	srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"node-b:7777", "node-c:7777"}})
+	srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"node-b:7777", "node-c:7777"}}, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -662,7 +672,7 @@ func TestClaimRedirectsToTemplateOwner(t *testing.T) {
 					return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
 				},
 			}
-			srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}})
+			srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil)
 			ts := httptest.NewServer(srv.Handler())
 			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -690,7 +700,7 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 	// Unknown locally + gossip names an owner → the claim redirect shape;
 	// unknown everywhere stays 404.
 	mgr := &fakeManager{} // DeleteTemplate → ErrUnknownTemplate
-	srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}})
+	srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -722,7 +732,7 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 		t.Errorf("status %d, want 404 with no_redirect despite known owners", resp2.StatusCode)
 	}
 
-	srvNoOwner := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{})
+	srvNoOwner := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{}, nil)
 	ts2 := httptest.NewServer(srvNoOwner.Handler())
 	t.Cleanup(func() { ts2.Close(); srvNoOwner.CloseRelays() })
 	req3, _ := http.NewRequest(http.MethodDelete, ts2.URL+"/v1/templates?template=tpl", nil)
@@ -741,7 +751,7 @@ func TestClaimProvisionsWhenNoCandidate(t *testing.T) {
 	mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
 		return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
 	}}
-	srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: nil})
+	srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: nil}, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -765,7 +775,7 @@ func TestOwnerEndpoint(t *testing.T) {
 		}
 		return "", pool.ErrUnknownSandbox
 	}}
-	srv := New("", "node-b:7777", mgr, &fakeDialer{}, nil)
+	srv := New("", "node-b:7777", mgr, &fakeDialer{}, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
