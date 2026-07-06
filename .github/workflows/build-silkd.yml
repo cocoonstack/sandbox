@@ -1,14 +1,16 @@
 # silkd is an independent build artifact, same shape as build-boot: test the
 # crate, then build and push a single-file carrier image the os-images COPY
-# --from. A silkd change rebuilds only this image; build-os-images re-runs via
-# workflow_run to fold the new binary into base and every flavor.
-# Reusable: the images gating workflow calls this (see build-boot). The
-# pushed sha-pinned ref is an output so os-images bases FROM the exact silkd
-# carrier this commit built.
+# --from, so a silkd change rebuilds only this artifact. Reusable: the images
+# gating workflow calls this (see build-boot) and the pushed sha-pinned ref is
+# an output so os-images bases FROM the exact silkd carrier this commit built.
 name: build-silkd
 
 on:
   workflow_call:
+    inputs:
+      no_cache:
+        type: boolean
+        default: false
     outputs:
       image:
         description: sha-pinned silkd image ref this run pushed
@@ -81,5 +83,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          no-cache: ${{ inputs.no_cache }}
           cache-from: type=gha,scope=silkd
           cache-to: type=gha,mode=max,scope=silkd

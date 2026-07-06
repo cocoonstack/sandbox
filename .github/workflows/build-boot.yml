@@ -6,6 +6,10 @@ name: build-boot
 
 on:
   workflow_call:
+    inputs:
+      no_cache:
+        type: boolean
+        default: false
     outputs:
       image:
         description: sha-pinned boot image ref this run pushed
@@ -81,5 +85,6 @@ jobs:
             KERNEL_VERSION=${{ steps.ver.outputs.kernel }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          no-cache: ${{ inputs.no_cache }}
           cache-from: type=gha,scope=boot
           cache-to: type=gha,mode=max,scope=boot

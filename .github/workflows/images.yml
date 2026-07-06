@@ -70,12 +70,16 @@ jobs:
     needs: detect
     if: ${{ needs.detect.outputs.boot == 'true' }}
     uses: ./.github/workflows/build-boot.yml
+    with:
+      no_cache: ${{ github.event.inputs.no-cache == 'true' }}
     secrets: inherit
 
   silkd:
     needs: detect
     if: ${{ needs.detect.outputs.silkd == 'true' }}
     uses: ./.github/workflows/build-silkd.yml
+    with:
+      no_cache: ${{ github.event.inputs.no-cache == 'true' }}
     secrets: inherit
 
   os-images:
@@ -88,7 +92,6 @@ jobs:
     with:
       boot_changed: ${{ needs.detect.outputs.boot == 'true' }}
       silkd_changed: ${{ needs.detect.outputs.silkd == 'true' }}
-      osimage_changed: ${{ needs.detect.outputs.osimage == 'true' }}
       boot_image: ${{ needs.boot.outputs.image }}
       silkd_image: ${{ needs.silkd.outputs.image }}
       no_cache: ${{ github.event.inputs.no-cache == 'true' }}

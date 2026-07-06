@@ -19,9 +19,6 @@ on:
       silkd_changed:
         type: boolean
         default: false
-      osimage_changed:
-        type: boolean
-        default: false
       boot_image:
         description: sha-pinned boot carrier ref (empty = unchanged, use the mutable tag)
         type: string
