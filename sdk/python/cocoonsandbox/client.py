@@ -55,6 +55,18 @@ class Client:
             self._request(peer, "DELETE", path, None, "delete template")
             return
 
+    def lookup(self, id: str, token: str) -> Sandbox:
+        """Relocates a handle from id + token: asks the entry node, then
+        each mesh peer, and binds to whichever confirms ownership."""
+        for addr in [self.addr, *(self.info().get("peers") or [])]:
+            try:
+                reply = self._request(addr, "GET", f"/v1/sandboxes/{id}/owner", None, "owner", bearer=token)
+            except APIError:
+                continue
+            return Sandbox(client=self, id=id, token=token,
+                           owner=reply.get("owner_addr") or addr)
+        raise APIError("lookup", 404, f"no owner found for {id}")
+
     def checkpoints(self) -> list[Checkpoint]:
         """Lists the connected node's checkpoints, newest first."""
         reply = self._request(self.addr, "GET", "/v1/checkpoints", None, "list checkpoints")

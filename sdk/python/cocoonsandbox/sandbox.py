@@ -6,6 +6,8 @@ wake."""
 from __future__ import annotations
 
 import contextlib
+import socket
+import threading
 
 from .checkpoint import Checkpoint
 from .conn import Conn, dial_agent
@@ -164,6 +166,12 @@ class Sandbox:
     def git_checkout(self, path: str, name: str) -> None:
         self._done_rpc("git_branch", path=path, action="checkout", name=name)
 
+    def git_create_branch(self, path: str, name: str) -> None:
+        self._done_rpc("git_branch", path=path, action="create", name=name)
+
+    def git_delete_branch(self, path: str, name: str) -> None:
+        self._done_rpc("git_branch", path=path, action="delete", name=name)
+
     def watch(self, path: str, recursive: bool = False) -> Watcher:
         """Streams filesystem events under path; events after the returned
         Watcher exists are guaranteed captured. Close it to stop."""
@@ -220,6 +228,30 @@ class Sandbox:
                                         {"token": self.token, "template": template}, "promote")
         key = reply["key"]
         return Template(self._client, self.owner, key["template"], key.get("net", ""), key.get("size", ""))
+
+    def open_pty(self, cols: int = 80, rows: int = 24, cwd: str = "",
+                 env: dict | None = None, user: str = "") -> Pty:
+        """Runs the guest shell under a pty; returns a byte-stream handle.
+        A pty is a process guest-side: resize goes through its pid."""
+        conn = self._dial()
+        try:
+            conn.send("pty_open", cols=cols, rows=rows, cwd=cwd or None,
+                      env=env, user=user or None)
+            started = _expect(conn, "started")
+        except Exception:
+            conn.close()
+            raise
+        return Pty(self, conn, started["pid"])
+
+    def proxy_port(self, local_addr: str, port: int) -> socket.socket:
+        """Serves a guest port on a local listener for unmodified local
+        tools; returns the listening socket (close it to stop). local_addr
+        is "host:port"; port 0 picks a free one."""
+        host, _, lport = local_addr.rpartition(":")
+        listener = socket.create_server((host or "127.0.0.1", int(lport)))
+        threading.Thread(target=self._proxy_accept_loop,
+                         args=(listener, port), daemon=True).start()
+        return listener
 
     def dial_port(self, port: int) -> PortConn:
         """Opens a byte stream to 127.0.0.1:port inside the guest."""
@@ -279,6 +311,37 @@ class Watcher:
     def close(self) -> None:
         self._conn.close()
 
+class Pty:
+    """An interactive shell under a guest pty; read/write are raw bytes."""
+
+    def __init__(self, sandbox: Sandbox, conn: Conn, pid: int):
+        self._sandbox = sandbox
+        self._conn = conn
+        self.pid = pid
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def read(self) -> bytes:
+        """The next output chunk; b'' once the shell exits."""
+        frame = self._conn.recv()
+        if frame["type"] == "exit":
+            return b""
+        return frame.get("data") or b""
+
+    def write(self, data: bytes) -> None:
+        self._conn.send("stdin", data=data)
+
+    def resize(self, cols: int, rows: int) -> None:
+        self._sandbox._done_rpc("pty_resize", pid=self.pid, cols=cols, rows=rows)
+
+    def close(self) -> None:
+        self._conn.close()
+
+
 class PortConn:
     """A byte stream to a guest port, relayed over the silkd connection."""
 
@@ -307,8 +370,14 @@ class PortConn:
             return b""
         return frame.get("data") or b""
 
+    def close_write(self) -> None:
+        """Half-close: signals EOF to the guest side; reads keep working."""
+        self._conn.send("data_end")
+        self._conn.close_write()
+
     def close(self) -> None:
         self._conn.close()
+
 
 def _expect(conn: Conn, frame_type: str) -> dict:
     frame = conn.recv()

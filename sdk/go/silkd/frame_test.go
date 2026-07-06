@@ -60,8 +60,65 @@ func TestFixtureCorpusRoundTrips(t *testing.T) {
 		}
 		seen++
 	}
-	if seen < 22 {
-		t.Fatalf("fixture corpus went missing: %d files", seen)
+	// Exact, deliberately: adding a verb means adding its fixture and
+	// bumping this — a new frame type outside the corpus is drift waiting
+	// to happen.
+	if seen != 56 {
+		t.Fatalf("fixture corpus: %d frames, want exactly 56", seen)
+	}
+}
+
+// TestEveryVerbHasAFixture pins corpus completeness: every request and
+// response type the SDK knows must appear in at least one golden frame, so
+// no verb can exist outside the three-language drift guard.
+func TestEveryVerbHasAFixture(t *testing.T) {
+	allRequests := []Request{
+		Exec{}, Info{}, Ps{}, Kill{}, Attach{}, Logs{},
+		SessionCreate{}, SessionList{}, SessionRm{}, Stdin{}, StdinClose{},
+		FsWrite{}, FsRead{}, FsList{}, FsStat{}, FsMkdir{}, FsRm{}, FsRename{},
+		FsPush{}, FsPull{}, FsFind{}, FsReplace{}, FsWatch{},
+		PtyOpen{}, PtyResize{}, PortForward{},
+		GitClone{}, GitStatus{}, GitAdd{}, GitCommit{}, GitPush{}, GitPull{}, GitBranch{},
+		Data{}, DataEnd{},
+	}
+	allResponses := []Response{
+		Started{}, Stdout{}, Stderr{}, Exit{}, Done{}, Ready{}, ErrorResp{},
+		InfoResp{}, Procs{}, DataResp{}, Entries{}, Stat{}, SessionCreated{},
+		Sessions{}, Match{}, Replaced{}, Event{}, GitStatusResult{},
+		GitCommitResult{}, GitBranches{},
+	}
+
+	entries, err := os.ReadDir(fixtureDir)
+	if err != nil {
+		t.Fatalf("fixtures dir: %v", err)
+	}
+	haveReq, haveResp := map[string]bool{}, map[string]bool{}
+	for _, entry := range entries {
+		name := entry.Name()
+		raw, err := os.ReadFile(filepath.Join(fixtureDir, name))
+		if err != nil {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(name, "req_"):
+			if req, err := DecodeRequest(raw); err == nil {
+				haveReq[req.Op()] = true
+			}
+		case strings.HasPrefix(name, "resp_"):
+			if resp, err := DecodeResponse(raw); err == nil {
+				haveResp[resp.RespType()] = true
+			}
+		}
+	}
+	for _, r := range allRequests {
+		if !haveReq[r.Op()] {
+			t.Errorf("request %q has no fixture", r.Op())
+		}
+	}
+	for _, r := range allResponses {
+		if !haveResp[r.RespType()] {
+			t.Errorf("response %q has no fixture", r.RespType())
+		}
 	}
 }
 

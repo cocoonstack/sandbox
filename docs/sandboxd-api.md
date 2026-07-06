@@ -26,6 +26,10 @@ Success:
  "owner_addr": "10.0.0.5:7777"}
 ```
 
+A claim branched from a checkpoint (fork children included) additionally
+carries `"from_checkpoint": "ck_…"` — the lineage edge for reconstructing
+the checkpoint tree.
+
 Warm miss on a cluster node with warm peers (mutually exclusive with the
 fields above):
 

@@ -1,1 +1,1 @@
-{"v":1,"op":"git_clone","url":"https://github.com/x/y.git","path":"/work/y","branch":"main","depth":1}
+{"v":1,"op":"git_clone","url":"https://github.com/x/y.git","path":"/work/y","branch":"main","depth":1,"auth":"x-token-1"}

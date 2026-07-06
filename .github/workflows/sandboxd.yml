@@ -13,6 +13,14 @@ on:
       - "e2e/**"
       - "protocol/**"
       - ".github/workflows/sandboxd.yml"
+  pull_request:
+    paths:
+      - "sandboxd/**"
+      - "sdk/go/**"
+      - "mcp/**"
+      - "e2e/**"
+      - "protocol/**"
+      - ".github/workflows/sandboxd.yml"
   workflow_dispatch:
 
 permissions:

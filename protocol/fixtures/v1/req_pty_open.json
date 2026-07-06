@@ -1,1 +1,1 @@
-{"v":1,"op":"pty_open","cols":80,"rows":24,"cwd":"/work","env":{"TERM":"xterm-256color"}}
+{"v":1,"op":"pty_open","cols":80,"rows":24,"cwd":"/work","env":{"TERM":"xterm-256color"},"user":"ubuntu"}

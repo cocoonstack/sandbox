@@ -54,7 +54,9 @@ Design docs:
   musl build)
 - `boot/Dockerfile` — multi-stage: kernel → init → cpio → scratch image with
   `/boot/vmlinuz-sandbox` + `/boot/initrd.img-sandbox`
-- `os-image/` — VM images consuming the boot artifact (`base`, `python`)
+- `os-image/` — VM images consuming the boot artifact: `base` (layered,
+  for builds), `rt` (base squashed to one layer — the default template in
+  examples), `python`, `python-rt`
 - `scripts/` — `boot-bench.sh` (boot phase timing) and `sandboxd-e2e.sh`
   (bare-metal e2e, below)
 

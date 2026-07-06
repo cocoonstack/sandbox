@@ -34,9 +34,10 @@ lane (FC) is also the fastest-restore lane. Eager memory restore beats
 UFFD on-demand for sandbox-sized VMs in every configuration measured
 (the working set is small and mostly touched during readiness).
 
-Burst behavior: 10 concurrent cold clones degrade P99 to ~650–900 ms —
-that is the case for warm pools, which move provisioning off the request
-path entirely.
+Burst degradation under concurrent restores is real (pools exist to absorb
+it) but has no in-repo harness yet; treat any concurrency figure as
+external until one lands. That is the case for warm pools, which move
+provisioning off the request path entirely.
 
 ## Verb round-trips (SDK over the relay, bare metal)
 
@@ -64,6 +65,10 @@ parallel at sysinit and adds ~1–10 ms cold / ~3–12 ms on restore paths.
 
 ## Hibernate
 
+> The `vm hibernate` / `vm restore` rows below were measured with cocoon's
+> own tooling on the same hardware; they are not reproducible from this
+> repository alone. The SDK row is smoke-measured in-repo.
+
 cocoon's atomic hibernate
 ([cocoonstack/cocoon#87](https://github.com/cocoonstack/cocoon/pull/87))
 snapshots and stops in one pause window: capture, persist, and VMM
@@ -84,3 +89,11 @@ nothing lost. Measured bare metal, FC, `small`:
   it is an honest end-to-end number, not a VMM-internal one.
 - Warm/miss/verb numbers come straight from `sandboxd-e2e.sh` output on a
   real node; run it on your own hardware for numbers that apply to you.
+
+## Regression discipline
+
+There is deliberately no CI performance gate: CI has no KVM, and a numbers
+gate that measures a different machine class guards nothing. The manual
+harnesses are `scripts/boot-bench.sh` and the e2e smoke's per-step timings;
+re-measure and update this page when touching the boot chain, the relay, or
+snapshot paths.

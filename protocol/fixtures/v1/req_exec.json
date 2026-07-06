@@ -1,1 +1,1 @@
-{"v":1,"op":"exec","argv":["python3","-c","print(40+2)"],"cwd":"/workspace","env":{"PYTHONUNBUFFERED":"1"},"user":"root","detach":false}
+{"v":1,"op":"exec","argv":["python3","-c","print(40+2)"],"cwd":"/workspace","env":{"PYTHONUNBUFFERED":"1"},"user":"root","detach":false,"session":"sess-1"}

@@ -1,7 +1,9 @@
 package silkdtest
 
 import (
+	"archive/tar"
 	"bufio"
+	"bytes"
 	"io"
 	"io/fs"
 	"net"
@@ -70,6 +72,10 @@ func (f *Fake) ServeConn(conn net.Conn) {
 		f.sessionList(conn)
 	case *silkd.SessionRm:
 		f.sessionRm(conn, req.ID)
+	case *silkd.FsPush:
+		f.fsPush(conn, r, req.Dest)
+	case *silkd.FsPull:
+		f.fsPull(conn, req.Path)
 	case *silkd.FsFind:
 		f.fsFind(conn, req)
 	case *silkd.FsReplace:
@@ -162,6 +168,79 @@ func (f *Fake) fsRm(conn net.Conn, req *silkd.FsRm) {
 	} else {
 		f.done(conn, os.Remove(f.abs(req.Path)))
 	}
+}
+
+// fsPush extracts the uploaded tar under dest; fsPull streams a path back
+// as a tar with the basename as the entry root — matching silkd's contract
+// closely enough for SDK round-trip tests.
+func (f *Fake) fsPush(conn net.Conn, r *bufio.Reader, dest string) {
+	data, err := drainUpload(r)
+	if err != nil {
+		errFrame(conn, silkd.KindInternal, err.Error())
+		return
+	}
+	root := f.abs(dest)
+	tr := tar.NewReader(bytes.NewReader(data))
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			errFrame(conn, silkd.KindInternal, err.Error())
+			return
+		}
+		target := filepath.Join(root, filepath.Clean("/"+hdr.Name))
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			err = os.MkdirAll(target, 0o750)
+		case tar.TypeReg:
+			if err = os.MkdirAll(filepath.Dir(target), 0o750); err == nil {
+				var body []byte
+				if body, err = io.ReadAll(tr); err == nil {
+					err = os.WriteFile(target, body, 0o600)
+				}
+			}
+		}
+		if err != nil {
+			errFrame(conn, silkd.KindInternal, err.Error())
+			return
+		}
+	}
+	f.done(conn, nil)
+}
+
+func (f *Fake) fsPull(conn net.Conn, path string) {
+	root := f.abs(path)
+	base := filepath.Base(path)
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, p)
+		name := filepath.Join(base, rel)
+		if d.IsDir() {
+			return tw.WriteHeader(&tar.Header{Name: name + "/", Typeflag: tar.TypeDir, Mode: 0o750})
+		}
+		body, err := os.ReadFile(p) //nolint:gosec // test fake, paths under the fake root
+		if err != nil {
+			return err
+		}
+		if hdrErr := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(len(body))}); hdrErr != nil {
+			return hdrErr
+		}
+		_, err = tw.Write(body)
+		return err
+	})
+	if err != nil {
+		errFrame(conn, silkd.KindNotFound, err.Error())
+		return
+	}
+	_ = tw.Close()
+	send(conn, silkd.DataResp{Data: buf.Bytes()})
+	send(conn, silkd.Done{})
 }
 
 func (f *Fake) sessionCreate(conn net.Conn, req *silkd.SessionCreate) {

@@ -9,6 +9,10 @@ on:
     paths:
       - "silkd/**"
       - "protocol/**"
+  pull_request:
+    paths:
+      - "silkd/**"
+      - "protocol/**"
   workflow_dispatch:
 
 permissions:
