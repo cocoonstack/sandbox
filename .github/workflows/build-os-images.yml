@@ -1,24 +1,38 @@
-# Same shape as cocoon's build-os-images (detect changed image dirs, buildx
-# matrix, ghcr push, same-dir *.sh files injected as buildx secrets), with
-# sandbox-specific input tracking:
-#   - runs after every successful build-boot (workflow_run), rebuilding all
-#     images so kernel/initrd changes always reach the published images and
-#     never race the boot artifact they build FROM;
-#   - a push that also touches boot/** defers entirely to that workflow_run;
+# Reusable: the images gating workflow calls this after the boot/silkd
+# carriers build, passing which changed and their sha-pinned refs. It detects
+# changed image dirs for the matrix, builds base then flavors, and pushes to
+# ghcr with same-dir *.sh files as buildx secrets.
+#   - a changed carrier (boot or silkd) refolds into every image; otherwise
+#     only the git-changed image dirs rebuild;
 #   - a base change rebuilds every flavor (they are FROM base);
-#   - base builds receive BOOT_IMAGE pinned to boot/kernel/VERSION, flavor
-#     builds receive BASE_IMAGE in this repo's namespace (fork-safe).
+#   - base bases FROM the sha-pinned carrier ref when that carrier changed
+#     this commit, else its mutable tag; flavors FROM this repo's base
+#     (fork-safe).
 name: build-os-images
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "os-image/**"
-  workflow_run:
-    workflows: [build-boot, build-silkd]
-    types: [completed]
-    branches: [main]
+  workflow_call:
+    inputs:
+      boot_changed:
+        type: boolean
+        default: false
+      silkd_changed:
+        type: boolean
+        default: false
+      osimage_changed:
+        type: boolean
+        default: false
+      boot_image:
+        description: sha-pinned boot carrier ref (empty = unchanged, use the mutable tag)
+        type: string
+        default: ""
+      silkd_image:
+        description: sha-pinned silkd carrier ref (empty = unchanged)
+        type: string
+        default: ""
+      no_cache:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       no-cache:
@@ -36,13 +50,10 @@ permissions:
 
 jobs:
   detect:
-    # workflow_run also fires for failed boot builds — only follow successes.
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     outputs:
       base_matrix: ${{ steps.set-matrix.outputs.base_matrix }}
       flavor_matrix: ${{ steps.set-matrix.outputs.flavor_matrix }}
-      boot_changed: ${{ steps.set-matrix.outputs.boot_changed }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -51,10 +62,13 @@ jobs:
 
       - name: Find changed Dockerfiles
         id: set-matrix
+        env:
+          CARRIER_CHANGED: ${{ inputs.boot_changed || inputs.silkd_changed }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+          MANUAL_NO_CACHE: ${{ github.event.inputs.no-cache || inputs.no_cache }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
         run: |
-          MANUAL_NO_CACHE="${{ github.event.inputs.no-cache }}"
-          EVT="${{ github.event_name }}"
-
           all_names() {
             declare -gA names
             while IFS= read -r dockerfile; do
@@ -64,38 +78,24 @@ jobs:
             done <<< "$(find os-image -name Dockerfile -type f)"
           }
 
-          boot_changed="false"
-          if [[ "$EVT" == "workflow_dispatch" || "$EVT" == "workflow_run" ]]; then
-            # Manual trigger or fresh boot artifact: rebuild everything.
+          # A changed carrier (boot/silkd) refolds into every image; a manual
+          # run or a first push (no BEFORE) rebuilds all. Otherwise only the
+          # git-changed image dirs rebuild.
+          if [[ "$CARRIER_CHANGED" == "true" || "$MANUAL" == "true" || "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
             all_names
             all_changed=""
           else
-            BEFORE="${{ github.event.before }}"
-            if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
-              # First push: build-boot runs on it too — its workflow_run
-              # covers the images once the boot artifact exists.
+            all_changed=$(git diff --name-only "$BEFORE" "$SHA" -- 'os-image/' | sort -u)
+            declare -A names
+            for f in $all_changed; do
+              name=$(echo "$f" | cut -d'/' -f2)
+              if [[ -n "$name" ]]; then
+                names[$name]=1
+              fi
+            done
+            # Flavors are FROM base: a base change stales every flavor.
+            if [[ -n "${names[base]:-}" ]]; then
               all_names
-              all_changed=""
-              boot_changed="true"
-            else
-              all_changed=$(git diff --name-only "$BEFORE" "${{ github.sha }}" -- 'os-image/' | sort -u)
-              declare -A names
-              for f in $all_changed; do
-                name=$(echo "$f" | cut -d'/' -f2)
-                if [[ -n "$name" ]]; then
-                  names[$name]=1
-                fi
-              done
-              # A push touching boot/** or silkd/** rebuilds a carrier artifact
-              # the images COPY --from; defer to that build's workflow_run
-              # instead of racing it (the carrier tag isn't pushed yet).
-              if [[ -n "$(git diff --name-only "$BEFORE" "${{ github.sha }}" -- 'boot/' 'silkd/' | head -1)" ]]; then
-                boot_changed="true"
-              fi
-              # Flavors are FROM base: a base change stales every flavor.
-              if [[ -n "${names[base]:-}" ]]; then
-                all_names
-              fi
             fi
           fi
 
@@ -153,13 +153,12 @@ jobs:
           }
           emit base_matrix "${base_entries[@]}"
           emit flavor_matrix "${flavor_entries[@]}"
-          echo "boot_changed=$boot_changed" >> "$GITHUB_OUTPUT"
 
           echo "Generated matrices: $(cat "$GITHUB_OUTPUT")"
 
   build-base:
     needs: detect
-    if: ${{ needs.detect.outputs.boot_changed != 'true' && fromJson(needs.detect.outputs.base_matrix).include[0] != null }}
+    if: ${{ fromJson(needs.detect.outputs.base_matrix).include[0] != null }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -233,9 +232,12 @@ jobs:
           platforms: ${{ matrix.platforms }}
           push: true
           pull: true
+          # A carrier that changed this commit is pinned by its sha ref
+          # (deterministic — no dependence on a mutable tag another run may
+          # be overwriting); an unchanged carrier uses its stable mutable tag.
           build-args: |
-            BOOT_IMAGE=ghcr.io/${{ github.repository }}/boot:${{ steps.ver.outputs.kernel }}
-            SILKD_IMAGE=ghcr.io/${{ github.repository }}/silkd:${{ steps.ver.outputs.silkd }}
+            BOOT_IMAGE=${{ inputs.boot_image != '' && inputs.boot_image || format('ghcr.io/{0}/boot:{1}', github.repository, steps.ver.outputs.kernel) }}
+            SILKD_IMAGE=${{ inputs.silkd_image != '' && inputs.silkd_image || format('ghcr.io/{0}/silkd:{1}', github.repository, steps.ver.outputs.silkd) }}
             INPUTS_HASH=${{ steps.inputs.outputs.hash }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -249,7 +251,7 @@ jobs:
   # flavors build against the already-published base.
   build-flavors:
     needs: [detect, build-base]
-    if: ${{ !failure() && !cancelled() && needs.detect.outputs.boot_changed != 'true' && fromJson(needs.detect.outputs.flavor_matrix).include[0] != null }}
+    if: ${{ !failure() && !cancelled() && fromJson(needs.detect.outputs.flavor_matrix).include[0] != null }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

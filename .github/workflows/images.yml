@@ -1,0 +1,95 @@
+# The image chain's single entry point: one push runs boot and silkd (only
+# the changed ones) and then os-images, in order, so the build is
+# deterministic. Previously build-os-images was triggered independently by
+# each carrier's workflow_run and GitHub's concurrency queue kept only the
+# newest pending run — which carrier actually built was a race, and a run
+# could bake a stale carrier. Here os-images runs once, after both carriers,
+# and bases FROM their sha-pinned refs.
+name: images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "boot/**"
+      - "silkd/**"
+      - "protocol/**"
+      - "os-image/**"
+  workflow_dispatch:
+    inputs:
+      no-cache:
+        description: "Force rebuild without cache"
+        type: boolean
+        default: false
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      boot: ${{ steps.diff.outputs.boot }}
+      silkd: ${{ steps.diff.outputs.silkd }}
+      osimage: ${{ steps.diff.outputs.osimage }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Which areas changed
+        id: diff
+        env:
+          EVT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          # Manual run or a first/force push with no base: build everything.
+          if [[ "$EVT" == "workflow_dispatch" || -z "$BEFORE" || "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
+            boot=true; silkd=true; osimage=true
+          else
+            changed() { git diff --name-only "$BEFORE" "$SHA" -- "$@" | grep -q .; }
+            changed boot/ && boot=true || boot=false
+            changed silkd/ protocol/ && silkd=true || silkd=false
+            changed os-image/ && osimage=true || osimage=false
+          fi
+          {
+            echo "boot=$boot"
+            echo "silkd=$silkd"
+            echo "osimage=$osimage"
+          } >> "$GITHUB_OUTPUT"
+          echo "Detected: boot=$boot silkd=$silkd osimage=$osimage"
+
+  boot:
+    needs: detect
+    if: ${{ needs.detect.outputs.boot == 'true' }}
+    uses: ./.github/workflows/build-boot.yml
+    secrets: inherit
+
+  silkd:
+    needs: detect
+    if: ${{ needs.detect.outputs.silkd == 'true' }}
+    uses: ./.github/workflows/build-silkd.yml
+    secrets: inherit
+
+  os-images:
+    needs: [detect, boot, silkd]
+    # Run once the carriers settle (skipped counts as settled), whenever any
+    # area changed. A carrier that changed passes its sha-pinned ref so base
+    # pins FROM the exact artifact this commit built.
+    if: ${{ !failure() && !cancelled() && (needs.detect.outputs.boot == 'true' || needs.detect.outputs.silkd == 'true' || needs.detect.outputs.osimage == 'true') }}
+    uses: ./.github/workflows/build-os-images.yml
+    with:
+      boot_changed: ${{ needs.detect.outputs.boot == 'true' }}
+      silkd_changed: ${{ needs.detect.outputs.silkd == 'true' }}
+      osimage_changed: ${{ needs.detect.outputs.osimage == 'true' }}
+      boot_image: ${{ needs.boot.outputs.image }}
+      silkd_image: ${{ needs.silkd.outputs.image }}
+      no_cache: ${{ github.event.inputs.no-cache == 'true' }}
+    secrets: inherit

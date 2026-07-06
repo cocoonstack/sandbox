@@ -2,14 +2,17 @@
 # crate, then build and push a single-file carrier image the os-images COPY
 # --from. A silkd change rebuilds only this image; build-os-images re-runs via
 # workflow_run to fold the new binary into base and every flavor.
+# Reusable: the images gating workflow calls this (see build-boot). The
+# pushed sha-pinned ref is an output so os-images bases FROM the exact silkd
+# carrier this commit built.
 name: build-silkd
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "silkd/**"
-      - "protocol/**"
+  workflow_call:
+    outputs:
+      image:
+        description: sha-pinned silkd image ref this run pushed
+        value: ${{ jobs.build.outputs.image }}
   workflow_dispatch:
 
 permissions:
@@ -34,6 +37,8 @@ jobs:
   build:
     needs: test
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -41,6 +46,11 @@ jobs:
       - name: Read silkd version
         id: ver
         run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' silkd/Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Compute sha-pinned ref
+        id: ref
+        # Matches docker/metadata-action's type=sha short SHA below.
+        run: echo "image=ghcr.io/${{ github.repository }}/silkd:${{ steps.ver.outputs.version }}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

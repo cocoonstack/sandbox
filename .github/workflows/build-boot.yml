@@ -1,10 +1,15 @@
+# Reusable: the images gating workflow calls this in order (boot → silkd →
+# os-images) so the chain is deterministic; workflow_dispatch stays for
+# building the carrier alone. The pushed sha-pinned ref is an output so
+# os-images can base FROM the exact carrier this commit built.
 name: build-boot
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "boot/**"
+  workflow_call:
+    outputs:
+      image:
+        description: sha-pinned boot image ref this run pushed
+        value: ${{ jobs.build.outputs.image }}
   workflow_dispatch:
 
 permissions:
@@ -29,6 +34,8 @@ jobs:
   build:
     needs: test
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -36,6 +43,12 @@ jobs:
       - name: Read kernel version
         id: ver
         run: echo "kernel=$(cat boot/kernel/VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Compute sha-pinned ref
+        id: ref
+        # Same 7-char short SHA docker/metadata-action's type=sha emits, so
+        # the ref matches the tag actually pushed below.
+        run: echo "image=ghcr.io/${{ github.repository }}/boot:$(cat boot/kernel/VERSION)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
