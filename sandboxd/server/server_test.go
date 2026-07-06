@@ -247,7 +247,9 @@ func TestForkFlow(t *testing.T) {
 		}
 		return children, nil
 	}}
-	ts := newTestServer(t, "", mgr, nil)
+	// Fork creates node resources: the header carries the API token like a
+	// claim, and the sandbox's own token rides in the body.
+	ts := newTestServer(t, "sekret", mgr, nil)
 
 	post := func(auth, body string) *http.Response {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/fork", strings.NewReader(body))
@@ -264,7 +266,7 @@ func TestForkFlow(t *testing.T) {
 		return resp
 	}
 
-	resp := post("Bearer tok", `{"count":2,"ttl_seconds":60}`)
+	resp := post("Bearer sekret", `{"token":"tok","count":2,"ttl_seconds":60}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d, want 200", resp.StatusCode)
@@ -281,10 +283,11 @@ func TestForkFlow(t *testing.T) {
 		name, auth, body string
 		want             int
 	}{
-		{"bad count", "Bearer tok", `{"count":17,"ttl_seconds":60}`, http.StatusBadRequest},
-		{"bad body", "Bearer tok", `{oops`, http.StatusBadRequest},
-		{"unknown or bad token", "Bearer bad", `{"count":1}`, http.StatusNotFound},
-		{"missing bearer", "", `{"count":1}`, http.StatusUnauthorized},
+		{"bad count", "Bearer sekret", `{"token":"tok","count":17,"ttl_seconds":60}`, http.StatusBadRequest},
+		{"bad body", "Bearer sekret", `{oops`, http.StatusBadRequest},
+		{"unknown or bad sandbox token", "Bearer sekret", `{"token":"bad","count":1}`, http.StatusNotFound},
+		{"missing api token", "", `{"token":"tok","count":1}`, http.StatusUnauthorized},
+		{"sandbox token is no api token", "Bearer tok", `{"token":"tok","count":1}`, http.StatusUnauthorized},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			resp := post(tt.auth, tt.body)
@@ -336,11 +339,11 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 		name, auth, body string
 		want             int
 	}{
-		{"ok", "Bearer tok", `{"template":"tpl:x"}`, http.StatusNoContent},
-		{"bad name", "Bearer tok", `{"template":"_bad"}`, http.StatusBadRequest},
-		{"pooled", "Bearer tok", `{"template":"pooled"}`, http.StatusConflict},
-		{"bad token", "Bearer bad", `{"template":"tpl:x"}`, http.StatusNotFound},
-		{"missing bearer", "", `{"template":"tpl:x"}`, http.StatusUnauthorized},
+		{"ok", "Bearer sekret", `{"token":"tok","template":"tpl:x"}`, http.StatusNoContent},
+		{"bad name", "Bearer sekret", `{"token":"tok","template":"_bad"}`, http.StatusBadRequest},
+		{"pooled", "Bearer sekret", `{"token":"tok","template":"pooled"}`, http.StatusConflict},
+		{"bad sandbox token", "Bearer sekret", `{"token":"bad","template":"tpl:x"}`, http.StatusNotFound},
+		{"missing api token", "", `{"token":"tok","template":"tpl:x"}`, http.StatusUnauthorized},
 	} {
 		t.Run("promote/"+tt.name, func(t *testing.T) {
 			if got := promote(tt.auth, tt.body); got != tt.want {

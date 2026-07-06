@@ -235,8 +235,9 @@ type claimResponse struct {
 }
 
 type forkRequest struct {
-	Count      int `json:"count"`
-	TTLSeconds int `json:"ttl_seconds,omitempty"`
+	Token      string `json:"token"`
+	Count      int    `json:"count"`
+	TTLSeconds int    `json:"ttl_seconds,omitempty"`
 }
 
 type forkResponse struct {
@@ -244,6 +245,7 @@ type forkResponse struct {
 }
 
 type promoteRequest struct {
+	Token    string `json:"token"`
 	Template string `json:"template"`
 }
 

@@ -148,11 +148,11 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 // no child survived. Forking a hibernated sandbox reuses its memory image
 // without waking it.
 func (s *Sandbox) Fork(ctx context.Context, count int, ttl time.Duration) ([]*Sandbox, error) {
-	body, err := json.Marshal(forkRequest{Count: count, TTLSeconds: ttlSeconds(ttl)})
+	body, err := json.Marshal(forkRequest{Token: s.token, Count: count, TTLSeconds: ttlSeconds(ttl)})
 	if err != nil {
 		return nil, fmt.Errorf("encode fork: %w", err)
 	}
-	resp, err := s.post(ctx, "fork", bytes.NewReader(body))
+	resp, err := s.postAsClaimer(ctx, "fork", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -177,11 +177,11 @@ func (s *Sandbox) Fork(ctx context.Context, count int, ttl time.Duration) ([]*Sa
 // replaces the template; DeleteTemplate removes it. Like Fork, a hibernated
 // sandbox is promoted from its memory image without waking.
 func (s *Sandbox) Promote(ctx context.Context, template string) error {
-	body, err := json.Marshal(promoteRequest{Template: template})
+	body, err := json.Marshal(promoteRequest{Token: s.token, Template: template})
 	if err != nil {
 		return fmt.Errorf("encode promote: %w", err)
 	}
-	resp, err := s.post(ctx, "promote", bytes.NewReader(body))
+	resp, err := s.postAsClaimer(ctx, "promote", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -227,6 +227,16 @@ func (s *Sandbox) Close() error {
 // post sends a sandbox-scoped verb to the owning node (which holds the
 // claim); a non-nil body is JSON.
 func (s *Sandbox) post(ctx context.Context, verb string, body io.Reader) (*http.Response, error) {
+	return s.postWith(ctx, verb, body, s.token)
+}
+
+// postAsClaimer sends a resource-creating verb (fork, promote): the node
+// wants the api token like a claim; the sandbox token rides in the body.
+func (s *Sandbox) postAsClaimer(ctx context.Context, verb string, body io.Reader) (*http.Response, error) {
+	return s.postWith(ctx, verb, body, s.c.apiToken)
+}
+
+func (s *Sandbox) postWith(ctx context.Context, verb string, body io.Reader, bearer string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+s.owner+"/v1/sandboxes/"+s.ID+"/"+verb, body)
 	if err != nil {
 		return nil, err
@@ -234,7 +244,9 @@ func (s *Sandbox) post(ctx context.Context, verb string, body io.Reader) (*http.
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("Authorization", "Bearer "+s.token)
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
 	return s.c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
 }
 

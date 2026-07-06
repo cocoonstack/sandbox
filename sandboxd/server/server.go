@@ -100,8 +100,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/claim", s.requireAPIToken(s.handleClaim))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleSandboxVerb("release", s.mgr.Release))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
-	mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.handleFork)
-	mux.HandleFunc("POST /v1/sandboxes/{id}/promote", s.handlePromote)
+	// Fork and promote create node resources, so they take the api token
+	// like a claim; the source sandbox's token rides in the body as the
+	// ownership proof.
+	mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.requireAPIToken(s.handleFork))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/promote", s.requireAPIToken(s.handlePromote))
 	mux.HandleFunc("DELETE /v1/templates", s.requireAPIToken(s.handleDeleteTemplate))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", s.handleAgent)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/owner", s.handleOwner)
@@ -173,16 +176,12 @@ func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id,
 // handleFork clones a claimed sandbox into fresh child claims, one
 // ClaimResponse per child; this node owns them all.
 func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
-	token, ok := sandboxToken(w, r)
-	if !ok {
-		return
-	}
 	req, ok := decodeBody[types.ForkRequest](w, r)
 	if !ok {
 		return
 	}
 	id := r.PathValue("id")
-	children, err := s.mgr.Fork(r.Context(), id, token, req.Count, req.TTL())
+	children, err := s.mgr.Fork(r.Context(), id, req.Token, req.Count, req.TTL())
 	switch {
 	case errors.Is(err, pool.ErrBadCount):
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -202,16 +201,12 @@ func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
 
 // handlePromote publishes a claimed sandbox as a node-local template.
 func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request) {
-	token, ok := sandboxToken(w, r)
-	if !ok {
-		return
-	}
 	req, ok := decodeBody[types.PromoteRequest](w, r)
 	if !ok {
 		return
 	}
 	id := r.PathValue("id")
-	err := s.mgr.Promote(r.Context(), id, token, req.Template)
+	err := s.mgr.Promote(r.Context(), id, req.Token, req.Template)
 	switch {
 	case errors.Is(err, pool.ErrBadKey):
 		writeErr(w, http.StatusBadRequest, err.Error())

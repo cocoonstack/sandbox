@@ -58,10 +58,11 @@ token.
 
 ## POST /v1/sandboxes/{id}/fork
 
-Auth: the sandbox's own token. Body:
+Auth: the node `api_token` (Bearer) — forking creates node resources, like a
+claim. The sandbox's own token rides in the body as the ownership proof:
 
 ```json
-{"count": 2, "ttl_seconds": 300}
+{"token": "…", "count": 2, "ttl_seconds": 300}
 ```
 
 Clones the sandbox into `count` fresh claims (1–16). Memory, disk, and guest
@@ -76,14 +77,16 @@ All-or-nothing: on error no child survived. 200 with one claim per child:
 {"children": [{"id": "sb_…", "token": "…", "deadline": "…", "owner_addr": "…"}]}
 ```
 
-400 invalid count or body, 404 unknown id or wrong token.
+400 invalid count or body, 401 bad api token, 404 unknown id or wrong
+sandbox token.
 
 ## POST /v1/sandboxes/{id}/promote
 
-Auth: the sandbox's own token. Body:
+Auth: like fork — node `api_token` in the header, the sandbox's own token in
+the body:
 
 ```json
-{"template": "myproj:v1"}
+{"token": "…", "template": "myproj:v1"}
 ```
 
 Publishes the sandbox's current state as a node-local template under
@@ -91,8 +94,8 @@ Publishes the sandbox's current state as a node-local template under
 from it, provision-on-demand — no warm pool unless the node config adds one.
 Re-promoting to the same name replaces the template. A hibernated sandbox is
 promoted from its memory image without waking. 204 on success, 400 invalid
-name, 409 when the name collides with a configured pool, 404 unknown id or
-wrong token.
+name, 401 bad api token, 409 when the name collides with a configured pool,
+404 unknown id or wrong sandbox token.
 
 ## DELETE /v1/templates?template=…&net=…&size=…
 

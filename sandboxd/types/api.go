@@ -43,13 +43,16 @@ func (r ClaimRequest) TTL() time.Duration {
 	return time.Duration(r.TTLSeconds) * time.Second
 }
 
-// ForkRequest is the wire body of POST /v1/sandboxes/{id}/fork. TTLSeconds
-// applies to every child; zero means the server default — a lease is a
-// per-sandbox resource bound, so children never inherit the parent's
-// remainder.
+// ForkRequest is the wire body of POST /v1/sandboxes/{id}/fork. The
+// Authorization header carries the node api token (forking creates node
+// resources, like a claim); Token proves ownership of the source sandbox.
+// TTLSeconds applies to every child; zero means the server default — a
+// lease is a per-sandbox resource bound, so children never inherit the
+// parent's remainder.
 type ForkRequest struct {
-	Count      int `json:"count"`
-	TTLSeconds int `json:"ttl_seconds,omitempty"`
+	Token      string `json:"token"`
+	Count      int    `json:"count"`
+	TTLSeconds int    `json:"ttl_seconds,omitempty"`
 }
 
 // TTL converts the wire seconds to a duration; zero means server default.
@@ -62,7 +65,9 @@ type ForkResponse struct {
 	Children []ClaimResponse `json:"children"`
 }
 
-// PromoteRequest is the wire body of POST /v1/sandboxes/{id}/promote.
+// PromoteRequest is the wire body of POST /v1/sandboxes/{id}/promote; auth
+// mirrors ForkRequest (api token in the header, source ownership in Token).
 type PromoteRequest struct {
+	Token    string `json:"token"`
 	Template string `json:"template"`
 }

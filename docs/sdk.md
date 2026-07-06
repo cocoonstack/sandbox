@@ -88,6 +88,8 @@ child's lifetime (zero = server default) — children never inherit the
 parent's remaining lease. A running parent pauses briefly for the snapshot;
 a hibernated parent forks from its memory image without waking.
 All-or-nothing: on error no child survived. Count is capped at 16 per call.
+Fork and Promote create node resources, so on a token-guarded node the
+client needs `WithAPIToken` — a sandbox handle alone cannot amplify.
 
 ## Promoting to a template
 
