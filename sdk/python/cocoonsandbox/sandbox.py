@@ -86,9 +86,10 @@ class Sandbox:
             return entries
 
     def stat(self, path: str) -> dict:
+        """Returns {kind, size, mode, mtime_epoch_secs} for path."""
         with self._dial() as conn:
             conn.send("fs_stat", path=path)
-            return _expect(conn, "stat")
+            return _expect(conn, "stat")["info"]
 
     def mkdir(self, path: str, parents: bool = False) -> None:
         self._done_rpc("fs_mkdir", path=path, parents=parents or None)
@@ -193,7 +194,7 @@ class Sandbox:
     def sessions(self) -> list[str]:
         with self._dial() as conn:
             conn.send("session_list")
-            return _expect(conn, "sessions").get("ids") or []
+            return _expect(conn, "sessions").get("sessions") or []
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -209,8 +210,8 @@ class Sandbox:
     def hibernate(self) -> None:
         """Snapshots and stops the VM, freeing its memory; the next call that
         reaches the guest wakes it transparently, state intact."""
-        self._client._post_json(self.owner, f"/v1/sandboxes/{self.id}/hibernate",
-                                {"token": self.token}, "hibernate")
+        self._client._request(self.owner, "POST", f"/v1/sandboxes/{self.id}/hibernate",
+                              None, "hibernate", bearer=self.token)
 
     def checkpoint(self, name: str = "") -> Checkpoint:
         """Captures full state without stopping the sandbox; the returned
@@ -242,8 +243,8 @@ class Sandbox:
 
     def close(self) -> None:
         """Releases the sandbox; its VM is destroyed."""
-        self._client._post_json(self.owner, f"/v1/sandboxes/{self.id}/release",
-                                {"token": self.token}, "release")
+        self._client._request(self.owner, "POST", f"/v1/sandboxes/{self.id}/release",
+                              None, "release", bearer=self.token)
 
     def __enter__(self):
         return self

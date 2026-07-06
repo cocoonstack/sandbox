@@ -77,13 +77,17 @@ class Client:
     def _post_json(self, addr: str, path: str, body: dict, verb: str) -> dict:
         return self._request(addr, "POST", path, body, verb)
 
-    def _request(self, addr: str, method: str, path: str, body, verb: str) -> dict:
+    def _request(self, addr: str, method: str, path: str, body, verb: str, bearer: str = "") -> dict:
+        """Issues one control-plane request. bearer overrides the api token —
+        sandbox-scoped verbs (release, hibernate) authenticate with the
+        per-sandbox token instead."""
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(f"http://{addr}{path}", data=data, method=method)
         if data is not None:
             req.add_header("Content-Type", "application/json")
-        if self.api_token:
-            req.add_header("Authorization", f"Bearer {self.api_token}")
+        token = bearer or self.api_token
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 raw = resp.read()

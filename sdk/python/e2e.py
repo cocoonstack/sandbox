@@ -7,10 +7,12 @@ sandboxd node. Mirrors the Go smoke's step discipline; prints PY-E2E PASS.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import io
 import sys
 import tarfile
 import time
+import traceback
 
 from cocoonsandbox import Client, ExitError, SilkdError
 
@@ -32,7 +34,7 @@ def main() -> int:
     args = parser.parse_args()
 
     client = Client(args.addr, api_token=args.token)
-    sb = client.new(args.template, net="none")
+    sb = client.new(args.template, net="none", ttl_seconds=900)
     steps = []
 
     def step(name):
@@ -66,7 +68,7 @@ def main() -> int:
     def _session():
         sess = sb.session(cwd="/root")
         try:
-            sess.exec("sh", "-c", "MARK=py; export MARK")
+            sess.exec("export", "MARK=py")
             assert sess.exec("sh", "-c", "echo $MARK") == "py\n"
         finally:
             sess.close()
@@ -99,7 +101,7 @@ def main() -> int:
     @step("hibernate-wake")
     def _hibernate():
         sess = sb.session()
-        sess.exec("sh", "-c", "HIB=alive; export HIB")
+        sess.exec("export", "HIB=alive")
         sb.hibernate()
         assert sess.exec("sh", "-c", "echo $HIB") == "alive\n"  # transparent wake
         sess.close()
@@ -162,10 +164,17 @@ def main() -> int:
     try:
         for name, fn in steps:
             start = time.time()
-            fn()
+            try:
+                fn()
+            except BaseException:
+                print(f"  {name:<18} FAIL")
+                traceback.print_exc()
+                raise
             print(f"  {name:<18} ok ({int((time.time() - start) * 1000)}ms)")
     finally:
-        sb.close()
+        # Never mask a step failure with a close error.
+        with contextlib.suppress(Exception):
+            sb.close()
     print("PY-E2E PASS")
     return 0
 

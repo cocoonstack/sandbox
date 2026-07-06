@@ -29,11 +29,11 @@ class McpClient:
         assert "error" not in resp, resp
         return resp["result"]
 
-    def tool(self, name, **arguments):
-        result = self.call("tools/call", {"name": name, "arguments": arguments})
+    def tool(self, tool_name, **arguments):
+        result = self.call("tools/call", {"name": tool_name, "arguments": arguments})
         text = result["content"][0]["text"]
         if result.get("isError"):
-            raise RuntimeError(f"{name}: {text}")
+            raise RuntimeError(f"{tool_name}: {text}")
         try:
             return json.loads(text)
         except ValueError:
