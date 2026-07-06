@@ -53,7 +53,7 @@ func run(addr, peer, token, template string) error {
 	}
 	fmt.Printf("  redirect: claim entered at %s, owned by %s\n", addr, sb.Owner())
 
-	if _, err := sb.Exec(ctx, "sh", "-c", "echo mesh-marker > /root/marker"); err != nil {
+	if _, err = sb.Exec(ctx, "sh", "-c", "echo mesh-marker > /root/marker"); err != nil {
 		return fmt.Errorf("write marker: %w", err)
 	}
 	tpl, err := sb.Promote(ctx, "mesh-tpl")
