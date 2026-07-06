@@ -74,32 +74,6 @@ func (s *Sandbox) Exec(ctx context.Context, argv ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-// dial opens one relayed silkd connection and arms ctx cancellation to close
-// it; the returned cleanup must be deferred. One connection carries one RPC.
-func (s *Sandbox) dial(ctx context.Context) (*silkd.Conn, func(), error) {
-	raw, err := s.c.dialAgent(ctx, s.owner, s.ID, s.token)
-	if err != nil {
-		return nil, nil, err
-	}
-	conn := silkd.NewConn(raw)
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	return conn, func() { stop(); _ = conn.Close() }, nil
-}
-
-// call dials one RPC connection and sends its leading request, cleaning up
-// itself on a send failure; the returned cleanup must be deferred.
-func (s *Sandbox) call(ctx context.Context, req silkd.Request) (*silkd.Conn, func(), error) {
-	conn, done, err := s.dial(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := conn.Send(req); err != nil {
-		done()
-		return nil, nil, err
-	}
-	return conn, done, nil
-}
-
 // Run executes cmd in the sandbox, streaming stdio over one relayed silkd
 // connection, and returns the exit code.
 func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
@@ -239,6 +213,32 @@ func (s *Sandbox) Close() error {
 		return nil
 	}
 	return apiError("release", resp)
+}
+
+// dial opens one relayed silkd connection and arms ctx cancellation to close
+// it; the returned cleanup must be deferred. One connection carries one RPC.
+func (s *Sandbox) dial(ctx context.Context) (*silkd.Conn, func(), error) {
+	raw, err := s.c.dialAgent(ctx, s.owner, s.ID, s.token)
+	if err != nil {
+		return nil, nil, err
+	}
+	conn := silkd.NewConn(raw)
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	return conn, func() { stop(); _ = conn.Close() }, nil
+}
+
+// call dials one RPC connection and sends its leading request, cleaning up
+// itself on a send failure; the returned cleanup must be deferred.
+func (s *Sandbox) call(ctx context.Context, req silkd.Request) (*silkd.Conn, func(), error) {
+	conn, done, err := s.dial(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := conn.Send(req); err != nil {
+		done()
+		return nil, nil, err
+	}
+	return conn, done, nil
 }
 
 // post sends a sandbox-scoped verb to the owning node (which holds the

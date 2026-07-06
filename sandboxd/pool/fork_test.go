@@ -87,7 +87,7 @@ func TestForkCountValidation(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
-	for _, count := range []int{0, -1, maxForkCount + 1} {
+	for _, count := range []int{0, -1, m.maxFork + 1} {
 		if _, err := m.Fork(t.Context(), parent.ID, parent.Token, count, 0); !errors.Is(err, ErrBadCount) {
 			t.Errorf("count %d: err %v, want ErrBadCount", count, err)
 		}

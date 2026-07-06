@@ -50,6 +50,7 @@ sandboxd reads one JSON file (`-config`, default
 | `advertise_addr` | = `listen` | the host:port clients reach this node at; returned as a claim's owner address and gossiped to peers. Must be routable when `listen` is a wildcard |
 | `bridge` / `network` | unset | egress-lane attachment: a host bridge device, or a CNI conflist name. Mutually exclusive; with neither set the node serves only the no-network lane |
 | `api_token` | unset | when set, guards `POST /v1/claim` and `GET /v1/info` (Bearer). Per-sandbox tokens guard sandbox-scoped calls regardless |
+| `max_fork_count` | 16 | children a single `fork` may create; each is a full-RAM VM, so this bounds one request's memory blast radius to the node's capacity |
 | `mesh` | unset | join a cluster ([Clusters](cluster.md)); unset = single node |
 | `pools[]` | — | warm pools. `warm` defaults to 4; `net` is `none` or `egress`; `size` is a tier, below |
 

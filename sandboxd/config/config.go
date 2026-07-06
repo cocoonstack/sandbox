@@ -10,10 +10,11 @@ import (
 )
 
 const (
-	defaultListen    = ":7777"
-	defaultDataDir   = "/var/lib/sandboxd"
-	defaultCocoonBin = "cocoon"
-	defaultWarm      = 4
+	defaultListen       = ":7777"
+	defaultDataDir      = "/var/lib/sandboxd"
+	defaultCocoonBin    = "cocoon"
+	defaultWarm         = 4
+	defaultMaxForkCount = 16
 )
 
 // PoolSpec declares one warm pool and its target of claim-ready VMs.
@@ -42,6 +43,11 @@ type Config struct {
 	// APIToken, when set, guards claim and info; per-sandbox tokens guard
 	// sandbox-scoped calls regardless.
 	APIToken string `json:"api_token,omitempty"` //nolint:gosec // config field, not a hardcoded credential
+
+	// MaxForkCount caps children per fork call — each child is a full-RAM VM,
+	// so this bounds a single request's memory blast radius to the node's
+	// capacity. Defaults to 16.
+	MaxForkCount int `json:"max_fork_count,omitempty"`
 
 	// Mesh, when set, joins this node to a memberlist cluster for redirect
 	// placement; nil is a single node (mesh of one, no gossip).
@@ -97,6 +103,9 @@ func (c *Config) applyDefaults() {
 	if c.AdvertiseAddr == "" {
 		c.AdvertiseAddr = c.Listen
 	}
+	if c.MaxForkCount == 0 {
+		c.MaxForkCount = defaultMaxForkCount
+	}
 	for i := range c.Pools {
 		if c.Pools[i].Warm == 0 {
 			c.Pools[i].Warm = defaultWarm
@@ -107,6 +116,9 @@ func (c *Config) applyDefaults() {
 func (c *Config) validate() error {
 	if c.Bridge != "" && c.Network != "" {
 		return fmt.Errorf("bridge and network are mutually exclusive")
+	}
+	if c.MaxForkCount < 1 {
+		return fmt.Errorf("max_fork_count must be at least 1, got %d", c.MaxForkCount)
 	}
 	for _, p := range c.Pools {
 		if err := p.Validate(); err != nil {

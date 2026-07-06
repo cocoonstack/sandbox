@@ -33,9 +33,9 @@ const (
 	maxConcurrentRefills = 4
 	defaultTTL           = 5 * time.Minute
 	maxTTL               = 24 * time.Hour
-	// maxForkCount bounds one fork call: every child is a full-RAM VM, so an
-	// unbounded count could OOM the node in a single request.
-	maxForkCount = 16
+	// defaultMaxFork is the fork ceiling when a Manager is built from a Config
+	// that skipped config.Load's defaulting (direct construction in tests).
+	defaultMaxFork = 16
 
 	vmPrefix        = "sbx-"
 	goldenPrefix    = "sbx-golden-"
@@ -78,6 +78,7 @@ type Manager struct {
 	eng     Engine
 	dataDir string
 	egress  bool
+	maxFork int
 	store   *store
 
 	mu      sync.Mutex
@@ -109,10 +110,15 @@ type pool struct {
 
 // NewManager builds a manager from the node config.
 func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
+	maxFork := cfg.MaxForkCount
+	if maxFork < 1 {
+		maxFork = defaultMaxFork
+	}
 	m := &Manager{
 		eng:       eng,
 		dataDir:   cfg.DataDir,
 		egress:    cfg.HasEgress(),
+		maxFork:   maxFork,
 		store:     newStore(cfg.DataDir),
 		pools:     make(map[types.PoolKey]*pool, len(cfg.Pools)),
 		claimed:   map[string]*types.Sandbox{},
@@ -370,8 +376,8 @@ func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string
 // child a distinct machine identity. All-or-nothing: any child failing
 // destroys the ones already built, so an error means no child survived.
 func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
-	if count < 1 || count > maxForkCount {
-		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, maxForkCount)
+	if count < 1 || count > m.maxFork {
+		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, m.maxFork)
 	}
 	sb, ok := m.claim(id, token)
 	if !ok {

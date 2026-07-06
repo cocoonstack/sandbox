@@ -116,6 +116,19 @@ func (c *Client) Lookup(ctx context.Context, id, token string) (*Sandbox, error)
 	return nil, fmt.Errorf("lookup %s: no owner found", id)
 }
 
+// DeleteTemplate removes a promoted template from the CONNECTED node —
+// templates are node-local, and on a cluster the entry node may not be the
+// one holding it; prefer Template.Delete on the handle Promote returned. The
+// options pick the template's key axes exactly as a claim would (network
+// lane, size); the same defaults apply.
+func (c *Client) DeleteTemplate(ctx context.Context, template string, opts ...Option) error {
+	claim := claimRequest{Template: template}
+	for _, opt := range opts {
+		opt(&claim)
+	}
+	return c.deleteTemplates(ctx, c.addr, url.Values{"template": {claim.Template}, "net": {claim.Net}, "size": {claim.Size}})
+}
+
 // ownerAt asks one node whether it owns the sandbox, returning its data-plane
 // address on success.
 func (c *Client) ownerAt(ctx context.Context, addr, id, token string) (string, error) {
@@ -164,19 +177,6 @@ func (c *Client) claimAt(ctx context.Context, addr string, body []byte) (claimRe
 		return claimResponse{}, fmt.Errorf("decode claim response: %w", err)
 	}
 	return cr, nil
-}
-
-// DeleteTemplate removes a promoted template from the CONNECTED node —
-// templates are node-local, and on a cluster the entry node may not be the
-// one holding it; prefer Template.Delete on the handle Promote returned. The
-// options pick the template's key axes exactly as a claim would (network
-// lane, size); the same defaults apply.
-func (c *Client) DeleteTemplate(ctx context.Context, template string, opts ...Option) error {
-	claim := claimRequest{Template: template}
-	for _, opt := range opts {
-		opt(&claim)
-	}
-	return c.deleteTemplates(ctx, c.addr, url.Values{"template": {claim.Template}, "net": {claim.Net}, "size": {claim.Size}})
 }
 
 // deleteTemplates issues the template delete against one node.
