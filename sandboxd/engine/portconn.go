@@ -9,6 +9,10 @@ import (
 	"time"
 )
 
+// portWriteChunk keeps each data frame (base64 ×4/3 + envelope) well under
+// silkd's 8MiB frame cap, so a large HTTP body is split across frames.
+const portWriteChunk = 1 << 20
+
 // guestPortConn adapts silkd's framed port_forward channel to a plain
 // net.Conn: the guest's TCP bytes ride inside newline-JSON `data` frames
 // (base64 payloads), so writes wrap into `{"op":"data",...}` frames and
@@ -57,19 +61,25 @@ func (g *guestPortConn) Read(p []byte) (int, error) {
 }
 
 func (g *guestPortConn) Write(p []byte) (int, error) {
-	frame := struct {
-		V    int    `json:"v"`
-		Op   string `json:"op"`
-		Data []byte `json:"data"`
-	}{V: 1, Op: "data", Data: p}
-	line, err := json.Marshal(frame)
-	if err != nil {
-		return 0, err
+	written := 0
+	for len(p) > 0 {
+		n := min(len(p), portWriteChunk)
+		frame := struct {
+			V    int    `json:"v"`
+			Op   string `json:"op"`
+			Data []byte `json:"data"`
+		}{V: 1, Op: "data", Data: p[:n]}
+		line, err := json.Marshal(frame)
+		if err != nil {
+			return written, err
+		}
+		if _, err := g.Conn.Write(append(line, '\n')); err != nil {
+			return written, err
+		}
+		p = p[n:]
+		written += n
 	}
-	if _, err := g.Conn.Write(append(line, '\n')); err != nil {
-		return 0, err
-	}
-	return len(p), nil
+	return written, nil
 }
 
 func (g *guestPortConn) SetDeadline(t time.Time) error      { return g.Conn.SetDeadline(t) }

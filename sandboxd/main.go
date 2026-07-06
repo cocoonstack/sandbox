@@ -81,7 +81,10 @@ func main() {
 		logger.Infof(ctx, "mesh %s joined (%d seeds)", cmp.Or(cfg.Mesh.NodeID, cfg.Mesh.Bind), len(cfg.Mesh.Join))
 	}
 
-	preview := server.NewPreviewServer(cfg.PreviewSecret, cfg.PreviewAdvertise, mgr)
+	var preview *server.PreviewServer
+	if cfg.PreviewListen != "" {
+		preview = server.NewPreviewServer(cfg.PreviewSecret, cfg.PreviewAdvertise, mgr)
+	}
 	srv := server.New(cfg.APIToken, cfg.AdvertiseAddr, mgr, eng, placer, preview)
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,

@@ -61,7 +61,11 @@ func (p *PreviewServer) Mint(id string, port uint16, ttl time.Duration) string {
 	payload, _ := json.Marshal(claims)
 	enc := base64.RawURLEncoding.EncodeToString(payload)
 	token := enc + "." + p.sign(enc)
-	return fmt.Sprintf("http://%s/p/%s/", p.advertise, token)
+	base := p.advertise
+	if !strings.Contains(base, "://") {
+		base = "http://" + base
+	}
+	return fmt.Sprintf("%s/p/%s/", strings.TrimRight(base, "/"), token)
 }
 
 // Handler serves the preview_listen address: verify the token, then either
@@ -95,6 +99,11 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 			req.URL.Scheme = "http"
 			req.URL.Host = "guest"
 			req.URL.Path = "/" + strings.TrimPrefix(req.URL.Path, "/p/"+r.PathValue("token")+"/")
+			// The preview URL is bearer-authorized by its token; never hand
+			// the browser's ambient credentials for the preview domain to
+			// untrusted guest code.
+			req.Header.Del("Cookie")
+			req.Header.Del("Authorization")
 		},
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {

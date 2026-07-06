@@ -377,7 +377,16 @@ func (m *Manager) ClaimDeadline(id, token string) (time.Time, error) {
 // is needed; the live-claim lookup is the revocation check — a released or
 // reaped sandbox is absent and this fails. A hibernated sandbox wakes.
 func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.Conn, error) {
-	sock, err := m.wakeByID(ctx, id)
+	m.mu.Lock()
+	sb, ok := m.claimed[id]
+	if ok {
+		sb.LastActivity = time.Now() // a live preview stream is data-plane activity
+	}
+	m.mu.Unlock()
+	if !ok {
+		return nil, ErrUnknownSandbox
+	}
+	sock, err := m.wakeResolved(ctx, sb)
 	if err != nil {
 		return nil, err
 	}
@@ -440,19 +449,6 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 // WakeAgentSocket resolves the sandbox's vsock UDS for the relay, first
 // restoring the VM if it is hibernated; concurrent wakes queue on the
 // transition lock and find the fast path.
-// wakeByID resolves a live claim's socket by id alone (authorization proven
-// upstream), waking it if hibernated. Mirrors WakeAgentSocket's transition
-// discipline.
-func (m *Manager) wakeByID(ctx context.Context, id string) (string, error) {
-	m.mu.Lock()
-	sb, ok := m.claimed[id]
-	m.mu.Unlock()
-	if !ok {
-		return "", ErrUnknownSandbox
-	}
-	return m.wakeResolved(ctx, sb)
-}
-
 func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string, error) {
 	sb, ok := m.claim(id, token)
 	if !ok {
