@@ -54,6 +54,14 @@ func run(addr, token, template string, egress bool) error {
 		return fmt.Errorf("claim: %w", err)
 	}
 	defer func() { _ = sb.Close() }()
+	// Info is node-local: on a cluster the claim may have been redirected, so
+	// hibernated-count assertions must ask the owner, not the entry node.
+	ownerClient := client
+	if sb.Owner() != addr {
+		if ownerClient, err = sandbox.Connect(sb.Owner(), copts...); err != nil {
+			return err
+		}
+	}
 
 	type step struct {
 		name string
@@ -69,7 +77,7 @@ func run(addr, token, template string, egress bool) error {
 		{"git", smokeGit},
 		{"pty", smokePty},
 		{"hibernate", func(ctx context.Context, sb *sandbox.Sandbox) error {
-			return smokeHibernate(ctx, client, sb)
+			return smokeHibernate(ctx, ownerClient, sb)
 		}},
 		{"fork", smokeFork},
 		{"promote", func(ctx context.Context, sb *sandbox.Sandbox) error {
