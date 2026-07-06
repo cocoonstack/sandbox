@@ -87,6 +87,20 @@ entry node, then queries every peer concurrently
 ownership proof) and returns a handle bound to whichever node confirms
 ownership first.
 
+## Templates on a cluster
+
+A promoted template (see the [SDK guide](sdk.md#promoting-to-a-template))
+lives **only on its owner node**. The handle `Sandbox.Promote` returns is
+bound to that node, so `template.New` and `template.Delete` always reach it —
+prefer the handle on a cluster.
+
+The name-based `Client.New("tpl")` and `Client.DeleteTemplate("tpl")` only see
+the node the client is connected to. If the parent claim was redirected to a
+peer, its template was promoted there, and a name-based call at the entry node
+won't find it. Automatic name-based routing (gossiping the template set so a
+claim redirects to the owner) is planned as **M3.1**; until then, use the
+owner-bound handle across nodes.
+
 ## Cluster checklist
 
 - memberlist port (e.g. 7946) open node-to-node, TCP **and** UDP

@@ -68,4 +68,6 @@ lane. `SILKD_NET=none|egress` overrides the probe for tests and operators.
   rather than losing output; detached observers ride a best-effort broadcast
 - no fsync durability on writes (guest page cache semantics)
 - `fs_push` extraction is streaming, not atomic — a truncated stream errors
-  but may leave partially extracted files
+  but may leave partially extracted files. Treat a `Push` error as "the tree
+  may be dirty": clean the destination before retrying. Atomic extraction
+  (stage in a temp dir, then swap) is planned as **M3.1**
