@@ -205,8 +205,8 @@ pub enum Response {
         code: i32,
     },
     Done,
-    /// Acknowledges that a watch is armed: events after it are guaranteed
-    /// captured, so clients need no arming sleep.
+    /// Acknowledges an armed watch (events after it are guaranteed captured)
+    /// or a connected port_forward.
     Ready,
     Error {
         kind: ErrorKind,

@@ -14,12 +14,9 @@ import (
 func TestPromoteThenClaimClonesFromTemplate(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	parent, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
+	parent := mustClaim(t, m, testKey)
 
-	if err = m.Promote(t.Context(), parent.ID, parent.Token, "tpl:x"); err != nil {
+	if err := m.Promote(t.Context(), parent.ID, parent.Token, "tpl:x"); err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
 	if len(eng.snapSaves) != 1 || !slices.Contains(eng.snapRemoves, eng.snapSaves[0]) {
@@ -46,15 +43,12 @@ func TestPromoteThenClaimClonesFromTemplate(t *testing.T) {
 func TestPromoteHibernatedUsesWakeImage(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	parent, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
-	if err = m.Hibernate(t.Context(), parent.ID, parent.Token); err != nil {
+	parent := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), parent.ID, parent.Token); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
 
-	if err = m.Promote(t.Context(), parent.ID, parent.Token, "tpl:hib"); err != nil {
+	if err := m.Promote(t.Context(), parent.ID, parent.Token, "tpl:hib"); err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
 	if len(eng.snapSaves) != 0 {
@@ -71,10 +65,7 @@ func TestPromoteHibernatedUsesWakeImage(t *testing.T) {
 func TestPromoteValidations(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 0})
-	parent, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
+	parent := mustClaim(t, m, testKey)
 
 	if err := m.Promote(t.Context(), parent.ID, parent.Token, "_bad"); !errors.Is(err, ErrBadKey) {
 		t.Errorf("bad name: %v, want ErrBadKey", err)
@@ -92,26 +83,23 @@ func TestPromoteValidations(t *testing.T) {
 	}
 }
 
-func TestDeleteGolden(t *testing.T) {
+func TestDeleteTemplate(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 0})
-	parent, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
-	if err = m.Promote(t.Context(), parent.ID, parent.Token, "tpl:del"); err != nil {
+	parent := mustClaim(t, m, testKey)
+	if err := m.Promote(t.Context(), parent.ID, parent.Token, "tpl:del"); err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
 	key := types.PoolKey{Template: "tpl:del", Net: testKey.Net, Size: testKey.Size}
 
-	if err := m.DeleteGolden(testKey); !errors.Is(err, ErrPooledTemplate) {
+	if err := m.DeleteTemplate(testKey); !errors.Is(err, ErrPooledTemplate) {
 		t.Errorf("pooled delete: %v, want ErrPooledTemplate", err)
 	}
-	if err := m.DeleteGolden(types.PoolKey{Template: "nope", Net: testKey.Net, Size: testKey.Size}); !errors.Is(err, ErrUnknownTemplate) {
+	if err := m.DeleteTemplate(types.PoolKey{Template: "nope", Net: testKey.Net, Size: testKey.Size}); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("unknown delete: %v, want ErrUnknownTemplate", err)
 	}
-	if err := m.DeleteGolden(key); err != nil {
-		t.Fatalf("DeleteGolden: %v", err)
+	if err := m.DeleteTemplate(key); err != nil {
+		t.Fatalf("DeleteTemplate: %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(m.goldensDir(), key.Hash())); !os.IsNotExist(statErr) {
 		t.Errorf("golden dir still present after delete: %v", statErr)

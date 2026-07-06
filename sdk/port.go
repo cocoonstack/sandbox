@@ -11,6 +11,10 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/silkd"
 )
 
+// portWriteChunk keeps a data frame (payload ×4/3 base64 + envelope) well
+// under silkd.MaxFrame.
+const portWriteChunk = 1 << 20
+
 var _ net.Conn = (*PortConn)(nil)
 
 // PortConn is a net.Conn to a TCP port inside the sandbox, relayed over the
@@ -44,7 +48,7 @@ func (s *Sandbox) DialPort(ctx context.Context, port uint16) (*PortConn, error) 
 	}
 	pr, pw := io.Pipe()
 	p := &PortConn{conn: conn, stop: done, out: pr}
-	go p.drain(pw)
+	go p.drain(ctx, pw)
 	return p, nil
 }
 
@@ -71,6 +75,10 @@ func (s *Sandbox) ProxyPort(ctx context.Context, localAddr string, port uint16) 
 
 func (s *Sandbox) proxyConn(ctx context.Context, local net.Conn, port uint16) {
 	defer func() { _ = local.Close() }()
+	// The copy below can sit in local.Read forever; only closing the conn
+	// unblocks it, so ctx teardown must reach the local side too.
+	unarm := context.AfterFunc(ctx, func() { _ = local.Close() })
+	defer unarm()
 	guest, err := s.DialPort(ctx, port)
 	if err != nil {
 		return
@@ -87,21 +95,21 @@ func (s *Sandbox) proxyConn(ctx context.Context, local net.Conn, port uint16) {
 	<-done
 }
 
-// closeWrite half-closes conn's write side when it supports it, so the peer
-// sees EOF while the tail still drains.
-func closeWrite(conn net.Conn) {
-	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
-		_ = cw.CloseWrite()
-	}
-}
-
 func (p *PortConn) Read(b []byte) (int, error) { return p.out.Read(b) }
 
+// Write chunks b so no frame (with its base64 and envelope overhead) can
+// exceed the protocol cap — one oversized frame would kill the relay.
 func (p *PortConn) Write(b []byte) (int, error) {
-	if err := p.conn.Send(&silkd.Data{Data: b}); err != nil {
-		return 0, err
+	sent := 0
+	for len(b) > 0 {
+		chunk := b[:min(len(b), portWriteChunk)]
+		if err := p.conn.Send(&silkd.Data{Data: chunk}); err != nil {
+			return sent, err
+		}
+		sent += len(chunk)
+		b = b[len(chunk):]
 	}
-	return len(b), nil
+	return sent, nil
 }
 
 // CloseWrite half-closes the guest socket (the server sees EOF) while reads
@@ -111,7 +119,12 @@ func (p *PortConn) CloseWrite() error {
 }
 
 func (p *PortConn) Close() error {
-	p.closeOnce.Do(p.stop)
+	p.closeOnce.Do(func() {
+		p.stop()
+		// drain can be parked in a pipe write on an unread tail; only the
+		// reader side unblocks it, so teardown must close the pipe too.
+		_ = p.out.CloseWithError(net.ErrClosed)
+	})
 	return nil
 }
 
@@ -132,29 +145,20 @@ func (p *PortConn) SetReadDeadline(time.Time) error { return errors.ErrUnsupport
 func (p *PortConn) SetWriteDeadline(time.Time) error { return errors.ErrUnsupported }
 
 // drain relays guest bytes into the pipe until Done (clean server close →
-// EOF), an error frame, or teardown.
-func (p *PortConn) drain(pw *io.PipeWriter) {
-	for {
-		resp, err := p.conn.Recv()
-		if err != nil {
-			_ = pw.CloseWithError(err)
-			return
-		}
-		switch r := resp.(type) {
-		case *silkd.DataResp:
-			if _, err := pw.Write(r.Data); err != nil {
-				return
-			}
-		case *silkd.Done:
-			_ = pw.Close()
-			return
-		case *silkd.ErrorResp:
-			_ = pw.CloseWithError(r)
-			return
-		default:
-			_ = pw.CloseWithError(unexpected(resp))
-			return
-		}
+// EOF), an error frame, or teardown; a relay dropped before its terminal
+// frame surfaces as drainData's truncation error, not a clean EOF.
+func (p *PortConn) drain(ctx context.Context, pw *io.PipeWriter) {
+	_ = pw.CloseWithError(drainData(ctx, p.conn, func(b []byte) error {
+		_, err := pw.Write(b)
+		return err
+	}))
+}
+
+// closeWrite half-closes conn's write side when it supports it, so the peer
+// sees EOF while the tail still drains.
+func closeWrite(conn net.Conn) {
+	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
 	}
 }
 

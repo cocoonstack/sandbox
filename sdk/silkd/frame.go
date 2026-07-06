@@ -333,8 +333,8 @@ type Exit struct {
 // Done is the terminal frame of verbs with no payload result.
 type Done struct{}
 
-// Ready acknowledges that a watch is armed: events after it are guaranteed
-// captured, so clients need no arming sleep.
+// Ready acknowledges an armed watch (events after it are guaranteed
+// captured) or a connected port_forward.
 type Ready struct{}
 
 // ErrorResp is the terminal frame of a failed verb; it implements error.

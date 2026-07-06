@@ -23,10 +23,7 @@ func TestClaimWarmHitTransfersOwnership(t *testing.T) {
 	warm := &types.Sandbox{VMName: "sbx-warm-1", Key: testKey, VsockSocket: "/vsock/warm"}
 	m.pools[testKey].warm = append(m.pools[testKey].warm, warm)
 
-	sb, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
+	sb := mustClaim(t, m, testKey)
 	if sb.VMName != "sbx-warm-1" || sb.VsockSocket != "/vsock/warm" {
 		t.Errorf("got %+v, want the warm sandbox", sb)
 	}
@@ -63,10 +60,7 @@ func TestClaimMissClonesFromGolden(t *testing.T) {
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
 	m.pools[testKey].goldenDir = "/goldens/x"
 
-	sb, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
+	sb := mustClaim(t, m, testKey)
 	if len(eng.clones) != 1 || len(eng.colds) != 0 {
 		t.Fatalf("got clones=%v colds=%v, want one clone", eng.clones, eng.colds)
 	}
@@ -161,10 +155,7 @@ func TestClaimRejectsBadKey(t *testing.T) {
 func TestReleaseValidatesToken(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	sb, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
+	sb := mustClaim(t, m, testKey)
 
 	if err := m.Release(t.Context(), sb.ID, "wrong"); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("got %v, want ErrUnknownSandbox", err)
@@ -185,10 +176,7 @@ func TestReleaseValidatesToken(t *testing.T) {
 
 func TestAgentSocketValidatesToken(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	sb, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
+	sb := mustClaim(t, m, testKey)
 
 	if _, wrongErr := m.AgentSocket(sb.ID, "wrong"); !errors.Is(wrongErr, ErrUnknownSandbox) {
 		t.Errorf("got %v, want ErrUnknownSandbox", wrongErr)
@@ -205,10 +193,7 @@ func TestAgentSocketValidatesToken(t *testing.T) {
 func TestReapDestroysExpiredClaims(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	sb, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
+	sb := mustClaim(t, m, testKey)
 	m.mu.Lock()
 	m.claimed[sb.ID].Deadline = time.Now().Add(-time.Second)
 	m.mu.Unlock()
@@ -358,6 +343,16 @@ func TestGoldenBuildFailureBacksOff(t *testing.T) {
 func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	return newTestManagerAt(t, eng, t.TempDir(), pools...)
+}
+
+// mustClaim claims with the default TTL or fails the test.
+func mustClaim(t *testing.T, m *Manager, key types.PoolKey) *types.Sandbox {
+	t.Helper()
+	sb, err := m.Claim(t.Context(), key, 0)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	return sb
 }
 
 func newTestManagerAt(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {

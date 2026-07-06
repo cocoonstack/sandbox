@@ -38,7 +38,7 @@ type Manager interface {
 	Hibernate(ctx context.Context, id, token string) error
 	Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
 	Promote(ctx context.Context, id, token, template string) error
-	DeleteGolden(key types.PoolKey) error
+	DeleteTemplate(key types.PoolKey) error
 	AgentSocket(id, token string) (string, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, error)
 	Info() ([]pool.PoolInfo, int, int)
@@ -111,9 +111,8 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
-	var req types.ClaimRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	req, ok := decodeBody[types.ClaimRequest](w, r)
+	if !ok {
 		return
 	}
 	key := req.Key()
@@ -144,9 +143,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		log.WithFunc("server.handleClaim").Errorf(r.Context(), err, "claim %s", key.Hash())
 		writeErr(w, http.StatusInternalServerError, "provisioning failed")
 	default:
-		writeJSON(w, http.StatusOK, types.ClaimResponse{
-			ID: sb.ID, Token: sb.Token, Deadline: sb.Deadline, OwnerAddr: s.advertise,
-		})
+		writeJSON(w, http.StatusOK, s.claimResponse(sb))
 	}
 }
 
@@ -155,9 +152,8 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 // success.
 func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id, token string) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token, ok := bearerToken(r)
+		token, ok := sandboxToken(w, r)
 		if !ok {
-			writeErr(w, http.StatusUnauthorized, "missing bearer token")
 			return
 		}
 		id := r.PathValue("id")
@@ -177,14 +173,12 @@ func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id,
 // handleFork clones a claimed sandbox into fresh child claims, one
 // ClaimResponse per child; this node owns them all.
 func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
-	token, ok := bearerToken(r)
+	token, ok := sandboxToken(w, r)
 	if !ok {
-		writeErr(w, http.StatusUnauthorized, "missing bearer token")
 		return
 	}
-	var req types.ForkRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	req, ok := decodeBody[types.ForkRequest](w, r)
+	if !ok {
 		return
 	}
 	id := r.PathValue("id")
@@ -200,7 +194,7 @@ func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
 	default:
 		resp := types.ForkResponse{Children: make([]types.ClaimResponse, len(children))}
 		for i, c := range children {
-			resp.Children[i] = types.ClaimResponse{ID: c.ID, Token: c.Token, Deadline: c.Deadline, OwnerAddr: s.advertise}
+			resp.Children[i] = s.claimResponse(c)
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -208,14 +202,12 @@ func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
 
 // handlePromote publishes a claimed sandbox as a node-local template.
 func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request) {
-	token, ok := bearerToken(r)
+	token, ok := sandboxToken(w, r)
 	if !ok {
-		writeErr(w, http.StatusUnauthorized, "missing bearer token")
 		return
 	}
-	var req types.PromoteRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	req, ok := decodeBody[types.PromoteRequest](w, r)
+	if !ok {
 		return
 	}
 	id := r.PathValue("id")
@@ -244,7 +236,7 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 		Net:      types.NetShape(q.Get("net")),
 		Size:     types.Size(q.Get("size")),
 	}
-	err := s.mgr.DeleteGolden(req.Key())
+	err := s.mgr.DeleteTemplate(req.Key())
 	switch {
 	case errors.Is(err, pool.ErrPooledTemplate):
 		writeErr(w, http.StatusConflict, err.Error())
@@ -305,6 +297,30 @@ func (s *Server) requireAPIToken(next http.HandlerFunc) http.HandlerFunc {
 func bearerToken(r *http.Request) (string, bool) {
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	return token, ok && token != ""
+}
+
+// sandboxToken extracts the per-sandbox bearer token, answering 401 itself.
+func sandboxToken(w http.ResponseWriter, r *http.Request) (string, bool) {
+	token, ok := bearerToken(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "missing bearer token")
+	}
+	return token, ok
+}
+
+// decodeBody parses a JSON request body, answering 400 itself on failure.
+func decodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
+	var v T
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&v); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return v, false
+	}
+	return v, true
+}
+
+// claimResponse renders one claimed sandbox with this node as its owner.
+func (s *Server) claimResponse(sb *types.Sandbox) types.ClaimResponse {
+	return types.ClaimResponse{ID: sb.ID, Token: sb.Token, Deadline: sb.Deadline, OwnerAddr: s.advertise}
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

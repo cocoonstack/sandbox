@@ -12,10 +12,7 @@ import (
 func TestForkFromRunning(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	parent, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
+	parent := mustClaim(t, m, testKey)
 
 	children, err := m.Fork(t.Context(), parent.ID, parent.Token, 3, time.Hour)
 	if err != nil {
@@ -58,11 +55,8 @@ func TestForkFromRunning(t *testing.T) {
 func TestForkFromHibernatedUsesWakeImage(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	parent, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
-	if err = m.Hibernate(t.Context(), parent.ID, parent.Token); err != nil {
+	parent := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), parent.ID, parent.Token); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
 
@@ -92,10 +86,7 @@ func TestForkFromHibernatedUsesWakeImage(t *testing.T) {
 func TestForkCountValidation(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	parent, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
+	parent := mustClaim(t, m, testKey)
 	for _, count := range []int{0, -1, maxForkCount + 1} {
 		if _, err := m.Fork(t.Context(), parent.ID, parent.Token, count, 0); !errors.Is(err, ErrBadCount) {
 			t.Errorf("count %d: err %v, want ErrBadCount", count, err)
@@ -109,10 +100,7 @@ func TestForkCountValidation(t *testing.T) {
 func TestForkUnknownSandbox(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	parent, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
+	parent := mustClaim(t, m, testKey)
 	if _, err := m.Fork(t.Context(), parent.ID, "wrong-token", 1, 0); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("err %v, want ErrUnknownSandbox", err)
 	}
@@ -149,10 +137,7 @@ func TestReconcileSweepsOrphanSnapshots(t *testing.T) {
 	eng := newFakeEngine()
 	dataDir := t.TempDir()
 	m := newTestManagerAt(t, eng, dataDir)
-	parent, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
+	parent := mustClaim(t, m, testKey)
 	if err := m.Hibernate(t.Context(), parent.ID, parent.Token); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}

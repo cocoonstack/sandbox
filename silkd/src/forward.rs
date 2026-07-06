@@ -39,48 +39,81 @@ pub async fn run<W: AsyncWrite + Unpin>(
     proto::write_frame(w, &Response::Ready).await?;
 
     let (mut tr, tw) = stream.into_split();
-    let feed = tokio::spawn(feed_socket(client, tw));
+    let mut feed = tokio::spawn(feed_socket(client, tw));
+    let mut feed_done = false;
 
     let mut buf = vec![0u8; READ_CHUNK];
     let res = loop {
-        match tr.read(&mut buf).await {
-            // Guest closed its write side: the stream is done.
-            Ok(0) | Err(_) => break proto::write_frame(w, &Response::Done).await,
-            Ok(n) => {
-                if let Err(e) = proto::write_frame(
-                    w,
-                    &Response::Data {
-                        data: buf[..n].to_vec(),
-                    },
-                )
-                .await
-                {
-                    break Err(e);
+        tokio::select! {
+            r = tr.read(&mut buf) => match r {
+                // Guest closed its write side: the stream is done.
+                Ok(0) => break proto::write_frame(w, &Response::Done).await,
+                // A read failure (RST, server crash) must not pass for a
+                // clean close — the client would mistake truncation for EOF.
+                Err(e) => {
+                    break proto::write_frame(
+                        w,
+                        &Response::error(ErrorKind::Internal, format!("read port {port}: {e}")),
+                    )
+                    .await
+                }
+                Ok(n) => {
+                    if let Err(e) = proto::write_frame(
+                        w,
+                        &Response::Data {
+                            data: buf[..n].to_vec(),
+                        },
+                    )
+                    .await
+                    {
+                        break Err(e);
+                    }
+                }
+            },
+            // A clean feeder end (data_end, client gone) keeps draining the
+            // socket; a protocol violation terminates the relay with its
+            // error instead of masquerading as a clean close.
+            f = &mut feed, if !feed_done => {
+                feed_done = true;
+                if let Ok(Err(resp)) = f {
+                    break proto::write_frame(w, &resp).await;
                 }
             }
         }
     };
-    feed.abort();
+    if !feed_done {
+        feed.abort();
+    }
     res
 }
 
 /// Writes client `data` frames into the guest socket until `data_end`
-/// (half-close), a stray frame, or the client disconnects. Owns the write
-/// half so its `write_all` can block on a slow guest without stalling the
-/// output direction.
-async fn feed_socket(mut client: mpsc::Receiver<Request>, mut tw: OwnedWriteHalf) {
+/// (half-close) or the client disconnects; a stray frame is a protocol
+/// violation, reported like the fs feeders do. Owns the write half so its
+/// `write_all` can block on a slow guest without stalling the output
+/// direction.
+async fn feed_socket(
+    mut client: mpsc::Receiver<Request>,
+    mut tw: OwnedWriteHalf,
+) -> Result<(), Response> {
     while let Some(req) = client.recv().await {
         match req {
             Request::Data { data } => {
                 if tw.write_all(&data).await.is_err() {
-                    return;
+                    return Ok(());
                 }
             }
             Request::DataEnd => {
                 let _ = tw.shutdown().await;
-                return;
+                return Ok(());
             }
-            _ => return,
+            _ => {
+                return Err(Response::error(
+                    ErrorKind::BadRequest,
+                    "unexpected frame during port_forward",
+                ))
+            }
         }
     }
+    Ok(())
 }

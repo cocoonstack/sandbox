@@ -13,15 +13,12 @@ import (
 func TestHibernateWakeCycle(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	sb, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
+	sb := mustClaim(t, m, testKey)
 
-	if err = m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
-	if err = m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("repeat Hibernate: %v", err)
 	}
 	if len(eng.hibernates) != 1 {
@@ -55,7 +52,7 @@ func TestHibernateWakeCycle(t *testing.T) {
 	}
 
 	// Awake sandbox: the fast path must not touch the engine again.
-	if _, err = m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("fast-path WakeAgentSocket: %v", err)
 	}
 	if len(eng.restores) != 1 {
@@ -66,16 +63,13 @@ func TestHibernateWakeCycle(t *testing.T) {
 func TestWakeFailureKeepsHibernated(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	sb, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
-	if err = m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	sb := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
 
 	eng.restoreErr = errors.New("restore boom")
-	if _, err = m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
+	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
 		t.Fatal("WakeAgentSocket succeeded despite restore failure")
 	}
 	if _, _, hibernated := m.Info(); hibernated != 1 {
@@ -89,15 +83,12 @@ func TestWakeFailureKeepsHibernated(t *testing.T) {
 func TestReleaseHibernatedDropsSnapshot(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	sb, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
-	if err = m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	sb := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
 
-	if err = m.Release(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Release(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 	if !slices.Contains(eng.removes, sb.VMName) {
@@ -112,10 +103,7 @@ func TestReleaseMidHibernateDropsOrphanSnapshot(t *testing.T) {
 	eng := newFakeEngine()
 	eng.hibernateStall = make(chan struct{})
 	m := newTestManager(t, eng)
-	sb, err := m.Claim(t.Context(), testKey, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
+	sb := mustClaim(t, m, testKey)
 
 	hibErr := make(chan error, 1)
 	go func() { hibErr <- m.Hibernate(t.Context(), sb.ID, sb.Token) }()
@@ -127,11 +115,11 @@ func TestReleaseMidHibernateDropsOrphanSnapshot(t *testing.T) {
 
 	// Release lands while the engine transition is in flight: the claim is
 	// gone before Hibernate can commit, so its snapshot must not leak.
-	if err = m.Release(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Release(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 	close(eng.hibernateStall)
-	if err = <-hibErr; !errors.Is(err, ErrUnknownSandbox) {
+	if err := <-hibErr; !errors.Is(err, ErrUnknownSandbox) {
 		t.Fatalf("Hibernate: %v, want ErrUnknownSandbox", err)
 	}
 	if !slices.Contains(eng.snapRemoves, eng.hibernates[0]) {

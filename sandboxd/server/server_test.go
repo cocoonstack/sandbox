@@ -405,19 +405,15 @@ type fakeManager struct {
 	deleteGolden func(key types.PoolKey) error
 }
 
-func (f *fakeManager) doClaim(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
-	if f.claim == nil {
-		return &types.Sandbox{ID: "sb_1", Token: "tok"}, nil
-	}
-	return f.claim(ctx, key, ttl)
-}
-
 func (f *fakeManager) ClaimWarm(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
 	return nil, pool.ErrNoWarm
 }
 
 func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
-	return f.doClaim(ctx, key, ttl)
+	if f.claim == nil {
+		return &types.Sandbox{ID: "sb_1", Token: "tok"}, nil
+	}
+	return f.claim(ctx, key, ttl)
 }
 
 func (f *fakeManager) Release(_ context.Context, id, token string) error {
@@ -459,7 +455,7 @@ func (f *fakeManager) Promote(_ context.Context, id, token, template string) err
 	return f.promote(id, token, template)
 }
 
-func (f *fakeManager) DeleteGolden(key types.PoolKey) error {
+func (f *fakeManager) DeleteTemplate(key types.PoolKey) error {
 	if f.deleteGolden == nil {
 		return pool.ErrUnknownTemplate
 	}

@@ -166,11 +166,7 @@ func (s *Sandbox) Fork(ctx context.Context, count int, ttl time.Duration) ([]*Sa
 	}
 	children := make([]*Sandbox, len(fr.Children))
 	for i, c := range fr.Children {
-		owner := c.OwnerAddr
-		if owner == "" {
-			owner = s.owner
-		}
-		children[i] = &Sandbox{ID: c.ID, Deadline: c.Deadline, c: s.c, token: c.Token, owner: owner}
+		children[i] = s.c.handleFrom(s.owner, c)
 	}
 	return children, nil
 }
