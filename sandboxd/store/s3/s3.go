@@ -5,8 +5,10 @@
 package s3
 
 import (
-	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,12 +20,12 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 )
-
-var _ store.Store = (*Store)(nil)
 
 // Config selects the bucket and, for MinIO/R2-style endpoints, the
 // addressing mode. Credentials come from the standard AWS chain (env,
@@ -36,6 +38,8 @@ type Config struct {
 	ForcePathStyle bool   `json:"force_path_style,omitempty"`
 }
 
+var _ store.Store = (*Store)(nil)
+
 // Store stages locally under stagingRoot and publishes to the bucket;
 // idRe names the instance's id namespace within the shared prefix.
 type Store struct {
@@ -45,12 +49,18 @@ type Store struct {
 	prefix  string
 	staging string
 	idRe    *regexp.Regexp
+	fetches singleflight.Group
 }
 
 // New builds the backend; ctx bounds the credential-chain resolution.
 func New(ctx context.Context, cfg Config, stagingRoot string, idRe *regexp.Regexp) (*Store, error) {
 	if cfg.Bucket == "" {
 		return nil, fmt.Errorf("s3 checkpoint store needs a bucket")
+	}
+	// A prefix without its trailing slash would glue onto the id and make
+	// every record invisible to the delimiter listing.
+	if cfg.Prefix != "" && !strings.HasSuffix(cfg.Prefix, "/") {
+		cfg.Prefix += "/"
 	}
 	if err := os.MkdirAll(stagingRoot, 0o750); err != nil {
 		return nil, fmt.Errorf("create staging dir: %w", err)
@@ -84,8 +94,8 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 	var meta string
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(4) // files in parallel; each already multiparts internally
-	err := filepath.Walk(staging, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+	err := filepath.WalkDir(staging, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
 			return err
 		}
 		rel, err := filepath.Rel(staging, path)
@@ -111,38 +121,79 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 	if err := s.upload(ctx, s.key(id, store.MetaFile), meta); err != nil {
 		return err
 	}
+	// A re-publish (re-promote) may ship a different export file set:
+	// after the new meta commits, sweep keys the new generation did not
+	// write, or Fetch would download the union of generations.
+	fresh := map[string]struct{}{s.key(id, store.MetaFile): {}}
+	_ = filepath.WalkDir(staging, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if rel, relErr := filepath.Rel(staging, path); relErr == nil {
+			fresh[s.key(id, rel)] = struct{}{}
+		}
+		return nil
+	})
+	keys, err := s.list(ctx, s.key(id, "")+"/")
+	if err != nil {
+		return err
+	}
+	var stale []string
+	for _, key := range keys {
+		if _, ok := fresh[key]; !ok {
+			stale = append(stale, key)
+		}
+	}
+	if err := s.deleteKeys(ctx, stale); err != nil {
+		return err
+	}
 	return os.RemoveAll(staging)
 }
 
-// Fetch materializes the export locally, keeping one cached copy per id:
-// records are immutable except re-publish (re-promote), so a cache whose
-// stored meta still matches the bucket's is current — repeat claims pay
-// one small meta GET instead of the full download. release is a no-op;
-// Delete and the cache swap clean up.
+// Fetch materializes the export into a local cache generation keyed by
+// the record's meta hash: records change only on re-publish, so an
+// unchanged record's repeat fetch is one small meta GET, and installing a
+// new generation never disturbs a directory an in-flight clone is still
+// reading (old generations are reaped at Delete and the startup sweep,
+// when no clone can be in flight). Concurrent misses share one download.
+// release is a no-op. A missing id is ErrNotFound.
 func (s *Store) Fetch(ctx context.Context, id string) (string, func(), error) {
 	meta, err := s.ReadMeta(ctx, id)
 	if err != nil {
 		return "", nil, err
 	}
-	cached := filepath.Join(s.staging, "cache", id)
-	if have, readErr := os.ReadFile(filepath.Join(cached, store.MetaFile)); readErr == nil && bytes.Equal(have, meta) { //nolint:gosec // id pinned by idRe
-		return filepath.Join(cached, store.ExportDir), func() {}, nil
+	sum := sha256.Sum256(meta)
+	gen := filepath.Join(s.staging, "cache", id, hex.EncodeToString(sum[:8]))
+	export := filepath.Join(gen, store.ExportDir)
+	if _, statErr := os.Stat(export); statErr == nil {
+		return export, func() {}, nil
 	}
-
-	local, err := os.MkdirTemp(s.staging, id+"-fetch-*")
+	_, err, _ = s.fetches.Do(gen, func() (any, error) {
+		return nil, s.populate(ctx, id, meta, gen)
+	})
 	if err != nil {
 		return "", nil, err
 	}
-	cleanup := func() { _ = os.RemoveAll(local) }
+	return export, func() {}, nil
+}
+
+// populate downloads one cache generation and installs it atomically.
+func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string) error {
+	if _, err := os.Stat(gen); err == nil {
+		return nil // another flight installed it between stat and Do
+	}
+	local, err := os.MkdirTemp(s.staging, id+"-fetch-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(local) }()
 	exportPrefix := s.key(id, store.ExportDir) + "/"
 	keys, err := s.list(ctx, exportPrefix)
 	if err != nil {
-		cleanup()
-		return "", nil, err
+		return err
 	}
 	if len(keys) == 0 {
-		cleanup()
-		return "", nil, fmt.Errorf("record %s has no export", id)
+		return fmt.Errorf("record %s has no export", id)
 	}
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(4)
@@ -152,25 +203,15 @@ func (s *Store) Fetch(ctx context.Context, id string) (string, func(), error) {
 		})
 	}
 	if err := g.Wait(); err != nil {
-		cleanup()
-		return "", nil, err
+		return err
 	}
 	if err := os.WriteFile(filepath.Join(local, store.MetaFile), meta, 0o600); err != nil {
-		cleanup()
-		return "", nil, err
+		return err
 	}
-	// Swap into the cache slot; a concurrent Fetch that lost the race just
-	// re-downloads next time.
-	if err := os.MkdirAll(filepath.Dir(cached), 0o750); err != nil {
-		cleanup()
-		return "", nil, err
+	if err := os.MkdirAll(filepath.Dir(gen), 0o750); err != nil {
+		return err
 	}
-	_ = os.RemoveAll(cached)
-	if err := os.Rename(local, cached); err != nil {
-		cleanup()
-		return "", nil, err
-	}
-	return filepath.Join(cached, store.ExportDir), func() {}, nil
+	return os.Rename(local, gen)
 }
 
 func (s *Store) ReadMeta(ctx context.Context, id string) ([]byte, error) {
@@ -178,60 +219,85 @@ func (s *Store) ReadMeta(ctx context.Context, id string) ([]byte, error) {
 		Bucket: &s.bucket, Key: aws.String(s.key(id, store.MetaFile)),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("checkpoint %s: %w", id, err)
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound") {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("record %s: %w", id, err)
 	}
 	defer func() { _ = out.Body.Close() }()
 	return io.ReadAll(out.Body)
 }
 
 func (s *Store) Metas(ctx context.Context) ([][]byte, error) {
-	keys, err := s.list(ctx, s.prefix)
-	if err != nil {
+	// Delimiter listing yields one CommonPrefix per record instead of
+	// walking every export object of both namespaces under the prefix.
+	var ids []string
+	p := awss3.NewListObjectsV2Paginator(s.client, &awss3.ListObjectsV2Input{
+		Bucket: &s.bucket, Prefix: &s.prefix, Delimiter: aws.String("/"),
+	})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list %s: %w", s.prefix, err)
+		}
+		for _, cp := range page.CommonPrefixes {
+			id := strings.TrimSuffix(strings.TrimPrefix(*cp.Prefix, s.prefix), "/")
+			if s.idRe.MatchString(id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	metas := make([][]byte, len(ids))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(8)
+	for i, id := range ids {
+		g.Go(func() error {
+			raw, err := s.ReadMeta(gctx, id)
+			if err == nil {
+				metas[i] = raw
+			} else if !errors.Is(err, store.ErrNotFound) {
+				return err // absence mid-list is a race, not a failure
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
 		return nil, err
 	}
-	var metas [][]byte
-	for _, key := range keys {
-		rest, ok := strings.CutSuffix(key, "/"+store.MetaFile)
-		if !ok {
-			continue
-		}
-		id := rest[strings.LastIndex(rest, "/")+1:]
-		if !s.idRe.MatchString(id) {
-			continue
-		}
-		if raw, err := s.ReadMeta(ctx, id); err == nil {
-			metas = append(metas, raw)
+	out := metas[:0]
+	for _, m := range metas {
+		if m != nil {
+			out = append(out, m)
 		}
 	}
-	return metas, nil
+	return out, nil
 }
 
 func (s *Store) Delete(ctx context.Context, id string) error {
 	_ = os.RemoveAll(filepath.Join(s.staging, "cache", id)) //nolint:gosec // id pinned by idRe
+	// Uncommit first: dropping meta.json makes the record invisible to
+	// loads before any export object disappears under a concurrent fetch.
+	if err := s.deleteKeys(ctx, []string{s.key(id, store.MetaFile)}); err != nil {
+		return err
+	}
 	keys, err := s.list(ctx, s.key(id, "")+"/")
 	if err != nil {
 		return err
 	}
-	for _, key := range keys {
-		if _, err := s.client.DeleteObject(ctx, &awss3.DeleteObjectInput{Bucket: &s.bucket, Key: &key}); err != nil {
-			return fmt.Errorf("delete %s: %w", key, err)
-		}
-	}
-	return nil
+	return s.deleteKeys(ctx, keys)
 }
 
-// SweepStaging clears local staging residue; a crash between upload and
-// meta.json leaves orphan objects invisible to Metas — an S3 lifecycle
-// rule on the bucket reclaims those (documented in deploy).
+// SweepStaging clears local staging residue AND stale cache generations —
+// it runs at startup, when no clone can be mid-flight. A crash between
+// upload and meta.json leaves orphan objects invisible to Metas; an S3
+// lifecycle rule on the bucket reclaims those (documented in deploy).
 func (s *Store) SweepStaging() error {
 	entries, err := os.ReadDir(s.staging)
 	if err != nil {
 		return err
 	}
 	for _, e := range entries {
-		if e.Name() == "cache" {
-			continue // warm fetch cache, not staging residue
-		}
 		if err := os.RemoveAll(filepath.Join(s.staging, e.Name())); err != nil {
 			return err
 		}
@@ -271,6 +337,15 @@ func (s *Store) download(ctx context.Context, key, path string) error {
 	// parallel; GetObject's io.Reader is a single sequential stream.
 	if _, err := s.tm.DownloadObject(ctx, &transfermanager.DownloadObjectInput{Bucket: &s.bucket, Key: &key, WriterAt: f}); err != nil {
 		return fmt.Errorf("download %s: %w", key, err)
+	}
+	return nil
+}
+
+func (s *Store) deleteKeys(ctx context.Context, keys []string) error {
+	for _, key := range keys {
+		if _, err := s.client.DeleteObject(ctx, &awss3.DeleteObjectInput{Bucket: &s.bucket, Key: &key}); err != nil {
+			return fmt.Errorf("delete %s: %w", key, err)
+		}
 	}
 	return nil
 }

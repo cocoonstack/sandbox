@@ -7,6 +7,7 @@ package pool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -77,7 +78,10 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey) error {
 	}
 	id := templateID(key.Hash())
 	if _, err := m.tpls.ReadMeta(ctx, id); err != nil {
-		return ErrUnknownTemplate
+		if errors.Is(err, store.ErrNotFound) {
+			return ErrUnknownTemplate
+		}
+		return fmt.Errorf("read template: %w", err)
 	}
 	if err := m.tpls.Delete(ctx, id); err != nil {
 		return fmt.Errorf("delete template: %w", err)
@@ -95,22 +99,21 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey) error {
 // template gossip, from the in-memory set — the 1s gossip tick never
 // touches the store backend.
 func (m *Manager) TemplateHashes() []string {
+	m.mu.Lock()
+	pooled := make(map[string]struct{}, len(m.pools))
+	for key := range m.pools {
+		pooled[key.Hash()] = struct{}{}
+	}
+	m.mu.Unlock()
 	m.tplMu.Lock()
 	hashes := make([]string, 0, len(m.tplSet))
 	for id := range m.tplSet {
-		hashes = append(hashes, id[len("tp_"):])
+		if _, ok := pooled[id[len("tp_"):]]; !ok {
+			hashes = append(hashes, id[len("tp_"):])
+		}
 	}
 	m.tplMu.Unlock()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return sliceWithout(hashes, func(h string) bool {
-		for key := range m.pools {
-			if key.Hash() == h {
-				return true
-			}
-		}
-		return false
-	})
+	return hashes
 }
 
 // HasGolden reports whether this node can provision the key without a cold
@@ -142,7 +145,8 @@ func (m *Manager) pooledHash(hash string) bool {
 
 // resolveGolden resolves a key's clone source: the configured pool's local
 // golden (no release), else a promoted template fetched from the store;
-// empty dir cold-boots.
+// empty dir cold-boots. Only a true absence cold-boots — a backend failure
+// propagates rather than silently booting a template name as an image ref.
 func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string, func(), error) {
 	m.mu.Lock()
 	var dir string
@@ -153,11 +157,11 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string,
 	if dir != "" {
 		return dir, func() {}, nil
 	}
-	id := templateID(key.Hash())
-	if _, err := m.tpls.ReadMeta(ctx, id); err != nil {
-		return "", func() {}, nil // no template: cold boot
+	dir, release, err := m.tpls.Fetch(ctx, templateID(key.Hash()))
+	if errors.Is(err, store.ErrNotFound) {
+		return "", func() {}, nil
 	}
-	return m.tpls.Fetch(ctx, id)
+	return dir, release, err
 }
 
 // publishTemplate exports snap into the store under the key's template id.
@@ -171,6 +175,12 @@ func (m *Manager) publishTemplate(ctx context.Context, snap string, key types.Po
 	if err = m.eng.SnapshotExport(ctx, snap, filepath.Join(staging, store.ExportDir)); err != nil {
 		return fmt.Errorf("export template: %w", err)
 	}
+	return m.commitTemplate(ctx, staging, id)
+}
+
+// commitTemplate writes the meta record, publishes the staged template, and
+// registers it in the gossip set.
+func (m *Manager) commitTemplate(ctx context.Context, staging, id string) error {
 	meta, err := json.Marshal(templateRecord{ID: id, CreatedAt: time.Now()})
 	if err != nil {
 		return err
@@ -198,10 +208,10 @@ func (m *Manager) migrateLegacyTemplates(ctx context.Context) {
 	}
 	for _, e := range entries {
 		hash := e.Name()
-		if !e.IsDir() || m.pooledHash(hash) || len(hash) != 32 {
+		id := templateID(hash)
+		if !e.IsDir() || m.pooledHash(hash) || !store.TemplateIDRe.MatchString(id) {
 			continue
 		}
-		id := templateID(hash)
 		staging, err := m.tpls.Stage(id)
 		if err != nil {
 			logger.Errorf(ctx, err, "stage %s", id)
@@ -213,31 +223,12 @@ func (m *Manager) migrateLegacyTemplates(ctx context.Context) {
 			_ = os.RemoveAll(staging)
 			continue
 		}
-		meta, _ := json.Marshal(templateRecord{ID: id, CreatedAt: time.Now()})
-		if err := os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); err != nil {
-			logger.Errorf(ctx, err, "meta %s", id)
-			continue
-		}
-		if err := m.tpls.Publish(ctx, staging, id); err != nil {
+		if err := m.commitTemplate(ctx, staging, id); err != nil {
 			logger.Errorf(ctx, err, "publish %s", id)
 			continue
 		}
-		m.tplMu.Lock()
-		m.tplSet[id] = struct{}{}
-		m.tplMu.Unlock()
 		logger.Infof(ctx, "migrated legacy template %s", id)
 	}
 }
 
 func templateID(hash string) string { return "tp_" + hash }
-
-// sliceWithout filters s in place, dropping entries drop reports true for.
-func sliceWithout(s []string, drop func(string) bool) []string {
-	out := s[:0]
-	for _, v := range s {
-		if !drop(v) {
-			out = append(out, v)
-		}
-	}
-	return out
-}

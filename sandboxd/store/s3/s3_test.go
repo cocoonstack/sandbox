@@ -35,21 +35,39 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.objects[key] = body
 	case r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2":
 		prefix := r.URL.Query().Get("prefix")
+		delim := r.URL.Query().Get("delimiter")
 		type object struct {
 			Key  string `xml:"Key"`
 			Size int    `xml:"Size"`
 		}
-		var result struct {
-			XMLName     xml.Name `xml:"ListBucketResult"`
-			IsTruncated bool     `xml:"IsTruncated"`
-			Contents    []object
+		type commonPrefix struct {
+			Prefix string `xml:"Prefix"`
 		}
+		var result struct {
+			XMLName        xml.Name `xml:"ListBucketResult"`
+			IsTruncated    bool     `xml:"IsTruncated"`
+			Contents       []object
+			CommonPrefixes []commonPrefix
+		}
+		seen := map[string]bool{}
 		for k, v := range f.objects {
-			if strings.HasPrefix(k, prefix) {
-				result.Contents = append(result.Contents, object{Key: k, Size: len(v)})
+			if !strings.HasPrefix(k, prefix) {
+				continue
 			}
+			if delim != "" {
+				if i := strings.Index(k[len(prefix):], delim); i >= 0 {
+					cp := k[:len(prefix)+i+1]
+					if !seen[cp] {
+						seen[cp] = true
+						result.CommonPrefixes = append(result.CommonPrefixes, commonPrefix{Prefix: cp})
+					}
+					continue
+				}
+			}
+			result.Contents = append(result.Contents, object{Key: k, Size: len(v)})
 		}
 		sort.Slice(result.Contents, func(i, j int) bool { return result.Contents[i].Key < result.Contents[j].Key })
+		sort.Slice(result.CommonPrefixes, func(i, j int) bool { return result.CommonPrefixes[i].Prefix < result.CommonPrefixes[j].Prefix })
 		w.Header().Set("Content-Type", "application/xml")
 		_ = xml.NewEncoder(w).Encode(result)
 	case r.Method == http.MethodHead:
@@ -62,7 +80,8 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet:
 		body, ok := f.objects[key]
 		if !ok {
-			http.Error(w, "NoSuchKey", http.StatusNotFound)
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`<Error><Code>NoSuchKey</Code></Error>`))
 			return
 		}
 		// transfermanager sizes ranged downloads via HeadObject then GETs

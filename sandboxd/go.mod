@@ -9,7 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.105.0
 	github.com/hashicorp/memberlist v0.5.4
 	github.com/projecteru2/core v0.0.0-20241016125006-ff909eefe04c
-	golang.org/x/sync v0.18.0
+	golang.org/x/sync v0.21.0
 )
 
 require (

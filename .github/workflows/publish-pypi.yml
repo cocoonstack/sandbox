@@ -51,10 +51,10 @@ jobs:
 
       - name: Test before publish
         run: |
-          python -m pip install -q "${{ steps.pkg.outputs.dir }}" pytest ruff
-          # openai/langchain adapters depend on cocoonstack-sandbox: install
-          # the in-repo copy so a release never tests against a stale PyPI one
+          # The in-repo base SDK installs first, so an adapter release never
+          # resolves (or fails to resolve) cocoonstack-sandbox from PyPI.
           python -m pip install -q ./sdk/python
+          python -m pip install -q "${{ steps.pkg.outputs.dir }}" pytest ruff
           (cd "${{ steps.pkg.outputs.dir }}" && ruff check . && python -m pytest -q)
 
       - name: Build sdist + wheel

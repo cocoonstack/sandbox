@@ -29,9 +29,9 @@ bridge/CNI NIC. Backends are never user-selected.
 - [Go SDK](sdk.md) — connecting (single node and clusters), every option,
   the full sandbox surface, error handling
 - [Python SDK](sdk-python.md) — the same surface for the Python-first
+  agent ecosystem, stdlib-only
 - [LangChain toolkit](langchain.md) — sandbox tools for LangChain/LangGraph
   agents, with checkpoint branching
-  agent ecosystem, stdlib-only
 - [MCP server](mcp.md) — sandboxes as Model Context Protocol tools for
   Claude Code, Cursor, and agent frameworks
 - [OpenAI Agents SDK adapter](openai-adapter.md) — run Agents SDK tools

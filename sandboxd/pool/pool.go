@@ -148,9 +148,10 @@ type Manager struct {
 	usage     *journal
 	audit     *journal
 	counters  counters
-	ckpts     store.Store
-	tpls      store.Store
-	ckptTTL   time.Duration
+	ckpts        store.Store
+	tpls         store.Store
+	ckptTTL      time.Duration
+	ckptSweeping atomic.Bool
 
 	// tplSet caches the template ids visible in the store so the 1s gossip
 	// tick never touches the backend (an s3 listing is network I/O); local
@@ -310,7 +311,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	saveErr := m.store.save(m.claimed)
 	for _, p := range m.pools {
 		dir := filepath.Join(m.goldensDir(), p.key.Hash())
-		if fi, statErr := os.Stat(dir); statErr == nil && fi.IsDir() {
+		if dirExists(dir) {
 			p.goldenDir = dir
 		}
 	}

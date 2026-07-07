@@ -3,6 +3,8 @@ shaping, lazy claim, and double-close safety — no real node."""
 
 import asyncio
 
+import pytest
+
 from cocoonsandbox_langchain import CocoonToolkit
 
 
@@ -77,3 +79,10 @@ def test_close_releases_once(monkeypatch):
     kit.close()
     kit.close()
     assert fake.closed == 1
+
+
+def test_use_after_close_raises(monkeypatch):
+    kit, _ = hooked(monkeypatch)
+    kit.close()
+    with pytest.raises(RuntimeError):
+        kit.sandbox()

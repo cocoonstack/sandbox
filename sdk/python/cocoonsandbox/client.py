@@ -74,6 +74,11 @@ class Client:
                            owner=reply.get("owner_addr") or addr)
         raise APIError("lookup", 404, f"no owner found for {id}")
 
+    def checkpoint(self, id: str) -> Checkpoint:
+        """A handle for a known checkpoint id, bound to the entry node — no
+        listing round-trip; an unknown id surfaces as 404 at claim time."""
+        return Checkpoint(self, self.addr, {"id": id})
+
     def checkpoints(self) -> list[Checkpoint]:
         """Lists the connected node's checkpoints, newest first."""
         reply = self._request(self.addr, "GET", "/v1/checkpoints", None, "list checkpoints")

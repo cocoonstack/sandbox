@@ -122,8 +122,13 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID string) error {
 }
 
 // sweepExpiredCheckpoints ages out checkpoints older than the configured
-// TTL; explicit deletes never wait for it.
+// TTL; explicit deletes never wait for it. It runs detached from the Run
+// loop, so the guard keeps a slow backend from stacking sweeps.
 func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
+	if !m.ckptSweeping.CompareAndSwap(false, true) {
+		return
+	}
+	defer m.ckptSweeping.Store(false)
 	logger := log.WithFunc("pool.sweepExpiredCheckpoints")
 	ckpts, err := m.Checkpoints(ctx)
 	if err != nil {
@@ -146,8 +151,11 @@ func (m *Manager) loadCheckpoint(ctx context.Context, ckptID string) (types.Chec
 		return types.Checkpoint{}, ErrUnknownCheckpoint
 	}
 	raw, err := m.ckpts.ReadMeta(ctx, ckptID)
-	if err != nil {
+	if errors.Is(err, store.ErrNotFound) {
 		return types.Checkpoint{}, ErrUnknownCheckpoint
+	}
+	if err != nil {
+		return types.Checkpoint{}, fmt.Errorf("read checkpoint: %w", err)
 	}
 	var ckpt types.Checkpoint
 	if err := json.Unmarshal(raw, &ckpt); err != nil {

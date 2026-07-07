@@ -4,6 +4,7 @@
 package storetest
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -63,11 +64,40 @@ func RunContract(t *testing.T, st store.Store) {
 	if err = st.SweepStaging(); err != nil {
 		t.Fatalf("SweepStaging: %v", err)
 	}
+
+	// Re-publish replaces: the second generation's export fully supersedes
+	// the first (a leftover first-generation file would corrupt a clone).
+	second, err := st.Stage(id)
+	if err != nil {
+		t.Fatalf("Stage second: %v", err)
+	}
+	writeExport(t, second, "disk2.img", "second-gen")
+	if err = os.WriteFile(filepath.Join(second, store.MetaFile), []byte(`{"id":"`+id+`","gen":2}`), 0o600); err != nil {
+		t.Fatalf("write meta: %v", err)
+	}
+	if err = st.Publish(ctx, second, id); err != nil {
+		t.Fatalf("Publish second: %v", err)
+	}
+	dir, release, err = st.Fetch(ctx, id)
+	if err != nil {
+		t.Fatalf("Fetch second: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "disk.img")); !os.IsNotExist(statErr) {
+		t.Errorf("first-generation file survived re-publish: %v", statErr)
+	}
+	if got, readErr := os.ReadFile(filepath.Join(dir, "disk2.img")); readErr != nil || string(got) != "second-gen" { //nolint:gosec // test path
+		t.Errorf("second-generation export: %q, %v", got, readErr)
+	}
+	release()
+
 	if err = st.Delete(ctx, id); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err = st.ReadMeta(ctx, id); err == nil {
-		t.Fatal("ReadMeta after Delete: want an error")
+	if _, err = st.ReadMeta(ctx, id); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("ReadMeta after Delete: %v, want store.ErrNotFound", err)
+	}
+	if _, _, err = st.Fetch(ctx, id); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Fetch after Delete: %v, want store.ErrNotFound", err)
 	}
 	if metas, err = st.Metas(ctx); err != nil || len(metas) != 0 {
 		t.Fatalf("Metas after Delete: %d, %v", len(metas), err)

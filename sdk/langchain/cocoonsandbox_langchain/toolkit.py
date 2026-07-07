@@ -9,7 +9,7 @@ import asyncio
 import json
 import threading
 
-from cocoonsandbox import Client, ExitError, Sandbox
+from cocoonsandbox import Client, Sandbox
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
@@ -45,6 +45,7 @@ class CocoonToolkit:
         self._from_checkpoint = from_checkpoint
         self._lock = threading.Lock()
         self._sb: Sandbox | None = None
+        self._closed = False
 
     def __enter__(self) -> CocoonToolkit:
         return self
@@ -71,25 +72,27 @@ class CocoonToolkit:
         ]
 
     def close(self) -> None:
-        """Releases the sandbox; safe to call twice or before any claim."""
+        """Releases the sandbox; safe to call twice or before any claim.
+        Tools invoked after close raise instead of silently claiming a
+        sandbox nothing would ever release."""
         with self._lock:
             sb, self._sb = self._sb, None
+            self._closed = True
         if sb is not None:
             sb.close()
 
     def sandbox(self) -> Sandbox:
         """The claimed sandbox, claiming (or branching) on first use."""
         with self._lock:
+            if self._closed:
+                raise RuntimeError("toolkit is closed")
             if self._sb is None:
                 self._sb = self._claim()
             return self._sb
 
     def _claim(self) -> Sandbox:
         if self._from_checkpoint:
-            for ck in self._client.checkpoints():
-                if ck.id == self._from_checkpoint:
-                    return ck.new(ttl_seconds=self._ttl)
-            raise ValueError(f"unknown checkpoint {self._from_checkpoint}")
+            return self._client.checkpoint(self._from_checkpoint).new(ttl_seconds=self._ttl)
         return self._client.new(self._template, net=self._net, ttl_seconds=self._ttl)
 
     def _tool(self, name: str, description: str, schema: type[BaseModel], func) -> StructuredTool:
@@ -102,11 +105,8 @@ class CocoonToolkit:
     def _exec(self, command: str, cwd: str = "") -> str:
         out: list[bytes] = []
         errs: list[bytes] = []
-        try:
-            code = self.sandbox().run(["sh", "-c", command], cwd=cwd,
-                                      on_stdout=out.append, on_stderr=errs.append)
-        except ExitError as exc:  # run() streams; ExitError only from exec paths
-            return f"exit {exc.code}\n{exc.stderr}"
+        code = self.sandbox().run(["sh", "-c", command], cwd=cwd,
+                                  on_stdout=out.append, on_stderr=errs.append)
         stdout = b"".join(out).decode(errors="replace")
         stderr = b"".join(errs).decode(errors="replace")
         result = stdout

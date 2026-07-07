@@ -37,15 +37,31 @@ func (d *Store) Stage(id string) (string, error) {
 }
 
 func (d *Store) Publish(_ context.Context, staging, id string) error {
-	return os.Rename(staging, filepath.Join(d.root, id))
+	final := filepath.Join(d.root, id)
+	// Re-publish (re-promote) replaces: drop the old generation first, or
+	// the rename fails against the existing dir.
+	if err := os.RemoveAll(final); err != nil {
+		return err
+	}
+	return os.Rename(staging, final)
 }
 
 func (d *Store) Fetch(_ context.Context, id string) (string, func(), error) {
-	return filepath.Join(d.root, id, store.ExportDir), func() {}, nil
+	dir := filepath.Join(d.root, id, store.ExportDir)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return "", nil, store.ErrNotFound
+	} else if err != nil {
+		return "", nil, err
+	}
+	return dir, func() {}, nil
 }
 
 func (d *Store) ReadMeta(_ context.Context, id string) ([]byte, error) {
-	return os.ReadFile(filepath.Join(d.root, id, store.MetaFile)) //nolint:gosec // id pinned by the instance idRe before any call
+	raw, err := os.ReadFile(filepath.Join(d.root, id, store.MetaFile)) //nolint:gosec // id pinned by the instance idRe before any call
+	if os.IsNotExist(err) {
+		return nil, store.ErrNotFound
+	}
+	return raw, err
 }
 
 func (d *Store) Metas(ctx context.Context) ([][]byte, error) {
@@ -55,8 +71,8 @@ func (d *Store) Metas(ctx context.Context) ([][]byte, error) {
 	}
 	var metas [][]byte
 	for _, e := range entries {
-		// Only well-formed checkpoint dirs — a planted foo/meta.json is
-		// not a checkpoint.
+		// Only well-formed record dirs in this instance's namespace — a
+		// planted foo/meta.json is not a record.
 		if !e.IsDir() || !d.idRe.MatchString(e.Name()) {
 			continue
 		}
