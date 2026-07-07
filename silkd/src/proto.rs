@@ -18,6 +18,10 @@ pub const PROTO_VERSION: u32 = 1;
 
 /// Chunk size for streaming a file back over `fs.read`.
 pub const READ_CHUNK: usize = 32 * 1024;
+/// Bulk streams (fs read/pull, port bytes) chunk larger: fewer frames and
+/// fewer flushes for the same bytes, still far under MAX_FRAME after base64.
+/// Reads return what is available, so interactivity is unaffected.
+pub const BULK_CHUNK: usize = 256 * 1024;
 
 /// Client → server frames. Unknown JSON fields (e.g. a future `v`) are
 /// ignored by construction, which is the forward-compatibility story.
@@ -437,7 +441,7 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let mut buf = vec![0u8; READ_CHUNK];
+    let mut buf = vec![0u8; BULK_CHUNK];
     loop {
         match reader.read(&mut buf).await {
             Ok(0) => return Ok(Ok(())),

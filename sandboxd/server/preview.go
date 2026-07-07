@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
+
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 // previewClaims is the signed payload of a preview URL: it authorizes serving
@@ -170,18 +172,6 @@ func (p *PreviewServer) verify(token string) (previewClaims, bool) {
 	return claims, true
 }
 
-// PreviewRequest is the wire body of POST /v1/sandboxes/{id}/preview.
-type PreviewRequest struct {
-	Token      string `json:"token"`
-	Port       uint16 `json:"port"`
-	TTLSeconds int    `json:"ttl_seconds,omitempty"`
-}
-
-// PreviewResponse carries the minted URL.
-type PreviewResponse struct {
-	URL string `json:"url"`
-}
-
 // handlePreview mints a preview URL for a claimed sandbox's port. The sandbox
 // token authorizes it; the TTL is clamped to the claim's remaining lease.
 func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
@@ -189,7 +179,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotImplemented, "preview not configured")
 		return
 	}
-	req, ok := decodeBody[PreviewRequest](w, r)
+	req, ok := decodeBody[types.PreviewRequest](w, r)
 	if !ok {
 		return
 	}
@@ -203,5 +193,5 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	if lease := time.Until(deadline); ttl <= 0 || ttl > lease {
 		ttl = lease // never outlive the claim
 	}
-	writeJSON(w, http.StatusOK, PreviewResponse{URL: s.preview.Mint(id, req.Port, ttl)})
+	writeJSON(w, http.StatusOK, types.PreviewResponse{URL: s.preview.Mint(id, req.Port, ttl)})
 }

@@ -32,7 +32,7 @@ func TestPromoteThenClaimClonesFromTemplate(t *testing.T) {
 		t.Fatalf("golden dir %s missing: %v", golden, statErr)
 	}
 
-	child, err := m.Claim(t.Context(), key, 0)
+	child, err := claimAny(t.Context(), m, key, 0)
 	if err != nil {
 		t.Fatalf("Claim promoted template: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestDeleteTemplate(t *testing.T) {
 	}
 	// The next claim for the deleted template cold-boots instead of cloning.
 	before := len(eng.colds)
-	if _, err := m.Claim(t.Context(), key, 0); err != nil {
+	if _, err := claimAny(t.Context(), m, key, 0); err != nil {
 		t.Fatalf("Claim after delete: %v", err)
 	}
 	if len(eng.colds) != before+1 {

@@ -147,17 +147,9 @@ func (s *Sandbox) Fork(ctx context.Context, count int, ttl time.Duration) ([]*Sa
 	if err != nil {
 		return nil, fmt.Errorf("encode fork: %w", err)
 	}
-	resp, err := s.postAsClaimer(ctx, "fork", bytes.NewReader(body))
+	fr, err := doJSON[forkResponse](ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/fork", bytes.NewReader(body), s.c.apiToken, "fork")
 	if err != nil {
 		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, apiError("fork", resp)
-	}
-	var fr forkResponse
-	if err := json.NewDecoder(resp.Body).Decode(&fr); err != nil {
-		return nil, fmt.Errorf("decode fork response: %w", err)
 	}
 	children := make([]*Sandbox, len(fr.Children))
 	for i, c := range fr.Children {
@@ -178,17 +170,9 @@ func (s *Sandbox) Promote(ctx context.Context, template string) (*Template, erro
 	if err != nil {
 		return nil, fmt.Errorf("encode promote: %w", err)
 	}
-	resp, err := s.postAsClaimer(ctx, "promote", bytes.NewReader(body))
+	pr, err := doJSON[promoteResponse](ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/promote", bytes.NewReader(body), s.c.apiToken, "promote")
 	if err != nil {
 		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, apiError("promote", resp)
-	}
-	var pr promoteResponse
-	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
-		return nil, fmt.Errorf("decode promote response: %w", err)
 	}
 	return &Template{Name: pr.Key.Template, c: s.c, addr: s.owner, net: pr.Key.Net, size: pr.Key.Size}, nil
 }
@@ -198,15 +182,7 @@ func (s *Sandbox) Promote(ctx context.Context, template string) (*Template, erro
 // sessions, processes, and memory state intact. The TTL keeps running — a
 // hibernated sandbox is still reaped at its deadline.
 func (s *Sandbox) Hibernate(ctx context.Context) error {
-	resp, err := s.post(ctx, "hibernate", nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusNoContent {
-		return apiError("hibernate", resp)
-	}
-	return nil
+	return doNoContent(ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/hibernate", nil, s.token, "hibernate")
 }
 
 // Close releases the sandbox on its node; releasing one already gone is not
@@ -255,12 +231,6 @@ func (s *Sandbox) call(ctx context.Context, req silkd.Request) (*silkd.Conn, fun
 // claim); a non-nil body is JSON.
 func (s *Sandbox) post(ctx context.Context, verb string, body io.Reader) (*http.Response, error) {
 	return s.postWith(ctx, verb, body, s.token)
-}
-
-// postAsClaimer sends a resource-creating verb (fork, promote): the node
-// wants the api token like a claim; the sandbox token rides in the body.
-func (s *Sandbox) postAsClaimer(ctx context.Context, verb string, body io.Reader) (*http.Response, error) {
-	return s.postWith(ctx, verb, body, s.c.apiToken)
 }
 
 func (s *Sandbox) postWith(ctx context.Context, verb string, body io.Reader, bearer string) (*http.Response, error) {

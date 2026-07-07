@@ -35,6 +35,21 @@ type PoolSpec struct {
 	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitempty"`
 }
 
+// ValidateLimits checks the warm/watermark/idle bounds — shared by the
+// config file path and the PUT /v1/pools path so the two cannot drift.
+func (s PoolSpec) ValidateLimits() error {
+	if s.Warm < 0 {
+		return fmt.Errorf("warm must not be negative")
+	}
+	if s.WarmMax != 0 && s.WarmMax < s.Warm {
+		return fmt.Errorf("warm_max %d below warm %d", s.WarmMax, s.Warm)
+	}
+	if s.IdleHibernateSeconds < 0 {
+		return fmt.Errorf("idle_hibernate_seconds must not be negative")
+	}
+	return nil
+}
+
 // MeshConfig configures cluster membership. Two v1 constraints: all nodes
 // must share the same APIToken (the SDK replays it across a redirect), and a
 // node serving the egress lane can only redirect egress claims to peers if it
@@ -178,14 +193,8 @@ func (c *Config) validate() error {
 		if p.Net == types.NetEgress && !c.HasEgress() {
 			return fmt.Errorf("pool %q: egress lane needs bridge or network", p.Template)
 		}
-		if p.Warm < 0 {
-			return fmt.Errorf("pool %q: warm must not be negative", p.Template)
-		}
-		if p.IdleHibernateSeconds < 0 {
-			return fmt.Errorf("pool %q: idle_hibernate_seconds must not be negative", p.Template)
-		}
-		if p.WarmMax != 0 && p.WarmMax < p.Warm {
-			return fmt.Errorf("pool %q: warm_max %d below warm %d", p.Template, p.WarmMax, p.Warm)
+		if err := p.ValidateLimits(); err != nil {
+			return fmt.Errorf("pool %q: %w", p.Template, err)
 		}
 	}
 	return nil

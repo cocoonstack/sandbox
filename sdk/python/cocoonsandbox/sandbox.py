@@ -11,8 +11,8 @@ import threading
 
 from .checkpoint import Checkpoint
 from .conn import Conn, dial_agent
-from .errors import ExitError, ProtocolError, SandboxError
-from .frames import FS_CHUNK
+from .errors import APIError, ExitError, ProtocolError, SandboxError
+from .frames import BULK_CHUNK, FS_CHUNK
 from .template import Template
 
 
@@ -55,8 +55,7 @@ class Sandbox:
             conn.send("exec", argv=argv, cwd=cwd or None, env=env,
                       user=user or None, session=session or None)
             if stdin:
-                for off in range(0, len(stdin), FS_CHUNK):
-                    conn.send("stdin", data=stdin[off:off + FS_CHUNK])
+                _send_chunks(conn, stdin, op="stdin")
             conn.send("stdin_close")
             for frame in conn.recv_until("exit"):
                 if frame["type"] == "stdout" and on_stdout:
@@ -71,9 +70,7 @@ class Sandbox:
         """Writes data to path atomically (temp + rename on the guest)."""
         with self._dial() as conn:
             conn.send("fs_write", path=path, mode=mode)
-            view = memoryview(data)
-            for off in range(0, len(view), FS_CHUNK):
-                conn.send("data", data=view[off:off + FS_CHUNK])
+            _send_chunks(conn, data)
             conn.send("data_end")
             _expect(conn, "done")
 
@@ -110,9 +107,7 @@ class Sandbox:
         stream; the only project-ingestion path on the no-network lane."""
         with self._dial() as conn:
             conn.send("fs_push", dest=dest)
-            view = memoryview(tar_stream)
-            for off in range(0, len(view), FS_CHUNK):
-                conn.send("data", data=view[off:off + FS_CHUNK])
+            _send_chunks(conn, tar_stream, chunk=BULK_CHUNK)
             conn.send("data_end")
             _expect(conn, "done")
 
@@ -175,13 +170,7 @@ class Sandbox:
     def watch(self, path: str, recursive: bool = False) -> Watcher:
         """Streams filesystem events under path; events after the returned
         Watcher exists are guaranteed captured. Close it to stop."""
-        conn = self._dial()
-        try:
-            conn.send("fs_watch", path=path, recursive=recursive or None)
-            _expect(conn, "ready")
-        except Exception:
-            conn.close()
-            raise
+        conn, _ = self._open_stream("fs_watch", path=path, recursive=recursive or None)
         return Watcher(conn)
 
     def session(self, cwd: str = "", env: dict | None = None) -> Session:
@@ -242,14 +231,8 @@ class Sandbox:
                  env: dict | None = None, user: str = "") -> Pty:
         """Runs the guest shell under a pty; returns a byte-stream handle.
         A pty is a process guest-side: resize goes through its pid."""
-        conn = self._dial()
-        try:
-            conn.send("pty_open", cols=cols, rows=rows, cwd=cwd or None,
-                      env=env, user=user or None)
-            started = _expect(conn, "started")
-        except Exception:
-            conn.close()
-            raise
+        conn, started = self._open_stream("pty_open", expect="started", cols=cols,
+                                          rows=rows, cwd=cwd or None, env=env, user=user or None)
         return Pty(self, conn, started["pid"])
 
     def proxy_port(self, local_addr: str, port: int) -> socket.socket:
@@ -274,25 +257,34 @@ class Sandbox:
 
     def dial_port(self, port: int) -> PortConn:
         """Opens a byte stream to 127.0.0.1:port inside the guest."""
-        return self._open_stream("port_forward", port=port)
+        conn, _ = self._open_stream("port_forward", port=port)
+        return PortConn(conn)
 
     def close(self) -> None:
-        """Releases the sandbox; its VM is destroyed."""
-        self._client._request(self.owner, "POST", f"/v1/sandboxes/{self.id}/release",
-                              None, "release", bearer=self.token)
+        """Releases the sandbox; its VM is destroyed. Releasing one already
+        gone is not an error — double-release and reap races stay silent,
+        matching the Go SDK."""
+        try:
+            self._client._request(self.owner, "POST", f"/v1/sandboxes/{self.id}/release",
+                                  None, "release", bearer=self.token)
+        except APIError as exc:
+            if exc.status != 404:
+                raise
 
     def _dial(self) -> Conn:
         return dial_agent(self.owner, self.id, self.token, self._client.timeout)
 
-    def _open_stream(self, op: str, **fields) -> PortConn:
+    def _open_stream(self, op: str, expect: str = "ready", **fields) -> tuple[Conn, dict]:
+        """Dials, sends op, and waits for the handshake frame, closing the
+        conn on any failure so no socket leaks on the error path."""
         conn = self._dial()
         try:
             conn.send(op, **fields)
-            _expect(conn, "ready")
+            frame = _expect(conn, expect)
         except Exception:
             conn.close()
             raise
-        return PortConn(conn)
+        return conn, frame
 
     def _proxy_accept_loop(self, listener: socket.socket, port: int) -> None:
         with contextlib.suppress(OSError):
@@ -411,7 +403,8 @@ class Lsp:
         """Opens the JSON-RPC byte stream: writes go to the server's stdin,
         recv returns its stdout. A server serves one request for its
         lifetime; closing the stream ends the session and reaps it."""
-        return self._sandbox._open_stream("lsp_request", server_id=self.server_id)
+        conn, _ = self._sandbox._open_stream("lsp_request", server_id=self.server_id)
+        return PortConn(conn)
 
     def stop(self) -> None:
         """Kills the language server."""
@@ -432,9 +425,7 @@ class PortConn:
         self.close()
 
     def send(self, data: bytes) -> None:
-        view = memoryview(data)
-        for off in range(0, len(view), FS_CHUNK):
-            self._conn.send("data", data=view[off:off + FS_CHUNK])
+        _send_chunks(self._conn, data, chunk=BULK_CHUNK)
 
     def recv(self) -> bytes:
         """Returns the next chunk from the guest; b'' on stream end."""
@@ -453,6 +444,12 @@ class PortConn:
 
     def close(self) -> None:
         self._conn.close()
+
+
+def _send_chunks(conn: Conn, data: bytes, op: str = "data", chunk: int = FS_CHUNK) -> None:
+    view = memoryview(data)
+    for off in range(0, len(view), chunk):
+        conn.send(op, data=view[off:off + chunk])
 
 
 def _expect(conn: Conn, frame_type: str) -> dict:

@@ -286,8 +286,7 @@ func smokeGit(ctx context.Context, sb *sandbox.Sandbox) error {
 
 	// This sandbox is on the no-network lane: push must fail with the typed
 	// unimplemented error, not hang on an unreachable remote.
-	var e *silkd.ErrorResp
-	if err := sb.GitPush(ctx, "/work", ""); !errors.As(err, &e) || e.Kind != silkd.KindUnimplemented {
+	if err := sb.GitPush(ctx, "/work", ""); !isSilkdKind(err, silkd.KindUnimplemented) {
 		return fmt.Errorf("push on none lane: %v, want unimplemented", err)
 	}
 	return nil
@@ -306,8 +305,7 @@ func smokeEgress(ctx context.Context, client *sandbox.Client, template string) e
 	if _, err := sb.Exec(ctx, "git", "init", "-q", "-b", "main", "/tmp/r"); err != nil {
 		return err
 	}
-	var e *silkd.ErrorResp
-	if err := sb.GitPush(ctx, "/tmp/r", ""); !errors.As(err, &e) || e.Kind != silkd.KindInternal {
+	if err := sb.GitPush(ctx, "/tmp/r", ""); !isSilkdKind(err, silkd.KindInternal) {
 		return fmt.Errorf("push on egress lane: %v, want internal git failure (lane misdetected?)", err)
 	}
 	return nil
@@ -566,8 +564,7 @@ func smokePortForward(ctx context.Context, sb *sandbox.Sandbox) error {
 	if string(banner) != "SSH-" {
 		return fmt.Errorf("banner %q, want an SSH greeting", banner)
 	}
-	var e *silkd.ErrorResp
-	if _, err := sb.DialPort(ctx, 9); !errors.As(err, &e) || e.Kind != silkd.KindNotFound {
+	if _, err := sb.DialPort(ctx, 9); !isSilkdKind(err, silkd.KindNotFound) {
 		return fmt.Errorf("dead port: %v, want not_found", err)
 	}
 	return nil
@@ -595,7 +592,7 @@ func want(got, exp string) error {
 // typed not_found (no manifests), and a python-flavor sandbox serves a real
 // pylsp session — initialize, didOpen, hover — over the relay.
 func smokeLsp(ctx context.Context, client *sandbox.Client, base *sandbox.Sandbox, template string) error {
-	if _, err := base.StartLsp(ctx, "python", ""); !isSilkdKind(err, "not_found") {
+	if _, err := base.StartLsp(ctx, "python", ""); !isSilkdKind(err, silkd.KindNotFound) {
 		return fmt.Errorf("base StartLsp: %v, want typed not_found", err)
 	}
 

@@ -10,6 +10,9 @@ import json
 PROTO_VERSION = 1
 MAX_FRAME = 8 * 1024 * 1024
 FS_CHUNK = 32 * 1024
+# Bulk streams (push tars, port bytes) chunk larger — fewer frames for the
+# same bytes, still far under MAX_FRAME after base64; mirrors the Go SDK.
+BULK_CHUNK = 1 << 20
 
 
 def encode_request(op: str, **fields) -> bytes:

@@ -21,11 +21,11 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
 
-use crate::proto::{self, ErrorKind, Request, Response, READ_CHUNK};
+use crate::proto::{self, ErrorKind, Request, Response};
 
 const MANIFEST_DIR: &str = "/etc/silkd/lsp.d";
 
@@ -202,22 +202,10 @@ async fn pump_stdout<W: AsyncWrite + Unpin>(
     mut stdout: ChildStdout,
     w: &mut W,
 ) -> std::io::Result<()> {
-    let mut buf = vec![0u8; READ_CHUNK];
-    loop {
-        match stdout.read(&mut buf).await {
-            Ok(0) => return proto::write_frame(w, &Response::Done).await,
-            Ok(n) => {
-                proto::write_frame(
-                    w,
-                    &Response::Data {
-                        data: buf[..n].to_vec(),
-                    },
-                )
-                .await?
-            }
-            Err(e) => return proto::err_frame(w, &e, "read lsp stdout").await,
-        }
+    if let Err(e) = proto::stream_data_frames(&mut stdout, w).await? {
+        return proto::err_frame(w, &e, "read lsp stdout").await;
     }
+    proto::write_frame(w, &Response::Done).await
 }
 
 // manifest_dir allows tests (and an operator) to relocate the manifest dir

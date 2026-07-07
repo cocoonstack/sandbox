@@ -210,17 +210,6 @@ func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
 	return m, nil
 }
 
-// Claim hands out a claim-ready sandbox: a warm hit when one exists, else a
-// provision (golden clone ~40ms, or a cold boot for an unpooled key). The mesh
-// redirect is layered above this in the server; Claim itself is node-local.
-func (m *Manager) Claim(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
-	sb, err := m.ClaimWarm(ctx, key, ttl)
-	if errors.Is(err, ErrNoWarm) {
-		return m.ClaimProvision(ctx, key, ttl)
-	}
-	return sb, err
-}
-
 // ClaimWarm transfers ownership of a warm sandbox without provisioning;
 // ErrNoWarm means the pool is empty (the caller may redirect or provision).
 func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
@@ -318,23 +307,13 @@ func (m *Manager) WarmCounts() map[string]int {
 func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 	desired := make(map[types.PoolKey]config.PoolSpec, len(specs))
 	hashes := make(map[string]types.PoolKey, len(specs))
-	enableIdle := false
 	for _, spec := range specs {
 		spec = normalizePoolSpec(spec)
 		if err := m.validate(spec.PoolKey); err != nil {
 			return err
 		}
-		if spec.Warm < 0 {
-			return fmt.Errorf("%w: warm must not be negative", ErrBadCount)
-		}
-		if spec.WarmMax != 0 && spec.WarmMax < spec.Warm {
-			return fmt.Errorf("%w: warm_max %d below warm %d", ErrBadCount, spec.WarmMax, spec.Warm)
-		}
-		if spec.IdleHibernateSeconds < 0 {
-			return fmt.Errorf("%w: idle_hibernate_seconds must not be negative", ErrBadCount)
-		}
-		if spec.IdleHibernateSeconds > 0 {
-			enableIdle = true
+		if err := spec.ValidateLimits(); err != nil {
+			return fmt.Errorf("%w: %v", ErrBadCount, err)
 		}
 		if existing, ok := hashes[spec.Hash()]; ok && existing != spec.PoolKey {
 			return fmt.Errorf("%w: pool key hash collision between %q and %q", ErrBadKey, existing.Template, spec.Template)
@@ -348,9 +327,6 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 
 	var trim []string
 	m.mu.Lock()
-	if enableIdle {
-		m.idleEnabled = true
-	}
 	now := time.Now()
 	for key, p := range m.pools {
 		spec, ok := desired[key]
@@ -387,6 +363,14 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 			p.goldenDir = dir
 		}
 		m.pools[key] = p
+	}
+	// Recompute rather than latch: removing every idle pool turns the
+	// sweep off again.
+	m.idleEnabled = m.idleDefault > 0
+	for _, p := range m.pools {
+		if p.idle > 0 {
+			m.idleEnabled = true
+		}
 	}
 	m.mu.Unlock()
 
@@ -473,7 +457,7 @@ func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.
 	// Preview bypasses the relay's audit tap (it dials the engine directly),
 	// so record the access here — the only data-plane entry that would
 	// otherwise leave no audit trace.
-	m.Audit(ctx, id, fmt.Appendf(nil, `{"op":"preview_dial","port":%d}`, port))
+	m.recordAudit(ctx, id, auditFrame{Op: "preview_dial", Port: port})
 	sock, err := m.wakeResolved(ctx, sb)
 	if err != nil {
 		return nil, err
@@ -884,6 +868,9 @@ func (m *Manager) validate(key types.PoolKey) error {
 	return nil
 }
 
+// normalizePoolSpec fills the wire defaults, mirroring ClaimRequest.Key():
+// API requests default net/size; config files stay explicit (Validate
+// rejects empty there).
 func normalizePoolSpec(spec config.PoolSpec) config.PoolSpec {
 	if spec.Net == "" {
 		spec.Net = types.NetNone
@@ -964,7 +951,7 @@ func (m *Manager) refillOnce(ctx context.Context) {
 	for _, p := range m.pools {
 		target := p.effectiveTarget(now)
 		if p.goldenDir == "" {
-			if !p.building && time.Now().After(p.nextBuild) {
+			if !p.building && now.After(p.nextBuild) {
 				p.building = true
 				go m.buildGolden(ctx, p)
 			}

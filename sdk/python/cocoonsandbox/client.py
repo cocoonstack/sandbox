@@ -49,11 +49,18 @@ class Client:
             query["size"] = size
         path = "/v1/templates?" + urllib.parse.urlencode(query)
         reply = self._request(self.addr, "DELETE", path, None, "delete template")
-        for peer in (reply or {}).get("redirect") or []:
-            query["no_redirect"] = "1"
-            path = "/v1/templates?" + urllib.parse.urlencode(query)
-            self._request(peer, "DELETE", path, None, "delete template")
-            return
+        candidates = (reply or {}).get("redirect") or []
+        query["no_redirect"] = "1"
+        path = "/v1/templates?" + urllib.parse.urlencode(query)
+        # Each candidate once, like the Go SDK: a peer that lost the template
+        # answers 404, the next may own it; the last 404 propagates.
+        for i, peer in enumerate(candidates):
+            try:
+                self._request(peer, "DELETE", path, None, "delete template")
+                return
+            except APIError as exc:
+                if exc.status != 404 or i == len(candidates) - 1:
+                    raise
 
     def lookup(self, id: str, token: str) -> Sandbox:
         """Relocates a handle from id + token: asks the entry node, then

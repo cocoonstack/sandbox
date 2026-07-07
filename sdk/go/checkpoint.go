@@ -34,32 +34,16 @@ func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error)
 	if err != nil {
 		return nil, fmt.Errorf("encode checkpoint claim: %w", err)
 	}
-	resp, err := ck.c.roundTrip(ctx, http.MethodPost, ck.addr, "/v1/checkpoints/"+ck.ID+"/claim", bytes.NewReader(body), ck.c.apiToken)
+	cr, err := doJSON[claimResponse](ctx, ck.c, http.MethodPost, ck.addr, "/v1/checkpoints/"+ck.ID+"/claim", bytes.NewReader(body), ck.c.apiToken, "claim checkpoint")
 	if err != nil {
 		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, apiError("claim checkpoint", resp)
-	}
-	var cr claimResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		return nil, fmt.Errorf("decode checkpoint claim: %w", err)
 	}
 	return ck.c.handleFrom(ck.addr, cr), nil
 }
 
 // Delete removes the checkpoint from its node.
 func (ck *Checkpoint) Delete(ctx context.Context) error {
-	resp, err := ck.c.roundTrip(ctx, http.MethodDelete, ck.addr, "/v1/checkpoints/"+ck.ID, nil, ck.c.apiToken)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusNoContent {
-		return apiError("delete checkpoint", resp)
-	}
-	return nil
+	return doNoContent(ctx, ck.c, http.MethodDelete, ck.addr, "/v1/checkpoints/"+ck.ID, nil, ck.c.apiToken, "delete checkpoint")
 }
 
 // Checkpoint captures the sandbox's full state — memory, disk, running
@@ -70,17 +54,9 @@ func (s *Sandbox) Checkpoint(ctx context.Context, name string) (*Checkpoint, err
 	if err != nil {
 		return nil, fmt.Errorf("encode checkpoint: %w", err)
 	}
-	resp, err := s.postAsClaimer(ctx, "checkpoint", bytes.NewReader(body))
+	cr, err := doJSON[checkpointResponse](ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/checkpoint", bytes.NewReader(body), s.c.apiToken, "checkpoint")
 	if err != nil {
 		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, apiError("checkpoint", resp)
-	}
-	var cr checkpointResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		return nil, fmt.Errorf("decode checkpoint response: %w", err)
 	}
 	return checkpointHandle(s.c, s.owner, cr.Checkpoint), nil
 }
@@ -88,17 +64,9 @@ func (s *Sandbox) Checkpoint(ctx context.Context, name string) (*Checkpoint, err
 // Checkpoints lists the CONNECTED node's checkpoints, newest first; the
 // returned handles are bound to that node.
 func (c *Client) Checkpoints(ctx context.Context) ([]*Checkpoint, error) {
-	resp, err := c.roundTrip(ctx, http.MethodGet, c.addr, "/v1/checkpoints", nil, c.apiToken)
+	lr, err := doJSON[checkpointListResponse](ctx, c, http.MethodGet, c.addr, "/v1/checkpoints", nil, c.apiToken, "list checkpoints")
 	if err != nil {
 		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, apiError("list checkpoints", resp)
-	}
-	var lr checkpointListResponse
-	if err := json.NewDecoder(resp.Body).Decode(&lr); err != nil {
-		return nil, fmt.Errorf("decode checkpoint list: %w", err)
 	}
 	ckpts := make([]*Checkpoint, len(lr.Checkpoints))
 	for i, rec := range lr.Checkpoints {

@@ -99,6 +99,8 @@ type InfoResponse struct {
 
 // PoolUpdateRequest is the wire body of PUT /v1/pools. It replaces the node's
 // desired warm targets with the supplied list; omitted pools are drained.
+// Lives here, not types/api.go: it embeds config.PoolSpec and types cannot
+// import config.
 type PoolUpdateRequest struct {
 	Pools []config.PoolSpec `json:"pools"`
 }
@@ -145,7 +147,7 @@ func (s *Server) Handler() http.Handler {
 	// ownership proof.
 	mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.requireAPIToken(s.handleFork))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/promote", s.requireAPIToken(s.handlePromote))
-	mux.HandleFunc("POST /v1/sandboxes/{id}/preview", s.handlePreview)
+	mux.HandleFunc("POST /v1/sandboxes/{id}/preview", s.requireAPIToken(s.handlePreview))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/checkpoint", s.requireAPIToken(s.handleCheckpoint))
 	mux.HandleFunc("POST /v1/checkpoints/{id}/claim", s.requireAPIToken(s.handleClaimCheckpoint))
 	mux.HandleFunc("GET /v1/checkpoints", s.requireAPIToken(s.handleListCheckpoints))

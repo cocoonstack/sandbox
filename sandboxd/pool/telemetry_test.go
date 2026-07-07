@@ -81,14 +81,14 @@ func TestQuotaRefusesClaimsPastCap(t *testing.T) {
 	m.maxClaims = 1
 
 	first := mustClaim(t, m, testKey)
-	if _, err := m.Claim(t.Context(), testKey, time.Hour); !errors.Is(err, ErrQuota) {
+	if _, err := claimAny(t.Context(), m, testKey, time.Hour); !errors.Is(err, ErrQuota) {
 		t.Fatalf("claim past cap: %v, want ErrQuota", err)
 	}
 	// The refused VM must not leak, and the pool state stays sane.
 	if err := m.Release(t.Context(), first.ID, first.Token); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if _, err := m.Claim(t.Context(), testKey, time.Hour); err != nil {
+	if _, err := claimAny(t.Context(), m, testKey, time.Hour); err != nil {
 		t.Errorf("claim after release: %v", err)
 	}
 }

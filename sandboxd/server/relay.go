@@ -74,12 +74,12 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "connection cannot be hijacked")
 		return
 	}
-	s.relay(r.PathValue("id"), client, bufrw.Reader, guest)
+	s.relay(r.Context(), r.PathValue("id"), client, bufrw.Reader, guest)
 }
 
 // relay writes the 101 and splices the two connections until the guest side
 // finishes (silkd closes after the terminal frame) or the client vanishes.
-func (s *Server) relay(id string, client net.Conn, clientBuf *bufio.Reader, guest net.Conn) {
+func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBuf *bufio.Reader, guest net.Conn) {
 	s.relayMu.Lock()
 	if s.relayClosed {
 		s.relayMu.Unlock()
@@ -116,7 +116,7 @@ func (s *Server) relay(id string, client net.Conn, clientBuf *bufio.Reader, gues
 		// One connection is one RPC: the first line client→guest is the
 		// request frame. The tee records it as it flows, then passes through.
 		clientR = &auditTee{r: clientR, record: func(line []byte) {
-			s.mgr.Audit(context.Background(), id, line)
+			s.mgr.Audit(ctx, id, line)
 		}}
 	}
 

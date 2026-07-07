@@ -110,3 +110,16 @@ type PromoteRequest struct {
 type PromoteResponse struct {
 	Key PoolKey `json:"key"`
 }
+
+// PreviewRequest is the wire body of POST /v1/sandboxes/{id}/preview; auth
+// mirrors ForkRequest (api token in the header, ownership in Token).
+type PreviewRequest struct {
+	Token      string `json:"token"`
+	Port       uint16 `json:"port"`
+	TTLSeconds int    `json:"ttl_seconds,omitempty"`
+}
+
+// PreviewResponse carries the minted URL.
+type PreviewResponse struct {
+	URL string `json:"url"`
+}

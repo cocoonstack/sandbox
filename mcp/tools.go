@@ -144,12 +144,13 @@ func toolWriteFile(ctx context.Context, s *server, raw json.RawMessage) (string,
 
 func toolReadFile(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
 	var args struct {
-		Path string `json:"path"`
+		SandboxID string `json:"sandbox_id"`
+		Path      string `json:"path"`
 	}
 	if err := parse(raw, &args); err != nil {
 		return "", err
 	}
-	sb, err := s.boxArg(raw)
+	sb, err := s.box(args.SandboxID)
 	if err != nil {
 		return "", err
 	}
@@ -162,12 +163,13 @@ func toolReadFile(ctx context.Context, s *server, raw json.RawMessage) (string, 
 
 func toolListDir(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
 	var args struct {
-		Path string `json:"path"`
+		SandboxID string `json:"sandbox_id"`
+		Path      string `json:"path"`
 	}
 	if err := parse(raw, &args); err != nil {
 		return "", err
 	}
-	sb, err := s.boxArg(raw)
+	sb, err := s.box(args.SandboxID)
 	if err != nil {
 		return "", err
 	}

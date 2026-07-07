@@ -135,17 +135,9 @@ func (s *Sandbox) PreviewURL(ctx context.Context, port uint16, ttl time.Duration
 	if err != nil {
 		return "", fmt.Errorf("encode preview: %w", err)
 	}
-	resp, err := s.postAsClaimer(ctx, "preview", bytes.NewReader(body))
+	pr, err := doJSON[previewResponse](ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/preview", bytes.NewReader(body), s.c.apiToken, "preview")
 	if err != nil {
 		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return "", apiError("preview", resp)
-	}
-	var pr previewResponse
-	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
-		return "", fmt.Errorf("decode preview response: %w", err)
 	}
 	return pr.URL, nil
 }

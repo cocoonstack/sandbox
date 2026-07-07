@@ -109,7 +109,7 @@ func TestForkUnknownSandbox(t *testing.T) {
 func TestForkAllOrNothing(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	parent, err := m.Claim(t.Context(), testKey, 0) // cold boot, no Clone calls yet
+	parent, err := claimAny(t.Context(), m, testKey, 0) // cold boot, no Clone calls yet
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}

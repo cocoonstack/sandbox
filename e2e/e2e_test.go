@@ -204,7 +204,6 @@ func TestWrongAPITokenRejected(t *testing.T) {
 type stack struct {
 	client *sandbox.Client
 	mgr    *pool.Manager
-	eng    *fakeEngine
 	addr   string
 }
 
@@ -231,7 +230,7 @@ func startStack(t *testing.T, apiToken string, pools ...config.PoolSpec) *stack 
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	return &stack{client: client, mgr: mgr, eng: eng, addr: addr}
+	return &stack{client: client, mgr: mgr, addr: addr}
 }
 
 func waitFor(t *testing.T, cond func() bool) {

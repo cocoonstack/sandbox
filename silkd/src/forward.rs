@@ -12,7 +12,7 @@ use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
-use crate::proto::{self, ErrorKind, Request, Response, READ_CHUNK};
+use crate::proto::{self, ErrorKind, Request, Response, BULK_CHUNK};
 
 /// Connects to 127.0.0.1:port and relays until either side finishes. The two
 /// directions run on separate tasks: a blocking `write_all` into the guest
@@ -41,7 +41,7 @@ pub async fn run<W: AsyncWrite + Unpin>(
     let mut feed = tokio::spawn(feed_socket(client, tw));
     let mut feed_done = false;
 
-    let mut buf = vec![0u8; READ_CHUNK];
+    let mut buf = vec![0u8; BULK_CHUNK];
     let res = loop {
         tokio::select! {
             r = tr.read(&mut buf) => match r {

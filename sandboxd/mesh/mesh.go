@@ -85,10 +85,15 @@ func (m *Mesh) Join(seeds []string) error {
 }
 
 // UpdateSelf republishes this node's warm-pool counts and promoted-template
-// set, bumping the epoch so peers adopt the new view.
+// set, bumping the epoch so peers adopt the new view. An unchanged view is
+// not republished — the periodic tick would otherwise gossip a fresh epoch
+// every second for nothing.
 func (m *Mesh) UpdateSelf(pools map[string]int, templates []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if maps.Equal(m.self.Pools, pools) && slices.Equal(m.self.Templates, templates) {
+		return
+	}
 	m.self.Epoch++
 	m.self.Pools = pools
 	m.self.Templates = templates

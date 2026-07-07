@@ -2,7 +2,6 @@ package sandbox
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"time"
 )
@@ -37,16 +36,8 @@ type PoolStatus struct {
 
 // Info reports the entry node's pools, claim counts, and mesh peers.
 func (c *Client) Info(ctx context.Context) (*NodeInfo, error) {
-	resp, err := c.roundTrip(ctx, http.MethodGet, c.addr, "/v1/info", nil, c.apiToken)
+	info, err := doJSON[NodeInfo](ctx, c, http.MethodGet, c.addr, "/v1/info", nil, c.apiToken, "info")
 	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, apiError("info", resp)
-	}
-	var info NodeInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
 		return nil, err
 	}
 	return &info, nil

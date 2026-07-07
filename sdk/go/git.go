@@ -6,10 +6,11 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
-// GitClone clones url into path in the sandbox. Auth, when non-empty, is a
-// token sent as an in-memory Authorization header. Needs the egress lane.
-func (s *Sandbox) GitClone(ctx context.Context, url, path, branch, auth string) error {
-	return s.doneRPC(ctx, &silkd.GitClone{URL: url, Path: path, Branch: branch, Auth: auth})
+// GitClone clones url into path in the sandbox; depth > 0 makes a shallow
+// clone. Auth, when non-empty, is a token sent as an in-memory Authorization
+// header. Needs the egress lane.
+func (s *Sandbox) GitClone(ctx context.Context, url, path, branch string, depth uint32, auth string) error {
+	return s.doneRPC(ctx, &silkd.GitClone{URL: url, Path: path, Branch: branch, Depth: depth, Auth: auth})
 }
 
 // GitStatus returns the structured status of the repo at path.

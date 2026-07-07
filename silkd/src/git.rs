@@ -273,7 +273,7 @@ fn parse_file_line(line: &str) -> Option<GitFileStatus> {
             let unstaged = chars.next()?.to_string();
             let skip = if kind == "2" { 7 } else { 6 }; // to reach the path field
             let path = fields.nth(skip)?;
-            // Rejoin any spaces splitn consumed, then drop a rename's \t<orig>.
+            // Rejoin any spaces the split consumed, then drop a rename's \t<orig>.
             let rest: Vec<&str> = fields.collect();
             let full = if rest.is_empty() {
                 path.to_string()

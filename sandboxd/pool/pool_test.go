@@ -48,7 +48,7 @@ func TestClaimClampsTTL(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
 
-	sb, err := m.Claim(t.Context(), testKey, 48*time.Hour)
+	sb, err := claimAny(t.Context(), m, testKey, 48*time.Hour)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestClaimUnpooledKeyColdBoots(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 
-	if _, err := m.Claim(t.Context(), testKey, 0); err != nil {
+	if _, err := claimAny(t.Context(), m, testKey, 0); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 	if len(eng.colds) != 1 || len(eng.clones) != 0 {
@@ -97,7 +97,7 @@ func TestClaimProbeFailureDestroysVM(t *testing.T) {
 	eng.probeErr = errors.New("never ready")
 	m := newTestManager(t, eng)
 
-	if _, err := m.Claim(t.Context(), testKey, 0); err == nil {
+	if _, err := claimAny(t.Context(), m, testKey, 0); err == nil {
 		t.Fatal("Claim succeeded with failing probe")
 	}
 	if len(eng.removes) != 1 {
@@ -113,7 +113,7 @@ func TestClaimCreateFailureDestroysVM(t *testing.T) {
 	eng.runColdErr = errors.New("cli killed by timeout")
 	m := newTestManager(t, eng)
 
-	if _, err := m.Claim(t.Context(), testKey, 0); err == nil {
+	if _, err := claimAny(t.Context(), m, testKey, 0); err == nil {
 		t.Fatal("Claim succeeded with failing create")
 	}
 	if len(eng.removes) != 1 {
@@ -128,7 +128,7 @@ func TestClaimCanceledRequestStillDestroys(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	if _, err := m.Claim(ctx, testKey, 0); err == nil {
+	if _, err := claimAny(ctx, m, testKey, 0); err == nil {
 		t.Fatal("Claim succeeded with failing probe")
 	}
 	if len(eng.removes) != 1 {
@@ -140,7 +140,7 @@ func TestClaimEgressNeedsAttachment(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	key := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}
 
-	if _, err := m.Claim(t.Context(), key, 0); !errors.Is(err, ErrNoEgress) {
+	if _, err := claimAny(t.Context(), m, key, 0); !errors.Is(err, ErrNoEgress) {
 		t.Errorf("got %v, want ErrNoEgress", err)
 	}
 }
@@ -149,7 +149,7 @@ func TestClaimRejectsBadKey(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	key := types.PoolKey{Template: "rt:24.04", Net: "lan", Size: types.SizeSmall}
 
-	if _, err := m.Claim(t.Context(), key, 0); !errors.Is(err, ErrBadKey) {
+	if _, err := claimAny(t.Context(), m, key, 0); !errors.Is(err, ErrBadKey) {
 		t.Errorf("got %v, want ErrBadKey", err)
 	}
 }
@@ -400,9 +400,19 @@ func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Ma
 	return newTestManagerAt(t, eng, t.TempDir(), pools...)
 }
 
+// claimAny composes warm-then-provision the way the server does around the
+// redirect decision; production has no single-call form.
+func claimAny(ctx context.Context, m *Manager, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
+	sb, err := m.ClaimWarm(ctx, key, ttl)
+	if errors.Is(err, ErrNoWarm) {
+		return m.ClaimProvision(ctx, key, ttl)
+	}
+	return sb, err
+}
+
 func mustClaim(t *testing.T, m *Manager, key types.PoolKey) *types.Sandbox {
 	t.Helper()
-	sb, err := m.Claim(t.Context(), key, 0)
+	sb, err := claimAny(t.Context(), m, key, 0)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}

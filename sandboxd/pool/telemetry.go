@@ -43,6 +43,19 @@ type counters struct {
 	claimNanos, wakeNanos               atomic.Uint64
 }
 
+// auditFrame is the addressing slice of a request frame worth auditing.
+type auditFrame struct {
+	Op      string   `json:"op"`
+	Argv    []string `json:"argv,omitempty"`
+	Path    string   `json:"path,omitempty"`
+	Dest    string   `json:"dest,omitempty"`
+	From    string   `json:"from,omitempty"`
+	To      string   `json:"to,omitempty"`
+	URL     string   `json:"url,omitempty"`
+	Session string   `json:"session,omitempty"`
+	Port    uint16   `json:"port,omitempty"`
+}
+
 // Counters snapshots the monotonic telemetry counters.
 func (m *Manager) Counters() Counters {
 	c := &m.counters
@@ -64,6 +77,8 @@ func (m *Manager) Counters() Counters {
 
 // Audit records one relayed request frame against a sandbox when the audit
 // journal is enabled: the op plus its addressing fields, payloads dropped.
+// It is the byte-level adapter over recordAudit for the relay's tee;
+// non-relay sources (preview) call recordAudit with the frame directly.
 func (m *Manager) Audit(ctx context.Context, id string, line []byte) {
 	if m.audit == nil || len(line) > AuditLineCap {
 		return
@@ -72,27 +87,21 @@ func (m *Manager) Audit(ctx context.Context, id string, line []byte) {
 	if err := json.Unmarshal(line, &frame); err != nil || frame.Op == "" {
 		return // torn cap boundary or a non-frame first line: nothing to record
 	}
+	m.recordAudit(ctx, id, frame)
+}
+
+func (m *Manager) recordAudit(ctx context.Context, id string, frame auditFrame) {
+	if m.audit == nil {
+		return
+	}
 	event := struct {
 		Time time.Time `json:"t"`
 		ID   string    `json:"id"`
 		auditFrame
 	}{time.Now(), id, frame}
 	if err := m.audit.append(event); err != nil {
-		log.WithFunc("pool.Audit").Errorf(ctx, err, "append audit event")
+		log.WithFunc("pool.recordAudit").Errorf(ctx, err, "append audit event")
 	}
-}
-
-// auditFrame is the addressing slice of a request frame worth auditing.
-type auditFrame struct {
-	Op      string   `json:"op"`
-	Argv    []string `json:"argv,omitempty"`
-	Path    string   `json:"path,omitempty"`
-	Dest    string   `json:"dest,omitempty"`
-	From    string   `json:"from,omitempty"`
-	To      string   `json:"to,omitempty"`
-	URL     string   `json:"url,omitempty"`
-	Session string   `json:"session,omitempty"`
-	Port    uint16   `json:"port,omitempty"`
 }
 
 // AuditEnabled reports whether the relay should tap request frames at all.

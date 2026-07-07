@@ -147,18 +147,10 @@ func (c *Client) DeleteTemplate(ctx context.Context, template string, opts ...Op
 // ownerAt asks one node whether it owns the sandbox, returning its data-plane
 // address on success.
 func (c *Client) ownerAt(ctx context.Context, addr, id, token string) (string, error) {
-	resp, err := c.roundTrip(ctx, http.MethodGet, addr, "/v1/sandboxes/"+id+"/owner", nil, token)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return "", apiError("owner", resp)
-	}
-	var body struct {
+	body, err := doJSON[struct {
 		OwnerAddr string `json:"owner_addr"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	}](ctx, c, http.MethodGet, addr, "/v1/sandboxes/"+id+"/owner", nil, token, "owner")
+	if err != nil {
 		return "", err
 	}
 	owner := body.OwnerAddr
@@ -179,19 +171,7 @@ func (c *Client) handleFrom(dialed string, cr claimResponse) *Sandbox {
 }
 
 func (c *Client) claimAt(ctx context.Context, addr string, body []byte) (claimResponse, error) {
-	resp, err := c.roundTrip(ctx, http.MethodPost, addr, "/v1/claim", bytes.NewReader(body), c.apiToken)
-	if err != nil {
-		return claimResponse{}, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return claimResponse{}, apiError("claim", resp)
-	}
-	var cr claimResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		return claimResponse{}, fmt.Errorf("decode claim response: %w", err)
-	}
-	return cr, nil
+	return doJSON[claimResponse](ctx, c, http.MethodPost, addr, "/v1/claim", bytes.NewReader(body), c.apiToken, "claim")
 }
 
 // deleteTemplates issues the template delete against one node; a 200 with a
@@ -214,6 +194,38 @@ func (c *Client) deleteTemplates(ctx context.Context, addr string, u url.Values)
 	default:
 		return nil, apiError("delete template", resp)
 	}
+}
+
+// doJSON issues one control-plane request and decodes a 200 reply into T;
+// any other status maps through apiError under verb. The shared plumbing
+// behind every decode-a-reply verb in this file and its siblings.
+func doJSON[T any](ctx context.Context, c *Client, method, addr, path string, body io.Reader, bearer, verb string) (T, error) {
+	var out T
+	resp, err := c.roundTrip(ctx, method, addr, path, body, bearer)
+	if err != nil {
+		return out, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return out, apiError(verb, resp)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return out, fmt.Errorf("decode %s response: %w", verb, err)
+	}
+	return out, nil
+}
+
+// doNoContent is doJSON's reply-less twin: 204 or an apiError.
+func doNoContent(ctx context.Context, c *Client, method, addr, path string, body io.Reader, bearer, verb string) error {
+	resp, err := c.roundTrip(ctx, method, addr, path, body, bearer)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		return apiError(verb, resp)
+	}
+	return nil
 }
 
 // roundTrip issues one control-plane request against addr, attaching bearer
