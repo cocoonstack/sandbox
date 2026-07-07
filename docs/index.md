@@ -36,6 +36,8 @@ bridge/CNI NIC. Backends are never user-selected.
   Claude Code, Cursor, and agent frameworks
 - [OpenAI Agents SDK adapter](openai-adapter.md) — run Agents SDK tools
   inside cocoon microVMs via the custom sandbox-provider interface
+- [Android sandboxes](android.md) — the redroid flavor: claim shape, adb
+  access through the relay or the network, checkpoint/branch
 - [silkd](silkd.md) — the in-guest daemon: protocol, verb reference, lanes
   and limits
 - [Performance](performance.md) — measured latencies and the environments
