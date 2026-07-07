@@ -1,9 +1,11 @@
-# android flavor (groundwork)
+# android flavor
 
-Android guest for UI-automation sandboxes: the cocoon-android lineage
-(`ghcr.io/jiaqing-simular/cocoon-android-vnc`, a redroid-style Android 15
-rootfs with droidVNC-NG baked in) plus silkd, claimable like any other
-template. The intended pool shape is `size: xlarge` (4 CPU / 8G).
+Android guest for UI-automation sandboxes: the cocoon project's official
+redroid image (`ghcr.io/cocoonstack/cocoon/android:15.0`, upstream
+redroid 15 rootfs + cocoon boot chain, built from `cocoon/os-image/android/`)
+plus silkd, claimable like any other template. Remote access is adb on
+port 5555 — no VNC in this lineage. The intended pool shape is
+`size: xlarge` (4 CPU / 8G).
 
 ## Build
 
@@ -17,17 +19,17 @@ Unlike the Ubuntu flavors, the guest has no glibc and no systemd:
   the `cocoon-agent.rc` pattern the base lineage already ships.
 - `platforms` — `linux/amd64`; the lineage is x86_64-only.
 
-Verified about the base image (0.3.0): pullable at docker level and via
-`cocoon image pull`; 4 layers, ~3.7GB on disk; entrypoint
-`/init androidboot.hardware=redroid ro.setupwizard.mode=DISABLED`; ships its
-own kernel (`/boot/vmlinuz-6.8.0-117-generic` + initrd, with
-`binder_linux.ko`) rather than using the sandbox boot artifact; already runs
-`cocoon-agent` from `/system/etc/init/cocoon-agent.rc` (class core, root, no
-seclabel — the lineage boots SELinux-permissive).
+Verified about the base image (15.0): anonymous ghcr pull at docker and
+`cocoon image pull` level; 2 layers; ships its own kernel
+(`/boot/vmlinuz-6.8.*-generic` + initrd, `binder_linux.ko`) booted via
+`/sbin/init` busybox wrapper → Android `/init`; runs `cocoon-agent` from
+`/system/etc/init/cocoon-agent.rc`; full framework boot to
+`sys.boot_completed=1` with zygote64 + system_server alive (CH egress
+lane, 4 CPU / 8G).
 
-The base is public on ghcr (anonymous pull verified against the manifest
-endpoint), so the flavor rides the normal images matrix; the earlier
-"CI base-image access" blocker is void.
+Do not revert to the previous `ghcr.io/jiaqing-simular/cocoon-android-vnc`
+pin: that build ships a broken dexpreopt boot-image chain that
+crash-loops zygote before the framework ever completes.
 
 ## Open
 
