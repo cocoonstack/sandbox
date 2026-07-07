@@ -1,0 +1,68 @@
+# PyPI publishing via Trusted Publishing (OIDC) — no tokens in secrets.
+# One-time setup per package on pypi.org: add this repo + workflow as a
+# trusted publisher for the project name. Then a tag push releases:
+#   sdk-python-v0.1.0    -> cocoonstack-sandbox
+#   sdk-openai-v0.1.0    -> cocoonstack-sandbox-openai
+#   sdk-langchain-v0.1.0 -> cocoonstack-sandbox-langchain
+name: publish-pypi
+
+on:
+  push:
+    tags:
+      - "sdk-python-v*"
+      - "sdk-openai-v*"
+      - "sdk-langchain-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # OIDC for PyPI Trusted Publishing
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Resolve package dir from the tag
+        id: pkg
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            sdk-python-v*)    echo "dir=sdk/python"    >> "$GITHUB_OUTPUT" ;;
+            sdk-openai-v*)    echo "dir=sdk/openai"    >> "$GITHUB_OUTPUT" ;;
+            sdk-langchain-v*) echo "dir=sdk/langchain" >> "$GITHUB_OUTPUT" ;;
+            *) echo "unknown tag ${GITHUB_REF_NAME}" >&2; exit 1 ;;
+          esac
+          # The tag version must match pyproject's, so a stale tag cannot
+          # silently publish old code under a new number.
+          ver="${GITHUB_REF_NAME##*-v}"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check tag matches pyproject version
+        run: |
+          proj_ver=$(python -c "import tomllib;print(tomllib.load(open('${{ steps.pkg.outputs.dir }}/pyproject.toml','rb'))['project']['version'])")
+          [ "$proj_ver" = "${{ steps.pkg.outputs.version }}" ] || { echo "tag ${{ steps.pkg.outputs.version }} != pyproject $proj_ver" >&2; exit 1; }
+
+      - name: Test before publish
+        run: |
+          python -m pip install -q "${{ steps.pkg.outputs.dir }}" pytest ruff
+          # openai/langchain adapters depend on cocoonstack-sandbox: install
+          # the in-repo copy so a release never tests against a stale PyPI one
+          python -m pip install -q ./sdk/python
+          (cd "${{ steps.pkg.outputs.dir }}" && ruff check . && python -m pytest -q)
+
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install -q build
+          python -m build "${{ steps.pkg.outputs.dir }}"
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: ${{ steps.pkg.outputs.dir }}/dist

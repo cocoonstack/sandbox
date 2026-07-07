@@ -5,12 +5,14 @@ on:
     paths:
       - "sdk/python/**"
       - "sdk/openai/**"
+      - "sdk/langchain/**"
       - "protocol/**"
       - ".github/workflows/python.yml"
   pull_request:
     paths:
       - "sdk/python/**"
       - "sdk/openai/**"
+      - "sdk/langchain/**"
       - "protocol/**"
 
 jobs:
@@ -22,10 +24,12 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install tooling
-        run: pip install ruff pytest && pip install -e sdk/python -e sdk/openai
+        run: pip install ruff pytest && pip install -e sdk/python -e sdk/openai -e sdk/langchain
       - name: Lint
-        run: ruff check sdk/python && ruff check sdk/openai
+        run: ruff check sdk/python && ruff check sdk/openai && ruff check sdk/langchain
       - name: Test cocoonsandbox
         run: cd sdk/python && pytest -q
       - name: Test openai adapter
         run: cd sdk/openai && pytest -q
+      - name: Test langchain adapter
+        run: cd sdk/langchain && pytest -q

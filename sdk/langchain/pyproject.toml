@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cocoonstack-sandbox-langchain"
+version = "0.1.0"
+description = "LangChain tools backed by cocoon microVM sandboxes"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+readme = "README.md"
+dependencies = ["langchain-core>=1.0", "cocoonstack-sandbox>=0.1"]
+
+[tool.setuptools.packages.find]
+include = ["cocoonsandbox_langchain*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]

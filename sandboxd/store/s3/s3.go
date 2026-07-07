@@ -16,7 +16,9 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 )
@@ -38,6 +40,8 @@ type Config struct {
 // idRe names the instance's id namespace within the shared prefix.
 type Store struct {
 	client  *awss3.Client
+	up      *manager.Uploader
+	down    *manager.Downloader
 	bucket  string
 	prefix  string
 	staging string
@@ -62,7 +66,17 @@ func New(ctx context.Context, cfg Config, stagingRoot string, idRe *regexp.Regex
 		}
 		o.UsePathStyle = cfg.ForcePathStyle
 	})
-	return &Store{client: client, bucket: cfg.Bucket, prefix: cfg.Prefix, staging: stagingRoot, idRe: idRe}, nil
+	// Snapshot exports are hundreds of MB: multipart + concurrency keep a
+	// publish/fetch bandwidth-bound instead of latency-bound.
+	up := manager.NewUploader(client, func(u *manager.Uploader) {
+		u.PartSize = 16 << 20
+		u.Concurrency = 8
+	})
+	down := manager.NewDownloader(client, func(d *manager.Downloader) {
+		d.PartSize = 16 << 20
+		d.Concurrency = 8
+	})
+	return &Store{client: client, up: up, down: down, bucket: cfg.Bucket, prefix: cfg.Prefix, staging: stagingRoot, idRe: idRe}, nil
 }
 
 func (s *Store) Stage(id string) (string, error) {
@@ -73,6 +87,8 @@ func (s *Store) Stage(id string) (string, error) {
 // the checkpoint once its commit marker exists.
 func (s *Store) Publish(ctx context.Context, staging, id string) error {
 	var meta string
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(4) // files in parallel; each already multiparts internally
 	err := filepath.Walk(staging, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return err
@@ -85,9 +101,13 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 			meta = path
 			return nil
 		}
-		return s.upload(ctx, s.key(id, rel), path)
+		g.Go(func() error { return s.upload(gctx, s.key(id, rel), path) })
+		return nil
 	})
 	if err != nil {
+		return err
+	}
+	if err := g.Wait(); err != nil {
 		return err
 	}
 	if meta == "" {
@@ -129,11 +149,16 @@ func (s *Store) Fetch(ctx context.Context, id string) (string, func(), error) {
 		cleanup()
 		return "", nil, fmt.Errorf("record %s has no export", id)
 	}
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(4)
 	for _, key := range keys {
-		if err := s.download(ctx, key, filepath.Join(local, store.ExportDir, strings.TrimPrefix(key, exportPrefix))); err != nil {
-			cleanup()
-			return "", nil, err
-		}
+		g.Go(func() error {
+			return s.download(gctx, key, filepath.Join(local, store.ExportDir, strings.TrimPrefix(key, exportPrefix)))
+		})
+	}
+	if err := g.Wait(); err != nil {
+		cleanup()
+		return "", nil, err
 	}
 	if err := os.WriteFile(filepath.Join(local, store.MetaFile), meta, 0o600); err != nil {
 		cleanup()
@@ -232,19 +257,14 @@ func (s *Store) upload(ctx context.Context, key, path string) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	if _, err := s.client.PutObject(ctx, &awss3.PutObjectInput{Bucket: &s.bucket, Key: &key, Body: f}); err != nil {
+	if _, err := s.up.Upload(ctx, &awss3.PutObjectInput{Bucket: &s.bucket, Key: &key, Body: f}); err != nil {
 		return fmt.Errorf("upload %s: %w", key, err)
 	}
 	return nil
 }
 
 func (s *Store) download(ctx context.Context, key, path string) error {
-	out, err := s.client.GetObject(ctx, &awss3.GetObjectInput{Bucket: &s.bucket, Key: &key})
-	if err != nil {
-		return fmt.Errorf("download %s: %w", key, err)
-	}
-	defer func() { _ = out.Body.Close() }()
-	if err = os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
 	f, err := os.Create(path) //nolint:gosec // path derives from our own temp dir
@@ -252,8 +272,10 @@ func (s *Store) download(ctx context.Context, key, path string) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	_, err = io.Copy(f, out.Body)
-	return err
+	if _, err := s.down.Download(ctx, f, &awss3.GetObjectInput{Bucket: &s.bucket, Key: &key}); err != nil {
+		return fmt.Errorf("download %s: %w", key, err)
+	}
+	return nil
 }
 
 func (s *Store) list(ctx context.Context, prefix string) ([]string, error) {

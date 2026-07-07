@@ -67,13 +67,22 @@ if [[ -n ${BRIDGE:-} ]]; then
   EGRESS_POOL=", {\"template\": \"$TEMPLATE\", \"net\": \"egress\", \"size\": \"small\", \"warm\": 1}"
 fi
 
-echo "== start (pool: $TEMPLATE none/small warm=$WARM${BRIDGE:+, egress via $BRIDGE})"
+# S3_ENDPOINT (optional, with S3_BUCKET and AWS creds in the env) switches
+# the checkpoint store to the s3 backend — the checkpoint/promote steps
+# then exercise object storage end to end.
+STORE_LINE=""
+if [[ -n ${S3_ENDPOINT:-} ]]; then
+  STORE_LINE="\"checkpoint_store\": {\"kind\": \"s3\", \"s3\": {\"bucket\": \"${S3_BUCKET:-sbx-checkpoints}\", \"prefix\": \"e2e/\", \"endpoint\": \"$S3_ENDPOINT\", \"region\": \"us-east-1\", \"force_path_style\": true}},"
+fi
+
+echo "== start (pool: $TEMPLATE none/small warm=$WARM${BRIDGE:+, egress via $BRIDGE}${S3_ENDPOINT:+, s3 store at $S3_ENDPOINT})"
 cat >"$DATA/config.json" <<EOF
 {
   "listen": "$ADDR",
   "data_dir": "$DATA/state",
   "api_token": "$TOKEN",
   $BRIDGE_LINE
+  $STORE_LINE
   "pools": [{"template": "$TEMPLATE", "net": "none", "size": "small", "warm": $WARM}$EGRESS_POOL]
 }
 EOF
