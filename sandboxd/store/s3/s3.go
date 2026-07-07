@@ -112,13 +112,13 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 	if err != nil {
 		return err
 	}
-	if err := g.Wait(); err != nil {
+	if err = g.Wait(); err != nil {
 		return err
 	}
 	if meta == "" {
 		return fmt.Errorf("staging has no %s", store.MetaFile)
 	}
-	if err := s.upload(ctx, s.key(id, store.MetaFile), meta); err != nil {
+	if err = s.upload(ctx, s.key(id, store.MetaFile), meta); err != nil {
 		return err
 	}
 	// A re-publish (re-promote) may ship a different export file set:

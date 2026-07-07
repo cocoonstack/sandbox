@@ -144,10 +144,10 @@ type Manager struct {
 
 	// maxClaims caps live claims node-wide (0 = unlimited); usage is the
 	// always-on billing event stream, audit the config-gated request tap.
-	maxClaims int
-	usage     *journal
-	audit     *journal
-	counters  counters
+	maxClaims    int
+	usage        *journal
+	audit        *journal
+	counters     counters
 	ckpts        store.Store
 	tpls         store.Store
 	ckptTTL      time.Duration
