@@ -21,9 +21,10 @@ Python all round-trip in CI.
 client = Client("10.0.0.5:7777", api_token="...", timeout=120.0)
 ```
 
-`api_token` authenticates node-level calls (claim, info, fork, promote,
-checkpoint, preview); on a cluster all nodes share one token. `timeout`
-bounds every socket operation.
+`api_token` is the node token — a root `api_token` (full access) or a
+tenant token (resource-creating verbs only; operator surfaces answer it
+403). On a cluster every node shares the root token and the same tenants
+set. `timeout` bounds every socket operation.
 
 **Clusters need nothing extra**: dial any node. On a warm miss the entry
 node answers with a redirect and `new` follows it transparently; the
@@ -94,8 +95,9 @@ child = tpl.new()                 # clones the promoted state
 tpl.delete()                      # caller owns the lifecycle
 ```
 
-Templates are keyed by (name, the sandbox's network lane, its size) and
-live on the owning node; the returned `Template` handle is bound there, so
+Templates are keyed by (name, the sandbox's network lane, its size); on
+the default local-disk backend they live on the owning node (a shared
+store makes every node resolve them); the returned `Template` handle is bound there, so
 its `new`/`delete` always reach it. The name-based calls
 (`client.new("myproj:v1")`, `client.delete_template(...)`) route
 cluster-wide via template gossip and lag a promote/delete by about a gossip
@@ -120,8 +122,9 @@ A checkpoint captures memory, disk, and running processes without stopping
 the sandbox (the same brief pause a fork takes); `ckpt.new(ttl_seconds=0)`
 branches any number of independent sandboxes from that exact moment, and
 successive checkpoints of sources and branches form a tree. Checkpoints
-live in the node's `checkpoint_dir` — on a shared FUSE mount any node
-sharing the mount can branch them; handles stay owner-bound like templates.
+live in the node's checkpoint store — a shared FUSE mount or
+`checkpoint_store: s3` lets any node branch them; handles stay owner-bound
+like templates.
 
 ## Language servers (LSP)
 

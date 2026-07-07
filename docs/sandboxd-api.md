@@ -120,15 +120,18 @@ Publishes the sandbox's current state as a node-local template under
 from it, provision-on-demand — no warm pool unless the node config adds one.
 Re-promoting to the same name replaces the template. A hibernated sandbox is
 promoted from its memory image without waking. 200 returns the template's
-full key — templates are node-local, so a cluster client must claim from and
-delete on this node, under exactly this key:
+full key. On the default local-disk backend a template is node-local, so a
+cluster client claims from and deletes on this node (name-based calls route
+via gossip); a shared checkpoint store makes every node resolve it. Under
+exactly this key:
 
 ```json
 {"key": {"template": "myproj:v1", "net": "none", "size": "small"}}
 ```
 
 400 invalid name, 401 bad api token, 409 when the name collides with a
-configured pool, 404 unknown id or wrong sandbox token.
+configured pool or the template is owned by another tenant, 404
+unknown id or wrong sandbox token.
 
 ## DELETE /v1/templates?template=…&net=…&size=…
 
@@ -261,6 +264,13 @@ peers:
 `golden` reports whether the pool's snapshot exists (refill can clone);
 `warm` at `target` with `golden: true` means warm claims are served in
 sub-millisecond time.
+
+## GET /v1/peers
+
+Auth: node API token (root **or** tenant). Answers `{"peers": [addr, …]}`
+— the cluster's other node addresses, for the SDK's redirect follow and
+`Lookup` scatter. Cluster topology, not operator state, so a tenant token
+may read it (unlike `GET /v1/info`).
 
 ## GET /healthz
 

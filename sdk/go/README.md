@@ -15,6 +15,7 @@ out, _ := sb.Exec(ctx, "echo", "hello")
 - `files.go` / `tree.go` — streaming file verbs, tar push/pull
 - `port.go` — `DialPort`/`ProxyPort` (net.Conn over the relay), `PreviewURL`
 - `lsp.go` — `StartLsp` + the JSON-RPC byte stream to a flavor's server
+- `proc.go` — background process management (Spawn/Ps/Kill/Logs/Attach)
 - `checkpoint.go` / `template.go` — branch/rewind and promote handles
 - `silkd/` — the wire binding: frame types round-tripping
   `protocol/fixtures/` (drift against the Rust guest fails CI); `silkdtest/`

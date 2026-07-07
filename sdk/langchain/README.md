@@ -1,5 +1,7 @@
 # cocoonstack-sandbox-langchain
 
+`pip install cocoonstack-sandbox-langchain`
+
 LangChain tools backed by cocoon microVM sandboxes: a `CocoonToolkit`
 claims one sandbox lazily on first tool use and exposes it as
 `StructuredTool`s an agent can call — shell exec, file read/write, and

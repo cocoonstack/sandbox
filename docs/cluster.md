@@ -30,7 +30,9 @@ Give every node a `mesh` block:
   encryption; all members must share it
 
 Two v1 constraints, fine for a homogeneous cluster: all nodes share the same
-`api_token` (the SDK replays it across a redirect), and only egress-capable
+`api_token` and `tenants` set (the SDK replays whichever token authorized a
+call across a redirect; a peer missing that tenant answers 401), and only
+egress-capable
 nodes redirect egress claims.
 
 ## How placement works
@@ -58,7 +60,7 @@ it.
 
 ## Querying members
 
-`GET /v1/info` (api token) reports this node's pools plus the peer
+`GET /v1/info` (root `api_token`) reports this node's pools plus the peer
 data-plane addresses it currently sees:
 
 ```bash
@@ -77,8 +79,7 @@ curl -s -H "Authorization: Bearer $TOKEN" http://node-a:7777/v1/info | jq .
 }
 ```
 
-`peers` lists the *other* members' advertise addresses — it is what the SDK
-scatters across in `Lookup`. An empty/absent `peers` means a mesh of one.
+`peers`, served by `GET /v1/peers` (root or tenant token), is what the SDK scatters across in `Lookup`. An empty/absent `peers` means a mesh of one.
 
 ## Relocating a handle
 
@@ -116,5 +117,5 @@ race-free choice immediately after a promote.
 - memberlist port (e.g. 7946) open node-to-node, TCP **and** UDP
 - `advertise_addr` set to a routable address on every node (never loopback,
   never a wildcard)
-- same `api_token` everywhere
+- same `api_token` and `tenants` set everywhere
 - `cluster_key` set if the gossip network is not otherwise trusted

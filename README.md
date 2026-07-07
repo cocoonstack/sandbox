@@ -20,7 +20,8 @@ Two network lanes, derived from the claim (never user-selected backend):
 
 **Documentation**: [cocoonstack.github.io/sandbox](https://cocoonstack.github.io/sandbox/)
 (deployment, clusters, HTTP API, Go + Python SDK references, the MCP server,
-the OpenAI Agents SDK adapter, silkd protocol, performance) — source in
+the OpenAI Agents SDK and LangChain adapters, silkd protocol,
+performance) — source in
 [`docs/`](docs/).
 
 Design docs:
@@ -44,17 +45,19 @@ Design docs:
 - `sdk/go/` — Go SDK (stdlib-only): `Connect/New/Lookup`, `Exec/Run`, files,
   `Push/Pull`, sessions, `Find/Replace`, `Watch`, git verbs, `OpenPty`,
   `Fork/Hibernate/Promote/Checkpoint`, `DialPort/ProxyPort/PreviewURL`,
-  `StartLsp`; `sdk/go/silkd` is the wire binding, `silkdtest` a test fake
+  `StartLsp`, `Spawn/Ps/Kill/Logs/Attach`; `sdk/go/silkd` is the wire binding, `silkdtest` a test fake
 - `sdk/python/` — Python SDK (stdlib-only, sync), the same surface for the
   Python-first agent ecosystem; round-trips the shared fixture corpus
 - `mcp/` — `sandbox-mcp`, an MCP stdio server exposing the surface as tools
   for Claude Code / Cursor / agent frameworks
 - `sdk/openai/` — `cocoonstack-sandbox-openai`, a custom sandbox provider
   for the OpenAI Agents SDK (Python, over the Python SDK)
-- `protocol/fixtures/` — golden frame corpus; the Rust and Go protocol tests
-  both round-trip it, so wire drift fails CI
+- `sdk/langchain/` — `cocoonstack-sandbox-langchain`, a LangChain toolkit
+  (StructuredTools over the Python SDK, checkpoint branching)
+- `protocol/fixtures/` — golden frame corpus; the Rust, Go, and Python
+  protocol tests all round-trip it, so wire drift fails CI
 - `e2e/` — in-process full-stack tests (real pool/engine/relay/SDK, fake
-  cocoon+guest) plus `cmd/demo` and `cmd/smoke` bare-metal drivers
+  cocoon+guest) plus `cmd/demo`, `cmd/smoke`, `cmd/meshsmoke`, and the `pullbench`/`rpcbench` perf drivers
 - `boot/kernel/` — kernel version pin (`VERSION` + matching tarball `SHA256`,
   bump both together) + config fragment (applied over `x86_64_defconfig` +
   `kvm_guest.config`)
@@ -64,7 +67,7 @@ Design docs:
   `/boot/vmlinuz-sandbox` + `/boot/initrd.img-sandbox`
 - `os-image/` — VM images consuming the boot artifact: `base` (layered,
   for builds), `rt` (base squashed to one layer — the default template in
-  examples), `python`, `python-rt`
+  examples), `python`, `python-rt`, and `android` (groundwork)
 - `scripts/` — `boot-bench.sh` (boot phase timing) and `sandboxd-e2e.sh`
   (bare-metal e2e, below)
 
@@ -106,12 +109,15 @@ TEMPLATE=rt:24.04 scripts/sandboxd-e2e.sh
 ## CI
 
 - `silkd.yml` / `sandboxd.yml` — Rust and Go test+lint suites
-- `build-boot.yml` — publishes `ghcr.io/cocoonstack/sandbox/boot:<kernel-ver>`
-  on `boot/**` changes
-- `build-silkd.yml` — publishes the silkd carrier image on `silkd/**` changes
-- `build-os-images.yml` — rebuilds images via `workflow_run` after build-boot
-  and build-silkd (dual-parent: the run that starts after the last parent
-  finishes is the authoritative one)
+- `python.yml` — ruff + pytest for the three Python packages
+- `images.yml` — the single image entry point: on a push touching
+  `boot/**`, `silkd/**`, `protocol/**`, or `os-image/**` it builds the
+  changed carriers (via `build-boot.yml` / `build-silkd.yml`,
+  `workflow_call`) then os-images, in order, so the chain is deterministic
+- `build-os-images.yml` — bakes base + flavors FROM the sha-pinned carriers
+- `publish-pypi.yml` — on an `sdk-*-v*` tag, builds and publishes the
+  matching package via PyPI Trusted Publishing (OIDC, per-package
+  environment)
 
 On a fresh repo run build-boot first — images build `FROM` the boot artifact.
 

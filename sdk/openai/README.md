@@ -1,5 +1,7 @@
 # cocoonstack-sandbox-openai
 
+`pip install cocoonstack-sandbox-openai`
+
 OpenAI Agents SDK sandbox provider backed by cocoon microVMs: implements
 the SDK's `BaseSandboxClient`/`BaseSandboxSession` pair over the sync
 `cocoonstack-sandbox` SDK, bridged with `asyncio.to_thread`.

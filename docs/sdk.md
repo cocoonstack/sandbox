@@ -17,9 +17,10 @@ client, err := sandbox.Connect("10.0.0.5:7777",
 
 - `Connect(addr, opts...)` — `addr` accepts a comma-separated seed list for
   forward compatibility; the current version uses the first entry.
-- `WithAPIToken(token)` — authenticates node-level calls (claim, info).
-  Required when the nodes are configured with `api_token`; on a cluster all
-  nodes share one token.
+- `WithAPIToken(token)` — the node token: a root `api_token` (full access)
+  or a tenant token (resource-creating verbs only; operator surfaces like
+  `Info` answer it 403). On a cluster every node shares the same root token
+  and the same tenants set.
 
 ### Connecting to clusters
 
@@ -56,8 +57,9 @@ defer sb.Close()
 
 `New` returns when the sandbox's silkd answers: a warm hit is milliseconds,
 a cold key can take the full boot. `Sandbox.ID`, `Sandbox.Deadline`, and
-`Sandbox.FromCheckpoint` (the lineage edge when branched) are exported, and
-`Owner()` names the owning node; `Close()` releases the sandbox (releasing
+`Sandbox.FromCheckpoint` (the lineage edge when branched) are exported,
+`Owner()` names the owning node, and `Token()` returns the per-sandbox
+bearer to persist with `ID` for a later `Lookup`; `Close()` releases the sandbox (releasing
 one already gone is not an error, and `Close` is bounded internally so it
 stays defer-friendly).
 
@@ -111,7 +113,7 @@ demand (~a golden-clone's latency); there is no warm pool for promoted
 templates unless the node's config adds one. Re-promoting to the same name
 replaces the template.
 
-**Templates live on one node**, and on a cluster the parent claim may have
+**On the default local-disk backend templates live on one node**, and on a cluster the parent claim may have
 been redirected — the returned `Template` handle is bound to the owning
 node, so its `New`/`Delete` always reach it. The name-based calls
 (`client.New("myproj:v1")`, `client.DeleteTemplate(...)` with
@@ -134,8 +136,9 @@ processes — without stopping it (the same brief pause a fork takes), and
 `ckpt.New` branches any number of independent sandboxes from that exact
 moment; the checkpoint's key axes apply and `WithTimeout` may set each
 branch's TTL. Successive checkpoints of sources and branches form a tree.
-Checkpoints live in the node's `checkpoint_dir` — on a shared FUSE mount,
-any node sharing the mount can branch them; handles stay owner-bound like
+Checkpoints live in the node's checkpoint store — a shared FUSE mount or
+`checkpoint_store: s3` object storage lets any node branch them; handles
+stay owner-bound like
 templates;
 `client.Checkpoints` lists the connected node's. Checkpoint creation is
 resource-creating and takes the api token, like fork.
