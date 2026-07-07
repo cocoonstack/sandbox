@@ -5,14 +5,14 @@ Android guest for UI-automation sandboxes: the cocoon-android lineage
 rootfs with droidVNC-NG baked in) plus silkd, claimable like any other
 template. The intended pool shape is `size: xlarge` (4 CPU / 8G).
 
-## Planned build
+## Build
 
 Unlike the Ubuntu flavors, the guest has no glibc and no systemd:
 
-- `15/Dockerfile.skeleton` — `FROM ${ANDROID_BASE_IMAGE}` (no default; the
-  base is outside the cocoonstack registry), `COPY --from` the silkd
-  carrier's musl-static `/silkd-static` binary to `/system/bin/silkd`, and
-  drop `silkd.rc` into `/system/etc/init/`.
+- `15/Dockerfile` — `FROM ${ANDROID_BASE_IMAGE}` (defaults to the pinned
+  public base), `COPY --from` the silkd carrier's musl-static
+  `/silkd-static` binary to `/system/bin/silkd`, and drop `silkd.rc` into
+  `/system/etc/init/`.
 - `silkd.rc` — Android init service starting silkd on vsock 2048, mirroring
   the `cocoon-agent.rc` pattern the base lineage already ships.
 - `platforms` — `linux/amd64`; the lineage is x86_64-only.
@@ -25,18 +25,17 @@ own kernel (`/boot/vmlinuz-6.8.0-117-generic` + initrd, with
 `cocoon-agent` from `/system/etc/init/cocoon-agent.rc` (class core, root, no
 seclabel — the lineage boots SELinux-permissive).
 
-## Blocked / open
+The base is public on ghcr (anonymous pull verified against the manifest
+endpoint), so the flavor rides the normal images matrix; the earlier
+"CI base-image access" blocker is void.
 
-- **CI base-image access**: the base lives under an external ghcr org and
-  CI credentials for it are not arranged. Until then `ANDROID_BASE_IMAGE`
-  has no default and the Dockerfile is parked as `Dockerfile.skeleton` —
-  the images workflow matrixes every file named exactly `Dockerfile` under
-  `os-image/`, and wiring this in before base access would fail every
-  all-image rebuild. Renaming the file is the wiring step.
+## Open
+
 - **Boot integration**: the image boots its embedded 6.8 kernel via Android
   `/init`, not the sandbox boot chain (PVH kernel + overlay-root init).
-  How cocoon boots this shape (and whether snapshot/restore holds) is
-  unvalidated — no boot test has been run.
+  The claim lane must be CH/egress — the FC no-network lane fails the
+  readiness probe (2026-07-07 boot-attempt finding). Snapshot/restore of a
+  booted Android is validated by the M6-1 acceptance round.
 - **silkd on Android**: the musl-static binary is built and verified static,
   but exec/session behavior against an Android userspace (`/system/bin/sh`,
-  no `/bin/sh`) is untested until a boot test is possible.
+  no `/bin/sh`) is validated by the M6-1 acceptance round.
