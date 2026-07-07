@@ -85,7 +85,7 @@ func main() {
 	if cfg.PreviewListen != "" {
 		preview = server.NewPreviewServer(cfg.PreviewSecret, cfg.PreviewAdvertise, mgr)
 	}
-	srv := server.New(cfg.APIToken, cfg.AdvertiseAddr, mgr, eng, placer, preview)
+	srv := server.New(cfg.APIToken, cfg.Tenants, cfg.AdvertiseAddr, mgr, eng, placer, preview)
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           srv.Handler(),

@@ -103,6 +103,10 @@ type Sandbox struct {
 	Token    string    `json:"token,omitempty"`
 	Deadline time.Time `json:"deadline,omitzero"`
 
+	// Tenant names the owning tenant; empty means the operator (root)
+	// claimed it. Fork children inherit it from the parent.
+	Tenant string `json:"tenant,omitempty"`
+
 	VsockSocket string `json:"vsock_socket,omitempty"`
 	// HibernateSnap names the memory snapshot while the VM is hibernated;
 	// empty means running.
@@ -129,6 +133,7 @@ type Checkpoint struct {
 	Name      string    `json:"name,omitempty"`
 	SandboxID string    `json:"sandbox_id"`
 	Key       PoolKey   `json:"key"`
+	Tenant    string    `json:"tenant,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 

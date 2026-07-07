@@ -75,6 +75,23 @@ func (m *Manager) Counters() Counters {
 	}
 }
 
+// TenantClaims counts live claims per configured tenant for /metrics —
+// configured tenants only, so the label cardinality stays bounded.
+func (m *Manager) TenantClaims() map[string]int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	counts := make(map[string]int, len(m.tenantMax))
+	for name := range m.tenantMax {
+		counts[name] = 0
+	}
+	for _, sb := range m.claimed {
+		if _, ok := counts[sb.Tenant]; ok {
+			counts[sb.Tenant]++
+		}
+	}
+	return counts
+}
+
 // Audit records one relayed request frame against a sandbox when the audit
 // journal is enabled: the op plus its addressing fields, payloads dropped.
 // It is the byte-level adapter over recordAudit for the relay's tee;

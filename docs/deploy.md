@@ -49,7 +49,8 @@ sandboxd reads one JSON file (`-config`, default
 | `cocoon_bin` | `cocoon` | cocoon CLI binary |
 | `advertise_addr` | = `listen` | the host:port clients reach this node at; returned as a claim's owner address and gossiped to peers. Must be routable when `listen` is a wildcard |
 | `bridge` / `network` | unset | egress-lane attachment: a host bridge device, or a CNI conflist name. Mutually exclusive; with neither set the node serves only the no-network lane |
-| `api_token` | unset | when set, guards `POST /v1/claim` and `GET /v1/info` (Bearer). Per-sandbox tokens guard sandbox-scoped calls regardless |
+| `api_token` | unset | the operator (root) credential: when set, guards the node-level endpoints (Bearer) with full access. Per-sandbox tokens guard sandbox-scoped calls regardless |
+| `tenants` | unset | multi-tenant tokens next to `api_token`: `[{"name": "acme", "token": "…", "max_claims": 50}]`. A tenant token reaches the resource-creating verbs (claim, fork, promote, checkpoint, preview) and everything it creates is stamped with the tenant name; operator surfaces (`GET /v1/sandboxes`, `GET /v1/info`, `PUT /v1/pools`, `/metrics`) answer it 403. `max_claims` (0 = unlimited) caps that tenant's live claims next to the node-wide cap. Names and tokens must be unique, tokens distinct from `api_token`. Empty = exactly the single-token behavior |
 | `max_fork_count` | 16 | children a single `fork` may create; each is a full-RAM VM, so this bounds one request's memory blast radius to the node's capacity |
 | `preview_listen` | (off) | address for a preview HTTP server that serves guest ports under signed URLs; needs `preview_secret` |
 | `preview_secret` | — | cluster-shared HMAC secret signing preview tokens (all nodes share one) |
@@ -72,6 +73,22 @@ fragment the warm pools):
 | `small` | 1 | 512M |
 | `medium` | 2 | 1G |
 | `large` | 4 | 4G |
+
+### Auth model
+
+Three token kinds. The root `api_token` has full access — operators and
+single-tenant deployments need nothing else. Tenant tokens (the `tenants`
+list) create and manage their own resources: claims, forks, checkpoints,
+promoted templates, and preview URLs are stamped with the tenant name;
+checkpoint listings filter to the caller's tenant, and a tenant can delete
+only its own checkpoints and templates (root sees and deletes everything).
+Operator surfaces stay root-only — a tenant token there is authenticated but
+not authorized, so it answers 403 (a wrong token stays 401). Per-sandbox
+tokens are unchanged: whoever holds a sandbox's token drives that sandbox.
+Fork children inherit the parent's tenant and count against its
+`max_claims`; a tenant at its cap gets 429 exactly like a node at
+`max_claims`, and the usage journal's claim events carry the tenant for
+per-tenant billing.
 
 ## Running
 

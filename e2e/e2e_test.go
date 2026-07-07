@@ -7,6 +7,7 @@ package e2e
 import (
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -188,6 +189,76 @@ func TestCheckpointEndToEnd(t *testing.T) {
 	}
 }
 
+// TestTwoTenantFlow drives two tenants through the real stack: each claims
+// under its own token, quotas bind per tenant, checkpoint listings are
+// isolated, and operator surfaces refuse tenant tokens with 403.
+func TestTwoTenantFlow(t *testing.T) {
+	tenants := []config.TenantSpec{
+		{Name: "acme", Token: "acme-tok", MaxClaims: 1},
+		{Name: "beta", Token: "beta-tok"},
+	}
+	stack := startTenantStack(t, "node-token", tenants)
+	acme, err := sandbox.Connect(stack.addr, sandbox.WithAPIToken("acme-tok"))
+	if err != nil {
+		t.Fatalf("connect acme: %v", err)
+	}
+	beta, err := sandbox.Connect(stack.addr, sandbox.WithAPIToken("beta-tok"))
+	if err != nil {
+		t.Fatalf("connect beta: %v", err)
+	}
+
+	sbA, err := acme.New(t.Context(), "rt:24.04")
+	if err != nil {
+		t.Fatalf("acme claim: %v", err)
+	}
+	defer sbA.Close()
+	if _, capErr := acme.New(t.Context(), "rt:24.04"); capErr == nil ||
+		!strings.Contains(capErr.Error(), "429") {
+		t.Errorf("acme second claim past its cap: %v, want 429", capErr)
+	}
+	sbB, err := beta.New(t.Context(), "rt:24.04")
+	if err != nil {
+		t.Fatalf("beta claim while acme is at cap: %v", err)
+	}
+	defer sbB.Close()
+
+	if _, err := sbA.Checkpoint(t.Context(), "acme-step"); err != nil {
+		t.Fatalf("acme checkpoint: %v", err)
+	}
+	if _, err := sbB.Checkpoint(t.Context(), "beta-step"); err != nil {
+		t.Fatalf("beta checkpoint: %v", err)
+	}
+	for _, tt := range []struct {
+		client *sandbox.Client
+		want   []string
+	}{
+		{acme, []string{"acme-step"}},
+		{beta, []string{"beta-step"}},
+		{stack.client, []string{"acme-step", "beta-step"}},
+	} {
+		ckpts, err := tt.client.Checkpoints(t.Context())
+		if err != nil {
+			t.Fatalf("list checkpoints: %v", err)
+		}
+		var names []string
+		for _, ck := range ckpts {
+			names = append(names, ck.Name)
+		}
+		slices.Sort(names)
+		if !slices.Equal(names, tt.want) {
+			t.Errorf("checkpoint listing %v, want %v", names, tt.want)
+		}
+	}
+
+	if _, err := acme.Info(t.Context()); err == nil ||
+		!strings.Contains(err.Error(), "403") {
+		t.Errorf("tenant on operator surface: %v, want 403", err)
+	}
+	if _, err := stack.client.Info(t.Context()); err != nil {
+		t.Errorf("root on operator surface: %v", err)
+	}
+}
+
 func TestWrongAPITokenRejected(t *testing.T) {
 	stack := startStack(t, "node-token")
 
@@ -209,6 +280,11 @@ type stack struct {
 
 func startStack(t *testing.T, apiToken string, pools ...config.PoolSpec) *stack {
 	t.Helper()
+	return startTenantStack(t, apiToken, nil, pools...)
+}
+
+func startTenantStack(t *testing.T, apiToken string, tenants []config.TenantSpec, pools ...config.PoolSpec) *stack {
+	t.Helper()
 	// Short prefix: the sockets under it must fit darwin's 104-byte sun_path.
 	dir, err := os.MkdirTemp("", "sbx")
 	if err != nil {
@@ -217,13 +293,13 @@ func startStack(t *testing.T, apiToken string, pools ...config.PoolSpec) *stack 
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	eng := newFakeEngine(dir)
-	mgr, err := pool.NewManager(t.Context(), &config.Config{DataDir: dir, Pools: pools}, eng)
+	mgr, err := pool.NewManager(t.Context(), &config.Config{DataDir: dir, Pools: pools, Tenants: tenants}, eng)
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
 	go mgr.Run(t.Context())
 
-	ts := httptest.NewServer(server.New(apiToken, "", mgr, eng.real, nil, nil).Handler())
+	ts := httptest.NewServer(server.New(apiToken, tenants, "", mgr, eng.real, nil, nil).Handler())
 	t.Cleanup(ts.Close)
 	addr := strings.TrimPrefix(ts.URL, "http://")
 	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(apiToken))

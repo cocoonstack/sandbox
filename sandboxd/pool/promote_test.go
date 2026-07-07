@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -16,7 +17,7 @@ func TestPromoteThenClaimClonesFromTemplate(t *testing.T) {
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
 
-	gotKey, err := m.Promote(t.Context(), parent.ID, parent.Token, "tpl:x")
+	gotKey, err := m.Promote(t.Context(), parent.ID, parent.Token, "tpl:x", "")
 	if err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
@@ -52,7 +53,7 @@ func TestPromoteHibernatedUsesWakeImage(t *testing.T) {
 		t.Fatalf("Hibernate: %v", err)
 	}
 
-	if _, err := m.Promote(t.Context(), parent.ID, parent.Token, "tpl:hib"); err != nil {
+	if _, err := m.Promote(t.Context(), parent.ID, parent.Token, "tpl:hib", ""); err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
 	if len(eng.snapSaves) != 0 {
@@ -71,15 +72,15 @@ func TestPromoteValidations(t *testing.T) {
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 0})
 	parent := mustClaim(t, m, testKey)
 
-	if _, err := m.Promote(t.Context(), parent.ID, parent.Token, "_bad"); !errors.Is(err, ErrBadKey) {
+	if _, err := m.Promote(t.Context(), parent.ID, parent.Token, "_bad", ""); !errors.Is(err, ErrBadKey) {
 		t.Errorf("bad name: %v, want ErrBadKey", err)
 	}
-	if _, err := m.Promote(t.Context(), parent.ID, "wrong", "tpl:x"); !errors.Is(err, ErrUnknownSandbox) {
+	if _, err := m.Promote(t.Context(), parent.ID, "wrong", "tpl:x", ""); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("bad token: %v, want ErrUnknownSandbox", err)
 	}
 	// Same template/net/size as the configured pool: the golden path would
 	// collide with the pool's own.
-	if _, err := m.Promote(t.Context(), parent.ID, parent.Token, testKey.Template); !errors.Is(err, ErrPooledTemplate) {
+	if _, err := m.Promote(t.Context(), parent.ID, parent.Token, testKey.Template, ""); !errors.Is(err, ErrPooledTemplate) {
 		t.Errorf("pooled key: %v, want ErrPooledTemplate", err)
 	}
 	if len(eng.snapSaves) != 0 {
@@ -91,18 +92,18 @@ func TestDeleteTemplate(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 0})
 	parent := mustClaim(t, m, testKey)
-	if _, err := m.Promote(t.Context(), parent.ID, parent.Token, "tpl:del"); err != nil {
+	if _, err := m.Promote(t.Context(), parent.ID, parent.Token, "tpl:del", ""); err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
 	key := types.PoolKey{Template: "tpl:del", Net: testKey.Net, Size: testKey.Size}
 
-	if err := m.DeleteTemplate(t.Context(), testKey); !errors.Is(err, ErrPooledTemplate) {
+	if err := m.DeleteTemplate(t.Context(), testKey, ""); !errors.Is(err, ErrPooledTemplate) {
 		t.Errorf("pooled delete: %v, want ErrPooledTemplate", err)
 	}
-	if err := m.DeleteTemplate(t.Context(), types.PoolKey{Template: "nope", Net: testKey.Net, Size: testKey.Size}); !errors.Is(err, ErrUnknownTemplate) {
+	if err := m.DeleteTemplate(t.Context(), types.PoolKey{Template: "nope", Net: testKey.Net, Size: testKey.Size}, ""); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("unknown delete: %v, want ErrUnknownTemplate", err)
 	}
-	if err := m.DeleteTemplate(t.Context(), key); err != nil {
+	if err := m.DeleteTemplate(t.Context(), key, ""); err != nil {
 		t.Fatalf("DeleteTemplate: %v", err)
 	}
 	if m.HasGolden(t.Context(), key) {
@@ -165,5 +166,31 @@ func TestReconcileMigratesLegacyTemplates(t *testing.T) {
 	}
 	if hashes := m.TemplateHashes(); !slices.Contains(hashes, key.Hash()) {
 		t.Errorf("TemplateHashes %v missing migrated %s", hashes, key.Hash())
+	}
+}
+
+func TestTemplateTenantScopedDelete(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme")
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	key, err := m.Promote(t.Context(), parent.ID, parent.Token, "tpl:tenant", "acme")
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+
+	if err := m.DeleteTemplate(t.Context(), key, "beta"); !errors.Is(err, ErrUnknownTemplate) {
+		t.Errorf("cross-tenant delete: %v, want ErrUnknownTemplate", err)
+	}
+	if err := m.DeleteTemplate(t.Context(), key, "acme"); err != nil {
+		t.Errorf("own delete: %v", err)
+	}
+	if _, err := m.Promote(t.Context(), parent.ID, parent.Token, "tpl:tenant", "acme"); err != nil {
+		t.Fatalf("re-promote: %v", err)
+	}
+	if err := m.DeleteTemplate(t.Context(), key, ""); err != nil {
+		t.Errorf("root delete: %v", err)
 	}
 }

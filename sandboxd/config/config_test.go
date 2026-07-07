@@ -39,6 +39,13 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"bad pool key", `{"pools":[{"template":"","net":"none","size":"small"}]}`, "pool"},
 		{"egress without attachment", `{"pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`, "egress lane needs"},
 		{"negative warm", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","warm":-2}]}`, "negative"},
+		{"empty tenant name", `{"pools":[],"tenants":[{"name":"","token":"t1"}]}`, "tenant name"},
+		{"bad tenant name", `{"pools":[],"tenants":[{"name":"_bad","token":"t1"}]}`, "tenant name"},
+		{"duplicate tenant name", `{"pools":[],"tenants":[{"name":"acme","token":"t1"},{"name":"acme","token":"t2"}]}`, "duplicate tenant"},
+		{"empty tenant token", `{"pools":[],"tenants":[{"name":"acme","token":""}]}`, "needs a token"},
+		{"tenant token equals api token", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"root"}]}`, "differ from api_token"},
+		{"duplicate tenant token", `{"pools":[],"tenants":[{"name":"acme","token":"t1"},{"name":"beta","token":"t1"}]}`, "token reused"},
+		{"negative tenant max_claims", `{"pools":[],"tenants":[{"name":"acme","token":"t1","max_claims":-1}]}`, "max_claims"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Load(writeConfig(t, tt.body))
@@ -46,6 +53,21 @@ func TestLoadRejectsInvalid(t *testing.T) {
 				t.Errorf("Load: %v, want error containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestLoadAcceptsTenants(t *testing.T) {
+	path := writeConfig(t, `{"api_token":"root","pools":[],
+		"tenants":[{"name":"acme","token":"t1","max_claims":50},{"name":"beta","token":"t2"}]}`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Tenants) != 2 || cfg.Tenants[0].Name != "acme" || cfg.Tenants[0].MaxClaims != 50 {
+		t.Errorf("tenants %+v", cfg.Tenants)
+	}
+	if cfg.Tenants[1].MaxClaims != 0 {
+		t.Errorf("beta max_claims %d, want 0 (unlimited)", cfg.Tenants[1].MaxClaims)
 	}
 }
 

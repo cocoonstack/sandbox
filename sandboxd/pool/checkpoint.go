@@ -25,8 +25,9 @@ var (
 // returns its record; the source keeps running (a hibernated source is
 // captured from its wake image and stays hibernated). Claims born from the
 // checkpoint clone that exact state — branching — and the source can be
-// checkpointed again later, so successive checkpoints form a tree.
-func (m *Manager) Checkpoint(ctx context.Context, id, token, name string) (types.Checkpoint, error) {
+// checkpointed again later, so successive checkpoints form a tree. tenant
+// attributes the record; empty means the operator (root).
+func (m *Manager) Checkpoint(ctx context.Context, id, token, name, tenant string) (types.Checkpoint, error) {
 	if name != "" && !templateNameRe.MatchString(name) {
 		return types.Checkpoint{}, fmt.Errorf("%w: %q must match %s", ErrBadName, name, templateNameRe)
 	}
@@ -42,6 +43,7 @@ func (m *Manager) Checkpoint(ctx context.Context, id, token, name string) (types
 		Name:      name,
 		SandboxID: sb.ID,
 		Key:       sb.Key,
+		Tenant:    tenant,
 		CreatedAt: time.Now(),
 	}
 	staging, err := m.ckpts.Stage(ckpt.ID)
@@ -69,10 +71,15 @@ func (m *Manager) Checkpoint(ctx context.Context, id, token, name string) (types
 
 // ClaimCheckpoint provisions a fresh claim cloned from a checkpoint — a
 // branch. The checkpoint's recorded key applies (snapshots pin size and
-// lane); the checkpoint itself is read-only and reusable.
-func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration) (*types.Sandbox, error) {
+// lane); the checkpoint itself is read-only and reusable. The claim is
+// attributed to tenant, not the checkpoint's recorder — the unguessable id
+// is the capability to branch.
+func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error) {
 	if !store.CheckpointIDRe.MatchString(ckptID) {
 		return nil, ErrUnknownCheckpoint
+	}
+	if err := m.overQuota(1, tenant); err != nil {
+		return nil, err
 	}
 	dir, meta, release, err := m.ckpts.Fetch(ctx, ckptID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -91,6 +98,7 @@ func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.D
 		return nil, err
 	}
 	sb.FromCheckpoint = ckpt.ID
+	sb.Tenant = tenant
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {
 		m.counters.claimsClone.Add(1)
@@ -100,8 +108,9 @@ func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.D
 
 // Checkpoints lists the store's checkpoints, newest first — on a shared
 // backend (a FUSE mount, a bucket), that is the cluster's set, not one
-// node's.
-func (m *Manager) Checkpoints(ctx context.Context) ([]types.Checkpoint, error) {
+// node's. A non-empty tenant filters to that tenant's records; empty (root)
+// lists everything.
+func (m *Manager) Checkpoints(ctx context.Context, tenant string) ([]types.Checkpoint, error) {
 	metas, err := m.ckpts.Metas(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list checkpoints: %w", err)
@@ -109,7 +118,7 @@ func (m *Manager) Checkpoints(ctx context.Context) ([]types.Checkpoint, error) {
 	ckpts := make([]types.Checkpoint, 0, len(metas))
 	for _, raw := range metas {
 		var ckpt types.Checkpoint
-		if err := json.Unmarshal(raw, &ckpt); err == nil {
+		if err := json.Unmarshal(raw, &ckpt); err == nil && (tenant == "" || ckpt.Tenant == tenant) {
 			ckpts = append(ckpts, ckpt)
 		}
 	}
@@ -117,10 +126,16 @@ func (m *Manager) Checkpoints(ctx context.Context) ([]types.Checkpoint, error) {
 	return ckpts, nil
 }
 
-// DeleteCheckpoint removes a checkpoint's snapshot and record.
-func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID string) error {
-	if _, err := m.loadCheckpoint(ctx, ckptID); err != nil {
+// DeleteCheckpoint removes a checkpoint's snapshot and record. A tenant may
+// delete only its own records — anything else answers ErrUnknownCheckpoint,
+// never a hint that the id exists; root (empty tenant) deletes anything.
+func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string) error {
+	ckpt, err := m.loadCheckpoint(ctx, ckptID)
+	if err != nil {
 		return err
+	}
+	if tenant != "" && ckpt.Tenant != tenant {
+		return ErrUnknownCheckpoint
 	}
 	if err := m.ckpts.Delete(ctx, ckptID); err != nil {
 		return fmt.Errorf("delete checkpoint: %w", err)
@@ -137,7 +152,7 @@ func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 	}
 	defer m.ckptSweeping.Store(false)
 	logger := log.WithFunc("pool.sweepExpiredCheckpoints")
-	ckpts, err := m.Checkpoints(ctx)
+	ckpts, err := m.Checkpoints(ctx, "")
 	if err != nil {
 		logger.Error(ctx, err, "list for retention")
 		return

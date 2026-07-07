@@ -172,3 +172,27 @@ func TestReconcileSweepsOrphanSnapshots(t *testing.T) {
 		t.Fatalf("wake after reconcile: %v", err)
 	}
 }
+
+func TestForkChildrenInheritTenantAndQuota(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	m.tenantMax = map[string]int{"acme": 3}
+	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme")
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	children, err := m.Fork(t.Context(), parent.ID, parent.Token, 2, 0)
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	for i, c := range children {
+		if c.Tenant != "acme" {
+			t.Errorf("child %d tenant %q, want acme", i, c.Tenant)
+		}
+	}
+	// Parent plus two children fill acme's cap of 3; one more child is over.
+	if _, err := m.Fork(t.Context(), parent.ID, parent.Token, 1, 0); !errors.Is(err, ErrQuota) {
+		t.Errorf("fork past the tenant cap: %v, want ErrQuota", err)
+	}
+}

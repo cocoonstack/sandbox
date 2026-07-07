@@ -14,18 +14,19 @@ import (
 // Fork clones a claimed sandbox into count children, each a fresh claim with
 // its own lease: memory, disk, and guest state (sessions, processes, tmpfs)
 // duplicate at the snapshot point, and cocoon's clone reseed gives every
-// child a distinct machine identity. All-or-nothing: any child failing
-// destroys the ones already built, so an error means no child survived.
+// child a distinct machine identity. Children inherit the parent's tenant
+// and count against its quota. All-or-nothing: any child failing destroys
+// the ones already built, so an error means no child survived.
 func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
 	if count < 1 || count > m.maxFork {
 		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, m.maxFork)
 	}
-	if m.overQuota(count) {
-		return nil, fmt.Errorf("%w: cap %d", ErrQuota, m.maxClaims)
-	}
 	sb, ok := m.claim(id, token)
 	if !ok {
 		return nil, ErrUnknownSandbox
+	}
+	if err := m.overQuota(count, sb.Tenant); err != nil {
+		return nil, err
 	}
 	// See Hibernate: a started fork must finish even if the caller hangs up.
 	ctx = context.WithoutCancel(ctx)
@@ -43,6 +44,9 @@ func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl tim
 	children, err := m.cloneBatch(ctx, sb.Key, exportDir, count)
 	if err != nil {
 		return nil, fmt.Errorf("fork %s: %w", id, err)
+	}
+	for _, c := range children {
+		c.Tenant = sb.Tenant
 	}
 	if err := m.finalizeBatch(ctx, children, ttl); err != nil {
 		return nil, fmt.Errorf("fork %s: %w", id, err)

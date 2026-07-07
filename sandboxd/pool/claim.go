@@ -15,13 +15,14 @@ import (
 
 // ClaimWarm transfers ownership of a warm sandbox without provisioning;
 // ErrNoWarm means the pool is empty (the caller may redirect or provision).
-func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
+// tenant attributes the claim; empty means the operator (root).
+func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant string) (*types.Sandbox, error) {
 	start := time.Now()
 	if err := m.validate(key); err != nil {
 		return nil, err
 	}
-	if m.overQuota(1) {
-		return nil, fmt.Errorf("%w: cap %d", ErrQuota, m.maxClaims)
+	if err := m.overQuota(1, tenant); err != nil {
+		return nil, err
 	}
 	m.mu.Lock()
 	var sb *types.Sandbox
@@ -36,6 +37,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	if sb == nil {
 		return nil, ErrNoWarm
 	}
+	sb.Tenant = tenant
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {
 		m.counters.claimsWarm.Add(1)
@@ -45,13 +47,13 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 }
 
 // ClaimProvision creates a claim-ready sandbox (golden clone or cold boot).
-func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
+func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant string) (*types.Sandbox, error) {
 	start := time.Now()
 	if err := m.validate(key); err != nil {
 		return nil, err
 	}
-	if m.overQuota(1) {
-		return nil, fmt.Errorf("%w: cap %d", ErrQuota, m.maxClaims)
+	if err := m.overQuota(1, tenant); err != nil {
+		return nil, err
 	}
 	golden, release, err := m.resolveGolden(ctx, key)
 	if err != nil {
@@ -62,6 +64,7 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	if err != nil {
 		return nil, err
 	}
+	sb.Tenant = tenant
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {
 		if golden != "" {
@@ -147,16 +150,36 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 	return sb.VsockSocket, nil
 }
 
-// overQuota is the cheap advisory precheck: the authoritative check stays
-// in finalizeBatch (admission races resolve there), this one just spares a
-// doomed request the provision cost.
-func (m *Manager) overQuota(extra int) bool {
-	if m.maxClaims <= 0 {
-		return false
-	}
+// overQuota is the cheap advisory precheck against the node-wide and
+// per-tenant caps: the authoritative check stays in finalizeBatch (admission
+// races resolve there), this one just spares a doomed request the provision
+// cost.
+func (m *Manager) overQuota(extra int, tenant string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(m.claimed)+extra > m.maxClaims
+	return m.quotaErr(extra, tenant)
+}
+
+// quotaErr answers ErrQuota when extra more claims for tenant would cross
+// the node-wide or per-tenant cap; callers hold m.mu.
+func (m *Manager) quotaErr(extra int, tenant string) error {
+	if m.maxClaims > 0 && len(m.claimed)+extra > m.maxClaims {
+		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, len(m.claimed), m.maxClaims)
+	}
+	limit := m.tenantMax[tenant]
+	if tenant == "" || limit <= 0 {
+		return nil
+	}
+	live := 0
+	for _, sb := range m.claimed {
+		if sb.Tenant == tenant {
+			live++
+		}
+	}
+	if live+extra > limit {
+		return fmt.Errorf("%w: tenant %s at %d live claims, cap %d", ErrQuota, tenant, live, limit)
+	}
+	return nil
 }
 
 // finalize stamps identity, persists the claim, and destroys the VM if the
@@ -170,7 +193,8 @@ func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Dura
 
 // finalizeBatch stamps identities and persists the claims as one journal
 // write; on a failed write every VM in the batch is destroyed — a durable
-// claim always matches a live VM, and a batch lands all-or-nothing.
+// claim always matches a live VM, and a batch lands all-or-nothing. A batch
+// carries one tenant (claims are single, fork children inherit one parent).
 func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration) error {
 	now := time.Now()
 	for _, sb := range sbs {
@@ -178,12 +202,12 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		sb.LastActivity = now
 	}
 	m.mu.Lock()
-	if live := len(m.claimed); m.maxClaims > 0 && live+len(sbs) > m.maxClaims {
+	if quotaErr := m.quotaErr(len(sbs), sbs[0].Tenant); quotaErr != nil {
 		m.mu.Unlock()
 		for _, sb := range sbs {
 			m.destroy(ctx, sb.VMName)
 		}
-		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, live, m.maxClaims)
+		return quotaErr
 	}
 	for _, sb := range sbs {
 		m.claimed[sb.ID] = sb
@@ -202,7 +226,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		return fmt.Errorf("persist claim: %w", saveErr)
 	}
 	for _, sb := range sbs {
-		m.recordUsage(ctx, usageEvent{Event: "claim", ID: sb.ID, VMName: sb.VMName, KeyHash: sb.Key.Hash()})
+		m.recordUsage(ctx, usageEvent{Event: "claim", ID: sb.ID, VMName: sb.VMName, KeyHash: sb.Key.Hash(), Tenant: sb.Tenant})
 	}
 	return nil
 }

@@ -2,7 +2,9 @@ package server
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 )
@@ -27,6 +29,14 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	_, _ = fmt.Fprintf(w, "sandboxd_claimed %d\n", claimed)
 	metric("hibernated", "gauge", "claims currently hibernated")
 	_, _ = fmt.Fprintf(w, "sandboxd_hibernated %d\n", hibernated)
+
+	// Cardinality stays bounded: TenantClaims reports configured tenants only.
+	if tenants := s.mgr.TenantClaims(); len(tenants) > 0 {
+		metric("tenant_claims", "gauge", "live claims per configured tenant")
+		for _, name := range slices.Sorted(maps.Keys(tenants)) {
+			_, _ = fmt.Fprintf(w, "sandboxd_tenant_claims{tenant=%q} %d\n", name, tenants[name])
+		}
+	}
 
 	metric("pool_warm", "gauge", "claim-ready VMs per pool")
 	for _, p := range pools {

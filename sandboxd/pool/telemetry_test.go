@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 func TestUsageJournalRecordsLifecycle(t *testing.T) {
@@ -90,6 +91,83 @@ func TestQuotaRefusesClaimsPastCap(t *testing.T) {
 	}
 	if _, err := claimAny(t.Context(), m, testKey, time.Hour); err != nil {
 		t.Errorf("claim after release: %v", err)
+	}
+}
+
+func TestTenantQuotaBindsPerTenant(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	m.tenantMax = map[string]int{"acme": 1, "beta": 2}
+
+	first, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme")
+	if err != nil {
+		t.Fatalf("acme claim: %v", err)
+	}
+	if first.Tenant != "acme" {
+		t.Errorf("tenant %q, want acme", first.Tenant)
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme"); !errors.Is(err, ErrQuota) {
+		t.Fatalf("acme past its cap: %v, want ErrQuota", err)
+	}
+	// The node-wide cap (unset here) stays untouched: other tenants and root
+	// keep claiming while acme is full.
+	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "beta"); err != nil {
+		t.Errorf("beta claim while acme is at cap: %v", err)
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, ""); err != nil {
+		t.Errorf("root claim while acme is at cap: %v", err)
+	}
+	counts := m.TenantClaims()
+	if counts["acme"] != 1 || counts["beta"] != 1 {
+		t.Errorf("TenantClaims %v, want acme=1 beta=1", counts)
+	}
+	if err := m.Release(t.Context(), first.ID, first.Token); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme"); err != nil {
+		t.Errorf("acme claim after release: %v", err)
+	}
+}
+
+func TestTenantStampedInJournals(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme")
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(m.dataDir, "claims.json"))
+	if err != nil {
+		t.Fatalf("read claims journal: %v", err)
+	}
+	claims := map[string]*types.Sandbox{}
+	if err = json.Unmarshal(raw, &claims); err != nil {
+		t.Fatalf("parse claims journal: %v", err)
+	}
+	if claims[sb.ID] == nil || claims[sb.ID].Tenant != "acme" {
+		t.Errorf("persisted claim %+v, want tenant acme", claims[sb.ID])
+	}
+
+	usage, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
+	if err != nil {
+		t.Fatalf("read usage journal: %v", err)
+	}
+	found := false
+	for line := range strings.SplitSeq(strings.TrimSpace(string(usage)), "\n") {
+		var ev usageEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("bad journal line %q: %v", line, err)
+		}
+		if ev.Event == "claim" && ev.ID == sb.ID {
+			found = true
+			if ev.Tenant != "acme" {
+				t.Errorf("claim event tenant %q, want acme", ev.Tenant)
+			}
+		}
+	}
+	if !found {
+		t.Error("no claim event for the tenant claim")
 	}
 }
 

@@ -21,9 +21,11 @@ import (
 
 // templateRecord is a template's meta.json: the id carries the key hash
 // (tp_<hash>), which is all resolution needs — claims re-derive the hash
-// from the requested key, never the reverse.
+// from the requested key, never the reverse. Tenant attributes the promote
+// and scopes deletion; empty means the operator (root).
 type templateRecord struct {
 	ID        string    `json:"id"`
+	Tenant    string    `json:"tenant,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -33,8 +35,9 @@ type templateRecord struct {
 // unless the node config adds one. Re-promoting to the same name replaces
 // the template. The caller owns the template's lifecycle (DeleteTemplate).
 // On a shared store root every node resolves it; on local disk it stays
-// node-bound and the mesh's template gossip routes to it.
-func (m *Manager) Promote(ctx context.Context, id, token, template string) (types.PoolKey, error) {
+// node-bound and the mesh's template gossip routes to it. tenant attributes
+// the record; empty means the operator (root).
+func (m *Manager) Promote(ctx context.Context, id, token, template, tenant string) (types.PoolKey, error) {
 	if !templateNameRe.MatchString(template) {
 		return types.PoolKey{}, fmt.Errorf("%w: template %q must match %s", ErrBadKey, template, templateNameRe)
 	}
@@ -59,7 +62,7 @@ func (m *Manager) Promote(ctx context.Context, id, token, template string) (type
 		return types.PoolKey{}, fmt.Errorf("promote %s: %w", id, err)
 	}
 	defer cleanup()
-	if err := m.publishTemplate(ctx, snap, key); err != nil {
+	if err := m.publishTemplate(ctx, snap, key, tenant); err != nil {
 		return types.PoolKey{}, fmt.Errorf("promote %s: %w", id, err)
 	}
 	if m.notifyTemplates != nil {
@@ -71,17 +74,26 @@ func (m *Manager) Promote(ctx context.Context, id, token, template string) (type
 }
 
 // DeleteTemplate removes a promoted template. Configured pools are refused:
-// their goldens are owned by the node config, not an API caller.
-func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey) error {
+// their goldens are owned by the node config, not an API caller. A tenant
+// may delete only templates it promoted — anything else answers
+// ErrUnknownTemplate; root (empty tenant) deletes anything.
+func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant string) error {
 	if m.pooledHash(key.Hash()) {
 		return ErrPooledTemplate
 	}
 	id := store.TemplateID(key.Hash())
-	if _, err := m.tpls.ReadMeta(ctx, id); err != nil {
+	raw, err := m.tpls.ReadMeta(ctx, id)
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return ErrUnknownTemplate
 		}
 		return fmt.Errorf("read template: %w", err)
+	}
+	if tenant != "" {
+		var rec templateRecord
+		if json.Unmarshal(raw, &rec) != nil || rec.Tenant != tenant {
+			return ErrUnknownTemplate
+		}
 	}
 	if err := m.tpls.Delete(ctx, id); err != nil {
 		return fmt.Errorf("delete template: %w", err)
@@ -166,7 +178,7 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string,
 }
 
 // publishTemplate exports snap into the store under the key's template id.
-func (m *Manager) publishTemplate(ctx context.Context, snap string, key types.PoolKey) error {
+func (m *Manager) publishTemplate(ctx context.Context, snap string, key types.PoolKey, tenant string) error {
 	id := store.TemplateID(key.Hash())
 	staging, err := m.tpls.Stage(id)
 	if err != nil {
@@ -176,13 +188,13 @@ func (m *Manager) publishTemplate(ctx context.Context, snap string, key types.Po
 	if err = m.eng.SnapshotExport(ctx, snap, filepath.Join(staging, store.ExportDir)); err != nil {
 		return fmt.Errorf("export template: %w", err)
 	}
-	return m.commitTemplate(ctx, staging, id)
+	return m.commitTemplate(ctx, staging, id, tenant)
 }
 
 // commitTemplate writes the meta record, publishes the staged template, and
 // registers it in the gossip set.
-func (m *Manager) commitTemplate(ctx context.Context, staging, id string) error {
-	meta, err := json.Marshal(templateRecord{ID: id, CreatedAt: time.Now()})
+func (m *Manager) commitTemplate(ctx context.Context, staging, id, tenant string) error {
+	meta, err := json.Marshal(templateRecord{ID: id, Tenant: tenant, CreatedAt: time.Now()})
 	if err != nil {
 		return err
 	}
@@ -224,7 +236,7 @@ func (m *Manager) migrateLegacyTemplates(ctx context.Context) {
 			_ = os.RemoveAll(staging)
 			continue
 		}
-		if err := m.commitTemplate(ctx, staging, id); err != nil {
+		if err := m.commitTemplate(ctx, staging, id, ""); err != nil {
 			logger.Errorf(ctx, err, "publish %s", id)
 			continue
 		}

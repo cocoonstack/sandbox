@@ -142,9 +142,12 @@ type Manager struct {
 	idleEnabled bool
 	idleSweep   atomic.Bool
 
-	// maxClaims caps live claims node-wide (0 = unlimited); usage is the
-	// always-on billing event stream, audit the config-gated request tap.
+	// maxClaims caps live claims node-wide (0 = unlimited); tenantMax holds
+	// every configured tenant's cap (0 = unlimited) and doubles as the set of
+	// known tenants. usage is the always-on billing event stream, audit the
+	// config-gated request tap.
 	maxClaims    int
+	tenantMax    map[string]int
 	usage        *journal
 	audit        *journal
 	counters     counters
@@ -224,6 +227,10 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine) (*Manager, 
 		m.audit = audit
 	}
 	m.maxClaims = cfg.MaxClaims
+	m.tenantMax = make(map[string]int, len(cfg.Tenants))
+	for _, tn := range cfg.Tenants {
+		m.tenantMax[tn.Name] = tn.MaxClaims
+	}
 	m.idleDefault = time.Duration(cfg.IdleHibernateSeconds) * time.Second
 	m.idleEnabled = m.idleDefault > 0
 	for _, spec := range cfg.Pools {

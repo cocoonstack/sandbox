@@ -50,23 +50,26 @@ var poolErrHTTP = []struct {
 	{pool.ErrUnknownCheckpoint, http.StatusNotFound, "unknown checkpoint"},
 }
 
-// Manager is the slice of the pool manager the server consumes.
+// Manager is the slice of the pool manager the server consumes. tenant
+// parameters attribute created resources and scope listings/deletes; empty
+// means the operator (root) — unquotaed, unfiltered.
 type Manager interface {
-	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
-	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
+	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant string) (*types.Sandbox, error)
+	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant string) (*types.Sandbox, error)
 	Release(ctx context.Context, id, token string) error
 	Hibernate(ctx context.Context, id, token string) error
 	Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
-	Promote(ctx context.Context, id, token, template string) (types.PoolKey, error)
-	DeleteTemplate(ctx context.Context, key types.PoolKey) error
-	Checkpoint(ctx context.Context, id, token, name string) (types.Checkpoint, error)
+	Promote(ctx context.Context, id, token, template, tenant string) (types.PoolKey, error)
+	DeleteTemplate(ctx context.Context, key types.PoolKey, tenant string) error
+	Checkpoint(ctx context.Context, id, token, name, tenant string) (types.Checkpoint, error)
 	Counters() pool.Counters
+	TenantClaims() map[string]int
 	Sandboxes() []pool.SandboxSummary
 	Audit(ctx context.Context, id string, line []byte)
 	AuditEnabled() bool
-	ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration) (*types.Sandbox, error)
-	Checkpoints(ctx context.Context) ([]types.Checkpoint, error)
-	DeleteCheckpoint(ctx context.Context, ckptID string) error
+	ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error)
+	Checkpoints(ctx context.Context, tenant string) ([]types.Checkpoint, error)
+	DeleteCheckpoint(ctx context.Context, ckptID, tenant string) error
 	ClaimDeadline(id, token string) (time.Time, error)
 	HasGolden(ctx context.Context, key types.PoolKey) bool
 	AgentSocket(id, token string) (string, error)
@@ -111,6 +114,7 @@ type Server struct {
 	dialer    Dialer
 	placer    Placer
 	apiToken  string
+	tenants   []config.TenantSpec
 	advertise string
 	preview   *PreviewServer
 
@@ -120,45 +124,49 @@ type Server struct {
 	relayWG     sync.WaitGroup
 }
 
-// New returns a Server; an empty apiToken leaves the node-level endpoints
-// open (per-sandbox tokens still guard sandbox-scoped calls). advertise is
-// this node's data-plane address, returned as a claim's owner address. A nil
-// placer disables mesh redirects (single node).
-func New(apiToken, advertise string, mgr Manager, dialer Dialer, placer Placer, preview *PreviewServer) *Server {
+// New returns a Server; an empty apiToken with no tenants leaves the
+// node-level endpoints open (per-sandbox tokens still guard sandbox-scoped
+// calls). tenants adds per-tenant tokens next to the root apiToken.
+// advertise is this node's data-plane address, returned as a claim's owner
+// address. A nil placer disables mesh redirects (single node).
+func New(apiToken string, tenants []config.TenantSpec, advertise string, mgr Manager, dialer Dialer, placer Placer, preview *PreviewServer) *Server {
 	return &Server{
 		mgr:       mgr,
 		dialer:    dialer,
 		placer:    placer,
 		apiToken:  apiToken,
+		tenants:   tenants,
 		advertise: advertise,
 		preview:   preview,
 		relays:    map[net.Conn]net.Conn{},
 	}
 }
 
-// Handler builds the route table.
+// Handler builds the route table. Resource-creating verbs and tenant-scoped
+// listings/deletes take the api token or a tenant token; operator surfaces
+// (index, pools, info, metrics) stay root-only.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/claim", s.requireAPIToken(s.handleClaim))
+	mux.HandleFunc("POST /v1/claim", s.requireToken(s.handleClaim))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleSandboxVerb("release", s.mgr.Release))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
 	// Fork and promote create node resources, so they take the api token
 	// like a claim; the source sandbox's token rides in the body as the
 	// ownership proof.
-	mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.requireAPIToken(s.handleFork))
-	mux.HandleFunc("POST /v1/sandboxes/{id}/promote", s.requireAPIToken(s.handlePromote))
-	mux.HandleFunc("POST /v1/sandboxes/{id}/preview", s.requireAPIToken(s.handlePreview))
-	mux.HandleFunc("POST /v1/sandboxes/{id}/checkpoint", s.requireAPIToken(s.handleCheckpoint))
-	mux.HandleFunc("POST /v1/checkpoints/{id}/claim", s.requireAPIToken(s.handleClaimCheckpoint))
-	mux.HandleFunc("GET /v1/checkpoints", s.requireAPIToken(s.handleListCheckpoints))
-	mux.HandleFunc("DELETE /v1/checkpoints/{id}", s.requireAPIToken(s.handleDeleteCheckpoint))
-	mux.HandleFunc("DELETE /v1/templates", s.requireAPIToken(s.handleDeleteTemplate))
-	mux.HandleFunc("PUT /v1/pools", s.requireAPIToken(s.handlePutPools))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.requireToken(s.handleFork))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/promote", s.requireToken(s.handlePromote))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/preview", s.requireToken(s.handlePreview))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/checkpoint", s.requireToken(s.handleCheckpoint))
+	mux.HandleFunc("POST /v1/checkpoints/{id}/claim", s.requireToken(s.handleClaimCheckpoint))
+	mux.HandleFunc("GET /v1/checkpoints", s.requireToken(s.handleListCheckpoints))
+	mux.HandleFunc("DELETE /v1/checkpoints/{id}", s.requireToken(s.handleDeleteCheckpoint))
+	mux.HandleFunc("DELETE /v1/templates", s.requireToken(s.handleDeleteTemplate))
+	mux.HandleFunc("PUT /v1/pools", s.requireRoot(s.handlePutPools))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", s.handleAgent)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/owner", s.handleOwner)
-	mux.HandleFunc("GET /v1/info", s.requireAPIToken(s.handleInfo))
-	mux.HandleFunc("GET /v1/sandboxes", s.requireAPIToken(s.handleSandboxes))
-	mux.HandleFunc("GET /metrics", s.requireAPIToken(s.handleMetrics))
+	mux.HandleFunc("GET /v1/info", s.requireRoot(s.handleInfo))
+	mux.HandleFunc("GET /v1/sandboxes", s.requireRoot(s.handleSandboxes))
+	mux.HandleFunc("GET /metrics", s.requireRoot(s.handleMetrics))
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	return mux
 }
@@ -174,12 +182,13 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	// peer that reports a warm sandbox gets the claim via redirect (data plane
 	// must be direct, so redirect beats proxy); only if no peer has one does
 	// this node provision (golden clone or cold boot).
-	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL())
+	tenant := tenantFrom(r.Context())
+	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant)
 	if errors.Is(err, pool.ErrNoWarm) {
 		if s.redirectClaim(r.Context(), w, req, key) {
 			return
 		}
-		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL())
+		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant)
 	}
 	// A full node bounces the claim to a warm peer before answering 429 —
 	// quota is per node, and a peer with capacity is a better answer.
@@ -268,7 +277,7 @@ func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	key, err := s.mgr.Promote(r.Context(), id, req.Token, req.Template)
+	key, err := s.mgr.Promote(r.Context(), id, req.Token, req.Template, tenantFrom(r.Context()))
 	switch {
 	case writePoolErr(w, err):
 	case err != nil:
@@ -286,7 +295,7 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	ckpt, err := s.mgr.Checkpoint(r.Context(), id, req.Token, req.Name)
+	ckpt, err := s.mgr.Checkpoint(r.Context(), id, req.Token, req.Name, tenantFrom(r.Context()))
 	switch {
 	case writePoolErr(w, err):
 	case err != nil:
@@ -304,7 +313,7 @@ func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ckptID := r.PathValue("id")
-	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, req.TTL())
+	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, req.TTL(), tenantFrom(r.Context()))
 	switch {
 	case writePoolErr(w, err):
 	case err != nil:
@@ -315,9 +324,10 @@ func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleListCheckpoints lists this node's checkpoints, newest first.
+// handleListCheckpoints lists this node's checkpoints, newest first — a
+// tenant caller sees only its own records.
 func (s *Server) handleListCheckpoints(w http.ResponseWriter, r *http.Request) {
-	ckpts, err := s.mgr.Checkpoints(r.Context())
+	ckpts, err := s.mgr.Checkpoints(r.Context(), tenantFrom(r.Context()))
 	if err != nil {
 		log.WithFunc("server.handleListCheckpoints").Error(r.Context(), err, "list checkpoints")
 		writeErr(w, http.StatusInternalServerError, "list checkpoints failed")
@@ -326,9 +336,10 @@ func (s *Server) handleListCheckpoints(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, types.CheckpointListResponse{Checkpoints: ckpts})
 }
 
-// handleDeleteCheckpoint removes a checkpoint.
+// handleDeleteCheckpoint removes a checkpoint; a tenant caller may delete
+// only its own records (anything else is 404).
 func (s *Server) handleDeleteCheckpoint(w http.ResponseWriter, r *http.Request) {
-	err := s.mgr.DeleteCheckpoint(r.Context(), r.PathValue("id"))
+	err := s.mgr.DeleteCheckpoint(r.Context(), r.PathValue("id"), tenantFrom(r.Context()))
 	switch {
 	case writePoolErr(w, err):
 	case err != nil:
@@ -349,7 +360,7 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 		Size:     types.Size(q.Get("size")),
 	}
 	key := req.Key()
-	err := s.mgr.DeleteTemplate(r.Context(), key)
+	err := s.mgr.DeleteTemplate(r.Context(), key, tenantFrom(r.Context()))
 	// Unknown here but owned by a peer per gossip: redirect the SDK to the
 	// owner. no_redirect mirrors the claim protocol — a redirected retry
 	// carries it, so the owner answers for itself and never bounces again.
@@ -411,19 +422,51 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	_, _ = io.WriteString(w, "ok")
 }
 
-// requireAPIToken guards node-level endpoints with the configured token;
-// sandbox-scoped endpoints use per-sandbox tokens instead.
-func (s *Server) requireAPIToken(next http.HandlerFunc) http.HandlerFunc {
+// requireToken guards node-level endpoints, resolving the caller's scope —
+// root (the api token) or a tenant name (its configured token) — onto the
+// request context; sandbox-scoped endpoints use per-sandbox tokens instead.
+func (s *Server) requireToken(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.apiToken != "" {
-			token, ok := bearerToken(r)
-			if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) != 1 {
-				writeErr(w, http.StatusUnauthorized, "invalid api token")
-				return
-			}
+		tenant, ok := s.resolveScope(r)
+		if !ok {
+			writeErr(w, http.StatusUnauthorized, "invalid api token")
+			return
+		}
+		next(w, r.WithContext(withTenant(r.Context(), tenant)))
+	}
+}
+
+// requireRoot guards operator-only surfaces: a tenant token authenticates
+// but is not authorized, so it gets 403, never 401.
+func (s *Server) requireRoot(next http.HandlerFunc) http.HandlerFunc {
+	return s.requireToken(func(w http.ResponseWriter, r *http.Request) {
+		if tenantFrom(r.Context()) != "" {
+			writeErr(w, http.StatusForbidden, "operator token required")
+			return
 		}
 		next(w, r)
+	})
+}
+
+// resolveScope matches the bearer token to root ("") or a tenant name. With
+// no api token and no tenants the node-level endpoints stay open, as before.
+func (s *Server) resolveScope(r *http.Request) (string, bool) {
+	if s.apiToken == "" && len(s.tenants) == 0 {
+		return "", true
 	}
+	token, ok := bearerToken(r)
+	if !ok {
+		return "", false
+	}
+	if s.apiToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) == 1 {
+		return "", true
+	}
+	for _, tn := range s.tenants {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(tn.Token)) == 1 {
+			return tn.Name, true
+		}
+	}
+	return "", false
 }
 
 func (s *Server) claimResponse(sb *types.Sandbox) types.ClaimResponse {
@@ -431,6 +474,19 @@ func (s *Server) claimResponse(sb *types.Sandbox) types.ClaimResponse {
 		ID: sb.ID, Token: sb.Token, Deadline: sb.Deadline,
 		OwnerAddr: s.advertise, FromCheckpoint: sb.FromCheckpoint,
 	}
+}
+
+// tenantKey carries the resolved tenant scope ("" = root) on the request
+// context, from requireToken to the handlers.
+type tenantKey struct{}
+
+func withTenant(ctx context.Context, tenant string) context.Context {
+	return context.WithValue(ctx, tenantKey{}, tenant)
+}
+
+func tenantFrom(ctx context.Context) string {
+	tenant, _ := ctx.Value(tenantKey{}).(string)
+	return tenant
 }
 
 func bearerToken(r *http.Request) (string, bool) {

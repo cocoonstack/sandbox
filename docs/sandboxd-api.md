@@ -1,9 +1,21 @@
 # sandboxd HTTP API
 
-All bodies are JSON. Two token kinds: the node-level `api_token` guards
-claim and info; every claimed sandbox carries its own bearer token guarding
-the sandbox-scoped endpoints. Errors are `{"error": "message"}` with the
-status codes listed per endpoint.
+All bodies are JSON. Three token kinds:
+
+- **root** — the node-level `api_token`: full access to every endpoint.
+- **tenant** — a token from the `tenants` config list: accepted by the
+  resource-creating verbs (claim, fork, promote, checkpoint create/claim,
+  preview mint) and the tenant-scoped listings/deletes below; everything a
+  tenant creates is stamped with its name. Operator surfaces
+  (`GET /v1/sandboxes`, `GET /v1/info`, `PUT /v1/pools`, `GET /metrics`)
+  answer a tenant token `403` — authenticated but not authorized; an unknown
+  token stays `401`.
+- **sandbox** — every claimed sandbox carries its own bearer token guarding
+  the sandbox-scoped endpoints, regardless of the other two.
+
+Endpoints below that say "node API token" accept root or tenant unless
+marked root-only. Errors are `{"error": "message"}` with the status codes
+listed per endpoint.
 
 ## POST /v1/claim
 
@@ -42,10 +54,14 @@ the key but gossip names a template owner, and when the node is at
 Retry the same body (+`no_redirect: true`) at each candidate until one
 answers.
 
+A tenant token claims the same way; the sandbox is stamped with the tenant
+name (attributed in the usage journal and counted against the tenant's
+`max_claims`).
+
 Errors: 400 unknown template axis / bad body; 401 bad api token; 409 egress
 requested on a node without an egress attachment; 429 node at `max_claims`
-(a redirect to a warm peer is tried first on a cluster); 500 provisioning
-failed.
+or the calling tenant at its own `max_claims` (a redirect to a warm peer is
+tried first on a cluster); 500 provisioning failed.
 
 ## POST /v1/sandboxes/{id}/release
 
@@ -86,8 +102,9 @@ All-or-nothing: on error no child survived. 200 with one claim per child:
 {"children": [{"id": "sb_…", "token": "…", "deadline": "…", "owner_addr": "…"}]}
 ```
 
-400 invalid count or body, 401 bad api token, 404 unknown id or wrong
-sandbox token, 429 node at `max_claims`.
+Children inherit the parent's tenant and count against its `max_claims`,
+whoever calls. 400 invalid count or body, 401 bad api token, 404 unknown id
+or wrong sandbox token, 429 node or the parent's tenant at `max_claims`.
 
 ## POST /v1/sandboxes/{id}/promote
 
@@ -116,9 +133,10 @@ configured pool, 404 unknown id or wrong sandbox token.
 ## DELETE /v1/templates?template=…&net=…&size=…
 
 Auth: node API token. Removes a promoted template (the query parameters
-default like a claim's: `net=none`, `size=small`). 204 on success, 404
-unknown template, 409 when the key belongs to a configured pool (those
-goldens are owned by the node config). On a cluster, a node that does not
+default like a claim's: `net=none`, `size=small`). A tenant may delete only
+templates it promoted — anything else is 404, root deletes anything. 204 on
+success, 404 unknown template, 409 when the key belongs to a configured pool
+(those goldens are owned by the node config). On a cluster, a node that does not
 hold the template but sees an owner in gossip answers `200
 {"redirect": [addrs]}` — the claim redirect shape — and the SDK retries the
 delete at the owner. The retry carries `no_redirect=1`, mirroring the claim
@@ -126,8 +144,8 @@ protocol: a node answering a `no_redirect` delete speaks only for itself.
 
 ## PUT /v1/pools
 
-Auth: node API token. Replaces the node's desired warm targets online — no
-restart, live claims untouched:
+Auth: root only (tenant tokens get 403). Replaces the node's desired warm
+targets online — no restart, live claims untouched:
 
 ```json
 {"pools": [{"template": "base:24.04", "net": "none", "size": "small",
@@ -156,45 +174,53 @@ list. See [deploy](deploy.md#preview-urls).
 
 Auth: node API token; body `{"token": "<sandbox token>", "name": "..."}`
 (name optional). Captures the sandbox's full state without stopping it and
-answers `200 {"checkpoint": {id, name, sandbox_id, key, created_at}}`.
+answers `200 {"checkpoint": {id, name, sandbox_id, key, tenant?,
+created_at}}` — `tenant` records the calling tenant, absent for root.
 400 bad body or name, 401 bad api token, 404 unknown id or wrong sandbox
 token.
 
 ## POST /v1/checkpoints/{id}/claim
 
 Auth: node API token; body `{"ttl_seconds": 0}`. Claims a fresh sandbox
-branched from the checkpoint (a normal claim response); the checkpoint's
-recorded key applies. 404 for an unknown checkpoint, 429 node at
-`max_claims`.
+branched from the checkpoint (a normal claim response, attributed to the
+caller); the checkpoint's recorded key applies — the unguessable id is the
+capability to branch. 404 for an unknown checkpoint, 429 node or calling
+tenant at `max_claims`.
 
 ## GET /v1/checkpoints
 
-Auth: node API token. Lists this node's checkpoints, newest first.
+Auth: node API token. Lists this node's checkpoints, newest first. A tenant
+sees only its own records; root sees everything.
 
 ## DELETE /v1/checkpoints/{id}
 
-Auth: node API token. 204 on success, 404 unknown.
+Auth: node API token. A tenant may delete only its own records — anything
+else is 404, never a hint the id exists; root deletes anything. 204 on
+success, 404 unknown.
 
 ## GET /v1/sandboxes
 
-Auth: node API token. The operator index: `{"sandboxes": [{id, key,
-deadline, hibernated, from_checkpoint?}]}` — never tokens.
+Auth: root only (tenant tokens get 403). The operator index: `{"sandboxes":
+[{id, key, deadline, hibernated, from_checkpoint?}]}` — never tokens.
 
 ## GET /metrics
 
-Auth: node API token. Prometheus text format, hand-rendered: pool
-warm/target gauges, claimed/hibernated gauges, claims by tier
-(warm/clone/cold), wake/hibernate/fork/checkpoint/promote/release/reap
-counters, and claim/wake `*_seconds_total` for average latency. /metrics is
-a derived ops view; the billing source of truth is the usage journal below.
+Auth: root only (tenant tokens get 403). Prometheus text format,
+hand-rendered: pool warm/target gauges, claimed/hibernated gauges, a
+per-tenant live-claim gauge (`sandboxd_tenant_claims{tenant="…"}`,
+configured tenants only), claims by tier (warm/clone/cold),
+wake/hibernate/fork/checkpoint/promote/release/reap counters, and claim/wake
+`*_seconds_total` for average latency. /metrics is a derived ops view; the
+billing source of truth is the usage journal below.
 
 ## Usage journal (usage.jsonl)
 
 Always on: every lifecycle transition appends one JSONL event to
 `<data_dir>/usage.jsonl` — `{"t": <RFC3339>, "ev":
 "claim|hibernate|wake|fork|checkpoint|promote|release|reap", "id": "sb_…",
-"vm": "sbx-…"}` plus `key` (the pool key, claim events), `children` (fork)
-and `ref` (the promoted template / checkpoint id). The file rotates at
+"vm": "sbx-…"}` plus `key` and `tenant` (the pool key and owning tenant,
+claim events), `children` (fork) and `ref` (the promoted template /
+checkpoint id). The file rotates at
 64 MiB keeping one `.1` backup, so a tailing collector never loses a window
 silently. Folding rules: billable compute seconds per sandbox =
 Σ(claim→release/reap) − Σ(hibernate→wake); hibernated storage seconds =
@@ -218,7 +244,8 @@ scatter.
 
 ## GET /v1/info
 
-Auth: api token. Node pools, claim count, and mesh peers:
+Auth: root only (tenant tokens get 403). Node pools, claim count, and mesh
+peers:
 
 ```json
 {"pools": [{"key": {"template": "base:24.04", "net": "none", "size": "small"},

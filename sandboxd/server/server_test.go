@@ -133,6 +133,92 @@ func TestAPITokenGuard(t *testing.T) {
 	}
 }
 
+// TestTenantAuthMatrix drives the three token kinds across the two endpoint
+// classes: resource-creating verbs take root or tenant tokens (the tenant
+// scope reaches the manager), operator surfaces answer 403 to a tenant —
+// authenticated but not authorized — and 401 to anything unknown.
+func TestTenantAuthMatrix(t *testing.T) {
+	mgr := &fakeManager{tenantClaims: map[string]int{"acme": 2}}
+	tenants := []config.TenantSpec{{Name: "acme", Token: "acme-tok"}, {Name: "beta", Token: "beta-tok"}}
+	ts := newTenantTestServer(t, "sekret", tenants, mgr, nil)
+
+	do := func(t *testing.T, method, path, auth string) *http.Response {
+		t.Helper()
+		var body io.Reader
+		switch {
+		case path == "/v1/claim":
+			body = strings.NewReader(`{"template":"rt:24.04"}`)
+		case method == http.MethodPut:
+			body = strings.NewReader(`{"pools":[]}`)
+		}
+		req, err := http.NewRequestWithContext(t.Context(), method, ts.URL+path, body)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		if auth != "" {
+			req.Header.Set("Authorization", "Bearer "+auth)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do: %v", err)
+		}
+		return resp
+	}
+
+	for _, tt := range []struct {
+		name, method, path, auth string
+		want                     int
+		wantTenant               string
+	}{
+		{"root claims", http.MethodPost, "/v1/claim", "sekret", http.StatusOK, ""},
+		{"tenant claims", http.MethodPost, "/v1/claim", "acme-tok", http.StatusOK, "acme"},
+		{"second tenant resolves its own name", http.MethodPost, "/v1/claim", "beta-tok", http.StatusOK, "beta"},
+		{"wrong token", http.MethodPost, "/v1/claim", "nope", http.StatusUnauthorized, ""},
+		{"missing token", http.MethodPost, "/v1/claim", "", http.StatusUnauthorized, ""},
+		{"tenant lists own checkpoints", http.MethodGet, "/v1/checkpoints", "acme-tok", http.StatusOK, "acme"},
+		{"root lists all checkpoints", http.MethodGet, "/v1/checkpoints", "sekret", http.StatusOK, ""},
+		{"tenant forbidden on info", http.MethodGet, "/v1/info", "acme-tok", http.StatusForbidden, ""},
+		{"tenant forbidden on index", http.MethodGet, "/v1/sandboxes", "acme-tok", http.StatusForbidden, ""},
+		{"tenant forbidden on metrics", http.MethodGet, "/metrics", "acme-tok", http.StatusForbidden, ""},
+		{"tenant forbidden on pools", http.MethodPut, "/v1/pools", "acme-tok", http.StatusForbidden, ""},
+		{"wrong token on info stays 401", http.MethodGet, "/v1/info", "nope", http.StatusUnauthorized, ""},
+		{"root reads info", http.MethodGet, "/v1/info", "sekret", http.StatusOK, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr.gotTenant = "unset"
+			resp := do(t, tt.method, tt.path, tt.auth)
+			defer resp.Body.Close()
+			if resp.StatusCode != tt.want {
+				t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
+			}
+			reachedManager := resp.StatusCode == http.StatusOK &&
+				(tt.path == "/v1/claim" || tt.path == "/v1/checkpoints")
+			if reachedManager && mgr.gotTenant != tt.wantTenant {
+				t.Errorf("manager saw tenant %q, want %q", mgr.gotTenant, tt.wantTenant)
+			}
+		})
+	}
+}
+
+// TestMetricsTenantGauge checks the per-tenant live-claim gauge renders with
+// the configured tenants only.
+func TestMetricsTenantGauge(t *testing.T) {
+	mgr := &fakeManager{tenantClaims: map[string]int{"acme": 2, "beta": 0}}
+	ts := newTestServer(t, "", mgr, nil)
+
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("metrics: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	body := string(raw)
+	if !strings.Contains(body, `sandboxd_tenant_claims{tenant="acme"} 2`) ||
+		!strings.Contains(body, `sandboxd_tenant_claims{tenant="beta"} 0`) {
+		t.Errorf("tenant gauge missing:\n%s", body)
+	}
+}
+
 func TestPutPoolsUpdatesTargets(t *testing.T) {
 	var got []config.PoolSpec
 	mgr := &fakeManager{
@@ -498,10 +584,15 @@ func TestCheckpointFlow(t *testing.T) {
 
 func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *httptest.Server {
 	t.Helper()
+	return newTenantTestServer(t, apiToken, nil, mgr, dialer)
+}
+
+func newTenantTestServer(t *testing.T, apiToken string, tenants []config.TenantSpec, mgr Manager, dialer Dialer) *httptest.Server {
+	t.Helper()
 	if dialer == nil {
 		dialer = &fakeDialer{}
 	}
-	srv := New(apiToken, "node:7777", mgr, dialer, nil, nil)
+	srv := New(apiToken, tenants, "node:7777", mgr, dialer, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()
@@ -512,7 +603,8 @@ func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *h
 
 // fakeManager implements Manager with overridable behavior. ClaimWarm always
 // misses, so the server's warm-miss → redirect → provision path is exercised;
-// the claim hook stands in for the provision result.
+// the claim hook stands in for the provision result. Tenant-scoped methods
+// record the tenant they were handed in gotTenant.
 type fakeManager struct {
 	claim     func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
 	release   func(id, token string) error
@@ -531,13 +623,18 @@ type fakeManager struct {
 	deleteCheckpoint func(ckptID string) error
 	setPools         func(pools []config.PoolSpec) error
 	infoPools        []pool.PoolInfo
+
+	gotTenant    string
+	tenantClaims map[string]int
 }
 
-func (f *fakeManager) ClaimWarm(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimWarm(_ context.Context, _ types.PoolKey, _ time.Duration, tenant string) (*types.Sandbox, error) {
+	f.gotTenant = tenant
 	return nil, pool.ErrNoWarm
 }
 
-func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant string) (*types.Sandbox, error) {
+	f.gotTenant = tenant
 	if f.claim == nil {
 		return &types.Sandbox{ID: "sb_1", Token: "tok"}, nil
 	}
@@ -576,7 +673,8 @@ func (f *fakeManager) Fork(_ context.Context, id, token string, count int, ttl t
 	return f.fork(id, token, count, ttl)
 }
 
-func (f *fakeManager) Promote(_ context.Context, id, token, template string) (types.PoolKey, error) {
+func (f *fakeManager) Promote(_ context.Context, id, token, template, tenant string) (types.PoolKey, error) {
+	f.gotTenant = tenant
 	if f.promote == nil {
 		return types.PoolKey{}, pool.ErrUnknownSandbox
 	}
@@ -586,7 +684,8 @@ func (f *fakeManager) Promote(_ context.Context, id, token, template string) (ty
 	return types.PoolKey{Template: template, Net: types.NetNone, Size: types.SizeSmall}, nil
 }
 
-func (f *fakeManager) DeleteTemplate(_ context.Context, key types.PoolKey) error {
+func (f *fakeManager) DeleteTemplate(_ context.Context, key types.PoolKey, tenant string) error {
+	f.gotTenant = tenant
 	if f.deleteGolden == nil {
 		return pool.ErrUnknownTemplate
 	}
@@ -609,6 +708,8 @@ func (f *fakeManager) ClaimDeadline(id, token string) (time.Time, error) {
 
 func (f *fakeManager) Counters() pool.Counters { return pool.Counters{} }
 
+func (f *fakeManager) TenantClaims() map[string]int { return f.tenantClaims }
+
 func (f *fakeManager) Sandboxes() []pool.SandboxSummary { return nil }
 
 func (f *fakeManager) Audit(_ context.Context, id string, line []byte) {
@@ -619,25 +720,29 @@ func (f *fakeManager) Audit(_ context.Context, id string, line []byte) {
 
 func (f *fakeManager) AuditEnabled() bool { return f.audited != nil }
 
-func (f *fakeManager) Checkpoint(_ context.Context, id, token, name string) (types.Checkpoint, error) {
+func (f *fakeManager) Checkpoint(_ context.Context, id, token, name, tenant string) (types.Checkpoint, error) {
+	f.gotTenant = tenant
 	if f.checkpoint == nil {
 		return types.Checkpoint{}, pool.ErrUnknownSandbox
 	}
 	return f.checkpoint(id, token, name)
 }
 
-func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, _ time.Duration) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, _ time.Duration, tenant string) (*types.Sandbox, error) {
+	f.gotTenant = tenant
 	if f.claimCheckpoint == nil {
 		return nil, pool.ErrUnknownCheckpoint
 	}
 	return f.claimCheckpoint(ckptID)
 }
 
-func (f *fakeManager) Checkpoints(context.Context) ([]types.Checkpoint, error) {
+func (f *fakeManager) Checkpoints(_ context.Context, tenant string) ([]types.Checkpoint, error) {
+	f.gotTenant = tenant
 	return f.checkpoints, nil
 }
 
-func (f *fakeManager) DeleteCheckpoint(_ context.Context, ckptID string) error {
+func (f *fakeManager) DeleteCheckpoint(_ context.Context, ckptID, tenant string) error {
+	f.gotTenant = tenant
 	if f.deleteCheckpoint == nil {
 		return pool.ErrUnknownCheckpoint
 	}
@@ -684,7 +789,7 @@ func TestClaimRedirectsOnWarmMiss(t *testing.T) {
 		provisioned = true
 		return &types.Sandbox{ID: "sb_local"}, nil
 	}}
-	srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"node-b:7777", "node-c:7777"}}, nil)
+	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"node-b:7777", "node-c:7777"}}, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -729,7 +834,7 @@ func TestClaimRedirectsToTemplateOwner(t *testing.T) {
 					return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
 				},
 			}
-			srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil)
+			srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil)
 			ts := httptest.NewServer(srv.Handler())
 			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -757,7 +862,7 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 	// Unknown locally + gossip names an owner → the claim redirect shape;
 	// unknown everywhere stays 404.
 	mgr := &fakeManager{} // DeleteTemplate → ErrUnknownTemplate
-	srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil)
+	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -789,7 +894,7 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 		t.Errorf("status %d, want 404 with no_redirect despite known owners", resp2.StatusCode)
 	}
 
-	srvNoOwner := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{}, nil)
+	srvNoOwner := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{}, nil)
 	ts2 := httptest.NewServer(srvNoOwner.Handler())
 	t.Cleanup(func() { ts2.Close(); srvNoOwner.CloseRelays() })
 	req3, _ := http.NewRequest(http.MethodDelete, ts2.URL+"/v1/templates?template=tpl", nil)
@@ -808,7 +913,7 @@ func TestClaimProvisionsWhenNoCandidate(t *testing.T) {
 	mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
 		return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
 	}}
-	srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: nil}, nil)
+	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: nil}, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -832,7 +937,7 @@ func TestOwnerEndpoint(t *testing.T) {
 		}
 		return "", pool.ErrUnknownSandbox
 	}}
-	srv := New("", "node-b:7777", mgr, &fakeDialer{}, nil, nil)
+	srv := New("", nil, "node-b:7777", mgr, &fakeDialer{}, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 

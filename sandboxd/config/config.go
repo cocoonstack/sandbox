@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -17,6 +18,10 @@ const (
 	defaultWarm         = 4
 	defaultMaxForkCount = 16
 )
+
+// tenantNameRe mirrors pool's template-name rule: tenant names ride in
+// journal fields and metric labels, so the same conservative charset applies.
+var tenantNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`)
 
 // PoolSpec declares one warm pool and its target of claim-ready VMs.
 type PoolSpec struct {
@@ -57,6 +62,16 @@ type StoreConfig struct {
 	S3   *s3.Config `json:"s3,omitempty"`
 }
 
+// TenantSpec declares one tenant: its bearer token and its live-claim quota.
+// APIToken stays the operator (root) credential with full access; tenant
+// tokens reach the resource-creating verbs only, and everything a tenant
+// creates is stamped with its name.
+type TenantSpec struct {
+	Name      string `json:"name"`
+	Token     string `json:"token"` //nolint:gosec // config field, not a hardcoded credential
+	MaxClaims int    `json:"max_claims,omitempty"`
+}
+
 // MeshConfig configures cluster membership. Two v1 constraints: all nodes
 // must share the same APIToken (the SDK replays it across a redirect), and a
 // node serving the egress lane can only redirect egress claims to peers if it
@@ -89,6 +104,10 @@ type Config struct {
 	// APIToken, when set, guards claim and info; per-sandbox tokens guard
 	// sandbox-scoped calls regardless.
 	APIToken string `json:"api_token,omitempty"` //nolint:gosec // config field, not a hardcoded credential
+
+	// Tenants adds per-tenant bearer tokens next to APIToken; empty keeps
+	// the single-token behavior.
+	Tenants []TenantSpec `json:"tenants,omitempty"`
 
 	// IdleHibernateSeconds is the idle policy for claims of unpooled keys
 	// (template and checkpoint claims); per-pool settings override it for
@@ -216,6 +235,9 @@ func (c *Config) validate() error {
 	if c.CheckpointTTLHours < 0 {
 		return fmt.Errorf("checkpoint_ttl_hours must not be negative")
 	}
+	if err := c.validateTenants(); err != nil {
+		return err
+	}
 	for _, p := range c.Pools {
 		if err := p.Validate(); err != nil {
 			return fmt.Errorf("pool %q: %w", p.Template, err)
@@ -225,6 +247,34 @@ func (c *Config) validate() error {
 		}
 		if err := p.ValidateLimits(); err != nil {
 			return fmt.Errorf("pool %q: %w", p.Template, err)
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateTenants() error {
+	names := make(map[string]struct{}, len(c.Tenants))
+	tokens := make(map[string]struct{}, len(c.Tenants))
+	for _, tn := range c.Tenants {
+		if !tenantNameRe.MatchString(tn.Name) {
+			return fmt.Errorf("tenant name %q must match %s", tn.Name, tenantNameRe)
+		}
+		if _, ok := names[tn.Name]; ok {
+			return fmt.Errorf("duplicate tenant name %q", tn.Name)
+		}
+		names[tn.Name] = struct{}{}
+		switch tn.Token {
+		case "":
+			return fmt.Errorf("tenant %q needs a token", tn.Name)
+		case c.APIToken:
+			return fmt.Errorf("tenant %q token must differ from api_token", tn.Name)
+		}
+		if _, ok := tokens[tn.Token]; ok {
+			return fmt.Errorf("tenant %q token reused by another tenant", tn.Name)
+		}
+		tokens[tn.Token] = struct{}{}
+		if tn.MaxClaims < 0 {
+			return fmt.Errorf("tenant %q max_claims must not be negative, got %d", tn.Name, tn.MaxClaims)
 		}
 	}
 	return nil
