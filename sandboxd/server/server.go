@@ -211,7 +211,9 @@ func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req t
 	if writeRedirect(w, s.placer.Candidates(key.Hash())) {
 		return true
 	}
-	return !s.mgr.HasGolden(ctx, key) && writeRedirect(w, s.placer.TemplateOwners(key.Hash()))
+	// TemplateOwners is in-memory; HasGolden can be a store round-trip.
+	owners := s.placer.TemplateOwners(key.Hash())
+	return len(owners) > 0 && !s.mgr.HasGolden(ctx, key) && writeRedirect(w, owners)
 }
 
 // handleSandboxVerb adapts a sandbox-scoped manager call (release,

@@ -1,6 +1,6 @@
-// Package dir is the directory checkpoint backend: plain files under a
+// Package dir is the directory record backend: plain files under a
 // root whose filesystem is the operator's choice — local disk keeps
-// checkpoints node-local, a shared FUSE mount makes them cluster-wide.
+// records node-local, a shared FUSE mount makes them cluster-wide.
 package dir
 
 import (
@@ -46,14 +46,19 @@ func (d *Store) Publish(_ context.Context, staging, id string) error {
 	return os.Rename(staging, final)
 }
 
-func (d *Store) Fetch(_ context.Context, id string) (string, func(), error) {
+func (d *Store) Fetch(ctx context.Context, id string) (string, []byte, func(), error) {
+	// Meta is the commit marker: a half-published record stays invisible.
+	meta, err := d.ReadMeta(ctx, id)
+	if err != nil {
+		return "", nil, nil, err
+	}
 	dir := filepath.Join(d.root, id, store.ExportDir)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return "", nil, store.ErrNotFound
+		return "", nil, nil, store.ErrNotFound
 	} else if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
-	return dir, func() {}, nil
+	return dir, meta, func() {}, nil
 }
 
 func (d *Store) ReadMeta(_ context.Context, id string) ([]byte, error) {

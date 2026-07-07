@@ -11,9 +11,9 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// store persists claimed sandboxes across daemon restarts. Warm pool VMs are
-// deliberately not persisted: they are cheap to rebuild and unsafe to trust
-// after an unsupervised gap.
+// claimStore persists claimed sandboxes across daemon restarts. Warm pool
+// VMs are deliberately not persisted: they are cheap to rebuild and unsafe
+// to trust after an unsupervised gap.
 type claimStore struct {
 	path string
 }

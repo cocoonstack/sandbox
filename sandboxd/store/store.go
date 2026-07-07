@@ -12,14 +12,15 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strings"
 )
 
 const (
-	// ExportDir is the snapshot export under a checkpoint: <id>/export.
+	// ExportDir is the snapshot export under a record: <id>/export.
 	ExportDir = "export"
-	// MetaFile is the checkpoint's metadata record: <id>/meta.json. It is
+	// MetaFile is the record's metadata: <id>/meta.json. It is
 	// written/uploaded last, so a lister never sees a half-published
-	// checkpoint.
+	// record.
 	MetaFile = "meta.json"
 )
 
@@ -37,7 +38,7 @@ var (
 	TemplateIDRe   = regexp.MustCompile(`^tp_[0-9a-f]{32}$`)
 )
 
-// Store is one checkpoint backend.
+// Store is one record backend.
 type Store interface {
 	// Stage returns a writable staging directory whose Publish is atomic.
 	Stage(id string) (string, error)
@@ -46,14 +47,14 @@ type Store interface {
 	// the s3 backend commits meta.json last). Request-path callers pass an
 	// uncancelable ctx so a started publish finishes.
 	Publish(ctx context.Context, staging, id string) error
-	// Fetch materializes a checkpoint's snapshot export as a local
-	// directory cocoon can clone from, returning it with a release to call
-	// when the clone is done. The dir backend returns its path with a
-	// no-op release; the s3 backend downloads to a temp dir and releases
-	// by removing it.
-	Fetch(ctx context.Context, id string) (dir string, release func(), err error)
-	// ReadMeta returns a checkpoint's metadata record, or an error when
-	// the checkpoint does not exist.
+	// Fetch materializes a record's snapshot export as a local directory
+	// cocoon can clone from, plus the meta it resolved on the way, and a
+	// release to call when the clone is done. The dir backend returns its
+	// path with a no-op release; the s3 backend serves a local cache
+	// generation.
+	Fetch(ctx context.Context, id string) (dir string, meta []byte, release func(), err error)
+	// ReadMeta returns a record's metadata, or an error when the record
+	// does not exist.
 	ReadMeta(ctx context.Context, id string) ([]byte, error)
 	// Metas lists the metadata of every record in this instance's id
 	// namespace.
@@ -63,3 +64,11 @@ type Store interface {
 	// SweepStaging removes abandoned staging left by a crash mid-publish.
 	SweepStaging() error
 }
+
+// CheckpointID, TemplateID, and TemplateHash are the one home for the
+// ck_/tp_ id scheme the regexps above pin.
+func CheckpointID(suffix string) string { return "ck_" + suffix }
+
+func TemplateID(hash string) string { return "tp_" + hash }
+
+func TemplateHash(id string) string { return strings.TrimPrefix(id, "tp_") }

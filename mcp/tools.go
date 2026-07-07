@@ -432,13 +432,7 @@ func toolSpawn(ctx context.Context, s *server, raw json.RawMessage) (string, err
 }
 
 func toolPs(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	var args struct {
-		SandboxID string `json:"sandbox_id"`
-	}
-	if err := parse(raw, &args); err != nil {
-		return "", err
-	}
-	sb, err := s.box(args.SandboxID)
+	sb, err := s.boxArg(raw)
 	if err != nil {
 		return "", err
 	}

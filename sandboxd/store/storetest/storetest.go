@@ -36,9 +36,12 @@ func RunContract(t *testing.T, st store.Store) {
 		t.Fatalf("ReadMeta: %q, %v", raw, err)
 	}
 
-	dir, release, err := st.Fetch(ctx, id)
+	dir, meta, release, err := st.Fetch(ctx, id)
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
+	}
+	if string(meta) != `{"id":"`+id+`"}` {
+		t.Fatalf("Fetch meta: %q, want the published record", meta)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "disk.img")) //nolint:gosec // test path
 	if err != nil || string(got) != "snapshot-bytes" {
@@ -78,9 +81,12 @@ func RunContract(t *testing.T, st store.Store) {
 	if err = st.Publish(ctx, second, id); err != nil {
 		t.Fatalf("Publish second: %v", err)
 	}
-	dir, release, err = st.Fetch(ctx, id)
+	dir, meta, release, err = st.Fetch(ctx, id)
 	if err != nil {
 		t.Fatalf("Fetch second: %v", err)
+	}
+	if string(meta) != `{"id":"`+id+`","gen":2}` {
+		t.Fatalf("Fetch meta after re-publish: %q, want the second generation", meta)
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "disk.img")); !os.IsNotExist(statErr) {
 		t.Errorf("first-generation file survived re-publish: %v", statErr)
@@ -96,7 +102,7 @@ func RunContract(t *testing.T, st store.Store) {
 	if _, err = st.ReadMeta(ctx, id); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("ReadMeta after Delete: %v, want store.ErrNotFound", err)
 	}
-	if _, _, err = st.Fetch(ctx, id); !errors.Is(err, store.ErrNotFound) {
+	if _, _, _, err = st.Fetch(ctx, id); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Fetch after Delete: %v, want store.ErrNotFound", err)
 	}
 	if metas, err = st.Metas(ctx); err != nil || len(metas) != 0 {

@@ -17,12 +17,8 @@ func (s *Sandbox) Spawn(ctx context.Context, cmd Cmd) (uint32, error) {
 	if len(cmd.Argv) == 0 {
 		return 0, fmt.Errorf("empty argv")
 	}
-	conn, done, err := s.call(ctx, &silkd.Exec{Argv: cmd.Argv, Cwd: cmd.Cwd, Env: cmd.Env, User: cmd.User, Detach: true, Session: cmd.Session})
-	if err != nil {
-		return 0, err
-	}
-	defer done()
-	started, err := expect[silkd.Started](ctx, conn)
+	req := &silkd.Exec{Argv: cmd.Argv, Cwd: cmd.Cwd, Env: cmd.Env, User: cmd.User, Detach: true, Session: cmd.Session}
+	started, err := oneShotRPC[silkd.Started](ctx, s, req)
 	if err != nil {
 		return 0, err
 	}
@@ -32,12 +28,7 @@ func (s *Sandbox) Spawn(ctx context.Context, cmd Cmd) (uint32, error) {
 // Ps lists the guest's tracked processes — execs, spawns, and ptys — with
 // state and exit codes.
 func (s *Sandbox) Ps(ctx context.Context) ([]silkd.ProcInfo, error) {
-	conn, done, err := s.call(ctx, silkd.Ps{})
-	if err != nil {
-		return nil, err
-	}
-	defer done()
-	procs, err := expect[silkd.Procs](ctx, conn)
+	procs, err := oneShotRPC[silkd.Procs](ctx, s, silkd.Ps{})
 	if err != nil {
 		return nil, err
 	}

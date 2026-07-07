@@ -76,7 +76,7 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey) error {
 	if m.pooledHash(key.Hash()) {
 		return ErrPooledTemplate
 	}
-	id := templateID(key.Hash())
+	id := store.TemplateID(key.Hash())
 	if _, err := m.tpls.ReadMeta(ctx, id); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return ErrUnknownTemplate
@@ -108,8 +108,9 @@ func (m *Manager) TemplateHashes() []string {
 	m.tplMu.Lock()
 	hashes := make([]string, 0, len(m.tplSet))
 	for id := range m.tplSet {
-		if _, ok := pooled[id[len("tp_"):]]; !ok {
-			hashes = append(hashes, id[len("tp_"):])
+		hash := store.TemplateHash(id)
+		if _, ok := pooled[hash]; !ok {
+			hashes = append(hashes, hash)
 		}
 	}
 	m.tplMu.Unlock()
@@ -125,7 +126,7 @@ func (m *Manager) HasGolden(ctx context.Context, key types.PoolKey) bool {
 	if pooled {
 		return true
 	}
-	_, err := m.tpls.ReadMeta(ctx, templateID(key.Hash()))
+	_, err := m.tpls.ReadMeta(ctx, store.TemplateID(key.Hash()))
 	return err == nil
 }
 
@@ -157,7 +158,7 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string,
 	if dir != "" {
 		return dir, func() {}, nil
 	}
-	dir, release, err := m.tpls.Fetch(ctx, templateID(key.Hash()))
+	dir, _, release, err := m.tpls.Fetch(ctx, store.TemplateID(key.Hash()))
 	if errors.Is(err, store.ErrNotFound) {
 		return "", func() {}, nil
 	}
@@ -166,7 +167,7 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string,
 
 // publishTemplate exports snap into the store under the key's template id.
 func (m *Manager) publishTemplate(ctx context.Context, snap string, key types.PoolKey) error {
-	id := templateID(key.Hash())
+	id := store.TemplateID(key.Hash())
 	staging, err := m.tpls.Stage(id)
 	if err != nil {
 		return fmt.Errorf("stage template: %w", err)
@@ -208,7 +209,7 @@ func (m *Manager) migrateLegacyTemplates(ctx context.Context) {
 	}
 	for _, e := range entries {
 		hash := e.Name()
-		id := templateID(hash)
+		id := store.TemplateID(hash)
 		if !e.IsDir() || m.pooledHash(hash) || !store.TemplateIDRe.MatchString(id) {
 			continue
 		}
@@ -230,5 +231,3 @@ func (m *Manager) migrateLegacyTemplates(ctx context.Context) {
 		logger.Infof(ctx, "migrated legacy template %s", id)
 	}
 }
-
-func templateID(hash string) string { return "tp_" + hash }

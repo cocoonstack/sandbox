@@ -1,4 +1,4 @@
-// Package s3 is the object-store checkpoint backend for nodes without a
+// Package s3 is the object-store record backend for nodes without a
 // shared POSIX namespace: <prefix><id>/{export/...,meta.json} objects,
 // meta.json uploaded last as the commit marker (S3 has no atomic
 // multi-object rename). The aws dependency is scoped to this package.
@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -89,9 +90,10 @@ func (s *Store) Stage(id string) (string, error) {
 }
 
 // Publish uploads every staged file, meta.json last: a lister only sees
-// the checkpoint once its commit marker exists.
+// the record once its commit marker exists.
 func (s *Store) Publish(ctx context.Context, staging, id string) error {
 	var meta string
+	fresh := map[string]struct{}{}
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(4) // files in parallel; each already multiparts internally
 	err := filepath.WalkDir(staging, func(path string, d os.DirEntry, err error) error {
@@ -102,6 +104,7 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 		if err != nil {
 			return err
 		}
+		fresh[s.key(id, rel)] = struct{}{}
 		if rel == store.MetaFile {
 			meta = path
 			return nil
@@ -124,16 +127,6 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 	// A re-publish (re-promote) may ship a different export file set:
 	// after the new meta commits, sweep keys the new generation did not
 	// write, or Fetch would download the union of generations.
-	fresh := map[string]struct{}{s.key(id, store.MetaFile): {}}
-	_ = filepath.WalkDir(staging, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		if rel, relErr := filepath.Rel(staging, path); relErr == nil {
-			fresh[s.key(id, rel)] = struct{}{}
-		}
-		return nil
-	})
 	keys, err := s.list(ctx, s.key(id, "")+"/")
 	if err != nil {
 		return err
@@ -157,24 +150,24 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 // reading (old generations are reaped at Delete and the startup sweep,
 // when no clone can be in flight). Concurrent misses share one download.
 // release is a no-op. A missing id is ErrNotFound.
-func (s *Store) Fetch(ctx context.Context, id string) (string, func(), error) {
+func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, func(), error) {
 	meta, err := s.ReadMeta(ctx, id)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	sum := sha256.Sum256(meta)
 	gen := filepath.Join(s.staging, "cache", id, hex.EncodeToString(sum[:8]))
 	export := filepath.Join(gen, store.ExportDir)
 	if _, statErr := os.Stat(export); statErr == nil {
-		return export, func() {}, nil
+		return export, meta, func() {}, nil
 	}
 	_, err, _ = s.fetches.Do(gen, func() (any, error) {
 		return nil, s.populate(ctx, id, meta, gen)
 	})
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
-	return export, func() {}, nil
+	return export, meta, func() {}, nil
 }
 
 // populate downloads one cache generation and installs it atomically.
@@ -265,13 +258,7 @@ func (s *Store) Metas(ctx context.Context) ([][]byte, error) {
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
-	out := metas[:0]
-	for _, m := range metas {
-		if m != nil {
-			out = append(out, m)
-		}
-	}
-	return out, nil
+	return slices.DeleteFunc(metas, func(m []byte) bool { return m == nil }), nil
 }
 
 func (s *Store) Delete(ctx context.Context, id string) error {

@@ -38,7 +38,7 @@ func (m *Manager) Checkpoint(ctx context.Context, id, token, name string) (types
 	ctx = context.WithoutCancel(ctx)
 
 	ckpt := types.Checkpoint{
-		ID:        "ck_" + randHex(8),
+		ID:        store.CheckpointID(randHex(8)),
 		Name:      name,
 		SandboxID: sb.ID,
 		Key:       sb.Key,
@@ -71,15 +71,21 @@ func (m *Manager) Checkpoint(ctx context.Context, id, token, name string) (types
 // branch. The checkpoint's recorded key applies (snapshots pin size and
 // lane); the checkpoint itself is read-only and reusable.
 func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration) (*types.Sandbox, error) {
-	ckpt, err := m.loadCheckpoint(ctx, ckptID)
-	if err != nil {
-		return nil, err
+	if !store.CheckpointIDRe.MatchString(ckptID) {
+		return nil, ErrUnknownCheckpoint
 	}
-	dir, release, err := m.ckpts.Fetch(ctx, ckpt.ID)
+	dir, meta, release, err := m.ckpts.Fetch(ctx, ckptID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, ErrUnknownCheckpoint
+	}
 	if err != nil {
 		return nil, fmt.Errorf("fetch checkpoint: %w", err)
 	}
 	defer release()
+	ckpt, err := parseCheckpoint(meta)
+	if err != nil {
+		return nil, err
+	}
 	sb, err := m.provision(ctx, ckpt.Key, dir)
 	if err != nil {
 		return nil, err
@@ -93,7 +99,8 @@ func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.D
 }
 
 // Checkpoints lists the store's checkpoints, newest first — on a shared
-// checkpoint_dir (a FUSE mount), that is the cluster's set, not one node's.
+// backend (a FUSE mount, a bucket), that is the cluster's set, not one
+// node's.
 func (m *Manager) Checkpoints(ctx context.Context) ([]types.Checkpoint, error) {
 	metas, err := m.ckpts.Metas(ctx)
 	if err != nil {
@@ -157,6 +164,10 @@ func (m *Manager) loadCheckpoint(ctx context.Context, ckptID string) (types.Chec
 	if err != nil {
 		return types.Checkpoint{}, fmt.Errorf("read checkpoint: %w", err)
 	}
+	return parseCheckpoint(raw)
+}
+
+func parseCheckpoint(raw []byte) (types.Checkpoint, error) {
 	var ckpt types.Checkpoint
 	if err := json.Unmarshal(raw, &ckpt); err != nil {
 		return types.Checkpoint{}, ErrUnknownCheckpoint
