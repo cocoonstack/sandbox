@@ -27,7 +27,8 @@ const FG_CAP: usize = 256;
 
 /// Runs an exec request to completion (or to `started` when detached),
 /// writing response frames to `out`. `client` yields further client frames
-/// (stdin / stdin_close) for the foreground case.
+/// (stdin / stdin_close) for the foreground case. argv is non-empty — the
+/// dispatcher validates it before the session/process split.
 pub async fn run<W>(
     table: &Table,
     now_secs: u64,
@@ -38,11 +39,6 @@ pub async fn run<W>(
 where
     W: AsyncWrite + Unpin,
 {
-    if req.argv.is_empty() {
-        return crate::proto::error_frame(out, ErrorKind::BadRequest, "argv must not be empty")
-            .await;
-    }
-
     let mut cmd = Command::new(&req.argv[0]);
     cmd.args(&req.argv[1..])
         .stdin(Stdio::piped())

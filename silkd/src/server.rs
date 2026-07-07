@@ -56,6 +56,17 @@ impl State {
             Request::Logs { pid } => self.logs(&mut writer, pid).await,
             Request::Attach { pid } => self.attach(&mut writer, pid).await,
             Request::Exec(e) => {
+                // Validated here, ahead of the session/process split, so an
+                // empty argv answers the same error on both paths (the session
+                // shell would otherwise run it as a successful no-op).
+                if e.argv.is_empty() {
+                    return proto::error_frame(
+                        &mut writer,
+                        ErrorKind::BadRequest,
+                        "argv must not be empty",
+                    )
+                    .await;
+                }
                 if let Some(sid) = e.session.as_deref() {
                     let Some(sess) = self.sessions.get(sid) else {
                         return proto::error_frame(
@@ -307,8 +318,9 @@ async fn feed_client<R>(mut reader: R, tx: mpsc::Sender<Request>)
 where
     R: AsyncBufRead + Unpin,
 {
-    while let Ok(Some(bytes)) = proto::read_frame(&mut reader).await {
-        match serde_json::from_slice::<Request>(&bytes) {
+    let mut line = Vec::new();
+    while let Ok(true) = proto::read_frame_into(&mut reader, &mut line).await {
+        match serde_json::from_slice::<Request>(&line) {
             Ok(req) => {
                 if tx.send(req).await.is_err() {
                     return;

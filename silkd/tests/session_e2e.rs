@@ -228,6 +228,21 @@ async fn session_rm_unwedges_a_running_external_command() {
 }
 
 #[tokio::test]
+async fn empty_argv_in_session_is_a_bad_request() {
+    // The dispatcher validates argv ahead of the session/process split: an
+    // empty argv must not reach the shell as a successful no-op.
+    let state = Arc::new(State::new());
+    let id = create(&state, json!({})).await;
+    let f = one(
+        &state,
+        &json!({"op":"exec","argv":[],"session":id}).to_string(),
+    )
+    .await;
+    assert_eq!(type_of(&f[0]), "error");
+    assert_eq!(f[0]["kind"], "bad_request");
+}
+
+#[tokio::test]
 async fn exec_in_unknown_session_is_not_found() {
     let state = Arc::new(State::new());
     let f = one(&state, r#"{"op":"exec","argv":["true"],"session":"nope"}"#).await;

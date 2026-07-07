@@ -47,6 +47,10 @@ impl Table {
             _ => format!("sess-{}", sysutil::tmp_suffix()),
         };
         let mut child = Command::new("bash")
+            // The same sanitized baseline as exec/pty ("nothing inherited
+            // from silkd"); the request's cwd/env layer on via the init line.
+            .env_clear()
+            .envs(sysutil::base_env())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // Null, not piped: nothing ever reads a stderr pipe, and the init
