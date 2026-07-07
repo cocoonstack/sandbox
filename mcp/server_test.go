@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -45,7 +44,7 @@ func TestServeSpeaksMCP(t *testing.T) {
 	}
 	var out bytes.Buffer
 	in := bufio.NewReader(strings.NewReader(strings.Join(lines, "\n") + "\n"))
-	if err := srv.serve(context.Background(), in, &out); err != nil {
+	if err := srv.serve(t.Context(), in, &out); err != nil {
 		t.Fatalf("serve: %v", err)
 	}
 
