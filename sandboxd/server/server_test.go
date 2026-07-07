@@ -108,9 +108,10 @@ func TestAPITokenGuard(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var body io.Reader
-			if tt.method == http.MethodPost {
+			switch tt.method {
+			case http.MethodPost:
 				body = strings.NewReader(`{"template":"rt:24.04"}`)
-			} else if tt.method == http.MethodPut {
+			case http.MethodPut:
 				body = strings.NewReader(`{"pools":[{"template":"rt:24.04","net":"none","size":"small","warm":1}]}`)
 			}
 			req, err := http.NewRequestWithContext(t.Context(), tt.method, ts.URL+tt.path, body)

@@ -336,13 +336,13 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 		if spec.IdleHibernateSeconds > 0 {
 			enableIdle = true
 		}
-		if existing, ok := hashes[spec.PoolKey.Hash()]; ok && existing != spec.PoolKey {
+		if existing, ok := hashes[spec.Hash()]; ok && existing != spec.PoolKey {
 			return fmt.Errorf("%w: pool key hash collision between %q and %q", ErrBadKey, existing.Template, spec.Template)
 		}
 		if _, ok := desired[spec.PoolKey]; ok {
 			return fmt.Errorf("%w: duplicate pool %q", ErrBadKey, spec.Template)
 		}
-		hashes[spec.PoolKey.Hash()] = spec.PoolKey
+		hashes[spec.Hash()] = spec.PoolKey
 		desired[spec.PoolKey] = spec
 	}
 
