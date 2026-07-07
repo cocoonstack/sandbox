@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,8 @@ import (
 	"sync"
 	"time"
 )
+
+var errScatterExhausted = errors.New("every probe failed")
 
 // ClientOption configures Connect.
 type ClientOption func(*Client)
@@ -75,16 +78,18 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 		if err != nil {
 			return nil, err
 		}
-		var lastErr error
-		for _, addr := range cr.Redirect {
-			target, err := c.claimAt(ctx, addr, body)
-			if err != nil {
-				lastErr = err
-				continue
+		var sb *Sandbox
+		if tryErr := tryEach(cr.Redirect, func(addr string) error {
+			target, claimErr := c.claimAt(ctx, addr, body)
+			if claimErr != nil {
+				return claimErr
 			}
-			return c.handleFrom(addr, target), nil
+			sb = c.handleFrom(addr, target)
+			return nil
+		}); tryErr != nil {
+			return nil, fmt.Errorf("claim: all redirect targets failed: %w", tryErr)
 		}
-		return nil, fmt.Errorf("claim: all redirect targets failed: %w", lastErr)
+		return sb, nil
 	}
 	return c.handleFrom(c.addr, cr), nil
 }
@@ -97,23 +102,13 @@ func (c *Client) Lookup(ctx context.Context, id, token string) (*Sandbox, error)
 	if owner, err := c.ownerAt(ctx, c.addr, id, token); err == nil {
 		return &Sandbox{ID: id, token: token, c: c, owner: owner}, nil
 	}
-	peers := c.peers(ctx)
-	scatterCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	owners := make(chan string, len(peers))
-	var wg sync.WaitGroup
-	for _, addr := range peers {
-		wg.Go(func() {
-			if owner, err := c.ownerAt(scatterCtx, addr, id, token); err == nil {
-				owners <- owner
-			}
-		})
+	owner, err := scatter(ctx, c.peers(ctx), func(ctx context.Context, addr string) (string, error) {
+		return c.ownerAt(ctx, addr, id, token)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("lookup %s: no owner found", id)
 	}
-	go func() { wg.Wait(); close(owners) }()
-	if owner, ok := <-owners; ok {
-		return &Sandbox{ID: id, token: token, c: c, owner: owner}, nil
-	}
-	return nil, fmt.Errorf("lookup %s: no owner found", id)
+	return &Sandbox{ID: id, token: token, c: c, owner: owner}, nil
 }
 
 // DeleteTemplate removes a promoted template by name. When the entry node
@@ -136,12 +131,13 @@ func (c *Client) DeleteTemplate(ctx context.Context, template string, opts ...Op
 	// The retry carries no_redirect, mirroring the claim protocol: the owner
 	// answers for itself, never a second hop.
 	u.Set("no_redirect", "1")
-	for _, addr := range redirect {
-		if _, err = c.deleteTemplates(ctx, addr, u); err == nil {
-			return nil
-		}
+	if tryErr := tryEach(redirect, func(addr string) error {
+		_, retryErr := c.deleteTemplates(ctx, addr, u)
+		return retryErr
+	}); tryErr != nil {
+		return fmt.Errorf("delete template at owner: %w", tryErr)
 	}
-	return fmt.Errorf("delete template at owner: %w", err)
+	return nil
 }
 
 // ownerAt asks one node whether it owns the sandbox, returning its data-plane
@@ -226,6 +222,44 @@ func doNoContent(ctx context.Context, c *Client, method, addr, path string, body
 		return apiError(verb, resp)
 	}
 	return nil
+}
+
+// tryEach calls call against each candidate in turn, stopping at the first
+// success; any failure moves on to the next candidate and the last error
+// propagates. The sequential half of the cluster redirect protocol: a claim
+// or template-delete retry walks the owner list one node at a time.
+func tryEach(candidates []string, call func(addr string) error) error {
+	var lastErr error
+	for _, addr := range candidates {
+		lastErr = call(addr)
+		if lastErr == nil {
+			return nil
+		}
+	}
+	return lastErr
+}
+
+// scatter probes addrs concurrently, returning the first success and
+// canceling the losers — one hung peer must not stall the caller. When
+// every probe fails (or addrs is empty) it yields errScatterExhausted.
+func scatter[T any](ctx context.Context, addrs []string, probe func(ctx context.Context, addr string) (T, error)) (T, error) {
+	scatterCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	wins := make(chan T, len(addrs))
+	var wg sync.WaitGroup
+	for _, addr := range addrs {
+		wg.Go(func() {
+			if v, probeErr := probe(scatterCtx, addr); probeErr == nil {
+				wins <- v
+			}
+		})
+	}
+	go func() { wg.Wait(); close(wins) }()
+	if v, ok := <-wins; ok {
+		return v, nil
+	}
+	var zero T
+	return zero, errScatterExhausted
 }
 
 // roundTrip issues one control-plane request against addr, attaching bearer

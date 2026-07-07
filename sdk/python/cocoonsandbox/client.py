@@ -5,6 +5,8 @@ that has capacity, and the returned Sandbox is bound to its owner."""
 from __future__ import annotations
 
 import json
+import queue
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -29,14 +31,11 @@ class Client:
         reply = self._post_json(self.addr, "/v1/claim", claim, "claim")
         redirect = reply.get("redirect") or []
         if redirect:
+            # Retry at a peer with no_redirect set: it warm-or-provisions and
+            # cannot bounce us again.
             claim["no_redirect"] = True
-            last_error = None
-            for peer in redirect:
-                try:
-                    return self._handle_from(peer, self._post_json(peer, "/v1/claim", claim, "claim"))
-                except APIError as exc:
-                    last_error = exc
-            raise last_error
+            return _try_each(redirect, lambda peer: self._handle_from(
+                peer, self._post_json(peer, "/v1/claim", claim, "claim")))
         return self._handle_from(self.addr, reply)
 
     def delete_template(self, template: str, net: str = "", size: str = "") -> None:
@@ -50,29 +49,28 @@ class Client:
         path = "/v1/templates?" + urllib.parse.urlencode(query)
         reply = self._request(self.addr, "DELETE", path, None, "delete template")
         candidates = (reply or {}).get("redirect") or []
+        if not candidates:
+            return
+        # The retry carries no_redirect, mirroring the claim protocol: the
+        # owner answers for itself, never a second hop.
         query["no_redirect"] = "1"
         path = "/v1/templates?" + urllib.parse.urlencode(query)
-        # Each candidate once, like the Go SDK: a peer that lost the template
-        # answers 404, the next may own it; the last 404 propagates.
-        for i, peer in enumerate(candidates):
-            try:
-                self._request(peer, "DELETE", path, None, "delete template")
-                return
-            except APIError as exc:
-                if exc.status != 404 or i == len(candidates) - 1:
-                    raise
+        _try_each(candidates, lambda peer: self._request(peer, "DELETE", path, None, "delete template"))
 
     def lookup(self, id: str, token: str) -> Sandbox:
-        """Relocates a handle from id + token: asks the entry node, then
-        each mesh peer, and binds to whichever confirms ownership."""
-        for addr in [self.addr, *(self.info().get("peers") or [])]:
-            try:
-                reply = self._request(addr, "GET", f"/v1/sandboxes/{id}/owner", None, "owner", bearer=token)
-            except APIError:
-                continue
+        """Relocates a handle from id + token: asks the entry node and every
+        mesh peer concurrently, binding to whichever confirms ownership
+        first — one dead peer must not cost its full timeout."""
+        def probe(addr: str) -> Sandbox:
+            reply = self._request(addr, "GET", f"/v1/sandboxes/{id}/owner", None, "owner", bearer=token)
             return Sandbox(client=self, id=id, token=token,
                            owner=reply.get("owner_addr") or addr)
-        raise APIError("lookup", 404, f"no owner found for {id}")
+
+        addrs = [self.addr, *(self.info().get("peers") or [])]
+        try:
+            return _scatter(addrs, probe)
+        except APIError:
+            raise APIError("lookup", 404, f"no owner found for {id}") from None
 
     def checkpoint(self, id: str) -> Checkpoint:
         """A handle for a known checkpoint id, bound to the entry node — no
@@ -138,4 +136,44 @@ def _error_message(raw: bytes) -> str:
         return json.loads(raw)["error"]
     except (ValueError, KeyError, TypeError):
         return raw.decode(errors="replace").strip()
+
+
+def _try_each(candidates, call):
+    """Calls call against each candidate in turn, returning the first
+    success. A miss — 404, or a dead peer (status 0) — moves on to the next
+    candidate and the last miss propagates; any other error raises
+    immediately. candidates must be non-empty."""
+    last_error = None
+    for addr in candidates:
+        try:
+            return call(addr)
+        except APIError as exc:
+            if exc.status not in (404, 0):
+                raise
+            last_error = exc
+    raise last_error
+
+
+def _scatter(addrs, probe):
+    """Probes every addr concurrently and returns the first success; when
+    all probes fail the last error propagates. Loser threads are daemons
+    whose requests die with _request's own timeout; the queue is bounded by
+    len(addrs) so they never block. addrs must be non-empty."""
+    results = queue.Queue(maxsize=len(addrs))
+
+    def run(addr):
+        try:
+            results.put((probe(addr), None))
+        except Exception as exc:  # any escape would hang the drain below
+            results.put((None, exc))
+
+    for addr in addrs:
+        threading.Thread(target=run, args=(addr,), daemon=True).start()
+    last_error = None
+    for _ in addrs:
+        value, error = results.get()
+        if error is None:
+            return value
+        last_error = error
+    raise last_error
 
