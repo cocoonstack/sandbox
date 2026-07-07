@@ -66,6 +66,36 @@ class Sandbox:
                     return frame["code"]
         raise ProtocolError("exec stream ended without an exit frame")
 
+    def spawn(self, *argv: str, cwd: str = "", env: dict | None = None,
+              user: str = "", session: str = "") -> int:
+        """Starts argv detached, returning its pid immediately; the process
+        keeps a bounded output ring readable later via logs()/attach()."""
+        started = self._call("exec", "started", argv=list(argv), cwd=cwd or None,
+                             env=env, user=user or None, session=session or None,
+                             detach=True)
+        return started["pid"]
+
+    def ps(self) -> list[dict]:
+        """Lists tracked processes: {pid, argv, detached, state,
+        exit_code?, started_at_epoch_secs}."""
+        return self._call("ps", "procs")["procs"]
+
+    def kill(self, pid: int, signal: int | None = None) -> None:
+        """Signals a tracked process (default SIGKILL); killing one that
+        already exited is a no-op success."""
+        self._done_rpc("kill", pid=pid, signal=signal)
+
+    def logs(self, pid: int, on_stdout=None, on_stderr=None) -> int | None:
+        """Replays a process's ring-buffered output through the callbacks;
+        returns its exit code if it already exited, else None."""
+        return self._drain_proc("logs", pid, on_stdout, on_stderr)
+
+    def attach(self, pid: int, on_stdout=None, on_stderr=None) -> int | None:
+        """Replays buffered output then follows live output until the
+        process exits, returning its exit code (None only if the proc table
+        dropped it mid-attach)."""
+        return self._drain_proc("attach", pid, on_stdout, on_stderr)
+
     def write_file(self, path: str, data: bytes, mode: int | None = None) -> None:
         """Writes data to path atomically (temp + rename on the guest)."""
         with self._dial() as conn:
@@ -315,6 +345,19 @@ class Sandbox:
 
     def _done_rpc(self, op: str, **fields) -> None:
         self._call(op, "done", **fields)
+
+    def _drain_proc(self, op: str, pid: int, on_stdout, on_stderr) -> int | None:
+        with self._dial() as conn:
+            conn.send(op, pid=pid)
+            for frame in conn.recv_until("exit", "done"):
+                t = frame["type"]
+                if t == "stdout" and on_stdout:
+                    on_stdout(frame["data"])
+                elif t == "stderr" and on_stderr:
+                    on_stderr(frame["data"])
+                elif t == "exit":
+                    return frame["code"]
+        return None
 
 class Session:
     """A persistent shell inside the sandbox, addressed by id."""

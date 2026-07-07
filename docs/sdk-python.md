@@ -180,6 +180,20 @@ exit. `run` streams raw bytes through the callbacks (chunk boundaries may
 split multi-byte sequences) and returns the exit code. `user` de-escalates
 inside the guest; `session=` routes the command into a persistent session.
 
+## Background processes
+
+```python
+pid = sb.spawn("sh", "-c", "make build")     # returns immediately
+sb.ps()                                       # [{pid, argv, detached, state, exit_code?, ...}]
+code = sb.logs(pid, on_stdout=out.append)     # replay the bounded ring; None while running
+code = sb.attach(pid, on_stdout=out.append)   # replay, then follow live until exit
+sb.kill(pid)                                  # default SIGKILL
+```
+
+`spawn` starts the command detached with a bounded output ring; `logs`
+replays it, `attach` follows live output until exit (replay and live stream
+hand off atomically). Killing an already-exited process is a no-op success.
+
 ## Sessions
 
 A session is a real persistent shell: cwd, env and shell state survive

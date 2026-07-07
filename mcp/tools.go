@@ -20,6 +20,22 @@ var tools = []tool{
 		schema(props{"sandbox_id": str("sandbox to run in"), "command": str("shell command, run via sh -c"), "cwd": str("working directory (optional)")}, "sandbox_id", "command"), toolExec,
 	},
 	{
+		"spawn", "Start a command detached in a sandbox; returns its pid. Read output later with logs.",
+		schema(props{"sandbox_id": str(""), "command": str("shell command, run via sh -c"), "cwd": str("working directory (optional)")}, "sandbox_id", "command"), toolSpawn,
+	},
+	{
+		"ps", "List a sandbox's tracked processes with state and exit codes.",
+		schema(props{"sandbox_id": str("")}, "sandbox_id"), toolPs,
+	},
+	{
+		"kill", "Signal a tracked process (default SIGKILL).",
+		schema(props{"sandbox_id": str(""), "pid": integer("guest pid from spawn/ps"), "signal": integer("signal number; 0 = SIGKILL")}, "sandbox_id", "pid"), toolKill,
+	},
+	{
+		"logs", "Replay a process's buffered output (stdout/stderr, exit code when ended).",
+		schema(props{"sandbox_id": str(""), "pid": integer("guest pid from spawn/ps")}, "sandbox_id", "pid"), toolLogs,
+	},
+	{
 		"write_file", "Write text to a file in a sandbox (atomic on the guest).",
 		schema(props{"sandbox_id": str(""), "path": str("absolute path"), "content": str("file content")}, "sandbox_id", "path", "content"), toolWriteFile,
 	},
@@ -393,4 +409,85 @@ func schema(p props, required ...string) map[string]any {
 		out["required"] = required
 	}
 	return out
+}
+
+func toolSpawn(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+	var args struct {
+		SandboxID string `json:"sandbox_id"`
+		Command   string `json:"command"`
+		Cwd       string `json:"cwd"`
+	}
+	if err := parse(raw, &args); err != nil {
+		return "", err
+	}
+	sb, err := s.box(args.SandboxID)
+	if err != nil {
+		return "", err
+	}
+	pid, err := sb.Spawn(ctx, sandbox.Cmd{Argv: []string{"sh", "-c", args.Command}, Cwd: args.Cwd})
+	if err != nil {
+		return "", err
+	}
+	return jsonText(map[string]uint32{"pid": pid}), nil
+}
+
+func toolPs(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+	var args struct {
+		SandboxID string `json:"sandbox_id"`
+	}
+	if err := parse(raw, &args); err != nil {
+		return "", err
+	}
+	sb, err := s.box(args.SandboxID)
+	if err != nil {
+		return "", err
+	}
+	procs, err := sb.Ps(ctx)
+	if err != nil {
+		return "", err
+	}
+	return jsonText(procs), nil
+}
+
+func toolKill(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+	var args struct {
+		SandboxID string `json:"sandbox_id"`
+		PID       uint32 `json:"pid"`
+		Signal    int32  `json:"signal"`
+	}
+	if err := parse(raw, &args); err != nil {
+		return "", err
+	}
+	sb, err := s.box(args.SandboxID)
+	if err != nil {
+		return "", err
+	}
+	if err := sb.Kill(ctx, args.PID, args.Signal); err != nil {
+		return "", err
+	}
+	return "killed", nil
+}
+
+func toolLogs(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+	var args struct {
+		SandboxID string `json:"sandbox_id"`
+		PID       uint32 `json:"pid"`
+	}
+	if err := parse(raw, &args); err != nil {
+		return "", err
+	}
+	sb, err := s.box(args.SandboxID)
+	if err != nil {
+		return "", err
+	}
+	var stdout, stderr strings.Builder
+	code, exited, err := sb.Logs(ctx, args.PID, &stdout, &stderr)
+	if err != nil {
+		return "", err
+	}
+	out := map[string]any{"stdout": stdout.String(), "stderr": stderr.String()}
+	if exited {
+		out["exit_code"] = code
+	}
+	return jsonText(out), nil
 }

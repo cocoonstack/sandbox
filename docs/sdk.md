@@ -214,6 +214,24 @@ across Runs), `Stdout`/`Stderr` (nil discards).
 Non-zero exits surface as `*sandbox.ExitError{Code, Stderr}` from `Exec`
 (alongside partial stdout); `Run` returns the code directly.
 
+## Background processes
+
+```go
+pid, err := sb.Spawn(ctx, sandbox.Cmd{Argv: []string{"sh", "-c", "make build"}})
+procs, err := sb.Ps(ctx)                          // []silkd.ProcInfo{PID, Argv, Detached, State, ExitCode, ...}
+code, exited, err := sb.Logs(ctx, pid, w, nil)    // replay the bounded output ring
+code, exited, err = sb.Attach(ctx, pid, w, nil)   // replay, then follow live until exit
+err = sb.Kill(ctx, pid, 0)                        // 0 = SIGKILL
+```
+
+`Spawn` returns as soon as the process starts; it keeps running with a
+bounded output ring. `Logs` replays the ring and reports the exit code once
+the process has ended (`exited=false` while running); `Attach` follows live
+output until exit — the replay and the live stream hand off atomically, so
+no chunk is lost or doubled between them. Killing an already-exited process
+is a no-op success (its OS pid may be recycled; silkd never signals a
+reaped child).
+
 ## Sessions
 
 A session is a real persistent shell: cwd, env and shell state survive

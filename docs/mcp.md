@@ -26,6 +26,10 @@ Build: `cd mcp && go build -o sandbox-mcp .`
 |---|---|
 | `create_sandbox` | claim a microVM (warm claims are milliseconds); returns `sandbox_id` |
 | `exec` | run a shell command; returns stdout/stderr/exit code; a hibernated sandbox wakes transparently |
+| `spawn` | start a command detached; returns its pid immediately |
+| `ps` | list tracked processes with state and exit codes |
+| `logs` | replay a process's buffered stdout/stderr (+ exit code once ended) |
+| `kill` | signal a tracked process (default SIGKILL) |
 | `write_file` / `read_file` / `list_dir` | text file operations |
 | `fork` | clone into N children carrying exact memory + disk state |
 | `checkpoint` | capture full state without stopping; returns `checkpoint_id` |

@@ -91,6 +91,7 @@ func run(addr, token, template, lspTemplate string, egress bool) error {
 		{"promote", func(ctx context.Context, sb *sandbox.Sandbox) error {
 			return smokePromote(ctx, client, sb)
 		}},
+		{"procs", smokeProcs},
 		{"checkpoint", smokeCheckpoint},
 		{"tree", smokeTree},
 		{"port", smokePortForward},
@@ -702,4 +703,48 @@ func lspReadResponse(r *bufio.Reader, id int) (json.RawMessage, error) {
 		}
 		return msg.Result, nil
 	}
+}
+
+// smokeProcs drives the detached-process surface: spawn, ps, logs replay,
+// attach-until-exit, and kill.
+func smokeProcs(ctx context.Context, sb *sandbox.Sandbox) error {
+	pid, err := sb.Spawn(ctx, sandbox.Cmd{Argv: []string{"sh", "-c", "echo bg-mark; sleep 0.3; echo late"}})
+	if err != nil {
+		return fmt.Errorf("spawn: %w", err)
+	}
+	procs, err := sb.Ps(ctx)
+	if err != nil {
+		return fmt.Errorf("ps: %w", err)
+	}
+	if !slices.ContainsFunc(procs, func(p silkd.ProcInfo) bool { return p.PID == pid && p.Detached }) {
+		return fmt.Errorf("ps does not list spawned pid %d: %+v", pid, procs)
+	}
+	var out bytes.Buffer
+	code, exited, err := sb.Attach(ctx, pid, &out, nil)
+	if err != nil || !exited || code != 0 {
+		return fmt.Errorf("attach: code=%d exited=%v, %v", code, exited, err)
+	}
+	if !strings.Contains(out.String(), "bg-mark") || !strings.Contains(out.String(), "late") {
+		return fmt.Errorf("attach output %q missing marks", out.String())
+	}
+	out.Reset()
+	if code, exited, err = sb.Logs(ctx, pid, &out, nil); err != nil || !exited || code != 0 {
+		return fmt.Errorf("logs after exit: code=%d exited=%v, %v", code, exited, err)
+	}
+	if !strings.Contains(out.String(), "bg-mark") {
+		return fmt.Errorf("logs replay %q missing mark", out.String())
+	}
+
+	// A long-runner dies to kill; its pid must be gone from the next attach.
+	pid, err = sb.Spawn(ctx, sandbox.Cmd{Argv: []string{"sleep", "30"}})
+	if err != nil {
+		return fmt.Errorf("spawn sleeper: %w", err)
+	}
+	if err = sb.Kill(ctx, pid, 0); err != nil {
+		return fmt.Errorf("kill: %w", err)
+	}
+	if code, exited, err = sb.Attach(ctx, pid, nil, nil); err != nil || !exited || code == 0 {
+		return fmt.Errorf("attach killed: code=%d exited=%v, %v (want non-zero exit)", code, exited, err)
+	}
+	return nil
 }
