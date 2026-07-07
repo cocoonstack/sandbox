@@ -89,18 +89,24 @@ func run(addr, token, template string) error {
 	return nil
 }
 
+// The framework (zygote, system_server) starts minutes after init on a
+// nested first boot; silkd answers long before.
 func initTree(ctx context.Context, sb *sandbox.Sandbox) error {
-	out, err := sb.Exec(ctx, "/system/bin/sh", "-c", shellPath+"; ps -A")
-	if err != nil {
-		return fmt.Errorf("exec ps: %w", err)
-	}
-	for _, proc := range []string{"zygote", "system_server"} {
-		if !strings.Contains(out, proc) {
-			return fmt.Errorf("ps misses %s:\n%s", proc, tail(out))
+	deadline := time.Now().Add(5 * time.Minute)
+	for {
+		out, err := sb.Exec(ctx, "/system/bin/sh", "-c", shellPath+"; ps -A")
+		if err != nil {
+			return fmt.Errorf("exec ps: %w", err)
 		}
+		if strings.Contains(out, "zygote") && strings.Contains(out, "system_server") {
+			fmt.Println("  exec: ps -A shows the Android init tree (zygote, system_server)")
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("framework never came up:\n%s", tail(out))
+		}
+		time.Sleep(3 * time.Second)
 	}
-	fmt.Println("  exec: ps -A shows the Android init tree (zygote, system_server)")
-	return nil
 }
 
 func rfbHandshake(ctx context.Context, sb *sandbox.Sandbox) error {
