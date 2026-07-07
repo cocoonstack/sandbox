@@ -470,6 +470,10 @@ func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.
 		return nil, ErrUnknownSandbox
 	}
 	m.touch(sb) // a live preview stream is data-plane activity
+	// Preview bypasses the relay's audit tap (it dials the engine directly),
+	// so record the access here — the only data-plane entry that would
+	// otherwise leave no audit trace.
+	m.Audit(ctx, id, fmt.Appendf(nil, `{"op":"preview_dial","port":%d}`, port))
 	sock, err := m.wakeResolved(ctx, sb)
 	if err != nil {
 		return nil, err

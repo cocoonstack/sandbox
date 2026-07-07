@@ -107,3 +107,35 @@ func TestSandboxesIndexOmitsTokens(t *testing.T) {
 		t.Error("index leaked a token")
 	}
 }
+
+func TestPreviewDialWritesAuditEvent(t *testing.T) {
+	eng := newFakeEngine()
+	dir := t.TempDir()
+	m, err := NewManager(&config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}, eng)
+	if err != nil {
+		t.Fatalf("setup manager: %v", err)
+	}
+	sb := mustClaim(t, m, testKey)
+	// The fake engine cannot complete the dial; the audit event records the
+	// access attempt against the live claim, before the engine is involved.
+	if _, dialErr := m.PreviewDial(t.Context(), sb.ID, 8080); dialErr == nil {
+		t.Fatal("fake engine dial unexpectedly succeeded")
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatalf("read audit journal: %v", err)
+	}
+	var ev struct {
+		ID   string `json:"id"`
+		Op   string `json:"op"`
+		Port uint16 `json:"port"`
+	}
+	line := strings.TrimSpace(string(raw))
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		t.Fatalf("bad audit line %q: %v", line, err)
+	}
+	if ev.ID != sb.ID || ev.Op != "preview_dial" || ev.Port != 8080 {
+		t.Errorf("audit event %+v", ev)
+	}
+}

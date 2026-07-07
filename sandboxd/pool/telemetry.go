@@ -92,6 +92,7 @@ type auditFrame struct {
 	To      string   `json:"to,omitempty"`
 	URL     string   `json:"url,omitempty"`
 	Session string   `json:"session,omitempty"`
+	Port    uint16   `json:"port,omitempty"`
 }
 
 // AuditEnabled reports whether the relay should tap request frames at all.

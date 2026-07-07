@@ -190,3 +190,73 @@ async fn lsp_stop_kills_an_idle_server() {
     .await;
     assert_eq!(gone.last().unwrap()["kind"], "not_found");
 }
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // ENV_LOCK serializes SILKD_LSP_DIR across the whole test
+async fn lsp_data_end_half_closes_stdin() {
+    // The fake server drains stdin to EOF before replying — it can only
+    // answer if data_end actually closes its stdin.
+    let _env_lock = ENV_LOCK.lock().unwrap();
+    // unquoted $(...) word-splits away wc's platform-dependent padding
+    let env = manifest_env("#!/bin/sh\nprintf 'ate:%s\\n' $(cat | wc -c)\n");
+    std::fs::write(
+        env.path().join("eoftest"),
+        env.path().join("fake-lsp").to_string_lossy().as_bytes(),
+    )
+    .unwrap();
+    std::env::set_var("SILKD_LSP_DIR", env.path());
+    let state = Arc::new(State::new());
+    let start = one(
+        &state,
+        &json!({"op":"lsp_start","language":"eoftest"}).to_string(),
+    )
+    .await;
+    let server_id = start.last().unwrap()["server_id"].as_str().unwrap();
+
+    let (mut cw, mut out, handle) = connect(&state);
+    cw.write_all(
+        json!({"op":"lsp_request","server_id":server_id})
+            .to_string()
+            .as_bytes(),
+    )
+    .await
+    .unwrap();
+    cw.write_all(b"\n").await.unwrap();
+    let ready: serde_json::Value =
+        serde_json::from_str(&out.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(type_of(&ready), "ready");
+
+    cw.write_all(
+        json!({"op":"data","data":b64(b"12345")})
+            .to_string()
+            .as_bytes(),
+    )
+    .await
+    .unwrap();
+    cw.write_all(b"\n").await.unwrap();
+    cw.write_all(json!({"op":"data_end"}).to_string().as_bytes())
+        .await
+        .unwrap();
+    cw.write_all(b"\n").await.unwrap();
+
+    let reply = timeout(DEADLINE, out.next_line())
+        .await
+        .expect("data_end never closed stdin")
+        .unwrap()
+        .unwrap();
+    let frame: serde_json::Value = serde_json::from_str(&reply).unwrap();
+    assert_eq!(type_of(&frame), "data");
+    assert_eq!(decode(&frame), b"ate:5\n");
+
+    let done = timeout(DEADLINE, out.next_line())
+        .await
+        .expect("deadline")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        type_of(&serde_json::from_str::<serde_json::Value>(&done).unwrap()),
+        "done"
+    );
+    cw.shutdown().await.unwrap();
+    let _ = handle.await;
+}

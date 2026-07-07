@@ -5,7 +5,8 @@
 //! parses LSP method semantics — the server multiplexes, silkd just pipes.
 //!
 //! `lsp_start` spawns and returns an id; `lsp_request` attaches the byte
-//! stream and pumps until either side closes; `lsp_stop` kills it. v1 is
+//! stream and pumps until either side closes (`data_end` half-closes the
+//! server's stdin, as in port_forward); `lsp_stop` kills it. v1 is
 //! single-shot per server: the stream ending — clean or dropped — reaps the
 //! server, since an LSP stream loses frame sync on any mid-request cut and a
 //! resynced reattach is not worth the failure surface. The id and `lsp_stop`
@@ -77,7 +78,7 @@ impl Broker {
         let stdout = child.stdout.take().expect("stdout piped");
         let server = Server {
             child: Arc::new(tokio::sync::Mutex::new(child)),
-            stdin: Arc::new(tokio::sync::Mutex::new(stdin)),
+            stdin: Arc::new(tokio::sync::Mutex::new(Some(stdin))),
             stdout: Arc::new(tokio::sync::Mutex::new(Some(stdout))),
         };
 
@@ -162,28 +163,37 @@ impl Broker {
 }
 
 /// One running language server: child + stdio, shared so `lsp_request` reads
-/// stdout, `feed_stdin` writes stdin, and `reap` kills the child.
+/// stdout, `feed_stdin` writes stdin, and `reap` kills the child. stdin is
+/// Option so `feed_stdin` can drop it to half-close, like stdout for attach.
 #[derive(Clone)]
 struct Server {
     child: Arc<tokio::sync::Mutex<Child>>,
-    stdin: Arc<tokio::sync::Mutex<ChildStdin>>,
+    stdin: Arc<tokio::sync::Mutex<Option<ChildStdin>>>,
     stdout: Arc<tokio::sync::Mutex<Option<ChildStdout>>>,
 }
 
 async fn feed_stdin(
     mut client: mpsc::Receiver<Request>,
-    stdin: Arc<tokio::sync::Mutex<ChildStdin>>,
+    stdin: Arc<tokio::sync::Mutex<Option<ChildStdin>>>,
 ) {
     while let Some(req) = client.recv().await {
         match req {
             Request::Data { data } => {
                 let mut guard = stdin.lock().await;
-                if guard.write_all(&data).await.is_err() || guard.flush().await.is_err() {
+                let Some(w) = guard.as_mut() else { return };
+                if w.write_all(&data).await.is_err() || w.flush().await.is_err() {
                     return;
                 }
             }
-            Request::DataEnd => return,
-            _ => return, // a stray non-data frame ends the LSP stream
+            // DataEnd half-closes, aligned with port_forward: dropping stdin
+            // delivers EOF so the server can flush remaining output and exit
+            // (stdout then EOFs -> Done -> reap). A stray non-data frame gets
+            // the same close — the writer belongs to the stdout pump, so
+            // there is no channel to answer an error frame on.
+            _ => {
+                stdin.lock().await.take();
+                return;
+            }
         }
     }
 }
