@@ -550,7 +550,7 @@ func smokePortForward(ctx context.Context, sb *sandbox.Sandbox) error {
 	// socket-activated sshd can transiently refuse, so the positive probe
 	// retries briefly; the dead-port negative below stays strict.
 	pc, err := sb.DialPort(ctx, 22)
-	for attempt := 0; err != nil && attempt < 20; attempt++ {
+	for attempt := 0; err != nil && attempt < 100; attempt++ {
 		time.Sleep(100 * time.Millisecond)
 		pc, err = sb.DialPort(ctx, 22)
 	}
