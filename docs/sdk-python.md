@@ -45,7 +45,7 @@ sb = client.new("ghcr.io/cocoonstack/sandbox/rt:24.04",
 | parameter | values | default | meaning |
 |---|---|---|---|
 | `net` | `"none"`, `"egress"` | `"none"` | `none`: no NIC at all, vsock-only I/O (hardened lane, Firecracker). `egress`: bridge/CNI NIC (Cloud Hypervisor) |
-| `size` | `"small"`, `"medium"`, `"large"` | `"small"` | resource tier: 1cpu/512M, 2cpu/1G, 4cpu/4G |
+| `size` | `"small"`, `"medium"`, `"large"`, `"xlarge"` | `"small"` | resource tier: 1cpu/512M, 2cpu/1G, 4cpu/4G, 4cpu/8G |
 | `ttl_seconds` | int | server default 5m | sandbox TTL, server-capped at 24h. The node reaps the sandbox after the TTL even if the client vanishes |
 
 `new` returns when the sandbox's silkd answers: a warm hit is milliseconds,

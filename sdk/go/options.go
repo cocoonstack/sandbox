@@ -11,6 +11,7 @@ const (
 	Small  Size = "small"
 	Medium Size = "medium"
 	Large  Size = "large"
+	XLarge Size = "xlarge"
 )
 
 // NetShape selects the sandbox network lane.

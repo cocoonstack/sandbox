@@ -1,0 +1,15 @@
+# /system/etc/init/silkd.rc
+#
+# silkd (sandbox product daemon: exec, files, sessions over vsock 2048) as
+# an Android init service — the same readiness contract as the systemd unit
+# in base:24.04. Persistent service: init restarts the binary if it exits.
+# Pattern mirrors the base lineage's /system/etc/init/cocoon-agent.rc.
+
+service silkd /system/bin/silkd
+    class core
+    user root
+    group root
+    setenv SILKD_PORT 2048
+
+on boot
+    start silkd

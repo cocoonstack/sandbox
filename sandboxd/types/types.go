@@ -18,6 +18,7 @@ const (
 	SizeSmall  Size = "small"
 	SizeMedium Size = "medium"
 	SizeLarge  Size = "large"
+	SizeXLarge Size = "xlarge"
 
 	BackendCH Backend = "ch"
 	BackendFC Backend = "fc"
@@ -27,6 +28,7 @@ var sizeSpecs = map[Size]SizeSpec{
 	SizeSmall:  {CPU: 1, Memory: "512M"},
 	SizeMedium: {CPU: 2, Memory: "1G"},
 	SizeLarge:  {CPU: 4, Memory: "4G"},
+	SizeXLarge: {CPU: 4, Memory: "8G"},
 }
 
 // NetShape selects the sandbox network lane and derives the backend.

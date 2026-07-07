@@ -1,0 +1,26 @@
+# android sandbox flavor: the cocoon-android lineage (redroid-style Android
+# rootfs, /init entrypoint, its own embedded kernel + binder module) plus
+# silkd. The userspace has no glibc and no systemd, so this flavor ships the
+# musl-static silkd binary and starts it from an Android init .rc.
+#
+# Parked as Dockerfile.skeleton: the images workflow auto-wires any file
+# named exactly Dockerfile under os-image/ into the build matrix, and this
+# build needs a base image outside the cocoonstack registry (see README.md).
+# Rename once base access is arranged; until then build by hand:
+#   docker build --platform linux/amd64 \
+#     -f os-image/android/15/Dockerfile.skeleton \
+#     --build-arg ANDROID_BASE_IMAGE=ghcr.io/jiaqing-simular/cocoon-android-vnc:0.3.0 \
+#     os-image/android
+#
+# No default on purpose: the base lives outside the cocoonstack registry and
+# CI access to it is not yet arranged.
+ARG ANDROID_BASE_IMAGE
+# silkd carrier image (built from silkd/Dockerfile). CI overrides with the
+# version-pinned tag once this flavor is wired into the matrix.
+ARG SILKD_IMAGE=ghcr.io/cocoonstack/sandbox/silkd:0.1.0
+
+FROM ${SILKD_IMAGE} AS silkd
+
+FROM ${ANDROID_BASE_IMAGE}
+COPY --chmod=0755 --from=silkd /silkd-static /system/bin/silkd
+COPY silkd.rc /system/etc/init/silkd.rc

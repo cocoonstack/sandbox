@@ -73,6 +73,7 @@ fragment the warm pools):
 | `small` | 1 | 512M |
 | `medium` | 2 | 1G |
 | `large` | 4 | 4G |
+| `xlarge` | 4 | 8G |
 
 ### Auth model
 
