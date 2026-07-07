@@ -6,14 +6,17 @@ package main
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing/iotest"
 	"time"
@@ -27,17 +30,22 @@ func main() {
 	token := flag.String("token", "", "node api token")
 	template := flag.String("template", "rt:24.04", "template ref")
 	egress := flag.Bool("egress", false, "also claim an egress-lane sandbox and check lane detection")
+	lspTemplate := flag.String("lsp-template", "", "python-flavor template ref; when set, adds the LSP broker step")
 	flag.Parse()
 
-	if err := run(*addr, *token, *template, *egress); err != nil {
+	if err := run(*addr, *token, *template, *lspTemplate, *egress); err != nil {
 		fmt.Fprintln(os.Stderr, "smoke:", err)
 		os.Exit(1)
 	}
 	fmt.Println("SMOKE PASS")
 }
 
-func run(addr, token, template string, egress bool) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+func run(addr, token, template, lspTemplate string, egress bool) error {
+	timeout := 120 * time.Second
+	if lspTemplate != "" {
+		timeout = 300 * time.Second // the LSP step cold-boots a second sandbox
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	var copts []sandbox.ClientOption
@@ -90,6 +98,11 @@ func run(addr, token, template string, egress bool) error {
 	if egress {
 		steps = append(steps, step{"egress", func(ctx context.Context, _ *sandbox.Sandbox) error {
 			return smokeEgress(ctx, client, template)
+		}})
+	}
+	if lspTemplate != "" {
+		steps = append(steps, step{"lsp", func(ctx context.Context, sb *sandbox.Sandbox) error {
+			return smokeLsp(ctx, client, sb, lspTemplate)
 		}})
 	}
 	for _, s := range steps {
@@ -576,4 +589,120 @@ func want(got, exp string) error {
 		return fmt.Errorf("got %q, want %q", got, exp)
 	}
 	return nil
+}
+
+// smokeLsp proves the M4-4 broker on hardware: the base sandbox answers a
+// typed not_found (no manifests), and a python-flavor sandbox serves a real
+// pylsp session — initialize, didOpen, hover — over the relay.
+func smokeLsp(ctx context.Context, client *sandbox.Client, base *sandbox.Sandbox, template string) error {
+	if _, err := base.StartLsp(ctx, "python", ""); !isSilkdKind(err, "not_found") {
+		return fmt.Errorf("base StartLsp: %v, want typed not_found", err)
+	}
+
+	py, err := client.New(ctx, template, sandbox.WithNetwork(sandbox.NetNone))
+	if err != nil {
+		return fmt.Errorf("claim %s: %w", template, err)
+	}
+	defer func() { _ = py.Close() }()
+	if err = py.Mkdir(ctx, "/work/lsp", true); err != nil {
+		return err
+	}
+	if err = py.WriteFile(ctx, "/work/lsp/hello.py", []byte("def add(a, b):\n    return a + b\n"), nil); err != nil {
+		return err
+	}
+	lsp, err := py.StartLsp(ctx, "python", "/work/lsp")
+	if err != nil {
+		return fmt.Errorf("start lsp: %w", err)
+	}
+	stream, err := lsp.Request(ctx)
+	if err != nil {
+		return fmt.Errorf("open lsp stream: %w", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	r := bufio.NewReader(stream)
+	init := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"file:///work/lsp","capabilities":{}}}`
+	if err = lspWrite(stream, init); err != nil {
+		return err
+	}
+	if _, err = lspReadResponse(r, 1); err != nil {
+		return fmt.Errorf("initialize: %w", err)
+	}
+	notify := `{"jsonrpc":"2.0","method":"initialized","params":{}}`
+	didOpen := `{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{` +
+		`"uri":"file:///work/lsp/hello.py","languageId":"python","version":1,` +
+		`"text":"def add(a, b):\n    return a + b\n"}}}`
+	hover := `{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{` +
+		`"textDocument":{"uri":"file:///work/lsp/hello.py"},"position":{"line":0,"character":4}}}`
+	for _, body := range []string{notify, didOpen, hover} {
+		if err = lspWrite(stream, body); err != nil {
+			return err
+		}
+	}
+	result, err := lspReadResponse(r, 2)
+	if err != nil {
+		return fmt.Errorf("hover: %w", err)
+	}
+	if string(result) == "null" || !bytes.Contains(result, []byte("add")) {
+		return fmt.Errorf("hover result %s does not describe add", result)
+	}
+	return nil
+}
+
+func isSilkdKind(err error, kind string) bool {
+	var er *silkd.ErrorResp
+	return errors.As(err, &er) && er.Kind == kind
+}
+
+// lspWrite frames one JSON-RPC message the LSP way (Content-Length header).
+func lspWrite(w io.Writer, body string) error {
+	_, err := fmt.Fprintf(w, "Content-Length: %d\r\n\r\n%s", len(body), body)
+	return err
+}
+
+// lspReadResponse reads framed server messages until the response carrying
+// id arrives (server-initiated requests also carry ids but have a method;
+// notifications have no id — both are skipped), returning its result.
+func lspReadResponse(r *bufio.Reader, id int) (json.RawMessage, error) {
+	for {
+		length := 0
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return nil, err
+			}
+			line = strings.TrimRight(line, "\r\n")
+			if line == "" {
+				break
+			}
+			if v, ok := strings.CutPrefix(line, "Content-Length: "); ok {
+				if length, err = strconv.Atoi(v); err != nil {
+					return nil, fmt.Errorf("content-length %q: %w", v, err)
+				}
+			}
+		}
+		if length <= 0 {
+			return nil, fmt.Errorf("lsp frame without content-length")
+		}
+		body := make([]byte, length)
+		if _, err := io.ReadFull(r, body); err != nil {
+			return nil, err
+		}
+		var msg struct {
+			ID     *int            `json:"id"`
+			Method string          `json:"method"`
+			Result json.RawMessage `json:"result"`
+			Error  json.RawMessage `json:"error"`
+		}
+		if err := json.Unmarshal(body, &msg); err != nil {
+			return nil, fmt.Errorf("lsp frame %q: %w", body, err)
+		}
+		if msg.Method != "" || msg.ID == nil || *msg.ID != id {
+			continue
+		}
+		if msg.Error != nil {
+			return nil, fmt.Errorf("lsp error: %s", msg.Error)
+		}
+		return msg.Result, nil
+	}
 }

@@ -94,7 +94,8 @@ echo "== claim/exec/release x3 (expect: warm-hit ms-scale, then clone-tier)"
 "$DATA/demo" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -n 3
 
 echo "== v2 smoke: files/session/find/replace/watch/git/pty through the relay"
-"$DATA/smoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" ${BRIDGE:+-egress}
+# LSP_TEMPLATE (optional, a python-flavor ref) adds the LSP broker step.
+"$DATA/smoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" ${BRIDGE:+-egress} ${LSP_TEMPLATE:+-lsp-template "$LSP_TEMPLATE"}
 
 echo "== reap: leaked 5s-ttl claim is destroyed by the owner"
 "$DATA/demo" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -n 1 -ttl 5 -leak
