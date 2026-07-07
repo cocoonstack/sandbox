@@ -116,3 +116,20 @@ does not approach a 2× claim-latency regression. **Decision: keep the
 simple in-mutex write; do not move to a store-owned sequential writer.**
 The benchmark stays as a regression sentinel — revisit only if it crosses
 into the milliseconds at the deployment's real claim count.
+
+## Measured and declined (decision data)
+
+**Pre-dialed relay connections** (H-4, 2026-07-07, GCE nested, n=300
+`fs_stat` RPCs): dial-per-RPC (today) p50 1.23ms / p90 4.69ms / p99
+10.51ms; one connection pre-dialed ahead p50 1.05ms / p90 4.47ms / p99
+15.49ms. The handshake is not the dominant cost — the win is ~0.2ms at
+p50, nothing at p90, and the background dialer degrades p99. Decision:
+keep one-connection-per-RPC; revisit only with a protocol-level mux.
+`e2e/cmd/rpcbench` reproduces the experiment.
+
+**Template pre-check meta GET** (parked provision-redirect item): a
+single `ReadMeta` against MinIO measures 4.76ms cross-host (sub-ms
+node-local, 20-50ms on WAN S3). It fires once per warm-miss claim of a
+promoted template whose key gossip advertises, against a provision that
+already costs a >=48ms clone plus the export fetch. Stays parked behind
+the measurement trigger recorded in the M5 plan.

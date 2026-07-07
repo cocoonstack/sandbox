@@ -70,6 +70,13 @@ func (s *Sandbox) Owner() string {
 	return s.owner
 }
 
+// Token is the per-sandbox bearer secret — persist it with ID to reattach
+// later via Lookup (treat it like a credential). The Python SDK exposes the
+// same field as sb.token.
+func (s *Sandbox) Token() string {
+	return s.token
+}
+
 // Exec runs argv to completion and returns its stdout; a non-zero exit
 // surfaces as *ExitError carrying stderr, alongside the partial stdout.
 func (s *Sandbox) Exec(ctx context.Context, argv ...string) (string, error) {
