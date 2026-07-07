@@ -21,9 +21,14 @@ const (
 	MetaFile = "meta.json"
 )
 
-// IDRe pins the checkpoint id shape wherever an id reaches a backend, so
-// a crafted id can never escape the store's namespace.
-var IDRe = regexp.MustCompile(`^ck_[0-9a-f]{16}$`)
+// The two id namespaces sharing one store root: backends filter listings
+// by their instance's regexp, so checkpoints and templates coexist in the
+// same directory/bucket without seeing each other. The pins also keep a
+// crafted id from escaping the store's namespace.
+var (
+	CheckpointIDRe = regexp.MustCompile(`^ck_[0-9a-f]{16}$`)
+	TemplateIDRe   = regexp.MustCompile(`^tp_[0-9a-f]{32}$`)
+)
 
 // Store is one checkpoint backend.
 type Store interface {

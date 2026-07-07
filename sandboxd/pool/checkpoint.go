@@ -142,7 +142,7 @@ func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 }
 
 func (m *Manager) loadCheckpoint(ctx context.Context, ckptID string) (types.Checkpoint, error) {
-	if !store.IDRe.MatchString(ckptID) {
+	if !store.CheckpointIDRe.MatchString(ckptID) {
 		return types.Checkpoint{}, ErrUnknownCheckpoint
 	}
 	raw, err := m.ckpts.ReadMeta(ctx, ckptID)

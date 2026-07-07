@@ -586,14 +586,14 @@ func (f *fakeManager) Promote(_ context.Context, id, token, template string) (ty
 	return types.PoolKey{Template: template, Net: types.NetNone, Size: types.SizeSmall}, nil
 }
 
-func (f *fakeManager) DeleteTemplate(key types.PoolKey) error {
+func (f *fakeManager) DeleteTemplate(_ context.Context, key types.PoolKey) error {
 	if f.deleteGolden == nil {
 		return pool.ErrUnknownTemplate
 	}
 	return f.deleteGolden(key)
 }
 
-func (f *fakeManager) HasGolden(types.PoolKey) bool {
+func (f *fakeManager) HasGolden(context.Context, types.PoolKey) bool {
 	return f.hasGolden
 }
 

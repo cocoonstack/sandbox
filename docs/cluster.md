@@ -92,8 +92,11 @@ ownership first.
 ## Templates on a cluster
 
 A promoted template (see the [SDK guide](sdk.md#promoting-to-a-template))
-lives **only on its owner node**, and the mesh gossips each node's template
-set alongside its warm counts. Name-based calls route cluster-wide:
+lives in its node's checkpoint store. On the default local-disk backend
+that means **only on its owner node**, and the mesh gossips each node's
+template set alongside its warm counts; on a shared store (a FUSE-mounted
+`checkpoint_dir` or the s3 backend) every node resolves every template
+directly, so the gossip routing simply never fires. Name-based calls route cluster-wide:
 
 - `Client.New("tpl")` at any node redirects to the template's owner when the
   entry node has no golden for the key (warm peers still win first).

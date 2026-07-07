@@ -1,15 +1,18 @@
 package s3
 
 import (
+	"cmp"
 	"encoding/xml"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/storetest"
 )
 
@@ -80,7 +83,29 @@ func TestS3BackendContract(t *testing.T) {
 		Endpoint:       ts.URL,
 		Region:         "us-east-1",
 		ForcePathStyle: true,
-	}, t.TempDir())
+	}, t.TempDir(), store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	storetest.RunContract(t, st)
+}
+
+// TestS3BackendContractRealEndpoint runs the same contract against a real
+// S3 implementation (MinIO on a testbed) when SANDBOX_S3_E2E names its
+// endpoint — real list pagination, checksums, and path-style behavior the
+// in-process fake cannot vouch for.
+func TestS3BackendContractRealEndpoint(t *testing.T) {
+	endpoint := os.Getenv("SANDBOX_S3_E2E")
+	if endpoint == "" {
+		t.Skip("SANDBOX_S3_E2E not set (export it to a MinIO endpoint to run)")
+	}
+	st, err := New(t.Context(), Config{
+		Bucket:         cmp.Or(os.Getenv("SANDBOX_S3_E2E_BUCKET"), "sbx-checkpoints"),
+		Prefix:         "contract/",
+		Endpoint:       endpoint,
+		Region:         "us-east-1",
+		ForcePathStyle: true,
+	}, t.TempDir(), store.CheckpointIDRe)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -148,7 +149,14 @@ type Manager struct {
 	audit     *journal
 	counters  counters
 	ckpts     store.Store
+	tpls      store.Store
 	ckptTTL   time.Duration
+
+	// tplSet caches the template ids visible in the store so the 1s gossip
+	// tick never touches the backend (an s3 listing is network I/O); local
+	// promotes/deletes update it, startup loads it.
+	tplMu  sync.Mutex
+	tplSet map[string]struct{}
 
 	// notifyTemplates, when set (before serving starts), fires after a
 	// promote or template delete so the mesh republishes immediately
@@ -182,26 +190,26 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine) (*Manager, 
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("create goldens dir: %w", err)
 	}
-	if cs := cfg.CheckpointStore; cs != nil && cs.Kind == "s3" {
-		ckpts, err := s3.New(ctx, *cs.S3, filepath.Join(cfg.DataDir, "checkpoint-staging"))
-		if err != nil {
-			return nil, err
-		}
-		m.ckpts = ckpts
-	} else {
-		// The default lives here rather than config.applyDefaults: tests
-		// build Config directly, skipping Load.
-		ckptDir := cfg.CheckpointDir
-		if ckptDir == "" {
-			ckptDir = filepath.Join(cfg.DataDir, "checkpoints")
-		}
-		ckpts, err := dir.New(ckptDir)
-		if err != nil {
-			return nil, err
-		}
-		m.ckpts = ckpts
+	// Checkpoints and templates are two id-namespaced views over ONE store
+	// root (ck_* vs tp_*): a shared mount or bucket carries both, and each
+	// instance's listing filters to its own records.
+	var err error
+	if m.ckpts, err = newStoreView(ctx, cfg, "checkpoint-staging", store.CheckpointIDRe); err != nil {
+		return nil, err
+	}
+	if m.tpls, err = newStoreView(ctx, cfg, "template-staging", store.TemplateIDRe); err != nil {
+		return nil, err
 	}
 	m.ckptTTL = time.Duration(cfg.CheckpointTTLHours) * time.Hour
+	m.tplSet = map[string]struct{}{}
+	if metas, listErr := m.tpls.Metas(ctx); listErr == nil {
+		for _, raw := range metas {
+			var rec templateRecord
+			if json.Unmarshal(raw, &rec) == nil && rec.ID != "" {
+				m.tplSet[rec.ID] = struct{}{}
+			}
+		}
+	}
 	usage, err := newJournal(filepath.Join(cfg.DataDir, "usage.jsonl"))
 	if err != nil {
 		return nil, fmt.Errorf("open usage journal: %w", err)
@@ -313,6 +321,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err := m.ckpts.SweepStaging(); err != nil {
 		log.WithFunc("pool.Reconcile").Error(ctx, err, "sweep checkpoint staging")
 	}
+	if err := m.tpls.SweepStaging(); err != nil {
+		log.WithFunc("pool.Reconcile").Error(ctx, err, "sweep template staging")
+	}
+	m.migrateLegacyTemplates(ctx)
 	for _, tmp := range tmps {
 		_ = os.RemoveAll(tmp)
 	}
@@ -400,8 +412,10 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 		}
 		p := &pool{key: key}
 		p.applySpec(spec)
-		if dir, ok := m.goldenOnDisk(key.Hash()); ok {
-			p.goldenDir = dir
+		// A golden already on disk (from this pool's earlier life) is
+		// adopted; buildGolden covers the rest.
+		if g := filepath.Join(m.goldensDir(), key.Hash()); dirExists(g) {
+			p.goldenDir = g
 		}
 		m.pools[key] = p
 	}
@@ -501,6 +515,25 @@ func normalizePoolSpec(spec config.PoolSpec) config.PoolSpec {
 		spec.Size = types.SizeSmall
 	}
 	return spec
+}
+
+// newStoreView builds one id-namespaced view of the configured backend.
+// The dir default lives here rather than config.applyDefaults: tests build
+// Config directly, skipping Load.
+func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe *regexp.Regexp) (store.Store, error) {
+	if cs := cfg.CheckpointStore; cs != nil && cs.Kind == "s3" {
+		return s3.New(ctx, *cs.S3, filepath.Join(cfg.DataDir, staging), idRe)
+	}
+	ckptDir := cfg.CheckpointDir
+	if ckptDir == "" {
+		ckptDir = filepath.Join(cfg.DataDir, "checkpoints")
+	}
+	return dir.New(ckptDir, idRe)
+}
+
+func dirExists(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
 }
 
 func (m *Manager) goldensDir() string {

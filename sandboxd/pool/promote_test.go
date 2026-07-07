@@ -27,9 +27,9 @@ func TestPromoteThenClaimClonesFromTemplate(t *testing.T) {
 	if gotKey != key {
 		t.Errorf("returned key %+v, want %+v (the parent's axes)", gotKey, key)
 	}
-	golden := filepath.Join(m.goldensDir(), key.Hash())
+	golden := filepath.Join(m.dataDir, "checkpoints", "tp_"+key.Hash(), "export")
 	if fi, statErr := os.Stat(golden); statErr != nil || !fi.IsDir() {
-		t.Fatalf("golden dir %s missing: %v", golden, statErr)
+		t.Fatalf("template export %s missing: %v", golden, statErr)
 	}
 
 	child, err := claimAny(t.Context(), m, key, 0)
@@ -96,17 +96,17 @@ func TestDeleteTemplate(t *testing.T) {
 	}
 	key := types.PoolKey{Template: "tpl:del", Net: testKey.Net, Size: testKey.Size}
 
-	if err := m.DeleteTemplate(testKey); !errors.Is(err, ErrPooledTemplate) {
+	if err := m.DeleteTemplate(t.Context(), testKey); !errors.Is(err, ErrPooledTemplate) {
 		t.Errorf("pooled delete: %v, want ErrPooledTemplate", err)
 	}
-	if err := m.DeleteTemplate(types.PoolKey{Template: "nope", Net: testKey.Net, Size: testKey.Size}); !errors.Is(err, ErrUnknownTemplate) {
+	if err := m.DeleteTemplate(t.Context(), types.PoolKey{Template: "nope", Net: testKey.Net, Size: testKey.Size}); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("unknown delete: %v, want ErrUnknownTemplate", err)
 	}
-	if err := m.DeleteTemplate(key); err != nil {
+	if err := m.DeleteTemplate(t.Context(), key); err != nil {
 		t.Fatalf("DeleteTemplate: %v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(m.goldensDir(), key.Hash())); !os.IsNotExist(statErr) {
-		t.Errorf("golden dir still present after delete: %v", statErr)
+	if m.HasGolden(t.Context(), key) {
+		t.Error("template still resolvable after delete")
 	}
 	// The next claim for the deleted template cold-boots instead of cloning.
 	before := len(eng.colds)
@@ -130,5 +130,40 @@ func TestReconcileSweepsGoldenTmpDirs(t *testing.T) {
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Errorf("stale export staging survived reconcile: %v", err)
+	}
+}
+
+func TestReconcileMigratesLegacyTemplates(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	key := types.PoolKey{Template: "tpl:legacy", Net: testKey.Net, Size: testKey.Size}
+	legacy := filepath.Join(m.goldensDir(), key.Hash())
+	if err := os.MkdirAll(legacy, 0o750); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "disk.img"), []byte("golden-bytes"), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Errorf("legacy golden dir survived migration: %v", err)
+	}
+	if !m.HasGolden(t.Context(), key) {
+		t.Fatal("migrated template not resolvable")
+	}
+	dir, release, err := m.resolveGolden(t.Context(), key)
+	if err != nil || dir == "" {
+		t.Fatalf("resolveGolden: %q, %v", dir, err)
+	}
+	defer release()
+	if got, err := os.ReadFile(filepath.Join(dir, "disk.img")); err != nil || string(got) != "golden-bytes" {
+		t.Errorf("migrated export: %q, %v", got, err)
+	}
+	if hashes := m.TemplateHashes(); !slices.Contains(hashes, key.Hash()) {
+		t.Errorf("TemplateHashes %v missing migrated %s", hashes, key.Hash())
 	}
 }

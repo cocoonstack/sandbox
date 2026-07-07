@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
@@ -15,17 +16,20 @@ import (
 
 var _ store.Store = (*Store)(nil)
 
-// Store keeps checkpoints as <root>/<id>/{export,meta.json}; staging dirs
-// are <root>/<id>-*.tmp siblings so publish is one rename.
+// Store keeps records as <root>/<id>/{export,meta.json}; staging dirs are
+// <root>/<id>-*.tmp siblings so publish is one rename. idRe names the
+// instance's id namespace — two instances (checkpoints, templates) share a
+// root without seeing each other's records.
 type Store struct {
 	root string
+	idRe *regexp.Regexp
 }
 
-func New(root string) (*Store, error) {
+func New(root string, idRe *regexp.Regexp) (*Store, error) {
 	if err := os.MkdirAll(root, 0o750); err != nil {
-		return nil, fmt.Errorf("create checkpoint dir: %w", err)
+		return nil, fmt.Errorf("create store dir: %w", err)
 	}
-	return &Store{root: root}, nil
+	return &Store{root: root, idRe: idRe}, nil
 }
 
 func (d *Store) Stage(id string) (string, error) {
@@ -41,7 +45,7 @@ func (d *Store) Fetch(_ context.Context, id string) (string, func(), error) {
 }
 
 func (d *Store) ReadMeta(_ context.Context, id string) ([]byte, error) {
-	return os.ReadFile(filepath.Join(d.root, id, store.MetaFile)) //nolint:gosec // id pinned by store.IDRe before any call
+	return os.ReadFile(filepath.Join(d.root, id, store.MetaFile)) //nolint:gosec // id pinned by the instance idRe before any call
 }
 
 func (d *Store) Metas(ctx context.Context) ([][]byte, error) {
@@ -53,7 +57,7 @@ func (d *Store) Metas(ctx context.Context) ([][]byte, error) {
 	for _, e := range entries {
 		// Only well-formed checkpoint dirs — a planted foo/meta.json is
 		// not a checkpoint.
-		if !e.IsDir() || !store.IDRe.MatchString(e.Name()) {
+		if !e.IsDir() || !d.idRe.MatchString(e.Name()) {
 			continue
 		}
 		if raw, err := d.ReadMeta(ctx, e.Name()); err == nil {

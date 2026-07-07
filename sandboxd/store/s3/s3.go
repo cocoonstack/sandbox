@@ -5,11 +5,13 @@
 package s3
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -32,16 +34,18 @@ type Config struct {
 	ForcePathStyle bool   `json:"force_path_style,omitempty"`
 }
 
-// Store stages locally under stagingRoot and publishes to the bucket.
+// Store stages locally under stagingRoot and publishes to the bucket;
+// idRe names the instance's id namespace within the shared prefix.
 type Store struct {
 	client  *awss3.Client
 	bucket  string
 	prefix  string
 	staging string
+	idRe    *regexp.Regexp
 }
 
 // New builds the backend; ctx bounds the credential-chain resolution.
-func New(ctx context.Context, cfg Config, stagingRoot string) (*Store, error) {
+func New(ctx context.Context, cfg Config, stagingRoot string, idRe *regexp.Regexp) (*Store, error) {
 	if cfg.Bucket == "" {
 		return nil, fmt.Errorf("s3 checkpoint store needs a bucket")
 	}
@@ -58,7 +62,7 @@ func New(ctx context.Context, cfg Config, stagingRoot string) (*Store, error) {
 		}
 		o.UsePathStyle = cfg.ForcePathStyle
 	})
-	return &Store{client: client, bucket: cfg.Bucket, prefix: cfg.Prefix, staging: stagingRoot}, nil
+	return &Store{client: client, bucket: cfg.Bucket, prefix: cfg.Prefix, staging: stagingRoot, idRe: idRe}, nil
 }
 
 func (s *Store) Stage(id string) (string, error) {
@@ -95,31 +99,58 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 	return os.RemoveAll(staging)
 }
 
-// Fetch downloads the export into a temp dir; release removes it.
+// Fetch materializes the export locally, keeping one cached copy per id:
+// records are immutable except re-publish (re-promote), so a cache whose
+// stored meta still matches the bucket's is current — repeat claims pay
+// one small meta GET instead of the full download. release is a no-op;
+// Delete and the cache swap clean up.
 func (s *Store) Fetch(ctx context.Context, id string) (string, func(), error) {
+	meta, err := s.ReadMeta(ctx, id)
+	if err != nil {
+		return "", nil, err
+	}
+	cached := filepath.Join(s.staging, "cache", id)
+	if have, readErr := os.ReadFile(filepath.Join(cached, store.MetaFile)); readErr == nil && bytes.Equal(have, meta) { //nolint:gosec // id pinned by idRe
+		return filepath.Join(cached, store.ExportDir), func() {}, nil
+	}
+
 	local, err := os.MkdirTemp(s.staging, id+"-fetch-*")
 	if err != nil {
 		return "", nil, err
 	}
-	release := func() { _ = os.RemoveAll(local) }
+	cleanup := func() { _ = os.RemoveAll(local) }
 	exportPrefix := s.key(id, store.ExportDir) + "/"
 	keys, err := s.list(ctx, exportPrefix)
 	if err != nil {
-		release()
+		cleanup()
 		return "", nil, err
 	}
 	if len(keys) == 0 {
-		release()
-		return "", nil, fmt.Errorf("checkpoint %s has no export", id)
+		cleanup()
+		return "", nil, fmt.Errorf("record %s has no export", id)
 	}
-	dir := filepath.Join(local, store.ExportDir)
 	for _, key := range keys {
-		if err := s.download(ctx, key, filepath.Join(dir, strings.TrimPrefix(key, exportPrefix))); err != nil {
-			release()
+		if err := s.download(ctx, key, filepath.Join(local, store.ExportDir, strings.TrimPrefix(key, exportPrefix))); err != nil {
+			cleanup()
 			return "", nil, err
 		}
 	}
-	return dir, release, nil
+	if err := os.WriteFile(filepath.Join(local, store.MetaFile), meta, 0o600); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	// Swap into the cache slot; a concurrent Fetch that lost the race just
+	// re-downloads next time.
+	if err := os.MkdirAll(filepath.Dir(cached), 0o750); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	_ = os.RemoveAll(cached)
+	if err := os.Rename(local, cached); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return filepath.Join(cached, store.ExportDir), func() {}, nil
 }
 
 func (s *Store) ReadMeta(ctx context.Context, id string) ([]byte, error) {
@@ -145,7 +176,7 @@ func (s *Store) Metas(ctx context.Context) ([][]byte, error) {
 			continue
 		}
 		id := rest[strings.LastIndex(rest, "/")+1:]
-		if !store.IDRe.MatchString(id) {
+		if !s.idRe.MatchString(id) {
 			continue
 		}
 		if raw, err := s.ReadMeta(ctx, id); err == nil {
@@ -156,6 +187,7 @@ func (s *Store) Metas(ctx context.Context) ([][]byte, error) {
 }
 
 func (s *Store) Delete(ctx context.Context, id string) error {
+	_ = os.RemoveAll(filepath.Join(s.staging, "cache", id)) //nolint:gosec // id pinned by idRe
 	keys, err := s.list(ctx, s.key(id, "")+"/")
 	if err != nil {
 		return err
@@ -177,6 +209,9 @@ func (s *Store) SweepStaging() error {
 		return err
 	}
 	for _, e := range entries {
+		if e.Name() == "cache" {
+			continue // warm fetch cache, not staging residue
+		}
 		if err := os.RemoveAll(filepath.Join(s.staging, e.Name())); err != nil {
 			return err
 		}

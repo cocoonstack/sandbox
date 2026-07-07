@@ -53,7 +53,11 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	if m.overQuota(1) {
 		return nil, fmt.Errorf("%w: cap %d", ErrQuota, m.maxClaims)
 	}
-	golden := m.goldenDirFor(key)
+	golden, release, err := m.resolveGolden(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("resolve template: %w", err)
+	}
+	defer release()
 	sb, err := m.provision(ctx, key, golden)
 	if err != nil {
 		return nil, err
