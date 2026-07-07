@@ -58,6 +58,7 @@ class Conn:
         finally:
             self._sock.close()
 
+
 def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float) -> Conn:
     """Opens the data-plane connection: TCP dial plus a hand-rolled HTTP
     Upgrade, so nothing pools or proxies underneath the byte stream."""

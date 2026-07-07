@@ -15,10 +15,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
 use crate::proc::{synth_pid, Chunk, Proc, Table};
-use crate::proto::{ErrorKind, PtyReq, Request, Response};
+use crate::proto::{ErrorKind, PtyReq, Request, Response, READ_CHUNK};
 use crate::sysutil;
 
-const PTY_READ_CHUNK: usize = 32 * 1024;
 /// After the shell exits, drain the master's buffered tail for at most this
 /// long so the last screenful isn't lost, without wedging on a stuck fd.
 const POST_EXIT_DRAIN: Duration = Duration::from_secs(1);
@@ -141,7 +140,7 @@ async fn pump<W: AsyncWrite + Unpin>(
     let (disc_tx, mut disc_rx) = oneshot::channel::<()>();
     tokio::spawn(pump_stdin(Arc::clone(master), client, disc_tx));
 
-    let mut buf = [0u8; PTY_READ_CHUNK];
+    let mut buf = [0u8; READ_CHUNK];
     let mut frame = Vec::new();
     let mut eof = false;
     let mut disc = false;
@@ -237,8 +236,8 @@ async fn drain<W: AsyncWrite + Unpin>(
     .await;
 }
 
-// finish publishes the terminal state once, so attachers on this pid always
-// see an Exit (and never hang waiting for one).
+/// finish publishes the terminal state once, so attachers on this pid always
+/// see an Exit (and never hang waiting for one).
 fn finish(proc: &Arc<Proc>, code: i32) {
     if proc.exit_code().is_none() {
         proc.mark_exited(code);

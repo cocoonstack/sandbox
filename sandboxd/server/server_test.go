@@ -582,6 +582,196 @@ func TestCheckpointFlow(t *testing.T) {
 	}
 }
 
+func TestClaimRedirectsOnWarmMiss(t *testing.T) {
+	// Warm miss (fakeManager.ClaimWarm always misses) + a placer with
+	// candidates → a redirect response, and the local manager never provisions.
+	provisioned := false
+	mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+		provisioned = true
+		return &types.Sandbox{ID: "sb_local"}, nil
+	}}
+	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"node-b:7777", "node-c:7777"}}, nil)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+	resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"rt:24.04"}`))
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	defer resp.Body.Close()
+	var cr types.ClaimResponse
+	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(cr.Redirect) != 2 || cr.Redirect[0] != "node-b:7777" {
+		t.Errorf("redirect %v, want [node-b:7777 node-c:7777]", cr.Redirect)
+	}
+	if cr.ID != "" {
+		t.Errorf("redirect carried a sandbox id %q", cr.ID)
+	}
+	if provisioned {
+		t.Error("provisioned locally despite an available peer")
+	}
+}
+
+func TestClaimRedirectsToTemplateOwner(t *testing.T) {
+	// Warm miss, no warm candidates, no local golden, but gossip names a
+	// template owner → redirect there instead of cold-booting a nonexistent
+	// image ref. A local golden suppresses the redirect: provision here.
+	for _, tt := range []struct {
+		name         string
+		hasGolden    bool
+		wantRedirect bool
+	}{
+		{"no local golden redirects", false, true},
+		{"local golden provisions", true, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			provisioned := false
+			mgr := &fakeManager{
+				hasGolden: tt.hasGolden,
+				claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+					provisioned = true
+					return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
+				},
+			}
+			srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil)
+			ts := httptest.NewServer(srv.Handler())
+			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+			resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"tpl"}`))
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			defer resp.Body.Close()
+			var cr types.ClaimResponse
+			if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			gotRedirect := len(cr.Redirect) > 0
+			if gotRedirect != tt.wantRedirect {
+				t.Errorf("redirect %v, want redirect=%v", cr.Redirect, tt.wantRedirect)
+			}
+			if provisioned == tt.wantRedirect {
+				t.Errorf("provisioned=%v with wantRedirect=%v", provisioned, tt.wantRedirect)
+			}
+		})
+	}
+}
+
+func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
+	// Unknown locally + gossip names an owner → the claim redirect shape;
+	// unknown everywhere stays 404.
+	mgr := &fakeManager{} // DeleteTemplate → ErrUnknownTemplate
+	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/templates?template=tpl", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200 redirect", resp.StatusCode)
+	}
+	var cr types.ClaimResponse
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&cr); decodeErr != nil {
+		t.Fatalf("decode: %v", decodeErr)
+	}
+	if len(cr.Redirect) != 1 || cr.Redirect[0] != "node-b:7777" {
+		t.Errorf("redirect %v, want [node-b:7777]", cr.Redirect)
+	}
+
+	// no_redirect answers for this node alone, even with owners in gossip.
+	req2, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/templates?template=tpl&no_redirect=1", nil)
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Errorf("status %d, want 404 with no_redirect despite known owners", resp2.StatusCode)
+	}
+
+	srvNoOwner := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{}, nil)
+	ts2 := httptest.NewServer(srvNoOwner.Handler())
+	t.Cleanup(func() { ts2.Close(); srvNoOwner.CloseRelays() })
+	req3, _ := http.NewRequest(http.MethodDelete, ts2.URL+"/v1/templates?template=tpl", nil)
+	resp3, err := http.DefaultClient.Do(req3)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusNotFound {
+		t.Errorf("status %d, want 404 when no owner known", resp3.StatusCode)
+	}
+}
+
+func TestClaimProvisionsWhenNoCandidate(t *testing.T) {
+	// Warm miss + a placer with no candidates → local provision.
+	mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+		return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
+	}}
+	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: nil}, nil)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+	resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"rt:24.04"}`))
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	defer resp.Body.Close()
+	var cr types.ClaimResponse
+	_ = json.NewDecoder(resp.Body).Decode(&cr)
+	if cr.ID != "sb_local" || len(cr.Redirect) != 0 {
+		t.Errorf("got %+v, want local sandbox", cr)
+	}
+}
+
+func TestOwnerEndpoint(t *testing.T) {
+	// AgentSocket succeeds → this node owns it → 200 with owner addr.
+	mgr := &fakeManager{socket: func(id, token string) (string, error) {
+		if token == "good" {
+			return "/v/sock", nil
+		}
+		return "", pool.ErrUnknownSandbox
+	}}
+	srv := New("", nil, "node-b:7777", mgr, &fakeDialer{}, nil, nil)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/owner", nil)
+	req.Header.Set("Authorization", "Bearer good")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("owner: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	var body struct {
+		OwnerAddr string `json:"owner_addr"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if body.OwnerAddr != "node-b:7777" {
+		t.Errorf("owner %q, want node-b:7777", body.OwnerAddr)
+	}
+
+	req2, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/owner", nil)
+	req2.Header.Set("Authorization", "Bearer wrong")
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("owner: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Errorf("status %d, want 404", resp2.StatusCode)
+	}
+}
+
 func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *httptest.Server {
 	t.Helper()
 	return newTenantTestServer(t, apiToken, nil, mgr, dialer)
@@ -780,193 +970,3 @@ type fakePlacer struct {
 func (f *fakePlacer) Candidates(string) []string     { return f.addrs }
 func (f *fakePlacer) TemplateOwners(string) []string { return f.owners }
 func (f *fakePlacer) PeerAddrs() []string            { return f.addrs }
-
-func TestClaimRedirectsOnWarmMiss(t *testing.T) {
-	// Warm miss (fakeManager.ClaimWarm always misses) + a placer with
-	// candidates → a redirect response, and the local manager never provisions.
-	provisioned := false
-	mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
-		provisioned = true
-		return &types.Sandbox{ID: "sb_local"}, nil
-	}}
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"node-b:7777", "node-c:7777"}}, nil)
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
-
-	resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"rt:24.04"}`))
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	defer resp.Body.Close()
-	var cr types.ClaimResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(cr.Redirect) != 2 || cr.Redirect[0] != "node-b:7777" {
-		t.Errorf("redirect %v, want [node-b:7777 node-c:7777]", cr.Redirect)
-	}
-	if cr.ID != "" {
-		t.Errorf("redirect carried a sandbox id %q", cr.ID)
-	}
-	if provisioned {
-		t.Error("provisioned locally despite an available peer")
-	}
-}
-
-func TestClaimRedirectsToTemplateOwner(t *testing.T) {
-	// Warm miss, no warm candidates, no local golden, but gossip names a
-	// template owner → redirect there instead of cold-booting a nonexistent
-	// image ref. A local golden suppresses the redirect: provision here.
-	for _, tt := range []struct {
-		name         string
-		hasGolden    bool
-		wantRedirect bool
-	}{
-		{"no local golden redirects", false, true},
-		{"local golden provisions", true, false},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			provisioned := false
-			mgr := &fakeManager{
-				hasGolden: tt.hasGolden,
-				claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
-					provisioned = true
-					return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
-				},
-			}
-			srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil)
-			ts := httptest.NewServer(srv.Handler())
-			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
-
-			resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"tpl"}`))
-			if err != nil {
-				t.Fatalf("claim: %v", err)
-			}
-			defer resp.Body.Close()
-			var cr types.ClaimResponse
-			if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-				t.Fatalf("decode: %v", err)
-			}
-			gotRedirect := len(cr.Redirect) > 0
-			if gotRedirect != tt.wantRedirect {
-				t.Errorf("redirect %v, want redirect=%v", cr.Redirect, tt.wantRedirect)
-			}
-			if provisioned == tt.wantRedirect {
-				t.Errorf("provisioned=%v with wantRedirect=%v", provisioned, tt.wantRedirect)
-			}
-		})
-	}
-}
-
-func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
-	// Unknown locally + gossip names an owner → the claim redirect shape;
-	// unknown everywhere stays 404.
-	mgr := &fakeManager{} // DeleteTemplate → ErrUnknownTemplate
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil)
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
-
-	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/templates?template=tpl", nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status %d, want 200 redirect", resp.StatusCode)
-	}
-	var cr types.ClaimResponse
-	if decodeErr := json.NewDecoder(resp.Body).Decode(&cr); decodeErr != nil {
-		t.Fatalf("decode: %v", decodeErr)
-	}
-	if len(cr.Redirect) != 1 || cr.Redirect[0] != "node-b:7777" {
-		t.Errorf("redirect %v, want [node-b:7777]", cr.Redirect)
-	}
-
-	// no_redirect answers for this node alone, even with owners in gossip.
-	req2, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/templates?template=tpl&no_redirect=1", nil)
-	resp2, err := http.DefaultClient.Do(req2)
-	if err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusNotFound {
-		t.Errorf("status %d, want 404 with no_redirect despite known owners", resp2.StatusCode)
-	}
-
-	srvNoOwner := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{}, nil)
-	ts2 := httptest.NewServer(srvNoOwner.Handler())
-	t.Cleanup(func() { ts2.Close(); srvNoOwner.CloseRelays() })
-	req3, _ := http.NewRequest(http.MethodDelete, ts2.URL+"/v1/templates?template=tpl", nil)
-	resp3, err := http.DefaultClient.Do(req3)
-	if err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	defer resp3.Body.Close()
-	if resp3.StatusCode != http.StatusNotFound {
-		t.Errorf("status %d, want 404 when no owner known", resp3.StatusCode)
-	}
-}
-
-func TestClaimProvisionsWhenNoCandidate(t *testing.T) {
-	// Warm miss + a placer with no candidates → local provision.
-	mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
-		return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
-	}}
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: nil}, nil)
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
-
-	resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"rt:24.04"}`))
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	defer resp.Body.Close()
-	var cr types.ClaimResponse
-	_ = json.NewDecoder(resp.Body).Decode(&cr)
-	if cr.ID != "sb_local" || len(cr.Redirect) != 0 {
-		t.Errorf("got %+v, want local sandbox", cr)
-	}
-}
-
-func TestOwnerEndpoint(t *testing.T) {
-	// AgentSocket succeeds → this node owns it → 200 with owner addr.
-	mgr := &fakeManager{socket: func(id, token string) (string, error) {
-		if token == "good" {
-			return "/v/sock", nil
-		}
-		return "", pool.ErrUnknownSandbox
-	}}
-	srv := New("", nil, "node-b:7777", mgr, &fakeDialer{}, nil, nil)
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
-
-	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/owner", nil)
-	req.Header.Set("Authorization", "Bearer good")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("owner: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status %d, want 200", resp.StatusCode)
-	}
-	var body struct {
-		OwnerAddr string `json:"owner_addr"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&body)
-	if body.OwnerAddr != "node-b:7777" {
-		t.Errorf("owner %q, want node-b:7777", body.OwnerAddr)
-	}
-
-	req2, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/owner", nil)
-	req2.Header.Set("Authorization", "Bearer wrong")
-	resp2, err := http.DefaultClient.Do(req2)
-	if err != nil {
-		t.Fatalf("owner: %v", err)
-	}
-	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusNotFound {
-		t.Errorf("status %d, want 404", resp2.StatusCode)
-	}
-}

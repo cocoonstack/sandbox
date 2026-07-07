@@ -96,11 +96,7 @@ pub async fn push<W: AsyncWrite + Unpin>(
     path: String,
     auth: Option<String>,
 ) -> std::io::Result<()> {
-    if !crate::net::has_egress() {
-        return proto::write_frame(w, &no_egress()).await;
-    }
-    let out = git(&path, auth.as_deref(), &["push"]).await?;
-    terminal(w, out).await
+    net_verb(w, path, auth, "push").await
 }
 
 /// Pulls the current branch.
@@ -109,11 +105,7 @@ pub async fn pull<W: AsyncWrite + Unpin>(
     path: String,
     auth: Option<String>,
 ) -> std::io::Result<()> {
-    if !crate::net::has_egress() {
-        return proto::write_frame(w, &no_egress()).await;
-    }
-    let out = git(&path, auth.as_deref(), &["pull"]).await?;
-    terminal(w, out).await
+    net_verb(w, path, auth, "pull").await
 }
 
 /// Lists, creates, deletes, or checks out a branch.
@@ -155,6 +147,20 @@ pub async fn branch<W: AsyncWrite + Unpin>(
             terminal(w, out).await
         }
     }
+}
+
+/// push/pull shared body: the egress guard, the bare verb, a terminal frame.
+async fn net_verb<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    path: String,
+    auth: Option<String>,
+    verb: &str,
+) -> std::io::Result<()> {
+    if !crate::net::has_egress() {
+        return proto::write_frame(w, &no_egress()).await;
+    }
+    let out = git(&path, auth.as_deref(), &[verb]).await?;
+    terminal(w, out).await
 }
 
 /// Builds a `git -C dir` command with config and stdio policy applied. Config

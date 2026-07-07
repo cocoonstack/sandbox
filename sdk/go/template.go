@@ -28,7 +28,7 @@ func (t *Template) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
 	// The template only exists under its exact key, and this node holds it:
 	// a redirect elsewhere could never find it.
 	claim.Net, claim.Size, claim.NoRedirect = t.net, t.size, true
-	body, err := encodeClaim(claim)
+	body, err := encodeBody("claim", claim)
 	if err != nil {
 		return nil, err
 	}

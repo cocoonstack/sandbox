@@ -9,29 +9,6 @@ import (
 	"testing"
 )
 
-// procServe answers each RPC with a canned frame script keyed by op — the
-// proc verbs are pure frame plumbing, so a scripted fake covers them.
-func procServe(script map[string][]string) func(net.Conn) {
-	return func(conn net.Conn) {
-		defer func() { _ = conn.Close() }()
-		line, err := bufio.NewReader(conn).ReadString('\n')
-		if err != nil {
-			return
-		}
-		var req struct {
-			Op string `json:"op"`
-		}
-		if json.Unmarshal([]byte(line), &req) != nil {
-			return
-		}
-		for _, frame := range script[req.Op] {
-			if _, err := conn.Write([]byte(frame + "\n")); err != nil {
-				return
-			}
-		}
-	}
-}
-
 func TestProcVerbs(t *testing.T) {
 	script := map[string][]string{
 		"exec": {`{"type":"started","pid":41}`},
@@ -91,5 +68,28 @@ func TestProcVerbsUnknownPid(t *testing.T) {
 	_, _, err := sb.Logs(t.Context(), 999, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "not_found") {
 		t.Fatalf("Logs unknown pid: %v, want typed not_found", err)
+	}
+}
+
+// procServe answers each RPC with a canned frame script keyed by op — the
+// proc verbs are pure frame plumbing, so a scripted fake covers them.
+func procServe(script map[string][]string) func(net.Conn) {
+	return func(conn net.Conn) {
+		defer func() { _ = conn.Close() }()
+		line, err := bufio.NewReader(conn).ReadString('\n')
+		if err != nil {
+			return
+		}
+		var req struct {
+			Op string `json:"op"`
+		}
+		if json.Unmarshal([]byte(line), &req) != nil {
+			return
+		}
+		for _, frame := range script[req.Op] {
+			if _, err := conn.Write([]byte(frame + "\n")); err != nil {
+				return
+			}
+		}
 	}
 }

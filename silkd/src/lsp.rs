@@ -208,8 +208,8 @@ async fn pump_stdout<W: AsyncWrite + Unpin>(
     proto::write_frame(w, &Response::Done).await
 }
 
-// manifest_dir allows tests (and an operator) to relocate the manifest dir
-// via SILKD_LSP_DIR, mirroring silkd's other env overrides.
+/// manifest_dir allows tests (and an operator) to relocate the manifest dir
+/// via SILKD_LSP_DIR, mirroring silkd's other env overrides.
 fn manifest_dir() -> String {
     std::env::var("SILKD_LSP_DIR").unwrap_or_else(|_| MANIFEST_DIR.to_string())
 }

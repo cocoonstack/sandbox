@@ -44,11 +44,7 @@ class Client:
     def delete_template(self, template: str, net: str = "", size: str = "") -> None:
         """Removes a promoted template by name; on a cluster the delete
         follows gossip to the owner node (one hop)."""
-        query = {"template": template}
-        if net:
-            query["net"] = net
-        if size:
-            query["size"] = size
+        query = _template_query(template, net, size)
         path = "/v1/templates?" + urllib.parse.urlencode(query)
         reply = self._request(self.addr, "DELETE", path, None, "delete template")
         candidates = (reply or {}).get("redirect") or []
@@ -85,6 +81,10 @@ class Client:
         reply = self._request(self.addr, "GET", "/v1/checkpoints", None, "list checkpoints")
         return [Checkpoint(self, self.addr, rec) for rec in reply.get("checkpoints") or []]
 
+    def info(self) -> dict:
+        """The node's pool/claim counters, as served by GET /v1/info."""
+        return self._request(self.addr, "GET", "/v1/info", None, "info")
+
     def _peers(self) -> list:
         # /v1/peers is tenant-accessible (cluster topology); /v1/info is
         # operator-only, so a tenant lookup cannot read peers from it. A
@@ -93,10 +93,6 @@ class Client:
             return self._request(self.addr, "GET", "/v1/peers", None, "peers").get("peers") or []
         except APIError:
             return []
-
-    def info(self) -> dict:
-        """The node's pool/claim counters, as served by GET /v1/info."""
-        return self._request(self.addr, "GET", "/v1/info", None, "info")
 
     def _handle_from(self, dialed: str, reply: dict) -> Sandbox:
         return Sandbox(
@@ -141,6 +137,15 @@ def _claim_body(template: str, net: str, size: str, ttl_seconds: int) -> dict:
     if ttl_seconds:
         claim["ttl_seconds"] = ttl_seconds
     return claim
+
+
+def _template_query(template: str, net: str, size: str) -> dict:
+    query = {"template": template}
+    if net:
+        query["net"] = net
+    if size:
+        query["size"] = size
+    return query
 
 
 def _error_message(raw: bytes) -> str:
@@ -189,4 +194,3 @@ def _scatter(addrs, probe):
             return value
         last_error = error
     raise last_error
-

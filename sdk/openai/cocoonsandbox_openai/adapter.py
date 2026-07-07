@@ -121,7 +121,8 @@ class CocoonSandboxSession(BaseSandboxSession):
 
     def _sandbox(self, timeout: float | None = None) -> Sandbox:
         s = self.state
-        client = Client(s.addr, api_token=s.api_token, timeout=timeout or 120.0)
+        kwargs = {"timeout": timeout} if timeout is not None else {}
+        client = Client(s.addr, api_token=s.api_token, **kwargs)
         return Sandbox(client=client, id=s.sandbox_id, token=s.sandbox_token, owner=s.owner or s.addr)
 
     def _abs(self, path: Path | str) -> Path:

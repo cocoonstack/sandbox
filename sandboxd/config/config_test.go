@@ -59,7 +59,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 
 func TestLoadAcceptsTenants(t *testing.T) {
 	path := writeConfig(t, `{"api_token":"root","pools":[],
-		"api_token":"root","tenants":[{"name":"acme","token":"t1","max_claims":50},{"name":"beta","token":"t2"}]}`)
+		"tenants":[{"name":"acme","token":"t1","max_claims":50},{"name":"beta","token":"t2"}]}`)
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)

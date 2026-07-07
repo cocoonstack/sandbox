@@ -118,7 +118,7 @@ func (m *Manager) Checkpoints(ctx context.Context, tenant string) ([]types.Check
 	ckpts := make([]types.Checkpoint, 0, len(metas))
 	for _, raw := range metas {
 		var ckpt types.Checkpoint
-		if err := json.Unmarshal(raw, &ckpt); err == nil && (tenant == "" || ckpt.Tenant == tenant) {
+		if err := json.Unmarshal(raw, &ckpt); err == nil && tenantOwns(tenant, ckpt.Tenant) {
 			ckpts = append(ckpts, ckpt)
 		}
 	}
@@ -134,7 +134,7 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string) e
 	if err != nil {
 		return err
 	}
-	if tenant != "" && ckpt.Tenant != tenant {
+	if !tenantOwns(tenant, ckpt.Tenant) {
 		return ErrUnknownCheckpoint
 	}
 	if err := m.ckpts.Delete(ctx, ckptID); err != nil {

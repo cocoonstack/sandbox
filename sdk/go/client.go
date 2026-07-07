@@ -58,7 +58,7 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 	for _, opt := range opts {
 		opt(&claim)
 	}
-	body, err := encodeClaim(claim)
+	body, err := encodeBody("claim", claim)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +72,7 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 		// cannot bounce us again. Try each candidate so one dead/stale peer
 		// (its addr lingering in a gossip view) doesn't fail the claim.
 		claim.NoRedirect = true
-		body, err = encodeClaim(claim)
+		body, err = encodeBody("claim", claim)
 		if err != nil {
 			return nil, err
 		}
@@ -284,10 +284,12 @@ func (c *Client) roundTrip(ctx context.Context, method, addr, path string, body 
 	return c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
 }
 
-func encodeClaim(claim claimRequest) ([]byte, error) {
-	body, err := json.Marshal(claim)
+// encodeBody marshals a wire request body, wrapping failures under verb —
+// the shared prelude of every POST-a-JSON-body call in this package.
+func encodeBody(verb string, v any) ([]byte, error) {
+	body, err := json.Marshal(v)
 	if err != nil {
-		return nil, fmt.Errorf("encode claim: %w", err)
+		return nil, fmt.Errorf("encode %s: %w", verb, err)
 	}
 	return body, nil
 }

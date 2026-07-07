@@ -139,6 +139,81 @@ func toolExec(ctx context.Context, s *server, raw json.RawMessage) (string, erro
 	return jsonText(map[string]any{"exit_code": code, "stdout": stdout.String(), "stderr": stderr.String()}), nil
 }
 
+func toolSpawn(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+	var args struct {
+		SandboxID string `json:"sandbox_id"`
+		Command   string `json:"command"`
+		Cwd       string `json:"cwd"`
+	}
+	if err := parse(raw, &args); err != nil {
+		return "", err
+	}
+	sb, err := s.box(args.SandboxID)
+	if err != nil {
+		return "", err
+	}
+	pid, err := sb.Spawn(ctx, sandbox.Cmd{Argv: []string{"sh", "-c", args.Command}, Cwd: args.Cwd})
+	if err != nil {
+		return "", err
+	}
+	return jsonText(map[string]uint32{"pid": pid}), nil
+}
+
+func toolPs(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+	sb, err := s.boxArg(raw)
+	if err != nil {
+		return "", err
+	}
+	procs, err := sb.Ps(ctx)
+	if err != nil {
+		return "", err
+	}
+	return jsonText(procs), nil
+}
+
+func toolKill(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+	var args struct {
+		SandboxID string `json:"sandbox_id"`
+		PID       uint32 `json:"pid"`
+		Signal    int32  `json:"signal"`
+	}
+	if err := parse(raw, &args); err != nil {
+		return "", err
+	}
+	sb, err := s.box(args.SandboxID)
+	if err != nil {
+		return "", err
+	}
+	if err := sb.Kill(ctx, args.PID, args.Signal); err != nil {
+		return "", err
+	}
+	return "killed", nil
+}
+
+func toolLogs(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+	var args struct {
+		SandboxID string `json:"sandbox_id"`
+		PID       uint32 `json:"pid"`
+	}
+	if err := parse(raw, &args); err != nil {
+		return "", err
+	}
+	sb, err := s.box(args.SandboxID)
+	if err != nil {
+		return "", err
+	}
+	var stdout, stderr strings.Builder
+	code, exited, err := sb.Logs(ctx, args.PID, &stdout, &stderr)
+	if err != nil {
+		return "", err
+	}
+	out := map[string]any{"stdout": stdout.String(), "stderr": stderr.String()}
+	if exited {
+		out["exit_code"] = code
+	}
+	return jsonText(out), nil
+}
+
 func toolWriteFile(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
 	var args struct {
 		SandboxID string `json:"sandbox_id"`
@@ -236,9 +311,7 @@ func toolCheckpoint(ctx context.Context, s *server, raw json.RawMessage) (string
 	if err != nil {
 		return "", err
 	}
-	s.mu.Lock()
-	s.ckpts[ckpt.ID] = ckpt
-	s.mu.Unlock()
+	s.trackCkpt(ckpt)
 	return jsonText(map[string]any{"checkpoint_id": ckpt.ID, "name": ckpt.Name}), nil
 }
 
@@ -275,9 +348,7 @@ func toolDeleteCheckpoint(ctx context.Context, s *server, raw json.RawMessage) (
 	if err := ckpt.Delete(ctx); err != nil {
 		return "", err
 	}
-	s.mu.Lock()
-	delete(s.ckpts, ckpt.ID)
-	s.mu.Unlock()
+	s.dropCkpt(ckpt.ID)
 	return "deleted", nil
 }
 
@@ -353,10 +424,7 @@ func (s *server) checkpointArg(ctx context.Context, raw json.RawMessage) (*sandb
 	if err := parse(raw, &args); err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	ckpt, ok := s.ckpts[args.CheckpointID]
-	s.mu.Unlock()
-	if ok {
+	if ckpt, ok := s.ckpt(args.CheckpointID); ok {
 		return ckpt, nil
 	}
 	ckpts, err := s.client.Checkpoints(ctx)
@@ -409,79 +477,4 @@ func schema(p props, required ...string) map[string]any {
 		out["required"] = required
 	}
 	return out
-}
-
-func toolSpawn(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	var args struct {
-		SandboxID string `json:"sandbox_id"`
-		Command   string `json:"command"`
-		Cwd       string `json:"cwd"`
-	}
-	if err := parse(raw, &args); err != nil {
-		return "", err
-	}
-	sb, err := s.box(args.SandboxID)
-	if err != nil {
-		return "", err
-	}
-	pid, err := sb.Spawn(ctx, sandbox.Cmd{Argv: []string{"sh", "-c", args.Command}, Cwd: args.Cwd})
-	if err != nil {
-		return "", err
-	}
-	return jsonText(map[string]uint32{"pid": pid}), nil
-}
-
-func toolPs(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	sb, err := s.boxArg(raw)
-	if err != nil {
-		return "", err
-	}
-	procs, err := sb.Ps(ctx)
-	if err != nil {
-		return "", err
-	}
-	return jsonText(procs), nil
-}
-
-func toolKill(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	var args struct {
-		SandboxID string `json:"sandbox_id"`
-		PID       uint32 `json:"pid"`
-		Signal    int32  `json:"signal"`
-	}
-	if err := parse(raw, &args); err != nil {
-		return "", err
-	}
-	sb, err := s.box(args.SandboxID)
-	if err != nil {
-		return "", err
-	}
-	if err := sb.Kill(ctx, args.PID, args.Signal); err != nil {
-		return "", err
-	}
-	return "killed", nil
-}
-
-func toolLogs(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	var args struct {
-		SandboxID string `json:"sandbox_id"`
-		PID       uint32 `json:"pid"`
-	}
-	if err := parse(raw, &args); err != nil {
-		return "", err
-	}
-	sb, err := s.box(args.SandboxID)
-	if err != nil {
-		return "", err
-	}
-	var stdout, stderr strings.Builder
-	code, exited, err := sb.Logs(ctx, args.PID, &stdout, &stderr)
-	if err != nil {
-		return "", err
-	}
-	out := map[string]any{"stdout": stdout.String(), "stderr": stderr.String()}
-	if exited {
-		out["exit_code"] = code
-	}
-	return jsonText(out), nil
 }

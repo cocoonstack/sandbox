@@ -1,7 +1,3 @@
-// Promoted templates: goldens published through the store under the tp_
-// namespace, so a shared mount or bucket serves them cluster-wide exactly
-// like checkpoints. Configured pools keep their node-local goldens — the
-// refill hot path never touches the store.
 package pool
 
 import (
@@ -56,7 +52,7 @@ func (m *Manager) Promote(ctx context.Context, id, token, template, tenant strin
 	if tenant != "" {
 		if raw, err := m.tpls.ReadMeta(ctx, store.TemplateID(key.Hash())); err == nil {
 			var prev templateRecord
-			if json.Unmarshal(raw, &prev) == nil && prev.Tenant != tenant {
+			if json.Unmarshal(raw, &prev) == nil && !tenantOwns(tenant, prev.Tenant) {
 				return types.PoolKey{}, ErrTemplateOwned
 			}
 		}
@@ -101,7 +97,7 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant 
 	}
 	if tenant != "" {
 		var rec templateRecord
-		if json.Unmarshal(raw, &rec) != nil || rec.Tenant != tenant {
+		if json.Unmarshal(raw, &rec) != nil || !tenantOwns(tenant, rec.Tenant) {
 			return ErrUnknownTemplate
 		}
 	}

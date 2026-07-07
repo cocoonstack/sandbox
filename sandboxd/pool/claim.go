@@ -1,4 +1,3 @@
-// Claim hand-out, authorization, release, and lease reaping.
 package pool
 
 import (

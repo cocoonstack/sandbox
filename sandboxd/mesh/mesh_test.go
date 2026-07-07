@@ -11,16 +11,6 @@ import (
 	"github.com/hashicorp/memberlist"
 )
 
-func discardLogger() *log.Logger { return log.New(io.Discard, "", 0) }
-
-func newTestMesh(t *testing.T, id string) *Mesh {
-	t.Helper()
-	return &Mesh{
-		self: NodeState{NodeID: id, Addr: id + ":7777", Pools: map[string]int{}},
-		view: map[string]NodeState{id: {NodeID: id, Addr: id + ":7777"}},
-	}
-}
-
 func TestMergeKeepsHigherEpoch(t *testing.T) {
 	m := newTestMesh(t, "a")
 	m.merge([]NodeState{{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 2}}})
@@ -146,6 +136,16 @@ func TestTwoNodeClusterGossipsPools(t *testing.T) {
 	}
 	t.Fatalf("node-b never learned node-a's state: view=%+v", b.mesh.Members())
 }
+
+func newTestMesh(t *testing.T, id string) *Mesh {
+	t.Helper()
+	return &Mesh{
+		self: NodeState{NodeID: id, Addr: id + ":7777", Pools: map[string]int{}},
+		view: map[string]NodeState{id: {NodeID: id, Addr: id + ":7777"}},
+	}
+}
+
+func discardLogger() *log.Logger { return log.New(io.Discard, "", 0) }
 
 type node struct {
 	mesh *Mesh

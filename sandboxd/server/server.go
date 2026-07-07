@@ -179,6 +179,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := req.Key()
+	hash := key.Hash()
 
 	// Warm hit here is ownership transfer only. On a warm miss with a mesh, a
 	// peer that reports a warm sandbox gets the claim via redirect (data plane
@@ -187,7 +188,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	tenant := tenantFrom(r.Context())
 	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant)
 	if errors.Is(err, pool.ErrNoWarm) {
-		if s.redirectClaim(r.Context(), w, req, key) {
+		if s.redirectClaim(r.Context(), w, req, key, hash) {
 			return
 		}
 		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant)
@@ -195,13 +196,13 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	// A full node bounces the claim to a warm peer before answering 429 —
 	// quota is per node, and a peer with capacity is a better answer.
 	if errors.Is(err, pool.ErrQuota) && s.placer != nil && !req.NoRedirect &&
-		writeRedirect(w, s.placer.Candidates(key.Hash())) {
+		writeRedirect(w, s.placer.Candidates(hash)) {
 		return
 	}
 	switch {
 	case writePoolErr(w, err):
 	case err != nil:
-		log.WithFunc("server.handleClaim").Errorf(r.Context(), err, "claim %s", key.Hash())
+		log.WithFunc("server.handleClaim").Errorf(r.Context(), err, "claim %s", hash)
 		writeErr(w, http.StatusInternalServerError, "provisioning failed")
 	default:
 		writeJSON(w, http.StatusOK, s.claimResponse(sb))
@@ -215,15 +216,15 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 // claim already redirected here carries no_redirect and must warm-or-provision
 // locally, never bounce again — that avoids a two-node stale-view ping-pong
 // when both just emptied their pools.
-func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req types.ClaimRequest, key types.PoolKey) bool {
+func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req types.ClaimRequest, key types.PoolKey, hash string) bool {
 	if s.placer == nil || req.NoRedirect {
 		return false
 	}
-	if writeRedirect(w, s.placer.Candidates(key.Hash())) {
+	if writeRedirect(w, s.placer.Candidates(hash)) {
 		return true
 	}
 	// TemplateOwners is in-memory; HasGolden can be a store round-trip.
-	owners := s.placer.TemplateOwners(key.Hash())
+	owners := s.placer.TemplateOwners(hash)
 	return len(owners) > 0 && !s.mgr.HasGolden(ctx, key) && writeRedirect(w, owners)
 }
 

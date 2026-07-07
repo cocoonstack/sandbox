@@ -113,15 +113,6 @@ func TestCloseReleases(t *testing.T) {
 	}
 }
 
-func testClient(t *testing.T, ts *httptest.Server, opts ...ClientOption) *Client {
-	t.Helper()
-	c, err := Connect(strings.TrimPrefix(ts.URL, "http://"), opts...)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	return c
-}
-
 func TestNewFollowsRedirect(t *testing.T) {
 	// The first node redirects; the second answers with the claim. The SDK
 	// must follow transparently and end up owning the sandbox at node B.
@@ -318,4 +309,13 @@ func TestLookupScatter(t *testing.T) {
 	if sb.ID != "sb_1" || sb.owner != strings.TrimPrefix(owner.URL, "http://") {
 		t.Errorf("handle %+v, want owner=B", sb)
 	}
+}
+
+func testClient(t *testing.T, ts *httptest.Server, opts ...ClientOption) *Client {
+	t.Helper()
+	c, err := Connect(strings.TrimPrefix(ts.URL, "http://"), opts...)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	return c
 }

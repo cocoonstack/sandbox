@@ -6,14 +6,6 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
 )
 
-// fakeSandbox wires a Sandbox whose data plane is served by a temp-dir-backed
-// silkd Fake behind a hijacking agent endpoint.
-func fakeSandbox(t *testing.T) *Sandbox {
-	t.Helper()
-	fake := silkdtest.NewFake(t.TempDir())
-	return testSandbox(t, newAgentServer(t, fake.ServeConn))
-}
-
 func TestFilesRoundTrip(t *testing.T) {
 	sb := fakeSandbox(t)
 	ctx := t.Context()
@@ -98,4 +90,12 @@ func TestSessionLifecycle(t *testing.T) {
 	if err := sess.Close(ctx); err == nil {
 		t.Error("second close succeeded")
 	}
+}
+
+// fakeSandbox wires a Sandbox whose data plane is served by a temp-dir-backed
+// silkd Fake behind a hijacking agent endpoint.
+func fakeSandbox(t *testing.T) *Sandbox {
+	t.Helper()
+	fake := silkdtest.NewFake(t.TempDir())
+	return testSandbox(t, newAgentServer(t, fake.ServeConn))
 }

@@ -3,9 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -130,9 +128,9 @@ type previewResponse struct {
 // port from a plain browser, valid for ttl (the node clamps it to the
 // claim's lease). Requires the node to have preview configured.
 func (s *Sandbox) PreviewURL(ctx context.Context, port uint16, ttl time.Duration) (string, error) {
-	body, err := json.Marshal(previewRequest{Token: s.token, Port: port, TTLSeconds: ttlSeconds(ttl)})
+	body, err := encodeBody("preview", previewRequest{Token: s.token, Port: port, TTLSeconds: ttlSeconds(ttl)})
 	if err != nil {
-		return "", fmt.Errorf("encode preview: %w", err)
+		return "", err
 	}
 	pr, err := doJSON[previewResponse](ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/preview", bytes.NewReader(body), s.c.apiToken, "preview")
 	if err != nil {

@@ -3,7 +3,6 @@ package sandbox
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -137,7 +136,7 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 		case *silkd.ErrorResp:
 			return 0, resp
 		default:
-			return 0, fmt.Errorf("unexpected frame %q", resp.RespType())
+			return 0, unexpected(resp)
 		}
 	}
 }
@@ -149,9 +148,9 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 // no child survived. Forking a hibernated sandbox reuses its memory image
 // without waking it.
 func (s *Sandbox) Fork(ctx context.Context, count int, ttl time.Duration) ([]*Sandbox, error) {
-	body, err := json.Marshal(forkRequest{Token: s.token, Count: count, TTLSeconds: ttlSeconds(ttl)})
+	body, err := encodeBody("fork", forkRequest{Token: s.token, Count: count, TTLSeconds: ttlSeconds(ttl)})
 	if err != nil {
-		return nil, fmt.Errorf("encode fork: %w", err)
+		return nil, err
 	}
 	fr, err := doJSON[forkResponse](ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/fork", bytes.NewReader(body), s.c.apiToken, "fork")
 	if err != nil {
@@ -172,9 +171,9 @@ func (s *Sandbox) Fork(ctx context.Context, count int, ttl time.Duration) ([]*Sa
 // bound to the owning node, and its New/Delete always reach it (name-based
 // Client calls only see the connected node's templates).
 func (s *Sandbox) Promote(ctx context.Context, template string) (*Template, error) {
-	body, err := json.Marshal(promoteRequest{Token: s.token, Template: template})
+	body, err := encodeBody("promote", promoteRequest{Token: s.token, Template: template})
 	if err != nil {
-		return nil, fmt.Errorf("encode promote: %w", err)
+		return nil, err
 	}
 	pr, err := doJSON[promoteResponse](ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/promote", bytes.NewReader(body), s.c.apiToken, "promote")
 	if err != nil {

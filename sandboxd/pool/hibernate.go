@@ -1,4 +1,3 @@
-// Hibernate/wake transitions and the opt-in idle-hibernate sweep.
 package pool
 
 import (

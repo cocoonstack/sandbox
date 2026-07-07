@@ -25,4 +25,3 @@ class Checkpoint:
     def delete(self) -> None:
         """Removes the checkpoint from its node."""
         self._client._request(self._addr, "DELETE", f"/v1/checkpoints/{self.id}", None, "delete checkpoint")
-

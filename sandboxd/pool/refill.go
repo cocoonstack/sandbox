@@ -1,4 +1,3 @@
-// Warm-pool supply: refill, golden builds, and VM provisioning plumbing.
 package pool
 
 import (

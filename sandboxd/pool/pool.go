@@ -521,6 +521,10 @@ func (m *Manager) validate(key types.PoolKey) error {
 	return nil
 }
 
+func (m *Manager) goldensDir() string {
+	return filepath.Join(m.dataDir, "goldens")
+}
+
 // normalizePoolSpec fills the wire defaults, mirroring ClaimRequest.Key():
 // API requests default net/size; config files stay explicit (Validate
 // rejects empty there).
@@ -553,8 +557,11 @@ func dirExists(path string) bool {
 	return err == nil && fi.IsDir()
 }
 
-func (m *Manager) goldensDir() string {
-	return filepath.Join(m.dataDir, "goldens")
+// tenantOwns is THE tenancy predicate — every read/delete/overwrite scope
+// check goes through it: root (empty tenant) owns everything, a tenant only
+// records stamped with its own name.
+func tenantOwns(tenant, owner string) bool {
+	return tenant == "" || tenant == owner
 }
 
 func vmName(key types.PoolKey) string {

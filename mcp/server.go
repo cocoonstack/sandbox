@@ -144,6 +144,25 @@ func (s *server) dropBox(id string) {
 	delete(s.boxes, id)
 }
 
+func (s *server) ckpt(id string) (*sandbox.Checkpoint, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ck, ok := s.ckpts[id]
+	return ck, ok
+}
+
+func (s *server) trackCkpt(ck *sandbox.Checkpoint) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ckpts[ck.ID] = ck
+}
+
+func (s *server) dropCkpt(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.ckpts, id)
+}
+
 type rpcRequest struct {
 	ID     json.RawMessage `json:"id"`
 	Method string          `json:"method"`

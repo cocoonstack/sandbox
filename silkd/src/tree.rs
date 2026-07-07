@@ -57,25 +57,19 @@ pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
     } else {
         parent
     };
-    let mut child = match Command::new("tar")
-        .arg("-c")
+    let mut cmd = Command::new("tar");
+    // `--` so a basename starting with `-` is a path, not a tar option.
+    cmd.arg("-c")
         .arg("-C")
         .arg(&cwd)
-        // `--` so a basename starting with `-` is a path, not a tar option.
         .arg("--")
         .arg(&name)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-    {
-        Ok(c) => c,
+        .stdout(Stdio::piped());
+    let (mut child, err_task) = match spawn_tar(cmd) {
+        Ok(pair) => pair,
         Err(e) => return err_frame(w, &e, "spawn tar").await,
     };
     let mut out = child.stdout.take().expect("stdout piped");
-    // Drain stderr concurrently so a noisy tar can't block on a full stderr
-    // pipe while we are reading its stdout.
-    let err_task = tokio::spawn(drain(child.stderr.take().expect("stderr piped")));
 
     if let Err(e) = proto::stream_data_frames(&mut out, w).await? {
         let _ = child.wait().await;
@@ -93,23 +87,17 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let mut child = match Command::new("tar")
-        .arg("-x")
+    let mut cmd = Command::new("tar");
+    cmd.arg("-x")
         .arg("-C")
         .arg(staging)
         .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-    {
-        Ok(c) => c,
+        .stdout(Stdio::null());
+    let (mut child, err_task) = match spawn_tar(cmd) {
+        Ok(pair) => pair,
         Err(e) => return err_frame(w, &e, "spawn tar").await,
     };
     let mut sink = child.stdin.take().expect("stdin piped");
-    // Drain stderr concurrently: a noisy tar can fill the stderr pipe and
-    // block while we are still writing its stdin, deadlocking both.
-    let err_task = tokio::spawn(drain(child.stderr.take().expect("stderr piped")));
 
     let feed = proto::feed_data_frames(reader, &mut sink).await;
     drop(sink); // EOF to tar regardless of outcome
@@ -148,6 +136,17 @@ async fn tar_result<W: AsyncWrite + Unpin>(
     } else {
         proto::error_frame(w, ErrorKind::Internal, format!("{label}: {}", msg.trim())).await
     }
+}
+
+/// Spawns a configured tar with stderr piped and drained on its own task —
+/// a noisy tar filling the stderr pipe must not deadlock against the stdio
+/// end we are servicing.
+fn spawn_tar(
+    mut cmd: Command,
+) -> io::Result<(tokio::process::Child, tokio::task::JoinHandle<String>)> {
+    let mut child = cmd.stderr(Stdio::piped()).kill_on_drop(true).spawn()?;
+    let err_task = tokio::spawn(drain(child.stderr.take().expect("stderr piped")));
+    Ok((child, err_task))
 }
 
 /// Creates a unique staging dir inside `dest` — the same filesystem, so the

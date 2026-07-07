@@ -1,5 +1,3 @@
-// Process management: the client surface over silkd's proc table — spawn
-// detached, list, signal, replay buffered output, or follow it live.
 package sandbox
 
 import (
@@ -95,7 +93,7 @@ func (s *Sandbox) drainProc(ctx context.Context, req silkd.Request, stdout, stde
 		case *silkd.ErrorResp:
 			return 0, false, resp
 		default:
-			return 0, false, fmt.Errorf("unexpected frame %q", resp.RespType())
+			return 0, false, unexpected(resp)
 		}
 	}
 }

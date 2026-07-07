@@ -394,39 +394,6 @@ func TestGoldenBuildFailureBacksOff(t *testing.T) {
 	}
 }
 
-func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
-	t.Helper()
-	return newTestManagerAt(t, eng, t.TempDir(), pools...)
-}
-
-// claimAny composes warm-then-provision the way the server does around the
-// redirect decision; production has no single-call form.
-func claimAny(ctx context.Context, m *Manager, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
-	sb, err := m.ClaimWarm(ctx, key, ttl, "")
-	if errors.Is(err, ErrNoWarm) {
-		return m.ClaimProvision(ctx, key, ttl, "")
-	}
-	return sb, err
-}
-
-func mustClaim(t *testing.T, m *Manager, key types.PoolKey) *types.Sandbox {
-	t.Helper()
-	sb, err := claimAny(t.Context(), m, key, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
-	return sb
-}
-
-func newTestManagerAt(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
-	t.Helper()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: dataDir, Pools: pools}, eng)
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
-	return m
-}
-
 func TestReapBatchDoesNotStallTheLoop(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -458,6 +425,39 @@ func TestReapBatchDoesNotStallTheLoop(t *testing.T) {
 	}
 	close(stall)
 	waitFor(t, func() bool { return eng.removed(sbs[n-1].VMName) })
+}
+
+func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
+	t.Helper()
+	return newTestManagerAt(t, eng, t.TempDir(), pools...)
+}
+
+// claimAny composes warm-then-provision the way the server does around the
+// redirect decision; production has no single-call form.
+func claimAny(ctx context.Context, m *Manager, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
+	sb, err := m.ClaimWarm(ctx, key, ttl, "")
+	if errors.Is(err, ErrNoWarm) {
+		return m.ClaimProvision(ctx, key, ttl, "")
+	}
+	return sb, err
+}
+
+func mustClaim(t *testing.T, m *Manager, key types.PoolKey) *types.Sandbox {
+	t.Helper()
+	sb, err := claimAny(t.Context(), m, key, 0)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	return sb
+}
+
+func newTestManagerAt(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
+	t.Helper()
+	m, err := NewManager(t.Context(), &config.Config{DataDir: dataDir, Pools: pools}, eng)
+	if err != nil {
+		t.Fatalf("setup manager: %v", err)
+	}
+	return m
 }
 
 func waitFor(t *testing.T, cond func() bool) {

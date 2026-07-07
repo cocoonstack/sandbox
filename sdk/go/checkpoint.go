@@ -3,8 +3,6 @@ package sandbox
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 )
@@ -30,9 +28,9 @@ func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error)
 	for _, opt := range opts {
 		opt(&claim)
 	}
-	body, err := json.Marshal(checkpointClaimRequest{TTLSeconds: claim.TTLSeconds})
+	body, err := encodeBody("checkpoint claim", checkpointClaimRequest{TTLSeconds: claim.TTLSeconds})
 	if err != nil {
-		return nil, fmt.Errorf("encode checkpoint claim: %w", err)
+		return nil, err
 	}
 	cr, err := doJSON[claimResponse](ctx, ck.c, http.MethodPost, ck.addr, "/v1/checkpoints/"+ck.ID+"/claim", bytes.NewReader(body), ck.c.apiToken, "claim checkpoint")
 	if err != nil {
@@ -50,9 +48,9 @@ func (ck *Checkpoint) Delete(ctx context.Context) error {
 // processes — without stopping it, and returns a handle that branches new
 // sandboxes from that exact moment. name is an optional label.
 func (s *Sandbox) Checkpoint(ctx context.Context, name string) (*Checkpoint, error) {
-	body, err := json.Marshal(checkpointRequest{Token: s.token, Name: name})
+	body, err := encodeBody("checkpoint", checkpointRequest{Token: s.token, Name: name})
 	if err != nil {
-		return nil, fmt.Errorf("encode checkpoint: %w", err)
+		return nil, err
 	}
 	cr, err := doJSON[checkpointResponse](ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/checkpoint", bytes.NewReader(body), s.c.apiToken, "checkpoint")
 	if err != nil {

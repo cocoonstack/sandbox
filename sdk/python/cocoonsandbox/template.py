@@ -31,10 +31,9 @@ class Template:
 
     def delete(self) -> None:
         """Removes the template from its node."""
-        query = {"template": self.name, "no_redirect": "1"}
-        if self.net:
-            query["net"] = self.net
-        if self.size:
-            query["size"] = self.size
+        from .client import _template_query
+
+        query = _template_query(self.name, self.net, self.size)
+        query["no_redirect"] = "1"
         self._client._request(self._addr, "DELETE", "/v1/templates?" + urllib.parse.urlencode(query),
                               None, "delete template")

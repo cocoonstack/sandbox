@@ -57,14 +57,10 @@ class Sandbox:
             if stdin:
                 _send_chunks(conn, stdin, op="stdin")
             conn.send("stdin_close")
-            for frame in conn.recv_until("exit"):
-                if frame["type"] == "stdout" and on_stdout:
-                    on_stdout(frame["data"])
-                elif frame["type"] == "stderr" and on_stderr:
-                    on_stderr(frame["data"])
-                elif frame["type"] == "exit":
-                    return frame["code"]
-        raise ProtocolError("exec stream ended without an exit frame")
+            code = _pump_stdio(conn, on_stdout, on_stderr)
+        if code is None:
+            raise ProtocolError("exec stream ended without an exit frame")
+        return code
 
     def spawn(self, *argv: str, cwd: str = "", env: dict | None = None,
               user: str = "", session: str = "") -> int:
@@ -349,15 +345,8 @@ class Sandbox:
     def _drain_proc(self, op: str, pid: int, on_stdout, on_stderr) -> int | None:
         with self._dial() as conn:
             conn.send(op, pid=pid)
-            for frame in conn.recv_until("exit", "done"):
-                t = frame["type"]
-                if t == "stdout" and on_stdout:
-                    on_stdout(frame["data"])
-                elif t == "stderr" and on_stderr:
-                    on_stderr(frame["data"])
-                elif t == "exit":
-                    return frame["code"]
-        return None
+            return _pump_stdio(conn, on_stdout, on_stderr)
+
 
 class Session:
     """A persistent shell inside the sandbox, addressed by id."""
@@ -372,6 +361,7 @@ class Session:
 
     def close(self) -> None:
         self._sandbox._done_rpc("session_rm", id=self.id)
+
 
 class Watcher:
     """A live filesystem event stream; iterate for {kind, path} events."""
@@ -392,6 +382,7 @@ class Watcher:
 
     def close(self) -> None:
         self._conn.close()
+
 
 class Pty:
     """An interactive shell under a guest pty; read/write are raw bytes."""
@@ -485,11 +476,26 @@ def _send_chunks(conn: Conn, data: bytes, op: str = "data", chunk: int = FS_CHUN
         conn.send(op, data=view[off:off + chunk])
 
 
+def _pump_stdio(conn: Conn, on_stdout, on_stderr) -> int | None:
+    """Streams stdout/stderr frames into the callbacks until the terminal
+    frame: the exit code, or None when the stream ends with done."""
+    for frame in conn.recv_until("exit", "done"):
+        t = frame["type"]
+        if t == "stdout" and on_stdout:
+            on_stdout(frame["data"])
+        elif t == "stderr" and on_stderr:
+            on_stderr(frame["data"])
+        elif t == "exit":
+            return frame["code"]
+    return None
+
+
 def _expect(conn: Conn, frame_type: str) -> dict:
     frame = conn.recv()
     if frame["type"] != frame_type:
         raise ProtocolError(f"expected {frame_type}, got {frame['type']}")
     return frame
+
 
 def _drain_data(conn: Conn) -> bytes:
     chunks = []

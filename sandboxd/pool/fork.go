@@ -1,4 +1,3 @@
-// Fork: clone a running sandbox into children at its current state.
 package pool
 
 import (

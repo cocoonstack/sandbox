@@ -187,8 +187,8 @@ pub struct ExecReq {
     pub user: Option<String>,
     #[serde(default)]
     pub detach: bool,
-    // When set, run inside the named persistent shell session (cwd/env/state
-    // persist across calls) instead of spawning a fresh process.
+    /// When set, run inside the named persistent shell session (cwd/env/state
+    /// persist across calls) instead of spawning a fresh process.
     #[serde(default)]
     pub session: Option<String>,
 }
@@ -369,35 +369,48 @@ pub struct ProcInfo {
 }
 
 /// Reads one newline-terminated frame (newline stripped); None on clean EOF.
-/// Scans the buffered reader chunk by chunk so a peer that never sends a
-/// newline is cut off at MAX_FRAME instead of growing the line unbounded.
+/// One-shot callers (the leading request frame) use this; streaming loops use
+/// `read_frame_into` so bulk uploads pay no per-frame growth reallocations.
 pub async fn read_frame<R: AsyncBufRead + Unpin>(r: &mut R) -> io::Result<Option<Vec<u8>>> {
     let mut line = Vec::new();
+    Ok(read_frame_into(r, &mut line).await?.then_some(line))
+}
+
+/// Reads one frame into `line` (cleared first, reused across calls — the
+/// inbound twin of `write_chunk_frame`'s buffer reuse); false on clean EOF.
+/// Scans the buffered reader chunk by chunk so a peer that never sends a
+/// newline is cut off at MAX_FRAME instead of growing the line unbounded.
+pub async fn read_frame_into<R: AsyncBufRead + Unpin>(
+    r: &mut R,
+    line: &mut Vec<u8>,
+) -> io::Result<bool> {
+    line.clear();
     loop {
         let available = r.fill_buf().await?;
         if available.is_empty() {
-            return Ok((!line.is_empty()).then_some(line));
+            return Ok(!line.is_empty());
         }
         if let Some(pos) = available.iter().position(|&b| b == b'\n') {
             line.extend_from_slice(&available[..pos]);
             r.consume(pos + 1);
-            return cap_check(line).map(Some);
+            cap_check(line.len())?;
+            return Ok(true);
         }
         let n = available.len();
         line.extend_from_slice(available);
         r.consume(n);
-        line = cap_check(line)?;
+        cap_check(line.len())?;
     }
 }
 
-fn cap_check(line: Vec<u8>) -> io::Result<Vec<u8>> {
-    if line.len() > MAX_FRAME {
+fn cap_check(len: usize) -> io::Result<()> {
+    if len > MAX_FRAME {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "frame exceeds cap",
         ));
     }
-    Ok(line)
+    Ok(())
 }
 
 pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, resp: &Response) -> io::Result<()> {
@@ -494,11 +507,14 @@ where
     R: AsyncBufRead + Unpin,
     S: AsyncWrite + Unpin,
 {
+    let mut frame = Vec::new();
     loop {
-        let frame = read_frame(reader)
+        if !read_frame_into(reader, &mut frame)
             .await
             .map_err(|e| FeedError::Io(e, "read"))?
-            .ok_or(FeedError::Truncated)?;
+        {
+            return Err(FeedError::Truncated);
+        }
         match serde_json::from_slice::<Request>(&frame) {
             Ok(Request::Data { data }) => sink
                 .write_all(&data)
