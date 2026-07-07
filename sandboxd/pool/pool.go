@@ -331,12 +331,16 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 
 	logger := log.WithFunc("pool.Reconcile")
+	var stale []string
 	for name := range live {
 		if strings.HasPrefix(name, vmPrefix) && !owned[name] {
-			m.destroy(ctx, name)
-			logger.Infof(ctx, "removed stale VM %s", name)
+			stale = append(stale, name)
 		}
 	}
+	m.runBounded(ctx, len(stale), func(ctx context.Context, i int) {
+		m.destroy(ctx, stale[i])
+		logger.Infof(ctx, "removed stale VM %s", stale[i])
+	}).Wait()
 
 	// Snapshot sweep, symmetric to the VM sweep: a hibernate snapshot no
 	// adopted claim references is an orphan (a crash between `vm hibernate`
@@ -346,13 +350,17 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if snaps, listErr := m.eng.SnapshotList(ctx); listErr != nil {
 		logger.Warnf(ctx, "snapshot sweep skipped: %v", listErr)
 	} else {
+		var orphans []string
 		for _, snap := range snaps {
 			orphanHib := strings.HasPrefix(snap, hibernatePrefix) && !referenced[snap]
 			if orphanHib || strings.HasPrefix(snap, forkPrefix) || strings.HasPrefix(snap, goldenPrefix) {
-				m.dropSnap(ctx, snap)
-				logger.Infof(ctx, "removed orphan snapshot %s", snap)
+				orphans = append(orphans, snap)
 			}
 		}
+		m.runBounded(ctx, len(orphans), func(ctx context.Context, i int) {
+			m.dropSnap(ctx, orphans[i])
+			logger.Infof(ctx, "removed orphan snapshot %s", orphans[i])
+		}).Wait()
 	}
 	now := time.Now()
 	for _, sb := range m.claimed {

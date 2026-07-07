@@ -125,18 +125,20 @@ func (m *Manager) idleOnce(ctx context.Context) {
 		return
 	}
 	// Hibernates are seconds-long engine snapshots: run them off the
-	// housekeeping loop so refill ticks keep flowing during a big sweep.
+	// housekeeping loop, fanned out on the refill budget, so a big sweep
+	// finishes in parallel while refill ticks keep flowing.
 	go func() {
 		defer m.idleSweep.Store(false)
 		logger := log.WithFunc("pool.idleOnce")
-		for _, v := range victims {
+		m.runBounded(ctx, len(victims), func(ctx context.Context, i int) {
+			v := victims[i]
 			switch err := m.idleHibernate(ctx, v.id, v.token, now); {
 			case err == nil:
 				logger.Infof(ctx, "idle-hibernated %s", v.id)
 			case !errors.Is(err, ErrUnknownSandbox) && !errors.Is(err, errWokeMeanwhile):
 				logger.Errorf(ctx, err, "idle-hibernate %s", v.id)
 			}
-		}
+		}).Wait()
 	}()
 }
 

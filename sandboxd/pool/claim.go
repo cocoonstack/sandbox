@@ -230,13 +230,16 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	if saveErr != nil {
 		logger.Errorf(ctx, saveErr, "persist reap")
 	}
-	for _, v := range expired {
+	// Destroys are engine subprocesses (worst case minutes on a hung stop):
+	// fan them out bounded so a big batch never stalls the ticker loop.
+	m.runBounded(ctx, len(expired), func(ctx context.Context, i int) {
+		v := expired[i]
 		m.destroy(ctx, v.vmName)
 		m.dropSnap(ctx, v.snap)
 		m.counters.reaps.Add(1)
 		m.recordUsage(ctx, usageEvent{Event: "reap", ID: v.id, VMName: v.vmName})
 		logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
-	}
+	})
 }
 
 // touch records data-plane activity for the idle policy.

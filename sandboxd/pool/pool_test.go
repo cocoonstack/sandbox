@@ -201,9 +201,8 @@ func TestReapDestroysExpiredClaims(t *testing.T) {
 	m.mu.Unlock()
 
 	m.reapOnce(t.Context())
-	if !slices.Contains(eng.removes, sb.VMName) {
-		t.Errorf("removes=%v, want expired VM reaped", eng.removes)
-	}
+	// The destroy batch is fanned off the ticker loop; poll for it.
+	waitFor(t, func() bool { return eng.removed(sb.VMName) })
 	if _, n, _ := m.Info(); n != 0 {
 		t.Errorf("claimed=%d, want 0", n)
 	}
@@ -428,6 +427,33 @@ func newTestManagerAt(t *testing.T, eng *fakeEngine, dataDir string, pools ...co
 	return m
 }
 
+func TestReapBatchDoesNotStallTheLoop(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	m.mu.Lock()
+	m.claimed[sb.ID].Deadline = time.Now().Add(-time.Second)
+	m.mu.Unlock()
+
+	stall := make(chan struct{})
+	eng.mu.Lock()
+	eng.removeStall = stall
+	eng.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() { m.reapOnce(t.Context()); close(done) }()
+	select {
+	case <-done: // reapOnce returned while the destroy is parked: unblocked loop
+	case <-time.After(2 * time.Second):
+		t.Fatal("reapOnce blocked on a stalled destroy")
+	}
+	if eng.removed(sb.VMName) {
+		t.Fatal("destroy finished before the stall released — test is vacuous")
+	}
+	close(stall)
+	waitFor(t, func() bool { return eng.removed(sb.VMName) })
+}
+
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -460,7 +486,8 @@ type fakeEngine struct {
 	cloneFailNth                                                          int // 1-based Clone call to fail; 0 = never
 
 	probeStall     chan struct{} // non-nil: Probe blocks until closed
-	hibernateStall chan struct{} // non-nil: Hibernate blocks until closed
+	hibernateStall chan struct{}
+	removeStall    chan struct{} // non-nil: Hibernate blocks until closed
 }
 
 func newFakeEngine() *fakeEngine {
@@ -493,10 +520,24 @@ func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) er
 	return nil
 }
 
+// removed reports whether name was destroyed, under the fake's own lock —
+// bounded batches append concurrently with test polls.
+func (f *fakeEngine) removed(name string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Contains(f.removes, name)
+}
+
 func (f *fakeEngine) Remove(ctx context.Context, name string) error {
 	// Models exec.CommandContext: a canceled ctx never runs cocoon at all.
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	f.mu.Lock()
+	stall := f.removeStall
+	f.mu.Unlock()
+	if stall != nil {
+		<-stall
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

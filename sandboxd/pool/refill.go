@@ -236,6 +236,24 @@ func (m *Manager) vsockOf(ctx context.Context, name string) (string, error) {
 	return "", fmt.Errorf("vm %s not found after create", name)
 }
 
+// runBounded fans f over n items on the refill semaphore, so engine
+// batches (reap destroys, idle hibernates, reconcile sweeps) share the
+// same node-wide concurrency budget as refills. The returned WaitGroup
+// lets callers that need completion (Reconcile) wait; tickers drop it.
+func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context, int)) *sync.WaitGroup {
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		m.refillSem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-m.refillSem }()
+			f(ctx, i)
+		}()
+	}
+	return &wg
+}
+
 // destroy removes a VM on a cancellation-immune ctx: cleanup is usually
 // triggered by a failed or abandoned request, and running `cocoon vm rm` on
 // the caller's canceled ctx would no-op and orphan a live VM.
