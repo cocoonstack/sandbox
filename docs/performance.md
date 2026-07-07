@@ -2,8 +2,9 @@
 
 All numbers below are real measurements, not targets. Environment matters
 enormously for microVM latency — every table states where it was measured.
-Reproduce with `scripts/sandboxd-e2e.sh` (claim/verb latencies print per
-run) and `scripts/boot-bench.sh` (boot phases).
+Reproduce with `make bench` (tier definitions and the dated results log:
+[Benchmarks](benchmarks.md)), `scripts/sandboxd-e2e.sh` (claim/verb
+latencies print per run), and `scripts/boot-bench.sh` (boot phases).
 
 **Bare metal** = a 16-core AMD (SVM) node, Ubuntu 24.04, kernel 6.x, local
 NVMe, KVM. **Nested** = a cloud VM with nested virtualization; nested

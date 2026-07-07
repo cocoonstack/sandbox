@@ -13,7 +13,7 @@ GO_MODULES := sandboxd sdk/go e2e mcp
 GO_OSES := linux darwin
 
 .PHONY: help test lint boot boot-debug extract extract-debug silkd-image base python images \
-	sandboxd go-test go-lint
+	sandboxd go-test go-lint bench
 
 help: ## show this list
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "%-14s %s\n", $$1, $$2}'
@@ -32,6 +32,9 @@ sandboxd: ## build dist/sandboxd
 
 go-test: ## go test -race across the Go modules
 	for m in $(GO_MODULES); do (cd $$m && GOWORK=off go test -race ./...) || exit 1; done
+
+bench: ## claim-tier + data-plane benchmarks on this node (see docs/benchmarks.md)
+	bash scripts/bench.sh
 
 go-lint: ## golangci-lint (run + fmt --diff) across the Go modules, GOOS linux+darwin
 	for m in $(GO_MODULES); do \

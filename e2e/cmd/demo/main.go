@@ -18,19 +18,20 @@ func main() {
 		token    = flag.String("token", "", "node api token")
 		template = flag.String("template", "rt:24.04", "template ref")
 		netShape = flag.String("net", "none", "network lane: none|egress")
+		size     = flag.String("size", "", "size tier (empty = server default)")
 		n        = flag.Int("n", 3, "iterations")
 		ttl      = flag.Int("ttl", 0, "sandbox ttl seconds (0 = server default)")
 		leak     = flag.Bool("leak", false, "claim without releasing (reap check)")
 	)
 	flag.Parse()
 
-	if err := run(*addr, *token, *template, *netShape, *n, *ttl, *leak); err != nil {
+	if err := run(*addr, *token, *template, *netShape, *size, *n, *ttl, *leak); err != nil {
 		fmt.Fprintln(os.Stderr, "demo:", err)
 		os.Exit(1)
 	}
 }
 
-func run(addr, token, template, netShape string, n, ttl int, leak bool) error {
+func run(addr, token, template, netShape, size string, n, ttl int, leak bool) error {
 	ctx := context.Background()
 	var copts []sandbox.ClientOption
 	if token != "" {
@@ -41,6 +42,9 @@ func run(addr, token, template, netShape string, n, ttl int, leak bool) error {
 		return err
 	}
 	opts := []sandbox.Option{sandbox.WithNetwork(sandbox.NetShape(netShape))}
+	if size != "" {
+		opts = append(opts, sandbox.WithSize(sandbox.Size(size)))
+	}
 	if ttl > 0 {
 		opts = append(opts, sandbox.WithTimeout(time.Duration(ttl)*time.Second))
 	}

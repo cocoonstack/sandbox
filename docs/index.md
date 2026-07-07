@@ -40,6 +40,8 @@ bridge/CNI NIC. Backends are never user-selected.
   and limits
 - [Performance](performance.md) — measured latencies and the environments
   they were measured in
+- [Benchmarks](benchmarks.md) — what each number measures, `make bench`
+  reproduction, and the dated results log
 
 ## Repository
 
