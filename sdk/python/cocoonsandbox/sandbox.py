@@ -274,14 +274,7 @@ class Sandbox:
 
     def dial_port(self, port: int) -> PortConn:
         """Opens a byte stream to 127.0.0.1:port inside the guest."""
-        conn = self._dial()
-        try:
-            conn.send("port_forward", port=port)
-            _expect(conn, "ready")
-        except Exception:
-            conn.close()
-            raise
-        return PortConn(conn)
+        return self._open_stream("port_forward", port=port)
 
     def close(self) -> None:
         """Releases the sandbox; its VM is destroyed."""
@@ -290,6 +283,16 @@ class Sandbox:
 
     def _dial(self) -> Conn:
         return dial_agent(self.owner, self.id, self.token, self._client.timeout)
+
+    def _open_stream(self, op: str, **fields) -> PortConn:
+        conn = self._dial()
+        try:
+            conn.send(op, **fields)
+            _expect(conn, "ready")
+        except Exception:
+            conn.close()
+            raise
+        return PortConn(conn)
 
     def _proxy_accept_loop(self, listener: socket.socket, port: int) -> None:
         with contextlib.suppress(OSError):
@@ -408,14 +411,7 @@ class Lsp:
         """Opens the JSON-RPC byte stream: writes go to the server's stdin,
         recv returns its stdout. A server serves one request for its
         lifetime; closing the stream ends the session and reaps it."""
-        conn = self._sandbox._dial()
-        try:
-            conn.send("lsp_request", server_id=self.server_id)
-            _expect(conn, "ready")
-        except Exception:
-            conn.close()
-            raise
-        return PortConn(conn)
+        return self._sandbox._open_stream("lsp_request", server_id=self.server_id)
 
     def stop(self) -> None:
         """Kills the language server."""

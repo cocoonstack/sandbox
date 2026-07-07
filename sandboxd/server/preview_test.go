@@ -19,10 +19,14 @@ func (f *fakePreviewMgr) PreviewDial(_ context.Context, id string, port uint16) 
 	return f.dial(id, port)
 }
 
+func mintToken(ps *PreviewServer, id string, port uint16, ttl time.Duration) string {
+	url := ps.Mint(id, port, ttl)
+	return strings.TrimSuffix(url[strings.Index(url, "/p/")+3:], "/")
+}
+
 func TestPreviewTokenRoundTrip(t *testing.T) {
 	ps := NewPreviewServer("secret", "node:9000", &fakePreviewMgr{})
-	url := ps.Mint("sb_1", 8080, time.Hour)
-	token := strings.TrimSuffix(strings.TrimPrefix(url, "http://node:9000/p/"), "/")
+	token := mintToken(ps, "sb_1", 8080, time.Hour)
 
 	claims, ok := ps.verify(token)
 	if !ok || claims.ID != "sb_1" || claims.Port != 8080 || claims.Owner != "node:9000" {
@@ -38,8 +42,7 @@ func TestPreviewTokenRoundTrip(t *testing.T) {
 
 func TestPreviewRejectsExpired(t *testing.T) {
 	ps := NewPreviewServer("secret", "node:9000", &fakePreviewMgr{})
-	url := ps.Mint("sb_1", 8080, -time.Second) // already expired
-	token := strings.TrimSuffix(strings.TrimPrefix(url, "http://node:9000/p/"), "/")
+	token := mintToken(ps, "sb_1", 8080, -time.Second) // already expired
 	if _, ok := ps.verify(token); ok {
 		t.Error("expired token verified")
 	}
@@ -67,8 +70,7 @@ func TestPreviewProxiesToGuest(t *testing.T) {
 	ts := httptest.NewServer(ps.Handler())
 	t.Cleanup(ts.Close)
 
-	url := ps.Mint("sb_1", 8080, time.Hour)
-	token := strings.TrimSuffix(strings.TrimPrefix(url, "http://node:9000/p/"), "/")
+	token := mintToken(ps, "sb_1", 8080, time.Hour)
 
 	resp, err := http.Get(ts.URL + "/p/" + token + "/hello/world")
 	if err != nil {
@@ -88,8 +90,7 @@ func TestPreviewRevokedWhenDialFails(t *testing.T) {
 	})
 	ts := httptest.NewServer(ps.Handler())
 	t.Cleanup(ts.Close)
-	url := ps.Mint("sb_gone", 3000, time.Hour)
-	token := strings.TrimSuffix(strings.TrimPrefix(url, "http://node:9000/p/"), "/")
+	token := mintToken(ps, "sb_gone", 3000, time.Hour)
 
 	resp, err := http.Get(ts.URL + "/p/" + token + "/")
 	if err != nil {
@@ -113,8 +114,7 @@ func TestPreviewForwardsToOwner(t *testing.T) {
 
 	// Mint on the owner, serve on a different node.
 	ownerPS := NewPreviewServer("secret", ownerAddr, &fakePreviewMgr{})
-	url := ownerPS.Mint("sb_1", 8080, time.Hour)
-	token := strings.TrimSuffix(strings.TrimPrefix(url, "http://"+ownerAddr+"/p/"), "/")
+	token := mintToken(ownerPS, "sb_1", 8080, time.Hour)
 
 	entry := NewPreviewServer("secret", "entry:9000", &fakePreviewMgr{})
 	ts := httptest.NewServer(entry.Handler())

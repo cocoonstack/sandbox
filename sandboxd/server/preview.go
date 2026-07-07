@@ -28,6 +28,11 @@ type previewClaims struct {
 	Exp   int64  `json:"exp"`
 }
 
+// PreviewManager is the slice of the pool manager the preview path needs.
+type PreviewManager interface {
+	PreviewDial(ctx context.Context, id string, port uint16) (net.Conn, error)
+}
+
 // PreviewServer serves guest HTTP apps under signed, expiring URLs, built on
 // the port relay. The whole mechanism lives here: a signed token needs no
 // revocation list (a released sandbox simply isn't in the claim map), and
@@ -39,11 +44,6 @@ type PreviewServer struct {
 	advertise string
 	mgr       PreviewManager
 	transport *http.Transport
-}
-
-// PreviewManager is the slice of the pool manager the preview path needs.
-type PreviewManager interface {
-	PreviewDial(ctx context.Context, id string, port uint16) (net.Conn, error)
 }
 
 // NewPreviewServer returns nil when preview is not configured (empty secret).
@@ -128,8 +128,8 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 			req.Header.Del("Authorization")
 		},
 		Transport: p.transport,
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			log.WithFunc("server.preview").Errorf(context.Background(), err, "proxy %s:%d", claims.ID, claims.Port)
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			log.WithFunc("server.preview").Errorf(r.Context(), err, "proxy %s:%d", claims.ID, claims.Port)
 			http.Error(w, "preview target unreachable", http.StatusBadGateway)
 		},
 	}
@@ -141,8 +141,8 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 func (p *PreviewServer) forward(w http.ResponseWriter, r *http.Request, owner string) {
 	target := &url.URL{Scheme: "http", Host: owner}
 	rp := httputil.NewSingleHostReverseProxy(target)
-	rp.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
-		log.WithFunc("server.preview").Errorf(context.Background(), err, "forward to owner %s", owner)
+	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		log.WithFunc("server.preview").Errorf(r.Context(), err, "forward to owner %s", owner)
 		http.Error(w, "owner node unreachable", http.StatusBadGateway)
 	}
 	rp.ServeHTTP(w, r) //nolint:gosec // owner host comes from an HMAC-signed token

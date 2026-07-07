@@ -78,12 +78,9 @@ async fn lsp_start_language_name_cannot_escape() {
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // ENV_LOCK serializes SILKD_LSP_DIR across the whole test
 async fn lsp_broker_relays_to_the_server() {
-    // Point the broker at a manifest dir under our control by baking the
-    // fake server's argv into a manifest the broker will read. The broker
-    // reads /etc/silkd/lsp.d, which we cannot write in CI, so this test drives
-    // the Broker directly against a manifest we control via the language arg
-    // being an absolute path is disallowed — instead we assert the spawn +
-    // relay path through a manifest we plant when running as root, else skip.
+    // Point the broker at a manifest dir under our control: SILKD_LSP_DIR
+    // overrides /etc/silkd/lsp.d, and the planted manifest names the fake
+    // server as the language server for "faketest".
     let _env_lock = ENV_LOCK.lock().unwrap();
     let env = manifest_env(FAKE_SERVER);
     let bin = env.path().join("fake-lsp");
@@ -115,7 +112,6 @@ async fn lsp_broker_relays_to_the_server() {
     .await
     .unwrap();
     cw.write_all(b"\n").await.unwrap();
-    // ready frame
     let ready: serde_json::Value =
         serde_json::from_str(&out.next_line().await.unwrap().unwrap()).unwrap();
     assert_eq!(type_of(&ready), "ready");

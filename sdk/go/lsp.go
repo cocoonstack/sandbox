@@ -3,7 +3,6 @@ package sandbox
 import (
 	"context"
 	"fmt"
-	"io"
 
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
@@ -22,31 +21,12 @@ type Lsp struct {
 // server serves one Request for its lifetime — closing the stream ends the
 // session and reaps the server (start a new one to work again).
 func (l *Lsp) Request(ctx context.Context) (*PortConn, error) {
-	conn, done, err := l.s.call(ctx, &silkd.LspRequest{ServerID: l.ServerID})
-	if err != nil {
-		return nil, err
-	}
-	if _, err = expect[silkd.Ready](ctx, conn); err != nil {
-		done()
-		return nil, err
-	}
-	pr, pw := io.Pipe()
-	p := &PortConn{conn: conn, stop: done, out: pr}
-	go p.drain(ctx, pw)
-	return p, nil
+	return l.s.openStream(ctx, &silkd.LspRequest{ServerID: l.ServerID})
 }
 
 // Stop kills the language server.
 func (l *Lsp) Stop(ctx context.Context) error {
-	conn, done, err := l.s.call(ctx, &silkd.LspStop{ServerID: l.ServerID})
-	if err != nil {
-		return err
-	}
-	defer done()
-	if _, err := expect[silkd.Done](ctx, conn); err != nil {
-		return err
-	}
-	return nil
+	return l.s.doneRPC(ctx, &silkd.LspStop{ServerID: l.ServerID})
 }
 
 // StartLsp spawns the language server the flavor image provides for language

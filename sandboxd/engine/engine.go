@@ -32,19 +32,13 @@ const (
 	connectMax    = 64   // "OK <port>" handshake reply cap
 	infoMax       = 4096 // info response frame cap
 	outputTail    = 400
+
+	// portForwardMax caps the port_forward handshake reply line; the byte
+	// stream follows on the same conn.
+	portForwardMax = 4096
 )
 
-var (
-	infoProbe = []byte(`{"v":1,"op":"info"}` + "\n")
-
-	// errPortClosed signals the guest closed the forwarded port; it maps to
-	// the io.EOF a net.Conn reader expects.
-	errPortClosed = io.EOF
-)
-
-// portForwardMax caps the port_forward handshake reply line; the byte
-// stream follows on the same conn.
-const portForwardMax = 4096
+var infoProbe = []byte(`{"v":1,"op":"info"}` + "\n")
 
 // Engine runs cocoon commands on the local node.
 type Engine struct {
@@ -210,6 +204,40 @@ func (e *Engine) Probe(ctx context.Context, vsockSocket string, timeout time.Dur
 	}
 }
 
+// DialGuestPort opens a raw byte stream to 127.0.0.1:port inside the guest
+// by driving silkd's port_forward handshake, then returns the connection
+// carrying the relayed TCP bytes — the preview server proxies HTTP over it.
+func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error) {
+	conn, err := e.DialSilkd(ctx, vsockSocket)
+	if err != nil {
+		return nil, err
+	}
+	req := fmt.Sprintf(`{"v":1,"op":"port_forward","port":%d}`+"\n", port)
+	if _, err := conn.Write([]byte(req)); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("write port_forward: %w", err)
+	}
+	line, readErr := readLine(conn, portForwardMax)
+	if readErr != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("read port_forward reply: %w", readErr)
+	}
+	var frame struct {
+		Type    string `json:"type"`
+		Kind    string `json:"kind"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(line), &frame); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("parse port_forward reply: %w", err)
+	}
+	if frame.Type != "ready" {
+		_ = conn.Close()
+		return nil, fmt.Errorf("port_forward %d: %s: %s", port, frame.Kind, frame.Message)
+	}
+	return newGuestPortConn(conn), nil
+}
+
 func (e *Engine) cloneArgs(fromDir, name string, key types.PoolKey) []string {
 	args := []string{"vm", "clone", "--from-dir", fromDir, "--name", name}
 	return append(args, e.netArgs(key, false)...)
@@ -281,40 +309,6 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 		return fmt.Errorf("info reply type %q", frame.Type)
 	}
 	return nil
-}
-
-// DialGuestPort opens a raw byte stream to 127.0.0.1:port inside the guest
-// by driving silkd's port_forward handshake, then returns the connection
-// carrying the relayed TCP bytes — the preview server proxies HTTP over it.
-func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error) {
-	conn, err := e.DialSilkd(ctx, vsockSocket)
-	if err != nil {
-		return nil, err
-	}
-	req := fmt.Sprintf(`{"v":1,"op":"port_forward","port":%d}`+"\n", port)
-	if _, err := conn.Write([]byte(req)); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("write port_forward: %w", err)
-	}
-	line, readErr := readLine(conn, portForwardMax)
-	if readErr != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("read port_forward reply: %w", readErr)
-	}
-	var frame struct {
-		Type    string `json:"type"`
-		Kind    string `json:"kind"`
-		Message string `json:"message"`
-	}
-	if err := json.Unmarshal([]byte(line), &frame); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("parse port_forward reply: %w", err)
-	}
-	if frame.Type != "ready" {
-		_ = conn.Close()
-		return nil, fmt.Errorf("port_forward %d: %s: %s", port, frame.Kind, frame.Message)
-	}
-	return newGuestPortConn(conn), nil
 }
 
 // readLine reads byte-wise so nothing past the newline is consumed —

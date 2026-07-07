@@ -8,15 +8,15 @@ import io
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 import pytest
+from cocoonsandbox import SilkdError
 
 from cocoonsandbox_openai import CocoonSandboxClient, CocoonSandboxClientOptions, CocoonSandboxSessionState
 
 
 class FakeNode(BaseHTTPRequestHandler):
-    claims: dict = {}
-
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
         _ = self.rfile.read(length)
@@ -92,8 +92,6 @@ def test_exec_maps_stdio_and_exit(node, monkeypatch):
 
 
 def test_read_missing_maps_to_filenotfound(node, monkeypatch):
-    from cocoonsandbox import SilkdError
-
     class FakeSandbox:
         def read_file(self, path):
             raise SilkdError("not_found", path)
@@ -104,15 +102,9 @@ def test_read_missing_maps_to_filenotfound(node, monkeypatch):
         inner = session._inner
         monkeypatch.setattr(inner, "_sandbox", lambda timeout=None: FakeSandbox())
         with pytest.raises(FileNotFoundError):
-            await inner.read(adapter_path("/nope"))
+            await inner.read(Path("/nope"))
 
     asyncio.run(go())
-
-
-def adapter_path(p: str):
-    from pathlib import Path
-
-    return Path(p)
 
 
 def test_write_and_persist_use_tree_verbs(node, monkeypatch):
@@ -134,7 +126,7 @@ def test_write_and_persist_use_tree_verbs(node, monkeypatch):
         session = await client.create(options=CocoonSandboxClientOptions(addr=node))
         inner = session._inner
         monkeypatch.setattr(inner, "_sandbox", lambda timeout=None: FakeSandbox())
-        await inner.write(adapter_path("/workspace/a.txt"), io.BytesIO(b"body"))
+        await inner.write(Path("/workspace/a.txt"), io.BytesIO(b"body"))
         assert calls["write"] == ("/workspace/a.txt", b"body")
         tar = await inner.persist_workspace()
         assert tar.read() == b"tar-bytes" and calls["pull"] == "/workspace"

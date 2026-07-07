@@ -7,8 +7,6 @@ import (
 	"strings"
 )
 
-var _ CheckpointStore = (*dirCheckpointStore)(nil)
-
 // CheckpointStore persists captured sandbox states. The manager needs four
 // things from a backend: a staging area in the same publish domain, an
 // atomic publish, a local directory cocoon can `clone --from-dir`, and
@@ -38,6 +36,8 @@ type CheckpointStore interface {
 	// SweepStaging removes abandoned staging left by a crash mid-publish.
 	SweepStaging() error
 }
+
+var _ CheckpointStore = (*dirCheckpointStore)(nil)
 
 // dirCheckpointStore keeps checkpoints as <root>/<id>/{export,meta.json};
 // staging dirs are <root>/<id>-*.tmp siblings so publish is one rename.

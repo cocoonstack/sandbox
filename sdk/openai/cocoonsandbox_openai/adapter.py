@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import socket
 import uuid
 from pathlib import Path
 from typing import Literal
@@ -50,7 +51,7 @@ class CocoonSandboxSession(BaseSandboxSession):
 
     def __init__(self, *, state: CocoonSandboxSessionState) -> None:
         self.state = state
-        self._proxies: list[object] = []
+        self._proxies: list[socket.socket] = []
 
     @classmethod
     def from_state(cls, state: CocoonSandboxSessionState) -> CocoonSandboxSession:
@@ -115,7 +116,7 @@ class CocoonSandboxSession(BaseSandboxSession):
         # The sandbox itself outlives shutdown (delete releases it); only the
         # local port proxies belong to this process.
         for listener in self._proxies:
-            listener.close()  # type: ignore[attr-defined]
+            listener.close()
         self._proxies.clear()
 
     def _sandbox(self, timeout: float | None = None) -> Sandbox:

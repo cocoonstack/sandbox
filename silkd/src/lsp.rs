@@ -28,12 +28,6 @@ use crate::proto::{self, ErrorKind, Request, Response, READ_CHUNK};
 
 const MANIFEST_DIR: &str = "/etc/silkd/lsp.d";
 
-// manifest_dir allows tests (and an operator) to relocate the manifest dir
-// via SILKD_LSP_DIR, mirroring silkd's other env overrides.
-fn manifest_dir() -> String {
-    std::env::var("SILKD_LSP_DIR").unwrap_or_else(|_| MANIFEST_DIR.to_string())
-}
-
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Table of running language servers, addressed by server id.
@@ -87,19 +81,8 @@ impl Broker {
             stdout: Arc::new(tokio::sync::Mutex::new(Some(stdout))),
         };
 
-        // Allocate a free id under the map lock so a wrapped counter can't
-        // overwrite a live server.
-        let id = {
-            let mut map = self.inner.lock().unwrap();
-            let id = loop {
-                let candidate = format!("lsp-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
-                if !map.contains_key(&candidate) {
-                    break candidate;
-                }
-            };
-            map.insert(id.clone(), server.clone());
-            id
-        };
+        let id = format!("lsp-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
+        self.inner.lock().unwrap().insert(id.clone(), server);
 
         // If the client is already gone, don't leak the server we just spawned.
         if let Err(e) = proto::write_frame(
@@ -225,6 +208,12 @@ async fn pump_stdout<W: AsyncWrite + Unpin>(
             Err(e) => return proto::err_frame(w, &e, "read lsp stdout").await,
         }
     }
+}
+
+// manifest_dir allows tests (and an operator) to relocate the manifest dir
+// via SILKD_LSP_DIR, mirroring silkd's other env overrides.
+fn manifest_dir() -> String {
+    std::env::var("SILKD_LSP_DIR").unwrap_or_else(|_| MANIFEST_DIR.to_string())
 }
 
 fn read_manifest(language: &str) -> Option<Vec<String>> {

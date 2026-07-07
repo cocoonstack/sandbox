@@ -172,7 +172,8 @@ func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("create goldens dir: %w", err)
 	}
-	// Default here too: tests build Config directly, skipping Load.
+	// The default lives here rather than config.applyDefaults: tests build
+	// Config directly, skipping Load.
 	ckptDir := cfg.CheckpointDir
 	if ckptDir == "" {
 		ckptDir = filepath.Join(cfg.DataDir, "checkpoints")
@@ -464,13 +465,11 @@ func (m *Manager) ClaimDeadline(id, token string) (time.Time, error) {
 func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.Conn, error) {
 	m.mu.Lock()
 	sb, ok := m.claimed[id]
-	if ok {
-		sb.LastActivity = time.Now() // a live preview stream is data-plane activity
-	}
 	m.mu.Unlock()
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
+	m.touch(sb) // a live preview stream is data-plane activity
 	sock, err := m.wakeResolved(ctx, sb)
 	if err != nil {
 		return nil, err

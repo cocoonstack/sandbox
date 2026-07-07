@@ -405,7 +405,8 @@ type GitBranch struct {
 
 func (GitBranch) Op() string { return "git_branch" }
 
-// Data carries one chunk of an upload stream (FsWrite/FsPush payloads).
+// LspStart spawns the flavor image's language server for Language,
+// rooted at Root.
 type LspStart struct {
 	Language string `json:"language"`
 	Root     string `json:"root,omitempty"`
@@ -413,18 +414,21 @@ type LspStart struct {
 
 func (LspStart) Op() string { return "lsp_start" }
 
+// LspRequest opens the JSON-RPC byte stream to a started language server.
 type LspRequest struct {
 	ServerID string `json:"server_id"`
 }
 
 func (LspRequest) Op() string { return "lsp_request" }
 
+// LspStop kills a started language server.
 type LspStop struct {
 	ServerID string `json:"server_id"`
 }
 
 func (LspStop) Op() string { return "lsp_stop" }
 
+// Data carries one chunk of an upload stream (FsWrite/FsPush payloads).
 type Data struct {
 	Data B64 `json:"data"`
 }
@@ -532,13 +536,14 @@ type SessionCreated struct {
 
 func (SessionCreated) RespType() string { return "session_created" }
 
-// Sessions answers SessionList.
+// LspStarted answers LspStart.
 type LspStarted struct {
 	ServerID string `json:"server_id"`
 }
 
 func (LspStarted) RespType() string { return "lsp_started" }
 
+// Sessions answers SessionList.
 type Sessions struct {
 	Sessions []string `json:"sessions"`
 }

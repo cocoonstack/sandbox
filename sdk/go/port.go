@@ -97,7 +97,13 @@ func (p *PortConn) drain(ctx context.Context, pw *io.PipeWriter) {
 // the connection's lifetime: canceling it (or Close) tears the relay down.
 // A port nobody listens on fails here with silkd's not_found error.
 func (s *Sandbox) DialPort(ctx context.Context, port uint16) (*PortConn, error) {
-	conn, done, err := s.call(ctx, &silkd.PortForward{Port: port})
+	return s.openStream(ctx, &silkd.PortForward{Port: port})
+}
+
+// openStream drives the call → Ready → attach dance shared by every verb
+// that turns the connection into a raw byte stream (DialPort, Lsp.Request).
+func (s *Sandbox) openStream(ctx context.Context, req silkd.Request) (*PortConn, error) {
+	conn, done, err := s.call(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -109,6 +115,16 @@ func (s *Sandbox) DialPort(ctx context.Context, port uint16) (*PortConn, error) 
 	p := &PortConn{conn: conn, stop: done, out: pr}
 	go p.drain(ctx, pw)
 	return p, nil
+}
+
+type previewRequest struct {
+	Token      string `json:"token"`
+	Port       uint16 `json:"port"`
+	TTLSeconds int    `json:"ttl_seconds,omitempty"`
+}
+
+type previewResponse struct {
+	URL string `json:"url"`
 }
 
 // PreviewURL mints a shareable URL that serves the sandbox's guest HTTP
@@ -132,16 +148,6 @@ func (s *Sandbox) PreviewURL(ctx context.Context, port uint16, ttl time.Duration
 		return "", fmt.Errorf("decode preview response: %w", err)
 	}
 	return pr.URL, nil
-}
-
-type previewRequest struct {
-	Token      string `json:"token"`
-	Port       uint16 `json:"port"`
-	TTLSeconds int    `json:"ttl_seconds,omitempty"`
-}
-
-type previewResponse struct {
-	URL string `json:"url"`
 }
 
 // ProxyPort listens on localAddr (e.g. "127.0.0.1:0") and pipes every

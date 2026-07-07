@@ -95,7 +95,7 @@ func main() {
 		previewSrv := &http.Server{Addr: cfg.PreviewListen, Handler: preview.Handler(), ReadHeaderTimeout: readHeaderTimeout}
 		go func() {
 			if err := previewSrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-				logger.Errorf(ctx, err, "preview server")
+				logger.Error(ctx, err, "preview server")
 			}
 		}()
 		context.AfterFunc(ctx, func() {
