@@ -1,9 +1,12 @@
 # PyPI publishing via Trusted Publishing (OIDC) — no tokens in secrets.
-# One-time setup per package on pypi.org: add this repo + workflow as a
-# trusted publisher for the project name. Then a tag push releases:
-#   sdk-python-v0.1.0    -> cocoonstack-sandbox
-#   sdk-openai-v0.1.0    -> cocoonstack-sandbox-openai
-#   sdk-langchain-v0.1.0 -> cocoonstack-sandbox-langchain
+# One-time setup per package on pypi.org (pending publisher): owner
+# cocoonstack, repo sandbox, workflow publish-pypi.yml, and the package's
+# environment below — PyPI keys pending publishers on (repo, workflow,
+# environment), so each package needs its own environment name:
+#   sdk-python-v0.1.0    -> cocoonstack-sandbox            env pypi-python
+#   sdk-openai-v0.1.0    -> cocoonstack-sandbox-openai     env pypi-openai
+#   sdk-langchain-v0.1.0 -> cocoonstack-sandbox-langchain  env pypi-langchain
+# The environments are created on first run; no GitHub-side setup needed.
 name: publish-pypi
 
 on:
@@ -19,6 +22,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: ${{ startsWith(github.ref_name, 'sdk-python-') && 'pypi-python' || startsWith(github.ref_name, 'sdk-openai-') && 'pypi-openai' || 'pypi-langchain' }}
     permissions:
       id-token: write # OIDC for PyPI Trusted Publishing
     steps:
