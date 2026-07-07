@@ -1,9 +1,7 @@
-// androidsmoke proves the android flavor on a live node: an egress-lane
-// xlarge claim boots the redroid guest, silkd answers over vsock, ps shows
-// the Android init tree, the VNC port speaks RFB through the relay (and a
-// preview URL serves the guest's HTTP port when the node has preview
-// configured), and a checkpoint branch of the booted guest boots too.
-// Sessions are deliberately not exercised: the guest has no bash.
+// androidsmoke is the M6-1 acceptance: claim (egress/xlarge) → Android
+// init tree over the relay → RFB on the VNC port → optional preview-URL
+// fetch → checkpoint/branch of the booted guest. No session step: the
+// guest ships no bash.
 package main
 
 import (
@@ -22,11 +20,9 @@ import (
 const (
 	vncPort   = 5900
 	rfbBanner = "RFB "
-	// The VNC app starts well after Android's init: give it its own window
-	// past the claim's readiness probe.
+	// The VNC app starts well after the claim's readiness probe.
 	vncWait = 3 * time.Minute
-	// Android userspace lives under /system/bin, which silkd's base PATH
-	// does not carry.
+	// silkd's base PATH does not carry the Android userspace.
 	shellPath = "PATH=/system/bin:/system/xbin:$PATH"
 )
 
@@ -93,7 +89,6 @@ func run(addr, token, template string) error {
 	return nil
 }
 
-// initTree asserts the Android init tree is up over the relay.
 func initTree(ctx context.Context, sb *sandbox.Sandbox) error {
 	out, err := sb.Exec(ctx, "/system/bin/sh", "-c", shellPath+"; ps -A")
 	if err != nil {
@@ -108,8 +103,6 @@ func initTree(ctx context.Context, sb *sandbox.Sandbox) error {
 	return nil
 }
 
-// rfbHandshake dials the VNC port through the relay until the server
-// answers its RFB greeting.
 func rfbHandshake(ctx context.Context, sb *sandbox.Sandbox) error {
 	deadline := time.Now().Add(vncWait)
 	for {
@@ -138,11 +131,8 @@ func dialBanner(ctx context.Context, sb *sandbox.Sandbox) (string, error) {
 	return string(buf), nil
 }
 
-// previewVNC mints a preview URL for the first guest port that answers
-// HTTP (droidVNC-NG's web server, when enabled) and fetches it through the
-// preview server. Best-effort: a node without preview configured, or a
-// lineage without the HTTP server, reports and moves on — RFB through the
-// relay is the hard acceptance.
+// previewVNC is best-effort: RFB through the relay is the hard
+// acceptance; no preview config or no guest web UI just reports and moves on.
 func previewVNC(ctx context.Context, sb *sandbox.Sandbox) {
 	port, ok := httpPort(ctx, sb)
 	if !ok {
