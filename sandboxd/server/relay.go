@@ -38,9 +38,8 @@ func (s *Server) CloseRelays() {
 
 func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	logger := log.WithFunc("server.handleAgent")
-	token, ok := bearerToken(r)
+	token, ok := sandboxToken(w, r)
 	if !ok {
-		writeErr(w, http.StatusUnauthorized, "missing bearer token")
 		return
 	}
 	// The cheap header check runs first: waking is expensive and consumes

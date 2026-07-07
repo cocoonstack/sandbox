@@ -230,11 +230,7 @@ func (s *Sandbox) call(ctx context.Context, req silkd.Request) (*silkd.Conn, fun
 // post sends a sandbox-scoped verb to the owning node (which holds the
 // claim); a non-nil body is JSON.
 func (s *Sandbox) post(ctx context.Context, verb string, body io.Reader) (*http.Response, error) {
-	return s.postWith(ctx, verb, body, s.token)
-}
-
-func (s *Sandbox) postWith(ctx context.Context, verb string, body io.Reader, bearer string) (*http.Response, error) {
-	return s.c.roundTrip(ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/"+verb, body, bearer)
+	return s.c.roundTrip(ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/"+verb, body, s.token)
 }
 
 // pumpStdin chunks the reader into stdin frames; Send's own locking keeps

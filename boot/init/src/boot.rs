@@ -78,11 +78,10 @@ impl Marks {
     }
 
     fn render(&self) -> String {
-        let mut out = String::new();
-        for (label, us) in &self.points {
-            out.push_str(&format!(" {label}@{us}us"));
-        }
-        out
+        self.points
+            .iter()
+            .map(|(label, us)| format!(" {label}@{us}us"))
+            .collect()
     }
 }
 

@@ -244,7 +244,6 @@ func (c *Client) roundTrip(ctx context.Context, method, addr, path string, body 
 	return c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
 }
 
-// encodeClaim marshals a claim body.
 func encodeClaim(claim claimRequest) ([]byte, error) {
 	body, err := json.Marshal(claim)
 	if err != nil {

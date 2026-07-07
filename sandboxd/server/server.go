@@ -369,9 +369,8 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 // Lookup scatter to relocate a handle whose owner address was lost). The
 // per-sandbox token both authorizes the query and confirms ownership.
 func (s *Server) handleOwner(w http.ResponseWriter, r *http.Request) {
-	token, ok := bearerToken(r)
+	token, ok := sandboxToken(w, r)
 	if !ok {
-		writeErr(w, http.StatusUnauthorized, "missing bearer token")
 		return
 	}
 	if _, err := s.mgr.AgentSocket(r.PathValue("id"), token); err != nil {

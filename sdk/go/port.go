@@ -70,7 +70,6 @@ func (p *PortConn) Close() error {
 // LocalAddr implements net.Conn; the relay has no meaningful socket address.
 func (p *PortConn) LocalAddr() net.Addr { return portAddr("sandbox-relay") }
 
-// RemoteAddr implements net.Conn.
 func (p *PortConn) RemoteAddr() net.Addr { return portAddr("sandbox-guest") }
 
 // SetDeadline implements net.Conn; deadlines are unsupported — bound the

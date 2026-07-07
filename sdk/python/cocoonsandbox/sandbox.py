@@ -89,9 +89,7 @@ class Sandbox:
 
     def stat(self, path: str) -> dict:
         """Returns {kind, size, mode, mtime_epoch_secs} for path."""
-        with self._dial() as conn:
-            conn.send("fs_stat", path=path)
-            return _expect(conn, "stat")["info"]
+        return self._call("fs_stat", "stat", path=path)["info"]
 
     def mkdir(self, path: str, parents: bool = False) -> None:
         self._done_rpc("fs_mkdir", path=path, parents=parents or None)
@@ -134,18 +132,15 @@ class Sandbox:
                        depth=depth or None, auth=auth or None)
 
     def git_status(self, path: str) -> dict:
-        with self._dial() as conn:
-            conn.send("git_status", path=path)
-            return _expect(conn, "git_status_result")
+        return self._call("git_status", "git_status_result", path=path)
 
     def git_add(self, path: str, files: list[str]) -> None:
         self._done_rpc("git_add", path=path, files=files)
 
     def git_commit(self, path: str, message: str, author: str) -> str:
         """Commits staged changes; returns the commit hash."""
-        with self._dial() as conn:
-            conn.send("git_commit", path=path, message=message, author=author)
-            return _expect(conn, "git_commit_result").get("hash", "")
+        return self._call("git_commit", "git_commit_result",
+                          path=path, message=message, author=author).get("hash", "")
 
     def git_push(self, path: str, auth: str = "") -> None:
         self._done_rpc("git_push", path=path, auth=auth or None)
@@ -154,9 +149,7 @@ class Sandbox:
         self._done_rpc("git_pull", path=path, auth=auth or None)
 
     def git_branches(self, path: str) -> dict:
-        with self._dial() as conn:
-            conn.send("git_branch", path=path, action="list")
-            return _expect(conn, "git_branches")
+        return self._call("git_branch", "git_branches", path=path, action="list")
 
     def git_checkout(self, path: str, name: str) -> None:
         self._done_rpc("git_branch", path=path, action="checkout", name=name)
@@ -176,15 +169,11 @@ class Sandbox:
     def session(self, cwd: str = "", env: dict | None = None) -> Session:
         """Creates a persistent shell: cd/export/aliases survive across exec
         calls routed into it."""
-        with self._dial() as conn:
-            conn.send("session_create", cwd=cwd or None, env=env)
-            created = _expect(conn, "session_created")
+        created = self._call("session_create", "session_created", cwd=cwd or None, env=env)
         return Session(self, created["id"])
 
     def sessions(self) -> list[str]:
-        with self._dial() as conn:
-            conn.send("session_list")
-            return _expect(conn, "sessions").get("sessions") or []
+        return self._call("session_list", "sessions").get("sessions") or []
 
     def fork(self, count: int, ttl_seconds: int = 0) -> list[Sandbox]:
         """Clones this sandbox into count independent children carrying its
@@ -222,9 +211,7 @@ class Sandbox:
         """Spawns the language server the flavor image provides for language;
         the base image ships none, so it raises SilkdError(kind="not_found").
         The returned handle streams JSON-RPC over the relay."""
-        with self._dial() as conn:
-            conn.send("lsp_start", language=language, root=root or None)
-            started = _expect(conn, "lsp_started")
+        started = self._call("lsp_start", "lsp_started", language=language, root=root or None)
         return Lsp(self, started["server_id"])
 
     def open_pty(self, cols: int = 80, rows: int = 24, cwd: str = "",
@@ -321,10 +308,13 @@ class Sandbox:
         except Exception:
             guest.close()
 
-    def _done_rpc(self, op: str, **fields) -> None:
+    def _call(self, op: str, expect: str, **fields) -> dict:
         with self._dial() as conn:
             conn.send(op, **fields)
-            _expect(conn, "done")
+            return _expect(conn, expect)
+
+    def _done_rpc(self, op: str, **fields) -> None:
+        self._call(op, "done", **fields)
 
 class Session:
     """A persistent shell inside the sandbox, addressed by id."""

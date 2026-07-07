@@ -70,11 +70,8 @@ impl State {
                     }
                     Ok(())
                 } else {
-                    let (tx, rx) = mpsc::channel(16);
-                    let feeder = tokio::spawn(feed_client(reader, tx));
-                    let res = exec::run(&self.table, now_secs(), e, rx, &mut writer).await;
-                    feeder.abort();
-                    res
+                    let (rx, _feeder) = spawn_feeder(reader);
+                    exec::run(&self.table, now_secs(), e, rx, &mut writer).await
                 }
             }
             Request::SessionCreate { id, cwd, env } => {
@@ -131,11 +128,8 @@ impl State {
                 watch::watch(&mut reader, &mut writer, path, recursive).await
             }
             Request::PtyOpen(req) => {
-                let (tx, rx) = mpsc::channel(16);
-                let feeder = tokio::spawn(feed_client(reader, tx));
-                let res = pty::open(&self.table, now_secs(), req, rx, &mut writer).await;
-                feeder.abort();
-                res
+                let (rx, _feeder) = spawn_feeder(reader);
+                pty::open(&self.table, now_secs(), req, rx, &mut writer).await
             }
             Request::PtyResize { pid, cols, rows } => {
                 pty::resize(&self.table, &mut writer, pid, cols, rows).await
@@ -146,19 +140,13 @@ impl State {
                     .await
             }
             Request::LspRequest { server_id } => {
-                let (tx, rx) = mpsc::channel(16);
-                let feeder = tokio::spawn(feed_client(reader, tx));
-                let res = self.lsp.request(rx, &mut writer, &server_id).await;
-                feeder.abort();
-                res
+                let (rx, _feeder) = spawn_feeder(reader);
+                self.lsp.request(rx, &mut writer, &server_id).await
             }
             Request::LspStop { server_id } => self.lsp.stop(&mut writer, &server_id).await,
             Request::PortForward { port } => {
-                let (tx, rx) = mpsc::channel(16);
-                let feeder = tokio::spawn(feed_client(reader, tx));
-                let res = forward::run(port, rx, &mut writer).await;
-                feeder.abort();
-                res
+                let (rx, _feeder) = spawn_feeder(reader);
+                forward::run(port, rx, &mut writer).await
             }
             Request::GitClone {
                 url,
@@ -289,6 +277,24 @@ impl Default for State {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Aborts the spawned feeder on drop, so no streaming arm can leak the task
+/// (and the reader half it owns) on any return path.
+struct Feeder(tokio::task::JoinHandle<()>);
+
+impl Drop for Feeder {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+fn spawn_feeder<R>(reader: R) -> (mpsc::Receiver<Request>, Feeder)
+where
+    R: AsyncBufRead + Unpin + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel(16);
+    (rx, Feeder(tokio::spawn(feed_client(reader, tx))))
 }
 
 async fn write_chunk<W: AsyncWrite + Unpin>(w: &mut W, chunk: Chunk) -> std::io::Result<()> {

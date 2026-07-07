@@ -20,13 +20,12 @@ class Template:
     def new(self, ttl_seconds: int = 0):
         """Claims a sandbox cloned from the template, on the template's
         node; the key axes are the template's own."""
-        claim = {"template": self.name, "no_redirect": True}
-        if self.net:
-            claim["net"] = self.net
-        if self.size:
-            claim["size"] = self.size
-        if ttl_seconds:
-            claim["ttl_seconds"] = ttl_seconds
+        # Local import: a top-level one would close the client → sandbox →
+        # template cycle.
+        from .client import _claim_body
+
+        claim = _claim_body(self.name, self.net, self.size, ttl_seconds)
+        claim["no_redirect"] = True
         reply = self._client._post_json(self._addr, "/v1/claim", claim, "claim")
         return self._client._handle_from(self._addr, reply)
 

@@ -118,6 +118,12 @@ type pool struct {
 	refilling int
 }
 
+func (p *pool) applySpec(spec config.PoolSpec) {
+	p.floor = spec.Warm
+	p.warmMax = spec.WarmMax
+	p.idle = time.Duration(spec.IdleHibernateSeconds) * time.Second
+}
+
 // Manager owns the node's pools, claims, and their persistence.
 type Manager struct {
 	eng     Engine
@@ -198,10 +204,9 @@ func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
 	m.idleDefault = time.Duration(cfg.IdleHibernateSeconds) * time.Second
 	m.idleEnabled = m.idleDefault > 0
 	for _, spec := range cfg.Pools {
-		m.pools[spec.PoolKey] = &pool{
-			key: spec.PoolKey, floor: spec.Warm, warmMax: spec.WarmMax,
-			idle: time.Duration(spec.IdleHibernateSeconds) * time.Second,
-		}
+		p := &pool{key: spec.PoolKey}
+		p.applySpec(spec)
+		m.pools[spec.PoolKey] = p
 		if spec.IdleHibernateSeconds > 0 {
 			m.idleEnabled = true
 		}
@@ -352,9 +357,7 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 			p.warmMax = 0
 			p.idle = 0
 		} else {
-			p.floor = spec.Warm
-			p.warmMax = spec.WarmMax
-			p.idle = time.Duration(spec.IdleHibernateSeconds) * time.Second
+			p.applySpec(spec)
 		}
 		target := p.effectiveTarget(now)
 		for len(p.warm) > target {
@@ -370,12 +373,8 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 		if p := m.pools[key]; p != nil {
 			continue
 		}
-		p := &pool{
-			key:     key,
-			floor:   spec.Warm,
-			warmMax: spec.WarmMax,
-			idle:    time.Duration(spec.IdleHibernateSeconds) * time.Second,
-		}
+		p := &pool{key: key}
+		p.applySpec(spec)
 		if dir, ok := m.goldenOnDisk(key.Hash()); ok {
 			p.goldenDir = dir
 		}

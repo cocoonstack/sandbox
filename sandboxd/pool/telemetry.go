@@ -100,7 +100,7 @@ func (m *Manager) recordAudit(ctx context.Context, id string, frame auditFrame) 
 		auditFrame
 	}{time.Now(), id, frame}
 	if err := m.audit.append(event); err != nil {
-		log.WithFunc("pool.recordAudit").Errorf(ctx, err, "append audit event")
+		log.WithFunc("pool.recordAudit").Error(ctx, err, "append audit event")
 	}
 }
 
