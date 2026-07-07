@@ -97,7 +97,10 @@ lives in its node's checkpoint store. On the default local-disk backend
 that means **only on its owner node**, and the mesh gossips each node's
 template set alongside its warm counts; on a shared store (a FUSE-mounted
 `checkpoint_dir` or the s3 backend) every node resolves every template
-directly, so the gossip routing simply never fires. Name-based calls route cluster-wide:
+directly, so the gossip routing simply never fires. An export carries only
+the sandbox's writable state — the base image blobs resolve from the
+claiming node's local store, pulled by digest when missing (`vm clone
+--pull`). Name-based calls route cluster-wide:
 
 - `Client.New("tpl")` at any node redirects to the template's owner when the
   entry node has no golden for the key (warm peers still win first).

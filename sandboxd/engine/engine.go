@@ -239,7 +239,10 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 }
 
 func (e *Engine) cloneArgs(fromDir, name string, key types.PoolKey) []string {
-	args := []string{"vm", "clone", "--from-dir", fromDir, "--name", name}
+	// --pull: a checkpoint/template export carries only COW + memory; on a
+	// cross-node claim the base image blobs resolve locally or are pulled
+	// by digest.
+	args := []string{"vm", "clone", "--from-dir", fromDir, "--name", name, "--pull"}
 	return append(args, e.netArgs(key, false)...)
 }
 
