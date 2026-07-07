@@ -136,7 +136,11 @@ func (m *Manager) TemplateHashes() []string {
 }
 
 // HasGolden reports whether this node can provision the key without a cold
-// boot — a configured pool golden or a promoted template in the store.
+// boot — a configured pool golden or a promoted template in the store. The
+// tplSet answers for templates this node promoted or listed at startup, so
+// the owning node's redirect check costs no store read (which doubles the
+// meta I/O ahead of resolveGolden's own Fetch); only a shared-store
+// template promoted elsewhere after startup falls through to the backend.
 func (m *Manager) HasGolden(ctx context.Context, key types.PoolKey) bool {
 	m.mu.Lock()
 	pooled := m.pools[key] != nil && m.pools[key].goldenDir != ""
@@ -144,7 +148,14 @@ func (m *Manager) HasGolden(ctx context.Context, key types.PoolKey) bool {
 	if pooled {
 		return true
 	}
-	_, err := m.tpls.ReadMeta(ctx, store.TemplateID(key.Hash()))
+	id := store.TemplateID(key.Hash())
+	m.tplMu.Lock()
+	_, cached := m.tplSet[id]
+	m.tplMu.Unlock()
+	if cached {
+		return true
+	}
+	_, err := m.tpls.ReadMeta(ctx, id)
 	return err == nil
 }
 
