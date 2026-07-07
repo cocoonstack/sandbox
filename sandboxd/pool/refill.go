@@ -207,12 +207,20 @@ func (m *Manager) cloneBatch(ctx context.Context, key types.PoolKey, dir string,
 
 // probeReady resolves a VM's vsock socket and waits until its silkd answers,
 // returning the socket — the claim-ready gate after create, clone, or restore.
+// One budget covers both waits: cocoon reports the vsock socket only once the
+// VMM reaches running, and a heavy image (android's 8G alloc) can widen the
+// created→running window past the first List.
 func (m *Manager) probeReady(ctx context.Context, name string, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
 	sock, err := m.vsockOf(ctx, name)
+	for err != nil && time.Now().Before(deadline) && ctx.Err() == nil {
+		time.Sleep(vsockPollInterval)
+		sock, err = m.vsockOf(ctx, name)
+	}
 	if err != nil {
 		return "", err
 	}
-	if err := m.eng.Probe(ctx, sock, timeout); err != nil {
+	if err := m.eng.Probe(ctx, sock, time.Until(deadline)); err != nil {
 		return "", err
 	}
 	return sock, nil

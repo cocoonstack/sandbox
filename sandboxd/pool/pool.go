@@ -35,6 +35,7 @@ const (
 	buildRetryDelay      = 30 * time.Second
 	claimProbeTimeout    = 15 * time.Second
 	coldProbeTimeout     = 90 * time.Second
+	vsockPollInterval    = 100 * time.Millisecond
 	maxConcurrentRefills = 4
 	defaultTTL           = 5 * time.Minute
 	maxTTL               = 24 * time.Hour

@@ -72,8 +72,8 @@ func TestClaimMissClonesFromGolden(t *testing.T) {
 	if want := "/vsock/" + sb.VMName; sb.VsockSocket != want {
 		t.Errorf("vsock %q, want %q", sb.VsockSocket, want)
 	}
-	if got := eng.probeTimeouts[0]; got != claimProbeTimeout {
-		t.Errorf("probe timeout %v, want %v", got, claimProbeTimeout)
+	if got := eng.probeTimeouts[0]; got > claimProbeTimeout || got < claimProbeTimeout-time.Second {
+		t.Errorf("probe timeout %v, want ~%v", got, claimProbeTimeout)
 	}
 }
 
@@ -87,8 +87,8 @@ func TestClaimUnpooledKeyColdBoots(t *testing.T) {
 	if len(eng.colds) != 1 || len(eng.clones) != 0 {
 		t.Fatalf("got clones=%v colds=%v, want one cold boot", eng.clones, eng.colds)
 	}
-	if got := eng.probeTimeouts[0]; got != coldProbeTimeout {
-		t.Errorf("probe timeout %v, want %v", got, coldProbeTimeout)
+	if got := eng.probeTimeouts[0]; got > coldProbeTimeout || got < coldProbeTimeout-time.Second {
+		t.Errorf("probe timeout %v, want ~%v", got, coldProbeTimeout)
 	}
 }
 
@@ -460,6 +460,20 @@ func newTestManagerAt(t *testing.T, eng *fakeEngine, dataDir string, pools ...co
 	return m
 }
 
+func TestProbeReadyWaitsForVsock(t *testing.T) {
+	eng := newFakeEngine()
+	eng.vsockLateN = 2 // cocoon reports the socket only once the VMM runs
+	m := newTestManager(t, eng)
+
+	sb, err := claimAny(t.Context(), m, testKey, 0)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if sb.VsockSocket == "" {
+		t.Error("claim returned an empty vsock socket")
+	}
+}
+
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -487,6 +501,7 @@ type fakeEngine struct {
 	hibernates, restores, snapRemoves []string
 	snapSaves, exports, snapshots     []string
 	stopped                           map[string]bool
+	vsockLateN                        int // List calls that report no socket yet
 
 	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr, snapSaveErr error
 	cloneFailNth                                                          int // 1-based Clone call to fail; 0 = never
@@ -615,6 +630,10 @@ func (f *fakeEngine) List(_ context.Context, filters ...string) ([]types.VMRecor
 	for name, sock := range f.vms {
 		if len(filters) > 0 && !slices.Contains(filters, name) {
 			continue
+		}
+		if f.vsockLateN > 0 {
+			f.vsockLateN--
+			sock = ""
 		}
 		state := vmStateRunning
 		if f.stopped[name] {
