@@ -43,7 +43,7 @@ func TestForkFromRunning(t *testing.T) {
 			t.Errorf("child deadline off requested TTL by %v", d)
 		}
 	}
-	if got, _ := newStore(m.dataDir).load(); len(got) != 4 {
+	if got, _ := newClaimStore(m.dataDir).load(); len(got) != 4 {
 		t.Errorf("persisted %d claims, want parent + 3 children", len(got))
 	}
 	leftovers, _ := filepath.Glob(filepath.Join(m.dataDir, "fork-*"))
@@ -123,7 +123,7 @@ func TestForkAllOrNothing(t *testing.T) {
 	if _, claimed, _ := m.Info(); claimed != 1 {
 		t.Errorf("claimed=%d, want only the parent", claimed)
 	}
-	if got, _ := newStore(m.dataDir).load(); len(got) != 1 {
+	if got, _ := newClaimStore(m.dataDir).load(); len(got) != 1 {
 		t.Errorf("persisted %d claims, want only the parent", len(got))
 	}
 	eng.mu.Lock()

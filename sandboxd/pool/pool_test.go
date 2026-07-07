@@ -39,7 +39,7 @@ func TestClaimWarmHitTransfersOwnership(t *testing.T) {
 	if n := len(eng.clones) + len(eng.colds); n != 0 {
 		t.Errorf("warm hit ran %d VM operations, want 0", n)
 	}
-	if got, _ := newStore(m.dataDir).load(); len(got) != 1 {
+	if got, _ := newClaimStore(m.dataDir).load(); len(got) != 1 {
 		t.Errorf("claim not persisted: %d entries", len(got))
 	}
 }
@@ -171,7 +171,7 @@ func TestReleaseValidatesToken(t *testing.T) {
 	if !slices.Contains(eng.removes, sb.VMName) {
 		t.Errorf("removes=%v, want %s", eng.removes, sb.VMName)
 	}
-	if got, _ := newStore(m.dataDir).load(); len(got) != 0 {
+	if got, _ := newClaimStore(m.dataDir).load(); len(got) != 0 {
 		t.Errorf("release not persisted: %d entries", len(got))
 	}
 }
@@ -207,7 +207,7 @@ func TestReapDestroysExpiredClaims(t *testing.T) {
 	if _, n, _ := m.Info(); n != 0 {
 		t.Errorf("claimed=%d, want 0", n)
 	}
-	if got, _ := newStore(m.dataDir).load(); len(got) != 0 {
+	if got, _ := newClaimStore(m.dataDir).load(); len(got) != 0 {
 		t.Errorf("reap not persisted: %d entries", len(got))
 	}
 }
@@ -222,7 +222,7 @@ func TestReconcile(t *testing.T) {
 		"sb_live": {ID: "sb_live", VMName: "sbx-live-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/live-old"},
 		"sb_dead": {ID: "sb_dead", VMName: "sbx-dead-1", Key: testKey, Token: "tok"},
 	}
-	if err := newStore(dataDir).save(claims); err != nil {
+	if err := newClaimStore(dataDir).save(claims); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	m := newTestManagerAt(t, eng, dataDir, config.PoolSpec{PoolKey: testKey, Warm: 1})
@@ -421,7 +421,7 @@ func mustClaim(t *testing.T, m *Manager, key types.PoolKey) *types.Sandbox {
 
 func newTestManagerAt(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
 	t.Helper()
-	m, err := NewManager(&config.Config{DataDir: dataDir, Pools: pools}, eng)
+	m, err := NewManager(t.Context(), &config.Config{DataDir: dataDir, Pools: pools}, eng)
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}

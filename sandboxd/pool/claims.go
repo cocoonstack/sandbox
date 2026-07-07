@@ -14,15 +14,15 @@ import (
 // store persists claimed sandboxes across daemon restarts. Warm pool VMs are
 // deliberately not persisted: they are cheap to rebuild and unsafe to trust
 // after an unsupervised gap.
-type store struct {
+type claimStore struct {
 	path string
 }
 
-func newStore(dataDir string) *store {
-	return &store{path: filepath.Join(dataDir, "claims.json")}
+func newClaimStore(dataDir string) *claimStore {
+	return &claimStore{path: filepath.Join(dataDir, "claims.json")}
 }
 
-func (s *store) load() (map[string]*types.Sandbox, error) {
+func (s *claimStore) load() (map[string]*types.Sandbox, error) {
 	raw, err := os.ReadFile(s.path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return map[string]*types.Sandbox{}, nil
@@ -37,7 +37,7 @@ func (s *store) load() (map[string]*types.Sandbox, error) {
 	return claims, nil
 }
 
-func (s *store) save(claims map[string]*types.Sandbox) error {
+func (s *claimStore) save(claims map[string]*types.Sandbox) error {
 	raw, err := json.Marshal(claims)
 	if err != nil {
 		return fmt.Errorf("encode claims: %w", err)

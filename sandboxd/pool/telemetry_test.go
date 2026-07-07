@@ -111,7 +111,7 @@ func TestSandboxesIndexOmitsTokens(t *testing.T) {
 func TestPreviewDialWritesAuditEvent(t *testing.T) {
 	eng := newFakeEngine()
 	dir := t.TempDir()
-	m, err := NewManager(&config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}, eng)
+	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}, eng)
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}

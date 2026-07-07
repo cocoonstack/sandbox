@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -48,6 +49,12 @@ func (s PoolSpec) ValidateLimits() error {
 		return fmt.Errorf("idle_hibernate_seconds must not be negative")
 	}
 	return nil
+}
+
+// StoreConfig selects a checkpoint backend.
+type StoreConfig struct {
+	Kind string     `json:"kind"`
+	S3   *s3.Config `json:"s3,omitempty"`
 }
 
 // MeshConfig configures cluster membership. Two v1 constraints: all nodes
@@ -101,6 +108,15 @@ type Config struct {
 	// object storage, NFS) and every node sharing the mount resolves every
 	// checkpoint — the path's filesystem is the operator's choice.
 	CheckpointDir string `json:"checkpoint_dir,omitempty"`
+
+	// CheckpointStore selects the checkpoint backend; absent means the
+	// dir backend at CheckpointDir. Kind "s3" stores checkpoints in object
+	// storage (credentials from the AWS chain, never this file).
+	CheckpointStore *StoreConfig `json:"checkpoint_store,omitempty"`
+
+	// CheckpointTTLHours ages out checkpoints (0 = keep forever); the
+	// sweep runs hourly and on startup.
+	CheckpointTTLHours int `json:"checkpoint_ttl_hours,omitempty"`
 
 	// MaxClaims caps live claims node-wide; 0 means unlimited. Claim,
 	// fork, and checkpoint-branch requests beyond it answer 429.
@@ -185,6 +201,20 @@ func (c *Config) validate() error {
 	}
 	if c.IdleHibernateSeconds < 0 {
 		return fmt.Errorf("idle_hibernate_seconds must not be negative, got %d", c.IdleHibernateSeconds)
+	}
+	if cs := c.CheckpointStore; cs != nil {
+		switch cs.Kind {
+		case "", "dir":
+		case "s3":
+			if cs.S3 == nil || cs.S3.Bucket == "" {
+				return fmt.Errorf("checkpoint_store s3 needs a bucket")
+			}
+		default:
+			return fmt.Errorf("checkpoint_store kind %q: want dir or s3", cs.Kind)
+		}
+	}
+	if c.CheckpointTTLHours < 0 {
+		return fmt.Errorf("checkpoint_ttl_hours must not be negative")
 	}
 	for _, p := range c.Pools {
 		if err := p.Validate(); err != nil {

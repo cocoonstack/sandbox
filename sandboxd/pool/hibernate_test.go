@@ -27,7 +27,7 @@ func TestHibernateWakeCycle(t *testing.T) {
 	if _, _, hibernated := m.Info(); hibernated != 1 {
 		t.Errorf("hibernated count %d, want 1", hibernated)
 	}
-	if got, _ := newStore(m.dataDir).load(); got[sb.ID] == nil || got[sb.ID].HibernateSnap == "" {
+	if got, _ := newClaimStore(m.dataDir).load(); got[sb.ID] == nil || got[sb.ID].HibernateSnap == "" {
 		t.Error("hibernation flag not persisted")
 	}
 	if !strings.HasPrefix(eng.hibernates[0], hibernatePrefix) {
@@ -141,7 +141,7 @@ func TestReconcileAdoptsHibernated(t *testing.T) {
 			HibernateSnap: hibernatePrefix + "hibernated-1",
 		},
 	}
-	if err := newStore(dataDir).save(claims); err != nil {
+	if err := newClaimStore(dataDir).save(claims); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	m := newTestManagerAt(t, eng, dataDir, config.PoolSpec{PoolKey: testKey, Warm: 1})

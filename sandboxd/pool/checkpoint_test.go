@@ -1,12 +1,15 @@
 package pool
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 func TestCheckpointThenBranch(t *testing.T) {
@@ -36,12 +39,12 @@ func TestCheckpointThenBranch(t *testing.T) {
 		t.Errorf("branch %+v, want fresh id, source key, lineage to %s", branch, ckpt.ID)
 	}
 
-	ckpts, err := m.Checkpoints()
+	ckpts, err := m.Checkpoints(t.Context())
 	if err != nil || len(ckpts) != 1 || ckpts[0].ID != ckpt.ID {
 		t.Errorf("Checkpoints() = %+v, %v; want the one record", ckpts, err)
 	}
 
-	if err := m.DeleteCheckpoint(ckpt.ID); err != nil {
+	if err := m.DeleteCheckpoint(t.Context(), ckpt.ID); err != nil {
 		t.Fatalf("DeleteCheckpoint: %v", err)
 	}
 	if _, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, time.Hour); !errors.Is(err, ErrUnknownCheckpoint) {
@@ -64,7 +67,7 @@ func TestCheckpointValidation(t *testing.T) {
 		if _, err := m.ClaimCheckpoint(t.Context(), id, time.Hour); !errors.Is(err, ErrUnknownCheckpoint) {
 			t.Errorf("claim %q: %v, want ErrUnknownCheckpoint", id, err)
 		}
-		if err := m.DeleteCheckpoint(id); !errors.Is(err, ErrUnknownCheckpoint) {
+		if err := m.DeleteCheckpoint(t.Context(), id); !errors.Is(err, ErrUnknownCheckpoint) {
 			t.Errorf("delete %q: %v, want ErrUnknownCheckpoint", id, err)
 		}
 	}
@@ -73,7 +76,7 @@ func TestCheckpointValidation(t *testing.T) {
 func TestReconcileSweepsCheckpointStaging(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	stale := filepath.Join(m.ckpts.(*dirCheckpointStore).root, "ck_00ff00ff00ff00ff-1234.tmp")
+	stale := filepath.Join(m.dataDir, "checkpoints", "ck_00ff00ff00ff00ff-1234.tmp")
 	if err := os.MkdirAll(stale, 0o750); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -83,7 +86,33 @@ func TestReconcileSweepsCheckpointStaging(t *testing.T) {
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Errorf("staging survived reconcile: %v", err)
 	}
-	if ckpts, err := m.Checkpoints(); err != nil || len(ckpts) != 0 {
+	if ckpts, err := m.Checkpoints(t.Context()); err != nil || len(ckpts) != 0 {
 		t.Errorf("Checkpoints() = %+v, %v; want none", ckpts, err)
+	}
+}
+
+func TestRetentionSweepsExpiredCheckpoints(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	m.ckptTTL = time.Hour
+	plant := func(id string, age time.Duration) {
+		t.Helper()
+		dir := filepath.Join(m.dataDir, "checkpoints", id)
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		meta, _ := json.Marshal(types.Checkpoint{ID: id, CreatedAt: time.Now().Add(-age)})
+		if err := os.WriteFile(filepath.Join(dir, "meta.json"), meta, 0o600); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	plant("ck_000000000000000a", 2*time.Hour) // expired
+	plant("ck_000000000000000b", time.Minute) // fresh
+
+	m.sweepExpiredCheckpoints(t.Context())
+
+	ckpts, err := m.Checkpoints(t.Context())
+	if err != nil || len(ckpts) != 1 || ckpts[0].ID != "ck_000000000000000b" {
+		t.Fatalf("after sweep: %+v, %v — want only the fresh checkpoint", ckpts, err)
 	}
 }

@@ -217,7 +217,7 @@ func startStack(t *testing.T, apiToken string, pools ...config.PoolSpec) *stack 
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	eng := newFakeEngine(dir)
-	mgr, err := pool.NewManager(&config.Config{DataDir: dir, Pools: pools}, eng)
+	mgr, err := pool.NewManager(t.Context(), &config.Config{DataDir: dir, Pools: pools}, eng)
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}

@@ -54,7 +54,7 @@ func main() {
 		logger.Fatalf(ctx, err, "load config")
 	}
 	eng := engine.New(cfg.CocoonBin, cfg.Bridge, cfg.Network)
-	mgr, err := pool.NewManager(cfg, eng)
+	mgr, err := pool.NewManager(ctx, cfg, eng)
 	if err != nil {
 		logger.Fatalf(ctx, err, "init pool manager")
 	}

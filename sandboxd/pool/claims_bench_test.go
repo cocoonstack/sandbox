@@ -15,7 +15,7 @@ import (
 func BenchmarkStoreSaveScaling(b *testing.B) {
 	for _, n := range []int{10, 100, 1000} {
 		b.Run(fmt.Sprintf("claims=%d", n), func(b *testing.B) {
-			st := newStore(b.TempDir())
+			st := newClaimStore(b.TempDir())
 			claims := make(map[string]*types.Sandbox, n)
 			for i := range n {
 				id := fmt.Sprintf("sb_%016x", i)

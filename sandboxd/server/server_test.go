@@ -633,11 +633,11 @@ func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, _ time.D
 	return f.claimCheckpoint(ckptID)
 }
 
-func (f *fakeManager) Checkpoints() ([]types.Checkpoint, error) {
+func (f *fakeManager) Checkpoints(context.Context) ([]types.Checkpoint, error) {
 	return f.checkpoints, nil
 }
 
-func (f *fakeManager) DeleteCheckpoint(ckptID string) error {
+func (f *fakeManager) DeleteCheckpoint(_ context.Context, ckptID string) error {
 	if f.deleteCheckpoint == nil {
 		return pool.ErrUnknownCheckpoint
 	}

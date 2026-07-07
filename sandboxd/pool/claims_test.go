@@ -11,7 +11,7 @@ import (
 )
 
 func TestStoreRoundTrip(t *testing.T) {
-	s := newStore(t.TempDir())
+	s := newClaimStore(t.TempDir())
 	claims := map[string]*types.Sandbox{
 		"sb_a": {ID: "sb_a", VMName: "sbx-1", Key: testKey, Token: "t1", Deadline: time.Now().Add(time.Minute).UTC(), VsockSocket: "/v/1"},
 		"sb_b": {ID: "sb_b", VMName: "sbx-2", Key: testKey, Token: "t2"},
@@ -30,7 +30,7 @@ func TestStoreRoundTrip(t *testing.T) {
 }
 
 func TestStoreLoadMissingFile(t *testing.T) {
-	got, err := newStore(t.TempDir()).load()
+	got, err := newClaimStore(t.TempDir()).load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestStoreLoadCorruptFile(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	if _, err := newStore(dir).load(); err == nil {
+	if _, err := newClaimStore(dir).load(); err == nil {
 		t.Error("load succeeded on corrupt file")
 	}
 }

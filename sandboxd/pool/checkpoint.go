@@ -7,22 +7,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"time"
 
+	"github.com/projecteru2/core/log"
+
+	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
-
-const checkpointExport = "export"
 
 var (
 	ErrBadName           = errors.New("invalid checkpoint name")
 	ErrUnknownCheckpoint = errors.New("unknown checkpoint")
-
-	// checkpointIDRe pins the id shape wherever an id reaches the store,
-	// so a crafted id can never escape the checkpoint root.
-	checkpointIDRe = regexp.MustCompile(`^ck_[0-9a-f]{16}$`)
 )
 
 // Checkpoint captures a claimed sandbox's full state under a fresh id and
@@ -53,17 +49,17 @@ func (m *Manager) Checkpoint(ctx context.Context, id, token, name string) (types
 		return types.Checkpoint{}, fmt.Errorf("stage checkpoint: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
-	if err = m.exportSource(ctx, sb, filepath.Join(staging, checkpointExport)); err != nil {
+	if err = m.exportSource(ctx, sb, filepath.Join(staging, store.ExportDir)); err != nil {
 		return types.Checkpoint{}, fmt.Errorf("checkpoint %s: %w", id, err)
 	}
 	meta, err := json.Marshal(ckpt)
 	if err != nil {
 		return types.Checkpoint{}, fmt.Errorf("encode checkpoint meta: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(staging, "meta.json"), meta, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); err != nil {
 		return types.Checkpoint{}, fmt.Errorf("write checkpoint meta: %w", err)
 	}
-	if err := m.ckpts.Publish(staging, ckpt.ID); err != nil {
+	if err := m.ckpts.Publish(ctx, staging, ckpt.ID); err != nil {
 		return types.Checkpoint{}, fmt.Errorf("commit checkpoint: %w", err)
 	}
 	m.counters.checkpoints.Add(1)
@@ -75,11 +71,11 @@ func (m *Manager) Checkpoint(ctx context.Context, id, token, name string) (types
 // branch. The checkpoint's recorded key applies (snapshots pin size and
 // lane); the checkpoint itself is read-only and reusable.
 func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration) (*types.Sandbox, error) {
-	ckpt, err := m.loadCheckpoint(ckptID)
+	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	if err != nil {
 		return nil, err
 	}
-	dir, release, err := m.ckpts.Fetch(ckpt.ID)
+	dir, release, err := m.ckpts.Fetch(ctx, ckpt.ID)
 	if err != nil {
 		return nil, fmt.Errorf("fetch checkpoint: %w", err)
 	}
@@ -98,8 +94,8 @@ func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.D
 
 // Checkpoints lists the store's checkpoints, newest first — on a shared
 // checkpoint_dir (a FUSE mount), that is the cluster's set, not one node's.
-func (m *Manager) Checkpoints() ([]types.Checkpoint, error) {
-	metas, err := m.ckpts.Metas()
+func (m *Manager) Checkpoints(ctx context.Context) ([]types.Checkpoint, error) {
+	metas, err := m.ckpts.Metas(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list checkpoints: %w", err)
 	}
@@ -115,21 +111,41 @@ func (m *Manager) Checkpoints() ([]types.Checkpoint, error) {
 }
 
 // DeleteCheckpoint removes a checkpoint's snapshot and record.
-func (m *Manager) DeleteCheckpoint(ckptID string) error {
-	if _, err := m.loadCheckpoint(ckptID); err != nil {
+func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID string) error {
+	if _, err := m.loadCheckpoint(ctx, ckptID); err != nil {
 		return err
 	}
-	if err := m.ckpts.Delete(ckptID); err != nil {
+	if err := m.ckpts.Delete(ctx, ckptID); err != nil {
 		return fmt.Errorf("delete checkpoint: %w", err)
 	}
 	return nil
 }
 
-func (m *Manager) loadCheckpoint(ckptID string) (types.Checkpoint, error) {
-	if !checkpointIDRe.MatchString(ckptID) {
+// sweepExpiredCheckpoints ages out checkpoints older than the configured
+// TTL; explicit deletes never wait for it.
+func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
+	logger := log.WithFunc("pool.sweepExpiredCheckpoints")
+	ckpts, err := m.Checkpoints(ctx)
+	if err != nil {
+		logger.Error(ctx, err, "list for retention")
+		return
+	}
+	cutoff := time.Now().Add(-m.ckptTTL)
+	for _, ckpt := range ckpts {
+		if ckpt.CreatedAt.After(cutoff) {
+			continue
+		}
+		if err := m.ckpts.Delete(ctx, ckpt.ID); err != nil {
+			logger.Errorf(ctx, err, "expire %s", ckpt.ID)
+		}
+	}
+}
+
+func (m *Manager) loadCheckpoint(ctx context.Context, ckptID string) (types.Checkpoint, error) {
+	if !store.IDRe.MatchString(ckptID) {
 		return types.Checkpoint{}, ErrUnknownCheckpoint
 	}
-	raw, err := m.ckpts.ReadMeta(ckptID)
+	raw, err := m.ckpts.ReadMeta(ctx, ckptID)
 	if err != nil {
 		return types.Checkpoint{}, ErrUnknownCheckpoint
 	}

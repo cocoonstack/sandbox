@@ -65,8 +65,8 @@ type Manager interface {
 	Audit(ctx context.Context, id string, line []byte)
 	AuditEnabled() bool
 	ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration) (*types.Sandbox, error)
-	Checkpoints() ([]types.Checkpoint, error)
-	DeleteCheckpoint(ckptID string) error
+	Checkpoints(ctx context.Context) ([]types.Checkpoint, error)
+	DeleteCheckpoint(ctx context.Context, ckptID string) error
 	ClaimDeadline(id, token string) (time.Time, error)
 	HasGolden(key types.PoolKey) bool
 	AgentSocket(id, token string) (string, error)
@@ -315,7 +315,7 @@ func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 
 // handleListCheckpoints lists this node's checkpoints, newest first.
 func (s *Server) handleListCheckpoints(w http.ResponseWriter, r *http.Request) {
-	ckpts, err := s.mgr.Checkpoints()
+	ckpts, err := s.mgr.Checkpoints(r.Context())
 	if err != nil {
 		log.WithFunc("server.handleListCheckpoints").Error(r.Context(), err, "list checkpoints")
 		writeErr(w, http.StatusInternalServerError, "list checkpoints failed")
@@ -326,7 +326,7 @@ func (s *Server) handleListCheckpoints(w http.ResponseWriter, r *http.Request) {
 
 // handleDeleteCheckpoint removes a checkpoint.
 func (s *Server) handleDeleteCheckpoint(w http.ResponseWriter, r *http.Request) {
-	err := s.mgr.DeleteCheckpoint(r.PathValue("id"))
+	err := s.mgr.DeleteCheckpoint(r.Context(), r.PathValue("id"))
 	switch {
 	case writePoolErr(w, err):
 	case err != nil:

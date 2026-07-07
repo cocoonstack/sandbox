@@ -22,6 +22,9 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/store"
+	"github.com/cocoonstack/sandbox/sandboxd/store/dir"
+	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -130,7 +133,7 @@ type Manager struct {
 	dataDir string
 	egress  bool
 	maxFork int
-	store   *store
+	store   *claimStore
 
 	// idleDefault is the idle-hibernate threshold for unpooled keys; pooled
 	// keys carry theirs on the pool struct. Zero means disabled.
@@ -144,7 +147,8 @@ type Manager struct {
 	usage     *journal
 	audit     *journal
 	counters  counters
-	ckpts     CheckpointStore
+	ckpts     store.Store
+	ckptTTL   time.Duration
 
 	// notifyTemplates, when set (before serving starts), fires after a
 	// promote or template delete so the mesh republishes immediately
@@ -158,8 +162,9 @@ type Manager struct {
 	refillSem chan struct{}
 }
 
-// NewManager builds a manager from the node config.
-func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
+// NewManager builds a manager from the node config; ctx bounds backend
+// construction (the s3 store resolves its credential chain).
+func NewManager(ctx context.Context, cfg *config.Config, eng Engine) (*Manager, error) {
 	maxFork := cfg.MaxForkCount
 	if maxFork < 1 {
 		maxFork = defaultMaxFork
@@ -169,7 +174,7 @@ func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
 		dataDir:   cfg.DataDir,
 		egress:    cfg.HasEgress(),
 		maxFork:   maxFork,
-		store:     newStore(cfg.DataDir),
+		store:     newClaimStore(cfg.DataDir),
 		pools:     make(map[types.PoolKey]*pool, len(cfg.Pools)),
 		claimed:   map[string]*types.Sandbox{},
 		refillSem: make(chan struct{}, maxConcurrentRefills),
@@ -177,17 +182,26 @@ func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("create goldens dir: %w", err)
 	}
-	// The default lives here rather than config.applyDefaults: tests build
-	// Config directly, skipping Load.
-	ckptDir := cfg.CheckpointDir
-	if ckptDir == "" {
-		ckptDir = filepath.Join(cfg.DataDir, "checkpoints")
+	if cs := cfg.CheckpointStore; cs != nil && cs.Kind == "s3" {
+		ckpts, err := s3.New(ctx, *cs.S3, filepath.Join(cfg.DataDir, "checkpoint-staging"))
+		if err != nil {
+			return nil, err
+		}
+		m.ckpts = ckpts
+	} else {
+		// The default lives here rather than config.applyDefaults: tests
+		// build Config directly, skipping Load.
+		ckptDir := cfg.CheckpointDir
+		if ckptDir == "" {
+			ckptDir = filepath.Join(cfg.DataDir, "checkpoints")
+		}
+		ckpts, err := dir.New(ckptDir)
+		if err != nil {
+			return nil, err
+		}
+		m.ckpts = ckpts
 	}
-	ckpts, err := newDirCheckpointStore(ckptDir)
-	if err != nil {
-		return nil, err
-	}
-	m.ckpts = ckpts
+	m.ckptTTL = time.Duration(cfg.CheckpointTTLHours) * time.Hour
 	usage, err := newJournal(filepath.Join(cfg.DataDir, "usage.jsonl"))
 	if err != nil {
 		return nil, fmt.Errorf("open usage journal: %w", err)
@@ -220,6 +234,15 @@ func (m *Manager) Run(ctx context.Context) {
 	defer refill.Stop()
 	reap := time.NewTicker(reapInterval)
 	defer reap.Stop()
+	// Retention is hourly, not per reap tick: on the s3 backend a sweep is
+	// a LIST + per-checkpoint GETs.
+	ckptSweep := make(<-chan time.Time)
+	if m.ckptTTL > 0 {
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		ckptSweep = t.C
+		m.sweepExpiredCheckpoints(ctx)
+	}
 	m.refillOnce(ctx)
 	for {
 		select {
@@ -230,6 +253,8 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-reap.C:
 			m.reapOnce(ctx)
 			m.idleOnce(ctx)
+		case <-ckptSweep:
+			m.sweepExpiredCheckpoints(ctx)
 		}
 	}
 }
