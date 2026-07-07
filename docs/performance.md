@@ -98,7 +98,7 @@ harnesses are `scripts/boot-bench.sh` and the e2e smoke's per-step timings;
 re-measure and update this page when touching the boot chain, the relay, or
 snapshot paths.
 
-## Claims-journal write path (M4-6, evidence-gated)
+## Claims-journal write path
 
 Every claim/release/hibernate persists `claims.json` inside the pool mutex
 (marshal + write + rename). Benchmark (`BenchmarkStoreSaveScaling`, APFS

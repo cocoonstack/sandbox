@@ -154,8 +154,9 @@ language (its argv in `/etc/silkd/lsp.d/<language>`; the python flavor bakes
 `pylsp`); the base image has none, so it returns silkd's typed `not_found`.
 silkd is a broker — it pipes JSON-RPC bytes between your `Request` stream
 and the server's stdio without parsing LSP semantics, so the caller frames
-(Content-Length) and correlates by request id. The server keeps running
-across `Request` streams until `Stop`.
+(Content-Length) and correlates by request id. A server serves one
+`Request` stream for its lifetime: closing the stream ends the session and
+reaps the server (start a new one to keep working); `Stop` kills it early.
 
 ## Reaching guest ports
 
@@ -286,7 +287,7 @@ synchronously.
 ## Git
 
 ```go
-err  = sb.GitClone(ctx, url, "/work/repo", "main", token) // egress lane only
+err  = sb.GitClone(ctx, url, "/work/repo", "main", 0, token) // egress lane only; depth > 0 = shallow
 st,  err := sb.GitStatus(ctx, "/work/repo")   // Branch, Ahead, Behind, Files[]
 err  = sb.GitAdd(ctx, "/work/repo", "a.txt")
 hash, err := sb.GitCommit(ctx, "/work/repo", "message", "Dev <dev@example.com>")

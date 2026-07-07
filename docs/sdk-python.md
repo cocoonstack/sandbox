@@ -8,61 +8,99 @@ with client.new("ghcr.io/cocoonstack/sandbox/rt:24.04") as sb:
     print(sb.exec("echo", "hello"))          # "hello\n"
 ```
 
-stdlib-only and synchronous: `pip install cocoonstack-sandbox` brings no
-dependencies. The surface mirrors the [Go SDK](sdk.md); this page lists the
-Python spellings — semantics (redirect follow, transparent wake, lanes,
-tokens) are identical and documented there.
+`pip install cocoonstack-sandbox` — stdlib-only, no dependencies, and
+synchronous by design (agent frameworks that need async wrap calls in
+`asyncio.to_thread`, exactly like the [OpenAI adapter](openai-adapter.md)
+does). The surface is at parity with the [Go SDK](sdk.md); wire fidelity is
+pinned by the shared protocol fixture corpus that the Rust guest, Go, and
+Python all round-trip in CI.
 
-## Client
+## Connecting
 
-| call | meaning |
-|---|---|
-| `Client(addr, api_token="", timeout=120.0)` | one entry node; cluster redirects are followed transparently |
-| `client.new(template, net="", size="", ttl_seconds=0)` | claim a sandbox (context-manager friendly) |
-| `client.checkpoints()` | node's checkpoints, newest first |
-| `client.delete_template(name, net="", size="")` | name-based template delete, gossip-routed |
-| `client.lookup(id, token)` | relocate a handle from id + token (asks the entry node, then each mesh peer) |
-| `client.info()` | pool/claim counters |
+```python
+client = Client("10.0.0.5:7777", api_token="...", timeout=120.0)
+```
 
-## Sandbox
+`api_token` authenticates node-level calls (claim, info, fork, promote,
+checkpoint, preview); on a cluster all nodes share one token. `timeout`
+bounds every socket operation.
 
-Commands: `sb.exec(*argv, cwd=, env=, user=, session=, stdin=)` returns
-stdout and raises `ExitError(code, stderr)` on a non-zero exit;
-`sb.run(argv, on_stdout=, on_stderr=, ...)` streams and returns the code.
+**Clusters need nothing extra**: dial any node. On a warm miss the entry
+node answers with a redirect and `new` follows it transparently; the
+returned handle is bound to the owning node and all further calls go there
+directly. To recover a handle when only `id` + `token` survived (say,
+across a process restart):
 
-Files: `write_file` (atomic), `read_file`, `list_dir`, `stat`, `mkdir`,
-`remove`, `rename`. Trees: `push(dest, tar_bytes)` (atomic against a
-truncated stream), `pull(path)` → tar bytes. Search: `find`, `replace`.
-Git: `git_clone/status/add/commit/push/pull/branches/checkout/
-create_branch/delete_branch` (network verbs are egress-lane only — the none lane raises a typed
-`SilkdError(kind="unimplemented")`).
+```python
+sb = client.lookup(id, token)   # asks the entry node, then each mesh peer
+```
 
-Sessions: `sb.session(cwd=, env=)` returns a persistent shell whose state
-survives across `session.exec(...)` calls; `sb.sessions()` lists the live
-session ids. Watching: `sb.watch(path, recursive=)` yields event dicts
-until closed.
+## Claiming
 
-Terminals: `sb.open_pty(cols=80, rows=24, cwd=, env=, user=)` returns a
-`Pty` (`read`/`write`/`resize`/`close`, context-manager) — a real shell
-under a pseudo-terminal for agents that drive interactive programs.
+```python
+sb = client.new("ghcr.io/cocoonstack/sandbox/rt:24.04",
+                net="egress", size="medium", ttl_seconds=600)
+```
 
-Ports: `sb.dial_port(port)` returns a byte stream (`send`/`recv`/
-`close_write`/`close`) to the guest port, working on the no-network lane;
-`sb.proxy_port("127.0.0.1:0", port)` serves it on a local listener for
-unmodified local tools (returns the listening socket — close it to stop);
-`sb.preview_url(port, ttl_seconds=0)` mints a signed, shareable URL served
-by the node's preview listener, clamped to the claim's lease.
+| parameter | values | default | meaning |
+|---|---|---|---|
+| `net` | `"none"`, `"egress"` | `"none"` | `none`: no NIC at all, vsock-only I/O (hardened lane, Firecracker). `egress`: bridge/CNI NIC (Cloud Hypervisor) |
+| `size` | `"small"`, `"medium"`, `"large"` | `"small"` | resource tier: 1cpu/512M, 2cpu/1G, 4cpu/4G |
+| `ttl_seconds` | int | server default 5m | sandbox TTL, server-capped at 24h. The node reaps the sandbox after the TTL even if the client vanishes |
 
-Language servers: `sb.start_lsp(language, root="")` spawns the flavor
-image's server (base images raise the typed `not_found`) and returns an
-`Lsp`; `lsp.request()` opens the JSON-RPC byte stream (the caller frames
-Content-Length and correlates ids — agents already speak LSP); a server
-serves one request stream for its lifetime, and `lsp.stop()` kills it
-early. The python flavor bakes `pylsp`.
+`new` returns when the sandbox's silkd answers: a warm hit is milliseconds,
+a cold key can take the full boot. The handle exposes `sb.id`, `sb.token`,
+`sb.owner`, `sb.deadline`, and `sb.from_checkpoint` (the lineage edge when
+branched). `Sandbox` is a context manager; `sb.close()` releases it
+(releasing one already gone is not an error — double-release and reap races
+stay silent).
 
-Lifecycle: `fork(count, ttl_seconds=0)` → children; `hibernate()` (any
-later call wakes transparently); `checkpoint(name="")` → `Checkpoint`;
-`promote(template)` → `Template`; `close()` releases.
+## Hibernating
+
+```python
+sb.hibernate()                        # snapshot + stop atomically; memory freed
+sb.exec("cat", "/tmp/state")          # any later call wakes it transparently
+```
+
+`hibernate` snapshots the VM and stops it in one atomic step. The handle
+stays valid: the first call that reaches the guest restores the VM (roughly
+a restore's latency, tens of milliseconds on bare metal). The TTL keeps
+running — a hibernated sandbox is still reaped at its deadline, so claim
+with a `ttl_seconds` that covers the idle period. When to hibernate is your
+policy, unless the deployment opts into `idle_hibernate_seconds`
+([deploy](deploy.md#configuration)), which hibernates idle claims
+automatically with the same transparent wake.
+
+## Forking
+
+```python
+children = sb.fork(2, ttl_seconds=600)   # list[Sandbox], own leases
+```
+
+Clones the sandbox into fresh, fully independent claims: memory, disk, and
+guest state (sessions, processes, tmpfs) duplicate at the fork point, and
+each child gets a distinct machine identity. `ttl_seconds` bounds every
+child's lifetime (0 = server default) — children never inherit the parent's
+remaining lease. A running parent pauses briefly for the snapshot; a
+hibernated parent forks from its memory image without waking.
+All-or-nothing: on error no child survived. Count is capped at the node's
+`max_fork_count` (default 16).
+
+## Promoting to a template
+
+```python
+tpl = sb.promote("myproj:v1")     # publish current state
+child = tpl.new()                 # clones the promoted state
+tpl.delete()                      # caller owns the lifecycle
+```
+
+Templates are keyed by (name, the sandbox's network lane, its size) and
+live on the owning node; the returned `Template` handle is bound there, so
+its `new`/`delete` always reach it. The name-based calls
+(`client.new("myproj:v1")`, `client.delete_template(...)`) route
+cluster-wide via template gossip and lag a promote/delete by about a gossip
+tick — prefer the handle right after promoting (see
+[Templates on a cluster](cluster.md#templates-on-a-cluster)).
 
 ## Checkpoints — branching and time travel
 
@@ -74,16 +112,185 @@ sb.write_file("/root/state.txt", b"v2")
 branch = ckpt.new()                        # a fresh sandbox at the captured moment
 branch.read_file("/root/state.txt")        # b"v1"
 sb.read_file("/root/state.txt")            # b"v2" — source unaffected
+ckpt.delete()
+client.checkpoints()                       # node's checkpoints, newest first
 ```
 
 A checkpoint captures memory, disk, and running processes without stopping
-the sandbox. `ckpt.new()` branches any number of independent sandboxes from
-that exact moment; successive checkpoints of sources and branches form a
-tree. `ckpt.delete()` removes it. Checkpoints are node-local; handles are
-bound to their node, and `client.checkpoints()` lists the connected node's.
+the sandbox (the same brief pause a fork takes); `ckpt.new(ttl_seconds=0)`
+branches any number of independent sandboxes from that exact moment, and
+successive checkpoints of sources and branches form a tree. Checkpoints
+live in the node's `checkpoint_dir` — on a shared FUSE mount any node
+sharing the mount can branch them; handles stay owner-bound like templates.
+
+## Language servers (LSP)
+
+```python
+lsp = sb.start_lsp("python", "/work")   # flavor image provides the server
+stream = lsp.request()                  # JSON-RPC byte stream (frame it yourself)
+# ... speak Content-Length-framed JSON-RPC over stream.send()/recv() ...
+stream.close()                          # ends the session and reaps the server
+```
+
+`start_lsp` spawns the language server the flavor image ships for the
+language (the python flavor bakes `pylsp`); the base image has none, so it
+raises the typed `not_found`. silkd is a broker — it pipes JSON-RPC bytes
+without parsing LSP semantics, so the caller frames (Content-Length) and
+correlates by request id. A server serves one `request()` stream for its
+lifetime: closing the stream reaps it (start a new one to keep working);
+`lsp.stop()` kills it early.
+
+## Reaching guest ports
+
+```python
+conn = sb.dial_port(8080)                        # byte stream to 127.0.0.1:8080 in the guest
+listener = sb.proxy_port("127.0.0.1:0", 8080)    # local listener piping to it
+url = sb.preview_url(8080, ttl_seconds=1800)     # signed, shareable browser URL
+```
+
+`dial_port` returns a `PortConn` (`send`/`recv`/`close_write`/`close`,
+context-manager) relayed over the silkd protocol — it works on the
+no-network lane, where the vsock relay is the only way in. A dead port
+raises silkd's `not_found`. `proxy_port` serves the port on a local
+listener for unmodified local tools (browsers, curl); close the returned
+socket to stop. `preview_url` mints a signed URL served by the node's
+preview listener, clamped to the claim's remaining lease — the URL dies
+with the sandbox, and a node without `preview_listen` answers 501.
+
+## Node info
+
+```python
+client.info()   # {"pools": [...], "claimed": n, "hibernated": n, "peers": [...]}
+```
+
+## Running commands
+
+```python
+out = sb.exec("python3", "script.py")            # stdout; ExitError on rc != 0
+
+code = sb.run(["bash", "-c", "make test"],
+              cwd="/work", env={"CI": "1"}, user="ubuntu",
+              stdin=input_bytes,
+              on_stdout=lambda b: sys.stdout.buffer.write(b),
+              on_stderr=lambda b: sys.stderr.buffer.write(b))
+```
+
+`exec` returns stdout and raises `ExitError(code, stderr)` on a non-zero
+exit. `run` streams raw bytes through the callbacks (chunk boundaries may
+split multi-byte sequences) and returns the exit code. `user` de-escalates
+inside the guest; `session=` routes the command into a persistent session.
+
+## Sessions
+
+A session is a real persistent shell: cwd, env and shell state survive
+across calls.
+
+```python
+sess = sb.session(cwd="/work", env={"PATH": "..."})
+sess.exec("export", "MARK=1")            # persists
+sess.exec("sh", "-c", "echo $MARK")      # "1\n"
+sess.close()
+
+sb.sessions()                            # live session ids
+```
+
+Idle sessions are reaped guest-side after 30 minutes.
+
+## Files
+
+```python
+sb.write_file("/work/a.txt", b"data")     # atomic; mode=0o755 optional
+data = sb.read_file("/work/a.txt")
+ents = sb.list_dir("/work")               # [{"name", "kind", "size"}]
+info = sb.stat("/work/a.txt")             # {"kind", "size", "mode", "mtime_epoch_secs"}
+sb.mkdir("/work/sub", parents=True)
+sb.remove("/work/sub", recursive=True)
+sb.rename("/a", "/b")
+```
+
+Writes stream any size and commit via temp-file rename: a mid-stream
+failure never leaves a truncated destination, and overwriting an executable
+keeps its exec bit.
+
+## Project trees
+
+```python
+sb.push("/work", tar_bytes)    # extract a tar stream under /work (atomic)
+tar = sb.pull("/work")         # /work back as tar bytes
+```
+
+`push` is atomic against a truncated stream and the only project-ingestion
+path on the no-network lane.
+
+## Search
+
+```python
+matches = sb.find("/work", r"TODO|FIXME", glob="*.py")
+# [{"file", "line", "content"}]; glob is anchored *? wildcards on the file name
+
+results = sb.replace(["/work/main.py"], r"foo", "bar")
+# [{"file", "replacements"}]; per-file atomic
+```
+
+Patterns are regular expressions evaluated in the guest — no shell quoting.
+
+## Watching
+
+```python
+w = sb.watch("/work", recursive=True)
+for ev in w:                       # {"kind", "path"}
+    print(ev["kind"], ev["path"])  # created|modified|deleted|renamed
+w.close()
+```
+
+`watch` returns once the guest acknowledges the watch is armed — events
+caused after it returns are guaranteed captured. A bad path fails
+synchronously.
+
+## Git
+
+```python
+sb.git_clone(url, "/work/repo", branch="main", depth=1, auth=token)  # egress lane only
+st = sb.git_status("/work/repo")          # {"branch", "ahead", "behind", "files"}
+sb.git_add("/work/repo", ["a.txt"])
+sha = sb.git_commit("/work/repo", "message", "Dev <dev@example.com>")
+sb.git_push("/work/repo", auth=token)     # egress lane only
+sb.git_pull("/work/repo", auth=token)     # egress lane only
+br = sb.git_branches("/work/repo")        # {"current", "branches"}
+sb.git_create_branch("/work/repo", "feature")
+sb.git_checkout("/work/repo", "feature")
+sb.git_delete_branch("/work/repo", "feature")
+```
+
+Results are structured (porcelain v2 under the hood), never scraped stdout.
+Auth tokens travel as an in-memory header, never touching guest disk. On
+the no-network lane, clone/push/pull raise a typed `unimplemented` error
+pointing at `push`.
+
+## Terminals
+
+```python
+pty = sb.open_pty(cols=120, rows=40)      # context-manager; pty.pid is the guest process
+pty.write(b"make test\n")
+data = pty.read()                         # b"" when the shell exits
+pty.resize(200, 50)
+pty.close()
+```
 
 ## Errors
 
-`SandboxError` is the base; `APIError` (control plane, carries HTTP
-status), `SilkdError` (guest daemon, carries the typed `kind`),
-`ExitError` (non-zero exit), `ProtocolError` (broken stream).
+`SandboxError` is the base; catch the narrowest type you handle:
+
+- `APIError(verb, status, message)` — control plane (HTTP status)
+- `SilkdError(kind, message)` — typed guest failure; `kind` is
+  `bad_request` / `not_found` / `unimplemented` / `internal`
+- `ExitError(code, stderr)` — non-zero exit from `exec`
+- `ProtocolError` — broken stream
+
+```python
+try:
+    sb.git_clone(url, "/work/repo")
+except SilkdError as e:
+    if e.kind == "unimplemented":   # no-network lane: fall back to push
+        sb.push("/work/repo", tar_bytes)
+```
