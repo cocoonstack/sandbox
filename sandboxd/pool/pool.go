@@ -6,7 +6,6 @@ package pool
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -210,464 +209,24 @@ func NewManager(cfg *config.Config, eng Engine) (*Manager, error) {
 	return m, nil
 }
 
-// ClaimWarm transfers ownership of a warm sandbox without provisioning;
-// ErrNoWarm means the pool is empty (the caller may redirect or provision).
-func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
-	start := time.Now()
-	if err := m.validate(key); err != nil {
-		return nil, err
-	}
-	if m.overQuota(1) {
-		return nil, fmt.Errorf("%w: cap %d", ErrQuota, m.maxClaims)
-	}
-	m.mu.Lock()
-	var sb *types.Sandbox
-	if p := m.pools[key]; p != nil {
-		p.noteArrival(start)
-		if n := len(p.warm); n > 0 {
-			sb = p.warm[n-1]
-			p.warm = p.warm[:n-1]
+// Run drives the refill and reap loops until ctx is canceled.
+func (m *Manager) Run(ctx context.Context) {
+	refill := time.NewTicker(refillInterval)
+	defer refill.Stop()
+	reap := time.NewTicker(reapInterval)
+	defer reap.Stop()
+	m.refillOnce(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-refill.C:
+			m.refillOnce(ctx)
+		case <-reap.C:
+			m.reapOnce(ctx)
+			m.idleOnce(ctx)
 		}
 	}
-	m.mu.Unlock()
-	if sb == nil {
-		return nil, ErrNoWarm
-	}
-	out, err := m.finalize(ctx, sb, ttl)
-	if err == nil {
-		m.counters.claimsWarm.Add(1)
-		m.counters.claimNanos.Add(uint64(time.Since(start))) //nolint:gosec // durations are positive
-	}
-	return out, err
-}
-
-// ClaimProvision creates a claim-ready sandbox (golden clone or cold boot).
-func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
-	start := time.Now()
-	if err := m.validate(key); err != nil {
-		return nil, err
-	}
-	if m.overQuota(1) {
-		return nil, fmt.Errorf("%w: cap %d", ErrQuota, m.maxClaims)
-	}
-	golden := m.goldenDirFor(key)
-	sb, err := m.provision(ctx, key, golden)
-	if err != nil {
-		return nil, err
-	}
-	out, err := m.finalize(ctx, sb, ttl)
-	if err == nil {
-		if golden != "" {
-			m.counters.claimsClone.Add(1)
-		} else {
-			m.counters.claimsCold.Add(1)
-		}
-		m.counters.claimNanos.Add(uint64(time.Since(start))) //nolint:gosec // durations are positive
-	}
-	return out, err
-}
-
-// overQuota is the cheap advisory precheck: the authoritative check stays
-// in finalizeBatch (admission races resolve there), this one just spares a
-// doomed request the provision cost.
-func (m *Manager) overQuota(extra int) bool {
-	if m.maxClaims <= 0 {
-		return false
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.claimed)+extra > m.maxClaims
-}
-
-// SetTemplateNotifier wires the immediate-republish hook; call it before
-// the server starts serving.
-func (m *Manager) SetTemplateNotifier(fn func()) {
-	m.notifyTemplates = fn
-}
-
-// HasGolden reports whether this node can provision the key without a cold
-// boot — a configured pool golden or a promoted template on disk.
-func (m *Manager) HasGolden(key types.PoolKey) bool {
-	return m.goldenDirFor(key) != ""
-}
-
-// WarmCounts is the per-pool-key-hash warm count, for gossiping placement.
-func (m *Manager) WarmCounts() map[string]int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	counts := make(map[string]int, len(m.pools))
-	for key, p := range m.pools {
-		counts[key.Hash()] = len(p.warm)
-	}
-	return counts
-}
-
-// SetPools replaces the node's desired warm targets. Existing claims are not
-// affected; only unclaimed warm VMs are trimmed or refilled.
-func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
-	desired := make(map[types.PoolKey]config.PoolSpec, len(specs))
-	hashes := make(map[string]types.PoolKey, len(specs))
-	for _, spec := range specs {
-		spec = normalizePoolSpec(spec)
-		if err := m.validate(spec.PoolKey); err != nil {
-			return err
-		}
-		if err := spec.ValidateLimits(); err != nil {
-			return fmt.Errorf("%w: %v", ErrBadCount, err)
-		}
-		if existing, ok := hashes[spec.Hash()]; ok && existing != spec.PoolKey {
-			return fmt.Errorf("%w: pool key hash collision between %q and %q", ErrBadKey, existing.Template, spec.Template)
-		}
-		if _, ok := desired[spec.PoolKey]; ok {
-			return fmt.Errorf("%w: duplicate pool %q", ErrBadKey, spec.Template)
-		}
-		hashes[spec.Hash()] = spec.PoolKey
-		desired[spec.PoolKey] = spec
-	}
-
-	var trim []string
-	m.mu.Lock()
-	now := time.Now()
-	for key, p := range m.pools {
-		spec, ok := desired[key]
-		if !ok {
-			p.floor = 0
-			p.warmMax = 0
-			p.idle = 0
-		} else {
-			p.floor = spec.Warm
-			p.warmMax = spec.WarmMax
-			p.idle = time.Duration(spec.IdleHibernateSeconds) * time.Second
-		}
-		target := p.effectiveTarget(now)
-		for len(p.warm) > target {
-			n := len(p.warm) - 1
-			trim = append(trim, p.warm[n].VMName)
-			p.warm = p.warm[:n]
-		}
-		if !ok && !p.building && p.refilling == 0 {
-			delete(m.pools, key)
-		}
-	}
-	for key, spec := range desired {
-		if p := m.pools[key]; p != nil {
-			continue
-		}
-		p := &pool{
-			key:     key,
-			floor:   spec.Warm,
-			warmMax: spec.WarmMax,
-			idle:    time.Duration(spec.IdleHibernateSeconds) * time.Second,
-		}
-		if dir, ok := m.goldenOnDisk(key.Hash()); ok {
-			p.goldenDir = dir
-		}
-		m.pools[key] = p
-	}
-	// Recompute rather than latch: removing every idle pool turns the
-	// sweep off again.
-	m.idleEnabled = m.idleDefault > 0
-	for _, p := range m.pools {
-		if p.idle > 0 {
-			m.idleEnabled = true
-		}
-	}
-	m.mu.Unlock()
-
-	runCtx := context.WithoutCancel(ctx)
-	for _, name := range trim {
-		m.destroy(runCtx, name)
-	}
-	m.refillOnce(runCtx)
-	return nil
-}
-
-// TemplateHashes lists the promoted-template key hashes on disk — goldens
-// not backing a configured pool — for the mesh's template gossip.
-func (m *Manager) TemplateHashes() []string {
-	entries, err := os.ReadDir(m.goldensDir())
-	if err != nil {
-		return nil
-	}
-	m.mu.Lock()
-	pooled := make(map[string]struct{}, len(m.pools))
-	for key := range m.pools {
-		pooled[key.Hash()] = struct{}{}
-	}
-	m.mu.Unlock()
-	var hashes []string
-	for _, e := range entries {
-		if !e.IsDir() || strings.HasSuffix(e.Name(), ".tmp") {
-			continue
-		}
-		if _, ok := pooled[e.Name()]; !ok {
-			hashes = append(hashes, e.Name())
-		}
-	}
-	return hashes
-}
-
-// Release destroys a claimed sandbox after validating its token.
-func (m *Manager) Release(ctx context.Context, id, token string) error {
-	m.mu.Lock()
-	sb, ok := m.authed(id, token)
-	if !ok {
-		m.mu.Unlock()
-		return ErrUnknownSandbox
-	}
-	delete(m.claimed, id)
-	snap := sb.HibernateSnap
-	saveErr := m.store.save(m.claimed)
-	m.mu.Unlock()
-	if saveErr != nil {
-		log.WithFunc("pool.Release").Errorf(ctx, saveErr, "persist release of %s", id)
-	}
-	// The claim is already dropped; removal must survive the caller hanging up.
-	err := m.eng.Remove(context.WithoutCancel(ctx), sb.VMName)
-	m.dropSnap(ctx, snap)
-	m.counters.releases.Add(1)
-	m.recordUsage(ctx, usageEvent{Event: "release", ID: id, VMName: sb.VMName})
-	return err
-}
-
-// ClaimDeadline authorizes a sandbox by token and returns its lease
-// deadline — the preview mint clamps a URL's life to it.
-func (m *Manager) ClaimDeadline(id, token string) (time.Time, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	sb, ok := m.authed(id, token)
-	if !ok {
-		return time.Time{}, ErrUnknownSandbox
-	}
-	return sb.Deadline, nil
-}
-
-// PreviewDial opens a byte stream to a guest port for the preview server. The
-// caller has already verified the signed preview token, so no sandbox token
-// is needed; the live-claim lookup is the revocation check — a released or
-// reaped sandbox is absent and this fails. A hibernated sandbox wakes.
-func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.Conn, error) {
-	m.mu.Lock()
-	sb, ok := m.claimed[id]
-	m.mu.Unlock()
-	if !ok {
-		return nil, ErrUnknownSandbox
-	}
-	m.touch(sb) // a live preview stream is data-plane activity
-	// Preview bypasses the relay's audit tap (it dials the engine directly),
-	// so record the access here — the only data-plane entry that would
-	// otherwise leave no audit trace.
-	m.recordAudit(ctx, id, auditFrame{Op: "preview_dial", Port: port})
-	sock, err := m.wakeResolved(ctx, sb)
-	if err != nil {
-		return nil, err
-	}
-	return m.eng.DialGuestPort(ctx, sock, port)
-}
-
-// AgentSocket resolves a claimed sandbox's vsock UDS without waking it (the
-// ownership probe must not restore a hibernated VM).
-func (m *Manager) AgentSocket(id, token string) (string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	sb, ok := m.authed(id, token)
-	if !ok {
-		return "", ErrUnknownSandbox
-	}
-	// No activity stamp here: owner/Lookup probes use this path, and a
-	// control-plane poll must not keep an idle sandbox awake. The relay's
-	// stamp lives in WakeAgentSocket.
-	return sb.VsockSocket, nil
-}
-
-// Hibernate atomically snapshots a claimed sandbox and stops its VM, freeing
-// memory; the next agent access wakes it. Idempotent on an already-hibernated
-// sandbox. When to hibernate is the caller's policy — the node only provides
-// the transition.
-func (m *Manager) Hibernate(ctx context.Context, id, token string) error {
-	sb, ok := m.claim(id, token)
-	if !ok {
-		return ErrUnknownSandbox
-	}
-	sb.Transition.Lock()
-	defer sb.Transition.Unlock()
-	return m.hibernateLocked(ctx, sb)
-}
-
-// hibernateLocked is Hibernate's body; the caller holds sb.Transition.
-func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error {
-	if sb.HibernateSnap != "" {
-		return nil
-	}
-	// A started transition must finish even if the caller hangs up (the
-	// engine bounds every step), or the record would disagree with the VM.
-	ctx = context.WithoutCancel(ctx)
-	// Derived from VMName, not sb.ID: cocoon snapshot names reject the
-	// underscore in the "sb_" prefix.
-	snap := hibernatePrefix + strings.TrimPrefix(sb.VMName, vmPrefix)
-	if err := m.eng.Hibernate(ctx, sb.VMName, snap); err != nil {
-		return err
-	}
-	if !m.commitTransition(ctx, sb, snap, sb.VsockSocket) {
-		// Released mid-transition: the VM is gone, drop our snapshot.
-		m.dropSnap(ctx, snap)
-		return ErrUnknownSandbox
-	}
-	m.counters.hibernates.Add(1)
-	m.recordUsage(ctx, usageEvent{Event: "hibernate", ID: sb.ID, VMName: sb.VMName})
-	return nil
-}
-
-// WakeAgentSocket resolves the sandbox's vsock UDS for the relay, first
-// restoring the VM if it is hibernated; concurrent wakes queue on the
-// transition lock and find the fast path.
-func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string, error) {
-	sb, ok := m.claim(id, token)
-	if !ok {
-		return "", ErrUnknownSandbox
-	}
-	m.touch(sb)
-	return m.wakeResolved(ctx, sb)
-}
-
-// wakeResolved is the wake body shared by the token and id-only entry points.
-func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, error) {
-	sb.Transition.Lock()
-	defer sb.Transition.Unlock()
-	if sb.HibernateSnap == "" {
-		return sb.VsockSocket, nil
-	}
-	// See Hibernate: a half-restored VM is worse than a wasted wake.
-	ctx = context.WithoutCancel(ctx)
-	wakeStart := time.Now()
-	snap := sb.HibernateSnap
-	if err := m.eng.Restore(ctx, sb.VMName, snap); err != nil {
-		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
-	}
-	sock, err := m.probeReady(ctx, sb.VMName, claimProbeTimeout)
-	if err != nil {
-		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
-	}
-	if !m.commitTransition(ctx, sb, "", sock) {
-		// Released mid-transition: destroy the VM we just resurrected.
-		m.destroy(ctx, sb.VMName)
-		m.dropSnap(ctx, snap)
-		return "", ErrUnknownSandbox
-	}
-	// The memory image is consumed by the resume; drop it to free disk.
-	m.dropSnap(ctx, snap)
-	m.counters.wakes.Add(1)
-	m.counters.wakeNanos.Add(uint64(time.Since(wakeStart))) //nolint:gosec // durations are positive
-	m.recordUsage(ctx, usageEvent{Event: "wake", ID: sb.ID, VMName: sb.VMName})
-	return sock, nil
-}
-
-// Fork clones a claimed sandbox into count children, each a fresh claim with
-// its own lease: memory, disk, and guest state (sessions, processes, tmpfs)
-// duplicate at the snapshot point, and cocoon's clone reseed gives every
-// child a distinct machine identity. All-or-nothing: any child failing
-// destroys the ones already built, so an error means no child survived.
-func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
-	if count < 1 || count > m.maxFork {
-		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, m.maxFork)
-	}
-	if m.overQuota(count) {
-		return nil, fmt.Errorf("%w: cap %d", ErrQuota, m.maxClaims)
-	}
-	sb, ok := m.claim(id, token)
-	if !ok {
-		return nil, ErrUnknownSandbox
-	}
-	// See Hibernate: a started fork must finish even if the caller hangs up.
-	ctx = context.WithoutCancel(ctx)
-
-	dir, err := os.MkdirTemp(m.dataDir, "fork-")
-	if err != nil {
-		return nil, fmt.Errorf("fork %s: %w", id, err)
-	}
-	defer func() { _ = os.RemoveAll(dir) }()
-	exportDir := filepath.Join(dir, "export") // cocoon wants the target absent
-	if err = m.exportSource(ctx, sb, exportDir); err != nil {
-		return nil, fmt.Errorf("fork %s: %w", id, err)
-	}
-
-	children, err := m.cloneBatch(ctx, sb.Key, exportDir, count)
-	if err != nil {
-		return nil, fmt.Errorf("fork %s: %w", id, err)
-	}
-	if err := m.finalizeBatch(ctx, children, ttl); err != nil {
-		return nil, fmt.Errorf("fork %s: %w", id, err)
-	}
-	m.counters.forks.Add(1)
-	m.counters.claimsClone.Add(uint64(len(children))) //nolint:gosec // count is bounded by maxFork
-	ids := make([]string, len(children))
-	for i, c := range children {
-		ids[i] = c.ID
-	}
-	m.recordUsage(ctx, usageEvent{Event: "fork", ID: sb.ID, VMName: sb.VMName, Children: ids})
-	return children, nil
-}
-
-// Promote publishes a claimed sandbox as a template: its state is exported
-// as a golden under (template, parent net, parent size), and later claims
-// for that key clone from it — provision-on-demand, no warm pool unless the
-// node config adds one. Re-promoting to the same name replaces the golden.
-// The caller owns the template's lifecycle (DeleteTemplate); it lives only
-// on this node, so the returned key is what a cluster client needs to reach
-// it again.
-func (m *Manager) Promote(ctx context.Context, id, token, template string) (types.PoolKey, error) {
-	if !templateNameRe.MatchString(template) {
-		return types.PoolKey{}, fmt.Errorf("%w: template %q must match %s", ErrBadKey, template, templateNameRe)
-	}
-	sb, ok := m.claim(id, token)
-	if !ok {
-		return types.PoolKey{}, ErrUnknownSandbox
-	}
-	key := types.PoolKey{Template: template, Net: sb.Key.Net, Size: sb.Key.Size}
-	if m.pooledHash(key.Hash()) {
-		// The same goldens/<hash> path backs a configured pool's golden —
-		// promoting over it would silently change what refills produce.
-		return types.PoolKey{}, ErrPooledTemplate
-	}
-	// See Fork: the transition lock pins the source snapshot, and a started
-	// promote must finish even if the caller hangs up.
-	sb.Transition.Lock()
-	defer sb.Transition.Unlock()
-	ctx = context.WithoutCancel(ctx)
-
-	snap, cleanup, err := m.sourceSnap(ctx, sb)
-	if err != nil {
-		return types.PoolKey{}, fmt.Errorf("promote %s: %w", id, err)
-	}
-	defer cleanup()
-	if err := m.exportGolden(ctx, snap, filepath.Join(m.goldensDir(), key.Hash())); err != nil {
-		return types.PoolKey{}, fmt.Errorf("promote %s: %w", id, err)
-	}
-	if m.notifyTemplates != nil {
-		m.notifyTemplates()
-	}
-	m.counters.promotes.Add(1)
-	m.recordUsage(ctx, usageEvent{Event: "promote", ID: sb.ID, VMName: sb.VMName, Reference: key.Template})
-	return key, nil
-}
-
-// DeleteTemplate removes a promoted template's golden. Configured pools are
-// refused: their goldens are owned by the node config, not an API caller.
-func (m *Manager) DeleteTemplate(key types.PoolKey) error {
-	if m.pooledHash(key.Hash()) {
-		return ErrPooledTemplate
-	}
-	dir, ok := m.goldenOnDisk(key.Hash())
-	if !ok {
-		return ErrUnknownTemplate
-	}
-	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("delete template: %w", err)
-	}
-	if m.notifyTemplates != nil {
-		m.notifyTemplates()
-	}
-	return nil
 }
 
 // Reconcile aligns state after a daemon restart: re-adopt persisted claims
@@ -760,24 +319,90 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	return saveErr
 }
 
-// Run drives the refill and reap loops until ctx is canceled.
-func (m *Manager) Run(ctx context.Context) {
-	refill := time.NewTicker(refillInterval)
-	defer refill.Stop()
-	reap := time.NewTicker(reapInterval)
-	defer reap.Stop()
-	m.refillOnce(ctx)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-refill.C:
-			m.refillOnce(ctx)
-		case <-reap.C:
-			m.reapOnce(ctx)
-			m.idleOnce(ctx)
+// SetPools replaces the node's desired warm targets. Existing claims are not
+// affected; only unclaimed warm VMs are trimmed or refilled.
+func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
+	desired := make(map[types.PoolKey]config.PoolSpec, len(specs))
+	hashes := make(map[string]types.PoolKey, len(specs))
+	for _, spec := range specs {
+		spec = normalizePoolSpec(spec)
+		if err := m.validate(spec.PoolKey); err != nil {
+			return err
+		}
+		if err := spec.ValidateLimits(); err != nil {
+			return fmt.Errorf("%w: %v", ErrBadCount, err)
+		}
+		if existing, ok := hashes[spec.Hash()]; ok && existing != spec.PoolKey {
+			return fmt.Errorf("%w: pool key hash collision between %q and %q", ErrBadKey, existing.Template, spec.Template)
+		}
+		if _, ok := desired[spec.PoolKey]; ok {
+			return fmt.Errorf("%w: duplicate pool %q", ErrBadKey, spec.Template)
+		}
+		hashes[spec.Hash()] = spec.PoolKey
+		desired[spec.PoolKey] = spec
+	}
+
+	var trim []string
+	m.mu.Lock()
+	now := time.Now()
+	for key, p := range m.pools {
+		spec, ok := desired[key]
+		if !ok {
+			p.floor = 0
+			p.warmMax = 0
+			p.idle = 0
+		} else {
+			p.floor = spec.Warm
+			p.warmMax = spec.WarmMax
+			p.idle = time.Duration(spec.IdleHibernateSeconds) * time.Second
+		}
+		target := p.effectiveTarget(now)
+		for len(p.warm) > target {
+			n := len(p.warm) - 1
+			trim = append(trim, p.warm[n].VMName)
+			p.warm = p.warm[:n]
+		}
+		if !ok && !p.building && p.refilling == 0 {
+			delete(m.pools, key)
 		}
 	}
+	for key, spec := range desired {
+		if p := m.pools[key]; p != nil {
+			continue
+		}
+		p := &pool{
+			key:     key,
+			floor:   spec.Warm,
+			warmMax: spec.WarmMax,
+			idle:    time.Duration(spec.IdleHibernateSeconds) * time.Second,
+		}
+		if dir, ok := m.goldenOnDisk(key.Hash()); ok {
+			p.goldenDir = dir
+		}
+		m.pools[key] = p
+	}
+	// Recompute rather than latch: removing every idle pool turns the
+	// sweep off again.
+	m.idleEnabled = m.idleDefault > 0
+	for _, p := range m.pools {
+		if p.idle > 0 {
+			m.idleEnabled = true
+		}
+	}
+	m.mu.Unlock()
+
+	runCtx := context.WithoutCancel(ctx)
+	for _, name := range trim {
+		m.destroy(runCtx, name)
+	}
+	m.refillOnce(runCtx)
+	return nil
+}
+
+// SetTemplateNotifier wires the immediate-republish hook; call it before
+// the server starts serving.
+func (m *Manager) SetTemplateNotifier(fn func()) {
+	m.notifyTemplates = fn
 }
 
 // Info reports pool states (sorted for stable output), the claim count, and
@@ -820,42 +445,15 @@ func (m *Manager) Sandboxes() []SandboxSummary {
 	return out
 }
 
-// pooledHash reports whether a configured pool occupies this hash — the
-// guard is on the HASH, not the key: goldens are stored by hash, so a
-// colliding key would reach a pool's golden dir even though the keys differ.
-func (m *Manager) pooledHash(hash string) bool {
+// WarmCounts is the per-pool-key-hash warm count, for gossiping placement.
+func (m *Manager) WarmCounts() map[string]int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for key := range m.pools {
-		if key.Hash() == hash {
-			return true
-		}
+	counts := make(map[string]int, len(m.pools))
+	for key, p := range m.pools {
+		counts[key.Hash()] = len(p.warm)
 	}
-	return false
-}
-
-// goldenDirFor resolves a key's golden: the pool's when configured, else an
-// on-disk golden a Promote published for an unpooled key; "" cold-boots.
-func (m *Manager) goldenDirFor(key types.PoolKey) string {
-	m.mu.Lock()
-	var dir string
-	if p := m.pools[key]; p != nil {
-		dir = p.goldenDir
-	}
-	m.mu.Unlock()
-	if dir != "" {
-		return dir
-	}
-	if onDisk, ok := m.goldenOnDisk(key.Hash()); ok {
-		return onDisk
-	}
-	return ""
-}
-
-func (m *Manager) goldenOnDisk(hash string) (string, bool) {
-	dir := filepath.Join(m.goldensDir(), hash)
-	fi, err := os.Stat(dir)
-	return dir, err == nil && fi.IsDir()
+	return counts
 }
 
 func (m *Manager) validate(key types.PoolKey) error {
@@ -881,448 +479,8 @@ func normalizePoolSpec(spec config.PoolSpec) config.PoolSpec {
 	return spec
 }
 
-// finalize stamps identity, persists the claim, and destroys the VM if the
-// store write fails so a durable claim always matches a live VM.
-func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Duration) (*types.Sandbox, error) {
-	if err := m.finalizeBatch(ctx, []*types.Sandbox{sb}, ttl); err != nil {
-		return nil, err
-	}
-	return sb, nil
-}
-
-// finalizeBatch stamps identities and persists the claims as one journal
-// write; on a failed write every VM in the batch is destroyed — a durable
-// claim always matches a live VM, and a batch lands all-or-nothing.
-func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration) error {
-	now := time.Now()
-	for _, sb := range sbs {
-		stampIdentity(sb, clampTTL(ttl))
-		sb.LastActivity = now
-	}
-	m.mu.Lock()
-	if live := len(m.claimed); m.maxClaims > 0 && live+len(sbs) > m.maxClaims {
-		m.mu.Unlock()
-		for _, sb := range sbs {
-			m.destroy(ctx, sb.VMName)
-		}
-		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, live, m.maxClaims)
-	}
-	for _, sb := range sbs {
-		m.claimed[sb.ID] = sb
-	}
-	saveErr := m.store.save(m.claimed)
-	if saveErr != nil {
-		for _, sb := range sbs {
-			delete(m.claimed, sb.ID)
-		}
-	}
-	m.mu.Unlock()
-	if saveErr != nil {
-		for _, sb := range sbs {
-			m.destroy(ctx, sb.VMName)
-		}
-		return fmt.Errorf("persist claim: %w", saveErr)
-	}
-	for _, sb := range sbs {
-		m.recordUsage(ctx, usageEvent{Event: "claim", ID: sb.ID, VMName: sb.VMName, KeyHash: sb.Key.Hash()})
-	}
-	return nil
-}
-
-// exportSource captures a claimed sandbox's state into exportDir. Only this
-// window holds the transition lock — it pins the source snapshot against a
-// concurrent wake consuming it; the minutes-long clone fan-out after it must
-// not block the source's own wake/hibernate traffic.
-func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir string) error {
-	sb.Transition.Lock()
-	defer sb.Transition.Unlock()
-	snap, cleanup, err := m.sourceSnap(ctx, sb)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	return m.eng.SnapshotExport(ctx, snap, exportDir)
-}
-
-func (m *Manager) refillOnce(ctx context.Context) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	now := time.Now()
-	for _, p := range m.pools {
-		target := p.effectiveTarget(now)
-		if p.goldenDir == "" {
-			if !p.building && now.After(p.nextBuild) {
-				p.building = true
-				go m.buildGolden(ctx, p)
-			}
-			continue
-		}
-		golden := p.goldenDir
-		for len(p.warm)+p.refilling < target {
-			select {
-			case m.refillSem <- struct{}{}:
-				p.refilling++
-				go m.refillOne(ctx, p, golden)
-			default:
-				return
-			}
-		}
-	}
-}
-
-func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
-	defer func() { <-m.refillSem }()
-	start := time.Now()
-	sb, err := m.provision(ctx, p.key, golden)
-	keep := false
-	m.mu.Lock()
-	p.refilling--
-	target := p.effectiveTarget(time.Now())
-	if err == nil && len(p.warm) < target {
-		p.warm = append(p.warm, sb)
-		p.noteLead(time.Since(start))
-		keep = true
-	}
-	m.mu.Unlock()
-	if err != nil {
-		log.WithFunc("pool.refillOne").Errorf(ctx, err, "refill %s", p.key.Hash())
-		return
-	}
-	if !keep {
-		m.destroy(ctx, sb.VMName)
-	}
-}
-
-func (m *Manager) buildGolden(ctx context.Context, p *pool) {
-	logger := log.WithFunc("pool.buildGolden")
-	hash := p.key.Hash()
-	name := vmPrefix + "gb-" + hash
-	snap := goldenPrefix + hash
-	final := filepath.Join(m.goldensDir(), hash)
-
-	err := m.buildGoldenSteps(ctx, p.key, name, snap, final)
-	if rmErr := m.eng.SnapshotRemove(ctx, snap); rmErr != nil && err == nil {
-		logger.Debugf(ctx, "drop golden snapshot %s: %v", snap, rmErr)
-	}
-	m.destroy(ctx, name)
-
-	m.mu.Lock()
-	p.building = false
-	if err == nil {
-		p.goldenDir = final
-	} else {
-		p.nextBuild = time.Now().Add(buildRetryDelay)
-	}
-	m.mu.Unlock()
-	if err != nil {
-		logger.Errorf(ctx, err, "build golden for %s", hash)
-		return
-	}
-	logger.Infof(ctx, "golden ready for %s (%s)", hash, p.key.Template)
-}
-
-func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name, snap, final string) error {
-	if err := m.eng.RunCold(ctx, name, key); err != nil {
-		return err
-	}
-	if _, err := m.probeReady(ctx, name, coldProbeTimeout); err != nil {
-		return err
-	}
-	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
-		return err
-	}
-	return m.exportGolden(ctx, snap, final)
-}
-
-// exportGolden exports snap into final through a unique sibling *.tmp dir:
-// a crash mid-export never leaves a half-written dir that would pass for a
-// golden, and concurrent promotes to one name cannot clobber each other's
-// staging (last rename wins whole).
-func (m *Manager) exportGolden(ctx context.Context, snap, final string) error {
-	staging, err := os.MkdirTemp(filepath.Dir(final), filepath.Base(final)+"-*.tmp")
-	if err != nil {
-		return fmt.Errorf("stage golden: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(staging) }()
-	tmp := filepath.Join(staging, "export") // cocoon wants the target absent
-	if err := m.eng.SnapshotExport(ctx, snap, tmp); err != nil {
-		return err
-	}
-	if err := os.RemoveAll(final); err != nil {
-		return fmt.Errorf("clear golden dir: %w", err)
-	}
-	return os.Rename(tmp, final)
-}
-
-// sourceSnap picks the snapshot to export a claimed sandbox from: the wake
-// image of a hibernated one (kept — the wake still needs it), or a transient
-// capture of a running one, dropped by the returned cleanup.
-func (m *Manager) sourceSnap(ctx context.Context, sb *types.Sandbox) (string, func(), error) {
-	if sb.HibernateSnap != "" {
-		return sb.HibernateSnap, func() {}, nil
-	}
-	snap := forkPrefix + strings.TrimPrefix(sb.VMName, vmPrefix) + "-" + randHex(3)
-	if err := m.eng.SnapshotSave(ctx, sb.VMName, snap); err != nil {
-		return "", nil, err
-	}
-	return snap, func() { m.dropSnap(ctx, snap) }, nil
-}
-
-func (m *Manager) reapOnce(ctx context.Context) {
-	now := time.Now()
-	type victim struct {
-		id, vmName, snap string
-	}
-	m.mu.Lock()
-	var expired []victim
-	for id, sb := range m.claimed {
-		if now.After(sb.Deadline) {
-			expired = append(expired, victim{id: id, vmName: sb.VMName, snap: sb.HibernateSnap})
-			delete(m.claimed, id)
-		}
-	}
-	var saveErr error
-	if len(expired) > 0 {
-		saveErr = m.store.save(m.claimed)
-	}
-	m.mu.Unlock()
-
-	logger := log.WithFunc("pool.reapOnce")
-	if saveErr != nil {
-		logger.Errorf(ctx, saveErr, "persist reap")
-	}
-	for _, v := range expired {
-		m.destroy(ctx, v.vmName)
-		m.dropSnap(ctx, v.snap)
-		m.counters.reaps.Add(1)
-		m.recordUsage(ctx, usageEvent{Event: "reap", ID: v.id, VMName: v.vmName})
-		logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
-	}
-}
-
-// touch records data-plane activity for the idle policy.
-func (m *Manager) touch(sb *types.Sandbox) {
-	m.mu.Lock()
-	sb.LastActivity = time.Now()
-	m.mu.Unlock()
-}
-
-// idleOnce hibernates claims idle past their pool's (or the node's)
-// threshold. Best-effort: a connection racing the sweep may see its sandbox
-// hibernate right after — the next call wakes it transparently.
-func (m *Manager) idleOnce(ctx context.Context) {
-	if !m.idleEnabled {
-		return
-	}
-	if !m.idleSweep.CompareAndSwap(false, true) {
-		return // the previous sweep's hibernates are still draining
-	}
-	now := time.Now()
-	type victim struct{ id, token string }
-	var victims []victim
-	m.mu.Lock()
-	for _, sb := range m.claimed {
-		idle := m.idleDefault
-		if p, pooled := m.pools[sb.Key]; pooled {
-			idle = p.idle // pooled keys never take the node default
-		}
-		if idle <= 0 || sb.HibernateSnap != "" || now.Sub(sb.LastActivity) < idle {
-			continue
-		}
-		victims = append(victims, victim{sb.ID, sb.Token})
-	}
-	m.mu.Unlock()
-	if len(victims) == 0 {
-		m.idleSweep.Store(false)
-		return
-	}
-	// Hibernates are seconds-long engine snapshots: run them off the
-	// housekeeping loop so refill ticks keep flowing during a big sweep.
-	go func() {
-		defer m.idleSweep.Store(false)
-		logger := log.WithFunc("pool.idleOnce")
-		for _, v := range victims {
-			switch err := m.idleHibernate(ctx, v.id, v.token, now); {
-			case err == nil:
-				logger.Infof(ctx, "idle-hibernated %s", v.id)
-			case !errors.Is(err, ErrUnknownSandbox) && !errors.Is(err, errWokeMeanwhile):
-				logger.Errorf(ctx, err, "idle-hibernate %s", v.id)
-			}
-		}
-	}()
-}
-
-// idleHibernate re-validates a sweep victim under the Transition lock: a
-// data-plane connection that arrived after the sweep's snapshot refreshes
-// LastActivity, and hibernating underneath it would cut a live call.
-func (m *Manager) idleHibernate(ctx context.Context, id, token string, sweepStart time.Time) error {
-	sb, ok := m.claim(id, token)
-	if !ok {
-		return ErrUnknownSandbox
-	}
-	sb.Transition.Lock()
-	defer sb.Transition.Unlock()
-	m.mu.Lock()
-	woke := sb.LastActivity.After(sweepStart) || sb.HibernateSnap != ""
-	m.mu.Unlock()
-	if woke {
-		return errWokeMeanwhile
-	}
-	return m.hibernateLocked(ctx, sb)
-}
-
-// provision creates one claim-ready VM: clone from a golden when available,
-// cold-boot the template otherwise. The VM is destroyed on any failure —
-// including create-command failures, which can leave a half-created VM
-// behind (e.g. the CLI killed by timeout after the VMM spawned).
-func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden string) (*types.Sandbox, error) {
-	name := vmName(key)
-	probeTimeout := claimProbeTimeout
-	var err error
-	if golden != "" {
-		err = m.eng.Clone(ctx, golden, name, key)
-	} else {
-		err = m.eng.RunCold(ctx, name, key)
-		probeTimeout = coldProbeTimeout
-	}
-	var sock string
-	if err == nil {
-		sock, err = m.probeReady(ctx, name, probeTimeout)
-	}
-	if err != nil {
-		m.destroy(ctx, name)
-		return nil, err
-	}
-	return &types.Sandbox{VMName: name, Key: key, VsockSocket: sock}, nil
-}
-
-// cloneBatch builds count claim-ready clones from an exported snapshot dir,
-// bounded by the refill semaphore — forks and refills contend for the same
-// node resources, so they share one gate. One failure destroys the batch.
-func (m *Manager) cloneBatch(ctx context.Context, key types.PoolKey, dir string, count int) ([]*types.Sandbox, error) {
-	children := make([]*types.Sandbox, count)
-	errs := make([]error, count)
-	var wg sync.WaitGroup
-	for i := range count {
-		m.refillSem <- struct{}{}
-		wg.Go(func() {
-			defer func() { <-m.refillSem }()
-			children[i], errs[i] = m.provision(ctx, key, dir)
-		})
-	}
-	wg.Wait()
-	if err := errors.Join(errs...); err != nil {
-		for _, child := range children {
-			if child != nil {
-				m.destroy(ctx, child.VMName)
-			}
-		}
-		return nil, err
-	}
-	return children, nil
-}
-
-// probeReady resolves a VM's vsock socket and waits until its silkd answers,
-// returning the socket — the claim-ready gate after create, clone, or restore.
-func (m *Manager) probeReady(ctx context.Context, name string, timeout time.Duration) (string, error) {
-	sock, err := m.vsockOf(ctx, name)
-	if err != nil {
-		return "", err
-	}
-	if err := m.eng.Probe(ctx, sock, timeout); err != nil {
-		return "", err
-	}
-	return sock, nil
-}
-
-func (m *Manager) vsockOf(ctx context.Context, name string) (string, error) {
-	vms, err := m.eng.List(ctx, name)
-	if err != nil {
-		return "", err
-	}
-	for _, vm := range vms {
-		if vm.Config.Name != name {
-			continue
-		}
-		if vm.VsockSocket == "" {
-			return "", fmt.Errorf("vm %s has no vsock socket", name)
-		}
-		return vm.VsockSocket, nil
-	}
-	return "", fmt.Errorf("vm %s not found after create", name)
-}
-
-// destroy removes a VM on a cancellation-immune ctx: cleanup is usually
-// triggered by a failed or abandoned request, and running `cocoon vm rm` on
-// the caller's canceled ctx would no-op and orphan a live VM.
-func (m *Manager) destroy(ctx context.Context, name string) {
-	ctx = context.WithoutCancel(ctx)
-	if err := m.eng.Remove(ctx, name); err != nil {
-		log.WithFunc("pool.destroy").Errorf(ctx, err, "remove vm %s", name)
-	}
-}
-
-func (m *Manager) dropSnap(ctx context.Context, snap string) {
-	if snap == "" {
-		return
-	}
-	ctx = context.WithoutCancel(ctx)
-	if err := m.eng.SnapshotRemove(ctx, snap); err != nil {
-		log.WithFunc("pool.dropSnap").Warnf(ctx, "drop snapshot %s: %v", snap, err)
-	}
-}
-
-func (m *Manager) claim(id, token string) (*types.Sandbox, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.authed(id, token)
-}
-
-// commitTransition publishes a hibernate/wake result and persists the
-// journal, but only if the claim is still live — Release and reap do not
-// take the transition lock, so a sandbox can be destroyed mid-transition
-// and publishing then would resurrect state nobody owns. Returns liveness;
-// a failed journal write only warns (the live state is authoritative).
-func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap, sock string) bool {
-	m.mu.Lock()
-	live := m.claimed[sb.ID] == sb
-	var saveErr error
-	if live {
-		sb.HibernateSnap = snap
-		sb.VsockSocket = sock
-		saveErr = m.store.save(m.claimed)
-	}
-	m.mu.Unlock()
-	if saveErr != nil {
-		log.WithFunc("pool.commitTransition").Warnf(ctx, "persist claims: %v", saveErr)
-	}
-	return live
-}
-
-// authed looks up a claim by id and token; callers hold m.mu.
-func (m *Manager) authed(id, token string) (*types.Sandbox, bool) {
-	sb := m.claimed[id]
-	if sb == nil || subtle.ConstantTimeCompare([]byte(sb.Token), []byte(token)) != 1 {
-		return nil, false
-	}
-	return sb, true
-}
-
 func (m *Manager) goldensDir() string {
 	return filepath.Join(m.dataDir, "goldens")
-}
-
-func stampIdentity(sb *types.Sandbox, ttl time.Duration) {
-	sb.ID = "sb_" + randHex(8)
-	sb.Token = randHex(16)
-	sb.Deadline = time.Now().Add(ttl)
-}
-
-func clampTTL(ttl time.Duration) time.Duration {
-	if ttl <= 0 {
-		return defaultTTL
-	}
-	return min(ttl, maxTTL)
 }
 
 func vmName(key types.PoolKey) string {
