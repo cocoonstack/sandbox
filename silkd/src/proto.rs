@@ -7,6 +7,8 @@
 use std::collections::HashMap;
 use std::io;
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
@@ -405,6 +407,31 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, resp: &Response) -> i
     w.flush().await
 }
 
+/// Renders `{"type":KIND,"data":"<base64>"}` into `buf` (reused across calls)
+/// and writes it — the bulk path skips serde's owned Vec + String per chunk.
+/// base64's alphabet needs no JSON escaping. KIND is data|stdout|stderr.
+pub async fn write_chunk_frame<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    buf: &mut Vec<u8>,
+    kind: &str,
+    data: &[u8],
+) -> io::Result<()> {
+    buf.clear();
+    buf.extend_from_slice(b"{\"type\":\"");
+    buf.extend_from_slice(kind.as_bytes());
+    buf.extend_from_slice(b"\",\"data\":\"");
+    let start = buf.len();
+    let b64_len = base64::encoded_len(data.len(), true)
+        .ok_or_else(|| io::Error::other("chunk too large to encode"))?;
+    buf.resize(start + b64_len, 0);
+    STANDARD
+        .encode_slice(data, &mut buf[start..])
+        .map_err(io::Error::other)?;
+    buf.extend_from_slice(b"\"}\n");
+    w.write_all(buf).await?;
+    w.flush().await
+}
+
 /// Maps an io error to an Error frame, classifying NotFound so a client can
 /// tell a missing path from a real failure. Shared by the fs and tree verbs.
 pub async fn err_frame<W: AsyncWrite + Unpin>(
@@ -442,18 +469,11 @@ where
     W: AsyncWrite + Unpin,
 {
     let mut buf = vec![0u8; BULK_CHUNK];
+    let mut frame = Vec::new();
     loop {
         match reader.read(&mut buf).await {
             Ok(0) => return Ok(Ok(())),
-            Ok(n) => {
-                write_frame(
-                    w,
-                    &Response::Data {
-                        data: buf[..n].to_vec(),
-                    },
-                )
-                .await?;
-            }
+            Ok(n) => write_chunk_frame(w, &mut frame, "data", &buf[..n]).await?,
             Err(e) => return Ok(Err(e)),
         }
     }
@@ -553,6 +573,83 @@ mod tests {
         })
         .expect("encode");
         assert_eq!(frame, r#"{"type":"stdout","data":"aGk="}"#);
+    }
+
+    #[tokio::test]
+    async fn chunk_frame_parses_back_to_serde_response() {
+        // Payload lengths 0..=3 cover every base64 padding shape; the full
+        // byte range covers the whole alphabet.
+        let payloads: Vec<Vec<u8>> = vec![
+            Vec::new(),
+            b"a".to_vec(),
+            b"ab".to_vec(),
+            b"abc".to_vec(),
+            (0u8..=255).collect(),
+        ];
+        let mut frame = Vec::new(); // shared across sizes, as producers reuse it
+        for kind in ["data", "stdout", "stderr"] {
+            for payload in &payloads {
+                let mut rendered = Vec::new();
+                write_chunk_frame(&mut rendered, &mut frame, kind, payload)
+                    .await
+                    .expect("render");
+                assert_eq!(rendered.pop(), Some(b'\n'), "{kind}: newline-terminated");
+                let got = match serde_json::from_slice::<Response>(&rendered) {
+                    Ok(Response::Data { data }) if kind == "data" => data,
+                    Ok(Response::Stdout { data }) if kind == "stdout" => data,
+                    Ok(Response::Stderr { data }) if kind == "stderr" => data,
+                    other => panic!("{kind}: parsed to {other:?}"),
+                };
+                assert_eq!(&got, payload, "{kind}: payload roundtrip");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn chunk_frame_matches_resp_data_fixture() {
+        let raw = std::fs::read(format!("{FIXTURES_DIR}/resp_data.json")).expect("fixture");
+        let Response::Data { data } =
+            serde_json::from_slice::<Response>(&raw).expect("parse fixture")
+        else {
+            panic!("resp_data.json is not a data frame");
+        };
+        let mut rendered = Vec::new();
+        let mut frame = Vec::new();
+        write_chunk_frame(&mut rendered, &mut frame, "data", &data)
+            .await
+            .expect("render");
+        let got: serde_json::Value = serde_json::from_slice(&rendered).expect("parse rendered");
+        let want: serde_json::Value = serde_json::from_slice(&raw).expect("parse fixture json");
+        assert_eq!(got, want);
+    }
+
+    /// Perf evidence, not a correctness gate. The serde side pays the
+    /// per-chunk `to_vec` the old producers paid. Run with:
+    /// cargo test --release -- --ignored --nocapture bench_chunk_render
+    #[tokio::test]
+    #[ignore]
+    async fn bench_chunk_render_old_vs_new() {
+        const CHUNKS: usize = 32 * 1024;
+        let data = vec![0xa5u8; BULK_CHUNK];
+        let mut sink = tokio::io::sink();
+
+        let start = std::time::Instant::now();
+        for _ in 0..CHUNKS {
+            write_frame(&mut sink, &Response::Data { data: data.clone() })
+                .await
+                .expect("serde render");
+        }
+        let serde_dt = start.elapsed();
+
+        let mut frame = Vec::new();
+        let start = std::time::Instant::now();
+        for _ in 0..CHUNKS {
+            write_chunk_frame(&mut sink, &mut frame, "data", &data)
+                .await
+                .expect("hand render");
+        }
+        let hand_dt = start.elapsed();
+        println!("{CHUNKS} x {BULK_CHUNK} B chunks: serde {serde_dt:?}, hand-rendered {hand_dt:?}");
     }
 
     #[tokio::test]

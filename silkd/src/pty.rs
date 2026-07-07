@@ -142,13 +142,14 @@ async fn pump<W: AsyncWrite + Unpin>(
     tokio::spawn(pump_stdin(Arc::clone(master), client, disc_tx));
 
     let mut buf = [0u8; PTY_READ_CHUNK];
+    let mut frame = Vec::new();
     let mut eof = false;
     let mut disc = false;
     loop {
         tokio::select! {
             status = child.wait() => {
                 let code = status.map(sysutil::exit_code).unwrap_or(-1);
-                drain(master, proc, out, &mut buf).await;
+                drain(master, proc, out, &mut buf, &mut frame).await;
                 return code;
             }
             // Client closed the terminal: kill the shell and let child.wait
@@ -166,9 +167,8 @@ async fn pump<W: AsyncWrite + Unpin>(
                     // 0 (BSD) and EIO (Linux) both mean the slave is fully closed.
                     Ok(Ok(0)) | Ok(Err(_)) => eof = true,
                     Ok(Ok(n)) => {
-                        let chunk = Chunk::Stdout(buf[..n].to_vec());
-                        proc.emit(&chunk);
-                        if crate::proto::write_frame(out, &chunk.into_response()).await.is_err() {
+                        proc.emit(&Chunk::Stdout(buf[..n].to_vec()));
+                        if crate::proto::write_chunk_frame(out, &mut frame, "stdout", &buf[..n]).await.is_err() {
                             // Client gone mid-output: kill and reap for the real code.
                             let _ = child.start_kill();
                             return sysutil::wait_code(child).await;
@@ -212,6 +212,7 @@ async fn drain<W: AsyncWrite + Unpin>(
     proc: &Arc<Proc>,
     out: &mut W,
     buf: &mut [u8],
+    frame: &mut Vec<u8>,
 ) {
     let _ = timeout(POST_EXIT_DRAIN, async {
         loop {
@@ -221,9 +222,8 @@ async fn drain<W: AsyncWrite + Unpin>(
             match guard.try_io(|fd| sysutil::read_fd(fd.get_ref().as_raw_fd(), buf)) {
                 Ok(Ok(0)) | Ok(Err(_)) => return,
                 Ok(Ok(n)) => {
-                    let chunk = Chunk::Stdout(buf[..n].to_vec());
-                    proc.emit(&chunk);
-                    if crate::proto::write_frame(out, &chunk.into_response())
+                    proc.emit(&Chunk::Stdout(buf[..n].to_vec()));
+                    if crate::proto::write_chunk_frame(out, frame, "stdout", &buf[..n])
                         .await
                         .is_err()
                     {

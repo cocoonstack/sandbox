@@ -161,10 +161,16 @@ async fn stream_to_client<W>(rx: &mut mpsc::Receiver<Chunk>, out: &mut W) -> std
 where
     W: AsyncWrite + Unpin,
 {
+    let mut frame = Vec::new();
     while let Some(chunk) = rx.recv().await {
         match chunk {
             Chunk::Exit(_) => return Ok(()),
-            c => crate::proto::write_frame(out, &c.into_response()).await?,
+            Chunk::Stdout(data) => {
+                crate::proto::write_chunk_frame(out, &mut frame, "stdout", &data).await?
+            }
+            Chunk::Stderr(data) => {
+                crate::proto::write_chunk_frame(out, &mut frame, "stderr", &data).await?
+            }
         }
     }
     Ok(())

@@ -230,6 +230,7 @@ impl Io {
         let keep = mb.len().saturating_sub(1);
         let mut acc: Vec<u8> = Vec::new();
         let mut buf = vec![0u8; READ_CHUNK];
+        let mut frame: Vec<u8> = Vec::new();
         loop {
             let n = self.stdout.read(&mut buf).await?;
             if n == 0 {
@@ -237,7 +238,7 @@ impl Io {
             }
             acc.extend_from_slice(&buf[..n]);
             if let Some(pos) = find(&acc, mb) {
-                emit(&mut out, &acc[..pos]).await;
+                emit(&mut out, &mut frame, &acc[..pos]).await;
                 let mut rest = acc[pos + mb.len()..].to_vec();
                 while !rest.contains(&b'\n') {
                     let m = self.stdout.read(&mut buf).await?;
@@ -257,7 +258,7 @@ impl Io {
             }
             if acc.len() > keep {
                 let upto = acc.len() - keep;
-                emit(&mut out, &acc[..upto]).await;
+                emit(&mut out, &mut frame, &acc[..upto]).await;
                 acc.drain(..upto);
             }
         }
@@ -279,19 +280,14 @@ pub async fn reap_loop(table: Table, ttl: Duration, interval: Duration) {
 /// client (`*out = None`) but does not abort the caller, so converse keeps
 /// draining the shell to its sentinel — a mid-command disconnect must not
 /// leave the persistent shell out of sync for the next exec.
-async fn emit<W: AsyncWrite + Unpin>(out: &mut Option<&mut W>, data: &[u8]) {
+async fn emit<W: AsyncWrite + Unpin>(out: &mut Option<&mut W>, frame: &mut Vec<u8>, data: &[u8]) {
     if data.is_empty() {
         return;
     }
     let failed = match out.as_deref_mut() {
-        Some(w) => proto::write_frame(
-            w,
-            &Response::Stdout {
-                data: data.to_vec(),
-            },
-        )
-        .await
-        .is_err(),
+        Some(w) => proto::write_chunk_frame(w, frame, "stdout", data)
+            .await
+            .is_err(),
         None => false,
     };
     if failed {

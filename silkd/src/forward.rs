@@ -42,6 +42,7 @@ pub async fn run<W: AsyncWrite + Unpin>(
     let mut feed_done = false;
 
     let mut buf = vec![0u8; BULK_CHUNK];
+    let mut frame = Vec::new();
     let res = loop {
         tokio::select! {
             r = tr.read(&mut buf) => match r {
@@ -58,13 +59,7 @@ pub async fn run<W: AsyncWrite + Unpin>(
                     .await
                 }
                 Ok(n) => {
-                    if let Err(e) = proto::write_frame(
-                        w,
-                        &Response::Data {
-                            data: buf[..n].to_vec(),
-                        },
-                    )
-                    .await
+                    if let Err(e) = proto::write_chunk_frame(w, &mut frame, "data", &buf[..n]).await
                     {
                         break Err(e);
                     }
