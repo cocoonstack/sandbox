@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -18,10 +17,6 @@ const (
 	defaultWarm         = 4
 	defaultMaxForkCount = 16
 )
-
-// tenantNameRe mirrors pool's template-name rule: tenant names ride in
-// journal fields and metric labels, so the same conservative charset applies.
-var tenantNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`)
 
 // PoolSpec declares one warm pool and its target of claim-ready VMs.
 type PoolSpec struct {
@@ -261,8 +256,8 @@ func (c *Config) validateTenants() error {
 	names := make(map[string]struct{}, len(c.Tenants))
 	tokens := make(map[string]struct{}, len(c.Tenants))
 	for _, tn := range c.Tenants {
-		if !tenantNameRe.MatchString(tn.Name) {
-			return fmt.Errorf("tenant name %q must match %s", tn.Name, tenantNameRe)
+		if !types.NameRe.MatchString(tn.Name) {
+			return fmt.Errorf("tenant name %q must match %s", tn.Name, types.NameRe)
 		}
 		if _, ok := names[tn.Name]; ok {
 			return fmt.Errorf("duplicate tenant name %q", tn.Name)

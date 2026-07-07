@@ -82,12 +82,7 @@ func (m *Manager) TenantClaims() map[string]int {
 	defer m.mu.Unlock()
 	counts := make(map[string]int, len(m.tenantMax))
 	for name := range m.tenantMax {
-		counts[name] = 0
-	}
-	for _, sb := range m.claimed {
-		if _, ok := counts[sb.Tenant]; ok {
-			counts[sb.Tenant]++
-		}
+		counts[name] = m.tenantLive[name]
 	}
 	return counts
 }

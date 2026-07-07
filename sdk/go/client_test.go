@@ -185,6 +185,55 @@ func TestDeleteTemplateFollowsRedirect(t *testing.T) {
 	}
 }
 
+// TestDeleteTemplateRetryPolicy pins the walk semantics shared with the
+// Python SDK: a 404 moves to the next owner, a served error surfaces at
+// once (walking on would let a later 404 mask it).
+func TestDeleteTemplateRetryPolicy(t *testing.T) {
+	status := func(code int, hit *bool) *httptest.Server {
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			*hit = true
+			w.WriteHeader(code)
+		}))
+		t.Cleanup(s.Close)
+		return s
+	}
+	entry := func(candidates ...*httptest.Server) *httptest.Server {
+		addrs := make([]string, len(candidates))
+		for i, c := range candidates {
+			addrs[i] = strings.TrimPrefix(c.URL, "http://")
+		}
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(claimResponse{Redirect: addrs})
+		}))
+		t.Cleanup(s.Close)
+		return s
+	}
+
+	t.Run("miss walks to the next owner", func(t *testing.T) {
+		var missHit, ownerHit bool
+		miss := status(http.StatusNotFound, &missHit)
+		owner := status(http.StatusNoContent, &ownerHit)
+		if err := testClient(t, entry(miss, owner)).DeleteTemplate(t.Context(), "tpl"); err != nil {
+			t.Fatalf("DeleteTemplate: %v", err)
+		}
+		if !missHit || !ownerHit {
+			t.Errorf("miss=%v owner=%v, want both tried", missHit, ownerHit)
+		}
+	})
+	t.Run("served error stops the walk", func(t *testing.T) {
+		var brokenHit, ownerHit bool
+		broken := status(http.StatusInternalServerError, &brokenHit)
+		owner := status(http.StatusNoContent, &ownerHit)
+		err := testClient(t, entry(broken, owner)).DeleteTemplate(t.Context(), "tpl")
+		if err == nil || !strings.Contains(err.Error(), "http 500") {
+			t.Fatalf("err %v, want the 500 surfaced", err)
+		}
+		if ownerHit {
+			t.Error("walk continued past a served error")
+		}
+	})
+}
+
 func TestRedirectSetsNoRedirect(t *testing.T) {
 	// The retry at a redirect target must carry no_redirect so the target
 	// warm-or-provisions instead of bouncing the claim back.

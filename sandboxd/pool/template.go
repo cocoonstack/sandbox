@@ -38,8 +38,8 @@ type templateRecord struct {
 // node-bound and the mesh's template gossip routes to it. tenant attributes
 // the record; empty means the operator (root).
 func (m *Manager) Promote(ctx context.Context, id, token, template, tenant string) (types.PoolKey, error) {
-	if !templateNameRe.MatchString(template) {
-		return types.PoolKey{}, fmt.Errorf("%w: template %q must match %s", ErrBadKey, template, templateNameRe)
+	if !types.NameRe.MatchString(template) {
+		return types.PoolKey{}, fmt.Errorf("%w: template %q must match %s", ErrBadKey, template, types.NameRe)
 	}
 	sb, ok := m.claim(id, token)
 	if !ok {
@@ -52,11 +52,13 @@ func (m *Manager) Promote(ctx context.Context, id, token, template, tenant strin
 		return types.PoolKey{}, ErrPooledTemplate
 	}
 	// Re-promote replaces; a tenant must not overwrite (and poison) another
-	// tenant's template. Root may replace any.
-	if raw, err := m.tpls.ReadMeta(ctx, store.TemplateID(key.Hash())); err == nil && tenant != "" {
-		var prev templateRecord
-		if json.Unmarshal(raw, &prev) == nil && prev.Tenant != tenant {
-			return types.PoolKey{}, ErrTemplateOwned
+	// tenant's template. Root may replace any, so it skips the meta read.
+	if tenant != "" {
+		if raw, err := m.tpls.ReadMeta(ctx, store.TemplateID(key.Hash())); err == nil {
+			var prev templateRecord
+			if json.Unmarshal(raw, &prev) == nil && prev.Tenant != tenant {
+				return types.PoolKey{}, ErrTemplateOwned
+			}
 		}
 	}
 	// See Fork: the transition lock pins the source snapshot, and a started

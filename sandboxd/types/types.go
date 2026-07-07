@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"sync"
 	"time"
 )
@@ -24,12 +25,19 @@ const (
 	BackendFC Backend = "fc"
 )
 
-var sizeSpecs = map[Size]SizeSpec{
-	SizeSmall:  {CPU: 1, Memory: "512M"},
-	SizeMedium: {CPU: 2, Memory: "1G"},
-	SizeLarge:  {CPU: 4, Memory: "4G"},
-	SizeXLarge: {CPU: 4, Memory: "8G"},
-}
+var (
+	// NameRe pins caller-chosen names (templates, checkpoints, tenants),
+	// which ride in journal fields and metric labels: one conservative
+	// charset, also accepted by cocoon's snapshot naming.
+	NameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`)
+
+	sizeSpecs = map[Size]SizeSpec{
+		SizeSmall:  {CPU: 1, Memory: "512M"},
+		SizeMedium: {CPU: 2, Memory: "1G"},
+		SizeLarge:  {CPU: 4, Memory: "4G"},
+		SizeXLarge: {CPU: 4, Memory: "8G"},
+	}
+)
 
 // NetShape selects the sandbox network lane and derives the backend.
 type NetShape string

@@ -244,10 +244,8 @@ func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context,
 	var wg sync.WaitGroup
 	wg.Add(n)
 	for i := range n {
-		// Acquire the semaphore inside the goroutine, not the submit loop:
-		// a batch larger than the budget must not block the caller (Run's
-		// select loop) while slots are busy. Concurrency stays bounded;
-		// only the cheap goroutines queue.
+		// Acquire inside the goroutine: a batch larger than the budget
+		// must not block the caller (Run's select loop).
 		go func() {
 			defer wg.Done()
 			select {

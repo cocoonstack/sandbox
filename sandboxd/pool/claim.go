@@ -86,6 +86,7 @@ func (m *Manager) Release(ctx context.Context, id, token string) error {
 		return ErrUnknownSandbox
 	}
 	delete(m.claimed, id)
+	m.tenantDelta(sb.Tenant, -1)
 	snap := sb.HibernateSnap
 	saveErr := m.store.save(m.claimed)
 	m.mu.Unlock()
@@ -170,16 +171,22 @@ func (m *Manager) quotaErr(extra int, tenant string) error {
 	if tenant == "" || limit <= 0 {
 		return nil
 	}
-	live := 0
-	for _, sb := range m.claimed {
-		if sb.Tenant == tenant {
-			live++
-		}
-	}
-	if live+extra > limit {
+	if live := m.tenantLive[tenant]; live+extra > limit {
 		return fmt.Errorf("%w: tenant %s at %d live claims, cap %d", ErrQuota, tenant, live, limit)
 	}
 	return nil
+}
+
+// tenantDelta tracks tenantLive as m.claimed changes; callers hold m.mu.
+func (m *Manager) tenantDelta(tenant string, delta int) {
+	if tenant == "" {
+		return
+	}
+	if n := m.tenantLive[tenant] + delta; n > 0 {
+		m.tenantLive[tenant] = n
+	} else {
+		delete(m.tenantLive, tenant)
+	}
 }
 
 // finalize stamps identity, persists the claim, and destroys the VM if the
@@ -211,11 +218,13 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	}
 	for _, sb := range sbs {
 		m.claimed[sb.ID] = sb
+		m.tenantDelta(sb.Tenant, 1)
 	}
 	saveErr := m.store.save(m.claimed)
 	if saveErr != nil {
 		for _, sb := range sbs {
 			delete(m.claimed, sb.ID)
+			m.tenantDelta(sb.Tenant, -1)
 		}
 	}
 	m.mu.Unlock()
@@ -242,6 +251,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		if now.After(sb.Deadline) {
 			expired = append(expired, victim{id: id, vmName: sb.VMName, snap: sb.HibernateSnap})
 			delete(m.claimed, id)
+			m.tenantDelta(sb.Tenant, -1)
 		}
 	}
 	var saveErr error

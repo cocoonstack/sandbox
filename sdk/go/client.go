@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -76,6 +77,7 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 			return nil, err
 		}
 		var sb *Sandbox
+		retryAny := func(error) bool { return true }
 		if tryErr := tryEach(cr.Redirect, func(addr string) error {
 			target, claimErr := c.claimAt(ctx, addr, body)
 			if claimErr != nil {
@@ -83,7 +85,7 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 			}
 			sb = c.handleFrom(addr, target)
 			return nil
-		}); tryErr != nil {
+		}, retryAny); tryErr != nil {
 			return nil, fmt.Errorf("claim: all redirect targets failed: %w", tryErr)
 		}
 		return sb, nil
@@ -131,7 +133,7 @@ func (c *Client) DeleteTemplate(ctx context.Context, template string, opts ...Op
 	if tryErr := tryEach(redirect, func(addr string) error {
 		_, retryErr := c.deleteTemplates(ctx, addr, u)
 		return retryErr
-	}); tryErr != nil {
+	}, retryMiss); tryErr != nil {
 		return fmt.Errorf("delete template at owner: %w", tryErr)
 	}
 	return nil
@@ -222,18 +224,28 @@ func doNoContent(ctx context.Context, c *Client, method, addr, path string, body
 }
 
 // tryEach calls call against each candidate in turn, stopping at the first
-// success; any failure moves on to the next candidate and the last error
-// propagates. The sequential half of the cluster redirect protocol: a claim
-// or template-delete retry walks the owner list one node at a time.
-func tryEach(candidates []string, call func(addr string) error) error {
+// success. An error for which retry is true moves on to the next candidate
+// and the last such error propagates; any other error returns at once. The
+// per-verb retry policy mirrors the Python SDK's _try_each.
+func tryEach(candidates []string, call func(addr string) error, retry func(error) bool) error {
 	var lastErr error
 	for _, addr := range candidates {
 		lastErr = call(addr)
 		if lastErr == nil {
 			return nil
 		}
+		if !retry(lastErr) {
+			return lastErr
+		}
 	}
 	return lastErr
+}
+
+// retryMiss retries a miss (the next candidate may own the record) or a
+// transport failure (dead peer); a served error is real and stops the walk.
+func retryMiss(err error) bool {
+	var he *httpError
+	return !errors.As(err, &he) || he.status == http.StatusNotFound
 }
 
 // scatter probes addrs concurrently, returning the first success and
@@ -280,14 +292,26 @@ func encodeClaim(claim claimRequest) ([]byte, error) {
 	return body, nil
 }
 
+// httpError is a non-2xx control-plane reply; redirect walks branch on the
+// status (retryMiss).
+type httpError struct {
+	verb   string
+	status int
+	msg    string
+}
+
+func (e *httpError) Error() string {
+	if e.msg != "" {
+		return fmt.Sprintf("%s: %s (http %d)", e.verb, e.msg, e.status)
+	}
+	return fmt.Sprintf("%s: http %d", e.verb, e.status)
+}
+
 // apiError surfaces the server's {"error": ...} body when present.
 func apiError(verb string, resp *http.Response) error {
 	var er errorResponse
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&er)
-	if er.Error != "" {
-		return fmt.Errorf("%s: %s (http %d)", verb, er.Error, resp.StatusCode)
-	}
-	return fmt.Errorf("%s: http %d", verb, resp.StatusCode)
+	return &httpError{verb: verb, status: resp.StatusCode, msg: er.Error}
 }
 
 // claimRequest mirrors sandboxd's wire type; duplicated so the SDK stays

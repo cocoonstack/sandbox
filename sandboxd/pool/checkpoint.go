@@ -28,8 +28,8 @@ var (
 // checkpointed again later, so successive checkpoints form a tree. tenant
 // attributes the record; empty means the operator (root).
 func (m *Manager) Checkpoint(ctx context.Context, id, token, name, tenant string) (types.Checkpoint, error) {
-	if name != "" && !templateNameRe.MatchString(name) {
-		return types.Checkpoint{}, fmt.Errorf("%w: %q must match %s", ErrBadName, name, templateNameRe)
+	if name != "" && !types.NameRe.MatchString(name) {
+		return types.Checkpoint{}, fmt.Errorf("%w: %q must match %s", ErrBadName, name, types.NameRe)
 	}
 	sb, ok := m.claim(id, token)
 	if !ok {

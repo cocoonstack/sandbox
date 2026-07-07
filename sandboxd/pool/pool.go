@@ -63,10 +63,6 @@ var (
 	// errWokeMeanwhile aborts an idle-hibernate whose victim saw a
 	// data-plane connection after the sweep snapshot; internal only.
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
-
-	// templateNameRe mirrors cocoon's snapshot-name rule so a promoted
-	// template's derived snapshot and golden names are always accepted.
-	templateNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`)
 )
 
 // Engine is the slice of the cocoon driver the manager consumes.
@@ -145,10 +141,12 @@ type Manager struct {
 
 	// maxClaims caps live claims node-wide (0 = unlimited); tenantMax holds
 	// every configured tenant's cap (0 = unlimited) and doubles as the set of
-	// known tenants. usage is the always-on billing event stream, audit the
+	// known tenants; tenantLive counts live claims per tenant so admission
+	// stays O(1). usage is the always-on billing event stream, audit the
 	// config-gated request tap.
 	maxClaims    int
 	tenantMax    map[string]int
+	tenantLive   map[string]int
 	usage        *journal
 	audit        *journal
 	counters     counters
@@ -183,14 +181,15 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine) (*Manager, 
 		maxFork = defaultMaxFork
 	}
 	m := &Manager{
-		eng:       eng,
-		dataDir:   cfg.DataDir,
-		egress:    cfg.HasEgress(),
-		maxFork:   maxFork,
-		store:     newClaimStore(cfg.DataDir),
-		pools:     make(map[types.PoolKey]*pool, len(cfg.Pools)),
-		claimed:   map[string]*types.Sandbox{},
-		refillSem: make(chan struct{}, maxConcurrentRefills),
+		eng:        eng,
+		dataDir:    cfg.DataDir,
+		egress:     cfg.HasEgress(),
+		maxFork:    maxFork,
+		store:      newClaimStore(cfg.DataDir),
+		pools:      make(map[types.PoolKey]*pool, len(cfg.Pools)),
+		claimed:    map[string]*types.Sandbox{},
+		tenantLive: map[string]int{},
+		refillSem:  make(chan struct{}, maxConcurrentRefills),
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("create goldens dir: %w", err)
@@ -313,6 +312,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			continue
 		}
 		m.claimed[id] = sb
+		m.tenantDelta(sb.Tenant, 1)
 		owned[sb.VMName] = true
 		referenced[sb.HibernateSnap] = true
 	}

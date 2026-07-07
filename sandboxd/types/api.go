@@ -48,7 +48,7 @@ type ClaimResponse struct {
 }
 
 // ForkRequest is the wire body of POST /v1/sandboxes/{id}/fork. The
-// Authorization header carries the node api token (forking creates node
+// Authorization header carries an api or tenant token (forking creates node
 // resources, like a claim); Token proves ownership of the source sandbox.
 // TTLSeconds applies to every child; zero means the server default — a
 // lease is a per-sandbox resource bound, so children never inherit the
@@ -70,7 +70,7 @@ type ForkResponse struct {
 }
 
 // CheckpointRequest is the wire body of POST /v1/sandboxes/{id}/checkpoint.
-// Auth mirrors fork: api token in Authorization, sandbox token here.
+// Auth mirrors fork: api/tenant token in Authorization, sandbox token here.
 type CheckpointRequest struct {
 	Token string `json:"token"`
 	Name  string `json:"name,omitempty"`
@@ -98,7 +98,7 @@ type CheckpointListResponse struct {
 }
 
 // PromoteRequest is the wire body of POST /v1/sandboxes/{id}/promote; auth
-// mirrors ForkRequest (api token in the header, source ownership in Token).
+// mirrors ForkRequest (control token in the header, ownership in Token).
 type PromoteRequest struct {
 	Token    string `json:"token"`
 	Template string `json:"template"`
@@ -112,7 +112,7 @@ type PromoteResponse struct {
 }
 
 // PreviewRequest is the wire body of POST /v1/sandboxes/{id}/preview; auth
-// mirrors ForkRequest (api token in the header, ownership in Token).
+// mirrors ForkRequest (control token in the header, ownership in Token).
 type PreviewRequest struct {
 	Token      string `json:"token"`
 	Port       uint16 `json:"port"`

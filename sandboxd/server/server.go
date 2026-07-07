@@ -151,8 +151,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/claim", s.requireToken(s.handleClaim))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleSandboxVerb("release", s.mgr.Release))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
-	// Fork and promote create node resources, so they take the api token
-	// like a claim; the source sandbox's token rides in the body as the
+	// Fork and promote create node resources, so they take the same token
+	// class as a claim; the source sandbox's token rides in the body as the
 	// ownership proof.
 	mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.requireToken(s.handleFork))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/promote", s.requireToken(s.handlePromote))
