@@ -17,7 +17,7 @@ def main() -> int:
 
     with CocoonToolkit(args.addr, api_token=args.token, template=args.template) as kit:
         exec_tool, write, read, list_dir = kit.get_tools()
-        print(exec_tool.invoke({"command": "echo toolkit-mark"}))
+        print(exec_tool.invoke({"command": "mkdir -p /work && echo toolkit-mark"}))
         write.invoke({"path": "/work/lc.txt", "content": "via-langchain"})
         assert read.invoke({"path": "/work/lc.txt"}) == "via-langchain"
         assert "lc.txt" in list_dir.invoke({"path": "/work"})

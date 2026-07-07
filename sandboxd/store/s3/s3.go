@@ -16,7 +16,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"golang.org/x/sync/errgroup"
 
@@ -40,8 +40,7 @@ type Config struct {
 // idRe names the instance's id namespace within the shared prefix.
 type Store struct {
 	client  *awss3.Client
-	up      *manager.Uploader
-	down    *manager.Downloader
+	tm      *transfermanager.Client
 	bucket  string
 	prefix  string
 	staging string
@@ -68,15 +67,11 @@ func New(ctx context.Context, cfg Config, stagingRoot string, idRe *regexp.Regex
 	})
 	// Snapshot exports are hundreds of MB: multipart + concurrency keep a
 	// publish/fetch bandwidth-bound instead of latency-bound.
-	up := manager.NewUploader(client, func(u *manager.Uploader) {
-		u.PartSize = 16 << 20
-		u.Concurrency = 8
+	tm := transfermanager.New(client, func(o *transfermanager.Options) {
+		o.PartSizeBytes = 16 << 20
+		o.Concurrency = 8
 	})
-	down := manager.NewDownloader(client, func(d *manager.Downloader) {
-		d.PartSize = 16 << 20
-		d.Concurrency = 8
-	})
-	return &Store{client: client, up: up, down: down, bucket: cfg.Bucket, prefix: cfg.Prefix, staging: stagingRoot, idRe: idRe}, nil
+	return &Store{client: client, tm: tm, bucket: cfg.Bucket, prefix: cfg.Prefix, staging: stagingRoot, idRe: idRe}, nil
 }
 
 func (s *Store) Stage(id string) (string, error) {
@@ -257,7 +252,7 @@ func (s *Store) upload(ctx context.Context, key, path string) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	if _, err := s.up.Upload(ctx, &awss3.PutObjectInput{Bucket: &s.bucket, Key: &key, Body: f}); err != nil {
+	if _, err := s.tm.UploadObject(ctx, &transfermanager.UploadObjectInput{Bucket: &s.bucket, Key: &key, Body: f}); err != nil {
 		return fmt.Errorf("upload %s: %w", key, err)
 	}
 	return nil
@@ -272,7 +267,9 @@ func (s *Store) download(ctx context.Context, key, path string) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	if _, err := s.down.Download(ctx, f, &awss3.GetObjectInput{Bucket: &s.bucket, Key: &key}); err != nil {
+	// DownloadObject, not GetObject: the WriterAt form downloads parts in
+	// parallel; GetObject's io.Reader is a single sequential stream.
+	if _, err := s.tm.DownloadObject(ctx, &transfermanager.DownloadObjectInput{Bucket: &s.bucket, Key: &key, WriterAt: f}); err != nil {
 		return fmt.Errorf("download %s: %w", key, err)
 	}
 	return nil

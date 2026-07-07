@@ -3,11 +3,13 @@ package s3
 import (
 	"cmp"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -50,11 +52,32 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sort.Slice(result.Contents, func(i, j int) bool { return result.Contents[i].Key < result.Contents[j].Key })
 		w.Header().Set("Content-Type", "application/xml")
 		_ = xml.NewEncoder(w).Encode(result)
+	case r.Method == http.MethodHead:
+		body, ok := f.objects[key]
+		if !ok {
+			http.Error(w, "NoSuchKey", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	case r.Method == http.MethodGet:
 		body, ok := f.objects[key]
 		if !ok {
 			http.Error(w, "NoSuchKey", http.StatusNotFound)
 			return
+		}
+		// transfermanager sizes ranged downloads via HeadObject then GETs
+		// with a Range header; serve it so multi-part gets stay correct.
+		if rng := r.Header.Get("Range"); rng != "" {
+			var start, end int
+			if _, err := fmt.Sscanf(rng, "bytes=%d-%d", &start, &end); err == nil && start < len(body) {
+				if end >= len(body) {
+					end = len(body) - 1
+				}
+				w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(body)))
+				w.WriteHeader(http.StatusPartialContent)
+				_, _ = w.Write(body[start : end+1])
+				return
+			}
 		}
 		_, _ = w.Write(body)
 	case r.Method == http.MethodDelete:
