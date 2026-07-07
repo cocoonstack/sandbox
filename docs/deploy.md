@@ -45,7 +45,7 @@ sandboxd reads one JSON file (`-config`, default
 | field | default | meaning |
 |---|---|---|
 | `listen` | `:7777` | control- and data-plane HTTP listener |
-| `data_dir` | `/var/lib/sandboxd` | golden snapshot exports and the claims journal |
+| `data_dir` | `/var/lib/sandboxd` | golden snapshot exports, the claims journal, the usage/audit journals (`usage.jsonl`, `audit.jsonl` + `.1` backups), and `checkpoints/` by default |
 | `cocoon_bin` | `cocoon` | cocoon CLI binary |
 | `advertise_addr` | = `listen` | the host:port clients reach this node at; returned as a claim's owner address and gossiped to peers. Must be routable when `listen` is a wildcard |
 | `bridge` / `network` | unset | egress-lane attachment: a host bridge device, or a CNI conflist name. Mutually exclusive; with neither set the node serves only the no-network lane |
@@ -56,11 +56,11 @@ sandboxd reads one JSON file (`-config`, default
 | `preview_advertise` | = `preview_listen` | the base URL a browser/proxy reaches this node's preview server at |
 | `checkpoint_dir` | `<data_dir>/checkpoints` | where checkpoints live. Point it at a shared FUSE mount (JuiceFS over object storage, NFS) and every node sharing the mount can branch every checkpoint — the path's filesystem is the operator's choice, and the storage backend sits behind an interface for future native object-store support |
 | `warm_max` (pool entry) | 0 (static) | turns on the demand-adaptive watermark for that pool: the warm target rises from `warm` toward `warm_max` while claims arrive faster than the measured provision lead covers, and decays back over ~a minute of silence |
-| `max_claims` | 0 (unlimited) | node-wide cap on live claims; claim/fork/branch requests beyond it answer 429 with the pool state unharmed |
-| `audit_log` | false | append every relayed request frame's op + addressing fields (never payloads) to `<data_dir>/audit.jsonl`, size-rotated with one `.1` backup |
+| `max_claims` | 0 (unlimited) | node-wide cap on live claims; claim/fork/branch requests beyond it answer 429 with the pool state unharmed (on a cluster, a claim is first redirected to a warm peer) |
+| `audit_log` | false | append every relayed request frame's op + addressing fields (never payloads) to `<data_dir>/audit.jsonl`, size-rotated with one `.1` backup. Records are `{t, id, op}` plus whichever addressing fields the op carries (`argv`, `path`, `dest`, `from`, `to`, `url`, `session`, `port`); preview accesses record as op `preview_dial`. A request frame whose first line exceeds 4 KiB is skipped, never truncated |
 | `idle_hibernate_seconds` | 0 (off) | node-wide idle policy for unpooled claims (template/checkpoint claims): a claim with no data-plane connection for this long is hibernated; the next call wakes it transparently. Per-pool `idle_hibernate_seconds` (in a pool entry) does the same for that pool's claims — pooled keys ignore the node-wide value. Opt-in deliberately: a wake costs latency and the snapshot, so callers with their own idle logic must not pay twice |
 | `mesh` | unset | join a cluster ([Clusters](cluster.md)); unset = single node |
-| `pools[]` | — | warm pools. `warm` defaults to 4; `net` is `none` or `egress`; `size` is a tier, below |
+| `pools[]` | — | warm pools. `warm` defaults to 4; `net` is `none` or `egress`; `size` is a tier, below. Retune online without a restart via [`PUT /v1/pools`](sandboxd-api.md#put-v1pools) — omitted pools drain |
 
 Size tiers (free-form CPU/memory is deliberately not accepted — it would
 fragment the warm pools):

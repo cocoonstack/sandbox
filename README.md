@@ -19,8 +19,9 @@ Two network lanes, derived from the claim (never user-selected backend):
 `net=egress` → Cloud Hypervisor with a bridge/CNI NIC.
 
 **Documentation**: [cocoonstack.github.io/sandbox](https://cocoonstack.github.io/sandbox/)
-(deployment, clusters, HTTP API, Go SDK reference, silkd protocol,
-performance) — source in [`docs/`](docs/).
+(deployment, clusters, HTTP API, Go + Python SDK references, the MCP server,
+the OpenAI Agents SDK adapter, silkd protocol, performance) — source in
+[`docs/`](docs/).
 
 Design docs:
 [sandbox-fast-boot](https://github.com/cocoonstack/cocoon-specs/blob/main/design/sandbox-fast-boot.md) (boot chain),
@@ -31,20 +32,25 @@ Design docs:
 
 - `silkd/` — in-guest product daemon (Rust, tokio): exec with context,
   persistent shell sessions, streaming fs, tar-stream tree push/pull,
-  find/replace, watch (ready-acked), pty, structured git — newline-JSON
-  frames over vsock 2048, one connection per RPC; baked into the base image
+  find/replace, watch (ready-acked), pty, structured git, guest port
+  relay (`port_forward`), and an LSP broker for flavor-shipped language
+  servers — newline-JSON frames over vsock 2048, one connection per RPC;
+  baked into the base image
 - `sandboxd/` — per-node control plane (Go): warm pools refilled from golden
-  snapshot exports, claim/release/info HTTP API, the HTTP-upgrade byte relay
-  to silkd, reap + restart reconcile, memberlist mesh with redirect placement
+  snapshot exports (online-retunable), claim/release/hibernate/fork/promote/
+  checkpoint HTTP API, signed preview URLs, the HTTP-upgrade byte relay to
+  silkd, usage + audit journals, /metrics, reap + restart reconcile,
+  memberlist mesh with redirect placement
 - `sdk/go/` — Go SDK (stdlib-only): `Connect/New/Lookup`, `Exec/Run`, files,
   `Push/Pull`, sessions, `Find/Replace`, `Watch`, git verbs, `OpenPty`,
-  `Checkpoint`; `sdk/go/silkd` is the wire binding, `silkdtest` a test fake
+  `Fork/Hibernate/Promote/Checkpoint`, `DialPort/ProxyPort/PreviewURL`,
+  `StartLsp`; `sdk/go/silkd` is the wire binding, `silkdtest` a test fake
 - `sdk/python/` — Python SDK (stdlib-only, sync), the same surface for the
   Python-first agent ecosystem; round-trips the shared fixture corpus
 - `mcp/` — `sandbox-mcp`, an MCP stdio server exposing the surface as tools
   for Claude Code / Cursor / agent frameworks
-- `sdk/openai/` — `cocoonsandbox-openai`, a custom sandbox provider for the
-  OpenAI Agents SDK (Python, over the Python SDK)
+- `sdk/openai/` — `cocoonstack-sandbox-openai`, a custom sandbox provider
+  for the OpenAI Agents SDK (Python, over the Python SDK)
 - `protocol/fixtures/` — golden frame corpus; the Rust and Go protocol tests
   both round-trip it, so wire drift fails CI
 - `e2e/` — in-process full-stack tests (real pool/engine/relay/SDK, fake

@@ -43,7 +43,9 @@ A claim always enters at whatever node the client dialed:
    up to two peer addresses that gossip says hold warm sandboxes, chosen
    power-of-two-choices to avoid herding. The SDK retries there with
    `no_redirect` set, so the target warms-or-provisions locally and a stale
-   view can never ping-pong.
+   view can never ping-pong. The same redirect fires when the node lacks a
+   golden for the key but gossip names a template owner, and when the node
+   sits at `max_claims` while a peer reports warm capacity.
 3. **No candidates** — the node provisions locally: a golden clone (tens of
    ms) or a cold boot for an unpooled key.
 

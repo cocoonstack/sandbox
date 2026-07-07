@@ -30,8 +30,10 @@ A claim branched from a checkpoint (fork children included) additionally
 carries `"from_checkpoint": "ck_…"` — the lineage edge for reconstructing
 the checkpoint tree.
 
-Warm miss on a cluster node with warm peers (mutually exclusive with the
-fields above):
+Redirects (mutually exclusive with the fields above) name peers to retry
+at — sent on a warm miss with warm peers, when the node lacks a golden for
+the key but gossip names a template owner, and when the node is at
+`max_claims` but a peer reports warm capacity:
 
 ```json
 {"redirect": ["10.0.0.6:7777", "10.0.0.7:7777"]}
@@ -41,7 +43,9 @@ Retry the same body (+`no_redirect: true`) at each candidate until one
 answers.
 
 Errors: 400 unknown template axis / bad body; 401 bad api token; 409 egress
-requested on a node without an egress attachment; 500 provisioning failed.
+requested on a node without an egress attachment; 429 node at `max_claims`
+(a redirect to a warm peer is tried first on a cluster); 500 provisioning
+failed.
 
 ## POST /v1/sandboxes/{id}/release
 
@@ -69,7 +73,8 @@ claim. The sandbox's own token rides in the body as the ownership proof:
 {"token": "…", "count": 2, "ttl_seconds": 300}
 ```
 
-Clones the sandbox into `count` fresh claims (1–16). Memory, disk, and guest
+Clones the sandbox into `count` fresh claims (1 up to the node's
+`max_fork_count`, default 16). Memory, disk, and guest
 state (sessions, processes, tmpfs) duplicate at the fork point; cocoon's
 clone reseed gives every child a distinct machine identity. Children get
 their own lease — `ttl_seconds` (0 = server default), never the parent's
@@ -82,7 +87,7 @@ All-or-nothing: on error no child survived. 200 with one claim per child:
 ```
 
 400 invalid count or body, 401 bad api token, 404 unknown id or wrong
-sandbox token.
+sandbox token, 429 node at `max_claims`.
 
 ## POST /v1/sandboxes/{id}/promote
 
@@ -119,9 +124,26 @@ hold the template but sees an owner in gossip answers `200
 delete at the owner. The retry carries `no_redirect=1`, mirroring the claim
 protocol: a node answering a `no_redirect` delete speaks only for itself.
 
+## PUT /v1/pools
+
+Auth: node API token. Replaces the node's desired warm targets online — no
+restart, live claims untouched:
+
+```json
+{"pools": [{"template": "base:24.04", "net": "none", "size": "small",
+            "warm": 4, "warm_max": 16, "idle_hibernate_seconds": 0}]}
+```
+
+Pools omitted from the list are drained: their unclaimed warm VMs are
+destroyed and the pool entry retires. `net`/`size` default like a claim's.
+Answers the fresh `GET /v1/info` payload. 400 bad key, negative warm/idle,
+`warm_max` below `warm`, or duplicate pool; 401 bad api token; 409 egress
+pool on a node without an egress attachment.
+
 ## POST /v1/sandboxes/{id}/preview
 
-Auth: the sandbox's own token in the body. Mints a signed URL serving a
+Auth: like fork — node `api_token` in the header, the sandbox's own token
+in the body. Mints a signed URL serving a
 guest HTTP port from a browser: body `{"token": "...", "port": 8080,
 "ttl_seconds": 0}` → `{"url": "http://<preview_advertise>/p/<token>/"}`.
 The URL's life is clamped to the claim's remaining lease. 501 when the node
@@ -135,12 +157,15 @@ list. See [deploy](deploy.md#preview-urls).
 Auth: node API token; body `{"token": "<sandbox token>", "name": "..."}`
 (name optional). Captures the sandbox's full state without stopping it and
 answers `200 {"checkpoint": {id, name, sandbox_id, key, created_at}}`.
+400 bad body or name, 401 bad api token, 404 unknown id or wrong sandbox
+token.
 
 ## POST /v1/checkpoints/{id}/claim
 
 Auth: node API token; body `{"ttl_seconds": 0}`. Claims a fresh sandbox
 branched from the checkpoint (a normal claim response); the checkpoint's
-recorded key applies. 404 for an unknown checkpoint.
+recorded key applies. 404 for an unknown checkpoint, 429 node at
+`max_claims`.
 
 ## GET /v1/checkpoints
 
@@ -160,10 +185,22 @@ deadline, hibernated, from_checkpoint?}]}` — never tokens.
 Auth: node API token. Prometheus text format, hand-rendered: pool
 warm/target gauges, claimed/hibernated gauges, claims by tier
 (warm/clone/cold), wake/hibernate/fork/checkpoint/promote/release/reap
-counters, and claim/wake `*_seconds_total` for average latency. The
-always-on `<data_dir>/usage.jsonl` billing stream (claim/hibernate/wake/
-fork/checkpoint/promote/release/reap events) is the billing source of
-truth; /metrics is a derived ops view.
+counters, and claim/wake `*_seconds_total` for average latency. /metrics is
+a derived ops view; the billing source of truth is the usage journal below.
+
+## Usage journal (usage.jsonl)
+
+Always on: every lifecycle transition appends one JSONL event to
+`<data_dir>/usage.jsonl` — `{"t": <RFC3339>, "ev":
+"claim|hibernate|wake|fork|checkpoint|promote|release|reap", "id": "sb_…",
+"vm": "sbx-…"}` plus `key` (the pool key, claim events), `children` (fork)
+and `ref` (the promoted template / checkpoint id). The file rotates at
+64 MiB keeping one `.1` backup, so a tailing collector never loses a window
+silently. Folding rules: billable compute seconds per sandbox =
+Σ(claim→release/reap) − Σ(hibernate→wake); hibernated storage seconds =
+Σ(hibernate→wake); an interval left open by a crash clamps to the claim's
+deadline, and the next reconcile emits `reap` for claims it drops. The `vm`
+name joins cocoon's machine-level metering ledger for audit cross-checks.
 
 ## GET /v1/sandboxes/{id}/agent
 

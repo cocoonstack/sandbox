@@ -23,8 +23,9 @@ bridge/CNI NIC. Backends are never user-selected.
   images, running as a service
 - [Clusters](cluster.md) — joining a mesh, querying members, how redirect
   placement works, relocating handles
-- [sandboxd HTTP API](sandboxd-api.md) — claim/release/relay endpoints and
-  wire types
+- [sandboxd HTTP API](sandboxd-api.md) — every endpoint: claim/release,
+  hibernate, fork, promote, checkpoints, preview, online pool reconfigure,
+  metrics, the usage journal
 - [Go SDK](sdk.md) — connecting (single node and clusters), every option,
   the full sandbox surface, error handling
 - [Python SDK](sdk-python.md) — the same surface for the Python-first

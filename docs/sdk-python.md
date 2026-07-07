@@ -21,6 +21,7 @@ tokens) are identical and documented there.
 | `client.new(template, net="", size="", ttl_seconds=0)` | claim a sandbox (context-manager friendly) |
 | `client.checkpoints()` | node's checkpoints, newest first |
 | `client.delete_template(name, net="", size="")` | name-based template delete, gossip-routed |
+| `client.lookup(id, token)` | relocate a handle from id + token (asks the entry node, then each mesh peer) |
 | `client.info()` | pool/claim counters |
 
 ## Sandbox
@@ -32,15 +33,32 @@ stdout and raises `ExitError(code, stderr)` on a non-zero exit;
 Files: `write_file` (atomic), `read_file`, `list_dir`, `stat`, `mkdir`,
 `remove`, `rename`. Trees: `push(dest, tar_bytes)` (atomic against a
 truncated stream), `pull(path)` → tar bytes. Search: `find`, `replace`.
-Git: `git_clone/status/add/commit/push/pull/branches/checkout` (network
-verbs are egress-lane only — the none lane raises a typed
+Git: `git_clone/status/add/commit/push/pull/branches/checkout/
+create_branch/delete_branch` (network verbs are egress-lane only — the none lane raises a typed
 `SilkdError(kind="unimplemented")`).
 
 Sessions: `sb.session(cwd=, env=)` returns a persistent shell whose state
-survives across `session.exec(...)` calls. Watching: `sb.watch(path,
-recursive=)` yields event dicts until closed. Ports: `sb.dial_port(port)`
-returns a byte stream (`send`/`recv`/`close`) to the guest port, working on
-the no-network lane.
+survives across `session.exec(...)` calls; `sb.sessions()` lists the live
+session ids. Watching: `sb.watch(path, recursive=)` yields event dicts
+until closed.
+
+Terminals: `sb.open_pty(cols=80, rows=24, cwd=, env=, user=)` returns a
+`Pty` (`read`/`write`/`resize`/`close`, context-manager) — a real shell
+under a pseudo-terminal for agents that drive interactive programs.
+
+Ports: `sb.dial_port(port)` returns a byte stream (`send`/`recv`/
+`close_write`/`close`) to the guest port, working on the no-network lane;
+`sb.proxy_port("127.0.0.1:0", port)` serves it on a local listener for
+unmodified local tools (returns the listening socket — close it to stop);
+`sb.preview_url(port, ttl_seconds=0)` mints a signed, shareable URL served
+by the node's preview listener, clamped to the claim's lease.
+
+Language servers: `sb.start_lsp(language, root="")` spawns the flavor
+image's server (base images raise the typed `not_found`) and returns an
+`Lsp`; `lsp.request()` opens the JSON-RPC byte stream (the caller frames
+Content-Length and correlates ids — agents already speak LSP); a server
+serves one request stream for its lifetime, and `lsp.stop()` kills it
+early. The python flavor bakes `pylsp`.
 
 Lifecycle: `fork(count, ttl_seconds=0)` → children; `hibernate()` (any
 later call wakes transparently); `checkpoint(name="")` → `Checkpoint`;

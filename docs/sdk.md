@@ -55,9 +55,11 @@ defer sb.Close()
 | `WithTimeout(d)` | duration | server default 5m | sandbox TTL, rounded up to seconds, server-capped at 24h. The node reaps the sandbox after the TTL even if the client vanishes |
 
 `New` returns when the sandbox's silkd answers: a warm hit is milliseconds,
-a cold key can take the full boot. `Sandbox.ID` and `Sandbox.Deadline` are
-exported; `Close()` releases the sandbox (releasing one already gone is not
-an error, and `Close` is bounded internally so it stays defer-friendly).
+a cold key can take the full boot. `Sandbox.ID`, `Sandbox.Deadline`, and
+`Sandbox.FromCheckpoint` (the lineage edge when branched) are exported, and
+`Owner()` names the owning node; `Close()` releases the sandbox (releasing
+one already gone is not an error, and `Close` is bounded internally so it
+stays defer-friendly).
 
 ## Hibernating
 
@@ -90,7 +92,8 @@ point, and each child gets a distinct machine identity. The ttl bounds every
 child's lifetime (zero = server default) — children never inherit the
 parent's remaining lease. A running parent pauses briefly for the snapshot;
 a hibernated parent forks from its memory image without waking.
-All-or-nothing: on error no child survived. Count is capped at 16 per call.
+All-or-nothing: on error no child survived. Count is capped at the node's
+`max_fork_count` (default 16).
 Fork and Promote create node resources, so on a token-guarded node the
 client needs `WithAPIToken` — a sandbox handle alone cannot amplify.
 
@@ -167,6 +170,18 @@ is the only way in. The returned `net.Conn` supports half-close
 (`CloseWrite`) but not deadlines; bound the ctx instead. A dead port fails
 with silkd's `not_found`. `ProxyPort` serves it to unmodified local tools
 (browsers, curl) via a local listener.
+
+### Preview URLs
+
+```go
+url, err := sb.PreviewURL(ctx, 8080, 30*time.Minute)
+```
+
+Mints a signed, shareable URL serving the guest HTTP port from a plain
+browser via the node's preview listener. The TTL is clamped to the claim's
+remaining lease, and the URL dies with the sandbox — release or reap
+revokes it with no extra state. Answers 501 when the node has no
+`preview_listen` configured; see [deploy](deploy.md#preview-urls).
 
 ## Node info
 
