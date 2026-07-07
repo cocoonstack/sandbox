@@ -252,7 +252,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 
 	logger := log.WithFunc("pool.reapOnce")
 	if saveErr != nil {
-		logger.Errorf(ctx, saveErr, "persist reap")
+		logger.Error(ctx, saveErr, "persist reap")
 	}
 	// Destroys are engine subprocesses (worst case minutes on a hung stop):
 	// fan them out bounded so a big batch never stalls the ticker loop.

@@ -71,8 +71,7 @@ func (s *Sandbox) Owner() string {
 }
 
 // Token is the per-sandbox bearer secret — persist it with ID to reattach
-// later via Lookup (treat it like a credential). The Python SDK exposes the
-// same field as sb.token.
+// later via Lookup (treat it like a credential).
 func (s *Sandbox) Token() string {
 	return s.token
 }

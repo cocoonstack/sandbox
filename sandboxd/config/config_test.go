@@ -39,13 +39,14 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"bad pool key", `{"pools":[{"template":"","net":"none","size":"small"}]}`, "pool"},
 		{"egress without attachment", `{"pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`, "egress lane needs"},
 		{"negative warm", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","warm":-2}]}`, "negative"},
-		{"empty tenant name", `{"pools":[],"tenants":[{"name":"","token":"t1"}]}`, "tenant name"},
-		{"bad tenant name", `{"pools":[],"tenants":[{"name":"_bad","token":"t1"}]}`, "tenant name"},
-		{"duplicate tenant name", `{"pools":[],"tenants":[{"name":"acme","token":"t1"},{"name":"acme","token":"t2"}]}`, "duplicate tenant"},
-		{"empty tenant token", `{"pools":[],"tenants":[{"name":"acme","token":""}]}`, "needs a token"},
+		{"tenants without api_token", `{"pools":[],"tenants":[{"name":"acme","token":"t1"}]}`, "require api_token"},
+		{"empty tenant name", `{"api_token":"root","pools":[],"tenants":[{"name":"","token":"t1"}]}`, "tenant name"},
+		{"bad tenant name", `{"api_token":"root","pools":[],"tenants":[{"name":"_bad","token":"t1"}]}`, "tenant name"},
+		{"duplicate tenant name", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1"},{"name":"acme","token":"t2"}]}`, "duplicate tenant"},
+		{"empty tenant token", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":""}]}`, "needs a token"},
 		{"tenant token equals api token", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"root"}]}`, "differ from api_token"},
-		{"duplicate tenant token", `{"pools":[],"tenants":[{"name":"acme","token":"t1"},{"name":"beta","token":"t1"}]}`, "token reused"},
-		{"negative tenant max_claims", `{"pools":[],"tenants":[{"name":"acme","token":"t1","max_claims":-1}]}`, "max_claims"},
+		{"duplicate tenant token", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1"},{"name":"beta","token":"t1"}]}`, "token reused"},
+		{"negative tenant max_claims", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1","max_claims":-1}]}`, "max_claims"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Load(writeConfig(t, tt.body))
@@ -58,7 +59,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 
 func TestLoadAcceptsTenants(t *testing.T) {
 	path := writeConfig(t, `{"api_token":"root","pools":[],
-		"tenants":[{"name":"acme","token":"t1","max_claims":50},{"name":"beta","token":"t2"}]}`)
+		"api_token":"root","tenants":[{"name":"acme","token":"t1","max_claims":50},{"name":"beta","token":"t2"}]}`)
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)

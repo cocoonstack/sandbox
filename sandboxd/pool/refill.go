@@ -238,15 +238,23 @@ func (m *Manager) vsockOf(ctx context.Context, name string) (string, error) {
 
 // runBounded fans f over n items on the refill semaphore, so engine
 // batches (reap destroys, idle hibernates, reconcile sweeps) share the
-// same node-wide concurrency budget as refills. The returned WaitGroup
-// lets callers that need completion (Reconcile) wait; tickers drop it.
+// same node-wide concurrency budget as refills without blocking the
+// caller. Callers that need completion Wait; fire-and-forget drops it.
 func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context, int)) *sync.WaitGroup {
 	var wg sync.WaitGroup
+	wg.Add(n)
 	for i := range n {
-		wg.Add(1)
-		m.refillSem <- struct{}{}
+		// Acquire the semaphore inside the goroutine, not the submit loop:
+		// a batch larger than the budget must not block the caller (Run's
+		// select loop) while slots are busy. Concurrency stays bounded;
+		// only the cheap goroutines queue.
 		go func() {
 			defer wg.Done()
+			select {
+			case m.refillSem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
 			defer func() { <-m.refillSem }()
 			f(ctx, i)
 		}()

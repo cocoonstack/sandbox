@@ -45,6 +45,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrNoEgress, http.StatusConflict, ""},
 	{pool.ErrQuota, http.StatusTooManyRequests, ""},
 	{pool.ErrPooledTemplate, http.StatusConflict, ""},
+	{pool.ErrTemplateOwned, http.StatusConflict, ""},
 	{pool.ErrUnknownSandbox, http.StatusNotFound, "unknown sandbox"},
 	{pool.ErrUnknownTemplate, http.StatusNotFound, "unknown template"},
 	{pool.ErrUnknownCheckpoint, http.StatusNotFound, "unknown checkpoint"},
@@ -165,6 +166,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", s.handleAgent)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/owner", s.handleOwner)
 	mux.HandleFunc("GET /v1/info", s.requireRoot(s.handleInfo))
+	mux.HandleFunc("GET /v1/peers", s.requireToken(s.handlePeers))
 	mux.HandleFunc("GET /v1/sandboxes", s.requireRoot(s.handleSandboxes))
 	mux.HandleFunc("GET /metrics", s.requireRoot(s.handleMetrics))
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
@@ -407,6 +409,17 @@ func (s *Server) handlePutPools(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.handleInfo(w, r)
 	}
+}
+
+// handlePeers lists the cluster's node addresses for the SDK's redirect
+// follow and Lookup scatter — cluster topology, not operator state, so any
+// valid token (root or tenant) may read it.
+func (s *Server) handlePeers(w http.ResponseWriter, _ *http.Request) {
+	var peers []string
+	if s.placer != nil {
+		peers = s.placer.PeerAddrs()
+	}
+	writeJSON(w, http.StatusOK, map[string][]string{"peers": peers})
 }
 
 func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {

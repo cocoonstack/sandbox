@@ -194,3 +194,28 @@ func TestTemplateTenantScopedDelete(t *testing.T) {
 		t.Errorf("root delete: %v", err)
 	}
 }
+
+func TestPromoteRefusesCrossTenantOverwrite(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	claim := func(tenant string) *types.Sandbox {
+		t.Helper()
+		sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, tenant)
+		if err != nil {
+			t.Fatalf("claim %q: %v", tenant, err)
+		}
+		return sb
+	}
+	a := claim("acme")
+	if _, err := m.Promote(t.Context(), a.ID, a.Token, "shared:v1", "acme"); err != nil {
+		t.Fatalf("acme promote: %v", err)
+	}
+	b := claim("beta")
+	if _, err := m.Promote(t.Context(), b.ID, b.Token, "shared:v1", "beta"); !errors.Is(err, ErrTemplateOwned) {
+		t.Errorf("beta overwrite: %v, want ErrTemplateOwned", err)
+	}
+	r := claim("") // root may replace anything
+	if _, err := m.Promote(t.Context(), r.ID, r.Token, "shared:v1", ""); err != nil {
+		t.Errorf("root replace: %v, want ok", err)
+	}
+}

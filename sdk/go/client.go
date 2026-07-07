@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,8 +15,6 @@ import (
 	"sync"
 	"time"
 )
-
-var errScatterExhausted = errors.New("every probe failed")
 
 // ClientOption configures Connect.
 type ClientOption func(*Client)
@@ -102,10 +99,10 @@ func (c *Client) Lookup(ctx context.Context, id, token string) (*Sandbox, error)
 	if owner, err := c.ownerAt(ctx, c.addr, id, token); err == nil {
 		return &Sandbox{ID: id, token: token, c: c, owner: owner}, nil
 	}
-	owner, err := scatter(ctx, c.peers(ctx), func(ctx context.Context, addr string) (string, error) {
+	owner, ok := scatter(ctx, c.peers(ctx), func(ctx context.Context, addr string) (string, error) {
 		return c.ownerAt(ctx, addr, id, token)
 	})
-	if err != nil {
+	if !ok {
 		return nil, fmt.Errorf("lookup %s: no owner found", id)
 	}
 	return &Sandbox{ID: id, token: token, c: c, owner: owner}, nil
@@ -241,8 +238,8 @@ func tryEach(candidates []string, call func(addr string) error) error {
 
 // scatter probes addrs concurrently, returning the first success and
 // canceling the losers — one hung peer must not stall the caller. When
-// every probe fails (or addrs is empty) it yields errScatterExhausted.
-func scatter[T any](ctx context.Context, addrs []string, probe func(ctx context.Context, addr string) (T, error)) (T, error) {
+// every probe fails (or addrs is empty) ok is false.
+func scatter[T any](ctx context.Context, addrs []string, probe func(ctx context.Context, addr string) (T, error)) (result T, ok bool) {
 	scatterCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	wins := make(chan T, len(addrs))
@@ -255,11 +252,8 @@ func scatter[T any](ctx context.Context, addrs []string, probe func(ctx context.
 		})
 	}
 	go func() { wg.Wait(); close(wins) }()
-	if v, ok := <-wins; ok {
-		return v, nil
-	}
-	var zero T
-	return zero, errScatterExhausted
+	result, ok = <-wins
+	return result, ok
 }
 
 // roundTrip issues one control-plane request against addr, attaching bearer

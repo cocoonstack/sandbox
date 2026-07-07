@@ -30,7 +30,6 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	metric("hibernated", "gauge", "claims currently hibernated")
 	_, _ = fmt.Fprintf(w, "sandboxd_hibernated %d\n", hibernated)
 
-	// Cardinality stays bounded: TenantClaims reports configured tenants only.
 	if tenants := s.mgr.TenantClaims(); len(tenants) > 0 {
 		metric("tenant_claims", "gauge", "live claims per configured tenant")
 		for _, name := range slices.Sorted(maps.Keys(tenants)) {

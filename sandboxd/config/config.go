@@ -73,7 +73,9 @@ type TenantSpec struct {
 }
 
 // MeshConfig configures cluster membership. Two v1 constraints: all nodes
-// must share the same APIToken (the SDK replays it across a redirect), and a
+// must share the same APIToken AND the same Tenants set (the SDK replays
+// whichever token authorized a claim across a redirect, so a peer missing
+// that tenant answers 401), and a
 // node serving the egress lane can only redirect egress claims to peers if it
 // too has an egress attachment (a no-egress node answers 409 rather than
 // redirecting). Both are acceptable for a homogeneous cluster.
@@ -253,6 +255,9 @@ func (c *Config) validate() error {
 }
 
 func (c *Config) validateTenants() error {
+	if len(c.Tenants) > 0 && c.APIToken == "" {
+		return fmt.Errorf("tenants require api_token: the operator surfaces are unreachable without it")
+	}
 	names := make(map[string]struct{}, len(c.Tenants))
 	tokens := make(map[string]struct{}, len(c.Tenants))
 	for _, tn := range c.Tenants {

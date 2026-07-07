@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -45,7 +46,7 @@ func run(addr, token, template string, size, n int) error {
 	}
 	for i := range n {
 		start := time.Now()
-		if err := sb.Pull(ctx, "/work/bench", discard{}); err != nil {
+		if err := sb.Pull(ctx, "/work/bench", io.Discard); err != nil {
 			return fmt.Errorf("pull: %w", err)
 		}
 		d := time.Since(start)
@@ -53,7 +54,3 @@ func run(addr, token, template string, size, n int) error {
 	}
 	return nil
 }
-
-type discard struct{}
-
-func (discard) Write(p []byte) (int, error) { return len(p), nil }

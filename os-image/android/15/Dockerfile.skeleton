@@ -11,9 +11,6 @@
 #     -f os-image/android/15/Dockerfile.skeleton \
 #     --build-arg ANDROID_BASE_IMAGE=ghcr.io/jiaqing-simular/cocoon-android-vnc:0.3.0 \
 #     os-image/android
-#
-# No default on purpose: the base lives outside the cocoonstack registry and
-# CI access to it is not yet arranged.
 ARG ANDROID_BASE_IMAGE
 # silkd carrier image (built from silkd/Dockerfile). CI overrides with the
 # version-pinned tag once this flavor is wired into the matrix.

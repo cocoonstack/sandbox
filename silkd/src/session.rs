@@ -230,7 +230,7 @@ impl Io {
         let keep = mb.len().saturating_sub(1);
         let mut acc: Vec<u8> = Vec::new();
         let mut buf = vec![0u8; READ_CHUNK];
-        let mut frame: Vec<u8> = Vec::new();
+        let mut frame = Vec::new();
         loop {
             let n = self.stdout.read(&mut buf).await?;
             if n == 0 {

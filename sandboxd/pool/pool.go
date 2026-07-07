@@ -56,6 +56,7 @@ var (
 	ErrUnknownSandbox  = errors.New("unknown sandbox or bad token")
 	ErrUnknownTemplate = errors.New("unknown promoted template")
 	ErrPooledTemplate  = errors.New("template belongs to a configured pool")
+	ErrTemplateOwned   = errors.New("template owned by another tenant")
 	ErrNoEgress        = errors.New("node has no egress attachment (bridge or network)")
 	ErrQuota           = errors.New("node claim quota reached")
 

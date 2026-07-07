@@ -43,13 +43,17 @@ func (c *Client) Info(ctx context.Context) (*NodeInfo, error) {
 	return &info, nil
 }
 
-// peers fetches the cluster's other node addresses, best-effort.
+// peers fetches the cluster's node addresses, best-effort. It reads the
+// tenant-accessible /v1/peers, not /v1/info (operator-only), so Lookup
+// works under a tenant token.
 func (c *Client) peers(ctx context.Context) []string {
 	ctx, cancel := context.WithTimeout(ctx, peersTimeout)
 	defer cancel()
-	info, err := c.Info(ctx)
+	reply, err := doJSON[struct {
+		Peers []string `json:"peers"`
+	}](ctx, c, http.MethodGet, c.addr, "/v1/peers", nil, c.apiToken, "peers")
 	if err != nil {
 		return nil
 	}
-	return info.Peers
+	return reply.Peers
 }

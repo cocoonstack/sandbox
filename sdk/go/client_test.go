@@ -256,7 +256,7 @@ func TestLookupScatter(t *testing.T) {
 		switch r.URL.Path {
 		case "/v1/sandboxes/sb_1/owner":
 			w.WriteHeader(http.StatusNotFound) // not owned here
-		case "/v1/info":
+		case "/v1/peers":
 			_ = json.NewEncoder(w).Encode(map[string]any{"peers": []string{strings.TrimPrefix(owner.URL, "http://")}})
 		}
 	}))

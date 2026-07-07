@@ -34,8 +34,11 @@ class Client:
             # Retry at a peer with no_redirect set: it warm-or-provisions and
             # cannot bounce us again.
             claim["no_redirect"] = True
+            # A candidate that is full (429) or erroring must not abort the
+            # follow — try every one until a node answers, matching the Go SDK.
             return _try_each(redirect, lambda peer: self._handle_from(
-                peer, self._post_json(peer, "/v1/claim", claim, "claim")))
+                peer, self._post_json(peer, "/v1/claim", claim, "claim")),
+                retry=lambda _: True)
         return self._handle_from(self.addr, reply)
 
     def delete_template(self, template: str, net: str = "", size: str = "") -> None:
@@ -66,7 +69,7 @@ class Client:
             return Sandbox(client=self, id=id, token=token,
                            owner=reply.get("owner_addr") or addr)
 
-        addrs = [self.addr, *(self.info().get("peers") or [])]
+        addrs = [self.addr, *self._peers()]
         try:
             return _scatter(addrs, probe)
         except APIError:
@@ -81,6 +84,15 @@ class Client:
         """Lists the connected node's checkpoints, newest first."""
         reply = self._request(self.addr, "GET", "/v1/checkpoints", None, "list checkpoints")
         return [Checkpoint(self, self.addr, rec) for rec in reply.get("checkpoints") or []]
+
+    def _peers(self) -> list:
+        # /v1/peers is tenant-accessible (cluster topology); /v1/info is
+        # operator-only, so a tenant lookup cannot read peers from it. A
+        # single node has none — degrade to just the entry node.
+        try:
+            return self._request(self.addr, "GET", "/v1/peers", None, "peers").get("peers") or []
+        except APIError:
+            return []
 
     def info(self) -> dict:
         """The node's pool/claim counters, as served by GET /v1/info."""
@@ -138,17 +150,18 @@ def _error_message(raw: bytes) -> str:
         return raw.decode(errors="replace").strip()
 
 
-def _try_each(candidates, call):
+def _try_each(candidates, call, retry=lambda exc: exc.status in (404, 0)):
     """Calls call against each candidate in turn, returning the first
-    success. A miss — 404, or a dead peer (status 0) — moves on to the next
-    candidate and the last miss propagates; any other error raises
-    immediately. candidates must be non-empty."""
+    success. An APIError for which retry(exc) is true moves on to the next
+    candidate and the last such error propagates; any other raises at once.
+    The default retries only a miss (404 or a dead peer, status 0);
+    candidates must be non-empty."""
     last_error = None
     for addr in candidates:
         try:
             return call(addr)
         except APIError as exc:
-            if exc.status not in (404, 0):
+            if not retry(exc):
                 raise
             last_error = exc
     raise last_error

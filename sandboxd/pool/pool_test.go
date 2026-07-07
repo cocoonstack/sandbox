@@ -430,9 +430,18 @@ func newTestManagerAt(t *testing.T, eng *fakeEngine, dataDir string, pools ...co
 func TestReapBatchDoesNotStallTheLoop(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	sb := mustClaim(t, m, testKey)
+	// More expired claims than the concurrency budget (maxConcurrentRefills)
+	// so the batch would block the submit loop if it acquired the semaphore
+	// there instead of per-goroutine.
+	const n = maxConcurrentRefills + 3
+	var sbs []*types.Sandbox
+	for range n {
+		sbs = append(sbs, mustClaim(t, m, testKey))
+	}
 	m.mu.Lock()
-	m.claimed[sb.ID].Deadline = time.Now().Add(-time.Second)
+	for _, sb := range sbs {
+		m.claimed[sb.ID].Deadline = time.Now().Add(-time.Second)
+	}
 	m.mu.Unlock()
 
 	stall := make(chan struct{})
@@ -443,15 +452,12 @@ func TestReapBatchDoesNotStallTheLoop(t *testing.T) {
 	done := make(chan struct{})
 	go func() { m.reapOnce(t.Context()); close(done) }()
 	select {
-	case <-done: // reapOnce returned while the destroy is parked: unblocked loop
+	case <-done: // returned while every destroy is parked: the loop never blocked
 	case <-time.After(2 * time.Second):
-		t.Fatal("reapOnce blocked on a stalled destroy")
-	}
-	if eng.removed(sb.VMName) {
-		t.Fatal("destroy finished before the stall released — test is vacuous")
+		t.Fatal("reapOnce blocked on a batch larger than the budget")
 	}
 	close(stall)
-	waitFor(t, func() bool { return eng.removed(sb.VMName) })
+	waitFor(t, func() bool { return eng.removed(sbs[n-1].VMName) })
 }
 
 func waitFor(t *testing.T, cond func() bool) {
@@ -486,8 +492,8 @@ type fakeEngine struct {
 	cloneFailNth                                                          int // 1-based Clone call to fail; 0 = never
 
 	probeStall     chan struct{} // non-nil: Probe blocks until closed
-	hibernateStall chan struct{}
-	removeStall    chan struct{} // non-nil: Hibernate blocks until closed
+	hibernateStall chan struct{} // non-nil: Hibernate blocks until closed
+	removeStall    chan struct{} // non-nil: Remove blocks until closed
 }
 
 func newFakeEngine() *fakeEngine {

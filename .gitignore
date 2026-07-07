@@ -13,3 +13,5 @@ __pycache__/
 *.pyc
 *.egg-info/
 .pytest_cache/
+e2e/pullbench
+e2e/rpcbench

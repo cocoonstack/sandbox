@@ -51,6 +51,14 @@ func (m *Manager) Promote(ctx context.Context, id, token, template, tenant strin
 		// silently change what refills produce.
 		return types.PoolKey{}, ErrPooledTemplate
 	}
+	// Re-promote replaces; a tenant must not overwrite (and poison) another
+	// tenant's template. Root may replace any.
+	if raw, err := m.tpls.ReadMeta(ctx, store.TemplateID(key.Hash())); err == nil && tenant != "" {
+		var prev templateRecord
+		if json.Unmarshal(raw, &prev) == nil && prev.Tenant != tenant {
+			return types.PoolKey{}, ErrTemplateOwned
+		}
+	}
 	// See Fork: the transition lock pins the source snapshot, and a started
 	// promote must finish even if the caller hangs up.
 	sb.Transition.Lock()

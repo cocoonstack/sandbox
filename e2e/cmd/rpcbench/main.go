@@ -74,7 +74,6 @@ func run(addr, token, template string, n int) error {
 	}
 	report("A dial-per-RPC (today)", a)
 
-	// Mode B: one connection dialed ahead while the current RPC runs.
 	spare := make(chan net.Conn, 1)
 	errs := make(chan error, 1)
 	go func() {
