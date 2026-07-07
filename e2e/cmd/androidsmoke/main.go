@@ -1,15 +1,15 @@
 // androidsmoke is the M6-1 acceptance: claim (egress/xlarge) → Android
-// init tree over the relay → RFB on the VNC port → optional preview-URL
-// fetch → checkpoint/branch of the booted guest. No session step: the
-// guest ships no bash.
+// init tree over the relay → adb CNXN handshake on the adb port →
+// checkpoint/branch of the booted guest. No session step: the guest
+// ships no bash.
 package main
 
 import (
 	"context"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -18,10 +18,12 @@ import (
 )
 
 const (
-	vncPort   = 5900
-	rfbBanner = "RFB "
-	// The VNC app starts well after the claim's readiness probe.
-	vncWait = 3 * time.Minute
+	adbPort    = 5555
+	adbCnxn    = 0x4e584e43
+	adbVersion = 0x01000001
+	adbMaxData = 256 * 1024
+	// adbd is a core service, up well before the framework completes.
+	adbWait = 2 * time.Minute
 	// silkd's base PATH does not carry the Android userspace.
 	shellPath = "PATH=/system/bin:/system/xbin:$PATH"
 )
@@ -64,10 +66,9 @@ func run(addr, token, template string) error {
 	if treeErr := initTree(ctx, sb); treeErr != nil {
 		return treeErr
 	}
-	if rfbErr := rfbHandshake(ctx, sb); rfbErr != nil {
-		return rfbErr
+	if adbErr := adbHandshake(ctx, sb); adbErr != nil {
+		return adbErr
 	}
-	previewVNC(ctx, sb)
 
 	ckpt, err := sb.Checkpoint(ctx, "android-booted")
 	if err != nil {
@@ -82,10 +83,10 @@ func run(addr, token, template string) error {
 	if err := initTree(ctx, branch); err != nil {
 		return fmt.Errorf("branch: %w", err)
 	}
-	if err := rfbHandshake(ctx, branch); err != nil {
+	if err := adbHandshake(ctx, branch); err != nil {
 		return fmt.Errorf("branch: %w", err)
 	}
-	fmt.Println("  checkpoint: branch of the booted guest answers ps + RFB")
+	fmt.Println("  checkpoint: branch of the booted guest answers ps + adb")
 	return nil
 }
 
@@ -109,78 +110,53 @@ func initTree(ctx context.Context, sb *sandbox.Sandbox) error {
 	}
 }
 
-func rfbHandshake(ctx context.Context, sb *sandbox.Sandbox) error {
-	deadline := time.Now().Add(vncWait)
+func adbHandshake(ctx context.Context, sb *sandbox.Sandbox) error {
+	deadline := time.Now().Add(adbWait)
 	for {
-		banner, err := dialBanner(ctx, sb)
-		if err == nil && strings.HasPrefix(banner, rfbBanner) {
-			fmt.Printf("  vnc: port %d speaks %s\n", vncPort, strings.TrimSpace(banner))
+		reply, err := dialAdb(ctx, sb)
+		if err == nil {
+			fmt.Printf("  adb: port %d answered %s to CNXN\n", adbPort, reply)
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("vnc port %d: banner %q, err %v", vncPort, banner, err)
+			return fmt.Errorf("adb port %d: %w", adbPort, err)
 		}
 		time.Sleep(2 * time.Second)
 	}
 }
 
-func dialBanner(ctx context.Context, sb *sandbox.Sandbox) (string, error) {
-	pc, err := sb.DialPort(ctx, vncPort)
+// dialAdb sends one ADB CNXN message; adbd replies CNXN (unauthenticated)
+// or AUTH — either proves a live endpoint.
+func dialAdb(ctx context.Context, sb *sandbox.Sandbox) (string, error) {
+	pc, err := sb.DialPort(ctx, adbPort)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = pc.Close() }()
-	buf := make([]byte, 12)
-	if _, err := io.ReadFull(pc, buf); err != nil {
+	payload := []byte("host::")
+	var sum uint32
+	for _, b := range payload {
+		sum += uint32(b)
+	}
+	msg := make([]byte, 24, 24+len(payload))
+	binary.LittleEndian.PutUint32(msg[0:], adbCnxn)
+	binary.LittleEndian.PutUint32(msg[4:], adbVersion)
+	binary.LittleEndian.PutUint32(msg[8:], adbMaxData)
+	binary.LittleEndian.PutUint32(msg[12:], uint32(len(payload))) //nolint:gosec // fixed 6-byte payload
+	binary.LittleEndian.PutUint32(msg[16:], sum)
+	binary.LittleEndian.PutUint32(msg[20:], adbCnxn^0xffffffff)
+	if _, err := pc.Write(append(msg, payload...)); err != nil {
 		return "", err
 	}
-	return string(buf), nil
-}
-
-// previewVNC is best-effort: RFB through the relay is the hard
-// acceptance; no preview config or no guest web UI just reports and moves on.
-func previewVNC(ctx context.Context, sb *sandbox.Sandbox) {
-	port, ok := httpPort(ctx, sb)
-	if !ok {
-		fmt.Println("  preview: no guest HTTP port found (VNC web UI off) — skipped")
-		return
+	resp := make([]byte, 24)
+	if _, err := io.ReadFull(pc, resp); err != nil {
+		return "", err
 	}
-	url, err := sb.PreviewURL(ctx, port, 10*time.Minute)
-	if err != nil {
-		fmt.Printf("  preview: mint failed (%v) — skipped\n", err)
-		return
+	reply := string(resp[:4])
+	if reply != "CNXN" && reply != "AUTH" {
+		return "", fmt.Errorf("unexpected reply %q", reply)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		fmt.Printf("  preview: %v — skipped\n", err)
-		return
-	}
-	resp, err := http.DefaultClient.Do(req) //nolint:gosec // the preview URL was minted by our own node
-	if err != nil {
-		fmt.Printf("  preview: fetch failed (%v) — skipped\n", err)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	fmt.Printf("  preview: %s → HTTP %d, %d bytes (guest port %d)\n", url, resp.StatusCode, len(body), port)
-}
-
-func httpPort(ctx context.Context, sb *sandbox.Sandbox) (uint16, bool) {
-	for _, port := range []uint16{5800, 5801, 8080, 80} {
-		pc, err := sb.DialPort(ctx, port)
-		if err != nil {
-			continue
-		}
-		if _, err := pc.Write([]byte("GET / HTTP/1.0\r\n\r\n")); err == nil {
-			buf := make([]byte, 5)
-			if _, err := io.ReadFull(pc, buf); err == nil && strings.HasPrefix(string(buf), "HTTP/") {
-				_ = pc.Close()
-				return port, true
-			}
-		}
-		_ = pc.Close()
-	}
-	return 0, false
+	return reply, nil
 }
 
 func tail(s string) string {
