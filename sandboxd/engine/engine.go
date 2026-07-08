@@ -73,13 +73,9 @@ func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey) er
 	return err
 }
 
-// Remove kills and removes a VM. Stop is an immediate `--force` kill — rm's
-// own stop-before-delete waits a 30s graceful window sandbox guests never
-// answer (no CtrlAltDel path), which would put 30s on every release and
-// reap. The stop error is ignored: the VM may already be stopped or gone;
-// rm is authoritative.
+// Remove force-deletes a VM; `rm --force` skips the graceful stop window
+// (FC guests without i8042 never answer it), so one call is authoritative.
 func (e *Engine) Remove(ctx context.Context, name string) error {
-	_, _ = e.run(ctx, "vm", "stop", "--force", name)
 	_, err := e.run(ctx, "vm", "rm", "--force", name)
 	return err
 }
