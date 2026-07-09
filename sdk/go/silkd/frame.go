@@ -7,6 +7,7 @@ package silkd
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -96,15 +97,15 @@ var (
 	// procs is a count, ps's procs is a list).
 	responseDecoders = map[string]func([]byte) (Response, error){
 		"started":           decodeResp[Started],
-		"stdout":            decodeResp[Stdout],
-		"stderr":            decodeResp[Stderr],
+		"stdout":            fastBulk(decodeResp[Stdout], func(d []byte) Response { return &Stdout{Data: d} }),
+		"stderr":            fastBulk(decodeResp[Stderr], func(d []byte) Response { return &Stderr{Data: d} }),
 		"exit":              decodeResp[Exit],
 		"done":              decodeResp[Done],
 		"ready":             decodeResp[Ready],
 		"error":             decodeResp[ErrorResp],
 		"info":              decodeResp[InfoResp],
 		"procs":             decodeResp[Procs],
-		"data":              decodeResp[DataResp],
+		"data":              fastBulk(decodeResp[DataResp], func(d []byte) Response { return &DataResp{Data: d} }),
 		"entries":           decodeResp[Entries],
 		"stat":              decodeResp[Stat],
 		"session_created":   decodeResp[SessionCreated],
@@ -666,6 +667,28 @@ func DecodeResponse(line []byte) (Response, error) {
 		return nil, fmt.Errorf("unknown response type %q", typ)
 	}
 	return dec(line)
+}
+
+// fastBulk decodes a bulk frame's base64 data field by slicing it out (base64's
+// alphabet is JSON-escape-free) and skipping json.Unmarshal, which otherwise
+// dominates the download path; slow is the json fallback for any other shape.
+func fastBulk(slow func([]byte) (Response, error), mk func([]byte) Response) func([]byte) (Response, error) {
+	return func(line []byte) (Response, error) {
+		_, after, ok := bytes.Cut(line, []byte(`"data":"`))
+		if !ok {
+			return slow(line)
+		}
+		b64, _, ok := bytes.Cut(after, []byte(`"`))
+		if !ok {
+			return slow(line)
+		}
+		out := make([]byte, base64.StdEncoding.DecodedLen(len(b64)))
+		n, err := base64.StdEncoding.Decode(out, b64)
+		if err != nil {
+			return slow(line)
+		}
+		return mk(out[:n]), nil
+	}
 }
 
 // encodeTagged marshals v as a flat object and splices the tag head in front
