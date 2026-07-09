@@ -19,6 +19,7 @@ type SandboxListResponse struct {
 // its count, so dashboards derive averages without histogram machinery.
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	pools, claimed, hibernated := s.mgr.Info()
+	archived := s.mgr.ArchivedCount()
 	c := s.mgr.Counters()
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
@@ -29,6 +30,8 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	_, _ = fmt.Fprintf(w, "sandboxd_claimed %d\n", claimed)
 	metric("hibernated", "gauge", "claims currently hibernated")
 	_, _ = fmt.Fprintf(w, "sandboxd_hibernated %d\n", hibernated)
+	metric("archived", "gauge", "claims archived to the checkpoint store")
+	_, _ = fmt.Fprintf(w, "sandboxd_archived %d\n", archived)
 
 	if tenants := s.mgr.TenantClaims(); len(tenants) > 0 {
 		metric("tenant_claims", "gauge", "live claims per configured tenant")
@@ -65,6 +68,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		{"promotes_total", "templates promoted", c.Promotes},
 		{"releases_total", "claims released", c.Releases},
 		{"reaps_total", "claims reaped at deadline", c.Reaps},
+		{"archives_total", "claims archived to the store", c.Archives},
+		{"unarchives_total", "archived claims restored", c.Unarchives},
+		{"archive_deletes_total", "archived checkpoints purged at retention", c.ArchiveDeletes},
 	} {
 		metric(row.name, "counter", row.help)
 		_, _ = fmt.Fprintf(w, "sandboxd_%s %d\n", row.name, row.value)

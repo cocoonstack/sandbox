@@ -12,6 +12,16 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+// reapAction is what reapOnce does with an expired claim, so the lifecycle
+// reaper preserves state (archive) instead of always destroying.
+type reapAction int
+
+const (
+	reapDestroy reapAction = iota // engine teardown + drop snapshot
+	reapArchive                   // hibernated + archive-enabled: archive, keep the claim
+	reapPurge                     // archived past retention: delete the store checkpoint
+)
+
 // ClaimWarm transfers ownership of a warm sandbox without provisioning;
 // ErrNoWarm means the pool is empty (the caller may redirect or provision).
 // tenant attributes the claim; empty means the operator (root).
@@ -86,17 +96,29 @@ func (m *Manager) Release(ctx context.Context, id, token string) error {
 	}
 	delete(m.claimed, id)
 	m.tenantDelta(sb.Tenant, -1)
-	snap := sb.HibernateSnap
+	snap, ck, vmName := sb.HibernateSnap, sb.ArchiveCk, sb.VMName
 	saveErr := m.store.save(m.claimed)
+	if saveErr != nil {
+		m.claimed[id] = sb // roll back so memory matches the still-durable claim; ck stays pinned
+		m.tenantDelta(sb.Tenant, 1)
+	}
 	m.mu.Unlock()
 	if saveErr != nil {
 		log.WithFunc("pool.Release").Errorf(ctx, saveErr, "persist release of %s", id)
+		return fmt.Errorf("release %s: %w", id, saveErr)
 	}
-	// The claim is already dropped; removal must survive the caller hanging up.
-	err := m.eng.Remove(context.WithoutCancel(ctx), sb.VMName)
+	// Cleanup must survive the caller hanging up; the claim is already dropped.
+	ctx = context.WithoutCancel(ctx)
+	if ck != "" {
+		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
+	}
+	var err error
+	if vmName != "" {
+		err = m.eng.Remove(ctx, vmName)
+	}
 	m.dropSnap(ctx, snap)
 	m.counters.releases.Add(1)
-	m.recordUsage(ctx, usageEvent{Event: "release", ID: id, VMName: sb.VMName})
+	m.recordUsage(ctx, usageEvent{Event: "release", ID: id, VMName: vmName})
 	return err
 }
 
@@ -123,7 +145,7 @@ func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
-	m.touch(sb) // a live preview stream is data-plane activity
+	sb.Touch() // a live preview stream is data-plane activity
 	// Preview bypasses the relay's audit tap (it dials the engine directly),
 	// so record the access here — the only data-plane entry that would
 	// otherwise leave no audit trace.
@@ -205,7 +227,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	now := time.Now()
 	for _, sb := range sbs {
 		stampIdentity(sb, clampTTL(ttl))
-		sb.LastActivity = now
+		sb.TouchAt(now)
 	}
 	m.mu.Lock()
 	if quotaErr := m.quotaErr(len(sbs), sbs[0].Tenant); quotaErr != nil {
@@ -242,44 +264,89 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 func (m *Manager) reapOnce(ctx context.Context) {
 	now := time.Now()
 	type victim struct {
-		id, vmName, snap string
+		action                       reapAction
+		id, vmName, snap, ck, tenant string
+		sb                           *types.Sandbox
 	}
 	m.mu.Lock()
 	var expired []victim
 	for id, sb := range m.claimed {
-		if now.After(sb.Deadline) {
-			expired = append(expired, victim{id: id, vmName: sb.VMName, snap: sb.HibernateSnap})
+		// A zero deadline means no expiry (an archived claim kept forever).
+		if sb.Deadline.IsZero() || !now.After(sb.Deadline) {
+			continue
+		}
+		switch {
+		case sb.ArchiveCk != "":
+			expired = append(expired, victim{action: reapPurge, id: id, ck: sb.ArchiveCk, tenant: sb.Tenant, sb: sb})
+			delete(m.claimed, id)
+			m.tenantDelta(sb.Tenant, -1)
+		case sb.HibernateSnap != "" && m.archiveEnabledFor(sb.Key):
+			// End-of-lease hibernated + archive-enabled: archive instead of
+			// destroy, kept in m.claimed for archive() to re-validate and move.
+			if _, busy := m.archiving[id]; busy {
+				continue // an archive is already exporting this sandbox
+			}
+			m.archiving[id] = struct{}{}
+			expired = append(expired, victim{action: reapArchive, id: id, sb: sb})
+		default:
+			expired = append(expired, victim{action: reapDestroy, id: id, vmName: sb.VMName, snap: sb.HibernateSnap, tenant: sb.Tenant, sb: sb})
 			delete(m.claimed, id)
 			m.tenantDelta(sb.Tenant, -1)
 		}
 	}
 	var saveErr error
 	if len(expired) > 0 {
-		saveErr = m.store.save(m.claimed)
+		if saveErr = m.store.save(m.claimed); saveErr != nil {
+			for _, v := range expired {
+				if v.action == reapArchive {
+					delete(m.archiving, v.id) // never removed from m.claimed
+				} else {
+					m.claimed[v.id] = v.sb // roll back so memory matches the still-durable claim
+					m.tenantDelta(v.tenant, 1)
+				}
+			}
+		}
 	}
 	m.mu.Unlock()
 
 	logger := log.WithFunc("pool.reapOnce")
 	if saveErr != nil {
-		logger.Error(ctx, saveErr, "persist reap")
+		logger.Error(ctx, saveErr, "persist reap; rolled back")
+		return
 	}
-	// Destroys are engine subprocesses (worst case minutes on a hung stop):
-	// fan them out bounded so a big batch never stalls the ticker loop.
+	// Engine subprocesses (worst case minutes on a hung stop): fan out bounded
+	// so a big batch never stalls the ticker loop.
 	m.runBounded(ctx, len(expired), func(ctx context.Context, i int) {
 		v := expired[i]
-		m.destroy(ctx, v.vmName)
-		m.dropSnap(ctx, v.snap)
-		m.counters.reaps.Add(1)
-		m.recordUsage(ctx, usageEvent{Event: "reap", ID: v.id, VMName: v.vmName})
-		logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
+		switch v.action {
+		case reapPurge:
+			m.purgeArchiveCk(ctx, v.id, v.ck, v.tenant)
+			logger.Infof(ctx, "purged archived sandbox %s", v.id)
+		case reapArchive:
+			switch err := m.archive(ctx, v.sb); {
+			case err == nil:
+				logger.Infof(ctx, "archived expired sandbox %s", v.id)
+			case !benignSweepErr(err):
+				logger.Errorf(ctx, err, "archive expired %s", v.id)
+			}
+		default:
+			m.destroy(ctx, v.vmName)
+			m.dropSnap(ctx, v.snap)
+			m.counters.reaps.Add(1)
+			m.recordUsage(ctx, usageEvent{Event: "reap", ID: v.id, VMName: v.vmName})
+			logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
+		}
 	})
 }
 
-// touch records data-plane activity for the idle policy.
-func (m *Manager) touch(sb *types.Sandbox) {
-	m.mu.Lock()
-	sb.LastActivity = time.Now()
-	m.mu.Unlock()
+// purgeArchiveCk deletes an archived claim's store checkpoint and records the
+// retention billing event; shared by Release and reapOnce's purge.
+func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
+	if err := m.ckpts.Delete(ctx, ck); err != nil {
+		log.WithFunc("pool.purgeArchiveCk").Warnf(ctx, "delete archive ck %s: %v", ck, err)
+	}
+	m.counters.archiveDeletes.Add(1)
+	m.recordUsage(ctx, usageEvent{Event: "archive_delete", ID: id, Reference: ck, Tenant: tenant})
 }
 
 func (m *Manager) claim(id, token string) (*types.Sandbox, bool) {

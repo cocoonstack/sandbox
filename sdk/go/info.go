@@ -15,6 +15,7 @@ type NodeInfo struct {
 	Pools      []PoolStatus `json:"pools"`
 	Claimed    int          `json:"claimed"`
 	Hibernated int          `json:"hibernated"`
+	Archived   int          `json:"archived"`
 	Peers      []string     `json:"peers,omitempty"`
 }
 

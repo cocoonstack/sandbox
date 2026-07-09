@@ -74,7 +74,7 @@ func TestActivityStampsBlockIdleSweep(t *testing.T) {
 
 func backdate(m *Manager, sb *types.Sandbox, by time.Duration) {
 	m.mu.Lock()
-	sb.LastActivity = time.Now().Add(-by)
+	sb.TouchAt(time.Now().Add(-by))
 	m.mu.Unlock()
 }
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -121,20 +122,33 @@ type Sandbox struct {
 	// HibernateSnap names the memory snapshot while the VM is hibernated;
 	// empty means running.
 	HibernateSnap string `json:"hibernate_snap,omitempty"`
+	// ArchiveCk names the store checkpoint holding this sandbox's state while
+	// archived; empty means live or hibernated. While set, VMName/VsockSocket/
+	// HibernateSnap are empty (no local VM) and Deadline is the retention deadline.
+	ArchiveCk string `json:"archive_ck,omitempty"`
 
 	// FromCheckpoint names the checkpoint this sandbox branched from, for
 	// lineage; empty for pool and template claims.
 	FromCheckpoint string `json:"from_checkpoint,omitempty"`
 
-	// LastActivity is the last data-plane connection, for the idle policy;
-	// runtime-only and guarded by the manager mutex. A restart resets it to
-	// adoption time.
-	LastActivity time.Time `json:"-"`
+	// lastActivity is unix-nanos of the last data-plane connection, for the
+	// idle policy; lock-free, stamped on the relay hot path. Runtime-only, a
+	// restart resets it to adoption time.
+	lastActivity atomic.Int64
 
 	// Transition serializes hibernate/wake so concurrent wakes collapse onto
 	// one restore. Lock it before (never under) the manager mutex.
 	Transition sync.Mutex `json:"-"`
 }
+
+// Touch stamps last data-plane activity; lock-free, called on the relay hot path.
+func (s *Sandbox) Touch() { s.lastActivity.Store(time.Now().UnixNano()) }
+
+// TouchAt stamps last-activity at a caller-supplied instant (batch claim/adoption, tests).
+func (s *Sandbox) TouchAt(t time.Time) { s.lastActivity.Store(t.UnixNano()) }
+
+// LastSeen returns the last data-plane activity time.
+func (s *Sandbox) LastSeen() time.Time { return time.Unix(0, s.lastActivity.Load()) }
 
 // Checkpoint is the record of a captured sandbox state: claims cloned from
 // it branch off the exact captured moment. Node-local, like a template.

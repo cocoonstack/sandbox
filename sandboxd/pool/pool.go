@@ -82,12 +82,13 @@ type Engine interface {
 	DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error)
 }
 
-// SandboxSummary is the ops view of one live claim — no tokens.
+// SandboxSummary is the ops view of one live claim â no tokens.
 type SandboxSummary struct {
 	ID             string        `json:"id"`
 	Key            types.PoolKey `json:"key"`
 	Deadline       time.Time     `json:"deadline"`
 	Hibernated     bool          `json:"hibernated"`
+	Archived       bool          `json:"archived,omitempty"`
 	FromCheckpoint string        `json:"from_checkpoint,omitempty"`
 }
 
@@ -106,12 +107,14 @@ type pool struct {
 	// floor and warmMax bound the demand-adaptive target (watermark.go);
 	// rate/lead/lastArrival are its EWMA inputs, guarded by the manager
 	// mutex like everything else here.
-	floor       int
-	warmMax     int
-	idle        time.Duration
-	rate        float64
-	lead        time.Duration
-	lastArrival time.Time
+	floor         int
+	warmMax       int
+	idle          time.Duration
+	archiveAfter  time.Duration
+	archiveDelete time.Duration
+	rate          float64
+	lead          time.Duration
+	lastArrival   time.Time
 
 	goldenDir string
 	building  bool
@@ -124,6 +127,8 @@ func (p *pool) applySpec(spec config.PoolSpec) {
 	p.floor = spec.Warm
 	p.warmMax = spec.WarmMax
 	p.idle = time.Duration(spec.IdleHibernateSeconds) * time.Second
+	p.archiveAfter = time.Duration(spec.ArchiveAfterSeconds) * time.Second
+	p.archiveDelete = time.Duration(spec.ArchiveDeleteAfterSeconds) * time.Second
 }
 
 // Manager owns the node's pools, claims, and their persistence.
@@ -139,6 +144,17 @@ type Manager struct {
 	idleDefault time.Duration
 	idleEnabled bool
 	idleSweep   atomic.Bool
+
+	// archive*Default are the archive thresholds for unpooled keys; pooled keys
+	// carry theirs on the pool struct. archiveEnabled is set when any pool or
+	// the node default has archiving on; archiveSweep guards the sweep loop.
+	archiveAfterDefault  time.Duration
+	archiveDeleteDefault time.Duration
+	archiveEnabled       bool
+	archiveSweep         atomic.Bool
+	// archiving holds ids with an archive() export in flight, so the reap tick
+	// and archive sweep don't both re-export the same sandbox. Guarded by m.mu.
+	archiving map[string]struct{}
 
 	// maxClaims caps live claims node-wide (0 = unlimited); tenantMax holds
 	// every configured tenant's cap (0 = unlimited) and doubles as the set of
@@ -190,6 +206,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine) (*Manager, 
 		pools:      make(map[types.PoolKey]*pool, len(cfg.Pools)),
 		claimed:    map[string]*types.Sandbox{},
 		tenantLive: map[string]int{},
+		archiving:  map[string]struct{}{},
 		refillSem:  make(chan struct{}, maxConcurrentRefills),
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
@@ -234,12 +251,18 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine) (*Manager, 
 	}
 	m.idleDefault = time.Duration(cfg.IdleHibernateSeconds) * time.Second
 	m.idleEnabled = m.idleDefault > 0
+	m.archiveAfterDefault = time.Duration(cfg.ArchiveAfterSeconds) * time.Second
+	m.archiveDeleteDefault = time.Duration(cfg.ArchiveDeleteAfterSeconds) * time.Second
+	m.archiveEnabled = m.archiveAfterDefault > 0
 	for _, spec := range cfg.Pools {
 		p := &pool{key: spec.PoolKey}
 		p.applySpec(spec)
 		m.pools[spec.PoolKey] = p
 		if spec.IdleHibernateSeconds > 0 {
 			m.idleEnabled = true
+		}
+		if spec.ArchiveAfterSeconds > 0 {
+			m.archiveEnabled = true
 		}
 	}
 	return m, nil
@@ -270,6 +293,7 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-reap.C:
 			m.reapOnce(ctx)
 			m.idleOnce(ctx)
+			m.archiveOnce(ctx)
 		case <-ckptSweep:
 			m.sweepExpiredCheckpoints(ctx)
 		}
@@ -301,6 +325,13 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	for id, sb := range claims {
 		rec, ok := live[sb.VMName]
 		switch {
+		case sb.ArchiveCk != "":
+			// Archived: no local VM by design; the store ck is the durable
+			// state. Adopt the stub so the id/token survive restart and the
+			// first exec wakes it (wakeArchived).
+			m.claimed[id] = sb
+			m.tenantDelta(sb.Tenant, 1)
+			continue
 		case ok && rec.State == vmStateRunning:
 			sb.VsockSocket = rec.VsockSocket
 			// Running with the flag set = a wake crashed between restore and
@@ -354,7 +385,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	// Snapshot sweep, symmetric to the VM sweep: a hibernate snapshot no
 	// adopted claim references is an orphan (a crash between `vm hibernate`
 	// and the journal commit), and fork/golden-build snapshots are transient
-	// by construction — none can span a restart. A list failure only skips
+	// by construction â none can span a restart. A list failure only skips
 	// the sweep: GC must not brick startup.
 	if snaps, listErr := m.eng.SnapshotList(ctx); listErr != nil {
 		logger.Warnf(ctx, "snapshot sweep skipped: %v", listErr)
@@ -373,7 +404,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 	now := time.Now()
 	for _, sb := range m.claimed {
-		sb.LastActivity = now
+		sb.TouchAt(now)
 	}
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
 	return saveErr
@@ -440,9 +471,13 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 	// Recompute rather than latch: removing every idle pool turns the
 	// sweep off again.
 	m.idleEnabled = m.idleDefault > 0
+	m.archiveEnabled = m.archiveAfterDefault > 0
 	for _, p := range m.pools {
 		if p.idle > 0 {
 			m.idleEnabled = true
+		}
+		if p.archiveAfter > 0 {
+			m.archiveEnabled = true
 		}
 	}
 	m.mu.Unlock()
@@ -486,6 +521,20 @@ func (m *Manager) Info() ([]PoolInfo, int, int) {
 	return infos, len(m.claimed), hibernated
 }
 
+// ArchivedCount returns how many live claims are archived to the store (no
+// local VM); separate from Info's gauges to keep its arity â and its callers.
+func (m *Manager) ArchivedCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, sb := range m.claimed {
+		if sb.ArchiveCk != "" {
+			n++
+		}
+	}
+	return n
+}
+
 // Sandboxes lists the live claims, for the operator index.
 func (m *Manager) Sandboxes() []SandboxSummary {
 	m.mu.Lock()
@@ -494,7 +543,7 @@ func (m *Manager) Sandboxes() []SandboxSummary {
 	for _, sb := range m.claimed {
 		out = append(out, SandboxSummary{
 			ID: sb.ID, Key: sb.Key, Deadline: sb.Deadline,
-			Hibernated: sb.HibernateSnap != "", FromCheckpoint: sb.FromCheckpoint,
+			Hibernated: sb.HibernateSnap != "", Archived: sb.ArchiveCk != "", FromCheckpoint: sb.FromCheckpoint,
 		})
 	}
 	slices.SortFunc(out, func(a, b SandboxSummary) int { return strings.Compare(a.ID, b.ID) })
@@ -558,11 +607,18 @@ func dirExists(path string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// tenantOwns is THE tenancy predicate — every read/delete/overwrite scope
+// tenantOwns is THE tenancy predicate â every read/delete/overwrite scope
 // check goes through it: root (empty tenant) owns everything, a tenant only
 // records stamped with its own name.
 func tenantOwns(tenant, owner string) bool {
 	return tenant == "" || tenant == owner
+}
+
+// benignSweepErr reports whether err is the expected outcome of a housekeeping
+// sweep racing the data plane (victim released, or woke mid-sweep), so it is
+// not worth logging as a failure.
+func benignSweepErr(err error) bool {
+	return errors.Is(err, ErrUnknownSandbox) || errors.Is(err, errWokeMeanwhile)
 }
 
 func vmName(key types.PoolKey) string {

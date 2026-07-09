@@ -28,6 +28,10 @@ type Counters struct {
 	Releases    uint64
 	Reaps       uint64
 
+	Archives       uint64
+	Unarchives     uint64
+	ArchiveDeletes uint64
+
 	// Nanosecond totals paired with the counters above: avg latency for
 	// dashboards without histogram machinery.
 	ClaimNanos uint64
@@ -36,11 +40,12 @@ type Counters struct {
 
 // counters is the live atomic set behind Counters.
 type counters struct {
-	claimsWarm, claimsClone, claimsCold atomic.Uint64
-	wakes, hibernates                   atomic.Uint64
-	forks, checkpoints, promotes        atomic.Uint64
-	releases, reaps                     atomic.Uint64
-	claimNanos, wakeNanos               atomic.Uint64
+	claimsWarm, claimsClone, claimsCold  atomic.Uint64
+	wakes, hibernates                    atomic.Uint64
+	forks, checkpoints, promotes         atomic.Uint64
+	releases, reaps                      atomic.Uint64
+	archives, unarchives, archiveDeletes atomic.Uint64
+	claimNanos, wakeNanos                atomic.Uint64
 }
 
 // auditFrame is the addressing slice of a request frame worth auditing.
@@ -60,18 +65,21 @@ type auditFrame struct {
 func (m *Manager) Counters() Counters {
 	c := &m.counters
 	return Counters{
-		ClaimsWarm:  c.claimsWarm.Load(),
-		ClaimsClone: c.claimsClone.Load(),
-		ClaimsCold:  c.claimsCold.Load(),
-		Wakes:       c.wakes.Load(),
-		Hibernates:  c.hibernates.Load(),
-		Forks:       c.forks.Load(),
-		Checkpoints: c.checkpoints.Load(),
-		Promotes:    c.promotes.Load(),
-		Releases:    c.releases.Load(),
-		Reaps:       c.reaps.Load(),
-		ClaimNanos:  c.claimNanos.Load(),
-		WakeNanos:   c.wakeNanos.Load(),
+		ClaimsWarm:     c.claimsWarm.Load(),
+		ClaimsClone:    c.claimsClone.Load(),
+		ClaimsCold:     c.claimsCold.Load(),
+		Wakes:          c.wakes.Load(),
+		Hibernates:     c.hibernates.Load(),
+		Forks:          c.forks.Load(),
+		Checkpoints:    c.checkpoints.Load(),
+		Promotes:       c.promotes.Load(),
+		Releases:       c.releases.Load(),
+		Reaps:          c.reaps.Load(),
+		Archives:       c.archives.Load(),
+		Unarchives:     c.unarchives.Load(),
+		ArchiveDeletes: c.archiveDeletes.Load(),
+		ClaimNanos:     c.claimNanos.Load(),
+		WakeNanos:      c.wakeNanos.Load(),
 	}
 }
 

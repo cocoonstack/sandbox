@@ -2,7 +2,6 @@ package pool
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -34,7 +33,7 @@ func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string
 	if !ok {
 		return "", ErrUnknownSandbox
 	}
-	m.touch(sb)
+	sb.Touch()
 	return m.wakeResolved(ctx, sb)
 }
 
@@ -66,6 +65,9 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
+	if sb.ArchiveCk != "" {
+		return m.wakeArchived(ctx, sb)
+	}
 	if sb.HibernateSnap == "" {
 		return sb.VsockSocket, nil
 	}
@@ -113,7 +115,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 		if p, pooled := m.pools[sb.Key]; pooled {
 			idle = p.idle // pooled keys never take the node default
 		}
-		if idle <= 0 || sb.HibernateSnap != "" || now.Sub(sb.LastActivity) < idle {
+		if idle <= 0 || sb.HibernateSnap != "" || sb.ArchiveCk != "" || now.Sub(sb.LastSeen()) < idle {
 			continue
 		}
 		victims = append(victims, victim{sb.ID, sb.Token})
@@ -134,7 +136,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 			switch err := m.idleHibernate(ctx, v.id, v.token, now); {
 			case err == nil:
 				logger.Infof(ctx, "idle-hibernated %s", v.id)
-			case !errors.Is(err, ErrUnknownSandbox) && !errors.Is(err, errWokeMeanwhile):
+			case !benignSweepErr(err):
 				logger.Errorf(ctx, err, "idle-hibernate %s", v.id)
 			}
 		}).Wait()
@@ -152,7 +154,7 @@ func (m *Manager) idleHibernate(ctx context.Context, id, token string, sweepStar
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
-	woke := sb.LastActivity.After(sweepStart) || sb.HibernateSnap != ""
+	woke := sb.LastSeen().After(sweepStart) || sb.HibernateSnap != ""
 	m.mu.Unlock()
 	if woke {
 		return errWokeMeanwhile

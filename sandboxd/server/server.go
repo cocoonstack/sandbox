@@ -77,6 +77,7 @@ type Manager interface {
 	WakeAgentSocket(ctx context.Context, id, token string) (string, error)
 	SetPools(ctx context.Context, pools []config.PoolSpec) error
 	Info() ([]pool.PoolInfo, int, int)
+	ArchivedCount() int
 }
 
 // Dialer opens the hybrid-vsock connection to a VM's silkd.
@@ -98,6 +99,7 @@ type InfoResponse struct {
 	Pools      []pool.PoolInfo `json:"pools"`
 	Claimed    int             `json:"claimed"`
 	Hibernated int             `json:"hibernated"`
+	Archived   int             `json:"archived"`
 	Peers      []string        `json:"peers,omitempty"`
 }
 
@@ -425,7 +427,7 @@ func (s *Server) handlePeers(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 	pools, claimed, hibernated := s.mgr.Info()
-	resp := InfoResponse{Pools: pools, Claimed: claimed, Hibernated: hibernated}
+	resp := InfoResponse{Pools: pools, Claimed: claimed, Hibernated: hibernated, Archived: s.mgr.ArchivedCount()}
 	if s.placer != nil {
 		resp.Peers = s.placer.PeerAddrs()
 	}

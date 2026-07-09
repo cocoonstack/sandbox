@@ -666,6 +666,18 @@ func (f *fakeEngine) cloneCount() int {
 	return len(f.clones)
 }
 
+func (f *fakeEngine) hibernateCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.hibernates)
+}
+
+func (f *fakeEngine) exportCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.exports)
+}
+
 func (f *fakeEngine) coldCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
