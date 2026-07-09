@@ -90,9 +90,10 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 	return nil
 }
 
-// save marshals and commits in one call, holding no lock itself — for callers
-// not already under the manager mutex (Reconcile). Hot-path callers split
-// snapshot()/commit() around the mutex instead.
+// save marshals and commits in one call — the combined form for the startup
+// Reconcile pass, which holds the manager mutex but runs before any claim or
+// housekeeping tick can contend. Hot-path callers split snapshot()/commit()
+// around the mutex so the write leaves it.
 func (s *claimStore) save(claims map[string]*types.Sandbox) error {
 	return s.commit(s.snapshot(claims))
 }

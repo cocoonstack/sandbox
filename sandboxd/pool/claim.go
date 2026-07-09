@@ -105,7 +105,7 @@ func (m *Manager) Release(ctx context.Context, id, token string) error {
 		m.tenantDelta(sb.Tenant, 1)
 		rb := m.store.snapshot(m.claimed)
 		m.mu.Unlock()
-		_ = m.store.commit(rb)
+		m.recommit(ctx, rb)
 		log.WithFunc("pool.Release").Errorf(ctx, saveErr, "persist release of %s", id)
 		return fmt.Errorf("release %s: %w", id, saveErr)
 	}
@@ -253,7 +253,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		}
 		rb := m.store.snapshot(m.claimed)
 		m.mu.Unlock()
-		_ = m.store.commit(rb) // converge disk to the rolled-back set
+		m.recommit(ctx, rb) // converge disk to the rolled-back set
 		for _, sb := range sbs {
 			m.destroy(ctx, sb.VMName)
 		}
@@ -318,7 +318,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			}
 			rb := m.store.snapshot(m.claimed)
 			m.mu.Unlock()
-			_ = m.store.commit(rb)
+			m.recommit(ctx, rb)
 			logger.Error(ctx, saveErr, "persist reap; rolled back")
 			return
 		}
@@ -356,6 +356,21 @@ func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
 	}
 	m.counters.archiveDeletes.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "archive_delete", ID: id, Reference: ck, Tenant: tenant})
+}
+
+// recommit best-effort persists a rolled-back snapshot so disk converges to it
+// after a failed commit: a transient fault clears on retry, and a coalesced
+// result means a newer write already superseded this state. A persistent
+// failure only warns; memory is authoritative and Reconcile fixes it on start.
+func (m *Manager) recommit(ctx context.Context, snap claimSnapshot) {
+	var err error
+	for range recommitAttempts {
+		if err = m.store.commit(snap); err == nil {
+			return
+		}
+		time.Sleep(recommitBackoff)
+	}
+	log.WithFunc("pool.recommit").Errorf(ctx, err, "persist rolled-back claims after retries")
 }
 
 func (m *Manager) claim(id, token string) (*types.Sandbox, bool) {

@@ -127,7 +127,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		rb := m.store.snapshot(m.claimed)
 		m.mu.Unlock()
 		sb.Transition.Unlock()
-		_ = m.store.commit(rb)
+		m.recommit(ctx, rb)
 		m.deleteOrphanArchiveCk(ctx, ck.ID)
 		return fmt.Errorf("archive %s: persist claims: %w", sb.ID, saveErr)
 	}
@@ -196,7 +196,7 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 		sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.Deadline = "", "", ck, deadline
 		rb := m.store.snapshot(m.claimed)
 		m.mu.Unlock()
-		_ = m.store.commit(rb)
+		m.recommit(ctx, rb)
 		log.WithFunc("pool.commitWake").Warnf(ctx, "persist claims: %v", err)
 		return true, false
 	}
