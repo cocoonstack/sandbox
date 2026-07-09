@@ -75,13 +75,17 @@ cocoon's atomic hibernate
 snapshots and stops in one pause window: capture, persist, and VMM
 termination are atomic — the VMM dies only after the snapshot is durably
 stored, and a failed save (disk full, snapshot DB error) resumes the VM with
-nothing lost. Measured bare metal, FC, `small`:
+nothing lost. Direct capture
+([cocoonstack/cocoon#109](https://github.com/cocoonstack/cocoon/pull/109))
+fsyncs and renames the snapshot into the store instead of streaming it
+through a tar pass, cutting the CH pause window ~1.5×. Measured bare
+metal, `small` 1 G, cocoon `32bcbc6`, N=5:
 
 | op | latency | notes |
 |---|---|---|
-| `vm hibernate` | ~330–460 ms | pause → snapshot → persist → VMM killed; memory freed, snapshot point and stop coincide |
-| `vm restore` (stopped VM) | ~27–35 ms | machine identity preserved, tmpfs contents intact, in-guest daemons resume |
-| SDK hibernate → wake loop | ~440–470 ms | `sb.Hibernate()` + transparent wake on the next exec, through the relay; a live shell session survives with its state intact (smoke-measured, bare metal) |
+| `vm hibernate` | ~345–365 ms CH / ~475–505 ms FC | pause → snapshot → fsync + rename into the store → VMM killed; memory freed, snapshot point and stop coincide |
+| `vm restore` (stopped VM) | ~97–103 ms CH / ~18–20 ms FC | machine identity preserved, tmpfs contents intact, in-guest daemons resume; FC wins restore, consistent with the clone asymmetry |
+| SDK hibernate → wake loop | ~315 ms | `sb.Hibernate()` + transparent wake on the next exec, through the relay (FC none lane); a live shell session survives with its state intact (smoke-measured) |
 
 ## Method notes
 
