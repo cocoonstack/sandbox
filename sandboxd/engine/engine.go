@@ -320,10 +320,8 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 	return nil
 }
 
-// parseVsock pulls the vsock UDS out of a lifecycle command's --output json VM
-// record. Best-effort: a missing socket (the VMM had not bound it by cocoon's
-// post-start inspect) or an unparseable record yields "", and the caller falls
-// back to polling `vm list` until the socket appears.
+// parseVsock reads the vsock UDS from a lifecycle command's --output json VM
+// record; best-effort, so an empty or unparseable record yields "" (poll fallback).
 func parseVsock(ctx context.Context, out []byte) string {
 	var rec types.VMRecord
 	if err := json.Unmarshal(out, &rec); err != nil {

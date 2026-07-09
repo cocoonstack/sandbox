@@ -542,8 +542,7 @@ func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) (s
 }
 
 // lateVsock models cocoon's report-once-running lag: while vsockLateN ticks
-// remain, a lifecycle command or List reports no socket yet (consuming one),
-// forcing the caller's poll fallback.
+// remain it reports no socket (consuming one), forcing the caller's poll.
 func (f *fakeEngine) lateVsock(sock string) string {
 	if f.vsockLateN > 0 {
 		f.vsockLateN--

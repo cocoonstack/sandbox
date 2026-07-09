@@ -206,12 +206,9 @@ func (m *Manager) cloneBatch(ctx context.Context, key types.PoolKey, dir string,
 	return children, nil
 }
 
-// probeReady waits until a VM's silkd answers, returning its vsock socket —
-// the claim-ready gate after clone, cold-run, or restore. sock is the socket
-// the lifecycle command already reported; when empty (cocoon's post-start
-// inspect ran before the VMM bound it — a heavy image's android 8G alloc
-// widens that window) it falls back to polling `vm list` until the socket
-// appears, within the same probe budget.
+// probeReady waits until a VM's silkd answers, returning its vsock socket. sock
+// is what the lifecycle command reported; when empty (a heavy image can boot
+// past cocoon's post-start inspect) it polls `vm list` until the socket appears.
 func (m *Manager) probeReady(ctx context.Context, name, sock string, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	if sock == "" {
