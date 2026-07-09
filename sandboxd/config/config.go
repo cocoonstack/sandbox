@@ -60,18 +60,6 @@ func (s PoolSpec) ValidateLimits() error {
 	return validateArchiveWindow(s.IdleHibernateSeconds, s.ArchiveAfterSeconds, s.ArchiveDeleteAfterSeconds)
 }
 
-// validateArchiveWindow checks the archive thresholds shared by PoolSpec and
-// the node Config: non-negative, and archive_after must sit past idle_hibernate.
-func validateArchiveWindow(idle, after, del int) error {
-	if after < 0 || del < 0 {
-		return fmt.Errorf("archive seconds must not be negative")
-	}
-	if after > 0 && (idle <= 0 || after <= idle) {
-		return fmt.Errorf("archive_after_seconds %d requires idle_hibernate_seconds>0 and a larger value", after)
-	}
-	return nil
-}
-
 // StoreConfig selects a checkpoint backend.
 type StoreConfig struct {
 	Kind string     `json:"kind"`
@@ -306,6 +294,18 @@ func (c *Config) validateTenants() error {
 		if tn.MaxClaims < 0 {
 			return fmt.Errorf("tenant %q max_claims must not be negative, got %d", tn.Name, tn.MaxClaims)
 		}
+	}
+	return nil
+}
+
+// validateArchiveWindow checks the archive thresholds shared by PoolSpec and
+// the node Config: non-negative, and archive_after must sit past idle_hibernate.
+func validateArchiveWindow(idle, after, del int) error {
+	if after < 0 || del < 0 {
+		return fmt.Errorf("archive seconds must not be negative")
+	}
+	if after > 0 && (idle <= 0 || after <= idle) {
+		return fmt.Errorf("archive_after_seconds %d requires idle_hibernate_seconds>0 and a larger value", after)
 	}
 	return nil
 }
