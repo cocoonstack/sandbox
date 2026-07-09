@@ -265,6 +265,9 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine) (*Manager, 
 			m.archiveEnabled = true
 		}
 	}
+	if m.archiveEnabled && m.ckptTTL == 0 {
+		log.WithFunc("pool.NewManager").Warn(ctx, "archive enabled with checkpoint_ttl_hours=0: a checkpoint whose delete fails is not reclaimed")
+	}
 	return m, nil
 }
 
