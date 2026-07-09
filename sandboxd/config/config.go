@@ -34,6 +34,15 @@ type PoolSpec struct {
 	// and the snapshot, so callers with their own idle logic must not
 	// pay twice.
 	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitempty"`
+
+	// ArchiveAfterSeconds, when >0, checkpoints a hibernated claim to the
+	// store after that many idle seconds and drops its local VM; a later call
+	// restores it. Requires IdleHibernateSeconds>0 and must exceed it.
+	ArchiveAfterSeconds int `json:"archive_after_seconds,omitempty"`
+
+	// ArchiveDeleteAfterSeconds, when >0, purges an archived claim's store
+	// checkpoint that many seconds after archiving. Zero keeps it forever.
+	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitempty"`
 }
 
 // ValidateLimits checks the warm/watermark/idle bounds — shared by the
@@ -47,6 +56,18 @@ func (s PoolSpec) ValidateLimits() error {
 	}
 	if s.IdleHibernateSeconds < 0 {
 		return fmt.Errorf("idle_hibernate_seconds must not be negative")
+	}
+	return validateArchiveWindow(s.IdleHibernateSeconds, s.ArchiveAfterSeconds, s.ArchiveDeleteAfterSeconds)
+}
+
+// validateArchiveWindow checks the archive thresholds shared by PoolSpec and
+// the node Config: non-negative, and archive_after must sit past idle_hibernate.
+func validateArchiveWindow(idle, after, del int) error {
+	if after < 0 || del < 0 {
+		return fmt.Errorf("archive seconds must not be negative")
+	}
+	if after > 0 && (idle <= 0 || after <= idle) {
+		return fmt.Errorf("archive_after_seconds %d requires idle_hibernate_seconds>0 and a larger value", after)
 	}
 	return nil
 }
@@ -110,6 +131,12 @@ type Config struct {
 	// (template and checkpoint claims); per-pool settings override it for
 	// pooled keys. Zero disables.
 	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitempty"`
+
+	// ArchiveAfterSeconds / ArchiveDeleteAfterSeconds are the archive policy
+	// for unpooled keys; per-pool settings override them. Same rules as
+	// PoolSpec (archive_after must exceed idle_hibernate).
+	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitempty"`
+	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitempty"`
 
 	// PreviewListen, when set, starts a preview HTTP server on that address
 	// serving guest ports under signed URLs. PreviewSecret (cluster-shared)
@@ -217,6 +244,9 @@ func (c *Config) validate() error {
 	}
 	if c.IdleHibernateSeconds < 0 {
 		return fmt.Errorf("idle_hibernate_seconds must not be negative, got %d", c.IdleHibernateSeconds)
+	}
+	if err := validateArchiveWindow(c.IdleHibernateSeconds, c.ArchiveAfterSeconds, c.ArchiveDeleteAfterSeconds); err != nil {
+		return err
 	}
 	if cs := c.CheckpointStore; cs != nil {
 		switch cs.Kind {
