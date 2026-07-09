@@ -93,10 +93,11 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 }
 
 func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name, snap, final string) error {
-	if err := m.eng.RunCold(ctx, name, key); err != nil {
+	sock, err := m.eng.RunCold(ctx, name, key)
+	if err != nil {
 		return err
 	}
-	if _, err := m.probeReady(ctx, name, coldProbeTimeout); err != nil {
+	if _, err := m.probeReady(ctx, name, sock, coldProbeTimeout); err != nil {
 		return err
 	}
 	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
@@ -161,16 +162,16 @@ func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir
 func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden string) (*types.Sandbox, error) {
 	name := vmName(key)
 	probeTimeout := claimProbeTimeout
+	var sock string
 	var err error
 	if golden != "" {
-		err = m.eng.Clone(ctx, golden, name, key)
+		sock, err = m.eng.Clone(ctx, golden, name, key)
 	} else {
-		err = m.eng.RunCold(ctx, name, key)
+		sock, err = m.eng.RunCold(ctx, name, key)
 		probeTimeout = coldProbeTimeout
 	}
-	var sock string
 	if err == nil {
-		sock, err = m.probeReady(ctx, name, probeTimeout)
+		sock, err = m.probeReady(ctx, name, sock, probeTimeout)
 	}
 	if err != nil {
 		m.destroy(ctx, name)
@@ -205,20 +206,24 @@ func (m *Manager) cloneBatch(ctx context.Context, key types.PoolKey, dir string,
 	return children, nil
 }
 
-// probeReady resolves a VM's vsock socket and waits until its silkd answers,
-// returning the socket — the claim-ready gate after create, clone, or restore.
-// One budget covers both waits: cocoon reports the vsock socket only once the
-// VMM reaches running, and a heavy image (android's 8G alloc) can widen the
-// created→running window past the first List.
-func (m *Manager) probeReady(ctx context.Context, name string, timeout time.Duration) (string, error) {
+// probeReady waits until a VM's silkd answers, returning its vsock socket —
+// the claim-ready gate after clone, cold-run, or restore. sock is the socket
+// the lifecycle command already reported; when empty (cocoon's post-start
+// inspect ran before the VMM bound it — a heavy image's android 8G alloc
+// widens that window) it falls back to polling `vm list` until the socket
+// appears, within the same probe budget.
+func (m *Manager) probeReady(ctx context.Context, name, sock string, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
-	sock, err := m.vsockOf(ctx, name)
-	for err != nil && time.Now().Before(deadline) && ctx.Err() == nil {
-		time.Sleep(vsockPollInterval)
+	if sock == "" {
+		var err error
 		sock, err = m.vsockOf(ctx, name)
-	}
-	if err != nil {
-		return "", err
+		for err != nil && time.Now().Before(deadline) && ctx.Err() == nil {
+			time.Sleep(vsockPollInterval)
+			sock, err = m.vsockOf(ctx, name)
+		}
+		if err != nil {
+			return "", err
+		}
 	}
 	if err := m.eng.Probe(ctx, sock, time.Until(deadline)); err != nil {
 		return "", err

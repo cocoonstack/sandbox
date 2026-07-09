@@ -515,30 +515,41 @@ func newFakeEngine() *fakeEngine {
 	return &fakeEngine{vms: map[string]string{}, stopped: map[string]bool{}}
 }
 
-func (f *fakeEngine) Clone(_ context.Context, fromDir, name string, _ types.PoolKey) error {
+func (f *fakeEngine) Clone(_ context.Context, fromDir, name string, _ types.PoolKey) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.clones = append(f.clones, name)
 	f.cloneFroms = append(f.cloneFroms, fromDir)
 	if f.cloneErr != nil {
-		return f.cloneErr
+		return "", f.cloneErr
 	}
 	if f.cloneFailNth > 0 && len(f.clones) == f.cloneFailNth {
-		return errors.New("clone failed")
+		return "", errors.New("clone failed")
 	}
 	f.vms[name] = "/vsock/" + name
-	return nil
+	return f.lateVsock(f.vms[name]), nil
 }
 
-func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) error {
+func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.colds = append(f.colds, name)
 	if f.runColdErr != nil {
-		return f.runColdErr
+		return "", f.runColdErr
 	}
 	f.vms[name] = "/vsock/" + name
-	return nil
+	return f.lateVsock(f.vms[name]), nil
+}
+
+// lateVsock models cocoon's report-once-running lag: while vsockLateN ticks
+// remain, a lifecycle command or List reports no socket yet (consuming one),
+// forcing the caller's poll fallback.
+func (f *fakeEngine) lateVsock(sock string) string {
+	if f.vsockLateN > 0 {
+		f.vsockLateN--
+		return ""
+	}
+	return sock
 }
 
 // removed reports whether name was destroyed, under the fake's own lock —
@@ -612,15 +623,15 @@ func (f *fakeEngine) Hibernate(_ context.Context, name, snapName string) error {
 	return nil
 }
 
-func (f *fakeEngine) Restore(_ context.Context, name, _ string) error {
+func (f *fakeEngine) Restore(_ context.Context, name, _ string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.restores = append(f.restores, name)
 	if f.restoreErr != nil {
-		return f.restoreErr
+		return "", f.restoreErr
 	}
 	f.stopped[name] = false
-	return nil
+	return f.lateVsock(f.vms[name]), nil
 }
 
 func (f *fakeEngine) List(_ context.Context, filters ...string) ([]types.VMRecord, error) {
@@ -631,10 +642,7 @@ func (f *fakeEngine) List(_ context.Context, filters ...string) ([]types.VMRecor
 		if len(filters) > 0 && !slices.Contains(filters, name) {
 			continue
 		}
-		if f.vsockLateN > 0 {
-			f.vsockLateN--
-			sock = ""
-		}
+		sock = f.lateVsock(sock)
 		state := vmStateRunning
 		if f.stopped[name] {
 			state = "stopped"

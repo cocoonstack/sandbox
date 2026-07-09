@@ -75,10 +75,11 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	ctx = context.WithoutCancel(ctx)
 	wakeStart := time.Now()
 	snap := sb.HibernateSnap
-	if err := m.eng.Restore(ctx, sb.VMName, snap); err != nil {
+	restoredSock, err := m.eng.Restore(ctx, sb.VMName, snap)
+	if err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
-	sock, err := m.probeReady(ctx, sb.VMName, claimProbeTimeout)
+	sock, err := m.probeReady(ctx, sb.VMName, restoredSock, claimProbeTimeout)
 	if err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
