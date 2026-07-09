@@ -170,15 +170,17 @@ func (m *Manager) idleHibernate(ctx context.Context, id, token string, sweepStar
 func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap, sock string) bool {
 	m.mu.Lock()
 	live := m.claimed[sb.ID] == sb
-	var saveErr error
+	var js claimSnapshot
 	if live {
 		sb.HibernateSnap = snap
 		sb.VsockSocket = sock
-		saveErr = m.store.save(m.claimed)
+		js = m.store.snapshot(m.claimed)
 	}
 	m.mu.Unlock()
-	if saveErr != nil {
-		log.WithFunc("pool.commitTransition").Warnf(ctx, "persist claims: %v", saveErr)
+	if live {
+		if err := m.store.commit(js); err != nil {
+			log.WithFunc("pool.commitTransition").Warnf(ctx, "persist claims: %v", err)
+		}
 	}
 	return live
 }

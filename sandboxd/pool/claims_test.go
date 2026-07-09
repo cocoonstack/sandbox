@@ -4,6 +4,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,5 +48,41 @@ func TestStoreLoadCorruptFile(t *testing.T) {
 
 	if _, err := newClaimStore(dir).load(); err == nil {
 		t.Error("load succeeded on corrupt file")
+	}
+}
+
+// TestClaimStoreCommitCoalesces asserts an older snapshot never overwrites a
+// newer one already on disk — the guard that lets the write leave the manager
+// mutex without losing the latest state.
+func TestClaimStoreCommitCoalesces(t *testing.T) {
+	s := newClaimStore(t.TempDir())
+	one := map[string]*types.Sandbox{"sb_a": {ID: "sb_a"}}
+	two := map[string]*types.Sandbox{"sb_a": {ID: "sb_a"}, "sb_b": {ID: "sb_b"}}
+
+	older := s.snapshot(one) // seq 1
+	newer := s.snapshot(two) // seq 2
+	if err := s.commit(newer); err != nil {
+		t.Fatalf("commit newer: %v", err)
+	}
+	if err := s.commit(older); err != nil { // must be a no-op, not an overwrite
+		t.Fatalf("commit older: %v", err)
+	}
+	if got, err := s.load(); err != nil || len(got) != 2 {
+		t.Errorf("stale snapshot overwrote the newer state: %d claims (%v), want 2", len(got), err)
+	}
+}
+
+// TestClaimStoreConcurrentCommits exercises the writer off the manager mutex:
+// many snapshot+commit pairs race, and the file must stay parseable (-race).
+func TestClaimStoreConcurrentCommits(t *testing.T) {
+	s := newClaimStore(t.TempDir())
+	claims := map[string]*types.Sandbox{"sb_a": {ID: "sb_a"}}
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Go(func() { _ = s.commit(s.snapshot(claims)) })
+	}
+	wg.Wait()
+	if got, err := s.load(); err != nil || len(got) != 1 {
+		t.Fatalf("after concurrent commits: %+v, %v", got, err)
 	}
 }
