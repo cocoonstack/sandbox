@@ -38,11 +38,11 @@ func newFakeEngine(dir string) *fakeEngine {
 	}
 }
 
-func (f *fakeEngine) Clone(_ context.Context, _, name string, _ types.PoolKey) error {
+func (f *fakeEngine) Clone(_ context.Context, _, name string, _ types.PoolKey) (string, error) {
 	return f.create(name)
 }
 
-func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) error {
+func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) (string, error) {
 	return f.create(name)
 }
 
@@ -74,7 +74,7 @@ func (f *fakeEngine) Hibernate(ctx context.Context, name, _ string) error {
 	return f.Remove(ctx, name)
 }
 
-func (f *fakeEngine) Restore(_ context.Context, name, _ string) error {
+func (f *fakeEngine) Restore(_ context.Context, name, _ string) (string, error) {
 	return f.create(name)
 }
 
@@ -99,16 +99,16 @@ func (f *fakeEngine) DialGuestPort(context.Context, string, uint16) (net.Conn, e
 	return nil, fmt.Errorf("fakeEngine has no guest port")
 }
 
-func (f *fakeEngine) create(name string) error {
+func (f *fakeEngine) create(name string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq++
 	sock := filepath.Join(f.dir, fmt.Sprintf("v%d.sock", f.seq))
 	l, err := silkdtest.ListenHybrid(sock, 2048)
 	if err != nil {
-		return err
+		return "", err
 	}
 	f.listeners[name] = l
 	f.socks[name] = sock
-	return nil
+	return sock, nil
 }
