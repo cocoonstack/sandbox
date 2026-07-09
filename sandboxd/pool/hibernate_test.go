@@ -30,8 +30,9 @@ func TestHibernateWakeCycle(t *testing.T) {
 	if got, _ := newClaimStore(m.dataDir).load(); got[sb.ID] == nil || got[sb.ID].HibernateSnap == "" {
 		t.Error("hibernation flag not persisted")
 	}
-	if !strings.HasPrefix(eng.hibernates[0], hibernatePrefix) {
-		t.Errorf("snapshot name %q, want %s prefix", eng.hibernates[0], hibernatePrefix)
+	hibSnap := eng.hibernates[0]
+	if !strings.HasPrefix(hibSnap, hibernatePrefix) {
+		t.Errorf("snapshot name %q, want %s prefix", hibSnap, hibernatePrefix)
 	}
 
 	sock, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
@@ -44,9 +45,7 @@ func TestHibernateWakeCycle(t *testing.T) {
 	if len(eng.restores) != 1 {
 		t.Errorf("engine restored %d times, want 1", len(eng.restores))
 	}
-	if !slices.Contains(eng.snapRemoves, eng.hibernates[0]) {
-		t.Errorf("snapRemoves=%v, want consumed snapshot dropped", eng.snapRemoves)
-	}
+	waitFor(t, func() bool { return eng.snapRemoved(hibSnap) }) // wake drops it off the return path
 	if _, g := m.Info(); g.Hibernated != 0 {
 		t.Errorf("hibernated count %d after wake, want 0", g.Hibernated)
 	}
@@ -58,6 +57,31 @@ func TestHibernateWakeCycle(t *testing.T) {
 	if len(eng.restores) != 1 {
 		t.Errorf("fast path restored again: %d", len(eng.restores))
 	}
+}
+
+// TestWakeDropsSnapshotOffReturnPath: wake returns the socket without waiting
+// for the consumed snapshot's (subprocess) removal.
+func TestWakeDropsSnapshotOffReturnPath(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	eng.snapRemoveStall = make(chan struct{})
+
+	sock, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+	if err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	if sock == "" {
+		t.Error("wake returned an empty socket")
+	}
+	if n := eng.snapRemoveCount(); n != 0 {
+		t.Errorf("snapshot removed %d times before wake returned, want it off the return path", n)
+	}
+	close(eng.snapRemoveStall)
+	waitFor(t, func() bool { return eng.snapRemoveCount() == 1 })
 }
 
 func TestWakeFailureKeepsHibernated(t *testing.T) {

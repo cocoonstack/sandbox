@@ -506,9 +506,10 @@ type fakeEngine struct {
 	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr, snapSaveErr error
 	cloneFailNth                                                          int // 1-based Clone call to fail; 0 = never
 
-	probeStall     chan struct{} // non-nil: Probe blocks until closed
-	hibernateStall chan struct{} // non-nil: Hibernate blocks until closed
-	removeStall    chan struct{} // non-nil: Remove blocks until closed
+	probeStall      chan struct{} // non-nil: Probe blocks until closed
+	hibernateStall  chan struct{} // non-nil: Hibernate blocks until closed
+	removeStall     chan struct{} // non-nil: Remove blocks until closed
+	snapRemoveStall chan struct{} // non-nil: SnapshotRemove blocks until closed
 }
 
 func newFakeEngine() *fakeEngine {
@@ -598,6 +599,12 @@ func (f *fakeEngine) SnapshotList(_ context.Context) ([]string, error) {
 }
 
 func (f *fakeEngine) SnapshotRemove(_ context.Context, snapName string) error {
+	f.mu.Lock()
+	stall := f.snapRemoveStall
+	f.mu.Unlock()
+	if stall != nil {
+		<-stall
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.snapRemoves = append(f.snapRemoves, snapName)
@@ -695,4 +702,16 @@ func (f *fakeEngine) removedNames() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.removes)
+}
+
+func (f *fakeEngine) snapRemoveCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.snapRemoves)
+}
+
+func (f *fakeEngine) snapRemoved(name string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Contains(f.snapRemoves, name)
 }

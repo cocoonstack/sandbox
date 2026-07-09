@@ -45,9 +45,10 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	// A started transition must finish even if the caller hangs up (the
 	// engine bounds every step), or the record would disagree with the VM.
 	ctx = context.WithoutCancel(ctx)
-	// Derived from VMName, not sb.ID: cocoon snapshot names reject the
-	// underscore in the "sb_" prefix.
-	snap := hibernatePrefix + strings.TrimPrefix(sb.VMName, vmPrefix)
+	// From VMName (not sb.ID, whose "sb_" underscore cocoon rejects) plus a
+	// random suffix, so the wake's async snapshot drop can't collide with a
+	// re-hibernate reusing the name.
+	snap := hibernatePrefix + strings.TrimPrefix(sb.VMName, vmPrefix) + "-" + randHex(3)
 	if err := m.eng.Hibernate(ctx, sb.VMName, snap); err != nil {
 		return err
 	}
@@ -89,8 +90,10 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 		m.dropSnap(ctx, snap)
 		return "", ErrUnknownSandbox
 	}
-	// The memory image is consumed by the resume; drop it to free disk.
-	m.dropSnap(ctx, snap)
+	// The resume consumed the memory image; reclaim its disk off the
+	// wake-return path (a stale-name re-hibernate is guarded by randHex above,
+	// a failed drop by the orphan-snapshot sweep).
+	go m.dropSnap(ctx, snap)
 	m.counters.wakes.Add(1)
 	m.counters.wakeNanos.Add(uint64(time.Since(wakeStart))) //nolint:gosec // durations are positive
 	m.recordUsage(ctx, usageEvent{Event: "wake", ID: sb.ID, VMName: sb.VMName})
