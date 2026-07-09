@@ -53,24 +53,31 @@ func New(bin, bridge, network string) *Engine {
 	return &Engine{bin: bin, bridge: bridge, network: network}
 }
 
-// Clone restores a VM from an exported golden directory. The no-network lane
-// passes no net flags at all — the golden has no NIC to retarget, the only
-// clone shape FC supports; the egress lane re-attaches to the node's bridge
-// or CNI network. cocoon signals the in-guest reseed itself after resume.
-func (e *Engine) Clone(ctx context.Context, fromDir, name string, key types.PoolKey) error {
-	_, err := e.run(ctx, e.cloneArgs(fromDir, name, key)...)
-	return err
+// Clone restores a VM from an exported golden directory, returning its vsock
+// UDS. The no-network lane passes no net flags at all — the golden has no NIC
+// to retarget, the only clone shape FC supports; the egress lane re-attaches
+// to the node's bridge or CNI network. cocoon signals the in-guest reseed
+// itself after resume.
+func (e *Engine) Clone(ctx context.Context, fromDir, name string, key types.PoolKey) (string, error) {
+	out, err := e.run(ctx, e.cloneArgs(fromDir, name, key)...)
+	if err != nil {
+		return "", err
+	}
+	return parseVsock(ctx, out), nil
 }
 
 // RunCold boots a VM from the template image (golden builds and cache-miss
-// claims).
-func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey) error {
+// claims), returning its vsock UDS.
+func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey) (string, error) {
 	args, err := e.runColdArgs(name, key)
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = e.run(ctx, args...)
-	return err
+	out, err := e.run(ctx, args...)
+	if err != nil {
+		return "", err
+	}
+	return parseVsock(ctx, out), nil
 }
 
 // Remove force-deletes a VM; `rm --force` skips the graceful stop window
@@ -94,10 +101,13 @@ func (e *Engine) Hibernate(ctx context.Context, vmName, snapName string) error {
 }
 
 // Restore resumes a VM from a snapshot with its memory state and identity
-// intact (cocoon reseeds entropy only on restore).
-func (e *Engine) Restore(ctx context.Context, vmName, snapRef string) error {
-	_, err := e.run(ctx, "vm", "restore", vmName, snapRef)
-	return err
+// intact (cocoon reseeds entropy only on restore), returning its vsock UDS.
+func (e *Engine) Restore(ctx context.Context, vmName, snapRef string) (string, error) {
+	out, err := e.run(ctx, "vm", "restore", "--output", "json", vmName, snapRef)
+	if err != nil {
+		return "", err
+	}
+	return parseVsock(ctx, out), nil
 }
 
 // SnapshotExport exports a snapshot into toDir (cocoon requires it absent or
@@ -238,7 +248,7 @@ func (e *Engine) cloneArgs(fromDir, name string, key types.PoolKey) []string {
 	// --pull: a checkpoint/template export carries only COW + memory; on a
 	// cross-node claim the base image blobs resolve locally or are pulled
 	// by digest.
-	args := []string{"vm", "clone", "--from-dir", fromDir, "--name", name, "--pull"}
+	args := []string{"vm", "clone", "--from-dir", fromDir, "--name", name, "--pull", "--output", "json"}
 	return append(args, e.netArgs(key, false)...)
 }
 
@@ -247,7 +257,7 @@ func (e *Engine) runColdArgs(name string, key types.PoolKey) ([]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown size %q", key.Size)
 	}
-	args := []string{"vm", "run", "--name", name, "--cpu", strconv.Itoa(spec.CPU), "--memory", spec.Memory}
+	args := []string{"vm", "run", "--name", name, "--output", "json", "--cpu", strconv.Itoa(spec.CPU), "--memory", spec.Memory}
 	if key.Backend() == types.BackendFC {
 		args = append(args, "--fc")
 	}
@@ -308,6 +318,17 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 		return fmt.Errorf("info reply type %q", frame.Type)
 	}
 	return nil
+}
+
+// parseVsock reads the vsock UDS from a lifecycle command's --output json VM
+// record; best-effort, so an empty or unparseable record yields "" (poll fallback).
+func parseVsock(ctx context.Context, out []byte) string {
+	var rec types.VMRecord
+	if err := json.Unmarshal(out, &rec); err != nil {
+		log.WithFunc("engine.parseVsock").Warnf(ctx, "parse vm record, will poll for vsock: %v", err)
+		return ""
+	}
+	return rec.VsockSocket
 }
 
 // readLine reads byte-wise so nothing past the newline is consumed —

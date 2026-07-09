@@ -70,15 +70,15 @@ var (
 
 // Engine is the slice of the cocoon driver the manager consumes.
 type Engine interface {
-	Clone(ctx context.Context, fromDir, name string, key types.PoolKey) error
-	RunCold(ctx context.Context, name string, key types.PoolKey) error
+	Clone(ctx context.Context, fromDir, name string, key types.PoolKey) (string, error)
+	RunCold(ctx context.Context, name string, key types.PoolKey) (string, error)
 	Remove(ctx context.Context, name string) error
 	SnapshotSave(ctx context.Context, vmName, snapName string) error
 	SnapshotExport(ctx context.Context, snapName, toDir string) error
 	SnapshotRemove(ctx context.Context, snapName string) error
 	SnapshotList(ctx context.Context) ([]string, error)
 	Hibernate(ctx context.Context, vmName, snapName string) error
-	Restore(ctx context.Context, vmName, snapRef string) error
+	Restore(ctx context.Context, vmName, snapRef string) (string, error)
 	List(ctx context.Context, filters ...string) ([]types.VMRecord, error)
 	Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error
 	DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error)
