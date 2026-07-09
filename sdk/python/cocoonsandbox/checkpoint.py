@@ -4,6 +4,11 @@ keeps running and can be checkpointed again, so captures form a tree."""
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .sandbox import Sandbox
+
 
 class Checkpoint:
     """A captured sandbox state on its owner node."""
@@ -16,7 +21,7 @@ class Checkpoint:
         self.sandbox_id = rec.get("sandbox_id", "")
         self.created_at = rec.get("created_at", "")
 
-    def new(self, ttl_seconds: int = 0):
+    def new(self, ttl_seconds: int = 0) -> Sandbox:
         """Claims a fresh sandbox branched from the checkpoint."""
         body = {"ttl_seconds": ttl_seconds} if ttl_seconds else {}
         reply = self._client._post_json(self._addr, f"/v1/checkpoints/{self.id}/claim", body, "claim checkpoint")

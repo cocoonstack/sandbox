@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import socket
+from collections.abc import Iterator
 
 from .errors import APIError, ProtocolError, SilkdError
 from .frames import MAX_FRAME, decode_response, encode_request
@@ -17,10 +18,10 @@ class Conn:
         self._sock = sock
         self._reader = reader
 
-    def __enter__(self):
+    def __enter__(self) -> Conn:
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc) -> None:
         self.close()
 
     def send(self, op: str, **fields) -> None:
@@ -39,7 +40,7 @@ class Conn:
             raise SilkdError(frame.get("kind", "internal"), frame.get("message", ""))
         return frame
 
-    def recv_until(self, *terminal: str):
+    def recv_until(self, *terminal: str) -> Iterator[dict]:
         """Yields frames until one of the terminal types arrives; the
         terminal frame is yielded last."""
         while True:

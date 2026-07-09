@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import socket
 import threading
+from collections.abc import Iterator
 
 from .checkpoint import Checkpoint
 from .conn import Conn, dial_agent
@@ -28,10 +29,10 @@ class Sandbox:
         self.deadline = deadline
         self.from_checkpoint = from_checkpoint
 
-    def __enter__(self):
+    def __enter__(self) -> Sandbox:
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc) -> None:
         try:
             self.close()
         except Exception:
@@ -372,7 +373,7 @@ class Watcher:
     def __init__(self, conn: Conn):
         self._conn = conn
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[dict]:
         # The stream is connection-bound: closing the watcher (or the server
         # dropping the conn) ends iteration rather than raising.
         while True:
@@ -395,10 +396,10 @@ class Pty:
         self._conn = conn
         self.pid = pid
 
-    def __enter__(self):
+    def __enter__(self) -> Pty:
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc) -> None:
         self.close()
 
     def read(self) -> bytes:
@@ -445,10 +446,10 @@ class PortConn:
         self._conn = conn
         self._eof = False
 
-    def __enter__(self):
+    def __enter__(self) -> PortConn:
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc) -> None:
         self.close()
 
     def send(self, data: bytes) -> None:
