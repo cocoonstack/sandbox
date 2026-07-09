@@ -41,12 +41,11 @@ type claimDTO struct {
 // VMs are deliberately not persisted: they are cheap to rebuild and unsafe
 // to trust after an unsupervised gap.
 //
-// A write is split so the manager mutex covers only the marshal (a consistent
-// snapshot of the claim map), not the file syscalls: snapshot() runs under the
-// manager mutex, commit() writes off it. commit is serialized and coalescing —
-// a snapshot no newer than one already on disk is dropped, because sequence
-// order matches the manager-mutex mutation order, so the newest write wins and
-// an older one only ever describes a superseded state.
+// The write is split to keep the manager mutex off both the marshal and the
+// file syscalls: snapshot() takes a cheap field-copy under the mutex, commit()
+// marshals and writes off it — serialized and coalescing so a snapshot no newer
+// than one already on disk is dropped (sequence order matches mutation order,
+// so an older write only ever describes a superseded state).
 type claimStore struct {
 	path string
 

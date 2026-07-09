@@ -101,22 +101,19 @@ snapshot paths.
 
 ## Claims-journal write path
 
-Every claim/release/hibernate persists `claims.json` inside the pool mutex
-(marshal + write + rename). Benchmark (`BenchmarkStoreSaveScaling`, APFS
-SSD), per save:
+`claim`/`release`/`hibernate`/`wake` persist `claims.json`, but the write is
+kept off the manager mutex — the lock every data-plane op contends. `snapshot()`
+takes a cheap by-value copy of the claim map under the mutex; `commit()` marshals
+it, writes, and renames off the mutex, serialized and coalescing by sequence so
+an older snapshot never overwrites a newer one. Only the startup `Reconcile`
+pass (pre-contention) still marshals and writes in one call under the lock.
 
-| live claims | ns/op | B/op |
-|---|---|---|
-| 10 | ~181k (0.18ms) | 4.5k |
-| 100 | ~240k (0.24ms) | 36k |
-| 1000 | ~829k (0.83ms) | 385k |
-
-At realistic scale the in-mutex write is sub-millisecond and dwarfed by the
-provision path (~40ms clone, ~230ms cold); the mutex-held serialization
-does not approach a 2× claim-latency regression. **Decision: keep the
-simple in-mutex write; do not move to a store-owned sequential writer.**
-The benchmark stays as a regression sentinel — revisit only if it crosses
-into the milliseconds at the deployment's real claim count.
+`BenchmarkStorePersistContention` measures the ns a concurrent manager-mutex
+acquire waits during a persist. Moving first the write (F1), then the marshal
+(F1 part 2), off the lock cut that wait from tens of µs to tens of ns — the
+marshal-off-lock split alone is a ~6× drop at 1000 live claims, a margin that
+grows with claim count. `BenchmarkStoreSaveScaling` (the combined `save()`
+Reconcile uses) stays as a regression sentinel.
 
 ## Measured and declined (decision data)
 

@@ -165,7 +165,7 @@ class CocoonSandboxClient(BaseSandboxClient[CocoonSandboxClientOptions]):
         inner = session._inner
         if not isinstance(inner, CocoonSandboxSession):
             raise TypeError("CocoonSandboxClient.delete expects a CocoonSandboxSession")
-        await inner._shutdown_backend()  # close any local port proxies
+        await inner._shutdown_backend()
         await asyncio.to_thread(inner._sandbox().close)  # 404-safe in the SDK
         return session
 
