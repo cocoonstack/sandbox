@@ -82,7 +82,7 @@ type Engine interface {
 	DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error)
 }
 
-// SandboxSummary is the ops view of one live claim â no tokens.
+// SandboxSummary is the ops view of one live claim — no tokens.
 type SandboxSummary struct {
 	ID             string        `json:"id"`
 	Key            types.PoolKey `json:"key"`
@@ -385,7 +385,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	// Snapshot sweep, symmetric to the VM sweep: a hibernate snapshot no
 	// adopted claim references is an orphan (a crash between `vm hibernate`
 	// and the journal commit), and fork/golden-build snapshots are transient
-	// by construction â none can span a restart. A list failure only skips
+	// by construction — none can span a restart. A list failure only skips
 	// the sweep: GC must not brick startup.
 	if snaps, listErr := m.eng.SnapshotList(ctx); listErr != nil {
 		logger.Warnf(ctx, "snapshot sweep skipped: %v", listErr)
@@ -522,7 +522,7 @@ func (m *Manager) Info() ([]PoolInfo, int, int) {
 }
 
 // ArchivedCount returns how many live claims are archived to the store (no
-// local VM); separate from Info's gauges to keep its arity â and its callers.
+// local VM); separate from Info's gauges to keep its arity — and its callers.
 func (m *Manager) ArchivedCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -607,7 +607,7 @@ func dirExists(path string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// tenantOwns is THE tenancy predicate â every read/delete/overwrite scope
+// tenantOwns is THE tenancy predicate — every read/delete/overwrite scope
 // check goes through it: root (empty tenant) owns everything, a tenant only
 // records stamped with its own name.
 func tenantOwns(tenant, owner string) bool {
