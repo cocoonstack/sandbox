@@ -327,16 +327,13 @@ mod tests {
 
     #[test]
     fn parse_ip_param_variants() {
-        // No DNS, zero gateway.
         let p = parse_ip_param("10.0.0.2::0.0.0.0:255.255.254.0:vm:eth1:off").unwrap();
         assert_eq!(p.prefix, 23);
         assert_eq!(p.gateway, None);
         assert!(p.dns.is_empty());
         assert_eq!(p.device, "eth1");
-        // Zero DNS entries are filtered.
         let p = parse_ip_param("10.0.0.2::10.0.0.1:255.255.255.0:vm:eth0:off:0.0.0.0").unwrap();
         assert!(p.dns.is_empty());
-        // Shorthand and malformed forms are ignored.
         assert_eq!(parse_ip_param("dhcp"), None);
         assert_eq!(parse_ip_param("off"), None);
         assert_eq!(parse_ip_param("10.0.0.2::gw:not-a-mask:vm:eth0:off"), None);

@@ -210,13 +210,10 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// redirectClaim answers a warm-miss claim with a redirect when a peer is the
-// better node: one that reports warm sandboxes, or — when this node has no
-// golden for the key — the owner of a promoted template gossip names, which
-// provisions from it instead of us cold-booting a nonexistent image ref. A
-// claim already redirected here carries no_redirect and must warm-or-provision
-// locally, never bounce again — that avoids a two-node stale-view ping-pong
-// when both just emptied their pools.
+// redirectClaim redirects a warm-miss to a better peer — a warm holder, or the
+// template owner when we lack a golden (so we don't cold-boot a nonexistent
+// image ref). A no_redirect request must resolve locally, never bounce again,
+// to avoid a two-node ping-pong.
 func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req types.ClaimRequest, key types.PoolKey, hash string) bool {
 	if s.placer == nil || req.NoRedirect {
 		return false

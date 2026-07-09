@@ -20,12 +20,9 @@ const (
 	portReadBuf = 64 << 10
 )
 
-// guestPortConn adapts silkd's framed port_forward channel to a plain
-// net.Conn: the guest's TCP bytes ride inside newline-JSON `data` frames
-// (base64 payloads), so writes wrap into `{"op":"data",...}` frames and
-// reads unwrap `{"type":"data",...}` frames back to raw bytes. This is the
-// server-side twin of the SDK's PortConn, so a reverse proxy can splice HTTP
-// straight through it.
+// guestPortConn adapts silkd's newline-JSON data-frame port_forward channel to
+// a plain net.Conn (base64 payloads), the server-side twin of the SDK's
+// PortConn, so a reverse proxy can splice HTTP straight through it.
 type guestPortConn struct {
 	net.Conn
 	r       *bufio.Reader
