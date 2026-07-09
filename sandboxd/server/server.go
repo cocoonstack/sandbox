@@ -465,7 +465,7 @@ func (s *Server) requireRoot(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // resolveScope matches the bearer token to root ("") or a tenant name. With
-// no api token and no tenants the node-level endpoints stay open, as before.
+// no api token and no tenants the node-level endpoints stay open.
 func (s *Server) resolveScope(r *http.Request) (string, bool) {
 	if s.apiToken == "" && len(s.tenants) == 0 {
 		return "", true

@@ -126,8 +126,6 @@ class CocoonSandboxSession(BaseSandboxSession):
         return Sandbox(client=client, id=s.sandbox_id, token=s.sandbox_token, owner=s.owner or s.addr)
 
     def _abs(self, path: Path | str) -> Path:
-        # The SDK hands paths as str or Path; a relative one roots at the
-        # manifest workspace.
         path = Path(path)
         if path.is_absolute():
             return path

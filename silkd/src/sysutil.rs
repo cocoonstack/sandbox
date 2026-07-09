@@ -101,6 +101,8 @@ fn lookup_user(user: &str) -> Result<(u32, u32, String), String> {
     if pw.is_null() {
         return Err(format!("unknown user {user:?}"));
     }
+    // SAFETY: pw is non-null (checked) and, with NSS_LOCK still held, points to
+    // a valid passwd whose pw_dir is a NUL-terminated string it owns.
     let pw = unsafe { &*pw };
     let home = unsafe { std::ffi::CStr::from_ptr(pw.pw_dir) }
         .to_string_lossy()
