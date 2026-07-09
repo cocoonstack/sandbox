@@ -18,8 +18,7 @@ type SandboxListResponse struct {
 // gauges only, no client library. Latency rides as *_seconds_total next to
 // its count, so dashboards derive averages without histogram machinery.
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
-	pools, claimed, hibernated := s.mgr.Info()
-	archived := s.mgr.ArchivedCount()
+	pools, g := s.mgr.Info()
 	c := s.mgr.Counters()
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
@@ -27,11 +26,11 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprintf(w, "# HELP sandboxd_%s %s\n# TYPE sandboxd_%s %s\n", name, help, name, kind)
 	}
 	metric("claimed", "gauge", "live claims on this node")
-	_, _ = fmt.Fprintf(w, "sandboxd_claimed %d\n", claimed)
+	_, _ = fmt.Fprintf(w, "sandboxd_claimed %d\n", g.Claimed)
 	metric("hibernated", "gauge", "claims currently hibernated")
-	_, _ = fmt.Fprintf(w, "sandboxd_hibernated %d\n", hibernated)
+	_, _ = fmt.Fprintf(w, "sandboxd_hibernated %d\n", g.Hibernated)
 	metric("archived", "gauge", "claims archived to the checkpoint store")
-	_, _ = fmt.Fprintf(w, "sandboxd_archived %d\n", archived)
+	_, _ = fmt.Fprintf(w, "sandboxd_archived %d\n", g.Archived)
 
 	if tenants := s.mgr.TenantClaims(); len(tenants) > 0 {
 		metric("tenant_claims", "gauge", "live claims per configured tenant")

@@ -501,14 +501,21 @@ func (m *Manager) SetTemplateNotifier(fn func()) {
 	m.notifyTemplates = fn
 }
 
-// Info reports pool states (sorted for stable output), the claim count, and
-// how many claims are hibernated.
-func (m *Manager) Info() ([]PoolInfo, int, int) {
+// Gauges are the manager's point-in-time claim counts.
+type Gauges struct {
+	Claimed    int
+	Hibernated int
+	Archived   int
+}
+
+// Info reports pool states (sorted for stable output) and the claim gauges —
+// one locked pass counts hibernated and archived together.
+func (m *Manager) Info() ([]PoolInfo, Gauges) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	infos := make([]PoolInfo, 0, len(m.pools))
+	pools := make([]PoolInfo, 0, len(m.pools))
 	for _, p := range m.pools {
-		infos = append(infos, PoolInfo{
+		pools = append(pools, PoolInfo{
 			Key:       p.key,
 			Warm:      len(p.warm),
 			Refilling: p.refilling,
@@ -516,28 +523,17 @@ func (m *Manager) Info() ([]PoolInfo, int, int) {
 			Golden:    p.goldenDir != "",
 		})
 	}
-	slices.SortFunc(infos, func(a, b PoolInfo) int { return strings.Compare(a.Key.Hash(), b.Key.Hash()) })
-	hibernated := 0
+	slices.SortFunc(pools, func(a, b PoolInfo) int { return strings.Compare(a.Key.Hash(), b.Key.Hash()) })
+	g := Gauges{Claimed: len(m.claimed)}
 	for _, sb := range m.claimed {
 		if sb.HibernateSnap != "" {
-			hibernated++
+			g.Hibernated++
 		}
-	}
-	return infos, len(m.claimed), hibernated
-}
-
-// ArchivedCount returns how many live claims are archived to the store (no
-// local VM); separate from Info's gauges to keep its arity — and its callers.
-func (m *Manager) ArchivedCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	n := 0
-	for _, sb := range m.claimed {
 		if sb.ArchiveCk != "" {
-			n++
+			g.Archived++
 		}
 	}
-	return n
+	return pools, g
 }
 
 // Sandboxes lists the live claims, for the operator index.

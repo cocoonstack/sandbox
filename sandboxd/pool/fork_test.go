@@ -120,8 +120,8 @@ func TestForkAllOrNothing(t *testing.T) {
 	}
 	// Every successfully built child is destroyed; only the parent's claim
 	// survives in memory and on disk.
-	if _, claimed, _ := m.Info(); claimed != 1 {
-		t.Errorf("claimed=%d, want only the parent", claimed)
+	if _, g := m.Info(); g.Claimed != 1 {
+		t.Errorf("claimed=%d, want only the parent", g.Claimed)
 	}
 	if got, _ := newClaimStore(m.dataDir).load(); len(got) != 1 {
 		t.Errorf("persisted %d claims, want only the parent", len(got))

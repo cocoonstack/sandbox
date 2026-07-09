@@ -946,11 +946,9 @@ func (f *fakeManager) SetPools(_ context.Context, pools []config.PoolSpec) error
 	return f.setPools(pools)
 }
 
-func (f *fakeManager) Info() ([]pool.PoolInfo, int, int) {
-	return f.infoPools, 0, 0
+func (f *fakeManager) Info() ([]pool.PoolInfo, pool.Gauges) {
+	return f.infoPools, pool.Gauges{}
 }
-
-func (f *fakeManager) ArchivedCount() int { return 0 }
 
 type fakeDialer struct {
 	dial func(ctx context.Context, sock string) (net.Conn, error)
