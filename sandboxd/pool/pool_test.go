@@ -347,6 +347,23 @@ func TestRefillRespectsSemaphore(t *testing.T) {
 	})
 }
 
+// TestRefillReactivelyFillsToTarget: one trigger fills the whole target (not
+// just maxConcurrentRefills), since a finished refill chains the next.
+func TestRefillReactivelyFillsToTarget(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 10})
+	m.pools[testKey].goldenDir = "/goldens/x"
+
+	m.refillOnce(t.Context())
+	waitFor(t, func() bool {
+		infos, _ := m.Info()
+		return infos[0].Warm == 10 && infos[0].Refilling == 0
+	})
+	if n := eng.cloneCount(); n != 10 {
+		t.Errorf("clones=%d, want 10", n)
+	}
+}
+
 func TestGoldenBuildPipeline(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
