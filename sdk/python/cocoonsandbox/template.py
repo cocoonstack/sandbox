@@ -5,6 +5,10 @@ name-based Client calls route via gossip and lag a promote by about a tick."""
 from __future__ import annotations
 
 import urllib.parse
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .sandbox import Sandbox
 
 
 class Template:
@@ -17,7 +21,7 @@ class Template:
         self.net = net
         self.size = size
 
-    def new(self, ttl_seconds: int = 0):
+    def new(self, ttl_seconds: int = 0) -> Sandbox:
         """Claims a sandbox cloned from the template, on the template's
         node; the key axes are the template's own."""
         # Local import: a top-level one would close the client → sandbox →
