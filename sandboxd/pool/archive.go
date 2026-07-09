@@ -12,9 +12,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// archiveAfterFor / archiveDeleteFor / archiveEnabledFor resolve a key's
-// archive thresholds — the pool's when pooled, the node default otherwise.
-// Callers hold m.mu (they read m.pools).
+// archive*For resolve a key's thresholds (pool's, else node default); callers hold m.mu.
 func (m *Manager) archiveAfterFor(key types.PoolKey) time.Duration {
 	if p, ok := m.pools[key]; ok {
 		return p.archiveAfter
@@ -72,7 +70,7 @@ func (m *Manager) archiveOnce(ctx context.Context) {
 			switch err := m.archive(ctx, sb); {
 			case err == nil:
 				logger.Infof(ctx, "archived %s", sb.ID)
-			case !errors.Is(err, ErrUnknownSandbox) && !errors.Is(err, errWokeMeanwhile):
+			case !benignSweepErr(err):
 				logger.Errorf(ctx, err, "archive %s", sb.ID)
 			}
 		}).Wait()
@@ -107,9 +105,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	if m.claimed[sb.ID] != sb || sb.HibernateSnap == "" || sb.ArchiveCk != "" {
 		m.mu.Unlock()
 		sb.Transition.Unlock()
-		if delErr := m.ckpts.Delete(ctx, ck.ID); delErr != nil {
-			log.WithFunc("pool.archive").Warnf(ctx, "delete orphaned archive ck %s: %v", ck.ID, delErr)
-		}
+		m.deleteOrphanArchiveCk(ctx, ck.ID)
 		return errWokeMeanwhile
 	}
 	snap, vmName, sock, prevDeadline := sb.HibernateSnap, sb.VMName, sb.VsockSocket, sb.Deadline
@@ -128,9 +124,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		sb.Deadline = prevDeadline
 		m.mu.Unlock()
 		sb.Transition.Unlock()
-		if delErr := m.ckpts.Delete(ctx, ck.ID); delErr != nil {
-			log.WithFunc("pool.archive").Warnf(ctx, "delete orphaned archive ck %s: %v", ck.ID, delErr)
-		}
+		m.deleteOrphanArchiveCk(ctx, ck.ID)
 		return fmt.Errorf("archive %s: persist claims: %w", sb.ID, saveErr)
 	}
 	m.mu.Unlock()
@@ -202,4 +196,11 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 		sb.Touch() // restart the idle→hibernate→archive clock
 	}
 	return live, saveErr == nil
+}
+
+// deleteOrphanArchiveCk drops the published ck when archive() aborts pre-commit.
+func (m *Manager) deleteOrphanArchiveCk(ctx context.Context, ckID string) {
+	if err := m.ckpts.Delete(ctx, ckID); err != nil {
+		log.WithFunc("pool.archive").Warnf(ctx, "delete orphaned archive ck %s: %v", ckID, err)
+	}
 }

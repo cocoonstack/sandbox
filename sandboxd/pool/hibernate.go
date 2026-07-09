@@ -2,7 +2,6 @@ package pool
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -137,7 +136,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 			switch err := m.idleHibernate(ctx, v.id, v.token, now); {
 			case err == nil:
 				logger.Infof(ctx, "idle-hibernated %s", v.id)
-			case !errors.Is(err, ErrUnknownSandbox) && !errors.Is(err, errWokeMeanwhile):
+			case !benignSweepErr(err):
 				logger.Errorf(ctx, err, "idle-hibernate %s", v.id)
 			}
 		}).Wait()

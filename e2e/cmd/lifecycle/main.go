@@ -91,9 +91,9 @@ func run(addr, token, template, netShape string, wait time.Duration) error {
 
 // waitArchived polls the node until archived reaches n, returning how long the
 // reaper's idle→hibernate→archive ladder took.
-func waitArchived(ctx context.Context, client *sandbox.Client, n int, max time.Duration) (time.Duration, error) {
+func waitArchived(ctx context.Context, client *sandbox.Client, n int, timeout time.Duration) (time.Duration, error) {
 	start := time.Now()
-	deadline := start.Add(max)
+	deadline := start.Add(timeout)
 	for {
 		info, err := client.Info(ctx)
 		if err != nil {
@@ -104,7 +104,7 @@ func waitArchived(ctx context.Context, client *sandbox.Client, n int, max time.D
 		}
 		if time.Now().After(deadline) {
 			return 0, fmt.Errorf("archived never reached %d within %s (hibernated=%d archived=%d claimed=%d)",
-				n, max, info.Hibernated, info.Archived, info.Claimed)
+				n, timeout, info.Hibernated, info.Archived, info.Claimed)
 		}
 		time.Sleep(500 * time.Millisecond)
 	}

@@ -3,7 +3,6 @@ package pool
 import (
 	"context"
 	"crypto/subtle"
-	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -327,7 +326,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			switch err := m.archive(ctx, v.sb); {
 			case err == nil:
 				logger.Infof(ctx, "archived expired sandbox %s", v.id)
-			case !errors.Is(err, ErrUnknownSandbox) && !errors.Is(err, errWokeMeanwhile):
+			case !benignSweepErr(err):
 				logger.Errorf(ctx, err, "archive expired %s", v.id)
 			}
 		default:
