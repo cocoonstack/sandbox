@@ -79,6 +79,26 @@ labeled and must only be compared against other nested runs.
 
 <!-- paste `make bench` output below -->
 
+### 2026-07-10 — bare metal
+
+| environment | |
+|---|---|
+| host | bare metal, AMD Ryzen 7 9700X 8-Core Processor, 16 cores, 60 GiB |
+| kernel | 6.17.0-35-generic |
+| cocoon | v0.4.8-master.c48fe84 |
+| template | ghcr.io/cocoonstack/sandbox/rt:24.04 @ sha256:d489c07f9907 |
+
+| claim tier | p50 | p90 | max | n |
+|---|---|---|---|---|
+| warm pool hit | 0.2 ms | 0.3 ms | 0.6 ms | 6 |
+| clone from golden | 37.1 ms | 39.7 ms | 40.9 ms | 10 |
+| cold boot (unpooled ghcr.io/cocoonstack/sandbox/python:3.12) | 379.7 ms | 379.7 ms | 402.6 ms | 3 |
+
+| data plane | measured |
+|---|---|
+| exec RTT (dial per RPC) | n=200 p50=0.22ms p90=1.71ms p99=3.40ms |
+| fs_pull throughput (128 MiB) | 595.9 MiB/s best of 3 |
+
 ### 2026-07-08 — bare metal
 
 | environment | |

@@ -118,7 +118,7 @@ rpc_line=$("$DATA/rpcbench" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" 
 pull_best=$("$DATA/pullbench" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -size "$PULL_MB" -n "$PULL_N" |
   sed -n 's/.* \([0-9.]*\) MiB\/s/\1/p' | sort -n | tail -1)
 
-virt=$(systemd-detect-virt 2>/dev/null || echo unknown)
+virt=$(systemd-detect-virt 2>/dev/null || true); virt=${virt:-unknown}
 [[ $virt == none ]] && envlabel="bare metal" || envlabel="nested ($virt)"
 cpu=$(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo 2>/dev/null || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo unknown)
 digest=$(cocoon image list 2>/dev/null | awk -v t="$TEMPLATE" '$2 ~ t {print $3; exit}')
