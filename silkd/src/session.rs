@@ -246,7 +246,7 @@ impl Io {
                 return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "shell exited"));
             }
             acc.extend_from_slice(&buf[..n]);
-            if let Some(pos) = find(&acc, mb) {
+            if let Some(pos) = memchr::memmem::find(&acc, mb) {
                 emit(&mut out, &mut frame, &acc[..pos]).await;
                 let mut rest = acc[pos + mb.len()..].to_vec();
                 while !rest.contains(&b'\n') && rest.len() < EXIT_TAIL_MAX {
@@ -302,13 +302,6 @@ async fn emit<W: AsyncWrite + Unpin>(out: &mut Option<&mut W>, frame: &mut Vec<u
     if failed {
         *out = None;
     }
-}
-
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return None;
-    }
-    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 /// POSIX single-quote quoting: wrap in '…', closing/reopening around any
