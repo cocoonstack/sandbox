@@ -103,8 +103,8 @@ func TestClaimProbeFailureDestroysVM(t *testing.T) {
 	if len(eng.removes) != 1 {
 		t.Errorf("removes=%v, want the failed VM destroyed", eng.removes)
 	}
-	if _, n, _ := m.Info(); n != 0 {
-		t.Errorf("claimed=%d, want 0", n)
+	if _, g := m.Info(); g.Claimed != 0 {
+		t.Errorf("claimed=%d, want 0", g.Claimed)
 	}
 }
 
@@ -203,8 +203,8 @@ func TestReapDestroysExpiredClaims(t *testing.T) {
 	m.reapOnce(t.Context())
 	// The destroy batch is fanned off the ticker loop; poll for it.
 	waitFor(t, func() bool { return eng.removed(sb.VMName) })
-	if _, n, _ := m.Info(); n != 0 {
-		t.Errorf("claimed=%d, want 0", n)
+	if _, g := m.Info(); g.Claimed != 0 {
+		t.Errorf("claimed=%d, want 0", g.Claimed)
 	}
 	if got, _ := newClaimStore(m.dataDir).load(); len(got) != 0 {
 		t.Errorf("reap not persisted: %d entries", len(got))
@@ -261,7 +261,7 @@ func TestRefillTopsUpToTarget(t *testing.T) {
 
 	m.refillOnce(t.Context())
 	waitFor(t, func() bool {
-		infos, _, _ := m.Info()
+		infos, _ := m.Info()
 		return infos[0].Warm == 2 && infos[0].Refilling == 0
 	})
 	if n := eng.cloneCount(); n != 2 {
@@ -281,7 +281,7 @@ func TestSetPoolsGrowShrinkAndDrain(t *testing.T) {
 		t.Fatalf("SetPools grow: %v", err)
 	}
 	waitFor(t, func() bool {
-		infos, _, _ := m.Info()
+		infos, _ := m.Info()
 		return len(infos) == 1 && infos[0].Target == 2 && infos[0].Warm == 2 && infos[0].Golden
 	})
 	if n := eng.cloneCount(); n != 2 {
@@ -291,7 +291,7 @@ func TestSetPoolsGrowShrinkAndDrain(t *testing.T) {
 	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 1}}); err != nil {
 		t.Fatalf("SetPools shrink: %v", err)
 	}
-	infos, _, _ := m.Info()
+	infos, _ := m.Info()
 	if len(infos) != 1 || infos[0].Target != 1 || infos[0].Warm != 1 {
 		t.Fatalf("after shrink info=%+v, want target=1 warm=1", infos)
 	}
@@ -302,7 +302,7 @@ func TestSetPoolsGrowShrinkAndDrain(t *testing.T) {
 	if err := m.SetPools(t.Context(), nil); err != nil {
 		t.Fatalf("SetPools drain: %v", err)
 	}
-	infos, _, _ = m.Info()
+	infos, _ = m.Info()
 	if len(infos) != 0 {
 		t.Fatalf("after drain info=%+v, want no configured pools", infos)
 	}
@@ -337,12 +337,12 @@ func TestRefillRespectsSemaphore(t *testing.T) {
 
 	close(eng.probeStall)
 	waitFor(t, func() bool {
-		infos, _, _ := m.Info()
+		infos, _ := m.Info()
 		return infos[0].Warm+infos[0].Refilling >= maxConcurrentRefills && infos[0].Refilling == 0
 	})
 	m.refillOnce(t.Context())
 	waitFor(t, func() bool {
-		infos, _, _ := m.Info()
+		infos, _ := m.Info()
 		return infos[0].Warm == 6
 	})
 }
@@ -353,7 +353,7 @@ func TestGoldenBuildPipeline(t *testing.T) {
 
 	m.refillOnce(t.Context())
 	waitFor(t, func() bool {
-		infos, _, _ := m.Info()
+		infos, _ := m.Info()
 		return infos[0].Golden
 	})
 	m.mu.Lock()
@@ -369,7 +369,7 @@ func TestGoldenBuildPipeline(t *testing.T) {
 
 	m.refillOnce(t.Context())
 	waitFor(t, func() bool {
-		infos, _, _ := m.Info()
+		infos, _ := m.Info()
 		return infos[0].Warm == 1
 	})
 }

@@ -24,8 +24,8 @@ func TestHibernateWakeCycle(t *testing.T) {
 	if len(eng.hibernates) != 1 {
 		t.Errorf("engine hibernated %d times, want 1 (idempotent)", len(eng.hibernates))
 	}
-	if _, _, hibernated := m.Info(); hibernated != 1 {
-		t.Errorf("hibernated count %d, want 1", hibernated)
+	if _, g := m.Info(); g.Hibernated != 1 {
+		t.Errorf("hibernated count %d, want 1", g.Hibernated)
 	}
 	if got, _ := newClaimStore(m.dataDir).load(); got[sb.ID] == nil || got[sb.ID].HibernateSnap == "" {
 		t.Error("hibernation flag not persisted")
@@ -47,8 +47,8 @@ func TestHibernateWakeCycle(t *testing.T) {
 	if !slices.Contains(eng.snapRemoves, eng.hibernates[0]) {
 		t.Errorf("snapRemoves=%v, want consumed snapshot dropped", eng.snapRemoves)
 	}
-	if _, _, hibernated := m.Info(); hibernated != 0 {
-		t.Errorf("hibernated count %d after wake, want 0", hibernated)
+	if _, g := m.Info(); g.Hibernated != 0 {
+		t.Errorf("hibernated count %d after wake, want 0", g.Hibernated)
 	}
 
 	// Awake sandbox: the fast path must not touch the engine again.
@@ -72,8 +72,8 @@ func TestWakeFailureKeepsHibernated(t *testing.T) {
 	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
 		t.Fatal("WakeAgentSocket succeeded despite restore failure")
 	}
-	if _, _, hibernated := m.Info(); hibernated != 1 {
-		t.Errorf("hibernated count %d, want 1 (wake failed, snapshot kept)", hibernated)
+	if _, g := m.Info(); g.Hibernated != 1 {
+		t.Errorf("hibernated count %d, want 1 (wake failed, snapshot kept)", g.Hibernated)
 	}
 	if len(eng.snapRemoves) != 0 {
 		t.Errorf("snapRemoves=%v, want none after failed wake", eng.snapRemoves)
@@ -125,8 +125,8 @@ func TestReleaseMidHibernateDropsOrphanSnapshot(t *testing.T) {
 	if !slices.Contains(eng.snapRemoves, eng.hibernates[0]) {
 		t.Errorf("snapRemoves=%v, want the orphaned snapshot dropped", eng.snapRemoves)
 	}
-	if _, _, hibernated := m.Info(); hibernated != 0 {
-		t.Errorf("hibernated count %d, want 0", hibernated)
+	if _, g := m.Info(); g.Hibernated != 0 {
+		t.Errorf("hibernated count %d, want 0", g.Hibernated)
 	}
 }
 
@@ -152,8 +152,8 @@ func TestReconcileAdoptsHibernated(t *testing.T) {
 	if slices.Contains(eng.removes, "sbx-hibernated-1") {
 		t.Error("reconcile destroyed a hibernated claim's VM")
 	}
-	if _, _, hibernated := m.Info(); hibernated != 1 {
-		t.Errorf("hibernated count %d after reconcile, want 1", hibernated)
+	if _, g := m.Info(); g.Hibernated != 1 {
+		t.Errorf("hibernated count %d after reconcile, want 1", g.Hibernated)
 	}
 	if _, err := m.WakeAgentSocket(t.Context(), "sb_hib", "tok"); err != nil {
 		t.Fatalf("wake after reconcile: %v", err)

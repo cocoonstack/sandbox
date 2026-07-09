@@ -79,6 +79,6 @@ func backdate(m *Manager, sb *types.Sandbox, by time.Duration) {
 }
 
 func hibernated(m *Manager) int {
-	_, _, n := m.Info()
-	return n
+	_, g := m.Info()
+	return g.Hibernated
 }

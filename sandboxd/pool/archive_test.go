@@ -17,6 +17,11 @@ func breakStore(t *testing.T, m *Manager) {
 	m.store.path = filepath.Join(t.TempDir(), "gone", "claims.json")
 }
 
+func archivedCount(m *Manager) int {
+	_, g := m.Info()
+	return g.Archived
+}
+
 // archivePool is the pool shape the archive tests share: idle→hibernate at 1s,
 // archive at 2s, a long retention window (overridden per test).
 func archivePool(delete int) config.PoolSpec {
@@ -66,7 +71,7 @@ func TestArchiveLifecycleRoundTrip(t *testing.T) {
 	waitFor(t, func() bool { return hibernated(m) == 1 })
 
 	m.archiveOnce(t.Context())
-	waitFor(t, func() bool { return m.ArchivedCount() == 1 })
+	waitFor(t, func() bool { return archivedCount(m) == 1 })
 
 	m.mu.Lock()
 	ck, vm, snap := sb.ArchiveCk, sb.VMName, sb.HibernateSnap
@@ -95,7 +100,7 @@ func TestArchiveLifecycleRoundTrip(t *testing.T) {
 	if wokeCk != "" || wokeVM == "" {
 		t.Errorf("woke record ck=%q vm=%q, want ck cleared + vm set", wokeCk, wokeVM)
 	}
-	if m.ArchivedCount() != 0 {
+	if archivedCount(m) != 0 {
 		t.Error("woke claim still counted as archived")
 	}
 	if ckExists(t, m, ck) {
@@ -141,7 +146,7 @@ func TestArchiveKeepsForeverWhenDeleteZero(t *testing.T) {
 	}
 
 	m.reapOnce(t.Context())
-	if m.ArchivedCount() != 1 || !ckExists(t, m, ck) {
+	if archivedCount(m) != 1 || !ckExists(t, m, ck) {
 		t.Fatal("reap purged a keep-forever archived sandbox")
 	}
 	if _, err := m.WakeAgentSocket(t.Context(), id, token); err != nil {
@@ -167,7 +172,7 @@ func TestArchiveRetentionPurge(t *testing.T) {
 	m.mu.Unlock()
 
 	m.reapOnce(t.Context())
-	waitFor(t, func() bool { return m.ArchivedCount() == 0 })
+	waitFor(t, func() bool { return archivedCount(m) == 0 })
 	waitFor(t, func() bool { return !ckExists(t, m, ck) })
 
 	m.mu.Lock()
@@ -222,7 +227,7 @@ func TestIdleOnceSkipsArchived(t *testing.T) {
 	if got := eng.hibernateCount(); got != hibBefore {
 		t.Errorf("idle sweep hibernated an archived claim: %d→%d", hibBefore, got)
 	}
-	if m.ArchivedCount() != 1 {
+	if archivedCount(m) != 1 {
 		t.Error("idle sweep disturbed the archived claim")
 	}
 }
@@ -388,7 +393,7 @@ func TestArchiveOnceSkipsInFlight(t *testing.T) {
 	if got := eng.exportCount(); got != exportsBefore {
 		t.Errorf("archiveOnce double-exported an in-flight sandbox: %d→%d", exportsBefore, got)
 	}
-	if m.ArchivedCount() != 0 {
+	if archivedCount(m) != 0 {
 		t.Error("archiveOnce archived a sandbox already being archived elsewhere")
 	}
 }
