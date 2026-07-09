@@ -1,6 +1,7 @@
 package silkd_test
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"net"
@@ -10,6 +11,34 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
 )
+
+// TestSendBulkMatchesJSONEncoding pins the hand-built data/stdin envelope to
+// byte-for-byte identity with the json.Marshal path — the fast path must not
+// drift from the wire contract silkd parses.
+func TestSendBulkMatchesJSONEncoding(t *testing.T) {
+	for _, req := range []silkd.Request{
+		&silkd.Data{Data: []byte("hello\x00\xff binary")},
+		&silkd.Stdin{Data: []byte{}},
+		&silkd.Data{Data: bytes.Repeat([]byte{0xAB}, 300*1024)},
+	} {
+		want, err := silkd.EncodeRequest(req)
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		want = append(want, '\n')
+		var buf bufferConn
+		if err := silkd.NewConn(&buf).Send(req); err != nil {
+			t.Fatalf("send: %v", err)
+		}
+		if !bytes.Equal(buf.Bytes(), want) {
+			t.Errorf("%s: fast frame != json frame\n got %q\nwant %q", req.Op(), buf.Bytes(), want)
+		}
+	}
+}
+
+type bufferConn struct{ bytes.Buffer }
+
+func (bufferConn) Close() error { return nil }
 
 func TestConnInfoRoundTrip(t *testing.T) {
 	conn := dialFake(t)

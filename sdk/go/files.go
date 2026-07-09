@@ -9,7 +9,9 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
-const fsChunk = 32 * 1024
+// fsChunk matches silkd's BULK_CHUNK so upload frames are the same size as
+// the download frames it streams back — 8× fewer frames than the old 32 KiB.
+const fsChunk = 256 * 1024
 
 // WriteFile writes data to path in the sandbox, atomically (silkd renames a
 // temp file into place). mode, when non-nil, sets the file's permission bits.
