@@ -116,18 +116,21 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	} else {
 		sb.Deadline = time.Time{} // keep forever: no retention (reap skips a zero deadline)
 	}
-	saveErr := m.store.save(m.claimed)
-	if saveErr != nil {
+	js := m.store.snapshot(m.claimed)
+	m.mu.Unlock()
+	if saveErr := m.store.commit(js); saveErr != nil {
 		// Roll back so memory matches the still-durable hibernated record; drop the orphan ck.
+		m.mu.Lock()
 		sb.ArchiveCk = ""
 		sb.HibernateSnap, sb.VsockSocket, sb.VMName = snap, sock, vmName
 		sb.Deadline = prevDeadline
+		rb := m.store.snapshot(m.claimed)
 		m.mu.Unlock()
 		sb.Transition.Unlock()
+		m.recommit(ctx, rb)
 		m.deleteOrphanArchiveCk(ctx, ck.ID)
 		return fmt.Errorf("archive %s: persist claims: %w", sb.ID, saveErr)
 	}
-	m.mu.Unlock()
 	sb.Transition.Unlock()
 	// Committed: the store ck is authoritative now; reclaim the local footprint.
 	if rmErr := m.eng.Remove(ctx, vmName); rmErr != nil {
@@ -179,23 +182,26 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, sock string) (live, saved bool) {
 	m.mu.Lock()
 	live = m.claimed[sb.ID] == sb
-	var saveErr error
-	if live {
-		ck, deadline := sb.ArchiveCk, sb.Deadline
-		sb.VMName, sb.VsockSocket, sb.ArchiveCk = vmName, sock, ""
-		sb.Deadline = time.Now().Add(clampTTL(0)) // a woken sandbox is a fresh lease
-		if saveErr = m.store.save(m.claimed); saveErr != nil {
-			sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.Deadline = "", "", ck, deadline
-		}
+	if !live {
+		m.mu.Unlock()
+		return false, false
 	}
+	ck, deadline := sb.ArchiveCk, sb.Deadline
+	sb.VMName, sb.VsockSocket, sb.ArchiveCk = vmName, sock, ""
+	sb.Deadline = time.Now().Add(clampTTL(0)) // a woken sandbox is a fresh lease
+	js := m.store.snapshot(m.claimed)
 	m.mu.Unlock()
-	if saveErr != nil {
-		log.WithFunc("pool.commitWake").Warnf(ctx, "persist claims: %v", saveErr)
+	if err := m.store.commit(js); err != nil {
+		m.mu.Lock()
+		sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.Deadline = "", "", ck, deadline
+		rb := m.store.snapshot(m.claimed)
+		m.mu.Unlock()
+		m.recommit(ctx, rb)
+		log.WithFunc("pool.commitWake").Warnf(ctx, "persist claims: %v", err)
+		return true, false
 	}
-	if live && saveErr == nil {
-		sb.Touch() // restart the idle→hibernate→archive clock
-	}
-	return live, saveErr == nil
+	sb.Touch() // restart the idle→hibernate→archive clock
+	return true, true
 }
 
 // deleteOrphanArchiveCk drops the published ck when archive() aborts pre-commit.

@@ -97,13 +97,15 @@ func (m *Manager) Release(ctx context.Context, id, token string) error {
 	delete(m.claimed, id)
 	m.tenantDelta(sb.Tenant, -1)
 	snap, ck, vmName := sb.HibernateSnap, sb.ArchiveCk, sb.VMName
-	saveErr := m.store.save(m.claimed)
-	if saveErr != nil {
+	js := m.store.snapshot(m.claimed)
+	m.mu.Unlock()
+	if saveErr := m.store.commit(js); saveErr != nil {
+		m.mu.Lock()
 		m.claimed[id] = sb // roll back so memory matches the still-durable claim; ck stays pinned
 		m.tenantDelta(sb.Tenant, 1)
-	}
-	m.mu.Unlock()
-	if saveErr != nil {
+		rb := m.store.snapshot(m.claimed)
+		m.mu.Unlock()
+		m.recommit(ctx, rb)
 		log.WithFunc("pool.Release").Errorf(ctx, saveErr, "persist release of %s", id)
 		return fmt.Errorf("release %s: %w", id, saveErr)
 	}
@@ -241,15 +243,17 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		m.claimed[sb.ID] = sb
 		m.tenantDelta(sb.Tenant, 1)
 	}
-	saveErr := m.store.save(m.claimed)
-	if saveErr != nil {
+	js := m.store.snapshot(m.claimed)
+	m.mu.Unlock()
+	if saveErr := m.store.commit(js); saveErr != nil {
+		m.mu.Lock()
 		for _, sb := range sbs {
 			delete(m.claimed, sb.ID)
 			m.tenantDelta(sb.Tenant, -1)
 		}
-	}
-	m.mu.Unlock()
-	if saveErr != nil {
+		rb := m.store.snapshot(m.claimed)
+		m.mu.Unlock()
+		m.recommit(ctx, rb) // converge disk to the rolled-back set
 		for _, sb := range sbs {
 			m.destroy(ctx, sb.VMName)
 		}
@@ -294,9 +298,16 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			m.tenantDelta(sb.Tenant, -1)
 		}
 	}
-	var saveErr error
+	var js claimSnapshot
 	if len(expired) > 0 {
-		if saveErr = m.store.save(m.claimed); saveErr != nil {
+		js = m.store.snapshot(m.claimed)
+	}
+	m.mu.Unlock()
+
+	logger := log.WithFunc("pool.reapOnce")
+	if len(expired) > 0 {
+		if saveErr := m.store.commit(js); saveErr != nil {
+			m.mu.Lock()
 			for _, v := range expired {
 				if v.action == reapArchive {
 					delete(m.archiving, v.id) // never removed from m.claimed
@@ -305,14 +316,12 @@ func (m *Manager) reapOnce(ctx context.Context) {
 					m.tenantDelta(v.tenant, 1)
 				}
 			}
+			rb := m.store.snapshot(m.claimed)
+			m.mu.Unlock()
+			m.recommit(ctx, rb)
+			logger.Error(ctx, saveErr, "persist reap; rolled back")
+			return
 		}
-	}
-	m.mu.Unlock()
-
-	logger := log.WithFunc("pool.reapOnce")
-	if saveErr != nil {
-		logger.Error(ctx, saveErr, "persist reap; rolled back")
-		return
 	}
 	// Engine subprocesses (worst case minutes on a hung stop): fan out bounded
 	// so a big batch never stalls the ticker loop.
@@ -347,6 +356,21 @@ func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
 	}
 	m.counters.archiveDeletes.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "archive_delete", ID: id, Reference: ck, Tenant: tenant})
+}
+
+// recommit best-effort persists a rolled-back snapshot so disk converges to it
+// after a failed commit: a transient fault clears on retry, and a coalesced
+// result means a newer write already superseded this state. A persistent
+// failure only warns; memory is authoritative and Reconcile fixes it on start.
+func (m *Manager) recommit(ctx context.Context, snap claimSnapshot) {
+	var err error
+	for range recommitAttempts {
+		if err = m.store.commit(snap); err == nil {
+			return
+		}
+		time.Sleep(recommitBackoff)
+	}
+	log.WithFunc("pool.recommit").Errorf(ctx, err, "persist rolled-back claims after retries")
 }
 
 func (m *Manager) claim(id, token string) (*types.Sandbox, bool) {
