@@ -23,6 +23,11 @@ use crate::sysutil;
 pub const IDLE_TTL: Duration = Duration::from_secs(30 * 60);
 pub const REAP_INTERVAL: Duration = Duration::from_secs(60);
 
+/// Bounds the post-marker scan for the exit-code line's newline: the line is
+/// tiny and atomic with the marker, so this only caps a backgrounded child
+/// flooding stdout without a newline.
+const EXIT_TAIL_MAX: usize = 64 * 1024;
+
 /// Registry of live shell sessions, addressed by id across connections.
 #[derive(Clone, Default)]
 pub struct Table {
@@ -244,7 +249,7 @@ impl Io {
             if let Some(pos) = find(&acc, mb) {
                 emit(&mut out, &mut frame, &acc[..pos]).await;
                 let mut rest = acc[pos + mb.len()..].to_vec();
-                while !rest.contains(&b'\n') {
+                while !rest.contains(&b'\n') && rest.len() < EXIT_TAIL_MAX {
                     let m = self.stdout.read(&mut buf).await?;
                     if m == 0 {
                         break;
