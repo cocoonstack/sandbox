@@ -103,6 +103,13 @@ type PoolInfo struct {
 	Golden    bool          `json:"golden"`
 }
 
+// Gauges are the manager's point-in-time claim counts.
+type Gauges struct {
+	Claimed    int
+	Hibernated int
+	Archived   int
+}
+
 type pool struct {
 	key types.PoolKey
 
@@ -499,13 +506,6 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 // the server starts serving.
 func (m *Manager) SetTemplateNotifier(fn func()) {
 	m.notifyTemplates = fn
-}
-
-// Gauges are the manager's point-in-time claim counts.
-type Gauges struct {
-	Claimed    int
-	Hibernated int
-	Archived   int
 }
 
 // Info reports pool states (sorted for stable output) and the claim gauges —
