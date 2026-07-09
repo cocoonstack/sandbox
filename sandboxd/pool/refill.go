@@ -42,7 +42,12 @@ func (m *Manager) refillOnce(ctx context.Context) {
 }
 
 func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
-	defer func() { <-m.refillSem }()
+	releaseSlot := true
+	defer func() {
+		if releaseSlot {
+			<-m.refillSem
+		}
+	}()
 	start := time.Now()
 	sb, err := m.provision(ctx, p.key, golden)
 	keep := false
@@ -53,6 +58,11 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 		p.warm = append(p.warm, sb)
 		p.noteLead(time.Since(start))
 		keep = true
+	}
+	if err == nil && p.goldenDir != "" && len(p.warm)+p.refilling < target {
+		p.refilling++
+		releaseSlot = false
+		go m.refillOne(ctx, p, p.goldenDir)
 	}
 	m.mu.Unlock()
 	if err != nil {
