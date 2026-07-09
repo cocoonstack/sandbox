@@ -38,6 +38,9 @@ bridge/CNI NIC. Backends are never user-selected.
   inside cocoon microVMs via the custom sandbox-provider interface
 - [Android sandboxes](android.md) — the redroid flavor: claim shape, adb
   access through the relay or the network, checkpoint/branch
+- [Browser sandboxes](browser.md) — headless Chromium with CDP through
+  the relay: Playwright/Puppeteer access, checkpoint/branch of a live
+  browser
 - [silkd](silkd.md) — the in-guest daemon: protocol, verb reference, lanes
   and limits
 - [Performance](performance.md) — measured latencies and the environments
