@@ -22,6 +22,8 @@ pub fn mount(
     let target_c = cstr(target)?;
     let fstype_c = fstype.map(cstr).transpose()?;
     let data_c = data.map(cstr).transpose()?;
+    // SAFETY: every pointer is either a live CString for the call's duration
+    // or null (the optional fstype/data), exactly as mount(2) expects.
     let ret = unsafe {
         libc::mount(
             src_c.as_ptr(),
@@ -51,6 +53,7 @@ pub fn is_block_dev(path: &str) -> bool {
 }
 
 pub fn sethostname(name: &str) -> Result<(), String> {
+    // SAFETY: name is a live &str; sethostname(2) copies name.len() bytes.
     let ret = unsafe { libc::sethostname(name.as_ptr() as *const libc::c_char, name.len()) };
     if ret != 0 {
         return Err(format!(
@@ -68,6 +71,7 @@ pub fn switch_root(newroot: &str) -> Result<(), String> {
     std::env::set_current_dir(newroot).map_err(|err| format!("chdir {newroot}: {err}"))?;
     mount(".", "/", None, libc::MS_MOVE, None)?;
     let dot = cstr(".")?;
+    // SAFETY: dot is a live CString for the duration of the call.
     if unsafe { libc::chroot(dot.as_ptr()) } != 0 {
         return Err(format!("chroot: {}", io::Error::last_os_error()));
     }
@@ -83,6 +87,8 @@ pub fn exec_init(path: &str) -> String {
     let term_env = static_cstr("TERM=linux");
     let argv = [path_c.as_ptr(), ptr::null()];
     let envp = [path_env.as_ptr(), term_env.as_ptr(), ptr::null()];
+    // SAFETY: path_c, argv, and envp are live and NUL-terminated for the call;
+    // execve only returns on failure.
     unsafe { libc::execve(path_c.as_ptr(), argv.as_ptr(), envp.as_ptr()) };
     io::Error::last_os_error().to_string()
 }
@@ -91,6 +97,8 @@ pub fn exec_init(path: &str) -> String {
 /// cpio carries the console node; this also covers cpios built without it.
 pub fn claim_console() {
     let console = static_cstr("/dev/console");
+    // SAFETY: console is a live CString; the fd is validated (>=0) before any
+    // dup2/close and only closed when it is not already a std stream.
     unsafe {
         let fd = libc::open(console.as_ptr(), libc::O_RDWR);
         if fd >= 0 {
@@ -112,10 +120,12 @@ pub fn fatal(msg: &str, debug: bool) -> ! {
     if debug {
         if let Ok(sh) = CString::new("/bin/sh") {
             let argv = [sh.as_ptr(), ptr::null()];
+            // SAFETY: sh and argv are live and NUL-terminated for the call.
             unsafe { libc::execv(sh.as_ptr(), argv.as_ptr()) };
         }
         eprintln!("sandbox-init: no /bin/sh in this initramfs (non-debug build?)");
     }
+    // SAFETY: sync(2) and reboot(2) take no pointer arguments.
     unsafe {
         libc::sync();
         libc::reboot(libc::RB_POWER_OFF);

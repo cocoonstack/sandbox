@@ -32,8 +32,11 @@ class Sandbox:
         return self
 
     def __exit__(self, *exc):
-        with contextlib.suppress(Exception):
+        try:
             self.close()
+        except Exception:
+            if exc[0] is None:  # a clean block surfaces a real release failure
+                raise
 
     def exec(self, *argv: str, cwd: str = "", env: dict | None = None,
              user: str = "", session: str = "", stdin: bytes = b"") -> str:

@@ -64,6 +64,7 @@ def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float) -> Conn:
     Upgrade, so nothing pools or proxies underneath the byte stream."""
     host, port = addr.rsplit(":", 1)
     sock = socket.create_connection((host, int(port)), timeout=timeout)
+    reader = None
     try:
         request = (
             f"GET /v1/sandboxes/{sandbox_id}/agent HTTP/1.1\r\n"
@@ -91,5 +92,8 @@ def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float) -> Conn:
             raise APIError("agent upgrade", code, body.strip() or status.strip())
         return Conn(sock, reader)
     except Exception:
+        # makefile() holds a ref on the socket; close it too or the fd lingers.
+        if reader is not None:
+            reader.close()
         sock.close()
         raise
