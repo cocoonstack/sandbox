@@ -107,6 +107,12 @@ echo "== clone tier ($CLONE_N claims from the golden-only pool)"
 clone_row=$(claim_ms -template "$TEMPLATE" -size medium -n "$CLONE_N" | stats)
 
 cold_row="- | - | - | 0"
+if [[ $COLD_TEMPLATE == "$TEMPLATE" ]]; then
+  # A pooled COLD_TEMPLATE would measure warm/clone claims mislabeled as cold,
+  # and its pool drain + refill churn would contaminate the RTT window below.
+  echo "== cold tier SKIPPED: COLD_TEMPLATE == TEMPLATE (pooled, not a cold boot)"
+  COLD_TEMPLATE=""
+fi
 if [[ -n $COLD_TEMPLATE ]]; then
   echo "== cold tier ($COLD_N claims of unpooled $COLD_TEMPLATE)"
   cold_row=$(claim_ms -template "$COLD_TEMPLATE" -n "$COLD_N" | stats)
@@ -133,6 +139,7 @@ cat <<EOF
 |---|---|
 | host | $envlabel, $cpu, $(nproc) cores, $(awk '/MemTotal/{printf "%.0f GiB", $2/1048576}' /proc/meminfo) |
 | kernel | $(uname -r) |
+| cpufreq | $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo unknown)/$(cat /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference 2>/dev/null || echo -) |
 | cocoon | $(cocoon version 2>/dev/null | awk '/Version/{print $2; exit}') |
 | template | $TEMPLATE @ ${digest:-unknown} |
 
