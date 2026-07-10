@@ -85,19 +85,27 @@ labeled and must only be compared against other nested runs.
 |---|---|
 | host | bare metal, AMD Ryzen 7 9700X 8-Core Processor, 16 cores, 60 GiB |
 | kernel | 6.17.0-35-generic |
+| cpufreq | powersave/performance |
 | cocoon | v0.4.8-master.32bcbc6 |
 | template | rt-2c8f5c6:24.04 @ sha256:ec268d5498fa (full local chain: silkd carrier → base → rt) |
 
 | claim tier | p50 | p90 | max | n |
 |---|---|---|---|---|
 | warm pool hit | 0.2 ms | 0.3 ms | 0.6 ms | 6 |
-| clone from golden | 28.5 ms | 29.3 ms | 29.8 ms | 10 |
-| cold boot (unpooled rt-2c8f5c6:24.04) | 52.4 ms | 52.4 ms | 52.5 ms | 3 |
+| clone from golden | 26.0 ms | 29.3 ms | 30.6 ms | 10 |
+| cold boot (pool-less node, coldproof claim→first exec) | 304 ms / 306 ms | — | 314 ms | 3 |
 
 | data plane | measured |
 |---|---|
-| exec RTT (dial per RPC) | n=200 p50=0.29ms p90=1.68ms p99=3.23ms |
-| fs_pull throughput (128 MiB) | 614.7 MiB/s best of 3 |
+| exec RTT (dial per RPC) | n=200 p50=0.21ms p90=1.27ms p99=2.56ms |
+| fs_pull throughput (128 MiB) | 609.5 MiB/s best of 3 |
+
+exec RTT is power-policy sensitive on this host: under the performance
+governor the same stack measures p50=0.18 p90=0.22 p99=0.27 (n=1000, ×2),
+reproducing the 07-08 entry; .79's 07-09 reboots reset the policy to
+powersave, whose C-state/freq-ramp latency lands in the tail. The guest is
+up 0.26s (its own /proc/uptime) when the first cold exec returns — silkd
+answers long before a console login prompt would appear.
 
 ### 2026-07-10 — bare metal
 
