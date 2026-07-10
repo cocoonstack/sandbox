@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
+
+	"github.com/cocoonstack/sandbox/sandboxd/egress"
 )
 
 // AuditLineCap bounds how much of a relayed request frame the audit tap
@@ -49,15 +51,17 @@ type counters struct {
 
 // auditFrame is the addressing slice of a request frame worth auditing.
 type auditFrame struct {
-	Op      string   `json:"op"`
-	Argv    []string `json:"argv,omitempty"`
-	Path    string   `json:"path,omitempty"`
-	Dest    string   `json:"dest,omitempty"`
-	From    string   `json:"from,omitempty"`
-	To      string   `json:"to,omitempty"`
-	URL     string   `json:"url,omitempty"`
-	Session string   `json:"session,omitempty"`
-	Port    uint16   `json:"port,omitempty"`
+	Op       string   `json:"op"`
+	Argv     []string `json:"argv,omitempty"`
+	Path     string   `json:"path,omitempty"`
+	Dest     string   `json:"dest,omitempty"`
+	From     string   `json:"from,omitempty"`
+	To       string   `json:"to,omitempty"`
+	URL      string   `json:"url,omitempty"`
+	Session  string   `json:"session,omitempty"`
+	Port     uint16   `json:"port,omitempty"`
+	Decision string   `json:"decision,omitempty"` // egress: allow|deny
+	Secret   string   `json:"secret,omitempty"`   //nolint:gosec // the secret's ref name, never its value
 }
 
 // Counters snapshots the monotonic telemetry counters.
@@ -126,6 +130,17 @@ func (m *Manager) recordAudit(ctx context.Context, id string, frame auditFrame) 
 // AuditEnabled reports whether the relay should tap request frames at all.
 func (m *Manager) AuditEnabled() bool {
 	return m.audit != nil
+}
+
+// recordEgress logs one guarded-egress decision to the audit tap (secret name
+// only, never its value) and meters it as an always-on usage event.
+func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress.Event) {
+	decision := "deny"
+	if ev.Decision == egress.DecisionAllow {
+		decision = "allow"
+	}
+	m.recordAudit(ctx, id, auditFrame{Op: "egress", Dest: ev.Host, Decision: decision, Secret: ev.Injected})
+	m.recordUsage(ctx, usageEvent{Event: "egress", ID: id, Tenant: tenant, Reference: ev.Host})
 }
 
 // recordUsage appends one billing event; failures are logged, never

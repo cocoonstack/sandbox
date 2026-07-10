@@ -110,6 +110,7 @@ func (m *Manager) Release(ctx context.Context, id, token string) error {
 	}
 	// Cleanup must survive the caller hanging up; the claim is already dropped.
 	ctx = context.WithoutCancel(ctx)
+	m.disarmEgress(id)
 	if ck != "" {
 		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
 	}
@@ -257,6 +258,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	}
 	for _, sb := range sbs {
 		m.recordUsage(ctx, usageEvent{Event: "claim", ID: sb.ID, VMName: sb.VMName, KeyHash: sb.Key.Hash(), Tenant: sb.Tenant})
+		m.armEgress(sb)
 	}
 	return nil
 }
@@ -325,6 +327,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		v := expired[i]
 		switch v.action {
 		case reapPurge:
+			m.disarmEgress(v.id)
 			m.purgeArchiveCk(ctx, v.id, v.ck, v.tenant)
 			logger.Infof(ctx, "purged archived sandbox %s", v.id)
 		case reapArchive:
@@ -335,6 +338,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				logger.Errorf(ctx, err, "archive expired %s", v.id)
 			}
 		default:
+			m.disarmEgress(v.id)
 			m.destroy(ctx, v.vmName)
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)

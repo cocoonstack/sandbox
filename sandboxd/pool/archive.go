@@ -138,6 +138,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	}
 	sb.Transition.Unlock()
 	// Committed: the store ck is authoritative now; reclaim the local footprint.
+	m.disarmEgress(sb.ID)
 	if rmErr := m.eng.Remove(ctx, vmName); rmErr != nil {
 		log.WithFunc("pool.archive").Warnf(ctx, "remove archived VM %s: %v", vmName, rmErr)
 	}

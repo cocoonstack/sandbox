@@ -23,6 +23,7 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/dir"
 	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
@@ -128,6 +129,8 @@ type pool struct {
 	nextBuild time.Time
 	warm      []*types.Sandbox
 	refilling int
+
+	egressPolicy *egress.Policy // this pool's allow-list; nil = no pool policy
 }
 
 func (p *pool) applySpec(spec config.PoolSpec) {
@@ -136,6 +139,7 @@ func (p *pool) applySpec(spec config.PoolSpec) {
 	p.idle = time.Duration(spec.IdleHibernateSeconds) * time.Second
 	p.archiveAfter = time.Duration(spec.ArchiveAfterSeconds) * time.Second
 	p.archiveDelete = time.Duration(spec.ArchiveDeleteAfterSeconds) * time.Second
+	p.egressPolicy = spec.Egress
 }
 
 // Manager owns the node's pools, claims, and their persistence.
@@ -165,6 +169,9 @@ type Manager struct {
 	// in that window would strand the claim). Both guarded by m.mu.
 	archiving  map[string]struct{}
 	pendingCks map[string]struct{}
+	// egressListeners holds the per-sandbox none-lane egress proxy accept point,
+	// keyed by sandbox id; guarded by m.mu, torn down on release/reap.
+	egressListeners map[string]*egressListener
 
 	// maxClaims caps live claims node-wide (0 = unlimited); tenantMax holds
 	// every configured tenant's cap (0 = unlimited) and doubles as the set of
@@ -174,6 +181,7 @@ type Manager struct {
 	maxClaims    int
 	tenantMax    map[string]int
 	tenantLive   map[string]int
+	tenantEgress map[string]*egress.Policy // per-tenant allow-list; nil = no tenant policy
 	usage        *journal
 	audit        *journal
 	counters     counters
@@ -197,6 +205,12 @@ type Manager struct {
 	// instead of waiting out a gossip tick.
 	notifyTemplates func()
 
+	// egressSecrets resolves a rule's secret name to the injected header;
+	// built once at startup, read-only after. egressEnabled short-circuits the
+	// claim path when no pool or tenant declares a policy.
+	egressSecrets *egress.SecretStore
+	egressEnabled bool
+
 	mu      sync.Mutex
 	pools   map[types.PoolKey]*pool
 	claimed map[string]*types.Sandbox
@@ -205,24 +219,27 @@ type Manager struct {
 }
 
 // NewManager builds a manager from the node config; ctx bounds backend
-// construction (the s3 store resolves its credential chain).
-func NewManager(ctx context.Context, cfg *config.Config, eng Engine) (*Manager, error) {
+// construction (the s3 store resolves its credential chain). secrets resolves
+// egress rule references and is shared by every per-sandbox proxy.
+func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *egress.SecretStore) (*Manager, error) {
 	maxFork := cfg.MaxForkCount
 	if maxFork < 1 {
 		maxFork = defaultMaxFork
 	}
 	m := &Manager{
-		eng:        eng,
-		dataDir:    cfg.DataDir,
-		egress:     cfg.HasEgress(),
-		maxFork:    maxFork,
-		store:      newClaimStore(cfg.DataDir),
-		pools:      make(map[types.PoolKey]*pool, len(cfg.Pools)),
-		claimed:    map[string]*types.Sandbox{},
-		tenantLive: map[string]int{},
-		archiving:  map[string]struct{}{},
-		pendingCks: map[string]struct{}{},
-		refillSem:  make(chan struct{}, maxConcurrentRefills),
+		eng:             eng,
+		dataDir:         cfg.DataDir,
+		egress:          cfg.HasEgress(),
+		maxFork:         maxFork,
+		store:           newClaimStore(cfg.DataDir),
+		pools:           make(map[types.PoolKey]*pool, len(cfg.Pools)),
+		claimed:         map[string]*types.Sandbox{},
+		tenantLive:      map[string]int{},
+		archiving:       map[string]struct{}{},
+		pendingCks:      map[string]struct{}{},
+		egressListeners: map[string]*egressListener{},
+		egressSecrets:   secrets,
+		refillSem:       make(chan struct{}, maxConcurrentRefills),
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("create goldens dir: %w", err)
@@ -261,8 +278,13 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine) (*Manager, 
 	}
 	m.maxClaims = cfg.MaxClaims
 	m.tenantMax = make(map[string]int, len(cfg.Tenants))
+	m.tenantEgress = make(map[string]*egress.Policy, len(cfg.Tenants))
 	for _, tn := range cfg.Tenants {
 		m.tenantMax[tn.Name] = tn.MaxClaims
+		if tn.Egress != nil {
+			m.tenantEgress[tn.Name] = tn.Egress
+			m.egressEnabled = true
+		}
 	}
 	m.idleDefault = time.Duration(cfg.IdleHibernateSeconds) * time.Second
 	m.idleEnabled = m.idleDefault > 0
@@ -278,6 +300,9 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine) (*Manager, 
 		}
 		if spec.ArchiveAfterSeconds > 0 {
 			m.archiveEnabled = true
+		}
+		if spec.Egress != nil {
+			m.egressEnabled = true
 		}
 	}
 	if m.archiveEnabled && m.ckptTTL == 0 {
