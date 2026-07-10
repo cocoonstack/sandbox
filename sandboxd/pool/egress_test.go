@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -56,7 +57,9 @@ func TestEgressProxyInjectsAndGates(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
 	sb := &types.Sandbox{ID: "sb_egress", Key: testKey, VsockSocket: filepath.Join(sockDir, "v")}
-	m.armEgress(t.Context(), sb)
+	if armErr := m.armEgress(t.Context(), sb); armErr != nil {
+		t.Fatalf("arm egress: %v", armErr)
+	}
 	path := engine.EgressSocketPath(sb.VsockSocket)
 	client := egressClient(path)
 
@@ -83,6 +86,68 @@ func TestEgressProxyInjectsAndGates(t *testing.T) {
 	m.disarmEgress(sb.ID)
 	if _, err := net.Dial("unix", path); err == nil {
 		t.Error("egress socket still accepts after disarm")
+	}
+}
+
+func TestArmEgressFailsClosedWhenNICUnlockable(t *testing.T) {
+	t.Setenv("GH_TOKEN", "s3cr3t")
+	secrets := testSecrets(t, egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"})
+	egKey := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}
+	pol := &egress.Policy{Allow: []egress.Rule{{Host: "example.com", Secret: "gh"}}}
+	cfg := &config.Config{DataDir: t.TempDir(), Pools: []config.PoolSpec{{PoolKey: egKey, Egress: pol}}}
+	m, err := NewManager(t.Context(), cfg, newFakeEngine(), secrets)
+	if err != nil {
+		t.Fatalf("manager: %v", err)
+	}
+	sockDir, err := os.MkdirTemp("/tmp", "eg")
+	if err != nil {
+		t.Fatalf("sockdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+	// The engine reports no NIC tap, so the nft lock cannot apply; arming must
+	// fail rather than hand out an egress-lane NIC that bypasses the proxy.
+	sb := &types.Sandbox{ID: "sb_eg_fc", Key: egKey, VMName: "sbx-fc-1", VsockSocket: filepath.Join(sockDir, "v")}
+	if armErr := m.armEgress(t.Context(), sb); armErr == nil {
+		t.Fatal("armEgress must fail closed when the egress-lane NIC cannot be locked")
+	}
+}
+
+func TestArmEgressLocksEgressLaneWithoutPolicy(t *testing.T) {
+	// guardedEgress on (one pool carries a policy) plus a policyless egress-lane
+	// pool: that lane must still lock the NIC (default-deny), so arming a claim
+	// whose NIC cannot be locked fails rather than handing out a free NIC.
+	t.Setenv("GH_TOKEN", "s3cr3t")
+	secrets := testSecrets(t, egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"})
+	egKey := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}
+	cfg := &config.Config{DataDir: t.TempDir(), Pools: []config.PoolSpec{
+		{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "a.test"}}}},
+		{PoolKey: egKey}, // egress lane, no egress policy
+	}}
+	m, err := NewManager(t.Context(), cfg, newFakeEngine(), secrets)
+	if err != nil {
+		t.Fatalf("manager: %v", err)
+	}
+	sockDir, err := os.MkdirTemp("/tmp", "eg")
+	if err != nil {
+		t.Fatalf("sockdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+	sb := &types.Sandbox{ID: "sb_eg_np", Key: egKey, VMName: "sbx-np-1", VsockSocket: filepath.Join(sockDir, "v")}
+	if armErr := m.armEgress(t.Context(), sb); armErr == nil {
+		t.Fatal("policyless egress-lane claim must still lock the NIC, not skip it")
+	}
+}
+
+func TestEgressLaneDoesNotHibernate(t *testing.T) {
+	// cocoon resumes a guest before its fresh tap can be re-locked, so an
+	// egress-lane sandbox must refuse to hibernate rather than wake unlocked.
+	m := newTestManager(t, newFakeEngine())
+	sb := &types.Sandbox{ID: "sb_eg_h", Key: types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}}
+	sb.Transition.Lock()
+	err := m.hibernateLocked(t.Context(), sb)
+	sb.Transition.Unlock()
+	if !errors.Is(err, ErrNoEgressHibernate) {
+		t.Fatalf("hibernate egress lane: got %v, want ErrNoEgressHibernate", err)
 	}
 }
 

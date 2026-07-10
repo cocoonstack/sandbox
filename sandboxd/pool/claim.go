@@ -257,10 +257,33 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		return fmt.Errorf("persist claim: %w", saveErr)
 	}
 	for _, sb := range sbs {
+		if armErr := m.armEgress(ctx, sb); armErr != nil {
+			m.rollbackClaim(ctx, sbs)
+			return fmt.Errorf("arm egress %s: %w", sb.ID, armErr)
+		}
 		m.recordUsage(ctx, usageEvent{Event: "claim", ID: sb.ID, VMName: sb.VMName, KeyHash: sb.Key.Hash(), Tenant: sb.Tenant})
-		m.armEgress(ctx, sb)
 	}
 	return nil
+}
+
+// rollbackClaim undoes a committed batch whose egress arm failed: it disarms,
+// drops the claims, recommits, and destroys the VMs — a NIC that cannot be
+// locked must never be handed out.
+func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
+	for _, sb := range sbs {
+		m.disarmEgress(sb.ID)
+	}
+	m.mu.Lock()
+	for _, sb := range sbs {
+		delete(m.claimed, sb.ID)
+		m.tenantDelta(sb.Tenant, -1)
+	}
+	rb := m.store.snapshot(m.claimed)
+	m.mu.Unlock()
+	m.recommit(ctx, rb)
+	for _, sb := range sbs {
+		m.destroy(ctx, sb.VMName)
+	}
 }
 
 func (m *Manager) reapOnce(ctx context.Context) {

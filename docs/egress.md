@@ -26,6 +26,21 @@ curl -x http://127.0.0.1:3128 https://api.github.com/user   # allowed + credenti
 curl -x http://127.0.0.1:3128 https://evil.example/         # 403 egress denied: evil.example
 ```
 
+## How it works (egress lane)
+
+A `net:"egress"` guest owns a real NIC on the host bridge and reaches the same
+proxy over the same vsock path. To stop it bypassing the proxy, sandboxd locks
+the NIC at claim: an nftables netdev table (`sandbox_egress_<tap>`) with an
+ingress hook on the guest's tap drops every guest-initiated packet except IPv4
+broadcast DHCP, so the only egress path left is the audited vsock proxy. The lock
+is fail-closed — a claim whose NIC cannot be locked is rejected, not handed out
+unlocked, and no policy still means a locked NIC (default-deny), never a free
+one. It lives in the host root netns and is removed when the sandbox is released.
+
+Egress-lane sandboxes do not hibernate or archive: cocoon resumes a guest before
+its fresh tap can be re-locked, so suspending would open an unlocked-NIC window.
+Keeping the lane live holds the lock unbroken from claim to release.
+
 ## Configuration
 
 Policy is per pool and per tenant; the effective policy is their intersection
@@ -66,12 +81,9 @@ secret **name**) and metered as an `egress` usage event.
 | Capability | Status |
 |---|---|
 | none lane — proxy, policy, plaintext injection, audit | **shipped** |
+| egress lane — nftables lock on the tap, forcing the NIC through the proxy | **shipped** |
 | HTTPS credential injection (per-node ephemeral-CA TLS interception) | planned |
-| egress lane — nftables default-deny on the tap, forcing the NIC through the proxy | planned |
 
-Today the **egress lane** (a NIC-backed guest) is not yet forced through the
-proxy; a policy on a `net:"egress"` pool is accepted but enforced only once the
-nftables lockdown ships. HTTPS requests on the none lane are gated by host
-(CONNECT allow/deny) and audited, but credential injection into an HTTPS request
-awaits TLS interception. Use the none lane with plaintext or CONNECT-gated
-HTTPS for the credentialed-egress guarantees above.
+HTTPS requests are gated by host (CONNECT allow/deny) and audited on both lanes,
+but credential injection into an HTTPS request awaits TLS interception. Use
+plaintext or CONNECT-gated HTTPS for the credentialed-egress guarantees above.

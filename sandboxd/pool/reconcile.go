@@ -12,6 +12,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -127,13 +128,57 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			logger.Infof(ctx, "removed orphan snapshot %s", orphans[i])
 		}).Wait()
 	}
-	now := time.Now()
-	for _, sb := range m.claimed {
-		sb.TouchAt(now)
-		m.armEgress(ctx, sb) // re-bind the none-lane egress accept point after restart
-	}
+	m.resyncEgress(ctx, live)
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
 	return saveErr
+}
+
+// resyncEgress re-establishes egress state after a restart, then sweeps tables
+// orphaned by VMs that vanished while the daemon was down. A live VM kept its
+// nft lock across the restart (the table lives in the root netns, not in this
+// process), so the tap is only re-recorded — never re-locked — to avoid a window
+// where a running guest is briefly unlocked; only the proxy listener is rebound.
+func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMRecord) {
+	logger := log.WithFunc("pool.resyncEgress")
+	now := time.Now()
+	lockedTaps := map[string]bool{}
+	for _, sb := range m.claimed {
+		sb.TouchAt(now)
+		// Gate on guardedEgress like every other lock site: with guarding off the
+		// claim path leaves the egress NIC free, so a restart must not lock it.
+		if !m.guardedEgress {
+			continue
+		}
+		if tap := m.readoptEgressTap(sb, live); tap != "" {
+			lockedTaps[tap] = true
+			if err := netfilter.EnsureLock(tap); err != nil { // re-apply only if the table did not survive
+				logger.Errorf(ctx, err, "ensure egress lock %s", sb.ID)
+			}
+		}
+		if proxyErr := m.armEgressProxy(ctx, sb); proxyErr != nil {
+			logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
+		}
+	}
+	if sweepErr := netfilter.SweepExcept(lockedTaps); sweepErr != nil {
+		logger.Warnf(ctx, "sweep orphan egress tables: %v", sweepErr)
+	}
+}
+
+// readoptEgressTap records a live egress-lane claim's tap for lifecycle after a
+// restart and returns it; "" for the none lane or a VM whose tap is not listed.
+func (m *Manager) readoptEgressTap(sb *types.Sandbox, live map[string]types.VMRecord) string {
+	if sb.Key.Net != types.NetEgress {
+		return ""
+	}
+	rec, ok := live[sb.VMName]
+	if !ok || len(rec.NetworkConfigs) == 0 || rec.NetworkConfigs[0].TAP == "" {
+		return ""
+	}
+	tap := rec.NetworkConfigs[0].TAP
+	m.mu.Lock()
+	m.egressTaps[sb.ID] = tap
+	m.mu.Unlock()
+	return tap
 }
 
 // reclaimOrphanArchiveCks reaps archives that crashed between their

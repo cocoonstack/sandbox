@@ -41,6 +41,11 @@ func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string
 
 // hibernateLocked is Hibernate's body; the caller holds sb.Transition.
 func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error {
+	if sb.Key.Net == types.NetEgress {
+		// cocoon resumes the guest before its fresh tap can be re-locked, so a
+		// woken egress guest would egress unlocked; keep the lane live instead.
+		return ErrNoEgressHibernate
+	}
 	// An adopted hibernate was never billed (its confirming list had failed),
 	// so record it even if this resolve's own persist is still converging.
 	adopted, resolveErr := m.resolvePendingSnap(ctx, sb)
@@ -51,6 +56,7 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		return resolveErr
 	}
 	if sb.HibernateSnap != "" {
+		m.disarmEgress(sb.ID) // already hibernated: drop its proxy listener and nft lock
 		if err := m.syncClaims(ctx, sb); err != nil {
 			return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, err)
 		}
@@ -77,6 +83,7 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		adopted, resolveErr := m.resolvePendingSnap(ctx, sb)
 		if adopted {
 			m.recordHibernate(ctx, sb)
+			m.disarmEgress(sb.ID) // snapshot landed, VM stopped: drop its listener and nft lock
 			if resolveErr != nil {
 				return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, resolveErr)
 			}
@@ -95,6 +102,7 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	}
 	// The VM is hibernated either way, so the billing window closes here.
 	m.recordHibernate(ctx, sb)
+	m.disarmEgress(sb.ID) // the tap is gone; drop its proxy listener and nft lock
 	if err != nil {
 		return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, err)
 	}
@@ -152,6 +160,11 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	m.counters.wakes.Add(1)
 	m.counters.wakeNanos.Add(uint64(time.Since(wakeStart))) //nolint:gosec // durations are positive
 	m.recordUsage(ctx, usageEvent{Event: "wake", ID: sb.ID, VMName: sb.VMName})
+	// Only the none lane hibernates, so this rebinds its proxy; the egress lane
+	// never reaches here (hibernateLocked rejects it) and needs no re-lock.
+	if proxyErr := m.armEgressProxy(ctx, sb); proxyErr != nil {
+		log.WithFunc("pool.wakeResolved").Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
+	}
 	if err != nil {
 		// The lagging journal still references the snapshot; park it for
 		// reclaim after a later write lands, not just the restart sweep.
@@ -184,8 +197,8 @@ func (m *Manager) idleOnce(ctx context.Context) {
 		if p, pooled := m.pools[sb.Key]; pooled {
 			idle = p.idle // pooled keys never take the node default
 		}
-		if idle <= 0 || sb.HibernateSnap != "" || sb.ArchiveCk != "" || now.Sub(sb.LastSeen()) < idle {
-			continue
+		if idle <= 0 || sb.Key.Net == types.NetEgress || sb.HibernateSnap != "" || sb.ArchiveCk != "" || now.Sub(sb.LastSeen()) < idle {
+			continue // egress never hibernates (hibernateLocked would reject it)
 		}
 		victims = append(victims, victim{sb.ID, sb.Token})
 	}

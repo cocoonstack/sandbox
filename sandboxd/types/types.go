@@ -176,9 +176,15 @@ type Checkpoint struct {
 // VMRecord is the subset of cocoon's `vm list --format json` output the
 // control plane reads.
 type VMRecord struct {
-	State       string   `json:"state"`
-	VsockSocket string   `json:"vsock_socket"`
-	Config      VMConfig `json:"config"`
+	State          string        `json:"state"`
+	VsockSocket    string        `json:"vsock_socket"`
+	NetworkConfigs []VMNetConfig `json:"network_configs,omitempty"`
+	Config         VMConfig      `json:"config"`
+}
+
+// VMNetConfig is the per-NIC host tap the egress-lane nft lock binds.
+type VMNetConfig struct {
+	TAP string `json:"tap"`
 }
 
 // VMConfig is the config subset of VMRecord.
