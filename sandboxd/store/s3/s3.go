@@ -126,9 +126,8 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 	if err = g.Wait(); err != nil {
 		return err
 	}
-	metaKey := s.key(id, store.MetaFile)
-	if _, err = s.tm.UploadObject(ctx, &transfermanager.UploadObjectInput{Bucket: &s.bucket, Key: &metaKey, Body: bytes.NewReader(metaRaw)}); err != nil {
-		return fmt.Errorf("upload %s: %w", metaKey, err)
+	if err = s.uploadReader(ctx, s.key(id, store.MetaFile), bytes.NewReader(metaRaw)); err != nil {
+		return err
 	}
 	// A re-publish (re-promote) may ship a different export file set:
 	// after the new meta commits, sweep keys the new generation did not
@@ -317,7 +316,11 @@ func (s *Store) upload(ctx context.Context, key, path string) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	if _, err := s.tm.UploadObject(ctx, &transfermanager.UploadObjectInput{Bucket: &s.bucket, Key: &key, Body: f}); err != nil {
+	return s.uploadReader(ctx, key, f)
+}
+
+func (s *Store) uploadReader(ctx context.Context, key string, body io.Reader) error {
+	if _, err := s.tm.UploadObject(ctx, &transfermanager.UploadObjectInput{Bucket: &s.bucket, Key: &key, Body: body}); err != nil {
 		return fmt.Errorf("upload %s: %w", key, err)
 	}
 	return nil

@@ -249,6 +249,9 @@ func TestBulkDecodeStrictShape(t *testing.T) {
 	if _, err := DecodeResponse([]byte(`{"type":"stdout","data":"aGk="`)); err == nil {
 		t.Error("unterminated frame accepted")
 	}
+	if _, err := DecodeResponse([]byte(`{"type":"stdout"}garbage"data":"QQ=="}`)); err == nil {
+		t.Error("garbage between fields accepted")
+	}
 }
 
 func TestUnknownTagsRejected(t *testing.T) {

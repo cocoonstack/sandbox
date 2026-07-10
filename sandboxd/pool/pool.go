@@ -162,8 +162,11 @@ type Manager struct {
 	archiveEnabled       bool
 	archiveSweep         atomic.Bool
 	// archiving holds ids with an archive() export in flight, so the reap tick
-	// and archive sweep don't both re-export the same sandbox. Guarded by m.mu.
-	archiving map[string]struct{}
+	// and archive sweep don't both re-export the same sandbox; pendingCks pins
+	// checkpoint ids an archive is publishing before ArchiveCk can (a delete
+	// in that window would strand the claim). Both guarded by m.mu.
+	archiving  map[string]struct{}
+	pendingCks map[string]struct{}
 
 	// maxClaims caps live claims node-wide (0 = unlimited); tenantMax holds
 	// every configured tenant's cap (0 = unlimited) and doubles as the set of
@@ -186,6 +189,10 @@ type Manager struct {
 	// promotes/deletes update it, startup loads it.
 	tplMu  sync.Mutex
 	tplSet map[string]struct{}
+
+	// tplLocks serializes same-template store mutations and holds off a
+	// re-publish swap while a clone reads the old generation (per id, RW).
+	tplLocks sync.Map
 
 	// notifyTemplates, when set (before serving starts), fires after a
 	// promote or template delete so the mesh republishes immediately
@@ -216,6 +223,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine) (*Manager, 
 		claimed:    map[string]*types.Sandbox{},
 		tenantLive: map[string]int{},
 		archiving:  map[string]struct{}{},
+		pendingCks: map[string]struct{}{},
 		refillSem:  make(chan struct{}, maxConcurrentRefills),
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
@@ -420,6 +428,25 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
 	return saveErr
+}
+
+// FlushClaims synchronously persists the current claim set — the shutdown
+// hook that closes the window where a detached recommit has not converged yet.
+func (m *Manager) FlushClaims() error {
+	return m.store.commit(m.claimsSnapshot())
+}
+
+func (m *Manager) claimsSnapshot() claimSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.store.snapshot(m.claimed)
+}
+
+// untrack removes a key from an m.mu-guarded set.
+func (m *Manager) untrack(set map[string]struct{}, key string) {
+	m.mu.Lock()
+	delete(set, key)
+	m.mu.Unlock()
 }
 
 // SetPools replaces the node's desired warm targets. Existing claims are not

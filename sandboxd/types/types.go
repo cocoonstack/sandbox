@@ -131,6 +131,10 @@ type Sandbox struct {
 	// lineage; empty for pool and template claims.
 	FromCheckpoint string `json:"from_checkpoint,omitempty"`
 
+	// StaleSnap names a consumed wake snapshot a lagging journal still
+	// references; dropped once a later write lands. Guarded by Transition.
+	StaleSnap string `json:"-"`
+
 	// lastActivity is unix-nanos of the last data-plane connection, for the
 	// idle policy; lock-free, stamped on the relay hot path. Runtime-only, a
 	// restart resets it to adoption time.

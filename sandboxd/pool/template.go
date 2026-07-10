@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -47,15 +48,10 @@ func (m *Manager) Promote(ctx context.Context, id, token, template, tenant strin
 		// silently change what refills produce.
 		return types.PoolKey{}, ErrPooledTemplate
 	}
-	// Re-promote replaces; a tenant must not overwrite (and poison) another
-	// tenant's template. Root may replace any, so it skips the meta read.
-	if tenant != "" {
-		if raw, err := m.tpls.ReadMeta(ctx, store.TemplateID(key.Hash())); err == nil {
-			var prev templateRecord
-			if json.Unmarshal(raw, &prev) == nil && !tenantOwns(tenant, prev.Tenant) {
-				return types.PoolKey{}, ErrTemplateOwned
-			}
-		}
+	// Fast-fail before the export; commitTemplate re-checks under the
+	// template lock, closing the check-then-publish race.
+	if err := m.checkTemplateOwner(ctx, store.TemplateID(key.Hash()), tenant); err != nil {
+		return types.PoolKey{}, err
 	}
 	// See Fork: the transition lock pins the source snapshot, and a started
 	// promote must finish even if the caller hangs up.
@@ -88,6 +84,9 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant 
 		return ErrPooledTemplate
 	}
 	id := store.TemplateID(key.Hash())
+	l := m.tplLock(id)
+	l.Lock()
+	defer l.Unlock()
 	raw, err := m.tpls.ReadMeta(ctx, id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -173,6 +172,34 @@ func (m *Manager) pooledHash(hash string) bool {
 	return false
 }
 
+// tplLock is the per-template mutation lock: same-id publish/delete
+// serialize on it, and a clone holds it shared so a re-publish swap never
+// moves the generation under an in-flight read.
+func (m *Manager) tplLock(id string) *sync.RWMutex {
+	l, _ := m.tplLocks.LoadOrStore(id, &sync.RWMutex{})
+	return l.(*sync.RWMutex)
+}
+
+// checkTemplateOwner rejects publishing or deleting over another tenant's
+// record; a meta failure other than absence refuses rather than fail open.
+func (m *Manager) checkTemplateOwner(ctx context.Context, id, tenant string) error {
+	if tenant == "" {
+		return nil
+	}
+	raw, err := m.tpls.ReadMeta(ctx, id)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return nil
+	case err != nil:
+		return fmt.Errorf("read template: %w", err)
+	}
+	var prev templateRecord
+	if json.Unmarshal(raw, &prev) != nil || !tenantOwns(tenant, prev.Tenant) {
+		return ErrTemplateOwned
+	}
+	return nil
+}
+
 // resolveGolden resolves a key's clone source: the configured pool's local
 // golden (no release), else a promoted template fetched from the store;
 // empty dir cold-boots. Only a true absence cold-boots — a backend failure
@@ -187,11 +214,18 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string,
 	if dir != "" {
 		return dir, func() {}, nil
 	}
-	dir, _, release, err := m.tpls.Fetch(ctx, store.TemplateID(key.Hash()))
-	if errors.Is(err, store.ErrNotFound) {
-		return "", func() {}, nil
+	id := store.TemplateID(key.Hash())
+	l := m.tplLock(id)
+	l.RLock()
+	dir, _, release, err := m.tpls.Fetch(ctx, id)
+	if err != nil {
+		l.RUnlock()
+		if errors.Is(err, store.ErrNotFound) {
+			return "", func() {}, nil
+		}
+		return "", func() {}, err
 	}
-	return dir, release, err
+	return dir, func() { release(); l.RUnlock() }, nil
 }
 
 // publishTemplate exports snap into the store under the key's template id.
@@ -209,13 +243,20 @@ func (m *Manager) publishTemplate(ctx context.Context, snap string, key types.Po
 }
 
 // commitTemplate writes the meta record, publishes the staged template, and
-// registers it in the gossip set.
+// registers it in the gossip set — owner re-checked and swap serialized
+// under the template lock.
 func (m *Manager) commitTemplate(ctx context.Context, staging, id, tenant string) error {
 	meta, err := json.Marshal(templateRecord{ID: id, Tenant: tenant, CreatedAt: time.Now()})
 	if err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); err != nil {
+		return err
+	}
+	l := m.tplLock(id)
+	l.Lock()
+	defer l.Unlock()
+	if err := m.checkTemplateOwner(ctx, id, tenant); err != nil {
 		return err
 	}
 	if err := m.tpls.Publish(ctx, staging, id); err != nil {

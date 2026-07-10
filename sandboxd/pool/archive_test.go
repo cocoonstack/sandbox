@@ -1,14 +1,66 @@
 package pool
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
+
+// stallingStore parks Publish after the record becomes visible, exposing the
+// window between an archive's publish and its ArchiveCk commit.
+type stallingStore struct {
+	store.Store
+	published chan string
+	release   chan struct{}
+}
+
+func (s *stallingStore) Publish(ctx context.Context, staging, id string) error {
+	if err := s.Store.Publish(ctx, staging, id); err != nil {
+		return err
+	}
+	s.published <- id
+	<-s.release
+	return nil
+}
+
+// TestArchivePublishWindowPinsCheckpoint guards the pre-pin: between an
+// archive's checkpoint publish and the ArchiveCk commit, the checkpoint must
+// be invisible to listings and refuse deletion — a delete landing in that
+// window stranded the claim.
+func TestArchivePublishWindowPinsCheckpoint(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, archivePool(3600))
+	sb := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	stall := &stallingStore{Store: m.ckpts, published: make(chan string, 1), release: make(chan struct{})}
+	m.ckpts = stall
+
+	archived := make(chan error, 1)
+	go func() { archived <- m.archive(t.Context(), sb) }()
+	ck := <-stall.published
+
+	if ckpts, err := m.Checkpoints(t.Context(), ""); err != nil || len(ckpts) != 0 {
+		t.Errorf("mid-publish checkpoint visible: %v, %v", ckpts, err)
+	}
+	if err := m.DeleteCheckpoint(t.Context(), ck, ""); !errors.Is(err, ErrUnknownCheckpoint) {
+		t.Errorf("mid-publish delete: %v, want ErrUnknownCheckpoint", err)
+	}
+	close(stall.release)
+	if err := <-archived; err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake archived: %v", err)
+	}
+}
 
 // breakStore points the claim store at a path whose parent is missing, so the
 // next save fails — the fault used to exercise the persist-failure paths.

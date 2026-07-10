@@ -358,11 +358,9 @@ func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
 	m.recordUsage(ctx, usageEvent{Event: "archive_delete", ID: id, Reference: ck, Tenant: tenant})
 }
 
-// recommit re-persists a snapshot in the background until disk converges
-// after a failed commit — Reconcile trusts disk, so a restart while it lags
-// drops claims memory still holds. Its own success or any newer durable
-// write (commit coalesces by sequence) ends the loop; detached, because
-// callers may hold the transition lock.
+// recommit re-persists a snapshot in the background until its own success or
+// any newer durable write ends the loop (commit coalesces by sequence);
+// detached, because callers may hold the transition lock.
 func (m *Manager) recommit(ctx context.Context, snap claimSnapshot) {
 	go func() {
 		backoff := recommitBackoff

@@ -83,19 +83,22 @@ func (m *Manager) archiveOnce(ctx context.Context) {
 func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	// Must finish even if the sweep ctx is canceled, or the record diverges from the store.
 	ctx = context.WithoutCancel(ctx)
-	defer func() {
-		m.mu.Lock()
-		delete(m.archiving, sb.ID)
-		m.mu.Unlock()
-	}()
+	defer m.untrack(m.archiving, sb.ID)
 	m.mu.Lock()
 	ok := m.claimed[sb.ID] == sb && sb.HibernateSnap != "" && sb.ArchiveCk == ""
 	m.mu.Unlock()
 	if !ok {
 		return errWokeMeanwhile
 	}
+	// Pin the wake image before it exists: from the moment Publish makes it
+	// listable, a tenant/root delete would strand the claim it will back.
+	ckID := store.CheckpointID(randHex(8))
+	m.mu.Lock()
+	m.pendingCks[ckID] = struct{}{}
+	m.mu.Unlock()
+	defer m.untrack(m.pendingCks, ckID)
 	// A hibernated source is copied from its wake image, so no VM starts.
-	ck, err := m.publishCheckpoint(ctx, sb, "archive", sb.Tenant)
+	ck, err := m.publishCheckpoint(ctx, sb, ckID, "archive", sb.Tenant)
 	if err != nil {
 		return err
 	}

@@ -40,6 +40,9 @@ func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string
 // hibernateLocked is Hibernate's body; the caller holds sb.Transition.
 func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error {
 	if sb.HibernateSnap != "" {
+		if err := m.syncClaims(ctx, sb); err != nil {
+			return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, err)
+		}
 		return nil
 	}
 	// A started transition must finish even if the caller hangs up (the
@@ -64,6 +67,7 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	if err != nil {
 		return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, err)
 	}
+	m.dropStale(ctx, sb)
 	return nil
 }
 
@@ -75,6 +79,13 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 		return m.wakeArchived(ctx, sb)
 	}
 	if sb.HibernateSnap == "" {
+		// No journal sync here — this is the data-plane fast path, and a
+		// lagging journal only says hibernated while the VM runs, which a
+		// restart heals (Reconcile adopts running VMs). Reclaim a parked
+		// snapshot once the journal no longer references it.
+		if sb.StaleSnap != "" && m.store.synced() {
+			m.dropStale(ctx, sb)
+		}
 		return sb.VsockSocket, nil
 	}
 	// See Hibernate: a half-restored VM is worse than a wasted wake.
@@ -100,9 +111,12 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	m.counters.wakeNanos.Add(uint64(time.Since(wakeStart))) //nolint:gosec // durations are positive
 	m.recordUsage(ctx, usageEvent{Event: "wake", ID: sb.ID, VMName: sb.VMName})
 	if err != nil {
-		// Keep the snapshot the lagging journal still references.
+		// The lagging journal still references the snapshot; park it for
+		// reclaim after a later write lands, not just the restart sweep.
+		sb.StaleSnap = snap
 		return "", fmt.Errorf("wake %s: persist claims: %w", sb.ID, err)
 	}
+	m.dropStale(ctx, sb)
 	// The resume consumed the memory image; reclaim its disk off the
 	// wake-return path (a stale-name re-hibernate is guarded by randHex above,
 	// a failed drop by the orphan-snapshot sweep).
@@ -177,12 +191,10 @@ func (m *Manager) idleHibernate(ctx context.Context, id, token string, sweepStar
 }
 
 // commitTransition publishes a hibernate/wake result and persists the
-// journal, but only if the claim is still live — Release and reap do not
-// take the transition lock, so a sandbox can be destroyed mid-transition
-// and publishing then would resurrect state nobody owns. A failed journal
-// write is returned (a restart before disk converges would drop the claim,
-// so the caller must not report success) while recommit converges disk to
-// the published state, which the VM already embodies.
+// journal, but only if the claim is still live — Release and reap skip the
+// transition lock, and publishing after them would resurrect state nobody
+// owns. A failed write is returned (the caller must not report success)
+// while recommit converges disk to the state the VM already embodies.
 func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap, sock string) (live bool, err error) {
 	m.mu.Lock()
 	live = m.claimed[sb.ID] == sb
@@ -201,4 +213,24 @@ func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap,
 		return true, err
 	}
 	return true, nil
+}
+
+// syncClaims backs the idempotent hibernate fast path: a retry after a
+// failed persist must not answer success while the journal still lags the
+// transition it reports. The caller holds sb.Transition.
+func (m *Manager) syncClaims(ctx context.Context, sb *types.Sandbox) error {
+	if !m.store.synced() {
+		if err := m.store.commit(m.claimsSnapshot()); err != nil {
+			return err
+		}
+	}
+	m.dropStale(ctx, sb)
+	return nil
+}
+
+func (m *Manager) dropStale(ctx context.Context, sb *types.Sandbox) {
+	if snap := sb.StaleSnap; snap != "" {
+		sb.StaleSnap = ""
+		go m.dropSnap(ctx, snap)
+	}
 }

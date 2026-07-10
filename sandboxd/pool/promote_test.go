@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -192,6 +193,57 @@ func TestTemplateTenantScopedDelete(t *testing.T) {
 	}
 	if err := m.DeleteTemplate(t.Context(), key, ""); err != nil {
 		t.Errorf("root delete: %v", err)
+	}
+}
+
+// TestCommitTemplateRechecksOwnerUnderLock drives the publish-side check
+// directly: two racers that both passed Promote's early check must still
+// serialize on ownership at publish.
+func TestCommitTemplateRechecksOwnerUnderLock(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	id := store.TemplateID(testKey.Hash())
+	stage := func() string {
+		t.Helper()
+		staging, err := m.tpls.Stage(id)
+		if err != nil {
+			t.Fatalf("stage: %v", err)
+		}
+		if err := os.MkdirAll(filepath.Join(staging, store.ExportDir), 0o750); err != nil {
+			t.Fatalf("mkdir export: %v", err)
+		}
+		return staging
+	}
+	if err := m.commitTemplate(t.Context(), stage(), id, "acme"); err != nil {
+		t.Fatalf("acme publish: %v", err)
+	}
+	if err := m.commitTemplate(t.Context(), stage(), id, "beta"); !errors.Is(err, ErrTemplateOwned) {
+		t.Errorf("beta publish over acme: %v, want ErrTemplateOwned", err)
+	}
+}
+
+// TestPromoteFailsClosedOnMetaError: an unreadable template meta must refuse
+// the promote, never skip the ownership check.
+func TestPromoteFailsClosedOnMetaError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file permissions")
+	}
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme")
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, err := m.Promote(t.Context(), a.ID, a.Token, "shared:v1", "acme"); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	key := types.PoolKey{Template: "shared:v1", Net: testKey.Net, Size: testKey.Size}
+	meta := filepath.Join(m.dataDir, "checkpoints", store.TemplateID(key.Hash()), store.MetaFile)
+	if err := os.Chmod(meta, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(meta, 0o600) })
+	if _, err := m.Promote(t.Context(), a.ID, a.Token, "shared:v1", "beta"); err == nil {
+		t.Fatal("promote succeeded despite an unreadable owner record")
 	}
 }
 

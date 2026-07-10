@@ -37,7 +37,7 @@ func (m *Manager) Checkpoint(ctx context.Context, id, token, name, tenant string
 	}
 	// See Hibernate: a started capture must finish even if the caller hangs up.
 	ctx = context.WithoutCancel(ctx)
-	ckpt, err := m.publishCheckpoint(ctx, sb, name, tenant)
+	ckpt, err := m.publishCheckpoint(ctx, sb, store.CheckpointID(randHex(8)), name, tenant)
 	if err != nil {
 		return types.Checkpoint{}, err
 	}
@@ -49,9 +49,9 @@ func (m *Manager) Checkpoint(ctx context.Context, id, token, name, tenant string
 // publishCheckpoint stages the sandbox's exported state, writes the meta, and
 // publishes it to the store. Shared by Checkpoint and archive; a hibernated
 // source exports its wake image directly (no VM start — refill.sourceSnap).
-func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, name, tenant string) (types.Checkpoint, error) {
+func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID, name, tenant string) (types.Checkpoint, error) {
 	ckpt := types.Checkpoint{
-		ID:        store.CheckpointID(randHex(8)),
+		ID:        ckID,
 		Name:      name,
 		SandboxID: sb.ID,
 		Key:       sb.Key,
@@ -142,13 +142,16 @@ func (m *Manager) Checkpoints(ctx context.Context, tenant string) ([]types.Check
 	return ckpts, nil
 }
 
-// pinnedArchiveCks is the set of checkpoint ids backing a live archived claim:
-// its wake image, which the listing hides and delete/TTL must spare (deleting
-// one would strand its sandbox).
+// pinnedArchiveCks is the set of checkpoint ids backing a live archived claim
+// or an archive publish in flight (pendingCks): wake images the listing hides
+// and delete/TTL must spare (deleting one would strand its sandbox).
 func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	pinned := make(map[string]struct{})
+	pinned := make(map[string]struct{}, len(m.pendingCks))
+	for id := range m.pendingCks {
+		pinned[id] = struct{}{}
+	}
 	for _, sb := range m.claimed {
 		if sb.ArchiveCk != "" {
 			pinned[sb.ArchiveCk] = struct{}{}

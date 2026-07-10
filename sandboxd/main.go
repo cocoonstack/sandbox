@@ -122,6 +122,10 @@ func main() {
 		logger.Fatalf(ctx, err, "serve")
 	}
 	<-drained
+	// A detached recommit may not have converged; leave disk matching memory.
+	if err := mgr.FlushClaims(); err != nil {
+		logger.Error(ctx, err, "flush claims")
+	}
 	logger.Info(ctx, "sandboxd stopped; VMs stay alive for the next reconcile")
 }
 

@@ -123,3 +123,10 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 func (s *claimStore) save(claims map[string]*types.Sandbox) error {
 	return s.commit(s.snapshot(claims))
 }
+
+// synced reports whether every handed-out snapshot has reached disk.
+func (s *claimStore) synced() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.written == s.seq.Load()
+}
