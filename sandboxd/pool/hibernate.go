@@ -56,7 +56,9 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	// cannot be written aborts with the VM untouched, and a committed intent
 	// lets Reconcile adopt a hibernate whose final commit never landed.
 	if err := m.store.commit(m.setPendingSnap(sb, snap)); err != nil {
-		m.setPendingSnap(sb, "")
+		m.mu.Lock()
+		sb.PendingSnap = ""
+		m.mu.Unlock()
 		return fmt.Errorf("hibernate %s: persist intent: %w", sb.ID, err)
 	}
 	if err := m.eng.Hibernate(ctx, sb.VMName, snap); err != nil {
