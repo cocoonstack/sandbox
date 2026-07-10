@@ -219,6 +219,26 @@ func TestMetricsTenantGauge(t *testing.T) {
 	}
 }
 
+// TestPutPoolsRejectsUnknownFields: the operator body decodes strictly — a
+// mistyped key (e.g. "egres") must 400, not succeed with the policy dropped.
+func TestPutPoolsRejectsUnknownFields(t *testing.T) {
+	ts := newTestServer(t, "sekret", &fakeManager{}, nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, ts.URL+"/v1/pools",
+		strings.NewReader(`{"pools":[{"template":"rt:24.04","net":"none","size":"small","egres":{"allow":[]}}]}`))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer sekret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", resp.StatusCode)
+	}
+}
+
 func TestPutPoolsUpdatesTargets(t *testing.T) {
 	var got []config.PoolSpec
 	mgr := &fakeManager{

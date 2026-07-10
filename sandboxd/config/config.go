@@ -2,12 +2,13 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 
+	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 const (
@@ -27,6 +28,11 @@ type PoolSpec struct {
 	// target may rise from Warm (the floor) toward WarmMax while claims
 	// arrive faster than the pool provisions, and decays back in silence.
 	WarmMax int `json:"warm_max,omitempty"`
+
+	// Egress is this pool's allow-list, intersected with the tenant's for the
+	// effective policy (a request must pass both); when both matched rules
+	// name a secret, the pool's is injected. Nil denies all egress.
+	Egress *egress.Policy `json:"egress,omitempty"`
 
 	// IdleHibernateSeconds, when >0, hibernates this pool's idle claims
 	// after that many seconds without a data-plane connection; the next
@@ -74,6 +80,9 @@ type TenantSpec struct {
 	Name      string `json:"name"`
 	Token     string `json:"token"` //nolint:gosec // config field, not a hardcoded credential
 	MaxClaims int    `json:"max_claims,omitempty"`
+
+	// Egress is the tenant's allow-list (see PoolSpec.Egress).
+	Egress *egress.Policy `json:"egress,omitempty"`
 }
 
 // MeshConfig configures cluster membership. Two v1 constraints: all nodes
@@ -114,6 +123,10 @@ type Config struct {
 	// Tenants adds per-tenant bearer tokens next to APIToken; empty keeps
 	// the single-token behavior.
 	Tenants []TenantSpec `json:"tenants,omitempty"`
+
+	// Secrets registers node-side credentials the egress proxy injects by
+	// name; values come from the environment (value_env), never this file.
+	Secrets []egress.SecretSpec `json:"secrets,omitempty"`
 
 	// IdleHibernateSeconds is the idle policy for claims of unpooled keys
 	// (template and checkpoint claims); per-pool settings override it for
@@ -176,7 +189,8 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 	cfg := &Config{}
-	if err := json.Unmarshal(raw, cfg); err != nil {
+	// Hand-edited file: a typo must fail load, not silently change policy.
+	if err := utils.DecodeStrictJSON(raw, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	cfg.applyDefaults()
@@ -253,6 +267,10 @@ func (c *Config) validate() error {
 	if err := c.validateTenants(); err != nil {
 		return err
 	}
+	secrets, err := c.validateSecrets()
+	if err != nil {
+		return err
+	}
 	for _, p := range c.Pools {
 		if err := p.Validate(); err != nil {
 			return fmt.Errorf("pool %q: %w", p.Template, err)
@@ -263,8 +281,30 @@ func (c *Config) validate() error {
 		if err := p.ValidateLimits(); err != nil {
 			return fmt.Errorf("pool %q: %w", p.Template, err)
 		}
+		if err := validatePolicy(p.Egress, secrets); err != nil {
+			return fmt.Errorf("pool %q egress: %w", p.Template, err)
+		}
+	}
+	for _, tn := range c.Tenants {
+		if err := validatePolicy(tn.Egress, secrets); err != nil {
+			return fmt.Errorf("tenant %q egress: %w", tn.Name, err)
+		}
 	}
 	return nil
+}
+
+func (c *Config) validateSecrets() (map[string]struct{}, error) {
+	names := make(map[string]struct{}, len(c.Secrets))
+	for _, s := range c.Secrets {
+		if err := s.Validate(); err != nil {
+			return nil, err
+		}
+		if _, ok := names[s.Name]; ok {
+			return nil, fmt.Errorf("duplicate secret name %q", s.Name)
+		}
+		names[s.Name] = struct{}{}
+	}
+	return names, nil
 }
 
 func (c *Config) validateTenants() error {
@@ -293,6 +333,26 @@ func (c *Config) validateTenants() error {
 		tokens[tn.Token] = struct{}{}
 		if tn.MaxClaims < 0 {
 			return fmt.Errorf("tenant %q max_claims must not be negative, got %d", tn.Name, tn.MaxClaims)
+		}
+	}
+	return nil
+}
+
+// validatePolicy checks the rules and that each secret ref is registered; a
+// nil policy is valid (deny-all).
+func validatePolicy(p *egress.Policy, secrets map[string]struct{}) error {
+	if p == nil {
+		return nil
+	}
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	for i, r := range p.Allow {
+		if r.Secret == "" {
+			continue
+		}
+		if _, ok := secrets[r.Secret]; !ok {
+			return fmt.Errorf("allow[%d]: unknown secret %q", i, r.Secret)
 		}
 	}
 	return nil

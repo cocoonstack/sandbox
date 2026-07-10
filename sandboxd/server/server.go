@@ -24,6 +24,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 const (
@@ -395,7 +396,7 @@ func (s *Server) handleOwner(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePutPools(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeBody[PoolUpdateRequest](w, r)
+	req, ok := decodeBodyStrict[PoolUpdateRequest](w, r)
 	if !ok {
 		return
 	}
@@ -520,6 +521,23 @@ func decodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var v T
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&v); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return v, false
+	}
+	return v, true
+}
+
+// decodeBodyStrict is decodeBody for operator bodies, where a mistyped or
+// repeated key must fail instead of silently no-opping; client-facing bodies
+// stay lenient (newer SDK fields must not break older nodes).
+func decodeBodyStrict[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
+	var v T
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return v, false
+	}
+	if err := utils.DecodeStrictJSON(raw, &v); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return v, false
 	}
 	return v, true

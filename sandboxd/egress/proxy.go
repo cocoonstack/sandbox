@@ -7,11 +7,16 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/textproto"
+	"strings"
 )
 
-// hopHeaders are proxy-scoped request headers the forward hop must strip
-// rather than pass to the origin.
-var hopHeaders = []string{"Proxy-Connection", "Proxy-Authorization"}
+// hopHeaders are hop-by-hop and proxy-scoped headers this hop owns: stripped
+// from forwarded requests and from relayed responses rather than passed on.
+var hopHeaders = []string{
+	"Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
+	"Proxy-Connection", "TE", "Trailer", "Transfer-Encoding", "Upgrade",
+}
 
 // DialFunc opens the upstream connection for a permitted request. The proxy
 // stays transport-agnostic: the node wires the real egress path (a bridge
@@ -119,9 +124,7 @@ func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
 
 	out := r.Clone(r.Context())
 	out.RequestURI = ""
-	for _, h := range hopHeaders {
-		out.Header.Del(h)
-	}
+	stripHop(out.Header)
 	injected := p.inject(rule, out.Header)
 	p.record(Event{Method: r.Method, Host: host, Decision: decision, Injected: injected})
 
@@ -132,6 +135,7 @@ func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	maps.Copy(w.Header(), resp.Header)
+	stripHop(w.Header())
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
 }
@@ -157,6 +161,20 @@ func (p *Proxy) record(ev Event) {
 	}
 	ev.Sandbox, ev.Tenant = p.sandbox, p.tenant
 	p.audit(ev)
+}
+
+func stripHop(h http.Header) {
+	// Connection may name additional hop headers this hop must consume.
+	for _, v := range h.Values("Connection") {
+		for f := range strings.SplitSeq(v, ",") {
+			if f = textproto.TrimString(f); f != "" {
+				h.Del(f)
+			}
+		}
+	}
+	for _, k := range hopHeaders {
+		h.Del(k)
+	}
 }
 
 // splice copies bytes both ways until either side ends, then returns; each

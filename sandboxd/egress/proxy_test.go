@@ -68,6 +68,44 @@ func TestForwardAllowInjectsSecretAndOverwritesGuestHeader(t *testing.T) {
 	}
 }
 
+// TestForwardStripsHopHeaders: fixed and Connection-named hop headers die at
+// this hop, in both directions.
+func TestForwardStripsHopHeaders(t *testing.T) {
+	var gotHop, gotConn string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHop = r.Header.Get("X-Guest-Hop")
+		gotConn = r.Header.Get("Connection")
+		w.Header().Set("Connection", "X-Origin-Hop")
+		w.Header().Set("X-Origin-Hop", "leak")
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+
+	policy := Policy{Allow: []Rule{{Host: "api.internal"}}}
+	p := New("sb_1", "", policy, nil, fixedDial(upstream.Listener.Addr().String()), nil)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	client := proxyClient(t, front.URL)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://api.internal/x", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Connection", "X-Guest-Hop")
+	req.Header.Set("X-Guest-Hop", "leak")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("proxied GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if gotHop != "" || gotConn != "" {
+		t.Errorf("upstream saw hop headers: X-Guest-Hop=%q Connection=%q", gotHop, gotConn)
+	}
+	if got := resp.Header.Get("X-Origin-Hop"); got != "" {
+		t.Errorf("client saw origin hop header: %q", got)
+	}
+}
+
 func TestForwardDeniedIsTyped(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "api.internal"}}}
 	events := make(chan Event, 4)

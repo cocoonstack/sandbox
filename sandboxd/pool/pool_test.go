@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -319,6 +320,19 @@ func TestSetPoolsRejectsInvalidSpec(t *testing.T) {
 	}})
 	if !errors.Is(err, ErrBadCount) {
 		t.Fatalf("got %v, want ErrBadCount", err)
+	}
+}
+
+// SetPools neither validates nor keeps egress policy: accepting it would
+// report success and silently drop it.
+func TestSetPoolsRejectsEgress(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	err := m.SetPools(t.Context(), []config.PoolSpec{{
+		PoolKey: types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall},
+		Egress:  &egress.Policy{},
+	}})
+	if !errors.Is(err, ErrBadKey) {
+		t.Fatalf("got %v, want ErrBadKey", err)
 	}
 }
 

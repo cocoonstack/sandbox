@@ -435,6 +435,11 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 		if err := spec.ValidateLimits(); err != nil {
 			return fmt.Errorf("%w: %v", ErrBadCount, err)
 		}
+		// The manager neither validates nor keeps egress policy yet;
+		// accepting it here would silently drop it.
+		if spec.Egress != nil {
+			return fmt.Errorf("%w: pool %q: egress is set in the config file, not via the API", ErrBadKey, spec.Template)
+		}
 		if existing, ok := hashes[spec.Hash()]; ok && existing != spec.PoolKey {
 			return fmt.Errorf("%w: pool key hash collision between %q and %q", ErrBadKey, existing.Template, spec.Template)
 		}
