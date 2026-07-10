@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -60,6 +61,58 @@ func TestArchivePublishWindowPinsCheckpoint(t *testing.T) {
 	}
 	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake archived: %v", err)
+	}
+}
+
+// TestArchiveWakeRehibernateWindowAborts guards the commit's identity check: a
+// wake + re-hibernate landing inside the publish window leaves HibernateSnap
+// non-empty but pointing at NEWER state than the exported checkpoint —
+// committing would archive stale data and destroy the only copy of the new
+// snapshot.
+func TestArchiveWakeRehibernateWindowAborts(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, archivePool(3600))
+	sb := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	stall := &stallingStore{Store: m.ckpts, published: make(chan string, 1), release: make(chan struct{})}
+	m.ckpts = stall
+
+	archived := make(chan error, 1)
+	go func() { archived <- m.archive(t.Context(), sb) }()
+	ck := <-stall.published
+
+	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake mid-publish: %v", err)
+	}
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("re-hibernate mid-publish: %v", err)
+	}
+	m.mu.Lock()
+	newSnap := sb.HibernateSnap
+	m.mu.Unlock()
+	close(stall.release)
+	if err := <-archived; !errors.Is(err, errWokeMeanwhile) {
+		t.Fatalf("archive: %v, want errWokeMeanwhile", err)
+	}
+	m.mu.Lock()
+	archiveCk, hibSnap := sb.ArchiveCk, sb.HibernateSnap
+	m.mu.Unlock()
+	if archiveCk != "" || hibSnap != newSnap {
+		t.Errorf("claim mutated: ArchiveCk=%q HibernateSnap=%q, want \"\" %q", archiveCk, hibSnap, newSnap)
+	}
+	if _, err := m.ckpts.ReadMeta(t.Context(), ck); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("orphan archive ck not reclaimed: %v", err)
+	}
+	eng.mu.Lock()
+	dropped := slices.Contains(eng.snapRemoves, newSnap)
+	eng.mu.Unlock()
+	if dropped {
+		t.Error("abort dropped the newer hibernate snapshot")
+	}
+	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake after aborted archive: %v", err)
 	}
 }
 

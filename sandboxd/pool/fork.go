@@ -36,7 +36,7 @@ func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl tim
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	exportDir := filepath.Join(dir, "export") // cocoon wants the target absent
-	if err = m.exportSource(ctx, sb, exportDir); err != nil {
+	if _, err = m.exportSource(ctx, sb, exportDir); err != nil {
 		return nil, fmt.Errorf("fork %s: %w", id, err)
 	}
 

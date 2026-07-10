@@ -37,7 +37,7 @@ func (m *Manager) Checkpoint(ctx context.Context, id, token, name, tenant string
 	}
 	// See Hibernate: a started capture must finish even if the caller hangs up.
 	ctx = context.WithoutCancel(ctx)
-	ckpt, err := m.publishCheckpoint(ctx, sb, store.CheckpointID(randHex(8)), name, tenant, false)
+	ckpt, _, err := m.publishCheckpoint(ctx, sb, store.CheckpointID(randHex(8)), name, tenant, false)
 	if err != nil {
 		return types.Checkpoint{}, err
 	}
@@ -47,9 +47,10 @@ func (m *Manager) Checkpoint(ctx context.Context, id, token, name, tenant string
 }
 
 // publishCheckpoint stages the sandbox's exported state, writes the meta, and
-// publishes it to the store. Shared by Checkpoint and archive; a hibernated
-// source exports its wake image directly (no VM start — refill.sourceSnap).
-func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID, name, tenant string, archive bool) (types.Checkpoint, error) {
+// publishes it to the store, returning the record and the source snapshot the
+// export captured. Shared by Checkpoint and archive; a hibernated source
+// exports its wake image directly (no VM start — refill.sourceSnap).
+func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID, name, tenant string, archive bool) (types.Checkpoint, string, error) {
 	ckpt := types.Checkpoint{
 		ID:        ckID,
 		Name:      name,
@@ -61,23 +62,24 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 	}
 	staging, err := m.ckpts.Stage(ckpt.ID)
 	if err != nil {
-		return types.Checkpoint{}, fmt.Errorf("stage checkpoint: %w", err)
+		return types.Checkpoint{}, "", fmt.Errorf("stage checkpoint: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
-	if err = m.exportSource(ctx, sb, filepath.Join(staging, store.ExportDir)); err != nil {
-		return types.Checkpoint{}, fmt.Errorf("checkpoint %s: %w", sb.ID, err)
+	srcSnap, err := m.exportSource(ctx, sb, filepath.Join(staging, store.ExportDir))
+	if err != nil {
+		return types.Checkpoint{}, "", fmt.Errorf("checkpoint %s: %w", sb.ID, err)
 	}
 	meta, err := json.Marshal(ckpt)
 	if err != nil {
-		return types.Checkpoint{}, fmt.Errorf("encode checkpoint meta: %w", err)
+		return types.Checkpoint{}, "", fmt.Errorf("encode checkpoint meta: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); err != nil {
-		return types.Checkpoint{}, fmt.Errorf("write checkpoint meta: %w", err)
+		return types.Checkpoint{}, "", fmt.Errorf("write checkpoint meta: %w", err)
 	}
 	if err := m.ckpts.Publish(ctx, staging, ckpt.ID); err != nil {
-		return types.Checkpoint{}, fmt.Errorf("commit checkpoint: %w", err)
+		return types.Checkpoint{}, "", fmt.Errorf("commit checkpoint: %w", err)
 	}
-	return ckpt, nil
+	return ckpt, srcSnap, nil
 }
 
 // ClaimCheckpoint provisions a fresh claim cloned from a checkpoint — a

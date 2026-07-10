@@ -150,19 +150,20 @@ func (m *Manager) sourceSnap(ctx context.Context, sb *types.Sandbox) (string, fu
 	return snap, func() { m.dropSnap(ctx, snap) }, nil
 }
 
-// exportSource captures a claimed sandbox's state into exportDir. Only this
-// window holds the transition lock — it pins the source snapshot against a
-// concurrent wake consuming it; the minutes-long clone fan-out after it must
-// not block the source's own wake/hibernate traffic.
-func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir string) error {
+// exportSource captures a claimed sandbox's state into exportDir, returning
+// the snapshot name it exported. Only this window holds the transition lock —
+// it pins the source snapshot against a concurrent wake consuming it; the
+// minutes-long clone fan-out after it must not block the source's own
+// wake/hibernate traffic.
+func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir string) (string, error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	snap, cleanup, err := m.sourceSnap(ctx, sb)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer cleanup()
-	return m.eng.SnapshotExport(ctx, snap, exportDir)
+	return snap, m.eng.SnapshotExport(ctx, snap, exportDir)
 }
 
 // provision creates one claim-ready VM: clone from a golden when available,

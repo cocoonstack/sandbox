@@ -98,14 +98,16 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	m.mu.Unlock()
 	defer m.untrack(m.pendingCks, ckID)
 	// A hibernated source is copied from its wake image, so no VM starts.
-	ck, err := m.publishCheckpoint(ctx, sb, ckID, "archive", sb.Tenant, true)
+	ck, srcSnap, err := m.publishCheckpoint(ctx, sb, ckID, "archive", sb.Tenant, true)
 	if err != nil {
 		return err
 	}
-	// Re-validate under Transition+m.mu: a wake since the export cleared HibernateSnap.
+	// Re-validate under Transition+m.mu: the claim must still be hibernated on
+	// the exact snapshot the export captured — a wake, or a wake+re-hibernate
+	// landing inside the publish window, means the checkpoint holds stale state.
 	sb.Transition.Lock()
 	m.mu.Lock()
-	if m.claimed[sb.ID] != sb || sb.HibernateSnap == "" || sb.ArchiveCk != "" {
+	if m.claimed[sb.ID] != sb || sb.HibernateSnap != srcSnap || sb.ArchiveCk != "" {
 		m.mu.Unlock()
 		sb.Transition.Unlock()
 		m.deleteOrphanArchiveCk(ctx, ck.ID)
