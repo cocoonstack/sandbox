@@ -371,7 +371,7 @@ func (m *Manager) recommit(ctx context.Context, snap claimSnapshot) {
 			if err == nil {
 				return
 			}
-			log.WithFunc("pool.recommit").Errorf(ctx, err, "persist claims")
+			log.WithFunc("pool.recommit").Error(ctx, err, "persist claims")
 			time.Sleep(backoff)
 			backoff = min(backoff*2, recommitMaxBackoff)
 		}

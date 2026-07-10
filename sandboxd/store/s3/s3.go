@@ -5,6 +5,7 @@
 package s3
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -125,8 +126,9 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 	if err = g.Wait(); err != nil {
 		return err
 	}
-	if err = s.upload(ctx, s.key(id, store.MetaFile), filepath.Join(staging, store.MetaFile)); err != nil {
-		return err
+	metaKey := s.key(id, store.MetaFile)
+	if _, err = s.tm.UploadObject(ctx, &transfermanager.UploadObjectInput{Bucket: &s.bucket, Key: &metaKey, Body: bytes.NewReader(metaRaw)}); err != nil {
+		return fmt.Errorf("upload %s: %w", metaKey, err)
 	}
 	// A re-publish (re-promote) may ship a different export file set:
 	// after the new meta commits, sweep keys the new generation did not
@@ -302,18 +304,6 @@ func (s *Store) SweepStaging() error {
 	return nil
 }
 
-// exportGen names a record generation's export prefix from its meta bytes —
-// meta is unique per publish (checkpoint ids are fresh, template records
-// carry created_at), and Fetch keys its cache generation off the same hash.
-func exportGen(meta []byte) string {
-	return store.ExportDir + "-" + exportGenHash(meta)
-}
-
-func exportGenHash(meta []byte) string {
-	sum := sha256.Sum256(meta)
-	return hex.EncodeToString(sum[:8])
-}
-
 func (s *Store) key(id, rest string) string {
 	if rest == "" {
 		return s.prefix + id
@@ -372,4 +362,16 @@ func (s *Store) list(ctx context.Context, prefix string) ([]string, error) {
 		}
 	}
 	return keys, nil
+}
+
+// exportGen names a record generation's export prefix from its meta bytes —
+// meta is unique per publish (checkpoint ids are fresh, template records
+// carry created_at), and Fetch keys its cache generation off the same hash.
+func exportGen(meta []byte) string {
+	return store.ExportDir + "-" + exportGenHash(meta)
+}
+
+func exportGenHash(meta []byte) string {
+	sum := sha256.Sum256(meta)
+	return hex.EncodeToString(sum[:8])
 }

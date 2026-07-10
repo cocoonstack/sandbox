@@ -16,7 +16,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 )
 
-// oldSuffix parks the previous generation during a re-publish swap.
 const oldSuffix = ".old"
 
 var _ store.Store = (*Store)(nil)
