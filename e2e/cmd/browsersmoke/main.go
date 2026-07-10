@@ -1,4 +1,4 @@
-// browsersmoke is the M7-2 acceptance: claim the browser flavor → CDP
+// browsersmoke is the browser-flavor acceptance: claim the browser flavor → CDP
 // /json/version over the relay → open a target → checkpoint/branch of the
 // warmed browser.
 package main

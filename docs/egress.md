@@ -6,9 +6,9 @@ lives host-side and enters no guest memory, so prompt injection can exfiltrate
 at most the proxy's answers, and every credentialed call lands in the audit and
 usage journals keyed by sandbox and tenant. Default-deny.
 
-The wedge: the same host proxy serves the **none lane** (a NIC-less Firecracker
+The same host proxy also serves the **none lane** (a NIC-less Firecracker
 guest) over vsock, so a network-less sandbox can call approved APIs with
-injected credentials — a capability that assumes a NIC everywhere else.
+injected credentials — no NIC required in the guest.
 
 ## How it works (none lane)
 
@@ -61,17 +61,17 @@ the environment, never the config file.
 Each decision is written to `audit.jsonl` (`op:"egress"`, host, allow/deny, the
 secret **name**) and metered as an `egress` usage event.
 
-## Lanes and roadmap
+## Lanes and status
 
-| Slice | Status |
+| Capability | Status |
 |---|---|
 | none lane — proxy, policy, plaintext injection, audit | **shipped** |
 | HTTPS credential injection (per-node ephemeral-CA TLS interception) | planned |
 | egress lane — nftables default-deny on the tap, forcing the NIC through the proxy | planned |
 
 Today the **egress lane** (a NIC-backed guest) is not yet forced through the
-proxy; a policy on an `net:"egress"` pool is accepted but enforced only once the
-nftables slice lands. HTTPS requests on the none lane are gated by host
+proxy; a policy on a `net:"egress"` pool is accepted but enforced only once the
+nftables lockdown ships. HTTPS requests on the none lane are gated by host
 (CONNECT allow/deny) and audited, but credential injection into an HTTPS request
 awaits TLS interception. Use the none lane with plaintext or CONNECT-gated
 HTTPS for the credentialed-egress guarantees above.

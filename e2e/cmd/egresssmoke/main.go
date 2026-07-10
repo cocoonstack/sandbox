@@ -1,6 +1,6 @@
-// egresssmoke is the M6-6 none-lane acceptance: a NIC-less sandbox reaches an
-// allowed origin through the host egress proxy with a host-injected credential
-// it never holds, and a disallowed host is denied — all over vsock, no NIC.
+// egresssmoke is the none-lane guarded-egress acceptance: a NIC-less sandbox
+// reaches an allowed origin through the host egress proxy with a host-injected
+// credential it never holds, and a disallowed host is denied — over vsock, no NIC.
 //
 // The origin runs on the sandboxd host (the guest has no network); the proxy
 // dials it host-side. Run on a node whose config declares a none-lane pool with

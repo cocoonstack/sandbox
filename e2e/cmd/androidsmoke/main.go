@@ -1,4 +1,4 @@
-// androidsmoke is the M6-1 acceptance: claim (egress/xlarge) → Android
+// androidsmoke is the android-flavor acceptance: claim (egress/xlarge) → Android
 // init tree over the relay → adb CNXN handshake on the adb port →
 // checkpoint/branch of the booted guest. No session step: the guest
 // ships no bash.

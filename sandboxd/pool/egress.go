@@ -32,7 +32,7 @@ func (e *egressListener) close() {
 // armEgress starts the none-lane egress proxy for a claim whose effective
 // policy is non-empty; a no-op otherwise, so no listener means default-deny
 // (the guest's proxy dial is refused). Only the none lane is enforced by
-// construction — the egress lane needs nft (next slice).
+// construction — the egress lane needs its own nftables lockdown.
 func (m *Manager) armEgress(sb *types.Sandbox) {
 	if !m.egressEnabled || sb.Key.Net != types.NetNone || sb.VsockSocket == "" {
 		return

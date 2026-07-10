@@ -589,7 +589,7 @@ func want(got, exp string) error {
 	return nil
 }
 
-// smokeLsp proves the M4-4 broker on hardware: the base sandbox answers a
+// smokeLsp proves the LSP broker on hardware: the base sandbox answers a
 // typed not_found (no manifests), and a python-flavor sandbox serves a real
 // pylsp session — initialize, didOpen, hover — over the relay.
 func smokeLsp(ctx context.Context, client *sandbox.Client, base *sandbox.Sandbox, template string) error {

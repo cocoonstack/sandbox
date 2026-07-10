@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bare-metal acceptance for M6-6 none-lane guarded egress: a NIC-less sandbox
+# Bare-metal acceptance for none-lane guarded egress: a NIC-less sandbox
 # reaches an allowed origin through the host proxy with a host-injected
 # credential it never holds, and a disallowed host is denied — all over vsock.
 # Runs a dedicated sandboxd on port 7779 (7777=e2e, 7778=archive).
