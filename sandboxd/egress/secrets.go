@@ -8,14 +8,16 @@ import (
 	"golang.org/x/net/http/httpguts"
 )
 
-// nonInjectable lists headers the transport owns or strips (framing,
-// routing, hop-by-hop): injecting one would audit as done while the request
-// carries something else.
-var nonInjectable = map[string]struct{}{
-	"host": {}, "content-length": {}, "transfer-encoding": {}, "connection": {},
-	"keep-alive": {}, "proxy-authenticate": {}, "proxy-authorization": {},
-	"proxy-connection": {}, "te": {}, "trailer": {}, "upgrade": {},
-}
+// nonInjectable rejects secret headers the transport owns or strips —
+// injecting one would audit as done while the request carries something
+// else. Derived from the proxy's hop set so the two lists cannot drift.
+var nonInjectable = func() map[string]struct{} {
+	m := map[string]struct{}{"host": {}, "content-length": {}}
+	for _, h := range hopHeaders {
+		m[strings.ToLower(h)] = struct{}{}
+	}
+	return m
+}()
 
 // SecretSpec declares a node-side credential the proxy injects: Header is the
 // request header it sets, valued from the ValueEnv env var — the literal
