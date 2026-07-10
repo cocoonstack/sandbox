@@ -14,10 +14,9 @@ import (
 
 // TestHibernatePersistFailureSurfacesAndConverges guards the durability fix
 // where a hibernate whose journal write failed still reported success — a
-// restart then dropped the claim and destroyed the VM and snapshot. The call
-// must fail, retries must keep failing while the journal lags (the fast path
-// may not answer for a transition disk does not hold), and a retry after the
-// store heals must land the write.
+// restart then dropped the claim and destroyed the VM and snapshot. With the
+// intent write first, an unwritable journal aborts before the engine stops
+// anything; a retry after the store heals runs the full transition.
 func TestHibernatePersistFailureSurfacesAndConverges(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -29,10 +28,10 @@ func TestHibernatePersistFailureSurfacesAndConverges(t *testing.T) {
 		t.Fatal("Hibernate reported success despite a persist failure")
 	}
 	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
-		t.Fatal("Hibernate retry reported success while the journal still lags")
+		t.Fatal("Hibernate retry reported success while the journal is unwritable")
 	}
-	if len(eng.hibernates) != 1 {
-		t.Fatalf("engine hibernated %d times, want 1", len(eng.hibernates))
+	if len(eng.hibernates) != 0 {
+		t.Fatalf("engine hibernated %d times before the intent could persist, want 0", len(eng.hibernates))
 	}
 	if err := os.MkdirAll(filepath.Dir(broken), 0o750); err != nil {
 		t.Fatalf("heal store dir: %v", err)
@@ -41,7 +40,7 @@ func TestHibernatePersistFailureSurfacesAndConverges(t *testing.T) {
 		t.Fatalf("Hibernate retry after heal: %v", err)
 	}
 	got, err := (&claimStore{path: broken}).load()
-	if err != nil || got[sb.ID] == nil || got[sb.ID].HibernateSnap == "" {
+	if err != nil || got[sb.ID] == nil || got[sb.ID].HibernateSnap == "" || got[sb.ID].PendingSnap != "" {
 		t.Fatalf("journal after healed retry: %+v, %v", got[sb.ID], err)
 	}
 }
@@ -91,16 +90,19 @@ func TestWakePersistFailureSurfaces(t *testing.T) {
 }
 
 // TestFlushClaimsClosesShutdownWindow: the shutdown hook persists what the
-// background recommit has not converged yet.
+// background recommit has not converged yet (here, a wake whose commit failed).
 func TestFlushClaimsClosesShutdownWindow(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("Hibernate: %v", err)
+	}
 	broken := filepath.Join(t.TempDir(), "gone", "claims.json")
 	m.store.path = broken
 
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
-		t.Fatal("Hibernate reported success despite a persist failure")
+	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
+		t.Fatal("wake reported success despite a persist failure")
 	}
 	if err := os.MkdirAll(filepath.Dir(broken), 0o750); err != nil {
 		t.Fatalf("heal store dir: %v", err)
@@ -109,7 +111,7 @@ func TestFlushClaimsClosesShutdownWindow(t *testing.T) {
 		t.Fatalf("FlushClaims: %v", err)
 	}
 	got, err := (&claimStore{path: broken}).load()
-	if err != nil || got[sb.ID] == nil || got[sb.ID].HibernateSnap == "" {
+	if err != nil || got[sb.ID] == nil || got[sb.ID].HibernateSnap != "" {
 		t.Fatalf("journal after flush: %+v, %v", got[sb.ID], err)
 	}
 }
@@ -258,18 +260,21 @@ func TestReleaseMidHibernateDropsOrphanSnapshot(t *testing.T) {
 	}
 }
 
-// TestReconcileAdoptsUncommittedHibernate: a hibernate that stopped the VM
-// but whose journal write never landed (failed persist, exit mid-transition)
-// leaves a running-state record over a stopped VM; the sole wake image
-// identifies it, and reconcile must adopt it back instead of destroying it.
-func TestReconcileAdoptsUncommittedHibernate(t *testing.T) {
+// TestReconcileAdoptsJournaledIntent: a hibernate that stopped the VM but
+// whose final commit never landed leaves a journaled intent (PendingSnap)
+// over a stopped VM; reconcile adopts it as hibernated — no heuristics, the
+// intent names the wake image.
+func TestReconcileAdoptsJournaledIntent(t *testing.T) {
 	eng := newFakeEngine()
 	eng.vms["sbx-lagged-1"] = "/vsock/lagged"
 	eng.stopped["sbx-lagged-1"] = true
 	eng.snapshots = append(eng.snapshots, hibernatePrefix+"lagged-1-abc123")
 	dataDir := t.TempDir()
 	claims := map[string]*types.Sandbox{
-		"sb_lag": {ID: "sb_lag", VMName: "sbx-lagged-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/lagged"},
+		"sb_lag": {
+			ID: "sb_lag", VMName: "sbx-lagged-1", Key: testKey, Token: "tok",
+			VsockSocket: "/vsock/lagged", PendingSnap: hibernatePrefix + "lagged-1-abc123",
+		},
 	}
 	if err := newClaimStore(dataDir).save(claims); err != nil {
 		t.Fatalf("setup: %v", err)
@@ -280,7 +285,7 @@ func TestReconcileAdoptsUncommittedHibernate(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if _, g := m.Info(); g.Hibernated != 1 {
-		t.Fatalf("hibernated count %d after reconcile, want the lagged claim adopted", g.Hibernated)
+		t.Fatalf("hibernated count %d after reconcile, want the intent adopted", g.Hibernated)
 	}
 	if eng.snapRemoved(hibernatePrefix + "lagged-1-abc123") {
 		t.Error("reconcile swept the wake image it adopted")
@@ -290,16 +295,18 @@ func TestReconcileAdoptsUncommittedHibernate(t *testing.T) {
 	}
 }
 
-// TestReconcileDropsAmbiguousHibernate: two candidate wake images cannot
-// identify the uncommitted hibernate; the claim falls back to the drop path.
-func TestReconcileDropsAmbiguousHibernate(t *testing.T) {
+// TestReconcileIgnoresStaleOrphanSnapshot: a leftover wake image without a
+// journaled intent must never be mistaken for a hibernate — adopting it
+// would silently roll the sandbox back to pre-wake state. The claim drops,
+// the orphan sweeps.
+func TestReconcileIgnoresStaleOrphanSnapshot(t *testing.T) {
 	eng := newFakeEngine()
-	eng.vms["sbx-ambig-1"] = "/vsock/ambig"
-	eng.stopped["sbx-ambig-1"] = true
-	eng.snapshots = append(eng.snapshots, hibernatePrefix+"ambig-1-aaa111", hibernatePrefix+"ambig-1-bbb222")
+	eng.vms["sbx-orphan-1"] = "/vsock/orphan"
+	eng.stopped["sbx-orphan-1"] = true
+	eng.snapshots = append(eng.snapshots, hibernatePrefix+"orphan-1-old111")
 	dataDir := t.TempDir()
 	claims := map[string]*types.Sandbox{
-		"sb_amb": {ID: "sb_amb", VMName: "sbx-ambig-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/ambig"},
+		"sb_orp": {ID: "sb_orp", VMName: "sbx-orphan-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/orphan"},
 	}
 	if err := newClaimStore(dataDir).save(claims); err != nil {
 		t.Fatalf("setup: %v", err)
@@ -310,7 +317,34 @@ func TestReconcileDropsAmbiguousHibernate(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if _, g := m.Info(); g.Claimed != 0 {
-		t.Errorf("claimed %d, want the ambiguous claim dropped", g.Claimed)
+		t.Errorf("claimed %d, want the intent-less claim dropped", g.Claimed)
+	}
+	waitFor(t, func() bool { return eng.snapRemoved(hibernatePrefix + "orphan-1-old111") })
+}
+
+// TestReconcileDropsIntentWithoutImage: an intent whose wake image is
+// verified missing means the hibernate never completed; the claim drops.
+func TestReconcileDropsIntentWithoutImage(t *testing.T) {
+	eng := newFakeEngine()
+	eng.vms["sbx-noimg-1"] = "/vsock/noimg"
+	eng.stopped["sbx-noimg-1"] = true
+	dataDir := t.TempDir()
+	claims := map[string]*types.Sandbox{
+		"sb_no": {
+			ID: "sb_no", VMName: "sbx-noimg-1", Key: testKey, Token: "tok",
+			VsockSocket: "/vsock/noimg", PendingSnap: hibernatePrefix + "noimg-1-abc123",
+		},
+	}
+	if err := newClaimStore(dataDir).save(claims); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	m := newTestManagerAt(t, eng, dataDir)
+
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if _, g := m.Info(); g.Claimed != 0 {
+		t.Errorf("claimed %d, want the imageless intent dropped", g.Claimed)
 	}
 }
 

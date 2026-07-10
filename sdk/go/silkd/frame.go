@@ -688,7 +688,10 @@ func fastBulk(tag string, slow func([]byte) (Response, error), mk func([]byte) R
 		}
 		out := make([]byte, base64.StdEncoding.DecodedLen(len(b64)))
 		n, err := base64.StdEncoding.Decode(out, b64)
-		if err != nil {
+		// Decode skips CR/LF (raw control bytes JSON forbids); a canonical
+		// payload decodes to exactly the encoded length, so any skip falls
+		// back to the full parse.
+		if err != nil || base64.StdEncoding.EncodedLen(n) != len(b64) {
 			return slow(line)
 		}
 		return mk(out[:n]), nil

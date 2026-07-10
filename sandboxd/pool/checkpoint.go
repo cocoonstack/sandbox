@@ -107,6 +107,9 @@ func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.D
 	if err != nil {
 		return nil, err
 	}
+	if ckpt.Archive {
+		return nil, ErrUnknownCheckpoint // a wake image, not a branchable checkpoint
+	}
 	sb, err := m.provision(ctx, ckpt.Key, dir)
 	if err != nil {
 		return nil, err

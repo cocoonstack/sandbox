@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -296,10 +297,15 @@ func (m *Manager) migrateLegacyTemplates(ctx context.Context) {
 			continue
 		}
 		if err := m.commitTemplate(ctx, staging, id, ""); err != nil {
-			// The staged export is the only copy; put it back or the next
-			// staging sweep deletes the template outright.
-			_ = os.Rename(filepath.Join(staging, store.ExportDir), legacy)
-			_ = os.RemoveAll(staging)
+			// The staged export is the only copy: put it back, or quarantine
+			// the staging dir out of the sweep's .tmp suffix when even that
+			// rename fails.
+			if rbErr := os.Rename(filepath.Join(staging, store.ExportDir), legacy); rbErr != nil {
+				_ = os.Rename(staging, strings.TrimSuffix(staging, ".tmp")+".stuck")
+				logger.Errorf(ctx, rbErr, "restore %s", legacy)
+			} else {
+				_ = os.RemoveAll(staging)
+			}
 			logger.Errorf(ctx, err, "publish %s", id)
 			continue
 		}

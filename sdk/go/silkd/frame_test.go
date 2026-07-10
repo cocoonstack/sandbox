@@ -251,6 +251,8 @@ func TestBulkDecodeStrictShape(t *testing.T) {
 		`{"type":"stdout":,"data":"QQ=="}`,
 		`{"type":"stdout",garbage"data":"QQ=="}`,
 		`{"type":"stdout","data":"QQ==" }x`,
+		"{\"type\":\"stdout\",\"data\":\"Q\nQ==\"}",
+		"{\"type\":\"stdout\",\"data\":\"Q\r\nQ==\"}",
 	} {
 		if _, err := DecodeResponse([]byte(frame)); err == nil {
 			t.Errorf("malformed frame accepted: %s", frame)

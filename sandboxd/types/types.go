@@ -122,6 +122,10 @@ type Sandbox struct {
 	// HibernateSnap names the memory snapshot while the VM is hibernated;
 	// empty means running.
 	HibernateSnap string `json:"hibernate_snap,omitempty"`
+	// PendingSnap is the journaled intent of a hibernate in flight: written
+	// before the engine stops the VM, cleared by the commit. Reconcile
+	// trusts it to adopt a hibernate whose commit never landed.
+	PendingSnap string `json:"pending_snap,omitempty"`
 	// ArchiveCk names the store checkpoint holding this sandbox's state while
 	// archived; empty means live or hibernated. While set, VMName/VsockSocket/
 	// HibernateSnap are empty (no local VM) and Deadline is the retention deadline.

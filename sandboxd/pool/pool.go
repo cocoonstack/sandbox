@@ -355,23 +355,21 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			continue
 		case ok && rec.State == vmStateRunning:
 			sb.VsockSocket = rec.VsockSocket
-			// Running with the flag set = a wake crashed between restore and
-			// commit; clearing it un-bricks the claim and unreferences the
+			// Running with either flag set = a wake crashed between restore
+			// and commit, or a hibernate intent never reached the engine;
+			// clearing them un-bricks the claim and unreferences the
 			// snapshot for the sweep below.
-			sb.HibernateSnap = ""
+			sb.HibernateSnap, sb.PendingSnap = "", ""
 		case ok && sb.HibernateSnap != "":
 			// Hibernated: the VM is stopped by design and wakes on demand.
-		case ok:
-			// Stopped with a running-state record: a hibernate finished but
-			// its journal write never landed (failed persist, or exit mid
-			// transition). Exactly one wake image for this VM means that
-			// hibernate; adopt it back instead of destroying the claim.
-			// Ambiguity (an orphan drop leftover) falls through to drop.
-			snap := soleHibernateSnap(snaps, sb.VMName)
-			if snap == "" {
-				continue
-			}
-			sb.HibernateSnap = snap
+			sb.PendingSnap = ""
+		case ok && sb.PendingSnap != "" && (snapsErr != nil || slices.Contains(snaps, sb.PendingSnap)):
+			// Stopped under a journaled hibernate intent whose commit never
+			// landed: the intent names the wake image, adopt it. A verified-
+			// missing image means the hibernate never completed — fall
+			// through and drop; an unverifiable list adopts (a failed wake
+			// beats a destroyed claim).
+			sb.HibernateSnap, sb.PendingSnap = sb.PendingSnap, ""
 		default:
 			continue
 		}
@@ -403,6 +401,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 
 	logger := log.WithFunc("pool.Reconcile")
+	m.reclaimOrphanArchiveCks(ctx, claims)
 	var stale []string
 	for name := range live {
 		if strings.HasPrefix(name, vmPrefix) && !owned[name] {
@@ -439,6 +438,34 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
 	return saveErr
+}
+
+// reclaimOrphanArchiveCks reaps archives that crashed between their
+// checkpoint publish and the journal commit: the flag hides them from
+// listings and deletes, so only the journal identifies ours — the sandbox is
+// in it under a different (or no) ArchiveCk.
+func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string]*types.Sandbox) {
+	logger := log.WithFunc("pool.reclaimOrphanArchiveCks")
+	metas, err := m.ckpts.Metas(ctx)
+	if err != nil {
+		logger.Warnf(ctx, "list archive cks skipped: %v", err)
+		return
+	}
+	for _, raw := range metas {
+		var ckpt types.Checkpoint
+		if json.Unmarshal(raw, &ckpt) != nil || !ckpt.Archive {
+			continue
+		}
+		orig, mine := claims[ckpt.SandboxID]
+		if !mine || orig.ArchiveCk == ckpt.ID {
+			continue
+		}
+		if err := m.deleteCkLocked(ctx, ckpt.ID); err != nil {
+			logger.Warnf(ctx, "reclaim %s: %v", ckpt.ID, err)
+		} else {
+			logger.Infof(ctx, "reclaimed orphan archive ck %s", ckpt.ID)
+		}
+	}
 }
 
 // FlushClaims synchronously persists the current claim set — the shutdown
@@ -662,22 +689,6 @@ func benignSweepErr(err error) bool {
 
 func vmName(key types.PoolKey) string {
 	return vmPrefix + key.Hash() + "-" + randHex(3)
-}
-
-// soleHibernateSnap returns a VM's wake image when exactly one exists.
-func soleHibernateSnap(snaps []string, vmName string) string {
-	prefix := hibernatePrefix + strings.TrimPrefix(vmName, vmPrefix) + "-"
-	var found string
-	for _, snap := range snaps {
-		if !strings.HasPrefix(snap, prefix) {
-			continue
-		}
-		if found != "" {
-			return ""
-		}
-		found = snap
-	}
-	return found
 }
 
 func randHex(n int) string {

@@ -52,7 +52,15 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	// random suffix, so the wake's async snapshot drop can't collide with a
 	// re-hibernate reusing the name.
 	snap := hibernatePrefix + strings.TrimPrefix(sb.VMName, vmPrefix) + "-" + randHex(3)
+	// Journal the intent before the engine stops anything: an intent that
+	// cannot be written aborts with the VM untouched, and a committed intent
+	// lets Reconcile adopt a hibernate whose final commit never landed.
+	if err := m.store.commit(m.setPendingSnap(sb, snap)); err != nil {
+		m.setPendingSnap(sb, "")
+		return fmt.Errorf("hibernate %s: persist intent: %w", sb.ID, err)
+	}
 	if err := m.eng.Hibernate(ctx, sb.VMName, snap); err != nil {
+		_ = m.store.commit(m.setPendingSnap(sb, ""))
 		return err
 	}
 	live, err := m.commitTransition(ctx, sb, snap, sb.VsockSocket)
@@ -202,6 +210,7 @@ func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap,
 	if live {
 		sb.HibernateSnap = snap
 		sb.VsockSocket = sock
+		sb.PendingSnap = ""
 		js = m.store.snapshot(m.claimed)
 	}
 	m.mu.Unlock()
@@ -233,4 +242,13 @@ func (m *Manager) dropStale(ctx context.Context, sb *types.Sandbox) {
 		sb.StaleSnap = ""
 		go m.dropSnap(ctx, snap)
 	}
+}
+
+// setPendingSnap stamps a hibernate intent under the manager mutex and hands
+// back the snapshot carrying it.
+func (m *Manager) setPendingSnap(sb *types.Sandbox, snap string) claimSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sb.PendingSnap = snap
+	return m.store.snapshot(m.claimed)
 }

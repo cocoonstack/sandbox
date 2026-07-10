@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -143,6 +144,68 @@ func TestArchiveCkHiddenAcrossNodes(t *testing.T) {
 	}
 	if _, err := mA.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("owner wake after peer sweep: %v", err)
+	}
+}
+
+// TestReconcileReclaimsOrphanArchiveCk: a crash between an archive's publish
+// and its journal commit leaves a flagged record listings hide and deletes
+// refuse; reconcile identifies it by the journal (the sandbox is ours, under
+// a different ArchiveCk) and reclaims it. A flagged record of an unknown
+// sandbox is left alone.
+func TestReconcileReclaimsOrphanArchiveCk(t *testing.T) {
+	eng := newFakeEngine()
+	dataDir := t.TempDir()
+	claims := map[string]*types.Sandbox{
+		"sb_mine": {ID: "sb_mine", VMName: "sbx-gone-1", Key: testKey, Token: "tok"},
+	}
+	if err := newClaimStore(dataDir).save(claims); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	m := newTestManagerAt(t, eng, dataDir)
+	seedCk := func(id, sandboxID string) {
+		t.Helper()
+		staging, err := m.ckpts.Stage(id)
+		if err != nil {
+			t.Fatalf("stage: %v", err)
+		}
+		if err := os.MkdirAll(filepath.Join(staging, store.ExportDir), 0o750); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		meta := `{"id":"` + id + `","sandbox_id":"` + sandboxID + `","archive":true}`
+		if err := os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(meta), 0o600); err != nil {
+			t.Fatalf("meta: %v", err)
+		}
+		if err := m.ckpts.Publish(t.Context(), staging, id); err != nil {
+			t.Fatalf("publish: %v", err)
+		}
+	}
+	seedCk("ck_00000000000000aa", "sb_mine")
+	seedCk("ck_00000000000000bb", "sb_elsewhere")
+
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if ckExists(t, m, "ck_00000000000000aa") {
+		t.Error("orphan archive ck of a journaled sandbox not reclaimed")
+	}
+	if !ckExists(t, m, "ck_00000000000000bb") {
+		t.Error("another node's archive ck reclaimed")
+	}
+}
+
+// TestClaimCheckpointRefusesArchive: wake images are lifecycle-internal —
+// branching from one would race its consumption by the owner's wake.
+func TestClaimCheckpointRefusesArchive(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, archivePool(3600))
+	sb := mustClaim(t, m, testKey)
+	mustArchive(t, m, sb)
+
+	if _, err := m.ClaimCheckpoint(t.Context(), sb.ArchiveCk, 0, ""); !errors.Is(err, ErrUnknownCheckpoint) {
+		t.Errorf("branch from archive ck: %v, want ErrUnknownCheckpoint", err)
+	}
+	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("owner wake: %v", err)
 	}
 }
 
