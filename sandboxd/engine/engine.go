@@ -27,6 +27,7 @@ import (
 
 const (
 	silkdPort     = 2048 // silkd's fixed guest vsock port, the claim-ready anchor
+	egressPort    = 2049 // guest→host egress port; VMM maps it to <vsock_socket>_2049
 	cmdTimeout    = 2 * time.Minute
 	probeInterval = 20 * time.Millisecond
 	connectMax    = 64   // "OK <port>" handshake reply cap
@@ -318,6 +319,12 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 		return fmt.Errorf("info reply type %q", frame.Type)
 	}
 	return nil
+}
+
+// EgressSocketPath is the host UDS the VMM connects when the guest dials
+// CID2:egressPort — sandboxd listens here to serve the egress proxy.
+func EgressSocketPath(vsockSocket string) string {
+	return fmt.Sprintf("%s_%d", vsockSocket, egressPort)
 }
 
 // parseVsock reads the vsock UDS from a lifecycle command's --output json VM

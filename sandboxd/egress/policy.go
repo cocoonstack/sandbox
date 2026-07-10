@@ -87,3 +87,27 @@ func (p Policy) Eval(host, method string) (Rule, Decision) {
 	}
 	return Rule{}, DecisionDeny
 }
+
+// Evaluator is what the proxy consults per request; Policy is one, Compose
+// intersects two.
+type Evaluator interface {
+	Eval(host, method string) (Rule, Decision)
+}
+
+// Compose intersects a pool and a tenant policy: a request must pass both, and
+// the pool rule (with its secret) wins on a double allow.
+func Compose(pool, tenant Policy) Evaluator {
+	return composite{pool: pool, tenant: tenant}
+}
+
+type composite struct {
+	pool, tenant Policy
+}
+
+func (c composite) Eval(host, method string) (Rule, Decision) {
+	rule, pd := c.pool.Eval(host, method)
+	if _, td := c.tenant.Eval(host, method); pd == DecisionAllow && td == DecisionAllow {
+		return rule, DecisionAllow
+	}
+	return Rule{}, DecisionDeny
+}
