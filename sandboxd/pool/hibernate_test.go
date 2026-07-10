@@ -89,6 +89,86 @@ func TestWakePersistFailureSurfaces(t *testing.T) {
 	}
 }
 
+// TestHibernateAmbiguousErrorTreatedAsDone: the engine can report failure
+// after the snapshot landed (a CLI timeout). A snapshot the list confirms
+// present means the hibernate happened — the call must not clear the intent
+// or fail, or a restart would destroy a genuinely hibernated claim.
+func TestHibernateAmbiguousErrorTreatedAsDone(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	eng.hibernateErr = errors.New("cli timeout")
+	eng.hibernateErrCompletes = true // the snapshot landed before the timeout
+
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("Hibernate: %v, want nil (the snapshot landed despite the error)", err)
+	}
+	if _, g := m.Info(); g.Hibernated != 1 {
+		t.Errorf("hibernated %d, want 1", g.Hibernated)
+	}
+	got, _ := newClaimStore(m.dataDir).load()
+	if got[sb.ID] == nil || got[sb.ID].HibernateSnap == "" || got[sb.ID].PendingSnap != "" {
+		t.Fatalf("journal %+v, want HibernateSnap set + PendingSnap clear", got[sb.ID])
+	}
+}
+
+// TestHibernateVerifiedFailureClearsIntent: only a snapshot the list confirms
+// absent proves the hibernate did not happen — then the intent clears, the
+// claim stays running, and a retry hibernates cleanly.
+func TestHibernateVerifiedFailureClearsIntent(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	eng.hibernateErr = errors.New("cli failed") // completes=false: no snapshot
+
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
+		t.Fatal("Hibernate reported success despite a verified failure")
+	}
+	if _, g := m.Info(); g.Hibernated != 0 {
+		t.Errorf("hibernated %d, want 0 (still running)", g.Hibernated)
+	}
+	got, _ := newClaimStore(m.dataDir).load()
+	if got[sb.ID] == nil || got[sb.ID].HibernateSnap != "" || got[sb.ID].PendingSnap != "" {
+		t.Fatalf("journal %+v, want running (no snaps)", got[sb.ID])
+	}
+	eng.hibernateErr = nil
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("Hibernate retry: %v", err)
+	}
+}
+
+// TestWakeProbeFailureDestroysAndRetries: a readiness-probe timeout after a
+// successful Restore must tear the booted VM down (keeping the snapshot) so
+// the next wake restores cleanly, instead of re-restoring a running VM.
+func TestWakeProbeFailureDestroysAndRetries(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("Hibernate: %v", err)
+	}
+	snap := eng.hibernates[0]
+	eng.probeErr = errors.New("probe timeout")
+
+	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
+		t.Fatal("wake reported success despite a probe timeout")
+	}
+	if !eng.removed(sb.VMName) {
+		t.Error("probe failure left the restored VM running")
+	}
+	if eng.snapRemoved(snap) {
+		t.Error("probe failure dropped the snapshot needed to retry")
+	}
+	eng.probeErr = nil
+	sock, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+	if err != nil || sock == "" {
+		t.Fatalf("wake retry after the probe recovered: %q, %v", sock, err)
+	}
+	if len(eng.restores) != 2 {
+		t.Errorf("restores=%d, want 2 (failed attempt + retry)", len(eng.restores))
+	}
+}
+
 // TestFlushClaimsClosesShutdownWindow: the shutdown hook persists what the
 // background recommit has not converged yet (here, a wake whose commit failed).
 func TestFlushClaimsClosesShutdownWindow(t *testing.T) {

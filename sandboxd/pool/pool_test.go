@@ -521,7 +521,8 @@ type fakeEngine struct {
 	vsockLateN                        int // List calls that report no socket yet
 
 	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr, snapSaveErr error
-	cloneFailNth                                                          int // 1-based Clone call to fail; 0 = never
+	cloneFailNth                                                          int  // 1-based Clone call to fail; 0 = never
+	hibernateErrCompletes                                                 bool // hibernateErr fires after the snapshot lands (CLI timeout)
 
 	probeStall      chan struct{} // non-nil: Probe blocks until closed
 	hibernateStall  chan struct{} // non-nil: Hibernate blocks until closed
@@ -625,6 +626,7 @@ func (f *fakeEngine) SnapshotRemove(_ context.Context, snapName string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.snapRemoves = append(f.snapRemoves, snapName)
+	f.snapshots = slices.DeleteFunc(f.snapshots, func(s string) bool { return s == snapName })
 	return nil
 }
 
@@ -633,17 +635,18 @@ func (f *fakeEngine) Hibernate(_ context.Context, name, snapName string) error {
 	f.hibernates = append(f.hibernates, snapName)
 	stall := f.hibernateStall
 	err := f.hibernateErr
+	completes := err == nil || f.hibernateErrCompletes
 	f.mu.Unlock()
 	if stall != nil {
 		<-stall
 	}
-	if err != nil {
-		return err
+	if completes {
+		f.mu.Lock()
+		f.stopped[name] = true
+		f.snapshots = append(f.snapshots, snapName)
+		f.mu.Unlock()
 	}
-	f.mu.Lock()
-	f.stopped[name] = true
-	f.mu.Unlock()
-	return nil
+	return err
 }
 
 func (f *fakeEngine) Restore(_ context.Context, name, _ string) (string, error) {
@@ -654,6 +657,9 @@ func (f *fakeEngine) Restore(_ context.Context, name, _ string) (string, error) 
 		return "", f.restoreErr
 	}
 	f.stopped[name] = false
+	if f.vms[name] == "" {
+		f.vms[name] = "/vsock/" + name // Restore rebuilds the VM from its snapshot
+	}
 	return f.lateVsock(f.vms[name]), nil
 }
 
