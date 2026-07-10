@@ -180,9 +180,10 @@ func (m *Manager) recLock(id string) *sync.RWMutex {
 }
 
 // dropRecLock evicts a deleted record's lock so recLocks can't grow per
-// checkpoint. Safe only for single-use ck ids, holding the record's write lock:
-// the id is dead after delete, so no two live ops ever diverge onto different
-// locks. Template ids (tp_, reused) must not be evicted; they are bounded.
+// checkpoint. Safe only for single-use ck ids and only after the store record
+// is deleted: a fresh lock is obtainable only after eviction, i.e. after the
+// record is gone, so no two live ops diverge onto different locks. Template ids
+// (tp_, reused on re-promote) must not be evicted; they are bounded.
 func (m *Manager) dropRecLock(id string) {
 	m.recLocks.Delete(id)
 }

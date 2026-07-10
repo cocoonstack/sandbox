@@ -175,9 +175,11 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		}
 		return "", fmt.Errorf("wake %s: persist claims", sb.ID)
 	}
-	// Consumed into the live VM; drop the store copy.
+	// Consumed into the live VM; drop the store copy, and its now-dead lock.
 	if delErr := m.ckpts.Delete(ctx, ck); delErr != nil {
 		log.WithFunc("pool.wakeArchived").Warnf(ctx, "delete consumed archive ck %s: %v", ck, delErr)
+	} else {
+		m.dropRecLock(ck)
 	}
 	m.counters.unarchives.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "unarchive", ID: sb.ID, Reference: ck, Tenant: sb.Tenant})
