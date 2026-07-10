@@ -2,6 +2,7 @@ package silkd
 
 import (
 	"bufio"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"sync"
@@ -11,9 +12,10 @@ import (
 // silkd RPCs. Reads are single-consumer; Send is safe for concurrent use so
 // a stdin pump can interleave with the caller.
 type Conn struct {
-	wmu sync.Mutex
-	rwc io.ReadWriteCloser
-	sc  *bufio.Scanner
+	wmu  sync.Mutex
+	wbuf []byte
+	rwc  io.ReadWriteCloser
+	sc   *bufio.Scanner
 }
 
 // NewConn wraps rwc; the caller keeps ownership of closing via Close.
@@ -25,6 +27,12 @@ func NewConn(rwc io.ReadWriteCloser) *Conn {
 
 // Send writes one request frame.
 func (c *Conn) Send(r Request) error {
+	switch v := r.(type) {
+	case *Data:
+		return c.sendBulk(v.Op(), v.Data)
+	case *Stdin:
+		return c.sendBulk(v.Op(), v.Data)
+	}
 	frame, err := EncodeRequest(r)
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", r.Op(), err)
@@ -49,4 +57,18 @@ func (c *Conn) Recv() (Response, error) {
 
 func (c *Conn) Close() error {
 	return c.rwc.Close()
+}
+
+// sendBulk hand-builds a data/stdin frame in a reused buffer, skipping the
+// json.Marshal alloc + escape rescan (base64 needs no escaping).
+func (c *Conn) sendBulk(op string, payload []byte) error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	c.wbuf = append(c.wbuf[:0], requestHead...)
+	c.wbuf = append(c.wbuf, op...)
+	c.wbuf = append(c.wbuf, `","data":"`...)
+	c.wbuf = base64.StdEncoding.AppendEncode(c.wbuf, payload)
+	c.wbuf = append(c.wbuf, '"', '}', '\n')
+	_, err := c.rwc.Write(c.wbuf)
+	return err
 }
