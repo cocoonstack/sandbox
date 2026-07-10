@@ -37,7 +37,7 @@ crash-loops zygote before the framework ever completes.
   `/init`, not the sandbox boot chain (PVH kernel + overlay-root init).
   The claim lane must be CH/egress — the FC no-network lane fails the
   readiness probe (2026-07-07 boot-attempt finding). Snapshot/restore of a
-  booted Android is validated by the M6-1 acceptance round.
+  booted Android is validated by the androidsmoke acceptance round.
 - **silkd on Android**: the musl-static binary is built and verified static,
   but exec/session behavior against an Android userspace (`/system/bin/sh`,
-  no `/bin/sh`) is validated by the M6-1 acceptance round.
+  no `/bin/sh`) is validated by the androidsmoke acceptance round.

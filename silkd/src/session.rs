@@ -1,6 +1,6 @@
 //! Persistent shell sessions: each session owns a long-lived bash whose cwd,
-//! environment, and shell state survive across `exec {session}` calls
-//! (Cloudflare/Daytona semantics). A command is injected into the shell and
+//! environment, and shell state survive across `exec {session}` calls.
+//! A command is injected into the shell and
 //! delimited by a unique sentinel that also carries its exit code; stderr is
 //! merged into stdout (`exec 2>&1`) so one stream frames cleanly without a
 //! pipe deadlock, which is the conventional interactive-shell behaviour.

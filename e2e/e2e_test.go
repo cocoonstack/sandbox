@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/server"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -293,7 +294,11 @@ func startTenantStack(t *testing.T, apiToken string, tenants []config.TenantSpec
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	eng := newFakeEngine(dir)
-	mgr, err := pool.NewManager(t.Context(), &config.Config{DataDir: dir, Pools: pools, Tenants: tenants}, eng)
+	secrets, err := egress.NewSecretStore(nil)
+	if err != nil {
+		t.Fatalf("secrets: %v", err)
+	}
+	mgr, err := pool.NewManager(t.Context(), &config.Config{DataDir: dir, Pools: pools, Tenants: tenants}, eng, secrets)
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}

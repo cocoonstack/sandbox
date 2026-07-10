@@ -48,7 +48,7 @@ type Event struct {
 type Proxy struct {
 	sandbox string
 	tenant  string
-	policy  Policy
+	policy  Evaluator
 	secrets Secrets
 	audit   func(Event)
 	dial    DialFunc
@@ -57,7 +57,7 @@ type Proxy struct {
 
 // New builds a Proxy for one sandbox. secrets and audit may be nil (no
 // injection, no audit). dial must be set.
-func New(sandbox, tenant string, policy Policy, secrets Secrets, dial DialFunc, audit func(Event)) *Proxy {
+func New(sandbox, tenant string, policy Evaluator, secrets Secrets, dial DialFunc, audit func(Event)) *Proxy {
 	return &Proxy{
 		sandbox: sandbox,
 		tenant:  tenant,

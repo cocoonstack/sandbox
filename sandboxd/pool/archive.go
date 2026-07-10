@@ -138,6 +138,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	}
 	sb.Transition.Unlock()
 	// Committed: the store ck is authoritative now; reclaim the local footprint.
+	m.disarmEgress(sb.ID)
 	if rmErr := m.eng.Remove(ctx, vmName); rmErr != nil {
 		log.WithFunc("pool.archive").Warnf(ctx, "remove archived VM %s: %v", vmName, rmErr)
 	}
@@ -181,6 +182,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	} else {
 		m.dropRecLock(ck)
 	}
+	m.armEgress(ctx, sb) // fresh VM after unarchive: bind its egress accept point
 	m.counters.unarchives.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "unarchive", ID: sb.ID, Reference: ck, Tenant: sb.Tenant})
 	return built.VsockSocket, nil

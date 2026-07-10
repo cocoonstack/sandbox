@@ -1,4 +1,4 @@
-// meshsmoke proves M3.1 cluster template routing on a real two-node mesh:
+// meshsmoke proves cluster template routing on a real two-node mesh:
 // a claim at the entry node redirects to the peer that pools the key, a
 // promote there is reachable by name from the entry node, and a name-based
 // delete follows gossip to the owner. Run against node A of a two-node

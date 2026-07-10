@@ -103,7 +103,7 @@ labeled and must only be compared against other nested runs.
 
 exec RTT is power-policy sensitive on this host: under the performance
 governor the same stack measures p50=0.18 p90=0.22 p99=0.27 (n=1000, ×2),
-reproducing the 07-08 entry; .79's 07-09 reboots reset the policy to
+reproducing the 07-08 entry; a host reboot reset the policy to
 powersave, whose C-state/freq-ramp latency lands in the tail. The guest is
 up 0.26s (its own /proc/uptime) when the first cold exec returns — silkd
 answers long before a console login prompt would appear.

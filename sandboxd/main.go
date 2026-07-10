@@ -24,6 +24,7 @@ import (
 	coretypes "github.com/projecteru2/core/types"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/mesh"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
@@ -54,7 +55,11 @@ func main() {
 		logger.Fatalf(ctx, err, "load config")
 	}
 	eng := engine.New(cfg.CocoonBin, cfg.Bridge, cfg.Network)
-	mgr, err := pool.NewManager(ctx, cfg, eng)
+	secrets, err := egress.NewSecretStore(cfg.Secrets)
+	if err != nil {
+		logger.Fatalf(ctx, err, "init egress secrets")
+	}
+	mgr, err := pool.NewManager(ctx, cfg, eng, secrets)
 	if err != nil {
 		logger.Fatalf(ctx, err, "init pool manager")
 	}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bare-metal acceptance for M7-E lifecycle auto-archive: a claim idles into
+# Bare-metal acceptance for lifecycle auto-archive: a claim idles into
 # hibernation, then to a store checkpoint (its local VM dropped), and the next
 # access wakes it from the store with the same id and guest state intact.
 # Runs a dedicated sandboxd on port 7778 so it never collides with

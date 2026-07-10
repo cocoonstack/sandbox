@@ -173,7 +173,7 @@ func TestArchiveCkHiddenAcrossNodes(t *testing.T) {
 		m, err := NewManager(t.Context(), &config.Config{
 			DataDir: t.TempDir(), CheckpointDir: shared,
 			Pools: []config.PoolSpec{archivePool(3600)},
-		}, newFakeEngine())
+		}, newFakeEngine(), testSecrets(t))
 		if err != nil {
 			t.Fatalf("manager: %v", err)
 		}

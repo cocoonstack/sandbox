@@ -9,6 +9,7 @@ pub mod fs;
 pub mod git;
 pub mod lsp;
 pub mod net;
+pub mod net_egress;
 pub mod proc;
 pub mod proto;
 pub mod pty;

@@ -136,8 +136,8 @@ restart reconcile); set `BRIDGE=<dev>` to include the egress lane.
 ## Preview URLs
 
 `preview_listen` starts a second HTTP server that serves a sandbox's guest
-HTTP port under a signed, expiring URL — the E2B-style shareable preview.
-The whole mechanism is in sandboxd:
+HTTP port under a signed, expiring shareable URL. The whole mechanism is in
+sandboxd:
 
 - **Minting** (`sb.PreviewURL(port, ttl)`): the owner node signs a token
   embedding `{sandbox, port, owner, exp}` with `preview_secret`; the URL's

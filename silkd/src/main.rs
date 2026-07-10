@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use silkd::server::State;
-use silkd::{session, vsock};
+use silkd::{net_egress, session, vsock};
 
 const DEFAULT_PORT: u32 = 2048;
 
@@ -26,6 +26,12 @@ async fn main() {
         state.sessions.clone(),
         session::IDLE_TTL,
         session::REAP_INTERVAL,
+    ));
+    // Loopback→host egress relay: harmless when the host wired no proxy (the
+    // per-conn vsock dial is refused), so it needs no lane gate here.
+    tokio::spawn(net_egress::serve(
+        net_egress::LOOPBACK_PORT,
+        net_egress::HOST_VSOCK_PORT,
     ));
     if let Err(e) = vsock::serve(port, state).await {
         eprintln!("silkd: fatal: {e}");

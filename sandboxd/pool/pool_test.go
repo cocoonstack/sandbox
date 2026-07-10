@@ -458,6 +458,20 @@ func TestReapBatchDoesNotStallTheLoop(t *testing.T) {
 	waitFor(t, func() bool { return eng.removed(sbs[n-1].VMName) })
 }
 
+func TestProbeReadyWaitsForVsock(t *testing.T) {
+	eng := newFakeEngine()
+	eng.vsockLateN = 2 // cocoon reports the socket only once the VMM runs
+	m := newTestManager(t, eng)
+
+	sb, err := claimAny(t.Context(), m, testKey, 0)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if sb.VsockSocket == "" {
+		t.Error("claim returned an empty vsock socket")
+	}
+}
+
 func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	return newTestManagerAt(t, eng, t.TempDir(), pools...)
@@ -484,25 +498,20 @@ func mustClaim(t *testing.T, m *Manager, key types.PoolKey) *types.Sandbox {
 
 func newTestManagerAt(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
 	t.Helper()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: dataDir, Pools: pools}, eng)
+	m, err := NewManager(t.Context(), &config.Config{DataDir: dataDir, Pools: pools}, eng, testSecrets(t))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
 	return m
 }
 
-func TestProbeReadyWaitsForVsock(t *testing.T) {
-	eng := newFakeEngine()
-	eng.vsockLateN = 2 // cocoon reports the socket only once the VMM runs
-	m := newTestManager(t, eng)
-
-	sb, err := claimAny(t.Context(), m, testKey, 0)
+func testSecrets(t *testing.T, specs ...egress.SecretSpec) *egress.SecretStore {
+	t.Helper()
+	s, err := egress.NewSecretStore(specs)
 	if err != nil {
-		t.Fatalf("Claim: %v", err)
+		t.Fatalf("secrets: %v", err)
 	}
-	if sb.VsockSocket == "" {
-		t.Error("claim returned an empty vsock socket")
-	}
+	return s
 }
 
 func waitFor(t *testing.T, cond func() bool) {
