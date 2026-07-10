@@ -25,9 +25,7 @@ func NewConn(rwc io.ReadWriteCloser) *Conn {
 	return &Conn{rwc: rwc, sc: sc}
 }
 
-// Send writes one request frame. Bulk payload frames (data, stdin) take a
-// hand-built envelope instead of json.Marshal — the upload twin of the
-// server relay's portWriteChunk.
+// Send writes one request frame.
 func (c *Conn) Send(r Request) error {
 	switch v := r.(type) {
 	case *Data:
@@ -61,9 +59,8 @@ func (c *Conn) Close() error {
 	return c.rwc.Close()
 }
 
-// sendBulk writes a payload frame from a reused buffer, skipping the two
-// frame-sized allocations and the JSON escape rescan json.Marshal costs (the
-// base64 alphabet needs no escaping).
+// sendBulk hand-builds a data/stdin frame in a reused buffer, skipping the
+// json.Marshal alloc + escape rescan (base64 needs no escaping).
 func (c *Conn) sendBulk(op string, payload []byte) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
