@@ -28,11 +28,6 @@ func (s SecretSpec) Validate() error {
 	return nil
 }
 
-type resolvedSecret struct {
-	header string
-	value  string
-}
-
 // SecretStore is the resolved node-side credential registry, implementing the
 // Proxy's Secrets interface. Values live only here — never in a policy or a
 // gossiped struct.
@@ -57,6 +52,11 @@ func NewSecretStore(specs []SecretSpec) (*SecretStore, error) {
 		byName[s.Name] = resolvedSecret{header: s.Header, value: value}
 	}
 	return &SecretStore{byName: byName}, nil
+}
+
+type resolvedSecret struct {
+	header string
+	value  string
 }
 
 // Header returns the header and value the named secret injects.
