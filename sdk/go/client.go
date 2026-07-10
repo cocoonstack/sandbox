@@ -32,22 +32,6 @@ type Client struct {
 	hc       *http.Client
 }
 
-// Connect returns a client for a sandboxd node. addr accepts a
-// comma-separated seed list for forward compatibility; v0 uses the first
-// entry.
-func Connect(addr string, opts ...ClientOption) (*Client, error) {
-	first, _, _ := strings.Cut(addr, ",")
-	first = strings.TrimSpace(first)
-	if first == "" {
-		return nil, fmt.Errorf("empty sandboxd address")
-	}
-	c := &Client{addr: first, hc: &http.Client{}}
-	for _, opt := range opts {
-		opt(c)
-	}
-	return c, nil
-}
-
 // New claims a sandbox for template. Without options the node serves its
 // defaults: the no-network lane and the smallest size tier. New returns when
 // the sandbox's silkd is reachable; a warm pool hit is milliseconds, a cold
@@ -191,6 +175,38 @@ func (c *Client) deleteTemplates(ctx context.Context, addr string, u url.Values)
 	}
 }
 
+// roundTrip issues one control-plane request against addr, attaching bearer
+// when non-empty; a non-nil body is JSON.
+func (c *Client) roundTrip(ctx context.Context, method, addr, path string, body io.Reader, bearer string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, "http://"+addr+path, body)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	return c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
+}
+
+// Connect returns a client for a sandboxd node. addr accepts a
+// comma-separated seed list for forward compatibility; v0 uses the first
+// entry.
+func Connect(addr string, opts ...ClientOption) (*Client, error) {
+	first, _, _ := strings.Cut(addr, ",")
+	first = strings.TrimSpace(first)
+	if first == "" {
+		return nil, fmt.Errorf("empty sandboxd address")
+	}
+	c := &Client{addr: first, hc: &http.Client{}}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c, nil
+}
+
 // doJSON issues one control-plane request and decodes a 200 reply into T;
 // any other status maps through apiError under verb. The shared plumbing
 // behind every decode-a-reply verb in this file and its siblings.
@@ -266,22 +282,6 @@ func scatter[T any](ctx context.Context, addrs []string, probe func(ctx context.
 	go func() { wg.Wait(); close(wins) }()
 	result, ok = <-wins
 	return result, ok
-}
-
-// roundTrip issues one control-plane request against addr, attaching bearer
-// when non-empty; a non-nil body is JSON.
-func (c *Client) roundTrip(ctx context.Context, method, addr, path string, body io.Reader, bearer string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, "http://"+addr+path, body)
-	if err != nil {
-		return nil, err
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
-	}
-	return c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
 }
 
 // encodeBody marshals a wire request body, wrapping failures under verb —

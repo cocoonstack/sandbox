@@ -180,24 +180,6 @@ type Config struct {
 	Pools []PoolSpec `json:"pools"`
 }
 
-// Load reads a JSON config file, applies defaults, and validates.
-func Load(path string) (*Config, error) {
-	raw, err := os.ReadFile(path) //nolint:gosec // path is the operator-supplied -config flag
-	if err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
-	}
-	cfg := &Config{}
-	// Hand-edited file: a typo must fail load, not silently change policy.
-	if err := utils.DecodeStrictJSON(raw, cfg); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
-	}
-	cfg.applyDefaults()
-	if err := cfg.validate(); err != nil {
-		return nil, fmt.Errorf("validate config: %w", err)
-	}
-	return cfg, nil
-}
-
 // HasEgress reports whether the node can attach egress-lane VMs.
 func (c *Config) HasEgress() bool {
 	return c.Bridge != "" || c.Network != ""
@@ -334,6 +316,24 @@ func (c *Config) validateTenants() error {
 		}
 	}
 	return nil
+}
+
+// Load reads a JSON config file, applies defaults, and validates.
+func Load(path string) (*Config, error) {
+	raw, err := os.ReadFile(path) //nolint:gosec // path is the operator-supplied -config flag
+	if err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+	cfg := &Config{}
+	// Hand-edited file: a typo must fail load, not silently change policy.
+	if err := utils.DecodeStrictJSON(raw, cfg); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	cfg.applyDefaults()
+	if err := cfg.validate(); err != nil {
+		return nil, fmt.Errorf("validate config: %w", err)
+	}
+	return cfg, nil
 }
 
 // validatePolicy checks the rules and that each secret ref is registered; a
