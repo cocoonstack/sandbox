@@ -520,9 +520,9 @@ type fakeEngine struct {
 	stopped                           map[string]bool
 	vsockLateN                        int // List calls that report no socket yet
 
-	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr, snapSaveErr error
-	cloneFailNth                                                          int  // 1-based Clone call to fail; 0 = never
-	hibernateErrCompletes                                                 bool // hibernateErr fires after the snapshot lands (CLI timeout)
+	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr, snapSaveErr, snapListErr error
+	cloneFailNth                                                                       int  // 1-based Clone call to fail; 0 = never
+	hibernateErrCompletes                                                              bool // hibernateErr fires after the snapshot lands (CLI timeout)
 
 	probeStall      chan struct{} // non-nil: Probe blocks until closed
 	hibernateStall  chan struct{} // non-nil: Hibernate blocks until closed
@@ -613,6 +613,9 @@ func (f *fakeEngine) SnapshotExport(_ context.Context, snapName, toDir string) e
 func (f *fakeEngine) SnapshotList(_ context.Context) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.snapListErr != nil {
+		return nil, f.snapListErr
+	}
 	return slices.Clone(f.snapshots), nil
 }
 

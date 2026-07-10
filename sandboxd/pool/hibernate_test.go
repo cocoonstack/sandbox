@@ -137,6 +137,62 @@ func TestHibernateVerifiedFailureClearsIntent(t *testing.T) {
 	}
 }
 
+// TestHibernateUnverifiableErrorKeepsIntent: when the engine errors and the
+// snapshot list is also unusable (the same cocoon fault), the outcome is
+// unknown — the call must surface the error and keep the intent for Reconcile,
+// never report success on an unconfirmed transition.
+func TestHibernateUnverifiableErrorKeepsIntent(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	eng.hibernateErr = errors.New("cli timeout")
+	eng.snapListErr = errors.New("cocoon unreachable")
+
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
+		t.Fatal("Hibernate reported success on an unconfirmed transition")
+	}
+	if _, g := m.Info(); g.Hibernated != 0 {
+		t.Errorf("hibernated %d, want 0 (unconfirmed, not committed)", g.Hibernated)
+	}
+	got, _ := newClaimStore(m.dataDir).load()
+	if got[sb.ID] == nil || got[sb.ID].HibernateSnap != "" || got[sb.ID].PendingSnap == "" {
+		t.Fatalf("journal %+v, want the intent kept for Reconcile", got[sb.ID])
+	}
+}
+
+// TestWakeRestoreErrorDestroysAndRetries: Restore can boot the VM before the
+// engine errors (a CLI timeout); the failed wake must tear it down (keeping
+// the snapshot) so the next wake restores cleanly instead of re-restoring an
+// already-running VM.
+func TestWakeRestoreErrorDestroysAndRetries(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("Hibernate: %v", err)
+	}
+	snap := eng.hibernates[0]
+	eng.restoreErr = errors.New("restore timeout")
+
+	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
+		t.Fatal("wake reported success despite a restore error")
+	}
+	if !eng.removed(sb.VMName) {
+		t.Error("restore error left a possibly-booted VM behind")
+	}
+	if eng.snapRemoved(snap) {
+		t.Error("restore error dropped the snapshot needed to retry")
+	}
+	eng.restoreErr = nil
+	sock, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+	if err != nil || sock == "" {
+		t.Fatalf("wake retry after restore recovered: %q, %v", sock, err)
+	}
+	if len(eng.restores) != 2 {
+		t.Errorf("restores=%d, want 2 (failed attempt + retry)", len(eng.restores))
+	}
+}
+
 // TestWakeProbeFailureDestroysAndRetries: a readiness-probe timeout after a
 // successful Restore must tear the booted VM down (keeping the snapshot) so
 // the next wake restores cleanly, instead of re-restoring a running VM.

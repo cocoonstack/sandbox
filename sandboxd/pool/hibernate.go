@@ -64,16 +64,20 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	}
 	if hibErr := m.eng.Hibernate(ctx, sb.VMName, snap); hibErr != nil {
 		// The engine can report failure after the snapshot already landed (a
-		// CLI timeout): only a verified-absent snapshot proves the hibernate
-		// did not happen, and then the intent is cleared and the error
-		// surfaced. Otherwise treat it as done — commitTransition publishes it
-		// below, and Reconcile resolves any lie against the live VM on restart.
-		if snaps, listErr := m.eng.SnapshotList(ctx); listErr == nil && !slices.Contains(snaps, snap) {
-			m.mu.Lock()
-			sb.PendingSnap = ""
-			m.mu.Unlock()
-			_ = m.store.commit(m.claimsSnapshot())
-			return hibErr
+		// CLI timeout), so only a snapshot the list confirms present proves
+		// the hibernate happened — commit it below. Anything else must not
+		// report success: a verified-absent snapshot means it did not happen
+		// (clear the intent, stay running), and an unusable list leaves the
+		// outcome unknown (keep the intent for Reconcile).
+		snaps, listErr := m.eng.SnapshotList(ctx)
+		if listErr != nil || !slices.Contains(snaps, snap) {
+			if listErr == nil {
+				m.mu.Lock()
+				sb.PendingSnap = ""
+				m.mu.Unlock()
+				_ = m.store.commit(m.claimsSnapshot())
+			}
+			return fmt.Errorf("hibernate %s: %w", sb.ID, hibErr)
 		}
 	}
 	live, err := m.commitTransition(ctx, sb, snap, sb.VsockSocket)
@@ -115,6 +119,10 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	snap := sb.HibernateSnap
 	restoredSock, err := m.eng.Restore(ctx, sb.VMName, snap)
 	if err != nil {
+		// Restore may have booted the VM before the engine errored (a CLI
+		// timeout); tear it down, keeping the snapshot, so the next wake
+		// restores cleanly instead of re-restoring an already-running VM.
+		m.destroy(ctx, sb.VMName)
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
 	sock, err := m.probeReady(ctx, sb.VMName, restoredSock, claimProbeTimeout)
