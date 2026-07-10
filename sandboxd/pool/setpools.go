@@ -1,0 +1,109 @@
+package pool
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
+)
+
+// SetPools replaces the node's desired warm targets. Existing claims are not
+// affected; only unclaimed warm VMs are trimmed or refilled.
+func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
+	desired := make(map[types.PoolKey]config.PoolSpec, len(specs))
+	hashes := make(map[string]types.PoolKey, len(specs))
+	for _, spec := range specs {
+		spec = normalizePoolSpec(spec)
+		if err := m.validate(spec.PoolKey); err != nil {
+			return err
+		}
+		if err := spec.ValidateLimits(); err != nil {
+			return fmt.Errorf("%w: %v", ErrBadCount, err)
+		}
+		// The manager neither validates nor keeps egress policy yet;
+		// accepting it here would silently drop it.
+		if spec.Egress != nil {
+			return fmt.Errorf("%w: pool %q: egress is set in the config file, not via the API", ErrBadKey, spec.Template)
+		}
+		if existing, ok := hashes[spec.Hash()]; ok && existing != spec.PoolKey {
+			return fmt.Errorf("%w: pool key hash collision between %q and %q", ErrBadKey, existing.Template, spec.Template)
+		}
+		if _, ok := desired[spec.PoolKey]; ok {
+			return fmt.Errorf("%w: duplicate pool %q", ErrBadKey, spec.Template)
+		}
+		hashes[spec.Hash()] = spec.PoolKey
+		desired[spec.PoolKey] = spec
+	}
+
+	var trim []string
+	m.mu.Lock()
+	now := time.Now()
+	for key, p := range m.pools {
+		spec, ok := desired[key]
+		if !ok {
+			p.floor = 0
+			p.warmMax = 0
+			p.idle = 0
+		} else {
+			p.applySpec(spec)
+		}
+		target := p.effectiveTarget(now)
+		for len(p.warm) > target {
+			n := len(p.warm) - 1
+			trim = append(trim, p.warm[n].VMName)
+			p.warm = p.warm[:n]
+		}
+		if !ok && !p.building && p.refilling == 0 {
+			delete(m.pools, key)
+		}
+	}
+	for key, spec := range desired {
+		if p := m.pools[key]; p != nil {
+			continue
+		}
+		p := &pool{key: key}
+		p.applySpec(spec)
+		// A golden already on disk (from this pool's earlier life) is
+		// adopted; buildGolden covers the rest.
+		if g := filepath.Join(m.goldensDir(), key.Hash()); dirExists(g) {
+			p.goldenDir = g
+		}
+		m.pools[key] = p
+	}
+	// Recompute rather than latch: removing every idle pool turns the
+	// sweep off again.
+	m.idleEnabled = m.idleDefault > 0
+	m.archiveEnabled = m.archiveAfterDefault > 0
+	for _, p := range m.pools {
+		if p.idle > 0 {
+			m.idleEnabled = true
+		}
+		if p.archiveAfter > 0 {
+			m.archiveEnabled = true
+		}
+	}
+	m.mu.Unlock()
+
+	runCtx := context.WithoutCancel(ctx)
+	for _, name := range trim {
+		m.destroy(runCtx, name)
+	}
+	m.refillOnce(runCtx)
+	return nil
+}
+
+// normalizePoolSpec fills the wire defaults, mirroring ClaimRequest.Key():
+// API requests default net/size; config files stay explicit (Validate
+// rejects empty there).
+func normalizePoolSpec(spec config.PoolSpec) config.PoolSpec {
+	if spec.Net == "" {
+		spec.Net = types.NetNone
+	}
+	if spec.Size == "" {
+		spec.Size = types.SizeSmall
+	}
+	return spec
+}
