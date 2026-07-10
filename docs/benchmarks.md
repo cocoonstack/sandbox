@@ -94,6 +94,7 @@ labeled and must only be compared against other nested runs.
 | warm pool hit | 0.2 ms | 0.3 ms | 0.6 ms | 6 |
 | clone from golden | 26.0 ms | 29.3 ms | 30.6 ms | 10 |
 | cold boot (pool-less node, coldproof claim→first exec) | 304 ms / 306 ms | — | 314 ms | 3 |
+| cold boot (unpooled ghcr.io/cocoonstack/sandbox/python:3.12, coldproof) | 399.5 ms | — | 413.9 ms | 3 |
 
 | data plane | measured |
 |---|---|
