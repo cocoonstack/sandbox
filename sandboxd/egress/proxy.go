@@ -138,12 +138,6 @@ func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-func stripHop(h http.Header) {
-	for _, k := range hopHeaders {
-		h.Del(k)
-	}
-}
-
 // inject sets the header the rule's Secret resolves to, overwriting any
 // guest-supplied value, and returns the secret name it applied (empty when
 // the rule names none or the store cannot resolve it).
@@ -165,6 +159,12 @@ func (p *Proxy) record(ev Event) {
 	}
 	ev.Sandbox, ev.Tenant = p.sandbox, p.tenant
 	p.audit(ev)
+}
+
+func stripHop(h http.Header) {
+	for _, k := range hopHeaders {
+		h.Del(k)
+	}
 }
 
 // splice copies bytes both ways until either side ends, then returns; each
