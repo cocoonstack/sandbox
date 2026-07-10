@@ -36,9 +36,7 @@ type PoolSpec struct {
 
 	// IdleHibernateSeconds, when >0, hibernates this pool's idle claims
 	// after that many seconds without a data-plane connection; the next
-	// call wakes them transparently. Zero disables — wake costs latency
-	// and the snapshot, so callers with their own idle logic must not
-	// pay twice.
+	// call wakes them transparently. Zero disables.
 	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitempty"`
 
 	// ArchiveAfterSeconds, when >0, checkpoints a hibernated claim to the

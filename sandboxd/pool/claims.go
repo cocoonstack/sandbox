@@ -74,10 +74,8 @@ func (s *claimStore) load() (map[string]*types.Sandbox, error) {
 	return claims, nil
 }
 
-// snapshot copies the claim set into a detached, sequenced value and stamps it
-// with the next sequence. The caller holds the manager mutex, so it does only a
-// cheap field copy — not the marshal — and sequences are handed out in mutation
-// order; commit() marshals and writes off the mutex.
+// snapshot copies the claim set into a detached, sequenced value; the caller
+// holds the manager mutex, so sequences are handed out in mutation order.
 func (s *claimStore) snapshot(claims map[string]*types.Sandbox) claimSnapshot {
 	seq := s.seq.Add(1)
 	dtos := make(map[string]claimDTO, len(claims))
@@ -92,10 +90,8 @@ func (s *claimStore) snapshot(claims map[string]*types.Sandbox) claimSnapshot {
 	return claimSnapshot{claims: dtos, seq: seq}
 }
 
-// commit marshals a snapshot and durably writes it, off the manager mutex.
-// Serialized by s.mu so writes never interleave; coalescing so a snapshot no
-// newer than the last written is a no-op — a higher sequence already persisted
-// a later state that supersedes it — which also skips its marshal.
+// commit marshals a snapshot and durably writes it, off the manager mutex;
+// serialized by s.mu, and a snapshot no newer than the last written is a no-op.
 func (s *claimStore) commit(snap claimSnapshot) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -117,10 +113,8 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 	return nil
 }
 
-// save marshals and commits in one call — the combined form for the startup
-// Reconcile pass, which holds the manager mutex but runs before any claim or
-// housekeeping tick can contend. Hot-path callers split snapshot()/commit()
-// around the mutex so the write leaves it.
+// save is the combined form for the startup Reconcile pass, before contention
+// exists; hot-path callers split snapshot()/commit() around the manager mutex.
 func (s *claimStore) save(claims map[string]*types.Sandbox) error {
 	return s.commit(s.snapshot(claims))
 }

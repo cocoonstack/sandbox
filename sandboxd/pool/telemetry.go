@@ -38,7 +38,6 @@ type Counters struct {
 	WakeNanos  uint64
 }
 
-// counters is the live atomic set behind Counters.
 type counters struct {
 	claimsWarm, claimsClone, claimsCold  atomic.Uint64
 	wakes, hibernates                    atomic.Uint64

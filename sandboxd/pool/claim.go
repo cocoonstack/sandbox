@@ -12,8 +12,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// reapAction is what reapOnce does with an expired claim, so the lifecycle
-// reaper preserves state (archive) instead of always destroying.
+// reapAction is what reapOnce does with an expired claim.
 type reapAction int
 
 const (
@@ -253,7 +252,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		}
 		rb := m.store.snapshot(m.claimed)
 		m.mu.Unlock()
-		m.recommit(ctx, rb) // converge disk to the rolled-back set
+		m.recommit(ctx, rb)
 		for _, sb := range sbs {
 			m.destroy(ctx, sb.VMName)
 		}

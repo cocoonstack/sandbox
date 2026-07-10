@@ -48,9 +48,6 @@ const (
 var (
 	requestHead = `{"v":` + strconv.Itoa(ProtoVersion) + `,"op":"`
 
-	// requestDecoders maps each op tag to a decoder; table dispatch keeps this
-	// (and the verb set) flat instead of a switch that grows past the complexity
-	// budget as verbs are added.
 	requestDecoders = map[string]func([]byte) (Request, error){
 		"exec":           decodeReq[Exec],
 		"info":           decodeReq[Info],

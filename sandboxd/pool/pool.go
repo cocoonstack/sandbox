@@ -63,8 +63,6 @@ var (
 	ErrNoEgress        = errors.New("node has no egress attachment (bridge or network)")
 	ErrQuota           = errors.New("node claim quota reached")
 
-	// errWokeMeanwhile aborts an idle-hibernate whose victim saw a
-	// data-plane connection after the sweep snapshot; internal only.
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
 )
 
@@ -480,7 +478,6 @@ func (m *Manager) claimsSnapshot() claimSnapshot {
 	return m.store.snapshot(m.claimed)
 }
 
-// untrack removes a key from an m.mu-guarded set.
 func (m *Manager) untrack(set map[string]struct{}, key string) {
 	m.mu.Lock()
 	delete(set, key)
@@ -578,8 +575,7 @@ func (m *Manager) SetTemplateNotifier(fn func()) {
 	m.notifyTemplates = fn
 }
 
-// Info reports pool states (sorted for stable output) and the claim gauges —
-// one locked pass counts hibernated and archived together.
+// Info reports pool states (sorted for stable output) and the claim gauges.
 func (m *Manager) Info() ([]PoolInfo, Gauges) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -686,8 +682,7 @@ func tenantOwns(tenant, owner string) bool {
 }
 
 // benignSweepErr reports whether err is the expected outcome of a housekeeping
-// sweep racing the data plane (victim released, or woke mid-sweep), so it is
-// not worth logging as a failure.
+// sweep racing the data plane (victim released, or woke mid-sweep).
 func benignSweepErr(err error) bool {
 	return errors.Is(err, ErrUnknownSandbox) || errors.Is(err, errWokeMeanwhile)
 }
