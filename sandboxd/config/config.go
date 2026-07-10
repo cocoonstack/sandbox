@@ -29,8 +29,8 @@ type PoolSpec struct {
 	// arrive faster than the pool provisions, and decays back in silence.
 	WarmMax int `json:"warm_max,omitempty"`
 
-	// Egress is this pool's guarded-egress allow-list; nil denies all egress.
-	// The effective policy for a claim is this intersected with the tenant's.
+	// Egress is this pool's allow-list, intersected with the tenant's for the
+	// effective policy; nil denies all egress.
 	Egress *egress.Policy `json:"egress,omitempty"`
 
 	// IdleHibernateSeconds, when >0, hibernates this pool's idle claims
@@ -80,8 +80,7 @@ type TenantSpec struct {
 	Token     string `json:"token"` //nolint:gosec // config field, not a hardcoded credential
 	MaxClaims int    `json:"max_claims,omitempty"`
 
-	// Egress is the tenant's guarded-egress allow-list, intersected with the
-	// pool's for the effective policy; nil denies all egress for the tenant.
+	// Egress is the tenant's allow-list (see PoolSpec.Egress).
 	Egress *egress.Policy `json:"egress,omitempty"`
 }
 
@@ -292,8 +291,6 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// validateSecrets checks each secret spec and returns the set of registered
-// names, so policy rules can be checked to reference a real secret.
 func (c *Config) validateSecrets() (map[string]struct{}, error) {
 	names := make(map[string]struct{}, len(c.Secrets))
 	for _, s := range c.Secrets {
@@ -339,8 +336,8 @@ func (c *Config) validateTenants() error {
 	return nil
 }
 
-// validatePolicy checks a policy's rules and that each rule's secret names a
-// registered secret. A nil policy denies all egress and is always valid.
+// validatePolicy checks the rules and that each secret ref is registered; a
+// nil policy is valid (deny-all).
 func validatePolicy(p *egress.Policy, secrets map[string]struct{}) error {
 	if p == nil {
 		return nil

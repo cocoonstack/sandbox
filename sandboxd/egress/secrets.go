@@ -15,7 +15,6 @@ type SecretSpec struct {
 	ValueEnv string `json:"value_env,omitempty"` //nolint:gosec // env var name, not a value
 }
 
-// Validate rejects a spec missing a name, header, or value source.
 func (s SecretSpec) Validate() error {
 	switch {
 	case s.Name == "":
@@ -35,9 +34,8 @@ type SecretStore struct {
 	byName map[string]resolvedSecret
 }
 
-// NewSecretStore resolves each spec's value (ValueEnv from the environment)
-// into an in-memory registry. An unset ValueEnv is an error so a misconfigured
-// node fails loudly instead of injecting an empty credential.
+// NewSecretStore resolves each spec's value; an unset ValueEnv is an error,
+// never a silently-empty credential.
 func NewSecretStore(specs []SecretSpec) (*SecretStore, error) {
 	byName := make(map[string]resolvedSecret, len(specs))
 	for _, s := range specs {
@@ -54,13 +52,12 @@ func NewSecretStore(specs []SecretSpec) (*SecretStore, error) {
 	return &SecretStore{byName: byName}, nil
 }
 
-type resolvedSecret struct {
-	header string
-	value  string
-}
-
-// Header returns the header and value the named secret injects.
 func (s *SecretStore) Header(name string) (header, value string, ok bool) {
 	r, ok := s.byName[name]
 	return r.header, r.value, ok
+}
+
+type resolvedSecret struct {
+	header string
+	value  string
 }
