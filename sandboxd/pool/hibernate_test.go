@@ -258,6 +258,62 @@ func TestReleaseMidHibernateDropsOrphanSnapshot(t *testing.T) {
 	}
 }
 
+// TestReconcileAdoptsUncommittedHibernate: a hibernate that stopped the VM
+// but whose journal write never landed (failed persist, exit mid-transition)
+// leaves a running-state record over a stopped VM; the sole wake image
+// identifies it, and reconcile must adopt it back instead of destroying it.
+func TestReconcileAdoptsUncommittedHibernate(t *testing.T) {
+	eng := newFakeEngine()
+	eng.vms["sbx-lagged-1"] = "/vsock/lagged"
+	eng.stopped["sbx-lagged-1"] = true
+	eng.snapshots = append(eng.snapshots, hibernatePrefix+"lagged-1-abc123")
+	dataDir := t.TempDir()
+	claims := map[string]*types.Sandbox{
+		"sb_lag": {ID: "sb_lag", VMName: "sbx-lagged-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/lagged"},
+	}
+	if err := newClaimStore(dataDir).save(claims); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	m := newTestManagerAt(t, eng, dataDir)
+
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if _, g := m.Info(); g.Hibernated != 1 {
+		t.Fatalf("hibernated count %d after reconcile, want the lagged claim adopted", g.Hibernated)
+	}
+	if eng.snapRemoved(hibernatePrefix + "lagged-1-abc123") {
+		t.Error("reconcile swept the wake image it adopted")
+	}
+	if _, err := m.WakeAgentSocket(t.Context(), "sb_lag", "tok"); err != nil {
+		t.Fatalf("wake adopted claim: %v", err)
+	}
+}
+
+// TestReconcileDropsAmbiguousHibernate: two candidate wake images cannot
+// identify the uncommitted hibernate; the claim falls back to the drop path.
+func TestReconcileDropsAmbiguousHibernate(t *testing.T) {
+	eng := newFakeEngine()
+	eng.vms["sbx-ambig-1"] = "/vsock/ambig"
+	eng.stopped["sbx-ambig-1"] = true
+	eng.snapshots = append(eng.snapshots, hibernatePrefix+"ambig-1-aaa111", hibernatePrefix+"ambig-1-bbb222")
+	dataDir := t.TempDir()
+	claims := map[string]*types.Sandbox{
+		"sb_amb": {ID: "sb_amb", VMName: "sbx-ambig-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/ambig"},
+	}
+	if err := newClaimStore(dataDir).save(claims); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	m := newTestManagerAt(t, eng, dataDir)
+
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if _, g := m.Info(); g.Claimed != 0 {
+		t.Errorf("claimed %d, want the ambiguous claim dropped", g.Claimed)
+	}
+}
+
 func TestReconcileAdoptsHibernated(t *testing.T) {
 	eng := newFakeEngine()
 	eng.vms["sbx-hibernated-1"] = "/vsock/hib"

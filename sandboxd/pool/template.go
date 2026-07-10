@@ -84,7 +84,7 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant 
 		return ErrPooledTemplate
 	}
 	id := store.TemplateID(key.Hash())
-	l := m.tplLock(id)
+	l := m.recLock(id)
 	l.Lock()
 	defer l.Unlock()
 	raw, err := m.tpls.ReadMeta(ctx, id)
@@ -172,11 +172,11 @@ func (m *Manager) pooledHash(hash string) bool {
 	return false
 }
 
-// tplLock is the per-template mutation lock: same-id publish/delete
+// recLock is the per-record mutation lock: same-id publish/delete
 // serialize on it, and a clone holds it shared so a re-publish swap never
 // moves the generation under an in-flight read.
-func (m *Manager) tplLock(id string) *sync.RWMutex {
-	l, _ := m.tplLocks.LoadOrStore(id, &sync.RWMutex{})
+func (m *Manager) recLock(id string) *sync.RWMutex {
+	l, _ := m.recLocks.LoadOrStore(id, &sync.RWMutex{})
 	return l.(*sync.RWMutex)
 }
 
@@ -215,7 +215,7 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string,
 		return dir, func() {}, nil
 	}
 	id := store.TemplateID(key.Hash())
-	l := m.tplLock(id)
+	l := m.recLock(id)
 	l.RLock()
 	dir, _, release, err := m.tpls.Fetch(ctx, id)
 	if err != nil {
@@ -253,7 +253,7 @@ func (m *Manager) commitTemplate(ctx context.Context, staging, id, tenant string
 	if err := os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); err != nil {
 		return err
 	}
-	l := m.tplLock(id)
+	l := m.recLock(id)
 	l.Lock()
 	defer l.Unlock()
 	if err := m.checkTemplateOwner(ctx, id, tenant); err != nil {
@@ -295,6 +295,10 @@ func (m *Manager) migrateLegacyTemplates(ctx context.Context) {
 			continue
 		}
 		if err := m.commitTemplate(ctx, staging, id, ""); err != nil {
+			// The staged export is the only copy; put it back or the next
+			// staging sweep deletes the template outright.
+			_ = os.Rename(filepath.Join(staging, store.ExportDir), legacy)
+			_ = os.RemoveAll(staging)
 			logger.Errorf(ctx, err, "publish %s", id)
 			continue
 		}

@@ -98,7 +98,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	m.mu.Unlock()
 	defer m.untrack(m.pendingCks, ckID)
 	// A hibernated source is copied from its wake image, so no VM starts.
-	ck, err := m.publishCheckpoint(ctx, sb, ckID, "archive", sb.Tenant)
+	ck, err := m.publishCheckpoint(ctx, sb, ckID, "archive", sb.Tenant, true)
 	if err != nil {
 		return err
 	}
@@ -150,6 +150,9 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, error) {
 	ctx = context.WithoutCancel(ctx)
 	ck := sb.ArchiveCk
+	l := m.recLock(ck)
+	l.RLock()
+	defer l.RUnlock()
 	dir, _, release, err := m.ckpts.Fetch(ctx, ck)
 	if errors.Is(err, store.ErrNotFound) {
 		return "", ErrUnknownSandbox // record disagrees with the store

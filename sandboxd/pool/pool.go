@@ -190,9 +190,9 @@ type Manager struct {
 	tplMu  sync.Mutex
 	tplSet map[string]struct{}
 
-	// tplLocks serializes same-template store mutations and holds off a
+	// recLocks serializes same-id store record mutations and holds off a
 	// re-publish swap while a clone reads the old generation (per id, RW).
-	tplLocks sync.Map
+	recLocks sync.Map
 
 	// notifyTemplates, when set (before serving starts), fires after a
 	// promote or template delete so the mesh republishes immediately
@@ -338,6 +338,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	for _, vm := range vms {
 		live[vm.Config.Name] = vm
 	}
+	snaps, snapsErr := m.eng.SnapshotList(ctx)
 
 	owned := map[string]bool{}
 	referenced := map[string]bool{}
@@ -360,6 +361,17 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			sb.HibernateSnap = ""
 		case ok && sb.HibernateSnap != "":
 			// Hibernated: the VM is stopped by design and wakes on demand.
+		case ok:
+			// Stopped with a running-state record: a hibernate finished but
+			// its journal write never landed (failed persist, or exit mid
+			// transition). Exactly one wake image for this VM means that
+			// hibernate; adopt it back instead of destroying the claim.
+			// Ambiguity (an orphan drop leftover) falls through to drop.
+			snap := soleHibernateSnap(snaps, sb.VMName)
+			if snap == "" {
+				continue
+			}
+			sb.HibernateSnap = snap
 		default:
 			continue
 		}
@@ -403,12 +415,11 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}).Wait()
 
 	// Snapshot sweep, symmetric to the VM sweep: a hibernate snapshot no
-	// adopted claim references is an orphan (a crash between `vm hibernate`
-	// and the journal commit), and fork/golden-build snapshots are transient
-	// by construction — none can span a restart. A list failure only skips
-	// the sweep: GC must not brick startup.
-	if snaps, listErr := m.eng.SnapshotList(ctx); listErr != nil {
-		logger.Warnf(ctx, "snapshot sweep skipped: %v", listErr)
+	// adopted claim references is an orphan, and fork/golden-build snapshots
+	// are transient by construction — none can span a restart. A list failure
+	// only skips the sweep: GC must not brick startup.
+	if snapsErr != nil {
+		logger.Warnf(ctx, "snapshot sweep skipped: %v", snapsErr)
 	} else {
 		var orphans []string
 		for _, snap := range snaps {
@@ -651,6 +662,22 @@ func benignSweepErr(err error) bool {
 
 func vmName(key types.PoolKey) string {
 	return vmPrefix + key.Hash() + "-" + randHex(3)
+}
+
+// soleHibernateSnap returns a VM's wake image when exactly one exists.
+func soleHibernateSnap(snaps []string, vmName string) string {
+	prefix := hibernatePrefix + strings.TrimPrefix(vmName, vmPrefix) + "-"
+	var found string
+	for _, snap := range snaps {
+		if !strings.HasPrefix(snap, prefix) {
+			continue
+		}
+		if found != "" {
+			return ""
+		}
+		found = snap
+	}
+	return found
 }
 
 func randHex(n int) string {

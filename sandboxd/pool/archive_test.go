@@ -109,6 +109,43 @@ func ckExists(t *testing.T, m *Manager, ck string) bool {
 	return true
 }
 
+// TestArchiveCkHiddenAcrossNodes: on a shared store, another node has no
+// in-memory pin for this node's archive wake images — the meta Archive flag
+// must hide them from its listings, refuse its deletes, and spare its TTL
+// sweep, or a routine cleanup elsewhere strands the claim.
+func TestArchiveCkHiddenAcrossNodes(t *testing.T) {
+	shared := t.TempDir()
+	mkMgr := func() *Manager {
+		m, err := NewManager(t.Context(), &config.Config{
+			DataDir: t.TempDir(), CheckpointDir: shared,
+			Pools: []config.PoolSpec{archivePool(3600)},
+		}, newFakeEngine())
+		if err != nil {
+			t.Fatalf("manager: %v", err)
+		}
+		return m
+	}
+	mA, mB := mkMgr(), mkMgr()
+	sb := mustClaim(t, mA, testKey)
+	mustArchive(t, mA, sb)
+	ck := sb.ArchiveCk
+
+	if ckpts, err := mB.Checkpoints(t.Context(), ""); err != nil || len(ckpts) != 0 {
+		t.Errorf("peer lists the archive wake image: %v, %v", ckpts, err)
+	}
+	if err := mB.DeleteCheckpoint(t.Context(), ck, ""); !errors.Is(err, ErrUnknownCheckpoint) {
+		t.Errorf("peer delete: %v, want ErrUnknownCheckpoint", err)
+	}
+	mB.ckptTTL = time.Nanosecond
+	mB.sweepExpiredCheckpoints(t.Context())
+	if !ckExists(t, mA, ck) {
+		t.Fatal("peer TTL sweep deleted the archive wake image")
+	}
+	if _, err := mA.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("owner wake after peer sweep: %v", err)
+	}
+}
+
 // TestArchiveLifecycleRoundTrip exercises the real sweep wiring:
 // claim→idle-hibernate→archive→wake, and asserts the id/token survive the
 // store round-trip while the local VM and its wake image are reclaimed.

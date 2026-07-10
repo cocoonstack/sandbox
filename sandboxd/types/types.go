@@ -163,6 +163,10 @@ type Checkpoint struct {
 	Key       PoolKey   `json:"key"`
 	Tenant    string    `json:"tenant,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+
+	// Archive marks a lifecycle-internal wake image: hidden from listings
+	// and undeletable on every node sharing the store, not just the owner.
+	Archive bool `json:"archive,omitempty"`
 }
 
 // VMRecord is the subset of cocoon's `vm list --format json` output the
