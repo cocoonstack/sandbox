@@ -26,6 +26,11 @@ def test_trailing_bytes_rejected():
         frames.decode_response(b'{"type":"stdout","data":"aGk="}garbage')
 
 
+def test_control_bytes_in_base64_rejected():
+    with pytest.raises(json.JSONDecodeError):
+        frames.decode_response(b'{"type":"data","data":"QUJD\r\nREVG"}')
+
+
 def test_unterminated_frame_rejected():
     with pytest.raises(json.JSONDecodeError):
         frames.decode_response(b'{"type":"stdout","data":"aGk="')

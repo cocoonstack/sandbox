@@ -5,6 +5,7 @@ and Rust implementations; all three round-trip protocol/fixtures/v1."""
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 
 PROTO_VERSION = 1
@@ -35,13 +36,17 @@ def decode_response(line: bytes) -> dict:
     # of the big base64 string dominates. base64 is JSON-escape-free and these
     # frames carry exactly {"type":...,"data":...}, so slice both out and skip
     # json — but only for that exact shape; anything else (extra fields,
-    # trailing bytes) gets the full parse instead of a silently wrong slice.
+    # trailing bytes, non-alphabet bytes in the segment) gets the full parse
+    # instead of a silently wrong slice.
     if line.startswith(b'{"type":"'):
         te = line.find(b'"', 9)
         if te > 0 and line[9:te] in (b"stdout", b"stderr", b"data") and line.startswith(b'","data":"', te):
             de = line.find(b'"', te + 10)
             if de > 0 and line[de:] in (b'"}', b'"}\n'):
-                return {"type": line[9:te].decode(), "data": base64.b64decode(line[te + 10 : de])}
+                try:
+                    return {"type": line[9:te].decode(), "data": base64.b64decode(line[te + 10 : de], validate=True)}
+                except binascii.Error:
+                    pass
     frame = json.loads(line)
     if not isinstance(frame, dict) or "type" not in frame:
         raise ValueError(f"frame without a type tag: {line[:80]!r}")
