@@ -182,6 +182,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	} else {
 		m.dropRecLock(ck)
 	}
+	m.armEgress(sb) // fresh VM after unarchive: bind its egress accept point
 	m.counters.unarchives.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "unarchive", ID: sb.ID, Reference: ck, Tenant: sb.Tenant})
 	return built.VsockSocket, nil
