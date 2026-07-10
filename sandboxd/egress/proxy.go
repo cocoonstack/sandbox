@@ -7,6 +7,8 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/textproto"
+	"strings"
 )
 
 // hopHeaders are hop-by-hop and proxy-scoped headers this hop owns: stripped
@@ -162,6 +164,14 @@ func (p *Proxy) record(ev Event) {
 }
 
 func stripHop(h http.Header) {
+	// Connection may name additional hop headers this hop must consume.
+	for _, v := range h.Values("Connection") {
+		for f := range strings.SplitSeq(v, ",") {
+			if f = textproto.TrimString(f); f != "" {
+				h.Del(f)
+			}
+		}
+	}
 	for _, k := range hopHeaders {
 		h.Del(k)
 	}

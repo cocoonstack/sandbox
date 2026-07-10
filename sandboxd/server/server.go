@@ -395,7 +395,7 @@ func (s *Server) handleOwner(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePutPools(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeBody[PoolUpdateRequest](w, r)
+	req, ok := decodeBodyStrict[PoolUpdateRequest](w, r)
 	if !ok {
 		return
 	}
@@ -520,6 +520,20 @@ func decodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var v T
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&v); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return v, false
+	}
+	return v, true
+}
+
+// decodeBodyStrict rejects unknown fields — for operator bodies where a
+// mistyped key must fail, not silently no-op. Client-facing bodies stay
+// lenient (newer SDK fields must not break older nodes).
+func decodeBodyStrict[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
+	var v T
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&v); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return v, false
 	}
 	return v, true

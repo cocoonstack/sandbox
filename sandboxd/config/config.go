@@ -4,7 +4,9 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
@@ -191,17 +193,67 @@ func Load(path string) (*Config, error) {
 	}
 	cfg := &Config{}
 	// Strict: a mistyped key must fail load, not silently widen policy
-	// (e.g. "method" for "methods" leaves Methods empty = any method).
+	// (e.g. "method" for "methods" leaves Methods empty = any method); a
+	// duplicated key would make one value silently win, and trailing data
+	// would be silently ignored.
+	if err := rejectDuplicateKeys(json.NewDecoder(bytes.NewReader(raw))); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("config has trailing data after the object")
 	}
 	cfg.applyDefaults()
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
 	return cfg, nil
+}
+
+// rejectDuplicateKeys walks one JSON value and refuses objects that repeat a
+// key at the same level.
+func rejectDuplicateKeys(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := map[string]struct{}{}
+		for dec.More() {
+			keyTok, keyErr := dec.Token()
+			if keyErr != nil {
+				return keyErr
+			}
+			key, _ := keyTok.(string)
+			if _, dup := seen[key]; dup {
+				return fmt.Errorf("duplicate key %q", key)
+			}
+			seen[key] = struct{}{}
+			if walkErr := rejectDuplicateKeys(dec); walkErr != nil {
+				return walkErr
+			}
+		}
+		_, err = dec.Token()
+		return err
+	case '[':
+		for dec.More() {
+			if walkErr := rejectDuplicateKeys(dec); walkErr != nil {
+				return walkErr
+			}
+		}
+		_, err = dec.Token()
+		return err
+	}
+	return nil
 }
 
 // HasEgress reports whether the node can attach egress-lane VMs.
