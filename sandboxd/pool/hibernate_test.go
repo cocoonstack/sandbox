@@ -2,6 +2,8 @@ package pool
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -9,6 +11,57 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
+
+// TestHibernatePersistFailureSurfacesAndConverges guards the durability fix
+// where a hibernate whose journal write failed still reported success — a
+// restart then dropped the claim and destroyed the VM and snapshot. The VM is
+// hibernated either way, so the call must fail and disk must converge once
+// the store heals.
+func TestHibernatePersistFailureSurfacesAndConverges(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	broken := filepath.Join(t.TempDir(), "gone", "claims.json")
+	m.store.path = broken
+
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
+		t.Fatal("Hibernate reported success despite a persist failure")
+	}
+	if len(eng.hibernates) != 1 {
+		t.Fatalf("engine hibernated %d times, want 1", len(eng.hibernates))
+	}
+	if err := os.MkdirAll(filepath.Dir(broken), 0o750); err != nil {
+		t.Fatalf("heal store dir: %v", err)
+	}
+	waitFor(t, func() bool {
+		got, err := (&claimStore{path: broken}).load()
+		return err == nil && got[sb.ID] != nil && got[sb.ID].HibernateSnap != ""
+	})
+}
+
+// TestWakePersistFailureSurfaces is the wake side of the same fix: the caller
+// must see the failed persist, the snapshot the lagging journal still
+// references must survive, and the woken VM stays usable on the fast path.
+func TestWakePersistFailureSurfaces(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("Hibernate: %v", err)
+	}
+	snap := eng.hibernates[0]
+	breakStore(t, m)
+
+	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
+		t.Fatal("wake reported success despite a persist failure")
+	}
+	if eng.snapRemoved(snap) {
+		t.Error("wake dropped the snapshot the lagging journal references")
+	}
+	if sock, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil || sock == "" {
+		t.Fatalf("fast-path wake after failed persist: %q, %v", sock, err)
+	}
+}
 
 func TestHibernateWakeCycle(t *testing.T) {
 	eng := newFakeEngine()

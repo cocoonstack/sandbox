@@ -1,6 +1,6 @@
 // Package s3 is the object-store record backend for nodes without a
-// shared POSIX namespace: <prefix><id>/{export/...,meta.json} objects,
-// meta.json uploaded last as the commit marker (S3 has no atomic
+// shared POSIX namespace: <prefix><id>/{export-<gen>/...,meta.json}
+// objects, meta.json uploaded last as the commit marker (S3 has no atomic
 // multi-object rename). The aws dependency is scoped to this package.
 package s3
 
@@ -90,13 +90,20 @@ func (s *Store) Stage(id string) (string, error) {
 }
 
 // Publish uploads every staged file, meta.json last: a lister only sees
-// the record once its commit marker exists.
+// the record once its commit marker exists. Export objects live under a
+// per-generation prefix derived from the meta bytes, so a re-publish never
+// overwrites keys a concurrent Fetch of the old generation is reading —
+// mixed-generation downloads become impossible, not just unlikely.
 func (s *Store) Publish(ctx context.Context, staging, id string) error {
-	var meta string
-	fresh := map[string]struct{}{}
+	metaRaw, err := os.ReadFile(filepath.Join(staging, store.MetaFile)) //nolint:gosec // our own staging dir
+	if err != nil {
+		return fmt.Errorf("staging has no %s: %w", store.MetaFile, err)
+	}
+	gen := exportGen(metaRaw)
+	fresh := map[string]struct{}{s.key(id, store.MetaFile): {}}
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(4) // files in parallel; each already multiparts internally
-	err := filepath.WalkDir(staging, func(path string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(staging, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
@@ -104,12 +111,12 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 		if err != nil {
 			return err
 		}
-		fresh[s.key(id, rel)] = struct{}{}
 		if rel == store.MetaFile {
-			meta = path
 			return nil
 		}
-		g.Go(func() error { return s.upload(gctx, s.key(id, rel), path) })
+		key := s.key(id, gen+strings.TrimPrefix(rel, store.ExportDir))
+		fresh[key] = struct{}{}
+		g.Go(func() error { return s.upload(gctx, key, path) })
 		return nil
 	})
 	if err != nil {
@@ -118,10 +125,7 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 	if err = g.Wait(); err != nil {
 		return err
 	}
-	if meta == "" {
-		return fmt.Errorf("staging has no %s", store.MetaFile)
-	}
-	if err = s.upload(ctx, s.key(id, store.MetaFile), meta); err != nil {
+	if err = s.upload(ctx, s.key(id, store.MetaFile), filepath.Join(staging, store.MetaFile)); err != nil {
 		return err
 	}
 	// A re-publish (re-promote) may ship a different export file set:
@@ -155,8 +159,7 @@ func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, func(), e
 	if err != nil {
 		return "", nil, nil, err
 	}
-	sum := sha256.Sum256(meta)
-	gen := filepath.Join(s.staging, "cache", id, hex.EncodeToString(sum[:8]))
+	gen := filepath.Join(s.staging, "cache", id, exportGenHash(meta))
 	export := filepath.Join(gen, store.ExportDir)
 	if _, statErr := os.Stat(export); statErr == nil {
 		return export, meta, func() {}, nil
@@ -180,10 +183,17 @@ func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string
 		return err
 	}
 	defer func() { _ = os.RemoveAll(local) }()
-	exportPrefix := s.key(id, store.ExportDir) + "/"
+	exportPrefix := s.key(id, exportGen(meta)) + "/"
 	keys, err := s.list(ctx, exportPrefix)
 	if err != nil {
 		return err
+	}
+	if len(keys) == 0 {
+		// Records published before per-generation prefixes.
+		exportPrefix = s.key(id, store.ExportDir) + "/"
+		if keys, err = s.list(ctx, exportPrefix); err != nil {
+			return err
+		}
 	}
 	if len(keys) == 0 {
 		return fmt.Errorf("record %s has no export", id)
@@ -290,6 +300,18 @@ func (s *Store) SweepStaging() error {
 		}
 	}
 	return nil
+}
+
+// exportGen names a record generation's export prefix from its meta bytes —
+// meta is unique per publish (checkpoint ids are fresh, template records
+// carry created_at), and Fetch keys its cache generation off the same hash.
+func exportGen(meta []byte) string {
+	return store.ExportDir + "-" + exportGenHash(meta)
+}
+
+func exportGenHash(meta []byte) string {
+	sum := sha256.Sum256(meta)
+	return hex.EncodeToString(sum[:8])
 }
 
 func (s *Store) key(id, rest string) string {

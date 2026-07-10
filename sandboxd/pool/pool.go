@@ -39,8 +39,8 @@ const (
 	maxConcurrentRefills = 4
 	defaultTTL           = 5 * time.Minute
 	maxTTL               = 24 * time.Hour
-	recommitAttempts     = 3
 	recommitBackoff      = 20 * time.Millisecond
+	recommitMaxBackoff   = 5 * time.Second
 	// defaultMaxFork is the fork ceiling when a Manager is built from a Config
 	// that skipped config.Load's defaulting (direct construction in tests).
 	defaultMaxFork = 16

@@ -5,7 +5,9 @@ package dir
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,6 +15,9 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 )
+
+// oldSuffix parks the previous generation during a re-publish swap.
+const oldSuffix = ".old"
 
 var _ store.Store = (*Store)(nil)
 
@@ -38,12 +43,25 @@ func (d *Store) Stage(id string) (string, error) {
 
 func (d *Store) Publish(_ context.Context, staging, id string) error {
 	final := filepath.Join(d.root, id)
-	// Re-publish (re-promote) replaces: drop the old generation first, or
-	// the rename fails against the existing dir.
-	if err := os.RemoveAll(final); err != nil {
+	old := final + oldSuffix
+	// Re-publish (re-promote) replaces by swap, not delete-then-rename: the
+	// old generation survives as <id>.old until the new one is in place, so
+	// a crash in between loses nothing (SweepStaging restores it).
+	if err := os.RemoveAll(old); err != nil {
 		return err
 	}
-	return os.Rename(staging, final)
+	switch err := os.Rename(final, old); {
+	case errors.Is(err, fs.ErrNotExist):
+		return os.Rename(staging, final)
+	case err != nil:
+		return err
+	}
+	if err := os.Rename(staging, final); err != nil {
+		_ = os.Rename(old, final)
+		return err
+	}
+	_ = os.RemoveAll(old) // leftovers are reclaimed by SweepStaging
+	return nil
 }
 
 func (d *Store) Fetch(ctx context.Context, id string) (string, []byte, func(), error) {
@@ -100,8 +118,22 @@ func (d *Store) SweepStaging() error {
 	// ReadDir + suffix, not Glob: the root path may hold glob
 	// metacharacters.
 	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".tmp") {
-			if err := os.RemoveAll(filepath.Join(d.root, e.Name())); err != nil {
+		switch name := e.Name(); {
+		case strings.HasSuffix(name, ".tmp"):
+			if err := os.RemoveAll(filepath.Join(d.root, name)); err != nil {
+				return err
+			}
+		case strings.HasSuffix(name, oldSuffix):
+			// A crash mid-Publish: restore the moved-aside generation when
+			// the swap never completed, drop it once the new one is live.
+			final := filepath.Join(d.root, strings.TrimSuffix(name, oldSuffix))
+			if _, err := os.Stat(final); errors.Is(err, fs.ErrNotExist) {
+				if err := os.Rename(filepath.Join(d.root, name), final); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := os.RemoveAll(filepath.Join(d.root, name)); err != nil {
 				return err
 			}
 		}

@@ -358,19 +358,24 @@ func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
 	m.recordUsage(ctx, usageEvent{Event: "archive_delete", ID: id, Reference: ck, Tenant: tenant})
 }
 
-// recommit best-effort persists a rolled-back snapshot so disk converges to it
-// after a failed commit: a transient fault clears on retry, and a coalesced
-// result means a newer write already superseded this state. A persistent
-// failure only warns; memory is authoritative and Reconcile fixes it on start.
+// recommit re-persists a snapshot in the background until disk converges
+// after a failed commit — Reconcile trusts disk, so a restart while it lags
+// drops claims memory still holds. Its own success or any newer durable
+// write (commit coalesces by sequence) ends the loop; detached, because
+// callers may hold the transition lock.
 func (m *Manager) recommit(ctx context.Context, snap claimSnapshot) {
-	var err error
-	for range recommitAttempts {
-		if err = m.store.commit(snap); err == nil {
-			return
+	go func() {
+		backoff := recommitBackoff
+		for {
+			err := m.store.commit(snap)
+			if err == nil {
+				return
+			}
+			log.WithFunc("pool.recommit").Errorf(ctx, err, "persist claims")
+			time.Sleep(backoff)
+			backoff = min(backoff*2, recommitMaxBackoff)
 		}
-		time.Sleep(recommitBackoff)
-	}
-	log.WithFunc("pool.recommit").Errorf(ctx, err, "persist rolled-back claims after retries")
+	}()
 }
 
 func (m *Manager) claim(id, token string) (*types.Sandbox, bool) {

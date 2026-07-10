@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -130,6 +131,43 @@ func TestS3BackendContract(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	storetest.RunContract(t, st)
+}
+
+// TestFetchLegacyExportLayout: records published before per-generation
+// export prefixes keep flat export/ keys; Fetch must fall back to them.
+func TestFetchLegacyExportLayout(t *testing.T) {
+	const id = "ck_00000000000000aa"
+	fake := &fakeS3{objects: map[string][]byte{
+		"ck/" + id + "/" + store.MetaFile:                []byte(`{"id":"` + id + `"}`),
+		"ck/" + id + "/" + store.ExportDir + "/disk.img": []byte("legacy-bytes"),
+	}}
+	ts := httptest.NewServer(fake)
+	t.Cleanup(ts.Close)
+
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	t.Setenv("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
+	t.Setenv("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
+
+	st, err := New(t.Context(), Config{
+		Bucket:         "testbucket",
+		Prefix:         "ck/",
+		Endpoint:       ts.URL,
+		Region:         "us-east-1",
+		ForcePathStyle: true,
+	}, t.TempDir(), store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	dir, _, release, err := st.Fetch(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	defer release()
+	got, err := os.ReadFile(filepath.Join(dir, "disk.img")) //nolint:gosec // test path
+	if err != nil || string(got) != "legacy-bytes" {
+		t.Fatalf("fetched legacy export: %q, %v", got, err)
+	}
 }
 
 // TestS3BackendContractRealEndpoint runs the same contract against a real

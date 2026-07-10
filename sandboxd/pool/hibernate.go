@@ -52,13 +52,18 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	if err := m.eng.Hibernate(ctx, sb.VMName, snap); err != nil {
 		return err
 	}
-	if !m.commitTransition(ctx, sb, snap, sb.VsockSocket) {
+	live, err := m.commitTransition(ctx, sb, snap, sb.VsockSocket)
+	if !live {
 		// Released mid-transition: the VM is gone, drop our snapshot.
 		m.dropSnap(ctx, snap)
 		return ErrUnknownSandbox
 	}
+	// The VM is hibernated either way, so the billing window closes here.
 	m.counters.hibernates.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "hibernate", ID: sb.ID, VMName: sb.VMName})
+	if err != nil {
+		return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, err)
+	}
 	return nil
 }
 
@@ -84,19 +89,24 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	if err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
-	if !m.commitTransition(ctx, sb, "", sock) {
+	live, err := m.commitTransition(ctx, sb, "", sock)
+	if !live {
 		// Released mid-transition: destroy the VM we just resurrected.
 		m.destroy(ctx, sb.VMName)
 		m.dropSnap(ctx, snap)
 		return "", ErrUnknownSandbox
 	}
+	m.counters.wakes.Add(1)
+	m.counters.wakeNanos.Add(uint64(time.Since(wakeStart))) //nolint:gosec // durations are positive
+	m.recordUsage(ctx, usageEvent{Event: "wake", ID: sb.ID, VMName: sb.VMName})
+	if err != nil {
+		// Keep the snapshot the lagging journal still references.
+		return "", fmt.Errorf("wake %s: persist claims: %w", sb.ID, err)
+	}
 	// The resume consumed the memory image; reclaim its disk off the
 	// wake-return path (a stale-name re-hibernate is guarded by randHex above,
 	// a failed drop by the orphan-snapshot sweep).
 	go m.dropSnap(ctx, snap)
-	m.counters.wakes.Add(1)
-	m.counters.wakeNanos.Add(uint64(time.Since(wakeStart))) //nolint:gosec // durations are positive
-	m.recordUsage(ctx, usageEvent{Event: "wake", ID: sb.ID, VMName: sb.VMName})
 	return sock, nil
 }
 
@@ -169,11 +179,13 @@ func (m *Manager) idleHibernate(ctx context.Context, id, token string, sweepStar
 // commitTransition publishes a hibernate/wake result and persists the
 // journal, but only if the claim is still live — Release and reap do not
 // take the transition lock, so a sandbox can be destroyed mid-transition
-// and publishing then would resurrect state nobody owns. Returns liveness;
-// a failed journal write only warns (the live state is authoritative).
-func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap, sock string) bool {
+// and publishing then would resurrect state nobody owns. A failed journal
+// write is returned (a restart before disk converges would drop the claim,
+// so the caller must not report success) while recommit converges disk to
+// the published state, which the VM already embodies.
+func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap, sock string) (live bool, err error) {
 	m.mu.Lock()
-	live := m.claimed[sb.ID] == sb
+	live = m.claimed[sb.ID] == sb
 	var js claimSnapshot
 	if live {
 		sb.HibernateSnap = snap
@@ -181,10 +193,12 @@ func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap,
 		js = m.store.snapshot(m.claimed)
 	}
 	m.mu.Unlock()
-	if live {
-		if err := m.store.commit(js); err != nil {
-			log.WithFunc("pool.commitTransition").Warnf(ctx, "persist claims: %v", err)
-		}
+	if !live {
+		return false, nil
 	}
-	return live
+	if err := m.store.commit(js); err != nil {
+		m.recommit(ctx, js)
+		return true, err
+	}
+	return true, nil
 }
