@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -40,6 +41,17 @@ func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string
 
 // hibernateLocked is Hibernate's body; the caller holds sb.Transition.
 func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error {
+	// Settle a dangling intent from a prior unconfirmed attempt first — never
+	// overwrite it with a fresh snapshot name, or its real snapshot leaks. An
+	// adopted transition was never recorded (its confirming list had failed),
+	// so bill it even if this resolve's own persist is still converging.
+	adopted, resolveErr := m.resolvePendingSnap(ctx, sb)
+	if adopted {
+		m.recordHibernate(ctx, sb)
+	}
+	if resolveErr != nil {
+		return resolveErr
+	}
 	if sb.HibernateSnap != "" {
 		if err := m.syncClaims(ctx, sb); err != nil {
 			return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, err)
@@ -63,22 +75,23 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		return fmt.Errorf("hibernate %s: persist intent: %w", sb.ID, err)
 	}
 	if hibErr := m.eng.Hibernate(ctx, sb.VMName, snap); hibErr != nil {
-		// The engine can report failure after the snapshot already landed (a
-		// CLI timeout), so only a snapshot the list confirms present proves
-		// the hibernate happened — commit it below. Anything else must not
-		// report success: a verified-absent snapshot means it did not happen
-		// (clear the intent, stay running), and an unusable list leaves the
-		// outcome unknown (keep the intent for Reconcile).
-		snaps, listErr := m.eng.SnapshotList(ctx)
-		if listErr != nil || !slices.Contains(snaps, snap) {
-			if listErr == nil {
-				m.mu.Lock()
-				sb.PendingSnap = ""
-				m.mu.Unlock()
-				_ = m.store.commit(m.claimsSnapshot())
+		// The engine can report failure after the snapshot landed (a CLI
+		// timeout); resolve the intent against the real snapshot instead of
+		// trusting the error. A confirmed snapshot is a completed hibernate
+		// (bill it); an unusable list or verified-absent snapshot is not.
+		adopted, resolveErr := m.resolvePendingSnap(ctx, sb)
+		if adopted {
+			m.recordHibernate(ctx, sb)
+			if resolveErr != nil {
+				return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, resolveErr)
 			}
-			return fmt.Errorf("hibernate %s: %w", sb.ID, hibErr)
+			m.dropStale(ctx, sb)
+			return nil
 		}
+		if resolveErr != nil {
+			return errors.Join(fmt.Errorf("hibernate %s: %w", sb.ID, hibErr), resolveErr)
+		}
+		return fmt.Errorf("hibernate %s: %w", sb.ID, hibErr)
 	}
 	live, err := m.commitTransition(ctx, sb, snap, sb.VsockSocket)
 	if !live {
@@ -87,8 +100,7 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		return ErrUnknownSandbox
 	}
 	// The VM is hibernated either way, so the billing window closes here.
-	m.counters.hibernates.Add(1)
-	m.recordUsage(ctx, usageEvent{Event: "hibernate", ID: sb.ID, VMName: sb.VMName})
+	m.recordHibernate(ctx, sb)
 	if err != nil {
 		return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, err)
 	}
@@ -102,6 +114,17 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	defer sb.Transition.Unlock()
 	if sb.ArchiveCk != "" {
 		return m.wakeArchived(ctx, sb)
+	}
+	// Settle a dangling intent before choosing running vs hibernated, or a
+	// stopped VM's stale socket would answer as if the sandbox were live. An
+	// adopted hibernate happened on a prior unconfirmed attempt; record it
+	// before the wake so the hibernate→wake window bills correctly.
+	adopted, err := m.resolvePendingSnap(ctx, sb)
+	if adopted {
+		m.recordHibernate(ctx, sb)
+	}
+	if err != nil {
+		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
 	if sb.HibernateSnap == "" {
 		// No journal sync here — this is the data-plane fast path, and a
@@ -276,4 +299,57 @@ func (m *Manager) setPendingSnap(sb *types.Sandbox, snap string) claimSnapshot {
 	defer m.mu.Unlock()
 	sb.PendingSnap = snap
 	return m.store.snapshot(m.claimed)
+}
+
+// resolvePendingSnap settles a hibernate intent left by an attempt whose
+// engine result could not be confirmed: the snapshot's presence decides
+// whether it hibernated (adopt it as HibernateSnap) or not (clear the intent).
+// It reports whether it adopted a completed-but-unrecorded hibernate, so the
+// caller can bill it. An unusable snapshot list leaves the intent unresolved
+// and errors, so the caller never acts over a dangling intent — never
+// overwriting it or answering a stopped VM's stale socket. A no-op when no
+// intent is pending, so the wake fast path pays only a field read. The caller
+// holds sb.Transition.
+func (m *Manager) resolvePendingSnap(ctx context.Context, sb *types.Sandbox) (adopted bool, err error) {
+	if sb.PendingSnap == "" {
+		return false, nil
+	}
+	snaps, err := m.eng.SnapshotList(ctx)
+	if err != nil {
+		return false, fmt.Errorf("resolve hibernate intent %s: %w", sb.ID, err)
+	}
+	m.mu.Lock()
+	live := m.claimed[sb.ID] == sb
+	pending := sb.PendingSnap
+	exists := slices.Contains(snaps, pending)
+	if live {
+		if exists {
+			sb.HibernateSnap = pending
+		}
+		sb.PendingSnap = ""
+	}
+	js := m.store.snapshot(m.claimed)
+	m.mu.Unlock()
+	if !live {
+		// Released mid-resolve: Release captured an empty HibernateSnap, so a
+		// completed hibernate's snapshot is an orphan it could not drop.
+		if exists {
+			m.dropSnap(ctx, pending)
+		}
+		return false, ErrUnknownSandbox
+	}
+	if err := m.store.commit(js); err != nil {
+		m.recommit(ctx, js)
+		// The transition is decided in memory; report the adoption so the
+		// caller still bills it, and surface the persist error while recommit
+		// converges — the commitTransition contract.
+		return exists, fmt.Errorf("resolve hibernate intent %s: persist: %w", sb.ID, err)
+	}
+	return exists, nil
+}
+
+// recordHibernate bills one hibernate transition.
+func (m *Manager) recordHibernate(ctx context.Context, sb *types.Sandbox) {
+	m.counters.hibernates.Add(1)
+	m.recordUsage(ctx, usageEvent{Event: "hibernate", ID: sb.ID, VMName: sb.VMName})
 }

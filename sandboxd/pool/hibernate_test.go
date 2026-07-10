@@ -193,6 +193,152 @@ func TestWakeRestoreErrorDestroysAndRetries(t *testing.T) {
 	}
 }
 
+// TestRetryResolvesDanglingIntent: a hibernate that actually completed but
+// left a dangling intent (CLI and list both timed out) must be resolved by a
+// later retry against the real snapshot — adopted, not overwritten with a
+// fresh name that would strand the real snapshot and drop the claim on restart.
+func TestRetryResolvesDanglingIntent(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	// First hibernate completes, but the CLI and the list both time out.
+	eng.hibernateErr = errors.New("cli timeout")
+	eng.hibernateErrCompletes = true
+	eng.snapListErr = errors.New("cocoon unreachable")
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
+		t.Fatal("Hibernate reported success on an unconfirmed transition")
+	}
+	realSnap := eng.hibernates[0]
+	if got, _ := newClaimStore(m.dataDir).load(); got[sb.ID].PendingSnap != realSnap {
+		t.Fatalf("intent %q, want the real snapshot %q kept", got[sb.ID].PendingSnap, realSnap)
+	}
+
+	// cocoon recovers; the retry must adopt the real snapshot, not re-hibernate.
+	eng.hibernateErr = nil
+	eng.snapListErr = nil
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("Hibernate retry: %v", err)
+	}
+	if len(eng.hibernates) != 1 {
+		t.Errorf("engine hibernated %d times, want 1 (retry adopted the existing snapshot)", len(eng.hibernates))
+	}
+	got, _ := newClaimStore(m.dataDir).load()
+	if got[sb.ID].HibernateSnap != realSnap || got[sb.ID].PendingSnap != "" {
+		t.Fatalf("journal %+v, want HibernateSnap=%q + no pending", got[sb.ID], realSnap)
+	}
+	if n := m.Counters().Hibernates; n != 1 {
+		t.Errorf("hibernates billed=%d, want 1 (the adopted transition is recorded)", n)
+	}
+	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake after resolve: %v", err)
+	}
+	if len(eng.restores) != 1 {
+		t.Errorf("restores=%d, want 1 (restored from the adopted snapshot)", len(eng.restores))
+	}
+}
+
+// TestWakeResolvesDanglingIntent: a Wake facing a dangling intent whose
+// snapshot exists must resolve it and restore, not return the stopped VM's
+// stale socket as if it were live.
+func TestWakeResolvesDanglingIntent(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	eng.hibernateErr = errors.New("cli timeout")
+	eng.hibernateErrCompletes = true
+	eng.snapListErr = errors.New("cocoon unreachable")
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
+		t.Fatal("Hibernate reported success on an unconfirmed transition")
+	}
+
+	eng.hibernateErr = nil
+	eng.snapListErr = nil
+	sock, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+	if err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	if len(eng.restores) != 1 {
+		t.Errorf("restores=%d, want 1 (the intent resolved to hibernated and restored)", len(eng.restores))
+	}
+	if sock == "" {
+		t.Error("wake returned an empty socket")
+	}
+	if n := m.Counters().Hibernates; n != 1 {
+		t.Errorf("hibernates billed=%d, want 1 (adopt records the hibernate before the wake)", n)
+	}
+}
+
+// TestResolvePendingSnapReleaseRaceDropsOrphan: a Release landing while a wake
+// is mid-resolve (Release captured an empty HibernateSnap, so it drops
+// nothing) must not strand the intent's real snapshot — resolvePendingSnap
+// sees the claim gone and drops the orphan itself.
+func TestResolvePendingSnapReleaseRaceDropsOrphan(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	// Drive to a dangling intent whose snapshot really exists.
+	eng.hibernateErr = errors.New("cli timeout")
+	eng.hibernateErrCompletes = true
+	eng.snapListErr = errors.New("cocoon unreachable")
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
+		t.Fatal("Hibernate reported success on an unconfirmed transition")
+	}
+	realSnap := eng.hibernates[0]
+
+	// A wake resolves, but stalls inside SnapshotList; Release lands first.
+	eng.snapListErr = nil
+	eng.snapListStall = make(chan struct{})
+	callsBefore := eng.snapListCalls()
+	wakeErr := make(chan error, 1)
+	go func() {
+		_, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+		wakeErr <- err
+	}()
+	waitFor(t, func() bool { return eng.snapListCalls() > callsBefore })
+	if err := m.Release(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	close(eng.snapListStall)
+
+	if err := <-wakeErr; !errors.Is(err, ErrUnknownSandbox) {
+		t.Fatalf("wake: %v, want ErrUnknownSandbox", err)
+	}
+	waitFor(t, func() bool { return eng.snapRemoved(realSnap) })
+}
+
+// TestResolveAdoptBillsWhenPersistFails: a real transition must be billed even
+// when the adopting resolve's own journal write fails — memory is authoritative
+// and recommit converges disk, so it must not silently escape metering.
+func TestResolveAdoptBillsWhenPersistFails(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	eng.hibernateErr = errors.New("cli timeout")
+	eng.hibernateErrCompletes = true
+	eng.snapListErr = errors.New("cocoon unreachable")
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
+		t.Fatal("Hibernate reported success on an unconfirmed transition")
+	}
+	// The list recovers, but the claims journal is now unwritable.
+	eng.snapListErr = nil
+	broken := filepath.Join(t.TempDir(), "gone", "claims.json")
+	m.store.path = broken
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
+		t.Fatal("Hibernate reported success despite a persist failure")
+	}
+	if n := m.Counters().Hibernates; n != 1 {
+		t.Errorf("hibernates billed=%d, want 1 (billed even while the persist lags)", n)
+	}
+	// Heal so the background recommit converges (and its goroutine exits).
+	if err := os.MkdirAll(filepath.Dir(broken), 0o750); err != nil {
+		t.Fatalf("heal store dir: %v", err)
+	}
+	waitFor(t, func() bool {
+		got, err := (&claimStore{path: broken}).load()
+		return err == nil && got[sb.ID] != nil && got[sb.ID].HibernateSnap != ""
+	})
+}
+
 // TestWakeProbeFailureDestroysAndRetries: a readiness-probe timeout after a
 // successful Restore must tear the booted VM down (keeping the snapshot) so
 // the next wake restores cleanly, instead of re-restoring a running VM.

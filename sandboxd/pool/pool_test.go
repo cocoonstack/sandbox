@@ -528,6 +528,8 @@ type fakeEngine struct {
 	hibernateStall  chan struct{} // non-nil: Hibernate blocks until closed
 	removeStall     chan struct{} // non-nil: Remove blocks until closed
 	snapRemoveStall chan struct{} // non-nil: SnapshotRemove blocks until closed
+	snapListStall   chan struct{} // non-nil: SnapshotList blocks until closed
+	snapListCount   int
 }
 
 func newFakeEngine() *fakeEngine {
@@ -612,11 +614,24 @@ func (f *fakeEngine) SnapshotExport(_ context.Context, snapName, toDir string) e
 
 func (f *fakeEngine) SnapshotList(_ context.Context) ([]string, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.snapListErr != nil {
-		return nil, f.snapListErr
+	f.snapListCount++
+	stall := f.snapListStall
+	err := f.snapListErr
+	snaps := slices.Clone(f.snapshots)
+	f.mu.Unlock()
+	if stall != nil {
+		<-stall
 	}
-	return slices.Clone(f.snapshots), nil
+	if err != nil {
+		return nil, err
+	}
+	return snaps, nil
+}
+
+func (f *fakeEngine) snapListCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.snapListCount
 }
 
 func (f *fakeEngine) SnapshotRemove(_ context.Context, snapName string) error {
