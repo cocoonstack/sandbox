@@ -46,21 +46,6 @@ func (c *Conn) Send(r Request) error {
 	return err
 }
 
-// sendBulk writes a payload frame from a reused buffer, skipping the two
-// frame-sized allocations and the JSON escape rescan json.Marshal costs (the
-// base64 alphabet needs no escaping).
-func (c *Conn) sendBulk(op string, payload []byte) error {
-	c.wmu.Lock()
-	defer c.wmu.Unlock()
-	c.wbuf = append(c.wbuf[:0], requestHead...)
-	c.wbuf = append(c.wbuf, op...)
-	c.wbuf = append(c.wbuf, `","data":"`...)
-	c.wbuf = base64.StdEncoding.AppendEncode(c.wbuf, payload)
-	c.wbuf = append(c.wbuf, '"', '}', '\n')
-	_, err := c.rwc.Write(c.wbuf)
-	return err
-}
-
 // Recv reads the next response frame; io.EOF signals a clean close.
 func (c *Conn) Recv() (Response, error) {
 	if !c.sc.Scan() {
@@ -74,4 +59,19 @@ func (c *Conn) Recv() (Response, error) {
 
 func (c *Conn) Close() error {
 	return c.rwc.Close()
+}
+
+// sendBulk writes a payload frame from a reused buffer, skipping the two
+// frame-sized allocations and the JSON escape rescan json.Marshal costs (the
+// base64 alphabet needs no escaping).
+func (c *Conn) sendBulk(op string, payload []byte) error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	c.wbuf = append(c.wbuf[:0], requestHead...)
+	c.wbuf = append(c.wbuf, op...)
+	c.wbuf = append(c.wbuf, `","data":"`...)
+	c.wbuf = base64.StdEncoding.AppendEncode(c.wbuf, payload)
+	c.wbuf = append(c.wbuf, '"', '}', '\n')
+	_, err := c.rwc.Write(c.wbuf)
+	return err
 }
