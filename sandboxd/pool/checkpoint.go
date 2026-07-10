@@ -21,12 +21,10 @@ var (
 	ErrUnknownCheckpoint = errors.New("unknown checkpoint")
 )
 
-// Checkpoint captures a claimed sandbox's full state under a fresh id and
-// returns its record; the source keeps running (a hibernated source is
-// captured from its wake image and stays hibernated). Claims born from the
-// checkpoint clone that exact state — branching — and the source can be
-// checkpointed again later, so successive checkpoints form a tree. tenant
-// attributes the record; empty means the operator (root).
+// Checkpoint captures a claimed sandbox's state under a fresh id; the source
+// keeps running (a hibernated one is captured from its wake image). Branches
+// clone that exact state, and a source can be checkpointed again — a tree.
+// tenant attributes the record; empty means the operator (root).
 func (m *Manager) Checkpoint(ctx context.Context, id, token, name, tenant string) (types.Checkpoint, error) {
 	if name != "" && !types.NameRe.MatchString(name) {
 		return types.Checkpoint{}, fmt.Errorf("%w: %q must match %s", ErrBadName, name, types.NameRe)
@@ -191,6 +189,7 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string) e
 	if err := m.ckpts.Delete(ctx, ckptID); err != nil {
 		return fmt.Errorf("delete checkpoint: %w", err)
 	}
+	m.dropRecLock(ckptID)
 	return nil
 }
 
@@ -228,7 +227,11 @@ func (m *Manager) deleteCkLocked(ctx context.Context, ckID string) error {
 	l := m.recLock(ckID)
 	l.Lock()
 	defer l.Unlock()
-	return m.ckpts.Delete(ctx, ckID)
+	if err := m.ckpts.Delete(ctx, ckID); err != nil {
+		return err
+	}
+	m.dropRecLock(ckID)
+	return nil
 }
 
 func (m *Manager) loadCheckpoint(ctx context.Context, ckptID string) (types.Checkpoint, error) {

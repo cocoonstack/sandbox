@@ -158,3 +158,39 @@ func TestCheckpointTenantIsolation(t *testing.T) {
 		t.Errorf("root delete: %v", err)
 	}
 }
+
+// TestCheckpointDeleteEvictsRecLock proves recLocks does not retain a lock per
+// checkpoint: ck ids are single-use, so a create+delete cycle must leave the
+// map at its prior size, or a long-running node leaks one RWMutex per ck.
+func TestCheckpointDeleteEvictsRecLock(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	src := mustClaim(t, m, testKey)
+
+	countLocks := func() int {
+		n := 0
+		m.recLocks.Range(func(_, _ any) bool { n++; return true })
+		return n
+	}
+	base := countLocks() // the golden-resolve's template lock: bounded, never evicted
+
+	var ids []string
+	for range 5 {
+		ckpt, err := m.Checkpoint(t.Context(), src.ID, src.Token, "", "")
+		if err != nil {
+			t.Fatalf("checkpoint: %v", err)
+		}
+		ids = append(ids, ckpt.ID)
+	}
+	for _, id := range ids {
+		if err := m.DeleteCheckpoint(t.Context(), id, ""); err != nil {
+			t.Fatalf("delete %s: %v", id, err)
+		}
+		if _, ok := m.recLocks.Load(id); ok {
+			t.Errorf("recLocks retained a lock for deleted checkpoint %s", id)
+		}
+	}
+	if got := countLocks(); got != base {
+		t.Errorf("recLocks grew %d->%d over 5 checkpoint create+delete cycles, want no net growth", base, got)
+	}
+}

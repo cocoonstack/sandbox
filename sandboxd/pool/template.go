@@ -27,14 +27,10 @@ type templateRecord struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Promote publishes a claimed sandbox as a template: its state is exported
-// into the store under (template, parent net, parent size), and later
-// claims for that key clone from it — provision-on-demand, no warm pool
-// unless the node config adds one. Re-promoting to the same name replaces
-// the template. The caller owns the template's lifecycle (DeleteTemplate).
-// On a shared store root every node resolves it; on local disk it stays
-// node-bound and the mesh's template gossip routes to it. tenant attributes
-// the record; empty means the operator (root).
+// Promote publishes a claimed sandbox as a template under (template, parent
+// net, parent size); later claims for that key clone from it. Re-promoting the
+// same name replaces it, and the caller owns its lifecycle (DeleteTemplate).
+// tenant attributes the record; empty means the operator (root).
 func (m *Manager) Promote(ctx context.Context, id, token, template, tenant string) (types.PoolKey, error) {
 	if !types.NameRe.MatchString(template) {
 		return types.PoolKey{}, fmt.Errorf("%w: template %q must match %s", ErrBadKey, template, types.NameRe)
@@ -181,6 +177,15 @@ func (m *Manager) recLock(id string) *sync.RWMutex {
 	}
 	l, _ := m.recLocks.LoadOrStore(id, &sync.RWMutex{})
 	return l.(*sync.RWMutex)
+}
+
+// dropRecLock evicts a deleted record's lock so recLocks can't grow per
+// checkpoint. Safe only for single-use ck ids and only after the store record
+// is deleted: a fresh lock is obtainable only after eviction, i.e. after the
+// record is gone, so no two live ops diverge onto different locks. Template ids
+// (tp_, reused on re-promote) must not be evicted; they are bounded.
+func (m *Manager) dropRecLock(id string) {
+	m.recLocks.Delete(id)
 }
 
 // checkTemplateOwner rejects publishing or deleting over another tenant's

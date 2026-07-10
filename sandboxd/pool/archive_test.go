@@ -602,3 +602,31 @@ func TestArchiveOnceSkipsInFlight(t *testing.T) {
 		t.Error("archiveOnce archived a sandbox already being archived elsewhere")
 	}
 }
+
+// TestArchiveWakeEvictsRecLock proves the archive->wake cycle leaves no
+// recLocks residue: wakeArchived recLocks the consumed ck, so it must evict it
+// after the delete or a repeatedly idle->archive->wake workload leaks a lock
+// per cycle.
+func TestArchiveWakeEvictsRecLock(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, archivePool(3600))
+	sb := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	countLocks := func() int {
+		n := 0
+		m.recLocks.Range(func(_, _ any) bool { n++; return true })
+		return n
+	}
+	base := countLocks()
+	if err := m.archive(t.Context(), sb); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake archived: %v", err)
+	}
+	if got := countLocks(); got != base {
+		t.Errorf("recLocks grew %d->%d over an archive+wake cycle, want no growth", base, got)
+	}
+}

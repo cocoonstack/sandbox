@@ -173,10 +173,8 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 	return sb.VsockSocket, nil
 }
 
-// overQuota is the cheap advisory precheck against the node-wide and
-// per-tenant caps: the authoritative check stays in finalizeBatch (admission
-// races resolve there), this one just spares a doomed request the provision
-// cost.
+// overQuota is a cheap advisory precheck; finalizeBatch does the authoritative
+// admission check, so this just spares a doomed request the provision cost.
 func (m *Manager) overQuota(extra int, tenant string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -220,10 +218,9 @@ func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Dura
 	return sb, nil
 }
 
-// finalizeBatch stamps identities and persists the claims as one journal
-// write; on a failed write every VM in the batch is destroyed — a durable
-// claim always matches a live VM, and a batch lands all-or-nothing. A batch
-// carries one tenant (claims are single, fork children inherit one parent).
+// finalizeBatch stamps identities and persists the batch as one journal write;
+// a failed write destroys every VM in it — a durable claim always matches a
+// live VM, all-or-nothing. One tenant per batch (fork children inherit it).
 func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration) error {
 	now := time.Now()
 	for _, sb := range sbs {

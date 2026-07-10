@@ -40,13 +40,8 @@ type claimDTO struct {
 
 // claimStore persists claimed sandboxes across daemon restarts. Warm pool
 // VMs are deliberately not persisted: they are cheap to rebuild and unsafe
-// to trust after an unsupervised gap.
-//
-// The write is split to keep the manager mutex off both the marshal and the
-// file syscalls: snapshot() takes a cheap field-copy under the mutex, commit()
-// marshals and writes off it — serialized and coalescing so a snapshot no newer
-// than one already on disk is dropped (sequence order matches mutation order,
-// so an older write only ever describes a superseded state).
+// to trust after an unsupervised gap. snapshot()/commit() document the
+// split-write that keeps the manager mutex off the marshal and the syscalls.
 type claimStore struct {
 	path string
 
