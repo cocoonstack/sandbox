@@ -47,9 +47,11 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"tenant token equals api token", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"root"}]}`, "differ from api_token"},
 		{"duplicate tenant token", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1"},{"name":"beta","token":"t1"}]}`, "token reused"},
 		{"negative tenant max_claims", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1","max_claims":-1}]}`, "max_claims"},
-		{"secret without header", `{"secrets":[{"name":"gh"}],"pools":[]}`, "header must not be empty"},
-		{"secret without value", `{"secrets":[{"name":"gh","header":"Authorization"}],"pools":[]}`, "needs value or value_env"},
-		{"duplicate secret name", `{"secrets":[{"name":"gh","header":"A","value":"x"},{"name":"gh","header":"B","value":"y"}],"pools":[]}`, "duplicate secret"},
+		{"secret without header", `{"secrets":[{"name":"gh"}],"pools":[]}`, "not a valid header name"},
+		{"secret bad header", `{"secrets":[{"name":"gh","header":"Bad Header:","value_env":"GH_TOKEN"}],"pools":[]}`, "not a valid header name"},
+		{"secret without value_env", `{"secrets":[{"name":"gh","header":"Authorization"}],"pools":[]}`, "needs value_env"},
+		{"secret with inline value", `{"secrets":[{"name":"gh","header":"Authorization","value":"tok"}],"pools":[]}`, "needs value_env"},
+		{"duplicate secret name", `{"secrets":[{"name":"gh","header":"A","value_env":"X"},{"name":"gh","header":"B","value_env":"Y"}],"pools":[]}`, "duplicate secret"},
 		{"pool egress empty host", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":""}]}}]}`, "must not be empty"},
 		{"pool egress unknown secret", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"api.github.com","secret":"gh"}]}}]}`, "unknown secret"},
 		{"tenant egress unknown secret", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x","secret":"gh"}]}}]}`, "unknown secret"},
@@ -79,7 +81,7 @@ func TestLoadAcceptsTenants(t *testing.T) {
 }
 
 func TestLoadAcceptsEgressPolicy(t *testing.T) {
-	path := writeConfig(t, `{"secrets":[{"name":"gh","header":"Authorization","value":"tok"}],
+	path := writeConfig(t, `{"secrets":[{"name":"gh","header":"Authorization","value_env":"GH_TOKEN"}],
 		"pools":[{"template":"rt:24.04","net":"none","size":"small",
 			"egress":{"allow":[{"host":"api.github.com","methods":["GET"],"secret":"gh"},{"host":"*.googleapis.com"}]}}]}`)
 	cfg, err := Load(path)

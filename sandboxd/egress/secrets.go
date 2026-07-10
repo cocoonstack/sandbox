@@ -3,26 +3,27 @@ package egress
 import (
 	"fmt"
 	"os"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 // SecretSpec declares a node-side credential the proxy injects: Header is the
-// request header it sets, valued from ValueEnv (an env var, so the literal
-// never sits in the config file) or Value.
+// request header it sets, valued from the ValueEnv env var — the literal
+// never sits in the config file.
 type SecretSpec struct {
 	Name     string `json:"name"`
 	Header   string `json:"header"`
-	Value    string `json:"value,omitempty"`
-	ValueEnv string `json:"value_env,omitempty"` //nolint:gosec // env var name, not a value
+	ValueEnv string `json:"value_env"` //nolint:gosec // env var name, not a value
 }
 
 func (s SecretSpec) Validate() error {
 	switch {
 	case s.Name == "":
 		return fmt.Errorf("secret name must not be empty")
-	case s.Header == "":
-		return fmt.Errorf("secret %q: header must not be empty", s.Name)
-	case s.Value == "" && s.ValueEnv == "":
-		return fmt.Errorf("secret %q: needs value or value_env", s.Name)
+	case !httpguts.ValidHeaderFieldName(s.Header):
+		return fmt.Errorf("secret %q: header %q is not a valid header name", s.Name, s.Header)
+	case s.ValueEnv == "":
+		return fmt.Errorf("secret %q: needs value_env", s.Name)
 	}
 	return nil
 }
@@ -34,20 +35,20 @@ type SecretStore struct {
 	byName map[string]resolvedSecret
 }
 
-// NewSecretStore resolves each spec's value; an unset ValueEnv is an error,
-// never a silently-empty credential.
+// NewSecretStore resolves each spec's value; an unset or empty ValueEnv is an
+// error, never a silently-empty credential, and a value a header cannot carry
+// (CTLs would split the injected request) is rejected before it can be sent.
 func NewSecretStore(specs []SecretSpec) (*SecretStore, error) {
 	byName := make(map[string]resolvedSecret, len(specs))
 	for _, s := range specs {
-		value := s.Value
-		if s.ValueEnv != "" {
-			v, ok := os.LookupEnv(s.ValueEnv)
-			if !ok {
-				return nil, fmt.Errorf("secret %q: env %s is not set", s.Name, s.ValueEnv)
-			}
-			value = v
+		v := os.Getenv(s.ValueEnv)
+		if v == "" {
+			return nil, fmt.Errorf("secret %q: env %s is unset or empty", s.Name, s.ValueEnv)
 		}
-		byName[s.Name] = resolvedSecret{header: s.Header, value: value}
+		if !httpguts.ValidHeaderFieldValue(v) {
+			return nil, fmt.Errorf("secret %q: env %s holds an invalid header value", s.Name, s.ValueEnv)
+		}
+		byName[s.Name] = resolvedSecret{header: s.Header, value: v}
 	}
 	return &SecretStore{byName: byName}, nil
 }

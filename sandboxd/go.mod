@@ -10,6 +10,7 @@ require (
 	github.com/aws/smithy-go v1.27.3
 	github.com/hashicorp/memberlist v0.5.4
 	github.com/projecteru2/core v0.0.0-20241016125006-ff909eefe04c
+	golang.org/x/net v0.47.0
 	golang.org/x/sync v0.21.0
 )
 
@@ -56,7 +57,6 @@ require (
 	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
 	golang.org/x/exp v0.0.0-20230425010034-47ecfdc1ba53 // indirect
 	golang.org/x/mod v0.29.0 // indirect
-	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
 	golang.org/x/tools v0.38.0 // indirect
