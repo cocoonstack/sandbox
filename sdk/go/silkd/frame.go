@@ -672,14 +672,17 @@ func DecodeResponse(line []byte) (Response, error) {
 // fastBulk decodes a bulk frame's base64 data field by slicing it out (base64's
 // alphabet is JSON-escape-free) and skipping json.Unmarshal, which otherwise
 // dominates the download path; slow is the json fallback for any other shape.
+// The slice is only trusted when data is a last, top-level field — no nested
+// container or escape before it, nothing after it — so an unexpected shape
+// gets the full parse instead of silently picking the wrong bytes.
 func fastBulk(slow func([]byte) (Response, error), mk func([]byte) Response) func([]byte) (Response, error) {
 	return func(line []byte) (Response, error) {
-		_, after, ok := bytes.Cut(line, []byte(`"data":"`))
-		if !ok {
+		head, after, ok := bytes.Cut(line, []byte(`"data":"`))
+		if !ok || len(head) == 0 || bytes.ContainsAny(head[1:], `{[\`) {
 			return slow(line)
 		}
-		b64, _, ok := bytes.Cut(after, []byte(`"`))
-		if !ok {
+		b64, rest, ok := bytes.Cut(after, []byte(`"`))
+		if !ok || !bytes.Equal(rest, []byte(`}`)) {
 			return slow(line)
 		}
 		out := make([]byte, base64.StdEncoding.DecodedLen(len(b64)))

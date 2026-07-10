@@ -232,6 +232,25 @@ func TestUnknownFieldsIgnored(t *testing.T) {
 	}
 }
 
+// TestBulkDecodeStrictShape guards the fast bulk slicer: a "data" match
+// inside a nested unknown field or trailing bytes after the frame must never
+// yield a silently wrong payload — unexpected shapes take the full parse.
+func TestBulkDecodeStrictShape(t *testing.T) {
+	resp, err := DecodeResponse([]byte(`{"type":"stdout","meta":{"data":"WFhY"},"data":"aGk="}`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := string(resp.(*Stdout).Data); got != "hi" {
+		t.Errorf("nested field shadowed the data payload: %q", got)
+	}
+	if _, err := DecodeResponse([]byte(`{"type":"stdout","data":"aGk="}garbage`)); err == nil {
+		t.Error("trailing bytes after the frame accepted")
+	}
+	if _, err := DecodeResponse([]byte(`{"type":"stdout","data":"aGk="`)); err == nil {
+		t.Error("unterminated frame accepted")
+	}
+}
+
 func TestUnknownTagsRejected(t *testing.T) {
 	if _, err := DecodeRequest([]byte(`{"v":1,"op":"teleport"}`)); err == nil {
 		t.Error("unknown op accepted")

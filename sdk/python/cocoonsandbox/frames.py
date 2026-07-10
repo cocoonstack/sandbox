@@ -33,14 +33,15 @@ def decode_response(line: bytes) -> dict:
     "type" and any binary payload decoded under "data"."""
     # Bulk frames (stdout/stderr/data) are the throughput path where json.loads
     # of the big base64 string dominates. base64 is JSON-escape-free and these
-    # frames carry only type+data, so slice both out and skip json.
+    # frames carry exactly {"type":...,"data":...}, so slice both out and skip
+    # json — but only for that exact shape; anything else (extra fields,
+    # trailing bytes) gets the full parse instead of a silently wrong slice.
     if line.startswith(b'{"type":"'):
         te = line.find(b'"', 9)
-        if te > 0 and line[9:te] in (b"stdout", b"stderr", b"data"):
-            di = line.find(b'"data":"', te)
-            de = line.find(b'"', di + 8) if di > 0 else -1
-            if de > 0:
-                return {"type": line[9:te].decode(), "data": base64.b64decode(line[di + 8 : de])}
+        if te > 0 and line[9:te] in (b"stdout", b"stderr", b"data") and line.startswith(b'","data":"', te):
+            de = line.find(b'"', te + 10)
+            if de > 0 and line[de:] in (b'"}', b'"}\n'):
+                return {"type": line[9:te].decode(), "data": base64.b64decode(line[te + 10 : de])}
     frame = json.loads(line)
     if not isinstance(frame, dict) or "type" not in frame:
         raise ValueError(f"frame without a type tag: {line[:80]!r}")
