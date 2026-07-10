@@ -484,11 +484,20 @@ func mustClaim(t *testing.T, m *Manager, key types.PoolKey) *types.Sandbox {
 
 func newTestManagerAt(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
 	t.Helper()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: dataDir, Pools: pools}, eng)
+	m, err := NewManager(t.Context(), &config.Config{DataDir: dataDir, Pools: pools}, eng, testSecrets(t))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
 	return m
+}
+
+func testSecrets(t *testing.T, specs ...egress.SecretSpec) *egress.SecretStore {
+	t.Helper()
+	s, err := egress.NewSecretStore(specs)
+	if err != nil {
+		t.Fatalf("secrets: %v", err)
+	}
+	return s
 }
 
 func TestProbeReadyWaitsForVsock(t *testing.T) {
