@@ -113,8 +113,8 @@ an older snapshot never overwrites a newer one. Only the startup `Reconcile`
 pass (pre-contention) still marshals and writes in one call under the lock.
 
 `BenchmarkStorePersistContention` measures the ns a concurrent manager-mutex
-acquire waits during a persist. Moving first the write (F1), then the marshal
-(F1 part 2), off the lock cut that wait from tens of µs to tens of ns — the
+acquire waits during a persist. Moving first the write, then the marshal,
+off the lock cut that wait from tens of µs to tens of ns — the
 marshal-off-lock split alone is a ~6× drop at 1000 live claims, a margin that
 grows with claim count. `BenchmarkStoreSaveScaling` (the combined `save()`
 Reconcile uses) stays as a regression sentinel.
@@ -134,4 +134,4 @@ single `ReadMeta` against MinIO measures 4.76ms cross-host (sub-ms
 node-local, 20-50ms on WAN S3). It fires once per warm-miss claim of a
 promoted template whose key gossip advertises, against a provision that
 already costs a >=48ms clone plus the export fetch. Stays parked behind
-the measurement trigger recorded in the M5 plan.
+a measurement trigger.
