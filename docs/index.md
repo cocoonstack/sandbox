@@ -41,6 +41,8 @@ bridge/CNI NIC. Backends are never user-selected.
 - [Browser sandboxes](browser.md) — headless Chromium with CDP through
   the relay: Playwright/Puppeteer access, checkpoint/branch of a live
   browser
+- [Guarded egress](egress.md) — allow-listed, audited outbound access with
+  host-side credential injection; the none-lane wedge
 - [silkd](silkd.md) — the in-guest daemon: protocol, verb reference, lanes
   and limits
 - [Performance](performance.md) — measured latencies and the environments
