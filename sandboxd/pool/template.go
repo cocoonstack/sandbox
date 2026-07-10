@@ -178,6 +178,9 @@ func (m *Manager) pooledHash(hash string) bool {
 // fresh and unguessable pre-publish). A clone or wake holds it shared, so a
 // delete or re-publish swap never runs under an in-flight read.
 func (m *Manager) recLock(id string) *sync.RWMutex {
+	if l, ok := m.recLocks.Load(id); ok {
+		return l.(*sync.RWMutex)
+	}
 	l, _ := m.recLocks.LoadOrStore(id, &sync.RWMutex{})
 	return l.(*sync.RWMutex)
 }
