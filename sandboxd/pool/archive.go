@@ -215,6 +215,6 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 // deleteOrphanArchiveCk drops the published ck when archive() aborts pre-commit.
 func (m *Manager) deleteOrphanArchiveCk(ctx context.Context, ckID string) {
 	if err := m.ckpts.Delete(ctx, ckID); err != nil {
-		log.WithFunc("pool.archive").Warnf(ctx, "delete orphaned archive ck %s: %v", ckID, err)
+		log.WithFunc("pool.deleteOrphanArchiveCk").Warnf(ctx, "delete orphaned archive ck %s: %v", ckID, err)
 	}
 }

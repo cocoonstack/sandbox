@@ -230,11 +230,10 @@ func (m *Manager) idleHibernate(ctx context.Context, id, token string, sweepStar
 	return m.hibernateLocked(ctx, sb)
 }
 
-// commitTransition publishes a hibernate/wake result and persists the
-// journal, but only if the claim is still live — Release and reap skip the
-// transition lock, and publishing after them would resurrect state nobody
-// owns. A failed write is returned (the caller must not report success)
-// while recommit converges disk to the state the VM already embodies.
+// commitTransition publishes a hibernate/wake result and persists the journal
+// only if the claim is still live — Release/reap skip the transition lock, and
+// publishing after them resurrects state nobody owns. Returns a failed write
+// (caller must not report success); recommit converges disk in the background.
 func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap, sock string) (live bool, err error) {
 	m.mu.Lock()
 	live = m.claimed[sb.ID] == sb

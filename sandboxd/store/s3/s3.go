@@ -148,13 +148,11 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 	return os.RemoveAll(staging)
 }
 
-// Fetch materializes the export into a local cache generation keyed by
-// the record's meta hash: records change only on re-publish, so an
-// unchanged record's repeat fetch is one small meta GET, and installing a
-// new generation never disturbs a directory an in-flight clone is still
-// reading (old generations are reaped at Delete and the startup sweep,
-// when no clone can be in flight). Concurrent misses share one download.
-// release is a no-op. A missing id is ErrNotFound.
+// Fetch materializes the export into a local cache generation keyed by the
+// record's meta hash: an unchanged record's repeat fetch is one meta GET, and
+// a new generation never disturbs a directory an in-flight clone is reading
+// (old generations are reaped at Delete and startup). Concurrent misses share
+// one download; release is a no-op; a missing id is ErrNotFound.
 func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, func(), error) {
 	meta, err := s.ReadMeta(ctx, id)
 	if err != nil {

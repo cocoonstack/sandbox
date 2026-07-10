@@ -27,14 +27,10 @@ type templateRecord struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Promote publishes a claimed sandbox as a template: its state is exported
-// into the store under (template, parent net, parent size), and later
-// claims for that key clone from it — provision-on-demand, no warm pool
-// unless the node config adds one. Re-promoting to the same name replaces
-// the template. The caller owns the template's lifecycle (DeleteTemplate).
-// On a shared store root every node resolves it; on local disk it stays
-// node-bound and the mesh's template gossip routes to it. tenant attributes
-// the record; empty means the operator (root).
+// Promote publishes a claimed sandbox as a template under (template, parent
+// net, parent size); later claims for that key clone from it. Re-promoting the
+// same name replaces it, and the caller owns its lifecycle (DeleteTemplate).
+// tenant attributes the record; empty means the operator (root).
 func (m *Manager) Promote(ctx context.Context, id, token, template, tenant string) (types.PoolKey, error) {
 	if !types.NameRe.MatchString(template) {
 		return types.PoolKey{}, fmt.Errorf("%w: template %q must match %s", ErrBadKey, template, types.NameRe)
@@ -183,14 +179,10 @@ func (m *Manager) recLock(id string) *sync.RWMutex {
 	return l.(*sync.RWMutex)
 }
 
-// dropRecLock evicts a deleted record's lock so recLocks can't grow one entry
-// per checkpoint over a node's life. Call it holding the record's write lock,
-// after the store delete succeeded, and only for single-use ids (ck_<rand>,
-// never reused): an op that took the old lock before eviction still serializes
-// and then finds the record gone; a later acquire makes a fresh lock but the id
-// is dead, so no two live ops ever hold different locks for the same live
-// record. Template ids (tp_, reused on re-promote) must not be evicted — and
-// they are bounded by the template count anyway.
+// dropRecLock evicts a deleted record's lock so recLocks can't grow per
+// checkpoint. Safe only for single-use ck ids, holding the record's write lock:
+// the id is dead after delete, so no two live ops ever diverge onto different
+// locks. Template ids (tp_, reused) must not be evicted; they are bounded.
 func (m *Manager) dropRecLock(id string) {
 	m.recLocks.Delete(id)
 }

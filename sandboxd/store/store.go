@@ -1,11 +1,8 @@
-// Package store persists captured sandbox states — checkpoints and
-// promoted templates. The
-// interface is what the pool manager needs from any backend: a staging
-// area in the same publish domain, an atomic publish, a local directory
-// cocoon can `clone --from-dir`, and listing/removal. The dir backend
-// covers local disk and any FUSE mount (JuiceFS over object storage,
-// NFS — every node sharing the mount resolves every checkpoint); the s3
-// backend talks to object storage natively.
+// Package store persists captured sandbox states — checkpoints and promoted
+// templates — behind one interface: staging, an atomic publish, a local
+// directory cocoon can `clone --from-dir`, and listing/removal. The dir
+// backend covers local disk and any shared FUSE mount (every node sharing it
+// resolves every record); the s3 backend talks to object storage natively.
 package store
 
 import (
