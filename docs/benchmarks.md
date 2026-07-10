@@ -79,6 +79,26 @@ labeled and must only be compared against other nested runs.
 
 <!-- paste `make bench` output below -->
 
+### 2026-07-10 — bare metal (2c8f5c6, locally built image)
+
+| environment | |
+|---|---|
+| host | bare metal, AMD Ryzen 7 9700X 8-Core Processor, 16 cores, 60 GiB |
+| kernel | 6.17.0-35-generic |
+| cocoon | v0.4.8-master.32bcbc6 |
+| template | rt-2c8f5c6:24.04 @ sha256:ec268d5498fa (full local chain: silkd carrier → base → rt) |
+
+| claim tier | p50 | p90 | max | n |
+|---|---|---|---|---|
+| warm pool hit | 0.2 ms | 0.3 ms | 0.6 ms | 6 |
+| clone from golden | 28.5 ms | 29.3 ms | 29.8 ms | 10 |
+| cold boot (unpooled rt-2c8f5c6:24.04) | 52.4 ms | 52.4 ms | 52.5 ms | 3 |
+
+| data plane | measured |
+|---|---|
+| exec RTT (dial per RPC) | n=200 p50=0.29ms p90=1.68ms p99=3.23ms |
+| fs_pull throughput (128 MiB) | 614.7 MiB/s best of 3 |
+
 ### 2026-07-10 — bare metal
 
 | environment | |
