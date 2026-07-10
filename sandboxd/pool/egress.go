@@ -33,8 +33,8 @@ func (e *egressListener) close() {
 // policy is non-empty; a no-op otherwise, so no listener means default-deny
 // (the guest's proxy dial is refused). Only the none lane is enforced by
 // construction — the egress lane needs its own nftables lockdown.
-func (m *Manager) armEgress(sb *types.Sandbox) {
-	if !m.egressEnabled || sb.Key.Net != types.NetNone || sb.VsockSocket == "" {
+func (m *Manager) armEgress(ctx context.Context, sb *types.Sandbox) {
+	if !m.guardedEgress || sb.Key.Net != types.NetNone || sb.VsockSocket == "" {
 		return
 	}
 	policy, ok := m.effectivePolicy(sb)
@@ -45,7 +45,7 @@ func (m *Manager) armEgress(sb *types.Sandbox) {
 	_ = os.Remove(path) // a stale socket from a prior life would block the bind
 	ln, err := net.Listen("unix", path)
 	if err != nil {
-		log.WithFunc("pool.armEgress").Errorf(context.Background(), err, "listen egress %s", sb.ID)
+		log.WithFunc("pool.armEgress").Errorf(ctx, err, "listen egress %s", sb.ID)
 		return
 	}
 	id, tenant := sb.ID, sb.Tenant
@@ -60,6 +60,9 @@ func (m *Manager) armEgress(sb *types.Sandbox) {
 
 // disarmEgress tears down a sandbox's egress accept point; idempotent.
 func (m *Manager) disarmEgress(id string) {
+	if !m.guardedEgress {
+		return
+	}
 	m.mu.Lock()
 	el := m.egressListeners[id]
 	delete(m.egressListeners, id)

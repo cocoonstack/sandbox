@@ -62,14 +62,11 @@ func run(addr, token, template, wantToken string) error {
 	defer func() { _ = sb.Close() }()
 	fmt.Printf("  claimed none-lane sandbox %s\n", sb.ID)
 
-	// The guest has no NIC — a direct dial to the origin must fail; only the
-	// vsock proxy can reach it.
 	if out, _ := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -s -m 3 http://127.0.0.1:%d/ || echo NO-NIC", port)); !strings.Contains(out, "NO-NIC") {
 		return fmt.Errorf("guest reached the origin without the proxy: %q", out)
 	}
 	fmt.Println("  no-NIC confirmed: direct egress fails")
 
-	// Allowed host through the proxy: the origin sees the injected credential.
 	seen, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -s -x %s http://127.0.0.1:%d/", proxy, port))
 	if err != nil {
 		return fmt.Errorf("proxied exec: %w", err)
@@ -79,13 +76,11 @@ func run(addr, token, template, wantToken string) error {
 	}
 	fmt.Printf("  allowed origin reached; injected credential observed host-side\n")
 
-	// The secret's value must not be anywhere in the guest.
 	if out, _ := sb.Exec(ctx, "sh", "-c", "env; cat /proc/1/environ 2>/dev/null | tr '\\0' '\\n'"); wantToken != "" && strings.Contains(out, wantToken) {
 		return fmt.Errorf("secret value leaked into the guest")
 	}
 	fmt.Println("  secret absent from guest env")
 
-	// Denied host: a typed proxy failure, no origin reached.
 	deny, _ := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' -x %s http://10.255.255.1/", proxy))
 	if strings.TrimSpace(deny) != "403" {
 		return fmt.Errorf("denied host returned %q, want 403", strings.TrimSpace(deny))

@@ -258,7 +258,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	}
 	for _, sb := range sbs {
 		m.recordUsage(ctx, usageEvent{Event: "claim", ID: sb.ID, VMName: sb.VMName, KeyHash: sb.Key.Hash(), Tenant: sb.Tenant})
-		m.armEgress(sb)
+		m.armEgress(ctx, sb)
 	}
 	return nil
 }

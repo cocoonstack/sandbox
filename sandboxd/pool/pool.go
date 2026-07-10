@@ -170,7 +170,7 @@ type Manager struct {
 	archiving  map[string]struct{}
 	pendingCks map[string]struct{}
 	// egressListeners holds the per-sandbox none-lane egress proxy accept point,
-	// keyed by sandbox id; guarded by m.mu, torn down on release/reap.
+	// keyed by sandbox id; guarded by m.mu.
 	egressListeners map[string]*egressListener
 
 	// maxClaims caps live claims node-wide (0 = unlimited); tenantMax holds
@@ -206,10 +206,10 @@ type Manager struct {
 	notifyTemplates func()
 
 	// egressSecrets resolves a rule's secret name to the injected header;
-	// built once at startup, read-only after. egressEnabled short-circuits the
+	// built once at startup, read-only after. guardedEgress short-circuits the
 	// claim path when no pool or tenant declares a policy.
 	egressSecrets *egress.SecretStore
-	egressEnabled bool
+	guardedEgress bool
 
 	mu      sync.Mutex
 	pools   map[types.PoolKey]*pool
@@ -283,7 +283,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		m.tenantMax[tn.Name] = tn.MaxClaims
 		if tn.Egress != nil {
 			m.tenantEgress[tn.Name] = tn.Egress
-			m.egressEnabled = true
+			m.guardedEgress = true
 		}
 	}
 	m.idleDefault = time.Duration(cfg.IdleHibernateSeconds) * time.Second
@@ -302,7 +302,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 			m.archiveEnabled = true
 		}
 		if spec.Egress != nil {
-			m.egressEnabled = true
+			m.guardedEgress = true
 		}
 	}
 	if m.archiveEnabled && m.ckptTTL == 0 {

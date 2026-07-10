@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -33,7 +34,11 @@ func egressClient(path string) *http.Client {
 }
 
 func TestEgressProxyInjectsAndGates(t *testing.T) {
-	origin := newEchoOrigin(t)
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Seen-Auth", r.Header.Get("Authorization"))
+		_, _ = io.WriteString(w, "ok")
+	}))
+	t.Cleanup(origin.Close)
 	host := mustHostname(t, origin.URL)
 
 	t.Setenv("GH_TOKEN", "s3cr3t")
@@ -51,12 +56,10 @@ func TestEgressProxyInjectsAndGates(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
 	sb := &types.Sandbox{ID: "sb_egress", Key: testKey, VsockSocket: filepath.Join(sockDir, "v")}
-	m.armEgress(sb)
+	m.armEgress(t.Context(), sb)
 	path := engine.EgressSocketPath(sb.VsockSocket)
 	client := egressClient(path)
 
-	// Allowed host: reaches the origin, and the origin sees the injected header
-	// the guest never supplied.
 	resp, err := client.Get(origin.URL + "/")
 	if err != nil {
 		t.Fatalf("allowed request: %v", err)
@@ -67,7 +70,6 @@ func TestEgressProxyInjectsAndGates(t *testing.T) {
 		t.Errorf("allowed request body=%q injected=%q, want ok/s3cr3t", body, resp.Header.Get("X-Seen-Auth"))
 	}
 
-	// Denied host: default-deny returns a typed 403 without reaching any origin.
 	req, _ := http.NewRequest(http.MethodGet, "http://blocked.example/", nil)
 	deny, err := client.Do(req)
 	if err != nil {
@@ -78,7 +80,6 @@ func TestEgressProxyInjectsAndGates(t *testing.T) {
 		t.Errorf("denied status %d, want 403", deny.StatusCode)
 	}
 
-	// Disarm removes the accept point.
 	m.disarmEgress(sb.ID)
 	if _, err := net.Dial("unix", path); err == nil {
 		t.Error("egress socket still accepts after disarm")
@@ -124,27 +125,6 @@ func TestEffectivePolicyComposition(t *testing.T) {
 			}
 		})
 	}
-}
-
-func newEchoOrigin(t *testing.T) *echoOrigin {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("origin listen: %v", err)
-	}
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Seen-Auth", r.Header.Get("Authorization"))
-		_, _ = io.WriteString(w, "ok")
-	})}
-	go func() { _ = srv.Serve(ln) }()
-	o := &echoOrigin{URL: "http://" + ln.Addr().String(), srv: srv}
-	t.Cleanup(func() { _ = srv.Close() })
-	return o
-}
-
-type echoOrigin struct {
-	URL string
-	srv *http.Server
 }
 
 func testEgressConfig(t *testing.T, pool *egress.Policy) *config.Config {

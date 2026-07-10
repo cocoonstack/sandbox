@@ -130,7 +130,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	now := time.Now()
 	for _, sb := range m.claimed {
 		sb.TouchAt(now)
-		m.armEgress(sb) // re-bind the none-lane egress accept point after restart
+		m.armEgress(ctx, sb) // re-bind the none-lane egress accept point after restart
 	}
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
 	return saveErr
