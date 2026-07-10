@@ -8,7 +8,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -25,6 +24,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 const (
@@ -526,10 +526,9 @@ func decodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	return v, true
 }
 
-// decodeBodyStrict rejects unknown fields and duplicated keys — for operator
-// bodies where a mistyped or repeated key must fail, not silently no-op.
-// Client-facing bodies stay lenient (newer SDK fields must not break older
-// nodes).
+// decodeBodyStrict is decodeBody for operator bodies, where a mistyped or
+// repeated key must fail instead of silently no-opping; client-facing bodies
+// stay lenient (newer SDK fields must not break older nodes).
 func decodeBodyStrict[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var v T
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
@@ -537,13 +536,7 @@ func decodeBodyStrict[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return v, false
 	}
-	if err := config.RejectDuplicateKeys(json.NewDecoder(bytes.NewReader(raw))); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return v, false
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&v); err != nil {
+	if err := utils.DecodeStrictJSON(raw, &v); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return v, false
 	}

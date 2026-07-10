@@ -2,16 +2,13 @@
 package config
 
 import (
-	"bytes"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 const (
@@ -192,68 +189,15 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 	cfg := &Config{}
-	// Strict: a mistyped key must fail load, not silently widen policy
-	// (e.g. "method" for "methods" leaves Methods empty = any method); a
-	// duplicated key would make one value silently win, and trailing data
-	// would be silently ignored.
-	if err := RejectDuplicateKeys(json.NewDecoder(bytes.NewReader(raw))); err != nil {
+	// Hand-edited file: a typo must fail load, not silently change policy.
+	if err := utils.DecodeStrictJSON(raw, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(cfg); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("config has trailing data after the object")
 	}
 	cfg.applyDefaults()
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
 	return cfg, nil
-}
-
-// RejectDuplicateKeys walks one JSON value and refuses objects that repeat a
-// key at the same level.
-func RejectDuplicateKeys(dec *json.Decoder) error {
-	tok, err := dec.Token()
-	if err != nil {
-		return err
-	}
-	delim, ok := tok.(json.Delim)
-	if !ok {
-		return nil
-	}
-	switch delim {
-	case '{':
-		seen := map[string]struct{}{}
-		for dec.More() {
-			keyTok, keyErr := dec.Token()
-			if keyErr != nil {
-				return keyErr
-			}
-			key, _ := keyTok.(string)
-			if _, dup := seen[key]; dup {
-				return fmt.Errorf("duplicate key %q", key)
-			}
-			seen[key] = struct{}{}
-			if walkErr := RejectDuplicateKeys(dec); walkErr != nil {
-				return walkErr
-			}
-		}
-		_, err = dec.Token()
-		return err
-	case '[':
-		for dec.More() {
-			if walkErr := RejectDuplicateKeys(dec); walkErr != nil {
-				return walkErr
-			}
-		}
-		_, err = dec.Token()
-		return err
-	}
-	return nil
 }
 
 // HasEgress reports whether the node can attach egress-lane VMs.
