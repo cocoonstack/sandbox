@@ -13,7 +13,8 @@ func TestDecodeStrictJSON(t *testing.T) {
 		{"valid", `{"methods":["GET"]}`, true},
 		{"unknown field", `{"method":["GET"]}`, false},
 		{"duplicate key", `{"methods":["GET"],"methods":[]}`, false},
-		{"nested duplicate", `{"methods":["GET"]} `, true},
+		{"case-folded duplicate", `{"methods":["GET"],"Methods":[]}`, false},
+		{"trailing whitespace ok", `{"methods":["GET"]} `, true},
 		{"trailing data", `{"methods":["GET"]} {"methods":[]}`, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

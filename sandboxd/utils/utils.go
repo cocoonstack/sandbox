@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // DecodeStrictJSON decodes one JSON value into v, refusing unknown fields,
@@ -47,9 +48,14 @@ func rejectDuplicateKeys(dec *json.Decoder) error {
 			if keyErr != nil {
 				return keyErr
 			}
-			key, _ := keyTok.(string)
+			// Fold case: encoding/json matches struct fields case-insensitively,
+			// so "Methods" and "methods" target the same field and the second
+			// silently wins — treat them as one key. (The callers decode into
+			// structs, never into map[string]T where case is significant.)
+			keyStr, _ := keyTok.(string)
+			key := strings.ToLower(keyStr)
 			if _, dup := seen[key]; dup {
-				return fmt.Errorf("duplicate key %q", key)
+				return fmt.Errorf("duplicate key %q", keyStr)
 			}
 			seen[key] = struct{}{}
 			if walkErr := rejectDuplicateKeys(dec); walkErr != nil {
