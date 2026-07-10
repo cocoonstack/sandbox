@@ -3,9 +3,19 @@ package egress
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"golang.org/x/net/http/httpguts"
 )
+
+// nonInjectable lists headers the transport owns or strips (framing,
+// routing, hop-by-hop): injecting one would audit as done while the request
+// carries something else.
+var nonInjectable = map[string]struct{}{
+	"host": {}, "content-length": {}, "transfer-encoding": {}, "connection": {},
+	"keep-alive": {}, "proxy-authenticate": {}, "proxy-authorization": {},
+	"te": {}, "trailer": {}, "upgrade": {},
+}
 
 // SecretSpec declares a node-side credential the proxy injects: Header is the
 // request header it sets, valued from the ValueEnv env var — the literal
@@ -13,17 +23,23 @@ import (
 type SecretSpec struct {
 	Name     string `json:"name"`
 	Header   string `json:"header"`
-	ValueEnv string `json:"value_env"` //nolint:gosec // env var name, not a value
+	Value    string `json:"value,omitempty"` // always rejected — kept so an inline value fails loudly
+	ValueEnv string `json:"value_env"`       //nolint:gosec // env var name, not a value
 }
 
 func (s SecretSpec) Validate() error {
 	switch {
 	case s.Name == "":
 		return fmt.Errorf("secret name must not be empty")
+	case s.Value != "":
+		return fmt.Errorf("secret %q: value is not supported, use value_env", s.Name)
 	case !httpguts.ValidHeaderFieldName(s.Header):
 		return fmt.Errorf("secret %q: header %q is not a valid header name", s.Name, s.Header)
 	case s.ValueEnv == "":
 		return fmt.Errorf("secret %q: needs value_env", s.Name)
+	}
+	if _, bad := nonInjectable[strings.ToLower(s.Header)]; bad {
+		return fmt.Errorf("secret %q: header %s is not injectable", s.Name, s.Header)
 	}
 	return nil
 }

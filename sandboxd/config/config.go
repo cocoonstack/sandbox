@@ -30,7 +30,8 @@ type PoolSpec struct {
 	WarmMax int `json:"warm_max,omitempty"`
 
 	// Egress is this pool's allow-list, intersected with the tenant's for the
-	// effective policy; nil denies all egress.
+	// effective policy (a request must pass both); when both matched rules
+	// name a secret, the pool's is injected. Nil denies all egress.
 	Egress *egress.Policy `json:"egress,omitempty"`
 
 	// IdleHibernateSeconds, when >0, hibernates this pool's idle claims
