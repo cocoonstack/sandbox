@@ -191,6 +191,7 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string) e
 	if err := m.ckpts.Delete(ctx, ckptID); err != nil {
 		return fmt.Errorf("delete checkpoint: %w", err)
 	}
+	m.dropRecLock(ckptID)
 	return nil
 }
 
@@ -228,7 +229,11 @@ func (m *Manager) deleteCkLocked(ctx context.Context, ckID string) error {
 	l := m.recLock(ckID)
 	l.Lock()
 	defer l.Unlock()
-	return m.ckpts.Delete(ctx, ckID)
+	if err := m.ckpts.Delete(ctx, ckID); err != nil {
+		return err
+	}
+	m.dropRecLock(ckID)
+	return nil
 }
 
 func (m *Manager) loadCheckpoint(ctx context.Context, ckptID string) (types.Checkpoint, error) {

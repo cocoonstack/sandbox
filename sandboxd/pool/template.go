@@ -183,6 +183,18 @@ func (m *Manager) recLock(id string) *sync.RWMutex {
 	return l.(*sync.RWMutex)
 }
 
+// dropRecLock evicts a deleted record's lock so recLocks can't grow one entry
+// per checkpoint over a node's life. Call it holding the record's write lock,
+// after the store delete succeeded, and only for single-use ids (ck_<rand>,
+// never reused): an op that took the old lock before eviction still serializes
+// and then finds the record gone; a later acquire makes a fresh lock but the id
+// is dead, so no two live ops ever hold different locks for the same live
+// record. Template ids (tp_, reused on re-promote) must not be evicted — and
+// they are bounded by the template count anyway.
+func (m *Manager) dropRecLock(id string) {
+	m.recLocks.Delete(id)
+}
+
 // checkTemplateOwner rejects publishing or deleting over another tenant's
 // record; a meta failure other than absence refuses rather than fail open.
 func (m *Manager) checkTemplateOwner(ctx context.Context, id, tenant string) error {
