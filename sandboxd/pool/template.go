@@ -172,9 +172,10 @@ func (m *Manager) pooledHash(hash string) bool {
 	return false
 }
 
-// recLock is the per-record mutation lock: same-id publish/delete
-// serialize on it, and a clone holds it shared so a re-publish swap never
-// moves the generation under an in-flight read.
+// recLock is the per-record mutation lock: template publish/delete serialize
+// on it directly; checkpoints take it only for delete/fetch (their ids are
+// fresh and unguessable pre-publish). A clone or wake holds it shared, so a
+// delete or re-publish swap never runs under an in-flight read.
 func (m *Manager) recLock(id string) *sync.RWMutex {
 	l, _ := m.recLocks.LoadOrStore(id, &sync.RWMutex{})
 	return l.(*sync.RWMutex)

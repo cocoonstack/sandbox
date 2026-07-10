@@ -351,11 +351,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 // purgeArchiveCk deletes an archived claim's store checkpoint and records the
 // retention billing event; shared by Release and reapOnce's purge.
 func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
-	l := m.recLock(ck)
-	l.Lock()
-	err := m.ckpts.Delete(ctx, ck)
-	l.Unlock()
-	if err != nil {
+	if err := m.deleteCkLocked(ctx, ck); err != nil {
 		log.WithFunc("pool.purgeArchiveCk").Warnf(ctx, "delete archive ck %s: %v", ck, err)
 	}
 	m.counters.archiveDeletes.Add(1)

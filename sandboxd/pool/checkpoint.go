@@ -211,14 +211,19 @@ func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 		if ckpt.CreatedAt.After(cutoff) {
 			continue
 		}
-		l := m.recLock(ckpt.ID)
-		l.Lock()
-		err := m.ckpts.Delete(ctx, ckpt.ID)
-		l.Unlock()
-		if err != nil {
+		if err := m.deleteCkLocked(ctx, ckpt.ID); err != nil {
 			logger.Errorf(ctx, err, "expire %s", ckpt.ID)
 		}
 	}
+}
+
+// deleteCkLocked removes a checkpoint under its record lock, so the delete
+// never runs beneath an in-flight branch clone or archived wake.
+func (m *Manager) deleteCkLocked(ctx context.Context, ckID string) error {
+	l := m.recLock(ckID)
+	l.Lock()
+	defer l.Unlock()
+	return m.ckpts.Delete(ctx, ckID)
 }
 
 func (m *Manager) loadCheckpoint(ctx context.Context, ckptID string) (types.Checkpoint, error) {
