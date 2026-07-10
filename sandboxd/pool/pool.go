@@ -39,8 +39,8 @@ const (
 	maxConcurrentRefills = 4
 	defaultTTL           = 5 * time.Minute
 	maxTTL               = 24 * time.Hour
-	recommitAttempts     = 3
 	recommitBackoff      = 20 * time.Millisecond
+	recommitMaxBackoff   = 5 * time.Second
 	// defaultMaxFork is the fork ceiling when a Manager is built from a Config
 	// that skipped config.Load's defaulting (direct construction in tests).
 	defaultMaxFork = 16
@@ -162,8 +162,11 @@ type Manager struct {
 	archiveEnabled       bool
 	archiveSweep         atomic.Bool
 	// archiving holds ids with an archive() export in flight, so the reap tick
-	// and archive sweep don't both re-export the same sandbox. Guarded by m.mu.
-	archiving map[string]struct{}
+	// and archive sweep don't both re-export the same sandbox; pendingCks pins
+	// checkpoint ids an archive is publishing before ArchiveCk can (a delete
+	// in that window would strand the claim). Both guarded by m.mu.
+	archiving  map[string]struct{}
+	pendingCks map[string]struct{}
 
 	// maxClaims caps live claims node-wide (0 = unlimited); tenantMax holds
 	// every configured tenant's cap (0 = unlimited) and doubles as the set of
@@ -186,6 +189,10 @@ type Manager struct {
 	// promotes/deletes update it, startup loads it.
 	tplMu  sync.Mutex
 	tplSet map[string]struct{}
+
+	// recLocks serializes same-id store record mutations and holds off a
+	// re-publish swap while a clone reads the old generation (per id, RW).
+	recLocks sync.Map
 
 	// notifyTemplates, when set (before serving starts), fires after a
 	// promote or template delete so the mesh republishes immediately
@@ -216,6 +223,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine) (*Manager, 
 		claimed:    map[string]*types.Sandbox{},
 		tenantLive: map[string]int{},
 		archiving:  map[string]struct{}{},
+		pendingCks: map[string]struct{}{},
 		refillSem:  make(chan struct{}, maxConcurrentRefills),
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
@@ -330,6 +338,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	for _, vm := range vms {
 		live[vm.Config.Name] = vm
 	}
+	snaps, snapsErr := m.eng.SnapshotList(ctx)
 
 	owned := map[string]bool{}
 	referenced := map[string]bool{}
@@ -346,12 +355,21 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			continue
 		case ok && rec.State == vmStateRunning:
 			sb.VsockSocket = rec.VsockSocket
-			// Running with the flag set = a wake crashed between restore and
-			// commit; clearing it un-bricks the claim and unreferences the
+			// Running with either flag set = a wake crashed between restore
+			// and commit, or a hibernate intent never reached the engine;
+			// clearing them un-bricks the claim and unreferences the
 			// snapshot for the sweep below.
-			sb.HibernateSnap = ""
+			sb.HibernateSnap, sb.PendingSnap = "", ""
 		case ok && sb.HibernateSnap != "":
 			// Hibernated: the VM is stopped by design and wakes on demand.
+			sb.PendingSnap = ""
+		case ok && sb.PendingSnap != "" && (snapsErr != nil || slices.Contains(snaps, sb.PendingSnap)):
+			// Stopped under a journaled hibernate intent whose commit never
+			// landed: the intent names the wake image, adopt it. A verified-
+			// missing image means the hibernate never completed — fall
+			// through and drop; an unverifiable list adopts (a failed wake
+			// beats a destroyed claim).
+			sb.HibernateSnap, sb.PendingSnap = sb.PendingSnap, ""
 		default:
 			continue
 		}
@@ -383,6 +401,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 
 	logger := log.WithFunc("pool.Reconcile")
+	m.reclaimOrphanArchiveCks(ctx, claims)
 	var stale []string
 	for name := range live {
 		if strings.HasPrefix(name, vmPrefix) && !owned[name] {
@@ -395,12 +414,11 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}).Wait()
 
 	// Snapshot sweep, symmetric to the VM sweep: a hibernate snapshot no
-	// adopted claim references is an orphan (a crash between `vm hibernate`
-	// and the journal commit), and fork/golden-build snapshots are transient
-	// by construction — none can span a restart. A list failure only skips
-	// the sweep: GC must not brick startup.
-	if snaps, listErr := m.eng.SnapshotList(ctx); listErr != nil {
-		logger.Warnf(ctx, "snapshot sweep skipped: %v", listErr)
+	// adopted claim references is an orphan, and fork/golden-build snapshots
+	// are transient by construction — none can span a restart. A list failure
+	// only skips the sweep: GC must not brick startup.
+	if snapsErr != nil {
+		logger.Warnf(ctx, "snapshot sweep skipped: %v", snapsErr)
 	} else {
 		var orphans []string
 		for _, snap := range snaps {
@@ -420,6 +438,53 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
 	return saveErr
+}
+
+// reclaimOrphanArchiveCks reaps archives that crashed between their
+// checkpoint publish and the journal commit: the flag hides them from
+// listings and deletes, so only the journal identifies ours — the sandbox is
+// in it under a different (or no) ArchiveCk.
+func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string]*types.Sandbox) {
+	logger := log.WithFunc("pool.reclaimOrphanArchiveCks")
+	metas, err := m.ckpts.Metas(ctx)
+	if err != nil {
+		logger.Warnf(ctx, "list archive cks skipped: %v", err)
+		return
+	}
+	for _, raw := range metas {
+		var ckpt types.Checkpoint
+		if json.Unmarshal(raw, &ckpt) != nil || !ckpt.Archive {
+			continue
+		}
+		orig, mine := claims[ckpt.SandboxID]
+		if !mine || orig.ArchiveCk == ckpt.ID {
+			continue
+		}
+		if err := m.deleteCkLocked(ctx, ckpt.ID); err != nil {
+			logger.Warnf(ctx, "reclaim %s: %v", ckpt.ID, err)
+		} else {
+			logger.Infof(ctx, "reclaimed orphan archive ck %s", ckpt.ID)
+		}
+	}
+}
+
+// FlushClaims synchronously persists the current claim set — the shutdown
+// hook that closes the window where a detached recommit has not converged yet.
+func (m *Manager) FlushClaims() error {
+	return m.store.commit(m.claimsSnapshot())
+}
+
+func (m *Manager) claimsSnapshot() claimSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.store.snapshot(m.claimed)
+}
+
+// untrack removes a key from an m.mu-guarded set.
+func (m *Manager) untrack(set map[string]struct{}, key string) {
+	m.mu.Lock()
+	delete(set, key)
+	m.mu.Unlock()
 }
 
 // SetPools replaces the node's desired warm targets. Existing claims are not

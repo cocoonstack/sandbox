@@ -37,7 +37,7 @@ func (m *Manager) Checkpoint(ctx context.Context, id, token, name, tenant string
 	}
 	// See Hibernate: a started capture must finish even if the caller hangs up.
 	ctx = context.WithoutCancel(ctx)
-	ckpt, err := m.publishCheckpoint(ctx, sb, name, tenant)
+	ckpt, err := m.publishCheckpoint(ctx, sb, store.CheckpointID(randHex(8)), name, tenant, false)
 	if err != nil {
 		return types.Checkpoint{}, err
 	}
@@ -49,14 +49,15 @@ func (m *Manager) Checkpoint(ctx context.Context, id, token, name, tenant string
 // publishCheckpoint stages the sandbox's exported state, writes the meta, and
 // publishes it to the store. Shared by Checkpoint and archive; a hibernated
 // source exports its wake image directly (no VM start — refill.sourceSnap).
-func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, name, tenant string) (types.Checkpoint, error) {
+func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID, name, tenant string, archive bool) (types.Checkpoint, error) {
 	ckpt := types.Checkpoint{
-		ID:        store.CheckpointID(randHex(8)),
+		ID:        ckID,
 		Name:      name,
 		SandboxID: sb.ID,
 		Key:       sb.Key,
 		Tenant:    tenant,
 		CreatedAt: time.Now(),
+		Archive:   archive,
 	}
 	staging, err := m.ckpts.Stage(ckpt.ID)
 	if err != nil {
@@ -91,6 +92,9 @@ func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.D
 	if err := m.overQuota(1, tenant); err != nil {
 		return nil, err
 	}
+	l := m.recLock(ckptID)
+	l.RLock()
+	defer l.RUnlock()
 	dir, meta, release, err := m.ckpts.Fetch(ctx, ckptID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, ErrUnknownCheckpoint
@@ -102,6 +106,9 @@ func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.D
 	ckpt, err := parseCheckpoint(meta)
 	if err != nil {
 		return nil, err
+	}
+	if ckpt.Archive {
+		return nil, ErrUnknownCheckpoint // a wake image, not a branchable checkpoint
 	}
 	sb, err := m.provision(ctx, ckpt.Key, dir)
 	if err != nil {
@@ -133,7 +140,7 @@ func (m *Manager) Checkpoints(ctx context.Context, tenant string) ([]types.Check
 		if err := json.Unmarshal(raw, &ckpt); err != nil || !tenantOwns(tenant, ckpt.Tenant) {
 			continue
 		}
-		if _, archived := pinned[ckpt.ID]; archived {
+		if _, archived := pinned[ckpt.ID]; archived || ckpt.Archive {
 			continue
 		}
 		ckpts = append(ckpts, ckpt)
@@ -142,13 +149,16 @@ func (m *Manager) Checkpoints(ctx context.Context, tenant string) ([]types.Check
 	return ckpts, nil
 }
 
-// pinnedArchiveCks is the set of checkpoint ids backing a live archived claim:
-// its wake image, which the listing hides and delete/TTL must spare (deleting
-// one would strand its sandbox).
+// pinnedArchiveCks is the set of checkpoint ids backing a live archived claim
+// or an archive publish in flight (pendingCks): wake images the listing hides
+// and delete/TTL must spare (deleting one would strand its sandbox).
 func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	pinned := make(map[string]struct{})
+	pinned := make(map[string]struct{}, len(m.pendingCks))
+	for id := range m.pendingCks {
+		pinned[id] = struct{}{}
+	}
 	for _, sb := range m.claimed {
 		if sb.ArchiveCk != "" {
 			pinned[sb.ArchiveCk] = struct{}{}
@@ -161,6 +171,9 @@ func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 // delete only its own records — anything else answers ErrUnknownCheckpoint,
 // never a hint that the id exists; root (empty tenant) deletes anything.
 func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string) error {
+	l := m.recLock(ckptID)
+	l.Lock()
+	defer l.Unlock()
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	if err != nil {
 		return err
@@ -168,8 +181,10 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string) e
 	if !tenantOwns(tenant, ckpt.Tenant) {
 		return ErrUnknownCheckpoint
 	}
-	if _, pinned := m.pinnedArchiveCks()[ckptID]; pinned {
-		return ErrUnknownCheckpoint // backs a live archived sandbox, not a deletable checkpoint
+	// ckpt.Archive guards wake images across every node sharing the store;
+	// the pin set guards this node's not-yet-committed ones.
+	if _, pinned := m.pinnedArchiveCks()[ckptID]; pinned || ckpt.Archive {
+		return ErrUnknownCheckpoint // backs an archived sandbox, not a deletable checkpoint
 	}
 	if err := m.ckpts.Delete(ctx, ckptID); err != nil {
 		return fmt.Errorf("delete checkpoint: %w", err)
@@ -199,10 +214,19 @@ func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 		if ckpt.CreatedAt.After(cutoff) {
 			continue
 		}
-		if err := m.ckpts.Delete(ctx, ckpt.ID); err != nil {
+		if err := m.deleteCkLocked(ctx, ckpt.ID); err != nil {
 			logger.Errorf(ctx, err, "expire %s", ckpt.ID)
 		}
 	}
+}
+
+// deleteCkLocked removes a checkpoint under its record lock, so the delete
+// never runs beneath an in-flight branch clone or archived wake.
+func (m *Manager) deleteCkLocked(ctx context.Context, ckID string) error {
+	l := m.recLock(ckID)
+	l.Lock()
+	defer l.Unlock()
+	return m.ckpts.Delete(ctx, ckID)
 }
 
 func (m *Manager) loadCheckpoint(ctx context.Context, ckptID string) (types.Checkpoint, error) {

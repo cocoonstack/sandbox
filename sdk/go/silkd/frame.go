@@ -97,15 +97,15 @@ var (
 	// procs is a count, ps's procs is a list).
 	responseDecoders = map[string]func([]byte) (Response, error){
 		"started":           decodeResp[Started],
-		"stdout":            fastBulk(decodeResp[Stdout], func(d []byte) Response { return &Stdout{Data: d} }),
-		"stderr":            fastBulk(decodeResp[Stderr], func(d []byte) Response { return &Stderr{Data: d} }),
+		"stdout":            fastBulk("stdout", decodeResp[Stdout], func(d []byte) Response { return &Stdout{Data: d} }),
+		"stderr":            fastBulk("stderr", decodeResp[Stderr], func(d []byte) Response { return &Stderr{Data: d} }),
 		"exit":              decodeResp[Exit],
 		"done":              decodeResp[Done],
 		"ready":             decodeResp[Ready],
 		"error":             decodeResp[ErrorResp],
 		"info":              decodeResp[InfoResp],
 		"procs":             decodeResp[Procs],
-		"data":              fastBulk(decodeResp[DataResp], func(d []byte) Response { return &DataResp{Data: d} }),
+		"data":              fastBulk("data", decodeResp[DataResp], func(d []byte) Response { return &DataResp{Data: d} }),
 		"entries":           decodeResp[Entries],
 		"stat":              decodeResp[Stat],
 		"session_created":   decodeResp[SessionCreated],
@@ -669,22 +669,29 @@ func DecodeResponse(line []byte) (Response, error) {
 	return dec(line)
 }
 
-// fastBulk decodes a bulk frame's base64 data field by slicing it out (base64's
-// alphabet is JSON-escape-free) and skipping json.Unmarshal, which otherwise
-// dominates the download path; slow is the json fallback for any other shape.
-func fastBulk(slow func([]byte) (Response, error), mk func([]byte) Response) func([]byte) (Response, error) {
+// fastBulk decodes a bulk frame's base64 data field by slicing it out
+// (base64's alphabet is JSON-escape-free) and skipping json.Unmarshal, which
+// otherwise dominates the download path. Only the exact canonical shape both
+// producers emit — {"type":"<tag>","data":"<base64>"} — takes the slice;
+// anything else falls back to slow, the full parse, so no byte of a frame
+// escapes validation.
+func fastBulk(tag string, slow func([]byte) (Response, error), mk func([]byte) Response) func([]byte) (Response, error) {
+	head := []byte(`{"type":"` + tag + `","data":"`)
 	return func(line []byte) (Response, error) {
-		_, after, ok := bytes.Cut(line, []byte(`"data":"`))
+		after, ok := bytes.CutPrefix(line, head)
 		if !ok {
 			return slow(line)
 		}
-		b64, _, ok := bytes.Cut(after, []byte(`"`))
-		if !ok {
+		b64, rest, ok := bytes.Cut(after, []byte(`"`))
+		if !ok || !bytes.Equal(rest, []byte(`}`)) {
 			return slow(line)
 		}
 		out := make([]byte, base64.StdEncoding.DecodedLen(len(b64)))
 		n, err := base64.StdEncoding.Decode(out, b64)
-		if err != nil {
+		// Decode skips CR/LF (raw control bytes JSON forbids); a canonical
+		// payload decodes to exactly the encoded length, so any skip falls
+		// back to the full parse.
+		if err != nil || base64.StdEncoding.EncodedLen(n) != len(b64) {
 			return slow(line)
 		}
 		return mk(out[:n]), nil

@@ -232,6 +232,34 @@ func TestUnknownFieldsIgnored(t *testing.T) {
 	}
 }
 
+// TestBulkDecodeStrictShape guards the fast bulk slicer: only the exact
+// canonical frame takes the fast path, so a "data" match inside another
+// field or any malformed JSON must never yield a silently wrong payload.
+func TestBulkDecodeStrictShape(t *testing.T) {
+	resp, err := DecodeResponse([]byte(`{"type":"stdout","meta":{"data":"WFhY"},"data":"aGk="}`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := string(resp.(*Stdout).Data); got != "hi" {
+		t.Errorf("nested field shadowed the data payload: %q", got)
+	}
+	for _, frame := range []string{
+		`{"type":"stdout","data":"aGk="}garbage`,
+		`{"type":"stdout","data":"aGk="`,
+		`{"type":"stdout"}garbage"data":"QQ=="}`,
+		`{"type":"stdout"garbage,"data":"QQ=="}`,
+		`{"type":"stdout":,"data":"QQ=="}`,
+		`{"type":"stdout",garbage"data":"QQ=="}`,
+		`{"type":"stdout","data":"QQ==" }x`,
+		"{\"type\":\"stdout\",\"data\":\"Q\nQ==\"}",
+		"{\"type\":\"stdout\",\"data\":\"Q\r\nQ==\"}",
+	} {
+		if _, err := DecodeResponse([]byte(frame)); err == nil {
+			t.Errorf("malformed frame accepted: %s", frame)
+		}
+	}
+}
+
 func TestUnknownTagsRejected(t *testing.T) {
 	if _, err := DecodeRequest([]byte(`{"v":1,"op":"teleport"}`)); err == nil {
 		t.Error("unknown op accepted")

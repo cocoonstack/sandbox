@@ -33,6 +33,7 @@ type claimDTO struct {
 	Tenant         string        `json:"tenant,omitempty"`
 	VsockSocket    string        `json:"vsock_socket,omitempty"`
 	HibernateSnap  string        `json:"hibernate_snap,omitempty"`
+	PendingSnap    string        `json:"pending_snap,omitempty"`
 	ArchiveCk      string        `json:"archive_ck,omitempty"`
 	FromCheckpoint string        `json:"from_checkpoint,omitempty"`
 }
@@ -84,8 +85,8 @@ func (s *claimStore) snapshot(claims map[string]*types.Sandbox) claimSnapshot {
 		dtos[id] = claimDTO{
 			ID: sb.ID, VMName: sb.VMName, Key: sb.Key, Token: sb.Token,
 			Deadline: sb.Deadline, Tenant: sb.Tenant, VsockSocket: sb.VsockSocket,
-			HibernateSnap: sb.HibernateSnap, ArchiveCk: sb.ArchiveCk,
-			FromCheckpoint: sb.FromCheckpoint,
+			HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap,
+			ArchiveCk: sb.ArchiveCk, FromCheckpoint: sb.FromCheckpoint,
 		}
 	}
 	return claimSnapshot{claims: dtos, seq: seq}
@@ -122,4 +123,11 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 // around the mutex so the write leaves it.
 func (s *claimStore) save(claims map[string]*types.Sandbox) error {
 	return s.commit(s.snapshot(claims))
+}
+
+// synced reports whether every handed-out snapshot has reached disk.
+func (s *claimStore) synced() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.written == s.seq.Load()
 }

@@ -122,6 +122,10 @@ type Sandbox struct {
 	// HibernateSnap names the memory snapshot while the VM is hibernated;
 	// empty means running.
 	HibernateSnap string `json:"hibernate_snap,omitempty"`
+	// PendingSnap is the journaled intent of a hibernate in flight: written
+	// before the engine stops the VM, cleared by the commit. Reconcile
+	// trusts it to adopt a hibernate whose commit never landed.
+	PendingSnap string `json:"pending_snap,omitempty"`
 	// ArchiveCk names the store checkpoint holding this sandbox's state while
 	// archived; empty means live or hibernated. While set, VMName/VsockSocket/
 	// HibernateSnap are empty (no local VM) and Deadline is the retention deadline.
@@ -130,6 +134,10 @@ type Sandbox struct {
 	// FromCheckpoint names the checkpoint this sandbox branched from, for
 	// lineage; empty for pool and template claims.
 	FromCheckpoint string `json:"from_checkpoint,omitempty"`
+
+	// StaleSnap names a consumed wake snapshot a lagging journal still
+	// references; dropped once a later write lands. Guarded by Transition.
+	StaleSnap string `json:"-"`
 
 	// lastActivity is unix-nanos of the last data-plane connection, for the
 	// idle policy; lock-free, stamped on the relay hot path. Runtime-only, a
@@ -159,6 +167,10 @@ type Checkpoint struct {
 	Key       PoolKey   `json:"key"`
 	Tenant    string    `json:"tenant,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+
+	// Archive marks a lifecycle-internal wake image: hidden from listings
+	// and undeletable on every node sharing the store, not just the owner.
+	Archive bool `json:"archive,omitempty"`
 }
 
 // VMRecord is the subset of cocoon's `vm list --format json` output the

@@ -1,14 +1,67 @@
 package pool
 
 import (
+	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
+
+// stallingStore parks Publish after the record becomes visible, exposing the
+// window between an archive's publish and its ArchiveCk commit.
+type stallingStore struct {
+	store.Store
+	published chan string
+	release   chan struct{}
+}
+
+func (s *stallingStore) Publish(ctx context.Context, staging, id string) error {
+	if err := s.Store.Publish(ctx, staging, id); err != nil {
+		return err
+	}
+	s.published <- id
+	<-s.release
+	return nil
+}
+
+// TestArchivePublishWindowPinsCheckpoint guards the pre-pin: between an
+// archive's checkpoint publish and the ArchiveCk commit, the checkpoint must
+// be invisible to listings and refuse deletion — a delete landing in that
+// window stranded the claim.
+func TestArchivePublishWindowPinsCheckpoint(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, archivePool(3600))
+	sb := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	stall := &stallingStore{Store: m.ckpts, published: make(chan string, 1), release: make(chan struct{})}
+	m.ckpts = stall
+
+	archived := make(chan error, 1)
+	go func() { archived <- m.archive(t.Context(), sb) }()
+	ck := <-stall.published
+
+	if ckpts, err := m.Checkpoints(t.Context(), ""); err != nil || len(ckpts) != 0 {
+		t.Errorf("mid-publish checkpoint visible: %v, %v", ckpts, err)
+	}
+	if err := m.DeleteCheckpoint(t.Context(), ck, ""); !errors.Is(err, ErrUnknownCheckpoint) {
+		t.Errorf("mid-publish delete: %v, want ErrUnknownCheckpoint", err)
+	}
+	close(stall.release)
+	if err := <-archived; err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake archived: %v", err)
+	}
+}
 
 // breakStore points the claim store at a path whose parent is missing, so the
 // next save fails — the fault used to exercise the persist-failure paths.
@@ -55,6 +108,105 @@ func ckExists(t *testing.T, m *Manager, ck string) bool {
 	}
 	release()
 	return true
+}
+
+// TestArchiveCkHiddenAcrossNodes: on a shared store, another node has no
+// in-memory pin for this node's archive wake images — the meta Archive flag
+// must hide them from its listings, refuse its deletes, and spare its TTL
+// sweep, or a routine cleanup elsewhere strands the claim.
+func TestArchiveCkHiddenAcrossNodes(t *testing.T) {
+	shared := t.TempDir()
+	mkMgr := func() *Manager {
+		m, err := NewManager(t.Context(), &config.Config{
+			DataDir: t.TempDir(), CheckpointDir: shared,
+			Pools: []config.PoolSpec{archivePool(3600)},
+		}, newFakeEngine())
+		if err != nil {
+			t.Fatalf("manager: %v", err)
+		}
+		return m
+	}
+	mA, mB := mkMgr(), mkMgr()
+	sb := mustClaim(t, mA, testKey)
+	mustArchive(t, mA, sb)
+	ck := sb.ArchiveCk
+
+	if ckpts, err := mB.Checkpoints(t.Context(), ""); err != nil || len(ckpts) != 0 {
+		t.Errorf("peer lists the archive wake image: %v, %v", ckpts, err)
+	}
+	if err := mB.DeleteCheckpoint(t.Context(), ck, ""); !errors.Is(err, ErrUnknownCheckpoint) {
+		t.Errorf("peer delete: %v, want ErrUnknownCheckpoint", err)
+	}
+	mB.ckptTTL = time.Nanosecond
+	mB.sweepExpiredCheckpoints(t.Context())
+	if !ckExists(t, mA, ck) {
+		t.Fatal("peer TTL sweep deleted the archive wake image")
+	}
+	if _, err := mA.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("owner wake after peer sweep: %v", err)
+	}
+}
+
+// TestReconcileReclaimsOrphanArchiveCk: a crash between an archive's publish
+// and its journal commit leaves a flagged record listings hide and deletes
+// refuse; reconcile identifies it by the journal (the sandbox is ours, under
+// a different ArchiveCk) and reclaims it. A flagged record of an unknown
+// sandbox is left alone.
+func TestReconcileReclaimsOrphanArchiveCk(t *testing.T) {
+	eng := newFakeEngine()
+	dataDir := t.TempDir()
+	claims := map[string]*types.Sandbox{
+		"sb_mine": {ID: "sb_mine", VMName: "sbx-gone-1", Key: testKey, Token: "tok"},
+	}
+	if err := newClaimStore(dataDir).save(claims); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	m := newTestManagerAt(t, eng, dataDir)
+	seedCk := func(id, sandboxID string) {
+		t.Helper()
+		staging, err := m.ckpts.Stage(id)
+		if err != nil {
+			t.Fatalf("stage: %v", err)
+		}
+		if err := os.MkdirAll(filepath.Join(staging, store.ExportDir), 0o750); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		meta := `{"id":"` + id + `","sandbox_id":"` + sandboxID + `","archive":true}`
+		if err := os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(meta), 0o600); err != nil {
+			t.Fatalf("meta: %v", err)
+		}
+		if err := m.ckpts.Publish(t.Context(), staging, id); err != nil {
+			t.Fatalf("publish: %v", err)
+		}
+	}
+	seedCk("ck_00000000000000aa", "sb_mine")
+	seedCk("ck_00000000000000bb", "sb_elsewhere")
+
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if ckExists(t, m, "ck_00000000000000aa") {
+		t.Error("orphan archive ck of a journaled sandbox not reclaimed")
+	}
+	if !ckExists(t, m, "ck_00000000000000bb") {
+		t.Error("another node's archive ck reclaimed")
+	}
+}
+
+// TestClaimCheckpointRefusesArchive: wake images are lifecycle-internal —
+// branching from one would race its consumption by the owner's wake.
+func TestClaimCheckpointRefusesArchive(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, archivePool(3600))
+	sb := mustClaim(t, m, testKey)
+	mustArchive(t, m, sb)
+
+	if _, err := m.ClaimCheckpoint(t.Context(), sb.ArchiveCk, 0, ""); !errors.Is(err, ErrUnknownCheckpoint) {
+		t.Errorf("branch from archive ck: %v, want ErrUnknownCheckpoint", err)
+	}
+	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("owner wake: %v", err)
+	}
 }
 
 // TestArchiveLifecycleRoundTrip exercises the real sweep wiring:
