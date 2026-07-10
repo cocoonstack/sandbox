@@ -14,24 +14,24 @@ import (
 var nonInjectable = map[string]struct{}{
 	"host": {}, "content-length": {}, "transfer-encoding": {}, "connection": {},
 	"keep-alive": {}, "proxy-authenticate": {}, "proxy-authorization": {},
-	"te": {}, "trailer": {}, "upgrade": {},
+	"proxy-connection": {}, "te": {}, "trailer": {}, "upgrade": {},
 }
 
 // SecretSpec declares a node-side credential the proxy injects: Header is the
 // request header it sets, valued from the ValueEnv env var — the literal
 // never sits in the config file.
 type SecretSpec struct {
-	Name     string `json:"name"`
-	Header   string `json:"header"`
-	Value    string `json:"value,omitempty"` // always rejected — kept so an inline value fails loudly
-	ValueEnv string `json:"value_env"`       //nolint:gosec // env var name, not a value
+	Name     string  `json:"name"`
+	Header   string  `json:"header"`
+	Value    *string `json:"value,omitempty"` // rejected whenever present — value_env is the only source
+	ValueEnv string  `json:"value_env"`       //nolint:gosec // env var name, not a value
 }
 
 func (s SecretSpec) Validate() error {
 	switch {
 	case s.Name == "":
 		return fmt.Errorf("secret name must not be empty")
-	case s.Value != "":
+	case s.Value != nil:
 		return fmt.Errorf("secret %q: value is not supported, use value_env", s.Name)
 	case !httpguts.ValidHeaderFieldName(s.Header):
 		return fmt.Errorf("secret %q: header %q is not a valid header name", s.Name, s.Header)

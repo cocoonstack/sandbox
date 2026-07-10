@@ -13,12 +13,14 @@ func TestSecretSpecValidate(t *testing.T) {
 		{"no header", SecretSpec{Name: "gh", ValueEnv: "GH_TOKEN"}, false},
 		{"invalid header", SecretSpec{Name: "gh", Header: "Bad Header:", ValueEnv: "GH_TOKEN"}, false},
 		{"no value_env", SecretSpec{Name: "gh", Header: "Authorization"}, false},
-		{"inline value", SecretSpec{Name: "gh", Header: "Authorization", Value: "tok"}, false},
-		{"value and value_env", SecretSpec{Name: "gh", Header: "Authorization", Value: "tok", ValueEnv: "GH_TOKEN"}, false},
+		{"inline value", SecretSpec{Name: "gh", Header: "Authorization", Value: new("tok")}, false},
+		{"value and value_env", SecretSpec{Name: "gh", Header: "Authorization", Value: new("tok"), ValueEnv: "GH_TOKEN"}, false},
+		{"empty inline value", SecretSpec{Name: "gh", Header: "Authorization", Value: new(""), ValueEnv: "GH_TOKEN"}, false},
 		{"host header", SecretSpec{Name: "gh", Header: "Host", ValueEnv: "GH_TOKEN"}, false},
 		{"content-length header", SecretSpec{Name: "gh", Header: "Content-Length", ValueEnv: "GH_TOKEN"}, false},
 		{"transfer-encoding header", SecretSpec{Name: "gh", Header: "Transfer-Encoding", ValueEnv: "GH_TOKEN"}, false},
 		{"connection header", SecretSpec{Name: "gh", Header: "connection", ValueEnv: "GH_TOKEN"}, false},
+		{"proxy-connection header", SecretSpec{Name: "gh", Header: "Proxy-Connection", ValueEnv: "GH_TOKEN"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
