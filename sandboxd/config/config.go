@@ -196,7 +196,7 @@ func Load(path string) (*Config, error) {
 	// (e.g. "method" for "methods" leaves Methods empty = any method); a
 	// duplicated key would make one value silently win, and trailing data
 	// would be silently ignored.
-	if err := rejectDuplicateKeys(json.NewDecoder(bytes.NewReader(raw))); err != nil {
+	if err := RejectDuplicateKeys(json.NewDecoder(bytes.NewReader(raw))); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
@@ -214,9 +214,9 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// rejectDuplicateKeys walks one JSON value and refuses objects that repeat a
+// RejectDuplicateKeys walks one JSON value and refuses objects that repeat a
 // key at the same level.
-func rejectDuplicateKeys(dec *json.Decoder) error {
+func RejectDuplicateKeys(dec *json.Decoder) error {
 	tok, err := dec.Token()
 	if err != nil {
 		return err
@@ -238,7 +238,7 @@ func rejectDuplicateKeys(dec *json.Decoder) error {
 				return fmt.Errorf("duplicate key %q", key)
 			}
 			seen[key] = struct{}{}
-			if walkErr := rejectDuplicateKeys(dec); walkErr != nil {
+			if walkErr := RejectDuplicateKeys(dec); walkErr != nil {
 				return walkErr
 			}
 		}
@@ -246,7 +246,7 @@ func rejectDuplicateKeys(dec *json.Decoder) error {
 		return err
 	case '[':
 		for dec.More() {
-			if walkErr := rejectDuplicateKeys(dec); walkErr != nil {
+			if walkErr := RejectDuplicateKeys(dec); walkErr != nil {
 				return walkErr
 			}
 		}

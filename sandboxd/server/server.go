@@ -8,6 +8,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -525,12 +526,22 @@ func decodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	return v, true
 }
 
-// decodeBodyStrict rejects unknown fields — for operator bodies where a
-// mistyped key must fail, not silently no-op. Client-facing bodies stay
-// lenient (newer SDK fields must not break older nodes).
+// decodeBodyStrict rejects unknown fields and duplicated keys — for operator
+// bodies where a mistyped or repeated key must fail, not silently no-op.
+// Client-facing bodies stay lenient (newer SDK fields must not break older
+// nodes).
 func decodeBodyStrict[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var v T
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return v, false
+	}
+	if err := config.RejectDuplicateKeys(json.NewDecoder(bytes.NewReader(raw))); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return v, false
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&v); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body: "+err.Error())
