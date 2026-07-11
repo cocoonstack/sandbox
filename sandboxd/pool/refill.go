@@ -168,20 +168,32 @@ func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir
 }
 
 // provision creates one claim-ready VM: clone from a golden when available,
-// cold-boot the template otherwise. The VM is destroyed on any failure —
-// including create-command failures, which can leave a half-created VM
-// behind (e.g. the CLI killed by timeout after the VMM spawned).
+// cold-boot the template otherwise.
 func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden string) (*types.Sandbox, error) {
-	name := vmName(key)
-	probeTimeout := claimProbeTimeout
-	var rec types.VMRecord
-	var err error
-	if golden != "" {
-		rec, err = m.eng.Clone(ctx, golden, name, key)
-	} else {
-		rec, err = m.eng.RunCold(ctx, name, key)
-		probeTimeout = coldProbeTimeout
+	if golden == "" {
+		return m.provisionVM(ctx, key, coldProbeTimeout, func(name string) (types.VMRecord, error) {
+			return m.eng.RunCold(ctx, name, key)
+		})
 	}
+	return m.provisionVM(ctx, key, claimProbeTimeout, func(name string) (types.VMRecord, error) {
+		return m.eng.Clone(ctx, golden, name, key)
+	})
+}
+
+// provisionSnap creates one claim-ready clone from a local-store snapshot —
+// fork's fast path, which skips the export-to-dir copy.
+func (m *Manager) provisionSnap(ctx context.Context, key types.PoolKey, snap string) (*types.Sandbox, error) {
+	return m.provisionVM(ctx, key, claimProbeTimeout, func(name string) (types.VMRecord, error) {
+		return m.eng.CloneSnap(ctx, snap, name, key)
+	})
+}
+
+// provisionVM creates one VM via create, probes it ready, and destroys it on
+// any failure — including create-command failures, which can leave a half-
+// created VM behind (e.g. the CLI killed by timeout after the VMM spawned).
+func (m *Manager) provisionVM(ctx context.Context, key types.PoolKey, probeTimeout time.Duration, create func(name string) (types.VMRecord, error)) (*types.Sandbox, error) {
+	name := vmName(key)
+	rec, err := create(name)
 	var sock string
 	if err == nil {
 		sock, err = m.probeReady(ctx, name, rec.VsockSocket, probeTimeout)
@@ -193,10 +205,10 @@ func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden strin
 	return &types.Sandbox{VMName: name, Key: key, VsockSocket: sock, TAP: rec.TapDevice()}, nil
 }
 
-// cloneBatch builds count claim-ready clones from an exported snapshot dir,
-// bounded by the refill semaphore — forks and refills contend for the same
-// node resources, so they share one gate. One failure destroys the batch.
-func (m *Manager) cloneBatch(ctx context.Context, key types.PoolKey, dir string, count int) ([]*types.Sandbox, error) {
+// cloneBatch builds count claim-ready VMs via provisionOne, bounded by the
+// refill semaphore — forks and refills contend for the same node resources,
+// so they share one gate. One failure destroys the batch.
+func (m *Manager) cloneBatch(ctx context.Context, count int, provisionOne func() (*types.Sandbox, error)) ([]*types.Sandbox, error) {
 	children := make([]*types.Sandbox, count)
 	errs := make([]error, count)
 	var wg sync.WaitGroup
@@ -204,7 +216,7 @@ func (m *Manager) cloneBatch(ctx context.Context, key types.PoolKey, dir string,
 		m.refillSem <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-m.refillSem }()
-			children[i], errs[i] = m.provision(ctx, key, dir)
+			children[i], errs[i] = provisionOne()
 		})
 	}
 	wg.Wait()

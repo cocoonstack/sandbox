@@ -42,6 +42,10 @@ func (f *fakeEngine) Clone(_ context.Context, _, name string, _ types.PoolKey) (
 	return f.createRecord(name)
 }
 
+func (f *fakeEngine) CloneSnap(_ context.Context, _, name string, _ types.PoolKey) (types.VMRecord, error) {
+	return f.createRecord(name)
+}
+
 func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) (types.VMRecord, error) {
 	return f.createRecord(name)
 }

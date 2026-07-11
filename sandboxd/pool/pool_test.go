@@ -577,6 +577,21 @@ func (f *fakeEngine) Clone(_ context.Context, fromDir, name string, _ types.Pool
 	return f.record(name), nil
 }
 
+func (f *fakeEngine) CloneSnap(_ context.Context, snap, name string, _ types.PoolKey) (types.VMRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.clones = append(f.clones, name)
+	f.cloneFroms = append(f.cloneFroms, snap)
+	if f.cloneErr != nil {
+		return types.VMRecord{}, f.cloneErr
+	}
+	if f.cloneFailNth > 0 && len(f.clones) == f.cloneFailNth {
+		return types.VMRecord{}, errors.New("clone failed")
+	}
+	f.vms[name] = "/vsock/" + name
+	return f.record(name), nil
+}
+
 func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) (types.VMRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

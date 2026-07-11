@@ -74,6 +74,7 @@ var (
 // Engine is the slice of the cocoon driver the manager consumes.
 type Engine interface {
 	Clone(ctx context.Context, fromDir, name string, key types.PoolKey) (types.VMRecord, error)
+	CloneSnap(ctx context.Context, snap, name string, key types.PoolKey) (types.VMRecord, error)
 	RunCold(ctx context.Context, name string, key types.PoolKey) (types.VMRecord, error)
 	Remove(ctx context.Context, name string) error
 	SnapshotSave(ctx context.Context, vmName, snapName string) error

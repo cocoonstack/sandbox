@@ -24,8 +24,12 @@ func TestForkFromRunning(t *testing.T) {
 	if len(eng.snapSaves) != 1 || !strings.HasPrefix(eng.snapSaves[0], forkPrefix) {
 		t.Errorf("snapSaves %v, want one %s* snapshot", eng.snapSaves, forkPrefix)
 	}
-	if !slices.Equal(eng.exports, eng.snapSaves) {
-		t.Errorf("exported %v, want the fork snapshot %v", eng.exports, eng.snapSaves)
+	// Fast path: clone the children straight from the store snapshot, no export.
+	if len(eng.exports) != 0 {
+		t.Errorf("exported %v, want none (fork clones from the snapshot directly)", eng.exports)
+	}
+	if want := []string{eng.snapSaves[0], eng.snapSaves[0], eng.snapSaves[0]}; !slices.Equal(eng.cloneFroms, want) {
+		t.Errorf("children cloned from %v, want three clones of the fork snapshot %v", eng.cloneFroms, want)
 	}
 	if !slices.Contains(eng.snapRemoves, eng.snapSaves[0]) {
 		t.Errorf("snapRemoves %v, want the transient fork snapshot dropped", eng.snapRemoves)
