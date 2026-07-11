@@ -24,6 +24,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/dir"
 	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
@@ -132,8 +133,6 @@ type pool struct {
 	nextBuild time.Time
 	warm      []*types.Sandbox
 	refilling int
-
-	egressPolicy *egress.Policy // this pool's allow-list; nil = no pool policy
 }
 
 func (p *pool) applySpec(spec config.PoolSpec) {
@@ -142,9 +141,6 @@ func (p *pool) applySpec(spec config.PoolSpec) {
 	p.idle = time.Duration(spec.IdleHibernateSeconds) * time.Second
 	p.archiveAfter = time.Duration(spec.ArchiveAfterSeconds) * time.Second
 	p.archiveDelete = time.Duration(spec.ArchiveDeleteAfterSeconds) * time.Second
-	if spec.Egress != nil {
-		p.egressPolicy = spec.Egress // config-only; a nil SetPools spec must not clear it
-	}
 }
 
 // Manager owns the node's pools, claims, and their persistence.
@@ -191,6 +187,7 @@ type Manager struct {
 	tenantMax    map[string]int
 	tenantLive   map[string]int
 	tenantEgress map[string]*egress.Policy // per-tenant allow-list; nil = no tenant policy
+	poolEgress   map[types.PoolKey]*egress.Policy
 	usage        *journal
 	audit        *journal
 	counters     counters
@@ -220,6 +217,10 @@ type Manager struct {
 	egressSecrets *egress.SecretStore
 	guardedEgress bool
 	lockEgress    bool
+	// dial and sweep are fields as test seams: the SSRF guard blocks loopback
+	// test origins, and the nft sweep is netlink-only.
+	dial  egress.DialFunc
+	sweep func(map[string]bool) error
 
 	mu      sync.Mutex
 	pools   map[types.PoolKey]*pool
@@ -251,6 +252,8 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		egressListeners: map[string]*egressListener{},
 		egressTaps:      map[string]string{},
 		egressSecrets:   secrets,
+		dial:            egressDialer.DialContext,
+		sweep:           netfilter.SweepExcept,
 		refillSem:       make(chan struct{}, maxConcurrentRefills),
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
@@ -291,6 +294,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	m.maxClaims = cfg.MaxClaims
 	m.tenantMax = make(map[string]int, len(cfg.Tenants))
 	m.tenantEgress = make(map[string]*egress.Policy, len(cfg.Tenants))
+	m.poolEgress = make(map[types.PoolKey]*egress.Policy, len(cfg.Pools))
 	for _, tn := range cfg.Tenants {
 		m.tenantMax[tn.Name] = tn.MaxClaims
 		if tn.Egress != nil {
@@ -314,6 +318,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 			m.archiveEnabled = true
 		}
 		if spec.Egress != nil {
+			m.poolEgress[spec.PoolKey] = spec.Egress
 			m.guardedEgress = true
 		}
 	}

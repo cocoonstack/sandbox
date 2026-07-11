@@ -18,13 +18,11 @@ import (
 )
 
 var (
-	cgnatRange = netip.MustParsePrefix("100.64.0.0/10") // RFC 6598; some clouds host metadata here
-	nat64Range = netip.MustParsePrefix("64:ff9b::/96")  // RFC 6052; DNS64 embeds an IPv4 in the low 32 bits
+	cgnatRange      = netip.MustParsePrefix("100.64.0.0/10")  // RFC 6598 CGNAT; some clouds host metadata here
+	nat64Range      = netip.MustParsePrefix("64:ff9b::/96")   // RFC 6052 NAT64; v4 in the low 32 bits
+	nat64LocalRange = netip.MustParsePrefix("64:ff9b:1::/48") // RFC 8215 local-use NAT64
 
-	// egressDialer refuses connections to internal addresses so an allow-listed
-	// host that resolves (or is rebound) to loopback, link-local (incl. cloud
-	// metadata), or a private/CGNAT/sibling address cannot turn the proxy into
-	// an SSRF.
+	// egressDialer blocks internal-address targets so the proxy cannot be an SSRF.
 	egressDialer = &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
 		host, _, err := net.SplitHostPort(address)
 		if err != nil {
@@ -34,12 +32,13 @@ var (
 		if err != nil {
 			return fmt.Errorf("egress: unresolved address %q", host)
 		}
-		ip = ip.Unmap() // fold ::ffff:127.0.0.1 so the v4 checks apply
+		ip = ip.Unmap()
 		if nat64Range.Contains(ip) {
-			b := ip.As16() // a DNS64-synthesized metadata/private v4 hides in the low 32 bits
+			b := ip.As16()
 			ip = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
 		}
-		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || cgnatRange.Contains(ip) {
+		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+			cgnatRange.Contains(ip) || nat64LocalRange.Contains(ip) {
 			return fmt.Errorf("egress: blocked internal address %s", ip)
 		}
 		return nil
@@ -126,7 +125,7 @@ func (m *Manager) armEgressProxy(_ context.Context, sb *types.Sandbox) error {
 		return fmt.Errorf("listen egress %s: %w", sb.ID, err)
 	}
 	id, tenant := sb.ID, sb.Tenant
-	proxy := egress.New(id, tenant, policy, m.egressSecrets, egressDialer.DialContext,
+	proxy := egress.New(id, tenant, policy, m.egressSecrets, m.dial,
 		func(ev egress.Event) { m.recordEgress(context.Background(), id, tenant, ev) })
 	el := &egressListener{srv: &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}, ln: ln, path: path}
 	m.mu.Lock()
@@ -149,9 +148,7 @@ func (m *Manager) disarmIfReleased(sb *types.Sandbox) bool {
 }
 
 // disarmEgress tears down a sandbox's egress proxy listener, and its NIC lock
-// only when removed is true — a failed VM removal keeps the lock (the guest is
-// still running) but still stops the dropped claim's credential injection.
-// Idempotent.
+// only when removed (a failed removal keeps a running guest locked). Idempotent.
 func (m *Manager) disarmEgress(id string, removed bool) {
 	if !m.guardedEgress && !m.lockEgress {
 		return
@@ -178,10 +175,7 @@ func (m *Manager) disarmEgress(id string, removed bool) {
 func (m *Manager) effectivePolicy(sb *types.Sandbox) (egress.Evaluator, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var poolPol *egress.Policy
-	if p := m.pools[sb.Key]; p != nil {
-		poolPol = p.egressPolicy
-	}
+	poolPol := m.poolEgress[sb.Key]
 	tenantPol := m.tenantEgress[sb.Tenant]
 	switch {
 	case poolPol != nil && tenantPol != nil:

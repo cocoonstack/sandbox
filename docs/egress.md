@@ -47,8 +47,9 @@ lock unbroken from claim to release; those operations are refused (409) on the
 lane.
 
 The proxy also refuses to connect to internal addresses — loopback, link-local
-(including cloud metadata), and private ranges — so an allow-listed host that
-resolves, or is rebound, to one cannot reach the sandboxd host or a sibling VM.
+(including cloud metadata), private, carrier-grade NAT, and NAT64-embedded
+ranges — so an allow-listed host that resolves, or is rebound, to one cannot
+reach the sandboxd host or a sibling VM.
 
 ### Deployment constraints
 

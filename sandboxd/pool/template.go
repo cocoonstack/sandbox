@@ -225,6 +225,9 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string,
 	if dir != "" {
 		return dir, func() {}, nil
 	}
+	if key.Net == types.NetEgress {
+		return "", func() {}, nil // never resume a live-captured template on the egress lane; cold-boot instead
+	}
 	id := store.TemplateID(key.Hash())
 	l := m.recLock(id)
 	l.RLock()

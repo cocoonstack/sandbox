@@ -50,7 +50,7 @@ func TestEgressProxyInjectsAndGates(t *testing.T) {
 
 	pol := &egress.Policy{Allow: []egress.Rule{{Host: host, Secret: "gh"}}}
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
-	defer swapEgressDialer(&net.Dialer{})() // the test origin is on loopback, which the SSRF guard blocks
+	m.dial = (&net.Dialer{}).DialContext // the test origin is on loopback, which the SSRF guard blocks
 
 	// A short socket dir: the UDS path + "_2049" must fit the OS sun_path cap.
 	sockDir, err := os.MkdirTemp("/tmp", "eg")
@@ -165,7 +165,10 @@ func TestEffectivePolicyComposition(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m.pools[testKey] = &pool{key: testKey, egressPolicy: tc.pool}
+			m.poolEgress = map[types.PoolKey]*egress.Policy{}
+			if tc.pool != nil {
+				m.poolEgress[testKey] = tc.pool
+			}
 			m.tenantEgress = map[string]*egress.Policy{}
 			if tc.tenant != nil {
 				m.tenantEgress["acme"] = tc.tenant
@@ -304,13 +307,11 @@ func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
 	m.mu.Lock()
 	m.claimed[sb.ID] = sb
 	m.mu.Unlock()
-	// The live record names no tap, so the claim quarantines; its remove fails.
 	live := map[string]types.VMRecord{"sbx-q1": {Config: types.VMConfig{Name: "sbx-q1"}, State: vmStateRunning}}
 	removed := map[string]bool{}
 
 	var gotKeep map[string]bool
-	restore := swapSweepExcept(func(keep map[string]bool) error { gotKeep = keep; return nil })
-	defer restore()
+	m.sweep = func(keep map[string]bool) error { gotKeep = keep; return nil }
 	m.resyncEgress(t.Context(), live, removed)
 
 	if removed["sbx-q1"] {
@@ -324,18 +325,6 @@ func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
 	if _, ok := m.claimed["sb_q1"]; ok {
 		t.Error("quarantined claim still in service")
 	}
-}
-
-func swapSweepExcept(f func(map[string]bool) error) func() {
-	old := sweepExcept
-	sweepExcept = f
-	return func() { sweepExcept = old }
-}
-
-func swapEgressDialer(d *net.Dialer) func() {
-	old := egressDialer
-	egressDialer = d
-	return func() { egressDialer = old }
 }
 
 func TestEgressLaneLocksWithNoPolicyAnywhere(t *testing.T) {
@@ -366,7 +355,7 @@ func TestDisarmKeepsLockWhenRemoveFailed(t *testing.T) {
 	// A failed VM removal must tear down the proxy listener (stop credential
 	// injection for the dropped claim) but keep the NIC lock (the guest runs on).
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Egress: egPolicy})
-	defer swapEgressDialer(&net.Dialer{})()
+	m.dial = (&net.Dialer{}).DialContext
 	sockDir, err := os.MkdirTemp("/tmp", "eg")
 	if err != nil {
 		t.Fatalf("sockdir: %v", err)
@@ -394,25 +383,34 @@ func TestDisarmKeepsLockWhenRemoveFailed(t *testing.T) {
 }
 
 func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
-	// The pool API cannot carry egress (config-only); applying a warm change to
-	// an existing pool must not wipe its policy, which would widen egress to
-	// tenant-only for every later claim.
+	// The pool API cannot carry egress (config-only), so no SetPools call — warm
+	// change or drain-then-re-add — may widen the effective policy to tenant-only.
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 	gd := filepath.Join(m.goldensDir(), egKey.Hash())
-	if err := os.MkdirAll(gd, 0o750); err != nil {
+	if err := os.MkdirAll(gd, 0o750); err != nil { // on disk so re-add adopts it, sparing an async build
 		t.Fatalf("golden dir: %v", err)
 	}
 	m.mu.Lock()
-	m.pools[egKey].goldenDir = gd // adopt a golden so SetPools' refill spawns no async build
+	m.pools[egKey].goldenDir = gd
 	m.mu.Unlock()
-	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: egKey, WarmMax: 3}}); err != nil {
-		t.Fatalf("SetPools: %v", err)
+	policyLive := func() bool {
+		_, ok := m.effectivePolicy(&types.Sandbox{Key: egKey})
+		return ok
 	}
-	m.mu.Lock()
-	pol := m.pools[egKey].egressPolicy
-	m.mu.Unlock()
-	if pol == nil {
-		t.Fatal("SetPools wiped the pool egress policy")
+	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: egKey, WarmMax: 3}}); err != nil {
+		t.Fatalf("SetPools warm change: %v", err)
+	}
+	if !policyLive() {
+		t.Fatal("a warm change wiped the pool egress policy")
+	}
+	if err := m.SetPools(t.Context(), nil); err != nil { // drain: the pool object is deleted
+		t.Fatalf("SetPools drain: %v", err)
+	}
+	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: egKey}}); err != nil {
+		t.Fatalf("SetPools re-add: %v", err)
+	}
+	if !policyLive() {
+		t.Fatal("drain + re-add wiped the pool egress policy")
 	}
 }
 
@@ -422,6 +420,7 @@ func TestEgressDialerBlocksInternal(t *testing.T) {
 		"[::1]:80", "100.100.100.200:80", "[::ffff:127.0.0.1]:80",
 		"[64:ff9b::a9fe:a9fe]:80", // NAT64-embedded 169.254.169.254
 		"[64:ff9b::a00:1]:80",     // NAT64-embedded 10.0.0.1
+		"[64:ff9b:1::8.8.8.8]:80", // RFC 8215 local-use NAT64
 	}
 	for _, addr := range blocked {
 		if err := egressDialer.Control("tcp", addr, nil); err == nil {

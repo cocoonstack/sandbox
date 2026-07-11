@@ -186,10 +186,8 @@ func (c *Config) HasEgress() bool {
 	return c.Bridge != "" || c.Network != ""
 }
 
-// guardsEgressLane reports whether a policy could apply to an egress-lane claim:
-// a tenant policy (which rides any lane, including an unpooled egress claim) or
-// an egress-lane pool's own. A none-lane pool policy locks no tap, so it does
-// not count. No declared egress pool is required — claims mint keys directly.
+// guardsEgressLane: any tenant policy counts (claims mint egress keys without a
+// pool), a none-lane pool policy does not (it locks no tap).
 func (c *Config) guardsEgressLane() bool {
 	return slices.ContainsFunc(c.Tenants, func(t TenantSpec) bool { return t.Egress != nil }) ||
 		slices.ContainsFunc(c.Pools, func(p PoolSpec) bool { return p.Net == types.NetEgress && p.Egress != nil })

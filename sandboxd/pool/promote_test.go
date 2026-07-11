@@ -136,6 +136,31 @@ func TestReconcileSweepsGoldenTmpDirs(t *testing.T) {
 	}
 }
 
+func TestResolveGoldenSkipsPromotedEgressTemplate(t *testing.T) {
+	// A template promoted before the egress guard existed must never be resumed:
+	// resolveGolden returns "" for the egress lane so the claim cold-boots.
+	m := newTestManager(t, newFakeEngine())
+	id := store.TemplateID(egKey.Hash())
+	staging, err := m.tpls.Stage(id)
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	if err = os.MkdirAll(filepath.Join(staging, store.ExportDir), 0o750); err != nil {
+		t.Fatalf("mkdir export: %v", err)
+	}
+	if err = m.commitTemplate(t.Context(), staging, id, ""); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	dir, release, err := m.resolveGolden(t.Context(), egKey)
+	if err != nil {
+		t.Fatalf("resolveGolden: %v", err)
+	}
+	release()
+	if dir != "" {
+		t.Errorf("resolveGolden resumed a promoted egress template %q; want cold-boot", dir)
+	}
+}
+
 func TestReconcileMigratesLegacyTemplates(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)

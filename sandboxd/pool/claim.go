@@ -117,7 +117,7 @@ func (m *Manager) Release(ctx context.Context, id, token string) error {
 	if vmName != "" {
 		err = m.eng.Remove(ctx, vmName)
 	}
-	m.disarmEgress(id, vmName == "" || err == nil)
+	m.disarmEgress(id, err == nil)
 	m.dropSnap(ctx, snap)
 	m.counters.releases.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "release", ID: id, VMName: vmName})
