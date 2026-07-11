@@ -185,6 +185,22 @@ func (c *Config) HasEgress() bool {
 	return c.Bridge != "" || c.Network != ""
 }
 
+// hasEgressPolicy reports whether any pool or tenant carries an egress policy,
+// i.e. whether guarded egress (the nft NIC lock) is in force.
+func (c *Config) hasEgressPolicy() bool {
+	for _, p := range c.Pools {
+		if p.Egress != nil {
+			return true
+		}
+	}
+	for _, tn := range c.Tenants {
+		if tn.Egress != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Config) applyDefaults() {
 	if c.Listen == "" {
 		c.Listen = defaultListen
@@ -214,6 +230,11 @@ func (c *Config) applyDefaults() {
 func (c *Config) validate() error {
 	if c.Bridge != "" && c.Network != "" {
 		return fmt.Errorf("bridge and network are mutually exclusive")
+	}
+	// A CNI network's tap lives in the VM netns, unreachable from the root-netns
+	// nft lock, so guarded egress can only run on a bridge lane.
+	if c.Network != "" && c.hasEgressPolicy() {
+		return fmt.Errorf("guarded egress needs a bridge lane, not a CNI network: the tap lives in the VM netns and cannot be locked")
 	}
 	if c.MaxForkCount < 1 {
 		return fmt.Errorf("max_fork_count must be at least 1, got %d", c.MaxForkCount)
