@@ -50,6 +50,7 @@ func TestEgressProxyInjectsAndGates(t *testing.T) {
 
 	pol := &egress.Policy{Allow: []egress.Rule{{Host: host, Secret: "gh"}}}
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
+	m.dial = (&net.Dialer{}).DialContext // the test origin is on loopback, which the SSRF guard blocks
 
 	// A short socket dir: the UDS path + "_2049" must fit the OS sun_path cap.
 	sockDir, err := os.MkdirTemp("/tmp", "eg")
@@ -84,7 +85,7 @@ func TestEgressProxyInjectsAndGates(t *testing.T) {
 		t.Errorf("denied status %d, want 403", deny.StatusCode)
 	}
 
-	m.disarmEgress(sb.ID)
+	m.disarmEgress(sb.ID, true)
 	if _, err := net.Dial("unix", path); err == nil {
 		t.Error("egress socket still accepts after disarm")
 	}
@@ -164,7 +165,10 @@ func TestEffectivePolicyComposition(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m.pools[testKey] = &pool{key: testKey, egressPolicy: tc.pool}
+			m.poolEgress = map[types.PoolKey]*egress.Policy{}
+			if tc.pool != nil {
+				m.poolEgress[testKey] = tc.pool
+			}
 			m.tenantEgress = map[string]*egress.Policy{}
 			if tc.tenant != nil {
 				m.tenantEgress["acme"] = tc.tenant
@@ -306,10 +310,15 @@ func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
 	live := map[string]types.VMRecord{"sbx-q1": {Config: types.VMConfig{Name: "sbx-q1"}, State: vmStateRunning}}
 	removed := map[string]bool{}
 
+	var gotKeep map[string]bool
+	m.sweep = func(keep map[string]bool) error { gotKeep = keep; return nil }
 	m.resyncEgress(t.Context(), live, removed)
 
 	if removed["sbx-q1"] {
 		t.Error("failed remove marked the VM gone; the sweep would drop its lock table")
+	}
+	if !gotKeep["tap-q1"] {
+		t.Error("failed-remove VM's journal tap not kept; the sweep would unlock a running guest")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -318,11 +327,149 @@ func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
 	}
 }
 
+func TestEgressLaneLocksWithNoPolicyAnywhere(t *testing.T) {
+	// A bridge egress lane with zero policy on the node: guardedEgress is false,
+	// but the NIC must still be nft-locked (default-deny), never handed out free.
+	eng := newFakeEngine()
+	eng.tap = "tap-nopol"
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey}) // egress lane, no policy
+	if m.guardedEgress {
+		t.Fatal("no policy configured; guardedEgress should be false")
+	}
+	sb := &types.Sandbox{ID: "sb_np", Key: egKey, VMName: "sbx-np", TAP: "tap-nopol"}
+	lockErr := m.lockEgressNIC(t.Context(), sb)
+	m.mu.Lock()
+	attempted := m.egressTaps[sb.ID] == "tap-nopol"
+	m.mu.Unlock()
+	if lockErr != nil {
+		// nft is linux-only; off Linux the lock fails but must name the tap it
+		// tried, proving lockEgressNIC ran rather than short-circuiting as before.
+		attempted = strings.Contains(lockErr.Error(), "tap-nopol")
+	}
+	if !attempted {
+		t.Fatalf("policyless egress lane skipped the NIC lock: err=%v", lockErr)
+	}
+}
+
+func TestDisarmKeepsLockWhenRemoveFailed(t *testing.T) {
+	// A failed VM removal must tear down the proxy listener (stop credential
+	// injection for the dropped claim) but keep the NIC lock (the guest runs on).
+	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Egress: egPolicy})
+	m.dial = (&net.Dialer{}).DialContext
+	sockDir, err := os.MkdirTemp("/tmp", "eg")
+	if err != nil {
+		t.Fatalf("sockdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+	sb := &types.Sandbox{ID: "sb_dz", Key: testKey, VsockSocket: filepath.Join(sockDir, "v")}
+	if armErr := m.armEgressProxy(t.Context(), sb); armErr != nil {
+		t.Fatalf("arm proxy: %v", armErr)
+	}
+	m.mu.Lock()
+	m.egressTaps[sb.ID] = "tap-dz" // as lockEgressNIC would record at claim
+	m.mu.Unlock()
+	path := engine.EgressSocketPath(sb.VsockSocket)
+
+	m.disarmEgress(sb.ID, false)
+	if _, err := net.Dial("unix", path); err == nil {
+		t.Error("proxy listener still accepts after a failed-remove disarm")
+	}
+	m.mu.Lock()
+	tap := m.egressTaps[sb.ID]
+	m.mu.Unlock()
+	if tap != "tap-dz" {
+		t.Error("failed remove dropped the NIC lock; a still-running VM must stay locked")
+	}
+}
+
+func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
+	// The pool API cannot carry egress (config-only), so no SetPools call — warm
+	// change or drain-then-re-add — may widen the effective policy to tenant-only.
+	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
+	gd := filepath.Join(m.goldensDir(), egKey.Hash())
+	if err := os.MkdirAll(gd, 0o750); err != nil { // on disk so re-add adopts it, sparing an async build
+		t.Fatalf("golden dir: %v", err)
+	}
+	m.mu.Lock()
+	m.pools[egKey].goldenDir = gd
+	m.mu.Unlock()
+	policyLive := func() bool {
+		_, ok := m.effectivePolicy(&types.Sandbox{Key: egKey})
+		return ok
+	}
+	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: egKey, WarmMax: 3}}); err != nil {
+		t.Fatalf("SetPools warm change: %v", err)
+	}
+	if !policyLive() {
+		t.Fatal("a warm change wiped the pool egress policy")
+	}
+	if err := m.SetPools(t.Context(), nil); err != nil { // drain: the pool object is deleted
+		t.Fatalf("SetPools drain: %v", err)
+	}
+	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: egKey}}); err != nil {
+		t.Fatalf("SetPools re-add: %v", err)
+	}
+	if !policyLive() {
+		t.Fatal("drain + re-add wiped the pool egress policy")
+	}
+}
+
+func TestEgressDialerBlocksInternal(t *testing.T) {
+	blocked := []string{
+		// Caught by IsGlobalUnicast/IsPrivate/IsLinkLocal.
+		"127.0.0.1:80", "169.254.169.254:80", "10.0.0.5:443", "192.168.1.1:22",
+		"172.16.0.1:80", "255.255.255.255:80", "[::1]:80", "[::ffff:127.0.0.1]:80",
+		"[fe80::1]:80", "[fc00::1]:80", "[ff02::1]:80",
+		// IANA IPv4 special-purpose, Globally Reachable = false (one per table prefix).
+		"0.6.6.6:80", "100.100.100.200:80", "192.0.0.1:80", "192.0.2.1:80",
+		"192.88.99.2:80", "198.18.0.1:80", "198.19.255.255:80", "198.51.100.1:80",
+		"203.0.113.1:80", "240.1.2.3:80",
+		// IANA IPv6 special-purpose + deprecated v4-in-v6 embeddings.
+		"[100::1]:80", "[100:0:0:1::1]:80", "[2001:db8::1]:80", "[3fff::1]:80",
+		"[5f00::1]:80", "[::127.0.0.1]:80",
+		"[2001::a9fe:a9fe]:80",    // Teredo, within 2001::/23
+		"[2001:2::1]:80",          // benchmarking, within 2001::/23
+		"[2001:10::1]:80",         // ORCHID, within 2001::/23
+		"[64:ff9b:1::8.8.8.8]:80", // RFC 8215 local-use NAT64
+		"[2002:a9fe:a9fe::]:80",   // 6to4-embedded 169.254.169.254
+		"[64:ff9b::a9fe:a9fe]:80", // NAT64-embedded 169.254.169.254
+		"[64:ff9b::a00:1]:80",     // NAT64-embedded 10.0.0.1
+	}
+	for _, addr := range blocked {
+		if err := egressDialer.Control("tcp", addr, nil); err == nil {
+			t.Errorf("dial to internal %s allowed; SSRF not blocked", addr)
+		}
+	}
+	// public v4 direct, public v6, and a public v4 via the NAT64 well-known prefix
+	for _, addr := range []string{"93.184.216.34:443", "[2606:4700:4700::1111]:443", "[64:ff9b::5db8:d822]:443"} {
+		if err := egressDialer.Control("tcp", addr, nil); err != nil {
+			t.Errorf("dial to public %s blocked: %v", addr, err)
+		}
+	}
+}
+
+func TestEgressLaneCannotForkOrCheckpoint(t *testing.T) {
+	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
+	sb := &types.Sandbox{ID: "sb_egb", Key: egKey, Token: "tok", VMName: "sbx-egb"}
+	m.mu.Lock()
+	m.claimed[sb.ID] = sb
+	m.mu.Unlock()
+	if _, err := m.Fork(t.Context(), sb.ID, "tok", 1, time.Minute); !errors.Is(err, ErrNoEgressFork) {
+		t.Errorf("Fork on egress lane: got %v, want ErrNoEgressFork", err)
+	}
+	if _, err := m.Checkpoint(t.Context(), sb.ID, "tok", "", ""); !errors.Is(err, ErrNoEgressFork) {
+		t.Errorf("Checkpoint on egress lane: got %v, want ErrNoEgressFork", err)
+	}
+	if _, err := m.Promote(t.Context(), sb.ID, "tok", "tpl", ""); !errors.Is(err, ErrNoEgressFork) {
+		t.Errorf("Promote on egress lane: got %v, want ErrNoEgressFork", err)
+	}
+}
+
 func egressManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	t.Setenv("GH_TOKEN", "s3cr3t")
 	secrets := testSecrets(t, egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"})
-	m, err := NewManager(t.Context(), &config.Config{DataDir: t.TempDir(), Pools: pools}, eng, secrets)
+	m, err := NewManager(t.Context(), &config.Config{DataDir: t.TempDir(), Bridge: "sbxbr0", Pools: pools}, eng, secrets)
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}

@@ -40,9 +40,19 @@ remove keeps an existing lock in place; the next restart retries the remove). A
 lock that never applied plus a failed remove leaves the VM unguarded until a
 later remove succeeds.
 
-Egress-lane sandboxes do not hibernate or archive: cocoon resumes a guest before
-its fresh tap can be re-locked, so suspending would open an unlocked-NIC window.
-Keeping the lane live holds the lock unbroken from claim to release.
+Egress-lane sandboxes do not hibernate, archive, fork, checkpoint, or promote:
+cocoon resumes a guest before its fresh tap can be re-locked, so any resume from
+a snapshot would open an unlocked-NIC window. Keeping the lane live holds the
+lock unbroken from claim to release; those operations are refused (409) on the
+lane.
+
+The proxy also refuses to connect to internal addresses — every IANA
+special-purpose range that is not globally reachable (loopback, link-local
+incl. cloud metadata, private, carrier-grade NAT, benchmarking, documentation,
+reserved, per the registry snapshot in `egress.go`) plus the IPv4-embedding
+IPv6 forms (NAT64, 6to4, Teredo, IPv4-compatible) — so an allow-listed host
+that resolves, or is rebound, to one cannot reach the sandboxd host or a
+sibling VM.
 
 ### Deployment constraints
 
@@ -52,8 +62,17 @@ Keeping the lane live holds the lock unbroken from claim to release.
   matched by header fields, not payload, so a broadcast in that shape can still
   reach the local L2 segment (never routed off-link). Give egress-lane VMs a
   bridge they do not share with an untrusted listener.
-- **Bridge lane only.** A CNI network's tap lives in the VM netns, out of reach
-  of the root-netns lock; guarded egress on a CNI `network` is rejected at load.
+- **Bridge lane only (egress lane).** A CNI network's tap lives in the VM netns,
+  out of reach of the root-netns lock, so a guarded egress *lane* needs a bridge
+  and is rejected on a CNI `network`. None-lane policies ride the proxy and work
+  on either. A bridge egress lane locks every NIC default-deny, even with no
+  policy configured.
+- **No custom NAT64/DNS64 prefix routed to the host.** The SSRF guard folds the
+  standard NAT64 forms (RFC 6052 well-known `64:ff9b::/96`, RFC 8215 local-use
+  `64:ff9b:1::/48`), but an operator-specific network-specific prefix (RFC 6052
+  allows any /32–/96) is opaque — its embedded IPv4 reads as public. If the host
+  routes such a translator, an allow-listed or DNS-rebound host could reach an
+  internal IPv4 through it; do not route a custom NAT64 prefix on a sandboxd host.
 
 ## Configuration
 

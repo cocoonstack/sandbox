@@ -39,6 +39,9 @@ func (m *Manager) Promote(ctx context.Context, id, token, template, tenant strin
 	if !ok {
 		return types.PoolKey{}, ErrUnknownSandbox
 	}
+	if sb.Key.Net == types.NetEgress {
+		return types.PoolKey{}, ErrNoEgressFork
+	}
 	key := types.PoolKey{Template: template, Net: sb.Key.Net, Size: sb.Key.Size}
 	if m.pooledHash(key.Hash()) {
 		// A configured pool owns this key — promoting over it would
@@ -221,6 +224,9 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string,
 	m.mu.Unlock()
 	if dir != "" {
 		return dir, func() {}, nil
+	}
+	if key.Net == types.NetEgress {
+		return "", func() {}, nil // never resume a live-captured template on the egress lane; cold-boot instead
 	}
 	id := store.TemplateID(key.Hash())
 	l := m.recLock(id)

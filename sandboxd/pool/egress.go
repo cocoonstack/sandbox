@@ -5,14 +5,69 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"slices"
+	"syscall"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+)
+
+var (
+	nat64Range = netip.MustParsePrefix("64:ff9b::/96") // RFC 6052 NAT64; the embedded v4 is checked instead
+
+	// internalRanges is every IANA special-purpose prefix with Globally Reachable =
+	// false that IsGlobalUnicast/IsPrivate do not already exclude, plus the
+	// deprecated IPv4-compatible embedding, mirrored from the IPv4/IPv6
+	// Special-Purpose registries (snapshot 2026-07-11). 2001::/23 is blocked whole
+	// (its handful of globally-reachable anycast carve-outs are not egress targets).
+	internalRanges = []netip.Prefix{
+		netip.MustParsePrefix("0.0.0.0/8"),       // "this network"
+		netip.MustParsePrefix("100.64.0.0/10"),   // RFC 6598 CGNAT; some clouds host metadata here
+		netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments
+		netip.MustParsePrefix("192.0.2.0/24"),    // TEST-NET-1
+		netip.MustParsePrefix("192.88.99.2/32"),  // 6a44-relay anycast
+		netip.MustParsePrefix("198.18.0.0/15"),   // benchmarking
+		netip.MustParsePrefix("198.51.100.0/24"), // TEST-NET-2
+		netip.MustParsePrefix("203.0.113.0/24"),  // TEST-NET-3
+		netip.MustParsePrefix("240.0.0.0/4"),     // reserved
+
+		netip.MustParsePrefix("::/96"),          // deprecated IPv4-compatible; embeds a v4 unmapped
+		netip.MustParsePrefix("64:ff9b:1::/48"), // RFC 8215 local-use NAT64; embeds a v4
+		netip.MustParsePrefix("100::/64"),       // discard-only
+		netip.MustParsePrefix("100:0:0:1::/64"), // dummy prefix
+		netip.MustParsePrefix("2001::/23"),      // IETF protocol assignments (Teredo, benchmarking, ORCHID)
+		netip.MustParsePrefix("2001:db8::/32"),  // documentation
+		netip.MustParsePrefix("2002::/16"),      // 6to4; embeds a v4
+		netip.MustParsePrefix("3fff::/20"),      // documentation
+		netip.MustParsePrefix("5f00::/16"),      // SRv6 SIDs
+	}
+
+	// egressDialer blocks internal-address targets so the proxy cannot be an SSRF.
+	egressDialer = &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return err
+		}
+		ip, err := netip.ParseAddr(host)
+		if err != nil {
+			return fmt.Errorf("egress: unresolved address %q", host)
+		}
+		ip = ip.Unmap()
+		if nat64Range.Contains(ip) {
+			b := ip.As16()
+			ip = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
+		}
+		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+			slices.ContainsFunc(internalRanges, func(p netip.Prefix) bool { return p.Contains(ip) }) {
+			return fmt.Errorf("egress: blocked internal address %s", ip)
+		}
+		return nil
+	}}
 )
 
 // egressListener is one sandbox's egress accept point: an http.Server serving
@@ -43,7 +98,7 @@ func (m *Manager) armEgress(ctx context.Context, sb *types.Sandbox) error {
 // lockEgressNIC nft-locks the egress-lane NIC and records the tap for unlock;
 // the engine lookup is the fallback for claims from pre-tap journals.
 func (m *Manager) lockEgressNIC(ctx context.Context, sb *types.Sandbox) error {
-	if !m.guardedEgress || sb.Key.Net != types.NetEgress {
+	if !m.lockEgress || sb.Key.Net != types.NetEgress {
 		return nil
 	}
 	tap := sb.TAP
@@ -95,7 +150,7 @@ func (m *Manager) armEgressProxy(_ context.Context, sb *types.Sandbox) error {
 		return fmt.Errorf("listen egress %s: %w", sb.ID, err)
 	}
 	id, tenant := sb.ID, sb.Tenant
-	proxy := egress.New(id, tenant, policy, m.egressSecrets, (&net.Dialer{}).DialContext,
+	proxy := egress.New(id, tenant, policy, m.egressSecrets, m.dial,
 		func(ev egress.Event) { m.recordEgress(context.Background(), id, tenant, ev) })
 	el := &egressListener{srv: &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}, ln: ln, path: path}
 	m.mu.Lock()
@@ -112,21 +167,25 @@ func (m *Manager) disarmIfReleased(sb *types.Sandbox) bool {
 	live := m.claimed[sb.ID] == sb
 	m.mu.Unlock()
 	if !live {
-		m.disarmEgress(sb.ID)
+		m.disarmEgress(sb.ID, true)
 	}
 	return !live
 }
 
-// disarmEgress tears down a sandbox's egress proxy and NIC lock; idempotent.
-func (m *Manager) disarmEgress(id string) {
-	if !m.guardedEgress {
+// disarmEgress tears down a sandbox's egress proxy listener, and its NIC lock
+// only when removed (a failed removal keeps a running guest locked). Idempotent.
+func (m *Manager) disarmEgress(id string, removed bool) {
+	if !m.guardedEgress && !m.lockEgress {
 		return
 	}
 	m.mu.Lock()
 	el := m.egressListeners[id]
 	delete(m.egressListeners, id)
-	tap := m.egressTaps[id]
-	delete(m.egressTaps, id)
+	var tap string
+	if removed {
+		tap = m.egressTaps[id]
+		delete(m.egressTaps, id)
+	}
 	m.mu.Unlock()
 	if el != nil {
 		el.close()
@@ -141,10 +200,7 @@ func (m *Manager) disarmEgress(id string) {
 func (m *Manager) effectivePolicy(sb *types.Sandbox) (egress.Evaluator, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var poolPol *egress.Policy
-	if p := m.pools[sb.Key]; p != nil {
-		poolPol = p.egressPolicy
-	}
+	poolPol := m.poolEgress[sb.Key]
 	tenantPol := m.tenantEgress[sb.Tenant]
 	switch {
 	case poolPol != nil && tenantPol != nil:

@@ -63,6 +63,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"tenant egress unknown secret", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x","secret":"gh"}]}}]}`, "unknown secret"},
 		{"guarded egress on cni pool", `{"network":"cni","pools":[{"template":"rt:24.04","net":"egress","size":"small","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
 		{"guarded egress on cni tenant", `{"api_token":"root","network":"cni","pools":[{"template":"rt:24.04","net":"egress","size":"small"}],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
+		{"cni tenant egress no egress pool", `{"api_token":"root","network":"cni","pools":[{"template":"rt:24.04","net":"none","size":"small"}],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Load(writeConfig(t, tt.body))
@@ -110,6 +111,19 @@ func TestLoadAcceptsUnguardedCNINetwork(t *testing.T) {
 	path := writeConfig(t, `{"network":"cni","pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`)
 	if _, err := Load(path); err != nil {
 		t.Fatalf("Load: %v", err)
+	}
+}
+
+func TestLoadAcceptsNoneLanePolicyOnCNI(t *testing.T) {
+	// A none-lane policy rides the vsock proxy and locks no tap, so it is valid on
+	// a CNI network — the bridge requirement is only for a guarded egress lane.
+	for _, body := range []string{
+		`{"network":"cni","pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"x"}]}}]}`,
+		`{"network":"cni","pools":[{"template":"rt:24.04","net":"egress","size":"small"},{"template":"rt:24.04","net":"none","size":"medium","egress":{"allow":[{"host":"x"}]}}]}`,
+	} {
+		if _, err := Load(writeConfig(t, body)); err != nil {
+			t.Errorf("Load rejected a none-lane policy on CNI: %v", err)
+		}
 	}
 }
 

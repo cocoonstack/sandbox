@@ -138,7 +138,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	}
 	// Disarm under Transition so a wake that runs the instant we release it
 	// re-arms cleanly instead of being clobbered by a late disarm.
-	m.disarmEgress(sb.ID)
+	m.disarmEgress(sb.ID, true)
 	sb.Transition.Unlock()
 	// Committed: the store ck is authoritative now; reclaim the local footprint.
 	if rmErr := m.eng.Remove(ctx, vmName); rmErr != nil {

@@ -78,7 +78,8 @@ snapshot point and the stop coincident). Idempotent on an already-hibernated
 sandbox. The TTL keeps running: a hibernated sandbox is still reaped (VM and
 snapshot) at its deadline. When to hibernate is the caller's policy — the
 node only provides the transition. 204 on success, 404 unknown id or wrong
-token.
+token, 409 on the egress lane (egress-lane sandboxes never hibernate; see
+[egress](egress.md)).
 
 ## POST /v1/sandboxes/{id}/fork
 
@@ -104,7 +105,9 @@ All-or-nothing: on error no child survived. 200 with one claim per child:
 
 Children inherit the parent's tenant and count against its `max_claims`,
 whoever calls. 400 invalid count or body, 401 bad api token, 404 unknown id
-or wrong sandbox token, 429 node or the parent's tenant at `max_claims`.
+or wrong sandbox token, 409 egress-lane parent (the lane never forks,
+checkpoints, or promotes; see [egress](egress.md)), 429 node or the parent's
+tenant at `max_claims`.
 
 ## POST /v1/sandboxes/{id}/promote
 
@@ -130,8 +133,9 @@ exactly this key:
 ```
 
 400 invalid name, 401 bad api token, 409 when the name collides with a
-configured pool or the template is owned by another tenant, 404
-unknown id or wrong sandbox token.
+configured pool, the template is owned by another tenant, or the sandbox is
+on the egress lane (see [egress](egress.md)), 404 unknown id or wrong
+sandbox token.
 
 ## DELETE /v1/templates?template=…&net=…&size=…
 
@@ -180,15 +184,16 @@ Auth: node API token; body `{"token": "<sandbox token>", "name": "..."}`
 answers `200 {"checkpoint": {id, name, sandbox_id, key, tenant?,
 created_at}}` — `tenant` records the calling tenant, absent for root.
 400 bad body or name, 401 bad api token, 404 unknown id or wrong sandbox
-token.
+token, 409 egress-lane sandbox (see [egress](egress.md)).
 
 ## POST /v1/checkpoints/{id}/claim
 
 Auth: node API token; body `{"ttl_seconds": 0}`. Claims a fresh sandbox
 branched from the checkpoint (a normal claim response, attributed to the
 caller); the checkpoint's recorded key applies — the unguessable id is the
-capability to branch. 404 for an unknown checkpoint, 429 node or calling
-tenant at `max_claims`.
+capability to branch. 404 for an unknown checkpoint, 409 for an egress-lane
+checkpoint (see [egress](egress.md)), 429 node or calling tenant at
+`max_claims`.
 
 ## GET /v1/checkpoints
 

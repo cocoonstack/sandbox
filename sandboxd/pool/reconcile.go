@@ -157,7 +157,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 	var quarantine []*types.Sandbox
 	for _, sb := range m.claimed {
 		sb.TouchAt(now)
-		if m.guardedEgress && sb.Key.Net == types.NetEgress {
+		if m.lockEgress && sb.Key.Net == types.NetEgress {
 			tap := m.readoptEgressTap(sb, live)
 			if tap == "" {
 				logger.Errorf(ctx, errNoEgressTap, "egress claim %s has no lockable tap; quarantining", sb.ID)
@@ -189,7 +189,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 			keep[tap] = true
 		}
 	}
-	if sweepErr := netfilter.SweepExcept(keep); sweepErr != nil {
+	if sweepErr := m.sweep(keep); sweepErr != nil {
 		logger.Warnf(ctx, "sweep orphan egress tables: %v", sweepErr)
 	}
 }

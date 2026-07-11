@@ -186,9 +186,11 @@ func (c *Config) HasEgress() bool {
 	return c.Bridge != "" || c.Network != ""
 }
 
-func (c *Config) hasEgressPolicy() bool {
-	return slices.ContainsFunc(c.Pools, func(p PoolSpec) bool { return p.Egress != nil }) ||
-		slices.ContainsFunc(c.Tenants, func(t TenantSpec) bool { return t.Egress != nil })
+// guardsEgressLane: any tenant policy counts (claims mint egress keys without a
+// pool), a none-lane pool policy does not (it locks no tap).
+func (c *Config) guardsEgressLane() bool {
+	return slices.ContainsFunc(c.Tenants, func(t TenantSpec) bool { return t.Egress != nil }) ||
+		slices.ContainsFunc(c.Pools, func(p PoolSpec) bool { return p.Net == types.NetEgress && p.Egress != nil })
 }
 
 func (c *Config) applyDefaults() {
@@ -223,7 +225,7 @@ func (c *Config) validate() error {
 	}
 	// A CNI network's tap lives in the VM netns, unreachable from the root-netns
 	// nft lock; guarded egress needs a bridge.
-	if c.Network != "" && c.hasEgressPolicy() {
+	if c.Network != "" && c.guardsEgressLane() {
 		return fmt.Errorf("guarded egress needs a bridge lane, not a CNI network: the tap lives in the VM netns and cannot be locked")
 	}
 	if c.MaxForkCount < 1 {
