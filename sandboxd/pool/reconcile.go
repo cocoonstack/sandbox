@@ -175,14 +175,15 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 		}
 	}
 	// Quarantine before the sweep so a failed remove's still-running tap is kept.
+	keep := make(map[string]bool, len(live))
 	for _, sb := range quarantine {
 		if m.quarantineClaim(ctx, sb) {
 			removed[sb.VMName] = true
+		} else if sb.TAP != "" {
+			keep[sb.TAP] = true
 		}
 	}
-	// Keep every still-running VM's tap; sweep only a confirmed-gone VM's table,
-	// so the sweep can never unlock a running guest.
-	keep := make(map[string]bool, len(live))
+	// Keep every still-running VM's tap; sweep only a confirmed-gone VM's table.
 	for name, rec := range live {
 		if tap := rec.TapDevice(); tap != "" && !removed[name] {
 			keep[tap] = true
@@ -195,7 +196,8 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 
 // quarantineClaim removes a claim whose egress NIC could not be locked and drops
 // it from service; it returns whether the VM is confirmed gone (a failed remove
-// leaves it for the next restart's stale sweep).
+// leaves it for the next restart's stale sweep). A never-applied lock plus a
+// failed remove leaves the VM unguarded until a later remove succeeds.
 func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
 	gone := m.removeVM(ctx, sb.VMName)
 	m.mu.Lock()

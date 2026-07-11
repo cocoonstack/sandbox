@@ -544,6 +544,7 @@ type fakeEngine struct {
 	vsockLateN                        int // List calls that report no socket yet
 
 	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr, snapSaveErr, snapListErr error
+	removeErrFor                                                                       string // VM name whose Remove fails; "" = never
 	cloneFailNth                                                                       int    // 1-based Clone call to fail; 0 = never
 	hibernateErrCompletes                                                              bool   // hibernateErr fires after the snapshot lands (CLI timeout)
 	tap                                                                                string // non-empty: lifecycle records carry this NIC tap
@@ -627,6 +628,9 @@ func (f *fakeEngine) Remove(ctx context.Context, name string) error {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if name == f.removeErrFor {
+		return errors.New("remove failed")
+	}
 	f.removes = append(f.removes, name)
 	delete(f.vms, name)
 	return nil

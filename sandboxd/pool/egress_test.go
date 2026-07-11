@@ -261,6 +261,62 @@ func TestBatchArmFailureRecordsNoUsage(t *testing.T) {
 	}
 }
 
+func TestRollbackKeepsLockWhenRemoveFails(t *testing.T) {
+	eng := newFakeEngine()
+	eng.removeErrFor = "sbx-r1"
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
+	// Both members armed before a later batch member failed; sbx-r1's remove fails.
+	sbs := []*types.Sandbox{
+		{ID: "sb_r1", VMName: "sbx-r1", Key: egKey},
+		{ID: "sb_r2", VMName: "sbx-r2", Key: egKey},
+	}
+	m.mu.Lock()
+	for _, sb := range sbs {
+		m.claimed[sb.ID] = sb
+	}
+	m.egressTaps["sb_r1"] = "tap-r1"
+	m.egressTaps["sb_r2"] = "tap-r2"
+	m.mu.Unlock()
+
+	m.rollbackClaim(t.Context(), sbs)
+	waitFor(t, m.store.synced)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.claimed) != 0 {
+		t.Errorf("rollback left %d claims", len(m.claimed))
+	}
+	if _, locked := m.egressTaps["sb_r1"]; !locked {
+		t.Error("rollback unlocked a VM whose remove failed")
+	}
+	if _, locked := m.egressTaps["sb_r2"]; locked {
+		t.Error("rollback kept a confirmed-removed VM locked")
+	}
+}
+
+func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
+	eng := newFakeEngine()
+	eng.removeErrFor = "sbx-q1"
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
+	sb := &types.Sandbox{ID: "sb_q1", VMName: "sbx-q1", Key: egKey, TAP: "tap-q1"}
+	m.mu.Lock()
+	m.claimed[sb.ID] = sb
+	m.mu.Unlock()
+	live := map[string]types.VMRecord{"sbx-q1": {Config: types.VMConfig{Name: "sbx-q1"}, State: vmStateRunning}}
+	removed := map[string]bool{}
+
+	m.resyncEgress(t.Context(), live, removed)
+
+	if removed["sbx-q1"] {
+		t.Error("failed remove marked the VM gone; the sweep would drop its lock table")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.claimed["sb_q1"]; ok {
+		t.Error("quarantined claim still in service")
+	}
+}
+
 func egressManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	t.Setenv("GH_TOKEN", "s3cr3t")

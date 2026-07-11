@@ -265,12 +265,9 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 }
 
 // rollbackClaim unwinds a claim batch after a persist or egress-arm failure:
-// disarm, drop the claims, reconverge the journal, destroy the VMs — a NIC
-// that cannot be locked must never be handed out.
+// drop the claims, reconverge the journal, destroy the VMs — a NIC that
+// cannot be locked must never be handed out.
 func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
-	for _, sb := range sbs {
-		m.disarmEgress(sb.ID)
-	}
 	m.mu.Lock()
 	for _, sb := range sbs {
 		delete(m.claimed, sb.ID)
@@ -280,7 +277,10 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	m.mu.Unlock()
 	m.recommit(ctx, rb)
 	for _, sb := range sbs {
-		m.destroy(ctx, sb.VMName)
+		// Unlock only after the VM is gone (see Release).
+		if m.removeVM(ctx, sb.VMName) {
+			m.disarmEgress(sb.ID)
+		}
 	}
 }
 
