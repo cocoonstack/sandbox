@@ -47,9 +47,9 @@ lock unbroken from claim to release; those operations are refused (409) on the
 lane.
 
 The proxy also refuses to connect to internal addresses — loopback, link-local
-(including cloud metadata), private, carrier-grade NAT, and NAT64-embedded
-ranges — so an allow-listed host that resolves, or is rebound, to one cannot
-reach the sandboxd host or a sibling VM.
+(including cloud metadata), private, carrier-grade NAT, reserved, and
+IPv4-embedding IPv6 (NAT64, 6to4, Teredo) ranges — so an allow-listed host that
+resolves, or is rebound, to one cannot reach the sandboxd host or a sibling VM.
 
 ### Deployment constraints
 
@@ -64,6 +64,12 @@ reach the sandboxd host or a sibling VM.
   and is rejected on a CNI `network`. None-lane policies ride the proxy and work
   on either. A bridge egress lane locks every NIC default-deny, even with no
   policy configured.
+- **No custom NAT64/DNS64 prefix routed to the host.** The SSRF guard folds the
+  standard NAT64 forms (RFC 6052 well-known `64:ff9b::/96`, RFC 8215 local-use
+  `64:ff9b:1::/48`), but an operator-specific network-specific prefix (RFC 6052
+  allows any /32–/96) is opaque — its embedded IPv4 reads as public. If the host
+  routes such a translator, an allow-listed or DNS-rebound host could reach an
+  internal IPv4 through it; do not route a custom NAT64 prefix on a sandboxd host.
 
 ## Configuration
 

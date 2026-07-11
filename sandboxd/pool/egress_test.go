@@ -421,6 +421,10 @@ func TestEgressDialerBlocksInternal(t *testing.T) {
 		"[64:ff9b::a9fe:a9fe]:80", // NAT64-embedded 169.254.169.254
 		"[64:ff9b::a00:1]:80",     // NAT64-embedded 10.0.0.1
 		"[64:ff9b:1::8.8.8.8]:80", // RFC 8215 local-use NAT64
+		"[::127.0.0.1]:80",        // deprecated IPv4-compatible loopback
+		"[2002:a9fe:a9fe::]:80",   // 6to4-embedded 169.254.169.254
+		"[2001::a9fe:a9fe]:80",    // Teredo space
+		"0.6.6.6:80", "240.1.2.3:80",
 	}
 	for _, addr := range blocked {
 		if err := egressDialer.Control("tcp", addr, nil); err == nil {

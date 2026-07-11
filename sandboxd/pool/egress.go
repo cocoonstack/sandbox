@@ -18,9 +18,18 @@ import (
 )
 
 var (
-	cgnatRange      = netip.MustParsePrefix("100.64.0.0/10")  // RFC 6598 CGNAT; some clouds host metadata here
-	nat64Range      = netip.MustParsePrefix("64:ff9b::/96")   // RFC 6052 NAT64; v4 in the low 32 bits
-	nat64LocalRange = netip.MustParsePrefix("64:ff9b:1::/48") // RFC 8215 local-use NAT64
+	nat64Range = netip.MustParsePrefix("64:ff9b::/96") // RFC 6052 NAT64; the embedded v4 is checked instead
+
+	// internalRanges are reserved or v4-embedding ranges IsGlobalUnicast would pass.
+	internalRanges = []netip.Prefix{
+		netip.MustParsePrefix("100.64.0.0/10"),  // RFC 6598 CGNAT; some clouds host metadata here
+		netip.MustParsePrefix("0.0.0.0/8"),      // "this network"
+		netip.MustParsePrefix("240.0.0.0/4"),    // reserved; some clouds use it as internal fabric
+		netip.MustParsePrefix("64:ff9b:1::/48"), // RFC 8215 local-use NAT64
+		netip.MustParsePrefix("::/96"),          // deprecated IPv4-compatible; embeds a v4 unmapped
+		netip.MustParsePrefix("2002::/16"),      // 6to4; embeds a v4
+		netip.MustParsePrefix("2001::/32"),      // Teredo; embeds a v4
+	}
 
 	// egressDialer blocks internal-address targets so the proxy cannot be an SSRF.
 	egressDialer = &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
@@ -38,7 +47,7 @@ var (
 			ip = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
 		}
 		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-			cgnatRange.Contains(ip) || nat64LocalRange.Contains(ip) {
+			slices.ContainsFunc(internalRanges, func(p netip.Prefix) bool { return p.Contains(ip) }) {
 			return fmt.Errorf("egress: blocked internal address %s", ip)
 		}
 		return nil
