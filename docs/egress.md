@@ -36,7 +36,9 @@ broadcast DHCP, so the guest's only routed egress is the audited vsock proxy. Th
 lock is fail-closed — a claim whose NIC cannot be locked is rejected, not handed
 out unlocked, and no policy still means a locked NIC (default-deny), never a free
 one. It lives in the host root netns and is removed once the VM is gone (a failed
-remove keeps the VM locked; the next restart reclaims it).
+remove keeps an existing lock in place; the next restart retries the remove). A
+lock that never applied plus a failed remove leaves the VM unguarded until a
+later remove succeeds.
 
 Egress-lane sandboxes do not hibernate or archive: cocoon resumes a guest before
 its fresh tap can be re-locked, so suspending would open an unlocked-NIC window.

@@ -246,6 +246,7 @@ func TestBatchArmFailureRecordsNoUsage(t *testing.T) {
 	if err := m.finalizeBatch(t.Context(), sbs, time.Minute); err == nil {
 		t.Fatal("finalizeBatch must fail when a batch member cannot arm")
 	}
+	waitFor(t, m.store.synced)
 	m.mu.Lock()
 	claimed := len(m.claimed)
 	m.mu.Unlock()
