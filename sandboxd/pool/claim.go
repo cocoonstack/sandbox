@@ -118,7 +118,8 @@ func (m *Manager) Release(ctx context.Context, id, token string) error {
 		err = m.eng.Remove(ctx, vmName)
 	}
 	// Unlock only once the VM is gone: a failed remove leaves a running VM, so
-	// disarming first would hand its NIC back unguarded (the next reap retries).
+	// disarming first would hand its NIC back unguarded. The VM stays locked
+	// until the next restart's stale sweep reclaims it.
 	if err == nil {
 		m.disarmEgress(id)
 	}
@@ -360,7 +361,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			}
 		default:
 			// Unlock only after the VM is gone (see Release): a failed remove
-			// must not leave a running VM with an unguarded NIC.
+			// keeps the NIC locked, reclaimed by the next restart's stale sweep.
 			if rmErr := m.eng.Remove(context.WithoutCancel(ctx), v.vmName); rmErr != nil {
 				logger.Errorf(ctx, rmErr, "remove vm %s", v.vmName)
 			} else {

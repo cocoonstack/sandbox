@@ -189,10 +189,13 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	} else {
 		m.dropRecLock(ck)
 	}
-	// Only the none lane archives, so this rebinds its proxy; the egress lane
-	// never reaches here (it does not hibernate) and needs no re-lock.
+	// Only the none lane reaches here (the egress guard above fails closed), so
+	// this rebinds the none-lane proxy; there is no NIC to re-lock.
 	if proxyErr := m.armEgressProxy(ctx, sb); proxyErr != nil {
 		log.WithFunc("pool.wakeArchived").Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
+	}
+	if m.disarmIfReleased(sb) {
+		return "", ErrUnknownSandbox
 	}
 	m.counters.unarchives.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "unarchive", ID: sb.ID, Reference: ck, Tenant: sb.Tenant})
