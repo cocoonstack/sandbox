@@ -64,6 +64,7 @@ the environment, never the config file.
 
 ```jsonc
 {
+  "bridge": "sbxbr0",                       // egress-lane pools only; none-lane needs no attachment
   "secrets": [
     { "name": "gh", "header": "Authorization", "value_env": "GH_TOKEN" }
   ],
@@ -72,13 +73,19 @@ the environment, never the config file.
       "egress": { "allow": [
         { "host": "api.github.com", "methods": ["GET", "POST"], "secret": "gh" },
         { "host": "*.googleapis.com" }
-      ] } }
+      ] } },
+    { "template": "rt:24.04", "net": "egress", "size": "small", "warm": 2,
+      "egress": { "allow": [{ "host": "api.github.com", "secret": "gh" }] } }
   ],
   "tenants": [
     { "name": "acme", "token": "…", "egress": { "allow": [{ "host": "api.github.com" }] } }
   ]
 }
 ```
+
+Both pools serve the proxy the same way; the egress-lane pool additionally gets
+its NIC locked at claim, so its policy governs the only route out just like the
+none lane's.
 
 - `host`: an exact name, a `*.`-prefixed suffix wildcard, or `*`. Case-insensitive.
 - `methods`: empty means any.
