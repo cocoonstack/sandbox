@@ -467,9 +467,10 @@ func tenantOwns(tenant, owner string) bool {
 }
 
 // benignSweepErr reports whether err is the expected outcome of a housekeeping
-// sweep racing the data plane (victim released, or woke mid-sweep).
+// sweep (victim released, woke mid-sweep, or a lane that never hibernates).
 func benignSweepErr(err error) bool {
-	return errors.Is(err, ErrUnknownSandbox) || errors.Is(err, errWokeMeanwhile)
+	return errors.Is(err, ErrUnknownSandbox) || errors.Is(err, errWokeMeanwhile) ||
+		errors.Is(err, ErrNoEgressHibernate)
 }
 
 func vmName(key types.PoolKey) string {

@@ -243,17 +243,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	js := m.store.snapshot(m.claimed)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
-		m.mu.Lock()
-		for _, sb := range sbs {
-			delete(m.claimed, sb.ID)
-			m.tenantDelta(sb.Tenant, -1)
-		}
-		rb := m.store.snapshot(m.claimed)
-		m.mu.Unlock()
-		m.recommit(ctx, rb)
-		for _, sb := range sbs {
-			m.destroy(ctx, sb.VMName)
-		}
+		m.rollbackClaim(ctx, sbs)
 		return fmt.Errorf("persist claim: %w", saveErr)
 	}
 	for _, sb := range sbs {
@@ -270,9 +260,9 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	return nil
 }
 
-// rollbackClaim undoes a committed batch whose egress arm failed: it disarms,
-// drops the claims, recommits, and destroys the VMs — a NIC that cannot be
-// locked must never be handed out.
+// rollbackClaim unwinds a claim batch after a persist or egress-arm failure:
+// disarm, drop the claims, reconverge the journal, destroy the VMs — a NIC
+// that cannot be locked must never be handed out.
 func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	for _, sb := range sbs {
 		m.disarmEgress(sb.ID)

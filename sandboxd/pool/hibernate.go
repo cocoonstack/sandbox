@@ -56,7 +56,7 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		return resolveErr
 	}
 	if sb.HibernateSnap != "" {
-		m.disarmEgress(sb.ID) // already hibernated: drop its proxy listener and nft lock
+		m.disarmEgress(sb.ID)
 		if err := m.syncClaims(ctx, sb); err != nil {
 			return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, err)
 		}
@@ -83,7 +83,7 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		adopted, resolveErr := m.resolvePendingSnap(ctx, sb)
 		if adopted {
 			m.recordHibernate(ctx, sb)
-			m.disarmEgress(sb.ID) // snapshot landed, VM stopped: drop its listener and nft lock
+			m.disarmEgress(sb.ID)
 			if resolveErr != nil {
 				return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, resolveErr)
 			}
@@ -102,7 +102,7 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	}
 	// The VM is hibernated either way, so the billing window closes here.
 	m.recordHibernate(ctx, sb)
-	m.disarmEgress(sb.ID) // the tap is gone; drop its proxy listener and nft lock
+	m.disarmEgress(sb.ID)
 	if err != nil {
 		return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, err)
 	}
@@ -197,8 +197,8 @@ func (m *Manager) idleOnce(ctx context.Context) {
 		if p, pooled := m.pools[sb.Key]; pooled {
 			idle = p.idle // pooled keys never take the node default
 		}
-		if idle <= 0 || sb.Key.Net == types.NetEgress || sb.HibernateSnap != "" || sb.ArchiveCk != "" || now.Sub(sb.LastSeen()) < idle {
-			continue // egress never hibernates (hibernateLocked would reject it)
+		if idle <= 0 || sb.HibernateSnap != "" || sb.ArchiveCk != "" || now.Sub(sb.LastSeen()) < idle {
+			continue
 		}
 		victims = append(victims, victim{sb.ID, sb.Token})
 	}

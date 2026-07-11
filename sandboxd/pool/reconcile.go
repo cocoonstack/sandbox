@@ -151,7 +151,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 		}
 		if tap := m.readoptEgressTap(sb, live); tap != "" {
 			lockedTaps[tap] = true
-			if err := netfilter.EnsureLock(tap); err != nil { // re-apply only if the table did not survive
+			if err := netfilter.EnsureLock(tap); err != nil {
 				logger.Errorf(ctx, err, "ensure egress lock %s", sb.ID)
 			}
 		}
@@ -177,6 +177,7 @@ func (m *Manager) readoptEgressTap(sb *types.Sandbox, live map[string]types.VMRe
 	}
 	m.mu.Lock()
 	m.egressTaps[sb.ID] = tap
+	sb.TAP = tap
 	m.mu.Unlock()
 	return tap
 }

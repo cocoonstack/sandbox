@@ -79,8 +79,6 @@ func run(addr, token, template, wantToken, netShape, reach, nicAddr string, guar
 		}
 	}
 
-	// Guarded: direct egress must fail (none lane has no NIC, egress lane is
-	// nft-locked). Unguarded negative control: the same NIC reaches directly.
 	out, _ := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -s -m 3 %s || echo BLOCKED", target))
 	if guarded && !strings.Contains(out, "BLOCKED") {
 		return fmt.Errorf("guest reached the origin without the proxy: %q", out)

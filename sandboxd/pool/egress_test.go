@@ -20,6 +20,11 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+var (
+	egKey    = types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}
+	egPolicy = &egress.Policy{Allow: []egress.Rule{{Host: "example.com", Secret: "gh"}}}
+)
+
 // egressClient builds an HTTP client that reaches the origin through the
 // per-sandbox egress proxy UDS, exactly as the guest's proxy client would over
 // vsock. Playing the VMM's role lets the host-side path run without a real VM.
@@ -43,13 +48,8 @@ func TestEgressProxyInjectsAndGates(t *testing.T) {
 	t.Cleanup(origin.Close)
 	host := mustHostname(t, origin.URL)
 
-	t.Setenv("GH_TOKEN", "s3cr3t")
-	secrets := testSecrets(t, egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"})
 	pol := &egress.Policy{Allow: []egress.Rule{{Host: host, Secret: "gh"}}}
-	m, err := NewManager(t.Context(), testEgressConfig(t, pol), newFakeEngine(), secrets)
-	if err != nil {
-		t.Fatalf("manager: %v", err)
-	}
+	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
 
 	// A short socket dir: the UDS path + "_2049" must fit the OS sun_path cap.
 	sockDir, err := os.MkdirTemp("/tmp", "eg")
@@ -91,23 +91,10 @@ func TestEgressProxyInjectsAndGates(t *testing.T) {
 }
 
 func TestArmEgressFailsClosedWhenNICUnlockable(t *testing.T) {
-	t.Setenv("GH_TOKEN", "s3cr3t")
-	secrets := testSecrets(t, egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"})
-	egKey := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}
-	pol := &egress.Policy{Allow: []egress.Rule{{Host: "example.com", Secret: "gh"}}}
-	cfg := &config.Config{DataDir: t.TempDir(), Pools: []config.PoolSpec{{PoolKey: egKey, Egress: pol}}}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), secrets)
-	if err != nil {
-		t.Fatalf("manager: %v", err)
-	}
-	sockDir, err := os.MkdirTemp("/tmp", "eg")
-	if err != nil {
-		t.Fatalf("sockdir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 	// The engine reports no NIC tap, so the nft lock cannot apply; arming must
 	// fail rather than hand out an egress-lane NIC that bypasses the proxy.
-	sb := &types.Sandbox{ID: "sb_eg_fc", Key: egKey, VMName: "sbx-fc-1", VsockSocket: filepath.Join(sockDir, "v")}
+	sb := &types.Sandbox{ID: "sb_eg_fc", Key: egKey, VMName: "sbx-fc-1"}
 	if armErr := m.armEgress(t.Context(), sb); armErr == nil {
 		t.Fatal("armEgress must fail closed when the egress-lane NIC cannot be locked")
 	}
@@ -117,23 +104,11 @@ func TestArmEgressLocksEgressLaneWithoutPolicy(t *testing.T) {
 	// guardedEgress on (one pool carries a policy) plus a policyless egress-lane
 	// pool: that lane must still lock the NIC (default-deny), so arming a claim
 	// whose NIC cannot be locked fails rather than handing out a free NIC.
-	t.Setenv("GH_TOKEN", "s3cr3t")
-	secrets := testSecrets(t, egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"})
-	egKey := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}
-	cfg := &config.Config{DataDir: t.TempDir(), Pools: []config.PoolSpec{
-		{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "a.test"}}}},
-		{PoolKey: egKey}, // egress lane, no egress policy
-	}}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), secrets)
-	if err != nil {
-		t.Fatalf("manager: %v", err)
-	}
-	sockDir, err := os.MkdirTemp("/tmp", "eg")
-	if err != nil {
-		t.Fatalf("sockdir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
-	sb := &types.Sandbox{ID: "sb_eg_np", Key: egKey, VMName: "sbx-np-1", VsockSocket: filepath.Join(sockDir, "v")}
+	m := egressManager(t, newFakeEngine(),
+		config.PoolSpec{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "a.test"}}}},
+		config.PoolSpec{PoolKey: egKey}, // egress lane, no egress policy
+	)
+	sb := &types.Sandbox{ID: "sb_eg_np", Key: egKey, VMName: "sbx-np-1"}
 	if armErr := m.armEgress(t.Context(), sb); armErr == nil {
 		t.Fatal("policyless egress-lane claim must still lock the NIC, not skip it")
 	}
@@ -194,17 +169,9 @@ func TestEffectivePolicyComposition(t *testing.T) {
 }
 
 func TestLockUsesProvisionedTapWithoutList(t *testing.T) {
-	t.Setenv("GH_TOKEN", "s3cr3t")
-	secrets := testSecrets(t, egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"})
-	egKey := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}
-	pol := &egress.Policy{Allow: []egress.Rule{{Host: "example.com", Secret: "gh"}}}
-	cfg := &config.Config{DataDir: t.TempDir(), Pools: []config.PoolSpec{{PoolKey: egKey, Egress: pol}}}
 	eng := newFakeEngine()
 	eng.tap = "tap-fake0"
-	m, err := NewManager(t.Context(), cfg, eng, secrets)
-	if err != nil {
-		t.Fatalf("manager: %v", err)
-	}
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 
 	sb, err := m.provision(t.Context(), egKey, "")
 	if err != nil {
@@ -231,17 +198,9 @@ func TestLockUsesProvisionedTapWithoutList(t *testing.T) {
 }
 
 func TestLockFallsBackToListForPreTapClaims(t *testing.T) {
-	t.Setenv("GH_TOKEN", "s3cr3t")
-	secrets := testSecrets(t, egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"})
-	egKey := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}
-	pol := &egress.Policy{Allow: []egress.Rule{{Host: "example.com", Secret: "gh"}}}
-	cfg := &config.Config{DataDir: t.TempDir(), Pools: []config.PoolSpec{{PoolKey: egKey, Egress: pol}}}
 	eng := newFakeEngine()
 	eng.tap = "tap-fake1"
-	m, err := NewManager(t.Context(), cfg, eng, secrets)
-	if err != nil {
-		t.Fatalf("manager: %v", err)
-	}
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 	if _, err := eng.RunCold(t.Context(), "sbx-old", egKey); err != nil {
 		t.Fatalf("seed vm: %v", err)
 	}
@@ -258,16 +217,8 @@ func TestLockFallsBackToListForPreTapClaims(t *testing.T) {
 }
 
 func TestBatchArmFailureRecordsNoUsage(t *testing.T) {
-	t.Setenv("GH_TOKEN", "s3cr3t")
-	secrets := testSecrets(t, egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"})
-	egKey := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}
-	pol := &egress.Policy{Allow: []egress.Rule{{Host: "example.com", Secret: "gh"}}}
-	cfg := &config.Config{DataDir: t.TempDir(), Pools: []config.PoolSpec{{PoolKey: egKey, Egress: pol}}}
 	eng := newFakeEngine()
-	m, err := NewManager(t.Context(), cfg, eng, secrets)
-	if err != nil {
-		t.Fatalf("manager: %v", err)
-	}
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 	// First member arms trivially (none lane), second fails (egress lane, no
 	// such VM): the committed-then-rolled-back batch must leave no claim event
 	// in the billing stream — a claim with no terminal release/reap would stay
@@ -285,7 +236,7 @@ func TestBatchArmFailureRecordsNoUsage(t *testing.T) {
 	if claimed != 0 {
 		t.Errorf("rollback left %d claims", claimed)
 	}
-	raw, _ := os.ReadFile(filepath.Join(cfg.DataDir, "usage.jsonl"))
+	raw, _ := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
 	if strings.Contains(string(raw), `"ev":"claim"`) {
 		t.Errorf("rolled-back batch left claim usage events:\n%s", raw)
 	}
@@ -294,12 +245,15 @@ func TestBatchArmFailureRecordsNoUsage(t *testing.T) {
 	}
 }
 
-func testEgressConfig(t *testing.T, pool *egress.Policy) *config.Config {
+func egressManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
 	t.Helper()
-	return &config.Config{
-		DataDir: t.TempDir(),
-		Pools:   []config.PoolSpec{{PoolKey: testKey, Warm: 1, Egress: pool}},
+	t.Setenv("GH_TOKEN", "s3cr3t")
+	secrets := testSecrets(t, egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"})
+	m, err := NewManager(t.Context(), &config.Config{DataDir: t.TempDir(), Pools: pools}, eng, secrets)
+	if err != nil {
+		t.Fatalf("manager: %v", err)
 	}
+	return m
 }
 
 func mustHostname(t *testing.T, raw string) string {
