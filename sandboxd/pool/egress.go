@@ -110,9 +110,8 @@ func (m *Manager) armEgressProxy(_ context.Context, sb *types.Sandbox) error {
 	return nil
 }
 
-// disarmIfReleased tears down a proxy armed on a wake path when Release dropped
-// the claim in the arm window (Release skips the Transition lock the wake
-// holds); reports whether the claim is gone.
+// disarmIfReleased tears down a proxy armed on a wake path if Release dropped
+// the claim in the arm window (Release skips the Transition lock); reports gone.
 func (m *Manager) disarmIfReleased(sb *types.Sandbox) bool {
 	m.mu.Lock()
 	live := m.claimed[sb.ID] == sb

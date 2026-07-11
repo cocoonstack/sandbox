@@ -327,9 +327,8 @@ func EgressSocketPath(vsockSocket string) string {
 	return fmt.Sprintf("%s_%d", vsockSocket, egressPort)
 }
 
-// parseRecord reads a lifecycle command's --output json VM record;
-// best-effort, so an unparseable record yields the zero value (the vsock
-// poll and the tap lookup fall back to `vm list`).
+// parseRecord reads a lifecycle command's --output json VM record; best-effort,
+// so an unparseable record yields the zero value (callers fall back to vm list).
 func parseRecord(ctx context.Context, out []byte) types.VMRecord {
 	var rec types.VMRecord
 	if err := json.Unmarshal(out, &rec); err != nil {

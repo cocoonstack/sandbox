@@ -106,8 +106,7 @@ func TestLoadAcceptsEgressPolicy(t *testing.T) {
 }
 
 func TestLoadAcceptsUnguardedCNINetwork(t *testing.T) {
-	// A CNI network lane is fine without an egress policy: guarded egress (the
-	// root-netns nft lock) is what a VM-netns tap can't support, not the lane.
+	// Only guarded egress needs a bridge; an unguarded CNI network lane is fine.
 	path := writeConfig(t, `{"network":"cni","pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`)
 	if _, err := Load(path); err != nil {
 		t.Fatalf("Load: %v", err)
