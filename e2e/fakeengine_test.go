@@ -38,12 +38,12 @@ func newFakeEngine(dir string) *fakeEngine {
 	}
 }
 
-func (f *fakeEngine) Clone(_ context.Context, _, name string, _ types.PoolKey) (string, error) {
-	return f.create(name)
+func (f *fakeEngine) Clone(_ context.Context, _, name string, _ types.PoolKey) (types.VMRecord, error) {
+	return f.createRecord(name)
 }
 
-func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) (string, error) {
-	return f.create(name)
+func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) (types.VMRecord, error) {
+	return f.createRecord(name)
 }
 
 func (f *fakeEngine) Remove(_ context.Context, name string) error {
@@ -111,4 +111,12 @@ func (f *fakeEngine) create(name string) (string, error) {
 	f.listeners[name] = l
 	f.socks[name] = sock
 	return sock, nil
+}
+
+func (f *fakeEngine) createRecord(name string) (types.VMRecord, error) {
+	sock, err := f.create(name)
+	if err != nil {
+		return types.VMRecord{}, err
+	}
+	return types.VMRecord{VsockSocket: sock, Config: types.VMConfig{Name: name}}, nil
 }

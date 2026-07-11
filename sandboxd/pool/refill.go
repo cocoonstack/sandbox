@@ -103,11 +103,11 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 }
 
 func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name, snap, final string) error {
-	sock, err := m.eng.RunCold(ctx, name, key)
+	rec, err := m.eng.RunCold(ctx, name, key)
 	if err != nil {
 		return err
 	}
-	if _, err := m.probeReady(ctx, name, sock, coldProbeTimeout); err != nil {
+	if _, err := m.probeReady(ctx, name, rec.VsockSocket, coldProbeTimeout); err != nil {
 		return err
 	}
 	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
@@ -173,22 +173,23 @@ func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir
 func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden string) (*types.Sandbox, error) {
 	name := vmName(key)
 	probeTimeout := claimProbeTimeout
-	var sock string
+	var rec types.VMRecord
 	var err error
 	if golden != "" {
-		sock, err = m.eng.Clone(ctx, golden, name, key)
+		rec, err = m.eng.Clone(ctx, golden, name, key)
 	} else {
-		sock, err = m.eng.RunCold(ctx, name, key)
+		rec, err = m.eng.RunCold(ctx, name, key)
 		probeTimeout = coldProbeTimeout
 	}
+	var sock string
 	if err == nil {
-		sock, err = m.probeReady(ctx, name, sock, probeTimeout)
+		sock, err = m.probeReady(ctx, name, rec.VsockSocket, probeTimeout)
 	}
 	if err != nil {
 		m.destroy(ctx, name)
 		return nil, err
 	}
-	return &types.Sandbox{VMName: name, Key: key, VsockSocket: sock}, nil
+	return &types.Sandbox{VMName: name, Key: key, VsockSocket: sock, TAP: rec.TapDevice()}, nil
 }
 
 // cloneBatch builds count claim-ready clones from an exported snapshot dir,

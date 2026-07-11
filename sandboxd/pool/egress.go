@@ -35,7 +35,7 @@ func (e *egressListener) close() {
 // on the claim path where both happen at once; wake/unarchive split the two to
 // lock before the guest resumes.
 func (m *Manager) armEgress(ctx context.Context, sb *types.Sandbox) error {
-	if err := m.lockEgressNIC(ctx, sb.ID, sb.Key.Net, sb.VMName); err != nil {
+	if err := m.lockEgressNIC(ctx, sb); err != nil {
 		return err
 	}
 	return m.armEgressProxy(ctx, sb)
@@ -43,33 +43,43 @@ func (m *Manager) armEgress(ctx context.Context, sb *types.Sandbox) error {
 
 // lockEgressNIC drops the egress-lane VM's NIC egress via nft and records the
 // tap for later unlock; a no-op off the egress lane or when guarded egress is
-// off. vmName is passed explicitly because an unarchive locks before sb.VMName
-// is republished.
-func (m *Manager) lockEgressNIC(ctx context.Context, sbID string, lane types.NetShape, vmName string) error {
-	if !m.guardedEgress || lane != types.NetEgress {
+// off. The tap normally rides the provision record — the engine lookup is the
+// fallback for claims adopted from pre-tap journals.
+func (m *Manager) lockEgressNIC(ctx context.Context, sb *types.Sandbox) error {
+	if !m.guardedEgress || sb.Key.Net != types.NetEgress {
 		return nil
 	}
+	tap := sb.TAP
+	if tap == "" {
+		var err error
+		if tap, err = m.tapOf(ctx, sb.VMName); err != nil {
+			return err
+		}
+	}
+	if err := netfilter.Lock(tap); err != nil {
+		return fmt.Errorf("nft lock %s: %w", tap, err)
+	}
+	m.mu.Lock()
+	m.egressTaps[sb.ID] = tap
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *Manager) tapOf(ctx context.Context, vmName string) (string, error) {
 	vms, err := m.eng.List(ctx, vmName)
 	if err != nil {
-		return fmt.Errorf("list %s: %w", vmName, err)
+		return "", fmt.Errorf("list %s: %w", vmName, err)
 	}
 	for _, vm := range vms {
-		if vm.Config.Name != vmName || len(vm.NetworkConfigs) == 0 {
+		if vm.Config.Name != vmName {
 			continue
 		}
-		tap := vm.NetworkConfigs[0].TAP
-		if tap == "" {
-			return fmt.Errorf("no tap for %s", vmName)
+		if tap := vm.TapDevice(); tap != "" {
+			return tap, nil
 		}
-		if err := netfilter.Lock(tap); err != nil {
-			return fmt.Errorf("nft lock %s: %w", tap, err)
-		}
-		m.mu.Lock()
-		m.egressTaps[sbID] = tap
-		m.mu.Unlock()
-		return nil
+		return "", fmt.Errorf("no tap for %s", vmName)
 	}
-	return fmt.Errorf("no NIC config for %s", vmName)
+	return "", fmt.Errorf("no NIC config for %s", vmName)
 }
 
 // armEgressProxy binds the vsock egress proxy for a claim whose effective policy

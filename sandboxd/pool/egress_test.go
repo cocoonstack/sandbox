@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,6 +190,70 @@ func TestEffectivePolicyComposition(t *testing.T) {
 				t.Errorf("%s should deny", tc.deny)
 			}
 		})
+	}
+}
+
+func TestLockUsesProvisionedTapWithoutList(t *testing.T) {
+	t.Setenv("GH_TOKEN", "s3cr3t")
+	secrets := testSecrets(t, egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"})
+	egKey := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}
+	pol := &egress.Policy{Allow: []egress.Rule{{Host: "example.com", Secret: "gh"}}}
+	cfg := &config.Config{DataDir: t.TempDir(), Pools: []config.PoolSpec{{PoolKey: egKey, Egress: pol}}}
+	eng := newFakeEngine()
+	eng.tap = "tap-fake0"
+	m, err := NewManager(t.Context(), cfg, eng, secrets)
+	if err != nil {
+		t.Fatalf("manager: %v", err)
+	}
+
+	sb, err := m.provision(t.Context(), egKey, "")
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if sb.TAP != "tap-fake0" {
+		t.Fatalf("provision carried tap %q, want tap-fake0", sb.TAP)
+	}
+	lockErr := m.lockEgressNIC(t.Context(), sb)
+	if calls := eng.listCalls(); calls != 0 {
+		t.Errorf("claim-path lock consulted vm list %d times, want 0", calls)
+	}
+	switch {
+	case lockErr != nil && !strings.Contains(lockErr.Error(), "tap-fake0"):
+		t.Errorf("lock failed outside nft: %v", lockErr) // nft itself may fail off-linux/unprivileged
+	case lockErr == nil:
+		m.mu.Lock()
+		got := m.egressTaps[sb.ID]
+		m.mu.Unlock()
+		if got != "tap-fake0" {
+			t.Errorf("recorded tap %q, want tap-fake0", got)
+		}
+	}
+}
+
+func TestLockFallsBackToListForPreTapClaims(t *testing.T) {
+	t.Setenv("GH_TOKEN", "s3cr3t")
+	secrets := testSecrets(t, egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"})
+	egKey := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}
+	pol := &egress.Policy{Allow: []egress.Rule{{Host: "example.com", Secret: "gh"}}}
+	cfg := &config.Config{DataDir: t.TempDir(), Pools: []config.PoolSpec{{PoolKey: egKey, Egress: pol}}}
+	eng := newFakeEngine()
+	eng.tap = "tap-fake1"
+	m, err := NewManager(t.Context(), cfg, eng, secrets)
+	if err != nil {
+		t.Fatalf("manager: %v", err)
+	}
+	if _, err := eng.RunCold(t.Context(), "sbx-old", egKey); err != nil {
+		t.Fatalf("seed vm: %v", err)
+	}
+	// A claim adopted from a pre-tap journal has no TAP; the lock must resolve
+	// it through the engine instead of failing.
+	sb := &types.Sandbox{ID: "sb_old", Key: egKey, VMName: "sbx-old"}
+	lockErr := m.lockEgressNIC(t.Context(), sb)
+	if calls := eng.listCalls(); calls != 1 {
+		t.Errorf("fallback consulted vm list %d times, want 1", calls)
+	}
+	if lockErr != nil && !strings.Contains(lockErr.Error(), "tap-fake1") {
+		t.Errorf("fallback resolved no tap: %v", lockErr)
 	}
 }
 

@@ -54,31 +54,31 @@ func New(bin, bridge, network string) *Engine {
 	return &Engine{bin: bin, bridge: bridge, network: network}
 }
 
-// Clone restores a VM from an exported golden directory, returning its vsock
-// UDS. The no-network lane passes no net flags at all — the golden has no NIC
-// to retarget, the only clone shape FC supports; the egress lane re-attaches
-// to the node's bridge or CNI network. cocoon signals the in-guest reseed
-// itself after resume.
-func (e *Engine) Clone(ctx context.Context, fromDir, name string, key types.PoolKey) (string, error) {
+// Clone restores a VM from an exported golden directory, returning its
+// lifecycle record (vsock UDS, NIC tap). The no-network lane passes no net
+// flags at all — the golden has no NIC to retarget, the only clone shape FC
+// supports; the egress lane re-attaches to the node's bridge or CNI network.
+// cocoon signals the in-guest reseed itself after resume.
+func (e *Engine) Clone(ctx context.Context, fromDir, name string, key types.PoolKey) (types.VMRecord, error) {
 	out, err := e.run(ctx, e.cloneArgs(fromDir, name, key)...)
 	if err != nil {
-		return "", err
+		return types.VMRecord{}, err
 	}
-	return parseVsock(ctx, out), nil
+	return parseRecord(ctx, out), nil
 }
 
 // RunCold boots a VM from the template image (golden builds and cache-miss
-// claims), returning its vsock UDS.
-func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey) (string, error) {
+// claims), returning its lifecycle record.
+func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey) (types.VMRecord, error) {
 	args, err := e.runColdArgs(name, key)
 	if err != nil {
-		return "", err
+		return types.VMRecord{}, err
 	}
 	out, err := e.run(ctx, args...)
 	if err != nil {
-		return "", err
+		return types.VMRecord{}, err
 	}
-	return parseVsock(ctx, out), nil
+	return parseRecord(ctx, out), nil
 }
 
 // Remove force-deletes a VM; `rm --force` skips the graceful stop window
@@ -108,7 +108,7 @@ func (e *Engine) Restore(ctx context.Context, vmName, snapRef string) (string, e
 	if err != nil {
 		return "", err
 	}
-	return parseVsock(ctx, out), nil
+	return parseRecord(ctx, out).VsockSocket, nil
 }
 
 // SnapshotExport exports a snapshot into toDir (cocoon requires it absent or
@@ -327,15 +327,16 @@ func EgressSocketPath(vsockSocket string) string {
 	return fmt.Sprintf("%s_%d", vsockSocket, egressPort)
 }
 
-// parseVsock reads the vsock UDS from a lifecycle command's --output json VM
-// record; best-effort, so an empty or unparseable record yields "" (poll fallback).
-func parseVsock(ctx context.Context, out []byte) string {
+// parseRecord reads a lifecycle command's --output json VM record;
+// best-effort, so an unparseable record yields the zero value (the vsock
+// poll and the tap lookup fall back to `vm list`).
+func parseRecord(ctx context.Context, out []byte) types.VMRecord {
 	var rec types.VMRecord
 	if err := json.Unmarshal(out, &rec); err != nil {
-		log.WithFunc("engine.parseVsock").Warnf(ctx, "parse vm record, will poll for vsock: %v", err)
-		return ""
+		log.WithFunc("engine.parseRecord").Warnf(ctx, "parse vm record, will poll for vsock: %v", err)
+		return types.VMRecord{}
 	}
-	return rec.VsockSocket
+	return rec
 }
 
 // readLine reads byte-wise so nothing past the newline is consumed —

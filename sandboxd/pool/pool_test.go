@@ -544,8 +544,10 @@ type fakeEngine struct {
 	vsockLateN                        int // List calls that report no socket yet
 
 	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr, snapSaveErr, snapListErr error
-	cloneFailNth                                                                       int  // 1-based Clone call to fail; 0 = never
-	hibernateErrCompletes                                                              bool // hibernateErr fires after the snapshot lands (CLI timeout)
+	cloneFailNth                                                                       int    // 1-based Clone call to fail; 0 = never
+	hibernateErrCompletes                                                              bool   // hibernateErr fires after the snapshot lands (CLI timeout)
+	tap                                                                                string // non-empty: lifecycle records carry this NIC tap
+	listCount                                                                          int
 
 	probeStall      chan struct{} // non-nil: Probe blocks until closed
 	hibernateStall  chan struct{} // non-nil: Hibernate blocks until closed
@@ -559,30 +561,39 @@ func newFakeEngine() *fakeEngine {
 	return &fakeEngine{vms: map[string]string{}, stopped: map[string]bool{}}
 }
 
-func (f *fakeEngine) Clone(_ context.Context, fromDir, name string, _ types.PoolKey) (string, error) {
+func (f *fakeEngine) Clone(_ context.Context, fromDir, name string, _ types.PoolKey) (types.VMRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.clones = append(f.clones, name)
 	f.cloneFroms = append(f.cloneFroms, fromDir)
 	if f.cloneErr != nil {
-		return "", f.cloneErr
+		return types.VMRecord{}, f.cloneErr
 	}
 	if f.cloneFailNth > 0 && len(f.clones) == f.cloneFailNth {
-		return "", errors.New("clone failed")
+		return types.VMRecord{}, errors.New("clone failed")
 	}
 	f.vms[name] = "/vsock/" + name
-	return f.lateVsock(f.vms[name]), nil
+	return f.record(name), nil
 }
 
-func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) (string, error) {
+func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) (types.VMRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.colds = append(f.colds, name)
 	if f.runColdErr != nil {
-		return "", f.runColdErr
+		return types.VMRecord{}, f.runColdErr
 	}
 	f.vms[name] = "/vsock/" + name
-	return f.lateVsock(f.vms[name]), nil
+	return f.record(name), nil
+}
+
+// record builds a lifecycle result for name; callers hold f.mu.
+func (f *fakeEngine) record(name string) types.VMRecord {
+	rec := types.VMRecord{VsockSocket: f.lateVsock(f.vms[name]), Config: types.VMConfig{Name: name}}
+	if f.tap != "" {
+		rec.NetworkConfigs = []types.VMNetConfig{{TAP: f.tap}}
+	}
+	return rec
 }
 
 // lateVsock models cocoon's report-once-running lag: while vsockLateN ticks
@@ -651,6 +662,12 @@ func (f *fakeEngine) SnapshotList(_ context.Context) ([]string, error) {
 	return snaps, nil
 }
 
+func (f *fakeEngine) listCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.listCount
+}
+
 func (f *fakeEngine) snapListCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -707,6 +724,7 @@ func (f *fakeEngine) Restore(_ context.Context, name, _ string) (string, error) 
 func (f *fakeEngine) List(_ context.Context, filters ...string) ([]types.VMRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.listCount++
 	var vms []types.VMRecord
 	for name, sock := range f.vms {
 		if len(filters) > 0 && !slices.Contains(filters, name) {
@@ -717,7 +735,11 @@ func (f *fakeEngine) List(_ context.Context, filters ...string) ([]types.VMRecor
 		if f.stopped[name] {
 			state = "stopped"
 		}
-		vms = append(vms, types.VMRecord{State: state, VsockSocket: sock, Config: types.VMConfig{Name: name}})
+		rec := types.VMRecord{State: state, VsockSocket: sock, Config: types.VMConfig{Name: name}}
+		if f.tap != "" {
+			rec.NetworkConfigs = []types.VMNetConfig{{TAP: f.tap}}
+		}
+		vms = append(vms, rec)
 	}
 	return vms, nil
 }
