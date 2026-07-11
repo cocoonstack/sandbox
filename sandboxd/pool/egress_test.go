@@ -127,6 +127,27 @@ func TestEgressLaneDoesNotHibernate(t *testing.T) {
 	}
 }
 
+func TestEgressLaneWakeFailsClosed(t *testing.T) {
+	// #25 forbids egress hibernation/archive; a claim that reached such a state
+	// (corrupt or pre-#25 journal) must fail closed on wake, never resume with
+	// an unlockable fresh tap. Drive wakeResolved directly, past hibernateLocked.
+	m := newTestManager(t, newFakeEngine())
+	cases := []struct {
+		name string
+		sb   *types.Sandbox
+	}{
+		{"hibernated", &types.Sandbox{ID: "sb_h", Key: egKey, VMName: "sbx-h", HibernateSnap: "sbx-hib-x"}},
+		{"archived", &types.Sandbox{ID: "sb_a", Key: egKey, ArchiveCk: "ck_x"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := m.wakeResolved(t.Context(), tc.sb); err == nil {
+				t.Fatal("egress-lane wake must fail closed, not resume unguarded")
+			}
+		})
+	}
+}
+
 func TestEffectivePolicyComposition(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	both := &egress.Policy{Allow: []egress.Rule{{Host: "a.test"}, {Host: "b.test"}}}

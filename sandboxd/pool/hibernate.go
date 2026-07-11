@@ -134,6 +134,12 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 		}
 		return sb.VsockSocket, nil
 	}
+	// #25 forbids egress-lane hibernation (cocoon resumes the guest before its
+	// fresh tap can be locked), so a hibernated egress claim is a corrupt or
+	// pre-#25 state that must fail closed, never resume unguarded.
+	if sb.Key.Net == types.NetEgress {
+		return "", fmt.Errorf("wake %s: egress lane cannot resume from hibernation", sb.ID)
+	}
 	// See Hibernate: a half-restored VM is worse than a wasted wake.
 	ctx = context.WithoutCancel(ctx)
 	wakeStart := time.Now()
@@ -160,10 +166,13 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	m.counters.wakes.Add(1)
 	m.counters.wakeNanos.Add(uint64(time.Since(wakeStart))) //nolint:gosec // durations are positive
 	m.recordUsage(ctx, usageEvent{Event: "wake", ID: sb.ID, VMName: sb.VMName})
-	// Only the none lane hibernates, so this rebinds its proxy; the egress lane
-	// never reaches here (hibernateLocked rejects it) and needs no re-lock.
+	// Only the none lane reaches here (the egress guard above fails closed), so
+	// this rebinds the none-lane proxy; there is no NIC to re-lock.
 	if proxyErr := m.armEgressProxy(ctx, sb); proxyErr != nil {
 		log.WithFunc("pool.wakeResolved").Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
+	}
+	if m.disarmIfReleased(sb) {
+		return "", ErrUnknownSandbox
 	}
 	if err != nil {
 		// The lagging journal still references the snapshot; park it for

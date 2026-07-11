@@ -36,7 +36,10 @@ func Lock(tap string) error {
 	// Accept only IPv4 broadcast DHCP (client sport 68 → server dport 67, dst
 	// 255.255.255.255): the nfproto guard stops an IPv6 datagram whose header
 	// happens to carry 0xffffffff at the IPv4-daddr offset from matching, and
-	// any unicast dport-67 tunnel falls through to the drop below.
+	// any unicast dport-67 tunnel falls through to the drop below. The DHCP
+	// payload is not inspected — a crafted broadcast in this shape reaches only
+	// the local L2 segment (never routed off-link), so egress-lane VMs must not
+	// share a broadcast domain with an untrusted peer.
 	c.AddRule(&nftables.Rule{Table: t, Chain: ch, Exprs: []expr.Any{
 		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
 		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.NFPROTO_IPV4}},
@@ -90,7 +93,8 @@ func Unlock(tap string) error {
 }
 
 // SweepExcept drops every per-tap egress table whose tap is not in keep, clearing
-// locks orphaned by VMs that went away while the daemon was down.
+// locks orphaned by VMs that went away while the daemon was down. It owns the
+// whole sandbox_egress_* namespace in the root netns — one sandboxd per host.
 func SweepExcept(keep map[string]bool) error {
 	c, err := nftables.New()
 	if err != nil {

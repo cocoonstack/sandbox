@@ -142,18 +142,27 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 	logger := log.WithFunc("pool.resyncEgress")
 	now := time.Now()
 	lockedTaps := map[string]bool{}
+	var quarantine []*types.Sandbox
 	for _, sb := range m.claimed {
 		sb.TouchAt(now)
 		// Gate on guardedEgress like every other lock site: with guarding off the
 		// claim path leaves the egress NIC free, so a restart must not lock it.
-		if !m.guardedEgress {
-			continue
-		}
-		if tap := m.readoptEgressTap(sb, live); tap != "" {
-			lockedTaps[tap] = true
-			if err := netfilter.EnsureLock(tap); err != nil {
-				logger.Errorf(ctx, err, "ensure egress lock %s", sb.ID)
+		if m.guardedEgress && sb.Key.Net == types.NetEgress {
+			tap := m.readoptEgressTap(sb, live)
+			// A live egress claim we cannot re-lock (no tap, or nft failed) must
+			// not be served with a free NIC: quarantine it (fail closed) instead
+			// of leaving it reachable unguarded.
+			if tap == "" {
+				logger.Errorf(ctx, errNoEgressTap, "egress claim %s has no lockable tap; quarantining", sb.ID)
+				quarantine = append(quarantine, sb)
+				continue
 			}
+			if err := netfilter.EnsureLock(tap); err != nil { // re-apply only if the table did not survive
+				logger.Errorf(ctx, err, "ensure egress lock %s; quarantining", sb.ID)
+				quarantine = append(quarantine, sb)
+				continue
+			}
+			lockedTaps[tap] = true
 		}
 		if proxyErr := m.armEgressProxy(ctx, sb); proxyErr != nil {
 			logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
@@ -161,6 +170,24 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 	}
 	if sweepErr := netfilter.SweepExcept(lockedTaps); sweepErr != nil {
 		logger.Warnf(ctx, "sweep orphan egress tables: %v", sweepErr)
+	}
+	for _, sb := range quarantine {
+		m.quarantineClaim(ctx, sb)
+	}
+}
+
+// quarantineClaim fail-closes a claim whose egress NIC could not be locked on
+// restart: it destroys the VM and drops the claim, so a re-claim gets a fresh,
+// locked VM rather than the daemon serving an unguarded one.
+func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) {
+	m.destroy(ctx, sb.VMName)
+	m.mu.Lock()
+	delete(m.claimed, sb.ID)
+	m.tenantDelta(sb.Tenant, -1)
+	js := m.store.snapshot(m.claimed)
+	m.mu.Unlock()
+	if err := m.store.commit(js); err != nil {
+		m.recommit(ctx, js)
 	}
 }
 

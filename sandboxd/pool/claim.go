@@ -110,13 +110,17 @@ func (m *Manager) Release(ctx context.Context, id, token string) error {
 	}
 	// Cleanup must survive the caller hanging up; the claim is already dropped.
 	ctx = context.WithoutCancel(ctx)
-	m.disarmEgress(id)
 	if ck != "" {
 		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
 	}
 	var err error
 	if vmName != "" {
 		err = m.eng.Remove(ctx, vmName)
+	}
+	// Unlock only once the VM is gone: a failed remove leaves a running VM, so
+	// disarming first would hand its NIC back unguarded (the next reap retries).
+	if err == nil {
+		m.disarmEgress(id)
 	}
 	m.dropSnap(ctx, snap)
 	m.counters.releases.Add(1)
@@ -355,8 +359,13 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				logger.Errorf(ctx, err, "archive expired %s", v.id)
 			}
 		default:
-			m.disarmEgress(v.id)
-			m.destroy(ctx, v.vmName)
+			// Unlock only after the VM is gone (see Release): a failed remove
+			// must not leave a running VM with an unguarded NIC.
+			if rmErr := m.eng.Remove(context.WithoutCancel(ctx), v.vmName); rmErr != nil {
+				logger.Errorf(ctx, rmErr, "remove vm %s", v.vmName)
+			} else {
+				m.disarmEgress(v.id)
+			}
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)
 			m.recordUsage(ctx, usageEvent{Event: "reap", ID: v.id, VMName: v.vmName})

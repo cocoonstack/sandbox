@@ -66,6 +66,7 @@ var (
 	ErrQuota             = errors.New("node claim quota reached")
 
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
+	errNoEgressTap   = errors.New("egress-lane claim has no lockable tap")
 )
 
 // Engine is the slice of the cocoon driver the manager consumes.

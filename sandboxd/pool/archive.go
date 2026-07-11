@@ -153,6 +153,11 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 // wakeArchived restores an archived claim from its store checkpoint into a
 // fresh local VM, keeping id/token/tenant; the caller holds the Transition lock.
 func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, error) {
+	// Egress never archives (only hibernated claims do, which the egress lane
+	// refuses); a corrupt/pre-#25 archived egress claim must not resume unguarded.
+	if sb.Key.Net == types.NetEgress {
+		return "", fmt.Errorf("wake %s: egress lane cannot resume from archive", sb.ID)
+	}
 	ctx = context.WithoutCancel(ctx)
 	ck := sb.ArchiveCk
 	l := m.recLock(ck)
