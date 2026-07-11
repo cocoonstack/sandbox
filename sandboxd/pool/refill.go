@@ -281,15 +281,18 @@ func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context,
 	return &wg
 }
 
-// destroy removes a VM on a cancellation-immune ctx: cleanup is usually
-// triggered by a failed or abandoned request, and running `cocoon vm rm` on
-// the caller's canceled ctx would no-op and orphan a live VM.
-func (m *Manager) destroy(ctx context.Context, name string) {
-	ctx = context.WithoutCancel(ctx)
-	if err := m.eng.Remove(ctx, name); err != nil {
-		log.WithFunc("pool.destroy").Errorf(ctx, err, "remove vm %s", name)
+// removeVM deletes a VM (on a cancellation-immune ctx, else `cocoon vm rm`
+// no-ops and orphans it) and reports whether it is confirmed gone; a failed
+// remove leaves it running, so the caller must keep its lock.
+func (m *Manager) removeVM(ctx context.Context, name string) bool {
+	if err := m.eng.Remove(context.WithoutCancel(ctx), name); err != nil {
+		log.WithFunc("pool.removeVM").Errorf(ctx, err, "remove vm %s", name)
+		return false
 	}
+	return true
 }
+
+func (m *Manager) destroy(ctx context.Context, name string) { _ = m.removeVM(ctx, name) }
 
 func (m *Manager) dropSnap(ctx context.Context, snap string) {
 	if snap == "" {

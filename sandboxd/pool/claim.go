@@ -117,9 +117,8 @@ func (m *Manager) Release(ctx context.Context, id, token string) error {
 	if vmName != "" {
 		err = m.eng.Remove(ctx, vmName)
 	}
-	// Unlock only once the VM is gone: a failed remove leaves a running VM, so
-	// disarming first would hand its NIC back unguarded. The VM stays locked
-	// until the next restart's stale sweep reclaims it.
+	// Unlock only once the VM is gone, else a failed remove hands its NIC back
+	// unguarded; the restart stale sweep reclaims a VM left locked.
 	if err == nil {
 		m.disarmEgress(id)
 	}
@@ -360,8 +359,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				logger.Errorf(ctx, err, "archive expired %s", v.id)
 			}
 		default:
-			// Unlock only after the VM is gone (see Release): a failed remove
-			// keeps the NIC locked, reclaimed by the next restart's stale sweep.
+			// Unlock only after the VM is gone (see Release).
 			if rmErr := m.eng.Remove(context.WithoutCancel(ctx), v.vmName); rmErr != nil {
 				logger.Errorf(ctx, rmErr, "remove vm %s", v.vmName)
 			} else {

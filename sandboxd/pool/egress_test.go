@@ -128,9 +128,7 @@ func TestEgressLaneDoesNotHibernate(t *testing.T) {
 }
 
 func TestEgressLaneWakeFailsClosed(t *testing.T) {
-	// #25 forbids egress hibernation/archive; a claim that reached such a state
-	// (corrupt or pre-#25 journal) must fail closed on wake, never resume with
-	// an unlockable fresh tap. Drive wakeResolved directly, past hibernateLocked.
+	// A hibernated/archived egress claim (corrupt state) must fail closed on wake.
 	m := newTestManager(t, newFakeEngine())
 	cases := []struct {
 		name string
@@ -225,8 +223,7 @@ func TestLockFallsBackToListForPreTapClaims(t *testing.T) {
 	if _, err := eng.RunCold(t.Context(), "sbx-old", egKey); err != nil {
 		t.Fatalf("seed vm: %v", err)
 	}
-	// A claim adopted from a pre-tap journal has no TAP; the lock must resolve
-	// it through the engine instead of failing.
+	// A pre-tap-journal claim has no TAP; the lock resolves it through the engine.
 	sb := &types.Sandbox{ID: "sb_old", Key: egKey, VMName: "sbx-old"}
 	lockErr := m.lockEgressNIC(t.Context(), sb)
 	if calls := eng.listCalls(); calls != 1 {
@@ -240,10 +237,8 @@ func TestLockFallsBackToListForPreTapClaims(t *testing.T) {
 func TestBatchArmFailureRecordsNoUsage(t *testing.T) {
 	eng := newFakeEngine()
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
-	// First member arms trivially (none lane), second fails (egress lane, no
-	// such VM): the committed-then-rolled-back batch must leave no claim event
-	// in the billing stream — a claim with no terminal release/reap would stay
-	// open forever for the collector.
+	// Second member (egress, no VM) fails to arm; the rolled-back batch must
+	// leave no claim event, else it stays open forever for the collector.
 	sbs := []*types.Sandbox{
 		{VMName: "sbx-ok", Key: testKey},
 		{VMName: "sbx-eg", Key: egKey},

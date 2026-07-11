@@ -98,21 +98,11 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 
 	logger := log.WithFunc("pool.Reconcile")
 	m.reclaimOrphanArchiveCks(ctx, claims)
-	var stale []string
-	for name := range live {
-		if strings.HasPrefix(name, vmPrefix) && !owned[name] {
-			stale = append(stale, name)
-		}
-	}
-	m.runBounded(ctx, len(stale), func(ctx context.Context, i int) {
-		m.destroy(ctx, stale[i])
-		logger.Infof(ctx, "removed stale VM %s", stale[i])
-	}).Wait()
+	removed := m.sweepStaleVMs(ctx, live, owned)
 
-	// Snapshot sweep, symmetric to the VM sweep: a hibernate snapshot no
-	// adopted claim references is an orphan, and fork/golden-build snapshots
-	// are transient by construction — none can span a restart. A list failure
-	// only skips the sweep: GC must not brick startup.
+	// A hibernate snapshot no adopted claim references is an orphan;
+	// fork/golden-build snapshots never span a restart. A list failure only
+	// skips the sweep — GC must not brick startup.
 	if snapsErr != nil {
 		logger.Warnf(ctx, "snapshot sweep skipped: %v", snapsErr)
 	} else {
@@ -128,30 +118,47 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			logger.Infof(ctx, "removed orphan snapshot %s", orphans[i])
 		}).Wait()
 	}
-	m.resyncEgress(ctx, live)
+	m.resyncEgress(ctx, live, removed)
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
 	return saveErr
 }
 
-// resyncEgress re-establishes egress state after a restart, then sweeps tables
-// orphaned by VMs that vanished while the daemon was down. A live VM kept its
-// nft lock across the restart (the table lives in the root netns, not in this
-// process), so the tap is only re-recorded — never re-locked — to avoid a window
-// where a running guest is briefly unlocked; only the proxy listener is rebound.
-func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMRecord) {
+// sweepStaleVMs removes sbx-prefixed VMs no claim owns and returns the ones
+// confirmed gone; a failed remove is omitted so the egress sweep keeps its lock.
+func (m *Manager) sweepStaleVMs(ctx context.Context, live map[string]types.VMRecord, owned map[string]bool) map[string]bool {
+	logger := log.WithFunc("pool.Reconcile")
+	var stale []string
+	for name := range live {
+		if strings.HasPrefix(name, vmPrefix) && !owned[name] {
+			stale = append(stale, name)
+		}
+	}
+	gone := make([]bool, len(stale)) // distinct indices: no lock under the Wait barrier
+	m.runBounded(ctx, len(stale), func(ctx context.Context, i int) {
+		if m.removeVM(ctx, stale[i]) {
+			gone[i] = true
+			logger.Infof(ctx, "removed stale VM %s", stale[i])
+		}
+	}).Wait()
+	removed := make(map[string]bool, len(stale))
+	for i, ok := range gone {
+		if ok {
+			removed[stale[i]] = true
+		}
+	}
+	return removed
+}
+
+// resyncEgress re-locks adopted egress claims after a restart, quarantines any
+// it cannot lock, and sweeps tables orphaned by VMs confirmed gone (in removed).
+func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMRecord, removed map[string]bool) {
 	logger := log.WithFunc("pool.resyncEgress")
 	now := time.Now()
-	lockedTaps := map[string]bool{}
 	var quarantine []*types.Sandbox
 	for _, sb := range m.claimed {
 		sb.TouchAt(now)
-		// Gate on guardedEgress like every other lock site: with guarding off the
-		// claim path leaves the egress NIC free, so a restart must not lock it.
 		if m.guardedEgress && sb.Key.Net == types.NetEgress {
 			tap := m.readoptEgressTap(sb, live)
-			// A live egress claim we cannot re-lock (no tap, or nft failed) must
-			// not be served with a free NIC: quarantine it (fail closed) instead
-			// of leaving it reachable unguarded.
 			if tap == "" {
 				logger.Errorf(ctx, errNoEgressTap, "egress claim %s has no lockable tap; quarantining", sb.ID)
 				quarantine = append(quarantine, sb)
@@ -162,25 +169,35 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 				quarantine = append(quarantine, sb)
 				continue
 			}
-			lockedTaps[tap] = true
 		}
 		if proxyErr := m.armEgressProxy(ctx, sb); proxyErr != nil {
 			logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 		}
 	}
-	if sweepErr := netfilter.SweepExcept(lockedTaps); sweepErr != nil {
-		logger.Warnf(ctx, "sweep orphan egress tables: %v", sweepErr)
-	}
+	// Quarantine before the sweep so a failed remove's still-running tap is kept.
 	for _, sb := range quarantine {
-		m.quarantineClaim(ctx, sb)
+		if m.quarantineClaim(ctx, sb) {
+			removed[sb.VMName] = true
+		}
+	}
+	// Keep every still-running VM's tap; sweep only a confirmed-gone VM's table,
+	// so the sweep can never unlock a running guest.
+	keep := make(map[string]bool, len(live))
+	for name, rec := range live {
+		if tap := rec.TapDevice(); tap != "" && !removed[name] {
+			keep[tap] = true
+		}
+	}
+	if sweepErr := netfilter.SweepExcept(keep); sweepErr != nil {
+		logger.Warnf(ctx, "sweep orphan egress tables: %v", sweepErr)
 	}
 }
 
-// quarantineClaim fail-closes a claim whose egress NIC could not be locked on
-// restart: it destroys the VM and drops the claim, so a re-claim gets a fresh,
-// locked VM rather than the daemon serving an unguarded one.
-func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) {
-	m.destroy(ctx, sb.VMName)
+// quarantineClaim removes a claim whose egress NIC could not be locked and drops
+// it from service; it returns whether the VM is confirmed gone (a failed remove
+// leaves it for the next restart's stale sweep).
+func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
+	gone := m.removeVM(ctx, sb.VMName)
 	m.mu.Lock()
 	delete(m.claimed, sb.ID)
 	m.tenantDelta(sb.Tenant, -1)
@@ -189,6 +206,7 @@ func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) {
 	if err := m.store.commit(js); err != nil {
 		m.recommit(ctx, js)
 	}
+	return gone
 }
 
 // readoptEgressTap records a live egress-lane claim's tap for lifecycle after a
