@@ -171,10 +171,10 @@ func (m *Manager) readoptEgressTap(sb *types.Sandbox, live map[string]types.VMRe
 		return ""
 	}
 	rec, ok := live[sb.VMName]
-	if !ok || rec.TapDevice() == "" {
+	tap := rec.TapDevice()
+	if !ok || tap == "" {
 		return ""
 	}
-	tap := rec.TapDevice()
 	m.mu.Lock()
 	m.egressTaps[sb.ID] = tap
 	m.mu.Unlock()
