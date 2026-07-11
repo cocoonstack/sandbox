@@ -41,6 +41,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrBadName, http.StatusBadRequest, ""},
 	{pool.ErrBadCount, http.StatusBadRequest, ""},
 	{pool.ErrNoEgress, http.StatusConflict, ""},
+	{pool.ErrNoEgressHibernate, http.StatusConflict, ""},
 	{pool.ErrQuota, http.StatusTooManyRequests, ""},
 	{pool.ErrPooledTemplate, http.StatusConflict, ""},
 	{pool.ErrTemplateOwned, http.StatusConflict, ""},

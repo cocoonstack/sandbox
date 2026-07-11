@@ -54,23 +54,25 @@ const (
 )
 
 var (
-	ErrBadKey          = errors.New("invalid pool key")
-	ErrBadCount        = errors.New("invalid fork count")
-	ErrNoWarm          = errors.New("no warm sandbox for key")
-	ErrUnknownSandbox  = errors.New("unknown sandbox or bad token")
-	ErrUnknownTemplate = errors.New("unknown promoted template")
-	ErrPooledTemplate  = errors.New("template belongs to a configured pool")
-	ErrTemplateOwned   = errors.New("template owned by another tenant")
-	ErrNoEgress        = errors.New("node has no egress attachment (bridge or network)")
-	ErrQuota           = errors.New("node claim quota reached")
+	ErrBadKey            = errors.New("invalid pool key")
+	ErrBadCount          = errors.New("invalid fork count")
+	ErrNoWarm            = errors.New("no warm sandbox for key")
+	ErrUnknownSandbox    = errors.New("unknown sandbox or bad token")
+	ErrUnknownTemplate   = errors.New("unknown promoted template")
+	ErrPooledTemplate    = errors.New("template belongs to a configured pool")
+	ErrTemplateOwned     = errors.New("template owned by another tenant")
+	ErrNoEgress          = errors.New("node has no egress attachment (bridge or network)")
+	ErrNoEgressHibernate = errors.New("egress-lane sandboxes do not hibernate")
+	ErrQuota             = errors.New("node claim quota reached")
 
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
+	errNoEgressTap   = errors.New("egress-lane claim has no lockable tap")
 )
 
 // Engine is the slice of the cocoon driver the manager consumes.
 type Engine interface {
-	Clone(ctx context.Context, fromDir, name string, key types.PoolKey) (string, error)
-	RunCold(ctx context.Context, name string, key types.PoolKey) (string, error)
+	Clone(ctx context.Context, fromDir, name string, key types.PoolKey) (types.VMRecord, error)
+	RunCold(ctx context.Context, name string, key types.PoolKey) (types.VMRecord, error)
 	Remove(ctx context.Context, name string) error
 	SnapshotSave(ctx context.Context, vmName, snapName string) error
 	SnapshotExport(ctx context.Context, snapName, toDir string) error
@@ -169,9 +171,13 @@ type Manager struct {
 	// in that window would strand the claim). Both guarded by m.mu.
 	archiving  map[string]struct{}
 	pendingCks map[string]struct{}
-	// egressListeners holds the per-sandbox none-lane egress proxy accept point,
-	// keyed by sandbox id; guarded by m.mu.
+	// egressListeners holds the per-sandbox egress proxy accept point, keyed by
+	// sandbox id; guarded by m.mu.
 	egressListeners map[string]*egressListener
+	// egressTaps holds the nft-locked egress-lane tap per sandbox id, tracked
+	// apart from the proxy so a locked-but-policyless NIC still unlocks on
+	// release; guarded by m.mu.
+	egressTaps map[string]string
 
 	// maxClaims caps live claims node-wide (0 = unlimited); tenantMax holds
 	// every configured tenant's cap (0 = unlimited) and doubles as the set of
@@ -238,6 +244,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		archiving:       map[string]struct{}{},
 		pendingCks:      map[string]struct{}{},
 		egressListeners: map[string]*egressListener{},
+		egressTaps:      map[string]string{},
 		egressSecrets:   secrets,
 		refillSem:       make(chan struct{}, maxConcurrentRefills),
 	}
@@ -461,9 +468,10 @@ func tenantOwns(tenant, owner string) bool {
 }
 
 // benignSweepErr reports whether err is the expected outcome of a housekeeping
-// sweep racing the data plane (victim released, or woke mid-sweep).
+// sweep (victim released, woke mid-sweep, or a lane that never hibernates).
 func benignSweepErr(err error) bool {
-	return errors.Is(err, ErrUnknownSandbox) || errors.Is(err, errWokeMeanwhile)
+	return errors.Is(err, ErrUnknownSandbox) || errors.Is(err, errWokeMeanwhile) ||
+		errors.Is(err, ErrNoEgressHibernate)
 }
 
 func vmName(key types.PoolKey) string {

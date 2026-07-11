@@ -62,6 +62,10 @@ physical NIC). Name-based checks are not enough — the all-builtin sandbox
 kernel auto-creates virtual tunnels (`sit0` and friends) even on the no-NIC
 lane. `SILKD_NET=none|egress` overrides the probe for tests and operators.
 
+On every lane silkd also binds `127.0.0.1:3128` and relays each connection to
+the host's [guarded-egress](egress.md) proxy over vsock (`CID2:2049`); when the
+host wired no policy the per-connection dial is refused, so the port is inert.
+
 ## Limits
 
 - 8 MiB frame cap (a malformed peer cannot OOM the daemon)

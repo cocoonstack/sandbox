@@ -110,13 +110,17 @@ func (m *Manager) Release(ctx context.Context, id, token string) error {
 	}
 	// Cleanup must survive the caller hanging up; the claim is already dropped.
 	ctx = context.WithoutCancel(ctx)
-	m.disarmEgress(id)
 	if ck != "" {
 		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
 	}
 	var err error
 	if vmName != "" {
 		err = m.eng.Remove(ctx, vmName)
+	}
+	// Unlock only once the VM is gone, else a failed remove hands its NIC back
+	// unguarded; the restart stale sweep reclaims a VM left locked.
+	if err == nil {
+		m.disarmEgress(id)
 	}
 	m.dropSnap(ctx, snap)
 	m.counters.releases.Add(1)
@@ -243,24 +247,41 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	js := m.store.snapshot(m.claimed)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
-		m.mu.Lock()
-		for _, sb := range sbs {
-			delete(m.claimed, sb.ID)
-			m.tenantDelta(sb.Tenant, -1)
-		}
-		rb := m.store.snapshot(m.claimed)
-		m.mu.Unlock()
-		m.recommit(ctx, rb)
-		for _, sb := range sbs {
-			m.destroy(ctx, sb.VMName)
-		}
+		m.rollbackClaim(ctx, sbs)
 		return fmt.Errorf("persist claim: %w", saveErr)
 	}
 	for _, sb := range sbs {
+		if armErr := m.armEgress(ctx, sb); armErr != nil {
+			m.rollbackClaim(ctx, sbs)
+			return fmt.Errorf("arm egress %s: %w", sb.ID, armErr)
+		}
+	}
+	// Usage lands only after the whole batch armed: a rollback must not leave
+	// claim events with no terminal release/reap in the billing stream.
+	for _, sb := range sbs {
 		m.recordUsage(ctx, usageEvent{Event: "claim", ID: sb.ID, VMName: sb.VMName, KeyHash: sb.Key.Hash(), Tenant: sb.Tenant})
-		m.armEgress(ctx, sb)
 	}
 	return nil
+}
+
+// rollbackClaim unwinds a claim batch after a persist or egress-arm failure:
+// drop the claims, reconverge the journal, destroy the VMs — a NIC that
+// cannot be locked must never be handed out.
+func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
+	m.mu.Lock()
+	for _, sb := range sbs {
+		delete(m.claimed, sb.ID)
+		m.tenantDelta(sb.Tenant, -1)
+	}
+	rb := m.store.snapshot(m.claimed)
+	m.mu.Unlock()
+	m.recommit(ctx, rb)
+	for _, sb := range sbs {
+		// Unlock only after the VM is gone (see Release).
+		if m.removeVM(ctx, sb.VMName) {
+			m.disarmEgress(sb.ID)
+		}
+	}
 }
 
 func (m *Manager) reapOnce(ctx context.Context) {
@@ -338,8 +359,10 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				logger.Errorf(ctx, err, "archive expired %s", v.id)
 			}
 		default:
-			m.disarmEgress(v.id)
-			m.destroy(ctx, v.vmName)
+			// Unlock only after the VM is gone (see Release).
+			if m.removeVM(ctx, v.vmName) {
+				m.disarmEgress(v.id)
+			}
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)
 			m.recordUsage(ctx, usageEvent{Event: "reap", ID: v.id, VMName: v.vmName})

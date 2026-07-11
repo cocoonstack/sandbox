@@ -136,9 +136,11 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		m.deleteOrphanArchiveCk(ctx, ck.ID)
 		return fmt.Errorf("archive %s: persist claims: %w", sb.ID, saveErr)
 	}
+	// Disarm under Transition so a wake that runs the instant we release it
+	// re-arms cleanly instead of being clobbered by a late disarm.
+	m.disarmEgress(sb.ID)
 	sb.Transition.Unlock()
 	// Committed: the store ck is authoritative now; reclaim the local footprint.
-	m.disarmEgress(sb.ID)
 	if rmErr := m.eng.Remove(ctx, vmName); rmErr != nil {
 		log.WithFunc("pool.archive").Warnf(ctx, "remove archived VM %s: %v", vmName, rmErr)
 	}
@@ -151,6 +153,10 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 // wakeArchived restores an archived claim from its store checkpoint into a
 // fresh local VM, keeping id/token/tenant; the caller holds the Transition lock.
 func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, error) {
+	// Egress never archives; a corrupt archived egress claim must fail closed.
+	if sb.Key.Net == types.NetEgress {
+		return "", fmt.Errorf("wake %s: egress lane cannot resume from archive", sb.ID)
+	}
 	ctx = context.WithoutCancel(ctx)
 	ck := sb.ArchiveCk
 	l := m.recLock(ck)
@@ -182,7 +188,14 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	} else {
 		m.dropRecLock(ck)
 	}
-	m.armEgress(ctx, sb) // fresh VM after unarchive: bind its egress accept point
+	// Only the none lane reaches here (the egress guard above fails closed), so
+	// this rebinds the none-lane proxy; there is no NIC to re-lock.
+	if proxyErr := m.armEgressProxy(ctx, sb); proxyErr != nil {
+		log.WithFunc("pool.wakeArchived").Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
+	}
+	if m.disarmIfReleased(sb) {
+		return "", ErrUnknownSandbox
+	}
 	m.counters.unarchives.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "unarchive", ID: sb.ID, Reference: ck, Tenant: sb.Tenant})
 	return built.VsockSocket, nil

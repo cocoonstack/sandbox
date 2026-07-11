@@ -42,7 +42,8 @@ bridge/CNI NIC. Backends are never user-selected.
   the relay: Playwright/Puppeteer access, checkpoint/branch of a live
   browser
 - [Guarded egress](egress.md) — allow-listed, audited outbound access with
-  host-side credential injection; the none-lane wedge
+  host-side credential injection, on both lanes: no NIC (none) or an
+  nftables-locked NIC (egress)
 - [silkd](silkd.md) — the in-guest daemon: protocol, verb reference, lanes
   and limits
 - [Performance](performance.md) — measured latencies and the environments

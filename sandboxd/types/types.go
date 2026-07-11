@@ -119,6 +119,9 @@ type Sandbox struct {
 	Tenant string `json:"tenant,omitempty"`
 
 	VsockSocket string `json:"vsock_socket,omitempty"`
+	// TAP is the egress-lane NIC's host tap, captured at provision; empty on
+	// the none lane and on claims adopted from pre-tap journals.
+	TAP string `json:"tap,omitempty"`
 	// HibernateSnap names the memory snapshot while the VM is hibernated;
 	// empty means running.
 	HibernateSnap string `json:"hibernate_snap,omitempty"`
@@ -173,12 +176,27 @@ type Checkpoint struct {
 	Archive bool `json:"archive,omitempty"`
 }
 
-// VMRecord is the subset of cocoon's `vm list --format json` output the
-// control plane reads.
+// VMRecord is the subset of cocoon's VM records the control plane reads —
+// the same shape backs `vm list --format json` rows and the lifecycle
+// commands' `--output json` result.
 type VMRecord struct {
-	State       string   `json:"state"`
-	VsockSocket string   `json:"vsock_socket"`
-	Config      VMConfig `json:"config"`
+	State          string        `json:"state"`
+	VsockSocket    string        `json:"vsock_socket"`
+	NetworkConfigs []VMNetConfig `json:"network_configs,omitempty"`
+	Config         VMConfig      `json:"config"`
+}
+
+// TapDevice returns the first NIC's host tap; empty when the record carries none.
+func (r VMRecord) TapDevice() string {
+	if len(r.NetworkConfigs) == 0 {
+		return ""
+	}
+	return r.NetworkConfigs[0].TAP
+}
+
+// VMNetConfig is the per-NIC host tap the egress-lane nft lock binds.
+type VMNetConfig struct {
+	TAP string `json:"tap"`
 }
 
 // VMConfig is the config subset of VMRecord.

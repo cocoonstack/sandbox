@@ -1,15 +1,28 @@
 #!/usr/bin/env bash
-# Bare-metal acceptance for none-lane guarded egress: a NIC-less sandbox
-# reaches an allowed origin through the host proxy with a host-injected
-# credential it never holds, and a disallowed host is denied — all over vsock.
+# Bare-metal acceptance for guarded egress: a sandbox reaches an allowed origin
+# through the host proxy with a host-injected credential it never holds, direct
+# egress is blocked (no NIC on the none lane, an nft lock on the egress lane),
+# and a disallowed host is denied. NET=none|egress selects the lane.
 # Runs a dedicated sandboxd on port 7779 (7777=e2e, 7778=archive).
 set -euo pipefail
 
 TEMPLATE=${TEMPLATE:-rt:24.04}
 ADDR=${ADDR:-127.0.0.1:7779}
 TOKEN=${TOKEN:-e2e}
+NET=${NET:-none}
+BRIDGE=${BRIDGE:-sbxbr0}
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 export EGRESS_PROBE_TOKEN=${EGRESS_PROBE_TOKEN:-tok-$(date +%s)}
+
+REACH=127.0.0.1
+BRIDGE_CFG=""
+NICADDR=""
+if [[ $NET == egress ]]; then
+  REACH=$(ip -4 addr show "$BRIDGE" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -1)
+  [[ -z $REACH ]] && { echo "bridge $BRIDGE has no IPv4 — egress lane needs a gateway"; exit 1; }
+  BRIDGE_CFG="\"bridge\": \"$BRIDGE\","
+  NICADDR="${REACH%.*}.222/24" # static guest NIC (image does not DHCP), so a blocked direct egress is the nft lock
+fi
 
 DATA=$(mktemp -d /tmp/egress-e2e.XXXXXX)
 DAEMON_PID=""
@@ -49,17 +62,18 @@ cat >"$DATA/config.json" <<EOF
   "data_dir": "$DATA/state",
   "api_token": "$TOKEN",
   "audit_log": true,
+  $BRIDGE_CFG
   "secrets": [
     {"name": "probe", "header": "X-Egress-Token", "value_env": "EGRESS_PROBE_TOKEN"}
   ],
   "pools": [
-    {"template": "$TEMPLATE", "net": "none", "size": "small", "warm": 1,
-     "egress": {"allow": [{"host": "127.0.0.1", "secret": "probe"}]}}
+    {"template": "$TEMPLATE", "net": "$NET", "size": "small", "warm": 1,
+     "egress": {"allow": [{"host": "$REACH", "secret": "probe"}]}}
   ]
 }
 EOF
 
-echo "== start sandboxd (none-lane pool + egress policy)"
+echo "== start sandboxd ($NET-lane pool + egress policy, reach=$REACH)"
 "$DATA/sandboxd" -config "$DATA/config.json" >>"$DATA/daemon.log" 2>&1 &
 DAEMON_PID=$!
 for _ in $(seq 1 40); do curl -sf "http://$ADDR/healthz" >/dev/null && break; sleep 0.5; done
@@ -71,5 +85,5 @@ for _ in $(seq 1 120); do
 done
 
 echo "== egresssmoke"
-"$DATA/egresssmoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -secret "$EGRESS_PROBE_TOKEN"
+"$DATA/egresssmoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -secret "$EGRESS_PROBE_TOKEN" -net "$NET" -reach "$REACH" -nicaddr "$NICADDR"
 echo "PASS"

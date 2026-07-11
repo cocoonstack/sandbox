@@ -34,10 +34,14 @@ require (
 	github.com/getsentry/sentry-go v0.20.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
+	github.com/google/go-cmp v0.6.0 // indirect
+	github.com/google/nftables v0.3.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.18 // indirect
+	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42 // indirect
+	github.com/mdlayher/socket v0.5.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/projecteru2/core v0.0.0-20241016125006-ff909eefe04c // indirect

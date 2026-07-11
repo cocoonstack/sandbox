@@ -12,6 +12,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -97,21 +98,11 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 
 	logger := log.WithFunc("pool.Reconcile")
 	m.reclaimOrphanArchiveCks(ctx, claims)
-	var stale []string
-	for name := range live {
-		if strings.HasPrefix(name, vmPrefix) && !owned[name] {
-			stale = append(stale, name)
-		}
-	}
-	m.runBounded(ctx, len(stale), func(ctx context.Context, i int) {
-		m.destroy(ctx, stale[i])
-		logger.Infof(ctx, "removed stale VM %s", stale[i])
-	}).Wait()
+	removed := m.sweepStaleVMs(ctx, live, owned)
 
-	// Snapshot sweep, symmetric to the VM sweep: a hibernate snapshot no
-	// adopted claim references is an orphan, and fork/golden-build snapshots
-	// are transient by construction — none can span a restart. A list failure
-	// only skips the sweep: GC must not brick startup.
+	// A hibernate snapshot no adopted claim references is an orphan;
+	// fork/golden-build snapshots never span a restart. A list failure only
+	// skips the sweep — GC must not brick startup.
 	if snapsErr != nil {
 		logger.Warnf(ctx, "snapshot sweep skipped: %v", snapsErr)
 	} else {
@@ -127,13 +118,115 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			logger.Infof(ctx, "removed orphan snapshot %s", orphans[i])
 		}).Wait()
 	}
-	now := time.Now()
-	for _, sb := range m.claimed {
-		sb.TouchAt(now)
-		m.armEgress(ctx, sb) // re-bind the none-lane egress accept point after restart
-	}
+	m.resyncEgress(ctx, live, removed)
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
 	return saveErr
+}
+
+// sweepStaleVMs removes sbx-prefixed VMs no claim owns and returns the ones
+// confirmed gone; a failed remove is omitted so the egress sweep keeps its lock.
+func (m *Manager) sweepStaleVMs(ctx context.Context, live map[string]types.VMRecord, owned map[string]bool) map[string]bool {
+	logger := log.WithFunc("pool.Reconcile")
+	var stale []string
+	for name := range live {
+		if strings.HasPrefix(name, vmPrefix) && !owned[name] {
+			stale = append(stale, name)
+		}
+	}
+	gone := make([]bool, len(stale)) // distinct indices: no lock under the Wait barrier
+	m.runBounded(ctx, len(stale), func(ctx context.Context, i int) {
+		if m.removeVM(ctx, stale[i]) {
+			gone[i] = true
+			logger.Infof(ctx, "removed stale VM %s", stale[i])
+		}
+	}).Wait()
+	removed := make(map[string]bool, len(stale))
+	for i, ok := range gone {
+		if ok {
+			removed[stale[i]] = true
+		}
+	}
+	return removed
+}
+
+// resyncEgress re-locks adopted egress claims after a restart, quarantines any
+// it cannot lock, and sweeps tables orphaned by VMs confirmed gone (in removed).
+func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMRecord, removed map[string]bool) {
+	logger := log.WithFunc("pool.resyncEgress")
+	now := time.Now()
+	var quarantine []*types.Sandbox
+	for _, sb := range m.claimed {
+		sb.TouchAt(now)
+		if m.guardedEgress && sb.Key.Net == types.NetEgress {
+			tap := m.readoptEgressTap(sb, live)
+			if tap == "" {
+				logger.Errorf(ctx, errNoEgressTap, "egress claim %s has no lockable tap; quarantining", sb.ID)
+				quarantine = append(quarantine, sb)
+				continue
+			}
+			if err := netfilter.EnsureLock(tap); err != nil {
+				logger.Errorf(ctx, err, "ensure egress lock %s; quarantining", sb.ID)
+				quarantine = append(quarantine, sb)
+				continue
+			}
+		}
+		if proxyErr := m.armEgressProxy(ctx, sb); proxyErr != nil {
+			logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
+		}
+	}
+	// Quarantine before the sweep so a failed remove's still-running tap is kept.
+	keep := make(map[string]bool, len(live))
+	for _, sb := range quarantine {
+		if m.quarantineClaim(ctx, sb) {
+			removed[sb.VMName] = true
+		} else if sb.TAP != "" {
+			keep[sb.TAP] = true
+		}
+	}
+	// Keep every still-running VM's tap; sweep only a confirmed-gone VM's table.
+	for name, rec := range live {
+		if tap := rec.TapDevice(); tap != "" && !removed[name] {
+			keep[tap] = true
+		}
+	}
+	if sweepErr := netfilter.SweepExcept(keep); sweepErr != nil {
+		logger.Warnf(ctx, "sweep orphan egress tables: %v", sweepErr)
+	}
+}
+
+// quarantineClaim removes a claim whose egress NIC could not be locked and drops
+// it from service; it returns whether the VM is confirmed gone (a failed remove
+// leaves it for the next restart's stale sweep). A never-applied lock plus a
+// failed remove leaves the VM unguarded until a later remove succeeds.
+func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
+	gone := m.removeVM(ctx, sb.VMName)
+	m.mu.Lock()
+	delete(m.claimed, sb.ID)
+	m.tenantDelta(sb.Tenant, -1)
+	js := m.store.snapshot(m.claimed)
+	m.mu.Unlock()
+	if err := m.store.commit(js); err != nil {
+		m.recommit(ctx, js)
+	}
+	return gone
+}
+
+// readoptEgressTap records a live egress-lane claim's tap for lifecycle after a
+// restart and returns it; "" for the none lane or a VM whose tap is not listed.
+func (m *Manager) readoptEgressTap(sb *types.Sandbox, live map[string]types.VMRecord) string {
+	if sb.Key.Net != types.NetEgress {
+		return ""
+	}
+	rec, ok := live[sb.VMName]
+	tap := rec.TapDevice()
+	if !ok || tap == "" {
+		return ""
+	}
+	m.mu.Lock()
+	m.egressTaps[sb.ID] = tap
+	sb.TAP = tap
+	m.mu.Unlock()
+	return tap
 }
 
 // reclaimOrphanArchiveCks reaps archives that crashed between their

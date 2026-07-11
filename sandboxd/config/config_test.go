@@ -61,6 +61,8 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"pool egress empty host", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":""}]}}]}`, "must not be empty"},
 		{"pool egress unknown secret", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"api.github.com","secret":"gh"}]}}]}`, "unknown secret"},
 		{"tenant egress unknown secret", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x","secret":"gh"}]}}]}`, "unknown secret"},
+		{"guarded egress on cni pool", `{"network":"cni","pools":[{"template":"rt:24.04","net":"egress","size":"small","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
+		{"guarded egress on cni tenant", `{"api_token":"root","network":"cni","pools":[{"template":"rt:24.04","net":"egress","size":"small"}],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Load(writeConfig(t, tt.body))
@@ -100,6 +102,14 @@ func TestLoadAcceptsEgressPolicy(t *testing.T) {
 	}
 	if len(cfg.Secrets) != 1 || cfg.Secrets[0].Name != "gh" {
 		t.Errorf("secrets %+v", cfg.Secrets)
+	}
+}
+
+func TestLoadAcceptsUnguardedCNINetwork(t *testing.T) {
+	// Only guarded egress needs a bridge; an unguarded CNI network lane is fine.
+	path := writeConfig(t, `{"network":"cni","pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`)
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load: %v", err)
 	}
 }
 

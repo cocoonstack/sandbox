@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -103,11 +104,11 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 }
 
 func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name, snap, final string) error {
-	sock, err := m.eng.RunCold(ctx, name, key)
+	rec, err := m.eng.RunCold(ctx, name, key)
 	if err != nil {
 		return err
 	}
-	if _, err := m.probeReady(ctx, name, sock, coldProbeTimeout); err != nil {
+	if _, err := m.probeReady(ctx, name, rec.VsockSocket, coldProbeTimeout); err != nil {
 		return err
 	}
 	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
@@ -173,22 +174,23 @@ func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir
 func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden string) (*types.Sandbox, error) {
 	name := vmName(key)
 	probeTimeout := claimProbeTimeout
-	var sock string
+	var rec types.VMRecord
 	var err error
 	if golden != "" {
-		sock, err = m.eng.Clone(ctx, golden, name, key)
+		rec, err = m.eng.Clone(ctx, golden, name, key)
 	} else {
-		sock, err = m.eng.RunCold(ctx, name, key)
+		rec, err = m.eng.RunCold(ctx, name, key)
 		probeTimeout = coldProbeTimeout
 	}
+	var sock string
 	if err == nil {
-		sock, err = m.probeReady(ctx, name, sock, probeTimeout)
+		sock, err = m.probeReady(ctx, name, rec.VsockSocket, probeTimeout)
 	}
 	if err != nil {
 		m.destroy(ctx, name)
 		return nil, err
 	}
-	return &types.Sandbox{VMName: name, Key: key, VsockSocket: sock}, nil
+	return &types.Sandbox{VMName: name, Key: key, VsockSocket: sock, TAP: rec.TapDevice()}, nil
 }
 
 // cloneBatch builds count claim-ready clones from an exported snapshot dir,
@@ -244,16 +246,14 @@ func (m *Manager) vsockOf(ctx context.Context, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, vm := range vms {
-		if vm.Config.Name != name {
-			continue
-		}
-		if vm.VsockSocket == "" {
-			return "", fmt.Errorf("vm %s has no vsock socket", name)
-		}
-		return vm.VsockSocket, nil
+	i := slices.IndexFunc(vms, func(vm types.VMRecord) bool { return vm.Config.Name == name })
+	if i < 0 {
+		return "", fmt.Errorf("vm %s not found after create", name)
 	}
-	return "", fmt.Errorf("vm %s not found after create", name)
+	if vms[i].VsockSocket == "" {
+		return "", fmt.Errorf("vm %s has no vsock socket", name)
+	}
+	return vms[i].VsockSocket, nil
 }
 
 // runBounded fans f over n items on the refill semaphore, so engine
@@ -280,15 +280,18 @@ func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context,
 	return &wg
 }
 
-// destroy removes a VM on a cancellation-immune ctx: cleanup is usually
-// triggered by a failed or abandoned request, and running `cocoon vm rm` on
-// the caller's canceled ctx would no-op and orphan a live VM.
-func (m *Manager) destroy(ctx context.Context, name string) {
-	ctx = context.WithoutCancel(ctx)
-	if err := m.eng.Remove(ctx, name); err != nil {
-		log.WithFunc("pool.destroy").Errorf(ctx, err, "remove vm %s", name)
+// removeVM deletes a VM (on a cancellation-immune ctx, else `cocoon vm rm`
+// no-ops and orphans it) and reports whether it is confirmed gone; a failed
+// remove leaves it running, so the caller must keep its lock.
+func (m *Manager) removeVM(ctx context.Context, name string) bool {
+	if err := m.eng.Remove(context.WithoutCancel(ctx), name); err != nil {
+		log.WithFunc("pool.removeVM").Errorf(ctx, err, "remove vm %s", name)
+		return false
 	}
+	return true
 }
+
+func (m *Manager) destroy(ctx context.Context, name string) { _ = m.removeVM(ctx, name) }
 
 func (m *Manager) dropSnap(ctx context.Context, snap string) {
 	if snap == "" {

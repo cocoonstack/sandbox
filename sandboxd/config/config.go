@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
@@ -185,6 +186,11 @@ func (c *Config) HasEgress() bool {
 	return c.Bridge != "" || c.Network != ""
 }
 
+func (c *Config) hasEgressPolicy() bool {
+	return slices.ContainsFunc(c.Pools, func(p PoolSpec) bool { return p.Egress != nil }) ||
+		slices.ContainsFunc(c.Tenants, func(t TenantSpec) bool { return t.Egress != nil })
+}
+
 func (c *Config) applyDefaults() {
 	if c.Listen == "" {
 		c.Listen = defaultListen
@@ -214,6 +220,11 @@ func (c *Config) applyDefaults() {
 func (c *Config) validate() error {
 	if c.Bridge != "" && c.Network != "" {
 		return fmt.Errorf("bridge and network are mutually exclusive")
+	}
+	// A CNI network's tap lives in the VM netns, unreachable from the root-netns
+	// nft lock; guarded egress needs a bridge.
+	if c.Network != "" && c.hasEgressPolicy() {
+		return fmt.Errorf("guarded egress needs a bridge lane, not a CNI network: the tap lives in the VM netns and cannot be locked")
 	}
 	if c.MaxForkCount < 1 {
 		return fmt.Errorf("max_fork_count must be at least 1, got %d", c.MaxForkCount)
