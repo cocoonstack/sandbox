@@ -420,15 +420,18 @@ func TestEgressDialerBlocksInternal(t *testing.T) {
 		"127.0.0.1:80", "169.254.169.254:80", "10.0.0.5:443", "192.168.1.1:22",
 		"172.16.0.1:80", "255.255.255.255:80", "[::1]:80", "[::ffff:127.0.0.1]:80",
 		"[fe80::1]:80", "[fc00::1]:80", "[ff02::1]:80",
-		// IANA IPv4 special-purpose, Globally Reachable = false.
+		// IANA IPv4 special-purpose, Globally Reachable = false (one per table prefix).
 		"0.6.6.6:80", "100.100.100.200:80", "192.0.0.1:80", "192.0.2.1:80",
-		"198.18.0.1:80", "198.19.255.255:80", "198.51.100.1:80", "203.0.113.1:80",
-		"240.1.2.3:80",
+		"192.88.99.2:80", "198.18.0.1:80", "198.19.255.255:80", "198.51.100.1:80",
+		"203.0.113.1:80", "240.1.2.3:80",
 		// IANA IPv6 special-purpose + deprecated v4-in-v6 embeddings.
-		"[100::1]:80", "[2001:2::1]:80", "[2001:db8::1]:80", "[::127.0.0.1]:80",
+		"[100::1]:80", "[100:0:0:1::1]:80", "[2001:db8::1]:80", "[3fff::1]:80",
+		"[5f00::1]:80", "[::127.0.0.1]:80",
+		"[2001::a9fe:a9fe]:80",    // Teredo, within 2001::/23
+		"[2001:2::1]:80",          // benchmarking, within 2001::/23
+		"[2001:10::1]:80",         // ORCHID, within 2001::/23
 		"[64:ff9b:1::8.8.8.8]:80", // RFC 8215 local-use NAT64
 		"[2002:a9fe:a9fe::]:80",   // 6to4-embedded 169.254.169.254
-		"[2001::a9fe:a9fe]:80",    // Teredo space
 		"[64:ff9b::a9fe:a9fe]:80", // NAT64-embedded 169.254.169.254
 		"[64:ff9b::a00:1]:80",     // NAT64-embedded 10.0.0.1
 	}
@@ -437,7 +440,8 @@ func TestEgressDialerBlocksInternal(t *testing.T) {
 			t.Errorf("dial to internal %s allowed; SSRF not blocked", addr)
 		}
 	}
-	for _, addr := range []string{"93.184.216.34:443", "[64:ff9b::5db8:d822]:443"} { // public v4 direct + via NAT64
+	// public v4 direct, public v6, and a public v4 via the NAT64 well-known prefix
+	for _, addr := range []string{"93.184.216.34:443", "[2606:4700:4700::1111]:443", "[64:ff9b::5db8:d822]:443"} {
 		if err := egressDialer.Control("tcp", addr, nil); err != nil {
 			t.Errorf("dial to public %s blocked: %v", addr, err)
 		}

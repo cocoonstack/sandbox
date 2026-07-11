@@ -49,9 +49,10 @@ lane.
 The proxy also refuses to connect to internal addresses — every IANA
 special-purpose range that is not globally reachable (loopback, link-local
 incl. cloud metadata, private, carrier-grade NAT, benchmarking, documentation,
-reserved) plus the IPv4-embedding IPv6 forms (NAT64, 6to4, Teredo) — so an
-allow-listed host that resolves, or is rebound, to one cannot reach the
-sandboxd host or a sibling VM.
+reserved, per the registry snapshot in `egress.go`) plus the IPv4-embedding
+IPv6 forms (NAT64, 6to4, Teredo, IPv4-compatible) — so an allow-listed host
+that resolves, or is rebound, to one cannot reach the sandboxd host or a
+sibling VM.
 
 ### Deployment constraints
 
