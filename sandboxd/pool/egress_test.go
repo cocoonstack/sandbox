@@ -416,15 +416,21 @@ func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 
 func TestEgressDialerBlocksInternal(t *testing.T) {
 	blocked := []string{
+		// Caught by IsGlobalUnicast/IsPrivate/IsLinkLocal.
 		"127.0.0.1:80", "169.254.169.254:80", "10.0.0.5:443", "192.168.1.1:22",
-		"[::1]:80", "100.100.100.200:80", "[::ffff:127.0.0.1]:80",
-		"[64:ff9b::a9fe:a9fe]:80", // NAT64-embedded 169.254.169.254
-		"[64:ff9b::a00:1]:80",     // NAT64-embedded 10.0.0.1
+		"172.16.0.1:80", "255.255.255.255:80", "[::1]:80", "[::ffff:127.0.0.1]:80",
+		"[fe80::1]:80", "[fc00::1]:80", "[ff02::1]:80",
+		// IANA IPv4 special-purpose, Globally Reachable = false.
+		"0.6.6.6:80", "100.100.100.200:80", "192.0.0.1:80", "192.0.2.1:80",
+		"198.18.0.1:80", "198.19.255.255:80", "198.51.100.1:80", "203.0.113.1:80",
+		"240.1.2.3:80",
+		// IANA IPv6 special-purpose + deprecated v4-in-v6 embeddings.
+		"[100::1]:80", "[2001:2::1]:80", "[2001:db8::1]:80", "[::127.0.0.1]:80",
 		"[64:ff9b:1::8.8.8.8]:80", // RFC 8215 local-use NAT64
-		"[::127.0.0.1]:80",        // deprecated IPv4-compatible loopback
 		"[2002:a9fe:a9fe::]:80",   // 6to4-embedded 169.254.169.254
 		"[2001::a9fe:a9fe]:80",    // Teredo space
-		"0.6.6.6:80", "240.1.2.3:80",
+		"[64:ff9b::a9fe:a9fe]:80", // NAT64-embedded 169.254.169.254
+		"[64:ff9b::a00:1]:80",     // NAT64-embedded 10.0.0.1
 	}
 	for _, addr := range blocked {
 		if err := egressDialer.Control("tcp", addr, nil); err == nil {

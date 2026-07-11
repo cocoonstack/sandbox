@@ -46,10 +46,12 @@ a snapshot would open an unlocked-NIC window. Keeping the lane live holds the
 lock unbroken from claim to release; those operations are refused (409) on the
 lane.
 
-The proxy also refuses to connect to internal addresses — loopback, link-local
-(including cloud metadata), private, carrier-grade NAT, reserved, and
-IPv4-embedding IPv6 (NAT64, 6to4, Teredo) ranges — so an allow-listed host that
-resolves, or is rebound, to one cannot reach the sandboxd host or a sibling VM.
+The proxy also refuses to connect to internal addresses — every IANA
+special-purpose range that is not globally reachable (loopback, link-local
+incl. cloud metadata, private, carrier-grade NAT, benchmarking, documentation,
+reserved) plus the IPv4-embedding IPv6 forms (NAT64, 6to4, Teredo) — so an
+allow-listed host that resolves, or is rebound, to one cannot reach the
+sandboxd host or a sibling VM.
 
 ### Deployment constraints
 

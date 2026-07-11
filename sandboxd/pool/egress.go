@@ -20,15 +20,27 @@ import (
 var (
 	nat64Range = netip.MustParsePrefix("64:ff9b::/96") // RFC 6052 NAT64; the embedded v4 is checked instead
 
-	// internalRanges are reserved or v4-embedding ranges IsGlobalUnicast would pass.
+	// internalRanges are IANA special-purpose prefixes with Globally Reachable =
+	// false (plus deprecated v4-in-v6 embeddings) that IsGlobalUnicast/IsPrivate
+	// do not already exclude — a table so the denylist tracks the registry, not
+	// one-off additions.
 	internalRanges = []netip.Prefix{
-		netip.MustParsePrefix("100.64.0.0/10"),  // RFC 6598 CGNAT; some clouds host metadata here
-		netip.MustParsePrefix("0.0.0.0/8"),      // "this network"
-		netip.MustParsePrefix("240.0.0.0/4"),    // reserved; some clouds use it as internal fabric
-		netip.MustParsePrefix("64:ff9b:1::/48"), // RFC 8215 local-use NAT64
+		netip.MustParsePrefix("0.0.0.0/8"),       // "this host on this network"
+		netip.MustParsePrefix("100.64.0.0/10"),   // RFC 6598 CGNAT; some clouds host metadata here
+		netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments
+		netip.MustParsePrefix("192.0.2.0/24"),    // TEST-NET-1 documentation
+		netip.MustParsePrefix("198.18.0.0/15"),   // benchmarking
+		netip.MustParsePrefix("198.51.100.0/24"), // TEST-NET-2 documentation
+		netip.MustParsePrefix("203.0.113.0/24"),  // TEST-NET-3 documentation
+		netip.MustParsePrefix("240.0.0.0/4"),     // reserved; some clouds use it as internal fabric
+
 		netip.MustParsePrefix("::/96"),          // deprecated IPv4-compatible; embeds a v4 unmapped
-		netip.MustParsePrefix("2002::/16"),      // 6to4; embeds a v4
+		netip.MustParsePrefix("64:ff9b:1::/48"), // RFC 8215 local-use NAT64; embeds a v4
+		netip.MustParsePrefix("100::/64"),       // discard-only
 		netip.MustParsePrefix("2001::/32"),      // Teredo; embeds a v4
+		netip.MustParsePrefix("2001:2::/48"),    // benchmarking
+		netip.MustParsePrefix("2001:db8::/32"),  // documentation
+		netip.MustParsePrefix("2002::/16"),      // 6to4; embeds a v4
 	}
 
 	// egressDialer blocks internal-address targets so the proxy cannot be an SSRF.
