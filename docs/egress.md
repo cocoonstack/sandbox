@@ -32,14 +32,26 @@ A `net:"egress"` guest owns a real NIC on the host bridge and reaches the same
 proxy over the same vsock path. To stop it bypassing the proxy, sandboxd locks
 the NIC at claim: an nftables netdev table (`sandbox_egress_<tap>`) with an
 ingress hook on the guest's tap drops every guest-initiated packet except IPv4
-broadcast DHCP, so the only egress path left is the audited vsock proxy. The lock
-is fail-closed — a claim whose NIC cannot be locked is rejected, not handed out
-unlocked, and no policy still means a locked NIC (default-deny), never a free
-one. It lives in the host root netns and is removed when the sandbox is released.
+broadcast DHCP, so the guest's only routed egress is the audited vsock proxy. The
+lock is fail-closed — a claim whose NIC cannot be locked is rejected, not handed
+out unlocked, and no policy still means a locked NIC (default-deny), never a free
+one. It lives in the host root netns and is removed once the VM is gone (a failed
+remove keeps the VM locked; the next restart reclaims it).
 
 Egress-lane sandboxes do not hibernate or archive: cocoon resumes a guest before
 its fresh tap can be re-locked, so suspending would open an unlocked-NIC window.
 Keeping the lane live holds the lock unbroken from claim to release.
+
+### Deployment constraints
+
+- **One sandboxd per host.** The restart sweep owns the whole `sandbox_egress_*`
+  table namespace in the root netns; a second daemon would clear the first's locks.
+- **No shared broadcast domain with untrusted peers.** The DHCP exception is
+  matched by header fields, not payload, so a broadcast in that shape can still
+  reach the local L2 segment (never routed off-link). Give egress-lane VMs a
+  bridge they do not share with an untrusted listener.
+- **Bridge lane only.** A CNI network's tap lives in the VM netns, out of reach
+  of the root-netns lock; guarded egress on a CNI `network` is rejected at load.
 
 ## Configuration
 
