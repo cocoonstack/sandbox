@@ -257,6 +257,43 @@ func TestLockFallsBackToListForPreTapClaims(t *testing.T) {
 	}
 }
 
+func TestBatchArmFailureRecordsNoUsage(t *testing.T) {
+	t.Setenv("GH_TOKEN", "s3cr3t")
+	secrets := testSecrets(t, egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"})
+	egKey := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}
+	pol := &egress.Policy{Allow: []egress.Rule{{Host: "example.com", Secret: "gh"}}}
+	cfg := &config.Config{DataDir: t.TempDir(), Pools: []config.PoolSpec{{PoolKey: egKey, Egress: pol}}}
+	eng := newFakeEngine()
+	m, err := NewManager(t.Context(), cfg, eng, secrets)
+	if err != nil {
+		t.Fatalf("manager: %v", err)
+	}
+	// First member arms trivially (none lane), second fails (egress lane, no
+	// such VM): the committed-then-rolled-back batch must leave no claim event
+	// in the billing stream — a claim with no terminal release/reap would stay
+	// open forever for the collector.
+	sbs := []*types.Sandbox{
+		{VMName: "sbx-ok", Key: testKey},
+		{VMName: "sbx-eg", Key: egKey},
+	}
+	if err := m.finalizeBatch(t.Context(), sbs, time.Minute); err == nil {
+		t.Fatal("finalizeBatch must fail when a batch member cannot arm")
+	}
+	m.mu.Lock()
+	claimed := len(m.claimed)
+	m.mu.Unlock()
+	if claimed != 0 {
+		t.Errorf("rollback left %d claims", claimed)
+	}
+	raw, _ := os.ReadFile(filepath.Join(cfg.DataDir, "usage.jsonl"))
+	if strings.Contains(string(raw), `"ev":"claim"`) {
+		t.Errorf("rolled-back batch left claim usage events:\n%s", raw)
+	}
+	if !eng.removed("sbx-ok") || !eng.removed("sbx-eg") {
+		t.Error("rollback must destroy every batch VM")
+	}
+}
+
 func testEgressConfig(t *testing.T, pool *egress.Policy) *config.Config {
 	t.Helper()
 	return &config.Config{

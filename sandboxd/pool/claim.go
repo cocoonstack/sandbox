@@ -261,6 +261,10 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 			m.rollbackClaim(ctx, sbs)
 			return fmt.Errorf("arm egress %s: %w", sb.ID, armErr)
 		}
+	}
+	// Usage lands only after the whole batch armed: a rollback must not leave
+	// claim events with no terminal release/reap in the billing stream.
+	for _, sb := range sbs {
 		m.recordUsage(ctx, usageEvent{Event: "claim", ID: sb.ID, VMName: sb.VMName, KeyHash: sb.Key.Hash(), Tenant: sb.Tenant})
 	}
 	return nil
