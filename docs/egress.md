@@ -40,9 +40,15 @@ remove keeps an existing lock in place; the next restart retries the remove). A
 lock that never applied plus a failed remove leaves the VM unguarded until a
 later remove succeeds.
 
-Egress-lane sandboxes do not hibernate or archive: cocoon resumes a guest before
-its fresh tap can be re-locked, so suspending would open an unlocked-NIC window.
-Keeping the lane live holds the lock unbroken from claim to release.
+Egress-lane sandboxes do not hibernate, archive, fork, checkpoint, or promote:
+cocoon resumes a guest before its fresh tap can be re-locked, so any resume from
+a snapshot would open an unlocked-NIC window. Keeping the lane live holds the
+lock unbroken from claim to release; those operations are refused (409) on the
+lane.
+
+The proxy also refuses to connect to internal addresses — loopback, link-local
+(including cloud metadata), and private ranges — so an allow-listed host that
+resolves, or is rebound, to one cannot reach the sandboxd host or a sibling VM.
 
 ### Deployment constraints
 
@@ -52,8 +58,11 @@ Keeping the lane live holds the lock unbroken from claim to release.
   matched by header fields, not payload, so a broadcast in that shape can still
   reach the local L2 segment (never routed off-link). Give egress-lane VMs a
   bridge they do not share with an untrusted listener.
-- **Bridge lane only.** A CNI network's tap lives in the VM netns, out of reach
-  of the root-netns lock; guarded egress on a CNI `network` is rejected at load.
+- **Bridge lane only (egress lane).** A CNI network's tap lives in the VM netns,
+  out of reach of the root-netns lock, so a guarded egress *lane* needs a bridge
+  and is rejected on a CNI `network`. None-lane policies ride the proxy and work
+  on either. A bridge egress lane locks every NIC default-deny, even with no
+  policy configured.
 
 ## Configuration
 

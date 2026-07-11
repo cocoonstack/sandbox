@@ -16,6 +16,10 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+// sweepExcept is a seam so a test can observe the keep set (netfilter is a
+// no-op off Linux and an unmockable netlink call on it).
+var sweepExcept = netfilter.SweepExcept
+
 // Reconcile aligns state after a daemon restart: re-adopt persisted claims
 // whose VMs are still running (or hibernated), drop the rest, and remove any
 // sbx-prefixed VM nobody owns (stale pool VMs and golden builders from a
@@ -157,7 +161,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 	var quarantine []*types.Sandbox
 	for _, sb := range m.claimed {
 		sb.TouchAt(now)
-		if m.guardedEgress && sb.Key.Net == types.NetEgress {
+		if m.lockEgress && sb.Key.Net == types.NetEgress {
 			tap := m.readoptEgressTap(sb, live)
 			if tap == "" {
 				logger.Errorf(ctx, errNoEgressTap, "egress claim %s has no lockable tap; quarantining", sb.ID)
@@ -189,7 +193,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 			keep[tap] = true
 		}
 	}
-	if sweepErr := netfilter.SweepExcept(keep); sweepErr != nil {
+	if sweepErr := sweepExcept(keep); sweepErr != nil {
 		logger.Warnf(ctx, "sweep orphan egress tables: %v", sweepErr)
 	}
 }

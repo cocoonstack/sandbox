@@ -5,14 +5,45 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"slices"
+	"syscall"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+)
+
+var (
+	cgnatRange = netip.MustParsePrefix("100.64.0.0/10") // RFC 6598; some clouds host metadata here
+	nat64Range = netip.MustParsePrefix("64:ff9b::/96")  // RFC 6052; DNS64 embeds an IPv4 in the low 32 bits
+
+	// egressDialer refuses connections to internal addresses so an allow-listed
+	// host that resolves (or is rebound) to loopback, link-local (incl. cloud
+	// metadata), or a private/CGNAT/sibling address cannot turn the proxy into
+	// an SSRF.
+	egressDialer = &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return err
+		}
+		ip, err := netip.ParseAddr(host)
+		if err != nil {
+			return fmt.Errorf("egress: unresolved address %q", host)
+		}
+		ip = ip.Unmap() // fold ::ffff:127.0.0.1 so the v4 checks apply
+		if nat64Range.Contains(ip) {
+			b := ip.As16() // a DNS64-synthesized metadata/private v4 hides in the low 32 bits
+			ip = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
+		}
+		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || cgnatRange.Contains(ip) {
+			return fmt.Errorf("egress: blocked internal address %s", ip)
+		}
+		return nil
+	}}
 )
 
 // egressListener is one sandbox's egress accept point: an http.Server serving
@@ -43,7 +74,7 @@ func (m *Manager) armEgress(ctx context.Context, sb *types.Sandbox) error {
 // lockEgressNIC nft-locks the egress-lane NIC and records the tap for unlock;
 // the engine lookup is the fallback for claims from pre-tap journals.
 func (m *Manager) lockEgressNIC(ctx context.Context, sb *types.Sandbox) error {
-	if !m.guardedEgress || sb.Key.Net != types.NetEgress {
+	if !m.lockEgress || sb.Key.Net != types.NetEgress {
 		return nil
 	}
 	tap := sb.TAP
@@ -95,7 +126,7 @@ func (m *Manager) armEgressProxy(_ context.Context, sb *types.Sandbox) error {
 		return fmt.Errorf("listen egress %s: %w", sb.ID, err)
 	}
 	id, tenant := sb.ID, sb.Tenant
-	proxy := egress.New(id, tenant, policy, m.egressSecrets, (&net.Dialer{}).DialContext,
+	proxy := egress.New(id, tenant, policy, m.egressSecrets, egressDialer.DialContext,
 		func(ev egress.Event) { m.recordEgress(context.Background(), id, tenant, ev) })
 	el := &egressListener{srv: &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}, ln: ln, path: path}
 	m.mu.Lock()
@@ -112,21 +143,27 @@ func (m *Manager) disarmIfReleased(sb *types.Sandbox) bool {
 	live := m.claimed[sb.ID] == sb
 	m.mu.Unlock()
 	if !live {
-		m.disarmEgress(sb.ID)
+		m.disarmEgress(sb.ID, true)
 	}
 	return !live
 }
 
-// disarmEgress tears down a sandbox's egress proxy and NIC lock; idempotent.
-func (m *Manager) disarmEgress(id string) {
-	if !m.guardedEgress {
+// disarmEgress tears down a sandbox's egress proxy listener, and its NIC lock
+// only when removed is true — a failed VM removal keeps the lock (the guest is
+// still running) but still stops the dropped claim's credential injection.
+// Idempotent.
+func (m *Manager) disarmEgress(id string, removed bool) {
+	if !m.guardedEgress && !m.lockEgress {
 		return
 	}
 	m.mu.Lock()
 	el := m.egressListeners[id]
 	delete(m.egressListeners, id)
-	tap := m.egressTaps[id]
-	delete(m.egressTaps, id)
+	var tap string
+	if removed {
+		tap = m.egressTaps[id]
+		delete(m.egressTaps, id)
+	}
 	m.mu.Unlock()
 	if el != nil {
 		el.close()

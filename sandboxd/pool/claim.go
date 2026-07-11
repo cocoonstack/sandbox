@@ -117,11 +117,7 @@ func (m *Manager) Release(ctx context.Context, id, token string) error {
 	if vmName != "" {
 		err = m.eng.Remove(ctx, vmName)
 	}
-	// Unlock only once the VM is gone, else a failed remove hands its NIC back
-	// unguarded; the restart stale sweep reclaims a VM left locked.
-	if err == nil {
-		m.disarmEgress(id)
-	}
+	m.disarmEgress(id, vmName == "" || err == nil)
 	m.dropSnap(ctx, snap)
 	m.counters.releases.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "release", ID: id, VMName: vmName})
@@ -277,10 +273,7 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	m.mu.Unlock()
 	m.recommit(ctx, rb)
 	for _, sb := range sbs {
-		// Unlock only after the VM is gone (see Release).
-		if m.removeVM(ctx, sb.VMName) {
-			m.disarmEgress(sb.ID)
-		}
+		m.disarmEgress(sb.ID, m.removeVM(ctx, sb.VMName))
 	}
 }
 
@@ -348,7 +341,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		v := expired[i]
 		switch v.action {
 		case reapPurge:
-			m.disarmEgress(v.id)
+			m.disarmEgress(v.id, true)
 			m.purgeArchiveCk(ctx, v.id, v.ck, v.tenant)
 			logger.Infof(ctx, "purged archived sandbox %s", v.id)
 		case reapArchive:
@@ -359,10 +352,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				logger.Errorf(ctx, err, "archive expired %s", v.id)
 			}
 		default:
-			// Unlock only after the VM is gone (see Release).
-			if m.removeVM(ctx, v.vmName) {
-				m.disarmEgress(v.id)
-			}
+			m.disarmEgress(v.id, m.removeVM(ctx, v.vmName))
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)
 			m.recordUsage(ctx, usageEvent{Event: "reap", ID: v.id, VMName: v.vmName})

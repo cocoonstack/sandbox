@@ -56,7 +56,7 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		return resolveErr
 	}
 	if sb.HibernateSnap != "" {
-		m.disarmEgress(sb.ID)
+		m.disarmEgress(sb.ID, true)
 		if err := m.syncClaims(ctx, sb); err != nil {
 			return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, err)
 		}
@@ -83,7 +83,7 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		adopted, resolveErr := m.resolvePendingSnap(ctx, sb)
 		if adopted {
 			m.recordHibernate(ctx, sb)
-			m.disarmEgress(sb.ID)
+			m.disarmEgress(sb.ID, true)
 			if resolveErr != nil {
 				return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, resolveErr)
 			}
@@ -102,7 +102,7 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	}
 	// The VM is hibernated either way, so the billing window closes here.
 	m.recordHibernate(ctx, sb)
-	m.disarmEgress(sb.ID)
+	m.disarmEgress(sb.ID, true)
 	if err != nil {
 		return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, err)
 	}

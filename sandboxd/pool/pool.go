@@ -63,6 +63,7 @@ var (
 	ErrTemplateOwned     = errors.New("template owned by another tenant")
 	ErrNoEgress          = errors.New("node has no egress attachment (bridge or network)")
 	ErrNoEgressHibernate = errors.New("egress-lane sandboxes do not hibernate")
+	ErrNoEgressFork      = errors.New("egress-lane sandboxes cannot fork, checkpoint, or promote: a resumed guest egresses before its fresh tap can be locked")
 	ErrQuota             = errors.New("node claim quota reached")
 
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
@@ -141,7 +142,9 @@ func (p *pool) applySpec(spec config.PoolSpec) {
 	p.idle = time.Duration(spec.IdleHibernateSeconds) * time.Second
 	p.archiveAfter = time.Duration(spec.ArchiveAfterSeconds) * time.Second
 	p.archiveDelete = time.Duration(spec.ArchiveDeleteAfterSeconds) * time.Second
-	p.egressPolicy = spec.Egress
+	if spec.Egress != nil {
+		p.egressPolicy = spec.Egress // config-only; a nil SetPools spec must not clear it
+	}
 }
 
 // Manager owns the node's pools, claims, and their persistence.
@@ -211,11 +214,12 @@ type Manager struct {
 	// instead of waiting out a gossip tick.
 	notifyTemplates func()
 
-	// egressSecrets resolves a rule's secret name to the injected header;
-	// built once at startup, read-only after. guardedEgress short-circuits the
-	// claim path when no pool or tenant declares a policy.
+	// egressSecrets resolves a rule's secret name to the injected header, read-only
+	// after startup. guardedEgress arms the proxy (some policy exists); lockEgress
+	// nft-locks every egress-lane NIC default-deny (a bridge lane exists).
 	egressSecrets *egress.SecretStore
 	guardedEgress bool
+	lockEgress    bool
 
 	mu      sync.Mutex
 	pools   map[types.PoolKey]*pool
@@ -236,6 +240,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		eng:             eng,
 		dataDir:         cfg.DataDir,
 		egress:          cfg.HasEgress(),
+		lockEgress:      cfg.Bridge != "",
 		maxFork:         maxFork,
 		store:           newClaimStore(cfg.DataDir),
 		pools:           make(map[types.PoolKey]*pool, len(cfg.Pools)),

@@ -123,6 +123,16 @@ func breakStore(t *testing.T, m *Manager) {
 	m.store.path = filepath.Join(t.TempDir(), "gone", "claims.json")
 }
 
+// healStore repairs breakStore's path and waits for the detached recommit to
+// converge, so its retry loop does not outlive the test.
+func healStore(t *testing.T, m *Manager) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(m.store.path), 0o750); err != nil {
+		t.Fatalf("heal store: %v", err)
+	}
+	waitFor(t, m.store.synced)
+}
+
 func archivedCount(m *Manager) int {
 	_, g := m.Info()
 	return g.Archived
@@ -492,6 +502,7 @@ func TestArchivePersistFailureRollsBack(t *testing.T) {
 	if ckpts, err := m.Checkpoints(t.Context(), ""); err != nil || len(ckpts) != 0 {
 		t.Errorf("orphaned archive ck not cleaned up: %d records (%v)", len(ckpts), err)
 	}
+	healStore(t, m)
 }
 
 // pinnedHidden reports whether the store holds exactly one checkpoint and it is
@@ -523,6 +534,7 @@ func TestReleaseArchivedRollsBackOnPersistFailure(t *testing.T) {
 	if !pinnedHidden(t, m, ck) {
 		t.Error("kept ck is not pinned after a failed release")
 	}
+	healStore(t, m)
 }
 
 // TestWakeArchivedRollsBackOnPersistFailure guards the durability fix where a
@@ -549,6 +561,7 @@ func TestWakeArchivedRollsBackOnPersistFailure(t *testing.T) {
 	if !pinnedHidden(t, m, ck) {
 		t.Error("kept ck is not pinned after a failed wake")
 	}
+	healStore(t, m)
 }
 
 // TestReapPurgeRollsBackOnPersistFailure guards the same rollback on the reaper:
@@ -575,6 +588,7 @@ func TestReapPurgeRollsBackOnPersistFailure(t *testing.T) {
 	if !pinnedHidden(t, m, ck) {
 		t.Error("kept ck is not pinned after a failed reap purge")
 	}
+	healStore(t, m)
 }
 
 // TestArchiveOnceSkipsInFlight guards the in-flight dedup: a sandbox already

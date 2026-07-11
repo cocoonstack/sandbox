@@ -39,6 +39,9 @@ func (m *Manager) Promote(ctx context.Context, id, token, template, tenant strin
 	if !ok {
 		return types.PoolKey{}, ErrUnknownSandbox
 	}
+	if sb.Key.Net == types.NetEgress {
+		return types.PoolKey{}, ErrNoEgressFork
+	}
 	key := types.PoolKey{Template: template, Net: sb.Key.Net, Size: sb.Key.Size}
 	if m.pooledHash(key.Hash()) {
 		// A configured pool owns this key — promoting over it would
