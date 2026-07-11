@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
@@ -29,11 +30,9 @@ func (e *egressListener) close() {
 	_ = os.Remove(e.path)
 }
 
-// armEgress locks the egress-lane NIC then binds the proxy: the lock is
-// unconditional and fail-closed, so a lock error aborts the claim and no policy
-// still yields a locked NIC with no proxy (default-deny, never a free NIC). Used
-// on the claim path where both happen at once; wake/unarchive split the two to
-// lock before the guest resumes.
+// armEgress locks the egress-lane NIC then binds the proxy: fail-closed (a
+// lock error aborts the claim), and no policy still yields a locked NIC with
+// no proxy — default-deny, never a free NIC.
 func (m *Manager) armEgress(ctx context.Context, sb *types.Sandbox) error {
 	if err := m.lockEgressNIC(ctx, sb); err != nil {
 		return err
@@ -41,10 +40,8 @@ func (m *Manager) armEgress(ctx context.Context, sb *types.Sandbox) error {
 	return m.armEgressProxy(ctx, sb)
 }
 
-// lockEgressNIC drops the egress-lane VM's NIC egress via nft and records the
-// tap for later unlock; a no-op off the egress lane or when guarded egress is
-// off. The tap normally rides the provision record — the engine lookup is the
-// fallback for claims adopted from pre-tap journals.
+// lockEgressNIC nft-locks the egress-lane NIC and records the tap for unlock;
+// the engine lookup is the fallback for claims from pre-tap journals.
 func (m *Manager) lockEgressNIC(ctx context.Context, sb *types.Sandbox) error {
 	if !m.guardedEgress || sb.Key.Net != types.NetEgress {
 		return nil
@@ -70,16 +67,14 @@ func (m *Manager) tapOf(ctx context.Context, vmName string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("list %s: %w", vmName, err)
 	}
-	for _, vm := range vms {
-		if vm.Config.Name != vmName {
-			continue
-		}
-		if tap := vm.TapDevice(); tap != "" {
-			return tap, nil
-		}
-		return "", fmt.Errorf("no tap for %s", vmName)
+	i := slices.IndexFunc(vms, func(vm types.VMRecord) bool { return vm.Config.Name == vmName })
+	if i < 0 {
+		return "", fmt.Errorf("no NIC config for %s", vmName)
 	}
-	return "", fmt.Errorf("no NIC config for %s", vmName)
+	if tap := vms[i].TapDevice(); tap != "" {
+		return tap, nil
+	}
+	return "", fmt.Errorf("no tap for %s", vmName)
 }
 
 // armEgressProxy binds the vsock egress proxy for a claim whose effective policy

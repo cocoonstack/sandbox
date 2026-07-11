@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -245,16 +246,14 @@ func (m *Manager) vsockOf(ctx context.Context, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, vm := range vms {
-		if vm.Config.Name != name {
-			continue
-		}
-		if vm.VsockSocket == "" {
-			return "", fmt.Errorf("vm %s has no vsock socket", name)
-		}
-		return vm.VsockSocket, nil
+	i := slices.IndexFunc(vms, func(vm types.VMRecord) bool { return vm.Config.Name == name })
+	if i < 0 {
+		return "", fmt.Errorf("vm %s not found after create", name)
 	}
-	return "", fmt.Errorf("vm %s not found after create", name)
+	if vms[i].VsockSocket == "" {
+		return "", fmt.Errorf("vm %s has no vsock socket", name)
+	}
+	return vms[i].VsockSocket, nil
 }
 
 // runBounded fans f over n items on the refill semaphore, so engine

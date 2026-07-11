@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
@@ -185,19 +186,9 @@ func (c *Config) HasEgress() bool {
 	return c.Bridge != "" || c.Network != ""
 }
 
-// hasEgressPolicy reports whether any pool or tenant policy turns on guarded egress.
 func (c *Config) hasEgressPolicy() bool {
-	for _, p := range c.Pools {
-		if p.Egress != nil {
-			return true
-		}
-	}
-	for _, tn := range c.Tenants {
-		if tn.Egress != nil {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(c.Pools, func(p PoolSpec) bool { return p.Egress != nil }) ||
+		slices.ContainsFunc(c.Tenants, func(t TenantSpec) bool { return t.Egress != nil })
 }
 
 func (c *Config) applyDefaults() {

@@ -164,7 +164,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 				quarantine = append(quarantine, sb)
 				continue
 			}
-			if err := netfilter.EnsureLock(tap); err != nil { // re-apply only if the table did not survive
+			if err := netfilter.EnsureLock(tap); err != nil {
 				logger.Errorf(ctx, err, "ensure egress lock %s; quarantining", sb.ID)
 				quarantine = append(quarantine, sb)
 				continue

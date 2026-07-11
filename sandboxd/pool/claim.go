@@ -360,9 +360,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			}
 		default:
 			// Unlock only after the VM is gone (see Release).
-			if rmErr := m.eng.Remove(context.WithoutCancel(ctx), v.vmName); rmErr != nil {
-				logger.Errorf(ctx, rmErr, "remove vm %s", v.vmName)
-			} else {
+			if m.removeVM(ctx, v.vmName) {
 				m.disarmEgress(v.id)
 			}
 			m.dropSnap(ctx, v.snap)

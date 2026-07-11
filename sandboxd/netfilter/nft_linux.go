@@ -4,6 +4,7 @@ package netfilter
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/nftables"
@@ -70,10 +71,8 @@ func EnsureLock(tap string) error {
 	if err != nil {
 		return fmt.Errorf("list netdev tables: %w", err)
 	}
-	for _, t := range tables {
-		if t.Name == tablePrefix+tap {
-			return nil
-		}
+	if slices.ContainsFunc(tables, func(t *nftables.Table) bool { return t.Name == tablePrefix+tap }) {
+		return nil
 	}
 	return Lock(tap)
 }
