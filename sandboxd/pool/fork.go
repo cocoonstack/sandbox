@@ -66,11 +66,9 @@ func (m *Manager) forkClones(ctx context.Context, sb *types.Sandbox, count int) 
 	return m.cloneBatch(ctx, count, provision)
 }
 
-// forkSource captures the fork source and returns the per-child provisioner.
-// The source kind is decided and captured under the transition lock — a
-// hibernate or wake racing the fork cannot swap the snapshot out from under
-// the fan-out — and only the capture window holds the lock: the fan-out runs
-// unlocked on a private snapshot or export.
+// forkSource decides and captures the fork source under the transition lock
+// (a racing hibernate cannot swap the snapshot out from under the fan-out),
+// returning the per-child provisioner and its cleanup.
 func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (func() (*types.Sandbox, error), func(), error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
