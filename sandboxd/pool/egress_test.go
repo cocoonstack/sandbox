@@ -257,6 +257,7 @@ func TestBatchArmFailureRecordsNoUsage(t *testing.T) {
 	if claimed != 0 {
 		t.Errorf("rollback left %d claims", claimed)
 	}
+	m.usage.flush()
 	raw, _ := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
 	if strings.Contains(string(raw), `"ev":"claim"`) {
 		t.Errorf("rolled-back batch left claim usage events:\n%s", raw)

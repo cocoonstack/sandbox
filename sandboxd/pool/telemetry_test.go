@@ -27,6 +27,7 @@ func TestUsageJournalRecordsLifecycle(t *testing.T) {
 		t.Fatalf("Release: %v", err)
 	}
 
+	m.usage.flush()
 	raw, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
 	if err != nil {
 		t.Fatalf("read journal: %v", err)
@@ -67,6 +68,7 @@ func TestJournalRotationKeepsOneBackup(t *testing.T) {
 	if err := j.append(usageEvent{Event: "claim", ID: "sb_1"}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
+	j.flush()
 	if _, err := os.Stat(path + ".1"); err != nil {
 		t.Errorf("backup missing: %v", err)
 	}
@@ -149,6 +151,7 @@ func TestTenantStampedInJournals(t *testing.T) {
 		t.Errorf("persisted claim %+v, want tenant acme", claims[sb.ID])
 	}
 
+	m.usage.flush()
 	usage, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
 	if err != nil {
 		t.Fatalf("read usage journal: %v", err)
@@ -200,6 +203,7 @@ func TestPreviewDialWritesAuditEvent(t *testing.T) {
 		t.Fatal("fake engine dial unexpectedly succeeded")
 	}
 
+	m.audit.flush()
 	raw, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
 	if err != nil {
 		t.Fatalf("read audit journal: %v", err)

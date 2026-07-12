@@ -131,6 +131,7 @@ func main() {
 	if err := mgr.FlushClaims(); err != nil {
 		logger.Error(ctx, err, "flush claims")
 	}
+	mgr.CloseJournals()
 	logger.Info(ctx, "sandboxd stopped; VMs stay alive for the next reconcile")
 }
 

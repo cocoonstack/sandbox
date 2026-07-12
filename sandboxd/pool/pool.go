@@ -367,6 +367,15 @@ func (m *Manager) FlushClaims() error {
 	return m.store.commit(m.claimsSnapshot())
 }
 
+// CloseJournals drains and closes the usage and audit journals — the last
+// shutdown step, after every event source has stopped.
+func (m *Manager) CloseJournals() {
+	_ = m.usage.close()
+	if m.audit != nil {
+		_ = m.audit.close()
+	}
+}
+
 func (m *Manager) claimsSnapshot() claimSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
