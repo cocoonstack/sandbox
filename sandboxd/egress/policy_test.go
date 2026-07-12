@@ -50,6 +50,34 @@ func TestEvalHostPrefersInterceptRule(t *testing.T) {
 	}
 }
 
+func TestEvalInnerMatchesOnlyInterceptRulesByMethod(t *testing.T) {
+	p := Policy{Allow: []Rule{
+		{Host: "*.example.com"},                                             // plain: must not shadow or rescue
+		{Host: "api.example.com", Methods: []string{"GET"}, Secret: "gh", Intercept: true},
+		{Host: "api.example.com", Methods: []string{"POST"}, Intercept: true},
+	}}
+	if rule, d := p.EvalInner("api.example.com", "GET"); d != DecisionAllow || rule.Secret != "gh" {
+		t.Errorf("EvalInner GET = %+v/%v, want the GET intercept rule with secret gh", rule, d)
+	}
+	if rule, d := p.EvalInner("api.example.com", "POST"); d != DecisionAllow || rule.Secret != "" {
+		t.Errorf("EvalInner POST = %+v/%v, want the POST intercept rule (later rule reachable)", rule, d)
+	}
+	if _, d := p.EvalInner("api.example.com", "DELETE"); d != DecisionDeny {
+		t.Error("EvalInner DELETE allowed; the plain rule must not rescue a method no intercept rule covers")
+	}
+}
+
+func TestCompositeEvalInnerIntersectsTenant(t *testing.T) {
+	pool := Policy{Allow: []Rule{{Host: "api.example.com", Secret: "gh", Intercept: true}}}
+	ev := Compose(pool, Policy{Allow: []Rule{{Host: "api.example.com", Methods: []string{"GET"}}}})
+	if rule, d := ev.EvalInner("api.example.com", "GET"); d != DecisionAllow || rule.Secret != "gh" {
+		t.Errorf("EvalInner GET = %+v/%v, want allow with the pool secret", rule, d)
+	}
+	if _, d := ev.EvalInner("api.example.com", "POST"); d != DecisionDeny {
+		t.Error("EvalInner POST allowed though the tenant permits only GET; want tenant intersection")
+	}
+}
+
 func TestWildcardApexIsNotMatched(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "*.example.com"}}}
 	if _, d := policy.Eval("example.com", "GET"); d != DecisionDeny {
