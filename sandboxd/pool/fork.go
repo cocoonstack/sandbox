@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -57,35 +58,39 @@ func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl tim
 // cloned straight from a fresh store snapshot (no export copy); a hibernated
 // source stays on the export path (its shared wake image needs a private copy).
 func (m *Manager) forkClones(ctx context.Context, sb *types.Sandbox, count int) ([]*types.Sandbox, error) {
-	if sb.HibernateSnap != "" {
-		dir, err := os.MkdirTemp(m.dataDir, "fork-")
-		if err != nil {
-			return nil, err
-		}
-		defer func() { _ = os.RemoveAll(dir) }()
-		exportDir := filepath.Join(dir, "export") // cocoon wants the target absent
-		if _, err := m.exportSource(ctx, sb, exportDir); err != nil {
-			return nil, err
-		}
-		return m.cloneBatch(ctx, count, func() (*types.Sandbox, error) {
-			return m.provision(ctx, sb.Key, exportDir)
-		})
-	}
-	snap, drop, err := m.captureRunning(ctx, sb)
+	provision, cleanup, err := m.forkSource(ctx, sb)
 	if err != nil {
 		return nil, err
 	}
-	defer drop()
-	return m.cloneBatch(ctx, count, func() (*types.Sandbox, error) {
-		return m.provisionSnap(ctx, sb.Key, snap)
-	})
+	defer cleanup()
+	return m.cloneBatch(ctx, count, provision)
 }
 
-// captureRunning snapshots a running sandbox into the local store under the
-// transition lock (pinning it against a concurrent wake); the fan-out then runs
-// unlocked since the fresh snapshot is private to this fork. Cleanup drops it.
-func (m *Manager) captureRunning(ctx context.Context, sb *types.Sandbox) (string, func(), error) {
+// forkSource captures the fork source and returns the per-child provisioner.
+// The source kind is decided and captured under the transition lock — a
+// hibernate or wake racing the fork cannot swap the snapshot out from under
+// the fan-out — and only the capture window holds the lock: the fan-out runs
+// unlocked on a private snapshot or export.
+func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (func() (*types.Sandbox, error), func(), error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
-	return m.sourceSnap(ctx, sb)
+	if sb.HibernateSnap == "" {
+		snap := forkPrefix + strings.TrimPrefix(sb.VMName, vmPrefix) + "-" + randHex(3)
+		if err := m.eng.SnapshotSave(ctx, sb.VMName, snap); err != nil {
+			return nil, nil, err
+		}
+		return func() (*types.Sandbox, error) { return m.provisionSnap(ctx, sb.Key, snap) },
+			func() { m.dropSnap(ctx, snap) }, nil
+	}
+	dir, err := os.MkdirTemp(m.dataDir, "fork-")
+	if err != nil {
+		return nil, nil, err
+	}
+	exportDir := filepath.Join(dir, "export") // cocoon wants the target absent
+	if err := m.eng.SnapshotExport(ctx, sb.HibernateSnap, exportDir); err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, nil, err
+	}
+	return func() (*types.Sandbox, error) { return m.provision(ctx, sb.Key, exportDir) },
+		func() { _ = os.RemoveAll(dir) }, nil
 }
