@@ -52,7 +52,7 @@ func TestEvalHostPrefersInterceptRule(t *testing.T) {
 
 func TestEvalInnerMatchesOnlyInterceptRulesByMethod(t *testing.T) {
 	p := Policy{Allow: []Rule{
-		{Host: "*.example.com"},                                             // plain: must not shadow or rescue
+		{Host: "*.example.com"}, // plain: must not shadow or rescue
 		{Host: "api.example.com", Methods: []string{"GET"}, Secret: "gh", Intercept: true},
 		{Host: "api.example.com", Methods: []string{"POST"}, Intercept: true},
 	}}
