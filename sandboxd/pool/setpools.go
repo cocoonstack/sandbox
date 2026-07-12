@@ -88,9 +88,9 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 	m.mu.Unlock()
 
 	runCtx := context.WithoutCancel(ctx)
-	for _, name := range trim {
-		m.destroy(runCtx, name)
-	}
+	m.runBounded(runCtx, len(trim), func(ctx context.Context, i int) {
+		m.destroy(ctx, trim[i])
+	}).Wait()
 	m.refillOnce(runCtx)
 	return nil
 }
