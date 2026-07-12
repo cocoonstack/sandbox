@@ -3,13 +3,13 @@
 // holds, direct egress is blocked (no NIC on the none lane, an nft lock on the
 // egress lane), and a disallowed host is denied.
 //
-// The origin runs on the sandboxd host and binds all interfaces so the guest
-// reaches it at -reach (127.0.0.1 for the none lane, the bridge gateway for the
-// egress lane); the pool's egress policy must allow that host. Example config:
+// Injection is checked against a public echo (-echo) reached through the proxy,
+// which the pool policy must allow; a host-local origin bound at -reach is the
+// negative control the guest must fail to reach directly. Example config:
 //
 //	"secrets":[{"name":"probe","header":"X-Egress-Token","value_env":"EGRESS_PROBE_TOKEN"}],
 //	"pools":[{"template":"…","net":"none","size":"small","warm":1,
-//	  "egress":{"allow":[{"host":"127.0.0.1","secret":"probe"}]}}]
+//	  "egress":{"allow":[{"host":"postman-echo.com","secret":"probe"}]}}]
 package main
 
 import (
@@ -37,16 +37,17 @@ func main() {
 	reach := flag.String("reach", "127.0.0.1", "host the guest reaches the origin at (policy must allow it)")
 	nicAddr := flag.String("nicaddr", "", "static CIDR to bring the egress-lane NIC up with (default route via -reach)")
 	guarded := flag.Bool("guarded", true, "pool has an egress policy; false asserts the unlocked NIC reaches directly (negative control)")
+	echo := flag.String("echo", "postman-echo.com", "public HTTP host echoing request headers at /get, for the injection check")
 	flag.Parse()
 
-	if err := run(*addr, *token, *template, *wantToken, *netShape, *reach, *nicAddr, *guarded); err != nil {
+	if err := run(*addr, *token, *template, *wantToken, *netShape, *reach, *nicAddr, *echo, *guarded); err != nil {
 		fmt.Fprintln(os.Stderr, "egresssmoke:", err)
 		os.Exit(1)
 	}
 	fmt.Println("EGRESSSMOKE PASS")
 }
 
-func run(addr, token, template, wantToken, netShape, reach, nicAddr string, guarded bool) error {
+func run(addr, token, template, wantToken, netShape, reach, nicAddr, echo string, guarded bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -92,12 +93,15 @@ func run(addr, token, template, wantToken, netShape, reach, nicAddr string, guar
 	}
 	fmt.Println("  direct egress blocked")
 
-	seen, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -s -x %s %s", proxy, target))
+	// The injection origin is a public echo reached through the proxy: post-#26
+	// the SSRF guard refuses private/loopback destinations even when allow-listed
+	// (issue #27, Option A), so a private origin cannot exercise injection.
+	seen, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -s -x %s http://%s/get", proxy, echo))
 	if err != nil {
 		return fmt.Errorf("proxied exec: %w", err)
 	}
-	if strings.TrimSpace(seen) != wantToken {
-		return fmt.Errorf("origin saw injected token %q, want %q", strings.TrimSpace(seen), wantToken)
+	if !strings.Contains(seen, wantToken) {
+		return fmt.Errorf("origin %s did not echo injected token %q: %q", echo, wantToken, strings.TrimSpace(seen))
 	}
 	fmt.Printf("  allowed origin reached; injected credential observed host-side\n")
 
