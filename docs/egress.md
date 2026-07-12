@@ -173,13 +173,18 @@ no golden rebuilds.
 against the root(s) it was born with, so the node's leaves must chain to a root
 every *live* guest trusts. `root_cert` may bundle several CA certs (every block
 must be a CA cert; the fingerprint covers the exact file bytes, so any edit
-rebuilds goldens): add the new root to the bundle and rebuild goldens so
-newly-created guests trust both, but keep the node signing under an intermediate
-that chains to the **old** root until every old-root guest — including
-checkpoints, archives, and promoted templates — has been recreated or drained;
-only then cut the intermediate over to the new root and drop the old one. A hard
-swap of the intermediate while old-root guests are alive breaks interception for
-them with no re-claim path to fix it.
+rebuilds goldens), and `LoadCA` validates the node's intermediate against the
+**first** cert in the bundle. That fixes the order:
+
+1. Bundle `old root, new root` (old first) and keep the **old** intermediate.
+   Rebuilt goldens bake both roots, so new guests trust old and new while the
+   node still signs under the old root that every live guest trusts.
+2. Recreate or drain every old-root guest — checkpoints, archives, promoted
+   templates, and live/hibernated claims.
+3. Atomically swap to `new root` first and the **new** intermediate.
+
+Swapping the intermediate while old-root guests are alive breaks interception
+for them, with no re-claim path to fix it.
 
 Limitations: interception is HTTP/1.1 only and breaks clients that pin
 certificates, so scope it to hosts you control. A host that speaks a non-HTTP

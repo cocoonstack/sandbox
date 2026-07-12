@@ -16,18 +16,15 @@ const (
 	interceptTimeout = 30 * time.Second
 	leafRenewBefore  = 24 * time.Hour
 
-	// maxLeaves bounds one sandbox's leaf cache so a wildcard intercept rule
-	// can't let its guest mint unbounded per-host leaves; the flush is scoped to
-	// this sandbox, never a neighbor's.
+	// maxLeaves bounds one sandbox's leaf cache against a wildcard rule minting
+	// unbounded per-host leaves.
 	maxLeaves = 1024
 )
 
-// serveIntercept terminates a matched CONNECT's TLS with a leaf the node CA
-// signs, then serves the decrypted HTTP/1.1 stream through interceptHandler:
-// the guest trusts the CA (baked into its golden), so it accepts the leaf, and
-// the proxy now sees method and path and can inject the rule's secret. Upstream
-// is re-originated with real-root verification (mitmTr), never blindly trusted.
-func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host string, rule Rule) {
+// serveIntercept terminates a matched CONNECT's TLS with a node-signed leaf the
+// guest trusts, then serves the decrypted HTTP/1.1 through interceptHandler.
+// Upstream is re-originated with real-root verification (mitmTr), never trusted.
+func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host string) {
 	leaf, err := p.leafFor(host)
 	if err != nil {
 		http.Error(w, "egress: intercept setup failed", http.StatusInternalServerError)
@@ -51,9 +48,8 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}
-	// A guest that never sends a ClientHello would otherwise pin this goroutine
-	// and its FD until the sandbox dies; the deadline is cleared once the
-	// handshake lands, leaving http.Server's per-request timeouts in charge.
+	// A guest that never sends a ClientHello would pin this goroutine until the
+	// sandbox dies; cleared once the handshake lands.
 	_ = client.SetDeadline(time.Now().Add(interceptTimeout))
 	tlsConn := tls.Server(client, cfg)
 	if err := tlsConn.HandshakeContext(r.Context()); err != nil {
@@ -62,7 +58,7 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 	_ = client.SetDeadline(time.Time{})
 	ln := &singleConnListener{conn: tlsConn, done: make(chan struct{})}
 	srv := &http.Server{
-		Handler:           &interceptHandler{proxy: p, host: host, authority: r.Host, rule: rule},
+		Handler:           &interceptHandler{proxy: p, host: host, authority: r.Host},
 		ReadHeaderTimeout: interceptTimeout,
 	}
 	_ = srv.Serve(ln)
@@ -88,19 +84,16 @@ func (p *Proxy) leafFor(host string) (*tls.Certificate, error) {
 }
 
 // interceptHandler forwards one decrypted request per call: host is the CONNECT
-// authority's hostname (policy + leaf key), authority its host:port (upstream),
-// rule the intercept rule that captured the tunnel — it governs the inner
-// request so a shadowing plain rule cannot re-decide it.
+// authority's hostname (policy + leaf key), authority its host:port (upstream).
 type interceptHandler struct {
 	proxy     *Proxy
 	host      string
 	authority string
-	rule      Rule
 }
 
 func (h *interceptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p := h.proxy
-	rule, decision := p.policy.EvalInner(h.rule, h.host, r.Method)
+	rule, decision := p.policy.EvalInner(h.host, r.Method)
 	if decision == DecisionDeny {
 		p.record(Event{Method: r.Method, Host: h.host, Decision: decision})
 		denied(w, h.host)

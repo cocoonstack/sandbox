@@ -146,7 +146,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	// request method, so a matched intercept rule enforces its methods on the
 	// decrypted inner request. The plain splice keeps the host+method gate.
 	if rule, d := p.policy.EvalHost(host); d == DecisionAllow && rule.Intercept && p.ca != nil {
-		p.serveIntercept(w, r, host, rule)
+		p.serveIntercept(w, r, host)
 		return
 	}
 	_, decision := p.policy.Eval(host, r.Method)

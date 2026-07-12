@@ -155,6 +155,29 @@ func TestInterceptCaptureEnforcesRuleMethod(t *testing.T) {
 	}
 }
 
+func TestInterceptReachesLaterInterceptRuleByMethod(t *testing.T) {
+	// A wildcard intercept rule (GET) precedes a specific intercept rule (POST)
+	// for the same host. The inner POST must reach the second rule by host+method
+	// — binding the whole tunnel to the first intercept rule makes it unreachable.
+	policy := Policy{Allow: []Rule{
+		{Host: "*.example.com", Methods: []string{"GET"}, Intercept: true},
+		{Host: "api.example.com", Methods: []string{"POST"}, Intercept: true},
+	}}
+	p, guestRoots, upstream := interceptProxyPolicy(t, policy, nil)
+	p.mitmTr.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	tc := connectTLS(t, front.Listener.Addr().String(), "api.example.com:443", "api.example.com", guestRoots)
+	defer func() { _ = tc.Close() }()
+	resp := roundTripTLSTo(t, tc, http.MethodPost, "api.example.com")
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("POST got %d, want 200 (the POST-only intercept rule must be reachable)", resp.StatusCode)
+	}
+}
+
 func TestInterceptForcesAuthorityOnForeignHost(t *testing.T) {
 	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Intercept: true}, nil)
 	p.mitmTr.TLSClientConfig.RootCAs = trustUpstream(upstream)
