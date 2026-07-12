@@ -27,7 +27,7 @@ const (
 // the guest trusts the CA (baked into its golden), so it accepts the leaf, and
 // the proxy now sees method and path and can inject the rule's secret. Upstream
 // is re-originated with real-root verification (mitmTr), never blindly trusted.
-func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host string) {
+func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host string, rule Rule) {
 	leaf, err := p.leafFor(host)
 	if err != nil {
 		http.Error(w, "egress: intercept setup failed", http.StatusInternalServerError)
@@ -62,7 +62,7 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 	_ = client.SetDeadline(time.Time{})
 	ln := &singleConnListener{conn: tlsConn, done: make(chan struct{})}
 	srv := &http.Server{
-		Handler:           &interceptHandler{proxy: p, host: host, authority: r.Host},
+		Handler:           &interceptHandler{proxy: p, host: host, authority: r.Host, rule: rule},
 		ReadHeaderTimeout: interceptTimeout,
 	}
 	_ = srv.Serve(ln)
@@ -88,16 +88,19 @@ func (p *Proxy) leafFor(host string) (*tls.Certificate, error) {
 }
 
 // interceptHandler forwards one decrypted request per call: host is the CONNECT
-// authority's hostname (policy + leaf key), authority its host:port (upstream).
+// authority's hostname (policy + leaf key), authority its host:port (upstream),
+// rule the intercept rule that captured the tunnel — it governs the inner
+// request so a shadowing plain rule cannot re-decide it.
 type interceptHandler struct {
 	proxy     *Proxy
 	host      string
 	authority string
+	rule      Rule
 }
 
 func (h *interceptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p := h.proxy
-	rule, decision := p.policy.Eval(h.host, r.Method)
+	rule, decision := p.policy.EvalInner(h.rule, h.host, r.Method)
 	if decision == DecisionDeny {
 		p.record(Event{Method: r.Method, Host: h.host, Decision: decision})
 		denied(w, h.host)

@@ -154,19 +154,32 @@ then point the node's config at the root cert and its own intermediate:
 ```
 
 `egress_ca` is required whenever a pool has an intercept rule. The root cert is
-baked into an interception pool's golden (via silkd, off the claim path; a
-pre-golden cold claim gets the same install at provision); a
-`.cafp` sidecar ties golden adoption to the baked bytes, so only a **root**
-rotation rebuilds goldens — rotating a node's intermediate does not. Because the
-baked cert is the shared cluster root, promote/checkpoint/archive carry no node-
-private material and stay unrestricted.
+baked into a guest **when the guest is created** — at golden build, or at a
+pre-golden cold claim's provision (both via silkd, off the claim path). It is
+**not** re-installed on re-claim: a clone, checkpoint restore, archive wake, or
+reconcile adopts the guest with whatever root it was born with. A `.cafp`
+sidecar ties golden adoption to the baked bytes, so a changed root rebuilds
+goldens — but nothing rebuilds an existing checkpoint, archive, promoted
+template, or live/hibernated claim. Because the baked cert is the shared cluster
+root, promote/checkpoint/archive carry no node-private material and stay
+unrestricted.
 
-Rotating the root: `root_cert` may bundle several CA certs — list the new root
-first (intermediates chain to it), keep the old one after it, and rebuilt
-goldens trust both while old sandboxes live out. Every block must be a CA
-certificate, and the fingerprint covers the exact file bytes, so any bundle
-edit rebuilds goldens. A sandbox or checkpoint created before a hard swap keeps
-only the old root and loses intercepted hosts until re-claimed.
+**Intermediate rotation is seamless.** Issue a fresh intermediate from the same
+root, point the node's config at it, restart: leaves still chain to the root
+every guest already trusts, and `.cafp` (the root fingerprint) is unchanged, so
+no golden rebuilds.
+
+**Root rotation needs a drain, not a hot swap.** A guest verifies leaves only
+against the root(s) it was born with, so the node's leaves must chain to a root
+every *live* guest trusts. `root_cert` may bundle several CA certs (every block
+must be a CA cert; the fingerprint covers the exact file bytes, so any edit
+rebuilds goldens): add the new root to the bundle and rebuild goldens so
+newly-created guests trust both, but keep the node signing under an intermediate
+that chains to the **old** root until every old-root guest — including
+checkpoints, archives, and promoted templates — has been recreated or drained;
+only then cut the intermediate over to the new root and drop the old one. A hard
+swap of the intermediate while old-root guests are alive breaks interception for
+them with no re-claim path to fix it.
 
 Limitations: interception is HTTP/1.1 only and breaks clients that pin
 certificates, so scope it to hosts you control. A host that speaks a non-HTTP

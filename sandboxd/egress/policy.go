@@ -121,11 +121,23 @@ func (p Policy) EvalHost(host string) (Rule, Decision) {
 	return Rule{}, DecisionDeny
 }
 
+// EvalInner decides a decrypted request over a tunnel that intercept rule
+// already captured: that rule governs the method and secret, so a shadowing
+// plain rule cannot strip the injection or widen the method set. A composite
+// still intersects the tenant side (which never carries intercept).
+func (p Policy) EvalInner(intercept Rule, _, method string) (Rule, Decision) {
+	if !intercept.matchMethod(method) {
+		return Rule{}, DecisionDeny
+	}
+	return intercept, DecisionAllow
+}
+
 // Evaluator is what the proxy consults per request; Policy is one, Compose
 // intersects two.
 type Evaluator interface {
 	Eval(host, method string) (Rule, Decision)
 	EvalHost(host string) (Rule, Decision)
+	EvalInner(intercept Rule, host, method string) (Rule, Decision)
 }
 
 // Compose intersects a pool and a tenant policy: a request must pass both, and
@@ -155,6 +167,17 @@ func (c composite) EvalHost(host string) (Rule, Decision) {
 		return Rule{}, DecisionDeny
 	}
 	if _, td := c.tenant.EvalHost(host); td != DecisionAllow {
+		return Rule{}, DecisionDeny
+	}
+	return rule, DecisionAllow
+}
+
+func (c composite) EvalInner(intercept Rule, host, method string) (Rule, Decision) {
+	rule, pd := c.pool.EvalInner(intercept, host, method)
+	if pd != DecisionAllow {
+		return Rule{}, DecisionDeny
+	}
+	if _, td := c.tenant.Eval(host, method); td != DecisionAllow {
 		return Rule{}, DecisionDeny
 	}
 	return rule, DecisionAllow

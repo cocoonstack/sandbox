@@ -43,6 +43,10 @@ func TestInterceptLeafCacheBounded(t *testing.T) {
 }
 
 func interceptProxy(t *testing.T, rule Rule, events chan Event) (*Proxy, *x509.CertPool, *httptest.Server) {
+	return interceptProxyPolicy(t, Policy{Allow: []Rule{rule}}, events)
+}
+
+func interceptProxyPolicy(t *testing.T, policy Policy, events chan Event) (*Proxy, *x509.CertPool, *httptest.Server) {
 	t.Helper()
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Auth-Seen", r.Header.Get("Authorization"))
@@ -69,7 +73,7 @@ func interceptProxy(t *testing.T, rule Rule, events chan Event) (*Proxy, *x509.C
 			events <- ev
 		}
 	}
-	p := New("sb_1", "acme", Policy{Allow: []Rule{rule}}, secrets, ca, fixedDial(upstream.Listener.Addr().String()), audit)
+	p := New("sb_1", "acme", policy, secrets, ca, fixedDial(upstream.Listener.Addr().String()), audit)
 
 	guestRoots := x509.NewCertPool()
 	if !guestRoots.AppendCertsFromPEM(ca.CertPEM()) {
@@ -102,6 +106,52 @@ func TestInterceptInjectsSecretIntoHTTPS(t *testing.T) {
 	}
 	if ev := recvEvent(t, events); ev.Method != http.MethodGet || ev.Injected != "gh" || ev.Decision != DecisionAllow {
 		t.Errorf("audit event = %+v, want GET/gh/allow", ev)
+	}
+}
+
+func TestInterceptBindsInnerRequestToInterceptRule(t *testing.T) {
+	// A broad plain rule precedes the specific intercept rule for the same
+	// host: the inner request must still bind to the intercept rule (inject its
+	// secret), not first-match the shadowing plain rule.
+	policy := Policy{Allow: []Rule{
+		{Host: "*.example.com"},
+		{Host: "api.example.com", Secret: "gh", Intercept: true},
+	}}
+	p, guestRoots, upstream := interceptProxyPolicy(t, policy, nil)
+	p.mitmTr.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	tc := connectTLS(t, front.Listener.Addr().String(), "api.example.com:443", "api.example.com", guestRoots)
+	defer func() { _ = tc.Close() }()
+	resp := roundTripTLSTo(t, tc, http.MethodGet, "api.example.com")
+	defer func() { _ = resp.Body.Close() }()
+
+	if seen := resp.Header.Get("X-Auth-Seen"); seen != "Bearer SECRET" {
+		t.Errorf("upstream saw Authorization %q, want the intercept rule's secret (shadowing plain rule stole the decision)", seen)
+	}
+}
+
+func TestInterceptCaptureEnforcesRuleMethod(t *testing.T) {
+	// The intercept rule is GET-only; a broad plain rule would allow POST. Once
+	// a host is captured for interception, the intercept rule governs its
+	// decrypted traffic — POST must be denied, not routed via the plain rule.
+	policy := Policy{Allow: []Rule{
+		{Host: "*.example.com"},
+		{Host: "api.example.com", Methods: []string{"GET"}, Intercept: true},
+	}}
+	p, guestRoots, upstream := interceptProxyPolicy(t, policy, nil)
+	p.mitmTr.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	tc := connectTLS(t, front.Listener.Addr().String(), "api.example.com:443", "api.example.com", guestRoots)
+	defer func() { _ = tc.Close() }()
+	resp := roundTripTLSTo(t, tc, http.MethodPost, "api.example.com")
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("POST over the intercepted tunnel got %d, want 403 (intercept rule is GET-only)", resp.StatusCode)
 	}
 }
 
@@ -208,6 +258,22 @@ func connectTLS(t *testing.T, proxyAddr, target, serverName string, roots *x509.
 func roundTripTLS(t *testing.T, tc *tls.Conn, method string) *http.Response {
 	t.Helper()
 	return roundTripTLSHost(t, tc, method, "")
+}
+
+func roundTripTLSTo(t *testing.T, tc *tls.Conn, method, host string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), method, "https://"+host+"/x", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if err = req.Write(tc); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(tc), req)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	return resp
 }
 
 func roundTripTLSHost(t *testing.T, tc *tls.Conn, method, host string) *http.Response {
