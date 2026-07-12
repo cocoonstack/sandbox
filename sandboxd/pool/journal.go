@@ -1,24 +1,15 @@
 package pool
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"sync"
 	"time"
-
-	"github.com/projecteru2/core/log"
 )
 
-const (
-	// journalMaxBytes rotates a journal once it crosses this size; one .1 backup
-	// is kept so a slow collector never loses a window silently.
-	journalMaxBytes = 64 * 1024 * 1024
-	journalDepth    = 256
-)
-
-var errJournalClosed = errors.New("journal closed")
+// journalMaxBytes rotates a journal once it crosses this size; one .1 backup
+// is kept so a slow collector never loses a window silently.
+const journalMaxBytes = 64 * 1024 * 1024
 
 // usageEvent is one line of usage.jsonl: the product-level billing stream,
 // folded by the platform collector (compute time = claim→release minus
@@ -35,15 +26,10 @@ type usageEvent struct {
 	Reference string    `json:"ref,omitempty"`      // promote: template; checkpoint: ckpt id
 }
 
-// journal is an append-only JSONL writer with size rotation. append only
-// enqueues: a single writer goroutine orders and persists events, keeping the
-// marshal and write syscall off callers' paths (claim response, egress proxy).
+// journal is an append-only JSONL writer with size rotation. Writes happen
+// outside the pool mutex; the journal's own lock only orders appends.
 type journal struct {
-	mu      sync.RWMutex
-	closed  bool
-	ch      chan func()
-	drained chan struct{}
-
+	mu   sync.Mutex
 	path string
 	f    *os.File
 	size int64
@@ -59,71 +45,17 @@ func newJournal(path string) (*journal, error) {
 		_ = f.Close()
 		return nil, err
 	}
-	j := &journal{
-		ch:      make(chan func(), journalDepth),
-		drained: make(chan struct{}),
-		path:    path,
-		f:       f,
-		size:    st.Size(),
-	}
-	go j.run()
-	return j, nil
+	return &journal{path: path, f: f, size: st.Size()}, nil
 }
 
 func (j *journal) append(v any) error {
-	return j.enqueue(func() {
-		if err := j.write(v); err != nil {
-			log.WithFunc("pool.journal").Errorf(context.Background(), err, "append to %s", j.path)
-		}
-	})
-}
-
-// flush blocks until every event enqueued before it is on disk.
-func (j *journal) flush() {
-	mark := make(chan struct{})
-	if j.enqueue(func() { close(mark) }) != nil {
-		return // closed: the writer already drained
-	}
-	<-mark
-}
-
-func (j *journal) enqueue(f func()) error {
-	j.mu.RLock()
-	defer j.mu.RUnlock()
-	if j.closed {
-		return errJournalClosed
-	}
-	j.ch <- f
-	return nil
-}
-
-// close stops intake, drains buffered events to disk, and closes the file.
-func (j *journal) close() error {
-	j.mu.Lock()
-	if j.closed {
-		j.mu.Unlock()
-		return nil
-	}
-	j.closed = true
-	close(j.ch)
-	j.mu.Unlock()
-	<-j.drained
-	return j.f.Close()
-}
-
-func (j *journal) run() {
-	for f := range j.ch {
-		f()
-	}
-	close(j.drained)
-}
-
-func (j *journal) write(v any) error {
 	line, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
 	line = append(line, '\n')
+	j.mu.Lock()
+	defer j.mu.Unlock()
 	if j.size+int64(len(line)) > journalMaxBytes {
 		if rotateErr := j.rotate(); rotateErr != nil {
 			return rotateErr
@@ -132,6 +64,12 @@ func (j *journal) write(v any) error {
 	n, err := j.f.Write(line)
 	j.size += int64(n)
 	return err
+}
+
+func (j *journal) close() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.f.Close()
 }
 
 // rotate moves the live file to .1 (replacing any prior backup) and reopens.
