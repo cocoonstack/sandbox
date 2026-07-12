@@ -239,11 +239,7 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 		_ = conn.Close()
 		return nil, fmt.Errorf("read port_forward reply: %w", readErr)
 	}
-	var frame struct {
-		Type    string `json:"type"`
-		Kind    string `json:"kind"`
-		Message string `json:"message"`
-	}
+	var frame silkdFrame
 	if err := json.Unmarshal([]byte(line), &frame); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("parse port_forward reply: %w", err)
@@ -324,9 +320,7 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 	if err != nil {
 		return fmt.Errorf("read info reply: %w", err)
 	}
-	var frame struct {
-		Type string `json:"type"`
-	}
+	var frame silkdFrame
 	if err := json.Unmarshal(reply, &frame); err != nil {
 		return fmt.Errorf("parse info reply: %w", err)
 	}
