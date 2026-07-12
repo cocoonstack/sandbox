@@ -46,6 +46,7 @@ func interceptProxy(t *testing.T, rule Rule, events chan Event) (*Proxy, *x509.C
 	t.Helper()
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Auth-Seen", r.Header.Get("Authorization"))
+		w.Header().Set("X-Host-Seen", r.Host)
 		_, _ = io.WriteString(w, "hello")
 	}))
 	t.Cleanup(upstream.Close)
@@ -96,8 +97,53 @@ func TestInterceptInjectsSecretIntoHTTPS(t *testing.T) {
 	if seen := resp.Header.Get("X-Auth-Seen"); seen != "Bearer SECRET" {
 		t.Errorf("upstream saw Authorization %q, want the injected secret", seen)
 	}
+	if seen := resp.Header.Get("X-Host-Seen"); seen != "example.com" {
+		t.Errorf("upstream saw Host %q, want the guest's own header preserved", seen)
+	}
 	if ev := recvEvent(t, events); ev.Method != http.MethodGet || ev.Injected != "gh" || ev.Decision != DecisionAllow {
 		t.Errorf("audit event = %+v, want GET/gh/allow", ev)
+	}
+}
+
+func TestInterceptForcesAuthorityOnForeignHost(t *testing.T) {
+	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Intercept: true}, nil)
+	p.mitmTr.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	tc := connectTLS(t, front.Listener.Addr().String(), "example.com:443", "example.com", guestRoots)
+	defer func() { _ = tc.Close() }()
+	resp := roundTripTLSHost(t, tc, http.MethodGet, "evil.example.net")
+	defer func() { _ = resp.Body.Close() }()
+
+	if seen := resp.Header.Get("X-Host-Seen"); seen != "example.com:443" {
+		t.Errorf("foreign Host forwarded as %q, want the CONNECT authority", seen)
+	}
+}
+
+func TestCloseRevokesInterceptedSession(t *testing.T) {
+	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Intercept: true}, nil)
+	p.mitmTr.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	tc := connectTLS(t, front.Listener.Addr().String(), "example.com:443", "example.com", guestRoots)
+	defer func() { _ = tc.Close() }()
+	resp := roundTripTLS(t, tc, http.MethodGet)
+	_ = resp.Body.Close()
+
+	p.Close()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com/x", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if err := req.Write(tc); err == nil {
+		revived, err := http.ReadResponse(bufio.NewReader(tc), req)
+		if err == nil {
+			_ = revived.Body.Close()
+			t.Error("established intercepted session survived proxy Close")
+		}
 	}
 }
 
@@ -161,9 +207,17 @@ func connectTLS(t *testing.T, proxyAddr, target, serverName string, roots *x509.
 
 func roundTripTLS(t *testing.T, tc *tls.Conn, method string) *http.Response {
 	t.Helper()
+	return roundTripTLSHost(t, tc, method, "")
+}
+
+func roundTripTLSHost(t *testing.T, tc *tls.Conn, method, host string) *http.Response {
+	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), method, "https://example.com/x", nil)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
+	}
+	if host != "" {
+		req.Host = host
 	}
 	if err = req.Write(tc); err != nil {
 		t.Fatalf("write request: %v", err)

@@ -74,13 +74,15 @@ var (
 // egress.Proxy over the per-sandbox UDS the VMM connects when the guest dials
 // CID2:egressPort.
 type egressListener struct {
-	srv  *http.Server
-	ln   net.Listener
-	path string
+	srv   *http.Server
+	proxy *egress.Proxy
+	ln    net.Listener
+	path  string
 }
 
 func (e *egressListener) close() {
 	_ = e.srv.Close()
+	e.proxy.Close()
 	_ = e.ln.Close()
 	_ = os.Remove(e.path)
 }
@@ -152,7 +154,7 @@ func (m *Manager) armEgressProxy(_ context.Context, sb *types.Sandbox) error {
 	id, tenant := sb.ID, sb.Tenant
 	proxy := egress.New(id, tenant, policy, m.egressSecrets, m.egressCA, m.dial,
 		func(ev egress.Event) { m.recordEgress(context.Background(), id, tenant, ev) })
-	el := &egressListener{srv: &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}, ln: ln, path: path}
+	el := &egressListener{srv: &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}, proxy: proxy, ln: ln, path: path}
 	m.mu.Lock()
 	m.egressListeners[id] = el
 	m.mu.Unlock()

@@ -107,8 +107,10 @@ its NIC locked at claim, so its policy governs the only route out just like the
 none lane's.
 
 - `host`: an exact name, a `*.`-prefixed suffix wildcard, or `*`. Case-insensitive.
-- `methods`: empty means any. Enforced on plaintext and on intercepted HTTPS; a
-  non-intercepted CONNECT tunnel is opaque, so its methods are not enforced.
+- `methods`: empty means any. Enforced on plaintext and on intercepted HTTPS. A
+  non-intercepted CONNECT tunnel is opaque — the method cannot be checked — so a
+  methods-restricted rule without `intercept` denies CONNECT outright rather
+  than tunneling unchecked.
 - `secret`: injects the named registered secret's header. A guest-supplied value
   for the same header is overwritten. On HTTPS the injection needs `intercept`.
 - `intercept`: terminate a matched HTTPS CONNECT so the request is filtered by
@@ -152,11 +154,19 @@ then point the node's config at the root cert and its own intermediate:
 ```
 
 `egress_ca` is required whenever a pool has an intercept rule. The root cert is
-baked into an interception pool's golden (via silkd, off the claim path); a
-`.cafp` sidecar ties golden adoption to the root, so only a **root** rotation
-rebuilds goldens — rotating a node's intermediate does not. Because the baked
-cert is the shared cluster root, promote/checkpoint/archive carry no node-
+baked into an interception pool's golden (via silkd, off the claim path; a
+pre-golden cold claim gets the same install at provision); a
+`.cafp` sidecar ties golden adoption to the baked bytes, so only a **root**
+rotation rebuilds goldens — rotating a node's intermediate does not. Because the
+baked cert is the shared cluster root, promote/checkpoint/archive carry no node-
 private material and stay unrestricted.
+
+Rotating the root: `root_cert` may bundle several CA certs — list the new root
+first (intermediates chain to it), keep the old one after it, and rebuilt
+goldens trust both while old sandboxes live out. Every block must be a CA
+certificate, and the fingerprint covers the exact file bytes, so any bundle
+edit rebuilds goldens. A sandbox or checkpoint created before a hard swap keeps
+only the old root and loses intercepted hosts until re-claimed.
 
 Limitations: interception is HTTP/1.1 only and breaks clients that pin
 certificates, so scope it to hosts you control. A host that speaks a non-HTTP

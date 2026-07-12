@@ -37,14 +37,22 @@ type CA struct {
 }
 
 // LoadCA builds the node CA from the cluster root cert (public) and this node's
-// intermediate cert and key; the intermediate must be signed by the root.
+// intermediate cert and key; the intermediate must be signed by the first root
+// cert. The root file may bundle several CA certs (a rotation bakes old and new
+// roots together); every block it contains is baked into guests verbatim.
 func LoadCA(rootCertPEM, interCertPEM, interKeyPEM []byte) (*CA, error) {
-	root, err := parseCert(rootCertPEM, "root")
+	root, err := parseRootBundle(rootCertPEM)
 	if err != nil {
+		return nil, err
+	}
+	if err = checkValidity(root, "root"); err != nil {
 		return nil, err
 	}
 	inter, err := parseCert(interCertPEM, "intermediate")
 	if err != nil {
+		return nil, err
+	}
+	if err = checkValidity(inter, "intermediate"); err != nil {
 		return nil, err
 	}
 	interKey, err := parseECKey(interKeyPEM)
@@ -67,7 +75,8 @@ func LoadCA(rootCertPEM, interCertPEM, interKeyPEM []byte) (*CA, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate leaf key: %w", err)
 	}
-	sum := sha256.Sum256(root.Raw)
+	// CertPEM bakes the whole file verbatim, so the fingerprint covers its bytes.
+	sum := sha256.Sum256(rootCertPEM)
 	return &CA{
 		rootPEM:   rootCertPEM,
 		rootFP:    hex.EncodeToString(sum[:]),
@@ -82,8 +91,9 @@ func LoadCA(rootCertPEM, interCertPEM, interKeyPEM []byte) (*CA, error) {
 // trust store.
 func (c *CA) CertPEM() []byte { return c.rootPEM }
 
-// Fingerprint is the SHA-256 of the root cert; a golden baked with a different
-// root must rebuild. Rotating the per-node intermediate does not change it.
+// Fingerprint is the SHA-256 of the exact root PEM baked into guests; a golden
+// baked with different bytes must rebuild. Rotating the per-node intermediate
+// does not change it.
 func (c *CA) Fingerprint() string { return c.rootFP }
 
 // SignLeaf issues a fresh interception leaf for host, chained [leaf,
@@ -133,6 +143,47 @@ func parseCert(pemBytes []byte, what string) (*x509.Certificate, error) {
 		return nil, fmt.Errorf("%s cert: not a certificate authority", what)
 	}
 	return cert, nil
+}
+
+// parseRootBundle returns the first cert — the anchor the intermediate must
+// chain to — and rejects any block that is not a CA certificate: the whole file
+// lands in guest trust stores, so nothing may ride along unchecked.
+func parseRootBundle(pemBytes []byte) (*x509.Certificate, error) {
+	var anchor *x509.Certificate
+	for rest := pemBytes; ; {
+		var block *pem.Block
+		if block, rest = pem.Decode(rest); block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			return nil, fmt.Errorf("root bundle: unexpected %s pem block", block.Type)
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse root bundle cert: %w", err)
+		}
+		if !cert.IsCA {
+			return nil, fmt.Errorf("root bundle: %q is not a certificate authority", cert.Subject.CommonName)
+		}
+		if anchor == nil {
+			anchor = cert
+		}
+	}
+	if anchor == nil {
+		return nil, fmt.Errorf("root cert: no pem block")
+	}
+	return anchor, nil
+}
+
+func checkValidity(cert *x509.Certificate, what string) error {
+	now := time.Now()
+	if now.Before(cert.NotBefore) {
+		return fmt.Errorf("%s cert not valid until %s", what, cert.NotBefore.Format(time.RFC3339))
+	}
+	if now.After(cert.NotAfter) {
+		return fmt.Errorf("%s cert expired %s", what, cert.NotAfter.Format(time.RFC3339))
+	}
+	return nil
 }
 
 func parseECKey(pemBytes []byte) (*ecdsa.PrivateKey, error) {

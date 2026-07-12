@@ -36,6 +36,20 @@ func TestPolicyEval(t *testing.T) {
 	}
 }
 
+func TestEvalHostPrefersInterceptRule(t *testing.T) {
+	p := Policy{Allow: []Rule{
+		{Host: "api.github.com", Methods: []string{"GET"}},
+		{Host: "api.github.com", Intercept: true},
+	}}
+	rule, d := p.EvalHost("api.github.com")
+	if d != DecisionAllow || !rule.Intercept {
+		t.Errorf("EvalHost = %+v/%v, want the intercept rule over the earlier plain match", rule, d)
+	}
+	if rule, d := p.EvalHost("other.com"); d != DecisionDeny || rule.Intercept {
+		t.Errorf("EvalHost(other.com) = %+v/%v, want deny", rule, d)
+	}
+}
+
 func TestWildcardApexIsNotMatched(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "*.example.com"}}}
 	if _, d := policy.Eval("example.com", "GET"); d != DecisionDeny {

@@ -211,9 +211,21 @@ func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir
 // cold-boot the template otherwise.
 func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden string) (*types.Sandbox, error) {
 	if golden == "" {
-		return m.provisionVM(ctx, key, coldProbeTimeout, func(name string) (types.VMRecord, error) {
+		sb, err := m.provisionVM(ctx, key, coldProbeTimeout, func(name string) (types.VMRecord, error) {
 			return m.eng.RunCold(ctx, name, key)
 		})
+		if err != nil {
+			return nil, err
+		}
+		// A pre-golden cold claim must trust the root too, or its intercepted
+		// hosts fail TLS for the sandbox's whole life.
+		if m.poolIntercepts(key) {
+			if err := m.eng.InstallCACert(ctx, sb.VsockSocket, m.egressCA.CertPEM()); err != nil {
+				m.destroy(ctx, sb.VMName)
+				return nil, fmt.Errorf("install egress ca: %w", err)
+			}
+		}
+		return sb, nil
 	}
 	return m.provisionVM(ctx, key, claimProbeTimeout, func(name string) (types.VMRecord, error) {
 		return m.eng.Clone(ctx, golden, name, key)

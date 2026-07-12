@@ -84,6 +84,42 @@ func TestGoldenCAMatchRebuildsOnMismatch(t *testing.T) {
 	}
 }
 
+func TestColdProvisionInstallsCAForInterceptPool(t *testing.T) {
+	eng := newFakeEngine()
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: interceptKey, Warm: 1, Egress: interceptPolicy()})
+	sb, err := m.provision(t.Context(), interceptKey, "")
+	if err != nil {
+		t.Fatalf("cold provision: %v", err)
+	}
+	m.destroy(t.Context(), sb.VMName)
+	if n := len(eng.caInstalls); n != 1 {
+		t.Errorf("InstallCACert calls = %d, want 1 (pre-golden cold claim must trust the root)", n)
+	}
+}
+
+func TestColdProvisionSkipsCAForPlainPool(t *testing.T) {
+	eng := newFakeEngine()
+	plain := &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh"}}}
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: interceptKey, Warm: 1, Egress: plain})
+	sb, err := m.provision(t.Context(), interceptKey, "")
+	if err != nil {
+		t.Fatalf("cold provision: %v", err)
+	}
+	m.destroy(t.Context(), sb.VMName)
+	if n := len(eng.caInstalls); n != 0 {
+		t.Errorf("InstallCACert called %d times for a plain pool", n)
+	}
+}
+
+func TestColdProvisionFailsClosedOnCAInstallError(t *testing.T) {
+	eng := newFakeEngine()
+	eng.installCAErr = errors.New("silkd down")
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: interceptKey, Warm: 1, Egress: interceptPolicy()})
+	if _, err := m.provision(t.Context(), interceptKey, ""); err == nil {
+		t.Error("cold provision succeeded though the guest never got the root; want fail-closed")
+	}
+}
+
 func TestInterceptPoolAllowsPromote(t *testing.T) {
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: interceptKey, Warm: 1, Egress: interceptPolicy()})
 	sb := &types.Sandbox{ID: "sb_i", Key: interceptKey, Token: "tok", VMName: "sbx-i"}

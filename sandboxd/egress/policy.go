@@ -101,13 +101,22 @@ func (p Policy) Eval(host, method string) (Rule, Decision) {
 
 // EvalHost matches by host only, ignoring methods: a CONNECT tunnel carries no
 // request method, so the proxy gates it by host and (for an intercept rule)
-// enforces the method on the decrypted inner request instead.
+// enforces the method on the decrypted inner request instead. An intercept
+// rule wins over an earlier plain match: interception is a host property.
 func (p Policy) EvalHost(host string) (Rule, Decision) {
 	host = strings.ToLower(host)
-	for _, r := range p.Allow {
-		if r.matchHost(host) {
+	first := -1
+	for i, r := range p.Allow {
+		switch {
+		case !r.matchHost(host):
+		case r.Intercept:
 			return r, DecisionAllow
+		case first < 0:
+			first = i
 		}
+	}
+	if first >= 0 {
+		return p.Allow[first], DecisionAllow
 	}
 	return Rule{}, DecisionDeny
 }

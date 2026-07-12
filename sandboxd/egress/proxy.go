@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/textproto"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -62,6 +63,11 @@ type Proxy struct {
 	// sandbox's host churn never evicts or blocks another's.
 	leafMu sync.Mutex
 	leaves map[string]*tls.Certificate
+
+	// conns tracks hijacked tunnels, which http.Server.Close no longer reaches.
+	connMu sync.Mutex
+	conns  map[net.Conn]struct{}
+	closed bool
 }
 
 // New builds a Proxy for one sandbox. secrets, ca, and audit may be nil (no
@@ -77,7 +83,8 @@ func New(sandbox, tenant string, policy Evaluator, secrets Secrets, ca *CA, dial
 		dial:    dial,
 		// The stdlib default of 2 idle conns per host re-dials bursty
 		// same-host plaintext traffic.
-		tr: &http.Transport{DialContext: dial, MaxIdleConnsPerHost: 8},
+		tr:    &http.Transport{DialContext: dial, MaxIdleConnsPerHost: 8},
+		conns: map[net.Conn]struct{}{},
 	}
 	if ca != nil {
 		p.mitmTr = &http.Transport{
@@ -96,6 +103,37 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.serveForward(w, r)
+}
+
+// Close ends every hijacked tunnel, which outlives http.Server.Close, so a
+// released claim's guest cannot keep an authorized session. Idempotent.
+func (p *Proxy) Close() {
+	p.connMu.Lock()
+	conns := slices.Collect(maps.Keys(p.conns))
+	clear(p.conns)
+	p.closed = true
+	p.connMu.Unlock()
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
+}
+
+// track registers conn for Close; false means already closed, conn closed instead.
+func (p *Proxy) track(conn net.Conn) bool {
+	p.connMu.Lock()
+	defer p.connMu.Unlock()
+	if p.closed {
+		_ = conn.Close()
+		return false
+	}
+	p.conns[conn] = struct{}{}
+	return true
+}
+
+func (p *Proxy) untrack(conn net.Conn) {
+	p.connMu.Lock()
+	delete(p.conns, conn)
+	p.connMu.Unlock()
 }
 
 // serveConnect gates an HTTPS/opaque tunnel by host. A plain allow hijacks and
@@ -129,6 +167,10 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = client.Close() }()
+	if !p.track(client) {
+		return
+	}
+	defer p.untrack(client)
 	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}

@@ -1,8 +1,14 @@
 package egress
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"testing"
+	"time"
 )
 
 func testCA(t *testing.T) (*CA, []byte) {
@@ -83,6 +89,97 @@ func TestSignLeafChainsToRoot(t *testing.T) {
 				t.Errorf("verify hostname %s: %v", host, err)
 			}
 		})
+	}
+}
+
+func TestLoadCARejectsExpiredIntermediate(t *testing.T) {
+	rootCert, rootKey, err := GenerateRoot("root")
+	if err != nil {
+		t.Fatalf("root: %v", err)
+	}
+	root, err := parseCert(rootCert, "root")
+	if err != nil {
+		t.Fatalf("parse root: %v", err)
+	}
+	rk, err := parseECKey(rootKey)
+	if err != nil {
+		t.Fatalf("parse root key: %v", err)
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	serial, err := serialNumber()
+	if err != nil {
+		t.Fatalf("serial: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "expired intermediate"},
+		NotBefore:             time.Now().Add(-2 * time.Hour),
+		NotAfter:              time.Now().Add(-time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLenZero:        true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, root, &key.PublicKey, rk)
+	if err != nil {
+		t.Fatalf("sign expired intermediate: %v", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	if _, err := LoadCA(rootCert, certPEM, keyPEM); err == nil {
+		t.Error("LoadCA accepted an expired intermediate")
+	}
+}
+
+func TestLoadCARootBundle(t *testing.T) {
+	rootA, keyA, err := GenerateRoot("A")
+	if err != nil {
+		t.Fatalf("root A: %v", err)
+	}
+	rootB, _, err := GenerateRoot("B")
+	if err != nil {
+		t.Fatalf("root B: %v", err)
+	}
+	interCert, interKey, err := IssueIntermediate(rootA, keyA, "n")
+	if err != nil {
+		t.Fatalf("intermediate: %v", err)
+	}
+	bundle := append(append([]byte{}, rootA...), rootB...)
+	ca, err := LoadCA(bundle, interCert, interKey)
+	if err != nil {
+		t.Fatalf("LoadCA rotation bundle: %v", err)
+	}
+	single, err := LoadCA(rootA, interCert, interKey)
+	if err != nil {
+		t.Fatalf("LoadCA single root: %v", err)
+	}
+	if ca.Fingerprint() == single.Fingerprint() {
+		t.Error("fingerprint ignores the bundled second root; .cafp would not rebuild goldens")
+	}
+	if string(ca.CertPEM()) != string(bundle) {
+		t.Error("CertPEM must bake the whole bundle verbatim")
+	}
+}
+
+func TestLoadCARejectsNonCertBlockInRoot(t *testing.T) {
+	rootCert, rootKey, err := GenerateRoot("root")
+	if err != nil {
+		t.Fatalf("root: %v", err)
+	}
+	interCert, interKey, err := IssueIntermediate(rootCert, rootKey, "n")
+	if err != nil {
+		t.Fatalf("intermediate: %v", err)
+	}
+	polluted := append(append([]byte{}, rootCert...), rootKey...)
+	if _, err := LoadCA(polluted, interCert, interKey); err == nil {
+		t.Error("LoadCA accepted a non-certificate pem block in the root bundle")
 	}
 }
 

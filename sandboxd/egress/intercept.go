@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,6 +44,10 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 		return
 	}
 	defer func() { _ = client.Close() }()
+	if !p.track(client) {
+		return
+	}
+	defer p.untrack(client)
 	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}
@@ -101,7 +106,11 @@ func (h *interceptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	out := r.Clone(r.Context())
 	out.URL.Scheme = "https"
 	out.URL.Host = h.authority
-	out.Host = h.authority
+	// Keep the guest's Host when it names the CONNECT host (SigV4-style signing
+	// breaks on the ":443" rewrite); a foreign Host snaps to the authority.
+	if !strings.EqualFold(hostOnly(r.Host), h.host) {
+		out.Host = h.authority
+	}
 	out.RequestURI = ""
 	stripHop(out.Header)
 	injected := p.inject(rule, out.Header)
