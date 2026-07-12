@@ -28,12 +28,12 @@ type Rule struct {
 	Secret  string   `json:"secret,omitempty"` //nolint:gosec // reference name of a node-side secret, never a value
 }
 
+// matches expects host already lowercased by Eval.
 func (r Rule) matches(host, method string) bool {
 	return r.matchHost(host) && r.matchMethod(method)
 }
 
 func (r Rule) matchHost(host string) bool {
-	host = strings.ToLower(host)
 	switch {
 	case r.Host == "*":
 		return true
@@ -80,6 +80,7 @@ func (p Policy) Validate() error {
 // rule with DecisionDeny when nothing matches. host is a bare hostname (no
 // port); the proxy strips the port before calling.
 func (p Policy) Eval(host, method string) (Rule, Decision) {
+	host = strings.ToLower(host)
 	for _, r := range p.Allow {
 		if r.matches(host, method) {
 			return r, DecisionAllow
@@ -106,8 +107,11 @@ type composite struct {
 
 func (c composite) Eval(host, method string) (Rule, Decision) {
 	rule, pd := c.pool.Eval(host, method)
-	if _, td := c.tenant.Eval(host, method); pd == DecisionAllow && td == DecisionAllow {
-		return rule, DecisionAllow
+	if pd != DecisionAllow {
+		return Rule{}, DecisionDeny
 	}
-	return Rule{}, DecisionDeny
+	if _, td := c.tenant.Eval(host, method); td != DecisionAllow {
+		return Rule{}, DecisionDeny
+	}
+	return rule, DecisionAllow
 }
