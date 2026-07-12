@@ -40,6 +40,13 @@ const (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "ca" {
+		if err := runCA(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "sandboxd ca:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	configPath := flag.String("config", "/etc/sandboxd/config.json", "node config file")
 	flag.Parse()
 

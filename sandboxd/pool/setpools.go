@@ -67,8 +67,8 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 		p := &pool{key: key}
 		p.applySpec(spec)
 		// A golden already on disk (from this pool's earlier life) is
-		// adopted; buildGolden covers the rest.
-		if g := filepath.Join(m.goldensDir(), key.Hash()); dirExists(g) {
+		// adopted when its baked-CA state still fits; buildGolden covers the rest.
+		if g := filepath.Join(m.goldensDir(), key.Hash()); dirExists(g) && m.goldenCAMatches(g, m.poolEgress[key].Intercepts()) {
 			p.goldenDir = g
 		}
 		m.pools[key] = p

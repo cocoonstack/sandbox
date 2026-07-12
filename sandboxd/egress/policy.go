@@ -6,6 +6,7 @@ package egress
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -21,11 +22,14 @@ type Decision int
 // "*."-prefixed suffix wildcard ("*.example.com" matches sub.example.com but
 // not the apex), or "*" for any host — and whose method is in Methods (empty
 // means any). Secret names a node-side credential the proxy injects into a
-// matched request; empty injects nothing. Host matching is case-insensitive.
+// matched request; empty injects nothing. Intercept terminates a matched
+// HTTPS CONNECT so the request is filtered by method and the secret injected;
+// only a pool rule may set it. Host matching is case-insensitive.
 type Rule struct {
-	Host    string   `json:"host"`
-	Methods []string `json:"methods,omitempty"`
-	Secret  string   `json:"secret,omitempty"` //nolint:gosec // reference name of a node-side secret, never a value
+	Host      string   `json:"host"`
+	Methods   []string `json:"methods,omitempty"`
+	Secret    string   `json:"secret,omitempty"` //nolint:gosec // reference name of a node-side secret, never a value
+	Intercept bool     `json:"intercept,omitempty"`
 }
 
 // matches expects host already lowercased by Eval.
@@ -62,6 +66,12 @@ type Policy struct {
 	Allow []Rule `json:"allow"`
 }
 
+// Intercepts reports whether any rule terminates HTTPS; nil is false. It gates
+// baking the cluster root cert into a pool's golden.
+func (p *Policy) Intercepts() bool {
+	return p != nil && slices.ContainsFunc(p.Allow, func(r Rule) bool { return r.Intercept })
+}
+
 // Validate rejects a rule with an empty or bare-wildcard host; an empty
 // allow-list is valid (it denies everything).
 func (p Policy) Validate() error {
@@ -89,10 +99,24 @@ func (p Policy) Eval(host, method string) (Rule, Decision) {
 	return Rule{}, DecisionDeny
 }
 
+// EvalHost matches by host only, ignoring methods: a CONNECT tunnel carries no
+// request method, so the proxy gates it by host and (for an intercept rule)
+// enforces the method on the decrypted inner request instead.
+func (p Policy) EvalHost(host string) (Rule, Decision) {
+	host = strings.ToLower(host)
+	for _, r := range p.Allow {
+		if r.matchHost(host) {
+			return r, DecisionAllow
+		}
+	}
+	return Rule{}, DecisionDeny
+}
+
 // Evaluator is what the proxy consults per request; Policy is one, Compose
 // intersects two.
 type Evaluator interface {
 	Eval(host, method string) (Rule, Decision)
+	EvalHost(host string) (Rule, Decision)
 }
 
 // Compose intersects a pool and a tenant policy: a request must pass both, and
@@ -111,6 +135,17 @@ func (c composite) Eval(host, method string) (Rule, Decision) {
 		return Rule{}, DecisionDeny
 	}
 	if _, td := c.tenant.Eval(host, method); td != DecisionAllow {
+		return Rule{}, DecisionDeny
+	}
+	return rule, DecisionAllow
+}
+
+func (c composite) EvalHost(host string) (Rule, Decision) {
+	rule, pd := c.pool.EvalHost(host)
+	if pd != DecisionAllow {
+		return Rule{}, DecisionDeny
+	}
+	if _, td := c.tenant.EvalHost(host); td != DecisionAllow {
 		return Rule{}, DecisionDeny
 	}
 	return rule, DecisionAllow

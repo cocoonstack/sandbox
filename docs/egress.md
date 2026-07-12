@@ -90,7 +90,7 @@ the environment, never the config file.
   "pools": [
     { "template": "rt:24.04", "net": "none", "size": "small", "warm": 2,
       "egress": { "allow": [
-        { "host": "api.github.com", "methods": ["GET", "POST"], "secret": "gh" },
+        { "host": "api.github.com", "methods": ["GET", "POST"], "secret": "gh", "intercept": true },
         { "host": "*.googleapis.com" }
       ] } },
     { "template": "rt:24.04", "net": "egress", "size": "small", "warm": 2,
@@ -107,14 +107,60 @@ its NIC locked at claim, so its policy governs the only route out just like the
 none lane's.
 
 - `host`: an exact name, a `*.`-prefixed suffix wildcard, or `*`. Case-insensitive.
-- `methods`: empty means any.
-- `secret`: injects the named registered secret's header (plaintext requests
-  only; HTTPS injection needs TLS interception, below). A guest-supplied value
-  for the same header is overwritten.
+- `methods`: empty means any. Enforced on plaintext and on intercepted HTTPS; a
+  non-intercepted CONNECT tunnel is opaque, so its methods are not enforced.
+- `secret`: injects the named registered secret's header. A guest-supplied value
+  for the same header is overwritten. On HTTPS the injection needs `intercept`.
+- `intercept`: terminate a matched HTTPS CONNECT so the request is filtered by
+  method and the secret injected (see below). Only a pool rule may set it.
 - No policy on a claim ⇒ no egress at all (the proxy is not started).
 
 Each decision is written to `audit.jsonl` (`op:"egress"`, host, allow/deny, the
 secret **name**) and metered as an `egress` usage event.
+
+## HTTPS interception
+
+A rule with `intercept: true` makes the proxy terminate that host's TLS with a
+leaf it signs, so it sees the request's method and path and can inject the
+secret into HTTPS — the same guarantees plaintext already has. Upstream is
+re-originated and verified against the host's real root store; the proxy never
+trusts an unverified origin.
+
+Trust is a two-tier PKI. One **cluster root CA** is the trust anchor: its
+certificate (public) is baked into every interception guest's store, so a leaf
+from any node validates. Each node signs leaves with its **own intermediate
+CA**, issued from the root, and presents `[leaf, intermediate]`; the guest
+builds `leaf → intermediate → cluster root`. The **root private key never
+reaches a node** — a node holds only its intermediate.
+
+Provision with the operator PKI tool:
+
+```
+sandboxd ca init -out ca/                                  # once per cluster; keep ca/root.key offline
+sandboxd ca issue-intermediate -root-cert ca/root.crt \
+  -root-key ca/root.key -node node-1 -out node-1/          # once per node
+```
+
+then point the node's config at the root cert and its own intermediate:
+
+```jsonc
+"egress_ca": {
+  "root_cert":         "/etc/sandboxd/egress-ca/root.crt",
+  "intermediate_cert": "/etc/sandboxd/egress-ca/node-1.crt",
+  "intermediate_key":  "/etc/sandboxd/egress-ca/node-1.key"
+}
+```
+
+`egress_ca` is required whenever a pool has an intercept rule. The root cert is
+baked into an interception pool's golden (via silkd, off the claim path); a
+`.cafp` sidecar ties golden adoption to the root, so only a **root** rotation
+rebuilds goldens — rotating a node's intermediate does not. Because the baked
+cert is the shared cluster root, promote/checkpoint/archive carry no node-
+private material and stay unrestricted.
+
+Limitations: interception is HTTP/1.1 only and breaks clients that pin
+certificates, so scope it to hosts you control. A host that speaks a non-HTTP
+protocol over TLS must not be given an intercept rule.
 
 ## Lanes and status
 
@@ -122,8 +168,4 @@ secret **name**) and metered as an `egress` usage event.
 |---|---|
 | none lane — proxy, policy, plaintext injection, audit | **shipped** |
 | egress lane — nftables lock on the tap, forcing the NIC through the proxy | **shipped** |
-| HTTPS credential injection (per-node ephemeral-CA TLS interception) | planned |
-
-HTTPS requests are gated by host (CONNECT allow/deny) and audited on both lanes,
-but credential injection into an HTTPS request awaits TLS interception. Use
-plaintext or CONNECT-gated HTTPS for the credentialed-egress guarantees above.
+| HTTPS credential injection (per-node CA TLS interception) | **shipped** |

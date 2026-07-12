@@ -39,7 +39,7 @@ func TestForwardAllowInjectsSecretAndOverwritesGuestHeader(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "api.internal", Secret: "gh"}}}
 	secrets := fakeSecrets{"gh": {"Authorization", "Bearer SECRET"}}
 	events := make(chan Event, 4)
-	p := New("sb_1", "acme", policy, secrets, fixedDial(upstream.Listener.Addr().String()), func(ev Event) { events <- ev })
+	p := New("sb_1", "acme", policy, secrets, nil, fixedDial(upstream.Listener.Addr().String()), func(ev Event) { events <- ev })
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -82,7 +82,7 @@ func TestForwardStripsHopHeaders(t *testing.T) {
 	defer upstream.Close()
 
 	policy := Policy{Allow: []Rule{{Host: "api.internal"}}}
-	p := New("sb_1", "", policy, nil, fixedDial(upstream.Listener.Addr().String()), nil)
+	p := New("sb_1", "", policy, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -109,7 +109,7 @@ func TestForwardStripsHopHeaders(t *testing.T) {
 func TestForwardDeniedIsTyped(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "api.internal"}}}
 	events := make(chan Event, 4)
-	p := New("sb_1", "acme", policy, nil, fixedDial("127.0.0.1:1"), func(ev Event) { events <- ev })
+	p := New("sb_1", "acme", policy, nil, nil, fixedDial("127.0.0.1:1"), func(ev Event) { events <- ev })
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -130,7 +130,7 @@ func TestConnectAllowTunnels(t *testing.T) {
 	echo := echoServer(t)
 	policy := Policy{Allow: []Rule{{Host: "echo.internal"}}}
 	events := make(chan Event, 4)
-	p := New("sb_1", "acme", policy, nil, fixedDial(echo), func(ev Event) { events <- ev })
+	p := New("sb_1", "acme", policy, nil, nil, fixedDial(echo), func(ev Event) { events <- ev })
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -157,7 +157,7 @@ func TestConnectAllowTunnels(t *testing.T) {
 
 func TestConnectDeniedIsTyped(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "echo.internal"}}}
-	p := New("sb_1", "acme", policy, nil, fixedDial("127.0.0.1:1"), nil)
+	p := New("sb_1", "acme", policy, nil, nil, fixedDial("127.0.0.1:1"), nil)
 	front := httptest.NewServer(p)
 	defer front.Close()
 

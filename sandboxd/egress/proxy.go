@@ -2,6 +2,7 @@ package egress
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"maps"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"strings"
+	"sync"
 )
 
 // hopHeaders are hop-by-hop and proxy-scoped headers this hop owns: stripped
@@ -50,25 +52,42 @@ type Proxy struct {
 	tenant  string
 	policy  Evaluator
 	secrets Secrets
+	ca      *CA
 	audit   func(Event)
 	dial    DialFunc
 	tr      *http.Transport
+	mitmTr  *http.Transport
+
+	// leaves caches this sandbox's interception leaves; per-proxy, so one
+	// sandbox's host churn never evicts or blocks another's.
+	leafMu sync.Mutex
+	leaves map[string]*tls.Certificate
 }
 
-// New builds a Proxy for one sandbox. secrets and audit may be nil (no
-// injection, no audit). dial must be set.
-func New(sandbox, tenant string, policy Evaluator, secrets Secrets, dial DialFunc, audit func(Event)) *Proxy {
-	return &Proxy{
+// New builds a Proxy for one sandbox. secrets, ca, and audit may be nil (no
+// injection, no HTTPS interception, no audit). dial must be set.
+func New(sandbox, tenant string, policy Evaluator, secrets Secrets, ca *CA, dial DialFunc, audit func(Event)) *Proxy {
+	p := &Proxy{
 		sandbox: sandbox,
 		tenant:  tenant,
 		policy:  policy,
 		secrets: secrets,
+		ca:      ca,
 		audit:   audit,
 		dial:    dial,
 		// The stdlib default of 2 idle conns per host re-dials bursty
 		// same-host plaintext traffic.
 		tr: &http.Transport{DialContext: dial, MaxIdleConnsPerHost: 8},
 	}
+	if ca != nil {
+		p.mitmTr = &http.Transport{
+			DialContext:         dial,
+			TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
+			MaxIdleConnsPerHost: 8,
+		}
+		p.leaves = map[string]*tls.Certificate{}
+	}
+	return p
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -79,12 +98,19 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.serveForward(w, r)
 }
 
-// serveConnect gates an HTTPS/opaque tunnel by host only — the payload is
-// end-to-end TLS the proxy never terminates, so a rule's Secret cannot ride
-// here (credential injection lives on the plaintext forward path). Allow
-// hijacks and splices to the origin; deny answers a typed 403.
+// serveConnect gates an HTTPS/opaque tunnel by host. A plain allow hijacks and
+// splices the end-to-end TLS to the origin untouched. A matched rule with
+// Intercept instead terminates the TLS (interception, see intercept.go) so the
+// request is filtered by method and the secret injected; deny answers a typed 403.
 func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	host := hostOnly(r.Host)
+	// Host-gate the interception decision: the tunnel's CONNECT verb is not the
+	// request method, so a matched intercept rule enforces its methods on the
+	// decrypted inner request. The plain splice keeps the host+method gate.
+	if rule, d := p.policy.EvalHost(host); d == DecisionAllow && rule.Intercept && p.ca != nil {
+		p.serveIntercept(w, r, host)
+		return
+	}
 	_, decision := p.policy.Eval(host, r.Method)
 	p.record(Event{Method: r.Method, Host: host, Decision: decision})
 	if decision == DecisionDeny {

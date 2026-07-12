@@ -150,7 +150,7 @@ func (m *Manager) armEgressProxy(_ context.Context, sb *types.Sandbox) error {
 		return fmt.Errorf("listen egress %s: %w", sb.ID, err)
 	}
 	id, tenant := sb.ID, sb.Tenant
-	proxy := egress.New(id, tenant, policy, m.egressSecrets, m.dial,
+	proxy := egress.New(id, tenant, policy, m.egressSecrets, m.egressCA, m.dial,
 		func(ev egress.Event) { m.recordEgress(context.Background(), id, tenant, ev) })
 	el := &egressListener{srv: &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}, ln: ln, path: path}
 	m.mu.Lock()
@@ -193,6 +193,14 @@ func (m *Manager) disarmEgress(id string, removed bool) {
 	if tap != "" {
 		_ = netfilter.Unlock(tap)
 	}
+}
+
+// poolIntercepts reports whether the configured pool for key HTTPS-intercepts,
+// so its golden bakes the node CA.
+func (m *Manager) poolIntercepts(key types.PoolKey) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.poolEgress[key].Intercepts()
 }
 
 // effectivePolicy resolves a claim's egress evaluator: pool ∩ tenant (deny
