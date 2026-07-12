@@ -356,8 +356,13 @@ func (s *Store) deleteKeys(ctx context.Context, keys []string) error {
 		if err != nil {
 			return fmt.Errorf("delete %d objects: %w", len(chunk), err)
 		}
-		if len(out.Errors) > 0 {
-			e := out.Errors[0]
+		for _, e := range out.Errors {
+			// Strict backends report deleting an absent key per-entry where
+			// AWS succeeds silently; tolerating it keeps Delete retries
+			// convergent, matching single-object DeleteObject semantics.
+			if code := aws.ToString(e.Code); code == "NoSuchKey" || code == "NoSuchVersion" {
+				continue
+			}
 			return fmt.Errorf("delete %s: %s", aws.ToString(e.Key), aws.ToString(e.Message))
 		}
 	}

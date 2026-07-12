@@ -111,11 +111,25 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad delete xml", http.StatusBadRequest)
 			return
 		}
+		// Strict-backend emulation: absent keys answer a per-entry NoSuchKey
+		// (AWS succeeds silently) so the client's tolerance stays exercised.
+		type delErr struct {
+			Key  string `xml:"Key"`
+			Code string `xml:"Code"`
+		}
+		var result struct {
+			XMLName xml.Name `xml:"DeleteResult"`
+			Errors  []delErr `xml:"Error"`
+		}
 		for _, o := range req.Objects {
+			if _, ok := f.objects[o.Key]; !ok {
+				result.Errors = append(result.Errors, delErr{Key: o.Key, Code: "NoSuchKey"})
+				continue
+			}
 			delete(f.objects, o.Key)
 		}
 		w.Header().Set("Content-Type", "application/xml")
-		_, _ = w.Write([]byte(`<DeleteResult/>`))
+		_ = xml.NewEncoder(w).Encode(result)
 	case r.Method == http.MethodDelete:
 		delete(f.objects, key)
 		w.WriteHeader(http.StatusNoContent)
@@ -147,6 +161,44 @@ func TestS3BackendContract(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	storetest.RunContract(t, st)
+}
+
+// TestDeleteRetryConverges: a Delete retried after a partial failure re-deletes
+// keys already gone; strict backends answer NoSuchKey per entry and the retry
+// must still converge instead of failing forever.
+func TestDeleteRetryConverges(t *testing.T) {
+	const id = "ck_00000000000000bb"
+	fake := &fakeS3{objects: map[string][]byte{
+		"ck/" + id + "/" + store.MetaFile:                []byte(`{"id":"` + id + `"}`),
+		"ck/" + id + "/" + store.ExportDir + "/disk.img": []byte("bytes"),
+	}}
+	ts := httptest.NewServer(fake)
+	t.Cleanup(ts.Close)
+
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	t.Setenv("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
+	t.Setenv("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
+
+	st, err := New(t.Context(), Config{
+		Bucket:         "testbucket",
+		Prefix:         "ck/",
+		Endpoint:       ts.URL,
+		Region:         "us-east-1",
+		ForcePathStyle: true,
+	}, t.TempDir(), store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := st.Delete(t.Context(), id); err != nil {
+		t.Fatalf("first delete: %v", err)
+	}
+	if err := st.Delete(t.Context(), id); err != nil {
+		t.Fatalf("delete retry after keys already gone: %v", err)
+	}
+	if len(fake.objects) != 0 {
+		t.Errorf("objects left behind: %v", fake.objects)
+	}
 }
 
 // TestFetchLegacyExportLayout: records published before per-generation
