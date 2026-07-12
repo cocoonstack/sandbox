@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -88,9 +87,5 @@ func (m *Manager) forkClones(ctx context.Context, sb *types.Sandbox, count int) 
 func (m *Manager) captureRunning(ctx context.Context, sb *types.Sandbox) (string, func(), error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
-	snap := forkPrefix + strings.TrimPrefix(sb.VMName, vmPrefix) + "-" + randHex(3)
-	if err := m.eng.SnapshotSave(ctx, sb.VMName, snap); err != nil {
-		return "", nil, err
-	}
-	return snap, func() { m.dropSnap(ctx, snap) }, nil
+	return m.sourceSnap(ctx, sb)
 }

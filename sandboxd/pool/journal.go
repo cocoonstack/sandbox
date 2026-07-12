@@ -41,7 +41,7 @@ type usageEvent struct {
 type journal struct {
 	mu      sync.RWMutex
 	closed  bool
-	ch      chan any
+	ch      chan func()
 	drained chan struct{}
 
 	path string
@@ -60,7 +60,7 @@ func newJournal(path string) (*journal, error) {
 		return nil, err
 	}
 	j := &journal{
-		ch:      make(chan any, journalDepth),
+		ch:      make(chan func(), journalDepth),
 		drained: make(chan struct{}),
 		path:    path,
 		f:       f,
@@ -71,22 +71,30 @@ func newJournal(path string) (*journal, error) {
 }
 
 func (j *journal) append(v any) error {
-	j.mu.RLock()
-	defer j.mu.RUnlock()
-	if j.closed {
-		return errJournalClosed
-	}
-	j.ch <- v
-	return nil
+	return j.enqueue(func() {
+		if err := j.write(v); err != nil {
+			log.WithFunc("pool.journal").Errorf(context.Background(), err, "append to %s", j.path)
+		}
+	})
 }
 
 // flush blocks until every event enqueued before it is on disk.
 func (j *journal) flush() {
 	mark := make(chan struct{})
-	if j.append(mark) != nil {
+	if j.enqueue(func() { close(mark) }) != nil {
 		return // closed: the writer already drained
 	}
 	<-mark
+}
+
+func (j *journal) enqueue(f func()) error {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	if j.closed {
+		return errJournalClosed
+	}
+	j.ch <- f
+	return nil
 }
 
 // close stops intake, drains buffered events to disk, and closes the file.
@@ -104,14 +112,8 @@ func (j *journal) close() error {
 }
 
 func (j *journal) run() {
-	for v := range j.ch {
-		if mark, ok := v.(chan struct{}); ok {
-			close(mark)
-			continue
-		}
-		if err := j.write(v); err != nil {
-			log.WithFunc("pool.journal").Errorf(context.Background(), err, "append to %s", j.path)
-		}
+	for f := range j.ch {
+		f()
 	}
 	close(j.drained)
 }
