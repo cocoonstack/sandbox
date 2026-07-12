@@ -72,9 +72,8 @@ type StoreConfig struct {
 }
 
 // EgressCAConfig provisions HTTPS interception: RootCert is the cluster root
-// (public) baked into intercepted guests; IntermediateCert/IntermediateKey are
-// this node's own signing CA, issued from the root by `sandboxd ca
-// issue-intermediate`. The root private key never appears here.
+// baked into guests; IntermediateCert/Key are this node's signing CA. The root
+// private key never appears here.
 type EgressCAConfig struct {
 	RootCert         string `json:"root_cert"`
 	IntermediateCert string `json:"intermediate_cert"`

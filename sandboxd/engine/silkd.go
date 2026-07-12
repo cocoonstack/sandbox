@@ -24,10 +24,8 @@ type silkdFrame struct {
 	Data    []byte `json:"data"`
 }
 
-// silkdSession is a dialed silkd conn whose lifetime is bound to a ctx: the
-// request/reply helpers frame newline-JSON, and close releases both the
-// ctx hook and the conn. The hot port-forward relay (portconn.go) frames its
-// own data path and does not use this.
+// silkdSession is a dialed silkd conn bound to a ctx, with newline-JSON
+// request/reply helpers. The hot port-forward relay (portconn.go) does not use it.
 type silkdSession struct {
 	conn net.Conn
 	sc   *bufio.Scanner

@@ -9,9 +9,8 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 )
 
-// runCA is the operator PKI tool for HTTPS interception: mint the cluster root
-// once, then issue a per-node intermediate from it. The root key stays with the
-// operator; only the intermediate (and the root cert) are provisioned to a node.
+// runCA is the operator PKI tool: mint the cluster root once, then issue a
+// per-node intermediate from it. The root key stays with the operator.
 func runCA(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: sandboxd ca {init|issue-intermediate}")
@@ -96,8 +95,7 @@ func writeCAFiles(dir, name string, certPEM, keyPEM []byte, force bool) error {
 	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
 		return fmt.Errorf("write key: %w", err)
 	}
-	// WriteFile applies the mode only on create; force-overwriting an existing
-	// key must not inherit looser bits.
+	// WriteFile sets the mode only on create; an overwrite must not keep looser bits.
 	if err := os.Chmod(keyPath, 0o600); err != nil {
 		return fmt.Errorf("chmod key: %w", err)
 	}

@@ -127,9 +127,8 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 	return m.writeGoldenCASidecar(final, caBaked)
 }
 
-// writeGoldenCASidecar records (or clears) the fingerprint of the CA baked into
-// a golden. A restart adopts the golden only while this still matches the pool's
-// need, so a rotated CA or a flipped intercept flag forces a rebuild.
+// writeGoldenCASidecar records (or clears) the baked-CA fingerprint, so a
+// rotated CA or flipped intercept flag forces a rebuild on restart.
 func (m *Manager) writeGoldenCASidecar(final string, caBaked bool) error {
 	path := final + caSidecarSuffix
 	if !caBaked {
@@ -144,10 +143,9 @@ func (m *Manager) writeGoldenCASidecar(final string, caBaked bool) error {
 	return nil
 }
 
-// goldenCAMatches reports whether an on-disk golden's baked-CA state fits the
-// pool: a CA-baked golden must carry the current fingerprint, a plain one none;
-// a mismatch is left unadopted so refill rebuilds. The plain case stats, not
-// reads, as it runs under m.mu on the live SetPools path.
+// goldenCAMatches reports whether a golden's baked-CA state fits the pool: a
+// CA-baked one must carry the current fingerprint, a plain one none. The plain
+// case only stats (no read) — it runs under m.mu on the live SetPools path.
 func (m *Manager) goldenCAMatches(final string, caNeeded bool) bool {
 	if !caNeeded {
 		_, err := os.Stat(final + caSidecarSuffix)

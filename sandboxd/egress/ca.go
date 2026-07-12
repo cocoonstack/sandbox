@@ -21,12 +21,8 @@ const (
 	clockSkew    = time.Hour
 )
 
-// CA signs per-host interception leaves with this node's intermediate, which
-// chains to the one cluster root. The root cert (public) is baked into every
-// interception guest's trust store, so a leaf from any node validates; the root
-// private key never reaches the node, so a node holds only its own intermediate.
-// It is stateless and lock-free: leaf caching lives per-sandbox in the proxy, so
-// one tenant's churn cannot evict or serialize another's.
+// CA signs per-host interception leaves with the node's intermediate. The
+// shared cluster root is baked into guests; the root key never reaches a node.
 type CA struct {
 	rootPEM   []byte
 	rootFP    string
@@ -36,10 +32,8 @@ type CA struct {
 	leafKey   *ecdsa.PrivateKey
 }
 
-// LoadCA builds the node CA from the cluster root cert (public) and this node's
-// intermediate cert and key; the intermediate must be signed by the first root
-// cert. The root file may bundle several CA certs (a rotation bakes old and new
-// roots together); every block it contains is baked into guests verbatim.
+// LoadCA builds the node CA; the intermediate must be signed by the bundle's
+// first root cert (a bundle carries old+new roots during a rotation).
 func LoadCA(rootCertPEM, interCertPEM, interKeyPEM []byte) (*CA, error) {
 	root, err := parseRootBundle(rootCertPEM)
 	if err != nil {
@@ -62,9 +56,8 @@ func LoadCA(rootCertPEM, interCertPEM, interKeyPEM []byte) (*CA, error) {
 	if err = inter.CheckSignatureFrom(root); err != nil {
 		return nil, fmt.Errorf("intermediate not signed by root: %w", err)
 	}
-	// A self-signed cert satisfies CheckSignatureFrom(itself); reject it so the
-	// cluster root cannot be misconfigured as a node's intermediate, which would
-	// put the root key on the node.
+	// Reject a self-signed intermediate: the root must not double as one, which
+	// would put the root key on the node.
 	if inter.CheckSignatureFrom(inter) == nil {
 		return nil, fmt.Errorf("intermediate must not be a self-signed root")
 	}
@@ -75,7 +68,7 @@ func LoadCA(rootCertPEM, interCertPEM, interKeyPEM []byte) (*CA, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate leaf key: %w", err)
 	}
-	// CertPEM bakes the whole file verbatim, so the fingerprint covers its bytes.
+	// Fingerprint the whole file: CertPEM bakes it verbatim.
 	sum := sha256.Sum256(rootCertPEM)
 	return &CA{
 		rootPEM:   rootCertPEM,
@@ -87,18 +80,15 @@ func LoadCA(rootCertPEM, interCertPEM, interKeyPEM []byte) (*CA, error) {
 	}, nil
 }
 
-// CertPEM is the cluster root certificate to bake into an intercepted guest's
-// trust store.
+// CertPEM is the cluster root to bake into an intercepted guest's trust store.
 func (c *CA) CertPEM() []byte { return c.rootPEM }
 
-// Fingerprint is the SHA-256 of the exact root PEM baked into guests; a golden
-// baked with different bytes must rebuild. Rotating the per-node intermediate
-// does not change it.
+// Fingerprint is the SHA-256 of the baked root PEM; changed bytes rebuild the
+// golden, a rotated intermediate does not.
 func (c *CA) Fingerprint() string { return c.rootFP }
 
 // SignLeaf issues a fresh interception leaf for host, chained [leaf,
-// intermediate] for a guest that trusts the root. Stateless and lock-free —
-// the per-sandbox proxy caches, so no tenant shares a cache or a signing lock.
+// intermediate] for a guest that trusts the root.
 func (c *CA) SignLeaf(host string) (*tls.Certificate, error) {
 	serial, err := serialNumber()
 	if err != nil {
@@ -145,9 +135,8 @@ func parseCert(pemBytes []byte, what string) (*x509.Certificate, error) {
 	return cert, nil
 }
 
-// parseRootBundle returns the first cert — the anchor the intermediate must
-// chain to — and rejects any block that is not a CA certificate: the whole file
-// lands in guest trust stores, so nothing may ride along unchecked.
+// parseRootBundle returns the first cert (the anchor) and rejects any non-CA
+// block: the whole file lands in guest trust stores.
 func parseRootBundle(pemBytes []byte) (*x509.Certificate, error) {
 	var anchor *x509.Certificate
 	for rest := pemBytes; ; {

@@ -16,9 +16,8 @@ const (
 	interValidity = 5 * 365 * 24 * time.Hour
 )
 
-// GenerateRoot mints a cluster root CA, returning its cert and key PEM. The key
-// stays with the operator and signs per-node intermediates; it never reaches a
-// worker node. Run once per cluster.
+// GenerateRoot mints a cluster root CA (cert + key PEM). Run once per cluster;
+// the key stays with the operator and never reaches a node.
 func GenerateRoot(commonName string) (certPEM, keyPEM []byte, err error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -41,9 +40,8 @@ func GenerateRoot(commonName string) (certPEM, keyPEM []byte, err error) {
 	return marshalCA(tmpl, tmpl, &key.PublicKey, key, key)
 }
 
-// IssueIntermediate signs a fresh per-node intermediate CA with the cluster
-// root, returning the intermediate's cert and key PEM to provision to nodeID.
-// The intermediate can issue only leaves (path length zero).
+// IssueIntermediate signs a per-node intermediate CA (leaves only, path length
+// zero) from the cluster root, to provision to nodeID.
 func IssueIntermediate(rootCertPEM, rootKeyPEM []byte, nodeID string) (certPEM, keyPEM []byte, err error) {
 	root, err := parseCert(rootCertPEM, "root")
 	if err != nil {

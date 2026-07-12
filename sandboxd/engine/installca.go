@@ -16,12 +16,10 @@ const (
 	guestExecPATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 )
 
-// InstallCACert makes the guest trust the cluster root: it drops the cert in
-// the source dir (so a later guest-run update-ca-certificates keeps it) and
-// appends it to the active bundle. It does NOT run update-ca-certificates —
-// silkd is reachable before boot's systemd-tmpfiles finishes clearing /tmp, and
-// that script stages temp files there, so they vanish mid-run. Called once per
-// interception-pool golden build, off the claim path.
+// InstallCACert makes the guest trust the cluster root: drop the cert in the
+// source dir and append it to the active bundle. It avoids update-ca-certificates
+// on purpose — silkd runs before systemd-tmpfiles clears /tmp, where that script
+// stages temp files. Off the claim path (golden build / cold provision).
 func (e *Engine) InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, cmdTimeout)
 	defer cancel()
