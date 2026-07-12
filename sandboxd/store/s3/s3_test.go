@@ -20,7 +20,7 @@ import (
 )
 
 // fakeS3 implements just enough of the S3 REST surface (path-style) for
-// the backend: PutObject, GetObject, DeleteObject, ListObjectsV2.
+// the backend: PutObject, GetObject, DeleteObjects, ListObjectsV2.
 type fakeS3 struct {
 	mu      sync.Mutex
 	objects map[string][]byte // key -> body
@@ -100,6 +100,22 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		_, _ = w.Write(body)
+	case r.Method == http.MethodPost && r.URL.Query().Has("delete"):
+		var req struct {
+			Objects []struct {
+				Key string `xml:"Key"`
+			} `xml:"Object"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		if err := xml.Unmarshal(body, &req); err != nil {
+			http.Error(w, "bad delete xml", http.StatusBadRequest)
+			return
+		}
+		for _, o := range req.Objects {
+			delete(f.objects, o.Key)
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		_, _ = w.Write([]byte(`<DeleteResult/>`))
 	case r.Method == http.MethodDelete:
 		delete(f.objects, key)
 		w.WriteHeader(http.StatusNoContent)
