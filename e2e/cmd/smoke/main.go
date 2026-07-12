@@ -528,8 +528,19 @@ func smokeTree(ctx context.Context, sb *sandbox.Sandbox) error {
 	if out, err := sb.Exec(ctx, "cat", "/root/tree/t.txt"); err != nil || strings.TrimSpace(out) != "tree-marker" {
 		return fmt.Errorf("tree changed by failed push: %q, %v", out, err)
 	}
-	if out, err := sb.Exec(ctx, "sh", "-c", "ls -a /root/tree"); err != nil || strings.Contains(out, ".silkd-push-") {
-		return fmt.Errorf("staging left behind: %q, %v", out, err)
+	// silkd unlinks the staging file when it notices the dead stream — an
+	// asynchronous cleanup a fresh RPC can outrun, so settle with a budget.
+	var staging string
+	var stagingErr error
+	for range 20 {
+		staging, stagingErr = sb.Exec(ctx, "sh", "-c", "ls -a /root/tree")
+		if stagingErr == nil && !strings.Contains(staging, ".silkd-push-") {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if stagingErr != nil || strings.Contains(staging, ".silkd-push-") {
+		return fmt.Errorf("staging left behind: %q, %v", staging, stagingErr)
 	}
 
 	var pulled bytes.Buffer
