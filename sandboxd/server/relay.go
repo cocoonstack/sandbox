@@ -37,7 +37,6 @@ func (s *Server) CloseRelays() {
 }
 
 func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
-	logger := log.WithFunc("server.handleAgent")
 	token, ok := sandboxToken(w, r)
 	if !ok {
 		return
@@ -56,20 +55,20 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	case writePoolErr(w, err):
 		return
 	case err != nil:
-		logger.Errorf(r.Context(), err, "agent socket for %s", r.PathValue("id"))
+		log.WithFunc("server.handleAgent").Errorf(r.Context(), err, "agent socket for %s", r.PathValue("id"))
 		writeErr(w, http.StatusInternalServerError, "sandbox lookup failed")
 		return
 	}
 	guest, err := s.dialer.DialSilkd(r.Context(), sock)
 	if err != nil {
-		logger.Errorf(r.Context(), err, "dial silkd for %s", r.PathValue("id"))
+		log.WithFunc("server.handleAgent").Errorf(r.Context(), err, "dial silkd for %s", r.PathValue("id"))
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
 		return
 	}
 	client, bufrw, err := http.NewResponseController(w).Hijack()
 	if err != nil {
 		_ = guest.Close()
-		logger.Error(r.Context(), err, "hijack")
+		log.WithFunc("server.handleAgent").Error(r.Context(), err, "hijack")
 		writeErr(w, http.StatusInternalServerError, "connection cannot be hijacked")
 		return
 	}

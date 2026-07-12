@@ -22,6 +22,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
@@ -342,9 +343,27 @@ func (s *Store) download(ctx context.Context, key, path string) error {
 }
 
 func (s *Store) deleteKeys(ctx context.Context, keys []string) error {
-	for _, key := range keys {
-		if _, err := s.client.DeleteObject(ctx, &awss3.DeleteObjectInput{Bucket: &s.bucket, Key: &key}); err != nil {
-			return fmt.Errorf("delete %s: %w", key, err)
+	// DeleteObjects caps one batch at 1000 keys.
+	for chunk := range slices.Chunk(keys, 1000) {
+		objs := make([]s3types.ObjectIdentifier, len(chunk))
+		for i := range chunk {
+			objs[i] = s3types.ObjectIdentifier{Key: &chunk[i]}
+		}
+		out, err := s.client.DeleteObjects(ctx, &awss3.DeleteObjectsInput{
+			Bucket: &s.bucket,
+			Delete: &s3types.Delete{Objects: objs, Quiet: aws.Bool(true)},
+		})
+		if err != nil {
+			return fmt.Errorf("delete %d objects: %w", len(chunk), err)
+		}
+		for _, e := range out.Errors {
+			// Strict backends report deleting an absent key per-entry where
+			// AWS succeeds silently; tolerating it keeps Delete retries
+			// convergent, matching single-object DeleteObject semantics.
+			if code := aws.ToString(e.Code); code == "NoSuchKey" || code == "NoSuchVersion" {
+				continue
+			}
+			return fmt.Errorf("delete %s: %s", aws.ToString(e.Key), aws.ToString(e.Message))
 		}
 	}
 	return nil

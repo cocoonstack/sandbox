@@ -67,6 +67,16 @@ func (e *Engine) Clone(ctx context.Context, fromDir, name string, key types.Pool
 	return parseRecord(ctx, out), nil
 }
 
+// CloneSnap clones from a local-store snapshot by name — fork's fast path,
+// which skips the export-to-dir copy that `Clone --from-dir` requires.
+func (e *Engine) CloneSnap(ctx context.Context, snap, name string, key types.PoolKey) (types.VMRecord, error) {
+	out, err := e.run(ctx, e.cloneSnapArgs(snap, name, key)...)
+	if err != nil {
+		return types.VMRecord{}, err
+	}
+	return parseRecord(ctx, out), nil
+}
+
 // RunCold boots a VM from the template image (golden builds and cache-miss
 // claims), returning its lifecycle record.
 func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey) (types.VMRecord, error) {
@@ -250,6 +260,11 @@ func (e *Engine) cloneArgs(fromDir, name string, key types.PoolKey) []string {
 	// cross-node claim the base image blobs resolve locally or are pulled
 	// by digest.
 	args := []string{"vm", "clone", "--from-dir", fromDir, "--name", name, "--pull", "--output", "json"}
+	return append(args, e.netArgs(key, false)...)
+}
+
+func (e *Engine) cloneSnapArgs(snap, name string, key types.PoolKey) []string {
+	args := []string{"vm", "clone", snap, "--name", name, "--pull", "--output", "json"}
 	return append(args, e.netArgs(key, false)...)
 }
 

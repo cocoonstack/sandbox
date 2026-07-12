@@ -260,6 +260,25 @@ func TestBulkDecodeStrictShape(t *testing.T) {
 	}
 }
 
+// TestTagAfterOtherKeys pins the tokenizer fallback: producers emit the tag
+// first, but the protocol never promised order.
+func TestTagAfterOtherKeys(t *testing.T) {
+	resp, err := DecodeResponse([]byte(`{"data":"aGk=","type":"stdout"}`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := string(resp.(*Stdout).Data); got != "hi" {
+		t.Errorf("got %q, want %q", got, "hi")
+	}
+	req, err := DecodeRequest([]byte(`{"path":"/","v":1,"op":"fs_stat"}`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := req.(*FsStat).Path; got != "/" {
+		t.Errorf("got path %q, want %q", got, "/")
+	}
+}
+
 func TestUnknownTagsRejected(t *testing.T) {
 	if _, err := DecodeRequest([]byte(`{"v":1,"op":"teleport"}`)); err == nil {
 		t.Error("unknown op accepted")

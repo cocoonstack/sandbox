@@ -48,6 +48,9 @@ const (
 var (
 	requestHead = `{"v":` + strconv.Itoa(ProtoVersion) + `,"op":"`
 
+	reqTagHead  = []byte(requestHead)
+	respTagHead = []byte(`{"type":"`)
+
 	requestDecoders = map[string]func([]byte) (Request, error){
 		"exec":           decodeReq[Exec],
 		"info":           decodeReq[Info],
@@ -642,7 +645,7 @@ func EncodeResponse(r Response) ([]byte, error) {
 
 // DecodeRequest parses one frame into its op's concrete type.
 func DecodeRequest(line []byte) (Request, error) {
-	op, err := scanTag(line, "op")
+	op, err := frameTag(line, reqTagHead, "op")
 	if err != nil {
 		return nil, fmt.Errorf("parse request frame: %w", err)
 	}
@@ -655,7 +658,7 @@ func DecodeRequest(line []byte) (Request, error) {
 
 // DecodeResponse parses one frame into its type's concrete Go type.
 func DecodeResponse(line []byte) (Response, error) {
-	typ, err := scanTag(line, "type")
+	typ, err := frameTag(line, respTagHead, "type")
 	if err != nil {
 		return nil, fmt.Errorf("parse response frame: %w", err)
 	}
@@ -712,12 +715,21 @@ func encodeTagged(head string, v any) ([]byte, error) {
 	return append(frame, body[1:]...), nil
 }
 
+// frameTag returns the frame's dispatch tag: a canonical head (both producers
+// emit the tag first, unescaped) yields it with a prefix cut; anything else
+// takes the full token walk.
+func frameTag(line, head []byte, key string) (string, error) {
+	if rest, ok := bytes.CutPrefix(line, head); ok {
+		if end := bytes.IndexAny(rest, `"\`); end >= 0 && rest[end] == '"' {
+			return string(rest[:end]), nil
+		}
+	}
+	return scanTag(line, key)
+}
+
 // scanTag extracts the string value of a top-level key without decoding the
-// whole frame: both producers emit the tag first, so the token walk stops at
-// the frame head on bulk data frames instead of pre-scanning every payload
-// byte before the real decode. A missing tag returns "" (the callers'
-// unknown-tag error); key order never affects correctness, only how early
-// the walk stops.
+// whole frame; key order never affects correctness, only how early the walk
+// stops. A missing tag returns "" (the callers' unknown-tag error).
 func scanTag(line []byte, key string) (string, error) {
 	dec := json.NewDecoder(bytes.NewReader(line))
 	tok, err := dec.Token()

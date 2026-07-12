@@ -65,7 +65,9 @@ func New(sandbox, tenant string, policy Evaluator, secrets Secrets, dial DialFun
 		secrets: secrets,
 		audit:   audit,
 		dial:    dial,
-		tr:      &http.Transport{DialContext: dial},
+		// The stdlib default of 2 idle conns per host re-dials bursty
+		// same-host plaintext traffic.
+		tr: &http.Transport{DialContext: dial, MaxIdleConnsPerHost: 8},
 	}
 }
 

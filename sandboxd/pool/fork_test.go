@@ -5,9 +5,58 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+// TestForkRacingHibernateUsesPrivateSource pins the transition-locked source
+// decision: a hibernate landing between Fork's entry and its capture must
+// never let the fan-out clone the shared wake snapshot.
+func TestForkRacingHibernateUsesPrivateSource(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	parent := mustClaim(t, m, testKey)
+
+	eng.hibernateStall = make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		if err := m.Hibernate(t.Context(), parent.ID, parent.Token); err != nil {
+			t.Errorf("Hibernate: %v", err)
+		}
+	})
+	waitFor(t, func() bool {
+		eng.mu.Lock()
+		defer eng.mu.Unlock()
+		return len(eng.hibernates) == 1
+	})
+	var children []string
+	wg.Go(func() {
+		sbs, err := m.Fork(t.Context(), parent.ID, parent.Token, 2, time.Hour)
+		if err != nil {
+			t.Errorf("Fork: %v", err)
+			return
+		}
+		for _, sb := range sbs {
+			children = append(children, sb.ID)
+		}
+	})
+	time.Sleep(20 * time.Millisecond) // let Fork reach the transition lock
+	close(eng.hibernateStall)
+	wg.Wait()
+
+	if len(children) != 2 {
+		t.Fatalf("fork built %d children, want 2", len(children))
+	}
+	for _, from := range eng.cloneFroms {
+		if strings.HasPrefix(from, hibernatePrefix) {
+			t.Fatalf("child cloned from the shared wake snapshot %q", from)
+		}
+	}
+	if len(eng.exports) != 1 || !strings.HasPrefix(eng.exports[0], hibernatePrefix) {
+		t.Errorf("exports %v, want one private copy of the wake snapshot", eng.exports)
+	}
+}
 
 func TestForkFromRunning(t *testing.T) {
 	eng := newFakeEngine()
@@ -24,8 +73,12 @@ func TestForkFromRunning(t *testing.T) {
 	if len(eng.snapSaves) != 1 || !strings.HasPrefix(eng.snapSaves[0], forkPrefix) {
 		t.Errorf("snapSaves %v, want one %s* snapshot", eng.snapSaves, forkPrefix)
 	}
-	if !slices.Equal(eng.exports, eng.snapSaves) {
-		t.Errorf("exported %v, want the fork snapshot %v", eng.exports, eng.snapSaves)
+	// Fast path: clone the children straight from the store snapshot, no export.
+	if len(eng.exports) != 0 {
+		t.Errorf("exported %v, want none (fork clones from the snapshot directly)", eng.exports)
+	}
+	if want := []string{eng.snapSaves[0], eng.snapSaves[0], eng.snapSaves[0]}; !slices.Equal(eng.cloneFroms, want) {
+		t.Errorf("children cloned from %v, want three clones of the fork snapshot %v", eng.cloneFroms, want)
 	}
 	if !slices.Contains(eng.snapRemoves, eng.snapSaves[0]) {
 		t.Errorf("snapRemoves %v, want the transient fork snapshot dropped", eng.snapRemoves)
