@@ -21,6 +21,11 @@ the stop line.
 | **warm pool hit** | ownership transfer of a pre-booted, probed VM; no VM lifecycle work on the request path |
 | **clone from golden** | restore a full VM (memory + disk) from a golden snapshot, reseed entropy/machine identity, re-probe readiness |
 | **cold boot** | boot from the template image: kernel + initramfs + rootfs assembly + init to a probed silkd |
+| **burst** | `BURST_N` clone-tier claims issued concurrently — per-claim latency under restore contention plus the batch wall clock. Runs last so its churn cannot contaminate the RTT and throughput windows |
+
+The harness also reports **warm refill recovery**: after fully draining the
+warm pool it times the refill loop rebuilding to target — the number bounded
+by refill admission rather than by a single restore.
 
 When comparing against other systems, match tiers — not headlines:
 
@@ -62,7 +67,7 @@ table stamped with the host evidence: virtualization
 Knobs (environment variables): `WARM`/`WARM_N` (warm-pool depth and burst
 size — the burst must stay within the depth, or refill loses the race and
 the tail measures clones), `CLONE_N`, `COLD_N`, `RPC_N`, `PULL_MB`,
-`PULL_N`.
+`PULL_N`, `BURST_N` (concurrent clone-claim burst; 0 skips the stage).
 
 Boot anatomy (where inside the cold tier the milliseconds go — kernel,
 initramfs phases, rootfs handoff) has its own harness:
@@ -78,6 +83,36 @@ Newest first. Bare-metal numbers are the headline; nested runs are
 labeled and must only be compared against other nested runs.
 
 <!-- paste `make bench` output below -->
+
+### 2026-07-13 — bare metal (88fda81, first burst + refill-recovery round)
+
+| environment | |
+|---|---|
+| host | bare metal, AMD Ryzen 7 9700X 8-Core Processor, 16 cores, 60 GiB |
+| kernel | 6.17.0-35-generic |
+| cpufreq | powersave/balance_performance |
+| cocoon | master-acfc815 |
+| template | ghcr.io/cocoonstack/sandbox/rt:24.04 @ sha256:d489c07f9907 |
+
+| claim tier | p50 | p90 | max | n |
+|---|---|---|---|---|
+| warm pool hit | 0.3 ms | 0.3 ms | 0.7 ms | 6 |
+| clone from golden | 33.2 ms | 40.1 ms | 40.7 ms | 10 |
+| cold boot (unpooled ghcr.io/cocoonstack/sandbox/python:3.12) | 381.0 ms | 381.0 ms | 393.7 ms | 3 |
+| burst: 16 concurrent clones | 149.4 ms | 190.9 ms | 249.9 ms | 16 |
+
+| data plane | measured |
+|---|---|
+| exec RTT (dial per RPC) | n=200 p50=0.19ms p90=0.23ms p99=0.36ms |
+| fs_pull throughput (128 MiB) | 611.6 MiB/s best of 3 |
+| burst wall (16 concurrent clones) | 308 ms |
+| warm refill recovery (0 → 6) | 1638 ms |
+
+Second of two rounds (first: burst per-claim p50 126.5 ms, wall 331 ms;
+sequential tiers within the band of the two same-day pre-burst rounds).
+Refill recovery measured 1638 ms in both rounds — identical to the
+millisecond, so the recovery is refill-cadence-quantized, not
+restore-bound; measure the tick before re-tuning refill admission.
 
 ### 2026-07-10 — bare metal (2c8f5c6, locally built image)
 

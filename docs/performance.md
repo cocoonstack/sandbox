@@ -36,8 +36,10 @@ UFFD on-demand for sandbox-sized VMs in every configuration measured
 (the working set is small and mostly touched during readiness).
 
 Burst degradation under concurrent restores is real, and warm pools exist
-to absorb it — they move provisioning off the request path entirely. No
-in-repo harness measures it, so treat any concurrency figure as external.
+to absorb it — they move provisioning off the request path entirely.
+`make bench` measures both sides: the burst stage issues `BURST_N`
+concurrent clone claims, and the refill-recovery stage times the warm pool
+rebuilding after a full drain ([Benchmarks](benchmarks.md)).
 
 ## Verb round-trips (SDK over the relay, bare metal)
 

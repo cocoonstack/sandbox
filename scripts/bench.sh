@@ -18,6 +18,7 @@ COLD_N=${COLD_N:-3}
 RPC_N=${RPC_N:-200}
 PULL_MB=${PULL_MB:-128}
 PULL_N=${PULL_N:-3}
+BURST_N=${BURST_N:-16}
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 
 DATA=$(mktemp -d /tmp/sandboxd-bench.XXXXXX)
@@ -124,6 +125,36 @@ rpc_line=$("$DATA/rpcbench" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" 
 pull_best=$("$DATA/pullbench" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -size "$PULL_MB" -n "$PULL_N" |
   sed -n 's/.* \([0-9.]*\) MiB\/s/\1/p' | sort -n | tail -1)
 
+# Concurrency stages run last so their churn cannot contaminate the RTT and
+# throughput windows above.
+burst_row="- | - | - | 0"
+burst_wall="-"
+if ((BURST_N > 0)); then
+  echo "== burst ($BURST_N concurrent clone claims from the golden-only pool)"
+  burst_start=$(date +%s%N)
+  pids=()
+  for i in $(seq 1 "$BURST_N"); do
+    claim_ms -template "$TEMPLATE" -size medium -n 1 >"$DATA/burst.$i" &
+    pids+=($!)
+  done
+  wait "${pids[@]}"
+  burst_wall=$((($(date +%s%N) - burst_start) / 1000000))
+  burst_row=$(cat "$DATA"/burst.* | stats)
+fi
+
+echo "== refill recovery (drain the warm pool, wait until back at target)"
+claim_ms -template "$TEMPLATE" -size small -n "$WARM" >/dev/null
+refill_start=$(date +%s%N)
+refill_ms="timeout"
+for _ in $(seq 1 600); do
+  if api info | jq -e \
+    '[.pools[] | select(.key.size == "small")] | all(.warm >= .target)' >/dev/null 2>&1; then
+    refill_ms=$((($(date +%s%N) - refill_start) / 1000000))
+    break
+  fi
+  sleep 0.2
+done
+
 virt=$(systemd-detect-virt 2>/dev/null || true); virt=${virt:-unknown}
 [[ $virt == none ]] && envlabel="bare metal" || envlabel="nested ($virt)"
 cpu=$(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo 2>/dev/null || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo unknown)
@@ -148,11 +179,14 @@ cat <<EOF
 | warm pool hit | $warm_row |
 | clone from golden | $clone_row |
 | cold boot (unpooled ${COLD_TEMPLATE:-—}) | $cold_row |
+| burst: $BURST_N concurrent clones | $burst_row |
 
 | data plane | measured |
 |---|---|
 | exec RTT (dial per RPC) | $rpc_line |
 | fs_pull throughput (${PULL_MB} MiB) | ${pull_best:-?} MiB/s best of $PULL_N |
+| burst wall ($BURST_N concurrent clones) | $burst_wall ms |
+| warm refill recovery (0 → $WARM) | $refill_ms ms |
 EOF
 echo
 echo "BENCH DONE"
