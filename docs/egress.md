@@ -135,23 +135,60 @@ CA**, issued from the root, and presents `[leaf, intermediate]`; the guest
 builds `leaf → intermediate → cluster root`. The **root private key never
 reaches a node** — a node holds only its intermediate.
 
-Provision with the operator PKI tool:
+### Provisioning the cluster PKI
+
+Run the `sandboxd ca` tool on an **operator machine, not a node** — the root
+key never touches a worker. Mint the root once, then issue one intermediate
+per node:
+
+```bash
+# 1. Once per cluster. root.key stays here, offline, forever.
+sandboxd ca init -out ca -cn "acme sandbox root"
+#   → ca/root.crt (public)   ca/root.key (0600, never leaves this host)
+
+# 2. One intermediate per node, all signed by the same root.
+for n in node-a node-b node-c; do
+  sandboxd ca issue-intermediate \
+    -root-cert ca/root.crt -root-key ca/root.key \
+    -node "$n" -out "dist/$n"
+done
+#   dist/node-a/node-a.crt  dist/node-a/node-a.key   (0600)
+#   dist/node-b/…  dist/node-c/…
+```
+
+That gives one shared root and a per-node signing key:
 
 ```
-sandboxd ca init -out ca/                                  # once per cluster; keep ca/root.key offline
-sandboxd ca issue-intermediate -root-cert ca/root.crt \
-  -root-key ca/root.key -node node-1 -out node-1/          # once per node
+ca/root.crt          → copied to EVERY node (public trust anchor)
+ca/root.key          → stays offline on the operator machine
+dist/node-a/node-a.* → node-a only
+dist/node-b/node-b.* → node-b only
+dist/node-c/node-c.* → node-c only
 ```
 
-then point the node's config at the root cert and its own intermediate:
+Distribute to each node — the root cert plus **that node's** intermediate,
+never another node's key, never `root.key`:
+
+```bash
+scp ca/root.crt dist/node-a/node-a.crt dist/node-a/node-a.key \
+    node-a:/etc/sandboxd/egress-ca/
+```
+
+then point that node's config at the root cert and its own intermediate:
 
 ```jsonc
 "egress_ca": {
   "root_cert":         "/etc/sandboxd/egress-ca/root.crt",
-  "intermediate_cert": "/etc/sandboxd/egress-ca/node-1.crt",
-  "intermediate_key":  "/etc/sandboxd/egress-ca/node-1.key"
+  "intermediate_cert": "/etc/sandboxd/egress-ca/node-a.crt",
+  "intermediate_key":  "/etc/sandboxd/egress-ca/node-a.key"
 }
 ```
+
+`openssl verify -CAfile ca/root.crt dist/node-a/node-a.crt` confirms the chain.
+Adding a node later is step 2 for the new node only — the root is untouched,
+so existing guests keep validating. Losing a node's intermediate key compromises
+only that node: re-issue it (step 2) and roll the node; the cluster root, and
+every other node, is unaffected.
 
 `egress_ca` is required whenever a pool has an intercept rule. The root cert is
 baked into a guest **when the guest is created** — at golden build, or at a
@@ -189,11 +226,3 @@ for them, with no re-claim path to fix it.
 Limitations: interception is HTTP/1.1 only and breaks clients that pin
 certificates, so scope it to hosts you control. A host that speaks a non-HTTP
 protocol over TLS must not be given an intercept rule.
-
-## Lanes and status
-
-| Capability | Status |
-|---|---|
-| none lane — proxy, policy, plaintext injection, audit | **shipped** |
-| egress lane — nftables lock on the tap, forcing the NIC through the proxy | **shipped** |
-| HTTPS credential injection (per-node CA TLS interception) | **shipped** |
