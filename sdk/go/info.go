@@ -16,7 +16,7 @@ type NodeInfo struct {
 	Claimed    int          `json:"claimed"`
 	Hibernated int          `json:"hibernated"`
 	Archived   int          `json:"archived"`
-	Draining   bool         `json:"draining"`
+	Draining   bool         `json:"draining,omitempty"`
 	Peers      []string     `json:"peers,omitempty"`
 }
 

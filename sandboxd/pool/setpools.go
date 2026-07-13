@@ -52,12 +52,7 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 		} else {
 			p.applySpec(spec)
 		}
-		target := p.effectiveTarget(now)
-		for len(p.warm) > target {
-			n := len(p.warm) - 1
-			trim = append(trim, p.warm[n].VMName)
-			p.warm = p.warm[:n]
-		}
+		trim = append(trim, p.trimWarm(p.effectiveTarget(now))...)
 		if !ok && !p.building && p.refilling == 0 {
 			delete(m.pools, key)
 		}

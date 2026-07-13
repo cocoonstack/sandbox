@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"slices"
 )
@@ -38,21 +39,22 @@ func (e *Engine) silkdWriteFile(ctx context.Context, vsockSocket, path string, m
 		return err
 	}
 	defer s.close()
-	if err = s.send(map[string]any{"v": 1, "op": "fs_write", "path": path, "mode": mode}); err != nil {
-		return err
-	}
-	for chunk := range slices.Chunk(data, silkdChunk) {
-		enc := base64.StdEncoding.EncodeToString(chunk)
-		if err = s.send(map[string]any{"v": 1, "op": "data", "data": enc}); err != nil {
-			return err
+	// A send racing the guest's early answer+close hits EPIPE; prefer the buffered verdict.
+	sendErr := func() error {
+		if serr := s.send(map[string]any{"v": 1, "op": "fs_write", "path": path, "mode": mode}); serr != nil {
+			return serr
 		}
-	}
-	if err = s.send(map[string]any{"v": 1, "op": "data_end"}); err != nil {
-		return err
-	}
+		for chunk := range slices.Chunk(data, silkdChunk) {
+			enc := base64.StdEncoding.EncodeToString(chunk)
+			if serr := s.send(map[string]any{"v": 1, "op": "data", "data": enc}); serr != nil {
+				return serr
+			}
+		}
+		return s.send(map[string]any{"v": 1, "op": "data_end"})
+	}()
 	frame, err := s.recv()
 	if err != nil {
-		return err
+		return errors.Join(sendErr, err)
 	}
 	switch frame.Type {
 	case "done":
@@ -70,20 +72,19 @@ func (e *Engine) silkdExec(ctx context.Context, vsockSocket string, argv ...stri
 		return err
 	}
 	defer s.close()
-	if err = s.send(map[string]any{
+	sendErr := s.send(map[string]any{
 		"v": 1, "op": "exec", "argv": argv, "detach": false,
 		"env": map[string]string{"PATH": guestExecPATH},
-	}); err != nil {
-		return err
-	}
-	if err = s.send(map[string]any{"v": 1, "op": "stdin_close"}); err != nil {
-		return err
+	})
+	if sendErr == nil {
+		// A child exiting without reading stdin races this close; prefer the buffered exit frame.
+		sendErr = s.send(map[string]any{"v": 1, "op": "stdin_close"})
 	}
 	var out []byte
 	for {
 		frame, err := s.recv()
 		if err != nil {
-			return err
+			return errors.Join(sendErr, err)
 		}
 		switch frame.Type {
 		case "started":

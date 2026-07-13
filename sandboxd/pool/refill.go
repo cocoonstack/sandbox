@@ -58,15 +58,17 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 	m.mu.Lock()
 	p.refilling--
 	target := p.effectiveTarget(time.Now())
-	if err == nil && !m.draining && len(p.warm) < target {
-		p.warm = append(p.warm, sb)
-		p.noteLead(time.Since(start))
-		keep = true
-	}
-	if err == nil && !m.draining && p.goldenDir != "" && len(p.warm)+p.refilling < target {
-		p.refilling++
-		releaseSlot = false
-		go m.refillOne(ctx, p, p.goldenDir)
+	if err == nil && !m.draining {
+		if len(p.warm) < target {
+			p.warm = append(p.warm, sb)
+			p.noteLead(time.Since(start))
+			keep = true
+		}
+		if p.goldenDir != "" && len(p.warm)+p.refilling < target {
+			p.refilling++
+			releaseSlot = false
+			go m.refillOne(ctx, p, p.goldenDir)
+		}
 	}
 	m.mu.Unlock()
 	if err != nil {

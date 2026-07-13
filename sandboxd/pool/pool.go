@@ -148,6 +148,18 @@ func (p *pool) applySpec(spec config.PoolSpec) {
 	p.archiveDelete = time.Duration(spec.ArchiveDeleteAfterSeconds) * time.Second
 }
 
+// trimWarm shrinks p.warm to at most target, returning the trimmed VM names;
+// callers hold m.mu and destroy the returned VMs outside it.
+func (p *pool) trimWarm(target int) []string {
+	var trim []string
+	for len(p.warm) > target {
+		n := len(p.warm) - 1
+		trim = append(trim, p.warm[n].VMName)
+		p.warm = p.warm[:n]
+	}
+	return trim
+}
+
 // Manager owns the node's pools, claims, and their persistence.
 type Manager struct {
 	eng     Engine
@@ -192,7 +204,7 @@ type Manager struct {
 	// stays O(1). usage is the always-on billing event stream, audit the
 	// config-gated request tap.
 	maxClaims    int
-	draining     bool // cordoned for maintenance; guarded by m.mu, deliberately not persisted
+	draining     bool // guarded by m.mu; deliberately not persisted
 	tenantMax    map[string]int
 	tenantLive   map[string]int
 	tenantEgress map[string]*egress.Policy // per-tenant allow-list; nil = no tenant policy

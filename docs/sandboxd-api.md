@@ -7,7 +7,7 @@ All bodies are JSON. Three token kinds:
   resource-creating verbs (claim, fork, promote, checkpoint create/claim,
   preview mint) and the tenant-scoped listings/deletes below; everything a
   tenant creates is stamped with its name. Operator surfaces
-  (`GET /v1/sandboxes`, `GET /v1/info`, `PUT /v1/pools`, `GET /metrics`)
+  (`GET /v1/sandboxes`, `GET /v1/info`, `PUT /v1/pools`, `POST/DELETE /v1/drain`, `GET /metrics`)
   answer a tenant token `403` — authenticated but not authorized; an unknown
   token stays `401`.
 - **sandbox** — every claimed sandbox carries its own bearer token guarding
@@ -59,9 +59,9 @@ name (attributed in the usage journal and counted against the tenant's
 `max_claims`).
 
 Errors: 400 unknown template axis / bad body; 401 bad api token; 409 egress
-requested on a node without an egress attachment; 429 node at `max_claims`
-or the calling tenant at its own `max_claims` (a redirect to a warm peer is
-tried first on a cluster); 500 provisioning failed.
+requested on a node without an egress attachment; 429 node at `max_claims`,
+the calling tenant at its own `max_claims`, or the node draining (a redirect
+to a warm peer is tried first on a cluster); 500 provisioning failed.
 
 ## POST /v1/sandboxes/{id}/release
 
@@ -107,7 +107,7 @@ Children inherit the parent's tenant and count against its `max_claims`,
 whoever calls. 400 invalid count or body, 401 bad api token, 404 unknown id
 or wrong sandbox token, 409 egress-lane parent (the lane never forks,
 checkpoints, or promotes; see [egress](egress.md)), 429 node or the parent's
-tenant at `max_claims`.
+tenant at `max_claims`, or the node draining.
 
 ## POST /v1/sandboxes/{id}/promote
 
@@ -167,7 +167,7 @@ pool on a node without an egress attachment.
 
 ## POST /v1/drain
 
-Auth: root only. Cordons the node for maintenance: claim/fork/branch answer
+Auth: root only (tenant tokens get 403). Cordons the node for maintenance: claim/fork/branch answer
 429 `node draining` (on a cluster the warm-peer redirect is tried first, and
 gossip stops naming this node within a tick as its warm counts hit zero),
 unclaimed warm VMs are destroyed, and live claims keep serving until release
@@ -177,7 +177,7 @@ node is empty. Deliberately not persisted: a restarted node serves again.
 
 ## DELETE /v1/drain
 
-Auth: root only. Lifts the drain and kicks an immediate refill. Answers the
+Auth: root only (tenant tokens get 403). Lifts the drain and kicks an immediate refill. Answers the
 fresh info payload.
 
 ## POST /v1/sandboxes/{id}/preview
@@ -208,7 +208,7 @@ branched from the checkpoint (a normal claim response, attributed to the
 caller); the checkpoint's recorded key applies — the unguessable id is the
 capability to branch. 404 for an unknown checkpoint, 409 for an egress-lane
 checkpoint (see [egress](egress.md)), 429 node or calling tenant at
-`max_claims`.
+`max_claims`, or the node draining.
 
 ## GET /v1/checkpoints
 

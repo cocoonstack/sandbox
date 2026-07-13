@@ -41,8 +41,7 @@ const (
 	readHeaderTimeout = 5 * time.Second
 )
 
-// version is stamped via -ldflags at build; devel builds fall back to the
-// VCS revision Go embeds.
+// Stamped via -ldflags at release; devel builds fall back to the VCS revision.
 var version = "devel"
 
 func main() {

@@ -125,8 +125,7 @@ rpc_line=$("$DATA/rpcbench" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" 
 pull_best=$("$DATA/pullbench" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -size "$PULL_MB" -n "$PULL_N" |
   sed -n 's/.* \([0-9.]*\) MiB\/s/\1/p' | sort -n | tail -1)
 
-# Concurrency stages run last so their churn cannot contaminate the RTT and
-# throughput windows above.
+# Concurrency stages run last so their churn cannot contaminate the windows above.
 burst_row="- | - | - | 0"
 burst_wall="-"
 if ((BURST_N > 0)); then
