@@ -151,3 +151,11 @@ Boot contract (cmdline keys consumed by sandbox-init):
 
 `boot=cocoon-overlay` is ignored. Everything cocoon passes today keeps
 working — images built here boot with an unmodified cocoon.
+
+## License
+
+The server stack — sandboxd, silkd, the boot chain, the OS images, and the
+MCP server — is licensed under [AGPL-3.0](LICENSE). The client SDKs
+(`sdk/go`, `sdk/python`, `sdk/openai`, `sdk/langchain`) are licensed under
+Apache-2.0 (see the `LICENSE` file in each directory), so embedding a
+client in a proprietary agent stack carries no copyleft obligation.
