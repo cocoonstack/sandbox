@@ -136,7 +136,13 @@ if ((BURST_N > 0)); then
     claim_ms -template "$TEMPLATE" -size medium -n 1 >"$DATA/burst.$i" &
     pids+=($!)
   done
-  wait "${pids[@]}"
+  # wait with multiple PIDs reports only the LAST one's status: join and
+  # count failures per PID so no failed claim is silently missing a sample.
+  fail=0
+  for pid in "${pids[@]}"; do
+    wait "$pid" || fail=$((fail + 1))
+  done
+  ((fail == 0)) || { echo "burst: $fail/$BURST_N claims failed"; exit 1; }
   burst_wall=$((($(date +%s%N) - burst_start) / 1000000))
   burst_row=$(cat "$DATA"/burst.* | stats)
 fi
