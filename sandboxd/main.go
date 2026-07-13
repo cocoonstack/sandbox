@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
+	"slices"
 	"strconv"
 	"syscall"
 	"time"
@@ -39,6 +41,10 @@ const (
 	readHeaderTimeout = 5 * time.Second
 )
 
+// version is stamped via -ldflags at build; devel builds fall back to the
+// VCS revision Go embeds.
+var version = "devel"
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "ca" {
 		if err := runCA(os.Args[2:]); err != nil {
@@ -48,7 +54,12 @@ func main() {
 		return
 	}
 	configPath := flag.String("config", "/etc/sandboxd/config.json", "node config file")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("sandboxd", versionString())
+		return
+	}
 
 	ctx := context.Background()
 	logLevel := cmp.Or(os.Getenv("SANDBOXD_LOG_LEVEL"), "info")
@@ -56,6 +67,7 @@ func main() {
 	if err := log.SetupLog(ctx, &coretypes.ServerLogConfig{Level: logLevel}, ""); err != nil {
 		logger.Fatalf(ctx, err, "setup log")
 	}
+	logger.Infof(ctx, "sandboxd %s", versionString())
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -193,4 +205,19 @@ func gossipNodeState(ctx context.Context, msh *mesh.Mesh, mgr *pool.Manager) {
 			msh.UpdateSelf(mgr.WarmCounts(), mgr.TemplateHashes())
 		}
 	}
+}
+
+func versionString() string {
+	if version != "devel" {
+		return version
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return version
+	}
+	i := slices.IndexFunc(info.Settings, func(s debug.BuildSetting) bool { return s.Key == "vcs.revision" })
+	if i < 0 || len(info.Settings[i].Value) < 12 {
+		return version
+	}
+	return version + "-" + info.Settings[i].Value[:12]
 }

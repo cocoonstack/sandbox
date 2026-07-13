@@ -1,0 +1,12 @@
+[Unit]
+Description=sandboxd
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/sandboxd -config /etc/sandboxd/config.json
+Restart=on-failure
+Environment=SANDBOXD_LOG_LEVEL=info
+
+[Install]
+WantedBy=multi-user.target
