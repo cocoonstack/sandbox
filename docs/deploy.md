@@ -14,7 +14,11 @@ the cocoon CLI and needs a template image with silkd baked in.
 - A silkd-baked template image, e.g. `ghcr.io/cocoonstack/sandbox/base:24.04`
   (pull via cocoon, or `cocoon image import` a tar)
 
-Build from source: `make sandboxd` produces `dist/sandboxd`.
+Prebuilt static linux/amd64 binaries (`sandboxd`, `sandbox-mcp`, with
+`SHA256SUMS`) ship with every
+[GitHub release](https://github.com/cocoonstack/sandbox/releases). Build
+from source with `make sandboxd` (produces `dist/sandboxd`); either way
+`sandboxd -version` reports what you are running.
 
 ## Configuration
 
@@ -176,7 +180,8 @@ tens of seconds) and keeps each pool topped up with claim-ready clones.
 `GET /v1/info` shows `"golden": true` and `warm` at target when the node is
 ready to serve warm claims.
 
-A minimal systemd unit:
+A minimal systemd unit (shipped as
+[`packaging/sandboxd.service`](https://github.com/cocoonstack/sandbox/blob/main/packaging/sandboxd.service)):
 
 ```ini
 [Unit]

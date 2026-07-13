@@ -5,6 +5,9 @@ BOOT_IMAGE ?= sandbox-boot:$(KERNEL_VERSION)
 SILKD_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' silkd/Cargo.toml | head -1)
 SILKD_IMAGE ?= sandbox-silkd:$(SILKD_VERSION)
 
+# Match only v* (binary releases); sdk-*-v* tags belong to the SDK packages.
+SANDBOXD_VERSION ?= $(shell git describe --tags --match 'v*' --always --dirty)
+
 EXTRACT_IMAGE ?= $(BOOT_IMAGE)
 
 # The parent workspace's go.work excludes these modules; GOWORK=off keeps
@@ -28,7 +31,7 @@ lint: ## Rust fmt --check + clippy -D warnings: boot/init + silkd
 
 sandboxd: ## build dist/sandboxd
 	mkdir -p dist
-	cd sandboxd && GOWORK=off go build -o ../dist/sandboxd .
+	cd sandboxd && GOWORK=off go build -ldflags "-X main.version=$(SANDBOXD_VERSION)" -o ../dist/sandboxd .
 
 go-test: ## go test -race across the Go modules
 	for m in $(GO_MODULES); do (cd $$m && GOWORK=off go test -race ./...) || exit 1; done
