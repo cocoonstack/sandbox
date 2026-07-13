@@ -44,6 +44,9 @@ bridge/CNI NIC. Backends are never user-selected.
 - [Guarded egress](egress.md) — allow-listed, audited outbound access with
   host-side credential injection, on both lanes: no NIC (none) or an
   nftables-locked NIC (egress)
+- [Security model](security.md) — trust boundaries, what a compromised
+  guest can reach, the deployment assumptions the guarantees rest on, and
+  the honest limitations
 - [silkd](silkd.md) — the in-guest daemon: protocol, verb reference, lanes
   and limits
 - [Performance](performance.md) — measured latencies and the environments
