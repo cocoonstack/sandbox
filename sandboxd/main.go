@@ -82,7 +82,7 @@ func main() {
 
 	var placer server.Placer
 	if cfg.Mesh != nil {
-		msh, err := startMesh(cfg)
+		msh, err := startMesh(cfg, mgr)
 		if err != nil {
 			logger.Fatalf(ctx, err, "start mesh")
 		}
@@ -141,7 +141,7 @@ func main() {
 	logger.Info(ctx, "sandboxd stopped; VMs stay alive for the next reconcile")
 }
 
-func startMesh(cfg *config.Config) (*mesh.Mesh, error) {
+func startMesh(cfg *config.Config, mgr *pool.Manager) (*mesh.Mesh, error) {
 	mc := cfg.Mesh
 	mlCfg := memberlist.DefaultLANConfig()
 	host, portStr, err := net.SplitHostPort(mc.Bind)
@@ -167,10 +167,13 @@ func startMesh(cfg *config.Config) (*mesh.Mesh, error) {
 			return nil, fmt.Errorf("mesh cluster key: %w", err)
 		}
 	}
-	msh, err := mesh.New(mlCfg, nodeID, cfg.AdvertiseAddr, key)
+	msh, err := mesh.New(mlCfg, nodeID, cfg.AdvertiseAddr, key, cfg.DataDir)
 	if err != nil {
 		return nil, err
 	}
+	// Publish the cluster-invariant config digest before Join, so the first
+	// gossip a peer sees already carries it.
+	msh.SetSelfDigest(cfg.ClusterDigest(mgr.EgressCAFingerprint()))
 	if err := msh.Join(mc.Join); err != nil {
 		_ = msh.Shutdown()
 		return nil, err

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,33 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
+
+func TestClusterDigest(t *testing.T) {
+	base := &Config{APIToken: "tok", PreviewSecret: "ps", Tenants: []TenantSpec{{Name: "acme", Token: "t1"}}}
+	d := base.ClusterDigest("ca-fp")
+	if base.ClusterDigest("ca-fp") != d {
+		t.Fatal("digest is not stable for identical config")
+	}
+	if (&Config{APIToken: "tok", PreviewSecret: "ps", Tenants: []TenantSpec{{Name: "beta", Token: "t1"}}}).ClusterDigest("ca-fp") == d {
+		t.Error("a tenant-name change is not reflected")
+	}
+	if base.ClusterDigest("other-fp") == d {
+		t.Error("an egress CA root change is not reflected")
+	}
+	// Without a cluster_key gossip may be cleartext, so token material must be
+	// excluded: an api_token change alone must NOT alter the on-wire digest.
+	if (&Config{APIToken: "other", PreviewSecret: "ps", Tenants: base.Tenants}).ClusterDigest("ca-fp") != d {
+		t.Error("api_token leaked into the keyless digest")
+	}
+	// With a cluster_key the digest is an HMAC over token material, so an
+	// api_token change IS covered.
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	keyed := &Config{APIToken: "tok", PreviewSecret: "ps", Tenants: base.Tenants, Mesh: &MeshConfig{ClusterKey: key}}
+	keyedDiff := &Config{APIToken: "other", PreviewSecret: "ps", Tenants: base.Tenants, Mesh: &MeshConfig{ClusterKey: key}}
+	if keyed.ClusterDigest("ca-fp") == keyedDiff.ClusterDigest("ca-fp") {
+		t.Error("with a cluster_key the api_token must be covered by the digest")
+	}
+}
 
 func TestLoadAppliesDefaults(t *testing.T) {
 	path := writeConfig(t, `{"pools":[{"template":"rt:24.04","net":"none","size":"small"}]}`)

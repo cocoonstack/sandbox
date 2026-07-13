@@ -123,10 +123,65 @@ handle `Sandbox.Promote` returns is still owner-bound — `template.New` and
 `template.Delete` dial the owner directly, no gossip involved — and is the
 race-free choice immediately after a promote.
 
+## State ownership
+
+Each kind of state has exactly one source of truth, and a restart rebuilds
+fully from it:
+
+| state | source of truth | survives restart |
+|---|---|---|
+| operator config (`tenants`, `secrets`, egress policies, `bridge`/`network`, `mesh`, `preview_secret`, `egress_ca`) | `config.json` (human/deploy-tool owned) | re-read at boot |
+| API-applied pool targets (`PUT /v1/pools`) | `<data_dir>/pools.json` (machine owned) | yes |
+| claims | the claims journal + `Reconcile` | yes |
+| placement hints (warm counts, template sets) | gossip | rebuilt |
+
+Pools are managed API-first. The first time a node takes `PUT /v1/pools`, it
+writes the applied set to `<data_dir>/pools.json` and from then on **that file
+seeds the pools at boot**, overriding the `pools` section of `config.json` (a
+loud log line notes this; if the two disagree because someone edited
+`config.json` afterward, a second warning names it). The file's presence is the
+ownership marker — delete `pools.json` to return the node to config-owned pools.
+Egress stays config-owned regardless: the API rejects egress specs, so
+`pools.json` never carries them, and egress policies re-merge from `config.json`
+by pool key at boot.
+
+Cluster-wide pool changes are a client-side fan-out, not a gossiped desired
+state (pools are legitimately heterogeneous per node): `Client.SetPoolsCluster`
+PUTs the set to the entry node and every peer and returns a per-node result;
+retrying the failed nodes is the whole protocol, because the apply is an
+idempotent declarative replace. A non-nil error means peer discovery itself
+failed and the fan-out reached only the entry node — an incomplete apply to
+retry, kept distinct from a genuine single-node cluster (nil error). It fits a
+homogeneous cluster — a spec set that names an egress-lane pool is refused on a
+node without an attachment, so nodes that differ in capacity or attachment take
+a per-node `Client.SetPools`.
+
+### Cluster-invariant config
+
+Some config must match on every node or the cluster fails in confusing ways:
+
+| config | what breaks on mismatch |
+|---|---|
+| `api_token`, `tenants` | the SDK replays the authorizing token across a redirect; a peer missing that tenant/token answers 401 |
+| `preview_secret` | a preview URL signed on one node fails verification on another |
+| `mesh.cluster_key` | nodes cannot join / decrypt gossip at all |
+| `egress_ca` cluster root | a guest checkpointed/redirected across nodes trusts the root; a divergent root fails interception |
+
+Each node gossips a digest of these (HMAC-keyed by `cluster_key` when set;
+otherwise a token-free digest of tenant names + the CA root, so nothing
+brute-forceable rides cleartext gossip). A mismatch logs a warning at the moment
+the divergent node appears — not at the first unlucky redirect — and raises the
+`sandboxd_config_digest_mismatch` gauge. It is warn-only: a rolling credential
+rotation is a legitimate transient mismatch, so a divergence never partitions
+the mesh.
+
 ## Cluster checklist
 
 - memberlist port (e.g. 7946) open node-to-node, TCP **and** UDP
 - `advertise_addr` set to a routable address on every node (never loopback,
   never a wildcard)
-- same `api_token` and `tenants` set everywhere
+- same `api_token`, `tenants`, `preview_secret`, and `egress_ca` root everywhere
+  (a mismatch warns and shows in `sandboxd_config_digest_mismatch`)
 - `cluster_key` set if the gossip network is not otherwise trusted
+- pool changes via `Client.SetPoolsCluster` (or per-node `SetPools`); the applied
+  set persists to `pools.json` and survives restart

@@ -2,9 +2,15 @@
 package config
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
@@ -202,6 +208,38 @@ type Config struct {
 // HasEgress reports whether the node can attach egress-lane VMs.
 func (c *Config) HasEgress() bool {
 	return c.Bridge != "" || c.Network != ""
+}
+
+// ClusterDigest fingerprints the config every mesh node must share, so a
+// divergent node is caught at join instead of at a later 401 or failed
+// cross-node interception: api_token, the tenant name→token set, preview_secret,
+// and the egress cluster root. With a cluster_key set (gossip is encrypted) it
+// HMACs the full set including token material; without one gossip may be
+// cleartext, so it covers only non-secret identity (tenant names + CA root),
+// keeping a weak token off the wire.
+func (c *Config) ClusterDigest(caFingerprint string) string {
+	names := make([]string, len(c.Tenants))
+	for i, t := range c.Tenants {
+		names[i] = t.Name
+	}
+	slices.Sort(names)
+	if c.Mesh != nil && c.Mesh.ClusterKey != "" {
+		if key, err := base64.StdEncoding.DecodeString(c.Mesh.ClusterKey); err == nil {
+			type auth struct{ Name, Token string }
+			tenants := make([]auth, len(c.Tenants))
+			for i, t := range c.Tenants {
+				tenants[i] = auth{t.Name, t.Token}
+			}
+			slices.SortFunc(tenants, func(a, b auth) int { return strings.Compare(a.Name, b.Name) })
+			raw, _ := json.Marshal([]any{c.APIToken, c.PreviewSecret, caFingerprint, tenants})
+			mac := hmac.New(sha256.New, key)
+			mac.Write(raw)
+			return hex.EncodeToString(mac.Sum(nil))
+		}
+	}
+	raw, _ := json.Marshal([]any{caFingerprint, names})
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 // guardsEgressLane: any tenant policy counts (claims mint egress keys without a
