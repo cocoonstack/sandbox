@@ -127,6 +127,32 @@ func TestLoadAcceptsNoneLanePolicyOnCNI(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsPoolIntercept(t *testing.T) {
+	path := writeConfig(t, `{"egress_ca":{"root_cert":"/x/root.crt","intermediate_cert":"/x/n.crt","intermediate_key":"/x/n.key"},
+		"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"api.github.com","intercept":true}]}}]}`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if pol := cfg.Pools[0].Egress; pol == nil || len(pol.Allow) != 1 || !pol.Allow[0].Intercept {
+		t.Errorf("intercept rule not parsed: %+v", cfg.Pools[0].Egress)
+	}
+}
+
+func TestLoadRejectsInterceptWithoutCA(t *testing.T) {
+	path := writeConfig(t, `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"x","intercept":true}]}}]}`)
+	if _, err := Load(path); err == nil {
+		t.Error("Load accepted an intercept pool without egress_ca; want rejection")
+	}
+}
+
+func TestLoadRejectsTenantIntercept(t *testing.T) {
+	path := writeConfig(t, `{"tenants":[{"name":"acme","token":"t","egress":{"allow":[{"host":"x","intercept":true}]}}],"pools":[]}`)
+	if _, err := Load(path); err == nil {
+		t.Error("Load accepted an intercept rule on a tenant policy; want rejection")
+	}
+}
+
 func TestHasEgress(t *testing.T) {
 	if (&Config{}).HasEgress() {
 		t.Error("no attachment must mean no egress")

@@ -52,6 +52,8 @@ const (
 	hibernatePrefix = "sbx-hib-"
 	forkPrefix      = "sbx-fork-"
 	vmStateRunning  = "running"
+
+	caSidecarSuffix = ".cafp"
 )
 
 var (
@@ -86,6 +88,7 @@ type Engine interface {
 	List(ctx context.Context, filters ...string) ([]types.VMRecord, error)
 	Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error
 	DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error)
+	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error
 }
 
 // SandboxSummary is the ops view of one live claim — no tokens.
@@ -214,8 +217,11 @@ type Manager struct {
 
 	// egressSecrets resolves a rule's secret name to the injected header, read-only
 	// after startup. guardedEgress arms the proxy (some policy exists); lockEgress
-	// nft-locks every egress-lane NIC default-deny (a bridge lane exists).
+	// nft-locks every egress-lane NIC default-deny (a bridge lane exists). egressCA
+	// signs HTTPS-interception leaves and is baked into interception pools' goldens;
+	// nil unless a pool rule sets intercept.
 	egressSecrets *egress.SecretStore
+	egressCA      *egress.CA
 	guardedEgress bool
 	lockEgress    bool
 	// dial and sweep are fields as test seams: the SSRF guard blocks loopback
@@ -323,10 +329,33 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 			m.guardedEgress = true
 		}
 	}
+	if slices.ContainsFunc(cfg.Pools, func(s config.PoolSpec) bool { return s.Egress.Intercepts() }) {
+		ca, err := loadEgressCA(cfg.EgressCA)
+		if err != nil {
+			return nil, fmt.Errorf("load egress ca: %w", err)
+		}
+		m.egressCA = ca
+	}
 	if m.archiveEnabled && m.ckptTTL == 0 {
 		log.WithFunc("pool.NewManager").Warn(ctx, "archive enabled with checkpoint_ttl_hours=0: a checkpoint whose delete fails is not reclaimed")
 	}
 	return m, nil
+}
+
+func loadEgressCA(cfg *config.EgressCAConfig) (*egress.CA, error) {
+	root, err := os.ReadFile(cfg.RootCert) //nolint:gosec // operator-configured ca path
+	if err != nil {
+		return nil, fmt.Errorf("read root cert: %w", err)
+	}
+	interCert, err := os.ReadFile(cfg.IntermediateCert) //nolint:gosec // operator-configured ca path
+	if err != nil {
+		return nil, fmt.Errorf("read intermediate cert: %w", err)
+	}
+	interKey, err := os.ReadFile(cfg.IntermediateKey) //nolint:gosec // operator-configured ca path
+	if err != nil {
+		return nil, fmt.Errorf("read intermediate key: %w", err)
+	}
+	return egress.LoadCA(root, interCert, interKey)
 }
 
 // Run drives the refill and reap loops until ctx is canceled.

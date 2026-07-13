@@ -540,6 +540,8 @@ type fakeEngine struct {
 
 	hibernates, restores, snapRemoves []string
 	snapSaves, exports, snapshots     []string
+	caInstalls                        []string // vsock sockets InstallCACert was called on
+	installCAErr                      error
 	stopped                           map[string]bool
 	vsockLateN                        int // List calls that report no socket yet
 
@@ -777,6 +779,13 @@ func (f *fakeEngine) Probe(_ context.Context, _ string, timeout time.Duration) e
 
 func (f *fakeEngine) DialGuestPort(context.Context, string, uint16) (net.Conn, error) {
 	return nil, fmt.Errorf("fakeEngine has no guest port")
+}
+
+func (f *fakeEngine) InstallCACert(_ context.Context, vsockSocket string, _ []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.caInstalls = append(f.caInstalls, vsockSocket)
+	return f.installCAErr
 }
 
 func (f *fakeEngine) cloneCount() int {

@@ -2,13 +2,16 @@ package egress
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"maps"
 	"net"
 	"net/http"
 	"net/textproto"
+	"slices"
 	"strings"
+	"sync"
 )
 
 // hopHeaders are hop-by-hop and proxy-scoped headers this hop owns: stripped
@@ -50,25 +53,48 @@ type Proxy struct {
 	tenant  string
 	policy  Evaluator
 	secrets Secrets
+	ca      *CA
 	audit   func(Event)
 	dial    DialFunc
 	tr      *http.Transport
+	mitmTr  *http.Transport
+
+	// leaves caches this sandbox's interception leaves; per-proxy, so one
+	// sandbox's host churn never evicts or blocks another's.
+	leafMu sync.Mutex
+	leaves map[string]*tls.Certificate
+
+	// conns tracks hijacked tunnels, which http.Server.Close no longer reaches.
+	connMu sync.Mutex
+	conns  map[net.Conn]struct{}
+	closed bool
 }
 
-// New builds a Proxy for one sandbox. secrets and audit may be nil (no
-// injection, no audit). dial must be set.
-func New(sandbox, tenant string, policy Evaluator, secrets Secrets, dial DialFunc, audit func(Event)) *Proxy {
-	return &Proxy{
+// New builds a Proxy for one sandbox. secrets, ca, and audit may be nil (no
+// injection, no HTTPS interception, no audit). dial must be set.
+func New(sandbox, tenant string, policy Evaluator, secrets Secrets, ca *CA, dial DialFunc, audit func(Event)) *Proxy {
+	p := &Proxy{
 		sandbox: sandbox,
 		tenant:  tenant,
 		policy:  policy,
 		secrets: secrets,
+		ca:      ca,
 		audit:   audit,
 		dial:    dial,
 		// The stdlib default of 2 idle conns per host re-dials bursty
 		// same-host plaintext traffic.
-		tr: &http.Transport{DialContext: dial, MaxIdleConnsPerHost: 8},
+		tr:    &http.Transport{DialContext: dial, MaxIdleConnsPerHost: 8},
+		conns: map[net.Conn]struct{}{},
 	}
+	if ca != nil {
+		p.mitmTr = &http.Transport{
+			DialContext:         dial,
+			TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
+			MaxIdleConnsPerHost: 8,
+		}
+		p.leaves = map[string]*tls.Certificate{}
+	}
+	return p
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -79,12 +105,50 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.serveForward(w, r)
 }
 
-// serveConnect gates an HTTPS/opaque tunnel by host only — the payload is
-// end-to-end TLS the proxy never terminates, so a rule's Secret cannot ride
-// here (credential injection lives on the plaintext forward path). Allow
-// hijacks and splices to the origin; deny answers a typed 403.
+// Close ends every hijacked tunnel, which outlives http.Server.Close, so a
+// released claim's guest cannot keep an authorized session. Idempotent.
+func (p *Proxy) Close() {
+	p.connMu.Lock()
+	conns := slices.Collect(maps.Keys(p.conns))
+	clear(p.conns)
+	p.closed = true
+	p.connMu.Unlock()
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
+}
+
+// track registers conn for Close; false means already closed, conn closed instead.
+func (p *Proxy) track(conn net.Conn) bool {
+	p.connMu.Lock()
+	defer p.connMu.Unlock()
+	if p.closed {
+		_ = conn.Close()
+		return false
+	}
+	p.conns[conn] = struct{}{}
+	return true
+}
+
+func (p *Proxy) untrack(conn net.Conn) {
+	p.connMu.Lock()
+	delete(p.conns, conn)
+	p.connMu.Unlock()
+}
+
+// serveConnect gates an HTTPS/opaque tunnel by host. A plain allow hijacks and
+// splices the end-to-end TLS to the origin untouched. A matched rule with
+// Intercept instead terminates the TLS (interception, see intercept.go) so the
+// request is filtered by method and the secret injected; deny answers a typed 403.
 func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	host := hostOnly(r.Host)
+	// Host-gate the interception decision: the tunnel's CONNECT verb is not the
+	// request method, so a matched intercept rule enforces its methods on the
+	// decrypted inner request. The plain splice keeps the host+method gate.
+	if rule, d := p.policy.EvalHost(host); d == DecisionAllow && rule.Intercept && p.ca != nil {
+		p.serveIntercept(w, r, host)
+		return
+	}
 	_, decision := p.policy.Eval(host, r.Method)
 	p.record(Event{Method: r.Method, Host: host, Decision: decision})
 	if decision == DecisionDeny {
@@ -103,6 +167,10 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = client.Close() }()
+	if !p.track(client) {
+		return
+	}
+	defer p.untrack(client)
 	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}

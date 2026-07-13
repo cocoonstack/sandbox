@@ -108,13 +108,51 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 	if err != nil {
 		return err
 	}
-	if _, err := m.probeReady(ctx, name, rec.VsockSocket, coldProbeTimeout); err != nil {
+	sock, err := m.probeReady(ctx, name, rec.VsockSocket, coldProbeTimeout)
+	if err != nil {
 		return err
+	}
+	caBaked := m.poolIntercepts(key)
+	if caBaked {
+		if err := m.eng.InstallCACert(ctx, sock, m.egressCA.CertPEM()); err != nil {
+			return fmt.Errorf("install egress ca: %w", err)
+		}
 	}
 	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
 		return err
 	}
-	return m.exportGolden(ctx, snap, final)
+	if err := m.exportGolden(ctx, snap, final); err != nil {
+		return err
+	}
+	return m.writeGoldenCASidecar(final, caBaked)
+}
+
+// writeGoldenCASidecar records (or clears) the baked-CA fingerprint, so a
+// rotated CA or flipped intercept flag forces a rebuild on restart.
+func (m *Manager) writeGoldenCASidecar(final string, caBaked bool) error {
+	path := final + caSidecarSuffix
+	if !caBaked {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("clear ca sidecar: %w", err)
+		}
+		return nil
+	}
+	if err := os.WriteFile(path, []byte(m.egressCA.Fingerprint()), 0o644); err != nil { //nolint:gosec // public fingerprint
+		return fmt.Errorf("write ca sidecar: %w", err)
+	}
+	return nil
+}
+
+// goldenCAMatches reports whether a golden's baked-CA state fits the pool: a
+// CA-baked one must carry the current fingerprint, a plain one none. The plain
+// case only stats (no read) — it runs under m.mu on the live SetPools path.
+func (m *Manager) goldenCAMatches(final string, caNeeded bool) bool {
+	if !caNeeded {
+		_, err := os.Stat(final + caSidecarSuffix)
+		return errors.Is(err, os.ErrNotExist)
+	}
+	fp, err := os.ReadFile(final + caSidecarSuffix) //nolint:gosec // node-local golden path
+	return err == nil && m.egressCA != nil && string(fp) == m.egressCA.Fingerprint()
 }
 
 // exportGolden exports snap into final through a unique sibling *.tmp dir:
@@ -171,9 +209,21 @@ func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir
 // cold-boot the template otherwise.
 func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden string) (*types.Sandbox, error) {
 	if golden == "" {
-		return m.provisionVM(ctx, key, coldProbeTimeout, func(name string) (types.VMRecord, error) {
+		sb, err := m.provisionVM(ctx, key, coldProbeTimeout, func(name string) (types.VMRecord, error) {
 			return m.eng.RunCold(ctx, name, key)
 		})
+		if err != nil {
+			return nil, err
+		}
+		// A pre-golden cold claim must trust the root too, or its intercepted
+		// hosts fail TLS for the sandbox's whole life.
+		if m.poolIntercepts(key) {
+			if err := m.eng.InstallCACert(ctx, sb.VsockSocket, m.egressCA.CertPEM()); err != nil {
+				m.destroy(ctx, sb.VMName)
+				return nil, fmt.Errorf("install egress ca: %w", err)
+			}
+		}
+		return sb, nil
 	}
 	return m.provisionVM(ctx, key, claimProbeTimeout, func(name string) (types.VMRecord, error) {
 		return m.eng.Clone(ctx, golden, name, key)

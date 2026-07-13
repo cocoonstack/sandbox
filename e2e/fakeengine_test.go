@@ -103,6 +103,8 @@ func (f *fakeEngine) DialGuestPort(context.Context, string, uint16) (net.Conn, e
 	return nil, fmt.Errorf("fakeEngine has no guest port")
 }
 
+func (f *fakeEngine) InstallCACert(context.Context, string, []byte) error { return nil }
+
 func (f *fakeEngine) create(name string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

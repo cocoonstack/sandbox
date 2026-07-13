@@ -469,11 +469,38 @@ func egressManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Man
 	t.Helper()
 	t.Setenv("GH_TOKEN", "s3cr3t")
 	secrets := testSecrets(t, egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"})
-	m, err := NewManager(t.Context(), &config.Config{DataDir: t.TempDir(), Bridge: "sbxbr0", Pools: pools}, eng, secrets)
+	cfg := &config.Config{DataDir: t.TempDir(), Bridge: "sbxbr0", EgressCA: writeTestEgressCA(t), Pools: pools}
+	m, err := NewManager(t.Context(), cfg, eng, secrets)
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}
 	return m
+}
+
+// writeTestEgressCA provisions a cluster root + this node's intermediate to temp
+// files, as `sandboxd ca` would, and returns the config pointing at them.
+func writeTestEgressCA(t *testing.T) *config.EgressCAConfig {
+	t.Helper()
+	rootCert, rootKey, err := egress.GenerateRoot("test cluster ca")
+	if err != nil {
+		t.Fatalf("generate root: %v", err)
+	}
+	interCert, interKey, err := egress.IssueIntermediate(rootCert, rootKey, "node-test")
+	if err != nil {
+		t.Fatalf("issue intermediate: %v", err)
+	}
+	dir := t.TempDir()
+	ca := &config.EgressCAConfig{
+		RootCert:         filepath.Join(dir, "root.crt"),
+		IntermediateCert: filepath.Join(dir, "node.crt"),
+		IntermediateKey:  filepath.Join(dir, "node.key"),
+	}
+	for path, data := range map[string][]byte{ca.RootCert: rootCert, ca.IntermediateCert: interCert, ca.IntermediateKey: interKey} {
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	return ca
 }
 
 func mustHostname(t *testing.T, raw string) string {

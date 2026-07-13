@@ -11,6 +11,7 @@ ADDR=${ADDR:-127.0.0.1:7779}
 TOKEN=${TOKEN:-e2e}
 NET=${NET:-none}
 BRIDGE=${BRIDGE:-sbxbr0}
+ECHO=${ECHO:-postman-echo.com}
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 export EGRESS_PROBE_TOKEN=${EGRESS_PROBE_TOKEN:-tok-$(date +%s)}
 
@@ -68,7 +69,7 @@ cat >"$DATA/config.json" <<EOF
   ],
   "pools": [
     {"template": "$TEMPLATE", "net": "$NET", "size": "small", "warm": 1,
-     "egress": {"allow": [{"host": "$REACH", "secret": "probe"}]}}
+     "egress": {"allow": [{"host": "$ECHO", "secret": "probe"}]}}
   ]
 }
 EOF
@@ -85,5 +86,5 @@ for _ in $(seq 1 120); do
 done
 
 echo "== egresssmoke"
-"$DATA/egresssmoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -secret "$EGRESS_PROBE_TOKEN" -net "$NET" -reach "$REACH" -nicaddr "$NICADDR"
+"$DATA/egresssmoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -secret "$EGRESS_PROBE_TOKEN" -net "$NET" -reach "$REACH" -nicaddr "$NICADDR" -echo "$ECHO"
 echo "PASS"

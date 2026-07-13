@@ -39,7 +39,7 @@ func TestForwardAllowInjectsSecretAndOverwritesGuestHeader(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "api.internal", Secret: "gh"}}}
 	secrets := fakeSecrets{"gh": {"Authorization", "Bearer SECRET"}}
 	events := make(chan Event, 4)
-	p := New("sb_1", "acme", policy, secrets, fixedDial(upstream.Listener.Addr().String()), func(ev Event) { events <- ev })
+	p := New("sb_1", "acme", policy, secrets, nil, fixedDial(upstream.Listener.Addr().String()), func(ev Event) { events <- ev })
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -82,7 +82,7 @@ func TestForwardStripsHopHeaders(t *testing.T) {
 	defer upstream.Close()
 
 	policy := Policy{Allow: []Rule{{Host: "api.internal"}}}
-	p := New("sb_1", "", policy, nil, fixedDial(upstream.Listener.Addr().String()), nil)
+	p := New("sb_1", "", policy, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -109,7 +109,7 @@ func TestForwardStripsHopHeaders(t *testing.T) {
 func TestForwardDeniedIsTyped(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "api.internal"}}}
 	events := make(chan Event, 4)
-	p := New("sb_1", "acme", policy, nil, fixedDial("127.0.0.1:1"), func(ev Event) { events <- ev })
+	p := New("sb_1", "acme", policy, nil, nil, fixedDial("127.0.0.1:1"), func(ev Event) { events <- ev })
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -130,7 +130,7 @@ func TestConnectAllowTunnels(t *testing.T) {
 	echo := echoServer(t)
 	policy := Policy{Allow: []Rule{{Host: "echo.internal"}}}
 	events := make(chan Event, 4)
-	p := New("sb_1", "acme", policy, nil, fixedDial(echo), func(ev Event) { events <- ev })
+	p := New("sb_1", "acme", policy, nil, nil, fixedDial(echo), func(ev Event) { events <- ev })
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -155,9 +155,37 @@ func TestConnectAllowTunnels(t *testing.T) {
 	}
 }
 
+func TestCloseEndsSplicedTunnel(t *testing.T) {
+	echo := echoServer(t)
+	p := New("sb_1", "", Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, nil, fixedDial(echo), nil)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	conn := dialConnect(t, front.Listener.Addr().String(), "echo.internal:443")
+	defer func() { _ = conn.Close() }()
+	br := bufio.NewReader(conn)
+	if status := readStatus(t, br); status != "HTTP/1.1 200 Connection Established" {
+		t.Fatalf("CONNECT status = %q, want 200 Connection Established", status)
+	}
+	if _, err := io.WriteString(conn, "ping"); err != nil {
+		t.Fatalf("write through tunnel: %v", err)
+	}
+	got := make([]byte, 4)
+	if _, err := io.ReadFull(br, got); err != nil {
+		t.Fatalf("read echo: %v", err)
+	}
+
+	p.Close()
+
+	_, _ = io.WriteString(conn, "ping")
+	if _, err := io.ReadFull(br, got); err == nil {
+		t.Error("established spliced tunnel survived proxy Close")
+	}
+}
+
 func TestConnectDeniedIsTyped(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "echo.internal"}}}
-	p := New("sb_1", "acme", policy, nil, fixedDial("127.0.0.1:1"), nil)
+	p := New("sb_1", "acme", policy, nil, nil, fixedDial("127.0.0.1:1"), nil)
 	front := httptest.NewServer(p)
 	defer front.Close()
 

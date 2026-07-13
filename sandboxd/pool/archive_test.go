@@ -388,16 +388,19 @@ func TestArchiveRetentionPurge(t *testing.T) {
 
 	m.reapOnce(t.Context())
 	waitFor(t, func() bool { return archivedCount(m) == 0 })
-	waitFor(t, func() bool { return !ckExists(t, m, ck) })
+	// archiveDeletes is the purge goroutine's last side effect, sequenced after
+	// the checkpoint delete; waiting on it makes both observable (a bare read
+	// races the async purge, flaking under -race).
+	waitFor(t, func() bool { return m.Counters().ArchiveDeletes > 0 })
+	if ckExists(t, m, ck) {
+		t.Error("purge did not delete the archived checkpoint")
+	}
 
 	m.mu.Lock()
 	live := m.tenantLive["acme"]
 	m.mu.Unlock()
 	if live != 0 {
 		t.Errorf("tenant acme has %d live after purge, want 0", live)
-	}
-	if got := m.Counters().ArchiveDeletes; got == 0 {
-		t.Error("purge did not record an archive_delete")
 	}
 }
 

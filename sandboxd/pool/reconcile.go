@@ -77,7 +77,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	saveErr := m.store.save(m.claimed)
 	for _, p := range m.pools {
 		dir := filepath.Join(m.goldensDir(), p.key.Hash())
-		if dirExists(dir) {
+		if dirExists(dir) && m.goldenCAMatches(dir, m.poolEgress[p.key].Intercepts()) {
 			p.goldenDir = dir
 		}
 	}

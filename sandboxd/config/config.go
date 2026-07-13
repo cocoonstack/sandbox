@@ -71,6 +71,20 @@ type StoreConfig struct {
 	S3   *s3.Config `json:"s3,omitempty"`
 }
 
+// EgressCAConfig provisions HTTPS interception: RootCert is the cluster root
+// baked into guests; IntermediateCert/Key are this node's signing CA. The root
+// private key never appears here.
+type EgressCAConfig struct {
+	RootCert         string `json:"root_cert"`
+	IntermediateCert string `json:"intermediate_cert"`
+	IntermediateKey  string `json:"intermediate_key"`
+}
+
+// Set reports whether every path is provided.
+func (e *EgressCAConfig) Set() bool {
+	return e != nil && e.RootCert != "" && e.IntermediateCert != "" && e.IntermediateKey != ""
+}
+
 // TenantSpec declares one tenant: its bearer token and its live-claim quota.
 // APIToken stays the operator (root) credential with full access; tenant
 // tokens reach the resource-creating verbs only, and everything a tenant
@@ -178,6 +192,10 @@ type Config struct {
 	// placement; nil is a single node (mesh of one, no gossip).
 	Mesh *MeshConfig `json:"mesh,omitempty"`
 
+	// EgressCA provisions HTTPS interception; required when any pool has an
+	// intercept rule.
+	EgressCA *EgressCAConfig `json:"egress_ca,omitempty"`
+
 	Pools []PoolSpec `json:"pools"`
 }
 
@@ -264,6 +282,10 @@ func (c *Config) validate() error {
 	if err != nil {
 		return err
 	}
+	return c.validateEgress(secrets)
+}
+
+func (c *Config) validateEgress(secrets map[string]struct{}) error {
 	for _, p := range c.Pools {
 		if err := p.Validate(); err != nil {
 			return fmt.Errorf("pool %q: %w", p.Template, err)
@@ -277,10 +299,16 @@ func (c *Config) validate() error {
 		if err := validatePolicy(p.Egress, secrets); err != nil {
 			return fmt.Errorf("pool %q egress: %w", p.Template, err)
 		}
+		if p.Egress.Intercepts() && !c.EgressCA.Set() {
+			return fmt.Errorf("pool %q: intercept needs egress_ca (root_cert + this node's intermediate_cert/intermediate_key)", p.Template)
+		}
 	}
 	for _, tn := range c.Tenants {
 		if err := validatePolicy(tn.Egress, secrets); err != nil {
 			return fmt.Errorf("tenant %q egress: %w", tn.Name, err)
+		}
+		if tn.Egress.Intercepts() {
+			return fmt.Errorf("tenant %q egress: intercept may only be set on a pool rule", tn.Name)
 		}
 	}
 	return nil
