@@ -155,6 +155,9 @@ type Manager struct {
 	maxFork int
 	store   *claimStore
 
+	poolStore      *poolStore
+	configSeedHash string // config pools' hash, to warn when a file edit is overridden
+
 	// idleDefault is the idle-hibernate threshold for unpooled keys; pooled
 	// keys carry theirs on the pool struct. Zero means disabled.
 	idleDefault time.Duration
@@ -251,6 +254,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		lockEgress:      cfg.Bridge != "",
 		maxFork:         maxFork,
 		store:           newClaimStore(cfg.DataDir),
+		poolStore:       newPoolStore(cfg.DataDir),
 		pools:           make(map[types.PoolKey]*pool, len(cfg.Pools)),
 		claimed:         map[string]*types.Sandbox{},
 		tenantLive:      map[string]int{},
@@ -336,10 +340,23 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		}
 		m.egressCA = ca
 	}
+	m.configSeedHash = poolSeedHash(cfg.Pools)
+	if err := m.adoptPersistedPools(ctx); err != nil {
+		return nil, err
+	}
 	if m.archiveEnabled && m.ckptTTL == 0 {
 		log.WithFunc("pool.NewManager").Warn(ctx, "archive enabled with checkpoint_ttl_hours=0: a checkpoint whose delete fails is not reclaimed")
 	}
 	return m, nil
+}
+
+// EgressCAFingerprint is the egress cluster root's fingerprint, or "" when the
+// node does no interception.
+func (m *Manager) EgressCAFingerprint() string {
+	if m.egressCA == nil {
+		return ""
+	}
+	return m.egressCA.Fingerprint()
 }
 
 func loadEgressCA(cfg *config.EgressCAConfig) (*egress.CA, error) {

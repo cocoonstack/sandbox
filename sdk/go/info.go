@@ -44,17 +44,22 @@ func (c *Client) Info(ctx context.Context) (*NodeInfo, error) {
 	return &info, nil
 }
 
-// peers fetches the cluster's node addresses, best-effort. It reads the
-// tenant-accessible /v1/peers, not /v1/info (operator-only), so Lookup
-// works under a tenant token.
+// peers fetches the cluster's node addresses, best-effort (nil on failure).
 func (c *Client) peers(ctx context.Context) []string {
+	addrs, _ := c.peersOrErr(ctx)
+	return addrs
+}
+
+// peersOrErr fetches the node addresses, surfacing a discovery failure. It reads
+// /v1/peers (tenant-accessible), so it works under a tenant token.
+func (c *Client) peersOrErr(ctx context.Context) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, peersTimeout)
 	defer cancel()
 	reply, err := doJSON[struct {
 		Peers []string `json:"peers"`
 	}](ctx, c, http.MethodGet, c.addr, "/v1/peers", nil, c.apiToken, "peers")
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return reply.Peers
+	return reply.Peers, nil
 }

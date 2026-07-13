@@ -90,6 +90,7 @@ type Placer interface {
 	Candidates(keyHash string) []string
 	TemplateOwners(keyHash string) []string
 	PeerAddrs() []string
+	ConfigMismatches() int
 }
 
 // InfoResponse is the wire reply of GET /v1/info. Peers lists the other nodes'

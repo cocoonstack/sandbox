@@ -7,8 +7,56 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 )
+
+// WriteFileSync durably replaces path with data (temp + fsync + rename + dir
+// fsync) so the rename survives a crash. The temp name is per-call unique, so
+// concurrent writers to the same path can't race a shared temp into a lost rename.
+func WriteFileSync(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	tmp := f.Name()
+	renamed := false
+	defer func() {
+		if !renamed {
+			_ = os.Remove(tmp) //nolint:gosec // our own just-created temp under a caller-owned data-dir path
+		}
+	}()
+	if err = f.Chmod(perm); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("chmod %s: %w", tmp, err)
+	}
+	if _, err = f.Write(data); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err = f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("sync %s: %w", tmp, err)
+	}
+	if err = f.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", tmp, err)
+	}
+	if err = os.Rename(tmp, path); err != nil { //nolint:gosec // our own temp, caller-owned data-dir path
+		return fmt.Errorf("rename %s: %w", path, err)
+	}
+	renamed = true
+	d, err := os.Open(dir) //nolint:gosec // caller-owned data-dir path
+	if err != nil {
+		return fmt.Errorf("open dir: %w", err)
+	}
+	defer func() { _ = d.Close() }()
+	if err = d.Sync(); err != nil {
+		return fmt.Errorf("sync dir: %w", err)
+	}
+	return nil
+}
 
 // DecodeStrictJSON decodes one JSON value into v, refusing unknown fields,
 // duplicated keys, and trailing data — for hand-edited operator input, where

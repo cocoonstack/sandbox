@@ -66,7 +66,7 @@ sandboxd reads one JSON file (`-config`, default
 | `archive_after_seconds` | 0 (off) | tier below hibernation: a hibernated claim idle this long is checkpointed to the store and its local VM dropped, freeing the node entirely; the next call restores it transparently (a checkpoint restore's latency). Requires `idle_hibernate_seconds > 0` and must exceed it. Node-wide for unpooled keys; per-pool overrides for that pool |
 | `archive_delete_after_seconds` | 0 (keep) | purge an archived claim's store checkpoint this long after it was archived, reclaiming storage; the claim is then gone for good. Same node-wide/per-pool split |
 | `mesh` | unset | join a cluster ([Clusters](cluster.md)); unset = single node |
-| `pools[]` | — | warm pools. `warm` defaults to 4; `net` is `none` or `egress`; `size` is a tier, below. Retune online without a restart via [`PUT /v1/pools`](sandboxd-api.md#put-v1pools) — omitted pools drain |
+| `pools[]` | — | warm pools. `warm` defaults to 4; `net` is `none` or `egress`; `size` is a tier, below. Retune online without a restart via [`PUT /v1/pools`](sandboxd-api.md#put-v1pools) — omitted pools drain. This is the **first-boot seed**: once a node takes a `PUT /v1/pools`, the applied set persists to `<data_dir>/pools.json` and overrides this section on every later boot (a startup log notes it); delete `pools.json` to return to config-owned pools. Egress stays config-owned either way. See [state ownership](cluster.md#state-ownership) |
 
 Size tiers (free-form CPU/memory is deliberately not accepted — it would
 fragment the warm pools):

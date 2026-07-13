@@ -990,3 +990,4 @@ type fakePlacer struct {
 func (f *fakePlacer) Candidates(string) []string     { return f.addrs }
 func (f *fakePlacer) TemplateOwners(string) []string { return f.owners }
 func (f *fakePlacer) PeerAddrs() []string            { return f.addrs }
+func (f *fakePlacer) ConfigMismatches() int          { return 0 }

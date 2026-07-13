@@ -7,15 +7,18 @@
 package mesh
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"math/rand/v2"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
 
 	"github.com/hashicorp/memberlist"
+	"github.com/projecteru2/core/log"
 )
 
 // leaveTimeout bounds the graceful-leave broadcast on shutdown so a wedged
@@ -30,32 +33,43 @@ type NodeState struct {
 	Epoch     uint64         `json:"epoch"`
 	Pools     map[string]int `json:"pools"`               // PoolKey hash → warm count
 	Templates []string       `json:"templates,omitempty"` // promoted-template key hashes on disk
+	Digest    string         `json:"digest,omitempty"`    // cluster-invariant config digest
 }
 
 // Mesh is the node's view of the cluster and its own gossiped state.
 type Mesh struct {
-	ml *memberlist.Memberlist
+	ml        *memberlist.Memberlist
+	epochPath string
 
 	mu   sync.Mutex
 	self NodeState
 	view map[string]NodeState // node_id → latest known state (includes self)
+
+	epochMu      sync.Mutex
+	epochWritten uint64 // highest epoch on disk; guarded by epochMu
 }
 
 // New starts a mesh member listening per cfg. selfAddr is the data-plane
 // address peers should dial for a redirect; secretKey (16/24/32 bytes) enables
-// gossip encryption when non-empty.
-func New(cfg *memberlist.Config, nodeID, selfAddr string, secretKey []byte) (*Mesh, error) {
+// gossip encryption when non-empty; dataDir holds the persisted epoch.
+func New(cfg *memberlist.Config, nodeID, selfAddr string, secretKey []byte, dataDir string) (*Mesh, error) {
+	epochPath := filepath.Join(dataDir, "mesh-epoch")
+	// Seed strictly above the persisted floor (the last epoch peers saw):
+	// seeding at it ties their stale copy and merge's `>` rejects the restart's
+	// fresh state. loadEpoch caps the floor so the +1 cannot wrap.
+	epoch := max(uint64(time.Now().UnixNano()), loadEpoch(epochPath)+1) //nolint:gosec // UnixNano is positive for current times
 	m := &Mesh{
+		epochPath: epochPath,
 		self: NodeState{
 			NodeID: nodeID,
 			Addr:   selfAddr,
-			// Seed the epoch from wall-clock so a restarted node's fresh counts
-			// aren't rejected by peers still holding its pre-restart (higher)
-			// epoch; Epoch++ keeps intra-process monotonicity above that base.
-			Epoch: uint64(time.Now().UnixNano()), //nolint:gosec // UnixNano is positive for current times
-			Pools: map[string]int{},
+			Epoch:  epoch,
+			Pools:  map[string]int{},
 		},
 		view: map[string]NodeState{},
+	}
+	if err := m.persistEpoch(epoch); err != nil {
+		return nil, fmt.Errorf("persist mesh epoch: %w", err)
 	}
 	m.view[nodeID] = m.self
 
@@ -90,14 +104,53 @@ func (m *Mesh) Join(seeds []string) error {
 // every second for nothing.
 func (m *Mesh) UpdateSelf(pools map[string]int, templates []string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if maps.Equal(m.self.Pools, pools) && slices.Equal(m.self.Templates, templates) {
+		m.mu.Unlock()
 		return
 	}
-	m.self.Epoch++
-	m.self.Pools = pools
-	m.self.Templates = templates
+	epoch := m.self.Epoch + 1
+	m.mu.Unlock()
+	// Persist the candidate before publishing it: memberlist gossips self the
+	// instant it enters the view, so a crash before the write would strand peers
+	// on an epoch a backwards-clock restart can't beat. Hold old state on failure.
+	if err := m.persistEpoch(epoch); err != nil {
+		log.WithFunc("mesh.UpdateSelf").Warnf(context.Background(), "persist epoch: %v", err)
+		return
+	}
+	m.mu.Lock()
+	if epoch > m.self.Epoch {
+		m.self.Epoch = epoch
+		m.self.Pools = pools
+		m.self.Templates = templates
+		m.view[m.self.NodeID] = m.self
+	}
+	m.mu.Unlock()
+}
+
+// SetSelfDigest records this node's cluster-invariant config digest so peers can
+// detect divergence; call it once before Join, before any gossip ships.
+func (m *Mesh) SetSelfDigest(digest string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.self.Digest = digest
 	m.view[m.self.NodeID] = m.self
+}
+
+// ConfigMismatches counts peers whose config digest differs from this node's —
+// the gauge for alerting on a divergent cluster, recomputed per read.
+func (m *Mesh) ConfigMismatches() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.self.Digest == "" {
+		return 0
+	}
+	n := 0
+	for id, st := range m.view {
+		if id != m.self.NodeID && st.Digest != "" && st.Digest != m.self.Digest {
+			n++
+		}
+	}
+	return n
 }
 
 // Candidates returns up to two peer addresses that report warm(keyHash) > 0,
@@ -188,6 +241,21 @@ func (m *Mesh) Shutdown() error {
 	return m.ml.Shutdown()
 }
 
+// persistEpoch durably records the epoch, serialized so a slower concurrent
+// UpdateSelf's lower value cannot overwrite a higher one already on disk.
+func (m *Mesh) persistEpoch(epoch uint64) error {
+	m.epochMu.Lock()
+	defer m.epochMu.Unlock()
+	if epoch <= m.epochWritten {
+		return nil
+	}
+	if err := storeEpoch(m.epochPath, epoch); err != nil {
+		return err
+	}
+	m.epochWritten = epoch
+	return nil
+}
+
 // forget drops a departed node from the placement view so redirects stop
 // targeting a dead peer; SWIM detected the death, the view must follow.
 func (m *Mesh) forget(nodeID string) {
@@ -207,10 +275,28 @@ func (m *Mesh) merge(states []NodeState) {
 		if st.NodeID == m.self.NodeID {
 			continue
 		}
-		if cur, ok := m.view[st.NodeID]; !ok || st.Epoch > cur.Epoch {
-			m.view[st.NodeID] = st
+		cur, ok := m.view[st.NodeID]
+		if ok && st.Epoch <= cur.Epoch {
+			continue
 		}
+		// Warn on each distinct divergent digest (not once per lifetime): a
+		// mismatched api_token/tenants/preview_secret/CA root 401s cross-node
+		// redirects and fails interception. Warn-only — refusing would partition
+		// a rolling credential rotation.
+		if m.self.Digest != "" && st.Digest != "" && st.Digest != m.self.Digest && (!ok || cur.Digest != st.Digest) {
+			log.WithFunc("mesh.merge").Warnf(context.Background(),
+				"peer %s config digest %s differs from this node's %s: cluster-invariant config diverges (redirects may 401, interception may fail)",
+				st.NodeID, short(st.Digest), short(m.self.Digest))
+		}
+		m.view[st.NodeID] = st
 	}
+}
+
+func short(digest string) string {
+	if len(digest) > 12 {
+		return digest[:12]
+	}
+	return digest
 }
 
 var _ memberlist.Delegate = (*delegate)(nil)

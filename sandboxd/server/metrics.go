@@ -48,6 +48,11 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprintf(w, "sandboxd_pool_target{template=%q,net=%q,size=%q} %d\n", p.Key.Template, p.Key.Net, p.Key.Size, p.Target)
 	}
 
+	if s.placer != nil {
+		metric("config_digest_mismatch", "gauge", "peers whose cluster-invariant config digest differs from this node")
+		_, _ = fmt.Fprintf(w, "sandboxd_config_digest_mismatch %d\n", s.placer.ConfigMismatches())
+	}
+
 	metric("claims_total", "counter", "claims served, by provisioning tier")
 	_, _ = fmt.Fprintf(w, "sandboxd_claims_total{tier=\"warm\"} %d\n", c.ClaimsWarm)
 	_, _ = fmt.Fprintf(w, "sandboxd_claims_total{tier=\"clone\"} %d\n", c.ClaimsClone)

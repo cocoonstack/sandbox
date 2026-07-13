@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -140,8 +141,9 @@ func TestTwoNodeClusterGossipsPools(t *testing.T) {
 func newTestMesh(t *testing.T, id string) *Mesh {
 	t.Helper()
 	return &Mesh{
-		self: NodeState{NodeID: id, Addr: id + ":7777", Pools: map[string]int{}},
-		view: map[string]NodeState{id: {NodeID: id, Addr: id + ":7777"}},
+		epochPath: filepath.Join(t.TempDir(), "mesh-epoch"),
+		self:      NodeState{NodeID: id, Addr: id + ":7777", Pools: map[string]int{}},
+		view:      map[string]NodeState{id: {NodeID: id, Addr: id + ":7777"}},
 	}
 }
 
@@ -160,7 +162,7 @@ func startNode(t *testing.T, host string, port int, id string) *node {
 	cfg.AdvertiseAddr = host
 	cfg.PushPullInterval = 200 * time.Millisecond
 	cfg.Logger = discardLogger()
-	m, err := New(cfg, id, id+":7777", nil)
+	m, err := New(cfg, id, id+":7777", nil, t.TempDir())
 	if err != nil {
 		t.Fatalf("new mesh %s: %v", id, err)
 	}
