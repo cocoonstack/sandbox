@@ -1,6 +1,7 @@
 package mesh
 
 import (
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -34,15 +35,45 @@ func TestEpochRoundTrip(t *testing.T) {
 	}
 }
 
-func TestEpochSeededFromPersistedFloor(t *testing.T) {
+func TestLoadEpochRejectsImplausibleValue(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "e")
+	// A saturated/corrupt value must not seed a counter that +1 cannot climb
+	// past and that would tie a peer's stale copy forever.
+	if err := os.WriteFile(p, []byte("18446744073709551615"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if got := loadEpoch(p); got != 0 {
+		t.Errorf("loadEpoch of a MaxUint64 file = %d, want 0 (treated as corrupt)", got)
+	}
+}
+
+func TestEpochSeededAbovePersistedFloor(t *testing.T) {
 	dir := t.TempDir()
 	huge := uint64(1) << 62 // above any plausible wall-clock nanos
 	if err := storeEpoch(filepath.Join(dir, "mesh-epoch"), huge); err != nil {
 		t.Fatalf("store: %v", err)
 	}
 	m := newBoundMesh(t, dir)
-	if m.self.Epoch != huge {
-		t.Errorf("epoch seeded %d, want persisted floor %d (a backwards clock must not regress it)", m.self.Epoch, huge)
+	// Strictly above: the persisted value is what peers last saw, so seeding at
+	// it would tie their stale copy and merge's `>` would reject the restart.
+	if m.self.Epoch != huge+1 {
+		t.Errorf("epoch seeded %d, want persisted floor + 1 = %d (a backwards clock must land above peers' last-seen epoch)", m.self.Epoch, huge+1)
+	}
+}
+
+func TestUpdateSelfPersistFailKeepsOldState(t *testing.T) {
+	dir := t.TempDir()
+	m := newBoundMesh(t, dir)
+	before := m.self.Epoch
+	// Point the epoch file at a non-existent directory so the durable write
+	// fails; the candidate epoch must not be published while the disk lags.
+	m.epochPath = filepath.Join(dir, "gone", "mesh-epoch")
+	m.UpdateSelf(map[string]int{"k": 1}, nil)
+	if m.self.Epoch != before {
+		t.Errorf("self epoch advanced to %d on a failed persist, want %d held", m.self.Epoch, before)
+	}
+	if len(m.self.Pools) != 0 {
+		t.Errorf("self pools published %v despite a failed persist", m.self.Pools)
 	}
 }
 

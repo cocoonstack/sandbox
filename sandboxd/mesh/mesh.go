@@ -54,10 +54,13 @@ type Mesh struct {
 // gossip encryption when non-empty; dataDir holds the persisted epoch.
 func New(cfg *memberlist.Config, nodeID, selfAddr string, secretKey []byte, dataDir string) (*Mesh, error) {
 	epochPath := filepath.Join(dataDir, "mesh-epoch")
-	// Seed from the persisted epoch, floored at wall-clock: a restart under a
-	// backwards clock would otherwise regress below peers' last-seen epoch, so
-	// its fresh state is silently rejected. Persist the seed at once.
-	epoch := max(loadEpoch(epochPath), uint64(time.Now().UnixNano())) //nolint:gosec // UnixNano is positive for current times
+	// Seed strictly above the persisted floor, then floor at wall-clock. The
+	// persisted value is the last epoch peers were shown; seeding at it (not
+	// above) ties the stale copy peers still hold, and merge's `>` rejects the
+	// tie, so a backwards-clock restart's fresh pools/templates/digest never
+	// propagate. The +1 keeps the restart one ahead even when the clock
+	// regressed; loadEpoch caps the floor at MaxInt64 so the +1 cannot wrap.
+	epoch := max(uint64(time.Now().UnixNano()), loadEpoch(epochPath)+1) //nolint:gosec // UnixNano is positive for current times
 	m := &Mesh{
 		epochPath: epochPath,
 		self: NodeState{
@@ -108,17 +111,25 @@ func (m *Mesh) UpdateSelf(pools map[string]int, templates []string) {
 		m.mu.Unlock()
 		return
 	}
-	m.self.Epoch++
-	m.self.Pools = pools
-	m.self.Templates = templates
-	m.view[m.self.NodeID] = m.self
-	epoch := m.self.Epoch
+	epoch := m.self.Epoch + 1
 	m.mu.Unlock()
-	// Persist off the manager lock (redirect placement reads it): the bump is
-	// the new floor a restart must not regress below.
+	// Persist the candidate epoch before it can gossip: memberlist may ship the
+	// new self state the instant it is published, so a crash between publish and
+	// persist would strand peers on an epoch a backwards-clock restart cannot
+	// climb back above. On write failure keep the old advertised state rather
+	// than gossip an epoch the disk does not back.
 	if err := m.persistEpoch(epoch); err != nil {
 		log.WithFunc("mesh.UpdateSelf").Warnf(context.Background(), "persist epoch: %v", err)
+		return
 	}
+	m.mu.Lock()
+	if epoch > m.self.Epoch {
+		m.self.Epoch = epoch
+		m.self.Pools = pools
+		m.self.Templates = templates
+		m.view[m.self.NodeID] = m.self
+	}
+	m.mu.Unlock()
 }
 
 // SetSelfDigest records this node's cluster-invariant config digest so peers can
