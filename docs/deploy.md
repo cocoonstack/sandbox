@@ -186,6 +186,7 @@ A minimal systemd unit (shipped as
 ```ini
 [Unit]
 Description=sandboxd
+Wants=network-online.target
 After=network-online.target
 
 [Service]
