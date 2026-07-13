@@ -14,8 +14,8 @@ the cocoon CLI and needs a template image with silkd baked in.
 - A silkd-baked template image, e.g. `ghcr.io/cocoonstack/sandbox/base:24.04`
   (pull via cocoon, or `cocoon image import` a tar)
 
-Prebuilt static linux/amd64 binaries (`sandboxd`, `sandbox-mcp`, with
-`SHA256SUMS`) ship with every
+Prebuilt static linux/amd64 binaries (`sandboxd`, `sandbox-mcp`, `silkd`,
+with `checksums.txt`) ship with every
 [GitHub release](https://github.com/cocoonstack/sandbox/releases). Build
 from source with `make sandboxd` (produces `dist/sandboxd`); either way
 `sandboxd -version` reports what you are running.

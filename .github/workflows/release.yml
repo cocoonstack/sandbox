@@ -1,4 +1,4 @@
-# A v* tag builds the static server binaries and publishes a GitHub release;
+# A v* tag runs goreleaser: server binaries + silkd, checksums, changelog.
 # SDK packages release separately via sdk-*-v* tags (publish-pypi.yml).
 name: release
 
@@ -15,27 +15,27 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: sandboxd/go.mod
-      - name: Build
-        env:
-          CGO_ENABLED: "0"
-          GOOS: linux
-          GOARCH: amd64
-          GOWORK: off
+      - name: Build silkd (musl static)
         run: |
-          mkdir -p dist
-          (cd sandboxd && go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o ../dist/sandboxd-linux-amd64 .)
-          (cd mcp && go build -trimpath -ldflags "-s -w" -o ../dist/sandbox-mcp-linux-amd64 .)
-          (cd dist && sha256sum sandboxd-linux-amd64 sandbox-mcp-linux-amd64 > SHA256SUMS)
-      - name: Publish release
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+          (cd silkd && cargo build --release --target x86_64-unknown-linux-musl)
+          strip silkd/target/x86_64-unknown-linux-musl/release/silkd
+          mkdir -p dist-extra
+          tar -C silkd/target/x86_64-unknown-linux-musl/release \
+            -czf "dist-extra/silkd_${GITHUB_REF_NAME#v}_Linux_x86_64.tar.gz" silkd
+          tar -C silkd/target/x86_64-unknown-linux-musl/release \
+            -czf "dist-extra/silkd_Linux_x86_64.tar.gz" silkd
+      - name: goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          args: release --clean
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # A UI-created release or a rerun already has the release: upload into it.
-          gh release create "$GITHUB_REF_NAME" --generate-notes \
-            dist/sandboxd-linux-amd64 dist/sandbox-mcp-linux-amd64 dist/SHA256SUMS ||
-            gh release upload "$GITHUB_REF_NAME" --clobber \
-              dist/sandboxd-linux-amd64 dist/sandbox-mcp-linux-amd64 dist/SHA256SUMS
+          GITHUB_TOKEN: ${{ github.token }}
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}

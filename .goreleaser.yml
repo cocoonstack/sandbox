@@ -1,0 +1,103 @@
+version: 2
+
+# linux/amd64 only: the guest stack (boot chain, images) is x86_64-only, so
+# an arm64 daemon would have nothing to run.
+before:
+  hooks:
+    - sh -c "cd sandboxd && GOWORK=off go mod download"
+    - sh -c "cd mcp && GOWORK=off go mod download"
+
+builds:
+  - id: sandboxd
+    dir: sandboxd
+    main: .
+    binary: sandboxd
+    env:
+      - CGO_ENABLED=0
+      - GOWORK=off
+    ldflags:
+      - -s
+      - -X main.version={{.Version}}
+    goos:
+      - linux
+    goarch:
+      - amd64
+
+  - id: sandboxd-debug
+    dir: sandboxd
+    main: .
+    binary: sandboxd.dbg
+    env:
+      - CGO_ENABLED=0
+      - GOWORK=off
+    ldflags:
+      - -X main.version={{.Version}}
+    goos:
+      - linux
+    goarch:
+      - amd64
+
+  - id: sandbox-mcp
+    dir: mcp
+    main: .
+    binary: sandbox-mcp
+    env:
+      - CGO_ENABLED=0
+      - GOWORK=off
+    ldflags:
+      - -s
+    goos:
+      - linux
+    goarch:
+      - amd64
+
+archives:
+  - id: sandboxd
+    ids:
+      - sandboxd
+    name_template: "sandboxd_{{ .Version }}_Linux_x86_64"
+
+  - id: sandboxd-debug
+    ids:
+      - sandboxd-debug
+    name_template: "sandboxd_{{ .Version }}_Linux_x86_64_debug"
+
+  - id: sandbox-mcp
+    ids:
+      - sandbox-mcp
+    name_template: "sandbox-mcp_{{ .Version }}_Linux_x86_64"
+
+  # Unversioned aliases so releases/latest/download/<name>.tar.gz resolves.
+  - id: sandboxd-latest
+    ids:
+      - sandboxd
+    name_template: "sandboxd_Linux_x86_64"
+
+  - id: sandbox-mcp-latest
+    ids:
+      - sandbox-mcp
+    name_template: "sandbox-mcp_Linux_x86_64"
+
+checksum:
+  name_template: 'checksums.txt'
+  extra_files:
+    - glob: dist-extra/*
+
+release:
+  prerelease: auto
+  # silkd (Rust, musl static) is built by the workflow step before goreleaser.
+  extra_files:
+    - glob: dist-extra/*
+  footer: |
+    ## SDKs
+
+    - Go: `go get github.com/cocoonstack/sandbox/sdk/go@v{{ .Version }}`
+    - Python: `pip install cocoonstack-sandbox` (adapters: `cocoonstack-sandbox-openai`, `cocoonstack-sandbox-langchain`)
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^review:'
