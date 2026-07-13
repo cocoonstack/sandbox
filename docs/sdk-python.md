@@ -143,8 +143,8 @@ tpl.delete()                      # caller owns the lifecycle
 
 Templates are keyed by (name, the sandbox's network lane, its size); on
 the default local-disk backend they live on the owning node (a shared
-store makes every node resolve them); the returned `Template` handle is bound there, so
-its `new`/`delete` always reach it. The name-based calls
+store makes every node resolve them); the returned `Template` handle is
+bound there, so its `new`/`delete` always reach it. The name-based calls
 (`client.new("myproj:v1")`, `client.delete_template(...)`) route
 cluster-wide via template gossip and lag a promote/delete by about a gossip
 tick — prefer the handle right after promoting (see

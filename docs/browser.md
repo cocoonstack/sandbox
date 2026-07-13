@@ -68,8 +68,8 @@ branch from.
   workload chooses to expose (a live-view page, a screenshot server).
 - Guest env knobs on the unit: `CDP_PORT` (default 9222),
   `CHROMIUM_FLAGS` (extra flags).
-- No stealth build in v1: headless Chromium is fingerprintable; this
-  flavor targets automation, not anti-bot evasion.
+- No stealth build: headless Chromium is fingerprintable; this flavor
+  targets automation, not anti-bot evasion.
 - One browser per sandbox by design — the VM is the isolation and
   checkpoint unit; open tabs via CDP `Target.createTarget`.
 - x86_64 only.

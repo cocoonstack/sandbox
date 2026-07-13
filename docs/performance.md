@@ -35,10 +35,9 @@ lane (FC) is also the fastest-restore lane. Eager memory restore beats
 UFFD on-demand for sandbox-sized VMs in every configuration measured
 (the working set is small and mostly touched during readiness).
 
-Burst degradation under concurrent restores is real (pools exist to absorb
-it) but has no in-repo harness yet; treat any concurrency figure as
-external until one lands. That is the case for warm pools, which move
-provisioning off the request path entirely.
+Burst degradation under concurrent restores is real, and warm pools exist
+to absorb it — they move provisioning off the request path entirely. No
+in-repo harness measures it, so treat any concurrency figure as external.
 
 ## Verb round-trips (SDK over the relay, bare metal)
 
@@ -121,7 +120,7 @@ Reconcile uses) stays as a regression sentinel.
 
 ## Measured and declined (decision data)
 
-**Pre-dialed relay connections** (H-4, 2026-07-07, GCE nested, n=300
+**Pre-dialed relay connections** (2026-07-07, GCE nested, n=300
 `fs_stat` RPCs): dial-per-RPC (today) p50 1.23ms / p90 4.69ms / p99
 10.51ms; one connection pre-dialed ahead p50 1.05ms / p90 4.47ms / p99
 15.49ms. The handshake is not the dominant cost — the win is ~0.2ms at
@@ -129,9 +128,8 @@ p50, nothing at p90, and the background dialer degrades p99. Decision:
 keep one-connection-per-RPC; revisit only with a protocol-level mux.
 `e2e/cmd/rpcbench` reproduces the experiment.
 
-**Template pre-check meta GET** (parked provision-redirect item): a
-single `ReadMeta` against MinIO measures 4.76ms cross-host (sub-ms
-node-local, 20-50ms on WAN S3). It fires once per warm-miss claim of a
-promoted template whose key gossip advertises, against a provision that
-already costs a >=48ms clone plus the export fetch. Stays parked behind
-a measurement trigger.
+**Template pre-check meta GET**: a single `ReadMeta` against MinIO
+measures 4.76ms cross-host (sub-ms node-local, 20-50ms on WAN S3). It
+would fire once per warm-miss claim of a promoted template whose key
+gossip advertises, against a provision that already costs a >=48ms clone
+plus the export fetch. Declined until a measurement shows it matters.

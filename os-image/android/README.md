@@ -19,11 +19,11 @@ Unlike the Ubuntu flavors, the guest has no glibc and no systemd:
   the `cocoon-agent.rc` pattern the base lineage already ships.
 - `platforms` — `linux/amd64`; the lineage is x86_64-only.
 
-Verified about the base image (15.0): anonymous ghcr pull at docker and
+The base image (15.0) pulls anonymously from ghcr at docker and
 `cocoon image pull` level; 2 layers; ships its own kernel
 (`/boot/vmlinuz-6.8.*-generic` + initrd, `binder_linux.ko`) booted via
 `/sbin/init` busybox wrapper → Android `/init`; runs `cocoon-agent` from
-`/system/etc/init/cocoon-agent.rc`; full framework boot to
+`/system/etc/init/cocoon-agent.rc`; boots the full framework to
 `sys.boot_completed=1` with zygote64 + system_server alive (CH egress
 lane, 4 CPU / 8G).
 
@@ -31,13 +31,13 @@ Do not revert to the previous `ghcr.io/jiaqing-simular/cocoon-android-vnc`
 pin: that build ships a broken dexpreopt boot-image chain that
 crash-loops zygote before the framework ever completes.
 
-## Open
+## Constraints
 
-- **Boot integration**: the image boots its embedded 6.8 kernel via Android
+- **Boot chain**: the image boots its embedded 6.8 kernel via Android
   `/init`, not the sandbox boot chain (PVH kernel + overlay-root init).
   The claim lane must be CH/egress — the FC no-network lane fails the
-  readiness probe (2026-07-07 boot-attempt finding). Snapshot/restore of a
-  booted Android is validated by the androidsmoke acceptance round.
-- **silkd on Android**: the musl-static binary is built and verified static,
-  but exec/session behavior against an Android userspace (`/system/bin/sh`,
-  no `/bin/sh`) is validated by the androidsmoke acceptance round.
+  readiness probe. Snapshot/restore of a booted Android is covered by the
+  `androidsmoke` acceptance round.
+- **silkd on Android**: the musl-static binary runs against an Android
+  userspace (`/system/bin/sh`, no `/bin/sh`); exec/session behavior is
+  covered by the `androidsmoke` acceptance round.

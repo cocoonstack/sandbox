@@ -45,4 +45,4 @@ session. Checkpoints outlive sessions: `branch_checkpoint` resolves ids it
 did not mint against the connected node's listing — on a cluster that
 covers the connected node's checkpoints; one created on a redirected
 (peer-owned) sandbox in a *previous* session needs a server pointed at that
-node (cross-node checkpoint routing is planned with snapshot archival).
+node.
