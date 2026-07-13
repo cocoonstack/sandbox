@@ -155,10 +155,8 @@ type Manager struct {
 	maxFork int
 	store   *claimStore
 
-	// poolStore persists the last API-applied pool set; configSeedHash is the
-	// config.json pools' hash, to warn when a file edit is overridden by it.
 	poolStore      *poolStore
-	configSeedHash string
+	configSeedHash string // config pools' hash, to warn when a file edit is overridden
 
 	// idleDefault is the idle-hibernate threshold for unpooled keys; pooled
 	// keys carry theirs on the pool struct. Zero means disabled.
@@ -352,8 +350,8 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	return m, nil
 }
 
-// EgressCAFingerprint is the egress cluster root's fingerprint, or "" when this
-// node does no interception; it feeds the cluster-invariant config digest.
+// EgressCAFingerprint is the egress cluster root's fingerprint, or "" when the
+// node does no interception.
 func (m *Manager) EgressCAFingerprint() string {
 	if m.egressCA == nil {
 		return ""

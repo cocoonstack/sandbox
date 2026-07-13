@@ -22,8 +22,7 @@ func TestPersistedPoolsSurviveRestart(t *testing.T) {
 	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: apiKey, Warm: 3}}); err != nil {
 		t.Fatalf("SetPools: %v", err)
 	}
-	// Restart: a fresh manager on the same data dir, still config-seeded with the
-	// old pool, must rebuild from pools.json (the API-applied set), not the seed.
+	// Restart on the same data dir, still config-seeded: must rebuild from pools.json.
 	m2 := newTestManagerAt(t, newFakeEngine(), dir, config.PoolSpec{PoolKey: seedKey, Warm: 1})
 	m2.mu.Lock()
 	_, hasSeed := m2.pools[seedKey]
@@ -68,8 +67,7 @@ func TestConcurrentSetPoolsPersistLatest(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	// The set that applied last (highest sequence) owns memory; the persisted
-	// file must match it, never revert to an already-superseded concurrent write.
+	// The last-applied set owns memory; the persisted file must match it.
 	m.mu.Lock()
 	want := m.pools[apiKey].floor
 	m.mu.Unlock()

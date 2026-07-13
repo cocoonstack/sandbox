@@ -21,12 +21,9 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
-// poolsFile records the last API-applied pool set (PUT /v1/pools) so a restart
-// rebuilds from operator intent, not the config.json seed that only grows
-// staler under API-first management. ConfigSeed is the config.json pools' hash
-// at write time; a boot that finds it changed warns that the file edit is
-// overridden. Egress is never here — SetPools rejects it, so it stays
-// config-owned and is re-merged by key at load.
+// poolsFile records the last API-applied pool set so a restart rebuilds from
+// operator intent, not the config.json seed. ConfigSeed is the config pools'
+// hash at write time; a boot finding it changed warns the edit is overridden.
 type poolsFile struct {
 	ConfigSeed string            `json:"config_seed"`
 	Pools      []config.PoolSpec `json:"pools"`
@@ -62,8 +59,7 @@ func (s *poolStore) load() (*poolsFile, error) {
 }
 
 // commit durably writes the applied set, serialized by s.mu; a seq no newer
-// than the last written is a no-op, so two concurrent SetPools calls can never
-// let an already-superseded set win the on-disk write and revert the latest.
+// than the last written is a no-op, so a superseded concurrent write can't win.
 func (s *poolStore) commit(seq uint64, pf poolsFile) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -81,12 +77,9 @@ func (s *poolStore) commit(seq uint64, pf poolsFile) error {
 	return nil
 }
 
-// adoptPersistedPools replaces the config-seeded pools with the last API-applied
-// set (pools.json) when present, so a restart rebuilds from operator intent.
-// Egress stays config-owned (kept in m.poolEgress, re-merged by key); the egress
-// CA must already be loaded so golden adoption can check its fingerprint. A
-// restored pool that no longer validates (e.g. an egress lane with the bridge
-// now removed) fails the boot, matching config-load discipline.
+// adoptPersistedPools rebuilds the pools from pools.json (the last API-applied
+// set) over the config seed when present. Egress stays config-owned; a restored
+// pool that no longer validates fails the boot, matching config-load discipline.
 func (m *Manager) adoptPersistedPools(ctx context.Context) error {
 	pf, err := m.poolStore.load()
 	if err != nil {
@@ -127,9 +120,8 @@ func (m *Manager) adoptPersistedPools(ctx context.Context) error {
 	return nil
 }
 
-// poolSeedHash digests a config pool set's warm-target shape, order-independent;
-// egress is excluded (config-owned, re-merged separately) so the hash tracks
-// exactly the targets pools.json would override.
+// poolSeedHash digests a pool set's warm-target shape, order-independent and
+// egress-excluded, so it tracks exactly the targets pools.json would override.
 func poolSeedHash(specs []config.PoolSpec) string {
 	shaped := make([]config.PoolSpec, len(specs))
 	copy(shaped, specs)

@@ -10,11 +10,8 @@ import (
 )
 
 // loadEpoch reads the persisted gossip epoch, or 0 when the file is absent,
-// unreadable, or holds an implausible value — the wall-clock seed then wins,
-// which is the pre-persistence behavior. The epoch is a UnixNano-derived
-// counter that only ever increments by one, so a value above MaxInt64 cannot
-// have arisen legitimately; treating it as corrupt keeps a crafted or
-// bit-rotted file from seeding a saturated counter that can never advance.
+// unreadable, or above MaxInt64 — a UnixNano-derived counter cannot legitimately
+// exceed it, so a corrupt value falls back to the wall-clock seed.
 func loadEpoch(path string) uint64 {
 	raw, err := os.ReadFile(path) //nolint:gosec // node-local data-dir path
 	if err != nil {

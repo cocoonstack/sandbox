@@ -12,12 +12,9 @@ import (
 	"strings"
 )
 
-// WriteFileSync durably replaces path with data: a uniquely-named sibling temp
-// file is written, fsync'd, renamed over path, and the parent directory fsync'd
-// so the rename survives a crash. Machine-owned state that a restart must trust
-// (pools.json, the mesh epoch) uses this rather than a bare write+rename. The
-// temp name is per-call unique, so concurrent writers to the same path never
-// race a shared temp into a lost rename.
+// WriteFileSync durably replaces path with data (temp + fsync + rename + dir
+// fsync) so the rename survives a crash. The temp name is per-call unique, so
+// concurrent writers to the same path can't race a shared temp into a lost rename.
 func WriteFileSync(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	f, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")

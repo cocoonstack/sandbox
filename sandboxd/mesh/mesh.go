@@ -54,12 +54,9 @@ type Mesh struct {
 // gossip encryption when non-empty; dataDir holds the persisted epoch.
 func New(cfg *memberlist.Config, nodeID, selfAddr string, secretKey []byte, dataDir string) (*Mesh, error) {
 	epochPath := filepath.Join(dataDir, "mesh-epoch")
-	// Seed strictly above the persisted floor, then floor at wall-clock. The
-	// persisted value is the last epoch peers were shown; seeding at it (not
-	// above) ties the stale copy peers still hold, and merge's `>` rejects the
-	// tie, so a backwards-clock restart's fresh pools/templates/digest never
-	// propagate. The +1 keeps the restart one ahead even when the clock
-	// regressed; loadEpoch caps the floor at MaxInt64 so the +1 cannot wrap.
+	// Seed strictly above the persisted floor (the last epoch peers saw):
+	// seeding at it ties their stale copy and merge's `>` rejects the restart's
+	// fresh state. loadEpoch caps the floor so the +1 cannot wrap.
 	epoch := max(uint64(time.Now().UnixNano()), loadEpoch(epochPath)+1) //nolint:gosec // UnixNano is positive for current times
 	m := &Mesh{
 		epochPath: epochPath,
@@ -113,11 +110,9 @@ func (m *Mesh) UpdateSelf(pools map[string]int, templates []string) {
 	}
 	epoch := m.self.Epoch + 1
 	m.mu.Unlock()
-	// Persist the candidate epoch before it can gossip: memberlist may ship the
-	// new self state the instant it is published, so a crash between publish and
-	// persist would strand peers on an epoch a backwards-clock restart cannot
-	// climb back above. On write failure keep the old advertised state rather
-	// than gossip an epoch the disk does not back.
+	// Persist the candidate before publishing it: memberlist gossips self the
+	// instant it enters the view, so a crash before the write would strand peers
+	// on an epoch a backwards-clock restart can't beat. Hold old state on failure.
 	if err := m.persistEpoch(epoch); err != nil {
 		log.WithFunc("mesh.UpdateSelf").Warnf(context.Background(), "persist epoch: %v", err)
 		return
@@ -142,8 +137,7 @@ func (m *Mesh) SetSelfDigest(digest string) {
 }
 
 // ConfigMismatches counts peers whose config digest differs from this node's —
-// a gauge for alerting on a divergent cluster-invariant config (the intermittent
-// 401 / cross-node interception class), recomputed per read from the view.
+// the gauge for alerting on a divergent cluster, recomputed per read.
 func (m *Mesh) ConfigMismatches() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -247,9 +241,8 @@ func (m *Mesh) Shutdown() error {
 	return m.ml.Shutdown()
 }
 
-// persistEpoch durably records the gossip epoch, serialized so a lower value
-// from a slower concurrent UpdateSelf can never overwrite a higher one already
-// on disk — the persisted floor must only ever advance.
+// persistEpoch durably records the epoch, serialized so a slower concurrent
+// UpdateSelf's lower value cannot overwrite a higher one already on disk.
 func (m *Mesh) persistEpoch(epoch uint64) error {
 	m.epochMu.Lock()
 	defer m.epochMu.Unlock()
@@ -286,13 +279,10 @@ func (m *Mesh) merge(states []NodeState) {
 		if ok && st.Epoch <= cur.Epoch {
 			continue
 		}
-		// Warn when a peer's config digest diverges from this node's, on each
-		// distinct new value (not once per lifetime): a mismatched
-		// cluster-invariant config (api_token/tenants/preview_secret/egress CA
-		// root) makes cross-node redirects 401 and interception fail — the
-		// worst failure mode to debug at first unlucky redirect. Warn-only:
-		// refusing the merge would turn a routine rolling credential rotation
-		// into a partition.
+		// Warn on each distinct divergent digest (not once per lifetime): a
+		// mismatched api_token/tenants/preview_secret/CA root 401s cross-node
+		// redirects and fails interception. Warn-only — refusing would partition
+		// a rolling credential rotation.
 		if m.self.Digest != "" && st.Digest != "" && st.Digest != m.self.Digest && (!ok || cur.Digest != st.Digest) {
 			log.WithFunc("mesh.merge").Warnf(context.Background(),
 				"peer %s config digest %s differs from this node's %s: cluster-invariant config diverges (redirects may 401, interception may fail)",

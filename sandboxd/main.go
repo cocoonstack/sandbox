@@ -171,8 +171,7 @@ func startMesh(cfg *config.Config, mgr *pool.Manager) (*mesh.Mesh, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Publish the cluster-invariant config digest before Join, so the first
-	// gossip a peer sees already carries it.
+	// Publish the config digest before Join, so the first gossip carries it.
 	msh.SetSelfDigest(cfg.ClusterDigest(mgr.EgressCAFingerprint()))
 	if err := msh.Join(mc.Join); err != nil {
 		_ = msh.Shutdown()

@@ -37,8 +37,7 @@ func TestEpochRoundTrip(t *testing.T) {
 
 func TestLoadEpochRejectsImplausibleValue(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "e")
-	// A saturated/corrupt value must not seed a counter that +1 cannot climb
-	// past and that would tie a peer's stale copy forever.
+	// A saturated value must not seed a counter that +1 can't climb past.
 	if err := os.WriteFile(p, []byte("18446744073709551615"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -54,8 +53,7 @@ func TestEpochSeededAbovePersistedFloor(t *testing.T) {
 		t.Fatalf("store: %v", err)
 	}
 	m := newBoundMesh(t, dir)
-	// Strictly above: the persisted value is what peers last saw, so seeding at
-	// it would tie their stale copy and merge's `>` would reject the restart.
+	// Strictly above: seeding at the persisted value would tie peers' stale copy.
 	if m.self.Epoch != huge+1 {
 		t.Errorf("epoch seeded %d, want persisted floor + 1 = %d (a backwards clock must land above peers' last-seen epoch)", m.self.Epoch, huge+1)
 	}
@@ -65,8 +63,7 @@ func TestUpdateSelfPersistFailKeepsOldState(t *testing.T) {
 	dir := t.TempDir()
 	m := newBoundMesh(t, dir)
 	before := m.self.Epoch
-	// Point the epoch file at a non-existent directory so the durable write
-	// fails; the candidate epoch must not be published while the disk lags.
+	// A non-existent dir makes the durable write fail: the epoch must not publish.
 	m.epochPath = filepath.Join(dir, "gone", "mesh-epoch")
 	m.UpdateSelf(map[string]int{"k": 1}, nil)
 	if m.self.Epoch != before {

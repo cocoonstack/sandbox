@@ -44,16 +44,14 @@ func (c *Client) Info(ctx context.Context) (*NodeInfo, error) {
 	return &info, nil
 }
 
-// peers fetches the cluster's node addresses, best-effort — a discovery
-// failure yields nil, harmless for Lookup's read scatter.
+// peers fetches the cluster's node addresses, best-effort (nil on failure).
 func (c *Client) peers(ctx context.Context) []string {
 	addrs, _ := c.peersOrErr(ctx)
 	return addrs
 }
 
-// peersOrErr fetches the cluster's node addresses, surfacing a discovery
-// failure. It reads the tenant-accessible /v1/peers, not /v1/info
-// (operator-only), so it works under a tenant token.
+// peersOrErr fetches the node addresses, surfacing a discovery failure. It reads
+// /v1/peers (tenant-accessible), so it works under a tenant token.
 func (c *Client) peersOrErr(ctx context.Context) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, peersTimeout)
 	defer cancel()

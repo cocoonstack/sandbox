@@ -210,13 +210,9 @@ func (c *Config) HasEgress() bool {
 	return c.Bridge != "" || c.Network != ""
 }
 
-// ClusterDigest fingerprints the config every mesh node must share, so a
-// divergent node is caught at join instead of at a later 401 or failed
-// cross-node interception: api_token, the tenant name→token set, preview_secret,
-// and the egress cluster root. With a cluster_key set (gossip is encrypted) it
-// HMACs the full set including token material; without one gossip may be
-// cleartext, so it covers only non-secret identity (tenant names + CA root),
-// keeping a weak token off the wire.
+// ClusterDigest fingerprints the must-match config so a divergent node is
+// caught early, not at a later 401. With cluster_key it HMACs token material
+// too; without one only tenant names + CA root ride the (maybe cleartext) wire.
 func (c *Config) ClusterDigest(caFingerprint string) string {
 	names := make([]string, len(c.Tenants))
 	for i, t := range c.Tenants {

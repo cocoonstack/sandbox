@@ -22,13 +22,10 @@ func TestClusterDigest(t *testing.T) {
 	if base.ClusterDigest("other-fp") == d {
 		t.Error("an egress CA root change is not reflected")
 	}
-	// Without a cluster_key gossip may be cleartext, so token material must be
-	// excluded: an api_token change alone must NOT alter the on-wire digest.
+	// Keyless: token material must stay off the (maybe cleartext) wire.
 	if (&Config{APIToken: "other", PreviewSecret: "ps", Tenants: base.Tenants}).ClusterDigest("ca-fp") != d {
 		t.Error("api_token leaked into the keyless digest")
 	}
-	// With a cluster_key the digest is an HMAC over token material, so an
-	// api_token change IS covered.
 	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
 	keyed := &Config{APIToken: "tok", PreviewSecret: "ps", Tenants: base.Tenants, Mesh: &MeshConfig{ClusterKey: key}}
 	keyedDiff := &Config{APIToken: "other", PreviewSecret: "ps", Tenants: base.Tenants, Mesh: &MeshConfig{ClusterKey: key}}
