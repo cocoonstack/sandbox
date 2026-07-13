@@ -165,6 +165,21 @@ Answers the fresh `GET /v1/info` payload. 400 bad key, negative warm/idle,
 `warm_max` below `warm`, or duplicate pool; 401 bad api token; 409 egress
 pool on a node without an egress attachment.
 
+## POST /v1/drain
+
+Auth: root only. Cordons the node for maintenance: claim/fork/branch answer
+429 `node draining` (on a cluster the warm-peer redirect is tried first, and
+gossip stops naming this node within a tick as its warm counts hit zero),
+unclaimed warm VMs are destroyed, and live claims keep serving until release
+or TTL. Pool ownership is untouched — no pools.json write, no config change.
+Answers the fresh `GET /v1/info` payload; poll `claimed` to zero to know the
+node is empty. Deliberately not persisted: a restarted node serves again.
+
+## DELETE /v1/drain
+
+Auth: root only. Lifts the drain and kicks an immediate refill. Answers the
+fresh info payload.
+
 ## POST /v1/sandboxes/{id}/preview
 
 Auth: like fork — node `api_token` in the header, the sandbox's own token
@@ -270,6 +285,8 @@ peers:
 `hibernated` counts claims whose VM is currently hibernated, `archived` those
 checkpointed to the store with the local VM dropped (see
 [archive tiers](deploy.md#configuration)); both are included in `claimed`.
+A node cordoned via [`POST /v1/drain`](#post-v1drain) additionally reports
+`"draining": true`.
 
 `golden` reports whether the pool's snapshot exists (refill can clone);
 `warm` at `target` with `golden: true` means warm claims are served in

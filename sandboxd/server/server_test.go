@@ -239,6 +239,36 @@ func TestPutPoolsRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestDrainEndpoints(t *testing.T) {
+	mgr := &fakeManager{}
+	ts := newTestServer(t, "sekret", mgr, nil)
+	for _, tt := range []struct {
+		method   string
+		draining bool
+	}{
+		{http.MethodPost, true},
+		{http.MethodDelete, false},
+	} {
+		req, err := http.NewRequestWithContext(t.Context(), tt.method, ts.URL+"/v1/drain", nil)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer sekret")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do: %v", err)
+		}
+		var info InfoResponse
+		if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || info.Draining != tt.draining || mgr.draining != tt.draining {
+			t.Fatalf("%s: status=%d draining=%v mgr=%v, want 200/%v", tt.method, resp.StatusCode, info.Draining, mgr.draining, tt.draining)
+		}
+	}
+}
+
 func TestPutPoolsUpdatesTargets(t *testing.T) {
 	var got []config.PoolSpec
 	mgr := &fakeManager{
@@ -836,6 +866,7 @@ type fakeManager struct {
 
 	gotTenant    string
 	tenantClaims map[string]int
+	draining     bool
 }
 
 func (f *fakeManager) ClaimWarm(_ context.Context, _ types.PoolKey, _ time.Duration, tenant string) (*types.Sandbox, error) {
@@ -967,8 +998,12 @@ func (f *fakeManager) SetPools(_ context.Context, pools []config.PoolSpec) error
 }
 
 func (f *fakeManager) Info() ([]pool.PoolInfo, pool.Gauges) {
-	return f.infoPools, pool.Gauges{}
+	return f.infoPools, pool.Gauges{Draining: f.draining}
 }
+
+func (f *fakeManager) Drain(context.Context) { f.draining = true }
+
+func (f *fakeManager) Uncordon(context.Context) { f.draining = false }
 
 type fakeDialer struct {
 	dial func(ctx context.Context, sock string) (net.Conn, error)

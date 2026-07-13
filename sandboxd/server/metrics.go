@@ -31,6 +31,12 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	_, _ = fmt.Fprintf(w, "sandboxd_hibernated %d\n", g.Hibernated)
 	metric("archived", "gauge", "claims archived to the checkpoint store")
 	_, _ = fmt.Fprintf(w, "sandboxd_archived %d\n", g.Archived)
+	draining := 0
+	if g.Draining {
+		draining = 1
+	}
+	metric("draining", "gauge", "1 while the node is cordoned for maintenance")
+	_, _ = fmt.Fprintf(w, "sandboxd_draining %d\n", draining)
 
 	if tenants := s.mgr.TenantClaims(); len(tenants) > 0 {
 		metric("tenant_claims", "gauge", "live claims per configured tenant")

@@ -19,6 +19,9 @@ import (
 func (m *Manager) refillOnce(ctx context.Context) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.draining {
+		return
+	}
 	now := time.Now()
 	for _, p := range m.pools {
 		target := p.effectiveTarget(now)
@@ -55,12 +58,12 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 	m.mu.Lock()
 	p.refilling--
 	target := p.effectiveTarget(time.Now())
-	if err == nil && len(p.warm) < target {
+	if err == nil && !m.draining && len(p.warm) < target {
 		p.warm = append(p.warm, sb)
 		p.noteLead(time.Since(start))
 		keep = true
 	}
-	if err == nil && p.goldenDir != "" && len(p.warm)+p.refilling < target {
+	if err == nil && !m.draining && p.goldenDir != "" && len(p.warm)+p.refilling < target {
 		p.refilling++
 		releaseSlot = false
 		go m.refillOne(ctx, p, p.goldenDir)
