@@ -195,6 +195,12 @@ WantedBy=multi-user.target
 Stopping sandboxd leaves VMs alive; the next start reconciles them. Claimed
 sandboxes are reaped when their TTL expires (default 5m, capped at 24h).
 
+To empty a node for maintenance, cordon it first:
+[`POST /v1/drain`](sandboxd-api.md#post-v1drain) (root) stops new claims and
+drains the warm pools; poll `GET /v1/info` until `claimed` reaches zero (or
+let the leases expire), then stop sandboxd. `DELETE /v1/drain` uncordons.
+The drain is not persisted — a restarted node serves again.
+
 ## Verifying a node
 
 ```bash

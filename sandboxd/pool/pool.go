@@ -110,11 +110,12 @@ type PoolInfo struct {
 	Golden    bool          `json:"golden"`
 }
 
-// Gauges are the manager's point-in-time claim counts.
+// Gauges are the manager's point-in-time claim counts and drain state.
 type Gauges struct {
 	Claimed    int
 	Hibernated int
 	Archived   int
+	Draining   bool
 }
 
 type pool struct {
@@ -191,6 +192,7 @@ type Manager struct {
 	// stays O(1). usage is the always-on billing event stream, audit the
 	// config-gated request tap.
 	maxClaims    int
+	draining     bool // cordoned for maintenance; guarded by m.mu, deliberately not persisted
 	tenantMax    map[string]int
 	tenantLive   map[string]int
 	tenantEgress map[string]*egress.Policy // per-tenant allow-list; nil = no tenant policy
@@ -446,7 +448,7 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 		})
 	}
 	slices.SortFunc(pools, func(a, b PoolInfo) int { return strings.Compare(a.Key.Hash(), b.Key.Hash()) })
-	g := Gauges{Claimed: len(m.claimed)}
+	g := Gauges{Claimed: len(m.claimed), Draining: m.draining}
 	for _, sb := range m.claimed {
 		if sb.HibernateSnap != "" {
 			g.Hibernated++

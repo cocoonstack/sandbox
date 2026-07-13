@@ -183,8 +183,12 @@ func (m *Manager) overQuota(extra int, tenant string) error {
 }
 
 // quotaErr answers ErrQuota when extra more claims for tenant would cross
-// the node-wide or per-tenant cap; callers hold m.mu.
+// the node-wide or per-tenant cap, or when the node is draining; callers
+// hold m.mu.
 func (m *Manager) quotaErr(extra int, tenant string) error {
+	if m.draining {
+		return fmt.Errorf("%w: node draining", ErrQuota)
+	}
 	if m.maxClaims > 0 && len(m.claimed)+extra > m.maxClaims {
 		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, len(m.claimed), m.maxClaims)
 	}

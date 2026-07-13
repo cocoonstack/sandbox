@@ -76,6 +76,8 @@ type Manager interface {
 	AgentSocket(id, token string) (string, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, error)
 	SetPools(ctx context.Context, pools []config.PoolSpec) error
+	Drain(ctx context.Context)
+	Uncordon(ctx context.Context)
 	Info() ([]pool.PoolInfo, pool.Gauges)
 }
 
@@ -100,6 +102,7 @@ type InfoResponse struct {
 	Claimed    int             `json:"claimed"`
 	Hibernated int             `json:"hibernated"`
 	Archived   int             `json:"archived"`
+	Draining   bool            `json:"draining,omitempty"`
 	Peers      []string        `json:"peers,omitempty"`
 }
 
@@ -165,6 +168,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/checkpoints/{id}", s.requireToken(s.handleDeleteCheckpoint))
 	mux.HandleFunc("DELETE /v1/templates", s.requireToken(s.handleDeleteTemplate))
 	mux.HandleFunc("PUT /v1/pools", s.requireRoot(s.handlePutPools))
+	mux.HandleFunc("POST /v1/drain", s.requireRoot(s.handleDrain))
+	mux.HandleFunc("DELETE /v1/drain", s.requireRoot(s.handleUncordon))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", s.handleAgent)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/owner", s.handleOwner)
 	mux.HandleFunc("GET /v1/info", s.requireRoot(s.handleInfo))
@@ -411,6 +416,16 @@ func (s *Server) handlePutPools(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request) {
+	s.mgr.Drain(r.Context())
+	s.handleInfo(w, r)
+}
+
+func (s *Server) handleUncordon(w http.ResponseWriter, r *http.Request) {
+	s.mgr.Uncordon(r.Context())
+	s.handleInfo(w, r)
+}
+
 // handlePeers lists the cluster's node addresses for the SDK's redirect
 // follow and Lookup scatter — cluster topology, not operator state, so any
 // valid token (root or tenant) may read it.
@@ -424,7 +439,7 @@ func (s *Server) handlePeers(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 	pools, g := s.mgr.Info()
-	resp := InfoResponse{Pools: pools, Claimed: g.Claimed, Hibernated: g.Hibernated, Archived: g.Archived}
+	resp := InfoResponse{Pools: pools, Claimed: g.Claimed, Hibernated: g.Hibernated, Archived: g.Archived, Draining: g.Draining}
 	if s.placer != nil {
 		resp.Peers = s.placer.PeerAddrs()
 	}
