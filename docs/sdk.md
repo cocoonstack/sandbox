@@ -8,6 +8,92 @@ The SDK is stdlib-only. One `Client` talks to one entry node; sandbox
 handles dial their owning node directly, so a client works unchanged against
 a single node or a cluster.
 
+## A complete example
+
+Claim a sandbox, push a project into it, run a build, then freeze the built
+state and fan out two independent workers from that exact moment:
+
+```go
+package main
+
+import (
+	"archive/tar"
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"time"
+
+	sandbox "github.com/cocoonstack/sandbox/sdk/go"
+)
+
+func main() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	client, err := sandbox.Connect(os.Getenv("SANDBOXD_ADDR"),
+		sandbox.WithAPIToken(os.Getenv("SANDBOXD_TOKEN")))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	sb, err := client.New(ctx, "rt:24.04",
+		sandbox.WithSize(sandbox.Medium),
+		sandbox.WithTimeout(10*time.Minute))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer sb.Close()
+	fmt.Printf("claimed %s on %s\n", sb.ID, sb.Owner())
+
+	// Push is the only ingestion path on the no-network lane.
+	if err := sb.Push(ctx, "/work", projectTar()); err != nil {
+		log.Fatal(err)
+	}
+	out, err := sb.Exec(ctx, "sh", "-c", "cd /work && make build 2>&1")
+	var exit *sandbox.ExitError
+	switch {
+	case errors.As(err, &exit):
+		log.Fatalf("build failed (rc=%d): %s", exit.Code, exit.Stderr)
+	case err != nil:
+		log.Fatal(err)
+	}
+	fmt.Print(out)
+
+	// Freeze the built state; each branch is a fully independent sandbox.
+	ckpt, err := sb.Checkpoint(ctx, "built")
+	if err != nil {
+		log.Fatal(err)
+	}
+	for i := range 2 {
+		worker, err := ckpt.New(ctx)
+		if err != nil {
+			log.Fatal(err)
+		}
+		got, err := worker.Exec(ctx, "sh", "-c", fmt.Sprintf("echo worker %d && ls /work", i))
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Print(got)
+		_ = worker.Close()
+	}
+}
+
+func projectTar() *bytes.Reader {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	body := "build:\n\techo built > out.txt\n"
+	_ = tw.WriteHeader(&tar.Header{Name: "Makefile", Mode: 0o644, Size: int64(len(body))})
+	_, _ = tw.Write([]byte(body))
+	_ = tw.Close()
+	return bytes.NewReader(buf.Bytes())
+}
+```
+
+The rest of this guide is the per-method reference.
+
 ## Connecting
 
 ```go
@@ -190,7 +276,7 @@ revokes it with no extra state. Answers 501 when the node has no
 ## Node info
 
 ```go
-info, err := client.Info(ctx)   // *NodeInfo: Pools, Claimed, Hibernated, Peers
+info, err := client.Info(ctx)   // *NodeInfo: Pools, Claimed, Hibernated, Archived, Peers
 ```
 
 ## Running commands

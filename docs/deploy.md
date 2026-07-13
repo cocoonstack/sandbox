@@ -63,6 +63,8 @@ sandboxd reads one JSON file (`-config`, default
 | `max_claims` | 0 (unlimited) | node-wide cap on live claims; claim/fork/branch requests beyond it answer 429 with the pool state unharmed (on a cluster, a claim is first redirected to a warm peer) |
 | `audit_log` | false | append every relayed request frame's op + addressing fields (never payloads) to `<data_dir>/audit.jsonl`, size-rotated with one `.1` backup. Records are `{t, id, op}` plus whichever addressing fields the op carries (`argv`, `path`, `dest`, `from`, `to`, `url`, `session`, `port`); preview accesses record as op `preview_dial`. A request frame whose first line exceeds 4 KiB is skipped, never truncated |
 | `idle_hibernate_seconds` | 0 (off) | node-wide idle policy for unpooled claims (template/checkpoint claims): a claim with no data-plane connection for this long is hibernated; the next call wakes it transparently. Per-pool `idle_hibernate_seconds` (in a pool entry) does the same for that pool's claims — pooled keys ignore the node-wide value. Opt-in deliberately: a wake costs latency and the snapshot, so callers with their own idle logic must not pay twice |
+| `archive_after_seconds` | 0 (off) | tier below hibernation: a hibernated claim idle this long is checkpointed to the store and its local VM dropped, freeing the node entirely; the next call restores it transparently (a checkpoint restore's latency). Requires `idle_hibernate_seconds > 0` and must exceed it. Node-wide for unpooled keys; per-pool overrides for that pool |
+| `archive_delete_after_seconds` | 0 (keep) | purge an archived claim's store checkpoint this long after it was archived, reclaiming storage; the claim is then gone for good. Same node-wide/per-pool split |
 | `mesh` | unset | join a cluster ([Clusters](cluster.md)); unset = single node |
 | `pools[]` | — | warm pools. `warm` defaults to 4; `net` is `none` or `egress`; `size` is a tier, below. Retune online without a restart via [`PUT /v1/pools`](sandboxd-api.md#put-v1pools) — omitted pools drain |
 
@@ -75,6 +77,75 @@ fragment the warm pools):
 | `medium` | 2 | 1G |
 | `large` | 4 | 4G |
 | `xlarge` | 4 | 8G |
+
+### A fuller config
+
+The block above is the minimum. A production node with tenants, guarded
+egress + HTTPS interception, previews, an object-store checkpoint backend,
+the idle→hibernate→archive tiers, and a mesh looks like this — every field
+here validates on load:
+
+```json
+{
+  "listen": ":7777",
+  "data_dir": "/var/lib/sandboxd",
+  "advertise_addr": "10.0.0.5:7777",
+  "bridge": "br0",
+
+  "api_token": "op-root-token",
+  "tenants": [
+    {"name": "acme", "token": "acme-token", "max_claims": 50}
+  ],
+
+  "secrets": [
+    {"name": "gh", "header": "Authorization", "value_env": "GH_TOKEN"}
+  ],
+  "egress_ca": {
+    "root_cert": "/etc/sandboxd/egress-ca/root.crt",
+    "intermediate_cert": "/etc/sandboxd/egress-ca/node-a.crt",
+    "intermediate_key": "/etc/sandboxd/egress-ca/node-a.key"
+  },
+
+  "preview_listen": ":8443",
+  "preview_secret": "cluster-shared-hmac-secret",
+  "preview_advertise": "https://preview.example.com",
+
+  "checkpoint_store": {
+    "kind": "s3",
+    "s3": {"bucket": "sandbox-ckpt", "prefix": "ck/", "region": "us-east-1"}
+  },
+  "checkpoint_ttl_hours": 168,
+
+  "max_claims": 200,
+  "audit_log": true,
+  "idle_hibernate_seconds": 300,
+  "archive_after_seconds": 3600,
+  "archive_delete_after_seconds": 604800,
+
+  "mesh": {
+    "node_id": "node-a",
+    "bind": "10.0.0.5:7946",
+    "join": ["10.0.0.6:7946"],
+    "cluster_key": "MDEyMzQ1Njc4OWFiY2RlZg=="
+  },
+
+  "pools": [
+    {"template": "rt:24.04", "net": "none", "size": "small", "warm": 4, "warm_max": 12},
+    {"template": "rt:24.04", "net": "egress", "size": "medium", "warm": 2,
+     "idle_hibernate_seconds": 120, "archive_after_seconds": 900,
+     "egress": {"allow": [
+       {"host": "api.github.com", "methods": ["GET", "POST"], "secret": "gh", "intercept": true},
+       {"host": "*.googleapis.com"}
+     ]}}
+  ]
+}
+```
+
+Secret values come from the environment named by `value_env` (here
+`GH_TOKEN`), never the file. The `egress_ca` files are provisioned with
+`sandboxd ca` — see [Guarded egress](egress.md#https-interception). On a
+cluster, `api_token`, `tenants`, `preview_secret`, and `cluster_key` must
+match on every node.
 
 ### Auth model
 

@@ -57,7 +57,10 @@ Design docs:
 - `protocol/fixtures/` — golden frame corpus; the Rust, Go, and Python
   protocol tests all round-trip it, so wire drift fails CI
 - `e2e/` — in-process full-stack tests (real pool/engine/relay/SDK, fake
-  cocoon+guest) plus `cmd/demo`, `cmd/smoke`, `cmd/meshsmoke`, and the `pullbench`/`rpcbench` perf drivers
+  cocoon+guest) plus bare-metal acceptance drivers under `cmd/`: `demo`,
+  `smoke`, `meshsmoke`, `crossnode`, `coldproof`, `egresssmoke`,
+  `interceptsmoke`, `lifecycle` (idle→hibernate→archive), `androidsmoke`,
+  `browsersmoke`, and the `pullbench`/`pushbench`/`rpcbench` perf drivers
 - `boot/kernel/` — kernel version pin (`VERSION` + matching tarball `SHA256`,
   bump both together) + config fragment (applied over `x86_64_defconfig` +
   `kvm_guest.config`)

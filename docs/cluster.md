@@ -75,6 +75,7 @@ curl -s -H "Authorization: Bearer $TOKEN" http://node-a:7777/v1/info | jq .
   ],
   "claimed": 2,
   "hibernated": 0,
+  "archived": 0,
   "peers": ["10.0.0.6:7777"]
 }
 ```
@@ -89,6 +90,13 @@ entry node, then queries every peer concurrently
 (`GET /v1/sandboxes/{id}/owner` — the token is both authorization and
 ownership proof) and returns a handle bound to whichever node confirms
 ownership first.
+
+```go
+// Persist sb.ID and sb.Token() before the process exits; dial any node to
+// rebind — Lookup finds the owner wherever the sandbox actually lives.
+client, _ := sandbox.Connect("10.0.0.6:7777", sandbox.WithAPIToken(token))
+sb, err := client.Lookup(ctx, savedID, savedToken)
+```
 
 ## Templates on a cluster
 

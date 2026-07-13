@@ -15,6 +15,52 @@ does). The surface is at parity with the [Go SDK](sdk.md); wire fidelity is
 pinned by the shared protocol fixture corpus that the Rust guest, Go, and
 Python all round-trip in CI.
 
+## A complete example
+
+Claim a sandbox, push a project in, run a build, then freeze the built state
+and fan out two independent workers from that exact moment:
+
+```python
+import io
+import os
+import tarfile
+
+from cocoonsandbox import Client, ExitError
+
+
+def project_tar() -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        body = b"build:\n\techo built > out.txt\n"
+        info = tarfile.TarInfo("Makefile")
+        info.size = len(body)
+        tar.addfile(info, io.BytesIO(body))
+    return buf.getvalue()
+
+
+def main() -> None:
+    client = Client(os.environ["SANDBOXD_ADDR"], api_token=os.environ["SANDBOXD_TOKEN"])
+    with client.new("rt:24.04", size="medium", ttl_seconds=600) as sb:
+        print(f"claimed {sb.id} on {sb.owner}")
+
+        sb.push("/work", project_tar())  # only ingestion path on the no-network lane
+        try:
+            print(sb.exec("sh", "-c", "cd /work && make build 2>&1"), end="")
+        except ExitError as e:
+            raise SystemExit(f"build failed (rc={e.code}): {e.stderr}")
+
+        ckpt = sb.checkpoint("built")  # freeze the built state
+        for i in range(2):
+            with ckpt.new() as worker:  # each branch is fully independent
+                print(worker.exec("sh", "-c", f"echo worker {i} && ls /work"), end="")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+The rest of this guide is the per-method reference.
+
 ## Connecting
 
 ```python

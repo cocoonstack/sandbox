@@ -209,7 +209,8 @@ success, 404 unknown.
 ## GET /v1/sandboxes
 
 Auth: root only (tenant tokens get 403). The operator index: `{"sandboxes":
-[{id, key, deadline, hibernated, from_checkpoint?}]}` — never tokens.
+[{id, key, deadline, hibernated, archived?, from_checkpoint?}]}` — never
+tokens.
 
 ## GET /metrics
 
@@ -225,14 +226,16 @@ billing source of truth is the usage journal below.
 
 Always on: every lifecycle transition appends one JSONL event to
 `<data_dir>/usage.jsonl` — `{"t": <RFC3339>, "ev":
-"claim|hibernate|wake|fork|checkpoint|promote|release|reap", "id": "sb_…",
-"vm": "sbx-…"}` plus `key` and `tenant` (the pool key and owning tenant,
-claim events), `children` (fork) and `ref` (the promoted template /
-checkpoint id). The file rotates at
+"claim|hibernate|wake|fork|checkpoint|promote|release|reap|archive|unarchive|archive_delete|egress",
+"id": "sb_…", "vm": "sbx-…"}` plus `key` and `tenant` (the pool key and
+owning tenant, claim events), `children` (fork) and `ref` (the promoted
+template / checkpoint id, or the egress host). The file rotates at
 64 MiB keeping one `.1` backup, so a tailing collector never loses a window
 silently. Folding rules: billable compute seconds per sandbox =
 Σ(claim→release/reap) − Σ(hibernate→wake); hibernated storage seconds =
-Σ(hibernate→wake); an interval left open by a crash clamps to the claim's
+Σ(hibernate→wake) minus the archived span; archived storage seconds =
+Σ(archive→unarchive/archive_delete), a cheaper store tier than a hibernated
+VM's RAM. An interval left open by a crash clamps to the claim's
 deadline, and the next reconcile emits `reap` for claims it drops. The `vm`
 name joins cocoon's machine-level metering ledger for audit cross-checks.
 
@@ -260,11 +263,13 @@ peers:
             "warm": 4, "refilling": 0, "target": 4, "golden": true}],
  "claimed": 2,
  "hibernated": 1,
+ "archived": 0,
  "peers": ["10.0.0.6:7777"]}
 ```
 
-`hibernated` counts claims whose VM is currently hibernated (included in
-`claimed`).
+`hibernated` counts claims whose VM is currently hibernated, `archived` those
+checkpointed to the store with the local VM dropped (see
+[archive tiers](deploy.md#configuration)); both are included in `claimed`.
 
 `golden` reports whether the pool's snapshot exists (refill can clone);
 `warm` at `target` with `golden: true` means warm claims are served in
