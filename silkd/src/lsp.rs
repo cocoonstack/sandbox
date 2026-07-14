@@ -74,8 +74,11 @@ impl Broker {
             Ok(c) => c,
             Err(e) => return proto::err_frame(w, &e, "spawn language server").await,
         };
-        let stdin = child.stdin.take().expect("stdin piped");
-        let stdout = child.stdout.take().expect("stdout piped");
+        let Some((stdin, stdout)) = child.stdin.take().zip(child.stdout.take()) else {
+            let _ = child.start_kill();
+            return proto::error_frame(w, ErrorKind::Internal, "language server stdio not piped")
+                .await;
+        };
         let server = Server {
             child: Arc::new(tokio::sync::Mutex::new(child)),
             stdin: Arc::new(tokio::sync::Mutex::new(Some(stdin))),
@@ -83,7 +86,7 @@ impl Broker {
         };
 
         let id = format!("lsp-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
-        self.inner.lock().unwrap().insert(id.clone(), server);
+        crate::sysutil::lock(&self.inner).insert(id.clone(), server);
 
         // If the client is already gone, don't leak the server we just spawned.
         if let Err(e) = proto::write_frame(
@@ -110,7 +113,7 @@ impl Broker {
         w: &mut W,
         server_id: &str,
     ) -> std::io::Result<()> {
-        let found = self.inner.lock().unwrap().get(server_id).cloned();
+        let found = crate::sysutil::lock(&self.inner).get(server_id).cloned();
         let server = match found {
             Some(s) => s,
             None => return proto::error_frame(w, ErrorKind::NotFound, "no such lsp server").await,
@@ -150,7 +153,7 @@ impl Broker {
     /// reap removes a server from the table and kills + waits its child (no
     /// zombie survives), reporting whether it was there.
     async fn reap(&self, server_id: &str) -> bool {
-        let removed = self.inner.lock().unwrap().remove(server_id);
+        let removed = crate::sysutil::lock(&self.inner).remove(server_id);
         if let Some(server) = removed {
             let mut child = server.child.lock().await;
             let _ = child.start_kill();

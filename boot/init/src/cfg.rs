@@ -1,6 +1,7 @@
 //! Kernel cmdline contract, shared with cocoon (hypervisor/utils.go builds
 //! the cmdline; this module is the consuming end).
 
+use std::fmt::Write as _;
 use std::time::Duration;
 
 pub const DEFAULT_INIT: &str = "/sbin/init";
@@ -124,10 +125,10 @@ pub fn network_unit(ip: &IpParam, mac: &str) -> String {
         ip.addr, ip.prefix
     );
     if let Some(gw) = &ip.gateway {
-        unit.push_str(&format!("Gateway={gw}\n"));
+        let _ = writeln!(unit, "Gateway={gw}");
     }
     for dns in &ip.dns {
-        unit.push_str(&format!("DNS={dns}\n"));
+        let _ = writeln!(unit, "DNS={dns}");
     }
     unit
 }
@@ -164,25 +165,10 @@ fn parse_ip_param(val: &str) -> Option<IpParam> {
 }
 
 fn mask_to_prefix(mask: &str) -> Option<u8> {
-    let mut bits: u32 = 0;
-    let mut octets = 0;
-    for part in mask.split('.') {
-        let octet: u32 = part.parse().ok()?;
-        if octet > 255 {
-            return None;
-        }
-        bits = (bits << 8) | octet;
-        octets += 1;
-    }
-    if octets != 4 {
-        return None;
-    }
+    let bits = u32::from(mask.parse::<std::net::Ipv4Addr>().ok()?);
     let prefix = bits.leading_ones();
     // Reject non-contiguous masks.
-    if bits != u32::MAX.checked_shl(32 - prefix).unwrap_or(0) {
-        return None;
-    }
-    Some(prefix as u8)
+    (bits == u32::MAX.checked_shl(32 - prefix).unwrap_or(0)).then_some(prefix as u8)
 }
 
 #[cfg(test)]
@@ -217,15 +203,21 @@ mod tests {
 
     #[test]
     fn parse_missing_layers_or_cow() {
-        assert!(parse("cocoon.cow=cow")
-            .unwrap_err()
-            .contains("cocoon.layers"));
-        assert!(parse("cocoon.layers=l0")
-            .unwrap_err()
-            .contains("cocoon.cow"));
-        assert!(parse("cocoon.layers= cocoon.cow=cow")
-            .unwrap_err()
-            .contains("cocoon.layers"));
+        assert!(
+            parse("cocoon.cow=cow")
+                .unwrap_err()
+                .contains("cocoon.layers")
+        );
+        assert!(
+            parse("cocoon.layers=l0")
+                .unwrap_err()
+                .contains("cocoon.cow")
+        );
+        assert!(
+            parse("cocoon.layers= cocoon.cow=cow")
+                .unwrap_err()
+                .contains("cocoon.layers")
+        );
     }
 
     #[test]

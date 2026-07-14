@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 use std::io;
 
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
@@ -460,6 +460,21 @@ pub async fn err_frame<W: AsyncWrite + Unpin>(
     write_frame(w, &Response::error(kind, format!("{op}: {e}"))).await
 }
 
+/// Writes the terminal frame of a finished subprocess verb: Done on success,
+/// else `label: trimmed stderr` as an Internal error. Shared by git and tree.
+pub async fn subprocess_result<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    success: bool,
+    label: &str,
+    stderr: &[u8],
+) -> io::Result<()> {
+    if success {
+        return write_frame(w, &Response::Done).await;
+    }
+    let msg = String::from_utf8_lossy(stderr);
+    error_frame(w, ErrorKind::Internal, format!("{label}: {}", msg.trim())).await
+}
+
 /// Writes the terminal Error frame of a failed verb.
 pub async fn error_frame<W: AsyncWrite + Unpin>(
     w: &mut W,
@@ -548,17 +563,29 @@ pub async fn write_feed_error<W: AsyncWrite + Unpin>(w: &mut W, err: FeedError) 
 }
 
 mod b64 {
-    use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
-    use serde::{Deserialize, Deserializer, Serializer};
+    use base64::engine::general_purpose::STANDARD;
+    use serde::{Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(data: &[u8], s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&STANDARD.encode(data))
     }
 
+    /// Decodes inside the visitor so bulk `data` frames (43KB-1.3MB on the
+    /// wire) never allocate an intermediate String — serde hands the borrowed
+    /// slice straight to the base64 decoder.
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
-        let text = String::deserialize(d)?;
-        STANDARD.decode(text).map_err(serde::de::Error::custom)
+        struct B64Visitor;
+        impl serde::de::Visitor<'_> for B64Visitor {
+            type Value = Vec<u8>;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a base64 string")
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Vec<u8>, E> {
+                STANDARD.decode(v).map_err(E::custom)
+            }
+        }
+        d.deserialize_str(B64Visitor)
     }
 }
 

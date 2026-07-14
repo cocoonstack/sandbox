@@ -1,13 +1,14 @@
 //! pty.open E2E: a shell under a pseudo-terminal, driven over a duplex.
 //! openpty exists on macOS and Linux, so this runs on the dev host.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
 mod common;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use common::{FrameLines, FrameWriter};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use silkd::server::State;
 use tokio::io::AsyncWriteExt;
 

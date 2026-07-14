@@ -1,5 +1,6 @@
 //! fs.watch E2E: a connection-bound event stream ended by client disconnect.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
 mod common;
 
 use std::sync::Arc;

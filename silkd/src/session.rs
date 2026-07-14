@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
-use crate::proto::{self, ErrorKind, Response, READ_CHUNK};
+use crate::proto::{self, ErrorKind, READ_CHUNK, Response};
 use crate::sysutil;
 
 /// Idle sessions (no command run within this window) are reaped so an
@@ -67,8 +67,8 @@ impl Table {
             .kill_on_drop(true)
             .spawn()?;
         let pid = child.id().unwrap_or(0);
-        let stdin = child.stdin.take().expect("stdin piped");
-        let stdout = child.stdout.take().expect("stdout piped");
+        let stdin = take_pipe(child.stdin.take(), "stdin")?;
+        let stdout = take_pipe(child.stdout.take(), "stdout")?;
         let session = Arc::new(Session {
             pid,
             io: tokio::sync::Mutex::new(Io {
@@ -83,10 +83,10 @@ impl Table {
         // real command reads a clean stream.
         let mut init = String::from("exec 2>&1\n");
         if let Some(dir) = cwd {
-            writeln!(init, "cd {} || exit 1", shell_quote(&dir)).unwrap();
+            let _ = writeln!(init, "cd {} || exit 1", shell_quote(&dir));
         }
         for (k, v) in env {
-            writeln!(init, "export {}={}", k, shell_quote(v)).unwrap();
+            let _ = writeln!(init, "export {}={}", k, shell_quote(v));
         }
         {
             let mut io = session.io.lock().await;
@@ -96,7 +96,7 @@ impl Table {
         // Reserve the id atomically: a concurrent create with the same id
         // must not silently replace (and orphan) the loser. Dropping the loser
         // Arc here fires kill_on_drop on its shell.
-        let mut map = self.inner.lock().unwrap();
+        let mut map = sysutil::lock(&self.inner);
         if map.contains_key(&id) {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -108,11 +108,11 @@ impl Table {
     }
 
     pub fn get(&self, id: &str) -> Option<Arc<Session>> {
-        self.inner.lock().unwrap().get(id).cloned()
+        sysutil::lock(&self.inner).get(id).cloned()
     }
 
     pub fn list(&self) -> Vec<String> {
-        let mut ids: Vec<String> = self.inner.lock().unwrap().keys().cloned().collect();
+        let mut ids: Vec<String> = sysutil::lock(&self.inner).keys().cloned().collect();
         ids.sort();
         ids
     }
@@ -121,7 +121,7 @@ impl Table {
     /// kill_on_drop) unwedges a session whose command is blocked while a
     /// run() still holds the io lock and its Arc.
     pub fn remove(&self, id: &str) -> bool {
-        let removed = self.inner.lock().unwrap().remove(id);
+        let removed = sysutil::lock(&self.inner).remove(id);
         if let Some(s) = &removed {
             sysutil::kill_group(s.pid);
         }
@@ -129,7 +129,7 @@ impl Table {
     }
 
     pub fn len(&self) -> usize {
-        self.inner.lock().unwrap().len()
+        sysutil::lock(&self.inner).len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -140,20 +140,16 @@ impl Table {
     /// running a command (io lock held) is never idle, so it is skipped even
     /// if its last stamp is old (a long-running command). Returns the count.
     pub fn reap_idle(&self, ttl: Duration) -> usize {
-        let mut map = self.inner.lock().unwrap();
-        let dead: Vec<String> = map
-            .iter()
-            .filter(|(_, s)| {
-                s.io.try_lock().is_ok() && s.last_active.lock().unwrap().elapsed() > ttl
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in &dead {
-            if let Some(s) = map.remove(id) {
+        let mut map = sysutil::lock(&self.inner);
+        let before = map.len();
+        map.retain(|_, s| {
+            let idle = s.io.try_lock().is_ok() && sysutil::lock(&s.last_active).elapsed() > ttl;
+            if idle {
                 sysutil::kill_group(s.pid);
             }
-        }
-        dead.len()
+            !idle
+        });
+        before - map.len()
     }
 }
 
@@ -184,7 +180,7 @@ impl Session {
         // is held, so it can't mis-reap in the gap between the command finishing
         // and the fresh stamp landing (a long-running command isn't idle either
         // — io stays held for its whole duration).
-        *self.last_active.lock().unwrap() = Instant::now();
+        *sysutil::lock(&self.last_active) = Instant::now();
         drop(io);
         match outcome {
             Ok(code) => {
@@ -248,19 +244,19 @@ impl Io {
             acc.extend_from_slice(&buf[..n]);
             if let Some(pos) = memchr::memmem::find(&acc, mb) {
                 emit(&mut out, &mut frame, &acc[..pos]).await;
-                let mut rest = acc[pos + mb.len()..].to_vec();
-                while !rest.contains(&b'\n') && rest.len() < EXIT_TAIL_MAX {
+                acc.drain(..pos + mb.len());
+                while !acc.contains(&b'\n') && acc.len() < EXIT_TAIL_MAX {
                     let m = self.stdout.read(&mut buf).await?;
                     if m == 0 {
                         break;
                     }
-                    rest.extend_from_slice(&buf[..m]);
+                    acc.extend_from_slice(&buf[..m]);
                 }
                 // Parse only the exit-code line; a command that left a
                 // background writer can land bytes after the newline, which
                 // must not corrupt the code.
-                let end = rest.iter().position(|&b| b == b'\n').unwrap_or(rest.len());
-                return Ok(String::from_utf8_lossy(&rest[..end])
+                let end = acc.iter().position(|&b| b == b'\n').unwrap_or(acc.len());
+                return Ok(String::from_utf8_lossy(&acc[..end])
                     .trim()
                     .parse()
                     .unwrap_or(-1));
@@ -302,6 +298,11 @@ async fn emit<W: AsyncWrite + Unpin>(out: &mut Option<&mut W>, frame: &mut Vec<u
     if failed {
         *out = None;
     }
+}
+
+/// Unwraps a piped child stdio handle; absent means the spawn contract broke.
+fn take_pipe<T>(pipe: Option<T>, name: &str) -> io::Result<T> {
+    pipe.ok_or_else(|| io::Error::other(format!("child {name} not piped")))
 }
 
 /// POSIX single-quote quoting: wrap in '…', closing/reopening around any

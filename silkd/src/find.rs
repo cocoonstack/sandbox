@@ -8,7 +8,7 @@ use regex::Regex;
 use tokio::fs;
 use tokio::io::AsyncWrite;
 
-use crate::proto::{self, err_frame, ErrorKind, Response};
+use crate::proto::{self, ErrorKind, Response, err_frame};
 
 /// The number of bytes a file may have before find skips it as binary/huge —
 /// grep-scale line scanning is for source trees, not blobs.

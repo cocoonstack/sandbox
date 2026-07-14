@@ -139,6 +139,7 @@ fn cstr(s: &str) -> Result<CString, String> {
     CString::new(s).map_err(|_| format!("NUL byte in {s:?}"))
 }
 
+#[allow(clippy::expect_used)] // compile-time literals contain no NUL
 fn static_cstr(s: &'static str) -> CString {
     CString::new(s).expect("static string contains no NUL")
 }

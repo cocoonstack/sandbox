@@ -2,6 +2,7 @@
 //! (echo, sh), so it runs on any Unix — keep it that way so exec-path bugs
 //! surface on the dev host, not only on Linux CI.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
 mod common;
 
 use std::sync::Arc;

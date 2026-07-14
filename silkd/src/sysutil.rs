@@ -2,11 +2,12 @@
 //! user de-escalation, and the one signal syscall — all the crate's unsafe
 //! lives here.
 
+use std::fmt::Write as _;
 use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::process::ExitStatus;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::process::Command;
 
@@ -34,7 +35,13 @@ pub fn tmp_suffix() -> String {
 pub fn rand_token() -> String {
     let mut b = [0u8; 16];
     match std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)) {
-        Ok(()) => b.iter().map(|x| format!("{x:02x}")).collect(),
+        Ok(()) => {
+            let mut s = String::with_capacity(32);
+            for x in b {
+                let _ = write!(s, "{x:02x}");
+            }
+            s
+        }
         Err(_) => tmp_suffix(),
     }
 }
@@ -45,13 +52,14 @@ pub fn rand_token() -> String {
 /// child holding the stdout pipe open). The shell is spawned as its own group
 /// leader (pgid == its pid).
 pub fn kill_group(pgid: u32) {
-    // kill(-0) targets the CALLER's group (silkd itself), and anything above
-    // i32::MAX would go negative through the pid_t cast — refuse both.
-    // Synthetic ids trip neither guard: synth_pid() keeps them ≤ i32::MAX
-    // and above pid_max, so they reach kill() and miss with ESRCH.
-    if pgid == 0 || pgid > i32::MAX as u32 {
+    // kill(-0) targets the CALLER's group (silkd itself). Synthetic ids pass
+    // the guard: synth_pid() keeps them ≤ i32::MAX and above pid_max, so they
+    // reach kill() and miss with ESRCH.
+    if !valid_pid(pgid) {
         return;
     }
+    // SAFETY: kill(2) takes no pointers; the guards above keep the pid_t cast
+    // in range and away from silkd's own group.
     unsafe { libc::kill(-(pgid as libc::pid_t), libc::SIGKILL) };
 }
 
@@ -59,13 +67,19 @@ pub fn kill_group(pgid: u32) {
 /// just-exited pid already satisfies the caller's goal (the process is gone).
 pub fn signal_pid(pid: u32, sig: i32) {
     // pid 0 means "my whole process group" to kill(2) — signalling it would
-    // take down silkd and every child; anything above i32::MAX would go
-    // negative through the pid_t cast and hit a process group. Synthetic ids
-    // trip neither guard (see kill_group).
-    if pid == 0 || pid > i32::MAX as u32 {
+    // take down silkd and every child (see kill_group for synthetic ids).
+    if !valid_pid(pid) {
         return;
     }
+    // SAFETY: kill(2) takes no pointers; the guards above keep the pid_t cast
+    // in range and away from silkd's own group.
     unsafe { libc::kill(pid as libc::pid_t, sig) };
+}
+
+/// Rejects pid 0 and anything that would go negative through the pid_t cast
+/// (and so hit a process group instead of a pid).
+fn valid_pid(id: u32) -> bool {
+    id != 0 && id <= i32::MAX as u32
 }
 
 /// The environment every exec starts from before the request's env is
@@ -96,7 +110,8 @@ fn lookup_user(user: &str) -> Result<(u32, u32, String), String> {
     // Hold NSS_LOCK across the call and every read of the returned static
     // buffer, so a concurrent lookup on another worker thread cannot clobber
     // it mid-read (which would de-escalate to the wrong uid).
-    let _guard = NSS_LOCK.lock().unwrap();
+    let _guard = lock(&NSS_LOCK);
+    // SAFETY: cname is a live NUL-terminated CString for the call.
     let pw = unsafe { libc::getpwnam(cname.as_ptr()) };
     if pw.is_null() {
         return Err(format!("unknown user {user:?}"));
@@ -104,6 +119,7 @@ fn lookup_user(user: &str) -> Result<(u32, u32, String), String> {
     // SAFETY: pw is non-null (checked) and, with NSS_LOCK still held, points to
     // a valid passwd whose pw_dir is a NUL-terminated string it owns.
     let pw = unsafe { &*pw };
+    // SAFETY: pw_dir is NUL-terminated and stays valid while NSS_LOCK is held.
     let home = unsafe { std::ffi::CStr::from_ptr(pw.pw_dir) }
         .to_string_lossy()
         .into_owned();
@@ -142,6 +158,7 @@ pub fn openpty(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
     // SAFETY: openpty just handed us these fds; wrapping transfers ownership so
     // they close on drop.
     let master = unsafe { OwnedFd::from_raw_fd(master) };
+    // SAFETY: same transfer for the slave end.
     let slave = unsafe { OwnedFd::from_raw_fd(slave) };
     set_nonblocking(master.as_raw_fd())?;
     Ok((master, slave))
@@ -170,13 +187,17 @@ pub fn set_winsize(fd: RawFd, cols: u16, rows: u16) -> std::io::Result<()> {
 /// # Safety
 /// Only async-signal-safe syscalls; valid in a post-fork child.
 pub unsafe fn make_controlling_tty() -> std::io::Result<()> {
-    if libc::setsid() < 0 {
-        return Err(std::io::Error::last_os_error());
+    // SAFETY: setsid and ioctl are async-signal-safe and take no pointers; the
+    // caller guarantees a post-fork child (see # Safety).
+    unsafe {
+        if libc::setsid() < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
     }
-    if libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
 }
 
 /// Reads from a raw fd (the pty master), returning bytes read; a WouldBlock
@@ -206,10 +227,18 @@ fn set_nonblocking(fd: RawFd) -> std::io::Result<()> {
     if flags < 0 {
         return Err(std::io::Error::last_os_error());
     }
+    // SAFETY: same fd; F_SETFL only sets the just-read flags plus O_NONBLOCK.
     if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())
+}
+
+/// Locks a std mutex, panicking on poisoning: silkd's critical sections never
+/// panic, so a poisoned lock is unreachable.
+#[allow(clippy::unwrap_used)]
+pub fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap()
 }
 
 /// Maps a wait() status to the shell convention (128 + signal when killed).

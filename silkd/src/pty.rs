@@ -8,14 +8,14 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::unix::AsyncFd;
 use tokio::io::AsyncWrite;
+use tokio::io::unix::AsyncFd;
 use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
-use crate::proc::{synth_pid, Chunk, Proc, Table};
-use crate::proto::{ErrorKind, PtyReq, Request, Response, READ_CHUNK};
+use crate::proc::{Chunk, Proc, Table, synth_pid};
+use crate::proto::{ErrorKind, PtyReq, READ_CHUNK, Request, Response};
 use crate::sysutil;
 
 /// After the shell exits, drain the master's buffered tail for at most this
@@ -36,11 +36,11 @@ pub async fn open<W: AsyncWrite + Unpin>(
 ) -> std::io::Result<()> {
     let (master, slave) = match sysutil::openpty(req.cols, req.rows) {
         Ok(pair) => pair,
-        Err(e) => return crate::proto::error_frame(out, ErrorKind::Internal, e.to_string()).await,
+        Err(e) => return crate::proto::err_frame(out, &e, "openpty").await,
     };
     let resize_fd = match master.try_clone() {
         Ok(fd) => fd,
-        Err(e) => return crate::proto::error_frame(out, ErrorKind::Internal, e.to_string()).await,
+        Err(e) => return crate::proto::err_frame(out, &e, "dup pty master").await,
     };
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
@@ -55,13 +55,13 @@ pub async fn open<W: AsyncWrite + Unpin>(
             return crate::proto::error_frame(out, ErrorKind::BadRequest, e).await;
         }
     }
-    match (slave.try_clone(), slave.try_clone()) {
-        (Ok(in_fd), Ok(out_fd)) => {
+    match slave.try_clone().and_then(|i| Ok((i, slave.try_clone()?))) {
+        Ok((in_fd, out_fd)) => {
             cmd.stdin(Stdio::from(in_fd))
                 .stdout(Stdio::from(out_fd))
                 .stderr(Stdio::from(slave));
         }
-        _ => return crate::proto::error_frame(out, ErrorKind::Internal, "dup pty slave").await,
+        Err(e) => return crate::proto::err_frame(out, &e, "dup pty slave").await,
     }
     // SAFETY: make_controlling_tty runs only async-signal-safe syscalls, which
     // is the contract for a post-fork pre_exec hook.
@@ -72,7 +72,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return crate::proto::error_frame(out, ErrorKind::Internal, e.to_string()).await,
+        Err(e) => return crate::proto::err_frame(out, &e, "spawn shell").await,
     };
     // Drop cmd so its Stdio dups of the slave close: otherwise silkd keeps the
     // slave open and the master never sees the shell's exit (no EOF/EIO), so
@@ -88,7 +88,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
         Err(e) => {
             child.start_kill().ok();
             table.remove_if(pid, &proc);
-            return crate::proto::error_frame(out, ErrorKind::Internal, e.to_string()).await;
+            return crate::proto::err_frame(out, &e, "watch pty master").await;
         }
     };
     if crate::proto::write_frame(out, &Response::Started { pid })
@@ -116,8 +116,8 @@ pub async fn resize<W: AsyncWrite + Unpin>(
     cols: u16,
     rows: u16,
 ) -> std::io::Result<()> {
-    let Some(proc) = table.get(pid) else {
-        return crate::proto::error_frame(w, ErrorKind::NotFound, "no such pid").await;
+    let Some(proc) = table.get_or_not_found(w, pid).await? else {
+        return Ok(());
     };
     match proc.resize(cols, rows) {
         Ok(()) => crate::proto::write_frame(w, &Response::Done).await,
@@ -166,7 +166,7 @@ async fn pump<W: AsyncWrite + Unpin>(
                     // 0 (BSD) and EIO (Linux) both mean the slave is fully closed.
                     Ok(Ok(0)) | Ok(Err(_)) => eof = true,
                     Ok(Ok(n)) => {
-                        proc.emit(&Chunk::Stdout(buf[..n].to_vec()));
+                        proc.emit_bytes(false, &buf[..n]);
                         if crate::proto::write_chunk_frame(out, &mut frame, "stdout", &buf[..n]).await.is_err() {
                             // Client gone mid-output: kill and reap for the real code.
                             let _ = child.start_kill();
@@ -221,7 +221,7 @@ async fn drain<W: AsyncWrite + Unpin>(
             match guard.try_io(|fd| sysutil::read_fd(fd.get_ref().as_raw_fd(), buf)) {
                 Ok(Ok(0)) | Ok(Err(_)) => return,
                 Ok(Ok(n)) => {
-                    proc.emit(&Chunk::Stdout(buf[..n].to_vec()));
+                    proc.emit_bytes(false, &buf[..n]);
                     if crate::proto::write_chunk_frame(out, frame, "stdout", &buf[..n])
                         .await
                         .is_err()

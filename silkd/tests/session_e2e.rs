@@ -2,12 +2,13 @@
 //! exec calls. Spawns real bash, so Unix-only in practice; kept ungated so
 //! the persistence contract is checked on the dev host too.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
 mod common;
 
 use std::sync::Arc;
 
 use common::{one, stdout_body, type_of};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use silkd::server::State;
 
 async fn create(state: &Arc<State>, extra: Value) -> String {
@@ -81,11 +82,13 @@ async fn session_list_and_rm() {
     let id = create(&state, json!({})).await;
 
     let listed = one(&state, r#"{"op":"session_list"}"#).await;
-    assert!(listed[0]["sessions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|s| s == &json!(id)));
+    assert!(
+        listed[0]["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s == &json!(id))
+    );
 
     let rm = one(&state, &json!({"op":"session_rm","id":id}).to_string()).await;
     assert_eq!(type_of(&rm[0]), "done");

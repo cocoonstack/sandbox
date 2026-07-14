@@ -8,11 +8,11 @@
 use std::io;
 
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
+use tokio::net::tcp::OwnedWriteHalf;
 use tokio::sync::mpsc;
 
-use crate::proto::{self, ErrorKind, Request, Response, BULK_CHUNK};
+use crate::proto::{self, BULK_CHUNK, ErrorKind, Request, Response};
 
 /// Connects to 127.0.0.1:port and relays until either side finishes. The two
 /// directions run on separate tasks: a blocking `write_all` into the guest
@@ -106,7 +106,7 @@ async fn feed_socket(
                 return Err(Response::error(
                     ErrorKind::BadRequest,
                     "unexpected frame during port_forward",
-                ))
+                ));
             }
         }
     }

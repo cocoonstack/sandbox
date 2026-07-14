@@ -1,12 +1,18 @@
 [package]
 name = "sandbox-init"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.85"
 description = "Initramfs PID 1: assemble the EROFS+overlay rootfs and switch_root"
 publish = false
 
 [dependencies]
 libc = "0.2"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+undocumented_unsafe_blocks = "deny"
 
 [profile.release]
 opt-level = 3

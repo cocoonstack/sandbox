@@ -8,9 +8,11 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use tokio::io::AsyncWrite;
 use tokio::sync::broadcast;
 
-use crate::proto::{ProcInfo, Response};
+use crate::proto::{self, ErrorKind, ProcInfo, Response};
+use crate::sysutil;
 
 const LOG_RING_BYTES: usize = 256 * 1024;
 const OUTPUT_FANOUT: usize = 256;
@@ -64,18 +66,32 @@ impl Table {
             state: Mutex::new(State::Running),
             pty_master: Mutex::new(None),
         });
-        self.inner.lock().unwrap().insert(pid, Arc::clone(&proc));
+        sysutil::lock(&self.inner).insert(pid, Arc::clone(&proc));
         proc
     }
 
     pub fn get(&self, pid: u32) -> Option<Arc<Proc>> {
-        self.inner.lock().unwrap().get(&pid).cloned()
+        sysutil::lock(&self.inner).get(&pid).cloned()
+    }
+
+    /// Looks up a pid, writing a NotFound frame and returning None on a miss —
+    /// the shared prelude of kill/logs/attach/pty.resize.
+    pub async fn get_or_not_found<W: AsyncWrite + Unpin>(
+        &self,
+        w: &mut W,
+        pid: u32,
+    ) -> std::io::Result<Option<Arc<Proc>>> {
+        match self.get(pid) {
+            Some(proc) => Ok(Some(proc)),
+            None => {
+                proto::error_frame(w, ErrorKind::NotFound, "no such pid").await?;
+                Ok(None)
+            }
+        }
     }
 
     pub fn list(&self) -> Vec<ProcInfo> {
-        self.inner
-            .lock()
-            .unwrap()
+        sysutil::lock(&self.inner)
             .values()
             .map(|p| p.info())
             .collect()
@@ -85,14 +101,14 @@ impl Table {
     /// a deferred cleanup that removed by pid alone could evict a newer
     /// process that reused the number.
     pub fn remove_if(&self, pid: u32, proc: &Arc<Proc>) {
-        let mut map = self.inner.lock().unwrap();
+        let mut map = sysutil::lock(&self.inner);
         if map.get(&pid).is_some_and(|cur| Arc::ptr_eq(cur, proc)) {
             map.remove(&pid);
         }
     }
 
     pub fn len(&self) -> usize {
-        self.inner.lock().unwrap().len()
+        sysutil::lock(&self.inner).len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -123,7 +139,7 @@ impl Proc {
     /// on the output hot path); `attach_stream` subscribes under this same
     /// ring lock, so the receiver count cannot change mid-emit.
     pub fn emit(&self, chunk: &Chunk) {
-        let mut ring = self.ring.lock().unwrap();
+        let mut ring = sysutil::lock(&self.ring);
         if let Chunk::Stdout(d) | Chunk::Stderr(d) = chunk {
             ring.push(matches!(chunk, Chunk::Stderr(_)), d);
         }
@@ -132,18 +148,34 @@ impl Proc {
         }
     }
 
+    /// `emit` for produced bytes: the ring takes the borrowed slice, and the
+    /// owned Chunk is built only when an attacher is actually listening — a
+    /// pty or detached exec pays no allocation on its output path otherwise.
+    pub fn emit_bytes(&self, stderr: bool, data: &[u8]) {
+        let mut ring = sysutil::lock(&self.ring);
+        ring.push(stderr, data);
+        if self.tx.receiver_count() > 0 {
+            let chunk = if stderr {
+                Chunk::Stderr(data.to_vec())
+            } else {
+                Chunk::Stdout(data.to_vec())
+            };
+            let _ = self.tx.send(chunk);
+        }
+    }
+
     pub fn mark_exited(&self, code: i32) {
-        *self.state.lock().unwrap() = State::Exited(code);
+        *sysutil::lock(&self.state) = State::Exited(code);
     }
 
     /// Records a pty master fd (a dup, owned here) so `resize` can reach it.
     pub fn set_pty_master(&self, fd: OwnedFd) {
-        *self.pty_master.lock().unwrap() = Some(fd);
+        *sysutil::lock(&self.pty_master) = Some(fd);
     }
 
     /// Resizes the pty's window; errors if this proc is a plain exec.
     pub fn resize(&self, cols: u16, rows: u16) -> std::io::Result<()> {
-        match &*self.pty_master.lock().unwrap() {
+        match &*sysutil::lock(&self.pty_master) {
             Some(fd) => crate::sysutil::set_winsize(fd.as_raw_fd(), cols, rows),
             None => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -156,7 +188,7 @@ impl Proc {
     /// Lets `logs`/`attach`/`kill` act on terminal state instead of waiting
     /// on (or signalling against) a pid whose child is already reaped.
     pub fn exit_code(&self) -> Option<i32> {
-        match *self.state.lock().unwrap() {
+        match *sysutil::lock(&self.state) {
             State::Running => None,
             State::Exited(code) => Some(code),
         }
@@ -164,19 +196,19 @@ impl Proc {
 
     /// Snapshot of retained output for `logs`.
     pub fn replay(&self) -> Vec<Chunk> {
-        self.ring.lock().unwrap().drain_view()
+        sysutil::lock(&self.ring).drain_view()
     }
 
     /// Atomically snapshots retained output and subscribes to live output
     /// under one lock, so a chunk emitted concurrently lands in the replay or
     /// the receiver but never both (no duplicate in the client's stream).
     pub fn attach_stream(&self) -> (Vec<Chunk>, broadcast::Receiver<Chunk>) {
-        let mut ring = self.ring.lock().unwrap();
+        let mut ring = sysutil::lock(&self.ring);
         (ring.drain_view(), self.tx.subscribe())
     }
 
     fn info(&self) -> ProcInfo {
-        let (state, exit_code) = match *self.state.lock().unwrap() {
+        let (state, exit_code) = match *sysutil::lock(&self.state) {
             State::Running => ("running".to_string(), None),
             State::Exited(c) => ("exited".to_string(), Some(c)),
         };

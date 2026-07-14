@@ -1,5 +1,6 @@
 //! Filesystem verb E2E over the in-memory duplex, against real temp paths.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
 mod common;
 
 use common::{b64, exchange, type_of};

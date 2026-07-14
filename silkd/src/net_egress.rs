@@ -16,7 +16,7 @@ pub const HOST_VSOCK_PORT: u32 = 2049;
 #[cfg(target_os = "linux")]
 pub async fn serve(loopback_port: u16, host_vsock_port: u32) -> io::Result<()> {
     use tokio::net::TcpListener;
-    use tokio_vsock::{VsockAddr, VsockStream, VMADDR_CID_HOST};
+    use tokio_vsock::{VMADDR_CID_HOST, VsockAddr, VsockStream};
 
     let listener = TcpListener::bind(("127.0.0.1", loopback_port)).await?;
     loop {

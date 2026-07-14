@@ -121,7 +121,7 @@ mod tests {
         match &frames[0] {
             Response::Event { kind, path } => {
                 assert_eq!(*kind, EventKind::Created);
-                assert!(path.ends_with("y.txt"));
+                assert_eq!(path, "/x/y.txt");
             }
             other => panic!("expected event frame, got {other:?}"),
         }

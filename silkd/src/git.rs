@@ -23,28 +23,27 @@ pub async fn clone<W: AsyncWrite + Unpin>(
     if !crate::net::has_egress() {
         return proto::write_frame(w, &no_egress()).await;
     }
-    let mut args = vec!["clone".to_string()];
-    if let Some(b) = branch {
-        args.push("--branch".to_string());
-        args.push(b);
+    let depth_arg;
+    let mut args: Vec<&str> = vec!["clone"];
+    if let Some(b) = &branch {
+        args.extend(["--branch", b]);
     }
     if let Some(d) = depth {
-        args.push("--depth".to_string());
-        args.push(d.to_string());
+        depth_arg = d.to_string();
+        args.extend(["--depth", &depth_arg]);
     }
-    args.push(url);
-    args.push(path);
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    args.push(&url);
+    args.push(&path);
     // clone has no repo dir yet, so run it from cwd (-C ".").
-    let out = git(".", auth.as_deref(), &refs).await?;
-    terminal(w, out).await
+    let out = git(".", auth.as_deref(), &args).await?;
+    terminal(w, "clone", &out).await
 }
 
 /// Reports branch, ahead/behind, and per-file status from porcelain v2.
 pub async fn status<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> std::io::Result<()> {
     let out = git(&path, None, &["status", "--porcelain=v2", "--branch"]).await?;
     if !out.status.success() {
-        return fail(w, &out).await;
+        return fail(w, "status", &out).await;
     }
     proto::write_frame(w, &parse_status(&String::from_utf8_lossy(&out.stdout))).await
 }
@@ -58,7 +57,7 @@ pub async fn add<W: AsyncWrite + Unpin>(
     let mut args = vec!["add", "--"];
     args.extend(files.iter().map(String::as_str));
     let out = git(&path, None, &args).await?;
-    terminal(w, out).await
+    terminal(w, "add", &out).await
 }
 
 /// Commits staged changes with `message` and `author` ("Name <email>"),
@@ -73,18 +72,18 @@ pub async fn commit<W: AsyncWrite + Unpin>(
     // auto-detect one; derive the committer from the author.
     let (name, email) = split_author(&author);
     let mut cmd = git_cmd(&path, None);
-    cmd.env("GIT_COMMITTER_NAME", &name)
-        .env("GIT_COMMITTER_EMAIL", &email);
+    cmd.env("GIT_COMMITTER_NAME", name)
+        .env("GIT_COMMITTER_EMAIL", email);
     let out = cmd
         .args(["commit", "--author", &author, "-m", &message])
         .output()
         .await?;
     if !out.status.success() {
-        return fail(w, &out).await;
+        return fail(w, "commit", &out).await;
     }
     let rev = git(&path, None, &["rev-parse", "HEAD"]).await?;
     if !rev.status.success() {
-        return fail(w, &rev).await;
+        return fail(w, "rev-parse", &rev).await;
     }
     let hash = String::from_utf8_lossy(&rev.stdout).trim().to_string();
     proto::write_frame(w, &Response::GitCommitResult { hash }).await
@@ -119,7 +118,7 @@ pub async fn branch<W: AsyncWrite + Unpin>(
         GitBranchOp::List => {
             let out = git(&path, None, &["branch", "--format=%(refname:short)"]).await?;
             if !out.status.success() {
-                return fail(w, &out).await;
+                return fail(w, "branch", &out).await;
             }
             let branches: Vec<String> = String::from_utf8_lossy(&out.stdout)
                 .lines()
@@ -144,7 +143,7 @@ pub async fn branch<W: AsyncWrite + Unpin>(
                 GitBranchOp::List => unreachable!(),
             };
             let out = git(&path, None, &args).await?;
-            terminal(w, out).await
+            terminal(w, "branch", &out).await
         }
     }
 }
@@ -160,7 +159,7 @@ async fn net_verb<W: AsyncWrite + Unpin>(
         return proto::write_frame(w, &no_egress()).await;
     }
     let out = git(&path, auth.as_deref(), &[verb]).await?;
-    terminal(w, out).await
+    terminal(w, verb, &out).await
 }
 
 /// Builds a `git -C dir` command with config and stdio policy applied. Config
@@ -201,13 +200,12 @@ fn apply_config(cmd: &mut Command, auth: Option<&str>) {
     }
 }
 
-async fn fail<W: AsyncWrite + Unpin>(w: &mut W, out: &std::process::Output) -> std::io::Result<()> {
-    let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    proto::write_frame(
-        w,
-        &Response::error(ErrorKind::Internal, format!("git: {msg}")),
-    )
-    .await
+async fn fail<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    verb: &str,
+    out: &std::process::Output,
+) -> std::io::Result<()> {
+    proto::subprocess_result(w, false, &format!("git {verb}"), &out.stderr).await
 }
 
 fn no_egress() -> Response {
@@ -220,13 +218,10 @@ fn no_egress() -> Response {
 /// Writes Done on success, else the git stderr as an error frame.
 async fn terminal<W: AsyncWrite + Unpin>(
     w: &mut W,
-    out: std::process::Output,
+    verb: &str,
+    out: &std::process::Output,
 ) -> std::io::Result<()> {
-    if out.status.success() {
-        proto::write_frame(w, &Response::Done).await
-    } else {
-        fail(w, &out).await
-    }
+    proto::subprocess_result(w, out.status.success(), &format!("git {verb}"), &out.stderr).await
 }
 
 fn parse_status(text: &str) -> Response {
@@ -303,13 +298,11 @@ fn parse_file_line(line: &str) -> Option<GitFileStatus> {
 
 /// Splits an author "Name <email>" into (name, email); a missing angle form
 /// leaves the whole string as the name.
-fn split_author(author: &str) -> (String, String) {
+fn split_author(author: &str) -> (&str, &str) {
     if let Some(open) = author.find('<') {
         if let Some(close) = author[open..].find('>') {
-            let name = author[..open].trim().to_string();
-            let email = author[open + 1..open + close].to_string();
-            return (name, email);
+            return (author[..open].trim(), &author[open + 1..open + close]);
         }
     }
-    (author.trim().to_string(), String::new())
+    (author.trim(), "")
 }

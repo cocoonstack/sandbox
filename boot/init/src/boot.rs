@@ -86,10 +86,16 @@ impl Marks {
 }
 
 fn assemble(cfg: &BootCfg, marks: &mut Marks) -> Result<(), String> {
-    let mut ids: Vec<String> = cfg.layers.clone();
-    ids.push(cfg.cow.clone());
+    let ids: Vec<&str> = cfg
+        .layers
+        .iter()
+        .map(String::as_str)
+        .chain([cfg.cow.as_str()])
+        .collect();
     let mut devs = resolve_disks(&ids, cfg.timeout)?;
-    let cow_dev = devs.pop().expect("cow id was pushed above");
+    let cow_dev = devs
+        .pop()
+        .ok_or("internal: cow disk missing from resolve")?;
     marks.mark("resolve");
 
     let mut lower = Vec::with_capacity(devs.len());
@@ -191,13 +197,13 @@ fn mkdir_all(path: &str) -> Result<(), String> {
 /// scan per disk. CH disks carry a virtio-blk serial; FC has no serials, so
 /// cocoon passes /dev/vdX paths there. 2ms polling — virtio probe completes
 /// a few ms into boot, so the first or second try normally hits.
-fn resolve_disks(ids: &[String], timeout: Duration) -> Result<Vec<String>, String> {
+fn resolve_disks(ids: &[&str], timeout: Duration) -> Result<Vec<String>, String> {
     let deadline = Instant::now() + timeout;
     let mut found: Vec<Option<String>> = vec![None; ids.len()];
     loop {
         for (i, id) in ids.iter().enumerate() {
             if found[i].is_none() && id.starts_with("/dev/") && sys::is_block_dev(id) {
-                found[i] = Some(id.clone());
+                found[i] = Some((*id).to_string());
             }
         }
         if found.iter().any(Option::is_none) {
@@ -211,7 +217,7 @@ fn resolve_disks(ids: &[String], timeout: Duration) -> Result<Vec<String>, Strin
                 .iter()
                 .zip(&found)
                 .filter(|(_, f)| f.is_none())
-                .map(|(id, _)| id.as_str())
+                .map(|(id, _)| *id)
                 .collect();
             return Err(format!("disks not found within {timeout:?}: {missing:?}"));
         }
@@ -219,7 +225,7 @@ fn resolve_disks(ids: &[String], timeout: Duration) -> Result<Vec<String>, Strin
     }
 }
 
-fn scan_serials(ids: &[String], found: &mut [Option<String>]) {
+fn scan_serials(ids: &[&str], found: &mut [Option<String>]) {
     let Ok(entries) = fs::read_dir("/sys/block") else {
         return;
     };
@@ -241,7 +247,7 @@ fn scan_serials(ids: &[String], found: &mut [Option<String>]) {
             };
             let serial = serial.trim_end();
             for (i, id) in ids.iter().enumerate() {
-                if found[i].is_none() && id == serial {
+                if found[i].is_none() && *id == serial {
                     found[i] = Some(format!("/dev/{name}"));
                 }
             }

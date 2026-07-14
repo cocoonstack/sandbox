@@ -7,7 +7,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
 
-use crate::proc::{Chunk, Proc, Table};
+use crate::proc::{Chunk, Table};
 use crate::proto::{self, ErrorKind, ProcInfo, Request, Response};
 use crate::{exec, find, forward, fs, git, lsp, pty, session, tree, watch};
 
@@ -45,7 +45,7 @@ impl State {
                     ErrorKind::BadRequest,
                     format!("parse: {e}"),
                 )
-                .await
+                .await;
             }
         };
 
@@ -214,7 +214,7 @@ impl State {
         pid: u32,
         signal: Option<i32>,
     ) -> std::io::Result<()> {
-        let Some(proc) = self.get_or_not_found(w, pid).await? else {
+        let Some(proc) = self.table.get_or_not_found(w, pid).await? else {
             return Ok(());
         };
         // An exited process's pid may already be recycled by the guest OS —
@@ -227,7 +227,7 @@ impl State {
     }
 
     async fn logs<W: AsyncWrite + Unpin>(&self, w: &mut W, pid: u32) -> std::io::Result<()> {
-        let Some(proc) = self.get_or_not_found(w, pid).await? else {
+        let Some(proc) = self.table.get_or_not_found(w, pid).await? else {
             return Ok(());
         };
         for chunk in proc.replay() {
@@ -240,7 +240,7 @@ impl State {
     }
 
     async fn attach<W: AsyncWrite + Unpin>(&self, w: &mut W, pid: u32) -> std::io::Result<()> {
-        let Some(proc) = self.get_or_not_found(w, pid).await? else {
+        let Some(proc) = self.table.get_or_not_found(w, pid).await? else {
             return Ok(());
         };
         // Snapshot replay and subscribe atomically so a chunk emitted right
@@ -256,29 +256,13 @@ impl State {
         loop {
             match rx.recv().await {
                 Ok(Chunk::Exit(code)) => {
-                    return proto::write_frame(w, &Response::Exit { code }).await
+                    return proto::write_frame(w, &Response::Exit { code }).await;
                 }
                 Ok(chunk) => write_chunk(w, chunk).await?,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    return proto::write_frame(w, &Response::Done).await
+                    return proto::write_frame(w, &Response::Done).await;
                 }
-            }
-        }
-    }
-
-    /// Looks up a pid, writing a NotFound frame and returning None on a miss —
-    /// the shared prelude of kill/logs/attach.
-    async fn get_or_not_found<W: AsyncWrite + Unpin>(
-        &self,
-        w: &mut W,
-        pid: u32,
-    ) -> std::io::Result<Option<Arc<Proc>>> {
-        match self.table.get(pid) {
-            Some(proc) => Ok(Some(proc)),
-            None => {
-                proto::error_frame(w, ErrorKind::NotFound, "no such pid").await?;
-                Ok(None)
             }
         }
     }

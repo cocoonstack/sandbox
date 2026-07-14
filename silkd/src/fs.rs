@@ -10,7 +10,7 @@ use std::time::UNIX_EPOCH;
 use tokio::fs;
 use tokio::io::{AsyncBufRead, AsyncWrite, AsyncWriteExt};
 
-use crate::proto::{self, err_frame, DirEntry, FileInfo, FileKind, Response};
+use crate::proto::{self, DirEntry, FileInfo, FileKind, Response, err_frame};
 
 /// Entries per `entries` frame. Worst-case entry (255-byte name, fully
 /// JSON-escaped) is ~1.6KiB, so a full batch stays under MAX_FRAME.

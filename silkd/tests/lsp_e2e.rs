@@ -4,6 +4,7 @@
 //! real language server. Every test runs under a deadline so a relay deadlock
 //! fails CI instead of hanging it.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
@@ -89,7 +90,9 @@ async fn lsp_broker_relays_to_the_server() {
         bin.to_string_lossy().as_bytes(),
     )
     .unwrap();
-    std::env::set_var("SILKD_LSP_DIR", env.path());
+    // SAFETY: ENV_LOCK (held for this test's whole body) serializes every
+    // writer/reader of SILKD_LSP_DIR in this binary.
+    unsafe { std::env::set_var("SILKD_LSP_DIR", env.path()) };
 
     let state = Arc::new(State::new());
     let start = one(
@@ -166,7 +169,9 @@ async fn lsp_stop_kills_an_idle_server() {
         env.path().join("fake-lsp").to_string_lossy().as_bytes(),
     )
     .unwrap();
-    std::env::set_var("SILKD_LSP_DIR", env.path());
+    // SAFETY: ENV_LOCK (held for this test's whole body) serializes every
+    // writer/reader of SILKD_LSP_DIR in this binary.
+    unsafe { std::env::set_var("SILKD_LSP_DIR", env.path()) };
     let state = Arc::new(State::new());
     let start = one(
         &state,
@@ -204,7 +209,9 @@ async fn lsp_data_end_half_closes_stdin() {
         env.path().join("fake-lsp").to_string_lossy().as_bytes(),
     )
     .unwrap();
-    std::env::set_var("SILKD_LSP_DIR", env.path());
+    // SAFETY: ENV_LOCK (held for this test's whole body) serializes every
+    // writer/reader of SILKD_LSP_DIR in this binary.
+    unsafe { std::env::set_var("SILKD_LSP_DIR", env.path()) };
     let state = Arc::new(State::new());
     let start = one(
         &state,

@@ -1,6 +1,7 @@
 //! Whole-tree transfer E2E: push a tar stream in, pull a tar stream out,
 //! using the system tar to build/extract the reference archives.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
 mod common;
 
 use std::path::Path;

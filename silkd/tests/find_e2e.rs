@@ -1,5 +1,6 @@
 //! Search verb E2E: fs.find streams matches, fs.replace rewrites files.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
 mod common;
 
 use common::{exchange, type_of};
@@ -28,9 +29,11 @@ async fn find_streams_line_matches() {
 
     let matches: Vec<_> = frames.iter().filter(|f| type_of(f) == "match").collect();
     assert_eq!(matches.len(), 2, "recursive *.rs matches only: {frames:?}");
-    assert!(matches
-        .iter()
-        .all(|m| m["content"].as_str().unwrap().contains("TODO")));
+    assert!(
+        matches
+            .iter()
+            .all(|m| m["content"].as_str().unwrap().contains("TODO"))
+    );
     assert!(matches.iter().any(|m| m["line"] == 2)); // a.rs
     assert!(matches.iter().any(|m| m["line"] == 1)); // sub/c.rs
     assert_eq!(type_of(frames.last().unwrap()), "done");

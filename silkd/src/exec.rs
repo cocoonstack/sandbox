@@ -11,7 +11,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
-use crate::proc::{synth_pid, Chunk, Proc, Table};
+use crate::proc::{Chunk, Proc, Table, synth_pid};
 use crate::proto::{ErrorKind, ExecReq, Request, Response};
 use crate::sysutil;
 
@@ -209,14 +209,18 @@ where
             Ok(0) | Err(_) => break,
             Ok(n) => n,
         };
+        let Some(fg) = fg else {
+            // Detached: no foreground consumer, so the ring takes the slice
+            // and no owned chunk is built unless an attacher listens.
+            proc.emit_bytes(stderr, &buf[..n]);
+            continue;
+        };
         let chunk = make(buf[..n].to_vec());
         proc.emit(&chunk);
-        if let Some(fg) = fg {
-            // The foreground client backpressures here; emit above is
-            // best-effort fan-out to attachers.
-            if fg.send(chunk).await.is_err() {
-                break;
-            }
+        // The foreground client backpressures here; emit above is
+        // best-effort fan-out to attachers.
+        if fg.send(chunk).await.is_err() {
+            break;
         }
     }
 }

@@ -17,7 +17,7 @@ use std::process::{ExitStatus, Stdio};
 use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncWrite};
 use tokio::process::Command;
 
-use crate::proto::{self, err_frame, ErrorKind, Response};
+use crate::proto::{self, ErrorKind, Response, err_frame};
 use crate::sysutil;
 
 /// Extracts a client tar stream (`data` frames until `data_end`) into `dest`,
@@ -69,7 +69,9 @@ pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
         Ok(pair) => pair,
         Err(e) => return err_frame(w, &e, "spawn tar").await,
     };
-    let mut out = child.stdout.take().expect("stdout piped");
+    let Some(mut out) = child.stdout.take() else {
+        return err_frame(w, &io::Error::other("tar stdout not piped"), "spawn tar").await;
+    };
 
     if let Err(e) = proto::stream_data_frames(&mut out, w).await? {
         let _ = child.wait().await;
@@ -97,7 +99,9 @@ where
         Ok(pair) => pair,
         Err(e) => return err_frame(w, &e, "spawn tar").await,
     };
-    let mut sink = child.stdin.take().expect("stdin piped");
+    let Some(mut sink) = child.stdin.take() else {
+        return err_frame(w, &io::Error::other("tar stdin not piped"), "spawn tar").await;
+    };
 
     let feed = proto::feed_data_frames(reader, &mut sink).await;
     drop(sink); // EOF to tar regardless of outcome
@@ -131,11 +135,7 @@ async fn tar_result<W: AsyncWrite + Unpin>(
     msg: &str,
     label: &str,
 ) -> io::Result<()> {
-    if status.success() {
-        proto::write_frame(w, &Response::Done).await
-    } else {
-        proto::error_frame(w, ErrorKind::Internal, format!("{label}: {}", msg.trim())).await
-    }
+    proto::subprocess_result(w, status.success(), label, msg.as_bytes()).await
 }
 
 /// Spawns a configured tar with stderr piped and drained on its own task —
@@ -145,8 +145,11 @@ fn spawn_tar(
     mut cmd: Command,
 ) -> io::Result<(tokio::process::Child, tokio::task::JoinHandle<String>)> {
     let mut child = cmd.stderr(Stdio::piped()).kill_on_drop(true).spawn()?;
-    let err_task = tokio::spawn(drain(child.stderr.take().expect("stderr piped")));
-    Ok((child, err_task))
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::other("tar stderr not piped"))?;
+    Ok((child, tokio::spawn(drain(stderr))))
 }
 
 /// Creates a unique staging dir inside `dest` — the same filesystem, so the

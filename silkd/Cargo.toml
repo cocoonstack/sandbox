@@ -1,7 +1,8 @@
 [package]
 name = "silkd"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.85"
 description = "In-guest sandbox daemon: exec with context, processes, and files over vsock"
 publish = false
 
@@ -20,6 +21,11 @@ tokio-vsock = "0.7"
 
 [dev-dependencies]
 tempfile = "3"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+undocumented_unsafe_blocks = "deny"
 
 [profile.release]
 opt-level = 3

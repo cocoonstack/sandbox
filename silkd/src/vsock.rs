@@ -10,7 +10,7 @@ use crate::server::State;
 
 #[cfg(target_os = "linux")]
 pub async fn serve(port: u32, state: Arc<State>) -> std::io::Result<()> {
-    use tokio_vsock::{VsockAddr, VsockListener, VMADDR_CID_ANY};
+    use tokio_vsock::{VMADDR_CID_ANY, VsockAddr, VsockListener};
 
     let listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, port))?;
     loop {

@@ -3,6 +3,7 @@
 //!
 //! Compiled into each test binary separately, so not every helper is used by
 //! every binary — allow the resulting dead_code rather than fragment this.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
 #![allow(dead_code)]
 
 use std::sync::Arc;
