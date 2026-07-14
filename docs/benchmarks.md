@@ -84,6 +84,38 @@ labeled and must only be compared against other nested runs.
 
 <!-- paste `make bench` output below -->
 
+### 2026-07-14 — bare metal (205d3f3, first round on the rust-review silkd)
+
+| environment | |
+|---|---|
+| host | bare metal, AMD Ryzen 7 9700X 8-Core Processor, 16 cores, 60 GiB |
+| kernel | 6.17.0-35-generic |
+| cpufreq | powersave/balance_performance |
+| cocoon | unstamped local build |
+| template | ghcr.io/cocoonstack/sandbox/rt:24.04 @ sha256:71c7f3638e2e |
+
+| claim tier | p50 | p90 | max | n |
+|---|---|---|---|---|
+| warm pool hit | 0.2 ms | 0.3 ms | 0.6 ms | 6 |
+| clone from golden | 30.6 ms | 37.1 ms | 41.7 ms | 10 |
+| cold boot (unpooled ghcr.io/cocoonstack/sandbox/python:3.12) | 395.6 ms | 395.6 ms | 403.7 ms | 3 |
+| burst: 16 concurrent clones | 98.6 ms | 190.9 ms | 206.8 ms | 16 |
+
+| data plane | measured |
+|---|---|
+| exec RTT (dial per RPC) | n=200 p50=0.20ms p90=0.26ms p99=0.37ms |
+| fs_pull throughput (128 MiB) | 595.2 MiB/s best of 3 |
+| burst wall (16 concurrent clones) | 285 ms |
+| warm refill recovery (0 → 6) | 1639 ms |
+
+Second of two rounds, both in band; the 16-step e2e smoke (egress lane
+included) passed on the same images first. fs_push steady state measured
+separately (`pushbench`, 128 MiB, 3 runs): 702/741/762 MiB/s against the
+~343 MiB/s of record — the inbound base64 decode now feeds the borrowed
+slice straight to the decoder, and the guest's musl allocator amplifies
+what the codec-level A/B (+6.5% on glibc) understates; a toolchain bump
+rides along, so treat the split between the two as unattributed.
+
 ### 2026-07-13 — bare metal (88fda81, first burst + refill-recovery round)
 
 | environment | |
