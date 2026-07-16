@@ -26,6 +26,12 @@ import (
 )
 
 const (
+	// RequiredCocoon is the minimum supported cocoon release: v0.5.0 silently
+	// breaks FC clone-from-snapshot (warm-pool refill + fork), fixed in v0.5.1;
+	// v0.5.2 carries the parallel-clone and snapshot/store perf work sandbox's
+	// latency numbers assume.
+	RequiredCocoon = "v0.5.2"
+
 	silkdPort     = 2048 // silkd's fixed guest vsock port, the claim-ready anchor
 	egressPort    = 2049 // guest→host egress port; VMM maps it to <vsock_socket>_2049
 	cmdTimeout    = 2 * time.Minute
@@ -52,6 +58,37 @@ type Engine struct {
 // egress-lane attachment.
 func New(bin, bridge, network string) *Engine {
 	return &Engine{bin: bin, bridge: bridge, network: network}
+}
+
+// Version reports cocoon's version string — a "vX.Y.Z" release or a
+// "master-<sha>" dev build.
+func (e *Engine) Version(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, e.bin, "version").Output() //nolint:gosec // bin is node config, arg is a literal
+	if err != nil {
+		return "", fmt.Errorf("cocoon version: %w", err)
+	}
+	for line := range strings.SplitSeq(string(out), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "Version:"); ok {
+			return strings.TrimSpace(v), nil
+		}
+	}
+	return "", fmt.Errorf("cocoon version: no Version line in output")
+}
+
+// VersionWarning probes cocoon and returns a non-empty warning when its
+// version is below RequiredCocoon (or unreadable); version is set when known.
+// A dev build (no vX.Y.Z) is assumed current.
+func (e *Engine) VersionWarning(ctx context.Context) (version, warning string) {
+	v, err := e.Version(ctx)
+	if err != nil {
+		return "", fmt.Sprintf("cannot determine cocoon version (need >= %s): %v", RequiredCocoon, err)
+	}
+	if below, comparable := belowFloor(v); comparable && below {
+		return v, fmt.Sprintf("cocoon %s is below the required %s: v0.5.0 breaks FC clone/fork — upgrade cocoon", v, RequiredCocoon)
+	}
+	return v, ""
 }
 
 // Clone restores a VM from an exported golden directory, returning its
@@ -345,6 +382,42 @@ func parseRecord(ctx context.Context, out []byte) types.VMRecord {
 		return types.VMRecord{}
 	}
 	return rec
+}
+
+// belowFloor reports whether cocoon version v is below RequiredCocoon;
+// comparable is false for a non-release build (no vX.Y.Z), assumed current.
+func belowFloor(v string) (below, comparable bool) {
+	cur, ok := parseSemver(v)
+	if !ok {
+		return false, false
+	}
+	floor, _ := parseSemver(RequiredCocoon)
+	for i := range 3 {
+		if cur[i] != floor[i] {
+			return cur[i] < floor[i], true
+		}
+	}
+	return false, true
+}
+
+func parseSemver(s string) ([3]int, bool) {
+	s = strings.TrimPrefix(s, "v")
+	if i := strings.IndexAny(s, "-+"); i >= 0 {
+		s = s[:i]
+	}
+	parts := strings.Split(s, ".")
+	if len(parts) != 3 {
+		return [3]int{}, false
+	}
+	var out [3]int
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return [3]int{}, false
+		}
+		out[i] = n
+	}
+	return out, true
 }
 
 // readLine reads byte-wise so nothing past the newline is consumed —

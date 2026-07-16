@@ -6,8 +6,14 @@ the cocoon CLI and needs a template image with silkd baked in.
 ## Prerequisites
 
 - Linux with KVM (`/dev/kvm`)
-- [cocoon](https://github.com/cocoonstack/cocoon) installed and working
-  (`cocoon vm run` boots a VM), with Cloud Hypervisor and/or Firecracker
+- [cocoon](https://github.com/cocoonstack/cocoon) **v0.5.2 or newer** installed
+  and working (`cocoon vm run` boots a VM), with Cloud Hypervisor and/or
+  Firecracker. Older cocoon fails or degrades — **v0.5.0 silently breaks the
+  Firecracker clone-from-snapshot path** (warm-pool refill and fork), fixed in
+  v0.5.1, and v0.5.2 adds the parallel-clone and snapshot/store perf work the
+  [performance](performance.md) numbers assume. sandboxd logs a warning at
+  startup when the detected cocoon is below v0.5.2 (a dev/`master-<sha>` build
+  is assumed current)
 - The sandbox boot artifact installed where cocoon finds it
   (`/boot/vmlinuz-sandbox`, `/boot/initrd.img-sandbox` — from
   `ghcr.io/cocoonstack/sandbox/boot:<kernel-ver>`)
