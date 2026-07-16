@@ -73,6 +73,11 @@ func main() {
 		logger.Fatalf(ctx, err, "load config")
 	}
 	eng := engine.New(cfg.CocoonBin, cfg.Bridge, cfg.Network)
+	if v, warn := eng.VersionWarning(ctx); warn != "" {
+		logger.Warn(ctx, warn)
+	} else {
+		logger.Infof(ctx, "cocoon %s", v)
+	}
 	secrets, err := egress.NewSecretStore(cfg.Secrets)
 	if err != nil {
 		logger.Fatalf(ctx, err, "init egress secrets")
