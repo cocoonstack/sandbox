@@ -25,18 +25,18 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	metric := func(name, kind, help string) {
 		_, _ = fmt.Fprintf(w, "# HELP sandboxd_%s %s\n# TYPE sandboxd_%s %s\n", name, help, name, kind)
 	}
-	metric("claimed", "gauge", "live claims on this node")
-	_, _ = fmt.Fprintf(w, "sandboxd_claimed %d\n", g.Claimed)
-	metric("hibernated", "gauge", "claims currently hibernated")
-	_, _ = fmt.Fprintf(w, "sandboxd_hibernated %d\n", g.Hibernated)
-	metric("archived", "gauge", "claims archived to the checkpoint store")
-	_, _ = fmt.Fprintf(w, "sandboxd_archived %d\n", g.Archived)
+	scalar := func(name, help string, value int) {
+		metric(name, "gauge", help)
+		_, _ = fmt.Fprintf(w, "sandboxd_%s %d\n", name, value)
+	}
 	draining := 0
 	if g.Draining {
 		draining = 1
 	}
-	metric("draining", "gauge", "1 while the node is cordoned for maintenance")
-	_, _ = fmt.Fprintf(w, "sandboxd_draining %d\n", draining)
+	scalar("claimed", "live claims on this node", g.Claimed)
+	scalar("hibernated", "claims currently hibernated", g.Hibernated)
+	scalar("archived", "claims archived to the checkpoint store", g.Archived)
+	scalar("draining", "1 while the node is cordoned for maintenance", draining)
 
 	if tenants := s.mgr.TenantClaims(); len(tenants) > 0 {
 		metric("tenant_claims", "gauge", "live claims per configured tenant")

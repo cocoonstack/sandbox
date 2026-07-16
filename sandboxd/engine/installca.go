@@ -89,8 +89,8 @@ func (e *Engine) silkdExec(ctx context.Context, vsockSocket string, argv ...stri
 		switch frame.Type {
 		case "started":
 		case "stdout", "stderr":
-			if len(out) < 4096 {
-				out = append(out, frame.Data...)
+			if room := 4096 - len(out); room > 0 {
+				out = append(out, frame.Data[:min(len(frame.Data), room)]...)
 			}
 		case "exit":
 			if frame.Code != 0 {

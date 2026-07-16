@@ -76,6 +76,7 @@ class CocoonSandboxSession(BaseSandboxSession):
         return ExecResult(stdout=bytes(stdout), stderr=bytes(stderr), exit_code=code)
 
     async def read(self, path: Path, *, user: str | User | None = None) -> io.IOBase:
+        _reject_user(user)
         sb = self._sandbox()
         try:
             data = await asyncio.to_thread(sb.read_file, str(self._abs(path)))
@@ -86,6 +87,7 @@ class CocoonSandboxSession(BaseSandboxSession):
         return io.BytesIO(data)
 
     async def write(self, path: Path, data: io.IOBase, *, user: str | User | None = None) -> None:
+        _reject_user(user)
         sb = self._sandbox()
         payload = data.read()
         await asyncio.to_thread(sb.write_file, str(self._abs(path)), payload)
@@ -176,3 +178,10 @@ class CocoonSandboxClient(BaseSandboxClient[CocoonSandboxClientOptions]):
 
     def deserialize_session_state(self, payload: dict[str, object]) -> SandboxSessionState:
         return CocoonSandboxSessionState.model_validate(payload)
+
+
+def _reject_user(user: str | User | None) -> None:
+    # fs_read/fs_write carry no per-call user on the wire; fail loud rather
+    # than silently running as the guest default.
+    if user is not None:
+        raise NotImplementedError("per-call user impersonation is not supported by the cocoon backend")

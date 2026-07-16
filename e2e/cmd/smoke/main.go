@@ -48,11 +48,7 @@ func run(addr, token, template, lspTemplate string, egress bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	var copts []sandbox.ClientOption
-	if token != "" {
-		copts = append(copts, sandbox.WithAPIToken(token))
-	}
-	client, err := sandbox.Connect(addr, copts...)
+	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(token))
 	if err != nil {
 		return err
 	}
@@ -66,7 +62,7 @@ func run(addr, token, template, lspTemplate string, egress bool) error {
 	// hibernated-count assertions must ask the owner, not the entry node.
 	ownerClient := client
 	if sb.Owner() != addr {
-		if ownerClient, err = sandbox.Connect(sb.Owner(), copts...); err != nil {
+		if ownerClient, err = sandbox.Connect(sb.Owner(), sandbox.WithAPIToken(token)); err != nil {
 			return err
 		}
 	}

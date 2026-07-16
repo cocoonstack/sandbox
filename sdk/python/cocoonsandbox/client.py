@@ -4,6 +4,7 @@ that has capacity, and the returned Sandbox is bound to its owner."""
 
 from __future__ import annotations
 
+import http.client
 import json
 import queue
 import threading
@@ -122,10 +123,22 @@ class Client:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as exc:
-            raise APIError(verb, exc.code, _error_message(exc.read())) from None
+            try:
+                detail = _error_message(exc.read())
+            except (OSError, http.client.HTTPException) as read_exc:
+                detail = str(read_exc)
+            raise APIError(verb, exc.code, detail) from None
         except urllib.error.URLError as exc:
             raise APIError(verb, 0, str(exc.reason)) from None
-        return json.loads(raw) if raw else {}
+        except (OSError, http.client.HTTPException) as exc:
+            # A reset or truncated body read is neither HTTPError nor URLError.
+            raise APIError(verb, 0, str(exc)) from None
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise APIError(verb, 0, "malformed JSON in response") from exc
 
 
 def _claim_body(template: str, net: str, size: str, ttl_seconds: int) -> dict:

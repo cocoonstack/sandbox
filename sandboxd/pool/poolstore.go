@@ -123,8 +123,7 @@ func (m *Manager) adoptPersistedPools(ctx context.Context) error {
 // poolSeedHash digests a pool set's warm-target shape, order-independent and
 // egress-excluded, so it tracks exactly the targets pools.json would override.
 func poolSeedHash(specs []config.PoolSpec) string {
-	shaped := make([]config.PoolSpec, len(specs))
-	copy(shaped, specs)
+	shaped := slices.Clone(specs)
 	for i := range shaped {
 		shaped[i].Egress = nil
 	}

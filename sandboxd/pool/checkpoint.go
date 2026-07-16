@@ -89,27 +89,27 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 // attributed to tenant, not the checkpoint's recorder — the unguessable id
 // is the capability to branch.
 func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error) {
-	if !store.CheckpointIDRe.MatchString(ckptID) {
-		return nil, ErrUnknownCheckpoint
-	}
 	if err := m.overQuota(1, tenant); err != nil {
+		return nil, err
+	}
+	// Reject a bad or unknown id before recLock: a rejected id must not leave
+	// a lock-map entry (only a delete evicts one). Checkpoints are immutable,
+	// so this parse stands in for the fetched meta below.
+	ckpt, err := m.loadCheckpoint(ctx, ckptID)
+	if err != nil {
 		return nil, err
 	}
 	l := m.recLock(ckptID)
 	l.RLock()
 	defer l.RUnlock()
-	dir, meta, release, err := m.ckpts.Fetch(ctx, ckptID)
+	dir, _, release, err := m.ckpts.Fetch(ctx, ckptID)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, ErrUnknownCheckpoint
+		return nil, ErrUnknownCheckpoint // deleted between the pre-check and the lock
 	}
 	if err != nil {
 		return nil, fmt.Errorf("fetch checkpoint: %w", err)
 	}
 	defer release()
-	ckpt, err := parseCheckpoint(meta)
-	if err != nil {
-		return nil, err
-	}
 	if ckpt.Archive {
 		return nil, ErrUnknownCheckpoint // a wake image, not a branchable checkpoint
 	}
@@ -177,9 +177,8 @@ func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 // delete only its own records — anything else answers ErrUnknownCheckpoint,
 // never a hint that the id exists; root (empty tenant) deletes anything.
 func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string) error {
-	l := m.recLock(ckptID)
-	l.Lock()
-	defer l.Unlock()
+	// Validate off the lock — a rejected id must not leave a lock-map entry;
+	// loadCheckpoint is safe unlocked (checkpoints are single-publish, immutable).
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	if err != nil {
 		return err
@@ -192,10 +191,9 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string) e
 	if _, pinned := m.pinnedArchiveCks()[ckptID]; pinned || ckpt.Archive {
 		return ErrUnknownCheckpoint // backs an archived sandbox, not a deletable checkpoint
 	}
-	if err := m.ckpts.Delete(ctx, ckptID); err != nil {
+	if err := m.deleteCkLocked(ctx, ckptID); err != nil {
 		return fmt.Errorf("delete checkpoint: %w", err)
 	}
-	m.dropRecLock(ckptID)
 	return nil
 }
 

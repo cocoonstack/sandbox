@@ -86,8 +86,9 @@ func (s *claimStore) snapshot(claims map[string]*types.Sandbox) claimSnapshot {
 	return claimSnapshot{claims: dtos, seq: seq}
 }
 
-// commit marshals a snapshot and durably writes it, off the manager mutex;
-// serialized by s.mu, and a snapshot no newer than the last written is a no-op.
+// commit marshals a snapshot and atomically replaces claims.json, off the
+// manager mutex; serialized by s.mu, a stale snapshot is a no-op. Unsynced by
+// design (#21): an fsync would sit on the sub-ms warm-claim path.
 func (s *claimStore) commit(snap claimSnapshot) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

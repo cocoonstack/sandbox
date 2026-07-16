@@ -12,7 +12,7 @@ from collections.abc import Iterator
 
 from .checkpoint import Checkpoint
 from .conn import Conn, dial_agent
-from .errors import APIError, ExitError, ProtocolError, SandboxError
+from .errors import APIError, ExitError, ProtocolError
 from .frames import BULK_CHUNK, FS_CHUNK
 from .template import Template
 
@@ -373,13 +373,19 @@ class Watcher:
     def __init__(self, conn: Conn):
         self._conn = conn
 
+    def __enter__(self) -> Watcher:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
     def __iter__(self) -> Iterator[dict]:
-        # The stream is connection-bound: closing the watcher (or the server
-        # dropping the conn) ends iteration rather than raising.
+        # Connection-bound: a close, drop, or undecodable frame ends iteration;
+        # a real server error frame (SilkdError) propagates.
         while True:
             try:
                 frame = self._conn.recv()
-            except (SandboxError, OSError, ValueError):
+            except (ProtocolError, OSError, ValueError):
                 return
             if frame["type"] == "event":
                 yield frame

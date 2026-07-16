@@ -28,6 +28,9 @@ func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error)
 	for _, opt := range opts {
 		opt(&claim)
 	}
+	if err := claim.rejectPinnedAxes(); err != nil {
+		return nil, err
+	}
 	body, err := encodeBody("checkpoint claim", checkpointClaimRequest{TTLSeconds: claim.TTLSeconds})
 	if err != nil {
 		return nil, err

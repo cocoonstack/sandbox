@@ -147,7 +147,7 @@ async fn pump<W: AsyncWrite + Unpin>(
     loop {
         tokio::select! {
             status = child.wait() => {
-                let code = status.map(sysutil::exit_code).unwrap_or(-1);
+                let code = status.map_or(-1, sysutil::exit_code);
                 drain(master, proc, out, &mut buf, &mut frame).await;
                 return code;
             }

@@ -5,6 +5,7 @@ package sandbox
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,7 +21,8 @@ import (
 // ClientOption configures Connect.
 type ClientOption func(*Client)
 
-// WithAPIToken authenticates node-level calls (claim, info).
+// WithAPIToken sets the operator bearer for every node-scoped call — claim and
+// info, plus drain, pools, templates, checkpoints, and fork/promote/preview.
 func WithAPIToken(token string) ClientOption {
 	return func(c *Client) { c.apiToken = token }
 }
@@ -132,21 +134,13 @@ func (c *Client) ownerAt(ctx context.Context, addr, id, token string) (string, e
 	if err != nil {
 		return "", err
 	}
-	owner := body.OwnerAddr
-	if owner == "" {
-		owner = addr
-	}
-	return owner, nil
+	return cmp.Or(body.OwnerAddr, addr), nil
 }
 
 // handleFrom builds a sandbox handle, defaulting the data-plane owner to the
 // node that answered when a single-node deployment omits owner_addr.
 func (c *Client) handleFrom(dialed string, cr claimResponse) *Sandbox {
-	owner := cr.OwnerAddr
-	if owner == "" {
-		owner = dialed
-	}
-	return &Sandbox{ID: cr.ID, Deadline: cr.Deadline, FromCheckpoint: cr.FromCheckpoint, c: c, token: cr.Token, owner: owner}
+	return &Sandbox{ID: cr.ID, Deadline: cr.Deadline, FromCheckpoint: cr.FromCheckpoint, c: c, token: cr.Token, owner: cmp.Or(cr.OwnerAddr, dialed)}
 }
 
 func (c *Client) claimAt(ctx context.Context, addr string, body []byte) (claimResponse, error) {
@@ -324,6 +318,15 @@ type claimRequest struct {
 	Size       string `json:"size,omitempty"`
 	TTLSeconds int    `json:"ttl_seconds,omitempty"`
 	NoRedirect bool   `json:"no_redirect,omitempty"`
+}
+
+// rejectPinnedAxes fails a snapshot claim (checkpoint, template) that passed
+// WithNetwork/WithSize — those axes are pinned and would silently no-op.
+func (r claimRequest) rejectPinnedAxes() error {
+	if r.Net != "" || r.Size != "" {
+		return fmt.Errorf("network and size are pinned by the snapshot; WithNetwork/WithSize are not accepted here")
+	}
+	return nil
 }
 
 type claimResponse struct {

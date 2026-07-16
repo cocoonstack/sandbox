@@ -110,7 +110,10 @@ async fn scan_file<W: AsyncWrite + Unpin>(
     re: &Regex,
     path: &Path,
 ) -> std::io::Result<()> {
-    if fs::metadata(path).await.map(|m| m.len()).unwrap_or(0) > FIND_MAX_FILE {
+    if fs::metadata(path)
+        .await
+        .is_ok_and(|m| m.len() > FIND_MAX_FILE)
+    {
         return Ok(());
     }
     let Ok(body) = fs::read_to_string(path).await else {

@@ -70,9 +70,8 @@ pub fn sethostname(name: &str) -> Result<(), String> {
 pub fn switch_root(newroot: &str) -> Result<(), String> {
     std::env::set_current_dir(newroot).map_err(|err| format!("chdir {newroot}: {err}"))?;
     mount(".", "/", None, libc::MS_MOVE, None)?;
-    let dot = cstr(".")?;
-    // SAFETY: dot is a live CString for the duration of the call.
-    if unsafe { libc::chroot(dot.as_ptr()) } != 0 {
+    // SAFETY: the literal is a live 'static CStr for the duration of the call.
+    if unsafe { libc::chroot(c".".as_ptr()) } != 0 {
         return Err(format!("chroot: {}", io::Error::last_os_error()));
     }
     std::env::set_current_dir("/").map_err(|err| format!("chdir /: {err}"))
@@ -83,10 +82,12 @@ pub fn exec_init(path: &str) -> String {
     let Ok(path_c) = CString::new(path) else {
         return format!("invalid init path {path:?}");
     };
-    let path_env = static_cstr("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
-    let term_env = static_cstr("TERM=linux");
     let argv = [path_c.as_ptr(), ptr::null()];
-    let envp = [path_env.as_ptr(), term_env.as_ptr(), ptr::null()];
+    let envp = [
+        c"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".as_ptr(),
+        c"TERM=linux".as_ptr(),
+        ptr::null(),
+    ];
     // SAFETY: path_c, argv, and envp are live and NUL-terminated for the call;
     // execve only returns on failure.
     unsafe { libc::execve(path_c.as_ptr(), argv.as_ptr(), envp.as_ptr()) };
@@ -96,11 +97,10 @@ pub fn exec_init(path: &str) -> String {
 /// Route PID 1 stdio to /dev/console. The kernel already did this when the
 /// cpio carries the console node; this also covers cpios built without it.
 pub fn claim_console() {
-    let console = static_cstr("/dev/console");
-    // SAFETY: console is a live CString; the fd is validated (>=0) before any
-    // dup2/close and only closed when it is not already a std stream.
+    // SAFETY: the literal is a live 'static CStr; the fd is validated (>=0)
+    // before any dup2/close and only closed when it is not already a std stream.
     unsafe {
-        let fd = libc::open(console.as_ptr(), libc::O_RDWR);
+        let fd = libc::open(c"/dev/console".as_ptr(), libc::O_RDWR);
         if fd >= 0 {
             libc::dup2(fd, 0);
             libc::dup2(fd, 1);
@@ -118,11 +118,9 @@ pub fn claim_console() {
 pub fn fatal(msg: &str, debug: bool) -> ! {
     eprintln!("sandbox-init: FATAL: {msg}");
     if debug {
-        if let Ok(sh) = CString::new("/bin/sh") {
-            let argv = [sh.as_ptr(), ptr::null()];
-            // SAFETY: sh and argv are live and NUL-terminated for the call.
-            unsafe { libc::execv(sh.as_ptr(), argv.as_ptr()) };
-        }
+        let argv = [c"/bin/sh".as_ptr(), ptr::null()];
+        // SAFETY: the literal and argv are live and NUL-terminated for the call.
+        unsafe { libc::execv(c"/bin/sh".as_ptr(), argv.as_ptr()) };
         eprintln!("sandbox-init: no /bin/sh in this initramfs (non-debug build?)");
     }
     // SAFETY: sync(2) and reboot(2) take no pointer arguments.
@@ -137,9 +135,4 @@ pub fn fatal(msg: &str, debug: bool) -> ! {
 
 fn cstr(s: &str) -> Result<CString, String> {
     CString::new(s).map_err(|_| format!("NUL byte in {s:?}"))
-}
-
-#[allow(clippy::expect_used)] // compile-time literals contain no NUL
-fn static_cstr(s: &'static str) -> CString {
-    CString::new(s).expect("static string contains no NUL")
 }

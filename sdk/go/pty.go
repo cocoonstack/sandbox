@@ -75,10 +75,11 @@ func (p *Pty) ExitCode() (code int, ok bool) {
 }
 
 // drain relays response frames: output into the pipe, the exit code into
-// state, and a terminal error to unblock Read.
-func (p *Pty) drain(pw *io.PipeWriter) {
+// state, a terminal error to unblock Read; an OpenPty-ctx cancel surfaces as
+// ctx.Err(), matching Watcher and PortConn.
+func (p *Pty) drain(ctx context.Context, pw *io.PipeWriter) {
 	for {
-		resp, err := p.conn.Recv()
+		resp, err := recv(ctx, p.conn)
 		if err != nil {
 			_ = pw.CloseWithError(err)
 			return
@@ -121,6 +122,6 @@ func (s *Sandbox) OpenPty(ctx context.Context, opts PtyOpts) (*Pty, error) {
 
 	pr, pw := io.Pipe()
 	p := &Pty{PID: started.PID, sb: s, conn: conn, stop: done, out: pr}
-	go p.drain(pw)
+	go p.drain(ctx, pw)
 	return p, nil
 }

@@ -68,6 +68,32 @@ func TestForwardAllowInjectsSecretAndOverwritesGuestHeader(t *testing.T) {
 	}
 }
 
+func TestForwardNeverInjectsInterceptSecret(t *testing.T) {
+	reached := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+	}))
+	defer upstream.Close()
+
+	policy := Policy{Allow: []Rule{{Host: "api.internal", Secret: "gh", Intercept: true}}}
+	secrets := fakeSecrets{"gh": {"Authorization", "Bearer SECRET"}}
+	p := New("sb_1", "acme", policy, secrets, nil, fixedDial(upstream.Listener.Addr().String()), nil)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	resp, err := proxyClient(t, front.URL).Get("http://api.internal/x")
+	if err != nil {
+		t.Fatalf("proxied GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("plaintext forward matching only an intercept rule got %d, want 403", resp.StatusCode)
+	}
+	if reached {
+		t.Error("request reached upstream; the intercept rule's secret was exposed to a cleartext scheme")
+	}
+}
+
 // TestForwardStripsHopHeaders: fixed and Connection-named hop headers die at
 // this hop, in both directions.
 func TestForwardStripsHopHeaders(t *testing.T) {

@@ -34,11 +34,7 @@ func main() {
 
 func run(addr, token, template, netShape string, wait time.Duration) error {
 	ctx := context.Background()
-	var copts []sandbox.ClientOption
-	if token != "" {
-		copts = append(copts, sandbox.WithAPIToken(token))
-	}
-	client, err := sandbox.Connect(addr, copts...)
+	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(token))
 	if err != nil {
 		return err
 	}

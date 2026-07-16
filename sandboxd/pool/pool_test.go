@@ -312,6 +312,65 @@ func TestSetPoolsGrowShrinkAndDrain(t *testing.T) {
 	}
 }
 
+func TestRefillServicesEveryPoolUnderTightBudget(t *testing.T) {
+	key2 := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeMedium}
+	m := newTestManager(t, newFakeEngine(),
+		config.PoolSpec{PoolKey: testKey, Warm: 3},
+		config.PoolSpec{PoolKey: key2, Warm: 3})
+	m.refillSem = make(chan struct{}, 1)
+	m.mu.Lock()
+	m.pools[testKey].goldenDir = "/goldens/a"
+	m.pools[key2].goldenDir = "/goldens/b"
+	m.mu.Unlock()
+
+	m.refillOnce(t.Context())
+
+	both := func() bool {
+		infos, _ := m.Info()
+		return len(infos) == 2 && infos[0].Warm == 3 && infos[1].Warm == 3
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for !both() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !both() {
+		infos, _ := m.Info()
+		t.Fatalf("one refill tick did not chain both pools to target: %+v", infos)
+	}
+}
+
+func TestSetPoolsRemovalShedsArchivePolicy(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 0, ArchiveAfterSeconds: 60, ArchiveDeleteAfterSeconds: 120})
+	m.mu.Lock()
+	m.pools[testKey].refilling = 1 // keep the removed pool lingering
+	m.mu.Unlock()
+
+	if err := m.SetPools(t.Context(), nil); err != nil {
+		t.Fatalf("SetPools: %v", err)
+	}
+	m.mu.Lock()
+	p := m.pools[testKey]
+	if p == nil {
+		m.mu.Unlock()
+		t.Fatal("lingering pool was deleted despite refilling=1")
+	}
+	if p.archiveAfter != 0 || p.archiveDelete != 0 {
+		t.Errorf("archive policy survived removal: after=%v delete=%v, want 0", p.archiveAfter, p.archiveDelete)
+	}
+	if m.archiveEnabled {
+		t.Error("archiveEnabled still latched by a removed pool")
+	}
+	p.refilling = 0
+	m.mu.Unlock()
+	m.refillOnce(t.Context())
+	m.mu.Lock()
+	_, lingering := m.pools[testKey]
+	m.mu.Unlock()
+	if lingering {
+		t.Error("quiescent removed pool not swept by refillOnce")
+	}
+}
+
 func TestSetPoolsRejectsInvalidSpec(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	err := m.SetPools(t.Context(), []config.PoolSpec{{

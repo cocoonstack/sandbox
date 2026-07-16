@@ -49,15 +49,8 @@ func (r Rule) matchHost(host string) bool {
 }
 
 func (r Rule) matchMethod(method string) bool {
-	if len(r.Methods) == 0 {
-		return true
-	}
-	for _, m := range r.Methods {
-		if strings.EqualFold(m, method) {
-			return true
-		}
-	}
-	return false
+	return len(r.Methods) == 0 ||
+		slices.ContainsFunc(r.Methods, func(m string) bool { return strings.EqualFold(m, method) })
 }
 
 // Policy is one sandbox's egress allow-list. Default-deny is implicit: a
@@ -86,13 +79,14 @@ func (p Policy) Validate() error {
 	return nil
 }
 
-// Eval returns the first matching allow rule with DecisionAllow, or a zero
-// rule with DecisionDeny when nothing matches. host is a bare hostname (no
-// port); the proxy strips the port before calling.
+// Eval returns the first matching non-intercept allow rule with DecisionAllow,
+// or a zero rule with DecisionDeny. host is a bare hostname (no port). Intercept
+// rules answer only the CONNECT paths (EvalHost/EvalInner) — matching one here
+// would inject its secret over cleartext.
 func (p Policy) Eval(host, method string) (Rule, Decision) {
 	host = strings.ToLower(host)
 	for _, r := range p.Allow {
-		if r.matches(host, method) {
+		if !r.Intercept && r.matches(host, method) {
 			return r, DecisionAllow
 		}
 	}

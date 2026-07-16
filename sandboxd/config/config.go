@@ -8,8 +8,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
@@ -116,6 +118,40 @@ type MeshConfig struct {
 	Bind       string   `json:"bind"`                  // memberlist host:port
 	Join       []string `json:"join,omitempty"`        // seed members; empty = mesh of one
 	ClusterKey string   `json:"cluster_key,omitempty"` // base64 gossip-encryption key
+}
+
+// ParsedBind splits Bind into host and port, rejecting a wildcard host —
+// memberlist would advertise an unroutable address.
+func (mc *MeshConfig) ParsedBind() (string, int, error) {
+	host, portStr, err := net.SplitHostPort(mc.Bind)
+	if err != nil {
+		return "", 0, fmt.Errorf("mesh bind %q: %w", mc.Bind, err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return "", 0, fmt.Errorf("mesh bind port %q: %w", portStr, err)
+	}
+	if host == "" {
+		return "", 0, fmt.Errorf("mesh bind needs an explicit host (got %q); a wildcard advertises an unroutable address", mc.Bind)
+	}
+	return host, port, nil
+}
+
+// DecodedKey returns the gossip-encryption key bytes; empty means unencrypted.
+func (mc *MeshConfig) DecodedKey() ([]byte, error) {
+	if mc.ClusterKey == "" {
+		return nil, nil
+	}
+	key, err := base64.StdEncoding.DecodeString(mc.ClusterKey)
+	if err != nil {
+		return nil, fmt.Errorf("mesh cluster_key: not valid base64: %w", err)
+	}
+	switch len(key) {
+	case 16, 24, 32:
+		return key, nil
+	default:
+		return nil, fmt.Errorf("mesh cluster_key decodes to %d bytes, want 16, 24, or 32 (AES-128/192/256)", len(key))
+	}
 }
 
 // Config is the sandboxd node configuration.
@@ -312,11 +348,26 @@ func (c *Config) validate() error {
 	if err := c.validateTenants(); err != nil {
 		return err
 	}
+	if err := c.validateMesh(); err != nil {
+		return err
+	}
 	secrets, err := c.validateSecrets()
 	if err != nil {
 		return err
 	}
 	return c.validateEgress(secrets)
+}
+
+// validateMesh fails at load what would otherwise only surface at startMesh.
+func (c *Config) validateMesh() error {
+	if c.Mesh == nil {
+		return nil
+	}
+	if _, _, err := c.Mesh.ParsedBind(); err != nil {
+		return err
+	}
+	_, err := c.Mesh.DecodedKey()
+	return err
 }
 
 func (c *Config) validateEgress(secrets map[string]struct{}) error {

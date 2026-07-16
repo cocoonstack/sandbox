@@ -136,6 +136,7 @@ type pool struct {
 	goldenDir string
 	building  bool
 	nextBuild time.Time
+	removed   bool // dropped from the desired set while building/refilling; swept by refillOnce
 	warm      []*types.Sandbox
 	refilling int
 }
@@ -449,13 +450,17 @@ func (m *Manager) SetTemplateNotifier(fn func()) {
 func (m *Manager) Info() ([]PoolInfo, Gauges) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	now := time.Now()
 	pools := make([]PoolInfo, 0, len(m.pools))
 	for _, p := range m.pools {
+		if p.removed {
+			continue
+		}
 		pools = append(pools, PoolInfo{
 			Key:       p.key,
 			Warm:      len(p.warm),
 			Refilling: p.refilling,
-			Target:    p.effectiveTarget(time.Now()),
+			Target:    p.effectiveTarget(now),
 			Golden:    p.goldenDir != "",
 		})
 	}
@@ -493,9 +498,17 @@ func (m *Manager) WarmCounts() map[string]int {
 	defer m.mu.Unlock()
 	counts := make(map[string]int, len(m.pools))
 	for key, p := range m.pools {
-		counts[key.Hash()] = len(p.warm)
+		if !p.removed {
+			counts[key.Hash()] = len(p.warm)
+		}
 	}
 	return counts
+}
+
+// activePool looks up key treating a removed pool as absent; callers hold m.mu.
+func (m *Manager) activePool(key types.PoolKey) (*pool, bool) {
+	p, ok := m.pools[key]
+	return p, ok && !p.removed
 }
 
 func (m *Manager) validate(key types.PoolKey) error {

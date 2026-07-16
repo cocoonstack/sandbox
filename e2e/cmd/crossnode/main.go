@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -64,16 +65,11 @@ func run(addrA, addrB, token, template string) error {
 	if err != nil {
 		return fmt.Errorf("list checkpoints on B: %w", err)
 	}
-	var ckB *sandbox.Checkpoint
-	for _, c := range cks {
-		if c.ID == ck.ID {
-			ckB = c
-			break
-		}
-	}
-	if ckB == nil {
+	i := slices.IndexFunc(cks, func(c *sandbox.Checkpoint) bool { return c.ID == ck.ID })
+	if i < 0 {
 		return fmt.Errorf("checkpoint %s not visible on B (store not shared?)", ck.ID)
 	}
+	ckB := cks[i]
 	fmt.Printf("  B: sees %s via the shared store\n", ckB.ID)
 
 	t0 = time.Now()

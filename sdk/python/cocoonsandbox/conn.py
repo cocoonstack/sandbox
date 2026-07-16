@@ -63,6 +63,10 @@ class Conn:
 def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float) -> Conn:
     """Opens the data-plane connection: TCP dial plus a hand-rolled HTTP
     Upgrade, so nothing pools or proxies underneath the byte stream."""
+    # id/token interpolate into the raw request line; CR/LF would inject headers.
+    for name, value in (("sandbox id", sandbox_id), ("token", token)):
+        if any(c in value for c in "\r\n\0"):
+            raise APIError("agent upgrade", 0, f"{name} contains a control character")
     host, port = addr.rsplit(":", 1)
     sock = socket.create_connection((host, int(port)), timeout=timeout)
     reader = None
@@ -87,9 +91,15 @@ def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float) -> Conn:
                 break
             name, _, value = header.decode(errors="replace").partition(":")
             if name.strip().lower() == "content-length":
-                body_len = int(value.strip())
+                try:
+                    body_len = int(value.strip())
+                    if body_len < 0:
+                        raise ValueError("negative content-length")
+                except ValueError as exc:
+                    raise ProtocolError("invalid content-length in upgrade reply") from exc
         if code != 101:
-            body = reader.read(body_len).decode(errors="replace") if body_len else ""
+            # A bogus content-length must not buffer unbounded bytes.
+            body = reader.read(min(body_len, MAX_FRAME)).decode(errors="replace") if body_len else ""
             raise APIError("agent upgrade", code, body.strip() or status.strip())
         return Conn(sock, reader)
     except Exception:

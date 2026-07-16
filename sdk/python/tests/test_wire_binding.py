@@ -64,6 +64,32 @@ CASES = [
      lambda sb, f: sb.git_pull(f["path"], auth=f["auth"])),
     ("req_pty_resize", [{"type": "done"}],
      lambda sb, f: _pty_stub(sb, f["pid"]).resize(f["cols"], f["rows"])),
+    ("req_exec_detach", [{"type": "started", "pid": 7}],
+     lambda sb, f: sb.spawn(*f["argv"])),
+    ("req_ps", [{"type": "procs", "procs": []}],
+     lambda sb, f: sb.ps()),
+    ("req_kill", [{"type": "done"}],
+     lambda sb, f: sb.kill(f["pid"], signal=f["signal"])),
+    ("req_logs", [{"type": "exit", "code": 0}],
+     lambda sb, f: sb.logs(f["pid"])),
+    ("req_attach", [{"type": "exit", "code": 0}],
+     lambda sb, f: sb.attach(f["pid"])),
+    ("req_fs_watch", [{"type": "ready"}],
+     lambda sb, f: sb.watch(f["path"], recursive=f["recursive"]).close()),
+    ("req_git_branch", [{"type": "done"}],
+     lambda sb, f: sb.git_create_branch(f["path"], f["name"])),
+    ("req_session_rm", [{"type": "done"}],
+     lambda sb, f: _session_stub(sb, f["id"]).close()),
+    ("req_lsp_start", [{"type": "lsp_started", "server_id": "lsp-1"}],
+     lambda sb, f: sb.start_lsp(f["language"], root=f["root"])),
+    ("req_lsp_request", [{"type": "ready"}],
+     lambda sb, f: _lsp_stub(sb, f["server_id"]).request().close()),
+    ("req_lsp_stop", [{"type": "done"}],
+     lambda sb, f: _lsp_stub(sb, f["server_id"]).stop()),
+    ("req_port_forward", [{"type": "ready"}],
+     lambda sb, f: sb.dial_port(f["port"]).close()),
+    ("req_pty_open", [{"type": "started", "pid": 7}],
+     lambda sb, f: sb.open_pty(cols=f["cols"], rows=f["rows"], cwd=f["cwd"], env=f["env"], user=f["user"]).close()),
 ]
 
 
@@ -71,6 +97,18 @@ def _pty_stub(sb, pid):
     from cocoonsandbox.sandbox import Pty
 
     return Pty(sb, None, pid)
+
+
+def _session_stub(sb, id):
+    from cocoonsandbox.sandbox import Session
+
+    return Session(sb, id)
+
+
+def _lsp_stub(sb, server_id):
+    from cocoonsandbox.sandbox import Lsp
+
+    return Lsp(sb, server_id)
 
 
 def _fake_sandbox(monkeypatch, replies):

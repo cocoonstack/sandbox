@@ -95,11 +95,19 @@ func (c *CA) SignLeaf(host string) (*tls.Certificate, error) {
 		return nil, err
 	}
 	now := time.Now()
+	// Guests reject a chain whose leaf outlives or postdates its intermediate.
+	if now.After(c.interCert.NotAfter) {
+		return nil, fmt.Errorf("sign leaf %s: intermediate expired %s", host, c.interCert.NotAfter.Format(time.RFC3339))
+	}
+	notAfter := now.Add(leafValidity)
+	if notAfter.After(c.interCert.NotAfter) {
+		notAfter = c.interCert.NotAfter
+	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: host},
 		NotBefore:             now.Add(-clockSkew),
-		NotAfter:              now.Add(leafValidity),
+		NotAfter:              notAfter,
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,

@@ -65,6 +65,77 @@ func TestSweepDropsSupersededOldGeneration(t *testing.T) {
 	}
 }
 
+// TestDeleteRemovesStaleOldGeneration: a <id>.old left by a Publish whose
+// cleanup failed must not survive Delete — otherwise the next sweep renames it
+// back over the deleted id and resurrects the record.
+func TestDeleteRemovesStaleOldGeneration(t *testing.T) {
+	const id = "ck_00000000000000aa"
+	root := t.TempDir()
+	st, err := New(root, store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	seedRecord(t, filepath.Join(root, id), id)
+	seedRecord(t, filepath.Join(root, id+oldSuffix), "stale")
+
+	if err := st.Delete(t.Context(), id); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := st.SweepStaging(); err != nil {
+		t.Fatalf("SweepStaging: %v", err)
+	}
+	if _, err := st.ReadMeta(t.Context(), id); err != store.ErrNotFound {
+		t.Errorf("deleted record resurrected by a stale .old: %v", err)
+	}
+}
+
+// TestPublishKeepsUnsweptOldWhenFinalMissing: a Publish must not destroy an
+// unswept <id>.old (a crash artifact holding the last good generation) before
+// installing the new one — the new record must land while .old is gone.
+func TestPublishKeepsUnsweptOldWhenFinalMissing(t *testing.T) {
+	const id = "ck_00000000000000aa"
+	root := t.TempDir()
+	st, err := New(root, store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	seedRecord(t, filepath.Join(root, id+oldSuffix), "stale")
+	staging, err := st.Stage(id)
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	seedRecord(t, staging, id)
+
+	if err = st.Publish(t.Context(), staging, id); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	raw, err := st.ReadMeta(t.Context(), id)
+	if err != nil || string(raw) != `{"id":"`+id+`"}` {
+		t.Fatalf("ReadMeta after publish = %q, %v, want the new generation", raw, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, id+oldSuffix)); !os.IsNotExist(err) {
+		t.Errorf("stale .old not reclaimed after a successful publish: %v", err)
+	}
+}
+
+// TestMetasSurfacesReadError: a corrupt/unreadable meta must fail the listing,
+// not vanish silently — mirroring the s3 backend.
+func TestMetasSurfacesReadError(t *testing.T) {
+	const id = "ck_00000000000000aa"
+	root := t.TempDir()
+	st, err := New(root, store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// A directory where meta.json is expected makes ReadFile fail with EISDIR.
+	if err := os.MkdirAll(filepath.Join(root, id, store.MetaFile), 0o750); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if _, err := st.Metas(t.Context()); err == nil {
+		t.Error("Metas swallowed an unreadable meta; want the error surfaced")
+	}
+}
+
 func seedRecord(t *testing.T, dir, metaID string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(dir, store.ExportDir), 0o750); err != nil {

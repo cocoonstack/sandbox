@@ -44,15 +44,24 @@ func (d *Store) Publish(_ context.Context, staging, id string) error {
 	final := filepath.Join(d.root, id)
 	old := final + oldSuffix
 	// Re-publish (re-promote) replaces by swap, not delete-then-rename: the
-	// old generation survives as <id>.old until the new one is in place, so
-	// a crash in between loses nothing (SweepStaging restores it).
+	// old generation survives as <id>.old until the new one is in place, so a
+	// crash in between loses nothing (SweepStaging restores it). An absent
+	// final with a live <id>.old is an unswept crash artifact — install first,
+	// clear it only after success.
+	switch _, statErr := os.Stat(final); {
+	case errors.Is(statErr, fs.ErrNotExist):
+		if err := os.Rename(staging, final); err != nil {
+			return err
+		}
+		_ = os.RemoveAll(old)
+		return nil
+	case statErr != nil:
+		return statErr
+	}
 	if err := os.RemoveAll(old); err != nil {
 		return err
 	}
-	switch err := os.Rename(final, old); {
-	case errors.Is(err, fs.ErrNotExist):
-		return os.Rename(staging, final)
-	case err != nil:
+	if err := os.Rename(final, old); err != nil {
 		return err
 	}
 	if err := os.Rename(staging, final); err != nil {
@@ -98,15 +107,22 @@ func (d *Store) Metas(ctx context.Context) ([][]byte, error) {
 		if !e.IsDir() || !d.idRe.MatchString(e.Name()) {
 			continue
 		}
-		if raw, err := d.ReadMeta(ctx, e.Name()); err == nil {
+		raw, err := d.ReadMeta(ctx, e.Name())
+		switch {
+		case err == nil:
 			metas = append(metas, raw)
+		case errors.Is(err, store.ErrNotFound): // absence mid-list is a race
+		default:
+			return nil, err // a corrupt or unreadable meta must not vanish silently
 		}
 	}
 	return metas, nil
 }
 
+// Delete also clears an unswept <id>.old so a sweep cannot resurrect the record.
 func (d *Store) Delete(_ context.Context, id string) error {
-	return os.RemoveAll(filepath.Join(d.root, id))
+	final := filepath.Join(d.root, id)
+	return errors.Join(os.RemoveAll(final), os.RemoveAll(final+oldSuffix))
 }
 
 func (d *Store) SweepStaging() error {

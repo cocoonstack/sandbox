@@ -2,6 +2,8 @@ package sandbox
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"io"
 	"testing"
 )
@@ -44,5 +46,23 @@ func TestPtyEchoAndExit(t *testing.T) {
 	code, ok := pty.ExitCode()
 	if !ok || code != 0 {
 		t.Errorf("exit code %d ok=%v, want 0 true", code, ok)
+	}
+}
+
+// TestPtyCtxCancelIsTyped: canceling the OpenPty ctx must surface as a typed
+// context error through Read, matching Watcher and PortConn.
+func TestPtyCtxCancelIsTyped(t *testing.T) {
+	sb := fakeSandbox(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	pty, err := sb.OpenPty(ctx, PtyOpts{Cols: 80, Rows: 24})
+	if err != nil {
+		t.Fatalf("OpenPty: %v", err)
+	}
+	defer pty.Close()
+
+	cancel()
+	_, err = io.ReadAll(pty)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Read after ctx cancel = %v, want context.Canceled", err)
 	}
 }

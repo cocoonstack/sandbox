@@ -15,6 +15,7 @@ func TestBelowFloor(t *testing.T) {
 		{"v0.5.0", true, true},
 		{"v0.4.9", true, true},
 		{"v1.0.0", false, true},
+		{"v0.10.0", false, true},
 		{"master-82e5902", false, false},
 		{"unknown", false, false},
 		{"v0.5", false, false},

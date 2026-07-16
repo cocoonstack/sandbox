@@ -30,8 +30,7 @@ func BenchmarkStoreSaveScaling(b *testing.B) {
 		b.Run(fmt.Sprintf("claims=%d", n), func(b *testing.B) {
 			st := newClaimStore(b.TempDir())
 			claims := benchClaims(n)
-			b.ResetTimer()
-			for range b.N {
+			for b.Loop() {
 				if err := st.save(claims); err != nil {
 					b.Fatalf("save: %v", err)
 				}
@@ -76,8 +75,7 @@ func benchPersistContention(b *testing.B, claims map[string]*types.Sandbox, offL
 		}
 	}()
 
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		if offLock {
 			mu.Lock()
 			snap := s.snapshot(claims) // marshal under the lock
@@ -89,7 +87,6 @@ func benchPersistContention(b *testing.B, claims map[string]*types.Sandbox, offL
 			mu.Unlock()
 		}
 	}
-	b.StopTimer()
 	close(done)
 	if w := waits.Load(); w > 0 {
 		b.ReportMetric(float64(waitNs.Load())/float64(w), "ns/acquire")

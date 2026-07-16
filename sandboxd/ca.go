@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -89,15 +90,33 @@ func writeCAFiles(dir, name string, certPEM, keyPEM []byte, force bool) error {
 			}
 		}
 	}
-	if err := os.WriteFile(certPath, certPEM, 0o644); err != nil { //nolint:gosec // public cert
+	if err := writeKeyMaterial(certPath, certPEM, 0o644, force); err != nil { //nolint:gosec // public cert
 		return fmt.Errorf("write cert: %w", err)
 	}
-	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+	if err := writeKeyMaterial(keyPath, keyPEM, 0o600, force); err != nil {
 		return fmt.Errorf("write key: %w", err)
 	}
-	// WriteFile sets the mode only on create; an overwrite must not keep looser bits.
+	// Create sets the mode only on a new file; an overwrite must not keep looser bits.
 	if err := os.Chmod(keyPath, 0o600); err != nil {
 		return fmt.Errorf("chmod key: %w", err)
 	}
 	return nil
+}
+
+// writeKeyMaterial writes path with O_EXCL unless force; the Stat precheck
+// above is a courtesy.
+func writeKeyMaterial(path string, data []byte, perm os.FileMode, force bool) error {
+	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	if !force {
+		flags |= os.O_EXCL
+	}
+	f, err := os.OpenFile(path, flags, perm) //nolint:gosec // operator-chosen -out path
+	if errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("%s exists; refusing to overwrite (use -force)", path)
+	}
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(data)
+	return errors.Join(werr, f.Close())
 }

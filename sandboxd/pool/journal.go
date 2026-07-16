@@ -2,6 +2,7 @@ package pool
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"sync"
 	"time"
@@ -56,14 +57,13 @@ func (j *journal) append(v any) error {
 	line = append(line, '\n')
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	var rotateErr error
 	if j.size+int64(len(line)) > journalMaxBytes {
-		if rotateErr := j.rotate(); rotateErr != nil {
-			return rotateErr
-		}
+		rotateErr = j.rotate()
 	}
 	n, err := j.f.Write(line)
 	j.size += int64(n)
-	return err
+	return errors.Join(rotateErr, err)
 }
 
 func (j *journal) close() error {
@@ -73,17 +73,22 @@ func (j *journal) close() error {
 }
 
 // rotate moves the live file to .1 (replacing any prior backup) and reopens.
+// A failed swap degrades to an oversized journal: reopen, append, retry next time.
 func (j *journal) rotate() error {
-	if err := j.f.Close(); err != nil {
+	if err := j.f.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
 		return err
 	}
-	if err := os.Rename(j.path, j.path+".1"); err != nil {
-		return err
-	}
+	renameErr := os.Rename(j.path, j.path+".1")
 	f, err := os.OpenFile(j.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // under data_dir
 	if err != nil {
-		return err
+		return errors.Join(renameErr, err)
 	}
 	j.f, j.size = f, 0
+	if renameErr != nil {
+		if st, statErr := f.Stat(); statErr == nil {
+			j.size = st.Size()
+		}
+		return renameErr
+	}
 	return nil
 }

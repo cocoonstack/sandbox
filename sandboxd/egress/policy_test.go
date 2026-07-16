@@ -36,6 +36,24 @@ func TestPolicyEval(t *testing.T) {
 	}
 }
 
+func TestEvalSkipsInterceptRules(t *testing.T) {
+	p := Policy{Allow: []Rule{
+		{Host: "api.github.com", Secret: "gh", Intercept: true},
+		{Host: "plain.github.com"},
+	}}
+	// An intercept-only host must deny the plaintext forward path outright —
+	// matching would inject the rule's secret over cleartext.
+	if rule, d := p.Eval("api.github.com", "GET"); d != DecisionDeny || rule.Secret != "" {
+		t.Errorf("Eval on an intercept-only host = %+v/%v, want deny", rule, d)
+	}
+	if _, d := p.Eval("plain.github.com", "GET"); d != DecisionAllow {
+		t.Error("plain rule must still allow the forward path")
+	}
+	if _, d := p.EvalHost("api.github.com"); d != DecisionAllow {
+		t.Error("EvalHost must still allow the intercepted CONNECT path")
+	}
+}
+
 func TestEvalHostPrefersInterceptRule(t *testing.T) {
 	p := Policy{Allow: []Rule{
 		{Host: "api.github.com", Methods: []string{"GET"}},

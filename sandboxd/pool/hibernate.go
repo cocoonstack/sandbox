@@ -200,7 +200,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 	m.mu.Lock()
 	for _, sb := range m.claimed {
 		idle := m.idleDefault
-		if p, pooled := m.pools[sb.Key]; pooled {
+		if p, pooled := m.activePool(sb.Key); pooled {
 			idle = p.idle // pooled keys never take the node default
 		}
 		if idle <= 0 || sb.HibernateSnap != "" || sb.ArchiveCk != "" || now.Sub(sb.LastSeen()) < idle {

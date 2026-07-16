@@ -2,6 +2,8 @@ package engine
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -85,6 +87,39 @@ func TestProbeRetriesUntilListenerAppears(t *testing.T) {
 	listenMuxer(t, path, "OK 2048\n", infoFrame)
 	if err := <-done; err != nil {
 		t.Errorf("Probe: %v", err)
+	}
+}
+
+func TestDialGuestPortCtxCancel(t *testing.T) {
+	path := sockPath(t)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("setup listener: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	hold := make(chan struct{})
+	t.Cleanup(func() { close(hold) })
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		r := bufio.NewReader(conn)
+		if _, err := r.ReadString('\n'); err != nil {
+			return
+		}
+		if _, err := io.WriteString(conn, "OK 2048\n"); err != nil {
+			return
+		}
+		_, _ = r.ReadString('\n') // consume port_forward, never answer
+		<-hold
+	}()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
+	defer cancel()
+	if _, err := New("cocoon", "", "").DialGuestPort(ctx, path, 8080); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("got %v, want context.DeadlineExceeded", err)
 	}
 }
 

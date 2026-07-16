@@ -34,11 +34,7 @@ func run(addr, peer, token, template string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	var copts []sandbox.ClientOption
-	if token != "" {
-		copts = append(copts, sandbox.WithAPIToken(token))
-	}
-	client, err := sandbox.Connect(addr, copts...)
+	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(token))
 	if err != nil {
 		return err
 	}

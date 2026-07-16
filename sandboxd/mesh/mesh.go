@@ -41,6 +41,10 @@ type Mesh struct {
 	ml        *memberlist.Memberlist
 	epochPath string
 
+	// updateMu serializes UpdateSelf end-to-end: two updates reading one epoch
+	// would both bump to E+1 and the loser's payload would be dropped.
+	updateMu sync.Mutex
+
 	mu   sync.Mutex
 	self NodeState
 	view map[string]NodeState // node_id → latest known state (includes self)
@@ -103,6 +107,8 @@ func (m *Mesh) Join(seeds []string) error {
 // not republished — the periodic tick would otherwise gossip a fresh epoch
 // every second for nothing.
 func (m *Mesh) UpdateSelf(pools map[string]int, templates []string) {
+	m.updateMu.Lock()
+	defer m.updateMu.Unlock()
 	m.mu.Lock()
 	if maps.Equal(m.self.Pools, pools) && slices.Equal(m.self.Templates, templates) {
 		m.mu.Unlock()
@@ -118,12 +124,10 @@ func (m *Mesh) UpdateSelf(pools map[string]int, templates []string) {
 		return
 	}
 	m.mu.Lock()
-	if epoch > m.self.Epoch {
-		m.self.Epoch = epoch
-		m.self.Pools = pools
-		m.self.Templates = templates
-		m.view[m.self.NodeID] = m.self
-	}
+	m.self.Epoch = epoch
+	m.self.Pools = pools
+	m.self.Templates = templates
+	m.view[m.self.NodeID] = m.self
 	m.mu.Unlock()
 }
 

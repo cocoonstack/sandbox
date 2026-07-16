@@ -14,14 +14,14 @@ import (
 
 // archive*For resolve a key's thresholds (pool's, else node default); callers hold m.mu.
 func (m *Manager) archiveAfterFor(key types.PoolKey) time.Duration {
-	if p, ok := m.pools[key]; ok {
+	if p, ok := m.activePool(key); ok {
 		return p.archiveAfter
 	}
 	return m.archiveAfterDefault
 }
 
 func (m *Manager) archiveDeleteFor(key types.PoolKey) time.Duration {
-	if p, ok := m.pools[key]; ok {
+	if p, ok := m.activePool(key); ok {
 		return p.archiveDelete
 	}
 	return m.archiveDeleteDefault
@@ -159,9 +159,10 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	}
 	ctx = context.WithoutCancel(ctx)
 	ck := sb.ArchiveCk
+	// Exclusive, not shared: this path deletes the consumed ck below.
 	l := m.recLock(ck)
-	l.RLock()
-	defer l.RUnlock()
+	l.Lock()
+	defer l.Unlock()
 	dir, _, release, err := m.ckpts.Fetch(ctx, ck)
 	if errors.Is(err, store.ErrNotFound) {
 		return "", ErrUnknownSandbox // record disagrees with the store

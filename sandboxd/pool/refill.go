@@ -23,21 +23,31 @@ func (m *Manager) refillOnce(ctx context.Context) {
 		return
 	}
 	now := time.Now()
-	for _, p := range m.pools {
-		target := p.effectiveTarget(now)
-		if p.goldenDir == "" {
-			if !p.building && now.After(p.nextBuild) {
-				p.building = true
-				go m.buildGolden(ctx, p)
+	for key, p := range m.pools {
+		// SetPools leaves a removed pool in place while a build/refill is in
+		// flight; sweep it once quiescent.
+		if p.removed {
+			if !p.building && p.refilling == 0 {
+				delete(m.pools, key)
 			}
 			continue
 		}
-		golden := p.goldenDir
-		for len(p.warm)+p.refilling < target {
+		if p.goldenDir == "" && !p.building && now.After(p.nextBuild) {
+			p.building = true
+			go m.buildGolden(ctx, p)
+		}
+	}
+	for spawned := true; spawned; {
+		spawned = false
+		for _, p := range m.pools {
+			if p.removed || p.goldenDir == "" || len(p.warm)+p.refilling >= p.effectiveTarget(now) {
+				continue
+			}
 			select {
 			case m.refillSem <- struct{}{}:
 				p.refilling++
-				go m.refillOne(ctx, p, golden)
+				go m.refillOne(ctx, p, p.goldenDir)
+				spawned = true
 			default:
 				return
 			}
@@ -46,35 +56,23 @@ func (m *Manager) refillOnce(ctx context.Context) {
 }
 
 func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
-	releaseSlot := true
-	defer func() {
-		if releaseSlot {
-			<-m.refillSem
-		}
-	}()
 	start := time.Now()
 	sb, err := m.provision(ctx, p.key, golden)
 	keep := false
 	m.mu.Lock()
 	p.refilling--
-	target := p.effectiveTarget(time.Now())
-	if err == nil && !m.draining {
-		if len(p.warm) < target {
-			p.warm = append(p.warm, sb)
-			p.noteLead(time.Since(start))
-			keep = true
-		}
-		if p.goldenDir != "" && len(p.warm)+p.refilling < target {
-			p.refilling++
-			releaseSlot = false
-			go m.refillOne(ctx, p, p.goldenDir)
-		}
+	if err == nil && !m.draining && len(p.warm) < p.effectiveTarget(time.Now()) {
+		p.warm = append(p.warm, sb)
+		p.noteLead(time.Since(start))
+		keep = true
 	}
 	m.mu.Unlock()
+	<-m.refillSem
 	if err != nil {
 		log.WithFunc("pool.refillOne").Errorf(ctx, err, "refill %s", p.key.Hash())
 		return
 	}
+	m.refillOnce(ctx)
 	if !keep {
 		m.destroy(ctx, sb.VMName)
 	}
@@ -329,12 +327,10 @@ func (m *Manager) vsockOf(ctx context.Context, name string) (string, error) {
 // caller. Callers that need completion Wait; fire-and-forget drops it.
 func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context, int)) *sync.WaitGroup {
 	var wg sync.WaitGroup
-	wg.Add(n)
 	for i := range n {
 		// Acquire inside the goroutine: a batch larger than the budget
 		// must not block the caller (Run's select loop).
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			select {
 			case m.refillSem <- struct{}{}:
 			case <-ctx.Done():
@@ -342,7 +338,7 @@ func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context,
 			}
 			defer func() { <-m.refillSem }()
 			f(ctx, i)
-		}()
+		})
 	}
 	return &wg
 }

@@ -43,7 +43,7 @@ pub async fn clone<W: AsyncWrite + Unpin>(
 pub async fn status<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> std::io::Result<()> {
     let out = git(&path, None, &["status", "--porcelain=v2", "--branch"]).await?;
     if !out.status.success() {
-        return fail(w, "status", &out).await;
+        return terminal(w, "status", &out).await;
     }
     proto::write_frame(w, &parse_status(&String::from_utf8_lossy(&out.stdout))).await
 }
@@ -79,11 +79,11 @@ pub async fn commit<W: AsyncWrite + Unpin>(
         .output()
         .await?;
     if !out.status.success() {
-        return fail(w, "commit", &out).await;
+        return terminal(w, "commit", &out).await;
     }
     let rev = git(&path, None, &["rev-parse", "HEAD"]).await?;
     if !rev.status.success() {
-        return fail(w, "rev-parse", &rev).await;
+        return terminal(w, "rev-parse", &rev).await;
     }
     let hash = String::from_utf8_lossy(&rev.stdout).trim().to_string();
     proto::write_frame(w, &Response::GitCommitResult { hash }).await
@@ -118,7 +118,7 @@ pub async fn branch<W: AsyncWrite + Unpin>(
         GitBranchOp::List => {
             let out = git(&path, None, &["branch", "--format=%(refname:short)"]).await?;
             if !out.status.success() {
-                return fail(w, "branch", &out).await;
+                return terminal(w, "branch", &out).await;
             }
             let branches: Vec<String> = String::from_utf8_lossy(&out.stdout)
                 .lines()
@@ -200,14 +200,6 @@ fn apply_config(cmd: &mut Command, auth: Option<&str>) {
     }
 }
 
-async fn fail<W: AsyncWrite + Unpin>(
-    w: &mut W,
-    verb: &str,
-    out: &std::process::Output,
-) -> std::io::Result<()> {
-    proto::subprocess_result(w, false, &format!("git {verb}"), &out.stderr).await
-}
-
 fn no_egress() -> Response {
     Response::error(
         ErrorKind::Unimplemented,
@@ -262,17 +254,23 @@ fn parse_ahead_behind(rest: &str) -> (u32, u32) {
 /// space-field (kept intact even with spaces — core.quotePath=false keeps it
 /// raw). Ordinary changes ("1") have the path at field 9; renames/copies ("2")
 /// add an Xscore field, so the path is field 10 and carries "<new>\t<orig>",
-/// of which we keep the new path. Untracked ("?") is a bare path.
+/// of which we keep the new path; unmerged ("u") entries carry four modes and
+/// three hashes, putting the bare path at field 11. Untracked ("?") is a
+/// bare path.
 fn parse_file_line(line: &str) -> Option<GitFileStatus> {
     let kind = line.split(' ').next()?;
     match kind {
-        "1" | "2" => {
+        "1" | "2" | "u" => {
             let mut fields = line.split(' ');
             let xy = fields.nth(1)?; // field 2
             let mut chars = xy.chars();
             let staged = chars.next()?.to_string();
             let unstaged = chars.next()?.to_string();
-            let skip = if kind == "2" { 7 } else { 6 }; // to reach the path field
+            let skip = match kind {
+                "2" => 7,
+                "u" => 8,
+                _ => 6,
+            }; // to reach the path field
             let path = fields.nth(skip)?;
             // Rejoin any spaces the split consumed, then drop a rename's \t<orig>.
             let rest: Vec<&str> = fields.collect();
@@ -305,4 +303,35 @@ fn split_author(author: &str) -> (&str, &str) {
         }
     }
     (author.trim(), "")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_ordinary_rename_untracked_and_conflict() {
+        let ordinary = parse_file_line("1 .M N... 100644 100644 100644 h1 h2 src/main.rs").unwrap();
+        assert_eq!(ordinary.path, "src/main.rs");
+        assert_eq!(
+            (ordinary.staged.as_str(), ordinary.unstaged.as_str()),
+            (".", "M")
+        );
+
+        let rename =
+            parse_file_line("2 R. N... 100644 100644 100644 h1 h2 R100 new.rs\told.rs").unwrap();
+        assert_eq!(rename.path, "new.rs");
+
+        let untracked = parse_file_line("? build/out.o").unwrap();
+        assert_eq!(untracked.path, "build/out.o");
+
+        // Unmerged entries (kind "u") must surface as conflicted, not vanish.
+        let conflict =
+            parse_file_line("u UU N... 100644 100644 100644 100644 h1 h2 h3 conflict.rs").unwrap();
+        assert_eq!(conflict.path, "conflict.rs");
+        assert_eq!(
+            (conflict.staged.as_str(), conflict.unstaged.as_str()),
+            ("U", "U")
+        );
+    }
 }

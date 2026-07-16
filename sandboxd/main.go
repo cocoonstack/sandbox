@@ -6,18 +6,15 @@ package main
 import (
 	"cmp"
 	"context"
-	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime/debug"
 	"slices"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -160,16 +157,9 @@ func main() {
 func startMesh(cfg *config.Config, mgr *pool.Manager) (*mesh.Mesh, error) {
 	mc := cfg.Mesh
 	mlCfg := memberlist.DefaultLANConfig()
-	host, portStr, err := net.SplitHostPort(mc.Bind)
+	host, port, err := mc.ParsedBind()
 	if err != nil {
-		return nil, fmt.Errorf("mesh bind %q: %w", mc.Bind, err)
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return nil, fmt.Errorf("mesh bind port %q: %w", portStr, err)
-	}
-	if host == "" {
-		return nil, fmt.Errorf("mesh bind needs an explicit host (got %q); a wildcard advertises an unroutable address", mc.Bind)
+		return nil, err
 	}
 	mlCfg.BindAddr, mlCfg.BindPort = host, port
 	mlCfg.AdvertiseAddr, mlCfg.AdvertisePort = host, port
@@ -177,11 +167,9 @@ func startMesh(cfg *config.Config, mgr *pool.Manager) (*mesh.Mesh, error) {
 	mlCfg.LogOutput = io.Discard // memberlist's own logs bypass core/log
 
 	nodeID := cmp.Or(mc.NodeID, mc.Bind)
-	var key []byte
-	if mc.ClusterKey != "" {
-		if key, err = base64.StdEncoding.DecodeString(mc.ClusterKey); err != nil {
-			return nil, fmt.Errorf("mesh cluster key: %w", err)
-		}
+	key, err := mc.DecodedKey()
+	if err != nil {
+		return nil, err
 	}
 	msh, err := mesh.New(mlCfg, nodeID, cfg.AdvertiseAddr, key, cfg.DataDir)
 	if err != nil {

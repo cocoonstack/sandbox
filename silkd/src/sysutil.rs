@@ -247,13 +247,13 @@ pub fn exit_code(status: ExitStatus) -> i32 {
     if let Some(code) = status.code() {
         return code;
     }
-    status.signal().map(|s| 128 + s).unwrap_or(-1)
+    status.signal().map_or(-1, |s| 128 + s)
 }
 
 /// Reaps the child and maps its status via `exit_code`; -1 when the wait
 /// itself fails.
 pub async fn wait_code(child: &mut tokio::process::Child) -> i32 {
-    child.wait().await.map(exit_code).unwrap_or(-1)
+    child.wait().await.map_or(-1, exit_code)
 }
 
 #[cfg(test)]

@@ -27,10 +27,8 @@ import (
 )
 
 const (
-	// RequiredCocoon is the minimum supported cocoon release: v0.5.0 silently
-	// breaks FC clone-from-snapshot (warm-pool refill + fork), fixed in v0.5.1;
-	// v0.5.2 carries the parallel-clone and snapshot/store perf work sandbox's
-	// latency numbers assume.
+	// RequiredCocoon is the minimum supported cocoon release: v0.5.0 breaks FC
+	// clone-from-snapshot; v0.5.2 carries the perf work the latency numbers assume.
 	RequiredCocoon = "v0.5.2"
 
 	silkdPort     = 2048 // silkd's fixed guest vsock port, the claim-ready anchor
@@ -66,9 +64,9 @@ func New(bin, bridge, network string) *Engine {
 func (e *Engine) Version(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, e.bin, "version").Output() //nolint:gosec // bin is node config, arg is a literal
+	out, err := e.run(ctx, "version")
 	if err != nil {
-		return "", fmt.Errorf("cocoon version: %w", err)
+		return "", err
 	}
 	for line := range strings.SplitSeq(string(out), "\n") {
 		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "Version:"); ok {
@@ -267,6 +265,8 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 	if err != nil {
 		return nil, err
 	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	req := fmt.Sprintf(`{"v":1,"op":"port_forward","port":%d}`+"\n", port)
 	if _, err := conn.Write([]byte(req)); err != nil {
 		_ = conn.Close()
@@ -275,6 +275,9 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 	line, readErr := readLine(conn, portForwardMax)
 	if readErr != nil {
 		_ = conn.Close()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("read port_forward reply: %w", readErr)
 	}
 	var frame silkdFrame
@@ -336,7 +339,7 @@ func (e *Engine) run(ctx context.Context, args ...string) ([]byte, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("cocoon %s: %w: %s", strings.Join(args[:2], " "), err, tail(stderr.String()))
+		return nil, fmt.Errorf("cocoon %s: %w: %s", strings.Join(args[:min(len(args), 2)], " "), err, tail(stderr.String()))
 	}
 	return stdout.Bytes(), nil
 }

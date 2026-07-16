@@ -107,6 +107,25 @@ func TestPersistEpochMonotonic(t *testing.T) {
 	}
 }
 
+func TestUpdateSelfConcurrentDropsNothing(t *testing.T) {
+	m := newBoundMesh(t, t.TempDir())
+	base := m.self.Epoch
+	for i := range 100 {
+		a := map[string]int{"a": i + 1}
+		b := map[string]int{"b": i + 1}
+		var wg sync.WaitGroup
+		wg.Go(func() { m.UpdateSelf(a, nil) })
+		wg.Go(func() { m.UpdateSelf(b, nil) })
+		wg.Wait()
+		// Serialized updates with distinct payloads must both land: the loser
+		// of the old TOCTOU race silently dropped its payload and one bump.
+		want := base + uint64(2*(i+1)) //nolint:gosec // loop index is small and positive
+		if m.self.Epoch != want {
+			t.Fatalf("round %d: epoch %d, want %d (an update was dropped)", i, m.self.Epoch, want)
+		}
+	}
+}
+
 func TestConfigDigestMismatch(t *testing.T) {
 	m := newTestMesh(t, "self")
 	m.SetSelfDigest("self-digest")

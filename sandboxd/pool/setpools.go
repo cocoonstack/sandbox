@@ -45,13 +45,10 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 	now := time.Now()
 	for key, p := range m.pools {
 		spec, ok := desired[key]
-		if !ok {
-			p.floor = 0
-			p.warmMax = 0
-			p.idle = 0
-		} else {
-			p.applySpec(spec)
-		}
+		// A removed key gets the zero spec: a lingering pool sheds its whole
+		// policy — a stale archiveAfter would keep archiving its claims.
+		p.applySpec(spec)
+		p.removed = !ok
 		trim = append(trim, p.trimWarm(p.effectiveTarget(now))...)
 		if !ok && !p.building && p.refilling == 0 {
 			delete(m.pools, key)
