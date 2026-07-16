@@ -16,6 +16,7 @@ import (
 	"io"
 	"net"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -392,12 +393,7 @@ func belowFloor(v string) (below, comparable bool) {
 		return false, false
 	}
 	floor, _ := parseSemver(RequiredCocoon)
-	for i := range 3 {
-		if cur[i] != floor[i] {
-			return cur[i] < floor[i], true
-		}
-	}
-	return false, true
+	return slices.Compare(cur[:], floor[:]) < 0, true
 }
 
 func parseSemver(s string) ([3]int, bool) {
