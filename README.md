@@ -63,8 +63,8 @@ Design docs:
   `interceptsmoke`, `lifecycle` (idle→hibernate→archive), `androidsmoke`,
   `browsersmoke`, and the `pullbench`/`pushbench`/`rpcbench` perf drivers
 - `boot/kernel/` — kernel version pin (`VERSION` + matching tarball `SHA256`,
-  bump both together) + config fragment (applied over `x86_64_defconfig` +
-  `kvm_guest.config`)
+  bump both together) + config fragment (amd64: over `x86_64_defconfig` +
+  `kvm_guest.config`; arm64: over `defconfig` + `sandbox-arm64.config`)
 - `boot/init/` — `sandbox-init`, the entire initramfs userland (Rust, static
   musl build)
 - `boot/Dockerfile` — multi-stage: kernel → init → cpio → scratch image with

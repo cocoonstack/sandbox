@@ -2,6 +2,9 @@
 # os-images) so the chain is deterministic; workflow_dispatch stays for
 # building the carrier alone. The pushed sha-pinned ref is an output so
 # os-images can base FROM the exact carrier this commit built.
+# Multi-arch: each platform builds on its native runner (a kernel build under
+# QEMU emulation takes hours), pushes by digest, and a merge job stitches the
+# manifest so every tag resolves per-platform.
 name: build-boot
 
 on:
@@ -13,7 +16,7 @@ on:
     outputs:
       image:
         description: sha-pinned boot image ref this run pushed
-        value: ${{ jobs.build.outputs.image }}
+        value: ${{ jobs.merge.outputs.image }}
   workflow_dispatch:
 
 permissions:
@@ -37,6 +40,64 @@ jobs:
 
   build:
     needs: test
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Read kernel version
+        id: ver
+        run: echo "kernel=$(cat boot/kernel/VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: boot
+          file: boot/Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            KERNEL_VERSION=${{ steps.ver.outputs.kernel }}
+          outputs: type=image,name=ghcr.io/${{ github.repository }}/boot,push-by-digest=true,name-canonical=true,push=true
+          no-cache: ${{ inputs.no_cache }}
+          cache-from: type=gha,scope=boot-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=boot-${{ matrix.arch }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: build
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.ref.outputs.image }}
@@ -53,6 +114,13 @@ jobs:
         # Same 7-char short SHA docker/metadata-action's type=sha emits, so
         # the ref matches the tag actually pushed below.
         run: echo "image=ghcr.io/${{ github.repository }}/boot:$(cat boot/kernel/VERSION)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: boot-digests-*
+          path: /tmp/digests
+          merge-multiple: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -74,17 +142,12 @@ jobs:
             type=raw,value=latest
             type=sha,prefix=${{ steps.ver.outputs.kernel }}-
 
-      - name: Build and push
-        uses: docker/build-push-action@v7
-        with:
-          context: boot
-          file: boot/Dockerfile
-          platforms: linux/amd64
-          push: true
-          build-args: |
-            KERNEL_VERSION=${{ steps.ver.outputs.kernel }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          no-cache: ${{ inputs.no_cache }}
-          cache-from: type=gha,scope=boot
-          cache-to: type=gha,mode=max,scope=boot
+      - name: Create multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< '${{ steps.meta.outputs.json }}') \
+            $(printf 'ghcr.io/${{ github.repository }}/boot@sha256:%s ' *)
+
+      - name: Inspect
+        run: docker buildx imagetools inspect "${{ steps.ref.outputs.image }}"

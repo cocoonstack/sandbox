@@ -32,6 +32,18 @@ jobs:
             -czf "dist-extra/silkd_${GITHUB_REF_NAME#v}_Linux_x86_64.tar.gz" silkd
           tar -C silkd/target/x86_64-unknown-linux-musl/release \
             -czf "dist-extra/silkd_Linux_x86_64.tar.gz" silkd
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Build silkd (musl static, arm64)
+        # Emulated cargo build via the carrier Dockerfile — byte-consistent
+        # with the image artifact; slow but release-rare.
+        run: |
+          docker buildx build --platform linux/arm64 -o type=local,dest=silkd-arm64 silkd
+          mkdir -p silkd-dist && cp silkd-arm64/silkd-static silkd-dist/silkd
+          tar -C silkd-dist -czf "dist-extra/silkd_${GITHUB_REF_NAME#v}_Linux_arm64.tar.gz" silkd
+          tar -C silkd-dist -czf "dist-extra/silkd_Linux_arm64.tar.gz" silkd
       - name: goreleaser
         uses: goreleaser/goreleaser-action@v6
         with:

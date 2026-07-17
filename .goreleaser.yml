@@ -1,7 +1,7 @@
 version: 2
 
-# linux/amd64 only: the guest stack (boot chain, images) is x86_64-only, so
-# an arm64 daemon would have nothing to run.
+# linux amd64+arm64: the boot chain and base/rt/python images are multi-arch;
+# archive names keep the historical x86_64 spelling and add Linux_arm64.
 before:
   hooks:
     - sh -c "cd sandboxd && GOWORK=off go mod download"
@@ -22,6 +22,7 @@ builds:
       - linux
     goarch:
       - amd64
+      - arm64
 
   - id: sandboxd-debug
     dir: sandboxd
@@ -36,6 +37,7 @@ builds:
       - linux
     goarch:
       - amd64
+      - arm64
 
   - id: sandbox-mcp
     dir: mcp
@@ -50,33 +52,34 @@ builds:
       - linux
     goarch:
       - amd64
+      - arm64
 
 archives:
   - id: sandboxd
     ids:
       - sandboxd
-    name_template: "sandboxd_{{ .Version }}_Linux_x86_64"
+    name_template: 'sandboxd_{{ .Version }}_Linux_{{ if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}'
 
   - id: sandboxd-debug
     ids:
       - sandboxd-debug
-    name_template: "sandboxd_{{ .Version }}_Linux_x86_64_debug"
+    name_template: 'sandboxd_{{ .Version }}_Linux_{{ if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}_debug'
 
   - id: sandbox-mcp
     ids:
       - sandbox-mcp
-    name_template: "sandbox-mcp_{{ .Version }}_Linux_x86_64"
+    name_template: 'sandbox-mcp_{{ .Version }}_Linux_{{ if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}'
 
   # Unversioned aliases so releases/latest/download/<name>.tar.gz resolves.
   - id: sandboxd-latest
     ids:
       - sandboxd
-    name_template: "sandboxd_Linux_x86_64"
+    name_template: 'sandboxd_Linux_{{ if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}'
 
   - id: sandbox-mcp-latest
     ids:
       - sandbox-mcp
-    name_template: "sandbox-mcp_Linux_x86_64"
+    name_template: 'sandbox-mcp_Linux_{{ if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}'
 
 checksum:
   name_template: 'checksums.txt'

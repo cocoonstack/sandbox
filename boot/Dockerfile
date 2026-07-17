@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
-# Boot artifact: custom guest kernel (PVH ELF vmlinux, everything =y) plus the
-# sandbox-init micro-initramfs, shipped as a scratch image under /boot/ for
-# os-image builds to COPY --from. See cocoon-specs/design/sandbox-fast-boot.md.
+# Boot artifact: custom guest kernel (amd64: PVH ELF vmlinux; arm64: flat
+# Image) plus the sandbox-init micro-initramfs, shipped as a scratch image
+# under /boot/ for os-image builds to COPY --from. Built per-platform on
+# native runners (a kernel build under QEMU emulation takes hours). See
+# cocoon-specs/design/sandbox-fast-boot.md.
 
 FROM debian:bookworm-slim AS kbuild
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -34,15 +36,25 @@ RUN set -e; \
     done; \
     echo "$hash  /tmp/linux.tar.xz" | sha256sum -c -; \
     tar -xJf /tmp/linux.tar.xz --strip-components=1 && rm /tmp/linux.tar.xz /tmp/SHA256
+ARG TARGETARCH
 COPY kernel/sandbox.config /tmp/sandbox.config
+COPY kernel/sandbox-arm64.config /tmp/sandbox-arm64.config
 # merge_config only warns and olddefconfig silently drops renamed or
 # dependency-orphaned symbols — assert the boot- and container-critical set
-# so a kernel bump cannot lose one with a green build.
+# so a kernel bump cannot lose one with a green build. Boot entry and console
+# are per-arch: amd64 = PVH + 8250, arm64 = direct Image boot + PL011.
 RUN set -e; \
-    make x86_64_defconfig kvm_guest.config; \
-    ./scripts/kconfig/merge_config.sh -m .config /tmp/sandbox.config; \
+    case "$TARGETARCH" in \
+      amd64) make x86_64_defconfig kvm_guest.config; \
+             ./scripts/kconfig/merge_config.sh -m .config /tmp/sandbox.config; \
+             arch_asserts="PVH SERIAL_8250_CONSOLE" ;; \
+      arm64) make defconfig; \
+             ./scripts/kconfig/merge_config.sh -m .config /tmp/sandbox.config /tmp/sandbox-arm64.config; \
+             arch_asserts="SERIAL_AMBA_PL011_CONSOLE RTC_DRV_PL031" ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH"; exit 1 ;; \
+    esac; \
     make olddefconfig; \
-    for s in PVH DEVTMPFS BLK_DEV_INITRD SERIAL_8250_CONSOLE \
+    for s in $arch_asserts DEVTMPFS BLK_DEV_INITRD \
              VIRTIO_PCI VIRTIO_MMIO_CMDLINE_DEVICES VIRTIO_BLK VIRTIO_NET \
              VIRTIO_CONSOLE VIRTIO_VSOCKETS \
              EROFS_FS EROFS_FS_ZIP OVERLAY_FS EXT4_FS \
@@ -55,9 +67,15 @@ RUN set -e; \
     if grep -q "^CONFIG_MODULES=y" .config; then \
         echo "CONFIG_MODULES must be off"; exit 1; \
     fi
-# vmlinux only: the uncompressed ELF is the shipped artifact (no bzImage).
-RUN make -j"$(nproc)" vmlinux \
-    && gcc usr/gen_init_cpio.c -o /usr/local/bin/gen_init_cpio
+# amd64 ships the uncompressed ELF vmlinux (no bzImage); arm64 ships the flat
+# Image — both direct-boot in CH and FC on their arch.
+RUN set -e; \
+    if [ "$TARGETARCH" = amd64 ]; then \
+        make -j"$(nproc)" vmlinux && cp vmlinux /linux/boot-kernel; \
+    else \
+        make -j"$(nproc)" Image && cp arch/arm64/boot/Image /linux/boot-kernel; \
+    fi; \
+    gcc usr/gen_init_cpio.c -o /usr/local/bin/gen_init_cpio
 
 FROM rust:1-alpine AS initbuild
 RUN apk add --no-cache musl-dev
@@ -98,10 +116,10 @@ gen_init_cpio initrd.desc > initrd.img-sandbox
 EOF
 
 # Names keep cocoon's scanBootFiles discovery working: base name prefixes
-# "vmlinuz" / "initrd.img" under /boot. The "vmlinuz" is really an ELF
-# vmlinux — CH (PVH) and FC (ELF loader) both content-detect it.
+# "vmlinuz" / "initrd.img" under /boot. The "vmlinuz" is an ELF vmlinux on
+# amd64 and a flat Image on arm64 — CH and FC content-detect both.
 FROM scratch
-COPY --from=kbuild /linux/vmlinux /boot/vmlinuz-sandbox
+COPY --from=kbuild /linux/boot-kernel /boot/vmlinuz-sandbox
 COPY --from=pack /pack/initrd.img-sandbox /boot/initrd.img-sandbox
 # Never runs; lets `docker create` work on this scratch image (make extract).
 CMD ["/boot"]

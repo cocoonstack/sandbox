@@ -20,11 +20,13 @@ the cocoon CLI and needs a template image with silkd baked in.
 - A silkd-baked template image, e.g. `ghcr.io/cocoonstack/sandbox/base:24.04`
   (pull via cocoon, or `cocoon image import` a tar)
 
-Prebuilt static linux/amd64 binaries (`sandboxd`, `sandbox-mcp`, `silkd`,
-with `checksums.txt`) ship with every
-[GitHub release](https://github.com/cocoonstack/sandbox/releases). Build
-from source with `make sandboxd` (produces `dist/sandboxd`); either way
-`sandboxd -version` reports what you are running.
+Prebuilt static linux/amd64 and linux/arm64 binaries (`sandboxd`,
+`sandbox-mcp`, `silkd`, with `checksums.txt`) ship with every
+[GitHub release](https://github.com/cocoonstack/sandbox/releases); the boot
+artifact and the `base`/`rt`/`python` images are multi-arch manifests
+(`browser` and `android` remain amd64-only). Build from source with
+`make sandboxd` (produces `dist/sandboxd`); either way `sandboxd -version`
+reports what you are running.
 
 ## Configuration
 

@@ -3,6 +3,8 @@
 # --from, so a silkd change rebuilds only this artifact. Reusable: the images
 # gating workflow calls this (see build-boot) and the pushed sha-pinned ref is
 # an output so os-images bases FROM the exact silkd carrier this commit built.
+# Multi-arch: per-platform native-runner builds pushed by digest, stitched by
+# a merge job — same shape as build-boot.
 name: build-silkd
 
 on:
@@ -14,7 +16,7 @@ on:
     outputs:
       image:
         description: sha-pinned silkd image ref this run pushed
-        value: ${{ jobs.build.outputs.image }}
+        value: ${{ jobs.merge.outputs.image }}
   workflow_dispatch:
 
 permissions:
@@ -38,6 +40,58 @@ jobs:
 
   build:
     needs: test
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: silkd
+          file: silkd/Dockerfile
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/${{ github.repository }}/silkd,push-by-digest=true,name-canonical=true,push=true
+          no-cache: ${{ inputs.no_cache }}
+          cache-from: type=gha,scope=silkd-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=silkd-${{ matrix.arch }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: silkd-digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: build
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.ref.outputs.image }}
@@ -53,6 +107,13 @@ jobs:
         id: ref
         # Matches docker/metadata-action's type=sha short SHA below.
         run: echo "image=ghcr.io/${{ github.repository }}/silkd:${{ steps.ver.outputs.version }}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: silkd-digests-*
+          path: /tmp/digests
+          merge-multiple: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -74,15 +135,12 @@ jobs:
             type=raw,value=latest
             type=sha,prefix=${{ steps.ver.outputs.version }}-
 
-      - name: Build and push
-        uses: docker/build-push-action@v7
-        with:
-          context: silkd
-          file: silkd/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          no-cache: ${{ inputs.no_cache }}
-          cache-from: type=gha,scope=silkd
-          cache-to: type=gha,mode=max,scope=silkd
+      - name: Create multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< '${{ steps.meta.outputs.json }}') \
+            $(printf 'ghcr.io/${{ github.repository }}/silkd@sha256:%s ' *)
+
+      - name: Inspect
+        run: docker buildx imagetools inspect "${{ steps.ref.outputs.image }}"
