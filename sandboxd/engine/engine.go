@@ -48,15 +48,16 @@ var infoProbe = []byte(`{"v":1,"op":"info"}` + "\n")
 
 // Engine runs cocoon commands on the local node.
 type Engine struct {
-	bin     string
-	bridge  string
-	network string
+	bin         string
+	bridge      string
+	network     string
+	restoreMode string
 }
 
 // New returns an Engine invoking bin; bridge or network picks the
-// egress-lane attachment.
-func New(bin, bridge, network string) *Engine {
-	return &Engine{bin: bin, bridge: bridge, network: network}
+// egress-lane attachment, restoreMode the CH clone memory-restore mode.
+func New(bin, bridge, network, restoreMode string) *Engine {
+	return &Engine{bin: bin, bridge: bridge, network: network, restoreMode: restoreMode}
 }
 
 // Version reports cocoon's version string — a "vX.Y.Z" release or a
@@ -297,12 +298,22 @@ func (e *Engine) cloneArgs(fromDir, name string, key types.PoolKey) []string {
 	// cross-node claim the base image blobs resolve locally or are pulled
 	// by digest.
 	args := []string{"vm", "clone", "--from-dir", fromDir, "--name", name, "--pull", "--output", "json"}
+	args = append(args, e.restoreArgs(key)...)
 	return append(args, e.netArgs(key, false)...)
 }
 
 func (e *Engine) cloneSnapArgs(snap, name string, key types.PoolKey) []string {
 	args := []string{"vm", "clone", snap, "--name", name, "--pull", "--output", "json"}
+	args = append(args, e.restoreArgs(key)...)
 	return append(args, e.netArgs(key, false)...)
+}
+
+func (e *Engine) restoreArgs(key types.PoolKey) []string {
+	// cocoon's --restore-mode is CH-only; the FC File backend already maps lazily.
+	if e.restoreMode == "" || key.Backend() == types.BackendFC {
+		return nil
+	}
+	return []string{"--restore-mode", e.restoreMode}
 }
 
 func (e *Engine) runColdArgs(name string, key types.PoolKey) ([]string, error) {

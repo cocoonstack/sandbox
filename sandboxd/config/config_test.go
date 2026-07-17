@@ -61,6 +61,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"bad json", `{`, "config"},
 		{"bridge and network", `{"bridge":"br0","network":"cni","pools":[]}`, "mutually exclusive"},
 		{"bad fork count", `{"max_fork_count":-1,"pools":[]}`, "max_fork_count"},
+		{"bad restore mode", `{"restore_mode":"Mmap","pools":[]}`, "restore_mode"},
 		{"bad pool key", `{"pools":[{"template":"","net":"none","size":"small"}]}`, "pool"},
 		{"egress without attachment", `{"pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`, "egress lane needs"},
 		{"negative warm", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","warm":-2}]}`, "negative"},

@@ -121,7 +121,7 @@ func (f *fakeSilkd) handleExec(conn net.Conn, argv []string, env map[string]stri
 func TestInstallCACertWritesCertAndUpdates(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
-	if err := New("cocoon", "", "").InstallCACert(t.Context(), path, []byte("CERT-PEM")); err != nil {
+	if err := New("cocoon", "", "", "").InstallCACert(t.Context(), path, []byte("CERT-PEM")); err != nil {
 		t.Fatalf("InstallCACert: %v", err)
 	}
 	fake.mu.Lock()
@@ -151,7 +151,7 @@ func TestInstallCACertNonzeroExitFails(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
 	fake.execCode = 3
-	err := New("cocoon", "", "").InstallCACert(t.Context(), path, []byte("x"))
+	err := New("cocoon", "", "", "").InstallCACert(t.Context(), path, []byte("x"))
 	if err == nil || !strings.Contains(err.Error(), "exit code 3") {
 		t.Errorf("got %v, want exit code 3 failure", err)
 	}
@@ -161,7 +161,7 @@ func TestInstallCACertWriteErrorFrameFails(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
 	fake.writeErr = "disk full"
-	err := New("cocoon", "", "").InstallCACert(t.Context(), path, []byte("x"))
+	err := New("cocoon", "", "", "").InstallCACert(t.Context(), path, []byte("x"))
 	if err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Errorf("got %v, want fs_write error-frame failure", err)
 	}

@@ -171,6 +171,12 @@ type Config struct {
 	Bridge  string `json:"bridge,omitempty"`
 	Network string `json:"network,omitempty"`
 
+	// RestoreMode, when set, rides CH-lane clones as cocoon's --restore-mode
+	// (copy|ondemand|mmap). Opt-in: mmap needs every node's cloud-hypervisor
+	// to carry CoW restore — an older CH silently eager-copies while
+	// reporting success.
+	RestoreMode string `json:"restore_mode,omitempty"`
+
 	// APIToken, when set, guards claim and info; per-sandbox tokens guard
 	// sandbox-scoped calls regardless.
 	APIToken string `json:"api_token,omitempty"` //nolint:gosec // config field, not a hardcoded credential
@@ -318,6 +324,11 @@ func (c *Config) validate() error {
 	}
 	if c.MaxForkCount < 1 {
 		return fmt.Errorf("max_fork_count must be at least 1, got %d", c.MaxForkCount)
+	}
+	switch c.RestoreMode {
+	case "", "copy", "ondemand", "mmap":
+	default:
+		return fmt.Errorf("restore_mode must be copy, ondemand or mmap, got %q", c.RestoreMode)
 	}
 	if c.MaxClaims < 0 {
 		return fmt.Errorf("max_claims must not be negative, got %d", c.MaxClaims)

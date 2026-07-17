@@ -69,7 +69,7 @@ func main() {
 	if err != nil {
 		logger.Fatalf(ctx, err, "load config")
 	}
-	eng := engine.New(cfg.CocoonBin, cfg.Bridge, cfg.Network)
+	eng := engine.New(cfg.CocoonBin, cfg.Bridge, cfg.Network, cfg.RestoreMode)
 	if v, warn := eng.VersionWarning(ctx); warn != "" {
 		logger.Warn(ctx, warn)
 	} else {
