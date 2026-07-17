@@ -251,7 +251,8 @@ type Manager struct {
 	pools   map[types.PoolKey]*pool
 	claimed map[string]*types.Sandbox
 
-	refillSem chan struct{}
+	refillSem  chan struct{}
+	refillKick chan struct{}
 }
 
 // NewManager builds a manager from the node config; ctx bounds backend
@@ -281,6 +282,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		dial:            egressDialer.DialContext,
 		sweep:           netfilter.SweepExcept,
 		refillSem:       make(chan struct{}, maxConcurrentRefills),
+		refillKick:      make(chan struct{}, 1),
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("create goldens dir: %w", err)
@@ -412,6 +414,8 @@ func (m *Manager) Run(ctx context.Context) {
 			return
 		case <-refill.C:
 			m.refillOnce(ctx)
+		case <-m.refillKick:
+			m.refillOnce(ctx)
 		case <-reap.C:
 			m.reapOnce(ctx)
 			m.idleOnce(ctx)
@@ -419,6 +423,15 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-ckptSweep:
 			m.sweepExpiredCheckpoints(ctx)
 		}
+	}
+}
+
+// kickRefill nudges Run's refill loop ahead of its ticker; the 1-buffered
+// channel coalesces bursts and never blocks the claim path.
+func (m *Manager) kickRefill() {
+	select {
+	case m.refillKick <- struct{}{}:
+	default:
 	}
 }
 

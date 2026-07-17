@@ -45,6 +45,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	if sb == nil {
 		return nil, ErrNoWarm
 	}
+	m.kickRefill()
 	sb.Tenant = tenant
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {
