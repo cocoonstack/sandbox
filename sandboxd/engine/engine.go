@@ -51,12 +51,12 @@ type Engine struct {
 	bin         string
 	bridge      string
 	network     string
-	restoreMode string
+	restoreMode types.RestoreMode
 }
 
 // New returns an Engine invoking bin; bridge or network picks the
 // egress-lane attachment, restoreMode the CH clone memory-restore mode.
-func New(bin, bridge, network, restoreMode string) *Engine {
+func New(bin, bridge, network string, restoreMode types.RestoreMode) *Engine {
 	return &Engine{bin: bin, bridge: bridge, network: network, restoreMode: restoreMode}
 }
 
@@ -313,7 +313,7 @@ func (e *Engine) restoreArgs(key types.PoolKey) []string {
 	if e.restoreMode == "" || key.Backend() == types.BackendFC {
 		return nil
 	}
-	return []string{"--restore-mode", e.restoreMode}
+	return []string{"--restore-mode", string(e.restoreMode)}
 }
 
 func (e *Engine) runColdArgs(name string, key types.PoolKey) ([]string, error) {

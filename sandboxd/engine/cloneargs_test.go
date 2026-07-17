@@ -12,12 +12,12 @@ func TestCloneArgsRestoreMode(t *testing.T) {
 	fcKey := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeMedium}
 	cases := []struct {
 		name string
-		mode string
+		mode types.RestoreMode
 		key  types.PoolKey
 		want bool
 	}{
-		{"ch lane carries the flag", "mmap", chKey, true},
-		{"fc lane never carries it", "mmap", fcKey, false},
+		{"ch lane carries the flag", types.RestoreMmap, chKey, true},
+		{"fc lane never carries it", types.RestoreMmap, fcKey, false},
 		{"unset mode adds nothing", "", chKey, false},
 	}
 	for _, tc := range cases {
@@ -31,7 +31,7 @@ func TestCloneArgsRestoreMode(t *testing.T) {
 				if got := i >= 0; got != tc.want {
 					t.Fatalf("args %v: restore-mode present=%v, want %v", args, got, tc.want)
 				}
-				if tc.want && args[i+1] != tc.mode {
+				if tc.want && args[i+1] != string(tc.mode) {
 					t.Fatalf("args %v: mode %q, want %q", args, args[i+1], tc.mode)
 				}
 			}

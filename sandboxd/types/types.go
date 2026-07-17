@@ -24,6 +24,10 @@ const (
 
 	BackendCH Backend = "ch"
 	BackendFC Backend = "fc"
+
+	RestoreCopy     RestoreMode = "copy"
+	RestoreOnDemand RestoreMode = "ondemand"
+	RestoreMmap     RestoreMode = "mmap"
 )
 
 var (
@@ -45,6 +49,20 @@ type NetShape string
 
 // Backend names the hypervisor serving a lane.
 type Backend string
+
+// RestoreMode selects cocoon's CH clone memory-restore strategy; empty leaves
+// cocoon's eager-copy default.
+type RestoreMode string
+
+// Validate accepts the empty default plus cocoon's known CH restore modes.
+func (m RestoreMode) Validate() error {
+	switch m {
+	case "", RestoreCopy, RestoreOnDemand, RestoreMmap:
+		return nil
+	default:
+		return fmt.Errorf("unknown restore mode %q", m)
+	}
+}
 
 // Size is a T-shirt resource tier. Free-form CPU/memory would fragment the
 // warm pools, so only tiers are accepted.
