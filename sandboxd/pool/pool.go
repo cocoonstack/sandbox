@@ -426,15 +426,6 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
-// kickRefill nudges Run's refill loop ahead of its ticker; the 1-buffered
-// channel coalesces bursts and never blocks the claim path.
-func (m *Manager) kickRefill() {
-	select {
-	case m.refillKick <- struct{}{}:
-	default:
-	}
-}
-
 // FlushClaims synchronously persists the current claim set — the shutdown
 // hook that closes the window where a detached recommit has not converged yet.
 func (m *Manager) FlushClaims() error {

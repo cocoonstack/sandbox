@@ -16,6 +16,15 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+// kickRefill nudges Run past its refill ticker after a warm claim; the
+// 1-buffered channel coalesces bursts and never blocks the claim path.
+func (m *Manager) kickRefill() {
+	select {
+	case m.refillKick <- struct{}{}:
+	default:
+	}
+}
+
 func (m *Manager) refillOnce(ctx context.Context) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
