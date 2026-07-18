@@ -2,7 +2,6 @@ package silkd
 
 import (
 	"bufio"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"sync"
@@ -61,16 +60,12 @@ func (c *Conn) Close() error {
 	return c.rwc.Close()
 }
 
-// sendBulk hand-builds a data/stdin frame in a reused buffer, skipping the
-// json.Marshal alloc + escape rescan (base64 needs no escaping).
+// sendBulk renders a data/stdin frame into the reused buffer, skipping the
+// json.Marshal alloc + escape rescan.
 func (c *Conn) sendBulk(op string, payload []byte) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
-	c.wbuf = append(c.wbuf[:0], wire.RequestHead...)
-	c.wbuf = append(c.wbuf, op...)
-	c.wbuf = append(c.wbuf, `","data":"`...)
-	c.wbuf = base64.StdEncoding.AppendEncode(c.wbuf, payload)
-	c.wbuf = append(c.wbuf, '"', '}', '\n')
+	c.wbuf = wire.AppendBulkRequest(c.wbuf, op, payload)
 	_, err := c.rwc.Write(c.wbuf)
 	return err
 }

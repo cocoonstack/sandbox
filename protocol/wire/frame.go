@@ -46,12 +46,10 @@ const (
 	FileKindOther   = "other"
 )
 
-// RequestHead is the canonical request-frame prefix up to the op tag; bulk
-// senders splice `op` + a data field after it instead of marshaling.
-var RequestHead = `{"v":` + strconv.Itoa(ProtoVersion) + `,"op":"`
-
 var (
-	reqTagHead  = []byte(RequestHead)
+	requestHead = `{"v":` + strconv.Itoa(ProtoVersion) + `,"op":"`
+
+	reqTagHead  = []byte(requestHead)
 	respTagHead = []byte(`{"type":"`)
 
 	requestDecoders = map[string]func([]byte) (Request, error){
@@ -638,7 +636,7 @@ type FileInfo struct {
 
 // EncodeRequest renders {"v":1,"op":...,fields} without a trailing newline.
 func EncodeRequest(r Request) ([]byte, error) {
-	return encodeTagged(RequestHead+r.Op()+`"`, r)
+	return encodeTagged(requestHead+r.Op()+`"`, r)
 }
 
 // EncodeResponse renders {"type":...,fields} without a trailing newline.
@@ -699,6 +697,18 @@ func fastBulk(tag string, slow func([]byte) (Response, error), mk func([]byte) R
 		}
 		return mk(out[:n]), nil
 	}
+}
+
+// AppendBulkRequest renders a data-carrying request frame —
+// {"v":1,"op":<op>,"data":"<base64>"} plus newline — into buf, reused across
+// calls: the zero-alloc twin of EncodeRequest for the bulk send paths
+// (base64's alphabet needs no JSON escaping).
+func AppendBulkRequest(buf []byte, op string, data []byte) []byte {
+	buf = append(buf[:0], requestHead...)
+	buf = append(buf, op...)
+	buf = append(buf, `","data":"`...)
+	buf = base64.StdEncoding.AppendEncode(buf, data)
+	return append(buf, '"', '}', '\n')
 }
 
 // encodeTagged marshals v as a flat object and splices the tag head in front

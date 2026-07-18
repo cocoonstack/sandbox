@@ -45,8 +45,6 @@ const (
 	portForwardMax = 4096
 )
 
-var infoProbe = []byte(`{"v":1,"op":"info"}` + "\n")
-
 // Engine runs cocoon commands on the local node.
 type Engine struct {
 	bin         string
@@ -274,9 +272,9 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 		_ = conn.Close()
 		return nil, err
 	}
-	if _, werr := conn.Write(append(req, '\n')); werr != nil {
+	if _, err := conn.Write(append(req, '\n')); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("write port_forward: %w", werr)
+		return nil, fmt.Errorf("write port_forward: %w", err)
 	}
 	line, readErr := readLine(conn, portForwardMax)
 	if readErr != nil {
@@ -286,10 +284,10 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 		}
 		return nil, fmt.Errorf("read port_forward reply: %w", readErr)
 	}
-	resp, perr := wire.DecodeResponse([]byte(line))
-	if perr != nil {
+	resp, parseErr := wire.DecodeResponse([]byte(line))
+	if parseErr != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("parse port_forward reply: %w", perr)
+		return nil, fmt.Errorf("parse port_forward reply: %w", parseErr)
 	}
 	if _, ok := resp.(*wire.Ready); !ok {
 		_ = conn.Close()
@@ -368,7 +366,11 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 	defer func() { _ = conn.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	if _, err = conn.Write(infoProbe); err != nil {
+	probe, err := wire.EncodeRequest(wire.Info{})
+	if err != nil {
+		return fmt.Errorf("encode info: %w", err)
+	}
+	if _, err = conn.Write(append(probe, '\n')); err != nil {
 		return fmt.Errorf("write info: %w", err)
 	}
 	// Unlike the handshake reader, buffered over-read is safe here: the conn
@@ -393,8 +395,6 @@ func EgressSocketPath(vsockSocket string) string {
 	return fmt.Sprintf("%s_%d", vsockSocket, egressPort)
 }
 
-// parseRecord reads a lifecycle command's --output json VM record; best-effort,
-// so an unparseable record yields the zero value (callers fall back to vm list).
 // respFail renders a non-success reply: the error frame's own text, or the
 // unexpected frame's type.
 func respFail(resp wire.Response) string {
@@ -404,6 +404,8 @@ func respFail(resp wire.Response) string {
 	return "unexpected frame " + resp.RespType()
 }
 
+// parseRecord reads a lifecycle command's --output json VM record; best-effort,
+// so an unparseable record yields the zero value (callers fall back to vm list).
 func parseRecord(ctx context.Context, out []byte) types.VMRecord {
 	var rec types.VMRecord
 	if err := json.Unmarshal(out, &rec); err != nil {

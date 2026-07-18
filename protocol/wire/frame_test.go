@@ -317,3 +317,16 @@ func jsonEqual(t *testing.T, a, b []byte) bool {
 	}
 	return reflect.DeepEqual(av, bv)
 }
+
+func TestAppendBulkRequestMatchesEncodeRequest(t *testing.T) {
+	for _, payload := range [][]byte{nil, {}, []byte("hello\x00\xff"), bytes.Repeat([]byte{0xAB}, 300*1024)} {
+		want, err := EncodeRequest(Data{Data: payload})
+		if err != nil {
+			t.Fatalf("EncodeRequest: %v", err)
+		}
+		got := AppendBulkRequest(nil, "data", payload)
+		if !bytes.Equal(got, append(want, '\n')) {
+			t.Fatalf("payload len %d: bulk %q, want %q", len(payload), got, want)
+		}
+	}
+}

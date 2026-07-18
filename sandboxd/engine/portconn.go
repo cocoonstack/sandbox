@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+
+	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
 const (
@@ -93,12 +95,9 @@ func (g *guestPortConn) Write(p []byte) (int, error) {
 	written := 0
 	for len(p) > 0 {
 		n := min(len(p), portWriteChunk)
-		// Hand-built envelope: the hot relay path reuses one buffer instead
-		// of allocating two frame-sized slices per chunk (base64 needs no
-		// JSON escaping).
-		g.wbuf = append(g.wbuf[:0], `{"v":1,"op":"data","data":"`...)
-		g.wbuf = base64.StdEncoding.AppendEncode(g.wbuf, p[:n])
-		g.wbuf = append(g.wbuf, '"', '}', '\n')
+		// The hot relay path renders into one reused buffer instead of
+		// allocating two frame-sized slices per chunk.
+		g.wbuf = wire.AppendBulkRequest(g.wbuf, "data", p[:n])
 		if _, err := g.Conn.Write(g.wbuf); err != nil {
 			return written, err
 		}

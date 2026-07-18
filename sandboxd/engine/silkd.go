@@ -10,10 +10,7 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-const (
-	silkdChunk    = 256 * 1024
-	maxSilkdFrame = 8 << 20
-)
+const silkdChunk = 256 * 1024
 
 // silkdSession is a dialed silkd conn bound to a ctx, with wire-typed
 // request/reply helpers. The hot port-forward relay (portconn.go) does not use it.
@@ -63,6 +60,6 @@ func (s *silkdSession) close() {
 
 func silkdScanner(conn net.Conn) *bufio.Scanner {
 	sc := bufio.NewScanner(conn)
-	sc.Buffer(make([]byte, 64*1024), maxSilkdFrame)
+	sc.Buffer(make([]byte, 64*1024), wire.MaxFrame)
 	return sc
 }
