@@ -80,6 +80,9 @@ func (m *Manager) Promote(ctx context.Context, id, token, template, tenant strin
 // may delete only templates it promoted — anything else answers
 // ErrUnknownTemplate; root (empty tenant) deletes anything.
 func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant string) error {
+	if err := m.validate(key); err != nil {
+		return err
+	}
 	if m.pooledHash(key.Hash()) {
 		return ErrPooledTemplate
 	}

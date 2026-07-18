@@ -16,6 +16,8 @@ from .checkpoint import Checkpoint
 from .errors import APIError
 from .sandbox import Sandbox
 
+_PEERS_TIMEOUT = 5.0
+
 
 class Client:
     """Talks to one sandboxd node (and, transparently, its cluster)."""
@@ -89,9 +91,12 @@ class Client:
     def _peers(self) -> list:
         # /v1/peers is tenant-accessible (cluster topology); /v1/info is
         # operator-only, so a tenant lookup cannot read peers from it. A
-        # single node has none — degrade to just the entry node.
+        # single node has none — degrade to just the entry node. Bounded
+        # tighter than the client default (mirrors the Go SDK's peersTimeout)
+        # so one slow entry node cannot stall the scatter it feeds.
         try:
-            return self._request(self.addr, "GET", "/v1/peers", None, "peers").get("peers") or []
+            return self._request(self.addr, "GET", "/v1/peers", None, "peers",
+                                 timeout=min(_PEERS_TIMEOUT, self.timeout)).get("peers") or []
         except APIError:
             return []
 
@@ -108,10 +113,11 @@ class Client:
     def _post_json(self, addr: str, path: str, body: dict, verb: str) -> dict:
         return self._request(addr, "POST", path, body, verb)
 
-    def _request(self, addr: str, method: str, path: str, body, verb: str, bearer: str = "") -> dict:
+    def _request(self, addr: str, method: str, path: str, body, verb: str, bearer: str = "",
+                 timeout: float = 0.0) -> dict:
         """Issues one control-plane request. bearer overrides the api token —
         sandbox-scoped verbs (release, hibernate) authenticate with the
-        per-sandbox token instead."""
+        per-sandbox token instead; timeout overrides the client default (0 keeps it)."""
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(f"http://{addr}{path}", data=data, method=method)
         if data is not None:
@@ -120,7 +126,7 @@ class Client:
         if token:
             req.add_header("Authorization", f"Bearer {token}")
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as exc:
             try:
