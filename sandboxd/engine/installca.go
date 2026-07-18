@@ -77,12 +77,6 @@ func (e *Engine) silkdExec(ctx context.Context, vsockSocket string, argv ...stri
 		// A child exiting without reading stdin races this close; prefer the buffered exit frame.
 		sendErr = s.send(wire.StdinClose{})
 	}
-	appendOut := func(out, data []byte) []byte {
-		if room := 4096 - len(out); room > 0 {
-			out = append(out, data[:min(len(data), room)]...)
-		}
-		return out
-	}
 	var out []byte
 	for {
 		frame, err := s.recv()
@@ -92,9 +86,9 @@ func (e *Engine) silkdExec(ctx context.Context, vsockSocket string, argv ...stri
 		switch resp := frame.(type) {
 		case *wire.Started:
 		case *wire.Stdout:
-			out = appendOut(out, resp.Data)
+			out = appendCapped(out, resp.Data)
 		case *wire.Stderr:
-			out = appendOut(out, resp.Data)
+			out = appendCapped(out, resp.Data)
 		case *wire.Exit:
 			if resp.Code != 0 {
 				return fmt.Errorf("exit code %d: %s", resp.Code, bytes.TrimSpace(out))
@@ -106,4 +100,12 @@ func (e *Engine) silkdExec(ctx context.Context, vsockSocket string, argv ...stri
 			return fmt.Errorf("unexpected silkd frame %q", resp.RespType())
 		}
 	}
+}
+
+// appendCapped keeps the first 4096 bytes of combined output for error context.
+func appendCapped(out, data []byte) []byte {
+	if room := 4096 - len(out); room > 0 {
+		out = append(out, data[:min(len(data), room)]...)
+	}
+	return out
 }

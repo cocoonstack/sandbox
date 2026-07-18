@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
-
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
 )

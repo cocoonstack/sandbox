@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
-
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
