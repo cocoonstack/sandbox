@@ -230,8 +230,9 @@ impl State {
         let Some(proc) = self.table.get_or_not_found(w, pid).await? else {
             return Ok(());
         };
+        let mut frame = Vec::new();
         for chunk in proc.replay() {
-            write_chunk(w, chunk).await?;
+            write_chunk(w, &mut frame, chunk).await?;
         }
         if let Some(code) = proc.exit_code() {
             proto::write_frame(w, &Response::Exit { code }).await?;
@@ -247,8 +248,9 @@ impl State {
         // now lands in one or the other, never both; if already exited, report
         // the code instead of waiting on an Exit that fired before we listened.
         let (replay, mut rx) = proc.attach_stream();
+        let mut frame = Vec::new();
         for chunk in replay {
-            write_chunk(w, chunk).await?;
+            write_chunk(w, &mut frame, chunk).await?;
         }
         if let Some(code) = proc.exit_code() {
             return proto::write_frame(w, &Response::Exit { code }).await;
@@ -258,7 +260,7 @@ impl State {
                 Ok(Chunk::Exit(code)) => {
                     return proto::write_frame(w, &Response::Exit { code }).await;
                 }
-                Ok(chunk) => write_chunk(w, chunk).await?,
+                Ok(chunk) => write_chunk(w, &mut frame, chunk).await?,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     return proto::write_frame(w, &Response::Done).await;
@@ -292,8 +294,18 @@ where
     (rx, Feeder(tokio::spawn(feed_client(reader, tx))))
 }
 
-async fn write_chunk<W: AsyncWrite + Unpin>(w: &mut W, chunk: Chunk) -> std::io::Result<()> {
-    proto::write_frame(w, &chunk.into_response()).await
+/// Stdout/Stderr ride the reused-buffer bulk path (serde's per-chunk Vec +
+/// base64 String otherwise dominate replay/attach); Exit stays a one-off frame.
+async fn write_chunk<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    buf: &mut Vec<u8>,
+    chunk: Chunk,
+) -> std::io::Result<()> {
+    match chunk {
+        Chunk::Stdout(data) => proto::write_chunk_frame(w, buf, "stdout", &data).await,
+        Chunk::Stderr(data) => proto::write_chunk_frame(w, buf, "stderr", &data).await,
+        other => proto::write_frame(w, &other.into_response()).await,
+    }
 }
 
 /// Forwards post-request client frames (stdin/stdin_close) to the exec

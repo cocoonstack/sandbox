@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -19,6 +20,8 @@ const (
 	// in one buffered read.
 	portReadBuf = 64 << 10
 )
+
+var portDataHead = []byte(`{"type":"data","data":"`)
 
 // guestPortConn adapts silkd's newline-JSON data-frame port_forward channel to
 // a plain net.Conn (base64 payloads), the server-side twin of the SDK's
@@ -40,6 +43,10 @@ func (g *guestPortConn) Read(p []byte) (int, error) {
 		if err != nil {
 			return 0, err
 		}
+		if data, ok := fastPortData(line); ok {
+			g.pending = data
+			continue
+		}
 		var frame struct {
 			Type string `json:"type"`
 			Data []byte `json:"data"`
@@ -59,6 +66,27 @@ func (g *guestPortConn) Read(p []byte) (int, error) {
 	n := copy(p, g.pending)
 	g.pending = g.pending[n:]
 	return n, nil
+}
+
+// fastPortData slices the canonical data frame's base64 out without a JSON
+// parse — json.Unmarshal otherwise dominates the download relay, and the
+// SDK's fastBulk sets the contract: only the exact canonical shape takes the
+// slice, anything else falls back to the full parse.
+func fastPortData(line []byte) ([]byte, bool) {
+	after, ok := bytes.CutPrefix(line, portDataHead)
+	if !ok {
+		return nil, false
+	}
+	b64, rest, ok := bytes.Cut(after, []byte(`"`))
+	if !ok || !bytes.Equal(rest, []byte("}\n")) {
+		return nil, false
+	}
+	out := make([]byte, base64.StdEncoding.DecodedLen(len(b64)))
+	n, err := base64.StdEncoding.Decode(out, b64)
+	if err != nil || base64.StdEncoding.EncodedLen(n) != len(b64) {
+		return nil, false
+	}
+	return out[:n], true
 }
 
 func (g *guestPortConn) Write(p []byte) (int, error) {
