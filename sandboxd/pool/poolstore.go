@@ -105,9 +105,7 @@ func (m *Manager) adoptPersistedPools(ctx context.Context) error {
 		}
 		p := &pool{key: spec.PoolKey}
 		p.applySpec(spec)
-		if g := filepath.Join(m.goldensDir(), spec.Hash()); dirExists(g) && m.goldenCAMatches(g, m.poolEgress[spec.PoolKey].Intercepts()) {
-			p.goldenDir = g
-		}
+		m.adoptGolden(p)
 		m.pools[spec.PoolKey] = p
 		if spec.IdleHibernateSeconds > 0 {
 			m.idleEnabled = true

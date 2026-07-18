@@ -33,7 +33,7 @@ func (m *Manager) Checkpoint(ctx context.Context, id, token, name, tenant string
 	if !ok {
 		return types.Checkpoint{}, ErrUnknownSandbox
 	}
-	if sb.Key.Net == types.NetEgress {
+	if !sb.Key.Capturable() {
 		return types.Checkpoint{}, ErrNoEgressFork
 	}
 	// See Hibernate: a started capture must finish even if the caller hangs up.
@@ -113,7 +113,7 @@ func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.D
 	if ckpt.Archive {
 		return nil, ErrUnknownCheckpoint // a wake image, not a branchable checkpoint
 	}
-	if ckpt.Key.Net == types.NetEgress {
+	if !ckpt.Key.Capturable() {
 		return nil, ErrNoEgressFork
 	}
 	sb, err := m.provision(ctx, ckpt.Key, dir)

@@ -25,7 +25,7 @@ func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl tim
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
-	if sb.Key.Net == types.NetEgress {
+	if !sb.Key.Capturable() {
 		return nil, ErrNoEgressFork
 	}
 	if err := m.overQuota(count, sb.Tenant); err != nil {

@@ -155,6 +155,14 @@ func (m *Manager) writeGoldenCASidecar(final string, caBaked bool) error {
 	return nil
 }
 
+// adoptGolden points p at a golden already on disk from the pool's earlier
+// life, when its baked-CA state still fits; buildGolden covers the rest.
+func (m *Manager) adoptGolden(p *pool) {
+	if g := filepath.Join(m.goldensDir(), p.key.Hash()); dirExists(g) && m.goldenCAMatches(g, m.poolEgress[p.key].Intercepts()) {
+		p.goldenDir = g
+	}
+}
+
 // goldenCAMatches reports whether a golden's baked-CA state fits the pool: a
 // CA-baked one must carry the current fingerprint, a plain one none. The plain
 // case only stats (no read) — it runs under m.mu on the live SetPools path.

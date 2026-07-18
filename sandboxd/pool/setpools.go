@@ -3,7 +3,6 @@ package pool
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -60,11 +59,7 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 		}
 		p := &pool{key: key}
 		p.applySpec(spec)
-		// A golden already on disk (from this pool's earlier life) is
-		// adopted when its baked-CA state still fits; buildGolden covers the rest.
-		if g := filepath.Join(m.goldensDir(), key.Hash()); dirExists(g) && m.goldenCAMatches(g, m.poolEgress[key].Intercepts()) {
-			p.goldenDir = g
-		}
+		m.adoptGolden(p)
 		m.pools[key] = p
 	}
 	// Recompute rather than latch: removing every idle pool turns the
@@ -94,15 +89,9 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 	return m.poolStore.commit(seq, poolsFile{ConfigSeed: m.configSeedHash, Pools: persisted})
 }
 
-// normalizePoolSpec fills the wire defaults, mirroring ClaimRequest.Key():
-// API requests default net/size; config files stay explicit (Validate
-// rejects empty there).
+// normalizePoolSpec fills the wire defaults: API requests default net/size;
+// config files stay explicit (Validate rejects empty there).
 func normalizePoolSpec(spec config.PoolSpec) config.PoolSpec {
-	if spec.Net == "" {
-		spec.Net = types.NetNone
-	}
-	if spec.Size == "" {
-		spec.Size = types.SizeSmall
-	}
+	spec.PoolKey = spec.Defaulted()
 	return spec
 }

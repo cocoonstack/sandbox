@@ -4,6 +4,7 @@
 package types
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -96,6 +97,21 @@ func (k PoolKey) Backend() Backend {
 		return BackendFC
 	}
 	return BackendCH
+}
+
+// Capturable reports whether state capture (fork, checkpoint, promote) is
+// allowed: the egress lane refuses it — a resumed capture opens an
+// unlocked-NIC window before the tap lock can reapply.
+func (k PoolKey) Capturable() bool {
+	return k.Net != NetEgress
+}
+
+// Defaulted fills the wire defaults: the hardened lane (net none → FC) and
+// the smallest tier — the one home for both the claim and pool-spec paths.
+func (k PoolKey) Defaulted() PoolKey {
+	k.Net = cmp.Or(k.Net, NetNone)
+	k.Size = cmp.Or(k.Size, SizeSmall)
+	return k
 }
 
 // Hash is a stable digest used in VM, snapshot, and golden-dir naming.

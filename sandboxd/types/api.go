@@ -1,7 +1,6 @@
 package types
 
 import (
-	"cmp"
 	"time"
 )
 
@@ -16,14 +15,9 @@ type ClaimRequest struct {
 	NoRedirect bool     `json:"no_redirect,omitempty"`
 }
 
-// Key resolves the requested pool key, defaulting to the hardened lane
-// (net none → FC) and the smallest tier.
+// Key resolves the requested pool key with the wire defaults filled.
 func (r ClaimRequest) Key() PoolKey {
-	return PoolKey{
-		Template: r.Template,
-		Net:      cmp.Or(r.Net, NetNone),
-		Size:     cmp.Or(r.Size, SizeSmall),
-	}
+	return PoolKey{Template: r.Template, Net: r.Net, Size: r.Size}.Defaulted()
 }
 
 // TTL converts the wire seconds to a duration; zero means server default.
