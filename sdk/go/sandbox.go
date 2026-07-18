@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
@@ -95,14 +96,14 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	if len(cmd.Argv) == 0 {
 		return 0, fmt.Errorf("empty argv")
 	}
-	conn, done, err := s.call(ctx, &silkd.Exec{Argv: cmd.Argv, Cwd: cmd.Cwd, Env: cmd.Env, User: cmd.User, Session: cmd.Session})
+	conn, done, err := s.call(ctx, &wire.Exec{Argv: cmd.Argv, Cwd: cmd.Cwd, Env: cmd.Env, User: cmd.User, Session: cmd.Session})
 	if err != nil {
 		return 0, err
 	}
 	defer done()
 
 	if cmd.Stdin == nil {
-		if err := conn.Send(silkd.StdinClose{}); err != nil {
+		if err := conn.Send(wire.StdinClose{}); err != nil {
 			return 0, fmt.Errorf("close stdin: %w", err)
 		}
 	} else {
@@ -122,18 +123,18 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 			return 0, err
 		}
 		switch resp := resp.(type) {
-		case *silkd.Started:
-		case *silkd.Stdout:
+		case *wire.Started:
+		case *wire.Stdout:
 			if _, err := stdout.Write(resp.Data); err != nil {
 				return 0, err
 			}
-		case *silkd.Stderr:
+		case *wire.Stderr:
 			if _, err := stderr.Write(resp.Data); err != nil {
 				return 0, err
 			}
-		case *silkd.Exit:
+		case *wire.Exit:
 			return int(resp.Code), nil
-		case *silkd.ErrorResp:
+		case *wire.ErrorResp:
 			return 0, resp
 		default:
 			return 0, unexpected(resp)
@@ -220,7 +221,7 @@ func (s *Sandbox) dial(ctx context.Context) (*silkd.Conn, func(), error) {
 
 // call dials one RPC connection and sends its leading request, cleaning up
 // itself on a send failure; the returned cleanup must be deferred.
-func (s *Sandbox) call(ctx context.Context, req silkd.Request) (*silkd.Conn, func(), error) {
+func (s *Sandbox) call(ctx context.Context, req wire.Request) (*silkd.Conn, func(), error) {
 	conn, done, err := s.dial(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -245,12 +246,12 @@ func pumpStdin(conn *silkd.Conn, r io.Reader) {
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
-			if sendErr := conn.Send(&silkd.Stdin{Data: buf[:n]}); sendErr != nil {
+			if sendErr := conn.Send(&wire.Stdin{Data: buf[:n]}); sendErr != nil {
 				return
 			}
 		}
 		if err != nil {
-			_ = conn.Send(silkd.StdinClose{})
+			_ = conn.Send(wire.StdinClose{})
 			return
 		}
 	}

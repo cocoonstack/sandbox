@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cocoonstack/sandbox/sdk/go/silkd"
+	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
 func TestWatchDeliversEventsUntilClose(t *testing.T) {
@@ -40,8 +40,8 @@ func TestWatchDeliversEventsUntilClose(t *testing.T) {
 func TestWatchMissingPathFailsSynchronously(t *testing.T) {
 	sb := fakeSandbox(t)
 	_, err := sb.Watch(t.Context(), "/nope", false)
-	var e *silkd.ErrorResp
-	if !errors.As(err, &e) || e.Kind != silkd.KindNotFound {
+	var e *wire.ErrorResp
+	if !errors.As(err, &e) || e.Kind != wire.KindNotFound {
 		t.Errorf("Watch = %v, want synchronous not_found (no ready frame)", err)
 	}
 }

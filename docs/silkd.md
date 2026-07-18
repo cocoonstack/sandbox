@@ -23,7 +23,7 @@ connection loses nothing (`attach` resumes). The only connection-bound verb
 is `fs_watch`.
 
 The authoritative wire contract is the shared fixture corpus in
-`protocol/fixtures/v1`, round-tripped by both the Rust and Go test suites —
+`protocol/wire/fixtures/v1`, round-tripped by both the Rust and Go test suites —
 a frame only one side can parse fails CI.
 
 ## Verbs

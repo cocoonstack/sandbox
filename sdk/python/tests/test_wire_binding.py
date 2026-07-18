@@ -16,7 +16,7 @@ from cocoonsandbox import Client
 from cocoonsandbox.conn import Conn
 from cocoonsandbox.frames import PROTO_VERSION
 
-FIXTURES = pathlib.Path(__file__).parent / ".." / ".." / ".." / "protocol" / "fixtures" / "v1"
+FIXTURES = pathlib.Path(__file__).parent / ".." / ".." / ".." / "protocol" / "wire" / "fixtures" / "v1"
 
 # op → (fixture stem, replies the fake guest scripts, invoke(sb, fixture)).
 # Invocations pass the fixture's own values so the subset assertion binds

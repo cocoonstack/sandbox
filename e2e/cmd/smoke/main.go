@@ -21,8 +21,9 @@ import (
 	"testing/iotest"
 	"time"
 
+	"github.com/cocoonstack/sandbox/protocol/wire"
+
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
-	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
 func main() {
@@ -283,7 +284,7 @@ func smokeGit(ctx context.Context, sb *sandbox.Sandbox) error {
 
 	// This sandbox is on the no-network lane: push must fail with the typed
 	// unimplemented error, not hang on an unreachable remote.
-	if err := sb.GitPush(ctx, "/work", ""); !isSilkdKind(err, silkd.KindUnimplemented) {
+	if err := sb.GitPush(ctx, "/work", ""); !isSilkdKind(err, wire.KindUnimplemented) {
 		return fmt.Errorf("push on none lane: %v, want unimplemented", err)
 	}
 	return nil
@@ -302,7 +303,7 @@ func smokeEgress(ctx context.Context, client *sandbox.Client, template string) e
 	if _, err := sb.Exec(ctx, "git", "init", "-q", "-b", "main", "/tmp/r"); err != nil {
 		return err
 	}
-	if err := sb.GitPush(ctx, "/tmp/r", ""); !isSilkdKind(err, silkd.KindInternal) {
+	if err := sb.GitPush(ctx, "/tmp/r", ""); !isSilkdKind(err, wire.KindInternal) {
 		return fmt.Errorf("push on egress lane: %v, want internal git failure (lane misdetected?)", err)
 	}
 	return nil
@@ -572,7 +573,7 @@ func smokePortForward(ctx context.Context, sb *sandbox.Sandbox) error {
 	if string(banner) != "SSH-" {
 		return fmt.Errorf("banner %q, want an SSH greeting", banner)
 	}
-	if _, err := sb.DialPort(ctx, 9); !isSilkdKind(err, silkd.KindNotFound) {
+	if _, err := sb.DialPort(ctx, 9); !isSilkdKind(err, wire.KindNotFound) {
 		return fmt.Errorf("dead port: %v, want not_found", err)
 	}
 	return nil
@@ -600,7 +601,7 @@ func want(got, exp string) error {
 // typed not_found (no manifests), and a python-flavor sandbox serves a real
 // pylsp session — initialize, didOpen, hover — over the relay.
 func smokeLsp(ctx context.Context, client *sandbox.Client, base *sandbox.Sandbox, template string) error {
-	if _, err := base.StartLsp(ctx, "python", ""); !isSilkdKind(err, silkd.KindNotFound) {
+	if _, err := base.StartLsp(ctx, "python", ""); !isSilkdKind(err, wire.KindNotFound) {
 		return fmt.Errorf("base StartLsp: %v, want typed not_found", err)
 	}
 
@@ -655,7 +656,7 @@ func smokeLsp(ctx context.Context, client *sandbox.Client, base *sandbox.Sandbox
 }
 
 func isSilkdKind(err error, kind string) bool {
-	var er *silkd.ErrorResp
+	var er *wire.ErrorResp
 	return errors.As(err, &er) && er.Kind == kind
 }
 
@@ -723,7 +724,7 @@ func smokeProcs(ctx context.Context, sb *sandbox.Sandbox) error {
 	if err != nil {
 		return fmt.Errorf("ps: %w", err)
 	}
-	if !slices.ContainsFunc(procs, func(p silkd.ProcInfo) bool { return p.PID == pid && p.Detached }) {
+	if !slices.ContainsFunc(procs, func(p wire.ProcInfo) bool { return p.PID == pid && p.Detached }) {
 		return fmt.Errorf("ps does not list spawned pid %d: %+v", pid, procs)
 	}
 	var out bytes.Buffer

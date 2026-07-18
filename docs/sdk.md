@@ -307,7 +307,7 @@ Non-zero exits surface as `*sandbox.ExitError{Code, Stderr}` from `Exec`
 
 ```go
 pid, err := sb.Spawn(ctx, sandbox.Cmd{Argv: []string{"sh", "-c", "make build"}})
-procs, err := sb.Ps(ctx)                          // []silkd.ProcInfo{PID, Argv, Detached, State, ExitCode, ...}
+procs, err := sb.Ps(ctx)                          // []wire.ProcInfo{PID, Argv, Detached, State, ExitCode, ...}
 code, exited, err := sb.Logs(ctx, pid, w, nil)    // replay the bounded output ring
 code, exited, err = sb.Attach(ctx, pid, w, nil)   // replay, then follow live until exit
 err = sb.Kill(ctx, pid, 0)                        // 0 = SIGKILL
@@ -344,8 +344,8 @@ Idle sessions are reaped guest-side after 30 minutes.
 ```go
 err  := sb.WriteFile(ctx, "/work/a.txt", data, nil)   // atomic; *uint32 mode optional
 data, err := sb.ReadFile(ctx, "/work/a.txt")
-ents, err := sb.ListDir(ctx, "/work")                  // []silkd.DirEntry{Name,Kind,Size}
-info, err := sb.Stat(ctx, "/work/a.txt")               // silkd.FileInfo{Kind,Size,Mode,MtimeEpochSecs}
+ents, err := sb.ListDir(ctx, "/work")                  // []wire.DirEntry{Name,Kind,Size}
+info, err := sb.Stat(ctx, "/work/a.txt")               // wire.FileInfo{Kind,Size,Mode,MtimeEpochSecs}
 err  = sb.Mkdir(ctx, "/work/sub", true)                // parents
 err  = sb.Remove(ctx, "/work/sub", true)               // recursive
 err  = sb.Rename(ctx, "/a", "/b")
@@ -368,10 +368,10 @@ err = sb.Pull(ctx, "/work", tarWriter)   // stream /work back as a tar
 
 ```go
 matches, err := sb.Find(ctx, "/work", `TODO|FIXME`, "*.go")
-// []silkd.Match{File, Line, Content}; glob is anchored *? wildcards on the file name
+// []wire.Match{File, Line, Content}; glob is anchored *? wildcards on the file name
 
 results, err := sb.Replace(ctx, []string{"/work/main.go"}, `foo`, "bar")
-// []silkd.Replaced{File, Replacements}; per-file atomic
+// []wire.Replaced{File, Replacements}; per-file atomic
 ```
 
 Patterns are regular expressions evaluated in the guest — no shell quoting.
@@ -381,7 +381,7 @@ Patterns are regular expressions evaluated in the guest — no shell quoting.
 ```go
 w, err := sb.Watch(ctx, "/work", true)
 defer w.Close()
-for ev := range w.Events() {           // silkd.Event{Kind, Path}
+for ev := range w.Events() {           // wire.Event{Kind, Path}
     fmt.Println(ev.Kind, ev.Path)      // created|modified|deleted|renamed
 }
 err = w.Err()                          // why the stream ended; nil after Close
@@ -428,13 +428,13 @@ ctx) tears the shell down.
 ## Error handling
 
 - `*sandbox.ExitError` — non-zero exit from `Exec` (`Code`, `Stderr`)
-- `*silkd.ErrorResp` — a typed guest-side failure; `Kind` is one of
-  `silkd.KindBadRequest`, `KindNotFound`, `KindUnimplemented`,
-  `KindInternal` (import `github.com/cocoonstack/sandbox/sdk/go/silkd`)
+- `*wire.ErrorResp` — a typed guest-side failure; `Kind` is one of
+  `wire.KindBadRequest`, `KindNotFound`, `KindUnimplemented`,
+  `KindInternal` (import `github.com/cocoonstack/sandbox/protocol/wire`)
 
 ```go
-var e *silkd.ErrorResp
-if errors.As(err, &e) && e.Kind == silkd.KindUnimplemented {
+var e *wire.ErrorResp
+if errors.As(err, &e) && e.Kind == wire.KindUnimplemented {
     // no-network lane: fall back to sb.Push
 }
 ```

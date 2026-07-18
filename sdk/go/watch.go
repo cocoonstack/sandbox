@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
@@ -11,7 +12,7 @@ import (
 // ends — by Close, ctx cancellation, or a watcher error on the sandbox side —
 // after which Err reports the terminal error (nil after a clean Close).
 type Watcher struct {
-	events chan silkd.Event
+	events chan wire.Event
 	stop   func()
 	closed chan struct{}
 	once   sync.Once
@@ -21,7 +22,7 @@ type Watcher struct {
 }
 
 // Events yields filesystem events; the channel closes when the watch ends.
-func (w *Watcher) Events() <-chan silkd.Event { return w.events }
+func (w *Watcher) Events() <-chan wire.Event { return w.events }
 
 // Close ends the watch (the sandbox side stops on disconnect).
 func (w *Watcher) Close() error {
@@ -54,13 +55,13 @@ func (w *Watcher) drain(ctx context.Context, conn *silkd.Conn) {
 			return
 		}
 		switch r := resp.(type) {
-		case *silkd.Event:
+		case *wire.Event:
 			select {
 			case w.events <- *r:
 			case <-w.closed:
 				return
 			}
-		case *silkd.ErrorResp:
+		case *wire.ErrorResp:
 			w.setErr(r)
 			return
 		default:
@@ -80,16 +81,16 @@ func (w *Watcher) setErr(err error) {
 // returns once the sandbox acknowledges the watch is armed, so events caused
 // after Watch returns are guaranteed captured.
 func (s *Sandbox) Watch(ctx context.Context, path string, recursive bool) (*Watcher, error) {
-	conn, done, err := s.call(ctx, &silkd.FsWatch{Path: path, Recursive: recursive})
+	conn, done, err := s.call(ctx, &wire.FsWatch{Path: path, Recursive: recursive})
 	if err != nil {
 		return nil, err
 	}
-	if _, err = expect[silkd.Ready](ctx, conn); err != nil {
+	if _, err = expect[wire.Ready](ctx, conn); err != nil {
 		done()
 		return nil, err
 	}
 	w := &Watcher{
-		events: make(chan silkd.Event, 16),
+		events: make(chan wire.Event, 16),
 		stop:   done,
 		closed: make(chan struct{}),
 	}

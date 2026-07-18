@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
@@ -15,13 +16,13 @@ const fsChunk = 256 * 1024
 // WriteFile writes data to path in the sandbox, atomically (silkd renames a
 // temp file into place). mode, when non-nil, sets the file's permission bits.
 func (s *Sandbox) WriteFile(ctx context.Context, path string, data []byte, mode *uint32) error {
-	return s.uploadRPC(ctx, &silkd.FsWrite{Path: path, Mode: mode}, bytes.NewReader(data))
+	return s.uploadRPC(ctx, &wire.FsWrite{Path: path, Mode: mode}, bytes.NewReader(data))
 }
 
 // ReadFile returns the contents of path.
 func (s *Sandbox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	var out []byte
-	err := s.downloadRPC(ctx, &silkd.FsRead{Path: path}, func(b []byte) error {
+	err := s.downloadRPC(ctx, &wire.FsRead{Path: path}, func(b []byte) error {
 		out = append(out, b...)
 		return nil
 	})
@@ -29,12 +30,12 @@ func (s *Sandbox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 }
 
 // ListDir returns the entries of a directory (batched frames are concatenated).
-func (s *Sandbox) ListDir(ctx context.Context, path string) ([]silkd.DirEntry, error) {
-	frames, err := collectRPC[silkd.Entries](ctx, s, &silkd.FsList{Path: path})
+func (s *Sandbox) ListDir(ctx context.Context, path string) ([]wire.DirEntry, error) {
+	frames, err := collectRPC[wire.Entries](ctx, s, &wire.FsList{Path: path})
 	if err != nil {
 		return nil, err
 	}
-	var entries []silkd.DirEntry
+	var entries []wire.DirEntry
 	for _, f := range frames {
 		entries = append(entries, f.Entries...)
 	}
@@ -42,31 +43,31 @@ func (s *Sandbox) ListDir(ctx context.Context, path string) ([]silkd.DirEntry, e
 }
 
 // Stat returns metadata for path.
-func (s *Sandbox) Stat(ctx context.Context, path string) (silkd.FileInfo, error) {
-	st, err := oneShotRPC[silkd.Stat](ctx, s, &silkd.FsStat{Path: path})
+func (s *Sandbox) Stat(ctx context.Context, path string) (wire.FileInfo, error) {
+	st, err := oneShotRPC[wire.Stat](ctx, s, &wire.FsStat{Path: path})
 	if err != nil {
-		return silkd.FileInfo{}, err
+		return wire.FileInfo{}, err
 	}
 	return st.Info, nil
 }
 
 // Mkdir creates a directory, with parents when set.
 func (s *Sandbox) Mkdir(ctx context.Context, path string, parents bool) error {
-	return s.doneRPC(ctx, &silkd.FsMkdir{Path: path, Parents: parents})
+	return s.doneRPC(ctx, &wire.FsMkdir{Path: path, Parents: parents})
 }
 
 // Remove deletes a file or directory (recursively when set).
 func (s *Sandbox) Remove(ctx context.Context, path string, recursive bool) error {
-	return s.doneRPC(ctx, &silkd.FsRm{Path: path, Recursive: recursive})
+	return s.doneRPC(ctx, &wire.FsRm{Path: path, Recursive: recursive})
 }
 
 // Rename moves a file within the sandbox.
 func (s *Sandbox) Rename(ctx context.Context, from, to string) error {
-	return s.doneRPC(ctx, &silkd.FsRename{From: from, To: to})
+	return s.doneRPC(ctx, &wire.FsRename{From: from, To: to})
 }
 
 // doneRPC sends a request that answers with Done or an error frame.
-func (s *Sandbox) doneRPC(ctx context.Context, req silkd.Request) error {
+func (s *Sandbox) doneRPC(ctx context.Context, req wire.Request) error {
 	conn, done, err := s.call(ctx, req)
 	if err != nil {
 		return err
@@ -76,7 +77,7 @@ func (s *Sandbox) doneRPC(ctx context.Context, req silkd.Request) error {
 }
 
 // uploadRPC sends req, streams r as Data frames, and expects a terminal Done.
-func (s *Sandbox) uploadRPC(ctx context.Context, req silkd.Request, r io.Reader) error {
+func (s *Sandbox) uploadRPC(ctx context.Context, req wire.Request, r io.Reader) error {
 	conn, done, err := s.call(ctx, req)
 	if err != nil {
 		return err
@@ -89,7 +90,7 @@ func (s *Sandbox) uploadRPC(ctx context.Context, req silkd.Request, r io.Reader)
 }
 
 // downloadRPC sends req and drains its Data stream into sink until Done.
-func (s *Sandbox) downloadRPC(ctx context.Context, req silkd.Request, sink func([]byte) error) error {
+func (s *Sandbox) downloadRPC(ctx context.Context, req wire.Request, sink func([]byte) error) error {
 	conn, done, err := s.call(ctx, req)
 	if err != nil {
 		return err
@@ -99,7 +100,7 @@ func (s *Sandbox) downloadRPC(ctx context.Context, req silkd.Request, sink func(
 }
 
 // oneShotRPC sends req and returns its single typed reply frame.
-func oneShotRPC[T any](ctx context.Context, s *Sandbox, req silkd.Request) (*T, error) {
+func oneShotRPC[T any](ctx context.Context, s *Sandbox, req wire.Request) (*T, error) {
 	conn, done, err := s.call(ctx, req)
 	if err != nil {
 		return nil, err
@@ -109,7 +110,7 @@ func oneShotRPC[T any](ctx context.Context, s *Sandbox, req silkd.Request) (*T, 
 }
 
 // collectRPC sends req and gathers every streamed frame of type T until Done.
-func collectRPC[T any](ctx context.Context, s *Sandbox, req silkd.Request) ([]T, error) {
+func collectRPC[T any](ctx context.Context, s *Sandbox, req wire.Request) ([]T, error) {
 	conn, done, err := s.call(ctx, req)
 	if err != nil {
 		return nil, err
@@ -128,9 +129,9 @@ func collectRPC[T any](ctx context.Context, s *Sandbox, req silkd.Request) ([]T,
 			continue
 		}
 		switch r := resp.(type) {
-		case *silkd.Done:
+		case *wire.Done:
 			return out, nil
-		case *silkd.ErrorResp:
+		case *wire.ErrorResp:
 			return nil, r
 		default:
 			return nil, unexpected(resp)
@@ -145,12 +146,12 @@ func uploadStream(conn *silkd.Conn, r io.Reader) error {
 	for {
 		n, readErr := r.Read(buf)
 		if n > 0 {
-			if err := conn.Send(&silkd.Data{Data: buf[:n]}); err != nil {
+			if err := conn.Send(&wire.Data{Data: buf[:n]}); err != nil {
 				return err
 			}
 		}
 		if readErr == io.EOF {
-			return conn.Send(silkd.DataEnd{})
+			return conn.Send(wire.DataEnd{})
 		}
 		if readErr != nil {
 			return readErr
@@ -167,13 +168,13 @@ func drainData(ctx context.Context, conn *silkd.Conn, sink func([]byte) error) e
 			return err
 		}
 		switch r := resp.(type) {
-		case *silkd.DataResp:
+		case *wire.DataResp:
 			if err := sink(r.Data); err != nil {
 				return err
 			}
-		case *silkd.Done:
+		case *wire.Done:
 			return nil
-		case *silkd.ErrorResp:
+		case *wire.ErrorResp:
 			return r
 		default:
 			return unexpected(resp)
@@ -183,7 +184,7 @@ func drainData(ctx context.Context, conn *silkd.Conn, sink func([]byte) error) e
 
 // terminalErr reads one frame and requires it to be Done (else the error).
 func terminalErr(ctx context.Context, conn *silkd.Conn) error {
-	_, err := expect[silkd.Done](ctx, conn)
+	_, err := expect[wire.Done](ctx, conn)
 	return err
 }
 
@@ -197,14 +198,14 @@ func expect[T any](ctx context.Context, conn *silkd.Conn) (*T, error) {
 	if v, ok := any(resp).(*T); ok {
 		return v, nil
 	}
-	if e, ok := resp.(*silkd.ErrorResp); ok {
+	if e, ok := resp.(*wire.ErrorResp); ok {
 		return nil, e
 	}
 	return nil, unexpected(resp)
 }
 
 // recv reads one frame, translating a canceled ctx and an early EOF.
-func recv(ctx context.Context, conn *silkd.Conn) (silkd.Response, error) {
+func recv(ctx context.Context, conn *silkd.Conn) (wire.Response, error) {
 	resp, err := conn.Recv()
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -218,6 +219,6 @@ func recv(ctx context.Context, conn *silkd.Conn) (silkd.Response, error) {
 	return resp, nil
 }
 
-func unexpected(resp silkd.Response) error {
+func unexpected(resp wire.Response) error {
 	return fmt.Errorf("unexpected frame %q", resp.RespType())
 }

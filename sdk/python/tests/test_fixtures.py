@@ -10,7 +10,7 @@ import pytest
 
 from cocoonsandbox import frames
 
-FIXTURES = pathlib.Path(__file__).parent / ".." / ".." / ".." / "protocol" / "fixtures" / "v1"
+FIXTURES = pathlib.Path(__file__).parent / ".." / ".." / ".." / "protocol" / "wire" / "fixtures" / "v1"
 
 
 def fixture_files(prefix):

@@ -10,11 +10,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
 // portWriteChunk keeps a data frame (payload ×4/3 base64 + envelope) well
-// under silkd.MaxFrame.
+// under wire.MaxFrame.
 const portWriteChunk = 1 << 20
 
 var _ net.Conn = (*PortConn)(nil)
@@ -40,7 +41,7 @@ func (p *PortConn) Write(b []byte) (int, error) {
 	sent := 0
 	for len(b) > 0 {
 		chunk := b[:min(len(b), portWriteChunk)]
-		if err := p.conn.Send(&silkd.Data{Data: chunk}); err != nil {
+		if err := p.conn.Send(&wire.Data{Data: chunk}); err != nil {
 			return sent, err
 		}
 		sent += len(chunk)
@@ -52,7 +53,7 @@ func (p *PortConn) Write(b []byte) (int, error) {
 // CloseWrite half-closes the guest socket (the server sees EOF) while reads
 // keep draining its response.
 func (p *PortConn) CloseWrite() error {
-	return p.conn.Send(silkd.DataEnd{})
+	return p.conn.Send(wire.DataEnd{})
 }
 
 func (p *PortConn) Close() error {
@@ -94,17 +95,17 @@ func (p *PortConn) drain(ctx context.Context, pw *io.PipeWriter) {
 // the connection's lifetime: canceling it (or Close) tears the relay down.
 // A port nobody listens on fails here with silkd's not_found error.
 func (s *Sandbox) DialPort(ctx context.Context, port uint16) (*PortConn, error) {
-	return s.openStream(ctx, &silkd.PortForward{Port: port})
+	return s.openStream(ctx, &wire.PortForward{Port: port})
 }
 
 // openStream drives the call → Ready → attach dance shared by every verb
 // that turns the connection into a raw byte stream (DialPort, Lsp.Request).
-func (s *Sandbox) openStream(ctx context.Context, req silkd.Request) (*PortConn, error) {
+func (s *Sandbox) openStream(ctx context.Context, req wire.Request) (*PortConn, error) {
 	conn, done, err := s.call(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	if _, err = expect[silkd.Ready](ctx, conn); err != nil {
+	if _, err = expect[wire.Ready](ctx, conn); err != nil {
 		done()
 		return nil, err
 	}

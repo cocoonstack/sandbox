@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
 )
@@ -16,12 +17,12 @@ import (
 // byte-for-byte identity with the json.Marshal path — the fast path must not
 // drift from the wire contract silkd parses.
 func TestSendBulkMatchesJSONEncoding(t *testing.T) {
-	for _, req := range []silkd.Request{
-		&silkd.Data{Data: []byte("hello\x00\xff binary")},
-		&silkd.Stdin{Data: []byte{}},
-		&silkd.Data{Data: bytes.Repeat([]byte{0xAB}, 300*1024)},
+	for _, req := range []wire.Request{
+		&wire.Data{Data: []byte("hello\x00\xff binary")},
+		&wire.Stdin{Data: []byte{}},
+		&wire.Data{Data: bytes.Repeat([]byte{0xAB}, 300*1024)},
 	} {
-		want, err := silkd.EncodeRequest(req)
+		want, err := wire.EncodeRequest(req)
 		if err != nil {
 			t.Fatalf("encode: %v", err)
 		}
@@ -42,14 +43,14 @@ func (bufferConn) Close() error { return nil }
 
 func TestConnInfoRoundTrip(t *testing.T) {
 	conn := dialFake(t)
-	if err := conn.Send(silkd.Info{}); err != nil {
+	if err := conn.Send(wire.Info{}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	resp, err := conn.Recv()
 	if err != nil {
 		t.Fatalf("recv: %v", err)
 	}
-	info, ok := resp.(*silkd.InfoResp)
+	info, ok := resp.(*wire.InfoResp)
 	if !ok || info.Version != "silkdtest" {
 		t.Errorf("got %#v, want silkdtest info", resp)
 	}
@@ -60,28 +61,28 @@ func TestConnInfoRoundTrip(t *testing.T) {
 
 func TestConnExecStdinEcho(t *testing.T) {
 	conn := dialFake(t)
-	if err := conn.Send(&silkd.Exec{Argv: []string{"cat"}}); err != nil {
+	if err := conn.Send(&wire.Exec{Argv: []string{"cat"}}); err != nil {
 		t.Fatalf("send exec: %v", err)
 	}
 	if resp, err := conn.Recv(); err != nil {
 		t.Fatalf("recv started: %v", err)
-	} else if _, ok := resp.(*silkd.Started); !ok {
+	} else if _, ok := resp.(*wire.Started); !ok {
 		t.Fatalf("got %#v, want started", resp)
 	}
-	if err := conn.Send(&silkd.Stdin{Data: []byte("ping")}); err != nil {
+	if err := conn.Send(&wire.Stdin{Data: []byte("ping")}); err != nil {
 		t.Fatalf("send stdin: %v", err)
 	}
 	if resp, err := conn.Recv(); err != nil {
 		t.Fatalf("recv echo: %v", err)
-	} else if out, ok := resp.(*silkd.Stdout); !ok || string(out.Data) != "ping" {
+	} else if out, ok := resp.(*wire.Stdout); !ok || string(out.Data) != "ping" {
 		t.Fatalf("got %#v, want stdout ping", resp)
 	}
-	if err := conn.Send(silkd.StdinClose{}); err != nil {
+	if err := conn.Send(wire.StdinClose{}); err != nil {
 		t.Fatalf("send stdin_close: %v", err)
 	}
 	if resp, err := conn.Recv(); err != nil {
 		t.Fatalf("recv exit: %v", err)
-	} else if exit, ok := resp.(*silkd.Exit); !ok || exit.Code != 0 {
+	} else if exit, ok := resp.(*wire.Exit); !ok || exit.Code != 0 {
 		t.Fatalf("got %#v, want exit 0", resp)
 	}
 }
@@ -91,7 +92,7 @@ func TestConnRejectsOversizedFrame(t *testing.T) {
 	t.Cleanup(func() { client.Close(); server.Close() })
 	conn := silkd.NewConn(client)
 	go func() {
-		huge := strings.Repeat("a", silkd.MaxFrame+2)
+		huge := strings.Repeat("a", wire.MaxFrame+2)
 		_, _ = io.WriteString(server, huge+"\n")
 	}()
 

@@ -1,6 +1,6 @@
 """silkd wire frames: newline-delimited JSON, requests tagged by "op",
 responses by "type", binary payloads base64 in "data" fields. Mirrors the Go
-and Rust implementations; all three round-trip protocol/fixtures/v1."""
+and Rust implementations; all three round-trip protocol/wire/fixtures/v1."""
 
 from __future__ import annotations
 

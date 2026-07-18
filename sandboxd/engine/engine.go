@@ -23,6 +23,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -43,8 +44,6 @@ const (
 	// stream follows on the same conn.
 	portForwardMax = 4096
 )
-
-var infoProbe = []byte(`{"v":1,"op":"info"}` + "\n")
 
 // Engine runs cocoon commands on the local node.
 type Engine struct {
@@ -268,8 +267,12 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	req := fmt.Sprintf(`{"v":1,"op":"port_forward","port":%d}`+"\n", port)
-	if _, err := conn.Write([]byte(req)); err != nil {
+	req, err := wire.EncodeRequest(wire.PortForward{Port: port})
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if _, err := conn.Write(append(req, '\n')); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("write port_forward: %w", err)
 	}
@@ -281,14 +284,14 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 		}
 		return nil, fmt.Errorf("read port_forward reply: %w", readErr)
 	}
-	var frame silkdFrame
-	if err := json.Unmarshal([]byte(line), &frame); err != nil {
+	resp, parseErr := wire.DecodeResponse([]byte(line))
+	if parseErr != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("parse port_forward reply: %w", err)
+		return nil, fmt.Errorf("parse port_forward reply: %w", parseErr)
 	}
-	if frame.Type != "ready" {
+	if _, ok := resp.(*wire.Ready); !ok {
 		_ = conn.Close()
-		return nil, fmt.Errorf("port_forward %d: %s: %s", port, frame.Kind, frame.Message)
+		return nil, fmt.Errorf("port_forward %d: %s", port, respFail(resp))
 	}
 	return newGuestPortConn(conn), nil
 }
@@ -363,7 +366,11 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 	defer func() { _ = conn.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	if _, err = conn.Write(infoProbe); err != nil {
+	probe, err := wire.EncodeRequest(wire.Info{})
+	if err != nil {
+		return fmt.Errorf("encode info: %w", err)
+	}
+	if _, err = conn.Write(append(probe, '\n')); err != nil {
 		return fmt.Errorf("write info: %w", err)
 	}
 	// Unlike the handshake reader, buffered over-read is safe here: the conn
@@ -372,12 +379,12 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 	if err != nil {
 		return fmt.Errorf("read info reply: %w", err)
 	}
-	var frame silkdFrame
-	if err := json.Unmarshal(reply, &frame); err != nil {
+	resp, err := wire.DecodeResponse(reply)
+	if err != nil {
 		return fmt.Errorf("parse info reply: %w", err)
 	}
-	if frame.Type != "info" {
-		return fmt.Errorf("info reply type %q", frame.Type)
+	if _, ok := resp.(*wire.InfoResp); !ok {
+		return fmt.Errorf("info reply type %q", resp.RespType())
 	}
 	return nil
 }
@@ -386,6 +393,15 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 // CID2:egressPort — sandboxd listens here to serve the egress proxy.
 func EgressSocketPath(vsockSocket string) string {
 	return fmt.Sprintf("%s_%d", vsockSocket, egressPort)
+}
+
+// respFail renders a non-success reply: the error frame's own text, or the
+// unexpected frame's type.
+func respFail(resp wire.Response) string {
+	if errResp, ok := resp.(*wire.ErrorResp); ok {
+		return errResp.Error()
+	}
+	return "unexpected frame " + resp.RespType()
 }
 
 // parseRecord reads a lifecycle command's --output json VM record; best-effort,

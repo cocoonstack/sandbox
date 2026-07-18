@@ -1,9 +1,10 @@
-// Package silkd is the host-side binding of the silkd wire protocol:
+// Package wire is the Go binding of the silkd wire protocol, shared by the
+// SDK and sandboxd:
 // newline-delimited JSON frames over one connection per RPC, requests tagged
 // by "op", responses by "type", binary payloads base64 in data fields. The
-// authoritative contract is the shared corpus in protocol/fixtures/v1 —
+// authoritative contract is the shared corpus in protocol/wire/fixtures/v1 —
 // silkd's Rust tests and this package's tests round-trip the same files.
-package silkd
+package wire
 
 import (
 	"bytes"
@@ -696,6 +697,18 @@ func fastBulk(tag string, slow func([]byte) (Response, error), mk func([]byte) R
 		}
 		return mk(out[:n]), nil
 	}
+}
+
+// AppendBulkRequest renders a data-carrying request frame —
+// {"v":1,"op":<op>,"data":"<base64>"} plus newline — into buf, reused across
+// calls: the zero-alloc twin of EncodeRequest for the bulk send paths
+// (base64's alphabet needs no JSON escaping).
+func AppendBulkRequest(buf []byte, op string, data []byte) []byte {
+	buf = append(buf[:0], requestHead...)
+	buf = append(buf, op...)
+	buf = append(buf, `","data":"`...)
+	buf = base64.StdEncoding.AppendEncode(buf, data)
+	return append(buf, '"', '}', '\n')
 }
 
 // encodeTagged marshals v as a flat object and splices the tag head in front

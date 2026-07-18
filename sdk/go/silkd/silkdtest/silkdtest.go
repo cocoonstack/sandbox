@@ -10,7 +10,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/cocoonstack/sandbox/sdk/go/silkd"
+	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
 // Serve accepts connections until l closes, speaking one RPC per connection
@@ -69,17 +69,17 @@ func handle(conn net.Conn, r *bufio.Reader) {
 		return
 	}
 	if !serveCommon(conn, r, req) {
-		errFrame(conn, silkd.KindUnimplemented, "silkdtest: "+req.Op())
+		errFrame(conn, wire.KindUnimplemented, "silkdtest: "+req.Op())
 	}
 }
 
 // serveCommon handles the verbs shared by the stateless server and the Fake,
 // reporting whether it recognized the request.
-func serveCommon(conn net.Conn, r *bufio.Reader, req silkd.Request) bool {
+func serveCommon(conn net.Conn, r *bufio.Reader, req wire.Request) bool {
 	switch req := req.(type) {
-	case *silkd.Info:
-		send(conn, &silkd.InfoResp{Version: "silkdtest", Proto: silkd.ProtoVersion})
-	case *silkd.Exec:
+	case *wire.Info:
+		send(conn, &wire.InfoResp{Version: "silkdtest", Proto: wire.ProtoVersion})
+	case *wire.Exec:
 		serveExec(conn, r, req)
 	default:
 		return false
@@ -97,16 +97,16 @@ func acceptLoop(l net.Listener, serve func(net.Conn)) {
 	}
 }
 
-func serveExec(conn net.Conn, r *bufio.Reader, req *silkd.Exec) {
+func serveExec(conn net.Conn, r *bufio.Reader, req *wire.Exec) {
 	if len(req.Argv) == 0 {
-		errFrame(conn, silkd.KindBadRequest, "empty argv")
+		errFrame(conn, wire.KindBadRequest, "empty argv")
 		return
 	}
-	send(conn, &silkd.Started{PID: 4242})
+	send(conn, &wire.Started{PID: 4242})
 	switch req.Argv[0] {
 	case "echo":
-		send(conn, &silkd.Stdout{Data: []byte(strings.Join(req.Argv[1:], " ") + "\n")})
-		send(conn, &silkd.Exit{Code: 0})
+		send(conn, &wire.Stdout{Data: []byte(strings.Join(req.Argv[1:], " ") + "\n")})
+		send(conn, &wire.Exit{Code: 0})
 	case "cat":
 		for {
 			in, err := recvRequest(r)
@@ -114,35 +114,35 @@ func serveExec(conn net.Conn, r *bufio.Reader, req *silkd.Exec) {
 				return
 			}
 			switch in := in.(type) {
-			case *silkd.Stdin:
-				send(conn, &silkd.Stdout{Data: in.Data})
-			case *silkd.StdinClose:
-				send(conn, &silkd.Exit{Code: 0})
+			case *wire.Stdin:
+				send(conn, &wire.Stdout{Data: in.Data})
+			case *wire.StdinClose:
+				send(conn, &wire.Exit{Code: 0})
 				return
 			default:
-				errFrame(conn, silkd.KindBadRequest, "expected stdin")
+				errFrame(conn, wire.KindBadRequest, "expected stdin")
 				return
 			}
 		}
 	case "false":
-		send(conn, &silkd.Exit{Code: 1})
+		send(conn, &wire.Exit{Code: 1})
 	case "sleep":
 		_, _ = io.Copy(io.Discard, r) // hold the RPC open until disconnect
 	default:
-		errFrame(conn, silkd.KindNotFound, "silkdtest: no such command "+req.Argv[0])
+		errFrame(conn, wire.KindNotFound, "silkdtest: no such command "+req.Argv[0])
 	}
 }
 
-func recvRequest(r *bufio.Reader) (silkd.Request, error) {
+func recvRequest(r *bufio.Reader) (wire.Request, error) {
 	line, err := r.ReadString('\n')
 	if err != nil {
 		return nil, err
 	}
-	return silkd.DecodeRequest([]byte(line))
+	return wire.DecodeRequest([]byte(line))
 }
 
-func send(conn net.Conn, resp silkd.Response) {
-	frame, err := silkd.EncodeResponse(resp)
+func send(conn net.Conn, resp wire.Response) {
+	frame, err := wire.EncodeResponse(resp)
 	if err != nil {
 		return
 	}

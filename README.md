@@ -45,8 +45,8 @@ Design docs:
 - `sdk/go/` — Go SDK (stdlib-only): `Connect/New/Lookup`, `Exec/Run`, files,
   `Push/Pull`, sessions, `Find/Replace`, `Watch`, git verbs, `OpenPty`,
   `Fork/Hibernate/Promote/Checkpoint`, `DialPort/ProxyPort/PreviewURL`,
-  `StartLsp`, `Spawn/Ps/Kill/Logs/Attach`; `sdk/go/silkd` is the wire
-  binding, `silkdtest` a test fake
+  `StartLsp`, `Spawn/Ps/Kill/Logs/Attach`; `protocol/wire` carries the frame
+  vocabulary, `sdk/go/silkd` the conn layer, `silkdtest` a test fake
 - `sdk/python/` — Python SDK (stdlib-only, sync), the same surface for the
   Python-first agent ecosystem; round-trips the shared fixture corpus
 - `mcp/` — `sandbox-mcp`, an MCP stdio server exposing the surface as tools
@@ -55,7 +55,7 @@ Design docs:
   for the OpenAI Agents SDK (Python, over the Python SDK)
 - `sdk/langchain/` — `cocoonstack-sandbox-langchain`, a LangChain toolkit
   (StructuredTools over the Python SDK, checkpoint branching)
-- `protocol/fixtures/` — golden frame corpus; the Rust, Go, and Python
+- `protocol/wire/fixtures/` — golden frame corpus; the Rust, Go, and Python
   protocol tests all round-trip it, so wire drift fails CI
 - `e2e/` — in-process full-stack tests (real pool/engine/relay/SDK, fake
   cocoon+guest) plus bare-metal acceptance drivers under `cmd/`: `demo`,
