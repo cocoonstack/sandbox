@@ -17,8 +17,10 @@ out, _ := sb.Exec(ctx, "echo", "hello")
 - `lsp.go` — `StartLsp` + the JSON-RPC byte stream to a flavor's server
 - `proc.go` — background process management (Spawn/Ps/Kill/Logs/Attach)
 - `checkpoint.go` / `template.go` — branch/rewind and promote handles
-- `silkd/` — the wire binding: frame types round-tripping
-  `protocol/wire/fixtures/` (drift against the Rust guest fails CI); `silkdtest/`
-  is an in-process fake guest for consumers' tests
+- `silkd/` — the conn/stream layer over the relay; the frame types live in
+  `protocol/wire`, whose tests round-trip `protocol/wire/fixtures/` (drift
+  against the Rust guest fails CI); `silkdtest/` is an in-process fake guest
+  for consumers' tests
 
-Module path `github.com/cocoonstack/sandbox/sdk/go`; no dependencies.
+Module path `github.com/cocoonstack/sandbox/sdk/go`; no third-party
+dependencies (only the sibling `protocol/wire` module).
