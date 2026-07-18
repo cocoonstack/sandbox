@@ -58,7 +58,7 @@ func TestGuestPortConnWriteWrapsInDataFrame(t *testing.T) {
 // to the shared protocol corpus: portconn is not built on sdk/go/silkd, so
 // without this test it could drift from the frames both real peers agree on.
 func TestGuestPortConnRoundTripsFixtures(t *testing.T) {
-	const fixtureDir = "../../protocol/fixtures/v1"
+	const fixtureDir = "../../protocol/wire/fixtures/v1"
 	fixture := func(name string) []byte {
 		t.Helper()
 		raw, err := os.ReadFile(filepath.Join(fixtureDir, name))

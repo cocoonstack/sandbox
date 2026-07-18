@@ -18,7 +18,7 @@ out, _ := sb.Exec(ctx, "echo", "hello")
 - `proc.go` — background process management (Spawn/Ps/Kill/Logs/Attach)
 - `checkpoint.go` / `template.go` — branch/rewind and promote handles
 - `silkd/` — the wire binding: frame types round-tripping
-  `protocol/fixtures/` (drift against the Rust guest fails CI); `silkdtest/`
+  `protocol/wire/fixtures/` (drift against the Rust guest fails CI); `silkdtest/`
   is an in-process fake guest for consumers' tests
 
 Module path `github.com/cocoonstack/sandbox/sdk/go`; no dependencies.

@@ -430,7 +430,7 @@ ctx) tears the shell down.
 - `*sandbox.ExitError` — non-zero exit from `Exec` (`Code`, `Stderr`)
 - `*wire.ErrorResp` — a typed guest-side failure; `Kind` is one of
   `wire.KindBadRequest`, `KindNotFound`, `KindUnimplemented`,
-  `KindInternal` (import `github.com/cocoonstack/sandbox/sdk/go/silkd`)
+  `KindInternal` (import `github.com/cocoonstack/sandbox/protocol/wire`)
 
 ```go
 var e *wire.ErrorResp

@@ -2,7 +2,7 @@
 // SDK and sandboxd:
 // newline-delimited JSON frames over one connection per RPC, requests tagged
 // by "op", responses by "type", binary payloads base64 in data fields. The
-// authoritative contract is the shared corpus in protocol/fixtures/v1 —
+// authoritative contract is the shared corpus in protocol/wire/fixtures/v1 —
 // silkd's Rust tests and this package's tests round-trip the same files.
 package wire
 

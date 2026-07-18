@@ -55,7 +55,7 @@ Design docs:
   for the OpenAI Agents SDK (Python, over the Python SDK)
 - `sdk/langchain/` — `cocoonstack-sandbox-langchain`, a LangChain toolkit
   (StructuredTools over the Python SDK, checkpoint branching)
-- `protocol/fixtures/` — golden frame corpus; the Rust, Go, and Python
+- `protocol/wire/fixtures/` — golden frame corpus; the Rust, Go, and Python
   protocol tests all round-trip it, so wire drift fails CI
 - `e2e/` — in-process full-stack tests (real pool/engine/relay/SDK, fake
   cocoon+guest) plus bare-metal acceptance drivers under `cmd/`: `demo`,

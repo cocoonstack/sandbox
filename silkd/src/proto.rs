@@ -593,7 +593,7 @@ mod b64 {
 mod tests {
     use super::*;
 
-    const FIXTURES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../protocol/fixtures/v1");
+    const FIXTURES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../protocol/wire/fixtures/v1");
 
     #[test]
     fn request_roundtrip_and_unknown_fields_ignored() {
