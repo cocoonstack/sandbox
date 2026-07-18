@@ -45,8 +45,8 @@ Design docs:
 - `sdk/go/` — Go SDK (stdlib-only): `Connect/New/Lookup`, `Exec/Run`, files,
   `Push/Pull`, sessions, `Find/Replace`, `Watch`, git verbs, `OpenPty`,
   `Fork/Hibernate/Promote/Checkpoint`, `DialPort/ProxyPort/PreviewURL`,
-  `StartLsp`, `Spawn/Ps/Kill/Logs/Attach`; `sdk/go/silkd` is the wire
-  binding, `silkdtest` a test fake
+  `StartLsp`, `Spawn/Ps/Kill/Logs/Attach`; `protocol/wire` carries the frame
+  vocabulary, `sdk/go/silkd` the conn layer, `silkdtest` a test fake
 - `sdk/python/` — Python SDK (stdlib-only, sync), the same surface for the
   Python-first agent ecosystem; round-trips the shared fixture corpus
 - `mcp/` — `sandbox-mcp`, an MCP stdio server exposing the surface as tools
