@@ -3,10 +3,11 @@ package engine
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
+
+	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
 const (
@@ -14,17 +15,7 @@ const (
 	maxSilkdFrame = 8 << 20
 )
 
-// silkdFrame is one newline-JSON frame silkd replies with; a given reply
-// populates only the fields its type carries.
-type silkdFrame struct {
-	Type    string `json:"type"`
-	Code    int32  `json:"code"`
-	Kind    string `json:"kind"`
-	Message string `json:"message"`
-	Data    []byte `json:"data"`
-}
-
-// silkdSession is a dialed silkd conn bound to a ctx, with newline-JSON
+// silkdSession is a dialed silkd conn bound to a ctx, with wire-typed
 // request/reply helpers. The hot port-forward relay (portconn.go) does not use it.
 type silkdSession struct {
 	conn net.Conn
@@ -44,8 +35,8 @@ func (e *Engine) dialSilkdSession(ctx context.Context, vsockSocket string) (*sil
 	}, nil
 }
 
-func (s *silkdSession) send(frame map[string]any) error {
-	buf, err := json.Marshal(frame)
+func (s *silkdSession) send(req wire.Request) error {
+	buf, err := wire.EncodeRequest(req)
 	if err != nil {
 		return err
 	}
@@ -55,18 +46,14 @@ func (s *silkdSession) send(frame map[string]any) error {
 	return nil
 }
 
-func (s *silkdSession) recv() (silkdFrame, error) {
+func (s *silkdSession) recv() (wire.Response, error) {
 	if !s.sc.Scan() {
 		if err := s.sc.Err(); err != nil {
-			return silkdFrame{}, fmt.Errorf("read silkd frame: %w", err)
+			return nil, fmt.Errorf("read silkd frame: %w", err)
 		}
-		return silkdFrame{}, io.ErrUnexpectedEOF
+		return nil, io.ErrUnexpectedEOF
 	}
-	var frame silkdFrame
-	if err := json.Unmarshal(s.sc.Bytes(), &frame); err != nil {
-		return silkdFrame{}, fmt.Errorf("parse silkd frame: %w", err)
-	}
-	return frame, nil
+	return wire.DecodeResponse(s.sc.Bytes())
 }
 
 func (s *silkdSession) close() {

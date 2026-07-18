@@ -18,6 +18,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/cocoonstack/sandbox/protocol/wire"
+
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
@@ -115,14 +117,14 @@ func run(addr, token, template string, n int) error {
 func statRPC(conn net.Conn) error {
 	defer func() { _ = conn.Close() }()
 	sc := silkd.NewConn(conn)
-	if err := sc.Send(&silkd.FsStat{Path: "/"}); err != nil {
+	if err := sc.Send(&wire.FsStat{Path: "/"}); err != nil {
 		return err
 	}
 	resp, err := sc.Recv()
 	if err != nil {
 		return err
 	}
-	if e, ok := resp.(*silkd.ErrorResp); ok {
+	if e, ok := resp.(*wire.ErrorResp); ok {
 		return e
 	}
 	return nil

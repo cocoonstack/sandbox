@@ -1,4 +1,4 @@
-package silkd
+package wire
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-const fixtureDir = "../../../protocol/fixtures/v1"
+const fixtureDir = "../fixtures/v1"
 
 // TestFixtureCorpusRoundTrips is the protocol/README contract: every golden
 // frame must decode and re-encode to canonical-JSON equality, both request

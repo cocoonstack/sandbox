@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"sync"
+
+	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
 // Conn frames a byte stream (typically the upgraded relay connection) into
@@ -21,23 +23,23 @@ type Conn struct {
 // NewConn wraps rwc; the caller keeps ownership of closing via Close.
 func NewConn(rwc io.ReadWriteCloser) *Conn {
 	sc := bufio.NewScanner(rwc)
-	sc.Buffer(make([]byte, 64*1024), MaxFrame)
+	sc.Buffer(make([]byte, 64*1024), wire.MaxFrame)
 	return &Conn{rwc: rwc, sc: sc}
 }
 
 // Send writes one request frame.
-func (c *Conn) Send(r Request) error {
+func (c *Conn) Send(r wire.Request) error {
 	switch v := r.(type) {
-	case *Data:
+	case *wire.Data:
 		return c.sendBulk(v.Op(), v.Data)
-	case *Stdin:
+	case *wire.Stdin:
 		return c.sendBulk(v.Op(), v.Data)
 	}
-	frame, err := EncodeRequest(r)
+	frame, err := wire.EncodeRequest(r)
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", r.Op(), err)
 	}
-	frame = append(frame, '\n') // in-place: EncodeRequest reserves the byte
+	frame = append(frame, '\n') // in-place: wire.EncodeRequest reserves the byte
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	_, err = c.rwc.Write(frame)
@@ -45,14 +47,14 @@ func (c *Conn) Send(r Request) error {
 }
 
 // Recv reads the next response frame; io.EOF signals a clean close.
-func (c *Conn) Recv() (Response, error) {
+func (c *Conn) Recv() (wire.Response, error) {
 	if !c.sc.Scan() {
 		if err := c.sc.Err(); err != nil {
 			return nil, err
 		}
 		return nil, io.EOF
 	}
-	return DecodeResponse(c.sc.Bytes())
+	return wire.DecodeResponse(c.sc.Bytes())
 }
 
 func (c *Conn) Close() error {
@@ -64,7 +66,7 @@ func (c *Conn) Close() error {
 func (c *Conn) sendBulk(op string, payload []byte) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
-	c.wbuf = append(c.wbuf[:0], requestHead...)
+	c.wbuf = append(c.wbuf[:0], wire.RequestHead...)
 	c.wbuf = append(c.wbuf, op...)
 	c.wbuf = append(c.wbuf, `","data":"`...)
 	c.wbuf = base64.StdEncoding.AppendEncode(c.wbuf, payload)

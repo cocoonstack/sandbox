@@ -11,7 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cocoonstack/sandbox/sdk/go/silkd"
+	"github.com/cocoonstack/sandbox/protocol/wire"
+
 	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
 )
 
@@ -43,8 +44,8 @@ func TestExecSurfacesErrorFrame(t *testing.T) {
 	sb := testSandbox(t, newAgentServer(t, silkdtest.ServeConn))
 
 	_, err := sb.Exec(t.Context(), "no-such-binary")
-	var silkdErr *silkd.ErrorResp
-	if !errors.As(err, &silkdErr) || silkdErr.Kind != silkd.KindNotFound {
+	var silkdErr *wire.ErrorResp
+	if !errors.As(err, &silkdErr) || silkdErr.Kind != wire.KindNotFound {
 		t.Errorf("got %v, want silkd not_found error", err)
 	}
 }

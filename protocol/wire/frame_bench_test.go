@@ -1,4 +1,4 @@
-package silkd
+package wire
 
 import (
 	"encoding/json"

@@ -5,6 +5,8 @@ import (
 	"io"
 	"sync"
 
+	"github.com/cocoonstack/sandbox/protocol/wire"
+
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
@@ -41,7 +43,7 @@ func (p *Pty) Read(b []byte) (int, error) {
 
 // Write feeds input to the terminal.
 func (p *Pty) Write(b []byte) (int, error) {
-	if err := p.conn.Send(&silkd.Stdin{Data: b}); err != nil {
+	if err := p.conn.Send(&wire.Stdin{Data: b}); err != nil {
 		return 0, err
 	}
 	return len(b), nil
@@ -54,7 +56,7 @@ func (p *Pty) Resize(ctx context.Context, cols, rows uint16) error {
 		return err
 	}
 	defer done()
-	if err := conn.Send(&silkd.PtyResize{PID: p.PID, Cols: cols, Rows: rows}); err != nil {
+	if err := conn.Send(&wire.PtyResize{PID: p.PID, Cols: cols, Rows: rows}); err != nil {
 		return err
 	}
 	return terminalErr(ctx, conn)
@@ -85,18 +87,18 @@ func (p *Pty) drain(ctx context.Context, pw *io.PipeWriter) {
 			return
 		}
 		switch r := resp.(type) {
-		case *silkd.Started:
-		case *silkd.Stdout:
+		case *wire.Started:
+		case *wire.Stdout:
 			if _, err := pw.Write(r.Data); err != nil {
 				return
 			}
-		case *silkd.Exit:
+		case *wire.Exit:
 			p.mu.Lock()
 			p.exitCode, p.exited = int(r.Code), true
 			p.mu.Unlock()
 			_ = pw.Close()
 			return
-		case *silkd.ErrorResp:
+		case *wire.ErrorResp:
 			_ = pw.CloseWithError(r)
 			return
 		default:
@@ -109,12 +111,12 @@ func (p *Pty) drain(ctx context.Context, pw *io.PipeWriter) {
 // OpenPty starts a shell under a pty. The ctx governs the pty's lifetime:
 // canceling it (or calling Close) tears the session down.
 func (s *Sandbox) OpenPty(ctx context.Context, opts PtyOpts) (*Pty, error) {
-	req := &silkd.PtyOpen{Cols: opts.Cols, Rows: opts.Rows, Cwd: opts.Cwd, Env: opts.Env, User: opts.User}
+	req := &wire.PtyOpen{Cols: opts.Cols, Rows: opts.Rows, Cwd: opts.Cwd, Env: opts.Env, User: opts.User}
 	conn, done, err := s.call(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	started, err := expect[silkd.Started](ctx, conn)
+	started, err := expect[wire.Started](ctx, conn)
 	if err != nil {
 		done()
 		return nil, err

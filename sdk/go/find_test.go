@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cocoonstack/sandbox/sdk/go/silkd"
+	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
 func TestFindStreamsMatches(t *testing.T) {
@@ -36,8 +36,8 @@ func TestFindStreamsMatches(t *testing.T) {
 func TestFindBadPatternIsTypedError(t *testing.T) {
 	sb := fakeSandbox(t)
 	_, err := sb.Find(t.Context(), "/", "(", "")
-	var e *silkd.ErrorResp
-	if !errors.As(err, &e) || e.Kind != silkd.KindBadRequest {
+	var e *wire.ErrorResp
+	if !errors.As(err, &e) || e.Kind != wire.KindBadRequest {
 		t.Errorf("got %v, want bad_request error frame", err)
 	}
 }

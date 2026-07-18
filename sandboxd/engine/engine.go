@@ -23,6 +23,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -268,10 +269,14 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	req := fmt.Sprintf(`{"v":1,"op":"port_forward","port":%d}`+"\n", port)
-	if _, err := conn.Write([]byte(req)); err != nil {
+	req, err := wire.EncodeRequest(wire.PortForward{Port: port})
+	if err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("write port_forward: %w", err)
+		return nil, err
+	}
+	if _, werr := conn.Write(append(req, '\n')); werr != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("write port_forward: %w", werr)
 	}
 	line, readErr := readLine(conn, portForwardMax)
 	if readErr != nil {
@@ -281,14 +286,14 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 		}
 		return nil, fmt.Errorf("read port_forward reply: %w", readErr)
 	}
-	var frame silkdFrame
-	if err := json.Unmarshal([]byte(line), &frame); err != nil {
+	resp, perr := wire.DecodeResponse([]byte(line))
+	if perr != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("parse port_forward reply: %w", err)
+		return nil, fmt.Errorf("parse port_forward reply: %w", perr)
 	}
-	if frame.Type != "ready" {
+	if _, ok := resp.(*wire.Ready); !ok {
 		_ = conn.Close()
-		return nil, fmt.Errorf("port_forward %d: %s: %s", port, frame.Kind, frame.Message)
+		return nil, fmt.Errorf("port_forward %d: %s", port, respFail(resp))
 	}
 	return newGuestPortConn(conn), nil
 }
@@ -372,12 +377,12 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 	if err != nil {
 		return fmt.Errorf("read info reply: %w", err)
 	}
-	var frame silkdFrame
-	if err := json.Unmarshal(reply, &frame); err != nil {
+	resp, err := wire.DecodeResponse(reply)
+	if err != nil {
 		return fmt.Errorf("parse info reply: %w", err)
 	}
-	if frame.Type != "info" {
-		return fmt.Errorf("info reply type %q", frame.Type)
+	if _, ok := resp.(*wire.InfoResp); !ok {
+		return fmt.Errorf("info reply type %q", resp.RespType())
 	}
 	return nil
 }
@@ -390,6 +395,15 @@ func EgressSocketPath(vsockSocket string) string {
 
 // parseRecord reads a lifecycle command's --output json VM record; best-effort,
 // so an unparseable record yields the zero value (callers fall back to vm list).
+// respFail renders a non-success reply: the error frame's own text, or the
+// unexpected frame's type.
+func respFail(resp wire.Response) string {
+	if errResp, ok := resp.(*wire.ErrorResp); ok {
+		return errResp.Error()
+	}
+	return "unexpected frame " + resp.RespType()
+}
+
 func parseRecord(ctx context.Context, out []byte) types.VMRecord {
 	var rec types.VMRecord
 	if err := json.Unmarshal(out, &rec); err != nil {

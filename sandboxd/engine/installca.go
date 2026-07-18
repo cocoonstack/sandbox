@@ -3,10 +3,11 @@ package engine
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"slices"
+
+	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
 const (
@@ -41,28 +42,27 @@ func (e *Engine) silkdWriteFile(ctx context.Context, vsockSocket, path string, m
 	defer s.close()
 	// A send racing the guest's early answer+close hits EPIPE; prefer the buffered verdict.
 	sendErr := func() error {
-		if serr := s.send(map[string]any{"v": 1, "op": "fs_write", "path": path, "mode": mode}); serr != nil {
+		if serr := s.send(wire.FsWrite{Path: path, Mode: &mode}); serr != nil {
 			return serr
 		}
 		for chunk := range slices.Chunk(data, silkdChunk) {
-			enc := base64.StdEncoding.EncodeToString(chunk)
-			if serr := s.send(map[string]any{"v": 1, "op": "data", "data": enc}); serr != nil {
+			if serr := s.send(wire.Data{Data: chunk}); serr != nil {
 				return serr
 			}
 		}
-		return s.send(map[string]any{"v": 1, "op": "data_end"})
+		return s.send(wire.DataEnd{})
 	}()
 	frame, err := s.recv()
 	if err != nil {
 		return errors.Join(sendErr, err)
 	}
-	switch frame.Type {
-	case "done":
+	switch resp := frame.(type) {
+	case *wire.Done:
 		return nil
-	case "error":
-		return fmt.Errorf("silkd %s: %s", frame.Kind, frame.Message)
+	case *wire.ErrorResp:
+		return fmt.Errorf("silkd %w", resp)
 	default:
-		return fmt.Errorf("unexpected silkd frame %q", frame.Type)
+		return fmt.Errorf("unexpected silkd frame %q", resp.RespType())
 	}
 }
 
@@ -72,13 +72,16 @@ func (e *Engine) silkdExec(ctx context.Context, vsockSocket string, argv ...stri
 		return err
 	}
 	defer s.close()
-	sendErr := s.send(map[string]any{
-		"v": 1, "op": "exec", "argv": argv, "detach": false,
-		"env": map[string]string{"PATH": guestExecPATH},
-	})
+	sendErr := s.send(wire.Exec{Argv: argv, Env: map[string]string{"PATH": guestExecPATH}})
 	if sendErr == nil {
 		// A child exiting without reading stdin races this close; prefer the buffered exit frame.
-		sendErr = s.send(map[string]any{"v": 1, "op": "stdin_close"})
+		sendErr = s.send(wire.StdinClose{})
+	}
+	appendOut := func(out, data []byte) []byte {
+		if room := 4096 - len(out); room > 0 {
+			out = append(out, data[:min(len(data), room)]...)
+		}
+		return out
 	}
 	var out []byte
 	for {
@@ -86,21 +89,21 @@ func (e *Engine) silkdExec(ctx context.Context, vsockSocket string, argv ...stri
 		if err != nil {
 			return errors.Join(sendErr, err)
 		}
-		switch frame.Type {
-		case "started":
-		case "stdout", "stderr":
-			if room := 4096 - len(out); room > 0 {
-				out = append(out, frame.Data[:min(len(frame.Data), room)]...)
-			}
-		case "exit":
-			if frame.Code != 0 {
-				return fmt.Errorf("exit code %d: %s", frame.Code, bytes.TrimSpace(out))
+		switch resp := frame.(type) {
+		case *wire.Started:
+		case *wire.Stdout:
+			out = appendOut(out, resp.Data)
+		case *wire.Stderr:
+			out = appendOut(out, resp.Data)
+		case *wire.Exit:
+			if resp.Code != 0 {
+				return fmt.Errorf("exit code %d: %s", resp.Code, bytes.TrimSpace(out))
 			}
 			return nil
-		case "error":
-			return fmt.Errorf("silkd %s: %s", frame.Kind, frame.Message)
+		case *wire.ErrorResp:
+			return fmt.Errorf("silkd %w", resp)
 		default:
-			return fmt.Errorf("unexpected silkd frame %q", frame.Type)
+			return fmt.Errorf("unexpected silkd frame %q", resp.RespType())
 		}
 	}
 }

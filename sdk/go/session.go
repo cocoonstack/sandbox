@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/cocoonstack/sandbox/sdk/go/silkd"
+	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
 // Session is a persistent shell in the sandbox: cwd, env, and shell state
@@ -31,29 +31,29 @@ func (sess *Session) Exec(ctx context.Context, argv ...string) (string, error) {
 
 // Close terminates the session's shell and its process group.
 func (sess *Session) Close(ctx context.Context) error {
-	return sess.sb.doneRPC(ctx, &silkd.SessionRm{ID: sess.ID})
+	return sess.sb.doneRPC(ctx, &wire.SessionRm{ID: sess.ID})
 }
 
 // SessionOption configures NewSession.
-type SessionOption func(*silkd.SessionCreate)
+type SessionOption func(*wire.SessionCreate)
 
 // WithSessionCwd sets the session's initial working directory.
 func WithSessionCwd(dir string) SessionOption {
-	return func(r *silkd.SessionCreate) { r.Cwd = dir }
+	return func(r *wire.SessionCreate) { r.Cwd = dir }
 }
 
 // WithSessionEnv sets the session's initial environment.
 func WithSessionEnv(env map[string]string) SessionOption {
-	return func(r *silkd.SessionCreate) { r.Env = env }
+	return func(r *wire.SessionCreate) { r.Env = env }
 }
 
 // NewSession opens a persistent shell.
 func (s *Sandbox) NewSession(ctx context.Context, opts ...SessionOption) (*Session, error) {
-	req := &silkd.SessionCreate{}
+	req := &wire.SessionCreate{}
 	for _, opt := range opts {
 		opt(req)
 	}
-	created, err := oneShotRPC[silkd.SessionCreated](ctx, s, req)
+	created, err := oneShotRPC[wire.SessionCreated](ctx, s, req)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +62,7 @@ func (s *Sandbox) NewSession(ctx context.Context, opts ...SessionOption) (*Sessi
 
 // Sessions lists the sandbox's live session ids.
 func (s *Sandbox) Sessions(ctx context.Context) ([]string, error) {
-	list, err := oneShotRPC[silkd.Sessions](ctx, s, silkd.SessionList{})
+	list, err := oneShotRPC[wire.Sessions](ctx, s, wire.SessionList{})
 	if err != nil {
 		return nil, err
 	}

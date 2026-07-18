@@ -1,9 +1,10 @@
-// Package silkd is the host-side binding of the silkd wire protocol:
+// Package wire is the Go binding of the silkd wire protocol, shared by the
+// SDK and sandboxd:
 // newline-delimited JSON frames over one connection per RPC, requests tagged
 // by "op", responses by "type", binary payloads base64 in data fields. The
 // authoritative contract is the shared corpus in protocol/fixtures/v1 —
 // silkd's Rust tests and this package's tests round-trip the same files.
-package silkd
+package wire
 
 import (
 	"bytes"
@@ -45,10 +46,12 @@ const (
 	FileKindOther   = "other"
 )
 
-var (
-	requestHead = `{"v":` + strconv.Itoa(ProtoVersion) + `,"op":"`
+// RequestHead is the canonical request-frame prefix up to the op tag; bulk
+// senders splice `op` + a data field after it instead of marshaling.
+var RequestHead = `{"v":` + strconv.Itoa(ProtoVersion) + `,"op":"`
 
-	reqTagHead  = []byte(requestHead)
+var (
+	reqTagHead  = []byte(RequestHead)
 	respTagHead = []byte(`{"type":"`)
 
 	requestDecoders = map[string]func([]byte) (Request, error){
@@ -635,7 +638,7 @@ type FileInfo struct {
 
 // EncodeRequest renders {"v":1,"op":...,fields} without a trailing newline.
 func EncodeRequest(r Request) ([]byte, error) {
-	return encodeTagged(requestHead+r.Op()+`"`, r)
+	return encodeTagged(RequestHead+r.Op()+`"`, r)
 }
 
 // EncodeResponse renders {"type":...,fields} without a trailing newline.

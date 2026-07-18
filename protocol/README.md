@@ -3,7 +3,8 @@
 Golden JSON frames shared by all three implementations of the silkd
 protocol:
 - silkd (Rust, guest) parses/emits these in `silkd/src/proto.rs` tests.
-- the Go SDK (host) parses/emits the same corpus in its tests.
+- `protocol/wire` (Go, host) round-trips the corpus in its tests; it is the
+  one Go implementation, consumed by both the Go SDK and sandboxd.
 - the Python SDK round-trips it in `sdk/python/tests/test_fixtures.py`.
 
 `req_*.json` are client→server frames, `resp_*.json` server→client. A frame
