@@ -402,16 +402,16 @@ func TestRefillRespectsSemaphore(t *testing.T) {
 	m.pools[testKey].goldenDir = "/goldens/x"
 
 	m.refillOnce(t.Context())
-	waitFor(t, func() bool { return eng.cloneCount() == maxConcurrentRefills })
+	waitFor(t, func() bool { return eng.cloneCount() == refillFloor })
 	time.Sleep(50 * time.Millisecond)
-	if n := eng.cloneCount(); n != maxConcurrentRefills {
-		t.Errorf("clones=%d while stalled, want %d", n, maxConcurrentRefills)
+	if n := eng.cloneCount(); n != refillFloor {
+		t.Errorf("clones=%d while stalled, want %d", n, refillFloor)
 	}
 
 	close(eng.probeStall)
 	waitFor(t, func() bool {
 		infos, _ := m.Info()
-		return infos[0].Warm+infos[0].Refilling >= maxConcurrentRefills && infos[0].Refilling == 0
+		return infos[0].Warm+infos[0].Refilling >= refillFloor && infos[0].Refilling == 0
 	})
 	m.refillOnce(t.Context())
 	waitFor(t, func() bool {
@@ -420,8 +420,29 @@ func TestRefillRespectsSemaphore(t *testing.T) {
 	})
 }
 
+// TestRefillBudgetFollowsConfig: the semaphore is sized from
+// refill_concurrency through the real construction path, and 0 auto-scales
+// within [refillFloor, refillCeiling].
+func TestRefillBudgetFollowsConfig(t *testing.T) {
+	m, err := NewManager(t.Context(), &config.Config{DataDir: t.TempDir(), RefillConcurrency: 2}, newFakeEngine(), testSecrets(t))
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if got := cap(m.refillSem); got != 2 {
+		t.Errorf("budget %d, want the configured 2", got)
+	}
+
+	auto, err := NewManager(t.Context(), &config.Config{DataDir: t.TempDir()}, newFakeEngine(), testSecrets(t))
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if got := cap(auto.refillSem); got < refillFloor || got > refillCeiling {
+		t.Errorf("auto budget %d, want within [%d, %d]", got, refillFloor, refillCeiling)
+	}
+}
+
 // TestRefillReactivelyFillsToTarget: one trigger fills the whole target (not
-// just maxConcurrentRefills), since a finished refill chains the next.
+// just the concurrency budget), since a finished refill chains the next.
 func TestRefillReactivelyFillsToTarget(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 10})
@@ -487,10 +508,10 @@ func TestGoldenBuildFailureBacksOff(t *testing.T) {
 func TestReapBatchDoesNotStallTheLoop(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	// More expired claims than the concurrency budget (maxConcurrentRefills)
-	// so the batch would block the submit loop if it acquired the semaphore
-	// there instead of per-goroutine.
-	const n = maxConcurrentRefills + 3
+	// More expired claims than the concurrency budget (the test managers pin
+	// it to refillFloor) so the batch would block the submit loop if it
+	// acquired the semaphore there instead of per-goroutine.
+	const n = refillFloor + 3
 	var sbs []*types.Sandbox
 	for range n {
 		sbs = append(sbs, mustClaim(t, m, testKey))
@@ -557,7 +578,9 @@ func mustClaim(t *testing.T, m *Manager, key types.PoolKey) *types.Sandbox {
 
 func newTestManagerAt(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
 	t.Helper()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: dataDir, Pools: pools}, eng, testSecrets(t))
+	// Budget pinned to the floor: the auto default scales with the host's
+	// NumCPU, and several tests assert stall-at-budget counts.
+	m, err := NewManager(t.Context(), &config.Config{DataDir: dataDir, RefillConcurrency: refillFloor, Pools: pools}, eng, testSecrets(t))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
