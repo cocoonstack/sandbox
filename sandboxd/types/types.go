@@ -152,6 +152,12 @@ type Sandbox struct {
 	// claimed it. Fork children inherit it from the parent.
 	Tenant string `json:"tenant,omitempty"`
 
+	// ClaimRef is the opaque caller reference recorded at claim time (the
+	// aggregated apiserver passes the k8s "<namespace>/<name>"), carried into
+	// the operator index so a listed sandbox maps back to its claim name.
+	// Empty for warm-pool, fork, and checkpoint-branch claims.
+	ClaimRef string `json:"claim_ref,omitempty"`
+
 	VsockSocket string `json:"vsock_socket,omitempty"`
 	// TAP is the egress-lane NIC's host tap, captured at provision; empty on
 	// the none lane and on claims adopted from pre-tap journals.

@@ -120,11 +120,11 @@ func TestRetentionSweepsExpiredCheckpoints(t *testing.T) {
 func TestCheckpointTenantIsolation(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	srcA, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme")
+	srcA, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "")
 	if err != nil {
 		t.Fatalf("acme claim: %v", err)
 	}
-	srcB, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "beta")
+	srcB, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "beta", "")
 	if err != nil {
 		t.Fatalf("beta claim: %v", err)
 	}

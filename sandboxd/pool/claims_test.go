@@ -14,7 +14,7 @@ import (
 func TestStoreRoundTrip(t *testing.T) {
 	s := newClaimStore(t.TempDir())
 	claims := map[string]*types.Sandbox{
-		"sb_a": {ID: "sb_a", VMName: "sbx-1", Key: testKey, Token: "t1", Deadline: time.Now().Add(time.Minute).UTC(), VsockSocket: "/v/1"},
+		"sb_a": {ID: "sb_a", VMName: "sbx-1", Key: testKey, Token: "t1", Deadline: time.Now().Add(time.Minute).UTC(), ClaimRef: "ns/workload", VsockSocket: "/v/1"},
 		"sb_b": {ID: "sb_b", VMName: "sbx-2", Key: testKey, Token: "t2"},
 	}
 

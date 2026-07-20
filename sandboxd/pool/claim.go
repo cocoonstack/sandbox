@@ -23,8 +23,9 @@ const (
 
 // ClaimWarm transfers ownership of a warm sandbox without provisioning;
 // ErrNoWarm means the pool is empty (the caller may redirect or provision).
-// tenant attributes the claim; empty means the operator (root).
-func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant string) (*types.Sandbox, error) {
+// tenant attributes the claim; empty means the operator (root). claimRef is an
+// opaque caller reference recorded on the claim; empty means none.
+func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string) (*types.Sandbox, error) {
 	start := time.Now()
 	if err := m.validate(key); err != nil {
 		return nil, err
@@ -47,6 +48,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	}
 	m.kickRefill()
 	sb.Tenant = tenant
+	sb.ClaimRef = claimRef
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {
 		m.counters.claimsWarm.Add(1)
@@ -56,7 +58,8 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 }
 
 // ClaimProvision creates a claim-ready sandbox (golden clone or cold boot).
-func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant string) (*types.Sandbox, error) {
+// claimRef is an opaque caller reference recorded on the claim; empty means none.
+func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string) (*types.Sandbox, error) {
 	start := time.Now()
 	if err := m.validate(key); err != nil {
 		return nil, err
@@ -74,6 +77,7 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl tim
 		return nil, err
 	}
 	sb.Tenant = tenant
+	sb.ClaimRef = claimRef
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {
 		if golden != "" {

@@ -55,8 +55,8 @@ var poolErrHTTP = []struct {
 // parameters attribute created resources and scope listings/deletes; empty
 // means the operator (root) — unquotaed, unfiltered.
 type Manager interface {
-	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant string) (*types.Sandbox, error)
-	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant string) (*types.Sandbox, error)
+	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string) (*types.Sandbox, error)
+	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string) (*types.Sandbox, error)
 	Release(ctx context.Context, id, token string) error
 	Hibernate(ctx context.Context, id, token string) error
 	Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
@@ -193,12 +193,12 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	// must be direct, so redirect beats proxy); only if no peer has one does
 	// this node provision (golden clone or cold boot).
 	tenant := tenantFrom(r.Context())
-	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant)
+	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef)
 	if errors.Is(err, pool.ErrNoWarm) {
 		if s.redirectClaim(r.Context(), w, req, key, hash) {
 			return
 		}
-		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant)
+		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef)
 	}
 	// A full node bounces the claim to a warm peer before answering 429 —
 	// quota is per node, and a peer with capacity is a better answer.

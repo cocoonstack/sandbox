@@ -768,7 +768,7 @@ func TestClaimProvisionsWhenNoCandidate(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
-	resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"rt:24.04"}`))
+	resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"rt:24.04","claim_ref":"ns1/w1"}`))
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -777,6 +777,10 @@ func TestClaimProvisionsWhenNoCandidate(t *testing.T) {
 	_ = json.NewDecoder(resp.Body).Decode(&cr)
 	if cr.ID != "sb_local" || len(cr.Redirect) != 0 {
 		t.Errorf("got %+v, want local sandbox", cr)
+	}
+	// The claim_ref on the wire must thread through the handler to the claim.
+	if mgr.gotClaimRef != "ns1/w1" {
+		t.Errorf("claim_ref not threaded: got %q, want %q", mgr.gotClaimRef, "ns1/w1")
 	}
 }
 
@@ -865,17 +869,20 @@ type fakeManager struct {
 	infoPools        []pool.PoolInfo
 
 	gotTenant    string
+	gotClaimRef  string
 	tenantClaims map[string]int
 	draining     bool
 }
 
-func (f *fakeManager) ClaimWarm(_ context.Context, _ types.PoolKey, _ time.Duration, tenant string) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimWarm(_ context.Context, _ types.PoolKey, _ time.Duration, tenant, claimRef string) (*types.Sandbox, error) {
 	f.gotTenant = tenant
+	f.gotClaimRef = claimRef
 	return nil, pool.ErrNoWarm
 }
 
-func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant string) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string) (*types.Sandbox, error) {
 	f.gotTenant = tenant
+	f.gotClaimRef = claimRef
 	if f.claim == nil {
 		return &types.Sandbox{ID: "sb_1", Token: "tok"}, nil
 	}

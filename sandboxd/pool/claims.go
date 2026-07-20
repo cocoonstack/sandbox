@@ -31,6 +31,7 @@ type claimDTO struct {
 	Token          string        `json:"token,omitempty"`
 	Deadline       time.Time     `json:"deadline,omitzero"`
 	Tenant         string        `json:"tenant,omitempty"`
+	ClaimRef       string        `json:"claim_ref,omitempty"`
 	VsockSocket    string        `json:"vsock_socket,omitempty"`
 	TAP            string        `json:"tap,omitempty"`
 	HibernateSnap  string        `json:"hibernate_snap,omitempty"`
@@ -78,7 +79,7 @@ func (s *claimStore) snapshot(claims map[string]*types.Sandbox) claimSnapshot {
 	for id, sb := range claims {
 		dtos[id] = claimDTO{
 			ID: sb.ID, VMName: sb.VMName, Key: sb.Key, Token: sb.Token,
-			Deadline: sb.Deadline, Tenant: sb.Tenant, VsockSocket: sb.VsockSocket,
+			Deadline: sb.Deadline, Tenant: sb.Tenant, ClaimRef: sb.ClaimRef, VsockSocket: sb.VsockSocket,
 			TAP: sb.TAP, HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap,
 			ArchiveCk: sb.ArchiveCk, FromCheckpoint: sb.FromCheckpoint,
 		}

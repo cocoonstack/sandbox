@@ -13,6 +13,10 @@ type ClaimRequest struct {
 	Size       Size     `json:"size,omitempty"`
 	TTLSeconds int      `json:"ttl_seconds,omitempty"`
 	NoRedirect bool     `json:"no_redirect,omitempty"`
+	// ClaimRef is an opaque caller reference (the aggregated apiserver passes
+	// the k8s "<namespace>/<name>") recorded on the claim so the read path can
+	// map a listed sandbox back to the name it was claimed under. Optional.
+	ClaimRef string `json:"claim_ref,omitempty"`
 }
 
 // Key resolves the requested pool key with the wire defaults filled.

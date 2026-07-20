@@ -23,12 +23,14 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
 
 ```json
 {"template": "base:24.04", "net": "none", "size": "small",
- "ttl_seconds": 300, "no_redirect": false}
+ "ttl_seconds": 300, "claim_ref": "namespace/workload", "no_redirect": false}
 ```
 
 - `net` defaults to `none`, `size` to `small`
 - `ttl_seconds` 0 means the server default (5 minutes); capped at 24h. The
   owning node reaps the sandbox after the TTL even if the client vanishes
+- `claim_ref` is an optional opaque caller reference echoed by the root-only
+  sandbox index; the aggregated apiserver uses `<namespace>/<name>`
 - `no_redirect` is set by the SDK when retrying at a redirect target
 
 Success:
@@ -65,9 +67,9 @@ to a warm peer is tried first on a cluster); 500 provisioning failed.
 
 ## POST /v1/sandboxes/{id}/release
 
-Auth: the sandbox's own token. Destroys the VM. 204 on success, 404 for an
-unknown id or wrong token. Releasing an already-gone sandbox is 404 — the
-SDK treats it as success.
+Auth: the sandbox's own token, or the root token for operator cleanup by id.
+Destroys the VM. 204 on success, 404 for an unknown id or wrong token.
+Releasing an already-gone sandbox is 404 — the SDK treats it as success.
 
 ## POST /v1/sandboxes/{id}/hibernate
 
@@ -224,8 +226,8 @@ success, 404 unknown.
 ## GET /v1/sandboxes
 
 Auth: root only (tenant tokens get 403). The operator index: `{"sandboxes":
-[{id, key, deadline, hibernated, archived?, from_checkpoint?}]}` — never
-tokens.
+[{id, key, deadline, hibernated, archived?, from_checkpoint?, claim_ref?}]}` —
+never tokens.
 
 ## GET /metrics
 

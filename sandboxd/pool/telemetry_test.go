@@ -99,22 +99,22 @@ func TestTenantQuotaBindsPerTenant(t *testing.T) {
 	m := newTestManager(t, eng)
 	m.tenantMax = map[string]int{"acme": 1, "beta": 2}
 
-	first, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme")
+	first, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "")
 	if err != nil {
 		t.Fatalf("acme claim: %v", err)
 	}
 	if first.Tenant != "acme" {
 		t.Errorf("tenant %q, want acme", first.Tenant)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme"); !errors.Is(err, ErrQuota) {
+	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", ""); !errors.Is(err, ErrQuota) {
 		t.Fatalf("acme past its cap: %v, want ErrQuota", err)
 	}
 	// The node-wide cap (unset here) stays untouched: other tenants and root
 	// keep claiming while acme is full.
-	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "beta"); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "beta", ""); err != nil {
 		t.Errorf("beta claim while acme is at cap: %v", err)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, ""); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", ""); err != nil {
 		t.Errorf("root claim while acme is at cap: %v", err)
 	}
 	counts := m.TenantClaims()
@@ -124,7 +124,7 @@ func TestTenantQuotaBindsPerTenant(t *testing.T) {
 	if err := m.Release(t.Context(), first.ID, first.Token); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme"); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", ""); err != nil {
 		t.Errorf("acme claim after release: %v", err)
 	}
 }
@@ -132,7 +132,7 @@ func TestTenantQuotaBindsPerTenant(t *testing.T) {
 func TestTenantStampedInJournals(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme")
+	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "")
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -175,9 +175,12 @@ func TestSandboxesIndexOmitsTokens(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
+	m.mu.Lock()
+	sb.ClaimRef = "ns/workload"
+	m.mu.Unlock()
 
 	list := m.Sandboxes()
-	if len(list) != 1 || list[0].ID != sb.ID || list[0].Hibernated {
+	if len(list) != 1 || list[0].ID != sb.ID || list[0].ClaimRef != "ns/workload" || list[0].Hibernated {
 		t.Fatalf("index %+v", list)
 	}
 	raw, _ := json.Marshal(list)

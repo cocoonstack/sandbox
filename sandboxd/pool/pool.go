@@ -100,6 +100,11 @@ type SandboxSummary struct {
 	Hibernated     bool          `json:"hibernated"`
 	Archived       bool          `json:"archived,omitempty"`
 	FromCheckpoint string        `json:"from_checkpoint,omitempty"`
+	// ClaimRef echoes the caller reference recorded at claim time (the
+	// aggregated apiserver's k8s "<namespace>/<name>"), so the operator index
+	// can map this sandbox back to the name it was claimed under. Empty for
+	// warm-pool, fork, and checkpoint-branch claims.
+	ClaimRef string `json:"claim_ref,omitempty"`
 }
 
 // PoolInfo is the ops view of one pool.
@@ -495,6 +500,7 @@ func (m *Manager) Sandboxes() []SandboxSummary {
 		out = append(out, SandboxSummary{
 			ID: sb.ID, Key: sb.Key, Deadline: sb.Deadline,
 			Hibernated: sb.HibernateSnap != "", Archived: sb.ArchiveCk != "", FromCheckpoint: sb.FromCheckpoint,
+			ClaimRef: sb.ClaimRef,
 		})
 	}
 	slices.SortFunc(out, func(a, b SandboxSummary) int { return strings.Compare(a.ID, b.ID) })
