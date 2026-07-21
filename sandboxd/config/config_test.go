@@ -57,6 +57,23 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	}
 }
 
+func TestAutoRefillConcurrency(t *testing.T) {
+	for _, tt := range []struct {
+		cpus int
+		want int
+	}{
+		{cpus: 1, want: 4},
+		{cpus: 6, want: 4},
+		{cpus: 24, want: 16},
+		{cpus: 384, want: 256},
+		{cpus: 768, want: 256},
+	} {
+		if got := autoRefillConcurrency(tt.cpus); got != tt.want {
+			t.Errorf("autoRefillConcurrency(%d) = %d, want %d", tt.cpus, got, tt.want)
+		}
+	}
+}
+
 func TestLoadRejectsInvalid(t *testing.T) {
 	for _, tt := range []struct {
 		name, body, want string

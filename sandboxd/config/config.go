@@ -28,7 +28,7 @@ const (
 	defaultWarm         = 4
 	defaultMaxForkCount = 16
 	refillFloor         = 4
-	refillCeiling       = 64
+	refillCeiling       = 256
 )
 
 // PoolSpec declares one warm pool and its target of claim-ready VMs.
@@ -314,13 +314,17 @@ func (c *Config) applyDefaults() {
 		c.MaxForkCount = defaultMaxForkCount
 	}
 	if c.RefillConcurrency == 0 {
-		c.RefillConcurrency = min(max(refillFloor, runtime.NumCPU()/16), refillCeiling)
+		c.RefillConcurrency = autoRefillConcurrency(runtime.NumCPU())
 	}
 	for i := range c.Pools {
 		if c.Pools[i].Warm == 0 {
 			c.Pools[i].Warm = defaultWarm
 		}
 	}
+}
+
+func autoRefillConcurrency(cpus int) int {
+	return min(max(refillFloor, cpus*2/3), refillCeiling)
 }
 
 func (c *Config) validate() error {
