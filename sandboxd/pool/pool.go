@@ -32,20 +32,21 @@ import (
 )
 
 const (
-	refillInterval       = 2 * time.Second
-	reapInterval         = 5 * time.Second
-	buildRetryDelay      = 30 * time.Second
-	claimProbeTimeout    = 15 * time.Second
-	coldProbeTimeout     = 90 * time.Second
-	vsockPollInterval    = 100 * time.Millisecond
-	maxConcurrentRefills = 4
-	defaultTTL           = 5 * time.Minute
-	maxTTL               = 24 * time.Hour
-	recommitBackoff      = 20 * time.Millisecond
-	recommitMaxBackoff   = 5 * time.Second
-	// defaultMaxFork is the fork ceiling when a Manager is built from a Config
-	// that skipped config.Load's defaulting (direct construction in tests).
+	refillInterval     = 2 * time.Second
+	reapInterval       = 5 * time.Second
+	buildRetryDelay    = 30 * time.Second
+	claimProbeTimeout  = 15 * time.Second
+	coldProbeTimeout   = 90 * time.Second
+	vsockPollInterval  = 100 * time.Millisecond
+	defaultTTL         = 5 * time.Minute
+	maxTTL             = 24 * time.Hour
+	recommitBackoff    = 20 * time.Millisecond
+	recommitMaxBackoff = 5 * time.Second
+	// defaultMaxFork/defaultRefill are the fallbacks when a Manager is built
+	// from a Config that skipped config.Load's defaulting (direct construction
+	// in tests).
 	defaultMaxFork = 16
+	defaultRefill  = 4
 
 	vmPrefix        = "sbx-"
 	goldenPrefix    = "sbx-golden-"
@@ -263,6 +264,10 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	if maxFork < 1 {
 		maxFork = defaultMaxFork
 	}
+	refill := cfg.RefillConcurrency
+	if refill < 1 {
+		refill = defaultRefill
+	}
 	m := &Manager{
 		eng:             eng,
 		dataDir:         cfg.DataDir,
@@ -281,7 +286,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		egressSecrets:   secrets,
 		dial:            egressDialer.DialContext,
 		sweep:           netfilter.SweepExcept,
-		refillSem:       make(chan struct{}, maxConcurrentRefills),
+		refillSem:       make(chan struct{}, refill),
 		refillKick:      make(chan struct{}, 1),
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {

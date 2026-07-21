@@ -402,16 +402,16 @@ func TestRefillRespectsSemaphore(t *testing.T) {
 	m.pools[testKey].goldenDir = "/goldens/x"
 
 	m.refillOnce(t.Context())
-	waitFor(t, func() bool { return eng.cloneCount() == maxConcurrentRefills })
+	waitFor(t, func() bool { return eng.cloneCount() == defaultRefill })
 	time.Sleep(50 * time.Millisecond)
-	if n := eng.cloneCount(); n != maxConcurrentRefills {
-		t.Errorf("clones=%d while stalled, want %d", n, maxConcurrentRefills)
+	if n := eng.cloneCount(); n != defaultRefill {
+		t.Errorf("clones=%d while stalled, want %d", n, defaultRefill)
 	}
 
 	close(eng.probeStall)
 	waitFor(t, func() bool {
 		infos, _ := m.Info()
-		return infos[0].Warm+infos[0].Refilling >= maxConcurrentRefills && infos[0].Refilling == 0
+		return infos[0].Warm+infos[0].Refilling >= defaultRefill && infos[0].Refilling == 0
 	})
 	m.refillOnce(t.Context())
 	waitFor(t, func() bool {
@@ -420,8 +420,18 @@ func TestRefillRespectsSemaphore(t *testing.T) {
 	})
 }
 
+func TestRefillBudgetFollowsConfig(t *testing.T) {
+	m, err := NewManager(t.Context(), &config.Config{DataDir: t.TempDir(), RefillConcurrency: 2}, newFakeEngine(), testSecrets(t))
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if got := cap(m.refillSem); got != 2 {
+		t.Errorf("budget %d, want the configured 2", got)
+	}
+}
+
 // TestRefillReactivelyFillsToTarget: one trigger fills the whole target (not
-// just maxConcurrentRefills), since a finished refill chains the next.
+// just the concurrency budget), since a finished refill chains the next.
 func TestRefillReactivelyFillsToTarget(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 10})
@@ -487,10 +497,10 @@ func TestGoldenBuildFailureBacksOff(t *testing.T) {
 func TestReapBatchDoesNotStallTheLoop(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	// More expired claims than the concurrency budget (maxConcurrentRefills)
-	// so the batch would block the submit loop if it acquired the semaphore
-	// there instead of per-goroutine.
-	const n = maxConcurrentRefills + 3
+	// More expired claims than the concurrency budget (defaultRefill here) so
+	// the batch would block the submit loop if it acquired the semaphore there
+	// instead of per-goroutine.
+	const n = defaultRefill + 3
 	var sbs []*types.Sandbox
 	for range n {
 		sbs = append(sbs, mustClaim(t, m, testKey))

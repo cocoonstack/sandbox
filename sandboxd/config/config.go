@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,6 +27,8 @@ const (
 	defaultCocoonBin    = "cocoon"
 	defaultWarm         = 4
 	defaultMaxForkCount = 16
+	refillFloor         = 4
+	refillCeiling       = 64
 )
 
 // PoolSpec declares one warm pool and its target of claim-ready VMs.
@@ -235,6 +238,11 @@ type Config struct {
 	// capacity. Defaults to 16.
 	MaxForkCount int `json:"max_fork_count,omitempty"`
 
+	// RefillConcurrency caps concurrent VM provisioning node-wide — warm-pool
+	// refills, fork clones, and reap/hibernate/reconcile batches share one
+	// budget; 0 auto-scales with the node's CPU count.
+	RefillConcurrency int `json:"refill_concurrency,omitempty"`
+
 	// Mesh, when set, joins this node to a memberlist cluster for redirect
 	// placement; nil is a single node (mesh of one, no gossip).
 	Mesh *MeshConfig `json:"mesh,omitempty"`
@@ -305,6 +313,9 @@ func (c *Config) applyDefaults() {
 	if c.MaxForkCount == 0 {
 		c.MaxForkCount = defaultMaxForkCount
 	}
+	if c.RefillConcurrency == 0 {
+		c.RefillConcurrency = min(max(refillFloor, runtime.NumCPU()/16), refillCeiling)
+	}
 	for i := range c.Pools {
 		if c.Pools[i].Warm == 0 {
 			c.Pools[i].Warm = defaultWarm
@@ -323,6 +334,9 @@ func (c *Config) validate() error {
 	}
 	if c.MaxForkCount < 1 {
 		return fmt.Errorf("max_fork_count must be at least 1, got %d", c.MaxForkCount)
+	}
+	if c.RefillConcurrency < 0 {
+		return fmt.Errorf("refill_concurrency must not be negative, got %d", c.RefillConcurrency)
 	}
 	if err := c.RestoreMode.Validate(); err != nil {
 		return fmt.Errorf("restore_mode: %w", err)
