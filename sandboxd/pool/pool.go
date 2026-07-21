@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -33,22 +32,21 @@ import (
 )
 
 const (
-	refillInterval    = 2 * time.Second
-	reapInterval      = 5 * time.Second
-	buildRetryDelay   = 30 * time.Second
-	claimProbeTimeout = 15 * time.Second
-	coldProbeTimeout  = 90 * time.Second
-	vsockPollInterval = 100 * time.Millisecond
-	// refillFloor/refillCeiling clamp refillBudget's auto-sized budget.
-	refillFloor        = 4
-	refillCeiling      = 64
+	refillInterval     = 2 * time.Second
+	reapInterval       = 5 * time.Second
+	buildRetryDelay    = 30 * time.Second
+	claimProbeTimeout  = 15 * time.Second
+	coldProbeTimeout   = 90 * time.Second
+	vsockPollInterval  = 100 * time.Millisecond
 	defaultTTL         = 5 * time.Minute
 	maxTTL             = 24 * time.Hour
 	recommitBackoff    = 20 * time.Millisecond
 	recommitMaxBackoff = 5 * time.Second
-	// defaultMaxFork is the fork ceiling when a Manager is built from a Config
-	// that skipped config.Load's defaulting (direct construction in tests).
+	// defaultMaxFork/defaultRefill are the fallbacks when a Manager is built
+	// from a Config that skipped config.Load's defaulting (direct construction
+	// in tests).
 	defaultMaxFork = 16
+	defaultRefill  = 4
 
 	vmPrefix        = "sbx-"
 	goldenPrefix    = "sbx-golden-"
@@ -258,17 +256,6 @@ type Manager struct {
 	refillKick chan struct{}
 }
 
-// refillBudget resolves the node's provisioning-concurrency budget: an
-// explicit refill_concurrency wins; 0 auto-scales as NumCPU/16 clamped to
-// [refillFloor, refillCeiling], so small nodes keep the historical 4
-// (throughput arithmetic lives in docs/deploy.md).
-func refillBudget(configured int) int {
-	if configured > 0 {
-		return configured
-	}
-	return min(max(refillFloor, runtime.NumCPU()/16), refillCeiling)
-}
-
 // NewManager builds a manager from the node config; ctx bounds backend
 // construction (the s3 store resolves its credential chain). secrets resolves
 // egress rule references and is shared by every per-sandbox proxy.
@@ -276,6 +263,10 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	maxFork := cfg.MaxForkCount
 	if maxFork < 1 {
 		maxFork = defaultMaxFork
+	}
+	refill := cfg.RefillConcurrency
+	if refill < 1 {
+		refill = defaultRefill
 	}
 	m := &Manager{
 		eng:             eng,
@@ -295,7 +286,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		egressSecrets:   secrets,
 		dial:            egressDialer.DialContext,
 		sweep:           netfilter.SweepExcept,
-		refillSem:       make(chan struct{}, refillBudget(cfg.RefillConcurrency)),
+		refillSem:       make(chan struct{}, refill),
 		refillKick:      make(chan struct{}, 1),
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {

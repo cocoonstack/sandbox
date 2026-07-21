@@ -49,8 +49,8 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if cfg.MaxForkCount < 1 {
 		t.Errorf("max_fork_count default missing: %d", cfg.MaxForkCount)
 	}
-	if cfg.RefillConcurrency != 0 {
-		t.Errorf("refill_concurrency %d, want 0 (auto — resolved by the pool manager, not at load)", cfg.RefillConcurrency)
+	if cfg.RefillConcurrency < 1 {
+		t.Errorf("refill_concurrency default missing: %d", cfg.RefillConcurrency)
 	}
 	if cfg.Pools[0].Warm < 1 {
 		t.Errorf("pool warm default missing: %d", cfg.Pools[0].Warm)
