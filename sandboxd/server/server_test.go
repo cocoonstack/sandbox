@@ -311,8 +311,11 @@ func TestPutPoolsUpdatesTargets(t *testing.T) {
 	}
 }
 
-// TestSandboxVerbFlows drives both handleSandboxVerb routes; release and
-// hibernate share auth, error mapping, and id/token plumbing by construction.
+// TestSandboxVerbFlows drives the per-sandbox-token verb paths. Hibernate runs
+// through handleSandboxVerb; release runs through handleRelease with an unset
+// api token (so isRootToken is always false and it takes the same per-sandbox
+// path) — both share auth, error mapping, and id/token plumbing by construction.
+// TestReleaseOperatorToken covers release's root-token elevation separately.
 func TestSandboxVerbFlows(t *testing.T) {
 	verbs := []struct {
 		name string
@@ -363,6 +366,75 @@ func TestSandboxVerbFlows(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestReleaseOperatorToken proves the release route's authorization split: the
+// node root api_token releases any sandbox by id via ReleaseOperator (no
+// per-sandbox token), while a per-sandbox token still takes the token-checked
+// Release path and a tenant/wrong token gets no operator elevation (it falls to
+// Release and 404s). Exactly one manager method runs per request.
+func TestReleaseOperatorToken(t *testing.T) {
+	const rootTok, sbTok = "sekret", "sb-secret"
+	tenants := []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}
+	tests := []struct {
+		name        string
+		auth        string
+		wantOp      bool   // ReleaseOperator expected
+		wantRelease bool   // per-sandbox Release expected
+		wantToken   string // token Release should receive (per-sandbox path)
+		releaseErr  error  // error the per-sandbox Release returns
+		want        int
+	}{
+		{"root token releases by id", "Bearer " + rootTok, true, false, "", nil, http.StatusNoContent},
+		{"sandbox token releases self", "Bearer " + sbTok, false, true, sbTok, nil, http.StatusNoContent},
+		{"tenant token gets no operator release", "Bearer acme-tok", false, true, "acme-tok", pool.ErrUnknownSandbox, http.StatusNotFound},
+		{"wrong token 404s", "Bearer nope", false, true, "nope", pool.ErrUnknownSandbox, http.StatusNotFound},
+		{"missing bearer", "", false, false, "", nil, http.StatusUnauthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var opID, relID, relToken string
+			var opCalled, relCalled bool
+			mgr := &fakeManager{
+				releaseOp: func(id string) error {
+					opCalled, opID = true, id
+					return nil
+				},
+				release: func(id, token string) error {
+					relCalled, relID, relToken = true, id, token
+					return tt.releaseErr
+				},
+			}
+			ts := newTenantTestServer(t, rootTok, tenants, mgr, nil)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/release", nil)
+			if err != nil {
+				t.Fatalf("request: %v", err)
+			}
+			if tt.auth != "" {
+				req.Header.Set("Authorization", tt.auth)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("do: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != tt.want {
+				t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
+			}
+			if opCalled != tt.wantOp {
+				t.Errorf("ReleaseOperator called=%v, want %v", opCalled, tt.wantOp)
+			}
+			if relCalled != tt.wantRelease {
+				t.Errorf("Release called=%v, want %v", relCalled, tt.wantRelease)
+			}
+			if tt.wantOp && opID != "sb_1" {
+				t.Errorf("ReleaseOperator id=%q, want sb_1", opID)
+			}
+			if tt.wantRelease && (relID != "sb_1" || relToken != tt.wantToken) {
+				t.Errorf("Release(%q, %q), want (sb_1, %q)", relID, relToken, tt.wantToken)
+			}
+		})
 	}
 }
 
@@ -852,6 +924,7 @@ func newTenantTestServer(t *testing.T, apiToken string, tenants []config.TenantS
 type fakeManager struct {
 	claim     func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
 	release   func(id, token string) error
+	releaseOp func(id string) error
 	socket    func(id, token string) (string, error)
 	hibernate func(id, token string) error
 	fork      func(id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
@@ -894,6 +967,13 @@ func (f *fakeManager) Release(_ context.Context, id, token string) error {
 		return nil
 	}
 	return f.release(id, token)
+}
+
+func (f *fakeManager) ReleaseOperator(_ context.Context, id string) error {
+	if f.releaseOp == nil {
+		return nil
+	}
+	return f.releaseOp(id)
 }
 
 func (f *fakeManager) AgentSocket(id, token string) (string, error) {

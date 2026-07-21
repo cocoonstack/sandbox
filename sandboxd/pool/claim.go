@@ -90,7 +90,7 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	return out, err
 }
 
-// Release destroys a claimed sandbox after validating its token.
+// Release destroys a claimed sandbox after validating its per-sandbox token.
 func (m *Manager) Release(ctx context.Context, id, token string) error {
 	m.mu.Lock()
 	sb, ok := m.authed(id, token)
@@ -98,6 +98,27 @@ func (m *Manager) Release(ctx context.Context, id, token string) error {
 		m.mu.Unlock()
 		return ErrUnknownSandbox
 	}
+	return m.releaseLocked(ctx, id, sb)
+}
+
+// ReleaseOperator destroys a claimed sandbox by id without a per-sandbox token.
+// It is the operator (root) path: the server authorizes it by the node's root
+// api_token before calling, so no token check happens here — the claim is looked
+// up by id directly. A tenant token never reaches this method (see server.go).
+func (m *Manager) ReleaseOperator(ctx context.Context, id string) error {
+	m.mu.Lock()
+	sb, ok := m.claimed[id]
+	if !ok {
+		m.mu.Unlock()
+		return ErrUnknownSandbox
+	}
+	return m.releaseLocked(ctx, id, sb)
+}
+
+// releaseLocked drops the already-resolved claim (id, sb) and tears down its VM.
+// The caller holds m.mu and has resolved sb; releaseLocked owns the unlock. It
+// is the shared body of Release (per-sandbox token) and ReleaseOperator (root).
+func (m *Manager) releaseLocked(ctx context.Context, id string, sb *types.Sandbox) error {
 	delete(m.claimed, id)
 	m.tenantDelta(sb.Tenant, -1)
 	snap, ck, vmName := sb.HibernateSnap, sb.ArchiveCk, sb.VMName
@@ -110,7 +131,7 @@ func (m *Manager) Release(ctx context.Context, id, token string) error {
 		rb := m.store.snapshot(m.claimed)
 		m.mu.Unlock()
 		m.recommit(ctx, rb)
-		log.WithFunc("pool.Release").Errorf(ctx, saveErr, "persist release of %s", id)
+		log.WithFunc("pool.releaseLocked").Errorf(ctx, saveErr, "persist release of %s", id)
 		return fmt.Errorf("release %s: %w", id, saveErr)
 	}
 	// Cleanup must survive the caller hanging up; the claim is already dropped.

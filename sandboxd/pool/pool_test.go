@@ -177,6 +177,27 @@ func TestReleaseValidatesToken(t *testing.T) {
 	}
 }
 
+func TestReleaseOperator(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+
+	// Unknown id is 404-equivalent, exactly like Release.
+	if err := m.ReleaseOperator(t.Context(), "sb_nope"); !errors.Is(err, ErrUnknownSandbox) {
+		t.Errorf("got %v, want ErrUnknownSandbox", err)
+	}
+	// The operator releases by id alone — no per-sandbox token needed.
+	if err := m.ReleaseOperator(t.Context(), sb.ID); err != nil {
+		t.Fatalf("ReleaseOperator: %v", err)
+	}
+	if !slices.Contains(eng.removes, sb.VMName) {
+		t.Errorf("removes=%v, want %s", eng.removes, sb.VMName)
+	}
+	if got, _ := newClaimStore(m.dataDir).load(); len(got) != 0 {
+		t.Errorf("release not persisted: %d entries", len(got))
+	}
+}
+
 func TestAgentSocketValidatesToken(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	sb := mustClaim(t, m, testKey)

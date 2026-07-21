@@ -58,6 +58,7 @@ type Manager interface {
 	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string) (*types.Sandbox, error)
 	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string) (*types.Sandbox, error)
 	Release(ctx context.Context, id, token string) error
+	ReleaseOperator(ctx context.Context, id string) error
 	Hibernate(ctx context.Context, id, token string) error
 	Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
 	Promote(ctx context.Context, id, token, template, tenant string) (types.PoolKey, error)
@@ -154,7 +155,7 @@ func New(apiToken string, tenants []config.TenantSpec, advertise string, mgr Man
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/claim", s.requireToken(s.handleClaim))
-	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleSandboxVerb("release", s.mgr.Release))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleRelease)
 	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
 	// Fork and promote create node resources, so they take the same token
 	// class as a claim; the source sandbox's token rides in the body as the
@@ -232,9 +233,36 @@ func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req t
 	return len(owners) > 0 && !s.mgr.HasGolden(ctx, key) && writeRedirect(w, owners)
 }
 
-// handleSandboxVerb adapts a sandbox-scoped manager call (release,
-// hibernate) to HTTP: per-sandbox bearer auth, 404 on unknown, 204 on
-// success.
+// handleRelease releases a claimed sandbox. Two credentials authorize it: the
+// node's root api_token (the operator) may release any sandbox by id, so
+// aggregated/control-plane teardown works without holding the per-sandbox token;
+// a per-sandbox token releases only its own claim, unchanged. A tenant token is
+// neither — it is not the root api_token, so it takes the per-sandbox path and
+// 404s (it matches no sandbox token). Tenants never get operator release.
+func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
+	token, ok := sandboxToken(w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	var err error
+	if s.isRootToken(token) {
+		err = s.mgr.ReleaseOperator(r.Context(), id)
+	} else {
+		err = s.mgr.Release(r.Context(), id, token)
+	}
+	switch {
+	case writePoolErr(w, err):
+	case err != nil:
+		log.WithFunc("server.handleRelease").Errorf(r.Context(), err, "release %s", id)
+		writeErr(w, http.StatusInternalServerError, "release failed")
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleSandboxVerb adapts a sandbox-scoped manager call (hibernate) to HTTP:
+// per-sandbox bearer auth, 404 on unknown, 204 on success.
 func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id, token string) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, ok := sandboxToken(w, r)
@@ -474,6 +502,14 @@ func (s *Server) requireRoot(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	})
+}
+
+// isRootToken reports whether token is the configured root api_token (the
+// operator credential). It mirrors resolveScope's root branch: an unset api
+// token matches nothing, so an open node grants no operator elevation on the
+// per-sandbox release path. Tenant tokens never match — they live in s.tenants.
+func (s *Server) isRootToken(token string) bool {
+	return s.apiToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) == 1
 }
 
 // resolveScope matches the bearer token to root ("") or a tenant name. With
