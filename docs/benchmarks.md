@@ -25,7 +25,8 @@ the stop line.
 
 The harness also reports **warm refill recovery**: after fully draining the
 warm pool it times the refill loop rebuilding to target — the number bounded
-by refill admission rather than by a single restore.
+by refill admission (`refill_concurrency`, see
+[Deployment](deploy.md)) rather than by a single restore.
 
 When comparing against other systems, match tiers — not headlines:
 
