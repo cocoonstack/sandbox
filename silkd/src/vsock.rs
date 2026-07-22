@@ -1,5 +1,5 @@
 //! vsock listener. On Linux silkd binds the guest's hybrid-vsock port and
-//! serves each connection; the host (sandboxd) reaches it through the CH/FC
+//! serves each connection; the host (sandboxd) reaches it through the VMM
 //! muxer's `CONNECT <port>` handshake, which the VMM answers — silkd sees a
 //! plain byte stream. Off Linux the crate still builds (host tooling, tests)
 //! with a stub so `cargo test` runs everywhere.

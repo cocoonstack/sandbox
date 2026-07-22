@@ -7,15 +7,14 @@ milliseconds; cold boot is ~200ms on bare metal.
 
 ```
 SDK (Go)                sandboxd (per node)              guest microVM
-sandbox.New() ── HTTP ─► claim: warm pool / golden clone  CH (egress) | FC (none)
+sandbox.New() ── HTTP ─► claim: warm pool / golden clone  Cloud Hypervisor
 sb.Exec/Files/… ─ HTTP upgrade ─► byte relay ── vsock ──► silkd :2048
                         memberlist mesh: warm-count gossip,
                         MOVED-style redirect to the owning node
 ```
 
-Two network lanes, derived from the claim: `net=none` → Firecracker, no NIC,
-vsock-only (hardened default); `net=egress` → Cloud Hypervisor with a
-bridge/CNI NIC. Backends are never user-selected.
+Cloud Hypervisor serves both network lanes. `net=none` has no NIC and uses
+vsock-only I/O (hardened default); `net=egress` attaches a bridge/CNI NIC.
 
 ## Guides
 

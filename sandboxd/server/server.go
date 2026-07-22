@@ -207,14 +207,9 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		writeRedirect(w, s.placer.Candidates(hash)) {
 		return
 	}
-	switch {
-	case writePoolErr(w, err):
-	case err != nil:
-		log.WithFunc("server.handleClaim").Errorf(r.Context(), err, "claim %s", hash)
-		writeErr(w, http.StatusInternalServerError, "provisioning failed")
-	default:
+	writeResult(w, r, "claim", hash, "provisioning failed", err, func() {
 		writeJSON(w, http.StatusOK, s.claimResponse(sb))
-	}
+	})
 }
 
 // redirectClaim redirects a warm-miss to a better peer — a warm holder, or the
@@ -271,14 +266,9 @@ func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id,
 		}
 		id := r.PathValue("id")
 		err := do(r.Context(), id, token)
-		switch {
-		case writePoolErr(w, err):
-		case err != nil:
-			log.WithFunc("server.handleSandboxVerb").Errorf(r.Context(), err, "%s %s", verb, id)
-			writeErr(w, http.StatusInternalServerError, verb+" failed")
-		default:
+		writeResult(w, r, verb, id, verb+" failed", err, func() {
 			w.WriteHeader(http.StatusNoContent)
-		}
+		})
 	}
 }
 
@@ -291,18 +281,13 @@ func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	children, err := s.mgr.Fork(r.Context(), id, req.Token, req.Count, req.TTL())
-	switch {
-	case writePoolErr(w, err):
-	case err != nil:
-		log.WithFunc("server.handleFork").Errorf(r.Context(), err, "fork %s", id)
-		writeErr(w, http.StatusInternalServerError, "fork failed")
-	default:
+	writeResult(w, r, "fork", id, "fork failed", err, func() {
 		resp := types.ForkResponse{Children: make([]types.ClaimResponse, len(children))}
 		for i, c := range children {
 			resp.Children[i] = s.claimResponse(c)
 		}
 		writeJSON(w, http.StatusOK, resp)
-	}
+	})
 }
 
 // handlePromote publishes a claimed sandbox as a node-local template.
@@ -313,14 +298,9 @@ func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	key, err := s.mgr.Promote(r.Context(), id, req.Token, req.Template, tenantFrom(r.Context()))
-	switch {
-	case writePoolErr(w, err):
-	case err != nil:
-		log.WithFunc("server.handlePromote").Errorf(r.Context(), err, "promote %s", id)
-		writeErr(w, http.StatusInternalServerError, "promote failed")
-	default:
+	writeResult(w, r, "promote", id, "promote failed", err, func() {
 		writeJSON(w, http.StatusOK, types.PromoteResponse{Key: key})
-	}
+	})
 }
 
 // handleCheckpoint captures a claimed sandbox's state as a new checkpoint.
@@ -331,14 +311,9 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	ckpt, err := s.mgr.Checkpoint(r.Context(), id, req.Token, req.Name, tenantFrom(r.Context()))
-	switch {
-	case writePoolErr(w, err):
-	case err != nil:
-		log.WithFunc("server.handleCheckpoint").Errorf(r.Context(), err, "checkpoint %s", id)
-		writeErr(w, http.StatusInternalServerError, "checkpoint failed")
-	default:
+	writeResult(w, r, "checkpoint", id, "checkpoint failed", err, func() {
 		writeJSON(w, http.StatusOK, types.CheckpointResponse{Checkpoint: ckpt})
-	}
+	})
 }
 
 // handleClaimCheckpoint claims a fresh sandbox branched from a checkpoint.
@@ -349,14 +324,9 @@ func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	ckptID := r.PathValue("id")
 	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, req.TTL(), tenantFrom(r.Context()))
-	switch {
-	case writePoolErr(w, err):
-	case err != nil:
-		log.WithFunc("server.handleClaimCheckpoint").Errorf(r.Context(), err, "claim checkpoint %s", ckptID)
-		writeErr(w, http.StatusInternalServerError, "provisioning failed")
-	default:
+	writeResult(w, r, "claim checkpoint", ckptID, "provisioning failed", err, func() {
 		writeJSON(w, http.StatusOK, s.claimResponse(sb))
-	}
+	})
 }
 
 // handleListCheckpoints lists this node's checkpoints, newest first — a
@@ -375,14 +345,9 @@ func (s *Server) handleListCheckpoints(w http.ResponseWriter, r *http.Request) {
 // only its own records (anything else is 404).
 func (s *Server) handleDeleteCheckpoint(w http.ResponseWriter, r *http.Request) {
 	err := s.mgr.DeleteCheckpoint(r.Context(), r.PathValue("id"), tenantFrom(r.Context()))
-	switch {
-	case writePoolErr(w, err):
-	case err != nil:
-		log.WithFunc("server.handleDeleteCheckpoint").Errorf(r.Context(), err, "delete checkpoint %s", r.PathValue("id"))
-		writeErr(w, http.StatusInternalServerError, "delete checkpoint failed")
-	default:
+	writeResult(w, r, "delete checkpoint", r.PathValue("id"), "delete checkpoint failed", err, func() {
 		w.WriteHeader(http.StatusNoContent)
-	}
+	})
 }
 
 // handleDeleteTemplate removes a promoted template; the key axes ride as
@@ -403,14 +368,9 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 		writeRedirect(w, s.placer.TemplateOwners(key.Hash())) {
 		return
 	}
-	switch {
-	case writePoolErr(w, err):
-	case err != nil:
-		log.WithFunc("server.handleDeleteTemplate").Errorf(r.Context(), err, "delete template %s", req.Template)
-		writeErr(w, http.StatusInternalServerError, "delete template failed")
-	default:
+	writeResult(w, r, "delete template", req.Template, "delete template failed", err, func() {
 		w.WriteHeader(http.StatusNoContent)
-	}
+	})
 }
 
 // handleOwner answers whether this node owns the sandbox (used by the SDK's

@@ -88,7 +88,6 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err := m.tpls.SweepStaging(); err != nil {
 		log.WithFunc("pool.Reconcile").Error(ctx, err, "sweep template staging")
 	}
-	m.migrateLegacyTemplates(ctx)
 	for _, tmp := range tmps {
 		_ = os.RemoveAll(tmp)
 	}

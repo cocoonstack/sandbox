@@ -2,9 +2,7 @@
 //! unsafe lives here.
 
 use std::ffi::CString;
-use std::fs;
 use std::io;
-use std::os::unix::fs::FileTypeExt;
 use std::ptr;
 use std::time::Duration;
 
@@ -44,12 +42,6 @@ pub fn mount(
 
 pub fn move_mount(src: &str, target: &str) -> Result<(), String> {
     mount(src, target, None, libc::MS_MOVE, None)
-}
-
-pub fn is_block_dev(path: &str) -> bool {
-    fs::metadata(path)
-        .map(|m| m.file_type().is_block_device())
-        .unwrap_or(false)
 }
 
 pub fn sethostname(name: &str) -> Result<(), String> {

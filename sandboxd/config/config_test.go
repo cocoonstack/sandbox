@@ -52,6 +52,9 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if cfg.RefillConcurrency < 1 {
 		t.Errorf("refill_concurrency default missing: %d", cfg.RefillConcurrency)
 	}
+	if cfg.NoDirectIO {
+		t.Error("no_direct_io defaulted on; want existing direct-I/O behavior")
+	}
 	if cfg.Pools[0].Warm < 1 {
 		t.Errorf("pool warm default missing: %d", cfg.Pools[0].Warm)
 	}
@@ -215,12 +218,12 @@ func TestHasEgress(t *testing.T) {
 
 func TestLoadKeepsExplicitValues(t *testing.T) {
 	path := writeConfig(t, `{"listen":"0.0.0.0:9999","advertise_addr":"10.0.0.5:9999","max_fork_count":4,
-		"refill_concurrency":8,"bridge":"br0","pools":[{"template":"rt:24.04","net":"egress","size":"small","warm":3}]}`)
+		"refill_concurrency":8,"no_direct_io":true,"bridge":"br0","pools":[{"template":"rt:24.04","net":"egress","size":"small","warm":3}]}`)
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.AdvertiseAddr != "10.0.0.5:9999" || cfg.MaxForkCount != 4 || cfg.RefillConcurrency != 8 || cfg.Pools[0].Warm != 3 {
+	if cfg.AdvertiseAddr != "10.0.0.5:9999" || cfg.MaxForkCount != 4 || cfg.RefillConcurrency != 8 || !cfg.NoDirectIO || cfg.Pools[0].Warm != 3 {
 		t.Errorf("explicit values overridden: %+v", cfg)
 	}
 	if cfg.Pools[0].Net != types.NetEgress {

@@ -193,22 +193,12 @@ fn mkdir_all(path: &str) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|err| format!("mkdir {path}: {err}"))
 }
 
-/// Resolves every disk in one sysfs sweep per poll iteration instead of a
-/// scan per disk. CH disks carry a virtio-blk serial; FC has no serials, so
-/// cocoon passes /dev/vdX paths there. 2ms polling — virtio probe completes
-/// a few ms into boot, so the first or second try normally hits.
+/// Resolves every virtio-blk serial in one sysfs sweep per poll iteration.
 fn resolve_disks(ids: &[&str], timeout: Duration) -> Result<Vec<String>, String> {
     let deadline = Instant::now() + timeout;
     let mut found: Vec<Option<String>> = vec![None; ids.len()];
     loop {
-        for (i, id) in ids.iter().enumerate() {
-            if found[i].is_none() && id.starts_with("/dev/") && sys::is_block_dev(id) {
-                found[i] = Some((*id).to_string());
-            }
-        }
-        if found.iter().any(Option::is_none) {
-            scan_serials(ids, &mut found);
-        }
+        scan_serials(ids, &mut found);
         if found.iter().all(Option::is_some) {
             return Ok(found.into_iter().flatten().collect());
         }

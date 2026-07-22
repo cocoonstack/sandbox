@@ -4,6 +4,7 @@
 package pool
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -258,6 +259,7 @@ type Manager struct {
 	claimed map[string]*types.Sandbox
 
 	refillSem  chan struct{}
+	probeSem   chan struct{}
 	refillKick chan struct{}
 }
 
@@ -292,6 +294,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		dial:            egressDialer.DialContext,
 		sweep:           netfilter.SweepExcept,
 		refillSem:       make(chan struct{}, refill),
+		probeSem:        make(chan struct{}, refill),
 		refillKick:      make(chan struct{}, 1),
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
@@ -547,11 +550,7 @@ func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe 
 	if cs := cfg.CheckpointStore; cs != nil && cs.Kind == "s3" {
 		return s3.New(ctx, *cs.S3, filepath.Join(cfg.DataDir, staging), idRe)
 	}
-	ckptDir := cfg.CheckpointDir
-	if ckptDir == "" {
-		ckptDir = filepath.Join(cfg.DataDir, "checkpoints")
-	}
-	return dir.New(ckptDir, idRe)
+	return dir.New(cmp.Or(cfg.CheckpointDir, filepath.Join(cfg.DataDir, "checkpoints")), idRe)
 }
 
 func dirExists(path string) bool {
@@ -574,7 +573,7 @@ func benignSweepErr(err error) bool {
 }
 
 func vmName(key types.PoolKey) string {
-	return vmPrefix + key.Hash() + "-" + randHex(3)
+	return vmPrefix + key.Hash() + "-" + randHex(6)
 }
 
 func randHex(n int) string {

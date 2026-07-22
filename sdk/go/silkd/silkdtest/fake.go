@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"io"
 	"io/fs"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -257,10 +258,7 @@ func (f *Fake) sessionCreate(conn net.Conn, req *wire.SessionCreate) {
 
 func (f *Fake) sessionList(conn net.Conn) {
 	f.mu.Lock()
-	ids := make([]string, 0, len(f.sessions))
-	for id := range f.sessions {
-		ids = append(ids, id)
-	}
+	ids := slices.Collect(maps.Keys(f.sessions))
 	f.mu.Unlock()
 	send(conn, &wire.Sessions{Sessions: ids})
 }

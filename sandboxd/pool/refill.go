@@ -32,7 +32,9 @@ func (m *Manager) refillOnce(ctx context.Context) {
 		return
 	}
 	now := time.Now()
+	inFlight := 0
 	for key, p := range m.pools {
+		inFlight += p.refilling
 		// SetPools leaves a removed pool in place while a build/refill is in
 		// flight; sweep it once quiescent.
 		if p.removed {
@@ -46,15 +48,20 @@ func (m *Manager) refillOnce(ctx context.Context) {
 			go m.buildGolden(ctx, p)
 		}
 	}
-	for spawned := true; spawned; {
+	limit := cap(m.refillSem) + cap(m.probeSem)
+	for spawned := true; spawned && inFlight < limit; {
 		spawned = false
 		for _, p := range m.pools {
+			if inFlight >= limit {
+				return
+			}
 			if p.removed || p.goldenDir == "" || len(p.warm)+p.refilling >= p.effectiveTarget(now) {
 				continue
 			}
 			select {
 			case m.refillSem <- struct{}{}:
 				p.refilling++
+				inFlight++
 				go m.refillOne(ctx, p, p.goldenDir)
 				spawned = true
 			default:
@@ -66,7 +73,16 @@ func (m *Manager) refillOnce(ctx context.Context) {
 
 func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 	start := time.Now()
-	sb, err := m.provision(ctx, p.key, golden)
+	sb, err := m.startVM(ctx, p.key, func(name string) (types.VMRecord, error) {
+		return m.eng.Clone(ctx, golden, name, p.key)
+	})
+	<-m.refillSem
+	if err == nil {
+		if ctx.Err() == nil {
+			m.refillOnce(ctx)
+		}
+		sb, err = m.readyBounded(ctx, sb, time.Now().Add(claimProbeTimeout))
+	}
 	keep := false
 	m.mu.Lock()
 	p.refilling--
@@ -76,12 +92,15 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 		keep = true
 	}
 	m.mu.Unlock()
-	<-m.refillSem
 	if err != nil {
-		log.WithFunc("pool.refillOne").Errorf(ctx, err, "refill %s", p.key.Hash())
+		if ctx.Err() == nil {
+			log.WithFunc("pool.refillOne").Errorf(ctx, err, "refill %s", p.key.Hash())
+		}
 		return
 	}
-	m.refillOnce(ctx)
+	if ctx.Err() == nil {
+		m.refillOnce(ctx)
+	}
 	if !keep {
 		m.destroy(ctx, sb.VMName)
 	}
@@ -250,43 +269,60 @@ func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden strin
 	})
 }
 
-// provisionSnap creates one claim-ready clone from a local-store snapshot —
-// fork's fast path, which skips the export-to-dir copy.
-func (m *Manager) provisionSnap(ctx context.Context, key types.PoolKey, snap string) (*types.Sandbox, error) {
-	return m.provisionVM(ctx, key, claimProbeTimeout, func(name string) (types.VMRecord, error) {
-		return m.eng.CloneSnap(ctx, snap, name, key)
-	})
+func (m *Manager) provisionVM(ctx context.Context, key types.PoolKey, probeTimeout time.Duration, create func(name string) (types.VMRecord, error)) (*types.Sandbox, error) {
+	sb, err := m.startVM(ctx, key, create)
+	if err != nil {
+		return nil, err
+	}
+	return m.readyVM(ctx, sb, time.Now().Add(probeTimeout))
 }
 
-// provisionVM creates one VM via create, probes it ready, and destroys it on
-// any failure — including create-command failures, which can leave a half-
-// created VM behind (e.g. the CLI killed by timeout after the VMM spawned).
-func (m *Manager) provisionVM(ctx context.Context, key types.PoolKey, probeTimeout time.Duration, create func(name string) (types.VMRecord, error)) (*types.Sandbox, error) {
+func (m *Manager) startVM(ctx context.Context, key types.PoolKey, create func(name string) (types.VMRecord, error)) (*types.Sandbox, error) {
 	name := vmName(key)
 	rec, err := create(name)
-	var sock string
-	if err == nil {
-		sock, err = m.probeReady(ctx, name, rec.VsockSocket, probeTimeout)
-	}
 	if err != nil {
 		m.destroy(ctx, name)
 		return nil, err
 	}
-	return &types.Sandbox{VMName: name, Key: key, VsockSocket: sock, TAP: rec.TapDevice()}, nil
+	return &types.Sandbox{VMName: name, Key: key, VsockSocket: rec.VsockSocket, TAP: rec.TapDevice()}, nil
 }
 
-// cloneBatch builds count claim-ready VMs via provisionOne, bounded by the
-// refill semaphore — forks and refills contend for the same node resources,
-// so they share one gate. One failure destroys the batch.
-func (m *Manager) cloneBatch(ctx context.Context, count int, provisionOne func() (*types.Sandbox, error)) ([]*types.Sandbox, error) {
+func (m *Manager) readyVM(ctx context.Context, sb *types.Sandbox, deadline time.Time) (*types.Sandbox, error) {
+	sock, err := m.probeReady(ctx, sb.VMName, sb.VsockSocket, time.Until(deadline))
+	if err != nil {
+		m.destroy(ctx, sb.VMName)
+		return nil, err
+	}
+	sb.VsockSocket = sock
+	return sb, nil
+}
+
+func (m *Manager) readyBounded(ctx context.Context, sb *types.Sandbox, deadline time.Time) (*types.Sandbox, error) {
+	probeCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	select {
+	case m.probeSem <- struct{}{}:
+		defer func() { <-m.probeSem }()
+	case <-probeCtx.Done():
+		m.destroy(ctx, sb.VMName)
+		return nil, probeCtx.Err()
+	}
+	return m.readyVM(probeCtx, sb, deadline)
+}
+
+func (m *Manager) cloneBatch(ctx context.Context, count int, key types.PoolKey, create func(string) (types.VMRecord, error)) ([]*types.Sandbox, error) {
 	children := make([]*types.Sandbox, count)
 	errs := make([]error, count)
 	var wg sync.WaitGroup
 	for i := range count {
 		m.refillSem <- struct{}{}
 		wg.Go(func() {
-			defer func() { <-m.refillSem }()
-			children[i], errs[i] = provisionOne()
+			child, err := m.startVM(ctx, key, create)
+			<-m.refillSem
+			if err == nil {
+				child, err = m.readyBounded(ctx, child, time.Now().Add(claimProbeTimeout))
+			}
+			children[i], errs[i] = child, err
 		})
 	}
 	wg.Wait()

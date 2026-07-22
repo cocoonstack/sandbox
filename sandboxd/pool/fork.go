@@ -58,18 +58,18 @@ func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl tim
 // cloned straight from a fresh store snapshot (no export copy); a hibernated
 // source stays on the export path (its shared wake image needs a private copy).
 func (m *Manager) forkClones(ctx context.Context, sb *types.Sandbox, count int) ([]*types.Sandbox, error) {
-	provision, cleanup, err := m.forkSource(ctx, sb)
+	create, cleanup, err := m.forkSource(ctx, sb)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
-	return m.cloneBatch(ctx, count, provision)
+	return m.cloneBatch(ctx, count, sb.Key, create)
 }
 
 // forkSource decides and captures the fork source under the transition lock
 // (a racing hibernate cannot swap the snapshot out from under the fan-out),
 // returning the per-child provisioner and its cleanup.
-func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (func() (*types.Sandbox, error), func(), error) {
+func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (func(string) (types.VMRecord, error), func(), error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	if sb.HibernateSnap == "" {
@@ -77,7 +77,7 @@ func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (func() (*t
 		if err := m.eng.SnapshotSave(ctx, sb.VMName, snap); err != nil {
 			return nil, nil, err
 		}
-		return func() (*types.Sandbox, error) { return m.provisionSnap(ctx, sb.Key, snap) },
+		return func(name string) (types.VMRecord, error) { return m.eng.CloneSnap(ctx, snap, name, sb.Key) },
 			func() { m.dropSnap(ctx, snap) }, nil
 	}
 	dir, err := os.MkdirTemp(m.dataDir, "fork-")
@@ -89,6 +89,6 @@ func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (func() (*t
 		_ = os.RemoveAll(dir)
 		return nil, nil, err
 	}
-	return func() (*types.Sandbox, error) { return m.provision(ctx, sb.Key, exportDir) },
+	return func(name string) (types.VMRecord, error) { return m.eng.Clone(ctx, exportDir, name, sb.Key) },
 		func() { _ = os.RemoveAll(dir) }, nil
 }

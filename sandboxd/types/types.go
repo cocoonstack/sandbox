@@ -1,6 +1,4 @@
-// Package types defines the shared vocabulary of the sandbox control plane:
-// pool keys with their derived backend lane, size tiers, and the sandbox
-// record tracked by a node.
+// Package types defines the shared vocabulary of the sandbox control plane.
 package types
 
 import (
@@ -23,9 +21,6 @@ const (
 	SizeLarge  Size = "large"
 	SizeXLarge Size = "xlarge"
 
-	BackendCH Backend = "ch"
-	BackendFC Backend = "fc"
-
 	RestoreCopy     RestoreMode = "copy"
 	RestoreOnDemand RestoreMode = "ondemand"
 	RestoreMmap     RestoreMode = "mmap"
@@ -45,17 +40,14 @@ var (
 	}
 )
 
-// NetShape selects the sandbox network lane and derives the backend.
+// NetShape selects whether the Cloud Hypervisor guest has a NIC.
 type NetShape string
 
-// Backend names the hypervisor serving a lane.
-type Backend string
-
-// RestoreMode selects cocoon's CH clone memory-restore strategy; empty leaves
+// RestoreMode selects cocoon's clone memory-restore strategy; empty leaves
 // cocoon's eager-copy default.
 type RestoreMode string
 
-// Validate accepts the empty default plus cocoon's known CH restore modes.
+// Validate accepts the empty default plus cocoon's known restore modes.
 func (m RestoreMode) Validate() error {
 	switch m {
 	case "", RestoreCopy, RestoreOnDemand, RestoreMmap:
@@ -89,16 +81,6 @@ type PoolKey struct {
 	Size     Size     `json:"size"`
 }
 
-// Backend derives the hypervisor lane: FC serves the no-network lane (faster
-// restore, minimal device model, and none of FC's clone restrictions apply
-// without a NIC); CH serves the full-featured egress lane.
-func (k PoolKey) Backend() Backend {
-	if k.Net == NetNone {
-		return BackendFC
-	}
-	return BackendCH
-}
-
 // Capturable reports whether state capture (fork, checkpoint, promote) is
 // allowed: the egress lane refuses it — a resumed capture opens an
 // unlocked-NIC window before the tap lock can reapply.
@@ -106,8 +88,8 @@ func (k PoolKey) Capturable() bool {
 	return k.Net != NetEgress
 }
 
-// Defaulted fills the wire defaults: the hardened lane (net none → FC) and
-// the smallest tier — the one home for both the claim and pool-spec paths.
+// Defaulted fills the wire defaults: the hardened no-NIC lane and the smallest
+// tier — the one home for both the claim and pool-spec paths.
 func (k PoolKey) Defaulted() PoolKey {
 	k.Net = cmp.Or(k.Net, NetNone)
 	k.Size = cmp.Or(k.Size, SizeSmall)

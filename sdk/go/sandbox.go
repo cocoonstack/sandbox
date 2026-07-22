@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -110,13 +111,8 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 		go pumpStdin(conn, cmd.Stdin)
 	}
 
-	stdout, stderr := cmd.Stdout, cmd.Stderr
-	if stdout == nil {
-		stdout = io.Discard
-	}
-	if stderr == nil {
-		stderr = io.Discard
-	}
+	stdout := cmp.Or(cmd.Stdout, io.Discard)
+	stderr := cmp.Or(cmd.Stderr, io.Discard)
 	for {
 		resp, err := recv(ctx, conn)
 		if err != nil {

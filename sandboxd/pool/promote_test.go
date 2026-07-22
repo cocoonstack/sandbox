@@ -1,7 +1,6 @@
 package pool
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -161,41 +160,6 @@ func TestResolveGoldenSkipsPromotedEgressTemplate(t *testing.T) {
 	}
 }
 
-func TestReconcileMigratesLegacyTemplates(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng)
-	key := types.PoolKey{Template: "tpl:legacy", Net: testKey.Net, Size: testKey.Size}
-	legacy := filepath.Join(m.goldensDir(), key.Hash())
-	if err := os.MkdirAll(legacy, 0o750); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(legacy, "disk.img"), []byte("golden-bytes"), 0o600); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
-	if err := m.Reconcile(t.Context()); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-
-	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
-		t.Errorf("legacy golden dir survived migration: %v", err)
-	}
-	if !m.HasGolden(t.Context(), key) {
-		t.Fatal("migrated template not resolvable")
-	}
-	dir, release, err := m.resolveGolden(t.Context(), key)
-	if err != nil || dir == "" {
-		t.Fatalf("resolveGolden: %q, %v", dir, err)
-	}
-	defer release()
-	if got, err := os.ReadFile(filepath.Join(dir, "disk.img")); err != nil || string(got) != "golden-bytes" {
-		t.Errorf("migrated export: %q, %v", got, err)
-	}
-	if hashes := m.TemplateHashes(); !slices.Contains(hashes, key.Hash()) {
-		t.Errorf("TemplateHashes %v missing migrated %s", hashes, key.Hash())
-	}
-}
-
 func TestTemplateTenantScopedDelete(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -244,34 +208,6 @@ func TestCommitTemplateRechecksOwnerUnderLock(t *testing.T) {
 	}
 	if err := m.commitTemplate(t.Context(), stage(), id, "beta"); !errors.Is(err, ErrTemplateOwned) {
 		t.Errorf("beta publish over acme: %v, want ErrTemplateOwned", err)
-	}
-}
-
-type failPublishStore struct{ store.Store }
-
-func (failPublishStore) Publish(context.Context, string, string) error {
-	return errors.New("publish boom")
-}
-
-// TestMigrateRollsBackOnPublishFailure: the staged legacy export is the only
-// copy; a failed publish must move it back or the next staging sweep deletes
-// the template outright.
-func TestMigrateRollsBackOnPublishFailure(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng)
-	legacy := filepath.Join(m.goldensDir(), testKey.Hash())
-	if err := os.MkdirAll(legacy, 0o750); err != nil {
-		t.Fatalf("mkdir legacy: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(legacy, "disk.img"), []byte("golden"), 0o600); err != nil {
-		t.Fatalf("write marker: %v", err)
-	}
-	m.tpls = failPublishStore{Store: m.tpls}
-
-	m.migrateLegacyTemplates(t.Context())
-	got, err := os.ReadFile(filepath.Join(legacy, "disk.img"))
-	if err != nil || string(got) != "golden" {
-		t.Fatalf("legacy template lost after failed publish: %q, %v", got, err)
 	}
 }
 

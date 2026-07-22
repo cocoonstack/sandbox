@@ -23,17 +23,17 @@ bare metal, `small` tier:
 | pool miss, golden exists | **~45–75 ms** | clone from the golden snapshot + entropy/machine-id reseed + readiness probe |
 | cold boot (no golden yet) | **~200–350 ms** | full boot from the template image to silkd answering |
 
-Backend cold-boot vs restore asymmetry (bare metal, vsock agent-ready):
+Cloud Hypervisor lifecycle latency (bare metal, vsock agent-ready):
 
-| path | Cloud Hypervisor | Firecracker |
-|---|---|---|
-| cold boot | ~230 ms | ~330 ms |
-| clone from golden (eager) | ~44 ms | ~28 ms |
+| path | latency |
+|---|---|
+| cold boot | ~230 ms |
+| clone from golden (eager) | ~44 ms |
 
-CH wins cold (block I/O), FC wins restore — which is why the no-network
-lane (FC) is also the fastest-restore lane. Eager memory restore beats
-UFFD on-demand for sandbox-sized VMs in every configuration measured
-(the working set is small and mostly touched during readiness).
+Both network lanes use Cloud Hypervisor; `net=none` only removes the NIC.
+Eager memory restore beats UFFD on-demand for sandbox-sized VMs in every
+configuration measured (the working set is small and mostly touched during
+readiness).
 
 Burst degradation under concurrent restores is real, and warm pools exist
 to absorb it — they move provisioning off the request path entirely.
@@ -71,7 +71,7 @@ parallel at sysinit and adds ~1–10 ms cold / ~3–12 ms on restore paths.
 
 > The `vm hibernate` / `vm restore` rows below were measured with cocoon's
 > own tooling on the same hardware; they are not reproducible from this
-> repository alone. The SDK row is smoke-measured in-repo.
+> repository alone.
 
 cocoon's atomic hibernate
 ([cocoonstack/cocoon#87](https://github.com/cocoonstack/cocoon/pull/87))
@@ -82,13 +82,14 @@ nothing lost. Direct capture
 ([cocoonstack/cocoon#109](https://github.com/cocoonstack/cocoon/pull/109))
 fsyncs and renames the snapshot into the store instead of streaming it
 through a tar pass, cutting the CH pause window ~1.5×. Measured bare
-metal, `small` 1 G, cocoon `32bcbc6`, N=5:
+metal (16c/60G), `small` 512 M, cocoon `master-e9502f6`, CH dev `d77dcf12`,
+N=5:
 
 | op | latency | notes |
 |---|---|---|
-| `vm hibernate` | ~345–365 ms CH / ~475–505 ms FC | pause → snapshot → fsync + rename into the store → VMM killed; memory freed, snapshot point and stop coincide |
-| `vm restore` (stopped VM) | ~97–103 ms CH / ~18–20 ms FC | machine identity preserved, tmpfs contents intact, in-guest daemons resume; FC wins restore, consistent with the clone asymmetry |
-| SDK hibernate → wake loop | ~315 ms | `sb.Hibernate()` + transparent wake on the next exec, through the relay (FC none lane); a live shell session survives with its state intact (smoke-measured) |
+| `vm hibernate` | ~170–270 ms | pause → snapshot → persist into the store → VMM killed; memory freed, snapshot point and stop coincide |
+| `vm restore` (stopped VM, eager) | ~55–190 ms (median ~65) | machine identity preserved, tmpfs contents intact, in-guest daemons resume |
+| `vm restore` (stopped VM, `restore_mode: mmap`) | ~40–67 ms (median ~55) | the node's `restore_mode` rides sandboxd wakes too; the wake drops its snapshot right after — safe, restore stages a private copy |
 
 ## Method notes
 

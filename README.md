@@ -8,15 +8,14 @@ snapshot in tens of milliseconds; cold boot is ~200ms on bare metal.
 
 ```
 SDK (Go)                sandboxd (per node)              guest microVM
-sandbox.New() ── HTTP ─► claim: warm pool / golden clone  CH (egress) | FC (none)
+sandbox.New() ── HTTP ─► claim: warm pool / golden clone  Cloud Hypervisor
 sb.Exec/Files/… ─ HTTP upgrade ─► byte relay ── vsock ──► silkd :2048
                         memberlist mesh: warm-count gossip,
                         MOVED-style redirect to the owning node
 ```
 
-Two network lanes, derived from the claim (never user-selected backend):
-`net=none` → Firecracker, no NIC, vsock-only (hardened default);
-`net=egress` → Cloud Hypervisor with a bridge/CNI NIC.
+Cloud Hypervisor serves both network lanes. `net=none` has no NIC and uses
+vsock-only I/O (hardened default); `net=egress` attaches a bridge/CNI NIC.
 
 **Documentation**: [cocoonstack.github.io/sandbox](https://cocoonstack.github.io/sandbox/)
 (deployment, clusters, HTTP API, Go + Python SDK references, the MCP server,
@@ -128,7 +127,7 @@ On a fresh repo run build-boot first — images build `FROM` the boot artifact.
 ## Boot chain
 
 ```
-cloud-hypervisor / firecracker
+cloud-hypervisor
   → vmlinux (PVH ELF, everything =y, no decompress stage)
   → uncompressed ~1.5MB cpio: /init = sandbox-init (static Rust)
   → resolve virtio-blk serials via sysfs (2ms poll, no udev)
@@ -140,7 +139,7 @@ Boot contract (cmdline keys consumed by sandbox-init):
 
 | cmdline key | meaning |
 |---|---|
-| `cocoon.layers=a,b,…` | EROFS layer disks: virtio-blk serials (CH) or `/dev/vdX` (FC), lowerdir order |
+| `cocoon.layers=a,b,…` | EROFS layer disks resolved from virtio-blk serials, lowerdir order |
 | `cocoon.cow=x` | writable ext4 COW disk (same resolution rules) |
 | `cocoon.timeout=10` | per-disk wait budget, seconds |
 | `cocoon.hostname=h` | set via `sethostname(2)` before handoff |

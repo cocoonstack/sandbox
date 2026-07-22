@@ -12,8 +12,7 @@ const MAX_TIMEOUT_SECS: u64 = 86_400;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct BootCfg {
-    /// Layer disk IDs in lowerdir order (first = uppermost lower layer):
-    /// virtio-blk serials on CH, /dev/vdX paths on FC.
+    /// Layer disk serials in lowerdir order (first = uppermost lower layer).
     pub layers: Vec<String>,
     /// Writable ext4 COW disk ID (same resolution rules as layers).
     pub cow: String,
