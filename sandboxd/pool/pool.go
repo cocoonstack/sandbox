@@ -54,9 +54,7 @@ const (
 	forkPrefix      = "sbx-fork-"
 	vmStateRunning  = "running"
 
-	caSidecarSuffix      = ".cafp"
-	runtimeSidecarSuffix = ".runtime"
-	runtimeMarker        = "cloud-hypervisor\n"
+	caSidecarSuffix = ".cafp"
 )
 
 var (

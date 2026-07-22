@@ -32,7 +32,9 @@ func (m *Manager) refillOnce(ctx context.Context) {
 		return
 	}
 	now := time.Now()
+	inFlight := 0
 	for key, p := range m.pools {
+		inFlight += p.refilling
 		// SetPools leaves a removed pool in place while a build/refill is in
 		// flight; sweep it once quiescent.
 		if p.removed {
@@ -46,11 +48,7 @@ func (m *Manager) refillOnce(ctx context.Context) {
 			go m.buildGolden(ctx, p)
 		}
 	}
-	inFlight := 0
-	for _, p := range m.pools {
-		inFlight += p.refilling
-	}
-	limit := 2 * cap(m.refillSem)
+	limit := cap(m.refillSem) + cap(m.probeSem)
 	for spawned := true; spawned && inFlight < limit; {
 		spawned = false
 		for _, p := range m.pools {
@@ -157,10 +155,7 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 	if err := m.exportGolden(ctx, snap, final); err != nil {
 		return err
 	}
-	if err := m.writeGoldenCASidecar(final, caBaked); err != nil {
-		return err
-	}
-	return os.WriteFile(final+runtimeSidecarSuffix, []byte(runtimeMarker), 0o644) //nolint:gosec // public runtime marker
+	return m.writeGoldenCASidecar(final, caBaked)
 }
 
 // writeGoldenCASidecar records (or clears) the baked-CA fingerprint, so a
@@ -182,14 +177,9 @@ func (m *Manager) writeGoldenCASidecar(final string, caBaked bool) error {
 // adoptGolden points p at a golden already on disk from the pool's earlier
 // life, when its baked-CA state still fits; buildGolden covers the rest.
 func (m *Manager) adoptGolden(p *pool) {
-	if g := filepath.Join(m.goldensDir(), p.key.Hash()); dirExists(g) && m.goldenRuntimeMatches(g) && m.goldenCAMatches(g, m.poolEgress[p.key].Intercepts()) {
+	if g := filepath.Join(m.goldensDir(), p.key.Hash()); dirExists(g) && m.goldenCAMatches(g, m.poolEgress[p.key].Intercepts()) {
 		p.goldenDir = g
 	}
-}
-
-func (m *Manager) goldenRuntimeMatches(final string) bool {
-	runtime, err := os.ReadFile(final + runtimeSidecarSuffix) //nolint:gosec // node-local golden marker
-	return err == nil && string(runtime) == runtimeMarker
 }
 
 // goldenCAMatches reports whether a golden's baked-CA state fits the pool: a
@@ -279,7 +269,6 @@ func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden strin
 	})
 }
 
-// provisionVM creates and probes one VM, cleaning up any failure.
 func (m *Manager) provisionVM(ctx context.Context, key types.PoolKey, probeTimeout time.Duration, create func(name string) (types.VMRecord, error)) (*types.Sandbox, error) {
 	sb, err := m.startVM(ctx, key, create)
 	if err != nil {
@@ -321,15 +310,14 @@ func (m *Manager) readyBounded(ctx context.Context, sb *types.Sandbox, deadline 
 	return m.readyVM(probeCtx, sb, deadline)
 }
 
-// cloneBatch creates and probes a fork batch through separate gates.
-func (m *Manager) cloneBatch(ctx context.Context, count int, startOne func() (*types.Sandbox, error)) ([]*types.Sandbox, error) {
+func (m *Manager) cloneBatch(ctx context.Context, count int, key types.PoolKey, create func(string) (types.VMRecord, error)) ([]*types.Sandbox, error) {
 	children := make([]*types.Sandbox, count)
 	errs := make([]error, count)
 	var wg sync.WaitGroup
 	for i := range count {
 		m.refillSem <- struct{}{}
 		wg.Go(func() {
-			child, err := startOne()
+			child, err := m.startVM(ctx, key, create)
 			<-m.refillSem
 			if err == nil {
 				child, err = m.readyBounded(ctx, child, time.Now().Add(claimProbeTimeout))

@@ -16,7 +16,6 @@ func TestDrainRefusesClaimsTrimsWarmAndUncordonRefills(t *testing.T) {
 	if err := os.MkdirAll(goldenDir, 0o750); err != nil {
 		t.Fatalf("setup golden: %v", err)
 	}
-	markGoldenRuntime(t, goldenDir)
 	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 2}}); err != nil {
 		t.Fatalf("SetPools: %v", err)
 	}

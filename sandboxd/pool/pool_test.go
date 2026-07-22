@@ -239,7 +239,6 @@ func TestReconcile(t *testing.T) {
 	if err := os.MkdirAll(goldenDir, 0o750); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	markGoldenRuntime(t, goldenDir)
 
 	if err := m.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -287,7 +286,6 @@ func TestSetPoolsGrowShrinkAndDrain(t *testing.T) {
 	if err := os.MkdirAll(goldenDir, 0o750); err != nil {
 		t.Fatalf("setup golden: %v", err)
 	}
-	markGoldenRuntime(t, goldenDir)
 
 	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 2}}); err != nil {
 		t.Fatalf("SetPools grow: %v", err)
@@ -554,9 +552,6 @@ func TestGoldenBuildPipeline(t *testing.T) {
 	if fi, err := os.Stat(golden); err != nil || !fi.IsDir() {
 		t.Errorf("golden dir not exported: %v", err)
 	}
-	if !m.goldenRuntimeMatches(golden) {
-		t.Error("golden runtime marker missing after build")
-	}
 	builder := vmPrefix + "gb-" + testKey.Hash()
 	if removed := eng.removedNames(); !slices.Contains(removed, builder) {
 		t.Errorf("removes=%v, want builder VM %s destroyed", removed, builder)
@@ -639,13 +634,6 @@ func TestProbeReadyWaitsForVsock(t *testing.T) {
 func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	return newTestManagerAt(t, eng, t.TempDir(), pools...)
-}
-
-func markGoldenRuntime(t *testing.T, golden string) {
-	t.Helper()
-	if err := os.WriteFile(golden+runtimeSidecarSuffix, []byte(runtimeMarker), 0o644); err != nil {
-		t.Fatalf("write golden runtime marker: %v", err)
-	}
 }
 
 // claimAny composes warm-then-provision the way the server does around the

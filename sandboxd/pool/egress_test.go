@@ -390,7 +390,6 @@ func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 	if err := os.MkdirAll(gd, 0o750); err != nil { // on disk so re-add adopts it, sparing an async build
 		t.Fatalf("golden dir: %v", err)
 	}
-	markGoldenRuntime(t, gd)
 	m.mu.Lock()
 	m.pools[egKey].goldenDir = gd
 	m.mu.Unlock()
