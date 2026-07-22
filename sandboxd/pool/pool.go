@@ -4,6 +4,7 @@
 package pool
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -543,11 +544,7 @@ func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe 
 	if cs := cfg.CheckpointStore; cs != nil && cs.Kind == "s3" {
 		return s3.New(ctx, *cs.S3, filepath.Join(cfg.DataDir, staging), idRe)
 	}
-	ckptDir := cfg.CheckpointDir
-	if ckptDir == "" {
-		ckptDir = filepath.Join(cfg.DataDir, "checkpoints")
-	}
-	return dir.New(ckptDir, idRe)
+	return dir.New(cmp.Or(cfg.CheckpointDir, filepath.Join(cfg.DataDir, "checkpoints")), idRe)
 }
 
 func dirExists(path string) bool {

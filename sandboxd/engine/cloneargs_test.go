@@ -47,10 +47,7 @@ func TestLifecycleArgsApplyDirectIOPolicy(t *testing.T) {
 		t.Run(strconv.FormatBool(noDirectIO), func(t *testing.T) {
 			e := New("cocoon", "", "", noDirectIO, "")
 			want := "--no-direct-io=" + strconv.FormatBool(noDirectIO)
-			cold, err := e.runColdArgs("sbx-1", key)
-			if err != nil {
-				t.Fatalf("runColdArgs: %v", err)
-			}
+			cold := e.runColdArgs("sbx-1", key)
 			for _, args := range [][]string{
 				cold,
 				e.cloneArgs("/goldens/g1", "sbx-1", key),

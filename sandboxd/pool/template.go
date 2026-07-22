@@ -7,11 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
-
-	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -283,47 +280,4 @@ func (m *Manager) commitTemplate(ctx context.Context, staging, id, tenant string
 	m.tplSet[id] = struct{}{}
 	m.tplMu.Unlock()
 	return nil
-}
-
-// migrateLegacyTemplates moves pre-store promoted templates
-// (<goldens>/<hash> dirs not backing a pool) into the template store —
-// one-time, at reconcile.
-func (m *Manager) migrateLegacyTemplates(ctx context.Context) {
-	logger := log.WithFunc("pool.migrateLegacyTemplates")
-	entries, err := os.ReadDir(m.goldensDir())
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		hash := e.Name()
-		id := store.TemplateID(hash)
-		if !e.IsDir() || m.pooledHash(hash) || !store.TemplateIDRe.MatchString(id) {
-			continue
-		}
-		staging, err := m.tpls.Stage(id)
-		if err != nil {
-			logger.Errorf(ctx, err, "stage %s", id)
-			continue
-		}
-		legacy := filepath.Join(m.goldensDir(), hash)
-		if err := os.Rename(legacy, filepath.Join(staging, store.ExportDir)); err != nil {
-			logger.Errorf(ctx, err, "move %s", legacy)
-			_ = os.RemoveAll(staging)
-			continue
-		}
-		if err := m.commitTemplate(ctx, staging, id, ""); err != nil {
-			// The staged export is the only copy: put it back, or quarantine
-			// the staging dir out of the sweep's .tmp suffix when even that
-			// rename fails.
-			if rbErr := os.Rename(filepath.Join(staging, store.ExportDir), legacy); rbErr != nil {
-				_ = os.Rename(staging, strings.TrimSuffix(staging, ".tmp")+".stuck")
-				logger.Errorf(ctx, rbErr, "restore %s", legacy)
-			} else {
-				_ = os.RemoveAll(staging)
-			}
-			logger.Errorf(ctx, err, "publish %s", id)
-			continue
-		}
-		logger.Infof(ctx, "migrated legacy template %s", id)
-	}
 }

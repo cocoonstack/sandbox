@@ -2,6 +2,7 @@
 package config
 
 import (
+	"cmp"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -298,31 +299,19 @@ func (c *Config) guardsEgressLane() bool {
 }
 
 func (c *Config) applyDefaults() {
-	if c.Listen == "" {
-		c.Listen = defaultListen
-	}
-	if c.DataDir == "" {
-		c.DataDir = defaultDataDir
-	}
-	if c.CocoonBin == "" {
-		c.CocoonBin = defaultCocoonBin
-	}
-	if c.AdvertiseAddr == "" {
-		c.AdvertiseAddr = c.Listen
-	}
+	c.Listen = cmp.Or(c.Listen, defaultListen)
+	c.DataDir = cmp.Or(c.DataDir, defaultDataDir)
+	c.CocoonBin = cmp.Or(c.CocoonBin, defaultCocoonBin)
+	c.AdvertiseAddr = cmp.Or(c.AdvertiseAddr, c.Listen)
 	if c.PreviewListen != "" && c.PreviewAdvertise == "" {
 		c.PreviewAdvertise = c.PreviewListen
 	}
-	if c.MaxForkCount == 0 {
-		c.MaxForkCount = defaultMaxForkCount
-	}
+	c.MaxForkCount = cmp.Or(c.MaxForkCount, defaultMaxForkCount)
 	if c.RefillConcurrency == 0 {
 		c.RefillConcurrency = min(max(refillFloor, runtime.NumCPU()/16), refillCeiling)
 	}
 	for i := range c.Pools {
-		if c.Pools[i].Warm == 0 {
-			c.Pools[i].Warm = defaultWarm
-		}
+		c.Pools[i].Warm = cmp.Or(c.Pools[i].Warm, defaultWarm)
 	}
 }
 

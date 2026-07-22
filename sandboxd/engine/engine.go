@@ -114,11 +114,7 @@ func (e *Engine) CloneSnap(ctx context.Context, snap, name string, key types.Poo
 // RunCold boots a VM from the template image (golden builds and cache-miss
 // claims), returning its lifecycle record.
 func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey) (types.VMRecord, error) {
-	args, err := e.runColdArgs(name, key)
-	if err != nil {
-		return types.VMRecord{}, err
-	}
-	out, err := e.run(ctx, args...)
+	out, err := e.run(ctx, e.runColdArgs(name, key)...)
 	if err != nil {
 		return types.VMRecord{}, err
 	}
@@ -324,14 +320,11 @@ func (e *Engine) restoreArgs() []string {
 	return []string{"--restore-mode", string(e.restoreMode)}
 }
 
-func (e *Engine) runColdArgs(name string, key types.PoolKey) ([]string, error) {
-	spec, ok := key.Size.Spec()
-	if !ok {
-		return nil, fmt.Errorf("unknown size %q", key.Size)
-	}
+func (e *Engine) runColdArgs(name string, key types.PoolKey) []string {
+	spec, _ := key.Size.Spec()
 	args := []string{"vm", "run", argName, name, argOutput, formatJSON, "--cpu", strconv.Itoa(spec.CPU), "--memory", spec.Memory, e.directIOArg()}
 	args = append(args, e.netArgs(key, true)...)
-	return append(args, key.Template), nil
+	return append(args, key.Template)
 }
 
 func (e *Engine) netArgs(key types.PoolKey, cold bool) []string {

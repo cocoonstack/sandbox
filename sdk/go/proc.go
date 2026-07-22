@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -66,12 +67,8 @@ func (s *Sandbox) drainProc(ctx context.Context, req wire.Request, stdout, stder
 		return 0, false, err
 	}
 	defer done()
-	if stdout == nil {
-		stdout = io.Discard
-	}
-	if stderr == nil {
-		stderr = io.Discard
-	}
+	stdout = cmp.Or(stdout, io.Writer(io.Discard))
+	stderr = cmp.Or(stderr, io.Writer(io.Discard))
 	for {
 		resp, err := recv(ctx, conn)
 		if err != nil {

@@ -1,12 +1,15 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
@@ -71,15 +74,22 @@ func decodeBodyStrict[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 func writePoolErr(w http.ResponseWriter, err error) bool {
 	for _, m := range poolErrHTTP {
 		if errors.Is(err, m.err) {
-			msg := m.msg
-			if msg == "" {
-				msg = err.Error()
-			}
-			writeErr(w, m.code, msg)
+			writeErr(w, m.code, cmp.Or(m.msg, err.Error()))
 			return true
 		}
 	}
 	return false
+}
+
+func writeResult(w http.ResponseWriter, r *http.Request, op, id, failMsg string, err error, ok func()) {
+	switch {
+	case writePoolErr(w, err):
+	case err != nil:
+		log.WithFunc("server.writeResult").Errorf(r.Context(), err, "%s %s", op, id)
+		writeErr(w, http.StatusInternalServerError, failMsg)
+	default:
+		ok()
+	}
 }
 
 // writeRedirect answers with the redirect shape of the claim protocol when
