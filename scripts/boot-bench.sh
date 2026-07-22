@@ -103,7 +103,7 @@ run_once() {
   done
   local layers_csv
   layers_csv=$(IFS=,; echo "${ids[*]}")
-  local cmdline="console=ttyS0 loglevel=3 reboot=k clocksource=kvm-clock rw cocoon.layers=$layers_csv cocoon.cow=cow $EXTRA_CMDLINE"
+  local cmdline="console=hvc0 loglevel=3 clocksource=kvm-clock rw cocoon.layers=$layers_csv cocoon.cow=cow $EXTRA_CMDLINE"
 
   local vsock_args=()
   [ -n "$AGENT_PORT" ] && vsock_args=(--vsock "cid=$VSOCK_CID,socket=$vsock")
@@ -113,13 +113,13 @@ run_once() {
   "$CH_BIN" --cpus "boot=$CPUS" --memory "size=$MEM" \
     --kernel "$KERNEL" --initramfs "$INITRD" --cmdline "$cmdline" \
     "${disk_args[@]}" --disk "path=$cow,image_type=raw,serial=cow" \
-    --serial "file=$log" --console off "${vsock_args[@]}" >"$work/ch.log" 2>&1 &
+    --serial off --console "file=$log" "${vsock_args[@]}" >"$work/ch.log" 2>&1 &
   ch=$!
 
   local deadline line k_init k_handoff
   deadline=$(($(date +%s) + 30))
   # Patterns include the terminated uptime number: CH writes the emulated
-  # UART byte-wise, so a bare-prefix match could grab a half-flushed line.
+  # console byte-wise, so a bare-prefix match could grab a half-flushed line.
   line=$(wait_line "$log" 'sandbox-init: start at [0-9.]+s' "$deadline") \
     || { keep=1; echo "run $n: sandbox-init start marker never appeared (logs kept in $work)"; return 1; }
   k_init=$(echo "$line" | grep -oE 'at [0-9.]+s' | grep -oE '[0-9.]+')

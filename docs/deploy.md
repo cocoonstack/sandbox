@@ -7,10 +7,8 @@ the cocoon CLI and needs a template image with silkd baked in.
 
 - Linux with KVM (`/dev/kvm`)
 - [cocoon](https://github.com/cocoonstack/cocoon) **v0.5.2 or newer** installed
-  and working (`cocoon vm run` boots a VM), with Cloud Hypervisor and/or
-  Firecracker. Older cocoon fails or degrades — **v0.5.0 silently breaks the
-  Firecracker clone-from-snapshot path** (warm-pool refill and fork), fixed in
-  v0.5.1, and v0.5.2 adds the parallel-clone and snapshot/store perf work the
+  and working (`cocoon vm run` boots a Cloud Hypervisor VM). v0.5.2 adds the
+  parallel-clone and snapshot/store performance work the
   [performance](performance.md) numbers assume. sandboxd logs a warning at
   startup when the detected cocoon is below v0.5.2 (a dev/`master-<sha>` build
   is assumed current)
@@ -28,6 +26,12 @@ artifact and the `base`/`rt`/`python` images are multi-arch manifests
 `make sandboxd` (produces `dist/sandboxd`); either way `sandboxd -version`
 reports what you are running.
 
+## Upgrading
+
+This CH-only release does not convert existing VM or snapshot state. Drain old
+claims and use fresh `data_dir` and `checkpoint_dir` locations when upgrading;
+older checkpoints and promoted templates must not be reused.
+
 ## Configuration
 
 sandboxd reads one JSON file (`-config`, default
@@ -38,6 +42,8 @@ sandboxd reads one JSON file (`-config`, default
   "listen": ":7777",
   "data_dir": "/var/lib/sandboxd",
   "cocoon_bin": "cocoon",
+  "restore_mode": "mmap",
+  "no_direct_io": true,
   "advertise_addr": "10.0.0.5:7777",
   "bridge": "br0",
   "api_token": "…",
@@ -59,6 +65,8 @@ sandboxd reads one JSON file (`-config`, default
 | `listen` | `:7777` | control- and data-plane HTTP listener |
 | `data_dir` | `/var/lib/sandboxd` | golden snapshot exports, the claims journal, the usage/audit journals (`usage.jsonl`, `audit.jsonl` + `.1` backups), and `checkpoints/` by default |
 | `cocoon_bin` | `cocoon` | cocoon CLI binary |
+| `restore_mode` | unset | clone and wake-restore memory mode: `copy`, `ondemand`, or `mmap`; use `mmap` for dense pools |
+| `no_direct_io` | false | use buffered writable disks for Cloud Hypervisor cold boots and clones; recommended for dense ephemeral pools to avoid direct-I/O CoW journal contention |
 | `advertise_addr` | = `listen` | the host:port clients reach this node at; returned as a claim's owner address and gossiped to peers. Must be routable when `listen` is a wildcard |
 | `bridge` / `network` | unset | egress-lane attachment: a host bridge device, or a CNI conflist name. Mutually exclusive; with neither set the node serves only the no-network lane. [Guarded egress](egress.md) needs the bridge form and rejects a CNI network at load |
 | `egress_ca` | unset | [HTTPS-interception](egress.md#https-interception) PKI: `root_cert` (the cluster root baked into intercepted guests; may bundle old+new roots during rotation) plus this node's `intermediate_cert`/`intermediate_key` from `sandboxd ca issue-intermediate`. Required when any pool rule sets `intercept` |
@@ -104,6 +112,8 @@ here validates on load:
   "data_dir": "/var/lib/sandboxd",
   "advertise_addr": "10.0.0.5:7777",
   "bridge": "br0",
+  "restore_mode": "mmap",
+  "no_direct_io": true,
 
   "api_token": "op-root-token",
   "tenants": [
@@ -159,6 +169,17 @@ Secret values come from the environment named by `value_env` (here
 `sandboxd ca` — see [Guarded egress](egress.md#https-interception). On a
 cluster, `api_token`, `tenants`, `preview_secret`, and `cluster_key` must
 match on every node.
+
+### High-density no-network pools
+
+Both lanes use Cloud Hypervisor; `net: "none"` launches it with no NIC. For
+dense ephemeral pools, set `restore_mode` to `mmap`, enable `no_direct_io`,
+place Cocoon's `run_dir` on a capacity-sized tmpfs, and set Cocoon's
+`cni_conf_dir` empty on none-only nodes to avoid per-VM network namespaces.
+The last setting also removes the VMM's network-namespace quarantine. On a
+384-core host, start with `refill_concurrency: 64`; higher values need
+measurement. Pause `cocoon daemon` or lengthen its reconcile interval during a
+mass fill.
 
 ### Auth model
 

@@ -6,7 +6,7 @@ lives host-side and enters no guest memory, so prompt injection can exfiltrate
 at most the proxy's answers, and every credentialed call lands in the audit and
 usage journals keyed by sandbox and tenant. Default-deny.
 
-The same host proxy also serves the **none lane** (a NIC-less Firecracker
+The same host proxy also serves the **none lane** (a NIC-less Cloud Hypervisor
 guest) over vsock, so a network-less sandbox can call approved APIs with
 injected credentials — no NIC required in the guest.
 

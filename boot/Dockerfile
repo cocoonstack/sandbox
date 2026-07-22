@@ -42,20 +42,20 @@ COPY kernel/sandbox-arm64.config /tmp/sandbox-arm64.config
 # merge_config only warns and olddefconfig silently drops renamed or
 # dependency-orphaned symbols — assert the boot- and container-critical set
 # so a kernel bump cannot lose one with a green build. Boot entry and console
-# are per-arch: amd64 = PVH + 8250, arm64 = direct Image boot + PL011.
+# are per-arch: amd64 = PVH, arm64 = direct Image boot + PL031 RTC.
 RUN set -e; \
     case "$TARGETARCH" in \
       amd64) make x86_64_defconfig kvm_guest.config; \
              ./scripts/kconfig/merge_config.sh -m .config /tmp/sandbox.config; \
-             arch_asserts="PVH SERIAL_8250_CONSOLE" ;; \
+             arch_asserts="PVH VIRTIO_CONSOLE" ;; \
       arm64) make defconfig; \
              ./scripts/kconfig/merge_config.sh -m .config /tmp/sandbox.config /tmp/sandbox-arm64.config; \
-             arch_asserts="SERIAL_AMBA_PL011_CONSOLE RTC_DRV_PL031" ;; \
+             arch_asserts="RTC_DRV_PL031" ;; \
       *) echo "unsupported TARGETARCH: $TARGETARCH"; exit 1 ;; \
     esac; \
     make olddefconfig; \
     for s in $arch_asserts DEVTMPFS BLK_DEV_INITRD \
-             VIRTIO_PCI VIRTIO_MMIO_CMDLINE_DEVICES VIRTIO_BLK VIRTIO_NET \
+             VIRTIO_PCI VIRTIO_BLK VIRTIO_NET \
              VIRTIO_CONSOLE VIRTIO_VSOCKETS \
              EROFS_FS EROFS_FS_ZIP OVERLAY_FS EXT4_FS \
              NAMESPACES USER_NS SECCOMP_FILTER \
@@ -67,8 +67,7 @@ RUN set -e; \
     if grep -q "^CONFIG_MODULES=y" .config; then \
         echo "CONFIG_MODULES must be off"; exit 1; \
     fi
-# amd64 ships the uncompressed ELF vmlinux (no bzImage); arm64 ships the flat
-# Image — both direct-boot in CH and FC on their arch.
+# amd64 ships the uncompressed ELF vmlinux; arm64 ships the flat Image.
 RUN set -e; \
     if [ "$TARGETARCH" = amd64 ]; then \
         make -j"$(nproc)" vmlinux && cp vmlinux /linux/boot-kernel; \
@@ -117,7 +116,7 @@ EOF
 
 # Names keep cocoon's scanBootFiles discovery working: base name prefixes
 # "vmlinuz" / "initrd.img" under /boot. The "vmlinuz" is an ELF vmlinux on
-# amd64 and a flat Image on arm64 — CH and FC content-detect both.
+# amd64 and a flat Image on arm64.
 FROM scratch
 COPY --from=kbuild /linux/boot-kernel /boot/vmlinuz-sandbox
 COPY --from=pack /pack/initrd.img-sandbox /boot/initrd.img-sandbox

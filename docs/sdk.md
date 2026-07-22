@@ -137,7 +137,7 @@ defer sb.Close()
 
 | option | values | default | meaning |
 |---|---|---|---|
-| `WithNetwork(n)` | `NetNone`, `NetEgress` | `NetNone` | `NetNone`: no NIC at all, vsock-only I/O (hardened lane, Firecracker). `NetEgress`: bridge/CNI NIC (Cloud Hypervisor) |
+| `WithNetwork(n)` | `NetNone`, `NetEgress` | `NetNone` | Cloud Hypervisor network shape: `NetNone` disables the NIC and uses vsock-only I/O; `NetEgress` attaches a bridge/CNI NIC |
 | `WithSize(s)` | `Small`, `Medium`, `Large`, `XLarge` | `Small` | resource tier: 1cpu/512M, 2cpu/1G, 4cpu/4G, 4cpu/8G |
 | `WithTimeout(d)` | duration | server default 5m | sandbox TTL, rounded up to seconds, server-capped at 24h. The node reaps the sandbox after the TTL even if the client vanishes |
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -103,11 +104,7 @@ func toolCreateSandbox(ctx context.Context, s *server, raw json.RawMessage) (str
 	if args.TTLSeconds > 0 {
 		opts = append(opts, sandbox.WithTimeout(time.Duration(args.TTLSeconds)*time.Second))
 	}
-	template := args.Template
-	if template == "" {
-		template = s.template
-	}
-	sb, err := s.client.New(ctx, template, opts...)
+	sb, err := s.client.New(ctx, cmp.Or(args.Template, s.template), opts...)
 	if err != nil {
 		return "", err
 	}

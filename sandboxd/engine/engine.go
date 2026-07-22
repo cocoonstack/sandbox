@@ -28,10 +28,12 @@ import (
 )
 
 const (
-	// RequiredCocoon is the minimum supported cocoon release: v0.5.0 breaks FC
-	// clone-from-snapshot; v0.5.2 carries the perf work the latency numbers assume.
+	// RequiredCocoon carries the snapshot/store performance baseline.
 	RequiredCocoon = "v0.5.2"
 
+	argName       = "--name"
+	argOutput     = "--output"
+	formatJSON    = "json"
 	silkdPort     = 2048 // silkd's fixed guest vsock port, the claim-ready anchor
 	egressPort    = 2049 // guest→host egress port; VMM maps it to <vsock_socket>_2049
 	cmdTimeout    = 2 * time.Minute
@@ -50,13 +52,13 @@ type Engine struct {
 	bin         string
 	bridge      string
 	network     string
+	noDirectIO  bool
 	restoreMode types.RestoreMode
 }
 
-// New returns an Engine invoking bin; bridge or network picks the
-// egress-lane attachment, restoreMode the CH clone memory-restore mode.
-func New(bin, bridge, network string, restoreMode types.RestoreMode) *Engine {
-	return &Engine{bin: bin, bridge: bridge, network: network, restoreMode: restoreMode}
+// New returns a cocoon engine with node-wide network and disk policy.
+func New(bin, bridge, network string, noDirectIO bool, restoreMode types.RestoreMode) *Engine {
+	return &Engine{bin: bin, bridge: bridge, network: network, noDirectIO: noDirectIO, restoreMode: restoreMode}
 }
 
 // Version reports cocoon's version string — a "vX.Y.Z" release or a
@@ -85,16 +87,12 @@ func (e *Engine) VersionWarning(ctx context.Context) (version, warning string) {
 		return "", fmt.Sprintf("cannot determine cocoon version (need >= %s): %v", RequiredCocoon, err)
 	}
 	if below, comparable := belowFloor(v); comparable && below {
-		return v, fmt.Sprintf("cocoon %s is below the required %s: v0.5.0 breaks FC clone/fork — upgrade cocoon", v, RequiredCocoon)
+		return v, fmt.Sprintf("cocoon %s is below the required %s — upgrade cocoon", v, RequiredCocoon)
 	}
 	return v, ""
 }
 
-// Clone restores a VM from an exported golden directory, returning its
-// lifecycle record (vsock UDS, NIC tap). The no-network lane passes no net
-// flags at all — the golden has no NIC to retarget, the only clone shape FC
-// supports; the egress lane re-attaches to the node's bridge or CNI network.
-// cocoon signals the in-guest reseed itself after resume.
+// Clone restores a VM from an exported golden directory.
 func (e *Engine) Clone(ctx context.Context, fromDir, name string, key types.PoolKey) (types.VMRecord, error) {
 	out, err := e.run(ctx, e.cloneArgs(fromDir, name, key)...)
 	if err != nil {
@@ -116,19 +114,14 @@ func (e *Engine) CloneSnap(ctx context.Context, snap, name string, key types.Poo
 // RunCold boots a VM from the template image (golden builds and cache-miss
 // claims), returning its lifecycle record.
 func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey) (types.VMRecord, error) {
-	args, err := e.runColdArgs(name, key)
-	if err != nil {
-		return types.VMRecord{}, err
-	}
-	out, err := e.run(ctx, args...)
+	out, err := e.run(ctx, e.runColdArgs(name, key)...)
 	if err != nil {
 		return types.VMRecord{}, err
 	}
 	return parseRecord(ctx, out), nil
 }
 
-// Remove force-deletes a VM; `rm --force` skips the graceful stop window
-// (FC guests without i8042 never answer it), so one call is authoritative.
+// Remove force-deletes a VM.
 func (e *Engine) Remove(ctx context.Context, name string) error {
 	_, err := e.run(ctx, "vm", "rm", "--force", name)
 	return err
@@ -136,21 +129,21 @@ func (e *Engine) Remove(ctx context.Context, name string) error {
 
 // SnapshotSave snapshots a running VM under snapName.
 func (e *Engine) SnapshotSave(ctx context.Context, vmName, snapName string) error {
-	_, err := e.run(ctx, "snapshot", "save", "--name", snapName, vmName)
+	_, err := e.run(ctx, "snapshot", "save", argName, snapName, vmName)
 	return err
 }
 
 // Hibernate atomically snapshots a running VM under snapName and stops it,
 // freeing its memory; Restore with the snapshot resumes it.
 func (e *Engine) Hibernate(ctx context.Context, vmName, snapName string) error {
-	_, err := e.run(ctx, "vm", "hibernate", "--name", snapName, vmName)
+	_, err := e.run(ctx, "vm", "hibernate", argName, snapName, vmName)
 	return err
 }
 
 // Restore resumes a VM from a snapshot with its memory state and identity
 // intact (cocoon reseeds entropy only on restore), returning its vsock UDS.
 func (e *Engine) Restore(ctx context.Context, vmName, snapRef string) (string, error) {
-	out, err := e.run(ctx, "vm", "restore", "--output", "json", vmName, snapRef)
+	out, err := e.run(ctx, e.restoreCmdArgs(vmName, snapRef)...)
 	if err != nil {
 		return "", err
 	}
@@ -172,7 +165,7 @@ func (e *Engine) SnapshotRemove(ctx context.Context, snapName string) error {
 
 // SnapshotList returns the names of all snapshots in cocoon's local DB.
 func (e *Engine) SnapshotList(ctx context.Context) ([]string, error) {
-	out, err := e.run(ctx, "snapshot", "list", "--format", "json")
+	out, err := e.run(ctx, "snapshot", "list", "--format", formatJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +191,7 @@ func (e *Engine) SnapshotList(ctx context.Context) ([]string, error) {
 
 // List returns cocoon's view of local VMs, optionally filtered by name.
 func (e *Engine) List(ctx context.Context, filters ...string) ([]types.VMRecord, error) {
-	args := append([]string{"vm", "list", "--format", "json"}, filters...)
+	args := append([]string{"vm", "list", "--format", formatJSON}, filters...)
 	out, err := e.run(ctx, args...)
 	if err != nil {
 		return nil, err
@@ -300,36 +293,38 @@ func (e *Engine) cloneArgs(fromDir, name string, key types.PoolKey) []string {
 	// --pull: a checkpoint/template export carries only COW + memory; on a
 	// cross-node claim the base image blobs resolve locally or are pulled
 	// by digest.
-	args := []string{"vm", "clone", "--from-dir", fromDir, "--name", name, "--pull", "--output", "json"}
-	args = append(args, e.restoreArgs(key)...)
+	args := []string{"vm", "clone", "--from-dir", fromDir, argName, name, "--pull", argOutput, formatJSON, e.directIOArg()}
+	args = append(args, e.restoreArgs()...)
 	return append(args, e.netArgs(key, false)...)
 }
 
 func (e *Engine) cloneSnapArgs(snap, name string, key types.PoolKey) []string {
-	args := []string{"vm", "clone", snap, "--name", name, "--pull", "--output", "json"}
-	args = append(args, e.restoreArgs(key)...)
+	args := []string{"vm", "clone", snap, argName, name, "--pull", argOutput, formatJSON, e.directIOArg()}
+	args = append(args, e.restoreArgs()...)
 	return append(args, e.netArgs(key, false)...)
 }
 
-func (e *Engine) restoreArgs(key types.PoolKey) []string {
-	// cocoon's --restore-mode is CH-only; the FC File backend already maps lazily.
-	if e.restoreMode == "" || key.Backend() == types.BackendFC {
+func (e *Engine) restoreCmdArgs(vmName, snapRef string) []string {
+	args := append([]string{"vm", "restore", argOutput, formatJSON}, e.restoreArgs()...)
+	return append(args, vmName, snapRef)
+}
+
+func (e *Engine) directIOArg() string {
+	return "--no-direct-io=" + strconv.FormatBool(e.noDirectIO)
+}
+
+func (e *Engine) restoreArgs() []string {
+	if e.restoreMode == "" {
 		return nil
 	}
 	return []string{"--restore-mode", string(e.restoreMode)}
 }
 
-func (e *Engine) runColdArgs(name string, key types.PoolKey) ([]string, error) {
-	spec, ok := key.Size.Spec()
-	if !ok {
-		return nil, fmt.Errorf("unknown size %q", key.Size)
-	}
-	args := []string{"vm", "run", "--name", name, "--output", "json", "--cpu", strconv.Itoa(spec.CPU), "--memory", spec.Memory}
-	if key.Backend() == types.BackendFC {
-		args = append(args, "--fc")
-	}
+func (e *Engine) runColdArgs(name string, key types.PoolKey) []string {
+	spec, _ := key.Size.Spec()
+	args := []string{"vm", "run", argName, name, argOutput, formatJSON, "--cpu", strconv.Itoa(spec.CPU), "--memory", spec.Memory, e.directIOArg()}
 	args = append(args, e.netArgs(key, true)...)
-	return append(args, key.Template), nil
+	return append(args, key.Template)
 }
 
 func (e *Engine) netArgs(key types.PoolKey, cold bool) []string {

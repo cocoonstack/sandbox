@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"cmp"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -162,9 +163,7 @@ func parseRootBundle(pemBytes []byte) (*x509.Certificate, error) {
 		if !cert.IsCA {
 			return nil, fmt.Errorf("root bundle: %q is not a certificate authority", cert.Subject.CommonName)
 		}
-		if anchor == nil {
-			anchor = cert
-		}
+		anchor = cmp.Or(anchor, cert)
 	}
 	if anchor == nil {
 		return nil, fmt.Errorf("root cert: no pem block")
