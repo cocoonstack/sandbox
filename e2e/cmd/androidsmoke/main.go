@@ -1,4 +1,4 @@
-// androidsmoke is the android-flavor acceptance: claim (egress/xlarge) → Android
+// androidsmoke is the android-flavor acceptance: claim (none/xlarge) → Android
 // init tree over the relay → adb CNXN handshake on the adb port →
 // checkpoint/branch of the booted guest. No session step: the guest
 // ships no bash.
@@ -51,7 +51,7 @@ func run(addr, token, template string) error {
 
 	start := time.Now()
 	sb, err := client.New(ctx, template,
-		sandbox.WithNetwork(sandbox.NetEgress), sandbox.WithSize(sandbox.XLarge),
+		sandbox.WithNetwork(sandbox.NetNone), sandbox.WithSize(sandbox.XLarge),
 		sandbox.WithTimeout(30*time.Minute))
 	if err != nil {
 		return fmt.Errorf("claim: %w", err)

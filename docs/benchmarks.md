@@ -4,7 +4,7 @@ Every number this project publishes is reproducible with one command on
 your own hardware. This page defines exactly what each number measures —
 because in this market most published "cold start" figures do not measure
 a cold start — and hosts the dated results log. The analysis behind the
-numbers (backend asymmetry, boot anatomy, hibernate costs) lives in
+numbers (Cloud Hypervisor lifecycle, boot anatomy, hibernate costs) lives in
 [Performance](performance.md).
 
 ## The three claim tiers
@@ -27,6 +27,10 @@ The harness also reports **warm refill recovery**: after fully draining the
 warm pool it times the refill loop rebuilding to target — the number bounded
 by refill admission (`refill_concurrency`, see
 [Deployment](deploy.md)) rather than by a single restore.
+
+Cloud Hypervisor serves both lanes. Use `net=none` for no-NIC measurements,
+and record `no_direct_io` with results because it changes disk and fill
+behavior.
 
 When comparing against other systems, match tiers — not headlines:
 
@@ -235,4 +239,3 @@ answers long before a console login prompt would appear.
 |---|---|
 | exec RTT (dial per RPC) | n=200 p50=1.43ms p90=5.49ms p99=8.27ms |
 | fs_pull throughput (128 MiB) | 95.7 MiB/s best of 3 |
-

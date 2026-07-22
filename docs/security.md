@@ -86,7 +86,7 @@ surfaces answer tenants 403.
 Facts to plan around, stated so the boundary is honest:
 
 - **The VMM processes are not additionally sandboxed.** cloud-hypervisor
-  and firecracker run as ordinary host processes under cocoon; a VMM
+  runs as an ordinary host process under cocoon; a VMM
   escape lands on the host with the VMM's privileges (upstream:
   cocoonstack/cocoon#83). Compensate with dedicated sandbox nodes and a
   minimal host.

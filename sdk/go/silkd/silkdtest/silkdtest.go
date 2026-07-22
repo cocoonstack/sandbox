@@ -1,5 +1,5 @@
 // Package silkdtest fakes a silkd daemon for host-side tests: deterministic
-// frame semantics over any listener, plus the CH/FC hybrid-vsock muxer
+// frame semantics over any listener, plus the hybrid-vsock muxer
 // handshake for tests that dial a UDS the way sandboxd does.
 package silkdtest
 

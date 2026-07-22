@@ -77,7 +77,11 @@ func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (func() (*t
 		if err := m.eng.SnapshotSave(ctx, sb.VMName, snap); err != nil {
 			return nil, nil, err
 		}
-		return func() (*types.Sandbox, error) { return m.provisionSnap(ctx, sb.Key, snap) },
+		return func() (*types.Sandbox, error) {
+				return m.startVM(ctx, sb.Key, func(name string) (types.VMRecord, error) {
+					return m.eng.CloneSnap(ctx, snap, name, sb.Key)
+				})
+			},
 			func() { m.dropSnap(ctx, snap) }, nil
 	}
 	dir, err := os.MkdirTemp(m.dataDir, "fork-")
@@ -89,6 +93,10 @@ func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (func() (*t
 		_ = os.RemoveAll(dir)
 		return nil, nil, err
 	}
-	return func() (*types.Sandbox, error) { return m.provision(ctx, sb.Key, exportDir) },
+	return func() (*types.Sandbox, error) {
+			return m.startVM(ctx, sb.Key, func(name string) (types.VMRecord, error) {
+				return m.eng.Clone(ctx, exportDir, name, sb.Key)
+			})
+		},
 		func() { _ = os.RemoveAll(dir) }, nil
 }

@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -67,8 +68,16 @@ func TestClaimMissClonesFromGolden(t *testing.T) {
 	if len(eng.clones) != 1 || len(eng.colds) != 0 {
 		t.Fatalf("got clones=%v colds=%v, want one clone", eng.clones, eng.colds)
 	}
-	if !strings.HasPrefix(sb.VMName, vmPrefix+testKey.Hash()) {
-		t.Errorf("vm name %q missing pool prefix", sb.VMName)
+	prefix := vmPrefix + testKey.Hash() + "-"
+	if !strings.HasPrefix(sb.VMName, prefix) {
+		t.Fatalf("vm name %q missing pool prefix", sb.VMName)
+	}
+	suffix := strings.TrimPrefix(sb.VMName, prefix)
+	if len(suffix) != 12 {
+		t.Errorf("vm name suffix %q has %d chars, want 12", suffix, len(suffix))
+	}
+	if _, err := hex.DecodeString(suffix); err != nil {
+		t.Errorf("vm name suffix %q is not hex: %v", suffix, err)
 	}
 	if want := "/vsock/" + sb.VMName; sb.VsockSocket != want {
 		t.Errorf("vsock %q, want %q", sb.VsockSocket, want)
@@ -230,6 +239,7 @@ func TestReconcile(t *testing.T) {
 	if err := os.MkdirAll(goldenDir, 0o750); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
+	markGoldenRuntime(t, goldenDir)
 
 	if err := m.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -277,6 +287,7 @@ func TestSetPoolsGrowShrinkAndDrain(t *testing.T) {
 	if err := os.MkdirAll(goldenDir, 0o750); err != nil {
 		t.Fatalf("setup golden: %v", err)
 	}
+	markGoldenRuntime(t, goldenDir)
 
 	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 2}}); err != nil {
 		t.Fatalf("SetPools grow: %v", err)
@@ -318,6 +329,7 @@ func TestRefillServicesEveryPoolUnderTightBudget(t *testing.T) {
 		config.PoolSpec{PoolKey: testKey, Warm: 3},
 		config.PoolSpec{PoolKey: key2, Warm: 3})
 	m.refillSem = make(chan struct{}, 1)
+	m.probeSem = make(chan struct{}, 1)
 	m.mu.Lock()
 	m.pools[testKey].goldenDir = "/goldens/a"
 	m.pools[key2].goldenDir = "/goldens/b"
@@ -398,26 +410,103 @@ func TestSetPoolsRejectsEgress(t *testing.T) {
 func TestRefillRespectsSemaphore(t *testing.T) {
 	eng := newFakeEngine()
 	eng.probeStall = make(chan struct{})
-	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 6})
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 7})
+	m.refillSem = make(chan struct{}, 2)
+	m.probeSem = make(chan struct{}, 2)
 	m.pools[testKey].goldenDir = "/goldens/x"
 
 	m.refillOnce(t.Context())
-	waitFor(t, func() bool { return eng.cloneCount() == defaultRefill })
+	waitFor(t, func() bool { return eng.cloneCount() == 4 && eng.probeCount() == 2 })
 	time.Sleep(50 * time.Millisecond)
-	if n := eng.cloneCount(); n != defaultRefill {
-		t.Errorf("clones=%d while stalled, want %d", n, defaultRefill)
+	if clones, probes := eng.cloneCount(), eng.probeCount(); clones != 4 || probes != 2 {
+		t.Errorf("stalled pipeline clones=%d probes=%d, want 4/2", clones, probes)
+	}
+	infos, _ := m.Info()
+	if infos[0].Warm != 0 || infos[0].Refilling != 4 {
+		t.Errorf("stalled pipeline info=%+v, want warm=0 refilling=4", infos[0])
 	}
 
 	close(eng.probeStall)
 	waitFor(t, func() bool {
 		infos, _ := m.Info()
-		return infos[0].Warm+infos[0].Refilling >= defaultRefill && infos[0].Refilling == 0
+		return infos[0].Warm == 7 && infos[0].Refilling == 0
 	})
+}
+
+func TestRefillCloneStageIsBounded(t *testing.T) {
+	eng := newFakeEngine()
+	eng.cloneStall = make(chan struct{})
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 5})
+	m.refillSem = make(chan struct{}, 2)
+	m.probeSem = make(chan struct{}, 2)
+	m.pools[testKey].goldenDir = "/goldens/x"
+
+	m.refillOnce(t.Context())
+	waitFor(t, func() bool { return eng.cloneCount() == 2 })
+	time.Sleep(50 * time.Millisecond)
+	if got := eng.cloneCount(); got != 2 {
+		t.Errorf("clones=%d while clone stage stalled, want 2", got)
+	}
+	close(eng.cloneStall)
+	waitFor(t, func() bool {
+		infos, _ := m.Info()
+		return infos[0].Warm == 5 && infos[0].Refilling == 0
+	})
+}
+
+func TestRefillProbeFailureCleansUp(t *testing.T) {
+	eng := newFakeEngine()
+	eng.probeErr = errors.New("never ready")
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	m.pools[testKey].goldenDir = "/goldens/x"
+
 	m.refillOnce(t.Context())
 	waitFor(t, func() bool {
 		infos, _ := m.Info()
-		return infos[0].Warm == 6
+		return infos[0].Warm == 0 && infos[0].Refilling == 0 && len(eng.removedNames()) == 1
 	})
+	eng.mu.Lock()
+	eng.probeErr = nil
+	eng.mu.Unlock()
+	m.refillOnce(t.Context())
+	waitFor(t, func() bool {
+		infos, _ := m.Info()
+		return infos[0].Warm == 1 && infos[0].Refilling == 0
+	})
+}
+
+func TestRefillCanceledWhileWaitingForProbeCleansUp(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	m.refillSem = make(chan struct{}, 1)
+	m.probeSem = make(chan struct{}, 1)
+	m.probeSem <- struct{}{}
+	m.pools[testKey].goldenDir = "/goldens/x"
+	ctx, cancel := context.WithCancel(t.Context())
+
+	m.refillOnce(ctx)
+	waitFor(t, func() bool { return eng.cloneCount() == 1 && len(m.refillSem) == 0 })
+	cancel()
+	waitFor(t, func() bool {
+		infos, _ := m.Info()
+		return infos[0].Refilling == 0 && len(eng.removedNames()) == 1
+	})
+	<-m.probeSem
+}
+
+func TestDirectClaimSkipsProbeGate(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	for range cap(m.probeSem) {
+		m.probeSem <- struct{}{}
+	}
+	defer func() {
+		for range cap(m.probeSem) {
+			<-m.probeSem
+		}
+	}()
+	if _, err := claimAny(t.Context(), m, testKey, 0); err != nil {
+		t.Fatalf("direct claim waited on probe gate: %v", err)
+	}
 }
 
 func TestRefillBudgetFollowsConfig(t *testing.T) {
@@ -427,6 +516,9 @@ func TestRefillBudgetFollowsConfig(t *testing.T) {
 	}
 	if got := cap(m.refillSem); got != 2 {
 		t.Errorf("budget %d, want the configured 2", got)
+	}
+	if got := cap(m.probeSem); got != 2 {
+		t.Errorf("probe budget %d, want the configured 2", got)
 	}
 }
 
@@ -461,6 +553,9 @@ func TestGoldenBuildPipeline(t *testing.T) {
 	m.mu.Unlock()
 	if fi, err := os.Stat(golden); err != nil || !fi.IsDir() {
 		t.Errorf("golden dir not exported: %v", err)
+	}
+	if !m.goldenRuntimeMatches(golden) {
+		t.Error("golden runtime marker missing after build")
 	}
 	builder := vmPrefix + "gb-" + testKey.Hash()
 	if removed := eng.removedNames(); !slices.Contains(removed, builder) {
@@ -546,6 +641,13 @@ func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Ma
 	return newTestManagerAt(t, eng, t.TempDir(), pools...)
 }
 
+func markGoldenRuntime(t *testing.T, golden string) {
+	t.Helper()
+	if err := os.WriteFile(golden+runtimeSidecarSuffix, []byte(runtimeMarker), 0o644); err != nil {
+		t.Fatalf("write golden runtime marker: %v", err)
+	}
+}
+
 // claimAny composes warm-then-provision the way the server does around the
 // redirect decision; production has no single-call form.
 func claimAny(ctx context.Context, m *Manager, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
@@ -621,6 +723,7 @@ type fakeEngine struct {
 	tap                                                                                string // non-empty: lifecycle records carry this NIC tap
 	listCount                                                                          int
 
+	cloneStall      chan struct{} // non-nil: Clone blocks until closed
 	probeStall      chan struct{} // non-nil: Probe blocks until closed
 	hibernateStall  chan struct{} // non-nil: Hibernate blocks until closed
 	removeStall     chan struct{} // non-nil: Remove blocks until closed
@@ -634,31 +737,31 @@ func newFakeEngine() *fakeEngine {
 }
 
 func (f *fakeEngine) Clone(_ context.Context, fromDir, name string, _ types.PoolKey) (types.VMRecord, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.clones = append(f.clones, name)
-	f.cloneFroms = append(f.cloneFroms, fromDir)
-	if f.cloneErr != nil {
-		return types.VMRecord{}, f.cloneErr
-	}
-	if f.cloneFailNth > 0 && len(f.clones) == f.cloneFailNth {
-		return types.VMRecord{}, errors.New("clone failed")
-	}
-	f.vms[name] = "/vsock/" + name
-	return f.record(name), nil
+	return f.clone(fromDir, name)
 }
 
 func (f *fakeEngine) CloneSnap(_ context.Context, snap, name string, _ types.PoolKey) (types.VMRecord, error) {
+	return f.clone(snap, name)
+}
+
+func (f *fakeEngine) clone(from, name string) (types.VMRecord, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.clones = append(f.clones, name)
-	f.cloneFroms = append(f.cloneFroms, snap)
-	if f.cloneErr != nil {
-		return types.VMRecord{}, f.cloneErr
+	f.cloneFroms = append(f.cloneFroms, from)
+	call := len(f.clones)
+	stall, err, failNth := f.cloneStall, f.cloneErr, f.cloneFailNth
+	f.mu.Unlock()
+	if stall != nil {
+		<-stall
 	}
-	if f.cloneFailNth > 0 && len(f.clones) == f.cloneFailNth {
+	if err != nil {
+		return types.VMRecord{}, err
+	}
+	if failNth > 0 && call == failNth {
 		return types.VMRecord{}, errors.New("clone failed")
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.vms[name] = "/vsock/" + name
 	return f.record(name), nil
 }
@@ -861,6 +964,12 @@ func (f *fakeEngine) cloneCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.clones)
+}
+
+func (f *fakeEngine) probeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.probeTimeouts)
 }
 
 func (f *fakeEngine) hibernateCount() int {

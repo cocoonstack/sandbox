@@ -95,7 +95,7 @@ func TestArmEgressFailsClosedWhenNICUnlockable(t *testing.T) {
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 	// The engine reports no NIC tap, so the nft lock cannot apply; arming must
 	// fail rather than hand out an egress-lane NIC that bypasses the proxy.
-	sb := &types.Sandbox{ID: "sb_eg_fc", Key: egKey, VMName: "sbx-fc-1"}
+	sb := &types.Sandbox{ID: "sb_eg_no_tap", Key: egKey, VMName: "sbx-no-tap-1"}
 	if armErr := m.armEgress(t.Context(), sb); armErr == nil {
 		t.Fatal("armEgress must fail closed when the egress-lane NIC cannot be locked")
 	}
@@ -390,6 +390,7 @@ func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 	if err := os.MkdirAll(gd, 0o750); err != nil { // on disk so re-add adopts it, sparing an async build
 		t.Fatalf("golden dir: %v", err)
 	}
+	markGoldenRuntime(t, gd)
 	m.mu.Lock()
 	m.pools[egKey].goldenDir = gd
 	m.mu.Unlock()

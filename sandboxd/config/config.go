@@ -174,10 +174,13 @@ type Config struct {
 	Bridge  string `json:"bridge,omitempty"`
 	Network string `json:"network,omitempty"`
 
-	// RestoreMode rides CH-lane clones as cocoon's --restore-mode. Opt-in: mmap
+	// RestoreMode rides clones as cocoon's --restore-mode. Opt-in: mmap
 	// needs every node's cloud-hypervisor to carry CoW restore — an older CH
 	// silently eager-copies while reporting success.
 	RestoreMode types.RestoreMode `json:"restore_mode,omitempty"`
+
+	// NoDirectIO enables buffered writable disks for cold boots and clones.
+	NoDirectIO bool `json:"no_direct_io,omitempty"`
 
 	// APIToken, when set, guards claim and info; per-sandbox tokens guard
 	// sandbox-scoped calls regardless.

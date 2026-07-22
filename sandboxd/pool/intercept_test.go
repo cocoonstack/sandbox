@@ -84,6 +84,21 @@ func TestGoldenCAMatchRebuildsOnMismatch(t *testing.T) {
 	}
 }
 
+func TestGoldenRuntimeMarkerRejectsLegacyExport(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	final := filepath.Join(m.goldensDir(), testKey.Hash())
+	if err := os.MkdirAll(final, 0o750); err != nil {
+		t.Fatalf("stage golden: %v", err)
+	}
+	if m.goldenRuntimeMatches(final) {
+		t.Error("adopted an unmarked pre-CH-only golden; want rebuild")
+	}
+	markGoldenRuntime(t, final)
+	if !m.goldenRuntimeMatches(final) {
+		t.Error("rejected a golden marked for Cloud Hypervisor")
+	}
+}
+
 func TestColdProvisionInstallsCAForInterceptPool(t *testing.T) {
 	eng := newFakeEngine()
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: interceptKey, Warm: 1, Egress: interceptPolicy()})

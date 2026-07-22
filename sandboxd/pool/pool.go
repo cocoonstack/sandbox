@@ -54,7 +54,9 @@ const (
 	forkPrefix      = "sbx-fork-"
 	vmStateRunning  = "running"
 
-	caSidecarSuffix = ".cafp"
+	caSidecarSuffix      = ".cafp"
+	runtimeSidecarSuffix = ".runtime"
+	runtimeMarker        = "cloud-hypervisor\n"
 )
 
 var (
@@ -253,6 +255,7 @@ type Manager struct {
 	claimed map[string]*types.Sandbox
 
 	refillSem  chan struct{}
+	probeSem   chan struct{}
 	refillKick chan struct{}
 }
 
@@ -287,6 +290,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		dial:            egressDialer.DialContext,
 		sweep:           netfilter.SweepExcept,
 		refillSem:       make(chan struct{}, refill),
+		probeSem:        make(chan struct{}, refill),
 		refillKick:      make(chan struct{}, 1),
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
@@ -568,7 +572,7 @@ func benignSweepErr(err error) bool {
 }
 
 func vmName(key types.PoolKey) string {
-	return vmPrefix + key.Hash() + "-" + randHex(3)
+	return vmPrefix + key.Hash() + "-" + randHex(6)
 }
 
 func randHex(n int) string {
