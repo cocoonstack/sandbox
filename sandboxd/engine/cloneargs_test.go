@@ -27,6 +27,7 @@ func TestCloneArgsRestoreMode(t *testing.T) {
 			for _, args := range [][]string{
 				e.cloneArgs("/goldens/g1", "sbx-1", tc.key),
 				e.cloneSnapArgs("ck_1", "sbx-1", tc.key),
+				e.restoreCmdArgs("sbx-1", "sbx-hib-1"),
 			} {
 				i := slices.Index(args, "--restore-mode")
 				if got := i >= 0; got != tc.want {

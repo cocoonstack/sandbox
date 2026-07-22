@@ -147,7 +147,7 @@ func (e *Engine) Hibernate(ctx context.Context, vmName, snapName string) error {
 // Restore resumes a VM from a snapshot with its memory state and identity
 // intact (cocoon reseeds entropy only on restore), returning its vsock UDS.
 func (e *Engine) Restore(ctx context.Context, vmName, snapRef string) (string, error) {
-	out, err := e.run(ctx, "vm", "restore", argOutput, formatJSON, vmName, snapRef)
+	out, err := e.run(ctx, e.restoreCmdArgs(vmName, snapRef)...)
 	if err != nil {
 		return "", err
 	}
@@ -306,6 +306,11 @@ func (e *Engine) cloneSnapArgs(snap, name string, key types.PoolKey) []string {
 	args := []string{"vm", "clone", snap, argName, name, "--pull", argOutput, formatJSON, e.directIOArg()}
 	args = append(args, e.restoreArgs()...)
 	return append(args, e.netArgs(key, false)...)
+}
+
+func (e *Engine) restoreCmdArgs(vmName, snapRef string) []string {
+	args := append([]string{"vm", "restore", argOutput, formatJSON}, e.restoreArgs()...)
+	return append(args, vmName, snapRef)
 }
 
 func (e *Engine) directIOArg() string {

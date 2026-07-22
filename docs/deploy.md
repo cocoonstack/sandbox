@@ -65,7 +65,7 @@ sandboxd reads one JSON file (`-config`, default
 | `listen` | `:7777` | control- and data-plane HTTP listener |
 | `data_dir` | `/var/lib/sandboxd` | golden snapshot exports, the claims journal, the usage/audit journals (`usage.jsonl`, `audit.jsonl` + `.1` backups), and `checkpoints/` by default |
 | `cocoon_bin` | `cocoon` | cocoon CLI binary |
-| `restore_mode` | unset | clone memory restore mode: `copy`, `ondemand`, or `mmap`; use `mmap` for dense pools |
+| `restore_mode` | unset | clone and wake-restore memory mode: `copy`, `ondemand`, or `mmap`; use `mmap` for dense pools |
 | `no_direct_io` | false | use buffered writable disks for Cloud Hypervisor cold boots and clones; recommended for dense ephemeral pools to avoid direct-I/O CoW journal contention |
 | `advertise_addr` | = `listen` | the host:port clients reach this node at; returned as a claim's owner address and gossiped to peers. Must be routable when `listen` is a wildcard |
 | `bridge` / `network` | unset | egress-lane attachment: a host bridge device, or a CNI conflist name. Mutually exclusive; with neither set the node serves only the no-network lane. [Guarded egress](egress.md) needs the bridge form and rejects a CNI network at load |

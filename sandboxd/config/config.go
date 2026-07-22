@@ -174,7 +174,7 @@ type Config struct {
 	Bridge  string `json:"bridge,omitempty"`
 	Network string `json:"network,omitempty"`
 
-	// RestoreMode rides clones as cocoon's --restore-mode. Opt-in: mmap
+	// RestoreMode rides clones and wake restores as cocoon's --restore-mode. Opt-in: mmap
 	// needs every node's cloud-hypervisor to carry CoW restore — an older CH
 	// silently eager-copies while reporting success.
 	RestoreMode types.RestoreMode `json:"restore_mode,omitempty"`
