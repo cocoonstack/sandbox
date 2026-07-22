@@ -82,12 +82,14 @@ nothing lost. Direct capture
 ([cocoonstack/cocoon#109](https://github.com/cocoonstack/cocoon/pull/109))
 fsyncs and renames the snapshot into the store instead of streaming it
 through a tar pass, cutting the CH pause window ~1.5×. Measured bare
-metal, `small` 1 G, cocoon `32bcbc6`, N=5:
+metal (16c/60G), `small` 512 M, cocoon `master-e9502f6`, CH dev `d77dcf12`,
+N=5:
 
 | op | latency | notes |
 |---|---|---|
-| `vm hibernate` | ~345–365 ms | pause → snapshot → fsync + rename into the store → VMM killed; memory freed, snapshot point and stop coincide |
-| `vm restore` (stopped VM) | ~97–103 ms | machine identity preserved, tmpfs contents intact, in-guest daemons resume |
+| `vm hibernate` | ~170–270 ms | pause → snapshot → persist into the store → VMM killed; memory freed, snapshot point and stop coincide |
+| `vm restore` (stopped VM, eager) | ~55–190 ms (median ~65) | machine identity preserved, tmpfs contents intact, in-guest daemons resume |
+| `vm restore` (stopped VM, `restore_mode: mmap`) | ~40–67 ms (median ~55) | the node's `restore_mode` rides sandboxd wakes too; the wake drops its snapshot right after — safe, restore stages a private copy |
 
 ## Method notes
 

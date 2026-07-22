@@ -89,6 +89,52 @@ labeled and must only be compared against other nested runs.
 
 <!-- paste `make bench` output below -->
 
+### 2026-07-22 — bare metal (3e54866, CH-only round: both lanes on Cloud Hypervisor)
+
+| environment | |
+|---|---|
+| host | bare metal, AMD Ryzen 7 9700X 8-Core Processor, 16 cores, 60 GiB |
+| kernel | 7.0.0-28-generic |
+| cpufreq | powersave/balance_performance |
+| cocoon | master-e9502f6 |
+| cloud-hypervisor | dev d77dcf12 (cocoonstack fork) |
+| template | ghcr.io/cocoonstack/sandbox/rt:24.04 @ sha256:804a596ee808 |
+
+| claim tier | p50 | p90 | max | n |
+|---|---|---|---|---|
+| warm pool hit | 0.3 ms | 0.3 ms | 0.6 ms | 6 |
+| clone from golden | 0.3 ms | 0.3 ms | 0.5 ms | 10 |
+| cold boot (unpooled ghcr.io/cocoonstack/sandbox/python:3.12) | 215.4 ms | 215.4 ms | 221.5 ms | 3 |
+| burst: 16 concurrent clones | 102.1 ms | 179.3 ms | 234.5 ms | 16 |
+
+The clone-tier row measured warm hits this round: the pipelined refill
+(clone and probe gated separately) refills between back-to-back claims, so
+the adaptive watermark wins the race the harness assumes it loses. The
+burst row is the real clone-path number.
+
+| data plane | measured |
+|---|---|
+| exec RTT (dial per RPC) | n=200 p50=0.19ms p90=0.25ms p99=0.40ms |
+| fs_pull throughput (128 MiB) | 925.0 MiB/s best of 3 |
+| burst wall (16 concurrent clones) | 295 ms |
+| warm refill recovery (0 → 6) | 207 ms |
+
+| hibernate / wake (cocoon tooling, `small` 512 M, N=5) | measured |
+|---|---|
+| `vm hibernate` | 168–272 ms |
+| `vm restore` eager | 53–188 ms, median ~65 |
+| `vm restore --restore-mode mmap` | 40–67 ms, median ~55; snapshot deleted right after each restore, 5 consecutive cycles healthy |
+
+| boot chain (boot-bench.sh, RUNS=5, hvc0 console) | published kernel | this branch's kernel (no 8250/MMIO) |
+|---|---|---|
+| kernel→sandbox-init | 40–50 ms | 40–50 ms |
+| init→handoff | 0 ms | 0 ms |
+| spawn→silkd answering | 137–184 ms (median ~157) | 136–208 ms (median ~151) |
+
+Warm fill (sandboxd, `warm=16`, `refill_concurrency=8`, `restore_mode:
+mmap`, `no_direct_io: true`): golden build 0.8 s, then 16 warm in 1.9 s
+(8.3/s). Full e2e (`sandboxd-e2e.sh`, both lanes via `sbxbr0`): PASS.
+
 ### 2026-07-14 — bare metal (205d3f3, first round on the rust-review silkd)
 
 | environment | |
