@@ -67,8 +67,8 @@ func (s *Sandbox) drainProc(ctx context.Context, req wire.Request, stdout, stder
 		return 0, false, err
 	}
 	defer done()
-	stdout = cmp.Or(stdout, io.Writer(io.Discard))
-	stderr = cmp.Or(stderr, io.Writer(io.Discard))
+	stdout = cmp.Or(stdout, io.Discard)
+	stderr = cmp.Or(stderr, io.Discard)
 	for {
 		resp, err := recv(ctx, conn)
 		if err != nil {

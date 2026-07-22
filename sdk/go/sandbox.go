@@ -111,8 +111,8 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 		go pumpStdin(conn, cmd.Stdin)
 	}
 
-	stdout := cmp.Or(cmd.Stdout, io.Writer(io.Discard))
-	stderr := cmp.Or(cmd.Stderr, io.Writer(io.Discard))
+	stdout := cmp.Or(cmd.Stdout, io.Discard)
+	stderr := cmp.Or(cmd.Stderr, io.Discard)
 	for {
 		resp, err := recv(ctx, conn)
 		if err != nil {
