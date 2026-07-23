@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: sandbox-init tests
         working-directory: boot/init
@@ -52,7 +52,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Read kernel version
         id: ver
@@ -89,7 +89,7 @@ jobs:
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: boot-digests-${{ matrix.arch }}
           path: /tmp/digests/*
@@ -103,7 +103,7 @@ jobs:
       image: ${{ steps.ref.outputs.image }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Read kernel version
         id: ver
@@ -116,7 +116,7 @@ jobs:
         run: echo "image=ghcr.io/${{ github.repository }}/boot:$(cat boot/kernel/VERSION)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: boot-digests-*
           path: /tmp/digests
