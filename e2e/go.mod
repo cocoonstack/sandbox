@@ -62,6 +62,6 @@ replace (
 	github.com/cocoonstack/sandbox/sdk/go => ../sdk/go
 )
 
-require github.com/cocoonstack/sandbox/protocol/wire v0.1.2
+require github.com/cocoonstack/sandbox/protocol/wire v0.1.3
 
 replace github.com/cocoonstack/sandbox/protocol/wire => ../protocol/wire
