@@ -16,7 +16,11 @@ GO_MODULES := protocol/wire sandboxd sdk/go e2e mcp
 GO_OSES := linux darwin
 
 .PHONY: help test lint boot boot-debug extract extract-debug silkd-image base python images \
-	sandboxd go-test go-lint bench
+	sandboxd go-test go-lint bench cloc
+
+cloc: ## Count lines of code excluding tests (requires cloc)
+	cloc --exclude-dir=target,dist,node_modules --exclude-ext=json \
+		--not-match-f='(_test\.go|_test\.py|\.test\.ts)$$' .
 
 help: ## show this list
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "%-14s %s\n", $$1, $$2}'
