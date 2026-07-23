@@ -25,7 +25,7 @@ func TestPromoteThenClaimClonesFromTemplate(t *testing.T) {
 	if len(eng.snapSaves) != 1 || !slices.Contains(eng.snapRemoves, eng.snapSaves[0]) {
 		t.Errorf("snapSaves=%v snapRemoves=%v, want one transient snapshot dropped", eng.snapSaves, eng.snapRemoves)
 	}
-	key := types.PoolKey{Template: "tpl:x", Net: parent.Key.Net, Size: parent.Key.Size}
+	key := types.PoolKey{Template: "tpl:x", Net: parent.Key.Net, Size: parent.Key.Size, Engine: parent.Key.Engine}
 	if gotKey != key {
 		t.Errorf("returned key %+v, want %+v (the parent's axes)", gotKey, key)
 	}
@@ -96,12 +96,12 @@ func TestDeleteTemplate(t *testing.T) {
 	if _, err := m.Promote(t.Context(), parent.ID, parent.Token, "tpl:del", ""); err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
-	key := types.PoolKey{Template: "tpl:del", Net: testKey.Net, Size: testKey.Size}
+	key := types.PoolKey{Template: "tpl:del", Net: testKey.Net, Size: testKey.Size, Engine: testKey.Engine}
 
 	if err := m.DeleteTemplate(t.Context(), testKey, ""); !errors.Is(err, ErrPooledTemplate) {
 		t.Errorf("pooled delete: %v, want ErrPooledTemplate", err)
 	}
-	if err := m.DeleteTemplate(t.Context(), types.PoolKey{Template: "nope", Net: testKey.Net, Size: testKey.Size}, ""); !errors.Is(err, ErrUnknownTemplate) {
+	if err := m.DeleteTemplate(t.Context(), types.PoolKey{Template: "nope", Net: testKey.Net, Size: testKey.Size, Engine: testKey.Engine}, ""); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("unknown delete: %v, want ErrUnknownTemplate", err)
 	}
 	if err := m.DeleteTemplate(t.Context(), key, ""); err != nil {
@@ -226,7 +226,7 @@ func TestPromoteFailsClosedOnMetaError(t *testing.T) {
 	if _, err := m.Promote(t.Context(), a.ID, a.Token, "shared:v1", "acme"); err != nil {
 		t.Fatalf("promote: %v", err)
 	}
-	key := types.PoolKey{Template: "shared:v1", Net: testKey.Net, Size: testKey.Size}
+	key := types.PoolKey{Template: "shared:v1", Net: testKey.Net, Size: testKey.Size, Engine: testKey.Engine}
 	meta := filepath.Join(m.dataDir, "checkpoints", store.TemplateID(key.Hash()), store.MetaFile)
 	if err := os.Chmod(meta, 0o000); err != nil {
 		t.Fatalf("chmod: %v", err)

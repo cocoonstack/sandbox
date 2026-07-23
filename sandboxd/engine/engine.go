@@ -323,6 +323,11 @@ func (e *Engine) restoreArgs() []string {
 func (e *Engine) runColdArgs(name string, key types.PoolKey) []string {
 	spec, _ := key.Size.Spec()
 	args := []string{"vm", "run", argName, name, argOutput, formatJSON, "--cpu", strconv.Itoa(spec.CPU), "--memory", spec.Memory, e.directIOArg()}
+	if key.Engine == types.EngineFC {
+		// Firecracker is a per-pool cold-boot choice; clones inherit the
+		// hypervisor from the golden's pinned snapshot, so only RunCold flags it.
+		args = append(args, "--fc")
+	}
 	args = append(args, e.netArgs(key, true)...)
 	return append(args, key.Template)
 }

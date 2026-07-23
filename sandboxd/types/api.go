@@ -11,6 +11,7 @@ type ClaimRequest struct {
 	Template   string   `json:"template"`
 	Net        NetShape `json:"net,omitempty"`
 	Size       Size     `json:"size,omitempty"`
+	Engine     Engine   `json:"engine,omitempty"`
 	TTLSeconds int      `json:"ttl_seconds,omitempty"`
 	NoRedirect bool     `json:"no_redirect,omitempty"`
 	// ClaimRef is an opaque caller reference (the aggregated apiserver passes
@@ -21,7 +22,7 @@ type ClaimRequest struct {
 
 // Key resolves the requested pool key with the wire defaults filled.
 func (r ClaimRequest) Key() PoolKey {
-	return PoolKey{Template: r.Template, Net: r.Net, Size: r.Size}.Defaulted()
+	return PoolKey{Template: r.Template, Net: r.Net, Size: r.Size, Engine: r.Engine}.Defaulted()
 }
 
 // TTL converts the wire seconds to a duration; zero means server default.

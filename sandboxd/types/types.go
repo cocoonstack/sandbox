@@ -24,6 +24,9 @@ const (
 	RestoreCopy     RestoreMode = "copy"
 	RestoreOnDemand RestoreMode = "ondemand"
 	RestoreMmap     RestoreMode = "mmap"
+
+	EngineCH Engine = "ch"
+	EngineFC Engine = "fc"
 )
 
 var (
@@ -57,6 +60,21 @@ func (m RestoreMode) Validate() error {
 	}
 }
 
+// Engine selects the hypervisor backend cocoon boots a pool's VMs on: Cloud
+// Hypervisor (default) or Firecracker. It is a pool axis so a CH pool and an
+// FC pool with the same template/net/size stay distinct goldens.
+type Engine string
+
+// Validate accepts the empty default (resolved to EngineCH) plus known engines.
+func (e Engine) Validate() error {
+	switch e {
+	case "", EngineCH, EngineFC:
+		return nil
+	default:
+		return fmt.Errorf("unknown engine %q", e)
+	}
+}
+
 // Size is a T-shirt resource tier. Free-form CPU/memory would fragment the
 // warm pools, so only tiers are accepted.
 type Size string
@@ -79,6 +97,7 @@ type PoolKey struct {
 	Template string   `json:"template"`
 	Net      NetShape `json:"net"`
 	Size     Size     `json:"size"`
+	Engine   Engine   `json:"engine,omitempty"`
 }
 
 // Capturable reports whether state capture (fork, checkpoint, promote) is
@@ -93,6 +112,7 @@ func (k PoolKey) Capturable() bool {
 func (k PoolKey) Defaulted() PoolKey {
 	k.Net = cmp.Or(k.Net, NetNone)
 	k.Size = cmp.Or(k.Size, SizeSmall)
+	k.Engine = cmp.Or(k.Engine, EngineCH)
 	return k
 }
 
@@ -101,7 +121,7 @@ func (k PoolKey) Defaulted() PoolKey {
 // names, so a targeted collision with a configured pool's hash must stay a
 // second-preimage problem, never a brute-forceable one.
 func (k PoolKey) Hash() string {
-	sum := sha256.Sum256([]byte(k.Template + "|" + string(k.Net) + "|" + string(k.Size)))
+	sum := sha256.Sum256([]byte(k.Template + "|" + string(k.Net) + "|" + string(k.Size) + "|" + string(k.Engine)))
 	return hex.EncodeToString(sum[:16])
 }
 
@@ -117,6 +137,9 @@ func (k PoolKey) Validate() error {
 	}
 	if _, ok := k.Size.Spec(); !ok {
 		return fmt.Errorf("unknown size %q", k.Size)
+	}
+	if err := k.Engine.Validate(); err != nil {
+		return err
 	}
 	return nil
 }

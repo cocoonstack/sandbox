@@ -45,7 +45,7 @@ func TestClaimHappyPath(t *testing.T) {
 	if cr.ID != "sb_1" || cr.Token != "tok" || !cr.Deadline.Equal(time.Unix(42, 0)) {
 		t.Errorf("got %+v", cr)
 	}
-	want := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
+	want := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineCH}
 	if gotKey != want {
 		t.Errorf("key %+v, want defaults %+v", gotKey, want)
 	}
@@ -623,7 +623,7 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 	if got := del("Bearer sekret", "template=tpl:x&net=none&size=small"); got != http.StatusNoContent {
 		t.Errorf("delete status %d, want 204", got)
 	}
-	want := types.PoolKey{Template: "tpl:x", Net: types.NetNone, Size: types.SizeSmall}
+	want := types.PoolKey{Template: "tpl:x", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineCH}
 	if gotKey != want {
 		t.Errorf("delete key %+v, want %+v (claim defaults applied)", gotKey, want)
 	}

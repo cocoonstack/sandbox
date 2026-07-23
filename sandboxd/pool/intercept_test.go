@@ -11,7 +11,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-var interceptKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
+var interceptKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineCH}
 
 func interceptPolicy() *egress.Policy {
 	return &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh", Intercept: true}}}
