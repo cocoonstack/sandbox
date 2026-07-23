@@ -822,6 +822,41 @@ func TestOwnerEndpoint(t *testing.T) {
 	}
 }
 
+// TestPreviewHandlerZeroDeadlineMintsLiveToken covers a claim with no
+// deadline (e.g. archived with ArchiveDeleteAfterSeconds=0): the minted
+// preview token must still verify, not be stamped already-expired.
+func TestPreviewHandlerZeroDeadlineMintsLiveToken(t *testing.T) {
+	mgr := &fakeManager{claimDeadline: func(string, string) (time.Time, error) {
+		return time.Time{}, nil
+	}}
+	ps := NewPreviewServer("secret", "node:7777", &fakePreviewMgr{})
+	srv := New("", nil, "node:7777", mgr, &fakeDialer{}, nil, ps)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+	resp, err := http.Post(ts.URL+"/v1/sandboxes/sb_1/preview", "application/json",
+		strings.NewReader(`{"token":"tok","port":8080,"ttl_seconds":300}`))
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	var out types.PreviewResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	token := strings.TrimSuffix(out.URL[strings.Index(out.URL, "/p/")+3:], "/")
+	claims, ok := ps.verify(token)
+	if !ok {
+		t.Fatalf("minted token %q does not verify", token)
+	}
+	if claims.Exp <= time.Now().Unix() {
+		t.Errorf("exp %d, want in the future", claims.Exp)
+	}
+}
+
 func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *httptest.Server {
 	t.Helper()
 	return newTenantTestServer(t, apiToken, nil, mgr, dialer)
@@ -863,6 +898,7 @@ type fakeManager struct {
 	deleteCheckpoint func(ckptID string) error
 	setPools         func(pools []config.PoolSpec) error
 	infoPools        []pool.PoolInfo
+	claimDeadline    func(id, token string) (time.Time, error)
 
 	gotTenant    string
 	tenantClaims map[string]int
@@ -938,6 +974,9 @@ func (f *fakeManager) HasGolden(context.Context, types.PoolKey) bool {
 }
 
 func (f *fakeManager) ClaimDeadline(id, token string) (time.Time, error) {
+	if f.claimDeadline != nil {
+		return f.claimDeadline(id, token)
+	}
 	if f.socket == nil {
 		return time.Now().Add(time.Hour), nil
 	}

@@ -27,6 +27,7 @@ import (
 const (
 	upgradeProto = "silkd"
 	maxBodyBytes = 1 << 20
+	previewTTL   = time.Hour
 )
 
 // poolErrHTTP maps pool sentinels to their HTTP replies; an empty msg
