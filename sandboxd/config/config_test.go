@@ -58,6 +58,9 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if cfg.Pools[0].Warm < 1 {
 		t.Errorf("pool warm default missing: %d", cfg.Pools[0].Warm)
 	}
+	if got := cfg.Pools[0].PoolKey; got != got.Defaulted() {
+		t.Errorf("pool key %+v not defaulted; claims key pools via Defaulted and would miss this pool's warm set", got)
+	}
 }
 
 func TestAutoRefillConcurrency(t *testing.T) {

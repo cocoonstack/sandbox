@@ -312,6 +312,7 @@ func (c *Config) applyDefaults() {
 	}
 	for i := range c.Pools {
 		c.Pools[i].Warm = cmp.Or(c.Pools[i].Warm, defaultWarm)
+		c.Pools[i].PoolKey = c.Pools[i].Defaulted()
 	}
 }
 
