@@ -96,6 +96,15 @@ func (c *Client) Lookup(ctx context.Context, id, token string) (*Sandbox, error)
 	return &Sandbox{ID: id, token: token, c: c, owner: owner}, nil
 }
 
+// Attach binds a handle to an already-claimed sandbox whose owner data-plane
+// address is already known (e.g. delivered by the L3 apiserver as annotations),
+// with no lookup round-trip. Use it to exec/agent into a sandbox claimed out of
+// band. ownerAddr is the node's sandboxd data-plane address; token is the
+// per-sandbox credential.
+func (c *Client) Attach(ownerAddr, id, token string) *Sandbox {
+	return &Sandbox{ID: id, token: token, c: c, owner: ownerAddr}
+}
+
 // DeleteTemplate removes a promoted template by name. When the entry node
 // does not hold it but the mesh's gossip names an owner, the delete follows
 // the redirect there (one hop); gossip lags a fresh promote by about a tick,
