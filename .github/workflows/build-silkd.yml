@@ -33,7 +33,6 @@ jobs:
       - name: fmt + clippy + test
         working-directory: silkd
         run: |
-          rustup component add rustfmt clippy
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
           cargo test
