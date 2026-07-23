@@ -8,8 +8,7 @@ protocol:
 - the Python SDK round-trips it in `sdk/python/tests/test_fixtures.py`.
 
 `req_*.json` are client→server frames, `resp_*.json` server→client. A frame
-that only one side can round-trip is a protocol drift bug. See
-`sandbox/sandbox-silkd.md` in cocoon-specs for the verb set.
+that only one side can round-trip is a protocol drift bug.
 
 `enums.json` pins each wire enum's full value set (error/event/file kinds,
 git branch actions). Frame fixtures carry only one representative value per

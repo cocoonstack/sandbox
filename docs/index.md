@@ -55,8 +55,5 @@ vsock-only I/O (hardened default); `net=egress` attaches a bridge/CNI NIC.
 
 ## Repository
 
-Source, issue tracker and design docs:
+Source and issue tracker:
 [github.com/cocoonstack/sandbox](https://github.com/cocoonstack/sandbox).
-Deep-dive design documents live in
-[cocoon-specs/design](https://github.com/cocoonstack/cocoon-specs/tree/main/design)
-(`sandbox-fast-boot.md`, `sandbox-control-plane.md`, `sandbox-silkd.md`).

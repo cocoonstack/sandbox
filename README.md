@@ -23,11 +23,6 @@ the OpenAI Agents SDK and LangChain adapters, silkd protocol,
 performance) — source in
 [`docs/`](docs/).
 
-Design docs:
-[sandbox-fast-boot](https://github.com/cocoonstack/cocoon-specs/blob/main/design/sandbox-fast-boot.md) (boot chain),
-[sandbox-control-plane](https://github.com/cocoonstack/cocoon-specs/blob/main/design/sandbox-control-plane.md) (sandboxd, pools, mesh, SDK),
-[sandbox-silkd](https://github.com/cocoonstack/cocoon-specs/blob/main/design/sandbox-silkd.md) (guest daemon, protocol, verbs).
-
 ## Layout
 
 - `silkd/` — in-guest product daemon (Rust, tokio): exec with context,

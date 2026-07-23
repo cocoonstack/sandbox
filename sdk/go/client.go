@@ -1,6 +1,6 @@
 // Package sandbox is the Go SDK for the cocoon sandbox control plane: claim
 // a microVM from a sandboxd node, run commands in it over the relayed silkd
-// protocol, release it. See cocoon-specs/design/sandbox-control-plane.md.
+// protocol, release it.
 package sandbox
 
 import (
