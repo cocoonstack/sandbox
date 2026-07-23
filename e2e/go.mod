@@ -1,6 +1,6 @@
 module github.com/cocoonstack/sandbox/e2e
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/cocoonstack/sandbox/sandboxd v0.0.0
