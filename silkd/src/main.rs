@@ -5,7 +5,6 @@
 //! Verbs: exec, info, ps, kill, attach, logs, session.{create,list,rm},
 //! fs.{write,read,list,stat,mkdir,rm,rename,push,pull,find,replace,watch},
 //! pty.{open,resize}, git.{clone,status,add,commit,push,pull,branch}.
-//! Design: cocoon-specs/design/sandbox-silkd.md.
 
 use std::sync::Arc;
 

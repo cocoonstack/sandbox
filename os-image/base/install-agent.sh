@@ -16,8 +16,7 @@ case "$ARCH" in
     *) echo "install-agent: unsupported arch '$ARCH'" >&2; exit 1 ;;
 esac
 
-# sshd: permit root login (stack-wide root:cocoon assumption, see
-# cocoon-specs/design/credential-assumptions.md).
+# sshd: permit root login (stack-wide root:cocoon assumption).
 mkdir -p /run/sshd
 sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 

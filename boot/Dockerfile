@@ -2,8 +2,7 @@
 # Boot artifact: custom guest kernel (amd64: PVH ELF vmlinux; arm64: flat
 # Image) plus the sandbox-init micro-initramfs, shipped as a scratch image
 # under /boot/ for os-image builds to COPY --from. Built per-platform on
-# native runners (a kernel build under QEMU emulation takes hours). See
-# cocoon-specs/design/sandbox-fast-boot.md.
+# native runners (a kernel build under QEMU emulation takes hours).
 
 FROM debian:bookworm-slim AS kbuild
 RUN apt-get update && apt-get install -y --no-install-recommends \
