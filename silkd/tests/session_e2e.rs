@@ -246,6 +246,21 @@ async fn empty_argv_in_session_is_a_bad_request() {
 }
 
 #[tokio::test]
+async fn detach_with_session_is_a_bad_request() {
+    // silkd's session path has no Started frame to answer a detached exec, so
+    // the combination must be rejected up front rather than silently run.
+    let state = Arc::new(State::new());
+    let id = create(&state, json!({})).await;
+    let f = one(
+        &state,
+        &json!({"op":"exec","argv":["true"],"session":id,"detach":true}).to_string(),
+    )
+    .await;
+    assert_eq!(type_of(&f[0]), "error");
+    assert_eq!(f[0]["kind"], "bad_request");
+}
+
+#[tokio::test]
 async fn exec_in_unknown_session_is_not_found() {
     let state = Arc::new(State::new());
     let f = one(&state, r#"{"op":"exec","argv":["true"],"session":"nope"}"#).await;

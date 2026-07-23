@@ -67,6 +67,14 @@ impl State {
                     )
                     .await;
                 }
+                if e.detach && e.session.is_some() {
+                    return proto::error_frame(
+                        &mut writer,
+                        ErrorKind::BadRequest,
+                        "detach is not supported with session",
+                    )
+                    .await;
+                }
                 if let Some(sid) = e.session.as_deref() {
                     let Some(sess) = self.sessions.get(sid) else {
                         return proto::error_frame(

@@ -30,7 +30,7 @@ a frame only one side can parse fails CI.
 
 | group | ops | response flow |
 |---|---|---|
-| exec | `exec {argv, cwd?, env?, user?, detach?, session?}` | `started{pid}` → `stdout/stderr{data}`… → `exit{code}`; the client may stream `stdin{data}` / `stdin_close`. `detach` returns after `started`; the process keeps a bounded output ring for later `logs`/`attach` |
+| exec | `exec {argv, cwd?, env?, user?, detach?, session?}` | `started{pid}` → `stdout/stderr{data}`… → `exit{code}`; the client may stream `stdin{data}` / `stdin_close`. `detach` returns after `started`; the process keeps a bounded output ring for later `logs`/`attach`; not combinable with `session` |
 | procs | `ps` / `kill {pid, signal?}` / `attach {pid}` / `logs {pid}` | handles are guest pids; any connection can list, signal, replay, or re-attach live |
 | sessions | `session_create {id?, cwd?, env?}` / `session_list` / `session_rm {id}` | a session is a real persistent bash; `exec` with `session` runs inside it. Idle sessions are reaped after 30 minutes |
 | fs | `fs_write {path, mode?}` (+`data`/`data_end` frames) / `fs_read` / `fs_list` / `fs_stat` / `fs_mkdir {parents?}` / `fs_rm {recursive?}` / `fs_rename {from, to}` | streaming both directions; write commits atomically via temp+rename and inherits an overwritten file's mode; `fs_list` streams 4096-entry batches |
