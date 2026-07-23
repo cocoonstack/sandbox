@@ -192,17 +192,14 @@ async fn overwrite_preserves_destination_mode() {
 #[tokio::test]
 async fn rm_plain_file_and_missing_and_nonempty_dir() {
     let dir = tempfile::tempdir().unwrap();
-    // plain file
     let f = dir.path().join("f");
     std::fs::write(&f, b"x").unwrap();
     let r = exchange(&[json!({"op":"fs_rm","path":f.to_str().unwrap()}).to_string()]).await;
     assert_eq!(type_of(&r[0]), "done");
     assert!(!f.exists());
-    // missing path → not_found
     let m = exchange(&[json!({"op":"fs_rm","path":"/no/such/xyz"}).to_string()]).await;
     assert_eq!(type_of(&m[0]), "error");
     assert_eq!(m[0]["kind"], "not_found");
-    // non-recursive rm of a non-empty dir → error (not not_found)
     let sub = dir.path().join("d");
     std::fs::create_dir(&sub).unwrap();
     std::fs::write(sub.join("inner"), b"y").unwrap();

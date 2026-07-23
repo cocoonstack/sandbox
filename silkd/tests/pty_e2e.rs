@@ -55,7 +55,6 @@ async fn pty_runs_a_shell_and_echoes() {
     .await;
     assert_eq!(out["type"], "stdout");
 
-    // Exit the shell; the stream ends with an exit frame.
     send(&mut cw, json!({"op":"stdin","data":common::b64(b"exit\n")})).await;
     let exit = read_until(&mut lines, |v| v["type"] == "exit").await;
     assert!(exit["code"].is_number());
