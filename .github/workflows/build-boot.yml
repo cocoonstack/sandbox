@@ -33,7 +33,6 @@ jobs:
       - name: sandbox-init tests
         working-directory: boot/init
         run: |
-          rustup component add rustfmt clippy
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
           cargo test
