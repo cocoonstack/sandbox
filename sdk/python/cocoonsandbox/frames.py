@@ -32,12 +32,10 @@ def encode_request(op: str, **fields) -> bytes:
 def decode_response(line: bytes) -> dict:
     """Parses one response frame; the returned dict carries its tag under
     "type" and any binary payload decoded under "data"."""
-    # Bulk frames (stdout/stderr/data) are the throughput path where json.loads
-    # of the big base64 string dominates. base64 is JSON-escape-free and these
-    # frames carry exactly {"type":...,"data":...}, so slice both out and skip
-    # json — but only for that exact shape; anything else (extra fields,
-    # trailing bytes, non-alphabet bytes in the segment) gets the full parse
-    # instead of a silently wrong slice.
+    # base64 is JSON-escape-free, so a frame shaped exactly {"type":...,
+    # "data":...} can be sliced directly, skipping json.loads; any other
+    # shape (extra fields, trailing bytes, non-alphabet bytes) falls through
+    # to the full parse instead of risking a silently wrong slice.
     if line.startswith(b'{"type":"'):
         te = line.find(b'"', 9)
         if te > 0 and line[9:te] in (b"stdout", b"stderr", b"data") and line.startswith(b'","data":"', te):

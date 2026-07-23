@@ -44,7 +44,7 @@ class McpClient:
         self.proc.wait(timeout=10)
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bin", required=True)
     parser.add_argument("--addr", default="127.0.0.1:7777")

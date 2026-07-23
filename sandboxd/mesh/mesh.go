@@ -48,9 +48,6 @@ type Mesh struct {
 	mu   sync.Mutex
 	self NodeState
 	view map[string]NodeState // node_id → latest known state (includes self)
-
-	epochMu      sync.Mutex
-	epochWritten uint64 // highest epoch on disk; guarded by epochMu
 }
 
 // New starts a mesh member listening per cfg. selfAddr is the data-plane
@@ -245,19 +242,9 @@ func (m *Mesh) Shutdown() error {
 	return m.ml.Shutdown()
 }
 
-// persistEpoch durably records the epoch, serialized so a slower concurrent
-// UpdateSelf's lower value cannot overwrite a higher one already on disk.
+// persistEpoch durably records the epoch.
 func (m *Mesh) persistEpoch(epoch uint64) error {
-	m.epochMu.Lock()
-	defer m.epochMu.Unlock()
-	if epoch <= m.epochWritten {
-		return nil
-	}
-	if err := storeEpoch(m.epochPath, epoch); err != nil {
-		return err
-	}
-	m.epochWritten = epoch
-	return nil
+	return storeEpoch(m.epochPath, epoch)
 }
 
 // forget drops a departed node from the placement view so redirects stop

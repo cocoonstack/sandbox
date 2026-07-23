@@ -190,8 +190,13 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ttl := time.Duration(req.TTLSeconds) * time.Second
-	if lease := time.Until(deadline); ttl <= 0 || ttl > lease {
-		ttl = lease // never outlive the claim
+	switch {
+	case !deadline.IsZero():
+		if lease := time.Until(deadline); ttl <= 0 || ttl > lease {
+			ttl = lease // never outlive the claim
+		}
+	case ttl <= 0:
+		ttl = previewTTL
 	}
 	writeJSON(w, http.StatusOK, types.PreviewResponse{URL: s.preview.Mint(id, req.Port, ttl)})
 }

@@ -67,12 +67,11 @@ class Sandbox:
         return code
 
     def spawn(self, *argv: str, cwd: str = "", env: dict | None = None,
-              user: str = "", session: str = "") -> int:
+              user: str = "") -> int:
         """Starts argv detached, returning its pid immediately; the process
         keeps a bounded output ring readable later via logs()/attach()."""
         started = self._call("exec", "started", argv=list(argv), cwd=cwd or None,
-                             env=env, user=user or None, session=session or None,
-                             detach=True)
+                             env=env, user=user or None, detach=True)
         return started["pid"]
 
     def ps(self) -> list[dict]:

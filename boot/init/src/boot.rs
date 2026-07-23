@@ -15,6 +15,32 @@ const POLL_INTERVAL: Duration = Duration::from_millis(2);
 // fallback, not stall rootfs handoff for the full disk budget (10s).
 const NIC_TIMEOUT: Duration = Duration::from_millis(200);
 
+/// Cumulative µs checkpoints since sandbox-init start.
+struct Marks {
+    start: Instant,
+    points: Vec<(&'static str, u128)>,
+}
+
+impl Marks {
+    fn new() -> Self {
+        Marks {
+            start: Instant::now(),
+            points: Vec::new(),
+        }
+    }
+
+    fn mark(&mut self, label: &'static str) {
+        self.points.push((label, self.start.elapsed().as_micros()));
+    }
+
+    fn render(&self) -> String {
+        self.points
+            .iter()
+            .map(|(label, us)| format!(" {label}@{us}us"))
+            .collect()
+    }
+}
+
 pub fn run() -> ! {
     // Best-effort: if devtmpfs fails there is no console either; later
     // failures then power off silently, which is still the right end state.
@@ -57,32 +83,6 @@ pub fn run() -> ! {
     );
     let err = sys::exec_init(&cfg.init);
     sys::fatal(&format!("exec {}: {err}", cfg.init), cfg.debug)
-}
-
-/// Cumulative µs checkpoints since sandbox-init start.
-struct Marks {
-    start: Instant,
-    points: Vec<(&'static str, u128)>,
-}
-
-impl Marks {
-    fn new() -> Self {
-        Marks {
-            start: Instant::now(),
-            points: Vec::new(),
-        }
-    }
-
-    fn mark(&mut self, label: &'static str) {
-        self.points.push((label, self.start.elapsed().as_micros()));
-    }
-
-    fn render(&self) -> String {
-        self.points
-            .iter()
-            .map(|(label, us)| format!(" {label}@{us}us"))
-            .collect()
-    }
 }
 
 fn assemble(cfg: &BootCfg, marks: &mut Marks) -> Result<(), String> {

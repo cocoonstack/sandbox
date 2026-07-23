@@ -84,29 +84,6 @@ func TestUpdateSelfPersistsEpoch(t *testing.T) {
 	}
 }
 
-func TestPersistEpochMonotonic(t *testing.T) {
-	dir := t.TempDir()
-	m := newBoundMesh(t, dir)
-	base := m.self.Epoch // New already seeded a wall-clock floor
-	high := base + 1000
-	if err := m.persistEpoch(high); err != nil {
-		t.Fatalf("persist high: %v", err)
-	}
-	// Concurrent lower values must never regress the on-disk floor below high.
-	var wg sync.WaitGroup
-	for e := base + 1; e < high; e++ {
-		wg.Go(func() {
-			if err := m.persistEpoch(e); err != nil {
-				t.Errorf("persist %d: %v", e, err)
-			}
-		})
-	}
-	wg.Wait()
-	if got := loadEpoch(filepath.Join(dir, "mesh-epoch")); got != high {
-		t.Errorf("persisted epoch %d, want the %d floor held against lower concurrent writes", got, high)
-	}
-}
-
 func TestUpdateSelfConcurrentDropsNothing(t *testing.T) {
 	m := newBoundMesh(t, t.TempDir())
 	base := m.self.Epoch

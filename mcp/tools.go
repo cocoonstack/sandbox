@@ -83,7 +83,6 @@ type tool struct {
 	handler     func(context.Context, *server, json.RawMessage) (string, error)
 }
 
-// toolSpecs renders the tools/list payload from the single table.
 func toolSpecs() []map[string]any {
 	specs := make([]map[string]any, len(tools))
 	for i, t := range tools {

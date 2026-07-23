@@ -11,12 +11,16 @@ import (
 
 // Spawn starts cmd detached: it returns the guest pid as soon as the
 // process starts, and the process keeps running with a bounded output ring
-// readable later via Logs or Attach. cmd's Stdin/Stdout/Stderr are ignored.
+// readable later via Logs or Attach. cmd's Stdin/Stdout/Stderr are ignored;
+// cmd.Session must be empty — the session exec path cannot detach.
 func (s *Sandbox) Spawn(ctx context.Context, cmd Cmd) (uint32, error) {
 	if len(cmd.Argv) == 0 {
 		return 0, fmt.Errorf("empty argv")
 	}
-	req := &wire.Exec{Argv: cmd.Argv, Cwd: cmd.Cwd, Env: cmd.Env, User: cmd.User, Detach: true, Session: cmd.Session}
+	if cmd.Session != "" {
+		return 0, fmt.Errorf("spawn does not support session")
+	}
+	req := &wire.Exec{Argv: cmd.Argv, Cwd: cmd.Cwd, Env: cmd.Env, User: cmd.User, Detach: true}
 	started, err := oneShotRPC[wire.Started](ctx, s, req)
 	if err != nil {
 		return 0, err

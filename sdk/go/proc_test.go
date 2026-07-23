@@ -32,6 +32,10 @@ func TestProcVerbs(t *testing.T) {
 		t.Fatalf("Spawn: pid %d, %v", pid, err)
 	}
 
+	if _, err = sb.Spawn(ctx, Cmd{Argv: []string{"true"}, Session: "s1"}); err == nil || !strings.Contains(err.Error(), "session") {
+		t.Fatalf("Spawn with session: want session error, got %v", err)
+	}
+
 	procs, err := sb.Ps(ctx)
 	if err != nil || len(procs) != 1 || procs[0].PID != 41 || !procs[0].Detached || procs[0].State != "running" {
 		t.Fatalf("Ps: %+v, %v", procs, err)
