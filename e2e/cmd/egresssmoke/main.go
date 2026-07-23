@@ -103,7 +103,7 @@ func run(addr, token, template, wantToken, netShape, reach, nicAddr, echo string
 	if !strings.Contains(seen, wantToken) {
 		return fmt.Errorf("origin %s did not echo injected token %q: %q", echo, wantToken, strings.TrimSpace(seen))
 	}
-	fmt.Printf("  allowed origin reached; injected credential observed host-side\n")
+	fmt.Println("  allowed origin reached; injected credential observed host-side")
 
 	if out, _ := sb.Exec(ctx, "sh", "-c", "env; cat /proc/1/environ 2>/dev/null | tr '\\0' '\\n'"); wantToken != "" && strings.Contains(out, wantToken) {
 		return fmt.Errorf("secret value leaked into the guest")

@@ -70,6 +70,22 @@ func (g *guestPortConn) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+func (g *guestPortConn) Write(p []byte) (int, error) {
+	written := 0
+	for len(p) > 0 {
+		n := min(len(p), portWriteChunk)
+		// The hot relay path renders into one reused buffer instead of
+		// allocating two frame-sized slices per chunk.
+		g.wbuf = wire.AppendBulkRequest(g.wbuf, "data", p[:n])
+		if _, err := g.Conn.Write(g.wbuf); err != nil {
+			return written, err
+		}
+		p = p[n:]
+		written += n
+	}
+	return written, nil
+}
+
 // fastPortData slices the canonical data frame's base64 out without a JSON
 // parse — json.Unmarshal otherwise dominates the download relay, and the
 // SDK's fastBulk sets the contract: only the exact canonical shape takes the
@@ -89,20 +105,4 @@ func fastPortData(line []byte) ([]byte, bool) {
 		return nil, false
 	}
 	return out[:n], true
-}
-
-func (g *guestPortConn) Write(p []byte) (int, error) {
-	written := 0
-	for len(p) > 0 {
-		n := min(len(p), portWriteChunk)
-		// The hot relay path renders into one reused buffer instead of
-		// allocating two frame-sized slices per chunk.
-		g.wbuf = wire.AppendBulkRequest(g.wbuf, "data", p[:n])
-		if _, err := g.Conn.Write(g.wbuf); err != nil {
-			return written, err
-		}
-		p = p[n:]
-		written += n
-	}
-	return written, nil
 }

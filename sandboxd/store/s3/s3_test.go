@@ -9,7 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,8 +67,8 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			result.Contents = append(result.Contents, object{Key: k, Size: len(v)})
 		}
-		sort.Slice(result.Contents, func(i, j int) bool { return result.Contents[i].Key < result.Contents[j].Key })
-		sort.Slice(result.CommonPrefixes, func(i, j int) bool { return result.CommonPrefixes[i].Prefix < result.CommonPrefixes[j].Prefix })
+		slices.SortFunc(result.Contents, func(a, b object) int { return cmp.Compare(a.Key, b.Key) })
+		slices.SortFunc(result.CommonPrefixes, func(a, b commonPrefix) int { return cmp.Compare(a.Prefix, b.Prefix) })
 		w.Header().Set("Content-Type", "application/xml")
 		_ = xml.NewEncoder(w).Encode(result)
 	case r.Method == http.MethodHead:
