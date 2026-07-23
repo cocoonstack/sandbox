@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: fmt + clippy + test
         working-directory: silkd
@@ -52,7 +52,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -83,7 +83,7 @@ jobs:
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: silkd-digests-${{ matrix.arch }}
           path: /tmp/digests/*
@@ -97,7 +97,7 @@ jobs:
       image: ${{ steps.ref.outputs.image }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Read silkd version
         id: ver
@@ -109,7 +109,7 @@ jobs:
         run: echo "image=ghcr.io/${{ github.repository }}/silkd:${{ steps.ver.outputs.version }}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: silkd-digests-*
           path: /tmp/digests
