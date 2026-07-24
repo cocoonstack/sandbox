@@ -122,7 +122,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 // sweepStaleVMs removes sbx-prefixed VMs no claim owns and returns the ones
 // confirmed gone; a failed remove is omitted so the egress sweep keeps its lock.
 func (m *Manager) sweepStaleVMs(ctx context.Context, live map[string]types.VMRecord, owned map[string]bool) map[string]bool {
-	logger := log.WithFunc("pool.Reconcile")
+	logger := log.WithFunc("pool.sweepStaleVMs")
 	var stale []string
 	for name := range live {
 		if strings.HasPrefix(name, vmPrefix) && !owned[name] {

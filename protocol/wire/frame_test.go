@@ -306,18 +306,6 @@ func TestProcInfoExitCodeAbsentWhileRunning(t *testing.T) {
 	}
 }
 
-func jsonEqual(t *testing.T, a, b []byte) bool {
-	t.Helper()
-	var av, bv any
-	if err := json.Unmarshal(a, &av); err != nil {
-		t.Fatalf("unmarshal fixture: %v", err)
-	}
-	if err := json.Unmarshal(b, &bv); err != nil {
-		t.Fatalf("unmarshal encoded: %v", err)
-	}
-	return reflect.DeepEqual(av, bv)
-}
-
 func TestAppendBulkRequestMatchesEncodeRequest(t *testing.T) {
 	for _, payload := range [][]byte{nil, {}, []byte("hello\x00\xff"), bytes.Repeat([]byte{0xAB}, 300*1024)} {
 		want, err := EncodeRequest(Data{Data: payload})
@@ -329,4 +317,16 @@ func TestAppendBulkRequestMatchesEncodeRequest(t *testing.T) {
 			t.Fatalf("payload len %d: bulk %q, want %q", len(payload), got, want)
 		}
 	}
+}
+
+func jsonEqual(t *testing.T, a, b []byte) bool {
+	t.Helper()
+	var av, bv any
+	if err := json.Unmarshal(a, &av); err != nil {
+		t.Fatalf("unmarshal fixture: %v", err)
+	}
+	if err := json.Unmarshal(b, &bv); err != nil {
+		t.Fatalf("unmarshal encoded: %v", err)
+	}
+	return reflect.DeepEqual(av, bv)
 }

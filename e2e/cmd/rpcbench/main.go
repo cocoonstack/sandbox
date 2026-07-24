@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
-
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )

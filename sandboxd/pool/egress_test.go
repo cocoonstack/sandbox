@@ -25,21 +25,6 @@ var (
 	egPolicy = &egress.Policy{Allow: []egress.Rule{{Host: "example.com", Secret: "gh"}}}
 )
 
-// egressClient builds an HTTP client that reaches the origin through the
-// per-sandbox egress proxy UDS, exactly as the guest's proxy client would over
-// vsock. Playing the VMM's role lets the host-side path run without a real VM.
-func egressClient(path string) *http.Client {
-	return &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: "proxy.internal:3128"}),
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, "unix", path)
-			},
-		},
-	}
-}
-
 func TestEgressProxyInjectsAndGates(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Seen-Auth", r.Header.Get("Authorization"))
@@ -462,6 +447,21 @@ func TestEgressLaneCannotForkOrCheckpoint(t *testing.T) {
 	}
 	if _, err := m.Promote(t.Context(), sb.ID, "tok", "tpl", ""); !errors.Is(err, ErrNoEgressFork) {
 		t.Errorf("Promote on egress lane: got %v, want ErrNoEgressFork", err)
+	}
+}
+
+// egressClient builds an HTTP client that reaches the origin through the
+// per-sandbox egress proxy UDS, exactly as the guest's proxy client would over
+// vsock. Playing the VMM's role lets the host-side path run without a real VM.
+func egressClient(path string) *http.Client {
+	return &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: "proxy.internal:3128"}),
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", path)
+			},
+		},
 	}
 }
 

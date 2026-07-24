@@ -6,23 +6,6 @@ import (
 	"testing"
 )
 
-func benchPayload(size int) []byte {
-	payload := make([]byte, size)
-	for i := range payload {
-		payload[i] = byte(i)
-	}
-	return payload
-}
-
-func benchFrame(b *testing.B, r Response) []byte {
-	b.Helper()
-	frame, err := EncodeResponse(r)
-	if err != nil {
-		b.Fatalf("encode: %v", err)
-	}
-	return frame
-}
-
 func BenchmarkDecodeBulk(b *testing.B) {
 	for _, size := range []int{4 << 10, 256 << 10} {
 		payload := benchPayload(size)
@@ -66,4 +49,21 @@ func BenchmarkEncodeControl(b *testing.B) {
 			b.Fatalf("encode: %v", err)
 		}
 	}
+}
+
+func benchPayload(size int) []byte {
+	payload := make([]byte, size)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+	return payload
+}
+
+func benchFrame(b *testing.B, r Response) []byte {
+	b.Helper()
+	frame, err := EncodeResponse(r)
+	if err != nil {
+		b.Fatalf("encode: %v", err)
+	}
+	return frame
 }

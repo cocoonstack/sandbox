@@ -11,23 +11,6 @@ import (
 	"time"
 )
 
-func testCA(t *testing.T) (*CA, []byte) {
-	t.Helper()
-	rootCert, rootKey, err := GenerateRoot("test root")
-	if err != nil {
-		t.Fatalf("generate root: %v", err)
-	}
-	interCert, interKey, err := IssueIntermediate(rootCert, rootKey, "node1")
-	if err != nil {
-		t.Fatalf("issue intermediate: %v", err)
-	}
-	ca, err := LoadCA(rootCert, interCert, interKey)
-	if err != nil {
-		t.Fatalf("load ca: %v", err)
-	}
-	return ca, rootCert
-}
-
 func TestLoadCARejectsForeignIntermediate(t *testing.T) {
 	rootA, keyA, err := GenerateRoot("A")
 	if err != nil {
@@ -201,4 +184,21 @@ func TestFingerprintIsRootAndStable(t *testing.T) {
 	if ca1.Fingerprint() != ca2.Fingerprint() {
 		t.Error("fingerprint differs across nodes sharing a root; must track the root only")
 	}
+}
+
+func testCA(t *testing.T) (*CA, []byte) {
+	t.Helper()
+	rootCert, rootKey, err := GenerateRoot("test root")
+	if err != nil {
+		t.Fatalf("generate root: %v", err)
+	}
+	interCert, interKey, err := IssueIntermediate(rootCert, rootKey, "node1")
+	if err != nil {
+		t.Fatalf("issue intermediate: %v", err)
+	}
+	ca, err := LoadCA(rootCert, interCert, interKey)
+	if err != nil {
+		t.Fatalf("load ca: %v", err)
+	}
+	return ca, rootCert
 }

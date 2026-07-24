@@ -131,7 +131,7 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 		},
 		Transport: p.transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			log.WithFunc("server.preview").Errorf(r.Context(), err, "proxy %s:%d", claims.ID, claims.Port)
+			log.WithFunc("server.proxyLocal").Errorf(r.Context(), err, "proxy %s:%d", claims.ID, claims.Port)
 			http.Error(w, "preview target unreachable", http.StatusBadGateway)
 		},
 	}
@@ -144,7 +144,7 @@ func (p *PreviewServer) forward(w http.ResponseWriter, r *http.Request, owner st
 	target := &url.URL{Scheme: "http", Host: owner}
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.WithFunc("server.preview").Errorf(r.Context(), err, "forward to owner %s", owner)
+		log.WithFunc("server.forward").Errorf(r.Context(), err, "forward to owner %s", owner)
 		http.Error(w, "owner node unreachable", http.StatusBadGateway)
 	}
 	rp.ServeHTTP(w, r) //nolint:gosec // owner host comes from an HMAC-signed token

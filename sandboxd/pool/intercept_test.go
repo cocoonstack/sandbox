@@ -13,10 +13,6 @@ import (
 
 var interceptKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineCH}
 
-func interceptPolicy() *egress.Policy {
-	return &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh", Intercept: true}}}
-}
-
 func TestGoldenBuildInstallsCAForInterceptPool(t *testing.T) {
 	eng := newFakeEngine()
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: interceptKey, Warm: 1, Egress: interceptPolicy()})
@@ -131,4 +127,8 @@ func TestInterceptPoolAllowsPromote(t *testing.T) {
 	if _, err := m.Promote(t.Context(), sb.ID, "tok", "tpl:x", ""); err != nil {
 		t.Errorf("Promote of an interception-pool sandbox: %v, want success", err)
 	}
+}
+
+func interceptPolicy() *egress.Policy {
+	return &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh", Intercept: true}}}
 }

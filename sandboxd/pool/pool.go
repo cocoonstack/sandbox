@@ -389,22 +389,6 @@ func (m *Manager) EgressCAFingerprint() string {
 	return m.egressCA.Fingerprint()
 }
 
-func loadEgressCA(cfg *config.EgressCAConfig) (*egress.CA, error) {
-	root, err := os.ReadFile(cfg.RootCert) //nolint:gosec // operator-configured ca path
-	if err != nil {
-		return nil, fmt.Errorf("read root cert: %w", err)
-	}
-	interCert, err := os.ReadFile(cfg.IntermediateCert) //nolint:gosec // operator-configured ca path
-	if err != nil {
-		return nil, fmt.Errorf("read intermediate cert: %w", err)
-	}
-	interKey, err := os.ReadFile(cfg.IntermediateKey) //nolint:gosec // operator-configured ca path
-	if err != nil {
-		return nil, fmt.Errorf("read intermediate key: %w", err)
-	}
-	return egress.LoadCA(root, interCert, interKey)
-}
-
 // Run drives the refill and reap loops until ctx is canceled.
 func (m *Manager) Run(ctx context.Context) {
 	refill := time.NewTicker(refillInterval)
@@ -541,6 +525,22 @@ func (m *Manager) validate(key types.PoolKey) error {
 
 func (m *Manager) goldensDir() string {
 	return filepath.Join(m.dataDir, "goldens")
+}
+
+func loadEgressCA(cfg *config.EgressCAConfig) (*egress.CA, error) {
+	root, err := os.ReadFile(cfg.RootCert) //nolint:gosec // operator-configured ca path
+	if err != nil {
+		return nil, fmt.Errorf("read root cert: %w", err)
+	}
+	interCert, err := os.ReadFile(cfg.IntermediateCert) //nolint:gosec // operator-configured ca path
+	if err != nil {
+		return nil, fmt.Errorf("read intermediate cert: %w", err)
+	}
+	interKey, err := os.ReadFile(cfg.IntermediateKey) //nolint:gosec // operator-configured ca path
+	if err != nil {
+		return nil, fmt.Errorf("read intermediate key: %w", err)
+	}
+	return egress.LoadCA(root, interCert, interKey)
 }
 
 // newStoreView builds one id-namespaced view of the configured backend.

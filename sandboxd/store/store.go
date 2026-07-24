@@ -21,16 +21,16 @@ const (
 	MetaFile = "meta.json"
 )
 
-// ErrNotFound is the one absence signal: backends normalize their native
-// missing-record errors to it, so call sites can tell "gone" from a
-// backend failure (which must never silently degrade to a cold boot).
-var ErrNotFound = errors.New("record not found")
-
-// The two id namespaces sharing one store root: backends filter listings
-// by their instance's regexp, so checkpoints and templates coexist in the
-// same directory/bucket without seeing each other. The pins also keep a
-// crafted id from escaping the store's namespace.
 var (
+	// ErrNotFound is the one absence signal: backends normalize their native
+	// missing-record errors to it, so call sites can tell "gone" from a
+	// backend failure (which must never silently degrade to a cold boot).
+	ErrNotFound = errors.New("record not found")
+
+	// The two id namespaces sharing one store root: backends filter listings
+	// by their instance's regexp, so checkpoints and templates coexist in the
+	// same directory/bucket without seeing each other. The pins also keep a
+	// crafted id from escaping the store's namespace.
 	CheckpointIDRe = regexp.MustCompile(`^ck_[0-9a-f]{16}$`)
 	TemplateIDRe   = regexp.MustCompile(`^tp_[0-9a-f]{32}$`)
 )

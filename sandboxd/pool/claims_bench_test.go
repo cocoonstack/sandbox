@@ -10,19 +10,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-func benchClaims(n int) map[string]*types.Sandbox {
-	claims := make(map[string]*types.Sandbox, n)
-	for i := range n {
-		id := fmt.Sprintf("sb_%016x", i)
-		claims[id] = &types.Sandbox{
-			ID: id, Token: "tok", VMName: "sbx-" + id,
-			Key:      types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall},
-			Deadline: time.Now().Add(time.Hour),
-		}
-	}
-	return claims
-}
-
 // BenchmarkStoreSaveScaling measures the claims-journal persist cost (marshal
 // + write + rename) as the live-claim set grows.
 func BenchmarkStoreSaveScaling(b *testing.B) {
@@ -53,6 +40,19 @@ func BenchmarkStorePersistContention(b *testing.B) {
 			benchPersistContention(b, claims, true)
 		})
 	}
+}
+
+func benchClaims(n int) map[string]*types.Sandbox {
+	claims := make(map[string]*types.Sandbox, n)
+	for i := range n {
+		id := fmt.Sprintf("sb_%016x", i)
+		claims[id] = &types.Sandbox{
+			ID: id, Token: "tok", VMName: "sbx-" + id,
+			Key:      types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall},
+			Deadline: time.Now().Add(time.Hour),
+		}
+	}
+	return claims
 }
 
 func benchPersistContention(b *testing.B, claims map[string]*types.Sandbox, offLock bool) {

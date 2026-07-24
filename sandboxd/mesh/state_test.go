@@ -9,19 +9,6 @@ import (
 	"github.com/hashicorp/memberlist"
 )
 
-func newBoundMesh(t *testing.T, dataDir string) *Mesh {
-	t.Helper()
-	cfg := memberlist.DefaultLocalConfig()
-	cfg.BindPort = 0
-	cfg.Logger = discardLogger()
-	m, err := New(cfg, "self", "self:7777", nil, dataDir)
-	if err != nil {
-		t.Fatalf("new mesh: %v", err)
-	}
-	t.Cleanup(func() { _ = m.Shutdown() })
-	return m
-}
-
 func TestEpochRoundTrip(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "e")
 	if loadEpoch(p) != 0 {
@@ -111,4 +98,17 @@ func TestConfigDigestMismatch(t *testing.T) {
 	if n := m.ConfigMismatches(); n != 1 {
 		t.Errorf("ConfigMismatches = %d, want 1 (only peerB diverges)", n)
 	}
+}
+
+func newBoundMesh(t *testing.T, dataDir string) *Mesh {
+	t.Helper()
+	cfg := memberlist.DefaultLocalConfig()
+	cfg.BindPort = 0
+	cfg.Logger = discardLogger()
+	m, err := New(cfg, "self", "self:7777", nil, dataDir)
+	if err != nil {
+		t.Fatalf("new mesh: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Shutdown() })
+	return m
 }

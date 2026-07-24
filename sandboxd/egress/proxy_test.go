@@ -12,22 +12,6 @@ import (
 	"time"
 )
 
-type fakeSecrets map[string][2]string
-
-func (f fakeSecrets) Header(name string) (string, string, bool) {
-	hv, ok := f[name]
-	return hv[0], hv[1], ok
-}
-
-// fixedDial ignores the requested address and connects to target, so a test
-// policy can name any host while the bytes land on a local backend.
-func fixedDial(target string) DialFunc {
-	return func(ctx context.Context, network, _ string) (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(ctx, network, target)
-	}
-}
-
 func TestForwardAllowInjectsSecretAndOverwritesGuestHeader(t *testing.T) {
 	var gotAuth string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -219,6 +203,22 @@ func TestConnectDeniedIsTyped(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	if status := readStatus(t, bufio.NewReader(conn)); status != "HTTP/1.1 403 Forbidden" {
 		t.Fatalf("denied CONNECT status = %q, want 403 Forbidden", status)
+	}
+}
+
+type fakeSecrets map[string][2]string
+
+func (f fakeSecrets) Header(name string) (string, string, bool) {
+	hv, ok := f[name]
+	return hv[0], hv[1], ok
+}
+
+// fixedDial ignores the requested address and connects to target, so a test
+// policy can name any host while the bytes land on a local backend.
+func fixedDial(target string) DialFunc {
+	return func(ctx context.Context, network, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, network, target)
 	}
 }
 

@@ -11,6 +11,51 @@ import (
 	"testing"
 )
 
+func BenchmarkSignLeaf(b *testing.B) {
+	ca := benchCA(b)
+	for b.Loop() {
+		if _, err := ca.SignLeaf("bench.example.com"); err != nil {
+			b.Fatalf("sign: %v", err)
+		}
+	}
+}
+
+func BenchmarkInterceptedRequest(b *testing.B) {
+	addr, roots := benchFront(b, true)
+	tc := benchSession(b, addr, roots)
+	defer func() { _ = tc.Close() }()
+	br := bufio.NewReader(tc)
+	for b.Loop() {
+		benchRoundTrip(b, tc, br)
+	}
+}
+
+func BenchmarkSplicedRequest(b *testing.B) {
+	addr, roots := benchFront(b, false)
+	tc := benchSession(b, addr, roots)
+	defer func() { _ = tc.Close() }()
+	br := bufio.NewReader(tc)
+	for b.Loop() {
+		benchRoundTrip(b, tc, br)
+	}
+}
+
+func BenchmarkInterceptedHandshake(b *testing.B) {
+	addr, roots := benchFront(b, true)
+	for b.Loop() {
+		tc := benchSession(b, addr, roots)
+		_ = tc.Close()
+	}
+}
+
+func BenchmarkSplicedHandshake(b *testing.B) {
+	addr, roots := benchFront(b, false)
+	for b.Loop() {
+		tc := benchSession(b, addr, roots)
+		_ = tc.Close()
+	}
+}
+
 func benchCA(b *testing.B) *CA {
 	b.Helper()
 	rootCert, rootKey, err := GenerateRoot("bench root")
@@ -103,49 +148,4 @@ func benchRoundTrip(b *testing.B, tc *tls.Conn, br *bufio.Reader) {
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
-}
-
-func BenchmarkSignLeaf(b *testing.B) {
-	ca := benchCA(b)
-	for b.Loop() {
-		if _, err := ca.SignLeaf("bench.example.com"); err != nil {
-			b.Fatalf("sign: %v", err)
-		}
-	}
-}
-
-func BenchmarkInterceptedRequest(b *testing.B) {
-	addr, roots := benchFront(b, true)
-	tc := benchSession(b, addr, roots)
-	defer func() { _ = tc.Close() }()
-	br := bufio.NewReader(tc)
-	for b.Loop() {
-		benchRoundTrip(b, tc, br)
-	}
-}
-
-func BenchmarkSplicedRequest(b *testing.B) {
-	addr, roots := benchFront(b, false)
-	tc := benchSession(b, addr, roots)
-	defer func() { _ = tc.Close() }()
-	br := bufio.NewReader(tc)
-	for b.Loop() {
-		benchRoundTrip(b, tc, br)
-	}
-}
-
-func BenchmarkInterceptedHandshake(b *testing.B) {
-	addr, roots := benchFront(b, true)
-	for b.Loop() {
-		tc := benchSession(b, addr, roots)
-		_ = tc.Close()
-	}
-}
-
-func BenchmarkSplicedHandshake(b *testing.B) {
-	addr, roots := benchFront(b, false)
-	for b.Loop() {
-		tc := benchSession(b, addr, roots)
-		_ = tc.Close()
-	}
 }

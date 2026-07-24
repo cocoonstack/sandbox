@@ -42,46 +42,6 @@ func TestInterceptLeafCacheBounded(t *testing.T) {
 	}
 }
 
-func interceptProxy(t *testing.T, rule Rule, events chan Event) (*Proxy, *x509.CertPool, *httptest.Server) {
-	return interceptProxyPolicy(t, Policy{Allow: []Rule{rule}}, events)
-}
-
-func interceptProxyPolicy(t *testing.T, policy Policy, events chan Event) (*Proxy, *x509.CertPool, *httptest.Server) {
-	t.Helper()
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Auth-Seen", r.Header.Get("Authorization"))
-		w.Header().Set("X-Host-Seen", r.Host)
-		_, _ = io.WriteString(w, "hello")
-	}))
-	t.Cleanup(upstream.Close)
-
-	rootCert, rootKey, err := GenerateRoot("test root")
-	if err != nil {
-		t.Fatalf("generate root: %v", err)
-	}
-	interCert, interKey, err := IssueIntermediate(rootCert, rootKey, "node1")
-	if err != nil {
-		t.Fatalf("issue intermediate: %v", err)
-	}
-	ca, err := LoadCA(rootCert, interCert, interKey)
-	if err != nil {
-		t.Fatalf("load ca: %v", err)
-	}
-	secrets := fakeSecrets{"gh": {"Authorization", "Bearer SECRET"}}
-	audit := func(ev Event) {
-		if events != nil {
-			events <- ev
-		}
-	}
-	p := New("sb_1", "acme", policy, secrets, ca, fixedDial(upstream.Listener.Addr().String()), audit)
-
-	guestRoots := x509.NewCertPool()
-	if !guestRoots.AppendCertsFromPEM(ca.CertPEM()) {
-		t.Fatal("guest trust: append ca cert")
-	}
-	return p, guestRoots, upstream
-}
-
 func TestInterceptInjectsSecretIntoHTTPS(t *testing.T) {
 	events := make(chan Event, 4)
 	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Methods: []string{"GET"}, Secret: "gh", Intercept: true}, events)
@@ -249,6 +209,46 @@ func TestInterceptRejectsUntrustedUpstream(t *testing.T) {
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Errorf("untrusted upstream got %d, want 502 (proxy verifies against real roots)", resp.StatusCode)
 	}
+}
+
+func interceptProxy(t *testing.T, rule Rule, events chan Event) (*Proxy, *x509.CertPool, *httptest.Server) {
+	return interceptProxyPolicy(t, Policy{Allow: []Rule{rule}}, events)
+}
+
+func interceptProxyPolicy(t *testing.T, policy Policy, events chan Event) (*Proxy, *x509.CertPool, *httptest.Server) {
+	t.Helper()
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Auth-Seen", r.Header.Get("Authorization"))
+		w.Header().Set("X-Host-Seen", r.Host)
+		_, _ = io.WriteString(w, "hello")
+	}))
+	t.Cleanup(upstream.Close)
+
+	rootCert, rootKey, err := GenerateRoot("test root")
+	if err != nil {
+		t.Fatalf("generate root: %v", err)
+	}
+	interCert, interKey, err := IssueIntermediate(rootCert, rootKey, "node1")
+	if err != nil {
+		t.Fatalf("issue intermediate: %v", err)
+	}
+	ca, err := LoadCA(rootCert, interCert, interKey)
+	if err != nil {
+		t.Fatalf("load ca: %v", err)
+	}
+	secrets := fakeSecrets{"gh": {"Authorization", "Bearer SECRET"}}
+	audit := func(ev Event) {
+		if events != nil {
+			events <- ev
+		}
+	}
+	p := New("sb_1", "acme", policy, secrets, ca, fixedDial(upstream.Listener.Addr().String()), audit)
+
+	guestRoots := x509.NewCertPool()
+	if !guestRoots.AppendCertsFromPEM(ca.CertPEM()) {
+		t.Fatal("guest trust: append ca cert")
+	}
+	return p, guestRoots, upstream
 }
 
 func trustUpstream(upstream *httptest.Server) *x509.CertPool {

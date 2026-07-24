@@ -14,23 +14,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// stallingStore parks Publish after the record becomes visible, exposing the
-// window between an archive's publish and its ArchiveCk commit.
-type stallingStore struct {
-	store.Store
-	published chan string
-	release   chan struct{}
-}
-
-func (s *stallingStore) Publish(ctx context.Context, staging, id string) error {
-	if err := s.Store.Publish(ctx, staging, id); err != nil {
-		return err
-	}
-	s.published <- id
-	<-s.release
-	return nil
-}
-
 // TestArchivePublishWindowPinsCheckpoint guards the pre-pin: between an
 // archive's checkpoint publish and the ArchiveCk commit, the checkpoint must
 // be invisible to listings and refuse deletion — a delete landing in that
@@ -114,63 +97,6 @@ func TestArchiveWakeRehibernateWindowAborts(t *testing.T) {
 	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake after aborted archive: %v", err)
 	}
-}
-
-// breakStore points the claim store at a path whose parent is missing, so the
-// next save fails — the fault used to exercise the persist-failure paths.
-func breakStore(t *testing.T, m *Manager) {
-	t.Helper()
-	m.store.path = filepath.Join(t.TempDir(), "gone", "claims.json")
-}
-
-// healStore repairs breakStore's path and waits for the detached recommit to
-// converge, so its retry loop does not outlive the test.
-func healStore(t *testing.T, m *Manager) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(m.store.path), 0o750); err != nil {
-		t.Fatalf("heal store: %v", err)
-	}
-	waitFor(t, m.store.synced)
-}
-
-func archivedCount(m *Manager) int {
-	_, g := m.Info()
-	return g.Archived
-}
-
-// archivePool is the pool shape the archive tests share: idle→hibernate at 1s,
-// archive at 2s, a long retention window (overridden per test).
-func archivePool(delete int) config.PoolSpec {
-	return config.PoolSpec{
-		PoolKey:                   testKey,
-		Warm:                      1,
-		IdleHibernateSeconds:      1,
-		ArchiveAfterSeconds:       2,
-		ArchiveDeleteAfterSeconds: delete,
-	}
-}
-
-// mustArchive drives a fresh claim to the archived state deterministically
-// (hibernate then archive directly), bypassing the sweep thresholds so a test
-// can start from a known archived record.
-func mustArchive(t *testing.T, m *Manager, sb *types.Sandbox) {
-	t.Helper()
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
-	if err := m.archive(t.Context(), sb); err != nil {
-		t.Fatalf("archive: %v", err)
-	}
-}
-
-func ckExists(t *testing.T, m *Manager, ck string) bool {
-	t.Helper()
-	_, _, release, err := m.ckpts.Fetch(t.Context(), ck)
-	if err != nil {
-		return false
-	}
-	release()
-	return true
 }
 
 // TestArchiveCkHiddenAcrossNodes: on a shared store, another node has no
@@ -508,14 +434,6 @@ func TestArchivePersistFailureRollsBack(t *testing.T) {
 	healStore(t, m)
 }
 
-// pinnedHidden reports whether the store holds exactly one checkpoint and it is
-// hidden from listings — i.e. a live claim's ArchiveCk still pins it.
-func pinnedHidden(t *testing.T, m *Manager, ck string) bool {
-	t.Helper()
-	ckpts, err := m.Checkpoints(t.Context(), "")
-	return err == nil && len(ckpts) == 0 && ckExists(t, m, ck)
-}
-
 // TestReleaseArchivedRollsBackOnPersistFailure guards the durability fix where
 // a release whose removal did not persist must roll back — the claim survives
 // and its ck stays pinned, so a restart still wakes it.
@@ -646,4 +564,86 @@ func TestArchiveWakeEvictsRecLock(t *testing.T) {
 	if got := countLocks(); got != base {
 		t.Errorf("recLocks grew %d->%d over an archive+wake cycle, want no growth", base, got)
 	}
+}
+
+// stallingStore parks Publish after the record becomes visible, exposing the
+// window between an archive's publish and its ArchiveCk commit.
+type stallingStore struct {
+	store.Store
+	published chan string
+	release   chan struct{}
+}
+
+func (s *stallingStore) Publish(ctx context.Context, staging, id string) error {
+	if err := s.Store.Publish(ctx, staging, id); err != nil {
+		return err
+	}
+	s.published <- id
+	<-s.release
+	return nil
+}
+
+// breakStore points the claim store at a path whose parent is missing, so the
+// next save fails — the fault used to exercise the persist-failure paths.
+func breakStore(t *testing.T, m *Manager) {
+	t.Helper()
+	m.store.path = filepath.Join(t.TempDir(), "gone", "claims.json")
+}
+
+// healStore repairs breakStore's path and waits for the detached recommit to
+// converge, so its retry loop does not outlive the test.
+func healStore(t *testing.T, m *Manager) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(m.store.path), 0o750); err != nil {
+		t.Fatalf("heal store: %v", err)
+	}
+	waitFor(t, m.store.synced)
+}
+
+func archivedCount(m *Manager) int {
+	_, g := m.Info()
+	return g.Archived
+}
+
+// archivePool is the pool shape the archive tests share: idle→hibernate at 1s,
+// archive at 2s, a long retention window (overridden per test).
+func archivePool(delete int) config.PoolSpec {
+	return config.PoolSpec{
+		PoolKey:                   testKey,
+		Warm:                      1,
+		IdleHibernateSeconds:      1,
+		ArchiveAfterSeconds:       2,
+		ArchiveDeleteAfterSeconds: delete,
+	}
+}
+
+// mustArchive drives a fresh claim to the archived state deterministically
+// (hibernate then archive directly), bypassing the sweep thresholds so a test
+// can start from a known archived record.
+func mustArchive(t *testing.T, m *Manager, sb *types.Sandbox) {
+	t.Helper()
+	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	if err := m.archive(t.Context(), sb); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+}
+
+func ckExists(t *testing.T, m *Manager, ck string) bool {
+	t.Helper()
+	_, _, release, err := m.ckpts.Fetch(t.Context(), ck)
+	if err != nil {
+		return false
+	}
+	release()
+	return true
+}
+
+// pinnedHidden reports whether the store holds exactly one checkpoint and it is
+// hidden from listings — i.e. a live claim's ArchiveCk still pins it.
+func pinnedHidden(t *testing.T, m *Manager, ck string) bool {
+	t.Helper()
+	ckpts, err := m.Checkpoints(t.Context(), "")
+	return err == nil && len(ckpts) == 0 && ckExists(t, m, ck)
 }

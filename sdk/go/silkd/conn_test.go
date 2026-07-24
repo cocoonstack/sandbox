@@ -37,10 +37,6 @@ func TestSendBulkMatchesJSONEncoding(t *testing.T) {
 	}
 }
 
-type bufferConn struct{ bytes.Buffer }
-
-func (bufferConn) Close() error { return nil }
-
 func TestConnInfoRoundTrip(t *testing.T) {
 	conn := dialFake(t)
 	if err := conn.Send(wire.Info{}); err != nil {
@@ -117,3 +113,7 @@ func dialFake(t *testing.T) *silkd.Conn {
 	t.Cleanup(func() { _ = conn.Close() })
 	return conn
 }
+
+type bufferConn struct{ bytes.Buffer }
+
+func (bufferConn) Close() error { return nil }

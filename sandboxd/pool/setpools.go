@@ -3,6 +3,8 @@ package pool
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -82,10 +84,7 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 	}).Wait()
 	m.refillOnce(runCtx)
 	// Persist the applied set so a restart rebuilds from it, not the config seed.
-	persisted := make([]config.PoolSpec, 0, len(desired))
-	for _, spec := range desired {
-		persisted = append(persisted, spec)
-	}
+	persisted := slices.Collect(maps.Values(desired))
 	return m.poolStore.commit(seq, poolsFile{ConfigSeed: m.configSeedHash, Pools: persisted})
 }
 

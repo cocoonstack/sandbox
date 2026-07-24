@@ -11,19 +11,6 @@ import (
 	"time"
 )
 
-type fakePreviewMgr struct {
-	dial func(id string, port uint16) (net.Conn, error)
-}
-
-func (f *fakePreviewMgr) PreviewDial(_ context.Context, id string, port uint16) (net.Conn, error) {
-	return f.dial(id, port)
-}
-
-func mintToken(ps *PreviewServer, id string, port uint16, ttl time.Duration) string {
-	url := ps.Mint(id, port, ttl)
-	return strings.TrimSuffix(url[strings.Index(url, "/p/")+3:], "/")
-}
-
 func TestPreviewTokenRoundTrip(t *testing.T) {
 	ps := NewPreviewServer("secret", "node:9000", &fakePreviewMgr{})
 	token := mintToken(ps, "sb_1", 8080, time.Hour)
@@ -128,4 +115,17 @@ func TestPreviewForwardsToOwner(t *testing.T) {
 	if !forwarded {
 		t.Error("request not forwarded to the owner node")
 	}
+}
+
+type fakePreviewMgr struct {
+	dial func(id string, port uint16) (net.Conn, error)
+}
+
+func (f *fakePreviewMgr) PreviewDial(_ context.Context, id string, port uint16) (net.Conn, error) {
+	return f.dial(id, port)
+}
+
+func mintToken(ps *PreviewServer, id string, port uint16, ttl time.Duration) string {
+	url := ps.Mint(id, port, ttl)
+	return strings.TrimSuffix(url[strings.Index(url, "/p/")+3:], "/")
 }
