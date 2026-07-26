@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
@@ -230,9 +231,19 @@ type Manager struct {
 	ckpts        store.Store
 	// A cluster-wide backend resolves every record from every node, so heal
 	// and the delete broadcast are both no-ops against it.
-	ckptsShared  bool
-	healer       *peer.Healer
+	ckptsShared bool
+	healer      *peer.Healer
+	// healSem bounds concurrent transfers node-wide; healFlights dedups
+	// concurrent heals of the same id to one transfer (keyed by checkpoint
+	// id, owns its own staging dir — callers never see one). healPending and
+	// healAbort (guarded by recLocksMu) let a delete that finds a checkpoint
+	// absent veto a heal already staging for that same id, so the heal's
+	// locked decide phase does not publish moments after a delete answered
+	// "not here" for it.
 	healSem      chan struct{}
+	healFlights  singleflight.Group
+	healPending  map[string]struct{}
+	healAbort    map[string]struct{}
 	peerDelete   PeerDeleteFunc
 	tpls         store.Store
 	ckptTTL      time.Duration
@@ -310,6 +321,8 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		egressListeners: map[string]*egressListener{},
 		egressTaps:      map[string]string{},
 		recRefs:         map[string]int{},
+		healPending:     map[string]struct{}{},
+		healAbort:       map[string]struct{}{},
 		egressSecrets:   secrets,
 		dial:            egressDialer.DialContext,
 		sweep:           netfilter.SweepExcept,

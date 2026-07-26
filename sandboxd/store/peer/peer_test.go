@@ -98,25 +98,37 @@ func TestHealErrorIsReported(t *testing.T) {
 	}
 }
 
-// TestHealDedupsConcurrentMisses: N concurrent Pulls of the same id sharing
-// one staging destination must trigger exactly one transfer — a stampede of
-// branches racing to heal the same checkpoint must not each pay for it.
-func TestHealDedupsConcurrentMisses(t *testing.T) {
+// TestPullDoesNotDedupConcurrentCalls: Pull used to share one singleflight
+// result across concurrent callers, which was only safe because every
+// caller happened to pass the SAME staging dir. With independent dirs (the
+// only safe assumption once dedup is not Pull's job), sharing a result would
+// leave whichever caller did not trigger the shared call with an untouched,
+// empty directory published as if it were a real record. Two concurrent
+// Pulls for one id but different dirs must each run their own full transfer.
+func TestPullDoesNotDedupConcurrentCalls(t *testing.T) {
 	puller := &fakePuller{records: map[string]map[string]string{"peer-a:7777": record()}}
 	h := NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
 
-	dst := t.TempDir()
+	dst1, dst2 := t.TempDir(), t.TempDir()
 	var wg sync.WaitGroup
-	for range 8 {
-		wg.Go(func() {
-			if err := h.Pull(t.Context(), testID, dst, nil); err != nil {
-				t.Errorf("Pull: %v", err)
-			}
-		})
+	errs := make([]error, 2)
+	for i, dst := range []string{dst1, dst2} {
+		wg.Go(func() { errs[i] = h.Pull(t.Context(), testID, dst, nil) })
 	}
 	wg.Wait()
-	if len(puller.asked) != 1 {
-		t.Errorf("puller called %d times (%v); concurrent misses must dedup to one pull", len(puller.asked), puller.asked)
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("Pull %d: %v", i, err)
+		}
+	}
+	if len(puller.asked) != 2 {
+		t.Errorf("puller called %d times, want 2: Pull must not dedup — that's the caller's job now", len(puller.asked))
+	}
+	for _, dst := range []string{dst1, dst2} {
+		if got, err := os.ReadFile(filepath.Join(dst, store.ExportDir, "mem")); err != nil || string(got) != "guest-pages" {
+			t.Errorf("staged export at %s = %q, %v; want every caller's own dir populated", dst, got, err)
+		}
 	}
 }
 
