@@ -446,9 +446,7 @@ func (s *Server) handleListCheckpoints(w http.ResponseWriter, r *http.Request) {
 // handleDeleteCheckpoint removes a checkpoint; a tenant caller may delete
 // only its own records (anything else is 404). no_forward marks a delete
 // arriving from another node's own broadcast, so this one does not
-// re-broadcast and loop the fleet forever. Either way, any cached probe
-// answer for id is forgotten unconditionally: a node that never held a
-// replica still learns from the broadcast that id's ownership changed.
+// re-broadcast and loop the fleet forever.
 func (s *Server) handleDeleteCheckpoint(w http.ResponseWriter, r *http.Request) {
 	scope := pool.DeleteFleet
 	if r.URL.Query().Get("no_forward") != "" {
@@ -589,9 +587,9 @@ func (s *Server) rootRequest(r *http.Request) bool {
 }
 
 // isRootToken reports whether token is the configured root api_token (the
-// operator credential). It mirrors resolveScope's root branch: an unset api
-// token matches nothing, so an open node grants no operator elevation on the
-// per-sandbox release path. Tenant tokens never match — they live in s.tenants.
+// operator credential). An unset api token matches nothing, so an open node
+// grants no operator elevation; tenant tokens never match — they live in
+// s.tenants.
 func (s *Server) isRootToken(token string) bool {
 	return s.apiToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) == 1
 }
@@ -621,7 +619,7 @@ func (s *Server) resolveScope(r *http.Request) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if s.apiToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) == 1 {
+	if s.isRootToken(token) {
 		return "", true
 	}
 	for _, tn := range s.tenants {

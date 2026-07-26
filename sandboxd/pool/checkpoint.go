@@ -167,9 +167,8 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl ti
 
 // healCheckpoint dedups concurrent heals of ckptID onto one flight (which
 // owns its own staging dir — never a caller's) and lets THIS call abandon
-// waiting the moment ctx is done; the flight itself runs detached from any
-// one caller (context.Background() in runHeal), so a client hanging up never
-// abandons a transfer already paid for — the next call would just pay again.
+// waiting the moment ctx is done; the flight itself runs detached (runHeal),
+// so a client hanging up never abandons a transfer already paid for.
 func (m *Manager) healCheckpoint(ctx context.Context, ckptID string) (types.Checkpoint, error) {
 	if ckpt, err := m.loadCheckpoint(ctx, ckptID); err == nil {
 		return ckpt, nil
@@ -190,10 +189,9 @@ func (m *Manager) healCheckpoint(ctx context.Context, ckptID string) (types.Chec
 
 // runHeal is healCheckpoint's flight body: it stages and pulls WITHOUT
 // holding ckptID's record lock — a heal budget runs up to 30 minutes, and
-// holding the lock across it would pin every other operation on the same id
-// (a delete, a claim, another heal) behind an uncancellable wait for that
-// long. The lock is taken only for the fast, final steps: check for a
-// concurrent veto (see vetoIfHealPending), re-validate, and publish.
+// holding the lock across it would pin every same-id operation behind an
+// uncancellable wait. The lock covers only the fast final steps: the veto
+// check, re-validate, publish.
 func (m *Manager) runHeal(ckptID string) (types.Checkpoint, error) {
 	select {
 	case m.healSem <- struct{}{}:
@@ -258,11 +256,9 @@ func (m *Manager) clearHealPending(ckptID string) (aborted bool) {
 	return aborted
 }
 
-// vetoIfHealPending marks ckptID aborted when a heal is currently pending
-// for it, so that heal's locked decide phase (clearHealPending) sees the
-// veto instead of publishing a checkpoint this call just answered "not
-// here" for — a delete otherwise racing an unlocked, still-staging heal
-// would return 404 only for the checkpoint to reappear moments later. A
+// vetoIfHealPending marks ckptID aborted when a heal is pending, so the
+// heal's locked decide phase (clearHealPending) abandons its publish instead
+// of resurrecting a checkpoint this delete just answered "not here" for. A
 // no-op when no heal is pending, so an unrelated miss leaves no residue.
 func (m *Manager) vetoIfHealPending(ckptID string) {
 	m.recLocksMu.Lock()
@@ -293,9 +289,8 @@ func validateHealedCheckpoint(staging, wantID string) error {
 		return fmt.Errorf("healed record %s has an invalid key: %w", wantID, keyErr)
 	}
 	if !ckpt.Key.Capturable() {
-		// An egress-lane key is well-formed but not branchable: claimLoaded
-		// rejects every branch of it, so publishing one poisons the id and
-		// suppresses a good owner. Reject it here and try the next owner.
+		// A well-formed egress key is not branchable: publishing it would
+		// poison the id and suppress a good owner; reject, try the next owner.
 		return fmt.Errorf("healed record %s has a non-branchable (egress) key", wantID)
 	}
 	export, err := os.ReadDir(filepath.Join(staging, store.ExportDir))
@@ -370,20 +365,14 @@ func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 	return pinned
 }
 
-// DeleteCheckpoint removes a checkpoint's snapshot and record, then broadcasts
-// to peers when fleet-scoped so a healed copy does not outlive it. A tenant may
-// delete only its own records — anything else answers ErrUnknownCheckpoint,
-// never a hint that the id exists; root (empty tenant) deletes anything.
-// Existence is checked under the record lock, not before it: heal broke the
-// old assumption that a local miss means the id is truly gone. That alone is
-// not enough, though — a heal's transfer runs unlocked (runHeal), so a
-// concurrent delete can take the lock, find the checkpoint absent, and
-// release it before the heal ever reaches its own locked decide phase;
-// vetoIfHealPending closes that gap by telling a pending heal to abandon its
-// publish instead of resurrecting what this call just answered "not here"
-// for. Every exit evicts the lock entry (recDoneEvict, not recDone) — unlike
-// a template id, a checkpoint id is effectively one-shot, so nothing is lost
-// keeping the map from growing per rejected or successful call alike.
+// DeleteCheckpoint removes a checkpoint's snapshot and record, then
+// broadcasts to peers when fleet-scoped so a healed copy does not outlive it.
+// A tenant may delete only its own records — anything else answers
+// ErrUnknownCheckpoint, never a hint the id exists; root deletes anything.
+// Existence is checked under the record lock (heal broke the "local miss
+// means truly gone" assumption), plus vetoIfHealPending for a heal whose
+// transfer runs unlocked. Every exit evicts the lock entry (recDoneEvict) —
+// a checkpoint id is effectively one-shot, so the map must not grow per call.
 func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, scope DeleteScope) error {
 	// Reject a bad id before recLock: a rejected id must not leave a
 	// lock-map entry.
@@ -445,10 +434,8 @@ func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 }
 
 // deleteCkLocked removes a checkpoint under its record lock, so the delete
-// never runs beneath an in-flight branch clone, heal, or archived wake. The
-// lock is unlocked before the entry is considered for eviction: evicting
-// while still (logically) held is what would let a concurrent recLock for
-// the same id hand out a different mutex and split the serialization.
+// never runs beneath an in-flight branch clone, heal, or archived wake; the
+// lock is released before eviction is considered (see recDoneEvict).
 func (m *Manager) deleteCkLocked(ctx context.Context, ckID string) error {
 	l := m.recLock(ckID)
 	l.Lock()

@@ -22,15 +22,11 @@ type Owners func(id string) []string
 // error tries the next owner. The healer does not know the record's shape.
 type Validate func(staging string) error
 
-// Healer pulls a record this node does not hold into a caller-provided staging
-// directory; the caller validates and publishes it. A nil owners or puller
-// makes every Pull a miss, so a node with no mesh simply cannot heal. Pull
-// does not dedup concurrent calls: a caller-owned staging dir means two
-// concurrent Pulls for the same id are two independent destinations, so
-// sharing one result (as a Healer-internal singleflight once did) would
-// leave whichever caller did not "win" the flight with an untouched,
-// published-empty directory. Dedup belongs to whoever owns the destination —
-// pool.Manager's per-id heal flight, which owns one staging dir per flight.
+// Healer pulls a record this node does not hold into a caller-provided
+// staging directory; the caller validates and publishes it. A nil owners or
+// puller makes every Pull a miss (no mesh, no heal). Pull never dedups
+// concurrent calls: each caller owns its destination dir, so dedup belongs to
+// whoever owns the staging — pool.Manager's per-id heal flight.
 type Healer struct {
 	owners Owners
 	puller Puller

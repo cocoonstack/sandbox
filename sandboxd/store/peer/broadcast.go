@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -56,12 +54,7 @@ func deleteOn(ctx context.Context, client *http.Client, addr, id, token string) 
 	ctx, cancel := context.WithTimeout(ctx, deleteTimeout)
 	defer cancel()
 
-	base := addr
-	if !strings.Contains(base, "://") {
-		base = "http://" + base
-	}
-	u := base + "/v1/checkpoints/" + url.PathEscape(id) + "?no_forward=1"
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, checkpointURL(addr, id, "?no_forward=1"), nil)
 	if err != nil {
 		return err
 	}

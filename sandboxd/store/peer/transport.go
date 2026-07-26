@@ -56,12 +56,7 @@ func (p *HTTPPuller) Pull(ctx context.Context, addr, id, dst string) error {
 	ctx, cancel := context.WithTimeout(ctx, pullTimeout)
 	defer cancel()
 
-	base := addr
-	if !strings.Contains(base, "://") {
-		base = "http://" + base
-	}
-	u := base + "/v1/checkpoints/" + url.PathEscape(id) + "/blob"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checkpointURL(addr, id, "/blob"), nil)
 	if err != nil {
 		return err
 	}
@@ -115,8 +110,6 @@ func TarRecord(exportDir string, meta []byte, w io.Writer) error {
 	if err := tarInto(exportDir, exportPrefix, tw); err != nil {
 		return err
 	}
-	// The completion marker rides last, after the export streamed whole, so its
-	// absence tells the receiver the transfer was cut short.
 	if err := tw.WriteHeader(&tar.Header{
 		Name: recordTrailer, Mode: 0o600, Size: 0, Typeflag: tar.TypeReg,
 	}); err != nil {
@@ -235,6 +228,15 @@ func writeFile(target string, r io.Reader, mode os.FileMode) error {
 		return fmt.Errorf("untar write %s: %w", target, err)
 	}
 	return f.Close()
+}
+
+// checkpointURL builds the control-plane URL for id's record on addr — the
+// one home for the scheme default a mesh member view omits.
+func checkpointURL(addr, id, suffix string) string {
+	if !strings.Contains(addr, "://") {
+		addr = "http://" + addr
+	}
+	return addr + "/v1/checkpoints/" + url.PathEscape(id) + suffix
 }
 
 // safeJoin resolves name under root, rejecting absolute paths and any name

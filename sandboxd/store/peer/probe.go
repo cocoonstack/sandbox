@@ -8,8 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"net/http"
-	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -24,9 +22,8 @@ const (
 	redirectCacheTTL          = 5 * time.Second
 
 	// probeGrace bounds how long a fan-out waits for more owners once it has
-	// its first: a checkpoint usually lives on one node, so the cap of three is
-	// rarely reached and without this the collector would block on every
-	// missing peer's timeout before returning the single owner it already has.
+	// its first: a checkpoint usually lives on one node, and without this the
+	// collector would wait out every missing peer's timeout to return it.
 	probeGrace = 150 * time.Millisecond
 
 	// ProbeHeader carries the base64 probe MAC when a ProbeKey is configured.
@@ -72,14 +69,11 @@ type HTTPProber struct {
 	cacheTTL time.Duration
 }
 
-// Owners fans a HEAD out to every peer in parallel and returns up to
-// maxRedirectOwners addresses that answered 200 -- enough candidates for a
-// redirect, not the whole fleet. Concurrent Owners calls for the same id
-// share one fan-out; a short positive cache then serves a hot id's repeat
-// redirects without re-probing the fleet at all. The cache accepts up to
-// redirectCacheTTL of staleness: a redirect to a peer that deleted the
-// record moments ago fails safely (404, then the client's own no_redirect
-// fallback heals from the origin), it never serves a wrong answer silently.
+// Owners fans a HEAD out to every peer and returns up to maxRedirectOwners
+// addresses that answered 200. Concurrent calls for one id share a fan-out;
+// a short positive cache serves a hot id's repeat redirects. Cache staleness
+// fails safely: a redirect to a peer that just deleted the record 404s, and
+// the client's no_redirect fallback heals from the origin.
 func (p *HTTPProber) Owners(ctx context.Context, id string) []string {
 	owners, start, hit := p.cacheLookup(id)
 	if hit {
@@ -93,11 +87,9 @@ func (p *HTTPProber) Owners(ctx context.Context, id string) []string {
 	return v.([]string)
 }
 
-// HealOwners is Owners' wide-fan-out twin: a heal wants the largest
-// available source list, so a few full or corrupt owners cannot hide a
-// usable one from it. Concurrent calls for the same id share one fan-out;
-// results are not cached -- a heal source list should reflect the fleet at
-// the moment it is needed, not a redirect-tuned snapshot.
+// HealOwners is Owners' wide twin: a heal wants the largest source list, so
+// a few full or corrupt owners cannot hide a usable one. Uncached — a heal's
+// source list should reflect the fleet now, not a redirect-tuned snapshot.
 func (p *HTTPProber) HealOwners(ctx context.Context, id string) []string {
 	v, _, _ := p.healFlight.Do(id, func() (any, error) {
 		// No grace: a heal wants every owner it can find, so it must not stop
@@ -107,11 +99,9 @@ func (p *HTTPProber) HealOwners(ctx context.Context, id string) []string {
 	return v.([]string)
 }
 
-// Forget evicts any cached Owners result for id -- called after a delete
-// (original or forwarded from another node's broadcast) touches id here,
-// since a stale positive would redirect a claim to a node that no longer
-// holds the record. A miss was never cached, so a delete that finds nothing
-// locally has nothing to do beyond this.
+// Forget evicts any cached Owners result for id -- called after any delete
+// (original or forwarded broadcast) touches id here, since a stale positive
+// would redirect claims to a node that no longer holds the record.
 func (p *HTTPProber) Forget(id string) {
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
@@ -119,13 +109,10 @@ func (p *HTTPProber) Forget(id string) {
 	delete(p.cache, id)
 }
 
-// fanOut probes every peer concurrently, stopping and canceling the
-// stragglers as soon as maxOwners have answered 200 -- a hung or slow peer
-// must not add its own timeout to a redirect or heal that already has
-// enough candidates. The context is detached from the caller and rebounded
-// internally: singleflight shares this fan-out across concurrent callers
-// whose own contexts may cancel independently (one client disconnecting
-// must not abort another's still-live probe).
+// fanOut probes every peer concurrently, canceling stragglers once maxOwners
+// have answered 200. The context is detached and rebounded internally:
+// singleflight shares one fan-out across callers whose own contexts cancel
+// independently — one client disconnecting must not abort another's probe.
 func (p *HTTPProber) fanOut(ctx context.Context, id string, maxOwners int, grace time.Duration) []string {
 	addrs := dedupAddrs(p.Peers())
 	if len(addrs) == 0 {
@@ -149,12 +136,10 @@ func (p *HTTPProber) fanOut(ctx context.Context, id string, maxOwners int, grace
 	}
 	go func() { wg.Wait(); close(wins) }()
 
-	// grace opens only after the first owner answers: until then the fan-out
-	// waits out the full timeout, since a genuine miss must hear from every
-	// peer before it can conclude nobody holds the record.
-	// graceCh stays nil when grace is 0 (heal wants an exhaustive list), so the
-	// select then only ever takes a win and runs until the cap or every peer
-	// has answered.
+	// grace opens only after the first win: a genuine miss must hear from
+	// every peer before concluding nobody holds the record. graceCh stays nil
+	// when grace is 0 (a heal wants the exhaustive list), so the select then
+	// runs to the cap or until every peer has answered.
 	var owners []string
 	var graceCh <-chan time.Time
 	for {
@@ -192,10 +177,9 @@ func (p *HTTPProber) cacheLookup(id string) (owners []string, epoch uint64, hit 
 }
 
 // cachePut records a positive result, unless a Forget bumped the epoch since
-// the fan-out began — that delete may have removed the very record this result
-// names, so caching it would redirect claims to a node that no longer holds
-// it. A miss is never cached: a checkpoint that appears moments later must not
-// be hidden behind a stale negative for the TTL.
+// the fan-out began — that delete may have removed the very record this
+// result names. A miss is never cached: a checkpoint appearing moments later
+// must not hide behind a stale negative for the TTL.
 func (p *HTTPProber) cachePut(id string, owners []string, start uint64) {
 	if len(owners) == 0 {
 		return
@@ -224,12 +208,7 @@ func probeOwner(ctx context.Context, client *http.Client, probeKey []byte, addr,
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
-	base := addr
-	if !strings.Contains(base, "://") {
-		base = "http://" + base
-	}
-	u := base + "/v1/checkpoints/" + url.PathEscape(id) + "/blob"
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, u, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, checkpointURL(addr, id, "/blob"), nil)
 	if err != nil {
 		return false
 	}
@@ -260,20 +239,16 @@ func dedupAddrs(addrs []string) []string {
 }
 
 // DeriveProbeKey derives the probe-MAC key from the mesh's cluster_key via
-// one HMAC step (domain separation): cluster_key already encrypts gossip
-// traffic, and reusing that key unmodified for a second, unrelated
-// construction is avoidable at negligible cost. Call only when clusterKey
-// is non-empty; an empty result leaves probing unauthenticated.
+// one HMAC step — domain separation from the gossip encryption. Call only
+// with a non-empty clusterKey.
 func DeriveProbeKey(clusterKey []byte) []byte {
 	mac := hmac.New(sha256.New, clusterKey)
 	mac.Write([]byte("cocoon-checkpoint-probe-v1"))
 	return mac.Sum(nil)
 }
 
-// SignProbe returns the current probe MAC for id, keyed by key -- the value
-// probeOwner sends in ProbeHeader. Exported for callers (and tests) that
-// need to construct a valid probe request without reaching into this
-// package's internals.
+// SignProbe returns id's current probe MAC keyed by key — the ProbeHeader
+// value; exported for callers and tests that build a valid probe request.
 func SignProbe(key []byte, id string) string {
 	return probeMAC(key, id, currentBucket())
 }

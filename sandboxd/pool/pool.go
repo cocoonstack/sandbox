@@ -234,12 +234,9 @@ type Manager struct {
 	ckptsShared bool
 	healer      *peer.Healer
 	// healSem bounds concurrent transfers node-wide; healFlights dedups
-	// concurrent heals of the same id to one transfer (keyed by checkpoint
-	// id, owns its own staging dir — callers never see one). healPending and
-	// healAbort (guarded by recLocksMu) let a delete that finds a checkpoint
-	// absent veto a heal already staging for that same id, so the heal's
-	// locked decide phase does not publish moments after a delete answered
-	// "not here" for it.
+	// same-id heals onto one transfer, which owns its own staging dir.
+	// healPending/healAbort (guarded by recLocksMu) let a delete veto a heal
+	// still staging the same id (see vetoIfHealPending).
 	healSem      chan struct{}
 	healFlights  singleflight.Group
 	healPending  map[string]struct{}

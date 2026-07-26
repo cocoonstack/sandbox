@@ -264,9 +264,6 @@ func TestTarRecordRoundTripsAWholeRecord(t *testing.T) {
 	}
 }
 
-// tarDir streams src's contents with no record layout, exercising tarInto and
-// Untar on their own.
-
 // TestUntarRejectsRecordWithoutCompletionMarker: a transfer cut short by a
 // source-side walk/read error still yields a valid short tar (Close writes the
 // footer regardless), so the receiver must reject a record that arrives without
@@ -310,6 +307,8 @@ func TestTarRecordUntarRoundTripComplete(t *testing.T) {
 	}
 }
 
+// tarDir streams src's contents with no record layout, exercising tarInto and
+// Untar on their own.
 func tarDir(src string, w io.Writer) error {
 	tw := tar.NewWriter(w)
 	defer func() { _ = tw.Close() }()
