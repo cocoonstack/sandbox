@@ -76,6 +76,7 @@ type Manager interface {
 	ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error)
 	ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error)
 	Checkpoints(ctx context.Context, tenant string) ([]types.Checkpoint, error)
+	HasCheckpoint(ctx context.Context, ckptID string) bool
 	FetchCheckpoint(ctx context.Context, ckptID string) (dir string, meta []byte, release func(), err error)
 	DeleteCheckpoint(ctx context.Context, ckptID, tenant string) error
 	ClaimDeadline(id, token string) (time.Time, error)
@@ -98,9 +99,15 @@ type Dialer interface {
 type Placer interface {
 	Candidates(keyHash string) []string
 	TemplateOwners(keyHash string) []string
-	CheckpointOwners(ckptID string) []string
 	PeerAddrs() []string
 	ConfigMismatches() int
+}
+
+// CheckpointProber answers which peers currently hold a checkpoint, queried
+// live on a redirect decision rather than gossiped; nil disables probing
+// (single-node).
+type CheckpointProber interface {
+	Owners(ctx context.Context, id string) []string
 }
 
 // InfoResponse is the wire reply of GET /v1/info. Peers lists the other nodes'
@@ -127,6 +134,7 @@ type Server struct {
 	mgr       Manager
 	dialer    Dialer
 	placer    Placer
+	prober    CheckpointProber
 	apiToken  string
 	tenants   []config.TenantSpec
 	advertise string
@@ -142,12 +150,14 @@ type Server struct {
 // node-level endpoints open (per-sandbox tokens still guard sandbox-scoped
 // calls). tenants adds per-tenant tokens next to the root apiToken.
 // advertise is this node's data-plane address, returned as a claim's owner
-// address. A nil placer disables mesh redirects (single node).
-func New(apiToken string, tenants []config.TenantSpec, advertise string, mgr Manager, dialer Dialer, placer Placer, preview *PreviewServer) *Server {
+// address. A nil placer disables mesh redirects and a nil prober disables
+// checkpoint-owner probing (both single-node).
+func New(apiToken string, tenants []config.TenantSpec, advertise string, mgr Manager, dialer Dialer, placer Placer, prober CheckpointProber, preview *PreviewServer) *Server {
 	return &Server{
 		mgr:       mgr,
 		dialer:    dialer,
 		placer:    placer,
+		prober:    prober,
 		apiToken:  apiToken,
 		tenants:   tenants,
 		advertise: advertise,
@@ -179,6 +189,9 @@ func (s *Server) Handler() http.Handler {
 	// The peer-transfer half of the snapshot placement design: a node that
 	// cannot redirect a branch pulls the record from an owner through this.
 	mux.HandleFunc("GET /v1/checkpoints/{id}/blob", s.requireToken(s.handleCheckpointBlob))
+	// HEAD is the probe endpoint a redirect decision fans out to: it must stay
+	// unauthenticated, so it is registered outside requireToken.
+	mux.HandleFunc("HEAD /v1/checkpoints/{id}/blob", s.handleCheckpointProbe)
 	mux.HandleFunc("DELETE /v1/checkpoints/{id}", s.requireToken(s.handleDeleteCheckpoint))
 	mux.HandleFunc("DELETE /v1/templates", s.requireToken(s.handleDeleteTemplate))
 	mux.HandleFunc("PUT /v1/pools", s.requireRoot(s.handlePutPools))
@@ -352,8 +365,10 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 
 // handleClaimCheckpoint claims a fresh sandbox branched from a checkpoint.
 // Tier order: local claim first; then a redirect (zero bytes moved) when a
-// gossiped owner exists and this is not already the redirect retry; heal (one
-// peer transfer) only when neither could answer.
+// live probe finds an owner and this is not already the redirect retry —
+// redirect targets come from a live probe, not gossip, so a redirect never
+// points at a node that already lost the record; heal (one peer transfer)
+// only when neither could answer.
 func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeBody[types.CheckpointClaimRequest](w, r)
 	if !ok {
@@ -362,7 +377,7 @@ func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	ckptID := r.PathValue("id")
 	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, req.TTL(), tenantFrom(r.Context()))
 	if errors.Is(err, pool.ErrUnknownCheckpoint) {
-		if !req.NoRedirect && s.placer != nil && writeRedirect(w, s.placer.CheckpointOwners(ckptID)) {
+		if !req.NoRedirect && s.prober != nil && writeRedirect(w, s.prober.Owners(r.Context(), ckptID)) {
 			return
 		}
 		sb, err = s.mgr.ClaimCheckpointHeal(r.Context(), ckptID, req.TTL(), tenantFrom(r.Context()))
@@ -395,6 +410,17 @@ func (s *Server) handleCheckpointBlob(w http.ResponseWriter, r *http.Request) {
 	if err := peer.TarRecord(dir, meta, w); err != nil {
 		log.WithFunc("server.handleCheckpointBlob").Error(r.Context(), err, "stream checkpoint")
 	}
+}
+
+// handleCheckpointProbe answers a peer's HEAD probe for a checkpoint.
+// Unauthenticated on purpose: the id is the unguessable capability, so this
+// leaks only existence to a caller who already holds it.
+func (s *Server) handleCheckpointProbe(w http.ResponseWriter, r *http.Request) {
+	if s.mgr.HasCheckpoint(r.Context(), r.PathValue("id")) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	w.WriteHeader(http.StatusNotFound)
 }
 
 // handleListCheckpoints lists this node's checkpoints, newest first — a

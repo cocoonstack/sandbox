@@ -240,13 +240,6 @@ type Manager struct {
 	tplMu  sync.Mutex
 	tplSet map[string]struct{}
 
-	// ckptSet mirrors tplSet for checkpoints: publish/delete/heal keep it
-	// current, startup seeds it from one Metas scan. Nil on a shared
-	// checkpoint store — gossiping it there would have every node advertise
-	// every record.
-	ckptMu  sync.Mutex
-	ckptSet map[string]struct{}
-
 	// recLocks serializes same-id store record mutations and holds off a
 	// re-publish swap while a clone reads the old generation (per id, RW).
 	recLocks sync.Map
@@ -336,9 +329,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 				m.tplSet[rec.ID] = struct{}{}
 			}
 		}
-	}
-	if !m.ckptsShared {
-		m.seedCkptSet(ctx)
 	}
 	usage, err := newJournal(filepath.Join(cfg.DataDir, "usage.jsonl"))
 	if err != nil {
@@ -587,24 +577,6 @@ func (m *Manager) WithPeerHeal(enabled bool, owners peer.Owners, token string) {
 		return
 	}
 	m.healer = peer.New(m.ckpts, owners, &peer.HTTPPuller{Token: token})
-}
-
-// seedCkptSet rebuilds the gossip set from one store scan at boot, so records
-// published by a prior life are advertised again without a re-publish.
-func (m *Manager) seedCkptSet(ctx context.Context) {
-	m.ckptSet = map[string]struct{}{}
-	metas, err := m.ckpts.Metas(ctx)
-	if err != nil {
-		// Existing records stay unadvertised until re-published; say so.
-		log.WithFunc("pool.seedCkptSet").Warnf(ctx, "seed checkpoint gossip set: %v", err)
-		return
-	}
-	for _, raw := range metas {
-		var ckpt types.Checkpoint
-		if json.Unmarshal(raw, &ckpt) == nil && ckpt.ID != "" && !ckpt.Archive {
-			m.ckptSet[ckpt.ID] = struct{}{}
-		}
-	}
 }
 
 func dirExists(path string) bool {

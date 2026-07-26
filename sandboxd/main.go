@@ -28,11 +28,15 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/mesh"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/server"
+	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
 )
 
 const (
 	shutdownGrace  = 5 * time.Second
 	gossipInterval = time.Second
+	// probeBudget bounds a checkpoint-owner probe fan-out for WithPeerHeal's
+	// resolver; the HTTPProber itself times out each individual peer sooner.
+	probeBudget = 5 * time.Second
 	// Slowloris protection; ReadTimeout/WriteTimeout must stay zero — cold
 	// claims block up to the cold probe timeout and relays stream forever.
 	readHeaderTimeout = 5 * time.Second
@@ -94,6 +98,7 @@ func main() {
 	go mgr.Run(ctx)
 
 	var placer server.Placer
+	var prober server.CheckpointProber
 	if cfg.Mesh != nil {
 		msh, err := startMesh(ctx, cfg, mgr)
 		if err != nil {
@@ -101,9 +106,13 @@ func main() {
 		}
 		defer func() { _ = msh.Shutdown() }()
 		placer = msh
-		mgr.SetTemplateNotifier(func() { msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes(), mgr.CheckpointIDs()) })
-		// Wired after the mesh: the owners resolver is the mesh's own view.
-		mgr.WithPeerHeal(cfg.CheckpointPeerHeal, msh.CheckpointOwners, cfg.APIToken)
+		mgr.SetTemplateNotifier(func() { msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes()) })
+		prober = &peer.HTTPProber{Peers: msh.PeerAddrs}
+		mgr.WithPeerHeal(cfg.CheckpointPeerHeal, func(id string) []string {
+			probeCtx, cancel := context.WithTimeout(ctx, probeBudget)
+			defer cancel()
+			return prober.Owners(probeCtx, id)
+		}, cfg.APIToken)
 		go gossipNodeState(ctx, msh, mgr)
 		logger.Infof(ctx, "mesh %s joined (%d seeds)", cmp.Or(cfg.Mesh.NodeID, cfg.Mesh.Bind), len(cfg.Mesh.Join))
 	}
@@ -112,7 +121,7 @@ func main() {
 	if cfg.PreviewListen != "" {
 		preview = server.NewPreviewServer(cfg.PreviewSecret, cfg.PreviewAdvertise, mgr)
 	}
-	srv := server.New(cfg.APIToken, cfg.Tenants, cfg.AdvertiseAddr, mgr, eng, placer, preview)
+	srv := server.New(cfg.APIToken, cfg.Tenants, cfg.AdvertiseAddr, mgr, eng, placer, prober, preview)
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           srv.Handler(),
@@ -196,7 +205,7 @@ func gossipNodeState(ctx context.Context, msh *mesh.Mesh, mgr *pool.Manager) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes(), mgr.CheckpointIDs())
+			msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes())
 		}
 	}
 }

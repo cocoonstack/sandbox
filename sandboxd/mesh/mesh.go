@@ -28,13 +28,12 @@ const leaveTimeout = time.Second
 // NodeState is one node's gossiped placement view. Epoch resolves merges: the
 // higher epoch for a given node wins.
 type NodeState struct {
-	NodeID      string         `json:"node_id"`
-	Addr        string         `json:"addr"` // data-plane advertise address
-	Epoch       uint64         `json:"epoch"`
-	Pools       map[string]int `json:"pools"`                 // PoolKey hash → warm count
-	Templates   []string       `json:"templates,omitempty"`   // promoted-template key hashes on disk
-	Checkpoints []string       `json:"checkpoints,omitempty"` // checkpoint ids on disk
-	Digest      string         `json:"digest,omitempty"`      // cluster-invariant config digest
+	NodeID    string         `json:"node_id"`
+	Addr      string         `json:"addr"` // data-plane advertise address
+	Epoch     uint64         `json:"epoch"`
+	Pools     map[string]int `json:"pools"`               // PoolKey hash → warm count
+	Templates []string       `json:"templates,omitempty"` // promoted-template key hashes on disk
+	Digest    string         `json:"digest,omitempty"`    // cluster-invariant config digest
 }
 
 // Mesh is the node's view of the cluster and its own gossiped state.
@@ -104,16 +103,15 @@ func (m *Mesh) Join(seeds []string) error {
 	return nil
 }
 
-// UpdateSelf republishes this node's warm-pool counts and template and
-// checkpoint sets, bumping the epoch so peers adopt the new view. An unchanged view is
+// UpdateSelf republishes this node's warm-pool counts and promoted-template
+// set, bumping the epoch so peers adopt the new view. An unchanged view is
 // not republished — the periodic tick would otherwise gossip a fresh epoch
 // every second for nothing.
-func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates, checkpoints []string) {
+func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates []string) {
 	m.updateMu.Lock()
 	defer m.updateMu.Unlock()
 	m.mu.Lock()
-	if maps.Equal(m.self.Pools, pools) && slices.Equal(m.self.Templates, templates) &&
-		slices.Equal(m.self.Checkpoints, checkpoints) {
+	if maps.Equal(m.self.Pools, pools) && slices.Equal(m.self.Templates, templates) {
 		m.mu.Unlock()
 		return
 	}
@@ -130,7 +128,6 @@ func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates, 
 	m.self.Epoch = epoch
 	m.self.Pools = pools
 	m.self.Templates = templates
-	m.self.Checkpoints = checkpoints
 	m.view[m.self.NodeID] = m.self
 	m.mu.Unlock()
 }
@@ -206,14 +203,20 @@ func (m *Mesh) Candidates(keyHash string) []string {
 // delete of a template this node does not hold. Self is excluded: the caller
 // has already checked its own disk.
 func (m *Mesh) TemplateOwners(keyHash string) []string {
-	return m.recordOwners(keyHash, func(st NodeState) []string { return st.Templates })
-}
-
-// CheckpointOwners returns up to two peer addresses whose gossiped checkpoint
-// set contains ckptID, the redirect targets for a branch this node cannot
-// serve. Self is excluded: the caller already checked its own store.
-func (m *Mesh) CheckpointOwners(ckptID string) []string {
-	return m.recordOwners(ckptID, func(st NodeState) []string { return st.Checkpoints })
+	m.mu.Lock()
+	var owners []string
+	for id, st := range m.view {
+		if id != m.self.NodeID && slices.Contains(st.Templates, keyHash) {
+			owners = append(owners, st.Addr)
+		}
+	}
+	m.mu.Unlock()
+	// Which two survive truncation is already jittered by map iteration
+	// order; unlike Candidates there is no warmth to rank by.
+	if len(owners) > 2 {
+		owners = owners[:2]
+	}
+	return owners
 }
 
 // Members returns the current cluster view (self included).
@@ -244,24 +247,6 @@ func (m *Mesh) Shutdown() error {
 }
 
 // persistEpoch durably records the epoch.
-// recordOwners scans the view for peers whose listed record set contains id.
-func (m *Mesh) recordOwners(id string, list func(NodeState) []string) []string {
-	m.mu.Lock()
-	var owners []string
-	for nid, st := range m.view {
-		if nid != m.self.NodeID && slices.Contains(list(st), id) {
-			owners = append(owners, st.Addr)
-		}
-	}
-	m.mu.Unlock()
-	// Which two survive truncation is already jittered by map iteration
-	// order; unlike Candidates there is no warmth to rank by.
-	if len(owners) > 2 {
-		owners = owners[:2]
-	}
-	return owners
-}
-
 func (m *Mesh) persistEpoch(epoch uint64) error {
 	return storeEpoch(m.epochPath, epoch)
 }

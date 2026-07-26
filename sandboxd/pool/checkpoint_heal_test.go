@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -31,9 +30,9 @@ func TestClaimCheckpointNeverPullsOnMiss(t *testing.T) {
 	}
 }
 
-// TestClaimCheckpointHealPullsAndGossips: a heal pays the transfer once and
-// makes the record locally listed, so the mesh advertises it going forward.
-func TestClaimCheckpointHealPullsAndGossips(t *testing.T) {
+// TestClaimCheckpointHealPullsOnce: a heal pays the transfer once and leaves
+// the record served from the local store from then on.
+func TestClaimCheckpointHealPullsOnce(t *testing.T) {
 	id := "ck_00000000000000bb"
 	ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
 	m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
@@ -48,8 +47,8 @@ func TestClaimCheckpointHealPullsAndGossips(t *testing.T) {
 	if got := puller.count(); got != 1 {
 		t.Errorf("puller called %d times, want 1", got)
 	}
-	if ids := m.CheckpointIDs(); !slices.Contains(ids, id) {
-		t.Errorf("CheckpointIDs() = %v, want %s gossiped after heal", ids, id)
+	if !m.HasCheckpoint(t.Context(), id) {
+		t.Errorf("HasCheckpoint(%s) = false, want true after heal", id)
 	}
 }
 
@@ -117,9 +116,9 @@ func TestFetchCheckpointNeverPulls(t *testing.T) {
 	}
 }
 
-// TestCheckpointIDsReflectsPublishAndDelete: the gossip set tracks a
-// checkpoint's whole lifecycle, and an archive wake image never enters it.
-func TestCheckpointIDsReflectsPublishAndDelete(t *testing.T) {
+// TestHasCheckpoint covers the probe answer across a present, missing, and
+// archive record: only a live branchable checkpoint reports true.
+func TestHasCheckpoint(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
 	src := mustClaim(t, m, testKey)
@@ -128,38 +127,17 @@ func TestCheckpointIDsReflectsPublishAndDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
-	if ids := m.CheckpointIDs(); !slices.Contains(ids, ckpt.ID) {
-		t.Errorf("CheckpointIDs() = %v, want %s listed after publish", ids, ckpt.ID)
+	if !m.HasCheckpoint(t.Context(), ckpt.ID) {
+		t.Errorf("HasCheckpoint(%s) = false, want true for a published record", ckpt.ID)
 	}
-
-	if err := m.DeleteCheckpoint(t.Context(), ckpt.ID, ""); err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	if ids := m.CheckpointIDs(); slices.Contains(ids, ckpt.ID) {
-		t.Errorf("CheckpointIDs() = %v, want %s gone after delete", ids, ckpt.ID)
+	if m.HasCheckpoint(t.Context(), "ck_00000000000000ff") {
+		t.Error("HasCheckpoint = true for a missing id, want false")
 	}
 
 	sb := mustClaim(t, m, testKey)
 	mustArchive(t, m, sb)
-	if ids := m.CheckpointIDs(); slices.Contains(ids, sb.ArchiveCk) {
-		t.Errorf("CheckpointIDs() = %v, want the archive wake image %s never listed", ids, sb.ArchiveCk)
-	}
-}
-
-// TestCheckpointIDsReseedsOnBoot: a fresh Manager over the same dataDir must
-// rebuild the gossip set from disk, not start empty until the next publish.
-func TestCheckpointIDsReseedsOnBoot(t *testing.T) {
-	dataDir := t.TempDir()
-	m1 := newTestManagerAt(t, newFakeEngine(), dataDir)
-	src := mustClaim(t, m1, testKey)
-	ckpt, err := m1.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "", "")
-	if err != nil {
-		t.Fatalf("checkpoint: %v", err)
-	}
-
-	m2 := newTestManagerAt(t, newFakeEngine(), dataDir)
-	if ids := m2.CheckpointIDs(); !slices.Contains(ids, ckpt.ID) {
-		t.Errorf("fresh manager CheckpointIDs() = %v, want %s re-seeded from disk", ids, ckpt.ID)
+	if m.HasCheckpoint(t.Context(), sb.ArchiveCk) {
+		t.Errorf("HasCheckpoint(%s) = true for an archive wake image, want false", sb.ArchiveCk)
 	}
 }
 

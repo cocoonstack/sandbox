@@ -188,7 +188,6 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		log.WithFunc("pool.wakeArchived").Warnf(ctx, "delete consumed archive ck %s: %v", ck, delErr)
 	} else {
 		m.dropRecLock(ck)
-		m.dropCkpt(ck)
 	}
 	// Only the none lane reaches here (the egress guard above fails closed), so
 	// this rebinds the none-lane proxy; there is no NIC to re-lock.
@@ -235,7 +234,5 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 func (m *Manager) deleteOrphanArchiveCk(ctx context.Context, ckID string) {
 	if err := m.ckpts.Delete(ctx, ckID); err != nil {
 		log.WithFunc("pool.deleteOrphanArchiveCk").Warnf(ctx, "delete orphaned archive ck %s: %v", ckID, err)
-		return
 	}
-	m.dropCkpt(ckID)
 }

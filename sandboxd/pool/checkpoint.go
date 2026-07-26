@@ -80,9 +80,6 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 	if err := m.ckpts.Publish(ctx, staging, ckpt.ID); err != nil {
 		return types.Checkpoint{}, "", fmt.Errorf("commit checkpoint: %w", err)
 	}
-	if !archive {
-		m.noteCkpt(ckpt)
-	}
 	return ckpt, srcSnap, nil
 }
 
@@ -119,7 +116,6 @@ func (m *Manager) ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl ti
 	if err != nil {
 		return nil, err
 	}
-	m.noteCkpt(ckpt) // record is now local: gossip it
 	return m.claimLoaded(ctx, ckpt, ttl, tenant)
 }
 
@@ -263,7 +259,6 @@ func (m *Manager) deleteCkLocked(ctx context.Context, ckID string) error {
 		return err
 	}
 	m.dropRecLock(ckID)
-	m.dropCkpt(ckID)
 	return nil
 }
 
@@ -296,44 +291,11 @@ func parseCheckpoint(raw []byte) (types.Checkpoint, error) {
 	return ckpt, nil
 }
 
-// CheckpointIDs lists this node's checkpoint ids for the mesh to gossip, from
-// the in-memory set — mirrors TemplateHashes so the 1s gossip tick never
-// touches the store backend. Archive wake images never enter the set. Nil on
-// a shared checkpoint store (every node already resolves every record).
-func (m *Manager) CheckpointIDs() []string {
-	m.ckptMu.Lock()
-	defer m.ckptMu.Unlock()
-	if m.ckptSet == nil {
-		return nil
-	}
-	ids := make([]string, 0, len(m.ckptSet))
-	for id := range m.ckptSet {
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
-	return ids
-}
-
-// noteCkpt adds a fresh non-archive record to the gossip set: called after
-// publishCheckpoint's Publish commits, and after ClaimCheckpointHeal pulls a
-// peer's record into this node's local store.
-func (m *Manager) noteCkpt(ckpt types.Checkpoint) {
-	if m.ckptSet == nil || ckpt.Archive {
-		return
-	}
-	m.ckptMu.Lock()
-	m.ckptSet[ckpt.ID] = struct{}{}
-	m.ckptMu.Unlock()
-}
-
-// dropCkpt removes id from the gossip set once its store record is deleted.
-func (m *Manager) dropCkpt(id string) {
-	if m.ckptSet == nil {
-		return
-	}
-	m.ckptMu.Lock()
-	delete(m.ckptSet, id)
-	m.ckptMu.Unlock()
+// HasCheckpoint reports whether this node's local store holds a branchable
+// (non-archive) record for id — the probe answer, never a fetch.
+func (m *Manager) HasCheckpoint(ctx context.Context, ckptID string) bool {
+	ckpt, err := m.loadCheckpoint(ctx, ckptID)
+	return err == nil && !ckpt.Archive
 }
 
 // FetchCheckpoint materializes a checkpoint's export for a peer transfer,

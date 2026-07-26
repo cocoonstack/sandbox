@@ -715,7 +715,7 @@ func TestClaimRedirectsOnWarmMiss(t *testing.T) {
 		provisioned = true
 		return &types.Sandbox{ID: "sb_local"}, nil
 	}}
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"node-b:7777", "node-c:7777"}}, nil)
+	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"node-b:7777", "node-c:7777"}}, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -760,7 +760,7 @@ func TestClaimRedirectsToTemplateOwner(t *testing.T) {
 					return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
 				},
 			}
-			srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil)
+			srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil, nil)
 			ts := httptest.NewServer(srv.Handler())
 			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -788,7 +788,7 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 	// Unknown locally + gossip names an owner → the claim redirect shape;
 	// unknown everywhere stays 404.
 	mgr := &fakeManager{} // DeleteTemplate → ErrUnknownTemplate
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil)
+	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -820,7 +820,7 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 		t.Errorf("status %d, want 404 with no_redirect despite known owners", resp2.StatusCode)
 	}
 
-	srvNoOwner := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{}, nil)
+	srvNoOwner := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{}, nil, nil)
 	ts2 := httptest.NewServer(srvNoOwner.Handler())
 	t.Cleanup(func() { ts2.Close(); srvNoOwner.CloseRelays() })
 	req3, _ := http.NewRequest(http.MethodDelete, ts2.URL+"/v1/templates?template=tpl", nil)
@@ -839,7 +839,7 @@ func TestClaimProvisionsWhenNoCandidate(t *testing.T) {
 	mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
 		return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
 	}}
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: nil}, nil)
+	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: nil}, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -867,7 +867,7 @@ func TestOwnerEndpoint(t *testing.T) {
 		}
 		return "", pool.ErrUnknownSandbox
 	}}
-	srv := New("", nil, "node-b:7777", mgr, &fakeDialer{}, nil, nil)
+	srv := New("", nil, "node-b:7777", mgr, &fakeDialer{}, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -909,7 +909,7 @@ func TestPreviewHandlerZeroDeadlineMintsLiveToken(t *testing.T) {
 		return time.Time{}, nil
 	}}
 	ps := NewPreviewServer("secret", "node:7777", &fakePreviewMgr{})
-	srv := New("", nil, "node:7777", mgr, &fakeDialer{}, nil, ps)
+	srv := New("", nil, "node:7777", mgr, &fakeDialer{}, nil, nil, ps)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -943,8 +943,8 @@ func TestPreviewHandlerZeroDeadlineMintsLiveToken(t *testing.T) {
 // A, branch from B" simply not work.
 func TestCheckpointClaimRedirectsToOwner(t *testing.T) {
 	mgr := &fakeManager{} // ClaimCheckpoint defaults to ErrUnknownCheckpoint
-	placer := &fakePlacer{ckptOwners: []string{"owner-a:7777"}}
-	ts := newPlacerTestServer(t, "sekret", mgr, placer)
+	prober := &fakeProber{owners: []string{"owner-a:7777"}}
+	ts := newPlacerTestServer(t, "sekret", mgr, prober)
 
 	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
 	defer resp.Body.Close()
@@ -967,8 +967,8 @@ func TestCheckpointClaimRedirectsToOwner(t *testing.T) {
 // TestCheckpointClaimNoRedirectResolvesLocally: the retry at a redirect target
 // must resolve there or two nodes would bounce the request between them.
 func TestCheckpointClaimNoRedirectResolvesLocally(t *testing.T) {
-	placer := &fakePlacer{ckptOwners: []string{"owner-a:7777"}}
-	ts := newPlacerTestServer(t, "sekret", &fakeManager{}, placer)
+	prober := &fakeProber{owners: []string{"owner-a:7777"}}
+	ts := newPlacerTestServer(t, "sekret", &fakeManager{}, prober)
 
 	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{"no_redirect":true}`)
 	defer resp.Body.Close()
@@ -983,7 +983,7 @@ func TestCheckpointClaimNoRedirectResolvesLocally(t *testing.T) {
 // than a redirect to nowhere.
 func TestCheckpointClaimNoOwnersIs404(t *testing.T) {
 	mgr := &fakeManager{} // ClaimCheckpointHeal defaults to ErrUnknownCheckpoint
-	ts := newPlacerTestServer(t, "sekret", mgr, &fakePlacer{})
+	ts := newPlacerTestServer(t, "sekret", mgr, nil)
 
 	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
 	defer resp.Body.Close()
@@ -1001,8 +1001,8 @@ func TestCheckpointClaimNoOwnersIs404(t *testing.T) {
 // the heal pull, even though the local ClaimCheckpoint missed.
 func TestCheckpointClaimRedirectBeatsHeal(t *testing.T) {
 	mgr := &fakeManager{} // ClaimCheckpoint defaults to ErrUnknownCheckpoint
-	placer := &fakePlacer{ckptOwners: []string{"owner-a:7777"}}
-	ts := newPlacerTestServer(t, "sekret", mgr, placer)
+	prober := &fakeProber{owners: []string{"owner-a:7777"}}
+	ts := newPlacerTestServer(t, "sekret", mgr, prober)
 
 	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
 	defer resp.Body.Close()
@@ -1030,7 +1030,7 @@ func TestCheckpointClaimFallsBackToHealWhenNoOwner(t *testing.T) {
 			return &types.Sandbox{ID: "sb_healed", Token: "htok", FromCheckpoint: ckptID}, nil
 		},
 	}
-	ts := newPlacerTestServer(t, "sekret", mgr, &fakePlacer{})
+	ts := newPlacerTestServer(t, "sekret", mgr, nil)
 
 	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
 	defer resp.Body.Close()
@@ -1058,8 +1058,8 @@ func TestCheckpointClaimNoRedirectGoesStraightToHeal(t *testing.T) {
 			return &types.Sandbox{ID: "sb_healed", Token: "htok", FromCheckpoint: ckptID}, nil
 		},
 	}
-	placer := &fakePlacer{ckptOwners: []string{"owner-a:7777"}}
-	ts := newPlacerTestServer(t, "sekret", mgr, placer)
+	prober := &fakeProber{owners: []string{"owner-a:7777"}}
+	ts := newPlacerTestServer(t, "sekret", mgr, prober)
 
 	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{"no_redirect":true}`)
 	defer resp.Body.Close()
@@ -1144,6 +1144,71 @@ func TestCheckpointBlobStreamsRecord(t *testing.T) {
 	}
 }
 
+// TestCheckpointBlobHeadUnauthenticated proves the probe route bypasses
+// requireToken while GET still enforces it: the id is the unguessable
+// capability, so an unauthenticated HEAD only confirms existence.
+func TestCheckpointBlobHeadUnauthenticated(t *testing.T) {
+	const ckptID = "ck_00000000000000aa"
+	mgr := &fakeManager{hasCheckpoint: map[string]bool{ckptID: true}}
+	ts := newTestServer(t, "sekret", mgr, nil)
+
+	head := func(id string) int {
+		resp, err := http.Head(ts.URL + "/v1/checkpoints/" + id + "/blob")
+		if err != nil {
+			t.Fatalf("head: %v", err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := head(ckptID); got != http.StatusOK {
+		t.Errorf("HEAD present, no token: status = %d, want 200", got)
+	}
+	if got := head("ck_00000000000000ff"); got != http.StatusNotFound {
+		t.Errorf("HEAD missing, no token: status = %d, want 404", got)
+	}
+
+	resp, err := http.Get(ts.URL + "/v1/checkpoints/" + ckptID + "/blob")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("GET no token: status = %d, want 401", resp.StatusCode)
+	}
+}
+
+// TestCheckpointClaimProbesRealPeerAndRedirects is the end-to-end probe: a
+// live HTTPProber HEADs an actual peer server rather than a fake, proving the
+// probe wire protocol (unauthenticated HEAD, addr scheme defaulting) against
+// the real handler, not just an interface stub.
+func TestCheckpointClaimProbesRealPeerAndRedirects(t *testing.T) {
+	const ckptID = "ck_00000000000000aa"
+	mgrB := &fakeManager{hasCheckpoint: map[string]bool{ckptID: true}}
+	srvB := New("sekret", nil, "node-b:7777", mgrB, &fakeDialer{}, nil, nil, nil)
+	tsB := httptest.NewServer(srvB.Handler())
+	t.Cleanup(tsB.Close)
+
+	prober := &peer.HTTPProber{Peers: func() []string { return []string{tsB.URL} }}
+	mgrA := &fakeManager{} // ClaimCheckpoint defaults to ErrUnknownCheckpoint
+	srvA := New("sekret", nil, "node-a:7777", mgrA, &fakeDialer{}, nil, prober, nil)
+	tsA := httptest.NewServer(srvA.Handler())
+	t.Cleanup(tsA.Close)
+
+	resp := postJSON(t, tsA.URL+"/v1/checkpoints/"+ckptID+"/claim", "sekret", `{}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 carrying a redirect", resp.StatusCode)
+	}
+	var got types.ClaimResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Redirect) != 1 || got.Redirect[0] != tsB.URL {
+		t.Errorf("redirect = %v, want [%s]", got.Redirect, tsB.URL)
+	}
+}
+
 func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *httptest.Server {
 	t.Helper()
 	return newTenantTestServer(t, apiToken, nil, mgr, dialer)
@@ -1154,7 +1219,7 @@ func newTenantTestServer(t *testing.T, apiToken string, tenants []config.TenantS
 	if dialer == nil {
 		dialer = &fakeDialer{}
 	}
-	srv := New(apiToken, tenants, "node:7777", mgr, dialer, nil, nil)
+	srv := New(apiToken, tenants, "node:7777", mgr, dialer, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()
@@ -1177,15 +1242,16 @@ func credToken(cred pool.Cred) string {
 // the claim hook stands in for the provision result. Tenant-scoped methods
 // record the tenant they were handed in gotTenant.
 type fakeManager struct {
-	ckptDir   string
-	claim     func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
-	release   func(id, token string) error
-	releaseOp func(id string) error
-	socket    func(id, token string) (string, error)
-	hibernate func(id, token string) error
-	wake      func(id, token string) error
-	fork      func(id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
-	promote   func(id, token, template string) error
+	ckptDir       string
+	hasCheckpoint map[string]bool
+	claim         func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
+	release       func(id, token string) error
+	releaseOp     func(id string) error
+	socket        func(id, token string) (string, error)
+	hibernate     func(id, token string) error
+	wake          func(id, token string) error
+	fork          func(id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
+	promote       func(id, token, template string) error
 
 	deleteGolden func(key types.PoolKey) error
 	hasGolden    bool
@@ -1391,17 +1457,20 @@ func (f *fakeDialer) DialSilkd(ctx context.Context, sock string) (net.Conn, erro
 }
 
 type fakePlacer struct {
-	ckptOwners []string
-	addrs      []string
-	owners     []string
+	addrs  []string
+	owners []string
 }
 
 func (f *fakePlacer) Candidates(string) []string     { return f.addrs }
 func (f *fakePlacer) TemplateOwners(string) []string { return f.owners }
+func (f *fakePlacer) PeerAddrs() []string            { return f.addrs }
+func (f *fakePlacer) ConfigMismatches() int          { return 0 }
 
-func (f *fakePlacer) CheckpointOwners(string) []string { return f.ckptOwners }
-func (f *fakePlacer) PeerAddrs() []string              { return f.addrs }
-func (f *fakePlacer) ConfigMismatches() int            { return 0 }
+// fakeProber stubs CheckpointProber with a fixed answer, standing in for a
+// live HEAD fan-out.
+type fakeProber struct{ owners []string }
+
+func (f *fakeProber) Owners(context.Context, string) []string { return f.owners }
 
 // FetchCheckpoint serves the peer-transfer read; the fake reports every record
 // missing unless a test supplies a directory.
@@ -1412,11 +1481,19 @@ func (f *fakeManager) FetchCheckpoint(_ context.Context, _ string) (string, []by
 	return f.ckptDir, []byte(`{"id":"ck_00000000000000aa"}`), func() {}, nil
 }
 
-// newPlacerTestServer builds a server with a mesh placer, which the shared
-// helper deliberately leaves nil (most tests are single-node).
-func newPlacerTestServer(t *testing.T, apiToken string, mgr Manager, placer Placer) *httptest.Server {
+// HasCheckpoint answers the probe endpoint straight from the fake's map;
+// unset ids report false.
+func (f *fakeManager) HasCheckpoint(_ context.Context, ckptID string) bool {
+	return f.hasCheckpoint[ckptID]
+}
+
+// newPlacerTestServer builds a server with a checkpoint prober, which the
+// shared helper deliberately leaves nil (most tests are single-node); the
+// mesh placer stays nil throughout — these tests exercise checkpoint claims
+// only.
+func newPlacerTestServer(t *testing.T, apiToken string, mgr Manager, prober CheckpointProber) *httptest.Server {
 	t.Helper()
-	srv := New(apiToken, nil, "node:7777", mgr, &fakeDialer{}, placer, nil)
+	srv := New(apiToken, nil, "node:7777", mgr, &fakeDialer{}, nil, prober, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts
