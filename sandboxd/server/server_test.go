@@ -741,6 +741,46 @@ func TestDeleteCheckpointNoForwardQueryParam(t *testing.T) {
 	}
 }
 
+// TestDeleteCheckpointForgetsProbeCache proves a delete evicts any cached
+// probe answer for the id, whether the delete is the original (fleet scope)
+// or a forwarded broadcast (no_forward) that finds nothing to delete locally
+// — both cases mean this node just learned id's ownership changed.
+func TestDeleteCheckpointForgetsProbeCache(t *testing.T) {
+	prober := &fakeProber{}
+
+	t.Run("original delete", func(t *testing.T) {
+		prober.forgotten = nil
+		mgr := &fakeManager{deleteCheckpoint: func(string) error { return nil }}
+		ts := newPlacerTestServer(t, "api", mgr, prober)
+		req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/checkpoints/ck_0011223344556677", nil)
+		req.Header.Set("Authorization", "Bearer api")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+		defer resp.Body.Close()
+		if len(prober.forgotten) != 1 || prober.forgotten[0] != "ck_0011223344556677" {
+			t.Errorf("forgotten = %v, want [ck_0011223344556677]", prober.forgotten)
+		}
+	})
+
+	t.Run("forwarded delete finding nothing locally", func(t *testing.T) {
+		prober.forgotten = nil
+		mgr := &fakeManager{deleteCheckpoint: func(string) error { return pool.ErrUnknownCheckpoint }}
+		ts := newPlacerTestServer(t, "api", mgr, prober)
+		req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/checkpoints/ck_0011223344556677?no_forward=1", nil)
+		req.Header.Set("Authorization", "Bearer api")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+		defer resp.Body.Close()
+		if len(prober.forgotten) != 1 || prober.forgotten[0] != "ck_0011223344556677" {
+			t.Errorf("forgotten = %v, want [ck_0011223344556677] even though nothing was held locally", prober.forgotten)
+		}
+	})
+}
+
 func TestClaimRedirectsOnWarmMiss(t *testing.T) {
 	// Warm miss (fakeManager.ClaimWarm always misses) + a placer with
 	// candidates → a redirect response, and the local manager never provisions.
