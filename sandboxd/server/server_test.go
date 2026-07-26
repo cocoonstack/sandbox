@@ -9,12 +9,15 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
+	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -181,6 +184,7 @@ func TestTenantAuthMatrix(t *testing.T) {
 		{"tenant forbidden on index", http.MethodGet, "/v1/sandboxes", "acme-tok", http.StatusForbidden, ""},
 		{"tenant forbidden on metrics", http.MethodGet, "/metrics", "acme-tok", http.StatusForbidden, ""},
 		{"tenant forbidden on pools", http.MethodPut, "/v1/pools", "acme-tok", http.StatusForbidden, ""},
+		{"tenant forbidden on checkpoint blob", http.MethodGet, "/v1/checkpoints/ck_00000000000000aa/blob", "acme-tok", http.StatusForbidden, ""},
 		{"wrong token on info stays 401", http.MethodGet, "/v1/info", "nope", http.StatusUnauthorized, ""},
 		{"root reads info", http.MethodGet, "/v1/info", "sekret", http.StatusOK, ""},
 	} {
@@ -370,20 +374,20 @@ func TestSandboxVerbFlows(t *testing.T) {
 }
 
 // TestReleaseOperatorToken proves the release route's authorization split: the
-// node root api_token releases any sandbox by id via ReleaseOperator (no
+// node root api_token releases any sandbox by id via an Operator credential (no
 // per-sandbox token), while a per-sandbox token still takes the token-checked
-// Release path and a tenant/wrong token gets no operator elevation (it falls to
-// Release and 404s). Exactly one manager method runs per request.
+// path and a tenant/wrong token gets no operator elevation (it resolves as a
+// non-matching sandbox token and 404s). Exactly one hook runs per request.
 func TestReleaseOperatorToken(t *testing.T) {
 	const rootTok, sbTok = "sekret", "sb-secret"
 	tenants := []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}
 	tests := []struct {
 		name        string
 		auth        string
-		wantOp      bool   // ReleaseOperator expected
-		wantRelease bool   // per-sandbox Release expected
-		wantToken   string // token Release should receive (per-sandbox path)
-		releaseErr  error  // error the per-sandbox Release returns
+		wantOp      bool   // operator (Cred.Operator) release expected
+		wantRelease bool   // per-sandbox release expected
+		wantToken   string // token the per-sandbox release should receive
+		releaseErr  error  // error the per-sandbox release returns
 		want        int
 	}{
 		{"root token releases by id", "Bearer " + rootTok, true, false, "", nil, http.StatusNoContent},
@@ -423,13 +427,13 @@ func TestReleaseOperatorToken(t *testing.T) {
 				t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
 			}
 			if opCalled != tt.wantOp {
-				t.Errorf("ReleaseOperator called=%v, want %v", opCalled, tt.wantOp)
+				t.Errorf("operator release called=%v, want %v", opCalled, tt.wantOp)
 			}
 			if relCalled != tt.wantRelease {
 				t.Errorf("Release called=%v, want %v", relCalled, tt.wantRelease)
 			}
 			if tt.wantOp && opID != "sb_1" {
-				t.Errorf("ReleaseOperator id=%q, want sb_1", opID)
+				t.Errorf("operator release id=%q, want sb_1", opID)
 			}
 			if tt.wantRelease && (relID != "sb_1" || relToken != tt.wantToken) {
 				t.Errorf("Release(%q, %q), want (sb_1, %q)", relID, relToken, tt.wantToken)
@@ -704,6 +708,79 @@ func TestCheckpointFlow(t *testing.T) {
 	}
 }
 
+// TestDeleteCheckpointNoForwardQueryParam proves the no_forward query param
+// reaches the manager, mirroring how handleDeleteTemplate already threads
+// no_redirect: a delete arriving from another node's broadcast must not
+// re-broadcast, or the fleet loops the delete forever.
+func TestDeleteCheckpointNoForwardQueryParam(t *testing.T) {
+	mgr := &fakeManager{deleteCheckpoint: func(string) error { return nil }}
+	ts := newTestServer(t, "api", mgr, &fakeDialer{})
+
+	del := func(path string) int {
+		req, _ := http.NewRequest(http.MethodDelete, ts.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer api")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := del("/v1/checkpoints/ck_0011223344556677"); got != http.StatusNoContent {
+		t.Fatalf("delete: status %d, want 204", got)
+	}
+	if mgr.gotNoForward {
+		t.Error("gotNoForward = true without the query param")
+	}
+	if got := del("/v1/checkpoints/ck_0011223344556677?no_forward=1"); got != http.StatusNoContent {
+		t.Fatalf("delete with no_forward: status %d, want 204", got)
+	}
+	if !mgr.gotNoForward {
+		t.Error("gotNoForward = false with no_forward=1 set")
+	}
+}
+
+// TestDeleteCheckpointForgetsProbeCache proves a delete evicts any cached
+// probe answer for the id, whether the delete is the original (fleet scope)
+// or a forwarded broadcast (no_forward) that finds nothing to delete locally
+// — both cases mean this node just learned id's ownership changed.
+func TestDeleteCheckpointForgetsProbeCache(t *testing.T) {
+	prober := &fakeProber{}
+
+	t.Run("original delete", func(t *testing.T) {
+		prober.forgotten = nil
+		mgr := &fakeManager{deleteCheckpoint: func(string) error { return nil }}
+		ts := newPlacerTestServer(t, "api", mgr, prober)
+		req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/checkpoints/ck_0011223344556677", nil)
+		req.Header.Set("Authorization", "Bearer api")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+		defer resp.Body.Close()
+		if len(prober.forgotten) != 1 || prober.forgotten[0] != "ck_0011223344556677" {
+			t.Errorf("forgotten = %v, want [ck_0011223344556677]", prober.forgotten)
+		}
+	})
+
+	t.Run("forwarded delete finding nothing locally", func(t *testing.T) {
+		prober.forgotten = nil
+		mgr := &fakeManager{deleteCheckpoint: func(string) error { return pool.ErrUnknownCheckpoint }}
+		ts := newPlacerTestServer(t, "api", mgr, prober)
+		req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/checkpoints/ck_0011223344556677?no_forward=1", nil)
+		req.Header.Set("Authorization", "Bearer api")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+		defer resp.Body.Close()
+		if len(prober.forgotten) != 1 || prober.forgotten[0] != "ck_0011223344556677" {
+			t.Errorf("forgotten = %v, want [ck_0011223344556677] even though nothing was held locally", prober.forgotten)
+		}
+	})
+}
+
 func TestClaimRedirectsOnWarmMiss(t *testing.T) {
 	// Warm miss (fakeManager.ClaimWarm always misses) + a placer with
 	// candidates → a redirect response, and the local manager never provisions.
@@ -712,7 +789,7 @@ func TestClaimRedirectsOnWarmMiss(t *testing.T) {
 		provisioned = true
 		return &types.Sandbox{ID: "sb_local"}, nil
 	}}
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"node-b:7777", "node-c:7777"}}, nil)
+	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"node-b:7777", "node-c:7777"}}, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -757,7 +834,7 @@ func TestClaimRedirectsToTemplateOwner(t *testing.T) {
 					return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
 				},
 			}
-			srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil)
+			srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil, nil, nil)
 			ts := httptest.NewServer(srv.Handler())
 			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -785,7 +862,7 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 	// Unknown locally + gossip names an owner → the claim redirect shape;
 	// unknown everywhere stays 404.
 	mgr := &fakeManager{} // DeleteTemplate → ErrUnknownTemplate
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil)
+	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -817,7 +894,7 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 		t.Errorf("status %d, want 404 with no_redirect despite known owners", resp2.StatusCode)
 	}
 
-	srvNoOwner := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{}, nil)
+	srvNoOwner := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{}, nil, nil, nil)
 	ts2 := httptest.NewServer(srvNoOwner.Handler())
 	t.Cleanup(func() { ts2.Close(); srvNoOwner.CloseRelays() })
 	req3, _ := http.NewRequest(http.MethodDelete, ts2.URL+"/v1/templates?template=tpl", nil)
@@ -836,7 +913,7 @@ func TestClaimProvisionsWhenNoCandidate(t *testing.T) {
 	mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
 		return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
 	}}
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: nil}, nil)
+	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: nil}, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -864,7 +941,7 @@ func TestOwnerEndpoint(t *testing.T) {
 		}
 		return "", pool.ErrUnknownSandbox
 	}}
-	srv := New("", nil, "node-b:7777", mgr, &fakeDialer{}, nil, nil)
+	srv := New("", nil, "node-b:7777", mgr, &fakeDialer{}, nil, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -906,7 +983,7 @@ func TestPreviewHandlerZeroDeadlineMintsLiveToken(t *testing.T) {
 		return time.Time{}, nil
 	}}
 	ps := NewPreviewServer("secret", "node:7777", &fakePreviewMgr{})
-	srv := New("", nil, "node:7777", mgr, &fakeDialer{}, nil, ps)
+	srv := New("", nil, "node:7777", mgr, &fakeDialer{}, nil, nil, nil, ps)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -933,6 +1010,341 @@ func TestPreviewHandlerZeroDeadlineMintsLiveToken(t *testing.T) {
 	}
 }
 
+// TestCheckpointClaimRedirectsToOwner is L2: checkpoints are node-local, so a
+// branch that lands on a node without the record must be pointed at one that
+// has it — the clone then runs on the node whose disk already holds the data,
+// on its local reflink fast path. Failing here instead would make "snapshot on
+// A, branch from B" simply not work.
+func TestCheckpointClaimRedirectsToOwner(t *testing.T) {
+	mgr := &fakeManager{} // ClaimCheckpoint defaults to ErrUnknownCheckpoint
+	prober := &fakeProber{owners: []string{"owner-a:7777"}}
+	ts := newPlacerTestServer(t, "sekret", mgr, prober)
+
+	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 carrying a redirect (the mesh redirect is a 200, not a 3xx)", resp.StatusCode)
+	}
+	var got types.ClaimResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Redirect) != 1 || got.Redirect[0] != "owner-a:7777" {
+		t.Errorf("redirect = %v, want [owner-a:7777]", got.Redirect)
+	}
+	if got.ID != "" {
+		t.Errorf("id = %q, want empty: a redirect and a delivered sandbox are mutually exclusive", got.ID)
+	}
+}
+
+// TestCheckpointClaimNoRedirectResolvesLocally: the retry at a redirect target
+// must resolve there or two nodes would bounce the request between them.
+func TestCheckpointClaimNoRedirectResolvesLocally(t *testing.T) {
+	prober := &fakeProber{owners: []string{"owner-a:7777"}}
+	ts := newPlacerTestServer(t, "sekret", &fakeManager{}, prober)
+
+	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{"no_redirect":true}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: a no_redirect retry must not bounce again", resp.StatusCode)
+	}
+}
+
+// TestCheckpointClaimNoOwnersIs404: nothing gossiped the record, so a miss
+// falls through to heal, and a heal miss (item 4) is an honest 404 rather
+// than a redirect to nowhere.
+func TestCheckpointClaimNoOwnersIs404(t *testing.T) {
+	mgr := &fakeManager{} // ClaimCheckpointHeal defaults to ErrUnknownCheckpoint
+	ts := newPlacerTestServer(t, "sekret", mgr, nil)
+
+	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+	if mgr.healCalls != 1 {
+		t.Errorf("heal called %d times, want 1: a miss with no owner must still try heal", mgr.healCalls)
+	}
+}
+
+// TestCheckpointClaimRedirectBeatsHeal is the tier-order regression test: a
+// gossiped owner must redirect (zero bytes moved) and never fall through to
+// the heal pull, even though the local ClaimCheckpoint missed.
+func TestCheckpointClaimRedirectBeatsHeal(t *testing.T) {
+	mgr := &fakeManager{} // ClaimCheckpoint defaults to ErrUnknownCheckpoint
+	prober := &fakeProber{owners: []string{"owner-a:7777"}}
+	ts := newPlacerTestServer(t, "sekret", mgr, prober)
+
+	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 carrying a redirect", resp.StatusCode)
+	}
+	var got types.ClaimResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Redirect) != 1 || got.Redirect[0] != "owner-a:7777" {
+		t.Errorf("redirect = %v, want [owner-a:7777]", got.Redirect)
+	}
+	if mgr.healCalls != 0 {
+		t.Errorf("heal called %d times, want 0: a known owner must redirect, not heal", mgr.healCalls)
+	}
+}
+
+// TestCheckpointClaimFallsBackToHealWhenNoOwner: no gossiped owner to redirect
+// to, so the server pulls the record itself via heal.
+func TestCheckpointClaimFallsBackToHealWhenNoOwner(t *testing.T) {
+	mgr := &fakeManager{
+		healCheckpoint: func(ckptID string) (*types.Sandbox, error) {
+			return &types.Sandbox{ID: "sb_healed", Token: "htok", FromCheckpoint: ckptID}, nil
+		},
+	}
+	ts := newPlacerTestServer(t, "sekret", mgr, nil)
+
+	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var got types.ClaimResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.ID != "sb_healed" {
+		t.Errorf("id = %q, want the healed claim", got.ID)
+	}
+	if mgr.healCalls != 1 {
+		t.Errorf("heal called %d times, want 1", mgr.healCalls)
+	}
+}
+
+// TestCheckpointClaimNoRedirectGoesStraightToHeal: a no_redirect retry must
+// not bounce again, but it must still try heal rather than answer 404 outright.
+func TestCheckpointClaimNoRedirectGoesStraightToHeal(t *testing.T) {
+	mgr := &fakeManager{
+		healCheckpoint: func(ckptID string) (*types.Sandbox, error) {
+			return &types.Sandbox{ID: "sb_healed", Token: "htok", FromCheckpoint: ckptID}, nil
+		},
+	}
+	prober := &fakeProber{owners: []string{"owner-a:7777"}}
+	ts := newPlacerTestServer(t, "sekret", mgr, prober)
+
+	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{"no_redirect":true}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var got types.ClaimResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Redirect) != 0 {
+		t.Errorf("redirect = %v, want none: no_redirect must not bounce", got.Redirect)
+	}
+	if got.ID != "sb_healed" {
+		t.Errorf("id = %q, want the healed claim", got.ID)
+	}
+	if mgr.healCalls != 1 {
+		t.Errorf("heal called %d times, want 1", mgr.healCalls)
+	}
+}
+
+// TestCheckpointClaimHealBusyIs503WithRetryAfter: a full heal budget is the
+// node's own transient exhaustion, not a caller error — the client should
+// retry, and Retry-After says so instead of leaving it to guess.
+func TestCheckpointClaimHealBusyIs503WithRetryAfter(t *testing.T) {
+	mgr := &fakeManager{
+		healCheckpoint: func(string) (*types.Sandbox, error) {
+			return nil, pool.ErrHealBusy
+		},
+	}
+	ts := newPlacerTestServer(t, "sekret", mgr, nil)
+
+	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Retry-After"); got == "" {
+		t.Error("Retry-After header missing on a 503")
+	}
+}
+
+// TestCheckpointBlobUnknownIs404 lets a puller move on to the next owner
+// instead of treating a stale gossip entry as a transfer failure.
+func TestCheckpointBlobUnknownIs404(t *testing.T) {
+	ts := newTestServer(t, "sekret", &fakeManager{}, nil)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		ts.URL+"/v1/checkpoints/ck_00000000000000aa/blob", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer sekret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 so the puller tries the next owner", resp.StatusCode)
+	}
+}
+
+// TestCheckpointBlobStreamsRecord is the serving half of L3: the record leaves
+// as a tar the peer can unpack, with its export contents intact.
+func TestCheckpointBlobStreamsRecord(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "mem"), []byte("guest-pages"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	mgr := &fakeManager{ckptDir: src}
+	ts := newTestServer(t, "sekret", mgr, nil)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		ts.URL+"/v1/checkpoints/ck_00000000000000aa/blob", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer sekret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	dst := t.TempDir()
+	if err := peer.Untar(resp.Body, dst); err != nil {
+		t.Fatalf("Untar the streamed record: %v", err)
+	}
+	// The blob is a whole record: meta.json at the root plus the export under
+	// export/. Streaming only the export produced a directory that published
+	// cleanly and then failed every read as "unknown checkpoint".
+	if got, err := os.ReadFile(filepath.Join(dst, "export", "mem")); err != nil || string(got) != "guest-pages" {
+		t.Fatalf("streamed export/mem = %q, %v; want the record's bytes", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "meta.json")); err != nil {
+		t.Fatalf("meta.json missing from the streamed record: %v", err)
+	}
+}
+
+// TestCheckpointBlobHeadUnauthenticated proves the probe route bypasses
+// requireToken while GET still enforces it. With no probe key configured
+// (no cluster_key -- an unencrypted mesh has no shared secret to build one
+// from), the id remains the only capability, same as before this batch.
+func TestCheckpointBlobHeadUnauthenticated(t *testing.T) {
+	const ckptID = "ck_00000000000000aa"
+	mgr := &fakeManager{hasCheckpoint: map[string]bool{ckptID: true}}
+	ts := newTestServer(t, "sekret", mgr, nil)
+
+	head := func(id string) int {
+		resp, err := http.Head(ts.URL + "/v1/checkpoints/" + id + "/blob")
+		if err != nil {
+			t.Fatalf("head: %v", err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := head(ckptID); got != http.StatusOK {
+		t.Errorf("HEAD present, no token: status = %d, want 200", got)
+	}
+	if got := head("ck_00000000000000ff"); got != http.StatusNotFound {
+		t.Errorf("HEAD missing, no token: status = %d, want 404", got)
+	}
+
+	resp, err := http.Get(ts.URL + "/v1/checkpoints/" + ckptID + "/blob")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("GET no token: status = %d, want 401", resp.StatusCode)
+	}
+}
+
+// TestCheckpointProbeRequiresValidMAC proves that with a probe key
+// configured (an encrypted mesh), handleCheckpointProbe rejects a missing or
+// wrongly-signed HEAD before it ever reads HasCheckpoint, and accepts one
+// signed with the matching key.
+func TestCheckpointProbeRequiresValidMAC(t *testing.T) {
+	const ckptID = "ck_00000000000000aa"
+	key := peer.DeriveProbeKey([]byte("cluster-secret"))
+	wrongKey := peer.DeriveProbeKey([]byte("other-secret"))
+	mgr := &fakeManager{hasCheckpoint: map[string]bool{ckptID: true}}
+	ts := newProbeAuthTestServer(t, mgr, key)
+
+	head := func(sig string) int {
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodHead, ts.URL+"/v1/checkpoints/"+ckptID+"/blob", nil)
+		if sig != "" {
+			req.Header.Set(peer.ProbeHeader, sig)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("head: %v", err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := head(""); got != http.StatusUnauthorized {
+		t.Errorf("no signature: status = %d, want 401", got)
+	}
+	if got := head(peer.SignProbe(wrongKey, ckptID)); got != http.StatusUnauthorized {
+		t.Errorf("wrong-key signature: status = %d, want 401", got)
+	}
+	if got := head(peer.SignProbe(key, ckptID)); got != http.StatusOK {
+		t.Errorf("valid signature: status = %d, want 200", got)
+	}
+	// A valid signature for a DIFFERENT checkpoint must not authorize this one.
+	if got := head(peer.SignProbe(key, "ck_00000000000000ff")); got != http.StatusUnauthorized {
+		t.Errorf("signature for a different id: status = %d, want 401", got)
+	}
+}
+
+// TestCheckpointClaimProbesRealPeerAndRedirects is the end-to-end probe: a
+// live HTTPProber HEADs an actual peer server rather than a fake, proving the
+// probe wire protocol (unauthenticated HEAD, addr scheme defaulting) against
+// the real handler, not just an interface stub.
+func TestCheckpointClaimProbesRealPeerAndRedirects(t *testing.T) {
+	const ckptID = "ck_00000000000000aa"
+	mgrB := &fakeManager{hasCheckpoint: map[string]bool{ckptID: true}}
+	srvB := New("sekret", nil, "node-b:7777", mgrB, &fakeDialer{}, nil, nil, nil, nil)
+	tsB := httptest.NewServer(srvB.Handler())
+	t.Cleanup(tsB.Close)
+
+	prober := &peer.HTTPProber{Peers: func() []string { return []string{tsB.URL} }}
+	mgrA := &fakeManager{} // ClaimCheckpoint defaults to ErrUnknownCheckpoint
+	srvA := New("sekret", nil, "node-a:7777", mgrA, &fakeDialer{}, nil, prober, nil, nil)
+	tsA := httptest.NewServer(srvA.Handler())
+	t.Cleanup(tsA.Close)
+
+	resp := postJSON(t, tsA.URL+"/v1/checkpoints/"+ckptID+"/claim", "sekret", `{}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 carrying a redirect", resp.StatusCode)
+	}
+	var got types.ClaimResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Redirect) != 1 || got.Redirect[0] != tsB.URL {
+		t.Errorf("redirect = %v, want [%s]", got.Redirect, tsB.URL)
+	}
+}
+
 func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *httptest.Server {
 	t.Helper()
 	return newTenantTestServer(t, apiToken, nil, mgr, dialer)
@@ -943,7 +1355,7 @@ func newTenantTestServer(t *testing.T, apiToken string, tenants []config.TenantS
 	if dialer == nil {
 		dialer = &fakeDialer{}
 	}
-	srv := New(apiToken, tenants, "node:7777", mgr, dialer, nil, nil)
+	srv := New(apiToken, tenants, "node:7777", mgr, dialer, nil, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()
@@ -952,18 +1364,43 @@ func newTenantTestServer(t *testing.T, apiToken string, tenants []config.TenantS
 	return ts
 }
 
+// newProbeAuthTestServer builds a server with a probe key configured, for
+// tests of handleCheckpointProbe's MAC verification specifically.
+func newProbeAuthTestServer(t *testing.T, mgr Manager, probeKey []byte) *httptest.Server {
+	t.Helper()
+	srv := New("", nil, "node:7777", mgr, &fakeDialer{}, nil, nil, probeKey, nil)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() {
+		ts.Close()
+		srv.CloseRelays()
+	})
+	return ts
+}
+
+// credToken recovers the token a fake hook expects from cred: empty for an
+// Operator credential, mirroring the collapsed manager's own translation.
+func credToken(cred pool.Cred) string {
+	if cred.Operator {
+		return ""
+	}
+	return cred.Token
+}
+
 // fakeManager implements Manager with overridable behavior. ClaimWarm always
 // misses, so the server's warm-miss → redirect → provision path is exercised;
 // the claim hook stands in for the provision result. Tenant-scoped methods
 // record the tenant they were handed in gotTenant.
 type fakeManager struct {
-	claim     func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
-	release   func(id, token string) error
-	releaseOp func(id string) error
-	socket    func(id, token string) (string, error)
-	hibernate func(id, token string) error
-	fork      func(id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
-	promote   func(id, token, template string) error
+	ckptDir       string
+	hasCheckpoint map[string]bool
+	claim         func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
+	release       func(id, token string) error
+	releaseOp     func(id string) error
+	socket        func(id, token string) (string, error)
+	hibernate     func(id, token string) error
+	wake          func(id, token string) error
+	fork          func(id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
+	promote       func(id, token, template string) error
 
 	deleteGolden func(key types.PoolKey) error
 	hasGolden    bool
@@ -971,6 +1408,8 @@ type fakeManager struct {
 	audited          func(id string, line []byte)
 	checkpoint       func(id, token, name string) (types.Checkpoint, error)
 	claimCheckpoint  func(ckptID string) (*types.Sandbox, error)
+	healCheckpoint   func(ckptID string) (*types.Sandbox, error)
+	healCalls        int
 	checkpoints      []types.Checkpoint
 	deleteCheckpoint func(ckptID string) error
 	setPools         func(pools []config.PoolSpec) error
@@ -979,6 +1418,7 @@ type fakeManager struct {
 
 	gotTenant    string
 	gotClaimRef  string
+	gotNoForward bool
 	tenantClaims map[string]int
 	draining     bool
 }
@@ -998,18 +1438,19 @@ func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl
 	return f.claim(ctx, key, ttl)
 }
 
-func (f *fakeManager) Release(_ context.Context, id, token string) error {
+// Release dispatches to the operator or per-sandbox hook, mirroring the
+// collapsed manager's own Cred split.
+func (f *fakeManager) Release(_ context.Context, id string, cred pool.Cred) error {
+	if cred.Operator {
+		if f.releaseOp == nil {
+			return nil
+		}
+		return f.releaseOp(id)
+	}
 	if f.release == nil {
 		return nil
 	}
-	return f.release(id, token)
-}
-
-func (f *fakeManager) ReleaseOperator(_ context.Context, id string) error {
-	if f.releaseOp == nil {
-		return nil
-	}
-	return f.releaseOp(id)
+	return f.release(id, cred.Token)
 }
 
 func (f *fakeManager) AgentSocket(id, token string) (string, error) {
@@ -1023,26 +1464,26 @@ func (f *fakeManager) WakeAgentSocket(_ context.Context, id, token string) (stri
 	return f.AgentSocket(id, token)
 }
 
-func (f *fakeManager) Hibernate(_ context.Context, id, token string) error {
+func (f *fakeManager) Hibernate(_ context.Context, id string, cred pool.Cred) error {
 	if f.hibernate == nil {
 		return nil
 	}
-	return f.hibernate(id, token)
+	return f.hibernate(id, credToken(cred))
 }
 
-func (f *fakeManager) Fork(_ context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
+func (f *fakeManager) Fork(_ context.Context, id string, cred pool.Cred, count int, ttl time.Duration) ([]*types.Sandbox, error) {
 	if f.fork == nil {
 		return nil, pool.ErrUnknownSandbox
 	}
-	return f.fork(id, token, count, ttl)
+	return f.fork(id, credToken(cred), count, ttl)
 }
 
-func (f *fakeManager) Promote(_ context.Context, id, token, template, tenant string) (types.PoolKey, error) {
+func (f *fakeManager) Promote(_ context.Context, id string, cred pool.Cred, template, tenant string) (types.PoolKey, error) {
 	f.gotTenant = tenant
 	if f.promote == nil {
 		return types.PoolKey{}, pool.ErrUnknownSandbox
 	}
-	if err := f.promote(id, token, template); err != nil {
+	if err := f.promote(id, credToken(cred), template); err != nil {
 		return types.PoolKey{}, err
 	}
 	return types.PoolKey{Template: template, Net: types.NetNone, Size: types.SizeSmall}, nil
@@ -1079,6 +1520,21 @@ func (f *fakeManager) TenantClaims() map[string]int { return f.tenantClaims }
 
 func (f *fakeManager) Sandboxes() []pool.SandboxSummary { return nil }
 
+func (f *fakeManager) Sandbox(string) (pool.SandboxSummary, bool) {
+	return pool.SandboxSummary{}, false
+}
+
+func (f *fakeManager) Stats(context.Context, string) (pool.SandboxStats, bool) {
+	return pool.SandboxStats{}, false
+}
+
+func (f *fakeManager) Wake(_ context.Context, id string, cred pool.Cred) error {
+	if f.wake == nil {
+		return nil
+	}
+	return f.wake(id, credToken(cred))
+}
+
 func (f *fakeManager) Audit(_ context.Context, id string, line []byte) {
 	if f.audited != nil {
 		f.audited(id, line)
@@ -1087,12 +1543,12 @@ func (f *fakeManager) Audit(_ context.Context, id string, line []byte) {
 
 func (f *fakeManager) AuditEnabled() bool { return f.audited != nil }
 
-func (f *fakeManager) Checkpoint(_ context.Context, id, token, name, tenant string) (types.Checkpoint, error) {
+func (f *fakeManager) Checkpoint(_ context.Context, id string, cred pool.Cred, name, tenant string) (types.Checkpoint, error) {
 	f.gotTenant = tenant
 	if f.checkpoint == nil {
 		return types.Checkpoint{}, pool.ErrUnknownSandbox
 	}
-	return f.checkpoint(id, token, name)
+	return f.checkpoint(id, credToken(cred), name)
 }
 
 func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, _ time.Duration, tenant string) (*types.Sandbox, error) {
@@ -1103,13 +1559,23 @@ func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, _ time.D
 	return f.claimCheckpoint(ckptID)
 }
 
+func (f *fakeManager) ClaimCheckpointHeal(_ context.Context, ckptID string, _ time.Duration, tenant string) (*types.Sandbox, error) {
+	f.gotTenant = tenant
+	f.healCalls++
+	if f.healCheckpoint == nil {
+		return nil, pool.ErrUnknownCheckpoint
+	}
+	return f.healCheckpoint(ckptID)
+}
+
 func (f *fakeManager) Checkpoints(_ context.Context, tenant string) ([]types.Checkpoint, error) {
 	f.gotTenant = tenant
 	return f.checkpoints, nil
 }
 
-func (f *fakeManager) DeleteCheckpoint(_ context.Context, ckptID, tenant string) error {
+func (f *fakeManager) DeleteCheckpoint(_ context.Context, ckptID, tenant string, scope pool.DeleteScope) error {
 	f.gotTenant = tenant
+	f.gotNoForward = scope == pool.DeleteLocal
 	if f.deleteCheckpoint == nil {
 		return pool.ErrUnknownCheckpoint
 	}
@@ -1152,3 +1618,55 @@ func (f *fakePlacer) Candidates(string) []string     { return f.addrs }
 func (f *fakePlacer) TemplateOwners(string) []string { return f.owners }
 func (f *fakePlacer) PeerAddrs() []string            { return f.addrs }
 func (f *fakePlacer) ConfigMismatches() int          { return 0 }
+
+// fakeProber stubs CheckpointProber with a fixed answer, standing in for a
+// live HEAD fan-out. forgotten records every id Forget was called with, so
+// tests can assert a delete evicted the right cache entry.
+type fakeProber struct {
+	owners    []string
+	forgotten []string
+}
+
+func (f *fakeProber) Owners(context.Context, string) []string { return f.owners }
+func (f *fakeProber) Forget(id string)                        { f.forgotten = append(f.forgotten, id) }
+
+// FetchCheckpoint serves the peer-transfer read; the fake reports every record
+// missing unless a test supplies a directory.
+func (f *fakeManager) FetchCheckpoint(_ context.Context, _ string) (string, []byte, func(), error) {
+	if f.ckptDir == "" {
+		return "", nil, nil, pool.ErrUnknownCheckpoint
+	}
+	return f.ckptDir, []byte(`{"id":"ck_00000000000000aa"}`), func() {}, nil
+}
+
+// HasCheckpoint answers the probe endpoint straight from the fake's map;
+// unset ids report false.
+func (f *fakeManager) HasCheckpoint(_ context.Context, ckptID string) bool {
+	return f.hasCheckpoint[ckptID]
+}
+
+// newPlacerTestServer builds a server with a checkpoint prober, which the
+// shared helper deliberately leaves nil (most tests are single-node); the
+// mesh placer stays nil throughout — these tests exercise checkpoint claims
+// only.
+func newPlacerTestServer(t *testing.T, apiToken string, mgr Manager, prober CheckpointProber) *httptest.Server {
+	t.Helper()
+	srv := New(apiToken, nil, "node:7777", mgr, &fakeDialer{}, nil, prober, nil, nil)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func postJSON(t *testing.T, url, token, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	return resp
+}

@@ -17,13 +17,13 @@ import (
 // child a distinct machine identity. Children inherit the parent's tenant
 // and count against its quota. All-or-nothing: any child failing destroys
 // the ones already built, so an error means no child survived.
-func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
-	if count < 1 || count > m.maxFork {
-		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, m.maxFork)
-	}
-	sb, ok := m.claim(id, token)
+func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl time.Duration) ([]*types.Sandbox, error) {
+	sb, ok := m.resolve(id, cred)
 	if !ok {
 		return nil, ErrUnknownSandbox
+	}
+	if count < 1 || count > m.maxFork {
+		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, m.maxFork)
 	}
 	if !sb.Key.Capturable() {
 		return nil, ErrNoEgressFork
@@ -36,13 +36,13 @@ func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl tim
 
 	children, err := m.forkClones(ctx, sb, count)
 	if err != nil {
-		return nil, fmt.Errorf("fork %s: %w", id, err)
+		return nil, fmt.Errorf("fork %s: %w", sb.ID, err)
 	}
 	for _, c := range children {
 		c.Tenant = sb.Tenant
 	}
 	if err := m.finalizeBatch(ctx, children, ttl); err != nil {
-		return nil, fmt.Errorf("fork %s: %w", id, err)
+		return nil, fmt.Errorf("fork %s: %w", sb.ID, err)
 	}
 	m.counters.forks.Add(1)
 	m.counters.claimsClone.Add(uint64(len(children))) //nolint:gosec // count is bounded by maxFork

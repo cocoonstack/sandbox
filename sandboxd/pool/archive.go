@@ -159,10 +159,21 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	}
 	ctx = context.WithoutCancel(ctx)
 	ck := sb.ArchiveCk
-	// Exclusive, not shared: this path deletes the consumed ck below.
+	// Exclusive, not shared: this path deletes the consumed ck below. The
+	// lock releases before eviction is considered, below — evicting while
+	// still held would let a concurrent recLock for ck split onto a
+	// different mutex.
 	l := m.recLock(ck)
 	l.Lock()
-	defer l.Unlock()
+	consumed := false
+	defer func() {
+		l.Unlock()
+		if consumed {
+			m.recDoneEvict(ck)
+		} else {
+			m.recDone(ck)
+		}
+	}()
 	dir, _, release, err := m.ckpts.Fetch(ctx, ck)
 	if errors.Is(err, store.ErrNotFound) {
 		return "", ErrUnknownSandbox // record disagrees with the store
@@ -187,7 +198,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	if delErr := m.ckpts.Delete(ctx, ck); delErr != nil {
 		log.WithFunc("pool.wakeArchived").Warnf(ctx, "delete consumed archive ck %s: %v", ck, delErr)
 	} else {
-		m.dropRecLock(ck)
+		consumed = true
 	}
 	// Only the none lane reaches here (the egress guard above fails closed), so
 	// this rebinds the none-lane proxy; there is no NIC to re-lock.

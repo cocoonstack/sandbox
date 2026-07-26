@@ -123,6 +123,55 @@ handle `Sandbox.Promote` returns is still owner-bound — `template.New` and
 `template.Delete` dial the owner directly, no gossip involved — and is the
 race-free choice immediately after a promote.
 
+## Checkpoints on a cluster
+
+A checkpoint lives on whichever node captured it (the default
+[`checkpoint_dir`](deploy.md#configuration)) unless the store is shared (a
+FUSE mount or the s3 backend), in which case every node resolves every
+checkpoint directly and nothing below applies.
+
+On the default per-node store, a branch claim (`Checkpoint.New` /
+[`POST /v1/checkpoints/{id}/claim`](sandboxd-api.md#post-v1checkpointsidclaim))
+at a node that does not hold the record runs a tier order:
+
+1. **Local claim** — the fast path when the claiming node already holds it.
+2. **Probe + redirect** — a live `HEAD` fan-out (HMAC-signed when the mesh
+   carries a `cluster_key`) to every mesh peer in parallel, redirecting to
+   the first owners that answer — the same claim-redirect contract a warm
+   miss already uses. The answer is capped at 3 addresses: a hint, not an
+   exhaustive list of every owner. The probe and
+   the follow-up claim are not atomic: a peer can answer the probe, then
+   lose the record — a delete's broadcast lands, or its own TTL sweep runs
+   (below) — before the retry reaches it, so a redirect can go stale
+   between the two calls.
+3. **Heal** — when `checkpoint_peer_heal` is on and neither of the above
+   answered, the node pulls the record from a probed peer, validates its
+   shape and id before trusting it, and publishes it locally so later
+   branches are local — paid once per node. The pull is bounded to one
+   overall time budget across however many peers it tries (`healBudget` in
+   `store/peer`), and a node accepts only so many heals at once
+   (`maxConcurrentHeals` in `pool`) — past that cap it answers `503` rather
+   than queuing indefinitely.
+
+### Delete is eventual, not a fleet-wide revocation
+
+`Checkpoint.Delete` (`DELETE /v1/checkpoints/{id}`) removes the local
+record, then best-effort broadcasts the delete to every peer this node
+currently sees, so a replica a heal pulled earlier is cleaned up too, not
+just the original. A peer that is offline or partitioned during that
+broadcast keeps its copy until the checkpoint TTL ages it out. A healed
+replica carries the source checkpoint's original `CreatedAt`, so it becomes
+eligible for expiry at the same instant everywhere; each node then removes
+it on its own hourly sweep, which is independently phased and retries on
+failure. The window in which a deleted checkpoint stays branchable by an
+id-holder is therefore normally `checkpoint_ttl_hours` plus the wait for the
+next hourly sweep; a sweep that fails retries on a later one, so persistent
+sweep failure extends retention until one succeeds — the TTL is the eligibility
+point, not a hard ceiling. This is why heal *requires* a nonzero, fleet-matching
+TTL (see [cluster-invariant config](#cluster-invariant-config)).
+With TTL disabled it could never close at all, so that combination is
+rejected at config load.
+
 ## State ownership
 
 Each kind of state has exactly one source of truth, and a restart rebuilds
@@ -134,6 +183,7 @@ fully from it:
 | API-applied pool targets (`PUT /v1/pools`) | `<data_dir>/pools.json` (machine owned) | yes |
 | claims | the claims journal + `Reconcile` | yes |
 | placement hints (warm counts, template sets) | gossip | rebuilt |
+| checkpoint ownership | a live per-request probe (no gossip); a healed replica is this node's own persisted copy, aged out by `checkpoint_ttl_hours` | yes |
 
 Pools are managed API-first. The first time a node takes `PUT /v1/pools`, it
 writes the applied set to `<data_dir>/pools.json` and from then on **that file
@@ -162,7 +212,7 @@ Some config must match on every node or the cluster fails in confusing ways:
 
 | config | what breaks on mismatch |
 |---|---|
-| `api_token`, `tenants` | the SDK replays the authorizing token across a redirect; a peer missing that tenant/token answers 401 |
+| `api_token`, `tenants` | the SDK replays the authorizing token across a redirect; a mid-rotation peer missing that tenant/token answers 401, which the SDK treats as transient — the claim falls back to the origin node (which already authorized it) and resolves there |
 | `preview_secret` | a preview URL signed on one node fails verification on another |
 | `mesh.cluster_key` | nodes cannot join / decrypt gossip at all |
 | `egress_ca` cluster root | a guest checkpointed/redirected across nodes trusts the root; a divergent root fails interception |

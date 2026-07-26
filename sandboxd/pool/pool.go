@@ -22,12 +22,14 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/dir"
+	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
 	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -48,6 +50,9 @@ const (
 	// in tests).
 	defaultMaxFork = 16
 	defaultRefill  = 4
+
+	// A heal pulls a whole guest memory image, so a few saturate disk and NIC.
+	maxConcurrentHeals = 4
 
 	vmPrefix        = "sbx-"
 	goldenPrefix    = "sbx-golden-"
@@ -168,6 +173,9 @@ func (p *pool) trimWarm(target int) []string {
 	return trim
 }
 
+// PeerDeleteFunc broadcasts a checkpoint delete to every peer.
+type PeerDeleteFunc func(ctx context.Context, id string)
+
 // Manager owns the node's pools, claims, and their persistence.
 type Manager struct {
 	eng     Engine
@@ -221,6 +229,19 @@ type Manager struct {
 	audit        *journal
 	counters     counters
 	ckpts        store.Store
+	// A cluster-wide backend resolves every record from every node, so heal
+	// and the delete broadcast are both no-ops against it.
+	ckptsShared bool
+	healer      *peer.Healer
+	// healSem bounds concurrent transfers node-wide; healFlights dedups
+	// same-id heals onto one transfer, which owns its own staging dir.
+	// healPending/healAbort (guarded by recLocksMu) let a delete veto a heal
+	// still staging the same id (see vetoIfHealPending).
+	healSem      chan struct{}
+	healFlights  singleflight.Group
+	healPending  map[string]struct{}
+	healAbort    map[string]struct{}
+	peerDelete   PeerDeleteFunc
 	tpls         store.Store
 	ckptTTL      time.Duration
 	ckptSweeping atomic.Bool
@@ -233,7 +254,17 @@ type Manager struct {
 
 	// recLocks serializes same-id store record mutations and holds off a
 	// re-publish swap while a clone reads the old generation (per id, RW).
-	recLocks sync.Map
+	// recLocksMu guards recRefs, the live-holder count that gates eviction: a
+	// checkpoint id can become live again after a delete (a peer's heal can
+	// republish one), so an entry is only safe to evict once nothing still
+	// holds or awaits it — never on a bare "record deleted" signal.
+	recLocks   sync.Map
+	recLocksMu sync.Mutex
+	recRefs    map[string]int
+	// recEvict remembers ids a delete asked to evict while a reference still
+	// held the lock, so the eviction happens when the last holder leaves rather
+	// than being lost — otherwise the recLocks entry leaks for that id.
+	recEvict map[string]struct{}
 
 	// notifyTemplates, when set (before serving starts), fires after a
 	// promote or template delete so the mesh republishes immediately
@@ -290,12 +321,17 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		pendingCks:      map[string]struct{}{},
 		egressListeners: map[string]*egressListener{},
 		egressTaps:      map[string]string{},
+		recRefs:         map[string]int{},
+		recEvict:        map[string]struct{}{},
+		healPending:     map[string]struct{}{},
+		healAbort:       map[string]struct{}{},
 		egressSecrets:   secrets,
 		dial:            egressDialer.DialContext,
 		sweep:           netfilter.SweepExcept,
 		refillSem:       make(chan struct{}, refill),
 		probeSem:        make(chan struct{}, refill),
 		refillKick:      make(chan struct{}, 1),
+		healSem:         make(chan struct{}, maxConcurrentHeals),
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("create goldens dir: %w", err)
@@ -307,6 +343,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	if m.ckpts, err = newStoreView(ctx, cfg, "checkpoint-staging", store.CheckpointIDRe); err != nil {
 		return nil, err
 	}
+	m.ckptsShared = cfg.CheckpointStore != nil && cfg.CheckpointStore.Kind == "s3"
 	if m.tpls, err = newStoreView(ctx, cfg, "template-staging", store.TemplateIDRe); err != nil {
 		return nil, err
 	}
@@ -484,14 +521,18 @@ func (m *Manager) Sandboxes() []SandboxSummary {
 	defer m.mu.Unlock()
 	out := make([]SandboxSummary, 0, len(m.claimed))
 	for _, sb := range m.claimed {
-		out = append(out, SandboxSummary{
-			ID: sb.ID, Key: sb.Key, Deadline: sb.Deadline,
-			Hibernated: sb.HibernateSnap != "", Archived: sb.ArchiveCk != "", FromCheckpoint: sb.FromCheckpoint,
-			ClaimRef: sb.ClaimRef,
-		})
+		out = append(out, summarize(sb))
 	}
 	slices.SortFunc(out, func(a, b SandboxSummary) int { return strings.Compare(a.ID, b.ID) })
 	return out
+}
+
+func summarize(sb *types.Sandbox) SandboxSummary {
+	return SandboxSummary{
+		ID: sb.ID, Key: sb.Key, Deadline: sb.Deadline,
+		Hibernated: sb.HibernateSnap != "", Archived: sb.ArchiveCk != "",
+		FromCheckpoint: sb.FromCheckpoint, ClaimRef: sb.ClaimRef,
+	}
 }
 
 // WarmCounts is the per-pool-key-hash warm count, for gossiping placement.
@@ -551,6 +592,21 @@ func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe 
 		return s3.New(ctx, *cs.S3, filepath.Join(cfg.DataDir, staging), idRe)
 	}
 	return dir.New(cmp.Or(cfg.CheckpointDir, filepath.Join(cfg.DataDir, "checkpoints")), idRe)
+}
+
+// WithPeerHeal installs the healer ClaimCheckpointHeal pulls through, so a
+// peer transfer is paid only once nothing cheaper resolves the claim.
+func (m *Manager) WithPeerHeal(enabled bool, owners peer.Owners, token string) {
+	if !enabled || owners == nil || m.ckptsShared {
+		return
+	}
+	m.healer = peer.NewHealer(owners, &peer.HTTPPuller{Token: token})
+}
+
+// WithPeerDelete wires the broadcast DeleteCheckpoint makes after a local
+// delete, so a healed replica does not outlive the source record.
+func (m *Manager) WithPeerDelete(fn PeerDeleteFunc) {
+	m.peerDelete = fn
 }
 
 func dirExists(path string) bool {

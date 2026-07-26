@@ -439,13 +439,13 @@ func TestEgressLaneCannotForkOrCheckpoint(t *testing.T) {
 	m.mu.Lock()
 	m.claimed[sb.ID] = sb
 	m.mu.Unlock()
-	if _, err := m.Fork(t.Context(), sb.ID, "tok", 1, time.Minute); !errors.Is(err, ErrNoEgressFork) {
+	if _, err := m.Fork(t.Context(), sb.ID, Cred{Token: "tok"}, 1, time.Minute); !errors.Is(err, ErrNoEgressFork) {
 		t.Errorf("Fork on egress lane: got %v, want ErrNoEgressFork", err)
 	}
-	if _, err := m.Checkpoint(t.Context(), sb.ID, "tok", "", ""); !errors.Is(err, ErrNoEgressFork) {
+	if _, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: "tok"}, "", ""); !errors.Is(err, ErrNoEgressFork) {
 		t.Errorf("Checkpoint on egress lane: got %v, want ErrNoEgressFork", err)
 	}
-	if _, err := m.Promote(t.Context(), sb.ID, "tok", "tpl", ""); !errors.Is(err, ErrNoEgressFork) {
+	if _, err := m.Promote(t.Context(), sb.ID, Cred{Token: "tok"}, "tpl", ""); !errors.Is(err, ErrNoEgressFork) {
 		t.Errorf("Promote on egress lane: got %v, want ErrNoEgressFork", err)
 	}
 }

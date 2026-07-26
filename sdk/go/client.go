@@ -38,7 +38,9 @@ type Client struct {
 // defaults: the no-network lane and the smallest size tier. New returns when
 // the sandbox's silkd is reachable; a warm pool hit is milliseconds, a cold
 // key can take the full boot. Against a cluster, a warm miss redirects to a
-// peer that holds one, which New follows transparently.
+// peer that holds one, which New follows transparently; if every candidate
+// fails transiently (full, mid-heal, unreachable), New falls back to the
+// origin once so it provisions or heals locally.
 func (c *Client) New(ctx context.Context, template string, opts ...Option) (*Sandbox, error) {
 	claim := claimRequest{Template: template}
 	for _, opt := range opts {
@@ -53,30 +55,21 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 	if err != nil {
 		return nil, err
 	}
-	if len(cr.Redirect) > 0 {
-		// Retry at a peer with no_redirect set: it warm-or-provisions and
-		// cannot bounce us again. Try each candidate so one dead/stale peer
-		// (its addr lingering in a gossip view) doesn't fail the claim.
-		claim.NoRedirect = true
-		body, err = encodeBody("claim", claim)
-		if err != nil {
-			return nil, err
-		}
-		var sb *Sandbox
-		retryAny := func(error) bool { return true }
-		if tryErr := tryEach(cr.Redirect, func(addr string) error {
-			target, claimErr := c.claimAt(ctx, addr, body)
-			if claimErr != nil {
-				return claimErr
-			}
-			sb = c.handleFrom(addr, target)
-			return nil
-		}, retryAny); tryErr != nil {
-			return nil, fmt.Errorf("claim: all redirect targets failed: %w", tryErr)
-		}
-		return sb, nil
+	if len(cr.Redirect) == 0 {
+		return c.handleFrom(c.addr, cr), nil
 	}
-	return c.handleFrom(c.addr, cr), nil
+	claim.NoRedirect = true
+	body, err = encodeBody("claim", claim)
+	if err != nil {
+		return nil, err
+	}
+	addr, target, err := redirectFallback(c.addr, cr.Redirect, func(a string) (claimResponse, error) {
+		return c.claimAt(ctx, a, body)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("claim: %w", err)
+	}
+	return c.handleFrom(addr, target), nil
 }
 
 // Lookup relocates a sandbox handle whose owner address was lost, given its
@@ -265,6 +258,78 @@ func tryEach(candidates []string, call func(addr string) error, retry func(error
 func retryMiss(err error) bool {
 	var he *httpError
 	return !errors.As(err, &he) || he.status == http.StatusNotFound
+}
+
+// retryAny retries a redirect candidate's failure unconditionally: one
+// candidate being wrong for the claim (no egress, a stale name) must not
+// stop the walk from reaching a candidate that would still succeed.
+func retryAny(error) bool { return true }
+
+// retryTransient reports whether an origin-fallback is worth the round-trip:
+// true for a transport failure, a miss (404), full (429), mid-heal (503), an
+// engine/proxy failure (500/502/504), or a mid-rotation 401 (the origin
+// proved the token valid by issuing the redirect). A served 4xx like a bad
+// request, a forbidden token, or an egress conflict is definitive: the
+// origin would fail the same way.
+func retryTransient(err error) bool {
+	var he *httpError
+	if !errors.As(err, &he) {
+		return true
+	}
+	switch he.status {
+	case http.StatusUnauthorized, http.StatusNotFound, http.StatusTooManyRequests,
+		http.StatusServiceUnavailable, http.StatusInternalServerError,
+		http.StatusBadGateway, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// redirectFallback walks candidates via claimAt, retrying broadly (retryAny)
+// so one wrong candidate doesn't cost a candidate that would still succeed.
+// If every candidate is exhausted and the last failure was transient
+// (retryTransient), it gives origin one more no_redirect attempt — the node
+// that issued the redirect provisions or heals locally instead of leaving
+// the claim stuck on stale gossip. A definitive last failure (a bad request,
+// an auth rejection, a conflict) skips the fallback: origin would fail the
+// same way. A second-level redirect (a compliant server never sends one
+// once no_redirect is set) fails the candidate rather than being followed.
+func redirectFallback(origin string, candidates []string, claimAt func(addr string) (claimResponse, error)) (string, claimResponse, error) {
+	claimNoRedirect := func(target string) (claimResponse, error) {
+		cr, err := claimAt(target)
+		if err != nil {
+			return claimResponse{}, err
+		}
+		if len(cr.Redirect) > 0 {
+			return claimResponse{}, fmt.Errorf("%s redirected again despite no_redirect", target)
+		}
+		return cr, nil
+	}
+
+	var won string
+	var cr claimResponse
+	tryErr := tryEach(candidates, func(addr string) error {
+		target, err := claimNoRedirect(addr)
+		if err != nil {
+			return err
+		}
+		won, cr = addr, target
+		return nil
+	}, retryAny)
+	if tryErr == nil {
+		return won, cr, nil
+	}
+	if !retryTransient(tryErr) {
+		return "", claimResponse{}, fmt.Errorf("all redirect targets failed: %w", tryErr)
+	}
+	cr, err := claimNoRedirect(origin)
+	if err != nil {
+		// Both halves matter to whoever reads this: the peers' failures say why
+		// the claim left the origin, the origin's says why coming back did not help.
+		return "", claimResponse{}, fmt.Errorf("all redirect targets failed, origin fallback failed: %w", errors.Join(tryErr, err))
+	}
+	return origin, cr, nil
 }
 
 // scatter probes addrs concurrently, returning the first success and

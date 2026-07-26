@@ -28,6 +28,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/mesh"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/server"
+	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
 )
 
 const (
@@ -94,14 +95,30 @@ func main() {
 	go mgr.Run(ctx)
 
 	var placer server.Placer
+	var prober server.CheckpointProber
+	var probeKey []byte
 	if cfg.Mesh != nil {
-		msh, err := startMesh(cfg, mgr)
+		msh, err := startMesh(ctx, cfg, mgr)
 		if err != nil {
 			logger.Fatalf(ctx, err, "start mesh")
 		}
 		defer func() { _ = msh.Shutdown() }()
 		placer = msh
-		mgr.SetTemplateNotifier(func() { msh.UpdateSelf(mgr.WarmCounts(), mgr.TemplateHashes()) })
+		mgr.SetTemplateNotifier(func() { msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes()) })
+		clusterKey, err := cfg.Mesh.DecodedKey()
+		if err != nil {
+			logger.Fatalf(ctx, err, "decode mesh cluster key")
+		}
+		if len(clusterKey) > 0 {
+			probeKey = peer.DeriveProbeKey(clusterKey)
+		}
+		httpProber := &peer.HTTPProber{Peers: msh.PeerAddrs, ProbeKey: probeKey}
+		prober = httpProber
+		mgr.WithPeerHeal(cfg.CheckpointPeerHeal, func(id string) []string {
+			return httpProber.HealOwners(ctx, id)
+		}, cfg.APIToken)
+		broadcaster := &peer.Broadcaster{Peers: msh.PeerAddrs, Token: cfg.APIToken}
+		mgr.WithPeerDelete(broadcaster.Delete)
 		go gossipNodeState(ctx, msh, mgr)
 		logger.Infof(ctx, "mesh %s joined (%d seeds)", cmp.Or(cfg.Mesh.NodeID, cfg.Mesh.Bind), len(cfg.Mesh.Join))
 	}
@@ -110,7 +127,7 @@ func main() {
 	if cfg.PreviewListen != "" {
 		preview = server.NewPreviewServer(cfg.PreviewSecret, cfg.PreviewAdvertise, mgr)
 	}
-	srv := server.New(cfg.APIToken, cfg.Tenants, cfg.AdvertiseAddr, mgr, eng, placer, preview)
+	srv := server.New(cfg.APIToken, cfg.Tenants, cfg.AdvertiseAddr, mgr, eng, placer, prober, probeKey, preview)
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           srv.Handler(),
@@ -154,7 +171,7 @@ func main() {
 	logger.Info(ctx, "sandboxd stopped; VMs stay alive for the next reconcile")
 }
 
-func startMesh(cfg *config.Config, mgr *pool.Manager) (*mesh.Mesh, error) {
+func startMesh(ctx context.Context, cfg *config.Config, mgr *pool.Manager) (*mesh.Mesh, error) {
 	mc := cfg.Mesh
 	mlCfg := memberlist.DefaultLANConfig()
 	host, port, err := mc.ParsedBind()
@@ -171,7 +188,7 @@ func startMesh(cfg *config.Config, mgr *pool.Manager) (*mesh.Mesh, error) {
 	if err != nil {
 		return nil, err
 	}
-	msh, err := mesh.New(mlCfg, nodeID, cfg.AdvertiseAddr, key, cfg.DataDir)
+	msh, err := mesh.New(ctx, mlCfg, nodeID, cfg.AdvertiseAddr, key, cfg.DataDir)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +211,7 @@ func gossipNodeState(ctx context.Context, msh *mesh.Mesh, mgr *pool.Manager) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			msh.UpdateSelf(mgr.WarmCounts(), mgr.TemplateHashes())
+			msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes())
 		}
 	}
 }

@@ -40,6 +40,9 @@ type NodeState struct {
 type Mesh struct {
 	ml        *memberlist.Memberlist
 	epochPath string
+	// ctx is the daemon's, for logging inside memberlist callbacks — the
+	// delegate interfaces carry no context of their own.
+	ctx context.Context
 
 	// updateMu serializes UpdateSelf end-to-end: two updates reading one epoch
 	// would both bump to E+1 and the loser's payload would be dropped.
@@ -53,13 +56,14 @@ type Mesh struct {
 // New starts a mesh member listening per cfg. selfAddr is the data-plane
 // address peers should dial for a redirect; secretKey (16/24/32 bytes) enables
 // gossip encryption when non-empty; dataDir holds the persisted epoch.
-func New(cfg *memberlist.Config, nodeID, selfAddr string, secretKey []byte, dataDir string) (*Mesh, error) {
+func New(ctx context.Context, cfg *memberlist.Config, nodeID, selfAddr string, secretKey []byte, dataDir string) (*Mesh, error) {
 	epochPath := filepath.Join(dataDir, "mesh-epoch")
 	// Seed strictly above the persisted floor (the last epoch peers saw):
 	// seeding at it ties their stale copy and merge's `>` rejects the restart's
 	// fresh state. loadEpoch caps the floor so the +1 cannot wrap.
 	epoch := max(uint64(time.Now().UnixNano()), loadEpoch(epochPath)+1) //nolint:gosec // UnixNano is positive for current times
 	m := &Mesh{
+		ctx:       ctx,
 		epochPath: epochPath,
 		self: NodeState{
 			NodeID: nodeID,
@@ -103,7 +107,7 @@ func (m *Mesh) Join(seeds []string) error {
 // set, bumping the epoch so peers adopt the new view. An unchanged view is
 // not republished — the periodic tick would otherwise gossip a fresh epoch
 // every second for nothing.
-func (m *Mesh) UpdateSelf(pools map[string]int, templates []string) {
+func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates []string) {
 	m.updateMu.Lock()
 	defer m.updateMu.Unlock()
 	m.mu.Lock()
@@ -117,7 +121,7 @@ func (m *Mesh) UpdateSelf(pools map[string]int, templates []string) {
 	// instant it enters the view, so a crash before the write would strand peers
 	// on an epoch a backwards-clock restart can't beat. Hold old state on failure.
 	if err := m.persistEpoch(epoch); err != nil {
-		log.WithFunc("mesh.UpdateSelf").Warnf(context.Background(), "persist epoch: %v", err)
+		log.WithFunc("mesh.UpdateSelf").Warnf(ctx, "persist epoch: %v", err)
 		return
 	}
 	m.mu.Lock()
@@ -275,7 +279,7 @@ func (m *Mesh) merge(states []NodeState) {
 		// redirects and fails interception. Warn-only — refusing would partition
 		// a rolling credential rotation.
 		if m.self.Digest != "" && st.Digest != "" && st.Digest != m.self.Digest && (!ok || cur.Digest != st.Digest) {
-			log.WithFunc("mesh.merge").Warnf(context.Background(),
+			log.WithFunc("mesh.merge").Warnf(m.ctx,
 				"peer %s config digest %s differs from this node's %s: cluster-invariant config diverges (redirects may 401, interception may fail)",
 				st.NodeID, short(st.Digest), short(m.self.Digest))
 		}

@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 )
@@ -22,7 +23,10 @@ type Checkpoint struct {
 }
 
 // New claims a sandbox cloned from the checkpoint, on the checkpoint's
-// node. The snapshot pins the key axes; WithTimeout may set the TTL.
+// node. The snapshot pins the key axes; WithTimeout may set the TTL. A node
+// that no longer holds the checkpoint redirects to a probed owner, which New
+// follows transparently; if every candidate fails transiently, New falls
+// back to the origin once so it heals (pulls the checkpoint) locally.
 func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
 	var claim claimRequest
 	for _, opt := range opts {
@@ -35,16 +39,39 @@ func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error)
 	if err != nil {
 		return nil, err
 	}
-	cr, err := doJSON[claimResponse](ctx, ck.c, http.MethodPost, ck.addr, "/v1/checkpoints/"+ck.ID+"/claim", bytes.NewReader(body), ck.c.apiToken, "claim checkpoint")
+	cr, err := ck.claimAt(ctx, ck.addr, body)
 	if err != nil {
 		return nil, err
 	}
-	return ck.c.handleFrom(ck.addr, cr), nil
+	if len(cr.Redirect) == 0 {
+		return ck.c.handleFrom(ck.addr, cr), nil
+	}
+	body, err = encodeBody("checkpoint claim", checkpointClaimRequest{TTLSeconds: claim.TTLSeconds, NoRedirect: true})
+	if err != nil {
+		return nil, err
+	}
+	addr, target, err := redirectFallback(ck.addr, cr.Redirect, func(a string) (claimResponse, error) {
+		return ck.claimAt(ctx, a, body)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("claim checkpoint: %w", err)
+	}
+	return ck.c.handleFrom(addr, target), nil
 }
 
-// Delete removes the checkpoint from its node.
+// Delete removes the checkpoint from its node and asks every peer that node
+// currently sees to drop any replica a heal pulled — best-effort eventual
+// cleanup, not a fleet-wide revocation. A peer that misses that broadcast
+// (offline, partitioned, or joined later) keeps serving branches from its
+// replica until the node's checkpoint_ttl_hours ages it out; with that TTL
+// at its default of 0 (keep forever), an unreachable peer's replica has no
+// cleanup bound at all. See the cluster docs' placement lifecycle.
 func (ck *Checkpoint) Delete(ctx context.Context) error {
 	return doNoContent(ctx, ck.c, http.MethodDelete, ck.addr, "/v1/checkpoints/"+ck.ID, nil, ck.c.apiToken, "delete checkpoint")
+}
+
+func (ck *Checkpoint) claimAt(ctx context.Context, addr string, body []byte) (claimResponse, error) {
+	return doJSON[claimResponse](ctx, ck.c, http.MethodPost, addr, "/v1/checkpoints/"+ck.ID+"/claim", bytes.NewReader(body), ck.c.apiToken, "claim checkpoint")
 }
 
 // Checkpoint captures the sandbox's full state — memory, disk, running
@@ -100,7 +127,8 @@ type checkpointResponse struct {
 }
 
 type checkpointClaimRequest struct {
-	TTLSeconds int `json:"ttl_seconds,omitempty"`
+	TTLSeconds int  `json:"ttl_seconds,omitempty"`
+	NoRedirect bool `json:"no_redirect,omitempty"`
 }
 
 type checkpointListResponse struct {

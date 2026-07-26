@@ -7,7 +7,9 @@ All bodies are JSON. Three token kinds:
   resource-creating verbs (claim, fork, promote, checkpoint create/claim,
   preview mint) and the tenant-scoped listings/deletes below; everything a
   tenant creates is stamped with its name. Operator surfaces
-  (`GET /v1/sandboxes`, `GET /v1/info`, `PUT /v1/pools`, `POST/DELETE /v1/drain`, `GET /metrics`)
+  (`GET /v1/sandboxes` and the per-id reads under it, `GET /v1/info`,
+  `PUT /v1/pools`, `POST/DELETE /v1/drain`, `GET /metrics`,
+  `GET /v1/checkpoints/{id}/blob`)
   answer a tenant token `403` — authenticated but not authorized; an unknown
   token stays `401`.
 - **sandbox** — every claimed sandbox carries its own bearer token guarding
@@ -73,7 +75,8 @@ Releasing an already-gone sandbox is 404 — the SDK treats it as success.
 
 ## POST /v1/sandboxes/{id}/hibernate
 
-Auth: the sandbox's own token. Atomically snapshots the VM and stops it,
+Auth: the sandbox's own token, or the root token by id (operator, like
+release). Atomically snapshots the VM and stops it,
 freeing its memory; the next agent access restores it transparently
 (sessions, processes, and memory state intact — cocoon's hibernate keeps the
 snapshot point and the stop coincident). Idempotent on an already-hibernated
@@ -82,6 +85,14 @@ snapshot) at its deadline. When to hibernate is the caller's policy — the
 node only provides the transition. 204 on success, 404 unknown id or wrong
 token, 409 on the egress lane (egress-lane sandboxes never hibernate; see
 [egress](egress.md)).
+
+## POST /v1/sandboxes/{id}/wake
+
+Auth: the sandbox's own token, or the root token by id (operator). Restores
+a hibernated (or archived) sandbox and leaves it running — waking is
+otherwise only a side effect of the next agent access, so this is the
+explicit form for warming a sandbox ahead of use. Idempotent on one already
+running. 204 on success, 404 unknown id or wrong token.
 
 ## POST /v1/sandboxes/{id}/fork
 
@@ -205,12 +216,56 @@ token, 409 egress-lane sandbox (see [egress](egress.md)).
 
 ## POST /v1/checkpoints/{id}/claim
 
-Auth: node API token; body `{"ttl_seconds": 0}`. Claims a fresh sandbox
-branched from the checkpoint (a normal claim response, attributed to the
-caller); the checkpoint's recorded key applies — the unguessable id is the
-capability to branch. 404 for an unknown checkpoint, 409 for an egress-lane
-checkpoint (see [egress](egress.md)), 429 node or calling tenant at
-`max_claims`, or the node draining.
+Auth: node API token; body `{"ttl_seconds": 0, "no_redirect": false}`.
+Claims a fresh sandbox branched from the checkpoint (a normal claim
+response, attributed to the caller); the checkpoint's recorded key applies
+— the unguessable id is the capability to branch.
+
+Checkpoints are node-local (unless the store is shared — see
+[Configuration](deploy.md#configuration)), so a miss here runs a tier order:
+
+1. This node checks its own store first.
+2. On a miss, it probes up to 3 peers directly — a parallel `HEAD` to each
+   (authenticated on an encrypted mesh, see below) — and answers exactly like
+   a warm-miss
+   [`POST /v1/claim`](#post-v1claim): `200 {"redirect": ["10.0.0.6:7777",
+   "10.0.0.7:7777"]}`, retry the same body (+`no_redirect: true`) at each
+   candidate until one answers. The probe and the follow-up claim are not
+   atomic: a peer can answer the probe, then lose the record — a delete's
+   broadcast lands, or its own TTL sweep runs (below) — before the retry
+   reaches it, so a redirect can go stale between the two calls.
+3. If nothing answers the probe (or `no_redirect` is set), and the node has
+   `checkpoint_peer_heal` enabled, it pulls the record from a probed peer
+   itself, validates it, publishes it locally, and serves the claim from
+   there — paid once per node. See the full
+   [placement lifecycle](cluster.md#checkpoints-on-a-cluster) for how the
+   three tiers fit together.
+
+404 for an unknown checkpoint (locally, and after redirect and heal both
+miss), 409 for an egress-lane checkpoint (see [egress](egress.md)), 429 node
+or calling tenant at `max_claims` or the node draining, 503 when the node's
+concurrent-heal cap is already full — retryable, and the response carries a
+`Retry-After` hint.
+
+## GET/HEAD /v1/checkpoints/{id}/blob
+
+The peer-transfer route behind the probe and heal above — internal, not
+part of the public API; an SDK caller has no reason to call it directly.
+
+- `GET` streams the whole record — guest memory, disk, and meta — as a tar.
+  Operator-token only: the stream carries no tenant scoping, and its only
+  real caller is a peer's heal pull, which presents the fleet `api_token`.
+  401 missing or unrecognized token, 403 a valid tenant token (authenticated
+  but not the operator), 404 unknown checkpoint.
+- `HEAD` is the ownership probe: 200 when this node holds a branchable
+  (non-archive) copy, 404 otherwise. On a mesh with `cluster_key` set the
+  request must carry `X-Cocoon-Probe`, an HMAC over the id and a coarse time
+  bucket keyed off a probe-specific derivation of the cluster key — verified
+  before any disk is touched, replayable for roughly a minute at most. On a
+  keyless mesh (redirect-only fleets have no shared secret to sign with) the
+  id itself remains the only capability, matching the mesh's own posture.
+  Repeat probes for one id are answered from a short positive cache on the
+  asking node, which a local delete evicts immediately.
 
 ## GET /v1/checkpoints
 
@@ -223,11 +278,56 @@ Auth: node API token. A tenant may delete only its own records — anything
 else is 404, never a hint the id exists; root deletes anything. 204 on
 success, 404 unknown.
 
+**Delete removes the local record and then best-effort broadcasts to peers
+so a healed replica does not outlive it — this is eventual best-effort
+cleanup, not a fleet-wide revocation.** A peer that is offline or
+partitioned during the broadcast keeps its copy until the checkpoint TTL
+ages it out. A healed replica carries the source's original `CreatedAt`, so
+it becomes eligible for expiry at the same instant on every node; the actual
+removal is each node's own hourly sweep, which is independently phased and
+retries on a later sweep if one fails. So a deleted checkpoint normally stops
+being branchable within `checkpoint_ttl_hours` plus a sweep interval, but a
+node whose sweeps keep failing holds its replica until one succeeds — the TTL
+is the eligibility point, not a hard ceiling. The TTL must also match
+fleet-wide, which the
+[cluster-invariant config](cluster.md#cluster-invariant-config) digest
+checks. A window always exists because `checkpoint_peer_heal` cannot be
+enabled with `checkpoint_ttl_hours: 0` — a replica that can outlive a delete
+must have a finite eligibility point. A shared
+checkpoint store skips the broadcast: every node already resolves every
+record directly, so there is no replica to chase. `?no_forward=1` marks a
+delete already arriving from another node's own broadcast, so it is not
+itself re-broadcast (loop prevention); it is an internal parameter, not one
+an SDK caller should set.
+
 ## GET /v1/sandboxes
 
 Auth: root only (tenant tokens get 403). The operator index: `{"sandboxes":
 [{id, key, deadline, hibernated, archived?, from_checkpoint?, claim_ref?}]}` —
 never tokens.
+
+## GET /v1/sandboxes/{id}
+
+Auth: root only. One live claim in the index-row shape above, so a
+reconcile loop can read a single sandbox without scanning the whole node
+listing. 404 unknown id.
+
+## GET /v1/sandboxes/{id}/stats
+
+Auth: root only. One sandbox's resource usage — the per-sandbox counterpart
+to the node-scoped `/metrics`:
+
+```json
+{"id": "sb_…", "cpu_count": 2, "mem_total_bytes": 1073741824,
+ "mem_used_bytes": 187654144, "mem_used_measured": true,
+ "hibernated": false, "measured_at": "…"}
+```
+
+`cpu_count`/`mem_total_bytes` come from the size tier. `mem_used_bytes` is
+the host VMM process's resident set — the only usage signal available
+without a guest agent; `mem_used_measured` is false when there is no VMM
+process to read (hibernated, or the PID is not yet known), so a zero is
+never mistaken for idle. 404 unknown id.
 
 ## GET /metrics
 

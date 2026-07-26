@@ -29,20 +29,21 @@ class Client:
 
     def new(self, template: str, net: str = "", size: str = "", ttl_seconds: int = 0) -> Sandbox:
         """Claims a sandbox; a warm hit is milliseconds. On a cluster a warm
-        miss may redirect to a peer, followed transparently."""
+        miss may redirect to a peer, followed transparently; if every
+        candidate fails transiently, the claim falls back to the origin
+        once so it provisions or heals locally."""
         claim = _claim_body(template, net, size, ttl_seconds)
         reply = self._post_json(self.addr, "/v1/claim", claim, "claim")
         redirect = reply.get("redirect") or []
-        if redirect:
-            # Retry at a peer with no_redirect set: it warm-or-provisions and
-            # cannot bounce us again.
-            claim["no_redirect"] = True
-            # A candidate that is full (429) or erroring must not abort the
-            # follow — try every one until a node answers, matching the Go SDK.
-            return _try_each(redirect, lambda peer: self._handle_from(
-                peer, self._post_json(peer, "/v1/claim", claim, "claim")),
-                retry=lambda _: True)
-        return self._handle_from(self.addr, reply)
+        if not redirect:
+            return self._handle_from(self.addr, reply)
+        claim["no_redirect"] = True
+
+        def post(peer):
+            return self._post_json(peer, "/v1/claim", claim, "claim")
+
+        addr, reply = _redirect_fallback(self.addr, redirect, post, "claim")
+        return self._handle_from(addr, reply)
 
     def delete_template(self, template: str, net: str = "", size: str = "") -> None:
         """Removes a promoted template by name; on a cluster the delete
@@ -189,6 +190,48 @@ def _try_each(candidates, call, retry=lambda exc: exc.status in (404, 0)):
                 raise
             last_error = exc
     raise last_error
+
+
+def _retry_transient(exc: APIError) -> bool:
+    """Origin-fallback policy: worth the round-trip for a transport failure
+    (status 0), a miss (404), full (429), mid-heal (503), an engine/proxy
+    failure (500/502/504), or a mid-rotation 401 (the origin proved the
+    token valid by issuing the redirect). A served 4xx like a bad request,
+    a forbidden token, or an egress conflict is definitive: the origin
+    would fail the same way."""
+    return exc.status in (0, 401, 404, 429, 503, 500, 502, 504)
+
+
+def _redirect_fallback(origin: str, candidates: list, post, verb: str):
+    """Walks candidates via post(addr) -> raw reply dict, retrying broadly
+    (any candidate failure moves to the next) so one wrong candidate doesn't
+    cost a candidate that would still succeed. If every candidate is
+    exhausted and the last failure was transient (_retry_transient), gives
+    the origin one more no_redirect attempt -- the node that issued the
+    redirect provisions or heals locally instead of leaving the claim stuck
+    on stale gossip. A definitive last failure skips the fallback: the origin
+    would fail the same way. A second-level redirect (a compliant server
+    never sends one once no_redirect is set) fails the candidate rather than
+    being followed. Returns (addr, reply)."""
+    def attempt(addr):
+        reply = post(addr)
+        if reply.get("redirect"):
+            raise APIError(verb, 0, f"{addr} redirected again despite no_redirect")
+        return addr, reply
+
+    try:
+        return _try_each(candidates, attempt, retry=lambda _: True)
+    except APIError as exc:
+        if not _retry_transient(exc):
+            raise
+        try:
+            return attempt(origin)
+        except APIError as origin_exc:
+            # Both halves matter to whoever reads this: the peers' failure says
+            # why the claim left the origin, the origin's why returning did not help.
+            origin_exc.message = f"{origin_exc.message} (after redirect targets failed: {exc.message})"
+            origin_exc.args = (f"{verb}: {origin_exc.message} (HTTP {origin_exc.status})",)
+            raise
 
 
 def _scatter(addrs, probe):

@@ -21,6 +21,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
+	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -45,6 +46,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrNoEgressHibernate, http.StatusConflict, ""},
 	{pool.ErrNoEgressFork, http.StatusConflict, ""},
 	{pool.ErrQuota, http.StatusTooManyRequests, ""},
+	{pool.ErrHealBusy, http.StatusServiceUnavailable, ""},
 	{pool.ErrPooledTemplate, http.StatusConflict, ""},
 	{pool.ErrTemplateOwned, http.StatusConflict, ""},
 	{pool.ErrUnknownSandbox, http.StatusNotFound, "unknown sandbox"},
@@ -58,21 +60,26 @@ var poolErrHTTP = []struct {
 type Manager interface {
 	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string) (*types.Sandbox, error)
 	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string) (*types.Sandbox, error)
-	Release(ctx context.Context, id, token string) error
-	ReleaseOperator(ctx context.Context, id string) error
-	Hibernate(ctx context.Context, id, token string) error
-	Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
-	Promote(ctx context.Context, id, token, template, tenant string) (types.PoolKey, error)
+	Release(ctx context.Context, id string, cred pool.Cred) error
+	Hibernate(ctx context.Context, id string, cred pool.Cred) error
+	Wake(ctx context.Context, id string, cred pool.Cred) error
+	Fork(ctx context.Context, id string, cred pool.Cred, count int, ttl time.Duration) ([]*types.Sandbox, error)
+	Promote(ctx context.Context, id string, cred pool.Cred, template, tenant string) (types.PoolKey, error)
 	DeleteTemplate(ctx context.Context, key types.PoolKey, tenant string) error
-	Checkpoint(ctx context.Context, id, token, name, tenant string) (types.Checkpoint, error)
+	Checkpoint(ctx context.Context, id string, cred pool.Cred, name, tenant string) (types.Checkpoint, error)
 	Counters() pool.Counters
 	TenantClaims() map[string]int
 	Sandboxes() []pool.SandboxSummary
+	Sandbox(id string) (pool.SandboxSummary, bool)
+	Stats(ctx context.Context, id string) (pool.SandboxStats, bool)
 	Audit(ctx context.Context, id string, line []byte)
 	AuditEnabled() bool
 	ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error)
+	ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error)
 	Checkpoints(ctx context.Context, tenant string) ([]types.Checkpoint, error)
-	DeleteCheckpoint(ctx context.Context, ckptID, tenant string) error
+	HasCheckpoint(ctx context.Context, ckptID string) bool
+	FetchCheckpoint(ctx context.Context, ckptID string) (dir string, meta []byte, release func(), err error)
+	DeleteCheckpoint(ctx context.Context, ckptID, tenant string, scope pool.DeleteScope) error
 	ClaimDeadline(id, token string) (time.Time, error)
 	HasGolden(ctx context.Context, key types.PoolKey) bool
 	AgentSocket(id, token string) (string, error)
@@ -95,6 +102,13 @@ type Placer interface {
 	TemplateOwners(keyHash string) []string
 	PeerAddrs() []string
 	ConfigMismatches() int
+}
+
+// CheckpointProber answers which peers hold a checkpoint, asked live on a
+// redirect decision rather than gossiped.
+type CheckpointProber interface {
+	Owners(ctx context.Context, id string) []string
+	Forget(id string)
 }
 
 // InfoResponse is the wire reply of GET /v1/info. Peers lists the other nodes'
@@ -121,6 +135,8 @@ type Server struct {
 	mgr       Manager
 	dialer    Dialer
 	placer    Placer
+	prober    CheckpointProber
+	probeKey  []byte
 	apiToken  string
 	tenants   []config.TenantSpec
 	advertise string
@@ -136,12 +152,18 @@ type Server struct {
 // node-level endpoints open (per-sandbox tokens still guard sandbox-scoped
 // calls). tenants adds per-tenant tokens next to the root apiToken.
 // advertise is this node's data-plane address, returned as a claim's owner
-// address. A nil placer disables mesh redirects (single node).
-func New(apiToken string, tenants []config.TenantSpec, advertise string, mgr Manager, dialer Dialer, placer Placer, preview *PreviewServer) *Server {
+// address. A nil placer disables mesh redirects and a nil prober disables
+// checkpoint-owner probing (both single-node). probeKey (see
+// peer.DeriveProbeKey) authenticates the checkpoint HEAD probe; empty
+// leaves it unauthenticated (an unencrypted mesh has no shared secret to
+// build one from).
+func New(apiToken string, tenants []config.TenantSpec, advertise string, mgr Manager, dialer Dialer, placer Placer, prober CheckpointProber, probeKey []byte, preview *PreviewServer) *Server {
 	return &Server{
 		mgr:       mgr,
 		dialer:    dialer,
 		placer:    placer,
+		prober:    prober,
+		probeKey:  probeKey,
 		apiToken:  apiToken,
 		tenants:   tenants,
 		advertise: advertise,
@@ -158,6 +180,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/claim", s.requireToken(s.handleClaim))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleRelease)
 	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/wake", s.handleSandboxVerb("wake", s.mgr.Wake))
+	mux.HandleFunc("GET /v1/sandboxes/{id}", s.requireRoot(s.handleSandbox))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/stats", s.requireRoot(s.handleSandboxStats))
 	// Fork and promote create node resources, so they take the same token
 	// class as a claim; the source sandbox's token rides in the body as the
 	// ownership proof.
@@ -167,6 +192,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sandboxes/{id}/checkpoint", s.requireToken(s.handleCheckpoint))
 	mux.HandleFunc("POST /v1/checkpoints/{id}/claim", s.requireToken(s.handleClaimCheckpoint))
 	mux.HandleFunc("GET /v1/checkpoints", s.requireToken(s.handleListCheckpoints))
+	// GET streams a whole checkpoint with no tenant scoping, so it is
+	// operator-only; HEAD is the ownership probe and stays unauthenticated.
+	mux.HandleFunc("GET /v1/checkpoints/{id}/blob", s.requireRoot(s.handleCheckpointBlob))
+	mux.HandleFunc("HEAD /v1/checkpoints/{id}/blob", s.handleCheckpointProbe)
 	mux.HandleFunc("DELETE /v1/checkpoints/{id}", s.requireToken(s.handleDeleteCheckpoint))
 	mux.HandleFunc("DELETE /v1/templates", s.requireToken(s.handleDeleteTemplate))
 	mux.HandleFunc("PUT /v1/pools", s.requireRoot(s.handlePutPools))
@@ -233,20 +262,15 @@ func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req t
 // node's root api_token (the operator) may release any sandbox by id, so
 // aggregated/control-plane teardown works without holding the per-sandbox token;
 // a per-sandbox token releases only its own claim, unchanged. A tenant token is
-// neither — it is not the root api_token, so it takes the per-sandbox path and
-// 404s (it matches no sandbox token). Tenants never get operator release.
+// neither — it is not the root api_token, so it resolves as a (non-matching)
+// sandbox token and 404s. Tenants never get operator release.
 func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 	token, ok := sandboxToken(w, r)
 	if !ok {
 		return
 	}
 	id := r.PathValue("id")
-	var err error
-	if s.isRootToken(token) {
-		err = s.mgr.ReleaseOperator(r.Context(), id)
-	} else {
-		err = s.mgr.Release(r.Context(), id, token)
-	}
+	err := s.mgr.Release(r.Context(), id, s.sandboxCred(token))
 	switch {
 	case writePoolErr(w, err):
 	case err != nil:
@@ -257,16 +281,41 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleSandboxVerb adapts a sandbox-scoped manager call (hibernate) to HTTP:
-// per-sandbox bearer auth, 404 on unknown, 204 on success.
-func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id, token string) error) http.HandlerFunc {
+// handleSandbox reports one live claim, so a reconcile need not scan the
+// whole-node listing.
+func (s *Server) handleSandbox(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	sb, ok := s.mgr.Sandbox(id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "unknown sandbox")
+		return
+	}
+	writeJSON(w, http.StatusOK, sb)
+}
+
+// handleSandboxStats reports one sandbox's resource usage. It is the only
+// per-sandbox usage surface: /metrics is node- and pool-scoped by design.
+func (s *Server) handleSandboxStats(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	st, ok := s.mgr.Stats(r.Context(), id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "unknown sandbox")
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+// handleSandboxVerb adapts a sandbox-scoped manager call (hibernate, wake) to
+// HTTP: per-sandbox bearer auth, 404 on unknown, 204 on success. The root
+// api_token resolves as an Operator credential instead.
+func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id string, cred pool.Cred) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, ok := sandboxToken(w, r)
 		if !ok {
 			return
 		}
 		id := r.PathValue("id")
-		err := do(r.Context(), id, token)
+		err := do(r.Context(), id, s.sandboxCred(token))
 		writeResult(w, r, verb, id, verb+" failed", err, func() {
 			w.WriteHeader(http.StatusNoContent)
 		})
@@ -281,7 +330,7 @@ func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	children, err := s.mgr.Fork(r.Context(), id, req.Token, req.Count, req.TTL())
+	children, err := s.mgr.Fork(r.Context(), id, s.bodyCred(r, req.Token), req.Count, req.TTL())
 	writeResult(w, r, "fork", id, "fork failed", err, func() {
 		resp := types.ForkResponse{Children: make([]types.ClaimResponse, len(children))}
 		for i, c := range children {
@@ -298,7 +347,7 @@ func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	key, err := s.mgr.Promote(r.Context(), id, req.Token, req.Template, tenantFrom(r.Context()))
+	key, err := s.mgr.Promote(r.Context(), id, s.bodyCred(r, req.Token), req.Template, tenantFrom(r.Context()))
 	writeResult(w, r, "promote", id, "promote failed", err, func() {
 		writeJSON(w, http.StatusOK, types.PromoteResponse{Key: key})
 	})
@@ -311,13 +360,17 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	ckpt, err := s.mgr.Checkpoint(r.Context(), id, req.Token, req.Name, tenantFrom(r.Context()))
+	ckpt, err := s.mgr.Checkpoint(r.Context(), id, s.bodyCred(r, req.Token), req.Name, tenantFrom(r.Context()))
 	writeResult(w, r, "checkpoint", id, "checkpoint failed", err, func() {
 		writeJSON(w, http.StatusOK, types.CheckpointResponse{Checkpoint: ckpt})
 	})
 }
 
 // handleClaimCheckpoint claims a fresh sandbox branched from a checkpoint.
+// Tier order: the local claim, then a redirect to a probed owner (zero bytes
+// moved, but not authoritative — a peer that missed a delete broadcast still
+// answers it holds the record until its own TTL sweep runs), then one peer
+// transfer if neither answered.
 func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeBody[types.CheckpointClaimRequest](w, r)
 	if !ok {
@@ -325,9 +378,57 @@ func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	ckptID := r.PathValue("id")
 	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, req.TTL(), tenantFrom(r.Context()))
+	if errors.Is(err, pool.ErrUnknownCheckpoint) {
+		if !req.NoRedirect && s.prober != nil && writeRedirect(w, s.prober.Owners(r.Context(), ckptID)) {
+			return
+		}
+		sb, err = s.mgr.ClaimCheckpointHeal(r.Context(), ckptID, req.TTL(), tenantFrom(r.Context()))
+	}
 	writeResult(w, r, "claim checkpoint", ckptID, "provisioning failed", err, func() {
 		writeJSON(w, http.StatusOK, s.claimResponse(sb))
 	})
+}
+
+// handleCheckpointBlob streams a checkpoint record as a tar for a peer's pull.
+func (s *Server) handleCheckpointBlob(w http.ResponseWriter, r *http.Request) {
+	ckptID := r.PathValue("id")
+	dir, meta, release, err := s.mgr.FetchCheckpoint(r.Context(), ckptID)
+	if err != nil {
+		if errors.Is(err, pool.ErrUnknownCheckpoint) {
+			writeErr(w, http.StatusNotFound, "unknown checkpoint")
+			return
+		}
+		log.WithFunc("server.handleCheckpointBlob").Error(r.Context(), err, "fetch checkpoint")
+		writeErr(w, http.StatusInternalServerError, "fetch checkpoint failed")
+		return
+	}
+	defer release()
+
+	w.Header().Set("Content-Type", "application/x-tar")
+	// Status is committed before the walk, so a mid-stream failure cannot change
+	// it; the tar's completion marker is what tells the reader the record
+	// arrived whole, and a short transfer is rejected for lacking it.
+	w.WriteHeader(http.StatusOK)
+	if err := peer.TarRecord(dir, meta, w); err != nil {
+		log.WithFunc("server.handleCheckpointBlob").Error(r.Context(), err, "stream checkpoint")
+	}
+}
+
+// handleCheckpointProbe answers a peer's HEAD probe. With a probeKey
+// configured (an encrypted mesh), the caller must present a fresh MAC over
+// the id (peer.ProbeHeader) or the probe is rejected before the metadata
+// read; without one, the id remains the only capability, same as before.
+func (s *Server) handleCheckpointProbe(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if len(s.probeKey) > 0 && !peer.VerifyProbeMAC(s.probeKey, id, r.Header.Get(peer.ProbeHeader)) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	if s.mgr.HasCheckpoint(r.Context(), id) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	w.WriteHeader(http.StatusNotFound)
 }
 
 // handleListCheckpoints lists this node's checkpoints, newest first — a
@@ -343,10 +444,24 @@ func (s *Server) handleListCheckpoints(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDeleteCheckpoint removes a checkpoint; a tenant caller may delete
-// only its own records (anything else is 404).
+// only its own records (anything else is 404). no_forward marks a delete
+// arriving from another node's own broadcast, so this one does not
+// re-broadcast and loop the fleet forever.
 func (s *Server) handleDeleteCheckpoint(w http.ResponseWriter, r *http.Request) {
-	err := s.mgr.DeleteCheckpoint(r.Context(), r.PathValue("id"), tenantFrom(r.Context()))
-	writeResult(w, r, "delete checkpoint", r.PathValue("id"), "delete checkpoint failed", err, func() {
+	scope := pool.DeleteFleet
+	if r.URL.Query().Get("no_forward") != "" {
+		scope = pool.DeleteLocal
+	}
+	id := r.PathValue("id")
+	err := s.mgr.DeleteCheckpoint(r.Context(), id, tenantFrom(r.Context()), scope)
+	// Evict after the record is gone, not before: a probe racing the delete
+	// would otherwise observe the still-present record and cache it just as the
+	// pre-delete eviction cleared the entry. Unconditional — a forwarded delete
+	// that finds nothing here still learned the id's ownership changed.
+	if s.prober != nil {
+		s.prober.Forget(id)
+	}
+	writeResult(w, r, "delete checkpoint", id, "delete checkpoint failed", err, func() {
 		w.WriteHeader(http.StatusNoContent)
 	})
 }
@@ -465,12 +580,33 @@ func (s *Server) requireRoot(next http.HandlerFunc) http.HandlerFunc {
 	})
 }
 
+// rootRequest reports whether this request presented the root api_token.
+func (s *Server) rootRequest(r *http.Request) bool {
+	token, ok := bearerToken(r)
+	return ok && s.isRootToken(token)
+}
+
 // isRootToken reports whether token is the configured root api_token (the
-// operator credential). It mirrors resolveScope's root branch: an unset api
-// token matches nothing, so an open node grants no operator elevation on the
-// per-sandbox release path. Tenant tokens never match — they live in s.tenants.
+// operator credential). An unset api token matches nothing, so an open node
+// grants no operator elevation; tenant tokens never match — they live in
+// s.tenants.
 func (s *Server) isRootToken(token string) bool {
 	return s.apiToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) == 1
+}
+
+// sandboxCred resolves a header bearer token to a Cred. The root api_token
+// elevates to Operator: the manager must never see it as a sandbox token.
+func (s *Server) sandboxCred(token string) pool.Cred {
+	if s.isRootToken(token) {
+		return pool.Cred{Operator: true}
+	}
+	return pool.Cred{Token: token}
+}
+
+// bodyCred resolves a body-carried sandbox token: absent, on a
+// root-authenticated request, is Operator; a tenant must still prove ownership.
+func (s *Server) bodyCred(r *http.Request, bodyToken string) pool.Cred {
+	return pool.Cred{Token: bodyToken, Operator: bodyToken == "" && s.rootRequest(r)}
 }
 
 // resolveScope matches the bearer token to root ("") or a tenant name. With
@@ -483,7 +619,7 @@ func (s *Server) resolveScope(r *http.Request) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if s.apiToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) == 1 {
+	if s.isRootToken(token) {
 		return "", true
 	}
 	for _, tn := range s.tenants {

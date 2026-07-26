@@ -225,6 +225,12 @@ type Config struct {
 	// storage (credentials from the AWS chain, never this file).
 	CheckpointStore *StoreConfig `json:"checkpoint_store,omitempty"`
 
+	// CheckpointPeerHeal lets a node pull a checkpoint it lacks from a peer
+	// rather than failing the branch. Requires cluster_key (the pull presents
+	// the fleet token to a probed address) and a nonzero checkpoint TTL (the
+	// revocation bound for a replica a delete broadcast missed). Off by default.
+	CheckpointPeerHeal bool `json:"checkpoint_peer_heal,omitempty"`
+
 	// CheckpointTTLHours ages out checkpoints (0 = keep forever); the
 	// sweep runs hourly and on startup.
 	CheckpointTTLHours int `json:"checkpoint_ttl_hours,omitempty"`
@@ -264,8 +270,9 @@ func (c *Config) HasEgress() bool {
 }
 
 // ClusterDigest fingerprints the must-match config so a divergent node is
-// caught early, not at a later 401. With cluster_key it HMACs token material
-// too; without one only tenant names + CA root ride the (maybe cleartext) wire.
+// caught early, not at a later 401 or an outlived replica. With cluster_key it
+// HMACs token material too; without one only tenant names, the CA root and the
+// checkpoint TTL ride the (maybe cleartext) wire.
 func (c *Config) ClusterDigest(caFingerprint string) string {
 	names := make([]string, len(c.Tenants))
 	for i, t := range c.Tenants {
@@ -280,13 +287,13 @@ func (c *Config) ClusterDigest(caFingerprint string) string {
 				tenants[i] = auth{t.Name, t.Token}
 			}
 			slices.SortFunc(tenants, func(a, b auth) int { return strings.Compare(a.Name, b.Name) })
-			raw, _ := json.Marshal([]any{c.APIToken, c.PreviewSecret, caFingerprint, tenants})
+			raw, _ := json.Marshal([]any{c.APIToken, c.PreviewSecret, caFingerprint, tenants, c.CheckpointTTLHours})
 			mac := hmac.New(sha256.New, key)
 			mac.Write(raw)
 			return hex.EncodeToString(mac.Sum(nil))
 		}
 	}
-	raw, _ := json.Marshal([]any{caFingerprint, names})
+	raw, _ := json.Marshal([]any{caFingerprint, names, c.CheckpointTTLHours})
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }
@@ -363,6 +370,15 @@ func (c *Config) validate() error {
 	}
 	if c.CheckpointTTLHours < 0 {
 		return fmt.Errorf("checkpoint_ttl_hours must not be negative")
+	}
+	if c.CheckpointPeerHeal && (c.Mesh == nil || c.Mesh.ClusterKey == "") {
+		return fmt.Errorf("checkpoint_peer_heal requires an encrypted mesh (set mesh.cluster_key)")
+	}
+	if c.CheckpointPeerHeal && c.CheckpointTTLHours == 0 {
+		return fmt.Errorf("checkpoint_peer_heal requires checkpoint_ttl_hours > 0: the ttl is what ages out a healed replica a delete broadcast missed")
+	}
+	if c.CheckpointPeerHeal && c.APIToken == "" {
+		return fmt.Errorf("checkpoint_peer_heal requires api_token: without it resolveScope leaves the raw checkpoint blob GET reachable with no credential")
 	}
 	if err := c.validateTenants(); err != nil {
 		return err

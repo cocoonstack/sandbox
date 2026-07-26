@@ -304,7 +304,7 @@ func startTenantStack(t *testing.T, apiToken string, tenants []config.TenantSpec
 	}
 	go mgr.Run(t.Context())
 
-	ts := httptest.NewServer(server.New(apiToken, tenants, "", mgr, eng.real, nil, nil).Handler())
+	ts := httptest.NewServer(server.New(apiToken, tenants, "", mgr, eng.real, nil, nil, nil, nil).Handler())
 	t.Cleanup(ts.Close)
 	addr := strings.TrimPrefix(ts.URL, "http://")
 	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(apiToken))

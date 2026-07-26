@@ -31,7 +31,7 @@ func TestMergeKeepsHigherEpoch(t *testing.T) {
 
 func TestMergeNeverOverwritesSelf(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.UpdateSelf(map[string]int{"k": 3}, nil)
+	m.UpdateSelf(t.Context(), map[string]int{"k": 3}, nil)
 	// A peer claiming to be "a" must not clobber our authoritative self entry.
 	m.merge([]NodeState{{NodeID: "a", Addr: "evil:9999", Epoch: 999, Pools: map[string]int{"k": 0}}})
 
@@ -44,7 +44,7 @@ func TestMergeNeverOverwritesSelf(t *testing.T) {
 
 func TestCandidatesExcludeSelfAndEmpty(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.UpdateSelf(map[string]int{"k": 5}, nil) // self has warm, but is never a candidate
+	m.UpdateSelf(t.Context(), map[string]int{"k": 5}, nil) // self has warm, but is never a candidate
 	m.merge([]NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 2}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Pools: map[string]int{"k": 0}}, // no warm
@@ -62,7 +62,7 @@ func TestCandidatesExcludeSelfAndEmpty(t *testing.T) {
 
 func TestTemplateOwnersExcludeSelfAndUnknown(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.UpdateSelf(nil, []string{"tpl"}) // self holds it, but is never an owner candidate
+	m.UpdateSelf(t.Context(), nil, []string{"tpl"}) // self holds it, but is never an owner candidate
 	m.merge([]NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Templates: []string{"tpl", "other"}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Templates: []string{"other"}},
@@ -87,7 +87,7 @@ func TestForgetPrunesDeadNode(t *testing.T) {
 		t.Errorf("candidates after forget %v, want nil (b pruned)", got)
 	}
 	// forgetting self is a no-op.
-	m.UpdateSelf(map[string]int{"k": 1}, nil)
+	m.UpdateSelf(t.Context(), map[string]int{"k": 1}, nil)
 	m.forget("a")
 	if len(m.Members()) != 1 {
 		t.Error("forget removed self")
@@ -121,7 +121,7 @@ func TestTwoNodeClusterGossipsPools(t *testing.T) {
 	if err := b.mesh.Join([]string{a.addr}); err != nil {
 		t.Fatalf("join: %v", err)
 	}
-	a.mesh.UpdateSelf(map[string]int{"kk": 4}, []string{"tpl-hash"})
+	a.mesh.UpdateSelf(t.Context(), map[string]int{"kk": 4}, []string{"tpl-hash"})
 
 	// Push/pull sync propagates a's warm counts and template set to b within
 	// a few intervals.
@@ -162,7 +162,7 @@ func startNode(t *testing.T, host string, port int, id string) *node {
 	cfg.AdvertiseAddr = host
 	cfg.PushPullInterval = 200 * time.Millisecond
 	cfg.Logger = discardLogger()
-	m, err := New(cfg, id, id+":7777", nil, t.TempDir())
+	m, err := New(t.Context(), cfg, id, id+":7777", nil, t.TempDir())
 	if err != nil {
 		t.Fatalf("new mesh %s: %v", id, err)
 	}

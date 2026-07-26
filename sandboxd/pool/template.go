@@ -28,13 +28,13 @@ type templateRecord struct {
 // net, parent size); later claims for that key clone from it. Re-promoting the
 // same name replaces it, and the caller owns its lifecycle (DeleteTemplate).
 // tenant attributes the record; empty means the operator (root).
-func (m *Manager) Promote(ctx context.Context, id, token, template, tenant string) (types.PoolKey, error) {
-	if !types.NameRe.MatchString(template) {
-		return types.PoolKey{}, fmt.Errorf("%w: template %q must match %s", ErrBadKey, template, types.NameRe)
-	}
-	sb, ok := m.claim(id, token)
+func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, tenant string) (types.PoolKey, error) {
+	sb, ok := m.resolve(id, cred)
 	if !ok {
 		return types.PoolKey{}, ErrUnknownSandbox
+	}
+	if !types.NameRe.MatchString(template) {
+		return types.PoolKey{}, fmt.Errorf("%w: template %q must match %s", ErrBadKey, template, types.NameRe)
 	}
 	if !sb.Key.Capturable() {
 		return types.PoolKey{}, ErrNoEgressFork
@@ -58,11 +58,11 @@ func (m *Manager) Promote(ctx context.Context, id, token, template, tenant strin
 
 	snap, cleanup, err := m.sourceSnap(ctx, sb)
 	if err != nil {
-		return types.PoolKey{}, fmt.Errorf("promote %s: %w", id, err)
+		return types.PoolKey{}, fmt.Errorf("promote %s: %w", sb.ID, err)
 	}
 	defer cleanup()
 	if err := m.publishTemplate(ctx, snap, key, tenant); err != nil {
-		return types.PoolKey{}, fmt.Errorf("promote %s: %w", id, err)
+		return types.PoolKey{}, fmt.Errorf("promote %s: %w", sb.ID, err)
 	}
 	if m.notifyTemplates != nil {
 		m.notifyTemplates()
@@ -86,7 +86,7 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant 
 	id := store.TemplateID(key.Hash())
 	l := m.recLock(id)
 	l.Lock()
-	defer l.Unlock()
+	defer func() { l.Unlock(); m.recDone(id) }()
 	raw, err := m.tpls.ReadMeta(ctx, id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -173,22 +173,58 @@ func (m *Manager) pooledHash(hash string) bool {
 // recLock is the per-record mutation lock: template publish/delete serialize
 // on it directly; checkpoints take it only for delete/fetch (their ids are
 // fresh and unguessable pre-publish). A clone or wake holds it shared, so a
-// delete or re-publish swap never runs under an in-flight read.
+// delete or re-publish swap never runs under an in-flight read. Every call
+// counts as a live reference — pair it with recDone (or recDoneEvict) once
+// the returned lock is unlocked, so a concurrent evict can never hand a
+// waiter a different mutex for the same id.
 func (m *Manager) recLock(id string) *sync.RWMutex {
-	if l, ok := m.recLocks.Load(id); ok {
-		return l.(*sync.RWMutex)
-	}
+	m.recLocksMu.Lock()
+	defer m.recLocksMu.Unlock()
+	m.recRefs[id]++
 	l, _ := m.recLocks.LoadOrStore(id, &sync.RWMutex{})
 	return l.(*sync.RWMutex)
 }
 
-// dropRecLock evicts a deleted record's lock so recLocks can't grow per
-// checkpoint. Safe only for single-use ck ids and only after the store record
-// is deleted: a fresh lock is obtainable only after eviction, i.e. after the
-// record is gone, so no two live ops diverge onto different locks. Template ids
-// (tp_, reused on re-promote) must not be evicted; they are bounded.
-func (m *Manager) dropRecLock(id string) {
-	m.recLocks.Delete(id)
+// recDone releases a reference taken by recLock; call after Unlock/RUnlock,
+// never before — releasing early is what lets a concurrent recLock observe
+// a fresh mutex while this call's lock is still logically held.
+func (m *Manager) recDone(id string) {
+	m.recLocksMu.Lock()
+	defer m.recLocksMu.Unlock()
+	m.recRefs[id]--
+	if m.recRefs[id] <= 0 {
+		delete(m.recRefs, id)
+		m.evictIfPending(id)
+	}
+}
+
+// recDoneEvict is recDone for a caller that just deleted id's record: once
+// the reference count drops to zero — no one else holds or awaits this id's
+// lock — its recLocks slot is removed so the map can't grow per checkpoint.
+// Template ids (tp_, reused on re-promote) never call this; they stay
+// cached forever, bounded by the promoted set.
+func (m *Manager) recDoneEvict(id string) {
+	m.recLocksMu.Lock()
+	defer m.recLocksMu.Unlock()
+	m.recRefs[id]--
+	if m.recRefs[id] <= 0 {
+		delete(m.recRefs, id)
+		delete(m.recEvict, id)
+		m.recLocks.Delete(id)
+		return
+	}
+	// Another holder or waiter is still on this lock; defer the eviction to
+	// whichever call drops the last reference, so it is not lost here.
+	m.recEvict[id] = struct{}{}
+}
+
+// evictIfPending drops id's lock entry if a delete asked for eviction while a
+// reference still held it; callers hold recLocksMu with the count at zero.
+func (m *Manager) evictIfPending(id string) {
+	if _, ok := m.recEvict[id]; ok {
+		delete(m.recEvict, id)
+		m.recLocks.Delete(id)
+	}
 }
 
 // checkTemplateOwner rejects publishing or deleting over another tenant's
@@ -234,12 +270,13 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string,
 	dir, _, release, err := m.tpls.Fetch(ctx, id)
 	if err != nil {
 		l.RUnlock()
+		m.recDone(id)
 		if errors.Is(err, store.ErrNotFound) {
 			return "", func() {}, nil
 		}
 		return "", func() {}, err
 	}
-	return dir, func() { release(); l.RUnlock() }, nil
+	return dir, func() { release(); l.RUnlock(); m.recDone(id) }, nil
 }
 
 // publishTemplate exports snap into the store under the key's template id.
@@ -269,7 +306,7 @@ func (m *Manager) commitTemplate(ctx context.Context, staging, id, tenant string
 	}
 	l := m.recLock(id)
 	l.Lock()
-	defer l.Unlock()
+	defer func() { l.Unlock(); m.recDone(id) }()
 	if err := m.checkTemplateOwner(ctx, id, tenant); err != nil {
 		return err
 	}

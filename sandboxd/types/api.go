@@ -84,6 +84,9 @@ type CheckpointResponse struct {
 // TTLSeconds semantics match a claim's; zero means the server default.
 type CheckpointClaimRequest struct {
 	TTLSeconds int `json:"ttl_seconds,omitempty"`
+	// NoRedirect is set by a client retrying at a redirect target, so the retry
+	// resolves locally instead of bouncing between two nodes.
+	NoRedirect bool `json:"no_redirect,omitempty"`
 }
 
 // TTL converts the requested lease.

@@ -17,7 +17,7 @@ func TestCheckpointThenBranch(t *testing.T) {
 	m := newTestManager(t, eng)
 	src := mustClaim(t, m, testKey)
 
-	ckpt, err := m.Checkpoint(t.Context(), src.ID, src.Token, "step-1", "")
+	ckpt, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "step-1", "")
 	if err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestCheckpointThenBranch(t *testing.T) {
 		t.Errorf("Checkpoints() = %+v, %v; want the one record", ckpts, err)
 	}
 
-	if err := m.DeleteCheckpoint(t.Context(), ckpt.ID, ""); err != nil {
+	if err := m.DeleteCheckpoint(t.Context(), ckpt.ID, "", DeleteFleet); err != nil {
 		t.Fatalf("DeleteCheckpoint: %v", err)
 	}
 	if _, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, time.Hour, ""); !errors.Is(err, ErrUnknownCheckpoint) {
@@ -57,17 +57,17 @@ func TestCheckpointValidation(t *testing.T) {
 	m := newTestManager(t, eng)
 	src := mustClaim(t, m, testKey)
 
-	if _, err := m.Checkpoint(t.Context(), src.ID, "wrong-token", "", ""); !errors.Is(err, ErrUnknownSandbox) {
+	if _, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: "wrong-token"}, "", ""); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("bad token: %v, want ErrUnknownSandbox", err)
 	}
-	if _, err := m.Checkpoint(t.Context(), src.ID, src.Token, "bad name", ""); !errors.Is(err, ErrBadName) {
+	if _, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "bad name", ""); !errors.Is(err, ErrBadName) {
 		t.Errorf("bad name: %v, want ErrBadName", err)
 	}
 	for _, id := range []string{"../../etc", "ck_zz", "", "ck_0011223344556677x"} {
 		if _, err := m.ClaimCheckpoint(t.Context(), id, time.Hour, ""); !errors.Is(err, ErrUnknownCheckpoint) {
 			t.Errorf("claim %q: %v, want ErrUnknownCheckpoint", id, err)
 		}
-		if err := m.DeleteCheckpoint(t.Context(), id, ""); !errors.Is(err, ErrUnknownCheckpoint) {
+		if err := m.DeleteCheckpoint(t.Context(), id, "", DeleteFleet); !errors.Is(err, ErrUnknownCheckpoint) {
 			t.Errorf("delete %q: %v, want ErrUnknownCheckpoint", id, err)
 		}
 	}
@@ -128,11 +128,11 @@ func TestCheckpointTenantIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("beta claim: %v", err)
 	}
-	ckA, err := m.Checkpoint(t.Context(), srcA.ID, srcA.Token, "a-step", "acme")
+	ckA, err := m.Checkpoint(t.Context(), srcA.ID, Cred{Token: srcA.Token}, "a-step", "acme")
 	if err != nil {
 		t.Fatalf("acme checkpoint: %v", err)
 	}
-	ckB, err := m.Checkpoint(t.Context(), srcB.ID, srcB.Token, "b-step", "beta")
+	ckB, err := m.Checkpoint(t.Context(), srcB.ID, Cred{Token: srcB.Token}, "b-step", "beta")
 	if err != nil {
 		t.Fatalf("beta checkpoint: %v", err)
 	}
@@ -148,13 +148,13 @@ func TestCheckpointTenantIsolation(t *testing.T) {
 	}
 
 	// A tenant cannot delete another's record — and learns nothing beyond 404.
-	if err := m.DeleteCheckpoint(t.Context(), ckA.ID, "beta"); !errors.Is(err, ErrUnknownCheckpoint) {
+	if err := m.DeleteCheckpoint(t.Context(), ckA.ID, "beta", DeleteFleet); !errors.Is(err, ErrUnknownCheckpoint) {
 		t.Errorf("cross-tenant delete: %v, want ErrUnknownCheckpoint", err)
 	}
-	if err := m.DeleteCheckpoint(t.Context(), ckA.ID, "acme"); err != nil {
+	if err := m.DeleteCheckpoint(t.Context(), ckA.ID, "acme", DeleteFleet); err != nil {
 		t.Errorf("own delete: %v", err)
 	}
-	if err := m.DeleteCheckpoint(t.Context(), ckB.ID, ""); err != nil {
+	if err := m.DeleteCheckpoint(t.Context(), ckB.ID, "", DeleteFleet); err != nil {
 		t.Errorf("root delete: %v", err)
 	}
 }
@@ -176,14 +176,14 @@ func TestCheckpointDeleteEvictsRecLock(t *testing.T) {
 
 	var ids []string
 	for range 5 {
-		ckpt, err := m.Checkpoint(t.Context(), src.ID, src.Token, "", "")
+		ckpt, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "", "")
 		if err != nil {
 			t.Fatalf("checkpoint: %v", err)
 		}
 		ids = append(ids, ckpt.ID)
 	}
 	for _, id := range ids {
-		if err := m.DeleteCheckpoint(t.Context(), id, ""); err != nil {
+		if err := m.DeleteCheckpoint(t.Context(), id, "", DeleteFleet); err != nil {
 			t.Fatalf("delete %s: %v", id, err)
 		}
 		if _, ok := m.recLocks.Load(id); ok {
@@ -211,7 +211,7 @@ func TestRejectedCheckpointOpsLeakNoRecLock(t *testing.T) {
 		if _, err := m.ClaimCheckpoint(t.Context(), id, time.Hour, ""); !errors.Is(err, ErrUnknownCheckpoint) {
 			t.Errorf("claim %q: %v, want ErrUnknownCheckpoint", id, err)
 		}
-		if err := m.DeleteCheckpoint(t.Context(), id, ""); !errors.Is(err, ErrUnknownCheckpoint) {
+		if err := m.DeleteCheckpoint(t.Context(), id, "", DeleteFleet); !errors.Is(err, ErrUnknownCheckpoint) {
 			t.Errorf("delete %q: %v, want ErrUnknownCheckpoint", id, err)
 		}
 	}
@@ -221,12 +221,12 @@ func TestRejectedCheckpointOpsLeakNoRecLock(t *testing.T) {
 
 	// A wrong-tenant delete of a real checkpoint must also leak nothing.
 	src := mustClaim(t, m, testKey)
-	ckpt, err := m.Checkpoint(t.Context(), src.ID, src.Token, "", "acme")
+	ckpt, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "", "acme")
 	if err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
 	before := countLocks()
-	if err := m.DeleteCheckpoint(t.Context(), ckpt.ID, "other"); !errors.Is(err, ErrUnknownCheckpoint) {
+	if err := m.DeleteCheckpoint(t.Context(), ckpt.ID, "other", DeleteFleet); !errors.Is(err, ErrUnknownCheckpoint) {
 		t.Errorf("wrong-tenant delete: %v, want ErrUnknownCheckpoint", err)
 	}
 	if got := countLocks(); got != before {
