@@ -96,10 +96,12 @@ func TestForgetPrunesDeadNode(t *testing.T) {
 
 func TestCandidatesPowerOfTwo(t *testing.T) {
 	m := newTestMesh(t, "a")
+	// warm=100 each: 20 draws debit the winners but must never exhaust a
+	// peer, so the two-distinct-candidates property is what this test sees.
 	m.merge([]NodeState{
-		{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 1}},
-		{NodeID: "c", Addr: "c:7777", Epoch: 1, Pools: map[string]int{"k": 1}},
-		{NodeID: "d", Addr: "d:7777", Epoch: 1, Pools: map[string]int{"k": 1}},
+		{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 100}},
+		{NodeID: "c", Addr: "c:7777", Epoch: 1, Pools: map[string]int{"k": 100}},
+		{NodeID: "d", Addr: "d:7777", Epoch: 1, Pools: map[string]int{"k": 100}},
 	})
 	// With ≥2 warm peers, exactly two distinct candidates come back.
 	for range 20 {
@@ -112,6 +114,52 @@ func TestCandidatesPowerOfTwo(t *testing.T) {
 				t.Errorf("unexpected candidate %q", a)
 			}
 		}
+	}
+}
+
+// TestCandidatesDebitWarmCredit: a redirect consumes one unit of the peer's
+// advertised warmth, so a burst inside one gossip window is bounded by what
+// the peer actually promised instead of herding onto a stale count.
+func TestCandidatesDebitWarmCredit(t *testing.T) {
+	m := newTestMesh(t, "a")
+	m.merge([]NodeState{{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 4}}})
+
+	var sent int
+	for range 40 {
+		if m.Candidates("k") != nil {
+			sent++
+		}
+	}
+	if sent != 4 {
+		t.Errorf("40 claims in one gossip window: %d redirected, want the 4 advertised", sent)
+	}
+
+	// A fresh adopted state resets the credit.
+	m.merge([]NodeState{{NodeID: "b", Addr: "b:7777", Epoch: 2, Pools: map[string]int{"k": 1}}})
+	if m.Candidates("k") == nil {
+		t.Error("no candidate after a fresh gossip refresh")
+	}
+	if m.Candidates("k") != nil {
+		t.Error("credit outlived the refreshed count")
+	}
+}
+
+// TestCandidatesDebitSumsAcrossPeers: the window's redirect budget is the
+// fleet's advertised total, not per-call luck.
+func TestCandidatesDebitSumsAcrossPeers(t *testing.T) {
+	m := newTestMesh(t, "a")
+	m.merge([]NodeState{
+		{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 2}},
+		{NodeID: "c", Addr: "c:7777", Epoch: 1, Pools: map[string]int{"k": 2}},
+	})
+	var sent int
+	for range 20 {
+		if m.Candidates("k") != nil {
+			sent++
+		}
+	}
+	if sent != 4 {
+		t.Errorf("redirected %d, want 4 (the fleet's advertised warm total)", sent)
 	}
 }
 

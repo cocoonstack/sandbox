@@ -160,10 +160,17 @@ func (m *Mesh) ConfigMismatches() int {
 
 // Candidates returns up to two peer addresses that report warm(keyHash) > 0,
 // chosen power-of-two-choices to avoid herding every waiter onto one node.
-// Self is never a candidate — the caller has already missed locally.
+// Self is never a candidate — the caller has already missed locally. The
+// winner's count is debited locally: a redirect is a claim in flight, and
+// undebited, every claim in one gossip window would chase the same stale
+// count, forcing the target to provision the whole burst once its warm pool
+// ran out (each retry arrives with no_redirect set). The peer's next adopted
+// state resets the debit.
 func (m *Mesh) Candidates(keyHash string) []string {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	type cand struct {
+		id   string
 		addr string
 		warm int
 	}
@@ -173,15 +180,15 @@ func (m *Mesh) Candidates(keyHash string) []string {
 			continue
 		}
 		if st.Pools[keyHash] > 0 {
-			pool = append(pool, cand{st.Addr, st.Pools[keyHash]})
+			pool = append(pool, cand{id, st.Addr, st.Pools[keyHash]})
 		}
 	}
-	m.mu.Unlock()
 
 	switch len(pool) {
 	case 0:
 		return nil
 	case 1:
+		m.view[pool[0].id].Pools[keyHash]--
 		return []string{pool[0].addr}
 	}
 	// Power-of-two-choices: sample two, order by warmer. This is load
@@ -195,6 +202,9 @@ func (m *Mesh) Candidates(keyHash string) []string {
 	if b.warm > a.warm {
 		a, b = b, a
 	}
+	// Only the winner is debited: the client walks the list in order and
+	// stops at the first success, so the runner-up's capacity stays intact.
+	m.view[a.id].Pools[keyHash]--
 	return []string{a.addr, b.addr}
 }
 
