@@ -31,7 +31,7 @@ func TestMergeKeepsHigherEpoch(t *testing.T) {
 
 func TestMergeNeverOverwritesSelf(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.UpdateSelf(map[string]int{"k": 3}, nil, nil)
+	m.UpdateSelf(t.Context(), map[string]int{"k": 3}, nil, nil)
 	// A peer claiming to be "a" must not clobber our authoritative self entry.
 	m.merge([]NodeState{{NodeID: "a", Addr: "evil:9999", Epoch: 999, Pools: map[string]int{"k": 0}}})
 
@@ -44,7 +44,7 @@ func TestMergeNeverOverwritesSelf(t *testing.T) {
 
 func TestCandidatesExcludeSelfAndEmpty(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.UpdateSelf(map[string]int{"k": 5}, nil, nil) // self has warm, but is never a candidate
+	m.UpdateSelf(t.Context(), map[string]int{"k": 5}, nil, nil) // self has warm, but is never a candidate
 	m.merge([]NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 2}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Pools: map[string]int{"k": 0}}, // no warm
@@ -62,7 +62,7 @@ func TestCandidatesExcludeSelfAndEmpty(t *testing.T) {
 
 func TestTemplateOwnersExcludeSelfAndUnknown(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.UpdateSelf(nil, []string{"tpl"}, nil) // self holds it, but is never an owner candidate
+	m.UpdateSelf(t.Context(), nil, []string{"tpl"}, nil) // self holds it, but is never an owner candidate
 	m.merge([]NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Templates: []string{"tpl", "other"}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Templates: []string{"other"}},
@@ -87,7 +87,7 @@ func TestForgetPrunesDeadNode(t *testing.T) {
 		t.Errorf("candidates after forget %v, want nil (b pruned)", got)
 	}
 	// forgetting self is a no-op.
-	m.UpdateSelf(map[string]int{"k": 1}, nil, nil)
+	m.UpdateSelf(t.Context(), map[string]int{"k": 1}, nil, nil)
 	m.forget("a")
 	if len(m.Members()) != 1 {
 		t.Error("forget removed self")
@@ -121,7 +121,7 @@ func TestTwoNodeClusterGossipsPools(t *testing.T) {
 	if err := b.mesh.Join([]string{a.addr}); err != nil {
 		t.Fatalf("join: %v", err)
 	}
-	a.mesh.UpdateSelf(map[string]int{"kk": 4}, []string{"tpl-hash"}, nil)
+	a.mesh.UpdateSelf(t.Context(), map[string]int{"kk": 4}, []string{"tpl-hash"}, nil)
 
 	// Push/pull sync propagates a's warm counts and template set to b within
 	// a few intervals.
@@ -140,7 +140,7 @@ func TestTwoNodeClusterGossipsPools(t *testing.T) {
 
 func TestCheckpointOwnersExcludeSelfAndUnknown(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.UpdateSelf(nil, nil, []string{"ck_00000000000000aa"}) // self holds it, still not an owner candidate
+	m.UpdateSelf(t.Context(), nil, nil, []string{"ck_00000000000000aa"}) // self holds it, still not an owner candidate
 	m.merge([]NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Checkpoints: []string{"ck_00000000000000aa", "ck_00000000000000bb"}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Checkpoints: []string{"ck_00000000000000bb"}},
@@ -175,7 +175,7 @@ func TestCheckpointOwnersTruncates(t *testing.T) {
 // into "branch fails on the wrong node" without any visible error.
 func TestUpdateSelfGossipsCheckpoints(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.UpdateSelf(nil, nil, []string{"ck_00000000000000aa"})
+	m.UpdateSelf(t.Context(), nil, nil, []string{"ck_00000000000000aa"})
 
 	var self NodeState
 	for _, st := range m.Members() {

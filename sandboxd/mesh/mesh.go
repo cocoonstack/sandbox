@@ -104,7 +104,7 @@ func (m *Mesh) Join(seeds []string) error {
 // checkpoint sets, bumping the epoch so peers adopt the new view. An unchanged view is
 // not republished — the periodic tick would otherwise gossip a fresh epoch
 // every second for nothing.
-func (m *Mesh) UpdateSelf(pools map[string]int, templates, checkpoints []string) {
+func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates, checkpoints []string) {
 	m.updateMu.Lock()
 	defer m.updateMu.Unlock()
 	m.mu.Lock()
@@ -119,7 +119,7 @@ func (m *Mesh) UpdateSelf(pools map[string]int, templates, checkpoints []string)
 	// instant it enters the view, so a crash before the write would strand peers
 	// on an epoch a backwards-clock restart can't beat. Hold old state on failure.
 	if err := m.persistEpoch(epoch); err != nil {
-		log.WithFunc("mesh.UpdateSelf").Warnf(context.Background(), "persist epoch: %v", err)
+		log.WithFunc("mesh.UpdateSelf").Warnf(ctx, "persist epoch: %v", err)
 		return
 	}
 	m.mu.Lock()
