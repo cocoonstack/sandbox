@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -24,21 +25,20 @@ func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (net.Con
 		_ = raw.SetDeadline(deadline)
 	}
 
-	req, err := http.NewRequest(http.MethodGet, "http://"+addr+"/v1/sandboxes/"+id+"/agent", nil)
-	if err != nil {
+	// id/token interpolate into the raw request; CR/LF would inject headers.
+	if strings.ContainsAny(id, "\r\n\x00") || strings.ContainsAny(token, "\r\n\x00") {
 		_ = raw.Close()
-		return nil, err
+		return nil, fmt.Errorf("agent upgrade: id or token contains a control character")
 	}
-	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", "silkd")
-	req.Header.Set("Authorization", "Bearer "+token)
-	if err = req.Write(raw); err != nil {
+	req := "GET /v1/sandboxes/" + id + "/agent HTTP/1.1\r\nHost: " + addr +
+		"\r\nConnection: Upgrade\r\nUpgrade: silkd\r\nAuthorization: Bearer " + token + "\r\n\r\n"
+	if _, err = raw.Write([]byte(req)); err != nil {
 		_ = raw.Close()
 		return nil, fmt.Errorf("write upgrade request: %w", err)
 	}
 
 	br := bufio.NewReader(raw)
-	resp, err := http.ReadResponse(br, req)
+	resp, err := http.ReadResponse(br, nil)
 	if err != nil {
 		_ = raw.Close()
 		if ctxErr := ctx.Err(); ctxErr != nil {

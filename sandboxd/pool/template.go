@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -114,7 +115,8 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant 
 
 // TemplateHashes lists the promoted-template key hashes for the mesh's
 // template gossip, from the in-memory set — the 1s gossip tick never
-// touches the store backend.
+// touches the store backend. Sorted: the mesh's unchanged-guard compares
+// order-sensitively, and map iteration order would defeat it every tick.
 func (m *Manager) TemplateHashes() []string {
 	m.mu.Lock()
 	pooled := make(map[string]struct{}, len(m.pools))
@@ -131,6 +133,7 @@ func (m *Manager) TemplateHashes() []string {
 		}
 	}
 	m.tplMu.Unlock()
+	slices.Sort(hashes)
 	return hashes
 }
 

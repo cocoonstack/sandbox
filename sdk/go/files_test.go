@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
@@ -94,6 +95,22 @@ func TestSessionLifecycle(t *testing.T) {
 
 // fakeSandbox wires a Sandbox whose data plane is served by a temp-dir-backed
 // silkd Fake behind a hijacking agent endpoint.
+func TestReadFileMultiChunk(t *testing.T) {
+	sb := fakeSandbox(t)
+	ctx := t.Context()
+	want := bytes.Repeat([]byte("abcdefgh"), 80*1024)
+	if err := sb.WriteFile(ctx, "/big.bin", want, nil); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got, err := sb.ReadFile(ctx, "/big.bin")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("read %d bytes, want %d", len(got), len(want))
+	}
+}
+
 func fakeSandbox(t *testing.T) *Sandbox {
 	t.Helper()
 	fake := silkdtest.NewFake(t.TempDir())

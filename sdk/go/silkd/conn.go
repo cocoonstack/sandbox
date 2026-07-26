@@ -21,9 +21,7 @@ type Conn struct {
 
 // NewConn wraps rwc; the caller keeps ownership of closing via Close.
 func NewConn(rwc io.ReadWriteCloser) *Conn {
-	sc := bufio.NewScanner(rwc)
-	sc.Buffer(make([]byte, 64*1024), wire.MaxFrame)
-	return &Conn{rwc: rwc, sc: sc}
+	return &Conn{rwc: rwc, sc: wire.NewFrameScanner(rwc)}
 }
 
 // Send writes one request frame.

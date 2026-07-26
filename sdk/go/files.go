@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
@@ -21,12 +22,19 @@ func (s *Sandbox) WriteFile(ctx context.Context, path string, data []byte, mode 
 
 // ReadFile returns the contents of path.
 func (s *Sandbox) ReadFile(ctx context.Context, path string) ([]byte, error) {
-	var out []byte
+	// Retaining b is safe: fastBulk decodes each frame into a fresh buffer.
+	var chunks [][]byte
 	err := s.downloadRPC(ctx, &wire.FsRead{Path: path}, func(b []byte) error {
-		out = append(out, b...)
+		chunks = append(chunks, b)
 		return nil
 	})
-	return out, err
+	if err != nil || len(chunks) == 0 {
+		return nil, err
+	}
+	if len(chunks) == 1 {
+		return chunks[0], nil
+	}
+	return slices.Concat(chunks...), nil
 }
 
 // ListDir returns the entries of a directory (batched frames are concatenated).

@@ -7,10 +7,12 @@
 package wire
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 )
 
@@ -657,7 +659,17 @@ func DecodeRequest(line []byte) (Request, error) {
 	return dec(line)
 }
 
-// DecodeResponse parses one frame into its type's concrete Go type.
+// NewFrameScanner wraps r for newline-delimited frames capped at MaxFrame.
+// No pre-sized buffer: bulk frames outgrow any fixed start anyway.
+func NewFrameScanner(r io.Reader) *bufio.Scanner {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(nil, MaxFrame)
+	return sc
+}
+
+// DecodeResponse parses one frame into its type's concrete Go type. Byte
+// fields are freshly allocated per frame, so callers may retain them; pooling
+// them would require a copy-out at every retention site first.
 func DecodeResponse(line []byte) (Response, error) {
 	typ, err := frameTag(line, respTagHead, "type")
 	if err != nil {

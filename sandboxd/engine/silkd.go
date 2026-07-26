@@ -27,7 +27,7 @@ func (e *Engine) dialSilkdSession(ctx context.Context, vsockSocket string) (*sil
 	}
 	return &silkdSession{
 		conn: conn,
-		sc:   silkdScanner(conn),
+		sc:   wire.NewFrameScanner(conn),
 		stop: context.AfterFunc(ctx, func() { _ = conn.Close() }),
 	}, nil
 }
@@ -56,10 +56,4 @@ func (s *silkdSession) recv() (wire.Response, error) {
 func (s *silkdSession) close() {
 	s.stop()
 	_ = s.conn.Close()
-}
-
-func silkdScanner(conn net.Conn) *bufio.Scanner {
-	sc := bufio.NewScanner(conn)
-	sc.Buffer(make([]byte, 64*1024), wire.MaxFrame)
-	return sc
 }
