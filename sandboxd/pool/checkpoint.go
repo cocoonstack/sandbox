@@ -34,8 +34,6 @@ func (m *Manager) Checkpoint(ctx context.Context, id, token, name, tenant string
 }
 
 // CheckpointOperator checkpoints a sandbox by id without a per-sandbox token.
-// It is the operator (root) path, authorized by the node's root api_token
-// before the call — mirroring ReleaseOperator.
 func (m *Manager) CheckpointOperator(ctx context.Context, id, name, tenant string) (types.Checkpoint, error) {
 	sb, ok := m.byID(id)
 	if !ok {
@@ -276,11 +274,9 @@ func parseCheckpoint(raw []byte) (types.Checkpoint, error) {
 	return ckpt, nil
 }
 
-// CheckpointIDs lists this node's checkpoint ids for the mesh to gossip, so a
-// peer can resolve a branch of a checkpoint it does not hold to the node that
-// does. Archive records are excluded: they are lifecycle-internal wake images,
-// never a branch target. Errors are swallowed to nil — gossip is best-effort
-// and a transient store read must not take the tick down.
+// CheckpointIDs lists this node's checkpoint ids for the mesh to gossip.
+// Archive records are excluded: a wake image is never a branch target. A store
+// read error yields nil — gossip is best-effort and must not take the tick down.
 func (m *Manager) CheckpointIDs() []string {
 	ckpts, err := m.Checkpoints(context.Background(), "")
 	if err != nil {
@@ -297,9 +293,7 @@ func (m *Manager) CheckpointIDs() []string {
 }
 
 // FetchCheckpoint materializes a checkpoint's export for a peer transfer,
-// returning the local directory, its meta, and the release to call when the
-// copy is done. It is the read half of the peer-heal path; the id is validated
-// against the store's namespace before any disk is touched.
+// returning the local directory, its meta, and the release to call when done.
 func (m *Manager) FetchCheckpoint(ctx context.Context, ckptID string) (string, []byte, func(), error) {
 	if _, err := m.loadCheckpoint(ctx, ckptID); err != nil {
 		return "", nil, nil, err

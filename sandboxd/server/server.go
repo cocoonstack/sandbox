@@ -98,6 +98,13 @@ type Dialer interface {
 	DialSilkd(ctx context.Context, vsockSocket string) (net.Conn, error)
 }
 
+// The two shapes a sandbox-scoped verb takes: proof of ownership by the
+// per-sandbox token, or by id alone once the root api_token authorized it.
+type (
+	tokenVerb    func(ctx context.Context, id, token string) error
+	operatorVerb func(ctx context.Context, id string) error
+)
+
 // Placer names peers for redirect placement and lists the mesh for Lookup;
 // nil on a single-node deployment (no mesh).
 type Placer interface {
@@ -302,11 +309,7 @@ func (s *Server) handleSandboxStats(w http.ResponseWriter, r *http.Request) {
 // HTTP: per-sandbox bearer auth, 404 on unknown, 204 on success. The node's
 // root api_token takes the operator path instead, exactly as release does, so
 // a control plane holding only the fleet token can drive the lifecycle.
-func (s *Server) handleSandboxVerb(
-	verb string,
-	do func(ctx context.Context, id, token string) error,
-	operator func(ctx context.Context, id string) error,
-) http.HandlerFunc {
+func (s *Server) handleSandboxVerb(verb string, do tokenVerb, operator operatorVerb) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, ok := sandboxToken(w, r)
 		if !ok {
@@ -333,9 +336,9 @@ func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	// An operator (root) caller proves authority with the node api_token in the
-	// header and carries no per-sandbox token; a tenant caller must still
-	// present the sandbox's own token as ownership proof.
+	// An operator caller proves authority with the node api_token in the header
+	// and carries no per-sandbox token; a tenant must still present the
+	// sandbox's own token as ownership proof.
 	var children []*types.Sandbox
 	var err error
 	if req.Token == "" && s.rootRequest(r) {
@@ -398,11 +401,9 @@ func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	ckptID := r.PathValue("id")
 	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, req.TTL(), tenantFrom(r.Context()))
-	// Checkpoints are node-local. When this node does not hold the record, a
-	// peer that gossiped it does: redirect the branch there rather than failing,
-	// so the clone still runs on the node whose disk already has the data (its
-	// local reflink fast path). A no_redirect retry must resolve locally, or two
-	// nodes would bounce the request between them.
+	// Checkpoints are node-local: redirect to a peer that gossiped the record
+	// so the clone runs on the disk that already holds it. A no_redirect retry
+	// must resolve locally or two nodes would bounce the request.
 	if errors.Is(err, pool.ErrUnknownCheckpoint) && s.placer != nil && !req.NoRedirect &&
 		writeRedirect(w, s.placer.CheckpointOwners(ckptID)) {
 		return
@@ -412,10 +413,8 @@ func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleCheckpointBlob streams a checkpoint record (its export directory and
-// meta.json) as a tar, so a peer that must serve a branch locally can pull it.
-// It is a read of an immutable record: the same api/tenant token class that
-// may branch a checkpoint may also copy one.
+// handleCheckpointBlob streams a checkpoint record as a tar, so a peer that
+// must serve a branch locally can pull it.
 func (s *Server) handleCheckpointBlob(w http.ResponseWriter, r *http.Request) {
 	ckptID := r.PathValue("id")
 	dir, meta, release, err := s.mgr.FetchCheckpoint(r.Context(), ckptID)
@@ -431,9 +430,8 @@ func (s *Server) handleCheckpointBlob(w http.ResponseWriter, r *http.Request) {
 	defer release()
 
 	w.Header().Set("Content-Type", "application/x-tar")
-	// The status is committed before the walk begins, so a mid-stream failure
-	// can only truncate the tar — the reader detects that as a short archive
-	// and treats the pull as failed, which is the honest outcome.
+	// Status committed before the walk, so a mid-stream failure truncates the
+	// tar and the reader fails the pull on the short archive.
 	w.WriteHeader(http.StatusOK)
 	if err := peer.TarRecord(dir, meta, w); err != nil {
 		log.WithFunc("server.handleCheckpointBlob").Error(r.Context(), err, "stream checkpoint")
@@ -575,17 +573,17 @@ func (s *Server) requireRoot(next http.HandlerFunc) http.HandlerFunc {
 	})
 }
 
-// isRootToken reports whether token is the configured root api_token (the
-// operator credential). It mirrors resolveScope's root branch: an unset api
-// token matches nothing, so an open node grants no operator elevation on the
-// per-sandbox release path. Tenant tokens never match — they live in s.tenants.
-// rootRequest reports whether this request presented the node's root
-// api_token, the credential that authorizes the operator lifecycle paths.
+// rootRequest reports whether this request presented the node's root api_token,
+// the credential that authorizes the operator lifecycle paths.
 func (s *Server) rootRequest(r *http.Request) bool {
 	token, ok := bearerToken(r)
 	return ok && s.isRootToken(token)
 }
 
+// isRootToken reports whether token is the configured root api_token (the
+// operator credential). It mirrors resolveScope's root branch: an unset api
+// token matches nothing, so an open node grants no operator elevation on the
+// per-sandbox release path. Tenant tokens never match — they live in s.tenants.
 func (s *Server) isRootToken(token string) bool {
 	return s.apiToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) == 1
 }

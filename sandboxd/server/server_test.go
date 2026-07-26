@@ -936,6 +936,123 @@ func TestPreviewHandlerZeroDeadlineMintsLiveToken(t *testing.T) {
 	}
 }
 
+// TestCheckpointClaimRedirectsToOwner is L2: checkpoints are node-local, so a
+// branch that lands on a node without the record must be pointed at one that
+// has it — the clone then runs on the node whose disk already holds the data,
+// on its local reflink fast path. Failing here instead would make "snapshot on
+// A, branch from B" simply not work.
+func TestCheckpointClaimRedirectsToOwner(t *testing.T) {
+	mgr := &fakeManager{} // ClaimCheckpoint defaults to ErrUnknownCheckpoint
+	placer := &fakePlacer{ckptOwners: []string{"owner-a:7777"}}
+	ts := newPlacerTestServer(t, "sekret", mgr, placer)
+
+	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 carrying a redirect (the mesh redirect is a 200, not a 3xx)", resp.StatusCode)
+	}
+	var got types.ClaimResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Redirect) != 1 || got.Redirect[0] != "owner-a:7777" {
+		t.Errorf("redirect = %v, want [owner-a:7777]", got.Redirect)
+	}
+	if got.ID != "" {
+		t.Errorf("id = %q, want empty: a redirect and a delivered sandbox are mutually exclusive", got.ID)
+	}
+}
+
+// TestCheckpointClaimNoRedirectResolvesLocally: the retry at a redirect target
+// must resolve there or two nodes would bounce the request between them.
+func TestCheckpointClaimNoRedirectResolvesLocally(t *testing.T) {
+	placer := &fakePlacer{ckptOwners: []string{"owner-a:7777"}}
+	ts := newPlacerTestServer(t, "sekret", &fakeManager{}, placer)
+
+	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{"no_redirect":true}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: a no_redirect retry must not bounce again", resp.StatusCode)
+	}
+}
+
+// TestCheckpointClaimNoOwnersIs404: nothing gossiped the record, so a miss is
+// an honest miss rather than a redirect to nowhere.
+func TestCheckpointClaimNoOwnersIs404(t *testing.T) {
+	ts := newPlacerTestServer(t, "sekret", &fakeManager{}, &fakePlacer{})
+
+	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestCheckpointBlobUnknownIs404 lets a puller move on to the next owner
+// instead of treating a stale gossip entry as a transfer failure.
+func TestCheckpointBlobUnknownIs404(t *testing.T) {
+	ts := newTestServer(t, "sekret", &fakeManager{}, nil)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		ts.URL+"/v1/checkpoints/ck_00000000000000aa/blob", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer sekret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 so the puller tries the next owner", resp.StatusCode)
+	}
+}
+
+// TestCheckpointBlobStreamsRecord is the serving half of L3: the record leaves
+// as a tar the peer can unpack, with its export contents intact.
+func TestCheckpointBlobStreamsRecord(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "mem"), []byte("guest-pages"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	mgr := &fakeManager{ckptDir: src}
+	ts := newTestServer(t, "sekret", mgr, nil)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		ts.URL+"/v1/checkpoints/ck_00000000000000aa/blob", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer sekret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	dst := t.TempDir()
+	if err := peer.Untar(resp.Body, dst); err != nil {
+		t.Fatalf("Untar the streamed record: %v", err)
+	}
+	// The blob is a whole record: meta.json at the root plus the export under
+	// export/. Streaming only the export produced a directory that published
+	// cleanly and then failed every read as "unknown checkpoint".
+	if got, err := os.ReadFile(filepath.Join(dst, "export", "mem")); err != nil || string(got) != "guest-pages" {
+		t.Fatalf("streamed export/mem = %q, %v; want the record's bytes", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "meta.json")); err != nil {
+		t.Fatalf("meta.json missing from the streamed record: %v", err)
+	}
+}
+
 func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *httptest.Server {
 	t.Helper()
 	return newTenantTestServer(t, apiToken, nil, mgr, dialer)
@@ -1227,121 +1344,4 @@ func postJSON(t *testing.T, url, token, body string) *http.Response {
 		t.Fatalf("do: %v", err)
 	}
 	return resp
-}
-
-// TestCheckpointClaimRedirectsToOwner is L2: checkpoints are node-local, so a
-// branch that lands on a node without the record must be pointed at one that
-// has it — the clone then runs on the node whose disk already holds the data,
-// on its local reflink fast path. Failing here instead would make "snapshot on
-// A, branch from B" simply not work.
-func TestCheckpointClaimRedirectsToOwner(t *testing.T) {
-	mgr := &fakeManager{} // ClaimCheckpoint defaults to ErrUnknownCheckpoint
-	placer := &fakePlacer{ckptOwners: []string{"owner-a:7777"}}
-	ts := newPlacerTestServer(t, "sekret", mgr, placer)
-
-	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200 carrying a redirect (the mesh redirect is a 200, not a 3xx)", resp.StatusCode)
-	}
-	var got types.ClaimResponse
-	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(got.Redirect) != 1 || got.Redirect[0] != "owner-a:7777" {
-		t.Errorf("redirect = %v, want [owner-a:7777]", got.Redirect)
-	}
-	if got.ID != "" {
-		t.Errorf("id = %q, want empty: a redirect and a delivered sandbox are mutually exclusive", got.ID)
-	}
-}
-
-// TestCheckpointClaimNoRedirectResolvesLocally: the retry at a redirect target
-// must resolve there or two nodes would bounce the request between them.
-func TestCheckpointClaimNoRedirectResolvesLocally(t *testing.T) {
-	placer := &fakePlacer{ckptOwners: []string{"owner-a:7777"}}
-	ts := newPlacerTestServer(t, "sekret", &fakeManager{}, placer)
-
-	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{"no_redirect":true}`)
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404: a no_redirect retry must not bounce again", resp.StatusCode)
-	}
-}
-
-// TestCheckpointClaimNoOwnersIs404: nothing gossiped the record, so a miss is
-// an honest miss rather than a redirect to nowhere.
-func TestCheckpointClaimNoOwnersIs404(t *testing.T) {
-	ts := newPlacerTestServer(t, "sekret", &fakeManager{}, &fakePlacer{})
-
-	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", resp.StatusCode)
-	}
-}
-
-// TestCheckpointBlobUnknownIs404 lets a puller move on to the next owner
-// instead of treating a stale gossip entry as a transfer failure.
-func TestCheckpointBlobUnknownIs404(t *testing.T) {
-	ts := newTestServer(t, "sekret", &fakeManager{}, nil)
-
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
-		ts.URL+"/v1/checkpoints/ck_00000000000000aa/blob", nil)
-	if err != nil {
-		t.Fatalf("request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer sekret")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 so the puller tries the next owner", resp.StatusCode)
-	}
-}
-
-// TestCheckpointBlobStreamsRecord is the serving half of L3: the record leaves
-// as a tar the peer can unpack, with its export contents intact.
-func TestCheckpointBlobStreamsRecord(t *testing.T) {
-	src := t.TempDir()
-	if err := os.WriteFile(filepath.Join(src, "mem"), []byte("guest-pages"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	mgr := &fakeManager{ckptDir: src}
-	ts := newTestServer(t, "sekret", mgr, nil)
-
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
-		ts.URL+"/v1/checkpoints/ck_00000000000000aa/blob", nil)
-	if err != nil {
-		t.Fatalf("request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer sekret")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-	dst := t.TempDir()
-	if err := peer.Untar(resp.Body, dst); err != nil {
-		t.Fatalf("Untar the streamed record: %v", err)
-	}
-	// The blob is a whole record: meta.json at the root plus the export under
-	// export/. Streaming only the export produced a directory that published
-	// cleanly and then failed every read as "unknown checkpoint".
-	if got, err := os.ReadFile(filepath.Join(dst, "export", "mem")); err != nil || string(got) != "guest-pages" {
-		t.Fatalf("streamed export/mem = %q, %v; want the record's bytes", got, err)
-	}
-	if _, err := os.Stat(filepath.Join(dst, "meta.json")); err != nil {
-		t.Fatalf("meta.json missing from the streamed record: %v", err)
-	}
 }

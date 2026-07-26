@@ -6,22 +6,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// The operator paths let a control plane holding the node's root api_token
-// drive a sandbox's lifecycle without its per-sandbox token. They exist
-// because a stateless aggregated control plane cannot keep one secret per
-// sandbox without turning O(nodes) storage into O(sandboxes) — the property
-// the whole design rests on. ReleaseOperator established the pattern; these
-// follow it exactly: the server authorizes by root api_token before calling,
-// so no token check happens here, and a tenant token never reaches them.
-
-// byID resolves a live claim by id alone, with no ownership proof.
-func (m *Manager) byID(id string) (*types.Sandbox, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	sb := m.claimed[id]
-	return sb, sb != nil
-}
-
 // Sandbox reports one live claim's summary, the single-sandbox read the
 // whole-node listing otherwise forces a caller to scan for.
 func (m *Manager) Sandbox(id string) (SandboxSummary, bool) {
@@ -47,10 +31,9 @@ func (m *Manager) HibernateOperator(ctx context.Context, id string) error {
 	return m.hibernateLocked(ctx, sb)
 }
 
-// Wake restores a hibernated sandbox and leaves it running, the explicit
-// counterpart to Hibernate. Waking is otherwise only a side effect of opening
-// an agent connection, which gives a control plane no way to resume a sandbox
-// it is not about to talk to. Idempotent on an already-running sandbox.
+// Wake restores a hibernated sandbox and leaves it running, so a control plane
+// can resume one it is not about to talk to — waking is otherwise only a side
+// effect of opening an agent connection. Idempotent on a running sandbox.
 func (m *Manager) Wake(ctx context.Context, id, token string) error {
 	sb, ok := m.claim(id, token)
 	if !ok {
@@ -68,10 +51,18 @@ func (m *Manager) WakeOperator(ctx context.Context, id string) error {
 	return m.wake(ctx, sb)
 }
 
-// wake is the body shared by both wake entry points. It reuses the relay's
-// resolve path, which restores through cocoon's mmap fast path (~55 ms) and
-// queues concurrent wakes on the transition lock, then discards the resolved
-// socket: the caller wants the VM running, not a connection to it.
+// byID resolves a live claim by id alone, with no ownership proof. The server
+// authorizes the operator paths by root api_token before the call, so a tenant
+// token never reaches one.
+func (m *Manager) byID(id string) (*types.Sandbox, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sb := m.claimed[id]
+	return sb, sb != nil
+}
+
+// wake reuses the relay's resolve path, then discards the resolved socket: the
+// caller wants the VM running, not a connection to it.
 func (m *Manager) wake(ctx context.Context, sb *types.Sandbox) error {
 	sb.Touch()
 	_, err := m.wakeResolved(ctx, sb)

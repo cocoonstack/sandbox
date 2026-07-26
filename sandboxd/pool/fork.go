@@ -25,10 +25,7 @@ func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl tim
 	return m.forkResolved(ctx, sb, count, ttl)
 }
 
-// ForkOperator forks a sandbox by id without a per-sandbox token. It is the
-// operator (root) path: the server authorizes it by the node's root api_token
-// before calling, so no token check happens here — mirroring ReleaseOperator.
-// A tenant token never reaches this method (see server.go).
+// ForkOperator forks a sandbox by id without a per-sandbox token.
 func (m *Manager) ForkOperator(ctx context.Context, id string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
 	sb, ok := m.byID(id)
 	if !ok {

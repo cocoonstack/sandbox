@@ -28,18 +28,13 @@ const leaveTimeout = time.Second
 // NodeState is one node's gossiped placement view. Epoch resolves merges: the
 // higher epoch for a given node wins.
 type NodeState struct {
-	NodeID    string         `json:"node_id"`
-	Addr      string         `json:"addr"` // data-plane advertise address
-	Epoch     uint64         `json:"epoch"`
-	Pools     map[string]int `json:"pools"`               // PoolKey hash → warm count
-	Templates []string       `json:"templates,omitempty"` // promoted-template key hashes on disk
-	// Checkpoints lists the checkpoint ids this node holds. Checkpoints are
-	// node-local like templates, so a resume or branch of one this node does
-	// not hold is answered with a redirect to a node that does — the placement
-	// moves to the data instead of the data moving to the placement, which is
-	// what keeps the clone on its local reflink fast path.
-	Checkpoints []string `json:"checkpoints,omitempty"`
-	Digest      string   `json:"digest,omitempty"` // cluster-invariant config digest
+	NodeID      string         `json:"node_id"`
+	Addr        string         `json:"addr"` // data-plane advertise address
+	Epoch       uint64         `json:"epoch"`
+	Pools       map[string]int `json:"pools"`                 // PoolKey hash → warm count
+	Templates   []string       `json:"templates,omitempty"`   // promoted-template key hashes on disk
+	Checkpoints []string       `json:"checkpoints,omitempty"` // checkpoint ids on disk
+	Digest      string         `json:"digest,omitempty"`      // cluster-invariant config digest
 }
 
 // Mesh is the node's view of the cluster and its own gossiped state.
@@ -224,9 +219,8 @@ func (m *Mesh) TemplateOwners(keyHash string) []string {
 }
 
 // CheckpointOwners returns up to two peer addresses whose gossiped checkpoint
-// set contains ckptID — the redirect targets for a branch of a checkpoint this
-// node does not hold. Self is excluded: the caller has already checked its own
-// store. Mirrors TemplateOwners; both answer "who has this immutable record".
+// set contains ckptID, the redirect targets for a branch this node cannot
+// serve. Self is excluded: the caller already checked its own store.
 func (m *Mesh) CheckpointOwners(ckptID string) []string {
 	m.mu.Lock()
 	var owners []string

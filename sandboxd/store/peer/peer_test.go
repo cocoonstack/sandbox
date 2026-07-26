@@ -15,53 +15,6 @@ import (
 
 const testID = "ck_00000000000000aa"
 
-func localStore(t *testing.T) *dir.Store {
-	t.Helper()
-	st, err := dir.New(t.TempDir(), store.CheckpointIDRe)
-	if err != nil {
-		t.Fatalf("dir.New: %v", err)
-	}
-	return st
-}
-
-// fakePuller serves records from an in-memory table, recording who was asked.
-type fakePuller struct {
-	records  map[string]map[string]string // addr → file → content
-	asked    []string
-	failAddr string
-}
-
-func (p *fakePuller) Pull(_ context.Context, addr, _ string, dst string) error {
-	p.asked = append(p.asked, addr)
-	if addr == p.failAddr {
-		return errors.New("peer exploded")
-	}
-	files, ok := p.records[addr]
-	if !ok {
-		return ErrNotFound
-	}
-	for name, content := range files {
-		full := filepath.Join(dst, name)
-		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
-			return err
-		}
-		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func record() map[string]string {
-	return map[string]string{
-		store.MetaFile:                        `{"id":"` + testID + `"}`,
-		filepath.Join(store.ExportDir, "mem"): "guest-pages",
-	}
-}
-
-// TestPeerBackendContract: wrapping must not change local behavior. Every
-// operation but a Fetch/ReadMeta miss is the local backend's, so the wrapper
-// has to satisfy the same store contract the dir backend does.
 func TestPeerBackendContract(t *testing.T) {
 	storetest.RunContract(t, New(localStore(t), nil, nil))
 }
@@ -134,7 +87,7 @@ func TestHealAllOwnersMissStaysNotFound(t *testing.T) {
 	puller := &fakePuller{records: map[string]map[string]string{}}
 	s := New(localStore(t), func(string) []string { return []string{"peer-a:7777"} }, puller)
 
-	_, _, _, err := s.Fetch(t.Context(), testID)
+	err := fetchErr(t, s)
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Fetch error = %v, want store.ErrNotFound", err)
 	}
@@ -160,7 +113,7 @@ func TestHealErrorIsReported(t *testing.T) {
 	puller := &fakePuller{failAddr: "peer-a:7777"}
 	s := New(localStore(t), func(string) []string { return []string{"peer-a:7777"} }, puller)
 
-	_, _, _, err := s.Fetch(t.Context(), testID)
+	err := fetchErr(t, s)
 	if err == nil || errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Fetch error = %v, want the peer failure surfaced", err)
 	}
@@ -183,4 +136,62 @@ func TestMetasStaysLocal(t *testing.T) {
 	if len(metas) != 0 {
 		t.Errorf("Metas returned %d record(s); a peer's records must not appear in a local listing", len(metas))
 	}
+}
+
+func localStore(t *testing.T) *dir.Store {
+	t.Helper()
+	st, err := dir.New(t.TempDir(), store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("dir.New: %v", err)
+	}
+	return st
+}
+
+// fakePuller serves records from an in-memory table, recording who was asked.
+type fakePuller struct {
+	records  map[string]map[string]string // addr → file → content
+	asked    []string
+	failAddr string
+}
+
+func (p *fakePuller) Pull(_ context.Context, addr, _, dst string) error {
+	p.asked = append(p.asked, addr)
+	if addr == p.failAddr {
+		return errors.New("peer exploded")
+	}
+	files, ok := p.records[addr]
+	if !ok {
+		return ErrNotFound
+	}
+	for name, content := range files {
+		full := filepath.Join(dst, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func record() map[string]string {
+	return map[string]string{
+		store.MetaFile:                        `{"id":"` + testID + `"}`,
+		filepath.Join(store.ExportDir, "mem"): "guest-pages",
+	}
+}
+
+// TestPeerBackendContract: wrapping must not change local behavior. Every
+// operation but a Fetch/ReadMeta miss is the local backend's, so the wrapper
+// has to satisfy the same store contract the dir backend does.
+
+// fetchErr keeps the three unused Fetch results out of the assertions.
+func fetchErr(t *testing.T, s *Store) error {
+	t.Helper()
+	_, _, release, err := s.Fetch(t.Context(), testID) //nolint:dogsled // only err is asserted
+	if release != nil {
+		release()
+	}
+	return err
 }

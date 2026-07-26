@@ -555,10 +555,9 @@ func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe 
 }
 
 // WithPeerHeal wraps the manager's checkpoint store so a record this node does
-// not hold is pulled from a node that gossiped it. It is wired after the mesh
-// exists (the owners resolver is the mesh's view), and is a no-op unless
-// checkpoint_peer_heal is set — a shared backend (s3, a FUSE mount) already
-// resolves every record from every node and needs no healing.
+// not hold is pulled from a node that gossiped it. A no-op unless
+// checkpoint_peer_heal is set: a shared backend already resolves every record
+// from every node.
 func (m *Manager) WithPeerHeal(enabled bool, owners peer.Owners, token string) {
 	if !enabled || owners == nil {
 		return

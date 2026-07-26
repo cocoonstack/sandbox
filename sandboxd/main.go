@@ -102,8 +102,7 @@ func main() {
 		defer func() { _ = msh.Shutdown() }()
 		placer = msh
 		mgr.SetTemplateNotifier(func() { msh.UpdateSelf(mgr.WarmCounts(), mgr.TemplateHashes(), mgr.CheckpointIDs()) })
-		// Peer healing needs the mesh's gossiped view to resolve who holds a
-		// record, so it is wired here rather than at store construction.
+		// Wired after the mesh: the owners resolver is the mesh's own view.
 		mgr.WithPeerHeal(cfg.CheckpointPeerHeal, msh.CheckpointOwners, cfg.APIToken)
 		go gossipNodeState(ctx, msh, mgr)
 		logger.Infof(ctx, "mesh %s joined (%d seeds)", cmp.Or(cfg.Mesh.NodeID, cfg.Mesh.Bind), len(cfg.Mesh.Join))

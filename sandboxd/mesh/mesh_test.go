@@ -138,41 +138,6 @@ func TestTwoNodeClusterGossipsPools(t *testing.T) {
 	t.Fatalf("node-b never learned node-a's state: view=%+v", b.mesh.Members())
 }
 
-func newTestMesh(t *testing.T, id string) *Mesh {
-	t.Helper()
-	return &Mesh{
-		epochPath: filepath.Join(t.TempDir(), "mesh-epoch"),
-		self:      NodeState{NodeID: id, Addr: id + ":7777", Pools: map[string]int{}},
-		view:      map[string]NodeState{id: {NodeID: id, Addr: id + ":7777"}},
-	}
-}
-
-func discardLogger() *log.Logger { return log.New(io.Discard, "", 0) }
-
-type node struct {
-	mesh *Mesh
-	addr string
-}
-
-func startNode(t *testing.T, host string, port int, id string) *node {
-	t.Helper()
-	cfg := memberlist.DefaultLocalConfig()
-	cfg.BindAddr = host
-	cfg.BindPort = port
-	cfg.AdvertiseAddr = host
-	cfg.PushPullInterval = 200 * time.Millisecond
-	cfg.Logger = discardLogger()
-	m, err := New(cfg, id, id+":7777", nil, t.TempDir())
-	if err != nil {
-		t.Fatalf("new mesh %s: %v", id, err)
-	}
-	t.Cleanup(func() { _ = m.Shutdown() })
-	return &node{mesh: m, addr: fmt.Sprintf("%s:%d", host, m.ml.LocalNode().Port)}
-}
-
-// TestCheckpointOwnersExcludeSelfAndUnknown mirrors the template case: the
-// caller has already checked its own store, so self is never an answer — a
-// redirect to ourselves would bounce the request in place.
 func TestCheckpointOwnersExcludeSelfAndUnknown(t *testing.T) {
 	m := newTestMesh(t, "a")
 	m.UpdateSelf(nil, nil, []string{"ck_00000000000000aa"}) // self holds it, still not an owner candidate
@@ -222,3 +187,39 @@ func TestUpdateSelfGossipsCheckpoints(t *testing.T) {
 		t.Fatalf("self.Checkpoints = %v, want the record to be gossiped", self.Checkpoints)
 	}
 }
+
+func newTestMesh(t *testing.T, id string) *Mesh {
+	t.Helper()
+	return &Mesh{
+		epochPath: filepath.Join(t.TempDir(), "mesh-epoch"),
+		self:      NodeState{NodeID: id, Addr: id + ":7777", Pools: map[string]int{}},
+		view:      map[string]NodeState{id: {NodeID: id, Addr: id + ":7777"}},
+	}
+}
+
+func discardLogger() *log.Logger { return log.New(io.Discard, "", 0) }
+
+type node struct {
+	mesh *Mesh
+	addr string
+}
+
+func startNode(t *testing.T, host string, port int, id string) *node {
+	t.Helper()
+	cfg := memberlist.DefaultLocalConfig()
+	cfg.BindAddr = host
+	cfg.BindPort = port
+	cfg.AdvertiseAddr = host
+	cfg.PushPullInterval = 200 * time.Millisecond
+	cfg.Logger = discardLogger()
+	m, err := New(cfg, id, id+":7777", nil, t.TempDir())
+	if err != nil {
+		t.Fatalf("new mesh %s: %v", id, err)
+	}
+	t.Cleanup(func() { _ = m.Shutdown() })
+	return &node{mesh: m, addr: fmt.Sprintf("%s:%d", host, m.ml.LocalNode().Port)}
+}
+
+// TestCheckpointOwnersExcludeSelfAndUnknown mirrors the template case: the
+// caller has already checked its own store, so self is never an answer — a
+// redirect to ourselves would bounce the request in place.

@@ -84,10 +84,8 @@ type CheckpointResponse struct {
 // TTLSeconds semantics match a claim's; zero means the server default.
 type CheckpointClaimRequest struct {
 	TTLSeconds int `json:"ttl_seconds,omitempty"`
-	// NoRedirect is set by a client retrying at a redirect target: checkpoints
-	// are node-local, so a branch of a record this node lacks is answered with
-	// the owning peer's address. The retry must resolve locally or two nodes
-	// would bounce it between them.
+	// NoRedirect is set by a client retrying at a redirect target, so the retry
+	// resolves locally instead of bouncing between two nodes.
 	NoRedirect bool `json:"no_redirect,omitempty"`
 }
 

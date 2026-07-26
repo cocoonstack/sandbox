@@ -36,9 +36,7 @@ func (m *Manager) Promote(ctx context.Context, id, token, template, tenant strin
 	return m.promoteResolved(ctx, sb, template, tenant)
 }
 
-// PromoteOperator promotes a sandbox by id without a per-sandbox token. It is
-// the operator (root) path, authorized by the node's root api_token before the
-// call — mirroring ReleaseOperator.
+// PromoteOperator promotes a sandbox by id without a per-sandbox token.
 func (m *Manager) PromoteOperator(ctx context.Context, id, template, tenant string) (types.PoolKey, error) {
 	sb, ok := m.byID(id)
 	if !ok {
