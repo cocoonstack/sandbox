@@ -36,7 +36,6 @@ func (m *Manager) ForkOperator(ctx context.Context, id string, count int, ttl ti
 
 // forkResolved is Fork's body once the source claim is resolved.
 func (m *Manager) forkResolved(ctx context.Context, sb *types.Sandbox, count int, ttl time.Duration) ([]*types.Sandbox, error) {
-	id := sb.ID
 	if count < 1 || count > m.maxFork {
 		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, m.maxFork)
 	}
@@ -51,13 +50,13 @@ func (m *Manager) forkResolved(ctx context.Context, sb *types.Sandbox, count int
 
 	children, err := m.forkClones(ctx, sb, count)
 	if err != nil {
-		return nil, fmt.Errorf("fork %s: %w", id, err)
+		return nil, fmt.Errorf("fork %s: %w", sb.ID, err)
 	}
 	for _, c := range children {
 		c.Tenant = sb.Tenant
 	}
 	if err := m.finalizeBatch(ctx, children, ttl); err != nil {
-		return nil, fmt.Errorf("fork %s: %w", id, err)
+		return nil, fmt.Errorf("fork %s: %w", sb.ID, err)
 	}
 	m.counters.forks.Add(1)
 	m.counters.claimsClone.Add(uint64(len(children))) //nolint:gosec // count is bounded by maxFork

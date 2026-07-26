@@ -13,11 +13,7 @@ func (m *Manager) Sandbox(id string) (SandboxSummary, bool) {
 	if !ok {
 		return SandboxSummary{}, false
 	}
-	return SandboxSummary{
-		ID: sb.ID, Key: sb.Key, Deadline: sb.Deadline,
-		Hibernated: sb.HibernateSnap != "", Archived: sb.ArchiveCk != "",
-		FromCheckpoint: sb.FromCheckpoint, ClaimRef: sb.ClaimRef,
-	}, true
+	return summarize(sb), true
 }
 
 // HibernateOperator hibernates a sandbox by id without a per-sandbox token.

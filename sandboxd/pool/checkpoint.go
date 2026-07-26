@@ -275,8 +275,9 @@ func parseCheckpoint(raw []byte) (types.Checkpoint, error) {
 }
 
 // CheckpointIDs lists this node's checkpoint ids for the mesh to gossip.
-// Archive records are excluded: a wake image is never a branch target. A store
-// read error yields nil — gossip is best-effort and must not take the tick down.
+// Checkpoints already drops archive wake images, which are never a branch
+// target. A store read error yields nil: gossip is best-effort and must not
+// take the tick down.
 func (m *Manager) CheckpointIDs() []string {
 	ckpts, err := m.Checkpoints(context.Background(), "")
 	if err != nil {
@@ -284,9 +285,7 @@ func (m *Manager) CheckpointIDs() []string {
 	}
 	ids := make([]string, 0, len(ckpts))
 	for _, c := range ckpts {
-		if !c.Archive {
-			ids = append(ids, c.ID)
-		}
+		ids = append(ids, c.ID)
 	}
 	slices.Sort(ids)
 	return ids

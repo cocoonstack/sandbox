@@ -485,14 +485,18 @@ func (m *Manager) Sandboxes() []SandboxSummary {
 	defer m.mu.Unlock()
 	out := make([]SandboxSummary, 0, len(m.claimed))
 	for _, sb := range m.claimed {
-		out = append(out, SandboxSummary{
-			ID: sb.ID, Key: sb.Key, Deadline: sb.Deadline,
-			Hibernated: sb.HibernateSnap != "", Archived: sb.ArchiveCk != "", FromCheckpoint: sb.FromCheckpoint,
-			ClaimRef: sb.ClaimRef,
-		})
+		out = append(out, summarize(sb))
 	}
 	slices.SortFunc(out, func(a, b SandboxSummary) int { return strings.Compare(a.ID, b.ID) })
 	return out
+}
+
+func summarize(sb *types.Sandbox) SandboxSummary {
+	return SandboxSummary{
+		ID: sb.ID, Key: sb.Key, Deadline: sb.Deadline,
+		Hibernated: sb.HibernateSnap != "", Archived: sb.ArchiveCk != "",
+		FromCheckpoint: sb.FromCheckpoint, ClaimRef: sb.ClaimRef,
+	}
 }
 
 // WarmCounts is the per-pool-key-hash warm count, for gossiping placement.

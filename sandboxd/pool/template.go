@@ -47,7 +47,6 @@ func (m *Manager) PromoteOperator(ctx context.Context, id, template, tenant stri
 
 // promoteResolved is Promote's body once the source claim is resolved.
 func (m *Manager) promoteResolved(ctx context.Context, sb *types.Sandbox, template, tenant string) (types.PoolKey, error) {
-	id := sb.ID
 	if !types.NameRe.MatchString(template) {
 		return types.PoolKey{}, fmt.Errorf("%w: template %q must match %s", ErrBadKey, template, types.NameRe)
 	}
@@ -73,11 +72,11 @@ func (m *Manager) promoteResolved(ctx context.Context, sb *types.Sandbox, templa
 
 	snap, cleanup, err := m.sourceSnap(ctx, sb)
 	if err != nil {
-		return types.PoolKey{}, fmt.Errorf("promote %s: %w", id, err)
+		return types.PoolKey{}, fmt.Errorf("promote %s: %w", sb.ID, err)
 	}
 	defer cleanup()
 	if err := m.publishTemplate(ctx, snap, key, tenant); err != nil {
-		return types.PoolKey{}, fmt.Errorf("promote %s: %w", id, err)
+		return types.PoolKey{}, fmt.Errorf("promote %s: %w", sb.ID, err)
 	}
 	if m.notifyTemplates != nil {
 		m.notifyTemplates()
