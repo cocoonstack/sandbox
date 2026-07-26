@@ -360,6 +360,7 @@ func TestRedirectFallbackAlsoFails(t *testing.T) {
 	full := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fullCalls++
 		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(errorResponse{Error: "candidate full"})
 	}))
 	t.Cleanup(full.Close)
 
@@ -381,6 +382,11 @@ func TestRedirectFallbackAlsoFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "origin also unavailable") {
 		t.Errorf("err %v, want the origin's failure surfaced", err)
+	}
+	// The candidate's failure must survive into the message too: it is what
+	// says why the claim left the origin in the first place.
+	if !strings.Contains(err.Error(), "candidate full") {
+		t.Errorf("err %v, want the candidate's failure surfaced too", err)
 	}
 	if sb != nil {
 		t.Errorf("sb %+v, want nil", sb)
