@@ -21,7 +21,7 @@ func TestForkRacingHibernateUsesPrivateSource(t *testing.T) {
 	eng.hibernateStall = make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		if err := m.Hibernate(t.Context(), parent.ID, parent.Token); err != nil {
+		if err := m.Hibernate(t.Context(), parent.ID, Cred{Token: parent.Token}); err != nil {
 			t.Errorf("Hibernate: %v", err)
 		}
 	})
@@ -32,7 +32,7 @@ func TestForkRacingHibernateUsesPrivateSource(t *testing.T) {
 	})
 	var children []string
 	wg.Go(func() {
-		sbs, err := m.Fork(t.Context(), parent.ID, parent.Token, 2, time.Hour)
+		sbs, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, time.Hour)
 		if err != nil {
 			t.Errorf("Fork: %v", err)
 			return
@@ -63,7 +63,7 @@ func TestForkFromRunning(t *testing.T) {
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
 
-	children, err := m.Fork(t.Context(), parent.ID, parent.Token, 3, time.Hour)
+	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 3, time.Hour)
 	if err != nil {
 		t.Fatalf("Fork: %v", err)
 	}
@@ -109,11 +109,11 @@ func TestForkFromHibernatedUsesWakeImage(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), parent.ID, parent.Token); err != nil {
+	if err := m.Hibernate(t.Context(), parent.ID, Cred{Token: parent.Token}); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
 
-	children, err := m.Fork(t.Context(), parent.ID, parent.Token, 2, 0)
+	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0)
 	if err != nil {
 		t.Fatalf("Fork: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestForkCountValidation(t *testing.T) {
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
 	for _, count := range []int{0, -1, m.maxFork + 1} {
-		if _, err := m.Fork(t.Context(), parent.ID, parent.Token, count, 0); !errors.Is(err, ErrBadCount) {
+		if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, count, 0); !errors.Is(err, ErrBadCount) {
 			t.Errorf("count %d: err %v, want ErrBadCount", count, err)
 		}
 	}
@@ -154,7 +154,7 @@ func TestForkUnknownSandbox(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
-	if _, err := m.Fork(t.Context(), parent.ID, "wrong-token", 1, 0); !errors.Is(err, ErrUnknownSandbox) {
+	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: "wrong-token"}, 1, 0); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("err %v, want ErrUnknownSandbox", err)
 	}
 }
@@ -168,7 +168,7 @@ func TestForkAllOrNothing(t *testing.T) {
 	}
 	eng.cloneFailNth = 2 // fail one of the three fork clones
 
-	if _, err := m.Fork(t.Context(), parent.ID, parent.Token, 3, 0); err == nil {
+	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 3, 0); err == nil {
 		t.Fatal("Fork succeeded despite a failed clone")
 	}
 	// Every successfully built child is destroyed; only the parent's claim
@@ -191,7 +191,7 @@ func TestReconcileSweepsOrphanSnapshots(t *testing.T) {
 	dataDir := t.TempDir()
 	m := newTestManagerAt(t, eng, dataDir)
 	parent := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), parent.ID, parent.Token); err != nil {
+	if err := m.Hibernate(t.Context(), parent.ID, Cred{Token: parent.Token}); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
 	referenced := eng.hibernates[0]
@@ -235,7 +235,7 @@ func TestForkChildrenInheritTenantAndQuota(t *testing.T) {
 		t.Fatalf("claim: %v", err)
 	}
 
-	children, err := m.Fork(t.Context(), parent.ID, parent.Token, 2, 0)
+	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0)
 	if err != nil {
 		t.Fatalf("Fork: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestForkChildrenInheritTenantAndQuota(t *testing.T) {
 		}
 	}
 	// Parent plus two children fill acme's cap of 3; one more child is over.
-	if _, err := m.Fork(t.Context(), parent.ID, parent.Token, 1, 0); !errors.Is(err, ErrQuota) {
+	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 1, 0); !errors.Is(err, ErrQuota) {
 		t.Errorf("fork past the tenant cap: %v, want ErrQuota", err)
 	}
 }

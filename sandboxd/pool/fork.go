@@ -17,25 +17,11 @@ import (
 // child a distinct machine identity. Children inherit the parent's tenant
 // and count against its quota. All-or-nothing: any child failing destroys
 // the ones already built, so an error means no child survived.
-func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
-	sb, ok := m.claim(id, token)
+func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl time.Duration) ([]*types.Sandbox, error) {
+	sb, ok := m.resolve(id, cred)
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
-	return m.forkResolved(ctx, sb, count, ttl)
-}
-
-// ForkOperator forks a sandbox by id without a per-sandbox token.
-func (m *Manager) ForkOperator(ctx context.Context, id string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
-	sb, ok := m.byID(id)
-	if !ok {
-		return nil, ErrUnknownSandbox
-	}
-	return m.forkResolved(ctx, sb, count, ttl)
-}
-
-// forkResolved is Fork's body once the source claim is resolved.
-func (m *Manager) forkResolved(ctx context.Context, sb *types.Sandbox, count int, ttl time.Duration) ([]*types.Sandbox, error) {
 	if count < 1 || count > m.maxFork {
 		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, m.maxFork)
 	}

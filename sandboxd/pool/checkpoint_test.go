@@ -17,7 +17,7 @@ func TestCheckpointThenBranch(t *testing.T) {
 	m := newTestManager(t, eng)
 	src := mustClaim(t, m, testKey)
 
-	ckpt, err := m.Checkpoint(t.Context(), src.ID, src.Token, "step-1", "")
+	ckpt, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "step-1", "")
 	if err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
@@ -57,10 +57,10 @@ func TestCheckpointValidation(t *testing.T) {
 	m := newTestManager(t, eng)
 	src := mustClaim(t, m, testKey)
 
-	if _, err := m.Checkpoint(t.Context(), src.ID, "wrong-token", "", ""); !errors.Is(err, ErrUnknownSandbox) {
+	if _, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: "wrong-token"}, "", ""); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("bad token: %v, want ErrUnknownSandbox", err)
 	}
-	if _, err := m.Checkpoint(t.Context(), src.ID, src.Token, "bad name", ""); !errors.Is(err, ErrBadName) {
+	if _, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "bad name", ""); !errors.Is(err, ErrBadName) {
 		t.Errorf("bad name: %v, want ErrBadName", err)
 	}
 	for _, id := range []string{"../../etc", "ck_zz", "", "ck_0011223344556677x"} {
@@ -128,11 +128,11 @@ func TestCheckpointTenantIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("beta claim: %v", err)
 	}
-	ckA, err := m.Checkpoint(t.Context(), srcA.ID, srcA.Token, "a-step", "acme")
+	ckA, err := m.Checkpoint(t.Context(), srcA.ID, Cred{Token: srcA.Token}, "a-step", "acme")
 	if err != nil {
 		t.Fatalf("acme checkpoint: %v", err)
 	}
-	ckB, err := m.Checkpoint(t.Context(), srcB.ID, srcB.Token, "b-step", "beta")
+	ckB, err := m.Checkpoint(t.Context(), srcB.ID, Cred{Token: srcB.Token}, "b-step", "beta")
 	if err != nil {
 		t.Fatalf("beta checkpoint: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestCheckpointDeleteEvictsRecLock(t *testing.T) {
 
 	var ids []string
 	for range 5 {
-		ckpt, err := m.Checkpoint(t.Context(), src.ID, src.Token, "", "")
+		ckpt, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "", "")
 		if err != nil {
 			t.Fatalf("checkpoint: %v", err)
 		}
@@ -221,7 +221,7 @@ func TestRejectedCheckpointOpsLeakNoRecLock(t *testing.T) {
 
 	// A wrong-tenant delete of a real checkpoint must also leak nothing.
 	src := mustClaim(t, m, testKey)
-	ckpt, err := m.Checkpoint(t.Context(), src.ID, src.Token, "", "acme")
+	ckpt, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "", "acme")
 	if err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}

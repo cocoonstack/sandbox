@@ -373,20 +373,20 @@ func TestSandboxVerbFlows(t *testing.T) {
 }
 
 // TestReleaseOperatorToken proves the release route's authorization split: the
-// node root api_token releases any sandbox by id via ReleaseOperator (no
+// node root api_token releases any sandbox by id via an Operator credential (no
 // per-sandbox token), while a per-sandbox token still takes the token-checked
-// Release path and a tenant/wrong token gets no operator elevation (it falls to
-// Release and 404s). Exactly one manager method runs per request.
+// path and a tenant/wrong token gets no operator elevation (it resolves as a
+// non-matching sandbox token and 404s). Exactly one hook runs per request.
 func TestReleaseOperatorToken(t *testing.T) {
 	const rootTok, sbTok = "sekret", "sb-secret"
 	tenants := []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}
 	tests := []struct {
 		name        string
 		auth        string
-		wantOp      bool   // ReleaseOperator expected
-		wantRelease bool   // per-sandbox Release expected
-		wantToken   string // token Release should receive (per-sandbox path)
-		releaseErr  error  // error the per-sandbox Release returns
+		wantOp      bool   // operator (Cred.Operator) release expected
+		wantRelease bool   // per-sandbox release expected
+		wantToken   string // token the per-sandbox release should receive
+		releaseErr  error  // error the per-sandbox release returns
 		want        int
 	}{
 		{"root token releases by id", "Bearer " + rootTok, true, false, "", nil, http.StatusNoContent},
@@ -426,13 +426,13 @@ func TestReleaseOperatorToken(t *testing.T) {
 				t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
 			}
 			if opCalled != tt.wantOp {
-				t.Errorf("ReleaseOperator called=%v, want %v", opCalled, tt.wantOp)
+				t.Errorf("operator release called=%v, want %v", opCalled, tt.wantOp)
 			}
 			if relCalled != tt.wantRelease {
 				t.Errorf("Release called=%v, want %v", relCalled, tt.wantRelease)
 			}
 			if tt.wantOp && opID != "sb_1" {
-				t.Errorf("ReleaseOperator id=%q, want sb_1", opID)
+				t.Errorf("operator release id=%q, want sb_1", opID)
 			}
 			if tt.wantRelease && (relID != "sb_1" || relToken != tt.wantToken) {
 				t.Errorf("Release(%q, %q), want (sb_1, %q)", relID, relToken, tt.wantToken)
@@ -1163,6 +1163,15 @@ func newTenantTestServer(t *testing.T, apiToken string, tenants []config.TenantS
 	return ts
 }
 
+// credToken recovers the token a fake hook expects from cred: empty for an
+// Operator credential, mirroring the collapsed manager's own translation.
+func credToken(cred pool.Cred) string {
+	if cred.Operator {
+		return ""
+	}
+	return cred.Token
+}
+
 // fakeManager implements Manager with overridable behavior. ClaimWarm always
 // misses, so the server's warm-miss → redirect → provision path is exercised;
 // the claim hook stands in for the provision result. Tenant-scoped methods
@@ -1213,18 +1222,19 @@ func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl
 	return f.claim(ctx, key, ttl)
 }
 
-func (f *fakeManager) Release(_ context.Context, id, token string) error {
+// Release dispatches to the operator or per-sandbox hook, mirroring the
+// collapsed manager's own Cred split.
+func (f *fakeManager) Release(_ context.Context, id string, cred pool.Cred) error {
+	if cred.Operator {
+		if f.releaseOp == nil {
+			return nil
+		}
+		return f.releaseOp(id)
+	}
 	if f.release == nil {
 		return nil
 	}
-	return f.release(id, token)
-}
-
-func (f *fakeManager) ReleaseOperator(_ context.Context, id string) error {
-	if f.releaseOp == nil {
-		return nil
-	}
-	return f.releaseOp(id)
+	return f.release(id, cred.Token)
 }
 
 func (f *fakeManager) AgentSocket(id, token string) (string, error) {
@@ -1238,26 +1248,26 @@ func (f *fakeManager) WakeAgentSocket(_ context.Context, id, token string) (stri
 	return f.AgentSocket(id, token)
 }
 
-func (f *fakeManager) Hibernate(_ context.Context, id, token string) error {
+func (f *fakeManager) Hibernate(_ context.Context, id string, cred pool.Cred) error {
 	if f.hibernate == nil {
 		return nil
 	}
-	return f.hibernate(id, token)
+	return f.hibernate(id, credToken(cred))
 }
 
-func (f *fakeManager) Fork(_ context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
+func (f *fakeManager) Fork(_ context.Context, id string, cred pool.Cred, count int, ttl time.Duration) ([]*types.Sandbox, error) {
 	if f.fork == nil {
 		return nil, pool.ErrUnknownSandbox
 	}
-	return f.fork(id, token, count, ttl)
+	return f.fork(id, credToken(cred), count, ttl)
 }
 
-func (f *fakeManager) Promote(_ context.Context, id, token, template, tenant string) (types.PoolKey, error) {
+func (f *fakeManager) Promote(_ context.Context, id string, cred pool.Cred, template, tenant string) (types.PoolKey, error) {
 	f.gotTenant = tenant
 	if f.promote == nil {
 		return types.PoolKey{}, pool.ErrUnknownSandbox
 	}
-	if err := f.promote(id, token, template); err != nil {
+	if err := f.promote(id, credToken(cred), template); err != nil {
 		return types.PoolKey{}, err
 	}
 	return types.PoolKey{Template: template, Net: types.NetNone, Size: types.SizeSmall}, nil
@@ -1300,33 +1310,11 @@ func (f *fakeManager) Sandbox(string) (pool.SandboxSummary, bool) {
 
 func (f *fakeManager) Stats(string) (pool.SandboxStats, bool) { return pool.SandboxStats{}, false }
 
-// The operator variants take no per-sandbox token; the fake records them
-// through the same hooks with an empty token, mirroring releaseOp.
-func (f *fakeManager) HibernateOperator(ctx context.Context, id string) error {
-	return f.Hibernate(ctx, id, "")
-}
-
-func (f *fakeManager) Wake(_ context.Context, id, token string) error {
+func (f *fakeManager) Wake(_ context.Context, id string, cred pool.Cred) error {
 	if f.wake == nil {
 		return nil
 	}
-	return f.wake(id, token)
-}
-
-func (f *fakeManager) WakeOperator(ctx context.Context, id string) error {
-	return f.Wake(ctx, id, "")
-}
-
-func (f *fakeManager) ForkOperator(ctx context.Context, id string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
-	return f.Fork(ctx, id, "", count, ttl)
-}
-
-func (f *fakeManager) PromoteOperator(ctx context.Context, id, template, tenant string) (types.PoolKey, error) {
-	return f.Promote(ctx, id, "", template, tenant)
-}
-
-func (f *fakeManager) CheckpointOperator(ctx context.Context, id, name, tenant string) (types.Checkpoint, error) {
-	return f.Checkpoint(ctx, id, "", name, tenant)
+	return f.wake(id, credToken(cred))
 }
 
 func (f *fakeManager) Audit(_ context.Context, id string, line []byte) {
@@ -1337,12 +1325,12 @@ func (f *fakeManager) Audit(_ context.Context, id string, line []byte) {
 
 func (f *fakeManager) AuditEnabled() bool { return f.audited != nil }
 
-func (f *fakeManager) Checkpoint(_ context.Context, id, token, name, tenant string) (types.Checkpoint, error) {
+func (f *fakeManager) Checkpoint(_ context.Context, id string, cred pool.Cred, name, tenant string) (types.Checkpoint, error) {
 	f.gotTenant = tenant
 	if f.checkpoint == nil {
 		return types.Checkpoint{}, pool.ErrUnknownSandbox
 	}
-	return f.checkpoint(id, token, name)
+	return f.checkpoint(id, credToken(cred), name)
 }
 
 func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, _ time.Duration, tenant string) (*types.Sandbox, error) {

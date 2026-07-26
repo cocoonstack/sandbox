@@ -18,7 +18,7 @@ func TestPromoteThenClaimClonesFromTemplate(t *testing.T) {
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
 
-	gotKey, err := m.Promote(t.Context(), parent.ID, parent.Token, "tpl:x", "")
+	gotKey, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:x", "")
 	if err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
@@ -50,11 +50,11 @@ func TestPromoteHibernatedUsesWakeImage(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), parent.ID, parent.Token); err != nil {
+	if err := m.Hibernate(t.Context(), parent.ID, Cred{Token: parent.Token}); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
 
-	if _, err := m.Promote(t.Context(), parent.ID, parent.Token, "tpl:hib", ""); err != nil {
+	if _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:hib", ""); err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
 	if len(eng.snapSaves) != 0 {
@@ -73,15 +73,15 @@ func TestPromoteValidations(t *testing.T) {
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 0})
 	parent := mustClaim(t, m, testKey)
 
-	if _, err := m.Promote(t.Context(), parent.ID, parent.Token, "_bad", ""); !errors.Is(err, ErrBadKey) {
+	if _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "_bad", ""); !errors.Is(err, ErrBadKey) {
 		t.Errorf("bad name: %v, want ErrBadKey", err)
 	}
-	if _, err := m.Promote(t.Context(), parent.ID, "wrong", "tpl:x", ""); !errors.Is(err, ErrUnknownSandbox) {
+	if _, err := m.Promote(t.Context(), parent.ID, Cred{Token: "wrong"}, "tpl:x", ""); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("bad token: %v, want ErrUnknownSandbox", err)
 	}
 	// Same template/net/size as the configured pool: the golden path would
 	// collide with the pool's own.
-	if _, err := m.Promote(t.Context(), parent.ID, parent.Token, testKey.Template, ""); !errors.Is(err, ErrPooledTemplate) {
+	if _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, testKey.Template, ""); !errors.Is(err, ErrPooledTemplate) {
 		t.Errorf("pooled key: %v, want ErrPooledTemplate", err)
 	}
 	if len(eng.snapSaves) != 0 {
@@ -93,7 +93,7 @@ func TestDeleteTemplate(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 0})
 	parent := mustClaim(t, m, testKey)
-	if _, err := m.Promote(t.Context(), parent.ID, parent.Token, "tpl:del", ""); err != nil {
+	if _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:del", ""); err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
 	key := types.PoolKey{Template: "tpl:del", Net: testKey.Net, Size: testKey.Size, Engine: testKey.Engine}
@@ -167,7 +167,7 @@ func TestTemplateTenantScopedDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	key, err := m.Promote(t.Context(), parent.ID, parent.Token, "tpl:tenant", "acme")
+	key, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:tenant", "acme")
 	if err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestTemplateTenantScopedDelete(t *testing.T) {
 	if err := m.DeleteTemplate(t.Context(), key, "acme"); err != nil {
 		t.Errorf("own delete: %v", err)
 	}
-	if _, err := m.Promote(t.Context(), parent.ID, parent.Token, "tpl:tenant", "acme"); err != nil {
+	if _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:tenant", "acme"); err != nil {
 		t.Fatalf("re-promote: %v", err)
 	}
 	if err := m.DeleteTemplate(t.Context(), key, ""); err != nil {
@@ -223,7 +223,7 @@ func TestPromoteFailsClosedOnMetaError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	if _, err := m.Promote(t.Context(), a.ID, a.Token, "shared:v1", "acme"); err != nil {
+	if _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "shared:v1", "acme"); err != nil {
 		t.Fatalf("promote: %v", err)
 	}
 	key := types.PoolKey{Template: "shared:v1", Net: testKey.Net, Size: testKey.Size, Engine: testKey.Engine}
@@ -232,7 +232,7 @@ func TestPromoteFailsClosedOnMetaError(t *testing.T) {
 		t.Fatalf("chmod: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(meta, 0o600) })
-	if _, err := m.Promote(t.Context(), a.ID, a.Token, "shared:v1", "beta"); err == nil {
+	if _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "shared:v1", "beta"); err == nil {
 		t.Fatal("promote succeeded despite an unreadable owner record")
 	}
 }
@@ -249,15 +249,15 @@ func TestPromoteRefusesCrossTenantOverwrite(t *testing.T) {
 		return sb
 	}
 	a := claim("acme")
-	if _, err := m.Promote(t.Context(), a.ID, a.Token, "shared:v1", "acme"); err != nil {
+	if _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "shared:v1", "acme"); err != nil {
 		t.Fatalf("acme promote: %v", err)
 	}
 	b := claim("beta")
-	if _, err := m.Promote(t.Context(), b.ID, b.Token, "shared:v1", "beta"); !errors.Is(err, ErrTemplateOwned) {
+	if _, err := m.Promote(t.Context(), b.ID, Cred{Token: b.Token}, "shared:v1", "beta"); !errors.Is(err, ErrTemplateOwned) {
 		t.Errorf("beta overwrite: %v, want ErrTemplateOwned", err)
 	}
 	r := claim("") // root may replace anything
-	if _, err := m.Promote(t.Context(), r.ID, r.Token, "shared:v1", ""); err != nil {
+	if _, err := m.Promote(t.Context(), r.ID, Cred{Token: r.Token}, "shared:v1", ""); err != nil {
 		t.Errorf("root replace: %v, want ok", err)
 	}
 }

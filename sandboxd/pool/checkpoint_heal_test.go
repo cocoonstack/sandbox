@@ -124,7 +124,7 @@ func TestCheckpointIDsReflectsPublishAndDelete(t *testing.T) {
 	m := newTestManager(t, eng, archivePool(3600))
 	src := mustClaim(t, m, testKey)
 
-	ckpt, err := m.Checkpoint(t.Context(), src.ID, src.Token, "", "")
+	ckpt, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "", "")
 	if err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestCheckpointIDsReseedsOnBoot(t *testing.T) {
 	dataDir := t.TempDir()
 	m1 := newTestManagerAt(t, newFakeEngine(), dataDir)
 	src := mustClaim(t, m1, testKey)
-	ckpt, err := m1.Checkpoint(t.Context(), src.ID, src.Token, "", "")
+	ckpt, err := m1.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "", "")
 	if err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}

@@ -22,7 +22,7 @@ func TestArchivePublishWindowPinsCheckpoint(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("hibernate: %v", err)
 	}
 	stall := &stallingStore{Store: m.ckpts, published: make(chan string, 1), release: make(chan struct{})}
@@ -56,7 +56,7 @@ func TestArchiveWakeRehibernateWindowAborts(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("hibernate: %v", err)
 	}
 	stall := &stallingStore{Store: m.ckpts, published: make(chan string, 1), release: make(chan struct{})}
@@ -69,7 +69,7 @@ func TestArchiveWakeRehibernateWindowAborts(t *testing.T) {
 	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake mid-publish: %v", err)
 	}
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("re-hibernate mid-publish: %v", err)
 	}
 	m.mu.Lock()
@@ -342,7 +342,7 @@ func TestReleaseArchivedDeletesCheckpoint(t *testing.T) {
 	ck := sb.ArchiveCk
 	removesBefore := len(eng.removedNames())
 
-	if err := m.Release(t.Context(), id, token); err != nil {
+	if err := m.Release(t.Context(), id, Cred{Token: token}); err != nil {
 		t.Fatalf("release archived: %v", err)
 	}
 	if ckExists(t, m, ck) {
@@ -410,7 +410,7 @@ func TestArchivePersistFailureRollsBack(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("hibernate: %v", err)
 	}
 	snap, vm := sb.HibernateSnap, sb.VMName
@@ -446,7 +446,7 @@ func TestReleaseArchivedRollsBackOnPersistFailure(t *testing.T) {
 	ck := sb.ArchiveCk
 	breakStore(t, m)
 
-	if err := m.Release(t.Context(), id, token); err == nil {
+	if err := m.Release(t.Context(), id, Cred{Token: token}); err == nil {
 		t.Fatal("release succeeded despite a persist failure")
 	}
 	if _, ok := m.claim(id, token); !ok {
@@ -518,7 +518,7 @@ func TestArchiveOnceSkipsInFlight(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("hibernate: %v", err)
 	}
 	backdate(m, sb, time.Hour)
@@ -546,7 +546,7 @@ func TestArchiveWakeEvictsRecLock(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("hibernate: %v", err)
 	}
 	countLocks := func() int {
@@ -622,7 +622,7 @@ func archivePool(delete int) config.PoolSpec {
 // can start from a known archived record.
 func mustArchive(t *testing.T, m *Manager, sb *types.Sandbox) {
 	t.Helper()
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("hibernate: %v", err)
 	}
 	if err := m.archive(t.Context(), sb); err != nil {

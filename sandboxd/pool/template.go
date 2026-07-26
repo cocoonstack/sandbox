@@ -28,25 +28,11 @@ type templateRecord struct {
 // net, parent size); later claims for that key clone from it. Re-promoting the
 // same name replaces it, and the caller owns its lifecycle (DeleteTemplate).
 // tenant attributes the record; empty means the operator (root).
-func (m *Manager) Promote(ctx context.Context, id, token, template, tenant string) (types.PoolKey, error) {
-	sb, ok := m.claim(id, token)
+func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, tenant string) (types.PoolKey, error) {
+	sb, ok := m.resolve(id, cred)
 	if !ok {
 		return types.PoolKey{}, ErrUnknownSandbox
 	}
-	return m.promoteResolved(ctx, sb, template, tenant)
-}
-
-// PromoteOperator promotes a sandbox by id without a per-sandbox token.
-func (m *Manager) PromoteOperator(ctx context.Context, id, template, tenant string) (types.PoolKey, error) {
-	sb, ok := m.byID(id)
-	if !ok {
-		return types.PoolKey{}, ErrUnknownSandbox
-	}
-	return m.promoteResolved(ctx, sb, template, tenant)
-}
-
-// promoteResolved is Promote's body once the source claim is resolved.
-func (m *Manager) promoteResolved(ctx context.Context, sb *types.Sandbox, template, tenant string) (types.PoolKey, error) {
 	if !types.NameRe.MatchString(template) {
 		return types.PoolKey{}, fmt.Errorf("%w: template %q must match %s", ErrBadKey, template, types.NameRe)
 	}

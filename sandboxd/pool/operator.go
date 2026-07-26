@@ -6,6 +6,14 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+// Cred is a caller's resolved authority over one sandbox: the per-sandbox
+// token, or Operator for the node's root api_token (verified by the server
+// before the call).
+type Cred struct {
+	Token    string
+	Operator bool
+}
+
 // Sandbox reports one live claim's summary, the single-sandbox read the
 // whole-node listing otherwise forces a caller to scan for.
 func (m *Manager) Sandbox(id string) (SandboxSummary, bool) {
@@ -16,40 +24,32 @@ func (m *Manager) Sandbox(id string) (SandboxSummary, bool) {
 	return summarize(sb), true
 }
 
-// HibernateOperator hibernates a sandbox by id without a per-sandbox token.
-func (m *Manager) HibernateOperator(ctx context.Context, id string) error {
-	sb, ok := m.byID(id)
-	if !ok {
-		return ErrUnknownSandbox
-	}
-	sb.Transition.Lock()
-	defer sb.Transition.Unlock()
-	return m.hibernateLocked(ctx, sb)
-}
-
 // Wake restores a hibernated sandbox and leaves it running, so a control plane
 // can resume one it is not about to talk to — waking is otherwise only a side
 // effect of opening an agent connection. Idempotent on a running sandbox.
-func (m *Manager) Wake(ctx context.Context, id, token string) error {
-	sb, ok := m.claim(id, token)
+func (m *Manager) Wake(ctx context.Context, id string, cred Cred) error {
+	sb, ok := m.resolve(id, cred)
 	if !ok {
 		return ErrUnknownSandbox
 	}
 	return m.wake(ctx, sb)
 }
 
-// WakeOperator wakes a sandbox by id without a per-sandbox token.
-func (m *Manager) WakeOperator(ctx context.Context, id string) error {
-	sb, ok := m.byID(id)
-	if !ok {
-		return ErrUnknownSandbox
+// resolve authorizes id under cred: Operator resolves by id alone (the
+// server has already verified the root api_token), otherwise the token must
+// match the claim — an unclaimed slot must never match an empty token.
+func (m *Manager) resolve(id string, cred Cred) (*types.Sandbox, bool) {
+	if cred.Operator {
+		return m.byID(id)
 	}
-	return m.wake(ctx, sb)
+	if cred.Token == "" {
+		return nil, false
+	}
+	return m.claim(id, cred.Token)
 }
 
-// byID resolves a live claim by id alone, with no ownership proof. The server
-// authorizes the operator paths by root api_token before the call, so a tenant
-// token never reaches one.
+// byID resolves a live claim by id alone, with no ownership proof. Callers
+// must have authorized the Operator credential themselves before reaching it.
 func (m *Manager) byID(id string) (*types.Sandbox, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

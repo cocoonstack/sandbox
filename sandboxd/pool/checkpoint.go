@@ -25,25 +25,11 @@ var (
 // keeps running (a hibernated one is captured from its wake image). Branches
 // clone that exact state, and a source can be checkpointed again — a tree.
 // tenant attributes the record; empty means the operator (root).
-func (m *Manager) Checkpoint(ctx context.Context, id, token, name, tenant string) (types.Checkpoint, error) {
-	sb, ok := m.claim(id, token)
+func (m *Manager) Checkpoint(ctx context.Context, id string, cred Cred, name, tenant string) (types.Checkpoint, error) {
+	sb, ok := m.resolve(id, cred)
 	if !ok {
 		return types.Checkpoint{}, ErrUnknownSandbox
 	}
-	return m.checkpointResolved(ctx, sb, name, tenant)
-}
-
-// CheckpointOperator checkpoints a sandbox by id without a per-sandbox token.
-func (m *Manager) CheckpointOperator(ctx context.Context, id, name, tenant string) (types.Checkpoint, error) {
-	sb, ok := m.byID(id)
-	if !ok {
-		return types.Checkpoint{}, ErrUnknownSandbox
-	}
-	return m.checkpointResolved(ctx, sb, name, tenant)
-}
-
-// checkpointResolved is Checkpoint's body once the source claim is resolved.
-func (m *Manager) checkpointResolved(ctx context.Context, sb *types.Sandbox, name, tenant string) (types.Checkpoint, error) {
 	if name != "" && !types.NameRe.MatchString(name) {
 		return types.Checkpoint{}, fmt.Errorf("%w: %q must match %s", ErrBadName, name, types.NameRe)
 	}

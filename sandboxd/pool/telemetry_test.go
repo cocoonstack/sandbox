@@ -17,13 +17,13 @@ func TestUsageJournalRecordsLifecycle(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
 	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("Wake: %v", err)
 	}
-	if err := m.Release(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 
@@ -86,7 +86,7 @@ func TestQuotaRefusesClaimsPastCap(t *testing.T) {
 		t.Fatalf("claim past cap: %v, want ErrQuota", err)
 	}
 	// The refused VM must not leak, and the pool state stays sane.
-	if err := m.Release(t.Context(), first.ID, first.Token); err != nil {
+	if err := m.Release(t.Context(), first.ID, Cred{Token: first.Token}); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 	if _, err := claimAny(t.Context(), m, testKey, time.Hour); err != nil {
@@ -121,7 +121,7 @@ func TestTenantQuotaBindsPerTenant(t *testing.T) {
 	if counts["acme"] != 1 || counts["beta"] != 1 {
 		t.Errorf("TenantClaims %v, want acme=1 beta=1", counts)
 	}
-	if err := m.Release(t.Context(), first.ID, first.Token); err != nil {
+	if err := m.Release(t.Context(), first.ID, Cred{Token: first.Token}); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", ""); err != nil {

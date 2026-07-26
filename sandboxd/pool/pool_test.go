@@ -169,13 +169,13 @@ func TestReleaseValidatesToken(t *testing.T) {
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
 
-	if err := m.Release(t.Context(), sb.ID, "wrong"); !errors.Is(err, ErrUnknownSandbox) {
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: "wrong"}); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("got %v, want ErrUnknownSandbox", err)
 	}
-	if err := m.Release(t.Context(), "sb_nope", sb.Token); !errors.Is(err, ErrUnknownSandbox) {
+	if err := m.Release(t.Context(), "sb_nope", Cred{Token: sb.Token}); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("got %v, want ErrUnknownSandbox", err)
 	}
-	if err := m.Release(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 	if !slices.Contains(eng.removes, sb.VMName) {
@@ -186,24 +186,68 @@ func TestReleaseValidatesToken(t *testing.T) {
 	}
 }
 
-func TestReleaseOperator(t *testing.T) {
+// TestReleaseAfterResolveTearsDownOnce: resolve authorizes off the manager
+// mutex, so two callers can both hold the same resolved claim before either
+// drops it — the state a live double-release reaches. Exactly one may tear the
+// VM down; the loser must read as unknown rather than remove it twice.
+func TestReleaseAfterResolveTearsDownOnce(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	cred := Cred{Token: sb.Token}
+
+	first, ok := m.resolve(sb.ID, cred)
+	if !ok {
+		t.Fatal("resolve: claim not found")
+	}
+	second, ok := m.resolve(sb.ID, cred)
+	if !ok {
+		t.Fatal("resolve: claim not found on the second caller")
+	}
+
+	if err := m.releaseResolved(t.Context(), sb.ID, first); err != nil {
+		t.Fatalf("first release: %v", err)
+	}
+	if err := m.releaseResolved(t.Context(), sb.ID, second); !errors.Is(err, ErrUnknownSandbox) {
+		t.Errorf("second release: %v, want ErrUnknownSandbox", err)
+	}
+	if got := slices.Compact(slices.Clone(eng.removes)); len(got) != 1 || got[0] != sb.VMName {
+		t.Errorf("removes=%v, want %s torn down exactly once", eng.removes, sb.VMName)
+	}
+}
+
+func TestReleaseByOperatorCred(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
 
-	// Unknown id is 404-equivalent, exactly like Release.
-	if err := m.ReleaseOperator(t.Context(), "sb_nope"); !errors.Is(err, ErrUnknownSandbox) {
+	// Unknown id is 404-equivalent, exactly like a token release.
+	if err := m.Release(t.Context(), "sb_nope", Cred{Operator: true}); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("got %v, want ErrUnknownSandbox", err)
 	}
 	// The operator releases by id alone — no per-sandbox token needed.
-	if err := m.ReleaseOperator(t.Context(), sb.ID); err != nil {
-		t.Fatalf("ReleaseOperator: %v", err)
+	if err := m.Release(t.Context(), sb.ID, Cred{Operator: true}); err != nil {
+		t.Fatalf("Release operator: %v", err)
 	}
 	if !slices.Contains(eng.removes, sb.VMName) {
 		t.Errorf("removes=%v, want %s", eng.removes, sb.VMName)
 	}
 	if got, _ := newClaimStore(m.dataDir).load(); len(got) != 0 {
 		t.Errorf("release not persisted: %d entries", len(got))
+	}
+}
+
+// TestResolveRejectsEmptyToken documents resolve's explicit guard: an
+// unclaimed slot must never match an empty token.
+func TestResolveRejectsEmptyToken(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+
+	if _, ok := m.resolve(sb.ID, Cred{Token: ""}); ok {
+		t.Error("empty token resolved a claimed sandbox")
+	}
+	if _, ok := m.resolve(sb.ID, Cred{Operator: true}); !ok {
+		t.Error("operator credential did not resolve the claim")
 	}
 }
 

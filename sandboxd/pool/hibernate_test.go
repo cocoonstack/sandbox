@@ -24,10 +24,10 @@ func TestHibernatePersistFailureSurfacesAndConverges(t *testing.T) {
 	broken := filepath.Join(t.TempDir(), "gone", "claims.json")
 	m.store.path = broken
 
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("Hibernate reported success despite a persist failure")
 	}
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("Hibernate retry reported success while the journal is unwritable")
 	}
 	if len(eng.hibernates) != 0 {
@@ -36,7 +36,7 @@ func TestHibernatePersistFailureSurfacesAndConverges(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(broken), 0o750); err != nil {
 		t.Fatalf("heal store dir: %v", err)
 	}
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate retry after heal: %v", err)
 	}
 	got, err := (&claimStore{path: broken}).load()
@@ -53,7 +53,7 @@ func TestWakePersistFailureSurfaces(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
 	snap := eng.hibernates[0]
@@ -100,7 +100,7 @@ func TestHibernateAmbiguousErrorTreatedAsDone(t *testing.T) {
 	eng.hibernateErr = errors.New("cli timeout")
 	eng.hibernateErrCompletes = true // the snapshot landed before the timeout
 
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate: %v, want nil (the snapshot landed despite the error)", err)
 	}
 	if _, g := m.Info(); g.Hibernated != 1 {
@@ -121,7 +121,7 @@ func TestHibernateVerifiedFailureClearsIntent(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 	eng.hibernateErr = errors.New("cli failed") // completes=false: no snapshot
 
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("Hibernate reported success despite a verified failure")
 	}
 	if _, g := m.Info(); g.Hibernated != 0 {
@@ -132,7 +132,7 @@ func TestHibernateVerifiedFailureClearsIntent(t *testing.T) {
 		t.Fatalf("journal %+v, want running (no snaps)", got[sb.ID])
 	}
 	eng.hibernateErr = nil
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate retry: %v", err)
 	}
 }
@@ -148,7 +148,7 @@ func TestHibernateUnverifiableErrorKeepsIntent(t *testing.T) {
 	eng.hibernateErr = errors.New("cli timeout")
 	eng.snapListErr = errors.New("cocoon unreachable")
 
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("Hibernate reported success on an unconfirmed transition")
 	}
 	if _, g := m.Info(); g.Hibernated != 0 {
@@ -168,7 +168,7 @@ func TestWakeRestoreErrorDestroysAndRetries(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
 	snap := eng.hibernates[0]
@@ -205,7 +205,7 @@ func TestRetryResolvesDanglingIntent(t *testing.T) {
 	eng.hibernateErr = errors.New("cli timeout")
 	eng.hibernateErrCompletes = true
 	eng.snapListErr = errors.New("cocoon unreachable")
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("Hibernate reported success on an unconfirmed transition")
 	}
 	realSnap := eng.hibernates[0]
@@ -216,7 +216,7 @@ func TestRetryResolvesDanglingIntent(t *testing.T) {
 	// cocoon recovers; the retry must adopt the real snapshot, not re-hibernate.
 	eng.hibernateErr = nil
 	eng.snapListErr = nil
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate retry: %v", err)
 	}
 	if len(eng.hibernates) != 1 {
@@ -247,7 +247,7 @@ func TestWakeResolvesDanglingIntent(t *testing.T) {
 	eng.hibernateErr = errors.New("cli timeout")
 	eng.hibernateErrCompletes = true
 	eng.snapListErr = errors.New("cocoon unreachable")
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("Hibernate reported success on an unconfirmed transition")
 	}
 
@@ -280,7 +280,7 @@ func TestResolvePendingSnapReleaseRaceDropsOrphan(t *testing.T) {
 	eng.hibernateErr = errors.New("cli timeout")
 	eng.hibernateErrCompletes = true
 	eng.snapListErr = errors.New("cocoon unreachable")
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("Hibernate reported success on an unconfirmed transition")
 	}
 	realSnap := eng.hibernates[0]
@@ -295,7 +295,7 @@ func TestResolvePendingSnapReleaseRaceDropsOrphan(t *testing.T) {
 		wakeErr <- err
 	}()
 	waitFor(t, func() bool { return eng.snapListCalls() > callsBefore })
-	if err := m.Release(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("release: %v", err)
 	}
 	close(eng.snapListStall)
@@ -316,14 +316,14 @@ func TestResolveAdoptBillsWhenPersistFails(t *testing.T) {
 	eng.hibernateErr = errors.New("cli timeout")
 	eng.hibernateErrCompletes = true
 	eng.snapListErr = errors.New("cocoon unreachable")
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("Hibernate reported success on an unconfirmed transition")
 	}
 	// The list recovers, but the claims journal is now unwritable.
 	eng.snapListErr = nil
 	broken := filepath.Join(t.TempDir(), "gone", "claims.json")
 	m.store.path = broken
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err == nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("Hibernate reported success despite a persist failure")
 	}
 	if n := m.Counters().Hibernates; n != 1 {
@@ -346,7 +346,7 @@ func TestWakeProbeFailureDestroysAndRetries(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
 	snap := eng.hibernates[0]
@@ -377,7 +377,7 @@ func TestFlushClaimsClosesShutdownWindow(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
 	broken := filepath.Join(t.TempDir(), "gone", "claims.json")
@@ -403,10 +403,10 @@ func TestHibernateWakeCycle(t *testing.T) {
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
 
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("repeat Hibernate: %v", err)
 	}
 	if len(eng.hibernates) != 1 {
@@ -453,7 +453,7 @@ func TestWakeDropsSnapshotOffReturnPath(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("hibernate: %v", err)
 	}
 	eng.snapRemoveStall = make(chan struct{})
@@ -476,7 +476,7 @@ func TestWakeFailureKeepsHibernated(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
 
@@ -496,11 +496,11 @@ func TestReleaseHibernatedDropsSnapshot(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
 
-	if err := m.Release(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 	if !slices.Contains(eng.removes, sb.VMName) {
@@ -518,7 +518,7 @@ func TestReleaseMidHibernateDropsOrphanSnapshot(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 
 	hibErr := make(chan error, 1)
-	go func() { hibErr <- m.Hibernate(t.Context(), sb.ID, sb.Token) }()
+	go func() { hibErr <- m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}) }()
 	waitFor(t, func() bool {
 		eng.mu.Lock()
 		defer eng.mu.Unlock()
@@ -527,7 +527,7 @@ func TestReleaseMidHibernateDropsOrphanSnapshot(t *testing.T) {
 
 	// Release lands while the engine transition is in flight: the claim is
 	// gone before Hibernate can commit, so its snapshot must not leak.
-	if err := m.Release(t.Context(), sb.ID, sb.Token); err != nil {
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 	close(eng.hibernateStall)

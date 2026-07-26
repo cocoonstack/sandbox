@@ -17,8 +17,8 @@ import (
 // memory; the next agent access wakes it. Idempotent on an already-hibernated
 // sandbox. When to hibernate is the caller's policy — the node only provides
 // the transition.
-func (m *Manager) Hibernate(ctx context.Context, id, token string) error {
-	sb, ok := m.claim(id, token)
+func (m *Manager) Hibernate(ctx context.Context, id string, cred Cred) error {
+	sb, ok := m.resolve(id, cred)
 	if !ok {
 		return ErrUnknownSandbox
 	}

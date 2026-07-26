@@ -59,19 +59,13 @@ var poolErrHTTP = []struct {
 type Manager interface {
 	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string) (*types.Sandbox, error)
 	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string) (*types.Sandbox, error)
-	Release(ctx context.Context, id, token string) error
-	ReleaseOperator(ctx context.Context, id string) error
-	Hibernate(ctx context.Context, id, token string) error
-	HibernateOperator(ctx context.Context, id string) error
-	Wake(ctx context.Context, id, token string) error
-	WakeOperator(ctx context.Context, id string) error
-	Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
-	ForkOperator(ctx context.Context, id string, count int, ttl time.Duration) ([]*types.Sandbox, error)
-	Promote(ctx context.Context, id, token, template, tenant string) (types.PoolKey, error)
-	PromoteOperator(ctx context.Context, id, template, tenant string) (types.PoolKey, error)
+	Release(ctx context.Context, id string, cred pool.Cred) error
+	Hibernate(ctx context.Context, id string, cred pool.Cred) error
+	Wake(ctx context.Context, id string, cred pool.Cred) error
+	Fork(ctx context.Context, id string, cred pool.Cred, count int, ttl time.Duration) ([]*types.Sandbox, error)
+	Promote(ctx context.Context, id string, cred pool.Cred, template, tenant string) (types.PoolKey, error)
 	DeleteTemplate(ctx context.Context, key types.PoolKey, tenant string) error
-	Checkpoint(ctx context.Context, id, token, name, tenant string) (types.Checkpoint, error)
-	CheckpointOperator(ctx context.Context, id, name, tenant string) (types.Checkpoint, error)
+	Checkpoint(ctx context.Context, id string, cred pool.Cred, name, tenant string) (types.Checkpoint, error)
 	Counters() pool.Counters
 	TenantClaims() map[string]int
 	Sandboxes() []pool.SandboxSummary
@@ -98,13 +92,6 @@ type Manager interface {
 type Dialer interface {
 	DialSilkd(ctx context.Context, vsockSocket string) (net.Conn, error)
 }
-
-// The two shapes a sandbox-scoped verb takes: proof of ownership by the
-// per-sandbox token, or by id alone once the root api_token authorized it.
-type (
-	tokenVerb    func(ctx context.Context, id, token string) error
-	operatorVerb func(ctx context.Context, id string) error
-)
 
 // Placer names peers for redirect placement and lists the mesh for Lookup;
 // nil on a single-node deployment (no mesh).
@@ -176,8 +163,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/claim", s.requireToken(s.handleClaim))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleRelease)
-	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate, s.mgr.HibernateOperator))
-	mux.HandleFunc("POST /v1/sandboxes/{id}/wake", s.handleSandboxVerb("wake", s.mgr.Wake, s.mgr.WakeOperator))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/wake", s.handleSandboxVerb("wake", s.mgr.Wake))
 	mux.HandleFunc("GET /v1/sandboxes/{id}", s.requireRoot(s.handleSandbox))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/stats", s.requireRoot(s.handleSandboxStats))
 	// Fork and promote create node resources, so they take the same token
@@ -258,20 +245,15 @@ func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req t
 // node's root api_token (the operator) may release any sandbox by id, so
 // aggregated/control-plane teardown works without holding the per-sandbox token;
 // a per-sandbox token releases only its own claim, unchanged. A tenant token is
-// neither — it is not the root api_token, so it takes the per-sandbox path and
-// 404s (it matches no sandbox token). Tenants never get operator release.
+// neither — it is not the root api_token, so it resolves as a (non-matching)
+// sandbox token and 404s. Tenants never get operator release.
 func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 	token, ok := sandboxToken(w, r)
 	if !ok {
 		return
 	}
 	id := r.PathValue("id")
-	var err error
-	if s.isRootToken(token) {
-		err = s.mgr.ReleaseOperator(r.Context(), id)
-	} else {
-		err = s.mgr.Release(r.Context(), id, token)
-	}
+	err := s.mgr.Release(r.Context(), id, s.sandboxCred(token))
 	switch {
 	case writePoolErr(w, err):
 	case err != nil:
@@ -308,21 +290,16 @@ func (s *Server) handleSandboxStats(w http.ResponseWriter, r *http.Request) {
 
 // handleSandboxVerb adapts a sandbox-scoped manager call (hibernate, wake) to
 // HTTP: per-sandbox bearer auth, 404 on unknown, 204 on success. The node's
-// root api_token takes the operator path instead, exactly as release does, so
-// a control plane holding only the fleet token can drive the lifecycle.
-func (s *Server) handleSandboxVerb(verb string, do tokenVerb, operator operatorVerb) http.HandlerFunc {
+// root api_token resolves as an Operator credential instead, so a control
+// plane holding only the fleet token can drive the lifecycle.
+func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id string, cred pool.Cred) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, ok := sandboxToken(w, r)
 		if !ok {
 			return
 		}
 		id := r.PathValue("id")
-		var err error
-		if s.isRootToken(token) {
-			err = operator(r.Context(), id)
-		} else {
-			err = do(r.Context(), id, token)
-		}
+		err := do(r.Context(), id, s.sandboxCred(token))
 		writeResult(w, r, verb, id, verb+" failed", err, func() {
 			w.WriteHeader(http.StatusNoContent)
 		})
@@ -337,16 +314,7 @@ func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	// An operator caller proves authority with the node api_token in the header
-	// and carries no per-sandbox token; a tenant must still present the
-	// sandbox's own token as ownership proof.
-	var children []*types.Sandbox
-	var err error
-	if req.Token == "" && s.rootRequest(r) {
-		children, err = s.mgr.ForkOperator(r.Context(), id, req.Count, req.TTL())
-	} else {
-		children, err = s.mgr.Fork(r.Context(), id, req.Token, req.Count, req.TTL())
-	}
+	children, err := s.mgr.Fork(r.Context(), id, s.bodyCred(r, req.Token), req.Count, req.TTL())
 	writeResult(w, r, "fork", id, "fork failed", err, func() {
 		resp := types.ForkResponse{Children: make([]types.ClaimResponse, len(children))}
 		for i, c := range children {
@@ -363,13 +331,7 @@ func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	var key types.PoolKey
-	var err error
-	if req.Token == "" && s.rootRequest(r) {
-		key, err = s.mgr.PromoteOperator(r.Context(), id, req.Template, tenantFrom(r.Context()))
-	} else {
-		key, err = s.mgr.Promote(r.Context(), id, req.Token, req.Template, tenantFrom(r.Context()))
-	}
+	key, err := s.mgr.Promote(r.Context(), id, s.bodyCred(r, req.Token), req.Template, tenantFrom(r.Context()))
 	writeResult(w, r, "promote", id, "promote failed", err, func() {
 		writeJSON(w, http.StatusOK, types.PromoteResponse{Key: key})
 	})
@@ -382,13 +344,7 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	var ckpt types.Checkpoint
-	var err error
-	if req.Token == "" && s.rootRequest(r) {
-		ckpt, err = s.mgr.CheckpointOperator(r.Context(), id, req.Name, tenantFrom(r.Context()))
-	} else {
-		ckpt, err = s.mgr.Checkpoint(r.Context(), id, req.Token, req.Name, tenantFrom(r.Context()))
-	}
+	ckpt, err := s.mgr.Checkpoint(r.Context(), id, s.bodyCred(r, req.Token), req.Name, tenantFrom(r.Context()))
 	writeResult(w, r, "checkpoint", id, "checkpoint failed", err, func() {
 		writeJSON(w, http.StatusOK, types.CheckpointResponse{Checkpoint: ckpt})
 	})
@@ -589,6 +545,23 @@ func (s *Server) rootRequest(r *http.Request) bool {
 // per-sandbox release path. Tenant tokens never match — they live in s.tenants.
 func (s *Server) isRootToken(token string) bool {
 	return s.apiToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) == 1
+}
+
+// sandboxCred resolves a header-borne bearer token to a Cred: the root
+// api_token elevates to Operator (the manager must never see it as a
+// sandbox token), anything else is carried as the per-sandbox token as-is.
+func (s *Server) sandboxCred(token string) pool.Cred {
+	if s.isRootToken(token) {
+		return pool.Cred{Operator: true}
+	}
+	return pool.Cred{Token: token}
+}
+
+// bodyCred resolves a body-carried sandbox token to a Cred: an empty token
+// from a root-authenticated request (header api_token) is Operator; a tenant
+// must still present the sandbox's own token as ownership proof.
+func (s *Server) bodyCred(r *http.Request, bodyToken string) pool.Cred {
+	return pool.Cred{Token: bodyToken, Operator: bodyToken == "" && s.rootRequest(r)}
 }
 
 // resolveScope matches the bearer token to root ("") or a tenant name. With
