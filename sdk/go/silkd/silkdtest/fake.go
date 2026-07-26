@@ -23,6 +23,9 @@ import (
 // and tracking sessions, so an SDK write-then-read round-trips through it.
 // exec/info reuse the stateless handlers. It exists for host-side unit tests;
 // the authoritative fs/session behavior is silkd's own Rust test suite.
+// readChunk mirrors silkd's BULK_CHUNK so downloads exercise real framing.
+const readChunk = 256 * 1024
+
 type Fake struct {
 	Root string
 
@@ -119,7 +122,11 @@ func (f *Fake) fsRead(conn net.Conn, path string) {
 		errFrame(conn, wire.KindNotFound, err.Error())
 		return
 	}
-	send(conn, &wire.DataResp{Data: data})
+	for len(data) > 0 {
+		n := min(readChunk, len(data))
+		send(conn, &wire.DataResp{Data: data[:n]})
+		data = data[n:]
+	}
 	send(conn, wire.Done{})
 }
 

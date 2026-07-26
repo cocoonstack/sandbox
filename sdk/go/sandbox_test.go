@@ -126,6 +126,19 @@ func TestRunRejectedUpgrade(t *testing.T) {
 	}
 }
 
+func TestDialAgentRejectsControlChars(t *testing.T) {
+	ts := newAgentServer(t, func(conn net.Conn) { _ = conn.Close() })
+	c := testClient(t, ts)
+	for _, bad := range []struct{ id, token string }{
+		{"sb\r\nInjected: 1", "tok"},
+		{"sb_1", "tok\r\nInjected: 1"},
+	} {
+		if _, err := c.dialAgent(t.Context(), c.addr, bad.id, bad.token); err == nil {
+			t.Errorf("dialAgent(%q, %q) succeeded, want control-character error", bad.id, bad.token)
+		}
+	}
+}
+
 // newAgentServer serves the agent endpoint by hijacking and handing the conn
 // to serve (a fake silkd), mirroring sandboxd's relay from the SDK's
 // perspective.
