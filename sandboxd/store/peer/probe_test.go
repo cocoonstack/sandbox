@@ -216,6 +216,26 @@ func TestHealOwnersReturnsMoreThanRedirectCap(t *testing.T) {
 	}
 }
 
+// TestHealOwnersIsExhaustiveDespiteAFastOwner: a heal must collect every owner
+// even when one answers fast, so it does not stop on the grace window a redirect
+// uses and hide slower valid sources behind the quick one.
+func TestHealOwnersIsExhaustiveDespiteAFastOwner(t *testing.T) {
+	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer fast.Close()
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(2 * probeGrace) // answers well after the redirect grace would have closed
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer slow.Close()
+
+	p := &HTTPProber{Peers: func() []string { return []string{fast.URL, slow.URL} }}
+	if owners := p.HealOwners(t.Context(), testID); len(owners) != 2 {
+		t.Errorf("HealOwners = %v, want both owners; the grace window must not truncate a heal", owners)
+	}
+}
+
 // TestOwnersCoalescesConcurrentProbes: concurrent redirect probes for one id
 // must fan out to each peer once, not once per caller.
 func TestOwnersCoalescesConcurrentProbes(t *testing.T) {

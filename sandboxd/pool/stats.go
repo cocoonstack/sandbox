@@ -29,8 +29,13 @@ type SandboxStats struct {
 
 // Stats reports one live claim's resource usage.
 func (m *Manager) Stats(ctx context.Context, id string) (SandboxStats, bool) {
-	sb, ok := m.byID(id)
-	if !ok {
+	// Snapshot the mutable fields under m.mu — hibernate and archive rewrite
+	// HibernateSnap and VMName there — then do the /proc read, which touches no
+	// sandbox state, outside the lock.
+	m.mu.Lock()
+	sb := m.claimed[id]
+	if sb == nil {
+		m.mu.Unlock()
 		return SandboxStats{}, false
 	}
 	spec, _ := sb.Key.Size.Spec()
@@ -41,8 +46,10 @@ func (m *Manager) Stats(ctx context.Context, id string) (SandboxStats, bool) {
 		Hibernated:    sb.HibernateSnap != "",
 		MeasuredAt:    time.Now().UTC(),
 	}
+	vmName := sb.VMName
+	m.mu.Unlock()
 	if !st.Hibernated {
-		if rss, ok := m.vmResidentBytes(ctx, sb.VMName); ok {
+		if rss, ok := m.vmResidentBytes(ctx, vmName); ok {
 			st.MemUsedBytes, st.MemUsedMeasured = rss, true
 		}
 	}

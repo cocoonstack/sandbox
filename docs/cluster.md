@@ -164,9 +164,11 @@ replica carries the source checkpoint's original `CreatedAt`, so it becomes
 eligible for expiry at the same instant everywhere; each node then removes
 it on its own hourly sweep, which is independently phased and retries on
 failure. The window in which a deleted checkpoint stays branchable by an
-id-holder is therefore `checkpoint_ttl_hours` plus up to one sweep interval,
-per replica, best-effort — which is why heal *requires* a nonzero,
-fleet-matching TTL (see [cluster-invariant config](#cluster-invariant-config)).
+id-holder is therefore normally `checkpoint_ttl_hours` plus the wait for the
+next hourly sweep; a sweep that fails retries on a later one, so persistent
+sweep failure extends retention until one succeeds — the TTL is the eligibility
+point, not a hard ceiling. This is why heal *requires* a nonzero, fleet-matching
+TTL (see [cluster-invariant config](#cluster-invariant-config)).
 With TTL disabled it could never close at all, so that combination is
 rejected at config load.
 

@@ -194,6 +194,7 @@ func (m *Manager) recDone(id string) {
 	m.recRefs[id]--
 	if m.recRefs[id] <= 0 {
 		delete(m.recRefs, id)
+		m.evictIfPending(id)
 	}
 }
 
@@ -208,6 +209,20 @@ func (m *Manager) recDoneEvict(id string) {
 	m.recRefs[id]--
 	if m.recRefs[id] <= 0 {
 		delete(m.recRefs, id)
+		delete(m.recEvict, id)
+		m.recLocks.Delete(id)
+		return
+	}
+	// Another holder or waiter is still on this lock; defer the eviction to
+	// whichever call drops the last reference, so it is not lost here.
+	m.recEvict[id] = struct{}{}
+}
+
+// evictIfPending drops id's lock entry if a delete asked for eviction while a
+// reference still held it; callers hold recLocksMu with the count at zero.
+func (m *Manager) evictIfPending(id string) {
+	if _, ok := m.recEvict[id]; ok {
+		delete(m.recEvict, id)
 		m.recLocks.Delete(id)
 	}
 }

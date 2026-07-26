@@ -15,10 +15,14 @@ type Cred struct {
 
 // Sandbox reports one live claim's summary.
 func (m *Manager) Sandbox(id string) (SandboxSummary, bool) {
-	sb, ok := m.byID(id)
-	if !ok {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sb := m.claimed[id]
+	if sb == nil {
 		return SandboxSummary{}, false
 	}
+	// summarize reads fields hibernate and archive mutate under m.mu, so it
+	// runs here, not after byID has released the lock.
 	return summarize(sb), true
 }
 

@@ -212,6 +212,29 @@ func TestRecLockEvictionWaitsForAllHolders(t *testing.T) {
 	}
 }
 
+// TestRecLockEvictDeferredToLastHolder is the production sequence the test
+// above sidesteps: a delete (recDoneEvict) releases while an ordinary holder
+// (recDone) still references the id, so the ordinary holder is the last one
+// out. The eviction the delete asked for must not be lost.
+func TestRecLockEvictDeferredToLastHolder(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	const id = "ck_00000000000000aa"
+
+	l1 := m.recLock(id) // the delete
+	l2 := m.recLock(id) // a concurrent claim/fetch
+	if l2 != l1 {
+		t.Fatal("recLock diverged for the same id")
+	}
+	m.recDoneEvict(id) // delete releases first, wants eviction, but l2 still holds
+	if _, ok := m.recLocks.Load(id); !ok {
+		t.Fatal("entry evicted while an ordinary holder still references it")
+	}
+	m.recDone(id) // the ordinary holder, last one out
+	if _, ok := m.recLocks.Load(id); ok {
+		t.Error("recLocks entry leaked: a delete's deferred eviction was lost when a plain recDone dropped the last reference")
+	}
+}
+
 // TestFetchCheckpointNeverPulls: the peer-transfer blob endpoint must never
 // trigger a recursive pull, even with a healer installed that could serve it.
 func TestFetchCheckpointNeverPulls(t *testing.T) {
@@ -376,6 +399,37 @@ func TestValidateHealedCheckpointRejectsArchive(t *testing.T) {
 	}
 }
 
+// TestValidateHealedCheckpointRejectsEmptyExport: an export directory that is
+// present but empty clones to nothing — publishing it would suppress a good
+// owner and fail every later local claim, so it must be rejected and the next
+// owner tried.
+func TestValidateHealedCheckpointRejectsEmptyExport(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, store.ExportDir), 0o750); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	meta, err := json.Marshal(types.Checkpoint{ID: "ck_00000000000000aa", Key: testKey})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, store.MetaFile), meta, 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := validateHealedCheckpoint(dir, "ck_00000000000000aa"); err == nil {
+		t.Error("validate accepted a record with an empty export")
+	}
+}
+
+// TestValidateHealedCheckpointRejectsInvalidKey: a record whose key does not
+// name a branchable pool must not be published.
+func TestValidateHealedCheckpointRejectsInvalidKey(t *testing.T) {
+	dir := t.TempDir()
+	plantHealedRecord(t, dir, types.Checkpoint{ID: "ck_00000000000000aa", Key: types.PoolKey{Net: "bogus"}})
+	if err := validateHealedCheckpoint(dir, "ck_00000000000000aa"); err == nil {
+		t.Error("validate accepted a record with an invalid key")
+	}
+}
+
 // TestDeleteCheckpointBroadcasts: a local delete calls the peer-delete hook
 // once so a copy healed onto another node is removed too.
 func TestDeleteCheckpointBroadcasts(t *testing.T) {
@@ -473,6 +527,9 @@ func (p *healPuller) Pull(_ context.Context, _, _, dst string) error {
 	if err := os.MkdirAll(filepath.Join(dst, store.ExportDir), 0o750); err != nil {
 		return err
 	}
+	if err := os.WriteFile(filepath.Join(dst, store.ExportDir, "mem"), []byte("state"), 0o600); err != nil {
+		return err
+	}
 	meta, err := json.Marshal(p.ckpt)
 	if err != nil {
 		return err
@@ -501,6 +558,9 @@ func (p *blockingPuller) Pull(_ context.Context, _, id, dst string) error {
 	if err := os.MkdirAll(filepath.Join(dst, store.ExportDir), 0o750); err != nil {
 		return err
 	}
+	if err := os.WriteFile(filepath.Join(dst, store.ExportDir, "mem"), []byte("state"), 0o600); err != nil {
+		return err
+	}
 	meta, err := json.Marshal(types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()})
 	if err != nil {
 		return err
@@ -511,7 +571,13 @@ func (p *blockingPuller) Pull(_ context.Context, _, id, dst string) error {
 // plantHealedRecord writes a valid-shaped staged record for validate tests.
 func plantHealedRecord(t *testing.T, dir string, ckpt types.Checkpoint) {
 	t.Helper()
+	if ckpt.Key == (types.PoolKey{}) {
+		ckpt.Key = testKey // a healed record carries a real, branchable key
+	}
 	if err := os.MkdirAll(filepath.Join(dir, store.ExportDir), 0o750); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, store.ExportDir, "mem"), []byte("state"), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	meta, err := json.Marshal(ckpt)

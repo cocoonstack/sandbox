@@ -264,6 +264,10 @@ type Manager struct {
 	recLocks   sync.Map
 	recLocksMu sync.Mutex
 	recRefs    map[string]int
+	// recEvict remembers ids a delete asked to evict while a reference still
+	// held the lock, so the eviction happens when the last holder leaves rather
+	// than being lost — otherwise the recLocks entry leaks for that id.
+	recEvict map[string]struct{}
 
 	// notifyTemplates, when set (before serving starts), fires after a
 	// promote or template delete so the mesh republishes immediately
@@ -321,6 +325,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		egressListeners: map[string]*egressListener{},
 		egressTaps:      map[string]string{},
 		recRefs:         map[string]int{},
+		recEvict:        map[string]struct{}{},
 		healPending:     map[string]struct{}{},
 		healAbort:       map[string]struct{}{},
 		egressSecrets:   secrets,

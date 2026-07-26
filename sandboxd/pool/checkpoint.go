@@ -289,8 +289,18 @@ func validateHealedCheckpoint(staging, wantID string) error {
 	if ckpt.Archive {
 		return fmt.Errorf("healed record %s is a wake image, not a checkpoint", wantID)
 	}
-	if !dirExists(filepath.Join(staging, store.ExportDir)) {
-		return fmt.Errorf("healed record %s missing export dir", wantID)
+	if keyErr := ckpt.Key.Validate(); keyErr != nil {
+		return fmt.Errorf("healed record %s has an invalid key: %w", wantID, keyErr)
+	}
+	export, err := os.ReadDir(filepath.Join(staging, store.ExportDir))
+	if err != nil {
+		return fmt.Errorf("healed record %s missing export dir: %w", wantID, err)
+	}
+	if len(export) == 0 {
+		// An empty but present export passes a shape check yet clones to
+		// nothing; accepting it would publish a dead record, suppress trying a
+		// good owner, and fail every later local claim of this id.
+		return fmt.Errorf("healed record %s has an empty export", wantID)
 	}
 	entries, err := os.ReadDir(staging)
 	if err != nil {

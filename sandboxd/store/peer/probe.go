@@ -86,7 +86,7 @@ func (p *HTTPProber) Owners(ctx context.Context, id string) []string {
 		return owners
 	}
 	v, _, _ := p.redirectFlight.Do(id, func() (any, error) {
-		owners := p.fanOut(ctx, id, maxRedirectOwners)
+		owners := p.fanOut(ctx, id, maxRedirectOwners, probeGrace)
 		p.cachePut(id, owners, start)
 		return owners, nil
 	})
@@ -100,7 +100,9 @@ func (p *HTTPProber) Owners(ctx context.Context, id string) []string {
 // the moment it is needed, not a redirect-tuned snapshot.
 func (p *HTTPProber) HealOwners(ctx context.Context, id string) []string {
 	v, _, _ := p.healFlight.Do(id, func() (any, error) {
-		return p.fanOut(ctx, id, maxHealOwners), nil
+		// No grace: a heal wants every owner it can find, so it must not stop
+		// early on a fast one and hide a slower valid source behind it.
+		return p.fanOut(ctx, id, maxHealOwners, 0), nil
 	})
 	return v.([]string)
 }
@@ -124,7 +126,7 @@ func (p *HTTPProber) Forget(id string) {
 // internally: singleflight shares this fan-out across concurrent callers
 // whose own contexts may cancel independently (one client disconnecting
 // must not abort another's still-live probe).
-func (p *HTTPProber) fanOut(ctx context.Context, id string, maxOwners int) []string {
+func (p *HTTPProber) fanOut(ctx context.Context, id string, maxOwners int, grace time.Duration) []string {
 	addrs := dedupAddrs(p.Peers())
 	if len(addrs) == 0 {
 		return nil
@@ -150,8 +152,11 @@ func (p *HTTPProber) fanOut(ctx context.Context, id string, maxOwners int) []str
 	// grace opens only after the first owner answers: until then the fan-out
 	// waits out the full timeout, since a genuine miss must hear from every
 	// peer before it can conclude nobody holds the record.
+	// graceCh stays nil when grace is 0 (heal wants an exhaustive list), so the
+	// select then only ever takes a win and runs until the cap or every peer
+	// has answered.
 	var owners []string
-	var grace <-chan time.Time
+	var graceCh <-chan time.Time
 	for {
 		select {
 		case addr, ok := <-wins:
@@ -163,10 +168,10 @@ func (p *HTTPProber) fanOut(ctx context.Context, id string, maxOwners int) []str
 				cancel()
 				return owners
 			}
-			if grace == nil {
-				grace = time.After(probeGrace)
+			if grace > 0 && graceCh == nil {
+				graceCh = time.After(grace)
 			}
-		case <-grace:
+		case <-graceCh:
 			cancel()
 			return owners
 		}

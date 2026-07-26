@@ -454,10 +454,14 @@ func (s *Server) handleDeleteCheckpoint(w http.ResponseWriter, r *http.Request) 
 		scope = pool.DeleteLocal
 	}
 	id := r.PathValue("id")
+	err := s.mgr.DeleteCheckpoint(r.Context(), id, tenantFrom(r.Context()), scope)
+	// Evict after the record is gone, not before: a probe racing the delete
+	// would otherwise observe the still-present record and cache it just as the
+	// pre-delete eviction cleared the entry. Unconditional — a forwarded delete
+	// that finds nothing here still learned the id's ownership changed.
 	if s.prober != nil {
 		s.prober.Forget(id)
 	}
-	err := s.mgr.DeleteCheckpoint(r.Context(), id, tenantFrom(r.Context()), scope)
 	writeResult(w, r, "delete checkpoint", id, "delete checkpoint failed", err, func() {
 		w.WriteHeader(http.StatusNoContent)
 	})

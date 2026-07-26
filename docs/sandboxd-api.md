@@ -274,13 +274,15 @@ partitioned during the broadcast keeps its copy until the checkpoint TTL
 ages it out. A healed replica carries the source's original `CreatedAt`, so
 it becomes eligible for expiry at the same instant on every node; the actual
 removal is each node's own hourly sweep, which is independently phased and
-retries on failure, so the true bound is `checkpoint_ttl_hours` plus up to
-one sweep interval per replica, best-effort. The TTL must also match
+retries on a later sweep if one fails. So a deleted checkpoint normally stops
+being branchable within `checkpoint_ttl_hours` plus a sweep interval, but a
+node whose sweeps keep failing holds its replica until one succeeds — the TTL
+is the eligibility point, not a hard ceiling. The TTL must also match
 fleet-wide, which the
 [cluster-invariant config](cluster.md#cluster-invariant-config) digest
 checks. A window always exists because `checkpoint_peer_heal` cannot be
 enabled with `checkpoint_ttl_hours: 0` — a replica that can outlive a delete
-must have a bound on how long. A shared
+must have a finite eligibility point. A shared
 checkpoint store skips the broadcast: every node already resolves every
 record directly, so there is no replica to chase. `?no_forward=1` marks a
 delete already arriving from another node's own broadcast, so it is not
