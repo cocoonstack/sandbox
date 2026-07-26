@@ -377,7 +377,9 @@ func TestValidateHealedCheckpointRejectsMissingMeta(t *testing.T) {
 // dir cannot back a branch.
 func TestValidateHealedCheckpointRejectsMissingExport(t *testing.T) {
 	dir := t.TempDir()
-	meta, err := json.Marshal(types.Checkpoint{ID: "ck_00000000000000aa"})
+	// A valid key, so the record reaches the export check rather than failing
+	// earlier on the key.
+	meta, err := json.Marshal(types.Checkpoint{ID: "ck_00000000000000aa", Key: testKey})
 	if err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -427,6 +429,38 @@ func TestValidateHealedCheckpointRejectsInvalidKey(t *testing.T) {
 	plantHealedRecord(t, dir, types.Checkpoint{ID: "ck_00000000000000aa", Key: types.PoolKey{Net: "bogus"}})
 	if err := validateHealedCheckpoint(dir, "ck_00000000000000aa"); err == nil {
 		t.Error("validate accepted a record with an invalid key")
+	}
+}
+
+// TestValidateHealedCheckpointRejectsEgressKey: an egress-lane key is valid but
+// not branchable (claimLoaded refuses it), so a healed record carrying one must
+// be rejected rather than published to poison the id.
+func TestValidateHealedCheckpointRejectsEgressKey(t *testing.T) {
+	dir := t.TempDir()
+	egress := testKey
+	egress.Net = types.NetEgress
+	plantHealedRecord(t, dir, types.Checkpoint{ID: "ck_00000000000000aa", Key: egress})
+	if err := validateHealedCheckpoint(dir, "ck_00000000000000aa"); err == nil {
+		t.Error("validate accepted a non-branchable egress-lane record")
+	}
+}
+
+// TestValidateHealedCheckpointRejectsContentlessExport: an export directory
+// holding only an empty subdirectory clones to nothing and must be rejected.
+func TestValidateHealedCheckpointRejectsContentlessExport(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, store.ExportDir, "sub"), 0o750); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	meta, err := json.Marshal(types.Checkpoint{ID: "ck_00000000000000aa", Key: testKey})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, store.MetaFile), meta, 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := validateHealedCheckpoint(dir, "ck_00000000000000aa"); err == nil {
+		t.Error("validate accepted an export with no regular file")
 	}
 }
 
@@ -508,7 +542,7 @@ func newHealManager(t *testing.T, ckpt types.Checkpoint, addrs []string) (*Manag
 }
 
 // healPuller fakes peer.Puller: it writes a valid record (meta.json + an
-// empty export/ dir the fakeEngine "clones" from) and can block until
+// export/ dir the fakeEngine "clones" from) and can block until
 // release, so a test can prove concurrent misses dedup to one pull.
 type healPuller struct {
 	mu      sync.Mutex

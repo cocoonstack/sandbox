@@ -17,9 +17,6 @@ func TestStatsUnknownSandbox(t *testing.T) {
 	}
 }
 
-// TestStatsHibernatedIsUnmeasured: a hibernated claim has no VMM process, so
-// MemUsedMeasured must stay false rather than reading a stale or zero RSS —
-// and Stats must not even ask the engine, which a hibernated claim can't answer.
 // TestOperatorReadsRaceFreeUnderHibernate: Sandbox and Stats read fields that
 // hibernate rewrites under m.mu, so they must snapshot under the same lock.
 // Run with -race; without the lock this trips the detector.
@@ -53,6 +50,9 @@ func TestOperatorReadsRaceFreeUnderHibernate(t *testing.T) {
 	wg.Wait()
 }
 
+// TestStatsHibernatedIsUnmeasured: a hibernated claim has no VMM process, so
+// MemUsedMeasured must stay false rather than reading a stale or zero RSS —
+// and Stats must not even ask the engine, which a hibernated claim can't answer.
 func TestStatsHibernatedIsUnmeasured(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})

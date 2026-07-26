@@ -292,15 +292,21 @@ func validateHealedCheckpoint(staging, wantID string) error {
 	if keyErr := ckpt.Key.Validate(); keyErr != nil {
 		return fmt.Errorf("healed record %s has an invalid key: %w", wantID, keyErr)
 	}
+	if !ckpt.Key.Capturable() {
+		// An egress-lane key is well-formed but not branchable: claimLoaded
+		// rejects every branch of it, so publishing one poisons the id and
+		// suppresses a good owner. Reject it here and try the next owner.
+		return fmt.Errorf("healed record %s has a non-branchable (egress) key", wantID)
+	}
 	export, err := os.ReadDir(filepath.Join(staging, store.ExportDir))
 	if err != nil {
 		return fmt.Errorf("healed record %s missing export dir: %w", wantID, err)
 	}
-	if len(export) == 0 {
-		// An empty but present export passes a shape check yet clones to
-		// nothing; accepting it would publish a dead record, suppress trying a
-		// good owner, and fail every later local claim of this id.
-		return fmt.Errorf("healed record %s has an empty export", wantID)
+	// A present export with no regular file clones to nothing (an empty dir, or
+	// only empty subdirs); the byte content is cocoon's own format and not
+	// sandboxd's to validate further.
+	if !hasRegularFile(export) {
+		return fmt.Errorf("healed record %s has no export content", wantID)
 	}
 	entries, err := os.ReadDir(staging)
 	if err != nil {
@@ -312,6 +318,12 @@ func validateHealedCheckpoint(staging, wantID string) error {
 		}
 	}
 	return nil
+}
+
+// hasRegularFile reports whether entries holds at least one regular file, so an
+// export of only empty subdirectories is treated as empty.
+func hasRegularFile(entries []os.DirEntry) bool {
+	return slices.ContainsFunc(entries, func(e os.DirEntry) bool { return e.Type().IsRegular() })
 }
 
 // Checkpoints lists the store's checkpoints, newest first — on a shared
