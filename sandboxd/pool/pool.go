@@ -50,6 +50,12 @@ const (
 	defaultMaxFork = 16
 	defaultRefill  = 4
 
+	// maxConcurrentHeals bounds node-wide in-flight checkpoint heals: each
+	// pulls a full guest memory image over the network, so a handful in
+	// flight already saturates a node's disk and NIC; further ones queue
+	// for nothing.
+	maxConcurrentHeals = 4
+
 	vmPrefix        = "sbx-"
 	goldenPrefix    = "sbx-golden-"
 	hibernatePrefix = "sbx-hib-"
@@ -169,6 +175,10 @@ func (p *pool) trimWarm(target int) []string {
 	return trim
 }
 
+// PeerDeleteFunc broadcasts a checkpoint delete to every peer; wired via
+// WithPeerDelete, nil means single node.
+type PeerDeleteFunc func(ctx context.Context, id string)
+
 // Manager owns the node's pools, claims, and their persistence.
 type Manager struct {
 	eng     Engine
@@ -226,10 +236,17 @@ type Manager struct {
 	// every node already resolves every record, so peer heal and its gossip
 	// set are no-ops.
 	ckptsShared bool
-	// healer is the checkpoint-only read path ClaimCheckpointHeal pulls
-	// through; nil unless checkpoint_peer_heal wired it. m.ckpts itself is
-	// never wrapped, so the server's redirect branch stays reachable.
-	healer       store.Store
+	// healer pulls a checkpoint this node does not hold from a peer;
+	// ClaimCheckpointHeal is its only caller. nil unless checkpoint_peer_heal
+	// wired it. m.ckpts itself is never wrapped, so the server's redirect
+	// branch stays reachable.
+	healer *peer.Healer
+	// healSem bounds node-wide in-flight heals to maxConcurrentHeals.
+	healSem chan struct{}
+	// peerDelete broadcasts a checkpoint delete to every peer after a
+	// successful local delete, so a healed replica does not outlive the
+	// source record; nil means single node (no mesh).
+	peerDelete   PeerDeleteFunc
 	tpls         store.Store
 	ckptTTL      time.Duration
 	ckptSweeping atomic.Bool
@@ -305,6 +322,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		refillSem:       make(chan struct{}, refill),
 		probeSem:        make(chan struct{}, refill),
 		refillKick:      make(chan struct{}, 1),
+		healSem:         make(chan struct{}, maxConcurrentHeals),
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("create goldens dir: %w", err)
@@ -576,7 +594,14 @@ func (m *Manager) WithPeerHeal(enabled bool, owners peer.Owners, token string) {
 	if !enabled || owners == nil || m.ckptsShared {
 		return
 	}
-	m.healer = peer.New(m.ckpts, owners, &peer.HTTPPuller{Token: token})
+	m.healer = peer.NewHealer(owners, &peer.HTTPPuller{Token: token})
+}
+
+// WithPeerDelete wires the fleet-wide delete broadcast: DeleteCheckpoint calls
+// fn after a successful local delete so a checkpoint healed onto a peer does
+// not outlive the source record. Nil (the default) keeps delete single-node.
+func (m *Manager) WithPeerDelete(fn PeerDeleteFunc) {
+	m.peerDelete = fn
 }
 
 func dirExists(path string) bool {

@@ -1,11 +1,15 @@
 package pool
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 // SandboxStats is one sandbox's resource usage. CPUCount and MemTotalBytes come
@@ -24,7 +28,7 @@ type SandboxStats struct {
 }
 
 // Stats reports one live claim's resource usage.
-func (m *Manager) Stats(id string) (SandboxStats, bool) {
+func (m *Manager) Stats(ctx context.Context, id string) (SandboxStats, bool) {
 	sb, ok := m.byID(id)
 	if !ok {
 		return SandboxStats{}, false
@@ -38,43 +42,34 @@ func (m *Manager) Stats(id string) (SandboxStats, bool) {
 		MeasuredAt:    time.Now().UTC(),
 	}
 	if !st.Hibernated {
-		if rss, ok := vmmResidentBytes(sb.VMName); ok {
+		if rss, ok := m.vmResidentBytes(ctx, sb.VMName); ok {
 			st.MemUsedBytes, st.MemUsedMeasured = rss, true
 		}
 	}
 	return st, true
 }
 
-// vmmResidentBytes reports the resident set of the hypervisor process serving
-// vmName, matched on the run directory in the VMM's argv. The scan is
-// O(processes), so this is a single-sandbox read, never a fleet sweep.
-func vmmResidentBytes(vmName string) (int64, bool) {
+// vmResidentBytes reports the resident set of the hypervisor process serving
+// vmName, read straight from engine.List's VMRecord.PID rather than scanning
+// /proc for a matching argv.
+func (m *Manager) vmResidentBytes(ctx context.Context, vmName string) (int64, bool) {
 	if vmName == "" {
 		return 0, false
 	}
-	entries, err := os.ReadDir("/proc")
+	vms, err := m.eng.List(ctx, vmName)
 	if err != nil {
 		return 0, false
 	}
-	for _, e := range entries {
-		pid := e.Name()
-		if !e.IsDir() || pid[0] < '0' || pid[0] > '9' {
-			continue
-		}
-		cmdline, err := os.ReadFile(filepath.Join("/proc", pid, "cmdline")) //nolint:gosec // pid enumerated from /proc
-		if err != nil || !strings.Contains(string(cmdline), vmName) {
-			continue
-		}
-		if rss, ok := residentBytes(pid); ok {
-			return rss, true
-		}
+	i := slices.IndexFunc(vms, func(vm types.VMRecord) bool { return vm.Config.Name == vmName })
+	if i < 0 || vms[i].PID <= 0 {
+		return 0, false
 	}
-	return 0, false
+	return residentBytes(vms[i].PID)
 }
 
 // residentBytes reads a process's resident page count from statm's second field.
-func residentBytes(pid string) (int64, bool) {
-	b, err := os.ReadFile(filepath.Join("/proc", pid, "statm")) //nolint:gosec // pid enumerated from /proc
+func residentBytes(pid int) (int64, bool) {
+	b, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "statm")) //nolint:gosec // pid comes from cocoon's own VM record
 	if err != nil {
 		return 0, false
 	}

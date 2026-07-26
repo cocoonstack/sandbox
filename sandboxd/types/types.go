@@ -228,6 +228,7 @@ type Checkpoint struct {
 // commands' `--output json` result.
 type VMRecord struct {
 	State          string        `json:"state"`
+	PID            int           `json:"pid"`
 	VsockSocket    string        `json:"vsock_socket"`
 	NetworkConfigs []VMNetConfig `json:"network_configs,omitempty"`
 	Config         VMConfig      `json:"config"`

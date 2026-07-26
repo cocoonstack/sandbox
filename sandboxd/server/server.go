@@ -46,6 +46,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrNoEgressHibernate, http.StatusConflict, ""},
 	{pool.ErrNoEgressFork, http.StatusConflict, ""},
 	{pool.ErrQuota, http.StatusTooManyRequests, ""},
+	{pool.ErrHealBusy, http.StatusServiceUnavailable, ""},
 	{pool.ErrPooledTemplate, http.StatusConflict, ""},
 	{pool.ErrTemplateOwned, http.StatusConflict, ""},
 	{pool.ErrUnknownSandbox, http.StatusNotFound, "unknown sandbox"},
@@ -70,7 +71,7 @@ type Manager interface {
 	TenantClaims() map[string]int
 	Sandboxes() []pool.SandboxSummary
 	Sandbox(id string) (pool.SandboxSummary, bool)
-	Stats(id string) (pool.SandboxStats, bool)
+	Stats(ctx context.Context, id string) (pool.SandboxStats, bool)
 	Audit(ctx context.Context, id string, line []byte)
 	AuditEnabled() bool
 	ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error)
@@ -78,7 +79,7 @@ type Manager interface {
 	Checkpoints(ctx context.Context, tenant string) ([]types.Checkpoint, error)
 	HasCheckpoint(ctx context.Context, ckptID string) bool
 	FetchCheckpoint(ctx context.Context, ckptID string) (dir string, meta []byte, release func(), err error)
-	DeleteCheckpoint(ctx context.Context, ckptID, tenant string) error
+	DeleteCheckpoint(ctx context.Context, ckptID, tenant string, scope pool.DeleteScope) error
 	ClaimDeadline(id, token string) (time.Time, error)
 	HasGolden(ctx context.Context, key types.PoolKey) bool
 	AgentSocket(id, token string) (string, error)
@@ -188,7 +189,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/checkpoints", s.requireToken(s.handleListCheckpoints))
 	// The peer-transfer half of the snapshot placement design: a node that
 	// cannot redirect a branch pulls the record from an owner through this.
-	mux.HandleFunc("GET /v1/checkpoints/{id}/blob", s.requireToken(s.handleCheckpointBlob))
+	// It streams a full checkpoint (guest memory + disk) with no tenant
+	// scoping, so only the fleet's root api_token may call it — its one
+	// intended caller is the peer puller, authenticated as the operator.
+	mux.HandleFunc("GET /v1/checkpoints/{id}/blob", s.requireRoot(s.handleCheckpointBlob))
 	// HEAD is the probe endpoint a redirect decision fans out to: it must stay
 	// unauthenticated, so it is registered outside requireToken.
 	mux.HandleFunc("HEAD /v1/checkpoints/{id}/blob", s.handleCheckpointProbe)
@@ -293,7 +297,7 @@ func (s *Server) handleSandbox(w http.ResponseWriter, r *http.Request) {
 // per-sandbox usage surface: /metrics is node- and pool-scoped by design.
 func (s *Server) handleSandboxStats(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	st, ok := s.mgr.Stats(id)
+	st, ok := s.mgr.Stats(r.Context(), id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "unknown sandbox")
 		return
@@ -436,9 +440,15 @@ func (s *Server) handleListCheckpoints(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDeleteCheckpoint removes a checkpoint; a tenant caller may delete
-// only its own records (anything else is 404).
+// only its own records (anything else is 404). no_forward marks a delete
+// arriving from another node's own broadcast, so this one does not
+// re-broadcast and loop the fleet forever.
 func (s *Server) handleDeleteCheckpoint(w http.ResponseWriter, r *http.Request) {
-	err := s.mgr.DeleteCheckpoint(r.Context(), r.PathValue("id"), tenantFrom(r.Context()))
+	scope := pool.DeleteFleet
+	if r.URL.Query().Get("no_forward") != "" {
+		scope = pool.DeleteLocal
+	}
+	err := s.mgr.DeleteCheckpoint(r.Context(), r.PathValue("id"), tenantFrom(r.Context()), scope)
 	writeResult(w, r, "delete checkpoint", r.PathValue("id"), "delete checkpoint failed", err, func() {
 		w.WriteHeader(http.StatusNoContent)
 	})

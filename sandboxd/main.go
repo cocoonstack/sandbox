@@ -113,6 +113,8 @@ func main() {
 			defer cancel()
 			return prober.Owners(probeCtx, id)
 		}, cfg.APIToken)
+		broadcaster := &peer.Broadcaster{Peers: msh.PeerAddrs, Token: cfg.APIToken}
+		mgr.WithPeerDelete(broadcaster.Delete)
 		go gossipNodeState(ctx, msh, mgr)
 		logger.Infof(ctx, "mesh %s joined (%d seeds)", cmp.Or(cfg.Mesh.NodeID, cfg.Mesh.Bind), len(cfg.Mesh.Join))
 	}

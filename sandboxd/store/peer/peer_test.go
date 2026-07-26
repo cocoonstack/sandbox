@@ -8,99 +8,74 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
-	"github.com/cocoonstack/sandbox/sandboxd/store/dir"
-	"github.com/cocoonstack/sandbox/sandboxd/store/storetest"
 )
 
 const testID = "ck_00000000000000aa"
 
-func TestPeerBackendContract(t *testing.T) {
-	storetest.RunContract(t, New(localStore(t), nil, nil))
-}
-
-// TestInertWithoutOwnersOrPuller: a node with no mesh must degrade to its local
-// backend, not fail. Healing is an addition, never a dependency.
+// TestInertWithoutOwnersOrPuller: a node with no mesh must degrade to unable
+// to heal, not fail oddly. Healing is an addition, never a dependency.
 func TestInertWithoutOwnersOrPuller(t *testing.T) {
-	s := New(localStore(t), nil, nil)
-	if _, _, _, err := s.Fetch(t.Context(), testID); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("Fetch error = %v, want store.ErrNotFound (a miss stays a miss)", err)
+	h := NewHealer(nil, nil)
+	if err := h.Pull(t.Context(), testID, t.TempDir(), nil); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Pull error = %v, want store.ErrNotFound", err)
 	}
 }
 
-// TestHealPublishesLocally is L3's whole point: after healing once, the record
-// is local, so the next branch is served at L1 speed and this node becomes an
-// owner that can serve its peers. The transfer must be paid once, not per use.
-func TestHealPublishesLocally(t *testing.T) {
-	local := localStore(t)
+// TestPullWritesStaging is Pull's whole point: the record lands in the
+// caller-provided staging directory for the caller to validate and publish.
+func TestPullWritesStaging(t *testing.T) {
 	puller := &fakePuller{records: map[string]map[string]string{"peer-a:7777": record()}}
-	s := New(local, func(string) []string { return []string{"peer-a:7777"} }, puller)
+	h := NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
 
-	dir1, _, release, err := s.Fetch(t.Context(), testID)
-	if err != nil {
-		t.Fatalf("Fetch after heal: %v", err)
+	dst := t.TempDir()
+	if err := h.Pull(t.Context(), testID, dst, nil); err != nil {
+		t.Fatalf("Pull: %v", err)
 	}
-	release()
-	if got, err := os.ReadFile(filepath.Join(dir1, "mem")); err != nil || string(got) != "guest-pages" {
-		t.Fatalf("healed export = %q, %v; want the peer's bytes", got, err)
-	}
-
-	// The record is now in the LOCAL backend: reading it directly, with no
-	// wrapper and no puller, must succeed.
-	if _, err := local.ReadMeta(t.Context(), testID); err != nil {
-		t.Fatalf("record not published locally after heal: %v", err)
-	}
-	// And a second Fetch must not touch the network again.
-	if _, _, release2, err := s.Fetch(t.Context(), testID); err != nil {
-		t.Fatalf("second Fetch: %v", err)
-	} else {
-		release2()
-	}
-	if len(puller.asked) != 1 {
-		t.Errorf("puller called %d times (%v); the transfer must be paid once", len(puller.asked), puller.asked)
+	if got, err := os.ReadFile(filepath.Join(dst, store.ExportDir, "mem")); err != nil || string(got) != "guest-pages" {
+		t.Fatalf("staged export = %q, %v; want the peer's bytes", got, err)
 	}
 }
 
-// TestHealTriesNextOwner: a gossiped view can be stale or a peer can be broken.
-// One bad owner must not fail the heal while another can still serve it.
+// TestHealTriesNextOwner: a gossiped view can be stale or a peer can be
+// broken. One bad owner must not fail the pull while another can still
+// serve it.
 func TestHealTriesNextOwner(t *testing.T) {
 	puller := &fakePuller{
 		records:  map[string]map[string]string{"peer-b:7777": record()},
 		failAddr: "peer-a:7777",
 	}
-	s := New(localStore(t), func(string) []string { return []string{"peer-a:7777", "peer-b:7777"} }, puller)
+	h := NewHealer(func(string) []string { return []string{"peer-a:7777", "peer-b:7777"} }, puller)
 
-	_, _, release, err := s.Fetch(t.Context(), testID)
-	if err != nil {
-		t.Fatalf("Fetch: %v", err)
+	if err := h.Pull(t.Context(), testID, t.TempDir(), nil); err != nil {
+		t.Fatalf("Pull: %v", err)
 	}
-	release()
 	if len(puller.asked) != 2 {
 		t.Errorf("asked = %v, want both owners tried in order", puller.asked)
 	}
 }
 
-// TestHealAllOwnersMissStaysNotFound: when every owner answers "not found" the
-// gossiped view was simply stale. That must surface as store.ErrNotFound so the
-// caller's existing not-found handling (a 404, not a 500) is unchanged.
+// TestHealAllOwnersMissStaysNotFound: when every owner answers "not found"
+// the gossiped view was simply stale. That must surface as store.ErrNotFound
+// so the caller's existing not-found handling is unchanged.
 func TestHealAllOwnersMissStaysNotFound(t *testing.T) {
 	puller := &fakePuller{records: map[string]map[string]string{}}
-	s := New(localStore(t), func(string) []string { return []string{"peer-a:7777"} }, puller)
+	h := NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
 
-	err := fetchErr(t, s)
-	if !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("Fetch error = %v, want store.ErrNotFound", err)
+	if err := h.Pull(t.Context(), testID, t.TempDir(), nil); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Pull error = %v, want store.ErrNotFound", err)
 	}
 }
 
 // TestHealNoOwners: nothing gossiped the record, so there is nobody to ask.
 func TestHealNoOwners(t *testing.T) {
 	puller := &fakePuller{}
-	s := New(localStore(t), func(string) []string { return nil }, puller)
+	h := NewHealer(func(string) []string { return nil }, puller)
 
-	if _, err := s.ReadMeta(t.Context(), testID); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("ReadMeta error = %v, want store.ErrNotFound", err)
+	if err := h.Pull(t.Context(), testID, t.TempDir(), nil); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Pull error = %v, want store.ErrNotFound", err)
 	}
 	if len(puller.asked) != 0 {
 		t.Errorf("puller was called with no owners: %v", puller.asked)
@@ -112,33 +87,31 @@ func TestHealNoOwners(t *testing.T) {
 // behind a 404 and send the operator looking for a deleted checkpoint.
 func TestHealErrorIsReported(t *testing.T) {
 	puller := &fakePuller{failAddr: "peer-a:7777"}
-	s := New(localStore(t), func(string) []string { return []string{"peer-a:7777"} }, puller)
+	h := NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
 
-	err := fetchErr(t, s)
+	err := h.Pull(t.Context(), testID, t.TempDir(), nil)
 	if err == nil || errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("Fetch error = %v, want the peer failure surfaced", err)
+		t.Fatalf("Pull error = %v, want the peer failure surfaced", err)
 	}
 	if !bytes.Contains([]byte(err.Error()), []byte("peer exploded")) {
 		t.Errorf("error = %v, want the underlying peer failure named", err)
 	}
 }
 
-// TestHealDedupsConcurrentMisses: N concurrent Fetch misses of the same id
-// must trigger exactly one pull — a stampede of branches racing to heal the
-// same checkpoint must not each pay for the whole transfer.
+// TestHealDedupsConcurrentMisses: N concurrent Pulls of the same id sharing
+// one staging destination must trigger exactly one transfer — a stampede of
+// branches racing to heal the same checkpoint must not each pay for it.
 func TestHealDedupsConcurrentMisses(t *testing.T) {
 	puller := &fakePuller{records: map[string]map[string]string{"peer-a:7777": record()}}
-	s := New(localStore(t), func(string) []string { return []string{"peer-a:7777"} }, puller)
+	h := NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
 
+	dst := t.TempDir()
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
-			_, _, release, err := s.Fetch(t.Context(), testID)
-			if err != nil {
-				t.Errorf("Fetch: %v", err)
-				return
+			if err := h.Pull(t.Context(), testID, dst, nil); err != nil {
+				t.Errorf("Pull: %v", err)
 			}
-			release()
 		})
 	}
 	wg.Wait()
@@ -147,29 +120,60 @@ func TestHealDedupsConcurrentMisses(t *testing.T) {
 	}
 }
 
-// TestMetasStaysLocal: a cluster-wide listing is the control plane's job (it
-// already scatter-gathers every node). If each node answered for its peers the
-// same record would come back N times.
-func TestMetasStaysLocal(t *testing.T) {
-	puller := &fakePuller{records: map[string]map[string]string{"peer-a:7777": record()}}
-	s := New(localStore(t), func(string) []string { return []string{"peer-a:7777"} }, puller)
+// TestPullValidateRejectionTriesNextOwner: an owner whose transferred content
+// fails validation is treated like a failed transfer — the next owner gets a
+// chance instead of the whole heal aborting on one bad copy.
+func TestPullValidateRejectionTriesNextOwner(t *testing.T) {
+	puller := &fakePuller{records: map[string]map[string]string{
+		"peer-a:7777": record(),
+		"peer-b:7777": record(),
+	}}
+	h := NewHealer(func(string) []string { return []string{"peer-a:7777", "peer-b:7777"} }, puller)
 
-	metas, err := s.Metas(t.Context())
-	if err != nil {
-		t.Fatalf("Metas: %v", err)
+	var calls int
+	validate := func(string) error {
+		calls++
+		if calls == 1 {
+			return errors.New("invalid record")
+		}
+		return nil
 	}
-	if len(metas) != 0 {
-		t.Errorf("Metas returned %d record(s); a peer's records must not appear in a local listing", len(metas))
+	if err := h.Pull(t.Context(), testID, t.TempDir(), validate); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	if len(puller.asked) != 2 {
+		t.Errorf("asked = %v, want both owners tried after the first failed validation", puller.asked)
 	}
 }
 
-func localStore(t *testing.T) *dir.Store {
-	t.Helper()
-	st, err := dir.New(t.TempDir(), store.CheckpointIDRe)
-	if err != nil {
-		t.Fatalf("dir.New: %v", err)
+// TestPullValidateRejectsEveryOwner: when every owner's copy fails
+// validation, Pull must report the failures, not silently succeed.
+func TestPullValidateRejectsEveryOwner(t *testing.T) {
+	puller := &fakePuller{records: map[string]map[string]string{"peer-a:7777": record()}}
+	h := NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
+
+	err := h.Pull(t.Context(), testID, t.TempDir(), func(string) error { return errors.New("bad shape") })
+	if err == nil || errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Pull error = %v, want the validation failure surfaced", err)
 	}
-	return st
+}
+
+// TestPullBudgetBoundsSlowOwners: two owners that each sleep past their
+// per-owner slice must not blow past the overall budget — 30 minutes PER
+// owner (the old design) would let N slow owners run N*30 minutes.
+func TestPullBudgetBoundsSlowOwners(t *testing.T) {
+	puller := &sleepyPuller{sleep: 300 * time.Millisecond}
+	h := NewHealer(func(string) []string { return []string{"peer-a:7777", "peer-b:7777"} }, puller)
+	h.budget = 200 * time.Millisecond // each owner's slice (100ms) is shorter than the sleep
+
+	start := time.Now()
+	err := h.Pull(t.Context(), testID, t.TempDir(), nil)
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Errorf("Pull took %v, want bounded near the %v budget", elapsed, h.budget)
+	}
+	if err == nil {
+		t.Error("Pull with two owners that never finish in time should fail, not silently succeed")
+	}
 }
 
 // fakePuller serves records from an in-memory table, recording who was asked.
@@ -203,23 +207,24 @@ func (p *fakePuller) Pull(_ context.Context, addr, _, dst string) error {
 	return nil
 }
 
+// sleepyPuller blocks until ctx expires or sleep elapses, whichever is
+// first — for proving a per-owner slice actually cuts a slow owner off.
+type sleepyPuller struct {
+	sleep time.Duration
+}
+
+func (p *sleepyPuller) Pull(ctx context.Context, _, _, _ string) error {
+	select {
+	case <-time.After(p.sleep):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func record() map[string]string {
 	return map[string]string{
 		store.MetaFile:                        `{"id":"` + testID + `"}`,
 		filepath.Join(store.ExportDir, "mem"): "guest-pages",
 	}
-}
-
-// TestPeerBackendContract: wrapping must not change local behavior. Every
-// operation but a Fetch/ReadMeta miss is the local backend's, so the wrapper
-// has to satisfy the same store contract the dir backend does.
-
-// fetchErr keeps the three unused Fetch results out of the assertions.
-func fetchErr(t *testing.T, s *Store) error {
-	t.Helper()
-	_, _, release, err := s.Fetch(t.Context(), testID) //nolint:dogsled // only err is asserted
-	if release != nil {
-		release()
-	}
-	return err
 }

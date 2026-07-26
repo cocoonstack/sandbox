@@ -16,9 +16,20 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+// DeleteScope selects how far a checkpoint delete reaches. The fleet-wide
+// value is the zero one: a caller that does not think about scope gets the
+// safe behavior, and the narrower local-only delete must be asked for.
+type DeleteScope int
+
+const (
+	DeleteFleet DeleteScope = iota
+	DeleteLocal
+)
+
 var (
 	ErrBadName           = errors.New("invalid checkpoint name")
 	ErrUnknownCheckpoint = errors.New("unknown checkpoint")
+	ErrHealBusy          = errors.New("too many checkpoint heals in flight")
 )
 
 // Checkpoint captures a claimed sandbox's state under a fresh id; the source
@@ -89,14 +100,16 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 // attributed to tenant, not the checkpoint's recorder — the unguessable id
 // is the capability to branch.
 func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error) {
-	if err := m.overQuota(1, tenant); err != nil {
-		return nil, err
-	}
 	// Reject a bad or unknown id before recLock: a rejected id must not leave
 	// a lock-map entry (only a delete evicts one). Checkpoints are immutable,
-	// so this parse stands in for the fetched meta below.
+	// so this parse stands in for the fetched meta below. The local read is
+	// cheap, so it goes before quota: a full node must still answer "not
+	// here" on a miss, or the handler's redirect/heal tiers never run.
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	if err != nil {
+		return nil, err
+	}
+	if err := m.overQuota(1, tenant); err != nil {
 		return nil, err
 	}
 	return m.claimLoaded(ctx, ckpt, ttl, tenant)
@@ -106,13 +119,16 @@ func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.D
 // pulling it from a peer first. The server calls it only after the local
 // claim missed and a redirect could not answer.
 func (m *Manager) ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error) {
-	if m.healer == nil {
+	if m.healer == nil || !store.CheckpointIDRe.MatchString(ckptID) {
 		return nil, ErrUnknownCheckpoint
 	}
+	// Unlike ClaimCheckpoint, resolving the record here means a peer
+	// transfer of a whole guest memory image: quota must reject a full node
+	// before paying that cost, not after.
 	if err := m.overQuota(1, tenant); err != nil {
 		return nil, err
 	}
-	ckpt, err := m.loadCheckpointFrom(ctx, m.healer, ckptID)
+	ckpt, err := m.healCheckpoint(ctx, ckptID)
 	if err != nil {
 		return nil, err
 	}
@@ -151,6 +167,78 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl ti
 		m.counters.claimsClone.Add(1)
 	}
 	return out, err
+}
+
+// healCheckpoint pulls ckptID from a peer under its record lock, so the
+// transfer, validation, and publish race no concurrent heal, delete, or TTL
+// sweep of the same id. A record already local when the lock is acquired
+// (another heal won the race) is used as-is. claimLoaded takes its own
+// RLock on the same recLock, so this releases before returning instead of
+// holding it into the claim; a delete racing in between is handled there
+// (Fetch answers store.ErrNotFound).
+func (m *Manager) healCheckpoint(ctx context.Context, ckptID string) (types.Checkpoint, error) {
+	l := m.recLock(ckptID)
+	l.Lock()
+	defer l.Unlock()
+	if ckpt, err := m.loadCheckpoint(ctx, ckptID); err == nil {
+		return ckpt, nil
+	}
+	select {
+	case m.healSem <- struct{}{}:
+		defer func() { <-m.healSem }()
+	default:
+		return types.Checkpoint{}, ErrHealBusy
+	}
+	staging, err := m.ckpts.Stage(ckptID)
+	if err != nil {
+		return types.Checkpoint{}, fmt.Errorf("stage healed checkpoint: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(staging) }()
+	validate := func(dir string) error { return validateHealedCheckpoint(dir, ckptID) }
+	if err := m.healer.Pull(ctx, ckptID, staging, validate); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return types.Checkpoint{}, ErrUnknownCheckpoint
+		}
+		return types.Checkpoint{}, fmt.Errorf("heal checkpoint: %w", err)
+	}
+	// A client hanging up must not abort a transfer that already landed.
+	if err := m.ckpts.Publish(context.WithoutCancel(ctx), staging, ckptID); err != nil {
+		return types.Checkpoint{}, fmt.Errorf("publish healed checkpoint: %w", err)
+	}
+	return m.loadCheckpoint(ctx, ckptID)
+}
+
+// validateHealedCheckpoint checks a staged pull's shape before it is trusted
+// enough to publish: a hostile or buggy peer must not be able to install an
+// unreadable or misattributed record that then suppresses future healing.
+func validateHealedCheckpoint(staging, wantID string) error {
+	raw, err := os.ReadFile(filepath.Join(staging, store.MetaFile)) //nolint:gosec // staging dir is this manager's own
+	if err != nil {
+		return fmt.Errorf("read healed meta: %w", err)
+	}
+	ckpt, err := parseCheckpoint(raw)
+	if err != nil {
+		return fmt.Errorf("parse healed meta: %w", err)
+	}
+	if ckpt.ID != wantID {
+		return fmt.Errorf("healed record id %q does not match requested %q", ckpt.ID, wantID)
+	}
+	if ckpt.Archive {
+		return fmt.Errorf("healed record %s is a wake image, not a checkpoint", wantID)
+	}
+	if !dirExists(filepath.Join(staging, store.ExportDir)) {
+		return fmt.Errorf("healed record %s missing export dir", wantID)
+	}
+	entries, err := os.ReadDir(staging)
+	if err != nil {
+		return fmt.Errorf("read staging: %w", err)
+	}
+	for _, e := range entries {
+		if e.Name() != store.MetaFile && e.Name() != store.ExportDir {
+			return fmt.Errorf("healed record %s has unexpected entry %q", wantID, e.Name())
+		}
+	}
+	return nil
 }
 
 // Checkpoints lists the store's checkpoints, newest first — on a shared
@@ -197,10 +285,13 @@ func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 	return pinned
 }
 
-// DeleteCheckpoint removes a checkpoint's snapshot and record. A tenant may
-// delete only its own records — anything else answers ErrUnknownCheckpoint,
-// never a hint that the id exists; root (empty tenant) deletes anything.
-func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string) error {
+// DeleteCheckpoint removes a checkpoint's snapshot and record. A fleet-scoped
+// delete then best-effort broadcasts to peers, so a copy healed onto one does
+// not outlive it; a forwarded delete is DeleteLocal, since re-forwarding would
+// loop the fleet forever. A tenant may delete only its own records — anything
+// else answers ErrUnknownCheckpoint, never a hint that the id exists; root
+// (empty tenant) deletes anything.
+func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, scope DeleteScope) error {
 	// Validate off the lock — a rejected id must not leave a lock-map entry;
 	// loadCheckpoint is safe unlocked (checkpoints are single-publish, immutable).
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
@@ -217,6 +308,11 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string) e
 	}
 	if err := m.deleteCkLocked(ctx, ckptID); err != nil {
 		return fmt.Errorf("delete checkpoint: %w", err)
+	}
+	// A shared backend (s3) has no per-node replicas to chase: the delete
+	// above already removed the one copy every node sees.
+	if scope == DeleteFleet && m.peerDelete != nil && !m.ckptsShared {
+		m.peerDelete(context.WithoutCancel(ctx), ckptID)
 	}
 	return nil
 }
@@ -264,16 +360,10 @@ func (m *Manager) deleteCkLocked(ctx context.Context, ckID string) error {
 
 // loadCheckpoint reads and parses a checkpoint's meta from the local store.
 func (m *Manager) loadCheckpoint(ctx context.Context, ckptID string) (types.Checkpoint, error) {
-	return m.loadCheckpointFrom(ctx, m.ckpts, ckptID)
-}
-
-// loadCheckpointFrom reads and parses a checkpoint's meta from st — the local
-// store for an ordinary claim, or the healer for ClaimCheckpointHeal.
-func (m *Manager) loadCheckpointFrom(ctx context.Context, st store.Store, ckptID string) (types.Checkpoint, error) {
 	if !store.CheckpointIDRe.MatchString(ckptID) {
 		return types.Checkpoint{}, ErrUnknownCheckpoint
 	}
-	raw, err := st.ReadMeta(ctx, ckptID)
+	raw, err := m.ckpts.ReadMeta(ctx, ckptID)
 	if errors.Is(err, store.ErrNotFound) {
 		return types.Checkpoint{}, ErrUnknownCheckpoint
 	}

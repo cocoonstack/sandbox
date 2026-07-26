@@ -767,7 +767,8 @@ type fakeEngine struct {
 	caInstalls                        []string // vsock sockets InstallCACert was called on
 	installCAErr                      error
 	stopped                           map[string]bool
-	vsockLateN                        int // List calls that report no socket yet
+	pids                              map[string]int // VM name → PID, for Stats' resident-set lookup
+	vsockLateN                        int            // List calls that report no socket yet
 
 	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr, snapSaveErr, snapListErr error
 	removeErrFor                                                                       string // VM name whose Remove fails; "" = never
@@ -786,7 +787,7 @@ type fakeEngine struct {
 }
 
 func newFakeEngine() *fakeEngine {
-	return &fakeEngine{vms: map[string]string{}, stopped: map[string]bool{}}
+	return &fakeEngine{vms: map[string]string{}, stopped: map[string]bool{}, pids: map[string]int{}}
 }
 
 func (f *fakeEngine) Clone(_ context.Context, fromDir, name string, _ types.PoolKey) (types.VMRecord, error) {
@@ -981,7 +982,7 @@ func (f *fakeEngine) List(_ context.Context, filters ...string) ([]types.VMRecor
 		if f.stopped[name] {
 			state = "stopped"
 		}
-		rec := types.VMRecord{State: state, VsockSocket: sock, Config: types.VMConfig{Name: name}}
+		rec := types.VMRecord{State: state, PID: f.pids[name], VsockSocket: sock, Config: types.VMConfig{Name: name}}
 		if f.tap != "" {
 			rec.NetworkConfigs = []types.VMNetConfig{{TAP: f.tap}}
 		}

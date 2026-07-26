@@ -35,7 +35,7 @@ func TestArchivePublishWindowPinsCheckpoint(t *testing.T) {
 	if ckpts, err := m.Checkpoints(t.Context(), ""); err != nil || len(ckpts) != 0 {
 		t.Errorf("mid-publish checkpoint visible: %v, %v", ckpts, err)
 	}
-	if err := m.DeleteCheckpoint(t.Context(), ck, ""); !errors.Is(err, ErrUnknownCheckpoint) {
+	if err := m.DeleteCheckpoint(t.Context(), ck, "", DeleteFleet); !errors.Is(err, ErrUnknownCheckpoint) {
 		t.Errorf("mid-publish delete: %v, want ErrUnknownCheckpoint", err)
 	}
 	close(stall.release)
@@ -123,7 +123,7 @@ func TestArchiveCkHiddenAcrossNodes(t *testing.T) {
 	if ckpts, err := mB.Checkpoints(t.Context(), ""); err != nil || len(ckpts) != 0 {
 		t.Errorf("peer lists the archive wake image: %v, %v", ckpts, err)
 	}
-	if err := mB.DeleteCheckpoint(t.Context(), ck, ""); !errors.Is(err, ErrUnknownCheckpoint) {
+	if err := mB.DeleteCheckpoint(t.Context(), ck, "", DeleteFleet); !errors.Is(err, ErrUnknownCheckpoint) {
 		t.Errorf("peer delete: %v, want ErrUnknownCheckpoint", err)
 	}
 	mB.ckptTTL = time.Nanosecond
@@ -392,7 +392,7 @@ func TestDeleteCheckpointCannotBrickArchive(t *testing.T) {
 	if ckpts, err := m.Checkpoints(t.Context(), ""); err != nil || len(ckpts) != 0 {
 		t.Fatalf("Checkpoints listed %d records, want the archive image hidden (%v)", len(ckpts), err)
 	}
-	if err := m.DeleteCheckpoint(t.Context(), ck, ""); !errors.Is(err, ErrUnknownCheckpoint) {
+	if err := m.DeleteCheckpoint(t.Context(), ck, "", DeleteFleet); !errors.Is(err, ErrUnknownCheckpoint) {
 		t.Fatalf("DeleteCheckpoint(archive ck) = %v, want ErrUnknownCheckpoint", err)
 	}
 	if !ckExists(t, m, ck) {

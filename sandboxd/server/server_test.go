@@ -184,6 +184,7 @@ func TestTenantAuthMatrix(t *testing.T) {
 		{"tenant forbidden on index", http.MethodGet, "/v1/sandboxes", "acme-tok", http.StatusForbidden, ""},
 		{"tenant forbidden on metrics", http.MethodGet, "/metrics", "acme-tok", http.StatusForbidden, ""},
 		{"tenant forbidden on pools", http.MethodPut, "/v1/pools", "acme-tok", http.StatusForbidden, ""},
+		{"tenant forbidden on checkpoint blob", http.MethodGet, "/v1/checkpoints/ck_00000000000000aa/blob", "acme-tok", http.StatusForbidden, ""},
 		{"wrong token on info stays 401", http.MethodGet, "/v1/info", "nope", http.StatusUnauthorized, ""},
 		{"root reads info", http.MethodGet, "/v1/info", "sekret", http.StatusOK, ""},
 	} {
@@ -704,6 +705,39 @@ func TestCheckpointFlow(t *testing.T) {
 	defer resp4.Body.Close()
 	if resp4.StatusCode != http.StatusNoContent {
 		t.Errorf("delete checkpoint: status %d, want 204", resp4.StatusCode)
+	}
+}
+
+// TestDeleteCheckpointNoForwardQueryParam proves the no_forward query param
+// reaches the manager, mirroring how handleDeleteTemplate already threads
+// no_redirect: a delete arriving from another node's broadcast must not
+// re-broadcast, or the fleet loops the delete forever.
+func TestDeleteCheckpointNoForwardQueryParam(t *testing.T) {
+	mgr := &fakeManager{deleteCheckpoint: func(string) error { return nil }}
+	ts := newTestServer(t, "api", mgr, &fakeDialer{})
+
+	del := func(path string) int {
+		req, _ := http.NewRequest(http.MethodDelete, ts.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer api")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := del("/v1/checkpoints/ck_0011223344556677"); got != http.StatusNoContent {
+		t.Fatalf("delete: status %d, want 204", got)
+	}
+	if mgr.gotNoForward {
+		t.Error("gotNoForward = true without the query param")
+	}
+	if got := del("/v1/checkpoints/ck_0011223344556677?no_forward=1"); got != http.StatusNoContent {
+		t.Fatalf("delete with no_forward: status %d, want 204", got)
+	}
+	if !mgr.gotNoForward {
+		t.Error("gotNoForward = false with no_forward=1 set")
 	}
 }
 
@@ -1269,6 +1303,7 @@ type fakeManager struct {
 
 	gotTenant    string
 	gotClaimRef  string
+	gotNoForward bool
 	tenantClaims map[string]int
 	draining     bool
 }
@@ -1374,7 +1409,9 @@ func (f *fakeManager) Sandbox(string) (pool.SandboxSummary, bool) {
 	return pool.SandboxSummary{}, false
 }
 
-func (f *fakeManager) Stats(string) (pool.SandboxStats, bool) { return pool.SandboxStats{}, false }
+func (f *fakeManager) Stats(context.Context, string) (pool.SandboxStats, bool) {
+	return pool.SandboxStats{}, false
+}
 
 func (f *fakeManager) Wake(_ context.Context, id string, cred pool.Cred) error {
 	if f.wake == nil {
@@ -1421,8 +1458,9 @@ func (f *fakeManager) Checkpoints(_ context.Context, tenant string) ([]types.Che
 	return f.checkpoints, nil
 }
 
-func (f *fakeManager) DeleteCheckpoint(_ context.Context, ckptID, tenant string) error {
+func (f *fakeManager) DeleteCheckpoint(_ context.Context, ckptID, tenant string, scope pool.DeleteScope) error {
 	f.gotTenant = tenant
+	f.gotNoForward = scope == pool.DeleteLocal
 	if f.deleteCheckpoint == nil {
 		return pool.ErrUnknownCheckpoint
 	}
