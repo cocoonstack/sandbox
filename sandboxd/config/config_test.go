@@ -123,6 +123,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"mesh cluster key wrong length", `{"pools":[],"mesh":{"bind":"node1:7946","cluster_key":"YWJj"}}`, "want 16, 24, or 32"},
 		{"checkpoint peer heal without mesh", `{"checkpoint_peer_heal":true,"pools":[]}`, "requires an encrypted mesh"},
 		{"checkpoint peer heal without cluster key", `{"checkpoint_peer_heal":true,"pools":[],"mesh":{"bind":"node1:7946"}}`, "requires an encrypted mesh"},
+		{"checkpoint peer heal without ttl", `{"checkpoint_peer_heal":true,"pools":[],"mesh":{"bind":"node1:7946","cluster_key":"MDEyMzQ1Njc4OWFiY2RlZg=="}}`, "requires checkpoint_ttl_hours"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Load(writeConfig(t, tt.body))
