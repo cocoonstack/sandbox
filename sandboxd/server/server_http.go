@@ -15,6 +15,11 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
+// retryAfterSeconds hints when to retry a 503. A heal slot frees when a
+// transfer finishes, which can be seconds or minutes, so this bounds a waiting
+// client to a few probes a minute rather than inviting a 1-second hammer.
+const retryAfterSeconds = "10"
+
 // tenantKey carries the resolved tenant scope ("" = root) on the request
 // context, from requireToken to the handlers.
 type tenantKey struct{}
@@ -74,6 +79,12 @@ func decodeBodyStrict[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 func writePoolErr(w http.ResponseWriter, err error) bool {
 	for _, m := range poolErrHTTP {
 		if errors.Is(err, m.err) {
+			// 503 here means the node's own resources are momentarily exhausted
+			// (e.g. the concurrent-heal budget), not a caller error — Retry-After
+			// tells the client this is worth retrying, not failing the request.
+			if m.code == http.StatusServiceUnavailable {
+				w.Header().Set("Retry-After", retryAfterSeconds)
+			}
 			writeErr(w, m.code, cmp.Or(m.msg, err.Error()))
 			return true
 		}

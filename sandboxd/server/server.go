@@ -362,7 +362,9 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 
 // handleClaimCheckpoint claims a fresh sandbox branched from a checkpoint.
 // Tier order: the local claim, then a redirect to a probed owner (zero bytes
-// moved, never a stale one), then one peer transfer if neither answered.
+// moved, but not authoritative — a peer that missed a delete broadcast still
+// answers it holds the record until its own TTL sweep runs), then one peer
+// transfer if neither answered.
 func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeBody[types.CheckpointClaimRequest](w, r)
 	if !ok {

@@ -246,7 +246,13 @@ type Manager struct {
 
 	// recLocks serializes same-id store record mutations and holds off a
 	// re-publish swap while a clone reads the old generation (per id, RW).
-	recLocks sync.Map
+	// recLocksMu guards recRefs, the live-holder count that gates eviction: a
+	// checkpoint id can become live again after a delete (a peer's heal can
+	// republish one), so an entry is only safe to evict once nothing still
+	// holds or awaits it — never on a bare "record deleted" signal.
+	recLocks   sync.Map
+	recLocksMu sync.Mutex
+	recRefs    map[string]int
 
 	// notifyTemplates, when set (before serving starts), fires after a
 	// promote or template delete so the mesh republishes immediately
@@ -303,6 +309,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		pendingCks:      map[string]struct{}{},
 		egressListeners: map[string]*egressListener{},
 		egressTaps:      map[string]string{},
+		recRefs:         map[string]int{},
 		egressSecrets:   secrets,
 		dial:            egressDialer.DialContext,
 		sweep:           netfilter.SweepExcept,

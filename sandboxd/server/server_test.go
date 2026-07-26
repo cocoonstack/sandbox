@@ -1116,6 +1116,28 @@ func TestCheckpointClaimNoRedirectGoesStraightToHeal(t *testing.T) {
 	}
 }
 
+// TestCheckpointClaimHealBusyIs503WithRetryAfter: a full heal budget is the
+// node's own transient exhaustion, not a caller error — the client should
+// retry, and Retry-After says so instead of leaving it to guess.
+func TestCheckpointClaimHealBusyIs503WithRetryAfter(t *testing.T) {
+	mgr := &fakeManager{
+		healCheckpoint: func(string) (*types.Sandbox, error) {
+			return nil, pool.ErrHealBusy
+		},
+	}
+	ts := newPlacerTestServer(t, "sekret", mgr, nil)
+
+	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Retry-After"); got == "" {
+		t.Error("Retry-After header missing on a 503")
+	}
+}
+
 // TestCheckpointBlobUnknownIs404 lets a puller move on to the next owner
 // instead of treating a stale gossip entry as a transfer failure.
 func TestCheckpointBlobUnknownIs404(t *testing.T) {

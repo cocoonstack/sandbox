@@ -137,7 +137,7 @@ func (m *Manager) ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl ti
 func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl time.Duration, tenant string) (*types.Sandbox, error) {
 	l := m.recLock(ckpt.ID)
 	l.RLock()
-	defer l.RUnlock()
+	defer func() { l.RUnlock(); m.recDone(ckpt.ID) }()
 	dir, _, release, err := m.ckpts.Fetch(ctx, ckpt.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, ErrUnknownCheckpoint // deleted between the pre-check and the lock
@@ -172,7 +172,7 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl ti
 func (m *Manager) healCheckpoint(ctx context.Context, ckptID string) (types.Checkpoint, error) {
 	l := m.recLock(ckptID)
 	l.Lock()
-	defer l.Unlock()
+	defer func() { l.Unlock(); m.recDone(ckptID) }()
 	if ckpt, err := m.loadCheckpoint(ctx, ckptID); err == nil {
 		return ckpt, nil
 	}
@@ -281,9 +281,24 @@ func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 // to peers when fleet-scoped so a healed copy does not outlive it. A tenant may
 // delete only its own records — anything else answers ErrUnknownCheckpoint,
 // never a hint that the id exists; root (empty tenant) deletes anything.
+// Existence is checked under the record lock, not before it: heal broke the
+// old assumption that a local miss means the id is truly gone — a concurrent
+// heal can be mid-transfer, unpublished, when an unlocked check would see
+// 404, and it would then publish right after this call gave up thinking
+// there was nothing to delete. Taking the same lock heal takes makes the two
+// wait on each other instead of racing. Every exit evicts the lock entry
+// (recDoneEvict, not recDone) — unlike a template id, a checkpoint id is
+// effectively one-shot, so nothing is lost keeping the map from growing
+// per rejected or successful call alike.
 func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, scope DeleteScope) error {
-	// Validate off the lock — a rejected id must not leave a lock-map entry;
-	// loadCheckpoint is safe unlocked (checkpoints are single-publish, immutable).
+	// Reject a bad id before recLock: a rejected id must not leave a
+	// lock-map entry.
+	if !store.CheckpointIDRe.MatchString(ckptID) {
+		return ErrUnknownCheckpoint
+	}
+	l := m.recLock(ckptID)
+	l.Lock()
+	defer func() { l.Unlock(); m.recDoneEvict(ckptID) }()
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	if err != nil {
 		return err
@@ -296,7 +311,7 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, s
 	if _, pinned := m.pinnedArchiveCks()[ckptID]; pinned || ckpt.Archive {
 		return ErrUnknownCheckpoint // backs an archived sandbox, not a deletable checkpoint
 	}
-	if err := m.deleteCkLocked(ctx, ckptID); err != nil {
+	if err := m.ckpts.Delete(ctx, ckptID); err != nil {
 		return fmt.Errorf("delete checkpoint: %w", err)
 	}
 	// A shared backend has no per-node replicas to chase.
@@ -335,15 +350,20 @@ func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 }
 
 // deleteCkLocked removes a checkpoint under its record lock, so the delete
-// never runs beneath an in-flight branch clone or archived wake.
+// never runs beneath an in-flight branch clone, heal, or archived wake. The
+// lock is unlocked before the entry is considered for eviction: evicting
+// while still (logically) held is what would let a concurrent recLock for
+// the same id hand out a different mutex and split the serialization.
 func (m *Manager) deleteCkLocked(ctx context.Context, ckID string) error {
 	l := m.recLock(ckID)
 	l.Lock()
-	defer l.Unlock()
-	if err := m.ckpts.Delete(ctx, ckID); err != nil {
+	err := m.ckpts.Delete(ctx, ckID)
+	l.Unlock()
+	if err != nil {
+		m.recDone(ckID)
 		return err
 	}
-	m.dropRecLock(ckID)
+	m.recDoneEvict(ckID)
 	return nil
 }
 
@@ -388,6 +408,7 @@ func (m *Manager) FetchCheckpoint(ctx context.Context, ckptID string) (string, [
 	dir, meta, release, err := m.ckpts.Fetch(ctx, ckptID)
 	if err != nil {
 		l.RUnlock()
+		m.recDone(ckptID)
 		if errors.Is(err, store.ErrNotFound) {
 			return "", nil, nil, ErrUnknownCheckpoint
 		}
@@ -395,5 +416,5 @@ func (m *Manager) FetchCheckpoint(ctx context.Context, ckptID string) (string, [
 	}
 	// The read lock spans the transfer: a delete must not pull the export out
 	// from under a stream already writing it to a peer.
-	return dir, meta, func() { release(); l.RUnlock() }, nil
+	return dir, meta, func() { release(); l.RUnlock(); m.recDone(ckptID) }, nil
 }

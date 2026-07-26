@@ -61,12 +61,44 @@ def test_checkpoint_new_follows_redirect(spawn_node):
 
 
 def test_checkpoint_new_all_candidates_fail(spawn_node):
-    broken = spawn_node({("POST", "/v1/checkpoints/ck_2/claim"): lambda body, path: (500, {"error": "boom"})})
-    entry = spawn_node({("POST", "/v1/checkpoints/ck_2/claim"): lambda body, path: (200, {"redirect": [broken]})})
+    # The probed owner transiently fails (500); once exhausted, new() falls
+    # back to the origin, which this time fails definitively too.
+    path = "/v1/checkpoints/ck_2/claim"
+    broken = spawn_node({("POST", path): lambda body, p: (500, {"error": "boom"})})
 
+    calls = []
+
+    def entry_claim(body, p):
+        calls.append(body)
+        if len(calls) == 1:
+            return 200, {"redirect": [broken]}
+        return 409, {"error": "origin also failed"}
+
+    entry = spawn_node({("POST", path): entry_claim})
     with pytest.raises(APIError) as exc:
         Client(entry).checkpoint("ck_2").new()
-    assert exc.value.status == 500 and "boom" in exc.value.message
+    assert exc.value.status == 409 and "origin also failed" in exc.value.message
+    assert len(calls) == 2 and calls[1]["no_redirect"] is True
+
+
+def test_checkpoint_new_redirect_fallback_heals(spawn_node):
+    # The only probed owner is mid-heal (503); once exhausted, new() falls
+    # back to the origin, which heals (pulls the checkpoint) locally.
+    path = "/v1/checkpoints/ck_5/claim"
+    busy = spawn_node({("POST", path): lambda body, p: (503, {"error": "healing"})})
+
+    calls = []
+
+    def entry_claim(body, p):
+        calls.append(body)
+        if len(calls) == 1:
+            return 200, {"redirect": [busy]}
+        return 200, {"id": "sb_healed", "token": "t"}
+
+    entry = spawn_node({("POST", path): entry_claim})
+    sb = Client(entry).checkpoint("ck_5").new()
+    assert sb.id == "sb_healed" and sb.owner == entry
+    assert len(calls) == 2 and calls[1]["no_redirect"] is True
 
 
 def test_checkpoint_new_redirect_never_yields_empty_id(spawn_node, dead_addr):

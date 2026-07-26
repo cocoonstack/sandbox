@@ -77,9 +77,13 @@ per-sandbox tokens (that sandbox only — holding a handle amplifies to
 nothing node-level). Two capability tokens ride on top: preview URLs are
 HMAC-signed, expire with the claim's lease, and die with the sandbox (no
 revocation list to leak); a checkpoint id is the unguessable capability to
-branch it. Tenants are isolated at the API layer — listings filter,
-deletes answer 404 rather than confirming existence, and operator
-surfaces answer tenants 403.
+branch it. On a cluster, deleting a checkpoint does not revoke that
+capability fleet-wide the instant it runs: the delete is best-effort —
+broadcast to every peer the node currently sees — so a peer that is offline
+or partitioned at that moment keeps its own replica branchable until
+`checkpoint_ttl_hours` ages it out ([placement lifecycle](cluster.md#checkpoints-on-a-cluster)).
+Tenants are isolated at the API layer — listings filter, deletes answer 404
+rather than confirming existence, and operator surfaces answer tenants 403.
 
 ## Known limitations
 

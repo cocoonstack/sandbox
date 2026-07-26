@@ -103,6 +103,82 @@ func TestClaimCheckpointHealDedupsConcurrentPulls(t *testing.T) {
 	}
 }
 
+// TestDeleteCheckpointWaitsForInFlightHeal covers the Codex r2 blocker: an
+// unlocked existence check would see 404 while a heal is mid-transfer and
+// give up, only for the heal to publish moments later — resurrecting a
+// checkpoint the delete had just answered "not here" for. Delete must
+// instead wait on the same record lock the heal holds, then genuinely
+// delete what the heal just published.
+func TestDeleteCheckpointWaitsForInFlightHeal(t *testing.T) {
+	id := "ck_00000000000000bb"
+	ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
+	m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
+	puller.release = make(chan struct{})
+
+	healDone := make(chan error, 1)
+	go func() {
+		_, err := m.ClaimCheckpointHeal(t.Context(), id, time.Hour, "")
+		healDone <- err
+	}()
+	waitFor(t, func() bool { return puller.count() >= 1 }) // heal is mid-pull, unpublished
+
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- m.DeleteCheckpoint(t.Context(), id, "", DeleteLocal) }()
+	// Give a buggy unlocked check every chance to (wrongly) return early
+	// before the heal ever publishes.
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("DeleteCheckpoint returned early (%v) while the heal was unpublished — it must wait for the record lock", err)
+	default:
+	}
+
+	close(puller.release)
+	if err := <-healDone; err != nil {
+		t.Fatalf("heal: %v", err)
+	}
+	if err := <-deleteDone; err != nil {
+		t.Errorf("delete after heal published: %v, want nil (the record existed once delete's lock was granted)", err)
+	}
+	if m.HasCheckpoint(t.Context(), id) {
+		t.Error("checkpoint still present after delete finished")
+	}
+}
+
+// TestRecLockEvictionWaitsForAllHolders covers the lock-identity-split half
+// of the same Codex r2 blocker: evicting an id's entry while another holder
+// still references it would let that holder's (or a new caller's) next
+// recLock for the same id return a different mutex, splitting mutual
+// exclusion between them. Eviction must wait until every holder has
+// released, not just the one that happened to delete the record.
+func TestRecLockEvictionWaitsForAllHolders(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	const id = "ck_00000000000000aa"
+
+	l1 := m.recLock(id)
+	l1.Lock()
+	l2 := m.recLock(id) // a second, concurrent holder registers interest first
+	if l2 != l1 {
+		t.Fatalf("recLock returned a different mutex while the first holder is still outstanding")
+	}
+	l1.Unlock()
+	m.recDoneEvict(id) // first holder's release must not evict: l2 is still outstanding
+	if _, ok := m.recLocks.Load(id); !ok {
+		t.Fatal("entry evicted while a second holder still references it")
+	}
+
+	l3 := m.recLock(id) // a third caller arriving now must still find the SAME mutex
+	if l3 != l1 {
+		t.Fatal("a concurrent recLock diverged onto a different mutex for the same id — the lock-identity split")
+	}
+
+	m.recDone(id)      // l2's release
+	m.recDoneEvict(id) // l3's release, last one out
+	if _, ok := m.recLocks.Load(id); ok {
+		t.Error("entry not evicted once every holder released")
+	}
+}
+
 // TestFetchCheckpointNeverPulls: the peer-transfer blob endpoint must never
 // trigger a recursive pull, even with a healer installed that could serve it.
 func TestFetchCheckpointNeverPulls(t *testing.T) {

@@ -1,6 +1,8 @@
 """Fault matrix for the cluster redirect follow and the lookup scatter:
-dead first candidate (connection refused), 404 first candidate, all-404 —
-and lookup must not pay a hung or dead peer's full timeout."""
+dead first candidate (connection refused), 404 first candidate, a definitive
+candidate error that still tries the next one, every candidate exhausted
+(then the origin fallback heals, fails, or is skipped for a definitive
+error) — and lookup must not pay a hung or dead peer's full timeout."""
 
 import socket
 import threading
@@ -61,13 +63,83 @@ def test_claim_redirect_skips_404_candidate(spawn_node):
     assert Client(entry).new("rt:24.04").id == "sb_2"
 
 
-def test_claim_redirect_all_404_propagates_last(spawn_node):
+def test_claim_redirect_all_candidates_fail_then_origin_fallback_fails(spawn_node):
+    # Every candidate is a stale miss (404); once exhausted, new() falls
+    # back to the origin, which this time fails definitively too.
     a = spawn_node({("POST", "/v1/claim"): lambda body, path: (404, {"error": "gone a"})})
     b = spawn_node({("POST", "/v1/claim"): lambda body, path: (404, {"error": "gone b"})})
-    entry = spawn_node({("POST", "/v1/claim"): lambda body, path: (200, {"redirect": [a, b]})})
+
+    calls = []
+
+    def entry_claim(body, path):
+        calls.append(body)
+        if len(calls) == 1:
+            return 200, {"redirect": [a, b]}
+        return 409, {"error": "origin also failed"}
+
+    entry = spawn_node({("POST", "/v1/claim"): entry_claim})
     with pytest.raises(APIError) as exc:
         Client(entry).new("rt:24.04")
-    assert exc.value.status == 404 and "gone b" in exc.value.message
+    assert exc.value.status == 409 and "origin also failed" in exc.value.message
+    # The last candidate's failure must survive into the message: it is what
+    # says why the claim left the origin in the first place.
+    assert "gone b" in exc.value.message
+    assert len(calls) == 2 and calls[1]["no_redirect"] is True
+
+
+def test_claim_redirect_all_candidates_fail_then_origin_heals(spawn_node):
+    # The only candidate holds the record but is full (429); once exhausted,
+    # new() falls back to the origin, which heals (provisions locally).
+    full_calls = []
+
+    def full_claim(body, path):
+        full_calls.append(body)
+        return 429, {"error": "full"}
+
+    full = spawn_node({("POST", "/v1/claim"): full_claim})
+
+    calls = []
+
+    def entry_claim(body, path):
+        calls.append(body)
+        if len(calls) == 1:
+            return 200, {"redirect": [full]}
+        return 200, {"id": "sb_healed", "token": "t"}
+
+    entry = spawn_node({("POST", "/v1/claim"): entry_claim})
+    sb = Client(entry).new("rt:24.04")
+    assert sb.id == "sb_healed" and sb.owner == entry
+    assert len(calls) == 2 and calls[1]["no_redirect"] is True
+    assert len(full_calls) == 1
+
+
+@pytest.mark.parametrize(("status", "message"), [(409, "no egress"), (403, "tenant not allowed")])
+def test_claim_redirect_definitive_error_skips_origin_fallback(spawn_node, status, message):
+    # A definitive 4xx is not worth trying another candidate, and not worth
+    # falling back to the origin either -- the origin would fail the same way.
+    bad = spawn_node({("POST", "/v1/claim"): lambda body, path: (status, {"error": message})})
+
+    calls = []
+
+    def entry_claim(body, path):
+        calls.append(body)
+        return 200, {"redirect": [bad]}
+
+    entry = spawn_node({("POST", "/v1/claim"): entry_claim})
+    with pytest.raises(APIError) as exc:
+        Client(entry).new("rt:24.04")
+    assert exc.value.status == status
+    assert len(calls) == 1
+
+
+def test_claim_redirect_candidate_definitive_error_still_tries_next_candidate(spawn_node):
+    # Candidate one is wrong for this claim (403, definitive) but candidate
+    # two would still succeed -- the per-candidate walk retries broadly, so
+    # one ill-suited candidate must not cost a candidate that would answer.
+    forbidden = spawn_node({("POST", "/v1/claim"): lambda body, path: (403, {"error": "tenant not allowed"})})
+    good = spawn_node({("POST", "/v1/claim"): lambda body, path: (200, {"id": "sb_3", "token": "t"})})
+    entry = spawn_node({("POST", "/v1/claim"): lambda body, path: (200, {"redirect": [forbidden, good]})})
+    assert Client(entry).new("rt:24.04").id == "sb_3"
 
 
 def test_delete_template_skips_dead_owner(spawn_node, dead_addr):

@@ -123,6 +123,51 @@ handle `Sandbox.Promote` returns is still owner-bound — `template.New` and
 `template.Delete` dial the owner directly, no gossip involved — and is the
 race-free choice immediately after a promote.
 
+## Checkpoints on a cluster
+
+A checkpoint lives on whichever node captured it (the default
+[`checkpoint_dir`](deploy.md#configuration)) unless the store is shared (a
+FUSE mount or the s3 backend), in which case every node resolves every
+checkpoint directly and nothing below applies.
+
+On the default per-node store, a branch claim (`Checkpoint.New` /
+[`POST /v1/checkpoints/{id}/claim`](sandboxd-api.md#post-v1checkpointsidclaim))
+at a node that does not hold the record runs a tier order:
+
+1. **Local claim** — the fast path when the claiming node already holds it.
+2. **Probe + redirect** — a live, unauthenticated `HEAD` fan-out to up to 3
+   mesh peers in parallel, redirecting to whoever answers — the same
+   claim-redirect contract a warm miss already uses. The cap means the
+   answer is a hint, not an exhaustive list of every owner. The probe and
+   the follow-up claim are not atomic: a peer can answer the probe, then
+   lose the record — a delete's broadcast lands, or its own TTL sweep runs
+   (below) — before the retry reaches it, so a redirect can go stale
+   between the two calls.
+3. **Heal** — when `checkpoint_peer_heal` is on and neither of the above
+   answered, the node pulls the record from a probed peer, validates its
+   shape and id before trusting it, and publishes it locally so later
+   branches are local — paid once per node. The pull is bounded to one
+   overall time budget across however many peers it tries (`healBudget` in
+   `store/peer`), and a node accepts only so many heals at once
+   (`maxConcurrentHeals` in `pool`) — past that cap it answers `503` rather
+   than queuing indefinitely.
+
+### Delete is eventual, not a fleet-wide revocation
+
+`Checkpoint.Delete` (`DELETE /v1/checkpoints/{id}`) removes the local
+record, then best-effort broadcasts the delete to every peer this node
+currently sees, so a replica a heal pulled earlier is cleaned up too, not
+just the original. A peer that is offline or partitioned during that
+broadcast keeps its copy until the checkpoint TTL ages it out: the
+worst-case window in which a deleted checkpoint remains branchable by an
+id-holder is `checkpoint_ttl_hours`. A healed replica carries the source
+checkpoint's original `CreatedAt`, so every node's hourly TTL sweep ages it
+out at the same wall-clock moment regardless of whether the broadcast
+reached it — which is why heal *requires* a nonzero, fleet-matching TTL
+(see [cluster-invariant config](#cluster-invariant-config)). With TTL
+disabled (the default), that window never closes on a peer the broadcast
+never reaches.
+
 ## State ownership
 
 Each kind of state has exactly one source of truth, and a restart rebuilds
@@ -134,6 +179,7 @@ fully from it:
 | API-applied pool targets (`PUT /v1/pools`) | `<data_dir>/pools.json` (machine owned) | yes |
 | claims | the claims journal + `Reconcile` | yes |
 | placement hints (warm counts, template sets) | gossip | rebuilt |
+| checkpoint ownership | a live per-request probe (no gossip); a healed replica is this node's own persisted copy, aged out by `checkpoint_ttl_hours` | yes |
 
 Pools are managed API-first. The first time a node takes `PUT /v1/pools`, it
 writes the applied set to `<data_dir>/pools.json` and from then on **that file

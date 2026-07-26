@@ -205,12 +205,51 @@ token, 409 egress-lane sandbox (see [egress](egress.md)).
 
 ## POST /v1/checkpoints/{id}/claim
 
-Auth: node API token; body `{"ttl_seconds": 0}`. Claims a fresh sandbox
-branched from the checkpoint (a normal claim response, attributed to the
-caller); the checkpoint's recorded key applies — the unguessable id is the
-capability to branch. 404 for an unknown checkpoint, 409 for an egress-lane
-checkpoint (see [egress](egress.md)), 429 node or calling tenant at
-`max_claims`, or the node draining.
+Auth: node API token; body `{"ttl_seconds": 0, "no_redirect": false}`.
+Claims a fresh sandbox branched from the checkpoint (a normal claim
+response, attributed to the caller); the checkpoint's recorded key applies
+— the unguessable id is the capability to branch.
+
+Checkpoints are node-local (unless the store is shared — see
+[Configuration](deploy.md#configuration)), so a miss here runs a tier order:
+
+1. This node checks its own store first.
+2. On a miss, it probes up to 3 peers directly — a parallel, unauthenticated
+   `HEAD` to each (see below) — and answers exactly like a warm-miss
+   [`POST /v1/claim`](#post-v1claim): `200 {"redirect": ["10.0.0.6:7777",
+   "10.0.0.7:7777"]}`, retry the same body (+`no_redirect: true`) at each
+   candidate until one answers. The probe and the follow-up claim are not
+   atomic: a peer can answer the probe, then lose the record — a delete's
+   broadcast lands, or its own TTL sweep runs (below) — before the retry
+   reaches it, so a redirect can go stale between the two calls.
+3. If nothing answers the probe (or `no_redirect` is set), and the node has
+   `checkpoint_peer_heal` enabled, it pulls the record from a probed peer
+   itself, validates it, publishes it locally, and serves the claim from
+   there — paid once per node. See the full
+   [placement lifecycle](cluster.md#checkpoints-on-a-cluster) for how the
+   three tiers fit together.
+
+404 for an unknown checkpoint (locally, and after redirect and heal both
+miss), 409 for an egress-lane checkpoint (see [egress](egress.md)), 429 node
+or calling tenant at `max_claims` or the node draining, 503 when the node's
+concurrent-heal cap is already full — the request is retryable.
+
+## GET/HEAD /v1/checkpoints/{id}/blob
+
+The peer-transfer route behind the probe and heal above — internal, not
+part of the public API; an SDK caller has no reason to call it directly.
+
+- `GET` streams the whole record — guest memory, disk, and meta — as a tar.
+  Operator-token only: the stream carries no tenant scoping, and its only
+  real caller is a peer's heal pull, which presents the fleet `api_token`.
+  401 missing or unrecognized token, 403 a valid tenant token (authenticated
+  but not the operator), 404 unknown checkpoint.
+- `HEAD` is the ownership probe and is currently **unauthenticated** — the id
+  itself is treated as the capability, so this tells a caller only what it
+  already knows: 200 when this node holds a branchable (non-archive) copy,
+  404 otherwise. Hardening this boundary (requiring a token, bounding who can
+  fan a probe out) is tracked as follow-up work; do not treat it as secured
+  today.
 
 ## GET /v1/checkpoints
 
@@ -222,6 +261,24 @@ sees only its own records; root sees everything.
 Auth: node API token. A tenant may delete only its own records — anything
 else is 404, never a hint the id exists; root deletes anything. 204 on
 success, 404 unknown.
+
+**Delete removes the local record and then best-effort broadcasts to peers
+so a healed replica does not outlive it — this is eventual best-effort
+cleanup, not a fleet-wide revocation.** A peer that is offline or
+partitioned during the broadcast keeps its copy until the checkpoint TTL
+ages it out: the worst-case window in which a deleted checkpoint remains
+branchable by an id-holder is `checkpoint_ttl_hours`. A healed replica
+carries the source's original `CreatedAt`, so every node's sweep expires it
+at the same wall-clock moment; the TTL must also match fleet-wide, which the
+[cluster-invariant config](cluster.md#cluster-invariant-config) digest
+checks. A window always exists because `checkpoint_peer_heal` cannot be
+enabled with `checkpoint_ttl_hours: 0` — a replica that can outlive a delete
+must have a bound on how long. A shared
+checkpoint store skips the broadcast: every node already resolves every
+record directly, so there is no replica to chase. `?no_forward=1` marks a
+delete already arriving from another node's own broadcast, so it is not
+itself re-broadcast (loop prevention); it is an internal parameter, not one
+an SDK caller should set.
 
 ## GET /v1/sandboxes
 

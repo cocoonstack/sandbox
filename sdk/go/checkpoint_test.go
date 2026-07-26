@@ -48,15 +48,24 @@ func TestCheckpointNewFollowsRedirect(t *testing.T) {
 }
 
 func TestCheckpointNewRedirectAllCandidatesFail(t *testing.T) {
+	// The probed owner transiently fails (500); once exhausted, New falls
+	// back to the origin, which this time fails definitively too.
 	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	t.Cleanup(broken.Close)
 
+	var entryCalls int
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(claimResponse{
-			Redirect: []string{strings.TrimPrefix(broken.URL, "http://")},
-		})
+		entryCalls++
+		if entryCalls == 1 {
+			_ = json.NewEncoder(w).Encode(claimResponse{
+				Redirect: []string{strings.TrimPrefix(broken.URL, "http://")},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(errorResponse{Error: "origin also failed"})
 	}))
 	t.Cleanup(entry.Close)
 
@@ -66,11 +75,52 @@ func TestCheckpointNewRedirectAllCandidatesFail(t *testing.T) {
 	if err == nil {
 		t.Fatal("New: want error, got nil")
 	}
-	if !strings.Contains(err.Error(), "http 500") {
-		t.Errorf("err %v, want the 500 surfaced", err)
+	if !strings.Contains(err.Error(), "origin also failed") {
+		t.Errorf("err %v, want the origin's failure surfaced", err)
 	}
 	if sb != nil {
 		t.Errorf("sb %+v, want nil on failure", sb)
+	}
+	if entryCalls != 2 {
+		t.Errorf("entry called %d times, want 2 (redirect + fallback)", entryCalls)
+	}
+}
+
+func TestCheckpointNewRedirectFallbackHeals(t *testing.T) {
+	// The only probed owner is mid-heal (503); once exhausted, New falls
+	// back to the origin, which heals (pulls the checkpoint) locally.
+	busy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(busy.Close)
+
+	var entryCalls int
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entryCalls++
+		if entryCalls == 1 {
+			_ = json.NewEncoder(w).Encode(claimResponse{Redirect: []string{strings.TrimPrefix(busy.URL, "http://")}})
+			return
+		}
+		var req checkpointClaimRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if !req.NoRedirect {
+			t.Error("origin fallback did not carry no_redirect")
+		}
+		_ = json.NewEncoder(w).Encode(claimResponse{ID: "sb_healed", Token: "t"})
+	}))
+	t.Cleanup(entry.Close)
+
+	c := testClient(t, entry)
+	ck := checkpointHandle(c, c.addr, checkpointRecord{ID: "ck_5"})
+	sb, err := ck.New(t.Context())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if sb.ID != "sb_healed" {
+		t.Errorf("id %q, want sb_healed", sb.ID)
+	}
+	if entryCalls != 2 {
+		t.Errorf("entry called %d times, want 2 (redirect + fallback)", entryCalls)
 	}
 }
 
