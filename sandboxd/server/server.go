@@ -21,6 +21,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
+	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -61,17 +62,26 @@ type Manager interface {
 	Release(ctx context.Context, id, token string) error
 	ReleaseOperator(ctx context.Context, id string) error
 	Hibernate(ctx context.Context, id, token string) error
+	HibernateOperator(ctx context.Context, id string) error
+	Wake(ctx context.Context, id, token string) error
+	WakeOperator(ctx context.Context, id string) error
 	Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
+	ForkOperator(ctx context.Context, id string, count int, ttl time.Duration) ([]*types.Sandbox, error)
 	Promote(ctx context.Context, id, token, template, tenant string) (types.PoolKey, error)
+	PromoteOperator(ctx context.Context, id, template, tenant string) (types.PoolKey, error)
 	DeleteTemplate(ctx context.Context, key types.PoolKey, tenant string) error
 	Checkpoint(ctx context.Context, id, token, name, tenant string) (types.Checkpoint, error)
+	CheckpointOperator(ctx context.Context, id, name, tenant string) (types.Checkpoint, error)
 	Counters() pool.Counters
 	TenantClaims() map[string]int
 	Sandboxes() []pool.SandboxSummary
+	Sandbox(id string) (pool.SandboxSummary, bool)
+	Stats(id string) (pool.SandboxStats, bool)
 	Audit(ctx context.Context, id string, line []byte)
 	AuditEnabled() bool
 	ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error)
 	Checkpoints(ctx context.Context, tenant string) ([]types.Checkpoint, error)
+	FetchCheckpoint(ctx context.Context, ckptID string) (dir string, meta []byte, release func(), err error)
 	DeleteCheckpoint(ctx context.Context, ckptID, tenant string) error
 	ClaimDeadline(id, token string) (time.Time, error)
 	HasGolden(ctx context.Context, key types.PoolKey) bool
@@ -93,6 +103,7 @@ type Dialer interface {
 type Placer interface {
 	Candidates(keyHash string) []string
 	TemplateOwners(keyHash string) []string
+	CheckpointOwners(ckptID string) []string
 	PeerAddrs() []string
 	ConfigMismatches() int
 }
@@ -157,7 +168,10 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/claim", s.requireToken(s.handleClaim))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleRelease)
-	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate, s.mgr.HibernateOperator))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/wake", s.handleSandboxVerb("wake", s.mgr.Wake, s.mgr.WakeOperator))
+	mux.HandleFunc("GET /v1/sandboxes/{id}", s.requireRoot(s.handleSandbox))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/stats", s.requireRoot(s.handleSandboxStats))
 	// Fork and promote create node resources, so they take the same token
 	// class as a claim; the source sandbox's token rides in the body as the
 	// ownership proof.
@@ -167,6 +181,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sandboxes/{id}/checkpoint", s.requireToken(s.handleCheckpoint))
 	mux.HandleFunc("POST /v1/checkpoints/{id}/claim", s.requireToken(s.handleClaimCheckpoint))
 	mux.HandleFunc("GET /v1/checkpoints", s.requireToken(s.handleListCheckpoints))
+	// The peer-transfer half of the snapshot placement design: a node that
+	// cannot redirect a branch pulls the record from an owner through this.
+	mux.HandleFunc("GET /v1/checkpoints/{id}/blob", s.requireToken(s.handleCheckpointBlob))
 	mux.HandleFunc("DELETE /v1/checkpoints/{id}", s.requireToken(s.handleDeleteCheckpoint))
 	mux.HandleFunc("DELETE /v1/templates", s.requireToken(s.handleDeleteTemplate))
 	mux.HandleFunc("PUT /v1/pools", s.requireRoot(s.handlePutPools))
@@ -257,16 +274,51 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleSandboxVerb adapts a sandbox-scoped manager call (hibernate) to HTTP:
-// per-sandbox bearer auth, 404 on unknown, 204 on success.
-func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id, token string) error) http.HandlerFunc {
+// handleSandbox reports one live claim, so a control plane can read a single
+// sandbox instead of scanning the whole-node listing on every reconcile.
+func (s *Server) handleSandbox(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	sb, ok := s.mgr.Sandbox(id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "unknown sandbox")
+		return
+	}
+	writeJSON(w, http.StatusOK, sb)
+}
+
+// handleSandboxStats reports one sandbox's resource usage. It is the only
+// per-sandbox usage surface: /metrics is node- and pool-scoped by design.
+func (s *Server) handleSandboxStats(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	st, ok := s.mgr.Stats(id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "unknown sandbox")
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+// handleSandboxVerb adapts a sandbox-scoped manager call (hibernate, wake) to
+// HTTP: per-sandbox bearer auth, 404 on unknown, 204 on success. The node's
+// root api_token takes the operator path instead, exactly as release does, so
+// a control plane holding only the fleet token can drive the lifecycle.
+func (s *Server) handleSandboxVerb(
+	verb string,
+	do func(ctx context.Context, id, token string) error,
+	operator func(ctx context.Context, id string) error,
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, ok := sandboxToken(w, r)
 		if !ok {
 			return
 		}
 		id := r.PathValue("id")
-		err := do(r.Context(), id, token)
+		var err error
+		if s.isRootToken(token) {
+			err = operator(r.Context(), id)
+		} else {
+			err = do(r.Context(), id, token)
+		}
 		writeResult(w, r, verb, id, verb+" failed", err, func() {
 			w.WriteHeader(http.StatusNoContent)
 		})
@@ -281,7 +333,16 @@ func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	children, err := s.mgr.Fork(r.Context(), id, req.Token, req.Count, req.TTL())
+	// An operator (root) caller proves authority with the node api_token in the
+	// header and carries no per-sandbox token; a tenant caller must still
+	// present the sandbox's own token as ownership proof.
+	var children []*types.Sandbox
+	var err error
+	if req.Token == "" && s.rootRequest(r) {
+		children, err = s.mgr.ForkOperator(r.Context(), id, req.Count, req.TTL())
+	} else {
+		children, err = s.mgr.Fork(r.Context(), id, req.Token, req.Count, req.TTL())
+	}
 	writeResult(w, r, "fork", id, "fork failed", err, func() {
 		resp := types.ForkResponse{Children: make([]types.ClaimResponse, len(children))}
 		for i, c := range children {
@@ -298,7 +359,13 @@ func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	key, err := s.mgr.Promote(r.Context(), id, req.Token, req.Template, tenantFrom(r.Context()))
+	var key types.PoolKey
+	var err error
+	if req.Token == "" && s.rootRequest(r) {
+		key, err = s.mgr.PromoteOperator(r.Context(), id, req.Template, tenantFrom(r.Context()))
+	} else {
+		key, err = s.mgr.Promote(r.Context(), id, req.Token, req.Template, tenantFrom(r.Context()))
+	}
 	writeResult(w, r, "promote", id, "promote failed", err, func() {
 		writeJSON(w, http.StatusOK, types.PromoteResponse{Key: key})
 	})
@@ -311,7 +378,13 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	ckpt, err := s.mgr.Checkpoint(r.Context(), id, req.Token, req.Name, tenantFrom(r.Context()))
+	var ckpt types.Checkpoint
+	var err error
+	if req.Token == "" && s.rootRequest(r) {
+		ckpt, err = s.mgr.CheckpointOperator(r.Context(), id, req.Name, tenantFrom(r.Context()))
+	} else {
+		ckpt, err = s.mgr.Checkpoint(r.Context(), id, req.Token, req.Name, tenantFrom(r.Context()))
+	}
 	writeResult(w, r, "checkpoint", id, "checkpoint failed", err, func() {
 		writeJSON(w, http.StatusOK, types.CheckpointResponse{Checkpoint: ckpt})
 	})
@@ -325,9 +398,46 @@ func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	ckptID := r.PathValue("id")
 	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, req.TTL(), tenantFrom(r.Context()))
+	// Checkpoints are node-local. When this node does not hold the record, a
+	// peer that gossiped it does: redirect the branch there rather than failing,
+	// so the clone still runs on the node whose disk already has the data (its
+	// local reflink fast path). A no_redirect retry must resolve locally, or two
+	// nodes would bounce the request between them.
+	if errors.Is(err, pool.ErrUnknownCheckpoint) && s.placer != nil && !req.NoRedirect &&
+		writeRedirect(w, s.placer.CheckpointOwners(ckptID)) {
+		return
+	}
 	writeResult(w, r, "claim checkpoint", ckptID, "provisioning failed", err, func() {
 		writeJSON(w, http.StatusOK, s.claimResponse(sb))
 	})
+}
+
+// handleCheckpointBlob streams a checkpoint record (its export directory and
+// meta.json) as a tar, so a peer that must serve a branch locally can pull it.
+// It is a read of an immutable record: the same api/tenant token class that
+// may branch a checkpoint may also copy one.
+func (s *Server) handleCheckpointBlob(w http.ResponseWriter, r *http.Request) {
+	ckptID := r.PathValue("id")
+	dir, meta, release, err := s.mgr.FetchCheckpoint(r.Context(), ckptID)
+	if err != nil {
+		if errors.Is(err, pool.ErrUnknownCheckpoint) {
+			writeErr(w, http.StatusNotFound, "unknown checkpoint")
+			return
+		}
+		log.WithFunc("server.handleCheckpointBlob").Error(r.Context(), err, "fetch checkpoint")
+		writeErr(w, http.StatusInternalServerError, "fetch checkpoint failed")
+		return
+	}
+	defer release()
+
+	w.Header().Set("Content-Type", "application/x-tar")
+	// The status is committed before the walk begins, so a mid-stream failure
+	// can only truncate the tar — the reader detects that as a short archive
+	// and treats the pull as failed, which is the honest outcome.
+	w.WriteHeader(http.StatusOK)
+	if err := peer.TarRecord(dir, meta, w); err != nil {
+		log.WithFunc("server.handleCheckpointBlob").Error(r.Context(), err, "stream checkpoint")
+	}
 }
 
 // handleListCheckpoints lists this node's checkpoints, newest first — a
@@ -469,6 +579,13 @@ func (s *Server) requireRoot(next http.HandlerFunc) http.HandlerFunc {
 // operator credential). It mirrors resolveScope's root branch: an unset api
 // token matches nothing, so an open node grants no operator elevation on the
 // per-sandbox release path. Tenant tokens never match — they live in s.tenants.
+// rootRequest reports whether this request presented the node's root
+// api_token, the credential that authorizes the operator lifecycle paths.
+func (s *Server) rootRequest(r *http.Request) bool {
+	token, ok := bearerToken(r)
+	return ok && s.isRootToken(token)
+}
+
 func (s *Server) isRootToken(token string) bool {
 	return s.apiToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) == 1
 }

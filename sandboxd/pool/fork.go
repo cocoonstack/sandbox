@@ -18,12 +18,30 @@ import (
 // and count against its quota. All-or-nothing: any child failing destroys
 // the ones already built, so an error means no child survived.
 func (m *Manager) Fork(ctx context.Context, id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
-	if count < 1 || count > m.maxFork {
-		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, m.maxFork)
-	}
 	sb, ok := m.claim(id, token)
 	if !ok {
 		return nil, ErrUnknownSandbox
+	}
+	return m.forkResolved(ctx, sb, count, ttl)
+}
+
+// ForkOperator forks a sandbox by id without a per-sandbox token. It is the
+// operator (root) path: the server authorizes it by the node's root api_token
+// before calling, so no token check happens here — mirroring ReleaseOperator.
+// A tenant token never reaches this method (see server.go).
+func (m *Manager) ForkOperator(ctx context.Context, id string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
+	sb, ok := m.byID(id)
+	if !ok {
+		return nil, ErrUnknownSandbox
+	}
+	return m.forkResolved(ctx, sb, count, ttl)
+}
+
+// forkResolved is Fork's body once the source claim is resolved.
+func (m *Manager) forkResolved(ctx context.Context, sb *types.Sandbox, count int, ttl time.Duration) ([]*types.Sandbox, error) {
+	id := sb.ID
+	if count < 1 || count > m.maxFork {
+		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, m.maxFork)
 	}
 	if !sb.Key.Capturable() {
 		return nil, ErrNoEgressFork

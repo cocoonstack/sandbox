@@ -9,12 +9,15 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
+	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -957,11 +960,13 @@ func newTenantTestServer(t *testing.T, apiToken string, tenants []config.TenantS
 // the claim hook stands in for the provision result. Tenant-scoped methods
 // record the tenant they were handed in gotTenant.
 type fakeManager struct {
+	ckptDir   string
 	claim     func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
 	release   func(id, token string) error
 	releaseOp func(id string) error
 	socket    func(id, token string) (string, error)
 	hibernate func(id, token string) error
+	wake      func(id, token string) error
 	fork      func(id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
 	promote   func(id, token, template string) error
 
@@ -1079,6 +1084,41 @@ func (f *fakeManager) TenantClaims() map[string]int { return f.tenantClaims }
 
 func (f *fakeManager) Sandboxes() []pool.SandboxSummary { return nil }
 
+func (f *fakeManager) Sandbox(string) (pool.SandboxSummary, bool) {
+	return pool.SandboxSummary{}, false
+}
+
+func (f *fakeManager) Stats(string) (pool.SandboxStats, bool) { return pool.SandboxStats{}, false }
+
+// The operator variants take no per-sandbox token; the fake records them
+// through the same hooks with an empty token, mirroring releaseOp.
+func (f *fakeManager) HibernateOperator(ctx context.Context, id string) error {
+	return f.Hibernate(ctx, id, "")
+}
+
+func (f *fakeManager) Wake(_ context.Context, id, token string) error {
+	if f.wake == nil {
+		return nil
+	}
+	return f.wake(id, token)
+}
+
+func (f *fakeManager) WakeOperator(ctx context.Context, id string) error {
+	return f.Wake(ctx, id, "")
+}
+
+func (f *fakeManager) ForkOperator(ctx context.Context, id string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
+	return f.Fork(ctx, id, "", count, ttl)
+}
+
+func (f *fakeManager) PromoteOperator(ctx context.Context, id, template, tenant string) (types.PoolKey, error) {
+	return f.Promote(ctx, id, "", template, tenant)
+}
+
+func (f *fakeManager) CheckpointOperator(ctx context.Context, id, name, tenant string) (types.Checkpoint, error) {
+	return f.Checkpoint(ctx, id, "", name, tenant)
+}
+
 func (f *fakeManager) Audit(_ context.Context, id string, line []byte) {
 	if f.audited != nil {
 		f.audited(id, line)
@@ -1144,11 +1184,164 @@ func (f *fakeDialer) DialSilkd(ctx context.Context, sock string) (net.Conn, erro
 }
 
 type fakePlacer struct {
-	addrs  []string
-	owners []string
+	ckptOwners []string
+	addrs      []string
+	owners     []string
 }
 
 func (f *fakePlacer) Candidates(string) []string     { return f.addrs }
 func (f *fakePlacer) TemplateOwners(string) []string { return f.owners }
-func (f *fakePlacer) PeerAddrs() []string            { return f.addrs }
-func (f *fakePlacer) ConfigMismatches() int          { return 0 }
+
+func (f *fakePlacer) CheckpointOwners(string) []string { return f.ckptOwners }
+func (f *fakePlacer) PeerAddrs() []string              { return f.addrs }
+func (f *fakePlacer) ConfigMismatches() int            { return 0 }
+
+// FetchCheckpoint serves the peer-transfer read; the fake reports every record
+// missing unless a test supplies a directory.
+func (f *fakeManager) FetchCheckpoint(_ context.Context, _ string) (string, []byte, func(), error) {
+	if f.ckptDir == "" {
+		return "", nil, nil, pool.ErrUnknownCheckpoint
+	}
+	return f.ckptDir, []byte(`{"id":"ck_00000000000000aa"}`), func() {}, nil
+}
+
+// newPlacerTestServer builds a server with a mesh placer, which the shared
+// helper deliberately leaves nil (most tests are single-node).
+func newPlacerTestServer(t *testing.T, apiToken string, mgr Manager, placer Placer) *httptest.Server {
+	t.Helper()
+	srv := New(apiToken, nil, "node:7777", mgr, &fakeDialer{}, placer, nil)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func postJSON(t *testing.T, url, token, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	return resp
+}
+
+// TestCheckpointClaimRedirectsToOwner is L2: checkpoints are node-local, so a
+// branch that lands on a node without the record must be pointed at one that
+// has it — the clone then runs on the node whose disk already holds the data,
+// on its local reflink fast path. Failing here instead would make "snapshot on
+// A, branch from B" simply not work.
+func TestCheckpointClaimRedirectsToOwner(t *testing.T) {
+	mgr := &fakeManager{} // ClaimCheckpoint defaults to ErrUnknownCheckpoint
+	placer := &fakePlacer{ckptOwners: []string{"owner-a:7777"}}
+	ts := newPlacerTestServer(t, "sekret", mgr, placer)
+
+	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 carrying a redirect (the mesh redirect is a 200, not a 3xx)", resp.StatusCode)
+	}
+	var got types.ClaimResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Redirect) != 1 || got.Redirect[0] != "owner-a:7777" {
+		t.Errorf("redirect = %v, want [owner-a:7777]", got.Redirect)
+	}
+	if got.ID != "" {
+		t.Errorf("id = %q, want empty: a redirect and a delivered sandbox are mutually exclusive", got.ID)
+	}
+}
+
+// TestCheckpointClaimNoRedirectResolvesLocally: the retry at a redirect target
+// must resolve there or two nodes would bounce the request between them.
+func TestCheckpointClaimNoRedirectResolvesLocally(t *testing.T) {
+	placer := &fakePlacer{ckptOwners: []string{"owner-a:7777"}}
+	ts := newPlacerTestServer(t, "sekret", &fakeManager{}, placer)
+
+	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{"no_redirect":true}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: a no_redirect retry must not bounce again", resp.StatusCode)
+	}
+}
+
+// TestCheckpointClaimNoOwnersIs404: nothing gossiped the record, so a miss is
+// an honest miss rather than a redirect to nowhere.
+func TestCheckpointClaimNoOwnersIs404(t *testing.T) {
+	ts := newPlacerTestServer(t, "sekret", &fakeManager{}, &fakePlacer{})
+
+	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestCheckpointBlobUnknownIs404 lets a puller move on to the next owner
+// instead of treating a stale gossip entry as a transfer failure.
+func TestCheckpointBlobUnknownIs404(t *testing.T) {
+	ts := newTestServer(t, "sekret", &fakeManager{}, nil)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		ts.URL+"/v1/checkpoints/ck_00000000000000aa/blob", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer sekret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 so the puller tries the next owner", resp.StatusCode)
+	}
+}
+
+// TestCheckpointBlobStreamsRecord is the serving half of L3: the record leaves
+// as a tar the peer can unpack, with its export contents intact.
+func TestCheckpointBlobStreamsRecord(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "mem"), []byte("guest-pages"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	mgr := &fakeManager{ckptDir: src}
+	ts := newTestServer(t, "sekret", mgr, nil)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		ts.URL+"/v1/checkpoints/ck_00000000000000aa/blob", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer sekret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	dst := t.TempDir()
+	if err := peer.Untar(resp.Body, dst); err != nil {
+		t.Fatalf("Untar the streamed record: %v", err)
+	}
+	// The blob is a whole record: meta.json at the root plus the export under
+	// export/. Streaming only the export produced a directory that published
+	// cleanly and then failed every read as "unknown checkpoint".
+	if got, err := os.ReadFile(filepath.Join(dst, "export", "mem")); err != nil || string(got) != "guest-pages" {
+		t.Fatalf("streamed export/mem = %q, %v; want the record's bytes", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "meta.json")); err != nil {
+		t.Fatalf("meta.json missing from the streamed record: %v", err)
+	}
+}

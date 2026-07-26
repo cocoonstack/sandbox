@@ -26,12 +26,28 @@ var (
 // clone that exact state, and a source can be checkpointed again — a tree.
 // tenant attributes the record; empty means the operator (root).
 func (m *Manager) Checkpoint(ctx context.Context, id, token, name, tenant string) (types.Checkpoint, error) {
-	if name != "" && !types.NameRe.MatchString(name) {
-		return types.Checkpoint{}, fmt.Errorf("%w: %q must match %s", ErrBadName, name, types.NameRe)
-	}
 	sb, ok := m.claim(id, token)
 	if !ok {
 		return types.Checkpoint{}, ErrUnknownSandbox
+	}
+	return m.checkpointResolved(ctx, sb, name, tenant)
+}
+
+// CheckpointOperator checkpoints a sandbox by id without a per-sandbox token.
+// It is the operator (root) path, authorized by the node's root api_token
+// before the call — mirroring ReleaseOperator.
+func (m *Manager) CheckpointOperator(ctx context.Context, id, name, tenant string) (types.Checkpoint, error) {
+	sb, ok := m.byID(id)
+	if !ok {
+		return types.Checkpoint{}, ErrUnknownSandbox
+	}
+	return m.checkpointResolved(ctx, sb, name, tenant)
+}
+
+// checkpointResolved is Checkpoint's body once the source claim is resolved.
+func (m *Manager) checkpointResolved(ctx context.Context, sb *types.Sandbox, name, tenant string) (types.Checkpoint, error) {
+	if name != "" && !types.NameRe.MatchString(name) {
+		return types.Checkpoint{}, fmt.Errorf("%w: %q must match %s", ErrBadName, name, types.NameRe)
 	}
 	if !sb.Key.Capturable() {
 		return types.Checkpoint{}, ErrNoEgressFork
@@ -258,4 +274,47 @@ func parseCheckpoint(raw []byte) (types.Checkpoint, error) {
 		return types.Checkpoint{}, ErrUnknownCheckpoint
 	}
 	return ckpt, nil
+}
+
+// CheckpointIDs lists this node's checkpoint ids for the mesh to gossip, so a
+// peer can resolve a branch of a checkpoint it does not hold to the node that
+// does. Archive records are excluded: they are lifecycle-internal wake images,
+// never a branch target. Errors are swallowed to nil — gossip is best-effort
+// and a transient store read must not take the tick down.
+func (m *Manager) CheckpointIDs() []string {
+	ckpts, err := m.Checkpoints(context.Background(), "")
+	if err != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(ckpts))
+	for _, c := range ckpts {
+		if !c.Archive {
+			ids = append(ids, c.ID)
+		}
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+// FetchCheckpoint materializes a checkpoint's export for a peer transfer,
+// returning the local directory, its meta, and the release to call when the
+// copy is done. It is the read half of the peer-heal path; the id is validated
+// against the store's namespace before any disk is touched.
+func (m *Manager) FetchCheckpoint(ctx context.Context, ckptID string) (string, []byte, func(), error) {
+	if _, err := m.loadCheckpoint(ctx, ckptID); err != nil {
+		return "", nil, nil, err
+	}
+	l := m.recLock(ckptID)
+	l.RLock()
+	dir, meta, release, err := m.ckpts.Fetch(ctx, ckptID)
+	if err != nil {
+		l.RUnlock()
+		if errors.Is(err, store.ErrNotFound) {
+			return "", nil, nil, ErrUnknownCheckpoint
+		}
+		return "", nil, nil, fmt.Errorf("fetch checkpoint: %w", err)
+	}
+	// The read lock spans the transfer: a delete must not pull the export out
+	// from under a stream already writing it to a peer.
+	return dir, meta, func() { release(); l.RUnlock() }, nil
 }
