@@ -429,19 +429,28 @@ pub async fn write_chunk_frame<W: AsyncWrite + Unpin>(
     kind: &str,
     data: &[u8],
 ) -> io::Result<()> {
-    buf.clear();
-    buf.extend_from_slice(b"{\"type\":\"");
-    buf.extend_from_slice(kind.as_bytes());
-    buf.extend_from_slice(b"\",\"data\":\"");
-    let start = buf.len();
+    const PRE: &[u8] = b"{\"type\":\"";
+    const MID: &[u8] = b"\",\"data\":\"";
+    const END: &[u8] = b"\"}\n";
     let b64_len = base64::encoded_len(data.len(), true)
         .ok_or_else(|| io::Error::other("chunk too large to encode"))?;
-    buf.resize(start + b64_len, 0);
+    let total = PRE.len() + kind.len() + MID.len() + b64_len + END.len();
+    // Grow-only, never cleared: resize's zero-fill runs once at high-water
+    // instead of per chunk; buf[..total] is fully overwritten below.
+    if buf.len() < total {
+        buf.resize(total, 0);
+    }
+    let mut at = 0;
+    for part in [PRE, kind.as_bytes(), MID] {
+        buf[at..at + part.len()].copy_from_slice(part);
+        at += part.len();
+    }
     STANDARD
-        .encode_slice(data, &mut buf[start..])
+        .encode_slice(data, &mut buf[at..at + b64_len])
         .map_err(io::Error::other)?;
-    buf.extend_from_slice(b"\"}\n");
-    w.write_all(buf).await?;
+    at += b64_len;
+    buf[at..at + END.len()].copy_from_slice(END);
+    w.write_all(&buf[..total]).await?;
     w.flush().await
 }
 
