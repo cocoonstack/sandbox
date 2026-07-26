@@ -261,3 +261,21 @@ func TestPromoteRefusesCrossTenantOverwrite(t *testing.T) {
 		t.Errorf("root replace: %v, want ok", err)
 	}
 }
+
+func TestTemplateHashesSortedForMeshCompare(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	parent := mustClaim(t, m, testKey)
+	for _, name := range []string{"tpl:a", "tpl:b", "tpl:c", "tpl:d"} {
+		if _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, name, ""); err != nil {
+			t.Fatalf("Promote %s: %v", name, err)
+		}
+	}
+	hashes := m.TemplateHashes()
+	if len(hashes) != 4 {
+		t.Fatalf("got %d hashes, want 4: %v", len(hashes), hashes)
+	}
+	if !slices.IsSorted(hashes) {
+		t.Errorf("TemplateHashes not sorted: %v", hashes)
+	}
+}
