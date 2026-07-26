@@ -105,7 +105,7 @@ func newBoundMesh(t *testing.T, dataDir string) *Mesh {
 	cfg := memberlist.DefaultLocalConfig()
 	cfg.BindPort = 0
 	cfg.Logger = discardLogger()
-	m, err := New(cfg, "self", "self:7777", nil, dataDir)
+	m, err := New(t.Context(), cfg, "self", "self:7777", nil, dataDir)
 	if err != nil {
 		t.Fatalf("new mesh: %v", err)
 	}

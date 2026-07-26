@@ -95,7 +95,7 @@ func main() {
 
 	var placer server.Placer
 	if cfg.Mesh != nil {
-		msh, err := startMesh(cfg, mgr)
+		msh, err := startMesh(ctx, cfg, mgr)
 		if err != nil {
 			logger.Fatalf(ctx, err, "start mesh")
 		}
@@ -156,7 +156,7 @@ func main() {
 	logger.Info(ctx, "sandboxd stopped; VMs stay alive for the next reconcile")
 }
 
-func startMesh(cfg *config.Config, mgr *pool.Manager) (*mesh.Mesh, error) {
+func startMesh(ctx context.Context, cfg *config.Config, mgr *pool.Manager) (*mesh.Mesh, error) {
 	mc := cfg.Mesh
 	mlCfg := memberlist.DefaultLANConfig()
 	host, port, err := mc.ParsedBind()
@@ -173,7 +173,7 @@ func startMesh(cfg *config.Config, mgr *pool.Manager) (*mesh.Mesh, error) {
 	if err != nil {
 		return nil, err
 	}
-	msh, err := mesh.New(mlCfg, nodeID, cfg.AdvertiseAddr, key, cfg.DataDir)
+	msh, err := mesh.New(ctx, mlCfg, nodeID, cfg.AdvertiseAddr, key, cfg.DataDir)
 	if err != nil {
 		return nil, err
 	}

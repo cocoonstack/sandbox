@@ -212,7 +212,7 @@ func startNode(t *testing.T, host string, port int, id string) *node {
 	cfg.AdvertiseAddr = host
 	cfg.PushPullInterval = 200 * time.Millisecond
 	cfg.Logger = discardLogger()
-	m, err := New(cfg, id, id+":7777", nil, t.TempDir())
+	m, err := New(t.Context(), cfg, id, id+":7777", nil, t.TempDir())
 	if err != nil {
 		t.Fatalf("new mesh %s: %v", id, err)
 	}
