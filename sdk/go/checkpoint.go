@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 )
@@ -22,7 +23,9 @@ type Checkpoint struct {
 }
 
 // New claims a sandbox cloned from the checkpoint, on the checkpoint's
-// node. The snapshot pins the key axes; WithTimeout may set the TTL.
+// node. The snapshot pins the key axes; WithTimeout may set the TTL. A node
+// that no longer holds the checkpoint redirects, which New follows
+// transparently, mirroring Client.New.
 func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
 	var claim claimRequest
 	for _, opt := range opts {
@@ -35,9 +38,31 @@ func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error)
 	if err != nil {
 		return nil, err
 	}
-	cr, err := doJSON[claimResponse](ctx, ck.c, http.MethodPost, ck.addr, "/v1/checkpoints/"+ck.ID+"/claim", bytes.NewReader(body), ck.c.apiToken, "claim checkpoint")
+	cr, err := ck.claimAt(ctx, ck.addr, body)
 	if err != nil {
 		return nil, err
+	}
+	if len(cr.Redirect) > 0 {
+		body, err = encodeBody("checkpoint claim", checkpointClaimRequest{TTLSeconds: claim.TTLSeconds, NoRedirect: true})
+		if err != nil {
+			return nil, err
+		}
+		var sb *Sandbox
+		retryAny := func(error) bool { return true }
+		if tryErr := tryEach(cr.Redirect, func(addr string) error {
+			target, claimErr := ck.claimAt(ctx, addr, body)
+			if claimErr != nil {
+				return claimErr
+			}
+			if len(target.Redirect) > 0 {
+				return fmt.Errorf("%s redirected again despite no_redirect", addr)
+			}
+			sb = ck.c.handleFrom(addr, target)
+			return nil
+		}, retryAny); tryErr != nil {
+			return nil, fmt.Errorf("claim checkpoint: all redirect targets failed: %w", tryErr)
+		}
+		return sb, nil
 	}
 	return ck.c.handleFrom(ck.addr, cr), nil
 }
@@ -45,6 +70,10 @@ func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error)
 // Delete removes the checkpoint from its node.
 func (ck *Checkpoint) Delete(ctx context.Context) error {
 	return doNoContent(ctx, ck.c, http.MethodDelete, ck.addr, "/v1/checkpoints/"+ck.ID, nil, ck.c.apiToken, "delete checkpoint")
+}
+
+func (ck *Checkpoint) claimAt(ctx context.Context, addr string, body []byte) (claimResponse, error) {
+	return doJSON[claimResponse](ctx, ck.c, http.MethodPost, addr, "/v1/checkpoints/"+ck.ID+"/claim", bytes.NewReader(body), ck.c.apiToken, "claim checkpoint")
 }
 
 // Checkpoint captures the sandbox's full state — memory, disk, running
@@ -100,7 +129,8 @@ type checkpointResponse struct {
 }
 
 type checkpointClaimRequest struct {
-	TTLSeconds int `json:"ttl_seconds,omitempty"`
+	TTLSeconds int  `json:"ttl_seconds,omitempty"`
+	NoRedirect bool `json:"no_redirect,omitempty"`
 }
 
 type checkpointListResponse struct {

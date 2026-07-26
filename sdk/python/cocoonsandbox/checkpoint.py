@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .errors import APIError
+
 if TYPE_CHECKING:
     from .sandbox import Sandbox
 
@@ -22,10 +24,27 @@ class Checkpoint:
         self.created_at = rec.get("created_at", "")
 
     def new(self, ttl_seconds: int = 0) -> Sandbox:
-        """Claims a fresh sandbox branched from the checkpoint."""
-        body = {"ttl_seconds": ttl_seconds} if ttl_seconds else {}
-        reply = self._client._post_json(self._addr, f"/v1/checkpoints/{self.id}/claim", body, "claim checkpoint")
-        return self._client._handle_from(self._addr, reply)
+        """Claims a fresh sandbox branched from the checkpoint, following a
+        redirect to the node that actually holds it."""
+        # Local import: a top-level one would close the client -> sandbox ->
+        # checkpoint cycle.
+        from .client import _try_each
+
+        claim = {"ttl_seconds": ttl_seconds} if ttl_seconds else {}
+        path = f"/v1/checkpoints/{self.id}/claim"
+        reply = self._client._post_json(self._addr, path, claim, "claim checkpoint")
+        redirect = reply.get("redirect") or []
+        if not redirect:
+            return self._client._handle_from(self._addr, reply)
+        claim["no_redirect"] = True
+
+        def claim_at(peer: str) -> Sandbox:
+            r = self._client._post_json(peer, path, claim, "claim checkpoint")
+            if r.get("redirect"):
+                raise APIError("claim checkpoint", 0, f"{peer} redirected again despite no_redirect")
+            return self._client._handle_from(peer, r)
+
+        return _try_each(redirect, claim_at, retry=lambda _: True)
 
     def delete(self) -> None:
         """Removes the checkpoint from its node."""
