@@ -377,6 +377,9 @@ func (c *Config) validate() error {
 	if c.CheckpointPeerHeal && c.CheckpointTTLHours == 0 {
 		return fmt.Errorf("checkpoint_peer_heal requires checkpoint_ttl_hours > 0: the ttl is what ages out a healed replica a delete broadcast missed")
 	}
+	if c.CheckpointPeerHeal && c.APIToken == "" {
+		return fmt.Errorf("checkpoint_peer_heal requires api_token: without it resolveScope leaves the raw checkpoint blob GET reachable with no credential")
+	}
 	if err := c.validateTenants(); err != nil {
 		return err
 	}

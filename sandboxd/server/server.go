@@ -108,6 +108,7 @@ type Placer interface {
 // redirect decision rather than gossiped.
 type CheckpointProber interface {
 	Owners(ctx context.Context, id string) []string
+	Forget(id string)
 }
 
 // InfoResponse is the wire reply of GET /v1/info. Peers lists the other nodes'
@@ -135,6 +136,7 @@ type Server struct {
 	dialer    Dialer
 	placer    Placer
 	prober    CheckpointProber
+	probeKey  []byte
 	apiToken  string
 	tenants   []config.TenantSpec
 	advertise string
@@ -151,13 +153,17 @@ type Server struct {
 // calls). tenants adds per-tenant tokens next to the root apiToken.
 // advertise is this node's data-plane address, returned as a claim's owner
 // address. A nil placer disables mesh redirects and a nil prober disables
-// checkpoint-owner probing (both single-node).
-func New(apiToken string, tenants []config.TenantSpec, advertise string, mgr Manager, dialer Dialer, placer Placer, prober CheckpointProber, preview *PreviewServer) *Server {
+// checkpoint-owner probing (both single-node). probeKey (see
+// peer.DeriveProbeKey) authenticates the checkpoint HEAD probe; empty
+// leaves it unauthenticated (an unencrypted mesh has no shared secret to
+// build one from).
+func New(apiToken string, tenants []config.TenantSpec, advertise string, mgr Manager, dialer Dialer, placer Placer, prober CheckpointProber, probeKey []byte, preview *PreviewServer) *Server {
 	return &Server{
 		mgr:       mgr,
 		dialer:    dialer,
 		placer:    placer,
 		prober:    prober,
+		probeKey:  probeKey,
 		apiToken:  apiToken,
 		tenants:   tenants,
 		advertise: advertise,
@@ -407,10 +413,17 @@ func (s *Server) handleCheckpointBlob(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleCheckpointProbe answers a peer's HEAD probe. Unauthenticated: the id
-// is the capability, so this tells a caller only what it already knows.
+// handleCheckpointProbe answers a peer's HEAD probe. With a probeKey
+// configured (an encrypted mesh), the caller must present a fresh MAC over
+// the id (peer.ProbeHeader) or the probe is rejected before the metadata
+// read; without one, the id remains the only capability, same as before.
 func (s *Server) handleCheckpointProbe(w http.ResponseWriter, r *http.Request) {
-	if s.mgr.HasCheckpoint(r.Context(), r.PathValue("id")) {
+	id := r.PathValue("id")
+	if len(s.probeKey) > 0 && !peer.VerifyProbeMAC(s.probeKey, id, r.Header.Get(peer.ProbeHeader)) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	if s.mgr.HasCheckpoint(r.Context(), id) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -432,14 +445,20 @@ func (s *Server) handleListCheckpoints(w http.ResponseWriter, r *http.Request) {
 // handleDeleteCheckpoint removes a checkpoint; a tenant caller may delete
 // only its own records (anything else is 404). no_forward marks a delete
 // arriving from another node's own broadcast, so this one does not
-// re-broadcast and loop the fleet forever.
+// re-broadcast and loop the fleet forever. Either way, any cached probe
+// answer for id is forgotten unconditionally: a node that never held a
+// replica still learns from the broadcast that id's ownership changed.
 func (s *Server) handleDeleteCheckpoint(w http.ResponseWriter, r *http.Request) {
 	scope := pool.DeleteFleet
 	if r.URL.Query().Get("no_forward") != "" {
 		scope = pool.DeleteLocal
 	}
-	err := s.mgr.DeleteCheckpoint(r.Context(), r.PathValue("id"), tenantFrom(r.Context()), scope)
-	writeResult(w, r, "delete checkpoint", r.PathValue("id"), "delete checkpoint failed", err, func() {
+	id := r.PathValue("id")
+	if s.prober != nil {
+		s.prober.Forget(id)
+	}
+	err := s.mgr.DeleteCheckpoint(r.Context(), id, tenantFrom(r.Context()), scope)
+	writeResult(w, r, "delete checkpoint", id, "delete checkpoint failed", err, func() {
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

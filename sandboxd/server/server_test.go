@@ -749,7 +749,7 @@ func TestClaimRedirectsOnWarmMiss(t *testing.T) {
 		provisioned = true
 		return &types.Sandbox{ID: "sb_local"}, nil
 	}}
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"node-b:7777", "node-c:7777"}}, nil, nil)
+	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"node-b:7777", "node-c:7777"}}, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -794,7 +794,7 @@ func TestClaimRedirectsToTemplateOwner(t *testing.T) {
 					return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
 				},
 			}
-			srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil, nil)
+			srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil, nil, nil)
 			ts := httptest.NewServer(srv.Handler())
 			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -822,7 +822,7 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 	// Unknown locally + gossip names an owner → the claim redirect shape;
 	// unknown everywhere stays 404.
 	mgr := &fakeManager{} // DeleteTemplate → ErrUnknownTemplate
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil, nil)
+	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -854,7 +854,7 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 		t.Errorf("status %d, want 404 with no_redirect despite known owners", resp2.StatusCode)
 	}
 
-	srvNoOwner := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{}, nil, nil)
+	srvNoOwner := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{}, nil, nil, nil)
 	ts2 := httptest.NewServer(srvNoOwner.Handler())
 	t.Cleanup(func() { ts2.Close(); srvNoOwner.CloseRelays() })
 	req3, _ := http.NewRequest(http.MethodDelete, ts2.URL+"/v1/templates?template=tpl", nil)
@@ -873,7 +873,7 @@ func TestClaimProvisionsWhenNoCandidate(t *testing.T) {
 	mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
 		return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
 	}}
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: nil}, nil, nil)
+	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: nil}, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -901,7 +901,7 @@ func TestOwnerEndpoint(t *testing.T) {
 		}
 		return "", pool.ErrUnknownSandbox
 	}}
-	srv := New("", nil, "node-b:7777", mgr, &fakeDialer{}, nil, nil, nil)
+	srv := New("", nil, "node-b:7777", mgr, &fakeDialer{}, nil, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -943,7 +943,7 @@ func TestPreviewHandlerZeroDeadlineMintsLiveToken(t *testing.T) {
 		return time.Time{}, nil
 	}}
 	ps := NewPreviewServer("secret", "node:7777", &fakePreviewMgr{})
-	srv := New("", nil, "node:7777", mgr, &fakeDialer{}, nil, nil, ps)
+	srv := New("", nil, "node:7777", mgr, &fakeDialer{}, nil, nil, nil, ps)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -1201,8 +1201,9 @@ func TestCheckpointBlobStreamsRecord(t *testing.T) {
 }
 
 // TestCheckpointBlobHeadUnauthenticated proves the probe route bypasses
-// requireToken while GET still enforces it: the id is the unguessable
-// capability, so an unauthenticated HEAD only confirms existence.
+// requireToken while GET still enforces it. With no probe key configured
+// (no cluster_key -- an unencrypted mesh has no shared secret to build one
+// from), the id remains the only capability, same as before this batch.
 func TestCheckpointBlobHeadUnauthenticated(t *testing.T) {
 	const ckptID = "ck_00000000000000aa"
 	mgr := &fakeManager{hasCheckpoint: map[string]bool{ckptID: true}}
@@ -1233,6 +1234,45 @@ func TestCheckpointBlobHeadUnauthenticated(t *testing.T) {
 	}
 }
 
+// TestCheckpointProbeRequiresValidMAC proves that with a probe key
+// configured (an encrypted mesh), handleCheckpointProbe rejects a missing or
+// wrongly-signed HEAD before it ever reads HasCheckpoint, and accepts one
+// signed with the matching key.
+func TestCheckpointProbeRequiresValidMAC(t *testing.T) {
+	const ckptID = "ck_00000000000000aa"
+	key := peer.DeriveProbeKey([]byte("cluster-secret"))
+	wrongKey := peer.DeriveProbeKey([]byte("other-secret"))
+	mgr := &fakeManager{hasCheckpoint: map[string]bool{ckptID: true}}
+	ts := newProbeAuthTestServer(t, mgr, key)
+
+	head := func(sig string) int {
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodHead, ts.URL+"/v1/checkpoints/"+ckptID+"/blob", nil)
+		if sig != "" {
+			req.Header.Set(peer.ProbeHeader, sig)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("head: %v", err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := head(""); got != http.StatusUnauthorized {
+		t.Errorf("no signature: status = %d, want 401", got)
+	}
+	if got := head(peer.SignProbe(wrongKey, ckptID)); got != http.StatusUnauthorized {
+		t.Errorf("wrong-key signature: status = %d, want 401", got)
+	}
+	if got := head(peer.SignProbe(key, ckptID)); got != http.StatusOK {
+		t.Errorf("valid signature: status = %d, want 200", got)
+	}
+	// A valid signature for a DIFFERENT checkpoint must not authorize this one.
+	if got := head(peer.SignProbe(key, "ck_00000000000000ff")); got != http.StatusUnauthorized {
+		t.Errorf("signature for a different id: status = %d, want 401", got)
+	}
+}
+
 // TestCheckpointClaimProbesRealPeerAndRedirects is the end-to-end probe: a
 // live HTTPProber HEADs an actual peer server rather than a fake, proving the
 // probe wire protocol (unauthenticated HEAD, addr scheme defaulting) against
@@ -1240,13 +1280,13 @@ func TestCheckpointBlobHeadUnauthenticated(t *testing.T) {
 func TestCheckpointClaimProbesRealPeerAndRedirects(t *testing.T) {
 	const ckptID = "ck_00000000000000aa"
 	mgrB := &fakeManager{hasCheckpoint: map[string]bool{ckptID: true}}
-	srvB := New("sekret", nil, "node-b:7777", mgrB, &fakeDialer{}, nil, nil, nil)
+	srvB := New("sekret", nil, "node-b:7777", mgrB, &fakeDialer{}, nil, nil, nil, nil)
 	tsB := httptest.NewServer(srvB.Handler())
 	t.Cleanup(tsB.Close)
 
 	prober := &peer.HTTPProber{Peers: func() []string { return []string{tsB.URL} }}
 	mgrA := &fakeManager{} // ClaimCheckpoint defaults to ErrUnknownCheckpoint
-	srvA := New("sekret", nil, "node-a:7777", mgrA, &fakeDialer{}, nil, prober, nil)
+	srvA := New("sekret", nil, "node-a:7777", mgrA, &fakeDialer{}, nil, prober, nil, nil)
 	tsA := httptest.NewServer(srvA.Handler())
 	t.Cleanup(tsA.Close)
 
@@ -1275,7 +1315,20 @@ func newTenantTestServer(t *testing.T, apiToken string, tenants []config.TenantS
 	if dialer == nil {
 		dialer = &fakeDialer{}
 	}
-	srv := New(apiToken, tenants, "node:7777", mgr, dialer, nil, nil, nil)
+	srv := New(apiToken, tenants, "node:7777", mgr, dialer, nil, nil, nil, nil)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() {
+		ts.Close()
+		srv.CloseRelays()
+	})
+	return ts
+}
+
+// newProbeAuthTestServer builds a server with a probe key configured, for
+// tests of handleCheckpointProbe's MAC verification specifically.
+func newProbeAuthTestServer(t *testing.T, mgr Manager, probeKey []byte) *httptest.Server {
+	t.Helper()
+	srv := New("", nil, "node:7777", mgr, &fakeDialer{}, nil, nil, probeKey, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()
@@ -1527,10 +1580,15 @@ func (f *fakePlacer) PeerAddrs() []string            { return f.addrs }
 func (f *fakePlacer) ConfigMismatches() int          { return 0 }
 
 // fakeProber stubs CheckpointProber with a fixed answer, standing in for a
-// live HEAD fan-out.
-type fakeProber struct{ owners []string }
+// live HEAD fan-out. forgotten records every id Forget was called with, so
+// tests can assert a delete evicted the right cache entry.
+type fakeProber struct {
+	owners    []string
+	forgotten []string
+}
 
 func (f *fakeProber) Owners(context.Context, string) []string { return f.owners }
+func (f *fakeProber) Forget(id string)                        { f.forgotten = append(f.forgotten, id) }
 
 // FetchCheckpoint serves the peer-transfer read; the fake reports every record
 // missing unless a test supplies a directory.
@@ -1553,7 +1611,7 @@ func (f *fakeManager) HasCheckpoint(_ context.Context, ckptID string) bool {
 // only.
 func newPlacerTestServer(t *testing.T, apiToken string, mgr Manager, prober CheckpointProber) *httptest.Server {
 	t.Helper()
-	srv := New(apiToken, nil, "node:7777", mgr, &fakeDialer{}, nil, prober, nil)
+	srv := New(apiToken, nil, "node:7777", mgr, &fakeDialer{}, nil, prober, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts

@@ -34,9 +34,6 @@ import (
 const (
 	shutdownGrace  = 5 * time.Second
 	gossipInterval = time.Second
-	// probeBudget bounds a checkpoint-owner probe fan-out for WithPeerHeal's
-	// resolver; the HTTPProber itself times out each individual peer sooner.
-	probeBudget = 5 * time.Second
 	// Slowloris protection; ReadTimeout/WriteTimeout must stay zero — cold
 	// claims block up to the cold probe timeout and relays stream forever.
 	readHeaderTimeout = 5 * time.Second
@@ -99,6 +96,7 @@ func main() {
 
 	var placer server.Placer
 	var prober server.CheckpointProber
+	var probeKey []byte
 	if cfg.Mesh != nil {
 		msh, err := startMesh(ctx, cfg, mgr)
 		if err != nil {
@@ -107,11 +105,17 @@ func main() {
 		defer func() { _ = msh.Shutdown() }()
 		placer = msh
 		mgr.SetTemplateNotifier(func() { msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes()) })
-		prober = &peer.HTTPProber{Peers: msh.PeerAddrs}
+		clusterKey, err := cfg.Mesh.DecodedKey()
+		if err != nil {
+			logger.Fatalf(ctx, err, "decode mesh cluster key")
+		}
+		if len(clusterKey) > 0 {
+			probeKey = peer.DeriveProbeKey(clusterKey)
+		}
+		httpProber := &peer.HTTPProber{Peers: msh.PeerAddrs, ProbeKey: probeKey}
+		prober = httpProber
 		mgr.WithPeerHeal(cfg.CheckpointPeerHeal, func(id string) []string {
-			probeCtx, cancel := context.WithTimeout(ctx, probeBudget)
-			defer cancel()
-			return prober.Owners(probeCtx, id)
+			return httpProber.HealOwners(ctx, id)
 		}, cfg.APIToken)
 		broadcaster := &peer.Broadcaster{Peers: msh.PeerAddrs, Token: cfg.APIToken}
 		mgr.WithPeerDelete(broadcaster.Delete)
@@ -123,7 +127,7 @@ func main() {
 	if cfg.PreviewListen != "" {
 		preview = server.NewPreviewServer(cfg.PreviewSecret, cfg.PreviewAdvertise, mgr)
 	}
-	srv := server.New(cfg.APIToken, cfg.Tenants, cfg.AdvertiseAddr, mgr, eng, placer, prober, preview)
+	srv := server.New(cfg.APIToken, cfg.Tenants, cfg.AdvertiseAddr, mgr, eng, placer, prober, probeKey, preview)
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           srv.Handler(),
