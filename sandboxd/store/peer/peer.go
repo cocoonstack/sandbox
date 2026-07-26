@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 )
 
@@ -19,58 +21,46 @@ var _ store.Store = (*Store)(nil)
 // pulling the record from a peer and publishing it locally, so the transfer is
 // paid once: this node then owns the record and serves later reads locally.
 type Store struct {
-	local  store.Store
-	owners Owners
-	puller Puller
+	store.Store
+	owners  Owners
+	puller  Puller
+	flights singleflight.Group
 }
 
 // New wraps local with peer healing. A nil owners or puller leaves the wrapper
 // inert, so a node with no mesh degrades to the local backend rather than
 // failing.
 func New(local store.Store, owners Owners, puller Puller) *Store {
-	return &Store{local: local, owners: owners, puller: puller}
+	return &Store{Store: local, owners: owners, puller: puller}
 }
-
-func (s *Store) Stage(id string) (string, error) { return s.local.Stage(id) }
-
-func (s *Store) Publish(ctx context.Context, staging, id string) error {
-	return s.local.Publish(ctx, staging, id)
-}
-
-func (s *Store) Delete(ctx context.Context, id string) error { return s.local.Delete(ctx, id) }
-
-func (s *Store) SweepStaging() error { return s.local.SweepStaging() }
-
-// Metas lists local records only: answering for peers would return the same
-// record once per node to a control plane that already scatter-gathers.
-func (s *Store) Metas(ctx context.Context) ([][]byte, error) { return s.local.Metas(ctx) }
 
 // Fetch serves the record locally, healing from a peer on a miss.
 func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, func(), error) {
-	dir, meta, release, err := s.local.Fetch(ctx, id)
+	dir, meta, release, err := s.Store.Fetch(ctx, id)
 	if !errors.Is(err, store.ErrNotFound) {
 		return dir, meta, release, err
 	}
 	if err := s.heal(ctx, id); err != nil {
 		return "", nil, nil, err
 	}
-	return s.local.Fetch(ctx, id)
+	return s.Store.Fetch(ctx, id)
 }
 
 // ReadMeta reads the record's metadata, healing from a peer on a miss.
 func (s *Store) ReadMeta(ctx context.Context, id string) ([]byte, error) {
-	meta, err := s.local.ReadMeta(ctx, id)
+	meta, err := s.Store.ReadMeta(ctx, id)
 	if !errors.Is(err, store.ErrNotFound) {
 		return meta, err
 	}
 	if err := s.heal(ctx, id); err != nil {
 		return nil, err
 	}
-	return s.local.ReadMeta(ctx, id)
+	return s.Store.ReadMeta(ctx, id)
 }
 
 // heal pulls id from the first peer that serves it and publishes it locally,
 // returning store.ErrNotFound when no peer has it so a miss stays a miss.
+// Concurrent misses of the same id share one pull.
 func (s *Store) heal(ctx context.Context, id string) error {
 	if s.owners == nil || s.puller == nil {
 		return store.ErrNotFound
@@ -82,7 +72,15 @@ func (s *Store) heal(ctx context.Context, id string) error {
 	// A client hanging up must not abandon a started pull: the next branch
 	// would pay the whole transfer again.
 	ctx = context.WithoutCancel(ctx)
+	_, err, _ := s.flights.Do(id, func() (any, error) {
+		return nil, s.healFrom(ctx, id, addrs)
+	})
+	return err
+}
 
+// healFrom tries each owner in order until one serves id; callers hold the
+// id's singleflight slot.
+func (s *Store) healFrom(ctx context.Context, id string, addrs []string) error {
 	var errs []error
 	for _, addr := range addrs {
 		if err := s.pullFrom(ctx, addr, id); err != nil {
@@ -102,7 +100,7 @@ func (s *Store) heal(ctx context.Context, id string) error {
 // pullFrom stages a peer's copy and publishes it, so the record becomes local
 // through the same atomic path a locally-created one takes.
 func (s *Store) pullFrom(ctx context.Context, addr, id string) error {
-	staging, err := s.local.Stage(id)
+	staging, err := s.Stage(id)
 	if err != nil {
 		return fmt.Errorf("stage: %w", err)
 	}
@@ -111,7 +109,7 @@ func (s *Store) pullFrom(ctx context.Context, addr, id string) error {
 	if err := s.puller.Pull(ctx, addr, id, staging); err != nil {
 		return err
 	}
-	if err := s.local.Publish(ctx, staging, id); err != nil {
+	if err := s.Publish(ctx, staging, id); err != nil {
 		return fmt.Errorf("publish pulled record: %w", err)
 	}
 	return nil

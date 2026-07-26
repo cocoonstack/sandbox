@@ -226,8 +226,9 @@ type Config struct {
 	CheckpointStore *StoreConfig `json:"checkpoint_store,omitempty"`
 
 	// CheckpointPeerHeal lets a node pull a checkpoint it does not hold from a
-	// node that gossiped it instead of failing the branch. Requires a mesh; off
-	// by default because it trades a transfer for availability.
+	// node that gossiped it instead of failing the branch. Requires an encrypted
+	// mesh (cluster_key): the heal path presents the fleet token to gossip-learned
+	// addresses. Off by default because it trades a transfer for availability.
 	CheckpointPeerHeal bool `json:"checkpoint_peer_heal,omitempty"`
 
 	// CheckpointTTLHours ages out checkpoints (0 = keep forever); the
@@ -368,6 +369,9 @@ func (c *Config) validate() error {
 	}
 	if c.CheckpointTTLHours < 0 {
 		return fmt.Errorf("checkpoint_ttl_hours must not be negative")
+	}
+	if c.CheckpointPeerHeal && (c.Mesh == nil || c.Mesh.ClusterKey == "") {
+		return fmt.Errorf("checkpoint_peer_heal requires an encrypted mesh (set mesh.cluster_key)")
 	}
 	if err := c.validateTenants(); err != nil {
 		return err

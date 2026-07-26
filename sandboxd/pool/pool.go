@@ -222,6 +222,14 @@ type Manager struct {
 	audit        *journal
 	counters     counters
 	ckpts        store.Store
+	// ckptsShared marks an s3 (or other cluster-wide) checkpoint backend:
+	// every node already resolves every record, so peer heal and its gossip
+	// set are no-ops.
+	ckptsShared bool
+	// healer is the checkpoint-only read path ClaimCheckpointHeal pulls
+	// through; nil unless checkpoint_peer_heal wired it. m.ckpts itself is
+	// never wrapped, so the server's redirect branch stays reachable.
+	healer       store.Store
 	tpls         store.Store
 	ckptTTL      time.Duration
 	ckptSweeping atomic.Bool
@@ -231,6 +239,13 @@ type Manager struct {
 	// promotes/deletes update it, startup loads it.
 	tplMu  sync.Mutex
 	tplSet map[string]struct{}
+
+	// ckptSet mirrors tplSet for checkpoints: publish/delete/heal keep it
+	// current, startup seeds it from one Metas scan. Nil on a shared
+	// checkpoint store — gossiping it there would have every node advertise
+	// every record.
+	ckptMu  sync.Mutex
+	ckptSet map[string]struct{}
 
 	// recLocks serializes same-id store record mutations and holds off a
 	// re-publish swap while a clone reads the old generation (per id, RW).
@@ -308,6 +323,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	if m.ckpts, err = newStoreView(ctx, cfg, "checkpoint-staging", store.CheckpointIDRe); err != nil {
 		return nil, err
 	}
+	m.ckptsShared = cfg.CheckpointStore != nil && cfg.CheckpointStore.Kind == "s3"
 	if m.tpls, err = newStoreView(ctx, cfg, "template-staging", store.TemplateIDRe); err != nil {
 		return nil, err
 	}
@@ -320,6 +336,9 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 				m.tplSet[rec.ID] = struct{}{}
 			}
 		}
+	}
+	if !m.ckptsShared {
+		m.seedCkptSet(ctx)
 	}
 	usage, err := newJournal(filepath.Join(cfg.DataDir, "usage.jsonl"))
 	if err != nil {
@@ -558,15 +577,34 @@ func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe 
 	return dir.New(cmp.Or(cfg.CheckpointDir, filepath.Join(cfg.DataDir, "checkpoints")), idRe)
 }
 
-// WithPeerHeal wraps the manager's checkpoint store so a record this node does
-// not hold is pulled from a node that gossiped it. A no-op unless
-// checkpoint_peer_heal is set: a shared backend already resolves every record
-// from every node.
+// WithPeerHeal installs the checkpoint healer: a read path ClaimCheckpointHeal
+// pulls through only after a local claim missed and a redirect could not
+// answer, so a peer transfer is paid only when nothing cheaper resolves the
+// claim. A no-op unless checkpoint_peer_heal is set, or the checkpoint store
+// is already shared cluster-wide (every node resolves every record already).
 func (m *Manager) WithPeerHeal(enabled bool, owners peer.Owners, token string) {
-	if !enabled || owners == nil {
+	if !enabled || owners == nil || m.ckptsShared {
 		return
 	}
-	m.ckpts = peer.New(m.ckpts, owners, &peer.HTTPPuller{Token: token})
+	m.healer = peer.New(m.ckpts, owners, &peer.HTTPPuller{Token: token})
+}
+
+// seedCkptSet rebuilds the gossip set from one store scan at boot, so records
+// published by a prior life are advertised again without a re-publish.
+func (m *Manager) seedCkptSet(ctx context.Context) {
+	m.ckptSet = map[string]struct{}{}
+	metas, err := m.ckpts.Metas(ctx)
+	if err != nil {
+		// Existing records stay unadvertised until re-published; say so.
+		log.WithFunc("pool.seedCkptSet").Warnf(ctx, "seed checkpoint gossip set: %v", err)
+		return
+	}
+	for _, raw := range metas {
+		var ckpt types.Checkpoint
+		if json.Unmarshal(raw, &ckpt) == nil && ckpt.ID != "" && !ckpt.Archive {
+			m.ckptSet[ckpt.ID] = struct{}{}
+		}
+	}
 }
 
 func dirExists(path string) bool {

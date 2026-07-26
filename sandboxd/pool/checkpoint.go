@@ -94,6 +94,9 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 	if err := m.ckpts.Publish(ctx, staging, ckpt.ID); err != nil {
 		return types.Checkpoint{}, "", fmt.Errorf("commit checkpoint: %w", err)
 	}
+	if !archive {
+		m.noteCkpt(ckpt)
+	}
 	return ckpt, srcSnap, nil
 }
 
@@ -113,10 +116,35 @@ func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.D
 	if err != nil {
 		return nil, err
 	}
-	l := m.recLock(ckptID)
+	return m.claimLoaded(ctx, ckpt, ttl, tenant)
+}
+
+// ClaimCheckpointHeal claims a checkpoint this node does not hold locally,
+// pulling it from a peer first. The server calls it only after the local
+// claim missed and a redirect could not answer.
+func (m *Manager) ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error) {
+	if m.healer == nil {
+		return nil, ErrUnknownCheckpoint
+	}
+	if err := m.overQuota(1, tenant); err != nil {
+		return nil, err
+	}
+	ckpt, err := m.loadCheckpointFrom(ctx, m.healer, ckptID)
+	if err != nil {
+		return nil, err
+	}
+	m.noteCkpt(ckpt) // record is now local: gossip it
+	return m.claimLoaded(ctx, ckpt, ttl, tenant)
+}
+
+// claimLoaded is ClaimCheckpoint's and ClaimCheckpointHeal's shared body once
+// ckpt's meta is resolved: it re-fetches under the record lock (immune to a
+// delete racing the pre-check), provisions the branch, and finalizes the claim.
+func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl time.Duration, tenant string) (*types.Sandbox, error) {
+	l := m.recLock(ckpt.ID)
 	l.RLock()
 	defer l.RUnlock()
-	dir, _, release, err := m.ckpts.Fetch(ctx, ckptID)
+	dir, _, release, err := m.ckpts.Fetch(ctx, ckpt.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, ErrUnknownCheckpoint // deleted between the pre-check and the lock
 	}
@@ -249,14 +277,22 @@ func (m *Manager) deleteCkLocked(ctx context.Context, ckID string) error {
 		return err
 	}
 	m.dropRecLock(ckID)
+	m.dropCkpt(ckID)
 	return nil
 }
 
+// loadCheckpoint reads and parses a checkpoint's meta from the local store.
 func (m *Manager) loadCheckpoint(ctx context.Context, ckptID string) (types.Checkpoint, error) {
+	return m.loadCheckpointFrom(ctx, m.ckpts, ckptID)
+}
+
+// loadCheckpointFrom reads and parses a checkpoint's meta from st — the local
+// store for an ordinary claim, or the healer for ClaimCheckpointHeal.
+func (m *Manager) loadCheckpointFrom(ctx context.Context, st store.Store, ckptID string) (types.Checkpoint, error) {
 	if !store.CheckpointIDRe.MatchString(ckptID) {
 		return types.Checkpoint{}, ErrUnknownCheckpoint
 	}
-	raw, err := m.ckpts.ReadMeta(ctx, ckptID)
+	raw, err := st.ReadMeta(ctx, ckptID)
 	if errors.Is(err, store.ErrNotFound) {
 		return types.Checkpoint{}, ErrUnknownCheckpoint
 	}
@@ -274,21 +310,44 @@ func parseCheckpoint(raw []byte) (types.Checkpoint, error) {
 	return ckpt, nil
 }
 
-// CheckpointIDs lists this node's checkpoint ids for the mesh to gossip.
-// Checkpoints already drops archive wake images, which are never a branch
-// target. A store read error yields nil: gossip is best-effort and must not
-// take the tick down.
-func (m *Manager) CheckpointIDs(ctx context.Context) []string {
-	ckpts, err := m.Checkpoints(ctx, "")
-	if err != nil {
+// CheckpointIDs lists this node's checkpoint ids for the mesh to gossip, from
+// the in-memory set — mirrors TemplateHashes so the 1s gossip tick never
+// touches the store backend. Archive wake images never enter the set. Nil on
+// a shared checkpoint store (every node already resolves every record).
+func (m *Manager) CheckpointIDs() []string {
+	m.ckptMu.Lock()
+	defer m.ckptMu.Unlock()
+	if m.ckptSet == nil {
 		return nil
 	}
-	ids := make([]string, 0, len(ckpts))
-	for _, c := range ckpts {
-		ids = append(ids, c.ID)
+	ids := make([]string, 0, len(m.ckptSet))
+	for id := range m.ckptSet {
+		ids = append(ids, id)
 	}
 	slices.Sort(ids)
 	return ids
+}
+
+// noteCkpt adds a fresh non-archive record to the gossip set: called after
+// publishCheckpoint's Publish commits, and after ClaimCheckpointHeal pulls a
+// peer's record into this node's local store.
+func (m *Manager) noteCkpt(ckpt types.Checkpoint) {
+	if m.ckptSet == nil || ckpt.Archive {
+		return
+	}
+	m.ckptMu.Lock()
+	m.ckptSet[ckpt.ID] = struct{}{}
+	m.ckptMu.Unlock()
+}
+
+// dropCkpt removes id from the gossip set once its store record is deleted.
+func (m *Manager) dropCkpt(id string) {
+	if m.ckptSet == nil {
+		return
+	}
+	m.ckptMu.Lock()
+	delete(m.ckptSet, id)
+	m.ckptMu.Unlock()
 }
 
 // FetchCheckpoint materializes a checkpoint's export for a peer transfer,

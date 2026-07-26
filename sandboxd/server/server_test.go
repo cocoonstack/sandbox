@@ -978,16 +978,107 @@ func TestCheckpointClaimNoRedirectResolvesLocally(t *testing.T) {
 	}
 }
 
-// TestCheckpointClaimNoOwnersIs404: nothing gossiped the record, so a miss is
-// an honest miss rather than a redirect to nowhere.
+// TestCheckpointClaimNoOwnersIs404: nothing gossiped the record, so a miss
+// falls through to heal, and a heal miss (item 4) is an honest 404 rather
+// than a redirect to nowhere.
 func TestCheckpointClaimNoOwnersIs404(t *testing.T) {
-	ts := newPlacerTestServer(t, "sekret", &fakeManager{}, &fakePlacer{})
+	mgr := &fakeManager{} // ClaimCheckpointHeal defaults to ErrUnknownCheckpoint
+	ts := newPlacerTestServer(t, "sekret", mgr, &fakePlacer{})
 
 	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+	if mgr.healCalls != 1 {
+		t.Errorf("heal called %d times, want 1: a miss with no owner must still try heal", mgr.healCalls)
+	}
+}
+
+// TestCheckpointClaimRedirectBeatsHeal is the tier-order regression test: a
+// gossiped owner must redirect (zero bytes moved) and never fall through to
+// the heal pull, even though the local ClaimCheckpoint missed.
+func TestCheckpointClaimRedirectBeatsHeal(t *testing.T) {
+	mgr := &fakeManager{} // ClaimCheckpoint defaults to ErrUnknownCheckpoint
+	placer := &fakePlacer{ckptOwners: []string{"owner-a:7777"}}
+	ts := newPlacerTestServer(t, "sekret", mgr, placer)
+
+	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 carrying a redirect", resp.StatusCode)
+	}
+	var got types.ClaimResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Redirect) != 1 || got.Redirect[0] != "owner-a:7777" {
+		t.Errorf("redirect = %v, want [owner-a:7777]", got.Redirect)
+	}
+	if mgr.healCalls != 0 {
+		t.Errorf("heal called %d times, want 0: a known owner must redirect, not heal", mgr.healCalls)
+	}
+}
+
+// TestCheckpointClaimFallsBackToHealWhenNoOwner: no gossiped owner to redirect
+// to, so the server pulls the record itself via heal.
+func TestCheckpointClaimFallsBackToHealWhenNoOwner(t *testing.T) {
+	mgr := &fakeManager{
+		healCheckpoint: func(ckptID string) (*types.Sandbox, error) {
+			return &types.Sandbox{ID: "sb_healed", Token: "htok", FromCheckpoint: ckptID}, nil
+		},
+	}
+	ts := newPlacerTestServer(t, "sekret", mgr, &fakePlacer{})
+
+	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var got types.ClaimResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.ID != "sb_healed" {
+		t.Errorf("id = %q, want the healed claim", got.ID)
+	}
+	if mgr.healCalls != 1 {
+		t.Errorf("heal called %d times, want 1", mgr.healCalls)
+	}
+}
+
+// TestCheckpointClaimNoRedirectGoesStraightToHeal: a no_redirect retry must
+// not bounce again, but it must still try heal rather than answer 404 outright.
+func TestCheckpointClaimNoRedirectGoesStraightToHeal(t *testing.T) {
+	mgr := &fakeManager{
+		healCheckpoint: func(ckptID string) (*types.Sandbox, error) {
+			return &types.Sandbox{ID: "sb_healed", Token: "htok", FromCheckpoint: ckptID}, nil
+		},
+	}
+	placer := &fakePlacer{ckptOwners: []string{"owner-a:7777"}}
+	ts := newPlacerTestServer(t, "sekret", mgr, placer)
+
+	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{"no_redirect":true}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var got types.ClaimResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Redirect) != 0 {
+		t.Errorf("redirect = %v, want none: no_redirect must not bounce", got.Redirect)
+	}
+	if got.ID != "sb_healed" {
+		t.Errorf("id = %q, want the healed claim", got.ID)
+	}
+	if mgr.healCalls != 1 {
+		t.Errorf("heal called %d times, want 1", mgr.healCalls)
 	}
 }
 
@@ -1093,6 +1184,8 @@ type fakeManager struct {
 	audited          func(id string, line []byte)
 	checkpoint       func(id, token, name string) (types.Checkpoint, error)
 	claimCheckpoint  func(ckptID string) (*types.Sandbox, error)
+	healCheckpoint   func(ckptID string) (*types.Sandbox, error)
+	healCalls        int
 	checkpoints      []types.Checkpoint
 	deleteCheckpoint func(ckptID string) error
 	setPools         func(pools []config.PoolSpec) error
@@ -1258,6 +1351,15 @@ func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, _ time.D
 		return nil, pool.ErrUnknownCheckpoint
 	}
 	return f.claimCheckpoint(ckptID)
+}
+
+func (f *fakeManager) ClaimCheckpointHeal(_ context.Context, ckptID string, _ time.Duration, tenant string) (*types.Sandbox, error) {
+	f.gotTenant = tenant
+	f.healCalls++
+	if f.healCheckpoint == nil {
+		return nil, pool.ErrUnknownCheckpoint
+	}
+	return f.healCheckpoint(ckptID)
 }
 
 func (f *fakeManager) Checkpoints(_ context.Context, tenant string) ([]types.Checkpoint, error) {

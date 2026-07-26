@@ -80,6 +80,7 @@ type Manager interface {
 	Audit(ctx context.Context, id string, line []byte)
 	AuditEnabled() bool
 	ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error)
+	ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error)
 	Checkpoints(ctx context.Context, tenant string) ([]types.Checkpoint, error)
 	FetchCheckpoint(ctx context.Context, ckptID string) (dir string, meta []byte, release func(), err error)
 	DeleteCheckpoint(ctx context.Context, ckptID, tenant string) error
@@ -394,6 +395,9 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleClaimCheckpoint claims a fresh sandbox branched from a checkpoint.
+// Tier order: local claim first; then a redirect (zero bytes moved) when a
+// gossiped owner exists and this is not already the redirect retry; heal (one
+// peer transfer) only when neither could answer.
 func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeBody[types.CheckpointClaimRequest](w, r)
 	if !ok {
@@ -401,12 +405,11 @@ func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	ckptID := r.PathValue("id")
 	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, req.TTL(), tenantFrom(r.Context()))
-	// Checkpoints are node-local: redirect to a peer that gossiped the record
-	// so the clone runs on the disk that already holds it. A no_redirect retry
-	// must resolve locally or two nodes would bounce the request.
-	if errors.Is(err, pool.ErrUnknownCheckpoint) && s.placer != nil && !req.NoRedirect &&
-		writeRedirect(w, s.placer.CheckpointOwners(ckptID)) {
-		return
+	if errors.Is(err, pool.ErrUnknownCheckpoint) {
+		if !req.NoRedirect && s.placer != nil && writeRedirect(w, s.placer.CheckpointOwners(ckptID)) {
+			return
+		}
+		sb, err = s.mgr.ClaimCheckpointHeal(r.Context(), ckptID, req.TTL(), tenantFrom(r.Context()))
 	}
 	writeResult(w, r, "claim checkpoint", ckptID, "provisioning failed", err, func() {
 		writeJSON(w, http.StatusOK, s.claimResponse(sb))

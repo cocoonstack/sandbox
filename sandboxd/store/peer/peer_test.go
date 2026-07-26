@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
@@ -122,6 +123,30 @@ func TestHealErrorIsReported(t *testing.T) {
 	}
 }
 
+// TestHealDedupsConcurrentMisses: N concurrent Fetch misses of the same id
+// must trigger exactly one pull — a stampede of branches racing to heal the
+// same checkpoint must not each pay for the whole transfer.
+func TestHealDedupsConcurrentMisses(t *testing.T) {
+	puller := &fakePuller{records: map[string]map[string]string{"peer-a:7777": record()}}
+	s := New(localStore(t), func(string) []string { return []string{"peer-a:7777"} }, puller)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			_, _, release, err := s.Fetch(t.Context(), testID)
+			if err != nil {
+				t.Errorf("Fetch: %v", err)
+				return
+			}
+			release()
+		})
+	}
+	wg.Wait()
+	if len(puller.asked) != 1 {
+		t.Errorf("puller called %d times (%v); concurrent misses must dedup to one pull", len(puller.asked), puller.asked)
+	}
+}
+
 // TestMetasStaysLocal: a cluster-wide listing is the control plane's job (it
 // already scatter-gathers every node). If each node answered for its peers the
 // same record would come back N times.
@@ -149,13 +174,16 @@ func localStore(t *testing.T) *dir.Store {
 
 // fakePuller serves records from an in-memory table, recording who was asked.
 type fakePuller struct {
+	mu       sync.Mutex
 	records  map[string]map[string]string // addr → file → content
 	asked    []string
 	failAddr string
 }
 
 func (p *fakePuller) Pull(_ context.Context, addr, _, dst string) error {
+	p.mu.Lock()
 	p.asked = append(p.asked, addr)
+	p.mu.Unlock()
 	if addr == p.failAddr {
 		return errors.New("peer exploded")
 	}
