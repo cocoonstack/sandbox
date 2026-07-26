@@ -115,6 +115,9 @@ func TestUntarSkipsNonDataEntries(t *testing.T) {
 	if _, err := tw.Write([]byte("{}")); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
+	if err := tw.WriteHeader(&tar.Header{Name: recordTrailer, Mode: 0o600, Typeflag: tar.TypeReg}); err != nil {
+		t.Fatalf("WriteHeader trailer: %v", err)
+	}
 	if err := tw.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -185,6 +188,7 @@ func TestHTTPPullerPresentsToken(t *testing.T) {
 		tw := tar.NewWriter(&buf)
 		_ = tw.WriteHeader(&tar.Header{Name: "meta.json", Mode: 0o600, Size: 2, Typeflag: tar.TypeReg})
 		_, _ = tw.Write([]byte("{}"))
+		_ = tw.WriteHeader(&tar.Header{Name: recordTrailer, Mode: 0o600, Typeflag: tar.TypeReg})
 		_ = tw.Close()
 		_, _ = w.Write(buf.Bytes())
 	}))
@@ -262,10 +266,57 @@ func TestTarRecordRoundTripsAWholeRecord(t *testing.T) {
 
 // tarDir streams src's contents with no record layout, exercising tarInto and
 // Untar on their own.
+
+// TestUntarRejectsRecordWithoutCompletionMarker: a transfer cut short by a
+// source-side walk/read error still yields a valid short tar (Close writes the
+// footer regardless), so the receiver must reject a record that arrives without
+// the trailer rather than publish an incomplete one.
+func TestUntarRejectsRecordWithoutCompletionMarker(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	// meta plus one complete export file, then the walk "fails" — no trailer.
+	_ = tw.WriteHeader(&tar.Header{Name: "meta.json", Mode: 0o600, Size: 4, Typeflag: tar.TypeReg})
+	_, _ = tw.Write([]byte(`{"a"`))
+	_ = tw.WriteHeader(&tar.Header{Name: "export/mem", Mode: 0o600, Size: 5, Typeflag: tar.TypeReg})
+	_, _ = tw.Write([]byte("bytes"))
+	_ = tw.Close() // valid footer, no trailer entry
+
+	if err := Untar(&buf, t.TempDir()); err == nil {
+		t.Error("Untar accepted a record with no completion marker (an incomplete transfer)")
+	}
+}
+
+// TestTarRecordUntarRoundTripComplete: the real send/receive pair carries the
+// trailer, so a whole record is accepted and the marker itself is not written
+// to disk (validateHealedCheckpoint would reject an unexpected entry).
+func TestTarRecordUntarRoundTripComplete(t *testing.T) {
+	exportDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(exportDir, "mem"), []byte("state"), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := TarRecord(exportDir, []byte(`{"id":"ck_1"}`), &buf); err != nil {
+		t.Fatalf("TarRecord: %v", err)
+	}
+	dst := t.TempDir()
+	if err := Untar(&buf, dst); err != nil {
+		t.Fatalf("Untar: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, recordTrailer)); !os.IsNotExist(err) {
+		t.Errorf("completion marker was written to disk (%v); it must be consumed, not stored", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "export", "mem")); err != nil {
+		t.Errorf("export content missing after round trip: %v", err)
+	}
+}
+
 func tarDir(src string, w io.Writer) error {
 	tw := tar.NewWriter(w)
 	defer func() { _ = tw.Close() }()
 	if err := tarInto(src, "", tw); err != nil {
+		return err
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: recordTrailer, Mode: 0o600, Typeflag: tar.TypeReg}); err != nil {
 		return err
 	}
 	return tw.Close()

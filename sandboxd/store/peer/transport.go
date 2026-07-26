@@ -26,6 +26,12 @@ const (
 
 	metaFile     = "meta.json"
 	exportPrefix = "export/"
+
+	// recordTrailer is written last, only after the whole export streamed, so a
+	// receiver that reaches EOF without it knows the transfer stopped early — a
+	// source-side walk or read error leaves a valid but short tar (Close still
+	// writes the footer), and that must not be published as a complete record.
+	recordTrailer = ".record-complete"
 )
 
 // ErrNotFound reports that a peer does not hold the requested record. Declared
@@ -109,6 +115,13 @@ func TarRecord(exportDir string, meta []byte, w io.Writer) error {
 	if err := tarInto(exportDir, exportPrefix, tw); err != nil {
 		return err
 	}
+	// The completion marker rides last, after the export streamed whole, so its
+	// absence tells the receiver the transfer was cut short.
+	if err := tw.WriteHeader(&tar.Header{
+		Name: recordTrailer, Mode: 0o600, Size: 0, Typeflag: tar.TypeReg,
+	}); err != nil {
+		return fmt.Errorf("tar record trailer: %w", err)
+	}
 	return tw.Close()
 }
 
@@ -167,13 +180,21 @@ func tarInto(src, prefix string, tw *tar.Writer) error {
 func Untar(r io.Reader, dst string) error {
 	tr := tar.NewReader(r)
 	var written int64
+	var complete bool
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
+			if !complete {
+				return fmt.Errorf("untar: record incomplete, no completion marker (transfer cut short)")
+			}
 			return nil
 		}
 		if err != nil {
 			return fmt.Errorf("untar: %w", err)
+		}
+		if hdr.Name == recordTrailer {
+			complete = true // a protocol marker, never written to disk
+			continue
 		}
 		target, err := safeJoin(dst, hdr.Name)
 		if err != nil {

@@ -405,8 +405,9 @@ func (s *Server) handleCheckpointBlob(w http.ResponseWriter, r *http.Request) {
 	defer release()
 
 	w.Header().Set("Content-Type", "application/x-tar")
-	// Status committed before the walk, so a mid-stream failure truncates the
-	// tar and the reader fails the pull on the short archive.
+	// Status is committed before the walk, so a mid-stream failure cannot change
+	// it; the tar's completion marker is what tells the reader the record
+	// arrived whole, and a short transfer is rejected for lacking it.
 	w.WriteHeader(http.StatusOK)
 	if err := peer.TarRecord(dir, meta, w); err != nil {
 		log.WithFunc("server.handleCheckpointBlob").Error(r.Context(), err, "stream checkpoint")
