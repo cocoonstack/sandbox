@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -35,8 +36,8 @@ func TestTarUntarRoundTrip(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Tar(src, &buf); err != nil {
-		t.Fatalf("Tar: %v", err)
+	if err := tarDir(src, &buf); err != nil {
+		t.Fatalf("tarDir: %v", err)
 	}
 	dst := t.TempDir()
 	if err := Untar(&buf, dst); err != nil {
@@ -143,8 +144,8 @@ func TestTarSkipsSymlinksAtSource(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Tar(src, &buf); err != nil {
-		t.Fatalf("Tar: %v", err)
+	if err := tarDir(src, &buf); err != nil {
+		t.Fatalf("tarDir: %v", err)
 	}
 	tr := tar.NewReader(&buf)
 	for {
@@ -257,4 +258,15 @@ func TestTarRecordRoundTripsAWholeRecord(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dst, "memory-ranges")); err == nil {
 		t.Error("export contents landed at the record root; they must be under export/")
 	}
+}
+
+// tarDir streams src's contents with no record layout, exercising tarInto and
+// Untar on their own.
+func tarDir(src string, w io.Writer) error {
+	tw := tar.NewWriter(w)
+	defer func() { _ = tw.Close() }()
+	if err := tarInto(src, "", tw); err != nil {
+		return err
+	}
+	return tw.Close()
 }

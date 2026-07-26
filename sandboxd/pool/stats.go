@@ -8,24 +8,19 @@ import (
 	"time"
 )
 
-// SandboxStats is one sandbox's resource usage. The declared fields (CPUCount,
-// MemTotalBytes) come from the size tier, which is what the VM was actually
-// booted with, so they are authoritative. The measured field (MemUsedBytes) is
-// the host VMM process's resident set — for a microVM that is the guest's
-// backing memory plus a small VMM overhead, and it is the only usage signal
-// available without a guest agent that reports its own /proc.
-//
-// MemUsedBytes is zero when the VMM process cannot be found (a hibernated
-// sandbox has no process at all); callers must treat zero as "not measured"
-// rather than "idle".
+// SandboxStats is one sandbox's resource usage. CPUCount and MemTotalBytes come
+// from the size tier the VM was booted with. MemUsedBytes is the host VMM
+// process's resident set, the only usage signal available without a guest agent;
+// MemUsedMeasured is false when no VMM process was found (a hibernated sandbox
+// has none), so a zero is never read as idle.
 type SandboxStats struct {
 	ID              string    `json:"id"`
 	CPUCount        int       `json:"cpu_count"`
 	MemTotalBytes   int64     `json:"mem_total_bytes"`
 	MemUsedBytes    int64     `json:"mem_used_bytes"`
+	MemUsedMeasured bool      `json:"mem_used_measured"`
 	Hibernated      bool      `json:"hibernated"`
 	MeasuredAt      time.Time `json:"measured_at"`
-	MemUsedMeasured bool      `json:"mem_used_measured"`
 }
 
 // Stats reports one live claim's resource usage.
@@ -38,7 +33,7 @@ func (m *Manager) Stats(id string) (SandboxStats, bool) {
 	st := SandboxStats{
 		ID:            sb.ID,
 		CPUCount:      spec.CPU,
-		MemTotalBytes: parseMemSize(spec.Memory),
+		MemTotalBytes: spec.MemoryBytes,
 		Hibernated:    sb.HibernateSnap != "",
 		MeasuredAt:    time.Now().UTC(),
 	}
@@ -50,31 +45,9 @@ func (m *Manager) Stats(id string) (SandboxStats, bool) {
 	return st, true
 }
 
-// parseMemSize converts a size tier's memory string ("512M", "8G") to bytes.
-func parseMemSize(s string) int64 {
-	if s == "" {
-		return 0
-	}
-	mult := int64(1)
-	switch s[len(s)-1] {
-	case 'K', 'k':
-		mult, s = 1<<10, s[:len(s)-1]
-	case 'M', 'm':
-		mult, s = 1<<20, s[:len(s)-1]
-	case 'G', 'g':
-		mult, s = 1<<30, s[:len(s)-1]
-	}
-	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
-	if err != nil {
-		return 0
-	}
-	return n * mult
-}
-
-// vmmResidentBytes finds the hypervisor process serving vmName and reports its
-// resident set. The VM name appears in the VMM's argv (its run directory), so
-// the scan matches on that; it is O(processes) and therefore meant for a
-// single-sandbox read, never a whole-fleet sweep.
+// vmmResidentBytes reports the resident set of the hypervisor process serving
+// vmName, matched on the run directory in the VMM's argv. The scan is
+// O(processes), so this is a single-sandbox read, never a fleet sweep.
 func vmmResidentBytes(vmName string) (int64, bool) {
 	if vmName == "" {
 		return 0, false
@@ -84,14 +57,11 @@ func vmmResidentBytes(vmName string) (int64, bool) {
 		return 0, false
 	}
 	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
 		pid := e.Name()
-		if pid[0] < '0' || pid[0] > '9' {
+		if !e.IsDir() || pid[0] < '0' || pid[0] > '9' {
 			continue
 		}
-		cmdline, err := os.ReadFile(filepath.Join("/proc", pid, "cmdline"))
+		cmdline, err := os.ReadFile(filepath.Join("/proc", pid, "cmdline")) //nolint:gosec // pid enumerated from /proc
 		if err != nil || !strings.Contains(string(cmdline), vmName) {
 			continue
 		}
@@ -102,10 +72,9 @@ func vmmResidentBytes(vmName string) (int64, bool) {
 	return 0, false
 }
 
-// residentBytes reads a process's resident set from /proc/<pid>/statm, whose
-// second field is the resident page count.
+// residentBytes reads a process's resident page count from statm's second field.
 func residentBytes(pid string) (int64, bool) {
-	b, err := os.ReadFile(filepath.Join("/proc", pid, "statm"))
+	b, err := os.ReadFile(filepath.Join("/proc", pid, "statm")) //nolint:gosec // pid enumerated from /proc
 	if err != nil {
 		return 0, false
 	}

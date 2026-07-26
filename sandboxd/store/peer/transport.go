@@ -1,15 +1,6 @@
-// Package peer adds cross-node reach to a node-local record store: when a
-// record is missing locally, it is pulled from a node that gossiped it, cached
-// locally, and served from there.
-//
-// The transport is sandboxd's own — deliberately NOT cocoon's image/snapshot
-// transfer. cocoon's mover is bound to its VM store layout and its own
-// addressing, and reusing it would tie a checkpoint's mobility to the engine's
-// release cycle. This one moves exactly one thing (a store record: an export
-// directory plus its meta.json) between two sandboxd nodes that already
-// authenticate to each other with the fleet api_token, over the control-plane
-// port they already share. It is a tar stream, so a pull costs one round trip
-// and never materializes the record twice.
+// Package peer adds cross-node reach to a node-local record store: a record
+// missing locally is pulled from a node that gossiped it, published locally,
+// and served from there.
 package peer
 
 import (
@@ -26,43 +17,32 @@ import (
 	"time"
 )
 
-// pullTimeout bounds a single record transfer. A checkpoint carries a guest's
-// memory image, so this is generous — but it is never unbounded: a wedged peer
-// must fail the pull and let the next owner be tried, not hang the branch.
-const pullTimeout = 30 * time.Minute
-
-// maxRecordBytes caps a pulled record. It is a decompression-bomb guard, not a
-// business limit: a peer is authenticated, but a compromised or buggy one must
-// not be able to fill this node's disk.
-const maxRecordBytes = 1 << 40 // 1 TiB
-
-// The record layout a pull must reproduce, mirroring the store's own names.
 const (
+	// A checkpoint carries a guest memory image, so this is generous — but a
+	// wedged peer must fail the pull so the next owner is tried, not hang it.
+	pullTimeout = 30 * time.Minute
+
+	maxRecordBytes = 1 << 40 // 1 TiB
+
 	metaFile     = "meta.json"
 	exportPrefix = "export/"
 )
 
+// ErrNotFound reports that a peer does not hold the requested record. Declared
+// here so the transport does not import the store package it is a backend for.
+var ErrNotFound = errors.New("peer does not hold record")
+
 // Puller fetches a record from a peer into a local directory.
 type Puller interface {
-	// Pull writes the record's contents (export/ and meta.json) into dst,
-	// which the caller has created. It returns ErrNotFound when the peer does
-	// not hold the record, so the caller can try the next owner.
 	Pull(ctx context.Context, addr, id, dst string) error
 }
 
-// ErrNotFound reports that a peer does not hold the requested record. It
-// mirrors store.ErrNotFound but is declared here so the transport does not
-// import the store package it is a backend for.
-var ErrNotFound = errors.New("peer does not hold record")
-
 // HTTPPuller pulls records over sandboxd's control-plane HTTP port.
 type HTTPPuller struct {
-	// Client is the HTTP client. A nil Client uses a default with no overall
-	// timeout — the per-pull deadline comes from the context instead, so a
-	// large record is not cut off mid-stream.
+	// A nil Client uses a default with no overall timeout: the per-pull
+	// deadline comes from the context, so a large record is not cut off.
 	Client *http.Client
-	// Token is the fleet api_token presented to the serving peer.
-	Token string
+	Token  string
 }
 
 // Pull implements Puller.
@@ -87,7 +67,7 @@ func (p *HTTPPuller) Pull(ctx context.Context, addr, id, dst string) error {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:gosec // addr comes from the mesh's own member view
 	if err != nil {
 		return fmt.Errorf("pull %s from %s: %w", id, addr, err)
 	}
@@ -106,11 +86,9 @@ func (p *HTTPPuller) Pull(ctx context.Context, addr, id, dst string) error {
 	return Untar(resp.Body, dst)
 }
 
-// TarRecord streams a whole store record: the export directory under
-// "export/" plus its "meta.json". A record is only branchable with both — the
-// meta carries the pool key and lineage the claim path reads before it ever
-// touches the export, so shipping the export alone produces a directory that
-// publishes cleanly and then fails every read as "unknown checkpoint".
+// TarRecord streams a whole store record: export/ plus meta.json. Both are
+// required — the claim path reads the meta's pool key and lineage before it
+// ever touches the export, so an export-only copy fails every read.
 func TarRecord(exportDir string, meta []byte, w io.Writer) error {
 	tw := tar.NewWriter(w)
 	defer func() { _ = tw.Close() }()
@@ -134,19 +112,9 @@ func TarRecord(exportDir string, meta []byte, w io.Writer) error {
 	return tw.Close()
 }
 
-// Tar streams src's contents as a tar archive. Only regular files and
-// directories are emitted: a record is data, and a symlink or device node in
-// the stream would be a way to write outside the reader's destination.
-func Tar(src string, w io.Writer) error {
-	tw := tar.NewWriter(w)
-	defer func() { _ = tw.Close() }()
-	if err := tarInto(src, "", tw); err != nil {
-		return err
-	}
-	return tw.Close()
-}
-
-// tarInto walks src into tw, prefixing every entry name with prefix.
+// tarInto walks src into tw under prefix, emitting only regular files and
+// directories: a symlink or device node would let the reader be steered outside
+// its destination.
 func tarInto(src, prefix string, tw *tar.Writer) error {
 	err := filepath.Walk(src, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
@@ -176,7 +144,7 @@ func tarInto(src, prefix string, tw *tar.Writer) error {
 			}); err != nil {
 				return err
 			}
-			f, err := os.Open(path)
+			f, err := os.Open(path) //nolint:gosec // path comes from Walk over src
 			if err != nil {
 				return err
 			}
@@ -184,7 +152,6 @@ func tarInto(src, prefix string, tw *tar.Writer) error {
 			_, err = io.Copy(tw, f)
 			return err
 		default:
-			// Skip anything that is not data.
 			return nil
 		}
 	})
@@ -194,9 +161,9 @@ func tarInto(src, prefix string, tw *tar.Writer) error {
 	return nil
 }
 
-// Untar writes a tar stream into dst. Entry names are validated against path
-// traversal — a peer is authenticated, but an authenticated peer is still not
-// allowed to write outside the destination this node chose.
+// Untar writes a tar stream into dst. An authenticated peer is still not
+// allowed to write outside the destination this node chose, so every entry
+// name is validated against traversal.
 func Untar(r io.Reader, dst string) error {
 	tr := tar.NewReader(r)
 	var written int64
@@ -225,27 +192,25 @@ func Untar(r io.Reader, dst string) error {
 			if written > maxRecordBytes {
 				return fmt.Errorf("untar: record exceeds %d bytes", int64(maxRecordBytes))
 			}
-			if err := writeFile(target, tr, os.FileMode(hdr.Mode).Perm()); err != nil {
+			if err := writeFile(target, tr, os.FileMode(hdr.Mode).Perm()); err != nil { //nolint:gosec // Perm masks to 0777
 				return err
 			}
 		default:
-			// Ignore non-data entries rather than trusting them.
 			continue
 		}
 	}
 }
 
-// writeFile copies one entry to disk.
 func writeFile(target string, r io.Reader, mode os.FileMode) error {
 	if mode == 0 {
 		mode = 0o600
 	}
-	f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode) //nolint:gosec // target resolved by safeJoin
 	if err != nil {
 		return fmt.Errorf("untar create %s: %w", target, err)
 	}
 	defer func() { _ = f.Close() }()
-	if _, err := io.Copy(f, io.LimitReader(r, maxRecordBytes)); err != nil {
+	if _, err := io.Copy(f, r); err != nil {
 		return fmt.Errorf("untar write %s: %w", target, err)
 	}
 	return f.Close()
@@ -257,11 +222,8 @@ func safeJoin(root, name string) (string, error) {
 	if name == "" || filepath.IsAbs(name) || strings.Contains(name, `\`) {
 		return "", fmt.Errorf("untar: refusing entry %q", name)
 	}
-	// Clean the name as-is, NOT as "/"+name: a leading slash would absorb any
-	// leading "..", silently rewriting ../escape into /escape and landing the
-	// entry inside root under a surprising name. A record this node produced
-	// never contains "..", so its presence means corruption or an attack —
-	// reject it loudly instead of neutralizing it.
+	// Clean as-is, never as "/"+name: a leading slash absorbs a leading "..",
+	// rewriting ../escape to /escape instead of rejecting it.
 	clean := filepath.Clean(name)
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
 		return "", fmt.Errorf("untar: entry %q escapes destination", name)

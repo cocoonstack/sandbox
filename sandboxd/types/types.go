@@ -36,10 +36,10 @@ var (
 	NameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`)
 
 	sizeSpecs = map[Size]SizeSpec{
-		SizeSmall:  {CPU: 1, Memory: "512M"},
-		SizeMedium: {CPU: 2, Memory: "1G"},
-		SizeLarge:  {CPU: 4, Memory: "4G"},
-		SizeXLarge: {CPU: 4, Memory: "8G"},
+		SizeSmall:  {CPU: 1, Memory: "512M", MemoryBytes: 512 << 20},
+		SizeMedium: {CPU: 2, Memory: "1G", MemoryBytes: 1 << 30},
+		SizeLarge:  {CPU: 4, Memory: "4G", MemoryBytes: 4 << 30},
+		SizeXLarge: {CPU: 4, Memory: "8G", MemoryBytes: 8 << 30},
 	}
 )
 
@@ -79,10 +79,12 @@ func (e Engine) Validate() error {
 // warm pools, so only tiers are accepted.
 type Size string
 
-// SizeSpec is the concrete allocation behind a tier, in cocoon flag units.
+// SizeSpec is the concrete allocation behind a tier. Memory is in cocoon flag
+// units; MemoryBytes is the same figure for callers that report bytes.
 type SizeSpec struct {
-	CPU    int
-	Memory string
+	CPU         int
+	Memory      string
+	MemoryBytes int64
 }
 
 // Spec resolves a tier to its allocation; ok is false for unknown tiers.
