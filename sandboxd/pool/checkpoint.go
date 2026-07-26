@@ -278,8 +278,8 @@ func parseCheckpoint(raw []byte) (types.Checkpoint, error) {
 // Checkpoints already drops archive wake images, which are never a branch
 // target. A store read error yields nil: gossip is best-effort and must not
 // take the tick down.
-func (m *Manager) CheckpointIDs() []string {
-	ckpts, err := m.Checkpoints(context.Background(), "")
+func (m *Manager) CheckpointIDs(ctx context.Context) []string {
+	ckpts, err := m.Checkpoints(ctx, "")
 	if err != nil {
 		return nil
 	}

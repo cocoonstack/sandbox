@@ -101,7 +101,7 @@ func main() {
 		}
 		defer func() { _ = msh.Shutdown() }()
 		placer = msh
-		mgr.SetTemplateNotifier(func() { msh.UpdateSelf(mgr.WarmCounts(), mgr.TemplateHashes(), mgr.CheckpointIDs()) })
+		mgr.SetTemplateNotifier(func() { msh.UpdateSelf(mgr.WarmCounts(), mgr.TemplateHashes(), mgr.CheckpointIDs(ctx)) })
 		// Wired after the mesh: the owners resolver is the mesh's own view.
 		mgr.WithPeerHeal(cfg.CheckpointPeerHeal, msh.CheckpointOwners, cfg.APIToken)
 		go gossipNodeState(ctx, msh, mgr)
@@ -196,7 +196,7 @@ func gossipNodeState(ctx context.Context, msh *mesh.Mesh, mgr *pool.Manager) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			msh.UpdateSelf(mgr.WarmCounts(), mgr.TemplateHashes(), mgr.CheckpointIDs())
+			msh.UpdateSelf(mgr.WarmCounts(), mgr.TemplateHashes(), mgr.CheckpointIDs(ctx))
 		}
 	}
 }

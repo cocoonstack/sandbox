@@ -100,8 +100,8 @@ func (m *Mesh) Join(seeds []string) error {
 	return nil
 }
 
-// UpdateSelf republishes this node's warm-pool counts and promoted-template
-// set, bumping the epoch so peers adopt the new view. An unchanged view is
+// UpdateSelf republishes this node's warm-pool counts and template and
+// checkpoint sets, bumping the epoch so peers adopt the new view. An unchanged view is
 // not republished — the periodic tick would otherwise gossip a fresh epoch
 // every second for nothing.
 func (m *Mesh) UpdateSelf(pools map[string]int, templates, checkpoints []string) {
@@ -202,38 +202,14 @@ func (m *Mesh) Candidates(keyHash string) []string {
 // delete of a template this node does not hold. Self is excluded: the caller
 // has already checked its own disk.
 func (m *Mesh) TemplateOwners(keyHash string) []string {
-	m.mu.Lock()
-	var owners []string
-	for id, st := range m.view {
-		if id != m.self.NodeID && slices.Contains(st.Templates, keyHash) {
-			owners = append(owners, st.Addr)
-		}
-	}
-	m.mu.Unlock()
-	// Which two survive truncation is already jittered by map iteration
-	// order; unlike Candidates there is no warmth to rank by.
-	if len(owners) > 2 {
-		owners = owners[:2]
-	}
-	return owners
+	return m.recordOwners(keyHash, func(st NodeState) []string { return st.Templates })
 }
 
 // CheckpointOwners returns up to two peer addresses whose gossiped checkpoint
 // set contains ckptID, the redirect targets for a branch this node cannot
 // serve. Self is excluded: the caller already checked its own store.
 func (m *Mesh) CheckpointOwners(ckptID string) []string {
-	m.mu.Lock()
-	var owners []string
-	for id, st := range m.view {
-		if id != m.self.NodeID && slices.Contains(st.Checkpoints, ckptID) {
-			owners = append(owners, st.Addr)
-		}
-	}
-	m.mu.Unlock()
-	if len(owners) > 2 {
-		owners = owners[:2]
-	}
-	return owners
+	return m.recordOwners(ckptID, func(st NodeState) []string { return st.Checkpoints })
 }
 
 // Members returns the current cluster view (self included).
@@ -264,6 +240,24 @@ func (m *Mesh) Shutdown() error {
 }
 
 // persistEpoch durably records the epoch.
+// recordOwners scans the view for peers whose listed record set contains id.
+func (m *Mesh) recordOwners(id string, list func(NodeState) []string) []string {
+	m.mu.Lock()
+	var owners []string
+	for nid, st := range m.view {
+		if nid != m.self.NodeID && slices.Contains(list(st), id) {
+			owners = append(owners, st.Addr)
+		}
+	}
+	m.mu.Unlock()
+	// Which two survive truncation is already jittered by map iteration
+	// order; unlike Candidates there is no warmth to rank by.
+	if len(owners) > 2 {
+		owners = owners[:2]
+	}
+	return owners
+}
+
 func (m *Mesh) persistEpoch(epoch uint64) error {
 	return storeEpoch(m.epochPath, epoch)
 }
