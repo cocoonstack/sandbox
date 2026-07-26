@@ -136,10 +136,10 @@ at a node that does not hold the record runs a tier order:
 
 1. **Local claim** — the fast path when the claiming node already holds it.
 2. **Probe + redirect** — a live `HEAD` fan-out (HMAC-signed when the mesh
-   carries a `cluster_key`) to up to 3
-   mesh peers in parallel, redirecting to whoever answers — the same
-   claim-redirect contract a warm miss already uses. The cap means the
-   answer is a hint, not an exhaustive list of every owner. The probe and
+   carries a `cluster_key`) to every mesh peer in parallel, redirecting to
+   the first owners that answer — the same claim-redirect contract a warm
+   miss already uses. The answer is capped at 3 addresses: a hint, not an
+   exhaustive list of every owner. The probe and
    the follow-up claim are not atomic: a peer can answer the probe, then
    lose the record — a delete's broadcast lands, or its own TTL sweep runs
    (below) — before the retry reaches it, so a redirect can go stale

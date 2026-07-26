@@ -7,7 +7,9 @@ All bodies are JSON. Three token kinds:
   resource-creating verbs (claim, fork, promote, checkpoint create/claim,
   preview mint) and the tenant-scoped listings/deletes below; everything a
   tenant creates is stamped with its name. Operator surfaces
-  (`GET /v1/sandboxes`, `GET /v1/info`, `PUT /v1/pools`, `POST/DELETE /v1/drain`, `GET /metrics`)
+  (`GET /v1/sandboxes` and the per-id reads under it, `GET /v1/info`,
+  `PUT /v1/pools`, `POST/DELETE /v1/drain`, `GET /metrics`,
+  `GET /v1/checkpoints/{id}/blob`)
   answer a tenant token `403` — authenticated but not authorized; an unknown
   token stays `401`.
 - **sandbox** — every claimed sandbox carries its own bearer token guarding
@@ -73,7 +75,8 @@ Releasing an already-gone sandbox is 404 — the SDK treats it as success.
 
 ## POST /v1/sandboxes/{id}/hibernate
 
-Auth: the sandbox's own token. Atomically snapshots the VM and stops it,
+Auth: the sandbox's own token, or the root token by id (operator, like
+release). Atomically snapshots the VM and stops it,
 freeing its memory; the next agent access restores it transparently
 (sessions, processes, and memory state intact — cocoon's hibernate keeps the
 snapshot point and the stop coincident). Idempotent on an already-hibernated
@@ -82,6 +85,14 @@ snapshot) at its deadline. When to hibernate is the caller's policy — the
 node only provides the transition. 204 on success, 404 unknown id or wrong
 token, 409 on the egress lane (egress-lane sandboxes never hibernate; see
 [egress](egress.md)).
+
+## POST /v1/sandboxes/{id}/wake
+
+Auth: the sandbox's own token, or the root token by id (operator). Restores
+a hibernated (or archived) sandbox and leaves it running — waking is
+otherwise only a side effect of the next agent access, so this is the
+explicit form for warming a sandbox ahead of use. Idempotent on one already
+running. 204 on success, 404 unknown id or wrong token.
 
 ## POST /v1/sandboxes/{id}/fork
 
@@ -294,6 +305,29 @@ an SDK caller should set.
 Auth: root only (tenant tokens get 403). The operator index: `{"sandboxes":
 [{id, key, deadline, hibernated, archived?, from_checkpoint?, claim_ref?}]}` —
 never tokens.
+
+## GET /v1/sandboxes/{id}
+
+Auth: root only. One live claim in the index-row shape above, so a
+reconcile loop can read a single sandbox without scanning the whole node
+listing. 404 unknown id.
+
+## GET /v1/sandboxes/{id}/stats
+
+Auth: root only. One sandbox's resource usage — the per-sandbox counterpart
+to the node-scoped `/metrics`:
+
+```json
+{"id": "sb_…", "cpu_count": 2, "mem_total_bytes": 1073741824,
+ "mem_used_bytes": 187654144, "mem_used_measured": true,
+ "hibernated": false, "measured_at": "…"}
+```
+
+`cpu_count`/`mem_total_bytes` come from the size tier. `mem_used_bytes` is
+the host VMM process's resident set — the only usage signal available
+without a guest agent; `mem_used_measured` is false when there is no VMM
+process to read (hibernated, or the PID is not yet known), so a zero is
+never mistaken for idle. 404 unknown id.
 
 ## GET /metrics
 
