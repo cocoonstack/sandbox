@@ -52,7 +52,7 @@ func TestUpdateSelfPersistFailKeepsOldState(t *testing.T) {
 	before := m.self.Epoch
 	// A non-existent dir makes the durable write fail: the epoch must not publish.
 	m.epochPath = filepath.Join(dir, "gone", "mesh-epoch")
-	m.UpdateSelf(map[string]int{"k": 1}, nil)
+	m.UpdateSelf(map[string]int{"k": 1}, nil, nil)
 	if m.self.Epoch != before {
 		t.Errorf("self epoch advanced to %d on a failed persist, want %d held", m.self.Epoch, before)
 	}
@@ -65,7 +65,7 @@ func TestUpdateSelfPersistsEpoch(t *testing.T) {
 	dir := t.TempDir()
 	m := newBoundMesh(t, dir)
 	before := m.self.Epoch
-	m.UpdateSelf(map[string]int{"k": 1}, nil)
+	m.UpdateSelf(map[string]int{"k": 1}, nil, nil)
 	if got := loadEpoch(filepath.Join(dir, "mesh-epoch")); got <= before {
 		t.Errorf("persisted epoch %d did not advance past the seed %d", got, before)
 	}
@@ -78,8 +78,8 @@ func TestUpdateSelfConcurrentDropsNothing(t *testing.T) {
 		a := map[string]int{"a": i + 1}
 		b := map[string]int{"b": i + 1}
 		var wg sync.WaitGroup
-		wg.Go(func() { m.UpdateSelf(a, nil) })
-		wg.Go(func() { m.UpdateSelf(b, nil) })
+		wg.Go(func() { m.UpdateSelf(a, nil, nil) })
+		wg.Go(func() { m.UpdateSelf(b, nil, nil) })
 		wg.Wait()
 		// Serialized updates with distinct payloads must both land: the loser
 		// of the old TOCTOU race silently dropped its payload and one bump.

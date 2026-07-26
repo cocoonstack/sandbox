@@ -33,7 +33,13 @@ type NodeState struct {
 	Epoch     uint64         `json:"epoch"`
 	Pools     map[string]int `json:"pools"`               // PoolKey hash → warm count
 	Templates []string       `json:"templates,omitempty"` // promoted-template key hashes on disk
-	Digest    string         `json:"digest,omitempty"`    // cluster-invariant config digest
+	// Checkpoints lists the checkpoint ids this node holds. Checkpoints are
+	// node-local like templates, so a resume or branch of one this node does
+	// not hold is answered with a redirect to a node that does — the placement
+	// moves to the data instead of the data moving to the placement, which is
+	// what keeps the clone on its local reflink fast path.
+	Checkpoints []string `json:"checkpoints,omitempty"`
+	Digest      string   `json:"digest,omitempty"` // cluster-invariant config digest
 }
 
 // Mesh is the node's view of the cluster and its own gossiped state.
@@ -103,11 +109,12 @@ func (m *Mesh) Join(seeds []string) error {
 // set, bumping the epoch so peers adopt the new view. An unchanged view is
 // not republished — the periodic tick would otherwise gossip a fresh epoch
 // every second for nothing.
-func (m *Mesh) UpdateSelf(pools map[string]int, templates []string) {
+func (m *Mesh) UpdateSelf(pools map[string]int, templates, checkpoints []string) {
 	m.updateMu.Lock()
 	defer m.updateMu.Unlock()
 	m.mu.Lock()
-	if maps.Equal(m.self.Pools, pools) && slices.Equal(m.self.Templates, templates) {
+	if maps.Equal(m.self.Pools, pools) && slices.Equal(m.self.Templates, templates) &&
+		slices.Equal(m.self.Checkpoints, checkpoints) {
 		m.mu.Unlock()
 		return
 	}
@@ -124,6 +131,7 @@ func (m *Mesh) UpdateSelf(pools map[string]int, templates []string) {
 	m.self.Epoch = epoch
 	m.self.Pools = pools
 	m.self.Templates = templates
+	m.self.Checkpoints = checkpoints
 	m.view[m.self.NodeID] = m.self
 	m.mu.Unlock()
 }
@@ -209,6 +217,25 @@ func (m *Mesh) TemplateOwners(keyHash string) []string {
 	m.mu.Unlock()
 	// Which two survive truncation is already jittered by map iteration
 	// order; unlike Candidates there is no warmth to rank by.
+	if len(owners) > 2 {
+		owners = owners[:2]
+	}
+	return owners
+}
+
+// CheckpointOwners returns up to two peer addresses whose gossiped checkpoint
+// set contains ckptID — the redirect targets for a branch of a checkpoint this
+// node does not hold. Self is excluded: the caller has already checked its own
+// store. Mirrors TemplateOwners; both answer "who has this immutable record".
+func (m *Mesh) CheckpointOwners(ckptID string) []string {
+	m.mu.Lock()
+	var owners []string
+	for id, st := range m.view {
+		if id != m.self.NodeID && slices.Contains(st.Checkpoints, ckptID) {
+			owners = append(owners, st.Addr)
+		}
+	}
+	m.mu.Unlock()
 	if len(owners) > 2 {
 		owners = owners[:2]
 	}
