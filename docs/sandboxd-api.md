@@ -271,10 +271,12 @@ success, 404 unknown.
 so a healed replica does not outlive it — this is eventual best-effort
 cleanup, not a fleet-wide revocation.** A peer that is offline or
 partitioned during the broadcast keeps its copy until the checkpoint TTL
-ages it out: the worst-case window in which a deleted checkpoint remains
-branchable by an id-holder is `checkpoint_ttl_hours`. A healed replica
-carries the source's original `CreatedAt`, so every node's sweep expires it
-at the same wall-clock moment; the TTL must also match fleet-wide, which the
+ages it out. A healed replica carries the source's original `CreatedAt`, so
+it becomes eligible for expiry at the same instant on every node; the actual
+removal is each node's own hourly sweep, which is independently phased and
+retries on failure, so the true bound is `checkpoint_ttl_hours` plus up to
+one sweep interval per replica, best-effort. The TTL must also match
+fleet-wide, which the
 [cluster-invariant config](cluster.md#cluster-invariant-config) digest
 checks. A window always exists because `checkpoint_peer_heal` cannot be
 enabled with `checkpoint_ttl_hours: 0` — a replica that can outlive a delete

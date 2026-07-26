@@ -23,6 +23,12 @@ const (
 	maxHealOwners             = 8 // a heal wants the widest source list a few full/corrupt owners can't hide behind
 	redirectCacheTTL          = 5 * time.Second
 
+	// probeGrace bounds how long a fan-out waits for more owners once it has
+	// its first: a checkpoint usually lives on one node, so the cap of three is
+	// rarely reached and without this the collector would block on every
+	// missing peer's timeout before returning the single owner it already has.
+	probeGrace = 150 * time.Millisecond
+
 	// ProbeHeader carries the base64 probe MAC when a ProbeKey is configured.
 	ProbeHeader = "X-Cocoon-Probe"
 
@@ -57,6 +63,10 @@ type HTTPProber struct {
 
 	cacheMu sync.Mutex
 	cache   map[string]redirectCacheEntry
+	// epoch is bumped by every Forget under cacheMu: a fan-out that started
+	// before a delete must not write its now-suspect result back into the
+	// cache, so cachePut only commits when the epoch it read still holds.
+	epoch uint64
 
 	// cacheTTL overrides redirectCacheTTL; a test seam, 5 seconds is slow to wait out.
 	cacheTTL time.Duration
@@ -71,12 +81,13 @@ type HTTPProber struct {
 // record moments ago fails safely (404, then the client's own no_redirect
 // fallback heals from the origin), it never serves a wrong answer silently.
 func (p *HTTPProber) Owners(ctx context.Context, id string) []string {
-	if owners, ok := p.cached(id); ok {
+	owners, start, hit := p.cacheLookup(id)
+	if hit {
 		return owners
 	}
 	v, _, _ := p.redirectFlight.Do(id, func() (any, error) {
 		owners := p.fanOut(ctx, id, maxRedirectOwners)
-		p.cachePut(id, owners)
+		p.cachePut(id, owners, start)
 		return owners, nil
 	})
 	return v.([]string)
@@ -102,6 +113,7 @@ func (p *HTTPProber) HealOwners(ctx context.Context, id string) []string {
 func (p *HTTPProber) Forget(id string) {
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
+	p.epoch++
 	delete(p.cache, id)
 }
 
@@ -135,37 +147,59 @@ func (p *HTTPProber) fanOut(ctx context.Context, id string, maxOwners int) []str
 	}
 	go func() { wg.Wait(); close(wins) }()
 
+	// grace opens only after the first owner answers: until then the fan-out
+	// waits out the full timeout, since a genuine miss must hear from every
+	// peer before it can conclude nobody holds the record.
 	var owners []string
-	for addr := range wins {
-		owners = append(owners, addr)
-		if len(owners) >= maxOwners {
-			cancel() // enough candidates; a straggler's answer would be discarded anyway
-			break
+	var grace <-chan time.Time
+	for {
+		select {
+		case addr, ok := <-wins:
+			if !ok {
+				return owners
+			}
+			owners = append(owners, addr)
+			if len(owners) >= maxOwners {
+				cancel()
+				return owners
+			}
+			if grace == nil {
+				grace = time.After(probeGrace)
+			}
+		case <-grace:
+			cancel()
+			return owners
 		}
 	}
-	return owners
 }
 
-// cached returns id's owners if a still-live positive cache entry exists.
-func (p *HTTPProber) cached(id string) ([]string, bool) {
+// cacheLookup returns id's owners if a still-live positive entry exists, and
+// always the current epoch: the caller carries it into the fan-out so cachePut
+// can tell whether a Forget landed while the probe was in flight.
+func (p *HTTPProber) cacheLookup(id string) (owners []string, epoch uint64, hit bool) {
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
 	entry, ok := p.cache[id]
 	if !ok || time.Now().After(entry.expires) {
-		return nil, false
+		return nil, p.epoch, false
 	}
-	return entry.owners, true
+	return entry.owners, p.epoch, true
 }
 
-// cachePut records a positive result. A miss is never cached: a checkpoint
-// that appears moments later (still propagating, or just created) must not
+// cachePut records a positive result, unless a Forget bumped the epoch since
+// the fan-out began — that delete may have removed the very record this result
+// names, so caching it would redirect claims to a node that no longer holds
+// it. A miss is never cached: a checkpoint that appears moments later must not
 // be hidden behind a stale negative for the TTL.
-func (p *HTTPProber) cachePut(id string, owners []string) {
+func (p *HTTPProber) cachePut(id string, owners []string, start uint64) {
 	if len(owners) == 0 {
 		return
 	}
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
+	if p.epoch != start {
+		return
+	}
 	if p.cache == nil {
 		p.cache = make(map[string]redirectCacheEntry)
 	}

@@ -159,15 +159,16 @@ at a node that does not hold the record runs a tier order:
 record, then best-effort broadcasts the delete to every peer this node
 currently sees, so a replica a heal pulled earlier is cleaned up too, not
 just the original. A peer that is offline or partitioned during that
-broadcast keeps its copy until the checkpoint TTL ages it out: the
-worst-case window in which a deleted checkpoint remains branchable by an
-id-holder is `checkpoint_ttl_hours`. A healed replica carries the source
-checkpoint's original `CreatedAt`, so every node's hourly TTL sweep ages it
-out at the same wall-clock moment regardless of whether the broadcast
-reached it — which is why heal *requires* a nonzero, fleet-matching TTL
-(see [cluster-invariant config](#cluster-invariant-config)). With TTL
-disabled (the default), that window never closes on a peer the broadcast
-never reaches.
+broadcast keeps its copy until the checkpoint TTL ages it out. A healed
+replica carries the source checkpoint's original `CreatedAt`, so it becomes
+eligible for expiry at the same instant everywhere; each node then removes
+it on its own hourly sweep, which is independently phased and retries on
+failure. The window in which a deleted checkpoint stays branchable by an
+id-holder is therefore `checkpoint_ttl_hours` plus up to one sweep interval,
+per replica, best-effort — which is why heal *requires* a nonzero,
+fleet-matching TTL (see [cluster-invariant config](#cluster-invariant-config)).
+With TTL disabled it could never close at all, so that combination is
+rejected at config load.
 
 ## State ownership
 

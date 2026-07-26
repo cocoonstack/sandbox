@@ -67,6 +67,69 @@ func TestOwnersHungPeerExcludedWithoutBlockingOthers(t *testing.T) {
 	}
 }
 
+// TestOwnersReturnsPromptlyWithOneOwner: the common case is a single owner, so
+// the fan-out must return shortly after that owner answers on the grace window,
+// not block on a slow peer's full timeout the way it would waiting for a cap it
+// will never reach.
+func TestOwnersReturnsPromptlyWithOneOwner(t *testing.T) {
+	block := make(chan struct{})
+	hung := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		<-block
+	}))
+	defer hung.Close()
+	defer close(block)
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ok.Close()
+
+	p := &HTTPProber{Peers: func() []string { return []string{hung.URL, ok.URL} }}
+	start := time.Now()
+	owners := p.Owners(t.Context(), testID)
+	if elapsed := time.Since(start); elapsed > probeGrace+500*time.Millisecond {
+		t.Errorf("Owners took %v with one owner, want ~grace, not the full probe timeout", elapsed)
+	}
+	if len(owners) != 1 || owners[0] != ok.URL {
+		t.Errorf("owners = %v, want [%s]", owners, ok.URL)
+	}
+}
+
+// TestForgetDuringFlightPreventsStaleCache: a delete that lands while a probe
+// is in flight must keep that probe's result out of the cache — the record it
+// names may be the one just deleted, and a cached positive would redirect
+// claims to a node that no longer holds it.
+func TestForgetDuringFlightPreventsStaleCache(t *testing.T) {
+	release := make(chan struct{})
+	var hits atomic.Int32
+	owner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		<-release // hold the probe open so Forget can land mid-flight
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer owner.Close()
+
+	p := &HTTPProber{Peers: func() []string { return []string{owner.URL} }}
+	var owners []string
+	done := make(chan struct{})
+	go func() { owners = p.Owners(t.Context(), testID); close(done) }()
+
+	for hits.Load() == 0 { // wait until the probe is in flight
+		time.Sleep(time.Millisecond)
+	}
+	p.Forget(testID) // the delete lands while the flight is open
+	close(release)
+	<-done
+
+	if len(owners) != 1 {
+		t.Fatalf("owners = %v, want the one that answered", owners)
+	}
+	// The result must not have been cached: a second call re-probes.
+	p.Owners(t.Context(), testID)
+	if got := hits.Load(); got != 2 {
+		t.Errorf("owner probed %d times, want 2: a Forget mid-flight must not leave a stale positive cached", got)
+	}
+}
+
 // TestOwnersDedupsAddrs: a duplicated peer list must probe each address once.
 func TestOwnersDedupsAddrs(t *testing.T) {
 	var hits atomic.Int32
