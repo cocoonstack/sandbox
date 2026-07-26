@@ -214,8 +214,9 @@ Checkpoints are node-local (unless the store is shared — see
 [Configuration](deploy.md#configuration)), so a miss here runs a tier order:
 
 1. This node checks its own store first.
-2. On a miss, it probes up to 3 peers directly — a parallel, unauthenticated
-   `HEAD` to each (see below) — and answers exactly like a warm-miss
+2. On a miss, it probes up to 3 peers directly — a parallel `HEAD` to each
+   (authenticated on an encrypted mesh, see below) — and answers exactly like
+   a warm-miss
    [`POST /v1/claim`](#post-v1claim): `200 {"redirect": ["10.0.0.6:7777",
    "10.0.0.7:7777"]}`, retry the same body (+`no_redirect: true`) at each
    candidate until one answers. The probe and the follow-up claim are not
@@ -232,7 +233,8 @@ Checkpoints are node-local (unless the store is shared — see
 404 for an unknown checkpoint (locally, and after redirect and heal both
 miss), 409 for an egress-lane checkpoint (see [egress](egress.md)), 429 node
 or calling tenant at `max_claims` or the node draining, 503 when the node's
-concurrent-heal cap is already full — the request is retryable.
+concurrent-heal cap is already full — retryable, and the response carries a
+`Retry-After` hint.
 
 ## GET/HEAD /v1/checkpoints/{id}/blob
 
@@ -244,12 +246,15 @@ part of the public API; an SDK caller has no reason to call it directly.
   real caller is a peer's heal pull, which presents the fleet `api_token`.
   401 missing or unrecognized token, 403 a valid tenant token (authenticated
   but not the operator), 404 unknown checkpoint.
-- `HEAD` is the ownership probe and is currently **unauthenticated** — the id
-  itself is treated as the capability, so this tells a caller only what it
-  already knows: 200 when this node holds a branchable (non-archive) copy,
-  404 otherwise. Hardening this boundary (requiring a token, bounding who can
-  fan a probe out) is tracked as follow-up work; do not treat it as secured
-  today.
+- `HEAD` is the ownership probe: 200 when this node holds a branchable
+  (non-archive) copy, 404 otherwise. On a mesh with `cluster_key` set the
+  request must carry `X-Cocoon-Probe`, an HMAC over the id and a coarse time
+  bucket keyed off a probe-specific derivation of the cluster key — verified
+  before any disk is touched, replayable for roughly a minute at most. On a
+  keyless mesh (redirect-only fleets have no shared secret to sign with) the
+  id itself remains the only capability, matching the mesh's own posture.
+  Repeat probes for one id are answered from a short positive cache on the
+  asking node, which a local delete evicts immediately.
 
 ## GET /v1/checkpoints
 
