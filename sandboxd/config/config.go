@@ -225,6 +225,16 @@ type Config struct {
 	// storage (credentials from the AWS chain, never this file).
 	CheckpointStore *StoreConfig `json:"checkpoint_store,omitempty"`
 
+	// CheckpointPeerHeal lets a node pull a checkpoint it does not hold from a
+	// node that gossiped it, instead of failing the branch. It is the last
+	// tier of the snapshot placement design: placement normally follows the
+	// data (a branch is redirected to the owning node and clones on its local
+	// reflink fast path), and this moves the data only when no owner can serve
+	// — the owner is gone, draining, or full. Requires a mesh; ignored without
+	// one. Off by default: it trades a transfer for availability, and that is
+	// the operator's call.
+	CheckpointPeerHeal bool `json:"checkpoint_peer_heal,omitempty"`
+
 	// CheckpointTTLHours ages out checkpoints (0 = keep forever); the
 	// sweep runs hourly and on startup.
 	CheckpointTTLHours int `json:"checkpoint_ttl_hours,omitempty"`

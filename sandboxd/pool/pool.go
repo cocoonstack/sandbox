@@ -28,6 +28,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/dir"
+	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
 	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -551,6 +552,18 @@ func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe 
 		return s3.New(ctx, *cs.S3, filepath.Join(cfg.DataDir, staging), idRe)
 	}
 	return dir.New(cmp.Or(cfg.CheckpointDir, filepath.Join(cfg.DataDir, "checkpoints")), idRe)
+}
+
+// WithPeerHeal wraps the manager's checkpoint store so a record this node does
+// not hold is pulled from a node that gossiped it. It is wired after the mesh
+// exists (the owners resolver is the mesh's view), and is a no-op unless
+// checkpoint_peer_heal is set — a shared backend (s3, a FUSE mount) already
+// resolves every record from every node and needs no healing.
+func (m *Manager) WithPeerHeal(enabled bool, owners peer.Owners, token string) {
+	if !enabled || owners == nil {
+		return
+	}
+	m.ckpts = peer.New(m.ckpts, owners, &peer.HTTPPuller{Token: token})
 }
 
 func dirExists(path string) bool {
