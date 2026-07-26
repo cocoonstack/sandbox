@@ -132,6 +132,30 @@ def test_claim_redirect_definitive_error_skips_origin_fallback(spawn_node, statu
     assert len(calls) == 1
 
 
+def test_claim_redirect_401_candidate_falls_back_to_origin(spawn_node):
+    stale_calls = []
+
+    def stale_claim(body, path):
+        stale_calls.append(body)
+        return 401, {"error": "invalid api token"}
+
+    stale = spawn_node({("POST", "/v1/claim"): stale_claim})
+
+    calls = []
+
+    def entry_claim(body, path):
+        calls.append(body)
+        if len(calls) == 1:
+            return 200, {"redirect": [stale]}
+        return 200, {"id": "sb_local", "token": "t"}
+
+    entry = spawn_node({("POST", "/v1/claim"): entry_claim})
+    sb = Client(entry).new("rt:24.04")
+    assert sb.id == "sb_local" and sb.owner == entry
+    assert len(calls) == 2 and calls[1]["no_redirect"] is True
+    assert len(stale_calls) == 1
+
+
 def test_claim_redirect_candidate_definitive_error_still_tries_next_candidate(spawn_node):
     # Candidate one is wrong for this claim (403, definitive) but candidate
     # two would still succeed -- the per-candidate walk retries broadly, so

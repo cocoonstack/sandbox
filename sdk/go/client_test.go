@@ -437,6 +437,43 @@ func TestRedirectDefinitiveErrorSkipsFallback(t *testing.T) {
 	}
 }
 
+func TestRedirectRotating401CandidateFallsBackToOrigin(t *testing.T) {
+	var staleCalls int
+	stale := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		staleCalls++
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(errorResponse{Error: "invalid api token"})
+	}))
+	t.Cleanup(stale.Close)
+
+	var entryCalls int
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entryCalls++
+		if entryCalls == 1 {
+			_ = json.NewEncoder(w).Encode(claimResponse{Redirect: []string{strings.TrimPrefix(stale.URL, "http://")}})
+			return
+		}
+		var req claimRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if !req.NoRedirect {
+			t.Error("origin fallback did not carry no_redirect")
+		}
+		_ = json.NewEncoder(w).Encode(claimResponse{ID: "sb_local", Token: "t"})
+	}))
+	t.Cleanup(entry.Close)
+
+	sb, err := testClient(t, entry).New(t.Context(), "rt:24.04")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if sb.ID != "sb_local" {
+		t.Errorf("id %q, want sb_local (provisioned at the already-authorized origin)", sb.ID)
+	}
+	if staleCalls != 1 || entryCalls != 2 {
+		t.Errorf("stale=%d entry=%d calls, want 1 and 2 (redirect + fallback)", staleCalls, entryCalls)
+	}
+}
+
 func TestLookupScatter(t *testing.T) {
 	// The owner is node B; the entry node A doesn't own the sandbox but lists
 	// B as a peer. Lookup must scatter to B and bind the handle there.

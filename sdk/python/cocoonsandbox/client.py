@@ -194,13 +194,12 @@ def _try_each(candidates, call, retry=lambda exc: exc.status in (404, 0)):
 
 def _retry_transient(exc: APIError) -> bool:
     """Origin-fallback policy: worth the round-trip for a transport failure
-    (status 0), a miss (404, stale gossip), full (429), mid-heal (503), or an
-    engine/proxy failure (500/502/504 -- the last two covering a load
-    balancer in front of sandboxd) -- any of which the origin's own attempt
-    may not hit. A served 4xx like a bad request, an unauthorized/forbidden
-    token, or an egress conflict is definitive: the origin would fail the
-    same way, so falling back would only hide the real error."""
-    return exc.status in (0, 404, 429, 503, 500, 502, 504)
+    (status 0), a miss (404), full (429), mid-heal (503), an engine/proxy
+    failure (500/502/504), or a mid-rotation 401 (the origin proved the
+    token valid by issuing the redirect). A served 4xx like a bad request,
+    a forbidden token, or an egress conflict is definitive: the origin
+    would fail the same way."""
+    return exc.status in (0, 401, 404, 429, 503, 500, 502, 504)
 
 
 def _redirect_fallback(origin: str, candidates: list, post, verb: str):

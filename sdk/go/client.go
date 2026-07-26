@@ -266,21 +266,20 @@ func retryMiss(err error) bool {
 func retryAny(error) bool { return true }
 
 // retryTransient reports whether an origin-fallback is worth the round-trip:
-// true for a transport failure (unreachable peer), a miss (404, stale
-// gossip), full (429), mid-heal (503), or an engine/proxy failure
-// (500/502/504 — the last two covering a load balancer in front of
-// sandboxd) — any of which the origin's own attempt may not hit. A served
-// 4xx like a bad request, an unauthorized/forbidden token, or an egress
-// conflict is definitive: the origin would fail the same way, so falling
-// back would only hide the real error.
+// true for a transport failure, a miss (404), full (429), mid-heal (503), an
+// engine/proxy failure (500/502/504), or a mid-rotation 401 (the origin
+// proved the token valid by issuing the redirect). A served 4xx like a bad
+// request, a forbidden token, or an egress conflict is definitive: the
+// origin would fail the same way.
 func retryTransient(err error) bool {
 	var he *httpError
 	if !errors.As(err, &he) {
 		return true
 	}
 	switch he.status {
-	case http.StatusNotFound, http.StatusTooManyRequests, http.StatusServiceUnavailable,
-		http.StatusInternalServerError, http.StatusBadGateway, http.StatusGatewayTimeout:
+	case http.StatusUnauthorized, http.StatusNotFound, http.StatusTooManyRequests,
+		http.StatusServiceUnavailable, http.StatusInternalServerError,
+		http.StatusBadGateway, http.StatusGatewayTimeout:
 		return true
 	default:
 		return false

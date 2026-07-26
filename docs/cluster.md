@@ -212,7 +212,7 @@ Some config must match on every node or the cluster fails in confusing ways:
 
 | config | what breaks on mismatch |
 |---|---|
-| `api_token`, `tenants` | the SDK replays the authorizing token across a redirect; a peer missing that tenant/token answers 401 |
+| `api_token`, `tenants` | the SDK replays the authorizing token across a redirect; a mid-rotation peer missing that tenant/token answers 401, which the SDK treats as transient — the claim falls back to the origin node (which already authorized it) and resolves there |
 | `preview_secret` | a preview URL signed on one node fails verification on another |
 | `mesh.cluster_key` | nodes cannot join / decrypt gossip at all |
 | `egress_ca` cluster root | a guest checkpointed/redirected across nodes trusts the root; a divergent root fails interception |
