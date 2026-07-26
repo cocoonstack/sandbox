@@ -99,10 +99,9 @@ func (m *Manager) Release(ctx context.Context, id string, cred Cred) error {
 	return m.releaseResolved(ctx, id, sb)
 }
 
-// releaseResolved drops the resolved claim (id, sb) and tears down its VM.
-// resolve authorizes and unlocks before this runs, so it re-validates under
-// m.mu that sb is still the live claim — a second release racing in on the
-// same id must not double-tear-down.
+// releaseResolved drops the resolved claim and tears down its VM. resolve
+// unlocks before this runs, so it re-checks under m.mu that sb is still the
+// live claim: a second release racing in must not tear down twice.
 func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sandbox) error {
 	m.mu.Lock()
 	if m.claimed[id] != sb {

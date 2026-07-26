@@ -16,9 +16,8 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// DeleteScope selects how far a checkpoint delete reaches. The fleet-wide
-// value is the zero one: a caller that does not think about scope gets the
-// safe behavior, and the narrower local-only delete must be asked for.
+// DeleteScope selects how far a checkpoint delete reaches. Fleet-wide is the
+// zero value, so the narrower local-only delete must be asked for.
 type DeleteScope int
 
 const (
@@ -102,9 +101,8 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error) {
 	// Reject a bad or unknown id before recLock: a rejected id must not leave
 	// a lock-map entry (only a delete evicts one). Checkpoints are immutable,
-	// so this parse stands in for the fetched meta below. The local read is
-	// cheap, so it goes before quota: a full node must still answer "not
-	// here" on a miss, or the handler's redirect/heal tiers never run.
+	// so this parse stands in for the fetched meta below. It precedes quota:
+	// a full node must still answer "not here", or the tiers never run.
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	if err != nil {
 		return nil, err
@@ -122,9 +120,8 @@ func (m *Manager) ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl ti
 	if m.healer == nil || !store.CheckpointIDRe.MatchString(ckptID) {
 		return nil, ErrUnknownCheckpoint
 	}
-	// Unlike ClaimCheckpoint, resolving the record here means a peer
-	// transfer of a whole guest memory image: quota must reject a full node
-	// before paying that cost, not after.
+	// Resolving here means moving a guest memory image, so quota rejects a
+	// full node before that cost, not after.
 	if err := m.overQuota(1, tenant); err != nil {
 		return nil, err
 	}
@@ -135,9 +132,8 @@ func (m *Manager) ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl ti
 	return m.claimLoaded(ctx, ckpt, ttl, tenant)
 }
 
-// claimLoaded is ClaimCheckpoint's and ClaimCheckpointHeal's shared body once
-// ckpt's meta is resolved: it re-fetches under the record lock (immune to a
-// delete racing the pre-check), provisions the branch, and finalizes the claim.
+// claimLoaded is the shared body once ckpt's meta is resolved: it re-fetches
+// under the record lock, so a delete racing the pre-check cannot slip through.
 func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl time.Duration, tenant string) (*types.Sandbox, error) {
 	l := m.recLock(ckpt.ID)
 	l.RLock()
@@ -169,13 +165,10 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl ti
 	return out, err
 }
 
-// healCheckpoint pulls ckptID from a peer under its record lock, so the
-// transfer, validation, and publish race no concurrent heal, delete, or TTL
-// sweep of the same id. A record already local when the lock is acquired
-// (another heal won the race) is used as-is. claimLoaded takes its own
-// RLock on the same recLock, so this releases before returning instead of
-// holding it into the claim; a delete racing in between is handled there
-// (Fetch answers store.ErrNotFound).
+// healCheckpoint pulls ckptID under its record lock, so the transfer,
+// validation, and publish race no concurrent heal, delete, or TTL sweep of the
+// same id. It releases before returning: claimLoaded takes an RLock on the
+// same lock, and handles a delete landing in between.
 func (m *Manager) healCheckpoint(ctx context.Context, ckptID string) (types.Checkpoint, error) {
 	l := m.recLock(ckptID)
 	l.Lock()
@@ -208,9 +201,8 @@ func (m *Manager) healCheckpoint(ctx context.Context, ckptID string) (types.Chec
 	return m.loadCheckpoint(ctx, ckptID)
 }
 
-// validateHealedCheckpoint checks a staged pull's shape before it is trusted
-// enough to publish: a hostile or buggy peer must not be able to install an
-// unreadable or misattributed record that then suppresses future healing.
+// validateHealedCheckpoint checks a staged pull's shape before publishing it:
+// an unreadable or misattributed record would suppress every later heal.
 func validateHealedCheckpoint(staging, wantID string) error {
 	raw, err := os.ReadFile(filepath.Join(staging, store.MetaFile)) //nolint:gosec // staging dir is this manager's own
 	if err != nil {
@@ -285,12 +277,10 @@ func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 	return pinned
 }
 
-// DeleteCheckpoint removes a checkpoint's snapshot and record. A fleet-scoped
-// delete then best-effort broadcasts to peers, so a copy healed onto one does
-// not outlive it; a forwarded delete is DeleteLocal, since re-forwarding would
-// loop the fleet forever. A tenant may delete only its own records — anything
-// else answers ErrUnknownCheckpoint, never a hint that the id exists; root
-// (empty tenant) deletes anything.
+// DeleteCheckpoint removes a checkpoint's snapshot and record, then broadcasts
+// to peers when fleet-scoped so a healed copy does not outlive it. A tenant may
+// delete only its own records — anything else answers ErrUnknownCheckpoint,
+// never a hint that the id exists; root (empty tenant) deletes anything.
 func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, scope DeleteScope) error {
 	// Validate off the lock — a rejected id must not leave a lock-map entry;
 	// loadCheckpoint is safe unlocked (checkpoints are single-publish, immutable).
@@ -309,8 +299,7 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, s
 	if err := m.deleteCkLocked(ctx, ckptID); err != nil {
 		return fmt.Errorf("delete checkpoint: %w", err)
 	}
-	// A shared backend (s3) has no per-node replicas to chase: the delete
-	// above already removed the one copy every node sees.
+	// A shared backend has no per-node replicas to chase.
 	if scope == DeleteFleet && m.peerDelete != nil && !m.ckptsShared {
 		m.peerDelete(context.WithoutCancel(ctx), ckptID)
 	}
@@ -381,8 +370,8 @@ func parseCheckpoint(raw []byte) (types.Checkpoint, error) {
 	return ckpt, nil
 }
 
-// HasCheckpoint reports whether this node's local store holds a branchable
-// (non-archive) record for id — the probe answer, never a fetch.
+// HasCheckpoint answers the ownership probe: a branchable local record, never
+// a fetch.
 func (m *Manager) HasCheckpoint(ctx context.Context, ckptID string) bool {
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	return err == nil && !ckpt.Archive

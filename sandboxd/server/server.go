@@ -104,9 +104,8 @@ type Placer interface {
 	ConfigMismatches() int
 }
 
-// CheckpointProber answers which peers currently hold a checkpoint, queried
-// live on a redirect decision rather than gossiped; nil disables probing
-// (single-node).
+// CheckpointProber answers which peers hold a checkpoint, asked live on a
+// redirect decision rather than gossiped.
 type CheckpointProber interface {
 	Owners(ctx context.Context, id string) []string
 }
@@ -187,14 +186,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sandboxes/{id}/checkpoint", s.requireToken(s.handleCheckpoint))
 	mux.HandleFunc("POST /v1/checkpoints/{id}/claim", s.requireToken(s.handleClaimCheckpoint))
 	mux.HandleFunc("GET /v1/checkpoints", s.requireToken(s.handleListCheckpoints))
-	// The peer-transfer half of the snapshot placement design: a node that
-	// cannot redirect a branch pulls the record from an owner through this.
-	// It streams a full checkpoint (guest memory + disk) with no tenant
-	// scoping, so only the fleet's root api_token may call it — its one
-	// intended caller is the peer puller, authenticated as the operator.
+	// GET streams a whole checkpoint with no tenant scoping, so it is
+	// operator-only; HEAD is the ownership probe and stays unauthenticated.
 	mux.HandleFunc("GET /v1/checkpoints/{id}/blob", s.requireRoot(s.handleCheckpointBlob))
-	// HEAD is the probe endpoint a redirect decision fans out to: it must stay
-	// unauthenticated, so it is registered outside requireToken.
 	mux.HandleFunc("HEAD /v1/checkpoints/{id}/blob", s.handleCheckpointProbe)
 	mux.HandleFunc("DELETE /v1/checkpoints/{id}", s.requireToken(s.handleDeleteCheckpoint))
 	mux.HandleFunc("DELETE /v1/templates", s.requireToken(s.handleDeleteTemplate))
@@ -281,8 +275,8 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleSandbox reports one live claim, so a control plane can read a single
-// sandbox instead of scanning the whole-node listing on every reconcile.
+// handleSandbox reports one live claim, so a reconcile need not scan the
+// whole-node listing.
 func (s *Server) handleSandbox(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	sb, ok := s.mgr.Sandbox(id)
@@ -306,9 +300,8 @@ func (s *Server) handleSandboxStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSandboxVerb adapts a sandbox-scoped manager call (hibernate, wake) to
-// HTTP: per-sandbox bearer auth, 404 on unknown, 204 on success. The node's
-// root api_token resolves as an Operator credential instead, so a control
-// plane holding only the fleet token can drive the lifecycle.
+// HTTP: per-sandbox bearer auth, 404 on unknown, 204 on success. The root
+// api_token resolves as an Operator credential instead.
 func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id string, cred pool.Cred) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, ok := sandboxToken(w, r)
@@ -368,11 +361,8 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleClaimCheckpoint claims a fresh sandbox branched from a checkpoint.
-// Tier order: local claim first; then a redirect (zero bytes moved) when a
-// live probe finds an owner and this is not already the redirect retry —
-// redirect targets come from a live probe, not gossip, so a redirect never
-// points at a node that already lost the record; heal (one peer transfer)
-// only when neither could answer.
+// Tier order: the local claim, then a redirect to a probed owner (zero bytes
+// moved, never a stale one), then one peer transfer if neither answered.
 func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeBody[types.CheckpointClaimRequest](w, r)
 	if !ok {
@@ -391,8 +381,7 @@ func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleCheckpointBlob streams a checkpoint record as a tar, so a peer that
-// must serve a branch locally can pull it.
+// handleCheckpointBlob streams a checkpoint record as a tar for a peer's pull.
 func (s *Server) handleCheckpointBlob(w http.ResponseWriter, r *http.Request) {
 	ckptID := r.PathValue("id")
 	dir, meta, release, err := s.mgr.FetchCheckpoint(r.Context(), ckptID)
@@ -416,9 +405,8 @@ func (s *Server) handleCheckpointBlob(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleCheckpointProbe answers a peer's HEAD probe for a checkpoint.
-// Unauthenticated on purpose: the id is the unguessable capability, so this
-// leaks only existence to a caller who already holds it.
+// handleCheckpointProbe answers a peer's HEAD probe. Unauthenticated: the id
+// is the capability, so this tells a caller only what it already knows.
 func (s *Server) handleCheckpointProbe(w http.ResponseWriter, r *http.Request) {
 	if s.mgr.HasCheckpoint(r.Context(), r.PathValue("id")) {
 		w.WriteHeader(http.StatusOK)
@@ -568,8 +556,7 @@ func (s *Server) requireRoot(next http.HandlerFunc) http.HandlerFunc {
 	})
 }
 
-// rootRequest reports whether this request presented the node's root api_token,
-// the credential that authorizes the operator lifecycle paths.
+// rootRequest reports whether this request presented the root api_token.
 func (s *Server) rootRequest(r *http.Request) bool {
 	token, ok := bearerToken(r)
 	return ok && s.isRootToken(token)
@@ -583,9 +570,8 @@ func (s *Server) isRootToken(token string) bool {
 	return s.apiToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) == 1
 }
 
-// sandboxCred resolves a header-borne bearer token to a Cred: the root
-// api_token elevates to Operator (the manager must never see it as a
-// sandbox token), anything else is carried as the per-sandbox token as-is.
+// sandboxCred resolves a header bearer token to a Cred. The root api_token
+// elevates to Operator: the manager must never see it as a sandbox token.
 func (s *Server) sandboxCred(token string) pool.Cred {
 	if s.isRootToken(token) {
 		return pool.Cred{Operator: true}
@@ -593,9 +579,8 @@ func (s *Server) sandboxCred(token string) pool.Cred {
 	return pool.Cred{Token: token}
 }
 
-// bodyCred resolves a body-carried sandbox token to a Cred: an empty token
-// from a root-authenticated request (header api_token) is Operator; a tenant
-// must still present the sandbox's own token as ownership proof.
+// bodyCred resolves a body-carried sandbox token: absent, on a
+// root-authenticated request, is Operator; a tenant must still prove ownership.
 func (s *Server) bodyCred(r *http.Request, bodyToken string) pool.Cred {
 	return pool.Cred{Token: bodyToken, Operator: bodyToken == "" && s.rootRequest(r)}
 }

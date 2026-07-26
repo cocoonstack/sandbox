@@ -14,31 +14,24 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 )
 
-// healBudget bounds one Pull across every owner tried, replacing the old
-// per-owner-only bound: a heal that tried N owners at 30 minutes each could
-// run for N*30 minutes with nothing else limiting it.
+// healBudget bounds one Pull across every owner tried, not each.
 const healBudget = 30 * time.Minute
 
-// Owners resolves a record id to the peer addresses that hold it — the mesh's
-// gossiped view, injected so the healer stays testable without a live cluster.
+// Owners resolves a record id to the peer addresses that hold it.
 type Owners func(id string) []string
 
-// Validate checks a staged pull before Pull trusts the owner that sent it; a
-// non-nil error tries the next owner instead of failing the whole heal. The
-// healer does not know the record's shape, so the caller supplies this.
+// Validate checks a staged pull before Pull trusts the owner that sent it; an
+// error tries the next owner. The healer does not know the record's shape.
 type Validate func(staging string) error
 
-// Healer pulls a record this node does not hold from whichever peer gossiped
-// it, staging the transfer into a caller-provided directory; the caller
-// validates and publishes it. A nil owners or puller leaves Pull always
-// answering store.ErrNotFound, so a node with no mesh degrades to unable to
-// heal rather than failing.
+// Healer pulls a record this node does not hold into a caller-provided staging
+// directory; the caller validates and publishes it. A nil owners or puller
+// makes every Pull a miss, so a node with no mesh simply cannot heal.
 type Healer struct {
 	owners Owners
 	puller Puller
 
-	// budget overrides healBudget when set; a test seam, since 30 minutes is
-	// not something a test should wait out.
+	// budget overrides healBudget; a test seam, 30 minutes is unwaitable.
 	budget time.Duration
 
 	flights singleflight.Group
@@ -50,9 +43,7 @@ func NewHealer(owners Owners, puller Puller) *Healer {
 }
 
 // Pull fetches id into staging from the first owner whose transfer validates,
-// bounding the whole attempt (every owner) to one budget so a wedged or
-// endlessly-invalid peer cannot starve the rest. Concurrent pulls of the same
-// id share one flight.
+// bounding every owner tried to one budget. Concurrent pulls share a flight.
 func (h *Healer) Pull(ctx context.Context, id, staging string, validate Validate) error {
 	if h.owners == nil || h.puller == nil {
 		return store.ErrNotFound
@@ -62,8 +53,7 @@ func (h *Healer) Pull(ctx context.Context, id, staging string, validate Validate
 		return store.ErrNotFound
 	}
 	budget := cmp.Or(h.budget, healBudget)
-	// A client hanging up must not abandon a started pull: the budget below
-	// bounds it instead of the caller's ctx.
+	// A client hanging up must not abandon a started pull; the budget bounds it.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
 	defer cancel()
 	_, err, _ := h.flights.Do(id, func() (any, error) {
@@ -105,9 +95,8 @@ func (h *Healer) pullFrom(ctx context.Context, id, staging string, addrs []strin
 	return store.ErrNotFound // every owner answered not-found: stale gossip
 }
 
-// clearDir empties dir's contents (keeping dir itself) between owner
-// attempts, so a rejected or partial transfer from one peer cannot linger
-// into the next's.
+// clearDir empties dir between owner attempts, so one peer's rejected or
+// partial transfer cannot linger into the next's.
 func clearDir(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {

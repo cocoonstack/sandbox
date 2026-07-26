@@ -225,10 +225,9 @@ type Config struct {
 	// storage (credentials from the AWS chain, never this file).
 	CheckpointStore *StoreConfig `json:"checkpoint_store,omitempty"`
 
-	// CheckpointPeerHeal lets a node pull a checkpoint it does not hold from a
-	// node that gossiped it instead of failing the branch. Requires an encrypted
-	// mesh (cluster_key): the heal path presents the fleet token to gossip-learned
-	// addresses. Off by default because it trades a transfer for availability.
+	// CheckpointPeerHeal lets a node pull a checkpoint it lacks from a peer
+	// rather than failing the branch. Requires cluster_key: the pull presents
+	// the fleet token to a probed address. Off by default.
 	CheckpointPeerHeal bool `json:"checkpoint_peer_heal,omitempty"`
 
 	// CheckpointTTLHours ages out checkpoints (0 = keep forever); the
