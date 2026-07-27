@@ -82,7 +82,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 		if ctx.Err() == nil {
 			m.refillOnce(ctx)
 		}
-		sb, err = m.readyBounded(ctx, sb, time.Now().Add(claimProbeTimeout))
+		sb, err = m.readyBounded(ctx, sb, time.Now().Add(warmProbeTimeout))
 	}
 	keep := false
 	var fails int
@@ -414,8 +414,19 @@ func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context,
 // removeVM deletes a VM (on a cancellation-immune ctx, else `cocoon vm rm`
 // no-ops and orphans it) and reports whether it is confirmed gone; a failed
 // remove leaves it running, so the caller must keep its lock.
+//
+// The remove is cancellation-immune but NOT unbounded: `cocoon vm rm` contends
+// with every concurrent create on the node's metadata store, and under a large
+// fill that contention can outlast any caller. A remove that never returns pins
+// whatever the caller was holding — refillOne cleans up a failed create before
+// it releases the refill semaphore and decrements p.refilling, so one wedged
+// remove leaves the pool permanently one short of target. Give up after
+// removeTimeout instead: cocoon keeps a tombstone and its own gc resumes the
+// delete, and the reaper sweeps whatever is still running.
 func (m *Manager) removeVM(ctx context.Context, name string) bool {
-	if err := m.eng.Remove(context.WithoutCancel(ctx), name); err != nil {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), removeTimeout)
+	defer cancel()
+	if err := m.eng.Remove(ctx, name); err != nil {
 		log.WithFunc("pool.removeVM").Errorf(ctx, err, "remove vm %s", name)
 		return false
 	}

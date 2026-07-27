@@ -35,11 +35,23 @@ import (
 )
 
 const (
-	refillInterval     = 2 * time.Second
-	reapInterval       = 5 * time.Second
-	buildRetryDelay    = 30 * time.Second
-	claimProbeTimeout  = 15 * time.Second
-	coldProbeTimeout   = 90 * time.Second
+	refillInterval    = 2 * time.Second
+	reapInterval      = 5 * time.Second
+	buildRetryDelay   = 30 * time.Second
+	claimProbeTimeout = 15 * time.Second
+	coldProbeTimeout  = 90 * time.Second
+	// warmProbeTimeout bounds the readiness probe of a warm-pool refill,
+	// which — unlike a claim — has no caller waiting on it. A clone answers
+	// in about a second even with the node saturated, so one that has said
+	// nothing for this long is an outlier worth replacing rather than
+	// waiting on: the refill holds a slot in the pool's target accounting
+	// for its whole probe, so a long deadline here stalls the LAST few of a
+	// large fill (deadline + refillInterval + a fresh boot) even though the
+	// replacement costs about a second. Claims keep the generous deadline.
+	warmProbeTimeout = 5 * time.Second
+	// removeTimeout bounds one `cocoon vm rm`; see removeVM for why a remove
+	// must never outlast its caller.
+	removeTimeout      = 10 * time.Second
 	vsockPollInterval  = 100 * time.Millisecond
 	defaultTTL         = 5 * time.Minute
 	maxTTL             = 24 * time.Hour
