@@ -67,13 +67,11 @@ go-lint: golangci-lint ## golangci-lint (run + fmt --diff) across the Go modules
 		(cd $$m && GOWORK=off $(GOLANGCILINT) fmt --diff ./...) || exit 1; \
 	done
 
-# --platform: the kernel build is x86-only (x86_64_defconfig, PVH); without
-# the pin, arm64 hosts build an aarch64 stage that dies inside kbuild.
 boot: ## kernel + initramfs artifact image (docker)
-	docker build --platform linux/amd64 -t $(BOOT_IMAGE) --build-arg KERNEL_VERSION=$(KERNEL_VERSION) --build-arg KERNEL_MIRROR=$(KERNEL_MIRROR) boot
+	docker build -t $(BOOT_IMAGE) --build-arg KERNEL_VERSION=$(KERNEL_VERSION) --build-arg KERNEL_MIRROR=$(KERNEL_MIRROR) boot
 
 boot-debug: ## boot image with busybox + /bin/sh on fatal errors
-	docker build --platform linux/amd64 -t $(BOOT_IMAGE)-debug --build-arg KERNEL_VERSION=$(KERNEL_VERSION) --build-arg KERNEL_MIRROR=$(KERNEL_MIRROR) --build-arg INITRD_DEBUG=1 boot
+	docker build -t $(BOOT_IMAGE)-debug --build-arg KERNEL_VERSION=$(KERNEL_VERSION) --build-arg KERNEL_MIRROR=$(KERNEL_MIRROR) --build-arg INITRD_DEBUG=1 boot
 
 extract: ## dump /boot artifacts into dist/ for boot-bench.sh
 	rm -rf dist && mkdir -p dist
@@ -83,17 +81,17 @@ extract-debug: ## extract from the boot-debug image
 	$(MAKE) extract EXTRACT_IMAGE=$(BOOT_IMAGE)-debug
 
 silkd-image: ## silkd release binary in a scratch carrier image
-	docker build --platform linux/amd64 -t $(SILKD_IMAGE) -f silkd/Dockerfile silkd
+	docker build -t $(SILKD_IMAGE) -f silkd/Dockerfile silkd
 
 base: silkd-image ## base VM image against the local boot + silkd images
-	docker build --platform linux/amd64 -t sandbox-base:dev \
+	docker build -t sandbox-base:dev \
 		--build-arg BOOT_IMAGE=$(BOOT_IMAGE) \
 		--build-arg SILKD_IMAGE=$(SILKD_IMAGE) \
 		--secret id=sandbox_install_agent,src=os-image/base/install-agent.sh \
 		-f os-image/base/24.04/Dockerfile os-image/base
 
 python: base ## python flavor image on top of base
-	docker build --platform linux/amd64 -t sandbox-python:dev \
+	docker build -t sandbox-python:dev \
 		--build-arg BASE_IMAGE=sandbox-base:dev \
 		-f os-image/python/3.12/Dockerfile os-image/python
 
