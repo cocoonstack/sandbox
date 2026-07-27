@@ -154,7 +154,7 @@ func TestClaimCheckpointHealCtxCancelReturnsPromptly(t *testing.T) {
 	m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
 	puller.release = make(chan struct{})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
 		_, err := m.ClaimCheckpointHeal(ctx, id, time.Hour, "")

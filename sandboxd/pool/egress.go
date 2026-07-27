@@ -137,7 +137,7 @@ func (m *Manager) tapOf(ctx context.Context, vmName string) (string, error) {
 // armEgressProxy binds the vsock egress proxy for a claim whose effective policy
 // permits something; a no-op otherwise, so no listener means default-deny (the
 // egress-lane NIC stays nft-locked, the none lane's proxy dial is refused).
-func (m *Manager) armEgressProxy(_ context.Context, sb *types.Sandbox) error {
+func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	if !m.guardedEgress || sb.VsockSocket == "" {
 		return nil
 	}
@@ -152,8 +152,9 @@ func (m *Manager) armEgressProxy(_ context.Context, sb *types.Sandbox) error {
 		return fmt.Errorf("listen egress %s: %w", sb.ID, err)
 	}
 	id, tenant := sb.ID, sb.Tenant
+	evCtx := context.WithoutCancel(ctx)
 	proxy := egress.New(id, tenant, policy, m.egressSecrets, m.egressCA, m.dial,
-		func(ev egress.Event) { m.recordEgress(context.Background(), id, tenant, ev) })
+		func(ev egress.Event) { m.recordEgress(evCtx, id, tenant, ev) })
 	el := &egressListener{srv: &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}, proxy: proxy, ln: ln, path: path}
 	m.mu.Lock()
 	m.egressListeners[id] = el

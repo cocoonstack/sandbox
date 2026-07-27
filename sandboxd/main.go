@@ -141,7 +141,7 @@ func main() {
 			}
 		}()
 		context.AfterFunc(ctx, func() {
-			sctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+			sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownGrace)
 			defer cancel()
 			_ = previewSrv.Shutdown(sctx)
 		})
@@ -153,7 +153,7 @@ func main() {
 		defer close(drained)
 		<-ctx.Done()
 		// Must outlive the canceled signal ctx to bound the drain.
-		sctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownGrace)
 		defer cancel()
 		_ = httpSrv.Shutdown(sctx)
 		srv.CloseRelays()
