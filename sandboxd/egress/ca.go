@@ -20,6 +20,8 @@ import (
 const (
 	leafValidity = 90 * 24 * time.Hour
 	clockSkew    = time.Hour
+
+	pemTypeCertificate = "CERTIFICATE"
 )
 
 // CA signs per-host interception leaves with the node's intermediate. The
@@ -153,7 +155,7 @@ func parseRootBundle(pemBytes []byte) (*x509.Certificate, error) {
 		if block, rest = pem.Decode(rest); block == nil {
 			break
 		}
-		if block.Type != "CERTIFICATE" {
+		if block.Type != pemTypeCertificate {
 			return nil, fmt.Errorf("root bundle: unexpected %s pem block", block.Type)
 		}
 		cert, err := x509.ParseCertificate(block.Bytes)

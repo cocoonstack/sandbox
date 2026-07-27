@@ -56,7 +56,7 @@ var (
 
 	requestDecoders = map[string]func([]byte) (Request, error){
 		"exec":           decodeReq[Exec],
-		"info":           decodeReq[Info],
+		"info":           decodeReq[Info], //nolint:goconst // wire tag shared with the response type by design
 		"ps":             decodeReq[Ps],
 		"kill":           decodeReq[Kill],
 		"attach":         decodeReq[Attach],
@@ -91,7 +91,7 @@ var (
 		"lsp_start":      decodeReq[LspStart],
 		"lsp_request":    decodeReq[LspRequest],
 		"lsp_stop":       decodeReq[LspStop],
-		"data":           decodeReq[Data],
+		"data":           decodeReq[Data], //nolint:goconst // wire tag shared with the response type by design
 		"data_end":       decodeReq[DataEnd],
 	}
 

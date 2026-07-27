@@ -82,7 +82,7 @@ func marshalCA(tmpl, parent *x509.Certificate, pub, signer, keyToPEM any) (certP
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal key: %w", err)
 	}
-	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	certPEM = pem.EncodeToMemory(&pem.Block{Type: pemTypeCertificate, Bytes: der})
 	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	return certPEM, keyPEM, nil
 }

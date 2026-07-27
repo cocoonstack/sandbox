@@ -71,6 +71,11 @@ linters:
       - path: silkdtest/
         linters:
           - gosec
+      # mcp is a JSON-RPC schema/dispatch table; tool and protocol field
+      # names stay literal at each site by design.
+      - path: ^mcp/
+        linters:
+          - goconst
 
 formatters:
   enable:

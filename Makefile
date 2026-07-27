@@ -15,8 +15,24 @@ EXTRACT_IMAGE ?= $(BOOT_IMAGE)
 GO_MODULES := protocol/wire sandboxd sdk/go e2e mcp
 GO_OSES := linux darwin
 
+## Location to install dependencies to
+LOCALBIN ?= $(shell pwd)/bin
+$(LOCALBIN):
+	mkdir -p $(LOCALBIN)
+
+## Tool versions
+GOLANGCILINT_VERSION ?= v2.12.2
+GOLANGCILINT_ROOT := $(LOCALBIN)/golangci-lint-$(GOLANGCILINT_VERSION)
+GOLANGCILINT := $(GOLANGCILINT_ROOT)/golangci-lint
+
 .PHONY: help test lint boot boot-debug extract extract-debug silkd-image base python images \
 	sandboxd go-test go-lint bench cloc
+
+## Tool download targets
+.PHONY: golangci-lint
+golangci-lint: $(GOLANGCILINT)
+$(GOLANGCILINT):
+	GOBIN=$(GOLANGCILINT_ROOT) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCILINT_VERSION)
 
 cloc: ## Count lines of code excluding tests (requires cloc)
 	cloc --exclude-dir=target,dist,node_modules --exclude-ext=json \
@@ -43,12 +59,12 @@ go-test: ## go test -race across the Go modules
 bench: ## claim-tier + data-plane benchmarks on this node (see docs/benchmarks.md)
 	bash scripts/bench.sh
 
-go-lint: ## golangci-lint (run + fmt --diff) across the Go modules, GOOS linux+darwin
+go-lint: golangci-lint ## golangci-lint (run + fmt --diff) across the Go modules, GOOS linux+darwin
 	for m in $(GO_MODULES); do \
 		for os in $(GO_OSES); do \
-			(cd $$m && GOWORK=off GOOS=$$os golangci-lint run ./...) || exit 1; \
+			(cd $$m && GOWORK=off GOOS=$$os $(GOLANGCILINT) run ./...) || exit 1; \
 		done; \
-		(cd $$m && GOWORK=off golangci-lint fmt --diff ./...) || exit 1; \
+		(cd $$m && GOWORK=off $(GOLANGCILINT) fmt --diff ./...) || exit 1; \
 	done
 
 # --platform: the kernel build is x86-only (x86_64_defconfig, PVH); without

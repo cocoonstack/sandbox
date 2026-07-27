@@ -273,7 +273,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	// Usage lands only after the whole batch armed: a rollback must not leave
 	// claim events with no terminal release/reap in the billing stream.
 	for _, sb := range sbs {
-		m.recordUsage(ctx, usageEvent{Event: "claim", ID: sb.ID, VMName: sb.VMName, KeyHash: sb.Key.Hash(), Tenant: sb.Tenant})
+		m.recordUsage(ctx, usageEvent{Event: "claim", ID: sb.ID, VMName: sb.VMName, KeyHash: sb.Key.Hash(), Tenant: sb.Tenant}) //nolint:goconst // event name; other occurrences are test assertions
 	}
 	return nil
 }

@@ -223,7 +223,7 @@ func (s *Store) ReadMeta(ctx context.Context, id string) ([]byte, error) {
 	})
 	if err != nil {
 		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound") {
+		if errors.As(err, &apiErr) && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound") { //nolint:goconst // AWS API error codes, compared as literals
 			return nil, store.ErrNotFound
 		}
 		return nil, fmt.Errorf("record %s: %w", id, err)
