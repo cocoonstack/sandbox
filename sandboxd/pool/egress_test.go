@@ -254,6 +254,9 @@ func TestBatchArmFailureRecordsNoUsage(t *testing.T) {
 func TestRollbackKeepsLockWhenRemoveFails(t *testing.T) {
 	eng := newFakeEngine()
 	eng.removeErrFor = "sbx-r1"
+	// Both VMs are running; sbx-r1's remove fails and the engine keeps listing it.
+	eng.vms["sbx-r1"] = "/run/sbx-r1.sock"
+	eng.vms["sbx-r2"] = "/run/sbx-r2.sock"
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 	// Both members armed before a later batch member failed; sbx-r1's remove fails.
 	sbs := []*types.Sandbox{
@@ -287,6 +290,9 @@ func TestRollbackKeepsLockWhenRemoveFails(t *testing.T) {
 func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
 	eng := newFakeEngine()
 	eng.removeErrFor = "sbx-q1"
+	// The VM is running: a failed remove only means "still here" if the engine
+	// still lists it, which is what removeVM now checks.
+	eng.vms["sbx-q1"] = "/run/sbx-q1.sock"
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 	sb := &types.Sandbox{ID: "sb_q1", VMName: "sbx-q1", Key: egKey, TAP: "tap-q1"}
 	m.mu.Lock()

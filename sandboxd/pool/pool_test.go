@@ -1061,3 +1061,47 @@ func (f *fakeEngine) snapRemoved(name string) bool {
 	defer f.mu.Unlock()
 	return slices.Contains(f.snapRemoves, name)
 }
+
+// TestRemoveVMWillNotReportGoneWhileTheVMRuns pins the invariant a bounded
+// remove has to preserve. `cocoon vm rm` contends with every concurrent create
+// on the node's metadata store, so under a large scale-down it routinely runs
+// long; the bound exists so one slow remove cannot pin the refill slot forever.
+// But a bound that reports success on expiry is worse than no bound: the
+// timeout SIGKILLs the command partway through, the guest keeps running, and
+// this manager forgets it exists. The slot is released, the pool refills, and
+// the node accumulates VMs nothing is accounting for — silently, and faster the
+// harder you drive it. Measured once at ~570 orphans per node.
+func TestRemoveVMWillNotReportGoneWhileTheVMRuns(t *testing.T) {
+	eng := newFakeEngine()
+	m := &Manager{eng: eng}
+
+	// A remove that fails outright, on a VM the engine still lists.
+	eng.mu.Lock()
+	eng.vms["survivor"] = "/run/survivor.sock"
+	eng.removeErrFor = "survivor"
+	eng.mu.Unlock()
+
+	if m.removeVM(context.Background(), "survivor") {
+		t.Fatal("a VM the engine still lists was reported gone; its slot would be " +
+			"released while the guest keeps running")
+	}
+
+	// The same failure, but the VM really is absent: reporting it gone is right,
+	// and is what stops a permanently failing remove from pinning a slot.
+	eng.mu.Lock()
+	delete(eng.vms, "survivor")
+	eng.mu.Unlock()
+	if !m.removeVM(context.Background(), "survivor") {
+		t.Fatal("a VM the engine no longer lists must be reported gone, whatever " +
+			"the remove command said, or a permanently failing remove pins the slot")
+	}
+
+	// The ordinary path is unchanged.
+	eng.mu.Lock()
+	eng.vms["ordinary"] = "/run/ordinary.sock"
+	eng.removeErrFor = ""
+	eng.mu.Unlock()
+	if !m.removeVM(context.Background(), "ordinary") || !eng.removed("ordinary") {
+		t.Fatal("the ordinary remove path regressed")
+	}
+}

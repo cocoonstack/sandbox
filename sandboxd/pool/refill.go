@@ -424,11 +424,44 @@ func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context,
 // removeTimeout instead: cocoon keeps a tombstone and its own gc resumes the
 // delete, and the reaper sweeps whatever is still running.
 func (m *Manager) removeVM(ctx context.Context, name string) bool {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), removeTimeout)
+	ctx = context.WithoutCancel(ctx)
+	rmCtx, cancel := context.WithTimeout(ctx, removeTimeout)
 	defer cancel()
-	if err := m.eng.Remove(ctx, name); err != nil {
-		log.WithFunc("pool.removeVM").Errorf(ctx, err, "remove vm %s", name)
+	if err := m.eng.Remove(rmCtx, name); err == nil {
+		return true
+	} else {
+		log.WithFunc("pool.removeVM").Warnf(ctx, "remove vm %s: %v; verifying", name, err)
+	}
+
+	// The remove failed or ran out of time, and the difference that matters is
+	// whether the VM is still running — not why the command stopped. A timeout
+	// SIGKILLs `cocoon vm rm` partway through, which can leave the guest alive
+	// while this process forgets it exists: the slot is released, the pool
+	// refills, and the machine accumulates VMs nobody is accounting for. That
+	// failure is silent and compounding, so confirm before reporting gone.
+	return m.confirmGone(ctx, name)
+}
+
+// confirmGone reports whether name is absent from the engine's own view.
+// A VM the engine still lists is reported as present, which keeps it in this
+// manager's accounting so the reaper retries it rather than leaking it.
+func (m *Manager) confirmGone(ctx context.Context, name string) bool {
+	ctx, cancel := context.WithTimeout(ctx, removeVerifyTimeout)
+	defer cancel()
+	vms, err := m.eng.List(ctx, name)
+	if err != nil {
+		// Cannot tell. Assume it is still there: a false "gone" leaks a running
+		// VM, a false "still here" only costs another sweep.
+		log.WithFunc("pool.confirmGone").Warnf(ctx, "verify remove of %s: %v", name, err)
 		return false
+	}
+	for i := range vms {
+		if vms[i].Config.Name == name {
+			log.WithFunc("pool.confirmGone").Errorf(ctx,
+				fmt.Errorf("vm %s survived removal", name),
+				"remove did not take effect; leaving it accounted for retry")
+			return false
+		}
 	}
 	return true
 }

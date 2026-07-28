@@ -50,13 +50,21 @@ const (
 	// replacement costs about a second. Claims keep the generous deadline.
 	warmProbeTimeout = 5 * time.Second
 	// removeTimeout bounds one `cocoon vm rm`; see removeVM for why a remove
-	// must never outlast its caller.
-	removeTimeout      = 10 * time.Second
-	vsockPollInterval  = 100 * time.Millisecond
-	defaultTTL         = 5 * time.Minute
-	maxTTL             = 24 * time.Hour
-	recommitBackoff    = 20 * time.Millisecond
-	recommitMaxBackoff = 5 * time.Second
+	// must never outlast its caller. It is generous because the command
+	// contends with every concurrent create on the node's metadata store, and
+	// under a large scale-down that contention is the normal case, not the
+	// exception — a tight bound there turns routine slowness into a killed
+	// remove, and a killed remove can leave the guest running.
+	removeTimeout = 120 * time.Second
+	// removeVerifyTimeout bounds the check that a failed remove really did
+	// leave nothing behind. Short: it is one list, and being wrong here only
+	// costs an extra sweep.
+	removeVerifyTimeout = 15 * time.Second
+	vsockPollInterval   = 100 * time.Millisecond
+	defaultTTL          = 5 * time.Minute
+	maxTTL              = 24 * time.Hour
+	recommitBackoff     = 20 * time.Millisecond
+	recommitMaxBackoff  = 5 * time.Second
 	// One failed boot is ordinary; only an unbroken run of failures says the
 	// next attempt will fail too.
 	refillFailStreak = 8
