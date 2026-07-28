@@ -170,11 +170,15 @@ type Config struct {
 	// to Listen, which is correct when Listen is a routable host:port.
 	AdvertiseAddr string `json:"advertise_addr,omitempty"`
 
-	// Bridge and Network pick the egress-lane attachment (TAP-on-bridge vs
-	// CNI conflist); mutually exclusive. With neither set the node serves
+	// Bridge and Networks pick the egress-lane attachment (TAP-on-bridge vs
+	// CNI conflists); mutually exclusive. With neither set the node serves
 	// only the no-network lane.
-	Bridge  string `json:"bridge,omitempty"`
-	Network string `json:"network,omitempty"`
+	Bridge string `json:"bridge,omitempty"`
+
+	// Networks shards egress-lane VMs over several CNI conflists, one Linux
+	// bridge each: a bridge holds at most 1024 ports (BR_MAX_PORTS, no
+	// sysctl), so N conflists raise the node's egress ceiling to N×1024.
+	Networks []string `json:"networks,omitempty"`
 
 	// RestoreMode rides clones and wake restores as cocoon's --restore-mode. Opt-in: mmap
 	// needs every node's cloud-hypervisor to carry CoW restore — an older CH
@@ -272,7 +276,7 @@ type Config struct {
 
 // HasEgress reports whether the node can attach egress-lane VMs.
 func (c *Config) HasEgress() bool {
-	return c.Bridge != "" || c.Network != ""
+	return c.Bridge != "" || len(c.Networks) > 0
 }
 
 // ClusterDigest fingerprints the must-match config so a divergent node is
@@ -334,12 +338,12 @@ func autoRefillConcurrency(cpus int) int {
 }
 
 func (c *Config) validate() error {
-	if c.Bridge != "" && c.Network != "" {
-		return fmt.Errorf("bridge and network are mutually exclusive")
+	if err := c.validateNetworks(); err != nil {
+		return err
 	}
 	// A CNI network's tap lives in the VM netns, unreachable from the root-netns
 	// nft lock; guarded egress needs a bridge.
-	if c.Network != "" && c.guardsEgressLane() {
+	if len(c.Networks) > 0 && c.guardsEgressLane() {
 		return fmt.Errorf("guarded egress needs a bridge lane, not a CNI network: the tap lives in the VM netns and cannot be locked")
 	}
 	if c.MaxForkCount < 1 {
@@ -455,6 +459,25 @@ func (c *Config) validateSecrets() (map[string]struct{}, error) {
 		names[s.Name] = struct{}{}
 	}
 	return names, nil
+}
+
+// validateNetworks checks the egress-lane attachment; a repeated conflist
+// would report N shards while filling one bridge.
+func (c *Config) validateNetworks() error {
+	if c.Bridge != "" && len(c.Networks) > 0 {
+		return fmt.Errorf("bridge and networks are mutually exclusive")
+	}
+	seen := make(map[string]struct{}, len(c.Networks))
+	for _, n := range c.Networks {
+		if n == "" {
+			return fmt.Errorf("networks must not contain an empty conflist name")
+		}
+		if _, ok := seen[n]; ok {
+			return fmt.Errorf("duplicate conflist %q", n)
+		}
+		seen[n] = struct{}{}
+	}
+	return nil
 }
 
 // validateEgressAllow rejects a malformed prefix at load: a typo would
