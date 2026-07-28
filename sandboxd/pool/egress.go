@@ -48,7 +48,21 @@ var (
 	}
 
 	// egressDialer blocks internal-address targets so the proxy cannot be an SSRF.
-	egressDialer = &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
+	// It is the fallback for a node that allows no internal destination; see
+	// newEgressDialer for the configured form.
+	egressDialer = newEgressDialer(nil)
+)
+
+// newEgressDialer builds the proxy's upstream dialer. It blocks every
+// internal-address target so the proxy cannot be turned into an SSRF, then
+// re-admits exactly the prefixes the node names.
+//
+// The allow-list is prefixes rather than a "permit private" switch because the
+// guest bridges are themselves ULA/RFC1918: a blanket permit would let one
+// sandbox reach another, and the host's own gateway address. Naming the
+// corporate ranges keeps those out while letting internal services in.
+func newEgressDialer(allow []netip.Prefix) *net.Dialer {
+	return &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
 		host, _, err := net.SplitHostPort(address)
 		if err != nil {
 			return err
@@ -62,13 +76,19 @@ var (
 			b := ip.As16()
 			ip = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
 		}
+		// Checked before the block so an allowed prefix wins, and after the
+		// NAT64 unwrap so a v4 embedded in a v6 target is matched as the v4 it
+		// really is.
+		if slices.ContainsFunc(allow, func(p netip.Prefix) bool { return p.Contains(ip) }) {
+			return nil
+		}
 		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
 			slices.ContainsFunc(internalRanges, func(p netip.Prefix) bool { return p.Contains(ip) }) {
 			return fmt.Errorf("egress: blocked internal address %s", ip)
 		}
 		return nil
 	}}
-)
+}
 
 // egressListener is one sandbox's egress accept point: an http.Server serving
 // egress.Proxy over the per-sandbox UDS the VMM connects when the guest dials
@@ -222,4 +242,17 @@ func (m *Manager) effectivePolicy(sb *types.Sandbox) (egress.Evaluator, bool) {
 	default:
 		return nil, false
 	}
+}
+
+// parsePrefixes turns the node's allow-list into prefixes. Config validation
+// already rejected a malformed entry, so a leftover here is dropped rather than
+// failing a claim: the strict form of the check belongs at load, not at dial.
+func parsePrefixes(cidrs []string) []netip.Prefix {
+	out := make([]netip.Prefix, 0, len(cidrs))
+	for _, c := range cidrs {
+		if p, err := netip.ParsePrefix(c); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out
 }

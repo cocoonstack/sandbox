@@ -516,3 +516,59 @@ func mustHostname(t *testing.T, raw string) string {
 	}
 	return u.Hostname()
 }
+
+// TestEgressDialerAdmitsOnlyNamedInternalPrefixes is the security boundary of
+// the none lane's proxy. The guard exists so a guest cannot turn the proxy into
+// an SSRF; the allow-list re-admits corporate services without also re-admitting
+// the guest bridges, which are themselves ULA/RFC1918 — a blanket "permit
+// private" would let one sandbox reach another and the host's own gateway.
+func TestEgressDialerAdmitsOnlyNamedInternalPrefixes(t *testing.T) {
+	// The corporate ranges a node would name; the guest bridge ULA deliberately
+	// is not among them.
+	d := newEgressDialer(parsePrefixes([]string{"fdbd::/16", "10.8.0.0/16"}))
+	check := func(addr string) error {
+		return d.Control("tcp", addr, nil)
+	}
+	for name, tc := range map[string]struct {
+		addr    string
+		allowed bool
+	}{
+		"public v4":                    {"93.184.216.34:443", true},
+		"public v6":                    {"[2606:2800:220:1:248:1893:25c8:1946]:443", true},
+		"corporate v6 (code.byted.org)": {"[fdbd:dc01:fe:200f::1]:443", true},
+		"corporate v4":                 {"10.8.7.149:443", true},
+		// The lane's own guests and the host's gateway share fc00::/7 with the
+		// corporate range; naming prefixes rather than permitting private is
+		// exactly what keeps them out.
+		"another sandbox on the bridge": {"[fd00:c0c0:38::5]:443", false},
+		"the host's bridge gateway":     {"[fd00:c0c0:38::1]:443", false},
+		"other private v4":              {"192.168.1.1:443", false},
+		"loopback":                      {"127.0.0.1:443", false},
+		"cloud metadata":                {"169.254.169.254:80", false},
+		"CGNAT metadata":                {"100.100.100.200:80", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := check(tc.addr)
+			if tc.allowed && err != nil {
+				t.Errorf("%s was blocked: %v", tc.addr, err)
+			}
+			if !tc.allowed && err == nil {
+				t.Errorf("%s was allowed; it must not be reachable from a guest", tc.addr)
+			}
+		})
+	}
+}
+
+// TestEgressDialerWithNoAllowListBlocksEverythingInternal keeps the default
+// safe: a node that names nothing behaves exactly as before this knob existed.
+func TestEgressDialerWithNoAllowListBlocksEverythingInternal(t *testing.T) {
+	d := newEgressDialer(nil)
+	for _, addr := range []string{"10.8.7.149:443", "[fdbd:dc01:fe:200f::1]:443", "192.168.1.1:443"} {
+		if err := d.Control("tcp", addr, nil); err == nil {
+			t.Errorf("%s allowed with an empty allow-list", addr)
+		}
+	}
+	if err := d.Control("tcp", "93.184.216.34:443", nil); err != nil {
+		t.Errorf("public address blocked: %v", err)
+	}
+}

@@ -384,7 +384,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		healPending:     map[string]struct{}{},
 		healAbort:       map[string]struct{}{},
 		egressSecrets:   secrets,
-		dial:            egressDialer.DialContext,
+		dial:            newEgressDialer(parsePrefixes(cfg.EgressInternalAllow)).DialContext,
 		sweep:           netfilter.SweepExcept,
 		refillSem:       make(chan struct{}, refill),
 		probeSem:        make(chan struct{}, refill),
