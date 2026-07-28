@@ -572,3 +572,24 @@ func TestEgressDialerWithNoAllowListBlocksEverythingInternal(t *testing.T) {
 		t.Errorf("public address blocked: %v", err)
 	}
 }
+
+// TestEgressDialerWildcardAllowsEverything pins the fully-open form. A node
+// that lists the whole address space turns the guard off deliberately —
+// including loopback and cloud metadata, which are the two the guard was most
+// worth keeping. It exists for fleets that put a policy-enforcing forward proxy
+// in front instead; without one, a guest can reach anything the node can.
+func TestEgressDialerWildcardAllowsEverything(t *testing.T) {
+	d := newEgressDialer(parsePrefixes([]string{"0.0.0.0/0", "::/0"}))
+	for _, addr := range []string{
+		"93.184.216.34:443",          // public
+		"[fdbd:dc01:fe:200f::1]:443", // corporate v6
+		"10.8.7.149:443",             // corporate v4
+		"[fd00:c0c0:38::5]:443",      // another sandbox
+		"127.0.0.1:7777",             // the node itself
+		"169.254.169.254:80",         // cloud metadata
+	} {
+		if err := d.Control("tcp", addr, nil); err != nil {
+			t.Errorf("%s blocked under a wildcard allow-list: %v", addr, err)
+		}
+	}
+}
