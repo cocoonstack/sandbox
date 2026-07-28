@@ -60,11 +60,18 @@ const (
 	// leave nothing behind. Short: it is one list, and being wrong here only
 	// costs an extra sweep.
 	removeVerifyTimeout = 15 * time.Second
-	vsockPollInterval   = 100 * time.Millisecond
-	defaultTTL          = 5 * time.Minute
-	maxTTL              = 24 * time.Hour
-	recommitBackoff     = 20 * time.Millisecond
-	recommitMaxBackoff  = 5 * time.Second
+	// capacityBackoff parks refill after the node reports it cannot attach
+	// another VM. The condition is a property of the node and clears only when
+	// VMs go away, so the refill ticker would otherwise retry a permanent
+	// failure at full concurrency forever. Matched to buildRetryDelay: long
+	// enough that the retry costs nothing, short enough that a drain is picked
+	// up promptly.
+	capacityBackoff    = 30 * time.Second
+	vsockPollInterval  = 100 * time.Millisecond
+	defaultTTL         = 5 * time.Minute
+	maxTTL             = 24 * time.Hour
+	recommitBackoff    = 20 * time.Millisecond
+	recommitMaxBackoff = 5 * time.Second
 	// One failed boot is ordinary; only an unbroken run of failures says the
 	// next attempt will fail too.
 	refillFailStreak = 8
@@ -154,6 +161,13 @@ type Gauges struct {
 	Hibernated int
 	Archived   int
 	Draining   bool
+	// AtCapacity reports that the node refused to attach another VM and refill
+	// is parked. It is published so a placer can send work elsewhere instead of
+	// reading this node's short warm count as transient slowness.
+	AtCapacity bool
+	// AtCapacityReason carries what the node said, so the condition is
+	// diagnosable from the API rather than only from the node's logs.
+	AtCapacityReason string
 }
 
 type pool struct {
@@ -342,6 +356,12 @@ type Manager struct {
 	mu      sync.Mutex
 	pools   map[types.PoolKey]*pool
 	claimed map[string]*types.Sandbox
+
+	// atCapacityUntil parks every pool's refill after the node reports it can
+	// hold no more VMs. It is node-wide rather than per-pool because the
+	// resource that ran out — bridge ports — is shared by all of them.
+	atCapacityUntil  time.Time
+	atCapacityReason string
 
 	refillSem  chan struct{}
 	probeSem   chan struct{}
@@ -558,6 +578,9 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 	}
 	slices.SortFunc(pools, func(a, b PoolInfo) int { return strings.Compare(a.Key.Hash(), b.Key.Hash()) })
 	g := Gauges{Claimed: len(m.claimed), Draining: m.draining}
+	if now.Before(m.atCapacityUntil) {
+		g.AtCapacity, g.AtCapacityReason = true, m.atCapacityReason
+	}
 	for _, sb := range m.claimed {
 		if sb.HibernateSnap != "" {
 			g.Hibernated++

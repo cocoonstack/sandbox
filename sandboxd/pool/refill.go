@@ -32,6 +32,13 @@ func (m *Manager) refillOnce(ctx context.Context) {
 		return
 	}
 	now := time.Now()
+	if now.Before(m.atCapacityUntil) {
+		// The node cannot attach another VM. Spawning refills anyway is what
+		// turned a capacity limit into an outage: each attempt still forks the
+		// engine, builds a netns and runs the CNI plugins before failing, and
+		// every one of those takes the global rtnl lock on the way through.
+		return
+	}
 	inFlight := 0
 	for key, p := range m.pools {
 		inFlight += p.refilling
@@ -100,15 +107,25 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 	if backedOff {
 		fails, wait = p.refillFails, time.Until(p.nextRefill)
 	}
+	// Capacity is node-wide, the streak backoff above is per-pool; both park
+	// refill, so record both and let the capacity episode own the log line.
+	entered := err != nil && m.noteCapacityLocked(err)
 	m.mu.Unlock()
 	if err != nil {
 		if ctx.Err() == nil {
 			hash := p.key.Hash()
-			log.WithFunc("pool.refillOne").Errorf(ctx, err, "refill %s", hash)
-			if backedOff {
-				log.WithFunc("pool.refillOne").Warnf(ctx,
-					"refill %s failed %d times running; pausing refill for %s",
-					hash, fails, wait.Round(time.Millisecond))
+			if entered {
+				// One line per episode, not one per attempt: the storm this
+				// replaces wrote twenty thousand of these an hour.
+				log.WithFunc("pool.refillOne").Errorf(ctx, err,
+					"node is at capacity; parking refill for %s", capacityBackoff)
+			} else if !m.atCapacity() {
+				log.WithFunc("pool.refillOne").Errorf(ctx, err, "refill %s", hash)
+				if backedOff {
+					log.WithFunc("pool.refillOne").Warnf(ctx,
+						"refill %s failed %d times running; pausing refill for %s",
+						hash, fails, wait.Round(time.Millisecond))
+				}
 			}
 		}
 		return
@@ -119,6 +136,52 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 	if !keep {
 		m.destroy(ctx, sb.VMName)
 	}
+}
+
+// noteCapacityLocked parks refill when err says the node itself is full, and
+// reports whether this call is what parked it — so the condition is logged once
+// per episode rather than once per failed attempt. Called with m.mu held.
+func (m *Manager) noteCapacityLocked(err error) bool {
+	reason, full := nodeAtCapacity(err)
+	if !full {
+		return false
+	}
+	first := !time.Now().Before(m.atCapacityUntil)
+	m.atCapacityUntil = time.Now().Add(capacityBackoff)
+	m.atCapacityReason = reason
+	return first
+}
+
+func (m *Manager) atCapacity() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return time.Now().Before(m.atCapacityUntil)
+}
+
+// capacitySignatures are the failures that mean "this node cannot attach
+// another VM", as opposed to "this VM failed to start". They are matched as
+// text because the engine is a subprocess: its exit status is 1 for every
+// failure and the distinction survives only in the message.
+//
+// "exchange full" is the kernel's EXFULL, which a Linux bridge returns for its
+// 1025th port — BR_MAX_PORTS is a compile-time constant, so the condition is
+// permanent until VMs are removed, and no amount of retrying clears it.
+var capacitySignatures = []string{
+	"exchange full",
+	"no space left on device",
+}
+
+func nodeAtCapacity(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, sig := range capacitySignatures {
+		if strings.Contains(msg, sig) {
+			return sig, true
+		}
+	}
+	return "", false
 }
 
 func (m *Manager) buildGolden(ctx context.Context, p *pool) {

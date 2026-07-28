@@ -120,6 +120,11 @@ type InfoResponse struct {
 	Archived   int             `json:"archived"`
 	Draining   bool            `json:"draining,omitempty"`
 	Peers      []string        `json:"peers,omitempty"`
+	// AtCapacity reports that the node cannot attach another VM and has parked
+	// refill. A placer should read a short warm count on such a node as "full",
+	// not "still filling", and send the work somewhere else.
+	AtCapacity       bool   `json:"at_capacity,omitempty"`
+	AtCapacityReason string `json:"at_capacity_reason,omitempty"`
 }
 
 // PoolUpdateRequest is the wire body of PUT /v1/pools. It replaces the node's
@@ -543,7 +548,10 @@ func (s *Server) handlePeers(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 	pools, g := s.mgr.Info()
-	resp := InfoResponse{Pools: pools, Claimed: g.Claimed, Hibernated: g.Hibernated, Archived: g.Archived, Draining: g.Draining}
+	resp := InfoResponse{
+		Pools: pools, Claimed: g.Claimed, Hibernated: g.Hibernated, Archived: g.Archived,
+		Draining: g.Draining, AtCapacity: g.AtCapacity, AtCapacityReason: g.AtCapacityReason,
+	}
 	if s.placer != nil {
 		resp.Peers = s.placer.PeerAddrs()
 	}
