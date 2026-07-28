@@ -82,16 +82,37 @@ fn valid_pid(id: u32) -> bool {
     id != 0 && id <= i32::MAX as u32
 }
 
+/// Variables forwarded from silkd's own environment into every exec. They are
+/// the one thing a guest cannot discover for itself: on the no-network lane
+/// there is no NIC, and the only way out is the loopback relay this daemon
+/// runs — an unconfigured client would never think to look for it. Everything
+/// else stays uninherited.
+const FORWARDED: [&str; 6] = [
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+];
+
 /// The environment every exec starts from before the request's env is
-/// layered on — a sane PATH and TERM, nothing inherited from silkd.
-pub fn base_env() -> [(&'static str, &'static str); 2] {
-    [
+/// layered on — a sane PATH and TERM, plus FORWARDED when the image set it.
+pub fn base_env() -> Vec<(String, String)> {
+    let mut env = vec![
         (
-            "PATH",
-            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "PATH".to_string(),
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
         ),
-        ("TERM", "xterm-256color"),
-    ]
+        ("TERM".to_string(), "xterm-256color".to_string()),
+    ];
+    for key in FORWARDED {
+        match std::env::var(key) {
+            Ok(v) if !v.is_empty() => env.push((key.to_string(), v)),
+            _ => {}
+        }
+    }
+    env
 }
 
 /// Resolves a username to uid/gid via getpwnam and sets them on the command.
@@ -263,8 +284,38 @@ mod tests {
     #[test]
     fn base_env_has_path_and_term() {
         let env = base_env();
-        assert!(env.iter().any(|(k, _)| *k == "PATH"));
-        assert!(env.iter().any(|(k, _)| *k == "TERM"));
+        assert!(env.iter().any(|(k, _)| k == "PATH"));
+        assert!(env.iter().any(|(k, _)| k == "TERM"));
+    }
+
+    /// The no-network lane has no NIC, so an unconfigured client only reaches
+    /// the outside if the proxy variables arrive without anyone asking. Nothing
+    /// else may leak: silkd's own environment is not the guest's.
+    #[test]
+    fn base_env_forwards_only_the_proxy_variables() {
+        // SAFETY: single-threaded test process; set/remove are scoped to it.
+        unsafe {
+            std::env::set_var("http_proxy", "http://127.0.0.1:3128");
+            std::env::set_var("SILKD_PORT", "2048");
+            std::env::remove_var("HTTPS_PROXY");
+        }
+        let env = base_env();
+        assert_eq!(
+            env.iter()
+                .find(|(k, _)| k == "http_proxy")
+                .map(|(_, v)| v.as_str()),
+            Some("http://127.0.0.1:3128"),
+        );
+        assert!(
+            !env.iter().any(|(k, _)| k == "SILKD_PORT"),
+            "silkd's own settings must not reach the guest's commands",
+        );
+        assert!(
+            !env.iter().any(|(k, _)| k == "HTTPS_PROXY"),
+            "an unset variable must not appear as empty",
+        );
+        // SAFETY: as above.
+        unsafe { std::env::remove_var("http_proxy") };
     }
 
     #[test]
