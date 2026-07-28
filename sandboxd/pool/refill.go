@@ -55,7 +55,8 @@ func (m *Manager) refillOnce(ctx context.Context) {
 			if inFlight >= limit {
 				return
 			}
-			if p.removed || p.goldenDir == "" || len(p.warm)+p.refilling >= p.effectiveTarget(now) {
+			if p.removed || p.goldenDir == "" || now.Before(p.nextRefill) ||
+				len(p.warm)+p.refilling >= p.effectiveTarget(now) {
 				continue
 			}
 			select {
@@ -91,10 +92,18 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 		p.noteLead(time.Since(start))
 		keep = true
 	}
+	// A canceled context is the daemon going down, not the pool failing.
+	backedOff := ctx.Err() == nil && p.noteRefillResult(time.Now(), err != nil)
+	wait := time.Until(p.nextRefill)
 	m.mu.Unlock()
 	if err != nil {
 		if ctx.Err() == nil {
 			log.WithFunc("pool.refillOne").Errorf(ctx, err, "refill %s", p.key.Hash())
+			if backedOff {
+				log.WithFunc("pool.refillOne").Warnf(ctx,
+					"refill %s failed %d times running; pausing refill for %s",
+					p.key.Hash(), refillFailStreak, wait.Round(time.Millisecond))
+			}
 		}
 		return
 	}

@@ -45,6 +45,18 @@ const (
 	maxTTL             = 24 * time.Hour
 	recommitBackoff    = 20 * time.Millisecond
 	recommitMaxBackoff = 5 * time.Second
+	// refillFailStreak is how many refills must fail back-to-back, with no
+	// success between them, before a pool backs off. A single failure is
+	// ordinary — one VM does not boot — and stalling the pool for it would
+	// trade a lost VM for a stalled pool. Only an unbroken streak says the
+	// next attempt will fail too.
+	refillFailStreak = 8
+	// refillBackoffBase/Max bound the wait after that streak, doubling per
+	// further failure. The ceiling matches buildRetryDelay: long enough that
+	// retrying a persistent failure costs nothing, short enough that a node
+	// recovering is picked up promptly.
+	refillBackoffBase = 250 * time.Millisecond
+	refillBackoffMax  = 30 * time.Second
 	// defaultMaxFork/defaultRefill are the fallbacks when a Manager is built
 	// from a Config that skipped config.Load's defaulting (direct construction
 	// in tests).
@@ -151,6 +163,34 @@ type pool struct {
 	removed   bool // dropped from the desired set while building/refilling; swept by refillOnce
 	warm      []*types.Sandbox
 	refilling int
+
+	// refillFails counts refills that failed back-to-back and nextRefill is
+	// when the pool may try again. Without them a pool short of target retries
+	// every tick at full concurrency for as long as the cause lasts, which for
+	// anything node-wide — a bridge at its port limit, a full disk — is
+	// indefinite: each attempt still forks the engine and runs the CNI plugins
+	// before failing, so the retries cost more than the work they replace.
+	refillFails int
+	nextRefill  time.Time
+}
+
+// noteRefillResult records one refill outcome and returns whether this call
+// started a backoff, so the caller can log the transition rather than every
+// attempt. A success clears the streak: pools recover without waiting out a
+// backoff earned by a burst that has passed.
+func (p *pool) noteRefillResult(now time.Time, failed bool) bool {
+	if !failed {
+		p.refillFails, p.nextRefill = 0, time.Time{}
+		return false
+	}
+	p.refillFails++
+	if p.refillFails < refillFailStreak {
+		return false
+	}
+	first := !now.Before(p.nextRefill)
+	backoff := refillBackoffBase << min(p.refillFails-refillFailStreak, 16)
+	p.nextRefill = now.Add(min(backoff, refillBackoffMax))
+	return first
 }
 
 func (p *pool) applySpec(spec config.PoolSpec) {
