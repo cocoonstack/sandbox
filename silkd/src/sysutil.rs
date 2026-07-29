@@ -95,17 +95,18 @@ fn valid_pid(id: u32) -> bool {
 
 /// The environment every exec starts from before the request's env is layered
 /// on — a sane PATH and TERM, plus the proxy snapshot when the guest has no
-/// NIC: only the none lane needs the relay, and on a lane with a working NIC
-/// the proxy variables would steer clients into a closed one.
+/// network of its own (net::has_egress): only the none lane needs the relay,
+/// and on a lane with a working NIC the variables would steer clients into a
+/// closed one.
 pub fn base_env() -> Vec<(&'static str, &'static str)> {
-    compose_env(has_nic(), proxy_vars())
+    compose_env(crate::net::has_egress(), proxy_vars())
 }
 
 /// Aligns an env-inheriting child (git, language servers) with the lane rule
-/// base_env applies to cleared ones: a guest with its own NIC must not be
+/// base_env applies to cleared ones: a guest with its own network must not be
 /// steered into the loopback relay.
 pub fn align_proxy_env(cmd: &mut Command) {
-    align_proxy_env_for(cmd, has_nic());
+    align_proxy_env_for(cmd, crate::net::has_egress());
 }
 
 fn align_proxy_env_for(cmd: &mut Command, nic: bool) {
@@ -146,18 +147,6 @@ fn snapshot_proxy(get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, St
             _ => None,
         })
         .collect()
-}
-
-/// Whether the guest has a NIC beyond lo/sit0. Read per call: cheap against a
-/// process spawn, and correct the day a NIC is hotplugged at claim.
-fn has_nic() -> bool {
-    std::fs::read_dir("/sys/class/net")
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .any(|e| e.file_name() != "lo" && e.file_name() != "sit0")
-        })
-        .unwrap_or(false)
 }
 
 /// Resolves a username to uid/gid via getpwnam and sets them on the command.
