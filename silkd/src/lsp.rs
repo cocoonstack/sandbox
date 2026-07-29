@@ -26,6 +26,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
 
 use crate::proto::{self, ErrorKind, Request, Response};
+use crate::sysutil;
 
 const MANIFEST_DIR: &str = "/etc/silkd/lsp.d";
 
@@ -62,6 +63,7 @@ impl Broker {
             }
         };
         let mut cmd = Command::new(&argv[0]);
+        sysutil::align_proxy_env(&mut cmd);
         cmd.args(&argv[1..])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
