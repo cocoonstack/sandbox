@@ -1063,14 +1063,8 @@ func (f *fakeEngine) snapRemoved(name string) bool {
 }
 
 // TestRemoveVMWillNotReportGoneWhileTheVMRuns pins the invariant a bounded
-// remove has to preserve. `cocoon vm rm` contends with every concurrent create
-// on the node's metadata store, so under a large scale-down it routinely runs
-// long; the bound exists so one slow remove cannot pin the refill slot forever.
-// But a bound that reports success on expiry is worse than no bound: the
-// timeout SIGKILLs the command partway through, the guest keeps running, and
-// this manager forgets it exists. The slot is released, the pool refills, and
-// the node accumulates VMs nothing is accounting for — silently, and faster the
-// harder you drive it. Measured once at ~570 orphans per node.
+// remove must keep: a bound that reports success on expiry silently leaks the
+// still-running guest from all accounting — measured once at ~570 orphans a node.
 func TestRemoveVMWillNotReportGoneWhileTheVMRuns(t *testing.T) {
 	eng := newFakeEngine()
 	m := &Manager{eng: eng}

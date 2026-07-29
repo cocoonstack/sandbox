@@ -40,33 +40,14 @@ const (
 	buildRetryDelay   = 30 * time.Second
 	claimProbeTimeout = 15 * time.Second
 	coldProbeTimeout  = 90 * time.Second
-	// warmProbeTimeout bounds the readiness probe of a warm-pool refill,
-	// which — unlike a claim — has no caller waiting on it. A clone answers
-	// in about a second even with the node saturated, so one that has said
-	// nothing for this long is an outlier worth replacing rather than
-	// waiting on: the refill holds a slot in the pool's target accounting
-	// for its whole probe, so a long deadline here stalls the LAST few of a
-	// large fill (deadline + refillInterval + a fresh boot) even though the
-	// replacement costs about a second. Claims keep the generous deadline.
+	// A refill has no caller waiting and holds a target-accounting slot for
+	// its whole probe; a clone answers in ~1s even saturated, so a silent one
+	// is replaced, not waited on. Claims keep the generous deadline.
 	warmProbeTimeout = 5 * time.Second
-	// removeTimeout bounds one `cocoon vm rm`; see removeVM for why a remove
-	// must never outlast its caller. It is generous because the command
-	// contends with every concurrent create on the node's metadata store, and
-	// under a large scale-down that contention is the normal case, not the
-	// exception — a tight bound there turns routine slowness into a killed
-	// remove, and a killed remove can leave the guest running.
-	removeTimeout = 120 * time.Second
-	// removeVerifyTimeout bounds the check that a failed remove really did
-	// leave nothing behind. Short: it is one list, and being wrong here only
-	// costs an extra sweep.
+	// One list; a wrong answer only costs an extra sweep.
 	removeVerifyTimeout = 15 * time.Second
-	// capacityBackoff parks refill after the node reports it cannot attach
-	// another VM. The condition is a property of the node and clears only when
-	// VMs go away, so the refill ticker would otherwise retry a permanent
-	// failure at full concurrency forever. Matched to buildRetryDelay: long
-	// enough that the retry costs nothing, short enough that a drain is picked
-	// up promptly.
-	capacityBackoff    = 30 * time.Second
+	// A full node clears only when VMs go away; retrying sooner buys nothing.
+	capacityBackoff    = buildRetryDelay
 	vsockPollInterval  = 100 * time.Millisecond
 	defaultTTL         = 5 * time.Minute
 	maxTTL             = 24 * time.Hour
@@ -161,12 +142,9 @@ type Gauges struct {
 	Hibernated int
 	Archived   int
 	Draining   bool
-	// AtCapacity reports that the node refused to attach another VM and refill
-	// is parked. It is published so a placer can send work elsewhere instead of
-	// reading this node's short warm count as transient slowness.
-	AtCapacity bool
-	// AtCapacityReason carries what the node said, so the condition is
-	// diagnosable from the API rather than only from the node's logs.
+	// AtCapacity marks refill parked because the node refused another VM, so a
+	// placer reads a short warm count as "full", not "still filling".
+	AtCapacity       bool
 	AtCapacityReason string
 }
 
@@ -357,9 +335,8 @@ type Manager struct {
 	pools   map[types.PoolKey]*pool
 	claimed map[string]*types.Sandbox
 
-	// atCapacityUntil parks every pool's refill after the node reports it can
-	// hold no more VMs. It is node-wide rather than per-pool because the
-	// resource that ran out — bridge ports — is shared by all of them.
+	// Node-wide, unlike the per-pool streak backoff: the resource that ran
+	// out — bridge ports, disk — is shared by every pool.
 	atCapacityUntil  time.Time
 	atCapacityReason string
 

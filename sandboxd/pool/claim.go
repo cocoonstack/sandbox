@@ -129,8 +129,8 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
 	}
 	var err error
-	if vmName != "" {
-		err = m.eng.Remove(ctx, vmName)
+	if vmName != "" && !m.removeVM(ctx, vmName) {
+		err = fmt.Errorf("vm %s survived removal", vmName)
 	}
 	m.disarmEgress(id, err == nil)
 	m.dropSnap(ctx, snap)

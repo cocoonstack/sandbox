@@ -290,8 +290,7 @@ func TestRollbackKeepsLockWhenRemoveFails(t *testing.T) {
 func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
 	eng := newFakeEngine()
 	eng.removeErrFor = "sbx-q1"
-	// The VM is running: a failed remove only means "still here" if the engine
-	// still lists it, which is what removeVM now checks.
+	// Running: removeVM reports "still here" only while the engine lists it.
 	eng.vms["sbx-q1"] = "/run/sbx-q1.sock"
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 	sb := &types.Sandbox{ID: "sb_q1", VMName: "sbx-q1", Key: egKey, TAP: "tap-q1"}

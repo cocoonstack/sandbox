@@ -47,6 +47,15 @@ const (
 	portForwardMax = 4096
 )
 
+// capacitySignatures mean "this node cannot attach another VM", not "this VM
+// failed"; matched as text because cocoon is a subprocess and the distinction
+// survives only in its stderr. "exchange full" is EXFULL from a bridge at
+// BR_MAX_PORTS — permanent until VMs are removed.
+var capacitySignatures = []string{
+	"exchange full",
+	"no space left on device",
+}
+
 // Engine runs cocoon commands on the local node.
 type Engine struct {
 	bin         string
@@ -461,6 +470,20 @@ func readLine(conn net.Conn, max int) (string, error) {
 		sb.WriteByte(b[0]) //nolint:gosec // G602 false positive on [1]byte in gosec ≤ v2.9.0
 	}
 	return "", fmt.Errorf("reply exceeds %d bytes", max)
+}
+
+// CapacitySignature returns the node-capacity signature err carries, or "".
+func CapacitySignature(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.ToLower(err.Error())
+	for _, sig := range capacitySignatures {
+		if strings.Contains(msg, sig) {
+			return sig
+		}
+	}
+	return ""
 }
 
 func tail(s string) string {

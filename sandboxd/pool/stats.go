@@ -4,12 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 // SandboxStats is one sandbox's resource usage. CPUCount and MemTotalBytes come
@@ -63,15 +60,11 @@ func (m *Manager) vmResidentBytes(ctx context.Context, vmName string) (int64, bo
 	if vmName == "" {
 		return 0, false
 	}
-	vms, err := m.eng.List(ctx, vmName)
-	if err != nil {
+	vm, ok, err := m.findVM(ctx, vmName)
+	if err != nil || !ok || vm.PID <= 0 {
 		return 0, false
 	}
-	i := slices.IndexFunc(vms, func(vm types.VMRecord) bool { return vm.Config.Name == vmName })
-	if i < 0 || vms[i].PID <= 0 {
-		return 0, false
-	}
-	return residentBytes(vms[i].PID)
+	return residentBytes(vm.PID)
 }
 
 // residentBytes reads a process's resident page count from statm's second field.
