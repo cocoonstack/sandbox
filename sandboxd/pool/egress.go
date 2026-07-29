@@ -48,10 +48,9 @@ var (
 	}
 )
 
-// newEgressDialer builds the proxy's upstream dialer: internal-address targets
-// are blocked (the proxy must not be an SSRF), then exactly the node-named
-// prefixes re-admitted — a "permit private" switch would also re-admit the
-// guest bridges, themselves ULA/RFC1918.
+// newEgressDialer builds the proxy's upstream dialer: internal targets are
+// blocked (the proxy must not be an SSRF), then exactly the node-named
+// prefixes re-admitted.
 func newEgressDialer(allow []netip.Prefix) *net.Dialer {
 	return &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
 		host, _, err := net.SplitHostPort(address)

@@ -94,17 +94,14 @@ fn valid_pid(id: u32) -> bool {
 }
 
 /// The environment every exec starts from before the request's env is layered
-/// on — a sane PATH and TERM, plus the proxy snapshot when the guest has no
-/// network of its own (net::has_egress): only the none lane needs the relay,
-/// and on a lane with a working NIC the variables would steer clients into a
-/// closed one.
+/// on — a sane PATH and TERM, plus the proxy snapshot on the no-network lane
+/// (a lane with its own NIC would be steered into a closed relay).
 pub fn base_env() -> Vec<(&'static str, &'static str)> {
     compose_env(crate::net::has_egress(), proxy_vars())
 }
 
-/// Aligns an env-inheriting child (git, language servers) with the lane rule
-/// base_env applies to cleared ones: a guest with its own network must not be
-/// steered into the loopback relay.
+/// Applies base_env's lane rule to an env-inheriting child (git, language
+/// servers): with a network of its own, the proxy variables come off.
 pub fn align_proxy_env(cmd: &mut Command) {
     align_proxy_env_for(cmd, crate::net::has_egress());
 }

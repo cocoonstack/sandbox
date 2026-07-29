@@ -232,11 +232,9 @@ type Config struct {
 	// revocation bound for a replica a delete broadcast missed). Off by default.
 	CheckpointPeerHeal bool `json:"checkpoint_peer_heal,omitempty"`
 
-	// EgressInternalAllow re-admits CIDRs the egress proxy's SSRF guard would
-	// refuse, node-wide: every pool and tenant on the node gets the same
-	// re-admission. Prefixes, not a "permit private" switch: the guest bridges
-	// are themselves ULA/RFC1918, so a blanket permit would open
-	// sandbox-to-sandbox and the host's own gateway.
+	// EgressInternalAllow re-admits CIDRs through the proxy's SSRF guard,
+	// node-wide (every pool and tenant). Prefixes, not a permit-private
+	// switch: the guest bridges are themselves ULA/RFC1918.
 	EgressInternalAllow []string `json:"egress_internal_allow,omitempty"`
 
 	// CheckpointTTLHours ages out checkpoints (0 = keep forever); the
