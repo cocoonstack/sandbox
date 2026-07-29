@@ -35,11 +35,19 @@ import (
 )
 
 const (
-	refillInterval     = 2 * time.Second
-	reapInterval       = 5 * time.Second
-	buildRetryDelay    = 30 * time.Second
-	claimProbeTimeout  = 15 * time.Second
-	coldProbeTimeout   = 90 * time.Second
+	refillInterval    = 2 * time.Second
+	reapInterval      = 5 * time.Second
+	buildRetryDelay   = 30 * time.Second
+	claimProbeTimeout = 15 * time.Second
+	coldProbeTimeout  = 90 * time.Second
+	// A refill has no caller waiting and holds a target-accounting slot for
+	// its whole probe; a clone answers in ~1s even saturated, so a silent one
+	// is replaced, not waited on. Claims keep the generous deadline.
+	warmProbeTimeout = 5 * time.Second
+	// One list; a wrong answer only costs an extra sweep.
+	removeVerifyTimeout = 15 * time.Second
+	// A full node clears only when VMs go away; retrying sooner buys nothing.
+	capacityBackoff    = buildRetryDelay
 	vsockPollInterval  = 100 * time.Millisecond
 	defaultTTL         = 5 * time.Minute
 	maxTTL             = 24 * time.Hour
@@ -134,6 +142,15 @@ type Gauges struct {
 	Hibernated int
 	Archived   int
 	Draining   bool
+	// AtCapacity marks refill parked because the node refused another VM, so a
+	// placer reads a short warm count as "full", not "still filling".
+	AtCapacity       bool
+	AtCapacityReason string
+}
+
+type pendingRemoval struct {
+	sandboxID string
+	tap       string
 }
 
 type pool struct {
@@ -319,9 +336,15 @@ type Manager struct {
 	dial  egress.DialFunc
 	sweep func(map[string]bool) error
 
-	mu      sync.Mutex
-	pools   map[types.PoolKey]*pool
-	claimed map[string]*types.Sandbox
+	mu              sync.Mutex
+	pools           map[types.PoolKey]*pool
+	claimed         map[string]*types.Sandbox
+	pendingRemovals map[string]pendingRemoval
+
+	// Node-wide, unlike the per-pool streak backoff: the resource that ran
+	// out — bridge ports, disk — is shared by every pool.
+	atCapacityUntil  time.Time
+	atCapacityReason string
 
 	refillSem  chan struct{}
 	probeSem   chan struct{}
@@ -350,6 +373,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		poolStore:       newPoolStore(cfg.DataDir),
 		pools:           make(map[types.PoolKey]*pool, len(cfg.Pools)),
 		claimed:         map[string]*types.Sandbox{},
+		pendingRemovals: map[string]pendingRemoval{},
 		tenantLive:      map[string]int{},
 		archiving:       map[string]struct{}{},
 		pendingCks:      map[string]struct{}{},
@@ -485,6 +509,7 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-m.refillKick:
 			m.refillOnce(ctx)
 		case <-reap.C:
+			m.retryRemovals(ctx)
 			m.reapOnce(ctx)
 			m.idleOnce(ctx)
 			m.archiveOnce(ctx)
@@ -538,6 +563,9 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 	}
 	slices.SortFunc(pools, func(a, b PoolInfo) int { return strings.Compare(a.Key.Hash(), b.Key.Hash()) })
 	g := Gauges{Claimed: len(m.claimed), Draining: m.draining}
+	if now.Before(m.atCapacityUntil) {
+		g.AtCapacity, g.AtCapacityReason = true, m.atCapacityReason
+	}
 	for _, sb := range m.claimed {
 		if sb.HibernateSnap != "" {
 			g.Hibernated++

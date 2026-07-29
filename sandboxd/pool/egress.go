@@ -120,15 +120,14 @@ func (m *Manager) lockEgressNIC(ctx context.Context, sb *types.Sandbox) error {
 }
 
 func (m *Manager) tapOf(ctx context.Context, vmName string) (string, error) {
-	vms, err := m.eng.List(ctx, vmName)
+	vm, ok, err := m.findVM(ctx, vmName)
 	if err != nil {
 		return "", fmt.Errorf("list %s: %w", vmName, err)
 	}
-	i := slices.IndexFunc(vms, func(vm types.VMRecord) bool { return vm.Config.Name == vmName })
-	if i < 0 {
+	if !ok {
 		return "", fmt.Errorf("no NIC config for %s", vmName)
 	}
-	if tap := vms[i].TapDevice(); tap != "" {
+	if tap := vm.TapDevice(); tap != "" {
 		return tap, nil
 	}
 	return "", fmt.Errorf("no tap for %s", vmName)

@@ -64,7 +64,9 @@ func TestBackoffGrowsAndIsCapped(t *testing.T) {
 // while a pool is backed off, the ticker spawns nothing.
 func TestRefillOnceHonorsTheBackoff(t *testing.T) {
 	eng := newFakeEngine()
-	eng.cloneErr = errors.New("configure network: failed to connect veth to bridge cni0: exchange full")
+	// Deliberately not a capacitySignature: that parks the node after one
+	// failure; the streak backoff is the fallback for unclassifiable errors.
+	eng.cloneErr = errors.New("clone: guest kernel panicked before vsock came up")
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 50})
 	m.pools[testKey].goldenDir = "/goldens/x"
 

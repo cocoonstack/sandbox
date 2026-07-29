@@ -13,6 +13,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -32,6 +33,10 @@ func (m *Manager) refillOnce(ctx context.Context) {
 		return
 	}
 	now := time.Now()
+	// Spawning VMs into a full node is what turned a capacity limit into an
+	// outage: every doomed attempt still takes the global rtnl lock. The park
+	// gates spawns only — sweeping removed pools is pure bookkeeping.
+	parked := now.Before(m.atCapacityUntil)
 	inFlight := 0
 	for key, p := range m.pools {
 		inFlight += p.refilling
@@ -43,10 +48,13 @@ func (m *Manager) refillOnce(ctx context.Context) {
 			}
 			continue
 		}
-		if p.goldenDir == "" && !p.building && now.After(p.nextBuild) {
+		if !parked && p.goldenDir == "" && !p.building && now.After(p.nextBuild) {
 			p.building = true
 			go m.buildGolden(ctx, p)
 		}
+	}
+	if parked {
+		return
 	}
 	limit := cap(m.refillSem) + cap(m.probeSem)
 	for spawned := true; spawned && inFlight < limit; {
@@ -82,11 +90,12 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 		if ctx.Err() == nil {
 			m.refillOnce(ctx)
 		}
-		sb, err = m.readyBounded(ctx, sb, time.Now().Add(claimProbeTimeout))
+		sb, err = m.readyBounded(ctx, sb, time.Now().Add(warmProbeTimeout))
 	}
 	keep := false
 	var fails int
 	var wait time.Duration
+	capReason := engine.CapacitySignature(err)
 	m.mu.Lock()
 	now := time.Now()
 	p.refilling--
@@ -95,14 +104,27 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 		p.noteLead(time.Since(start))
 		keep = true
 	}
-	// A canceled context is the daemon going down, not the pool failing.
-	backedOff := ctx.Err() == nil && p.noteRefillResult(now, err != nil)
+	// A canceled context is the daemon going down, and a capacity failure is
+	// the node's fault — neither says anything about this pool's health.
+	backedOff := false
+	if ctx.Err() == nil && capReason == "" {
+		backedOff = p.noteRefillResult(now, err != nil)
+	}
 	if backedOff {
 		fails, wait = p.refillFails, time.Until(p.nextRefill)
 	}
+	entered := capReason != "" && m.noteCapacityLocked(now, capReason)
+	parked := now.Before(m.atCapacityUntil)
 	m.mu.Unlock()
 	if err != nil {
-		if ctx.Err() == nil {
+		switch {
+		case ctx.Err() != nil:
+		case entered:
+			// One line per episode; the storm this replaces wrote 20k an hour.
+			log.WithFunc("pool.refillOne").Errorf(ctx, err,
+				"node is at capacity; parking refill for %s", capacityBackoff)
+		case parked:
+		default:
 			hash := p.key.Hash()
 			log.WithFunc("pool.refillOne").Errorf(ctx, err, "refill %s", hash)
 			if backedOff {
@@ -119,6 +141,15 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 	if !keep {
 		m.destroy(ctx, sb.VMName)
 	}
+}
+
+// noteCapacityLocked parks refill node-wide for a capacity failure, reporting
+// whether this call parked it so the episode is logged once. m.mu held.
+func (m *Manager) noteCapacityLocked(now time.Time, reason string) bool {
+	first := !now.Before(m.atCapacityUntil)
+	m.atCapacityUntil = now.Add(capacityBackoff)
+	m.atCapacityReason = reason
+	return first
 }
 
 func (m *Manager) buildGolden(ctx context.Context, p *pool) {
@@ -140,6 +171,11 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 		p.goldenDir = final
 	} else {
 		p.nextBuild = time.Now().Add(buildRetryDelay)
+		// A cold boot hits the same bridge and disk as a refill; feed the park
+		// so a node failing only its builds still publishes at-capacity.
+		if reason := engine.CapacitySignature(err); reason != "" {
+			m.noteCapacityLocked(time.Now(), reason)
+		}
 	}
 	m.mu.Unlock()
 	if err != nil {
@@ -375,18 +411,30 @@ func (m *Manager) probeReady(ctx context.Context, name, sock string, timeout tim
 }
 
 func (m *Manager) vsockOf(ctx context.Context, name string) (string, error) {
-	vms, err := m.eng.List(ctx, name)
+	vm, ok, err := m.findVM(ctx, name)
 	if err != nil {
 		return "", err
 	}
-	i := slices.IndexFunc(vms, func(vm types.VMRecord) bool { return vm.Config.Name == name })
-	if i < 0 {
+	if !ok {
 		return "", fmt.Errorf("vm %s not found after create", name)
 	}
-	if vms[i].VsockSocket == "" {
+	if vm.VsockSocket == "" {
 		return "", fmt.Errorf("vm %s has no vsock socket", name)
 	}
-	return vms[i].VsockSocket, nil
+	return vm.VsockSocket, nil
+}
+
+// findVM returns the engine's record for name, if it still lists one.
+func (m *Manager) findVM(ctx context.Context, name string) (types.VMRecord, bool, error) {
+	vms, err := m.eng.List(ctx, name)
+	if err != nil {
+		return types.VMRecord{}, false, err
+	}
+	i := slices.IndexFunc(vms, func(vm types.VMRecord) bool { return vm.Config.Name == name })
+	if i < 0 {
+		return types.VMRecord{}, false, nil
+	}
+	return vms[i], true, nil
 }
 
 // runBounded fans f over n items on the refill semaphore, so engine
@@ -410,19 +458,6 @@ func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context,
 	}
 	return &wg
 }
-
-// removeVM deletes a VM (on a cancellation-immune ctx, else `cocoon vm rm`
-// no-ops and orphans it) and reports whether it is confirmed gone; a failed
-// remove leaves it running, so the caller must keep its lock.
-func (m *Manager) removeVM(ctx context.Context, name string) bool {
-	if err := m.eng.Remove(context.WithoutCancel(ctx), name); err != nil {
-		log.WithFunc("pool.removeVM").Errorf(ctx, err, "remove vm %s", name)
-		return false
-	}
-	return true
-}
-
-func (m *Manager) destroy(ctx context.Context, name string) { _ = m.removeVM(ctx, name) }
 
 func (m *Manager) dropSnap(ctx context.Context, snap string) {
 	if snap == "" {
