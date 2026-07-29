@@ -19,11 +19,16 @@ bound to that sandbox's identity by the socket path — no in-band token. The
 proxy evaluates the policy, injects the matched rule's secret host-side, dials
 the origin, and relays the response.
 
-A sandbox reaches it as a standard HTTP proxy:
+The base image sets `http_proxy`/`https_proxy`/`no_proxy` on silkd's unit, and
+silkd forwards exactly those variables into every exec — only when the guest
+has no NIC beyond `lo`/`sit0`, so a lane with a working NIC is never steered
+into a relay whose host side is closed. An unconfigured client just works, and
+`-x` still does:
 
 ```sh
-curl -x http://127.0.0.1:3128 https://api.github.com/user   # allowed + credentialed
-curl -x http://127.0.0.1:3128 https://evil.example/         # 403 egress denied: evil.example
+curl https://api.github.com/user                            # allowed + credentialed
+curl https://evil.example/                                  # 403 egress denied: evil.example
+curl -x http://127.0.0.1:3128 https://api.github.com/user   # explicit form, same path
 ```
 
 ## How it works (egress lane)
@@ -53,6 +58,21 @@ reserved, per the registry snapshot in `egress.go`) plus the IPv4-embedding
 IPv6 forms (NAT64, 6to4, Teredo, IPv4-compatible) — so an allow-listed host
 that resolves, or is rebound, to one cannot reach the sandboxd host or a
 sibling VM.
+
+`egress_internal_allow` re-admits named prefixes through that guard for nodes
+whose sandboxes legitimately need internal services:
+
+```jsonc
+{ "egress_internal_allow": ["10.8.0.0/16", "fdc8::/16"] }
+```
+
+It is node-wide (every pool and tenant on the node gets the same re-admission)
+and checked after NAT64 unwrapping, so an embedded IPv4 matches as the IPv4 it
+is. Name service prefixes, never the whole private space: the guest bridges are
+themselves ULA/RFC1918, so a blanket permit would open sandbox-to-sandbox and
+the host's own gateway. `0.0.0.0/0` + `::/0` turns the guard off entirely — for
+fleets with a policy-enforcing proxy in front — and requests still pass the
+domain policy first; the allow-list widens the IP gate only.
 
 ### Deployment constraints
 

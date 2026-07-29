@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"runtime"
 	"slices"
@@ -231,6 +232,11 @@ type Config struct {
 	// revocation bound for a replica a delete broadcast missed). Off by default.
 	CheckpointPeerHeal bool `json:"checkpoint_peer_heal,omitempty"`
 
+	// EgressInternalAllow re-admits CIDRs through the proxy's SSRF guard,
+	// node-wide (every pool and tenant). Prefixes, not a permit-private
+	// switch: the guest bridges are themselves ULA/RFC1918.
+	EgressInternalAllow []string `json:"egress_internal_allow,omitempty"`
+
 	// CheckpointTTLHours ages out checkpoints (0 = keep forever); the
 	// sweep runs hourly and on startup.
 	CheckpointTTLHours int `json:"checkpoint_ttl_hours,omitempty"`
@@ -380,6 +386,9 @@ func (c *Config) validate() error {
 	if c.CheckpointPeerHeal && c.APIToken == "" {
 		return fmt.Errorf("checkpoint_peer_heal requires api_token: without it resolveScope leaves the raw checkpoint blob GET reachable with no credential")
 	}
+	if err := c.validateEgressAllow(); err != nil {
+		return err
+	}
 	if err := c.validateTenants(); err != nil {
 		return err
 	}
@@ -446,6 +455,17 @@ func (c *Config) validateSecrets() (map[string]struct{}, error) {
 		names[s.Name] = struct{}{}
 	}
 	return names, nil
+}
+
+// validateEgressAllow rejects a malformed prefix at load: a typo would
+// otherwise surface as a refused dial long after startup.
+func (c *Config) validateEgressAllow() error {
+	for _, cidr := range c.EgressInternalAllow {
+		if _, err := netip.ParsePrefix(cidr); err != nil {
+			return fmt.Errorf("egress_internal_allow %q: %w", cidr, err)
+		}
+	}
+	return nil
 }
 
 func (c *Config) validateTenants() error {

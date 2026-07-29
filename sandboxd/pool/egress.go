@@ -46,9 +46,13 @@ var (
 		netip.MustParsePrefix("3fff::/20"),      // documentation
 		netip.MustParsePrefix("5f00::/16"),      // SRv6 SIDs
 	}
+)
 
-	// egressDialer blocks internal-address targets so the proxy cannot be an SSRF.
-	egressDialer = &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
+// newEgressDialer builds the proxy's upstream dialer: internal targets are
+// blocked (the proxy must not be an SSRF), then exactly the node-named
+// prefixes re-admitted.
+func newEgressDialer(allow []netip.Prefix) *net.Dialer {
+	return &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
 		host, _, err := net.SplitHostPort(address)
 		if err != nil {
 			return err
@@ -62,13 +66,18 @@ var (
 			b := ip.As16()
 			ip = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
 		}
+		// After the NAT64 unwrap (a v4-in-v6 target matches as the v4 it is),
+		// before the block, so a named prefix wins.
+		if slices.ContainsFunc(allow, func(p netip.Prefix) bool { return p.Contains(ip) }) {
+			return nil
+		}
 		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
 			slices.ContainsFunc(internalRanges, func(p netip.Prefix) bool { return p.Contains(ip) }) {
 			return fmt.Errorf("egress: blocked internal address %s", ip)
 		}
 		return nil
 	}}
-)
+}
 
 // egressListener is one sandbox's egress accept point: an http.Server serving
 // egress.Proxy over the per-sandbox UDS the VMM connects when the guest dials
@@ -222,4 +231,16 @@ func (m *Manager) effectivePolicy(sb *types.Sandbox) (egress.Evaluator, bool) {
 	default:
 		return nil, false
 	}
+}
+
+// parsePrefixes turns the allow-list into prefixes; config validation already
+// rejected malformed entries, so a leftover is dropped rather than failing dials.
+func parsePrefixes(cidrs []string) []netip.Prefix {
+	out := make([]netip.Prefix, 0, len(cidrs))
+	for _, c := range cidrs {
+		if p, err := netip.ParsePrefix(c); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out
 }

@@ -10,6 +10,10 @@ service silkd /system/bin/silkd
     user root
     group root
     setenv SILKD_PORT 2048
+    # Mirrors the base:24.04 unit; forwarded into execs only on the no-NIC lane.
+    setenv http_proxy http://127.0.0.1:3128
+    setenv https_proxy http://127.0.0.1:3128
+    setenv no_proxy localhost,127.0.0.1,::1
 
 on boot
     start silkd

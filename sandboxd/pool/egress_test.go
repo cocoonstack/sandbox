@@ -426,13 +426,13 @@ func TestEgressDialerBlocksInternal(t *testing.T) {
 		"[64:ff9b::a00:1]:80",     // NAT64-embedded 10.0.0.1
 	}
 	for _, addr := range blocked {
-		if err := egressDialer.Control("tcp", addr, nil); err == nil {
+		if err := newEgressDialer(nil).Control("tcp", addr, nil); err == nil {
 			t.Errorf("dial to internal %s allowed; SSRF not blocked", addr)
 		}
 	}
 	// public v4 direct, public v6, and a public v4 via the NAT64 well-known prefix
 	for _, addr := range []string{"93.184.216.34:443", "[2606:4700:4700::1111]:443", "[64:ff9b::5db8:d822]:443"} {
-		if err := egressDialer.Control("tcp", addr, nil); err != nil {
+		if err := newEgressDialer(nil).Control("tcp", addr, nil); err != nil {
 			t.Errorf("dial to public %s blocked: %v", addr, err)
 		}
 	}
@@ -452,6 +452,61 @@ func TestEgressLaneCannotForkOrCheckpoint(t *testing.T) {
 	}
 	if _, err := m.Promote(t.Context(), sb.ID, Cred{Token: "tok"}, "tpl", ""); !errors.Is(err, ErrNoEgressFork) {
 		t.Errorf("Promote on egress lane: got %v, want ErrNoEgressFork", err)
+	}
+}
+
+// TestEgressDialerAdmitsOnlyNamedInternalPrefixes pins the SSRF boundary:
+// named prefixes re-admit corporate services without re-admitting the guest
+// bridges, which are themselves ULA/RFC1918.
+func TestEgressDialerAdmitsOnlyNamedInternalPrefixes(t *testing.T) {
+	d := newEgressDialer(parsePrefixes([]string{"fdc8::/16", "10.8.0.0/16"}))
+	check := func(addr string) error {
+		return d.Control("tcp", addr, nil)
+	}
+	for name, tc := range map[string]struct {
+		addr    string
+		allowed bool
+	}{
+		"public v4":    {"93.184.216.34:443", true},
+		"public v6":    {"[2606:2800:220:1:248:1893:25c8:1946]:443", true},
+		"corporate v6": {"[fdc8:17:9:200f::1]:443", true},
+		"corporate v4": {"10.8.7.149:443", true},
+		// Guests and the host gateway share fc00::/7 with the corporate range.
+		"another sandbox on the bridge": {"[fd00:c0c0:38::5]:443", false},
+		"the host's bridge gateway":     {"[fd00:c0c0:38::1]:443", false},
+		"other private v4":              {"192.168.1.1:443", false},
+		"loopback":                      {"127.0.0.1:443", false},
+		"cloud metadata":                {"169.254.169.254:80", false},
+		"CGNAT metadata":                {"100.100.100.200:80", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := check(tc.addr)
+			if tc.allowed && err != nil {
+				t.Errorf("%s was blocked: %v", tc.addr, err)
+			}
+			if !tc.allowed && err == nil {
+				t.Errorf("%s was allowed; it must not be reachable from a guest", tc.addr)
+			}
+		})
+	}
+}
+
+// TestEgressDialerWildcardAllowsEverything pins the fully-open form as a
+// deliberate choice — loopback and cloud metadata included — for fleets with
+// a policy-enforcing forward proxy in front.
+func TestEgressDialerWildcardAllowsEverything(t *testing.T) {
+	d := newEgressDialer(parsePrefixes([]string{"0.0.0.0/0", "::/0"}))
+	for _, addr := range []string{
+		"93.184.216.34:443",       // public
+		"[fdc8:17:9:200f::1]:443", // corporate v6
+		"10.8.7.149:443",          // corporate v4
+		"[fd00:c0c0:38::5]:443",   // another sandbox
+		"127.0.0.1:7777",          // the node itself
+		"169.254.169.254:80",      // cloud metadata
+	} {
+		if err := d.Control("tcp", addr, nil); err != nil {
+			t.Errorf("%s blocked under a wildcard allow-list: %v", addr, err)
+		}
 	}
 }
 

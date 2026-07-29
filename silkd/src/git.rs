@@ -10,6 +10,7 @@ use tokio::io::AsyncWrite;
 use tokio::process::Command;
 
 use crate::proto::{self, ErrorKind, GitBranchOp, GitFileStatus, Response};
+use crate::sysutil;
 
 /// Clones `url` into `path` (optionally a branch, shallow depth), then Done.
 pub async fn clone<W: AsyncWrite + Unpin>(
@@ -169,6 +170,7 @@ async fn net_verb<W: AsyncWrite + Unpin>(
 /// exec could otherwise scrape the token.
 fn git_cmd(dir: &str, auth: Option<&str>) -> Command {
     let mut cmd = Command::new("git");
+    sysutil::align_proxy_env(&mut cmd);
     cmd.arg("-C").arg(dir);
     apply_config(&mut cmd, auth);
     cmd.stdin(Stdio::null())

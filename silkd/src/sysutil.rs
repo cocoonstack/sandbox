@@ -6,8 +6,8 @@ use std::fmt::Write as _;
 use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::process::ExitStatus;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use tokio::process::Command;
 
@@ -16,6 +16,17 @@ use tokio::process::Command;
 static NSS_LOCK: Mutex<()> = Mutex::new(());
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Forwarded from silkd's own environment into every exec: the loopback proxy
+/// relay is the no-NIC lane's only way out, and nothing else may leak.
+const FORWARDED: [&str; 6] = [
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+];
 
 /// A suffix unique within this process (pid + monotonic counter), enough to
 /// name a temp file a concurrent write in the same directory won't collide
@@ -82,16 +93,57 @@ fn valid_pid(id: u32) -> bool {
     id != 0 && id <= i32::MAX as u32
 }
 
-/// The environment every exec starts from before the request's env is
-/// layered on — a sane PATH and TERM, nothing inherited from silkd.
-pub fn base_env() -> [(&'static str, &'static str); 2] {
-    [
+/// The environment every exec starts from before the request's env is layered
+/// on — a sane PATH and TERM, plus the proxy snapshot on the no-network lane
+/// (a lane with its own NIC would be steered into a closed relay).
+pub fn base_env() -> Vec<(&'static str, &'static str)> {
+    compose_env(crate::net::has_egress(), proxy_vars())
+}
+
+/// Applies base_env's lane rule to an env-inheriting child (git, language
+/// servers): with a network of its own, the proxy variables come off.
+pub fn align_proxy_env(cmd: &mut Command) {
+    align_proxy_env_for(cmd, crate::net::has_egress());
+}
+
+fn align_proxy_env_for(cmd: &mut Command, nic: bool) {
+    if !nic {
+        return;
+    }
+    for key in FORWARDED {
+        cmd.env_remove(key);
+    }
+}
+
+fn compose_env<'a>(nic: bool, proxy: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a str)> {
+    let mut env = vec![
         (
             "PATH",
             "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         ),
         ("TERM", "xterm-256color"),
-    ]
+    ];
+    if !nic {
+        env.extend(proxy.iter().map(|(k, v)| (*k, v.as_str())));
+    }
+    env
+}
+
+/// The FORWARDED values present in silkd's own environment, read once: the
+/// unit environment is fixed at service start and silkd never mutates it.
+fn proxy_vars() -> &'static [(&'static str, String)] {
+    static PROXY_VARS: OnceLock<Vec<(&'static str, String)>> = OnceLock::new();
+    PROXY_VARS.get_or_init(|| snapshot_proxy(|key| std::env::var(key).ok()))
+}
+
+fn snapshot_proxy(get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, String)> {
+    FORWARDED
+        .iter()
+        .filter_map(|&key| match get(key) {
+            Some(v) if !v.is_empty() => Some((key, v)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Resolves a username to uid/gid via getpwnam and sets them on the command.
@@ -265,6 +317,58 @@ mod tests {
         let env = base_env();
         assert!(env.iter().any(|(k, _)| *k == "PATH"));
         assert!(env.iter().any(|(k, _)| *k == "TERM"));
+    }
+
+    /// The no-NIC lane only reaches out if the proxy variables arrive without
+    /// anyone asking; nothing else of silkd's environment is the guest's.
+    #[test]
+    fn base_env_forwards_only_the_proxy_variables() {
+        let proxy = snapshot_proxy(|key| match key {
+            "http_proxy" => Some("http://127.0.0.1:3128".to_string()),
+            "HTTPS_PROXY" => Some(String::new()),
+            _ => Some("2048".to_string()),
+        });
+        let env = compose_env(false, &proxy);
+        assert_eq!(
+            env.iter()
+                .find(|(k, _)| *k == "http_proxy")
+                .map(|(_, v)| *v),
+            Some("http://127.0.0.1:3128"),
+        );
+        assert!(
+            !env.iter().any(|(k, _)| *k == "SILKD_PORT"),
+            "silkd's own settings must not reach the guest's commands",
+        );
+        assert!(
+            !env.iter().any(|(k, _)| *k == "HTTPS_PROXY"),
+            "an empty variable must not be forwarded",
+        );
+    }
+
+    /// A guest with a working NIC must not be steered into the loopback relay,
+    /// which is closed unless the host armed a proxy for this sandbox.
+    #[test]
+    fn base_env_forwards_nothing_when_a_nic_is_present() {
+        let proxy = snapshot_proxy(|_| Some("http://127.0.0.1:3128".to_string()));
+        let env = compose_env(true, &proxy);
+        assert!(
+            !env.iter().any(|(k, _)| *k == "http_proxy"),
+            "proxy variables must stay off a lane with its own NIC",
+        );
+    }
+
+    /// Env-inheriting children (git, language servers) follow the same lane
+    /// rule as cleared ones: scrubbed with a NIC, inherited without.
+    #[test]
+    fn align_proxy_env_scrubs_only_on_a_nic_lane() {
+        let removed = |cmd: &Command| cmd.as_std().get_envs().filter(|(_, v)| v.is_none()).count();
+        let mut with_nic = Command::new("true");
+        align_proxy_env_for(&mut with_nic, true);
+        assert_eq!(removed(&with_nic), FORWARDED.len());
+
+        let mut without_nic = Command::new("true");
+        align_proxy_env_for(&mut without_nic, false);
+        assert_eq!(removed(&without_nic), 0);
     }
 
     #[test]

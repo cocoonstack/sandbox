@@ -54,6 +54,10 @@ RUN --mount=type=secret,id=sandbox_install_agent \
     # [silkd] product-tier daemon on vsock 2048, started at sysinit alongside
     # the agent — this is the sandbox product's readiness signal. Same
     # measured-fast ordering as the agent unit (no local-fs wait).
+    #
+    # 3128 is silkd's loopback relay over vsock to the host proxy, the none
+    # lane's only way out. silkd forwards these into execs only on the
+    # no-network lane, so a lane with its own NIC never dials a closed relay.
     printf '%s\n' \
       '[Unit]' \
       'Description=silkd (sandbox product daemon: exec, files, sessions over vsock)' \
@@ -65,6 +69,9 @@ RUN --mount=type=secret,id=sandbox_install_agent \
       'Type=simple' \
       'ExecStart=/usr/local/bin/silkd' \
       'Environment=SILKD_PORT=2048' \
+      'Environment=http_proxy=http://127.0.0.1:3128' \
+      'Environment=https_proxy=http://127.0.0.1:3128' \
+      'Environment=no_proxy=localhost,127.0.0.1,::1' \
       'Restart=always' \
       'RestartSec=2s' \
       'LimitNOFILE=65536' \
