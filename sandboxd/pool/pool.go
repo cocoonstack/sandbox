@@ -45,6 +45,12 @@ const (
 	maxTTL             = 24 * time.Hour
 	recommitBackoff    = 20 * time.Millisecond
 	recommitMaxBackoff = 5 * time.Second
+	// One failed boot is ordinary; only an unbroken run of failures says the
+	// next attempt will fail too.
+	refillFailStreak = 8
+	// Doubles per failure past the streak.
+	refillBackoffBase = 250 * time.Millisecond
+	refillBackoffMax  = buildRetryDelay
 	// defaultMaxFork/defaultRefill are the fallbacks when a Manager is built
 	// from a Config that skipped config.Load's defaulting (direct construction
 	// in tests).
@@ -151,6 +157,34 @@ type pool struct {
 	removed   bool // dropped from the desired set while building/refilling; swept by refillOnce
 	warm      []*types.Sandbox
 	refilling int
+
+	// An unbroken failure streak and the retry gate it earns; without them a
+	// node-wide dead cause is retried every tick at full concurrency.
+	refillFails int
+	nextRefill  time.Time
+}
+
+// refillGated reports whether a refill may not spawn: the backoff wait, or —
+// expired — the single probe already in flight (a success resets the streak).
+func (p *pool) refillGated(now time.Time) bool {
+	return now.Before(p.nextRefill) || (p.refillFails >= refillFailStreak && p.refilling > 0)
+}
+
+// noteRefillResult records one refill outcome and reports whether this call
+// started a backoff, so the caller logs the transition, not every attempt.
+func (p *pool) noteRefillResult(now time.Time, failed bool) bool {
+	if !failed {
+		p.refillFails, p.nextRefill = 0, time.Time{}
+		return false
+	}
+	p.refillFails++
+	if p.refillFails < refillFailStreak {
+		return false
+	}
+	first := !now.Before(p.nextRefill)
+	backoff := refillBackoffBase << min(p.refillFails-refillFailStreak, 16)
+	p.nextRefill = now.Add(min(backoff, refillBackoffMax))
+	return first
 }
 
 func (p *pool) applySpec(spec config.PoolSpec) {
