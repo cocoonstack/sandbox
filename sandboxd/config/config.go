@@ -232,12 +232,11 @@ type Config struct {
 	// revocation bound for a replica a delete broadcast missed). Off by default.
 	CheckpointPeerHeal bool `json:"checkpoint_peer_heal,omitempty"`
 
-	// EgressInternalAllow re-admits CIDRs the egress proxy would otherwise
-	// refuse as internal. The proxy blocks private and special-purpose targets
-	// so a guest cannot turn it into an SSRF; a node that must reach corporate
-	// services names their prefixes here. Prefixes, not a "permit private"
-	// switch: the guest bridges are themselves ULA/RFC1918, so a blanket permit
-	// would open sandbox-to-sandbox and the host's own gateway.
+	// EgressInternalAllow re-admits CIDRs the egress proxy's SSRF guard would
+	// refuse, node-wide: every pool and tenant on the node gets the same
+	// re-admission. Prefixes, not a "permit private" switch: the guest bridges
+	// are themselves ULA/RFC1918, so a blanket permit would open
+	// sandbox-to-sandbox and the host's own gateway.
 	EgressInternalAllow []string `json:"egress_internal_allow,omitempty"`
 
 	// CheckpointTTLHours ages out checkpoints (0 = keep forever); the
@@ -389,10 +388,8 @@ func (c *Config) validate() error {
 	if c.CheckpointPeerHeal && c.APIToken == "" {
 		return fmt.Errorf("checkpoint_peer_heal requires api_token: without it resolveScope leaves the raw checkpoint blob GET reachable with no credential")
 	}
-	for _, cidr := range c.EgressInternalAllow {
-		if _, err := netip.ParsePrefix(cidr); err != nil {
-			return fmt.Errorf("egress_internal_allow %q: %w", cidr, err)
-		}
+	if err := c.validateEgressAllow(); err != nil {
+		return err
 	}
 	if err := c.validateTenants(); err != nil {
 		return err
@@ -460,6 +457,17 @@ func (c *Config) validateSecrets() (map[string]struct{}, error) {
 		names[s.Name] = struct{}{}
 	}
 	return names, nil
+}
+
+// validateEgressAllow rejects a malformed prefix at load: a typo would
+// otherwise surface as a refused dial long after startup.
+func (c *Config) validateEgressAllow() error {
+	for _, cidr := range c.EgressInternalAllow {
+		if _, err := netip.ParsePrefix(cidr); err != nil {
+			return fmt.Errorf("egress_internal_allow %q: %w", cidr, err)
+		}
+	}
+	return nil
 }
 
 func (c *Config) validateTenants() error {

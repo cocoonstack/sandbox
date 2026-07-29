@@ -55,12 +55,11 @@ RUN --mount=type=secret,id=sandbox_install_agent \
     # the agent — this is the sandbox product's readiness signal. Same
     # measured-fast ordering as the agent unit (no local-fs wait).
     #
-    # The proxy variables are on silkd's own unit because every exec in the
-    # guest is a child of silkd: that is what makes an unconfigured `curl`
-    # work. 3128 is silkd's loopback relay, which forwards to the host's
-    # egress proxy over vsock — the only way out for a none-lane guest, which
-    # has no NIC at all. On the egress lane the NIC carries traffic directly
-    # and the relay simply goes unused.
+    # The proxy variables ride silkd's unit because every guest exec is a silkd
+    # child — that is what makes an unconfigured curl work. 3128 is silkd's
+    # loopback relay over vsock to the host proxy, the none lane's only way
+    # out; silkd forwards them into execs only when the guest has no NIC, so a
+    # lane with its own NIC is never steered into a closed relay.
     printf '%s\n' \
       '[Unit]' \
       'Description=silkd (sandbox product daemon: exec, files, sessions over vsock)' \

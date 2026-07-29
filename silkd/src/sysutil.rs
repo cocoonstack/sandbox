@@ -17,6 +17,17 @@ static NSS_LOCK: Mutex<()> = Mutex::new(());
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// Forwarded from silkd's own environment into every exec: the loopback proxy
+/// relay is the no-NIC lane's only way out, and nothing else may leak.
+const FORWARDED: [&str; 6] = [
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+];
+
 /// A suffix unique within this process (pid + monotonic counter), enough to
 /// name a temp file a concurrent write in the same directory won't collide
 /// with. Not cryptographic — just unique.
@@ -82,37 +93,45 @@ fn valid_pid(id: u32) -> bool {
     id != 0 && id <= i32::MAX as u32
 }
 
-/// Variables forwarded from silkd's own environment into every exec. They are
-/// the one thing a guest cannot discover for itself: on the no-network lane
-/// there is no NIC, and the only way out is the loopback relay this daemon
-/// runs — an unconfigured client would never think to look for it. Everything
-/// else stays uninherited.
-const FORWARDED: [&str; 6] = [
-    "http_proxy",
-    "https_proxy",
-    "no_proxy",
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "NO_PROXY",
-];
+/// The environment every exec starts from before the request's env is layered
+/// on — a sane PATH and TERM, plus FORWARDED when the image set it and the
+/// guest has no NIC: only the none lane needs the relay, and on a lane with a
+/// working NIC the proxy variables would steer clients into a closed one.
+pub fn base_env() -> Vec<(&'static str, String)> {
+    base_env_from(has_nic(), |key| std::env::var(key).ok())
+}
 
-/// The environment every exec starts from before the request's env is
-/// layered on — a sane PATH and TERM, plus FORWARDED when the image set it.
-pub fn base_env() -> Vec<(String, String)> {
+fn base_env_from(nic: bool, get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, String)> {
     let mut env = vec![
         (
-            "PATH".to_string(),
+            "PATH",
             "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
         ),
-        ("TERM".to_string(), "xterm-256color".to_string()),
+        ("TERM", "xterm-256color".to_string()),
     ];
+    if nic {
+        return env;
+    }
     for key in FORWARDED {
-        match std::env::var(key) {
-            Ok(v) if !v.is_empty() => env.push((key.to_string(), v)),
-            _ => {}
+        if let Some(v) = get(key)
+            && !v.is_empty()
+        {
+            env.push((key, v));
         }
     }
     env
+}
+
+/// Whether the guest has a NIC beyond lo/sit0. Read per call: cheap against a
+/// process spawn, and correct the day a NIC is hotplugged at claim.
+fn has_nic() -> bool {
+    std::fs::read_dir("/sys/class/net")
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .any(|e| e.file_name() != "lo" && e.file_name() != "sit0")
+        })
+        .unwrap_or(false)
 }
 
 /// Resolves a username to uid/gid via getpwnam and sets them on the command.
@@ -284,38 +303,45 @@ mod tests {
     #[test]
     fn base_env_has_path_and_term() {
         let env = base_env();
-        assert!(env.iter().any(|(k, _)| k == "PATH"));
-        assert!(env.iter().any(|(k, _)| k == "TERM"));
+        assert!(env.iter().any(|(k, _)| *k == "PATH"));
+        assert!(env.iter().any(|(k, _)| *k == "TERM"));
     }
 
-    /// The no-network lane has no NIC, so an unconfigured client only reaches
-    /// the outside if the proxy variables arrive without anyone asking. Nothing
-    /// else may leak: silkd's own environment is not the guest's.
+    /// The no-NIC lane only reaches out if the proxy variables arrive without
+    /// anyone asking; nothing else of silkd's environment is the guest's.
     #[test]
     fn base_env_forwards_only_the_proxy_variables() {
-        // SAFETY: single-threaded test process; set/remove are scoped to it.
-        unsafe {
-            std::env::set_var("http_proxy", "http://127.0.0.1:3128");
-            std::env::set_var("SILKD_PORT", "2048");
-            std::env::remove_var("HTTPS_PROXY");
-        }
-        let env = base_env();
+        let vars = |key: &str| match key {
+            "http_proxy" => Some("http://127.0.0.1:3128".to_string()),
+            "HTTPS_PROXY" => Some(String::new()),
+            _ => Some("2048".to_string()),
+        };
+        let env = base_env_from(false, vars);
         assert_eq!(
             env.iter()
-                .find(|(k, _)| k == "http_proxy")
+                .find(|(k, _)| *k == "http_proxy")
                 .map(|(_, v)| v.as_str()),
             Some("http://127.0.0.1:3128"),
         );
         assert!(
-            !env.iter().any(|(k, _)| k == "SILKD_PORT"),
+            !env.iter().any(|(k, _)| *k == "SILKD_PORT"),
             "silkd's own settings must not reach the guest's commands",
         );
         assert!(
-            !env.iter().any(|(k, _)| k == "HTTPS_PROXY"),
-            "an unset variable must not appear as empty",
+            !env.iter().any(|(k, _)| *k == "HTTPS_PROXY"),
+            "an empty variable must not be forwarded",
         );
-        // SAFETY: as above.
-        unsafe { std::env::remove_var("http_proxy") };
+    }
+
+    /// A guest with a working NIC must not be steered into the loopback relay,
+    /// which is closed unless the host armed a proxy for this sandbox.
+    #[test]
+    fn base_env_forwards_nothing_when_a_nic_is_present() {
+        let env = base_env_from(true, |_| Some("http://127.0.0.1:3128".to_string()));
+        assert!(
+            !env.iter().any(|(k, _)| *k == "http_proxy"),
+            "proxy variables must stay off a lane with its own NIC",
+        );
     }
 
     #[test]
