@@ -1,5 +1,5 @@
 //! git verb E2E against a real git binary in temp repos. Local verbs run on
-//! any host; the none-lane guard is exercised via SILKD_NET.
+//! any host; the none-lane guard is exercised via the test lane override.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
 mod common;
@@ -113,14 +113,11 @@ async fn commit_failure_surfaces_git_error() {
     assert_eq!(type_of(&frames[0]), "error");
 }
 
-// One test owns SILKD_NET so the two lane cases can't race a shared env var
-// against parallel test threads.
+// One test owns the lane override so the two cases cannot fight over it.
 #[tokio::test]
 async fn clone_lane_behavior() {
     // none lane refuses with a typed error pointing at fs.push.
-    // SAFETY: this test is the binary's only SILKD_NET accessor (see the
-    // ownership note above), so no thread races the mutation.
-    unsafe { std::env::set_var("SILKD_NET", "none") };
+    silkd::net::override_egress_for_tests(Some(false));
     let none = exchange(&[json!({
         "op":"git_clone","url":"https://example.com/x.git","path":"/tmp/silkd-x"
     })
@@ -137,17 +134,13 @@ async fn clone_lane_behavior() {
     git(src.path(), &["commit", "-qm", "init"]);
     let dst = tempfile::tempdir().unwrap();
     let target = dst.path().join("clone");
-    // SAFETY: this test is the binary's only SILKD_NET accessor (see the
-    // ownership note above), so no thread races the mutation.
-    unsafe { std::env::set_var("SILKD_NET", "egress") };
+    silkd::net::override_egress_for_tests(Some(true));
     let ok = exchange(&[json!({
         "op":"git_clone", "url": src.path().to_str().unwrap(), "path": target.to_str().unwrap()
     })
     .to_string()])
     .await;
-    // SAFETY: this test is the binary's only SILKD_NET accessor (see the
-    // ownership note above), so no thread races the mutation.
-    unsafe { std::env::remove_var("SILKD_NET") };
+    silkd::net::override_egress_for_tests(None);
     assert_eq!(type_of(last(&ok)), "done", "clone failed: {ok:?}");
     assert!(target.join("r.txt").exists());
 }
