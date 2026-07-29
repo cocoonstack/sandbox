@@ -1,9 +1,9 @@
 //! Guest network-lane detection. The egress lane has a device-backed NIC;
 //! the none lane carries only virtual interfaces (lo, plus the tunnels an
-//! all-builtin kernel auto-creates). Verbs that need the network (git
-//! clone/push/pull) and the proxy-env forwarding consult this so the none
-//! lane fails fast — or reaches out through the relay — instead of hanging.
+//! all-builtin kernel auto-creates). Network verbs (git clone/push/pull) and
+//! proxy-env forwarding consult this.
 
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicI8, Ordering};
 
 static LANE_OVERRIDE: AtomicI8 = AtomicI8::new(-1);
@@ -22,9 +22,9 @@ pub fn has_egress() -> bool {
         1 => return true,
         _ => {}
     }
-    match std::env::var("SILKD_NET").as_deref() {
-        Ok("none") => return false,
-        Ok("egress") => return true,
+    match silkd_net() {
+        0 => return false,
+        1 => return true,
         _ => {}
     }
     let Ok(entries) = std::fs::read_dir("/sys/class/net") else {
@@ -33,9 +33,17 @@ pub fn has_egress() -> bool {
     entries.flatten().any(|e| e.path().join("device").exists())
 }
 
-/// Overrides the lane for tests, which must not reach for `set_var`: setenv
-/// races every concurrent getenv in the binary, and has_egress now runs on
-/// every spawn.
+/// Lane override for tests: set_var would race every concurrent getenv.
 pub fn override_egress_for_tests(lane: Option<bool>) {
     LANE_OVERRIDE.store(lane.map_or(-1, i8::from), Ordering::Relaxed);
+}
+
+/// SILKD_NET decoded once: operator config, fixed at service start.
+fn silkd_net() -> i8 {
+    static SILKD_NET: OnceLock<i8> = OnceLock::new();
+    *SILKD_NET.get_or_init(|| match std::env::var("SILKD_NET").as_deref() {
+        Ok("none") => 0,
+        Ok("egress") => 1,
+        _ => -1,
+    })
 }
