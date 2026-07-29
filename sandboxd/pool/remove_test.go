@@ -17,7 +17,7 @@ func TestRemoveVMClassifiesOutcome(t *testing.T) {
 	}
 
 	delete(eng.vms, "survivor")
-	if !m.removeOrRetry(t.Context(), "survivor", "") {
+	if !m.removeOrRetry(t.Context(), "survivor", "", "") {
 		t.Fatal("absent VM reported present")
 	}
 	m.mu.Lock()
@@ -48,24 +48,25 @@ func TestRemovalRetryConvergesConfirmedSurvivor(t *testing.T) {
 		t.Fatal("surviving VM was not retained for retry")
 	}
 
-	m.retryRemovals(t.Context())
-	waitFor(t, func() bool {
-		m.mu.Lock()
-		pending := m.pendingRemovals["survivor"]
-		m.mu.Unlock()
-		return !pending.retrying
-	})
+	// A failed retry re-queues itself, so the next tick tries again.
+	m.retryRemovals(t.Context()).Wait()
+	m.mu.Lock()
+	_, pending = m.pendingRemovals["survivor"]
+	m.mu.Unlock()
+	if !pending {
+		t.Fatal("failed retry dropped the survivor from the queue")
+	}
 
 	eng.mu.Lock()
 	eng.removeErrFor = ""
 	eng.mu.Unlock()
-	m.retryRemovals(t.Context())
-	waitFor(t, func() bool {
-		m.mu.Lock()
-		_, pending := m.pendingRemovals["survivor"]
-		m.mu.Unlock()
-		return !pending && eng.removed("survivor")
-	})
+	m.retryRemovals(t.Context()).Wait()
+	m.mu.Lock()
+	_, pending = m.pendingRemovals["survivor"]
+	m.mu.Unlock()
+	if pending || !eng.removed("survivor") {
+		t.Fatalf("retry did not converge: pending=%v removed=%v", pending, eng.removed("survivor"))
+	}
 }
 
 func TestRemovalRetryFinishesEgressCleanup(t *testing.T) {
@@ -76,7 +77,7 @@ func TestRemovalRetryFinishesEgressCleanup(t *testing.T) {
 	eng.removeErrFor = "survivor"
 	m.egressTaps["sb_survivor"] = "tap-survivor"
 
-	removed := m.removeOrRetry(t.Context(), "survivor", "sb_survivor")
+	removed := m.removeOrRetry(t.Context(), "survivor", "sb_survivor", "")
 	m.disarmEgress("sb_survivor", removed)
 	if removed {
 		t.Fatal("surviving VM reported gone")
@@ -85,14 +86,15 @@ func TestRemovalRetryFinishesEgressCleanup(t *testing.T) {
 	eng.mu.Lock()
 	eng.removeErrFor = ""
 	eng.mu.Unlock()
-	m.retryRemovals(t.Context())
-	waitFor(t, func() bool {
-		m.mu.Lock()
-		_, pending := m.pendingRemovals["survivor"]
-		_, locked := m.egressTaps["sb_survivor"]
-		m.mu.Unlock()
-		return !pending && !locked && eng.removed("survivor")
-	})
+	m.retryRemovals(t.Context()).Wait()
+	m.mu.Lock()
+	_, pending := m.pendingRemovals["survivor"]
+	_, locked := m.egressTaps["sb_survivor"]
+	m.mu.Unlock()
+	if pending || locked || !eng.removed("survivor") {
+		t.Fatalf("egress cleanup incomplete: pending=%v locked=%v removed=%v",
+			pending, locked, eng.removed("survivor"))
+	}
 }
 
 func TestStaleRemovalRetryKeepsTapForCleanup(t *testing.T) {
@@ -118,11 +120,11 @@ func TestStaleRemovalRetryKeepsTapForCleanup(t *testing.T) {
 	eng.mu.Lock()
 	eng.removeErrFor = ""
 	eng.mu.Unlock()
-	m.retryRemovals(t.Context())
-	waitFor(t, func() bool {
-		m.mu.Lock()
-		_, pending := m.pendingRemovals["sbx-stale"]
-		m.mu.Unlock()
-		return !pending && eng.removed("sbx-stale")
-	})
+	m.retryRemovals(t.Context()).Wait()
+	m.mu.Lock()
+	_, pending := m.pendingRemovals["sbx-stale"]
+	m.mu.Unlock()
+	if pending || !eng.removed("sbx-stale") {
+		t.Fatalf("stale retry did not converge: pending=%v removed=%v", pending, eng.removed("sbx-stale"))
+	}
 }

@@ -131,11 +131,9 @@ func (m *Manager) sweepStaleVMs(ctx context.Context, live map[string]types.VMRec
 	}
 	gone := make([]bool, len(stale)) // distinct indices: no lock under the Wait barrier
 	m.runBounded(ctx, len(stale), func(ctx context.Context, i int) {
-		if m.removeOrRetry(ctx, stale[i], "") {
+		if m.removeOrRetry(ctx, stale[i], "", live[stale[i]].TapDevice()) {
 			gone[i] = true
 			logger.Infof(ctx, "removed stale VM %s", stale[i])
-		} else {
-			m.queueRemoval(stale[i], "", live[stale[i]].TapDevice())
 		}
 	}).Wait()
 	removed := make(map[string]bool, len(stale))
@@ -194,7 +192,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 
 // A failed remove stays out of service and queued until teardown succeeds.
 func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
-	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID)
+	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID, "")
 	m.mu.Lock()
 	delete(m.claimed, sb.ID)
 	m.tenantDelta(sb.Tenant, -1)

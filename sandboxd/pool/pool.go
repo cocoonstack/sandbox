@@ -151,7 +151,6 @@ type Gauges struct {
 type pendingRemoval struct {
 	sandboxID string
 	tap       string
-	retrying  bool
 }
 
 type pool struct {

@@ -129,7 +129,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
 	}
 	var err error
-	if vmName != "" && !m.removeOrRetry(ctx, vmName, id) {
+	if vmName != "" && !m.removeOrRetry(ctx, vmName, id, "") {
 		err = fmt.Errorf("vm %s survived removal", vmName)
 	}
 	m.disarmEgress(id, err == nil)
@@ -291,7 +291,7 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	m.mu.Unlock()
 	m.recommit(ctx, rb)
 	for _, sb := range sbs {
-		m.disarmEgress(sb.ID, m.removeOrRetry(ctx, sb.VMName, sb.ID))
+		m.disarmEgress(sb.ID, m.removeOrRetry(ctx, sb.VMName, sb.ID, ""))
 	}
 }
 
@@ -370,7 +370,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				logger.Errorf(ctx, err, "archive expired %s", v.id)
 			}
 		default:
-			m.disarmEgress(v.id, m.removeOrRetry(ctx, v.vmName, v.id))
+			m.disarmEgress(v.id, m.removeOrRetry(ctx, v.vmName, v.id, ""))
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)
 			m.recordUsage(ctx, usageEvent{Event: "reap", ID: v.id, VMName: v.vmName})

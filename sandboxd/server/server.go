@@ -120,9 +120,8 @@ type InfoResponse struct {
 	Archived   int             `json:"archived"`
 	Draining   bool            `json:"draining,omitempty"`
 	Peers      []string        `json:"peers,omitempty"`
-	// AtCapacity reports that the node cannot attach another VM and has parked
-	// refill. A placer should read a short warm count on such a node as "full",
-	// not "still filling", and send the work somewhere else.
+	// AtCapacity marks refill parked because the node refused another VM, so a
+	// placer reads a short warm count as "full", not "still filling".
 	AtCapacity       bool   `json:"at_capacity,omitempty"`
 	AtCapacityReason string `json:"at_capacity_reason,omitempty"`
 }
