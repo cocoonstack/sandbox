@@ -459,44 +459,6 @@ func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context,
 	return &wg
 }
 
-// removeVM deletes a VM (on a cancellation-immune ctx, else `cocoon vm rm`
-// no-ops and orphans it) and reports whether it is confirmed gone; when it is
-// not, the caller must keep its lock and accounting. The engine bounds the
-// command, a killed or failed remove can leave the guest alive, and cocoon's
-// tombstone gc plus the reaper converge whatever it left behind.
-func (m *Manager) removeVM(ctx context.Context, name string) bool {
-	ctx = context.WithoutCancel(ctx)
-	err := m.eng.Remove(ctx, name)
-	if err == nil {
-		return true
-	}
-	log.WithFunc("pool.removeVM").Warnf(ctx, "remove vm %s: %v; verifying", name, err)
-	return m.confirmGone(ctx, name)
-}
-
-// confirmGone reports whether name is absent from the engine's own view; a VM
-// still listed stays in this manager's accounting so the reaper retries it.
-func (m *Manager) confirmGone(ctx context.Context, name string) bool {
-	ctx, cancel := context.WithTimeout(ctx, removeVerifyTimeout)
-	defer cancel()
-	_, present, err := m.findVM(ctx, name)
-	if err != nil {
-		// Cannot tell: a false "gone" leaks a running VM, a false "still
-		// here" only costs another sweep.
-		log.WithFunc("pool.confirmGone").Warnf(ctx, "verify remove of %s: %v", name, err)
-		return false
-	}
-	if present {
-		log.WithFunc("pool.confirmGone").Errorf(ctx,
-			fmt.Errorf("vm %s survived removal", name),
-			"remove did not take effect; leaving it accounted for retry")
-		return false
-	}
-	return true
-}
-
-func (m *Manager) destroy(ctx context.Context, name string) { _ = m.removeVM(ctx, name) }
-
 func (m *Manager) dropSnap(ctx context.Context, snap string) {
 	if snap == "" {
 		return

@@ -148,6 +148,12 @@ type Gauges struct {
 	AtCapacityReason string
 }
 
+type pendingRemoval struct {
+	sandboxID string
+	tap       string
+	retrying  bool
+}
+
 type pool struct {
 	key types.PoolKey
 
@@ -331,9 +337,10 @@ type Manager struct {
 	dial  egress.DialFunc
 	sweep func(map[string]bool) error
 
-	mu      sync.Mutex
-	pools   map[types.PoolKey]*pool
-	claimed map[string]*types.Sandbox
+	mu              sync.Mutex
+	pools           map[types.PoolKey]*pool
+	claimed         map[string]*types.Sandbox
+	pendingRemovals map[string]pendingRemoval
 
 	// Node-wide, unlike the per-pool streak backoff: the resource that ran
 	// out — bridge ports, disk — is shared by every pool.
@@ -367,6 +374,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		poolStore:       newPoolStore(cfg.DataDir),
 		pools:           make(map[types.PoolKey]*pool, len(cfg.Pools)),
 		claimed:         map[string]*types.Sandbox{},
+		pendingRemovals: map[string]pendingRemoval{},
 		tenantLive:      map[string]int{},
 		archiving:       map[string]struct{}{},
 		pendingCks:      map[string]struct{}{},
@@ -502,6 +510,7 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-m.refillKick:
 			m.refillOnce(ctx)
 		case <-reap.C:
+			m.retryRemovals(ctx)
 			m.reapOnce(ctx)
 			m.idleOnce(ctx)
 			m.archiveOnce(ctx)
