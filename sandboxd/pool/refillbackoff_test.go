@@ -8,10 +8,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 )
 
-// TestRefillBacksOffOnlyAfterAnUnbrokenRunOfFailures pins both halves of the
-// discriminator. One VM failing to boot is ordinary and must not stall the
-// pool; everything failing means the next attempt will fail too, and retrying
-// that at ticker rate is what turns a capacity limit into an outage.
 func TestRefillBacksOffOnlyAfterAnUnbrokenRunOfFailures(t *testing.T) {
 	p := &pool{}
 	now := time.Now()
@@ -31,21 +27,16 @@ func TestRefillBacksOffOnlyAfterAnUnbrokenRunOfFailures(t *testing.T) {
 		t.Fatal("backoff started but nextRefill is not in the future")
 	}
 
-	// A success clears it: a pool must recover without waiting out a backoff
-	// earned by a burst that has already passed.
 	p.noteRefillResult(now, false)
 	if p.refillFails != 0 || !p.nextRefill.IsZero() {
 		t.Fatalf("a success left fails=%d nextRefill=%v", p.refillFails, p.nextRefill)
 	}
 
-	// And one straggler failure after that success starts from scratch.
 	if p.noteRefillResult(now, true) {
 		t.Fatal("a single failure after a success backed the pool off")
 	}
 }
 
-// TestBackoffGrowsAndIsCapped keeps a persistent failure from being retried
-// forever at the same rate, without letting the wait run away.
 func TestBackoffGrowsAndIsCapped(t *testing.T) {
 	p := &pool{}
 	now := time.Now()
@@ -69,18 +60,15 @@ func TestBackoffGrowsAndIsCapped(t *testing.T) {
 	}
 }
 
-// TestRefillOnceHonorsTheBackoff is the property that actually saves the node:
-// while a pool is backed off, the ticker must spawn nothing. Without it a pool
-// short of target re-attempts every tick at full concurrency, and each attempt
-// forks the engine and runs the CNI plugins before failing.
+// TestRefillOnceHonorsTheBackoff pins the property that saves the node:
+// while a pool is backed off, the ticker spawns nothing.
 func TestRefillOnceHonorsTheBackoff(t *testing.T) {
 	eng := newFakeEngine()
 	eng.cloneErr = errors.New("configure network: failed to connect veth to bridge cni0: exchange full")
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 50})
 	m.pools[testKey].goldenDir = "/goldens/x"
 
-	// Concurrency is bounded, so the streak accrues over several ticks — the
-	// same way it does on a node whose refills are all failing.
+	// Concurrency is bounded, so the streak accrues over several ticks.
 	backedOff := false
 	for range 50 {
 		m.refillOnce(t.Context())
@@ -100,6 +88,11 @@ func TestRefillOnceHonorsTheBackoff(t *testing.T) {
 		t.Fatal("a pool whose every refill failed is not backed off")
 	}
 
+	// Pin the expiry far out so the no-spawn assertions cannot race a short
+	// first backoff on a loaded machine.
+	m.mu.Lock()
+	m.pools[testKey].nextRefill = time.Now().Add(time.Hour)
+	m.mu.Unlock()
 	for range 5 {
 		m.refillOnce(t.Context())
 	}
@@ -107,7 +100,7 @@ func TestRefillOnceHonorsTheBackoff(t *testing.T) {
 		t.Errorf("clones=%d after backing off, want %d: a backed-off pool must not attempt again", n, attempts)
 	}
 
-	// It is a pause, not a latch: once the wait expires a working engine fills.
+	// A pause, not a latch: once the wait expires a working engine fills.
 	m.mu.Lock()
 	m.pools[testKey].nextRefill = time.Now().Add(-time.Second)
 	m.mu.Unlock()

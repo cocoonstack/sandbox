@@ -55,7 +55,7 @@ func (m *Manager) refillOnce(ctx context.Context) {
 			if inFlight >= limit {
 				return
 			}
-			if p.removed || p.goldenDir == "" || now.Before(p.nextRefill) ||
+			if p.removed || p.goldenDir == "" || p.refillGated(now) ||
 				len(p.warm)+p.refilling >= p.effectiveTarget(now) {
 				continue
 			}
@@ -85,24 +85,30 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 		sb, err = m.readyBounded(ctx, sb, time.Now().Add(claimProbeTimeout))
 	}
 	keep := false
+	var fails int
+	var wait time.Duration
 	m.mu.Lock()
+	now := time.Now()
 	p.refilling--
-	if err == nil && !m.draining && len(p.warm) < p.effectiveTarget(time.Now()) {
+	if err == nil && !m.draining && len(p.warm) < p.effectiveTarget(now) {
 		p.warm = append(p.warm, sb)
 		p.noteLead(time.Since(start))
 		keep = true
 	}
 	// A canceled context is the daemon going down, not the pool failing.
-	backedOff := ctx.Err() == nil && p.noteRefillResult(time.Now(), err != nil)
-	wait := time.Until(p.nextRefill)
+	backedOff := ctx.Err() == nil && p.noteRefillResult(now, err != nil)
+	if backedOff {
+		fails, wait = p.refillFails, time.Until(p.nextRefill)
+	}
 	m.mu.Unlock()
 	if err != nil {
 		if ctx.Err() == nil {
-			log.WithFunc("pool.refillOne").Errorf(ctx, err, "refill %s", p.key.Hash())
+			hash := p.key.Hash()
+			log.WithFunc("pool.refillOne").Errorf(ctx, err, "refill %s", hash)
 			if backedOff {
 				log.WithFunc("pool.refillOne").Warnf(ctx,
 					"refill %s failed %d times running; pausing refill for %s",
-					p.key.Hash(), refillFailStreak, wait.Round(time.Millisecond))
+					hash, fails, wait.Round(time.Millisecond))
 			}
 		}
 		return

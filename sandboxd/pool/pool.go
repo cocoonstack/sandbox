@@ -45,18 +45,12 @@ const (
 	maxTTL             = 24 * time.Hour
 	recommitBackoff    = 20 * time.Millisecond
 	recommitMaxBackoff = 5 * time.Second
-	// refillFailStreak is how many refills must fail back-to-back, with no
-	// success between them, before a pool backs off. A single failure is
-	// ordinary — one VM does not boot — and stalling the pool for it would
-	// trade a lost VM for a stalled pool. Only an unbroken streak says the
+	// One failed boot is ordinary; only an unbroken run of failures says the
 	// next attempt will fail too.
 	refillFailStreak = 8
-	// refillBackoffBase/Max bound the wait after that streak, doubling per
-	// further failure. The ceiling matches buildRetryDelay: long enough that
-	// retrying a persistent failure costs nothing, short enough that a node
-	// recovering is picked up promptly.
+	// Doubles per failure past the streak.
 	refillBackoffBase = 250 * time.Millisecond
-	refillBackoffMax  = 30 * time.Second
+	refillBackoffMax  = buildRetryDelay
 	// defaultMaxFork/defaultRefill are the fallbacks when a Manager is built
 	// from a Config that skipped config.Load's defaulting (direct construction
 	// in tests).
@@ -164,20 +158,20 @@ type pool struct {
 	warm      []*types.Sandbox
 	refilling int
 
-	// refillFails counts refills that failed back-to-back and nextRefill is
-	// when the pool may try again. Without them a pool short of target retries
-	// every tick at full concurrency for as long as the cause lasts, which for
-	// anything node-wide — a bridge at its port limit, a full disk — is
-	// indefinite: each attempt still forks the engine and runs the CNI plugins
-	// before failing, so the retries cost more than the work they replace.
+	// An unbroken failure streak and the retry gate it earns; without them a
+	// node-wide dead cause is retried every tick at full concurrency.
 	refillFails int
 	nextRefill  time.Time
 }
 
-// noteRefillResult records one refill outcome and returns whether this call
-// started a backoff, so the caller can log the transition rather than every
-// attempt. A success clears the streak: pools recover without waiting out a
-// backoff earned by a burst that has passed.
+// refillGated reports whether a refill may not spawn: the backoff wait, or —
+// expired — the single probe already in flight (a success resets the streak).
+func (p *pool) refillGated(now time.Time) bool {
+	return now.Before(p.nextRefill) || (p.refillFails >= refillFailStreak && p.refilling > 0)
+}
+
+// noteRefillResult records one refill outcome and reports whether this call
+// started a backoff, so the caller logs the transition, not every attempt.
 func (p *pool) noteRefillResult(now time.Time, failed bool) bool {
 	if !failed {
 		p.refillFails, p.nextRefill = 0, time.Time{}
