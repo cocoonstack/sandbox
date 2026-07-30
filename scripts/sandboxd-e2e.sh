@@ -63,7 +63,7 @@ fi
 BRIDGE_LINE=""
 EGRESS_POOL=""
 if [[ -n ${BRIDGE:-} ]]; then
-  BRIDGE_LINE="\"bridge\": \"$BRIDGE\","
+  BRIDGE_LINE="\"bridges\": [\"$BRIDGE\"],"
   EGRESS_POOL=", {\"template\": \"$TEMPLATE\", \"net\": \"egress\", \"size\": \"small\", \"warm\": 1}"
 fi
 

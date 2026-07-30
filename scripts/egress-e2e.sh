@@ -21,7 +21,7 @@ NICADDR=""
 if [[ $NET == egress ]]; then
   REACH=$(ip -4 addr show "$BRIDGE" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -1)
   [[ -z $REACH ]] && { echo "bridge $BRIDGE has no IPv4 — egress lane needs a gateway"; exit 1; }
-  BRIDGE_CFG="\"bridge\": \"$BRIDGE\","
+  BRIDGE_CFG="\"bridges\": [\"$BRIDGE\"],"
   NICADDR="${REACH%.*}.222/24" # static guest NIC (image does not DHCP), so a blocked direct egress is the nft lock
 fi
 

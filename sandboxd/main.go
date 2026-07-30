@@ -70,7 +70,7 @@ func main() {
 	if err != nil {
 		logger.Fatalf(ctx, err, "load config")
 	}
-	eng := engine.New(cfg.CocoonBin, cfg.Bridge, cfg.Networks, cfg.NoDirectIO, cfg.RestoreMode)
+	eng := engine.New(cfg.CocoonBin, cfg.Bridges, cfg.Networks, cfg.NoDirectIO, cfg.RestoreMode)
 	if v, warn := eng.VersionWarning(ctx); warn != "" {
 		logger.Warn(ctx, warn)
 	} else {

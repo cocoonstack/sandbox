@@ -34,6 +34,8 @@ const (
 
 	argName       = "--name"
 	argOutput     = "--output"
+	argNetwork    = "--network"
+	argBridge     = "--bridge"
 	formatJSON    = "json"
 	silkdPort     = 2048 // silkd's fixed guest vsock port, the claim-ready anchor
 	egressPort    = 2049 // guest→host egress port; VMM maps it to <vsock_socket>_2049
@@ -60,16 +62,17 @@ var capacitySignatures = []string{
 // Engine runs cocoon commands on the local node.
 type Engine struct {
 	bin         string
-	bridge      string
+	bridges     []string
 	networks    []string
 	noDirectIO  bool
 	restoreMode types.RestoreMode
 }
 
-// New returns a cocoon engine with node-wide network and disk policy. networks
-// are CNI conflists to spread egress-lane VMs over; see networkFor.
-func New(bin, bridge string, networks []string, noDirectIO bool, restoreMode types.RestoreMode) *Engine {
-	return &Engine{bin: bin, bridge: bridge, networks: networks, noDirectIO: noDirectIO, restoreMode: restoreMode}
+// New returns a cocoon engine with node-wide network and disk policy. bridges
+// and networks are the egress-lane shard lists (host bridge devices vs CNI
+// conflists) egress VMs spread over; see shardOf.
+func New(bin string, bridges, networks []string, noDirectIO bool, restoreMode types.RestoreMode) *Engine {
+	return &Engine{bin: bin, bridges: bridges, networks: networks, noDirectIO: noDirectIO, restoreMode: restoreMode}
 }
 
 // Version reports cocoon's version string — a "vX.Y.Z" release or a
@@ -351,19 +354,9 @@ func (e *Engine) netArgs(name string, key types.PoolKey, cold bool) []string {
 		return nil
 	}
 	if len(e.networks) > 0 {
-		return []string{"--network", e.networkFor(name)}
+		return []string{argNetwork, shardOf(e.networks, name)}
 	}
-	return []string{"--bridge", e.bridge}
-}
-
-// networkFor picks a conflist by hashing the VM name, not by counter: the
-// record persists the network a VM was built on, so the choice must be
-// reproducible without process state.
-func (e *Engine) networkFor(name string) string {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(name))
-	// >>1 keeps the index conversion positive even where int is 32-bit.
-	return e.networks[int(h.Sum32()>>1)%len(e.networks)]
+	return []string{argBridge, shardOf(e.bridges, name)}
 }
 
 func (e *Engine) run(ctx context.Context, args ...string) ([]byte, error) {
@@ -414,6 +407,19 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 // CID2:egressPort — sandboxd listens here to serve the egress proxy.
 func EgressSocketPath(vsockSocket string) string {
 	return fmt.Sprintf("%s_%d", vsockSocket, egressPort)
+}
+
+// shardOf picks a shard by hashing the VM name, not by counter: the record
+// persists the attachment a VM was built on, so the choice must be
+// reproducible without process state.
+func shardOf(shards []string, name string) string {
+	if len(shards) == 0 {
+		return ""
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(name))
+	// >>1 keeps the index conversion positive even where int is 32-bit.
+	return shards[int(h.Sum32()>>1)%len(shards)]
 }
 
 // respFail renders a non-success reply: the error frame's own text, or the

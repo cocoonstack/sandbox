@@ -23,7 +23,7 @@ func TestCloneArgsRestoreMode(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			e := New("cocoon", "br0", nil, false, tc.mode)
+			e := New("cocoon", []string{"br0"}, nil, false, tc.mode)
 			for _, args := range [][]string{
 				e.cloneArgs("/goldens/g1", "sbx-1", tc.key),
 				e.cloneSnapArgs("ck_1", "sbx-1", tc.key),
@@ -45,7 +45,7 @@ func TestLifecycleArgsApplyDirectIOPolicy(t *testing.T) {
 	key := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeMedium}
 	for _, noDirectIO := range []bool{false, true} {
 		t.Run(strconv.FormatBool(noDirectIO), func(t *testing.T) {
-			e := New("cocoon", "", nil, noDirectIO, "")
+			e := New("cocoon", nil, nil, noDirectIO, "")
 			want := "--no-direct-io=" + strconv.FormatBool(noDirectIO)
 			cold := e.runColdArgs("sbx-1", key)
 			for _, args := range [][]string{
@@ -64,38 +64,46 @@ func TestLifecycleArgsApplyDirectIOPolicy(t *testing.T) {
 	}
 }
 
-// TestEgressVMsSpreadOverEveryConfiguredNetwork pins the point of the list:
-// a shard the hash never picks is bridge capacity that does not exist.
-func TestEgressVMsSpreadOverEveryConfiguredNetwork(t *testing.T) {
-	nets := []string{"cocoon-sbx0", "cocoon-sbx1", "cocoon-sbx2", "cocoon-sbx3"}
-	e := New("cocoon", "", nets, false, "")
+// TestEgressVMsSpreadOverEveryConfiguredShard pins the point of both shard
+// lists: a shard the hash never picks is bridge capacity that does not exist.
+func TestEgressVMsSpreadOverEveryConfiguredShard(t *testing.T) {
+	shards := []string{"sbx0", "sbx1", "sbx2", "sbx3"}
 	key := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeMedium}
-
-	counts := map[string]int{}
-	for i := range 4000 {
-		args := e.cloneArgs("/goldens/g1", "sbx-pool1-"+strconv.Itoa(i), key)
-		j := slices.Index(args, "--network")
-		if j < 0 {
-			t.Fatalf("args %v carry no --network", args)
-		}
-		counts[args[j+1]]++
-	}
-	for _, n := range nets {
-		// The bound catches a starved shard, not non-uniformity.
-		if counts[n] < 4000/len(nets)/2 {
-			t.Errorf("shard %s got %d of 4000, want a fair share: %v", n, counts[n], counts)
-		}
+	for name, tc := range map[string]struct {
+		e    *Engine
+		flag string
+	}{
+		"networks": {New("cocoon", nil, shards, false, ""), "--network"},
+		"bridges":  {New("cocoon", shards, nil, false, ""), "--bridge"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			counts := map[string]int{}
+			for i := range 4000 {
+				args := tc.e.cloneArgs("/goldens/g1", "sbx-pool1-"+strconv.Itoa(i), key)
+				j := slices.Index(args, tc.flag)
+				if j < 0 {
+					t.Fatalf("args %v carry no %s", args, tc.flag)
+				}
+				counts[args[j+1]]++
+			}
+			for _, s := range shards {
+				// The bound catches a starved shard, not non-uniformity.
+				if counts[s] < 4000/len(shards)/2 {
+					t.Errorf("shard %s got %d of 4000, want a fair share: %v", s, counts[s], counts)
+				}
+			}
+		})
 	}
 }
 
 // TestNetworkChoiceIsStableForAName guards restore and teardown: the record
 // persists the network a VM was built on, so the choice must not move.
 func TestNetworkChoiceIsStableForAName(t *testing.T) {
-	e := New("cocoon", "", []string{"a", "b", "c"}, false, "")
-	first := e.networkFor("sbx-pool1-42")
+	shards := []string{"a", "b", "c"}
+	first := shardOf(shards, "sbx-pool1-42")
 	for range 100 {
-		if got := e.networkFor("sbx-pool1-42"); got != first {
-			t.Fatalf("networkFor returned %q then %q for one name", first, got)
+		if got := shardOf(shards, "sbx-pool1-42"); got != first {
+			t.Fatalf("shardOf returned %q then %q for one name", first, got)
 		}
 	}
 }
@@ -107,13 +115,13 @@ func TestNetArgsHonorsTheLaneAndTheAttachment(t *testing.T) {
 	none := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeMedium}
 	egress := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeMedium}
 
-	if args := New("cocoon", "", []string{"cni"}, false, "").netArgs("sbx-1", none, false); len(args) != 0 {
+	if args := New("cocoon", nil, []string{"cni"}, false, "").netArgs("sbx-1", none, false); len(args) != 0 {
 		t.Errorf("none lane took an attachment: %v", args)
 	}
-	if args := New("cocoon", "br0", nil, false, "").netArgs("sbx-1", egress, false); !slices.Equal(args, []string{"--bridge", "br0"}) {
+	if args := New("cocoon", []string{"br0"}, nil, false, "").netArgs("sbx-1", egress, false); !slices.Equal(args, []string{"--bridge", "br0"}) {
 		t.Errorf("bridge lane args = %v", args)
 	}
-	if args := New("cocoon", "", []string{"cocoon-dhcp"}, false, "").netArgs("sbx-1", egress, false); !slices.Equal(args, []string{"--network", "cocoon-dhcp"}) {
+	if args := New("cocoon", nil, []string{"cocoon-dhcp"}, false, "").netArgs("sbx-1", egress, false); !slices.Equal(args, []string{"--network", "cocoon-dhcp"}) {
 		t.Errorf("single-network args = %v", args)
 	}
 }

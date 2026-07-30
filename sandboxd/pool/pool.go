@@ -367,7 +367,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		eng:             eng,
 		dataDir:         cfg.DataDir,
 		egress:          cfg.HasEgress(),
-		lockEgress:      cfg.Bridge != "",
+		lockEgress:      len(cfg.Bridges) > 0,
 		maxFork:         maxFork,
 		store:           newClaimStore(cfg.DataDir),
 		poolStore:       newPoolStore(cfg.DataDir),

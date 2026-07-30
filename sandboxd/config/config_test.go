@@ -85,7 +85,6 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		name, body, want string
 	}{
 		{"bad json", `{`, "config"},
-		{"bridge and networks", `{"bridge":"br0","networks":["cni"],"pools":[]}`, "mutually exclusive"},
 		{"bad fork count", `{"max_fork_count":-1,"pools":[]}`, "max_fork_count"},
 		{"negative refill concurrency", `{"refill_concurrency":-1,"pools":[]}`, "refill_concurrency"},
 		{"bad restore mode", `{"restore_mode":"Mmap","pools":[]}`, "restore_mode"},
@@ -218,14 +217,14 @@ func TestHasEgress(t *testing.T) {
 	if (&Config{}).HasEgress() {
 		t.Error("no attachment must mean no egress")
 	}
-	if !(&Config{Bridge: "br0"}).HasEgress() || !(&Config{Networks: []string{"cni"}}).HasEgress() {
-		t.Error("bridge or network must enable egress")
+	if !(&Config{Bridges: []string{"br0", "br1"}}).HasEgress() || !(&Config{Networks: []string{"cni"}}).HasEgress() {
+		t.Error("bridges or networks must enable egress")
 	}
 }
 
 func TestLoadKeepsExplicitValues(t *testing.T) {
 	path := writeConfig(t, `{"listen":"0.0.0.0:9999","advertise_addr":"10.0.0.5:9999","max_fork_count":4,
-		"refill_concurrency":8,"no_direct_io":true,"bridge":"br0","pools":[{"template":"rt:24.04","net":"egress","size":"small","warm":3}]}`)
+		"refill_concurrency":8,"no_direct_io":true,"bridges":["br0"],"pools":[{"template":"rt:24.04","net":"egress","size":"small","warm":3}]}`)
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -240,16 +239,26 @@ func TestLoadKeepsExplicitValues(t *testing.T) {
 
 func TestLoadRejectsUnusableNetworkLists(t *testing.T) {
 	for name, body := range map[string]string{
-		"bridge and networks together": `{"bridge":"br0","networks":["a"],"pools":[]}`,
-		"retired scalar network key":   `{"network":"a","pools":[]}`,
-		"empty conflist name":          `{"networks":["a",""],"pools":[]}`,
-		"repeated conflist":            `{"networks":["a","b","a"],"pools":[]}`,
+		"bridges and networks together": `{"bridges":["br0"],"networks":["a"],"pools":[]}`,
+		"retired scalar network key":    `{"network":"a","pools":[]}`,
+		"retired scalar bridge key":     `{"bridge":"br0","pools":[]}`,
+		"empty conflist name":           `{"networks":["a",""],"pools":[]}`,
+		"empty bridge name":             `{"bridges":["br0",""],"pools":[]}`,
+		"repeated conflist":             `{"networks":["a","b","a"],"pools":[]}`,
+		"repeated bridge":               `{"bridges":["br0","br1","br0"],"pools":[]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Load(writeConfig(t, body)); err == nil {
 				t.Error("Load accepted an unusable network list; want rejection")
 			}
 		})
+	}
+}
+
+func TestLoadAcceptsGuardedEgressOnABridgesList(t *testing.T) {
+	path := writeConfig(t, `{"bridges":["sbx0","sbx1"],"pools":[{"template":"rt:24.04","net":"egress","size":"small","egress":{"allow":[{"host":"x"}]}}]}`)
+	if _, err := Load(path); err != nil {
+		t.Fatalf("guarded egress on a bridges list must load (taps stay in the root netns): %v", err)
 	}
 }
 
