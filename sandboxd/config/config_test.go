@@ -85,7 +85,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		name, body, want string
 	}{
 		{"bad json", `{`, "config"},
-		{"bridge and network", `{"bridge":"br0","network":"cni","pools":[]}`, "mutually exclusive"},
+		{"bridge and networks", `{"bridge":"br0","networks":["cni"],"pools":[]}`, "mutually exclusive"},
 		{"bad fork count", `{"max_fork_count":-1,"pools":[]}`, "max_fork_count"},
 		{"negative refill concurrency", `{"refill_concurrency":-1,"pools":[]}`, "refill_concurrency"},
 		{"bad restore mode", `{"restore_mode":"Mmap","pools":[]}`, "restore_mode"},
@@ -114,9 +114,9 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"pool egress empty host", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":""}]}}]}`, "must not be empty"},
 		{"pool egress unknown secret", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"api.github.com","secret":"gh"}]}}]}`, "unknown secret"},
 		{"tenant egress unknown secret", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x","secret":"gh"}]}}]}`, "unknown secret"},
-		{"guarded egress on cni pool", `{"network":"cni","pools":[{"template":"rt:24.04","net":"egress","size":"small","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
-		{"guarded egress on cni tenant", `{"api_token":"root","network":"cni","pools":[{"template":"rt:24.04","net":"egress","size":"small"}],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
-		{"cni tenant egress no egress pool", `{"api_token":"root","network":"cni","pools":[{"template":"rt:24.04","net":"none","size":"small"}],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
+		{"guarded egress on cni pool", `{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"egress","size":"small","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
+		{"guarded egress on cni tenant", `{"api_token":"root","networks":["cni"],"pools":[{"template":"rt:24.04","net":"egress","size":"small"}],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
+		{"cni tenant egress no egress pool", `{"api_token":"root","networks":["cni"],"pools":[{"template":"rt:24.04","net":"none","size":"small"}],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
 		{"mesh bind missing port", `{"pools":[],"mesh":{"bind":"node1"}}`, "mesh bind"},
 		{"mesh bind wildcard host", `{"pools":[],"mesh":{"bind":":7946"}}`, "explicit host"},
 		{"mesh cluster key not base64", `{"pools":[],"mesh":{"bind":"node1:7946","cluster_key":"not!base64"}}`, "not valid base64"},
@@ -169,7 +169,7 @@ func TestLoadAcceptsEgressPolicy(t *testing.T) {
 
 func TestLoadAcceptsUnguardedCNINetwork(t *testing.T) {
 	// Only guarded egress needs a bridge; an unguarded CNI network lane is fine.
-	path := writeConfig(t, `{"network":"cni","pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`)
+	path := writeConfig(t, `{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`)
 	if _, err := Load(path); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -179,8 +179,8 @@ func TestLoadAcceptsNoneLanePolicyOnCNI(t *testing.T) {
 	// A none-lane policy rides the vsock proxy and locks no tap, so it is valid on
 	// a CNI network — the bridge requirement is only for a guarded egress lane.
 	for _, body := range []string{
-		`{"network":"cni","pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"x"}]}}]}`,
-		`{"network":"cni","pools":[{"template":"rt:24.04","net":"egress","size":"small"},{"template":"rt:24.04","net":"none","size":"medium","egress":{"allow":[{"host":"x"}]}}]}`,
+		`{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"x"}]}}]}`,
+		`{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"egress","size":"small"},{"template":"rt:24.04","net":"none","size":"medium","egress":{"allow":[{"host":"x"}]}}]}`,
 	} {
 		if _, err := Load(writeConfig(t, body)); err != nil {
 			t.Errorf("Load rejected a none-lane policy on CNI: %v", err)
@@ -218,7 +218,7 @@ func TestHasEgress(t *testing.T) {
 	if (&Config{}).HasEgress() {
 		t.Error("no attachment must mean no egress")
 	}
-	if !(&Config{Bridge: "br0"}).HasEgress() || !(&Config{Network: "cni"}).HasEgress() {
+	if !(&Config{Bridge: "br0"}).HasEgress() || !(&Config{Networks: []string{"cni"}}).HasEgress() {
 		t.Error("bridge or network must enable egress")
 	}
 }
@@ -235,6 +235,32 @@ func TestLoadKeepsExplicitValues(t *testing.T) {
 	}
 	if cfg.Pools[0].Net != types.NetEgress {
 		t.Errorf("pool net %q", cfg.Pools[0].Net)
+	}
+}
+
+func TestLoadRejectsUnusableNetworkLists(t *testing.T) {
+	for name, body := range map[string]string{
+		"bridge and networks together": `{"bridge":"br0","networks":["a"],"pools":[]}`,
+		"retired scalar network key":   `{"network":"a","pools":[]}`,
+		"empty conflist name":          `{"networks":["a",""],"pools":[]}`,
+		"repeated conflist":            `{"networks":["a","b","a"],"pools":[]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(writeConfig(t, body)); err == nil {
+				t.Error("Load accepted an unusable network list; want rejection")
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsAShardedNetworkList(t *testing.T) {
+	path := writeConfig(t, `{"networks":["cocoon-sbx0","cocoon-sbx1","cocoon-sbx2","cocoon-sbx3"],"pools":[]}`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Networks) != 4 || !cfg.HasEgress() {
+		t.Errorf("Networks = %v, HasEgress = %v", cfg.Networks, cfg.HasEgress())
 	}
 }
 

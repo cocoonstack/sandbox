@@ -31,7 +31,7 @@ type fakeEngine struct {
 
 func newFakeEngine(dir string) *fakeEngine {
 	return &fakeEngine{
-		real:      engine.New("cocoon", "", "", false, ""),
+		real:      engine.New("cocoon", "", nil, false, ""),
 		dir:       dir,
 		listeners: map[string]io.Closer{},
 		socks:     map[string]string{},

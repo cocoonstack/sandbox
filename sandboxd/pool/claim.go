@@ -99,46 +99,6 @@ func (m *Manager) Release(ctx context.Context, id string, cred Cred) error {
 	return m.releaseResolved(ctx, id, sb)
 }
 
-// releaseResolved drops the resolved claim and tears down its VM. resolve
-// unlocks before this runs, so it re-checks under m.mu that sb is still the
-// live claim: a second release racing in must not tear down twice.
-func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sandbox) error {
-	m.mu.Lock()
-	if m.claimed[id] != sb {
-		m.mu.Unlock()
-		return ErrUnknownSandbox
-	}
-	delete(m.claimed, id)
-	m.tenantDelta(sb.Tenant, -1)
-	snap, ck, vmName := sb.HibernateSnap, sb.ArchiveCk, sb.VMName
-	js := m.store.snapshot(m.claimed)
-	m.mu.Unlock()
-	if saveErr := m.store.commit(js); saveErr != nil {
-		m.mu.Lock()
-		m.claimed[id] = sb // roll back so memory matches the still-durable claim; ck stays pinned
-		m.tenantDelta(sb.Tenant, 1)
-		rb := m.store.snapshot(m.claimed)
-		m.mu.Unlock()
-		m.recommit(ctx, rb)
-		log.WithFunc("pool.releaseResolved").Errorf(ctx, saveErr, "persist release of %s", id)
-		return fmt.Errorf("release %s: %w", id, saveErr)
-	}
-	// Cleanup must survive the caller hanging up; the claim is already dropped.
-	ctx = context.WithoutCancel(ctx)
-	if ck != "" {
-		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
-	}
-	var err error
-	if vmName != "" && !m.removeOrRetry(ctx, vmName, id, "") {
-		err = fmt.Errorf("vm %s survived removal", vmName)
-	}
-	m.disarmEgress(id, err == nil)
-	m.dropSnap(ctx, snap)
-	m.counters.releases.Add(1)
-	m.recordUsage(ctx, usageEvent{Event: "release", ID: id, VMName: vmName})
-	return err
-}
-
 // ClaimDeadline authorizes a sandbox by token and returns its lease
 // deadline — the preview mint clamps a URL's life to it.
 func (m *Manager) ClaimDeadline(id, token string) (time.Time, error) {
@@ -187,6 +147,46 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 	// control-plane poll must not keep an idle sandbox awake. The relay's
 	// stamp lives in WakeAgentSocket.
 	return sb.VsockSocket, nil
+}
+
+// releaseResolved drops the resolved claim and tears down its VM. resolve
+// unlocks before this runs, so it re-checks under m.mu that sb is still the
+// live claim: a second release racing in must not tear down twice.
+func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sandbox) error {
+	m.mu.Lock()
+	if m.claimed[id] != sb {
+		m.mu.Unlock()
+		return ErrUnknownSandbox
+	}
+	delete(m.claimed, id)
+	m.tenantDelta(sb.Tenant, -1)
+	snap, ck, vmName := sb.HibernateSnap, sb.ArchiveCk, sb.VMName
+	js := m.store.snapshot(m.claimed)
+	m.mu.Unlock()
+	if saveErr := m.store.commit(js); saveErr != nil {
+		m.mu.Lock()
+		m.claimed[id] = sb // roll back so memory matches the still-durable claim; ck stays pinned
+		m.tenantDelta(sb.Tenant, 1)
+		rb := m.store.snapshot(m.claimed)
+		m.mu.Unlock()
+		m.recommit(ctx, rb)
+		log.WithFunc("pool.releaseResolved").Errorf(ctx, saveErr, "persist release of %s", id)
+		return fmt.Errorf("release %s: %w", id, saveErr)
+	}
+	// Cleanup must survive the caller hanging up; the claim is already dropped.
+	ctx = context.WithoutCancel(ctx)
+	if ck != "" {
+		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
+	}
+	var err error
+	if vmName != "" && !m.removeOrRetry(ctx, vmName, id, "") {
+		err = fmt.Errorf("vm %s survived removal", vmName)
+	}
+	m.disarmEgress(id, err == nil)
+	m.dropSnap(ctx, snap)
+	m.counters.releases.Add(1)
+	m.recordUsage(ctx, usageEvent{Event: "release", ID: id, VMName: vmName})
+	return err
 }
 
 // overQuota is a cheap advisory precheck; finalizeBatch does the authoritative

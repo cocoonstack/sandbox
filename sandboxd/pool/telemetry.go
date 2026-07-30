@@ -113,6 +113,11 @@ func (m *Manager) Audit(ctx context.Context, id string, line []byte) {
 	m.recordAudit(ctx, id, frame)
 }
 
+// AuditEnabled reports whether the relay should tap request frames at all.
+func (m *Manager) AuditEnabled() bool {
+	return m.audit != nil
+}
+
 func (m *Manager) recordAudit(ctx context.Context, id string, frame auditFrame) {
 	if m.audit == nil {
 		return
@@ -125,11 +130,6 @@ func (m *Manager) recordAudit(ctx context.Context, id string, frame auditFrame) 
 	if err := m.audit.append(event); err != nil {
 		log.WithFunc("pool.recordAudit").Error(ctx, err, "append audit event")
 	}
-}
-
-// AuditEnabled reports whether the relay should tap request frames at all.
-func (m *Manager) AuditEnabled() bool {
-	return m.audit != nil
 }
 
 // recordEgress logs one guarded-egress decision to the audit tap (secret name

@@ -5,6 +5,7 @@ package peer
 
 import (
 	"archive/tar"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -216,9 +217,7 @@ func Untar(r io.Reader, dst string) error {
 }
 
 func writeFile(target string, r io.Reader, mode os.FileMode) error {
-	if mode == 0 {
-		mode = 0o600
-	}
+	mode = cmp.Or(mode, os.FileMode(0o600))
 	f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode) //nolint:gosec // target resolved by safeJoin
 	if err != nil {
 		return fmt.Errorf("untar create %s: %w", target, err)

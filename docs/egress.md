@@ -84,7 +84,7 @@ domain policy first; the allow-list widens the IP gate only.
   bridge they do not share with an untrusted listener.
 - **Bridge lane only (egress lane).** A CNI network's tap lives in the VM netns,
   out of reach of the root-netns lock, so a guarded egress *lane* needs a bridge
-  and is rejected on a CNI `network`. None-lane policies ride the proxy and work
+  and is rejected on CNI `networks`. None-lane policies ride the proxy and work
   on either. A bridge egress lane locks every NIC default-deny, even with no
   policy configured.
 - **No custom NAT64/DNS64 prefix routed to the host.** The SSRF guard folds the

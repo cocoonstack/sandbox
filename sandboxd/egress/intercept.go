@@ -3,7 +3,6 @@ package egress
 import (
 	"crypto/tls"
 	"io"
-	"maps"
 	"net"
 	"net/http"
 	"strings"
@@ -94,34 +93,16 @@ type interceptHandler struct {
 func (h *interceptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p := h.proxy
 	rule, decision := p.policy.EvalInner(h.host, r.Method)
-	if decision == DecisionDeny {
-		p.record(Event{Method: r.Method, Host: h.host, Decision: decision})
-		denied(w, h.host)
-		return
-	}
-	out := r.Clone(r.Context())
-	out.URL.Scheme = "https"
-	out.URL.Host = h.authority
-	// Keep the guest's Host when it names the CONNECT host (SigV4-style signing
-	// breaks on the ":443" rewrite); a foreign Host snaps to the authority.
-	if !strings.EqualFold(hostOnly(r.Host), h.host) {
-		out.Host = h.authority
-	}
-	out.RequestURI = ""
-	stripHop(out.Header)
-	injected := p.inject(rule, out.Header)
-	p.record(Event{Method: r.Method, Host: h.host, Decision: decision, Injected: injected})
-
-	resp, err := p.mitmTr.RoundTrip(out)
-	if err != nil {
-		http.Error(w, "egress: upstream unreachable", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-	maps.Copy(w.Header(), resp.Header)
-	stripHop(w.Header())
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	p.relay(w, r, h.host, rule, decision, p.mitmTr, func(out *http.Request) {
+		out.URL.Scheme = "https"
+		out.URL.Host = h.authority
+		// Keep the guest's Host when it names the CONNECT host (SigV4-style
+		// signing breaks on the ":443" rewrite); a foreign Host snaps to the
+		// authority.
+		if !strings.EqualFold(hostOnly(r.Host), h.host) {
+			out.Host = h.authority
+		}
+	})
 }
 
 // singleConnListener feeds one already-accepted conn to an http.Server and then

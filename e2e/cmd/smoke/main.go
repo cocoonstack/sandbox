@@ -21,6 +21,7 @@ import (
 	"testing/iotest"
 	"time"
 
+	"github.com/cocoonstack/sandbox/e2e/internal/harness"
 	"github.com/cocoonstack/sandbox/protocol/wire"
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
@@ -48,14 +49,10 @@ func run(addr, token, template, lspTemplate string, egress bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(token))
+	// Explicitly the no-network lane: the git step asserts its typed error.
+	client, sb, err := harness.Claim(ctx, addr, token, template, sandbox.WithNetwork(sandbox.NetNone))
 	if err != nil {
 		return err
-	}
-	// Explicitly the no-network lane: the git step asserts its typed error.
-	sb, err := client.New(ctx, template, sandbox.WithNetwork(sandbox.NetNone))
-	if err != nil {
-		return fmt.Errorf("claim: %w", err)
 	}
 	defer func() { _ = sb.Close() }()
 	// Info is node-local: on a cluster the claim may have been redirected, so

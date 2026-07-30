@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cocoonstack/sandbox/e2e/internal/harness"
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
@@ -36,13 +37,9 @@ func run(addr, token, template, echo, secret, issuer string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	c, err := sandbox.Connect(addr, sandbox.WithAPIToken(token))
+	_, sb, err := harness.Claim(ctx, addr, token, template, sandbox.WithNetwork(sandbox.NetNone), sandbox.WithSize(sandbox.Small))
 	if err != nil {
 		return err
-	}
-	sb, err := c.New(ctx, template, sandbox.WithNetwork(sandbox.NetNone), sandbox.WithSize(sandbox.Small))
-	if err != nil {
-		return fmt.Errorf("claim: %w", err)
 	}
 	defer func() { _ = sb.Close() }()
 	fmt.Printf("  claimed none-lane sandbox %s\n", sb.ID)

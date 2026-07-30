@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net"
 	"os/exec"
@@ -60,14 +61,15 @@ var capacitySignatures = []string{
 type Engine struct {
 	bin         string
 	bridge      string
-	network     string
+	networks    []string
 	noDirectIO  bool
 	restoreMode types.RestoreMode
 }
 
-// New returns a cocoon engine with node-wide network and disk policy.
-func New(bin, bridge, network string, noDirectIO bool, restoreMode types.RestoreMode) *Engine {
-	return &Engine{bin: bin, bridge: bridge, network: network, noDirectIO: noDirectIO, restoreMode: restoreMode}
+// New returns a cocoon engine with node-wide network and disk policy. networks
+// are CNI conflists to spread egress-lane VMs over; see networkFor.
+func New(bin, bridge string, networks []string, noDirectIO bool, restoreMode types.RestoreMode) *Engine {
+	return &Engine{bin: bin, bridge: bridge, networks: networks, noDirectIO: noDirectIO, restoreMode: restoreMode}
 }
 
 // Version reports cocoon's version string — a "vX.Y.Z" release or a
@@ -304,13 +306,13 @@ func (e *Engine) cloneArgs(fromDir, name string, key types.PoolKey) []string {
 	// by digest.
 	args := []string{"vm", "clone", "--from-dir", fromDir, argName, name, "--pull", argOutput, formatJSON, e.directIOArg()}
 	args = append(args, e.restoreArgs()...)
-	return append(args, e.netArgs(key, false)...)
+	return append(args, e.netArgs(name, key, false)...)
 }
 
 func (e *Engine) cloneSnapArgs(snap, name string, key types.PoolKey) []string {
 	args := []string{"vm", "clone", snap, argName, name, "--pull", argOutput, formatJSON, e.directIOArg()}
 	args = append(args, e.restoreArgs()...)
-	return append(args, e.netArgs(key, false)...)
+	return append(args, e.netArgs(name, key, false)...)
 }
 
 func (e *Engine) restoreCmdArgs(vmName, snapRef string) []string {
@@ -337,21 +339,31 @@ func (e *Engine) runColdArgs(name string, key types.PoolKey) []string {
 		// hypervisor from the golden's pinned snapshot, so only RunCold flags it.
 		args = append(args, "--fc")
 	}
-	args = append(args, e.netArgs(key, true)...)
+	args = append(args, e.netArgs(name, key, true)...)
 	return append(args, key.Template)
 }
 
-func (e *Engine) netArgs(key types.PoolKey, cold bool) []string {
+func (e *Engine) netArgs(name string, key types.PoolKey, cold bool) []string {
 	if key.Net == types.NetNone {
 		if cold {
 			return []string{"--nics", "0"}
 		}
 		return nil
 	}
-	if e.network != "" {
-		return []string{"--network", e.network}
+	if len(e.networks) > 0 {
+		return []string{"--network", e.networkFor(name)}
 	}
 	return []string{"--bridge", e.bridge}
+}
+
+// networkFor picks a conflist by hashing the VM name, not by counter: the
+// record persists the network a VM was built on, so the choice must be
+// reproducible without process state.
+func (e *Engine) networkFor(name string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(name))
+	// >>1 keeps the index conversion positive even where int is 32-bit.
+	return e.networks[int(h.Sum32()>>1)%len(e.networks)]
 }
 
 func (e *Engine) run(ctx context.Context, args ...string) ([]byte, error) {

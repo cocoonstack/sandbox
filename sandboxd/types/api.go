@@ -4,16 +4,27 @@ import (
 	"time"
 )
 
+// TTLField is the requested-lease field shared by the claiming request
+// bodies; zero means the server default.
+type TTLField struct {
+	TTLSeconds int `json:"ttl_seconds,omitempty"`
+}
+
+// TTL converts the wire seconds to a duration.
+func (f TTLField) TTL() time.Duration {
+	return time.Duration(f.TTLSeconds) * time.Second
+}
+
 // ClaimRequest is the wire body of POST /v1/claim. NoRedirect is set by the
 // SDK on a claim it is retrying at a redirect target, so that node warm-or-
 // provisions locally instead of bouncing the claim back on a stale view.
 type ClaimRequest struct {
-	Template   string   `json:"template"`
-	Net        NetShape `json:"net,omitempty"`
-	Size       Size     `json:"size,omitempty"`
-	Engine     Engine   `json:"engine,omitempty"`
-	TTLSeconds int      `json:"ttl_seconds,omitempty"`
-	NoRedirect bool     `json:"no_redirect,omitempty"`
+	Template string   `json:"template"`
+	Net      NetShape `json:"net,omitempty"`
+	Size     Size     `json:"size,omitempty"`
+	Engine   Engine   `json:"engine,omitempty"`
+	TTLField
+	NoRedirect bool `json:"no_redirect,omitempty"`
 	// ClaimRef is an opaque caller reference (the aggregated apiserver passes
 	// the k8s "<namespace>/<name>") recorded on the claim so the read path can
 	// map a listed sandbox back to the name it was claimed under. Optional.
@@ -23,11 +34,6 @@ type ClaimRequest struct {
 // Key resolves the requested pool key with the wire defaults filled.
 func (r ClaimRequest) Key() PoolKey {
 	return PoolKey{Template: r.Template, Net: r.Net, Size: r.Size, Engine: r.Engine}.Defaulted()
-}
-
-// TTL converts the wire seconds to a duration; zero means server default.
-func (r ClaimRequest) TTL() time.Duration {
-	return time.Duration(r.TTLSeconds) * time.Second
 }
 
 // ClaimResponse is the wire reply of POST /v1/claim. A successful claim
@@ -53,14 +59,9 @@ type ClaimResponse struct {
 // lease is a per-sandbox resource bound, so children never inherit the
 // parent's remainder.
 type ForkRequest struct {
-	Token      string `json:"token"`
-	Count      int    `json:"count"`
-	TTLSeconds int    `json:"ttl_seconds,omitempty"`
-}
-
-// TTL converts the wire seconds to a duration; zero means server default.
-func (r ForkRequest) TTL() time.Duration {
-	return time.Duration(r.TTLSeconds) * time.Second
+	Token string `json:"token"`
+	Count int    `json:"count"`
+	TTLField
 }
 
 // ForkResponse carries one claim per child.
@@ -83,15 +84,10 @@ type CheckpointResponse struct {
 // CheckpointClaimRequest is the wire body of POST /v1/checkpoints/{id}/claim.
 // TTLSeconds semantics match a claim's; zero means the server default.
 type CheckpointClaimRequest struct {
-	TTLSeconds int `json:"ttl_seconds,omitempty"`
+	TTLField
 	// NoRedirect is set by a client retrying at a redirect target, so the retry
 	// resolves locally instead of bouncing between two nodes.
 	NoRedirect bool `json:"no_redirect,omitempty"`
-}
-
-// TTL converts the requested lease.
-func (r CheckpointClaimRequest) TTL() time.Duration {
-	return time.Duration(r.TTLSeconds) * time.Second
 }
 
 // CheckpointListResponse is the wire reply of GET /v1/checkpoints.
@@ -116,9 +112,9 @@ type PromoteResponse struct {
 // PreviewRequest is the wire body of POST /v1/sandboxes/{id}/preview; auth
 // mirrors ForkRequest (control token in the header, ownership in Token).
 type PreviewRequest struct {
-	Token      string `json:"token"`
-	Port       uint16 `json:"port"`
-	TTLSeconds int    `json:"ttl_seconds,omitempty"`
+	Token string `json:"token"`
+	Port  uint16 `json:"port"`
+	TTLField
 }
 
 // PreviewResponse carries the minted URL.
