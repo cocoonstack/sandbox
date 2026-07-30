@@ -83,10 +83,10 @@ domain policy first; the allow-list widens the IP gate only.
   reach the local L2 segment (never routed off-link). Give egress-lane VMs a
   bridge they do not share with an untrusted listener.
 - **Bridge lane only (egress lane).** A CNI network's tap lives in the VM netns,
-  out of reach of the root-netns lock, so a guarded egress *lane* needs a bridge
-  and is rejected on CNI `networks`. None-lane policies ride the proxy and work
-  on either. A bridge egress lane locks every NIC default-deny, even with no
-  policy configured.
+  out of reach of the root-netns lock, so a guarded egress *lane* needs the
+  `bridges` form (those taps stay in the root netns) and is rejected on CNI
+  `networks`. None-lane policies ride the proxy and work on either. A bridge
+  egress lane locks every NIC default-deny, even with no policy configured.
 - **No custom NAT64/DNS64 prefix routed to the host.** The SSRF guard folds the
   standard NAT64 forms (RFC 6052 well-known `64:ff9b::/96`, RFC 8215 local-use
   `64:ff9b:1::/48`), but an operator-specific network-specific prefix (RFC 6052
@@ -103,7 +103,7 @@ the environment, never the config file.
 
 ```jsonc
 {
-  "bridge": "sbxbr0",                       // egress-lane pools only; none-lane needs no attachment
+  "bridges": ["sbxbr0"],                    // egress-lane pools only; none-lane needs no attachment
   "secrets": [
     { "name": "gh", "header": "Authorization", "value_env": "GH_TOKEN" }
   ],

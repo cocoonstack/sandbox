@@ -170,10 +170,11 @@ type Config struct {
 	// to Listen, which is correct when Listen is a routable host:port.
 	AdvertiseAddr string `json:"advertise_addr,omitempty"`
 
-	// Bridge and Networks pick the egress-lane attachment (TAP-on-bridge vs
-	// CNI conflists); mutually exclusive. With neither set the node serves
-	// only the no-network lane.
-	Bridge string `json:"bridge,omitempty"`
+	// Bridges shards egress-lane VMs over several host bridge devices with
+	// the raw TAP-on-bridge attachment: taps stay in the root netns, so
+	// guarded egress can lock them. Mutually exclusive with Networks; with
+	// neither set the node serves only the no-network lane.
+	Bridges []string `json:"bridges,omitempty"`
 
 	// Networks shards egress-lane VMs over several CNI conflists, one Linux
 	// bridge each: a bridge holds at most 1024 ports (BR_MAX_PORTS, no
@@ -276,7 +277,7 @@ type Config struct {
 
 // HasEgress reports whether the node can attach egress-lane VMs.
 func (c *Config) HasEgress() bool {
-	return c.Bridge != "" || len(c.Networks) > 0
+	return len(c.Bridges) > 0 || len(c.Networks) > 0
 }
 
 // ClusterDigest fingerprints the must-match config so a divergent node is
@@ -336,7 +337,7 @@ func autoRefillConcurrency(cpus int) int {
 }
 
 func (c *Config) validate() error {
-	if err := c.validateNetworks(); err != nil {
+	if err := c.validateAttachment(); err != nil {
 		return err
 	}
 	// A CNI network's tap lives in the VM netns, unreachable from the root-netns
@@ -459,19 +460,26 @@ func (c *Config) validateSecrets() (map[string]struct{}, error) {
 	return names, nil
 }
 
-// validateNetworks checks the egress-lane attachment; a repeated conflist
+// validateAttachment checks the egress-lane attachment; a repeated shard
 // would report N shards while filling one bridge.
-func (c *Config) validateNetworks() error {
-	if c.Bridge != "" && len(c.Networks) > 0 {
-		return fmt.Errorf("bridge and networks are mutually exclusive")
+func (c *Config) validateAttachment() error {
+	if len(c.Bridges) > 0 && len(c.Networks) > 0 {
+		return fmt.Errorf("bridges and networks are mutually exclusive")
 	}
-	seen := make(map[string]struct{}, len(c.Networks))
-	for _, n := range c.Networks {
+	if err := validateShards(c.Bridges, "bridges", "bridge device"); err != nil {
+		return err
+	}
+	return validateShards(c.Networks, "networks", "conflist")
+}
+
+func validateShards(names []string, field, kind string) error {
+	seen := make(map[string]struct{}, len(names))
+	for _, n := range names {
 		if n == "" {
-			return fmt.Errorf("networks must not contain an empty conflist name")
+			return fmt.Errorf("%s must not contain an empty %s name", field, kind)
 		}
 		if _, ok := seen[n]; ok {
-			return fmt.Errorf("duplicate conflist %q", n)
+			return fmt.Errorf("duplicate %s %q", kind, n)
 		}
 		seen[n] = struct{}{}
 	}

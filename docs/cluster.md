@@ -179,7 +179,7 @@ fully from it:
 
 | state | source of truth | survives restart |
 |---|---|---|
-| operator config (`tenants`, `secrets`, egress policies, `bridge`/`networks`, `mesh`, `preview_secret`, `egress_ca`) | `config.json` (human/deploy-tool owned) | re-read at boot |
+| operator config (`tenants`, `secrets`, egress policies, `bridges`/`networks`, `mesh`, `preview_secret`, `egress_ca`) | `config.json` (human/deploy-tool owned) | re-read at boot |
 | API-applied pool targets (`PUT /v1/pools`) | `<data_dir>/pools.json` (machine owned) | yes |
 | claims | the claims journal + `Reconcile` | yes |
 | placement hints (warm counts, template sets) | gossip | rebuilt |
