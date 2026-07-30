@@ -173,50 +173,6 @@ func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, func(), e
 	return export, meta, func() {}, nil
 }
 
-// populate downloads one cache generation and installs it atomically.
-func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string) error {
-	if _, err := os.Stat(gen); err == nil {
-		return nil // another flight installed it between stat and Do
-	}
-	local, err := os.MkdirTemp(s.staging, id+"-fetch-*")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.RemoveAll(local) }()
-	exportPrefix := s.key(id, exportGen(meta)) + "/"
-	keys, err := s.list(ctx, exportPrefix)
-	if err != nil {
-		return err
-	}
-	if len(keys) == 0 {
-		// Records published before per-generation prefixes.
-		exportPrefix = s.key(id, store.ExportDir) + "/"
-		if keys, err = s.list(ctx, exportPrefix); err != nil {
-			return err
-		}
-	}
-	if len(keys) == 0 {
-		return fmt.Errorf("record %s has no export", id)
-	}
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(4)
-	for _, key := range keys {
-		g.Go(func() error {
-			return s.download(gctx, key, filepath.Join(local, store.ExportDir, strings.TrimPrefix(key, exportPrefix)))
-		})
-	}
-	if err := g.Wait(); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(local, store.MetaFile), meta, 0o600); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(gen), 0o750); err != nil {
-		return err
-	}
-	return os.Rename(local, gen)
-}
-
 func (s *Store) ReadMeta(ctx context.Context, id string) ([]byte, error) {
 	out, err := s.client.GetObject(ctx, &awss3.GetObjectInput{
 		Bucket: &s.bucket, Key: aws.String(s.key(id, store.MetaFile)),
@@ -300,6 +256,50 @@ func (s *Store) SweepStaging() error {
 		}
 	}
 	return nil
+}
+
+// populate downloads one cache generation and installs it atomically.
+func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string) error {
+	if _, err := os.Stat(gen); err == nil {
+		return nil // another flight installed it between stat and Do
+	}
+	local, err := os.MkdirTemp(s.staging, id+"-fetch-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(local) }()
+	exportPrefix := s.key(id, exportGen(meta)) + "/"
+	keys, err := s.list(ctx, exportPrefix)
+	if err != nil {
+		return err
+	}
+	if len(keys) == 0 {
+		// Records published before per-generation prefixes.
+		exportPrefix = s.key(id, store.ExportDir) + "/"
+		if keys, err = s.list(ctx, exportPrefix); err != nil {
+			return err
+		}
+	}
+	if len(keys) == 0 {
+		return fmt.Errorf("record %s has no export", id)
+	}
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(4)
+	for _, key := range keys {
+		g.Go(func() error {
+			return s.download(gctx, key, filepath.Join(local, store.ExportDir, strings.TrimPrefix(key, exportPrefix)))
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(local, store.MetaFile), meta, 0o600); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(gen), 0o750); err != nil {
+		return err
+	}
+	return os.Rename(local, gen)
 }
 
 func (s *Store) key(id, rest string) string {

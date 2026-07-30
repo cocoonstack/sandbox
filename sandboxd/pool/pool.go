@@ -525,18 +525,6 @@ func (m *Manager) FlushClaims() error {
 	return m.store.commit(m.claimsSnapshot())
 }
 
-func (m *Manager) claimsSnapshot() claimSnapshot {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.store.snapshot(m.claimed)
-}
-
-func (m *Manager) untrack(set map[string]struct{}, key string) {
-	m.mu.Lock()
-	delete(set, key)
-	m.mu.Unlock()
-}
-
 // SetTemplateNotifier wires the immediate-republish hook; call it before
 // the server starts serving.
 func (m *Manager) SetTemplateNotifier(fn func()) {
@@ -610,26 +598,6 @@ func (m *Manager) WarmCounts() map[string]int {
 	return counts
 }
 
-// activePool looks up key treating a removed pool as absent; callers hold m.mu.
-func (m *Manager) activePool(key types.PoolKey) (*pool, bool) {
-	p, ok := m.pools[key]
-	return p, ok && !p.removed
-}
-
-func (m *Manager) validate(key types.PoolKey) error {
-	if err := key.Validate(); err != nil {
-		return fmt.Errorf("%w: %v", ErrBadKey, err)
-	}
-	if key.Net == types.NetEgress && !m.egress {
-		return ErrNoEgress
-	}
-	return nil
-}
-
-func (m *Manager) goldensDir() string {
-	return filepath.Join(m.dataDir, "goldens")
-}
-
 func loadEgressCA(cfg *config.EgressCAConfig) (*egress.CA, error) {
 	root, err := os.ReadFile(cfg.RootCert) //nolint:gosec // operator-configured ca path
 	if err != nil {
@@ -669,6 +637,38 @@ func (m *Manager) WithPeerHeal(enabled bool, owners peer.Owners, token string) {
 // delete, so a healed replica does not outlive the source record.
 func (m *Manager) WithPeerDelete(fn PeerDeleteFunc) {
 	m.peerDelete = fn
+}
+
+func (m *Manager) claimsSnapshot() claimSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.store.snapshot(m.claimed)
+}
+
+func (m *Manager) untrack(set map[string]struct{}, key string) {
+	m.mu.Lock()
+	delete(set, key)
+	m.mu.Unlock()
+}
+
+// activePool looks up key treating a removed pool as absent; callers hold m.mu.
+func (m *Manager) activePool(key types.PoolKey) (*pool, bool) {
+	p, ok := m.pools[key]
+	return p, ok && !p.removed
+}
+
+func (m *Manager) validate(key types.PoolKey) error {
+	if err := key.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrBadKey, err)
+	}
+	if key.Net == types.NetEgress && !m.egress {
+		return ErrNoEgress
+	}
+	return nil
+}
+
+func (m *Manager) goldensDir() string {
+	return filepath.Join(m.dataDir, "goldens")
 }
 
 func dirExists(path string) bool {

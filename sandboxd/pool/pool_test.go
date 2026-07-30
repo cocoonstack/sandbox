@@ -798,28 +798,6 @@ func (f *fakeEngine) CloneSnap(_ context.Context, snap, name string, _ types.Poo
 	return f.clone(snap, name)
 }
 
-func (f *fakeEngine) clone(from, name string) (types.VMRecord, error) {
-	f.mu.Lock()
-	f.clones = append(f.clones, name)
-	f.cloneFroms = append(f.cloneFroms, from)
-	call := len(f.clones)
-	stall, err, failNth := f.cloneStall, f.cloneErr, f.cloneFailNth
-	f.mu.Unlock()
-	if stall != nil {
-		<-stall
-	}
-	if err != nil {
-		return types.VMRecord{}, err
-	}
-	if failNth > 0 && call == failNth {
-		return types.VMRecord{}, errors.New("clone failed")
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.vms[name] = "/vsock/" + name
-	return f.record(name), nil
-}
-
 func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) (types.VMRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -829,33 +807,6 @@ func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) (t
 	}
 	f.vms[name] = "/vsock/" + name
 	return f.record(name), nil
-}
-
-// record builds a lifecycle result for name; callers hold f.mu.
-func (f *fakeEngine) record(name string) types.VMRecord {
-	rec := types.VMRecord{VsockSocket: f.lateVsock(f.vms[name]), Config: types.VMConfig{Name: name}}
-	if f.tap != "" {
-		rec.NetworkConfigs = []types.VMNetConfig{{TAP: f.tap}}
-	}
-	return rec
-}
-
-// lateVsock models cocoon's report-once-running lag: while vsockLateN ticks
-// remain it reports no socket (consuming one), forcing the caller's poll.
-func (f *fakeEngine) lateVsock(sock string) string {
-	if f.vsockLateN > 0 {
-		f.vsockLateN--
-		return ""
-	}
-	return sock
-}
-
-// removed reports whether name was destroyed, under the fake's own lock —
-// bounded batches append concurrently with test polls.
-func (f *fakeEngine) removed(name string) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return slices.Contains(f.removes, name)
 }
 
 func (f *fakeEngine) Remove(ctx context.Context, name string) error {
@@ -907,18 +858,6 @@ func (f *fakeEngine) SnapshotList(_ context.Context) ([]string, error) {
 		return nil, err
 	}
 	return snaps, nil
-}
-
-func (f *fakeEngine) listCalls() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.listCount
-}
-
-func (f *fakeEngine) snapListCalls() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.snapListCount
 }
 
 func (f *fakeEngine) SnapshotRemove(_ context.Context, snapName string) error {
@@ -1012,6 +951,67 @@ func (f *fakeEngine) InstallCACert(_ context.Context, vsockSocket string, _ []by
 	defer f.mu.Unlock()
 	f.caInstalls = append(f.caInstalls, vsockSocket)
 	return f.installCAErr
+}
+
+func (f *fakeEngine) clone(from, name string) (types.VMRecord, error) {
+	f.mu.Lock()
+	f.clones = append(f.clones, name)
+	f.cloneFroms = append(f.cloneFroms, from)
+	call := len(f.clones)
+	stall, err, failNth := f.cloneStall, f.cloneErr, f.cloneFailNth
+	f.mu.Unlock()
+	if stall != nil {
+		<-stall
+	}
+	if err != nil {
+		return types.VMRecord{}, err
+	}
+	if failNth > 0 && call == failNth {
+		return types.VMRecord{}, errors.New("clone failed")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.vms[name] = "/vsock/" + name
+	return f.record(name), nil
+}
+
+// record builds a lifecycle result for name; callers hold f.mu.
+func (f *fakeEngine) record(name string) types.VMRecord {
+	rec := types.VMRecord{VsockSocket: f.lateVsock(f.vms[name]), Config: types.VMConfig{Name: name}}
+	if f.tap != "" {
+		rec.NetworkConfigs = []types.VMNetConfig{{TAP: f.tap}}
+	}
+	return rec
+}
+
+// lateVsock models cocoon's report-once-running lag: while vsockLateN ticks
+// remain it reports no socket (consuming one), forcing the caller's poll.
+func (f *fakeEngine) lateVsock(sock string) string {
+	if f.vsockLateN > 0 {
+		f.vsockLateN--
+		return ""
+	}
+	return sock
+}
+
+// removed reports whether name was destroyed, under the fake's own lock —
+// bounded batches append concurrently with test polls.
+func (f *fakeEngine) removed(name string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Contains(f.removes, name)
+}
+
+func (f *fakeEngine) listCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.listCount
+}
+
+func (f *fakeEngine) snapListCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.snapListCount
 }
 
 func (f *fakeEngine) cloneCount() int {
