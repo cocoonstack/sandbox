@@ -320,9 +320,7 @@ func (c *Config) applyDefaults() {
 	c.DataDir = cmp.Or(c.DataDir, defaultDataDir)
 	c.CocoonBin = cmp.Or(c.CocoonBin, defaultCocoonBin)
 	c.AdvertiseAddr = cmp.Or(c.AdvertiseAddr, c.Listen)
-	if c.PreviewListen != "" && c.PreviewAdvertise == "" {
-		c.PreviewAdvertise = c.PreviewListen
-	}
+	c.PreviewAdvertise = cmp.Or(c.PreviewAdvertise, c.PreviewListen)
 	c.MaxForkCount = cmp.Or(c.MaxForkCount, defaultMaxForkCount)
 	if c.RefillConcurrency == 0 {
 		c.RefillConcurrency = autoRefillConcurrency(runtime.NumCPU())

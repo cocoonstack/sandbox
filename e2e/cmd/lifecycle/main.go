@@ -12,6 +12,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/cocoonstack/sandbox/e2e/internal/harness"
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
@@ -34,14 +35,9 @@ func main() {
 
 func run(addr, token, template, netShape string, wait time.Duration) error {
 	ctx := context.Background()
-	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(token))
+	client, sb, err := harness.Claim(ctx, addr, token, template, sandbox.WithNetwork(sandbox.NetShape(netShape)))
 	if err != nil {
 		return err
-	}
-
-	sb, err := client.New(ctx, template, sandbox.WithNetwork(sandbox.NetShape(netShape)))
-	if err != nil {
-		return fmt.Errorf("claim: %w", err)
 	}
 	id := sb.ID
 	marker := fmt.Appendf(nil, "archive-marker-%d", time.Now().UnixNano())

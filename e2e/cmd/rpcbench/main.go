@@ -18,6 +18,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/cocoonstack/sandbox/e2e/internal/harness"
 	"github.com/cocoonstack/sandbox/protocol/wire"
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
@@ -38,13 +39,9 @@ func main() {
 func run(addr, token, template string, n int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(token))
+	_, sb, err := harness.Claim(ctx, addr, token, template, sandbox.WithNetwork(sandbox.NetNone))
 	if err != nil {
 		return err
-	}
-	sb, err := client.New(ctx, template, sandbox.WithNetwork(sandbox.NetNone))
-	if err != nil {
-		return fmt.Errorf("claim: %w", err)
 	}
 	defer func() { _ = sb.Close() }()
 

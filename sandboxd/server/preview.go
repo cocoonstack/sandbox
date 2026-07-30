@@ -189,7 +189,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		writePoolErr(w, err)
 		return
 	}
-	ttl := time.Duration(req.TTLSeconds) * time.Second
+	ttl := req.TTL()
 	switch {
 	case !deadline.IsZero():
 		if lease := time.Until(deadline); ttl <= 0 || ttl > lease {

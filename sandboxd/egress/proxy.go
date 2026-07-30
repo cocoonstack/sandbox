@@ -186,6 +186,12 @@ func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
 	}
 	host := hostOnly(r.URL.Host)
 	rule, decision := p.policy.Eval(host, r.Method)
+	p.relay(w, r, host, rule, decision, p.tr, nil)
+}
+
+// relay forwards one policy-evaluated request upstream and mirrors the
+// response; prepare, when set, rewrites the clone before it leaves.
+func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, host string, rule Rule, decision Decision, tr *http.Transport, prepare func(*http.Request)) {
 	if decision == DecisionDeny {
 		p.record(Event{Method: r.Method, Host: host, Decision: decision})
 		denied(w, host)
@@ -193,12 +199,15 @@ func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := r.Clone(r.Context())
+	if prepare != nil {
+		prepare(out)
+	}
 	out.RequestURI = ""
 	stripHop(out.Header)
 	injected := p.inject(rule, out.Header)
 	p.record(Event{Method: r.Method, Host: host, Decision: decision, Injected: injected})
 
-	resp, err := p.tr.RoundTrip(out)
+	resp, err := tr.RoundTrip(out)
 	if err != nil {
 		http.Error(w, "egress: upstream unreachable", http.StatusBadGateway)
 		return

@@ -111,16 +111,35 @@ func toolCreateSandbox(ctx context.Context, s *server, raw json.RawMessage) (str
 	return jsonText(map[string]any{"sandbox_id": sb.ID, "deadline": sb.Deadline}), nil
 }
 
-func toolExec(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	var args struct {
-		SandboxID string `json:"sandbox_id"`
-		Command   string `json:"command"`
-		Cwd       string `json:"cwd"`
-	}
+// sandboxArg is the shared sandbox_id field of the tool argument structs;
+// parseAndBox reads it through id().
+type sandboxArg struct {
+	SandboxID string `json:"sandbox_id"`
+}
+
+func (a sandboxArg) id() string { return a.SandboxID }
+
+type sandboxIDer interface{ id() string }
+
+// parseAndBox decodes a tool's arguments and resolves their sandbox_id to a
+// live handle — the prologue every sandbox-scoped tool shares.
+func parseAndBox[T sandboxIDer](s *server, raw json.RawMessage) (T, *sandbox.Sandbox, error) {
+	var args T
 	if err := parse(raw, &args); err != nil {
-		return "", err
+		return args, nil, err
 	}
-	sb, err := s.box(args.SandboxID)
+	sb, err := s.box(args.id())
+	return args, sb, err
+}
+
+type cmdArgs struct {
+	sandboxArg
+	Command string `json:"command"`
+	Cwd     string `json:"cwd"`
+}
+
+func toolExec(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+	args, sb, err := parseAndBox[cmdArgs](s, raw)
 	if err != nil {
 		return "", err
 	}
@@ -136,15 +155,7 @@ func toolExec(ctx context.Context, s *server, raw json.RawMessage) (string, erro
 }
 
 func toolSpawn(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	var args struct {
-		SandboxID string `json:"sandbox_id"`
-		Command   string `json:"command"`
-		Cwd       string `json:"cwd"`
-	}
-	if err := parse(raw, &args); err != nil {
-		return "", err
-	}
-	sb, err := s.box(args.SandboxID)
+	args, sb, err := parseAndBox[cmdArgs](s, raw)
 	if err != nil {
 		return "", err
 	}
@@ -167,16 +178,14 @@ func toolPs(ctx context.Context, s *server, raw json.RawMessage) (string, error)
 	return jsonText(procs), nil
 }
 
+type killArgs struct {
+	sandboxArg
+	PID    uint32 `json:"pid"`
+	Signal int32  `json:"signal"`
+}
+
 func toolKill(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	var args struct {
-		SandboxID string `json:"sandbox_id"`
-		PID       uint32 `json:"pid"`
-		Signal    int32  `json:"signal"`
-	}
-	if err := parse(raw, &args); err != nil {
-		return "", err
-	}
-	sb, err := s.box(args.SandboxID)
+	args, sb, err := parseAndBox[killArgs](s, raw)
 	if err != nil {
 		return "", err
 	}
@@ -186,15 +195,13 @@ func toolKill(ctx context.Context, s *server, raw json.RawMessage) (string, erro
 	return "killed", nil
 }
 
+type logsArgs struct {
+	sandboxArg
+	PID uint32 `json:"pid"`
+}
+
 func toolLogs(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	var args struct {
-		SandboxID string `json:"sandbox_id"`
-		PID       uint32 `json:"pid"`
-	}
-	if err := parse(raw, &args); err != nil {
-		return "", err
-	}
-	sb, err := s.box(args.SandboxID)
+	args, sb, err := parseAndBox[logsArgs](s, raw)
 	if err != nil {
 		return "", err
 	}
@@ -210,16 +217,14 @@ func toolLogs(ctx context.Context, s *server, raw json.RawMessage) (string, erro
 	return jsonText(out), nil
 }
 
+type writeFileArgs struct {
+	sandboxArg
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
 func toolWriteFile(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	var args struct {
-		SandboxID string `json:"sandbox_id"`
-		Path      string `json:"path"`
-		Content   string `json:"content"`
-	}
-	if err := parse(raw, &args); err != nil {
-		return "", err
-	}
-	sb, err := s.box(args.SandboxID)
+	args, sb, err := parseAndBox[writeFileArgs](s, raw)
 	if err != nil {
 		return "", err
 	}
@@ -229,15 +234,13 @@ func toolWriteFile(ctx context.Context, s *server, raw json.RawMessage) (string,
 	return fmt.Sprintf("wrote %d bytes to %s", len(args.Content), args.Path), nil
 }
 
+type pathArgs struct {
+	sandboxArg
+	Path string `json:"path"`
+}
+
 func toolReadFile(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	var args struct {
-		SandboxID string `json:"sandbox_id"`
-		Path      string `json:"path"`
-	}
-	if err := parse(raw, &args); err != nil {
-		return "", err
-	}
-	sb, err := s.box(args.SandboxID)
+	args, sb, err := parseAndBox[pathArgs](s, raw)
 	if err != nil {
 		return "", err
 	}
@@ -249,14 +252,7 @@ func toolReadFile(ctx context.Context, s *server, raw json.RawMessage) (string, 
 }
 
 func toolListDir(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	var args struct {
-		SandboxID string `json:"sandbox_id"`
-		Path      string `json:"path"`
-	}
-	if err := parse(raw, &args); err != nil {
-		return "", err
-	}
-	sb, err := s.box(args.SandboxID)
+	args, sb, err := parseAndBox[pathArgs](s, raw)
 	if err != nil {
 		return "", err
 	}
@@ -267,15 +263,13 @@ func toolListDir(ctx context.Context, s *server, raw json.RawMessage) (string, e
 	return jsonText(entries), nil
 }
 
+type forkArgs struct {
+	sandboxArg
+	Count int `json:"count"`
+}
+
 func toolFork(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	var args struct {
-		SandboxID string `json:"sandbox_id"`
-		Count     int    `json:"count"`
-	}
-	if err := parse(raw, &args); err != nil {
-		return "", err
-	}
-	sb, err := s.box(args.SandboxID)
+	args, sb, err := parseAndBox[forkArgs](s, raw)
 	if err != nil {
 		return "", err
 	}
@@ -291,15 +285,13 @@ func toolFork(ctx context.Context, s *server, raw json.RawMessage) (string, erro
 	return jsonText(map[string]any{"sandbox_ids": ids}), nil
 }
 
+type checkpointArgs struct {
+	sandboxArg
+	Name string `json:"name"`
+}
+
 func toolCheckpoint(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	var args struct {
-		SandboxID string `json:"sandbox_id"`
-		Name      string `json:"name"`
-	}
-	if err := parse(raw, &args); err != nil {
-		return "", err
-	}
-	sb, err := s.box(args.SandboxID)
+	args, sb, err := parseAndBox[checkpointArgs](s, raw)
 	if err != nil {
 		return "", err
 	}
@@ -359,15 +351,13 @@ func toolHibernate(ctx context.Context, s *server, raw json.RawMessage) (string,
 	return "hibernated (any later call wakes it transparently)", nil
 }
 
+type promoteArgs struct {
+	sandboxArg
+	TemplateName string `json:"template_name"`
+}
+
 func toolPromote(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	var args struct {
-		SandboxID    string `json:"sandbox_id"`
-		TemplateName string `json:"template_name"`
-	}
-	if err := parse(raw, &args); err != nil {
-		return "", err
-	}
-	sb, err := s.box(args.SandboxID)
+	args, sb, err := parseAndBox[promoteArgs](s, raw)
 	if err != nil {
 		return "", err
 	}
@@ -398,16 +388,10 @@ func toolNodeInfo(ctx context.Context, s *server, _ json.RawMessage) (string, er
 	return jsonText(info), nil
 }
 
-// boxArg resolves a sandbox_id argument to a live handle; handlers with
-// more arguments parse their own struct from the same raw bytes.
+// boxArg resolves a bare sandbox_id argument to a live handle.
 func (s *server) boxArg(raw json.RawMessage) (*sandbox.Sandbox, error) {
-	var args struct {
-		SandboxID string `json:"sandbox_id"`
-	}
-	if err := parse(raw, &args); err != nil {
-		return nil, err
-	}
-	return s.box(args.SandboxID)
+	_, sb, err := parseAndBox[sandboxArg](s, raw)
+	return sb, err
 }
 
 // checkpointArg resolves a checkpoint_id argument: a handle minted in this
