@@ -8,13 +8,14 @@ import urllib.parse
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .client import Client
     from .sandbox import Sandbox
 
 
 class Template:
     """A promoted template on its owner node."""
 
-    def __init__(self, client, addr: str, name: str, net: str, size: str):
+    def __init__(self, client: Client, addr: str, name: str, net: str, size: str):
         self._client = client
         self._addr = addr
         self.name = name

@@ -8,7 +8,8 @@ from __future__ import annotations
 import contextlib
 import socket
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from typing import TYPE_CHECKING
 
 from .checkpoint import Checkpoint
 from .conn import Conn, dial_agent
@@ -16,11 +17,14 @@ from .errors import APIError, ExitError, ProtocolError
 from .frames import BULK_CHUNK, FS_CHUNK
 from .template import Template
 
+if TYPE_CHECKING:
+    from .client import Client
+
 
 class Sandbox:
     """One claimed microVM."""
 
-    def __init__(self, client, id: str, token: str, owner: str,
+    def __init__(self, client: Client, id: str, token: str, owner: str,
                  deadline: str = "", from_checkpoint: str = ""):
         self._client = client
         self.id = id
@@ -52,7 +56,8 @@ class Sandbox:
 
     def run(self, argv: list[str], cwd: str = "", env: dict | None = None,
             user: str = "", session: str = "", stdin: bytes = b"",
-            on_stdout=None, on_stderr=None) -> int:
+            on_stdout: Callable[[bytes], object] | None = None,
+            on_stderr: Callable[[bytes], object] | None = None) -> int:
         """Runs argv streaming stdio through the callbacks (raw bytes — chunk
         boundaries may split multi-byte sequences); returns the exit code."""
         with self._dial() as conn:
@@ -84,12 +89,14 @@ class Sandbox:
         already exited is a no-op success."""
         self._done_rpc("kill", pid=pid, signal=signal)
 
-    def logs(self, pid: int, on_stdout=None, on_stderr=None) -> int | None:
+    def logs(self, pid: int, on_stdout: Callable[[bytes], object] | None = None,
+             on_stderr: Callable[[bytes], object] | None = None) -> int | None:
         """Replays a process's ring-buffered output through the callbacks;
         returns its exit code if it already exited, else None."""
         return self._drain_proc("logs", pid, on_stdout, on_stderr)
 
-    def attach(self, pid: int, on_stdout=None, on_stderr=None) -> int | None:
+    def attach(self, pid: int, on_stdout: Callable[[bytes], object] | None = None,
+               on_stderr: Callable[[bytes], object] | None = None) -> int | None:
         """Replays buffered output then follows live output until the
         process exits, returning its exit code (None only if the proc table
         dropped it mid-attach)."""

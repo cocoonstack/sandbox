@@ -7,13 +7,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .client import Client
     from .sandbox import Sandbox
 
 
 class Checkpoint:
     """A captured sandbox state on its owner node."""
 
-    def __init__(self, client, addr: str, rec: dict):
+    def __init__(self, client: Client, addr: str, rec: dict):
         self._client = client
         self._addr = addr
         self.id = rec["id"]
