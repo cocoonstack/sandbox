@@ -409,6 +409,20 @@ func EgressSocketPath(vsockSocket string) string {
 	return fmt.Sprintf("%s_%d", vsockSocket, egressPort)
 }
 
+// CapacitySignature returns the node-capacity signature err carries, or "".
+func CapacitySignature(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.ToLower(err.Error())
+	for _, sig := range capacitySignatures {
+		if strings.Contains(msg, sig) {
+			return sig
+		}
+	}
+	return ""
+}
+
 // shardOf picks a shard by hashing the VM name, not by counter: the record
 // persists the attachment a VM was built on, so the choice must be
 // reproducible without process state.
@@ -488,20 +502,6 @@ func readLine(conn net.Conn, max int) (string, error) {
 		sb.WriteByte(b[0]) //nolint:gosec // G602 false positive on [1]byte in gosec ≤ v2.9.0
 	}
 	return "", fmt.Errorf("reply exceeds %d bytes", max)
-}
-
-// CapacitySignature returns the node-capacity signature err carries, or "".
-func CapacitySignature(err error) string {
-	if err == nil {
-		return ""
-	}
-	msg := strings.ToLower(err.Error())
-	for _, sig := range capacitySignatures {
-		if strings.Contains(msg, sig) {
-			return sig
-		}
-	}
-	return ""
 }
 
 func tail(s string) string {
