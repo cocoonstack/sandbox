@@ -98,23 +98,6 @@ func (s *Sandbox) DialPort(ctx context.Context, port uint16) (*PortConn, error) 
 	return s.openStream(ctx, &wire.PortForward{Port: port})
 }
 
-// openStream drives the call → Ready → attach dance shared by every verb
-// that turns the connection into a raw byte stream (DialPort, Lsp.Request).
-func (s *Sandbox) openStream(ctx context.Context, req wire.Request) (*PortConn, error) {
-	conn, done, err := s.call(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	if _, err = expect[wire.Ready](ctx, conn); err != nil {
-		done()
-		return nil, err
-	}
-	pr, pw := io.Pipe()
-	p := &PortConn{conn: conn, stop: done, out: pr}
-	go p.drain(ctx, pw)
-	return p, nil
-}
-
 type previewRequest struct {
 	Token      string `json:"token"`
 	Port       uint16 `json:"port"`
@@ -159,6 +142,23 @@ func (s *Sandbox) ProxyPort(ctx context.Context, localAddr string, port uint16) 
 		}
 	}()
 	return l, nil
+}
+
+// openStream drives the call → Ready → attach dance shared by every verb
+// that turns the connection into a raw byte stream (DialPort, Lsp.Request).
+func (s *Sandbox) openStream(ctx context.Context, req wire.Request) (*PortConn, error) {
+	conn, done, err := s.call(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = expect[wire.Ready](ctx, conn); err != nil {
+		done()
+		return nil, err
+	}
+	pr, pw := io.Pipe()
+	p := &PortConn{conn: conn, stop: done, out: pr}
+	go p.drain(ctx, pw)
+	return p, nil
 }
 
 func (s *Sandbox) proxyConn(ctx context.Context, local net.Conn, port uint16) {
