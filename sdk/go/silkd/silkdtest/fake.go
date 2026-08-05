@@ -19,13 +19,13 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
+// readChunk mirrors silkd's BULK_CHUNK so downloads exercise real framing.
+const readChunk = 256 * 1024
+
 // Fake is a stateful silkd fake backing the fs verbs with a real directory
 // and tracking sessions, so an SDK write-then-read round-trips through it.
 // exec/info reuse the stateless handlers. It exists for host-side unit tests;
 // the authoritative fs/session behavior is silkd's own Rust test suite.
-// readChunk mirrors silkd's BULK_CHUNK so downloads exercise real framing.
-const readChunk = 256 * 1024
-
 type Fake struct {
 	Root string
 

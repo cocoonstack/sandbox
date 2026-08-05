@@ -57,7 +57,6 @@ func (h *Healer) Pull(ctx context.Context, id, staging string, validate Validate
 	return h.pullFrom(ctx, id, staging, addrs, budget, validate)
 }
 
-// pullFrom tries each owner in turn, giving each an even slice of budget.
 func (h *Healer) pullFrom(ctx context.Context, id, staging string, addrs []string, budget time.Duration, validate Validate) error {
 	perOwner := budget / time.Duration(len(addrs))
 	var errs []error

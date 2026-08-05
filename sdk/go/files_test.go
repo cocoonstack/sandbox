@@ -93,8 +93,6 @@ func TestSessionLifecycle(t *testing.T) {
 	}
 }
 
-// fakeSandbox wires a Sandbox whose data plane is served by a temp-dir-backed
-// silkd Fake behind a hijacking agent endpoint.
 func TestReadFileMultiChunk(t *testing.T) {
 	sb := fakeSandbox(t)
 	ctx := t.Context()
@@ -111,6 +109,8 @@ func TestReadFileMultiChunk(t *testing.T) {
 	}
 }
 
+// fakeSandbox wires a Sandbox whose data plane is served by a temp-dir-backed
+// silkd Fake behind a hijacking agent endpoint.
 func fakeSandbox(t *testing.T) *Sandbox {
 	t.Helper()
 	fake := silkdtest.NewFake(t.TempDir())

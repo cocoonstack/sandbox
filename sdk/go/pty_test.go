@@ -31,7 +31,6 @@ func TestPtyEchoAndExit(t *testing.T) {
 		t.Errorf("read %q, want ping", line)
 	}
 
-	// Resize is a separate RPC.
 	if err := pty.Resize(t.Context(), 120, 40); err != nil {
 		t.Fatalf("resize: %v", err)
 	}

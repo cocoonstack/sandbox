@@ -162,7 +162,7 @@ func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRe
 		case outcome == engine.StaleCreateCollected, outcome == engine.StaleCreateNotFound:
 			return true
 		case outcome == engine.StaleCreateBusy:
-			logger.Infof(ctx, "stale create %s has an in-flight owner; left alone", name)
+			logger.Infof(ctx, "stale create %s has an in-flight owner; queued for retry", name)
 			m.queueStaleCreate(name, rec.TapDevice())
 			return false
 		}

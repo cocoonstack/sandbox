@@ -1,6 +1,7 @@
 //! Small OS helpers: the base environment for spawned commands, best-effort
-//! user de-escalation, and the one signal syscall — all the crate's unsafe
-//! lives here.
+//! user de-escalation, and the one signal syscall — the crate's unsafe work
+//! lives here (pty.rs holds the one other unsafe block, its pre_exec
+//! registration).
 
 use std::fmt::Write as _;
 use std::io::Read;

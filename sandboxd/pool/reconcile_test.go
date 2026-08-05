@@ -11,14 +11,7 @@ import (
 )
 
 func TestReconcileStaleCreateSweep(t *testing.T) {
-	tests := []struct {
-		name        string
-		outcome     engine.StaleCreateOutcome
-		err         error
-		wantPresent bool
-		wantRemove  bool
-		wantPending bool
-	}{
+	tests := []staleCreateCase{
 		{"collected frees the record", engine.StaleCreateCollected, nil, false, false, false},
 		{"not-found treats the record as gone", engine.StaleCreateNotFound, nil, false, false, false},
 		{"busy leaves the in-flight clone", engine.StaleCreateBusy, nil, true, false, true},
@@ -59,14 +52,7 @@ func TestReconcileStaleCreateSweep(t *testing.T) {
 }
 
 func TestBusyStaleCreateRetryConverges(t *testing.T) {
-	tests := []struct {
-		name        string
-		outcome     engine.StaleCreateOutcome
-		err         error
-		wantPresent bool
-		wantRemove  bool
-		wantPending bool
-	}{
+	tests := []staleCreateCase{
 		{"collected", engine.StaleCreateCollected, nil, false, false, false},
 		{"not-found", engine.StaleCreateNotFound, nil, false, false, false},
 		{"not-creating", engine.StaleCreateNotCreating, nil, false, true, false},
@@ -164,4 +150,15 @@ func TestReconcileStaleRunningVMSkipsVerb(t *testing.T) {
 	if !eng.removed("sbx-orphan-1") {
 		t.Error("unowned running VM not removed")
 	}
+}
+
+// staleCreateCase drives both the startup sweep and the reap-tick retry
+// through the same outcome/end-state row shape.
+type staleCreateCase struct {
+	name        string
+	outcome     engine.StaleCreateOutcome
+	err         error
+	wantPresent bool
+	wantRemove  bool
+	wantPending bool
 }

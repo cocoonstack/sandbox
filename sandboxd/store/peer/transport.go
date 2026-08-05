@@ -52,7 +52,6 @@ type HTTPPuller struct {
 	Token  string
 }
 
-// Pull implements Puller.
 func (p *HTTPPuller) Pull(ctx context.Context, addr, id, dst string) error {
 	ctx, cancel := context.WithTimeout(ctx, pullTimeout)
 	defer cancel()

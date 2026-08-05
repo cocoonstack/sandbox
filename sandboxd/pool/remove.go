@@ -85,8 +85,7 @@ func (m *Manager) retryRemovals(ctx context.Context) *sync.WaitGroup {
 
 func (m *Manager) retryRemoval(ctx context.Context, name string, pending pendingRemoval) {
 	if pending.staleCreate {
-		outcome, err := m.eng.ReconcileStaleCreate(ctx, name)
-		switch {
+		switch outcome, err := m.eng.ReconcileStaleCreate(ctx, name); {
 		case err != nil:
 			log.WithFunc("pool.retryRemoval").Warnf(ctx, "reconcile stale create %s: %v; retrying", name, err)
 			m.queueStaleCreate(name, pending.tap)
