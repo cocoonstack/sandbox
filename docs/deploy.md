@@ -187,6 +187,50 @@ The last setting also removes the VMM's network-namespace quarantine. On a
 measurement. Pause `cocoon daemon` or lengthen its reconcile interval during a
 mass fill.
 
+### Host tuning for dense egress-lane nodes
+
+The no-network lane is CPU-bound and needs none of this. The egress lane
+serializes on the kernel's global rtnl lock — tap create, bridge attach, and
+the VMM's own tap open all take it — so at hundreds of VMs host configuration
+dominates fill throughput:
+
+- **Keep the kernel console quiet** (`loglevel=4` on the kernel cmdline, or
+  drop `console=ttyS0`; dmesg and the journal keep everything either way).
+  Bridge port transitions printk synchronously to every registered console
+  *while holding rtnl*: measured on a serial+fbcon host, one bridge attach is
+  44 ms noisy vs 3 ms quiet, and a 1000-VM fill roughly triples. Fix the
+  console before tuning anything else — netlink-level optimizations are
+  unmeasurable, or negative, on a noisy console.
+- **Keep udev off the sandbox taps.** Every tap add/remove fires a udev
+  event; rule evaluation plus hooks like `ifupdown-hotplug` (a fork+exec per
+  interface) contend on the same rtnl lock — stopping the udev exec queue
+  during a fill measured ~4x throughput, and a backed-up event queue can
+  collapse a fill outright. Shadow the net-setup rules for these taps, or
+  pause the exec queue around planned mass fills.
+- **Set `refill_concurrency` explicitly (~64) on egress-heavy nodes.** The
+  auto default scales with cores (a 384-core node gets 256), which suits the
+  no-network lane but overshoots the bridge lane: rtnl does not plateau under
+  pressure, it collapses — on a quiet host RC 256 halves the fill rate RC 64
+  achieves.
+- **Shard when one daemon is not enough.** Several sandboxd instances per
+  host (each with its own `data_dir`, `listen`, and bridges) joined by the
+  mesh behave as one capacity pool, measured ~3x the fill rate of a single
+  daemon at matched total concurrency — besides multiplying the 1024-port
+  bridge ceiling headroom.
+
+### Reserving CPU for the control plane
+
+A saturated node can leave clone/wake execution and sandboxd itself nothing
+to run on — under full-node load CH clone p95 has measured in the tens of
+seconds. cocoon newer than v0.5.8 runs every VMM in its own cgroup v2 CPU
+scope (Guaranteed-at-N: a VM's CPU count is also its hard host-CPU cap) and
+adds `cgroup_cpus`, a one-time cpuset fence keeping the whole VM population —
+including the virtio and io-wq worker threads vCPU affinity cannot reach —
+off reserved host cores. On dense nodes set the fence in cocoon's config
+(e.g. `cgroup_cpus: "0-379"` on a 384-core host) so the reserved cores stay
+free for sandboxd, its cocoon invocations, and the OS; cocoon's CPU-isolation
+docs cover validation semantics and the per-VM knobs.
+
 ### Auth model
 
 Three token kinds. The root `api_token` has full access — operators and
@@ -210,7 +254,11 @@ sandboxd -config /etc/sandboxd/config.json
 ```
 
 On start the node reconciles: persisted claims whose VMs still run are
-re-adopted, everything else `sbx-`-prefixed is removed. Then the refill loop
+re-adopted, everything else `sbx-`-prefixed is removed. A record still in
+cocoon's `creating` state is reclaimed through `vm reconcile-stale-create`
+(cocoon ≥ v0.5.8), which refuses while a clone is in flight instead of
+deleting the VM out from under it; older cocoons fall back to forced
+removal. Then the refill loop
 builds one golden snapshot per pool (a one-time cold boot + snapshot export,
 tens of seconds) and keeps each pool topped up with claim-ready clones.
 `GET /v1/info` shows `"golden": true` and `warm` at target when the node is
