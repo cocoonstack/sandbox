@@ -124,10 +124,8 @@ func TestCheckpointNewRedirectFallbackHeals(t *testing.T) {
 	}
 }
 
-// TestCheckpointNewRedirectNeverYieldsEmptyID is a regression test: New used
-// to hand a bare redirect reply straight to handleFrom, producing a Sandbox
-// with no id/token. It must now follow the redirect and fail loudly when no
-// candidate answers, never return a Sandbox with an empty ID.
+// TestCheckpointNewRedirectNeverYieldsEmptyID: New must fail loudly, not
+// return a Sandbox with an empty ID, when no redirect candidate answers.
 func TestCheckpointNewRedirectNeverYieldsEmptyID(t *testing.T) {
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(claimResponse{Redirect: []string{"127.0.0.1:1"}})

@@ -713,8 +713,7 @@ func fastBulk(tag string, slow func([]byte) (Response, error), mk func([]byte) R
 
 // AppendBulkRequest renders a data-carrying request frame —
 // {"v":1,"op":<op>,"data":"<base64>"} plus newline — into buf, reused across
-// calls: the zero-alloc twin of EncodeRequest for the bulk send paths
-// (base64's alphabet needs no JSON escaping).
+// calls on the bulk send paths (base64's alphabet needs no JSON escaping).
 func AppendBulkRequest(buf []byte, op string, data []byte) []byte {
 	buf = append(buf[:0], requestHead...)
 	buf = append(buf, op...)

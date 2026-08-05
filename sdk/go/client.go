@@ -46,30 +46,16 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 	for _, opt := range opts {
 		opt(&claim)
 	}
-	body, err := encodeBody("claim", claim)
-	if err != nil {
-		return nil, err
-	}
-
-	cr, err := c.claimAt(ctx, c.addr, body)
-	if err != nil {
-		return nil, err
-	}
-	if len(cr.Redirect) == 0 {
-		return c.handleFrom(c.addr, cr), nil
-	}
-	claim.NoRedirect = true
-	body, err = encodeBody("claim", claim)
-	if err != nil {
-		return nil, err
-	}
-	addr, target, err := redirectFallback(c.addr, cr.Redirect, func(a string) (claimResponse, error) {
+	addr, cr, err := claimFollow(c.addr, "claim", func(noRedirect bool) ([]byte, error) {
+		claim.NoRedirect = noRedirect
+		return encodeBody("claim", claim)
+	}, func(a string, body []byte) (claimResponse, error) {
 		return c.claimAt(ctx, a, body)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("claim: %w", err)
+		return nil, err
 	}
-	return c.handleFrom(addr, target), nil
+	return c.handleFrom(addr, cr), nil
 }
 
 // Lookup relocates a sandbox handle whose owner address was lost, given its
@@ -222,6 +208,14 @@ func doJSON[T any](ctx context.Context, c *Client, method, addr, path string, bo
 	return out, nil
 }
 
+func doJSONPtr[T any](ctx context.Context, c *Client, method, addr, path string, body io.Reader, bearer, verb string) (*T, error) {
+	out, err := doJSON[T](ctx, c, method, addr, path, body, bearer, verb)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // doNoContent is doJSON's reply-less twin: 204 or an apiError.
 func doNoContent(ctx context.Context, c *Client, method, addr, path string, body io.Reader, bearer, verb string) error {
 	resp, err := c.roundTrip(ctx, method, addr, path, body, bearer)
@@ -295,6 +289,33 @@ func retryTransient(err error) bool {
 // an auth rejection, a conflict) skips the fallback: origin would fail the
 // same way. A second-level redirect (a compliant server never sends one
 // once no_redirect is set) fails the candidate rather than being followed.
+// claimFollow runs the claim protocol from origin: claim there, and on a
+// redirect re-encode with no_redirect and follow via redirectFallback. Only
+// the fallback error carries the verb — first-contact errors return raw.
+func claimFollow(origin, verb string, encode func(noRedirect bool) ([]byte, error), claimAt func(addr string, body []byte) (claimResponse, error)) (string, claimResponse, error) {
+	body, err := encode(false)
+	if err != nil {
+		return "", claimResponse{}, err
+	}
+	cr, err := claimAt(origin, body)
+	if err != nil {
+		return "", claimResponse{}, err
+	}
+	if len(cr.Redirect) == 0 {
+		return origin, cr, nil
+	}
+	if body, err = encode(true); err != nil {
+		return "", claimResponse{}, err
+	}
+	addr, target, err := redirectFallback(origin, cr.Redirect, func(a string) (claimResponse, error) {
+		return claimAt(a, body)
+	})
+	if err != nil {
+		return "", claimResponse{}, fmt.Errorf("%s: %w", verb, err)
+	}
+	return addr, target, nil
+}
+
 func redirectFallback(origin string, candidates []string, claimAt func(addr string) (claimResponse, error)) (string, claimResponse, error) {
 	claimNoRedirect := func(target string) (claimResponse, error) {
 		cr, err := claimAt(target)

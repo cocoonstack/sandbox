@@ -98,13 +98,9 @@ func TestHealErrorIsReported(t *testing.T) {
 	}
 }
 
-// TestPullDoesNotDedupConcurrentCalls: Pull used to share one singleflight
-// result across concurrent callers, which was only safe because every
-// caller happened to pass the SAME staging dir. With independent dirs (the
-// only safe assumption once dedup is not Pull's job), sharing a result would
-// leave whichever caller did not trigger the shared call with an untouched,
-// empty directory published as if it were a real record. Two concurrent
-// Pulls for one id but different dirs must each run their own full transfer.
+// TestPullDoesNotDedupConcurrentCalls: concurrent Pulls for one id but
+// different staging dirs must each run their own transfer — sharing a result
+// would leave one caller's dir empty but published as real.
 func TestPullDoesNotDedupConcurrentCalls(t *testing.T) {
 	puller := &fakePuller{records: map[string]map[string]string{"peer-a:7777": record()}}
 	h := NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)

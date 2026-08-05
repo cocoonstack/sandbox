@@ -73,9 +73,5 @@ func (c *Client) setPoolsAt(ctx context.Context, addr string, pools []PoolSpec) 
 	if err != nil {
 		return nil, err
 	}
-	info, err := doJSON[NodeInfo](ctx, c, http.MethodPut, addr, "/v1/pools", bytes.NewReader(body), c.apiToken, "pools")
-	if err != nil {
-		return nil, err
-	}
-	return &info, nil
+	return doJSONPtr[NodeInfo](ctx, c, http.MethodPut, addr, "/v1/pools", bytes.NewReader(body), c.apiToken, "pools")
 }

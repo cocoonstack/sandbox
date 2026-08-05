@@ -32,6 +32,12 @@ const (
 	// RequiredCocoon carries the snapshot/store performance baseline.
 	RequiredCocoon = "v0.5.2"
 
+	// Stale-create verdicts, mirroring cocoon's reconcile-stale-create verb.
+	StaleCreateCollected   StaleCreateOutcome = "collected"
+	StaleCreateBusy        StaleCreateOutcome = "busy"
+	StaleCreateNotCreating StaleCreateOutcome = "not-creating"
+	StaleCreateNotFound    StaleCreateOutcome = "not-found"
+
 	argName       = "--name"
 	argOutput     = "--output"
 	argNetwork    = "--network"
@@ -58,6 +64,9 @@ var capacitySignatures = []string{
 	"exchange full",
 	"no space left on device",
 }
+
+// StaleCreateOutcome reports what reconcile-stale-create did with a record.
+type StaleCreateOutcome string
 
 // Engine runs cocoon commands on the local node.
 type Engine struct {
@@ -139,6 +148,22 @@ func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey) (t
 func (e *Engine) Remove(ctx context.Context, name string) error {
 	_, err := e.run(ctx, "vm", "rm", "--force", name)
 	return err
+}
+
+// ReconcileStaleCreate reclaims a creating-state record via cocoon's
+// free-ops-lock predicate — safe against an in-flight clone where rm --force is not.
+func (e *Engine) ReconcileStaleCreate(ctx context.Context, name string) (StaleCreateOutcome, error) {
+	out, err := e.run(ctx, "vm", "reconcile-stale-create", name, argOutput, formatJSON)
+	if err != nil {
+		return "", err
+	}
+	var res struct {
+		Outcome StaleCreateOutcome `json:"outcome"`
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		return "", fmt.Errorf("parse reconcile-stale-create: %w", err)
+	}
+	return res.Outcome, nil
 }
 
 // SnapshotSave snapshots a running VM under snapName.

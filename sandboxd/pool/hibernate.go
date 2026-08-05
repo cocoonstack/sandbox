@@ -220,12 +220,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 		logger := log.WithFunc("pool.idleOnce")
 		m.runBounded(ctx, len(victims), func(ctx context.Context, i int) {
 			v := victims[i]
-			switch err := m.idleHibernate(ctx, v.id, v.token, now); {
-			case err == nil:
-				logger.Infof(ctx, "idle-hibernated %s", v.id)
-			case !benignSweepErr(err):
-				logger.Errorf(ctx, err, "idle-hibernate %s", v.id)
-			}
+			logSweepResult(ctx, logger, m.idleHibernate(ctx, v.id, v.token, now), "idle-hibernated "+v.id, "idle-hibernate "+v.id)
 		}).Wait()
 	}()
 }
