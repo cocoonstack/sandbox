@@ -1,0 +1,107 @@
+package pool
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"testing"
+
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
+)
+
+func TestReconcileStaleCreateSweep(t *testing.T) {
+	tests := []struct {
+		name        string
+		outcome     engine.StaleCreateOutcome
+		err         error
+		wantPresent bool // the VM survives the sweep
+		wantRemove  bool // rm --force ran
+	}{
+		{"collected frees the record", engine.StaleCreateCollected, nil, false, false},
+		{"not-found treats the record as gone", engine.StaleCreateNotFound, nil, false, false},
+		{"busy leaves the in-flight clone", engine.StaleCreateBusy, nil, true, false},
+		{"not-creating removes normally", engine.StaleCreateNotCreating, nil, false, true},
+		{"verb failure falls back to remove", "", errors.New("unknown command"), false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			eng.vms["sbx-stale-1"] = "/vsock/sbx-stale-1"
+			eng.creating["sbx-stale-1"] = true
+			eng.staleOutcome, eng.staleErr = tt.outcome, tt.err
+			m := newTestManager(t, eng)
+
+			if err := m.Reconcile(t.Context()); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			if !slices.Contains(eng.staleReconciles, "sbx-stale-1") {
+				t.Fatal("reconcile-stale-create not attempted for the creating VM")
+			}
+			eng.mu.Lock()
+			_, present := eng.vms["sbx-stale-1"]
+			eng.mu.Unlock()
+			if present != tt.wantPresent {
+				t.Errorf("present=%v, want %v", present, tt.wantPresent)
+			}
+			if eng.removed("sbx-stale-1") != tt.wantRemove {
+				t.Errorf("removed=%v, want %v", eng.removed("sbx-stale-1"), tt.wantRemove)
+			}
+		})
+	}
+}
+
+func TestReconcileBusyStaleCreateKeepsTap(t *testing.T) {
+	eng := newFakeEngine()
+	eng.tap = "tap-busy"
+	eng.vms["sbx-stale-1"] = "/vsock/sbx-stale-1"
+	eng.creating["sbx-stale-1"] = true
+	eng.staleOutcome = engine.StaleCreateBusy
+	m := newTestManager(t, eng)
+
+	var gotKeep map[string]bool
+	m.sweep = func(keep map[string]bool) error { gotKeep = keep; return nil }
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if !gotKeep["tap-busy"] {
+		t.Error("busy VM's tap not kept; the sweep would tear down an in-flight clone's tables")
+	}
+}
+
+func TestRemoveStaleVMCanceledCtxStillChecksBusy(t *testing.T) {
+	eng := newFakeEngine()
+	eng.vms["sbx-stale-1"] = "/vsock/sbx-stale-1"
+	eng.creating["sbx-stale-1"] = true
+	eng.staleOutcome = engine.StaleCreateBusy
+	m := newTestManager(t, eng)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	rec := types.VMRecord{State: vmStateCreating, Config: types.VMConfig{Name: "sbx-stale-1"}}
+	if m.removeStaleVM(ctx, "sbx-stale-1", rec) {
+		t.Error("busy VM reported gone under a canceled ctx")
+	}
+	if len(eng.staleReconciles) != 1 {
+		t.Errorf("verb ran %d times, want 1 (cancellation-immune)", len(eng.staleReconciles))
+	}
+	if eng.removed("sbx-stale-1") {
+		t.Error("canceled ctx fell through to the forced remove the verb guards")
+	}
+}
+
+func TestReconcileStaleRunningVMSkipsVerb(t *testing.T) {
+	eng := newFakeEngine()
+	eng.vms["sbx-orphan-1"] = "/vsock/sbx-orphan-1"
+	m := newTestManager(t, eng)
+
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(eng.staleReconciles) != 0 {
+		t.Errorf("reconcile-stale-create ran on a running VM: %v", eng.staleReconciles)
+	}
+	if !eng.removed("sbx-orphan-1") {
+		t.Error("unowned running VM not removed")
+	}
+}

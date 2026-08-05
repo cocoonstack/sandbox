@@ -26,6 +26,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/dir"
@@ -73,6 +74,7 @@ const (
 	hibernatePrefix = "sbx-hib-"
 	forkPrefix      = "sbx-fork-"
 	vmStateRunning  = "running"
+	vmStateCreating = "creating"
 
 	caSidecarSuffix = ".cafp"
 )
@@ -100,6 +102,7 @@ type Engine interface {
 	CloneSnap(ctx context.Context, snap, name string, key types.PoolKey) (types.VMRecord, error)
 	RunCold(ctx context.Context, name string, key types.PoolKey) (types.VMRecord, error)
 	Remove(ctx context.Context, name string) error
+	ReconcileStaleCreate(ctx context.Context, name string) (engine.StaleCreateOutcome, error)
 	SnapshotSave(ctx context.Context, vmName, snapName string) error
 	SnapshotExport(ctx context.Context, snapName, toDir string) error
 	SnapshotRemove(ctx context.Context, snapName string) error

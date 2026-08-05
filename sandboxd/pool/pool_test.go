@@ -16,6 +16,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -765,8 +766,12 @@ type fakeEngine struct {
 	hibernates, restores, snapRemoves []string
 	snapSaves, exports, snapshots     []string
 	caInstalls                        []string // vsock sockets InstallCACert was called on
+	staleReconciles                   []string // VM names ReconcileStaleCreate was called on
 	installCAErr                      error
 	stopped                           map[string]bool
+	creating                          map[string]bool // VMs List reports in the creating state
+	staleOutcome                      engine.StaleCreateOutcome
+	staleErr                          error
 	pids                              map[string]int // VM name → PID, for Stats' resident-set lookup
 	vsockLateN                        int            // List calls that report no socket yet
 
@@ -787,7 +792,7 @@ type fakeEngine struct {
 }
 
 func newFakeEngine() *fakeEngine {
-	return &fakeEngine{vms: map[string]string{}, stopped: map[string]bool{}, pids: map[string]int{}}
+	return &fakeEngine{vms: map[string]string{}, stopped: map[string]bool{}, creating: map[string]bool{}, pids: map[string]int{}}
 }
 
 func (f *fakeEngine) Clone(_ context.Context, fromDir, name string, _ types.PoolKey) (types.VMRecord, error) {
@@ -828,6 +833,24 @@ func (f *fakeEngine) Remove(ctx context.Context, name string) error {
 	f.removes = append(f.removes, name)
 	delete(f.vms, name)
 	return nil
+}
+
+func (f *fakeEngine) ReconcileStaleCreate(ctx context.Context, name string) (engine.StaleCreateOutcome, error) {
+	// Models exec.CommandContext: a canceled ctx never runs cocoon at all.
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.staleReconciles = append(f.staleReconciles, name)
+	if f.staleErr != nil {
+		return "", f.staleErr
+	}
+	if f.staleOutcome == engine.StaleCreateCollected || f.staleOutcome == engine.StaleCreateNotFound {
+		delete(f.vms, name)
+		delete(f.creating, name)
+	}
+	return f.staleOutcome, nil
 }
 
 func (f *fakeEngine) SnapshotSave(_ context.Context, _, snapName string) error {
@@ -918,7 +941,10 @@ func (f *fakeEngine) List(_ context.Context, filters ...string) ([]types.VMRecor
 		}
 		sock = f.lateVsock(sock)
 		state := vmStateRunning
-		if f.stopped[name] {
+		switch {
+		case f.creating[name]:
+			state = vmStateCreating
+		case f.stopped[name]:
 			state = "stopped"
 		}
 		rec := types.VMRecord{State: state, PID: f.pids[name], VsockSocket: sock, Config: types.VMConfig{Name: name}}

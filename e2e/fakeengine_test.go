@@ -61,6 +61,10 @@ func (f *fakeEngine) Remove(_ context.Context, name string) error {
 	return nil
 }
 
+func (f *fakeEngine) ReconcileStaleCreate(context.Context, string) (engine.StaleCreateOutcome, error) {
+	return engine.StaleCreateNotCreating, nil
+}
+
 func (f *fakeEngine) SnapshotSave(_ context.Context, _, _ string) error { return nil }
 
 func (f *fakeEngine) SnapshotExport(_ context.Context, _, toDir string) error {

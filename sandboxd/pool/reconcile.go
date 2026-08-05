@@ -12,6 +12,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -131,7 +132,7 @@ func (m *Manager) sweepStaleVMs(ctx context.Context, live map[string]types.VMRec
 	}
 	gone := make([]bool, len(stale)) // distinct indices: no lock under the Wait barrier
 	m.runBounded(ctx, len(stale), func(ctx context.Context, i int) {
-		if m.removeOrRetry(ctx, stale[i], "", live[stale[i]].TapDevice()) {
+		if m.removeStaleVM(ctx, stale[i], live[stale[i]]) {
 			gone[i] = true
 			logger.Infof(ctx, "removed stale VM %s", stale[i])
 		}
@@ -143,6 +144,30 @@ func (m *Manager) sweepStaleVMs(ctx context.Context, live map[string]types.VMRec
 		}
 	}
 	return removed
+}
+
+// removeStaleVM reclaims one unowned VM, reporting whether it is gone; a
+// creating-state record goes through reconcile-stale-create first, since
+// rm --force would queue on the ops lock and then delete the VM an
+// in-flight clone just produced.
+func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRecord) bool {
+	logger := log.WithFunc("pool.removeStaleVM")
+	if rec.State == vmStateCreating {
+		// Cancellation-immune like removeVM: a canceled ctx must not skip
+		// the busy check and fall through to the forced remove it guards.
+		switch outcome, err := m.eng.ReconcileStaleCreate(context.WithoutCancel(ctx), name); {
+		case err != nil:
+			// Verb missing (cocoon < v0.5.8) or failed: keep the old sweep.
+			logger.Warnf(ctx, "reconcile stale create %s: %v; removing", name, err)
+		case outcome == engine.StaleCreateCollected, outcome == engine.StaleCreateNotFound:
+			return true
+		case outcome == engine.StaleCreateBusy:
+			logger.Infof(ctx, "stale create %s has an in-flight owner; left alone", name)
+			return false
+		}
+		// not-creating: the record moved on under the lock; remove normally.
+	}
+	return m.removeOrRetry(ctx, name, "", rec.TapDevice())
 }
 
 // resyncEgress re-locks adopted egress claims after a restart, quarantines any
