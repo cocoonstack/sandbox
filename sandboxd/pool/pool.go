@@ -689,6 +689,16 @@ func tenantOwns(tenant, owner string) bool {
 
 // benignSweepErr reports whether err is the expected outcome of a housekeeping
 // sweep (victim released, woke mid-sweep, or a lane that never hibernates).
+// logSweepResult reports one background-sweep outcome; benign races stay silent.
+func logSweepResult(ctx context.Context, logger *log.Fields, err error, okMsg, failMsg string) {
+	switch {
+	case err == nil:
+		logger.Info(ctx, okMsg)
+	case !benignSweepErr(err):
+		logger.Error(ctx, err, failMsg)
+	}
+}
+
 func benignSweepErr(err error) bool {
 	return errors.Is(err, ErrUnknownSandbox) || errors.Is(err, errWokeMeanwhile) ||
 		errors.Is(err, ErrNoEgressHibernate)

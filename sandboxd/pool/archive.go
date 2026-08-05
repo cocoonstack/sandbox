@@ -67,12 +67,7 @@ func (m *Manager) archiveOnce(ctx context.Context) {
 		logger := log.WithFunc("pool.archiveOnce")
 		m.runBounded(ctx, len(victims), func(ctx context.Context, i int) {
 			sb := victims[i]
-			switch err := m.archive(ctx, sb); {
-			case err == nil:
-				logger.Infof(ctx, "archived %s", sb.ID)
-			case !benignSweepErr(err):
-				logger.Errorf(ctx, err, "archive %s", sb.ID)
-			}
+			logSweepResult(ctx, logger, m.archive(ctx, sb), "archived "+sb.ID, "archive "+sb.ID)
 		}).Wait()
 	}()
 }

@@ -363,12 +363,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			m.purgeArchiveCk(ctx, v.id, v.ck, v.tenant)
 			logger.Infof(ctx, "purged archived sandbox %s", v.id)
 		case reapArchive:
-			switch err := m.archive(ctx, v.sb); {
-			case err == nil:
-				logger.Infof(ctx, "archived expired sandbox %s", v.id)
-			case !benignSweepErr(err):
-				logger.Errorf(ctx, err, "archive expired %s", v.id)
-			}
+			logSweepResult(ctx, logger, m.archive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
 		default:
 			m.disarmEgress(v.id, m.removeOrRetry(ctx, v.vmName, v.id, ""))
 			m.dropSnap(ctx, v.snap)

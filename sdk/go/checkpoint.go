@@ -3,7 +3,6 @@ package sandbox
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"net/http"
 	"time"
 )
@@ -35,28 +34,15 @@ func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error)
 	if err := claim.rejectPinnedAxes(); err != nil {
 		return nil, err
 	}
-	body, err := encodeBody("checkpoint claim", checkpointClaimRequest{TTLSeconds: claim.TTLSeconds})
-	if err != nil {
-		return nil, err
-	}
-	cr, err := ck.claimAt(ctx, ck.addr, body)
-	if err != nil {
-		return nil, err
-	}
-	if len(cr.Redirect) == 0 {
-		return ck.c.handleFrom(ck.addr, cr), nil
-	}
-	body, err = encodeBody("checkpoint claim", checkpointClaimRequest{TTLSeconds: claim.TTLSeconds, NoRedirect: true})
-	if err != nil {
-		return nil, err
-	}
-	addr, target, err := redirectFallback(ck.addr, cr.Redirect, func(a string) (claimResponse, error) {
+	addr, cr, err := claimFollow(ck.addr, "claim checkpoint", func(noRedirect bool) ([]byte, error) {
+		return encodeBody("checkpoint claim", checkpointClaimRequest{TTLSeconds: claim.TTLSeconds, NoRedirect: noRedirect})
+	}, func(a string, body []byte) (claimResponse, error) {
 		return ck.claimAt(ctx, a, body)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("claim checkpoint: %w", err)
+		return nil, err
 	}
-	return ck.c.handleFrom(addr, target), nil
+	return ck.c.handleFrom(addr, cr), nil
 }
 
 // Delete removes the checkpoint from its node and asks every peer that node

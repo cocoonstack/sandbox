@@ -38,11 +38,7 @@ type PoolStatus struct {
 
 // Info reports the entry node's pools, claim counts, and mesh peers.
 func (c *Client) Info(ctx context.Context) (*NodeInfo, error) {
-	info, err := doJSON[NodeInfo](ctx, c, http.MethodGet, c.addr, "/v1/info", nil, c.apiToken, "info")
-	if err != nil {
-		return nil, err
-	}
-	return &info, nil
+	return doJSONPtr[NodeInfo](ctx, c, http.MethodGet, c.addr, "/v1/info", nil, c.apiToken, "info")
 }
 
 // peers fetches the cluster's node addresses, best-effort (nil on failure).
