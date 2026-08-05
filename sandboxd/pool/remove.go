@@ -9,6 +9,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 )
 
@@ -58,6 +59,12 @@ func (m *Manager) queueRemoval(name, sandboxID, tap string) {
 	m.mu.Unlock()
 }
 
+func (m *Manager) queueStaleCreate(name, tap string) {
+	m.mu.Lock()
+	m.pendingRemovals[name] = pendingRemoval{tap: tap, staleCreate: true}
+	m.mu.Unlock()
+}
+
 // retryRemovals dispatches by emptying the queue, so absence also means "in
 // flight" and the next tick cannot double-dispatch; a failed retry re-queues
 // itself on completion. Callers that need completion Wait.
@@ -77,10 +84,29 @@ func (m *Manager) retryRemovals(ctx context.Context) *sync.WaitGroup {
 }
 
 func (m *Manager) retryRemoval(ctx context.Context, name string, pending pendingRemoval) {
+	if pending.staleCreate {
+		outcome, err := m.eng.ReconcileStaleCreate(ctx, name)
+		switch {
+		case err != nil:
+			log.WithFunc("pool.retryRemoval").Warnf(ctx, "reconcile stale create %s: %v; retrying", name, err)
+			m.queueStaleCreate(name, pending.tap)
+			return
+		case outcome == engine.StaleCreateBusy:
+			m.queueStaleCreate(name, pending.tap)
+			return
+		case outcome == engine.StaleCreateCollected, outcome == engine.StaleCreateNotFound:
+			m.finishRemoval(pending)
+			return
+		}
+	}
 	if !m.removeVM(ctx, name) {
 		m.queueRemoval(name, pending.sandboxID, pending.tap)
 		return
 	}
+	m.finishRemoval(pending)
+}
+
+func (m *Manager) finishRemoval(pending pendingRemoval) {
 	if pending.sandboxID != "" {
 		m.disarmEgress(pending.sandboxID, true)
 	} else if pending.tap != "" {

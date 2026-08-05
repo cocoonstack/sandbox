@@ -15,14 +15,15 @@ func TestReconcileStaleCreateSweep(t *testing.T) {
 		name        string
 		outcome     engine.StaleCreateOutcome
 		err         error
-		wantPresent bool // the VM survives the sweep
-		wantRemove  bool // rm --force ran
+		wantPresent bool
+		wantRemove  bool
+		wantPending bool
 	}{
-		{"collected frees the record", engine.StaleCreateCollected, nil, false, false},
-		{"not-found treats the record as gone", engine.StaleCreateNotFound, nil, false, false},
-		{"busy leaves the in-flight clone", engine.StaleCreateBusy, nil, true, false},
-		{"not-creating removes normally", engine.StaleCreateNotCreating, nil, false, true},
-		{"verb failure falls back to remove", "", errors.New("unknown command"), false, true},
+		{"collected frees the record", engine.StaleCreateCollected, nil, false, false, false},
+		{"not-found treats the record as gone", engine.StaleCreateNotFound, nil, false, false, false},
+		{"busy leaves the in-flight clone", engine.StaleCreateBusy, nil, true, false, true},
+		{"not-creating removes normally", engine.StaleCreateNotCreating, nil, false, true, false},
+		{"verb failure falls back to remove", "", errors.New("unknown command"), false, true, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -47,6 +48,59 @@ func TestReconcileStaleCreateSweep(t *testing.T) {
 			if eng.removed("sbx-stale-1") != tt.wantRemove {
 				t.Errorf("removed=%v, want %v", eng.removed("sbx-stale-1"), tt.wantRemove)
 			}
+			m.mu.Lock()
+			_, pending := m.pendingRemovals["sbx-stale-1"]
+			m.mu.Unlock()
+			if pending != tt.wantPending {
+				t.Errorf("pending=%v, want %v", pending, tt.wantPending)
+			}
+		})
+	}
+}
+
+func TestBusyStaleCreateRetryConverges(t *testing.T) {
+	tests := []struct {
+		name        string
+		outcome     engine.StaleCreateOutcome
+		err         error
+		wantPresent bool
+		wantRemove  bool
+		wantPending bool
+	}{
+		{"collected", engine.StaleCreateCollected, nil, false, false, false},
+		{"not-found", engine.StaleCreateNotFound, nil, false, false, false},
+		{"not-creating", engine.StaleCreateNotCreating, nil, false, true, false},
+		{"still busy", engine.StaleCreateBusy, nil, true, false, true},
+		{"verb failure", "", errors.New("temporary failure"), true, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			eng.vms["sbx-stale-1"] = "/vsock/sbx-stale-1"
+			eng.creating["sbx-stale-1"] = true
+			eng.staleOutcome = engine.StaleCreateBusy
+			m := newTestManager(t, eng)
+
+			if err := m.Reconcile(t.Context()); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			eng.mu.Lock()
+			eng.staleOutcome, eng.staleErr = tt.outcome, tt.err
+			eng.mu.Unlock()
+			m.retryRemovals(t.Context()).Wait()
+
+			eng.mu.Lock()
+			_, present := eng.vms["sbx-stale-1"]
+			eng.mu.Unlock()
+			m.mu.Lock()
+			_, pending := m.pendingRemovals["sbx-stale-1"]
+			m.mu.Unlock()
+			removed := eng.removed("sbx-stale-1")
+			if present != tt.wantPresent || removed != tt.wantRemove || pending != tt.wantPending {
+				t.Errorf("present=%v removed=%v pending=%v, want %v %v %v",
+					present, removed, pending,
+					tt.wantPresent, tt.wantRemove, tt.wantPending)
+			}
 		})
 	}
 }
@@ -66,6 +120,12 @@ func TestReconcileBusyStaleCreateKeepsTap(t *testing.T) {
 	}
 	if !gotKeep["tap-busy"] {
 		t.Error("busy VM's tap not kept; the sweep would tear down an in-flight clone's tables")
+	}
+	m.mu.Lock()
+	pending, ok := m.pendingRemovals["sbx-stale-1"]
+	m.mu.Unlock()
+	if !ok || !pending.staleCreate || pending.tap != "tap-busy" {
+		t.Errorf("pending=%+v present=%v, want stale-create retry with tap-busy", pending, ok)
 	}
 }
 

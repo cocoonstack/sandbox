@@ -212,11 +212,6 @@ dominates fill throughput:
   no-network lane but overshoots the bridge lane: rtnl does not plateau under
   pressure, it collapses — on a quiet host RC 256 halves the fill rate RC 64
   achieves.
-- **Shard when one daemon is not enough.** Several sandboxd instances per
-  host (each with its own `data_dir`, `listen`, and bridges) joined by the
-  mesh behave as one capacity pool, measured ~3x the fill rate of a single
-  daemon at matched total concurrency — besides multiplying the 1024-port
-  bridge ceiling headroom.
 
 ### Reserving CPU for the control plane
 

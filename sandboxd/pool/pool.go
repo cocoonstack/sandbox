@@ -152,8 +152,9 @@ type Gauges struct {
 }
 
 type pendingRemoval struct {
-	sandboxID string
-	tap       string
+	sandboxID   string
+	tap         string
+	staleCreate bool
 }
 
 type pool struct {
