@@ -118,55 +118,6 @@ func TarRecord(exportDir string, meta []byte, w io.Writer) error {
 	return tw.Close()
 }
 
-// tarInto walks src into tw under prefix, emitting only regular files and
-// directories: a symlink or device node would let the reader be steered outside
-// its destination.
-func tarInto(src, prefix string, tw *tar.Writer) error {
-	err := filepath.Walk(src, func(path string, fi os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-		name := prefix + rel
-		switch {
-		case fi.IsDir():
-			return tw.WriteHeader(&tar.Header{
-				Name:     name + "/",
-				Mode:     int64(fi.Mode().Perm()),
-				Typeflag: tar.TypeDir,
-			})
-		case fi.Mode().IsRegular():
-			if err := tw.WriteHeader(&tar.Header{
-				Name:     name,
-				Mode:     int64(fi.Mode().Perm()),
-				Size:     fi.Size(),
-				Typeflag: tar.TypeReg,
-			}); err != nil {
-				return err
-			}
-			f, err := os.Open(path) //nolint:gosec // path comes from Walk over src
-			if err != nil {
-				return err
-			}
-			defer func() { _ = f.Close() }()
-			_, err = io.Copy(tw, f)
-			return err
-		default:
-			return nil
-		}
-	})
-	if err != nil {
-		return fmt.Errorf("tar %s: %w", src, err)
-	}
-	return nil
-}
-
 // Untar writes a tar stream into dst. An authenticated peer is still not
 // allowed to write outside the destination this node chose, so every entry
 // name is validated against traversal.
@@ -254,4 +205,53 @@ func safeJoin(root, name string) (string, error) {
 		return "", fmt.Errorf("untar: entry %q escapes destination", name)
 	}
 	return target, nil
+}
+
+// tarInto walks src into tw under prefix, emitting only regular files and
+// directories: a symlink or device node would let the reader be steered outside
+// its destination.
+func tarInto(src, prefix string, tw *tar.Writer) error {
+	err := filepath.Walk(src, func(path string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		name := prefix + rel
+		switch {
+		case fi.IsDir():
+			return tw.WriteHeader(&tar.Header{
+				Name:     name + "/",
+				Mode:     int64(fi.Mode().Perm()),
+				Typeflag: tar.TypeDir,
+			})
+		case fi.Mode().IsRegular():
+			if err := tw.WriteHeader(&tar.Header{
+				Name:     name,
+				Mode:     int64(fi.Mode().Perm()),
+				Size:     fi.Size(),
+				Typeflag: tar.TypeReg,
+			}); err != nil {
+				return err
+			}
+			f, err := os.Open(path) //nolint:gosec // path comes from Walk over src
+			if err != nil {
+				return err
+			}
+			defer func() { _ = f.Close() }()
+			_, err = io.Copy(tw, f)
+			return err
+		default:
+			return nil
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("tar %s: %w", src, err)
+	}
+	return nil
 }

@@ -332,10 +332,6 @@ func (c *Config) applyDefaults() {
 	}
 }
 
-func autoRefillConcurrency(cpus int) int {
-	return min(max(refillFloor, cpus*2/3), refillCeiling)
-}
-
 func (c *Config) validate() error {
 	if err := c.validateAttachment(); err != nil {
 		return err
@@ -472,20 +468,6 @@ func (c *Config) validateAttachment() error {
 	return validateShards(c.Networks, "networks", "conflist")
 }
 
-func validateShards(names []string, field, kind string) error {
-	seen := make(map[string]struct{}, len(names))
-	for _, n := range names {
-		if n == "" {
-			return fmt.Errorf("%s must not contain an empty %s name", field, kind)
-		}
-		if _, ok := seen[n]; ok {
-			return fmt.Errorf("duplicate %s %q", kind, n)
-		}
-		seen[n] = struct{}{}
-	}
-	return nil
-}
-
 // validateEgressAllow rejects a malformed prefix at load: a typo would
 // otherwise surface as a refused dial long after startup.
 func (c *Config) validateEgressAllow() error {
@@ -574,6 +556,24 @@ func validateArchiveWindow(idle, after, del int) error {
 	}
 	if after > 0 && (idle <= 0 || after <= idle) {
 		return fmt.Errorf("archive_after_seconds %d requires idle_hibernate_seconds>0 and a larger value", after)
+	}
+	return nil
+}
+
+func autoRefillConcurrency(cpus int) int {
+	return min(max(refillFloor, cpus*2/3), refillCeiling)
+}
+
+func validateShards(names []string, field, kind string) error {
+	seen := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		if n == "" {
+			return fmt.Errorf("%s must not contain an empty %s name", field, kind)
+		}
+		if _, ok := seen[n]; ok {
+			return fmt.Errorf("duplicate %s %q", kind, n)
+		}
+		seen[n] = struct{}{}
 	}
 	return nil
 }

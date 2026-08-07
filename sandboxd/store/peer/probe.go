@@ -201,43 +201,6 @@ func (p *HTTPProber) cachePut(id string, owners []string, start uint64) {
 	p.cache[id] = redirectCacheEntry{owners: owners, expires: now.Add(cmp.Or(p.cacheTTL, redirectCacheTTL))}
 }
 
-// probeOwner sends a probe MAC when probeKey is set (see DeriveProbeKey);
-// an unencrypted mesh (empty probeKey) falls back to the older
-// capability-only posture -- the id is unguessable, but nothing else guards it.
-func probeOwner(ctx context.Context, client *http.Client, probeKey []byte, addr, id string) bool {
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, checkpointURL(addr, id, "/blob"), nil)
-	if err != nil {
-		return false
-	}
-	if len(probeKey) > 0 {
-		req.Header.Set(ProbeHeader, SignProbe(probeKey, id))
-	}
-	resp, err := client.Do(req) //nolint:gosec // addr comes from the mesh's own member view
-	if err != nil {
-		return false
-	}
-	defer func() { _ = resp.Body.Close() }()
-	return resp.StatusCode == http.StatusOK
-}
-
-// dedupAddrs drops repeated addresses so a stale or duplicated peer list
-// never probes the same node twice.
-func dedupAddrs(addrs []string) []string {
-	seen := make(map[string]struct{}, len(addrs))
-	out := make([]string, 0, len(addrs))
-	for _, a := range addrs {
-		if _, ok := seen[a]; ok {
-			continue
-		}
-		seen[a] = struct{}{}
-		out = append(out, a)
-	}
-	return out
-}
-
 // DeriveProbeKey derives the probe-MAC key from the mesh's cluster_key via
 // one HMAC step — domain separation from the gossip encryption. Call only
 // with a non-empty clusterKey.
@@ -281,4 +244,41 @@ func probeMAC(key []byte, id string, bucket int64) string {
 
 func currentBucket() int64 {
 	return time.Now().Unix() / probeBucketSeconds
+}
+
+// dedupAddrs drops repeated addresses so a stale or duplicated peer list
+// never probes the same node twice.
+func dedupAddrs(addrs []string) []string {
+	seen := make(map[string]struct{}, len(addrs))
+	out := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		if _, ok := seen[a]; ok {
+			continue
+		}
+		seen[a] = struct{}{}
+		out = append(out, a)
+	}
+	return out
+}
+
+// probeOwner sends a probe MAC when probeKey is set (see DeriveProbeKey);
+// an unencrypted mesh (empty probeKey) falls back to the older
+// capability-only posture -- the id is unguessable, but nothing else guards it.
+func probeOwner(ctx context.Context, client *http.Client, probeKey []byte, addr, id string) bool {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, checkpointURL(addr, id, "/blob"), nil)
+	if err != nil {
+		return false
+	}
+	if len(probeKey) > 0 {
+		req.Header.Set(ProbeHeader, SignProbe(probeKey, id))
+	}
+	resp, err := client.Do(req) //nolint:gosec // addr comes from the mesh's own member view
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode == http.StatusOK
 }
