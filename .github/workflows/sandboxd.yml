@@ -37,6 +37,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: sandboxd/go.mod
+          cache-dependency-path: "**/go.sum"
 
       - name: Build sandboxd
         working-directory: sandboxd

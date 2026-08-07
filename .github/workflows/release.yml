@@ -21,6 +21,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: sandboxd/go.mod
+          cache-dependency-path: "**/go.sum"
       - name: Build silkd (musl static)
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
