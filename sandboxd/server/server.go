@@ -330,18 +330,15 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 
 	var owners []string
 	if promoted {
-		owners = s.placer.TemplateVolumeOwners(hash, names)
 		// A shared template store lets a volume holder resolve the template
 		// even before that node has advertised the newly published hash. The
 		// no_redirect target re-checks both resources before provisioning.
-		if len(owners) == 0 {
-			owners = s.placer.VolumeOwners(names)
-		}
+		owners = s.placer.TemplateVolumeOwners(hash, names)
 	} else {
 		owners = s.placer.VolumeCandidates(hash, names)
-		if len(owners) == 0 {
-			owners = s.placer.VolumeOwners(names)
-		}
+	}
+	if len(owners) == 0 {
+		owners = s.placer.VolumeOwners(names)
 	}
 	if len(owners) == 0 {
 		return false, pool.ErrVolumeUnavailable

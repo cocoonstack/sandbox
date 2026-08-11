@@ -13,6 +13,7 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 // drainGrace bounds how long a finished relay waits for the client to
@@ -130,7 +131,7 @@ func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBu
 	}()
 
 	_, _ = io.Copy(client, guest)
-	closeWrite(client)
+	utils.CloseWrite(client)
 	// Wait for the client to consume the tail and close its side; the
 	// deadline unblocks the splice goroutine if it never does.
 	_ = client.SetReadDeadline(time.Now().Add(drainGrace))
@@ -188,12 +189,4 @@ func (t *auditTee) Read(p []byte) (int, error) {
 		t.buf = nil
 	}
 	return n, err
-}
-
-// closeWrite signals EOF to the client without tearing down its read
-// direction, so the tail written above survives until the client drains it.
-func closeWrite(conn net.Conn) {
-	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
-		_ = cw.CloseWrite()
-	}
 }

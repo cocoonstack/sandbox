@@ -7,10 +7,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// CloseWrite signals EOF to the peer without tearing down the read direction.
+func CloseWrite(conn net.Conn) {
+	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
+	}
+}
 
 // WriteFileSync durably replaces path with data (temp + fsync + rename + dir
 // fsync) so the rename survives a crash. The temp name is per-call unique, so
