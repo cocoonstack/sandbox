@@ -32,6 +32,10 @@ const (
 	EngineFC Engine = "fc"
 
 	MaxClaimVolumes = 8
+
+	DirectIOOn   = "on"
+	DirectIOOff  = "off"
+	DirectIOAuto = "auto"
 )
 
 var (
@@ -283,6 +287,23 @@ func ValidVolumeName(name string) bool {
 // DefaultVolumeMount returns the guest mount used when a request omits one.
 func DefaultVolumeMount(name string) string {
 	return "/volumes/" + name
+}
+
+// ValidDirectIO reports whether mode is a legal volume direct-I/O setting.
+func ValidDirectIO(mode string) bool {
+	return mode == DirectIOOn || mode == DirectIOOff || mode == DirectIOAuto
+}
+
+// VolumeNames projects the entries' names in order; nil for none.
+func VolumeNames(volumes []Volume) []string {
+	if len(volumes) == 0 {
+		return nil
+	}
+	names := make([]string, len(volumes))
+	for i, volume := range volumes {
+		names[i] = volume.Name
+	}
+	return names
 }
 
 // ValidateVolumes validates a request and returns detached entries with every

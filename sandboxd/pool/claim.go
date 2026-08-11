@@ -269,7 +269,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		m.recordUsage(ctx, usageEvent{
 			Event: "claim", //nolint:goconst // event name; other occurrences are test assertions
 			ID:    sb.ID, VMName: sb.VMName,
-			KeyHash: sb.Key.Hash(), Tenant: sb.Tenant, Volumes: volumeNames(sb.Volumes),
+			KeyHash: sb.Key.Hash(), Tenant: sb.Tenant, Volumes: types.VolumeNames(sb.Volumes),
 		})
 	}
 	return nil

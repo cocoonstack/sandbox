@@ -141,14 +141,3 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 	}
 	return nil
 }
-
-func volumeNames(volumes []types.Volume) []string {
-	if len(volumes) == 0 {
-		return nil
-	}
-	names := make([]string, len(volumes))
-	for i, volume := range volumes {
-		names[i] = volume.Name
-	}
-	return names
-}

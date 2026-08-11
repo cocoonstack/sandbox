@@ -301,10 +301,7 @@ func (s *Server) handleVolumes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter, req *types.ClaimRequest, key types.PoolKey, hash, tenant string) (bool, error) {
-	names := make([]string, len(req.Volumes))
-	for i, volume := range req.Volumes {
-		names[i] = volume.Name
-	}
+	names := types.VolumeNames(req.Volumes)
 	localVolumes, err := s.mgr.VolumePlacement(key, tenant, names)
 	if err != nil {
 		return false, err

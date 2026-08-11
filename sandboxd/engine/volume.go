@@ -1,15 +1,15 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 const (
-	directIOOn         = "on"
-	directIOOff        = "off"
-	directIOAuto       = "auto"
 	volumeDevicePrefix = "/dev/disk/by-id/virtio-"
 	volumePollInterval = 100 * time.Millisecond
 	volumeSetupTimeout = 10 * time.Second
@@ -23,14 +23,11 @@ type VolumeSpec struct {
 }
 
 func (s VolumeSpec) directIO() (string, error) {
-	switch s.DirectIO {
-	case "":
-		return directIOOff, nil
-	case directIOOn, directIOOff, directIOAuto:
-		return s.DirectIO, nil
-	default:
+	mode := cmp.Or(s.DirectIO, types.DirectIOOff)
+	if !types.ValidDirectIO(mode) {
 		return "", fmt.Errorf("volume directio must be on, off, or auto, got %q", s.DirectIO)
 	}
+	return mode, nil
 }
 
 // DiskAttach hot-attaches an operator-owned disk read-only through cocoon.

@@ -32,10 +32,6 @@ const (
 	defaultMaxForkCount = 16
 	refillFloor         = 4
 	refillCeiling       = 256
-
-	directIOOn   = "on"
-	directIOOff  = "off"
-	directIOAuto = "auto"
 )
 
 // PoolSpec declares one warm pool and its target of claim-ready VMs.
@@ -346,7 +342,7 @@ func (c *Config) applyDefaults() {
 		c.Pools[i].PoolKey = c.Pools[i].Defaulted()
 	}
 	for i := range c.Volumes {
-		c.Volumes[i].DirectIO = cmp.Or(c.Volumes[i].DirectIO, directIOOff)
+		c.Volumes[i].DirectIO = cmp.Or(c.Volumes[i].DirectIO, types.DirectIOOff)
 	}
 }
 
@@ -439,9 +435,7 @@ func (c *Config) validateVolumes() error {
 		if !filepath.IsAbs(volume.Path) {
 			return fmt.Errorf("volume %q path must be absolute", volume.Name)
 		}
-		switch volume.DirectIO {
-		case directIOOn, directIOOff, directIOAuto:
-		default:
+		if !types.ValidDirectIO(volume.DirectIO) {
 			return fmt.Errorf("volume %q directio must be on, off, or auto, got %q", volume.Name, volume.DirectIO)
 		}
 		for _, tenant := range volume.Tenants {

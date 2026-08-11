@@ -34,7 +34,7 @@ func TestClusterDigest(t *testing.T) {
 		t.Error("with a cluster_key the api_token must be covered by the digest")
 	}
 	withVolume := *base
-	withVolume.Volumes = []VolumeSpec{{Name: "imagenet", Path: "/srv/datasets/imagenet.img", DirectIO: directIOOff}}
+	withVolume.Volumes = []VolumeSpec{{Name: "imagenet", Path: "/srv/datasets/imagenet.img", DirectIO: types.DirectIOOff}}
 	if withVolume.ClusterDigest("ca-fp") != d {
 		t.Error("node-local volume catalog must not change the cluster digest")
 	}
@@ -154,7 +154,7 @@ func TestLoadAcceptsVolumes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(cfg.Volumes) != 2 || cfg.Volumes[0].DirectIO != directIOOff || cfg.Volumes[1].DirectIO != directIOOn {
+	if len(cfg.Volumes) != 2 || cfg.Volumes[0].DirectIO != types.DirectIOOff || cfg.Volumes[1].DirectIO != types.DirectIOOn {
 		t.Errorf("volumes = %+v", cfg.Volumes)
 	}
 }
