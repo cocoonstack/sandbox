@@ -20,18 +20,6 @@ type silkdSession struct {
 	stop func() bool
 }
 
-func (e *Engine) dialSilkdSession(ctx context.Context, vsockSocket string) (*silkdSession, error) {
-	conn, err := e.DialSilkd(ctx, vsockSocket)
-	if err != nil {
-		return nil, err
-	}
-	return &silkdSession{
-		conn: conn,
-		sc:   wire.NewFrameScanner(conn),
-		stop: context.AfterFunc(ctx, func() { _ = conn.Close() }),
-	}, nil
-}
-
 func (s *silkdSession) send(req wire.Request) error {
 	buf, err := wire.EncodeRequest(req)
 	if err != nil {
@@ -56,4 +44,16 @@ func (s *silkdSession) recv() (wire.Response, error) {
 func (s *silkdSession) close() {
 	s.stop()
 	_ = s.conn.Close()
+}
+
+func (e *Engine) dialSilkdSession(ctx context.Context, vsockSocket string) (*silkdSession, error) {
+	conn, err := e.DialSilkd(ctx, vsockSocket)
+	if err != nil {
+		return nil, err
+	}
+	return &silkdSession{
+		conn: conn,
+		sc:   wire.NewFrameScanner(conn),
+		stop: context.AfterFunc(ctx, func() { _ = conn.Close() }),
+	}, nil
 }

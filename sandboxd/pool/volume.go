@@ -16,13 +16,13 @@ type catalogVolume struct {
 	tenants []string
 }
 
+func (v catalogVolume) allowed(tenant string) bool {
+	return tenant == "" || len(v.tenants) == 0 || slices.Contains(v.tenants, tenant)
+}
+
 type resolvedVolume struct {
 	disk    engine.VolumeSpec
 	applied types.Volume
-}
-
-func (v catalogVolume) allowed(tenant string) bool {
-	return tenant == "" || len(v.tenants) == 0 || slices.Contains(v.tenants, tenant)
 }
 
 // Volumes reports the caller-visible fleet catalog, projected through this
