@@ -125,6 +125,15 @@ func statRPC(conn net.Conn) error {
 	return nil
 }
 
+// bufferedConn reads through the handshake reader so bytes coalesced behind
+// the 101 are never lost.
+type bufferedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (b bufferedConn) Read(p []byte) (int, error) { return b.r.Read(p) }
+
 // dialAgent mirrors the SDK's hand-rolled upgrade (unexported there).
 func dialAgent(ctx context.Context, addr, id, token string) (net.Conn, error) {
 	var d net.Dialer
@@ -157,15 +166,6 @@ func dialAgent(ctx context.Context, addr, id, token string) (net.Conn, error) {
 	}
 	return bufferedConn{Conn: raw, r: br}, nil
 }
-
-// bufferedConn reads through the handshake reader so bytes coalesced behind
-// the 101 are never lost.
-type bufferedConn struct {
-	net.Conn
-	r *bufio.Reader
-}
-
-func (b bufferedConn) Read(p []byte) (int, error) { return b.r.Read(p) }
 
 func report(label string, samples []time.Duration) {
 	slices.Sort(samples)

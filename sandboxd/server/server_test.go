@@ -2042,6 +2042,21 @@ func (f *fakeManager) Drain(context.Context) { f.draining = true }
 
 func (f *fakeManager) Uncordon(context.Context) { f.draining = false }
 
+// FetchCheckpoint serves the peer-transfer read; the fake reports every record
+// missing unless a test supplies a directory.
+func (f *fakeManager) FetchCheckpoint(_ context.Context, _ string) (string, []byte, func(), error) {
+	if f.ckptDir == "" {
+		return "", nil, nil, pool.ErrUnknownCheckpoint
+	}
+	return f.ckptDir, []byte(`{"id":"ck_00000000000000aa"}`), func() {}, nil
+}
+
+// HasCheckpoint answers the probe endpoint straight from the fake's map;
+// unset ids report false.
+func (f *fakeManager) HasCheckpoint(_ context.Context, ckptID string) bool {
+	return f.hasCheckpoint[ckptID]
+}
+
 type fakeDialer struct {
 	dial func(ctx context.Context, sock string) (net.Conn, error)
 }
@@ -2102,21 +2117,6 @@ type fakeProber struct {
 
 func (f *fakeProber) Owners(context.Context, string) []string { return f.owners }
 func (f *fakeProber) Forget(id string)                        { f.forgotten = append(f.forgotten, id) }
-
-// FetchCheckpoint serves the peer-transfer read; the fake reports every record
-// missing unless a test supplies a directory.
-func (f *fakeManager) FetchCheckpoint(_ context.Context, _ string) (string, []byte, func(), error) {
-	if f.ckptDir == "" {
-		return "", nil, nil, pool.ErrUnknownCheckpoint
-	}
-	return f.ckptDir, []byte(`{"id":"ck_00000000000000aa"}`), func() {}, nil
-}
-
-// HasCheckpoint answers the probe endpoint straight from the fake's map;
-// unset ids report false.
-func (f *fakeManager) HasCheckpoint(_ context.Context, ckptID string) bool {
-	return f.hasCheckpoint[ckptID]
-}
 
 // newPlacerTestServer builds a server with a checkpoint prober, which the
 // shared helper deliberately leaves nil (most tests are single-node); the

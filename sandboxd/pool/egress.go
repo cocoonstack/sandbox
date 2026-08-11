@@ -48,37 +48,6 @@ var (
 	}
 )
 
-// newEgressDialer builds the proxy's upstream dialer: internal targets are
-// blocked (the proxy must not be an SSRF), then exactly the node-named
-// prefixes re-admitted.
-func newEgressDialer(allow []netip.Prefix) *net.Dialer {
-	return &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
-		host, _, err := net.SplitHostPort(address)
-		if err != nil {
-			return err
-		}
-		ip, err := netip.ParseAddr(host)
-		if err != nil {
-			return fmt.Errorf("egress: unresolved address %q", host)
-		}
-		ip = ip.Unmap()
-		if nat64Range.Contains(ip) {
-			b := ip.As16()
-			ip = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
-		}
-		// After the NAT64 unwrap (a v4-in-v6 target matches as the v4 it is),
-		// before the block, so a named prefix wins.
-		if slices.ContainsFunc(allow, func(p netip.Prefix) bool { return p.Contains(ip) }) {
-			return nil
-		}
-		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-			slices.ContainsFunc(internalRanges, func(p netip.Prefix) bool { return p.Contains(ip) }) {
-			return fmt.Errorf("egress: blocked internal address %s", ip)
-		}
-		return nil
-	}}
-}
-
 // egressListener is one sandbox's egress accept point: an http.Server serving
 // egress.Proxy over the per-sandbox UDS the VMM connects when the guest dials
 // CID2:egressPort.
@@ -231,6 +200,37 @@ func (m *Manager) effectivePolicy(sb *types.Sandbox) (egress.Evaluator, bool) {
 	default:
 		return nil, false
 	}
+}
+
+// newEgressDialer builds the proxy's upstream dialer: internal targets are
+// blocked (the proxy must not be an SSRF), then exactly the node-named
+// prefixes re-admitted.
+func newEgressDialer(allow []netip.Prefix) *net.Dialer {
+	return &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return err
+		}
+		ip, err := netip.ParseAddr(host)
+		if err != nil {
+			return fmt.Errorf("egress: unresolved address %q", host)
+		}
+		ip = ip.Unmap()
+		if nat64Range.Contains(ip) {
+			b := ip.As16()
+			ip = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
+		}
+		// After the NAT64 unwrap (a v4-in-v6 target matches as the v4 it is),
+		// before the block, so a named prefix wins.
+		if slices.ContainsFunc(allow, func(p netip.Prefix) bool { return p.Contains(ip) }) {
+			return nil
+		}
+		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+			slices.ContainsFunc(internalRanges, func(p netip.Prefix) bool { return p.Contains(ip) }) {
+			return fmt.Errorf("egress: blocked internal address %s", ip)
+		}
+		return nil
+	}}
 }
 
 // parsePrefixes turns the allow-list into prefixes; config validation already
