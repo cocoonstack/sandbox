@@ -675,9 +675,7 @@ func loadEgressCA(cfg *config.EgressCAConfig) (*egress.CA, error) {
 	return egress.LoadCA(root, interCert, interKey)
 }
 
-// newStoreView builds one id-namespaced view of the configured backend.
-// The dir default lives here rather than config.applyDefaults: tests build
-// Config directly, skipping Load.
+// The dir default lives here, not config.applyDefaults: tests build Config directly.
 func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe *regexp.Regexp) (store.Store, error) {
 	if cs := cfg.CheckpointStore; cs != nil && cs.Kind == "s3" {
 		return s3.New(ctx, *cs.S3, filepath.Join(cfg.DataDir, staging), idRe)

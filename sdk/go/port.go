@@ -173,8 +173,7 @@ func (s *Sandbox) proxyConn(ctx context.Context, local net.Conn, port uint16) {
 	<-done
 }
 
-// closeWrite half-closes conn's write side when it supports it, so the peer
-// sees EOF while the tail still drains.
+// Half-close so the peer sees EOF while the tail still drains.
 func closeWrite(conn net.Conn) {
 	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
 		_ = cw.CloseWrite()
