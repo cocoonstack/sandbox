@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"maps"
 	"net/http"
 	"sync"
 	"time"
@@ -192,11 +193,7 @@ func (p *HTTPProber) cachePut(id string, owners []string, start uint64) {
 		p.cache = make(map[string]redirectCacheEntry)
 	}
 	now := time.Now()
-	for k, e := range p.cache {
-		if now.After(e.expires) {
-			delete(p.cache, k)
-		}
-	}
+	maps.DeleteFunc(p.cache, func(_ string, e redirectCacheEntry) bool { return now.After(e.expires) })
 	p.cache[id] = redirectCacheEntry{owners: owners, expires: now.Add(cmp.Or(p.cacheTTL, redirectCacheTTL))}
 }
 
