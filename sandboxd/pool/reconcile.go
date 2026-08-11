@@ -27,6 +27,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	m.clearCanceledArchiveDeletes(ctx, claims)
 	vms, err := m.eng.List(ctx)
 	if err != nil {
 		return fmt.Errorf("list vms: %w", err)

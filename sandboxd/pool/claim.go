@@ -159,26 +159,18 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		m.mu.Unlock()
 		return ErrUnknownSandbox
 	}
-	delete(m.claimed, id)
-	m.tenantDelta(sb.Tenant, -1)
 	snap, ck, vmName := sb.HibernateSnap, sb.ArchiveCk, sb.VMName
 	if ck != "" {
-		m.pendingCks[ck] = struct{}{}
-	}
-	js := m.store.snapshot(m.claimed)
-	m.mu.Unlock()
-	if ck != "" {
-		// An unmarkable ck must abort before the commit: committing would drop
-		// the journal's last reference and leave no recovery path to the ck.
 		if markErr := m.markArchiveCk(ck); markErr != nil {
-			m.mu.Lock()
-			m.claimed[id] = sb
-			m.tenantDelta(sb.Tenant, 1)
-			delete(m.pendingCks, ck)
 			m.mu.Unlock()
 			return fmt.Errorf("release %s: track archive checkpoint: %w", id, markErr)
 		}
+		m.pendingCks[ck] = struct{}{}
 	}
+	delete(m.claimed, id)
+	m.tenantDelta(sb.Tenant, -1)
+	js := m.store.snapshot(m.claimed)
+	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
 		m.mu.Lock()
 		m.claimed[id] = sb // roll back so memory matches the still-durable claim; the restored claim re-pins ck
@@ -335,9 +327,6 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		switch {
 		case sb.ArchiveCk != "":
 			expired = append(expired, victim{action: reapPurge, id: id, ck: sb.ArchiveCk, tenant: sb.Tenant, sb: sb})
-			m.pendingCks[sb.ArchiveCk] = struct{}{}
-			delete(m.claimed, id)
-			m.tenantDelta(sb.Tenant, -1)
 		case sb.HibernateSnap != "" && m.archiveEnabledFor(sb.Key):
 			// End-of-lease hibernated + archive-enabled: archive instead of
 			// destroy, kept in m.claimed for archive() to re-validate and move.
@@ -358,23 +347,13 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	}
 
 	logger := log.WithFunc("pool.reapOnce")
-	// A purge victim whose delete-intent marker cannot land is restored
-	// un-reaped: committing would drop the journal's last reference and leave
-	// no recovery path to the ck.
-	var purgeCks []string
 	keep := expired[:0]
 	for _, v := range expired {
 		if v.action == reapPurge {
 			if markErr := m.markArchiveCk(v.ck); markErr != nil {
 				logger.Errorf(ctx, markErr, "mark archive ck %s; keeping %s", v.ck, v.id)
-				m.mu.Lock()
-				m.claimed[v.id] = v.sb
-				m.tenantDelta(v.tenant, 1)
-				delete(m.pendingCks, v.ck)
-				m.mu.Unlock()
 				continue
 			}
-			purgeCks = append(purgeCks, v.ck)
 		}
 		keep = append(keep, v)
 	}
@@ -383,6 +362,25 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		return
 	}
 	m.mu.Lock()
+	keep = expired[:0]
+	var purgeCks []string
+	for _, v := range expired {
+		if v.action == reapPurge {
+			if m.claimed[v.id] != v.sb || v.sb.ArchiveCk != v.ck {
+				continue
+			}
+			m.pendingCks[v.ck] = struct{}{}
+			delete(m.claimed, v.id)
+			m.tenantDelta(v.tenant, -1)
+			purgeCks = append(purgeCks, v.ck)
+		}
+		keep = append(keep, v)
+	}
+	expired = keep
+	if len(expired) == 0 {
+		m.mu.Unlock()
+		return
+	}
 	js := m.store.snapshot(m.claimed)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
@@ -429,9 +427,6 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	})
 }
 
-// purgeArchiveCk deletes an archived claim's store checkpoint and records the
-// retention billing event; shared by Release and reapOnce's purge, whose
-// pre-commit marking makes deleteArchiveCk's re-mark redundant here.
 func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
 	logger := log.WithFunc("pool.purgeArchiveCk")
 	if err := m.deleteCkLocked(ctx, ck); err != nil {

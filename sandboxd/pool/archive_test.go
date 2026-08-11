@@ -417,10 +417,7 @@ func TestArchiveDeleteRetryAfterRestart(t *testing.T) {
 	}
 }
 
-// TestArchiveSteadyStateLeavesNoMarker: markers mean "delete attempted, not
-// yet done" — an archived claim in steady state, across a restart, must leave
-// the marker directory empty so the retry sweep stays a free no-op.
-func TestArchiveSteadyStateLeavesNoMarker(t *testing.T) {
+func TestReconcileClearsLiveArchiveMarker(t *testing.T) {
 	eng := newFakeEngine()
 	dataDir := t.TempDir()
 	m := newTestManagerAt(t, eng, dataDir, archivePool(3600))
@@ -429,6 +426,9 @@ func TestArchiveSteadyStateLeavesNoMarker(t *testing.T) {
 	id, token, ck := sb.ID, sb.Token, sb.ArchiveCk
 	if archiveCkMarked(m, ck) {
 		t.Fatal("archive left a delete marker for its live checkpoint")
+	}
+	if err := m.markArchiveCk(ck); err != nil {
+		t.Fatalf("seed live archive marker: %v", err)
 	}
 
 	m2 := newTestManagerAt(t, eng, dataDir, archivePool(3600))
@@ -443,6 +443,78 @@ func TestArchiveSteadyStateLeavesNoMarker(t *testing.T) {
 	}
 	if archiveCkMarked(m2, ck) {
 		t.Fatal("wake left an archive delete marker")
+	}
+}
+
+func TestArchiveWakeDeleteFailureRetries(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, archivePool(3600))
+	sb := mustClaim(t, m, testKey)
+	mustArchive(t, m, sb)
+	ck := sb.ArchiveCk
+	base := m.ckpts
+	failed := &failingDeleteStore{Store: base, attempts: make(chan string, 1)}
+	m.ckpts = failed
+
+	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	select {
+	case got := <-failed.attempts:
+		if got != ck {
+			t.Fatalf("deleted checkpoint %s, want %s", got, ck)
+		}
+	default:
+		t.Fatal("wake did not attempt archive deletion")
+	}
+	if !ckExists(t, m, ck) || !archiveCkMarked(m, ck) {
+		t.Fatal("failed wake deletion did not retain the checkpoint and cleanup marker")
+	}
+
+	m.ckpts = base
+	m.retryArchiveDeletes(t.Context())
+	if ckExists(t, m, ck) || archiveCkMarked(m, ck) {
+		t.Fatal("retry did not finish wake archive deletion")
+	}
+}
+
+func TestArchiveWakeRequiresDeleteMarker(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, archivePool(3600))
+	sb := mustClaim(t, m, testKey)
+	mustArchive(t, m, sb)
+	ck := sb.ArchiveCk
+	blocker := filepath.Join(m.dataDir, archiveDeleteDir)
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatalf("block marker dir: %v", err)
+	}
+	removesBefore := len(eng.removedNames())
+
+	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
+		t.Fatal("wake succeeded with an unwritable marker dir")
+	}
+	m.mu.Lock()
+	archived := m.claimed[sb.ID] == sb && sb.ArchiveCk == ck && sb.VMName == ""
+	m.mu.Unlock()
+	if !archived || !ckExists(t, m, ck) {
+		t.Fatal("failed wake did not retain the archived claim and checkpoint")
+	}
+	claims, err := m.store.load()
+	if err != nil || claims[sb.ID] == nil || claims[sb.ID].ArchiveCk != ck {
+		t.Fatalf("failed wake changed the durable archive claim: %+v, %v", claims[sb.ID], err)
+	}
+	if got := len(eng.removedNames()); got != removesBefore+1 {
+		t.Errorf("failed wake removed %d VMs, want 1", got-removesBefore)
+	}
+
+	if err := os.Remove(blocker); err != nil {
+		t.Fatalf("unblock marker dir: %v", err)
+	}
+	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake after heal: %v", err)
+	}
+	if ckExists(t, m, ck) || archiveCkMarked(m, ck) {
+		t.Fatal("healed wake did not delete the checkpoint")
 	}
 }
 
@@ -512,10 +584,6 @@ func TestArchiveRemovalCommitPinsCheckpoint(t *testing.T) {
 	}
 }
 
-// TestArchiveRemovalRequiresDeleteMarker: a removal whose delete-intent marker
-// cannot land must abort before the claims commit — committing would drop the
-// journal's last reference to an unmarked ck, leaking it past every recovery
-// path (restart reclaim skips cks of unknown sandboxes).
 func TestArchiveRemovalRequiresDeleteMarker(t *testing.T) {
 	for _, action := range []string{testArchiveRelease, testArchiveReap} {
 		t.Run(action, func(t *testing.T) {
@@ -561,18 +629,12 @@ func TestArchiveRemovalRequiresDeleteMarker(t *testing.T) {
 	}
 }
 
-// TestArchiveDeleteRetryRechecksWakeRollback: no marking site writes a marker
-// for a live claim's current ck, so one is seeded to prove the retry's pinned
-// re-check under the record lock still refuses a ck a wake rollback restored.
 func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
 	sb := mustClaim(t, m, testKey)
 	mustArchive(t, m, sb)
 	id, token, ck := sb.ID, sb.Token, sb.ArchiveCk
-	if err := m.markArchiveCk(ck); err != nil {
-		t.Fatalf("seed marker: %v", err)
-	}
 
 	m.store.mu.Lock()
 	locked := true
@@ -591,6 +653,9 @@ func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 		defer m.mu.Unlock()
 		return sb.ArchiveCk == ""
 	})
+	if !archiveCkMarked(m, ck) {
+		t.Fatal("wake dropped the journal reference before marking the checkpoint")
+	}
 	retried := make(chan struct{})
 	go func() {
 		m.retryArchiveDeletes(t.Context())
@@ -615,6 +680,12 @@ func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 		t.Fatal("retry deleted the archive restored by wake rollback")
 	}
 	healStore(t, m)
+	if _, err := m.WakeAgentSocket(t.Context(), id, token); err != nil {
+		t.Fatalf("wake after rollback: %v", err)
+	}
+	if ckExists(t, m, ck) || archiveCkMarked(m, ck) {
+		t.Fatal("wake after rollback did not delete the checkpoint")
+	}
 }
 
 // TestIdleOnceSkipsArchived guards the fix where the idle sweep tried to

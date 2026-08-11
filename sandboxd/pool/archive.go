@@ -184,6 +184,10 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	if err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
+	if markErr := m.markArchiveCk(ck); markErr != nil {
+		m.destroy(ctx, built.VMName)
+		return "", fmt.Errorf("wake %s: track archive checkpoint: %w", sb.ID, markErr)
+	}
 	live, saved := m.commitWake(ctx, sb, built.VMName, built.VsockSocket)
 	if !live || !saved {
 		m.destroy(ctx, built.VMName) // released, or persist rolled back to archived
@@ -192,16 +196,14 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		}
 		return "", fmt.Errorf("wake %s: persist claims", sb.ID)
 	}
-	// Consumed into the live VM; drop the store copy, and its now-dead lock.
-	// The wake is committed (ArchiveCk cleared, unpinned), so a failed delete
-	// marks the ck for the retry sweep instead of leaking it.
+	// The pre-commit marker keeps a failed delete retryable after the journal update.
 	if delErr := m.ckpts.Delete(ctx, ck); delErr != nil {
 		log.WithFunc("pool.wakeArchived").Warnf(ctx, "delete consumed archive ck %s: %v", ck, delErr)
-		if markErr := m.markArchiveCk(ck); markErr != nil {
-			log.WithFunc("pool.wakeArchived").Warnf(ctx, "mark archive ck %s: %v", ck, markErr)
-		}
 	} else {
 		consumed = true
+		if clearErr := m.clearArchiveCk(ck); clearErr != nil {
+			log.WithFunc("pool.wakeArchived").Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
+		}
 	}
 	// Only the none lane reaches here (the egress guard above fails closed), so
 	// this rebinds the none-lane proxy; there is no NIC to re-lock.
@@ -251,10 +253,7 @@ func (m *Manager) deleteOrphanArchiveCk(ctx context.Context, ckID string) {
 	}
 }
 
-// markArchiveCk records durable delete intent for a ck. It must land before
-// the claims commit that drops the ck's last journal reference: restart
-// recovery sees only the journal (reclaimOrphanArchiveCks) and these markers
-// (retryArchiveDeletes), and an unreferenced, unmarked ck is invisible to both.
+// markArchiveCk records durable delete intent before the journal drops its reference.
 func (m *Manager) markArchiveCk(ckID string) error {
 	if !store.CheckpointIDRe.MatchString(ckID) {
 		return fmt.Errorf("invalid checkpoint id %q", ckID)
@@ -264,6 +263,38 @@ func (m *Manager) markArchiveCk(ckID string) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, ckID), nil, 0o600)
+}
+
+func (m *Manager) clearCanceledArchiveDeletes(ctx context.Context, claims map[string]*types.Sandbox) {
+	logger := log.WithFunc("pool.clearCanceledArchiveDeletes")
+	entries, err := os.ReadDir(filepath.Join(m.dataDir, archiveDeleteDir))
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		logger.Warnf(ctx, "list: %v", err)
+		return
+	}
+	if len(entries) == 0 {
+		return
+	}
+	live := make(map[string]struct{})
+	for _, sb := range claims {
+		if sb.ArchiveCk != "" {
+			live[sb.ArchiveCk] = struct{}{}
+		}
+	}
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() || !store.CheckpointIDRe.MatchString(entry.Name()) {
+			continue
+		}
+		if _, ok := live[entry.Name()]; !ok {
+			continue
+		}
+		if err := m.clearArchiveCk(entry.Name()); err != nil {
+			logger.Warnf(ctx, "clear %s: %v", entry.Name(), err)
+		}
+	}
 }
 
 func (m *Manager) clearArchiveCk(ckID string) error {
