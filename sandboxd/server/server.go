@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -262,15 +263,14 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req types.ClaimRequest, key types.PoolKey, hash, tenant string) {
 	volumes, err := types.ValidateVolumes(req.Volumes)
+	if err == nil && key.Engine != types.EngineCH {
+		err = errors.New("volumes require engine ch")
+	}
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("%w: %v", pool.ErrBadVolume, err).Error())
 		return
 	}
 	req.Volumes = volumes
-	if key.Engine != types.EngineCH {
-		writeErr(w, http.StatusBadRequest, "volumes require engine ch")
-		return
-	}
 	redirected, err := s.redirectVolumeClaim(r.Context(), w, &req, key, hash, tenant)
 	if err != nil {
 		writeResult(w, r, "claim", hash, "provisioning failed", err, func() {})
