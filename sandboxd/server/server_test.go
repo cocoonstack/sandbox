@@ -773,7 +773,10 @@ func TestCheckpointFlow(t *testing.T) {
 	ts := newTestServer(t, "api", mgr, &fakeDialer{})
 
 	post := func(path, body string) *http.Response {
-		req, _ := http.NewRequest(http.MethodPost, ts.URL+path, strings.NewReader(body))
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
 		req.Header.Set("Authorization", "Bearer api")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -805,7 +808,10 @@ func TestCheckpointFlow(t *testing.T) {
 		t.Errorf("unknown checkpoint claim: status %d, want 404", resp3.StatusCode)
 	}
 
-	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/checkpoints/"+cr.Checkpoint.ID, nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts.URL+"/v1/checkpoints/"+cr.Checkpoint.ID, nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
 	req.Header.Set("Authorization", "Bearer api")
 	resp4, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -826,7 +832,10 @@ func TestDeleteCheckpointNoForwardQueryParam(t *testing.T) {
 	ts := newTestServer(t, "api", mgr, &fakeDialer{})
 
 	del := func(path string) int {
-		req, _ := http.NewRequest(http.MethodDelete, ts.URL+path, nil)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts.URL+path, nil)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
 		req.Header.Set("Authorization", "Bearer api")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -861,7 +870,10 @@ func TestDeleteCheckpointForgetsProbeCache(t *testing.T) {
 		prober.forgotten = nil
 		mgr := &fakeManager{deleteCheckpoint: func(string) error { return nil }}
 		ts := newPlacerTestServer(t, "api", mgr, prober)
-		req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/checkpoints/ck_0011223344556677", nil)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts.URL+"/v1/checkpoints/ck_0011223344556677", nil)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
 		req.Header.Set("Authorization", "Bearer api")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -877,7 +889,10 @@ func TestDeleteCheckpointForgetsProbeCache(t *testing.T) {
 		prober.forgotten = nil
 		mgr := &fakeManager{deleteCheckpoint: func(string) error { return pool.ErrUnknownCheckpoint }}
 		ts := newPlacerTestServer(t, "api", mgr, prober)
-		req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/checkpoints/ck_0011223344556677?no_forward=1", nil)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts.URL+"/v1/checkpoints/ck_0011223344556677?no_forward=1", nil)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
 		req.Header.Set("Authorization", "Bearer api")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -975,7 +990,10 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
-	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/templates?template=tpl", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts.URL+"/v1/templates?template=tpl", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
@@ -993,7 +1011,10 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 	}
 
 	// no_redirect answers for this node alone, even with owners in gossip.
-	req2, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/templates?template=tpl&no_redirect=1", nil)
+	req2, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts.URL+"/v1/templates?template=tpl&no_redirect=1", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
 	resp2, err := http.DefaultClient.Do(req2)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
@@ -1006,7 +1027,10 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 	srvNoOwner := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{}, nil, nil, nil)
 	ts2 := httptest.NewServer(srvNoOwner.Handler())
 	t.Cleanup(func() { ts2.Close(); srvNoOwner.CloseRelays() })
-	req3, _ := http.NewRequest(http.MethodDelete, ts2.URL+"/v1/templates?template=tpl", nil)
+	req3, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts2.URL+"/v1/templates?template=tpl", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
 	resp3, err := http.DefaultClient.Do(req3)
 	if err != nil {
 		t.Fatalf("delete: %v", err)

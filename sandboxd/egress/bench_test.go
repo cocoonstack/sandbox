@@ -135,7 +135,7 @@ func benchSession(b *testing.B, proxyAddr string, roots *x509.CertPool) *tls.Con
 
 func benchRoundTrip(b *testing.B, tc *tls.Conn, br *bufio.Reader) {
 	b.Helper()
-	req, err := http.NewRequest(http.MethodGet, "https://example.com/x", nil)
+	req, err := http.NewRequestWithContext(b.Context(), http.MethodGet, "https://example.com/x", nil)
 	if err != nil {
 		b.Fatalf("build request: %v", err)
 	}
