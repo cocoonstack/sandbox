@@ -30,16 +30,12 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	if err := m.validate(key); err != nil {
 		return nil, err
 	}
-	var volumeSpecs []resolvedVolume
-	if len(volumes) > 0 {
-		var err error
-		volumeSpecs, err = m.resolveVolumes(key, tenant, volumes)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if err := m.overQuota(1, tenant); err != nil {
+	volumeSpecs, err := m.resolveVolumes(key, tenant, volumes)
+	if err != nil {
 		return nil, err
+	}
+	if quotaErr := m.overQuota(1, tenant); quotaErr != nil {
+		return nil, quotaErr
 	}
 	m.mu.Lock()
 	var sb *types.Sandbox
@@ -55,11 +51,9 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 		return nil, ErrNoWarm
 	}
 	m.kickRefill()
-	if len(volumeSpecs) > 0 {
-		if err := m.applyVolumes(ctx, sb, volumeSpecs); err != nil {
-			m.destroy(ctx, sb.VMName)
-			return nil, err
-		}
+	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs); volumeErr != nil {
+		m.destroy(ctx, sb.VMName)
+		return nil, volumeErr
 	}
 	sb.Tenant = tenant
 	sb.ClaimRef = claimRef

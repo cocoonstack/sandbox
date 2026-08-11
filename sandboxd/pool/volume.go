@@ -125,19 +125,19 @@ func (m *Manager) resolveVolumes(key types.PoolKey, tenant string, requested []t
 }
 
 func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes []resolvedVolume) error {
-	for _, volume := range volumes {
+	if len(volumes) == 0 {
+		return nil
+	}
+	applied := make([]types.Volume, len(volumes))
+	for i, volume := range volumes {
 		if err := m.eng.DiskAttach(ctx, sb.VMName, volume.disk); err != nil {
 			return fmt.Errorf("attach volume %q: %w", volume.applied.Name, err)
 		}
 		if err := m.eng.MountVolume(ctx, sb.VsockSocket, volume.applied.Name, volume.applied.Mount); err != nil {
 			return fmt.Errorf("setup volume %q: %w", volume.applied.Name, err)
 		}
+		applied[i] = volume.applied
 	}
-	if len(volumes) > 0 {
-		sb.Volumes = make([]types.Volume, len(volumes))
-		for i, volume := range volumes {
-			sb.Volumes[i] = volume.applied
-		}
-	}
+	sb.Volumes = applied
 	return nil
 }
