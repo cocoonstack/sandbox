@@ -668,8 +668,7 @@ func NewFrameScanner(r io.Reader) *bufio.Scanner {
 }
 
 // DecodeResponse parses one frame into its type's concrete Go type. Byte
-// fields are freshly allocated per frame, so callers may retain them; pooling
-// them would require a copy-out at every retention site first.
+// fields are freshly allocated per frame, so callers may retain them.
 func DecodeResponse(line []byte) (Response, error) {
 	typ, err := frameTag(line, respTagHead, "type")
 	if err != nil {

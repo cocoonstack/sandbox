@@ -289,7 +289,7 @@ func smokeGit(ctx context.Context, sb *sandbox.Sandbox) error {
 // smokeEgress claims a second sandbox on the egress lane and pins the
 // positive half of silkd's lane detection: git must actually run there, so a
 // push with no remote fails inside git — never with the none-lane
-// unimplemented guard. Needs no reachable network.
+// unimplemented guard.
 func smokeEgress(ctx context.Context, client *sandbox.Client, template string) error {
 	sb, err := client.New(ctx, template, sandbox.WithNetwork(sandbox.NetEgress))
 	if err != nil {
@@ -388,8 +388,7 @@ func smokeFork(ctx context.Context, sb *sandbox.Sandbox) error {
 // smokePromote proves promote-to-template through the owner-bound handle:
 // claiming from it must clone the parent's state — on a real node a cold
 // boot of this never-registered image ref would fail, so success itself
-// proves the golden path — and delete removes it. The name-based
-// DeleteTemplate covers the node-local Client surface too.
+// proves the golden path — and delete removes it.
 func smokePromote(ctx context.Context, client *sandbox.Client, sb *sandbox.Sandbox) error {
 	tpl, err := sb.Promote(ctx, "smoke-tpl:v1")
 	if err != nil {
@@ -656,7 +655,6 @@ func isSilkdKind(err error, kind string) bool {
 	return errors.As(err, &er) && er.Kind == kind
 }
 
-// lspWrite frames one JSON-RPC message the LSP way (Content-Length header).
 func lspWrite(w io.Writer, body string) error {
 	_, err := fmt.Fprintf(w, "Content-Length: %d\r\n\r\n%s", len(body), body)
 	return err

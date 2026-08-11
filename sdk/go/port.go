@@ -23,8 +23,7 @@ var _ net.Conn = (*PortConn)(nil)
 // PortConn is a net.Conn to a TCP port inside the sandbox, relayed over the
 // silkd protocol (works on the no-network lane — the vsock relay is its only
 // transport). Read returns io.EOF when the guest server closes; CloseWrite
-// half-closes the guest socket. Deadlines are not supported (bound the
-// DialPort ctx instead).
+// half-closes the guest socket.
 type PortConn struct {
 	conn *silkd.Conn
 	stop func()

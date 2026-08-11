@@ -111,8 +111,6 @@ func toolCreateSandbox(ctx context.Context, s *server, raw json.RawMessage) (str
 	return jsonText(map[string]any{"sandbox_id": sb.ID, "deadline": sb.Deadline}), nil
 }
 
-// sandboxArg is the shared sandbox_id field of the tool argument structs;
-// parseAndBox reads it through id().
 type sandboxArg struct {
 	SandboxID string `json:"sandbox_id"`
 }
@@ -388,7 +386,6 @@ func toolNodeInfo(ctx context.Context, s *server, _ json.RawMessage) (string, er
 	return jsonText(info), nil
 }
 
-// boxArg resolves a bare sandbox_id argument to a live handle.
 func (s *server) boxArg(raw json.RawMessage) (*sandbox.Sandbox, error) {
 	_, sb, err := parseAndBox[sandboxArg](s, raw)
 	return sb, err

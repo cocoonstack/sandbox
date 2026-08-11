@@ -272,9 +272,8 @@ type Manager struct {
 
 	// maxClaims caps live claims node-wide (0 = unlimited); tenantMax holds
 	// every configured tenant's cap (0 = unlimited) and doubles as the set of
-	// known tenants; tenantLive counts live claims per tenant so admission
-	// stays O(1). usage is the always-on billing event stream, audit the
-	// config-gated request tap.
+	// known tenants; tenantLive counts live claims per tenant. usage is the
+	// always-on billing event stream, audit the config-gated request tap.
 	maxClaims    int
 	draining     bool // guarded by m.mu; deliberately not persisted
 	tenantMax    map[string]int

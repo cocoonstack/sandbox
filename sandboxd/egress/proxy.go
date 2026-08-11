@@ -136,10 +136,7 @@ func (p *Proxy) untrack(conn net.Conn) {
 	p.connMu.Unlock()
 }
 
-// serveConnect gates an HTTPS/opaque tunnel by host. A plain allow hijacks and
-// splices the end-to-end TLS to the origin untouched. A matched rule with
-// Intercept instead terminates the TLS (interception, see intercept.go) so the
-// request is filtered by method and the secret injected; deny answers a typed 403.
+// serveConnect gates an HTTPS/opaque tunnel by host.
 func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	host := hostOnly(r.Host)
 	// Host-gate the interception decision: the tunnel's CONNECT verb is not the
@@ -177,8 +174,6 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	splice(client, upstream)
 }
 
-// serveForward gates an absolute-form plaintext request by host and method,
-// injects the rule's credential, and relays it to the origin.
 func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
 	if !r.URL.IsAbs() {
 		http.Error(w, "egress: proxy requires an absolute-form request URI", http.StatusBadRequest)

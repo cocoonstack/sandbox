@@ -51,9 +51,7 @@ var _ store.Store = (*Store)(nil)
 
 // Store keeps records as <root>/<id>/{meta.json,export-<gen>/...}: the
 // generation dir is immutable and the meta rename is the atomic commit
-// pointer, so readers and writers need no cross-process locks. idRe names
-// the instance's id namespace — two instances (checkpoints, templates)
-// share a root without seeing each other's records.
+// pointer, so readers and writers need no cross-process locks.
 type Store struct {
 	root string
 	idRe *regexp.Regexp

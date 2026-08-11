@@ -148,8 +148,7 @@ type auditTee struct {
 
 // WriteTo hands the splice back to io.Copy's fast path once the first line
 // is captured: it reads through Read until the record fires, then delegates
-// the rest of the stream to a direct copy — an audit-enabled relay only pays
-// the tee for the request frame, not the payload.
+// the rest of the stream to a direct copy.
 func (t *auditTee) WriteTo(w io.Writer) (int64, error) {
 	var total int64
 	buf := make([]byte, 4096)

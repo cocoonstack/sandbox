@@ -27,7 +27,7 @@ type ClaimRequest struct {
 	NoRedirect bool `json:"no_redirect,omitempty"`
 	// ClaimRef is an opaque caller reference (the aggregated apiserver passes
 	// the k8s "<namespace>/<name>") recorded on the claim so the read path can
-	// map a listed sandbox back to the name it was claimed under. Optional.
+	// map a listed sandbox back to the name it was claimed under.
 	ClaimRef string `json:"claim_ref,omitempty"`
 }
 
@@ -58,9 +58,8 @@ type ClaimResponse struct {
 // ForkRequest is the wire body of POST /v1/sandboxes/{id}/fork. The
 // Authorization header carries an api or tenant token (forking creates node
 // resources, like a claim); Token proves ownership of the source sandbox.
-// TTLSeconds applies to every child; zero means the server default — a
-// lease is a per-sandbox resource bound, so children never inherit the
-// parent's remainder.
+// TTLSeconds applies to every child; zero means the server default, and
+// children never inherit the parent's remainder.
 type ForkRequest struct {
 	Token string `json:"token"`
 	Count int    `json:"count"`

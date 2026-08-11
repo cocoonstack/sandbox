@@ -61,7 +61,7 @@ func (g *guestPortConn) Read(p []byte) (int, error) {
 			g.pending = frame.Data
 		case "done", "":
 			return 0, io.EOF // the guest closed the forwarded port
-		default: // error frame or anything terminal
+		default:
 			return 0, fmt.Errorf("port stream ended: %s", frame.Type)
 		}
 	}
@@ -87,9 +87,8 @@ func (g *guestPortConn) Write(p []byte) (int, error) {
 }
 
 // fastPortData slices the canonical data frame's base64 out without a JSON
-// parse — json.Unmarshal otherwise dominates the download relay, and the
-// SDK's fastBulk sets the contract: only the exact canonical shape takes the
-// slice, anything else falls back to the full parse.
+// parse; the SDK's fastBulk sets the contract: only the exact canonical
+// shape takes the slice, anything else falls back to the full parse.
 func fastPortData(line []byte) ([]byte, bool) {
 	after, ok := bytes.CutPrefix(line, portDataHead)
 	if !ok {

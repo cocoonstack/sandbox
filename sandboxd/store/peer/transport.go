@@ -35,8 +35,7 @@ const (
 	recordTrailer = ".record-complete"
 )
 
-// ErrNotFound reports that a peer does not hold the requested record. Declared
-// here so the transport does not import the store package it is a backend for.
+// ErrNotFound reports that a peer does not hold the requested record.
 var ErrNotFound = errors.New("peer does not hold record")
 
 // Puller fetches a record from a peer into a local directory.

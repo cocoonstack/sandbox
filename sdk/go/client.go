@@ -43,11 +43,10 @@ type Client struct {
 
 // New claims a sandbox for template. Without options the node serves its
 // defaults: the no-network lane and the smallest size tier. New returns when
-// the sandbox's silkd is reachable; a warm pool hit is milliseconds, a cold
-// key can take the full boot. Against a cluster, a warm miss redirects to a
-// peer that holds one, which New follows transparently; if every candidate
-// fails transiently (full, mid-heal, unreachable), New falls back to the
-// origin once so it provisions or heals locally.
+// the sandbox's silkd is reachable. Against a cluster, a warm miss redirects
+// to a peer that holds one, which New follows transparently; if every
+// candidate fails transiently (full, mid-heal, unreachable), New falls back
+// to the origin once so it provisions or heals locally.
 func (c *Client) New(ctx context.Context, template string, opts ...Option) (*Sandbox, error) {
 	claim := claimRequest{Template: template}
 	for _, opt := range opts {
@@ -84,9 +83,8 @@ func (c *Client) Lookup(ctx context.Context, id, token string) (*Sandbox, error)
 
 // Attach binds a handle to an already-claimed sandbox whose owner data-plane
 // address is already known (e.g. delivered by the L3 apiserver as annotations),
-// with no lookup round-trip. Use it to exec/agent into a sandbox claimed out of
-// band. ownerAddr is the node's sandboxd data-plane address; token is the
-// per-sandbox credential.
+// with no lookup round-trip. ownerAddr is the node's sandboxd data-plane
+// address; token is the per-sandbox credential.
 func (c *Client) Attach(ownerAddr, id, token string) *Sandbox {
 	return &Sandbox{ID: id, token: token, c: c, owner: ownerAddr}
 }
@@ -95,8 +93,6 @@ func (c *Client) Attach(ownerAddr, id, token string) *Sandbox {
 // does not hold it but the mesh's gossip names an owner, the delete follows
 // the redirect there (one hop); gossip lags a fresh promote by about a tick,
 // so right after promoting prefer Template.Delete on the returned handle.
-// The options pick the template's key axes exactly as a claim would
-// (network lane, size); the same defaults apply.
 func (c *Client) DeleteTemplate(ctx context.Context, template string, opts ...Option) error {
 	claim := claimRequest{Template: template}
 	for _, opt := range opts {
@@ -290,15 +286,6 @@ func retryTransient(err error) bool {
 	}
 }
 
-// redirectFallback walks candidates via claimAt, retrying broadly (retryAny)
-// so one wrong candidate doesn't cost a candidate that would still succeed.
-// If every candidate is exhausted and the last failure was transient
-// (retryTransient), it gives origin one more no_redirect attempt — the node
-// that issued the redirect provisions or heals locally instead of leaving
-// the claim stuck on stale gossip. A definitive last failure (a bad request,
-// an auth rejection, a conflict) skips the fallback: origin would fail the
-// same way. A second-level redirect (a compliant server never sends one
-// once no_redirect is set) fails the candidate rather than being followed.
 // claimFollow runs the claim protocol from origin: claim there, and on a
 // redirect re-encode with no_redirect and follow via redirectFallback. Only
 // the fallback error carries the verb — first-contact errors return raw.
@@ -326,6 +313,14 @@ func claimFollow(origin, verb string, encode func(noRedirect bool) ([]byte, erro
 	return addr, target, nil
 }
 
+// redirectFallback walks candidates via claimAt, retrying broadly (retryAny).
+// If every candidate is exhausted and the last failure was transient
+// (retryTransient), it gives origin one more no_redirect attempt — the node
+// that issued the redirect provisions or heals locally instead of leaving
+// the claim stuck on stale gossip. A definitive last failure (a bad request,
+// an auth rejection, a conflict) skips the fallback: origin would fail the
+// same way. A second-level redirect (a compliant server never sends one
+// once no_redirect is set) fails the candidate rather than being followed.
 func redirectFallback(origin string, candidates []string, claimAt func(addr string) (claimResponse, error)) (string, claimResponse, error) {
 	claimNoRedirect := func(target string) (claimResponse, error) {
 		cr, err := claimAt(target)

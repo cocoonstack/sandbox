@@ -58,8 +58,7 @@ func (c *Conn) Close() error {
 	return c.rwc.Close()
 }
 
-// sendBulk renders a data/stdin frame into the reused buffer, skipping the
-// json.Marshal alloc + escape rescan.
+// sendBulk renders a data/stdin frame into the reused buffer.
 func (c *Conn) sendBulk(op string, payload []byte) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()

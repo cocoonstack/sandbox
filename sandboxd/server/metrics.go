@@ -16,7 +16,7 @@ type SandboxListResponse struct {
 
 // handleMetrics renders Prometheus text format by hand — counters and
 // gauges only, no client library. Latency rides as *_seconds_total next to
-// its count, so dashboards derive averages without histogram machinery.
+// its count.
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	pools, g := s.mgr.Info()
 	c := s.mgr.Counters()

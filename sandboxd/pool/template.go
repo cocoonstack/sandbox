@@ -28,7 +28,6 @@ type templateRecord struct {
 // Promote publishes a claimed sandbox as a template under (template, parent
 // net, parent size); later claims for that key clone from it. Re-promoting the
 // same name replaces it, and the caller owns its lifecycle (DeleteTemplate).
-// tenant attributes the record; empty means the operator (root).
 func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, tenant string) (types.PoolKey, string, error) {
 	sb, ok := m.resolve(id, cred)
 	if !ok {
