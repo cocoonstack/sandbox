@@ -12,7 +12,7 @@ from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING
 
 from .checkpoint import Checkpoint
-from .conn import Conn, dial_agent
+from .conn import Conn, _Closeable, dial_agent
 from .errors import APIError, ExitError, ProtocolError
 from .frames import BULK_CHUNK, FS_CHUNK
 from .template import Template
@@ -379,17 +379,11 @@ class Session:
         self._sandbox._done_rpc("session_rm", id=self.id)
 
 
-class Watcher:
+class Watcher(_Closeable):
     """A live filesystem event stream; iterate for {kind, path} events."""
 
     def __init__(self, conn: Conn):
         self._conn = conn
-
-    def __enter__(self) -> Watcher:
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.close()
 
     def __iter__(self) -> Iterator[dict]:
         # Connection-bound: a close, drop, or undecodable frame ends iteration;
@@ -406,19 +400,13 @@ class Watcher:
         self._conn.close()
 
 
-class Pty:
+class Pty(_Closeable):
     """An interactive shell under a guest pty; read/write are raw bytes."""
 
     def __init__(self, sandbox: Sandbox, conn: Conn, pid: int):
         self._sandbox = sandbox
         self._conn = conn
         self.pid = pid
-
-    def __enter__(self) -> Pty:
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.close()
 
     def read(self) -> bytes:
         """The next output chunk; b'' once the shell exits."""
@@ -457,18 +445,12 @@ class Lsp:
         self._sandbox._done_rpc("lsp_stop", server_id=self.server_id)
 
 
-class PortConn:
+class PortConn(_Closeable):
     """A byte stream to a guest port, relayed over the silkd connection."""
 
     def __init__(self, conn: Conn):
         self._conn = conn
         self._eof = False
-
-    def __enter__(self) -> PortConn:
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.close()
 
     def send(self, data: bytes) -> None:
         _send_chunks(self._conn, data, chunk=BULK_CHUNK)
