@@ -197,7 +197,7 @@ func (d *Store) lockRecord(id string, op int) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := unix.Flock(int(lock.Fd()), op); err != nil {
+	if err := unix.Flock(int(lock.Fd()), op); err != nil { //nolint:gosec // unix fds fit int
 		_ = lock.Close()
 		return nil, err
 	}
@@ -211,6 +211,6 @@ func (d *Store) recordLockPath(id string) string {
 }
 
 func unlockRecord(lock *os.File) {
-	_ = unix.Flock(int(lock.Fd()), unix.LOCK_UN)
+	_ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) //nolint:gosec // unix fds fit int
 	_ = lock.Close()
 }
