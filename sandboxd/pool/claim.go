@@ -167,6 +167,18 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	}
 	js := m.store.snapshot(m.claimed)
 	m.mu.Unlock()
+	if ck != "" {
+		// An unmarkable ck must abort before the commit: committing would drop
+		// the journal's last reference and leave no recovery path to the ck.
+		if markErr := m.markArchiveCk(ck); markErr != nil {
+			m.mu.Lock()
+			m.claimed[id] = sb
+			m.tenantDelta(sb.Tenant, 1)
+			delete(m.pendingCks, ck)
+			m.mu.Unlock()
+			return fmt.Errorf("release %s: track archive checkpoint: %w", id, markErr)
+		}
+	}
 	if saveErr := m.store.commit(js); saveErr != nil {
 		m.mu.Lock()
 		m.claimed[id] = sb // roll back so memory matches the still-durable claim; the restored claim re-pins ck
@@ -174,6 +186,11 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		delete(m.pendingCks, ck)
 		rb := m.store.snapshot(m.claimed)
 		m.mu.Unlock()
+		if ck != "" {
+			if clearErr := m.clearArchiveCk(ck); clearErr != nil {
+				log.WithFunc("pool.releaseResolved").Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
+			}
+		}
 		m.recommit(ctx, rb)
 		log.WithFunc("pool.releaseResolved").Errorf(ctx, saveErr, "persist release of %s", id)
 		return fmt.Errorf("release %s: %w", id, saveErr)
@@ -335,31 +352,60 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			m.tenantDelta(sb.Tenant, -1)
 		}
 	}
-	var js claimSnapshot
-	if len(expired) > 0 {
-		js = m.store.snapshot(m.claimed)
-	}
 	m.mu.Unlock()
+	if len(expired) == 0 {
+		return
+	}
 
 	logger := log.WithFunc("pool.reapOnce")
-	if len(expired) > 0 {
-		if saveErr := m.store.commit(js); saveErr != nil {
-			m.mu.Lock()
-			for _, v := range expired {
-				if v.action == reapArchive {
-					delete(m.archiving, v.id) // never removed from m.claimed
-				} else {
-					m.claimed[v.id] = v.sb // roll back so memory matches the still-durable claim
-					m.tenantDelta(v.tenant, 1)
-					delete(m.pendingCks, v.ck)
-				}
+	// A purge victim whose delete-intent marker cannot land is restored
+	// un-reaped: committing would drop the journal's last reference and leave
+	// no recovery path to the ck.
+	var purgeCks []string
+	keep := expired[:0]
+	for _, v := range expired {
+		if v.action == reapPurge {
+			if markErr := m.markArchiveCk(v.ck); markErr != nil {
+				logger.Errorf(ctx, markErr, "mark archive ck %s; keeping %s", v.ck, v.id)
+				m.mu.Lock()
+				m.claimed[v.id] = v.sb
+				m.tenantDelta(v.tenant, 1)
+				delete(m.pendingCks, v.ck)
+				m.mu.Unlock()
+				continue
 			}
-			rb := m.store.snapshot(m.claimed)
-			m.mu.Unlock()
-			m.recommit(ctx, rb)
-			logger.Error(ctx, saveErr, "persist reap; rolled back")
-			return
+			purgeCks = append(purgeCks, v.ck)
 		}
+		keep = append(keep, v)
+	}
+	expired = keep
+	if len(expired) == 0 {
+		return
+	}
+	m.mu.Lock()
+	js := m.store.snapshot(m.claimed)
+	m.mu.Unlock()
+	if saveErr := m.store.commit(js); saveErr != nil {
+		m.mu.Lock()
+		for _, v := range expired {
+			if v.action == reapArchive {
+				delete(m.archiving, v.id) // never removed from m.claimed
+			} else {
+				m.claimed[v.id] = v.sb // roll back so memory matches the still-durable claim
+				m.tenantDelta(v.tenant, 1)
+				delete(m.pendingCks, v.ck)
+			}
+		}
+		rb := m.store.snapshot(m.claimed)
+		m.mu.Unlock()
+		for _, ck := range purgeCks {
+			if clearErr := m.clearArchiveCk(ck); clearErr != nil {
+				logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
+			}
+		}
+		m.recommit(ctx, rb)
+		logger.Error(ctx, saveErr, "persist reap; rolled back")
+		return
 	}
 	// Engine subprocesses (worst case minutes on a hung stop): fan out bounded
 	// so a big batch never stalls the ticker loop.
@@ -384,10 +430,14 @@ func (m *Manager) reapOnce(ctx context.Context) {
 }
 
 // purgeArchiveCk deletes an archived claim's store checkpoint and records the
-// retention billing event; shared by Release and reapOnce's purge.
+// retention billing event; shared by Release and reapOnce's purge, whose
+// pre-commit marking makes deleteArchiveCk's re-mark redundant here.
 func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
-	if err := m.deleteArchiveCk(ctx, ck); err != nil {
-		log.WithFunc("pool.purgeArchiveCk").Warnf(ctx, "delete archive ck %s: %v", ck, err)
+	logger := log.WithFunc("pool.purgeArchiveCk")
+	if err := m.deleteCkLocked(ctx, ck); err != nil {
+		logger.Warnf(ctx, "delete archive ck %s: %v", ck, err)
+	} else if err := m.clearArchiveCk(ck); err != nil {
+		logger.Warnf(ctx, "clear archive ck %s: %v", ck, err)
 	}
 	m.counters.archiveDeletes.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "archive_delete", ID: id, Reference: ck, Tenant: tenant})

@@ -27,13 +27,6 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, sb := range claims {
-		if sb.ArchiveCk != "" {
-			if markErr := m.markArchiveCk(sb.ArchiveCk); markErr != nil {
-				return fmt.Errorf("track archive checkpoint %s: %w", sb.ArchiveCk, markErr)
-			}
-		}
-	}
 	vms, err := m.eng.List(ctx)
 	if err != nil {
 		return fmt.Errorf("list vms: %w", err)

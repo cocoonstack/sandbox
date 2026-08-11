@@ -97,9 +97,6 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	m.pendingCks[ckID] = struct{}{}
 	m.mu.Unlock()
 	defer m.untrack(m.pendingCks, ckID)
-	if err := m.markArchiveCk(ckID); err != nil {
-		return fmt.Errorf("track archive checkpoint: %w", err)
-	}
 	// A hibernated source is copied from its wake image, so no VM starts.
 	ck, srcSnap, err := m.publishCheckpoint(ctx, sb, ckID, "archive", sb.Tenant, true)
 	if err != nil {
@@ -196,13 +193,15 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		return "", fmt.Errorf("wake %s: persist claims", sb.ID)
 	}
 	// Consumed into the live VM; drop the store copy, and its now-dead lock.
+	// The wake is committed (ArchiveCk cleared, unpinned), so a failed delete
+	// marks the ck for the retry sweep instead of leaking it.
 	if delErr := m.ckpts.Delete(ctx, ck); delErr != nil {
 		log.WithFunc("pool.wakeArchived").Warnf(ctx, "delete consumed archive ck %s: %v", ck, delErr)
+		if markErr := m.markArchiveCk(ck); markErr != nil {
+			log.WithFunc("pool.wakeArchived").Warnf(ctx, "mark archive ck %s: %v", ck, markErr)
+		}
 	} else {
 		consumed = true
-		if clearErr := m.clearArchiveCk(ck); clearErr != nil {
-			log.WithFunc("pool.wakeArchived").Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
-		}
 	}
 	// Only the none lane reaches here (the egress guard above fails closed), so
 	// this rebinds the none-lane proxy; there is no NIC to re-lock.
@@ -252,6 +251,10 @@ func (m *Manager) deleteOrphanArchiveCk(ctx context.Context, ckID string) {
 	}
 }
 
+// markArchiveCk records durable delete intent for a ck. It must land before
+// the claims commit that drops the ck's last journal reference: restart
+// recovery sees only the journal (reclaimOrphanArchiveCks) and these markers
+// (retryArchiveDeletes), and an unreferenced, unmarked ck is invisible to both.
 func (m *Manager) markArchiveCk(ckID string) error {
 	if !store.CheckpointIDRe.MatchString(ckID) {
 		return fmt.Errorf("invalid checkpoint id %q", ckID)

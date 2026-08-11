@@ -36,10 +36,6 @@ func TestArchivePublishWindowPinsCheckpoint(t *testing.T) {
 	archived := make(chan error, 1)
 	go func() { archived <- m.archive(t.Context(), sb) }()
 	ck := <-stall.published
-	m.retryArchiveDeletes(t.Context())
-	if !ckExists(t, m, ck) {
-		t.Fatal("archive delete retry removed a checkpoint still being published")
-	}
 
 	if ckpts, err := m.Checkpoints(t.Context(), ""); err != nil || len(ckpts) != 0 {
 		t.Errorf("mid-publish checkpoint visible: %v, %v", ckpts, err)
@@ -421,29 +417,32 @@ func TestArchiveDeleteRetryAfterRestart(t *testing.T) {
 	}
 }
 
-func TestReconcileAdoptsLegacyArchiveMarker(t *testing.T) {
+// TestArchiveSteadyStateLeavesNoMarker: markers mean "delete attempted, not
+// yet done" — an archived claim in steady state, across a restart, must leave
+// the marker directory empty so the retry sweep stays a free no-op.
+func TestArchiveSteadyStateLeavesNoMarker(t *testing.T) {
 	eng := newFakeEngine()
 	dataDir := t.TempDir()
 	m := newTestManagerAt(t, eng, dataDir, archivePool(3600))
 	sb := mustClaim(t, m, testKey)
 	mustArchive(t, m, sb)
 	id, token, ck := sb.ID, sb.Token, sb.ArchiveCk
-	if err := m.clearArchiveCk(ck); err != nil {
-		t.Fatalf("clear marker: %v", err)
+	if archiveCkMarked(m, ck) {
+		t.Fatal("archive left a delete marker for its live checkpoint")
 	}
 
 	m2 := newTestManagerAt(t, eng, dataDir, archivePool(3600))
 	if err := m2.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if !ckExists(t, m2, ck) || !archiveCkMarked(m2, ck) {
-		t.Fatal("reconcile did not retain and mark the live archive")
+	if !ckExists(t, m2, ck) || archiveCkMarked(m2, ck) {
+		t.Fatal("reconcile did not retain the live archive unmarked")
 	}
 	if _, err := m2.WakeAgentSocket(t.Context(), id, token); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	if archiveCkMarked(m2, ck) {
-		t.Fatal("wake left the archive cleanup marker")
+		t.Fatal("wake left an archive delete marker")
 	}
 }
 
@@ -513,12 +512,67 @@ func TestArchiveRemovalCommitPinsCheckpoint(t *testing.T) {
 	}
 }
 
+// TestArchiveRemovalRequiresDeleteMarker: a removal whose delete-intent marker
+// cannot land must abort before the claims commit — committing would drop the
+// journal's last reference to an unmarked ck, leaking it past every recovery
+// path (restart reclaim skips cks of unknown sandboxes).
+func TestArchiveRemovalRequiresDeleteMarker(t *testing.T) {
+	for _, action := range []string{testArchiveRelease, testArchiveReap} {
+		t.Run(action, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newTestManager(t, eng, archivePool(3600))
+			sb := mustClaim(t, m, testKey)
+			id, token := sb.ID, sb.Token
+			mustArchive(t, m, sb)
+			ck := sb.ArchiveCk
+			blocker := filepath.Join(m.dataDir, archiveDeleteDir)
+			if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+				t.Fatalf("block marker dir: %v", err)
+			}
+
+			switch action {
+			case testArchiveRelease:
+				if err := m.Release(t.Context(), id, Cred{Token: token}); err == nil {
+					t.Fatal("release succeeded with an unwritable marker dir")
+				}
+			case testArchiveReap:
+				m.mu.Lock()
+				sb.Deadline = time.Now().Add(-time.Second)
+				m.mu.Unlock()
+				m.reapOnce(t.Context())
+			}
+			if _, ok := m.claim(id, token); !ok {
+				t.Fatal("claim dropped despite an unmarkable delete intent")
+			}
+			if !pinnedHidden(t, m, ck) {
+				t.Error("kept ck is not pinned after an aborted removal")
+			}
+
+			if err := os.Remove(blocker); err != nil {
+				t.Fatalf("unblock marker dir: %v", err)
+			}
+			if err := m.Release(t.Context(), id, Cred{Token: token}); err != nil {
+				t.Fatalf("release after heal: %v", err)
+			}
+			if ckExists(t, m, ck) || archiveCkMarked(m, ck) {
+				t.Fatal("healed release did not delete the checkpoint")
+			}
+		})
+	}
+}
+
+// TestArchiveDeleteRetryRechecksWakeRollback: no marking site writes a marker
+// for a live claim's current ck, so one is seeded to prove the retry's pinned
+// re-check under the record lock still refuses a ck a wake rollback restored.
 func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
 	sb := mustClaim(t, m, testKey)
 	mustArchive(t, m, sb)
 	id, token, ck := sb.ID, sb.Token, sb.ArchiveCk
+	if err := m.markArchiveCk(ck); err != nil {
+		t.Fatalf("seed marker: %v", err)
+	}
 
 	m.store.mu.Lock()
 	locked := true
