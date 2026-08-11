@@ -121,11 +121,17 @@ func TestPromoteEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
+	if tpl.ContentDigest == "" {
+		t.Fatal("Promote returned an empty content digest")
+	}
 	// Both claim surfaces must work: the owner-bound handle and the
 	// name-based Client call on the (single) node that holds the template.
 	child, err := tpl.New(t.Context())
 	if err != nil {
 		t.Fatalf("claim via template handle: %v", err)
+	}
+	if child.TemplateDigest != tpl.ContentDigest {
+		t.Errorf("claim template digest %q, want %q", child.TemplateDigest, tpl.ContentDigest)
 	}
 	if out, err := child.Exec(t.Context(), "echo", "tpl"); err != nil || out != "tpl\n" {
 		t.Errorf("exec on promoted claim: %q, %v", out, err)
@@ -134,6 +140,9 @@ func TestPromoteEndToEnd(t *testing.T) {
 	byName, nameErr := stack.client.New(t.Context(), "e2e-tpl:1")
 	if nameErr != nil {
 		t.Fatalf("claim promoted template by name: %v", nameErr)
+	}
+	if byName.TemplateDigest != tpl.ContentDigest {
+		t.Errorf("name claim template digest %q, want %q", byName.TemplateDigest, tpl.ContentDigest)
 	}
 	_ = byName.Close()
 

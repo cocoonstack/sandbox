@@ -143,11 +143,12 @@ defer sb.Close()
 
 `New` returns when the sandbox's silkd answers: a warm hit is milliseconds,
 a cold key can take the full boot. `Sandbox.ID`, `Sandbox.Deadline`, and
-`Sandbox.FromCheckpoint` (the lineage edge when branched) are exported,
-`Owner()` names the owning node, and `Token()` returns the per-sandbox
-bearer to persist with `ID` for a later `Lookup`; `Close()` releases the
-sandbox (releasing one already gone is not an error, and `Close` is bounded
-internally so it stays defer-friendly).
+`Sandbox.FromCheckpoint` (the lineage edge when branched) are exported.
+`Sandbox.TemplateDigest` is the exact content identity when the claim cloned a
+promoted template; it is empty for other sources. `Owner()` names the owning
+node, and `Token()` returns the per-sandbox bearer to persist with `ID` for a
+later `Lookup`; `Close()` releases the sandbox (releasing one already gone is
+not an error, and `Close` is bounded internally so it stays defer-friendly).
 
 ## Hibernating
 
@@ -190,6 +191,7 @@ client needs `WithAPIToken` — a sandbox handle alone cannot amplify.
 ```go
 tpl, err := sb.Promote(ctx, "myproj:v1")  // publish current state
 child, err := tpl.New(ctx)                // clones the promoted state
+fmt.Println(tpl.ContentDigest != "" && tpl.ContentDigest == child.TemplateDigest) // true
 err = tpl.Delete(ctx)                     // caller owns the lifecycle
 ```
 
@@ -197,7 +199,12 @@ err = tpl.Delete(ctx)                     // caller owns the lifecycle
 keyed by (name, the sandbox's network lane, its size). Claims clone on
 demand (~a golden-clone's latency); there is no warm pool for promoted
 templates unless the node's config adds one. Re-promoting to the same name
-replaces the template.
+replaces the template. `Template.ContentDigest` identifies the published
+export bytes; a claim from that exact generation carries the same value in
+`Sandbox.TemplateDigest`. A caller pinning a mutable template name can compare
+the claim's value with its expected digest and close/refuse a mismatch.
+Templates published by an older sandboxd have empty digests until they are
+re-promoted after the node is upgraded.
 
 **On the default local-disk backend templates live on one node**, and on a
 cluster the parent claim may have been redirected — the returned `Template`

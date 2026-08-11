@@ -765,6 +765,7 @@ type fakeEngine struct {
 
 	hibernates, restores, snapRemoves []string
 	snapSaves, exports, snapshots     []string
+	exportContent                     []byte
 	caInstalls                        []string // vsock sockets InstallCACert was called on
 	staleReconciles                   []string // VM names ReconcileStaleCreate was called on
 	installCAErr                      error
@@ -863,8 +864,15 @@ func (f *fakeEngine) SnapshotSave(_ context.Context, _, snapName string) error {
 func (f *fakeEngine) SnapshotExport(_ context.Context, snapName, toDir string) error {
 	f.mu.Lock()
 	f.exports = append(f.exports, snapName)
+	content := slices.Clone(f.exportContent)
 	f.mu.Unlock()
-	return os.MkdirAll(toDir, 0o750)
+	if err := os.MkdirAll(toDir, 0o750); err != nil {
+		return err
+	}
+	if content == nil {
+		return nil
+	}
+	return os.WriteFile(filepath.Join(toDir, "state.bin"), content, 0o600)
 }
 
 func (f *fakeEngine) SnapshotList(_ context.Context) ([]string, error) {

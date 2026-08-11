@@ -27,6 +27,13 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	for _, sb := range claims {
+		if sb.ArchiveCk != "" {
+			if markErr := m.markArchiveCk(sb.ArchiveCk); markErr != nil {
+				return fmt.Errorf("track archive checkpoint %s: %w", sb.ArchiveCk, markErr)
+			}
+		}
+	}
 	vms, err := m.eng.List(ctx)
 	if err != nil {
 		return fmt.Errorf("list vms: %w", err)
@@ -95,6 +102,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 
 	logger := log.WithFunc("pool.Reconcile")
 	m.reclaimOrphanArchiveCks(ctx, claims)
+	m.retryArchiveDeletes(ctx)
 	removed := m.sweepStaleVMs(ctx, live, owned)
 
 	// A hibernate snapshot no adopted claim references is an orphan;
@@ -268,7 +276,7 @@ func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string
 		if !mine || orig.ArchiveCk == ckpt.ID {
 			continue
 		}
-		if err := m.deleteCkLocked(ctx, ckpt.ID); err != nil {
+		if err := m.deleteArchiveCk(ctx, ckpt.ID); err != nil {
 			logger.Warnf(ctx, "reclaim %s: %v", ckpt.ID, err)
 		} else {
 			logger.Infof(ctx, "reclaimed orphan archive ck %s", ckpt.ID)

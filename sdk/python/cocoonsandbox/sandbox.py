@@ -25,13 +25,14 @@ class Sandbox:
     """One claimed microVM."""
 
     def __init__(self, client: Client, id: str, token: str, owner: str,
-                 deadline: str = "", from_checkpoint: str = ""):
+                 deadline: str = "", from_checkpoint: str = "", template_digest: str = ""):
         self._client = client
         self.id = id
         self.token = token
         self.owner = owner
         self.deadline = deadline
         self.from_checkpoint = from_checkpoint
+        self.template_digest = template_digest
 
     def __enter__(self) -> Sandbox:
         return self
@@ -241,7 +242,10 @@ class Sandbox:
         reply = self._client._post_json(self.owner, f"/v1/sandboxes/{self.id}/promote",
                                         {"token": self.token, "template": template}, "promote")
         key = reply["key"]
-        return Template(self._client, self.owner, key["template"], key.get("net", ""), key.get("size", ""))
+        return Template(
+            self._client, self.owner, key["template"], key.get("net", ""), key.get("size", ""),
+            reply.get("content_digest", ""),
+        )
 
     def start_lsp(self, language: str, root: str = "") -> Lsp:
         """Spawns the language server the flavor image provides for language;

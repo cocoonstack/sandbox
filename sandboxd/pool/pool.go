@@ -255,10 +255,11 @@ type Manager struct {
 	archiveDeleteDefault time.Duration
 	archiveEnabled       bool
 	archiveSweep         atomic.Bool
+	archiveDeleteSweep   atomic.Bool
 	// archiving holds ids with an archive() export in flight, so the reap tick
 	// and archive sweep don't both re-export the same sandbox; pendingCks pins
-	// checkpoint ids an archive is publishing before ArchiveCk can (a delete
-	// in that window would strand the claim). Both guarded by m.mu.
+	// checkpoint ids during archive publish and removal commits. Both guarded
+	// by m.mu.
 	archiving  map[string]struct{}
 	pendingCks map[string]struct{}
 	// egressListeners holds the per-sandbox egress proxy accept point, keyed by
@@ -473,9 +474,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	if err := m.adoptPersistedPools(ctx); err != nil {
 		return nil, err
 	}
-	if m.archiveEnabled && m.ckptTTL == 0 {
-		log.WithFunc("pool.NewManager").Warn(ctx, "archive enabled with checkpoint_ttl_hours=0: a checkpoint whose delete fails is not reclaimed")
-	}
 	return m, nil
 }
 
@@ -517,6 +515,7 @@ func (m *Manager) Run(ctx context.Context) {
 			m.reapOnce(ctx)
 			m.idleOnce(ctx)
 			m.archiveOnce(ctx)
+			go m.retryArchiveDeletes(ctx)
 		case <-ckptSweep:
 			m.sweepExpiredCheckpoints(ctx)
 		}

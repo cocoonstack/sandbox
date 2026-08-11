@@ -27,7 +27,10 @@ func TestClaimHappyPath(t *testing.T) {
 	mgr := &fakeManager{
 		claim: func(_ context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
 			gotKey, gotTTL = key, ttl
-			return &types.Sandbox{ID: "sb_1", Token: "tok", Deadline: time.Unix(42, 0).UTC()}, nil
+			return &types.Sandbox{
+				ID: "sb_1", Token: "tok", Deadline: time.Unix(42, 0).UTC(),
+				TemplateDigest: "sha256:claim-digest",
+			}, nil
 		},
 	}
 	ts := newTestServer(t, "", mgr, nil)
@@ -47,6 +50,9 @@ func TestClaimHappyPath(t *testing.T) {
 	}
 	if cr.ID != "sb_1" || cr.Token != "tok" || !cr.Deadline.Equal(time.Unix(42, 0)) {
 		t.Errorf("got %+v", cr)
+	}
+	if cr.TemplateDigest != "sha256:claim-digest" {
+		t.Errorf("template digest %q, want sha256:claim-digest", cr.TemplateDigest)
 	}
 	want := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineCH}
 	if gotKey != want {
@@ -562,6 +568,7 @@ func TestForkFlow(t *testing.T) {
 func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 	var gotKey types.PoolKey
 	mgr := &fakeManager{
+		promoteContentDigest: "sha256:promoted-digest",
 		promote: func(id, token, template string) error {
 			switch {
 			case token != "tok":
@@ -583,7 +590,7 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 	}
 	ts := newTestServer(t, "sekret", mgr, nil)
 
-	promote := func(auth, body string) int {
+	promote := func(auth, body string) (int, types.PromoteResponse) {
 		req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/promote", strings.NewReader(body))
 		if auth != "" {
 			req.Header.Set("Authorization", auth)
@@ -593,7 +600,13 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 			t.Fatalf("do: %v", err)
 		}
 		defer resp.Body.Close()
-		return resp.StatusCode
+		var result types.PromoteResponse
+		if resp.StatusCode == http.StatusOK {
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				t.Fatalf("decode promote response: %v", err)
+			}
+		}
+		return resp.StatusCode, result
 	}
 	for _, tt := range []struct {
 		name, auth, body string
@@ -606,8 +619,12 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 		{"missing api token", "", `{"token":"tok","template":"tpl:x"}`, http.StatusUnauthorized},
 	} {
 		t.Run("promote/"+tt.name, func(t *testing.T) {
-			if got := promote(tt.auth, tt.body); got != tt.want {
+			got, result := promote(tt.auth, tt.body)
+			if got != tt.want {
 				t.Errorf("status %d, want %d", got, tt.want)
+			}
+			if got == http.StatusOK && result.ContentDigest != "sha256:promoted-digest" {
+				t.Errorf("content digest %q, want sha256:promoted-digest", result.ContentDigest)
 			}
 		})
 	}
@@ -1391,16 +1408,17 @@ func credToken(cred pool.Cred) string {
 // the claim hook stands in for the provision result. Tenant-scoped methods
 // record the tenant they were handed in gotTenant.
 type fakeManager struct {
-	ckptDir       string
-	hasCheckpoint map[string]bool
-	claim         func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
-	release       func(id, token string) error
-	releaseOp     func(id string) error
-	socket        func(id, token string) (string, error)
-	hibernate     func(id, token string) error
-	wake          func(id, token string) error
-	fork          func(id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
-	promote       func(id, token, template string) error
+	ckptDir              string
+	hasCheckpoint        map[string]bool
+	claim                func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
+	release              func(id, token string) error
+	releaseOp            func(id string) error
+	socket               func(id, token string) (string, error)
+	hibernate            func(id, token string) error
+	wake                 func(id, token string) error
+	fork                 func(id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
+	promote              func(id, token, template string) error
+	promoteContentDigest string
 
 	deleteGolden func(key types.PoolKey) error
 	hasGolden    bool
@@ -1478,15 +1496,15 @@ func (f *fakeManager) Fork(_ context.Context, id string, cred pool.Cred, count i
 	return f.fork(id, credToken(cred), count, ttl)
 }
 
-func (f *fakeManager) Promote(_ context.Context, id string, cred pool.Cred, template, tenant string) (types.PoolKey, error) {
+func (f *fakeManager) Promote(_ context.Context, id string, cred pool.Cred, template, tenant string) (types.PoolKey, string, error) {
 	f.gotTenant = tenant
 	if f.promote == nil {
-		return types.PoolKey{}, pool.ErrUnknownSandbox
+		return types.PoolKey{}, "", pool.ErrUnknownSandbox
 	}
 	if err := f.promote(id, credToken(cred), template); err != nil {
-		return types.PoolKey{}, err
+		return types.PoolKey{}, "", err
 	}
-	return types.PoolKey{Template: template, Net: types.NetNone, Size: types.SizeSmall}, nil
+	return types.PoolKey{Template: template, Net: types.NetNone, Size: types.SizeSmall}, f.promoteContentDigest, nil
 }
 
 func (f *fakeManager) DeleteTemplate(_ context.Context, key types.PoolKey, tenant string) error {

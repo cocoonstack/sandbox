@@ -45,7 +45,9 @@ func TestNewSendsClaim(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Errorf("decode body: %v", err)
 		}
-		_ = json.NewEncoder(w).Encode(claimResponse{ID: "sb_1", Token: "tok", Deadline: time.Unix(42, 0)})
+		_ = json.NewEncoder(w).Encode(claimResponse{
+			ID: "sb_1", Token: "tok", Deadline: time.Unix(42, 0), TemplateDigest: "sha256:template",
+		})
 	}))
 	t.Cleanup(ts.Close)
 
@@ -64,6 +66,9 @@ func TestNewSendsClaim(t *testing.T) {
 	}
 	if sb.ID != "sb_1" || sb.token != "tok" {
 		t.Errorf("handle %+v", sb)
+	}
+	if sb.TemplateDigest != "sha256:template" {
+		t.Errorf("template digest %q, want sha256:template", sb.TemplateDigest)
 	}
 }
 

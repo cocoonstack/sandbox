@@ -67,15 +67,16 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	if err := m.overQuota(1, tenant); err != nil {
 		return nil, err
 	}
-	golden, release, err := m.resolveGolden(ctx, key)
+	golden, templateDigest, release, err := m.resolveGolden(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("resolve template: %w", err)
 	}
-	defer release()
 	sb, err := m.provision(ctx, key, golden)
+	release()
 	if err != nil {
 		return nil, err
 	}
+	sb.TemplateDigest = templateDigest
 	sb.Tenant = tenant
 	sb.ClaimRef = claimRef
 	out, err := m.finalize(ctx, sb, ttl)
@@ -161,12 +162,16 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	delete(m.claimed, id)
 	m.tenantDelta(sb.Tenant, -1)
 	snap, ck, vmName := sb.HibernateSnap, sb.ArchiveCk, sb.VMName
+	if ck != "" {
+		m.pendingCks[ck] = struct{}{}
+	}
 	js := m.store.snapshot(m.claimed)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
 		m.mu.Lock()
-		m.claimed[id] = sb // roll back so memory matches the still-durable claim; ck stays pinned
+		m.claimed[id] = sb // roll back so memory matches the still-durable claim; the restored claim re-pins ck
 		m.tenantDelta(sb.Tenant, 1)
+		delete(m.pendingCks, ck)
 		rb := m.store.snapshot(m.claimed)
 		m.mu.Unlock()
 		m.recommit(ctx, rb)
@@ -177,6 +182,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	ctx = context.WithoutCancel(ctx)
 	if ck != "" {
 		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
+		m.untrack(m.pendingCks, ck)
 	}
 	var err error
 	if vmName != "" && !m.removeOrRetry(ctx, vmName, id, "") {
@@ -312,6 +318,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		switch {
 		case sb.ArchiveCk != "":
 			expired = append(expired, victim{action: reapPurge, id: id, ck: sb.ArchiveCk, tenant: sb.Tenant, sb: sb})
+			m.pendingCks[sb.ArchiveCk] = struct{}{}
 			delete(m.claimed, id)
 			m.tenantDelta(sb.Tenant, -1)
 		case sb.HibernateSnap != "" && m.archiveEnabledFor(sb.Key):
@@ -344,6 +351,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				} else {
 					m.claimed[v.id] = v.sb // roll back so memory matches the still-durable claim
 					m.tenantDelta(v.tenant, 1)
+					delete(m.pendingCks, v.ck)
 				}
 			}
 			rb := m.store.snapshot(m.claimed)
@@ -361,6 +369,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		case reapPurge:
 			m.disarmEgress(v.id, true)
 			m.purgeArchiveCk(ctx, v.id, v.ck, v.tenant)
+			m.untrack(m.pendingCks, v.ck)
 			logger.Infof(ctx, "purged archived sandbox %s", v.id)
 		case reapArchive:
 			logSweepResult(ctx, logger, m.archive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
@@ -377,7 +386,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 // purgeArchiveCk deletes an archived claim's store checkpoint and records the
 // retention billing event; shared by Release and reapOnce's purge.
 func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
-	if err := m.deleteCkLocked(ctx, ck); err != nil {
+	if err := m.deleteArchiveCk(ctx, ck); err != nil {
 		log.WithFunc("pool.purgeArchiveCk").Warnf(ctx, "delete archive ck %s: %v", ck, err)
 	}
 	m.counters.archiveDeletes.Add(1)
