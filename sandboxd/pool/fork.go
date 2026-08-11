@@ -72,7 +72,7 @@ func (m *Manager) forkClones(ctx context.Context, sb *types.Sandbox, count int) 
 // forkSource decides and captures the fork source under the transition lock
 // (a racing hibernate cannot swap the snapshot out from under the fan-out),
 // returning the per-child provisioner and its cleanup.
-func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (func(string) (types.VMRecord, error), func(), error) {
+func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (vmProvisioner, func(), error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	if sb.HibernateSnap == "" {
