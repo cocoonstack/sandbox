@@ -102,7 +102,7 @@ sandboxd reads one JSON file (`-config`, default
 | `checkpoint_ttl_hours` | 0 (keep forever) | ages out checkpoints older than this; the sweep runs hourly and at startup. Explicit deletes never wait for it. Must be nonzero and match fleet-wide when `checkpoint_peer_heal` is on — it is the expiry eligibility point for a healed replica a delete broadcast missed, after which its next successful hourly sweep removes it; persistent sweep failure extends retention until one succeeds, so it is not a hard ceiling |
 | `checkpoint_peer_heal` | false | on a cluster, lets a node pull a checkpoint it lacks from a peer — found via a live probe, not gossip — rather than failing the branch; see [placement lifecycle](cluster.md#checkpoints-on-a-cluster). Three requirements, all enforced at config load: a nonempty `api_token` (the blob transfer between peers authenticates with it; without one the raw record stream would be open), `mesh.cluster_key` set (the pull presents the fleet `api_token` to an address learned from the peer probe, so the gossip layer carrying that address must itself be authenticated), and `checkpoint_ttl_hours` nonzero (a replica a delete broadcast missed becomes eligible for expiry after it, and its next successful hourly sweep removes it — so it is the finite eligibility point, not an exact ceiling). A shared checkpoint store (`checkpoint_store` kind `s3`) ignores this setting — every node already resolves every checkpoint directly, so there is nothing to heal |
 | `warm_max` (pool entry) | 0 (static) | turns on the demand-adaptive watermark for that pool: the warm target rises from `warm` toward `warm_max` while claims arrive faster than the measured provision lead covers, and decays back over ~a minute of silence |
-| `max_claims` | 0 (unlimited) | node-wide cap on live claims; claim/fork/branch requests beyond it answer 429 with the pool state unharmed (on a cluster, a non-volume claim is first redirected to a warm peer; volume claims never use warm candidates) |
+| `max_claims` | 0 (unlimited) | node-wide cap on live claims; claim/fork/branch requests beyond it answer 429 with the pool state unharmed (on a cluster, normal warm-candidate placement applies, with volume claims limited to candidates holding every requested volume) |
 | `audit_log` | false | append every relayed request frame's op + addressing fields (never payloads) to `<data_dir>/audit.jsonl`, size-rotated with one `.1` backup. Records are `{t, id, op}` plus whichever addressing fields the op carries (`argv`, `path`, `dest`, `from`, `to`, `url`, `session`, `port`); preview accesses record as op `preview_dial`. A request frame whose first line exceeds 4 KiB is skipped, never truncated |
 | `idle_hibernate_seconds` | 0 (off) | node-wide idle policy for unpooled claims (template/checkpoint claims): a claim with no data-plane connection for this long is hibernated; the next call wakes it transparently. Per-pool `idle_hibernate_seconds` (in a pool entry) does the same for that pool's claims — pooled keys ignore the node-wide value. Opt-in deliberately: a wake costs latency and the snapshot, so callers with their own idle logic must not pay twice |
 | `archive_after_seconds` | 0 (off) | tier below hibernation: a hibernated claim idle this long is checkpointed to the store and its local VM dropped, freeing the node entirely; the next call restores it transparently (a checkpoint restore's latency). Requires `idle_hibernate_seconds > 0` and must exceed it. Node-wide for unpooled keys; per-pool overrides for that pool |
@@ -146,13 +146,19 @@ A claim requests up to eight unique names and may set an absolute, clean custom
 mount for each; the default is `/volumes/<name>`. Mounts must stay outside the
 guest OS directories and cannot duplicate or nest within one claim. Volume
 mounts may shadow an existing populated guest directory for that claim's life.
-claims always provision a fresh Cloud Hypervisor VM, then attach each image as
-a read-only virtio disk and mount it before returning. They do not consume a
-warm VM or redirect to warm-capacity peers. Firecracker volume claims are
-rejected. If the entry node cannot serve every requested name it redirects once
-to a peer advertising their intersection. A promoted-template claim prefers a
-node advertising both resources; when a shared store has not yet made that
-capability visible in gossip, a volume holder self-verifies the template before
+
+A volume claim may consume an ordinary warm Cloud Hypervisor VM. sandboxd
+attaches after the warm pop or provision, polls `/sys/block/*/serial` for the
+attach name for up to 2 seconds, then mounts the device read-only before
+finalizing the claim. Both the Cloud Hypervisor attachment and the guest
+filesystem mount are read-only. Setup failure destroys the VM; a popped warm VM
+is refilled normally. Firecracker volume claims are rejected.
+
+Warm candidates retain their normal ranking, but a candidate for a volume
+claim must hold every requested image. If the entry node cannot serve them all,
+it redirects once to such a holder. A promoted-template claim prefers a node
+advertising both resources; when a shared store has not yet made that capability
+visible in gossip, a volume holder self-verifies the template before
 provisioning.
 
 An empty catalog `tenants` list allows every authenticated scope; a nonempty
@@ -167,8 +173,8 @@ operator-owned backing image. With `directio=off`, readers share the host page
 cache; use `directio=on` when cache interference matters.
 A dataset mounted into an egress-lane sandbox can be uploaded wherever that
 tenant's egress policy permits, so treat the ACL and egress policy as one access
-decision. Image replication, writable disks, detach, and refcounting remain out
-of scope.
+decision. Image replication, write-enabled dataset disks, detach, and
+refcounting remain out of scope.
 
 ### A fuller config
 
@@ -363,8 +369,10 @@ restart reconcile); set `BRIDGE=<dev>` to include the egress lane.
 
 To include the read-only volume proof, put a nonempty `volume-e2e.txt` in the
 filesystem image and run `VOLUME_IMAGE=/srv/datasets/imagenet.img
-scripts/sandboxd-e2e.sh`. On a node using prebuilt binaries, also set
-`VOLUME_SMOKE_BIN` beside `SANDBOXD_BIN`, `DEMO_BIN`, and `SMOKE_BIN`.
+scripts/sandboxd-e2e.sh`. The script verifies two concurrent mounts, read-only
+enforcement, warm-pool consumption, and an unchanged source checksum. On a node
+using prebuilt binaries, also set `VOLUME_SMOKE_BIN` beside `SANDBOXD_BIN`,
+`DEMO_BIN`, and `SMOKE_BIN`.
 
 ## Preview URLs
 

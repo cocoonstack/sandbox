@@ -161,6 +161,22 @@ func TestVolumeOwnersRequireEveryNameAndExcludeSelf(t *testing.T) {
 	}
 }
 
+func TestVolumeCandidatesRequireWarmAndEveryVolume(t *testing.T) {
+	m := newTestMesh(t, "a")
+	m.merge([]NodeState{
+		{NodeID: "both", Addr: "both:7777", Epoch: 1, Pools: map[string]int{"k": 2}, Volumes: []string{"dataset", "weights"}},
+		{NodeID: "partial", Addr: "partial:7777", Epoch: 1, Pools: map[string]int{"k": 3}, Volumes: []string{"dataset"}},
+		{NodeID: "cold", Addr: "cold:7777", Epoch: 1, Pools: map[string]int{"k": 0}, Volumes: []string{"dataset", "weights"}},
+	})
+
+	if got := m.VolumeCandidates("k", []string{"dataset", "weights"}); !slices.Equal(got, []string{"both:7777"}) {
+		t.Errorf("candidates=%v, want only warm full holder", got)
+	}
+	if got := m.VolumeCandidates("missing", []string{"dataset"}); got != nil {
+		t.Errorf("missing pool candidates=%v, want nil", got)
+	}
+}
+
 func TestTemplateVolumeOwnersUseTrueIntersection(t *testing.T) {
 	m := newTestMesh(t, "a")
 	m.merge([]NodeState{

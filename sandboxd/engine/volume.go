@@ -3,15 +3,18 @@ package engine
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 const (
-	volumeDevicePrefix = "/dev/disk/by-id/virtio-"
-	volumePollInterval = 100 * time.Millisecond
+	volumePollInterval = 10 * time.Millisecond
+	volumeProbeTimeout = 2 * time.Second
 	volumeSetupTimeout = 10 * time.Second
 )
 
@@ -40,18 +43,12 @@ func (e *Engine) DiskAttach(ctx context.Context, vmName string, spec VolumeSpec)
 	return err
 }
 
-// MountVolume settles and mounts a hot-attached disk read-only at mount.
+// MountVolume discovers and mounts a hot-attached disk read-only at mount.
 func (e *Engine) MountVolume(ctx context.Context, vsockSocket, name, mount string) error {
 	ctx, cancel := context.WithTimeout(ctx, volumeSetupTimeout)
 	defer cancel()
-	if err := e.silkdExec(ctx, vsockSocket, "udevadm", "trigger", "--action=add", "--subsystem-match=block"); err != nil {
-		return fmt.Errorf("trigger volume device %s: %w", name, err)
-	}
-	device := volumeDevicePrefix + name
-	if err := e.silkdExec(ctx, vsockSocket, "udevadm", "settle", "--timeout=5", "--exit-if-exists="+device); err != nil {
-		return fmt.Errorf("settle volume device %s: %w", name, err)
-	}
-	if err := e.waitForVolumeDevice(ctx, vsockSocket, device); err != nil {
+	device, err := e.waitForVolumeDevice(ctx, vsockSocket, name)
+	if err != nil {
 		return fmt.Errorf("wait for volume device %s: %w", name, err)
 	}
 	if err := e.silkdExec(ctx, vsockSocket, "mkdir", "-p", "--", mount); err != nil {
@@ -63,18 +60,49 @@ func (e *Engine) MountVolume(ctx context.Context, vsockSocket, name, mount strin
 	return nil
 }
 
-func (e *Engine) waitForVolumeDevice(ctx context.Context, vsockSocket, device string) error {
-	var lastErr error
+func (e *Engine) waitForVolumeDevice(ctx context.Context, vsockSocket, name string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, volumeProbeTimeout)
+	defer cancel()
+	ticker := time.NewTicker(volumePollInterval)
+	defer ticker.Stop()
 	for {
-		if lastErr = e.silkdExec(ctx, vsockSocket, "test", "-e", device); lastErr == nil {
-			return nil
+		device, found, err := e.findVolumeDevice(ctx, vsockSocket, name)
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			return "", err
+		}
+		if found {
+			return device, nil
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("%w (last: %v)", ctx.Err(), lastErr)
-		case <-time.After(volumePollInterval):
+			return "", ctx.Err()
+		case <-ticker.C:
 		}
 	}
+}
+
+func (e *Engine) findVolumeDevice(ctx context.Context, vsockSocket, name string) (string, bool, error) {
+	entries, err := e.silkdList(ctx, vsockSocket, "/sys/block")
+	if err != nil {
+		return "", false, err
+	}
+	for _, entry := range entries {
+		serial, err := e.silkdReadFile(ctx, vsockSocket, "/sys/block/"+entry.Name+"/serial")
+		var respErr *wire.ErrorResp
+		if errors.As(err, &respErr) && respErr.Kind == wire.KindNotFound {
+			continue
+		}
+		if err != nil {
+			return "", false, err
+		}
+		if strings.TrimSpace(string(serial)) == name {
+			return "/dev/" + entry.Name, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 func (e *Engine) diskAttachArgs(vmName string, spec VolumeSpec) ([]string, error) {

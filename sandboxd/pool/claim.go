@@ -25,10 +25,18 @@ const (
 // ErrNoWarm means the pool is empty (the caller may redirect or provision).
 // tenant attributes the claim; empty means the operator (root). claimRef is an
 // opaque caller reference recorded on the claim; empty means none.
-func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string) (*types.Sandbox, error) {
+func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
 	start := time.Now()
 	if err := m.validate(key); err != nil {
 		return nil, err
+	}
+	var volumeSpecs []resolvedVolume
+	if len(volumes) > 0 {
+		var err error
+		volumeSpecs, err = m.resolveVolumes(key, tenant, volumes)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := m.overQuota(1, tenant); err != nil {
 		return nil, err
@@ -47,6 +55,12 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 		return nil, ErrNoWarm
 	}
 	m.kickRefill()
+	if len(volumeSpecs) > 0 {
+		if err := m.applyVolumes(ctx, sb, volumeSpecs); err != nil {
+			m.destroy(ctx, sb.VMName)
+			return nil, err
+		}
+	}
 	sb.Tenant = tenant
 	sb.ClaimRef = claimRef
 	out, err := m.finalize(ctx, sb, ttl)

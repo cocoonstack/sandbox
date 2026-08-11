@@ -154,7 +154,8 @@ func TestLoadAcceptsVolumes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(cfg.Volumes) != 2 || cfg.Volumes[0].DirectIO != types.DirectIOOff || cfg.Volumes[1].DirectIO != types.DirectIOOn {
+	if len(cfg.Volumes) != 2 || cfg.Volumes[0].DirectIO != types.DirectIOOff ||
+		cfg.Volumes[1].DirectIO != types.DirectIOOn {
 		t.Errorf("volumes = %+v", cfg.Volumes)
 	}
 }

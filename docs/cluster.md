@@ -67,12 +67,13 @@ and access lists never leave the node. After config load the set appears on the
 next gossip tick; later image distribution or removal is detected the same way.
 The node epoch bumps only when the advertised name set changes.
 
-A volume claim always provisions, so it skips warm VMs and warm-count
-candidates even when the entry node is full. If the entry node cannot serve all
-requested names, it redirects once to a peer advertising their intersection. A
-promoted-template claim uses the intersection of template owners and volume
-owners first. If that advertised intersection is empty, a volume holder gets
-one chance to prove it can resolve the template from a shared store. The target
+A volume claim may consume an ordinary warm VM because attach happens after the
+pop and before finalization. Warm candidates retain their normal ranking, but a
+candidate must advertise every requested volume. If the entry node cannot serve
+all requested names, it redirects once to a peer advertising their intersection.
+A promoted-template claim uses the intersection of template owners and volume
+owners first. If that advertised intersection is empty, a volume holder gets one
+chance to prove it can resolve the template from a shared store. The target
 retries with `no_redirect` plus the carried `require_promoted` intent and
 validates both resources before provisioning, so a node-local template still
 fails without a second hop even while template gossip is one tick stale.

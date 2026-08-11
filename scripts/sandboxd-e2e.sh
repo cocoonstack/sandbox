@@ -26,7 +26,7 @@ if [[ -n $VOLUME_IMAGE ]]; then
     echo "VOLUME_DIRECTIO must be on, off, or auto"
     exit 1
   }
-  (( WARM > 0 )) || { echo "volume e2e needs WARM>0 for the ordinary warm-claim assertion"; exit 1; }
+  (( WARM >= 2 )) || { echo "volume e2e needs WARM>=2 for the concurrent warm-volume assertion"; exit 1; }
   VOLUME_CHECKSUM=$(sha256sum -- "$VOLUME_IMAGE" | awk '{print $1}')
 fi
 
@@ -159,15 +159,23 @@ echo "== v2 smoke: files/session/find/replace/watch/git/pty through the relay"
 "$DATA/smoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" ${BRIDGE:+-egress} ${LSP_TEMPLATE:+-lsp-template "$LSP_TEMPLATE"}
 
 if [[ -n $VOLUME_IMAGE ]]; then
-  echo "== read-only shared volume: two provisioned claims, different mounts"
+  echo "== volumes: two warm read-only claims, shared bytes, and EROFS"
+  for i in $(seq 1 30); do
+    if api info | jq -e 'all(.pools[]; .warm >= .target)' >/dev/null 2>&1; then
+      break
+    fi
+    [[ $i == 30 ]] && { echo "pool did not refill before volume smoke"; api info | jq . || true; exit 1; }
+    sleep 1
+  done
   warm_before=$(warm_claims)
   "$DATA/volumesmoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" \
     -volume "$VOLUME_NAME" -probe "$VOLUME_PROBE"
   warm_after=$(warm_claims)
-  [[ $warm_after -eq $warm_before ]] || {
-    echo "volume claims consumed the warm tier: before=$warm_before after=$warm_after"
+  [[ $warm_after -ge $((warm_before + 2)) ]] || {
+    echo "volume claims did not consume the two ready warm VMs: before=$warm_before after=$warm_after"
     exit 1
   }
+  echo "volume warm claim counter: $warm_before -> $warm_after"
   after_checksum=$(sha256sum -- "$VOLUME_IMAGE" | awk '{print $1}')
   [[ $after_checksum == "$VOLUME_CHECKSUM" ]] || {
     echo "volume backing image changed: before=$VOLUME_CHECKSUM after=$after_checksum"

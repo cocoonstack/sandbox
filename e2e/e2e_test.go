@@ -21,7 +21,7 @@ import (
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
-var testKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
+var testKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineCH}
 
 func TestEndToEnd(t *testing.T) {
 	stack := startStack(t, "node-token", config.PoolSpec{PoolKey: testKey, Warm: 1})
@@ -290,7 +290,12 @@ func TestVolumesEndToEnd(t *testing.T) {
 	}
 	stack := startTenantStack(t, "node-token", nil,
 		[]config.VolumeSpec{{Name: "dataset", Path: image, DirectIO: "off"}},
-		config.PoolSpec{PoolKey: testKey, Warm: 0})
+		config.PoolSpec{PoolKey: testKey, Warm: 1})
+	waitFor(t, func() bool {
+		infos, _ := stack.mgr.Info()
+		return len(infos) == 1 && infos[0].Warm >= 1
+	})
+	warmBefore := stack.mgr.Counters().ClaimsWarm
 
 	sb, err := stack.client.New(t.Context(), "rt:24.04",
 		sandbox.WithVolumes(sandbox.Volume{Name: "dataset", Mount: "/datasets/e2e"}))
@@ -300,6 +305,10 @@ func TestVolumesEndToEnd(t *testing.T) {
 	defer sb.Close()
 	if want := []sandbox.Volume{{Name: "dataset", Mount: "/datasets/e2e"}}; !slices.Equal(sb.Volumes, want) {
 		t.Errorf("claim volumes %+v, want %+v", sb.Volumes, want)
+	}
+	if counters := stack.mgr.Counters(); counters.ClaimsWarm != warmBefore+1 {
+		infos, _ := stack.mgr.Info()
+		t.Errorf("counters=%+v pools=%+v, want warm claims %d", counters, infos, warmBefore+1)
 	}
 
 	infos, err := stack.client.Volumes(t.Context())

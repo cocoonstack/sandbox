@@ -23,7 +23,10 @@ func TestClaimProvisionAppliesVolumesInOrder(t *testing.T) {
 		{Name: "weights", Path: second, DirectIO: "on"},
 	})
 	requested := []types.Volume{{Name: "weights", Mount: "/models"}, {Name: "imagenet"}}
-	wantApplied := []types.Volume{{Name: "weights", Mount: "/models"}, {Name: "imagenet", Mount: "/volumes/imagenet"}}
+	wantApplied := []types.Volume{
+		{Name: "weights", Mount: "/models"},
+		{Name: "imagenet", Mount: "/volumes/imagenet"},
+	}
 
 	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", requested)
 	if err != nil {
@@ -67,6 +70,56 @@ func TestClaimProvisionAppliesVolumesInOrder(t *testing.T) {
 	}
 }
 
+func TestClaimWarmAppliesVolumesAndRefillsAfterFailure(t *testing.T) {
+	path := writeVolumeImage(t, "data.img", "data")
+	for _, tt := range []struct {
+		name      string
+		mountErr  error
+		wantClaim bool
+	}{
+		{name: "success", wantClaim: true},
+		{name: "mount failure", mountErr: errors.New("mount failed")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			eng.mountVolumeErr = tt.mountErr
+			m := newVolumePoolManager(t, eng, t.TempDir(), []config.VolumeSpec{{Name: "data", Path: path}})
+			warm := &types.Sandbox{VMName: "sbx-warm", Key: testKey, VsockSocket: "/vsock/warm"}
+			m.pools[testKey].warm = append(m.pools[testKey].warm, warm)
+
+			sb, err := m.ClaimWarm(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "data"}})
+			if tt.wantClaim && err != nil {
+				t.Fatalf("ClaimWarm: %v", err)
+			}
+			if tt.wantClaim {
+				wantVolumes := []types.Volume{{Name: "data", Mount: "/volumes/data"}}
+				if sb.VMName != warm.VMName || !slices.Equal(sb.Volumes, wantVolumes) {
+					t.Errorf("sandbox=%+v, want warm VM with %v", sb, wantVolumes)
+				}
+			} else {
+				if err == nil {
+					t.Fatal("ClaimWarm succeeded")
+				}
+				if !eng.removed(warm.VMName) {
+					t.Errorf("removes=%v, want failed warm VM destroyed", eng.removedNames())
+				}
+			}
+			if len(eng.colds)+len(eng.clones) != 0 {
+				t.Errorf("warm claim provisioned colds=%v clones=%v", eng.colds, eng.clones)
+			}
+			wantOps := []string{"attach:data", "mount:data:/volumes/data"}
+			if !slices.Equal(eng.volumeOps, wantOps) {
+				t.Errorf("operations=%v, want %v", eng.volumeOps, wantOps)
+			}
+			select {
+			case <-m.refillKick:
+			default:
+				t.Error("warm pop did not request refill")
+			}
+		})
+	}
+}
+
 func TestClaimProvisionVolumeFailureDestroysVM(t *testing.T) {
 	path := writeVolumeImage(t, "data.img", "data")
 	for _, tt := range []struct {
@@ -90,7 +143,8 @@ func TestClaimProvisionVolumeFailureDestroysVM(t *testing.T) {
 				eng.diskAttachCancel = cancel
 			}
 
-			if _, err := m.ClaimProvision(ctx, testKey, 0, "", "", []types.Volume{{Name: "data"}}); err == nil {
+			_, err := m.ClaimProvision(ctx, testKey, 0, "", "", []types.Volume{{Name: "data"}})
+			if err == nil {
 				t.Fatal("ClaimProvision succeeded")
 			}
 			if len(eng.volumeOps) == 0 || eng.volumeOps[len(eng.volumeOps)-1] != tt.wantLast {
@@ -294,6 +348,7 @@ func TestVolumeClaimUsageAndScopedSummaries(t *testing.T) {
 	path := writeVolumeImage(t, "data.img", "data")
 	m := newVolumeManager(t, newFakeEngine(), []config.VolumeSpec{{Name: "data", Path: path}})
 	request := []types.Volume{{Name: "data", Mount: "/datasets"}}
+	wantApplied := []types.Volume{{Name: "data", Mount: "/datasets"}}
 	acme, err := m.ClaimProvision(t.Context(), testKey, 0, "acme", "", request)
 	if err != nil {
 		t.Fatalf("acme claim: %v", err)
@@ -303,13 +358,13 @@ func TestVolumeClaimUsageAndScopedSummaries(t *testing.T) {
 		t.Fatalf("beta claim: %v", betaErr)
 	}
 
-	if got := m.Sandboxes("acme"); len(got) != 1 || got[0].ID != acme.ID || !slices.Equal(got[0].Volumes, request) {
+	if got := m.Sandboxes("acme"); len(got) != 1 || got[0].ID != acme.ID || !slices.Equal(got[0].Volumes, wantApplied) {
 		t.Errorf("acme summaries=%+v, want only its volume claim", got)
 	}
 	if got := m.Sandboxes(""); len(got) != 2 {
 		t.Errorf("root summaries=%+v, want both claims", got)
 	}
-	if got, ok := m.Sandbox(acme.ID); !ok || !slices.Equal(got.Volumes, request) {
+	if got, ok := m.Sandbox(acme.ID); !ok || !slices.Equal(got.Volumes, wantApplied) {
 		t.Errorf("sandbox summary=%+v ok=%v, want applied volume", got, ok)
 	}
 
@@ -348,6 +403,19 @@ func TestClaimProvisionRejectsMissingVolumePathBeforeProvision(t *testing.T) {
 func newVolumeManager(t *testing.T, eng *fakeEngine, volumes []config.VolumeSpec) *Manager {
 	t.Helper()
 	m, err := NewManager(t.Context(), &config.Config{DataDir: t.TempDir(), Volumes: volumes}, eng, testSecrets(t))
+	if err != nil {
+		t.Fatalf("setup manager: %v", err)
+	}
+	return m
+}
+
+func newVolumePoolManager(t *testing.T, eng *fakeEngine, dataDir string, volumes []config.VolumeSpec) *Manager {
+	t.Helper()
+	m, err := NewManager(t.Context(), &config.Config{
+		DataDir: dataDir,
+		Pools:   []config.PoolSpec{{PoolKey: testKey, Warm: 1}},
+		Volumes: volumes,
+	}, eng, testSecrets(t))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}

@@ -52,7 +52,7 @@ func WithSize(s Size) Option {
 	return func(r *claimRequest) { r.Size = string(s) }
 }
 
-// WithVolumes requests read-only catalog volumes for a provisioned claim.
+// WithVolumes requests read-only catalog volumes for a claim.
 func WithVolumes(volumes ...Volume) Option {
 	volumes = slices.Clone(volumes)
 	return func(r *claimRequest) { r.Volumes = volumes }

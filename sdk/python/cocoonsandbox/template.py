@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import urllib.parse
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -21,7 +22,7 @@ class Template:
         self.size = size
         self.content_digest = content_digest
 
-    def new(self, ttl_seconds: int = 0, volumes: list[str | tuple[str, str]] | None = None) -> Sandbox:
+    def new(self, ttl_seconds: int = 0, volumes: list[str | Mapping[str, str]] | None = None) -> Sandbox:
         """Claims the template, following placement when volumes require it."""
         # Local import: a top-level one would close the client → sandbox →
         # template cycle.

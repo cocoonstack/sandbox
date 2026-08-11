@@ -87,21 +87,22 @@ sb = client.lookup(id, token)   # asks the entry node, then each mesh peer
 ```python
 sb = client.new("ghcr.io/cocoonstack/sandbox/rt:24.04",
                 net="egress", size="medium", ttl_seconds=600,
-                volumes=["imagenet", ("weights", "/models")])
+                volumes=["imagenet", {"name": "weights", "mount": "/models"}])
 ```
 
 | parameter | values | default | meaning |
 |---|---|---|---|
 | `net` | `"none"`, `"egress"` | `"none"` | Cloud Hypervisor network shape: `none` disables the NIC and uses vsock-only I/O; `egress` attaches a bridge/CNI NIC |
 | `size` | `"small"`, `"medium"`, `"large"`, `"xlarge"` | `"small"` | resource tier: 1cpu/512M, 2cpu/1G, 4cpu/4G, 4cpu/8G |
-| `volumes` | bare names or `(name, mount)` pairs | `None` | attach and mount up to eight unique read-only dataset disks; an omitted mount defaults to `/volumes/<name>`; accepted by `Client.new` and `Template.new` |
+| `volumes` | bare names or `{name, mount?}` mappings | `None` | attach and mount up to eight unique read-only dataset disks; an omitted mount defaults to `/volumes/<name>`; accepted by `Client.new` and `Template.new` |
 | `ttl_seconds` | int | server default 5m | sandbox TTL, server-capped at 24h. The node reaps the sandbox after the TTL even if the client vanishes |
 
 `new` returns when the sandbox's silkd answers: a warm hit is milliseconds,
-a cold key can take the full boot. A volume claim always provisions and returns
-only after every requested disk is mounted; `sb.volumes` contains dictionaries
-with the finalized name and effective mount. Custom mounts must be absolute and
-clean, stay outside the guest OS tree, and cannot duplicate or nest. The handle
+a cold key can take the full boot. A volume claim may consume an ordinary warm
+VM and returns only after every requested disk is mounted; `sb.volumes` contains
+dictionaries with the finalized name and effective mount. Custom mounts must be
+absolute and clean, stay outside the guest OS tree, and cannot duplicate or
+nest. The handle
 exposes `sb.id`, `sb.token`,
 `sb.owner`, `sb.deadline`, and `sb.from_checkpoint` (the lineage edge when
 branched). `sb.template_digest` is the exact content identity when the claim
@@ -111,7 +112,7 @@ an error — double-release and reap races stay silent).
 Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Checkpoint
 branches do not accept volumes in this version.
 
-The four caller-visible constraints are deliberate: volume claims never take a
+The caller-visible constraints are deliberate: volume claims may consume a
 warm VM, remain non-capturable, mount read-only, and require Cloud Hypervisor.
 
 `client.volumes()` returns the fleet entries this token may use:
@@ -123,10 +124,11 @@ for volume in client.volumes():
 ```
 
 Discovery returns the gossiped union and holder count; availability and size
-describe the connected node. Placement redirects to a node advertising every
-requested name. A promoted-template claim prefers a peer advertising both the
-template and every volume; when that intersection is empty, one volume holder
-may self-verify access to a shared template store before provisioning.
+describe the connected node. Warm candidates retain normal ranking, filtered to
+nodes advertising every requested name. A promoted-template claim prefers a
+peer advertising both the template and every volume; when that intersection is
+empty, one volume holder may self-verify access to a shared template store
+before provisioning.
 
 ## Hibernating
 

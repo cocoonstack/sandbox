@@ -57,3 +57,59 @@ func (e *Engine) dialSilkdSession(ctx context.Context, vsockSocket string) (*sil
 		stop: context.AfterFunc(ctx, func() { _ = conn.Close() }),
 	}, nil
 }
+
+func (e *Engine) silkdList(ctx context.Context, vsockSocket, path string) ([]wire.DirEntry, error) {
+	s, err := e.dialSilkdSession(ctx, vsockSocket)
+	if err != nil {
+		return nil, err
+	}
+	defer s.close()
+	if err := s.send(wire.FsList{Path: path}); err != nil {
+		return nil, err
+	}
+	var entries []wire.DirEntry
+	for {
+		frame, err := s.recv()
+		if err != nil {
+			return nil, err
+		}
+		switch resp := frame.(type) {
+		case *wire.Entries:
+			entries = append(entries, resp.Entries...)
+		case *wire.Done:
+			return entries, nil
+		case *wire.ErrorResp:
+			return nil, fmt.Errorf("silkd %w", resp)
+		default:
+			return nil, fmt.Errorf("unexpected silkd frame %q", resp.RespType())
+		}
+	}
+}
+
+func (e *Engine) silkdReadFile(ctx context.Context, vsockSocket, path string) ([]byte, error) {
+	s, err := e.dialSilkdSession(ctx, vsockSocket)
+	if err != nil {
+		return nil, err
+	}
+	defer s.close()
+	if err := s.send(wire.FsRead{Path: path}); err != nil {
+		return nil, err
+	}
+	var data []byte
+	for {
+		frame, err := s.recv()
+		if err != nil {
+			return nil, err
+		}
+		switch resp := frame.(type) {
+		case *wire.DataResp:
+			data = append(data, resp.Data...)
+		case *wire.Done:
+			return data, nil
+		case *wire.ErrorResp:
+			return nil, fmt.Errorf("silkd %w", resp)
+		default:
+			return nil, fmt.Errorf("unexpected silkd frame %q", resp.RespType())
+		}
+	}
+}

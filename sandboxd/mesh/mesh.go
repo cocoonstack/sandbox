@@ -162,38 +162,12 @@ func (m *Mesh) ConfigMismatches() int {
 // chosen power-of-two-choices to avoid herding every waiter onto one node.
 // Self is never a candidate — the caller has already missed locally.
 func (m *Mesh) Candidates(keyHash string) []string {
-	m.mu.Lock()
-	type cand struct {
-		addr string
-		warm int
-	}
-	var pool []cand
-	for id, st := range m.view {
-		if id == m.self.NodeID {
-			continue
-		}
-		if st.Pools[keyHash] > 0 {
-			pool = append(pool, cand{st.Addr, st.Pools[keyHash]})
-		}
-	}
-	m.mu.Unlock()
+	return m.warmCandidates(keyHash, func(NodeState) bool { return true })
+}
 
-	switch len(pool) {
-	case 0:
-		return nil
-	case 1:
-		return []string{pool[0].addr}
-	}
-	i := rand.IntN(len(pool))     //nolint:gosec // placement jitter, not crypto
-	j := rand.IntN(len(pool) - 1) //nolint:gosec // placement jitter, not crypto
-	if j >= i {
-		j++
-	}
-	a, b := pool[i], pool[j]
-	if b.warm > a.warm {
-		a, b = b, a
-	}
-	return []string{a.addr, b.addr}
+// VolumeCandidates returns warm peers that advertise every requested volume.
+func (m *Mesh) VolumeCandidates(keyHash string, names []string) []string {
+	return m.warmCandidates(keyHash, func(st NodeState) bool { return containsAll(st.Volumes, names) })
 }
 
 // TemplateOwners returns up to two peer addresses whose gossiped template
@@ -256,6 +230,41 @@ func (m *Mesh) PeerAddrs() []string {
 func (m *Mesh) Shutdown() error {
 	_ = m.ml.Leave(leaveTimeout)
 	return m.ml.Shutdown()
+}
+
+func (m *Mesh) warmCandidates(keyHash string, match func(NodeState) bool) []string {
+	m.mu.Lock()
+	type cand struct {
+		addr string
+		warm int
+	}
+	var pool []cand
+	for id, st := range m.view {
+		if id == m.self.NodeID {
+			continue
+		}
+		if st.Pools[keyHash] > 0 && match(st) {
+			pool = append(pool, cand{st.Addr, st.Pools[keyHash]})
+		}
+	}
+	m.mu.Unlock()
+
+	switch len(pool) {
+	case 0:
+		return nil
+	case 1:
+		return []string{pool[0].addr}
+	}
+	i := rand.IntN(len(pool))     //nolint:gosec // placement jitter, not crypto
+	j := rand.IntN(len(pool) - 1) //nolint:gosec // placement jitter, not crypto
+	if j >= i {
+		j++
+	}
+	a, b := pool[i], pool[j]
+	if b.warm > a.warm {
+		a, b = b, a
+	}
+	return []string{a.addr, b.addr}
 }
 
 func (m *Mesh) persistEpoch(epoch uint64) error {

@@ -35,7 +35,10 @@ func TestValidateVolumes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidateVolumes: %v", err)
 	}
-	want := []Volume{{Name: "dataset", Mount: "/volumes/dataset"}, {Name: "weights-1", Mount: "/models"}}
+	want := []Volume{
+		{Name: "dataset", Mount: "/volumes/dataset"},
+		{Name: "weights-1", Mount: "/models"},
+	}
 	if !slices.Equal(got, want) {
 		t.Errorf("volumes %v, want %v", got, want)
 	}

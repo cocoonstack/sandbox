@@ -1042,33 +1042,70 @@ func TestClaimProvisionsWhenNoCandidate(t *testing.T) {
 	}
 }
 
-func TestVolumeClaimProvisionsWithoutWarmCandidates(t *testing.T) {
-	mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
-		return &types.Sandbox{ID: "sb_volume", Token: "tok", Volumes: []types.Volume{{Name: "imagenet", Mount: "/volumes/imagenet"}}}, nil
-	}}
-	placer := &fakePlacer{addrs: []string{"warm-peer:7777"}}
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
-
-	resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"rt:24.04","volumes":[{"name":"imagenet"}]}`))
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	defer resp.Body.Close()
-	var cr types.ClaimResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+func TestVolumeClaimUsesWarmBeforeRedirectOrProvision(t *testing.T) {
 	wantVolumes := []types.Volume{{Name: "imagenet", Mount: "/volumes/imagenet"}}
-	if resp.StatusCode != http.StatusOK || cr.ID != "sb_volume" || !slices.Equal(cr.Volumes, wantVolumes) {
-		t.Errorf("status=%d response=%+v", resp.StatusCode, cr)
-	}
-	if mgr.warmCalls != 0 || mgr.provisionCalls != 1 || !slices.Equal(mgr.gotVolumes, wantVolumes) {
-		t.Errorf("warm=%d provision=%d volumes=%v", mgr.warmCalls, mgr.provisionCalls, mgr.gotVolumes)
-	}
-	if placer.candidateCalls != 0 {
-		t.Errorf("warm candidates consulted %d times", placer.candidateCalls)
+	for _, tt := range []struct {
+		name               string
+		warmHit            bool
+		volumeCandidates   []string
+		wantID             string
+		wantRedirect       []string
+		wantProvisionCalls int
+		wantCandidateCalls int
+	}{
+		{name: "local warm hit", warmHit: true, wantID: "sb_warm"},
+		{
+			name:             "warm miss redirects to volume-aware warm candidate",
+			volumeCandidates: []string{"warm-volume:7777"}, wantRedirect: []string{"warm-volume:7777"},
+			wantCandidateCalls: 1,
+		},
+		{
+			name: "warm miss without candidate provisions locally", wantID: "sb_provisioned",
+			wantProvisionCalls: 1, wantCandidateCalls: 1,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+				return &types.Sandbox{ID: "sb_provisioned", Token: "tok", Volumes: slices.Clone(wantVolumes)}, nil
+			}}
+			if tt.warmHit {
+				mgr.warmClaim = func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+					return &types.Sandbox{ID: "sb_warm", Token: "tok", Volumes: slices.Clone(wantVolumes)}, nil
+				}
+			}
+			placer := &fakePlacer{
+				addrs: []string{"wrong-general-candidate:7777"}, volumeCandidates: tt.volumeCandidates,
+			}
+			srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
+			ts := httptest.NewServer(srv.Handler())
+			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+			resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"rt:24.04","volumes":[{"name":"imagenet"}]}`))
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			defer resp.Body.Close()
+			var got types.ClaimResponse
+			if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if resp.StatusCode != http.StatusOK || got.ID != tt.wantID || !slices.Equal(got.Redirect, tt.wantRedirect) {
+				t.Errorf("status=%d response=%+v", resp.StatusCode, got)
+			}
+			if tt.wantID != "" && !slices.Equal(got.Volumes, wantVolumes) {
+				t.Errorf("volumes=%+v, want %+v", got.Volumes, wantVolumes)
+			}
+			if mgr.warmCalls != 1 || mgr.provisionCalls != tt.wantProvisionCalls ||
+				!slices.Equal(mgr.gotWarmVolumes, wantVolumes) {
+				t.Errorf("warm=%d warm volumes=%+v provision=%d", mgr.warmCalls, mgr.gotWarmVolumes, mgr.provisionCalls)
+			}
+			badCandidateNames := tt.wantCandidateCalls > 0 &&
+				!slices.Equal(placer.volumeCandidateNames, []string{"imagenet"})
+			if placer.candidateCalls != 0 || placer.volumeCandidateCalls != tt.wantCandidateCalls || badCandidateNames {
+				t.Errorf("candidates=%d volume candidates=%d names=%v",
+					placer.candidateCalls, placer.volumeCandidateCalls, placer.volumeCandidateNames)
+			}
+		})
 	}
 }
 
@@ -1085,19 +1122,24 @@ func TestVolumeClaimUsesVolumeAndTemplateIntersections(t *testing.T) {
 		wantStatus          int
 		wantVolumeCalls     int
 		wantTemplateCalls   int
+		wantWarmCalls       int
+		wantCandidateCalls  int
 		noRedirect          bool
 		requirePromoted     bool
 		wantPromoted        bool
 	}{
-		{name: "ordinary local volume provisions", localVolumes: true, wantStatus: http.StatusOK},
+		{
+			name: "ordinary local volume warm-misses then provisions", localVolumes: true,
+			wantStatus: http.StatusOK, wantWarmCalls: 1, wantCandidateCalls: 1,
+		},
 		{
 			name: "configured golden with remote volume uses volume owner", hasGolden: true,
 			volumeOwners: []string{"volume:7777"}, wantRedirect: "volume:7777",
-			wantStatus: http.StatusOK, wantVolumeCalls: 1,
+			wantStatus: http.StatusOK, wantVolumeCalls: 1, wantCandidateCalls: 1,
 		},
 		{
 			name:       "unknown fleet volume fails without provisioning",
-			wantStatus: http.StatusBadRequest, wantVolumeCalls: 1,
+			wantStatus: http.StatusBadRequest, wantVolumeCalls: 1, wantCandidateCalls: 1,
 		},
 		{
 			name:         "redirect target resolves locally without another hop",
@@ -1178,10 +1220,12 @@ func TestVolumeClaimUsesVolumeAndTemplateIntersections(t *testing.T) {
 			if mgr.gotRequirePromoted != (wantProvision == 1 && tt.wantPromoted) {
 				t.Errorf("promoted provision=%v", mgr.gotRequirePromoted)
 			}
-			if mgr.warmCalls != 0 || placer.candidateCalls != 0 ||
+			if mgr.warmCalls != tt.wantWarmCalls || placer.candidateCalls != 0 ||
+				placer.volumeCandidateCalls != tt.wantCandidateCalls ||
 				placer.volumeOwnerCalls != tt.wantVolumeCalls || placer.templateVolumeCalls != tt.wantTemplateCalls {
-				t.Errorf("warm=%d candidates=%d volume owners=%d template-volume owners=%d",
-					mgr.warmCalls, placer.candidateCalls, placer.volumeOwnerCalls, placer.templateVolumeCalls)
+				t.Errorf("warm=%d candidates=%d volume candidates=%d volume owners=%d template-volume owners=%d",
+					mgr.warmCalls, placer.candidateCalls, placer.volumeCandidateCalls,
+					placer.volumeOwnerCalls, placer.templateVolumeCalls)
 			}
 		})
 	}
@@ -1213,11 +1257,13 @@ func TestVolumeClaimValidatesKeyBeforePlacement(t *testing.T) {
 	}
 }
 
-func TestVolumeClaimQuotaDoesNotRedirectToWarmCandidate(t *testing.T) {
-	mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+func TestVolumeClaimQuotaDoesNotRedirect(t *testing.T) {
+	mgr := &fakeManager{warmClaim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
 		return nil, pool.ErrQuota
 	}}
-	placer := &fakePlacer{addrs: []string{"warm-peer:7777"}}
+	placer := &fakePlacer{
+		addrs: []string{"wrong-general-candidate:7777"}, volumeCandidates: []string{"wrong-volume-candidate:7777"},
+	}
 	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
@@ -1230,8 +1276,10 @@ func TestVolumeClaimQuotaDoesNotRedirectToWarmCandidate(t *testing.T) {
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Errorf("status=%d, want 429", resp.StatusCode)
 	}
-	if placer.candidateCalls != 0 {
-		t.Errorf("warm candidates consulted %d times", placer.candidateCalls)
+	if mgr.warmCalls != 1 || mgr.provisionCalls != 0 ||
+		placer.candidateCalls != 0 || placer.volumeCandidateCalls != 0 {
+		t.Errorf("warm=%d provision=%d candidates=%d volume candidates=%d",
+			mgr.warmCalls, mgr.provisionCalls, placer.candidateCalls, placer.volumeCandidateCalls)
 	}
 }
 
@@ -1739,14 +1787,14 @@ func credToken(cred pool.Cred) string {
 	return cred.Token
 }
 
-// fakeManager implements Manager with overridable behavior. ClaimWarm always
-// misses, so the server's warm-miss → redirect → provision path is exercised;
-// the claim hook stands in for the provision result. Tenant-scoped methods
-// record the tenant they were handed in gotTenant.
+// fakeManager implements Manager with overridable behavior. ClaimWarm misses
+// unless warmClaim is set; claim stands in for the provision result.
+// Tenant-scoped methods record the tenant they were handed in gotTenant.
 type fakeManager struct {
 	ckptDir              string
 	hasCheckpoint        map[string]bool
 	claim                func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
+	warmClaim            func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
 	release              func(id, token string) error
 	releaseOp            func(id string) error
 	socket               func(id, token string) (string, error)
@@ -1774,6 +1822,7 @@ type fakeManager struct {
 	gotTenant          string
 	gotClaimRef        string
 	gotVolumes         []types.Volume
+	gotWarmVolumes     []types.Volume
 	gotRequirePromoted bool
 	warmCalls          int
 	provisionCalls     int
@@ -1787,11 +1836,15 @@ type fakeManager struct {
 	draining           bool
 }
 
-func (f *fakeManager) ClaimWarm(_ context.Context, _ types.PoolKey, _ time.Duration, tenant, claimRef string) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
 	f.warmCalls++
 	f.gotTenant = tenant
 	f.gotClaimRef = claimRef
-	return nil, pool.ErrNoWarm
+	f.gotWarmVolumes = slices.Clone(volumes)
+	if f.warmClaim == nil {
+		return nil, pool.ErrNoWarm
+	}
+	return f.warmClaim(ctx, key, ttl)
 }
 
 func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
@@ -2004,10 +2057,13 @@ func (f *fakeDialer) DialSilkd(ctx context.Context, sock string) (net.Conn, erro
 type fakePlacer struct {
 	addrs                []string
 	owners               []string
+	volumeCandidates     []string
 	volumeOwners         []string
 	templateVolumeOwners []string
 	volumeHolders        map[string]int
 	candidateCalls       int
+	volumeCandidateCalls int
+	volumeCandidateNames []string
 	volumeOwnerCalls     int
 	templateVolumeCalls  int
 }
@@ -2015,6 +2071,12 @@ type fakePlacer struct {
 func (f *fakePlacer) Candidates(string) []string {
 	f.candidateCalls++
 	return f.addrs
+}
+
+func (f *fakePlacer) VolumeCandidates(_ string, names []string) []string {
+	f.volumeCandidateCalls++
+	f.volumeCandidateNames = slices.Clone(names)
+	return f.volumeCandidates
 }
 func (f *fakePlacer) TemplateOwners(string) []string { return f.owners }
 func (f *fakePlacer) VolumeOwners([]string) []string {
@@ -2089,7 +2151,7 @@ func fakeClaimProvision(f *fakeManager, ctx context.Context, key types.PoolKey, 
 	f.gotVolumes = slices.Clone(volumes)
 	f.gotRequirePromoted = requirePromoted
 	if f.claim == nil {
-		return &types.Sandbox{ID: "sb_1", Token: "tok"}, nil
+		return &types.Sandbox{ID: "sb_1", Token: "tok", Volumes: slices.Clone(volumes)}, nil
 	}
 	return f.claim(ctx, key, ttl)
 }

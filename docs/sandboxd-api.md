@@ -42,8 +42,8 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   a promoted template name if its gossip view is stale
 - `volumes` is an ordered list of at most eight unique catalog names. `mount`
   defaults to `/volumes/<name>`; a custom value must be absolute and clean,
-  outside the guest OS tree, unique, and non-nesting within the request. It
-  requires Cloud Hypervisor
+  outside the guest OS tree, unique, and non-nesting within the request. Volumes
+  are read-only and require Cloud Hypervisor
 
 Success:
 
@@ -63,10 +63,11 @@ A claim branched from a checkpoint (fork children included) additionally
 carries `"from_checkpoint": "ck_…"` — the lineage edge for reconstructing
 the checkpoint tree.
 
-`volumes` reports the names and effective mounts actually applied before
-finalization. Both the attached block device and filesystem mount are read-only.
-A custom mount may shadow an existing populated guest directory for the claim's
-life.
+`volumes` reports the names and effective mounts applied and persisted at
+finalization. sandboxd attaches each disk read-only, polls
+`/sys/block/*/serial` for its attach name for up to 2 seconds, and mounts the
+filesystem read-only before returning. A custom mount may shadow an existing
+populated guest directory for the claim's life.
 
 Redirects (mutually exclusive with the fields above) name peers to retry
 at — sent on a warm miss with warm peers, when the node lacks a golden for
@@ -82,25 +83,24 @@ Retry the same body (+`no_redirect: true`) at each candidate until one
 answers. Preserve `require_promoted: true` when the redirect carries it;
 ordinary redirects omit the field.
 
-Volume claims bypass warm VMs and warm-capacity candidates, including the
-node-quota redirect. A promoted-template volume claim first uses a node that
-advertises both resources. If none does, a volume holder may self-verify a
-shared template store; a `no_redirect` target validates both resources before
-provisioning. The redirect's `require_promoted` bit makes that validation
-independent of one-tick gossip lag. Redirect responses never carry `volumes`.
+A volume claim may consume an ordinary warm VM. Normal candidate ranking still
+applies, but every candidate must advertise all requested volumes. A
+promoted-template volume claim first uses a node that advertises both resources.
+If none does, a volume holder may self-verify a shared template store; a
+`no_redirect` target validates both resources before provisioning. The
+redirect's `require_promoted` bit makes that validation independent of one-tick
+gossip lag. Redirect responses never carry `volumes`.
 
 A tenant token claims the same way; the sandbox is stamped with the tenant
 name (attributed in the usage journal and counted against the tenant's
 `max_claims`). A catalog access list may restrict an entry to named tenants;
 an unknown and a forbidden volume return the same error text.
 
-Errors: 400 unknown template axis, invalid/duplicate volumes, or a volume
-that is unknown or forbidden (the latter two are deliberately indistinguishable),
-Firecracker with volumes, or bad body; 401 bad api token; 409 egress
-requested on a node without an egress attachment; 429 node at `max_claims`,
-the calling tenant at its own `max_claims`, or the node draining (a redirect
-to a warm peer is tried first only for non-volume claims); 500 provisioning
-failed.
+Errors: 400 unknown template axis, invalid/duplicate volumes, or a volume that
+is unknown or forbidden (the latter two are deliberately indistinguishable),
+Firecracker with volumes, or bad body; 401 bad api token; 409 egress requested
+on a node without an egress attachment; 429 node at `max_claims`, the calling
+tenant at its own `max_claims`, or the node draining; 500 provisioning failed.
 
 ## GET /v1/volumes
 

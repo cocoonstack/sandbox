@@ -11,6 +11,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Mapping
 
 from .checkpoint import Checkpoint
 from .errors import APIError
@@ -28,7 +29,7 @@ class Client:
         self.timeout = timeout
 
     def new(self, template: str, net: str = "", size: str = "", ttl_seconds: int = 0,
-            volumes: list[str | tuple[str, str]] | None = None) -> Sandbox:
+            volumes: list[str | Mapping[str, str]] | None = None) -> Sandbox:
         """Claims a sandbox; a warm hit is milliseconds. On a cluster a warm
         miss may redirect to a peer, followed transparently; if every
         candidate fails transiently, the claim falls back to the origin
@@ -162,7 +163,7 @@ class Client:
 
 
 def _claim_body(template: str, net: str, size: str, ttl_seconds: int,
-                volumes: list[str | tuple[str, str]] | None = None) -> dict:
+                volumes: list[str | Mapping[str, str]] | None = None) -> dict:
     claim = {"template": template}
     if net:
         claim["net"] = net
@@ -175,11 +176,14 @@ def _claim_body(template: str, net: str, size: str, ttl_seconds: int,
     return claim
 
 
-def _volume_body(volume: str | tuple[str, str]) -> dict:
+def _volume_body(volume: str | Mapping[str, str]) -> dict:
     if isinstance(volume, str):
         return {"name": volume}
-    name, mount = volume
-    return {"name": name, "mount": mount}
+    if not isinstance(volume, Mapping):
+        raise TypeError("volume must be a name string or mapping")
+    if set(volume) - {"name", "mount"}:
+        raise TypeError("volume mapping accepts only name and mount")
+    return dict(volume)
 
 
 def _template_query(template: str, net: str, size: str) -> dict:

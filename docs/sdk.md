@@ -146,10 +146,11 @@ defer sb.Close()
 | `WithTimeout(d)` | duration | server default 5m | sandbox TTL, rounded up to seconds, server-capped at 24h. The node reaps the sandbox after the TTL even if the client vanishes |
 
 `New` returns when the sandbox's silkd answers: a warm hit is milliseconds,
-a cold key can take the full boot. A volume claim always provisions and returns
-only after every requested disk is mounted; the finalized name/effective-mount
-entries are available in `Sandbox.Volumes`. Custom mounts must be absolute and
-clean, stay outside the guest OS tree, and cannot duplicate or nest.
+a cold key can take the full boot. A volume claim may consume an ordinary warm
+VM and returns only after every requested disk is mounted; the finalized name
+and effective mount are available in `Sandbox.Volumes`. Custom mounts must be
+absolute and clean, stay outside the guest OS tree, and cannot duplicate or
+nest.
 `Sandbox.ID`, `Sandbox.Deadline`, and
 `Sandbox.FromCheckpoint` (the lineage edge when branched) are exported.
 `Sandbox.TemplateDigest` is the exact content identity when the claim cloned a
@@ -161,7 +162,7 @@ Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Passing
 `WithVolumes` to `Checkpoint.New` returns a local error because checkpoint
 branches do not support volumes in this version.
 
-The four caller-visible constraints are deliberate: volume claims never take a
+The caller-visible constraints are deliberate: volume claims may consume a
 warm VM, remain non-capturable, mount read-only, and require Cloud Hypervisor.
 
 Discover the fleet entries this token may use before planning a claim:
@@ -174,10 +175,11 @@ for _, volume := range catalog {
 ```
 
 Discovery returns the gossiped union and holder count; availability and size
-describe the connected node. Placement redirects to a node advertising every
-requested name. A promoted-template claim prefers a peer advertising both the
-template and every volume; when that intersection is empty, one volume holder
-may self-verify access to a shared template store before provisioning.
+describe the connected node. Warm candidates retain normal ranking, filtered to
+nodes advertising every requested name. A promoted-template claim prefers a
+peer advertising both the template and every volume; when that intersection is
+empty, one volume holder may self-verify access to a shared template store
+before provisioning.
 
 ## Hibernating
 

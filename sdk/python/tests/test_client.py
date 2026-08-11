@@ -67,16 +67,31 @@ def test_claim_sends_volumes(node):
     def claim(body, path):
         seen.append(body)
         return 200, {"id": "sb_1", "token": "tok", "volumes": [
+            {"name": "imagenet", "mount": "/volumes/imagenet"},
             {"name": "weights-llama", "mount": "/models"},
         ]}
 
     FakeNode.routes[("POST", "/v1/claim")] = claim
-    sb = Client(node).new("rt:24.04", volumes=["imagenet", ("weights-llama", "/models")])
+    sb = Client(node).new("rt:24.04", volumes=[
+        "imagenet", {"name": "weights-llama", "mount": "/models"}])
     assert seen == [{"template": "rt:24.04", "volumes": [
         {"name": "imagenet"},
         {"name": "weights-llama", "mount": "/models"},
     ]}]
-    assert sb.volumes == [{"name": "weights-llama", "mount": "/models"}]
+    assert sb.volumes == [
+        {"name": "imagenet", "mount": "/volumes/imagenet"},
+        {"name": "weights-llama", "mount": "/models"},
+    ]
+
+
+def test_claim_rejects_legacy_volume_tuple(node):
+    with pytest.raises(TypeError, match="name string or mapping"):
+        Client(node).new("rt:24.04", volumes=[("imagenet", "/datasets/imagenet")])
+
+
+def test_claim_rejects_volume_mode(node):
+    with pytest.raises(TypeError, match="only name and mount"):
+        Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "mode": "rw"}])
 
 
 def test_template_claim_sends_volumes(node):
@@ -90,7 +105,7 @@ def test_template_claim_sends_volumes(node):
 
     FakeNode.routes[("POST", "/v1/claim")] = claim
     sb = Template(Client(node), node, "task:v1", "none", "small").new(
-        volumes=[("imagenet", "/datasets/imagenet")])
+        volumes=[{"name": "imagenet", "mount": "/datasets/imagenet"}])
     assert seen == [{
         "template": "task:v1",
         "net": "none",
@@ -111,7 +126,7 @@ def test_template_volume_claim_follows_redirect(node):
 
     FakeNode.routes[("POST", "/v1/claim")] = claim
     sb = Template(Client(node), node, "task:v1", "none", "small").new(
-        volumes=[("imagenet", "/datasets/imagenet")])
+        volumes=[{"name": "imagenet", "mount": "/datasets/imagenet"}])
     assert "no_redirect" not in seen[0]
     assert seen[1]["no_redirect"] is True
     assert seen[1]["require_promoted"] is True
@@ -155,7 +170,7 @@ def test_claim_follows_redirect_with_no_redirect(node):
         return 200, {"id": "sb_2", "token": "tok"}
 
     FakeNode.routes[("POST", "/v1/claim")] = claim
-    volumes = [("imagenet", "/datasets/imagenet")]
+    volumes = [{"name": "imagenet", "mount": "/datasets/imagenet"}]
     sb = Client(node).new("rt:24.04", volumes=volumes)
     assert sb.id == "sb_2"
     assert "no_redirect" not in seen[0]

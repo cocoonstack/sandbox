@@ -61,7 +61,7 @@ var poolErrHTTP = []struct {
 // parameters attribute created resources and scope listings/deletes; empty
 // means the operator (root) — unquotaed, unfiltered.
 type Manager interface {
-	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string) (*types.Sandbox, error)
+	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error)
 	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error)
 	ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error)
 	Release(ctx context.Context, id string, cred pool.Cred) error
@@ -106,6 +106,7 @@ type Dialer interface {
 // nil on a single-node deployment (no mesh).
 type Placer interface {
 	Candidates(keyHash string) []string
+	VolumeCandidates(keyHash string, names []string) []string
 	TemplateOwners(keyHash string) []string
 	VolumeOwners(names []string) []string
 	TemplateVolumeOwners(keyHash string, names []string) []string
@@ -243,7 +244,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	// peer that reports a warm sandbox gets the claim via redirect (data plane
 	// must be direct, so redirect beats proxy); only if no peer has one does
 	// this node provision (golden clone or cold boot).
-	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef)
+	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef, nil)
 	if errors.Is(err, pool.ErrNoWarm) {
 		if s.redirectClaim(r.Context(), w, req, key, hash) {
 			return
@@ -283,7 +284,13 @@ func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req t
 	if req.RequirePromoted {
 		sb, err = s.mgr.ClaimProvisionPromoted(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Volumes)
 	} else {
-		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Volumes)
+		sb, err = s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Volumes)
+		if errors.Is(err, pool.ErrNoWarm) {
+			if s.placer != nil && !req.NoRedirect && writeRedirect(w, s.placer.VolumeCandidates(hash, types.VolumeNames(req.Volumes))) {
+				return
+			}
+			sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Volumes)
+		}
 	}
 	writeResult(w, r, "claim", hash, "provisioning failed", err, func() {
 		writeJSON(w, http.StatusOK, s.claimResponse(sb))
@@ -331,7 +338,10 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 			owners = s.placer.VolumeOwners(names)
 		}
 	} else {
-		owners = s.placer.VolumeOwners(names)
+		owners = s.placer.VolumeCandidates(hash, names)
+		if len(owners) == 0 {
+			owners = s.placer.VolumeOwners(names)
+		}
 	}
 	if len(owners) == 0 {
 		return false, pool.ErrVolumeUnavailable
