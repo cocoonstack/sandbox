@@ -62,6 +62,9 @@ type Store interface {
 	Delete(ctx context.Context, id string) error
 	// SweepStaging removes abandoned staging left by a crash mid-publish.
 	SweepStaging() error
+	// SweepGenerations runs backend-specific generation retention without
+	// disturbing staging or active fetch caches.
+	SweepGenerations() error
 }
 
 // CheckpointID, TemplateID, and TemplateHash are the one home for the

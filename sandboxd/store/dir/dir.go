@@ -4,9 +4,11 @@
 package dir
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -22,9 +24,7 @@ const (
 	oldSuffix = ".old" // pre-generation crash artifacts, reclaimed at Delete
 
 	// generationGrace bounds the shared-mount race where another node is
-	// still cloning a generation it resolved just before a re-publish:
-	// nothing superseded more recently than this is reclaimed, and "startup"
-	// is per-node, never a cluster-wide quiesce point.
+	// still cloning a generation it resolved just before a re-publish.
 	generationGrace = time.Hour
 )
 
@@ -51,32 +51,49 @@ func (d *Store) Stage(id string) (string, error) {
 	return os.MkdirTemp(d.root, id+"-*.tmp")
 }
 
-// Publish installs the staged export as an immutable generation named by the
-// meta hash, then commits by renaming the meta into place. The previous
-// generation stays on disk for in-flight readers; the pre-install sweep
-// reclaims any superseded past the grace, so re-promotes never accumulate.
+// Publish makes the generation fresh before its install, refreshes the
+// outgoing generation at supersession, and commits by renaming meta.json.
 func (d *Store) Publish(_ context.Context, staging, id string) error {
 	metaRaw, err := os.ReadFile(filepath.Join(staging, store.MetaFile)) //nolint:gosec // our own staging dir
 	if err != nil {
 		return fmt.Errorf("staging has no %s: %w", store.MetaFile, err)
 	}
 	final := filepath.Join(d.root, id)
-	// Best-effort, and strictly before MkdirAll and the install: it may drop
-	// crash residue wholesale, and must never see the new generation.
-	_ = d.sweepGenerations(id)
 	if err := os.MkdirAll(final, 0o750); err != nil {
 		return err
 	}
 	genDir := filepath.Join(final, store.ExportGen(metaRaw))
-	// An existing generation dir is a retried publish of identical meta
-	// bytes — the install already happened, only the commit is left.
-	switch _, statErr := os.Stat(genDir); { //nolint:gosec // G703: id pinned by the instance idRe before any call
+	now := time.Now()
+	genInfo, statErr := os.Stat(genDir) //nolint:gosec // G703: id pinned by the instance idRe before any call
+	switch {
 	case errors.Is(statErr, fs.ErrNotExist):
-		if err := os.Rename(filepath.Join(staging, store.ExportDir), genDir); err != nil { //nolint:gosec // G703: our own staging dir
+		stagedExport := filepath.Join(staging, store.ExportDir)
+		// Make the generation fresh before a peer can observe it without committed meta.
+		if err := os.Chtimes(stagedExport, now, now); err != nil { //nolint:gosec // our own staging dir
+			return err
+		}
+		if err := os.Rename(stagedExport, genDir); err != nil { //nolint:gosec // G703: our own staging dir
 			return err
 		}
 	case statErr != nil:
 		return statErr
+	default:
+		currentMeta, readErr := os.ReadFile(filepath.Join(final, store.MetaFile)) //nolint:gosec // fixed path under our root
+		if readErr == nil && bytes.Equal(currentMeta, metaRaw) {
+			_ = d.sweepGenerations(id)
+			return os.RemoveAll(staging)
+		}
+		if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
+			return readErr
+		}
+		// A sweep may already have selected an expired path for removal.
+		if time.Since(genInfo.ModTime()) >= generationGrace {
+			return fmt.Errorf("generation %s expired before commit; retry after sweep", filepath.Base(genDir))
+		}
+	}
+	// Age the previous current generation from supersession, not publication.
+	if err := touchCurrentGeneration(final, now); err != nil {
+		return err
 	}
 	tmp := filepath.Join(final, store.MetaFile+".tmp")
 	if err := os.WriteFile(tmp, metaRaw, 0o600); err != nil { //nolint:gosec // fixed path under our root
@@ -85,6 +102,7 @@ func (d *Store) Publish(_ context.Context, staging, id string) error {
 	if err := os.Rename(tmp, filepath.Join(final, store.MetaFile)); err != nil {
 		return err
 	}
+	_ = d.sweepGenerations(id) // later publishes and startups retry a failed sweep
 	return os.RemoveAll(staging)
 }
 
@@ -165,8 +183,7 @@ func (d *Store) Delete(_ context.Context, id string) error {
 	return errors.Join(os.RemoveAll(final), os.RemoveAll(final+oldSuffix))
 }
 
-// SweepStaging clears crashed staging and every record's long-superseded
-// generations.
+// SweepStaging clears crashed staging and delegates generation retention.
 func (d *Store) SweepStaging() error {
 	entries, err := os.ReadDir(d.root)
 	if err != nil {
@@ -175,42 +192,62 @@ func (d *Store) SweepStaging() error {
 	// ReadDir + suffix, not Glob: the root path may hold glob
 	// metacharacters.
 	for _, e := range entries {
-		name := e.Name()
-		switch {
-		case strings.HasSuffix(name, ".tmp"):
-			if err := os.RemoveAll(filepath.Join(d.root, name)); err != nil {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			if err := os.RemoveAll(filepath.Join(d.root, e.Name())); err != nil {
 				return err
 			}
-		case e.IsDir() && d.idRe.MatchString(name):
-			if err := d.sweepGenerations(name); err != nil {
-				return err
-			}
+		}
+	}
+	return d.SweepGenerations()
+}
+
+// SweepGenerations reclaims expired record generations without touching staging.
+func (d *Store) SweepGenerations() error {
+	entries, err := os.ReadDir(d.root)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !d.idRe.MatchString(e.Name()) {
+			continue
+		}
+		if err := d.sweepGenerations(e.Name()); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// sweepGenerations reclaims a record's superseded generations. The current
-// meta's mtime is the supersession time of every non-current generation, so
-// nothing goes until the last publish is at least generationGrace old — a
-// reader that resolved older metadata has had the whole grace to finish its
-// clone. An uncommitted record (no meta) past the grace is crash residue.
-func (d *Store) sweepGenerations(id string) error {
+// sweepGenerations reclaims only entries whose own install or supersession
+// time is outside the grace. Without committed meta it never removes the
+// record directory, so a peer publishing into the same path remains safe.
+func (d *Store) sweepGenerations(id string) (err error) {
 	final := filepath.Join(d.root, id)
-	fi, err := os.Stat(filepath.Join(final, store.MetaFile))
+	metaFile, err := os.Open(filepath.Join(final, store.MetaFile)) //nolint:gosec // id pinned by the instance idRe
 	if errors.Is(err, fs.ErrNotExist) {
-		if dirFi, dirErr := os.Stat(final); dirErr == nil && time.Since(dirFi.ModTime()) >= generationGrace {
-			return os.RemoveAll(final)
+		entries, readErr := os.ReadDir(final)
+		if errors.Is(readErr, fs.ErrNotExist) {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
+		for _, e := range entries {
+			if !strings.HasPrefix(e.Name(), store.ExportDir+"-") {
+				continue
+			}
+			if removeErr := removeAgedEntry(final, e); removeErr != nil {
+				return removeErr
+			}
 		}
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if time.Since(fi.ModTime()) < generationGrace {
-		return nil
-	}
-	meta, err := os.ReadFile(filepath.Join(final, store.MetaFile)) //nolint:gosec // id pinned by the instance idRe
+	defer func() { err = errors.Join(err, metaFile.Close()) }()
+	// The open file pins one inode across a concurrent meta rename.
+	meta, err := io.ReadAll(metaFile)
 	if err != nil {
 		return err
 	}
@@ -228,9 +265,44 @@ func (d *Store) sweepGenerations(id string) error {
 		if name == store.ExportDir && !hasCurrent {
 			continue // the legacy flat layout still backs the current meta
 		}
-		if err := os.RemoveAll(filepath.Join(final, name)); err != nil {
-			return err
+		if removeErr := removeAgedEntry(final, e); removeErr != nil {
+			return removeErr
 		}
 	}
 	return nil
+}
+
+func touchCurrentGeneration(final string, now time.Time) error {
+	meta, err := os.ReadFile(filepath.Join(final, store.MetaFile)) //nolint:gosec // fixed path under our root
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	current := filepath.Join(final, store.ExportGen(meta))
+	err = os.Chtimes(current, now, now) //nolint:gosec // current is a hash-derived name under our root
+	if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	err = os.Chtimes(filepath.Join(final, store.ExportDir), now, now)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+func removeAgedEntry(final string, entry fs.DirEntry) error {
+	info, err := entry.Info()
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	// Publish refreshes a generation before it becomes visible or superseded.
+	if time.Since(info.ModTime()) < generationGrace {
+		return nil
+	}
+	return os.RemoveAll(filepath.Join(final, entry.Name()))
 }

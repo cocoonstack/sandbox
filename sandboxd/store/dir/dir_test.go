@@ -34,6 +34,8 @@ func TestFetchPinsGenerationAcrossStoreInstances(t *testing.T) {
 		t.Fatalf("new writer: %v", err)
 	}
 	mustPublish(t, writer, id, "first")
+	backdate(t, filepath.Join(root, id, store.ExportGen([]byte(metaJSON("first")))))
+	backdate(t, filepath.Join(root, id, store.MetaFile))
 
 	dir, meta, release, err := reader.Fetch(t.Context(), id)
 	if err != nil {
@@ -58,18 +60,61 @@ func TestFetchPinsGenerationAcrossStoreInstances(t *testing.T) {
 	}
 }
 
-// TestPublishRetriesIntoInstalledGeneration: a crash between the generation
-// install and the meta commit leaves the generation dir in place; retrying
-// the publish with identical meta bytes must converge, not fail on the rename.
-func TestPublishRetriesIntoInstalledGeneration(t *testing.T) {
+// TestPublishRetriesAfterExpiredInstall: an expired uncommitted generation is
+// never revived; GC then retry converges, and the committed retry is idempotent.
+func TestPublishRetriesAfterExpiredInstall(t *testing.T) {
 	const id = "ck_00000000000000aa"
-	st, err := New(t.TempDir(), store.CheckpointIDRe)
+	root := t.TempDir()
+	st, err := New(root, store.CheckpointIDRe)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	mustPublish(t, st, id, "same")
-	mustPublish(t, st, id, "same")
+	staging, err := st.Stage(id)
+	if err != nil {
+		t.Fatalf("stage installed generation: %v", err)
+	}
+	seedRecord(t, staging, "same")
+	meta, err := os.ReadFile(filepath.Join(staging, store.MetaFile))
+	if err != nil {
+		t.Fatalf("read staged meta: %v", err)
+	}
+	final := filepath.Join(root, id)
+	if mkdirErr := os.MkdirAll(final, 0o750); mkdirErr != nil {
+		t.Fatalf("create record dir: %v", mkdirErr)
+	}
+	gen := filepath.Join(final, store.ExportGen(meta))
+	if renameErr := os.Rename(filepath.Join(staging, store.ExportDir), gen); renameErr != nil {
+		t.Fatalf("install generation: %v", renameErr)
+	}
+	if removeErr := os.RemoveAll(staging); removeErr != nil {
+		t.Fatalf("remove crashed staging: %v", removeErr)
+	}
+	backdate(t, gen)
 
+	retry, err := st.Stage(id)
+	if err != nil {
+		t.Fatalf("stage retry: %v", err)
+	}
+	seedRecord(t, retry, "same")
+	if publishErr := st.Publish(t.Context(), retry, id); publishErr == nil {
+		t.Fatal("expired installed generation was revived")
+	}
+	if removeErr := os.RemoveAll(retry); removeErr != nil {
+		t.Fatalf("remove failed retry: %v", removeErr)
+	}
+	if _, readErr := st.ReadMeta(t.Context(), id); !errors.Is(readErr, store.ErrNotFound) {
+		t.Fatalf("expired retry committed meta: %v", readErr)
+	}
+	if sweepErr := st.SweepGenerations(); sweepErr != nil {
+		t.Fatalf("sweep expired generation: %v", sweepErr)
+	}
+	if _, statErr := os.Stat(gen); !os.IsNotExist(statErr) {
+		t.Fatalf("expired generation survived sweep: %v", statErr)
+	}
+
+	mustPublish(t, st, id, "same")
+	backdate(t, gen)
+	mustPublish(t, st, id, "same")
 	dir, _, release, err := st.Fetch(t.Context(), id)
 	if err != nil {
 		t.Fatalf("fetch after retried publish: %v", err)
@@ -112,10 +157,9 @@ func TestFetchLegacyFlatLayout(t *testing.T) {
 	}
 }
 
-// TestSweepReclaimsSupersededGenerations: a superseded generation survives
-// while the last publish is inside the grace, and is reclaimed once the
-// current meta is older than the grace.
-func TestSweepReclaimsSupersededGenerations(t *testing.T) {
+// TestPublishSweepsGenerationsBySupersessionAge: rolling re-promotes reclaim
+// generations outside their own grace without disturbing newer generations.
+func TestPublishSweepsGenerationsBySupersessionAge(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	root := t.TempDir()
 	st, err := New(root, store.CheckpointIDRe)
@@ -123,29 +167,30 @@ func TestSweepReclaimsSupersededGenerations(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	gen1 := filepath.Join(root, id, store.ExportGen([]byte(metaJSON("first"))))
+	gen2 := filepath.Join(root, id, store.ExportGen([]byte(metaJSON("second"))))
 	mustPublish(t, st, id, "first")
 	mustPublish(t, st, id, "second")
-
-	if sweepErr := st.SweepStaging(); sweepErr != nil {
-		t.Fatalf("sweep inside grace: %v", sweepErr)
-	}
+	mustPublish(t, st, id, "third")
 	if _, statErr := os.Stat(gen1); statErr != nil {
 		t.Fatalf("superseded generation reclaimed inside the grace: %v", statErr)
 	}
 
-	backdate(t, filepath.Join(root, id, store.MetaFile))
-	if sweepErr := st.SweepStaging(); sweepErr != nil {
-		t.Fatalf("sweep past grace: %v", sweepErr)
-	}
+	setAge(t, gen1, generationGrace+time.Minute)
+	setAge(t, gen2, generationGrace/2)
+	setAge(t, filepath.Join(root, id, store.MetaFile), generationGrace/2)
+	mustPublish(t, st, id, "fourth")
 	if _, statErr := os.Stat(gen1); !os.IsNotExist(statErr) {
-		t.Fatalf("superseded generation survived the graced sweep: %v", statErr)
+		t.Fatalf("generation past its supersession grace survived publish: %v", statErr)
+	}
+	if _, statErr := os.Stat(gen2); statErr != nil {
+		t.Fatalf("generation inside its supersession grace was reclaimed: %v", statErr)
 	}
 	dir, meta, release, err := st.Fetch(t.Context(), id)
 	if err != nil {
 		t.Fatalf("fetch after sweep: %v", err)
 	}
 	defer release()
-	if string(meta) != metaJSON("second") {
+	if string(meta) != metaJSON("fourth") {
 		t.Fatalf("fetch meta %q, want the current generation", meta)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "disk.img")); err != nil {
@@ -153,9 +198,64 @@ func TestSweepReclaimsSupersededGenerations(t *testing.T) {
 	}
 }
 
+// TestSweepSparesPublishingGeneration: a peer sweep cannot delete a fresh
+// generation between its install and meta commit.
+func TestSweepSparesPublishingGeneration(t *testing.T) {
+	const id = "ck_00000000000000aa"
+	root := t.TempDir()
+	sweeper, err := New(root, store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("new sweeper: %v", err)
+	}
+	writer, err := New(root, store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	mustPublish(t, writer, id, "old")
+	backdate(t, filepath.Join(root, id, store.MetaFile))
+
+	staging, err := writer.Stage(id)
+	if err != nil {
+		t.Fatalf("stage new generation: %v", err)
+	}
+	seedRecord(t, staging, "new")
+	meta, err := os.ReadFile(filepath.Join(staging, store.MetaFile))
+	if err != nil {
+		t.Fatalf("read staged meta: %v", err)
+	}
+	gen := filepath.Join(root, id, store.ExportGen(meta))
+	if renameErr := os.Rename(filepath.Join(staging, store.ExportDir), gen); renameErr != nil {
+		t.Fatalf("install generation: %v", renameErr)
+	}
+	if sweepErr := sweeper.SweepStaging(); sweepErr != nil {
+		t.Fatalf("sweep during publish: %v", sweepErr)
+	}
+	if _, statErr := os.Stat(gen); statErr != nil {
+		t.Fatalf("publishing generation was swept: %v", statErr)
+	}
+
+	tmp := filepath.Join(root, id, store.MetaFile+".tmp")
+	if writeErr := os.WriteFile(tmp, meta, 0o600); writeErr != nil {
+		t.Fatalf("write commit: %v", writeErr)
+	}
+	if renameErr := os.Rename(tmp, filepath.Join(root, id, store.MetaFile)); renameErr != nil {
+		t.Fatalf("commit meta: %v", renameErr)
+	}
+	dir, gotMeta, release, err := writer.Fetch(t.Context(), id)
+	if err != nil {
+		t.Fatalf("fetch committed generation: %v", err)
+	}
+	defer release()
+	if string(gotMeta) != metaJSON("new") {
+		t.Fatalf("fetch meta %q, want new generation", gotMeta)
+	}
+	if got, readErr := os.ReadFile(filepath.Join(dir, "disk.img")); readErr != nil || string(got) != "new" {
+		t.Fatalf("fetch export %q, %v, want new generation", got, readErr)
+	}
+}
+
 // TestSweepSparesLegacyFallback: the flat export dir of a never-re-published
-// legacy record is the live data — the graced sweep must not touch it, however
-// old the meta is. Once a re-publish supersedes it, it is reclaimed.
+// legacy record is live data; once a re-publish supersedes it, grace applies.
 func TestSweepSparesLegacyFallback(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	root := t.TempDir()
@@ -175,8 +275,12 @@ func TestSweepSparesLegacyFallback(t *testing.T) {
 		release()
 	}
 
+	backdate(t, filepath.Join(root, id, store.ExportDir))
 	mustPublish(t, st, id, "modern")
-	backdate(t, filepath.Join(root, id, store.MetaFile))
+	if _, err := os.Stat(filepath.Join(root, id, store.ExportDir)); err != nil {
+		t.Fatalf("legacy export reclaimed inside the grace: %v", err)
+	}
+	backdate(t, filepath.Join(root, id, store.ExportDir))
 	if err := st.SweepStaging(); err != nil {
 		t.Fatalf("sweep after re-publish: %v", err)
 	}
@@ -185,62 +289,74 @@ func TestSweepSparesLegacyFallback(t *testing.T) {
 	}
 }
 
-// TestSweepReclaimsUncommittedRecord: a record dir with no committed meta is a
-// crashed first publish — reclaimed only past the grace, because another node
-// sharing the root may be mid-publish right now.
-func TestSweepReclaimsUncommittedRecord(t *testing.T) {
-	const id = "ck_00000000000000aa"
+// TestSweepReclaimsOnlyAgedUncommittedGenerations: an abandoned generation
+// is reclaimed across ids while a peer's uncommitted publish remains intact.
+func TestSweepReclaimsOnlyAgedUncommittedGenerations(t *testing.T) {
+	const (
+		orphanID  = "ck_00000000000000aa"
+		publishID = "ck_00000000000000bb"
+	)
 	root := t.TempDir()
-	st, err := New(root, store.CheckpointIDRe)
+	sweeper, err := New(root, store.CheckpointIDRe)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("new sweeper: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, id, store.ExportDir+"-0011223344556677"), 0o750); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-
-	if err := st.SweepStaging(); err != nil {
-		t.Fatalf("sweep fresh: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, id)); err != nil {
-		t.Fatalf("fresh uncommitted record swept: %v", err)
-	}
-
-	backdate(t, filepath.Join(root, id))
-	if err := st.SweepStaging(); err != nil {
-		t.Fatalf("sweep old: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, id)); !os.IsNotExist(err) {
-		t.Fatalf("uncommitted crash residue survived the graced sweep: %v", err)
-	}
-}
-
-// TestPublishReclaimsCrashResidue: publishing over an uncommitted record dir
-// older than the grace reaps the residue in-line and still installs cleanly.
-func TestPublishReclaimsCrashResidue(t *testing.T) {
-	const id = "ck_00000000000000aa"
-	root := t.TempDir()
-	st, err := New(root, store.CheckpointIDRe)
+	writer, err := New(root, store.CheckpointIDRe)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("new writer: %v", err)
 	}
-	residue := filepath.Join(root, id, store.ExportDir+"-0011223344556677")
-	if mkErr := os.MkdirAll(residue, 0o750); mkErr != nil {
-		t.Fatalf("seed: %v", mkErr)
+	orphan := filepath.Join(root, orphanID, store.ExportDir+"-0011223344556677")
+	if mkdirErr := os.MkdirAll(orphan, 0o750); mkdirErr != nil {
+		t.Fatalf("seed orphan: %v", mkdirErr)
 	}
-	backdate(t, filepath.Join(root, id))
+	backdate(t, orphan)
 
-	mustPublish(t, st, id, "fresh")
-	_, meta, release, err := st.Fetch(t.Context(), id)
+	staging, err := writer.Stage(publishID)
 	if err != nil {
-		t.Fatalf("fetch: %v", err)
+		t.Fatalf("stage publishing generation: %v", err)
 	}
-	release()
-	if string(meta) != metaJSON("fresh") {
-		t.Fatalf("fetch meta %q, want the fresh publish", meta)
+	seedRecord(t, staging, "fresh")
+	meta, err := os.ReadFile(filepath.Join(staging, store.MetaFile))
+	if err != nil {
+		t.Fatalf("read staged meta: %v", err)
 	}
-	if _, statErr := os.Stat(residue); !os.IsNotExist(statErr) {
-		t.Errorf("crash residue survived the publish: %v", statErr)
+	backdate(t, filepath.Join(staging, store.ExportDir))
+	commitBlocker := filepath.Join(root, publishID, store.MetaFile+".tmp")
+	if mkdirErr := os.MkdirAll(commitBlocker, 0o750); mkdirErr != nil {
+		t.Fatalf("block meta commit: %v", mkdirErr)
+	}
+	if publishErr := writer.Publish(t.Context(), staging, publishID); publishErr == nil {
+		t.Fatal("publish with blocked meta commit succeeded")
+	}
+	fresh := filepath.Join(root, publishID, store.ExportGen(meta))
+
+	if sweepErr := sweeper.SweepStaging(); sweepErr != nil {
+		t.Fatalf("sweep old: %v", sweepErr)
+	}
+	if _, statErr := os.Stat(orphan); !os.IsNotExist(statErr) {
+		t.Fatalf("aged uncommitted generation survived: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, orphanID)); statErr != nil {
+		t.Fatalf("orphan record shell was removed: %v", statErr)
+	}
+	if _, statErr := os.Stat(fresh); statErr != nil {
+		t.Fatalf("publishing generation was swept: %v", statErr)
+	}
+
+	if removeErr := os.RemoveAll(commitBlocker); removeErr != nil {
+		t.Fatalf("remove commit blocker: %v", removeErr)
+	}
+	mustPublish(t, writer, publishID, "fresh")
+	dir, gotMeta, release, err := writer.Fetch(t.Context(), publishID)
+	if err != nil {
+		t.Fatalf("fetch retried publish: %v", err)
+	}
+	defer release()
+	if string(gotMeta) != metaJSON("fresh") {
+		t.Fatalf("fetch meta %q, want fresh", gotMeta)
+	}
+	if got, readErr := os.ReadFile(filepath.Join(dir, "disk.img")); readErr != nil || string(got) != "fresh" {
+		t.Fatalf("fetch export %q, %v, want fresh", got, readErr)
 	}
 }
 
@@ -321,7 +437,12 @@ func seedRecord(t *testing.T, dir, metaID string) {
 
 func backdate(t *testing.T, path string) {
 	t.Helper()
-	old := time.Now().Add(-2 * generationGrace)
+	setAge(t, path, 2*generationGrace)
+}
+
+func setAge(t *testing.T, path string, age time.Duration) {
+	t.Helper()
+	old := time.Now().Add(-age)
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatalf("backdate %s: %v", path, err)
 	}

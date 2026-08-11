@@ -240,6 +240,10 @@ func (s *Store) SweepStaging() error {
 	return nil
 }
 
+// SweepGenerations is a no-op: Delete reclaims committed S3 generations, and
+// bucket lifecycle policy handles invisible upload orphans.
+func (s *Store) SweepGenerations() error { return nil }
+
 // populate downloads one cache generation and installs it atomically.
 func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string) error {
 	if _, err := os.Stat(gen); err == nil {

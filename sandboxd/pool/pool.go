@@ -492,13 +492,11 @@ func (m *Manager) Run(ctx context.Context) {
 	defer refill.Stop()
 	reap := time.NewTicker(reapInterval)
 	defer reap.Stop()
-	// Retention is hourly, not per reap tick: on the s3 backend a sweep is
-	// a LIST + per-checkpoint GETs.
-	ckptSweep := make(<-chan time.Time)
+	// Store retention is hourly, not per reap tick: shared roots and buckets
+	// make each sweep cluster-visible I/O.
+	storeSweep := time.NewTicker(time.Hour)
+	defer storeSweep.Stop()
 	if m.ckptTTL > 0 {
-		t := time.NewTicker(time.Hour)
-		defer t.Stop()
-		ckptSweep = t.C
 		m.sweepExpiredCheckpoints(ctx)
 	}
 	m.refillOnce(ctx)
@@ -516,8 +514,11 @@ func (m *Manager) Run(ctx context.Context) {
 			m.idleOnce(ctx)
 			m.archiveOnce(ctx)
 			go m.retryArchiveDeletes(ctx)
-		case <-ckptSweep:
-			m.sweepExpiredCheckpoints(ctx)
+		case <-storeSweep.C:
+			m.sweepStoreGenerations(ctx)
+			if m.ckptTTL > 0 {
+				m.sweepExpiredCheckpoints(ctx)
+			}
 		}
 	}
 }
@@ -640,6 +641,16 @@ func (m *Manager) WithPeerHeal(enabled bool, owners peer.Owners, token string) {
 // delete, so a healed replica does not outlive the source record.
 func (m *Manager) WithPeerDelete(fn PeerDeleteFunc) {
 	m.peerDelete = fn
+}
+
+func (m *Manager) sweepStoreGenerations(ctx context.Context) {
+	logger := log.WithFunc("pool.sweepStoreGenerations")
+	if err := m.ckpts.SweepGenerations(); err != nil {
+		logger.Error(ctx, err, "sweep checkpoint generations")
+	}
+	if err := m.tpls.SweepGenerations(); err != nil {
+		logger.Error(ctx, err, "sweep template generations")
+	}
 }
 
 func (m *Manager) claimsSnapshot() claimSnapshot {
