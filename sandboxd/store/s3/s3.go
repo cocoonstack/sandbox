@@ -7,8 +7,6 @@ package s3
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -101,7 +99,7 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 	if err != nil {
 		return fmt.Errorf("staging has no %s: %w", store.MetaFile, err)
 	}
-	gen := exportGen(metaRaw)
+	gen := store.ExportGen(metaRaw)
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(4) // files in parallel; each already multiparts internally
 	err = filepath.WalkDir(staging, func(path string, d os.DirEntry, err error) error {
@@ -142,7 +140,7 @@ func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, func(), e
 	if err != nil {
 		return "", nil, nil, err
 	}
-	gen := filepath.Join(s.staging, "cache", id, exportGenHash(meta))
+	gen := filepath.Join(s.staging, "cache", id, store.ExportGenHash(meta))
 	export := filepath.Join(gen, store.ExportDir)
 	if _, statErr := os.Stat(export); statErr == nil {
 		return export, meta, func() {}, nil
@@ -242,6 +240,10 @@ func (s *Store) SweepStaging() error {
 	return nil
 }
 
+// SweepGenerations is a no-op: Delete reclaims committed S3 generations, and
+// bucket lifecycle policy handles invisible upload orphans.
+func (s *Store) SweepGenerations() error { return nil }
+
 // populate downloads one cache generation and installs it atomically.
 func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string) error {
 	if _, err := os.Stat(gen); err == nil {
@@ -252,7 +254,7 @@ func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string
 		return err
 	}
 	defer func() { _ = os.RemoveAll(local) }()
-	exportPrefix := s.key(id, exportGen(meta)) + "/"
+	exportPrefix := s.key(id, store.ExportGen(meta)) + "/"
 	keys, err := s.list(ctx, exportPrefix)
 	if err != nil {
 		return err
@@ -366,16 +368,4 @@ func (s *Store) list(ctx context.Context, prefix string) ([]string, error) {
 		}
 	}
 	return keys, nil
-}
-
-// exportGen names a record generation's export prefix from its meta bytes —
-// meta is unique per publish (checkpoint ids are fresh, template records
-// carry created_at), and Fetch keys its cache generation off the same hash.
-func exportGen(meta []byte) string {
-	return store.ExportDir + "-" + exportGenHash(meta)
-}
-
-func exportGenHash(meta []byte) string {
-	sum := sha256.Sum256(meta)
-	return hex.EncodeToString(sum[:8])
 }

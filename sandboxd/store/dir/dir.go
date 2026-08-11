@@ -4,34 +4,37 @@
 package dir
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
-
-	"golang.org/x/sys/unix"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 )
 
 const (
-	oldSuffix         = ".old"
-	lockDir           = ".locks"
-	recordLockStripes = 256
+	oldSuffix = ".old" // pre-generation crash artifacts, reclaimed at Delete
+
+	// generationGrace bounds the shared-mount race where another node is
+	// still cloning a generation it resolved just before a re-publish.
+	generationGrace = time.Hour
 )
 
 var _ store.Store = (*Store)(nil)
 
-// Store keeps records as <root>/<id>/{export,meta.json}; staging dirs are
-// <root>/<id>-*.tmp siblings so publish is one rename. idRe names the
-// instance's id namespace — two instances (checkpoints, templates) share a
-// root without seeing each other's records. A fixed SHA-256 lock stripe set
-// coordinates readers and writers across processes without growing per id.
+// Store keeps records as <root>/<id>/{meta.json,export-<gen>/...}: the
+// generation dir is immutable and the meta rename is the atomic commit
+// pointer, so readers and writers need no cross-process locks. idRe names
+// the instance's id namespace — two instances (checkpoints, templates)
+// share a root without seeing each other's records.
 type Store struct {
 	root string
 	idRe *regexp.Regexp
@@ -41,9 +44,6 @@ func New(root string, idRe *regexp.Regexp) (*Store, error) {
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return nil, fmt.Errorf("create store dir: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, lockDir), 0o750); err != nil {
-		return nil, fmt.Errorf("create store lock dir: %w", err)
-	}
 	return &Store{root: root, idRe: idRe}, nil
 }
 
@@ -51,66 +51,82 @@ func (d *Store) Stage(id string) (string, error) {
 	return os.MkdirTemp(d.root, id+"-*.tmp")
 }
 
+// Publish makes the generation fresh before its install, refreshes the
+// outgoing generation at supersession, and commits by renaming meta.json.
 func (d *Store) Publish(_ context.Context, staging, id string) error {
-	lock, err := d.lockRecord(id, unix.LOCK_EX)
+	metaRaw, err := os.ReadFile(filepath.Join(staging, store.MetaFile)) //nolint:gosec // our own staging dir
 	if err != nil {
-		return fmt.Errorf("lock record: %w", err)
+		return fmt.Errorf("staging has no %s: %w", store.MetaFile, err)
 	}
-	defer unlockRecord(lock)
-
 	final := filepath.Join(d.root, id)
-	old := final + oldSuffix
-	// Re-publish (re-promote) replaces by swap, not delete-then-rename: the
-	// old generation survives as <id>.old until the new one is in place, so a
-	// crash in between loses nothing (SweepStaging restores it). An absent
-	// final with a live <id>.old is an unswept crash artifact — install first,
-	// clear it only after success.
-	switch _, statErr := os.Stat(final); {
+	if err := os.MkdirAll(final, 0o750); err != nil {
+		return err
+	}
+	genDir := filepath.Join(final, store.ExportGen(metaRaw))
+	now := time.Now()
+	genInfo, statErr := os.Stat(genDir) //nolint:gosec // G703: id pinned by the instance idRe before any call
+	switch {
 	case errors.Is(statErr, fs.ErrNotExist):
-		if err := os.Rename(staging, final); err != nil {
+		stagedExport := filepath.Join(staging, store.ExportDir)
+		// Make the generation fresh before a peer can observe it without committed meta.
+		if err := os.Chtimes(stagedExport, now, now); err != nil { //nolint:gosec // our own staging dir
 			return err
 		}
-		_ = os.RemoveAll(old)
-		return nil
+		if err := os.Rename(stagedExport, genDir); err != nil { //nolint:gosec // G703: our own staging dir
+			return err
+		}
 	case statErr != nil:
 		return statErr
+	default:
+		currentMeta, readErr := os.ReadFile(filepath.Join(final, store.MetaFile)) //nolint:gosec // fixed path under our root
+		if readErr == nil && bytes.Equal(currentMeta, metaRaw) {
+			_ = d.sweepGenerations(id)
+			return os.RemoveAll(staging)
+		}
+		if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
+			return readErr
+		}
+		// A sweep may already have selected an expired path for removal.
+		if time.Since(genInfo.ModTime()) >= generationGrace {
+			return fmt.Errorf("generation %s expired before commit; retry after sweep", filepath.Base(genDir))
+		}
 	}
-	if err := os.RemoveAll(old); err != nil {
+	// Age the previous current generation from supersession, not publication.
+	if err := touchCurrentGeneration(final, now); err != nil {
 		return err
 	}
-	if err := os.Rename(final, old); err != nil {
+	tmp := filepath.Join(final, store.MetaFile+".tmp")
+	if err := os.WriteFile(tmp, metaRaw, 0o600); err != nil { //nolint:gosec // fixed path under our root
 		return err
 	}
-	if err := os.Rename(staging, final); err != nil {
-		_ = os.Rename(old, final)
+	if err := os.Rename(tmp, filepath.Join(final, store.MetaFile)); err != nil {
 		return err
 	}
-	_ = os.RemoveAll(old) // leftovers are reclaimed by SweepStaging
-	return nil
+	_ = d.sweepGenerations(id) // later publishes and startups retry a failed sweep
+	return os.RemoveAll(staging)
 }
 
+// Fetch resolves the committed meta and returns its immutable generation
+// directory; release is a no-op. Records published before per-generation
+// dirs fall back to the flat export layout.
 func (d *Store) Fetch(ctx context.Context, id string) (string, []byte, func(), error) {
-	final := filepath.Join(d.root, id)
-	lock, err := d.lockRecord(id, unix.LOCK_SH)
-	if err != nil {
-		return "", nil, nil, fmt.Errorf("lock record: %w", err)
-	}
-	release := func() { unlockRecord(lock) }
-	// Meta is the commit marker: a half-published record stays invisible.
 	meta, err := d.ReadMeta(ctx, id)
 	if err != nil {
-		release()
 		return "", nil, nil, err
 	}
-	dir := filepath.Join(final, store.ExportDir)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		release()
-		return "", nil, nil, store.ErrNotFound
-	} else if err != nil {
-		release()
-		return "", nil, nil, err
+	dir := filepath.Join(d.root, id, store.ExportGen(meta))
+	if _, statErr := os.Stat(dir); errors.Is(statErr, fs.ErrNotExist) {
+		dir = filepath.Join(d.root, id, store.ExportDir)
+		switch _, legacyErr := os.Stat(dir); {
+		case errors.Is(legacyErr, fs.ErrNotExist):
+			return "", nil, nil, store.ErrNotFound
+		case legacyErr != nil:
+			return "", nil, nil, legacyErr
+		}
+	} else if statErr != nil {
+		return "", nil, nil, statErr
 	}
-	return dir, meta, release, nil
+	return dir, meta, func() {}, nil
 }
 
 func (d *Store) ReadMeta(_ context.Context, id string) ([]byte, error) {
@@ -145,18 +161,29 @@ func (d *Store) Metas(ctx context.Context) ([][]byte, error) {
 	return metas, nil
 }
 
-// Delete also clears an unswept <id>.old so a sweep cannot resurrect the record.
+// Delete removes export generations first and the meta last, so a partially
+// failed delete stays discoverable and a retry converges.
 func (d *Store) Delete(_ context.Context, id string) error {
-	lock, err := d.lockRecord(id, unix.LOCK_EX)
-	if err != nil {
-		return fmt.Errorf("lock record: %w", err)
-	}
-	defer unlockRecord(lock)
-
 	final := filepath.Join(d.root, id)
+	entries, err := os.ReadDir(final)
+	if errors.Is(err, fs.ErrNotExist) {
+		return os.RemoveAll(final + oldSuffix)
+	}
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Name() == store.MetaFile {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(final, e.Name())); err != nil {
+			return err
+		}
+	}
 	return errors.Join(os.RemoveAll(final), os.RemoveAll(final+oldSuffix))
 }
 
+// SweepStaging clears crashed staging and delegates generation retention.
 func (d *Store) SweepStaging() error {
 	entries, err := os.ReadDir(d.root)
 	if err != nil {
@@ -165,52 +192,117 @@ func (d *Store) SweepStaging() error {
 	// ReadDir + suffix, not Glob: the root path may hold glob
 	// metacharacters.
 	for _, e := range entries {
-		switch name := e.Name(); {
-		case strings.HasSuffix(name, ".tmp"):
-			if err := os.RemoveAll(filepath.Join(d.root, name)); err != nil {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			if err := os.RemoveAll(filepath.Join(d.root, e.Name())); err != nil {
 				return err
 			}
-		case strings.HasSuffix(name, oldSuffix):
-			// A crash mid-Publish: restore the moved-aside generation when
-			// the swap never completed, drop it once the new one is live.
-			final := filepath.Join(d.root, strings.TrimSuffix(name, oldSuffix))
-			if _, err := os.Stat(final); errors.Is(err, fs.ErrNotExist) {
-				if err := os.Rename(filepath.Join(d.root, name), final); err != nil {
-					return err
-				}
-				continue
-			}
-			if err := os.RemoveAll(filepath.Join(d.root, name)); err != nil {
-				return err
-			}
+		}
+	}
+	return d.SweepGenerations()
+}
+
+// SweepGenerations reclaims expired record generations without touching staging.
+func (d *Store) SweepGenerations() error {
+	entries, err := os.ReadDir(d.root)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !d.idRe.MatchString(e.Name()) {
+			continue
+		}
+		if err := d.sweepGenerations(e.Name()); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func (d *Store) lockRecord(id string, op int) (*os.File, error) {
-	// Stripe files stay for the store lifetime so waiters never split across
-	// unlinked inodes. SHA-256 keeps one id on the same stripe across processes.
-	lock, err := os.OpenFile( //nolint:gosec // fixed path under our root
-		d.recordLockPath(id), os.O_CREATE|os.O_RDWR, 0o600,
-	)
+// sweepGenerations reclaims only entries whose own install or supersession
+// time is outside the grace. Without committed meta it never removes the
+// record directory, so a peer publishing into the same path remains safe.
+func (d *Store) sweepGenerations(id string) (err error) {
+	final := filepath.Join(d.root, id)
+	metaFile, err := os.Open(filepath.Join(final, store.MetaFile)) //nolint:gosec // id pinned by the instance idRe
+	if errors.Is(err, fs.ErrNotExist) {
+		entries, readErr := os.ReadDir(final)
+		if errors.Is(readErr, fs.ErrNotExist) {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
+		for _, e := range entries {
+			if removeErr := removeAgedEntry(final, e); removeErr != nil {
+				return removeErr
+			}
+		}
+		return nil
+	}
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := unix.Flock(int(lock.Fd()), op); err != nil { //nolint:gosec // unix fds fit int
-		_ = lock.Close()
-		return nil, err
+	defer func() { err = errors.Join(err, metaFile.Close()) }()
+	// The open file pins one inode across a concurrent meta rename.
+	meta, err := io.ReadAll(metaFile)
+	if err != nil {
+		return err
 	}
-	return lock, nil
+	entries, err := os.ReadDir(final)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	current := store.ExportGen(meta)
+	hasCurrent := slices.ContainsFunc(entries, func(e fs.DirEntry) bool { return e.Name() == current })
+	for _, e := range entries {
+		name := e.Name()
+		if name == store.MetaFile || name == current {
+			continue
+		}
+		if name == store.ExportDir && !hasCurrent {
+			continue // the legacy flat layout still backs the current meta
+		}
+		if removeErr := removeAgedEntry(final, e); removeErr != nil {
+			return removeErr
+		}
+	}
+	return nil
 }
 
-func (d *Store) recordLockPath(id string) string {
-	sum := sha256.Sum256([]byte(id))
-	stripe := int(sum[0]) % recordLockStripes
-	return filepath.Join(d.root, lockDir, fmt.Sprintf("%02x", stripe))
+func touchCurrentGeneration(final string, now time.Time) error {
+	meta, err := os.ReadFile(filepath.Join(final, store.MetaFile)) //nolint:gosec // fixed path under our root
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	current := filepath.Join(final, store.ExportGen(meta))
+	err = os.Chtimes(current, now, now) //nolint:gosec // current is a hash-derived name under our root
+	if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	err = os.Chtimes(filepath.Join(final, store.ExportDir), now, now)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
-func unlockRecord(lock *os.File) {
-	_ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) //nolint:gosec // unix fds fit int
-	_ = lock.Close()
+func removeAgedEntry(final string, entry fs.DirEntry) error {
+	info, err := entry.Info()
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	// Publish refreshes a generation before it becomes visible or superseded.
+	if time.Since(info.ModTime()) < generationGrace {
+		return nil
+	}
+	return os.RemoveAll(filepath.Join(final, entry.Name()))
 }

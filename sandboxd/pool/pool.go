@@ -492,13 +492,11 @@ func (m *Manager) Run(ctx context.Context) {
 	defer refill.Stop()
 	reap := time.NewTicker(reapInterval)
 	defer reap.Stop()
-	// Retention is hourly, not per reap tick: on the s3 backend a sweep is
-	// a LIST + per-checkpoint GETs.
-	ckptSweep := make(<-chan time.Time)
+	// Store retention is hourly, not per reap tick: shared roots and buckets
+	// make each sweep cluster-visible I/O.
+	storeSweep := time.NewTicker(time.Hour)
+	defer storeSweep.Stop()
 	if m.ckptTTL > 0 {
-		t := time.NewTicker(time.Hour)
-		defer t.Stop()
-		ckptSweep = t.C
 		m.sweepExpiredCheckpoints(ctx)
 	}
 	m.refillOnce(ctx)
@@ -516,8 +514,11 @@ func (m *Manager) Run(ctx context.Context) {
 			m.idleOnce(ctx)
 			m.archiveOnce(ctx)
 			go m.retryArchiveDeletes(ctx)
-		case <-ckptSweep:
-			m.sweepExpiredCheckpoints(ctx)
+		case <-storeSweep.C:
+			m.sweepStoreGenerations(ctx)
+			if m.ckptTTL > 0 {
+				m.sweepExpiredCheckpoints(ctx)
+			}
 		}
 	}
 }
@@ -642,6 +643,16 @@ func (m *Manager) WithPeerDelete(fn PeerDeleteFunc) {
 	m.peerDelete = fn
 }
 
+func (m *Manager) sweepStoreGenerations(ctx context.Context) {
+	logger := log.WithFunc("pool.sweepStoreGenerations")
+	if err := m.ckpts.SweepGenerations(); err != nil {
+		logger.Error(ctx, err, "sweep checkpoint generations")
+	}
+	if err := m.tpls.SweepGenerations(); err != nil {
+		logger.Error(ctx, err, "sweep template generations")
+	}
+}
+
 func (m *Manager) claimsSnapshot() claimSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -686,8 +697,6 @@ func tenantOwns(tenant, owner string) bool {
 	return tenant == "" || tenant == owner
 }
 
-// benignSweepErr reports whether err is the expected outcome of a housekeeping
-// sweep (victim released, woke mid-sweep, or a lane that never hibernates).
 // logSweepResult reports one background-sweep outcome; benign races stay silent.
 func logSweepResult(ctx context.Context, logger *log.Fields, err error, okMsg, failMsg string) {
 	switch {
@@ -698,6 +707,8 @@ func logSweepResult(ctx context.Context, logger *log.Fields, err error, okMsg, f
 	}
 }
 
+// benignSweepErr reports whether err is the expected outcome of a housekeeping
+// sweep (victim released, woke mid-sweep, or a lane that never hibernates).
 func benignSweepErr(err error) bool {
 	return errors.Is(err, ErrUnknownSandbox) || errors.Is(err, errWokeMeanwhile) ||
 		errors.Is(err, ErrNoEgressHibernate)

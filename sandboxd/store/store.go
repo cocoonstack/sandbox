@@ -7,6 +7,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"regexp"
 	"strings"
@@ -41,13 +43,14 @@ type Store interface {
 	Stage(id string) (string, error)
 	// Publish turns a staged directory into the record, replacing any
 	// previous generation atomically for listers and never disturbing one a
-	// concurrent Fetch pinned (locks or retention, per backend). The caller
-	// serializes same-id operations in-process; request-path callers pass an
-	// uncancelable ctx so a started publish finishes.
+	// concurrent Fetch pinned (generations are immutable and retained until
+	// Delete or a graced sweep). The caller serializes same-id operations
+	// in-process; request-path callers pass an uncancelable ctx so a started
+	// publish finishes.
 	Publish(ctx context.Context, staging, id string) error
 	// Fetch materializes a record's snapshot export as a local directory
 	// cocoon can clone from, plus the meta it resolved on the way, and a
-	// release pinning that exact generation — hold it until the clone is done.
+	// release to hold until the clone is done (the generation outlives it).
 	Fetch(ctx context.Context, id string) (dir string, meta []byte, release func(), err error)
 	// ReadMeta returns a record's metadata, or an error when the record
 	// does not exist.
@@ -59,6 +62,9 @@ type Store interface {
 	Delete(ctx context.Context, id string) error
 	// SweepStaging removes abandoned staging left by a crash mid-publish.
 	SweepStaging() error
+	// SweepGenerations runs backend-specific generation retention without
+	// disturbing staging or active fetch caches.
+	SweepGenerations() error
 }
 
 // CheckpointID, TemplateID, and TemplateHash are the one home for the
@@ -68,3 +74,14 @@ func CheckpointID(suffix string) string { return "ck_" + suffix }
 func TemplateID(hash string) string { return "tp_" + hash }
 
 func TemplateHash(id string) string { return strings.TrimPrefix(id, "tp_") }
+
+// ExportGen names a record generation's export dir/prefix from its meta
+// bytes — meta is unique per publish (checkpoint ids are fresh, template
+// records carry created_at), so a re-publish never collides with a
+// generation a concurrent Fetch is reading.
+func ExportGen(meta []byte) string { return ExportDir + "-" + ExportGenHash(meta) }
+
+func ExportGenHash(meta []byte) string {
+	sum := sha256.Sum256(meta)
+	return hex.EncodeToString(sum[:8])
+}
