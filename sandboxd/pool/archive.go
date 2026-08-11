@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -265,17 +266,31 @@ func (m *Manager) markArchiveCk(ckID string) error {
 	return os.WriteFile(filepath.Join(dir, ckID), nil, 0o600)
 }
 
-func (m *Manager) clearCanceledArchiveDeletes(ctx context.Context, claims map[string]*types.Sandbox) {
-	logger := log.WithFunc("pool.clearCanceledArchiveDeletes")
+func (m *Manager) archiveDeleteMarkers() ([]string, error) {
 	entries, err := os.ReadDir(filepath.Join(m.dataDir, archiveDeleteDir))
 	if errors.Is(err, fs.ErrNotExist) {
-		return
+		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && store.CheckpointIDRe.MatchString(entry.Name()) {
+			ids = append(ids, entry.Name())
+		}
+	}
+	return ids, nil
+}
+
+func (m *Manager) clearCanceledArchiveDeletes(ctx context.Context, claims map[string]*types.Sandbox) {
+	logger := log.WithFunc("pool.clearCanceledArchiveDeletes")
+	ids, err := m.archiveDeleteMarkers()
 	if err != nil {
 		logger.Warnf(ctx, "list: %v", err)
 		return
 	}
-	if len(entries) == 0 {
+	if len(ids) == 0 {
 		return
 	}
 	live := make(map[string]struct{})
@@ -284,15 +299,12 @@ func (m *Manager) clearCanceledArchiveDeletes(ctx context.Context, claims map[st
 			live[sb.ArchiveCk] = struct{}{}
 		}
 	}
-	for _, entry := range entries {
-		if !entry.Type().IsRegular() || !store.CheckpointIDRe.MatchString(entry.Name()) {
+	for _, id := range ids {
+		if _, ok := live[id]; !ok {
 			continue
 		}
-		if _, ok := live[entry.Name()]; !ok {
-			continue
-		}
-		if err := m.clearArchiveCk(entry.Name()); err != nil {
-			logger.Warnf(ctx, "clear %s: %v", entry.Name(), err)
+		if err := m.clearArchiveCk(id); err != nil {
+			logger.Warnf(ctx, "clear %s: %v", id, err)
 		}
 	}
 }
@@ -323,27 +335,16 @@ func (m *Manager) retryArchiveDeletes(ctx context.Context) {
 		return
 	}
 	defer m.archiveDeleteSweep.Store(false)
-	entries, err := os.ReadDir(filepath.Join(m.dataDir, archiveDeleteDir))
-	if errors.Is(err, fs.ErrNotExist) {
-		return
-	}
+	ids, err := m.archiveDeleteMarkers()
 	if err != nil {
 		log.WithFunc("pool.retryArchiveDeletes").Warnf(ctx, "list: %v", err)
 		return
 	}
-	if len(entries) == 0 {
+	if len(ids) == 0 {
 		return
 	}
 	pinned := m.pinnedArchiveCks()
-	ids := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.Type().IsRegular() || !store.CheckpointIDRe.MatchString(entry.Name()) {
-			continue
-		}
-		if _, ok := pinned[entry.Name()]; !ok {
-			ids = append(ids, entry.Name())
-		}
-	}
+	ids = slices.DeleteFunc(ids, func(id string) bool { _, ok := pinned[id]; return ok })
 	m.runBounded(ctx, len(ids), func(ctx context.Context, i int) {
 		m.retryArchiveDelete(ctx, ids[i])
 	}).Wait()
