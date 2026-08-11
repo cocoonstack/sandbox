@@ -48,10 +48,13 @@ type Store interface {
 	// in-process; request-path callers pass an uncancelable ctx so a started
 	// publish finishes.
 	Publish(ctx context.Context, staging, id string) error
+	// PublishDigested applies Publish semantics and returns the export digest.
+	PublishDigested(ctx context.Context, staging, id string) (string, error)
 	// Fetch materializes a record's snapshot export as a local directory
-	// cocoon can clone from, plus the meta it resolved on the way, and a
-	// release to hold until the clone is done (the generation outlives it).
-	Fetch(ctx context.Context, id string) (dir string, meta []byte, release func(), err error)
+	// cocoon can clone from, plus the meta and digest resolved on the way,
+	// and a release to hold until clone ends (the generation outlives it).
+	// The digest is empty for records written by Publish.
+	Fetch(ctx context.Context, id string) (dir string, meta []byte, digest string, release func(), err error)
 	// ReadMeta returns a record's metadata, or an error when the record
 	// does not exist.
 	ReadMeta(ctx context.Context, id string) ([]byte, error)

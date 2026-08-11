@@ -977,7 +977,7 @@ func mustArchive(t *testing.T, m *Manager, sb *types.Sandbox) {
 
 func ckExists(t *testing.T, m *Manager, ck string) bool {
 	t.Helper()
-	_, _, release, err := m.ckpts.Fetch(t.Context(), ck)
+	_, _, _, release, err := m.ckpts.Fetch(t.Context(), ck) //nolint:dogsled // existence only needs Fetch success
 	if err != nil {
 		return false
 	}

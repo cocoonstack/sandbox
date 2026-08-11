@@ -177,7 +177,7 @@ func (m *Manager) FetchCheckpoint(ctx context.Context, ckptID string) (string, [
 	}
 	l := m.recLock(ckptID)
 	l.RLock()
-	dir, meta, release, err := m.ckpts.Fetch(ctx, ckptID)
+	dir, meta, _, release, err := m.ckpts.Fetch(ctx, ckptID)
 	if err != nil {
 		l.RUnlock()
 		m.recDone(ckptID)
@@ -233,7 +233,7 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl ti
 	l := m.recLock(ckpt.ID)
 	l.RLock()
 	defer func() { l.RUnlock(); m.recDone(ckpt.ID) }()
-	dir, _, release, err := m.ckpts.Fetch(ctx, ckpt.ID)
+	dir, _, _, release, err := m.ckpts.Fetch(ctx, ckpt.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, ErrUnknownCheckpoint // deleted between the pre-check and the lock
 	}

@@ -2,18 +2,12 @@ package pool
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -26,10 +20,9 @@ import (
 // from the requested key, never the reverse. Tenant attributes the promote
 // and scopes deletion; empty means the operator (root).
 type templateRecord struct {
-	ID            string    `json:"id"`
-	Tenant        string    `json:"tenant,omitempty"`
-	ContentDigest string    `json:"content_digest,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID        string    `json:"id"`
+	Tenant    string    `json:"tenant,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Promote publishes a claimed sandbox as a template under (template, parent
@@ -278,7 +271,7 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string,
 	id := store.TemplateID(key.Hash())
 	l := m.recLock(id)
 	l.RLock()
-	dir, meta, release, err := m.tpls.Fetch(ctx, id)
+	dir, meta, digest, release, err := m.tpls.Fetch(ctx, id)
 	if err != nil {
 		l.RUnlock()
 		m.recDone(id)
@@ -294,7 +287,7 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string,
 		m.recDone(id)
 		return "", "", func() {}, fmt.Errorf("decode template metadata: %w", err)
 	}
-	return dir, rec.ContentDigest, func() { release(); l.RUnlock(); m.recDone(id) }, nil
+	return dir, digest, func() { release(); l.RUnlock(); m.recDone(id) }, nil
 }
 
 // publishTemplate exports snap into the store under the key's template id.
@@ -311,100 +304,26 @@ func (m *Manager) publishTemplate(ctx context.Context, snap string, key types.Po
 	return m.commitTemplate(ctx, staging, id, tenant)
 }
 
-// commitTemplate hashes the staged export once, then re-checks the owner and
-// swaps meta+generation in, all serialized under the template lock.
 func (m *Manager) commitTemplate(ctx context.Context, staging, id, tenant string) (string, error) {
-	digest, err := exportContentDigest(filepath.Join(staging, store.ExportDir))
-	if err != nil {
-		return "", fmt.Errorf("digest template export: %w", err)
-	}
 	l := m.recLock(id)
 	l.Lock()
 	defer func() { l.Unlock(); m.recDone(id) }()
 	if ownerErr := m.checkTemplateOwner(ctx, id, tenant); ownerErr != nil {
 		return "", ownerErr
 	}
-	meta, err := json.Marshal(templateRecord{ID: id, Tenant: tenant, ContentDigest: digest, CreatedAt: time.Now()})
+	meta, err := json.Marshal(templateRecord{ID: id, Tenant: tenant, CreatedAt: time.Now()})
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); err != nil {
+	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); err != nil {
 		return "", err
 	}
-	if err := m.tpls.Publish(ctx, staging, id); err != nil {
+	digest, err := m.tpls.PublishDigested(ctx, staging, id)
+	if err != nil {
 		return "", fmt.Errorf("publish template: %w", err)
 	}
 	m.tplMu.Lock()
 	m.tplSet[id] = struct{}{}
 	m.tplMu.Unlock()
 	return digest, nil
-}
-
-// exportContentDigest identifies a snapshot export by a versioned canonical
-// regular-file stream: slash-relative path, type, length, and content, globally
-// sorted by path. Directories, ownership metadata, modes, and mtimes are excluded.
-func exportContentDigest(root string) (string, error) {
-	type digestEntry struct {
-		path string
-		rel  string
-		size int64
-	}
-	var entries []digestEntry
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if path == root {
-			return nil
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("unsupported export entry %s (%s)", rel, info.Mode().Type())
-		}
-		entries = append(entries, digestEntry{path: path, rel: rel, size: info.Size()})
-		return nil
-	})
-	if err != nil {
-		return "", err
-	}
-	slices.SortFunc(entries, func(a, b digestEntry) int { return strings.Compare(a.rel, b.rel) })
-
-	h := sha256.New()
-	_, _ = io.WriteString(h, "sandbox-template-export-v1\x00")
-	for _, entry := range entries {
-		var frame [9]byte
-		frame[0] = 'f'
-		binary.BigEndian.PutUint64(frame[1:], uint64(len(entry.rel)))
-		_, _ = h.Write(frame[:])
-		_, _ = io.WriteString(h, entry.rel)
-		binary.BigEndian.PutUint64(frame[:8], uint64(entry.size)) //nolint:gosec // regular file sizes are non-negative
-		_, _ = h.Write(frame[:8])
-		f, err := os.Open(entry.path) //nolint:gosec // path is walked from private export staging
-		if err != nil {
-			return "", err
-		}
-		n, copyErr := io.Copy(h, f)
-		closeErr := f.Close()
-		if copyErr != nil {
-			return "", copyErr
-		}
-		if closeErr != nil {
-			return "", closeErr
-		}
-		if n != entry.size {
-			return "", fmt.Errorf("export entry %s changed size while hashing", entry.rel)
-		}
-	}
-	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }

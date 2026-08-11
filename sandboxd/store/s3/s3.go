@@ -28,6 +28,11 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 )
 
+const (
+	digestMetadataKey   = "content-digest"
+	uploadPartSizeBytes = 16 << 20
+)
+
 // Config selects the bucket and, for MinIO/R2-style endpoints, the
 // addressing mode. Credentials come from the standard AWS chain (env,
 // IAM role, web identity) — never from sandboxd's config file.
@@ -39,13 +44,24 @@ type Config struct {
 	ForcePathStyle bool   `json:"force_path_style,omitempty"`
 }
 
+type publishFile struct {
+	path       string
+	key        string
+	digestPath string
+}
+
+type transferManager interface {
+	UploadObject(context.Context, *transfermanager.UploadObjectInput, ...func(*transfermanager.Options)) (*transfermanager.UploadObjectOutput, error)
+	DownloadObject(context.Context, *transfermanager.DownloadObjectInput, ...func(*transfermanager.Options)) (*transfermanager.DownloadObjectOutput, error)
+}
+
 var _ store.Store = (*Store)(nil)
 
 // Store stages locally under stagingRoot and publishes to the bucket;
 // idRe names the instance's id namespace within the shared prefix.
 type Store struct {
 	client  *awss3.Client
-	tm      *transfermanager.Client
+	tm      transferManager
 	bucket  string
 	prefix  string
 	staging string
@@ -79,7 +95,7 @@ func New(ctx context.Context, cfg Config, stagingRoot string, idRe *regexp.Regex
 	// Snapshot exports are hundreds of MB: multipart + concurrency keep a
 	// publish/fetch bandwidth-bound instead of latency-bound.
 	tm := transfermanager.New(client, func(o *transfermanager.Options) {
-		o.PartSizeBytes = 16 << 20
+		o.PartSizeBytes = uploadPartSizeBytes
 		o.Concurrency = 8
 	})
 	return &Store{client: client, tm: tm, bucket: cfg.Bucket, prefix: cfg.Prefix, staging: stagingRoot, idRe: idRe}, nil
@@ -95,39 +111,12 @@ func (s *Store) Stage(id string) (string, error) {
 // overwrites keys a concurrent Fetch of the old generation is reading —
 // mixed-generation downloads become impossible, not just unlikely.
 func (s *Store) Publish(ctx context.Context, staging, id string) error {
-	metaRaw, err := os.ReadFile(filepath.Join(staging, store.MetaFile)) //nolint:gosec // our own staging dir
-	if err != nil {
-		return fmt.Errorf("staging has no %s: %w", store.MetaFile, err)
-	}
-	gen := store.ExportGen(metaRaw)
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(4) // files in parallel; each already multiparts internally
-	err = filepath.WalkDir(staging, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		rel, err := filepath.Rel(staging, path)
-		if err != nil {
-			return err
-		}
-		if rel == store.MetaFile {
-			return nil
-		}
-		key := s.key(id, gen+strings.TrimPrefix(rel, store.ExportDir))
-		g.Go(func() error { return s.upload(gctx, key, path) })
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	if err = g.Wait(); err != nil {
-		return err
-	}
-	if err = s.uploadReader(ctx, s.key(id, store.MetaFile), bytes.NewReader(metaRaw)); err != nil {
-		return err
-	}
-	// Keep old generations because another node may have selected the previous meta; Delete reclaims them.
-	return os.RemoveAll(staging)
+	_, err := s.publish(ctx, staging, id, false)
+	return err
+}
+
+func (s *Store) PublishDigested(ctx context.Context, staging, id string) (string, error) {
+	return s.publish(ctx, staging, id, true)
 }
 
 // Fetch materializes the export into a local cache generation keyed by the
@@ -135,38 +124,28 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 // a new generation never disturbs a directory an in-flight clone is reading
 // (old generations are reaped at Delete and startup). Concurrent misses share
 // one download; release is a no-op; a missing id is ErrNotFound.
-func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, func(), error) {
-	meta, err := s.ReadMeta(ctx, id)
+func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, string, func(), error) {
+	meta, digest, err := s.readMeta(ctx, id)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, "", nil, err
 	}
 	gen := filepath.Join(s.staging, "cache", id, store.ExportGenHash(meta))
 	export := filepath.Join(gen, store.ExportDir)
 	if _, statErr := os.Stat(export); statErr == nil {
-		return export, meta, func() {}, nil
+		return export, meta, digest, func() {}, nil
 	}
 	_, err, _ = s.fetches.Do(gen, func() (any, error) {
 		return nil, s.populate(ctx, id, meta, gen)
 	})
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, "", nil, err
 	}
-	return export, meta, func() {}, nil
+	return export, meta, digest, func() {}, nil
 }
 
 func (s *Store) ReadMeta(ctx context.Context, id string) ([]byte, error) {
-	out, err := s.client.GetObject(ctx, &awss3.GetObjectInput{
-		Bucket: &s.bucket, Key: aws.String(s.key(id, store.MetaFile)),
-	})
-	if err != nil {
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound") { //nolint:goconst // AWS API error codes, compared as literals
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("record %s: %w", id, err)
-	}
-	defer func() { _ = out.Body.Close() }()
-	return io.ReadAll(out.Body)
+	meta, _, err := s.readMeta(ctx, id)
+	return meta, err
 }
 
 func (s *Store) Metas(ctx context.Context) ([][]byte, error) {
@@ -244,6 +223,113 @@ func (s *Store) SweepStaging() error {
 // bucket lifecycle policy handles invisible upload orphans.
 func (s *Store) SweepGenerations() error { return nil }
 
+func (s *Store) readMeta(ctx context.Context, id string) ([]byte, string, error) {
+	out, err := s.client.GetObject(ctx, &awss3.GetObjectInput{
+		Bucket: &s.bucket, Key: aws.String(s.key(id, store.MetaFile)),
+	})
+	if err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound") { //nolint:goconst // AWS API error codes, compared as literals
+			return nil, "", store.ErrNotFound
+		}
+		return nil, "", fmt.Errorf("record %s: %w", id, err)
+	}
+	defer func() { _ = out.Body.Close() }()
+	meta, err := io.ReadAll(out.Body)
+	if err != nil {
+		return nil, "", err
+	}
+	return meta, out.Metadata[digestMetadataKey], nil
+}
+
+func (s *Store) publish(ctx context.Context, staging, id string, digested bool) (string, error) {
+	metaRaw, err := os.ReadFile(filepath.Join(staging, store.MetaFile)) //nolint:gosec // our own staging dir
+	if err != nil {
+		return "", fmt.Errorf("staging has no %s: %w", store.MetaFile, err)
+	}
+	files, err := s.publishFiles(staging, id, store.ExportGen(metaRaw), digested)
+	if err != nil {
+		return "", err
+	}
+	digestFiles := make([]store.DigestFile, len(files))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(4) // files in parallel; each already multiparts internally
+	for i, file := range files {
+		g.Go(func() error {
+			if !digested {
+				return s.upload(gctx, file.key, file.path)
+			}
+			fileDigest, digestErr := s.uploadDigested(gctx, file.key, file.path, file.digestPath)
+			if digestErr == nil {
+				digestFiles[i] = fileDigest
+			}
+			return digestErr
+		})
+	}
+	if err = g.Wait(); err != nil {
+		return "", err
+	}
+	digest := ""
+	var metadata map[string]string
+	if digested {
+		digest, err = store.AssembleDigest(digestFiles)
+		if err != nil {
+			return "", err
+		}
+		metadata = map[string]string{digestMetadataKey: digest}
+	}
+	if err = s.uploadReader(ctx, s.key(id, store.MetaFile), bytes.NewReader(metaRaw), int64(len(metaRaw)), metadata); err != nil {
+		return "", err
+	}
+	// Keep old generations because another node may have selected the previous meta; Delete reclaims them.
+	if err := os.RemoveAll(staging); err != nil {
+		return "", err
+	}
+	return digest, nil
+}
+
+func (s *Store) publishFiles(staging, id, gen string, digested bool) ([]publishFile, error) {
+	root := staging
+	if digested {
+		root = filepath.Join(staging, store.ExportDir)
+	}
+	var files []publishFile
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if !digested {
+			if rel == store.MetaFile {
+				return nil
+			}
+			files = append(files, publishFile{
+				path: path,
+				key:  s.key(id, gen+strings.TrimPrefix(rel, store.ExportDir)),
+			})
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("digest export %s is not a regular file", rel)
+		}
+		files = append(files, publishFile{
+			path:       path,
+			key:        s.key(id, gen+"/"+rel),
+			digestPath: rel,
+		})
+		return nil
+	})
+	return files, err
+}
+
 // populate downloads one cache generation and installs it atomically.
 func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string) error {
 	if _, err := os.Stat(gen); err == nil {
@@ -301,11 +387,42 @@ func (s *Store) upload(ctx context.Context, key, path string) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	return s.uploadReader(ctx, key, f)
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	return s.uploadReader(ctx, key, f, info.Size(), nil)
 }
 
-func (s *Store) uploadReader(ctx context.Context, key string, body io.Reader) error {
-	if _, err := s.tm.UploadObject(ctx, &transfermanager.UploadObjectInput{Bucket: &s.bucket, Key: &key, Body: body}); err != nil {
+func (s *Store) uploadDigested(ctx context.Context, key, path, digestPath string) (store.DigestFile, error) {
+	f, err := os.Open(path) //nolint:gosec // path walked from our own staging dir
+	if err != nil {
+		return store.DigestFile{}, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return store.DigestFile{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return store.DigestFile{}, fmt.Errorf("digest export %s is not a regular file", digestPath)
+	}
+	reader := newDigestReader(f, digestPath, info.Size())
+	if err := s.uploadReader(ctx, key, reader, info.Size(), nil); err != nil {
+		return store.DigestFile{}, err
+	}
+	return reader.Digest()
+}
+
+func (s *Store) uploadReader(ctx context.Context, key string, body io.Reader, size int64, metadata map[string]string) error {
+	input := &transfermanager.UploadObjectInput{
+		Bucket:        &s.bucket,
+		Key:           &key,
+		Body:          body,
+		ContentLength: aws.Int64(size),
+		Metadata:      metadata,
+	}
+	if _, err := s.tm.UploadObject(ctx, input); err != nil {
 		return fmt.Errorf("upload %s: %w", key, err)
 	}
 	return nil
