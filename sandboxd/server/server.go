@@ -64,7 +64,7 @@ type Manager interface {
 	Hibernate(ctx context.Context, id string, cred pool.Cred) error
 	Wake(ctx context.Context, id string, cred pool.Cred) error
 	Fork(ctx context.Context, id string, cred pool.Cred, count int, ttl time.Duration) ([]*types.Sandbox, error)
-	Promote(ctx context.Context, id string, cred pool.Cred, template, tenant string) (types.PoolKey, error)
+	Promote(ctx context.Context, id string, cred pool.Cred, template, tenant string) (types.PoolKey, string, error)
 	DeleteTemplate(ctx context.Context, key types.PoolKey, tenant string) error
 	Checkpoint(ctx context.Context, id string, cred pool.Cred, name, tenant string) (types.Checkpoint, error)
 	Counters() pool.Counters
@@ -351,9 +351,9 @@ func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	key, err := s.mgr.Promote(r.Context(), id, s.bodyCred(r, req.Token), req.Template, tenantFrom(r.Context()))
+	key, digest, err := s.mgr.Promote(r.Context(), id, s.bodyCred(r, req.Token), req.Template, tenantFrom(r.Context()))
 	writeResult(w, r, "promote", id, "promote failed", err, func() {
-		writeJSON(w, http.StatusOK, types.PromoteResponse{Key: key})
+		writeJSON(w, http.StatusOK, types.PromoteResponse{Key: key, ContentDigest: digest})
 	})
 }
 
@@ -640,6 +640,6 @@ func (s *Server) resolveScope(r *http.Request) (string, bool) {
 func (s *Server) claimResponse(sb *types.Sandbox) types.ClaimResponse {
 	return types.ClaimResponse{
 		ID: sb.ID, Token: sb.Token, Deadline: sb.Deadline,
-		OwnerAddr: s.advertise, FromCheckpoint: sb.FromCheckpoint,
+		OwnerAddr: s.advertise, FromCheckpoint: sb.FromCheckpoint, TemplateDigest: sb.TemplateDigest,
 	}
 }

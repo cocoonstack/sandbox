@@ -184,6 +184,9 @@ type Sandbox struct {
 	// FromCheckpoint names the checkpoint this sandbox branched from, for
 	// lineage; empty for pool and template claims.
 	FromCheckpoint string `json:"from_checkpoint,omitempty"`
+	// TemplateDigest identifies the promoted-template export this sandbox was
+	// initially cloned from; empty for every other provisioning source.
+	TemplateDigest string `json:"template_digest,omitempty"`
 
 	// StaleSnap names a consumed wake snapshot a lagging journal still
 	// references; dropped once a later write lands. Guarded by Transition.

@@ -41,16 +41,16 @@ type Store interface {
 	Stage(id string) (string, error)
 	// Publish turns a staged directory into the record, replacing any
 	// previous generation atomically for listers (the dir backend renames;
-	// the s3 backend commits meta.json last). Same-id Publish/Fetch/Delete
-	// are serialized by the caller (the pool's per-template lock); two
-	// processes publishing one id remain unserialized. Request-path callers
-	// pass an uncancelable ctx so a started publish finishes.
+	// the s3 backend commits meta.json last). The caller serializes same-id
+	// operations in-process; dir also uses a bounded, stable hash-striped set
+	// of cross-process advisory locks, while s3 retains old generations for
+	// readers but requires one writer per id.
+	// Request-path callers pass an uncancelable ctx so a started publish finishes.
 	Publish(ctx context.Context, staging, id string) error
 	// Fetch materializes a record's snapshot export as a local directory
 	// cocoon can clone from, plus the meta it resolved on the way, and a
-	// release to call when the clone is done. The dir backend returns its
-	// path with a no-op release; the s3 backend serves a local cache
-	// generation.
+	// release to call when the clone is done. The dir release drops its shared
+	// generation lock; the s3 backend serves an immutable local cache generation.
 	Fetch(ctx context.Context, id string) (dir string, meta []byte, release func(), err error)
 	// ReadMeta returns a record's metadata, or an error when the record
 	// does not exist.

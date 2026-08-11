@@ -174,8 +174,8 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	if err != nil {
 		return "", fmt.Errorf("wake %s: fetch archive: %w", sb.ID, err)
 	}
-	defer release()
 	built, err := m.provision(ctx, sb.Key, dir)
+	release()
 	if err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}

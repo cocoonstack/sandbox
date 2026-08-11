@@ -109,6 +109,7 @@ class Client:
             owner=reply.get("owner_addr") or dialed,
             deadline=reply.get("deadline", ""),
             from_checkpoint=reply.get("from_checkpoint", ""),
+            template_digest=reply.get("template_digest", ""),
         )
 
     def _post_json(self, addr: str, path: str, body: dict, verb: str) -> dict:

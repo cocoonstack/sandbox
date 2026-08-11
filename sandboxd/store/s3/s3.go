@@ -102,7 +102,6 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 		return fmt.Errorf("staging has no %s: %w", store.MetaFile, err)
 	}
 	gen := exportGen(metaRaw)
-	fresh := map[string]struct{}{s.key(id, store.MetaFile): {}}
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(4) // files in parallel; each already multiparts internally
 	err = filepath.WalkDir(staging, func(path string, d os.DirEntry, err error) error {
@@ -117,7 +116,6 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 			return nil
 		}
 		key := s.key(id, gen+strings.TrimPrefix(rel, store.ExportDir))
-		fresh[key] = struct{}{}
 		g.Go(func() error { return s.upload(gctx, key, path) })
 		return nil
 	})
@@ -130,22 +128,7 @@ func (s *Store) Publish(ctx context.Context, staging, id string) error {
 	if err = s.uploadReader(ctx, s.key(id, store.MetaFile), bytes.NewReader(metaRaw)); err != nil {
 		return err
 	}
-	// A re-publish (re-promote) may ship a different export file set:
-	// after the new meta commits, sweep keys the new generation did not
-	// write, or Fetch would download the union of generations.
-	keys, err := s.list(ctx, s.key(id, "")+"/")
-	if err != nil {
-		return err
-	}
-	var stale []string
-	for _, key := range keys {
-		if _, ok := fresh[key]; !ok {
-			stale = append(stale, key)
-		}
-	}
-	if err := s.deleteKeys(ctx, stale); err != nil {
-		return err
-	}
+	// Keep old generations because another node may have selected the previous meta; Delete reclaims them.
 	return os.RemoveAll(staging)
 }
 
@@ -229,16 +212,17 @@ func (s *Store) Metas(ctx context.Context) ([][]byte, error) {
 
 func (s *Store) Delete(ctx context.Context, id string) error {
 	_ = os.RemoveAll(filepath.Join(s.staging, "cache", id)) //nolint:gosec // id pinned by idRe
-	// Uncommit first: dropping meta.json makes the record invisible to
-	// loads before any export object disappears under a concurrent fetch.
-	if err := s.deleteKeys(ctx, []string{s.key(id, store.MetaFile)}); err != nil {
-		return err
-	}
+	metaKey := s.key(id, store.MetaFile)
 	keys, err := s.list(ctx, s.key(id, "")+"/")
 	if err != nil {
 		return err
 	}
-	return s.deleteKeys(ctx, keys)
+	// Keep the commit marker so a failed export cleanup remains discoverable on retry.
+	keys = slices.DeleteFunc(keys, func(key string) bool { return key == metaKey })
+	if err := s.deleteKeys(ctx, keys); err != nil {
+		return err
+	}
+	return s.deleteKeys(ctx, []string{metaKey})
 }
 
 // SweepStaging clears local staging residue AND stale cache generations —

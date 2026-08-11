@@ -450,7 +450,7 @@ func TestEgressLaneCannotForkOrCheckpoint(t *testing.T) {
 	if _, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: "tok"}, "", ""); !errors.Is(err, ErrNoEgressFork) {
 		t.Errorf("Checkpoint on egress lane: got %v, want ErrNoEgressFork", err)
 	}
-	if _, err := m.Promote(t.Context(), sb.ID, Cred{Token: "tok"}, "tpl", ""); !errors.Is(err, ErrNoEgressFork) {
+	if _, _, err := m.Promote(t.Context(), sb.ID, Cred{Token: "tok"}, "tpl", ""); !errors.Is(err, ErrNoEgressFork) {
 		t.Errorf("Promote on egress lane: got %v, want ErrNoEgressFork", err)
 	}
 }

@@ -9,7 +9,8 @@ import (
 // and Delete dial the owner directly — no gossip involved — so unlike the
 // name-based Client calls they are usable the instant Promote returns.
 type Template struct {
-	Name string
+	Name          string
+	ContentDigest string
 
 	c    *Client
 	addr string
@@ -47,7 +48,12 @@ func (t *Template) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
 // template is gone there) and gossip about same-name templates elsewhere is
 // never consulted.
 func (t *Template) Delete(ctx context.Context) error {
-	u := url.Values{"template": {t.Name}, "net": {t.net}, "size": {t.size}, "no_redirect": {"1"}}
+	u := url.Values{
+		templateQueryParam:   {t.Name},
+		netQueryParam:        {t.net},
+		sizeQueryParam:       {t.size},
+		noRedirectQueryParam: {"1"},
+	}
 	_, err := t.c.deleteTemplates(ctx, t.addr, u)
 	return err
 }

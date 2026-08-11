@@ -67,15 +67,16 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	if err := m.overQuota(1, tenant); err != nil {
 		return nil, err
 	}
-	golden, release, err := m.resolveGolden(ctx, key)
+	golden, templateDigest, release, err := m.resolveGolden(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("resolve template: %w", err)
 	}
-	defer release()
 	sb, err := m.provision(ctx, key, golden)
+	release()
 	if err != nil {
 		return nil, err
 	}
+	sb.TemplateDigest = templateDigest
 	sb.Tenant = tenant
 	sb.ClaimRef = claimRef
 	out, err := m.finalize(ctx, sb, ttl)

@@ -55,6 +55,9 @@ func (e *ExitError) Error() string {
 type Sandbox struct {
 	ID       string
 	Deadline time.Time
+	// TemplateDigest identifies the promoted-template export this sandbox was
+	// cloned from; empty for configured pools, image boots, forks, and checkpoints.
+	TemplateDigest string
 
 	// FromCheckpoint names the checkpoint this sandbox branched from; empty
 	// for pool and template claims.
@@ -176,7 +179,10 @@ func (s *Sandbox) Promote(ctx context.Context, template string) (*Template, erro
 	if err != nil {
 		return nil, err
 	}
-	return &Template{Name: pr.Key.Template, c: s.c, addr: s.owner, net: pr.Key.Net, size: pr.Key.Size}, nil
+	return &Template{
+		Name: pr.Key.Template, ContentDigest: pr.ContentDigest,
+		c: s.c, addr: s.owner, net: pr.Key.Net, size: pr.Key.Size,
+	}, nil
 }
 
 // Hibernate atomically snapshots the sandbox and stops its VM, freeing its

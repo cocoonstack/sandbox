@@ -1,9 +1,13 @@
 package dir
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/storetest"
@@ -15,6 +19,88 @@ func TestDirBackendContract(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	storetest.RunContract(t, st)
+}
+
+func TestFetchPinsGenerationAcrossStoreInstances(t *testing.T) {
+	const id = "ck_00000000000000aa"
+	root := t.TempDir()
+	reader, err := New(root, store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	writer, err := New(root, store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	staging, err := writer.Stage(id)
+	if err != nil {
+		t.Fatalf("stage first: %v", err)
+	}
+	seedRecord(t, staging, "first")
+	if err = writer.Publish(t.Context(), staging, id); err != nil {
+		t.Fatalf("publish first: %v", err)
+	}
+
+	dir, meta, release, err := reader.Fetch(t.Context(), id)
+	if err != nil {
+		t.Fatalf("fetch first: %v", err)
+	}
+	if string(meta) != `{"id":"first"}` {
+		t.Fatalf("fetch meta %q, want first generation", meta)
+	}
+	if lock, lockErr := writer.lockRecord(id, unix.LOCK_EX|unix.LOCK_NB); !errors.Is(lockErr, unix.EWOULDBLOCK) {
+		if lockErr == nil {
+			unlockRecord(lock)
+		}
+		t.Fatalf("writer lock while fetch is live: %v, want EWOULDBLOCK", lockErr)
+	}
+	if _, statErr := os.Stat(dir); statErr != nil {
+		t.Fatalf("pinned export: %v", statErr)
+	}
+	release()
+
+	staging, err = writer.Stage(id)
+	if err != nil {
+		t.Fatalf("stage second: %v", err)
+	}
+	seedRecord(t, staging, "second")
+	if err = writer.Publish(t.Context(), staging, id); err != nil {
+		t.Fatalf("publish second: %v", err)
+	}
+	_, meta, release, err = reader.Fetch(t.Context(), id)
+	if err != nil {
+		t.Fatalf("fetch second: %v", err)
+	}
+	defer release()
+	if string(meta) != `{"id":"second"}` {
+		t.Fatalf("fetch meta %q, want second generation", meta)
+	}
+}
+
+func TestRecordLockFilesStayBoundedAcrossIDChurn(t *testing.T) {
+	root := t.TempDir()
+	st, err := New(root, store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	want := map[string]struct{}{}
+	for i := range recordLockStripes * 16 {
+		id := fmt.Sprintf("ck_%016x", i)
+		want[filepath.Base(st.recordLockPath(id))] = struct{}{}
+		if _, _, _, err = st.Fetch(t.Context(), id); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("Fetch missing %s: %v, want store.ErrNotFound", id, err)
+		}
+	}
+	locks, err := os.ReadDir(filepath.Join(root, lockDir))
+	if err != nil {
+		t.Fatalf("read lock stripes: %v", err)
+	}
+	if len(locks) != len(want) {
+		t.Fatalf("lock files after churn = %d, want %d used stripes", len(locks), len(want))
+	}
+	if len(locks) > recordLockStripes {
+		t.Fatalf("lock files after churn = %d, want at most %d", len(locks), recordLockStripes)
+	}
 }
 
 // TestSweepRecoversInterruptedPublish guards the re-publish swap: a crash

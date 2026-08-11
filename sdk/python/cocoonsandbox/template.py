@@ -15,12 +15,13 @@ if TYPE_CHECKING:
 class Template:
     """A promoted template on its owner node."""
 
-    def __init__(self, client: Client, addr: str, name: str, net: str, size: str):
+    def __init__(self, client: Client, addr: str, name: str, net: str, size: str, content_digest: str = ""):
         self._client = client
         self._addr = addr
         self.name = name
         self.net = net
         self.size = size
+        self.content_digest = content_digest
 
     def new(self, ttl_seconds: int = 0) -> Sandbox:
         """Claims a sandbox cloned from the template, on the template's

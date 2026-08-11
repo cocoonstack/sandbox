@@ -18,6 +18,13 @@ import (
 	"time"
 )
 
+const (
+	templateQueryParam   = "template"
+	netQueryParam        = "net"
+	sizeQueryParam       = "size"
+	noRedirectQueryParam = "no_redirect"
+)
+
 // ClientOption configures Connect.
 type ClientOption func(*Client)
 
@@ -95,7 +102,7 @@ func (c *Client) DeleteTemplate(ctx context.Context, template string, opts ...Op
 	for _, opt := range opts {
 		opt(&claim)
 	}
-	u := url.Values{"template": {claim.Template}, "net": {claim.Net}, "size": {claim.Size}}
+	u := url.Values{templateQueryParam: {claim.Template}, netQueryParam: {claim.Net}, sizeQueryParam: {claim.Size}}
 	redirect, err := c.deleteTemplates(ctx, c.addr, u)
 	if err != nil || len(redirect) == 0 {
 		return err
@@ -103,7 +110,7 @@ func (c *Client) DeleteTemplate(ctx context.Context, template string, opts ...Op
 	// The entry node doesn't hold the template but gossip named its owners.
 	// The retry carries no_redirect, mirroring the claim protocol: the owner
 	// answers for itself, never a second hop.
-	u.Set("no_redirect", "1")
+	u.Set(noRedirectQueryParam, "1")
 	if tryErr := tryEach(redirect, func(addr string) error {
 		_, retryErr := c.deleteTemplates(ctx, addr, u)
 		return retryErr
@@ -128,7 +135,10 @@ func (c *Client) ownerAt(ctx context.Context, addr, id, token string) (string, e
 // handleFrom builds a sandbox handle, defaulting the data-plane owner to the
 // node that answered when a single-node deployment omits owner_addr.
 func (c *Client) handleFrom(dialed string, cr claimResponse) *Sandbox {
-	return &Sandbox{ID: cr.ID, Deadline: cr.Deadline, FromCheckpoint: cr.FromCheckpoint, c: c, token: cr.Token, owner: cmp.Or(cr.OwnerAddr, dialed)}
+	return &Sandbox{
+		ID: cr.ID, Deadline: cr.Deadline, FromCheckpoint: cr.FromCheckpoint, TemplateDigest: cr.TemplateDigest,
+		c: c, token: cr.Token, owner: cmp.Or(cr.OwnerAddr, dialed),
+	}
 }
 
 func (c *Client) claimAt(ctx context.Context, addr string, body []byte) (claimResponse, error) {
@@ -430,6 +440,7 @@ type claimResponse struct {
 	Deadline       time.Time `json:"deadline"`
 	OwnerAddr      string    `json:"owner_addr,omitempty"`
 	FromCheckpoint string    `json:"from_checkpoint,omitempty"`
+	TemplateDigest string    `json:"template_digest,omitempty"`
 	Redirect       []string  `json:"redirect,omitempty"`
 }
 
@@ -454,6 +465,7 @@ type promoteResponse struct {
 		Net      string `json:"net"`
 		Size     string `json:"size"`
 	} `json:"key"`
+	ContentDigest string `json:"content_digest"`
 }
 
 type errorResponse struct {

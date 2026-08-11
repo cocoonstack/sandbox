@@ -44,6 +44,10 @@ type ClaimResponse struct {
 	Token     string    `json:"token,omitempty"`
 	Deadline  time.Time `json:"deadline,omitzero"`
 	OwnerAddr string    `json:"owner_addr,omitempty"`
+	// TemplateDigest identifies the promoted-template export this claim was
+	// cloned from. It is empty for configured pools, cold image boots, forks,
+	// checkpoints, and templates published by older sandboxd versions.
+	TemplateDigest string `json:"template_digest,omitempty"`
 
 	// FromCheckpoint names the checkpoint a branched claim was born from,
 	// so clients can reconstruct the checkpoint tree.
@@ -102,11 +106,12 @@ type PromoteRequest struct {
 	Template string `json:"template"`
 }
 
-// PromoteResponse returns the template's full key: templates are node-local,
-// so a cluster client needs the exact key (and this node's address) to claim
-// from or delete the template later.
+// PromoteResponse returns the template's full key and stable identity:
+// templates are node-local, so a cluster client needs the exact key (and this
+// node's address) to claim from or delete the template later.
 type PromoteResponse struct {
-	Key PoolKey `json:"key"`
+	Key           PoolKey `json:"key"`
+	ContentDigest string  `json:"content_digest"`
 }
 
 // PreviewRequest is the wire body of POST /v1/sandboxes/{id}/preview; auth

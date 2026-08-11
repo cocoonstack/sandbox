@@ -2,12 +2,18 @@ package pool
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,36 +26,37 @@ import (
 // from the requested key, never the reverse. Tenant attributes the promote
 // and scopes deletion; empty means the operator (root).
 type templateRecord struct {
-	ID        string    `json:"id"`
-	Tenant    string    `json:"tenant,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID            string    `json:"id"`
+	Tenant        string    `json:"tenant,omitempty"`
+	ContentDigest string    `json:"content_digest,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // Promote publishes a claimed sandbox as a template under (template, parent
 // net, parent size); later claims for that key clone from it. Re-promoting the
 // same name replaces it, and the caller owns its lifecycle (DeleteTemplate).
 // tenant attributes the record; empty means the operator (root).
-func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, tenant string) (types.PoolKey, error) {
+func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, tenant string) (types.PoolKey, string, error) {
 	sb, ok := m.resolve(id, cred)
 	if !ok {
-		return types.PoolKey{}, ErrUnknownSandbox
+		return types.PoolKey{}, "", ErrUnknownSandbox
 	}
 	if !types.NameRe.MatchString(template) {
-		return types.PoolKey{}, fmt.Errorf("%w: template %q must match %s", ErrBadKey, template, types.NameRe)
+		return types.PoolKey{}, "", fmt.Errorf("%w: template %q must match %s", ErrBadKey, template, types.NameRe)
 	}
 	if !sb.Key.Capturable() {
-		return types.PoolKey{}, ErrNoEgressFork
+		return types.PoolKey{}, "", ErrNoEgressFork
 	}
 	key := types.PoolKey{Template: template, Net: sb.Key.Net, Size: sb.Key.Size, Engine: sb.Key.Engine}
 	if m.pooledHash(key.Hash()) {
 		// A configured pool owns this key — promoting over it would
 		// silently change what refills produce.
-		return types.PoolKey{}, ErrPooledTemplate
+		return types.PoolKey{}, "", ErrPooledTemplate
 	}
 	// Fast-fail before the export; commitTemplate re-checks under the
 	// template lock, closing the check-then-publish race.
 	if err := m.checkTemplateOwner(ctx, store.TemplateID(key.Hash()), tenant); err != nil {
-		return types.PoolKey{}, err
+		return types.PoolKey{}, "", err
 	}
 	// See Fork: the transition lock pins the source snapshot, and a started
 	// promote must finish even if the caller hangs up.
@@ -59,18 +66,19 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 
 	snap, cleanup, err := m.sourceSnap(ctx, sb)
 	if err != nil {
-		return types.PoolKey{}, fmt.Errorf("promote %s: %w", sb.ID, err)
+		return types.PoolKey{}, "", fmt.Errorf("promote %s: %w", sb.ID, err)
 	}
 	defer cleanup()
-	if err := m.publishTemplate(ctx, snap, key, tenant); err != nil {
-		return types.PoolKey{}, fmt.Errorf("promote %s: %w", sb.ID, err)
+	digest, err := m.publishTemplate(ctx, snap, key, tenant)
+	if err != nil {
+		return types.PoolKey{}, "", fmt.Errorf("promote %s: %w", sb.ID, err)
 	}
 	if m.notifyTemplates != nil {
 		m.notifyTemplates()
 	}
 	m.counters.promotes.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "promote", ID: sb.ID, VMName: sb.VMName, Reference: key.Template})
-	return key, nil
+	return key, digest, nil
 }
 
 // DeleteTemplate removes a promoted template. Configured pools are refused:
@@ -254,7 +262,7 @@ func (m *Manager) checkTemplateOwner(ctx context.Context, id, tenant string) err
 // golden (no release), else a promoted template fetched from the store;
 // empty dir cold-boots. Only a true absence cold-boots — a backend failure
 // propagates rather than silently booting a template name as an image ref.
-func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string, func(), error) {
+func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string, string, func(), error) {
 	m.mu.Lock()
 	var dir string
 	if p := m.pools[key]; p != nil {
@@ -262,62 +270,142 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string,
 	}
 	m.mu.Unlock()
 	if dir != "" {
-		return dir, func() {}, nil
+		return dir, "", func() {}, nil
 	}
 	if key.Net == types.NetEgress {
-		return "", func() {}, nil // never resume a live-captured template on the egress lane; cold-boot instead
+		return "", "", func() {}, nil // never resume a live-captured template on the egress lane; cold-boot instead
 	}
 	id := store.TemplateID(key.Hash())
 	l := m.recLock(id)
 	l.RLock()
-	dir, _, release, err := m.tpls.Fetch(ctx, id)
+	dir, meta, release, err := m.tpls.Fetch(ctx, id)
 	if err != nil {
 		l.RUnlock()
 		m.recDone(id)
 		if errors.Is(err, store.ErrNotFound) {
-			return "", func() {}, nil
+			return "", "", func() {}, nil
 		}
-		return "", func() {}, err
+		return "", "", func() {}, err
 	}
-	return dir, func() { release(); l.RUnlock(); m.recDone(id) }, nil
+	var rec templateRecord
+	if err := json.Unmarshal(meta, &rec); err != nil {
+		release()
+		l.RUnlock()
+		m.recDone(id)
+		return "", "", func() {}, fmt.Errorf("decode template metadata: %w", err)
+	}
+	return dir, rec.ContentDigest, func() { release(); l.RUnlock(); m.recDone(id) }, nil
 }
 
 // publishTemplate exports snap into the store under the key's template id.
-func (m *Manager) publishTemplate(ctx context.Context, snap string, key types.PoolKey, tenant string) error {
+func (m *Manager) publishTemplate(ctx context.Context, snap string, key types.PoolKey, tenant string) (string, error) {
 	id := store.TemplateID(key.Hash())
 	staging, err := m.tpls.Stage(id)
 	if err != nil {
-		return fmt.Errorf("stage template: %w", err)
+		return "", fmt.Errorf("stage template: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
 	if err = m.eng.SnapshotExport(ctx, snap, filepath.Join(staging, store.ExportDir)); err != nil {
-		return fmt.Errorf("export template: %w", err)
+		return "", fmt.Errorf("export template: %w", err)
 	}
 	return m.commitTemplate(ctx, staging, id, tenant)
 }
 
-// commitTemplate writes the meta record, publishes the staged template, and
-// registers it in the gossip set — owner re-checked and swap serialized
-// under the template lock.
-func (m *Manager) commitTemplate(ctx context.Context, staging, id, tenant string) error {
-	meta, err := json.Marshal(templateRecord{ID: id, Tenant: tenant, CreatedAt: time.Now()})
+// commitTemplate hashes the private export staging once, then writes its meta,
+// publishes that generation, and registers it in the gossip set. The owner
+// re-check and meta+generation swap are serialized under the template lock.
+func (m *Manager) commitTemplate(ctx context.Context, staging, id, tenant string) (string, error) {
+	digest, err := exportContentDigest(filepath.Join(staging, store.ExportDir))
 	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); err != nil {
-		return err
+		return "", fmt.Errorf("digest template export: %w", err)
 	}
 	l := m.recLock(id)
 	l.Lock()
 	defer func() { l.Unlock(); m.recDone(id) }()
-	if err := m.checkTemplateOwner(ctx, id, tenant); err != nil {
-		return err
+	if ownerErr := m.checkTemplateOwner(ctx, id, tenant); ownerErr != nil {
+		return "", ownerErr
+	}
+	meta, err := json.Marshal(templateRecord{ID: id, Tenant: tenant, ContentDigest: digest, CreatedAt: time.Now()})
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); err != nil {
+		return "", err
 	}
 	if err := m.tpls.Publish(ctx, staging, id); err != nil {
-		return fmt.Errorf("publish template: %w", err)
+		return "", fmt.Errorf("publish template: %w", err)
 	}
 	m.tplMu.Lock()
 	m.tplSet[id] = struct{}{}
 	m.tplMu.Unlock()
-	return nil
+	return digest, nil
+}
+
+// exportContentDigest identifies a snapshot export by a versioned canonical
+// regular-file stream: slash-relative path, type, length, and content, globally
+// sorted by path. Directories, ownership metadata, modes, and mtimes are excluded.
+func exportContentDigest(root string) (string, error) {
+	type digestEntry struct {
+		path string
+		rel  string
+		size int64
+	}
+	var entries []digestEntry
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == root {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported export entry %s (%s)", rel, info.Mode().Type())
+		}
+		entries = append(entries, digestEntry{path: path, rel: rel, size: info.Size()})
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	slices.SortFunc(entries, func(a, b digestEntry) int { return strings.Compare(a.rel, b.rel) })
+
+	h := sha256.New()
+	_, _ = io.WriteString(h, "sandbox-template-export-v1\x00")
+	for _, entry := range entries {
+		var frame [9]byte
+		frame[0] = 'f'
+		binary.BigEndian.PutUint64(frame[1:], uint64(len(entry.rel)))
+		_, _ = h.Write(frame[:])
+		_, _ = io.WriteString(h, entry.rel)
+		binary.BigEndian.PutUint64(frame[:8], uint64(entry.size)) //nolint:gosec // regular file sizes are non-negative
+		_, _ = h.Write(frame[:8])
+		f, err := os.Open(entry.path) //nolint:gosec // path is walked from private export staging
+		if err != nil {
+			return "", err
+		}
+		n, copyErr := io.Copy(h, f)
+		closeErr := f.Close()
+		if copyErr != nil {
+			return "", copyErr
+		}
+		if closeErr != nil {
+			return "", closeErr
+		}
+		if n != entry.size {
+			return "", fmt.Errorf("export entry %s changed size while hashing", entry.rel)
+		}
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }

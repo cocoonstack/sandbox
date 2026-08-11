@@ -82,6 +82,90 @@ func TestDeleteRetryConverges(t *testing.T) {
 	}
 }
 
+func TestDeleteRetainsMetaUntilExportsAreGone(t *testing.T) {
+	const id = "ck_00000000000000bb"
+	metaKey := "ck/" + id + "/" + store.MetaFile
+	exportKeys := []string{
+		"ck/" + id + "/export-first/disk.img",
+		"ck/" + id + "/export-second/disk.img",
+	}
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	t.Setenv("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
+	t.Setenv("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
+
+	for _, tc := range []struct {
+		name       string
+		failList   bool
+		failDelete bool
+	}{
+		{name: "list failure", failList: true},
+		{name: "delete failure", failDelete: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeS3{
+				objects: map[string][]byte{
+					metaKey:       []byte(`{"id":"` + id + `"}`),
+					exportKeys[0]: []byte("first"),
+					exportKeys[1]: []byte("second"),
+				},
+				failList:   tc.failList,
+				failDelete: tc.failDelete,
+			}
+			ts := httptest.NewServer(fake)
+			t.Cleanup(ts.Close)
+			st, err := New(t.Context(), Config{
+				Bucket: "testbucket", Prefix: "ck/", Endpoint: ts.URL,
+				Region: "us-east-1", ForcePathStyle: true,
+			}, t.TempDir(), store.CheckpointIDRe)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			if err = st.Delete(t.Context(), id); err == nil {
+				t.Fatal("first Delete succeeded with an injected failure")
+			}
+			fake.mu.Lock()
+			if _, ok := fake.objects[metaKey]; !ok {
+				fake.mu.Unlock()
+				t.Fatal("first Delete removed meta before export cleanup succeeded")
+			}
+			for _, batch := range fake.deleteBatches {
+				if slices.Contains(batch, metaKey) {
+					fake.mu.Unlock()
+					t.Fatalf("first Delete included meta in export batch %v", batch)
+				}
+			}
+			fake.failList = false
+			fake.failDelete = false
+			fake.deleteBatches = nil
+			fake.mu.Unlock()
+
+			if err = st.Delete(t.Context(), id); err != nil {
+				t.Fatalf("second Delete: %v", err)
+			}
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			if len(fake.objects) != 0 {
+				t.Errorf("objects left after retry: %v", fake.objects)
+			}
+			if len(fake.deleteBatches) < 2 {
+				t.Fatalf("delete batches = %v, want exports then meta", fake.deleteBatches)
+			}
+			last := len(fake.deleteBatches) - 1
+			for i, batch := range fake.deleteBatches {
+				hasMeta := slices.Contains(batch, metaKey)
+				if (i == last) != hasMeta {
+					t.Errorf("delete batch %d = %v, meta must appear only in final batch", i, batch)
+				}
+			}
+			if batch := fake.deleteBatches[last]; len(batch) != 1 || batch[0] != metaKey {
+				t.Errorf("final delete batch = %v, want only %s", batch, metaKey)
+			}
+		})
+	}
+}
+
 // TestFetchLegacyExportLayout: records published before per-generation
 // export prefixes keep flat export/ keys; Fetch must fall back to them.
 func TestFetchLegacyExportLayout(t *testing.T) {
@@ -119,6 +203,53 @@ func TestFetchLegacyExportLayout(t *testing.T) {
 	}
 }
 
+func TestRepublishRetainsGenerationSelectedByAnotherStore(t *testing.T) {
+	const id = "ck_00000000000000aa"
+	fake := &fakeS3{objects: map[string][]byte{}}
+	ts := httptest.NewServer(fake)
+	t.Cleanup(ts.Close)
+
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	t.Setenv("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
+	t.Setenv("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
+	cfg := Config{
+		Bucket: "testbucket", Prefix: "ck/", Endpoint: ts.URL,
+		Region: "us-east-1", ForcePathStyle: true,
+	}
+	reader, err := New(t.Context(), cfg, t.TempDir(), store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	writer, err := New(t.Context(), cfg, t.TempDir(), store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	publishRecord(t, writer, id, []byte(`{"id":"`+id+`","gen":1}`), "first")
+	selected, err := reader.ReadMeta(t.Context(), id)
+	if err != nil {
+		t.Fatalf("select first generation: %v", err)
+	}
+	publishRecord(t, writer, id, []byte(`{"id":"`+id+`","gen":2}`), "second")
+
+	gen := filepath.Join(reader.staging, "selected-first")
+	if err = reader.populate(t.Context(), id, selected, gen); err != nil {
+		t.Fatalf("fetch selected first generation after re-publish: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(gen, store.ExportDir, "disk.img")) //nolint:gosec // test path
+	if err != nil || string(got) != "first" {
+		t.Fatalf("selected generation bytes: %q, %v, want first", got, err)
+	}
+	if err = writer.Delete(t.Context(), id); err != nil {
+		t.Fatalf("delete all generations: %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.objects) != 0 {
+		t.Errorf("objects left after Delete: %v", fake.objects)
+	}
+}
+
 // TestS3BackendContractRealEndpoint runs the same contract against a real
 // S3 implementation (MinIO on a testbed) when SANDBOX_S3_E2E names its
 // endpoint — real list pagination, checksums, and path-style behavior the
@@ -141,11 +272,35 @@ func TestS3BackendContractRealEndpoint(t *testing.T) {
 	storetest.RunContract(t, st)
 }
 
+func publishRecord(t *testing.T, st *Store, id string, meta []byte, content string) {
+	t.Helper()
+	staging, err := st.Stage(id)
+	if err != nil {
+		t.Fatalf("stage record: %v", err)
+	}
+	export := filepath.Join(staging, store.ExportDir)
+	if err := os.MkdirAll(export, 0o750); err != nil {
+		t.Fatalf("mkdir export: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(export, "disk.img"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write export: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); err != nil {
+		t.Fatalf("write meta: %v", err)
+	}
+	if err := st.Publish(t.Context(), staging, id); err != nil {
+		t.Fatalf("publish record: %v", err)
+	}
+}
+
 // fakeS3 implements just enough of the S3 REST surface (path-style) for
 // the backend: PutObject, GetObject, DeleteObjects, ListObjectsV2.
 type fakeS3 struct {
-	mu      sync.Mutex
-	objects map[string][]byte // key -> body
+	mu            sync.Mutex
+	objects       map[string][]byte // key -> body
+	failList      bool
+	failDelete    bool
+	deleteBatches [][]string
 }
 
 func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -157,6 +312,10 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		f.objects[key] = body
 	case r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2":
+		if f.failList {
+			http.Error(w, "injected list failure", http.StatusBadRequest)
+			return
+		}
 		prefix := r.URL.Query().Get("prefix")
 		delim := r.URL.Query().Get("delimiter")
 		type object struct {
@@ -233,15 +392,29 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad delete xml", http.StatusBadRequest)
 			return
 		}
+		batch := make([]string, len(req.Objects))
+		for i := range req.Objects {
+			batch[i] = req.Objects[i].Key
+		}
+		f.deleteBatches = append(f.deleteBatches, batch)
 		// Strict-backend emulation: absent keys answer a per-entry NoSuchKey
 		// (AWS succeeds silently) so the client's tolerance stays exercised.
 		type delErr struct {
-			Key  string `xml:"Key"`
-			Code string `xml:"Code"`
+			Key     string `xml:"Key"`
+			Code    string `xml:"Code"`
+			Message string `xml:"Message,omitempty"`
 		}
 		var result struct {
 			XMLName xml.Name `xml:"DeleteResult"`
 			Errors  []delErr `xml:"Error"`
+		}
+		if f.failDelete {
+			result.Errors = append(result.Errors, delErr{
+				Key: req.Objects[0].Key, Code: "AccessDenied", Message: "injected delete failure",
+			})
+			w.Header().Set("Content-Type", "application/xml")
+			_ = xml.NewEncoder(w).Encode(result)
+			return
 		}
 		for _, o := range req.Objects {
 			if _, ok := f.objects[o.Key]; !ok {

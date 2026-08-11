@@ -98,9 +98,10 @@ sb = client.new("ghcr.io/cocoonstack/sandbox/rt:24.04",
 `new` returns when the sandbox's silkd answers: a warm hit is milliseconds,
 a cold key can take the full boot. The handle exposes `sb.id`, `sb.token`,
 `sb.owner`, `sb.deadline`, and `sb.from_checkpoint` (the lineage edge when
-branched). `Sandbox` is a context manager; `sb.close()` releases it
-(releasing one already gone is not an error — double-release and reap races
-stay silent).
+branched). `sb.template_digest` is the exact content identity when the claim
+cloned a promoted template; it is empty for other sources. `Sandbox` is a
+context manager; `sb.close()` releases it (releasing one already gone is not
+an error — double-release and reap races stay silent).
 
 ## Hibernating
 
@@ -138,6 +139,7 @@ All-or-nothing: on error no child survived. Count is capped at the node's
 ```python
 tpl = sb.promote("myproj:v1")     # publish current state
 child = tpl.new()                 # clones the promoted state
+assert tpl.content_digest == child.template_digest
 tpl.delete()                      # caller owns the lifecycle
 ```
 
@@ -149,6 +151,9 @@ bound there, so its `new`/`delete` always reach it. The name-based calls
 cluster-wide via template gossip and lag a promote/delete by about a gossip
 tick — prefer the handle right after promoting (see
 [Templates on a cluster](cluster.md#templates-on-a-cluster)).
+`tpl.content_digest` identifies the published export bytes. A caller pinning
+the mutable name can compare a claim's `template_digest` with its expected
+value and close/refuse a mismatch.
 
 ## Checkpoints — branching and time travel
 

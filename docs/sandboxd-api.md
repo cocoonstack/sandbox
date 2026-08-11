@@ -39,8 +39,13 @@ Success:
 
 ```json
 {"id": "sb_…", "token": "…", "deadline": "2026-07-06T00:05:00Z",
- "owner_addr": "10.0.0.5:7777"}
+ "owner_addr": "10.0.0.5:7777", "template_digest": "sha256:…"}
 ```
+
+A claim cloned from a promoted template carries `template_digest`, the exact
+export generation fetched for that clone. It is absent for configured pools,
+cold image boots, forks, checkpoints, and templates published by an older
+sandboxd until they are re-promoted.
 
 A claim branched from a checkpoint (fork children included) additionally
 carries `"from_checkpoint": "ck_…"` — the lineage edge for reconstructing
@@ -136,14 +141,23 @@ Publishes the sandbox's current state as a node-local template under
 from it, provision-on-demand — no warm pool unless the node config adds one.
 Re-promoting to the same name replaces the template. A hibernated sandbox is
 promoted from its memory image without waking. 200 returns the template's
-full key. On the default local-disk backend a template is node-local, so a
-cluster client claims from and deletes on this node (name-based calls route
-via gossip); a shared checkpoint store makes every node resolve it. Under
-exactly this key:
+full key and immutable content identity. On the default local-disk backend a
+template is node-local, so a cluster client claims from and deletes on this
+node (name-based calls route via gossip); a shared checkpoint store makes
+every node resolve it. Under exactly this key:
 
 ```json
-{"key": {"template": "myproj:v1", "net": "none", "size": "small"}}
+{"key": {"template": "myproj:v1", "net": "none", "size": "small"},
+ "content_digest": "sha256:…"}
 ```
+
+`content_digest` is SHA-256 over a versioned canonical stream of the published
+export's regular files: slash-relative path, byte length, and bytes, ordered
+lexically. Directory entries, modes, mtimes, and the template's ownership/
+creation metadata do not affect it. The digest is computed once while
+promoting, stored in `meta.json`, and therefore has identical semantics on the
+directory and S3 backends. Re-promoting unchanged export bytes keeps the
+digest; changing any exported path or bytes changes it.
 
 400 invalid name, 401 bad api token, 409 when the name collides with a
 configured pool, the template is owned by another tenant, or the sandbox is

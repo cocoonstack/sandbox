@@ -56,9 +56,24 @@ def node():
 
 def test_claim_happy_path(node):
     FakeNode.routes[("POST", "/v1/claim")] = lambda body, path: (
-        200, {"id": "sb_1", "token": "tok", "owner_addr": node})
+        200, {"id": "sb_1", "token": "tok", "owner_addr": node, "template_digest": "sha256:task"})
     sb = Client(node).new("rt:24.04")
     assert sb.id == "sb_1" and sb.owner == node
+    assert sb.template_digest == "sha256:task"
+
+
+def test_promote_returns_content_digest(node):
+    FakeNode.routes[("POST", "/v1/claim")] = lambda body, path: (
+        200, {"id": "sb_1", "token": "tok", "owner_addr": node})
+    FakeNode.routes[("POST", "/v1/sandboxes/sb_1/promote")] = lambda body, path: (
+        200, {
+            "key": {"template": "task:v1", "net": "none", "size": "small"},
+            "content_digest": "sha256:promoted",
+        })
+
+    tpl = Client(node).new("rt:24.04").promote("task:v1")
+    assert tpl.name == "task:v1"
+    assert tpl.content_digest == "sha256:promoted"
 
 
 def test_claim_follows_redirect_with_no_redirect(node):
