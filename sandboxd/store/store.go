@@ -50,7 +50,7 @@ type Store interface {
 	Publish(ctx context.Context, staging, id string) error
 	// Fetch materializes a record's snapshot export as a local directory
 	// cocoon can clone from, plus the meta it resolved on the way, and a
-	// release pinning that exact generation — hold it until the clone is done.
+	// release to hold until the clone is done (the generation outlives it).
 	Fetch(ctx context.Context, id string) (dir string, meta []byte, release func(), err error)
 	// ReadMeta returns a record's metadata, or an error when the record
 	// does not exist.
