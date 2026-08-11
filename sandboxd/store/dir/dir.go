@@ -442,19 +442,18 @@ func hashChunks(ctx context.Context, sources []digestSource, workers int, hashFn
 }
 
 func collectDigestSources(root string) ([]digestSource, error) {
-	info, err := os.Lstat(root)
-	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("export root is not a directory")
-	}
 	var sources []digestSource
-	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if path == root || entry.IsDir() {
+		if path == root {
+			if !entry.IsDir() {
+				return fmt.Errorf("export root is not a directory")
+			}
+			return nil
+		}
+		if entry.IsDir() {
 			return nil
 		}
 		rel, relErr := filepath.Rel(root, path)
@@ -469,14 +468,10 @@ func collectDigestSources(root string) ([]digestSource, error) {
 		if !entryInfo.Mode().IsRegular() {
 			return fmt.Errorf("unsupported export entry %s (%s)", rel, entryInfo.Mode().Type())
 		}
-		chunks := entryInfo.Size() / store.DigestChunkSize
-		if entryInfo.Size()%store.DigestChunkSize != 0 {
-			chunks++
-		}
 		sources = append(sources, digestSource{
 			path: path,
 			digest: store.DigestFile{
-				Path: rel, Size: entryInfo.Size(), Chunks: make([][sha256.Size]byte, int(chunks)),
+				Path: rel, Size: entryInfo.Size(), Chunks: make([][sha256.Size]byte, store.ChunkCount(entryInfo.Size())),
 			},
 		})
 		return nil

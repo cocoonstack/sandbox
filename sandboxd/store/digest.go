@@ -23,6 +23,14 @@ type DigestFile struct {
 	Chunks [][sha256.Size]byte // indexed by ascending file offset
 }
 
+// ChunkCount returns how many DigestChunkSize chunks size spans.
+func ChunkCount(size int64) int64 {
+	if size == 0 {
+		return 0
+	}
+	return (size-1)/DigestChunkSize + 1
+}
+
 // AssembleDigest returns the canonical v2 digest of indexed file chunks.
 func AssembleDigest(files []DigestFile) (string, error) {
 	files = slices.Clone(files)
@@ -40,12 +48,8 @@ func AssembleDigest(files []DigestFile) (string, error) {
 		if file.Size < 0 {
 			return "", fmt.Errorf("digest file %q has negative size %d", file.Path, file.Size)
 		}
-		var wantChunks int64
-		if file.Size > 0 {
-			wantChunks = (file.Size-1)/DigestChunkSize + 1
-		}
-		if int64(len(file.Chunks)) != wantChunks {
-			return "", fmt.Errorf("digest file %q has %d chunks, want %d for size %d", file.Path, len(file.Chunks), wantChunks, file.Size)
+		if int64(len(file.Chunks)) != ChunkCount(file.Size) {
+			return "", fmt.Errorf("digest file %q has %d chunks, want %d for size %d", file.Path, len(file.Chunks), ChunkCount(file.Size), file.Size)
 		}
 
 		var frame [8]byte
