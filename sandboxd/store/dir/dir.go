@@ -233,9 +233,6 @@ func (d *Store) sweepGenerations(id string) (err error) {
 			return readErr
 		}
 		for _, e := range entries {
-			if !strings.HasPrefix(e.Name(), store.ExportDir+"-") {
-				continue
-			}
 			if removeErr := removeAgedEntry(final, e); removeErr != nil {
 				return removeErr
 			}
@@ -252,6 +249,9 @@ func (d *Store) sweepGenerations(id string) (err error) {
 		return err
 	}
 	entries, err := os.ReadDir(final)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}

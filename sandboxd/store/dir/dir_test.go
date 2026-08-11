@@ -2,10 +2,13 @@ package dir
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/storetest"
@@ -69,26 +72,7 @@ func TestPublishRetriesAfterExpiredInstall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	staging, err := st.Stage(id)
-	if err != nil {
-		t.Fatalf("stage installed generation: %v", err)
-	}
-	seedRecord(t, staging, "same")
-	meta, err := os.ReadFile(filepath.Join(staging, store.MetaFile))
-	if err != nil {
-		t.Fatalf("read staged meta: %v", err)
-	}
-	final := filepath.Join(root, id)
-	if mkdirErr := os.MkdirAll(final, 0o750); mkdirErr != nil {
-		t.Fatalf("create record dir: %v", mkdirErr)
-	}
-	gen := filepath.Join(final, store.ExportGen(meta))
-	if renameErr := os.Rename(filepath.Join(staging, store.ExportDir), gen); renameErr != nil {
-		t.Fatalf("install generation: %v", renameErr)
-	}
-	if removeErr := os.RemoveAll(staging); removeErr != nil {
-		t.Fatalf("remove crashed staging: %v", removeErr)
-	}
+	_, gen := installUncommitted(t, st, root, id, "same")
 	backdate(t, gen)
 
 	retry, err := st.Stage(id)
@@ -177,7 +161,6 @@ func TestPublishSweepsGenerationsBySupersessionAge(t *testing.T) {
 
 	setAge(t, gen1, generationGrace+time.Minute)
 	setAge(t, gen2, generationGrace/2)
-	setAge(t, filepath.Join(root, id, store.MetaFile), generationGrace/2)
 	mustPublish(t, st, id, "fourth")
 	if _, statErr := os.Stat(gen1); !os.IsNotExist(statErr) {
 		t.Fatalf("generation past its supersession grace survived publish: %v", statErr)
@@ -214,19 +197,7 @@ func TestSweepSparesPublishingGeneration(t *testing.T) {
 	mustPublish(t, writer, id, "old")
 	backdate(t, filepath.Join(root, id, store.MetaFile))
 
-	staging, err := writer.Stage(id)
-	if err != nil {
-		t.Fatalf("stage new generation: %v", err)
-	}
-	seedRecord(t, staging, "new")
-	meta, err := os.ReadFile(filepath.Join(staging, store.MetaFile))
-	if err != nil {
-		t.Fatalf("read staged meta: %v", err)
-	}
-	gen := filepath.Join(root, id, store.ExportGen(meta))
-	if renameErr := os.Rename(filepath.Join(staging, store.ExportDir), gen); renameErr != nil {
-		t.Fatalf("install generation: %v", renameErr)
-	}
+	meta, gen := installUncommitted(t, writer, root, id, "new")
 	if sweepErr := sweeper.SweepStaging(); sweepErr != nil {
 		t.Fatalf("sweep during publish: %v", sweepErr)
 	}
@@ -360,6 +331,56 @@ func TestSweepReclaimsOnlyAgedUncommittedGenerations(t *testing.T) {
 	}
 }
 
+// TestSweepGenerationsToleratesConcurrentDelete: a record deleted mid-sweep
+// must not fail the pass — the first error aborts every remaining record.
+func TestSweepGenerationsToleratesConcurrentDelete(t *testing.T) {
+	const id = "ck_00000000000000aa"
+	st, err := New(t.TempDir(), store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx := t.Context()
+	done := make(chan struct{})
+	var g errgroup.Group
+	g.Go(func() error {
+		defer close(done)
+		for range 500 {
+			staging, err := st.Stage(id)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Join(staging, store.ExportDir), 0o750); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(metaJSON(id)), 0o600); err != nil {
+				return err
+			}
+			if err := st.Publish(ctx, staging, id); err != nil {
+				return fmt.Errorf("publish: %w", err)
+			}
+			if err := st.Delete(ctx, id); err != nil {
+				return fmt.Errorf("delete: %w", err)
+			}
+		}
+		return nil
+	})
+	g.Go(func() error {
+		for {
+			select {
+			case <-done:
+				return nil
+			default:
+			}
+			if err := st.SweepGenerations(); err != nil {
+				return fmt.Errorf("sweep: %w", err)
+			}
+		}
+	})
+	if err := g.Wait(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestDeleteRemovesLegacyResidue: Delete clears a pre-generation <id>.old
 // crash artifact along with the record, and is idempotent on a missing id.
 func TestDeleteRemovesLegacyResidue(t *testing.T) {
@@ -406,6 +427,33 @@ func TestMetasSurfacesReadError(t *testing.T) {
 
 func metaJSON(metaID string) string {
 	return `{"id":"` + metaID + `"}`
+}
+
+// installUncommitted installs metaID's generation without committing
+// meta.json — the state a crash between install and commit leaves.
+func installUncommitted(t *testing.T, st *Store, root, id, metaID string) (meta []byte, gen string) {
+	t.Helper()
+	staging, err := st.Stage(id)
+	if err != nil {
+		t.Fatalf("stage %s: %v", metaID, err)
+	}
+	seedRecord(t, staging, metaID)
+	meta, err = os.ReadFile(filepath.Join(staging, store.MetaFile))
+	if err != nil {
+		t.Fatalf("read staged meta: %v", err)
+	}
+	final := filepath.Join(root, id)
+	if err := os.MkdirAll(final, 0o750); err != nil {
+		t.Fatalf("create record dir: %v", err)
+	}
+	gen = filepath.Join(final, store.ExportGen(meta))
+	if err := os.Rename(filepath.Join(staging, store.ExportDir), gen); err != nil {
+		t.Fatalf("install generation: %v", err)
+	}
+	if err := os.RemoveAll(staging); err != nil {
+		t.Fatalf("remove crashed staging: %v", err)
+	}
+	return meta, gen
 }
 
 // mustPublish stages and publishes a one-file export whose meta is
