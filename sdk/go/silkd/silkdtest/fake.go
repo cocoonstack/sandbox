@@ -41,11 +41,6 @@ func NewFake(root string) *Fake {
 	return &Fake{Root: root, sessions: map[string]bool{}, branches: []string{"main"}, current: "main"}
 }
 
-// Serve accepts connections until l closes, one RPC per connection.
-func (f *Fake) Serve(l net.Listener) {
-	acceptLoop(l, f.ServeConn)
-}
-
 // ServeConn speaks one RPC on an already-open connection (e.g. after an HTTP
 // hijack) and closes it.
 func (f *Fake) ServeConn(conn net.Conn) {
