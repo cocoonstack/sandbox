@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -97,9 +98,6 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	m.pendingCks[ckID] = struct{}{}
 	m.mu.Unlock()
 	defer m.untrack(m.pendingCks, ckID)
-	if err := m.markArchiveCk(ckID); err != nil {
-		return fmt.Errorf("track archive checkpoint: %w", err)
-	}
 	// A hibernated source is copied from its wake image, so no VM starts.
 	ck, srcSnap, err := m.publishCheckpoint(ctx, sb, ckID, "archive", sb.Tenant, true)
 	if err != nil {
@@ -187,6 +185,10 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	if err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
+	if markErr := m.markArchiveCk(ck); markErr != nil {
+		m.destroy(ctx, built.VMName)
+		return "", fmt.Errorf("wake %s: track archive checkpoint: %w", sb.ID, markErr)
+	}
 	live, saved := m.commitWake(ctx, sb, built.VMName, built.VsockSocket)
 	if !live || !saved {
 		m.destroy(ctx, built.VMName) // released, or persist rolled back to archived
@@ -195,7 +197,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		}
 		return "", fmt.Errorf("wake %s: persist claims", sb.ID)
 	}
-	// Consumed into the live VM; drop the store copy, and its now-dead lock.
+	// The pre-commit marker keeps a failed delete retryable after the journal update.
 	if delErr := m.ckpts.Delete(ctx, ck); delErr != nil {
 		log.WithFunc("pool.wakeArchived").Warnf(ctx, "delete consumed archive ck %s: %v", ck, delErr)
 	} else {
@@ -252,6 +254,7 @@ func (m *Manager) deleteOrphanArchiveCk(ctx context.Context, ckID string) {
 	}
 }
 
+// markArchiveCk records durable delete intent before the journal drops its reference.
 func (m *Manager) markArchiveCk(ckID string) error {
 	if !store.CheckpointIDRe.MatchString(ckID) {
 		return fmt.Errorf("invalid checkpoint id %q", ckID)
@@ -261,6 +264,49 @@ func (m *Manager) markArchiveCk(ckID string) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, ckID), nil, 0o600)
+}
+
+func (m *Manager) archiveDeleteMarkers() ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(m.dataDir, archiveDeleteDir))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && store.CheckpointIDRe.MatchString(entry.Name()) {
+			ids = append(ids, entry.Name())
+		}
+	}
+	return ids, nil
+}
+
+func (m *Manager) clearCanceledArchiveDeletes(ctx context.Context, claims map[string]*types.Sandbox) {
+	logger := log.WithFunc("pool.clearCanceledArchiveDeletes")
+	ids, err := m.archiveDeleteMarkers()
+	if err != nil {
+		logger.Warnf(ctx, "list: %v", err)
+		return
+	}
+	if len(ids) == 0 {
+		return
+	}
+	live := make(map[string]struct{})
+	for _, sb := range claims {
+		if sb.ArchiveCk != "" {
+			live[sb.ArchiveCk] = struct{}{}
+		}
+	}
+	for _, id := range ids {
+		if _, ok := live[id]; !ok {
+			continue
+		}
+		if err := m.clearArchiveCk(id); err != nil {
+			logger.Warnf(ctx, "clear %s: %v", id, err)
+		}
+	}
 }
 
 func (m *Manager) clearArchiveCk(ckID string) error {
@@ -289,27 +335,16 @@ func (m *Manager) retryArchiveDeletes(ctx context.Context) {
 		return
 	}
 	defer m.archiveDeleteSweep.Store(false)
-	entries, err := os.ReadDir(filepath.Join(m.dataDir, archiveDeleteDir))
-	if errors.Is(err, fs.ErrNotExist) {
-		return
-	}
+	ids, err := m.archiveDeleteMarkers()
 	if err != nil {
 		log.WithFunc("pool.retryArchiveDeletes").Warnf(ctx, "list: %v", err)
 		return
 	}
-	if len(entries) == 0 {
+	if len(ids) == 0 {
 		return
 	}
 	pinned := m.pinnedArchiveCks()
-	ids := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.Type().IsRegular() || !store.CheckpointIDRe.MatchString(entry.Name()) {
-			continue
-		}
-		if _, ok := pinned[entry.Name()]; !ok {
-			ids = append(ids, entry.Name())
-		}
-	}
+	ids = slices.DeleteFunc(ids, func(id string) bool { _, ok := pinned[id]; return ok })
 	m.runBounded(ctx, len(ids), func(ctx context.Context, i int) {
 		m.retryArchiveDelete(ctx, ids[i])
 	}).Wait()
