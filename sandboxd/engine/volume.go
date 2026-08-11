@@ -68,10 +68,7 @@ func (e *Engine) waitForVolumeDevice(ctx context.Context, vsockSocket, name stri
 	for {
 		device, found, err := e.findVolumeDevice(ctx, vsockSocket, name)
 		if err != nil {
-			if ctx.Err() != nil {
-				return "", ctx.Err()
-			}
-			return "", err
+			return "", cmp.Or(ctx.Err(), err)
 		}
 		if found {
 			return device, nil
