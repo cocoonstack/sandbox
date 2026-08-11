@@ -397,13 +397,6 @@ func hashExport(ctx context.Context, root string) (string, error) {
 	}
 	files := make([]store.DigestFile, len(sources))
 	for i := range sources {
-		info, err := os.Lstat(sources[i].path)
-		if err != nil {
-			return "", fmt.Errorf("stat export entry %s: %w", sources[i].digest.Path, err)
-		}
-		if !info.Mode().IsRegular() || info.Size() != sources[i].digest.Size {
-			return "", fmt.Errorf("export entry %s changed while hashing", sources[i].digest.Path)
-		}
 		files[i] = sources[i].digest
 	}
 	return store.AssembleDigest(files)
