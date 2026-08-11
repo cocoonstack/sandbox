@@ -102,6 +102,8 @@ TEMPLATE=rt:24.04 scripts/sandboxd-e2e.sh
 #   `ip link add br0 type bridge` with no uplink is enough (NIC, not network).
 # SANDBOXD_BIN/DEMO_BIN/SMOKE_BIN point at prebuilt binaries for nodes
 #   without a Go toolchain.
+# VOLUME_IMAGE=/absolute/dataset.img enables the read-only volume proof; the
+#   image contains volume-e2e.txt. Prebuilt runs also set VOLUME_SMOKE_BIN.
 ```
 
 ## CI

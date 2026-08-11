@@ -52,7 +52,7 @@ func TestUpdateSelfPersistFailKeepsOldState(t *testing.T) {
 	before := m.self.Epoch
 	// A non-existent dir makes the durable write fail: the epoch must not publish.
 	m.epochPath = filepath.Join(dir, "gone", "mesh-epoch")
-	m.UpdateSelf(t.Context(), map[string]int{"k": 1}, nil)
+	m.UpdateSelf(t.Context(), map[string]int{"k": 1}, nil, nil)
 	if m.self.Epoch != before {
 		t.Errorf("self epoch advanced to %d on a failed persist, want %d held", m.self.Epoch, before)
 	}
@@ -65,7 +65,7 @@ func TestUpdateSelfPersistsEpoch(t *testing.T) {
 	dir := t.TempDir()
 	m := newBoundMesh(t, dir)
 	before := m.self.Epoch
-	m.UpdateSelf(t.Context(), map[string]int{"k": 1}, nil)
+	m.UpdateSelf(t.Context(), map[string]int{"k": 1}, nil, nil)
 	if got := loadEpoch(filepath.Join(dir, "mesh-epoch")); got <= before {
 		t.Errorf("persisted epoch %d did not advance past the seed %d", got, before)
 	}
@@ -78,8 +78,8 @@ func TestUpdateSelfConcurrentDropsNothing(t *testing.T) {
 		a := map[string]int{"a": i + 1}
 		b := map[string]int{"b": i + 1}
 		var wg sync.WaitGroup
-		wg.Go(func() { m.UpdateSelf(t.Context(), a, nil) })
-		wg.Go(func() { m.UpdateSelf(t.Context(), b, nil) })
+		wg.Go(func() { m.UpdateSelf(t.Context(), a, nil, nil) })
+		wg.Go(func() { m.UpdateSelf(t.Context(), b, nil, nil) })
 		wg.Wait()
 		// Serialized updates with distinct payloads must both land: the loser
 		// of the old TOCTOU race silently dropped its payload and one bump.
@@ -87,6 +87,23 @@ func TestUpdateSelfConcurrentDropsNothing(t *testing.T) {
 		if m.self.Epoch != want {
 			t.Fatalf("round %d: epoch %d, want %d (an update was dropped)", i, m.self.Epoch, want)
 		}
+	}
+}
+
+func TestUpdateSelfBumpsOnlyWhenVolumesChange(t *testing.T) {
+	m := newBoundMesh(t, t.TempDir())
+	base := m.self.Epoch
+	m.UpdateSelf(t.Context(), nil, nil, []string{"dataset"})
+	if m.self.Epoch != base+1 {
+		t.Fatalf("first volume publish epoch=%d, want %d", m.self.Epoch, base+1)
+	}
+	m.UpdateSelf(t.Context(), nil, nil, []string{"dataset"})
+	if m.self.Epoch != base+1 {
+		t.Errorf("unchanged volume republished at epoch=%d", m.self.Epoch)
+	}
+	m.UpdateSelf(t.Context(), nil, nil, []string{"dataset", "weights"})
+	if m.self.Epoch != base+2 {
+		t.Errorf("changed volume epoch=%d, want %d", m.self.Epoch, base+2)
 	}
 }
 

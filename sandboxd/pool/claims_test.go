@@ -1,9 +1,10 @@
 package pool
 
 import (
-	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ import (
 func TestStoreRoundTrip(t *testing.T) {
 	s := newClaimStore(t.TempDir())
 	claims := map[string]*types.Sandbox{
-		"sb_a": {ID: "sb_a", VMName: "sbx-1", Key: testKey, Token: "t1", Deadline: time.Now().Add(time.Minute).UTC(), ClaimRef: "ns/workload", VsockSocket: "/v/1"},
+		"sb_a": {ID: "sb_a", VMName: "sbx-1", Key: testKey, Token: "t1", Deadline: time.Now().Add(time.Minute).UTC(), ClaimRef: "ns/workload", Volumes: []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}, VsockSocket: "/v/1"},
 		"sb_b": {ID: "sb_b", VMName: "sbx-2", Key: testKey, Token: "t2"},
 	}
 
@@ -25,8 +26,29 @@ func TestStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if !maps.EqualFunc(got, claims, func(a, b *types.Sandbox) bool { return *a == *b }) {
+	if !reflect.DeepEqual(got, claims) {
 		t.Errorf("got %+v, want %+v", got, claims)
+	}
+}
+
+func TestClaimStoreSnapshotDetachesVolumes(t *testing.T) {
+	s := newClaimStore(t.TempDir())
+	sb := &types.Sandbox{ID: "sb_a", Volumes: []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}}
+	snap := s.snapshot(map[string]*types.Sandbox{sb.ID: sb})
+	sb.Volumes[0].Mount = "/mutated"
+	if err := s.commit(snap); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	got, err := s.load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	loaded := got[sb.ID]
+	if loaded == nil {
+		t.Fatal("detached snapshot omitted claim")
+	}
+	if !slices.Equal(loaded.Volumes, []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}) {
+		t.Errorf("volumes %v, want detached snapshot", loaded.Volumes)
 	}
 }
 

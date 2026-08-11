@@ -61,15 +61,17 @@ func TestInstallCACertWriteErrorFrameFails(t *testing.T) {
 }
 
 type fakeSilkd struct {
-	mu        sync.Mutex
-	writePath string
-	writeMode uint32
-	writeData []byte
-	execArgv  []string
-	execEnv   map[string]string
-	execCode  int32
-	writeErr  string
-	execErr   string
+	mu         sync.Mutex
+	writePath  string
+	writeMode  uint32
+	writeData  []byte
+	execArgv   []string
+	execCalls  [][]string
+	execEnv    map[string]string
+	execCode   int32
+	execFailAt int
+	writeErr   string
+	execErr    string
 }
 
 func serveFakeSilkd(t *testing.T, path string) *fakeSilkd {
@@ -156,8 +158,12 @@ func (f *fakeSilkd) handleWrite(conn net.Conn, r *bufio.Reader, path string, mod
 func (f *fakeSilkd) handleExec(conn net.Conn, argv []string, env map[string]string) {
 	f.mu.Lock()
 	f.execArgv = argv
+	f.execCalls = append(f.execCalls, argv)
 	f.execEnv = env
 	code, reply := f.execCode, f.execErr
+	if f.execFailAt > 0 && len(f.execCalls) != f.execFailAt {
+		code, reply = 0, ""
+	}
 	f.mu.Unlock()
 	if reply != "" {
 		_, _ = io.WriteString(conn, `{"type":"error","kind":"internal","message":"`+reply+`"}`+"\n")

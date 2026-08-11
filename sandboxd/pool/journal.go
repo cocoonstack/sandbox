@@ -23,6 +23,7 @@ type usageEvent struct {
 	VMName    string    `json:"vm,omitempty"`
 	KeyHash   string    `json:"key,omitempty"`      // claim only
 	Tenant    string    `json:"tenant,omitempty"`   // claim only
+	Volumes   []string  `json:"volumes,omitempty"`  // claim only
 	Children  []string  `json:"children,omitempty"` // fork only
 	Reference string    `json:"ref,omitempty"`      // promote: template; checkpoint: ckpt id
 }

@@ -59,36 +59,14 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 
 // ClaimProvision creates a claim-ready sandbox (golden clone or cold boot).
 // claimRef is an opaque caller reference recorded on the claim; empty means none.
-func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string) (*types.Sandbox, error) {
-	start := time.Now()
-	if err := m.validate(key); err != nil {
-		return nil, err
-	}
-	if err := m.overQuota(1, tenant); err != nil {
-		return nil, err
-	}
-	golden, templateDigest, release, err := m.resolveGolden(ctx, key)
-	if err != nil {
-		return nil, fmt.Errorf("resolve template: %w", err)
-	}
-	sb, err := m.provision(ctx, key, golden)
-	release()
-	if err != nil {
-		return nil, err
-	}
-	sb.TemplateDigest = templateDigest
-	sb.Tenant = tenant
-	sb.ClaimRef = claimRef
-	out, err := m.finalize(ctx, sb, ttl)
-	if err == nil {
-		if golden != "" {
-			m.counters.claimsClone.Add(1)
-		} else {
-			m.counters.claimsCold.Add(1)
-		}
-		m.counters.claimNanos.Add(uint64(time.Since(start))) //nolint:gosec // durations are positive
-	}
-	return out, err
+func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
+	return m.claimProvision(ctx, key, ttl, tenant, claimRef, volumes, false)
+}
+
+// ClaimProvisionPromoted requires key to resolve from a promoted template and
+// never falls through to a cold image boot.
+func (m *Manager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
+	return m.claimProvision(ctx, key, ttl, tenant, claimRef, volumes, true)
 }
 
 // Release destroys a claimed sandbox after authorizing cred.
@@ -288,7 +266,11 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	// Usage lands only after the whole batch armed: a rollback must not leave
 	// claim events with no terminal release/reap in the billing stream.
 	for _, sb := range sbs {
-		m.recordUsage(ctx, usageEvent{Event: "claim", ID: sb.ID, VMName: sb.VMName, KeyHash: sb.Key.Hash(), Tenant: sb.Tenant}) //nolint:goconst // event name; other occurrences are test assertions
+		m.recordUsage(ctx, usageEvent{
+			Event: "claim", //nolint:goconst // event name; other occurrences are test assertions
+			ID:    sb.ID, VMName: sb.VMName,
+			KeyHash: sb.Key.Hash(), Tenant: sb.Tenant, Volumes: volumeNames(sb.Volumes),
+		})
 	}
 	return nil
 }
@@ -469,6 +451,50 @@ func (m *Manager) authed(id, token string) (*types.Sandbox, bool) {
 		return nil, false
 	}
 	return sb, true
+}
+
+func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume, requirePromoted bool) (*types.Sandbox, error) {
+	start := time.Now()
+	if err := m.validate(key); err != nil {
+		return nil, err
+	}
+	volumeSpecs, err := m.resolveVolumes(key, tenant, volumes)
+	if err != nil {
+		return nil, err
+	}
+	if quotaErr := m.overQuota(1, tenant); quotaErr != nil {
+		return nil, quotaErr
+	}
+	golden, templateDigest, promoted, release, err := m.resolveGolden(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("resolve template: %w", err)
+	}
+	if requirePromoted && !promoted {
+		release()
+		return nil, ErrVolumeUnavailable
+	}
+	sb, err := m.provision(ctx, key, golden)
+	release()
+	if err != nil {
+		return nil, err
+	}
+	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs); volumeErr != nil {
+		m.destroy(ctx, sb.VMName)
+		return nil, volumeErr
+	}
+	sb.TemplateDigest = templateDigest
+	sb.Tenant = tenant
+	sb.ClaimRef = claimRef
+	out, err := m.finalize(ctx, sb, ttl)
+	if err == nil {
+		if golden != "" {
+			m.counters.claimsClone.Add(1)
+		} else {
+			m.counters.claimsCold.Add(1)
+		}
+		m.counters.claimNanos.Add(uint64(time.Since(start))) //nolint:gosec // durations are positive
+	}
+	return out, err
 }
 
 func stampIdentity(sb *types.Sandbox, ttl time.Duration) {

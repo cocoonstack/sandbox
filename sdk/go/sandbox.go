@@ -55,6 +55,8 @@ func (e *ExitError) Error() string {
 type Sandbox struct {
 	ID       string
 	Deadline time.Time
+	// Volumes lists the read-only volumes finalized on this claim.
+	Volumes []Volume
 	// TemplateDigest is the content identity of the promoted-template export
 	// this sandbox was cloned from; empty for any other source.
 	TemplateDigest string
@@ -168,8 +170,9 @@ func (s *Sandbox) Fork(ctx context.Context, count int, ttl time.Duration) ([]*Sa
 // clone from it, provision-on-demand. Re-promoting to the same name replaces
 // the template. Like Fork, a hibernated sandbox is promoted from its memory
 // image without waking. Templates are node-local — the returned handle is
-// bound to the owning node, and its New/Delete always reach it (name-based
-// Client calls only see the connected node's templates).
+// bound to the owning node. Delete and New without volumes reach that node;
+// New with volumes may follow one placement redirect (name-based Client calls
+// only see the connected node's templates).
 func (s *Sandbox) Promote(ctx context.Context, template string) (*Template, error) {
 	body, err := encodeBody("promote", promoteRequest{Token: s.token, Template: template})
 	if err != nil {

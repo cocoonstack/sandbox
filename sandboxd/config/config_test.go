@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -31,6 +32,11 @@ func TestClusterDigest(t *testing.T) {
 	keyedDiff := &Config{APIToken: "other", PreviewSecret: "ps", Tenants: base.Tenants, Mesh: &MeshConfig{ClusterKey: key}}
 	if keyed.ClusterDigest("ca-fp") == keyedDiff.ClusterDigest("ca-fp") {
 		t.Error("with a cluster_key the api_token must be covered by the digest")
+	}
+	withVolume := *base
+	withVolume.Volumes = []VolumeSpec{{Name: "imagenet", Path: "/srv/datasets/imagenet.img", DirectIO: directIOOff}}
+	if withVolume.ClusterDigest("ca-fp") != d {
+		t.Error("node-local volume catalog must not change the cluster digest")
 	}
 }
 
@@ -124,6 +130,12 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"checkpoint peer heal without cluster key", `{"checkpoint_peer_heal":true,"pools":[],"mesh":{"bind":"node1:7946"}}`, "requires an encrypted mesh"},
 		{"checkpoint peer heal without ttl", `{"checkpoint_peer_heal":true,"pools":[],"mesh":{"bind":"node1:7946","cluster_key":"MDEyMzQ1Njc4OWFiY2RlZg=="}}`, "requires checkpoint_ttl_hours"},
 		{"checkpoint peer heal without api_token", `{"checkpoint_peer_heal":true,"pools":[],"mesh":{"bind":"node1:7946","cluster_key":"MDEyMzQ1Njc4OWFiY2RlZg=="},"checkpoint_ttl_hours":1}`, "requires api_token"},
+		{"bad volume name", `{"pools":[],"volumes":[{"name":"ImageNet","path":"/srv/datasets/a.img"}]}`, "volume name"},
+		{"reserved volume name", `{"pools":[],"volumes":[{"name":"cocoon-data","path":"/srv/datasets/a.img"}]}`, "not start with cocoon-"},
+		{"duplicate volume name", `{"pools":[],"volumes":[{"name":"data","path":"/srv/datasets/a.img"},{"name":"data","path":"/srv/datasets/b.img"}]}`, "duplicate volume"},
+		{"relative volume path", `{"pools":[],"volumes":[{"name":"data","path":"datasets/a.img"}]}`, "path must be absolute"},
+		{"bad volume directio", `{"pools":[],"volumes":[{"name":"data","path":"/srv/datasets/a.img","directio":"yes"}]}`, "directio must be"},
+		{"unknown volume tenant", `{"api_token":"root","pools":[],"tenants":[{"name":"beta","token":"b"}],"volumes":[{"name":"data","path":"/srv/datasets/a.img","tenants":["acme"]}]}`, `volume "data" references unknown tenant "acme"`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Load(writeConfig(t, tt.body))
@@ -131,6 +143,32 @@ func TestLoadRejectsInvalid(t *testing.T) {
 				t.Errorf("Load: %v, want error containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestLoadAcceptsVolumes(t *testing.T) {
+	path := writeConfig(t, `{"pools":[],"volumes":[
+		{"name":"imagenet","path":"/srv/datasets/imagenet.img"},
+		{"name":"weights-llama","path":"/srv/datasets/llama.img","directio":"on"}]}`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Volumes) != 2 || cfg.Volumes[0].DirectIO != directIOOff || cfg.Volumes[1].DirectIO != directIOOn {
+		t.Errorf("volumes = %+v", cfg.Volumes)
+	}
+}
+
+func TestLoadAcceptsVolumeTenantAccessList(t *testing.T) {
+	path := writeConfig(t, `{"api_token":"root","pools":[],
+		"tenants":[{"name":"acme","token":"a"},{"name":"beta","token":"b"}],
+		"volumes":[{"name":"corpus","path":"/srv/datasets/corpus.img","tenants":["acme"]}]}`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Volumes[0].Tenants; !slices.Equal(got, []string{"acme"}) {
+		t.Errorf("volume tenants = %v, want [acme]", got)
 	}
 }
 

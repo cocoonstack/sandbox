@@ -82,6 +82,8 @@ const (
 var (
 	ErrBadKey            = errors.New("invalid pool key")
 	ErrBadCount          = errors.New("invalid fork count")
+	ErrBadVolume         = errors.New("invalid volume request")
+	ErrVolumeUnavailable = fmt.Errorf("%w: unknown or unavailable volume", ErrBadVolume)
 	ErrNoWarm            = errors.New("no warm sandbox for key")
 	ErrUnknownSandbox    = errors.New("unknown sandbox or bad token")
 	ErrUnknownTemplate   = errors.New("unknown promoted template")
@@ -90,6 +92,7 @@ var (
 	ErrNoEgress          = errors.New("node has no egress attachment (bridge or network)")
 	ErrNoEgressHibernate = errors.New("egress-lane sandboxes do not hibernate")
 	ErrNoEgressFork      = errors.New("egress-lane sandboxes cannot fork, checkpoint, or promote: a resumed guest egresses before its fresh tap can be locked")
+	ErrVolumeCapture     = errors.New("sandboxes with volumes cannot hibernate, fork, checkpoint, or promote")
 	ErrQuota             = errors.New("node claim quota reached")
 
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
@@ -113,16 +116,19 @@ type Engine interface {
 	Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error
 	DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error)
 	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error
+	DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error
+	MountVolume(ctx context.Context, vsockSocket, name, mount string) error
 }
 
 // SandboxSummary is the ops view of one live claim — no tokens.
 type SandboxSummary struct {
-	ID             string        `json:"id"`
-	Key            types.PoolKey `json:"key"`
-	Deadline       time.Time     `json:"deadline"`
-	Hibernated     bool          `json:"hibernated"`
-	Archived       bool          `json:"archived,omitempty"`
-	FromCheckpoint string        `json:"from_checkpoint,omitempty"`
+	ID             string         `json:"id"`
+	Key            types.PoolKey  `json:"key"`
+	Deadline       time.Time      `json:"deadline"`
+	Hibernated     bool           `json:"hibernated"`
+	Archived       bool           `json:"archived,omitempty"`
+	FromCheckpoint string         `json:"from_checkpoint,omitempty"`
+	Volumes        []types.Volume `json:"volumes,omitempty"`
 	// ClaimRef echoes the caller reference recorded at claim time (the
 	// aggregated apiserver's k8s "<namespace>/<name>"), so the operator index
 	// can map this sandbox back to the name it was claimed under. Empty for
@@ -238,6 +244,7 @@ type Manager struct {
 	egress  bool
 	maxFork int
 	store   *claimStore
+	volumes map[string]catalogVolume
 
 	poolStore      *poolStore
 	configSeedHash string // config pools' hash, to warn when a file edit is overridden
@@ -374,6 +381,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		lockEgress:      len(cfg.Bridges) > 0,
 		maxFork:         maxFork,
 		store:           newClaimStore(cfg.DataDir),
+		volumes:         make(map[string]catalogVolume, len(cfg.Volumes)),
 		poolStore:       newPoolStore(cfg.DataDir),
 		pools:           make(map[types.PoolKey]*pool, len(cfg.Pools)),
 		claimed:         map[string]*types.Sandbox{},
@@ -394,6 +402,12 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		probeSem:        make(chan struct{}, refill),
 		refillKick:      make(chan struct{}, 1),
 		healSem:         make(chan struct{}, maxConcurrentHeals),
+	}
+	for _, volume := range cfg.Volumes {
+		m.volumes[volume.Name] = catalogVolume{
+			disk:    engine.VolumeSpec{Name: volume.Name, Path: volume.Path, DirectIO: volume.DirectIO},
+			tenants: slices.Clone(volume.Tenants),
+		}
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("create goldens dir: %w", err)
@@ -568,12 +582,15 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 	return pools, g
 }
 
-// Sandboxes lists the live claims, for the operator index.
-func (m *Manager) Sandboxes() []SandboxSummary {
+// Sandboxes lists live claims visible to tenant; empty tenant means root.
+func (m *Manager) Sandboxes(tenant string) []SandboxSummary {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]SandboxSummary, 0, len(m.claimed))
 	for _, sb := range m.claimed {
+		if !tenantOwns(tenant, sb.Tenant) {
+			continue
+		}
 		out = append(out, summarize(sb))
 	}
 	slices.SortFunc(out, func(a, b SandboxSummary) int { return strings.Compare(a.ID, b.ID) })
@@ -655,6 +672,7 @@ func summarize(sb *types.Sandbox) SandboxSummary {
 		ID: sb.ID, Key: sb.Key, Deadline: sb.Deadline,
 		Hibernated: sb.HibernateSnap != "", Archived: sb.ArchiveCk != "",
 		FromCheckpoint: sb.FromCheckpoint, ClaimRef: sb.ClaimRef,
+		Volumes: slices.Clone(sb.Volumes),
 	}
 }
 
@@ -692,6 +710,10 @@ func dirExists(path string) bool {
 // records stamped with its own name.
 func tenantOwns(tenant, owner string) bool {
 	return tenant == "" || tenant == owner
+}
+
+func hasAppliedVolumes(sb *types.Sandbox) bool {
+	return len(sb.Volumes) > 0
 }
 
 // logSweepResult reports one background-sweep outcome; benign races stay silent.

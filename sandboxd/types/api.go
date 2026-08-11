@@ -23,8 +23,12 @@ type ClaimRequest struct {
 	Net      NetShape `json:"net,omitempty"`
 	Size     Size     `json:"size,omitempty"`
 	Engine   Engine   `json:"engine,omitempty"`
+	Volumes  []Volume `json:"volumes,omitempty"`
 	TTLField
 	NoRedirect bool `json:"no_redirect,omitempty"`
+	// RequirePromoted is carried from a promoted-volume redirect to make the
+	// target refuse a cold-image fallback when template gossip is stale.
+	RequirePromoted bool `json:"require_promoted,omitempty"`
 	// ClaimRef is an opaque caller reference (the aggregated apiserver passes
 	// the k8s "<namespace>/<name>") recorded on the claim so the read path can
 	// map a listed sandbox back to the name it was claimed under.
@@ -50,9 +54,27 @@ type ClaimResponse struct {
 
 	// FromCheckpoint names the checkpoint a branched claim was born from,
 	// so clients can reconstruct the checkpoint tree.
-	FromCheckpoint string `json:"from_checkpoint,omitempty"`
+	FromCheckpoint string   `json:"from_checkpoint,omitempty"`
+	Volumes        []Volume `json:"volumes,omitempty"`
 
 	Redirect []string `json:"redirect,omitempty"`
+	// RequirePromoted tells a redirecting client to preserve that requirement
+	// on its no_redirect retry. It is omitted from successful claims.
+	RequirePromoted bool `json:"require_promoted,omitempty"`
+}
+
+// VolumeInfo is the caller-visible, host-path-free catalog projection.
+type VolumeInfo struct {
+	Name         string `json:"name"`
+	DefaultMount string `json:"default_mount"`
+	SizeBytes    int64  `json:"size_bytes"`
+	Available    bool   `json:"available"`
+	Nodes        int    `json:"nodes"`
+}
+
+// VolumeListResponse is the wire reply of GET /v1/volumes.
+type VolumeListResponse struct {
+	Volumes []VolumeInfo `json:"volumes"`
 }
 
 // ForkRequest is the wire body of POST /v1/sandboxes/{id}/fork. The

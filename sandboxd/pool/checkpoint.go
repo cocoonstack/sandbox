@@ -42,6 +42,9 @@ func (m *Manager) Checkpoint(ctx context.Context, id string, cred Cred, name, te
 	if name != "" && !types.NameRe.MatchString(name) {
 		return types.Checkpoint{}, fmt.Errorf("%w: %q must match %s", ErrBadName, name, types.NameRe)
 	}
+	if hasAppliedVolumes(sb) {
+		return types.Checkpoint{}, ErrVolumeCapture
+	}
 	if !sb.Key.Capturable() {
 		return types.Checkpoint{}, ErrNoEgressFork
 	}

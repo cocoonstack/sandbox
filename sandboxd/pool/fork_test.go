@@ -230,7 +230,7 @@ func TestForkChildrenInheritTenantAndQuota(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	m.tenantMax = map[string]int{"acme": 3}
-	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "")
+	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}

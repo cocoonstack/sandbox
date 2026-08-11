@@ -200,7 +200,7 @@ func TestResolveGoldenSkipsPromotedEgressTemplate(t *testing.T) {
 	if _, err = m.commitTemplate(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("seed template: %v", err)
 	}
-	dir, _, release, err := m.resolveGolden(t.Context(), egKey)
+	dir, _, _, release, err := m.resolveGolden(t.Context(), egKey)
 	if err != nil {
 		t.Fatalf("resolveGolden: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestResolveGoldenSkipsPromotedEgressTemplate(t *testing.T) {
 func TestTemplateTenantScopedDelete(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "")
+	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestPromoteFailsClosedOnMetaError(t *testing.T) {
 	}
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "")
+	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestPromoteRefusesCrossTenantOverwrite(t *testing.T) {
 	m := newTestManager(t, eng)
 	claim := func(tenant string) *types.Sandbox {
 		t.Helper()
-		sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, tenant, "")
+		sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, tenant, "", nil)
 		if err != nil {
 			t.Fatalf("claim %q: %v", tenant, err)
 		}

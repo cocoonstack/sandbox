@@ -85,6 +85,28 @@ or partitioned at that moment keeps its own replica branchable until
 Tenants are isolated at the API layer — listings filter, deletes answer 404
 rather than confirming existence, and operator surfaces answer tenants 403.
 
+## Read-only dataset volumes
+
+The volume catalog is an operator-owned data boundary. A volume name and its
+access list must mean the same thing fleet-wide, although membership is
+node-local. An empty entry `tenants` list permits every authenticated scope; a
+nonempty list permits only those configured tenants, while the root token always
+has access. Config load rejects an access-list name that is not a configured
+tenant. Claim lookup returns byte-identical errors for an unknown and a
+forbidden name, and catalog discovery filters before replying, so a tenant
+cannot enumerate restricted entries by probing. Gossip carries names only.
+Neither gossip, discovery, persisted claims, usage events, nor the sandbox index
+exposes host image paths or access lists.
+
+Read-only is integrity protection for the shared image, not confidentiality.
+Mounting a dataset into an egress-lane sandbox gives that sandbox an export path
+to every destination its tenant egress policy permits; review the volume access
+list and egress policy together. With `directio=off`, concurrent readers share
+the host page cache, which improves reuse but lets one tenant's large scan evict
+another's cached pages. `directio=on` is the per-volume mitigation; v1 has no
+per-tenant cache quota or accounting. Operators must keep an attached image
+immutable and publish a new name/path for new content.
+
 ## Known limitations
 
 Facts to plan around, stated so the boundary is honest:

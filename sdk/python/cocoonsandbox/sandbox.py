@@ -25,7 +25,8 @@ class Sandbox:
     """One claimed microVM."""
 
     def __init__(self, client: Client, id: str, token: str, owner: str,
-                 deadline: str = "", from_checkpoint: str = "", template_digest: str = ""):
+                 deadline: str = "", from_checkpoint: str = "", template_digest: str = "",
+                 volumes: list[dict] | None = None):
         self._client = client
         self.id = id
         self.token = token
@@ -33,6 +34,7 @@ class Sandbox:
         self.deadline = deadline
         self.from_checkpoint = from_checkpoint
         self.template_digest = template_digest
+        self.volumes = [dict(volume) for volume in volumes or []]
 
     def __enter__(self) -> Sandbox:
         return self

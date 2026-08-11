@@ -1,6 +1,4 @@
-"""Template: a promoted sandbox state, claimable by name. The handle is
-bound to the node that holds it, so it works the instant promote returns —
-name-based Client calls route via gossip and lag a promote by about a tick."""
+"""Promoted template handles and owner-aware claims."""
 
 from __future__ import annotations
 
@@ -23,14 +21,15 @@ class Template:
         self.size = size
         self.content_digest = content_digest
 
-    def new(self, ttl_seconds: int = 0) -> Sandbox:
-        """Claims a sandbox cloned from the template, on the template's
-        node; the key axes are the template's own."""
+    def new(self, ttl_seconds: int = 0, volumes: list[str | tuple[str, str]] | None = None) -> Sandbox:
+        """Claims the template, following placement when volumes require it."""
         # Local import: a top-level one would close the client → sandbox →
         # template cycle.
         from .client import _claim_body
 
-        claim = _claim_body(self.name, self.net, self.size, ttl_seconds)
+        claim = _claim_body(self.name, self.net, self.size, ttl_seconds, volumes)
+        if volumes:
+            return self._client._claim_from(self._addr, claim)
         claim["no_redirect"] = True
         reply = self._client._post_json(self._addr, "/v1/claim", claim, "claim")
         return self._client._handle_from(self._addr, reply)

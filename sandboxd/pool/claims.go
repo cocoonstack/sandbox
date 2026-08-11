@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,19 +26,20 @@ type claimSnapshot struct {
 // copied by value so commit's marshal runs off the manager mutex without
 // racing the live record's Transition mutex and lastActivity.
 type claimDTO struct {
-	ID             string        `json:"id"`
-	VMName         string        `json:"vm_name"`
-	Key            types.PoolKey `json:"key"`
-	Token          string        `json:"token,omitempty"`
-	Deadline       time.Time     `json:"deadline,omitzero"`
-	Tenant         string        `json:"tenant,omitempty"`
-	ClaimRef       string        `json:"claim_ref,omitempty"`
-	VsockSocket    string        `json:"vsock_socket,omitempty"`
-	TAP            string        `json:"tap,omitempty"`
-	HibernateSnap  string        `json:"hibernate_snap,omitempty"`
-	PendingSnap    string        `json:"pending_snap,omitempty"`
-	ArchiveCk      string        `json:"archive_ck,omitempty"`
-	FromCheckpoint string        `json:"from_checkpoint,omitempty"`
+	ID             string         `json:"id"`
+	VMName         string         `json:"vm_name"`
+	Key            types.PoolKey  `json:"key"`
+	Token          string         `json:"token,omitempty"`
+	Deadline       time.Time      `json:"deadline,omitzero"`
+	Tenant         string         `json:"tenant,omitempty"`
+	ClaimRef       string         `json:"claim_ref,omitempty"`
+	Volumes        []types.Volume `json:"volumes,omitempty"`
+	VsockSocket    string         `json:"vsock_socket,omitempty"`
+	TAP            string         `json:"tap,omitempty"`
+	HibernateSnap  string         `json:"hibernate_snap,omitempty"`
+	PendingSnap    string         `json:"pending_snap,omitempty"`
+	ArchiveCk      string         `json:"archive_ck,omitempty"`
+	FromCheckpoint string         `json:"from_checkpoint,omitempty"`
 }
 
 // claimStore persists claimed sandboxes across daemon restarts. Warm pool
@@ -79,7 +81,8 @@ func (s *claimStore) snapshot(claims map[string]*types.Sandbox) claimSnapshot {
 	for id, sb := range claims {
 		dtos[id] = claimDTO{
 			ID: sb.ID, VMName: sb.VMName, Key: sb.Key, Token: sb.Token,
-			Deadline: sb.Deadline, Tenant: sb.Tenant, ClaimRef: sb.ClaimRef, VsockSocket: sb.VsockSocket,
+			Deadline: sb.Deadline, Tenant: sb.Tenant, ClaimRef: sb.ClaimRef,
+			Volumes: slices.Clone(sb.Volumes), VsockSocket: sb.VsockSocket,
 			TAP: sb.TAP, HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap,
 			ArchiveCk: sb.ArchiveCk, FromCheckpoint: sb.FromCheckpoint,
 		}

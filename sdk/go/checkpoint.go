@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"time"
 )
@@ -31,10 +32,13 @@ func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error)
 	for _, opt := range opts {
 		opt(&claim)
 	}
+	if len(claim.Volumes) > 0 {
+		return nil, errors.New("checkpoint claims do not accept WithVolumes")
+	}
 	if err := claim.rejectPinnedAxes(); err != nil {
 		return nil, err
 	}
-	addr, cr, err := claimFollow(ck.addr, "claim checkpoint", func(noRedirect bool) ([]byte, error) {
+	addr, cr, err := claimFollow(ck.addr, "claim checkpoint", func(noRedirect, _ bool) ([]byte, error) {
 		return encodeBody("checkpoint claim", checkpointClaimRequest{TTLSeconds: claim.TTLSeconds, NoRedirect: noRedirect})
 	}, func(a string, body []byte) (claimResponse, error) {
 		return ck.claimAt(ctx, a, body)

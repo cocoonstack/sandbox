@@ -8,6 +8,27 @@ ADDR=${ADDR:-127.0.0.1:7777}
 TOKEN=${TOKEN:-e2e}
 WARM=${WARM:-2}
 REPO=$(cd "$(dirname "$0")/.." && pwd)
+# VOLUME_IMAGE opts into the CH volume proof; its filesystem must contain the non-empty VOLUME_PROBE file.
+VOLUME_IMAGE=${VOLUME_IMAGE:-}
+VOLUME_NAME=${VOLUME_NAME:-e2e-data}
+VOLUME_PROBE=${VOLUME_PROBE:-volume-e2e.txt}
+VOLUME_DIRECTIO=${VOLUME_DIRECTIO:-off}
+
+VOLUME_CHECKSUM=""
+if [[ -n $VOLUME_IMAGE ]]; then
+  [[ $VOLUME_IMAGE == /* ]] || { echo "VOLUME_IMAGE must be absolute"; exit 1; }
+  [[ -f $VOLUME_IMAGE && -r $VOLUME_IMAGE ]] || { echo "VOLUME_IMAGE must be a readable file"; exit 1; }
+  [[ $VOLUME_NAME =~ ^[a-z][a-z0-9_-]{0,19}$ && $VOLUME_NAME != cocoon-* ]] || {
+    echo "VOLUME_NAME must match ^[a-z][a-z0-9_-]{0,19}$ and not start with cocoon-"
+    exit 1
+  }
+  [[ $VOLUME_DIRECTIO == on || $VOLUME_DIRECTIO == off || $VOLUME_DIRECTIO == auto ]] || {
+    echo "VOLUME_DIRECTIO must be on, off, or auto"
+    exit 1
+  }
+  (( WARM > 0 )) || { echo "volume e2e needs WARM>0 for the ordinary warm-claim assertion"; exit 1; }
+  VOLUME_CHECKSUM=$(sha256sum -- "$VOLUME_IMAGE" | awk '{print $1}')
+fi
 
 DATA=$(mktemp -d /tmp/sandboxd-e2e.XXXXXX)
 DAEMON_PID=""
@@ -34,6 +55,10 @@ cleanup() {
 trap cleanup EXIT
 
 api() { curl -sf -H "Authorization: Bearer $TOKEN" "http://$ADDR/v1/$1"; }
+metrics() { curl -sf -H "Authorization: Bearer $TOKEN" "http://$ADDR/metrics"; }
+warm_claims() {
+  metrics | awk '$1 == "sandboxd_claims_total{tier=\"warm\"}" {print $2}'
+}
 
 start_daemon() {
   "$DATA/sandboxd" -config "$DATA/config.json" >>"$DATA/daemon.log" 2>&1 &
@@ -50,10 +75,17 @@ echo "== build"
 # Prebuilt binaries let the script run on nodes without a Go toolchain.
 if [[ -n ${SANDBOXD_BIN:-} && -n ${DEMO_BIN:-} && -n ${SMOKE_BIN:-} ]]; then
   cp "$SANDBOXD_BIN" "$DATA/sandboxd" && cp "$DEMO_BIN" "$DATA/demo" && cp "$SMOKE_BIN" "$DATA/smoke"
+  if [[ -n $VOLUME_IMAGE ]]; then
+    [[ -n ${VOLUME_SMOKE_BIN:-} ]] || { echo "VOLUME_SMOKE_BIN is required with prebuilt binaries"; exit 1; }
+    cp "$VOLUME_SMOKE_BIN" "$DATA/volumesmoke"
+  fi
 else
   (cd "$REPO/sandboxd" && GOWORK=off go build -o "$DATA/sandboxd" .)
   (cd "$REPO/e2e" && GOWORK=off go build -o "$DATA/demo" ./cmd/demo)
   (cd "$REPO/e2e" && GOWORK=off go build -o "$DATA/smoke" ./cmd/smoke)
+  if [[ -n $VOLUME_IMAGE ]]; then
+    (cd "$REPO/e2e" && GOWORK=off go build -o "$DATA/volumesmoke" ./cmd/volumesmoke)
+  fi
 fi
 
 # BRIDGE (optional) attaches the node to an egress bridge, adds a small
@@ -75,7 +107,14 @@ if [[ -n ${S3_ENDPOINT:-} ]]; then
   STORE_LINE="\"checkpoint_store\": {\"kind\": \"s3\", \"s3\": {\"bucket\": \"${S3_BUCKET:-sbx-checkpoints}\", \"prefix\": \"e2e/\", \"endpoint\": \"$S3_ENDPOINT\", \"region\": \"us-east-1\", \"force_path_style\": true}},"
 fi
 
-echo "== start (pool: $TEMPLATE none/small warm=$WARM${BRIDGE:+, egress via $BRIDGE}${S3_ENDPOINT:+, s3 store at $S3_ENDPOINT})"
+VOLUME_LINE=""
+if [[ -n $VOLUME_IMAGE ]]; then
+  VOLUME_CATALOG=$(jq -cn --arg name "$VOLUME_NAME" --arg path "$VOLUME_IMAGE" --arg directio "$VOLUME_DIRECTIO" \
+    '[{name: $name, path: $path, directio: $directio}]')
+  VOLUME_LINE="\"volumes\": $VOLUME_CATALOG,"
+fi
+
+echo "== start (pool: $TEMPLATE none/small warm=$WARM${BRIDGE:+, egress via $BRIDGE}${S3_ENDPOINT:+, s3 store at $S3_ENDPOINT}${VOLUME_IMAGE:+, volume $VOLUME_NAME})"
 cat >"$DATA/config.json" <<EOF
 {
   "listen": "$ADDR",
@@ -83,6 +122,7 @@ cat >"$DATA/config.json" <<EOF
   "api_token": "$TOKEN",
   $BRIDGE_LINE
   $STORE_LINE
+  $VOLUME_LINE
   "pools": [{"template": "$TEMPLATE", "net": "none", "size": "small", "warm": $WARM}$EGRESS_POOL]
 }
 EOF
@@ -100,11 +140,41 @@ done
 api info | jq .
 
 echo "== claim/exec/release x3 (expect: warm-hit ms-scale, then clone-tier)"
-"$DATA/demo" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -n 3
+if [[ -n $VOLUME_IMAGE ]]; then
+  warm_before=$(warm_claims)
+  "$DATA/demo" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -n 1
+  warm_after=$(warm_claims)
+  [[ $warm_after -eq $((warm_before + 1)) ]] || {
+    echo "ordinary claim missed the warm tier: before=$warm_before after=$warm_after"
+    exit 1
+  }
+  echo "ordinary warm claim counter: $warm_before -> $warm_after"
+  "$DATA/demo" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -n 2
+else
+  "$DATA/demo" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -n 3
+fi
 
 echo "== v2 smoke: files/session/find/replace/watch/git/pty through the relay"
 # LSP_TEMPLATE (optional, a python-flavor ref) adds the LSP broker step.
 "$DATA/smoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" ${BRIDGE:+-egress} ${LSP_TEMPLATE:+-lsp-template "$LSP_TEMPLATE"}
+
+if [[ -n $VOLUME_IMAGE ]]; then
+  echo "== read-only shared volume: two provisioned claims, different mounts"
+  warm_before=$(warm_claims)
+  "$DATA/volumesmoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" \
+    -volume "$VOLUME_NAME" -probe "$VOLUME_PROBE"
+  warm_after=$(warm_claims)
+  [[ $warm_after -eq $warm_before ]] || {
+    echo "volume claims consumed the warm tier: before=$warm_before after=$warm_after"
+    exit 1
+  }
+  after_checksum=$(sha256sum -- "$VOLUME_IMAGE" | awk '{print $1}')
+  [[ $after_checksum == "$VOLUME_CHECKSUM" ]] || {
+    echo "volume backing image changed: before=$VOLUME_CHECKSUM after=$after_checksum"
+    exit 1
+  }
+  echo "volume backing checksum unchanged: $after_checksum"
+fi
 
 echo "== reap: leaked 5s-ttl claim is destroyed by the owner"
 "$DATA/demo" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -n 1 -ttl 5 -leak

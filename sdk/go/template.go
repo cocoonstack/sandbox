@@ -5,9 +5,9 @@ import (
 	"net/url"
 )
 
-// Template is a promoted template bound to the node that holds it. Its New
-// and Delete dial the owner directly — no gossip involved — so unlike the
-// name-based Client calls they are usable the instant Promote returns.
+// Template is a promoted template bound to the node that holds it. Delete and
+// New without volumes dial the owner directly, so they are usable the instant
+// Promote returns; a volume claim may follow one placement redirect.
 type Template struct {
 	Name          string
 	ContentDigest string
@@ -18,9 +18,9 @@ type Template struct {
 	size string
 }
 
-// New claims a sandbox cloned from the template, on the template's node.
-// Options may set the TTL; the key axes (network lane, size) are the
-// template's own and cannot be overridden.
+// New claims a sandbox cloned from the template. Options may set the TTL or
+// request volumes; the key axes (network lane, size) are the template's own
+// and cannot be overridden.
 func (t *Template) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
 	claim := claimRequest{Template: t.Name}
 	for _, opt := range opts {
@@ -29,18 +29,33 @@ func (t *Template) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
 	if err := claim.rejectPinnedAxes(); err != nil {
 		return nil, err
 	}
-	// The template only exists under its exact key, and this node holds it:
-	// a redirect elsewhere could never find it.
-	claim.Net, claim.Size, claim.NoRedirect = t.net, t.size, true
-	body, err := encodeBody("claim", claim)
+	claim.Net, claim.Size = t.net, t.size
+	// Without volumes the owner is already the only useful target, so retain
+	// the immediate owner-bound path. A volume claim may need another node
+	// that holds both resources and therefore uses the normal one-hop claim
+	// protocol.
+	if len(claim.Volumes) == 0 {
+		claim.NoRedirect = true
+		body, err := encodeBody("claim", claim)
+		if err != nil {
+			return nil, err
+		}
+		cr, err := t.c.claimAt(ctx, t.addr, body)
+		if err != nil {
+			return nil, err
+		}
+		return t.c.handleFrom(t.addr, cr), nil
+	}
+	addr, cr, err := claimFollow(t.addr, "claim", func(noRedirect, requirePromoted bool) ([]byte, error) {
+		claim.NoRedirect, claim.RequirePromoted = noRedirect, requirePromoted
+		return encodeBody("claim", claim)
+	}, func(addr string, body []byte) (claimResponse, error) {
+		return t.c.claimAt(ctx, addr, body)
+	})
 	if err != nil {
 		return nil, err
 	}
-	cr, err := t.c.claimAt(ctx, t.addr, body)
-	if err != nil {
-		return nil, err
-	}
-	return t.c.handleFrom(t.addr, cr), nil
+	return t.c.handleFrom(addr, cr), nil
 }
 
 // Delete removes the template from its node. The handle is owner-bound, so
