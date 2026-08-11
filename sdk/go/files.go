@@ -8,9 +8,6 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-// fsChunk matches silkd's BULK_CHUNK.
-const fsChunk = 256 * 1024
-
 // WriteFile writes data to path in the sandbox, atomically (silkd renames a
 // temp file into place). mode, when non-nil, sets the file's permission bits.
 func (s *Sandbox) WriteFile(ctx context.Context, path string, data []byte, mode *uint32) error {

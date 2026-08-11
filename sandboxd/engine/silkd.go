@@ -58,9 +58,8 @@ func (e *Engine) dialSilkdSession(ctx context.Context, vsockSocket string) (*sil
 	}, nil
 }
 
-// silkdStream runs one request to its terminal frame, handing every streamed
-// frame to onFrame. silkd serves a single request per connection, so the dial
-// belongs to the call.
+// silkdStream serves one request per dial: silkd handles a single request
+// per connection.
 func (e *Engine) silkdStream(ctx context.Context, vsockSocket string, req wire.Request, onFrame func(wire.Response) error) error {
 	s, err := e.dialSilkdSession(ctx, vsockSocket)
 	if err != nil {

@@ -9,6 +9,9 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
+// fsChunk matches silkd's BULK_CHUNK.
+const fsChunk = 256 * 1024
+
 // doneRPC sends a request that answers with Done or an error frame.
 func (s *Sandbox) doneRPC(ctx context.Context, req wire.Request) error {
 	conn, done, err := s.call(ctx, req)
