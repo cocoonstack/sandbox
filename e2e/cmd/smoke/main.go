@@ -707,8 +707,6 @@ func lspReadResponse(r *bufio.Reader, id int) (json.RawMessage, error) {
 	}
 }
 
-// smokeProcs drives the detached-process surface: spawn, ps, logs replay,
-// attach-until-exit, and kill.
 func smokeProcs(ctx context.Context, sb *sandbox.Sandbox) error {
 	pid, err := sb.Spawn(ctx, sandbox.Cmd{Argv: []string{"sh", "-c", "echo bg-mark; sleep 0.3; echo late"}})
 	if err != nil {

@@ -457,7 +457,6 @@ func errFrame(conn net.Conn, kind, msg string) {
 	send(conn, &wire.ErrorResp{Kind: kind, Message: msg})
 }
 
-// drainUpload reads Data frames until DataEnd, concatenating their payloads.
 func drainUpload(r *bufio.Reader) ([]byte, error) {
 	var out []byte
 	for {
