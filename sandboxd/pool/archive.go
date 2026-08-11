@@ -337,6 +337,15 @@ func (m *Manager) retryArchiveDelete(ctx context.Context, ckID string) {
 }
 
 func (m *Manager) archiveCkPinned(ckID string) bool {
-	_, ok := m.pinnedArchiveCks()[ckID]
-	return ok
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.pendingCks[ckID]; ok {
+		return true
+	}
+	for _, sb := range m.claimed {
+		if sb.ArchiveCk == ckID {
+			return true
+		}
+	}
+	return false
 }
