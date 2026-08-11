@@ -45,6 +45,8 @@ type digestJob struct {
 	chunk int
 }
 
+type chunkHasher func(source *digestSource, chunk int, buffer []byte) error
+
 var _ store.Store = (*Store)(nil)
 
 // Store keeps records as <root>/<id>/{meta.json,export-<gen>/...}: the
@@ -402,12 +404,7 @@ func hashExport(ctx context.Context, root string) (string, error) {
 	return store.AssembleDigest(files)
 }
 
-func hashChunks(
-	ctx context.Context,
-	sources []digestSource,
-	workers int,
-	hashFn func(*digestSource, int, []byte) error,
-) error {
+func hashChunks(ctx context.Context, sources []digestSource, workers int, hashFn chunkHasher) error {
 	jobs := make(chan digestJob)
 	group, groupCtx := errgroup.WithContext(ctx)
 	for range workers {
