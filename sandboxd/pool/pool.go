@@ -581,14 +581,6 @@ func (m *Manager) Sandboxes() []SandboxSummary {
 	return out
 }
 
-func summarize(sb *types.Sandbox) SandboxSummary {
-	return SandboxSummary{
-		ID: sb.ID, Key: sb.Key, Deadline: sb.Deadline,
-		Hibernated: sb.HibernateSnap != "", Archived: sb.ArchiveCk != "",
-		FromCheckpoint: sb.FromCheckpoint, ClaimRef: sb.ClaimRef,
-	}
-}
-
 // WarmCounts is the per-pool-key-hash warm count, for gossiping placement.
 func (m *Manager) WarmCounts() map[string]int {
 	m.mu.Lock()
@@ -600,32 +592,6 @@ func (m *Manager) WarmCounts() map[string]int {
 		}
 	}
 	return counts
-}
-
-func loadEgressCA(cfg *config.EgressCAConfig) (*egress.CA, error) {
-	root, err := os.ReadFile(cfg.RootCert) //nolint:gosec // operator-configured ca path
-	if err != nil {
-		return nil, fmt.Errorf("read root cert: %w", err)
-	}
-	interCert, err := os.ReadFile(cfg.IntermediateCert) //nolint:gosec // operator-configured ca path
-	if err != nil {
-		return nil, fmt.Errorf("read intermediate cert: %w", err)
-	}
-	interKey, err := os.ReadFile(cfg.IntermediateKey) //nolint:gosec // operator-configured ca path
-	if err != nil {
-		return nil, fmt.Errorf("read intermediate key: %w", err)
-	}
-	return egress.LoadCA(root, interCert, interKey)
-}
-
-// newStoreView builds one id-namespaced view of the configured backend.
-// The dir default lives here rather than config.applyDefaults: tests build
-// Config directly, skipping Load.
-func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe *regexp.Regexp) (store.Store, error) {
-	if cs := cfg.CheckpointStore; cs != nil && cs.Kind == "s3" {
-		return s3.New(ctx, *cs.S3, filepath.Join(cfg.DataDir, staging), idRe)
-	}
-	return dir.New(cmp.Or(cfg.CheckpointDir, filepath.Join(cfg.DataDir, "checkpoints")), idRe)
 }
 
 // WithPeerHeal installs the healer ClaimCheckpointHeal pulls through, so a
@@ -683,6 +649,40 @@ func (m *Manager) validate(key types.PoolKey) error {
 
 func (m *Manager) goldensDir() string {
 	return filepath.Join(m.dataDir, "goldens")
+}
+
+func summarize(sb *types.Sandbox) SandboxSummary {
+	return SandboxSummary{
+		ID: sb.ID, Key: sb.Key, Deadline: sb.Deadline,
+		Hibernated: sb.HibernateSnap != "", Archived: sb.ArchiveCk != "",
+		FromCheckpoint: sb.FromCheckpoint, ClaimRef: sb.ClaimRef,
+	}
+}
+
+func loadEgressCA(cfg *config.EgressCAConfig) (*egress.CA, error) {
+	root, err := os.ReadFile(cfg.RootCert) //nolint:gosec // operator-configured ca path
+	if err != nil {
+		return nil, fmt.Errorf("read root cert: %w", err)
+	}
+	interCert, err := os.ReadFile(cfg.IntermediateCert) //nolint:gosec // operator-configured ca path
+	if err != nil {
+		return nil, fmt.Errorf("read intermediate cert: %w", err)
+	}
+	interKey, err := os.ReadFile(cfg.IntermediateKey) //nolint:gosec // operator-configured ca path
+	if err != nil {
+		return nil, fmt.Errorf("read intermediate key: %w", err)
+	}
+	return egress.LoadCA(root, interCert, interKey)
+}
+
+// newStoreView builds one id-namespaced view of the configured backend.
+// The dir default lives here rather than config.applyDefaults: tests build
+// Config directly, skipping Load.
+func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe *regexp.Regexp) (store.Store, error) {
+	if cs := cfg.CheckpointStore; cs != nil && cs.Kind == "s3" {
+		return s3.New(ctx, *cs.S3, filepath.Join(cfg.DataDir, staging), idRe)
+	}
+	return dir.New(cmp.Or(cfg.CheckpointDir, filepath.Join(cfg.DataDir, "checkpoints")), idRe)
 }
 
 func dirExists(path string) bool {

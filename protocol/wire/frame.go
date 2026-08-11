@@ -682,6 +682,17 @@ func DecodeResponse(line []byte) (Response, error) {
 	return dec(line)
 }
 
+// AppendBulkRequest renders a data-carrying request frame —
+// {"v":1,"op":<op>,"data":"<base64>"} plus newline — into buf, reused across
+// calls on the bulk send paths (base64's alphabet needs no JSON escaping).
+func AppendBulkRequest(buf []byte, op string, data []byte) []byte {
+	buf = append(buf[:0], requestHead...)
+	buf = append(buf, op...)
+	buf = append(buf, `","data":"`...)
+	buf = base64.StdEncoding.AppendEncode(buf, data)
+	return append(buf, '"', '}', '\n')
+}
+
 // fastBulk decodes a bulk frame's base64 data field by slicing it out
 // (base64's alphabet is JSON-escape-free) and skipping json.Unmarshal, which
 // otherwise dominates the download path. Only the exact canonical shape both
@@ -709,17 +720,6 @@ func fastBulk(tag string, slow func([]byte) (Response, error), mk func([]byte) R
 		}
 		return mk(out[:n]), nil
 	}
-}
-
-// AppendBulkRequest renders a data-carrying request frame —
-// {"v":1,"op":<op>,"data":"<base64>"} plus newline — into buf, reused across
-// calls on the bulk send paths (base64's alphabet needs no JSON escaping).
-func AppendBulkRequest(buf []byte, op string, data []byte) []byte {
-	buf = append(buf[:0], requestHead...)
-	buf = append(buf, op...)
-	buf = append(buf, `","data":"`...)
-	buf = base64.StdEncoding.AppendEncode(buf, data)
-	return append(buf, '"', '}', '\n')
 }
 
 // encodeTagged marshals v as a flat object and splices the tag head in front

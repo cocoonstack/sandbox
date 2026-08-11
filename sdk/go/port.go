@@ -98,16 +98,6 @@ func (s *Sandbox) DialPort(ctx context.Context, port uint16) (*PortConn, error) 
 	return s.openStream(ctx, &wire.PortForward{Port: port})
 }
 
-type previewRequest struct {
-	Token      string `json:"token"`
-	Port       uint16 `json:"port"`
-	TTLSeconds int    `json:"ttl_seconds,omitempty"`
-}
-
-type previewResponse struct {
-	URL string `json:"url"`
-}
-
 // PreviewURL mints a shareable URL that serves the sandbox's guest HTTP
 // port from a plain browser, valid for ttl (the node clamps it to the
 // claim's lease). Requires the node to have preview configured.
@@ -189,6 +179,16 @@ func closeWrite(conn net.Conn) {
 	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
 		_ = cw.CloseWrite()
 	}
+}
+
+type previewRequest struct {
+	Token      string `json:"token"`
+	Port       uint16 `json:"port"`
+	TTLSeconds int    `json:"ttl_seconds,omitempty"`
+}
+
+type previewResponse struct {
+	URL string `json:"url"`
 }
 
 type portAddr string
