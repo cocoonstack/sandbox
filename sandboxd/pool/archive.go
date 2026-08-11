@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -11,6 +14,8 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
+
+const archiveDeleteDir = "archive-deletes"
 
 // archive*For resolve a key's thresholds (pool's, else node default); callers hold m.mu.
 func (m *Manager) archiveAfterFor(key types.PoolKey) time.Duration {
@@ -92,6 +97,9 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	m.pendingCks[ckID] = struct{}{}
 	m.mu.Unlock()
 	defer m.untrack(m.pendingCks, ckID)
+	if err := m.markArchiveCk(ckID); err != nil {
+		return fmt.Errorf("track archive checkpoint: %w", err)
+	}
 	// A hibernated source is copied from its wake image, so no VM starts.
 	ck, srcSnap, err := m.publishCheckpoint(ctx, sb, ckID, "archive", sb.Tenant, true)
 	if err != nil {
@@ -192,6 +200,9 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		log.WithFunc("pool.wakeArchived").Warnf(ctx, "delete consumed archive ck %s: %v", ck, delErr)
 	} else {
 		consumed = true
+		if clearErr := m.clearArchiveCk(ck); clearErr != nil {
+			log.WithFunc("pool.wakeArchived").Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
+		}
 	}
 	// Only the none lane reaches here (the egress guard above fails closed), so
 	// this rebinds the none-lane proxy; there is no NIC to re-lock.
@@ -236,7 +247,102 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 
 // deleteOrphanArchiveCk drops the published ck when archive() aborts pre-commit.
 func (m *Manager) deleteOrphanArchiveCk(ctx context.Context, ckID string) {
-	if err := m.ckpts.Delete(ctx, ckID); err != nil {
+	if err := m.deleteArchiveCk(ctx, ckID); err != nil {
 		log.WithFunc("pool.deleteOrphanArchiveCk").Warnf(ctx, "delete orphaned archive ck %s: %v", ckID, err)
 	}
+}
+
+func (m *Manager) markArchiveCk(ckID string) error {
+	if !store.CheckpointIDRe.MatchString(ckID) {
+		return fmt.Errorf("invalid checkpoint id %q", ckID)
+	}
+	dir := filepath.Join(m.dataDir, archiveDeleteDir)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, ckID), nil, 0o600)
+}
+
+func (m *Manager) clearArchiveCk(ckID string) error {
+	err := os.Remove(filepath.Join(m.dataDir, archiveDeleteDir, ckID))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+func (m *Manager) deleteArchiveCk(ctx context.Context, ckID string) error {
+	if err := m.markArchiveCk(ckID); err != nil {
+		return fmt.Errorf("track: %w", err)
+	}
+	if err := m.deleteCkLocked(ctx, ckID); err != nil {
+		return err
+	}
+	if err := m.clearArchiveCk(ckID); err != nil {
+		return fmt.Errorf("clear: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) retryArchiveDeletes(ctx context.Context) {
+	if !m.archiveDeleteSweep.CompareAndSwap(false, true) {
+		return
+	}
+	defer m.archiveDeleteSweep.Store(false)
+	entries, err := os.ReadDir(filepath.Join(m.dataDir, archiveDeleteDir))
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		log.WithFunc("pool.retryArchiveDeletes").Warnf(ctx, "list: %v", err)
+		return
+	}
+	pinned := m.pinnedArchiveCks()
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() || !store.CheckpointIDRe.MatchString(entry.Name()) {
+			continue
+		}
+		if _, ok := pinned[entry.Name()]; !ok {
+			ids = append(ids, entry.Name())
+		}
+	}
+	m.runBounded(ctx, len(ids), func(ctx context.Context, i int) {
+		m.retryArchiveDelete(ctx, ids[i])
+	}).Wait()
+}
+
+func (m *Manager) retryArchiveDelete(ctx context.Context, ckID string) {
+	l := m.recLock(ckID)
+	l.Lock()
+	if m.archiveCkPinned(ckID) {
+		l.Unlock()
+		m.recDone(ckID)
+		return
+	}
+	err := m.ckpts.Delete(ctx, ckID)
+	l.Unlock()
+	if err != nil {
+		m.recDone(ckID)
+		log.WithFunc("pool.retryArchiveDeletes").Warnf(ctx, "delete %s: %v", ckID, err)
+		return
+	}
+	m.recDoneEvict(ckID)
+	if err := m.clearArchiveCk(ckID); err != nil {
+		log.WithFunc("pool.retryArchiveDeletes").Warnf(ctx, "clear %s: %v", ckID, err)
+	}
+}
+
+func (m *Manager) archiveCkPinned(ckID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.pendingCks[ckID]; ok {
+		return true
+	}
+	for _, sb := range m.claimed {
+		if sb.ArchiveCk == ckID {
+			return true
+		}
+	}
+	return false
 }

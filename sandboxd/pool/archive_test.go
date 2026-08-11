@@ -14,6 +14,11 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+const (
+	testArchiveRelease = "release"
+	testArchiveReap    = "reap"
+)
+
 // TestArchivePublishWindowPinsCheckpoint guards the pre-pin: between an
 // archive's checkpoint publish and the ArchiveCk commit, the checkpoint must
 // be invisible to listings and refuse deletion — a delete landing in that
@@ -31,6 +36,10 @@ func TestArchivePublishWindowPinsCheckpoint(t *testing.T) {
 	archived := make(chan error, 1)
 	go func() { archived <- m.archive(t.Context(), sb) }()
 	ck := <-stall.published
+	m.retryArchiveDeletes(t.Context())
+	if !ckExists(t, m, ck) {
+		t.Fatal("archive delete retry removed a checkpoint still being published")
+	}
 
 	if ckpts, err := m.Checkpoints(t.Context(), ""); err != nil || len(ckpts) != 0 {
 		t.Errorf("mid-publish checkpoint visible: %v, %v", ckpts, err)
@@ -356,6 +365,204 @@ func TestReleaseArchivedDeletesCheckpoint(t *testing.T) {
 	}
 }
 
+func TestArchiveDeleteRetryAfterRestart(t *testing.T) {
+	for _, action := range []string{testArchiveRelease, testArchiveReap} {
+		t.Run(action, func(t *testing.T) {
+			eng := newFakeEngine()
+			dataDir := t.TempDir()
+			m := newTestManagerAt(t, eng, dataDir, archivePool(3600))
+			sb := mustClaim(t, m, testKey)
+			id, token := sb.ID, sb.Token
+			mustArchive(t, m, sb)
+			ck := sb.ArchiveCk
+			failed := &failingDeleteStore{Store: m.ckpts, attempts: make(chan string, 1)}
+			m.ckpts = failed
+
+			switch action {
+			case testArchiveRelease:
+				if err := m.Release(t.Context(), id, Cred{Token: token}); err != nil {
+					t.Fatalf("release: %v", err)
+				}
+			case testArchiveReap:
+				m.mu.Lock()
+				sb.Deadline = time.Now().Add(-time.Second)
+				m.mu.Unlock()
+				m.reapOnce(t.Context())
+				select {
+				case <-failed.attempts:
+				case <-time.After(3 * time.Second):
+					t.Fatal("reap did not attempt archive deletion")
+				}
+				waitFor(t, func() bool {
+					m.mu.Lock()
+					defer m.mu.Unlock()
+					_, pending := m.pendingCks[ck]
+					return !pending
+				})
+			}
+			if _, ok := m.claim(id, token); ok {
+				t.Fatal("removed archive claim survived")
+			}
+			if !ckExists(t, m, ck) || !archiveCkMarked(m, ck) {
+				t.Fatal("failed deletion did not retain the checkpoint and cleanup marker")
+			}
+
+			m2 := newTestManagerAt(t, eng, dataDir, archivePool(3600))
+			if err := m2.Reconcile(t.Context()); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			if ckExists(t, m2, ck) || archiveCkMarked(m2, ck) {
+				t.Fatal("restart did not finish archive deletion")
+			}
+			if _, ok := m2.claim(id, token); ok {
+				t.Fatal("restart revived the removed claim")
+			}
+		})
+	}
+}
+
+func TestReconcileAdoptsLegacyArchiveMarker(t *testing.T) {
+	eng := newFakeEngine()
+	dataDir := t.TempDir()
+	m := newTestManagerAt(t, eng, dataDir, archivePool(3600))
+	sb := mustClaim(t, m, testKey)
+	mustArchive(t, m, sb)
+	id, token, ck := sb.ID, sb.Token, sb.ArchiveCk
+	if err := m.clearArchiveCk(ck); err != nil {
+		t.Fatalf("clear marker: %v", err)
+	}
+
+	m2 := newTestManagerAt(t, eng, dataDir, archivePool(3600))
+	if err := m2.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if !ckExists(t, m2, ck) || !archiveCkMarked(m2, ck) {
+		t.Fatal("reconcile did not retain and mark the live archive")
+	}
+	if _, err := m2.WakeAgentSocket(t.Context(), id, token); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	if archiveCkMarked(m2, ck) {
+		t.Fatal("wake left the archive cleanup marker")
+	}
+}
+
+func TestArchiveRemovalCommitPinsCheckpoint(t *testing.T) {
+	for _, action := range []string{testArchiveRelease, testArchiveReap} {
+		t.Run(action, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newTestManager(t, eng, archivePool(3600))
+			sb := mustClaim(t, m, testKey)
+			mustArchive(t, m, sb)
+			id, token, ck := sb.ID, sb.Token, sb.ArchiveCk
+			if action == testArchiveReap {
+				m.mu.Lock()
+				sb.Deadline = time.Now().Add(-time.Second)
+				m.mu.Unlock()
+			}
+
+			m.store.mu.Lock()
+			locked := true
+			t.Cleanup(func() {
+				if locked {
+					m.store.mu.Unlock()
+				}
+			})
+			done := make(chan error, 1)
+			go func() {
+				if action == testArchiveRelease {
+					done <- m.Release(t.Context(), id, Cred{Token: token})
+					return
+				}
+				m.reapOnce(t.Context())
+				done <- nil
+			}()
+			waitFor(t, func() bool {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				_, claimed := m.claimed[id]
+				_, pending := m.pendingCks[ck]
+				return !claimed && pending
+			})
+			m.retryArchiveDeletes(t.Context())
+			if !ckExists(t, m, ck) {
+				t.Error("retry deleted the checkpoint before the claims commit")
+			}
+			m.store.path = filepath.Join(t.TempDir(), "gone", "claims.json")
+			m.store.mu.Unlock()
+			locked = false
+			if err := <-done; action == testArchiveRelease && err == nil {
+				t.Fatal("release succeeded despite a persist failure")
+			}
+			waitFor(t, func() bool {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				_, claimed := m.claimed[id]
+				_, pending := m.pendingCks[ck]
+				return claimed && !pending
+			})
+			m.retryArchiveDeletes(t.Context())
+			if !ckExists(t, m, ck) {
+				t.Error("retry deleted the checkpoint restored by rollback")
+			}
+			healStore(t, m)
+			if _, err := m.WakeAgentSocket(t.Context(), id, token); err != nil {
+				t.Fatalf("wake after rollback: %v", err)
+			}
+		})
+	}
+}
+
+func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, archivePool(3600))
+	sb := mustClaim(t, m, testKey)
+	mustArchive(t, m, sb)
+	id, token, ck := sb.ID, sb.Token, sb.ArchiveCk
+
+	m.store.mu.Lock()
+	locked := true
+	t.Cleanup(func() {
+		if locked {
+			m.store.mu.Unlock()
+		}
+	})
+	woke := make(chan error, 1)
+	go func() {
+		_, err := m.WakeAgentSocket(t.Context(), id, token)
+		woke <- err
+	}()
+	waitFor(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return sb.ArchiveCk == ""
+	})
+	retried := make(chan struct{})
+	go func() {
+		m.retryArchiveDeletes(t.Context())
+		close(retried)
+	}()
+	waitFor(t, func() bool {
+		m.recLocksMu.Lock()
+		defer m.recLocksMu.Unlock()
+		return m.recRefs[ck] >= 2
+	})
+	m.store.path = filepath.Join(t.TempDir(), "gone", "claims.json")
+	m.store.mu.Unlock()
+	locked = false
+	if err := <-woke; err == nil {
+		t.Fatal("wake succeeded despite a persist failure")
+	}
+	<-retried
+	m.mu.Lock()
+	archived := sb.ArchiveCk == ck && sb.VMName == ""
+	m.mu.Unlock()
+	if !archived || !ckExists(t, m, ck) {
+		t.Fatal("retry deleted the archive restored by wake rollback")
+	}
+	healStore(t, m)
+}
+
 // TestIdleOnceSkipsArchived guards the fix where the idle sweep tried to
 // hibernate an archived (VM-less) claim, corrupting its record.
 func TestIdleOnceSkipsArchived(t *testing.T) {
@@ -583,6 +790,19 @@ func (s *stallingStore) Publish(ctx context.Context, staging, id string) error {
 	return nil
 }
 
+type failingDeleteStore struct {
+	store.Store
+	attempts chan string
+}
+
+func (s *failingDeleteStore) Delete(_ context.Context, id string) error {
+	select {
+	case s.attempts <- id:
+	default:
+	}
+	return errors.New("delete failed")
+}
+
 // breakStore points the claim store at a path whose parent is missing, so the
 // next save fails — the fault used to exercise the persist-failure paths.
 func breakStore(t *testing.T, m *Manager) {
@@ -638,6 +858,11 @@ func ckExists(t *testing.T, m *Manager, ck string) bool {
 	}
 	release()
 	return true
+}
+
+func archiveCkMarked(m *Manager, ck string) bool {
+	_, err := os.Stat(filepath.Join(m.dataDir, archiveDeleteDir, ck))
+	return err == nil
 }
 
 // pinnedHidden reports whether the store holds exactly one checkpoint and it is

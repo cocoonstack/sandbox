@@ -191,7 +191,7 @@ client needs `WithAPIToken` — a sandbox handle alone cannot amplify.
 ```go
 tpl, err := sb.Promote(ctx, "myproj:v1")  // publish current state
 child, err := tpl.New(ctx)                // clones the promoted state
-fmt.Println(tpl.ContentDigest == child.TemplateDigest) // true
+fmt.Println(tpl.ContentDigest != "" && tpl.ContentDigest == child.TemplateDigest) // true
 err = tpl.Delete(ctx)                     // caller owns the lifecycle
 ```
 
@@ -203,6 +203,8 @@ replaces the template. `Template.ContentDigest` identifies the published
 export bytes; a claim from that exact generation carries the same value in
 `Sandbox.TemplateDigest`. A caller pinning a mutable template name can compare
 the claim's value with its expected digest and close/refuse a mismatch.
+Templates published by an older sandboxd have empty digests until they are
+re-promoted after the node is upgraded.
 
 **On the default local-disk backend templates live on one node**, and on a
 cluster the parent claim may have been redirected — the returned `Template`

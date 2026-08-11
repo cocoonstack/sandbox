@@ -139,7 +139,7 @@ All-or-nothing: on error no child survived. Count is capped at the node's
 ```python
 tpl = sb.promote("myproj:v1")     # publish current state
 child = tpl.new()                 # clones the promoted state
-assert tpl.content_digest == child.template_digest
+assert tpl.content_digest and tpl.content_digest == child.template_digest
 tpl.delete()                      # caller owns the lifecycle
 ```
 
@@ -154,6 +154,8 @@ tick — prefer the handle right after promoting (see
 `tpl.content_digest` identifies the published export bytes. A caller pinning
 the mutable name can compare a claim's `template_digest` with its expected
 value and close/refuse a mismatch.
+Templates published by an older sandboxd have empty digests until they are
+re-promoted after the node is upgraded.
 
 ## Checkpoints — branching and time travel
 

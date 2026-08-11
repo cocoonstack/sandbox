@@ -364,7 +364,7 @@ func (m *Manager) vetoIfHealPending(ckptID string) {
 }
 
 // pinnedArchiveCks is the set of checkpoint ids backing a live archived claim
-// or an archive publish in flight (pendingCks): wake images the listing hides
+// or an archive transition in flight (pendingCks): wake images the listing hides
 // and delete/TTL must spare (deleting one would strand its sandbox).
 func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 	m.mu.Lock()
@@ -392,7 +392,7 @@ func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 	logger := log.WithFunc("pool.sweepExpiredCheckpoints")
 	// Checkpoints already hides archive images backing a live claim, so the
 	// TTL never reaches one; their retention is the claim's own Deadline
-	// (reapPurge). An orphaned archive ck carries no live reference and ages out.
+	// (reapPurge).
 	ckpts, err := m.Checkpoints(ctx, "")
 	if err != nil {
 		logger.Error(ctx, err, "list for retention")
