@@ -155,8 +155,7 @@ func (m *Manager) HasGolden(ctx context.Context, key types.PoolKey) bool {
 }
 
 // HasPromotedTemplate reports whether the template store contains key. Unlike
-// HasGolden it does not count a configured pool golden, so volume placement can
-// require a true template-and-volume owner intersection only when necessary.
+// HasGolden it does not count a configured pool golden.
 func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey) bool {
 	id := store.TemplateID(key.Hash())
 	m.tplMu.Lock()

@@ -80,7 +80,6 @@ func TestReconcileRetainsVolumeCaptureGateWithoutCatalog(t *testing.T) {
 		t.Fatalf("ClaimProvision: %v", err)
 	}
 
-	// Restart from the persisted claim after removing the catalog entry.
 	m2 := newTestManagerAt(t, eng, dataDir)
 	if err := m2.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)

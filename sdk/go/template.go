@@ -30,10 +30,6 @@ func (t *Template) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
 		return nil, err
 	}
 	claim.Net, claim.Size = t.net, t.size
-	// Without volumes the owner is already the only useful target, so retain
-	// the immediate owner-bound path. A volume claim may need another node
-	// that holds both resources and therefore uses the normal one-hop claim
-	// protocol.
 	if len(claim.Volumes) == 0 {
 		claim.NoRedirect = true
 		body, err := encodeBody("claim", claim)
