@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cocoonstack/sandbox/e2e/internal/harness"
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
@@ -39,28 +40,26 @@ func run(addr, token, template, volume, probe string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	client, connectErr := sandbox.Connect(addr, sandbox.WithAPIToken(token))
-	if connectErr != nil {
-		return fmt.Errorf("connect: %w", connectErr)
-	}
 
 	const (
 		mountA = "/datasets/e2e-a"
 		mountB = "/datasets/e2e-b"
 	)
-	claim := func(mount string) (*sandbox.Sandbox, time.Duration, error) {
-		start := time.Now()
-		sb, claimErr := client.New(ctx, template,
-			sandbox.WithNetwork(sandbox.NetNone),
-			sandbox.WithVolumes(sandbox.Volume{Name: volume, Mount: mount}),
-		)
-		return sb, time.Since(start), claimErr
-	}
-	sbA, claimA, err := claim(mountA)
+	start := time.Now()
+	client, sbA, err := harness.Claim(ctx, addr, token, template,
+		sandbox.WithNetwork(sandbox.NetNone),
+		sandbox.WithVolumes(sandbox.Volume{Name: volume, Mount: mountA}),
+	)
+	claimA := time.Since(start)
 	if err != nil {
-		return fmt.Errorf("claim at %s: %w", mountA, err)
+		return err
 	}
-	sbB, claimB, err := claim(mountB)
+	start = time.Now()
+	sbB, err := client.New(ctx, template,
+		sandbox.WithNetwork(sandbox.NetNone),
+		sandbox.WithVolumes(sandbox.Volume{Name: volume, Mount: mountB}),
+	)
+	claimB := time.Since(start)
 	if err != nil {
 		_ = sbA.Close()
 		return fmt.Errorf("claim at %s: %w", mountB, err)
