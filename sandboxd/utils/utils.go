@@ -66,6 +66,23 @@ func WriteFileSync(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
+// RemoveDirEntries removes dir's entries for which match returns true; nil matches all.
+func RemoveDirEntries(dir string, match func(name string) bool) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if match != nil && !match(e.Name()) {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // DecodeStrictJSON decodes one JSON value into v, refusing unknown fields,
 // duplicated keys, and trailing data — for hand-edited operator input, where
 // a typo must fail instead of silently changing what was configured.

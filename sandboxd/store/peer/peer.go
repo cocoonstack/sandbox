@@ -5,11 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 // healBudget bounds one Pull across every owner tried, not each.
@@ -61,7 +60,8 @@ func (h *Healer) pullFrom(ctx context.Context, id, staging string, addrs []strin
 	perOwner := budget / time.Duration(len(addrs))
 	var errs []error
 	for _, addr := range addrs {
-		if err := clearDir(staging); err != nil {
+		// One peer's rejected or partial transfer must not linger into the next's.
+		if err := utils.RemoveDirEntries(staging, nil); err != nil {
 			return fmt.Errorf("reset staging: %w", err)
 		}
 		attemptCtx, cancel := context.WithTimeout(ctx, perOwner)
@@ -86,19 +86,4 @@ func (h *Healer) pullFrom(ctx context.Context, id, staging string, addrs []strin
 		return fmt.Errorf("heal %s from %d peer(s): %w", id, len(addrs), errors.Join(errs...))
 	}
 	return store.ErrNotFound // every owner answered not-found: stale gossip
-}
-
-// clearDir empties dir between owner attempts, so one peer's rejected or
-// partial transfer cannot linger into the next's.
-func clearDir(dir string) error {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
-			return err
-		}
-	}
-	return nil
 }
