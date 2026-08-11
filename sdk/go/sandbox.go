@@ -55,8 +55,8 @@ func (e *ExitError) Error() string {
 type Sandbox struct {
 	ID       string
 	Deadline time.Time
-	// TemplateDigest identifies the promoted-template export this sandbox was
-	// cloned from; empty for configured pools, image boots, forks, and checkpoints.
+	// TemplateDigest is the content identity of the promoted-template export
+	// this sandbox was cloned from; empty for any other source.
 	TemplateDigest string
 
 	// FromCheckpoint names the checkpoint this sandbox branched from; empty

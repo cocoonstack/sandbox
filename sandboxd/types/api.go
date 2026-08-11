@@ -44,9 +44,8 @@ type ClaimResponse struct {
 	Token     string    `json:"token,omitempty"`
 	Deadline  time.Time `json:"deadline,omitzero"`
 	OwnerAddr string    `json:"owner_addr,omitempty"`
-	// TemplateDigest identifies the promoted-template export this claim was
-	// cloned from. It is empty for configured pools, cold image boots, forks,
-	// checkpoints, and templates published by older sandboxd versions.
+	// TemplateDigest is the content identity of the promoted-template export
+	// this claim was cloned from; empty for any other source.
 	TemplateDigest string `json:"template_digest,omitempty"`
 
 	// FromCheckpoint names the checkpoint a branched claim was born from,

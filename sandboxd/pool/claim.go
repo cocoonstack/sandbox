@@ -169,7 +169,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
 		m.mu.Lock()
-		m.claimed[id] = sb // roll back so memory matches the still-durable claim; ck stays pinned
+		m.claimed[id] = sb // roll back so memory matches the still-durable claim; the restored claim re-pins ck
 		m.tenantDelta(sb.Tenant, 1)
 		delete(m.pendingCks, ck)
 		rb := m.store.snapshot(m.claimed)
@@ -381,7 +381,6 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
 		}
 	})
-	go m.retryArchiveDeletes(ctx)
 }
 
 // purgeArchiveCk deletes an archived claim's store checkpoint and records the

@@ -297,6 +297,9 @@ func (m *Manager) retryArchiveDeletes(ctx context.Context) {
 		log.WithFunc("pool.retryArchiveDeletes").Warnf(ctx, "list: %v", err)
 		return
 	}
+	if len(entries) == 0 {
+		return
+	}
 	pinned := m.pinnedArchiveCks()
 	ids := make([]string, 0, len(entries))
 	for _, entry := range entries {
@@ -334,15 +337,6 @@ func (m *Manager) retryArchiveDelete(ctx context.Context, ckID string) {
 }
 
 func (m *Manager) archiveCkPinned(ckID string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.pendingCks[ckID]; ok {
-		return true
-	}
-	for _, sb := range m.claimed {
-		if sb.ArchiveCk == ckID {
-			return true
-		}
-	}
-	return false
+	_, ok := m.pinnedArchiveCks()[ckID]
+	return ok
 }

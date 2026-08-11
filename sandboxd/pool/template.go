@@ -311,9 +311,8 @@ func (m *Manager) publishTemplate(ctx context.Context, snap string, key types.Po
 	return m.commitTemplate(ctx, staging, id, tenant)
 }
 
-// commitTemplate hashes the private export staging once, then writes its meta,
-// publishes that generation, and registers it in the gossip set. The owner
-// re-check and meta+generation swap are serialized under the template lock.
+// commitTemplate hashes the staged export once, then re-checks the owner and
+// swaps meta+generation in, all serialized under the template lock.
 func (m *Manager) commitTemplate(ctx context.Context, staging, id, tenant string) (string, error) {
 	digest, err := exportContentDigest(filepath.Join(staging, store.ExportDir))
 	if err != nil {

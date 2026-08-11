@@ -515,6 +515,7 @@ func (m *Manager) Run(ctx context.Context) {
 			m.reapOnce(ctx)
 			m.idleOnce(ctx)
 			m.archiveOnce(ctx)
+			go m.retryArchiveDeletes(ctx)
 		case <-ckptSweep:
 			m.sweepExpiredCheckpoints(ctx)
 		}
