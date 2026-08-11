@@ -36,27 +36,19 @@ func ListenHybrid(sockPath string, port int) (io.Closer, error) {
 	if err != nil {
 		return nil, err
 	}
-	go func() {
-		for {
-			conn, err := l.Accept()
-			if err != nil {
-				return
-			}
-			go func(c net.Conn) {
-				r := bufio.NewReader(c)
-				line, err := r.ReadString('\n')
-				if err != nil || strings.TrimSpace(line) != fmt.Sprintf("CONNECT %d", port) {
-					_ = c.Close()
-					return
-				}
-				if _, err := fmt.Fprintf(c, "OK %d\n", port); err != nil {
-					_ = c.Close()
-					return
-				}
-				handle(c, r)
-			}(conn)
+	go acceptLoop(l, func(c net.Conn) {
+		r := bufio.NewReader(c)
+		line, err := r.ReadString('\n')
+		if err != nil || strings.TrimSpace(line) != fmt.Sprintf("CONNECT %d", port) {
+			_ = c.Close()
+			return
 		}
-	}()
+		if _, err := fmt.Fprintf(c, "OK %d\n", port); err != nil {
+			_ = c.Close()
+			return
+		}
+		handle(c, r)
+	})
 	return l, nil
 }
 
