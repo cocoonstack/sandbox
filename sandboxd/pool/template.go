@@ -259,11 +259,18 @@ func (m *Manager) checkTemplateOwner(ctx context.Context, id, tenant string) err
 	return nil
 }
 
+type goldenResolution struct {
+	dir            string
+	templateDigest string
+	promoted       bool
+	release        func()
+}
+
 // resolveGolden resolves a key's clone source: the configured pool's local
 // golden (no release), else a promoted template fetched from the store;
 // empty dir cold-boots. Only a true absence cold-boots — a backend failure
 // propagates rather than silently booting a template name as an image ref.
-func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string, string, bool, func(), error) {
+func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (goldenResolution, error) {
 	m.mu.Lock()
 	var dir string
 	if p := m.pools[key]; p != nil {
@@ -271,10 +278,10 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string,
 	}
 	m.mu.Unlock()
 	if dir != "" {
-		return dir, "", false, func() {}, nil
+		return goldenResolution{dir: dir, release: func() {}}, nil
 	}
 	if key.Net == types.NetEgress {
-		return "", "", false, func() {}, nil // never resume a live-captured template on the egress lane; cold-boot instead
+		return goldenResolution{release: func() {}}, nil // never resume a live-captured template on the egress lane; cold-boot instead
 	}
 	id := store.TemplateID(key.Hash())
 	l := m.recLock(id)
@@ -284,18 +291,23 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (string,
 		l.RUnlock()
 		m.recDone(id)
 		if errors.Is(err, store.ErrNotFound) {
-			return "", "", false, func() {}, nil
+			return goldenResolution{release: func() {}}, nil
 		}
-		return "", "", false, func() {}, err
+		return goldenResolution{release: func() {}}, err
 	}
 	var rec templateRecord
 	if err := json.Unmarshal(meta, &rec); err != nil {
 		release()
 		l.RUnlock()
 		m.recDone(id)
-		return "", "", false, func() {}, fmt.Errorf("decode template metadata: %w", err)
+		return goldenResolution{release: func() {}}, fmt.Errorf("decode template metadata: %w", err)
 	}
-	return dir, digest, true, func() { release(); l.RUnlock(); m.recDone(id) }, nil
+	return goldenResolution{
+		dir:            dir,
+		templateDigest: digest,
+		promoted:       true,
+		release:        func() { release(); l.RUnlock(); m.recDone(id) },
+	}, nil
 }
 
 // publishTemplate exports snap into the store under the key's template id.

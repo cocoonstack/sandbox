@@ -200,13 +200,13 @@ func TestResolveGoldenSkipsPromotedEgressTemplate(t *testing.T) {
 	if _, err = m.commitTemplate(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("seed template: %v", err)
 	}
-	dir, _, _, release, err := m.resolveGolden(t.Context(), egKey)
+	golden, err := m.resolveGolden(t.Context(), egKey)
 	if err != nil {
 		t.Fatalf("resolveGolden: %v", err)
 	}
-	release()
-	if dir != "" {
-		t.Errorf("resolveGolden resumed a promoted egress template %q; want cold-boot", dir)
+	golden.release()
+	if golden.dir != "" {
+		t.Errorf("resolveGolden resumed a promoted egress template %q; want cold-boot", golden.dir)
 	}
 }
 

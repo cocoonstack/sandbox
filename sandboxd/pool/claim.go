@@ -473,16 +473,16 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	if quotaErr := m.overQuota(1, tenant); quotaErr != nil {
 		return nil, quotaErr
 	}
-	golden, templateDigest, promoted, release, err := m.resolveGolden(ctx, key)
+	golden, err := m.resolveGolden(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("resolve template: %w", err)
 	}
-	if requirePromoted && !promoted {
-		release()
+	if requirePromoted && !golden.promoted {
+		golden.release()
 		return nil, ErrVolumeUnavailable
 	}
-	sb, err := m.provision(ctx, key, golden)
-	release()
+	sb, err := m.provision(ctx, key, golden.dir)
+	golden.release()
 	if err != nil {
 		return nil, err
 	}
@@ -490,12 +490,12 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 		m.destroy(ctx, sb.VMName)
 		return nil, volumeErr
 	}
-	sb.TemplateDigest = templateDigest
+	sb.TemplateDigest = golden.templateDigest
 	sb.Tenant = tenant
 	sb.ClaimRef = claimRef
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {
-		if golden != "" {
+		if golden.dir != "" {
 			m.counters.claimsClone.Add(1)
 		} else {
 			m.counters.claimsCold.Add(1)
