@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -76,12 +75,12 @@ func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (vmProvisio
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	if sb.HibernateSnap == "" {
-		snap := forkPrefix + strings.TrimPrefix(sb.VMName, vmPrefix) + "-" + randHex(3)
-		if err := m.eng.SnapshotSave(ctx, sb.VMName, snap); err != nil {
+		snap, cleanup, err := m.sourceSnap(ctx, sb)
+		if err != nil {
 			return nil, nil, err
 		}
 		return func(name string) (types.VMRecord, error) { return m.eng.CloneSnap(ctx, snap, name, sb.Key) },
-			func() { m.dropSnap(ctx, snap) }, nil
+			cleanup, nil
 	}
 	dir, err := os.MkdirTemp(m.dataDir, "fork-")
 	if err != nil {
