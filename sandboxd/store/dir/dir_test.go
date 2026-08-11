@@ -1,6 +1,8 @@
 package dir
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -36,30 +38,265 @@ func TestFetchPinsGenerationAcrossStoreInstances(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
-	mustPublish(t, writer, id, "first")
-	backdate(t, filepath.Join(root, id, store.ExportGen([]byte(metaJSON("first")))))
+	firstMeta := []byte(metaJSON("first"))
+	firstDigest := mustPublishDigested(t, writer, id, "first")
+	firstDigestPath := filepath.Join(root, id, digestName(firstMeta))
+	backdate(t, filepath.Join(root, id, store.ExportGen(firstMeta)))
+	backdate(t, firstDigestPath)
 	backdate(t, filepath.Join(root, id, store.MetaFile))
 
-	dir, meta, release, err := reader.Fetch(t.Context(), id)
+	dir, meta, digest, release, err := reader.Fetch(t.Context(), id)
 	if err != nil {
 		t.Fatalf("fetch first: %v", err)
 	}
 	if string(meta) != metaJSON("first") {
 		t.Fatalf("fetch meta %q, want first generation", meta)
 	}
-	mustPublish(t, writer, id, "second")
+	if digest != firstDigest {
+		t.Fatalf("fetch digest %q, want first generation %q", digest, firstDigest)
+	}
+	secondDigest := mustPublishDigested(t, writer, id, "second")
 	if _, statErr := os.Stat(filepath.Join(dir, "disk.img")); statErr != nil {
 		t.Fatalf("first generation disturbed by re-publish: %v", statErr)
 	}
+	if _, statErr := os.Stat(firstDigestPath); statErr != nil {
+		t.Fatalf("first generation digest disturbed by re-publish: %v", statErr)
+	}
 	release()
 
-	_, meta, release, err = reader.Fetch(t.Context(), id)
+	_, meta, digest, release, err = reader.Fetch(t.Context(), id)
 	if err != nil {
 		t.Fatalf("fetch second: %v", err)
 	}
 	defer release()
 	if string(meta) != metaJSON("second") {
 		t.Fatalf("fetch meta %q, want second generation", meta)
+	}
+	if digest != secondDigest || digest == firstDigest {
+		t.Fatalf("fetch digest %q, want second generation %q", digest, secondDigest)
+	}
+}
+
+func TestPlainPublishReplacesDigestWithEmpty(t *testing.T) {
+	const id = "ck_00000000000000aa"
+	root := t.TempDir()
+	st, err := New(root, store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	firstMeta := []byte(metaJSON("digested"))
+	firstDigest := mustPublishDigested(t, st, id, "digested")
+	firstDigestPath := filepath.Join(root, id, digestName(firstMeta))
+	mustPublish(t, st, id, "plain")
+
+	_, meta, digest, release, err := st.Fetch(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	defer release()
+	if string(meta) != metaJSON("plain") || digest != "" {
+		t.Fatalf("plain replacement meta/digest = %q/%q, want plain/empty", meta, digest)
+	}
+	if firstDigest == "" {
+		t.Fatal("digested generation returned an empty digest")
+	}
+	if _, statErr := os.Stat(firstDigestPath); statErr != nil {
+		t.Fatalf("superseded digest removed inside the grace: %v", statErr)
+	}
+}
+
+func TestPublishDigestedChunkBoundaries(t *testing.T) {
+	const id = "ck_00000000000000aa"
+	content := bytes.Repeat([]byte{'x'}, int(store.DigestChunkSize)+1)
+	content[len(content)-1] = 'y'
+	tests := []struct {
+		name string
+		size int64
+		want string
+	}{
+		{name: "below", size: store.DigestChunkSize - 1, want: "sha256:9463427f8626e0b65863b401d333d32ad8e0b11efb34db7f502798aea753fc7e"},
+		{name: "exact", size: store.DigestChunkSize, want: "sha256:20ef154fac2fa87246572b15e008adfef78fc47ce93e479c367112ea750006c6"},
+		{name: "above", size: store.DigestChunkSize + 1, want: "sha256:da8dd289e7d66408bd7d202642f180f2c22bc508cf0fe1d6e9f0e0b7967f6a5e"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st, err := New(t.TempDir(), store.CheckpointIDRe)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			staging, err := st.Stage(id)
+			if err != nil {
+				t.Fatalf("Stage: %v", err)
+			}
+			export := filepath.Join(staging, store.ExportDir)
+			if err = os.MkdirAll(export, 0o750); err != nil {
+				t.Fatalf("mkdir export: %v", err)
+			}
+			if err = os.WriteFile(filepath.Join(export, "boundary.bin"), content[:int(tt.size)], 0o600); err != nil {
+				t.Fatalf("write export: %v", err)
+			}
+			if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(metaJSON(tt.name)), 0o600); err != nil {
+				t.Fatalf("write meta: %v", err)
+			}
+			digest, err := st.PublishDigested(t.Context(), staging, id)
+			if err != nil {
+				t.Fatalf("PublishDigested: %v", err)
+			}
+			if digest != tt.want {
+				t.Errorf("digest = %q, want %q", digest, tt.want)
+			}
+			_, _, fetched, release, err := st.Fetch(t.Context(), id)
+			if err != nil {
+				t.Fatalf("Fetch: %v", err)
+			}
+			defer release()
+			if fetched != tt.want {
+				t.Errorf("fetched digest = %q, want %q", fetched, tt.want)
+			}
+		})
+	}
+}
+
+func TestDigestWorkersStoreChunksByOffset(t *testing.T) {
+	data := bytes.Repeat([]byte{'x'}, int(store.DigestChunkSize))
+	data = append(data, 'y')
+	path := filepath.Join(t.TempDir(), "boundary.bin")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write export: %v", err)
+	}
+	sources := []digestSource{{
+		path: path,
+		digest: store.DigestFile{
+			Path: "boundary.bin", Size: int64(len(data)), Chunks: make([][sha256.Size]byte, 2),
+		},
+	}}
+	secondDone := make(chan struct{})
+	completed := make(chan int, 2)
+	hashFn := func(source *digestSource, chunk int, buffer []byte) error {
+		if chunk == 0 {
+			<-secondDone
+		}
+		err := hashChunk(source, chunk, buffer)
+		completed <- chunk
+		if chunk == 1 {
+			close(secondDone)
+		}
+		return err
+	}
+	if err := hashChunks(t.Context(), sources, 2, hashFn); err != nil {
+		t.Fatalf("hash chunks: %v", err)
+	}
+	if first, second := <-completed, <-completed; first != 1 || second != 0 {
+		t.Fatalf("completion order = %d, %d, want 1, 0", first, second)
+	}
+	digest, err := store.AssembleDigest([]store.DigestFile{sources[0].digest})
+	if err != nil {
+		t.Fatalf("assemble digest: %v", err)
+	}
+	const want = "sha256:da8dd289e7d66408bd7d202642f180f2c22bc508cf0fe1d6e9f0e0b7967f6a5e"
+	if digest != want {
+		t.Errorf("digest = %q, want %q", digest, want)
+	}
+}
+
+func TestPublishDigestedFailureAndFreshRetry(t *testing.T) {
+	const id = "ck_00000000000000aa"
+	root := t.TempDir()
+	st, err := New(root, store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	firstDigest := mustPublishDigested(t, st, id, "first")
+
+	failed, err := st.Stage(id)
+	if err != nil {
+		t.Fatalf("stage failed publish: %v", err)
+	}
+	seedRecord(t, failed, "second")
+	secondMeta, err := os.ReadFile(filepath.Join(failed, store.MetaFile))
+	if err != nil {
+		t.Fatalf("read second meta: %v", err)
+	}
+	blocker := filepath.Join(root, id, digestName(secondMeta))
+	if err = os.Mkdir(blocker, 0o750); err != nil {
+		t.Fatalf("block digest commit: %v", err)
+	}
+	if digest, publishErr := st.PublishDigested(t.Context(), failed, id); publishErr == nil || digest != "" {
+		t.Fatalf("PublishDigested with blocked sidecar = %q, %v, want empty/error", digest, publishErr)
+	}
+	dir, meta, digest, release, err := st.Fetch(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Fetch previous generation: %v", err)
+	}
+	content, readErr := os.ReadFile(filepath.Join(dir, "disk.img"))
+	release()
+	if string(meta) != metaJSON("first") || digest != firstDigest {
+		t.Errorf("previous generation meta/digest = %q/%q, want first/%q", meta, digest, firstDigest)
+	}
+	if readErr != nil || string(content) != "first" {
+		t.Errorf("previous generation content = %q, %v, want first", content, readErr)
+	}
+
+	if err = os.RemoveAll(blocker); err != nil {
+		t.Fatalf("remove digest blocker: %v", err)
+	}
+	if err = os.RemoveAll(failed); err != nil {
+		t.Fatalf("remove failed staging: %v", err)
+	}
+	secondDigest := mustPublishDigested(t, st, id, "second")
+	dir, meta, digest, release, err = st.Fetch(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Fetch replacement generation: %v", err)
+	}
+	defer release()
+	content, readErr = os.ReadFile(filepath.Join(dir, "disk.img"))
+	if string(meta) != metaJSON("second") || digest != secondDigest || digest == firstDigest {
+		t.Errorf("replacement generation meta/digest = %q/%q, want second/%q", meta, digest, secondDigest)
+	}
+	if readErr != nil || string(content) != "second" {
+		t.Errorf("replacement generation content = %q, %v, want second", content, readErr)
+	}
+}
+
+func TestSweepGenerationsPairsCurrentAndSupersededDigests(t *testing.T) {
+	const id = "ck_00000000000000aa"
+	root := t.TempDir()
+	st, err := New(root, store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	firstMeta := []byte(metaJSON("first"))
+	firstGen := filepath.Join(root, id, store.ExportGen(firstMeta))
+	firstSidecar := filepath.Join(root, id, digestName(firstMeta))
+	mustPublishDigested(t, st, id, "first")
+	secondMeta := []byte(metaJSON("second"))
+	secondGen := filepath.Join(root, id, store.ExportGen(secondMeta))
+	secondSidecar := filepath.Join(root, id, digestName(secondMeta))
+	secondDigest := mustPublishDigested(t, st, id, "second")
+	for _, path := range []string{firstGen, firstSidecar, secondGen, secondSidecar} {
+		backdate(t, path)
+	}
+
+	if err = st.SweepGenerations(); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+	for _, path := range []string{firstGen, firstSidecar} {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Errorf("superseded entry %s survived sweep: %v", filepath.Base(path), statErr)
+		}
+	}
+	for _, path := range []string{secondGen, secondSidecar} {
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Errorf("current entry %s was swept: %v", filepath.Base(path), statErr)
+		}
+	}
+	_, meta, digest, release, err := st.Fetch(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Fetch current generation: %v", err)
+	}
+	defer release()
+	if string(meta) != metaJSON("second") || digest != secondDigest {
+		t.Fatalf("current meta/digest = %q/%q, want second/%q", meta, digest, secondDigest)
 	}
 }
 
@@ -99,7 +336,7 @@ func TestPublishRetriesAfterExpiredInstall(t *testing.T) {
 	mustPublish(t, st, id, "same")
 	backdate(t, gen)
 	mustPublish(t, st, id, "same")
-	dir, _, release, err := st.Fetch(t.Context(), id)
+	dir, _, _, release, err := st.Fetch(t.Context(), id)
 	if err != nil {
 		t.Fatalf("fetch after retried publish: %v", err)
 	}
@@ -121,23 +358,23 @@ func TestFetchLegacyFlatLayout(t *testing.T) {
 	}
 	seedRecord(t, filepath.Join(root, id), "legacy")
 
-	dir, meta, release, err := st.Fetch(t.Context(), id)
+	dir, meta, digest, release, err := st.Fetch(t.Context(), id)
 	if err != nil {
 		t.Fatalf("fetch legacy: %v", err)
 	}
 	release()
-	if string(meta) != metaJSON("legacy") || dir != filepath.Join(root, id, store.ExportDir) {
-		t.Fatalf("legacy fetch = %q %q, want the flat export dir", dir, meta)
+	if string(meta) != metaJSON("legacy") || digest != "" || dir != filepath.Join(root, id, store.ExportDir) {
+		t.Fatalf("legacy fetch = %q %q %q, want the flat export dir without digest", dir, meta, digest)
 	}
 
 	mustPublish(t, st, id, "modern")
-	dir, meta, release, err = st.Fetch(t.Context(), id)
+	dir, meta, digest, release, err = st.Fetch(t.Context(), id)
 	if err != nil {
 		t.Fatalf("fetch after re-publish: %v", err)
 	}
 	defer release()
-	if string(meta) != metaJSON("modern") || dir == filepath.Join(root, id, store.ExportDir) {
-		t.Fatalf("re-published fetch = %q %q, want a generation dir", dir, meta)
+	if string(meta) != metaJSON("modern") || digest != "" || dir == filepath.Join(root, id, store.ExportDir) {
+		t.Fatalf("re-published fetch = %q %q %q, want a generation dir without digest", dir, meta, digest)
 	}
 }
 
@@ -168,7 +405,7 @@ func TestPublishSweepsGenerationsBySupersessionAge(t *testing.T) {
 	if _, statErr := os.Stat(gen2); statErr != nil {
 		t.Fatalf("generation inside its supersession grace was reclaimed: %v", statErr)
 	}
-	dir, meta, release, err := st.Fetch(t.Context(), id)
+	dir, meta, _, release, err := st.Fetch(t.Context(), id)
 	if err != nil {
 		t.Fatalf("fetch after sweep: %v", err)
 	}
@@ -212,13 +449,16 @@ func TestSweepSparesPublishingGeneration(t *testing.T) {
 	if renameErr := os.Rename(tmp, filepath.Join(root, id, store.MetaFile)); renameErr != nil {
 		t.Fatalf("commit meta: %v", renameErr)
 	}
-	dir, gotMeta, release, err := writer.Fetch(t.Context(), id)
+	dir, gotMeta, digest, release, err := writer.Fetch(t.Context(), id)
 	if err != nil {
 		t.Fatalf("fetch committed generation: %v", err)
 	}
 	defer release()
 	if string(gotMeta) != metaJSON("new") {
 		t.Fatalf("fetch meta %q, want new generation", gotMeta)
+	}
+	if digest != "" {
+		t.Fatalf("fetch digest %q, want empty", digest)
 	}
 	if got, readErr := os.ReadFile(filepath.Join(dir, "disk.img")); readErr != nil || string(got) != "new" {
 		t.Fatalf("fetch export %q, %v, want new generation", got, readErr)
@@ -240,7 +480,7 @@ func TestSweepSparesLegacyFallback(t *testing.T) {
 	if err := st.SweepStaging(); err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
-	if _, _, release, err := st.Fetch(t.Context(), id); err != nil {
+	if _, _, _, release, err := st.Fetch(t.Context(), id); err != nil {
 		t.Fatalf("legacy record swept while still current: %v", err)
 	} else {
 		release()
@@ -318,13 +558,16 @@ func TestSweepReclaimsOnlyAgedUncommittedGenerations(t *testing.T) {
 		t.Fatalf("remove commit blocker: %v", removeErr)
 	}
 	mustPublish(t, writer, publishID, "fresh")
-	dir, gotMeta, release, err := writer.Fetch(t.Context(), publishID)
+	dir, gotMeta, digest, release, err := writer.Fetch(t.Context(), publishID)
 	if err != nil {
 		t.Fatalf("fetch retried publish: %v", err)
 	}
 	defer release()
 	if string(gotMeta) != metaJSON("fresh") {
 		t.Fatalf("fetch meta %q, want fresh", gotMeta)
+	}
+	if digest != "" {
+		t.Fatalf("fetch digest %q, want empty", digest)
 	}
 	if got, readErr := os.ReadFile(filepath.Join(dir, "disk.img")); readErr != nil || string(got) != "fresh" {
 		t.Fatalf("fetch export %q, %v, want fresh", got, readErr)
@@ -468,6 +711,20 @@ func mustPublish(t *testing.T, st *Store, id, metaID string) {
 	if err := st.Publish(t.Context(), staging, id); err != nil {
 		t.Fatalf("publish %s: %v", metaID, err)
 	}
+}
+
+func mustPublishDigested(t *testing.T, st *Store, id, metaID string) string {
+	t.Helper()
+	staging, err := st.Stage(id)
+	if err != nil {
+		t.Fatalf("stage %s: %v", metaID, err)
+	}
+	seedRecord(t, staging, metaID)
+	digest, err := st.PublishDigested(t.Context(), staging, id)
+	if err != nil {
+		t.Fatalf("publish digested %s: %v", metaID, err)
+	}
+	return digest
 }
 
 func seedRecord(t *testing.T, dir, metaID string) {

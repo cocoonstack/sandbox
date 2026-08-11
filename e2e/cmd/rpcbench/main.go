@@ -108,8 +108,7 @@ func run(addr, token, template string, n int) error {
 	return nil
 }
 
-// statRPC drives one fs_stat over the upgraded conn and closes it — the
-// protocol is one RPC per connection.
+// statRPC: the protocol is one RPC per connection.
 func statRPC(conn net.Conn) error {
 	defer func() { _ = conn.Close() }()
 	sc := silkd.NewConn(conn)

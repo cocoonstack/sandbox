@@ -117,7 +117,7 @@ type TenantSpec struct {
 // that tenant answers 401), and a
 // node serving the egress lane can only redirect egress claims to peers if it
 // too has an egress attachment (a no-egress node answers 409 rather than
-// redirecting). Both are acceptable for a homogeneous cluster.
+// redirecting).
 type MeshConfig struct {
 	NodeID     string   `json:"node_id"`               // unique name; defaults to Bind
 	Bind       string   `json:"bind"`                  // memberlist host:port
@@ -254,9 +254,8 @@ type Config struct {
 	// addressing fields (never payloads) to <data_dir>/audit.jsonl.
 	AuditLog bool `json:"audit_log,omitempty"`
 
-	// MaxForkCount caps children per fork call — each child is a full-RAM VM,
-	// so this bounds a single request's memory blast radius to the node's
-	// capacity. Defaults to 16.
+	// MaxForkCount caps children per fork call — each child is a full-RAM VM.
+	// Defaults to 16.
 	MaxForkCount int `json:"max_fork_count,omitempty"`
 
 	// RefillConcurrency caps concurrent VM provisioning node-wide — warm-pool

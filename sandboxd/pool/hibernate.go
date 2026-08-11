@@ -15,8 +15,7 @@ import (
 
 // Hibernate atomically snapshots a claimed sandbox and stops its VM, freeing
 // memory; the next agent access wakes it. Idempotent on an already-hibernated
-// sandbox. When to hibernate is the caller's policy — the node only provides
-// the transition.
+// sandbox.
 func (m *Manager) Hibernate(ctx context.Context, id string, cred Cred) error {
 	sb, ok := m.resolve(id, cred)
 	if !ok {
@@ -298,10 +297,8 @@ func (m *Manager) setPendingSnap(sb *types.Sandbox, snap string) claimSnapshot {
 
 // resolvePendingSnap settles a hibernate intent whose engine result was never
 // confirmed: the snapshot's presence decides whether to adopt it as
-// HibernateSnap or clear the intent. Reports an adopted (completed but
-// unrecorded) hibernate so the caller bills it; an unusable snapshot list
-// keeps the intent and errors. No-op field read when nothing is pending.
-// The caller holds sb.Transition.
+// HibernateSnap or clear the intent. An unusable snapshot list keeps the
+// intent and errors. The caller holds sb.Transition.
 func (m *Manager) resolvePendingSnap(ctx context.Context, sb *types.Sandbox) (adopted bool, err error) {
 	if sb.PendingSnap == "" {
 		return false, nil

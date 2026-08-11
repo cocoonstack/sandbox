@@ -173,7 +173,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 			m.recDone(ck)
 		}
 	}()
-	dir, _, release, err := m.ckpts.Fetch(ctx, ck)
+	dir, _, _, release, err := m.ckpts.Fetch(ctx, ck)
 	if errors.Is(err, store.ErrNotFound) {
 		return "", ErrUnknownSandbox // record disagrees with the store
 	}

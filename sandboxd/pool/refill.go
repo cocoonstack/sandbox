@@ -33,9 +33,9 @@ func (m *Manager) refillOnce(ctx context.Context) {
 		return
 	}
 	now := time.Now()
-	// Spawning VMs into a full node is what turned a capacity limit into an
-	// outage: every doomed attempt still takes the global rtnl lock. The park
-	// gates spawns only — sweeping removed pools is pure bookkeeping.
+	// Spawning VMs into a full node still takes the global rtnl lock even when
+	// doomed to fail. The park gates spawns only — sweeping removed pools is
+	// pure bookkeeping.
 	parked := now.Before(m.atCapacityUntil)
 	inFlight := 0
 	for key, p := range m.pools {
@@ -144,7 +144,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 }
 
 // noteCapacityLocked parks refill node-wide for a capacity failure, reporting
-// whether this call parked it so the episode is logged once. m.mu held.
+// whether this call parked it. m.mu held.
 func (m *Manager) noteCapacityLocked(now time.Time, reason string) bool {
 	first := !now.Before(m.atCapacityUntil)
 	m.atCapacityUntil = now.Add(capacityBackoff)
@@ -424,7 +424,6 @@ func (m *Manager) vsockOf(ctx context.Context, name string) (string, error) {
 	return vm.VsockSocket, nil
 }
 
-// findVM returns the engine's record for name, if it still lists one.
 func (m *Manager) findVM(ctx context.Context, name string) (types.VMRecord, bool, error) {
 	vms, err := m.eng.List(ctx, name)
 	if err != nil {

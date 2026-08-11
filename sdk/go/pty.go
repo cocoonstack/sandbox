@@ -18,9 +18,7 @@ type PtyOpts struct {
 	User string
 }
 
-// Pty is an open pseudo-terminal in the sandbox. Read yields terminal output
-// (EOF when the shell exits), Write feeds input, Resize adjusts the window,
-// and Close (or canceling the OpenPty ctx) ends the session.
+// Pty is an open pseudo-terminal in the sandbox.
 type Pty struct {
 	PID uint32
 

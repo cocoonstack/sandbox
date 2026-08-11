@@ -105,9 +105,8 @@ func (m *Mesh) Join(seeds []string) error {
 
 // UpdateSelf republishes this node's warm-pool counts and promoted-template
 // set, bumping the epoch so peers adopt the new view. An unchanged view is
-// not republished — the periodic tick would otherwise gossip a fresh epoch
-// every second for nothing. templates must arrive sorted: the unchanged
-// compare is order-sensitive.
+// not republished. templates must arrive sorted: the unchanged compare is
+// order-sensitive.
 func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates []string) {
 	m.updateMu.Lock()
 	defer m.updateMu.Unlock()
@@ -120,7 +119,7 @@ func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates [
 	m.mu.Unlock()
 	// Persist the candidate before publishing it: memberlist gossips self the
 	// instant it enters the view, so a crash before the write would strand peers
-	// on an epoch a backwards-clock restart can't beat. Hold old state on failure.
+	// on an epoch a backwards-clock restart can't beat.
 	if err := m.persistEpoch(epoch); err != nil {
 		log.WithFunc("mesh.UpdateSelf").Warnf(ctx, "persist epoch: %v", err)
 		return
@@ -185,8 +184,6 @@ func (m *Mesh) Candidates(keyHash string) []string {
 	case 1:
 		return []string{pool[0].addr}
 	}
-	// Power-of-two-choices: sample two, order by warmer. This is load
-	// spreading, not security — a weak PRNG is the right tool.
 	i := rand.IntN(len(pool))     //nolint:gosec // placement jitter, not crypto
 	j := rand.IntN(len(pool) - 1) //nolint:gosec // placement jitter, not crypto
 	if j >= i {
@@ -247,7 +244,6 @@ func (m *Mesh) Shutdown() error {
 	return m.ml.Shutdown()
 }
 
-// persistEpoch durably records the epoch.
 func (m *Mesh) persistEpoch(epoch uint64) error {
 	return storeEpoch(m.epochPath, epoch)
 }

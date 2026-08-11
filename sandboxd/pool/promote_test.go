@@ -1,7 +1,7 @@
 package pool
 
 import (
-	"encoding/json"
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -33,7 +33,7 @@ func TestPromoteThenClaimClonesFromTemplate(t *testing.T) {
 	if gotDigest == "" {
 		t.Fatal("Promote returned an empty content digest")
 	}
-	golden, _, release, err := m.tpls.Fetch(t.Context(), store.TemplateID(key.Hash()))
+	golden, _, _, release, err := m.tpls.Fetch(t.Context(), store.TemplateID(key.Hash()))
 	if err != nil {
 		t.Fatalf("template export missing: %v", err)
 	}
@@ -52,16 +52,12 @@ func TestPromoteThenClaimClonesFromTemplate(t *testing.T) {
 	if child.TemplateDigest != gotDigest {
 		t.Errorf("claim template digest %q, want promoted content digest %q", child.TemplateDigest, gotDigest)
 	}
-	raw, err := m.tpls.ReadMeta(t.Context(), store.TemplateID(key.Hash()))
+	meta, err := m.tpls.ReadMeta(t.Context(), store.TemplateID(key.Hash()))
 	if err != nil {
 		t.Fatalf("read template metadata: %v", err)
 	}
-	var rec templateRecord
-	if err := json.Unmarshal(raw, &rec); err != nil {
-		t.Fatalf("decode template metadata: %v", err)
-	}
-	if rec.ContentDigest != gotDigest {
-		t.Errorf("persisted content digest %q, want %q", rec.ContentDigest, gotDigest)
+	if bytes.Contains(meta, []byte(`"content_digest"`)) {
+		t.Errorf("template metadata still contains the digest: %s", meta)
 	}
 }
 
@@ -97,69 +93,6 @@ func TestRepromoteContentDigestTracksExportBytes(t *testing.T) {
 	}
 	if child.TemplateDigest != thirdDigest {
 		t.Errorf("claim digest %q, want latest %q", child.TemplateDigest, thirdDigest)
-	}
-}
-
-func TestExportContentDigestCanonicalTree(t *testing.T) {
-	a, b := t.TempDir(), t.TempDir()
-	for _, root := range []string{a, b} {
-		if err := os.Mkdir(filepath.Join(root, "nested"), 0o750); err != nil {
-			t.Fatalf("mkdir tree: %v", err)
-		}
-	}
-	if err := os.Mkdir(filepath.Join(b, "ignored-empty-dir"), 0o750); err != nil {
-		t.Fatalf("mkdir empty dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(a, "z.bin"), []byte("z"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(a, "nested", "a.bin"), []byte("a"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(b, "nested", "a.bin"), []byte("a"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(b, "z.bin"), []byte("z"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(filepath.Join(b, "z.bin"), time.Unix(1, 0), time.Unix(2, 0)); err != nil {
-		t.Fatal(err)
-	}
-
-	da, err := exportContentDigest(a)
-	if err != nil {
-		t.Fatalf("digest tree a: %v", err)
-	}
-	db, err := exportContentDigest(b)
-	if err != nil {
-		t.Fatalf("digest tree b: %v", err)
-	}
-	if da != db {
-		t.Errorf("creation order/mode/mtime changed digest: %q != %q", da, db)
-	}
-	const want = "sha256:dfcaba733ae86b82c0760b4d2bb7828a595475e098e99a9769090aeda1390c0a"
-	if da != want {
-		t.Errorf("canonical digest %q, want %q", da, want)
-	}
-	if writeErr := os.WriteFile(filepath.Join(b, "z.bin"), []byte("changed"), 0o644); writeErr != nil {
-		t.Fatal(writeErr)
-	}
-	changed, err := exportContentDigest(b)
-	if err != nil {
-		t.Fatalf("digest changed tree: %v", err)
-	}
-	if changed == da {
-		t.Errorf("content change kept digest %q", changed)
-	}
-}
-
-func TestExportContentDigestRejectsNonRegularEntry(t *testing.T) {
-	root := t.TempDir()
-	if err := os.Symlink("target", filepath.Join(root, "link")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := exportContentDigest(root); err == nil {
-		t.Fatal("digest accepted a symbolic link")
 	}
 }
 

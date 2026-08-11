@@ -60,8 +60,7 @@ func WriteFileSync(path string, data []byte, perm os.FileMode) error {
 
 // DecodeStrictJSON decodes one JSON value into v, refusing unknown fields,
 // duplicated keys, and trailing data — for hand-edited operator input, where
-// a typo must fail instead of silently changing what was configured (an
-// unknown or repeated key is dropped or last-wins under a lenient decode).
+// a typo must fail instead of silently changing what was configured.
 func DecodeStrictJSON(raw []byte, v any) error {
 	if err := rejectDuplicateKeys(json.NewDecoder(bytes.NewReader(raw))); err != nil {
 		return err

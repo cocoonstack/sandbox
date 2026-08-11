@@ -267,7 +267,7 @@ func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req t
 // aggregated/control-plane teardown works without holding the per-sandbox token;
 // a per-sandbox token releases only its own claim, unchanged. A tenant token is
 // neither — it is not the root api_token, so it resolves as a (non-matching)
-// sandbox token and 404s. Tenants never get operator release.
+// sandbox token and 404s.
 func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 	token, ok := sandboxToken(w, r)
 	if !ok {

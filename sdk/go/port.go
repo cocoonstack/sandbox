@@ -23,8 +23,7 @@ var _ net.Conn = (*PortConn)(nil)
 // PortConn is a net.Conn to a TCP port inside the sandbox, relayed over the
 // silkd protocol (works on the no-network lane — the vsock relay is its only
 // transport). Read returns io.EOF when the guest server closes; CloseWrite
-// half-closes the guest socket. Deadlines are not supported (bound the
-// DialPort ctx instead).
+// half-closes the guest socket.
 type PortConn struct {
 	conn *silkd.Conn
 	stop func()
@@ -96,16 +95,6 @@ func (p *PortConn) drain(ctx context.Context, pw *io.PipeWriter) {
 // A port nobody listens on fails here with silkd's not_found error.
 func (s *Sandbox) DialPort(ctx context.Context, port uint16) (*PortConn, error) {
 	return s.openStream(ctx, &wire.PortForward{Port: port})
-}
-
-type previewRequest struct {
-	Token      string `json:"token"`
-	Port       uint16 `json:"port"`
-	TTLSeconds int    `json:"ttl_seconds,omitempty"`
-}
-
-type previewResponse struct {
-	URL string `json:"url"`
 }
 
 // PreviewURL mints a shareable URL that serves the sandbox's guest HTTP
@@ -183,12 +172,21 @@ func (s *Sandbox) proxyConn(ctx context.Context, local net.Conn, port uint16) {
 	<-done
 }
 
-// closeWrite half-closes conn's write side when it supports it, so the peer
-// sees EOF while the tail still drains.
+// Half-close so the peer sees EOF while the tail still drains.
 func closeWrite(conn net.Conn) {
 	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
 		_ = cw.CloseWrite()
 	}
+}
+
+type previewRequest struct {
+	Token      string `json:"token"`
+	Port       uint16 `json:"port"`
+	TTLSeconds int    `json:"ttl_seconds,omitempty"`
+}
+
+type previewResponse struct {
+	URL string `json:"url"`
 }
 
 type portAddr string

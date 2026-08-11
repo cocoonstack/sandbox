@@ -70,10 +70,9 @@ type HTTPProber struct {
 }
 
 // Owners fans a HEAD out to every peer and returns up to maxRedirectOwners
-// addresses that answered 200. Concurrent calls for one id share a fan-out;
-// a short positive cache serves a hot id's repeat redirects. Cache staleness
-// fails safely: a redirect to a peer that just deleted the record 404s, and
-// the client's no_redirect fallback heals from the origin.
+// addresses that answered 200. Cache staleness fails safely: a redirect to a
+// peer that just deleted the record 404s, and the client's no_redirect
+// fallback heals from the origin.
 func (p *HTTPProber) Owners(ctx context.Context, id string) []string {
 	owners, start, hit := p.cacheLookup(id)
 	if hit {

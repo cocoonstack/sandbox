@@ -32,9 +32,8 @@ var (
 )
 
 // Checkpoint captures a claimed sandbox's state under a fresh id; the source
-// keeps running (a hibernated one is captured from its wake image). Branches
-// clone that exact state, and a source can be checkpointed again — a tree.
-// tenant attributes the record; empty means the operator (root).
+// keeps running (a hibernated one is captured from its wake image). tenant
+// attributes the record; empty means the operator (root).
 func (m *Manager) Checkpoint(ctx context.Context, id string, cred Cred, name, tenant string) (types.Checkpoint, error) {
 	sb, ok := m.resolve(id, cred)
 	if !ok {
@@ -64,9 +63,8 @@ func (m *Manager) Checkpoint(ctx context.Context, id string, cred Cred, name, te
 // is the capability to branch.
 func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error) {
 	// Reject a bad or unknown id before recLock: a rejected id must not leave
-	// a lock-map entry (only a delete evicts one). Checkpoints are immutable,
-	// so this parse stands in for the fetched meta below. It precedes quota:
-	// a full node must still answer "not here", or the tiers never run.
+	// a lock-map entry (only a delete evicts one). It precedes quota: a full
+	// node must still answer "not here".
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	if err != nil {
 		return nil, err
@@ -126,10 +124,6 @@ func (m *Manager) Checkpoints(ctx context.Context, tenant string) ([]types.Check
 // broadcasts to peers when fleet-scoped so a healed copy does not outlive it.
 // A tenant may delete only its own records — anything else answers
 // ErrUnknownCheckpoint, never a hint the id exists; root deletes anything.
-// Existence is checked under the record lock (heal broke the "local miss
-// means truly gone" assumption), plus vetoIfHealPending for a heal whose
-// transfer runs unlocked. Every exit evicts the lock entry (recDoneEvict) —
-// a checkpoint id is effectively one-shot, so the map must not grow per call.
 func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, scope DeleteScope) error {
 	// Reject a bad id before recLock: a rejected id must not leave a
 	// lock-map entry.
@@ -177,7 +171,7 @@ func (m *Manager) FetchCheckpoint(ctx context.Context, ckptID string) (string, [
 	}
 	l := m.recLock(ckptID)
 	l.RLock()
-	dir, meta, release, err := m.ckpts.Fetch(ctx, ckptID)
+	dir, meta, _, release, err := m.ckpts.Fetch(ctx, ckptID)
 	if err != nil {
 		l.RUnlock()
 		m.recDone(ckptID)
@@ -233,7 +227,7 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl ti
 	l := m.recLock(ckpt.ID)
 	l.RLock()
 	defer func() { l.RUnlock(); m.recDone(ckpt.ID) }()
-	dir, _, release, err := m.ckpts.Fetch(ctx, ckpt.ID)
+	dir, _, _, release, err := m.ckpts.Fetch(ctx, ckpt.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, ErrUnknownCheckpoint // deleted between the pre-check and the lock
 	}
@@ -382,8 +376,7 @@ func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 }
 
 // sweepExpiredCheckpoints ages out checkpoints older than the configured
-// TTL; explicit deletes never wait for it. It runs detached from the Run
-// loop, so the guard keeps a slow backend from stacking sweeps.
+// TTL; explicit deletes never wait for it. It runs detached from the Run loop.
 func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 	if !m.ckptSweeping.CompareAndSwap(false, true) {
 		return
@@ -425,7 +418,6 @@ func (m *Manager) deleteCkLocked(ctx context.Context, ckID string) error {
 	return nil
 }
 
-// loadCheckpoint reads and parses a checkpoint's meta from the local store.
 func (m *Manager) loadCheckpoint(ctx context.Context, ckptID string) (types.Checkpoint, error) {
 	if !store.CheckpointIDRe.MatchString(ckptID) {
 		return types.Checkpoint{}, ErrUnknownCheckpoint

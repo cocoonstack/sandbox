@@ -19,7 +19,7 @@ const healBudget = 30 * time.Minute
 type Owners func(id string) []string
 
 // Validate checks a staged pull before Pull trusts the owner that sent it; an
-// error tries the next owner. The healer does not know the record's shape.
+// error tries the next owner.
 type Validate func(staging string) error
 
 // Healer pulls a record this node does not hold into a caller-provided

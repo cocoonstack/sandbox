@@ -668,8 +668,7 @@ func NewFrameScanner(r io.Reader) *bufio.Scanner {
 }
 
 // DecodeResponse parses one frame into its type's concrete Go type. Byte
-// fields are freshly allocated per frame, so callers may retain them; pooling
-// them would require a copy-out at every retention site first.
+// fields are freshly allocated per frame, so callers may retain them.
 func DecodeResponse(line []byte) (Response, error) {
 	typ, err := frameTag(line, respTagHead, "type")
 	if err != nil {
@@ -682,12 +681,19 @@ func DecodeResponse(line []byte) (Response, error) {
 	return dec(line)
 }
 
-// fastBulk decodes a bulk frame's base64 data field by slicing it out
-// (base64's alphabet is JSON-escape-free) and skipping json.Unmarshal, which
-// otherwise dominates the download path. Only the exact canonical shape both
-// producers emit — {"type":"<tag>","data":"<base64>"} — takes the slice;
-// anything else falls back to slow, the full parse, so no byte of a frame
-// escapes validation.
+// AppendBulkRequest renders a data-carrying request frame —
+// {"v":1,"op":<op>,"data":"<base64>"} plus newline — into buf, reused across
+// calls on the bulk send paths (base64's alphabet needs no JSON escaping).
+func AppendBulkRequest(buf []byte, op string, data []byte) []byte {
+	buf = append(buf[:0], requestHead...)
+	buf = append(buf, op...)
+	buf = append(buf, `","data":"`...)
+	buf = base64.StdEncoding.AppendEncode(buf, data)
+	return append(buf, '"', '}', '\n')
+}
+
+// fastBulk slices the base64 data out of a canonical bulk frame, skipping the
+// json.Unmarshal that dominates downloads; any other shape falls back to slow.
 func fastBulk(tag string, slow func([]byte) (Response, error), mk func([]byte) Response) func([]byte) (Response, error) {
 	head := []byte(`{"type":"` + tag + `","data":"`)
 	return func(line []byte) (Response, error) {
@@ -701,25 +707,12 @@ func fastBulk(tag string, slow func([]byte) (Response, error), mk func([]byte) R
 		}
 		out := make([]byte, base64.StdEncoding.DecodedLen(len(b64)))
 		n, err := base64.StdEncoding.Decode(out, b64)
-		// Decode skips CR/LF (raw control bytes JSON forbids); a canonical
-		// payload decodes to exactly the encoded length, so any skip falls
-		// back to the full parse.
+		// Decode skips CR/LF, so a length mismatch means non-canonical input.
 		if err != nil || base64.StdEncoding.EncodedLen(n) != len(b64) {
 			return slow(line)
 		}
 		return mk(out[:n]), nil
 	}
-}
-
-// AppendBulkRequest renders a data-carrying request frame —
-// {"v":1,"op":<op>,"data":"<base64>"} plus newline — into buf, reused across
-// calls on the bulk send paths (base64's alphabet needs no JSON escaping).
-func AppendBulkRequest(buf []byte, op string, data []byte) []byte {
-	buf = append(buf[:0], requestHead...)
-	buf = append(buf, op...)
-	buf = append(buf, `","data":"`...)
-	buf = base64.StdEncoding.AppendEncode(buf, data)
-	return append(buf, '"', '}', '\n')
 }
 
 // encodeTagged marshals v as a flat object and splices the tag head in front

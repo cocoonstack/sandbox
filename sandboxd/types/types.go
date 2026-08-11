@@ -75,8 +75,7 @@ func (e Engine) Validate() error {
 	}
 }
 
-// Size is a T-shirt resource tier. Free-form CPU/memory would fragment the
-// warm pools, so only tiers are accepted.
+// Size is a T-shirt resource tier.
 type Size string
 
 // SizeSpec is the concrete allocation behind a tier. Memory is in cocoon flag

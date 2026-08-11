@@ -46,8 +46,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		switch {
 		case sb.ArchiveCk != "":
 			// Archived: no local VM by design; the store ck is the durable
-			// state. Adopt the stub so the id/token survive restart and the
-			// first exec wakes it (wakeArchived).
+			// state. Adopt the stub; the first exec wakes it (wakeArchived).
 			m.claimed[id] = sb
 			m.tenantDelta(sb.Tenant, 1)
 			continue
@@ -65,8 +64,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			// Stopped under a journaled hibernate intent whose commit never
 			// landed: the intent names the wake image, adopt it. A verified-
 			// missing image means the hibernate never completed — fall
-			// through and drop; an unverifiable list adopts (a failed wake
-			// beats a destroyed claim).
+			// through and drop; an unverifiable list adopts.
 			sb.HibernateSnap, sb.PendingSnap = sb.PendingSnap, ""
 		default:
 			continue
