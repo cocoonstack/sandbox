@@ -120,13 +120,10 @@ type VolumeSpec struct {
 	Tenants  []string `json:"tenants,omitempty"`
 }
 
-// MeshConfig configures cluster membership. Two v1 constraints: all nodes
-// must share the same APIToken AND the same Tenants set (the SDK replays
-// whichever token authorized a claim across a redirect, so a peer missing
-// that tenant answers 401), and a
-// node serving the egress lane can only redirect egress claims to peers if it
-// too has an egress attachment (a no-egress node answers 409 rather than
-// redirecting).
+// MeshConfig configures cluster membership. Two v1 constraints: every node
+// shares one APIToken and Tenants set (a redirect replays the claim's token,
+// so a peer missing that tenant answers 401), and only a node with its own
+// egress attachment can take a redirected egress claim.
 type MeshConfig struct {
 	NodeID     string   `json:"node_id"`               // unique name; defaults to Bind
 	Bind       string   `json:"bind"`                  // memberlist host:port

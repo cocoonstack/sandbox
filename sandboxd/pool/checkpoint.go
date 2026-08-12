@@ -282,8 +282,7 @@ func (m *Manager) healCheckpoint(ctx context.Context, ckptID string) (types.Chec
 // runHeal is healCheckpoint's flight body: it stages and pulls WITHOUT
 // holding ckptID's record lock — a heal budget runs up to 30 minutes, and
 // holding the lock across it would pin every same-id operation behind an
-// uncancellable wait. The lock covers only the fast final steps: the veto
-// check, re-validate, publish.
+// uncancellable wait.
 func (m *Manager) runHeal(ckptID string) (types.Checkpoint, error) {
 	select {
 	case m.healSem <- struct{}{}:

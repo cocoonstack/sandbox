@@ -203,7 +203,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 	for _, sb := range m.claimed {
 		idle := m.idleDefault
 		if p, pooled := m.activePool(sb.Key); pooled {
-			idle = p.idle // pooled keys never take the node default
+			idle = p.idle
 		}
 		if idle <= 0 || hasAppliedVolumes(sb) || sb.HibernateSnap != "" || sb.ArchiveCk != "" || now.Sub(sb.LastSeen()) < idle {
 			continue

@@ -43,7 +43,7 @@ const (
 	coldProbeTimeout  = 90 * time.Second
 	// A refill has no caller waiting and holds a target-accounting slot for
 	// its whole probe; a clone answers in ~1s even saturated, so a silent one
-	// is replaced, not waited on. Claims keep the generous deadline.
+	// is replaced, not waited on.
 	warmProbeTimeout = 5 * time.Second
 	// One list; a wrong answer only costs an extra sweep.
 	removeVerifyTimeout = 15 * time.Second
