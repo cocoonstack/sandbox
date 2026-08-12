@@ -49,13 +49,26 @@ func (m *Manager) removeOrRetry(ctx context.Context, name, sandboxID, tap string
 	if m.removeVM(ctx, name) {
 		return true
 	}
-	m.queueRemoval(name, sandboxID, tap)
+	m.queueRemoval(name, sandboxID, tap, volumeTeardown{})
 	return false
 }
 
-func (m *Manager) queueRemoval(name, sandboxID, tap string) {
+// removeClaimVM removes a quiesced claim's VM and finishes its volume teardown,
+// which only a confirmed-gone VM may do: a survivor still holds the images, so
+// the payload rides the retry queue instead. A restart loses it — the markers
+// then stay until an rw claim clears them, and the holds die with the process.
+func (m *Manager) removeClaimVM(ctx context.Context, name, sandboxID string, td volumeTeardown) bool {
+	if m.removeVM(ctx, name) {
+		m.finishVolumeTeardown(ctx, td)
+		return true
+	}
+	m.queueRemoval(name, sandboxID, "", td)
+	return false
+}
+
+func (m *Manager) queueRemoval(name, sandboxID, tap string, td volumeTeardown) {
 	m.mu.Lock()
-	m.pendingRemovals[name] = pendingRemoval{sandboxID: sandboxID, tap: tap}
+	m.pendingRemovals[name] = pendingRemoval{sandboxID: sandboxID, tap: tap, volumes: td}
 	m.mu.Unlock()
 }
 
@@ -94,18 +107,19 @@ func (m *Manager) retryRemoval(ctx context.Context, name string, pending pending
 			m.queueStaleCreate(name, pending.tap)
 			return
 		case outcome == engine.StaleCreateCollected, outcome == engine.StaleCreateNotFound:
-			m.finishRemoval(pending)
+			m.finishRemoval(ctx, pending)
 			return
 		}
 	}
 	if !m.removeVM(ctx, name) {
-		m.queueRemoval(name, pending.sandboxID, pending.tap)
+		m.queueRemoval(name, pending.sandboxID, pending.tap, pending.volumes)
 		return
 	}
-	m.finishRemoval(pending)
+	m.finishRemoval(ctx, pending)
 }
 
-func (m *Manager) finishRemoval(pending pendingRemoval) {
+func (m *Manager) finishRemoval(ctx context.Context, pending pendingRemoval) {
+	m.finishVolumeTeardown(ctx, pending.volumes)
 	if pending.sandboxID != "" {
 		m.disarmEgress(pending.sandboxID, true)
 	} else if pending.tap != "" {

@@ -98,8 +98,8 @@ func TestMountVolumeUsesSysfsAndRequestedMode(t *testing.T) {
 }
 
 func TestUnmountVolumeExecsBoundedUmount(t *testing.T) {
-	if volumeUmountTimeout != 2*time.Second {
-		t.Fatalf("volume umount timeout = %s, want 2s", volumeUmountTimeout)
+	if VolumeCallTimeout != 2*time.Second {
+		t.Fatalf("volume call timeout = %s, want 2s", VolumeCallTimeout)
 	}
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
@@ -118,6 +118,26 @@ func TestUnmountVolumeExecsBoundedUmount(t *testing.T) {
 	err := e.UnmountVolume(t.Context(), path, "/datasets/training")
 	if err == nil || !strings.Contains(err.Error(), "unmount volume /datasets/training") {
 		t.Errorf("got %v, want umount failure", err)
+	}
+}
+
+func TestSyncGuestExecsPlainSync(t *testing.T) {
+	path := sockPath(t)
+	fake := serveFakeSilkd(t, path)
+	e := New("cocoon", nil, nil, false, "")
+	if err := e.SyncGuest(t.Context(), path); err != nil {
+		t.Fatalf("SyncGuest: %v", err)
+	}
+
+	fake.mu.Lock()
+	wantExec := [][]string{{"sync"}}
+	if !slices.EqualFunc(fake.execCalls, wantExec, slices.Equal) {
+		t.Errorf("exec calls = %v, want %v", fake.execCalls, wantExec)
+	}
+	fake.execCode, fake.execFailAt = 1, 2
+	fake.mu.Unlock()
+	if err := e.SyncGuest(t.Context(), path); err == nil || !strings.Contains(err.Error(), "sync guest") {
+		t.Errorf("got %v, want sync failure", err)
 	}
 }
 

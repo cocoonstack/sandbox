@@ -122,6 +122,7 @@ type Engine interface {
 	DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error
 	MountVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
 	UnmountVolume(ctx context.Context, vsockSocket, mount string) error
+	SyncGuest(ctx context.Context, vsockSocket string) error
 }
 
 // SandboxSummary is the ops view of one live claim — no tokens.
@@ -165,6 +166,7 @@ type pendingRemoval struct {
 	sandboxID   string
 	tap         string
 	staleCreate bool
+	volumes     volumeTeardown
 }
 
 type pool struct {

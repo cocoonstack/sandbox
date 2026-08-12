@@ -20,8 +20,8 @@ const (
 	// Sidecar, not data_dir: the marker travels with the image and survives a
 	// data_dir wipe.
 	volumeDirtySuffix = ".dirty"
-	// Bounds the whole quiesce: teardown must not hang on a wedged guest.
-	volumeQuiesceTimeout = 5 * time.Second
+	// Caps the per-mount budget below, so teardown can never hang for long.
+	volumeQuiesceMax = 10 * time.Second
 )
 
 type catalogVolume struct {
@@ -44,6 +44,15 @@ type volumeHolders struct {
 type resolvedVolume struct {
 	disk    engine.VolumeSpec
 	applied types.Volume
+}
+
+// volumeTeardown is what a quiesced claim leaves for after its VM is confirmed
+// gone: the admission holds to drop, and the marker paths — resolved through
+// the catalog while the claim still existed — of the mounts that came down
+// cleanly.
+type volumeTeardown struct {
+	holds  []types.Volume
+	clears []string
 }
 
 // Volumes reports the caller-visible fleet catalog, projected through this
@@ -148,8 +157,7 @@ func (m *Manager) resolveVolumes(key types.PoolKey, tenant string, requested []t
 		if _, statErr := os.Stat(entry.disk.Path); statErr != nil {
 			return nil, fmt.Errorf("volume %q path %q: %w", volume.Name, entry.disk.Path, statErr)
 		}
-		// A live writer's own marker is expected; admission answers that conflict.
-		if !volume.RW() && volumeDirty(entry.disk.Path) && !m.volumeHeld(volume.Name) {
+		if !volume.RW() && volumeDirty(entry.disk.Path) {
 			return nil, fmt.Errorf("%w: volume %q", ErrVolumeNeedsRecovery, volume.Name)
 		}
 		disk := entry.disk
@@ -157,6 +165,19 @@ func (m *Manager) resolveVolumes(key types.PoolKey, tenant string, requested []t
 		resolved = append(resolved, resolvedVolume{disk: disk, applied: volume})
 	}
 	return resolved, nil
+}
+
+// confirmVolumesClean re-stats the read-only entries' markers once the holds
+// are taken, closing the gap the resolve-time check leaves: a writable claim
+// that failed between the two marks its image and releases, and mounting that
+// image read-only would fail deep in guest setup instead of here.
+func (m *Manager) confirmVolumesClean(volumes []resolvedVolume) error {
+	for _, volume := range volumes {
+		if !volume.applied.RW() && volumeDirty(volume.disk.Path) {
+			return fmt.Errorf("%w: volume %q", ErrVolumeNeedsRecovery, volume.applied.Name)
+		}
+	}
+	return nil
 }
 
 func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes []resolvedVolume) error {
@@ -181,46 +202,56 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 	return nil
 }
 
-// teardownVolumes quiesces the guest (paths that still own a live VM, before
-// it is removed) and releases the admission holds. Exactly once per claim: a
-// leaked hold keeps the name unclaimable until the daemon restarts.
-func (m *Manager) teardownVolumes(ctx context.Context, sb *types.Sandbox, quiesce bool) {
-	if len(sb.Volumes) == 0 {
-		return
-	}
-	if quiesce {
-		m.quiesceVolumes(ctx, sb)
-	}
-	m.unreserveVolumes(sb.Volumes)
-}
-
-// quiesceVolumes unmounts the writable mounts in reverse order, clearing the
-// marker of each image that unmounted cleanly. A failure never blocks
-// teardown: the surviving marker routes the image to a recovering writer.
-func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) {
-	if !slices.ContainsFunc(sb.Volumes, types.Volume.RW) {
-		return
+// quiesceVolumes unmounts a claim's writable mounts in reverse order and
+// returns the teardown its VM removal must finish. A failed unmount never
+// blocks teardown: the image keeps its marker and waits for a recovering
+// writer. Runs while the guest is still live, before the VM is removed.
+func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeTeardown {
+	td := volumeTeardown{holds: slices.Clone(sb.Volumes)}
+	mounts := len(types.VolumeRWNames(sb.Volumes))
+	if mounts == 0 {
+		return td
 	}
 	logger := log.WithFunc("pool.quiesceVolumes")
 	// Cancellation-immune like removal: a caller hanging up must not skip the flush.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), volumeQuiesceTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), quiesceBudget(mounts))
 	defer cancel()
+	stuck := false
 	for _, volume := range slices.Backward(sb.Volumes) {
 		if !volume.RW() {
 			continue
 		}
 		if err := m.eng.UnmountVolume(ctx, sb.VsockSocket, volume.Mount); err != nil {
 			logger.Errorf(ctx, err, "unmount volume %s of %s", volume.Name, sb.ID)
+			stuck = true
 			continue
 		}
-		entry, ok := m.volumes[volume.Name]
-		if !ok {
-			continue
-		}
-		if err := clearVolumeDirty(entry.disk.Path); err != nil {
-			logger.Errorf(ctx, err, "clear dirty marker of volume %s", volume.Name)
+		if entry, ok := m.volumes[volume.Name]; ok {
+			td.clears = append(td.clears, entry.disk.Path)
 		}
 	}
+	if stuck {
+		if err := m.eng.SyncGuest(ctx, sb.VsockSocket); err != nil {
+			logger.Errorf(ctx, err, "sync guest of %s", sb.ID)
+		}
+	}
+	return td
+}
+
+// finishVolumeTeardown completes teardown once the VM is confirmed gone: only
+// then is the hypervisor's image lock released, so an earlier marker clear or
+// hold release would hand the name to a claim the still-live writer blocks.
+func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) {
+	if len(td.holds) == 0 {
+		return
+	}
+	logger := log.WithFunc("pool.finishVolumeTeardown")
+	for _, path := range td.clears {
+		if err := clearVolumeDirty(path); err != nil {
+			logger.Errorf(ctx, err, "clear dirty marker %s", path)
+		}
+	}
+	m.unreserveVolumes(td.holds)
 }
 
 // reserveVolumes admits one claim's volumes; every name is checked before any
@@ -267,12 +298,6 @@ func (m *Manager) releaseVolumes(volumes []types.Volume) {
 	}
 }
 
-func (m *Manager) volumeHeld(name string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.volumeAdmission[name].writers > 0
-}
-
 func (m *Manager) unreserveVolumes(volumes []types.Volume) {
 	if len(volumes) == 0 {
 		return
@@ -280,6 +305,12 @@ func (m *Manager) unreserveVolumes(volumes []types.Volume) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.releaseVolumes(volumes)
+}
+
+// quiesceBudget bounds one quiesce: a slice per writable mount plus one for the
+// sync fallback, so a wedged multi-volume guest still gets every umount tried.
+func quiesceBudget(mounts int) time.Duration {
+	return min(time.Duration(mounts+1)*engine.VolumeCallTimeout, volumeQuiesceMax)
 }
 
 func appliedVolumes(volumes []resolvedVolume) []types.Volume {
@@ -309,9 +340,10 @@ func clearVolumeDirty(path string) error {
 	return nil
 }
 
+// volumeDirty fails closed: an unreadable marker must not read as a clean image.
 func volumeDirty(path string) bool {
 	_, err := os.Stat(volumeDirtyPath(path))
-	return err == nil
+	return !errors.Is(err, os.ErrNotExist)
 }
 
 func volumeDirtyPath(path string) string {

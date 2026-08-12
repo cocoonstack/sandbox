@@ -60,6 +60,10 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 		return nil, ErrNoWarm
 	}
 	m.kickRefill()
+	if cleanErr := m.confirmVolumesClean(volumeSpecs); cleanErr != nil {
+		m.destroy(ctx, sb.VMName)
+		return nil, cleanErr
+	}
 	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs); volumeErr != nil {
 		m.destroy(ctx, sb.VMName)
 		return nil, volumeErr
@@ -189,9 +193,11 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
 		m.untrack(m.pendingCks, ck)
 	}
-	m.teardownVolumes(ctx, sb, true)
+	td := m.quiesceVolumes(ctx, sb)
 	var err error
-	if vmName != "" && !m.removeOrRetry(ctx, vmName, id, "") {
+	if vmName == "" {
+		m.finishVolumeTeardown(ctx, td) // archived: no VM to confirm gone
+	} else if !m.removeClaimVM(ctx, vmName, id, td) {
 		err = fmt.Errorf("vm %s survived removal", vmName)
 	}
 	m.disarmEgress(id, err == nil)
@@ -276,7 +282,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		for _, sb := range sbs {
 			// No quiesce: the claim was never handed out, so nothing wrote to
 			// the guest and the marker converges on the next writable claim.
-			m.teardownVolumes(ctx, sb, false)
+			m.unreserveVolumes(sb.Volumes)
 			m.destroy(ctx, sb.VMName)
 		}
 		return quotaErr
@@ -323,8 +329,8 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	m.mu.Unlock()
 	m.recommit(ctx, rb)
 	for _, sb := range sbs {
-		m.teardownVolumes(ctx, sb, true)
-		m.disarmEgress(sb.ID, m.removeOrRetry(ctx, sb.VMName, sb.ID, ""))
+		td := m.quiesceVolumes(ctx, sb)
+		m.disarmEgress(sb.ID, m.removeClaimVM(ctx, sb.VMName, sb.ID, td))
 	}
 }
 
@@ -436,8 +442,8 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		case reapArchive:
 			logSweepResult(ctx, logger, m.archive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
 		default:
-			m.teardownVolumes(ctx, v.sb, true)
-			m.disarmEgress(v.id, m.removeOrRetry(ctx, v.vmName, v.id, ""))
+			td := m.quiesceVolumes(ctx, v.sb)
+			m.disarmEgress(v.id, m.removeClaimVM(ctx, v.vmName, v.id, td))
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)
 			m.recordUsage(ctx, usageEvent{Event: "reap", ID: v.id, VMName: v.vmName})
@@ -507,6 +513,9 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 		return nil, admitErr
 	}
 	reserved = applied
+	if cleanErr := m.confirmVolumesClean(volumeSpecs); cleanErr != nil {
+		return nil, cleanErr
+	}
 	golden, err := m.resolveGolden(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("resolve template: %w", err)

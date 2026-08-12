@@ -138,6 +138,13 @@ func (f *fakeEngine) UnmountVolume(_ context.Context, _, mount string) error {
 	return nil
 }
 
+func (f *fakeEngine) SyncGuest(_ context.Context, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumeOps = append(f.volumeOps, "sync")
+	return nil
+}
+
 // Removals join the trace only for VMs that carried a volume, so warm-pool
 // churn cannot perturb the order.
 func (f *fakeEngine) volumeOpsLog() []string {

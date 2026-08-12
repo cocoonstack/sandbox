@@ -765,11 +765,17 @@ type fakeEngine struct {
 	volumeSpecs   []engine.VolumeSpec
 	volumeMounts  []types.Volume
 	volumeOps     []string
-	// attachDirty records whether an image's dirty marker was already down
-	// when it was attached; removeSeenOps snapshots the volume-op log at each
-	// VM removal, so teardown ordering is checkable across the two logs.
-	attachDirty   map[string]bool
-	removeSeenOps map[string][]string
+	// attachDirty records whether an image's dirty marker was already down when
+	// it was attached; removeSeenOps and removeSeenDirty snapshot the volume-op
+	// log and the markers still on disk at each VM removal, so teardown ordering
+	// is checkable on both sides of the removal.
+	attachDirty     map[string]bool
+	removeSeenOps   map[string][]string
+	removeSeenDirty map[string][]string
+	// dirtyPaths are the images removeSeenDirty samples; tests set it to the
+	// catalog paths the claim under test uses.
+	dirtyPaths []string
+	syncs      []string // vsock sockets SyncGuest was called on
 
 	hibernates, restores, snapRemoves []string
 	snapSaves, exports, snapshots     []string
@@ -807,7 +813,7 @@ type fakeEngine struct {
 func newFakeEngine() *fakeEngine {
 	return &fakeEngine{
 		vms: map[string]string{}, stopped: map[string]bool{}, creating: map[string]bool{}, pids: map[string]int{},
-		attachDirty: map[string]bool{}, removeSeenOps: map[string][]string{},
+		attachDirty: map[string]bool{}, removeSeenOps: map[string][]string{}, removeSeenDirty: map[string][]string{},
 	}
 }
 
@@ -848,6 +854,11 @@ func (f *fakeEngine) Remove(ctx context.Context, name string) error {
 		return errors.New("remove failed")
 	}
 	f.removeSeenOps[name] = slices.Clone(f.volumeOps)
+	for _, path := range f.dirtyPaths {
+		if volumeDirty(path) {
+			f.removeSeenDirty[name] = append(f.removeSeenDirty[name], path)
+		}
+	}
 	f.removes = append(f.removes, name)
 	delete(f.vms, name)
 	return nil
@@ -1036,6 +1047,14 @@ func (f *fakeEngine) UnmountVolume(_ context.Context, _, mount string) error {
 	return f.unmountVolumeErr
 }
 
+func (f *fakeEngine) SyncGuest(_ context.Context, vsockSocket string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.syncs = append(f.syncs, vsockSocket)
+	f.volumeOps = append(f.volumeOps, "sync")
+	return nil
+}
+
 func (f *fakeEngine) clone(from, name string) (types.VMRecord, error) {
 	f.mu.Lock()
 	f.clones = append(f.clones, name)
@@ -1096,6 +1115,18 @@ func (f *fakeEngine) opsAtRemoval(vmName string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.removeSeenOps[vmName]
+}
+
+func (f *fakeEngine) dirtyAtRemoval(vmName string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.removeSeenDirty[vmName]
+}
+
+func (f *fakeEngine) syncCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.syncs)
 }
 
 func (f *fakeEngine) volumeOpsLog() []string {

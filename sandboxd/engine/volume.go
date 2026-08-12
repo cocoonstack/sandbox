@@ -13,10 +13,13 @@ import (
 )
 
 const (
-	volumePollInterval  = 10 * time.Millisecond
-	volumeProbeTimeout  = 2 * time.Second
-	volumeSetupTimeout  = 10 * time.Second
-	volumeUmountTimeout = 2 * time.Second
+	// VolumeCallTimeout bounds one guest teardown exec; the pool scales its
+	// whole quiesce budget from it.
+	VolumeCallTimeout = 2 * time.Second
+
+	volumePollInterval = 10 * time.Millisecond
+	volumeProbeTimeout = 2 * time.Second
+	volumeSetupTimeout = 10 * time.Second
 )
 
 // VolumeSpec describes one operator-owned disk image attached to a sandbox.
@@ -69,10 +72,21 @@ func (e *Engine) MountVolume(ctx context.Context, vsockSocket, name, mount strin
 // UnmountVolume flushes and detaches a guest mount, so a writable image's
 // dirty state reaches the backing file before the VM is removed.
 func (e *Engine) UnmountVolume(ctx context.Context, vsockSocket, mount string) error {
-	ctx, cancel := context.WithTimeout(ctx, volumeUmountTimeout)
+	ctx, cancel := context.WithTimeout(ctx, VolumeCallTimeout)
 	defer cancel()
 	if err := e.silkdExec(ctx, vsockSocket, "umount", "--", mount); err != nil {
 		return fmt.Errorf("unmount volume %s: %w", mount, err)
+	}
+	return nil
+}
+
+// SyncGuest flushes the guest page cache — the only flush left for a mount that
+// refused to unmount, since a lazy unmount would keep writing behind us.
+func (e *Engine) SyncGuest(ctx context.Context, vsockSocket string) error {
+	ctx, cancel := context.WithTimeout(ctx, VolumeCallTimeout)
+	defer cancel()
+	if err := e.silkdExec(ctx, vsockSocket, "sync"); err != nil {
+		return fmt.Errorf("sync guest: %w", err)
 	}
 	return nil
 }
