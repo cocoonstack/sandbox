@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cocoonstack/sandbox/e2e/internal/harness"
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
@@ -44,17 +45,12 @@ func main() {
 func run(addr, token, template string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
-	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(token))
-	if err != nil {
-		return err
-	}
-
 	start := time.Now()
-	sb, err := client.New(ctx, template,
+	_, sb, err := harness.Claim(ctx, addr, token, template,
 		sandbox.WithNetwork(sandbox.NetNone), sandbox.WithSize(sandbox.XLarge),
 		sandbox.WithTimeout(30*time.Minute))
 	if err != nil {
-		return fmt.Errorf("claim: %w", err)
+		return err
 	}
 	defer func() { _ = sb.Close() }()
 	fmt.Printf("  claim: android xlarge up in %.1fs (silkd probed)\n", time.Since(start).Seconds())
