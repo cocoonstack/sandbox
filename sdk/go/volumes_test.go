@@ -170,3 +170,100 @@ func TestCheckpointNewRejectsVolumesLocally(t *testing.T) {
 		t.Errorf("sandbox %+v, want nil", sb)
 	}
 }
+
+func TestWithVolumesEncodesMode(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+	}{
+		{"empty stays omitted", ""},
+		{"ro normalizes to omitted", "ro"},
+		{"rw rides the wire", "rw"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var raw struct {
+				Volumes []map[string]any `json:"volumes"`
+			}
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+					t.Errorf("decode body: %v", err)
+				}
+				_ = json.NewEncoder(w).Encode(claimResponse{ID: "sb_1", Token: "tok"})
+			}))
+			t.Cleanup(ts.Close)
+			if _, err := testClient(t, ts).New(t.Context(), "rt:24.04", WithVolumes(Volume{Name: "a", Mode: tt.mode})); err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			got, present := raw.Volumes[0]["mode"]
+			if tt.mode == volumeModeRW {
+				if !present || got != volumeModeRW {
+					t.Errorf("wire mode = %v (present=%v), want %q", got, present, volumeModeRW)
+				}
+			} else if present {
+				t.Errorf("wire mode = %v, want omitted", got)
+			}
+		})
+	}
+}
+
+func TestNewRejectsInvalidVolumeModeLocally(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("server should not be contacted for a locally invalid mode")
+	}))
+	t.Cleanup(ts.Close)
+
+	_, err := testClient(t, ts).New(t.Context(), "rt:24.04", WithVolumes(Volume{Name: "a", Mode: "readwrite"}))
+	if err == nil || !strings.Contains(err.Error(), "mode must be") {
+		t.Errorf("err = %v, want local mode rejection", err)
+	}
+}
+
+func TestTemplateNewRejectsInvalidVolumeModeLocally(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("server should not be contacted for a locally invalid mode")
+	}))
+	t.Cleanup(ts.Close)
+
+	c := testClient(t, ts)
+	tpl := &Template{Name: "task:v1", c: c, addr: c.addr, net: "none", size: "small"}
+	_, err := tpl.New(t.Context(), WithVolumes(Volume{Name: "a", Mode: "bogus"}))
+	if err == nil || !strings.Contains(err.Error(), "mode must be") {
+		t.Errorf("err = %v, want local mode rejection", err)
+	}
+}
+
+func TestSandboxVolumesEchoMode(t *testing.T) {
+	want := []Volume{{Name: "imagenet"}, {Name: "scratch", Mode: "rw"}}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(claimResponse{ID: "sb_1", Token: "tok", Volumes: want})
+	}))
+	t.Cleanup(ts.Close)
+
+	sb, err := testClient(t, ts).New(t.Context(), "rt:24.04")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if !slices.Equal(sb.Volumes, want) {
+		t.Errorf("volumes = %+v, want %+v", sb.Volumes, want)
+	}
+}
+
+func TestClientVolumesDecodesWritable(t *testing.T) {
+	want := []VolumeInfo{
+		{Name: "imagenet", DefaultMount: "/volumes/imagenet", SizeBytes: 42, Available: true, Nodes: 3},
+		{Name: "scratch", DefaultMount: "/volumes/scratch", SizeBytes: 7, Available: true, Nodes: 1, Writable: true},
+	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(volumeListResponse{Volumes: want})
+	}))
+	t.Cleanup(ts.Close)
+
+	got, err := testClient(t, ts).Volumes(t.Context())
+	if err != nil {
+		t.Fatalf("Volumes: %v", err)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("volumes = %+v, want %+v", got, want)
+	}
+}

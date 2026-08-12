@@ -52,6 +52,9 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 	for _, opt := range opts {
 		opt(&claim)
 	}
+	if err := claim.validateVolumes(); err != nil {
+		return nil, err
+	}
 	addr, cr, err := claimFollow(c.addr, "claim", func(noRedirect, requirePromoted bool) ([]byte, error) {
 		claim.NoRedirect, claim.RequirePromoted = noRedirect, requirePromoted
 		return encodeBody("claim", claim)
@@ -437,6 +440,17 @@ type claimRequest struct {
 func (r claimRequest) rejectPinnedAxes() error {
 	if r.Net != "" || r.Size != "" {
 		return fmt.Errorf("network and size are pinned by the snapshot; WithNetwork/WithSize are not accepted here")
+	}
+	return nil
+}
+
+// validateVolumes rejects a volume mode outside the wire's vocabulary before
+// it reaches the network; WithVolumes already normalizes "ro" to "".
+func (r claimRequest) validateVolumes() error {
+	for _, v := range r.Volumes {
+		if v.Mode != "" && v.Mode != volumeModeRW {
+			return fmt.Errorf("volume %q: mode must be \"\", %q, or %q, got %q", v.Name, volumeModeRO, volumeModeRW, v.Mode)
+		}
 	}
 	return nil
 }

@@ -89,9 +89,45 @@ def test_claim_rejects_legacy_volume_tuple(node):
         Client(node).new("rt:24.04", volumes=[("imagenet", "/datasets/imagenet")])
 
 
-def test_claim_rejects_volume_mode(node):
-    with pytest.raises(TypeError, match="only name and mount"):
-        Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "mode": "rw"}])
+def test_claim_sends_volume_mode_rw(node):
+    seen = []
+
+    def claim(body, path):
+        seen.append(body)
+        return 200, {"id": "sb_1", "token": "tok", "volumes": [
+            {"name": "scratch", "mount": "/data", "mode": "rw"},
+        ]}
+
+    FakeNode.routes[("POST", "/v1/claim")] = claim
+    sb = Client(node).new("rt:24.04", volumes=[{"name": "scratch", "mount": "/data", "mode": "rw"}])
+    assert seen == [{"template": "rt:24.04", "volumes": [
+        {"name": "scratch", "mount": "/data", "mode": "rw"},
+    ]}]
+    assert sb.volumes == [{"name": "scratch", "mount": "/data", "mode": "rw"}]
+
+
+def test_claim_omits_volume_mode_ro(node):
+    seen = []
+
+    def claim(body, path):
+        seen.append(body)
+        return 200, {"id": "sb_1", "token": "tok"}
+
+    FakeNode.routes[("POST", "/v1/claim")] = claim
+    Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "mode": "ro"}])
+    Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "mode": ""}])
+    # "ro" and "" both normalize to an omitted key, byte-identical to a v1 request.
+    assert seen[0]["volumes"] == seen[1]["volumes"] == [{"name": "imagenet"}]
+
+
+def test_claim_rejects_invalid_volume_mode(node):
+    with pytest.raises(TypeError, match="mode must be"):
+        Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "mode": "rwx"}])
+
+
+def test_claim_rejects_unknown_volume_key(node):
+    with pytest.raises(TypeError, match="only name, mount, and mode"):
+        Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "bogus": "x"}])
 
 
 def test_template_claim_sends_volumes(node):
@@ -141,6 +177,19 @@ def test_volume_catalog(node):
         "size_bytes": 42,
         "available": True,
         "nodes": 3,
+    }]
+    FakeNode.routes[("GET", "/v1/volumes")] = lambda body, path: (200, {"volumes": want})
+    assert Client(node).volumes() == want
+
+
+def test_volume_catalog_surfaces_writable(node):
+    want = [{
+        "name": "scratch",
+        "default_mount": "/data",
+        "size_bytes": 42,
+        "available": True,
+        "nodes": 1,
+        "writable": True,
     }]
     FakeNode.routes[("GET", "/v1/volumes")] = lambda body, path: (200, {"volumes": want})
     assert Client(node).volumes() == want

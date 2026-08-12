@@ -55,7 +55,7 @@ func (e *ExitError) Error() string {
 type Sandbox struct {
 	ID       string
 	Deadline time.Time
-	// Volumes lists the read-only volumes finalized on this claim.
+	// Volumes lists the volumes finalized on this claim, each echoing its mode.
 	Volumes []Volume
 	// TemplateDigest is the content identity of the promoted-template export
 	// this sandbox was cloned from; empty for any other source.

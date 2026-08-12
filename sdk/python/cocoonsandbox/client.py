@@ -181,9 +181,15 @@ def _volume_body(volume: str | Mapping[str, str]) -> dict:
         return {"name": volume}
     if not isinstance(volume, Mapping):
         raise TypeError("volume must be a name string or mapping")
-    if set(volume) - {"name", "mount"}:
-        raise TypeError("volume mapping accepts only name and mount")
-    return dict(volume)
+    if set(volume) - {"name", "mount", "mode"}:
+        raise TypeError("volume mapping accepts only name, mount, and mode")
+    body = dict(volume)
+    mode = body.get("mode")
+    if mode in (None, "", "ro"):
+        body.pop("mode", None)
+    elif mode != "rw":
+        raise TypeError("volume mode must be 'rw' or 'ro'")
+    return body
 
 
 def _template_query(template: str, net: str, size: str) -> dict:

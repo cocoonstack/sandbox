@@ -29,6 +29,9 @@ func (t *Template) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
 	if err := claim.rejectPinnedAxes(); err != nil {
 		return nil, err
 	}
+	if err := claim.validateVolumes(); err != nil {
+		return nil, err
+	}
 	claim.Net, claim.Size = t.net, t.size
 	if len(claim.Volumes) == 0 {
 		claim.NoRedirect = true
