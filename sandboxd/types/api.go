@@ -33,6 +33,11 @@ type ClaimRequest struct {
 	// the k8s "<namespace>/<name>") recorded on the claim so the read path can
 	// map a listed sandbox back to the name it was claimed under.
 	ClaimRef string `json:"claim_ref,omitempty"`
+	// Workspace names a shared workspace to bind this sandbox to: the node keeps
+	// <workspace-root>/<Workspace> synced with the guest workspace dir under a
+	// multi-writer, close-to-open contract. Ignored when the node has no
+	// workspace root configured. Optional; a newer field older nodes ignore.
+	Workspace string `json:"workspace,omitempty"`
 }
 
 // Key resolves the requested pool key with the wire defaults filled.

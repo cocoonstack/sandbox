@@ -27,6 +27,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/filecache"
 	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/dir"
@@ -244,7 +245,15 @@ type Manager struct {
 	egress  bool
 	maxFork int
 	store   *claimStore
-	volumes map[string]catalogVolume
+
+	// wsMgr syncs claimed sandboxes' workspaces with a shared NAS root; nil
+	// (the default) disables the feature so arm/barrier are no-ops. wsRoot is
+	// the host mount a claim's workspace token resolves under. Set once before
+	// serving via EnableWorkspaceSync/EnableWorkspaceDisk.
+	wsMgr           *filecache.Manager
+	wsRoot          string
+	wsDedicatedDisk bool
+	volumes         map[string]catalogVolume
 
 	poolStore      *poolStore
 	configSeedHash string // config pools' hash, to warn when a file edit is overridden

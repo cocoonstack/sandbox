@@ -213,7 +213,7 @@ func TestResolveGoldenSkipsPromotedEgressTemplate(t *testing.T) {
 func TestTemplateTenantScopedDelete(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil)
+	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", "", nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestPromoteFailsClosedOnMetaError(t *testing.T) {
 	}
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil)
+	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", "", nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestPromoteRefusesCrossTenantOverwrite(t *testing.T) {
 	m := newTestManager(t, eng)
 	claim := func(tenant string) *types.Sandbox {
 		t.Helper()
-		sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, tenant, "", nil)
+		sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, tenant, "", "", nil)
 		if err != nil {
 			t.Fatalf("claim %q: %v", tenant, err)
 		}

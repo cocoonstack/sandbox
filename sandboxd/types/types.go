@@ -182,6 +182,11 @@ type Sandbox struct {
 	// Volumes records the read-only volumes successfully applied to this claim.
 	Volumes []Volume `json:"volumes,omitempty"`
 
+	// Workspace names the shared workspace this sandbox is bound to (the
+	// filecache syncs <root>/<Workspace> with the guest); empty means none.
+	// Persisted so a reconciled/adopted claim re-arms its sync after a restart.
+	Workspace string `json:"workspace,omitempty"`
+
 	VsockSocket string `json:"vsock_socket,omitempty"`
 	// TAP is the egress-lane NIC's host tap, captured at provision; empty on
 	// the none lane and on claims adopted from pre-tap journals.

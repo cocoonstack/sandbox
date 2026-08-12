@@ -430,6 +430,7 @@ type claimRequest struct {
 	TTLSeconds      int      `json:"ttl_seconds,omitempty"`
 	NoRedirect      bool     `json:"no_redirect,omitempty"`
 	RequirePromoted bool     `json:"require_promoted,omitempty"`
+	Workspace       string   `json:"workspace,omitempty"`
 }
 
 // rejectPinnedAxes fails a snapshot claim (checkpoint, template) that passed

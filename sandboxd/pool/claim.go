@@ -9,6 +9,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/sandboxd/filecache"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -25,7 +26,7 @@ const (
 // ErrNoWarm means the pool is empty (the caller may redirect or provision).
 // tenant attributes the claim; empty means the operator (root). claimRef is an
 // opaque caller reference recorded on the claim; empty means none.
-func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
+func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef, workspace string, volumes []types.Volume) (*types.Sandbox, error) {
 	start := time.Now()
 	if err := m.validate(key); err != nil {
 		return nil, err
@@ -57,6 +58,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	}
 	sb.Tenant = tenant
 	sb.ClaimRef = claimRef
+	sb.Workspace = workspace
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {
 		m.counters.claimsWarm.Add(1)
@@ -67,14 +69,14 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 
 // ClaimProvision creates a claim-ready sandbox (golden clone or cold boot).
 // claimRef is an opaque caller reference recorded on the claim; empty means none.
-func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
-	return m.claimProvision(ctx, key, ttl, tenant, claimRef, volumes, false)
+func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef, workspace string, volumes []types.Volume) (*types.Sandbox, error) {
+	return m.claimProvision(ctx, key, ttl, tenant, claimRef, workspace, volumes, false)
 }
 
 // ClaimProvisionPromoted requires key to resolve from a promoted template and
 // never falls through to a cold image boot.
-func (m *Manager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
-	return m.claimProvision(ctx, key, ttl, tenant, claimRef, volumes, true)
+func (m *Manager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef, workspace string, volumes []types.Volume) (*types.Sandbox, error) {
+	return m.claimProvision(ctx, key, ttl, tenant, claimRef, workspace, volumes, true)
 }
 
 // Release destroys a claimed sandbox after authorizing cred.
@@ -175,6 +177,9 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	}
 	// Cleanup must survive the caller hanging up; the claim is already dropped.
 	ctx = context.WithoutCancel(ctx)
+	// Barrier before the VM is torn down: publish the workspace one last time
+	// so every local change is on the NAS and visible to other clients.
+	m.barrierWorkspace(ctx, id)
 	if ck != "" {
 		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
 		m.untrack(m.pendingCks, ck)
@@ -280,7 +285,57 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 			KeyHash: sb.Key.Hash(), Tenant: sb.Tenant, Volumes: types.VolumeNames(sb.Volumes),
 		})
 	}
+	// Workspace sync is a best-effort enhancement: a failure to bind the NAS
+	// workspace must not fail an otherwise-good claim, so it arms after the
+	// batch is durable and armed, and only logs on error.
+	for _, sb := range sbs {
+		m.armWorkspace(ctx, sb)
+	}
 	return nil
+}
+
+// armWorkspace binds a claimed sandbox to its shared workspace and starts the
+// sync loops. No-op when workspace sync is disabled or the sandbox carries no
+// workspace. Best-effort: an error is logged, not returned.
+func (m *Manager) armWorkspace(ctx context.Context, sb *types.Sandbox) {
+	if m.wsMgr == nil || sb.Workspace == "" || sb.VsockSocket == "" {
+		return
+	}
+	ws := filecache.WorkspaceDir(m.wsRoot, sb.Workspace)
+	// One writer per sandbox: the sandbox id is globally unique, so it is a
+	// safe, collision-free writer id across nodes.
+	cfg := filecache.Config{VMName: sb.VMName, DedicatedDisk: m.wsDedicatedDisk}
+	if err := m.wsMgr.Arm(ctx, sb.ID, sb.VsockSocket, ws, sb.ID, cfg); err != nil {
+		log.WithFunc("pool.armWorkspace").Errorf(ctx, err, "arm workspace %s for %s", sb.Workspace, sb.ID)
+	}
+}
+
+// barrierWorkspace runs the final workspace sync for id (publish local changes
+// to the NAS) and stops its loops. No-op when sync is disabled or id has none.
+func (m *Manager) barrierWorkspace(ctx context.Context, id string) {
+	if m.wsMgr == nil {
+		return
+	}
+	m.wsMgr.Barrier(ctx, id)
+}
+
+// EnableWorkspaceSync turns on the workspace filecache, driving guests through
+// g and resolving workspace tokens under root. Call once before serving.
+func (m *Manager) EnableWorkspaceSync(g filecache.Guest, root string) {
+	m.wsMgr = filecache.NewManager(g)
+	m.wsRoot = root
+}
+
+// EnableWorkspaceDisk turns on the dedicated-workspace-disk mode for every
+// workspace claim: a fresh ext4 virtio-blk disk (image under imageRoot, sized
+// sizeMB) is attached read-write and mounted before hydration, isolating the
+// workspace from the guest rootfs layer. Requires EnableWorkspaceSync first.
+func (m *Manager) EnableWorkspaceDisk(d filecache.Disk, imageRoot string, sizeMB int) {
+	if m.wsMgr == nil {
+		return
+	}
+	m.wsMgr.EnableDedicatedDisk(d, imageRoot, sizeMB)
+	m.wsDedicatedDisk = true
 }
 
 // rollbackClaim unwinds a claim batch after a persist or egress-arm failure:
@@ -408,6 +463,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		case reapArchive:
 			logSweepResult(ctx, logger, m.archive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
 		default:
+			m.barrierWorkspace(ctx, v.id)
 			m.disarmEgress(v.id, m.removeOrRetry(ctx, v.vmName, v.id, ""))
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)
@@ -461,7 +517,7 @@ func (m *Manager) authed(id, token string) (*types.Sandbox, bool) {
 	return sb, true
 }
 
-func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume, requirePromoted bool) (*types.Sandbox, error) {
+func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef, workspace string, volumes []types.Volume, requirePromoted bool) (*types.Sandbox, error) {
 	start := time.Now()
 	if err := m.validate(key); err != nil {
 		return nil, err
@@ -493,6 +549,7 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	sb.TemplateDigest = golden.templateDigest
 	sb.Tenant = tenant
 	sb.ClaimRef = claimRef
+	sb.Workspace = workspace
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {
 		if golden.dir != "" {

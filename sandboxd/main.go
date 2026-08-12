@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"slices"
 	"syscall"
@@ -88,6 +89,15 @@ func main() {
 	mgr, err := pool.NewManager(ctx, cfg, eng, secrets)
 	if err != nil {
 		logger.Fatalf(ctx, err, "init pool manager")
+	}
+	if cfg.WorkspaceRoot != "" {
+		mgr.EnableWorkspaceSync(guestFS{eng}, cfg.WorkspaceRoot)
+		logger.Infof(ctx, "workspace filecache enabled (root %s)", cfg.WorkspaceRoot)
+		if cfg.WorkspaceDiskMB > 0 {
+			diskDir := cmp.Or(cfg.WorkspaceDiskDir, filepath.Join(cfg.DataDir, "workspaces"))
+			mgr.EnableWorkspaceDisk(diskFS{eng}, diskDir, cfg.WorkspaceDiskMB)
+			logger.Infof(ctx, "workspace dedicated disk enabled (%d MB, dir %s)", cfg.WorkspaceDiskMB, diskDir)
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -237,4 +247,38 @@ func versionString() string {
 		return version
 	}
 	return version + "-" + info.Settings[i].Value[:12]
+}
+
+// guestFS adapts *engine.Engine to filecache.Guest (the engine namespaces its
+// guest ops as Guest*).
+type guestFS struct{ e *engine.Engine }
+
+func (g guestFS) Run(ctx context.Context, sock string, argv ...string) (string, error) {
+	return g.e.GuestRun(ctx, sock, argv...)
+}
+func (g guestFS) WriteFile(ctx context.Context, sock, path string, mode uint32, data []byte) error {
+	return g.e.GuestWriteFile(ctx, sock, path, mode, data)
+}
+func (g guestFS) ReadFile(ctx context.Context, sock, path string) ([]byte, error) {
+	return g.e.GuestReadFile(ctx, sock, path)
+}
+func (g guestFS) PushTar(ctx context.Context, sock, dest string, r io.Reader) error {
+	return g.e.GuestPushTar(ctx, sock, dest, r)
+}
+func (g guestFS) Remove(ctx context.Context, sock, path string, recursive bool) error {
+	return g.e.GuestRemove(ctx, sock, path, recursive)
+}
+
+// diskFS adapts *engine.Engine to filecache.Disk (read-write workspace disks,
+// reusing cocoon's disk-attach and by-serial device discovery).
+type diskFS struct{ e *engine.Engine }
+
+func (d diskFS) Attach(ctx context.Context, vmName, rawPath, name string) error {
+	return d.e.WorkspaceDiskAttach(ctx, vmName, rawPath, name)
+}
+func (d diskFS) Mount(ctx context.Context, sock, name, mount string) error {
+	return d.e.WorkspaceDiskMount(ctx, sock, name, mount)
+}
+func (d diskFS) Detach(ctx context.Context, vmName, name string) error {
+	return d.e.WorkspaceDiskDetach(ctx, vmName, name)
 }

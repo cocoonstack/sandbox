@@ -46,7 +46,7 @@ func TestIdleOncePolicyScope(t *testing.T) {
 
 	// An unpooled key (template claim shape) takes the node default.
 	unpooled := types.PoolKey{Template: "tpl:v1", Net: types.NetNone, Size: types.SizeSmall}
-	sb2, err := m.ClaimProvision(t.Context(), unpooled, time.Hour, "", "", nil)
+	sb2, err := m.ClaimProvision(t.Context(), unpooled, time.Hour, "", "", "", nil)
 	if err != nil {
 		t.Fatalf("provision: %v", err)
 	}
