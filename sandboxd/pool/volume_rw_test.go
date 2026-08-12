@@ -114,6 +114,31 @@ func TestDirtyVolumeBlocksReadersUntilWriterRecovers(t *testing.T) {
 	}
 }
 
+func TestDirtyVolumeRefusesWarmClaimBeforeTakingAVM(t *testing.T) {
+	path := writeVolumeImage(t, "scratch.img", "data")
+	if err := markVolumeDirty(path); err != nil {
+		t.Fatalf("mark dirty: %v", err)
+	}
+	eng := newFakeEngine()
+	m := newVolumePoolManager(t, eng, t.TempDir(), []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
+	warm := &types.Sandbox{VMName: "sbx-warm", Key: testKey, VsockSocket: "/vsock/warm"}
+	m.pools[testKey].warm = append(m.pools[testKey].warm, warm)
+
+	_, err := m.ClaimWarm(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "scratch"}})
+	if !errors.Is(err, ErrVolumeNeedsRecovery) {
+		t.Fatalf("read-only warm claim of a dirty image: %v, want ErrVolumeNeedsRecovery", err)
+	}
+	m.mu.Lock()
+	warmLeft := len(m.pools[testKey].warm)
+	m.mu.Unlock()
+	if warmLeft != 1 || eng.removed(warm.VMName) {
+		t.Errorf("warm pool has %d VMs and removes=%v, want the warm VM untouched", warmLeft, eng.removedNames())
+	}
+	if holders := volumeHoldersOf(m, "scratch"); holders != (volumeHolders{}) {
+		t.Errorf("registry after the refusal=%+v, want empty", holders)
+	}
+}
+
 func TestConfirmVolumesCleanCatchesMarkerAfterAdmission(t *testing.T) {
 	path := writeVolumeImage(t, "scratch.img", "data")
 	m := newVolumeManager(t, newFakeEngine(), []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
@@ -156,10 +181,9 @@ func TestVolumeAdmissionMatrix(t *testing.T) {
 		wantErr       error
 	}{
 		{"writer excludes writer", types.VolumeModeRW, types.VolumeModeRW, ErrVolumeBusy},
-		// A live writer keeps the image marked, so a reader is turned away by
-		// the marker before admission ever sees it. Admission's own rule for
-		// this direction is pinned in TestReserveVolumesExcludesReaderUnderWriter.
-		{"writer excludes reader", types.VolumeModeRW, "", ErrVolumeNeedsRecovery},
+		// Admission answers first: a live writer is a busy conflict, never the
+		// recovery verdict its own write-ahead marker would otherwise suggest.
+		{"writer excludes reader", types.VolumeModeRW, "", ErrVolumeBusy},
 		{"reader excludes writer", "", types.VolumeModeRW, ErrVolumeBusy},
 		{"readers share", "", "", nil},
 	} {

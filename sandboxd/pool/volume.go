@@ -157,9 +157,6 @@ func (m *Manager) resolveVolumes(key types.PoolKey, tenant string, requested []t
 		if _, statErr := os.Stat(entry.disk.Path); statErr != nil {
 			return nil, fmt.Errorf("volume %q path %q: %w", volume.Name, entry.disk.Path, statErr)
 		}
-		if !volume.RW() && volumeDirty(entry.disk.Path) {
-			return nil, fmt.Errorf("%w: volume %q", ErrVolumeNeedsRecovery, volume.Name)
-		}
 		disk := entry.disk
 		disk.RW = volume.RW()
 		resolved = append(resolved, resolvedVolume{disk: disk, applied: volume})
@@ -167,10 +164,10 @@ func (m *Manager) resolveVolumes(key types.PoolKey, tenant string, requested []t
 	return resolved, nil
 }
 
-// confirmVolumesClean re-stats the read-only entries' markers once the holds
-// are taken, closing the gap the resolve-time check leaves: a writable claim
-// that failed between the two marks its image and releases, and mounting that
-// image read-only would fail deep in guest setup instead of here.
+// confirmVolumesClean refuses a read-only claim of an image a writer left
+// dirty. It is the only marker check, and runs once the holds are taken: no
+// writer can be admitted alongside, so the marker is stable and it can only
+// mean a crashed writer — a live one is answered by admission as busy.
 func (m *Manager) confirmVolumesClean(volumes []resolvedVolume) error {
 	for _, volume := range volumes {
 		if !volume.applied.RW() && volumeDirty(volume.disk.Path) {

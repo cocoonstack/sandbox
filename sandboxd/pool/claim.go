@@ -42,6 +42,9 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 		return nil, admitErr
 	}
 	reserved = applied
+	if cleanErr := m.confirmVolumesClean(volumeSpecs); cleanErr != nil {
+		return nil, cleanErr
+	}
 	m.mu.Lock()
 	var sb *types.Sandbox
 	if p := m.pools[key]; p != nil {
@@ -56,10 +59,6 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 		return nil, ErrNoWarm
 	}
 	m.kickRefill()
-	if cleanErr := m.confirmVolumesClean(volumeSpecs); cleanErr != nil {
-		m.destroy(ctx, sb.VMName)
-		return nil, cleanErr
-	}
 	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs, applied); volumeErr != nil {
 		m.destroy(ctx, sb.VMName)
 		return nil, volumeErr
