@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -24,6 +23,9 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	}
 	if count < 1 || count > m.maxFork {
 		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, m.maxFork)
+	}
+	if hasAppliedVolumes(sb) {
+		return nil, ErrVolumeCapture
 	}
 	if !sb.Key.Capturable() {
 		return nil, ErrNoEgressFork
@@ -69,16 +71,16 @@ func (m *Manager) forkClones(ctx context.Context, sb *types.Sandbox, count int) 
 // forkSource decides and captures the fork source under the transition lock
 // (a racing hibernate cannot swap the snapshot out from under the fan-out),
 // returning the per-child provisioner and its cleanup.
-func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (func(string) (types.VMRecord, error), func(), error) {
+func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (vmProvisioner, func(), error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	if sb.HibernateSnap == "" {
-		snap := forkPrefix + strings.TrimPrefix(sb.VMName, vmPrefix) + "-" + randHex(3)
-		if err := m.eng.SnapshotSave(ctx, sb.VMName, snap); err != nil {
+		snap, cleanup, err := m.sourceSnap(ctx, sb)
+		if err != nil {
 			return nil, nil, err
 		}
 		return func(name string) (types.VMRecord, error) { return m.eng.CloneSnap(ctx, snap, name, sb.Key) },
-			func() { m.dropSnap(ctx, snap) }, nil
+			cleanup, nil
 	}
 	dir, err := os.MkdirTemp(m.dataDir, "fork-")
 	if err != nil {

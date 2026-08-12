@@ -26,10 +26,10 @@ func TestDrainRefusesClaimsTrimsWarmAndUncordonRefills(t *testing.T) {
 
 	m.Drain(t.Context())
 
-	if _, err := m.ClaimWarm(t.Context(), testKey, 0, "", ""); !errors.Is(err, ErrQuota) {
+	if _, err := m.ClaimWarm(t.Context(), testKey, 0, "", "", nil); !errors.Is(err, ErrQuota) {
 		t.Fatalf("ClaimWarm during drain: %v, want ErrQuota", err)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", ""); !errors.Is(err, ErrQuota) {
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil); !errors.Is(err, ErrQuota) {
 		t.Fatalf("ClaimProvision during drain: %v, want ErrQuota", err)
 	}
 	infos, g := m.Info()

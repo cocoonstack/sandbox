@@ -6,10 +6,8 @@ import threading
 
 import pytest
 
-from cocoonsandbox import APIError, Client
+from cocoonsandbox import APIError, Client, ProtocolError, SilkdError, Watcher
 from cocoonsandbox.conn import Conn, dial_agent
-from cocoonsandbox.errors import ProtocolError, SilkdError
-from cocoonsandbox.sandbox import Watcher
 
 
 def test_dial_agent_rejects_control_chars_in_identity():

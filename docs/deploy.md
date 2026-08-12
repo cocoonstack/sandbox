@@ -7,8 +7,9 @@ the cocoon CLI and needs a template image with silkd baked in.
 
 - Linux with KVM (`/dev/kvm`)
 - [cocoon](https://github.com/cocoonstack/cocoon) **v0.5.2 or newer** installed
-  and working (`cocoon vm run` boots a Cloud Hypervisor VM). v0.5.2 adds the
-  parallel-clone and snapshot/store performance work the
+  and working (`cocoon vm run` boots a Cloud Hypervisor VM). v0.5.2 includes
+  the disk hot-attach used by read-only volumes and the parallel-clone and
+  snapshot/store performance work the
   [performance](performance.md) numbers assume. sandboxd logs a warning at
   startup when the detected cocoon is below v0.5.2 (a dev/`master-<sha>` build
   is assumed current)
@@ -37,6 +38,13 @@ The scalar egress-attachment keys are retired: rename `"bridge": "br0"` to
 starting the new binary — config loading rejects the old spellings loudly
 rather than silently dropping the egress lane.
 
+Read-only dataset volumes require a lockstep rollout. Upgrade every sandboxd
+node and cocoon to the required version before enabling the catalog or shipping
+an SDK that requests volumes. Mixed-version serving is unsupported. Once a
+volume claim has finalized, do not roll a node back to an older sandboxd until
+all volume claims are gone; the older daemon cannot preserve their capture
+semantics from `claims.json`.
+
 ## Configuration
 
 sandboxd reads one JSON file (`-config`, default
@@ -51,7 +59,13 @@ sandboxd reads one JSON file (`-config`, default
   "no_direct_io": true,
   "advertise_addr": "10.0.0.5:7777",
   "bridges": ["br0"],
+  "volumes": [
+    {"name": "imagenet", "path": "/srv/datasets/imagenet.img"},
+    {"name": "weights-llama", "path": "/srv/datasets/llama.img", "directio": "on"},
+    {"name": "acme-corpus", "path": "/srv/datasets/acme.img", "tenants": ["acme"]}
+  ],
   "api_token": "…",
+  "tenants": [{"name": "acme", "token": "…"}],
   "mesh": {
     "node_id": "node-a",
     "bind": "10.0.0.5:7946",
@@ -74,9 +88,10 @@ sandboxd reads one JSON file (`-config`, default
 | `no_direct_io` | false | use buffered writable disks for Cloud Hypervisor cold boots and clones; recommended for dense ephemeral pools to avoid direct-I/O CoW journal contention |
 | `advertise_addr` | = `listen` | the host:port clients reach this node at; returned as a claim's owner address and gossiped to peers. Must be routable when `listen` is a wildcard |
 | `bridges` / `networks` | unset | egress-lane attachment: a list of host bridge devices, or a list of CNI conflist names. Mutually exclusive; with neither set the node serves only the no-network lane. A Linux bridge holds at most 1024 ports (kernel `BR_MAX_PORTS`), so an N-entry list raises the node's egress ceiling to N×1024 — VMs spread over the list by a stable hash of the VM name, so size it with headroom (the spread is statistical, not exact). `bridges` keeps the raw TAP-on-bridge attachment (taps in the root netns, no per-VM network namespace or CNI plugin execution); `networks` runs the CNI chain per VM. [Guarded egress](egress.md) needs `bridges` and rejects a CNI network at load |
+| `volumes` | unset | node-local catalog of operator-managed read-only dataset images: `[ {"name":"imagenet","path":"/srv/datasets/imagenet.img","directio":"off","tenants":["acme"]} ]`. Names match `^[a-z][a-z0-9_-]{0,19}$` and cannot start with `cocoon-`; paths are absolute; `directio` is `on`, `off`, or `auto` and defaults to `off`. `tenants` is an optional access list: empty means every authenticated scope, while every listed name must exist in the node's `tenants` config. Root always has access. The catalog is intentionally not part of the cluster digest |
 | `egress_ca` | unset | [HTTPS-interception](egress.md#https-interception) PKI: `root_cert` (the cluster root baked into intercepted guests; may bundle old+new roots during rotation) plus this node's `intermediate_cert`/`intermediate_key` from `sandboxd ca issue-intermediate`. Required when any pool rule sets `intercept` |
 | `api_token` | unset | the operator (root) credential: when set, guards the node-level endpoints (Bearer) with full access, including release-by-id cleanup. Per-sandbox tokens guard ordinary sandbox-scoped calls |
-| `tenants` | unset | multi-tenant tokens next to `api_token`: `[{"name": "acme", "token": "…", "max_claims": 50}]`. A tenant token reaches the resource-creating verbs (claim, fork, promote, checkpoint, preview) and everything it creates is stamped with the tenant name; operator surfaces (`GET /v1/sandboxes` and the per-id reads under it, `GET /v1/info`, `PUT /v1/pools`, `POST/DELETE /v1/drain`, `/metrics`) answer it 403. `max_claims` (0 = unlimited) caps that tenant's live claims next to the node-wide cap. Requires `api_token` set (operator surfaces need it). Names and tokens must be unique, tokens distinct from `api_token`. On a cluster all nodes must carry the same tenants set (the SDK replays a tenant token across a redirect; a peer missing that tenant answers 401), and per-node caps mean a tenant's effective cluster limit is `max_claims` × nodes. Empty = exactly the single-token behavior |
+| `tenants` | unset | multi-tenant tokens next to `api_token`: `[{"name": "acme", "token": "…", "max_claims": 50}]`. A tenant token reaches the resource-creating verbs (claim, fork, promote, checkpoint, preview), catalog discovery, and its own sandbox/checkpoint listings; everything it creates is stamped with the tenant name. Root-only surfaces (per-id sandbox reads, `GET /v1/info`, `PUT /v1/pools`, `POST/DELETE /v1/drain`, `/metrics`) answer it 403. `max_claims` (0 = unlimited) caps that tenant's live claims next to the node-wide cap. Requires `api_token` set. Names and tokens must be unique, tokens distinct from `api_token`. On a cluster all nodes must carry the same tenants set (the SDK replays whichever token authorized a redirect), and per-node caps mean a tenant's effective cluster limit is `max_claims` × nodes. Empty = exactly the single-token behavior |
 | `max_fork_count` | 16 | children a single `fork` may create; each is a full-RAM VM, so this bounds one request's memory blast radius to the node's capacity |
 | `refill_concurrency` | 0 (auto) | concurrent VM provisioning budget, shared by warm-pool refills, fork clones, and the reap/hibernate/reconcile engine batches. 0 sizes it from the node: `NumCPU*2/3` clamped to [4, 256] — a 384-core node gets 256; small nodes keep a floor of 4 |
 | `preview_listen` | (off) | address for a preview HTTP server that serves guest ports under signed URLs; needs `preview_secret` |
@@ -87,7 +102,7 @@ sandboxd reads one JSON file (`-config`, default
 | `checkpoint_ttl_hours` | 0 (keep forever) | ages out checkpoints older than this; the sweep runs hourly and at startup. Explicit deletes never wait for it. Must be nonzero and match fleet-wide when `checkpoint_peer_heal` is on — it is the expiry eligibility point for a healed replica a delete broadcast missed, after which its next successful hourly sweep removes it; persistent sweep failure extends retention until one succeeds, so it is not a hard ceiling |
 | `checkpoint_peer_heal` | false | on a cluster, lets a node pull a checkpoint it lacks from a peer — found via a live probe, not gossip — rather than failing the branch; see [placement lifecycle](cluster.md#checkpoints-on-a-cluster). Three requirements, all enforced at config load: a nonempty `api_token` (the blob transfer between peers authenticates with it; without one the raw record stream would be open), `mesh.cluster_key` set (the pull presents the fleet `api_token` to an address learned from the peer probe, so the gossip layer carrying that address must itself be authenticated), and `checkpoint_ttl_hours` nonzero (a replica a delete broadcast missed becomes eligible for expiry after it, and its next successful hourly sweep removes it — so it is the finite eligibility point, not an exact ceiling). A shared checkpoint store (`checkpoint_store` kind `s3`) ignores this setting — every node already resolves every checkpoint directly, so there is nothing to heal |
 | `warm_max` (pool entry) | 0 (static) | turns on the demand-adaptive watermark for that pool: the warm target rises from `warm` toward `warm_max` while claims arrive faster than the measured provision lead covers, and decays back over ~a minute of silence |
-| `max_claims` | 0 (unlimited) | node-wide cap on live claims; claim/fork/branch requests beyond it answer 429 with the pool state unharmed (on a cluster, a claim is first redirected to a warm peer) |
+| `max_claims` | 0 (unlimited) | node-wide cap on live claims; claim/fork/branch requests beyond it answer 429 with the pool state unharmed (on a cluster, normal warm-candidate placement applies, with volume claims limited to candidates holding every requested volume) |
 | `audit_log` | false | append every relayed request frame's op + addressing fields (never payloads) to `<data_dir>/audit.jsonl`, size-rotated with one `.1` backup. Records are `{t, id, op}` plus whichever addressing fields the op carries (`argv`, `path`, `dest`, `from`, `to`, `url`, `session`, `port`); preview accesses record as op `preview_dial`. A request frame whose first line exceeds 4 KiB is skipped, never truncated |
 | `idle_hibernate_seconds` | 0 (off) | node-wide idle policy for unpooled claims (template/checkpoint claims): a claim with no data-plane connection for this long is hibernated; the next call wakes it transparently. Per-pool `idle_hibernate_seconds` (in a pool entry) does the same for that pool's claims — pooled keys ignore the node-wide value. Opt-in deliberately: a wake costs latency and the snapshot, so callers with their own idle logic must not pay twice |
 | `archive_after_seconds` | 0 (off) | tier below hibernation: a hibernated claim idle this long is checkpointed to the store and its local VM dropped, freeing the node entirely; the next call restores it transparently (a checkpoint restore's latency). Requires `idle_hibernate_seconds > 0` and must exceed it. Node-wide for unpooled keys; per-pool overrides for that pool |
@@ -104,6 +119,62 @@ fragment the warm pools):
 | `medium` | 2 | 1G |
 | `large` | 4 | 4G |
 | `xlarge` | 4 | 8G |
+
+### Read-only dataset volumes
+
+Each catalog path must name an immutable disk image containing a mountable
+whole-device filesystem. A missing path produces a startup warning and fails
+only claims that request it, allowing images to be distributed after sandboxd
+starts. Do not replace, truncate, or delete an image while it is attached;
+publish a new catalog name or path instead.
+
+For example, build a whole-device ext4 image directly from a prepared tree,
+then make the published file host-read-only:
+
+```bash
+truncate -s 200G /srv/datasets/imagenet.img
+mkfs.ext4 -F -d /srv/datasets/imagenet-root /srv/datasets/imagenet.img
+chmod 0444 /srv/datasets/imagenet.img
+```
+
+Use the same dataset identity and access list for a volume name on every node,
+then distribute its immutable image to each node that should advertise it.
+sandboxd gossips only catalog names; it never copies content or gossips paths or
+access lists.
+
+A claim requests up to eight unique names and may set an absolute, clean custom
+mount for each; the default is `/volumes/<name>`. Mounts must stay outside the
+guest OS directories and cannot duplicate or nest within one claim. Volume
+mounts may shadow an existing populated guest directory for that claim's life.
+
+A volume claim may consume an ordinary warm Cloud Hypervisor VM. sandboxd
+attaches after the warm pop or provision, polls `/sys/block/*/serial` for the
+attach name for up to 2 seconds, then mounts the device read-only before
+finalizing the claim. Both the Cloud Hypervisor attachment and the guest
+filesystem mount are read-only. Setup failure destroys the VM; a popped warm VM
+is refilled normally. Firecracker volume claims are rejected.
+
+Warm candidates retain their normal ranking, but a candidate for a volume
+claim must hold every requested image. If the entry node cannot serve them all,
+it redirects once to such a holder. A promoted-template claim prefers a node
+advertising both resources; when a shared store has not yet made that capability
+visible in gossip, a volume holder self-verifies the template before
+provisioning.
+
+An empty catalog `tenants` list allows every authenticated scope; a nonempty
+list limits the image to those tenants, while root always bypasses it. Removing
+a tenant therefore requires removing every catalog reference in the same edit.
+`GET /v1/volumes` reports the caller-visible fleet union and holder count, plus
+the answering node's current local availability, without exposing host paths or
+node addresses. Applied names and effective mounts are persisted with the
+claim. Such a claim cannot hibernate, fork, checkpoint, or promote; the idle
+hibernate sweep leaves it running. Release removes the VM but never deletes the
+operator-owned backing image. With `directio=off`, readers share the host page
+cache; use `directio=on` when cache interference matters.
+A dataset mounted into an egress-lane sandbox can be uploaded wherever that
+tenant's egress policy permits, so treat the ACL and egress policy as one access
+decision. Image replication, write-enabled dataset disks, detach, and
+refcounting remain out of scope.
 
 ### A fuller config
 
@@ -232,8 +303,8 @@ Three token kinds. The root `api_token` has full access — operators and
 single-tenant deployments need nothing else. Tenant tokens (the `tenants`
 list) create and manage their own resources: claims, forks, checkpoints,
 promoted templates, and preview URLs are stamped with the tenant name;
-checkpoint listings filter to the caller's tenant, and a tenant can delete
-only its own checkpoints and templates (root sees and deletes everything).
+sandbox and checkpoint listings filter to the caller's tenant, and a tenant
+can delete only its own checkpoints and templates (root sees everything).
 Operator surfaces stay root-only — a tenant token there is authenticated but
 not authorized, so it answers 403 (a wrong token stays 401). Per-sandbox
 tokens are unchanged: whoever holds a sandbox's token drives that sandbox.
@@ -295,6 +366,13 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7777/v1/info | jq .
 The repository's `scripts/sandboxd-e2e.sh` runs the full loop on a real node
 (golden build → warm pool → claim tiers → the complete verb smoke → reap →
 restart reconcile); set `BRIDGE=<dev>` to include the egress lane.
+
+To include the read-only volume proof, put a nonempty `volume-e2e.txt` in the
+filesystem image and run `VOLUME_IMAGE=/srv/datasets/imagenet.img
+scripts/sandboxd-e2e.sh`. The script verifies two concurrent mounts, read-only
+enforcement, warm-pool consumption, and an unchanged source checksum. On a node
+using prebuilt binaries, also set `VOLUME_SMOKE_BIN` beside `SANDBOXD_BIN`,
+`DEMO_BIN`, and `SMOKE_BIN`.
 
 ## Preview URLs
 

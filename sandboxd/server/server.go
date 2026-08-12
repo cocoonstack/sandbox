@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -40,11 +41,13 @@ var poolErrHTTP = []struct {
 	msg  string
 }{
 	{pool.ErrBadKey, http.StatusBadRequest, ""},
+	{pool.ErrBadVolume, http.StatusBadRequest, ""},
 	{pool.ErrBadName, http.StatusBadRequest, ""},
 	{pool.ErrBadCount, http.StatusBadRequest, ""},
 	{pool.ErrNoEgress, http.StatusConflict, ""},
 	{pool.ErrNoEgressHibernate, http.StatusConflict, ""},
 	{pool.ErrNoEgressFork, http.StatusConflict, ""},
+	{pool.ErrVolumeCapture, http.StatusConflict, ""},
 	{pool.ErrQuota, http.StatusTooManyRequests, ""},
 	{pool.ErrHealBusy, http.StatusServiceUnavailable, ""},
 	{pool.ErrPooledTemplate, http.StatusConflict, ""},
@@ -58,8 +61,9 @@ var poolErrHTTP = []struct {
 // parameters attribute created resources and scope listings/deletes; empty
 // means the operator (root) — unquotaed, unfiltered.
 type Manager interface {
-	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string) (*types.Sandbox, error)
-	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string) (*types.Sandbox, error)
+	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error)
+	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error)
+	ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error)
 	Release(ctx context.Context, id string, cred pool.Cred) error
 	Hibernate(ctx context.Context, id string, cred pool.Cred) error
 	Wake(ctx context.Context, id string, cred pool.Cred) error
@@ -69,7 +73,9 @@ type Manager interface {
 	Checkpoint(ctx context.Context, id string, cred pool.Cred, name, tenant string) (types.Checkpoint, error)
 	Counters() pool.Counters
 	TenantClaims() map[string]int
-	Sandboxes() []pool.SandboxSummary
+	VolumePlacement(key types.PoolKey, tenant string, names []string) (bool, error)
+	Volumes(tenant string, holders map[string]int) []types.VolumeInfo
+	Sandboxes(tenant string) []pool.SandboxSummary
 	Sandbox(id string) (pool.SandboxSummary, bool)
 	Stats(ctx context.Context, id string) (pool.SandboxStats, bool)
 	Audit(ctx context.Context, id string, line []byte)
@@ -82,6 +88,7 @@ type Manager interface {
 	DeleteCheckpoint(ctx context.Context, ckptID, tenant string, scope pool.DeleteScope) error
 	ClaimDeadline(id, token string) (time.Time, error)
 	HasGolden(ctx context.Context, key types.PoolKey) bool
+	HasPromotedTemplate(ctx context.Context, key types.PoolKey) bool
 	AgentSocket(id, token string) (string, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, error)
 	SetPools(ctx context.Context, pools []config.PoolSpec) error
@@ -99,7 +106,11 @@ type Dialer interface {
 // nil on a single-node deployment (no mesh).
 type Placer interface {
 	Candidates(keyHash string) []string
+	VolumeCandidates(keyHash string, names []string) []string
 	TemplateOwners(keyHash string) []string
+	VolumeOwners(names []string) []string
+	TemplateVolumeOwners(keyHash string, names []string) []string
+	VolumeHolders() map[string]int
 	PeerAddrs() []string
 	ConfigMismatches() int
 }
@@ -177,11 +188,12 @@ func New(apiToken string, tenants []config.TenantSpec, advertise string, mgr Man
 }
 
 // Handler builds the route table. Resource-creating verbs and tenant-scoped
-// listings/deletes take the api token or a tenant token; operator surfaces
-// (index, pools, info, metrics) stay root-only.
+// listings/deletes take the api token or a tenant token; pools, info, metrics,
+// and per-sandbox operator reads stay root-only.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/claim", s.requireToken(s.handleClaim))
+	mux.HandleFunc("GET /v1/volumes", s.requireToken(s.handleVolumes))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleRelease)
 	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/wake", s.handleSandboxVerb("wake", s.mgr.Wake))
@@ -209,7 +221,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/sandboxes/{id}/owner", s.handleOwner)
 	mux.HandleFunc("GET /v1/info", s.requireRoot(s.handleInfo))
 	mux.HandleFunc("GET /v1/peers", s.requireToken(s.handlePeers))
-	mux.HandleFunc("GET /v1/sandboxes", s.requireRoot(s.handleSandboxes))
+	mux.HandleFunc("GET /v1/sandboxes", s.requireToken(s.handleSandboxes))
 	mux.HandleFunc("GET /metrics", s.requireRoot(s.handleMetrics))
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	return mux
@@ -222,18 +234,22 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	}
 	key := req.Key()
 	hash := key.Hash()
+	tenant := tenantFrom(r.Context())
+	if len(req.Volumes) > 0 {
+		s.handleVolumeClaim(w, r, req, key, hash, tenant)
+		return
+	}
 
 	// Warm hit here is ownership transfer only. On a warm miss with a mesh, a
 	// peer that reports a warm sandbox gets the claim via redirect (data plane
 	// must be direct, so redirect beats proxy); only if no peer has one does
 	// this node provision (golden clone or cold boot).
-	tenant := tenantFrom(r.Context())
-	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef)
+	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef, nil)
 	if errors.Is(err, pool.ErrNoWarm) {
 		if s.redirectClaim(r.Context(), w, req, key, hash) {
 			return
 		}
-		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef)
+		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, nil)
 	}
 	// A full node bounces the claim to a warm peer before answering 429 —
 	// quota is per node, and a peer with capacity is a better answer.
@@ -244,6 +260,91 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	writeResult(w, r, "claim", hash, "provisioning failed", err, func() {
 		writeJSON(w, http.StatusOK, s.claimResponse(sb))
 	})
+}
+
+func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req types.ClaimRequest, key types.PoolKey, hash, tenant string) {
+	volumes, err := types.ValidateVolumes(req.Volumes)
+	if err == nil && key.Engine != types.EngineCH {
+		err = errors.New("volumes require engine ch")
+	}
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("%w: %v", pool.ErrBadVolume, err).Error())
+		return
+	}
+	req.Volumes = volumes
+	redirected, err := s.redirectVolumeClaim(r.Context(), w, &req, key, hash, tenant)
+	if err != nil {
+		writeResult(w, r, "claim", hash, "provisioning failed", err, func() {})
+		return
+	}
+	if redirected {
+		return
+	}
+	var sb *types.Sandbox
+	if req.RequirePromoted {
+		sb, err = s.mgr.ClaimProvisionPromoted(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Volumes)
+	} else {
+		sb, err = s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Volumes)
+		if errors.Is(err, pool.ErrNoWarm) {
+			if s.placer != nil && !req.NoRedirect && writeRedirect(w, s.placer.VolumeCandidates(hash, types.VolumeNames(req.Volumes))) {
+				return
+			}
+			sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Volumes)
+		}
+	}
+	writeResult(w, r, "claim", hash, "provisioning failed", err, func() {
+		writeJSON(w, http.StatusOK, s.claimResponse(sb))
+	})
+}
+
+func (s *Server) handleVolumes(w http.ResponseWriter, r *http.Request) {
+	var holders map[string]int
+	if s.placer != nil {
+		holders = s.placer.VolumeHolders()
+	}
+	writeJSON(w, http.StatusOK, types.VolumeListResponse{
+		Volumes: s.mgr.Volumes(tenantFrom(r.Context()), holders),
+	})
+}
+
+func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter, req *types.ClaimRequest, key types.PoolKey, hash, tenant string) (bool, error) {
+	names := types.VolumeNames(req.Volumes)
+	localVolumes, err := s.mgr.VolumePlacement(key, tenant, names)
+	if err != nil {
+		return false, err
+	}
+
+	localTemplate := s.mgr.HasPromotedTemplate(ctx, key)
+	var templateOwners []string
+	if s.placer != nil {
+		templateOwners = s.placer.TemplateOwners(hash)
+	}
+	promoted := req.RequirePromoted || localTemplate || len(templateOwners) > 0
+	req.RequirePromoted = promoted
+	if localVolumes && (!promoted || localTemplate) {
+		return false, nil
+	}
+	if s.placer == nil || req.NoRedirect {
+		return false, pool.ErrVolumeUnavailable
+	}
+
+	var owners []string
+	if promoted {
+		// A shared template store lets a volume holder resolve the template
+		// even before that node has advertised the newly published hash. The
+		// no_redirect target re-checks both resources before provisioning.
+		owners = s.placer.TemplateVolumeOwners(hash, names)
+	} else {
+		owners = s.placer.VolumeCandidates(hash, names)
+	}
+	if len(owners) == 0 {
+		owners = s.placer.VolumeOwners(names)
+	}
+	if len(owners) == 0 {
+		return false, pool.ErrVolumeUnavailable
+	}
+	writeJSON(w, http.StatusOK, types.ClaimResponse{Redirect: owners, RequirePromoted: promoted})
+	return true, nil
 }
 
 // redirectClaim redirects a warm-miss to a better peer — a warm holder, or the
@@ -641,5 +742,6 @@ func (s *Server) claimResponse(sb *types.Sandbox) types.ClaimResponse {
 	return types.ClaimResponse{
 		ID: sb.ID, Token: sb.Token, Deadline: sb.Deadline,
 		OwnerAddr: s.advertise, FromCheckpoint: sb.FromCheckpoint, TemplateDigest: sb.TemplateDigest,
+		Volumes: sb.Volumes,
 	}
 }

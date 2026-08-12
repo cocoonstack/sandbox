@@ -26,6 +26,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 const (
@@ -206,18 +207,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 // it runs at startup, when no clone can be mid-flight. A crash between
 // upload and meta.json leaves orphan objects invisible to Metas; an S3
 // lifecycle rule on the bucket reclaims those (documented in deploy).
-func (s *Store) SweepStaging() error {
-	entries, err := os.ReadDir(s.staging)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if err := os.RemoveAll(filepath.Join(s.staging, e.Name())); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+func (s *Store) SweepStaging() error { return utils.RemoveDirEntries(s.staging, nil) }
 
 // SweepGenerations is a no-op: Delete reclaims committed S3 generations, and
 // bucket lifecycle policy handles invisible upload orphans.

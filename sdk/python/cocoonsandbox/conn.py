@@ -6,23 +6,30 @@ from __future__ import annotations
 import contextlib
 import socket
 from collections.abc import Iterator
+from typing import TypeVar
 
 from .errors import APIError, ProtocolError, SilkdError
 from .frames import MAX_FRAME, decode_response, encode_request
 
+_CloseableT = TypeVar("_CloseableT", bound="_Closeable")
 
-class Conn:
+
+class _Closeable:
+    """Context-manager mixin for handles whose exit is just close()."""
+
+    def __enter__(self: _CloseableT) -> _CloseableT:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
+class Conn(_Closeable):
     """A live frame stream to one sandbox's silkd, via the owner node."""
 
     def __init__(self, sock: socket.socket, reader):
         self._sock = sock
         self._reader = reader
-
-    def __enter__(self) -> Conn:
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.close()
 
     def send(self, op: str, **fields) -> None:
         self._sock.sendall(encode_request(op, **fields))

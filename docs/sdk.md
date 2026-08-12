@@ -131,6 +131,9 @@ binds to whichever confirms ownership first.
 sb, err := client.New(ctx, "base:24.04",
     sandbox.WithNetwork(sandbox.NetEgress),
     sandbox.WithSize(sandbox.Medium),
+    sandbox.WithVolumes(
+        sandbox.Volume{Name: "imagenet"},
+        sandbox.Volume{Name: "weights", Mount: "/models"}),
     sandbox.WithTimeout(10*time.Minute))
 defer sb.Close()
 ```
@@ -139,16 +142,44 @@ defer sb.Close()
 |---|---|---|---|
 | `WithNetwork(n)` | `NetNone`, `NetEgress` | `NetNone` | Cloud Hypervisor network shape: `NetNone` disables the NIC and uses vsock-only I/O; `NetEgress` attaches a bridge/CNI NIC |
 | `WithSize(s)` | `Small`, `Medium`, `Large`, `XLarge` | `Small` | resource tier: 1cpu/512M, 2cpu/1G, 4cpu/4G, 4cpu/8G |
+| `WithVolumes(volumes...)` | `Volume{Name, Mount?}` entries | none | attach and mount up to eight unique read-only dataset disks; `Mount` defaults to `/volumes/<name>`; supported by `Client.New` and `Template.New` |
 | `WithTimeout(d)` | duration | server default 5m | sandbox TTL, rounded up to seconds, server-capped at 24h. The node reaps the sandbox after the TTL even if the client vanishes |
 
 `New` returns when the sandbox's silkd answers: a warm hit is milliseconds,
-a cold key can take the full boot. `Sandbox.ID`, `Sandbox.Deadline`, and
+a cold key can take the full boot. A volume claim may consume an ordinary warm
+VM and returns only after every requested disk is mounted; the finalized name
+and effective mount are available in `Sandbox.Volumes`. Custom mounts must be
+absolute and clean, stay outside the guest OS tree, and cannot duplicate or
+nest.
+`Sandbox.ID`, `Sandbox.Deadline`, and
 `Sandbox.FromCheckpoint` (the lineage edge when branched) are exported.
 `Sandbox.TemplateDigest` is the exact content identity when the claim cloned a
 promoted template; it is empty for other sources. `Owner()` names the owning
 node, and `Token()` returns the per-sandbox bearer to persist with `ID` for a
 later `Lookup`; `Close()` releases the sandbox (releasing one already gone is
 not an error, and `Close` is bounded internally so it stays defer-friendly).
+Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Passing
+`WithVolumes` to `Checkpoint.New` returns a local error because checkpoint
+branches do not support volumes in this version.
+
+The caller-visible constraints are deliberate: volume claims may consume a
+warm VM, remain non-capturable, mount read-only, and require Cloud Hypervisor.
+
+Discover the fleet entries this token may use before planning a claim:
+
+```go
+catalog, err := client.Volumes(ctx) // []sandbox.VolumeInfo
+for _, volume := range catalog {
+    fmt.Println(volume.Name, volume.DefaultMount, volume.SizeBytes, volume.Available, volume.Nodes)
+}
+```
+
+Discovery returns the gossiped union and holder count; availability and size
+describe the connected node. Warm candidates retain normal ranking, filtered to
+nodes advertising every requested name. A promoted-template claim prefers a
+peer advertising both the template and every volume; when that intersection is
+empty, one volume holder may self-verify access to a shared template store
+before provisioning.
 
 ## Hibernating
 
@@ -208,7 +239,8 @@ re-promoted after the node is upgraded.
 
 **On the default local-disk backend templates live on one node**, and on a
 cluster the parent claim may have been redirected — the returned `Template`
-handle is bound to the owning node, so its `New`/`Delete` always reach it.
+handle is bound to the owning node. Its `Delete` and volume-less `New` reach
+that node; `New(WithVolumes(...))` may follow one volume-placement redirect.
 The name-based calls
 (`client.New("myproj:v1")`, `client.DeleteTemplate(...)` with
 `WithNetwork`/`WithSize` when non-default) route cluster-wide via the

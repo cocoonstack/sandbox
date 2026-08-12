@@ -22,6 +22,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 const (
@@ -168,18 +169,9 @@ func (d *Store) Delete(_ context.Context, id string) error {
 
 // SweepStaging clears crashed staging and delegates generation retention.
 func (d *Store) SweepStaging() error {
-	entries, err := os.ReadDir(d.root)
-	if err != nil {
+	// ReadDir + suffix, not Glob: the root path may hold glob metacharacters.
+	if err := utils.RemoveDirEntries(d.root, func(name string) bool { return strings.HasSuffix(name, ".tmp") }); err != nil {
 		return err
-	}
-	// ReadDir + suffix, not Glob: the root path may hold glob
-	// metacharacters.
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".tmp") {
-			if err := os.RemoveAll(filepath.Join(d.root, e.Name())); err != nil {
-				return err
-			}
-		}
 	}
 	return d.SweepGenerations()
 }

@@ -40,6 +40,9 @@ func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string
 
 // hibernateLocked is Hibernate's body; the caller holds sb.Transition.
 func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error {
+	if hasAppliedVolumes(sb) {
+		return ErrVolumeCapture
+	}
 	if sb.Key.Net == types.NetEgress {
 		// cocoon resumes the guest before its fresh tap can be re-locked, so a
 		// woken egress guest would egress unlocked; keep the lane live instead.
@@ -200,9 +203,9 @@ func (m *Manager) idleOnce(ctx context.Context) {
 	for _, sb := range m.claimed {
 		idle := m.idleDefault
 		if p, pooled := m.activePool(sb.Key); pooled {
-			idle = p.idle // pooled keys never take the node default
+			idle = p.idle
 		}
-		if idle <= 0 || sb.HibernateSnap != "" || sb.ArchiveCk != "" || now.Sub(sb.LastSeen()) < idle {
+		if idle <= 0 || hasAppliedVolumes(sb) || sb.HibernateSnap != "" || sb.ArchiveCk != "" || now.Sub(sb.LastSeen()) < idle {
 			continue
 		}
 		victims = append(victims, victim{sb.ID, sb.Token})

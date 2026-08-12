@@ -7,10 +7,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// CloseWrite signals EOF to the peer without tearing down the read direction.
+func CloseWrite(conn net.Conn) {
+	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
+	}
+}
 
 // WriteFileSync durably replaces path with data (temp + fsync + rename + dir
 // fsync) so the rename survives a crash. The temp name is per-call unique, so
@@ -54,6 +62,23 @@ func WriteFileSync(path string, data []byte, perm os.FileMode) error {
 	defer func() { _ = d.Close() }()
 	if err = d.Sync(); err != nil {
 		return fmt.Errorf("sync dir: %w", err)
+	}
+	return nil
+}
+
+// RemoveDirEntries removes dir's entries for which match returns true; nil matches all.
+func RemoveDirEntries(dir string, match func(name string) bool) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if match != nil && !match(e.Name()) {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			return err
+		}
 	}
 	return nil
 }

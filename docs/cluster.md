@@ -2,10 +2,11 @@
 
 A cluster is a set of sandboxd nodes joined through a
 [hashicorp/memberlist](https://github.com/hashicorp/memberlist) SWIM mesh.
-Gossip carries only placement hints — per-pool warm counts and each node's
-data-plane address. Per-sandbox state never leaves its owning node, so a
-stale view costs at most one extra redirect, never correctness. A single
-node with no seeds is a valid mesh of one.
+Gossip carries only placement hints — per-pool warm counts, promoted-template
+hashes, available volume names, and each node's data-plane address.
+Per-sandbox state never leaves its owning node, so a stale view costs at most
+one extra redirect, never correctness. A single node with no seeds is a valid
+mesh of one.
 
 ## Joining
 
@@ -56,6 +57,32 @@ The data plane is never proxied between nodes: the claim response carries
 Node death is honest: a dead node's sandboxes die with it (memory state is
 node-local by design). SWIM detects the death and peers stop redirecting to
 it.
+
+### Read-only volumes and placement
+
+A volume name has one fleet-wide meaning and access list, while catalog
+membership is node-local and deliberately excluded from the cluster config
+digest. Nodes gossip only their currently available catalog names: host paths
+and access lists never leave the node. After config load the set appears on the
+next gossip tick; later image distribution or removal is detected the same way.
+The node epoch bumps only when the advertised name set changes.
+
+A volume claim may consume an ordinary warm VM because attach happens after the
+pop and before finalization. Warm candidates retain their normal ranking, but a
+candidate must advertise every requested volume. If the entry node cannot serve
+all requested names, it redirects once to a peer advertising their intersection.
+A promoted-template claim uses the intersection of template owners and volume
+owners first. If that advertised intersection is empty, a volume holder gets one
+chance to prove it can resolve the template from a shared store. The target
+retries with `no_redirect` plus the carried `require_promoted` intent and
+validates both resources before provisioning, so a node-local template still
+fails without a second hop even while template gossip is one tick stale.
+
+`GET /v1/volumes` and the SDK discovery calls return the gossiped union filtered
+through the answering node's fleet-uniform access lists. `nodes` counts members
+advertising each name, while `available` and `size_bytes` describe only the
+answering node's image. No node address or dataset-to-host mapping is returned;
+claim placement resolves the holder.
 
 ## Querying members
 
@@ -119,9 +146,9 @@ Gossip is eventually consistent: a template promoted a moment ago may be
 invisible to name-based calls for about a gossip tick (the claim fails
 cold — retry), and one deleted a moment ago may still redirect to a 404.
 Correctness is never violated; only the name-based convenience lags. The
-handle `Sandbox.Promote` returns is still owner-bound — `template.New` and
-`template.Delete` dial the owner directly, no gossip involved — and is the
-race-free choice immediately after a promote.
+handle `Sandbox.Promote` returns is still owner-bound. `template.Delete` and a
+`template.New` without volumes dial the owner directly; a volume claim may use
+one placement redirect to a node that can resolve both resources.
 
 ## Checkpoints on a cluster
 
@@ -179,10 +206,10 @@ fully from it:
 
 | state | source of truth | survives restart |
 |---|---|---|
-| operator config (`tenants`, `secrets`, egress policies, `bridges`/`networks`, `mesh`, `preview_secret`, `egress_ca`) | `config.json` (human/deploy-tool owned) | re-read at boot |
+| operator config (`tenants`, `volumes`, `secrets`, egress policies, `bridges`/`networks`, `mesh`, `preview_secret`, `egress_ca`) | `config.json` (human/deploy-tool owned) | re-read at boot |
 | API-applied pool targets (`PUT /v1/pools`) | `<data_dir>/pools.json` (machine owned) | yes |
 | claims | the claims journal + `Reconcile` | yes |
-| placement hints (warm counts, template sets) | gossip | rebuilt |
+| placement hints (warm counts, template and volume sets) | gossip | rebuilt |
 | checkpoint ownership | a live per-request probe (no gossip); a healed replica is this node's own persisted copy, aged out by `checkpoint_ttl_hours` | yes |
 
 Pools are managed API-first. The first time a node takes `PUT /v1/pools`, it
@@ -235,3 +262,6 @@ the mesh.
 - `cluster_key` set if the gossip network is not otherwise trusted
 - pool changes via `Client.SetPoolsCluster` (or per-node `SetPools`); the applied
   set persists to `pools.json` and survives restart
+- keep each volume name's dataset identity and access list identical across the
+  fleet, distribute its immutable image to every node meant to advertise it,
+  and verify the fleet view and holder count with `GET /v1/volumes`

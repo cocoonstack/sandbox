@@ -12,7 +12,7 @@ import threading
 
 import pytest
 
-from cocoonsandbox import Client
+from cocoonsandbox import Client, Lsp, Pty, Sandbox, Session
 from cocoonsandbox.conn import Conn
 from cocoonsandbox.frames import PROTO_VERSION
 
@@ -94,28 +94,20 @@ CASES = [
 
 
 def _pty_stub(sb, pid):
-    from cocoonsandbox.sandbox import Pty
-
     return Pty(sb, None, pid)
 
 
 def _session_stub(sb, id):
-    from cocoonsandbox.sandbox import Session
-
     return Session(sb, id)
 
 
 def _lsp_stub(sb, server_id):
-    from cocoonsandbox.sandbox import Lsp
-
     return Lsp(sb, server_id)
 
 
 def _fake_sandbox(monkeypatch, replies):
     """A Sandbox whose _dial yields a real Conn over a socketpair; a guest
     thread records inbound frames and answers the scripted replies."""
-    from cocoonsandbox.sandbox import Sandbox
-
     sent = []
     client_sock, guest_sock = socket.socketpair()
 

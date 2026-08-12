@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -31,7 +32,7 @@ func TestMergeKeepsHigherEpoch(t *testing.T) {
 
 func TestMergeNeverOverwritesSelf(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.UpdateSelf(t.Context(), map[string]int{"k": 3}, nil)
+	m.UpdateSelf(t.Context(), map[string]int{"k": 3}, nil, nil)
 	// A peer claiming to be "a" must not clobber our authoritative self entry.
 	m.merge([]NodeState{{NodeID: "a", Addr: "evil:9999", Epoch: 999, Pools: map[string]int{"k": 0}}})
 
@@ -44,7 +45,7 @@ func TestMergeNeverOverwritesSelf(t *testing.T) {
 
 func TestCandidatesExcludeSelfAndEmpty(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.UpdateSelf(t.Context(), map[string]int{"k": 5}, nil) // self has warm, but is never a candidate
+	m.UpdateSelf(t.Context(), map[string]int{"k": 5}, nil, nil) // self has warm, but is never a candidate
 	m.merge([]NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 2}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Pools: map[string]int{"k": 0}}, // no warm
@@ -62,7 +63,7 @@ func TestCandidatesExcludeSelfAndEmpty(t *testing.T) {
 
 func TestTemplateOwnersExcludeSelfAndUnknown(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.UpdateSelf(t.Context(), nil, []string{"tpl"}) // self holds it, but is never an owner candidate
+	m.UpdateSelf(t.Context(), nil, []string{"tpl"}, nil) // self holds it, but is never an owner candidate
 	m.merge([]NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Templates: []string{"tpl", "other"}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Templates: []string{"other"}},
@@ -87,7 +88,7 @@ func TestForgetPrunesDeadNode(t *testing.T) {
 		t.Errorf("candidates after forget %v, want nil (b pruned)", got)
 	}
 	// forgetting self is a no-op.
-	m.UpdateSelf(t.Context(), map[string]int{"k": 1}, nil)
+	m.UpdateSelf(t.Context(), map[string]int{"k": 1}, nil, nil)
 	m.forget("a")
 	if len(m.Members()) != 1 {
 		t.Error("forget removed self")
@@ -121,7 +122,7 @@ func TestTwoNodeClusterGossipsPools(t *testing.T) {
 	if err := b.mesh.Join([]string{a.addr}); err != nil {
 		t.Fatalf("join: %v", err)
 	}
-	a.mesh.UpdateSelf(t.Context(), map[string]int{"kk": 4}, []string{"tpl-hash"})
+	a.mesh.UpdateSelf(t.Context(), map[string]int{"kk": 4}, []string{"tpl-hash"}, []string{"dataset"})
 
 	// Push/pull sync propagates a's warm counts and template set to b within
 	// a few intervals.
@@ -129,13 +130,81 @@ func TestTwoNodeClusterGossipsPools(t *testing.T) {
 	for time.Now().Before(deadline) {
 		cands := b.mesh.Candidates("kk")
 		owners := b.mesh.TemplateOwners("tpl-hash")
+		volumeOwners := b.mesh.VolumeOwners([]string{"dataset"})
 		if len(cands) == 1 && cands[0] == "node-a:7777" &&
-			len(owners) == 1 && owners[0] == "node-a:7777" {
+			len(owners) == 1 && owners[0] == "node-a:7777" &&
+			len(volumeOwners) == 1 && volumeOwners[0] == "node-a:7777" {
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("node-b never learned node-a's state: view=%+v", b.mesh.Members())
+}
+
+func TestVolumeOwnersRequireEveryNameAndExcludeSelf(t *testing.T) {
+	m := newTestMesh(t, "a")
+	m.UpdateSelf(t.Context(), nil, nil, []string{"dataset", "weights"})
+	m.merge([]NodeState{
+		{NodeID: "b", Addr: "b:7777", Epoch: 1, Volumes: []string{"dataset", "weights"}},
+		{NodeID: "c", Addr: "c:7777", Epoch: 1, Volumes: []string{"dataset"}},
+		{NodeID: "d", Addr: "d:7777", Epoch: 1, Volumes: []string{"weights"}},
+	})
+
+	if owners := m.VolumeOwners([]string{"dataset", "weights"}); !slices.Equal(owners, []string{"b:7777"}) {
+		t.Errorf("owners=%v, want only full holder b", owners)
+	}
+	if owners := m.VolumeOwners([]string{"absent"}); owners != nil {
+		t.Errorf("unknown owners=%v, want nil", owners)
+	}
+	if owners := m.VolumeOwners(nil); owners != nil {
+		t.Errorf("empty request owners=%v, want nil", owners)
+	}
+}
+
+func TestVolumeCandidatesRequireWarmAndEveryVolume(t *testing.T) {
+	m := newTestMesh(t, "a")
+	m.merge([]NodeState{
+		{NodeID: "both", Addr: "both:7777", Epoch: 1, Pools: map[string]int{"k": 2}, Volumes: []string{"dataset", "weights"}},
+		{NodeID: "partial", Addr: "partial:7777", Epoch: 1, Pools: map[string]int{"k": 3}, Volumes: []string{"dataset"}},
+		{NodeID: "cold", Addr: "cold:7777", Epoch: 1, Pools: map[string]int{"k": 0}, Volumes: []string{"dataset", "weights"}},
+	})
+
+	if got := m.VolumeCandidates("k", []string{"dataset", "weights"}); !slices.Equal(got, []string{"both:7777"}) {
+		t.Errorf("candidates=%v, want only warm full holder", got)
+	}
+	if got := m.VolumeCandidates("missing", []string{"dataset"}); got != nil {
+		t.Errorf("missing pool candidates=%v, want nil", got)
+	}
+}
+
+func TestTemplateVolumeOwnersUseTrueIntersection(t *testing.T) {
+	m := newTestMesh(t, "a")
+	m.merge([]NodeState{
+		{NodeID: "template", Addr: "template:7777", Epoch: 1, Templates: []string{"tpl"}},
+		{NodeID: "volume", Addr: "volume:7777", Epoch: 1, Volumes: []string{"dataset"}},
+		{NodeID: "both", Addr: "both:7777", Epoch: 1, Templates: []string{"tpl"}, Volumes: []string{"dataset"}},
+	})
+
+	if owners := m.TemplateVolumeOwners("tpl", []string{"dataset"}); !slices.Equal(owners, []string{"both:7777"}) {
+		t.Errorf("owners=%v, want only intersection holder", owners)
+	}
+	if owners := m.TemplateVolumeOwners("missing", []string{"dataset"}); owners != nil {
+		t.Errorf("missing template owners=%v, want nil", owners)
+	}
+}
+
+func TestVolumeHoldersCountSelfAndPeers(t *testing.T) {
+	m := newTestMesh(t, "a")
+	m.UpdateSelf(t.Context(), nil, nil, []string{"dataset"})
+	m.merge([]NodeState{
+		{NodeID: "b", Addr: "b:7777", Epoch: 1, Volumes: []string{"dataset", "weights"}},
+		{NodeID: "c", Addr: "c:7777", Epoch: 1, Volumes: []string{"weights"}},
+	})
+
+	want := map[string]int{"dataset": 2, "weights": 2}
+	if got := m.VolumeHolders(); !maps.Equal(got, want) {
+		t.Errorf("holders=%v, want %v", got, want)
+	}
 }
 
 func newTestMesh(t *testing.T, id string) *Mesh {

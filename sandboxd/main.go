@@ -70,6 +70,11 @@ func main() {
 	if err != nil {
 		logger.Fatalf(ctx, err, "load config")
 	}
+	for _, volume := range cfg.Volumes {
+		if _, statErr := os.Stat(volume.Path); statErr != nil {
+			logger.Warnf(ctx, "volume %s path %s unavailable at startup: %v", volume.Name, volume.Path, statErr)
+		}
+	}
 	eng := engine.New(cfg.CocoonBin, cfg.Bridges, cfg.Networks, cfg.NoDirectIO, cfg.RestoreMode)
 	if v, warn := eng.VersionWarning(ctx); warn != "" {
 		logger.Warn(ctx, warn)
@@ -104,7 +109,9 @@ func main() {
 		}
 		defer func() { _ = msh.Shutdown() }()
 		placer = msh
-		mgr.SetTemplateNotifier(func() { msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes()) })
+		mgr.SetTemplateNotifier(func() {
+			msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
+		})
 		clusterKey, err := cfg.Mesh.DecodedKey()
 		if err != nil {
 			logger.Fatalf(ctx, err, "decode mesh cluster key")
@@ -194,6 +201,7 @@ func startMesh(ctx context.Context, cfg *config.Config, mgr *pool.Manager) (*mes
 	}
 	// Publish the config digest before Join, so the first gossip carries it.
 	msh.SetSelfDigest(cfg.ClusterDigest(mgr.EgressCAFingerprint()))
+	msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
 	if err := msh.Join(mc.Join); err != nil {
 		_ = msh.Shutdown()
 		return nil, err
@@ -201,8 +209,8 @@ func startMesh(ctx context.Context, cfg *config.Config, mgr *pool.Manager) (*mes
 	return msh, nil
 }
 
-// gossipNodeState republishes this node's warm-pool counts and template set
-// every tick so the mesh's placement view tracks refill and promotes.
+// gossipNodeState republishes this node's warm-pool counts, templates, and
+// locally available volumes every tick so placement tracks filesystem changes.
 func gossipNodeState(ctx context.Context, msh *mesh.Mesh, mgr *pool.Manager) {
 	t := time.NewTicker(gossipInterval)
 	defer t.Stop()
@@ -211,7 +219,7 @@ func gossipNodeState(ctx context.Context, msh *mesh.Mesh, mgr *pool.Manager) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes())
+			msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
 		}
 	}
 }

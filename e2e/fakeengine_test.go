@@ -109,6 +109,10 @@ func (f *fakeEngine) DialGuestPort(context.Context, string, uint16) (net.Conn, e
 
 func (f *fakeEngine) InstallCACert(context.Context, string, []byte) error { return nil }
 
+func (f *fakeEngine) DiskAttach(context.Context, string, engine.VolumeSpec) error { return nil }
+
+func (f *fakeEngine) MountVolume(context.Context, string, string, string) error { return nil }
+
 func (f *fakeEngine) create(name string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

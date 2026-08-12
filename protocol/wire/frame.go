@@ -98,7 +98,7 @@ var (
 	// responseDecoders maps each type tag to a decoder. Two-stage dispatch is
 	// required because the same key differs in shape across variants (info's
 	// procs is a count, ps's procs is a list).
-	responseDecoders = map[string]func([]byte) (Response, error){
+	responseDecoders = map[string]respDecoder{
 		"started":           decodeResp[Started],
 		"stdout":            fastBulk("stdout", decodeResp[Stdout], func(d []byte) Response { return &Stdout{Data: d} }),
 		"stderr":            fastBulk("stderr", decodeResp[Stderr], func(d []byte) Response { return &Stderr{Data: d} }),
@@ -128,6 +128,8 @@ type Request interface{ Op() string }
 
 // Response is a server→client frame; RespType is its wire tag.
 type Response interface{ RespType() string }
+
+type respDecoder func([]byte) (Response, error)
 
 // B64 carries request payload bytes. It exists because silkd's deserializer
 // requires a base64 string and rejects null — which is exactly what
@@ -694,7 +696,7 @@ func AppendBulkRequest(buf []byte, op string, data []byte) []byte {
 
 // fastBulk slices the base64 data out of a canonical bulk frame, skipping the
 // json.Unmarshal that dominates downloads; any other shape falls back to slow.
-func fastBulk(tag string, slow func([]byte) (Response, error), mk func([]byte) Response) func([]byte) (Response, error) {
+func fastBulk(tag string, slow respDecoder, mk func([]byte) Response) respDecoder {
 	head := []byte(`{"type":"` + tag + `","data":"`)
 	return func(line []byte) (Response, error) {
 		after, ok := bytes.CutPrefix(line, head)

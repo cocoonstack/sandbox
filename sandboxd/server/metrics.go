@@ -87,7 +87,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-// handleSandboxes lists live claims for operator tooling — never tokens.
-func (s *Server) handleSandboxes(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, SandboxListResponse{Sandboxes: s.mgr.Sandboxes()})
+// handleSandboxes lists the live claims visible to the caller — never tokens.
+func (s *Server) handleSandboxes(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, SandboxListResponse{Sandboxes: s.mgr.Sandboxes(tenantFrom(r.Context()))})
 }

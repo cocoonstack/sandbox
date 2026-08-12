@@ -306,7 +306,7 @@ func TestArchiveKeepsForeverWhenDeleteZero(t *testing.T) {
 func TestArchiveRetentionPurge(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
-	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "")
+	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}

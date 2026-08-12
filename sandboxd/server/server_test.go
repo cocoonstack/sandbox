@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +74,7 @@ func TestClaimErrorMapping(t *testing.T) {
 	}{
 		{"bad json", `{oops`, nil, http.StatusBadRequest},
 		{"bad key", `{"template":"rt:24.04","net":"lan"}`, fmt.Errorf("%w: unknown net", pool.ErrBadKey), http.StatusBadRequest},
+		{"bad volume", `{"template":"rt:24.04","volumes":[{"name":"data"}]}`, fmt.Errorf("%w: unknown volume", pool.ErrBadVolume), http.StatusBadRequest},
 		{"no egress", `{"template":"rt:24.04","net":"egress"}`, pool.ErrNoEgress, http.StatusConflict},
 		{"engine failure", `{"template":"rt:24.04"}`, errors.New("cocoon vm run: boom"), http.StatusInternalServerError},
 	}
@@ -95,6 +98,24 @@ func TestClaimErrorMapping(t *testing.T) {
 	}
 }
 
+func TestHibernateVolumeCaptureMapsConflict(t *testing.T) {
+	mgr := &fakeManager{hibernate: func(string, string) error { return pool.ErrVolumeCapture }}
+	ts := newTestServer(t, "", mgr, nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/hibernate", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer tok")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("status %d, want 409", resp.StatusCode)
+	}
+}
+
 func TestAPITokenGuard(t *testing.T) {
 	ts := newTestServer(t, "sekret", &fakeManager{}, nil)
 
@@ -108,6 +129,10 @@ func TestAPITokenGuard(t *testing.T) {
 		{"claim no token", "/v1/claim", http.MethodPost, "", http.StatusUnauthorized},
 		{"claim wrong token", "/v1/claim", http.MethodPost, "Bearer nope", http.StatusUnauthorized},
 		{"claim right token", "/v1/claim", http.MethodPost, "Bearer sekret", http.StatusOK},
+		{"volumes no token", "/v1/volumes", http.MethodGet, "", http.StatusUnauthorized},
+		{"volumes right token", "/v1/volumes", http.MethodGet, "Bearer sekret", http.StatusOK},
+		{"sandboxes no token", "/v1/sandboxes", http.MethodGet, "", http.StatusUnauthorized},
+		{"sandboxes right token", "/v1/sandboxes", http.MethodGet, "Bearer sekret", http.StatusOK},
 		{"info no token", "/v1/info", http.MethodGet, "", http.StatusUnauthorized},
 		{"info right token", "/v1/info", http.MethodGet, "Bearer sekret", http.StatusOK},
 		{"put pools no token", "/v1/pools", http.MethodPut, "", http.StatusUnauthorized},
@@ -142,10 +167,74 @@ func TestAPITokenGuard(t *testing.T) {
 	}
 }
 
-// TestTenantAuthMatrix drives the three token kinds across the two endpoint
-// classes: resource-creating verbs take root or tenant tokens (the tenant
-// scope reaches the manager), operator surfaces answer 403 to a tenant —
-// authenticated but not authorized — and 401 to anything unknown.
+func TestVolumeCatalogReturnsScopedFleetProjection(t *testing.T) {
+	mgr := &fakeManager{volumeCatalog: func(tenant string, holders map[string]int) []types.VolumeInfo {
+		if tenant != "acme" {
+			t.Errorf("tenant = %q, want acme", tenant)
+		}
+		if holders["imagenet"] != 3 {
+			t.Errorf("imagenet holders = %d, want 3", holders["imagenet"])
+		}
+		return []types.VolumeInfo{{
+			Name: "imagenet", DefaultMount: "/volumes/imagenet", SizeBytes: 42, Available: true, Nodes: 3,
+		}}
+	}}
+	placer := &fakePlacer{volumeHolders: map[string]int{"imagenet": 3}}
+	srv := New("root", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, "node:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/volumes", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer acme-tok")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("volumes: %v", err)
+	}
+	defer resp.Body.Close()
+	var got types.VolumeListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := []types.VolumeInfo{{
+		Name: "imagenet", DefaultMount: "/volumes/imagenet", SizeBytes: 42, Available: true, Nodes: 3,
+	}}
+	if !slices.Equal(got.Volumes, want) {
+		t.Errorf("volumes = %+v, want %+v", got.Volumes, want)
+	}
+}
+
+func TestSandboxIndexReturnsScopedAppliedVolumes(t *testing.T) {
+	mgr := &fakeManager{sandboxIndex: func(tenant string) []pool.SandboxSummary {
+		if tenant != "acme" {
+			t.Errorf("tenant = %q, want acme", tenant)
+		}
+		return []pool.SandboxSummary{{
+			ID: "sb_1", Volumes: []types.Volume{{Name: "imagenet", Mount: "/datasets/imagenet"}},
+		}}
+	}}
+	ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/sandboxes", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer acme-tok")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("sandboxes: %v", err)
+	}
+	defer resp.Body.Close()
+	var got SandboxListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := []types.Volume{{Name: "imagenet", Mount: "/datasets/imagenet"}}
+	if len(got.Sandboxes) != 1 || got.Sandboxes[0].ID != "sb_1" || !slices.Equal(got.Sandboxes[0].Volumes, want) {
+		t.Errorf("sandboxes = %+v, want sb_1 with %+v", got.Sandboxes, want)
+	}
+}
+
 func TestTenantAuthMatrix(t *testing.T) {
 	mgr := &fakeManager{tenantClaims: map[string]int{"acme": 2}}
 	tenants := []config.TenantSpec{{Name: "acme", Token: "acme-tok"}, {Name: "beta", Token: "beta-tok"}}
@@ -186,8 +275,11 @@ func TestTenantAuthMatrix(t *testing.T) {
 		{"missing token", http.MethodPost, "/v1/claim", "", http.StatusUnauthorized, ""},
 		{"tenant lists own checkpoints", http.MethodGet, "/v1/checkpoints", "acme-tok", http.StatusOK, "acme"},
 		{"root lists all checkpoints", http.MethodGet, "/v1/checkpoints", "sekret", http.StatusOK, ""},
+		{"tenant lists visible volumes", http.MethodGet, "/v1/volumes", "acme-tok", http.StatusOK, "acme"},
+		{"root lists all volumes", http.MethodGet, "/v1/volumes", "sekret", http.StatusOK, ""},
+		{"tenant lists own sandboxes", http.MethodGet, "/v1/sandboxes", "acme-tok", http.StatusOK, "acme"},
+		{"root lists all sandboxes", http.MethodGet, "/v1/sandboxes", "sekret", http.StatusOK, ""},
 		{"tenant forbidden on info", http.MethodGet, "/v1/info", "acme-tok", http.StatusForbidden, ""},
-		{"tenant forbidden on index", http.MethodGet, "/v1/sandboxes", "acme-tok", http.StatusForbidden, ""},
 		{"tenant forbidden on metrics", http.MethodGet, "/metrics", "acme-tok", http.StatusForbidden, ""},
 		{"tenant forbidden on pools", http.MethodPut, "/v1/pools", "acme-tok", http.StatusForbidden, ""},
 		{"tenant forbidden on checkpoint blob", http.MethodGet, "/v1/checkpoints/ck_00000000000000aa/blob", "acme-tok", http.StatusForbidden, ""},
@@ -201,8 +293,8 @@ func TestTenantAuthMatrix(t *testing.T) {
 			if resp.StatusCode != tt.want {
 				t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
 			}
-			reachedManager := resp.StatusCode == http.StatusOK &&
-				(tt.path == "/v1/claim" || tt.path == "/v1/checkpoints")
+			reachedManager := resp.StatusCode == http.StatusOK && slices.Contains(
+				[]string{"/v1/claim", "/v1/checkpoints", "/v1/volumes", "/v1/sandboxes"}, tt.path)
 			if reachedManager && mgr.gotTenant != tt.wantTenant {
 				t.Errorf("manager saw tenant %q, want %q", mgr.gotTenant, tt.wantTenant)
 			}
@@ -681,7 +773,10 @@ func TestCheckpointFlow(t *testing.T) {
 	ts := newTestServer(t, "api", mgr, &fakeDialer{})
 
 	post := func(path, body string) *http.Response {
-		req, _ := http.NewRequest(http.MethodPost, ts.URL+path, strings.NewReader(body))
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
 		req.Header.Set("Authorization", "Bearer api")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -713,7 +808,10 @@ func TestCheckpointFlow(t *testing.T) {
 		t.Errorf("unknown checkpoint claim: status %d, want 404", resp3.StatusCode)
 	}
 
-	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/checkpoints/"+cr.Checkpoint.ID, nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts.URL+"/v1/checkpoints/"+cr.Checkpoint.ID, nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
 	req.Header.Set("Authorization", "Bearer api")
 	resp4, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -734,7 +832,10 @@ func TestDeleteCheckpointNoForwardQueryParam(t *testing.T) {
 	ts := newTestServer(t, "api", mgr, &fakeDialer{})
 
 	del := func(path string) int {
-		req, _ := http.NewRequest(http.MethodDelete, ts.URL+path, nil)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts.URL+path, nil)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
 		req.Header.Set("Authorization", "Bearer api")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -769,7 +870,10 @@ func TestDeleteCheckpointForgetsProbeCache(t *testing.T) {
 		prober.forgotten = nil
 		mgr := &fakeManager{deleteCheckpoint: func(string) error { return nil }}
 		ts := newPlacerTestServer(t, "api", mgr, prober)
-		req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/checkpoints/ck_0011223344556677", nil)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts.URL+"/v1/checkpoints/ck_0011223344556677", nil)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
 		req.Header.Set("Authorization", "Bearer api")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -785,7 +889,10 @@ func TestDeleteCheckpointForgetsProbeCache(t *testing.T) {
 		prober.forgotten = nil
 		mgr := &fakeManager{deleteCheckpoint: func(string) error { return pool.ErrUnknownCheckpoint }}
 		ts := newPlacerTestServer(t, "api", mgr, prober)
-		req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/checkpoints/ck_0011223344556677?no_forward=1", nil)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts.URL+"/v1/checkpoints/ck_0011223344556677?no_forward=1", nil)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
 		req.Header.Set("Authorization", "Bearer api")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -883,7 +990,10 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
-	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/templates?template=tpl", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts.URL+"/v1/templates?template=tpl", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
@@ -901,7 +1011,10 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 	}
 
 	// no_redirect answers for this node alone, even with owners in gossip.
-	req2, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/templates?template=tpl&no_redirect=1", nil)
+	req2, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts.URL+"/v1/templates?template=tpl&no_redirect=1", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
 	resp2, err := http.DefaultClient.Do(req2)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
@@ -914,7 +1027,10 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 	srvNoOwner := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{}, nil, nil, nil)
 	ts2 := httptest.NewServer(srvNoOwner.Handler())
 	t.Cleanup(func() { ts2.Close(); srvNoOwner.CloseRelays() })
-	req3, _ := http.NewRequest(http.MethodDelete, ts2.URL+"/v1/templates?template=tpl", nil)
+	req3, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts2.URL+"/v1/templates?template=tpl", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
 	resp3, err := http.DefaultClient.Do(req3)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
@@ -947,6 +1063,278 @@ func TestClaimProvisionsWhenNoCandidate(t *testing.T) {
 	// The claim_ref on the wire must thread through the handler to the claim.
 	if mgr.gotClaimRef != "ns1/w1" {
 		t.Errorf("claim_ref not threaded: got %q, want %q", mgr.gotClaimRef, "ns1/w1")
+	}
+}
+
+func TestVolumeClaimUsesWarmBeforeRedirectOrProvision(t *testing.T) {
+	wantVolumes := []types.Volume{{Name: "imagenet", Mount: "/volumes/imagenet"}}
+	for _, tt := range []struct {
+		name               string
+		warmHit            bool
+		volumeCandidates   []string
+		wantID             string
+		wantRedirect       []string
+		wantProvisionCalls int
+		wantCandidateCalls int
+	}{
+		{name: "local warm hit", warmHit: true, wantID: "sb_warm"},
+		{
+			name:             "warm miss redirects to volume-aware warm candidate",
+			volumeCandidates: []string{"warm-volume:7777"}, wantRedirect: []string{"warm-volume:7777"},
+			wantCandidateCalls: 1,
+		},
+		{
+			name: "warm miss without candidate provisions locally", wantID: "sb_provisioned",
+			wantProvisionCalls: 1, wantCandidateCalls: 1,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+				return &types.Sandbox{ID: "sb_provisioned", Token: "tok", Volumes: slices.Clone(wantVolumes)}, nil
+			}}
+			if tt.warmHit {
+				mgr.warmClaim = func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+					return &types.Sandbox{ID: "sb_warm", Token: "tok", Volumes: slices.Clone(wantVolumes)}, nil
+				}
+			}
+			placer := &fakePlacer{
+				addrs: []string{"wrong-general-candidate:7777"}, volumeCandidates: tt.volumeCandidates,
+			}
+			srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
+			ts := httptest.NewServer(srv.Handler())
+			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+			resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"rt:24.04","volumes":[{"name":"imagenet"}]}`))
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			defer resp.Body.Close()
+			var got types.ClaimResponse
+			if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if resp.StatusCode != http.StatusOK || got.ID != tt.wantID || !slices.Equal(got.Redirect, tt.wantRedirect) {
+				t.Errorf("status=%d response=%+v", resp.StatusCode, got)
+			}
+			if tt.wantID != "" && !slices.Equal(got.Volumes, wantVolumes) {
+				t.Errorf("volumes=%+v, want %+v", got.Volumes, wantVolumes)
+			}
+			if mgr.warmCalls != 1 || mgr.provisionCalls != tt.wantProvisionCalls ||
+				!slices.Equal(mgr.gotWarmVolumes, wantVolumes) {
+				t.Errorf("warm=%d warm volumes=%+v provision=%d", mgr.warmCalls, mgr.gotWarmVolumes, mgr.provisionCalls)
+			}
+			badCandidateNames := tt.wantCandidateCalls > 0 &&
+				!slices.Equal(placer.volumeCandidateNames, []string{"imagenet"})
+			if placer.candidateCalls != 0 || placer.volumeCandidateCalls != tt.wantCandidateCalls || badCandidateNames {
+				t.Errorf("candidates=%d volume candidates=%d names=%v",
+					placer.candidateCalls, placer.volumeCandidateCalls, placer.volumeCandidateNames)
+			}
+		})
+	}
+}
+
+func TestVolumeClaimUsesVolumeAndTemplateIntersections(t *testing.T) {
+	for _, tt := range []struct {
+		name                string
+		localVolumes        bool
+		localPromoted       bool
+		hasGolden           bool
+		templateOwners      []string
+		volumeOwners        []string
+		templateVolumeOwner []string
+		wantRedirect        string
+		wantStatus          int
+		wantVolumeCalls     int
+		wantTemplateCalls   int
+		wantWarmCalls       int
+		wantCandidateCalls  int
+		noRedirect          bool
+		requirePromoted     bool
+		wantPromoted        bool
+	}{
+		{
+			name: "ordinary local volume warm-misses then provisions", localVolumes: true,
+			wantStatus: http.StatusOK, wantWarmCalls: 1, wantCandidateCalls: 1,
+		},
+		{
+			name: "configured golden with remote volume uses volume owner", hasGolden: true,
+			volumeOwners: []string{"volume:7777"}, wantRedirect: "volume:7777",
+			wantStatus: http.StatusOK, wantVolumeCalls: 1, wantCandidateCalls: 1,
+		},
+		{
+			name:       "unknown fleet volume fails without provisioning",
+			wantStatus: http.StatusBadRequest, wantVolumeCalls: 1, wantCandidateCalls: 1,
+		},
+		{
+			name:         "redirect target resolves locally without another hop",
+			volumeOwners: []string{"volume:7777"}, wantStatus: http.StatusBadRequest, noRedirect: true,
+		},
+		{
+			name: "remote promoted template uses true intersection", localVolumes: true,
+			templateOwners: []string{"template:7777"}, templateVolumeOwner: []string{"both:7777"},
+			wantRedirect: "both:7777", wantStatus: http.StatusOK, wantTemplateCalls: 1, wantPromoted: true,
+		},
+		{
+			name: "redirect target provisions the required promoted template", localVolumes: true,
+			localPromoted: true, noRedirect: true, requirePromoted: true,
+			wantStatus: http.StatusOK, wantPromoted: true,
+		},
+		{
+			name:          "local promoted template with remote volume uses intersection",
+			localPromoted: true, volumeOwners: []string{"volume-only:7777"},
+			templateVolumeOwner: []string{"both:7777"}, wantRedirect: "both:7777",
+			wantStatus: http.StatusOK, wantTemplateCalls: 1, wantPromoted: true,
+		},
+		{
+			name:          "shared-store template falls back to a volume holder",
+			localPromoted: true, volumeOwners: []string{"volume-only:7777"},
+			wantRedirect: "volume-only:7777", wantStatus: http.StatusOK,
+			wantVolumeCalls: 1, wantTemplateCalls: 1, wantPromoted: true,
+		},
+		{
+			name:         "redirect target refuses missing promoted template before provisioning",
+			localVolumes: true, noRedirect: true, requirePromoted: true,
+			wantStatus: http.StatusBadRequest, wantPromoted: true,
+		},
+		{
+			name:          "promoted template refuses when no volume holder exists",
+			localPromoted: true, wantStatus: http.StatusBadRequest,
+			wantVolumeCalls: 1, wantTemplateCalls: 1,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := &fakeManager{
+				hasGolden: tt.hasGolden, hasPromoted: tt.localPromoted,
+				volumePlacement: func(types.PoolKey, string, []string) (bool, error) { return tt.localVolumes, nil },
+			}
+			placer := &fakePlacer{
+				addrs: []string{"warm-peer:7777"}, owners: tt.templateOwners,
+				volumeOwners: tt.volumeOwners, templateVolumeOwners: tt.templateVolumeOwner,
+			}
+			srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
+			ts := httptest.NewServer(srv.Handler())
+			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+			request := types.ClaimRequest{
+				Template: "tpl", Volumes: []types.Volume{{Name: "imagenet"}},
+				NoRedirect: tt.noRedirect, RequirePromoted: tt.requirePromoted,
+			}
+			body, err := json.Marshal(request)
+			if err != nil {
+				t.Fatalf("encode request: %v", err)
+			}
+			resp, err := http.Post(ts.URL+"/v1/claim", "application/json", bytes.NewReader(body))
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != tt.wantStatus {
+				t.Fatalf("status=%d, want %d", resp.StatusCode, tt.wantStatus)
+			}
+			if tt.wantStatus == http.StatusOK {
+				assertVolumeClaimResponse(t, resp.Body, tt.wantRedirect, tt.wantPromoted)
+			}
+			wantProvision := 0
+			if tt.wantStatus == http.StatusOK && tt.wantRedirect == "" {
+				wantProvision = 1
+			}
+			if mgr.provisionCalls != wantProvision {
+				t.Errorf("provision calls=%d, want %d", mgr.provisionCalls, wantProvision)
+			}
+			if mgr.gotRequirePromoted != (wantProvision == 1 && tt.wantPromoted) {
+				t.Errorf("promoted provision=%v", mgr.gotRequirePromoted)
+			}
+			if mgr.warmCalls != tt.wantWarmCalls || placer.candidateCalls != 0 ||
+				placer.volumeCandidateCalls != tt.wantCandidateCalls ||
+				placer.volumeOwnerCalls != tt.wantVolumeCalls || placer.templateVolumeCalls != tt.wantTemplateCalls {
+				t.Errorf("warm=%d candidates=%d volume candidates=%d volume owners=%d template-volume owners=%d",
+					mgr.warmCalls, placer.candidateCalls, placer.volumeCandidateCalls,
+					placer.volumeOwnerCalls, placer.templateVolumeCalls)
+			}
+		})
+	}
+}
+
+func TestVolumeClaimValidatesKeyBeforePlacement(t *testing.T) {
+	mgr := &fakeManager{
+		volumePlacement: func(types.PoolKey, string, []string) (bool, error) {
+			return false, pool.ErrNoEgress
+		},
+	}
+	placer := &fakePlacer{volumeOwners: []string{"volume:7777"}}
+	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+	resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(
+		`{"template":"rt:24.04","net":"egress","volumes":[{"name":"imagenet"}]}`))
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("status=%d, want 409", resp.StatusCode)
+	}
+	if mgr.provisionCalls != 0 || placer.volumeOwnerCalls != 0 || placer.templateVolumeCalls != 0 {
+		t.Errorf("provision=%d volume owners=%d template-volume owners=%d",
+			mgr.provisionCalls, placer.volumeOwnerCalls, placer.templateVolumeCalls)
+	}
+}
+
+func TestVolumeClaimQuotaDoesNotRedirect(t *testing.T) {
+	mgr := &fakeManager{warmClaim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+		return nil, pool.ErrQuota
+	}}
+	placer := &fakePlacer{
+		addrs: []string{"wrong-general-candidate:7777"}, volumeCandidates: []string{"wrong-volume-candidate:7777"},
+	}
+	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+	resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"rt:24.04","volumes":[{"name":"imagenet"}]}`))
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("status=%d, want 429", resp.StatusCode)
+	}
+	if mgr.warmCalls != 1 || mgr.provisionCalls != 0 ||
+		placer.candidateCalls != 0 || placer.volumeCandidateCalls != 0 {
+		t.Errorf("warm=%d provision=%d candidates=%d volume candidates=%d",
+			mgr.warmCalls, mgr.provisionCalls, placer.candidateCalls, placer.volumeCandidateCalls)
+	}
+}
+
+func TestVolumeClaimRejectsShapeBeforePlacement(t *testing.T) {
+	for _, body := range []string{
+		`{"template":"rt:24.04","volumes":["data"]}`,
+		`{"template":"rt:24.04","volumes":[{"name":"data"},{"name":"data"}]}`,
+		`{"template":"rt:24.04","volumes":[{"name":"cocoon-data"}]}`,
+		`{"template":"rt:24.04","engine":"fc","volumes":[{"name":"data"}]}`,
+		`{"template":"rt:24.04","volumes":[{"name":"data","mount":"relative"}]}`,
+		`{"template":"rt:24.04","volumes":[{"name":"data","mount":"/datasets"},{"name":"other","mount":"/datasets/nested"}]}`,
+		`{"template":"rt:24.04","volumes":[{"name":"a"},{"name":"b"},{"name":"c"},{"name":"d"},{"name":"e"},{"name":"f"},{"name":"g"},{"name":"h"},{"name":"i"}]}`,
+	} {
+		mgr := &fakeManager{}
+		placer := &fakePlacer{addrs: []string{"warm-peer:7777"}, owners: []string{"owner:7777"}}
+		srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
+		ts := httptest.NewServer(srv.Handler())
+
+		resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		resp.Body.Close()
+		ts.Close()
+		srv.CloseRelays()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("body=%s status=%d, want 400", body, resp.StatusCode)
+		}
+		if mgr.provisionCalls != 0 || placer.candidateCalls != 0 {
+			t.Errorf("body=%s provision=%d candidates=%d", body, mgr.provisionCalls, placer.candidateCalls)
+		}
 	}
 }
 
@@ -1362,6 +1750,26 @@ func TestCheckpointClaimProbesRealPeerAndRedirects(t *testing.T) {
 	}
 }
 
+func assertVolumeClaimResponse(t *testing.T, body io.Reader, wantRedirect string, wantRequirePromoted bool) {
+	t.Helper()
+	var got types.ClaimResponse
+	if err := json.NewDecoder(body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if wantRedirect != "" {
+		if !slices.Equal(got.Redirect, []string{wantRedirect}) {
+			t.Errorf("redirect=%v, want [%s]", got.Redirect, wantRedirect)
+		}
+		if got.RequirePromoted != wantRequirePromoted {
+			t.Errorf("require_promoted=%v, want %v", got.RequirePromoted, wantRequirePromoted)
+		}
+		return
+	}
+	if got.ID == "" || len(got.Redirect) != 0 {
+		t.Errorf("response=%+v, want local claim", got)
+	}
+}
+
 func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *httptest.Server {
 	t.Helper()
 	return newTenantTestServer(t, apiToken, nil, mgr, dialer)
@@ -1403,14 +1811,14 @@ func credToken(cred pool.Cred) string {
 	return cred.Token
 }
 
-// fakeManager implements Manager with overridable behavior. ClaimWarm always
-// misses, so the server's warm-miss → redirect → provision path is exercised;
-// the claim hook stands in for the provision result. Tenant-scoped methods
-// record the tenant they were handed in gotTenant.
+// fakeManager implements Manager with overridable behavior. ClaimWarm misses
+// unless warmClaim is set; claim stands in for the provision result.
+// Tenant-scoped methods record the tenant they were handed in gotTenant.
 type fakeManager struct {
 	ckptDir              string
 	hasCheckpoint        map[string]bool
 	claim                func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
+	warmClaim            func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
 	release              func(id, token string) error
 	releaseOp            func(id string) error
 	socket               func(id, token string) (string, error)
@@ -1422,6 +1830,7 @@ type fakeManager struct {
 
 	deleteGolden func(key types.PoolKey) error
 	hasGolden    bool
+	hasPromoted  bool
 
 	audited          func(id string, line []byte)
 	checkpoint       func(id, token, name string) (types.Checkpoint, error)
@@ -1434,26 +1843,40 @@ type fakeManager struct {
 	infoPools        []pool.PoolInfo
 	claimDeadline    func(id, token string) (time.Time, error)
 
-	gotTenant    string
-	gotClaimRef  string
-	gotNoForward bool
-	tenantClaims map[string]int
-	draining     bool
+	gotTenant          string
+	gotClaimRef        string
+	gotVolumes         []types.Volume
+	gotWarmVolumes     []types.Volume
+	gotRequirePromoted bool
+	warmCalls          int
+	provisionCalls     int
+	gotNoForward       bool
+	tenantClaims       map[string]int
+	volumePlacement    func(key types.PoolKey, tenant string, names []string) (bool, error)
+	placementCalls     int
+	placementNames     []string
+	volumeCatalog      func(tenant string, holders map[string]int) []types.VolumeInfo
+	sandboxIndex       func(tenant string) []pool.SandboxSummary
+	draining           bool
 }
 
-func (f *fakeManager) ClaimWarm(_ context.Context, _ types.PoolKey, _ time.Duration, tenant, claimRef string) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
+	f.warmCalls++
 	f.gotTenant = tenant
 	f.gotClaimRef = claimRef
-	return nil, pool.ErrNoWarm
-}
-
-func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string) (*types.Sandbox, error) {
-	f.gotTenant = tenant
-	f.gotClaimRef = claimRef
-	if f.claim == nil {
-		return &types.Sandbox{ID: "sb_1", Token: "tok"}, nil
+	f.gotWarmVolumes = slices.Clone(volumes)
+	if f.warmClaim == nil {
+		return nil, pool.ErrNoWarm
 	}
-	return f.claim(ctx, key, ttl)
+	return f.warmClaim(ctx, key, ttl)
+}
+
+func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
+	return fakeClaimProvision(f, ctx, key, ttl, tenant, claimRef, volumes, false)
+}
+
+func (f *fakeManager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
+	return fakeClaimProvision(f, ctx, key, ttl, tenant, claimRef, volumes, true)
 }
 
 // Release dispatches to the operator or per-sandbox hook, mirroring the
@@ -1519,6 +1942,10 @@ func (f *fakeManager) HasGolden(context.Context, types.PoolKey) bool {
 	return f.hasGolden
 }
 
+func (f *fakeManager) HasPromotedTemplate(context.Context, types.PoolKey) bool {
+	return f.hasPromoted
+}
+
 func (f *fakeManager) ClaimDeadline(id, token string) (time.Time, error) {
 	if f.claimDeadline != nil {
 		return f.claimDeadline(id, token)
@@ -1536,7 +1963,31 @@ func (f *fakeManager) Counters() pool.Counters { return pool.Counters{} }
 
 func (f *fakeManager) TenantClaims() map[string]int { return f.tenantClaims }
 
-func (f *fakeManager) Sandboxes() []pool.SandboxSummary { return nil }
+func (f *fakeManager) VolumePlacement(key types.PoolKey, tenant string, names []string) (bool, error) {
+	f.placementCalls++
+	f.gotTenant = tenant
+	f.placementNames = slices.Clone(names)
+	if f.volumePlacement == nil {
+		return true, nil
+	}
+	return f.volumePlacement(key, tenant, names)
+}
+
+func (f *fakeManager) Volumes(tenant string, holders map[string]int) []types.VolumeInfo {
+	f.gotTenant = tenant
+	if f.volumeCatalog == nil {
+		return nil
+	}
+	return f.volumeCatalog(tenant, holders)
+}
+
+func (f *fakeManager) Sandboxes(tenant string) []pool.SandboxSummary {
+	f.gotTenant = tenant
+	if f.sandboxIndex == nil {
+		return nil
+	}
+	return f.sandboxIndex(tenant)
+}
 
 func (f *fakeManager) Sandbox(string) (pool.SandboxSummary, bool) {
 	return pool.SandboxSummary{}, false
@@ -1615,39 +2066,6 @@ func (f *fakeManager) Drain(context.Context) { f.draining = true }
 
 func (f *fakeManager) Uncordon(context.Context) { f.draining = false }
 
-type fakeDialer struct {
-	dial func(ctx context.Context, sock string) (net.Conn, error)
-}
-
-func (f *fakeDialer) DialSilkd(ctx context.Context, sock string) (net.Conn, error) {
-	if f.dial == nil {
-		c, _ := net.Pipe()
-		return c, nil
-	}
-	return f.dial(ctx, sock)
-}
-
-type fakePlacer struct {
-	addrs  []string
-	owners []string
-}
-
-func (f *fakePlacer) Candidates(string) []string     { return f.addrs }
-func (f *fakePlacer) TemplateOwners(string) []string { return f.owners }
-func (f *fakePlacer) PeerAddrs() []string            { return f.addrs }
-func (f *fakePlacer) ConfigMismatches() int          { return 0 }
-
-// fakeProber stubs CheckpointProber with a fixed answer, standing in for a
-// live HEAD fan-out. forgotten records every id Forget was called with, so
-// tests can assert a delete evicted the right cache entry.
-type fakeProber struct {
-	owners    []string
-	forgotten []string
-}
-
-func (f *fakeProber) Owners(context.Context, string) []string { return f.owners }
-func (f *fakeProber) Forget(id string)                        { f.forgotten = append(f.forgotten, id) }
-
 // FetchCheckpoint serves the peer-transfer read; the fake reports every record
 // missing unless a test supplies a directory.
 func (f *fakeManager) FetchCheckpoint(_ context.Context, _ string) (string, []byte, func(), error) {
@@ -1662,6 +2080,67 @@ func (f *fakeManager) FetchCheckpoint(_ context.Context, _ string) (string, []by
 func (f *fakeManager) HasCheckpoint(_ context.Context, ckptID string) bool {
 	return f.hasCheckpoint[ckptID]
 }
+
+type fakeDialer struct {
+	dial func(ctx context.Context, sock string) (net.Conn, error)
+}
+
+func (f *fakeDialer) DialSilkd(ctx context.Context, sock string) (net.Conn, error) {
+	if f.dial == nil {
+		c, _ := net.Pipe()
+		return c, nil
+	}
+	return f.dial(ctx, sock)
+}
+
+type fakePlacer struct {
+	addrs                []string
+	owners               []string
+	volumeCandidates     []string
+	volumeOwners         []string
+	templateVolumeOwners []string
+	volumeHolders        map[string]int
+	candidateCalls       int
+	volumeCandidateCalls int
+	volumeCandidateNames []string
+	volumeOwnerCalls     int
+	templateVolumeCalls  int
+}
+
+func (f *fakePlacer) Candidates(string) []string {
+	f.candidateCalls++
+	return f.addrs
+}
+
+func (f *fakePlacer) VolumeCandidates(_ string, names []string) []string {
+	f.volumeCandidateCalls++
+	f.volumeCandidateNames = slices.Clone(names)
+	return f.volumeCandidates
+}
+func (f *fakePlacer) TemplateOwners(string) []string { return f.owners }
+func (f *fakePlacer) VolumeOwners([]string) []string {
+	f.volumeOwnerCalls++
+	return f.volumeOwners
+}
+
+func (f *fakePlacer) TemplateVolumeOwners(string, []string) []string {
+	f.templateVolumeCalls++
+	return f.templateVolumeOwners
+}
+func (f *fakePlacer) VolumeHolders() map[string]int { return f.volumeHolders }
+func (f *fakePlacer) PeerAddrs() []string           { return f.addrs }
+func (f *fakePlacer) ConfigMismatches() int         { return 0 }
+
+// fakeProber stubs CheckpointProber with a fixed answer, standing in for a
+// live HEAD fan-out. forgotten records every id Forget was called with, so
+// tests can assert a delete evicted the right cache entry.
+type fakeProber struct {
+	owners    []string
+	forgotten []string
+}
+
+func (f *fakeProber) Owners(context.Context, string) []string { return f.owners }
+func (f *fakeProber) Forget(id string)                        { f.forgotten = append(f.forgotten, id) }
 
 // newPlacerTestServer builds a server with a checkpoint prober, which the
 // shared helper deliberately leaves nil (most tests are single-node); the
@@ -1687,4 +2166,16 @@ func postJSON(t *testing.T, url, token, body string) *http.Response {
 		t.Fatalf("do: %v", err)
 	}
 	return resp
+}
+
+func fakeClaimProvision(f *fakeManager, ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume, requirePromoted bool) (*types.Sandbox, error) {
+	f.provisionCalls++
+	f.gotTenant = tenant
+	f.gotClaimRef = claimRef
+	f.gotVolumes = slices.Clone(volumes)
+	f.gotRequirePromoted = requirePromoted
+	if f.claim == nil {
+		return &types.Sandbox{ID: "sb_1", Token: "tok", Volumes: slices.Clone(volumes)}, nil
+	}
+	return f.claim(ctx, key, ttl)
 }

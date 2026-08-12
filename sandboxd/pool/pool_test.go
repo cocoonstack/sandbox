@@ -705,9 +705,9 @@ func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Ma
 // claimAny composes warm-then-provision the way the server does around the
 // redirect decision; production has no single-call form.
 func claimAny(ctx context.Context, m *Manager, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
-	sb, err := m.ClaimWarm(ctx, key, ttl, "", "")
+	sb, err := m.ClaimWarm(ctx, key, ttl, "", "", nil)
 	if errors.Is(err, ErrNoWarm) {
-		return m.ClaimProvision(ctx, key, ttl, "", "")
+		return m.ClaimProvision(ctx, key, ttl, "", "", nil)
 	}
 	return sb, err
 }
@@ -762,6 +762,9 @@ type fakeEngine struct {
 	colds         []string
 	removes       []string
 	probeTimeouts []time.Duration
+	volumeSpecs   []engine.VolumeSpec
+	volumeMounts  []types.Volume
+	volumeOps     []string
 
 	hibernates, restores, snapRemoves []string
 	snapSaves, exports, snapshots     []string
@@ -769,6 +772,9 @@ type fakeEngine struct {
 	caInstalls                        []string // vsock sockets InstallCACert was called on
 	staleReconciles                   []string // VM names ReconcileStaleCreate was called on
 	installCAErr                      error
+	diskAttachErr                     error
+	diskAttachCancel                  context.CancelFunc
+	mountVolumeErr                    error
 	stopped                           map[string]bool
 	creating                          map[string]bool // VMs List reports in the creating state
 	staleOutcome                      engine.StaleCreateOutcome
@@ -808,6 +814,7 @@ func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) (t
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.colds = append(f.colds, name)
+	f.volumeOps = append(f.volumeOps, "provision")
 	if f.runColdErr != nil {
 		return types.VMRecord{}, f.runColdErr
 	}
@@ -967,6 +974,7 @@ func (f *fakeEngine) List(_ context.Context, filters ...string) ([]types.VMRecor
 func (f *fakeEngine) Probe(_ context.Context, _ string, timeout time.Duration) error {
 	f.mu.Lock()
 	f.probeTimeouts = append(f.probeTimeouts, timeout)
+	f.volumeOps = append(f.volumeOps, "probe")
 	stall := f.probeStall
 	err := f.probeErr
 	f.mu.Unlock()
@@ -987,10 +995,30 @@ func (f *fakeEngine) InstallCACert(_ context.Context, vsockSocket string, _ []by
 	return f.installCAErr
 }
 
+func (f *fakeEngine) DiskAttach(_ context.Context, _ string, spec engine.VolumeSpec) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumeSpecs = append(f.volumeSpecs, spec)
+	f.volumeOps = append(f.volumeOps, "attach:"+spec.Name)
+	if f.diskAttachCancel != nil {
+		f.diskAttachCancel()
+	}
+	return f.diskAttachErr
+}
+
+func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumeMounts = append(f.volumeMounts, types.Volume{Name: name, Mount: mount})
+	f.volumeOps = append(f.volumeOps, "mount:"+name+":"+mount)
+	return f.mountVolumeErr
+}
+
 func (f *fakeEngine) clone(from, name string) (types.VMRecord, error) {
 	f.mu.Lock()
 	f.clones = append(f.clones, name)
 	f.cloneFroms = append(f.cloneFroms, from)
+	f.volumeOps = append(f.volumeOps, "provision")
 	call := len(f.clones)
 	stall, err, failNth := f.cloneStall, f.cloneErr, f.cloneFailNth
 	f.mu.Unlock()

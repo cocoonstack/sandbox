@@ -1,9 +1,8 @@
-// Package mesh gossips per-node warm-pool counts over a hashicorp/memberlist
-// SWIM cluster, so any node can redirect a claim to a peer that already holds
-// a warm sandbox for the requested pool key. Gossip carries only placement
-// hints — per-sandbox state stays node-local — so a stale view costs at most
-// one extra redirect, never correctness. A single node with no seeds is a
-// valid mesh of one.
+// Package mesh gossips per-node warm counts, promoted templates, and available
+// volume names over a hashicorp/memberlist SWIM cluster. Gossip carries only
+// placement hints — per-sandbox state stays node-local — so a stale view costs
+// at most one failed redirect, never correctness. A single node with no seeds
+// is a valid mesh of one.
 package mesh
 
 import (
@@ -33,6 +32,7 @@ type NodeState struct {
 	Epoch     uint64         `json:"epoch"`
 	Pools     map[string]int `json:"pools"`               // PoolKey hash → warm count
 	Templates []string       `json:"templates,omitempty"` // promoted-template key hashes on disk
+	Volumes   []string       `json:"volumes,omitempty"`   // locally available dataset names
 	Digest    string         `json:"digest,omitempty"`    // cluster-invariant config digest
 }
 
@@ -103,15 +103,14 @@ func (m *Mesh) Join(seeds []string) error {
 	return nil
 }
 
-// UpdateSelf republishes this node's warm-pool counts and promoted-template
-// set, bumping the epoch so peers adopt the new view. An unchanged view is
-// not republished. templates must arrive sorted: the unchanged compare is
-// order-sensitive.
-func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates []string) {
+// UpdateSelf republishes this node's warm-pool counts, promoted-template set,
+// and locally available volumes. An unchanged view does not bump the epoch.
+// templates and volumes must arrive sorted: the compare is order-sensitive.
+func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates, volumes []string) {
 	m.updateMu.Lock()
 	defer m.updateMu.Unlock()
 	m.mu.Lock()
-	if maps.Equal(m.self.Pools, pools) && slices.Equal(m.self.Templates, templates) {
+	if maps.Equal(m.self.Pools, pools) && slices.Equal(m.self.Templates, templates) && slices.Equal(m.self.Volumes, volumes) {
 		m.mu.Unlock()
 		return
 	}
@@ -128,6 +127,7 @@ func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates [
 	m.self.Epoch = epoch
 	m.self.Pools = pools
 	m.self.Templates = templates
+	m.self.Volumes = volumes
 	m.view[m.self.NodeID] = m.self
 	m.mu.Unlock()
 }
@@ -162,38 +162,12 @@ func (m *Mesh) ConfigMismatches() int {
 // chosen power-of-two-choices to avoid herding every waiter onto one node.
 // Self is never a candidate — the caller has already missed locally.
 func (m *Mesh) Candidates(keyHash string) []string {
-	m.mu.Lock()
-	type cand struct {
-		addr string
-		warm int
-	}
-	var pool []cand
-	for id, st := range m.view {
-		if id == m.self.NodeID {
-			continue
-		}
-		if st.Pools[keyHash] > 0 {
-			pool = append(pool, cand{st.Addr, st.Pools[keyHash]})
-		}
-	}
-	m.mu.Unlock()
+	return m.warmCandidates(keyHash, func(NodeState) bool { return true })
+}
 
-	switch len(pool) {
-	case 0:
-		return nil
-	case 1:
-		return []string{pool[0].addr}
-	}
-	i := rand.IntN(len(pool))     //nolint:gosec // placement jitter, not crypto
-	j := rand.IntN(len(pool) - 1) //nolint:gosec // placement jitter, not crypto
-	if j >= i {
-		j++
-	}
-	a, b := pool[i], pool[j]
-	if b.warm > a.warm {
-		a, b = b, a
-	}
-	return []string{a.addr, b.addr}
+// VolumeCandidates returns warm peers that advertise every requested volume.
+func (m *Mesh) VolumeCandidates(keyHash string, names []string) []string {
+	return m.warmCandidates(keyHash, func(st NodeState) bool { return containsAll(st.Volumes, names) })
 }
 
 // TemplateOwners returns up to two peer addresses whose gossiped template
@@ -201,20 +175,34 @@ func (m *Mesh) Candidates(keyHash string) []string {
 // delete of a template this node does not hold. Self is excluded: the caller
 // has already checked its own disk.
 func (m *Mesh) TemplateOwners(keyHash string) []string {
+	return m.owners(func(st NodeState) bool { return slices.Contains(st.Templates, keyHash) })
+}
+
+// VolumeOwners returns peers that currently advertise every requested volume.
+// Self is excluded because the caller checks local availability first.
+func (m *Mesh) VolumeOwners(names []string) []string {
+	return m.owners(func(st NodeState) bool { return containsAll(st.Volumes, names) })
+}
+
+// TemplateVolumeOwners returns peers that hold both the promoted template and
+// every requested volume, avoiding an incorrect intersection after truncation.
+func (m *Mesh) TemplateVolumeOwners(keyHash string, names []string) []string {
+	return m.owners(func(st NodeState) bool {
+		return slices.Contains(st.Templates, keyHash) && containsAll(st.Volumes, names)
+	})
+}
+
+// VolumeHolders counts every member advertising each volume, including self.
+func (m *Mesh) VolumeHolders() map[string]int {
 	m.mu.Lock()
-	var owners []string
-	for id, st := range m.view {
-		if id != m.self.NodeID && slices.Contains(st.Templates, keyHash) {
-			owners = append(owners, st.Addr)
+	defer m.mu.Unlock()
+	holders := map[string]int{}
+	for _, st := range m.view {
+		for _, name := range st.Volumes {
+			holders[name]++
 		}
 	}
-	m.mu.Unlock()
-	// Which two survive truncation is already jittered by map iteration
-	// order; unlike Candidates there is no warmth to rank by.
-	if len(owners) > 2 {
-		owners = owners[:2]
-	}
-	return owners
+	return holders
 }
 
 // Members returns the current cluster view (self included).
@@ -244,8 +232,58 @@ func (m *Mesh) Shutdown() error {
 	return m.ml.Shutdown()
 }
 
+func (m *Mesh) warmCandidates(keyHash string, match func(NodeState) bool) []string {
+	m.mu.Lock()
+	type cand struct {
+		addr string
+		warm int
+	}
+	var pool []cand
+	for id, st := range m.view {
+		if id == m.self.NodeID {
+			continue
+		}
+		if st.Pools[keyHash] > 0 && match(st) {
+			pool = append(pool, cand{st.Addr, st.Pools[keyHash]})
+		}
+	}
+	m.mu.Unlock()
+
+	switch len(pool) {
+	case 0:
+		return nil
+	case 1:
+		return []string{pool[0].addr}
+	}
+	i := rand.IntN(len(pool))     //nolint:gosec // placement jitter, not crypto
+	j := rand.IntN(len(pool) - 1) //nolint:gosec // placement jitter, not crypto
+	if j >= i {
+		j++
+	}
+	a, b := pool[i], pool[j]
+	if b.warm > a.warm {
+		a, b = b, a
+	}
+	return []string{a.addr, b.addr}
+}
+
 func (m *Mesh) persistEpoch(epoch uint64) error {
 	return storeEpoch(m.epochPath, epoch)
+}
+
+func (m *Mesh) owners(match func(NodeState) bool) []string {
+	m.mu.Lock()
+	var owners []string
+	for id, st := range m.view {
+		if id != m.self.NodeID && match(st) {
+			owners = append(owners, st.Addr)
+		}
+	}
+	m.mu.Unlock()
+	if len(owners) > 2 {
+		owners = owners[:2]
+	}
+	return owners
 }
 
 // forget drops a departed node from the placement view so redirects stop
@@ -289,6 +327,12 @@ func short(digest string) string {
 		return digest[:12]
 	}
 	return digest
+}
+
+func containsAll(have, need []string) bool {
+	return len(need) > 0 && !slices.ContainsFunc(need, func(name string) bool {
+		return !slices.Contains(have, name)
+	})
 }
 
 var _ memberlist.Delegate = (*delegate)(nil)

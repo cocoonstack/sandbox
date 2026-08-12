@@ -17,6 +17,8 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+type vmProvisioner func(name string) (types.VMRecord, error)
+
 // kickRefill nudges Run past its refill ticker after a warm claim; the
 // 1-buffered channel coalesces bursts and never blocks the claim path.
 func (m *Manager) kickRefill() {
@@ -320,7 +322,7 @@ func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden strin
 	})
 }
 
-func (m *Manager) provisionVM(ctx context.Context, key types.PoolKey, probeTimeout time.Duration, create func(name string) (types.VMRecord, error)) (*types.Sandbox, error) {
+func (m *Manager) provisionVM(ctx context.Context, key types.PoolKey, probeTimeout time.Duration, create vmProvisioner) (*types.Sandbox, error) {
 	sb, err := m.startVM(ctx, key, create)
 	if err != nil {
 		return nil, err
@@ -328,7 +330,7 @@ func (m *Manager) provisionVM(ctx context.Context, key types.PoolKey, probeTimeo
 	return m.readyVM(ctx, sb, time.Now().Add(probeTimeout))
 }
 
-func (m *Manager) startVM(ctx context.Context, key types.PoolKey, create func(name string) (types.VMRecord, error)) (*types.Sandbox, error) {
+func (m *Manager) startVM(ctx context.Context, key types.PoolKey, create vmProvisioner) (*types.Sandbox, error) {
 	name := vmName(key)
 	rec, err := create(name)
 	if err != nil {
@@ -361,7 +363,7 @@ func (m *Manager) readyBounded(ctx context.Context, sb *types.Sandbox, deadline 
 	return m.readyVM(probeCtx, sb, deadline)
 }
 
-func (m *Manager) cloneBatch(ctx context.Context, count int, key types.PoolKey, create func(string) (types.VMRecord, error)) ([]*types.Sandbox, error) {
+func (m *Manager) cloneBatch(ctx context.Context, count int, key types.PoolKey, create vmProvisioner) ([]*types.Sandbox, error) {
 	children := make([]*types.Sandbox, count)
 	errs := make([]error, count)
 	var wg sync.WaitGroup

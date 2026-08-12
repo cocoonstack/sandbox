@@ -52,8 +52,8 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 	for _, opt := range opts {
 		opt(&claim)
 	}
-	addr, cr, err := claimFollow(c.addr, "claim", func(noRedirect bool) ([]byte, error) {
-		claim.NoRedirect = noRedirect
+	addr, cr, err := claimFollow(c.addr, "claim", func(noRedirect, requirePromoted bool) ([]byte, error) {
+		claim.NoRedirect, claim.RequirePromoted = noRedirect, requirePromoted
 		return encodeBody("claim", claim)
 	}, func(a string, body []byte) (claimResponse, error) {
 		return c.claimAt(ctx, a, body)
@@ -62,6 +62,15 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 		return nil, err
 	}
 	return c.handleFrom(addr, cr), nil
+}
+
+// Volumes lists the caller-visible fleet catalog; availability is local.
+func (c *Client) Volumes(ctx context.Context) ([]VolumeInfo, error) {
+	resp, err := doJSON[volumeListResponse](ctx, c, http.MethodGet, c.addr, "/v1/volumes", nil, c.apiToken, "list volumes")
+	if err != nil {
+		return nil, err
+	}
+	return resp.Volumes, nil
 }
 
 // Lookup relocates a sandbox handle whose owner address was lost, given its
@@ -132,7 +141,8 @@ func (c *Client) ownerAt(ctx context.Context, addr, id, token string) (string, e
 // node that answered when a single-node deployment omits owner_addr.
 func (c *Client) handleFrom(dialed string, cr claimResponse) *Sandbox {
 	return &Sandbox{
-		ID: cr.ID, Deadline: cr.Deadline, FromCheckpoint: cr.FromCheckpoint, TemplateDigest: cr.TemplateDigest,
+		ID: cr.ID, Deadline: cr.Deadline, Volumes: cr.Volumes,
+		FromCheckpoint: cr.FromCheckpoint, TemplateDigest: cr.TemplateDigest,
 		c: c, token: cr.Token, owner: cmp.Or(cr.OwnerAddr, dialed),
 	}
 }
@@ -289,8 +299,8 @@ func retryTransient(err error) bool {
 // claimFollow runs the claim protocol from origin: claim there, and on a
 // redirect re-encode with no_redirect and follow via redirectFallback. Only
 // the fallback error carries the verb — first-contact errors return raw.
-func claimFollow(origin, verb string, encode func(noRedirect bool) ([]byte, error), claimAt func(addr string, body []byte) (claimResponse, error)) (string, claimResponse, error) {
-	body, err := encode(false)
+func claimFollow(origin, verb string, encode func(noRedirect, requirePromoted bool) ([]byte, error), claimAt func(addr string, body []byte) (claimResponse, error)) (string, claimResponse, error) {
+	body, err := encode(false, false)
 	if err != nil {
 		return "", claimResponse{}, err
 	}
@@ -301,7 +311,7 @@ func claimFollow(origin, verb string, encode func(noRedirect bool) ([]byte, erro
 	if len(cr.Redirect) == 0 {
 		return origin, cr, nil
 	}
-	if body, err = encode(true); err != nil {
+	if body, err = encode(true, cr.RequirePromoted); err != nil {
 		return "", claimResponse{}, err
 	}
 	addr, target, err := redirectFallback(origin, cr.Redirect, func(a string) (claimResponse, error) {
@@ -413,11 +423,13 @@ func apiError(verb string, resp *http.Response) error {
 // claimRequest mirrors sandboxd's wire type; duplicated so the SDK stays
 // dependency-free — the e2e module guards against drift.
 type claimRequest struct {
-	Template   string `json:"template"`
-	Net        string `json:"net,omitempty"`
-	Size       string `json:"size,omitempty"`
-	TTLSeconds int    `json:"ttl_seconds,omitempty"`
-	NoRedirect bool   `json:"no_redirect,omitempty"`
+	Template        string   `json:"template"`
+	Net             string   `json:"net,omitempty"`
+	Size            string   `json:"size,omitempty"`
+	Volumes         []Volume `json:"volumes,omitempty"`
+	TTLSeconds      int      `json:"ttl_seconds,omitempty"`
+	NoRedirect      bool     `json:"no_redirect,omitempty"`
+	RequirePromoted bool     `json:"require_promoted,omitempty"`
 }
 
 // rejectPinnedAxes fails a snapshot claim (checkpoint, template) that passed
@@ -430,13 +442,19 @@ func (r claimRequest) rejectPinnedAxes() error {
 }
 
 type claimResponse struct {
-	ID             string    `json:"id"`
-	Token          string    `json:"token"`
-	Deadline       time.Time `json:"deadline"`
-	OwnerAddr      string    `json:"owner_addr,omitempty"`
-	FromCheckpoint string    `json:"from_checkpoint,omitempty"`
-	TemplateDigest string    `json:"template_digest,omitempty"`
-	Redirect       []string  `json:"redirect,omitempty"`
+	ID              string    `json:"id"`
+	Token           string    `json:"token"`
+	Deadline        time.Time `json:"deadline"`
+	OwnerAddr       string    `json:"owner_addr,omitempty"`
+	FromCheckpoint  string    `json:"from_checkpoint,omitempty"`
+	TemplateDigest  string    `json:"template_digest,omitempty"`
+	Volumes         []Volume  `json:"volumes,omitempty"`
+	Redirect        []string  `json:"redirect,omitempty"`
+	RequirePromoted bool      `json:"require_promoted,omitempty"`
+}
+
+type volumeListResponse struct {
+	Volumes []VolumeInfo `json:"volumes"`
 }
 
 type forkRequest struct {

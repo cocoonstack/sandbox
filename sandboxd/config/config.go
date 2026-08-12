@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -111,13 +112,18 @@ type TenantSpec struct {
 	Egress *egress.Policy `json:"egress,omitempty"`
 }
 
-// MeshConfig configures cluster membership. Two v1 constraints: all nodes
-// must share the same APIToken AND the same Tenants set (the SDK replays
-// whichever token authorized a claim across a redirect, so a peer missing
-// that tenant answers 401), and a
-// node serving the egress lane can only redirect egress claims to peers if it
-// too has an egress attachment (a no-egress node answers 409 rather than
-// redirecting).
+// VolumeSpec declares one operator-managed read-only dataset disk.
+type VolumeSpec struct {
+	Name     string   `json:"name"`
+	Path     string   `json:"path"`
+	DirectIO string   `json:"directio,omitempty"`
+	Tenants  []string `json:"tenants,omitempty"`
+}
+
+// MeshConfig configures cluster membership. Two v1 constraints: every node
+// shares one APIToken and Tenants set (a redirect replays the claim's token,
+// so a peer missing that tenant answers 401), and only a node with its own
+// egress attachment can take a redirected egress claim.
 type MeshConfig struct {
 	NodeID     string   `json:"node_id"`               // unique name; defaults to Bind
 	Bind       string   `json:"bind"`                  // memberlist host:port
@@ -258,6 +264,9 @@ type Config struct {
 	// Defaults to 16.
 	MaxForkCount int `json:"max_fork_count,omitempty"`
 
+	// Volumes is the node-local catalog of operator-managed dataset images.
+	Volumes []VolumeSpec `json:"volumes,omitempty"`
+
 	// RefillConcurrency caps concurrent VM provisioning node-wide — warm-pool
 	// refills, fork clones, and reap/hibernate/reconcile batches share one
 	// budget; 0 auto-scales with the node's CPU count.
@@ -329,6 +338,9 @@ func (c *Config) applyDefaults() {
 		c.Pools[i].Warm = cmp.Or(c.Pools[i].Warm, defaultWarm)
 		c.Pools[i].PoolKey = c.Pools[i].Defaulted()
 	}
+	for i := range c.Volumes {
+		c.Volumes[i].DirectIO = cmp.Or(c.Volumes[i].DirectIO, types.DirectIOOff)
+	}
 }
 
 func (c *Config) validate() error {
@@ -390,6 +402,9 @@ func (c *Config) validate() error {
 	if err := c.validateTenants(); err != nil {
 		return err
 	}
+	if err := c.validateVolumes(); err != nil {
+		return err
+	}
 	if err := c.validateMesh(); err != nil {
 		return err
 	}
@@ -398,6 +413,35 @@ func (c *Config) validate() error {
 		return err
 	}
 	return c.validateEgress(secrets)
+}
+
+func (c *Config) validateVolumes() error {
+	names := make(map[string]struct{}, len(c.Volumes))
+	tenants := make(map[string]struct{}, len(c.Tenants))
+	for _, tenant := range c.Tenants {
+		tenants[tenant.Name] = struct{}{}
+	}
+	for _, volume := range c.Volumes {
+		if !types.ValidVolumeName(volume.Name) {
+			return fmt.Errorf("volume name %q must match %s and not start with cocoon-", volume.Name, types.VolumeNameRe)
+		}
+		if _, ok := names[volume.Name]; ok {
+			return fmt.Errorf("duplicate volume name %q", volume.Name)
+		}
+		names[volume.Name] = struct{}{}
+		if !filepath.IsAbs(volume.Path) {
+			return fmt.Errorf("volume %q path must be absolute", volume.Name)
+		}
+		if !types.ValidDirectIO(volume.DirectIO) {
+			return fmt.Errorf("volume %q directio must be on, off, or auto, got %q", volume.Name, volume.DirectIO)
+		}
+		for _, tenant := range volume.Tenants {
+			if _, ok := tenants[tenant]; !ok {
+				return fmt.Errorf("volume %q references unknown tenant %q", volume.Name, tenant)
+			}
+		}
+	}
+	return nil
 }
 
 // validateMesh fails at load what would otherwise only surface at startMesh.

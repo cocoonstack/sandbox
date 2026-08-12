@@ -1,10 +1,7 @@
 //! silkd: the in-guest sandbox daemon. Listens on a hybrid-vsock port for
 //! newline-JSON RPC frames from the host (relayed by sandboxd) and runs
 //! commands with context, tracks processes, moves files, and holds sessions.
-//!
-//! Verbs: exec, info, ps, kill, attach, logs, session.{create,list,rm},
-//! fs.{write,read,list,stat,mkdir,rm,rename,push,pull,find,replace,watch},
-//! pty.{open,resize}, git.{clone,status,add,commit,push,pull,branch}.
+//! `proto::Request` is the authoritative verb list.
 
 use std::sync::Arc;
 

@@ -5,8 +5,11 @@ import (
 	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,6 +30,12 @@ const (
 
 	EngineCH Engine = "ch"
 	EngineFC Engine = "fc"
+
+	MaxClaimVolumes = 8
+
+	DirectIOOn   = "on"
+	DirectIOOff  = "off"
+	DirectIOAuto = "auto"
 )
 
 var (
@@ -34,12 +43,19 @@ var (
 	// which ride in journal fields and metric labels: one conservative
 	// charset, also accepted by cocoon's snapshot naming.
 	NameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`)
+	// VolumeNameRe is the virtio disk serial grammar shared with cocoon.
+	VolumeNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,19}$`)
 
 	sizeSpecs = map[Size]SizeSpec{
 		SizeSmall:  {CPU: 1, Memory: "512M", MemoryBytes: 512 << 20},
 		SizeMedium: {CPU: 2, Memory: "1G", MemoryBytes: 1 << 30},
 		SizeLarge:  {CPU: 4, Memory: "4G", MemoryBytes: 4 << 30},
 		SizeXLarge: {CPU: 4, Memory: "8G", MemoryBytes: 8 << 30},
+	}
+
+	guestOSMountRoots = []string{
+		"/bin", "/boot", "/dev", "/etc", "/lib", "/lib64", "/proc",
+		"/run", "/sbin", "/sys", "/usr", "/var",
 	}
 )
 
@@ -163,6 +179,8 @@ type Sandbox struct {
 	// the operator index so a listed sandbox maps back to its claim name.
 	// Empty for warm-pool, fork, and checkpoint-branch claims.
 	ClaimRef string `json:"claim_ref,omitempty"`
+	// Volumes records the read-only volumes successfully applied to this claim.
+	Volumes []Volume `json:"volumes,omitempty"`
 
 	VsockSocket string `json:"vsock_socket,omitempty"`
 	// TAP is the egress-lane NIC's host tap, captured at provision; empty on
@@ -252,4 +270,97 @@ type VMNetConfig struct {
 // VMConfig is the config subset of VMRecord.
 type VMConfig struct {
 	Name string `json:"name"`
+}
+
+// Volume is one requested or applied read-only dataset mount. Mount is empty
+// only before request validation; persisted and response entries are effective.
+type Volume struct {
+	Name  string `json:"name"`
+	Mount string `json:"mount,omitempty"`
+}
+
+// ValidVolumeName reports whether name is a legal cocoon data-disk serial.
+func ValidVolumeName(name string) bool {
+	return VolumeNameRe.MatchString(name) && !strings.HasPrefix(name, "cocoon-")
+}
+
+// DefaultVolumeMount returns the guest mount used when a request omits one.
+func DefaultVolumeMount(name string) string {
+	return "/volumes/" + name
+}
+
+// ValidDirectIO reports whether mode is a legal volume direct-I/O setting.
+func ValidDirectIO(mode string) bool {
+	return mode == DirectIOOn || mode == DirectIOOff || mode == DirectIOAuto
+}
+
+// VolumeNames projects the entries' names in order; nil for none.
+func VolumeNames(volumes []Volume) []string {
+	if len(volumes) == 0 {
+		return nil
+	}
+	names := make([]string, len(volumes))
+	for i, volume := range volumes {
+		names[i] = volume.Name
+	}
+	return names
+}
+
+// ValidateVolumes validates a request and returns detached entries with every
+// default mount filled. The input is not modified.
+func ValidateVolumes(volumes []Volume) ([]Volume, error) {
+	if len(volumes) > MaxClaimVolumes {
+		return nil, fmt.Errorf("volumes must contain at most %d entries, got %d", MaxClaimVolumes, len(volumes))
+	}
+	applied := make([]Volume, len(volumes))
+	names := make(map[string]struct{}, len(volumes))
+	for i, volume := range volumes {
+		if !ValidVolumeName(volume.Name) {
+			return nil, fmt.Errorf("volumes[%d] name %q must match %s and not start with cocoon-", i, volume.Name, VolumeNameRe)
+		}
+		if _, ok := names[volume.Name]; ok {
+			return nil, fmt.Errorf("volumes[%d] duplicates name %q", i, volume.Name)
+		}
+		names[volume.Name] = struct{}{}
+		mount := volume.Mount
+		if mount == "" {
+			mount = DefaultVolumeMount(volume.Name)
+		}
+		if err := validateVolumeMount(mount); err != nil {
+			return nil, fmt.Errorf("volumes[%d] mount %q: %w", i, mount, err)
+		}
+		for j := range i {
+			other := applied[j].Mount
+			switch {
+			case mount == other:
+				return nil, fmt.Errorf("volumes[%d] mount %q duplicates volumes[%d]", i, mount, j)
+			case pathWithin(other, mount), pathWithin(mount, other):
+				return nil, fmt.Errorf("volumes[%d] mount %q nests with volumes[%d] mount %q", i, mount, j, other)
+			}
+		}
+		applied[i] = Volume{Name: volume.Name, Mount: mount}
+	}
+	return applied, nil
+}
+
+func validateVolumeMount(mount string) error {
+	if !filepath.IsAbs(mount) {
+		return errors.New("must be absolute")
+	}
+	if filepath.Clean(mount) != mount {
+		return errors.New("must be clean")
+	}
+	if mount == "/" {
+		return errors.New("must be outside the guest OS tree")
+	}
+	for _, root := range guestOSMountRoots {
+		if mount == root || pathWithin(root, mount) {
+			return errors.New("must be outside the guest OS tree")
+		}
+	}
+	return nil
+}
+
+func pathWithin(parent, child string) bool {
+	return strings.HasPrefix(child, parent+"/")
 }

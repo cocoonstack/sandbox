@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -58,7 +59,7 @@ func TestNewSendsClaim(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	want := claimRequest{Template: "python:3.12", Net: "egress", Size: "medium", TTLSeconds: 90}
-	if gotBody != want {
+	if !reflect.DeepEqual(gotBody, want) {
 		t.Errorf("body %+v, want %+v", gotBody, want)
 	}
 	if gotAuth != "Bearer sekret" {

@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 // hopHeaders are hop-by-hop and proxy-scoped headers this hop owns: stripped
@@ -258,17 +260,11 @@ func splice(a, b net.Conn) {
 	go func() {
 		defer close(done)
 		_, _ = io.Copy(a, b)
-		closeWrite(a)
+		utils.CloseWrite(a)
 	}()
 	_, _ = io.Copy(b, a)
-	closeWrite(b)
+	utils.CloseWrite(b)
 	<-done
-}
-
-func closeWrite(conn net.Conn) {
-	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
-		_ = cw.CloseWrite()
-	}
 }
 
 // denied answers a policy rejection with a typed 403 the guest's client

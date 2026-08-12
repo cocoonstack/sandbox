@@ -1,0 +1,117 @@
+package engine
+
+import (
+	"cmp"
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/cocoonstack/sandbox/protocol/wire"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
+)
+
+const (
+	volumePollInterval = 10 * time.Millisecond
+	volumeProbeTimeout = 2 * time.Second
+	volumeSetupTimeout = 10 * time.Second
+)
+
+// VolumeSpec describes one operator-owned disk image attached to a sandbox.
+type VolumeSpec struct {
+	Name     string
+	Path     string
+	DirectIO string
+}
+
+func (s VolumeSpec) directIO() (string, error) {
+	mode := cmp.Or(s.DirectIO, types.DirectIOOff)
+	if !types.ValidDirectIO(mode) {
+		return "", fmt.Errorf("volume directio must be on, off, or auto, got %q", s.DirectIO)
+	}
+	return mode, nil
+}
+
+// DiskAttach hot-attaches an operator-owned disk read-only through cocoon.
+func (e *Engine) DiskAttach(ctx context.Context, vmName string, spec VolumeSpec) error {
+	args, err := e.diskAttachArgs(vmName, spec)
+	if err != nil {
+		return err
+	}
+	_, err = e.run(ctx, args...)
+	return err
+}
+
+// MountVolume discovers and mounts a hot-attached disk read-only at mount.
+func (e *Engine) MountVolume(ctx context.Context, vsockSocket, name, mount string) error {
+	ctx, cancel := context.WithTimeout(ctx, volumeSetupTimeout)
+	defer cancel()
+	device, err := e.waitForVolumeDevice(ctx, vsockSocket, name)
+	if err != nil {
+		return fmt.Errorf("wait for volume device %s: %w", name, err)
+	}
+	if err := e.silkdExec(ctx, vsockSocket, "mkdir", "-p", "--", mount); err != nil {
+		return fmt.Errorf("create volume mount point %s: %w", mount, err)
+	}
+	if err := e.silkdExec(ctx, vsockSocket, "mount", "-o", "ro", "--", device, mount); err != nil {
+		return fmt.Errorf("mount volume %s: %w", name, err)
+	}
+	return nil
+}
+
+func (e *Engine) waitForVolumeDevice(ctx context.Context, vsockSocket, name string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, volumeProbeTimeout)
+	defer cancel()
+	ticker := time.NewTicker(volumePollInterval)
+	defer ticker.Stop()
+	for {
+		device, found, err := e.findVolumeDevice(ctx, vsockSocket, name)
+		if err != nil {
+			return "", cmp.Or(ctx.Err(), err)
+		}
+		if found {
+			return device, nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (e *Engine) findVolumeDevice(ctx context.Context, vsockSocket, name string) (string, bool, error) {
+	entries, err := e.silkdList(ctx, vsockSocket, "/sys/block")
+	if err != nil {
+		return "", false, err
+	}
+	for _, entry := range entries {
+		serial, err := e.silkdReadFile(ctx, vsockSocket, "/sys/block/"+entry.Name+"/serial")
+		var respErr *wire.ErrorResp
+		if errors.As(err, &respErr) && respErr.Kind == wire.KindNotFound {
+			continue
+		}
+		if err != nil {
+			return "", false, err
+		}
+		if strings.TrimSpace(string(serial)) == name {
+			return "/dev/" + entry.Name, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func (e *Engine) diskAttachArgs(vmName string, spec VolumeSpec) ([]string, error) {
+	directIO, err := spec.directIO()
+	if err != nil {
+		return nil, err
+	}
+	return []string{
+		"vm", "disk", "attach", vmName,
+		"--path", spec.Path,
+		argName, spec.Name,
+		"--readonly",
+		"--directio", directIO,
+	}, nil
+}

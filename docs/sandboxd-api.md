@@ -7,7 +7,7 @@ All bodies are JSON. Three token kinds:
   resource-creating verbs (claim, fork, promote, checkpoint create/claim,
   preview mint) and the tenant-scoped listings/deletes below; everything a
   tenant creates is stamped with its name. Operator surfaces
-  (`GET /v1/sandboxes` and the per-id reads under it, `GET /v1/info`,
+  (the per-id sandbox reads, `GET /v1/info`,
   `PUT /v1/pools`, `POST/DELETE /v1/drain`, `GET /metrics`,
   `GET /v1/checkpoints/{id}/blob`)
   answer a tenant token `403` — authenticated but not authorized; an unknown
@@ -25,21 +25,33 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
 
 ```json
 {"template": "base:24.04", "net": "none", "size": "small",
- "ttl_seconds": 300, "claim_ref": "namespace/workload", "no_redirect": false}
+ "ttl_seconds": 300,
+ "volumes": [{"name": "imagenet"}, {"name": "weights", "mount": "/models"}],
+ "claim_ref": "namespace/workload", "no_redirect": false,
+ "require_promoted": false}
 ```
 
 - `net` defaults to `none`, `size` to `small`
 - `ttl_seconds` 0 means the server default (5 minutes); capped at 24h. The
   owning node reaps the sandbox after the TTL even if the client vanishes
-- `claim_ref` is an optional opaque caller reference echoed by the root-only
+- `claim_ref` is an optional opaque caller reference echoed by the scoped
   sandbox index; the aggregated apiserver uses `<namespace>/<name>`
 - `no_redirect` is set by the SDK when retrying at a redirect target
+- `require_promoted` is an internal redirect field. When a redirect response
+  sets it, copy it into the `no_redirect` retry so the target cannot cold-boot
+  a promoted template name if its gossip view is stale
+- `volumes` is an ordered list of at most eight unique catalog names. `mount`
+  defaults to `/volumes/<name>`; a custom value must be absolute and clean,
+  outside the guest OS tree, unique, and non-nesting within the request. Volumes
+  are read-only and require Cloud Hypervisor
 
 Success:
 
 ```json
 {"id": "sb_…", "token": "…", "deadline": "2026-07-06T00:05:00Z",
- "owner_addr": "10.0.0.5:7777", "template_digest": "sha256:…"}
+ "owner_addr": "10.0.0.5:7777", "template_digest": "sha256:…",
+ "volumes": [{"name": "imagenet", "mount": "/volumes/imagenet"},
+             {"name": "weights", "mount": "/models"}]}
 ```
 
 A claim cloned from a promoted template carries `template_digest`, the exact
@@ -51,26 +63,60 @@ A claim branched from a checkpoint (fork children included) additionally
 carries `"from_checkpoint": "ck_…"` — the lineage edge for reconstructing
 the checkpoint tree.
 
+`volumes` reports the names and effective mounts applied and persisted at
+finalization. sandboxd attaches each disk read-only, polls
+`/sys/block/*/serial` for its attach name for up to 2 seconds, and mounts the
+filesystem read-only before returning. A custom mount may shadow an existing
+populated guest directory for the claim's life.
+
 Redirects (mutually exclusive with the fields above) name peers to retry
 at — sent on a warm miss with warm peers, when the node lacks a golden for
 the key but gossip names a template owner, and when the node is at
 `max_claims` but a peer reports warm capacity:
 
 ```json
-{"redirect": ["10.0.0.6:7777", "10.0.0.7:7777"]}
+{"redirect": ["10.0.0.6:7777", "10.0.0.7:7777"],
+ "require_promoted": true}
 ```
 
 Retry the same body (+`no_redirect: true`) at each candidate until one
-answers.
+answers. Preserve `require_promoted: true` when the redirect carries it;
+ordinary redirects omit the field.
+
+A volume claim may consume an ordinary warm VM. Normal candidate ranking still
+applies, but every candidate must advertise all requested volumes. A
+promoted-template volume claim first uses a node that advertises both resources.
+If none does, a volume holder may self-verify a shared template store; a
+`no_redirect` target validates both resources before provisioning. The
+redirect's `require_promoted` bit makes that validation independent of one-tick
+gossip lag. Redirect responses never carry `volumes`.
 
 A tenant token claims the same way; the sandbox is stamped with the tenant
 name (attributed in the usage journal and counted against the tenant's
-`max_claims`).
+`max_claims`). A catalog access list may restrict an entry to named tenants;
+an unknown and a forbidden volume return the same error text.
 
-Errors: 400 unknown template axis / bad body; 401 bad api token; 409 egress
-requested on a node without an egress attachment; 429 node at `max_claims`,
-the calling tenant at its own `max_claims`, or the node draining (a redirect
-to a warm peer is tried first on a cluster); 500 provisioning failed.
+Errors: 400 unknown template axis, invalid/duplicate volumes, or a volume that
+is unknown or forbidden (the latter two are deliberately indistinguishable),
+Firecracker with volumes, or bad body; 401 bad api token; 409 egress requested
+on a node without an egress attachment; 429 node at `max_claims`, the calling
+tenant at its own `max_claims`, or the node draining; 500 provisioning failed.
+
+## GET /v1/volumes
+
+Auth: node API token (root or tenant). Lists the fleet catalog entries the
+caller may use, without host paths or holder addresses:
+
+```json
+{"volumes": [{"name": "imagenet", "default_mount": "/volumes/imagenet",
+              "size_bytes": 214748364800, "available": true, "nodes": 3}]}
+```
+
+Root sees every entry; a tenant sees unrestricted entries plus those whose
+access list names it. The response is the gossiped union: `nodes` counts members
+advertising the name. `size_bytes` and `available` are a best-effort stat of the
+answering node's image, so a peer-only entry remains discoverable with
+`available: false`. Membership is eventually consistent by one gossip tick.
 
 ## POST /v1/sandboxes/{id}/release
 
@@ -88,8 +134,8 @@ snapshot point and the stop coincident). Idempotent on an already-hibernated
 sandbox. The TTL keeps running: a hibernated sandbox is still reaped (VM and
 snapshot) at its deadline. When to hibernate is the caller's policy — the
 node only provides the transition. 204 on success, 404 unknown id or wrong
-token, 409 on the egress lane (egress-lane sandboxes never hibernate; see
-[egress](egress.md)).
+token, 409 on the egress lane or when volumes are attached (neither kind of
+sandbox hibernates; see [egress](egress.md)).
 
 ## POST /v1/sandboxes/{id}/wake
 
@@ -123,7 +169,7 @@ All-or-nothing: on error no child survived. 200 with one claim per child:
 
 Children inherit the parent's tenant and count against its `max_claims`,
 whoever calls. 400 invalid count or body, 401 bad api token, 404 unknown id
-or wrong sandbox token, 409 egress-lane parent (the lane never forks,
+or wrong sandbox token, 409 egress-lane or volume parent (neither forks,
 checkpoints, or promotes; see [egress](egress.md)), 429 node or the parent's
 tenant at `max_claims`, or the node draining.
 
@@ -161,7 +207,7 @@ digest; changing any exported path or bytes changes it.
 
 400 invalid name, 401 bad api token, 409 when the name collides with a
 configured pool, the template is owned by another tenant, or the sandbox is
-on the egress lane (see [egress](egress.md)), 404 unknown id or wrong
+on the egress lane or has volumes attached (see [egress](egress.md)), 404 unknown id or wrong
 sandbox token.
 
 ## DELETE /v1/templates?template=…&net=…&size=…
@@ -195,7 +241,7 @@ pool on a node without an egress attachment.
 ## POST /v1/drain
 
 Auth: root only (tenant tokens get 403). Cordons the node for maintenance: claim/fork/branch answer
-429 `node draining` (on a cluster the warm-peer redirect is tried first, and
+429 `node draining` (on a cluster a non-volume claim tries a warm-peer redirect first, and
 gossip stops naming this node within a tick as its warm counts hit zero),
 unclaimed warm VMs are destroyed, and live claims keep serving until release
 or TTL. Pool ownership is untouched — no pools.json write, no config change.
@@ -226,7 +272,8 @@ Auth: node API token; body `{"token": "<sandbox token>", "name": "..."}`
 answers `200 {"checkpoint": {id, name, sandbox_id, key, tenant?,
 created_at}}` — `tenant` records the calling tenant, absent for root.
 400 bad body or name, 401 bad api token, 404 unknown id or wrong sandbox
-token, 409 egress-lane sandbox (see [egress](egress.md)).
+token, 409 egress-lane sandbox or one with volumes attached (see
+[egress](egress.md)).
 
 ## POST /v1/checkpoints/{id}/claim
 
@@ -316,9 +363,10 @@ an SDK caller should set.
 
 ## GET /v1/sandboxes
 
-Auth: root only (tenant tokens get 403). The operator index: `{"sandboxes":
-[{id, key, deadline, hibernated, archived?, from_checkpoint?, claim_ref?}]}` —
-never tokens.
+Auth: node API token. Root sees every live claim; a tenant sees only its own.
+The index is `{"sandboxes": [{id, key, deadline, hibernated, archived?,
+from_checkpoint?, claim_ref?, volumes?: [{name, mount}]}]}` — never sandbox
+tokens, volume host paths, or catalog access lists.
 
 ## GET /v1/sandboxes/{id}
 
@@ -360,7 +408,9 @@ Always on: every lifecycle transition appends one JSONL event to
 "claim|hibernate|wake|fork|checkpoint|promote|release|reap|archive|unarchive|archive_delete|egress",
 "id": "sb_…", "vm": "sbx-…"}` plus `key` and `tenant` (the pool key and
 owning tenant, claim events), `children` (fork) and `ref` (the promoted
-template / checkpoint id, or the egress host). The file rotates at
+template / checkpoint id, or the egress host). A volume claim also carries
+`volumes`, the applied catalog names (mounts and host paths are not billing
+dimensions). The file rotates at
 64 MiB keeping one `.1` backup, so a tailing collector never loses a window
 silently. Folding rules: billable compute seconds per sandbox =
 Σ(claim→release/reap) − Σ(hibernate→wake); hibernated storage seconds =

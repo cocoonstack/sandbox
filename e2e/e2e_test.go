@@ -7,6 +7,7 @@ package e2e
 import (
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -20,7 +21,7 @@ import (
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
-var testKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
+var testKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineCH}
 
 func TestEndToEnd(t *testing.T) {
 	stack := startStack(t, "node-token", config.PoolSpec{PoolKey: testKey, Warm: 1})
@@ -207,7 +208,7 @@ func TestTwoTenantFlow(t *testing.T) {
 		{Name: "acme", Token: "acme-tok", MaxClaims: 1},
 		{Name: "beta", Token: "beta-tok"},
 	}
-	stack := startTenantStack(t, "node-token", tenants)
+	stack := startTenantStack(t, "node-token", tenants, nil)
 	acme, err := sandbox.Connect(stack.addr, sandbox.WithAPIToken("acme-tok"))
 	if err != nil {
 		t.Fatalf("connect acme: %v", err)
@@ -282,6 +283,47 @@ func TestWrongAPITokenRejected(t *testing.T) {
 	}
 }
 
+func TestVolumesEndToEnd(t *testing.T) {
+	image := filepath.Join(t.TempDir(), "dataset.img")
+	if err := os.WriteFile(image, []byte("dataset-bytes"), 0o600); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+	stack := startTenantStack(t, "node-token", nil,
+		[]config.VolumeSpec{{Name: "dataset", Path: image, DirectIO: "off"}},
+		config.PoolSpec{PoolKey: testKey, Warm: 1})
+	waitFor(t, func() bool {
+		infos, _ := stack.mgr.Info()
+		return len(infos) == 1 && infos[0].Warm >= 1
+	})
+	warmBefore := stack.mgr.Counters().ClaimsWarm
+
+	sb, err := stack.client.New(t.Context(), "rt:24.04",
+		sandbox.WithVolumes(sandbox.Volume{Name: "dataset", Mount: "/datasets/e2e"}))
+	if err != nil {
+		t.Fatalf("volume claim: %v", err)
+	}
+	defer sb.Close()
+	if want := []sandbox.Volume{{Name: "dataset", Mount: "/datasets/e2e"}}; !slices.Equal(sb.Volumes, want) {
+		t.Errorf("claim volumes %+v, want %+v", sb.Volumes, want)
+	}
+	if counters := stack.mgr.Counters(); counters.ClaimsWarm != warmBefore+1 {
+		infos, _ := stack.mgr.Info()
+		t.Errorf("counters=%+v pools=%+v, want warm claims %d", counters, infos, warmBefore+1)
+	}
+
+	infos, err := stack.client.Volumes(t.Context())
+	if err != nil {
+		t.Fatalf("Volumes: %v", err)
+	}
+	want := []sandbox.VolumeInfo{{
+		Name: "dataset", DefaultMount: "/volumes/dataset",
+		SizeBytes: int64(len("dataset-bytes")), Available: true, Nodes: 1,
+	}}
+	if !slices.Equal(infos, want) {
+		t.Errorf("catalog %+v, want %+v", infos, want)
+	}
+}
+
 type stack struct {
 	client *sandbox.Client
 	mgr    *pool.Manager
@@ -290,10 +332,10 @@ type stack struct {
 
 func startStack(t *testing.T, apiToken string, pools ...config.PoolSpec) *stack {
 	t.Helper()
-	return startTenantStack(t, apiToken, nil, pools...)
+	return startTenantStack(t, apiToken, nil, nil, pools...)
 }
 
-func startTenantStack(t *testing.T, apiToken string, tenants []config.TenantSpec, pools ...config.PoolSpec) *stack {
+func startTenantStack(t *testing.T, apiToken string, tenants []config.TenantSpec, volumes []config.VolumeSpec, pools ...config.PoolSpec) *stack {
 	t.Helper()
 	// Short prefix: the sockets under it must fit darwin's 104-byte sun_path.
 	dir, err := os.MkdirTemp("", "sbx")
@@ -307,7 +349,7 @@ func startTenantStack(t *testing.T, apiToken string, tenants []config.TenantSpec
 	if err != nil {
 		t.Fatalf("secrets: %v", err)
 	}
-	mgr, err := pool.NewManager(t.Context(), &config.Config{DataDir: dir, Pools: pools, Tenants: tenants}, eng, secrets)
+	mgr, err := pool.NewManager(t.Context(), &config.Config{DataDir: dir, Pools: pools, Tenants: tenants, Volumes: volumes}, eng, secrets)
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}

@@ -11,6 +11,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Mapping
 
 from .checkpoint import Checkpoint
 from .errors import APIError
@@ -27,23 +28,14 @@ class Client:
         self.api_token = api_token
         self.timeout = timeout
 
-    def new(self, template: str, net: str = "", size: str = "", ttl_seconds: int = 0) -> Sandbox:
+    def new(self, template: str, net: str = "", size: str = "", ttl_seconds: int = 0,
+            volumes: list[str | Mapping[str, str]] | None = None) -> Sandbox:
         """Claims a sandbox; a warm hit is milliseconds. On a cluster a warm
         miss may redirect to a peer, followed transparently; if every
         candidate fails transiently, the claim falls back to the origin
         once so it provisions or heals locally."""
-        claim = _claim_body(template, net, size, ttl_seconds)
-        reply = self._post_json(self.addr, "/v1/claim", claim, "claim")
-        redirect = reply.get("redirect") or []
-        if not redirect:
-            return self._handle_from(self.addr, reply)
-        claim["no_redirect"] = True
-
-        def post(peer):
-            return self._post_json(peer, "/v1/claim", claim, "claim")
-
-        addr, reply = _redirect_fallback(self.addr, redirect, post, "claim")
-        return self._handle_from(addr, reply)
+        claim = _claim_body(template, net, size, ttl_seconds, volumes)
+        return self._claim_from(self.addr, claim)
 
     def delete_template(self, template: str, net: str = "", size: str = "") -> None:
         """Removes a promoted template by name; on a cluster the delete
@@ -85,9 +77,29 @@ class Client:
         reply = self._request(self.addr, "GET", "/v1/checkpoints", None, "list checkpoints")
         return [Checkpoint(self, self.addr, rec) for rec in reply.get("checkpoints") or []]
 
+    def volumes(self) -> list[dict]:
+        """Lists the caller-visible fleet catalog; availability is local."""
+        reply = self._request(self.addr, "GET", "/v1/volumes", None, "list volumes")
+        return [dict(volume) for volume in reply.get("volumes") or []]
+
     def info(self) -> dict:
         """The node's pool/claim counters, as served by GET /v1/info."""
         return self._request(self.addr, "GET", "/v1/info", None, "info")
+
+    def _claim_from(self, addr: str, claim: dict) -> Sandbox:
+        reply = self._post_json(addr, "/v1/claim", claim, "claim")
+        redirect = reply.get("redirect") or []
+        if not redirect:
+            return self._handle_from(addr, reply)
+        claim["no_redirect"] = True
+        if reply.get("require_promoted"):
+            claim["require_promoted"] = True
+
+        def post(peer):
+            return self._post_json(peer, "/v1/claim", claim, "claim")
+
+        owner, reply = _redirect_fallback(addr, redirect, post, "claim")
+        return self._handle_from(owner, reply)
 
     def _peers(self) -> list:
         # /v1/peers is tenant-accessible (cluster topology); /v1/info is
@@ -110,6 +122,7 @@ class Client:
             deadline=reply.get("deadline", ""),
             from_checkpoint=reply.get("from_checkpoint", ""),
             template_digest=reply.get("template_digest", ""),
+            volumes=reply.get("volumes") or [],
         )
 
     def _post_json(self, addr: str, path: str, body: dict, verb: str) -> dict:
@@ -149,7 +162,8 @@ class Client:
             raise APIError(verb, 0, "malformed JSON in response") from exc
 
 
-def _claim_body(template: str, net: str, size: str, ttl_seconds: int) -> dict:
+def _claim_body(template: str, net: str, size: str, ttl_seconds: int,
+                volumes: list[str | Mapping[str, str]] | None = None) -> dict:
     claim = {"template": template}
     if net:
         claim["net"] = net
@@ -157,7 +171,19 @@ def _claim_body(template: str, net: str, size: str, ttl_seconds: int) -> dict:
         claim["size"] = size
     if ttl_seconds:
         claim["ttl_seconds"] = ttl_seconds
+    if volumes:
+        claim["volumes"] = [_volume_body(volume) for volume in volumes]
     return claim
+
+
+def _volume_body(volume: str | Mapping[str, str]) -> dict:
+    if isinstance(volume, str):
+        return {"name": volume}
+    if not isinstance(volume, Mapping):
+        raise TypeError("volume must be a name string or mapping")
+    if set(volume) - {"name", "mount"}:
+        raise TypeError("volume mapping accepts only name and mount")
+    return dict(volume)
 
 
 def _template_query(template: str, net: str, size: str) -> dict:

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
 func TestInstallCACertWritesCertAndUpdates(t *testing.T) {
@@ -61,15 +63,24 @@ func TestInstallCACertWriteErrorFrameFails(t *testing.T) {
 }
 
 type fakeSilkd struct {
-	mu        sync.Mutex
-	writePath string
-	writeMode uint32
-	writeData []byte
-	execArgv  []string
-	execEnv   map[string]string
-	execCode  int32
-	writeErr  string
-	execErr   string
+	mu         sync.Mutex
+	writePath  string
+	writeMode  uint32
+	writeData  []byte
+	execArgv   []string
+	execCalls  [][]string
+	execEnv    map[string]string
+	execCode   int32
+	execFailAt int
+	writeErr   string
+	execErr    string
+	block      []wire.DirEntry
+	serial     map[string][]byte
+	readMisses map[string]int
+	listErr    string
+	readErr    map[string]string
+	listCalls  int
+	readCalls  []string
 }
 
 func serveFakeSilkd(t *testing.T, path string) *fakeSilkd {
@@ -79,7 +90,11 @@ func serveFakeSilkd(t *testing.T, path string) *fakeSilkd {
 		t.Fatalf("listen: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	f := &fakeSilkd{}
+	f := &fakeSilkd{
+		serial:     make(map[string][]byte),
+		readMisses: make(map[string]int),
+		readErr:    make(map[string]string),
+	}
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -118,6 +133,10 @@ func (f *fakeSilkd) serve(conn net.Conn) {
 	switch req.Op {
 	case "fs_write":
 		f.handleWrite(conn, r, req.Path, req.Mode)
+	case "fs_list":
+		f.handleList(conn, req.Path)
+	case "fs_read":
+		f.handleRead(conn, req.Path)
 	case "exec":
 		f.handleExec(conn, req.Argv, req.Env)
 	}
@@ -156,8 +175,12 @@ func (f *fakeSilkd) handleWrite(conn net.Conn, r *bufio.Reader, path string, mod
 func (f *fakeSilkd) handleExec(conn net.Conn, argv []string, env map[string]string) {
 	f.mu.Lock()
 	f.execArgv = argv
+	f.execCalls = append(f.execCalls, argv)
 	f.execEnv = env
 	code, reply := f.execCode, f.execErr
+	if f.execFailAt > 0 && len(f.execCalls) != f.execFailAt {
+		code, reply = 0, ""
+	}
 	f.mu.Unlock()
 	if reply != "" {
 		_, _ = io.WriteString(conn, `{"type":"error","kind":"internal","message":"`+reply+`"}`+"\n")
@@ -165,4 +188,52 @@ func (f *fakeSilkd) handleExec(conn net.Conn, argv []string, env map[string]stri
 	}
 	_, _ = io.WriteString(conn, `{"type":"started","pid":1}`+"\n")
 	_, _ = fmt.Fprintf(conn, `{"type":"exit","code":%d}`+"\n", code)
+}
+
+func (f *fakeSilkd) handleList(conn net.Conn, path string) {
+	f.mu.Lock()
+	f.listCalls++
+	entries, reply := append([]wire.DirEntry(nil), f.block...), f.listErr
+	f.mu.Unlock()
+	if reply != "" {
+		writeFakeSilkdResponse(conn, &wire.ErrorResp{Kind: wire.KindInternal, Message: reply})
+		return
+	}
+	if path != "/sys/block" {
+		writeFakeSilkdResponse(conn, &wire.ErrorResp{Kind: wire.KindNotFound, Message: path})
+		return
+	}
+	writeFakeSilkdResponse(conn, &wire.Entries{Entries: entries})
+	writeFakeSilkdResponse(conn, &wire.Done{})
+}
+
+func (f *fakeSilkd) handleRead(conn net.Conn, path string) {
+	f.mu.Lock()
+	f.readCalls = append(f.readCalls, path)
+	data, ok := f.serial[path]
+	reply := f.readErr[path]
+	if f.readMisses[path] > 0 {
+		f.readMisses[path]--
+		ok = false
+	}
+	data = append([]byte(nil), data...)
+	f.mu.Unlock()
+	if reply != "" {
+		writeFakeSilkdResponse(conn, &wire.ErrorResp{Kind: wire.KindInternal, Message: reply})
+		return
+	}
+	if !ok {
+		writeFakeSilkdResponse(conn, &wire.ErrorResp{Kind: wire.KindNotFound, Message: path})
+		return
+	}
+	writeFakeSilkdResponse(conn, &wire.DataResp{Data: data})
+	writeFakeSilkdResponse(conn, &wire.Done{})
+}
+
+func writeFakeSilkdResponse(conn net.Conn, resp wire.Response) {
+	buf, err := wire.EncodeResponse(resp)
+	if err != nil {
+		return
+	}
+	_, _ = conn.Write(append(buf, '\n'))
 }
