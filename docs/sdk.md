@@ -133,7 +133,8 @@ sb, err := client.New(ctx, "base:24.04",
     sandbox.WithSize(sandbox.Medium),
     sandbox.WithVolumes(
         sandbox.Volume{Name: "imagenet"},
-        sandbox.Volume{Name: "weights", Mount: "/models"}),
+        sandbox.Volume{Name: "weights", Mount: "/models"},
+        sandbox.Volume{Name: "scratch-db", Mode: "rw"}),
     sandbox.WithTimeout(10*time.Minute))
 defer sb.Close()
 ```
@@ -142,15 +143,15 @@ defer sb.Close()
 |---|---|---|---|
 | `WithNetwork(n)` | `NetNone`, `NetEgress` | `NetNone` | Cloud Hypervisor network shape: `NetNone` disables the NIC and uses vsock-only I/O; `NetEgress` attaches a bridge/CNI NIC |
 | `WithSize(s)` | `Small`, `Medium`, `Large`, `XLarge` | `Small` | resource tier: 1cpu/512M, 2cpu/1G, 4cpu/4G, 4cpu/8G |
-| `WithVolumes(volumes...)` | `Volume{Name, Mount?}` entries | none | attach and mount up to eight unique read-only dataset disks; `Mount` defaults to `/volumes/<name>`; supported by `Client.New` and `Template.New` |
+| `WithVolumes(volumes...)` | `Volume{Name, Mount?, Mode?}` entries | none | attach and mount up to eight unique catalog dataset disks; `Mount` defaults to `/volumes/<name>`; `Mode` is `"ro"` (default) or `"rw"` — `"rw"` requires the catalog entry's `writable: true`; supported by `Client.New` and `Template.New` |
 | `WithTimeout(d)` | duration | server default 5m | sandbox TTL, rounded up to seconds, server-capped at 24h. The node reaps the sandbox after the TTL even if the client vanishes |
 
 `New` returns when the sandbox's silkd answers: a warm hit is milliseconds,
 a cold key can take the full boot. A volume claim may consume an ordinary warm
-VM and returns only after every requested disk is mounted; the finalized name
-and effective mount are available in `Sandbox.Volumes`. Custom mounts must be
-absolute and clean, stay outside the guest OS tree, and cannot duplicate or
-nest.
+VM and returns only after every requested disk is mounted; the finalized
+name, effective mount, and (for `rw` entries) mode are available in
+`Sandbox.Volumes`. Custom mounts must be absolute and clean, stay outside the
+guest OS tree, and cannot duplicate or nest.
 `Sandbox.ID`, `Sandbox.Deadline`, and
 `Sandbox.FromCheckpoint` (the lineage edge when branched) are exported.
 `Sandbox.TemplateDigest` is the exact content identity when the claim cloned a
@@ -160,17 +161,18 @@ later `Lookup`; `Close()` releases the sandbox (releasing one already gone is
 not an error, and `Close` is bounded internally so it stays defer-friendly).
 Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Passing
 `WithVolumes` to `Checkpoint.New` returns a local error because checkpoint
-branches do not support volumes in this version.
+branches do not support volumes of either mode in this version.
 
 The caller-visible constraints are deliberate: volume claims may consume a
-warm VM, remain non-capturable, mount read-only, and require Cloud Hypervisor.
+warm VM, remain non-capturable, mount read-only by default, and require Cloud
+Hypervisor.
 
 Discover the fleet entries this token may use before planning a claim:
 
 ```go
 catalog, err := client.Volumes(ctx) // []sandbox.VolumeInfo
 for _, volume := range catalog {
-    fmt.Println(volume.Name, volume.DefaultMount, volume.SizeBytes, volume.Available, volume.Nodes)
+    fmt.Println(volume.Name, volume.DefaultMount, volume.SizeBytes, volume.Available, volume.Nodes, volume.Writable)
 }
 ```
 
