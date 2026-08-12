@@ -417,6 +417,10 @@ enforcement, warm-pool consumption, and an unchanged source checksum. On a node
 using prebuilt binaries, also set `VOLUME_SMOKE_BIN` beside `SANDBOXD_BIN`,
 `DEMO_BIN`, and `SMOKE_BIN`.
 
+Add `VOLUME_RW_IMAGE=/srv/datasets/scratch.img` (a second, writable image) to
+also run the writable leg: a durable write across release, second-writer
+exclusion, and a clean read-only claim afterward.
+
 ## Preview URLs
 
 `preview_listen` starts a second HTTP server that serves a sandbox's guest

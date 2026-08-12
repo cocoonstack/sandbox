@@ -13,6 +13,9 @@ VOLUME_IMAGE=${VOLUME_IMAGE:-}
 VOLUME_NAME=${VOLUME_NAME:-e2e-data}
 VOLUME_PROBE=${VOLUME_PROBE:-volume-e2e.txt}
 VOLUME_DIRECTIO=${VOLUME_DIRECTIO:-off}
+# VOLUME_RW_IMAGE adds the writable leg; its own image is mutated by design, so it must not be VOLUME_IMAGE.
+VOLUME_RW_IMAGE=${VOLUME_RW_IMAGE:-}
+VOLUME_RW_NAME=${VOLUME_RW_NAME:-e2e-scratch}
 
 VOLUME_CHECKSUM=""
 if [[ -n $VOLUME_IMAGE ]]; then
@@ -28,6 +31,20 @@ if [[ -n $VOLUME_IMAGE ]]; then
   }
   (( WARM >= 2 )) || { echo "volume e2e needs WARM>=2 for the concurrent warm-volume assertion"; exit 1; }
   VOLUME_CHECKSUM=$(sha256sum -- "$VOLUME_IMAGE" | awk '{print $1}')
+fi
+
+VOLUME_RW_CHECKSUM=""
+if [[ -n $VOLUME_RW_IMAGE ]]; then
+  [[ -n $VOLUME_IMAGE ]] || { echo "VOLUME_RW_IMAGE needs VOLUME_IMAGE: the writable leg extends the volume proof"; exit 1; }
+  [[ $VOLUME_RW_IMAGE == /* ]] || { echo "VOLUME_RW_IMAGE must be absolute"; exit 1; }
+  [[ -f $VOLUME_RW_IMAGE && -w $VOLUME_RW_IMAGE ]] || { echo "VOLUME_RW_IMAGE must be a writable file"; exit 1; }
+  [[ $VOLUME_RW_IMAGE != "$VOLUME_IMAGE" ]] || { echo "VOLUME_RW_IMAGE must differ from VOLUME_IMAGE: the writable leg mutates its image"; exit 1; }
+  [[ $VOLUME_RW_NAME =~ ^[a-z][a-z0-9_-]{0,19}$ && $VOLUME_RW_NAME != cocoon-* ]] || {
+    echo "VOLUME_RW_NAME must match ^[a-z][a-z0-9_-]{0,19}$ and not start with cocoon-"
+    exit 1
+  }
+  [[ $VOLUME_RW_NAME != "$VOLUME_NAME" ]] || { echo "VOLUME_RW_NAME must differ from VOLUME_NAME"; exit 1; }
+  VOLUME_RW_CHECKSUM=$(sha256sum -- "$VOLUME_RW_IMAGE" | awk '{print $1}')
 fi
 
 DATA=$(mktemp -d /tmp/sandboxd-e2e.XXXXXX)
@@ -111,10 +128,14 @@ VOLUME_LINE=""
 if [[ -n $VOLUME_IMAGE ]]; then
   VOLUME_CATALOG=$(jq -cn --arg name "$VOLUME_NAME" --arg path "$VOLUME_IMAGE" --arg directio "$VOLUME_DIRECTIO" \
     '[{name: $name, path: $path, directio: $directio}]')
+  if [[ -n $VOLUME_RW_IMAGE ]]; then
+    VOLUME_CATALOG=$(jq -cn --argjson catalog "$VOLUME_CATALOG" --arg name "$VOLUME_RW_NAME" --arg path "$VOLUME_RW_IMAGE" \
+      '$catalog + [{name: $name, path: $path, writable: true}]')
+  fi
   VOLUME_LINE="\"volumes\": $VOLUME_CATALOG,"
 fi
 
-echo "== start (pool: $TEMPLATE none/small warm=$WARM${BRIDGE:+, egress via $BRIDGE}${S3_ENDPOINT:+, s3 store at $S3_ENDPOINT}${VOLUME_IMAGE:+, volume $VOLUME_NAME})"
+echo "== start (pool: $TEMPLATE none/small warm=$WARM${BRIDGE:+, egress via $BRIDGE}${S3_ENDPOINT:+, s3 store at $S3_ENDPOINT}${VOLUME_IMAGE:+, volume $VOLUME_NAME}${VOLUME_RW_IMAGE:+, writable volume $VOLUME_RW_NAME})"
 cat >"$DATA/config.json" <<EOF
 {
   "listen": "$ADDR",
@@ -159,7 +180,7 @@ echo "== v2 smoke: files/session/find/replace/watch/git/pty through the relay"
 "$DATA/smoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" ${BRIDGE:+-egress} ${LSP_TEMPLATE:+-lsp-template "$LSP_TEMPLATE"}
 
 if [[ -n $VOLUME_IMAGE ]]; then
-  echo "== volumes: two warm read-only claims, shared bytes, and EROFS"
+  echo "== volumes: two warm read-only claims, shared bytes, and EROFS${VOLUME_RW_IMAGE:+, then the writable publish round}"
   for i in $(seq 1 30); do
     if api info | jq -e 'all(.pools[]; .warm >= .target)' >/dev/null 2>&1; then
       break
@@ -169,7 +190,7 @@ if [[ -n $VOLUME_IMAGE ]]; then
   done
   warm_before=$(warm_claims)
   "$DATA/volumesmoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" \
-    -volume "$VOLUME_NAME" -probe "$VOLUME_PROBE"
+    -volume "$VOLUME_NAME" -probe "$VOLUME_PROBE" ${VOLUME_RW_IMAGE:+-rw-volume "$VOLUME_RW_NAME"}
   warm_after=$(warm_claims)
   [[ $warm_after -ge $((warm_before + 2)) ]] || {
     echo "volume claims did not consume the two ready warm VMs: before=$warm_before after=$warm_after"
@@ -182,6 +203,16 @@ if [[ -n $VOLUME_IMAGE ]]; then
     exit 1
   }
   echo "volume backing checksum unchanged: $after_checksum"
+  # The writable image is mutated on purpose: an unchanged digest means the
+  # writer's bytes never reached the host file.
+  if [[ -n $VOLUME_RW_IMAGE ]]; then
+    rw_checksum=$(sha256sum -- "$VOLUME_RW_IMAGE" | awk '{print $1}')
+    [[ $rw_checksum != "$VOLUME_RW_CHECKSUM" ]] || {
+      echo "writable backing image unchanged after the writable leg: $rw_checksum"
+      exit 1
+    }
+    echo "writable backing checksum advanced: $VOLUME_RW_CHECKSUM -> $rw_checksum"
+  fi
 fi
 
 echo "== reap: leaked 5s-ttl claim is destroyed by the owner"
