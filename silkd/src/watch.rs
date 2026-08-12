@@ -52,8 +52,8 @@ where
             frame = rx.recv() => match frame {
                 Some(frame) => {
                     let terminal = matches!(frame, Response::Error { .. });
-                    proto::write_frame(w, &frame).await?;
-                    if terminal {
+                    // A failed write is the disconnect the EOF arm can lose the select to.
+                    if proto::write_frame(w, &frame).await.is_err() || terminal {
                         return Ok(());
                     }
                 }
