@@ -71,6 +71,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 		m.claimed[id] = sb
 		m.tenantDelta(sb.Tenant, 1)
+		m.adoptVolumes(sb.Volumes)
 		owned[sb.VMName] = true
 		referenced[sb.HibernateSnap] = true
 	}
@@ -218,6 +219,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 
 // A failed remove stays out of service and queued until teardown succeeds.
 func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
+	m.teardownVolumes(ctx, sb, true)
 	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID, "")
 	m.mu.Lock()
 	delete(m.claimed, sb.ID)

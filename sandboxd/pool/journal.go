@@ -21,11 +21,12 @@ type usageEvent struct {
 	Event     string    `json:"ev"` // claim|hibernate|wake|fork|promote|checkpoint|release|reap
 	ID        string    `json:"id"`
 	VMName    string    `json:"vm,omitempty"`
-	KeyHash   string    `json:"key,omitempty"`      // claim only
-	Tenant    string    `json:"tenant,omitempty"`   // claim only
-	Volumes   []string  `json:"volumes,omitempty"`  // claim only
-	Children  []string  `json:"children,omitempty"` // fork only
-	Reference string    `json:"ref,omitempty"`      // promote: template; checkpoint: ckpt id
+	KeyHash   string    `json:"key,omitempty"`        // claim only
+	Tenant    string    `json:"tenant,omitempty"`     // claim only
+	Volumes   []string  `json:"volumes,omitempty"`    // claim only
+	VolumesRW []string  `json:"volumes_rw,omitempty"` // claim only: the write-enabled subset
+	Children  []string  `json:"children,omitempty"`   // fork only
+	Reference string    `json:"ref,omitempty"`        // promote: template; checkpoint: ckpt id
 }
 
 // journal is an append-only JSONL writer with size rotation. Writes happen

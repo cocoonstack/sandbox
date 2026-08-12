@@ -765,6 +765,11 @@ type fakeEngine struct {
 	volumeSpecs   []engine.VolumeSpec
 	volumeMounts  []types.Volume
 	volumeOps     []string
+	// attachDirty records whether an image's dirty marker was already down
+	// when it was attached; removeSeenOps snapshots the volume-op log at each
+	// VM removal, so teardown ordering is checkable across the two logs.
+	attachDirty   map[string]bool
+	removeSeenOps map[string][]string
 
 	hibernates, restores, snapRemoves []string
 	snapSaves, exports, snapshots     []string
@@ -775,6 +780,7 @@ type fakeEngine struct {
 	diskAttachErr                     error
 	diskAttachCancel                  context.CancelFunc
 	mountVolumeErr                    error
+	unmountVolumeErr                  error
 	stopped                           map[string]bool
 	creating                          map[string]bool // VMs List reports in the creating state
 	staleOutcome                      engine.StaleCreateOutcome
@@ -799,7 +805,10 @@ type fakeEngine struct {
 }
 
 func newFakeEngine() *fakeEngine {
-	return &fakeEngine{vms: map[string]string{}, stopped: map[string]bool{}, creating: map[string]bool{}, pids: map[string]int{}}
+	return &fakeEngine{
+		vms: map[string]string{}, stopped: map[string]bool{}, creating: map[string]bool{}, pids: map[string]int{},
+		attachDirty: map[string]bool{}, removeSeenOps: map[string][]string{},
+	}
 }
 
 func (f *fakeEngine) Clone(_ context.Context, fromDir, name string, _ types.PoolKey) (types.VMRecord, error) {
@@ -838,6 +847,7 @@ func (f *fakeEngine) Remove(ctx context.Context, name string) error {
 	if name == f.removeErrFor {
 		return errors.New("remove failed")
 	}
+	f.removeSeenOps[name] = slices.Clone(f.volumeOps)
 	f.removes = append(f.removes, name)
 	delete(f.vms, name)
 	return nil
@@ -1000,18 +1010,30 @@ func (f *fakeEngine) DiskAttach(_ context.Context, _ string, spec engine.VolumeS
 	defer f.mu.Unlock()
 	f.volumeSpecs = append(f.volumeSpecs, spec)
 	f.volumeOps = append(f.volumeOps, "attach:"+spec.Name)
+	f.attachDirty[spec.Name] = volumeDirty(spec.Path)
 	if f.diskAttachCancel != nil {
 		f.diskAttachCancel()
 	}
 	return f.diskAttachErr
 }
 
-func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string) error {
+func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.volumeMounts = append(f.volumeMounts, types.Volume{Name: name, Mount: mount})
+	mode := ""
+	if rw {
+		mode = types.VolumeModeRW
+	}
+	f.volumeMounts = append(f.volumeMounts, types.Volume{Name: name, Mount: mount, Mode: mode})
 	f.volumeOps = append(f.volumeOps, "mount:"+name+":"+mount)
 	return f.mountVolumeErr
+}
+
+func (f *fakeEngine) UnmountVolume(_ context.Context, _, mount string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumeOps = append(f.volumeOps, "umount:"+mount)
+	return f.unmountVolumeErr
 }
 
 func (f *fakeEngine) clone(from, name string) (types.VMRecord, error) {
@@ -1062,6 +1084,24 @@ func (f *fakeEngine) removed(name string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Contains(f.removes, name)
+}
+
+func (f *fakeEngine) dirtyAtAttach(name string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.attachDirty[name]
+}
+
+func (f *fakeEngine) opsAtRemoval(vmName string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.removeSeenOps[vmName]
+}
+
+func (f *fakeEngine) volumeOpsLog() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.volumeOps)
 }
 
 func (f *fakeEngine) listCalls() int {

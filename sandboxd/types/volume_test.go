@@ -71,12 +71,42 @@ func TestValidateVolumes(t *testing.T) {
 		{"duplicate-mount", []Volume{{Name: "a", Mount: "/data"}, {Name: "b", Mount: "/data"}}},
 		{"nested-mount", []Volume{{Name: "a", Mount: "/data"}, {Name: "b", Mount: "/data/child"}}},
 		{"parent-after-child", []Volume{{Name: "a", Mount: "/data/child"}, {Name: "b", Mount: "/data"}}},
+		{"unknown-mode", []Volume{{Name: "dataset", Mode: "readwrite"}}},
+		{"uppercase-mode", []Volume{{Name: "dataset", Mode: "RW"}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if _, err := ValidateVolumes(tt.volumes); err == nil {
 				t.Fatal("ValidateVolumes succeeded")
 			}
 		})
+	}
+}
+
+func TestValidateVolumesNormalizesMode(t *testing.T) {
+	got, err := ValidateVolumes([]Volume{
+		{Name: "shared"},
+		{Name: "explicit", Mode: VolumeModeRO},
+		{Name: "writable", Mode: VolumeModeRW},
+	})
+	if err != nil {
+		t.Fatalf("ValidateVolumes: %v", err)
+	}
+	want := []Volume{
+		{Name: "shared", Mount: "/volumes/shared"},
+		{Name: "explicit", Mount: "/volumes/explicit"},
+		{Name: "writable", Mount: "/volumes/writable", Mode: VolumeModeRW},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("volumes %v, want %v", got, want)
+	}
+	if got[0].RW() || got[1].RW() || !got[2].RW() {
+		t.Errorf("RW predicate disagrees with modes %v", got)
+	}
+	if names := VolumeRWNames(got); !slices.Equal(names, []string{"writable"}) {
+		t.Errorf("rw names %v, want [writable]", names)
+	}
+	if names := VolumeRWNames(got[:2]); names != nil {
+		t.Errorf("rw names %v, want nil", names)
 	}
 }
 

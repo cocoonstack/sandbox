@@ -70,6 +70,9 @@ type VolumeInfo struct {
 	SizeBytes    int64  `json:"size_bytes"`
 	Available    bool   `json:"available"`
 	Nodes        int    `json:"nodes"`
+	// Writable reports whether the operator allows rw claims of this name;
+	// unset for a name known only from a peer's advertisement.
+	Writable bool `json:"writable,omitempty"`
 }
 
 // VolumeListResponse is the wire reply of GET /v1/volumes.

@@ -11,20 +11,22 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-func TestDiskAttachArgsReadOnlyAndDirectIO(t *testing.T) {
+func TestDiskAttachArgsModeAndDirectIO(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		directIO string
+		rw       bool
 		wantIO   string
 	}{
-		{"default buffered", "", "off"},
-		{"direct", "on", "on"},
-		{"auto", "auto", "auto"},
+		{"default buffered", "", false, "off"},
+		{"direct", "on", false, "on"},
+		{"auto", "auto", false, "auto"},
+		{"writable", "", true, "off"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			e := New("cocoon", nil, nil, false, "")
 			args, err := e.diskAttachArgs("sbx-1", VolumeSpec{
-				Name: "imagenet", Path: "/srv/datasets/imagenet.img", DirectIO: tt.directIO,
+				Name: "imagenet", Path: "/srv/datasets/imagenet.img", DirectIO: tt.directIO, RW: tt.rw,
 			})
 			if err != nil {
 				t.Fatalf("diskAttachArgs: %v", err)
@@ -33,9 +35,11 @@ func TestDiskAttachArgsReadOnlyAndDirectIO(t *testing.T) {
 				"vm", "disk", "attach", "sbx-1",
 				"--path", "/srv/datasets/imagenet.img",
 				"--name", "imagenet",
-				"--readonly",
-				"--directio", tt.wantIO,
 			}
+			if !tt.rw {
+				want = append(want, "--readonly")
+			}
+			want = append(want, "--directio", tt.wantIO)
 			if !slices.Equal(args, want) {
 				t.Errorf("args = %v, want %v", args, want)
 			}
@@ -50,35 +54,70 @@ func TestDiskAttachArgsRejectBadOptions(t *testing.T) {
 	}
 }
 
-func TestMountVolumeUsesSysfsAndReadOnlyMount(t *testing.T) {
+func TestMountVolumeUsesSysfsAndRequestedMode(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		rw       bool
+		wantMode string
+	}{
+		{"read-only", false, "ro"},
+		{"writable", true, "rw"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := sockPath(t)
+			fake := serveFakeSilkd(t, path)
+			configureVolumeDevices(fake)
+			if err := New("cocoon", nil, nil, false, "").MountVolume(
+				t.Context(), path, "imagenet", "/datasets/training", tt.rw,
+			); err != nil {
+				t.Fatalf("MountVolume: %v", err)
+			}
+
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			wantExec := [][]string{
+				{"mkdir", "-p", "--", "/datasets/training"},
+				{"mount", "-o", tt.wantMode, "--", "/dev/vdc", "/datasets/training"},
+			}
+			if !slices.EqualFunc(fake.execCalls, wantExec, slices.Equal) {
+				t.Errorf("exec calls = %v, want %v", fake.execCalls, wantExec)
+			}
+			wantReads := []string{
+				"/sys/block/vda/serial",
+				"/sys/block/vdb/serial",
+				"/sys/block/vdc/serial",
+			}
+			if fake.listCalls != 1 || !slices.Equal(fake.readCalls, wantReads) {
+				t.Errorf("sysfs calls = list:%d read:%v, want list:1 read:%v", fake.listCalls, fake.readCalls, wantReads)
+			}
+			if fake.execEnv["PATH"] == "" {
+				t.Error("guest exec PATH is empty")
+			}
+		})
+	}
+}
+
+func TestUnmountVolumeExecsBoundedUmount(t *testing.T) {
+	if volumeUmountTimeout != 2*time.Second {
+		t.Fatalf("volume umount timeout = %s, want 2s", volumeUmountTimeout)
+	}
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
-	configureVolumeDevices(fake)
-	if err := New("cocoon", nil, nil, false, "").MountVolume(
-		t.Context(), path, "imagenet", "/datasets/training",
-	); err != nil {
-		t.Fatalf("MountVolume: %v", err)
+	e := New("cocoon", nil, nil, false, "")
+	if err := e.UnmountVolume(t.Context(), path, "/datasets/training"); err != nil {
+		t.Fatalf("UnmountVolume: %v", err)
 	}
 
 	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	wantExec := [][]string{
-		{"mkdir", "-p", "--", "/datasets/training"},
-		{"mount", "-o", "ro", "--", "/dev/vdc", "/datasets/training"},
-	}
+	wantExec := [][]string{{"umount", "--", "/datasets/training"}}
 	if !slices.EqualFunc(fake.execCalls, wantExec, slices.Equal) {
 		t.Errorf("exec calls = %v, want %v", fake.execCalls, wantExec)
 	}
-	wantReads := []string{
-		"/sys/block/vda/serial",
-		"/sys/block/vdb/serial",
-		"/sys/block/vdc/serial",
-	}
-	if fake.listCalls != 1 || !slices.Equal(fake.readCalls, wantReads) {
-		t.Errorf("sysfs calls = list:%d read:%v, want list:1 read:%v", fake.listCalls, fake.readCalls, wantReads)
-	}
-	if fake.execEnv["PATH"] == "" {
-		t.Error("guest exec PATH is empty")
+	fake.execCode, fake.execFailAt = 32, 2
+	fake.mu.Unlock()
+	err := e.UnmountVolume(t.Context(), path, "/datasets/training")
+	if err == nil || !strings.Contains(err.Error(), "unmount volume /datasets/training") {
+		t.Errorf("got %v, want umount failure", err)
 	}
 }
 
@@ -90,7 +129,7 @@ func TestMountVolumeWaitsForDelayedSysfsSerial(t *testing.T) {
 	fake.readMisses["/sys/block/vdc/serial"] = 1
 	fake.mu.Unlock()
 	if err := New("cocoon", nil, nil, false, "").MountVolume(
-		t.Context(), path, "imagenet", "/datasets/training",
+		t.Context(), path, "imagenet", "/datasets/training", false,
 	); err != nil {
 		t.Fatalf("MountVolume: %v", err)
 	}
@@ -125,7 +164,7 @@ func TestMountVolumeStopsAtFailedStage(t *testing.T) {
 			tt.prepare(fake)
 			fake.mu.Unlock()
 			err := New("cocoon", nil, nil, false, "").MountVolume(
-				t.Context(), path, "imagenet", "/datasets/training",
+				t.Context(), path, "imagenet", "/datasets/training", false,
 			)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("got %v, want %q failure", err, tt.wantErr)
@@ -149,7 +188,7 @@ func TestMountVolumeDeviceProbeIsBoundedAndCancelable(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	err := New("cocoon", nil, nil, false, "").MountVolume(
-		ctx, path, "missing", "/datasets/training",
+		ctx, path, "missing", "/datasets/training", false,
 	)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context cancellation", err)

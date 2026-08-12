@@ -33,6 +33,9 @@ const (
 
 	MaxClaimVolumes = 8
 
+	VolumeModeRO = "ro"
+	VolumeModeRW = "rw"
+
 	DirectIOOn   = "on"
 	DirectIOOff  = "off"
 	DirectIOAuto = "auto"
@@ -179,7 +182,7 @@ type Sandbox struct {
 	// the operator index so a listed sandbox maps back to its claim name.
 	// Empty for warm-pool, fork, and checkpoint-branch claims.
 	ClaimRef string `json:"claim_ref,omitempty"`
-	// Volumes records the read-only volumes successfully applied to this claim.
+	// Volumes records the volumes successfully applied to this claim.
 	Volumes []Volume `json:"volumes,omitempty"`
 
 	VsockSocket string `json:"vsock_socket,omitempty"`
@@ -272,12 +275,17 @@ type VMConfig struct {
 	Name string `json:"name"`
 }
 
-// Volume is one requested or applied read-only dataset mount. Mount is empty
-// only before request validation; persisted and response entries are effective.
+// Volume is one requested or applied dataset mount. Mount is empty only
+// before request validation; persisted and response entries are effective.
+// Mode is normalized to "" (read-only) or VolumeModeRW.
 type Volume struct {
 	Name  string `json:"name"`
 	Mount string `json:"mount,omitempty"`
+	Mode  string `json:"mode,omitempty"`
 }
+
+// RW reports whether the entry asks for write access.
+func (v Volume) RW() bool { return v.Mode == VolumeModeRW }
 
 // ValidVolumeName reports whether name is a legal cocoon data-disk serial.
 func ValidVolumeName(name string) bool {
@@ -306,8 +314,19 @@ func VolumeNames(volumes []Volume) []string {
 	return names
 }
 
+// VolumeRWNames projects the names of the write-enabled entries; nil for none.
+func VolumeRWNames(volumes []Volume) []string {
+	var names []string
+	for _, volume := range volumes {
+		if volume.RW() {
+			names = append(names, volume.Name)
+		}
+	}
+	return names
+}
+
 // ValidateVolumes validates a request and returns detached entries with every
-// default mount filled. The input is not modified.
+// default mount filled and every mode normalized. The input is not modified.
 func ValidateVolumes(volumes []Volume) ([]Volume, error) {
 	if len(volumes) > MaxClaimVolumes {
 		return nil, fmt.Errorf("volumes must contain at most %d entries, got %d", MaxClaimVolumes, len(volumes))
@@ -322,6 +341,14 @@ func ValidateVolumes(volumes []Volume) ([]Volume, error) {
 			return nil, fmt.Errorf("volumes[%d] duplicates name %q", i, volume.Name)
 		}
 		names[volume.Name] = struct{}{}
+		mode := volume.Mode
+		switch mode {
+		case VolumeModeRO:
+			mode = ""
+		case "", VolumeModeRW:
+		default:
+			return nil, fmt.Errorf("volumes[%d] mode %q must be %s or %s", i, mode, VolumeModeRO, VolumeModeRW)
+		}
 		mount := volume.Mount
 		if mount == "" {
 			mount = DefaultVolumeMount(volume.Name)
@@ -338,7 +365,7 @@ func ValidateVolumes(volumes []Volume) ([]Volume, error) {
 				return nil, fmt.Errorf("volumes[%d] mount %q nests with volumes[%d] mount %q", i, mount, j, other)
 			}
 		}
-		applied[i] = Volume{Name: volume.Name, Mount: mount}
+		applied[i] = Volume{Name: volume.Name, Mount: mount, Mode: mode}
 	}
 	return applied, nil
 }

@@ -37,7 +37,16 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	if quotaErr := m.overQuota(1, tenant); quotaErr != nil {
 		return nil, quotaErr
 	}
+	applied := appliedVolumes(volumeSpecs)
+	// Holds belong to this path until finalize; past it the sandbox carries them.
+	var reserved []types.Volume
+	defer func() { m.unreserveVolumes(reserved) }()
 	m.mu.Lock()
+	if reserveErr := m.reserveVolumes(applied); reserveErr != nil {
+		m.mu.Unlock()
+		return nil, reserveErr
+	}
+	reserved = applied
 	var sb *types.Sandbox
 	if p := m.pools[key]; p != nil {
 		p.noteArrival(start)
@@ -57,6 +66,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	}
 	sb.Tenant = tenant
 	sb.ClaimRef = claimRef
+	reserved = nil
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {
 		m.counters.claimsWarm.Add(1)
@@ -179,6 +189,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
 		m.untrack(m.pendingCks, ck)
 	}
+	m.teardownVolumes(ctx, sb, true)
 	var err error
 	if vmName != "" && !m.removeOrRetry(ctx, vmName, id, "") {
 		err = fmt.Errorf("vm %s survived removal", vmName)
@@ -196,6 +207,18 @@ func (m *Manager) overQuota(extra int, tenant string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.quotaErr(extra, tenant)
+}
+
+// admitClaim is the provision path's one admission section: the advisory quota
+// precheck plus the authoritative volume reservation, so a busy volume is
+// refused before any VM is built.
+func (m *Manager) admitClaim(tenant string, volumes []types.Volume) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.quotaErr(1, tenant); err != nil {
+		return err
+	}
+	return m.reserveVolumes(volumes)
 }
 
 // quotaErr answers ErrQuota over the node cap, the tenant cap, or a
@@ -251,6 +274,9 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	if quotaErr := m.quotaErr(len(sbs), sbs[0].Tenant); quotaErr != nil {
 		m.mu.Unlock()
 		for _, sb := range sbs {
+			// No quiesce: the claim was never handed out, so nothing wrote to
+			// the guest and the marker converges on the next writable claim.
+			m.teardownVolumes(ctx, sb, false)
 			m.destroy(ctx, sb.VMName)
 		}
 		return quotaErr
@@ -277,7 +303,8 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		m.recordUsage(ctx, usageEvent{
 			Event: "claim", //nolint:goconst // event name; other occurrences are test assertions
 			ID:    sb.ID, VMName: sb.VMName,
-			KeyHash: sb.Key.Hash(), Tenant: sb.Tenant, Volumes: types.VolumeNames(sb.Volumes),
+			KeyHash: sb.Key.Hash(), Tenant: sb.Tenant,
+			Volumes: types.VolumeNames(sb.Volumes), VolumesRW: types.VolumeRWNames(sb.Volumes),
 		})
 	}
 	return nil
@@ -296,6 +323,7 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	m.mu.Unlock()
 	m.recommit(ctx, rb)
 	for _, sb := range sbs {
+		m.teardownVolumes(ctx, sb, true)
 		m.disarmEgress(sb.ID, m.removeOrRetry(ctx, sb.VMName, sb.ID, ""))
 	}
 }
@@ -408,6 +436,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		case reapArchive:
 			logSweepResult(ctx, logger, m.archive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
 		default:
+			m.teardownVolumes(ctx, v.sb, true)
 			m.disarmEgress(v.id, m.removeOrRetry(ctx, v.vmName, v.id, ""))
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)
@@ -470,9 +499,14 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	if err != nil {
 		return nil, err
 	}
-	if quotaErr := m.overQuota(1, tenant); quotaErr != nil {
-		return nil, quotaErr
+	applied := appliedVolumes(volumeSpecs)
+	// Holds belong to this path until finalize; past it the sandbox carries them.
+	var reserved []types.Volume
+	defer func() { m.unreserveVolumes(reserved) }()
+	if admitErr := m.admitClaim(tenant, applied); admitErr != nil {
+		return nil, admitErr
 	}
+	reserved = applied
 	golden, err := m.resolveGolden(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("resolve template: %w", err)
@@ -493,6 +527,7 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	sb.TemplateDigest = golden.templateDigest
 	sb.Tenant = tenant
 	sb.ClaimRef = claimRef
+	reserved = nil
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {
 		if golden.dir != "" {

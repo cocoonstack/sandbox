@@ -76,6 +76,8 @@ func TestClaimErrorMapping(t *testing.T) {
 		{"bad key", `{"template":"rt:24.04","net":"lan"}`, fmt.Errorf("%w: unknown net", pool.ErrBadKey), http.StatusBadRequest},
 		{"bad volume", `{"template":"rt:24.04","volumes":[{"name":"data"}]}`, fmt.Errorf("%w: unknown volume", pool.ErrBadVolume), http.StatusBadRequest},
 		{"no egress", `{"template":"rt:24.04","net":"egress"}`, pool.ErrNoEgress, http.StatusConflict},
+		{"volume busy", `{"template":"rt:24.04","volumes":[{"name":"data","mode":"rw"}]}`, fmt.Errorf("%w: volume %q", pool.ErrVolumeBusy, "data"), http.StatusConflict},
+		{"volume needs recovery", `{"template":"rt:24.04","volumes":[{"name":"data"}]}`, fmt.Errorf("%w: volume %q", pool.ErrVolumeNeedsRecovery, "data"), http.StatusConflict},
 		{"engine failure", `{"template":"rt:24.04"}`, errors.New("cocoon vm run: boom"), http.StatusInternalServerError},
 	}
 	for _, tt := range tests {
