@@ -180,7 +180,9 @@ func (m *Manager) confirmVolumesClean(volumes []resolvedVolume) error {
 	return nil
 }
 
-func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes []resolvedVolume) error {
+// applyVolumes attaches and mounts the resolved set; applied is that same set
+// in request shape, recorded on the sandbox only once every mount is up.
+func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes []resolvedVolume, applied []types.Volume) error {
 	if len(volumes) == 0 {
 		return nil
 	}
@@ -198,7 +200,7 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 			return fmt.Errorf("setup volume %q: %w", volume.applied.Name, err)
 		}
 	}
-	sb.Volumes = appliedVolumes(volumes)
+	sb.Volumes = applied
 	return nil
 }
 
@@ -207,7 +209,7 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 // blocks teardown: the image keeps its marker and waits for a recovering
 // writer. Runs while the guest is still live, before the VM is removed.
 func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeTeardown {
-	td := volumeTeardown{holds: slices.Clone(sb.Volumes)}
+	td := volumeTeardown{holds: sb.Volumes}
 	mounts := len(types.VolumeRWNames(sb.Volumes))
 	if mounts == 0 {
 		return td

@@ -402,11 +402,7 @@ func TestClaimProvisionRejectsMissingVolumePathBeforeProvision(t *testing.T) {
 
 func newVolumeManager(t *testing.T, eng *fakeEngine, volumes []config.VolumeSpec) *Manager {
 	t.Helper()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: t.TempDir(), Volumes: volumes}, eng, testSecrets(t))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
-	return m
+	return newVolumeManagerAt(t, eng, t.TempDir(), volumes)
 }
 
 func newVolumePoolManager(t *testing.T, eng *fakeEngine, dataDir string, volumes []config.VolumeSpec) *Manager {

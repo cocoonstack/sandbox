@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -207,29 +208,31 @@ func TestWithVolumesEncodesMode(t *testing.T) {
 	}
 }
 
-func TestNewRejectsInvalidVolumeModeLocally(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("server should not be contacted for a locally invalid mode")
-	}))
-	t.Cleanup(ts.Close)
-
-	_, err := testClient(t, ts).New(t.Context(), "rt:24.04", WithVolumes(Volume{Name: "a", Mode: "readwrite"}))
-	if err == nil || !strings.Contains(err.Error(), "mode must be") {
-		t.Errorf("err = %v, want local mode rejection", err)
+func TestRejectsInvalidVolumeModeLocally(t *testing.T) {
+	tests := []struct {
+		name  string
+		claim func(c *Client, ctx context.Context) (*Sandbox, error)
+	}{
+		{"Client.New", func(c *Client, ctx context.Context) (*Sandbox, error) {
+			return c.New(ctx, "rt:24.04", WithVolumes(Volume{Name: "a", Mode: "readwrite"}))
+		}},
+		{"Template.New", func(c *Client, ctx context.Context) (*Sandbox, error) {
+			tpl := &Template{Name: "task:v1", c: c, addr: c.addr, net: "none", size: "small"}
+			return tpl.New(ctx, WithVolumes(Volume{Name: "a", Mode: "bogus"}))
+		}},
 	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				t.Error("server should not be contacted for a locally invalid mode")
+			}))
+			t.Cleanup(ts.Close)
 
-func TestTemplateNewRejectsInvalidVolumeModeLocally(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("server should not be contacted for a locally invalid mode")
-	}))
-	t.Cleanup(ts.Close)
-
-	c := testClient(t, ts)
-	tpl := &Template{Name: "task:v1", c: c, addr: c.addr, net: "none", size: "small"}
-	_, err := tpl.New(t.Context(), WithVolumes(Volume{Name: "a", Mode: "bogus"}))
-	if err == nil || !strings.Contains(err.Error(), "mode must be") {
-		t.Errorf("err = %v, want local mode rejection", err)
+			_, err := tt.claim(testClient(t, ts), t.Context())
+			if err == nil || !strings.Contains(err.Error(), "mode must be") {
+				t.Errorf("err = %v, want local mode rejection", err)
+			}
+		})
 	}
 }
 

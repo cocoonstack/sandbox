@@ -34,19 +34,15 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	if err != nil {
 		return nil, err
 	}
-	if quotaErr := m.overQuota(1, tenant); quotaErr != nil {
-		return nil, quotaErr
-	}
 	applied := appliedVolumes(volumeSpecs)
 	// Holds belong to this path until finalize; past it the sandbox carries them.
 	var reserved []types.Volume
 	defer func() { m.unreserveVolumes(reserved) }()
-	m.mu.Lock()
-	if reserveErr := m.reserveVolumes(applied); reserveErr != nil {
-		m.mu.Unlock()
-		return nil, reserveErr
+	if admitErr := m.admitClaim(tenant, applied); admitErr != nil {
+		return nil, admitErr
 	}
 	reserved = applied
+	m.mu.Lock()
 	var sb *types.Sandbox
 	if p := m.pools[key]; p != nil {
 		p.noteArrival(start)
@@ -64,7 +60,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 		m.destroy(ctx, sb.VMName)
 		return nil, cleanErr
 	}
-	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs); volumeErr != nil {
+	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs, applied); volumeErr != nil {
 		m.destroy(ctx, sb.VMName)
 		return nil, volumeErr
 	}
@@ -197,7 +193,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	var err error
 	if vmName == "" {
 		m.finishVolumeTeardown(ctx, td) // archived: no VM to confirm gone
-	} else if !m.removeClaimVM(ctx, vmName, id, td) {
+	} else if !m.removeOrRetry(ctx, vmName, id, "", td) {
 		err = fmt.Errorf("vm %s survived removal", vmName)
 	}
 	m.disarmEgress(id, err == nil)
@@ -330,7 +326,7 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	m.recommit(ctx, rb)
 	for _, sb := range sbs {
 		td := m.quiesceVolumes(ctx, sb)
-		m.disarmEgress(sb.ID, m.removeClaimVM(ctx, sb.VMName, sb.ID, td))
+		m.disarmEgress(sb.ID, m.removeOrRetry(ctx, sb.VMName, sb.ID, "", td))
 	}
 }
 
@@ -443,7 +439,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			logSweepResult(ctx, logger, m.archive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
 		default:
 			td := m.quiesceVolumes(ctx, v.sb)
-			m.disarmEgress(v.id, m.removeClaimVM(ctx, v.vmName, v.id, td))
+			m.disarmEgress(v.id, m.removeOrRetry(ctx, v.vmName, v.id, "", td))
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)
 			m.recordUsage(ctx, usageEvent{Event: "reap", ID: v.id, VMName: v.vmName})
@@ -506,7 +502,6 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 		return nil, err
 	}
 	applied := appliedVolumes(volumeSpecs)
-	// Holds belong to this path until finalize; past it the sandbox carries them.
 	var reserved []types.Volume
 	defer func() { m.unreserveVolumes(reserved) }()
 	if admitErr := m.admitClaim(tenant, applied); admitErr != nil {
@@ -529,7 +524,7 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	if err != nil {
 		return nil, err
 	}
-	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs); volumeErr != nil {
+	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs, applied); volumeErr != nil {
 		m.destroy(ctx, sb.VMName)
 		return nil, volumeErr
 	}

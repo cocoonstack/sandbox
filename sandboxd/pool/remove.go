@@ -44,25 +44,16 @@ func (m *Manager) confirmGone(ctx context.Context, name string) bool {
 
 // removeOrRetry reports whether the VM is confirmed gone; a survivor is queued
 // for the reap tick to retry, carrying what its cleanup needs (the sandbox ID
-// when a claim owns the tap via egressTaps, the tap itself when none does).
-func (m *Manager) removeOrRetry(ctx context.Context, name, sandboxID, tap string) bool {
-	if m.removeVM(ctx, name) {
-		return true
-	}
-	m.queueRemoval(name, sandboxID, tap, volumeTeardown{})
-	return false
-}
-
-// removeClaimVM removes a quiesced claim's VM and finishes its volume teardown,
-// which only a confirmed-gone VM may do: a survivor still holds the images, so
-// the payload rides the retry queue instead. A restart loses it — the markers
-// then stay until an rw claim clears them, and the holds die with the process.
-func (m *Manager) removeClaimVM(ctx context.Context, name, sandboxID string, td volumeTeardown) bool {
+// when a claim owns the tap via egressTaps, the tap itself when none does, and
+// the volume teardown only a confirmed-gone VM may finish — a survivor still
+// holds the images). A restart loses a queued teardown: its markers stay until
+// an rw claim clears them, and its holds die with the process.
+func (m *Manager) removeOrRetry(ctx context.Context, name, sandboxID, tap string, td volumeTeardown) bool {
 	if m.removeVM(ctx, name) {
 		m.finishVolumeTeardown(ctx, td)
 		return true
 	}
-	m.queueRemoval(name, sandboxID, "", td)
+	m.queueRemoval(name, sandboxID, tap, td)
 	return false
 }
 
@@ -128,5 +119,5 @@ func (m *Manager) finishRemoval(ctx context.Context, pending pendingRemoval) {
 }
 
 func (m *Manager) destroy(ctx context.Context, name string) {
-	m.removeOrRetry(ctx, name, "", "")
+	m.removeOrRetry(ctx, name, "", "", volumeTeardown{})
 }
