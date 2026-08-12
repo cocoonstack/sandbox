@@ -75,7 +75,7 @@ func TestReconcileRetainsVolumeCaptureGateWithoutCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
-	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "dataset", Mount: "/datasets"}})
+	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", []types.Volume{{Name: "dataset", Mount: "/datasets"}})
 	if err != nil {
 		t.Fatalf("ClaimProvision: %v", err)
 	}

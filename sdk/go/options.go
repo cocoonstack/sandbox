@@ -82,3 +82,17 @@ func WithTimeout(d time.Duration) Option {
 func ttlSeconds(d time.Duration) int {
 	return int((d + time.Second - 1) / time.Second)
 }
+
+// WithWorkspace binds the sandbox to a shared workspace: the owning node keeps
+// <workspace-root>/<name> synced with the guest workspace dir under a
+// multi-writer, close-to-open contract. Ignored by nodes with no workspace
+// root configured.
+func WithWorkspace(name string) Option {
+	return func(r *claimRequest) { r.Workspace = name }
+}
+
+// WithNoRedirect pins the claim to the addressed node instead of following a
+// warm-pool redirect to a peer — useful for driving a specific node.
+func WithNoRedirect() Option {
+	return func(r *claimRequest) { r.NoRedirect = true }
+}

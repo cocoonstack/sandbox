@@ -174,6 +174,22 @@ type Config struct {
 	DataDir   string `json:"data_dir"`
 	CocoonBin string `json:"cocoon_bin"`
 
+	// WorkspaceRoot enables the workspace filecache: the host path (a shared
+	// NAS mount) under which a claim's workspace token resolves to
+	// <WorkspaceRoot>/<token>. Empty disables the feature — claims that carry a
+	// workspace are served normally, just without host-side sync. The mount
+	// should use a low attribute cache (actimeo=1) so cross-node journal
+	// changes appear within the visibility budget.
+	WorkspaceRoot string `json:"workspace_root,omitempty"`
+	// WorkspaceDiskMB, when > 0, puts each workspace on a dedicated read-write
+	// ext4 virtio-blk disk of this size (image under WorkspaceDiskDir) instead
+	// of the guest rootfs layer, isolating it from the rootfs COW. Requires
+	// WorkspaceRoot.
+	WorkspaceDiskMB int `json:"workspace_disk_mb,omitempty"`
+	// WorkspaceDiskDir holds the raw disk images on local NVMe; defaults to
+	// <DataDir>/workspaces.
+	WorkspaceDiskDir string `json:"workspace_disk_dir,omitempty"`
+
 	// AdvertiseAddr is the host:port the data plane reaches this node at; it
 	// is returned as a claim's owner address (and, at M2c, gossiped). Defaults
 	// to Listen, which is correct when Listen is a routable host:port.

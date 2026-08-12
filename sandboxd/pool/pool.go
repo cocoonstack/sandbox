@@ -27,6 +27,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/filecache"
 	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/dir"
@@ -250,6 +251,14 @@ type Manager struct {
 	egress  bool
 	maxFork int
 	store   *claimStore
+	// wsMgr syncs claimed sandboxes' workspaces with a shared NAS root; nil
+	// (the default) disables the feature so arm/barrier are no-ops. wsRoot is
+	// the host mount a claim's workspace token resolves under. Set once before
+	// serving via EnableWorkspaceSync/EnableWorkspaceDisk.
+	wsMgr           *filecache.Manager
+	wsRoot          string
+	wsDedicatedDisk bool
+
 	volumes map[string]catalogVolume
 	// volumeAdmission counts the live holders of each volume name, mirroring
 	// the hypervisor's own per-image lock so a conflicting claim is refused

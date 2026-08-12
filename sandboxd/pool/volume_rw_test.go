@@ -21,7 +21,7 @@ func TestWritableClaimMarksDirtyBeforeAttachAndClearsOnRelease(t *testing.T) {
 	eng.dirtyPaths = []string{path}
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
 
-	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}})
+	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}})
 	if err != nil {
 		t.Fatalf("ClaimProvision: %v", err)
 	}
@@ -71,14 +71,14 @@ func TestClaimRejectsWriteOnReadOnlyEntry(t *testing.T) {
 		{Name: "scratch", Path: writable, Writable: true},
 	})
 
-	_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "data", Mode: types.VolumeModeRW}})
+	_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", []types.Volume{{Name: "data", Mode: types.VolumeModeRW}})
 	if !errors.Is(err, ErrBadVolume) || !strings.Contains(err.Error(), "not writable") {
 		t.Errorf("error=%v, want a not-writable ErrBadVolume", err)
 	}
 	if ops := eng.volumeOpsLog(); len(ops) != 0 {
 		t.Errorf("rejected claim ran %v", ops)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "scratch"}}); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", []types.Volume{{Name: "scratch"}}); err != nil {
 		t.Errorf("read-only claim of a writable entry: %v", err)
 	}
 	if volumeDirty(writable) {
@@ -95,21 +95,21 @@ func TestDirtyVolumeBlocksReadersUntilWriterRecovers(t *testing.T) {
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
 	readOnly := []types.Volume{{Name: "scratch"}}
 
-	_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", readOnly)
+	_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", readOnly)
 	if !errors.Is(err, ErrVolumeNeedsRecovery) {
 		t.Errorf("read-only claim of a dirty image: %v, want ErrVolumeNeedsRecovery", err)
 	}
 	if ops := eng.volumeOpsLog(); len(ops) != 0 {
 		t.Errorf("refused claim ran %v", ops)
 	}
-	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}})
+	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}})
 	if err != nil {
 		t.Fatalf("writable recovery claim: %v", err)
 	}
 	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", readOnly); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", readOnly); err != nil {
 		t.Errorf("read-only claim after recovery: %v", err)
 	}
 }
@@ -124,7 +124,7 @@ func TestDirtyVolumeRefusesWarmClaimBeforeTakingAVM(t *testing.T) {
 	warm := &types.Sandbox{VMName: "sbx-warm", Key: testKey, VsockSocket: "/vsock/warm"}
 	m.pools[testKey].warm = append(m.pools[testKey].warm, warm)
 
-	_, err := m.ClaimWarm(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "scratch"}})
+	_, err := m.ClaimWarm(t.Context(), testKey, 0, "", "", "", []types.Volume{{Name: "scratch"}})
 	if !errors.Is(err, ErrVolumeNeedsRecovery) {
 		t.Fatalf("read-only warm claim of a dirty image: %v, want ErrVolumeNeedsRecovery", err)
 	}
@@ -193,12 +193,12 @@ func TestVolumeAdmissionMatrix(t *testing.T) {
 			m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
 			second := []types.Volume{{Name: "scratch", Mode: tt.second}}
 
-			first, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "scratch", Mode: tt.first}})
+			first, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", []types.Volume{{Name: "scratch", Mode: tt.first}})
 			if err != nil {
 				t.Fatalf("first claim: %v", err)
 			}
 			before := eng.volumeOpsLog()
-			_, err = m.ClaimProvision(t.Context(), testKey, 0, "", "", second)
+			_, err = m.ClaimProvision(t.Context(), testKey, 0, "", "", "", second)
 			if tt.wantErr == nil {
 				if err != nil {
 					t.Fatalf("concurrent read-only claim: %v", err)
@@ -214,7 +214,7 @@ func TestVolumeAdmissionMatrix(t *testing.T) {
 			if err := m.Release(t.Context(), first.ID, Cred{Token: first.Token}); err != nil {
 				t.Fatalf("release first: %v", err)
 			}
-			if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", second); err != nil {
+			if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", second); err != nil {
 				t.Errorf("claim after release: %v", err)
 			}
 		})
@@ -244,11 +244,11 @@ func TestVolumeAdmissionRefusalHoldsNothing(t *testing.T) {
 		{Name: "held", Path: held, Writable: true},
 		{Name: "free", Path: free, Writable: true},
 	})
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "held", Mode: types.VolumeModeRW}}); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", []types.Volume{{Name: "held", Mode: types.VolumeModeRW}}); err != nil {
 		t.Fatalf("first claim: %v", err)
 	}
 
-	_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{
+	_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", []types.Volume{
 		{Name: "free", Mode: types.VolumeModeRW},
 		{Name: "held", Mode: types.VolumeModeRW},
 	})
@@ -258,7 +258,7 @@ func TestVolumeAdmissionRefusalHoldsNothing(t *testing.T) {
 	if holders := volumeHoldersOf(m, "free"); holders != (volumeHolders{}) {
 		t.Errorf("registry for the free name=%+v, want empty", holders)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "free", Mode: types.VolumeModeRW}}); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", []types.Volume{{Name: "free", Mode: types.VolumeModeRW}}); err != nil {
 		t.Errorf("claim of the free name after a refusal: %v", err)
 	}
 }
@@ -270,7 +270,7 @@ func TestVolumeAdmissionReleasedAfterSetupFailure(t *testing.T) {
 	m := newVolumePoolManager(t, eng, t.TempDir(), []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
 	writable := []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}
 
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", writable); err == nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", writable); err == nil {
 		t.Fatal("ClaimProvision succeeded")
 	}
 	if ops := eng.volumeOpsLog(); slices.ContainsFunc(ops, func(op string) bool { return strings.HasPrefix(op, "umount:") }) {
@@ -279,11 +279,11 @@ func TestVolumeAdmissionReleasedAfterSetupFailure(t *testing.T) {
 	if !volumeDirty(path) {
 		t.Error("setup failure cleared the dirty marker")
 	}
-	if _, err := m.ClaimWarm(t.Context(), testKey, 0, "", "", writable); !errors.Is(err, ErrNoWarm) {
+	if _, err := m.ClaimWarm(t.Context(), testKey, 0, "", "", "", writable); !errors.Is(err, ErrNoWarm) {
 		t.Fatalf("warm claim after a failed setup: %v, want ErrNoWarm", err)
 	}
 	eng.mountVolumeErr = nil
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", writable); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", writable); err != nil {
 		t.Errorf("claim after a failed setup: %v", err)
 	}
 }
@@ -323,7 +323,7 @@ func TestReapQuiescesWritableVolumesBeforeRemoval(t *testing.T) {
 	path := writeVolumeImage(t, "scratch.img", "data")
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
-	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "", []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}})
+	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "", "", []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}})
 	if err != nil {
 		t.Fatalf("ClaimProvision: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestQuiesceFailureSyncsOnceAndKeepsMarkers(t *testing.T) {
 		{Name: "first", Path: first, Writable: true},
 		{Name: "second", Path: second, Writable: true},
 	})
-	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{
+	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", []types.Volume{
 		{Name: "first", Mode: types.VolumeModeRW},
 		{Name: "second", Mode: types.VolumeModeRW},
 	})
@@ -373,7 +373,7 @@ func TestQuiesceFailureSyncsOnceAndKeepsMarkers(t *testing.T) {
 			t.Errorf("registry for %s after a failed unmount=%+v, want empty", name, holders)
 		}
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "first"}}); !errors.Is(err, ErrVolumeNeedsRecovery) {
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", []types.Volume{{Name: "first"}}); !errors.Is(err, ErrVolumeNeedsRecovery) {
 		t.Errorf("read-only claim after a failed unmount: %v, want ErrVolumeNeedsRecovery", err)
 	}
 }
@@ -383,7 +383,7 @@ func TestPendingRemovalHoldsVolumesUntilDrained(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
 	writable := []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}
-	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", writable)
+	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", writable)
 	if err != nil {
 		t.Fatalf("ClaimProvision: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestPendingRemovalHoldsVolumesUntilDrained(t *testing.T) {
 	if !volumeDirty(path) {
 		t.Error("marker cleared while the VM still holds the image")
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", writable); !errors.Is(err, ErrVolumeBusy) {
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", writable); !errors.Is(err, ErrVolumeBusy) {
 		t.Errorf("claim against a surviving VM: %v, want ErrVolumeBusy", err)
 	}
 
@@ -408,7 +408,7 @@ func TestPendingRemovalHoldsVolumesUntilDrained(t *testing.T) {
 	if holders := volumeHoldersOf(m, "scratch"); holders != (volumeHolders{}) {
 		t.Errorf("registry after the drain=%+v, want empty", holders)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", writable); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", writable); err != nil {
 		t.Errorf("claim after the drain: %v", err)
 	}
 }
@@ -456,7 +456,7 @@ func TestReconcileRebuildsVolumeAdmission(t *testing.T) {
 	catalog := []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}}
 	eng := newFakeEngine()
 	m := newVolumeManagerAt(t, eng, dataDir, catalog)
-	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "", []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}})
+	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "", "", []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}})
 	if err != nil {
 		t.Fatalf("ClaimProvision: %v", err)
 	}
@@ -469,13 +469,13 @@ func TestReconcileRebuildsVolumeAdmission(t *testing.T) {
 		t.Errorf("adopted registry=%+v, want one writer", holders)
 	}
 	writable := []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}
-	if _, err := m2.ClaimProvision(t.Context(), testKey, 0, "", "", writable); !errors.Is(err, ErrVolumeBusy) {
+	if _, err := m2.ClaimProvision(t.Context(), testKey, 0, "", "", "", writable); !errors.Is(err, ErrVolumeBusy) {
 		t.Errorf("claim against an adopted writer: %v, want ErrVolumeBusy", err)
 	}
 	if err := m2.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("release adopted claim: %v", err)
 	}
-	if _, err := m2.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "scratch"}}); err != nil {
+	if _, err := m2.ClaimProvision(t.Context(), testKey, 0, "", "", "", []types.Volume{{Name: "scratch"}}); err != nil {
 		t.Errorf("claim after releasing the adopted writer: %v", err)
 	}
 }
@@ -496,7 +496,7 @@ func TestWritableDiscoveryAndUsageEvent(t *testing.T) {
 		t.Errorf("catalog=%+v, want %+v", got, want)
 	}
 
-	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{
+	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", []types.Volume{
 		{Name: "data"},
 		{Name: "scratch", Mode: types.VolumeModeRW},
 	})

@@ -63,9 +63,9 @@ var poolErrHTTP = []struct {
 // parameters attribute created resources and scope listings/deletes; empty
 // means the operator (root) — unquotaed, unfiltered.
 type Manager interface {
-	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error)
-	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error)
-	ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error)
+	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef, workspace string, volumes []types.Volume) (*types.Sandbox, error)
+	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef, workspace string, volumes []types.Volume) (*types.Sandbox, error)
+	ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef, workspace string, volumes []types.Volume) (*types.Sandbox, error)
 	Release(ctx context.Context, id string, cred pool.Cred) error
 	Hibernate(ctx context.Context, id string, cred pool.Cred) error
 	Wake(ctx context.Context, id string, cred pool.Cred) error
@@ -246,12 +246,12 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	// peer that reports a warm sandbox gets the claim via redirect (data plane
 	// must be direct, so redirect beats proxy); only if no peer has one does
 	// this node provision (golden clone or cold boot).
-	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef, nil)
+	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Workspace, nil)
 	if errors.Is(err, pool.ErrNoWarm) {
 		if s.redirectClaim(r.Context(), w, req, key, hash) {
 			return
 		}
-		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, nil)
+		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Workspace, nil)
 	}
 	// A full node bounces the claim to a warm peer before answering 429 —
 	// quota is per node, and a peer with capacity is a better answer.
@@ -284,14 +284,14 @@ func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req t
 	}
 	var sb *types.Sandbox
 	if req.RequirePromoted {
-		sb, err = s.mgr.ClaimProvisionPromoted(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Volumes)
+		sb, err = s.mgr.ClaimProvisionPromoted(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Workspace, req.Volumes)
 	} else {
-		sb, err = s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Volumes)
+		sb, err = s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Workspace, req.Volumes)
 		if errors.Is(err, pool.ErrNoWarm) {
 			if s.placer != nil && !req.NoRedirect && writeRedirect(w, s.placer.VolumeCandidates(hash, types.VolumeNames(req.Volumes))) {
 				return
 			}
-			sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Volumes)
+			sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Workspace, req.Volumes)
 		}
 	}
 	writeResult(w, r, "claim", hash, "provisioning failed", err, func() {
