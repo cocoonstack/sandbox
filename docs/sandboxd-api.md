@@ -122,8 +122,7 @@ caller may use, without host paths or holder addresses:
 
 ```json
 {"volumes": [{"name": "imagenet", "default_mount": "/volumes/imagenet",
-              "size_bytes": 214748364800, "available": true, "nodes": 3,
-              "writable": false}]}
+              "size_bytes": 214748364800, "available": true, "nodes": 3}]}
 ```
 
 Root sees every entry; a tenant sees unrestricted entries plus those whose
@@ -132,7 +131,8 @@ advertising the name. `size_bytes` and `available` are a best-effort stat of the
 answering node's image, so a peer-only entry remains discoverable with
 `available: false`. Membership is eventually consistent by one gossip tick.
 `writable` is the entry's catalog configuration, fleet-uniform like the access
-list, not per-node state.
+list; the field is emitted (as `true`) only for a writable entry and omitted
+otherwise, so a read-only entry's response is byte-identical to v1.
 
 ## POST /v1/sandboxes/{id}/release
 
@@ -425,9 +425,9 @@ Always on: every lifecycle transition appends one JSONL event to
 "id": "sb_…", "vm": "sbx-…"}` plus `key` and `tenant` (the pool key and
 owning tenant, claim events), `children` (fork) and `ref` (the promoted
 template / checkpoint id, or the egress host). A volume claim also carries
-`volumes`, the applied catalog names, each flagged when claimed `rw` so
-billing can discriminate write access (mounts and host paths are not billing
-dimensions). The file rotates at
+`volumes`, the applied catalog names, and — omitted when empty — `volumes_rw`,
+the subset of those names claimed `rw`, so billing can discriminate write
+access (mounts and host paths are not billing dimensions). The file rotates at
 64 MiB keeping one `.1` backup, so a tailing collector never loses a window
 silently. Folding rules: billable compute seconds per sandbox =
 Σ(claim→release/reap) − Σ(hibernate→wake); hibernated storage seconds =

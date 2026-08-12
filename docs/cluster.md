@@ -67,15 +67,21 @@ and access lists never leave the node. After config load the set appears on the
 next gossip tick; later image distribution or removal is detected the same way.
 The node epoch bumps only when the advertised name set changes.
 
-A writable name (`writable: true`) is expected to have exactly one holder
-fleet-wide — the operator contract in
-[deploy](deploy.md#writable-dataset-volumes), not a mechanism this layer
-enforces. Because a node only ever advertises catalog names it actually
-holds, every claim for that name — `ro` or `rw` — already resolves to the
-single node that has it through the ordinary redirect logic below; there is
-no new gossip field or admission message for writable routing. Configuring
-the same writable name on two nodes is an operator error the fleet has no way
-to detect.
+A writable name (`writable: true`) still needs its catalog entry — name,
+access list, and the `writable` flag — declared identically on every node
+meant to serve it, the same rule the read-only case already needs: gossip
+carries only currently-available names, never ACL or `writable` metadata, so
+a tenant claim landing on a node with no local entry for that name is a hard
+error (unknown/forbidden), not a gossip redirect. Root tokens carry no ACL to
+enforce and are exempt — they can still redirect off gossip alone. What a
+writable entry adds is a constraint on the backing *image file*, not the
+entry: exactly one of those nodes should actually have the file present at
+the configured path (the operator contract in
+[deploy](deploy.md#writable-dataset-volumes)); the others log a missing-path
+warning and never advertise the name, so an ordinary claim still funnels to
+that one holder. Two nodes both holding the writable file is the operator
+error the fleet cannot detect — two nodes both declaring the entry is normal
+and expected.
 
 A volume claim may consume an ordinary warm VM because attach happens after the
 pop and before finalization. Warm candidates retain their normal ranking, but a
@@ -273,7 +279,9 @@ the mesh.
 - `cluster_key` set if the gossip network is not otherwise trusted
 - pool changes via `Client.SetPoolsCluster` (or per-node `SetPools`); the applied
   set persists to `pools.json` and survives restart
-- keep each volume name's dataset identity and access list identical across
-  the fleet; distribute a read-only image to every node meant to advertise
-  it, but a writable (`writable: true`) image belongs on exactly one node —
-  verify the fleet view and holder count with `GET /v1/volumes`
+- declare each volume's catalog entry — name, access list, and `writable`
+  — identically on every node meant to serve it (a tenant claim gets a hard
+  error, not a redirect, on a node missing the entry); put the actual image
+  file on every one of those nodes for a read-only name, but keep a writable
+  name's file on exactly one of them — verify the fleet view and holder
+  count with `GET /v1/volumes`

@@ -183,16 +183,30 @@ def test_volume_catalog(node):
 
 
 def test_volume_catalog_surfaces_writable(node):
-    want = [{
-        "name": "scratch",
-        "default_mount": "/data",
-        "size_bytes": 42,
-        "available": True,
-        "nodes": 1,
-        "writable": True,
-    }]
+    # The server omits "writable" for read-only entries (json omitempty); the
+    # client passes both shapes through as-is, key present or absent.
+    want = [
+        {
+            "name": "scratch",
+            "default_mount": "/data",
+            "size_bytes": 42,
+            "available": True,
+            "nodes": 1,
+            "writable": True,
+        },
+        {
+            "name": "imagenet",
+            "default_mount": "/volumes/imagenet",
+            "size_bytes": 42,
+            "available": True,
+            "nodes": 3,
+        },
+    ]
     FakeNode.routes[("GET", "/v1/volumes")] = lambda body, path: (200, {"volumes": want})
-    assert Client(node).volumes() == want
+    got = Client(node).volumes()
+    assert got == want
+    assert got[0]["writable"] is True
+    assert "writable" not in got[1]
 
 
 def test_promote_returns_content_digest(node):

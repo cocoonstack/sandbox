@@ -123,8 +123,11 @@ Hypervisor.
 for volume in client.volumes():
     print(volume["name"], volume["default_mount"],
           volume["size_bytes"], volume["available"], volume["nodes"],
-          volume["writable"])
+          volume.get("writable", False))
 ```
+
+`writable` is present (and `true`) only for a writable entry; a read-only
+entry omits the key, so read it with `.get`, not `[...]`.
 
 Discovery returns the gossiped union and holder count; availability and size
 describe the connected node. Warm candidates retain normal ranking, filtered to
