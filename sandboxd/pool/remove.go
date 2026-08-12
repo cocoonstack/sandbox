@@ -44,18 +44,22 @@ func (m *Manager) confirmGone(ctx context.Context, name string) bool {
 
 // removeOrRetry reports whether the VM is confirmed gone; a survivor is queued
 // for the reap tick to retry, carrying what its cleanup needs (the sandbox ID
-// when a claim owns the tap via egressTaps, the tap itself when none does).
-func (m *Manager) removeOrRetry(ctx context.Context, name, sandboxID, tap string) bool {
+// when a claim owns the tap via egressTaps, the tap itself when none does, and
+// the volume teardown only a confirmed-gone VM may finish — a survivor still
+// holds the images). A restart loses a queued teardown: its markers stay until
+// an rw claim clears them, and its holds die with the process.
+func (m *Manager) removeOrRetry(ctx context.Context, name, sandboxID, tap string, td volumeTeardown) bool {
 	if m.removeVM(ctx, name) {
+		m.finishVolumeTeardown(ctx, td)
 		return true
 	}
-	m.queueRemoval(name, sandboxID, tap)
+	m.queueRemoval(name, sandboxID, tap, td)
 	return false
 }
 
-func (m *Manager) queueRemoval(name, sandboxID, tap string) {
+func (m *Manager) queueRemoval(name, sandboxID, tap string, td volumeTeardown) {
 	m.mu.Lock()
-	m.pendingRemovals[name] = pendingRemoval{sandboxID: sandboxID, tap: tap}
+	m.pendingRemovals[name] = pendingRemoval{sandboxID: sandboxID, tap: tap, volumes: td}
 	m.mu.Unlock()
 }
 
@@ -94,18 +98,19 @@ func (m *Manager) retryRemoval(ctx context.Context, name string, pending pending
 			m.queueStaleCreate(name, pending.tap)
 			return
 		case outcome == engine.StaleCreateCollected, outcome == engine.StaleCreateNotFound:
-			m.finishRemoval(pending)
+			m.finishRemoval(ctx, pending)
 			return
 		}
 	}
 	if !m.removeVM(ctx, name) {
-		m.queueRemoval(name, pending.sandboxID, pending.tap)
+		m.queueRemoval(name, pending.sandboxID, pending.tap, pending.volumes)
 		return
 	}
-	m.finishRemoval(pending)
+	m.finishRemoval(ctx, pending)
 }
 
-func (m *Manager) finishRemoval(pending pendingRemoval) {
+func (m *Manager) finishRemoval(ctx context.Context, pending pendingRemoval) {
+	m.finishVolumeTeardown(ctx, pending.volumes)
 	if pending.sandboxID != "" {
 		m.disarmEgress(pending.sandboxID, true)
 	} else if pending.tap != "" {
@@ -114,5 +119,5 @@ func (m *Manager) finishRemoval(pending pendingRemoval) {
 }
 
 func (m *Manager) destroy(ctx context.Context, name string) {
-	m.removeOrRetry(ctx, name, "", "")
+	m.removeOrRetry(ctx, name, "", "", volumeTeardown{})
 }

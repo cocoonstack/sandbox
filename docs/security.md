@@ -85,7 +85,7 @@ or partitioned at that moment keeps its own replica branchable until
 Tenants are isolated at the API layer — listings filter, deletes answer 404
 rather than confirming existence, and operator surfaces answer tenants 403.
 
-## Read-only dataset volumes
+## Dataset volumes
 
 The volume catalog is an operator-owned data boundary. A volume name and its
 access list must mean the same thing fleet-wide, although membership is
@@ -103,9 +103,22 @@ Mounting a dataset into an egress-lane sandbox gives that sandbox an export path
 to every destination its tenant egress policy permits; review the volume access
 list and egress policy together. With `directio=off`, concurrent readers share
 the host page cache, which improves reuse but lets one tenant's large scan evict
-another's cached pages. `directio=on` is the per-volume mitigation; v1 has no
-per-tenant cache quota or accounting. Operators must keep an attached image
+another's cached pages — the same holds for a writer: a large `rw` write can
+evict cached pages backing another volume's readers exactly like a large scan
+would. `directio=on` is the per-volume mitigation; v1 has no per-tenant cache
+quota or accounting. Operators must keep a read-only entry's attached image
 immutable and publish a new name/path for new content.
+
+A writable entry (`writable: true`) adds a channel the read-only model does
+not have: whichever tenant is permitted to claim it `rw` changes what every
+other permitted tenant reads next, and any of them can be the writer in
+turn — a multi-tenant access list on a writable entry is a bidirectional
+channel between those tenants, not just a shared read. Recommend a writable
+entry's `tenants` name exactly one tenant — an empty list permits every
+authenticated scope, which for a writable entry means every tenant can write
+to every other tenant's next read. A dataset that genuinely needs multiple
+writers needs an out-of-band process for who writes when, which the catalog
+ACL does not provide.
 
 ## Known limitations
 

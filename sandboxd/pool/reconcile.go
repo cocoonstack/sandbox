@@ -71,6 +71,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 		m.claimed[id] = sb
 		m.tenantDelta(sb.Tenant, 1)
+		m.adoptVolumes(sb.Volumes)
 		owned[sb.VMName] = true
 		referenced[sb.HibernateSnap] = true
 	}
@@ -168,7 +169,7 @@ func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRe
 		}
 		// not-creating: the record moved on under the lock; remove normally.
 	}
-	return m.removeOrRetry(ctx, name, "", rec.TapDevice())
+	return m.removeOrRetry(ctx, name, "", rec.TapDevice(), volumeTeardown{})
 }
 
 // resyncEgress re-locks adopted egress claims after a restart, quarantines any
@@ -218,7 +219,8 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 
 // A failed remove stays out of service and queued until teardown succeeds.
 func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
-	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID, "")
+	td := m.quiesceVolumes(ctx, sb)
+	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID, "", td)
 	m.mu.Lock()
 	delete(m.claimed, sb.ID)
 	m.tenantDelta(sb.Tenant, -1)

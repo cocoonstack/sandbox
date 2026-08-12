@@ -13,6 +13,10 @@ import (
 )
 
 const (
+	// VolumeCallTimeout bounds one guest teardown exec; the pool scales its
+	// whole quiesce budget from it.
+	VolumeCallTimeout = 2 * time.Second
+
 	volumePollInterval = 10 * time.Millisecond
 	volumeProbeTimeout = 2 * time.Second
 	volumeSetupTimeout = 10 * time.Second
@@ -23,6 +27,7 @@ type VolumeSpec struct {
 	Name     string
 	Path     string
 	DirectIO string
+	RW       bool
 }
 
 func (s VolumeSpec) directIO() (string, error) {
@@ -33,7 +38,7 @@ func (s VolumeSpec) directIO() (string, error) {
 	return mode, nil
 }
 
-// DiskAttach hot-attaches an operator-owned disk read-only through cocoon.
+// DiskAttach hot-attaches an operator-owned disk through cocoon.
 func (e *Engine) DiskAttach(ctx context.Context, vmName string, spec VolumeSpec) error {
 	args, err := e.diskAttachArgs(vmName, spec)
 	if err != nil {
@@ -43,8 +48,8 @@ func (e *Engine) DiskAttach(ctx context.Context, vmName string, spec VolumeSpec)
 	return err
 }
 
-// MountVolume discovers and mounts a hot-attached disk read-only at mount.
-func (e *Engine) MountVolume(ctx context.Context, vsockSocket, name, mount string) error {
+// MountVolume discovers and mounts a hot-attached disk at mount, read-only unless rw.
+func (e *Engine) MountVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error {
 	ctx, cancel := context.WithTimeout(ctx, volumeSetupTimeout)
 	defer cancel()
 	device, err := e.waitForVolumeDevice(ctx, vsockSocket, name)
@@ -54,8 +59,34 @@ func (e *Engine) MountVolume(ctx context.Context, vsockSocket, name, mount strin
 	if err := e.silkdExec(ctx, vsockSocket, "mkdir", "-p", "--", mount); err != nil {
 		return fmt.Errorf("create volume mount point %s: %w", mount, err)
 	}
-	if err := e.silkdExec(ctx, vsockSocket, "mount", "-o", "ro", "--", device, mount); err != nil {
+	mode := types.VolumeModeRO
+	if rw {
+		mode = types.VolumeModeRW
+	}
+	if err := e.silkdExec(ctx, vsockSocket, "mount", "-o", mode, "--", device, mount); err != nil {
 		return fmt.Errorf("mount volume %s: %w", name, err)
+	}
+	return nil
+}
+
+// UnmountVolume flushes and detaches a guest mount, so a writable image's
+// dirty state reaches the backing file before the VM is removed.
+func (e *Engine) UnmountVolume(ctx context.Context, vsockSocket, mount string) error {
+	ctx, cancel := context.WithTimeout(ctx, VolumeCallTimeout)
+	defer cancel()
+	if err := e.silkdExec(ctx, vsockSocket, "umount", "--", mount); err != nil {
+		return fmt.Errorf("unmount volume %s: %w", mount, err)
+	}
+	return nil
+}
+
+// SyncGuest flushes the guest page cache — the only flush left for a mount that
+// refused to unmount, since a lazy unmount would keep writing behind us.
+func (e *Engine) SyncGuest(ctx context.Context, vsockSocket string) error {
+	ctx, cancel := context.WithTimeout(ctx, VolumeCallTimeout)
+	defer cancel()
+	if err := e.silkdExec(ctx, vsockSocket, "sync"); err != nil {
+		return fmt.Errorf("sync guest: %w", err)
 	}
 	return nil
 }
@@ -107,11 +138,13 @@ func (e *Engine) diskAttachArgs(vmName string, spec VolumeSpec) ([]string, error
 	if err != nil {
 		return nil, err
 	}
-	return []string{
+	args := []string{
 		"vm", "disk", "attach", vmName,
 		"--path", spec.Path,
 		argName, spec.Name,
-		"--readonly",
-		"--directio", directIO,
-	}, nil
+	}
+	if !spec.RW {
+		args = append(args, "--readonly")
+	}
+	return append(args, "--directio", directIO), nil
 }

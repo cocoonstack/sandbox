@@ -33,9 +33,10 @@ performance) — source in
   baked into the base image
 - `sandboxd/` — per-node control plane (Go): warm pools refilled from golden
   snapshot exports (online-retunable), claim/release/hibernate/fork/promote/
-  checkpoint HTTP API, operator-catalog read-only dataset volumes, signed
-  preview URLs, the HTTP-upgrade byte relay to silkd, usage + audit journals,
-  /metrics, reap + restart reconcile, memberlist mesh with redirect placement
+  checkpoint HTTP API, operator-catalog dataset volumes (read-only or
+  writable), signed preview URLs, the HTTP-upgrade byte relay to silkd,
+  usage + audit journals, /metrics, reap + restart reconcile, memberlist
+  mesh with redirect placement
 - `sdk/go/` — Go SDK (stdlib-only): `Connect/New/Lookup`, `Exec/Run`, files,
   `Push/Pull`, sessions, `Find/Replace`, `Watch`, git verbs, `OpenPty`,
   `Fork/Hibernate/Promote/Checkpoint`, `DialPort/ProxyPort/PreviewURL`,
@@ -103,8 +104,9 @@ TEMPLATE=rt:24.04 scripts/sandboxd-e2e.sh
 #   `ip link add br0 type bridge` with no uplink is enough (NIC, not network).
 # SANDBOXD_BIN/DEMO_BIN/SMOKE_BIN point at prebuilt binaries for nodes
 #   without a Go toolchain.
-# VOLUME_IMAGE=/absolute/dataset.img enables the read-only sharing proof; the
-#   image contains volume-e2e.txt. Prebuilt runs also set VOLUME_SMOKE_BIN.
+# VOLUME_IMAGE=/absolute/dataset.img enables the volumes proof (ro sharing
+#   + rw claim/release); the image contains volume-e2e.txt. Prebuilt runs
+#   also set VOLUME_SMOKE_BIN.
 ```
 
 ## CI

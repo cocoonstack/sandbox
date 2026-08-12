@@ -38,7 +38,7 @@ The scalar egress-attachment keys are retired: rename `"bridge": "br0"` to
 starting the new binary — config loading rejects the old spellings loudly
 rather than silently dropping the egress lane.
 
-Read-only dataset volumes require a lockstep rollout. Upgrade every sandboxd
+Dataset volumes require a lockstep rollout. Upgrade every sandboxd
 node and cocoon to the required version before enabling the catalog or shipping
 an SDK that requests volumes. Mixed-version serving is unsupported. Once a
 volume claim has finalized, do not roll a node back to an older sandboxd until
@@ -88,7 +88,7 @@ sandboxd reads one JSON file (`-config`, default
 | `no_direct_io` | false | use buffered writable disks for Cloud Hypervisor cold boots and clones; recommended for dense ephemeral pools to avoid direct-I/O CoW journal contention |
 | `advertise_addr` | = `listen` | the host:port clients reach this node at; returned as a claim's owner address and gossiped to peers. Must be routable when `listen` is a wildcard |
 | `bridges` / `networks` | unset | egress-lane attachment: a list of host bridge devices, or a list of CNI conflist names. Mutually exclusive; with neither set the node serves only the no-network lane. A Linux bridge holds at most 1024 ports (kernel `BR_MAX_PORTS`), so an N-entry list raises the node's egress ceiling to N×1024 — VMs spread over the list by a stable hash of the VM name, so size it with headroom (the spread is statistical, not exact). `bridges` keeps the raw TAP-on-bridge attachment (taps in the root netns, no per-VM network namespace or CNI plugin execution); `networks` runs the CNI chain per VM. [Guarded egress](egress.md) needs `bridges` and rejects a CNI network at load |
-| `volumes` | unset | node-local catalog of operator-managed read-only dataset images: `[ {"name":"imagenet","path":"/srv/datasets/imagenet.img","directio":"off","tenants":["acme"]} ]`. Names match `^[a-z][a-z0-9_-]{0,19}$` and cannot start with `cocoon-`; paths are absolute; `directio` is `on`, `off`, or `auto` and defaults to `off`. `tenants` is an optional access list: empty means every authenticated scope, while every listed name must exist in the node's `tenants` config. Root always has access. The catalog is intentionally not part of the cluster digest |
+| `volumes` | unset | node-local catalog of operator-managed dataset images: `[ {"name":"imagenet","path":"/srv/datasets/imagenet.img","directio":"off","tenants":["acme"]}, {"name":"scratch-db","path":"/srv/datasets/scratch.img","writable":true} ]`. Names match `^[a-z][a-z0-9_-]{0,19}$` and cannot start with `cocoon-`; paths are absolute; `directio` is `on`, `off`, or `auto` and defaults to `off` for both read-only and writable entries. `tenants` is an optional access list: empty means every authenticated scope, while every listed name must exist in the node's `tenants` config; root always has access. `writable` (default `false`) lets a claim request `mode: "rw"` on that entry — see [Dataset volumes](#dataset-volumes). The catalog is intentionally not part of the cluster digest |
 | `egress_ca` | unset | [HTTPS-interception](egress.md#https-interception) PKI: `root_cert` (the cluster root baked into intercepted guests; may bundle old+new roots during rotation) plus this node's `intermediate_cert`/`intermediate_key` from `sandboxd ca issue-intermediate`. Required when any pool rule sets `intercept` |
 | `api_token` | unset | the operator (root) credential: when set, guards the node-level endpoints (Bearer) with full access, including release-by-id cleanup. Per-sandbox tokens guard ordinary sandbox-scoped calls |
 | `tenants` | unset | multi-tenant tokens next to `api_token`: `[{"name": "acme", "token": "…", "max_claims": 50}]`. A tenant token reaches the resource-creating verbs (claim, fork, promote, checkpoint, preview), catalog discovery, and its own sandbox/checkpoint listings; everything it creates is stamped with the tenant name. Root-only surfaces (per-id sandbox reads, `GET /v1/info`, `PUT /v1/pools`, `POST/DELETE /v1/drain`, `/metrics`) answer it 403. `max_claims` (0 = unlimited) caps that tenant's live claims next to the node-wide cap. Requires `api_token` set. Names and tokens must be unique, tokens distinct from `api_token`. On a cluster all nodes must carry the same tenants set (the SDK replays whichever token authorized a redirect), and per-node caps mean a tenant's effective cluster limit is `max_claims` × nodes. Empty = exactly the single-token behavior |
@@ -120,13 +120,13 @@ fragment the warm pools):
 | `large` | 4 | 4G |
 | `xlarge` | 4 | 8G |
 
-### Read-only dataset volumes
+### Dataset volumes
 
-Each catalog path must name an immutable disk image containing a mountable
-whole-device filesystem. A missing path produces a startup warning and fails
-only claims that request it, allowing images to be distributed after sandboxd
-starts. Do not replace, truncate, or delete an image while it is attached;
-publish a new catalog name or path instead.
+Each catalog path must name a disk image containing a mountable whole-device
+filesystem. A read-only entry's image must stay immutable: do not replace,
+truncate, or delete it while attached; publish a new catalog name or path
+instead. A missing path produces a startup warning and fails only claims that
+request it, allowing images to be distributed after sandboxd starts.
 
 For example, build a whole-device ext4 image directly from a prepared tree,
 then make the published file host-read-only:
@@ -149,10 +149,12 @@ mounts may shadow an existing populated guest directory for that claim's life.
 
 A volume claim may consume an ordinary warm Cloud Hypervisor VM. sandboxd
 attaches after the warm pop or provision, polls `/sys/block/*/serial` for the
-attach name for up to 2 seconds, then mounts the device read-only before
-finalizing the claim. Both the Cloud Hypervisor attachment and the guest
-filesystem mount are read-only. Setup failure destroys the VM; a popped warm VM
-is refilled normally. Firecracker volume claims are rejected.
+attach name for up to 2 seconds, then mounts the device before finalizing the
+claim: `mode: "ro"` (the default) attaches and mounts read-only; `mode: "rw"`
+requires the catalog entry's `writable: true` and attaches and mounts
+read-write. Setup failure destroys the VM without quiescing — the claim was
+never handed out, so no workload write happened — and a popped warm VM is
+refilled normally. Firecracker volume claims are rejected.
 
 Warm candidates retain their normal ranking, but a candidate for a volume
 claim must hold every requested image. If the entry node cannot serve them all,
@@ -165,16 +167,57 @@ An empty catalog `tenants` list allows every authenticated scope; a nonempty
 list limits the image to those tenants, while root always bypasses it. Removing
 a tenant therefore requires removing every catalog reference in the same edit.
 `GET /v1/volumes` reports the caller-visible fleet union and holder count, plus
-the answering node's current local availability, without exposing host paths or
-node addresses. Applied names and effective mounts are persisted with the
-claim. Such a claim cannot hibernate, fork, checkpoint, or promote; the idle
-hibernate sweep leaves it running. Release removes the VM but never deletes the
-operator-owned backing image. With `directio=off`, readers share the host page
-cache; use `directio=on` when cache interference matters.
+the answering node's current local availability and whether the entry is
+`writable`, without exposing host paths or node addresses. Applied names,
+effective mounts, and (for `rw` entries) mode are persisted with the claim.
+Such a claim cannot hibernate, fork, checkpoint, or promote; the idle
+hibernate sweep leaves it running. Release removes the VM but never deletes
+the operator-owned backing image — an `rw` release quiesces (unmounts) first,
+below. With `directio=off`, readers share the host page cache; use
+`directio=on` when cache interference matters.
 A dataset mounted into an egress-lane sandbox can be uploaded wherever that
 tenant's egress policy permits, so treat the ACL and egress policy as one access
-decision. Image replication, write-enabled dataset disks, detach, and
-refcounting remain out of scope.
+decision. Image replication, detach, and refcounting remain out of scope.
+
+#### Writable dataset volumes
+
+A catalog entry with `writable: true` may be claimed with `mode: "rw"`
+(omitted, or `"ro"`, always mounts read-only, even against a writable entry).
+`directio` still defaults to `off` for a writable entry — the durability
+nuance is that the host page cache sits between the guest's flush and the
+device, so `directio=on` is the knob when that gap matters, not just cache
+interference.
+
+**Single holder, by operator contract.** A writable name must be attached
+from exactly one node — the same weight as "replacing an attached image is
+operator error." Nodes advertise only the catalog paths they actually hold,
+so every claim for that name, `ro` or `rw`, already funnels to that one node;
+running the same writable name from two nodes at once is dataset divergence
+that nothing in the protocol detects for you.
+
+**The `<path>.dirty` marker.** Before the first `rw` attach of an image,
+sandboxd durably creates a `<path>.dirty` sidecar beside it; a clean `rw`
+release removes it. It is a write-ahead record, not a lock: it survives a
+killed sandboxd or a dead VMM, so anything short of a clean unmount leaves it
+in place. It is operator-visible — `ls` next to the image shows whether it's
+mid-write — and travels with the image on shared storage. A leftover marker
+is not corruption (a journaling filesystem already makes a hard VM kill
+crash-consistent); it means the image needs one `rw` claim, which replays the
+journal as a side effect of mounting, followed by a clean release, before it
+can serve `ro` again. A `ro` claim against a dirty image is refused rather
+than auto-healed: replaying the journal takes the write lock, which conflicts
+with concurrent readers.
+
+**Concurrency, for one image name:**
+
+- `rw` ∥ `rw` — refused (409).
+- `rw` ∥ `ro`, either order — refused (409): a writer under live readers hands
+  every reader torn metadata, since ext4/xfs are not cluster filesystems.
+- `ro` ∥ `ro` — fine, same as v1.
+- Sequential `rw` → release → `ro` is the supported publish/update workflow,
+  gated by the dirty marker: a clean writer release clears it and readers
+  proceed; a crashed writer leaves it, and `ro` claims are refused until one
+  `rw` claim replays and releases cleanly.
 
 ### A fuller config
 
@@ -373,6 +416,10 @@ scripts/sandboxd-e2e.sh`. The script verifies two concurrent mounts, read-only
 enforcement, warm-pool consumption, and an unchanged source checksum. On a node
 using prebuilt binaries, also set `VOLUME_SMOKE_BIN` beside `SANDBOXD_BIN`,
 `DEMO_BIN`, and `SMOKE_BIN`.
+
+Add `VOLUME_RW_IMAGE=/srv/datasets/scratch.img` (a second, writable image) to
+also run the writable leg: a durable write across release, second-writer
+exclusion, and a clean read-only claim afterward.
 
 ## Preview URLs
 

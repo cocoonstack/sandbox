@@ -26,7 +26,8 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
 ```json
 {"template": "base:24.04", "net": "none", "size": "small",
  "ttl_seconds": 300,
- "volumes": [{"name": "imagenet"}, {"name": "weights", "mount": "/models"}],
+ "volumes": [{"name": "imagenet"}, {"name": "weights", "mount": "/models"},
+             {"name": "scratch-db", "mode": "rw"}],
  "claim_ref": "namespace/workload", "no_redirect": false,
  "require_promoted": false}
 ```
@@ -42,8 +43,10 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   a promoted template name if its gossip view is stale
 - `volumes` is an ordered list of at most eight unique catalog names. `mount`
   defaults to `/volumes/<name>`; a custom value must be absolute and clean,
-  outside the guest OS tree, unique, and non-nesting within the request. Volumes
-  are read-only and require Cloud Hypervisor
+  outside the guest OS tree, unique, and non-nesting within the request.
+  `mode` is `"ro"` (default, omitted) or `"rw"`; `"rw"` requires the catalog
+  entry's `writable: true` (see [deploy](deploy.md#dataset-volumes)). Volumes
+  require Cloud Hypervisor
 
 Success:
 
@@ -51,7 +54,8 @@ Success:
 {"id": "sb_…", "token": "…", "deadline": "2026-07-06T00:05:00Z",
  "owner_addr": "10.0.0.5:7777", "template_digest": "sha256:…",
  "volumes": [{"name": "imagenet", "mount": "/volumes/imagenet"},
-             {"name": "weights", "mount": "/models"}]}
+             {"name": "weights", "mount": "/models"},
+             {"name": "scratch-db", "mount": "/volumes/scratch-db", "mode": "rw"}]}
 ```
 
 A claim cloned from a promoted template carries `template_digest`, the exact
@@ -63,11 +67,13 @@ A claim branched from a checkpoint (fork children included) additionally
 carries `"from_checkpoint": "ck_…"` — the lineage edge for reconstructing
 the checkpoint tree.
 
-`volumes` reports the names and effective mounts applied and persisted at
-finalization. sandboxd attaches each disk read-only, polls
+`volumes` reports the names, effective mounts, and (`rw` only) mode applied
+and persisted at finalization — `mode` is omitted from the echo for `ro`
+entries, matching the request shape. sandboxd attaches each disk, polls
 `/sys/block/*/serial` for its attach name for up to 2 seconds, and mounts the
-filesystem read-only before returning. A custom mount may shadow an existing
-populated guest directory for the claim's life.
+filesystem — read-only, unless the entry requested and was granted `rw` —
+before returning. A custom mount may shadow an existing populated guest
+directory for the claim's life.
 
 Redirects (mutually exclusive with the fields above) name peers to retry
 at — sent on a warm miss with warm peers, when the node lacks a golden for
@@ -96,11 +102,18 @@ name (attributed in the usage journal and counted against the tenant's
 `max_claims`). A catalog access list may restrict an entry to named tenants;
 an unknown and a forbidden volume return the same error text.
 
-Errors: 400 unknown template axis, invalid/duplicate volumes, or a volume that
-is unknown or forbidden (the latter two are deliberately indistinguishable),
-Firecracker with volumes, or bad body; 401 bad api token; 409 egress requested
-on a node without an egress attachment; 429 node at `max_claims`, the calling
-tenant at its own `max_claims`, or the node draining; 500 provisioning failed.
+Errors: 400 unknown template axis, invalid/duplicate volumes, `mode: "rw"`
+against a non-writable entry, or a volume that is unknown or forbidden (the
+latter two are deliberately indistinguishable), Firecracker with volumes, or
+bad body; 401 bad api token; 409 egress requested on a node without an egress
+attachment, a writable name already claimed in a conflicting mode (volume
+busy — a live writer excludes every other claim for that name, live readers
+exclude a writer), or a `ro` claim against a writable image left dirty by an
+unclean `rw` release (needs recovery — one `rw` claim must replay and cleanly
+release before `ro` claims resume; see
+[deploy](deploy.md#writable-dataset-volumes)); 429 node at `max_claims`, the
+calling tenant at its own `max_claims`, or the node draining; 500
+provisioning failed.
 
 ## GET /v1/volumes
 
@@ -117,6 +130,9 @@ access list names it. The response is the gossiped union: `nodes` counts members
 advertising the name. `size_bytes` and `available` are a best-effort stat of the
 answering node's image, so a peer-only entry remains discoverable with
 `available: false`. Membership is eventually consistent by one gossip tick.
+`writable` is the entry's catalog configuration, fleet-uniform like the access
+list; the field is emitted (as `true`) only for a writable entry and omitted
+otherwise, so a read-only entry's response is byte-identical to v1.
 
 ## POST /v1/sandboxes/{id}/release
 
@@ -409,8 +425,9 @@ Always on: every lifecycle transition appends one JSONL event to
 "id": "sb_…", "vm": "sbx-…"}` plus `key` and `tenant` (the pool key and
 owning tenant, claim events), `children` (fork) and `ref` (the promoted
 template / checkpoint id, or the egress host). A volume claim also carries
-`volumes`, the applied catalog names (mounts and host paths are not billing
-dimensions). The file rotates at
+`volumes`, the applied catalog names, and — omitted when empty — `volumes_rw`,
+the subset of those names claimed `rw`, so billing can discriminate write
+access (mounts and host paths are not billing dimensions). The file rotates at
 64 MiB keeping one `.1` backup, so a tailing collector never loses a window
 silently. Folding rules: billable compute seconds per sandbox =
 Σ(claim→release/reap) − Σ(hibernate→wake); hibernated storage seconds =

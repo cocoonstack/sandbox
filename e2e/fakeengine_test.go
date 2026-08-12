@@ -26,6 +26,8 @@ type fakeEngine struct {
 	mu        sync.Mutex
 	listeners map[string]io.Closer
 	socks     map[string]string
+	volumeOps []string
+	volumeVMs map[string]bool
 	seq       int
 }
 
@@ -35,6 +37,7 @@ func newFakeEngine(dir string) *fakeEngine {
 		dir:       dir,
 		listeners: map[string]io.Closer{},
 		socks:     map[string]string{},
+		volumeVMs: map[string]bool{},
 	}
 }
 
@@ -58,6 +61,10 @@ func (f *fakeEngine) Remove(_ context.Context, name string) error {
 	}
 	delete(f.listeners, name)
 	delete(f.socks, name)
+	if f.volumeVMs[name] {
+		delete(f.volumeVMs, name)
+		f.volumeOps = append(f.volumeOps, "remove")
+	}
 	return nil
 }
 
@@ -109,9 +116,42 @@ func (f *fakeEngine) DialGuestPort(context.Context, string, uint16) (net.Conn, e
 
 func (f *fakeEngine) InstallCACert(context.Context, string, []byte) error { return nil }
 
-func (f *fakeEngine) DiskAttach(context.Context, string, engine.VolumeSpec) error { return nil }
+func (f *fakeEngine) DiskAttach(_ context.Context, vmName string, spec engine.VolumeSpec) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumeVMs[vmName] = true
+	f.volumeOps = append(f.volumeOps, "attach:"+spec.Name+":"+volumeMode(spec.RW))
+	return nil
+}
 
-func (f *fakeEngine) MountVolume(context.Context, string, string, string) error { return nil }
+func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumeOps = append(f.volumeOps, "mount:"+name+":"+mount+":"+volumeMode(rw))
+	return nil
+}
+
+func (f *fakeEngine) UnmountVolume(_ context.Context, _, mount string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumeOps = append(f.volumeOps, "umount:"+mount)
+	return nil
+}
+
+func (f *fakeEngine) SyncGuest(_ context.Context, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumeOps = append(f.volumeOps, "sync")
+	return nil
+}
+
+// Removals join the trace only for VMs that carried a volume, so warm-pool
+// churn cannot perturb the order.
+func (f *fakeEngine) volumeOpsLog() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.volumeOps)
+}
 
 func (f *fakeEngine) create(name string) (string, error) {
 	f.mu.Lock()
@@ -133,4 +173,11 @@ func (f *fakeEngine) createRecord(name string) (types.VMRecord, error) {
 		return types.VMRecord{}, err
 	}
 	return types.VMRecord{VsockSocket: sock, Config: types.VMConfig{Name: name}}, nil
+}
+
+func volumeMode(rw bool) string {
+	if rw {
+		return types.VolumeModeRW
+	}
+	return types.VolumeModeRO
 }

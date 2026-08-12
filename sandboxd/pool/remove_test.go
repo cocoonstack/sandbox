@@ -17,7 +17,7 @@ func TestRemoveVMClassifiesOutcome(t *testing.T) {
 	}
 
 	delete(eng.vms, "survivor")
-	if !m.removeOrRetry(t.Context(), "survivor", "", "") {
+	if !m.removeOrRetry(t.Context(), "survivor", "", "", volumeTeardown{}) {
 		t.Fatal("absent VM reported present")
 	}
 	m.mu.Lock()
@@ -77,7 +77,7 @@ func TestRemovalRetryFinishesEgressCleanup(t *testing.T) {
 	eng.removeErrFor = "survivor"
 	m.egressTaps["sb_survivor"] = "tap-survivor"
 
-	removed := m.removeOrRetry(t.Context(), "survivor", "sb_survivor", "")
+	removed := m.removeOrRetry(t.Context(), "survivor", "sb_survivor", "", volumeTeardown{})
 	m.disarmEgress("sb_survivor", removed)
 	if removed {
 		t.Fatal("surviving VM reported gone")

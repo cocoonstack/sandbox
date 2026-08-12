@@ -112,11 +112,14 @@ type TenantSpec struct {
 	Egress *egress.Policy `json:"egress,omitempty"`
 }
 
-// VolumeSpec declares one operator-managed read-only dataset disk.
+// VolumeSpec declares one operator-managed dataset disk. The entry — name,
+// access list, mode — is declared fleet-wide; Writable admits rw claims, and
+// the image at Path is held by exactly one node.
 type VolumeSpec struct {
 	Name     string   `json:"name"`
 	Path     string   `json:"path"`
 	DirectIO string   `json:"directio,omitempty"`
+	Writable bool     `json:"writable,omitempty"`
 	Tenants  []string `json:"tenants,omitempty"`
 }
 

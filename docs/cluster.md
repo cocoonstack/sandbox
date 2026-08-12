@@ -58,7 +58,7 @@ Node death is honest: a dead node's sandboxes die with it (memory state is
 node-local by design). SWIM detects the death and peers stop redirecting to
 it.
 
-### Read-only volumes and placement
+### Volumes and placement
 
 A volume name has one fleet-wide meaning and access list, while catalog
 membership is node-local and deliberately excluded from the cluster config
@@ -66,6 +66,22 @@ digest. Nodes gossip only their currently available catalog names: host paths
 and access lists never leave the node. After config load the set appears on the
 next gossip tick; later image distribution or removal is detected the same way.
 The node epoch bumps only when the advertised name set changes.
+
+A writable name (`writable: true`) still needs its catalog entry — name,
+access list, and the `writable` flag — declared identically on every node
+meant to serve it, the same rule the read-only case already needs: gossip
+carries only currently-available names, never ACL or `writable` metadata, so
+a tenant claim landing on a node with no local entry for that name is a hard
+error (unknown/forbidden), not a gossip redirect. Root tokens carry no ACL to
+enforce and are exempt — they can still redirect off gossip alone. What a
+writable entry adds is a constraint on the backing *image file*, not the
+entry: exactly one of those nodes should actually have the file present at
+the configured path (the operator contract in
+[deploy](deploy.md#writable-dataset-volumes)); the others log a missing-path
+warning and never advertise the name, so an ordinary claim still funnels to
+that one holder. Two nodes both holding the writable file is the operator
+error the fleet cannot detect — two nodes both declaring the entry is normal
+and expected.
 
 A volume claim may consume an ordinary warm VM because attach happens after the
 pop and before finalization. Warm candidates retain their normal ranking, but a
@@ -81,7 +97,8 @@ fails without a second hop even while template gossip is one tick stale.
 `GET /v1/volumes` and the SDK discovery calls return the gossiped union filtered
 through the answering node's fleet-uniform access lists. `nodes` counts members
 advertising each name, while `available` and `size_bytes` describe only the
-answering node's image. No node address or dataset-to-host mapping is returned;
+answering node's image, and `writable` is the entry's catalog configuration,
+uniform fleet-wide. No node address or dataset-to-host mapping is returned;
 claim placement resolves the holder.
 
 ## Querying members
@@ -262,6 +279,9 @@ the mesh.
 - `cluster_key` set if the gossip network is not otherwise trusted
 - pool changes via `Client.SetPoolsCluster` (or per-node `SetPools`); the applied
   set persists to `pools.json` and survives restart
-- keep each volume name's dataset identity and access list identical across the
-  fleet, distribute its immutable image to every node meant to advertise it,
-  and verify the fleet view and holder count with `GET /v1/volumes`
+- declare each volume's catalog entry — name, access list, and `writable`
+  — identically on every node meant to serve it (a tenant claim gets a hard
+  error, not a redirect, on a node missing the entry); put the actual image
+  file on every one of those nodes for a read-only name, but keep a writable
+  name's file on exactly one of them — verify the fleet view and holder
+  count with `GET /v1/volumes`

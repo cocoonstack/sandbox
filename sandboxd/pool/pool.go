@@ -93,7 +93,10 @@ var (
 	ErrNoEgressHibernate = errors.New("egress-lane sandboxes do not hibernate")
 	ErrNoEgressFork      = errors.New("egress-lane sandboxes cannot fork, checkpoint, or promote: a resumed guest egresses before its fresh tap can be locked")
 	ErrVolumeCapture     = errors.New("sandboxes with volumes cannot hibernate, fork, checkpoint, or promote")
-	ErrQuota             = errors.New("node claim quota reached")
+	ErrVolumeBusy        = errors.New("volume is held by another claim")
+	// Replaying a journal takes a writable mount, so readers stay out.
+	ErrVolumeNeedsRecovery = errors.New("volume needs recovery by a writable claim")
+	ErrQuota               = errors.New("node claim quota reached")
 
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
 	errNoEgressTap   = errors.New("egress-lane claim has no lockable tap")
@@ -117,7 +120,9 @@ type Engine interface {
 	DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error)
 	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error
 	DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error
-	MountVolume(ctx context.Context, vsockSocket, name, mount string) error
+	MountVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
+	UnmountVolume(ctx context.Context, vsockSocket, mount string) error
+	SyncGuest(ctx context.Context, vsockSocket string) error
 }
 
 // SandboxSummary is the ops view of one live claim — no tokens.
@@ -161,6 +166,7 @@ type pendingRemoval struct {
 	sandboxID   string
 	tap         string
 	staleCreate bool
+	volumes     volumeTeardown
 }
 
 type pool struct {
@@ -245,6 +251,10 @@ type Manager struct {
 	maxFork int
 	store   *claimStore
 	volumes map[string]catalogVolume
+	// volumeAdmission counts the live holders of each volume name, mirroring
+	// the hypervisor's own per-image lock so a conflicting claim is refused
+	// before it pays any attach cost; guarded by m.mu.
+	volumeAdmission map[string]volumeHolders
 
 	poolStore      *poolStore
 	configSeedHash string // config pools' hash, to warn when a file edit is overridden
@@ -382,6 +392,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		maxFork:         maxFork,
 		store:           newClaimStore(cfg.DataDir),
 		volumes:         make(map[string]catalogVolume, len(cfg.Volumes)),
+		volumeAdmission: map[string]volumeHolders{},
 		poolStore:       newPoolStore(cfg.DataDir),
 		pools:           make(map[types.PoolKey]*pool, len(cfg.Pools)),
 		claimed:         map[string]*types.Sandbox{},
@@ -405,8 +416,9 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	}
 	for _, volume := range cfg.Volumes {
 		m.volumes[volume.Name] = catalogVolume{
-			disk:    engine.VolumeSpec{Name: volume.Name, Path: volume.Path, DirectIO: volume.DirectIO},
-			tenants: slices.Clone(volume.Tenants),
+			disk:     engine.VolumeSpec{Name: volume.Name, Path: volume.Path, DirectIO: volume.DirectIO},
+			tenants:  slices.Clone(volume.Tenants),
+			writable: volume.Writable,
 		}
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
