@@ -34,17 +34,13 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	if err != nil {
 		return nil, err
 	}
-	applied := appliedVolumes(volumeSpecs)
+	applied, err := m.admitVolumes(tenant, volumeSpecs)
+	if err != nil {
+		return nil, err
+	}
 	// Holds belong to this path until finalize; past it the sandbox carries them.
-	var reserved []types.Volume
+	reserved := applied
 	defer func() { m.unreserveVolumes(reserved) }()
-	if admitErr := m.admitClaim(tenant, applied); admitErr != nil {
-		return nil, admitErr
-	}
-	reserved = applied
-	if cleanErr := m.confirmVolumesClean(volumeSpecs); cleanErr != nil {
-		return nil, cleanErr
-	}
 	m.mu.Lock()
 	var sb *types.Sandbox
 	if p := m.pools[key]; p != nil {
@@ -208,6 +204,19 @@ func (m *Manager) overQuota(extra int, tenant string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.quotaErr(extra, tenant)
+}
+
+// admitVolumes takes one claim's holds, then the marker check; a refusal on either leaves nothing held.
+func (m *Manager) admitVolumes(tenant string, volumes []resolvedVolume) ([]types.Volume, error) {
+	applied := appliedVolumes(volumes)
+	if err := m.admitClaim(tenant, applied); err != nil {
+		return nil, err
+	}
+	if err := m.confirmVolumesClean(volumes); err != nil {
+		m.unreserveVolumes(applied)
+		return nil, err
+	}
+	return applied, nil
 }
 
 // admitClaim is the provision path's one admission section: the advisory quota
@@ -500,16 +509,12 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	if err != nil {
 		return nil, err
 	}
-	applied := appliedVolumes(volumeSpecs)
-	var reserved []types.Volume
+	applied, err := m.admitVolumes(tenant, volumeSpecs)
+	if err != nil {
+		return nil, err
+	}
+	reserved := applied
 	defer func() { m.unreserveVolumes(reserved) }()
-	if admitErr := m.admitClaim(tenant, applied); admitErr != nil {
-		return nil, admitErr
-	}
-	reserved = applied
-	if cleanErr := m.confirmVolumesClean(volumeSpecs); cleanErr != nil {
-		return nil, cleanErr
-	}
 	golden, err := m.resolveGolden(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("resolve template: %w", err)

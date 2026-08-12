@@ -38,7 +38,7 @@ The scalar egress-attachment keys are retired: rename `"bridge": "br0"` to
 starting the new binary — config loading rejects the old spellings loudly
 rather than silently dropping the egress lane.
 
-Read-only dataset volumes require a lockstep rollout. Upgrade every sandboxd
+Dataset volumes require a lockstep rollout. Upgrade every sandboxd
 node and cocoon to the required version before enabling the catalog or shipping
 an SDK that requests volumes. Mixed-version serving is unsupported. Once a
 volume claim has finalized, do not roll a node back to an older sandboxd until
