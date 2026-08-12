@@ -5,6 +5,11 @@
 package e2e
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"maps"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -284,12 +289,13 @@ func TestWrongAPITokenRejected(t *testing.T) {
 }
 
 func TestVolumesEndToEnd(t *testing.T) {
-	image := filepath.Join(t.TempDir(), "dataset.img")
-	if err := os.WriteFile(image, []byte("dataset-bytes"), 0o600); err != nil {
-		t.Fatalf("write image: %v", err)
-	}
+	image := writeVolumeImage(t, "dataset.img", "dataset-bytes")
+	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
 	stack := startTenantStack(t, "node-token", nil,
-		[]config.VolumeSpec{{Name: "dataset", Path: image, DirectIO: "off"}},
+		[]config.VolumeSpec{
+			{Name: "dataset", Path: image, DirectIO: "off"},
+			{Name: "scratch", Path: scratch, Writable: true},
+		},
 		config.PoolSpec{PoolKey: testKey, Warm: 1})
 	waitFor(t, func() bool {
 		infos, _ := stack.mgr.Info()
@@ -318,16 +324,128 @@ func TestVolumesEndToEnd(t *testing.T) {
 	want := []sandbox.VolumeInfo{{
 		Name: "dataset", DefaultMount: "/volumes/dataset",
 		SizeBytes: int64(len("dataset-bytes")), Available: true, Nodes: 1,
+	}, {
+		Name: "scratch", DefaultMount: "/volumes/scratch",
+		SizeBytes: int64(len("scratch-bytes")), Available: true, Nodes: 1, Writable: true,
 	}}
 	if !slices.Equal(infos, want) {
 		t.Errorf("catalog %+v, want %+v", infos, want)
+	}
+
+	var listed struct {
+		Volumes []map[string]any `json:"volumes"`
+	}
+	_, body := rawJSON(t, stack, http.MethodGet, "/v1/volumes", "")
+	if err := json.Unmarshal(body, &listed); err != nil {
+		t.Fatalf("decode catalog %s: %v", body, err)
+	}
+	if len(listed.Volumes) != len(want) {
+		t.Fatalf("catalog bytes %s, want %d entries", body, len(want))
+	}
+	for _, entry := range listed.Volumes {
+		var writable any
+		if entry["name"] == "scratch" {
+			writable = true
+		}
+		if entry["writable"] != writable {
+			t.Errorf("volume %v writable=%v, want %v", entry["name"], entry["writable"], writable)
+		}
+	}
+}
+
+// TestWritableVolumeEndToEnd drives one writable claim through the whole
+// stack: the SDK's mode reaches the engine as a writable attach, a live writer
+// refuses every other claim on the name, and release unmounts before removal.
+func TestWritableVolumeEndToEnd(t *testing.T) {
+	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
+	stack := startTenantStack(t, "node-token", nil,
+		[]config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
+
+	sb, err := stack.client.New(t.Context(), "rt:24.04",
+		sandbox.WithVolumes(sandbox.Volume{Name: "scratch", Mount: "/datasets/rw", Mode: "rw"}))
+	if err != nil {
+		t.Fatalf("writable claim: %v", err)
+	}
+	if want := []sandbox.Volume{{Name: "scratch", Mount: "/datasets/rw", Mode: "rw"}}; !slices.Equal(sb.Volumes, want) {
+		t.Errorf("claim volumes %+v, want %+v", sb.Volumes, want)
+	}
+	applied := []string{"attach:scratch:rw", "mount:scratch:/datasets/rw:rw"}
+	if got := stack.eng.volumeOpsLog(); !slices.Equal(got, applied) {
+		t.Errorf("engine ops %v, want %v", got, applied)
+	}
+	for _, requested := range []string{`{"name":"scratch"}`, `{"name":"scratch","mode":"rw"}`} {
+		if status, _ := rawClaim(t, stack, requested); status != http.StatusConflict {
+			t.Errorf("claim %s under a live writer: %d, want 409", requested, status)
+		}
+	}
+
+	if err := sb.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	want := slices.Concat(applied, []string{"umount:/datasets/rw", "remove"})
+	if got := stack.eng.volumeOpsLog(); !slices.Equal(got, want) {
+		t.Errorf("engine ops after release %v, want %v", got, want)
+	}
+}
+
+// TestVolumeModeWireShape pins the claim reply's volume bytes independently of
+// the SDK mirror. The read-only leg runs second on purpose: it is admitted
+// only because the writer's release cleared the dirty marker.
+func TestVolumeModeWireShape(t *testing.T) {
+	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
+	stack := startTenantStack(t, "node-token", nil,
+		[]config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
+	for _, tt := range []struct {
+		name      string
+		requested string
+		want      map[string]any
+	}{
+		{
+			"writable echoes its mode",
+			`{"name":"scratch","mount":"/datasets/x","mode":"rw"}`,
+			map[string]any{"name": "scratch", "mount": "/datasets/x", "mode": "rw"},
+		},
+		{
+			"read-only omits mode",
+			`{"name":"scratch","mount":"/datasets/x"}`,
+			map[string]any{"name": "scratch", "mount": "/datasets/x"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			status, claimed := rawClaim(t, stack, tt.requested)
+			if status != http.StatusOK {
+				t.Fatalf("claim: %d, want 200", status)
+			}
+			if len(claimed.Volumes) != 1 || !maps.Equal(claimed.Volumes[0], tt.want) {
+				t.Errorf("reply volumes %v, want [%v]", claimed.Volumes, tt.want)
+			}
+			if err := stack.client.Attach(stack.addr, claimed.ID, claimed.Token).Close(); err != nil {
+				t.Fatalf("release: %v", err)
+			}
+		})
+	}
+}
+
+// TestDirtyVolumeRefusesReader: the marker a crashed writer leaves behind
+// (pre-created here) turns read-only claims into 409s over the wire.
+func TestDirtyVolumeRefusesReader(t *testing.T) {
+	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
+	if err := os.WriteFile(scratch+".dirty", nil, 0o600); err != nil {
+		t.Fatalf("write dirty marker: %v", err)
+	}
+	stack := startTenantStack(t, "node-token", nil,
+		[]config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
+	if status, _ := rawClaim(t, stack, `{"name":"scratch"}`); status != http.StatusConflict {
+		t.Errorf("read-only claim on a dirty image: %d, want 409", status)
 	}
 }
 
 type stack struct {
 	client *sandbox.Client
 	mgr    *pool.Manager
+	eng    *fakeEngine
 	addr   string
+	token  string
 }
 
 func startStack(t *testing.T, apiToken string, pools ...config.PoolSpec) *stack {
@@ -362,7 +480,7 @@ func startTenantStack(t *testing.T, apiToken string, tenants []config.TenantSpec
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	return &stack{client: client, mgr: mgr, addr: addr}
+	return &stack{client: client, mgr: mgr, eng: eng, addr: addr, token: apiToken}
 }
 
 func waitFor(t *testing.T, cond func() bool) {
@@ -375,4 +493,57 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("condition not met within 10s")
+}
+
+func writeVolumeImage(t *testing.T, name, content string) string {
+	t.Helper()
+	image := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(image, []byte(content), 0o600); err != nil {
+		t.Fatalf("write volume image: %v", err)
+	}
+	return image
+}
+
+// rawClaimResponse decodes the volume entries generically, so the assertion
+// is the server's own JSON rather than the SDK's mirror of it.
+type rawClaimResponse struct {
+	ID      string           `json:"id"`
+	Token   string           `json:"token"`
+	Volumes []map[string]any `json:"volumes"`
+}
+
+func rawClaim(t *testing.T, st *stack, volume string) (int, rawClaimResponse) {
+	t.Helper()
+	status, body := rawJSON(t, st, http.MethodPost, "/v1/claim",
+		fmt.Sprintf(`{"template":"rt:24.04","volumes":[%s]}`, volume))
+	var claimed rawClaimResponse
+	if status == http.StatusOK {
+		if err := json.Unmarshal(body, &claimed); err != nil {
+			t.Fatalf("decode claim %s: %v", body, err)
+		}
+	}
+	return status, claimed
+}
+
+func rawJSON(t *testing.T, st *stack, method, route, body string) (int, []byte) {
+	t.Helper()
+	var payload io.Reader
+	if body != "" {
+		payload = strings.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), method, "http://"+st.addr+route, payload)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, route, err)
+	}
+	req.Header.Set("Authorization", "Bearer "+st.token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, route, err)
+	}
+	defer resp.Body.Close()
+	out, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read %s %s: %v", method, route, err)
+	}
+	return resp.StatusCode, out
 }
