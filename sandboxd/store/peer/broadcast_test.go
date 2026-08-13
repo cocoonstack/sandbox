@@ -78,13 +78,18 @@ func TestBroadcastDeleteSwallowsFailures(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer fail.Close()
+	var reached atomic.Int32
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached.Add(1)
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer ok.Close()
 
 	b := &Broadcaster{Peers: func() []string { return []string{fail.URL, ok.URL, "127.0.0.1:1"} }}
 	b.Delete(t.Context(), testID) // must return without panicking regardless of peer outcomes
+	if got := reached.Load(); got != 1 {
+		t.Errorf("healthy peer hit %d times, want 1 (fan-out continues past a failure)", got)
+	}
 }
 
 // TestBroadcastDeleteNoPeersNoOp: a single-node deployment must not dial

@@ -100,9 +100,12 @@ func TestOwnersReturnsPromptlyWithOneOwner(t *testing.T) {
 // claims to a node that no longer holds it.
 func TestForgetDuringFlightPreventsStaleCache(t *testing.T) {
 	release := make(chan struct{})
+	inFlight := make(chan struct{})
+	probed := sync.OnceFunc(func() { close(inFlight) })
 	var hits atomic.Int32
 	owner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
+		probed()
 		<-release // hold the probe open so Forget can land mid-flight
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -113,9 +116,7 @@ func TestForgetDuringFlightPreventsStaleCache(t *testing.T) {
 	done := make(chan struct{})
 	go func() { owners = p.Owners(t.Context(), testID); close(done) }()
 
-	for hits.Load() == 0 { // wait until the probe is in flight
-		time.Sleep(time.Millisecond)
-	}
+	<-inFlight
 	p.Forget(testID) // the delete lands while the flight is open
 	close(release)
 	<-done
