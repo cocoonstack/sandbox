@@ -278,8 +278,8 @@ code = sb.run(["bash", "-c", "make test"],
               on_stderr=lambda b: sys.stderr.buffer.write(b))
 ```
 
-`exec` returns stdout and raises `ExitError(code, stderr)` on a non-zero
-exit. `run` streams raw bytes through the callbacks (chunk boundaries may
+`exec` returns stdout and raises `ExitError` on a non-zero exit — carrying
+`code`, `stderr`, and the `stdout` produced before it failed. `run` streams raw bytes through the callbacks (chunk boundaries may
 split multi-byte sequences) and returns the exit code. `user` de-escalates
 inside the guest; `session=` routes the command into a persistent session.
 
@@ -363,7 +363,8 @@ w.close()
 `watch` returns once the guest acknowledges the watch is armed — events
 caused after it returns are guaranteed captured. A bad path fails
 synchronously; if the consumer falls too far behind, iteration raises the
-terminal overflow instead of silently dropping events.
+terminal overflow instead of silently dropping events. Iteration also ends
+when the relay drops, which `w.error` tells apart from a clean close (`None`).
 
 ## Git
 
@@ -391,6 +392,7 @@ pointing at `push`.
 pty = sb.open_pty(cols=120, rows=40)      # context-manager; pty.pid is the guest process
 pty.write(b"make test\n")
 data = pty.read()                         # b"" when the shell exits
+pty.exit_code                             # the shell's status, once read() returned b""
 pty.resize(200, 50)
 pty.close()
 ```
@@ -416,7 +418,7 @@ zero.
 - `APIError(verb, status, message)` — control plane (HTTP status)
 - `SilkdError(kind, message)` — typed guest failure; `kind` is
   `bad_request` / `not_found` / `unimplemented` / `internal`
-- `ExitError(code, stderr)` — non-zero exit from `exec`
+- `ExitError(code, stderr, stdout)` — non-zero exit from `exec`
 - `ProtocolError` — broken stream
 
 ```python
