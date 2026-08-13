@@ -6,7 +6,9 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -229,5 +231,65 @@ func TestPushCycleSettleWindow(t *testing.T) {
 	}
 	if b, err := os.ReadFile(filepath.Join(ws, "hot.bin")); err != nil || string(b) != "abc" {
 		t.Fatalf("hot.bin on NAS = %q, %v", b, err)
+	}
+}
+
+// recDisk records Disk calls so the pre-attach fast path is observable.
+type recDisk struct{ calls []string }
+
+func (d *recDisk) Attach(_ context.Context, vm, raw, name string) error {
+	d.calls = append(d.calls, "attach")
+	return nil
+}
+
+func (d *recDisk) Mount(_ context.Context, _, _, _ string) error {
+	d.calls = append(d.calls, "mount")
+	return nil
+}
+
+func (d *recDisk) Unmount(_ context.Context, _, _ string) error {
+	d.calls = append(d.calls, "unmount")
+	return nil
+}
+
+func (d *recDisk) Detach(_ context.Context, _, _ string) error {
+	d.calls = append(d.calls, "detach")
+	return nil
+}
+
+// TestAttachAndMountUsesPreAttachedImage: with the image already provisioned
+// by refill, a claim pays only the mount; without one it does the full
+// provision — the fallback that keeps adopted VMs working.
+func TestAttachAndMountUsesPreAttachedImage(t *testing.T) {
+	if _, err := exec.LookPath("mkfs.ext4"); err != nil {
+		t.Skip("mkfs.ext4 not on PATH")
+	}
+	d := &recDisk{}
+	p := &diskProvisioner{disk: d, root: t.TempDir(), sizeMB: 4}
+
+	if err := p.preAttach(t.Context(), "vm-a"); err != nil {
+		t.Fatalf("preAttach: %v", err)
+	}
+	if want := []string{"attach"}; !slices.Equal(d.calls, want) {
+		t.Fatalf("preAttach calls = %v, want %v", d.calls, want)
+	}
+	if err := p.attachAndMount(t.Context(), "vm-a", "sock", "/workspace"); err != nil {
+		t.Fatalf("attachAndMount: %v", err)
+	}
+	if want := []string{"attach", "mount"}; !slices.Equal(d.calls, want) {
+		t.Fatalf("fast path re-provisioned: calls = %v, want %v", d.calls, want)
+	}
+
+	d.calls = nil
+	if err := p.attachAndMount(t.Context(), "vm-b", "sock", "/workspace"); err != nil {
+		t.Fatalf("fallback attachAndMount: %v", err)
+	}
+	if want := []string{"attach", "mount"}; !slices.Equal(d.calls, want) {
+		t.Fatalf("fallback calls = %v, want %v", d.calls, want)
+	}
+
+	p.cleanupVM("vm-a")
+	if _, err := os.Stat(p.rawPath("vm-a")); !os.IsNotExist(err) {
+		t.Fatal("cleanupVM left the image behind")
 	}
 }

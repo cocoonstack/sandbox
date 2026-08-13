@@ -39,24 +39,45 @@ type diskProvisioner struct {
 	sizeMB int
 }
 
-func (d *diskProvisioner) rawPath(id string) string {
-	return filepath.Join(d.root, id+".raw")
+func (d *diskProvisioner) rawPath(vmName string) string {
+	return filepath.Join(d.root, vmName+".raw")
 }
 
-// attachAndMount creates a fresh ext4 image, attaches it read-write to vmName,
-// and mounts it at mount inside the guest before hydration.
-func (d *diskProvisioner) attachAndMount(ctx context.Context, id, vmName, vsockSocket, mount string) error {
-	raw := d.rawPath(id)
+// preAttach creates and hot-attaches a workspace disk to a warm VM ahead of
+// any claim, so Arm pays only the in-guest mount. No mount happens here — a
+// claim that never asks for a workspace must not see a surprise /workspace.
+func (d *diskProvisioner) preAttach(ctx context.Context, vmName string) error {
+	raw := d.rawPath(vmName)
 	if err := os.MkdirAll(d.root, 0o750); err != nil {
 		return err
 	}
-	if _, err := os.Stat(raw); os.IsNotExist(err) {
-		if err := createExt4(ctx, raw, d.sizeMB); err != nil {
-			return fmt.Errorf("create workspace disk: %w", err)
-		}
+	if _, err := os.Stat(raw); err == nil {
+		return nil // already provisioned (reconcile re-ran refill bookkeeping)
+	}
+	if err := createExt4(ctx, raw, d.sizeMB); err != nil {
+		return fmt.Errorf("create workspace disk: %w", err)
 	}
 	if err := d.disk.Attach(ctx, vmName, raw, diskSerial); err != nil {
+		_ = os.Remove(raw)
 		return fmt.Errorf("attach workspace disk: %w", err)
+	}
+	return nil
+}
+
+// cleanupVM drops the disk image of a VM that died without a barrier (warm
+// trim, quarantine); idempotent, and a barrier already removed its image.
+func (d *diskProvisioner) cleanupVM(vmName string) {
+	_ = os.Remove(d.rawPath(vmName))
+}
+
+// attachAndMount brings the workspace disk up at mount. The fast path finds
+// the image pre-attached by refill and only mounts; a VM without one (adopted
+// from an older daemon, or its pre-attach failed) gets the full provision.
+func (d *diskProvisioner) attachAndMount(ctx context.Context, vmName, vsockSocket, mount string) error {
+	if _, err := os.Stat(d.rawPath(vmName)); err != nil {
+		if err := d.preAttach(ctx, vmName); err != nil {
+			return err
+		}
 	}
 	if err := d.disk.Mount(ctx, vsockSocket, diskSerial, mount); err != nil {
 		return fmt.Errorf("mount workspace disk: %w", err)
@@ -68,10 +89,10 @@ func (d *diskProvisioner) attachAndMount(ctx context.Context, id, vmName, vsockS
 // one failure does not strand the rest; a gone VM (already reaped) is fine, and
 // a failed unmount loses nothing durable — the image is scratch, discarded
 // below, and the workspace's contents were already published by the barrier.
-func (d *diskProvisioner) unmountAndDetach(ctx context.Context, id, vmName, vsockSocket, mount string) {
+func (d *diskProvisioner) unmountAndDetach(ctx context.Context, vmName, vsockSocket, mount string) {
 	_ = d.disk.Unmount(ctx, vsockSocket, mount)
 	_ = d.disk.Detach(ctx, vmName, diskSerial)
-	_ = os.Remove(d.rawPath(id))
+	_ = os.Remove(d.rawPath(vmName))
 }
 
 // createExt4 makes a sparse raw image of sizeMB and formats it ext4. mkfs is

@@ -17,6 +17,9 @@ func (m *Manager) removeVM(ctx context.Context, name string) bool {
 	// Cancellation-immune: on a canceled ctx `cocoon vm rm` no-ops and orphans.
 	ctx = context.WithoutCancel(ctx)
 	err := m.eng.Remove(ctx, name)
+	// The pre-attached workspace image dies with its VM (a barrier already
+	// removed a claimed one; this catches warm trims and quarantines).
+	m.wsMgr.CleanupVM(name)
 	if err == nil {
 		return true
 	}

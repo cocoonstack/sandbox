@@ -100,14 +100,14 @@ func (m *Manager) Arm(ctx context.Context, id, vsockSocket, ws, writer string, c
 	// layer. Falls back to the rootfs layer if the feature is off.
 	dedicated := cfg.DedicatedDisk && m.disk != nil
 	if dedicated {
-		if err := m.disk.attachAndMount(ctx, id, cfg.VMName, vsockSocket, cfg.Mount); err != nil {
+		if err := m.disk.attachAndMount(ctx, cfg.VMName, vsockSocket, cfg.Mount); err != nil {
 			return fmt.Errorf("workspace disk: %w", err)
 		}
 	}
 	sy := newSyncer(m.guest, vsockSocket, cfg.Mount, ws, writer)
 	if err := sy.bootstrap(ctx); err != nil {
 		if dedicated {
-			m.disk.unmountAndDetach(ctx, id, cfg.VMName, vsockSocket, cfg.Mount)
+			m.disk.unmountAndDetach(ctx, cfg.VMName, vsockSocket, cfg.Mount)
 		}
 		return fmt.Errorf("bootstrap: %w", err)
 	}
@@ -120,6 +120,25 @@ func (m *Manager) Arm(ctx context.Context, id, vsockSocket, ws, writer string, c
 	go sess.run(loopCtx)
 	log.WithFunc("filecache.Arm").Infof(ctx, "workspace armed for %s (ws=%s writer=%s)", id, ws, writer)
 	return nil
+}
+
+// PreAttach provisions and hot-attaches a workspace disk to a warm VM ahead
+// of any claim (no in-guest mount — a workspace-less claim must not see a
+// surprise /workspace). No-op unless dedicated-disk mode is enabled.
+func (m *Manager) PreAttach(ctx context.Context, vmName string) error {
+	if m == nil || m.disk == nil {
+		return nil
+	}
+	return m.disk.preAttach(ctx, vmName)
+}
+
+// CleanupVM removes the workspace disk image of a VM that is gone without a
+// barrier (warm trim, quarantine, failed claim). Idempotent.
+func (m *Manager) CleanupVM(vmName string) {
+	if m == nil || m.disk == nil {
+		return
+	}
+	m.disk.cleanupVM(vmName)
 }
 
 // Barrier stops the sync loops for id and runs a final push so every local
@@ -150,7 +169,7 @@ func (m *Manager) Barrier(ctx context.Context, id string) {
 	// Dedicated disk: after the final push has drained the workspace to the
 	// NAS, unmount and detach it (the VM is about to be torn down anyway).
 	if sess.dedicated && m.disk != nil {
-		m.disk.unmountAndDetach(bctx, id, sess.cfg.VMName, sess.sy.sock, sess.cfg.Mount)
+		m.disk.unmountAndDetach(bctx, sess.cfg.VMName, sess.sy.sock, sess.cfg.Mount)
 	}
 }
 

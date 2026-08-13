@@ -94,6 +94,13 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 		}
 		sb, err = m.readyBounded(ctx, sb, time.Now().Add(warmProbeTimeout))
 	}
+	if err == nil {
+		// Pre-attach the workspace disk off the claim path; best-effort — a
+		// VM without one falls back to attach-at-claim inside Arm.
+		if preErr := m.wsMgr.PreAttach(ctx, sb.VMName); preErr != nil {
+			log.WithFunc("pool.refillOne").Warnf(ctx, "pre-attach workspace disk to %s: %v", sb.VMName, preErr)
+		}
+	}
 	keep := false
 	var fails int
 	var wait time.Duration
