@@ -32,7 +32,10 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
  "require_promoted": false}
 ```
 
-- `net` defaults to `none`, `size` to `small`
+- `net` defaults to `none`, `size` to `small`, `engine` to `ch`. The pool key
+  is `(template, net, size, engine)`; `engine: "fc"` cold-boots that key under
+  Firecracker, and clones inherit the hypervisor pinned in the golden's
+  snapshot
 - `ttl_seconds` 0 means the server default (5 minutes); capped at 24h. The
   owning node reaps the sandbox after the TTL even if the client vanishes
 - `claim_ref` is an optional opaque caller reference echoed by the scoped
@@ -277,7 +280,7 @@ node (name-based calls route via gossip); a shared checkpoint store makes
 every node resolve it. Under exactly this key:
 
 ```json
-{"key": {"template": "myproj:v1", "net": "none", "size": "small"},
+{"key": {"template": "myproj:v1", "net": "none", "size": "small", "engine": "ch"},
  "content_digest": "sha256:…"}
 ```
 
@@ -403,7 +406,8 @@ part of the public API; an SDK caller has no reason to call it directly.
   401 missing or unrecognized token, 403 a valid tenant token (authenticated
   but not the operator), 404 unknown checkpoint.
 - `HEAD` is the ownership probe: 200 when this node holds a branchable
-  (non-archive) copy, 404 otherwise. On a mesh with `cluster_key` set the
+  (non-archive) copy, 404 otherwise, and 401 on a keyed mesh when
+  `X-Cocoon-Probe` is absent or expired. On a mesh with `cluster_key` set the
   request must carry `X-Cocoon-Probe`, an HMAC over the id and a coarse time
   bucket keyed off a probe-specific derivation of the cluster key — verified
   before any disk is touched, replayable for roughly a minute at most. On a
@@ -479,20 +483,22 @@ never mistaken for idle. 404 unknown id.
 ## GET /metrics
 
 Auth: root only (tenant tokens get 403). Prometheus text format,
-hand-rendered: pool warm/target gauges, claimed/hibernated gauges, a
-per-tenant live-claim gauge (`sandboxd_tenant_claims{tenant="…"}`,
-configured tenants only), claims by tier (warm/clone/cold),
-wake/hibernate/fork/checkpoint/promote/release/reap counters, and claim/wake
-`*_seconds_total` for average latency. /metrics is a derived ops view; the
-billing source of truth is the usage journal below.
+hand-rendered: pool warm/target gauges, claimed/hibernated/archived/draining
+gauges, a per-tenant live-claim gauge (`sandboxd_tenant_claims{tenant="…"}`,
+configured tenants only), `sandboxd_config_digest_mismatch` on a mesh, claims
+by tier (warm/clone/cold),
+wake/hibernate/fork/checkpoint/promote/release/reap counters plus
+archive/unarchive/archive-delete counters, and claim/wake `*_seconds_total`
+for average latency. /metrics is a derived ops view; the billing source of
+truth is the usage journal below.
 
 ## Usage journal (usage.jsonl)
 
 Always on: every lifecycle transition appends one JSONL event to
 `<data_dir>/usage.jsonl` — `{"t": <RFC3339>, "ev":
 "claim|hibernate|wake|fork|checkpoint|promote|release|reap|archive|unarchive|archive_delete|egress",
-"id": "sb_…", "vm": "sbx-…"}` plus `key` and `tenant` (the pool key and
-owning tenant, claim events), `children` (fork) and `ref` (the promoted
+"id": "sb_…", "vm": "sbx-…"}` plus `key` and `tenant` (the pool key's stable
+hash and the owning tenant, claim events), `children` (fork) and `ref` (the promoted
 template / checkpoint id, or the egress host). A volume claim also carries
 `volumes`, the applied catalog names, and — omitted when empty — `volumes_rw`,
 the subset of those names claimed `rw`, so billing can discriminate write
@@ -526,7 +532,7 @@ Auth: root only (tenant tokens get 403). Node pools, claim count, and mesh
 peers:
 
 ```json
-{"pools": [{"key": {"template": "base:24.04", "net": "none", "size": "small"},
+{"pools": [{"key": {"template": "base:24.04", "net": "none", "size": "small", "engine": "ch"},
             "warm": 4, "refilling": 0, "target": 4, "golden": true}],
  "claimed": 2,
  "hibernated": 1,

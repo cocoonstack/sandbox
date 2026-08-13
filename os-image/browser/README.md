@@ -14,7 +14,8 @@ pool shape is `size: large` (4 CPU / 4G) — a persistent Chromium idles at
   download Chrome for Testing pinned by version + SHA256 (the
   `install-agent.sh` idiom); bake `/usr/local/bin/chromium-cdp` and
   `chromium.service` (enabled, `multi-user.target`).
-- `platforms` — `linux/amd64`; the base lineage is amd64-only.
+- `platforms` — `linux/amd64`; this flavor is amd64-only (Chrome for Testing),
+  unlike the multi-arch `base`.
 
 Why Chrome for Testing: Ubuntu 24.04's `chromium` apt package is a
 transitional stub that pulls the snap, and snap cannot install inside a
