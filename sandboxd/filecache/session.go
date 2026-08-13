@@ -159,7 +159,10 @@ func (m *Manager) Barrier(ctx context.Context, id string) {
 	sess.stop()
 	<-sess.done // loops exited; no concurrent cycle
 
-	bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
+	// The barrier is the durability edge: a workspace file not on the NAS when
+	// the VM dies is lost. Budget for a large final delta (a 100k-file
+	// node_modules publishes for minutes) instead of truncating at 60s.
+	bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Minute)
 	defer cancel()
 	if puts, dels, err := sess.sy.pushCycle(bctx, 0); err != nil { // settle=0: the barrier must publish hot files too
 		log.WithFunc("filecache.Barrier").Errorf(ctx, err, "final push for %s", id)
