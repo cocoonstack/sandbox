@@ -2,9 +2,6 @@
 //! disconnects. Watch is the one connection-bound verb — an event feed has no
 //! meaningful detached state, so it lives only as long as its connection.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use notify::{RecursiveMode, Watcher};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite};
 use tokio::sync::mpsc;
@@ -25,10 +22,9 @@ where
     W: AsyncWrite + Unpin,
 {
     let (tx, mut rx) = mpsc::channel::<Response>(256);
-    let overflowed = Arc::new(AtomicBool::new(false));
-    let callback_overflowed = Arc::clone(&overflowed);
+    let mut tx = Some(tx);
     let mut watcher = match notify::recommended_watcher(move |res| {
-        enqueue_frames(&tx, &callback_overflowed, to_frames(res));
+        forward_frames(&mut tx, to_frames(res));
     }) {
         Ok(watcher) => watcher,
         Err(e) => return proto::error_frame(w, ErrorKind::Internal, e.to_string()).await,
@@ -43,9 +39,6 @@ where
     }
     proto::write_frame(w, &Response::Ready).await?;
     loop {
-        if overflowed.load(Ordering::Acquire) {
-            return proto::error_frame(w, ErrorKind::Internal, OVERFLOW_MESSAGE).await;
-        }
         tokio::select! {
             frame = rx.recv() => match frame {
                 Some(frame) => {
@@ -55,7 +48,9 @@ where
                         return Ok(());
                     }
                 }
-                None => return Ok(()),
+                // While the watcher lives, only overflow drops the sender: the
+                // buffered prefix has all been delivered, then the terminal error.
+                None => return proto::error_frame(w, ErrorKind::Internal, OVERFLOW_MESSAGE).await,
             },
             // The client sends nothing during a watch, so any readable state —
             // EOF (disconnect), a stray frame, or an error — ends the watch.
@@ -64,18 +59,15 @@ where
     }
 }
 
-fn enqueue_frames(tx: &mpsc::Sender<Response>, overflowed: &AtomicBool, frames: Vec<Response>) {
-    if overflowed.load(Ordering::Acquire) {
-        return;
-    }
+/// Forwards frames into the bounded channel; a full channel drops the sender,
+/// so the closed channel itself is the overflow signal — a wakeup the async
+/// loop cannot miss even while parked on an empty queue.
+fn forward_frames(tx: &mut Option<mpsc::Sender<Response>>, frames: Vec<Response>) {
+    let Some(sender) = tx.as_ref() else { return };
     for frame in frames {
-        match tx.try_send(frame) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                overflowed.store(true, Ordering::Release);
-                return;
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => return,
+        if sender.try_send(frame).is_err() {
+            *tx = None;
+            return;
         }
     }
 }
@@ -140,14 +132,17 @@ mod tests {
     }
 
     #[test]
-    fn full_channel_sets_overflow() {
+    fn full_channel_drops_sender_after_the_delivered_prefix() {
         let (tx, mut rx) = mpsc::channel(1);
-        let overflowed = AtomicBool::new(false);
+        let mut tx = Some(tx);
 
-        enqueue_frames(&tx, &overflowed, vec![Response::Ready, Response::Ready]);
+        forward_frames(&mut tx, vec![Response::Ready, Response::Ready]);
 
-        assert!(overflowed.load(Ordering::Acquire));
+        assert!(tx.is_none());
         assert!(matches!(rx.try_recv(), Ok(Response::Ready)));
-        assert!(rx.try_recv().is_err());
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Disconnected)
+        ));
     }
 }
