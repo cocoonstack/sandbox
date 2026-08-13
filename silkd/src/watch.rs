@@ -48,8 +48,7 @@ where
                         return Ok(());
                     }
                 }
-                // While the watcher lives, only overflow drops the sender: the
-                // buffered prefix has all been delivered, then the terminal error.
+                // Only overflow drops the sender mid-watch; the buffered prefix is already out.
                 None => return proto::error_frame(w, ErrorKind::Internal, OVERFLOW_MESSAGE).await,
             },
             // The client sends nothing during a watch, so any readable state —
@@ -59,9 +58,8 @@ where
     }
 }
 
-/// Forwards frames into the bounded channel; a full channel drops the sender,
-/// so the closed channel itself is the overflow signal — a wakeup the async
-/// loop cannot miss even while parked on an empty queue.
+/// A full channel drops the sender: the closed channel is the overflow
+/// signal, a wakeup the parked loop cannot miss.
 fn forward_frames(tx: &mut Option<mpsc::Sender<Response>>, frames: Vec<Response>) {
     let Some(sender) = tx.as_ref() else { return };
     for frame in frames {
