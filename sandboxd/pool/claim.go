@@ -56,8 +56,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	}
 	m.kickRefill()
 	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs, applied); volumeErr != nil {
-		m.removeOrRetry(ctx, sb.VMName, "", "", volumeTeardown{holds: reserved})
-		reserved = nil
+		m.abortVolumeClaim(ctx, sb.VMName, &reserved)
 		return nil, volumeErr
 	}
 	sb.Tenant = tenant
@@ -285,10 +284,9 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	if quotaErr := m.quotaErr(len(sbs), sbs[0].Tenant); quotaErr != nil {
 		m.mu.Unlock()
 		for _, sb := range sbs {
-			// No quiesce: the claim was never handed out, so nothing wrote to
-			// the guest and the marker converges on the next writable claim.
-			m.unreserveVolumes(sb.Volumes)
-			m.destroy(ctx, sb.VMName)
+			// No quiesce: never handed out, so nothing wrote to the guest and the
+			// marker waits for the next writable claim; the holds ride the removal.
+			m.abortVolumeClaim(ctx, sb.VMName, &sb.Volumes)
 		}
 		return quotaErr
 	}
@@ -337,6 +335,13 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 		td := m.quiesceVolumes(ctx, sb)
 		m.disarmEgress(sb.ID, m.removeOrRetry(ctx, sb.VMName, sb.ID, "", td))
 	}
+}
+
+// abortVolumeClaim removes a failed claim's VM, holds riding the teardown;
+// clearing reserved stops the deferred unreserve from double-releasing them.
+func (m *Manager) abortVolumeClaim(ctx context.Context, vmName string, reserved *[]types.Volume) {
+	m.removeOrRetry(ctx, vmName, "", "", volumeTeardown{holds: *reserved})
+	*reserved = nil
 }
 
 func (m *Manager) reapOnce(ctx context.Context) {
@@ -530,8 +535,7 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 		return nil, err
 	}
 	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs, applied); volumeErr != nil {
-		m.removeOrRetry(ctx, sb.VMName, "", "", volumeTeardown{holds: reserved})
-		reserved = nil
+		m.abortVolumeClaim(ctx, sb.VMName, &reserved)
 		return nil, volumeErr
 	}
 	sb.TemplateDigest = golden.templateDigest

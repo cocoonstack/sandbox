@@ -215,6 +215,81 @@ func TestClaimWarmAttachFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	}
 }
 
+// TestFinalizeQuotaFailureKeepsHoldsUntilRemoval: the finalize re-check loses
+// the quota race with the volumes already mounted, so its holds must outlive
+// the claim exactly as an attach failure's do — until the VM is confirmed gone.
+func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
+	scratch := writeVolumeImage(t, "scratch.img", "scratch")
+	eng := newFakeEngine()
+	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
+	m.maxClaims = 1
+	// The volume claim parks in its attach, so the volume-less claim below always
+	// takes the last slot and the volume claim always loses the finalize re-check.
+	var attaches sync.WaitGroup
+	attaches.Add(2)
+	eng.attachRendezvous = &attaches
+	writable := []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}
+
+	claimErr := make(chan error, 1)
+	go func() {
+		_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", writable)
+		claimErr <- err
+	}()
+	waitFor(t, func() bool { return slices.Contains(eng.volumeOpsLog(), "attach:scratch") })
+	eng.mu.Lock()
+	vmCount := len(eng.vms)
+	var vmName string
+	for name := range eng.vms {
+		vmName = name
+	}
+	eng.mu.Unlock()
+	filler, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil)
+	if err != nil {
+		t.Fatalf("volume-less claim: %v", err)
+	}
+	eng.mu.Lock()
+	eng.removeErrFor = vmName // the quota loser's VM survives its removal
+	eng.attachRendezvous = nil
+	eng.mu.Unlock()
+	attaches.Done()
+	err = <-claimErr
+
+	if vmCount != 1 {
+		t.Fatalf("live VMs at the attach=%d, want only the volume claim's", vmCount)
+	}
+	if !errors.Is(err, ErrQuota) {
+		t.Fatalf("volume claim: %v, want ErrQuota from the finalize re-check", err)
+	}
+	if holders := volumeHoldersOf(m, "scratch"); holders != (volumeHolders{writers: 1}) {
+		t.Errorf("registry after failed removal=%+v, want writer retained", holders)
+	}
+	if err := m.Release(t.Context(), filler.ID, Cred{Token: filler.Token}); err != nil {
+		t.Fatalf("release the volume-less claim: %v", err)
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", writable); !errors.Is(err, ErrVolumeBusy) {
+		t.Errorf("claim against the surviving VM: %v, want ErrVolumeBusy", err)
+	}
+
+	eng.mu.Lock()
+	eng.removeErrFor = ""
+	eng.mu.Unlock()
+	m.retryRemovals(t.Context()).Wait()
+
+	if !eng.removed(vmName) {
+		t.Errorf("removes=%v, want %s drained", eng.removedNames(), vmName)
+	}
+	if holders := volumeHoldersOf(m, "scratch"); holders != (volumeHolders{}) {
+		t.Errorf("registry after the drain=%+v, want empty", holders)
+	}
+	// Accepted residual: no quiesce runs, so the marker waits for a writable claim.
+	if !volumeDirty(scratch) {
+		t.Error("the unquiesced mount cleared its marker")
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", writable); err != nil {
+		t.Errorf("writable claim after the drain: %v", err)
+	}
+}
+
 // TestAttachOnlyClaimKeepsAdmissionExclusion: what protects other claims is
 // unchanged — only this claim's own mount contract moved to the caller.
 func TestAttachOnlyClaimKeepsAdmissionExclusion(t *testing.T) {
