@@ -139,8 +139,7 @@ async fn scan_file<W: AsyncWrite + Unpin>(
 fn name_matches(path: &Path, name_re: Option<&Regex>) -> bool {
     let Some(re) = name_re else { return true };
     path.file_name()
-        .map(|n| re.is_match(&n.to_string_lossy()))
-        .unwrap_or(false)
+        .is_some_and(|n| re.is_match(&n.to_string_lossy()))
 }
 
 /// Compiles a `*`/`?` glob into an anchored regex over the whole file name;

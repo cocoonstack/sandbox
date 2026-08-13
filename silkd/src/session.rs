@@ -6,7 +6,6 @@
 //! pipe deadlock, which is the conventional interactive-shell behaviour.
 
 use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::io;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -83,10 +82,16 @@ impl Table {
         // real command reads a clean stream.
         let mut init = String::from("exec 2>&1\n");
         if let Some(dir) = cwd {
-            let _ = writeln!(init, "cd {} || exit 1", shell_quote(&dir));
+            init.push_str("cd ");
+            shell_quote_into(&mut init, &dir);
+            init.push_str(" || exit 1\n");
         }
         for (k, v) in env {
-            let _ = writeln!(init, "export {}={}", k, shell_quote(v));
+            init.push_str("export ");
+            init.push_str(k);
+            init.push('=');
+            shell_quote_into(&mut init, v);
+            init.push('\n');
         }
         {
             let mut io = session.io.lock().await;
@@ -169,11 +174,13 @@ impl Session {
     /// Returns whether the session shell is still alive; a dead shell is
     /// removed by the caller so its id stops resolving.
     pub async fn run<W: AsyncWrite + Unpin>(&self, argv: &[String], w: &mut W) -> bool {
-        let cmdline = argv
-            .iter()
-            .map(|a| shell_quote(a))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let mut cmdline = String::new();
+        for (i, a) in argv.iter().enumerate() {
+            if i > 0 {
+                cmdline.push(' ');
+            }
+            shell_quote_into(&mut cmdline, a);
+        }
         let mut io = self.io.lock().await;
         let outcome = io.converse(&cmdline, Some(w)).await;
         // Stamp while io is still held: the reaper skips a session whose io lock
@@ -305,10 +312,9 @@ fn take_pipe<T>(pipe: Option<T>, name: &str) -> io::Result<T> {
     pipe.ok_or_else(|| io::Error::other(format!("child {name} not piped")))
 }
 
-/// POSIX single-quote quoting: wrap in '…', closing/reopening around any
-/// embedded single quote.
-fn shell_quote(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
+/// POSIX single-quote quoting: wraps `s` in '…' onto the end of `out`,
+/// closing/reopening around any embedded single quote.
+fn shell_quote_into(out: &mut String, s: &str) {
     out.push('\'');
     for c in s.chars() {
         if c == '\'' {
@@ -318,5 +324,24 @@ fn shell_quote(s: &str) -> String {
         }
     }
     out.push('\'');
-    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_quote_into_pins_exact_output() {
+        let cases = [
+            ("plain", "'plain'"),
+            ("a b", "'a b'"),
+            ("it's", "'it'\\''s'"),
+            ("", "''"),
+        ];
+        for (input, want) in cases {
+            let mut out = String::new();
+            shell_quote_into(&mut out, input);
+            assert_eq!(out, want, "quoting {input:?}");
+        }
+    }
 }
