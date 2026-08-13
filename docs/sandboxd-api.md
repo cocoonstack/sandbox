@@ -193,11 +193,11 @@ caller may use, without host paths or holder addresses:
               "size_bytes": 214748364800, "available": true, "nodes": 3}]}
 ```
 
-Root sees every entry; a tenant sees unrestricted entries plus those whose
-access list names it. The response is the gossiped union: `nodes` counts members
-advertising the name. `size_bytes` and `available` are a best-effort stat of the
-answering node's image, so a peer-only entry remains discoverable with
-`available: false`. Membership is eventually consistent by one gossip tick.
+Root sees the gossiped union, including peer-only entries (`available: false`);
+a tenant sees only entries this node declares locally and whose access list
+permits it. `nodes` counts members advertising the name; `size_bytes` and
+`available` are a best-effort stat of the answering node's image. Membership is
+eventually consistent by one gossip tick.
 `writable` is the entry's catalog configuration, fleet-uniform like the access
 list; the field is emitted (as `true`) only for a writable entry and omitted
 otherwise, so a read-only entry's response is byte-identical to v1.

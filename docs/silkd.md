@@ -19,8 +19,8 @@ ride base64 in `data` fields. Frames are capped at 8 MiB; requests carry
 `"v": 1` and unknown fields are ignored (the forward-compatibility story).
 
 Sessions and processes are server-side state addressed by id — a dropped
-connection loses nothing (`attach` resumes). The only connection-bound verb
-is `fs_watch`.
+connection loses nothing (`attach` resumes). The connection-bound verbs are
+`fs_watch`, `pty_open`, `lsp_request`, and `port_forward`.
 
 The authoritative wire contract is the shared fixture corpus in
 `protocol/wire/fixtures/v1`, round-tripped by both the Rust and Go test suites —
