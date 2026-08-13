@@ -376,7 +376,7 @@ func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req t
 // handleRelease releases a claimed sandbox. Two credentials authorize it: the
 // node's root api_token (the operator) may release any sandbox by id, so
 // aggregated/control-plane teardown works without holding the per-sandbox token;
-// a per-sandbox token releases only its own claim, unchanged. A tenant token is
+// a per-sandbox token releases only its own claim. A tenant token is
 // neither — it is not the root api_token, so it resolves as a (non-matching)
 // sandbox token and 404s.
 func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
@@ -532,7 +532,7 @@ func (s *Server) handleCheckpointBlob(w http.ResponseWriter, r *http.Request) {
 // handleCheckpointProbe answers a peer's HEAD probe. With a probeKey
 // configured (an encrypted mesh), the caller must present a fresh MAC over
 // the id (peer.ProbeHeader) or the probe is rejected before the metadata
-// read; without one, the id remains the only capability, same as before.
+// read; without one, the id remains the only capability.
 func (s *Server) handleCheckpointProbe(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if len(s.probeKey) > 0 && !peer.VerifyProbeMAC(s.probeKey, id, r.Header.Get(peer.ProbeHeader)) {
