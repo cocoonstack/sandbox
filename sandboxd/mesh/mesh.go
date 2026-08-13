@@ -51,8 +51,7 @@ type Mesh struct {
 	mu   sync.Mutex
 	self NodeState
 	view map[string]NodeState // node_id → latest known state (includes self)
-	// departedEpoch tombstones a node at the epoch it left; a restart outranks it.
-	departedEpoch map[string]uint64
+	live map[string]struct{}  // members SWIM reports; gossip about anyone else is ignored
 }
 
 // New starts a mesh member listening per cfg. selfAddr is the data-plane
@@ -73,8 +72,8 @@ func New(ctx context.Context, cfg *memberlist.Config, nodeID, selfAddr string, s
 			Epoch:  epoch,
 			Pools:  map[string]int{},
 		},
-		view:          map[string]NodeState{},
-		departedEpoch: map[string]uint64{},
+		view: map[string]NodeState{},
+		live: map[string]struct{}{},
 	}
 	if err := m.persistEpoch(epoch); err != nil {
 		return nil, fmt.Errorf("persist mesh epoch: %w", err)
@@ -289,13 +288,21 @@ func (m *Mesh) owners(match func(NodeState) bool) []string {
 	return owners
 }
 
+// admit records a node SWIM has seen join; merge accepts gossip only about
+// these, so a peer that has not noticed a death cannot reintroduce one.
+func (m *Mesh) admit(nodeID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.live[nodeID] = struct{}{}
+}
+
 // forget drops a departed node from the placement view so redirects stop
 // targeting a dead peer; SWIM detected the death, the view must follow.
 func (m *Mesh) forget(nodeID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if nodeID != m.self.NodeID {
-		m.departedEpoch[nodeID] = m.view[nodeID].Epoch
+		delete(m.live, nodeID)
 		delete(m.view, nodeID)
 	}
 }
@@ -309,14 +316,13 @@ func (m *Mesh) merge(states []NodeState) {
 		if st.NodeID == m.self.NodeID {
 			continue
 		}
+		if _, member := m.live[st.NodeID]; !member {
+			continue
+		}
 		cur, ok := m.view[st.NodeID]
 		if ok && st.Epoch <= cur.Epoch {
 			continue
 		}
-		if st.Epoch <= m.departedEpoch[st.NodeID] {
-			continue
-		}
-		delete(m.departedEpoch, st.NodeID)
 		// Warn on each distinct divergent digest (not once per lifetime): a
 		// mismatched api_token/tenants/preview_secret/CA root 401s cross-node
 		// redirects and fails interception. Warn-only — refusing would partition
@@ -371,7 +377,7 @@ var _ memberlist.EventDelegate = (*eventDelegate)(nil)
 // dead peer stops attracting redirects.
 type eventDelegate Mesh
 
-func (e *eventDelegate) NotifyJoin(*memberlist.Node)   {}
+func (e *eventDelegate) NotifyJoin(n *memberlist.Node) { (*Mesh)(e).admit(n.Name) }
 func (e *eventDelegate) NotifyUpdate(*memberlist.Node) {}
 func (e *eventDelegate) NotifyLeave(n *memberlist.Node) {
 	(*Mesh)(e).forget(n.Name)
