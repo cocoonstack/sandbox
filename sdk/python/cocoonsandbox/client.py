@@ -179,13 +179,15 @@ def _claim_body(template: str, net: str, size: str, ttl_seconds: int,
     return claim
 
 
-def _volume_body(volume: str | Mapping[str, str], mount: bool = True) -> dict:
+def _volume_body(volume: str | Mapping[str, str], mount: bool) -> dict:
     if isinstance(volume, str):
         return {"name": volume}
     if not isinstance(volume, Mapping):
         raise TypeError("volume must be a name string or mapping")
-    if set(volume) - {"name", "mount", "mode"}:
-        raise TypeError("volume mapping accepts only name, mount, and mode")
+    unknown = sorted(set(volume) - {"name", "mount", "mode"})
+    if unknown:
+        raise TypeError(
+            f"volume mapping accepts only name, mount, and mode, got unexpected key(s): {', '.join(unknown)}")
     if not mount and "mount" in volume:
         raise TypeError("volume mount is meaningless with mount=False, which leaves mounting to the caller")
     body = dict(volume)
@@ -193,7 +195,9 @@ def _volume_body(volume: str | Mapping[str, str], mount: bool = True) -> dict:
     if mode in (None, "", "ro"):
         body.pop("mode", None)
     elif mode != "rw":
-        raise TypeError("volume mode must be 'rw' or 'ro'")
+        name = volume.get("name")
+        prefix = f"volume {name!r}: " if name is not None else ""
+        raise TypeError(f"{prefix}mode must be 'rw' or 'ro', got {mode!r}")
     return body
 
 

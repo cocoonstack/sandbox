@@ -84,9 +84,14 @@ def test_claim_sends_volumes(node):
     ]
 
 
-def test_claim_rejects_legacy_volume_tuple(node):
-    with pytest.raises(TypeError, match="name string or mapping"):
-        Client(node).new("rt:24.04", volumes=[("imagenet", "/datasets/imagenet")])
+@pytest.mark.parametrize(("volumes", "match"), [
+    ([("imagenet", "/datasets/imagenet")], "name string or mapping"),
+    ([{"name": "imagenet", "mode": "rwx"}], "volume 'imagenet': mode must be 'rw' or 'ro', got 'rwx'"),
+    ([{"name": "imagenet", "bogus": "x"}], r"unexpected key\(s\): bogus"),
+])
+def test_claim_rejects_invalid_volumes(node, volumes, match):
+    with pytest.raises(TypeError, match=match):
+        Client(node).new("rt:24.04", volumes=volumes)
 
 
 def test_claim_sends_volume_mode_rw(node):
@@ -118,16 +123,6 @@ def test_claim_omits_volume_mode_ro(node):
     Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "mode": ""}])
     # "ro" and "" both normalize to an omitted key, byte-identical to a v1 request.
     assert seen[0]["volumes"] == seen[1]["volumes"] == [{"name": "imagenet"}]
-
-
-def test_claim_rejects_invalid_volume_mode(node):
-    with pytest.raises(TypeError, match="mode must be"):
-        Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "mode": "rwx"}])
-
-
-def test_claim_rejects_unknown_volume_key(node):
-    with pytest.raises(TypeError, match="only name, mount, and mode"):
-        Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "bogus": "x"}])
 
 
 def test_claim_attaches_volumes_without_mounting(node):
