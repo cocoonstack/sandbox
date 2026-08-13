@@ -33,18 +33,14 @@ func TestPreviewTokenRoundTrip(t *testing.T) {
 
 func TestPreviewRejectsExpired(t *testing.T) {
 	ps := NewPreviewServer("secret", "node:9000", "node:7777", &fakePreviewMgr{})
-	token := mintToken(ps, "sb_1", 8080, -time.Second) // already expired
+	token := mintToken(ps, "sb_1", 8080, -time.Second)
 	if _, ok := ps.verify(token); ok {
 		t.Error("expired token verified")
 	}
 }
 
 func TestPreviewProxiesToGuest(t *testing.T) {
-	guest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "guest saw "+r.URL.Path)
-	}))
-	t.Cleanup(guest.Close)
-	guestAddr := strings.TrimPrefix(guest.URL, "http://")
+	guestAddr := newGuestServer(t, func(r *http.Request) string { return "guest saw " + r.URL.Path })
 
 	dialed := false
 	ps := NewPreviewServer("secret", "node:9000", "node:7777", &fakePreviewMgr{
@@ -91,21 +87,21 @@ func TestPreviewRevokedWhenDialFails(t *testing.T) {
 }
 
 func TestPreviewRechecksClaimForEveryRequest(t *testing.T) {
-	guest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, "guest")
-	}))
-	t.Cleanup(guest.Close)
-	guestAddr := strings.TrimPrefix(guest.URL, "http://")
+	guestAddr := newGuestServer(t, func(*http.Request) string { return "guest" })
 
 	var live atomic.Bool
-	var dials atomic.Int32
+	var touches, dials atomic.Int32
 	live.Store(true)
 	ps := NewPreviewServer("secret", "node:9000", "node:7777", &fakePreviewMgr{
+		touch: func(string, uint16) error {
+			touches.Add(1)
+			if !live.Load() {
+				return net.ErrClosed
+			}
+			return nil
+		},
 		dial: func(string, uint16) (net.Conn, error) {
 			dials.Add(1)
-			if !live.Load() {
-				return nil, net.ErrClosed
-			}
 			return net.Dial("tcp", guestAddr)
 		},
 	})
@@ -132,17 +128,16 @@ func TestPreviewRechecksClaimForEveryRequest(t *testing.T) {
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Errorf("status after release = %d, want 502", resp.StatusCode)
 	}
-	if got := dials.Load(); got != 2 {
-		t.Errorf("PreviewDial calls = %d, want one per request", got)
+	if got := touches.Load(); got != 2 {
+		t.Errorf("PreviewTouch calls = %d, want one per request", got)
+	}
+	if got := dials.Load(); got != 1 {
+		t.Errorf("PreviewDial calls = %d, want the pooled conn reused", got)
 	}
 }
 
 func TestPreviewForwardsToOwner(t *testing.T) {
-	guest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "guest saw "+r.URL.Path)
-	}))
-	t.Cleanup(guest.Close)
-	guestAddr := strings.TrimPrefix(guest.URL, "http://")
+	guestAddr := newGuestServer(t, func(r *http.Request) string { return "guest saw " + r.URL.Path })
 
 	owner := httptest.NewUnstartedServer(nil)
 	ownerAddr := owner.Listener.Addr().String()
@@ -171,11 +166,28 @@ func TestPreviewForwardsToOwner(t *testing.T) {
 }
 
 type fakePreviewMgr struct {
-	dial func(id string, port uint16) (net.Conn, error)
+	touch func(id string, port uint16) error
+	dial  func(id string, port uint16) (net.Conn, error)
+}
+
+func (f *fakePreviewMgr) PreviewTouch(_ context.Context, id string, port uint16) error {
+	if f.touch == nil {
+		return nil
+	}
+	return f.touch(id, port)
 }
 
 func (f *fakePreviewMgr) PreviewDial(_ context.Context, id string, port uint16) (net.Conn, error) {
 	return f.dial(id, port)
+}
+
+func newGuestServer(t *testing.T, body func(r *http.Request) string) string {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, body(r))
+	}))
+	t.Cleanup(ts.Close)
+	return strings.TrimPrefix(ts.URL, "http://")
 }
 
 func mintToken(ps *PreviewServer, id string, port uint16, ttl time.Duration) string {

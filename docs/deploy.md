@@ -461,3 +461,9 @@ sandboxd:
   (GCP/AWS) in production, or a plain nginx/Caddy for self-hosting. It
   understands nothing about tokens — not sandboxd's code. Dev and e2e hit
   `preview_listen` directly over HTTP.
+- **Sharing scope**: a preview URL is a bearer link, and its token payload
+  (sandbox id, port, owner `advertise_addr`) is readable by whoever holds
+  it — keep `advertise_addr` off browser-routable networks. All URLs under
+  one `preview_advertise` share one browser origin, so different claims'
+  apps are same-origin to the browser; workloads needing browser-side
+  isolation need per-sandbox subdomains on the fronting proxy.
