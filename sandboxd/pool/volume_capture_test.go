@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -117,15 +118,17 @@ func TestReconcileRetainsVolumeCaptureGateWithoutCatalog(t *testing.T) {
 }
 
 func TestIdleOnceSkipsVolumeClaim(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, IdleHibernateSeconds: 1})
-	sb := mustClaim(t, m, testKey)
-	sb.Volumes = []types.Volume{{Name: "dataset", Mount: "/datasets"}}
-	backdate(m, sb, 2*time.Second)
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, IdleHibernateSeconds: 1})
+		sb := mustClaim(t, m, testKey)
+		sb.Volumes = []types.Volume{{Name: "dataset", Mount: "/datasets"}}
+		backdate(m, sb, 2*time.Second)
 
-	m.idleOnce(t.Context())
-	waitFor(t, func() bool { return !m.idleSweep.Load() })
-	if len(eng.hibernates) != 0 || hibernated(m) != 0 {
-		t.Errorf("idle sweep hibernated volume claim: engine=%v count=%d", eng.hibernates, hibernated(m))
-	}
+		m.idleOnce(t.Context())
+		waitFor(t, func() bool { return !m.idleSweep.Load() })
+		if len(eng.hibernates) != 0 || hibernated(m) != 0 {
+			t.Errorf("idle sweep hibernated volume claim: engine=%v count=%d", eng.hibernates, hibernated(m))
+		}
+	})
 }

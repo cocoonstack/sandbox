@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -289,57 +290,61 @@ func TestVolumeAdmissionReleasedAfterSetupFailure(t *testing.T) {
 }
 
 func TestRollbackQuiescesWritableVolumesBeforeRemoval(t *testing.T) {
-	path := writeVolumeImage(t, "scratch.img", "data")
-	eng := newFakeEngine()
-	eng.vms["sbx-rw"] = "/vsock/rw"
-	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
-	if err := markVolumeDirty(path); err != nil {
-		t.Fatalf("mark dirty: %v", err)
-	}
-	sb := &types.Sandbox{
-		ID: "sb_rw", VMName: "sbx-rw", Key: testKey, VsockSocket: "/vsock/rw",
-		Volumes: []types.Volume{{Name: "scratch", Mount: "/volumes/scratch", Mode: types.VolumeModeRW}},
-	}
-	m.mu.Lock()
-	m.claimed[sb.ID] = sb
-	m.adoptVolumes(sb.Volumes)
-	m.mu.Unlock()
+	synctest.Test(t, func(t *testing.T) {
+		path := writeVolumeImage(t, "scratch.img", "data")
+		eng := newFakeEngine()
+		eng.vms["sbx-rw"] = "/vsock/rw"
+		m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
+		if err := markVolumeDirty(path); err != nil {
+			t.Fatalf("mark dirty: %v", err)
+		}
+		sb := &types.Sandbox{
+			ID: "sb_rw", VMName: "sbx-rw", Key: testKey, VsockSocket: "/vsock/rw",
+			Volumes: []types.Volume{{Name: "scratch", Mount: "/volumes/scratch", Mode: types.VolumeModeRW}},
+		}
+		m.mu.Lock()
+		m.claimed[sb.ID] = sb
+		m.adoptVolumes(sb.Volumes)
+		m.mu.Unlock()
 
-	m.rollbackClaim(t.Context(), []*types.Sandbox{sb})
-	waitFor(t, m.store.synced)
+		m.rollbackClaim(t.Context(), []*types.Sandbox{sb})
+		waitFor(t, m.store.synced)
 
-	if seen := eng.opsAtRemoval(sb.VMName); !slices.Contains(seen, "umount:/volumes/scratch") {
-		t.Errorf("ops at removal=%v, want the unmount already done", seen)
-	}
-	if volumeDirty(path) {
-		t.Error("rollback left the image dirty after a clean unmount")
-	}
-	if holders := volumeHoldersOf(m, "scratch"); holders != (volumeHolders{}) {
-		t.Errorf("registry after rollback=%+v, want empty", holders)
-	}
+		if seen := eng.opsAtRemoval(sb.VMName); !slices.Contains(seen, "umount:/volumes/scratch") {
+			t.Errorf("ops at removal=%v, want the unmount already done", seen)
+		}
+		if volumeDirty(path) {
+			t.Error("rollback left the image dirty after a clean unmount")
+		}
+		if holders := volumeHoldersOf(m, "scratch"); holders != (volumeHolders{}) {
+			t.Errorf("registry after rollback=%+v, want empty", holders)
+		}
+	})
 }
 
 func TestReapQuiescesWritableVolumesBeforeRemoval(t *testing.T) {
-	path := writeVolumeImage(t, "scratch.img", "data")
-	eng := newFakeEngine()
-	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
-	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "", []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}})
-	if err != nil {
-		t.Fatalf("ClaimProvision: %v", err)
-	}
-	m.mu.Lock()
-	sb.Deadline = time.Now().Add(-time.Second)
-	m.mu.Unlock()
+	synctest.Test(t, func(t *testing.T) {
+		path := writeVolumeImage(t, "scratch.img", "data")
+		eng := newFakeEngine()
+		m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
+		sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "", []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}})
+		if err != nil {
+			t.Fatalf("ClaimProvision: %v", err)
+		}
+		m.mu.Lock()
+		sb.Deadline = time.Now().Add(-time.Second)
+		m.mu.Unlock()
 
-	m.reapOnce(t.Context())
-	waitFor(t, func() bool { return volumeHoldersOf(m, "scratch") == volumeHolders{} })
+		m.reapOnce(t.Context())
+		waitFor(t, func() bool { return volumeHoldersOf(m, "scratch") == volumeHolders{} })
 
-	if seen := eng.opsAtRemoval(sb.VMName); !slices.Contains(seen, "umount:/volumes/scratch") {
-		t.Errorf("ops at removal=%v, want the unmount already done", seen)
-	}
-	if volumeDirty(path) {
-		t.Error("reap left the image dirty after a clean unmount")
-	}
+		if seen := eng.opsAtRemoval(sb.VMName); !slices.Contains(seen, "umount:/volumes/scratch") {
+			t.Errorf("ops at removal=%v, want the unmount already done", seen)
+		}
+		if volumeDirty(path) {
+			t.Error("reap left the image dirty after a clean unmount")
+		}
+	})
 }
 
 func TestQuiesceFailureSyncsOnceAndKeepsMarkers(t *testing.T) {

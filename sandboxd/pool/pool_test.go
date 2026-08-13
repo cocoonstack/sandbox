@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -269,22 +270,24 @@ func TestAgentSocketValidatesToken(t *testing.T) {
 }
 
 func TestReapDestroysExpiredClaims(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng)
-	sb := mustClaim(t, m, testKey)
-	m.mu.Lock()
-	m.claimed[sb.ID].Deadline = time.Now().Add(-time.Second)
-	m.mu.Unlock()
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng)
+		sb := mustClaim(t, m, testKey)
+		m.mu.Lock()
+		m.claimed[sb.ID].Deadline = time.Now().Add(-time.Second)
+		m.mu.Unlock()
 
-	m.reapOnce(t.Context())
-	// The destroy batch is fanned off the ticker loop; poll for it.
-	waitFor(t, func() bool { return eng.removed(sb.VMName) })
-	if _, g := m.Info(); g.Claimed != 0 {
-		t.Errorf("claimed=%d, want 0", g.Claimed)
-	}
-	if got, _ := newClaimStore(m.dataDir).load(); len(got) != 0 {
-		t.Errorf("reap not persisted: %d entries", len(got))
-	}
+		m.reapOnce(t.Context())
+		// The destroy batch is fanned off the ticker loop; poll for it.
+		waitFor(t, func() bool { return eng.removed(sb.VMName) })
+		if _, g := m.Info(); g.Claimed != 0 {
+			t.Errorf("claimed=%d, want 0", g.Claimed)
+		}
+		if got, _ := newClaimStore(m.dataDir).load(); len(got) != 0 {
+			t.Errorf("reap not persisted: %d entries", len(got))
+		}
+	})
 }
 
 func TestReconcile(t *testing.T) {
@@ -331,88 +334,94 @@ func TestReconcile(t *testing.T) {
 }
 
 func TestRefillTopsUpToTarget(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
-	m.pools[testKey].goldenDir = "/goldens/x"
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
+		m.pools[testKey].goldenDir = "/goldens/x"
 
-	m.refillOnce(t.Context())
-	waitFor(t, func() bool {
-		infos, _ := m.Info()
-		return infos[0].Warm == 2 && infos[0].Refilling == 0
+		m.refillOnce(t.Context())
+		waitFor(t, func() bool {
+			infos, _ := m.Info()
+			return infos[0].Warm == 2 && infos[0].Refilling == 0
+		})
+		if n := eng.cloneCount(); n != 2 {
+			t.Errorf("clones=%d, want 2", n)
+		}
 	})
-	if n := eng.cloneCount(); n != 2 {
-		t.Errorf("clones=%d, want 2", n)
-	}
 }
 
 func TestSetPoolsGrowShrinkAndDrain(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng)
-	goldenDir := filepath.Join(m.goldensDir(), testKey.Hash())
-	if err := os.MkdirAll(goldenDir, 0o750); err != nil {
-		t.Fatalf("setup golden: %v", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng)
+		goldenDir := filepath.Join(m.goldensDir(), testKey.Hash())
+		if err := os.MkdirAll(goldenDir, 0o750); err != nil {
+			t.Fatalf("setup golden: %v", err)
+		}
 
-	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 2}}); err != nil {
-		t.Fatalf("SetPools grow: %v", err)
-	}
-	waitFor(t, func() bool {
+		if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 2}}); err != nil {
+			t.Fatalf("SetPools grow: %v", err)
+		}
+		waitFor(t, func() bool {
+			infos, _ := m.Info()
+			return len(infos) == 1 && infos[0].Target == 2 && infos[0].Warm == 2 && infos[0].Golden
+		})
+		if n := eng.cloneCount(); n != 2 {
+			t.Fatalf("clones=%d, want 2", n)
+		}
+
+		if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 1}}); err != nil {
+			t.Fatalf("SetPools shrink: %v", err)
+		}
 		infos, _ := m.Info()
-		return len(infos) == 1 && infos[0].Target == 2 && infos[0].Warm == 2 && infos[0].Golden
+		if len(infos) != 1 || infos[0].Target != 1 || infos[0].Warm != 1 {
+			t.Fatalf("after shrink info=%+v, want target=1 warm=1", infos)
+		}
+		if removed := eng.removedNames(); len(removed) != 1 {
+			t.Fatalf("removed=%v, want one trimmed VM", removed)
+		}
+
+		if err := m.SetPools(t.Context(), nil); err != nil {
+			t.Fatalf("SetPools drain: %v", err)
+		}
+		infos, _ = m.Info()
+		if len(infos) != 0 {
+			t.Fatalf("after drain info=%+v, want no configured pools", infos)
+		}
+		if removed := eng.removedNames(); len(removed) != 2 {
+			t.Fatalf("removed=%v, want both warm VMs destroyed", removed)
+		}
 	})
-	if n := eng.cloneCount(); n != 2 {
-		t.Fatalf("clones=%d, want 2", n)
-	}
-
-	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 1}}); err != nil {
-		t.Fatalf("SetPools shrink: %v", err)
-	}
-	infos, _ := m.Info()
-	if len(infos) != 1 || infos[0].Target != 1 || infos[0].Warm != 1 {
-		t.Fatalf("after shrink info=%+v, want target=1 warm=1", infos)
-	}
-	if removed := eng.removedNames(); len(removed) != 1 {
-		t.Fatalf("removed=%v, want one trimmed VM", removed)
-	}
-
-	if err := m.SetPools(t.Context(), nil); err != nil {
-		t.Fatalf("SetPools drain: %v", err)
-	}
-	infos, _ = m.Info()
-	if len(infos) != 0 {
-		t.Fatalf("after drain info=%+v, want no configured pools", infos)
-	}
-	if removed := eng.removedNames(); len(removed) != 2 {
-		t.Fatalf("removed=%v, want both warm VMs destroyed", removed)
-	}
 }
 
 func TestRefillServicesEveryPoolUnderTightBudget(t *testing.T) {
-	key2 := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeMedium}
-	m := newTestManager(t, newFakeEngine(),
-		config.PoolSpec{PoolKey: testKey, Warm: 3},
-		config.PoolSpec{PoolKey: key2, Warm: 3})
-	m.refillSem = make(chan struct{}, 1)
-	m.probeSem = make(chan struct{}, 1)
-	m.mu.Lock()
-	m.pools[testKey].goldenDir = "/goldens/a"
-	m.pools[key2].goldenDir = "/goldens/b"
-	m.mu.Unlock()
+	synctest.Test(t, func(t *testing.T) {
+		key2 := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeMedium}
+		m := newTestManager(t, newFakeEngine(),
+			config.PoolSpec{PoolKey: testKey, Warm: 3},
+			config.PoolSpec{PoolKey: key2, Warm: 3})
+		m.refillSem = make(chan struct{}, 1)
+		m.probeSem = make(chan struct{}, 1)
+		m.mu.Lock()
+		m.pools[testKey].goldenDir = "/goldens/a"
+		m.pools[key2].goldenDir = "/goldens/b"
+		m.mu.Unlock()
 
-	m.refillOnce(t.Context())
+		m.refillOnce(t.Context())
 
-	both := func() bool {
-		infos, _ := m.Info()
-		return len(infos) == 2 && infos[0].Warm == 3 && infos[1].Warm == 3
-	}
-	deadline := time.Now().Add(3 * time.Second)
-	for !both() && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if !both() {
-		infos, _ := m.Info()
-		t.Fatalf("one refill tick did not chain both pools to target: %+v", infos)
-	}
+		both := func() bool {
+			infos, _ := m.Info()
+			return len(infos) == 2 && infos[0].Warm == 3 && infos[1].Warm == 3
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for !both() && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		if !both() {
+			infos, _ := m.Info()
+			t.Fatalf("one refill tick did not chain both pools to target: %+v", infos)
+		}
+	})
 }
 
 func TestSetPoolsRemovalShedsArchivePolicy(t *testing.T) {
@@ -472,90 +481,98 @@ func TestSetPoolsRejectsEgress(t *testing.T) {
 }
 
 func TestRefillRespectsSemaphore(t *testing.T) {
-	eng := newFakeEngine()
-	eng.probeStall = make(chan struct{})
-	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 7})
-	m.refillSem = make(chan struct{}, 2)
-	m.probeSem = make(chan struct{}, 2)
-	m.pools[testKey].goldenDir = "/goldens/x"
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.probeStall = make(chan struct{})
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 7})
+		m.refillSem = make(chan struct{}, 2)
+		m.probeSem = make(chan struct{}, 2)
+		m.pools[testKey].goldenDir = "/goldens/x"
 
-	m.refillOnce(t.Context())
-	waitFor(t, func() bool { return eng.cloneCount() == 4 && eng.probeCount() == 2 })
-	time.Sleep(50 * time.Millisecond)
-	if clones, probes := eng.cloneCount(), eng.probeCount(); clones != 4 || probes != 2 {
-		t.Errorf("stalled pipeline clones=%d probes=%d, want 4/2", clones, probes)
-	}
-	infos, _ := m.Info()
-	if infos[0].Warm != 0 || infos[0].Refilling != 4 {
-		t.Errorf("stalled pipeline info=%+v, want warm=0 refilling=4", infos[0])
-	}
-
-	close(eng.probeStall)
-	waitFor(t, func() bool {
+		m.refillOnce(t.Context())
+		waitFor(t, func() bool { return eng.cloneCount() == 4 && eng.probeCount() == 2 })
+		time.Sleep(50 * time.Millisecond)
+		if clones, probes := eng.cloneCount(), eng.probeCount(); clones != 4 || probes != 2 {
+			t.Errorf("stalled pipeline clones=%d probes=%d, want 4/2", clones, probes)
+		}
 		infos, _ := m.Info()
-		return infos[0].Warm == 7 && infos[0].Refilling == 0
+		if infos[0].Warm != 0 || infos[0].Refilling != 4 {
+			t.Errorf("stalled pipeline info=%+v, want warm=0 refilling=4", infos[0])
+		}
+
+		close(eng.probeStall)
+		waitFor(t, func() bool {
+			infos, _ := m.Info()
+			return infos[0].Warm == 7 && infos[0].Refilling == 0
+		})
 	})
 }
 
 func TestRefillCloneStageIsBounded(t *testing.T) {
-	eng := newFakeEngine()
-	eng.cloneStall = make(chan struct{})
-	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 5})
-	m.refillSem = make(chan struct{}, 2)
-	m.probeSem = make(chan struct{}, 2)
-	m.pools[testKey].goldenDir = "/goldens/x"
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.cloneStall = make(chan struct{})
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 5})
+		m.refillSem = make(chan struct{}, 2)
+		m.probeSem = make(chan struct{}, 2)
+		m.pools[testKey].goldenDir = "/goldens/x"
 
-	m.refillOnce(t.Context())
-	waitFor(t, func() bool { return eng.cloneCount() == 2 })
-	time.Sleep(50 * time.Millisecond)
-	if got := eng.cloneCount(); got != 2 {
-		t.Errorf("clones=%d while clone stage stalled, want 2", got)
-	}
-	close(eng.cloneStall)
-	waitFor(t, func() bool {
-		infos, _ := m.Info()
-		return infos[0].Warm == 5 && infos[0].Refilling == 0
+		m.refillOnce(t.Context())
+		waitFor(t, func() bool { return eng.cloneCount() == 2 })
+		time.Sleep(50 * time.Millisecond)
+		if got := eng.cloneCount(); got != 2 {
+			t.Errorf("clones=%d while clone stage stalled, want 2", got)
+		}
+		close(eng.cloneStall)
+		waitFor(t, func() bool {
+			infos, _ := m.Info()
+			return infos[0].Warm == 5 && infos[0].Refilling == 0
+		})
 	})
 }
 
 func TestRefillProbeFailureCleansUp(t *testing.T) {
-	eng := newFakeEngine()
-	eng.probeErr = errors.New("never ready")
-	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
-	m.pools[testKey].goldenDir = "/goldens/x"
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.probeErr = errors.New("never ready")
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+		m.pools[testKey].goldenDir = "/goldens/x"
 
-	m.refillOnce(t.Context())
-	waitFor(t, func() bool {
-		infos, _ := m.Info()
-		return infos[0].Warm == 0 && infos[0].Refilling == 0 && len(eng.removedNames()) == 1
-	})
-	eng.mu.Lock()
-	eng.probeErr = nil
-	eng.mu.Unlock()
-	m.refillOnce(t.Context())
-	waitFor(t, func() bool {
-		infos, _ := m.Info()
-		return infos[0].Warm == 1 && infos[0].Refilling == 0
+		m.refillOnce(t.Context())
+		waitFor(t, func() bool {
+			infos, _ := m.Info()
+			return infos[0].Warm == 0 && infos[0].Refilling == 0 && len(eng.removedNames()) == 1
+		})
+		eng.mu.Lock()
+		eng.probeErr = nil
+		eng.mu.Unlock()
+		m.refillOnce(t.Context())
+		waitFor(t, func() bool {
+			infos, _ := m.Info()
+			return infos[0].Warm == 1 && infos[0].Refilling == 0
+		})
 	})
 }
 
 func TestRefillCanceledWhileWaitingForProbeCleansUp(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
-	m.refillSem = make(chan struct{}, 1)
-	m.probeSem = make(chan struct{}, 1)
-	m.probeSem <- struct{}{}
-	m.pools[testKey].goldenDir = "/goldens/x"
-	ctx, cancel := context.WithCancel(t.Context())
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+		m.refillSem = make(chan struct{}, 1)
+		m.probeSem = make(chan struct{}, 1)
+		m.probeSem <- struct{}{}
+		m.pools[testKey].goldenDir = "/goldens/x"
+		ctx, cancel := context.WithCancel(t.Context())
 
-	m.refillOnce(ctx)
-	waitFor(t, func() bool { return eng.cloneCount() == 1 && len(m.refillSem) == 0 })
-	cancel()
-	waitFor(t, func() bool {
-		infos, _ := m.Info()
-		return infos[0].Refilling == 0 && len(eng.removedNames()) == 1
+		m.refillOnce(ctx)
+		waitFor(t, func() bool { return eng.cloneCount() == 1 && len(m.refillSem) == 0 })
+		cancel()
+		waitFor(t, func() bool {
+			infos, _ := m.Info()
+			return infos[0].Refilling == 0 && len(eng.removedNames()) == 1
+		})
+		<-m.probeSem
 	})
-	<-m.probeSem
 }
 
 func TestDirectClaimSkipsProbeGate(t *testing.T) {
@@ -589,98 +606,106 @@ func TestRefillBudgetFollowsConfig(t *testing.T) {
 // TestRefillReactivelyFillsToTarget: one trigger fills the whole target (not
 // just the concurrency budget), since a finished refill chains the next.
 func TestRefillReactivelyFillsToTarget(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 10})
-	m.pools[testKey].goldenDir = "/goldens/x"
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 10})
+		m.pools[testKey].goldenDir = "/goldens/x"
 
-	m.refillOnce(t.Context())
-	waitFor(t, func() bool {
-		infos, _ := m.Info()
-		return infos[0].Warm == 10 && infos[0].Refilling == 0
+		m.refillOnce(t.Context())
+		waitFor(t, func() bool {
+			infos, _ := m.Info()
+			return infos[0].Warm == 10 && infos[0].Refilling == 0
+		})
+		if n := eng.cloneCount(); n != 10 {
+			t.Errorf("clones=%d, want 10", n)
+		}
 	})
-	if n := eng.cloneCount(); n != 10 {
-		t.Errorf("clones=%d, want 10", n)
-	}
 }
 
 func TestGoldenBuildPipeline(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
 
-	m.refillOnce(t.Context())
-	waitFor(t, func() bool {
-		infos, _ := m.Info()
-		return infos[0].Golden
-	})
-	m.mu.Lock()
-	golden := m.pools[testKey].goldenDir
-	m.mu.Unlock()
-	if fi, err := os.Stat(golden); err != nil || !fi.IsDir() {
-		t.Errorf("golden dir not exported: %v", err)
-	}
-	builder := vmPrefix + "gb-" + testKey.Hash()
-	if removed := eng.removedNames(); !slices.Contains(removed, builder) {
-		t.Errorf("removes=%v, want builder VM %s destroyed", removed, builder)
-	}
+		m.refillOnce(t.Context())
+		waitFor(t, func() bool {
+			infos, _ := m.Info()
+			return infos[0].Golden
+		})
+		m.mu.Lock()
+		golden := m.pools[testKey].goldenDir
+		m.mu.Unlock()
+		if fi, err := os.Stat(golden); err != nil || !fi.IsDir() {
+			t.Errorf("golden dir not exported: %v", err)
+		}
+		builder := vmPrefix + "gb-" + testKey.Hash()
+		if removed := eng.removedNames(); !slices.Contains(removed, builder) {
+			t.Errorf("removes=%v, want builder VM %s destroyed", removed, builder)
+		}
 
-	m.refillOnce(t.Context())
-	waitFor(t, func() bool {
-		infos, _ := m.Info()
-		return infos[0].Warm == 1
+		m.refillOnce(t.Context())
+		waitFor(t, func() bool {
+			infos, _ := m.Info()
+			return infos[0].Warm == 1
+		})
 	})
 }
 
 func TestGoldenBuildFailureBacksOff(t *testing.T) {
-	eng := newFakeEngine()
-	eng.runColdErr = errors.New("image pull failed")
-	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.runColdErr = errors.New("image pull failed")
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
 
-	m.refillOnce(t.Context())
-	waitFor(t, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		p := m.pools[testKey]
-		return !p.building && p.nextBuild.After(time.Now())
+		m.refillOnce(t.Context())
+		waitFor(t, func() bool {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			p := m.pools[testKey]
+			return !p.building && p.nextBuild.After(time.Now())
+		})
+
+		m.refillOnce(t.Context())
+		time.Sleep(20 * time.Millisecond)
+		if n := eng.coldCount(); n != 1 {
+			t.Errorf("cold boots=%d after failed build, want 1 (backoff)", n)
+		}
 	})
-
-	m.refillOnce(t.Context())
-	time.Sleep(20 * time.Millisecond)
-	if n := eng.coldCount(); n != 1 {
-		t.Errorf("cold boots=%d after failed build, want 1 (backoff)", n)
-	}
 }
 
 func TestReapBatchDoesNotStallTheLoop(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng)
-	// More expired claims than the concurrency budget (defaultRefill here) so
-	// the batch would block the submit loop if it acquired the semaphore there
-	// instead of per-goroutine.
-	const n = defaultRefill + 3
-	var sbs []*types.Sandbox
-	for range n {
-		sbs = append(sbs, mustClaim(t, m, testKey))
-	}
-	m.mu.Lock()
-	for _, sb := range sbs {
-		m.claimed[sb.ID].Deadline = time.Now().Add(-time.Second)
-	}
-	m.mu.Unlock()
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng)
+		// More expired claims than the concurrency budget (defaultRefill here) so
+		// the batch would block the submit loop if it acquired the semaphore there
+		// instead of per-goroutine.
+		const n = defaultRefill + 3
+		var sbs []*types.Sandbox
+		for range n {
+			sbs = append(sbs, mustClaim(t, m, testKey))
+		}
+		m.mu.Lock()
+		for _, sb := range sbs {
+			m.claimed[sb.ID].Deadline = time.Now().Add(-time.Second)
+		}
+		m.mu.Unlock()
 
-	stall := make(chan struct{})
-	eng.mu.Lock()
-	eng.removeStall = stall
-	eng.mu.Unlock()
+		stall := make(chan struct{})
+		eng.mu.Lock()
+		eng.removeStall = stall
+		eng.mu.Unlock()
 
-	done := make(chan struct{})
-	go func() { m.reapOnce(t.Context()); close(done) }()
-	select {
-	case <-done: // returned while every destroy is parked: the loop never blocked
-	case <-time.After(2 * time.Second):
-		t.Fatal("reapOnce blocked on a batch larger than the budget")
-	}
-	close(stall)
-	waitFor(t, func() bool { return eng.removed(sbs[n-1].VMName) })
+		done := make(chan struct{})
+		go func() { m.reapOnce(t.Context()); close(done) }()
+		select {
+		case <-done: // returned while every destroy is parked: the loop never blocked
+		case <-time.After(2 * time.Second):
+			t.Fatal("reapOnce blocked on a batch larger than the budget")
+		}
+		close(stall)
+		waitFor(t, func() bool { return eng.removed(sbs[n-1].VMName) })
+	})
 }
 
 func TestProbeReadyWaitsForVsock(t *testing.T) {

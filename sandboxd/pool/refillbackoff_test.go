@@ -3,6 +3,7 @@ package pool
 import (
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -63,53 +64,55 @@ func TestBackoffGrowsAndIsCapped(t *testing.T) {
 // TestRefillOnceHonorsTheBackoff pins the property that saves the node:
 // while a pool is backed off, the ticker spawns nothing.
 func TestRefillOnceHonorsTheBackoff(t *testing.T) {
-	eng := newFakeEngine()
-	// Deliberately not a capacitySignature: that parks the node after one
-	// failure; the streak backoff is the fallback for unclassifiable errors.
-	eng.cloneErr = errors.New("clone: guest kernel panicked before vsock came up")
-	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 50})
-	m.pools[testKey].goldenDir = "/goldens/x"
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		// Deliberately not a capacitySignature: that parks the node after one
+		// failure; the streak backoff is the fallback for unclassifiable errors.
+		eng.cloneErr = errors.New("clone: guest kernel panicked before vsock came up")
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 50})
+		m.pools[testKey].goldenDir = "/goldens/x"
 
-	// Concurrency is bounded, so the streak accrues over several ticks.
-	backedOff := false
-	for range 50 {
+		// Concurrency is bounded, so the streak accrues over several ticks.
+		backedOff := false
+		for range 50 {
+			m.refillOnce(t.Context())
+			waitFor(t, func() bool {
+				infos, _ := m.Info()
+				return infos[0].Refilling == 0
+			})
+			m.mu.Lock()
+			backedOff = !m.pools[testKey].nextRefill.IsZero()
+			m.mu.Unlock()
+			if backedOff {
+				break
+			}
+		}
+		attempts := eng.cloneCount()
+		if !backedOff {
+			t.Fatal("a pool whose every refill failed is not backed off")
+		}
+
+		// Pin the expiry far out so the no-spawn assertions cannot race a short
+		// first backoff on a loaded machine.
+		m.mu.Lock()
+		m.pools[testKey].nextRefill = time.Now().Add(time.Hour)
+		m.mu.Unlock()
+		for range 5 {
+			m.refillOnce(t.Context())
+		}
+		if n := eng.cloneCount(); n != attempts {
+			t.Errorf("clones=%d after backing off, want %d: a backed-off pool must not attempt again", n, attempts)
+		}
+
+		// A pause, not a latch: once the wait expires a working engine fills.
+		m.mu.Lock()
+		m.pools[testKey].nextRefill = time.Now().Add(-time.Second)
+		m.mu.Unlock()
+		eng.cloneErr = nil
 		m.refillOnce(t.Context())
 		waitFor(t, func() bool {
 			infos, _ := m.Info()
-			return infos[0].Refilling == 0
+			return infos[0].Warm == 50
 		})
-		m.mu.Lock()
-		backedOff = !m.pools[testKey].nextRefill.IsZero()
-		m.mu.Unlock()
-		if backedOff {
-			break
-		}
-	}
-	attempts := eng.cloneCount()
-	if !backedOff {
-		t.Fatal("a pool whose every refill failed is not backed off")
-	}
-
-	// Pin the expiry far out so the no-spawn assertions cannot race a short
-	// first backoff on a loaded machine.
-	m.mu.Lock()
-	m.pools[testKey].nextRefill = time.Now().Add(time.Hour)
-	m.mu.Unlock()
-	for range 5 {
-		m.refillOnce(t.Context())
-	}
-	if n := eng.cloneCount(); n != attempts {
-		t.Errorf("clones=%d after backing off, want %d: a backed-off pool must not attempt again", n, attempts)
-	}
-
-	// A pause, not a latch: once the wait expires a working engine fills.
-	m.mu.Lock()
-	m.pools[testKey].nextRefill = time.Now().Add(-time.Second)
-	m.mu.Unlock()
-	eng.cloneErr = nil
-	m.refillOnce(t.Context())
-	waitFor(t, func() bool {
-		infos, _ := m.Info()
-		return infos[0].Warm == 50
 	})
 }

@@ -156,15 +156,14 @@ func main() {
 	}
 
 	drained := make(chan struct{})
-	go func() {
+	context.AfterFunc(ctx, func() {
 		defer close(drained)
-		<-ctx.Done()
 		// Must outlive the canceled signal ctx to bound the drain.
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownGrace)
 		defer cancel()
 		_ = httpSrv.Shutdown(sctx)
 		srv.CloseRelays()
-	}()
+	})
 
 	logger.Infof(ctx, "sandboxd listening on %s", cfg.Listen)
 	if err := httpSrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
