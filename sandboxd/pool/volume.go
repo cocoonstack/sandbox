@@ -178,10 +178,9 @@ func (m *Manager) confirmVolumesClean(volumes []resolvedVolume) error {
 	return nil
 }
 
-// applyVolumes brings the resolved set up, a goroutine per volume past the
-// first: cocoon serializes the attach itself, so what overlaps is the CLI
-// spawn, the device settle wait and the guest mount. applied is that same set
-// in request shape, recorded on the sandbox only once every mount is up.
+// applyVolumes brings the resolved set up concurrently: cocoon serializes the
+// attach per VM, so what overlaps is the CLI spawns, settle waits and guest
+// mounts. applied is the request-shaped set, recorded once every mount is up.
 func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes []resolvedVolume, applied []types.Volume) error {
 	switch len(volumes) {
 	case 0:

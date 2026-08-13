@@ -488,7 +488,7 @@ func TestClaimProvisionRejectsMissingVolumePathBeforeProvision(t *testing.T) {
 }
 
 // assertVolumeBringUp pins each volume's own marker→attach→mount order and the
-// completeness of the set; cross-volume order is free — they come up together.
+// completeness of the set; cross-volume order is free.
 func assertVolumeBringUp(t *testing.T, eng *fakeEngine, applied []types.Volume) {
 	t.Helper()
 	ops := eng.volumeOpsLog()
