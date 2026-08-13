@@ -426,13 +426,14 @@ func apiError(verb string, resp *http.Response) error {
 // claimRequest mirrors sandboxd's wire type; duplicated so the SDK stays
 // dependency-free — the e2e module guards against drift.
 type claimRequest struct {
-	Template        string   `json:"template"`
-	Net             string   `json:"net,omitempty"`
-	Size            string   `json:"size,omitempty"`
-	Volumes         []Volume `json:"volumes,omitempty"`
-	TTLSeconds      int      `json:"ttl_seconds,omitempty"`
-	NoRedirect      bool     `json:"no_redirect,omitempty"`
-	RequirePromoted bool     `json:"require_promoted,omitempty"`
+	Template          string   `json:"template"`
+	Net               string   `json:"net,omitempty"`
+	Size              string   `json:"size,omitempty"`
+	Volumes           []Volume `json:"volumes,omitempty"`
+	VolumesAttachOnly bool     `json:"volumes_attach_only,omitempty"`
+	TTLSeconds        int      `json:"ttl_seconds,omitempty"`
+	NoRedirect        bool     `json:"no_redirect,omitempty"`
+	RequirePromoted   bool     `json:"require_promoted,omitempty"`
 }
 
 // rejectPinnedAxes fails a snapshot claim (checkpoint, template) that passed
@@ -444,12 +445,15 @@ func (r claimRequest) rejectPinnedAxes() error {
 	return nil
 }
 
-// validateVolumes rejects a volume mode outside the wire's vocabulary before
-// it reaches the network; WithVolumes already normalizes "ro" to "".
+// validateVolumes rejects a mode outside the wire's vocabulary and a mount
+// attach-only makes meaningless; WithVolumes already normalizes "ro" to "".
 func (r claimRequest) validateVolumes() error {
 	for _, v := range r.Volumes {
 		if v.Mode != "" && v.Mode != volumeModeRW {
 			return fmt.Errorf("volume %q: mode must be \"\", %q, or %q, got %q", v.Name, volumeModeRO, volumeModeRW, v.Mode)
+		}
+		if r.VolumesAttachOnly && v.Mount != "" {
+			return fmt.Errorf("volume %q: mount %q is meaningless with WithVolumesAttachOnly, which leaves mounting to the caller", v.Name, v.Mount)
 		}
 	}
 	return nil

@@ -29,12 +29,13 @@ class Client:
         self.timeout = timeout
 
     def new(self, template: str, net: str = "", size: str = "", ttl_seconds: int = 0,
-            volumes: list[str | Mapping[str, str]] | None = None) -> Sandbox:
+            volumes: list[str | Mapping[str, str]] | None = None, mount: bool = True) -> Sandbox:
         """Claims a sandbox; a warm hit is milliseconds. On a cluster a warm
         miss may redirect to a peer, followed transparently; if every
         candidate fails transiently, the claim falls back to the origin
-        once so it provisions or heals locally."""
-        claim = _claim_body(template, net, size, ttl_seconds, volumes)
+        once so it provisions or heals locally. mount=False attaches the
+        volumes without mounting them, leaving that to the workload."""
+        claim = _claim_body(template, net, size, ttl_seconds, volumes, mount)
         return self._claim_from(self.addr, claim)
 
     def delete_template(self, template: str, net: str = "", size: str = "") -> None:
@@ -163,7 +164,7 @@ class Client:
 
 
 def _claim_body(template: str, net: str, size: str, ttl_seconds: int,
-                volumes: list[str | Mapping[str, str]] | None = None) -> dict:
+                volumes: list[str | Mapping[str, str]] | None = None, mount: bool = True) -> dict:
     claim = {"template": template}
     if net:
         claim["net"] = net
@@ -172,17 +173,21 @@ def _claim_body(template: str, net: str, size: str, ttl_seconds: int,
     if ttl_seconds:
         claim["ttl_seconds"] = ttl_seconds
     if volumes:
-        claim["volumes"] = [_volume_body(volume) for volume in volumes]
+        claim["volumes"] = [_volume_body(volume, mount) for volume in volumes]
+    if not mount:
+        claim["volumes_attach_only"] = True
     return claim
 
 
-def _volume_body(volume: str | Mapping[str, str]) -> dict:
+def _volume_body(volume: str | Mapping[str, str], mount: bool = True) -> dict:
     if isinstance(volume, str):
         return {"name": volume}
     if not isinstance(volume, Mapping):
         raise TypeError("volume must be a name string or mapping")
     if set(volume) - {"name", "mount", "mode"}:
         raise TypeError("volume mapping accepts only name, mount, and mode")
+    if not mount and "mount" in volume:
+        raise TypeError("volume mount is meaningless with mount=False, which leaves mounting to the caller")
     body = dict(volume)
     mode = body.get("mode")
     if mode in (None, "", "ro"):

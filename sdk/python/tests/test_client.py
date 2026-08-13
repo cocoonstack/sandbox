@@ -130,6 +130,60 @@ def test_claim_rejects_unknown_volume_key(node):
         Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "bogus": "x"}])
 
 
+def test_claim_attaches_volumes_without_mounting(node):
+    seen = []
+
+    def claim(body, path):
+        seen.append(body)
+        return 200, {"id": "sb_1", "token": "tok", "volumes": [
+            {"name": "imagenet"}, {"name": "scratch", "mode": "rw"},
+        ]}
+
+    FakeNode.routes[("POST", "/v1/claim")] = claim
+    sb = Client(node).new("rt:24.04", volumes=["imagenet", {"name": "scratch", "mode": "rw"}], mount=False)
+    assert seen == [{
+        "template": "rt:24.04",
+        "volumes": [{"name": "imagenet"}, {"name": "scratch", "mode": "rw"}],
+        "volumes_attach_only": True,
+    }]
+    assert sb.volumes == [{"name": "imagenet"}, {"name": "scratch", "mode": "rw"}]
+
+
+def test_template_claim_attaches_volumes_without_mounting(node):
+    seen = []
+
+    def claim(body, path):
+        seen.append(body)
+        return 200, {"id": "sb_2", "token": "tok", "volumes": [{"name": "imagenet"}]}
+
+    FakeNode.routes[("POST", "/v1/claim")] = claim
+    sb = Template(Client(node), node, "task:v1", "none", "small").new(
+        volumes=["imagenet"], mount=False)
+    assert seen[0]["volumes_attach_only"] is True
+    assert seen[0]["volumes"] == [{"name": "imagenet"}]
+    assert sb.volumes == [{"name": "imagenet"}]
+
+
+def test_claim_rejects_mount_without_mounting(node):
+    with pytest.raises(TypeError, match="meaningless with mount=False"):
+        Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "mount": "/datasets"}], mount=False)
+    with pytest.raises(TypeError, match="meaningless with mount=False"):
+        Template(Client(node), node, "task:v1", "none", "small").new(
+            volumes=[{"name": "imagenet", "mount": "/datasets"}], mount=False)
+
+
+def test_claim_keeps_mounting_by_default(node):
+    seen = []
+
+    def claim(body, path):
+        seen.append(body)
+        return 200, {"id": "sb_1", "token": "tok"}
+
+    FakeNode.routes[("POST", "/v1/claim")] = claim
+    Client(node).new("rt:24.04", volumes=["imagenet"])
+    assert "volumes_attach_only" not in seen[0]
+
+
 def test_template_claim_sends_volumes(node):
     seen = []
 

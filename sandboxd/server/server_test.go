@@ -1318,6 +1318,9 @@ func TestVolumeClaimRejectsShapeBeforePlacement(t *testing.T) {
 		`{"template":"rt:24.04","volumes":[{"name":"data","mount":"relative"}]}`,
 		`{"template":"rt:24.04","volumes":[{"name":"data","mount":"/datasets"},{"name":"other","mount":"/datasets/nested"}]}`,
 		`{"template":"rt:24.04","volumes":[{"name":"a"},{"name":"b"},{"name":"c"},{"name":"d"},{"name":"e"},{"name":"f"},{"name":"g"},{"name":"h"},{"name":"i"}]}`,
+		`{"template":"rt:24.04","volumes_attach_only":true}`,
+		`{"template":"rt:24.04","volumes_attach_only":true,"volumes":[{"name":"data","mount":"/datasets"}]}`,
+		`{"template":"rt:24.04","volumes_attach_only":true,"volumes":[{"name":"data"},{"name":"other","mount":"/datasets"}]}`,
 	} {
 		mgr := &fakeManager{}
 		placer := &fakePlacer{addrs: []string{"warm-peer:7777"}, owners: []string{"owner:7777"}}

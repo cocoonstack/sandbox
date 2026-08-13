@@ -96,6 +96,7 @@ sb = client.new("ghcr.io/cocoonstack/sandbox/rt:24.04",
 | `net` | `"none"`, `"egress"` | `"none"` | Cloud Hypervisor network shape: `none` disables the NIC and uses vsock-only I/O; `egress` attaches a bridge/CNI NIC |
 | `size` | `"small"`, `"medium"`, `"large"`, `"xlarge"` | `"small"` | resource tier: 1cpu/512M, 2cpu/1G, 4cpu/4G, 4cpu/8G |
 | `volumes` | bare names or `{name, mount?, mode?}` mappings | `None` | attach and mount up to eight unique catalog dataset disks; an omitted mount defaults to `/volumes/<name>`; `mode` is `"ro"` (default) or `"rw"` — `"rw"` requires the catalog entry's `writable: true`; accepted by `Client.new` and `Template.new` |
+| `mount` | bool | `True` | mount every requested volume. `False` attaches the devices and leaves the mounting to the workload; a mapping carrying `mount` is then a `TypeError` |
 | `ttl_seconds` | int | server default 5m | sandbox TTL, server-capped at 24h. The node reaps the sandbox after the TTL even if the client vanishes |
 
 `new` returns when the sandbox's silkd answers: a warm hit is milliseconds,
@@ -112,6 +113,16 @@ context manager; `sb.close()` releases it (releasing one already gone is not
 an error — double-release and reap races stay silent).
 Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Checkpoint
 branches do not accept volumes of either mode in this version.
+
+`mount=False` on `client.new` or `template.new` claims the same volumes
+without mounting them: the dictionaries in `sb.volumes` carry no `mount` key,
+and the workload finds each device by polling `/sys/block/*/serial` for the
+catalog name. Everything above describes the default (`mount=True`) and is
+unchanged by it. What changes is that the mount and its consistency are
+entirely yours: sandboxd writes and clears no dirty marker for an attach-only
+`rw` claim, because it cannot verify your unmount, so releasing without
+unmounting cleanly leaves the image as a crash would — see
+[sandboxd-api](sandboxd-api.md#attach-only-volumes) for the full contract.
 
 The caller-visible constraints are deliberate: volume claims may consume a
 warm VM, remain non-capturable, mount read-only by default, and require Cloud

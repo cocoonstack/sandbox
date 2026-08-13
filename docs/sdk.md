@@ -144,6 +144,7 @@ defer sb.Close()
 | `WithNetwork(n)` | `NetNone`, `NetEgress` | `NetNone` | Cloud Hypervisor network shape: `NetNone` disables the NIC and uses vsock-only I/O; `NetEgress` attaches a bridge/CNI NIC |
 | `WithSize(s)` | `Small`, `Medium`, `Large`, `XLarge` | `Small` | resource tier: 1cpu/512M, 2cpu/1G, 4cpu/4G, 4cpu/8G |
 | `WithVolumes(volumes...)` | `Volume{Name, Mount?, Mode?}` entries | none | attach and mount up to eight unique catalog dataset disks; `Mount` defaults to `/volumes/<name>`; `Mode` is `"ro"` (default) or `"rw"` — `"rw"` requires the catalog entry's `writable: true`; supported by `Client.New` and `Template.New` |
+| `WithVolumesAttachOnly()` | — | mount | attach the requested volumes without mounting them; the workload finds each device and owns the mount. Rejects a `Volume.Mount` locally |
 | `WithTimeout(d)` | duration | server default 5m | sandbox TTL, rounded up to seconds, server-capped at 24h. The node reaps the sandbox after the TTL even if the client vanishes |
 
 `New` returns when the sandbox's silkd answers: a warm hit is milliseconds,
@@ -162,6 +163,16 @@ not an error, and `Close` is bounded internally so it stays defer-friendly).
 Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Passing
 `WithVolumes` to `Checkpoint.New` returns a local error because checkpoint
 branches do not support volumes of either mode in this version.
+
+`WithVolumesAttachOnly()` claims the same volumes without mounting them: the
+entries in `Sandbox.Volumes` carry an empty `Mount`, and the workload finds
+each device by polling `/sys/block/*/serial` for the catalog name. Everything
+above describes the default and is unchanged by this option. What changes is
+that the mount and its consistency are entirely yours: sandboxd writes and
+clears no dirty marker for an attach-only `rw` claim, because it cannot verify
+your unmount, so releasing without unmounting cleanly leaves the image as a
+crash would — see
+[sandboxd-api](sandboxd-api.md#attach-only-volumes) for the full contract.
 
 The caller-visible constraints are deliberate: volume claims may consume a
 warm VM, remain non-capturable, mount read-only by default, and require Cloud

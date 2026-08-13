@@ -47,6 +47,12 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   `mode` is `"ro"` (default, omitted) or `"rw"`; `"rw"` requires the catalog
   entry's `writable: true` (see [deploy](deploy.md#dataset-volumes)). Volumes
   require Cloud Hypervisor
+- `volumes_attach_only` (default `false`) attaches every requested volume
+  without mounting it, handing the whole mount contract to the workload. It
+  requires at least one volume, and rejects any entry carrying a `mount` —
+  the path is meaningless when the caller mounts the device. Everything below
+  describes the default, eager behaviour, which is completely unchanged; the
+  attach-only contract is in [its own section](#attach-only-volumes)
 
 Success:
 
@@ -75,6 +81,51 @@ filesystem — read-only, unless the entry requested and was granted `rw` —
 before returning. A custom mount may shadow an existing populated guest
 directory for the claim's life.
 
+### Attach-only volumes
+
+`"volumes_attach_only": true` stops after the attach. The device appears in
+the guest, nothing is mounted, and the echoed entries carry no `mount` key:
+
+```json
+{"id": "sb_…", "token": "…",
+ "volumes": [{"name": "imagenet"}, {"name": "scratch-db", "mode": "rw"}]}
+```
+
+Find each device by its virtio serial, which is the catalog name:
+
+```sh
+for dev in /sys/block/*/serial; do
+  [ "$(cat "$dev")" = scratch-db ] && echo "/dev/$(basename "$(dirname "$dev")")"
+done
+```
+
+Then mount it however the workload needs. A `ro` entry is attached
+`--readonly` and stays read-only at the guest block layer no matter who
+mounts it, so the guarantee does not depend on your mount flags.
+
+The whole consistency contract moves to the caller with the mount:
+
+- sandboxd writes no dirty marker for an attach-only `rw` claim and clears
+  none, because it cannot verify your unmount and therefore promises nothing.
+  Releasing without a clean unmount of your own leaves the image exactly as a
+  filesystem crash would. The next *eager* `ro` claim then fails at mount time
+  with a 500 — loud and attributable to the claim that skipped its unmount —
+  instead of the marker's 409. Recovery is any `rw` cycle that replays the
+  journal.
+- a marker left by an earlier *eager* `rw` crash is not cleared by attach-only
+  cycles, and still refuses eager `ro` claims with 409 until a `rw` claim
+  releases cleanly.
+- writes straight to the block device bypass the filesystem journal entirely
+  and are outside marker protection in either mode.
+
+What still protects other claims is unchanged: admission excludes an
+attach-only `rw` claim against every other claim of the name (and readers
+against a writer), an attach-only `ro` claim of a marker-bearing image is
+refused with 409, and a claim with volumes still refuses checkpoint, fork and
+hibernate. An attach-only claim costs one disk attach per volume — no device
+settle, no mount round-trip — and release costs nothing at all: removing the
+VM closes the devices.
+
 Redirects (mutually exclusive with the fields above) name peers to retry
 at — sent on a warm miss with warm peers, when the node lacks a golden for
 the key but gossip names a template owner, and when the node is at
@@ -102,7 +153,9 @@ name (attributed in the usage journal and counted against the tenant's
 `max_claims`). A catalog access list may restrict an entry to named tenants;
 an unknown and a forbidden volume return the same error text.
 
-Errors: 400 unknown template axis, invalid/duplicate volumes, `mode: "rw"`
+Errors: 400 unknown template axis, invalid/duplicate volumes,
+`volumes_attach_only` with no volumes or with an entry carrying a `mount`,
+`mode: "rw"`
 against a non-writable entry, or a volume that is unknown or forbidden (the
 latter two are deliberately indistinguishable), Firecracker with volumes, or
 bad body; 401 bad api token; 409 egress requested on a node without an egress

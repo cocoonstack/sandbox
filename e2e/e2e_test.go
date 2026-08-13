@@ -6,6 +6,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -426,6 +427,99 @@ func TestVolumeModeWireShape(t *testing.T) {
 	}
 }
 
+// TestAttachOnlyVolumeEndToEnd drives one attach-only writable claim through
+// the whole stack: the device is attached writable and nothing else happens —
+// no mount, no marker, no unmount at release — while admission still excludes
+// every other claim on the name, which is what protects third parties.
+func TestAttachOnlyVolumeEndToEnd(t *testing.T) {
+	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
+	stack := startTenantStack(t, "node-token", nil,
+		[]config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
+
+	sb, err := stack.client.New(t.Context(), "rt:24.04",
+		sandbox.WithVolumes(sandbox.Volume{Name: "scratch", Mode: "rw"}),
+		sandbox.WithVolumesAttachOnly())
+	if err != nil {
+		t.Fatalf("attach-only claim: %v", err)
+	}
+	if want := []sandbox.Volume{{Name: "scratch", Mode: "rw"}}; !slices.Equal(sb.Volumes, want) {
+		t.Errorf("claim volumes %+v, want %+v", sb.Volumes, want)
+	}
+	applied := []string{"attach:scratch:rw"}
+	if got := stack.eng.volumeOpsLog(); !slices.Equal(got, applied) {
+		t.Errorf("engine ops %v, want %v", got, applied)
+	}
+	assertNoDirtyMarker(t, scratch, "apply")
+	for _, requested := range []string{`{"name":"scratch"}`, `{"name":"scratch","mode":"rw"}`} {
+		if status, _ := rawClaim(t, stack, requested); status != http.StatusConflict {
+			t.Errorf("claim %s under a live attach-only writer: %d, want 409", requested, status)
+		}
+	}
+
+	if err := sb.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	want := slices.Concat(applied, []string{"remove"})
+	if got := stack.eng.volumeOpsLog(); !slices.Equal(got, want) {
+		t.Errorf("engine ops after release %v, want %v", got, want)
+	}
+	assertNoDirtyMarker(t, scratch, "release")
+}
+
+// TestAttachOnlyVolumeWireShape pins both claim replies' volume bytes: an
+// attach-only entry echoes without a mount, the eager entry is unchanged, and
+// the request flag never rides back in either.
+func TestAttachOnlyVolumeWireShape(t *testing.T) {
+	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
+	stack := startTenantStack(t, "node-token", nil,
+		[]config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
+	for _, tt := range []struct {
+		name    string
+		request string
+		want    map[string]any
+	}{
+		{
+			"attach-only omits the mount",
+			`{"template":"rt:24.04","volumes_attach_only":true,"volumes":[{"name":"scratch","mode":"rw"}]}`,
+			map[string]any{"name": "scratch", "mode": "rw"},
+		},
+		{
+			"eager claim is unchanged",
+			`{"template":"rt:24.04","volumes":[{"name":"scratch","mode":"rw"}]}`,
+			map[string]any{"name": "scratch", "mount": "/volumes/scratch", "mode": "rw"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			status, body := rawJSON(t, stack, http.MethodPost, "/v1/claim", tt.request)
+			if status != http.StatusOK {
+				t.Fatalf("claim: %d %s, want 200", status, body)
+			}
+			var reply map[string]any
+			if err := json.Unmarshal(body, &reply); err != nil {
+				t.Fatalf("decode claim %s: %v", body, err)
+			}
+			if _, leaked := reply["volumes_attach_only"]; leaked {
+				t.Errorf("reply %s carries the request flag", body)
+			}
+			entries, _ := reply["volumes"].([]any)
+			if len(entries) != 1 {
+				t.Fatalf("reply volumes %v, want one entry", reply["volumes"])
+			}
+			entry, _ := entries[0].(map[string]any)
+			if !maps.Equal(entry, tt.want) {
+				t.Errorf("reply volume %v, want %v", entry, tt.want)
+			}
+			var claimed rawClaimResponse
+			if err := json.Unmarshal(body, &claimed); err != nil {
+				t.Fatalf("decode claim %s: %v", body, err)
+			}
+			if err := stack.client.Attach(stack.addr, claimed.ID, claimed.Token).Close(); err != nil {
+				t.Fatalf("release: %v", err)
+			}
+		})
+	}
+}
+
 // TestDirtyVolumeRefusesReader: the marker a crashed writer leaves behind
 // (pre-created here) turns read-only claims into 409s over the wire.
 func TestDirtyVolumeRefusesReader(t *testing.T) {
@@ -502,6 +596,15 @@ func writeVolumeImage(t *testing.T, name, content string) string {
 		t.Fatalf("write volume image: %v", err)
 	}
 	return image
+}
+
+// assertNoDirtyMarker fails if the image carries the write-ahead marker: an
+// attach-only claim makes no consistency promise, so it must never write one.
+func assertNoDirtyMarker(t *testing.T, image, when string) {
+	t.Helper()
+	if _, err := os.Stat(image + ".dirty"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("dirty marker at %s: stat=%v, want no marker", when, err)
+	}
 }
 
 // rawClaimResponse decodes the volume entries generically, so the assertion

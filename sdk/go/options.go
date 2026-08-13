@@ -70,6 +70,12 @@ func WithVolumes(volumes ...Volume) Option {
 	return func(r *claimRequest) { r.Volumes = volumes }
 }
 
+// WithVolumesAttachOnly attaches the claim's volumes without mounting them;
+// the workload finds each device by its serial and owns the mount from there.
+func WithVolumesAttachOnly() Option {
+	return func(r *claimRequest) { r.VolumesAttachOnly = true }
+}
+
 // WithTimeout bounds the sandbox's lifetime: the owning node reaps it after
 // d (rounded up to seconds) even if the client vanishes.
 func WithTimeout(d time.Duration) Option {

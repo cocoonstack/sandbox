@@ -31,7 +31,7 @@ func TestValidVolumeName(t *testing.T) {
 func TestValidateVolumes(t *testing.T) {
 	volumes := []Volume{{Name: "dataset"}, {Name: "weights-1", Mount: "/models"}}
 	wantInput := slices.Clone(volumes)
-	got, err := ValidateVolumes(volumes)
+	got, err := ValidateVolumes(volumes, false)
 	if err != nil {
 		t.Fatalf("ValidateVolumes: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestValidateVolumes(t *testing.T) {
 		{Name: "f"},
 		{Name: "g"},
 		{Name: "h"},
-	}); err != nil || len(got) != MaxClaimVolumes {
+	}, false); err != nil || len(got) != MaxClaimVolumes {
 		t.Errorf("ValidateVolumes at limit: got=%v err=%v", got, err)
 	}
 
@@ -75,7 +75,7 @@ func TestValidateVolumes(t *testing.T) {
 		{"uppercase-mode", []Volume{{Name: "dataset", Mode: "RW"}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := ValidateVolumes(tt.volumes); err == nil {
+			if _, err := ValidateVolumes(tt.volumes, false); err == nil {
 				t.Fatal("ValidateVolumes succeeded")
 			}
 		})
@@ -87,7 +87,7 @@ func TestValidateVolumesNormalizesMode(t *testing.T) {
 		{Name: "shared"},
 		{Name: "explicit", Mode: VolumeModeRO},
 		{Name: "writable", Mode: VolumeModeRW},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("ValidateVolumes: %v", err)
 	}
@@ -110,21 +110,65 @@ func TestValidateVolumesNormalizesMode(t *testing.T) {
 	}
 }
 
+func TestValidateVolumesAttachOnly(t *testing.T) {
+	got, err := ValidateVolumes([]Volume{
+		{Name: "dataset"},
+		{Name: "scratch", Mode: VolumeModeRW},
+		{Name: "explicit", Mode: VolumeModeRO},
+	}, true)
+	if err != nil {
+		t.Fatalf("ValidateVolumes: %v", err)
+	}
+	want := []Volume{
+		{Name: "dataset", AttachOnly: true},
+		{Name: "scratch", Mode: VolumeModeRW, AttachOnly: true},
+		{Name: "explicit", AttachOnly: true},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("volumes %v, want %v", got, want)
+	}
+	if !VolumesAttachOnly(got) {
+		t.Error("validated attach-only set does not report itself")
+	}
+	if VolumesAttachOnly(nil) || VolumesAttachOnly([]Volume{{Name: "dataset", Mount: "/volumes/dataset"}}) {
+		t.Error("mounted set reports itself attach-only")
+	}
+
+	for _, tt := range []struct {
+		name    string
+		volumes []Volume
+	}{
+		{"no volumes", nil},
+		{"default mount spelled out", []Volume{{Name: "dataset", Mount: "/volumes/dataset"}}},
+		{"custom mount", []Volume{{Name: "dataset", Mount: "/datasets"}}},
+		{"one entry of many", []Volume{{Name: "dataset"}, {Name: "scratch", Mount: "/scratch"}}},
+		{"duplicate name", []Volume{{Name: "dataset"}, {Name: "dataset"}}},
+		{"invalid name", []Volume{{Name: "bad/name"}}},
+		{"unknown mode", []Volume{{Name: "dataset", Mode: "readwrite"}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := ValidateVolumes(tt.volumes, true); err == nil {
+				t.Fatal("ValidateVolumes succeeded")
+			}
+		})
+	}
+}
+
 func TestValidateVolumesRejectsGuestOSMounts(t *testing.T) {
 	for _, root := range append([]string{"/"}, guestOSMountRoots...) {
 		t.Run(root, func(t *testing.T) {
-			if _, err := ValidateVolumes([]Volume{{Name: "dataset", Mount: root}}); err == nil {
+			if _, err := ValidateVolumes([]Volume{{Name: "dataset", Mount: root}}, false); err == nil {
 				t.Fatalf("accepted OS mount %q", root)
 			}
 			if root != "/" {
-				if _, err := ValidateVolumes([]Volume{{Name: "dataset", Mount: root + "/child"}}); err == nil {
+				if _, err := ValidateVolumes([]Volume{{Name: "dataset", Mount: root + "/child"}}, false); err == nil {
 					t.Fatalf("accepted mount under OS root %q", root)
 				}
 			}
 		})
 	}
 	for _, mount := range []string{"/data", "/home/dataset", "/opt-data", "/usrdata"} {
-		if _, err := ValidateVolumes([]Volume{{Name: "dataset", Mount: mount}}); err != nil {
+		if _, err := ValidateVolumes([]Volume{{Name: "dataset", Mount: mount}}, false); err != nil {
 			t.Errorf("rejected allowed mount %q: %v", mount, err)
 		}
 	}

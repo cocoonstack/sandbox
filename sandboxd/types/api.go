@@ -24,6 +24,9 @@ type ClaimRequest struct {
 	Size     Size     `json:"size,omitempty"`
 	Engine   Engine   `json:"engine,omitempty"`
 	Volumes  []Volume `json:"volumes,omitempty"`
+	// VolumesAttachOnly attaches every requested volume without mounting it:
+	// the workload finds the device by its serial and owns the mount contract.
+	VolumesAttachOnly bool `json:"volumes_attach_only,omitempty"`
 	TTLField
 	NoRedirect bool `json:"no_redirect,omitempty"`
 	// RequirePromoted is carried from a promoted-volume redirect to make the

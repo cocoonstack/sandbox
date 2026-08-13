@@ -219,6 +219,18 @@ with concurrent readers.
   proceed; a crashed writer leaves it, and `ro` claims are refused until one
   `rw` claim replays and releases cleanly.
 
+**Attach-only claims opt out of the marker, not out of admission.** A claim
+sent with `volumes_attach_only` gets the device attached and nothing else, so
+sandboxd neither writes nor clears `<path>.dirty` for it — it cannot verify a
+mount it did not perform. Everything in this section still applies to the
+default, mounting claims, and the exclusion rules above apply to attach-only
+claims exactly the same way, which is what keeps other tenants safe. The
+operator-visible difference: an image whose attach-only writer released
+without unmounting cleanly carries no marker, so the next `ro` claim is
+admitted and fails at mount time (500) instead of being refused early (409).
+Whoever hands out attach-only `rw` access owns that trade; see
+[sandboxd-api](sandboxd-api.md#attach-only-volumes).
+
 ### A fuller config
 
 The block above is the minimum. A production node with tenants, guarded

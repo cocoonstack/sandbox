@@ -139,7 +139,9 @@ func (m *Manager) resolveVolumes(key types.PoolKey, tenant string, requested []t
 	if len(requested) == 0 {
 		return nil, nil
 	}
-	applied, err := types.ValidateVolumes(requested)
+	// An attach-only claim arrives with no mounts to default: re-defaulting
+	// them here would mount what the caller asked to mount itself.
+	applied, err := types.ValidateVolumes(requested, types.VolumesAttachOnly(requested))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrBadVolume, err)
 	}
@@ -160,6 +162,7 @@ func (m *Manager) resolveVolumes(key types.PoolKey, tenant string, requested []t
 		}
 		disk := entry.disk
 		disk.RW = volume.RW()
+		volume.AttachOnly = false // past validation the empty mount carries it
 		resolved = append(resolved, resolvedVolume{disk: disk, applied: volume})
 	}
 	return resolved, nil
@@ -204,14 +207,19 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 
 // applyVolume keeps one volume's steps strictly ordered; siblings overlap freely.
 func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume resolvedVolume) error {
+	// Attach-only mounts nothing, so there is no umount to verify and no marker.
+	attachOnly := volume.applied.Mount == ""
 	// Write-ahead: the marker must be durable before any guest write can be.
-	if volume.disk.RW {
+	if volume.disk.RW && !attachOnly {
 		if err := markVolumeDirty(volume.disk.Path); err != nil {
 			return fmt.Errorf("mark volume %q dirty: %w", volume.applied.Name, err)
 		}
 	}
 	if err := m.eng.DiskAttach(ctx, sb.VMName, volume.disk); err != nil {
 		return fmt.Errorf("attach volume %q: %w", volume.applied.Name, err)
+	}
+	if attachOnly {
+		return nil
 	}
 	if err := m.eng.MountVolume(ctx, sb.VsockSocket, volume.applied.Name, volume.applied.Mount, volume.disk.RW); err != nil {
 		return fmt.Errorf("setup volume %q: %w", volume.applied.Name, err)
@@ -222,10 +230,12 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 // quiesceVolumes unmounts a claim's writable mounts in reverse order and
 // returns the teardown its VM removal must finish. A failed unmount never
 // blocks teardown: the image keeps its marker and waits for a recovering
-// writer. Runs while the guest is still live, before the VM is removed.
+// writer. Attach-only entries have no mount to bring down — removing the VM
+// closes their devices. Runs while the guest is still live, before the VM is
+// removed.
 func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeTeardown {
 	td := volumeTeardown{holds: sb.Volumes}
-	mounts := len(types.VolumeRWNames(sb.Volumes))
+	mounts := writableMounts(sb.Volumes)
 	if mounts == 0 {
 		return td
 	}
@@ -235,7 +245,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 	defer cancel()
 	stuck := false
 	for _, volume := range slices.Backward(sb.Volumes) {
-		if !volume.RW() {
+		if !volume.RW() || volume.Mount == "" {
 			continue
 		}
 		if err := m.eng.UnmountVolume(ctx, sb.VsockSocket, volume.Mount); err != nil {
@@ -328,6 +338,16 @@ func (m *Manager) unreserveVolumes(volumes []types.Volume) {
 // sync fallback, so a wedged multi-volume guest still gets every umount tried.
 func quiesceBudget(mounts int) time.Duration {
 	return min(time.Duration(mounts+1)*engine.VolumeCallTimeout, volumeQuiesceMax)
+}
+
+func writableMounts(volumes []types.Volume) int {
+	mounts := 0
+	for _, volume := range volumes {
+		if volume.RW() && volume.Mount != "" {
+			mounts++
+		}
+	}
+	return mounts
 }
 
 func appliedVolumes(volumes []resolvedVolume) []types.Volume {
