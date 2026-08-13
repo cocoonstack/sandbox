@@ -42,8 +42,8 @@ Dataset volumes require a lockstep rollout. Upgrade every sandboxd
 node and cocoon to the required version before enabling the catalog or shipping
 an SDK that requests volumes. Mixed-version serving is unsupported. Once a
 volume claim has finalized, do not roll a node back to an older sandboxd until
-all volume claims are gone; the older daemon cannot preserve their capture
-semantics from `claims.json`.
+all volume claims are gone; the older daemon cannot preserve the volume
+claims' admission holds and marker bookkeeping recorded in `claims.json`.
 
 ## Configuration
 
@@ -148,20 +148,28 @@ guest OS directories and cannot duplicate or nest within one claim. Volume
 mounts may shadow an existing populated guest directory for that claim's life.
 
 A volume claim may consume an ordinary warm Cloud Hypervisor VM. sandboxd
-attaches after the warm pop or provision, polls `/sys/block/*/serial` for the
-attach name for up to 2 seconds, then mounts the device before finalizing the
-claim: `mode: "ro"` (the default) attaches and mounts read-only; `mode: "rw"`
-requires the catalog entry's `writable: true` and attaches and mounts
-read-write. Setup failure destroys the VM without quiescing — the claim was
-never handed out, so no workload write happened — and a popped warm VM is
-refilled normally. Firecracker volume claims are rejected.
+attaches after the warm pop or provision, waits for the device settle — a
+serial match under `/sys/block`, then the `/dev/<name>` node itself, since the
+kernel publishes sysfs before devtmpfs creates it — up to 2 seconds, then
+mounts the device before finalizing the claim: `mode: "ro"` (the default)
+attaches and mounts read-only; `mode: "rw"` requires the catalog entry's
+`writable: true` and attaches and mounts read-write. Setup failure destroys
+the VM without quiescing — the claim was never handed out, so no workload
+write happened — and a popped warm VM is refilled normally. Firecracker
+volume claims are rejected.
 
-Warm candidates retain their normal ranking, but a candidate for a volume
-claim must hold every requested image. If the entry node cannot serve them all,
-it redirects once to such a holder. A promoted-template claim prefers a node
-advertising both resources; when a shared store has not yet made that capability
-visible in gossip, a volume holder self-verifies the template before
-provisioning.
+A multi-volume claim brings every volume up concurrently: each volume's own
+marker→attach→mount order is preserved, but cocoon serializes the hypervisor
+attach per VM, so what actually overlaps across volumes is the CLI spawns,
+device settles, and guest mounts. A partial failure still fails the whole
+claim and destroys the VM without quiescing, so any `rw` volume already
+attached keeps its dirty marker — including one the caller never got a handle
+to; recovery is the normal `rw` cycle (see
+[Writable dataset volumes](#writable-dataset-volumes)).
+
+Warm candidates retain their normal ranking, but a volume claim's candidate
+set, promoted-template intersection, and redirect follow the fleet-wide rule
+in [cluster](cluster.md#volumes-and-placement).
 
 An empty catalog `tenants` list allows every authenticated scope; a nonempty
 list limits the image to those tenants, while root always bypasses it. Removing

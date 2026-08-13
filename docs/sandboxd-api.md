@@ -75,11 +75,12 @@ the checkpoint tree.
 
 `volumes` reports the names, effective mounts, and (`rw` only) mode applied
 and persisted at finalization — `mode` is omitted from the echo for `ro`
-entries, matching the request shape. sandboxd attaches each disk, polls
-`/sys/block/*/serial` for its attach name for up to 2 seconds, and mounts the
-filesystem — read-only, unless the entry requested and was granted `rw` —
-before returning. A custom mount may shadow an existing populated guest
-directory for the claim's life.
+entries, matching the request shape. sandboxd attaches each disk, waits for
+the device settle — a serial match under `/sys/block`, then the `/dev/<name>`
+node itself, since the kernel publishes sysfs before devtmpfs creates it — up
+to 2 seconds total, and mounts the filesystem — read-only, unless the entry
+requested and was granted `rw` — before returning. A custom mount may shadow
+an existing populated guest directory for the claim's life.
 
 ### Attach-only volumes
 
@@ -140,13 +141,10 @@ Retry the same body (+`no_redirect: true`) at each candidate until one
 answers. Preserve `require_promoted: true` when the redirect carries it;
 ordinary redirects omit the field.
 
-A volume claim may consume an ordinary warm VM. Normal candidate ranking still
-applies, but every candidate must advertise all requested volumes. A
-promoted-template volume claim first uses a node that advertises both resources.
-If none does, a volume holder may self-verify a shared template store; a
-`no_redirect` target validates both resources before provisioning. The
-redirect's `require_promoted` bit makes that validation independent of one-tick
-gossip lag. Redirect responses never carry `volumes`.
+A volume claim may consume an ordinary warm VM; candidate ranking, the
+promoted-template intersection, and the `no_redirect`/`require_promoted` retry
+follow the fleet-wide rule in [cluster](cluster.md#volumes-and-placement).
+Redirect responses never carry `volumes`.
 
 A tenant token claims the same way; the sandbox is stamped with the tenant
 name (attributed in the usage journal and counted against the tenant's
@@ -434,8 +432,9 @@ an SDK caller should set.
 
 Auth: node API token. Root sees every live claim; a tenant sees only its own.
 The index is `{"sandboxes": [{id, key, deadline, hibernated, archived?,
-from_checkpoint?, claim_ref?, volumes?: [{name, mount}]}]}` — never sandbox
-tokens, volume host paths, or catalog access lists.
+from_checkpoint?, claim_ref?, volumes?: [{name, mount, mode?}]}]}` — `mode` is
+omitted for `ro`, matching the claim echo; never sandbox tokens, volume host
+paths, or catalog access lists.
 
 ## GET /v1/sandboxes/{id}
 
