@@ -49,7 +49,7 @@ type PoolSpec struct {
 	// name a secret, the pool's is injected. Nil denies all egress.
 	Egress *egress.Policy `json:"egress,omitempty"`
 
-	// IdleHibernateSeconds, when >0, hibernates this pool's idle claims
+	// IdleHibernateSeconds, when >0, hibernates this none-lane pool's idle claims
 	// after that many seconds without a data-plane connection; the next
 	// call wakes them transparently. Zero disables.
 	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitempty"`
@@ -75,6 +75,9 @@ func (s PoolSpec) ValidateLimits() error {
 	}
 	if s.IdleHibernateSeconds < 0 {
 		return fmt.Errorf("idle_hibernate_seconds must not be negative")
+	}
+	if s.Net == types.NetEgress && s.IdleHibernateSeconds > 0 {
+		return fmt.Errorf("idle_hibernate_seconds is not supported for egress pools")
 	}
 	return validateArchiveWindow(s.IdleHibernateSeconds, s.ArchiveAfterSeconds, s.ArchiveDeleteAfterSeconds)
 }
@@ -210,7 +213,7 @@ type Config struct {
 	// name; values come from the environment (value_env), never this file.
 	Secrets []egress.SecretSpec `json:"secrets,omitempty"`
 
-	// IdleHibernateSeconds is the idle policy for claims of unpooled keys
+	// IdleHibernateSeconds is the idle policy for unpooled none-lane claims
 	// (template and checkpoint claims); per-pool settings override it for
 	// pooled keys. Zero disables.
 	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitempty"`

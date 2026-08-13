@@ -103,25 +103,7 @@ func (m *Manager) ClaimDeadline(id, token string) (time.Time, error) {
 	return sb.Deadline, nil
 }
 
-// PreviewTouch authorizes one preview request: the token is already verified,
-// so the live-claim lookup is the whole check — a released sandbox is absent
-// and its URL stops resolving. Stamps data-plane activity and writes the
-// audit record (preview bypasses the relay's tap; this is the only trace).
-func (m *Manager) PreviewTouch(ctx context.Context, id string, port uint16) error {
-	m.mu.Lock()
-	sb, ok := m.claimed[id]
-	m.mu.Unlock()
-	if !ok {
-		return ErrUnknownSandbox
-	}
-	sb.Touch()
-	m.recordAudit(ctx, id, auditFrame{Op: "preview", Port: port})
-	return nil
-}
-
-// PreviewDial opens a byte stream to a guest port for the preview proxy's
-// connection pool; PreviewTouch authorizes each request separately. A
-// hibernated sandbox wakes.
+// PreviewDial authorizes one preview request and opens its guest connection.
 func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.Conn, error) {
 	m.mu.Lock()
 	sb, ok := m.claimed[id]
@@ -129,6 +111,8 @@ func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
+	sb.Touch()
+	m.recordAudit(ctx, id, auditFrame{Op: "preview", Port: port})
 	sock, err := m.wakeResolved(ctx, sb)
 	if err != nil {
 		return nil, err

@@ -20,7 +20,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// previewClaims is the signed guest target and owner route carried by a preview URL.
 type previewClaims struct {
 	ID    string `json:"id"`
 	Port  uint16 `json:"port"`
@@ -30,7 +29,6 @@ type previewClaims struct {
 
 // PreviewManager is the slice of the pool manager the preview path needs.
 type PreviewManager interface {
-	PreviewTouch(ctx context.Context, id string, port uint16) error
 	PreviewDial(ctx context.Context, id string, port uint16) (net.Conn, error)
 }
 
@@ -49,12 +47,8 @@ func NewPreviewServer(secret, base, owner string, mgr PreviewManager) *PreviewSe
 		return nil
 	}
 	p := &PreviewServer{secret: []byte(secret), base: base, owner: owner, mgr: mgr}
-	// One shared transport so a page's sub-resource fan-out reuses kept-alive
-	// guest conns; the Director keys each request's host to sandbox:port so
-	// the idle pool never mixes claims. Revocation rides PreviewTouch in
-	// serve — pooled conns skip this dial.
 	p.transport = &http.Transport{
-		IdleConnTimeout: 90 * time.Second,
+		DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 			id, portStr, err := net.SplitHostPort(addr)
 			if err != nil {
@@ -101,15 +95,9 @@ func (p *PreviewServer) serve(w http.ResponseWriter, r *http.Request) {
 		p.forward(w, r, claims.Owner)
 		return
 	}
-	if err := p.mgr.PreviewTouch(r.Context(), claims.ID, claims.Port); err != nil {
-		http.Error(w, "preview target unreachable", http.StatusBadGateway)
-		return
-	}
 	p.proxyLocal(w, r, claims)
 }
 
-// proxyLocal reverse-proxies to the guest port over the pooled relay
-// transport; serve's PreviewTouch has already authorized the request.
 func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claims previewClaims) {
 	rp := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
@@ -130,7 +118,6 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 	rp.ServeHTTP(w, r) //nolint:gosec // target derived from an HMAC-signed token, not client input
 }
 
-// forward relays the signed request to the owner node's main listener.
 func (p *PreviewServer) forward(w http.ResponseWriter, r *http.Request, owner string) {
 	target := &url.URL{Scheme: "http", Host: owner}
 	rp := httputil.NewSingleHostReverseProxy(target)
@@ -163,7 +150,6 @@ func (p *PreviewServer) verify(token string) (previewClaims, bool) {
 	return claims, true
 }
 
-// handlePreview mints a preview URL bounded by the claim's remaining lease.
 func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	if s.preview == nil {
 		writeErr(w, http.StatusNotImplemented, "preview not configured")

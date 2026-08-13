@@ -189,7 +189,7 @@ func TestSandboxesIndexOmitsTokens(t *testing.T) {
 	}
 }
 
-func TestPreviewTouchWritesAuditEvent(t *testing.T) {
+func TestPreviewDialWritesAuditEvent(t *testing.T) {
 	eng := newFakeEngine()
 	dir := t.TempDir()
 	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}, eng, testSecrets(t))
@@ -197,8 +197,8 @@ func TestPreviewTouchWritesAuditEvent(t *testing.T) {
 		t.Fatalf("setup manager: %v", err)
 	}
 	sb := mustClaim(t, m, testKey)
-	if touchErr := m.PreviewTouch(t.Context(), sb.ID, 8080); touchErr != nil {
-		t.Fatalf("preview touch: %v", touchErr)
+	if _, dialErr := m.PreviewDial(t.Context(), sb.ID, 8080); dialErr == nil {
+		t.Fatal("fake engine dial unexpectedly succeeded")
 	}
 
 	raw, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
