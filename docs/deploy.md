@@ -106,7 +106,7 @@ sandboxd reads one JSON file (`-config`, default
 | `warm_max` (pool entry) | 0 (static) | turns on the demand-adaptive watermark for that pool: the warm target rises from `warm` toward `warm_max` while claims arrive faster than the measured provision lead covers, and decays back over ~a minute of silence |
 | `max_claims` | 0 (unlimited) | node-wide cap on live claims; claim/fork/branch requests beyond it answer 429 with the pool state unharmed (on a cluster, normal warm-candidate placement applies, with volume claims limited to candidates holding every requested volume) |
 | `audit_log` | false | append every relayed request frame's op + addressing fields (never payloads) to `<data_dir>/audit.jsonl`, size-rotated with one `.1` backup. Records are `{t, id, op}` plus whichever addressing fields the op carries (`argv`, `path`, `dest`, `from`, `to`, `url`, `session`, `port`), plus `decision` and `secret` (the ref name, never its value) on `egress` records; preview accesses record as op `preview`, one per request. A request frame whose first line exceeds 4 KiB is skipped, never truncated |
-| `idle_hibernate_seconds` | 0 (off) | node-wide idle policy for unpooled claims (template/checkpoint claims): a claim with no data-plane connection for this long is hibernated; the next call wakes it transparently. Per-pool `idle_hibernate_seconds` (in a pool entry) does the same for that pool's claims — pooled keys ignore the node-wide value. Opt-in deliberately: a wake costs latency and the snapshot, so callers with their own idle logic must not pay twice |
+| `idle_hibernate_seconds` | 0 (off) | node-wide idle policy for unpooled claims (template/checkpoint claims): a none-lane claim with no data-plane connection for this long is hibernated; the next call wakes it transparently. Per-pool `idle_hibernate_seconds` does the same for that pool's claims; pooled keys ignore the node-wide value, and egress pools reject it because they cannot resume safely. Opt in deliberately: a wake costs latency and the snapshot, so callers with their own idle logic must not pay twice |
 | `archive_after_seconds` | 0 (off) | tier below hibernation: a hibernated claim idle this long is checkpointed to the store and its local VM dropped, freeing the node entirely; the next call restores it transparently (a checkpoint restore's latency). Requires `idle_hibernate_seconds > 0` and must exceed it. Node-wide for unpooled keys; per-pool overrides for that pool |
 | `archive_delete_after_seconds` | 0 (keep) | purge an archived claim's store checkpoint this long after it was archived, reclaiming storage; the claim is then gone for good. Same node-wide/per-pool split |
 | `mesh` | unset | join a cluster ([Clusters](cluster.md)); unset = single node |
@@ -297,7 +297,6 @@ here validates on load:
   "pools": [
     {"template": "rt:24.04", "net": "none", "size": "small", "warm": 4, "warm_max": 12},
     {"template": "rt:24.04", "net": "egress", "size": "medium", "warm": 2,
-     "idle_hibernate_seconds": 120, "archive_after_seconds": 900,
      "egress": {"allow": [
        {"host": "api.github.com", "methods": ["GET", "POST"], "secret": "gh", "intercept": true},
        {"host": "*.googleapis.com"}

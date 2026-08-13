@@ -96,6 +96,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"bad restore mode", `{"restore_mode":"Mmap","pools":[]}`, "restore_mode"},
 		{"bad pool key", `{"pools":[{"template":"","net":"none","size":"small"}]}`, "pool"},
 		{"egress without attachment", `{"pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`, "egress lane needs"},
+		{"egress idle hibernate", `{"bridges":["br0"],"pools":[{"template":"rt:24.04","net":"egress","size":"small","idle_hibernate_seconds":1}]}`, "not supported for egress"},
 		{"negative warm", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","warm":-2}]}`, "negative"},
 		{"tenants without api_token", `{"pools":[],"tenants":[{"name":"acme","token":"t1"}]}`, "require api_token"},
 		{"empty tenant name", `{"api_token":"root","pools":[],"tenants":[{"name":"","token":"t1"}]}`, "tenant name"},

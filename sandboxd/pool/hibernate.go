@@ -205,7 +205,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 		if p, pooled := m.activePool(sb.Key); pooled {
 			idle = p.idle
 		}
-		if idle <= 0 || hasAppliedVolumes(sb) || sb.HibernateSnap != "" || sb.ArchiveCk != "" || now.Sub(sb.LastSeen()) < idle {
+		if idle <= 0 || sb.Key.Net == types.NetEgress || hasAppliedVolumes(sb) || sb.HibernateSnap != "" || sb.ArchiveCk != "" || now.Sub(sb.LastSeen()) < idle {
 			continue
 		}
 		victims = append(victims, victim{sb.ID, sb.Token})

@@ -90,18 +90,14 @@ func TestPreviewRechecksClaimForEveryRequest(t *testing.T) {
 	guestAddr := newGuestServer(t, func(*http.Request) string { return "guest" })
 
 	var live atomic.Bool
-	var touches, dials atomic.Int32
+	var dials atomic.Int32
 	live.Store(true)
 	ps := NewPreviewServer("secret", "node:9000", "node:7777", &fakePreviewMgr{
-		touch: func(string, uint16) error {
-			touches.Add(1)
-			if !live.Load() {
-				return net.ErrClosed
-			}
-			return nil
-		},
 		dial: func(string, uint16) (net.Conn, error) {
 			dials.Add(1)
+			if !live.Load() {
+				return nil, net.ErrClosed
+			}
 			return net.Dial("tcp", guestAddr)
 		},
 	})
@@ -128,11 +124,8 @@ func TestPreviewRechecksClaimForEveryRequest(t *testing.T) {
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Errorf("status after release = %d, want 502", resp.StatusCode)
 	}
-	if got := touches.Load(); got != 2 {
-		t.Errorf("PreviewTouch calls = %d, want one per request", got)
-	}
-	if got := dials.Load(); got != 1 {
-		t.Errorf("PreviewDial calls = %d, want the pooled conn reused", got)
+	if got := dials.Load(); got != 2 {
+		t.Errorf("PreviewDial calls = %d, want one per request", got)
 	}
 }
 
@@ -166,15 +159,7 @@ func TestPreviewForwardsToOwner(t *testing.T) {
 }
 
 type fakePreviewMgr struct {
-	touch func(id string, port uint16) error
-	dial  func(id string, port uint16) (net.Conn, error)
-}
-
-func (f *fakePreviewMgr) PreviewTouch(_ context.Context, id string, port uint16) error {
-	if f.touch == nil {
-		return nil
-	}
-	return f.touch(id, port)
+	dial func(id string, port uint16) (net.Conn, error)
 }
 
 func (f *fakePreviewMgr) PreviewDial(_ context.Context, id string, port uint16) (net.Conn, error) {
