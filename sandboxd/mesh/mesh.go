@@ -51,6 +51,8 @@ type Mesh struct {
 	mu   sync.Mutex
 	self NodeState
 	view map[string]NodeState // node_id → latest known state (includes self)
+	// departedEpoch tombstones a node at the epoch it left; a restart outranks it.
+	departedEpoch map[string]uint64
 }
 
 // New starts a mesh member listening per cfg. selfAddr is the data-plane
@@ -71,7 +73,8 @@ func New(ctx context.Context, cfg *memberlist.Config, nodeID, selfAddr string, s
 			Epoch:  epoch,
 			Pools:  map[string]int{},
 		},
-		view: map[string]NodeState{},
+		view:          map[string]NodeState{},
+		departedEpoch: map[string]uint64{},
 	}
 	if err := m.persistEpoch(epoch); err != nil {
 		return nil, fmt.Errorf("persist mesh epoch: %w", err)
@@ -292,6 +295,7 @@ func (m *Mesh) forget(nodeID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if nodeID != m.self.NodeID {
+		m.departedEpoch[nodeID] = m.view[nodeID].Epoch
 		delete(m.view, nodeID)
 	}
 }
@@ -309,6 +313,10 @@ func (m *Mesh) merge(states []NodeState) {
 		if ok && st.Epoch <= cur.Epoch {
 			continue
 		}
+		if st.Epoch <= m.departedEpoch[st.NodeID] {
+			continue
+		}
+		delete(m.departedEpoch, st.NodeID)
 		// Warn on each distinct divergent digest (not once per lifetime): a
 		// mismatched api_token/tenants/preview_secret/CA root 401s cross-node
 		// redirects and fails interception. Warn-only — refusing would partition
