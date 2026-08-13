@@ -20,8 +20,8 @@ RUN case "$TARGETARCH" in \
 WORKDIR /silkd
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN cargo build --release && strip target/release/silkd
-RUN cargo build --release --target "$(cat /musl-target)" && \
+RUN cargo build --release --locked && strip target/release/silkd
+RUN cargo build --release --locked --target "$(cat /musl-target)" && \
     strip "target/$(cat /musl-target)/release/silkd" && \
     cp "target/$(cat /musl-target)/release/silkd" /silkd-static
 
