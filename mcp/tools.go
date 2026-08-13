@@ -310,7 +310,7 @@ func toolCheckpoint(ctx context.Context, s *server, raw json.RawMessage) (string
 }
 
 func toolBranchCheckpoint(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	ckpt, err := s.checkpointArg(ctx, raw)
+	ckpt, err := s.checkpointArg(raw)
 	if err != nil {
 		return "", err
 	}
@@ -335,7 +335,7 @@ func toolListCheckpoints(ctx context.Context, s *server, _ json.RawMessage) (str
 }
 
 func toolDeleteCheckpoint(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	ckpt, err := s.checkpointArg(ctx, raw)
+	ckpt, err := s.checkpointArg(raw)
 	if err != nil {
 		return "", err
 	}
@@ -400,9 +400,8 @@ func (s *server) boxArg(raw json.RawMessage) (*sandbox.Sandbox, error) {
 }
 
 // checkpointArg resolves a checkpoint_id argument: a handle minted in this
-// session when available, else a listing lookup (checkpoints outlive
-// sessions).
-func (s *server) checkpointArg(ctx context.Context, raw json.RawMessage) (*sandbox.Checkpoint, error) {
+// session when available, else a fresh one — checkpoints outlive sessions.
+func (s *server) checkpointArg(raw json.RawMessage) (*sandbox.Checkpoint, error) {
 	var args struct {
 		CheckpointID string `json:"checkpoint_id"`
 	}
@@ -412,16 +411,10 @@ func (s *server) checkpointArg(ctx context.Context, raw json.RawMessage) (*sandb
 	if ckpt, ok := s.ckpt(args.CheckpointID); ok {
 		return ckpt, nil
 	}
-	ckpts, err := s.client.Checkpoints(ctx)
-	if err != nil {
-		return nil, err
+	if args.CheckpointID == "" {
+		return nil, fmt.Errorf("checkpoint_id is required")
 	}
-	for _, ck := range ckpts {
-		if ck.ID == args.CheckpointID {
-			return ck, nil
-		}
-	}
-	return nil, fmt.Errorf("unknown checkpoint %q", args.CheckpointID)
+	return s.client.Checkpoint(args.CheckpointID), nil
 }
 
 func parse(raw json.RawMessage, v any) error {

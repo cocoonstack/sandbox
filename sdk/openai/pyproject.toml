@@ -9,7 +9,7 @@ description = "OpenAI Agents SDK sandbox provider backed by cocoon microVMs"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 readme = "README.md"
-dependencies = ["openai-agents>=0.17", "cocoonstack-sandbox>=0.1"]
+dependencies = ["openai-agents>=0.17", "cocoonstack-sandbox>=0.1.5"]
 
 [tool.setuptools.packages.find]
 include = ["cocoonsandbox_openai*"]

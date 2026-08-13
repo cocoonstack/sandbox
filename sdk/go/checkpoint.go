@@ -93,6 +93,12 @@ func (c *Client) Checkpoints(ctx context.Context) ([]*Checkpoint, error) {
 	return ckpts, nil
 }
 
+// Checkpoint returns a handle for a known checkpoint id, bound to the entry
+// node — no listing round-trip; an unknown id surfaces as 404 at claim time.
+func (c *Client) Checkpoint(id string) *Checkpoint {
+	return checkpointHandle(c, c.addr, checkpointRecord{ID: id})
+}
+
 func checkpointHandle(c *Client, addr string, rec checkpointRecord) *Checkpoint {
 	return &Checkpoint{
 		ID: rec.ID, Name: rec.Name, SandboxID: rec.SandboxID, CreatedAt: rec.CreatedAt,

@@ -29,12 +29,14 @@ class SilkdError(SandboxError):
 
 
 class ExitError(SandboxError):
-    """A command exited non-zero; carries the exit code and stderr."""
+    """A command exited non-zero; carries the exit code, stderr, and whatever
+    stdout it had produced — a failing build's log is on stdout."""
 
-    def __init__(self, code: int, stderr: str):
+    def __init__(self, code: int, stderr: str, stdout: str = ""):
         super().__init__(f"exit status {code}: {stderr.strip()}")
         self.code = code
         self.stderr = stderr
+        self.stdout = stdout
 
 
 class ProtocolError(SandboxError):
