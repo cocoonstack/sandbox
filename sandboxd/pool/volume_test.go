@@ -353,6 +353,14 @@ func TestPooledKeyOutranksPromotedTemplate(t *testing.T) {
 	if m.HasPromotedTemplate(t.Context(), key) {
 		t.Error("a pooled key reports as promoted, disagreeing with both resolveGolden and the gossip")
 	}
+	// The local answer and the gossiped one are the same subtraction; a split
+	// between them is what makes a peer force RequirePromoted onto this node.
+	if hashes := m.TemplateHashes(); slices.Contains(hashes, key.Hash()) {
+		t.Errorf("gossiped template hashes=%v, want the pooled key subtracted", hashes)
+	}
+	if !m.HasPoolGolden(key) {
+		t.Error("the pool golden is not reported, so the server cannot pin content to it")
+	}
 	sb, err := m.ClaimProvision(t.Context(), key, 0, "", "", []types.Volume{{Name: "data"}})
 	if err != nil {
 		t.Fatalf("ordinary volume claim: %v", err)
@@ -515,6 +523,41 @@ func TestVolumeClaimUsageAndScopedSummaries(t *testing.T) {
 		}
 	}
 	t.Fatal("acme claim usage event not found")
+}
+
+// TestVolumeRefusalsAreIndistinguishableAcrossPrincipals: an unknown name, a
+// name this tenant may not see, and a known name whose image is gone answer
+// one error for every caller — a difference between them enumerates the
+// operator's catalog and its access lists.
+func TestVolumeRefusalsAreIndistinguishableAcrossPrincipals(t *testing.T) {
+	present := writeVolumeImage(t, "present.img", "present")
+	eng := newFakeEngine()
+	m := newVolumeManager(t, eng, []config.VolumeSpec{
+		{Name: "vanished", Path: filepath.Join(t.TempDir(), "vanished.img")},
+		{Name: "private", Path: present, Tenants: []string{"acme"}},
+	})
+
+	var refusals []string
+	for _, principal := range []string{"", "beta"} {
+		for _, name := range []string{"vanished", "unknown", "private"} {
+			if principal == "" && name == "private" {
+				continue // root is on every access list, so it has no forbidden case
+			}
+			_, err := m.ClaimProvision(t.Context(), testKey, 0, principal, "", []types.Volume{{Name: name}})
+			if !errors.Is(err, ErrVolumeUnavailable) {
+				t.Fatalf("principal %q volume %q: %v, want ErrVolumeUnavailable", principal, name, err)
+			}
+			refusals = append(refusals, err.Error())
+		}
+	}
+	for _, got := range refusals[1:] {
+		if got != refusals[0] {
+			t.Errorf("refusals differ: %q vs %q", got, refusals[0])
+		}
+	}
+	if len(eng.colds)+len(eng.clones) != 0 {
+		t.Errorf("refused claims provisioned colds=%v clones=%v", eng.colds, eng.clones)
+	}
 }
 
 func TestClaimProvisionRejectsMissingVolumePathBeforeProvision(t *testing.T) {

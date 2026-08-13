@@ -296,6 +296,64 @@ func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	}
 }
 
+// TestFinalizeTenantQuotaFailureQuiescesAndUncountsTenant: the tenant cap is
+// re-checked under the same lock as the node cap and aborts the same way, so a
+// tenant's losing claim owes the same clean umount — and must leave no claim
+// counted against the tenant that never got one.
+func TestFinalizeTenantQuotaFailureQuiescesAndUncountsTenant(t *testing.T) {
+	scratch := writeVolumeImage(t, "scratch.img", "scratch")
+	eng := newFakeEngine()
+	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
+	m.tenantMax = map[string]int{"acme": 1}
+	var attaches sync.WaitGroup
+	attaches.Add(2)
+	eng.attachRendezvous = &attaches
+
+	claimErr := make(chan error, 1)
+	go func() {
+		_, err := m.ClaimProvision(t.Context(), testKey, 0, "acme", "",
+			[]types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}})
+		claimErr <- err
+	}()
+	waitFor(t, func() bool { return slices.Contains(eng.volumeOpsLog(), "attach:scratch") })
+	eng.mu.Lock()
+	var vmName string
+	for name := range eng.vms {
+		vmName = name
+	}
+	eng.mu.Unlock()
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "acme", "", nil); err != nil {
+		t.Fatalf("volume-less tenant claim: %v", err)
+	}
+	eng.mu.Lock()
+	eng.attachRendezvous = nil
+	eng.mu.Unlock()
+	attaches.Done()
+	err := <-claimErr
+
+	if !errors.Is(err, ErrQuota) {
+		t.Fatalf("tenant volume claim: %v, want ErrQuota from the finalize re-check", err)
+	}
+	if counts := m.TenantClaims(); counts["acme"] != 1 {
+		t.Errorf("tenant claims=%v, want only the claim that won counted", counts)
+	}
+	if ops := eng.volumeOpsLog(); !slices.Contains(ops, "umount:/volumes/scratch") {
+		t.Errorf("volume ops=%v, want the tenant loser's mount unmounted", ops)
+	}
+	if !eng.removed(vmName) {
+		t.Errorf("removes=%v, want the loser's VM %s gone", eng.removedNames(), vmName)
+	}
+	if holders := volumeHoldersOf(m, "scratch"); holders != (volumeHolders{}) {
+		t.Errorf("registry after the removal=%+v, want empty", holders)
+	}
+	if volumeDirty(scratch) {
+		t.Error("the tenant loser left its marker, 409-poisoning every later ro claim")
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "scratch"}}); err != nil {
+		t.Errorf("ro claim after the tenant loss: %v, want the image left clean", err)
+	}
+}
+
 // TestAttachOnlyClaimKeepsAdmissionExclusion: what protects other claims is
 // unchanged — only this claim's own mount contract moved to the caller.
 func TestAttachOnlyClaimKeepsAdmissionExclusion(t *testing.T) {

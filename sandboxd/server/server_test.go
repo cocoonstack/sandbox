@@ -1257,6 +1257,90 @@ func TestVolumeClaimUsesVolumeAndTemplateIntersections(t *testing.T) {
 	}
 }
 
+// TestVolumeClaimKeepsPoolContentAgainstPeerTemplates: a peer may legitimately
+// promote a key this node pools, and no mesh rule forbids it. Per-node content
+// consistency decides — with a local pool golden, volume claims resolve to the
+// same content a non-volume claim gets here and the peer's advertisement is
+// never consulted; only a caller that demanded promoted content is refused, by
+// the manager rather than served the wrong golden.
+func TestVolumeClaimKeepsPoolContentAgainstPeerTemplates(t *testing.T) {
+	for _, tt := range []struct {
+		name              string
+		poolGolden        bool
+		requirePromoted   bool
+		claimErr          error
+		wantStatus        int
+		wantRedirect      string
+		wantPromoted      bool
+		wantProvisions    int
+		wantWarmCalls     int
+		wantTemplateCalls int
+	}{
+		{
+			name: "pool golden outranks the peer's template", poolGolden: true,
+			wantStatus: http.StatusOK, wantProvisions: 1, wantWarmCalls: 1,
+		},
+		{
+			name:       "without a pool golden the peer's template still escalates",
+			wantStatus: http.StatusOK, wantRedirect: "both:7777", wantPromoted: true,
+			wantTemplateCalls: 1,
+		},
+		{
+			name:       "caller-required promoted is refused, never served from the pool golden",
+			poolGolden: true, requirePromoted: true, claimErr: pool.ErrUnknownTemplate,
+			wantStatus: http.StatusNotFound, wantPromoted: true, wantProvisions: 1,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := &fakeManager{
+				hasPoolGolden:   tt.poolGolden,
+				volumePlacement: func(types.PoolKey, string, []string) (bool, error) { return true, nil },
+			}
+			if tt.claimErr != nil {
+				mgr.claim = func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+					return nil, tt.claimErr
+				}
+			}
+			placer := &fakePlacer{owners: []string{"template:7777"}, templateVolumeOwners: []string{"both:7777"}}
+			srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
+			ts := httptest.NewServer(srv.Handler())
+			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+			body, err := json.Marshal(types.ClaimRequest{
+				Template: "tpl", Volumes: []types.Volume{{Name: "imagenet"}},
+				RequirePromoted: tt.requirePromoted,
+			})
+			if err != nil {
+				t.Fatalf("encode request: %v", err)
+			}
+			resp, err := http.Post(ts.URL+"/v1/claim", "application/json", bytes.NewReader(body))
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != tt.wantStatus {
+				t.Fatalf("status=%d, want %d", resp.StatusCode, tt.wantStatus)
+			}
+			if tt.wantStatus == http.StatusOK {
+				assertVolumeClaimResponse(t, resp.Body, tt.wantRedirect, tt.wantPromoted)
+			}
+			if mgr.provisionCalls != tt.wantProvisions || mgr.warmCalls != tt.wantWarmCalls {
+				t.Errorf("provision=%d warm=%d, want %d/%d",
+					mgr.provisionCalls, mgr.warmCalls, tt.wantProvisions, tt.wantWarmCalls)
+			}
+			if mgr.gotRequirePromoted != (tt.wantProvisions == 1 && tt.wantPromoted) {
+				t.Errorf("promoted provision=%v, want %v", mgr.gotRequirePromoted, tt.wantPromoted)
+			}
+			// The ruling itself: a pooled key never asks the mesh what it promoted.
+			if placer.templateOwnerCalls != tt.wantTemplateCalls || placer.templateVolumeCalls != tt.wantTemplateCalls {
+				t.Errorf("template owner calls=%d template-volume calls=%d, want %d each",
+					placer.templateOwnerCalls, placer.templateVolumeCalls, tt.wantTemplateCalls)
+			}
+		})
+	}
+}
+
 func TestVolumeClaimValidatesKeyBeforePlacement(t *testing.T) {
 	mgr := &fakeManager{
 		volumePlacement: func(types.PoolKey, string, []string) (bool, error) {
@@ -1833,9 +1917,10 @@ type fakeManager struct {
 	promote              func(id, token, template string) error
 	promoteContentDigest string
 
-	deleteGolden func(key types.PoolKey) error
-	hasGolden    bool
-	hasPromoted  bool
+	deleteGolden  func(key types.PoolKey) error
+	hasGolden     bool
+	hasPoolGolden bool
+	hasPromoted   bool
 
 	audited          func(id string, line []byte)
 	checkpoint       func(id, token, name string) (types.Checkpoint, error)
@@ -1945,6 +2030,10 @@ func (f *fakeManager) DeleteTemplate(_ context.Context, key types.PoolKey, tenan
 
 func (f *fakeManager) HasGolden(context.Context, types.PoolKey) bool {
 	return f.hasGolden
+}
+
+func (f *fakeManager) HasPoolGolden(types.PoolKey) bool {
+	return f.hasPoolGolden
 }
 
 func (f *fakeManager) HasPromotedTemplate(context.Context, types.PoolKey) bool {
@@ -2109,6 +2198,7 @@ type fakePlacer struct {
 	volumeCandidateCalls int
 	volumeCandidateNames []string
 	volumeOwnerCalls     int
+	templateOwnerCalls   int
 	templateVolumeCalls  int
 }
 
@@ -2122,7 +2212,12 @@ func (f *fakePlacer) VolumeCandidates(_ string, names []string) []string {
 	f.volumeCandidateNames = slices.Clone(names)
 	return f.volumeCandidates
 }
-func (f *fakePlacer) TemplateOwners(string) []string { return f.owners }
+
+func (f *fakePlacer) TemplateOwners(string) []string {
+	f.templateOwnerCalls++
+	return f.owners
+}
+
 func (f *fakePlacer) VolumeOwners([]string) []string {
 	f.volumeOwnerCalls++
 	return f.volumeOwners

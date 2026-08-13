@@ -82,21 +82,24 @@ func TestTemplateNewSendsVolumes(t *testing.T) {
 func TestTemplateNewVolumeClaimFollowsRedirect(t *testing.T) {
 	want := []Volume{{Name: "imagenet", Mount: "/datasets/imagenet"}}
 	var got claimRequest
+	var originAuth, targetAuth string
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetAuth = r.Header.Get("Authorization")
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Errorf("decode body: %v", err)
 		}
 		_ = json.NewEncoder(w).Encode(claimResponse{ID: "sb_3", Token: "tok", Volumes: want})
 	}))
 	t.Cleanup(target.Close)
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originAuth = r.Header.Get("Authorization")
 		_ = json.NewEncoder(w).Encode(claimResponse{
 			Redirect: []string{strings.TrimPrefix(target.URL, "http://")}, RequirePromoted: true,
 		})
 	}))
 	t.Cleanup(entry.Close)
 
-	c := testClient(t, entry)
+	c := testClient(t, entry, WithAPIToken("tenant-token"))
 	tpl := &Template{Name: "task:v1", c: c, addr: c.addr, net: "none", size: "small"}
 	sb, err := tpl.New(t.Context(), WithVolumes(want...))
 	if err != nil {
@@ -104,6 +107,11 @@ func TestTemplateNewVolumeClaimFollowsRedirect(t *testing.T) {
 	}
 	if !got.NoRedirect || !got.RequirePromoted || !slices.Equal(got.Volumes, want) {
 		t.Errorf("redirected claim = %+v, want promoted no_redirect with %v", got, want)
+	}
+	// The redirect body carries no principal, so the bearer is what makes the
+	// peer resolve the same tenant — a dropped one would claim as the operator.
+	if originAuth != "Bearer tenant-token" || targetAuth != originAuth {
+		t.Errorf("bearer at origin=%q at target=%q, want the caller's token on both hops", originAuth, targetAuth)
 	}
 	if !slices.Equal(sb.Volumes, want) {
 		t.Errorf("response volumes = %+v, want %+v", sb.Volumes, want)

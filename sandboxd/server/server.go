@@ -90,6 +90,7 @@ type Manager interface {
 	DeleteCheckpoint(ctx context.Context, ckptID, tenant string, scope pool.DeleteScope) error
 	ClaimDeadline(id, token string) (time.Time, error)
 	HasGolden(ctx context.Context, key types.PoolKey) bool
+	HasPoolGolden(key types.PoolKey) bool
 	HasPromotedTemplate(ctx context.Context, key types.PoolKey) bool
 	AgentSocket(id, token string) (string, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, error)
@@ -317,13 +318,17 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 	}
 
 	localTemplate := s.mgr.HasPromotedTemplate(ctx, key)
+	// Per-node content consistency: a peer's promoted template must not escalate
+	// volume claims off the pool golden every other claim here resolves to. An
+	// explicit RequirePromoted still passes through, for the manager to refuse.
+	pooled := s.mgr.HasPoolGolden(key)
 	var templateOwners []string
-	if s.placer != nil {
+	if s.placer != nil && !pooled {
 		templateOwners = s.placer.TemplateOwners(hash)
 	}
 	promoted := req.RequirePromoted || localTemplate || len(templateOwners) > 0
 	req.RequirePromoted = promoted
-	if localVolumes && (!promoted || localTemplate) {
+	if localVolumes && (!promoted || localTemplate || pooled) {
 		return false, nil
 	}
 	if s.placer == nil || req.NoRedirect {

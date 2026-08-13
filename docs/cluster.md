@@ -94,6 +94,16 @@ retries with `no_redirect` plus the carried `require_promoted` intent and
 validates both resources before provisioning, so a node-local template still
 fails without a second hop even while template gossip is one tick stale.
 
+One key should be pooled or promoted fleet-wide, not both — the same class of
+operator error as two nodes holding one writable image. `promote` refuses a key
+the answering node pools, but nothing coordinates that across the mesh, so a
+peer can promote what another node pools and the two resolve to different
+content. Each node then answers with its own: a node holding a pool golden
+serves it to every claim for that key and ignores peer template
+advertisements, so volume and non-volume claims there never disagree. A caller
+that sets `require_promoted` itself is refused with 404 instead of being handed
+the pool golden, which lets the SDK walk on to a node that has the template.
+
 `GET /v1/volumes` and the SDK discovery calls return the gossiped union filtered
 through the answering node's fleet-uniform access lists. `nodes` counts members
 advertising each name, while `available` and `size_bytes` describe only the

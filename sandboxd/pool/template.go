@@ -145,13 +145,17 @@ func (m *Manager) TemplateHashes() []string {
 // tplSet answers without a store read; only a shared-store template promoted
 // elsewhere after startup falls through to the backend.
 func (m *Manager) HasGolden(ctx context.Context, key types.PoolKey) bool {
+	return m.HasPoolGolden(key) || m.HasPromotedTemplate(ctx, key)
+}
+
+// HasPoolGolden reports whether a configured pool can serve key from its own
+// golden. That golden is what every claim on this node resolves to, so a peer's
+// promoted template must not route one class of claim to different content.
+func (m *Manager) HasPoolGolden(key types.PoolKey) bool {
 	m.mu.Lock()
-	pooled := m.pools[key] != nil && m.pools[key].goldenDir != ""
-	m.mu.Unlock()
-	if pooled {
-		return true
-	}
-	return m.HasPromotedTemplate(ctx, key)
+	defer m.mu.Unlock()
+	p := m.pools[key]
+	return p != nil && p.goldenDir != ""
 }
 
 // HasPromotedTemplate reports whether key resolves to a promoted template.
