@@ -13,6 +13,11 @@ import (
 // TestForkRacingHibernateUsesPrivateSource pins the transition-locked source
 // decision: a hibernate landing between Fork's entry and its capture must
 // never let the fan-out clone the shared wake snapshot.
+//
+// Not a synctest candidate: Fork's block on sb.Transition (a plain
+// sync.Mutex) is never "durably blocked" by synctest's rules, so the bubble
+// can't fast-forward past the 20ms sleep that lets Fork reach it — verified
+// as a real deadlock (times out at 120s), not a flake.
 func TestForkRacingHibernateUsesPrivateSource(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)

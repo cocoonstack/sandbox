@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
@@ -77,36 +78,38 @@ func TestClaimCheckpointAfterHealStaysLocal(t *testing.T) {
 // still get a genuinely valid, non-empty checkpoint out of it (the exact
 // case a caller-owned-staging-dir singleflight used to get wrong).
 func TestClaimCheckpointHealDedupsConcurrentPulls(t *testing.T) {
-	id := "ck_00000000000000bb"
-	ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
-	m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
-	puller.release = make(chan struct{})
+	synctest.Test(t, func(t *testing.T) {
+		id := "ck_00000000000000bb"
+		ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
+		m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
+		puller.release = make(chan struct{})
 
-	var wg sync.WaitGroup
-	sbs := make([]*types.Sandbox, 2)
-	errs := make([]error, 2)
-	for i := range 2 {
-		wg.Go(func() {
-			sbs[i], errs[i] = m.ClaimCheckpointHeal(t.Context(), id, time.Hour, "")
-		})
-	}
-	waitFor(t, func() bool { return puller.count() >= 1 })
-	time.Sleep(50 * time.Millisecond) // let the second goroutine join the same flight
-	close(puller.release)
-	wg.Wait()
+		var wg sync.WaitGroup
+		sbs := make([]*types.Sandbox, 2)
+		errs := make([]error, 2)
+		for i := range 2 {
+			wg.Go(func() {
+				sbs[i], errs[i] = m.ClaimCheckpointHeal(t.Context(), id, time.Hour, "")
+			})
+		}
+		waitFor(t, func() bool { return puller.count() >= 1 })
+		time.Sleep(50 * time.Millisecond) // let the second goroutine join the same flight
+		close(puller.release)
+		wg.Wait()
 
-	for i, err := range errs {
-		if err != nil {
-			t.Errorf("goroutine %d: %v", i, err)
-			continue
+		for i, err := range errs {
+			if err != nil {
+				t.Errorf("goroutine %d: %v", i, err)
+				continue
+			}
+			if sbs[i] == nil || sbs[i].FromCheckpoint != id {
+				t.Errorf("goroutine %d: sandbox = %+v, want a valid branch of %s", i, sbs[i], id)
+			}
 		}
-		if sbs[i] == nil || sbs[i].FromCheckpoint != id {
-			t.Errorf("goroutine %d: sandbox = %+v, want a valid branch of %s", i, sbs[i], id)
+		if got := puller.count(); got != 1 {
+			t.Errorf("puller called %d times for two concurrent heals of one id, want 1", got)
 		}
-	}
-	if got := puller.count(); got != 1 {
-		t.Errorf("puller called %d times for two concurrent heals of one id, want 1", got)
-	}
+	})
 }
 
 // TestDeleteVetoesInFlightHeal covers the Codex r2 blocker: a heal's transfer
@@ -118,29 +121,31 @@ func TestClaimCheckpointHealDedupsConcurrentPulls(t *testing.T) {
 // vetoes the pending heal, so the heal's own locked decide phase abandons
 // its publish instead of racing the delete to a stale conclusion.
 func TestDeleteVetoesInFlightHeal(t *testing.T) {
-	id := "ck_00000000000000bb"
-	ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
-	m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
-	puller.release = make(chan struct{})
+	synctest.Test(t, func(t *testing.T) {
+		id := "ck_00000000000000bb"
+		ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
+		m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
+		puller.release = make(chan struct{})
 
-	healDone := make(chan error, 1)
-	go func() {
-		_, err := m.ClaimCheckpointHeal(t.Context(), id, time.Hour, "")
-		healDone <- err
-	}()
-	waitFor(t, func() bool { return puller.count() >= 1 }) // heal is staging, unpublished
+		healDone := make(chan error, 1)
+		go func() {
+			_, err := m.ClaimCheckpointHeal(t.Context(), id, time.Hour, "")
+			healDone <- err
+		}()
+		waitFor(t, func() bool { return puller.count() >= 1 }) // heal is staging, unpublished
 
-	if err := m.DeleteCheckpoint(t.Context(), id, "", DeleteLocal); !errors.Is(err, ErrUnknownCheckpoint) {
-		t.Fatalf("delete while heal is staging: %v, want ErrUnknownCheckpoint (nothing local yet, and it must not block)", err)
-	}
+		if err := m.DeleteCheckpoint(t.Context(), id, "", DeleteLocal); !errors.Is(err, ErrUnknownCheckpoint) {
+			t.Fatalf("delete while heal is staging: %v, want ErrUnknownCheckpoint (nothing local yet, and it must not block)", err)
+		}
 
-	close(puller.release)
-	if err := <-healDone; !errors.Is(err, ErrUnknownCheckpoint) {
-		t.Errorf("heal after a concurrent delete: %v, want ErrUnknownCheckpoint (vetoed, must not publish)", err)
-	}
-	if m.HasCheckpoint(t.Context(), id) {
-		t.Error("checkpoint present after a delete vetoed the pending heal — resurrection")
-	}
+		close(puller.release)
+		if err := <-healDone; !errors.Is(err, ErrUnknownCheckpoint) {
+			t.Errorf("heal after a concurrent delete: %v, want ErrUnknownCheckpoint (vetoed, must not publish)", err)
+		}
+		if m.HasCheckpoint(t.Context(), id) {
+			t.Error("checkpoint present after a delete vetoed the pending heal — resurrection")
+		}
+	})
 }
 
 // TestClaimCheckpointHealCtxCancelReturnsPromptly: a caller that gives up
@@ -149,33 +154,35 @@ func TestDeleteVetoesInFlightHeal(t *testing.T) {
 // ctx.Err() as soon as its own ctx is canceled, while the transfer keeps
 // running and still lands.
 func TestClaimCheckpointHealCtxCancelReturnsPromptly(t *testing.T) {
-	id := "ck_00000000000000bb"
-	ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
-	m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
-	puller.release = make(chan struct{})
+	synctest.Test(t, func(t *testing.T) {
+		id := "ck_00000000000000bb"
+		ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
+		m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
+		puller.release = make(chan struct{})
 
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		_, err := m.ClaimCheckpointHeal(ctx, id, time.Hour, "")
-		done <- err
-	}()
-	waitFor(t, func() bool { return puller.count() >= 1 }) // transfer started, unlocked
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() {
+			_, err := m.ClaimCheckpointHeal(ctx, id, time.Hour, "")
+			done <- err
+		}()
+		waitFor(t, func() bool { return puller.count() >= 1 }) // transfer started, unlocked
 
-	cancel()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("ClaimCheckpointHeal after cancel: %v, want context.Canceled", err)
+		cancel()
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("ClaimCheckpointHeal after cancel: %v, want context.Canceled", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("ClaimCheckpointHeal did not return promptly after ctx cancellation")
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("ClaimCheckpointHeal did not return promptly after ctx cancellation")
-	}
 
-	// Detached from the canceled caller, the transfer must still complete
-	// and publish.
-	close(puller.release)
-	waitFor(t, func() bool { return m.HasCheckpoint(t.Context(), id) })
+		// Detached from the canceled caller, the transfer must still complete
+		// and publish.
+		close(puller.release)
+		waitFor(t, func() bool { return m.HasCheckpoint(t.Context(), id) })
+	})
 }
 
 // TestRecLockEvictionWaitsForAllHolders covers the lock-identity-split half
