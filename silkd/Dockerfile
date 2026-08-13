@@ -7,7 +7,7 @@
 # /silkd-static is musl-static for guests without glibc, such as the android
 # flavor's non-systemd userspace. Built per-platform (amd64/arm64) on native
 # runners; TARGETARCH picks the musl target triple.
-FROM rust:1-slim AS build
+FROM rust:1-slim@sha256:8e8cf8f7fd54a2d23d5a743b3a03f56e26b6c774276c33fa0595111704ebb15c AS build
 ARG TARGETARCH
 RUN case "$TARGETARCH" in \
       amd64) echo x86_64-unknown-linux-musl > /musl-target ;; \

@@ -1,0 +1,39 @@
+# The guest binaries (sandbox-init, silkd) and every os-image are built from
+# these bases, so their tags are pinned by digest for reproducibility and
+# dependabot is what keeps the pins current — without it a pinned digest is a
+# frozen, unpatched toolchain.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directories:
+      - /silkd
+      - /boot
+      - /os-image/base/24.04
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build"
+  - package-ecosystem: cargo
+    directories:
+      - /silkd
+      - /boot/init
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build"
+  - package-ecosystem: gomod
+    directories:
+      - /sandboxd
+      - /sdk/go
+      - /e2e
+      - /mcp
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build"
