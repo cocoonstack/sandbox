@@ -14,7 +14,7 @@ import (
 var tools = []tool{
 	{
 		"create_sandbox", "Claim a fresh microVM sandbox; returns its id. Warm claims are milliseconds.",
-		schema(props{"template": str("template image ref; empty uses the server default"), "ttl_seconds": integer("sandbox lifetime; 0 = server default")}), toolCreateSandbox,
+		schema(props{"template": str("template image ref; empty uses the server default"), "net": str("network lane: none (default) or egress"), "size": str("resource tier: small (default), medium, large, xlarge"), "ttl_seconds": integer("sandbox lifetime in seconds; 0 means one hour, and nothing renews it")}), toolCreateSandbox,
 	},
 	{
 		"exec", "Run a command in a sandbox and return stdout/stderr/exit code. A hibernated sandbox wakes transparently.",
@@ -94,14 +94,22 @@ func toolSpecs() []map[string]any {
 func toolCreateSandbox(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
 	var args struct {
 		Template   string `json:"template"`
+		Net        string `json:"net"`
+		Size       string `json:"size"`
 		TTLSeconds int    `json:"ttl_seconds"`
 	}
 	if err := parse(raw, &args); err != nil {
 		return "", err
 	}
-	var opts []sandbox.Option
-	if args.TTLSeconds > 0 {
-		opts = append(opts, sandbox.WithTimeout(time.Duration(args.TTLSeconds)*time.Second))
+	// An agent session outlives the node's 5-minute default, and no tool
+	// renews a lease, so the sandbox would vanish mid-conversation.
+	ttl := time.Duration(cmp.Or(args.TTLSeconds, int(defaultToolTTL.Seconds()))) * time.Second
+	opts := []sandbox.Option{sandbox.WithTimeout(ttl)}
+	if args.Net != "" {
+		opts = append(opts, sandbox.WithNetwork(sandbox.NetShape(args.Net)))
+	}
+	if args.Size != "" {
+		opts = append(opts, sandbox.WithSize(sandbox.Size(args.Size)))
 	}
 	sb, err := s.client.New(ctx, cmp.Or(args.Template, s.template), opts...)
 	if err != nil {

@@ -34,6 +34,12 @@ func WithAPIToken(token string) ClientOption {
 	return func(c *Client) { c.apiToken = token }
 }
 
+// WithHTTPClient replaces the control-plane HTTP client, for callers that need
+// their own transport, proxy, or timeout.
+func WithHTTPClient(hc *http.Client) ClientOption {
+	return func(c *Client) { c.hc = hc }
+}
+
 // Client talks to one sandboxd node.
 type Client struct {
 	addr     string
@@ -194,7 +200,8 @@ func (c *Client) roundTrip(ctx context.Context, method, addr, path string, body 
 
 // Connect returns a client for a sandboxd node. addr accepts a
 // comma-separated seed list for forward compatibility; v0 uses the first
-// entry.
+// entry. Calls are bounded by their ctx — checkpoint and promote run as long
+// as the snapshot takes, so the client sets no blanket deadline.
 func Connect(addr string, opts ...ClientOption) (*Client, error) {
 	first, _, _ := strings.Cut(addr, ",")
 	first = strings.TrimSpace(first)
@@ -269,8 +276,8 @@ func tryEach(candidates []string, call func(addr string) error, retry func(error
 // retryMiss retries a miss (the next candidate may own the record) or a
 // transport failure (dead peer); a served error is real and stops the walk.
 func retryMiss(err error) bool {
-	var he *httpError
-	return !errors.As(err, &he) || he.status == http.StatusNotFound
+	var he *APIError
+	return !errors.As(err, &he) || he.Status == http.StatusNotFound
 }
 
 // retryAny retries a redirect candidate's failure unconditionally: one
@@ -285,11 +292,11 @@ func retryAny(error) bool { return true }
 // request, a forbidden token, or an egress conflict is definitive: the
 // origin would fail the same way.
 func retryTransient(err error) bool {
-	var he *httpError
+	var he *APIError
 	if !errors.As(err, &he) {
 		return true
 	}
-	switch he.status {
+	switch he.Status {
 	case http.StatusUnauthorized, http.StatusNotFound, http.StatusTooManyRequests,
 		http.StatusServiceUnavailable, http.StatusInternalServerError,
 		http.StatusBadGateway, http.StatusGatewayTimeout:
@@ -401,26 +408,26 @@ func encodeBody(verb string, v any) ([]byte, error) {
 	return body, nil
 }
 
-// httpError is a non-2xx control-plane reply; redirect walks branch on the
-// status (retryMiss).
-type httpError struct {
-	verb   string
-	status int
-	msg    string
+// APIError is a non-2xx control-plane reply. Status is exported because the
+// SDK's own redirect walk branches on it, so callers need it too.
+type APIError struct {
+	Verb    string
+	Status  int
+	Message string
 }
 
-func (e *httpError) Error() string {
-	if e.msg != "" {
-		return fmt.Sprintf("%s: %s (http %d)", e.verb, e.msg, e.status)
+func (e *APIError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("%s: %s (http %d)", e.Verb, e.Message, e.Status)
 	}
-	return fmt.Sprintf("%s: http %d", e.verb, e.status)
+	return fmt.Sprintf("%s: http %d", e.Verb, e.Status)
 }
 
 // apiError surfaces the server's {"error": ...} body when present.
 func apiError(verb string, resp *http.Response) error {
 	var er errorResponse
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&er)
-	return &httpError{verb: verb, status: resp.StatusCode, msg: er.Error}
+	return &APIError{Verb: verb, Status: resp.StatusCode, Message: er.Error}
 }
 
 // claimRequest mirrors sandboxd's wire type; duplicated so the SDK stays
@@ -434,6 +441,7 @@ type claimRequest struct {
 	TTLSeconds        int      `json:"ttl_seconds,omitempty"`
 	NoRedirect        bool     `json:"no_redirect,omitempty"`
 	RequirePromoted   bool     `json:"require_promoted,omitempty"`
+	ClaimRef          string   `json:"claim_ref,omitempty"`
 }
 
 // rejectPinnedAxes fails a snapshot claim (checkpoint, template) that passed
