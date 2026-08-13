@@ -200,7 +200,7 @@ func TestResolveGoldenSkipsPromotedEgressTemplate(t *testing.T) {
 	if _, err = m.commitTemplate(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("seed template: %v", err)
 	}
-	golden, err := m.resolveGolden(t.Context(), egKey)
+	golden, err := m.resolveGolden(t.Context(), egKey, "")
 	if err != nil {
 		t.Fatalf("resolveGolden: %v", err)
 	}
@@ -309,6 +309,53 @@ func TestPromoteRefusesCrossTenantOverwrite(t *testing.T) {
 	r := claim("") // root may replace anything
 	if _, _, err := m.Promote(t.Context(), r.ID, Cred{Token: r.Token}, "shared:v1", ""); err != nil {
 		t.Errorf("root replace: %v, want ok", err)
+	}
+}
+
+func TestTemplateClaimIsTenantScoped(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	claim := func(tenant string) *types.Sandbox {
+		t.Helper()
+		sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, tenant, "", nil)
+		if err != nil {
+			t.Fatalf("claim %q: %v", tenant, err)
+		}
+		return sb
+	}
+
+	a := claim("acme")
+	private, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "acme-private", "acme")
+	if err != nil {
+		t.Fatalf("acme promote: %v", err)
+	}
+	r := claim("")
+	shared, _, err := m.Promote(t.Context(), r.ID, Cred{Token: r.Token}, "ops-shared", "")
+	if err != nil {
+		t.Fatalf("root promote: %v", err)
+	}
+
+	if _, err := m.ClaimProvisionPromoted(t.Context(), private, time.Hour, "beta", "", nil); !errors.Is(err, ErrUnknownTemplate) {
+		t.Errorf("beta claiming acme's template: %v, want ErrUnknownTemplate", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		key    types.PoolKey
+		tenant string
+	}{
+		{"owner claims its own", private, "acme"},
+		{"root claims a tenant's", private, ""},
+		{"tenant claims a root template", shared, "beta"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sb, err := m.ClaimProvisionPromoted(t.Context(), tc.key, time.Hour, tc.tenant, "", nil)
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			if sb.TemplateDigest == "" {
+				t.Error("claim did not resolve from the promoted template")
+			}
+		})
 	}
 }
 

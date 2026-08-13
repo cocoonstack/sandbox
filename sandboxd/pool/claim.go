@@ -532,7 +532,7 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	}
 	reserved := applied
 	defer func() { m.unreserveVolumes(reserved) }()
-	golden, err := m.resolveGolden(ctx, key)
+	golden, err := m.resolveGolden(ctx, key, tenant)
 	if err != nil {
 		return nil, fmt.Errorf("resolve template: %w", err)
 	}

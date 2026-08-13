@@ -277,7 +277,7 @@ type goldenResolution struct {
 // golden (no release), else a promoted template fetched from the store;
 // empty dir cold-boots. Only a true absence cold-boots — a backend failure
 // propagates rather than silently booting a template name as an image ref.
-func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (goldenResolution, error) {
+func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant string) (goldenResolution, error) {
 	m.mu.Lock()
 	var dir string
 	if p := m.pools[key]; p != nil {
@@ -302,18 +302,21 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (goldenR
 		}
 		return goldenResolution{release: func() {}}, err
 	}
+	cleanup := func() { release(); l.RUnlock(); m.recDone(id) }
 	var rec templateRecord
 	if err := json.Unmarshal(meta, &rec); err != nil {
-		release()
-		l.RUnlock()
-		m.recDone(id)
+		cleanup()
 		return goldenResolution{release: func() {}}, fmt.Errorf("decode template metadata: %w", err)
+	}
+	if rec.Tenant != "" && !tenantOwns(tenant, rec.Tenant) {
+		cleanup()
+		return goldenResolution{release: func() {}}, nil
 	}
 	return goldenResolution{
 		dir:            dir,
 		templateDigest: digest,
 		promoted:       true,
-		release:        func() { release(); l.RUnlock(); m.recDone(id) },
+		release:        cleanup,
 	}, nil
 }
 
