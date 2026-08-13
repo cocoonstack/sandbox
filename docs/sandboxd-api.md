@@ -92,7 +92,11 @@ the guest, nothing is mounted, and the echoed entries carry no `mount` key:
  "volumes": [{"name": "imagenet"}, {"name": "scratch-db", "mode": "rw"}]}
 ```
 
-Find each device by its virtio serial, which is the catalog name:
+Find each device by its virtio serial, which is the catalog name — poll this,
+not a one-shot lookup: the claim can return before the guest enumerates the
+device (typically within ~100ms, never guaranteed), and the `/dev/<blk>` node
+can lag the serial match the same way it does for an eager mount's device
+settle. Confirm both before mounting:
 
 ```sh
 for dev in /sys/block/*/serial; do

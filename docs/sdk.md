@@ -166,7 +166,9 @@ branches do not support volumes of either mode in this version.
 
 `WithVolumesAttachOnly()` claims the same volumes without mounting them: the
 entries in `Sandbox.Volumes` carry an empty `Mount`, and the workload finds
-each device by polling `/sys/block/*/serial` for the catalog name. Everything
+each device by polling `/sys/block/*/serial` for the catalog name — not
+guaranteed present when the claim returns, typically within ~100ms — then
+confirms the `/dev/<blk>` node itself exists before mounting. Everything
 above describes the default and is unchanged by this option. What changes is
 that the mount and its consistency are entirely yours: sandboxd writes and
 clears no dirty marker for an attach-only `rw` claim, because it cannot verify

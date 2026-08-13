@@ -117,7 +117,9 @@ branches do not accept volumes of either mode in this version.
 `mount=False` on `client.new` or `template.new` claims the same volumes
 without mounting them: the dictionaries in `sb.volumes` carry no `mount` key,
 and the workload finds each device by polling `/sys/block/*/serial` for the
-catalog name. Everything above describes the default (`mount=True`) and is
+catalog name — not guaranteed present when the claim returns, typically
+within ~100ms — then confirms the `/dev/<blk>` node itself exists before
+mounting. Everything above describes the default (`mount=True`) and is
 unchanged by it. What changes is that the mount and its consistency are
 entirely yours: sandboxd writes and clears no dirty marker for an attach-only
 `rw` claim, because it cannot verify your unmount, so releasing without
