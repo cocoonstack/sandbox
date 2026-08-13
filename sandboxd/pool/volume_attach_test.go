@@ -216,8 +216,9 @@ func TestClaimWarmAttachFailureKeepsHoldsUntilRemoval(t *testing.T) {
 }
 
 // TestFinalizeQuotaFailureKeepsHoldsUntilRemoval: the finalize re-check loses
-// the quota race with the volumes already mounted, so its holds must outlive
-// the claim exactly as an attach failure's do — until the VM is confirmed gone.
+// the quota race with the volumes already mounted, so the loser owes a clean
+// umount, and its holds must outlive the claim exactly as an attach failure's
+// do — until the VM is confirmed gone.
 func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch")
 	eng := newFakeEngine()
@@ -260,8 +261,14 @@ func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	if !errors.Is(err, ErrQuota) {
 		t.Fatalf("volume claim: %v, want ErrQuota from the finalize re-check", err)
 	}
+	if ops := eng.volumeOpsLog(); !slices.Contains(ops, "umount:/volumes/scratch") {
+		t.Errorf("volume ops=%v, want the quota loser's mount unmounted", ops)
+	}
 	if holders := volumeHoldersOf(m, "scratch"); holders != (volumeHolders{writers: 1}) {
 		t.Errorf("registry after failed removal=%+v, want writer retained", holders)
+	}
+	if !volumeDirty(scratch) {
+		t.Error("the marker cleared before the surviving VM was confirmed gone")
 	}
 	if err := m.Release(t.Context(), filler.ID, Cred{Token: filler.Token}); err != nil {
 		t.Fatalf("release the volume-less claim: %v", err)
@@ -281,12 +288,11 @@ func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	if holders := volumeHoldersOf(m, "scratch"); holders != (volumeHolders{}) {
 		t.Errorf("registry after the drain=%+v, want empty", holders)
 	}
-	// Accepted residual: no quiesce runs, so the marker waits for a writable claim.
-	if !volumeDirty(scratch) {
-		t.Error("the unquiesced mount cleared its marker")
+	if volumeDirty(scratch) {
+		t.Error("the quiesced mount left its marker, 409-poisoning every later ro claim")
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", writable); err != nil {
-		t.Errorf("writable claim after the drain: %v", err)
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "scratch"}}); err != nil {
+		t.Errorf("ro claim after the drain: %v, want the image left clean", err)
 	}
 }
 

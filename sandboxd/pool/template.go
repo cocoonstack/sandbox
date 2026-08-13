@@ -154,9 +154,13 @@ func (m *Manager) HasGolden(ctx context.Context, key types.PoolKey) bool {
 	return m.HasPromotedTemplate(ctx, key)
 }
 
-// HasPromotedTemplate reports whether the template store contains key. Unlike
-// HasGolden it does not count a configured pool golden.
+// HasPromotedTemplate reports whether key resolves to a promoted template.
+// A hash a configured pool owns is subtracted, as TemplateHashes does for the
+// gossip: resolveGolden serves it from the pool golden, never the template.
 func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey) bool {
+	if m.pooledHash(key.Hash()) {
+		return false
+	}
 	id := store.TemplateID(key.Hash())
 	m.tplMu.Lock()
 	_, cached := m.tplSet[id]

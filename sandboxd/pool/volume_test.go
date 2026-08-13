@@ -289,8 +289,8 @@ func TestClaimProvisionPromotedRejectsMissingTemplateBeforeProvision(t *testing.
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "data", Path: path}})
 
 	_, err := m.ClaimProvisionPromoted(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "data"}})
-	if !errors.Is(err, ErrVolumeUnavailable) {
-		t.Errorf("error=%v, want ErrVolumeUnavailable", err)
+	if !errors.Is(err, ErrUnknownTemplate) {
+		t.Errorf("error=%v, want ErrUnknownTemplate", err)
 	}
 	if len(eng.colds)+len(eng.clones) != 0 {
 		t.Errorf("provisioned colds=%v clones=%v", eng.colds, eng.clones)
@@ -322,6 +322,49 @@ func TestClaimProvisionPromotedAppliesVolumesFromTemplate(t *testing.T) {
 	}
 	if sb.TemplateDigest != digest {
 		t.Errorf("template digest=%q, want %q", sb.TemplateDigest, digest)
+	}
+}
+
+// TestPooledKeyOutranksPromotedTemplate: promote, then pool the same key, then
+// restart. resolveGolden serves the pool golden, so the key must not report as
+// promoted either — otherwise the redirect decision arms RequirePromoted and
+// every volume claim for the key is refused while the template sits dormant.
+func TestPooledKeyOutranksPromotedTemplate(t *testing.T) {
+	path := writeVolumeImage(t, "data.img", "data")
+	catalog := []config.VolumeSpec{{Name: "data", Path: path}}
+	dataDir := t.TempDir()
+	eng := newFakeEngine()
+	promoter := newVolumeManagerAt(t, eng, dataDir, catalog)
+	parent := mustClaim(t, promoter, testKey)
+	key, _, err := promoter.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:pooled", "")
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	m, err := NewManager(t.Context(), &config.Config{
+		DataDir: dataDir,
+		Pools:   []config.PoolSpec{{PoolKey: key, Warm: 1}},
+		Volumes: catalog,
+	}, eng, testSecrets(t))
+	if err != nil {
+		t.Fatalf("restart with the key pooled: %v", err)
+	}
+	m.pools[key].goldenDir = "/goldens/pooled"
+
+	if m.HasPromotedTemplate(t.Context(), key) {
+		t.Error("a pooled key reports as promoted, disagreeing with both resolveGolden and the gossip")
+	}
+	sb, err := m.ClaimProvision(t.Context(), key, 0, "", "", []types.Volume{{Name: "data"}})
+	if err != nil {
+		t.Fatalf("ordinary volume claim: %v", err)
+	}
+	if sb.TemplateDigest != "" {
+		t.Errorf("template digest=%q, want none: the pool golden is the clone source", sb.TemplateDigest)
+	}
+	if got := eng.cloneFroms; !slices.Equal(got, []string{"/goldens/pooled"}) {
+		t.Errorf("clone sources=%v, want only the pool golden", got)
+	}
+	if _, err := m.ClaimProvisionPromoted(t.Context(), key, 0, "", "", []types.Volume{{Name: "data"}}); !errors.Is(err, ErrUnknownTemplate) {
+		t.Errorf("stale-peer promoted claim: %v, want ErrUnknownTemplate", err)
 	}
 }
 
@@ -475,12 +518,20 @@ func TestVolumeClaimUsageAndScopedSummaries(t *testing.T) {
 }
 
 func TestClaimProvisionRejectsMissingVolumePathBeforeProvision(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.img")
 	eng := newFakeEngine()
-	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "data", Path: filepath.Join(t.TempDir(), "missing.img")}})
+	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "data", Path: missing}})
 
 	_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "data"}})
-	if err == nil || !strings.Contains(err.Error(), "missing.img") {
-		t.Errorf("got %v, want missing-path error", err)
+	if !errors.Is(err, ErrVolumeUnavailable) {
+		t.Errorf("got %v, want ErrVolumeUnavailable", err)
+	}
+	if err == nil || strings.Contains(err.Error(), missing) {
+		t.Errorf("got %v, want the operator's image path kept server-side", err)
+	}
+	_, unknownErr := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "other"}})
+	if unknownErr == nil || err.Error() != unknownErr.Error() {
+		t.Errorf("vanished=%q unknown=%q, want byte-identical errors", err, unknownErr)
 	}
 	if len(eng.colds)+len(eng.clones) != 0 {
 		t.Errorf("provisioned colds=%v clones=%v", eng.colds, eng.clones)

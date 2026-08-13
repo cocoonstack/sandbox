@@ -48,9 +48,9 @@ type resolvedVolume struct {
 }
 
 // volumeTeardown is what a quiesced claim leaves for after its VM is confirmed
-// gone: the admission holds to drop, and the marker paths — resolved through
-// the catalog while the claim still existed — of the mounts that came down
-// cleanly.
+// gone: the admission holds to drop, and the marker paths of the mounts that
+// came down cleanly — captured rather than re-resolved later, because a claim
+// adopted across a restart can name a catalog entry the new config re-pointed.
 type volumeTeardown struct {
 	holds  []types.Volume
 	clears []string
@@ -135,7 +135,7 @@ func (m *Manager) VolumePlacement(key types.PoolKey, tenant string, names []stri
 	return local, nil
 }
 
-func (m *Manager) resolveVolumes(key types.PoolKey, tenant string, requested []types.Volume) ([]resolvedVolume, error) {
+func (m *Manager) resolveVolumes(ctx context.Context, key types.PoolKey, tenant string, requested []types.Volume) ([]resolvedVolume, error) {
 	if len(requested) == 0 {
 		return nil, nil
 	}
@@ -158,7 +158,10 @@ func (m *Manager) resolveVolumes(key types.PoolKey, tenant string, requested []t
 			return nil, fmt.Errorf("%w: volume %q is not writable", ErrBadVolume, volume.Name)
 		}
 		if _, statErr := os.Stat(entry.disk.Path); statErr != nil {
-			return nil, fmt.Errorf("volume %q path %q: %w", volume.Name, entry.disk.Path, statErr)
+			// The operator's path stays server-side, and the refusal stays
+			// byte-identical to the unknown and forbidden ones.
+			log.WithFunc("pool.resolveVolumes").Warnf(ctx, "stat volume %q image %s: %v", volume.Name, entry.disk.Path, statErr)
+			return nil, ErrVolumeUnavailable
 		}
 		disk := entry.disk
 		disk.RW = volume.RW()

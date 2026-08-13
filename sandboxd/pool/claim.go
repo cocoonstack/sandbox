@@ -30,7 +30,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	if err := m.validate(key); err != nil {
 		return nil, err
 	}
-	volumeSpecs, err := m.resolveVolumes(key, tenant, volumes)
+	volumeSpecs, err := m.resolveVolumes(ctx, key, tenant, volumes)
 	if err != nil {
 		return nil, err
 	}
@@ -284,9 +284,10 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	if quotaErr := m.quotaErr(len(sbs), sbs[0].Tenant); quotaErr != nil {
 		m.mu.Unlock()
 		for _, sb := range sbs {
-			// No quiesce: never handed out, so nothing wrote to the guest and the
-			// marker waits for the next writable claim; the holds ride the removal.
-			m.abortVolumeClaim(ctx, sb.VMName, &sb.Volumes)
+			// Never handed out, but the rw mount itself dirtied the journal — the
+			// clean umount is owed exactly as on the rollback path.
+			td := m.quiesceVolumes(ctx, sb)
+			m.removeOrRetry(ctx, sb.VMName, "", "", td)
 		}
 		return quotaErr
 	}
@@ -511,7 +512,7 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	if err := m.validate(key); err != nil {
 		return nil, err
 	}
-	volumeSpecs, err := m.resolveVolumes(key, tenant, volumes)
+	volumeSpecs, err := m.resolveVolumes(ctx, key, tenant, volumes)
 	if err != nil {
 		return nil, err
 	}
@@ -527,7 +528,7 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	}
 	if requirePromoted && !golden.promoted {
 		golden.release()
-		return nil, ErrVolumeUnavailable
+		return nil, ErrUnknownTemplate
 	}
 	sb, err := m.provision(ctx, key, golden.dir)
 	golden.release()
