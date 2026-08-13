@@ -129,9 +129,8 @@ func (e *Engine) findVolumeDevice(ctx context.Context, vsockSocket, name string)
 			continue
 		}
 		device := "/dev/" + entry.Name
-		// The kernel publishes /sys/block before devtmpfs creates the node, so
-		// a serial match can still precede the device actually existing.
-		if _, err := e.silkdStat(ctx, vsockSocket, device); err != nil {
+		// The kernel publishes /sys/block before devtmpfs creates the node.
+		if err := e.silkdStat(ctx, vsockSocket, device); err != nil {
 			if isNotFound(err) {
 				return "", false, nil
 			}

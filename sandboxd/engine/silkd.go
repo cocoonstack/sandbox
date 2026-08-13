@@ -119,27 +119,27 @@ func (e *Engine) silkdReadFile(ctx context.Context, vsockSocket, path string) ([
 	return data, nil
 }
 
-// silkdStat answers with a single Stat frame and no terminal Done, unlike the
-// streaming ops above, so it dials and reads one frame directly.
-func (e *Engine) silkdStat(ctx context.Context, vsockSocket, path string) (wire.FileInfo, error) {
+// silkdStat answers with a single Stat frame and no terminal Done, so it
+// cannot ride silkdStream.
+func (e *Engine) silkdStat(ctx context.Context, vsockSocket, path string) error {
 	s, err := e.dialSilkdSession(ctx, vsockSocket)
 	if err != nil {
-		return wire.FileInfo{}, err
+		return err
 	}
 	defer s.close()
 	if err = s.send(wire.FsStat{Path: path}); err != nil {
-		return wire.FileInfo{}, err
+		return err
 	}
 	frame, err := s.recv()
 	if err != nil {
-		return wire.FileInfo{}, err
+		return err
 	}
 	switch resp := frame.(type) {
 	case *wire.Stat:
-		return resp.Info, nil
+		return nil
 	case *wire.ErrorResp:
-		return wire.FileInfo{}, fmt.Errorf("silkd %w", resp)
+		return fmt.Errorf("silkd %w", resp)
 	default:
-		return wire.FileInfo{}, fmt.Errorf("unexpected silkd frame %q", frame.RespType())
+		return fmt.Errorf("unexpected silkd frame %q", frame.RespType())
 	}
 }
