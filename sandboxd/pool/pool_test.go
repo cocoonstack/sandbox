@@ -809,6 +809,7 @@ type fakeEngine struct {
 	staleReconciles                   []string // VM names ReconcileStaleCreate was called on
 	installCAErr                      error
 	diskAttachErr                     error
+	diskAttachErrFor                  string // volume name whose DiskAttach fails; "" = never
 	diskAttachCancel                  context.CancelFunc
 	mountVolumeErr                    error
 	unmountVolumeErr                  error
@@ -825,6 +826,8 @@ type fakeEngine struct {
 	hibernateErrCompletes                                                              bool   // hibernateErr fires after the snapshot lands (CLI timeout)
 	tap                                                                                string // non-empty: lifecycle records carry this NIC tap
 	listCount                                                                          int
+
+	attachRendezvous *sync.WaitGroup // non-nil: DiskAttach waits there until every attach has arrived
 
 	cloneStall      chan struct{} // non-nil: Clone blocks until closed
 	probeStall      chan struct{} // non-nil: Probe blocks until closed
@@ -1043,14 +1046,22 @@ func (f *fakeEngine) InstallCACert(_ context.Context, vsockSocket string, _ []by
 
 func (f *fakeEngine) DiskAttach(_ context.Context, _ string, spec engine.VolumeSpec) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.volumeSpecs = append(f.volumeSpecs, spec)
 	f.volumeOps = append(f.volumeOps, "attach:"+spec.Name)
 	f.attachDirty[spec.Name] = volumeDirty(spec.Path)
-	if f.diskAttachCancel != nil {
-		f.diskAttachCancel()
+	cancel, rendezvous, err := f.diskAttachCancel, f.attachRendezvous, f.diskAttachErr
+	if spec.Name == f.diskAttachErrFor {
+		err = errors.New("attach failed")
 	}
-	return f.diskAttachErr
+	f.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if rendezvous != nil {
+		rendezvous.Done()
+		rendezvous.Wait()
+	}
+	return err
 }
 
 func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw bool) error {

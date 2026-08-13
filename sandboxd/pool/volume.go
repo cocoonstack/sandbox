@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -177,27 +178,44 @@ func (m *Manager) confirmVolumesClean(volumes []resolvedVolume) error {
 	return nil
 }
 
-// applyVolumes attaches and mounts the resolved set; applied is that same set
-// in request shape, recorded on the sandbox only once every mount is up.
+// applyVolumes brings the resolved set up concurrently: cocoon serializes the
+// attach per VM, so what overlaps is the CLI spawns, settle waits and guest
+// mounts. applied is the request-shaped set, recorded once every mount is up.
 func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes []resolvedVolume, applied []types.Volume) error {
-	if len(volumes) == 0 {
+	switch len(volumes) {
+	case 0:
 		return nil
-	}
-	for _, volume := range volumes {
-		// Write-ahead: the marker must be durable before any guest write can be.
-		if volume.disk.RW {
-			if err := markVolumeDirty(volume.disk.Path); err != nil {
-				return fmt.Errorf("mark volume %q dirty: %w", volume.applied.Name, err)
-			}
+	case 1:
+		if err := m.applyVolume(ctx, sb, volumes[0]); err != nil {
+			return err
 		}
-		if err := m.eng.DiskAttach(ctx, sb.VMName, volume.disk); err != nil {
-			return fmt.Errorf("attach volume %q: %w", volume.applied.Name, err)
+	default:
+		group, groupCtx := errgroup.WithContext(ctx)
+		for _, volume := range volumes {
+			group.Go(func() error { return m.applyVolume(groupCtx, sb, volume) })
 		}
-		if err := m.eng.MountVolume(ctx, sb.VsockSocket, volume.applied.Name, volume.applied.Mount, volume.disk.RW); err != nil {
-			return fmt.Errorf("setup volume %q: %w", volume.applied.Name, err)
+		if err := group.Wait(); err != nil {
+			return err
 		}
 	}
 	sb.Volumes = applied
+	return nil
+}
+
+// applyVolume keeps one volume's steps strictly ordered; siblings overlap freely.
+func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume resolvedVolume) error {
+	// Write-ahead: the marker must be durable before any guest write can be.
+	if volume.disk.RW {
+		if err := markVolumeDirty(volume.disk.Path); err != nil {
+			return fmt.Errorf("mark volume %q dirty: %w", volume.applied.Name, err)
+		}
+	}
+	if err := m.eng.DiskAttach(ctx, sb.VMName, volume.disk); err != nil {
+		return fmt.Errorf("attach volume %q: %w", volume.applied.Name, err)
+	}
+	if err := m.eng.MountVolume(ctx, sb.VsockSocket, volume.applied.Name, volume.applied.Mount, volume.disk.RW); err != nil {
+		return fmt.Errorf("setup volume %q: %w", volume.applied.Name, err)
+	}
 	return nil
 }
 

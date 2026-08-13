@@ -8,13 +8,15 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-func TestClaimProvisionAppliesVolumesInOrder(t *testing.T) {
+func TestClaimProvisionAppliesVolumesInRequestOrder(t *testing.T) {
 	first := writeVolumeImage(t, "imagenet.img", "first")
 	second := writeVolumeImage(t, "weights.img", "second")
 	eng := newFakeEngine()
@@ -35,19 +37,20 @@ func TestClaimProvisionAppliesVolumesInOrder(t *testing.T) {
 	if !slices.Equal(sb.Volumes, wantApplied) {
 		t.Errorf("volumes=%v, want %v", sb.Volumes, wantApplied)
 	}
-	wantOps := []string{
-		"provision", "probe",
-		"attach:weights", "mount:weights:/models",
-		"attach:imagenet", "mount:imagenet:/volumes/imagenet",
+	wantLead := []string{"provision", "probe"}
+	if ops := eng.volumeOpsLog(); len(ops) < len(wantLead) || !slices.Equal(ops[:len(wantLead)], wantLead) {
+		t.Errorf("operations=%v, want %v ahead of every volume op", ops, wantLead)
 	}
-	if !slices.Equal(eng.volumeOps, wantOps) {
-		t.Errorf("operations=%v, want %v", eng.volumeOps, wantOps)
+	assertVolumeBringUp(t, eng, wantApplied)
+	wantSpecs := []engine.VolumeSpec{
+		{Name: "imagenet", Path: first, DirectIO: "off"},
+		{Name: "weights", Path: second, DirectIO: "on"},
 	}
-	if !slices.Equal(eng.volumeMounts, wantApplied) {
-		t.Errorf("mounts=%v, want %v", eng.volumeMounts, wantApplied)
-	}
-	if got := eng.volumeSpecs; len(got) != 2 || got[0].Path != second || got[0].DirectIO != "on" || got[1].Path != first {
-		t.Errorf("attached specs=%+v", got)
+	specs := slices.SortedFunc(slices.Values(eng.volumeSpecs), func(a, b engine.VolumeSpec) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	if !slices.Equal(specs, wantSpecs) {
+		t.Errorf("attached specs=%+v, want %+v", specs, wantSpecs)
 	}
 	persisted, err := newClaimStore(m.dataDir).load()
 	if err != nil {
@@ -67,6 +70,90 @@ func TestClaimProvisionAppliesVolumesInOrder(t *testing.T) {
 		if string(got) != want {
 			t.Errorf("backing image %s=%q, want %q", path, got, want)
 		}
+	}
+}
+
+func TestClaimProvisionBringsMixedVolumesUpConcurrently(t *testing.T) {
+	dataset := writeVolumeImage(t, "dataset.img", "dataset")
+	weights := writeVolumeImage(t, "weights.img", "weights")
+	scratch := writeVolumeImage(t, "scratch.img", "scratch")
+	cache := writeVolumeImage(t, "cache.img", "cache")
+	eng := newFakeEngine()
+	m := newVolumeManager(t, eng, []config.VolumeSpec{
+		{Name: "dataset", Path: dataset},
+		{Name: "weights", Path: weights},
+		{Name: "scratch", Path: scratch, Writable: true},
+		{Name: "cache", Path: cache, Writable: true},
+	})
+	requested := []types.Volume{
+		{Name: "weights", Mount: "/models"},
+		{Name: "scratch", Mode: types.VolumeModeRW},
+		{Name: "dataset"},
+		{Name: "cache", Mount: "/cache", Mode: types.VolumeModeRW},
+	}
+	wantApplied := []types.Volume{
+		{Name: "weights", Mount: "/models"},
+		{Name: "scratch", Mount: "/volumes/scratch", Mode: types.VolumeModeRW},
+		{Name: "dataset", Mount: "/volumes/dataset"},
+		{Name: "cache", Mount: "/cache", Mode: types.VolumeModeRW},
+	}
+	// Every attach must be in flight at once: a sequential apply blocks here.
+	var attaches sync.WaitGroup
+	attaches.Add(len(requested))
+	eng.attachRendezvous = &attaches
+
+	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", requested)
+	if err != nil {
+		t.Fatalf("ClaimProvision: %v", err)
+	}
+	if !slices.Equal(sb.Volumes, wantApplied) {
+		t.Errorf("volumes=%v, want the request order %v", sb.Volumes, wantApplied)
+	}
+	assertVolumeBringUp(t, eng, wantApplied)
+	if !volumeDirty(scratch) || !volumeDirty(cache) {
+		t.Error("live writable claim left an image unmarked")
+	}
+	if volumeDirty(dataset) || volumeDirty(weights) {
+		t.Error("read-only volume of a mixed claim was marked dirty")
+	}
+}
+
+func TestClaimProvisionOneVolumeAttachFailureFailsWholeClaim(t *testing.T) {
+	first := writeVolumeImage(t, "first.img", "first")
+	broken := writeVolumeImage(t, "broken.img", "broken")
+	third := writeVolumeImage(t, "third.img", "third")
+	eng := newFakeEngine()
+	eng.diskAttachErrFor = "broken"
+	m := newVolumeManager(t, eng, []config.VolumeSpec{
+		{Name: "first", Path: first, Writable: true},
+		{Name: "broken", Path: broken, Writable: true},
+		{Name: "third", Path: third},
+	})
+
+	_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{
+		{Name: "first", Mode: types.VolumeModeRW},
+		{Name: "broken", Mode: types.VolumeModeRW},
+		{Name: "third"},
+	})
+	if err == nil || !strings.Contains(err.Error(), `attach volume "broken"`) {
+		t.Fatalf("ClaimProvision: %v, want the failing volume's attach error", err)
+	}
+	if len(eng.removes) != 1 {
+		t.Errorf("removes=%v, want the failed VM destroyed", eng.removes)
+	}
+	if !volumeDirty(first) || !volumeDirty(broken) {
+		t.Error("failed claim cleared a writable marker, opening an image no writer flushed")
+	}
+	if volumeDirty(third) {
+		t.Error("read-only volume was marked dirty")
+	}
+	for _, name := range []string{"first", "broken", "third"} {
+		if holders := volumeHoldersOf(m, name); holders != (volumeHolders{}) {
+			t.Errorf("registry for %s after the failure=%+v, want empty", name, holders)
+		}
+	}
+	if _, gauges := m.Info(); gauges.Claimed != 0 {
+		t.Errorf("claimed=%d, want 0", gauges.Claimed)
 	}
 }
 
@@ -397,6 +484,37 @@ func TestClaimProvisionRejectsMissingVolumePathBeforeProvision(t *testing.T) {
 	}
 	if len(eng.colds)+len(eng.clones) != 0 {
 		t.Errorf("provisioned colds=%v clones=%v", eng.colds, eng.clones)
+	}
+}
+
+// assertVolumeBringUp pins each volume's own marker→attach→mount order and the
+// completeness of the set; cross-volume order is free.
+func assertVolumeBringUp(t *testing.T, eng *fakeEngine, applied []types.Volume) {
+	t.Helper()
+	ops := eng.volumeOpsLog()
+	brought := 0
+	for _, op := range ops {
+		if strings.HasPrefix(op, "attach:") || strings.HasPrefix(op, "mount:") {
+			brought++
+		}
+	}
+	if brought != 2*len(applied) {
+		t.Errorf("bring-up ops=%v, want one attach and one mount per volume of %v", ops, applied)
+	}
+	for _, volume := range applied {
+		attach := slices.Index(ops, "attach:"+volume.Name)
+		mount := slices.Index(ops, "mount:"+volume.Name+":"+volume.Mount)
+		if attach < 0 || mount < attach {
+			t.Errorf("volume %s: attach=%d mount=%d in %v, want the attach first", volume.Name, attach, mount, ops)
+		}
+		if volume.RW() && !eng.dirtyAtAttach(volume.Name) {
+			t.Errorf("volume %s attached before its dirty marker was durable", volume.Name)
+		}
+	}
+	byName := func(a, b types.Volume) int { return strings.Compare(a.Name, b.Name) }
+	mounts := slices.SortedFunc(slices.Values(eng.volumeMounts), byName)
+	if want := slices.SortedFunc(slices.Values(applied), byName); !slices.Equal(mounts, want) {
+		t.Errorf("mounts=%v, want %v", mounts, want)
 	}
 }
 
