@@ -98,8 +98,12 @@ domain policy first; the allow-list widens the IP gate only.
 
 Policy is per pool and per tenant; the effective policy is their intersection
 (a request must pass both, and the pool rule's secret wins on a double allow).
-Secrets are registered separately and referenced by name — the value comes from
-the environment, never the config file.
+A missing policy on either side is an empty allow-list, not a pass: a tenant
+without its own `egress` block reaches nothing, so granting a tenant egress —
+and the secret injection that rides it — is always an explicit act. Root
+claims have no tenant layer and take the pool's policy whole. Secrets are
+registered separately and referenced by name — the value comes from the
+environment, never the config file.
 
 ```jsonc
 {
