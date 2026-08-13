@@ -102,6 +102,119 @@ func TestAttachOnlyClaimAttachesEveryVolumeConcurrently(t *testing.T) {
 	}
 }
 
+func TestClaimProvisionAttachFailureKeepsHoldsUntilRemoval(t *testing.T) {
+	scratch := writeVolumeImage(t, "scratch.img", "scratch")
+	broken := writeVolumeImage(t, "broken.img", "broken")
+	eng := newFakeEngine()
+	eng.diskAttachErrFor = "broken"
+	eng.removeStall = make(chan struct{})
+	var attaches sync.WaitGroup
+	attaches.Add(2)
+	eng.attachRendezvous = &attaches
+	m := newVolumeManager(t, eng, []config.VolumeSpec{
+		{Name: "scratch", Path: scratch, Writable: true},
+		{Name: "broken", Path: broken},
+	})
+	requested := []types.Volume{
+		{Name: "scratch", Mode: types.VolumeModeRW, AttachOnly: true},
+		{Name: "broken", AttachOnly: true},
+	}
+
+	claimErr := make(chan error, 1)
+	go func() {
+		_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", requested)
+		claimErr <- err
+	}()
+	attaches.Wait()
+	eng.mu.Lock()
+	vmCount := len(eng.vms)
+	var vmName string
+	for name := range eng.vms {
+		vmName = name
+	}
+	eng.removeErrFor = vmName
+	eng.attachRendezvous = nil
+	eng.mu.Unlock()
+	close(eng.removeStall)
+	err := <-claimErr
+
+	if vmCount != 1 {
+		t.Fatalf("live VMs before cleanup=%d, want 1", vmCount)
+	}
+	if err == nil || !strings.Contains(err.Error(), `attach volume "broken"`) {
+		t.Fatalf("ClaimProvision: %v, want the failing volume's attach error", err)
+	}
+	if holders := volumeHoldersOf(m, "scratch"); holders != (volumeHolders{writers: 1}) {
+		t.Errorf("scratch registry after failed removal=%+v, want writer retained", holders)
+	}
+	if holders := volumeHoldersOf(m, "broken"); holders != (volumeHolders{readers: 1}) {
+		t.Errorf("broken registry after failed removal=%+v, want reader retained", holders)
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", requested[:1]); !errors.Is(err, ErrVolumeBusy) {
+		t.Errorf("claim against surviving VM: %v, want ErrVolumeBusy", err)
+	}
+
+	eng.removeErrFor = ""
+	m.retryRemovals(t.Context()).Wait()
+
+	if !eng.removed(vmName) {
+		t.Errorf("removes=%v, want %s drained", eng.removedNames(), vmName)
+	}
+	for _, name := range []string{"scratch", "broken"} {
+		if holders := volumeHoldersOf(m, name); holders != (volumeHolders{}) {
+			t.Errorf("registry for %s after retry=%+v, want empty", name, holders)
+		}
+	}
+}
+
+func TestClaimWarmAttachFailureKeepsHoldsUntilRemoval(t *testing.T) {
+	scratch := writeVolumeImage(t, "scratch.img", "scratch")
+	broken := writeVolumeImage(t, "broken.img", "broken")
+	eng := newFakeEngine()
+	eng.diskAttachErrFor = "broken"
+	eng.removeErrFor = "sbx-warm"
+	eng.vms["sbx-warm"] = "/vsock/warm"
+	var attaches sync.WaitGroup
+	attaches.Add(2)
+	eng.attachRendezvous = &attaches
+	m := newVolumePoolManager(t, eng, t.TempDir(), []config.VolumeSpec{
+		{Name: "scratch", Path: scratch, Writable: true},
+		{Name: "broken", Path: broken},
+	})
+	warm := &types.Sandbox{VMName: "sbx-warm", Key: testKey, VsockSocket: "/vsock/warm"}
+	m.pools[testKey].warm = append(m.pools[testKey].warm, warm)
+	requested := []types.Volume{
+		{Name: "scratch", Mode: types.VolumeModeRW, AttachOnly: true},
+		{Name: "broken", AttachOnly: true},
+	}
+
+	_, err := m.ClaimWarm(t.Context(), testKey, 0, "", "", requested)
+	if err == nil || !strings.Contains(err.Error(), `attach volume "broken"`) {
+		t.Fatalf("ClaimWarm: %v, want the failing volume's attach error", err)
+	}
+	if holders := volumeHoldersOf(m, "scratch"); holders != (volumeHolders{writers: 1}) {
+		t.Errorf("scratch registry after failed removal=%+v, want writer retained", holders)
+	}
+	if holders := volumeHoldersOf(m, "broken"); holders != (volumeHolders{readers: 1}) {
+		t.Errorf("broken registry after failed removal=%+v, want reader retained", holders)
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", requested[:1]); !errors.Is(err, ErrVolumeBusy) {
+		t.Errorf("claim against surviving warm VM: %v, want ErrVolumeBusy", err)
+	}
+
+	eng.removeErrFor = ""
+	m.retryRemovals(t.Context()).Wait()
+
+	if !eng.removed(warm.VMName) {
+		t.Errorf("removes=%v, want %s drained", eng.removedNames(), warm.VMName)
+	}
+	for _, name := range []string{"scratch", "broken"} {
+		if holders := volumeHoldersOf(m, name); holders != (volumeHolders{}) {
+			t.Errorf("registry for %s after retry=%+v, want empty", name, holders)
+		}
+	}
+}
+
 // TestAttachOnlyClaimKeepsAdmissionExclusion: what protects other claims is
 // unchanged — only this claim's own mount contract moved to the caller.
 func TestAttachOnlyClaimKeepsAdmissionExclusion(t *testing.T) {

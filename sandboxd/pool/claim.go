@@ -56,7 +56,8 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	}
 	m.kickRefill()
 	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs, applied); volumeErr != nil {
-		m.destroy(ctx, sb.VMName)
+		m.removeOrRetry(ctx, sb.VMName, "", "", volumeTeardown{holds: reserved})
+		reserved = nil
 		return nil, volumeErr
 	}
 	sb.Tenant = tenant
@@ -529,7 +530,8 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 		return nil, err
 	}
 	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs, applied); volumeErr != nil {
-		m.destroy(ctx, sb.VMName)
+		m.removeOrRetry(ctx, sb.VMName, "", "", volumeTeardown{holds: reserved})
+		reserved = nil
 		return nil, volumeErr
 	}
 	sb.TemplateDigest = golden.templateDigest
