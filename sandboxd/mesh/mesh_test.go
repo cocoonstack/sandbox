@@ -95,6 +95,25 @@ func TestForgetPrunesDeadNode(t *testing.T) {
 	}
 }
 
+func TestForgottenNodeStaysGoneUntilItRestarts(t *testing.T) {
+	m := newTestMesh(t, "a")
+	dead := NodeState{NodeID: "b", Addr: "b:7777", Epoch: 4, Pools: map[string]int{"k": 3}}
+	m.merge([]NodeState{dead})
+	m.forget("b")
+
+	m.merge([]NodeState{dead})
+	if got := m.Candidates("k"); got != nil {
+		t.Errorf("a lagging peer resurrected b: %v", got)
+	}
+
+	restarted := dead
+	restarted.Epoch = 5
+	m.merge([]NodeState{restarted})
+	if len(m.Candidates("k")) != 1 {
+		t.Error("b restarted with a higher epoch and must be reinstated")
+	}
+}
+
 func TestCandidatesPowerOfTwo(t *testing.T) {
 	m := newTestMesh(t, "a")
 	m.merge([]NodeState{
@@ -210,9 +229,10 @@ func TestVolumeHoldersCountSelfAndPeers(t *testing.T) {
 func newTestMesh(t *testing.T, id string) *Mesh {
 	t.Helper()
 	return &Mesh{
-		epochPath: filepath.Join(t.TempDir(), "mesh-epoch"),
-		self:      NodeState{NodeID: id, Addr: id + ":7777", Pools: map[string]int{}},
-		view:      map[string]NodeState{id: {NodeID: id, Addr: id + ":7777"}},
+		epochPath:     filepath.Join(t.TempDir(), "mesh-epoch"),
+		self:          NodeState{NodeID: id, Addr: id + ":7777", Pools: map[string]int{}},
+		view:          map[string]NodeState{id: {NodeID: id, Addr: id + ":7777"}},
+		departedEpoch: map[string]uint64{},
 	}
 }
 
