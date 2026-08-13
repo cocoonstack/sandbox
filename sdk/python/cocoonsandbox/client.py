@@ -34,7 +34,9 @@ class Client:
         miss may redirect to a peer, followed transparently; if every
         candidate fails transiently, the claim falls back to the origin
         once so it provisions or heals locally. mount=False attaches the
-        volumes without mounting them, leaving that to the workload."""
+        volumes without mounting them, leaving that — and the flush — to
+        the workload: releasing without a clean self-umount discards
+        unsynced guest pages, since the sandbox performs no sync."""
         claim = _claim_body(template, net, size, ttl_seconds, volumes, mount)
         return self._claim_from(self.addr, claim)
 

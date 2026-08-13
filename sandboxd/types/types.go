@@ -34,6 +34,8 @@ const (
 
 	MaxClaimVolumes = 8
 
+	// Also the guest `mount -o` option literals (engine.MountVolume): renaming
+	// the API vocabulary would silently change the mount flags.
 	VolumeModeRO = "ro"
 	VolumeModeRW = "rw"
 

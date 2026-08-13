@@ -71,7 +71,9 @@ func WithVolumes(volumes ...Volume) Option {
 }
 
 // WithVolumesAttachOnly attaches the claim's volumes without mounting them;
-// the workload finds each device by its serial and owns the mount from there.
+// the workload finds each device by its serial and owns the mount — and its
+// flush — from there: release without a clean self-umount discards unsynced
+// guest pages, since the sandbox performs no sync of its own.
 func WithVolumesAttachOnly() Option {
 	return func(r *claimRequest) { r.VolumesAttachOnly = true }
 }

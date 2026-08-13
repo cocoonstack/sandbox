@@ -108,11 +108,12 @@ The whole consistency contract moves to the caller with the mount:
 
 - sandboxd writes no dirty marker for an attach-only `rw` claim and clears
   none, because it cannot verify your unmount and therefore promises nothing.
-  Releasing without a clean unmount of your own leaves the image exactly as a
-  filesystem crash would. The next *eager* `ro` claim then fails at mount time
-  with a 500 — loud and attributable to the claim that skipped its unmount —
-  instead of the marker's 409. Recovery is any `rw` cycle that replays the
-  journal.
+  The flush is yours too: release runs no unmount and no `sync`, so whatever
+  the workload left unsynced is discarded with the VM. Releasing without a
+  clean unmount of your own leaves the image exactly as a filesystem crash
+  would. The next *eager* `ro` claim then fails at mount time with a 500 —
+  loud and attributable to the claim that skipped its unmount — instead of
+  the marker's 409. Recovery is any `rw` cycle that replays the journal.
 - a marker left by an earlier *eager* `rw` crash is not cleared by attach-only
   cycles, and still refuses eager `ro` claims with 409 until a `rw` claim
   releases cleanly.
