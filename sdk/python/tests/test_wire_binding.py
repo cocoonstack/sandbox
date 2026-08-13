@@ -136,6 +136,32 @@ def _fake_sandbox(monkeypatch, replies):
     return sb, sent, thread
 
 
+class BranchActionConn:
+    """Records the action each git_branch verb puts on the wire."""
+
+    def __init__(self, sent):
+        self.sent = sent
+        self.action = ""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+    def send(self, op, **fields):
+        self.action = fields.get("action")
+        self.sent.append(self.action)
+
+    def recv(self):
+        if self.action == "list":
+            return {"type": "git_branches", "branches": [], "current": ""}
+        return {"type": "done"}
+
+    def recv_until(self, *terminal):
+        yield self.recv()
+
+
 @pytest.mark.parametrize("stem,replies,invoke", CASES, ids=lambda c: c if isinstance(c, str) else "")
 def test_call_site_matches_fixture(monkeypatch, stem, replies, invoke):
     fixture = json.loads((FIXTURES / f"{stem}.json").read_text())
@@ -153,7 +179,22 @@ def test_call_site_matches_fixture(monkeypatch, stem, replies, invoke):
             assert value == fixture[key], f"field {key!r}: {value!r} != {fixture[key]!r}"
 
 
-def test_enum_error_kinds_match_corpus():
+def test_enum_value_sets_match_corpus():
     enums = json.loads((FIXTURES / "enums.json").read_text())
     assert set(enums["error_kind"]) == {"bad_request", "not_found", "unimplemented", "internal"}
     assert set(enums["event_kind"]) == {"created", "modified", "deleted", "renamed"}
+    assert set(enums["file_kind"]) == {"file", "dir", "symlink", "other"}
+    assert set(enums["git_branch_action"]) == {"list", "create", "delete", "checkout"}
+
+
+def test_git_branch_actions_come_from_the_corpus(monkeypatch):
+    enums = json.loads((FIXTURES / "enums.json").read_text())
+    sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
+    sent = []
+    monkeypatch.setattr(sb, "_dial", lambda: BranchActionConn(sent))
+
+    sb.git_branches("/w")
+    sb.git_create_branch("/w", "b")
+    sb.git_delete_branch("/w", "b")
+    sb.git_checkout("/w", "b")
+    assert set(sent) == set(enums["git_branch_action"])
