@@ -257,6 +257,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Read versions
+        id: ver
+        run: echo "silkd=$(sed -n 's/^version = "\(.*\)"/\1/p' silkd/Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
 
@@ -321,6 +325,7 @@ jobs:
           # single base:24.04 tag; revisit when a second base tag appears.
           build-args: |
             BASE_IMAGE=ghcr.io/${{ github.repository }}/base:24.04
+            SILKD_IMAGE=${{ inputs.silkd_image != '' && inputs.silkd_image || format('ghcr.io/{0}/silkd:{1}', github.repository, steps.ver.outputs.silkd) }}
             INPUTS_HASH=${{ steps.inputs.outputs.hash }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

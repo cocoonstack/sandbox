@@ -1,0 +1,31 @@
+# sandbox-init is PID 1 in every guest, but its own suite only ran as part of
+# the image chain on main — a PR could not fail on it. This gate is the
+# source-level counterpart to silkd.yml.
+name: boot-init
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "boot/init/**"
+  pull_request:
+    paths:
+      - "boot/init/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: fmt + clippy + test
+        working-directory: boot/init
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test

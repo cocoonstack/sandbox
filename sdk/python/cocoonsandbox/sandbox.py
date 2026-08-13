@@ -66,10 +66,13 @@ class Sandbox:
         with self._dial() as conn:
             conn.send("exec", argv=argv, cwd=cwd or None, env=env,
                       user=user or None, session=session or None)
-            if stdin:
-                _send_chunks(conn, stdin, op="stdin")
-            conn.send("stdin_close")
+            # The guest blocks writing output once its stdout buffer fills, and
+            # stops draining stdin while it does, so feeding stdin to completion
+            # before reading deadlocks on any payload past the socket buffers.
+            pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True)
+            pump.start()
             code = _pump_stdio(conn, on_stdout, on_stderr)
+            pump.join()
         if code is None:
             raise ProtocolError("exec stream ended without an exit frame")
         return code
@@ -90,7 +93,7 @@ class Sandbox:
     def kill(self, pid: int, signal: int | None = None) -> None:
         """Signals a tracked process (default SIGKILL); killing one that
         already exited is a no-op success."""
-        self._done_rpc("kill", pid=pid, signal=signal)
+        self._done_rpc("kill", pid=pid, signal=signal or None)
 
     def logs(self, pid: int, on_stdout: Callable[[bytes], object] | None = None,
              on_stderr: Callable[[bytes], object] | None = None) -> int | None:
@@ -347,7 +350,7 @@ class Sandbox:
                     break
                 guest.send(chunk)
             guest.close_write()
-        except Exception:
+        finally:
             guest.close()
 
     def _call(self, op: str, expect: str, **fields) -> dict:
@@ -478,6 +481,13 @@ def _send_chunks(conn: Conn, data: bytes, op: str = "data", chunk: int = FS_CHUN
     view = memoryview(data)
     for off in range(0, len(view), chunk):
         conn.send(op, data=view[off:off + chunk])
+
+
+def _feed_stdin(conn: Conn, stdin: bytes) -> None:
+    with contextlib.suppress(Exception):  # the reader reports the real failure
+        if stdin:
+            _send_chunks(conn, stdin, op="stdin")
+        conn.send("stdin_close")
 
 
 def _pump_stdio(conn: Conn, on_stdout, on_stderr) -> int | None:
