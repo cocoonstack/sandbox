@@ -60,7 +60,7 @@ func (p *PortConn) Close() error {
 		p.stop()
 		// drain can be parked in a pipe write on an unread tail; only the
 		// reader side unblocks it.
-		_ = p.out.Close()
+		_ = p.out.CloseWithError(net.ErrClosed)
 	})
 	return nil
 }

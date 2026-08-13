@@ -242,11 +242,8 @@ fn scan_serials(ids: &[&str], found: &mut [Option<String>]) {
 }
 
 fn record_serial(ids: &[&str], found: &mut [Option<String>], serial: &str, device: &str) {
-    if !Path::new(device).exists() {
-        return;
-    }
     for (i, id) in ids.iter().enumerate() {
-        if found[i].is_none() && *id == serial {
+        if found[i].is_none() && *id == serial && Path::new(device).exists() {
             found[i] = Some(device.into());
         }
     }
@@ -264,7 +261,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn record_serial_waits_for_device_node() {
+    fn record_serial_skips_a_missing_device_node() {
         let ids = ["layer"];
         let mut found = [None];
 

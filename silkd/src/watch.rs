@@ -1,5 +1,5 @@
 //! `fs.watch`: stream filesystem events under a path until the client
-//! disconnects. Watch is the one connection-bound verb — an event feed has no
+//! disconnects. Like every connection-bound verb, an event feed has no
 //! meaningful detached state, so it lives only as long as its connection.
 
 use notify::{RecursiveMode, Watcher};
@@ -58,8 +58,6 @@ where
     }
 }
 
-/// A full channel drops the sender: the closed channel is the overflow
-/// signal, a wakeup the parked loop cannot miss.
 fn forward_frames(tx: &mut Option<mpsc::Sender<Response>>, frames: Vec<Response>) {
     let Some(sender) = tx.as_ref() else { return };
     for frame in frames {

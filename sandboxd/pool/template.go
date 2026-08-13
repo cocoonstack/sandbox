@@ -275,8 +275,8 @@ type goldenResolution struct {
 
 // resolveGolden resolves a key's clone source: the configured pool's local
 // golden (no release), else a promoted template fetched from the store;
-// empty dir cold-boots. Only a true absence cold-boots — a backend failure
-// propagates rather than silently booting a template name as an image ref.
+// empty dir cold-boots. A cross-tenant or absent record cold-boots; a backend
+// failure propagates rather than booting a template name as an image ref.
 func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant string) (goldenResolution, error) {
 	m.mu.Lock()
 	var dir string

@@ -491,7 +491,7 @@ list, _ := client.Sandboxes(ctx)          // id, key, deadline, claim_ref — ne
 info, _ := client.Drain(ctx)              // cordon: refuse new claims, run leases out
 info, _ = client.Uncordon(ctx)
 info, _ = client.SetPools(ctx, pools)     // retune warm targets without a restart
-info, _ = client.SetPoolsCluster(ctx, pools)
+res, _ := client.SetPoolsCluster(ctx, pools) // per-node results; retry the failures
 sb = client.Attach(ownerAddr, id, token)  // bind a known handle, no lookup round-trip
 ```
 

@@ -25,6 +25,7 @@ type PoolKey struct {
 	Template string   `json:"template"`
 	Net      NetShape `json:"net"`
 	Size     Size     `json:"size"`
+	Engine   Engine   `json:"engine,omitempty"`
 }
 
 // PoolStatus reports one warm pool on a node.
@@ -49,7 +50,6 @@ type SandboxSummary struct {
 	ClaimRef       string    `json:"claim_ref,omitempty"`
 }
 
-// sandboxListResponse is the wire envelope of GET /v1/sandboxes.
 type sandboxListResponse struct {
 	Sandboxes []SandboxSummary `json:"sandboxes"`
 }
@@ -59,8 +59,7 @@ func (c *Client) Info(ctx context.Context) (*NodeInfo, error) {
 	return doJSONPtr[NodeInfo](ctx, c, http.MethodGet, c.addr, "/v1/info", nil, c.apiToken, "info")
 }
 
-// Sandboxes lists the live claims this token may see — the read side of
-// WithClaimRef, so a caller can map its own reference back to a sandbox.
+// Sandboxes lists the live claims this token may see.
 func (c *Client) Sandboxes(ctx context.Context) ([]SandboxSummary, error) {
 	reply, err := doJSON[sandboxListResponse](ctx, c, http.MethodGet, c.addr, "/v1/sandboxes", nil, c.apiToken, "list sandboxes")
 	if err != nil {

@@ -66,13 +66,12 @@ class Sandbox:
         with self._dial() as conn:
             conn.send("exec", argv=argv, cwd=cwd or None, env=env,
                       user=user or None, session=session or None)
-            # The guest blocks writing output once its stdout buffer fills, and
-            # stops draining stdin while it does, so feeding stdin to completion
-            # before reading deadlocks on any payload past the socket buffers.
+            # The guest stops draining stdin while blocked writing stdout, so
+            # feeding it to completion before reading deadlocks.
             pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True)
             pump.start()
             code = _pump_stdio(conn, on_stdout, on_stderr)
-            pump.join()
+        pump.join()  # the closed conn fails a stalled send, so this cannot hang
         if code is None:
             raise ProtocolError("exec stream ended without an exit frame")
         return code

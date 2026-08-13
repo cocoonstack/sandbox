@@ -14,6 +14,7 @@ type PoolSpec struct {
 	Template                  string   `json:"template"`
 	Net                       NetShape `json:"net,omitempty"`
 	Size                      Size     `json:"size,omitempty"`
+	Engine                    Engine   `json:"engine,omitempty"`
 	Warm                      int      `json:"warm"`
 	WarmMax                   int      `json:"warm_max,omitempty"`
 	IdleHibernateSeconds      int      `json:"idle_hibernate_seconds,omitempty"`

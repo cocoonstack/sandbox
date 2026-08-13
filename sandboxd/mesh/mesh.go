@@ -288,8 +288,6 @@ func (m *Mesh) owners(match func(NodeState) bool) []string {
 	return owners
 }
 
-// admit marks a node live: merge ignores gossip about anyone else, so a peer
-// that has not yet noticed a death cannot reintroduce it.
 func (m *Mesh) admit(nodeID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -373,8 +371,7 @@ func (d *delegate) MergeRemoteState(buf []byte, _ bool) {
 
 var _ memberlist.EventDelegate = (*eventDelegate)(nil)
 
-// eventDelegate prunes the placement view when SWIM reports a node gone, so a
-// dead peer stops attracting redirects.
+// eventDelegate tracks SWIM membership: admit on join, prune the view on leave.
 type eventDelegate Mesh
 
 func (e *eventDelegate) NotifyJoin(n *memberlist.Node) { (*Mesh)(e).admit(n.Name) }

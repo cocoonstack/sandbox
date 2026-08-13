@@ -134,10 +134,8 @@ type SandboxSummary struct {
 	Archived       bool           `json:"archived,omitempty"`
 	FromCheckpoint string         `json:"from_checkpoint,omitempty"`
 	Volumes        []types.Volume `json:"volumes,omitempty"`
-	// ClaimRef echoes the caller reference recorded at claim time (the
-	// aggregated apiserver's k8s "<namespace>/<name>"), so the operator index
-	// can map this sandbox back to the name it was claimed under. Empty for
-	// warm-pool, fork, and checkpoint-branch claims.
+	// ClaimRef echoes the caller reference recorded at claim time; empty for
+	// fork and checkpoint-branch claims.
 	ClaimRef string `json:"claim_ref,omitempty"`
 }
 

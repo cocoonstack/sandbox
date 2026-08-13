@@ -101,9 +101,9 @@ func toolCreateSandbox(ctx context.Context, s *server, raw json.RawMessage) (str
 	if err := parse(raw, &args); err != nil {
 		return "", err
 	}
-	// An agent session outlives the node's 5-minute default, and no tool
-	// renews a lease, so the sandbox would vanish mid-conversation.
-	ttl := time.Duration(cmp.Or(args.TTLSeconds, int(defaultToolTTL.Seconds()))) * time.Second
+	// An agent session outlives the node's 5-minute default and nothing renews
+	// a lease, so the sandbox would vanish mid-conversation.
+	ttl := cmp.Or(time.Duration(args.TTLSeconds)*time.Second, defaultToolTTL)
 	opts := []sandbox.Option{sandbox.WithTimeout(ttl)}
 	if args.Net != "" {
 		opts = append(opts, sandbox.WithNetwork(sandbox.NetShape(args.Net)))

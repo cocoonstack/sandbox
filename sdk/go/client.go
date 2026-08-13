@@ -408,8 +408,7 @@ func encodeBody(verb string, v any) ([]byte, error) {
 	return body, nil
 }
 
-// APIError is a non-2xx control-plane reply. Status is exported because the
-// SDK's own redirect walk branches on it, so callers need it too.
+// APIError is a non-2xx control-plane reply.
 type APIError struct {
 	Verb    string
 	Status  int
