@@ -139,8 +139,58 @@ async fn push_bad_archive_reports_tar_failure() {
 
 #[tokio::test]
 async fn pull_missing_path_errors() {
+    // Parent exists; the leaf itself is missing.
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("xyz");
+    let frames =
+        exchange(&[json!({"op":"fs_pull","path":missing.to_str().unwrap()}).to_string()]).await;
+    assert_eq!(
+        type_of(frames.last().unwrap()),
+        "error",
+        "missing leaf: {frames:?}"
+    );
+    assert_eq!(frames.last().unwrap()["kind"], "not_found");
+}
+
+#[tokio::test]
+async fn pull_missing_parent_errors_not_found() {
     let frames = exchange(&[json!({"op":"fs_pull","path":"/no/such/dir/xyz"}).to_string()]).await;
-    assert_eq!(type_of(frames.last().unwrap()), "error");
+    assert_eq!(
+        type_of(frames.last().unwrap()),
+        "error",
+        "missing parent: {frames:?}"
+    );
+    assert_eq!(frames.last().unwrap()["kind"], "not_found");
+}
+
+#[tokio::test]
+async fn pull_dangling_symlink_archives_the_link() {
+    use std::os::unix::fs::symlink;
+    let src = tempfile::tempdir().unwrap();
+    let link = src.path().join("dangling");
+    symlink("/no/such/target", &link).unwrap();
+
+    let frames =
+        exchange(&[json!({"op":"fs_pull","path":link.to_str().unwrap()}).to_string()]).await;
+    assert_eq!(
+        type_of(frames.last().unwrap()),
+        "done",
+        "pull of a dangling symlink must succeed: {frames:?}"
+    );
+    let archive = payload(&frames, "data");
+
+    let out = tempfile::tempdir().unwrap();
+    sys_tar_extract(&archive, out.path());
+    let extracted = out.path().join("dangling");
+    let meta = std::fs::symlink_metadata(&extracted).unwrap();
+    assert!(
+        meta.file_type().is_symlink(),
+        "archive must carry the link itself, not its (missing) target"
+    );
+    assert_eq!(
+        std::fs::read_link(&extracted).unwrap(),
+        Path::new("/no/such/target")
+    );
 }
 
 #[tokio::test]

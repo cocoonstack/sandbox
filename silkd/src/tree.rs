@@ -52,6 +52,11 @@ pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
         (Some(par), Some(n)) if !n.is_empty() => (par.to_path_buf(), n.to_os_string()),
         _ => return proto::error_frame(w, ErrorKind::BadRequest, "invalid path").await,
     };
+    // symlink_metadata, not metadata: a dangling symlink is a valid tar source
+    // (tar archives the link itself), and following it would wrongly 404 it.
+    if let Err(e) = tokio::fs::symlink_metadata(p).await {
+        return err_frame(w, &e, "stat source").await;
+    }
     let cwd = if parent.as_os_str().is_empty() {
         Path::new(".").to_path_buf()
     } else {
