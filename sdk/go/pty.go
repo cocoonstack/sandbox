@@ -3,7 +3,6 @@ package sandbox
 import (
 	"context"
 	"io"
-	"net"
 	"sync"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
@@ -64,7 +63,7 @@ func (p *Pty) Resize(ctx context.Context, cols, rows uint16) error {
 func (p *Pty) Close() error {
 	p.closeOnce.Do(func() {
 		p.stop()
-		_ = p.out.CloseWithError(net.ErrClosed)
+		_ = p.out.Close()
 	})
 	return nil
 }
