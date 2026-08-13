@@ -164,6 +164,29 @@ func TestMountVolumeWaitsForDelayedSysfsSerial(t *testing.T) {
 	}
 }
 
+func TestMountVolumeWaitsForDelayedDevNode(t *testing.T) {
+	path := sockPath(t)
+	fake := serveFakeSilkd(t, path)
+	configureVolumeDevices(fake)
+	fake.mu.Lock()
+	fake.statMisses["/dev/vdc"] = 3
+	fake.mu.Unlock()
+	if err := New("cocoon", nil, nil, false, "").MountVolume(
+		t.Context(), path, "imagenet", "/datasets/training", false,
+	); err != nil {
+		t.Fatalf("MountVolume: %v", err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.listCalls != 4 {
+		t.Errorf("fs_list calls = %d, want 4 (3 misses + the successful poll)", fake.listCalls)
+	}
+	if got := fake.statCalls[len(fake.statCalls)-1]; got != "/dev/vdc" {
+		t.Errorf("last fs_stat = %q, want target device", got)
+	}
+}
+
 func TestMountVolumeStopsAtFailedStage(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
@@ -173,6 +196,7 @@ func TestMountVolumeStopsAtFailedStage(t *testing.T) {
 	}{
 		{"list", func(f *fakeSilkd) { f.listErr = "list failed" }, "wait for volume device imagenet", 0},
 		{"read", func(f *fakeSilkd) { f.readErr["/sys/block/vda/serial"] = "read failed" }, "wait for volume device imagenet", 0},
+		{"stat", func(f *fakeSilkd) { f.statErr["/dev/vdc"] = "stat failed" }, "wait for volume device imagenet", 0},
 		{"mkdir", func(f *fakeSilkd) { f.execCode, f.execFailAt = 3, 1 }, "create volume mount point", 1},
 		{"mount", func(f *fakeSilkd) { f.execCode, f.execFailAt = 3, 2 }, "mount volume imagenet", 2},
 	} {
@@ -215,6 +239,21 @@ func TestMountVolumeDeviceProbeIsBoundedAndCancelable(t *testing.T) {
 	}
 }
 
+func TestMountVolumeDevNodeNeverAppearsTimesOut(t *testing.T) {
+	path := sockPath(t)
+	fake := serveFakeSilkd(t, path)
+	configureVolumeDevices(fake)
+	fake.mu.Lock()
+	delete(fake.stat, "/dev/vdc")
+	fake.mu.Unlock()
+	err := New("cocoon", nil, nil, false, "").MountVolume(
+		t.Context(), path, "imagenet", "/datasets/training", false,
+	)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "wait for volume device imagenet") {
+		t.Errorf("got %v, want a bounded wait-for-device timeout", err)
+	}
+}
+
 func configureVolumeDevices(f *fakeSilkd) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -225,4 +264,5 @@ func configureVolumeDevices(f *fakeSilkd) {
 	}
 	f.serial["/sys/block/vda/serial"] = []byte("root\n")
 	f.serial["/sys/block/vdc/serial"] = []byte("imagenet\n")
+	f.stat["/dev/vdc"] = true
 }
