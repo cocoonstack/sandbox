@@ -30,6 +30,7 @@ type previewClaims struct {
 
 // PreviewManager is the slice of the pool manager the preview path needs.
 type PreviewManager interface {
+	PreviewTouch(ctx context.Context, id string, port uint16) error
 	PreviewDial(ctx context.Context, id string, port uint16) (net.Conn, error)
 }
 
@@ -48,10 +49,12 @@ func NewPreviewServer(secret, base, owner string, mgr PreviewManager) *PreviewSe
 		return nil
 	}
 	p := &PreviewServer{secret: []byte(secret), base: base, owner: owner, mgr: mgr}
-	// Every request dials through PreviewDial so release revokes a URL even while
-	// VM removal is waiting for its eventual retry.
+	// One shared transport so a page's sub-resource fan-out reuses kept-alive
+	// guest conns; the Director keys each request's host to sandbox:port so
+	// the idle pool never mixes claims. Revocation rides PreviewTouch in
+	// serve — pooled conns skip this dial.
 	p.transport = &http.Transport{
-		DisableKeepAlives: true,
+		IdleConnTimeout: 90 * time.Second,
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 			id, portStr, err := net.SplitHostPort(addr)
 			if err != nil {
@@ -98,10 +101,15 @@ func (p *PreviewServer) serve(w http.ResponseWriter, r *http.Request) {
 		p.forward(w, r, claims.Owner)
 		return
 	}
+	if err := p.mgr.PreviewTouch(r.Context(), claims.ID, claims.Port); err != nil {
+		http.Error(w, "preview target unreachable", http.StatusBadGateway)
+		return
+	}
 	p.proxyLocal(w, r, claims)
 }
 
-// proxyLocal uses the live claim lookup as stateless revocation.
+// proxyLocal reverse-proxies to the guest port over the pooled relay
+// transport; serve's PreviewTouch has already authorized the request.
 func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claims previewClaims) {
 	rp := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
