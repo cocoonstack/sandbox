@@ -2024,7 +2024,7 @@ func (f *fakeManager) DeleteTemplate(_ context.Context, key types.PoolKey, tenan
 	return f.deleteGolden(key)
 }
 
-func (f *fakeManager) HasGolden(context.Context, types.PoolKey) bool {
+func (f *fakeManager) HasGolden(context.Context, types.PoolKey, string) bool {
 	return f.hasGolden
 }
 
@@ -2032,7 +2032,7 @@ func (f *fakeManager) HasPoolGolden(types.PoolKey) bool {
 	return f.hasPoolGolden
 }
 
-func (f *fakeManager) HasPromotedTemplate(context.Context, types.PoolKey) bool {
+func (f *fakeManager) HasPromotedTemplate(context.Context, types.PoolKey, string) bool {
 	return f.hasPromoted
 }
 

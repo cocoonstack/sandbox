@@ -348,7 +348,7 @@ func TestPooledKeyOutranksPromotedTemplate(t *testing.T) {
 	}
 	m.pools[key].goldenDir = "/goldens/pooled"
 
-	if m.HasPromotedTemplate(t.Context(), key) {
+	if m.HasPromotedTemplate(t.Context(), key, "") {
 		t.Error("a pooled key reports as promoted, disagreeing with both resolveGolden and the gossip")
 	}
 	if hashes := m.TemplateHashes(); slices.Contains(hashes, key.Hash()) {

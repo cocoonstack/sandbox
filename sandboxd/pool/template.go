@@ -144,8 +144,8 @@ func (m *Manager) TemplateHashes() []string {
 // boot — a configured pool golden or a promoted template in the store. The
 // tplSet answers without a store read; only a shared-store template promoted
 // elsewhere after startup falls through to the backend.
-func (m *Manager) HasGolden(ctx context.Context, key types.PoolKey) bool {
-	return m.HasPoolGolden(key) || m.HasPromotedTemplate(ctx, key)
+func (m *Manager) HasGolden(ctx context.Context, key types.PoolKey, tenant string) bool {
+	return m.HasPoolGolden(key) || m.HasPromotedTemplate(ctx, key, tenant)
 }
 
 // HasPoolGolden reports whether a configured pool can serve key from its own
@@ -157,22 +157,32 @@ func (m *Manager) HasPoolGolden(key types.PoolKey) bool {
 	return p != nil && p.goldenDir != ""
 }
 
-// HasPromotedTemplate reports whether key resolves to a promoted template.
-// A hash a configured pool owns is subtracted, as TemplateHashes does for the
-// gossip: resolveGolden serves it from the pool golden, never the template.
-func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey) bool {
+// HasPromotedTemplate reports whether key resolves to a promoted template this
+// tenant may claim. A hash a configured pool owns is subtracted, as
+// TemplateHashes does for the gossip: resolveGolden serves it from the pool
+// golden, never the template. The tenant test matches resolveGolden's, so
+// routing cannot promise a golden the claim will then refuse.
+func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, tenant string) bool {
 	if m.pooledHash(key.Hash()) {
 		return false
 	}
 	id := store.TemplateID(key.Hash())
 	m.tplMu.Lock()
-	_, cached := m.tplSet[id]
+	owner, cached := m.tplSet[id]
 	m.tplMu.Unlock()
-	if cached {
-		return true
+	if !cached {
+		// Only a shared-store template promoted elsewhere after startup.
+		raw, err := m.tpls.ReadMeta(ctx, id)
+		if err != nil {
+			return false
+		}
+		var rec templateRecord
+		if json.Unmarshal(raw, &rec) != nil {
+			return false
+		}
+		owner = rec.Tenant
 	}
-	_, err := m.tpls.ReadMeta(ctx, id)
-	return err == nil
+	return owner == "" || tenantOwns(tenant, owner)
 }
 
 // pooledHash reports whether a configured pool occupies this hash — the
@@ -353,7 +363,7 @@ func (m *Manager) commitTemplate(ctx context.Context, staging, id, tenant string
 		return "", fmt.Errorf("publish template: %w", err)
 	}
 	m.tplMu.Lock()
-	m.tplSet[id] = struct{}{}
+	m.tplSet[id] = tenant
 	m.tplMu.Unlock()
 	return digest, nil
 }

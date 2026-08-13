@@ -89,9 +89,9 @@ type Manager interface {
 	FetchCheckpoint(ctx context.Context, ckptID string) (dir string, meta []byte, release func(), err error)
 	DeleteCheckpoint(ctx context.Context, ckptID, tenant string, scope pool.DeleteScope) error
 	ClaimDeadline(id, token string) (time.Time, error)
-	HasGolden(ctx context.Context, key types.PoolKey) bool
+	HasGolden(ctx context.Context, key types.PoolKey, tenant string) bool
 	HasPoolGolden(key types.PoolKey) bool
-	HasPromotedTemplate(ctx context.Context, key types.PoolKey) bool
+	HasPromotedTemplate(ctx context.Context, key types.PoolKey, tenant string) bool
 	AgentSocket(id, token string) (string, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, error)
 	SetPools(ctx context.Context, pools []config.PoolSpec) error
@@ -252,7 +252,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	// this node provision (golden clone or cold boot).
 	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef, nil)
 	if errors.Is(err, pool.ErrNoWarm) {
-		if s.redirectClaim(r.Context(), w, req, key, hash) {
+		if s.redirectClaim(r.Context(), w, req, key, hash, tenant) {
 			return
 		}
 		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, nil)
@@ -320,7 +320,7 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 		return false, err
 	}
 
-	localTemplate := s.mgr.HasPromotedTemplate(ctx, key)
+	localTemplate := s.mgr.HasPromotedTemplate(ctx, key, tenant)
 	// Per-node content consistency: a peer's promoted template must not escalate
 	// volume claims off the pool golden every other claim here resolves to. An
 	// explicit RequirePromoted still passes through, for the manager to refuse.
@@ -361,7 +361,7 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 // template owner when we lack a golden (so we don't cold-boot a nonexistent
 // image ref). A no_redirect request must resolve locally, never bounce again,
 // to avoid a two-node ping-pong.
-func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req types.ClaimRequest, key types.PoolKey, hash string) bool {
+func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req types.ClaimRequest, key types.PoolKey, hash, tenant string) bool {
 	if s.placer == nil || req.NoRedirect {
 		return false
 	}
@@ -370,7 +370,7 @@ func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req t
 	}
 	// TemplateOwners is in-memory; HasGolden can be a store round-trip.
 	owners := s.placer.TemplateOwners(hash)
-	return len(owners) > 0 && !s.mgr.HasGolden(ctx, key) && writeRedirect(w, owners)
+	return len(owners) > 0 && !s.mgr.HasGolden(ctx, key, tenant) && writeRedirect(w, owners)
 }
 
 // handleRelease releases a claimed sandbox. Two credentials authorize it: the

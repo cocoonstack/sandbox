@@ -316,11 +316,12 @@ type Manager struct {
 	ckptTTL      time.Duration
 	ckptSweeping atomic.Bool
 
-	// tplSet caches the template ids visible in the store so the 1s gossip
-	// tick never touches the backend (an s3 listing is network I/O); local
-	// promotes/deletes update it, startup loads it.
+	// tplSet caches each visible template id against its owning tenant so the
+	// 1s gossip tick and the claim-path ownership test never touch the backend
+	// (an s3 read is network I/O); local promotes/deletes update it, startup
+	// loads it. Empty value means the operator promoted it.
 	tplMu  sync.Mutex
-	tplSet map[string]struct{}
+	tplSet map[string]string
 
 	// recLocks serializes same-id store record mutations and holds off a
 	// re-publish swap while a clone reads the old generation (per id, RW).
@@ -434,12 +435,12 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		return nil, err
 	}
 	m.ckptTTL = time.Duration(cfg.CheckpointTTLHours) * time.Hour
-	m.tplSet = map[string]struct{}{}
+	m.tplSet = map[string]string{}
 	if metas, listErr := m.tpls.Metas(ctx); listErr == nil {
 		for _, raw := range metas {
 			var rec templateRecord
 			if json.Unmarshal(raw, &rec) == nil && rec.ID != "" {
-				m.tplSet[rec.ID] = struct{}{}
+				m.tplSet[rec.ID] = rec.Tenant
 			}
 		}
 	}

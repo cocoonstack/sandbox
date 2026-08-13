@@ -157,7 +157,7 @@ func TestDeleteTemplate(t *testing.T) {
 	if err := m.DeleteTemplate(t.Context(), key, ""); err != nil {
 		t.Fatalf("DeleteTemplate: %v", err)
 	}
-	if m.HasGolden(t.Context(), key) {
+	if m.HasGolden(t.Context(), key, "") {
 		t.Error("template still resolvable after delete")
 	}
 	// The next claim for the deleted template cold-boots instead of cloning.
@@ -356,6 +356,29 @@ func TestTemplateClaimIsTenantScoped(t *testing.T) {
 				t.Error("claim did not resolve from the promoted template")
 			}
 		})
+	}
+}
+
+func TestHasPromotedTemplateIsTenantScoped(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	key, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "acme-private", "acme")
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+
+	// Routing must answer what a claim would: promising beta a golden here
+	// makes redirectClaim skip the peer hop and cold-boot the name as an image.
+	if m.HasPromotedTemplate(t.Context(), key, "beta") {
+		t.Error("beta sees acme's template as a local golden")
+	}
+	for _, tenant := range []string{"acme", ""} {
+		if !m.HasPromotedTemplate(t.Context(), key, tenant) {
+			t.Errorf("tenant %q lost its own template", tenant)
+		}
 	}
 }
 
