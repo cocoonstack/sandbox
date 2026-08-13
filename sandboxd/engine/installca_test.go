@@ -81,6 +81,10 @@ type fakeSilkd struct {
 	readErr    map[string]string
 	listCalls  int
 	readCalls  []string
+	stat       map[string]bool
+	statMisses map[string]int
+	statErr    map[string]string
+	statCalls  []string
 }
 
 func serveFakeSilkd(t *testing.T, path string) *fakeSilkd {
@@ -94,6 +98,9 @@ func serveFakeSilkd(t *testing.T, path string) *fakeSilkd {
 		serial:     make(map[string][]byte),
 		readMisses: make(map[string]int),
 		readErr:    make(map[string]string),
+		stat:       make(map[string]bool),
+		statMisses: make(map[string]int),
+		statErr:    make(map[string]string),
 	}
 	go func() {
 		for {
@@ -137,6 +144,8 @@ func (f *fakeSilkd) serve(conn net.Conn) {
 		f.handleList(conn, req.Path)
 	case "fs_read":
 		f.handleRead(conn, req.Path)
+	case "fs_stat":
+		f.handleStat(conn, req.Path)
 	case "exec":
 		f.handleExec(conn, req.Argv, req.Env)
 	}
@@ -228,6 +237,27 @@ func (f *fakeSilkd) handleRead(conn net.Conn, path string) {
 	}
 	writeFakeSilkdResponse(conn, &wire.DataResp{Data: data})
 	writeFakeSilkdResponse(conn, &wire.Done{})
+}
+
+func (f *fakeSilkd) handleStat(conn net.Conn, path string) {
+	f.mu.Lock()
+	f.statCalls = append(f.statCalls, path)
+	ok := f.stat[path]
+	reply := f.statErr[path]
+	if f.statMisses[path] > 0 {
+		f.statMisses[path]--
+		ok = false
+	}
+	f.mu.Unlock()
+	if reply != "" {
+		writeFakeSilkdResponse(conn, &wire.ErrorResp{Kind: wire.KindInternal, Message: reply})
+		return
+	}
+	if !ok {
+		writeFakeSilkdResponse(conn, &wire.ErrorResp{Kind: wire.KindNotFound, Message: path})
+		return
+	}
+	writeFakeSilkdResponse(conn, &wire.Stat{Info: wire.FileInfo{Kind: wire.FileKindFile}})
 }
 
 func writeFakeSilkdResponse(conn net.Conn, resp wire.Response) {

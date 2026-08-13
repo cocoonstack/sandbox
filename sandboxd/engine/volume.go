@@ -119,16 +119,25 @@ func (e *Engine) findVolumeDevice(ctx context.Context, vsockSocket, name string)
 	}
 	for _, entry := range entries {
 		serial, err := e.silkdReadFile(ctx, vsockSocket, "/sys/block/"+entry.Name+"/serial")
-		var respErr *wire.ErrorResp
-		if errors.As(err, &respErr) && respErr.Kind == wire.KindNotFound {
+		if isNotFound(err) {
 			continue
 		}
 		if err != nil {
 			return "", false, err
 		}
-		if strings.TrimSpace(string(serial)) == name {
-			return "/dev/" + entry.Name, true, nil
+		if strings.TrimSpace(string(serial)) != name {
+			continue
 		}
+		device := "/dev/" + entry.Name
+		// The kernel publishes /sys/block before devtmpfs creates the node, so
+		// a serial match can still precede the device actually existing.
+		if _, err := e.silkdStat(ctx, vsockSocket, device); err != nil {
+			if isNotFound(err) {
+				return "", false, nil
+			}
+			return "", false, err
+		}
+		return device, true, nil
 	}
 	return "", false, nil
 }
@@ -147,4 +156,9 @@ func (e *Engine) diskAttachArgs(vmName string, spec VolumeSpec) ([]string, error
 		args = append(args, "--readonly")
 	}
 	return append(args, "--directio", directIO), nil
+}
+
+func isNotFound(err error) bool {
+	var respErr *wire.ErrorResp
+	return errors.As(err, &respErr) && respErr.Kind == wire.KindNotFound
 }
