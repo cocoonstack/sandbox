@@ -1472,7 +1472,7 @@ func TestPreviewHandlerZeroDeadlineMintsLiveToken(t *testing.T) {
 	mgr := &fakeManager{claimDeadline: func(string, string) (time.Time, error) {
 		return time.Time{}, nil
 	}}
-	ps := NewPreviewServer("secret", "node:7777", &fakePreviewMgr{})
+	ps := NewPreviewServer("secret", "node:7777", "node:7777", &fakePreviewMgr{})
 	srv := New("", nil, "node:7777", mgr, &fakeDialer{}, nil, nil, nil, ps)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })

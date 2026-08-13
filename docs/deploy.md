@@ -96,7 +96,7 @@ sandboxd reads one JSON file (`-config`, default
 | `refill_concurrency` | 0 (auto) | concurrent VM provisioning budget, shared by warm-pool refills, fork clones, and the reap/hibernate/reconcile engine batches. 0 sizes it from the node: `NumCPU*2/3` clamped to [4, 256] — a 384-core node gets 256; small nodes keep a floor of 4 |
 | `preview_listen` | (off) | address for a preview HTTP server that serves guest ports under signed URLs; needs `preview_secret` |
 | `preview_secret` | — | cluster-shared HMAC secret signing preview tokens (all nodes share one) |
-| `preview_advertise` | = `preview_listen` | the base URL a browser/proxy reaches this node's preview server at |
+| `preview_advertise` | = `preview_listen` | the browser-facing preview base URL; nodes behind one TLS proxy may share it, while signed tokens route internally through each owner's `advertise_addr` |
 | `checkpoint_dir` | `<data_dir>/checkpoints` | where checkpoints and promoted templates live. Point it at a shared FUSE mount (JuiceFS over object storage, NFS) and every node sharing the mount can branch every checkpoint — records are generation-addressed with `meta.json` as the atomic commit pointer, so no cross-node locking is required of the filesystem. A re-publish retains its superseded export generation for at least ~1h and until a following hourly sweep so an in-flight clone that resolved the old metadata can finish; budget the current generation plus every generation retained across that grace-and-sweep window. An explicit delete can make a concurrent clone fail visibly. One contract on any shared root (mount or bucket): a template key has a single writer — promotes go to the sandbox's owner node, and operators must not race promotes of one name from different nodes (checkpoint ids are node-generated and never collide) |
 | `checkpoint_store` | dir | checkpoint AND promoted-template backend (both live in one store root, id-namespaced ck_/tp_): `{"kind": "s3", "s3": {"bucket": "…", "prefix": "ck/", "endpoint": "…", "region": "…", "force_path_style": true}}` stores checkpoints in object storage (any node claims any checkpoint, no shared mount needed). Credentials come from the standard AWS chain (env/IAM role), never this file. Re-publish retains prior export generations until Delete so an in-flight fetch that selected old metadata can finish; budget storage for those generations. An explicit S3 Delete can still make a concurrent fetch that has not finished materializing fail visibly. A crash between upload and the meta.json commit marker leaves orphan objects invisible to listings — add an S3 lifecycle rule to reclaim them. Absent = the dir backend at `checkpoint_dir` |
 | `checkpoint_ttl_hours` | 0 (keep forever) | ages out checkpoints older than this; the sweep runs hourly and at startup. Explicit deletes never wait for it. Must be nonzero and match fleet-wide when `checkpoint_peer_heal` is on — it is the expiry eligibility point for a healed replica a delete broadcast missed, after which its next successful hourly sweep removes it; persistent sweep failure extends retention until one succeeds, so it is not a hard ceiling |
@@ -452,9 +452,9 @@ sandboxd:
   life is clamped to the claim's lease.
 - **Serving**: any node's preview listener verifies the token (no shared
   state), then reverse-proxies to the guest port over the relay if it owns
-  the sandbox, or forwards to the owner node otherwise. A released sandbox
-  is gone from the claim map, so its URL stops resolving — revocation is
-  the liveness lookup, not a list.
+  the sandbox, or forwards over HTTP to the owner node's `advertise_addr`
+  otherwise. A released sandbox is gone from the claim map, so its URL stops
+  resolving — revocation is the liveness lookup, not a list.
 - **The public entry point is a commodity dumb proxy.** Because any node
   can accept and forward, front the nodes with whatever terminates TLS and
   round-robins: a cloud HTTPS load balancer with a managed wildcard cert

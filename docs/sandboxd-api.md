@@ -99,9 +99,21 @@ can lag the serial match the same way it does for an eager mount's device
 settle. Confirm both before mounting:
 
 ```sh
-for dev in /sys/block/*/serial; do
-  [ "$(cat "$dev")" = scratch-db ] && echo "/dev/$(basename "$(dirname "$dev")")"
+device=
+tries=0
+while [ "$tries" -lt 200 ]; do
+  for serial in /sys/block/*/serial /sys/block/*/device/serial; do
+    [ -r "$serial" ] || continue
+    [ "$(cat "$serial")" = scratch-db ] || continue
+    block=${serial#/sys/block/}
+    candidate="/dev/${block%%/*}"
+    [ -b "$candidate" ] && { device="$candidate"; break 2; }
+  done
+  tries=$((tries + 1))
+  sleep 0.01
 done
+[ -n "$device" ] || { echo "scratch-db device not ready" >&2; exit 1; }
+printf '%s\n' "$device"
 ```
 
 Then mount it however the workload needs. A `ro` entry is attached
@@ -333,9 +345,9 @@ guest HTTP port from a browser: body `{"token": "...", "port": 8080,
 "ttl_seconds": 0}` → `{"url": "http://<preview_advertise>/p/<token>/"}`.
 The URL's life is clamped to the claim's remaining lease. 501 when the node
 has no `preview_listen`. The signed token embeds the sandbox id, port, and
-owner node, so any node's preview listener can serve it (forwarding to the
-owner) and a released sandbox's URL simply stops resolving — no revocation
-list. See [deploy](deploy.md#preview-urls).
+owner `advertise_addr`, so any node's preview listener can serve it (forwarding
+to the owner's main listener) and a released sandbox's URL simply stops
+resolving — no revocation list. See [deploy](deploy.md#preview-urls).
 
 ## POST /v1/sandboxes/{id}/checkpoint
 
