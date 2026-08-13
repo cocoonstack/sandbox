@@ -288,8 +288,8 @@ func (m *Mesh) owners(match func(NodeState) bool) []string {
 	return owners
 }
 
-// admit records a node SWIM has seen join; merge accepts gossip only about
-// these, so a peer that has not noticed a death cannot reintroduce one.
+// admit marks a node live: merge ignores gossip about anyone else, so a peer
+// that has not yet noticed a death cannot reintroduce it.
 func (m *Mesh) admit(nodeID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
