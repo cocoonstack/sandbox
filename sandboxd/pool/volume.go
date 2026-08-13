@@ -168,10 +168,8 @@ func (m *Manager) resolveVolumes(key types.PoolKey, tenant string, requested []t
 	return resolved, nil
 }
 
-// confirmVolumesClean refuses a read-only claim of an image a writer left
-// dirty. It is the only marker check, and runs once the holds are taken: no
-// writer can be admitted alongside, so the marker is stable and it can only
-// mean a crashed writer — a live one is answered by admission as busy.
+// confirmVolumesClean refuses a read-only claim of a dirty image: run after
+// holds are taken, so the marker is stable and can only mean a crashed writer.
 func (m *Manager) confirmVolumesClean(volumes []resolvedVolume) error {
 	for _, volume := range volumes {
 		if !volume.applied.RW() && volumeDirty(volume.disk.Path) {
@@ -228,11 +226,8 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 }
 
 // quiesceVolumes unmounts a claim's writable mounts in reverse order and
-// returns the teardown its VM removal must finish. A failed unmount never
-// blocks teardown: the image keeps its marker and waits for a recovering
-// writer. Attach-only entries have no mount to bring down — removing the VM
-// closes their devices. Runs while the guest is still live, before the VM is
-// removed.
+// returns the teardown its VM removal must finish; a failed unmount keeps the
+// image's marker for a recovering writer, never blocking teardown.
 func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeTeardown {
 	td := volumeTeardown{holds: sb.Volumes}
 	mounts := writableMounts(sb.Volumes)
@@ -246,7 +241,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 	stuck := false
 	for _, volume := range slices.Backward(sb.Volumes) {
 		if !volume.RW() || volume.Mount == "" {
-			continue
+			continue // attach-only: no mount to bring down, VM removal closes the device
 		}
 		if err := m.eng.UnmountVolume(ctx, sb.VsockSocket, volume.Mount); err != nil {
 			logger.Errorf(ctx, err, "unmount volume %s of %s", volume.Name, sb.ID)
