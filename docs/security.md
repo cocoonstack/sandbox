@@ -25,8 +25,8 @@ exposing any part of a deployment beyond a single trusted host.
   toward the host, siblings, or the network beyond its lanes.
 - **What a compromised guest can reach.** On the none lane: nothing but
   vsock — the relay back to its own client and the guarded-egress proxy.
-  On the egress lane: the same vsock paths plus a NIC whose every packet
-  except IPv4 broadcast DHCP is dropped by an nftables lock in the host
+  On the egress lane: the same vsock paths plus a NIC whose every
+  guest-initiated packet except IPv4 broadcast DHCP is dropped by an nftables lock in the host
   root netns ([egress](egress.md)); the lock is fail-closed and applied
   before the claim is handed out. On both lanes the proxy refuses
   loopback, private, link-local (cloud metadata), CGN, and the

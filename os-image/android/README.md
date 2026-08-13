@@ -27,9 +27,9 @@ The base image (15.0) pulls anonymously from ghcr at docker and
 `sys.boot_completed=1` with zygote64 + system_server alive (Cloud Hypervisor,
 no NIC, 4 CPU / 8G).
 
-Do not revert to the previous `ghcr.io/jiaqing-simular/cocoon-android-vnc`
-pin: that build ships a broken dexpreopt boot-image chain that
-crash-loops zygote before the framework ever completes.
+Do not revert to the previous third-party VNC android pin: that build ships a
+broken dexpreopt boot-image chain that crash-loops zygote before the framework
+ever completes.
 
 ## Constraints
 

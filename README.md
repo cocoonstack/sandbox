@@ -67,9 +67,10 @@ performance) — source in
   `/boot/vmlinuz-sandbox` + `/boot/initrd.img-sandbox`
 - `os-image/` — VM images consuming the boot artifact: `base` (layered,
   for builds), `rt` (base squashed to one layer — the default template in
-  examples), `python`, `python-rt`, and `android`
-- `scripts/` — `boot-bench.sh` (boot phase timing) and `sandboxd-e2e.sh`
-  (bare-metal e2e, below)
+  examples), `python`, `python-rt`, `browser`, and `android`
+- `scripts/` — `boot-bench.sh` (boot phase timing), `bench.sh` (the published
+  benchmark procedure), `sandboxd-e2e.sh` (bare-metal e2e, below), plus the
+  `archive`/`egress`/`intercept` e2e drivers
 
 ## Build & test
 
@@ -118,6 +119,7 @@ TEMPLATE=rt:24.04 scripts/sandboxd-e2e.sh
   changed carriers (via `build-boot.yml` / `build-silkd.yml`,
   `workflow_call`) then os-images, in order, so the chain is deterministic
 - `build-os-images.yml` — bakes base + flavors FROM the sha-pinned carriers
+- `release.yml` — on a version tag, builds the release binaries and archives
 - `publish-pypi.yml` — on an `sdk-*-v*` tag, builds and publishes the
   matching package via PyPI Trusted Publishing (OIDC, per-package
   environment)
