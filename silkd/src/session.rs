@@ -38,8 +38,8 @@ impl Table {
         Self::default()
     }
 
-    /// Spawns a bash session, applies cwd/env, and registers it. A blank or
-    /// duplicate id yields a generated one.
+    /// Spawns a bash session, applies cwd/env, and registers it. A blank id
+    /// yields a generated one; a duplicate id is refused.
     pub async fn create(
         &self,
         id: Option<String>,
