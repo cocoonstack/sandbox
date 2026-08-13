@@ -142,7 +142,7 @@ func (m *Manager) Barrier(ctx context.Context, id string) {
 
 	bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 	defer cancel()
-	if puts, dels, err := sess.sy.pushCycle(bctx); err != nil {
+	if puts, dels, err := sess.sy.pushCycle(bctx, 0); err != nil { // settle=0: the barrier must publish hot files too
 		log.WithFunc("filecache.Barrier").Errorf(ctx, err, "final push for %s", id)
 	} else if puts+dels > 0 {
 		log.WithFunc("filecache.Barrier").Infof(ctx, "barrier %s: %d puts %d dels", id, puts, dels)
@@ -177,7 +177,7 @@ func (s *Session) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-pushT.C:
-			if puts, dels, err := s.sy.pushCycle(ctx); err != nil {
+			if puts, dels, err := s.sy.pushCycle(ctx, settleWindow); err != nil {
 				if ctx.Err() == nil {
 					logger.Warnf(ctx, "push %s: %v", s.id, err)
 				}

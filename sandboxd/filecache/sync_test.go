@@ -1,10 +1,16 @@
 package filecache
 
 import (
+	"archive/tar"
 	"bytes"
+	"context"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseListing(t *testing.T) {
@@ -156,5 +162,72 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// stubGuest serves a fixed find listing and enough of Guest for one pushCycle.
+type stubGuest struct {
+	listing string
+	tar     []byte // returned by ReadFile for the push tar
+}
+
+func (g *stubGuest) Run(_ context.Context, _ string, argv ...string) (string, error) {
+	cmd := argv[len(argv)-1]
+	if strings.Contains(cmd, "find") {
+		return g.listing, nil
+	}
+	return "", nil
+}
+func (g *stubGuest) WriteFile(context.Context, string, string, uint32, []byte) error { return nil }
+func (g *stubGuest) ReadFile(context.Context, string, string) ([]byte, error)        { return g.tar, nil }
+func (g *stubGuest) PushTar(context.Context, string, string, io.Reader) error        { return nil }
+func (g *stubGuest) Remove(context.Context, string, string, bool) error              { return nil }
+
+// TestPushCycleSettleWindow: a file whose mtime is inside the settle window is
+// held back by a periodic push (still being written) but published by the
+// barrier's settle=0 push — losing a hot file at teardown would lose data.
+func TestPushCycleSettleWindow(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws, fcDir, "journal"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	listing := "f\thot.bin\t" + strconv.FormatInt(now, 10) + ".0\t3\t\n"
+
+	var tarBuf bytes.Buffer
+	tw := tar.NewWriter(&tarBuf)
+	if err := tw.WriteHeader(&tar.Header{Name: "hot.bin", Mode: 0o644, Size: 3, Format: tar.FormatPAX}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("abc")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	g := &stubGuest{listing: listing, tar: tarBuf.Bytes()}
+	s := newSyncer(g, "sock", "/workspace", ws, "w1")
+
+	puts, _, err := s.pushCycle(t.Context(), settleWindow)
+	if err != nil {
+		t.Fatalf("settled push: %v", err)
+	}
+	if puts != 0 {
+		t.Fatalf("hot file published by periodic push: puts=%d", puts)
+	}
+	if _, ok := s.manifest["hot.bin"]; ok {
+		t.Fatal("hot file entered the manifest while held back")
+	}
+
+	puts, _, err = s.pushCycle(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("barrier push: %v", err)
+	}
+	if puts != 1 {
+		t.Fatalf("barrier push skipped the hot file: puts=%d", puts)
+	}
+	if b, err := os.ReadFile(filepath.Join(ws, "hot.bin")); err != nil || string(b) != "abc" {
+		t.Fatalf("hot.bin on NAS = %q, %v", b, err)
 	}
 }

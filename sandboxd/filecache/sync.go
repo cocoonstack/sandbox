@@ -73,15 +73,27 @@ func (s *syncer) bootstrap(ctx context.Context) error {
 
 // pushCycle diffs the guest tree against the baseline and publishes local
 // changes to the NAS plus a journal entry. Returns the counts for logging.
-func (s *syncer) pushCycle(ctx context.Context) (puts, dels int, err error) {
+// settleWindow keeps files whose mtime is this recent out of a periodic push:
+// a file still being written would otherwise ship whole every cycle — wasted
+// NAS bandwidth, and the vsock transfer steals guest I/O from the writer. The
+// barrier passes settle=0 so the final push publishes everything.
+const settleWindow = 3 * time.Second
+
+func (s *syncer) pushCycle(ctx context.Context, settle time.Duration) (puts, dels int, err error) {
 	listing, err := s.guestListing(ctx)
 	if err != nil {
 		return 0, 0, err
 	}
+	cutoff := time.Now().Add(-settle).Unix()
 	changed := map[string]entMeta{}
 	for p, m := range listing {
 		old, ok := s.manifest[p]
 		if !ok || old != m {
+			// Still hot: skip without touching the manifest, so the next
+			// cycle (or the barrier) picks it up once it settles.
+			if settle > 0 && m.Kind == "f" && m.MtimeS > cutoff {
+				continue
+			}
 			changed[p] = m
 		}
 	}
