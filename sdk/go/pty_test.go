@@ -19,7 +19,6 @@ func TestPtyEchoAndExit(t *testing.T) {
 	}
 	defer pty.Close()
 
-	// The fake echoes input; write a line and read it back.
 	if _, err = pty.Write([]byte("ping\n")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -35,7 +34,6 @@ func TestPtyEchoAndExit(t *testing.T) {
 		t.Fatalf("resize: %v", err)
 	}
 
-	// "exit" ends the shell → Read returns EOF and ExitCode is set.
 	if _, err := pty.Write([]byte("exit\n")); err != nil {
 		t.Fatalf("write exit: %v", err)
 	}
@@ -48,8 +46,6 @@ func TestPtyEchoAndExit(t *testing.T) {
 	}
 }
 
-// TestPtyCtxCancelIsTyped: canceling the OpenPty ctx must surface as a typed
-// context error through Read, matching Watcher and PortConn.
 func TestPtyCtxCancelIsTyped(t *testing.T) {
 	sb := fakeSandbox(t)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -63,5 +59,32 @@ func TestPtyCtxCancelIsTyped(t *testing.T) {
 	_, err = io.ReadAll(pty)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("Read after ctx cancel = %v, want context.Canceled", err)
+	}
+}
+
+func TestPtyCloseUnblocksUnreadOutput(t *testing.T) {
+	sb := fakeSandbox(t)
+	pty, err := sb.OpenPty(t.Context(), PtyOpts{Cols: 80, Rows: 24})
+	if err != nil {
+		t.Fatalf("OpenPty: %v", err)
+	}
+	if _, err = pty.Write([]byte("unread\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	stops := 0
+	stop := pty.stop
+	pty.stop = func() { stops++; stop() }
+
+	if err = pty.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err = pty.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if _, err = pty.Read(make([]byte, 1)); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("Read after Close = %v, want io.ErrClosedPipe", err)
+	}
+	if stops != 1 {
+		t.Errorf("stop called %d times, want 1", stops)
 	}
 }

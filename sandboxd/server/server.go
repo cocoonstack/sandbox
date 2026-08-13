@@ -227,6 +227,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/sandboxes", s.requireToken(s.handleSandboxes))
 	mux.HandleFunc("GET /metrics", s.requireRoot(s.handleMetrics))
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	if s.preview != nil {
+		mux.HandleFunc("/p/{token}/", s.preview.serve)
+	}
 	return mux
 }
 

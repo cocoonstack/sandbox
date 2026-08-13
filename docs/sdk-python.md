@@ -362,7 +362,8 @@ w.close()
 
 `watch` returns once the guest acknowledges the watch is armed — events
 caused after it returns are guaranteed captured. A bad path fails
-synchronously.
+synchronously; if the consumer falls too far behind, iteration raises the
+terminal overflow instead of silently dropping events.
 
 ## Git
 

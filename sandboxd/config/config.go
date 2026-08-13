@@ -221,10 +221,7 @@ type Config struct {
 	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitempty"`
 	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitempty"`
 
-	// PreviewListen, when set, starts a preview HTTP server on that address
-	// serving guest ports under signed URLs. PreviewSecret (cluster-shared)
-	// signs the tokens; PreviewAdvertise is the base a browser/proxy reaches
-	// this node's preview server at, defaulting to PreviewListen.
+	// PreviewAdvertise is the browser-facing base URL and may be shared behind one proxy.
 	PreviewListen    string `json:"preview_listen,omitempty"`
 	PreviewSecret    string `json:"preview_secret,omitempty"` //nolint:gosec // config field, not a hardcoded credential
 	PreviewAdvertise string `json:"preview_advertise,omitempty"`
