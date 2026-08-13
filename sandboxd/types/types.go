@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -275,13 +276,16 @@ type VMConfig struct {
 	Name string `json:"name"`
 }
 
-// Volume is one requested or applied dataset mount. Mount is empty only
-// before request validation; persisted and response entries are effective.
-// Mode is normalized to "" (read-only) or VolumeModeRW.
+// Volume is one requested or applied dataset mount. Mount is empty before
+// request validation and on an attach-only entry, whose device the caller
+// mounts itself. Mode is normalized to "" (read-only) or VolumeModeRW.
 type Volume struct {
 	Name  string `json:"name"`
 	Mount string `json:"mount,omitempty"`
 	Mode  string `json:"mode,omitempty"`
+	// AttachOnly carries the claim's flag into the pool's own validation pass;
+	// past it the empty Mount is the signal, so it is never stored or sent.
+	AttachOnly bool `json:"-"`
 }
 
 // RW reports whether the entry asks for write access.
@@ -325,11 +329,22 @@ func VolumeRWNames(volumes []Volume) []string {
 	return names
 }
 
+// VolumesAttachOnly reports whether request validation marked the set as the
+// caller's to mount.
+func VolumesAttachOnly(volumes []Volume) bool {
+	return slices.ContainsFunc(volumes, func(v Volume) bool { return v.AttachOnly })
+}
+
 // ValidateVolumes validates a request and returns detached entries with every
-// default mount filled and every mode normalized. The input is not modified.
-func ValidateVolumes(volumes []Volume) ([]Volume, error) {
+// default mount filled and every mode normalized. attachOnly instead leaves
+// every mount empty for the caller to mount itself, and rejects an entry that
+// carries one. The input is not modified.
+func ValidateVolumes(volumes []Volume, attachOnly bool) ([]Volume, error) {
 	if len(volumes) > MaxClaimVolumes {
 		return nil, fmt.Errorf("volumes must contain at most %d entries, got %d", MaxClaimVolumes, len(volumes))
+	}
+	if attachOnly && len(volumes) == 0 {
+		return nil, errors.New("volumes_attach_only requires at least one volume")
 	}
 	applied := make([]Volume, len(volumes))
 	names := make(map[string]struct{}, len(volumes))
@@ -348,6 +363,13 @@ func ValidateVolumes(volumes []Volume) ([]Volume, error) {
 		case "", VolumeModeRW:
 		default:
 			return nil, fmt.Errorf("volumes[%d] mode %q must be %s or %s", i, mode, VolumeModeRO, VolumeModeRW)
+		}
+		if attachOnly {
+			if volume.Mount != "" {
+				return nil, fmt.Errorf("volumes[%d] mount %q is meaningless when the caller mounts the device itself", i, volume.Mount)
+			}
+			applied[i] = Volume{Name: volume.Name, Mode: mode, AttachOnly: true}
+			continue
 		}
 		mount := volume.Mount
 		if mount == "" {
