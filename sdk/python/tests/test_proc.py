@@ -92,9 +92,8 @@ class BlockingStdinConn(FakeConn):
         self._read = False
 
     def send(self, op, **fields):
-        if op == "stdin" and not self._read:
-            if not self._room.acquire(blocking=False):
-                assert self._room.acquire(timeout=5), "stdin send deadlocked"
+        if op == "stdin" and not self._read and not self._room.acquire(blocking=False):
+            assert self._room.acquire(timeout=5), "stdin send deadlocked"
         super().send(op, **fields)
 
     def recv(self):
