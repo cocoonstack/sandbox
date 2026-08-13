@@ -480,6 +480,24 @@ err = pty.Resize(ctx, 200, 50)
 A PTY is a tracked guest process (`pty.PID`); closing the handle (or the
 ctx) tears the shell down.
 
+## Node operations
+
+Root-token verbs for operating a node, plus the reference the aggregated
+apiserver claims under:
+
+```go
+sb, _ := client.New(ctx, "rt:24.04", sandbox.WithClaimRef("ns/workload"))
+list, _ := client.Sandboxes(ctx)          // id, key, deadline, claim_ref — never tokens
+info, _ := client.Drain(ctx)              // cordon: refuse new claims, run leases out
+info, _ = client.Uncordon(ctx)
+info, _ = client.SetPools(ctx, pools)     // retune warm targets without a restart
+info, _ = client.SetPoolsCluster(ctx, pools)
+sb = client.Attach(ownerAddr, id, token)  // bind a known handle, no lookup round-trip
+```
+
+`Sandboxes` is scoped to the calling token, so a tenant sees only its own
+claims. `Drain` leaves live claims alone — poll `Info` until `Claimed` is zero.
+
 ## Error handling
 
 - `*sandbox.ExitError` — non-zero exit from `Exec` (`Code`, `Stderr`)

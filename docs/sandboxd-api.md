@@ -427,22 +427,12 @@ Auth: node API token. A tenant may delete only its own records — anything
 else is 404, never a hint the id exists; root deletes anything. 204 on
 success, 404 unknown.
 
-**Delete removes the local record and then best-effort broadcasts to peers
-so a healed replica does not outlive it — this is eventual best-effort
-cleanup, not a fleet-wide revocation.** A peer that is offline or
-partitioned during the broadcast keeps its copy until the checkpoint TTL
-ages it out. A healed replica carries the source's original `CreatedAt`, so
-it becomes eligible for expiry at the same instant on every node; the actual
-removal is each node's own hourly sweep, which is independently phased and
-retries on a later sweep if one fails. So a deleted checkpoint normally stops
-being branchable within `checkpoint_ttl_hours` plus a sweep interval, but a
-node whose sweeps keep failing holds its replica until one succeeds — the TTL
-is the eligibility point, not a hard ceiling. The TTL must also match
-fleet-wide, which the
-[cluster-invariant config](cluster.md#cluster-invariant-config) digest
-checks. A window always exists because `checkpoint_peer_heal` cannot be
-enabled with `checkpoint_ttl_hours: 0` — a replica that can outlive a delete
-must have a finite eligibility point. A shared
+**Delete removes the local record, then best-effort broadcasts to peers so a
+healed replica does not outlive it — eventual cleanup, not a fleet-wide
+revocation.** A peer offline during the broadcast keeps its copy until the
+checkpoint TTL ages it out, so an id-holder can still branch it for that
+window; [placement lifecycle](cluster.md#delete-is-eventual-not-a-fleet-wide-revocation)
+has the bound and why heal requires a nonzero, fleet-matching TTL. A shared
 checkpoint store skips the broadcast: every node already resolves every
 record directly, so there is no replica to chase. `?no_forward=1` marks a
 delete already arriving from another node's own broadcast, so it is not
