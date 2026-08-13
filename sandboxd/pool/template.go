@@ -149,8 +149,7 @@ func (m *Manager) HasGolden(ctx context.Context, key types.PoolKey) bool {
 }
 
 // HasPoolGolden reports whether a configured pool can serve key from its own
-// golden. That golden is what every claim on this node resolves to, so a peer's
-// promoted template must not route one class of claim to different content.
+// golden. That golden is what every claim on this node resolves to.
 func (m *Manager) HasPoolGolden(key types.PoolKey) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()

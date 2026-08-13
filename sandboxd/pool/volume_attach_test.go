@@ -216,9 +216,7 @@ func TestClaimWarmAttachFailureKeepsHoldsUntilRemoval(t *testing.T) {
 }
 
 // TestFinalizeQuotaFailureKeepsHoldsUntilRemoval: the finalize re-check loses
-// the quota race with the volumes already mounted, so the loser owes a clean
-// umount, and its holds must outlive the claim exactly as an attach failure's
-// do — until the VM is confirmed gone.
+// the quota race with volumes already mounted, so the loser owes a clean umount.
 func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch")
 	eng := newFakeEngine()
@@ -296,10 +294,8 @@ func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	}
 }
 
-// TestFinalizeTenantQuotaFailureQuiescesAndUncountsTenant: the tenant cap is
-// re-checked under the same lock as the node cap and aborts the same way, so a
-// tenant's losing claim owes the same clean umount — and must leave no claim
-// counted against the tenant that never got one.
+// TestFinalizeTenantQuotaFailureQuiescesAndUncountsTenant: the tenant limb of
+// the same re-check; its loser must leave the tenant with nothing counted.
 func TestFinalizeTenantQuotaFailureQuiescesAndUncountsTenant(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch")
 	eng := newFakeEngine()

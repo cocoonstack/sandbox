@@ -325,10 +325,8 @@ func TestClaimProvisionPromotedAppliesVolumesFromTemplate(t *testing.T) {
 	}
 }
 
-// TestPooledKeyOutranksPromotedTemplate: promote, then pool the same key, then
-// restart. resolveGolden serves the pool golden, so the key must not report as
-// promoted either — otherwise the redirect decision arms RequirePromoted and
-// every volume claim for the key is refused while the template sits dormant.
+// TestPooledKeyOutranksPromotedTemplate: promote, pool, then restart must not
+// arm RequirePromoted against every volume claim for the key.
 func TestPooledKeyOutranksPromotedTemplate(t *testing.T) {
 	path := writeVolumeImage(t, "data.img", "data")
 	catalog := []config.VolumeSpec{{Name: "data", Path: path}}
@@ -353,8 +351,6 @@ func TestPooledKeyOutranksPromotedTemplate(t *testing.T) {
 	if m.HasPromotedTemplate(t.Context(), key) {
 		t.Error("a pooled key reports as promoted, disagreeing with both resolveGolden and the gossip")
 	}
-	// The local answer and the gossiped one are the same subtraction; a split
-	// between them is what makes a peer force RequirePromoted onto this node.
 	if hashes := m.TemplateHashes(); slices.Contains(hashes, key.Hash()) {
 		t.Errorf("gossiped template hashes=%v, want the pooled key subtracted", hashes)
 	}
@@ -525,15 +521,14 @@ func TestVolumeClaimUsageAndScopedSummaries(t *testing.T) {
 	t.Fatal("acme claim usage event not found")
 }
 
-// TestVolumeRefusalsAreIndistinguishableAcrossPrincipals: an unknown name, a
-// name this tenant may not see, and a known name whose image is gone answer
-// one error for every caller — a difference between them enumerates the
-// operator's catalog and its access lists.
-func TestVolumeRefusalsAreIndistinguishableAcrossPrincipals(t *testing.T) {
+// TestClaimProvisionRefusesUnavailableVolumesIndistinguishably: unknown,
+// forbidden, and vanished refuse alike; any difference enumerates the catalog/ACLs.
+func TestClaimProvisionRefusesUnavailableVolumesIndistinguishably(t *testing.T) {
 	present := writeVolumeImage(t, "present.img", "present")
+	vanished := filepath.Join(t.TempDir(), "vanished.img")
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, []config.VolumeSpec{
-		{Name: "vanished", Path: filepath.Join(t.TempDir(), "vanished.img")},
+		{Name: "vanished", Path: vanished},
 		{Name: "private", Path: present, Tenants: []string{"acme"}},
 	})
 
@@ -547,6 +542,9 @@ func TestVolumeRefusalsAreIndistinguishableAcrossPrincipals(t *testing.T) {
 			if !errors.Is(err, ErrVolumeUnavailable) {
 				t.Fatalf("principal %q volume %q: %v, want ErrVolumeUnavailable", principal, name, err)
 			}
+			if strings.Contains(err.Error(), vanished) {
+				t.Errorf("principal %q volume %q: %v, want the image path kept server-side", principal, name, err)
+			}
 			refusals = append(refusals, err.Error())
 		}
 	}
@@ -557,27 +555,6 @@ func TestVolumeRefusalsAreIndistinguishableAcrossPrincipals(t *testing.T) {
 	}
 	if len(eng.colds)+len(eng.clones) != 0 {
 		t.Errorf("refused claims provisioned colds=%v clones=%v", eng.colds, eng.clones)
-	}
-}
-
-func TestClaimProvisionRejectsMissingVolumePathBeforeProvision(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "missing.img")
-	eng := newFakeEngine()
-	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "data", Path: missing}})
-
-	_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "data"}})
-	if !errors.Is(err, ErrVolumeUnavailable) {
-		t.Errorf("got %v, want ErrVolumeUnavailable", err)
-	}
-	if err == nil || strings.Contains(err.Error(), missing) {
-		t.Errorf("got %v, want the operator's image path kept server-side", err)
-	}
-	_, unknownErr := m.ClaimProvision(t.Context(), testKey, 0, "", "", []types.Volume{{Name: "other"}})
-	if unknownErr == nil || err.Error() != unknownErr.Error() {
-		t.Errorf("vanished=%q unknown=%q, want byte-identical errors", err, unknownErr)
-	}
-	if len(eng.colds)+len(eng.clones) != 0 {
-		t.Errorf("provisioned colds=%v clones=%v", eng.colds, eng.clones)
 	}
 }
 

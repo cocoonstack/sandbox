@@ -1257,12 +1257,9 @@ func TestVolumeClaimUsesVolumeAndTemplateIntersections(t *testing.T) {
 	}
 }
 
-// TestVolumeClaimKeepsPoolContentAgainstPeerTemplates: a peer may legitimately
-// promote a key this node pools, and no mesh rule forbids it. Per-node content
-// consistency decides — with a local pool golden, volume claims resolve to the
-// same content a non-volume claim gets here and the peer's advertisement is
-// never consulted; only a caller that demanded promoted content is refused, by
-// the manager rather than served the wrong golden.
+// TestVolumeClaimKeepsPoolContentAgainstPeerTemplates: per-node content
+// consistency means a pooled key never asks the mesh what a peer promoted;
+// only an explicit RequirePromoted is refused, never served the wrong golden.
 func TestVolumeClaimKeepsPoolContentAgainstPeerTemplates(t *testing.T) {
 	for _, tt := range []struct {
 		name              string
@@ -1332,7 +1329,6 @@ func TestVolumeClaimKeepsPoolContentAgainstPeerTemplates(t *testing.T) {
 			if mgr.gotRequirePromoted != (tt.wantProvisions == 1 && tt.wantPromoted) {
 				t.Errorf("promoted provision=%v, want %v", mgr.gotRequirePromoted, tt.wantPromoted)
 			}
-			// The ruling itself: a pooled key never asks the mesh what it promoted.
 			if placer.templateOwnerCalls != tt.wantTemplateCalls || placer.templateVolumeCalls != tt.wantTemplateCalls {
 				t.Errorf("template owner calls=%d template-volume calls=%d, want %d each",
 					placer.templateOwnerCalls, placer.templateVolumeCalls, tt.wantTemplateCalls)
