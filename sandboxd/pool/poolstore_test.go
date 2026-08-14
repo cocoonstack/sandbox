@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	seedKey = types.PoolKey{Template: "seed:24.04", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineCH}
-	apiKey  = types.PoolKey{Template: "api:24.04", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineCH}
+	seedKey = types.PoolKey{Template: "seed:24.04", Net: types.NetNone, Size: types.SizeSmall}
+	apiKey  = types.PoolKey{Template: "api:24.04", Net: types.NetNone, Size: types.SizeSmall}
 )
 
 func TestPersistedPoolsSurviveRestart(t *testing.T) {

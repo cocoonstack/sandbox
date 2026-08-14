@@ -147,7 +147,7 @@ func TestConfirmVolumesCleanCatchesMarkerAfterAdmission(t *testing.T) {
 
 	// The reader resolves a clean image; a writable claim then fails between
 	// that resolve and admission, leaving its marker but no hold behind.
-	resolved, err := m.resolveVolumes(t.Context(), testKey, "", readOnly)
+	resolved, err := m.resolveVolumes(t.Context(), "", readOnly)
 	if err != nil {
 		t.Fatalf("resolveVolumes: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestConfirmVolumesCleanCatchesMarkerAfterAdmission(t *testing.T) {
 	}
 	m.unreserveVolumes(appliedVolumes(resolved))
 
-	writable, err := m.resolveVolumes(t.Context(), testKey, "", []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}})
+	writable, err := m.resolveVolumes(t.Context(), "", []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}})
 	if err != nil {
 		t.Fatalf("resolveVolumes writable: %v", err)
 	}

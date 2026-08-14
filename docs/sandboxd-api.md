@@ -32,10 +32,8 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
  "require_promoted": false}
 ```
 
-- `net` defaults to `none`, `size` to `small`, `engine` to `ch`. The pool key
-  is `(template, net, size, engine)`; `engine: "fc"` cold-boots that key under
-  Firecracker, and clones inherit the hypervisor pinned in the golden's
-  snapshot
+- `net` defaults to `none`, `size` to `small`; the pool key is
+  `(template, net, size)`
 - `ttl_seconds` 0 means the server default (5 minutes); capped at 24h. The
   owning node reaps the sandbox after the TTL even if the client vanishes
 - `claim_ref` is an optional opaque caller reference echoed by the scoped
@@ -48,8 +46,7 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   defaults to `/volumes/<name>`; a custom value must be absolute and clean,
   outside the guest OS tree, unique, and non-nesting within the request.
   `mode` is `"ro"` (default, omitted) or `"rw"`; `"rw"` requires the catalog
-  entry's `writable: true` (see [deploy](deploy.md#dataset-volumes)). Volumes
-  require Cloud Hypervisor
+  entry's `writable: true` (see [deploy](deploy.md#dataset-volumes))
 - `volumes_attach_only` (default `false`) attaches every requested volume
   without mounting it, handing the whole mount contract to the workload. It
   requires at least one volume, and rejects any entry carrying a `mount` —
@@ -175,7 +172,7 @@ Errors: 400 unknown template axis, invalid/duplicate volumes,
 `volumes_attach_only` with no volumes or with an entry carrying a `mount`,
 `mode: "rw"`
 against a non-writable entry, or a volume that is unknown or forbidden (the
-latter two are deliberately indistinguishable), Firecracker with volumes, or
+latter two are deliberately indistinguishable), or
 bad body; 401 bad api token; 409 egress requested on a node without an egress
 attachment, a writable name already claimed in a conflicting mode (volume
 busy — a live writer excludes every other claim for that name, live readers
@@ -280,7 +277,7 @@ node (name-based calls route via gossip); a shared checkpoint store makes
 every node resolve it. Under exactly this key:
 
 ```json
-{"key": {"template": "myproj:v1", "net": "none", "size": "small", "engine": "ch"},
+{"key": {"template": "myproj:v1", "net": "none", "size": "small"},
  "content_digest": "sha256:…"}
 ```
 
@@ -522,7 +519,7 @@ Auth: root only (tenant tokens get 403). Node pools, claim count, and mesh
 peers:
 
 ```json
-{"pools": [{"key": {"template": "base:24.04", "net": "none", "size": "small", "engine": "ch"},
+{"pools": [{"key": {"template": "base:24.04", "net": "none", "size": "small"},
             "warm": 4, "refilling": 0, "target": 4, "golden": true}],
  "claimed": 2,
  "hibernated": 1,

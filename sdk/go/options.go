@@ -11,10 +11,6 @@ const (
 	// NetEgress attaches the node's bridge or CNI network.
 	NetEgress NetShape = "egress"
 
-	// EngineCH is the default hypervisor; EngineFC cold-boots under Firecracker.
-	EngineCH Engine = "ch"
-	EngineFC Engine = "fc"
-
 	Small  Size = "small"
 	Medium Size = "medium"
 	Large  Size = "large"
@@ -30,9 +26,6 @@ type NetShape string
 // Size is a T-shirt resource tier; free-form CPU/memory would fragment the
 // node's warm pools.
 type Size string
-
-// Engine is the pool key's hypervisor axis.
-type Engine string
 
 // Volume requests one catalog entry at an optional guest mount path and mode.
 type Volume struct {

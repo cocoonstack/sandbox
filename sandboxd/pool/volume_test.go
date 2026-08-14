@@ -268,7 +268,6 @@ func TestClaimProvisionRejectsInvalidVolumesBeforeProvision(t *testing.T) {
 		{"too many", testKey, nil, tooMany},
 		{"unknown", testKey, []config.VolumeSpec{{Name: "data", Path: path}}, []types.Volume{{Name: "other"}}},
 		{"invalid mount", testKey, []config.VolumeSpec{{Name: "data", Path: path}}, []types.Volume{{Name: "data", Mount: "relative"}}},
-		{"firecracker", types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineFC}, []config.VolumeSpec{{Name: "data", Path: path}}, []types.Volume{{Name: "data"}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()
@@ -472,7 +471,7 @@ func TestVolumePlacementChecksAccessAndLocalAvailability(t *testing.T) {
 	if local, err := m.VolumePlacement(testKey, "", []string{"peer-only"}); err != nil || local {
 		t.Errorf("root peer-only placement=(%v, %v), want false, nil", local, err)
 	}
-	badKey := types.PoolKey{Template: "rt:24.04", Net: "lan", Size: types.SizeSmall, Engine: types.EngineCH}
+	badKey := types.PoolKey{Template: "rt:24.04", Net: "lan", Size: types.SizeSmall}
 	if _, err := m.VolumePlacement(badKey, "", []string{"local"}); !errors.Is(err, ErrBadKey) {
 		t.Errorf("invalid key error=%v, want ErrBadKey", err)
 	}

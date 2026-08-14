@@ -25,7 +25,6 @@ type PoolKey struct {
 	Template string   `json:"template"`
 	Net      NetShape `json:"net"`
 	Size     Size     `json:"size"`
-	Engine   Engine   `json:"engine,omitempty"`
 }
 
 // PoolStatus reports one warm pool on a node.
