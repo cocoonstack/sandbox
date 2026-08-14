@@ -13,7 +13,7 @@ require (
 	github.com/hashicorp/memberlist v0.5.4
 	github.com/projecteru2/core v0.0.0-20241016125006-ff909eefe04c
 	golang.org/x/net v0.47.0
-	golang.org/x/sync v0.21.0
+	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.38.0
 )
 
