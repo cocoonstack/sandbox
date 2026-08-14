@@ -29,7 +29,7 @@ reports what you are running.
 
 ## Upgrading
 
-This CH-only release does not convert existing VM or snapshot state. Drain old
+This release does not convert VM or snapshot state from older releases. Drain old
 claims and use fresh `data_dir` and `checkpoint_dir` locations when upgrading;
 older checkpoints and promoted templates must not be reused.
 

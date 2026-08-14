@@ -49,7 +49,7 @@ var tools = []tool{
 		schema(props{"sandbox_id": str(""), "path": str("absolute path")}, "sandbox_id", "path"), toolListDir,
 	},
 	{
-		"fork", "Clone a sandbox into N independent children carrying its exact memory and disk state.",
+		"fork", "Clone a sandbox into N independent children carrying its exact memory and disk state; children live one hour.",
 		schema(props{"sandbox_id": str(""), "count": integer("children, 1-16")}, "sandbox_id", "count"), toolFork,
 	},
 	{
@@ -57,7 +57,7 @@ var tools = []tool{
 		schema(props{"sandbox_id": str(""), "name": str("optional label")}, "sandbox_id"), toolCheckpoint,
 	},
 	{
-		"branch_checkpoint", "Claim a fresh sandbox branched from a checkpoint's exact captured moment.",
+		"branch_checkpoint", "Claim a fresh sandbox branched from a checkpoint's exact captured moment; it lives one hour.",
 		schema(props{"checkpoint_id": str("")}, "checkpoint_id"), toolBranchCheckpoint,
 	},
 	{"list_checkpoints", "List checkpoints on the node, newest first.", schema(props{}), toolListCheckpoints},
@@ -279,7 +279,7 @@ func toolFork(ctx context.Context, s *server, raw json.RawMessage) (string, erro
 	if err != nil {
 		return "", err
 	}
-	children, err := sb.Fork(ctx, args.Count, 0)
+	children, err := sb.Fork(ctx, args.Count, defaultToolTTL)
 	if err != nil {
 		return "", err
 	}
@@ -314,7 +314,7 @@ func toolBranchCheckpoint(ctx context.Context, s *server, raw json.RawMessage) (
 	if err != nil {
 		return "", err
 	}
-	sb, err := ckpt.New(ctx)
+	sb, err := ckpt.New(ctx, sandbox.WithTimeout(defaultToolTTL))
 	if err != nil {
 		return "", err
 	}
