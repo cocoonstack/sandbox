@@ -158,10 +158,8 @@ func (m *Manager) HasPoolGolden(key types.PoolKey) bool {
 }
 
 // HasPromotedTemplate reports whether key resolves to a promoted template this
-// tenant may claim. A hash a configured pool owns is subtracted, as
-// TemplateHashes does for the gossip: resolveGolden serves it from the pool
-// golden, never the template. The tenant test matches resolveGolden's, so
-// routing cannot promise a golden the claim will then refuse.
+// tenant may claim — resolveGolden's test exactly, so routing never promises
+// a golden the claim would then refuse.
 func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, tenant string) bool {
 	if m.pooledHash(key.Hash()) {
 		return false

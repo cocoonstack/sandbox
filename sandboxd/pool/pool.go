@@ -316,10 +316,8 @@ type Manager struct {
 	ckptTTL      time.Duration
 	ckptSweeping atomic.Bool
 
-	// tplSet caches each visible template id against its owning tenant so the
-	// 1s gossip tick and the claim-path ownership test never touch the backend
-	// (an s3 read is network I/O); local promotes/deletes update it, startup
-	// loads it. Empty value means the operator promoted it.
+	// tplSet caches each template id against its owning tenant ("" = operator),
+	// so the gossip tick and the claim path never pay a store read.
 	tplMu  sync.Mutex
 	tplSet map[string]string
 
