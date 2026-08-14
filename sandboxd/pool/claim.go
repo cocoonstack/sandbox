@@ -30,7 +30,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	if err := m.validate(key); err != nil {
 		return nil, err
 	}
-	volumeSpecs, err := m.resolveVolumes(ctx, key, tenant, volumes)
+	volumeSpecs, err := m.resolveVolumes(ctx, tenant, volumes)
 	if err != nil {
 		return nil, err
 	}
@@ -506,7 +506,7 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	if err := m.validate(key); err != nil {
 		return nil, err
 	}
-	volumeSpecs, err := m.resolveVolumes(ctx, key, tenant, volumes)
+	volumeSpecs, err := m.resolveVolumes(ctx, tenant, volumes)
 	if err != nil {
 		return nil, err
 	}

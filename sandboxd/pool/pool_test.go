@@ -21,7 +21,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-var testKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineCH}
+var testKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
 
 func TestClaimWarmHitTransfersOwnership(t *testing.T) {
 	eng := newFakeEngine()

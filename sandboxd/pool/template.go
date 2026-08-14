@@ -42,7 +42,7 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 	if !sb.Key.Capturable() {
 		return types.PoolKey{}, "", ErrNoEgressFork
 	}
-	key := types.PoolKey{Template: template, Net: sb.Key.Net, Size: sb.Key.Size, Engine: sb.Key.Engine}
+	key := types.PoolKey{Template: template, Net: sb.Key.Net, Size: sb.Key.Size}
 	if m.pooledHash(key.Hash()) {
 		// A configured pool owns this key — promoting over it would
 		// silently change what refills produce.

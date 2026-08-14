@@ -27,7 +27,7 @@ import (
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
-var testKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineCH}
+var testKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
 
 func TestEndToEnd(t *testing.T) {
 	stack := startStack(t, "node-token", config.PoolSpec{PoolKey: testKey, Warm: 1})
@@ -445,9 +445,6 @@ func TestClaimRefRoundTrip(t *testing.T) {
 	}
 	if list[i].ClaimRef != "ns/workload" {
 		t.Errorf("claim_ref %q, want ns/workload", list[i].ClaimRef)
-	}
-	if list[i].Key.Engine != sandbox.EngineCH {
-		t.Errorf("engine %q, want the defaulted ch — the SDK key must carry the axis", list[i].Key.Engine)
 	}
 }
 

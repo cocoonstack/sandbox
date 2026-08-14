@@ -47,11 +47,11 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 
 	metric("pool_warm", "gauge", "claim-ready VMs per pool")
 	for _, p := range pools {
-		_, _ = fmt.Fprintf(w, "sandboxd_pool_warm{template=%q,net=%q,size=%q,engine=%q} %d\n", p.Key.Template, p.Key.Net, p.Key.Size, p.Key.Engine, p.Warm)
+		_, _ = fmt.Fprintf(w, "sandboxd_pool_warm{template=%q,net=%q,size=%q} %d\n", p.Key.Template, p.Key.Net, p.Key.Size, p.Warm)
 	}
 	metric("pool_target", "gauge", "warm watermark per pool")
 	for _, p := range pools {
-		_, _ = fmt.Fprintf(w, "sandboxd_pool_target{template=%q,net=%q,size=%q,engine=%q} %d\n", p.Key.Template, p.Key.Net, p.Key.Size, p.Key.Engine, p.Target)
+		_, _ = fmt.Fprintf(w, "sandboxd_pool_target{template=%q,net=%q,size=%q} %d\n", p.Key.Template, p.Key.Net, p.Key.Size, p.Target)
 	}
 
 	if s.placer != nil {

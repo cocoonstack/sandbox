@@ -123,7 +123,7 @@ curl -s -H "Authorization: Bearer $TOKEN" http://node-a:7777/v1/info | jq .
 ```json
 {
   "pools": [
-    {"key": {"template": "base:24.04", "net": "none", "size": "small", "engine": "ch"},
+    {"key": {"template": "base:24.04", "net": "none", "size": "small"},
      "warm": 4, "refilling": 0, "target": 4, "golden": true}
   ],
   "claimed": 2,

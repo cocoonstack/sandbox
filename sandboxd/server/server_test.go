@@ -56,7 +56,7 @@ func TestClaimHappyPath(t *testing.T) {
 	if cr.TemplateDigest != "sha256:claim-digest" {
 		t.Errorf("template digest %q, want sha256:claim-digest", cr.TemplateDigest)
 	}
-	want := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineCH}
+	want := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
 	if gotKey != want {
 		t.Errorf("key %+v, want defaults %+v", gotKey, want)
 	}
@@ -738,7 +738,7 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 	if got := del("Bearer sekret", "template=tpl:x&net=none&size=small"); got != http.StatusNoContent {
 		t.Errorf("delete status %d, want 204", got)
 	}
-	want := types.PoolKey{Template: "tpl:x", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineCH}
+	want := types.PoolKey{Template: "tpl:x", Net: types.NetNone, Size: types.SizeSmall}
 	if gotKey != want {
 		t.Errorf("delete key %+v, want %+v (claim defaults applied)", gotKey, want)
 	}
@@ -1394,7 +1394,6 @@ func TestVolumeClaimRejectsShapeBeforePlacement(t *testing.T) {
 		`{"template":"rt:24.04","volumes":["data"]}`,
 		`{"template":"rt:24.04","volumes":[{"name":"data"},{"name":"data"}]}`,
 		`{"template":"rt:24.04","volumes":[{"name":"cocoon-data"}]}`,
-		`{"template":"rt:24.04","engine":"fc","volumes":[{"name":"data"}]}`,
 		`{"template":"rt:24.04","volumes":[{"name":"data","mount":"relative"}]}`,
 		`{"template":"rt:24.04","volumes":[{"name":"data","mount":"/datasets"},{"name":"other","mount":"/datasets/nested"}]}`,
 		`{"template":"rt:24.04","volumes":[{"name":"a"},{"name":"b"},{"name":"c"},{"name":"d"},{"name":"e"},{"name":"f"},{"name":"g"},{"name":"h"},{"name":"i"}]}`,

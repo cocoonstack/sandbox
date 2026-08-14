@@ -270,9 +270,6 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req types.ClaimRequest, key types.PoolKey, hash, tenant string) {
 	volumes, err := types.ValidateVolumes(req.Volumes, req.VolumesAttachOnly)
-	if err == nil && key.Engine != types.EngineCH {
-		err = errors.New("volumes require engine ch")
-	}
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("%w: %v", pool.ErrBadVolume, err).Error())
 		return
