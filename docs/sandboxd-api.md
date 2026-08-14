@@ -32,7 +32,8 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
  "require_promoted": false}
 ```
 
-- `net` defaults to `none`, `size` to `small`
+- `net` defaults to `none`, `size` to `small`; the pool key is
+  `(template, net, size)`
 - `ttl_seconds` 0 means the server default (5 minutes); capped at 24h. The
   owning node reaps the sandbox after the TTL even if the client vanishes
 - `claim_ref` is an optional opaque caller reference echoed by the scoped
@@ -45,8 +46,7 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   defaults to `/volumes/<name>`; a custom value must be absolute and clean,
   outside the guest OS tree, unique, and non-nesting within the request.
   `mode` is `"ro"` (default, omitted) or `"rw"`; `"rw"` requires the catalog
-  entry's `writable: true` (see [deploy](deploy.md#dataset-volumes)). Volumes
-  require Cloud Hypervisor
+  entry's `writable: true` (see [deploy](deploy.md#dataset-volumes))
 - `volumes_attach_only` (default `false`) attaches every requested volume
   without mounting it, handing the whole mount contract to the workload. It
   requires at least one volume, and rejects any entry carrying a `mount` —
@@ -99,9 +99,21 @@ can lag the serial match the same way it does for an eager mount's device
 settle. Confirm both before mounting:
 
 ```sh
-for dev in /sys/block/*/serial; do
-  [ "$(cat "$dev")" = scratch-db ] && echo "/dev/$(basename "$(dirname "$dev")")"
+device=
+tries=0
+while [ "$tries" -lt 200 ]; do
+  for serial in /sys/block/*/serial /sys/block/*/device/serial; do
+    [ -r "$serial" ] || continue
+    [ "$(cat "$serial")" = scratch-db ] || continue
+    block=${serial#/sys/block/}
+    candidate="/dev/${block%%/*}"
+    [ -b "$candidate" ] && { device="$candidate"; break 2; }
+  done
+  tries=$((tries + 1))
+  sleep 0.01
 done
+[ -n "$device" ] || { echo "scratch-db device not ready" >&2; exit 1; }
+printf '%s\n' "$device"
 ```
 
 Then mount it however the workload needs. A `ro` entry is attached
@@ -160,7 +172,7 @@ Errors: 400 unknown template axis, invalid/duplicate volumes,
 `volumes_attach_only` with no volumes or with an entry carrying a `mount`,
 `mode: "rw"`
 against a non-writable entry, or a volume that is unknown or forbidden (the
-latter two are deliberately indistinguishable), Firecracker with volumes, or
+latter two are deliberately indistinguishable), or
 bad body; 401 bad api token; 409 egress requested on a node without an egress
 attachment, a writable name already claimed in a conflicting mode (volume
 busy — a live writer excludes every other claim for that name, live readers
@@ -181,11 +193,11 @@ caller may use, without host paths or holder addresses:
               "size_bytes": 214748364800, "available": true, "nodes": 3}]}
 ```
 
-Root sees every entry; a tenant sees unrestricted entries plus those whose
-access list names it. The response is the gossiped union: `nodes` counts members
-advertising the name. `size_bytes` and `available` are a best-effort stat of the
-answering node's image, so a peer-only entry remains discoverable with
-`available: false`. Membership is eventually consistent by one gossip tick.
+Root sees the gossiped union, including peer-only entries (`available: false`);
+a tenant sees only entries this node declares locally and whose access list
+permits it. `nodes` counts members advertising the name; `size_bytes` and
+`available` are a best-effort stat of the answering node's image. Membership is
+eventually consistent by one gossip tick.
 `writable` is the entry's catalog configuration, fleet-uniform like the access
 list; the field is emitted (as `true`) only for a writable entry and omitted
 otherwise, so a read-only entry's response is byte-identical to v1.
@@ -333,9 +345,9 @@ guest HTTP port from a browser: body `{"token": "...", "port": 8080,
 "ttl_seconds": 0}` → `{"url": "http://<preview_advertise>/p/<token>/"}`.
 The URL's life is clamped to the claim's remaining lease. 501 when the node
 has no `preview_listen`. The signed token embeds the sandbox id, port, and
-owner node, so any node's preview listener can serve it (forwarding to the
-owner) and a released sandbox's URL simply stops resolving — no revocation
-list. See [deploy](deploy.md#preview-urls).
+owner `advertise_addr`, so any node's preview listener can serve it (forwarding
+to the owner's main listener) and a released sandbox's URL simply stops
+resolving — no revocation list. See [deploy](deploy.md#preview-urls).
 
 ## POST /v1/sandboxes/{id}/checkpoint
 
@@ -391,7 +403,8 @@ part of the public API; an SDK caller has no reason to call it directly.
   401 missing or unrecognized token, 403 a valid tenant token (authenticated
   but not the operator), 404 unknown checkpoint.
 - `HEAD` is the ownership probe: 200 when this node holds a branchable
-  (non-archive) copy, 404 otherwise. On a mesh with `cluster_key` set the
+  (non-archive) copy, 404 otherwise, and 401 on a keyed mesh when
+  `X-Cocoon-Probe` is absent or expired. On a mesh with `cluster_key` set the
   request must carry `X-Cocoon-Probe`, an HMAC over the id and a coarse time
   bucket keyed off a probe-specific derivation of the cluster key — verified
   before any disk is touched, replayable for roughly a minute at most. On a
@@ -411,22 +424,12 @@ Auth: node API token. A tenant may delete only its own records — anything
 else is 404, never a hint the id exists; root deletes anything. 204 on
 success, 404 unknown.
 
-**Delete removes the local record and then best-effort broadcasts to peers
-so a healed replica does not outlive it — this is eventual best-effort
-cleanup, not a fleet-wide revocation.** A peer that is offline or
-partitioned during the broadcast keeps its copy until the checkpoint TTL
-ages it out. A healed replica carries the source's original `CreatedAt`, so
-it becomes eligible for expiry at the same instant on every node; the actual
-removal is each node's own hourly sweep, which is independently phased and
-retries on a later sweep if one fails. So a deleted checkpoint normally stops
-being branchable within `checkpoint_ttl_hours` plus a sweep interval, but a
-node whose sweeps keep failing holds its replica until one succeeds — the TTL
-is the eligibility point, not a hard ceiling. The TTL must also match
-fleet-wide, which the
-[cluster-invariant config](cluster.md#cluster-invariant-config) digest
-checks. A window always exists because `checkpoint_peer_heal` cannot be
-enabled with `checkpoint_ttl_hours: 0` — a replica that can outlive a delete
-must have a finite eligibility point. A shared
+**Delete removes the local record, then best-effort broadcasts to peers so a
+healed replica does not outlive it — eventual cleanup, not a fleet-wide
+revocation.** A peer offline during the broadcast keeps its copy until the
+checkpoint TTL ages it out, so an id-holder can still branch it for that
+window; [placement lifecycle](cluster.md#delete-is-eventual-not-a-fleet-wide-revocation)
+has the bound and why heal requires a nonzero, fleet-matching TTL. A shared
 checkpoint store skips the broadcast: every node already resolves every
 record directly, so there is no replica to chase. `?no_forward=1` marks a
 delete already arriving from another node's own broadcast, so it is not
@@ -467,20 +470,22 @@ never mistaken for idle. 404 unknown id.
 ## GET /metrics
 
 Auth: root only (tenant tokens get 403). Prometheus text format,
-hand-rendered: pool warm/target gauges, claimed/hibernated gauges, a
-per-tenant live-claim gauge (`sandboxd_tenant_claims{tenant="…"}`,
-configured tenants only), claims by tier (warm/clone/cold),
-wake/hibernate/fork/checkpoint/promote/release/reap counters, and claim/wake
-`*_seconds_total` for average latency. /metrics is a derived ops view; the
-billing source of truth is the usage journal below.
+hand-rendered: pool warm/target gauges, claimed/hibernated/archived/draining
+gauges, a per-tenant live-claim gauge (`sandboxd_tenant_claims{tenant="…"}`,
+configured tenants only), `sandboxd_config_digest_mismatch` on a mesh, claims
+by tier (warm/clone/cold),
+wake/hibernate/fork/checkpoint/promote/release/reap counters plus
+archive/unarchive/archive-delete counters, and claim/wake `*_seconds_total`
+for average latency. /metrics is a derived ops view; the billing source of
+truth is the usage journal below.
 
 ## Usage journal (usage.jsonl)
 
 Always on: every lifecycle transition appends one JSONL event to
 `<data_dir>/usage.jsonl` — `{"t": <RFC3339>, "ev":
 "claim|hibernate|wake|fork|checkpoint|promote|release|reap|archive|unarchive|archive_delete|egress",
-"id": "sb_…", "vm": "sbx-…"}` plus `key` and `tenant` (the pool key and
-owning tenant, claim events), `children` (fork) and `ref` (the promoted
+"id": "sb_…", "vm": "sbx-…"}` plus `key` and `tenant` (the pool key's stable
+hash and the owning tenant, claim events), `children` (fork) and `ref` (the promoted
 template / checkpoint id, or the egress host). A volume claim also carries
 `volumes`, the applied catalog names, and — omitted when empty — `volumes_rw`,
 the subset of those names claimed `rw`, so billing can discriminate write

@@ -36,9 +36,35 @@ type PoolStatus struct {
 	Golden    bool    `json:"golden"`
 }
 
+// SandboxSummary is one live claim as the scoped index reports it; never a
+// token or a host path.
+type SandboxSummary struct {
+	ID             string    `json:"id"`
+	Key            PoolKey   `json:"key"`
+	Deadline       time.Time `json:"deadline"`
+	Hibernated     bool      `json:"hibernated"`
+	Archived       bool      `json:"archived,omitempty"`
+	FromCheckpoint string    `json:"from_checkpoint,omitempty"`
+	Volumes        []Volume  `json:"volumes,omitempty"`
+	ClaimRef       string    `json:"claim_ref,omitempty"`
+}
+
+type sandboxListResponse struct {
+	Sandboxes []SandboxSummary `json:"sandboxes"`
+}
+
 // Info reports the entry node's pools, claim counts, and mesh peers.
 func (c *Client) Info(ctx context.Context) (*NodeInfo, error) {
 	return doJSONPtr[NodeInfo](ctx, c, http.MethodGet, c.addr, "/v1/info", nil, c.apiToken, "info")
+}
+
+// Sandboxes lists the live claims this token may see.
+func (c *Client) Sandboxes(ctx context.Context) ([]SandboxSummary, error) {
+	reply, err := doJSON[sandboxListResponse](ctx, c, http.MethodGet, c.addr, "/v1/sandboxes", nil, c.apiToken, "list sandboxes")
+	if err != nil {
+		return nil, err
+	}
+	return reply.Sandboxes, nil
 }
 
 // peers fetches the cluster's node addresses, best-effort (nil on failure).

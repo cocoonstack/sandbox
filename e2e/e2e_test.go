@@ -27,7 +27,7 @@ import (
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
-var testKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineCH}
+var testKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
 
 func TestEndToEnd(t *testing.T) {
 	stack := startStack(t, "node-token", config.PoolSpec{PoolKey: testKey, Warm: 1})
@@ -424,6 +424,27 @@ func TestVolumeModeWireShape(t *testing.T) {
 				t.Fatalf("release: %v", err)
 			}
 		})
+	}
+}
+
+func TestClaimRefRoundTrip(t *testing.T) {
+	stack := startStack(t, "node-token")
+	sb, err := stack.client.New(t.Context(), "rt:24.04", sandbox.WithClaimRef("ns/workload"))
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	defer sb.Close()
+
+	list, err := stack.client.Sandboxes(t.Context())
+	if err != nil {
+		t.Fatalf("list sandboxes: %v", err)
+	}
+	i := slices.IndexFunc(list, func(s sandbox.SandboxSummary) bool { return s.ID == sb.ID })
+	if i < 0 {
+		t.Fatalf("claim %s missing from the index %+v", sb.ID, list)
+	}
+	if list[i].ClaimRef != "ns/workload" {
+		t.Errorf("claim_ref %q, want ns/workload", list[i].ClaimRef)
 	}
 }
 

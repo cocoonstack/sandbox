@@ -54,7 +54,7 @@ class Sandbox:
         code = self.run(list(argv), cwd=cwd, env=env, user=user, session=session,
                         stdin=stdin, on_stdout=out.extend, on_stderr=err.extend)
         if code != 0:
-            raise ExitError(code, err.decode(errors="replace"))
+            raise ExitError(code, err.decode(errors="replace"), out.decode(errors="replace"))
         return out.decode(errors="replace")
 
     def run(self, argv: list[str], cwd: str = "", env: dict | None = None,
@@ -66,13 +66,12 @@ class Sandbox:
         with self._dial() as conn:
             conn.send("exec", argv=argv, cwd=cwd or None, env=env,
                       user=user or None, session=session or None)
-            # The guest blocks writing output once its stdout buffer fills, and
-            # stops draining stdin while it does, so feeding stdin to completion
-            # before reading deadlocks on any payload past the socket buffers.
+            # The guest stops draining stdin while blocked writing stdout, so
+            # feeding it to completion before reading deadlocks.
             pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True)
             pump.start()
             code = _pump_stdio(conn, on_stdout, on_stderr)
-            pump.join()
+        pump.join()  # the closed conn fails a stalled send, so this cannot hang
         if code is None:
             raise ProtocolError("exec stream ended without an exit frame")
         return code
@@ -387,14 +386,17 @@ class Watcher(_Closeable):
 
     def __init__(self, conn: Conn):
         self._conn = conn
+        self.error: Exception | None = None
 
     def __iter__(self) -> Iterator[dict]:
         # Connection-bound: a close, drop, or undecodable frame ends iteration;
-        # a real server error frame (SilkdError) propagates.
+        # a real server error frame (SilkdError) propagates. error tells a
+        # clean close (None) from a relay that dropped mid-stream.
         while True:
             try:
                 frame = self._conn.recv()
-            except (ProtocolError, OSError, ValueError):
+            except (ProtocolError, OSError, ValueError) as e:
+                self.error = e
                 return
             if frame["type"] == "event":
                 yield frame
@@ -410,11 +412,14 @@ class Pty(_Closeable):
         self._sandbox = sandbox
         self._conn = conn
         self.pid = pid
+        self.exit_code: int | None = None
 
     def read(self) -> bytes:
-        """The next output chunk; b'' once the shell exits."""
+        """The next output chunk; b'' once the shell exits, after which
+        exit_code holds the shell's status."""
         frame = self._conn.recv()
         if frame["type"] == "exit":
+            self.exit_code = frame.get("code")
             return b""
         return frame.get("data") or b""
 

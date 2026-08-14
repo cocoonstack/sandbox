@@ -27,13 +27,13 @@ type Pty struct {
 	stop func()
 	out  *io.PipeReader
 
-	mu       sync.Mutex
-	exitCode int
-	exited   bool
+	mu        sync.Mutex
+	exitCode  int
+	exited    bool
+	closeOnce sync.Once
 }
 
-// Read returns terminal output; io.EOF signals the shell has exited (check
-// ExitCode after).
+// Read returns terminal output; io.EOF means ExitCode is ready.
 func (p *Pty) Read(b []byte) (int, error) {
 	return p.out.Read(b)
 }
@@ -61,21 +61,21 @@ func (p *Pty) Resize(ctx context.Context, cols, rows uint16) error {
 
 // Close ends the pty session (silkd sees the disconnect and kills the shell).
 func (p *Pty) Close() error {
-	p.stop()
+	p.closeOnce.Do(func() {
+		p.stop()
+		_ = p.out.Close()
+	})
 	return nil
 }
 
-// ExitCode reports the shell's exit code once Read has returned io.EOF; ok is
-// false while the shell is still running.
+// ExitCode reports the shell's exit code after Read returns io.EOF.
 func (p *Pty) ExitCode() (code int, ok bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.exitCode, p.exited
 }
 
-// drain relays response frames: output into the pipe, the exit code into
-// state, a terminal error to unblock Read; an OpenPty-ctx cancel surfaces as
-// ctx.Err(), matching Watcher and PortConn.
+// drain relays response frames into the output pipe and terminal state.
 func (p *Pty) drain(ctx context.Context, pw *io.PipeWriter) {
 	for {
 		resp, err := recv(ctx, p.conn)
@@ -105,8 +105,7 @@ func (p *Pty) drain(ctx context.Context, pw *io.PipeWriter) {
 	}
 }
 
-// OpenPty starts a shell under a pty. The ctx governs the pty's lifetime:
-// canceling it (or calling Close) tears the session down.
+// OpenPty starts a shell whose lifetime is governed by ctx or Close.
 func (s *Sandbox) OpenPty(ctx context.Context, opts PtyOpts) (*Pty, error) {
 	req := &wire.PtyOpen{Cols: opts.Cols, Rows: opts.Rows, Cwd: opts.Cwd, Env: opts.Env, User: opts.User}
 	conn, done, err := s.call(ctx, req)

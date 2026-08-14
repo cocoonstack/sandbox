@@ -15,6 +15,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -89,9 +90,9 @@ type Manager interface {
 	FetchCheckpoint(ctx context.Context, ckptID string) (dir string, meta []byte, release func(), err error)
 	DeleteCheckpoint(ctx context.Context, ckptID, tenant string, scope pool.DeleteScope) error
 	ClaimDeadline(id, token string) (time.Time, error)
-	HasGolden(ctx context.Context, key types.PoolKey) bool
+	HasGolden(ctx context.Context, key types.PoolKey, tenant string) bool
 	HasPoolGolden(key types.PoolKey) bool
-	HasPromotedTemplate(ctx context.Context, key types.PoolKey) bool
+	HasPromotedTemplate(ctx context.Context, key types.PoolKey, tenant string) bool
 	AgentSocket(id, token string) (string, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, error)
 	SetPools(ctx context.Context, pools []config.PoolSpec) error
@@ -227,6 +228,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/sandboxes", s.requireToken(s.handleSandboxes))
 	mux.HandleFunc("GET /metrics", s.requireRoot(s.handleMetrics))
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	if s.preview != nil {
+		mux.HandleFunc("/p/{token}/", s.preview.serve)
+	}
 	return mux
 }
 
@@ -249,7 +253,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	// this node provision (golden clone or cold boot).
 	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef, nil)
 	if errors.Is(err, pool.ErrNoWarm) {
-		if s.redirectClaim(r.Context(), w, req, key, hash) {
+		if s.redirectClaim(r.Context(), w, req, key, hash, tenant) {
 			return
 		}
 		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, nil)
@@ -267,9 +271,6 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req types.ClaimRequest, key types.PoolKey, hash, tenant string) {
 	volumes, err := types.ValidateVolumes(req.Volumes, req.VolumesAttachOnly)
-	if err == nil && key.Engine != types.EngineCH {
-		err = errors.New("volumes require engine ch")
-	}
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("%w: %v", pool.ErrBadVolume, err).Error())
 		return
@@ -317,14 +318,14 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 		return false, err
 	}
 
-	localTemplate := s.mgr.HasPromotedTemplate(ctx, key)
+	localTemplate := s.mgr.HasPromotedTemplate(ctx, key, tenant)
 	// Per-node content consistency: a peer's promoted template must not escalate
 	// volume claims off the pool golden every other claim here resolves to. An
 	// explicit RequirePromoted still passes through, for the manager to refuse.
 	pooled := s.mgr.HasPoolGolden(key)
 	var templateOwners []string
 	if s.placer != nil && !pooled {
-		templateOwners = s.placer.TemplateOwners(hash)
+		templateOwners = s.templateOwners(s.placer.TemplateOwners, hash, tenant)
 	}
 	promoted := req.RequirePromoted || localTemplate || len(templateOwners) > 0
 	req.RequirePromoted = promoted
@@ -340,7 +341,9 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 		// A shared template store lets a volume holder resolve the template
 		// even before that node has advertised the newly published hash. The
 		// no_redirect target re-checks both resources before provisioning.
-		owners = s.placer.TemplateVolumeOwners(hash, names)
+		owners = s.templateOwners(func(probe string) []string {
+			return s.placer.TemplateVolumeOwners(probe, names)
+		}, hash, tenant)
 	} else {
 		owners = s.placer.VolumeCandidates(hash, names)
 	}
@@ -354,11 +357,31 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 	return true, nil
 }
 
+func (s *Server) templateOwners(query func(string) []string, hash, tenant string) []string {
+	probes := []string{types.TemplateGossipHash(hash, tenant)}
+	if tenant == "" {
+		for _, tn := range s.tenants {
+			probes = append(probes, types.TemplateGossipHash(hash, tn.Name))
+		}
+	} else {
+		probes = append(probes, types.TemplateGossipHash(hash, ""))
+	}
+	var owners []string
+	for _, probe := range probes {
+		for _, owner := range query(probe) {
+			if !slices.Contains(owners, owner) {
+				owners = append(owners, owner)
+			}
+		}
+	}
+	return owners
+}
+
 // redirectClaim redirects a warm-miss to a better peer — a warm holder, or the
 // template owner when we lack a golden (so we don't cold-boot a nonexistent
 // image ref). A no_redirect request must resolve locally, never bounce again,
 // to avoid a two-node ping-pong.
-func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req types.ClaimRequest, key types.PoolKey, hash string) bool {
+func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req types.ClaimRequest, key types.PoolKey, hash, tenant string) bool {
 	if s.placer == nil || req.NoRedirect {
 		return false
 	}
@@ -366,14 +389,14 @@ func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req t
 		return true
 	}
 	// TemplateOwners is in-memory; HasGolden can be a store round-trip.
-	owners := s.placer.TemplateOwners(hash)
-	return len(owners) > 0 && !s.mgr.HasGolden(ctx, key) && writeRedirect(w, owners)
+	owners := s.templateOwners(s.placer.TemplateOwners, hash, tenant)
+	return len(owners) > 0 && !s.mgr.HasGolden(ctx, key, tenant) && writeRedirect(w, owners)
 }
 
 // handleRelease releases a claimed sandbox. Two credentials authorize it: the
 // node's root api_token (the operator) may release any sandbox by id, so
 // aggregated/control-plane teardown works without holding the per-sandbox token;
-// a per-sandbox token releases only its own claim, unchanged. A tenant token is
+// a per-sandbox token releases only its own claim. A tenant token is
 // neither — it is not the root api_token, so it resolves as a (non-matching)
 // sandbox token and 404s.
 func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
@@ -529,7 +552,7 @@ func (s *Server) handleCheckpointBlob(w http.ResponseWriter, r *http.Request) {
 // handleCheckpointProbe answers a peer's HEAD probe. With a probeKey
 // configured (an encrypted mesh), the caller must present a fresh MAC over
 // the id (peer.ProbeHeader) or the probe is rejected before the metadata
-// read; without one, the id remains the only capability, same as before.
+// read; without one, the id remains the only capability.
 func (s *Server) handleCheckpointProbe(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if len(s.probeKey) > 0 && !peer.VerifyProbeMAC(s.probeKey, id, r.Header.Get(peer.ProbeHeader)) {
@@ -593,7 +616,7 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 	// owner. no_redirect mirrors the claim protocol — a redirected retry
 	// carries it, so the owner answers for itself and never bounces again.
 	if errors.Is(err, pool.ErrUnknownTemplate) && s.placer != nil && q.Get("no_redirect") == "" &&
-		writeRedirect(w, s.placer.TemplateOwners(key.Hash())) {
+		writeRedirect(w, s.templateOwners(s.placer.TemplateOwners, key.Hash(), tenantFrom(r.Context()))) {
 		return
 	}
 	writeResult(w, r, "delete template", req.Template, "delete template failed", err, func() {

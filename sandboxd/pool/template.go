@@ -42,7 +42,7 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 	if !sb.Key.Capturable() {
 		return types.PoolKey{}, "", ErrNoEgressFork
 	}
-	key := types.PoolKey{Template: template, Net: sb.Key.Net, Size: sb.Key.Size, Engine: sb.Key.Engine}
+	key := types.PoolKey{Template: template, Net: sb.Key.Net, Size: sb.Key.Size}
 	if m.pooledHash(key.Hash()) {
 		// A configured pool owns this key — promoting over it would
 		// silently change what refills produce.
@@ -129,10 +129,10 @@ func (m *Manager) TemplateHashes() []string {
 	m.mu.Unlock()
 	m.tplMu.Lock()
 	hashes := make([]string, 0, len(m.tplSet))
-	for id := range m.tplSet {
+	for id, tenant := range m.tplSet {
 		hash := store.TemplateHash(id)
 		if _, ok := pooled[hash]; !ok {
-			hashes = append(hashes, hash)
+			hashes = append(hashes, types.TemplateGossipHash(hash, tenant))
 		}
 	}
 	m.tplMu.Unlock()
@@ -144,8 +144,8 @@ func (m *Manager) TemplateHashes() []string {
 // boot — a configured pool golden or a promoted template in the store. The
 // tplSet answers without a store read; only a shared-store template promoted
 // elsewhere after startup falls through to the backend.
-func (m *Manager) HasGolden(ctx context.Context, key types.PoolKey) bool {
-	return m.HasPoolGolden(key) || m.HasPromotedTemplate(ctx, key)
+func (m *Manager) HasGolden(ctx context.Context, key types.PoolKey, tenant string) bool {
+	return m.HasPoolGolden(key) || m.HasPromotedTemplate(ctx, key, tenant)
 }
 
 // HasPoolGolden reports whether a configured pool can serve key from its own
@@ -157,22 +157,30 @@ func (m *Manager) HasPoolGolden(key types.PoolKey) bool {
 	return p != nil && p.goldenDir != ""
 }
 
-// HasPromotedTemplate reports whether key resolves to a promoted template.
-// A hash a configured pool owns is subtracted, as TemplateHashes does for the
-// gossip: resolveGolden serves it from the pool golden, never the template.
-func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey) bool {
+// HasPromotedTemplate reports whether key resolves to a promoted template this
+// tenant may claim — resolveGolden's test exactly, so routing never promises
+// a golden the claim would then refuse.
+func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, tenant string) bool {
 	if m.pooledHash(key.Hash()) {
 		return false
 	}
 	id := store.TemplateID(key.Hash())
 	m.tplMu.Lock()
-	_, cached := m.tplSet[id]
+	owner, cached := m.tplSet[id]
 	m.tplMu.Unlock()
-	if cached {
-		return true
+	if !cached {
+		// Only a shared-store template promoted elsewhere after startup.
+		raw, err := m.tpls.ReadMeta(ctx, id)
+		if err != nil {
+			return false
+		}
+		var rec templateRecord
+		if json.Unmarshal(raw, &rec) != nil {
+			return false
+		}
+		owner = rec.Tenant
 	}
-	_, err := m.tpls.ReadMeta(ctx, id)
-	return err == nil
+	return owner == "" || tenantOwns(tenant, owner)
 }
 
 // pooledHash reports whether a configured pool occupies this hash — the
@@ -275,9 +283,9 @@ type goldenResolution struct {
 
 // resolveGolden resolves a key's clone source: the configured pool's local
 // golden (no release), else a promoted template fetched from the store;
-// empty dir cold-boots. Only a true absence cold-boots — a backend failure
-// propagates rather than silently booting a template name as an image ref.
-func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (goldenResolution, error) {
+// empty dir cold-boots. A cross-tenant or absent record cold-boots; a backend
+// failure propagates rather than booting a template name as an image ref.
+func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant string) (goldenResolution, error) {
 	m.mu.Lock()
 	var dir string
 	if p := m.pools[key]; p != nil {
@@ -302,18 +310,21 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey) (goldenR
 		}
 		return goldenResolution{release: func() {}}, err
 	}
+	cleanup := func() { release(); l.RUnlock(); m.recDone(id) }
 	var rec templateRecord
 	if err := json.Unmarshal(meta, &rec); err != nil {
-		release()
-		l.RUnlock()
-		m.recDone(id)
+		cleanup()
 		return goldenResolution{release: func() {}}, fmt.Errorf("decode template metadata: %w", err)
+	}
+	if rec.Tenant != "" && !tenantOwns(tenant, rec.Tenant) {
+		cleanup()
+		return goldenResolution{release: func() {}}, nil
 	}
 	return goldenResolution{
 		dir:            dir,
 		templateDigest: digest,
 		promoted:       true,
-		release:        func() { release(); l.RUnlock(); m.recDone(id) },
+		release:        cleanup,
 	}, nil
 }
 
@@ -350,7 +361,7 @@ func (m *Manager) commitTemplate(ctx context.Context, staging, id, tenant string
 		return "", fmt.Errorf("publish template: %w", err)
 	}
 	m.tplMu.Lock()
-	m.tplSet[id] = struct{}{}
+	m.tplSet[id] = tenant
 	m.tplMu.Unlock()
 	return digest, nil
 }

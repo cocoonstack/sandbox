@@ -56,7 +56,9 @@ cleanup() {
     echo "== daemon log tail"
     tail -20 "$DATA/daemon.log"
   fi
-  [[ -n $DAEMON_PID ]] && kill "$DAEMON_PID" 2>/dev/null || true
+  if [[ -n $DAEMON_PID ]]; then
+    kill "$DAEMON_PID" 2>/dev/null || true
+  fi
   wait 2>/dev/null || true
   cocoon vm list --format json 2>/dev/null |
     jq -r '.[] | select(.config.name | startswith("sbx-")) | .config.name' |
@@ -223,7 +225,8 @@ claimed=$(api info | jq .claimed)
 
 echo "== restart: live claim re-adopts, warm VMs of the old life are replaced"
 "$DATA/demo" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -n 1 -ttl 300 -leak
-kill "$DAEMON_PID" && wait "$DAEMON_PID" 2>/dev/null || true
+kill "$DAEMON_PID" 2>/dev/null || true
+wait "$DAEMON_PID" 2>/dev/null || true
 start_daemon
 claimed=$(api info | jq .claimed)
 [[ $claimed == 1 ]] || { echo "claim not re-adopted: claimed=$claimed"; exit 1; }

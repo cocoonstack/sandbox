@@ -28,7 +28,7 @@ class Client:
         self.api_token = api_token
         self.timeout = timeout
 
-    def new(self, template: str, net: str = "", size: str = "", ttl_seconds: int = 0,
+    def new(self, template: str, net: str = "", size: str = "", ttl_seconds: int = 0, claim_ref: str = "",
             volumes: list[str | Mapping[str, str]] | None = None, mount: bool = True) -> Sandbox:
         """Claims a sandbox; a warm hit is milliseconds. On a cluster a warm
         miss may redirect to a peer, followed transparently; if every
@@ -37,7 +37,7 @@ class Client:
         volumes without mounting them, leaving that — and the flush — to
         the workload: releasing without a clean self-umount discards
         unsynced guest pages, since the sandbox performs no sync."""
-        claim = _claim_body(template, net, size, ttl_seconds, volumes, mount)
+        claim = _claim_body(template, net, size, ttl_seconds, volumes, mount, claim_ref)
         return self._claim_from(self.addr, claim)
 
     def delete_template(self, template: str, net: str = "", size: str = "") -> None:
@@ -69,6 +69,26 @@ class Client:
             return _scatter(addrs, probe)
         except APIError:
             raise APIError("lookup", 404, f"no owner found for {id}") from None
+
+    def attach(self, owner_addr: str, id: str, token: str) -> Sandbox:
+        """Binds a handle to an already-claimed sandbox whose owner address is
+        known (an apiserver annotation, say), with no lookup round-trip."""
+        return Sandbox(client=self, id=id, token=token, owner=owner_addr)
+
+    def sandboxes(self) -> list[dict]:
+        """Lists the claims this token may see: id, key, deadline, claim_ref —
+        never tokens or host paths."""
+        reply = self._request(self.addr, "GET", "/v1/sandboxes", None, "list sandboxes")
+        return [dict(sb) for sb in reply.get("sandboxes") or []]
+
+    def drain(self) -> dict:
+        """Cordons the node (root token): new claims are refused, live ones run
+        to their leases."""
+        return self._request(self.addr, "POST", "/v1/drain", None, "drain")
+
+    def uncordon(self) -> dict:
+        """Lifts a drain on the node (root token)."""
+        return self._request(self.addr, "DELETE", "/v1/drain", None, "uncordon")
 
     def checkpoint(self, id: str) -> Checkpoint:
         """A handle for a known checkpoint id, bound to the entry node — no
@@ -166,7 +186,8 @@ class Client:
 
 
 def _claim_body(template: str, net: str, size: str, ttl_seconds: int,
-                volumes: list[str | Mapping[str, str]] | None = None, mount: bool = True) -> dict:
+                volumes: list[str | Mapping[str, str]] | None = None, mount: bool = True,
+                claim_ref: str = "") -> dict:
     claim = {"template": template}
     if net:
         claim["net"] = net
@@ -178,6 +199,8 @@ def _claim_body(template: str, net: str, size: str, ttl_seconds: int,
         claim["volumes"] = [_volume_body(volume, mount) for volume in volumes]
     if not mount:
         claim["volumes_attach_only"] = True
+    if claim_ref:
+        claim["claim_ref"] = claim_ref
     return claim
 
 

@@ -110,8 +110,8 @@ func TestUpdateSelfBumpsOnlyWhenVolumesChange(t *testing.T) {
 func TestConfigDigestMismatch(t *testing.T) {
 	m := newTestMesh(t, "self")
 	m.SetSelfDigest("self-digest")
-	m.merge([]NodeState{{NodeID: "peerA", Addr: "a:1", Epoch: 1, Digest: "self-digest"}})
-	m.merge([]NodeState{{NodeID: "peerB", Addr: "b:1", Epoch: 1, Digest: "other-digest"}})
+	mergeStates(t, m, []NodeState{{NodeID: "peerA", Addr: "a:1", Epoch: 1, Digest: "self-digest"}})
+	mergeStates(t, m, []NodeState{{NodeID: "peerB", Addr: "b:1", Epoch: 1, Digest: "other-digest"}})
 	if n := m.ConfigMismatches(); n != 1 {
 		t.Errorf("ConfigMismatches = %d, want 1 (only peerB diverges)", n)
 	}

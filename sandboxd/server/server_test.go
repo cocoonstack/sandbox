@@ -56,7 +56,7 @@ func TestClaimHappyPath(t *testing.T) {
 	if cr.TemplateDigest != "sha256:claim-digest" {
 		t.Errorf("template digest %q, want sha256:claim-digest", cr.TemplateDigest)
 	}
-	want := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineCH}
+	want := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
 	if gotKey != want {
 		t.Errorf("key %+v, want defaults %+v", gotKey, want)
 	}
@@ -738,7 +738,7 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 	if got := del("Bearer sekret", "template=tpl:x&net=none&size=small"); got != http.StatusNoContent {
 		t.Errorf("delete status %d, want 204", got)
 	}
-	want := types.PoolKey{Template: "tpl:x", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineCH}
+	want := types.PoolKey{Template: "tpl:x", Net: types.NetNone, Size: types.SizeSmall}
 	if gotKey != want {
 		t.Errorf("delete key %+v, want %+v (claim defaults applied)", gotKey, want)
 	}
@@ -1337,6 +1337,62 @@ func TestVolumeClaimKeepsPoolContentAgainstPeerTemplates(t *testing.T) {
 	}
 }
 
+func TestForeignTemplateGossipNeverEscalates(t *testing.T) {
+	hash := types.ClaimRequest{Template: "tpl"}.Key().Hash()
+	tenants := []config.TenantSpec{{Name: "acme", Token: "acme-tok"}, {Name: "beta", Token: "beta-tok"}}
+	for _, tt := range []struct {
+		name, token   string
+		volumes       []types.Volume
+		wantRedirect  bool
+		wantProvision int
+	}{
+		{"foreign volume claim cold-boots locally", "beta-tok", []types.Volume{{Name: "imagenet"}}, false, 1},
+		{"owner volume claim escalates to its template", "acme-tok", []types.Volume{{Name: "imagenet"}}, true, 0},
+		{"foreign plain claim stays local, no existence signal", "beta-tok", nil, false, 1},
+		{"owner plain claim follows its template", "acme-tok", nil, true, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := &fakeManager{
+				volumePlacement: func(types.PoolKey, string, []string) (bool, error) { return true, nil },
+			}
+			placer := &fakePlacer{ownersByProbe: map[string][]string{
+				types.TemplateGossipHash(hash, "acme"): {"peer:7777"},
+			}}
+			srv := New("root-tok", tenants, "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
+			ts := httptest.NewServer(srv.Handler())
+			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+			body, _ := json.Marshal(types.ClaimRequest{Template: "tpl", Volumes: tt.volumes})
+			req, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/claim", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer "+tt.token)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status=%d, want 200", resp.StatusCode)
+			}
+			var cr types.ClaimResponse
+			if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if got := len(cr.Redirect) > 0; got != tt.wantRedirect {
+				t.Errorf("redirect=%v (%v), want %v", got, cr.Redirect, tt.wantRedirect)
+			}
+			if wantPromoted := tt.wantRedirect && tt.volumes != nil; cr.RequirePromoted != wantPromoted {
+				t.Errorf("require_promoted=%v, want %v (only the volume path pins it)", cr.RequirePromoted, wantPromoted)
+			}
+			if mgr.provisionCalls != tt.wantProvision {
+				t.Errorf("provisions=%d, want %d", mgr.provisionCalls, tt.wantProvision)
+			}
+			if mgr.gotRequirePromoted {
+				t.Error("a local resolution must not be forced onto the promoted path")
+			}
+		})
+	}
+}
+
 func TestVolumeClaimValidatesKeyBeforePlacement(t *testing.T) {
 	mgr := &fakeManager{
 		volumePlacement: func(types.PoolKey, string, []string) (bool, error) {
@@ -1394,7 +1450,6 @@ func TestVolumeClaimRejectsShapeBeforePlacement(t *testing.T) {
 		`{"template":"rt:24.04","volumes":["data"]}`,
 		`{"template":"rt:24.04","volumes":[{"name":"data"},{"name":"data"}]}`,
 		`{"template":"rt:24.04","volumes":[{"name":"cocoon-data"}]}`,
-		`{"template":"rt:24.04","engine":"fc","volumes":[{"name":"data"}]}`,
 		`{"template":"rt:24.04","volumes":[{"name":"data","mount":"relative"}]}`,
 		`{"template":"rt:24.04","volumes":[{"name":"data","mount":"/datasets"},{"name":"other","mount":"/datasets/nested"}]}`,
 		`{"template":"rt:24.04","volumes":[{"name":"a"},{"name":"b"},{"name":"c"},{"name":"d"},{"name":"e"},{"name":"f"},{"name":"g"},{"name":"h"},{"name":"i"}]}`,
@@ -1472,7 +1527,7 @@ func TestPreviewHandlerZeroDeadlineMintsLiveToken(t *testing.T) {
 	mgr := &fakeManager{claimDeadline: func(string, string) (time.Time, error) {
 		return time.Time{}, nil
 	}}
-	ps := NewPreviewServer("secret", "node:7777", &fakePreviewMgr{})
+	ps := NewPreviewServer("secret", "node:7777", "node:7777", &fakePreviewMgr{})
 	srv := New("", nil, "node:7777", mgr, &fakeDialer{}, nil, nil, nil, ps)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
@@ -2024,7 +2079,7 @@ func (f *fakeManager) DeleteTemplate(_ context.Context, key types.PoolKey, tenan
 	return f.deleteGolden(key)
 }
 
-func (f *fakeManager) HasGolden(context.Context, types.PoolKey) bool {
+func (f *fakeManager) HasGolden(context.Context, types.PoolKey, string) bool {
 	return f.hasGolden
 }
 
@@ -2032,7 +2087,7 @@ func (f *fakeManager) HasPoolGolden(types.PoolKey) bool {
 	return f.hasPoolGolden
 }
 
-func (f *fakeManager) HasPromotedTemplate(context.Context, types.PoolKey) bool {
+func (f *fakeManager) HasPromotedTemplate(context.Context, types.PoolKey, string) bool {
 	return f.hasPromoted
 }
 
@@ -2186,6 +2241,7 @@ func (f *fakeDialer) DialSilkd(ctx context.Context, sock string) (net.Conn, erro
 type fakePlacer struct {
 	addrs                []string
 	owners               []string
+	ownersByProbe        map[string][]string
 	volumeCandidates     []string
 	volumeOwners         []string
 	templateVolumeOwners []string
@@ -2209,8 +2265,11 @@ func (f *fakePlacer) VolumeCandidates(_ string, names []string) []string {
 	return f.volumeCandidates
 }
 
-func (f *fakePlacer) TemplateOwners(string) []string {
+func (f *fakePlacer) TemplateOwners(probe string) []string {
 	f.templateOwnerCalls++
+	if f.ownersByProbe != nil {
+		return f.ownersByProbe[probe]
+	}
 	return f.owners
 }
 
@@ -2219,8 +2278,11 @@ func (f *fakePlacer) VolumeOwners([]string) []string {
 	return f.volumeOwners
 }
 
-func (f *fakePlacer) TemplateVolumeOwners(string, []string) []string {
+func (f *fakePlacer) TemplateVolumeOwners(probe string, _ []string) []string {
 	f.templateVolumeCalls++
+	if f.ownersByProbe != nil {
+		return f.ownersByProbe[probe]
+	}
 	return f.templateVolumeOwners
 }
 func (f *fakePlacer) VolumeHolders() map[string]int { return f.volumeHolders }

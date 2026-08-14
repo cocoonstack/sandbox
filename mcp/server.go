@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 const (
 	protocolVersion = "2024-11-05"
 	execTimeout     = 5 * time.Minute
+	defaultToolTTL  = time.Hour
 )
 
 // server owns one sandboxd client and the handles minted over this stdio
@@ -50,6 +53,7 @@ func newServer(addr, token, template string) (*server, error) {
 // stdio transport. Requests are handled strictly in order: sandbox tools are
 // stateful, and an agent's tool calls arrive sequentially anyway.
 func (s *server) serve(ctx context.Context, r *bufio.Reader, w io.Writer) error {
+	defer s.closeBoxes()
 	for {
 		line, err := r.ReadBytes('\n')
 		if len(line) == 0 && err != nil {
@@ -130,6 +134,18 @@ func (s *server) box(id string) (*sandbox.Sandbox, error) {
 		return nil, fmt.Errorf("unknown sandbox %q (never created here, or already released)", id)
 	}
 	return sb, nil
+}
+
+// closeBoxes releases everything this session claimed; the lease would
+// otherwise hold the VMs until it expires.
+func (s *server) closeBoxes() {
+	s.mu.Lock()
+	boxes := slices.Collect(maps.Values(s.boxes))
+	clear(s.boxes)
+	s.mu.Unlock()
+	for _, sb := range boxes {
+		_ = sb.Close()
+	}
 }
 
 func (s *server) trackBox(sb *sandbox.Sandbox) {

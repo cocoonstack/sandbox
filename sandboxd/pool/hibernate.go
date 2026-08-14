@@ -205,7 +205,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 		if p, pooled := m.activePool(sb.Key); pooled {
 			idle = p.idle
 		}
-		if idle <= 0 || hasAppliedVolumes(sb) || sb.HibernateSnap != "" || sb.ArchiveCk != "" || now.Sub(sb.LastSeen()) < idle {
+		if skipIdle(sb, idle, now) {
 			continue
 		}
 		victims = append(victims, victim{sb.ID, sb.Token})
@@ -342,4 +342,12 @@ func (m *Manager) resolvePendingSnap(ctx context.Context, sb *types.Sandbox) (ad
 func (m *Manager) recordHibernate(ctx context.Context, sb *types.Sandbox) {
 	m.counters.hibernates.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "hibernate", ID: sb.ID, VMName: sb.VMName})
+}
+
+// skipIdle reports the claims an idle sweep must leave alone: the egress lane
+// cannot resume, a mounted volume cannot be captured, and an already
+// hibernated or archived claim has nothing left to do.
+func skipIdle(sb *types.Sandbox, idle time.Duration, now time.Time) bool {
+	return idle <= 0 || sb.Key.Net == types.NetEgress || hasAppliedVolumes(sb) ||
+		sb.HibernateSnap != "" || sb.ArchiveCk != "" || now.Sub(sb.LastSeen()) < idle
 }

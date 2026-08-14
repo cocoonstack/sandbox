@@ -183,23 +183,22 @@ func (m *Manager) poolIntercepts(key types.PoolKey) bool {
 	return m.poolEgress[key].Intercepts()
 }
 
-// effectivePolicy resolves a claim's egress evaluator: pool ∩ tenant (deny
-// wins), or whichever single one is set; ok is false when neither applies.
+// effectivePolicy resolves pool ∩ tenant; root has no tenant layer.
 func (m *Manager) effectivePolicy(sb *types.Sandbox) (egress.Evaluator, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	poolPol := m.poolEgress[sb.Key]
-	tenantPol := m.tenantEgress[sb.Tenant]
-	switch {
-	case poolPol != nil && tenantPol != nil:
-		return egress.Compose(*poolPol, *tenantPol), true
-	case poolPol != nil:
-		return *poolPol, true
-	case tenantPol != nil:
-		return *tenantPol, true
-	default:
+	if poolPol == nil {
 		return nil, false
 	}
+	if sb.Tenant == "" {
+		return *poolPol, true
+	}
+	tenantPol := m.tenantEgress[sb.Tenant]
+	if tenantPol == nil {
+		return nil, false
+	}
+	return egress.Compose(*poolPol, *tenantPol), true
 }
 
 // newEgressDialer builds the proxy's upstream dialer: internal targets are

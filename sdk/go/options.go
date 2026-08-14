@@ -86,6 +86,12 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
+// WithClaimRef records an opaque caller reference on the claim (the aggregated
+// apiserver passes its k8s "<namespace>/<name>"), echoed by Client.Sandboxes.
+func WithClaimRef(ref string) Option {
+	return func(r *claimRequest) { r.ClaimRef = ref }
+}
+
 // ttlSeconds rounds a lease up to whole wire seconds.
 func ttlSeconds(d time.Duration) int {
 	return int((d + time.Second - 1) / time.Second)

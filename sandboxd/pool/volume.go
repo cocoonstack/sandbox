@@ -135,7 +135,7 @@ func (m *Manager) VolumePlacement(key types.PoolKey, tenant string, names []stri
 	return local, nil
 }
 
-func (m *Manager) resolveVolumes(ctx context.Context, key types.PoolKey, tenant string, requested []types.Volume) ([]resolvedVolume, error) {
+func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested []types.Volume) ([]resolvedVolume, error) {
 	if len(requested) == 0 {
 		return nil, nil
 	}
@@ -144,9 +144,6 @@ func (m *Manager) resolveVolumes(ctx context.Context, key types.PoolKey, tenant 
 	applied, err := types.ValidateVolumes(requested, types.VolumesAttachOnly(requested))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrBadVolume, err)
-	}
-	if key.Engine != types.EngineCH {
-		return nil, fmt.Errorf("%w: volumes require engine ch", ErrBadVolume)
 	}
 	resolved := make([]resolvedVolume, 0, len(applied))
 	for _, volume := range applied {

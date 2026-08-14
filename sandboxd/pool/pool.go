@@ -134,10 +134,8 @@ type SandboxSummary struct {
 	Archived       bool           `json:"archived,omitempty"`
 	FromCheckpoint string         `json:"from_checkpoint,omitempty"`
 	Volumes        []types.Volume `json:"volumes,omitempty"`
-	// ClaimRef echoes the caller reference recorded at claim time (the
-	// aggregated apiserver's k8s "<namespace>/<name>"), so the operator index
-	// can map this sandbox back to the name it was claimed under. Empty for
-	// warm-pool, fork, and checkpoint-branch claims.
+	// ClaimRef echoes the caller reference recorded at claim time; empty for
+	// fork and checkpoint-branch claims.
 	ClaimRef string `json:"claim_ref,omitempty"`
 }
 
@@ -318,11 +316,10 @@ type Manager struct {
 	ckptTTL      time.Duration
 	ckptSweeping atomic.Bool
 
-	// tplSet caches the template ids visible in the store so the 1s gossip
-	// tick never touches the backend (an s3 listing is network I/O); local
-	// promotes/deletes update it, startup loads it.
+	// tplSet caches each template id against its owning tenant ("" = operator),
+	// so the gossip tick and the claim path never pay a store read.
 	tplMu  sync.Mutex
-	tplSet map[string]struct{}
+	tplSet map[string]string
 
 	// recLocks serializes same-id store record mutations and holds off a
 	// re-publish swap while a clone reads the old generation (per id, RW).
@@ -436,12 +433,12 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		return nil, err
 	}
 	m.ckptTTL = time.Duration(cfg.CheckpointTTLHours) * time.Hour
-	m.tplSet = map[string]struct{}{}
+	m.tplSet = map[string]string{}
 	if metas, listErr := m.tpls.Metas(ctx); listErr == nil {
 		for _, raw := range metas {
 			var rec templateRecord
 			if json.Unmarshal(raw, &rec) == nil && rec.ID != "" {
-				m.tplSet[rec.ID] = struct{}{}
+				m.tplSet[rec.ID] = rec.Tenant
 			}
 		}
 	}

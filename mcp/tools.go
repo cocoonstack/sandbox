@@ -14,7 +14,7 @@ import (
 var tools = []tool{
 	{
 		"create_sandbox", "Claim a fresh microVM sandbox; returns its id. Warm claims are milliseconds.",
-		schema(props{"template": str("template image ref; empty uses the server default"), "ttl_seconds": integer("sandbox lifetime; 0 = server default")}), toolCreateSandbox,
+		schema(props{"template": str("template image ref; empty uses the server default"), "net": str("network lane: none (default) or egress"), "size": str("resource tier: small (default), medium, large, xlarge"), "ttl_seconds": integer("sandbox lifetime in seconds; 0 means one hour, and nothing renews it")}), toolCreateSandbox,
 	},
 	{
 		"exec", "Run a command in a sandbox and return stdout/stderr/exit code. A hibernated sandbox wakes transparently.",
@@ -49,7 +49,7 @@ var tools = []tool{
 		schema(props{"sandbox_id": str(""), "path": str("absolute path")}, "sandbox_id", "path"), toolListDir,
 	},
 	{
-		"fork", "Clone a sandbox into N independent children carrying its exact memory and disk state.",
+		"fork", "Clone a sandbox into N independent children carrying its exact memory and disk state; children live one hour.",
 		schema(props{"sandbox_id": str(""), "count": integer("children, 1-16")}, "sandbox_id", "count"), toolFork,
 	},
 	{
@@ -57,7 +57,7 @@ var tools = []tool{
 		schema(props{"sandbox_id": str(""), "name": str("optional label")}, "sandbox_id"), toolCheckpoint,
 	},
 	{
-		"branch_checkpoint", "Claim a fresh sandbox branched from a checkpoint's exact captured moment.",
+		"branch_checkpoint", "Claim a fresh sandbox branched from a checkpoint's exact captured moment; it lives one hour.",
 		schema(props{"checkpoint_id": str("")}, "checkpoint_id"), toolBranchCheckpoint,
 	},
 	{"list_checkpoints", "List checkpoints on the node, newest first.", schema(props{}), toolListCheckpoints},
@@ -94,14 +94,22 @@ func toolSpecs() []map[string]any {
 func toolCreateSandbox(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
 	var args struct {
 		Template   string `json:"template"`
+		Net        string `json:"net"`
+		Size       string `json:"size"`
 		TTLSeconds int    `json:"ttl_seconds"`
 	}
 	if err := parse(raw, &args); err != nil {
 		return "", err
 	}
-	var opts []sandbox.Option
-	if args.TTLSeconds > 0 {
-		opts = append(opts, sandbox.WithTimeout(time.Duration(args.TTLSeconds)*time.Second))
+	// An agent session outlives the node's 5-minute default and nothing renews
+	// a lease, so the sandbox would vanish mid-conversation.
+	ttl := cmp.Or(time.Duration(args.TTLSeconds)*time.Second, defaultToolTTL)
+	opts := []sandbox.Option{sandbox.WithTimeout(ttl)}
+	if args.Net != "" {
+		opts = append(opts, sandbox.WithNetwork(sandbox.NetShape(args.Net)))
+	}
+	if args.Size != "" {
+		opts = append(opts, sandbox.WithSize(sandbox.Size(args.Size)))
 	}
 	sb, err := s.client.New(ctx, cmp.Or(args.Template, s.template), opts...)
 	if err != nil {
@@ -271,7 +279,7 @@ func toolFork(ctx context.Context, s *server, raw json.RawMessage) (string, erro
 	if err != nil {
 		return "", err
 	}
-	children, err := sb.Fork(ctx, args.Count, 0)
+	children, err := sb.Fork(ctx, args.Count, defaultToolTTL)
 	if err != nil {
 		return "", err
 	}
@@ -302,11 +310,11 @@ func toolCheckpoint(ctx context.Context, s *server, raw json.RawMessage) (string
 }
 
 func toolBranchCheckpoint(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	ckpt, err := s.checkpointArg(ctx, raw)
+	ckpt, err := s.checkpointArg(raw)
 	if err != nil {
 		return "", err
 	}
-	sb, err := ckpt.New(ctx)
+	sb, err := ckpt.New(ctx, sandbox.WithTimeout(defaultToolTTL))
 	if err != nil {
 		return "", err
 	}
@@ -327,7 +335,7 @@ func toolListCheckpoints(ctx context.Context, s *server, _ json.RawMessage) (str
 }
 
 func toolDeleteCheckpoint(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	ckpt, err := s.checkpointArg(ctx, raw)
+	ckpt, err := s.checkpointArg(raw)
 	if err != nil {
 		return "", err
 	}
@@ -392,9 +400,8 @@ func (s *server) boxArg(raw json.RawMessage) (*sandbox.Sandbox, error) {
 }
 
 // checkpointArg resolves a checkpoint_id argument: a handle minted in this
-// session when available, else a listing lookup (checkpoints outlive
-// sessions).
-func (s *server) checkpointArg(ctx context.Context, raw json.RawMessage) (*sandbox.Checkpoint, error) {
+// session when available, else a fresh one — checkpoints outlive sessions.
+func (s *server) checkpointArg(raw json.RawMessage) (*sandbox.Checkpoint, error) {
 	var args struct {
 		CheckpointID string `json:"checkpoint_id"`
 	}
@@ -404,16 +411,10 @@ func (s *server) checkpointArg(ctx context.Context, raw json.RawMessage) (*sandb
 	if ckpt, ok := s.ckpt(args.CheckpointID); ok {
 		return ckpt, nil
 	}
-	ckpts, err := s.client.Checkpoints(ctx)
-	if err != nil {
-		return nil, err
+	if args.CheckpointID == "" {
+		return nil, fmt.Errorf("checkpoint_id is required")
 	}
-	for _, ck := range ckpts {
-		if ck.ID == args.CheckpointID {
-			return ck, nil
-		}
-	}
-	return nil, fmt.Errorf("unknown checkpoint %q", args.CheckpointID)
+	return s.client.Checkpoint(args.CheckpointID), nil
 }
 
 func parse(raw json.RawMessage, v any) error {

@@ -25,7 +25,7 @@ GOLANGCILINT_VERSION ?= v2.12.2
 GOLANGCILINT_ROOT := $(LOCALBIN)/golangci-lint-$(GOLANGCILINT_VERSION)
 GOLANGCILINT := $(GOLANGCILINT_ROOT)/golangci-lint
 
-.PHONY: help test lint boot boot-debug extract extract-debug silkd-image base python images \
+.PHONY: help test lint sh-lint boot boot-debug extract extract-debug silkd-image base python images \
 	sandboxd go-test go-lint bench cloc
 
 ## Tool download targets
@@ -48,6 +48,9 @@ test: ## Rust tests: boot/init + silkd
 lint: ## Rust fmt --check + clippy -D warnings: boot/init + silkd
 	cd boot/init && cargo fmt --check && cargo clippy --all-targets -- -D warnings
 	cd silkd && cargo fmt --check && cargo clippy --all-targets -- -D warnings
+
+sh-lint: ## shellcheck every tracked shell script
+	git ls-files '*.sh' | xargs shellcheck
 
 sandboxd: ## build dist/sandboxd
 	mkdir -p dist

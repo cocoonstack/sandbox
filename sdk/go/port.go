@@ -59,7 +59,7 @@ func (p *PortConn) Close() error {
 	p.closeOnce.Do(func() {
 		p.stop()
 		// drain can be parked in a pipe write on an unread tail; only the
-		// reader side unblocks it, so teardown must close the pipe too.
+		// reader side unblocks it.
 		_ = p.out.CloseWithError(net.ErrClosed)
 	})
 	return nil

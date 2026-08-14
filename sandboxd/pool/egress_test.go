@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	egKey    = types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall, Engine: types.EngineCH}
+	egKey    = types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}
 	egPolicy = &egress.Policy{Allow: []egress.Rule{{Host: "example.com", Secret: "gh"}}}
 )
 
@@ -138,15 +138,18 @@ func TestEffectivePolicyComposition(t *testing.T) {
 	tenantOnly := &egress.Policy{Allow: []egress.Rule{{Host: "b.test"}, {Host: "c.test"}}}
 
 	cases := []struct {
-		name         string
-		pool, tenant *egress.Policy
-		allow, deny  string
-		wantArmed    bool
+		name        string
+		tenant      string
+		pool, tnPol *egress.Policy
+		allow, deny string
+		wantArmed   bool
 	}{
-		{"pool only", both, nil, "a.test", "z.test", true},
-		{"tenant only", nil, tenantOnly, "c.test", "a.test", true},
-		{"intersection", both, tenantOnly, "b.test", "a.test", true}, // a.test allowed by pool, denied by tenant
-		{"neither", nil, nil, "", "", false},
+		{"root takes the pool policy whole", "", both, nil, "a.test", "z.test", true},
+		{"root without a pool policy", "", nil, nil, "", "", false},
+		{"tenant intersects", "acme", both, tenantOnly, "b.test", "a.test", true}, // a.test allowed by pool, denied by tenant
+		{"tenant declaring no policy", "acme", both, nil, "", "", false},
+		{"tenant on a policyless pool", "acme", nil, tenantOnly, "", "", false},
+		{"neither", "acme", nil, nil, "", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -155,10 +158,10 @@ func TestEffectivePolicyComposition(t *testing.T) {
 				m.poolEgress[testKey] = tc.pool
 			}
 			m.tenantEgress = map[string]*egress.Policy{}
-			if tc.tenant != nil {
-				m.tenantEgress["acme"] = tc.tenant
+			if tc.tnPol != nil {
+				m.tenantEgress["acme"] = tc.tnPol
 			}
-			sb := &types.Sandbox{Key: testKey, Tenant: "acme"}
+			sb := &types.Sandbox{Key: testKey, Tenant: tc.tenant}
 			eval, ok := m.effectivePolicy(sb)
 			if ok != tc.wantArmed {
 				t.Fatalf("armed=%v, want %v", ok, tc.wantArmed)

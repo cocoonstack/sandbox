@@ -197,8 +197,6 @@ func TestPreviewDialWritesAuditEvent(t *testing.T) {
 		t.Fatalf("setup manager: %v", err)
 	}
 	sb := mustClaim(t, m, testKey)
-	// The fake engine cannot complete the dial; the audit event records the
-	// access attempt against the live claim, before the engine is involved.
 	if _, dialErr := m.PreviewDial(t.Context(), sb.ID, 8080); dialErr == nil {
 		t.Fatal("fake engine dial unexpectedly succeeded")
 	}
@@ -216,7 +214,7 @@ func TestPreviewDialWritesAuditEvent(t *testing.T) {
 	if err := json.Unmarshal([]byte(line), &ev); err != nil {
 		t.Fatalf("bad audit line %q: %v", line, err)
 	}
-	if ev.ID != sb.ID || ev.Op != "preview_dial" || ev.Port != 8080 {
+	if ev.ID != sb.ID || ev.Op != "preview" || ev.Port != 8080 {
 		t.Errorf("audit event %+v", ev)
 	}
 }

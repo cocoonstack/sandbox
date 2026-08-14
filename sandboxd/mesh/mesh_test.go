@@ -15,9 +15,9 @@ import (
 
 func TestMergeKeepsHigherEpoch(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.merge([]NodeState{{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 2}}})
-	m.merge([]NodeState{{NodeID: "b", Addr: "b:7777", Epoch: 3, Pools: map[string]int{"k": 5}}})
-	m.merge([]NodeState{{NodeID: "b", Addr: "b:7777", Epoch: 2, Pools: map[string]int{"k": 9}}}) // stale
+	mergeStates(t, m, []NodeState{{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 2}}})
+	mergeStates(t, m, []NodeState{{NodeID: "b", Addr: "b:7777", Epoch: 3, Pools: map[string]int{"k": 5}}})
+	mergeStates(t, m, []NodeState{{NodeID: "b", Addr: "b:7777", Epoch: 2, Pools: map[string]int{"k": 9}}}) // stale
 
 	got := 0
 	for _, st := range m.Members() {
@@ -34,7 +34,7 @@ func TestMergeNeverOverwritesSelf(t *testing.T) {
 	m := newTestMesh(t, "a")
 	m.UpdateSelf(t.Context(), map[string]int{"k": 3}, nil, nil)
 	// A peer claiming to be "a" must not clobber our authoritative self entry.
-	m.merge([]NodeState{{NodeID: "a", Addr: "evil:9999", Epoch: 999, Pools: map[string]int{"k": 0}}})
+	mergeStates(t, m, []NodeState{{NodeID: "a", Addr: "evil:9999", Epoch: 999, Pools: map[string]int{"k": 0}}})
 
 	for _, st := range m.Members() {
 		if st.NodeID == "a" && (st.Addr != "a:7777" || st.Pools["k"] != 3) {
@@ -46,7 +46,7 @@ func TestMergeNeverOverwritesSelf(t *testing.T) {
 func TestCandidatesExcludeSelfAndEmpty(t *testing.T) {
 	m := newTestMesh(t, "a")
 	m.UpdateSelf(t.Context(), map[string]int{"k": 5}, nil, nil) // self has warm, but is never a candidate
-	m.merge([]NodeState{
+	mergeStates(t, m, []NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 2}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Pools: map[string]int{"k": 0}}, // no warm
 		{NodeID: "d", Addr: "d:7777", Epoch: 1, Pools: map[string]int{"other": 4}},
@@ -64,7 +64,7 @@ func TestCandidatesExcludeSelfAndEmpty(t *testing.T) {
 func TestTemplateOwnersExcludeSelfAndUnknown(t *testing.T) {
 	m := newTestMesh(t, "a")
 	m.UpdateSelf(t.Context(), nil, []string{"tpl"}, nil) // self holds it, but is never an owner candidate
-	m.merge([]NodeState{
+	mergeStates(t, m, []NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Templates: []string{"tpl", "other"}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Templates: []string{"other"}},
 	})
@@ -79,7 +79,7 @@ func TestTemplateOwnersExcludeSelfAndUnknown(t *testing.T) {
 
 func TestForgetPrunesDeadNode(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.merge([]NodeState{{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 3}}})
+	mergeStates(t, m, []NodeState{{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 3}}})
 	if len(m.Candidates("k")) != 1 {
 		t.Fatal("setup: b should be a candidate")
 	}
@@ -95,9 +95,33 @@ func TestForgetPrunesDeadNode(t *testing.T) {
 	}
 }
 
+func TestForgottenNodeStaysGoneUntilItRejoins(t *testing.T) {
+	m := newTestMesh(t, "a")
+	dead := NodeState{NodeID: "b", Addr: "b:7777", Epoch: 4, Pools: map[string]int{"k": 3}}
+	mergeStates(t, m, []NodeState{dead})
+	m.forget("b")
+
+	m.merge([]NodeState{dead})
+	if got := m.Candidates("k"); got != nil {
+		t.Errorf("a lagging peer resurrected b: %v", got)
+	}
+	restarted := dead
+	restarted.Epoch = 5
+	m.merge([]NodeState{restarted})
+	if got := m.Candidates("k"); got != nil {
+		t.Errorf("a higher epoch alone resurrected b: %v", got)
+	}
+
+	m.admit("b")
+	m.merge([]NodeState{restarted})
+	if len(m.Candidates("k")) != 1 {
+		t.Error("b rejoined the cluster and must be reinstated")
+	}
+}
+
 func TestCandidatesPowerOfTwo(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.merge([]NodeState{
+	mergeStates(t, m, []NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 1}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Pools: map[string]int{"k": 1}},
 		{NodeID: "d", Addr: "d:7777", Epoch: 1, Pools: map[string]int{"k": 1}},
@@ -144,7 +168,7 @@ func TestTwoNodeClusterGossipsPools(t *testing.T) {
 func TestVolumeOwnersRequireEveryNameAndExcludeSelf(t *testing.T) {
 	m := newTestMesh(t, "a")
 	m.UpdateSelf(t.Context(), nil, nil, []string{"dataset", "weights"})
-	m.merge([]NodeState{
+	mergeStates(t, m, []NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Volumes: []string{"dataset", "weights"}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Volumes: []string{"dataset"}},
 		{NodeID: "d", Addr: "d:7777", Epoch: 1, Volumes: []string{"weights"}},
@@ -163,7 +187,7 @@ func TestVolumeOwnersRequireEveryNameAndExcludeSelf(t *testing.T) {
 
 func TestVolumeCandidatesRequireWarmAndEveryVolume(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.merge([]NodeState{
+	mergeStates(t, m, []NodeState{
 		{NodeID: "both", Addr: "both:7777", Epoch: 1, Pools: map[string]int{"k": 2}, Volumes: []string{"dataset", "weights"}},
 		{NodeID: "partial", Addr: "partial:7777", Epoch: 1, Pools: map[string]int{"k": 3}, Volumes: []string{"dataset"}},
 		{NodeID: "cold", Addr: "cold:7777", Epoch: 1, Pools: map[string]int{"k": 0}, Volumes: []string{"dataset", "weights"}},
@@ -179,7 +203,7 @@ func TestVolumeCandidatesRequireWarmAndEveryVolume(t *testing.T) {
 
 func TestTemplateVolumeOwnersUseTrueIntersection(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.merge([]NodeState{
+	mergeStates(t, m, []NodeState{
 		{NodeID: "template", Addr: "template:7777", Epoch: 1, Templates: []string{"tpl"}},
 		{NodeID: "volume", Addr: "volume:7777", Epoch: 1, Volumes: []string{"dataset"}},
 		{NodeID: "both", Addr: "both:7777", Epoch: 1, Templates: []string{"tpl"}, Volumes: []string{"dataset"}},
@@ -196,7 +220,7 @@ func TestTemplateVolumeOwnersUseTrueIntersection(t *testing.T) {
 func TestVolumeHoldersCountSelfAndPeers(t *testing.T) {
 	m := newTestMesh(t, "a")
 	m.UpdateSelf(t.Context(), nil, nil, []string{"dataset"})
-	m.merge([]NodeState{
+	mergeStates(t, m, []NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Volumes: []string{"dataset", "weights"}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Volumes: []string{"weights"}},
 	})
@@ -207,12 +231,21 @@ func TestVolumeHoldersCountSelfAndPeers(t *testing.T) {
 	}
 }
 
+func mergeStates(t *testing.T, m *Mesh, states []NodeState) {
+	t.Helper()
+	for _, st := range states {
+		m.admit(st.NodeID)
+	}
+	m.merge(states)
+}
+
 func newTestMesh(t *testing.T, id string) *Mesh {
 	t.Helper()
 	return &Mesh{
 		epochPath: filepath.Join(t.TempDir(), "mesh-epoch"),
 		self:      NodeState{NodeID: id, Addr: id + ":7777", Pools: map[string]int{}},
 		view:      map[string]NodeState{id: {NodeID: id, Addr: id + ":7777"}},
+		live:      map[string]struct{}{},
 	}
 }
 

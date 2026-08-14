@@ -20,7 +20,7 @@ the cocoon CLI and needs a template image with silkd baked in.
   (pull via cocoon, or `cocoon image import` a tar)
 
 Prebuilt static linux/amd64 and linux/arm64 binaries (`sandboxd`,
-`sandbox-mcp`, `silkd`, with `checksums.txt`) ship with every
+`sandboxd.dbg`, `sandbox-mcp`, `silkd`, with `checksums.txt`) ship with every
 [GitHub release](https://github.com/cocoonstack/sandbox/releases); the boot
 artifact and the `base`/`rt`/`python` images are multi-arch manifests
 (`browser` and `android` remain amd64-only). Build from source with
@@ -29,7 +29,7 @@ reports what you are running.
 
 ## Upgrading
 
-This CH-only release does not convert existing VM or snapshot state. Drain old
+This release does not convert VM or snapshot state from older releases. Drain old
 claims and use fresh `data_dir` and `checkpoint_dir` locations when upgrading;
 older checkpoints and promoted templates must not be reused.
 
@@ -89,6 +89,8 @@ sandboxd reads one JSON file (`-config`, default
 | `advertise_addr` | = `listen` | the host:port clients reach this node at; returned as a claim's owner address and gossiped to peers. Must be routable when `listen` is a wildcard |
 | `bridges` / `networks` | unset | egress-lane attachment: a list of host bridge devices, or a list of CNI conflist names. Mutually exclusive; with neither set the node serves only the no-network lane. A Linux bridge holds at most 1024 ports (kernel `BR_MAX_PORTS`), so an N-entry list raises the node's egress ceiling to N×1024 — VMs spread over the list by a stable hash of the VM name, so size it with headroom (the spread is statistical, not exact). `bridges` keeps the raw TAP-on-bridge attachment (taps in the root netns, no per-VM network namespace or CNI plugin execution); `networks` runs the CNI chain per VM. [Guarded egress](egress.md) needs `bridges` and rejects a CNI network at load |
 | `volumes` | unset | node-local catalog of operator-managed dataset images: `[ {"name":"imagenet","path":"/srv/datasets/imagenet.img","directio":"off","tenants":["acme"]}, {"name":"scratch-db","path":"/srv/datasets/scratch.img","writable":true} ]`. Names match `^[a-z][a-z0-9_-]{0,19}$` and cannot start with `cocoon-`; paths are absolute; `directio` is `on`, `off`, or `auto` and defaults to `off` for both read-only and writable entries. `tenants` is an optional access list: empty means every authenticated scope, while every listed name must exist in the node's `tenants` config; root always has access. `writable` (default `false`) lets a claim request `mode: "rw"` on that entry — see [Dataset volumes](#dataset-volumes). The catalog is intentionally not part of the cluster digest |
+| `secrets` | unset | node-side credentials the egress proxy injects by name: `[{"name": "gh", "header": "Authorization", "value_env": "GH_TOKEN"}]`. A pool or tenant rule references the name; the value comes from the environment, never this file. See [egress](egress.md) |
+| `egress_internal_allow` | unset | CIDR prefixes re-admitted through the egress proxy's SSRF guard, node-wide (every pool and tenant). Prefixes, not a permit-private switch — the guest bridges are themselves ULA/RFC1918. See [egress](egress.md) |
 | `egress_ca` | unset | [HTTPS-interception](egress.md#https-interception) PKI: `root_cert` (the cluster root baked into intercepted guests; may bundle old+new roots during rotation) plus this node's `intermediate_cert`/`intermediate_key` from `sandboxd ca issue-intermediate`. Required when any pool rule sets `intercept` |
 | `api_token` | unset | the operator (root) credential: when set, guards the node-level endpoints (Bearer) with full access, including release-by-id cleanup. Per-sandbox tokens guard ordinary sandbox-scoped calls |
 | `tenants` | unset | multi-tenant tokens next to `api_token`: `[{"name": "acme", "token": "…", "max_claims": 50}]`. A tenant token reaches the resource-creating verbs (claim, fork, promote, checkpoint, preview), catalog discovery, and its own sandbox/checkpoint listings; everything it creates is stamped with the tenant name. Root-only surfaces (per-id sandbox reads, `GET /v1/info`, `PUT /v1/pools`, `POST/DELETE /v1/drain`, `/metrics`) answer it 403. `max_claims` (0 = unlimited) caps that tenant's live claims next to the node-wide cap. Requires `api_token` set. Names and tokens must be unique, tokens distinct from `api_token`. On a cluster all nodes must carry the same tenants set (the SDK replays whichever token authorized a redirect), and per-node caps mean a tenant's effective cluster limit is `max_claims` × nodes. Empty = exactly the single-token behavior |
@@ -96,19 +98,19 @@ sandboxd reads one JSON file (`-config`, default
 | `refill_concurrency` | 0 (auto) | concurrent VM provisioning budget, shared by warm-pool refills, fork clones, and the reap/hibernate/reconcile engine batches. 0 sizes it from the node: `NumCPU*2/3` clamped to [4, 256] — a 384-core node gets 256; small nodes keep a floor of 4 |
 | `preview_listen` | (off) | address for a preview HTTP server that serves guest ports under signed URLs; needs `preview_secret` |
 | `preview_secret` | — | cluster-shared HMAC secret signing preview tokens (all nodes share one) |
-| `preview_advertise` | = `preview_listen` | the base URL a browser/proxy reaches this node's preview server at |
+| `preview_advertise` | = `preview_listen` | the browser-facing preview base URL; nodes behind one TLS proxy may share it, while signed tokens route internally through each owner's `advertise_addr` |
 | `checkpoint_dir` | `<data_dir>/checkpoints` | where checkpoints and promoted templates live. Point it at a shared FUSE mount (JuiceFS over object storage, NFS) and every node sharing the mount can branch every checkpoint — records are generation-addressed with `meta.json` as the atomic commit pointer, so no cross-node locking is required of the filesystem. A re-publish retains its superseded export generation for at least ~1h and until a following hourly sweep so an in-flight clone that resolved the old metadata can finish; budget the current generation plus every generation retained across that grace-and-sweep window. An explicit delete can make a concurrent clone fail visibly. One contract on any shared root (mount or bucket): a template key has a single writer — promotes go to the sandbox's owner node, and operators must not race promotes of one name from different nodes (checkpoint ids are node-generated and never collide) |
 | `checkpoint_store` | dir | checkpoint AND promoted-template backend (both live in one store root, id-namespaced ck_/tp_): `{"kind": "s3", "s3": {"bucket": "…", "prefix": "ck/", "endpoint": "…", "region": "…", "force_path_style": true}}` stores checkpoints in object storage (any node claims any checkpoint, no shared mount needed). Credentials come from the standard AWS chain (env/IAM role), never this file. Re-publish retains prior export generations until Delete so an in-flight fetch that selected old metadata can finish; budget storage for those generations. An explicit S3 Delete can still make a concurrent fetch that has not finished materializing fail visibly. A crash between upload and the meta.json commit marker leaves orphan objects invisible to listings — add an S3 lifecycle rule to reclaim them. Absent = the dir backend at `checkpoint_dir` |
 | `checkpoint_ttl_hours` | 0 (keep forever) | ages out checkpoints older than this; the sweep runs hourly and at startup. Explicit deletes never wait for it. Must be nonzero and match fleet-wide when `checkpoint_peer_heal` is on — it is the expiry eligibility point for a healed replica a delete broadcast missed, after which its next successful hourly sweep removes it; persistent sweep failure extends retention until one succeeds, so it is not a hard ceiling |
 | `checkpoint_peer_heal` | false | on a cluster, lets a node pull a checkpoint it lacks from a peer — found via a live probe, not gossip — rather than failing the branch; see [placement lifecycle](cluster.md#checkpoints-on-a-cluster). Three requirements, all enforced at config load: a nonempty `api_token` (the blob transfer between peers authenticates with it; without one the raw record stream would be open), `mesh.cluster_key` set (the pull presents the fleet `api_token` to an address learned from the peer probe, so the gossip layer carrying that address must itself be authenticated), and `checkpoint_ttl_hours` nonzero (a replica a delete broadcast missed becomes eligible for expiry after it, and its next successful hourly sweep removes it — so it is the finite eligibility point, not an exact ceiling). A shared checkpoint store (`checkpoint_store` kind `s3`) ignores this setting — every node already resolves every checkpoint directly, so there is nothing to heal |
 | `warm_max` (pool entry) | 0 (static) | turns on the demand-adaptive watermark for that pool: the warm target rises from `warm` toward `warm_max` while claims arrive faster than the measured provision lead covers, and decays back over ~a minute of silence |
 | `max_claims` | 0 (unlimited) | node-wide cap on live claims; claim/fork/branch requests beyond it answer 429 with the pool state unharmed (on a cluster, normal warm-candidate placement applies, with volume claims limited to candidates holding every requested volume) |
-| `audit_log` | false | append every relayed request frame's op + addressing fields (never payloads) to `<data_dir>/audit.jsonl`, size-rotated with one `.1` backup. Records are `{t, id, op}` plus whichever addressing fields the op carries (`argv`, `path`, `dest`, `from`, `to`, `url`, `session`, `port`); preview accesses record as op `preview_dial`. A request frame whose first line exceeds 4 KiB is skipped, never truncated |
-| `idle_hibernate_seconds` | 0 (off) | node-wide idle policy for unpooled claims (template/checkpoint claims): a claim with no data-plane connection for this long is hibernated; the next call wakes it transparently. Per-pool `idle_hibernate_seconds` (in a pool entry) does the same for that pool's claims — pooled keys ignore the node-wide value. Opt-in deliberately: a wake costs latency and the snapshot, so callers with their own idle logic must not pay twice |
+| `audit_log` | false | append every relayed request frame's op + addressing fields (never payloads) to `<data_dir>/audit.jsonl`, size-rotated with one `.1` backup. Records are `{t, id, op}` plus whichever addressing fields the op carries (`argv`, `path`, `dest`, `from`, `to`, `url`, `session`, `port`), plus `decision` and `secret` (the ref name, never its value) on `egress` records; preview accesses record as op `preview`, one per request. A request frame whose first line exceeds 4 KiB is skipped, never truncated |
+| `idle_hibernate_seconds` | 0 (off) | node-wide idle policy for unpooled claims (template/checkpoint claims): a none-lane claim with no data-plane connection for this long is hibernated; the next call wakes it transparently. Per-pool `idle_hibernate_seconds` does the same for that pool's claims; pooled keys ignore the node-wide value, and egress pools reject it because they cannot resume safely. Opt in deliberately: a wake costs latency and the snapshot, so callers with their own idle logic must not pay twice |
 | `archive_after_seconds` | 0 (off) | tier below hibernation: a hibernated claim idle this long is checkpointed to the store and its local VM dropped, freeing the node entirely; the next call restores it transparently (a checkpoint restore's latency). Requires `idle_hibernate_seconds > 0` and must exceed it. Node-wide for unpooled keys; per-pool overrides for that pool |
 | `archive_delete_after_seconds` | 0 (keep) | purge an archived claim's store checkpoint this long after it was archived, reclaiming storage; the claim is then gone for good. Same node-wide/per-pool split |
 | `mesh` | unset | join a cluster ([Clusters](cluster.md)); unset = single node |
-| `pools[]` | — | warm pools. `warm` defaults to 4; `net` is `none` or `egress`; `size` is a tier, below. Retune online without a restart via [`PUT /v1/pools`](sandboxd-api.md#put-v1pools) — omitted pools drain. This is the **first-boot seed**: once a node takes a `PUT /v1/pools`, the applied set persists to `<data_dir>/pools.json` and overrides this section on every later boot (a startup log notes it); delete `pools.json` to return to config-owned pools. Egress stays config-owned either way. See [state ownership](cluster.md#state-ownership) |
+| `pools[]` | — | warm pools, keyed by `(template, net, size)`. `warm` defaults to 4; `net` is `none` or `egress`; `size` is a tier, below. Retune online without a restart via [`PUT /v1/pools`](sandboxd-api.md#put-v1pools) — omitted pools drain. This is the **first-boot seed**: once a node takes a `PUT /v1/pools`, the applied set persists to `<data_dir>/pools.json` and overrides this section on every later boot (a startup log notes it); delete `pools.json` to return to config-owned pools. Egress stays config-owned either way. See [state ownership](cluster.md#state-ownership) |
 
 Size tiers (free-form CPU/memory is deliberately not accepted — it would
 fragment the warm pools):
@@ -155,8 +157,7 @@ mounts the device before finalizing the claim: `mode: "ro"` (the default)
 attaches and mounts read-only; `mode: "rw"` requires the catalog entry's
 `writable: true` and attaches and mounts read-write. Setup failure destroys
 the VM without quiescing — the claim was never handed out, so no workload
-write happened — and a popped warm VM is refilled normally. Firecracker
-volume claims are rejected.
+write happened — and a popped warm VM is refilled normally.
 
 A multi-volume claim brings every volume up concurrently: each volume's own
 marker→attach→mount order is preserved, but cocoon serializes the hypervisor
@@ -295,7 +296,6 @@ here validates on load:
   "pools": [
     {"template": "rt:24.04", "net": "none", "size": "small", "warm": 4, "warm_max": 12},
     {"template": "rt:24.04", "net": "egress", "size": "medium", "warm": 2,
-     "idle_hibernate_seconds": 120, "archive_after_seconds": 900,
      "egress": {"allow": [
        {"host": "api.github.com", "methods": ["GET", "POST"], "secret": "gh", "intercept": true},
        {"host": "*.googleapis.com"}
@@ -452,12 +452,18 @@ sandboxd:
   life is clamped to the claim's lease.
 - **Serving**: any node's preview listener verifies the token (no shared
   state), then reverse-proxies to the guest port over the relay if it owns
-  the sandbox, or forwards to the owner node otherwise. A released sandbox
-  is gone from the claim map, so its URL stops resolving — revocation is
-  the liveness lookup, not a list.
+  the sandbox, or forwards over HTTP to the owner node's `advertise_addr`
+  otherwise. A released sandbox is gone from the claim map, so its URL stops
+  resolving — revocation is the liveness lookup, not a list.
 - **The public entry point is a commodity dumb proxy.** Because any node
   can accept and forward, front the nodes with whatever terminates TLS and
   round-robins: a cloud HTTPS load balancer with a managed wildcard cert
   (GCP/AWS) in production, or a plain nginx/Caddy for self-hosting. It
   understands nothing about tokens — not sandboxd's code. Dev and e2e hit
   `preview_listen` directly over HTTP.
+- **Sharing scope**: a preview URL is a bearer link, and its token payload
+  (sandbox id, port, owner `advertise_addr`) is readable by whoever holds
+  it — keep `advertise_addr` off browser-routable networks. All URLs under
+  one `preview_advertise` share one browser origin, so different claims'
+  apps are same-origin to the browser; workloads needing browser-side
+  isolation need per-sandbox subdomains on the fronting proxy.

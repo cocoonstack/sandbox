@@ -22,7 +22,6 @@ type ClaimRequest struct {
 	Template string   `json:"template"`
 	Net      NetShape `json:"net,omitempty"`
 	Size     Size     `json:"size,omitempty"`
-	Engine   Engine   `json:"engine,omitempty"`
 	Volumes  []Volume `json:"volumes,omitempty"`
 	// VolumesAttachOnly attaches every requested volume without mounting it:
 	// the workload finds the device by its serial and owns the mount contract.
@@ -40,7 +39,7 @@ type ClaimRequest struct {
 
 // Key resolves the requested pool key with the wire defaults filled.
 func (r ClaimRequest) Key() PoolKey {
-	return PoolKey{Template: r.Template, Net: r.Net, Size: r.Size, Engine: r.Engine}.Defaulted()
+	return PoolKey{Template: r.Template, Net: r.Net, Size: r.Size}.Defaulted()
 }
 
 // ClaimResponse is the wire reply of POST /v1/claim. A successful claim

@@ -4,7 +4,7 @@
 # under /boot/ for os-image builds to COPY --from. Built per-platform on
 # native runners (a kernel build under QEMU emulation takes hours).
 
-FROM debian:bookworm-slim AS kbuild
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS kbuild
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential bc bison flex libelf-dev libssl-dev \
     xz-utils curl ca-certificates python3 \
@@ -75,14 +75,14 @@ RUN set -e; \
     fi; \
     gcc usr/gen_init_cpio.c -o /usr/local/bin/gen_init_cpio
 
-FROM rust:1-alpine AS initbuild
+FROM rust:1-alpine@sha256:3c38f3f82c2f3d73da3b38e18d279393a04cb43ddded0e35088a8c3324d40900 AS initbuild
 RUN apk add --no-cache musl-dev
 WORKDIR /build
 COPY init/Cargo.toml init/Cargo.lock ./
 COPY init/src ./src
 RUN cargo build --release --locked && cp target/release/sandbox-init /sandbox-init
 
-FROM busybox:musl AS bb
+FROM busybox:musl@sha256:32b5cdad7cce41dfd53d0ae06baebcf8357a147ee7694dc706911c373bc30c37 AS bb
 
 FROM kbuild AS pack
 ARG INITRD_DEBUG=0

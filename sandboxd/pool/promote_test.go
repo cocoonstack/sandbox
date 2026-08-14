@@ -26,7 +26,7 @@ func TestPromoteThenClaimClonesFromTemplate(t *testing.T) {
 	if len(eng.snapSaves) != 1 || !slices.Contains(eng.snapRemoves, eng.snapSaves[0]) {
 		t.Errorf("snapSaves=%v snapRemoves=%v, want one transient snapshot dropped", eng.snapSaves, eng.snapRemoves)
 	}
-	key := types.PoolKey{Template: "tpl:x", Net: parent.Key.Net, Size: parent.Key.Size, Engine: parent.Key.Engine}
+	key := types.PoolKey{Template: "tpl:x", Net: parent.Key.Net, Size: parent.Key.Size}
 	if gotKey != key {
 		t.Errorf("returned key %+v, want %+v (the parent's axes)", gotKey, key)
 	}
@@ -146,18 +146,18 @@ func TestDeleteTemplate(t *testing.T) {
 	if _, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:del", ""); err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
-	key := types.PoolKey{Template: "tpl:del", Net: testKey.Net, Size: testKey.Size, Engine: testKey.Engine}
+	key := types.PoolKey{Template: "tpl:del", Net: testKey.Net, Size: testKey.Size}
 
 	if err := m.DeleteTemplate(t.Context(), testKey, ""); !errors.Is(err, ErrPooledTemplate) {
 		t.Errorf("pooled delete: %v, want ErrPooledTemplate", err)
 	}
-	if err := m.DeleteTemplate(t.Context(), types.PoolKey{Template: "nope", Net: testKey.Net, Size: testKey.Size, Engine: testKey.Engine}, ""); !errors.Is(err, ErrUnknownTemplate) {
+	if err := m.DeleteTemplate(t.Context(), types.PoolKey{Template: "nope", Net: testKey.Net, Size: testKey.Size}, ""); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("unknown delete: %v, want ErrUnknownTemplate", err)
 	}
 	if err := m.DeleteTemplate(t.Context(), key, ""); err != nil {
 		t.Fatalf("DeleteTemplate: %v", err)
 	}
-	if m.HasGolden(t.Context(), key) {
+	if m.HasGolden(t.Context(), key, "") {
 		t.Error("template still resolvable after delete")
 	}
 	// The next claim for the deleted template cold-boots instead of cloning.
@@ -200,7 +200,7 @@ func TestResolveGoldenSkipsPromotedEgressTemplate(t *testing.T) {
 	if _, err = m.commitTemplate(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("seed template: %v", err)
 	}
-	golden, err := m.resolveGolden(t.Context(), egKey)
+	golden, err := m.resolveGolden(t.Context(), egKey, "")
 	if err != nil {
 		t.Fatalf("resolveGolden: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestPromoteFailsClosedOnMetaError(t *testing.T) {
 	if _, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "shared:v1", "acme"); err != nil {
 		t.Fatalf("promote: %v", err)
 	}
-	key := types.PoolKey{Template: "shared:v1", Net: testKey.Net, Size: testKey.Size, Engine: testKey.Engine}
+	key := types.PoolKey{Template: "shared:v1", Net: testKey.Net, Size: testKey.Size}
 	meta := filepath.Join(m.dataDir, "checkpoints", store.TemplateID(key.Hash()), store.MetaFile)
 	if err := os.Chmod(meta, 0o000); err != nil {
 		t.Fatalf("chmod: %v", err)
@@ -309,6 +309,101 @@ func TestPromoteRefusesCrossTenantOverwrite(t *testing.T) {
 	r := claim("") // root may replace anything
 	if _, _, err := m.Promote(t.Context(), r.ID, Cred{Token: r.Token}, "shared:v1", ""); err != nil {
 		t.Errorf("root replace: %v, want ok", err)
+	}
+}
+
+func TestTemplateClaimIsTenantScoped(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	claim := func(tenant string) *types.Sandbox {
+		t.Helper()
+		sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, tenant, "", nil)
+		if err != nil {
+			t.Fatalf("claim %q: %v", tenant, err)
+		}
+		return sb
+	}
+
+	a := claim("acme")
+	private, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "acme-private", "acme")
+	if err != nil {
+		t.Fatalf("acme promote: %v", err)
+	}
+	r := claim("")
+	shared, _, err := m.Promote(t.Context(), r.ID, Cred{Token: r.Token}, "ops-shared", "")
+	if err != nil {
+		t.Fatalf("root promote: %v", err)
+	}
+
+	if _, err := m.ClaimProvisionPromoted(t.Context(), private, time.Hour, "beta", "", nil); !errors.Is(err, ErrUnknownTemplate) {
+		t.Errorf("beta claiming acme's template: %v, want ErrUnknownTemplate", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		key    types.PoolKey
+		tenant string
+	}{
+		{"owner claims its own", private, "acme"},
+		{"root claims a tenant's", private, ""},
+		{"tenant claims a root template", shared, "beta"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sb, err := m.ClaimProvisionPromoted(t.Context(), tc.key, time.Hour, tc.tenant, "", nil)
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			if sb.TemplateDigest == "" {
+				t.Error("claim did not resolve from the promoted template")
+			}
+		})
+	}
+}
+
+func TestHasPromotedTemplateIsTenantScoped(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	key, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "acme-private", "acme")
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+
+	// Routing must answer what a claim would: promising beta a golden here
+	// makes redirectClaim skip the peer hop and cold-boot the name as an image.
+	if m.HasPromotedTemplate(t.Context(), key, "beta") {
+		t.Error("beta sees acme's template as a local golden")
+	}
+	for _, tenant := range []string{"acme", ""} {
+		if !m.HasPromotedTemplate(t.Context(), key, tenant) {
+			t.Errorf("tenant %q lost its own template", tenant)
+		}
+	}
+}
+
+func TestTemplateHashesAreTenantScoped(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	key, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "acme-private", "acme")
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+
+	hashes := m.TemplateHashes()
+	if want := types.TemplateGossipHash(key.Hash(), "acme"); !slices.Contains(hashes, want) {
+		t.Errorf("gossip %v lacks the owner-scoped hash %s", hashes, want)
+	}
+	for name, bad := range map[string]string{
+		"raw":     key.Hash(),
+		"foreign": types.TemplateGossipHash(key.Hash(), "beta"),
+	} {
+		if slices.Contains(hashes, bad) {
+			t.Errorf("gossip %v carries the %s hash — a foreign tenant could match it", hashes, name)
+		}
 	}
 }
 

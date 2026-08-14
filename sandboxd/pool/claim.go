@@ -30,7 +30,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	if err := m.validate(key); err != nil {
 		return nil, err
 	}
-	volumeSpecs, err := m.resolveVolumes(ctx, key, tenant, volumes)
+	volumeSpecs, err := m.resolveVolumes(ctx, tenant, volumes)
 	if err != nil {
 		return nil, err
 	}
@@ -103,10 +103,7 @@ func (m *Manager) ClaimDeadline(id, token string) (time.Time, error) {
 	return sb.Deadline, nil
 }
 
-// PreviewDial opens a byte stream to a guest port for the preview server. The
-// caller has already verified the signed preview token, so no sandbox token
-// is needed; the live-claim lookup is the revocation check — a released or
-// reaped sandbox is absent and this fails. A hibernated sandbox wakes.
+// PreviewDial authorizes one preview request and opens its guest connection.
 func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.Conn, error) {
 	m.mu.Lock()
 	sb, ok := m.claimed[id]
@@ -114,11 +111,8 @@ func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
-	sb.Touch() // a live preview stream is data-plane activity
-	// Preview bypasses the relay's audit tap (it dials the engine directly),
-	// so record the access here — the only data-plane entry that would
-	// otherwise leave no audit trace.
-	m.recordAudit(ctx, id, auditFrame{Op: "preview_dial", Port: port})
+	sb.Touch()
+	m.recordAudit(ctx, id, auditFrame{Op: "preview", Port: port})
 	sock, err := m.wakeResolved(ctx, sb)
 	if err != nil {
 		return nil, err
@@ -512,7 +506,7 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	if err := m.validate(key); err != nil {
 		return nil, err
 	}
-	volumeSpecs, err := m.resolveVolumes(ctx, key, tenant, volumes)
+	volumeSpecs, err := m.resolveVolumes(ctx, tenant, volumes)
 	if err != nil {
 		return nil, err
 	}
@@ -522,7 +516,7 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	}
 	reserved := applied
 	defer func() { m.unreserveVolumes(reserved) }()
-	golden, err := m.resolveGolden(ctx, key)
+	golden, err := m.resolveGolden(ctx, key, tenant)
 	if err != nil {
 		return nil, fmt.Errorf("resolve template: %w", err)
 	}

@@ -34,7 +34,9 @@ cleanup() {
     echo "== daemon log tail"
     tail -30 "$DATA/daemon.log"
   fi
-  [[ -n $DAEMON_PID ]] && kill "$DAEMON_PID" 2>/dev/null || true
+  if [[ -n $DAEMON_PID ]]; then
+    kill "$DAEMON_PID" 2>/dev/null || true
+  fi
   wait 2>/dev/null || true
   cocoon vm list --format json 2>/dev/null |
     jq -r '.[] | select(.config.name | startswith("sbx-")) | .config.name' |

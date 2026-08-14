@@ -11,7 +11,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-var interceptKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall, Engine: types.EngineCH}
+var interceptKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
 
 func TestGoldenBuildInstallsCAForInterceptPool(t *testing.T) {
 	eng := newFakeEngine()

@@ -51,6 +51,7 @@ type Mesh struct {
 	mu   sync.Mutex
 	self NodeState
 	view map[string]NodeState // node_id → latest known state (includes self)
+	live map[string]struct{}  // members SWIM reports; gossip about anyone else is ignored
 }
 
 // New starts a mesh member listening per cfg. selfAddr is the data-plane
@@ -72,6 +73,7 @@ func New(ctx context.Context, cfg *memberlist.Config, nodeID, selfAddr string, s
 			Pools:  map[string]int{},
 		},
 		view: map[string]NodeState{},
+		live: map[string]struct{}{},
 	}
 	if err := m.persistEpoch(epoch); err != nil {
 		return nil, fmt.Errorf("persist mesh epoch: %w", err)
@@ -286,12 +288,19 @@ func (m *Mesh) owners(match func(NodeState) bool) []string {
 	return owners
 }
 
+func (m *Mesh) admit(nodeID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.live[nodeID] = struct{}{}
+}
+
 // forget drops a departed node from the placement view so redirects stop
 // targeting a dead peer; SWIM detected the death, the view must follow.
 func (m *Mesh) forget(nodeID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if nodeID != m.self.NodeID {
+		delete(m.live, nodeID)
 		delete(m.view, nodeID)
 	}
 }
@@ -303,6 +312,9 @@ func (m *Mesh) merge(states []NodeState) {
 	defer m.mu.Unlock()
 	for _, st := range states {
 		if st.NodeID == m.self.NodeID {
+			continue
+		}
+		if _, member := m.live[st.NodeID]; !member {
 			continue
 		}
 		cur, ok := m.view[st.NodeID]
@@ -359,11 +371,10 @@ func (d *delegate) MergeRemoteState(buf []byte, _ bool) {
 
 var _ memberlist.EventDelegate = (*eventDelegate)(nil)
 
-// eventDelegate prunes the placement view when SWIM reports a node gone, so a
-// dead peer stops attracting redirects.
+// eventDelegate tracks SWIM membership: admit on join, prune the view on leave.
 type eventDelegate Mesh
 
-func (e *eventDelegate) NotifyJoin(*memberlist.Node)   {}
+func (e *eventDelegate) NotifyJoin(n *memberlist.Node) { (*Mesh)(e).admit(n.Name) }
 func (e *eventDelegate) NotifyUpdate(*memberlist.Node) {}
 func (e *eventDelegate) NotifyLeave(n *memberlist.Node) {
 	(*Mesh)(e).forget(n.Name)

@@ -2,6 +2,7 @@
 //! switch_root → exec.
 
 use std::fs;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::cfg::{self, BootCfg};
@@ -235,12 +236,15 @@ fn scan_serials(ids: &[&str], found: &mut [Option<String>]) {
             let Ok(serial) = fs::read_to_string(&path) else {
                 continue;
             };
-            let serial = serial.trim_end();
-            for (i, id) in ids.iter().enumerate() {
-                if found[i].is_none() && *id == serial {
-                    found[i] = Some(format!("/dev/{name}"));
-                }
-            }
+            record_serial(ids, found, serial.trim_end(), &format!("/dev/{name}"));
+        }
+    }
+}
+
+fn record_serial(ids: &[&str], found: &mut [Option<String>], serial: &str, device: &str) {
+    for (i, id) in ids.iter().enumerate() {
+        if found[i].is_none() && *id == serial && Path::new(device).exists() {
+            found[i] = Some(device.into());
         }
     }
 }
@@ -250,4 +254,26 @@ fn uptime() -> String {
         .ok()
         .and_then(|s| s.split_ascii_whitespace().next().map(String::from))
         .unwrap_or_else(|| "?".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn record_serial_skips_a_missing_device_node() {
+        let ids = ["layer"];
+        let mut found = [None];
+
+        record_serial(
+            &ids,
+            &mut found,
+            "layer",
+            "/dev/sandbox-init-missing-device",
+        );
+        assert!(found[0].is_none());
+
+        record_serial(&ids, &mut found, "layer", "/dev/null");
+        assert_eq!(found[0].as_deref(), Some("/dev/null"));
+    }
 }

@@ -1,5 +1,5 @@
 //! `fs.watch`: stream filesystem events under a path until the client
-//! disconnects. Watch is the one connection-bound verb — an event feed has no
+//! disconnects. Like every connection-bound verb, an event feed has no
 //! meaningful detached state, so it lives only as long as its connection.
 
 use notify::{RecursiveMode, Watcher};
@@ -8,15 +8,9 @@ use tokio::sync::mpsc;
 
 use crate::proto::{self, ErrorKind, EventKind, Response};
 
-/// Watches `path` (recursively when set): a `ready` frame once the watch is
-/// armed (events after it are guaranteed captured), then `event` frames until
-/// the client disconnects or the watcher dies. The blocking notify watcher
-/// runs on its own thread and forwards frames into an async channel; the
-/// client half is polled concurrently so a disconnect ends the watch even
-/// when no event is pending (otherwise an abandoned quiet watch would leak
-/// the task and the notify thread). A watcher error (inotify overflow,
-/// watcher death) arrives as an `error` frame, which is terminal. Dropping
-/// the watcher on return stops it.
+const OVERFLOW_MESSAGE: &str = "watch event queue overflow";
+
+/// Watches `path`, writing `ready`, ordered events, or a terminal error until disconnect.
 pub async fn watch<R, W>(
     reader: &mut R,
     w: &mut W,
@@ -28,12 +22,9 @@ where
     W: AsyncWrite + Unpin,
 {
     let (tx, mut rx) = mpsc::channel::<Response>(256);
+    let mut tx = Some(tx);
     let mut watcher = match notify::recommended_watcher(move |res| {
-        for frame in to_frames(res) {
-            // Best-effort: a full channel means the client is slower than the
-            // filesystem; drop rather than block the notify thread.
-            let _ = tx.try_send(frame);
-        }
+        forward_frames(&mut tx, to_frames(res));
     }) {
         Ok(watcher) => watcher,
         Err(e) => return proto::error_frame(w, ErrorKind::Internal, e.to_string()).await,
@@ -57,7 +48,8 @@ where
                         return Ok(());
                     }
                 }
-                None => return Ok(()),
+                // Only overflow drops the sender mid-watch; the buffered prefix is already out.
+                None => return proto::error_frame(w, ErrorKind::Internal, OVERFLOW_MESSAGE).await,
             },
             // The client sends nothing during a watch, so any readable state —
             // EOF (disconnect), a stray frame, or an error — ends the watch.
@@ -66,8 +58,16 @@ where
     }
 }
 
-/// Maps one notify result to the frames to stream: `event` frames for a good
-/// event, a single terminal `error` frame for a watcher error.
+fn forward_frames(tx: &mut Option<mpsc::Sender<Response>>, frames: Vec<Response>) {
+    let Some(sender) = tx.as_ref() else { return };
+    for frame in frames {
+        if sender.try_send(frame).is_err() {
+            *tx = None;
+            return;
+        }
+    }
+}
+
 fn to_frames(res: notify::Result<notify::Event>) -> Vec<Response> {
     use notify::EventKind as N;
     let event = match res {
@@ -125,5 +125,20 @@ mod tests {
             }
             other => panic!("expected event frame, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn full_channel_drops_sender_after_the_delivered_prefix() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut tx = Some(tx);
+
+        forward_frames(&mut tx, vec![Response::Ready, Response::Ready]);
+
+        assert!(tx.is_none());
+        assert!(matches!(rx.try_recv(), Ok(Response::Ready)));
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Disconnected)
+        ));
     }
 }
