@@ -15,6 +15,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -324,7 +325,7 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 	pooled := s.mgr.HasPoolGolden(key)
 	var templateOwners []string
 	if s.placer != nil && !pooled {
-		templateOwners = s.placer.TemplateOwners(hash)
+		templateOwners = s.templateOwners(s.placer.TemplateOwners, hash, tenant)
 	}
 	promoted := req.RequirePromoted || localTemplate || len(templateOwners) > 0
 	req.RequirePromoted = promoted
@@ -340,7 +341,9 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 		// A shared template store lets a volume holder resolve the template
 		// even before that node has advertised the newly published hash. The
 		// no_redirect target re-checks both resources before provisioning.
-		owners = s.placer.TemplateVolumeOwners(hash, names)
+		owners = s.templateOwners(func(probe string) []string {
+			return s.placer.TemplateVolumeOwners(probe, names)
+		}, hash, tenant)
 	} else {
 		owners = s.placer.VolumeCandidates(hash, names)
 	}
@@ -352,6 +355,26 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 	}
 	writeJSON(w, http.StatusOK, types.ClaimResponse{Redirect: owners, RequirePromoted: promoted})
 	return true, nil
+}
+
+func (s *Server) templateOwners(query func(string) []string, hash, tenant string) []string {
+	probes := []string{types.TemplateGossipHash(hash, tenant)}
+	if tenant == "" {
+		for _, tn := range s.tenants {
+			probes = append(probes, types.TemplateGossipHash(hash, tn.Name))
+		}
+	} else {
+		probes = append(probes, types.TemplateGossipHash(hash, ""))
+	}
+	var owners []string
+	for _, probe := range probes {
+		for _, owner := range query(probe) {
+			if !slices.Contains(owners, owner) {
+				owners = append(owners, owner)
+			}
+		}
+	}
+	return owners
 }
 
 // redirectClaim redirects a warm-miss to a better peer — a warm holder, or the
@@ -366,7 +389,7 @@ func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req t
 		return true
 	}
 	// TemplateOwners is in-memory; HasGolden can be a store round-trip.
-	owners := s.placer.TemplateOwners(hash)
+	owners := s.templateOwners(s.placer.TemplateOwners, hash, tenant)
 	return len(owners) > 0 && !s.mgr.HasGolden(ctx, key, tenant) && writeRedirect(w, owners)
 }
 
@@ -593,7 +616,7 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 	// owner. no_redirect mirrors the claim protocol — a redirected retry
 	// carries it, so the owner answers for itself and never bounces again.
 	if errors.Is(err, pool.ErrUnknownTemplate) && s.placer != nil && q.Get("no_redirect") == "" &&
-		writeRedirect(w, s.placer.TemplateOwners(key.Hash())) {
+		writeRedirect(w, s.templateOwners(s.placer.TemplateOwners, key.Hash(), tenantFrom(r.Context()))) {
 		return
 	}
 	writeResult(w, r, "delete template", req.Template, "delete template failed", err, func() {

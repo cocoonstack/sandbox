@@ -129,10 +129,10 @@ func (m *Manager) TemplateHashes() []string {
 	m.mu.Unlock()
 	m.tplMu.Lock()
 	hashes := make([]string, 0, len(m.tplSet))
-	for id := range m.tplSet {
+	for id, tenant := range m.tplSet {
 		hash := store.TemplateHash(id)
 		if _, ok := pooled[hash]; !ok {
-			hashes = append(hashes, hash)
+			hashes = append(hashes, types.TemplateGossipHash(hash, tenant))
 		}
 	}
 	m.tplMu.Unlock()

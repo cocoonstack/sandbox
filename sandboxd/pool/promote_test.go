@@ -382,6 +382,31 @@ func TestHasPromotedTemplateIsTenantScoped(t *testing.T) {
 	}
 }
 
+func TestTemplateHashesAreTenantScoped(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	key, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "acme-private", "acme")
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+
+	hashes := m.TemplateHashes()
+	if want := types.TemplateGossipHash(key.Hash(), "acme"); !slices.Contains(hashes, want) {
+		t.Errorf("gossip %v lacks the owner-scoped hash %s", hashes, want)
+	}
+	for name, bad := range map[string]string{
+		"raw":     key.Hash(),
+		"foreign": types.TemplateGossipHash(key.Hash(), "beta"),
+	} {
+		if slices.Contains(hashes, bad) {
+			t.Errorf("gossip %v carries the %s hash — a foreign tenant could match it", hashes, name)
+		}
+	}
+}
+
 func TestTemplateHashesSortedForMeshCompare(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)

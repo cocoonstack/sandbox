@@ -144,6 +144,13 @@ func (k PoolKey) Validate() error {
 	return nil
 }
 
+// TemplateGossipHash scopes a key hash to its owner for the gossip wire, so
+// foreign templates never match an owner query; the tenant itself never travels.
+func TemplateGossipHash(keyHash, tenant string) string {
+	sum := sha256.Sum256([]byte(keyHash + "|" + tenant))
+	return hex.EncodeToString(sum[:16])
+}
+
 // Sandbox is the node-local record of one pooled or claimed VM.
 type Sandbox struct {
 	ID     string  `json:"id"`
