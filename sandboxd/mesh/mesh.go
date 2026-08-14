@@ -282,10 +282,7 @@ func (m *Mesh) owners(match func(NodeState) bool) []string {
 		}
 	}
 	m.mu.Unlock()
-	if len(owners) > 2 {
-		owners = owners[:2]
-	}
-	return owners
+	return owners[:min(len(owners), 2)]
 }
 
 func (m *Mesh) admit(nodeID string) {
@@ -335,10 +332,7 @@ func (m *Mesh) merge(states []NodeState) {
 }
 
 func short(digest string) string {
-	if len(digest) > 12 {
-		return digest[:12]
-	}
-	return digest
+	return digest[:min(len(digest), 12)]
 }
 
 func containsAll(have, need []string) bool {

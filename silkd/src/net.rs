@@ -27,10 +27,14 @@ pub fn has_egress() -> bool {
         1 => return true,
         _ => {}
     }
-    let Ok(entries) = std::fs::read_dir("/sys/class/net") else {
-        return true;
-    };
-    entries.flatten().any(|e| e.path().join("device").exists())
+    // Probed once: the NIC set is fixed for the guest's life.
+    static DEVICE_BACKED: OnceLock<bool> = OnceLock::new();
+    *DEVICE_BACKED.get_or_init(|| {
+        let Ok(entries) = std::fs::read_dir("/sys/class/net") else {
+            return true;
+        };
+        entries.flatten().any(|e| e.path().join("device").exists())
+    })
 }
 
 /// Lane override for tests: set_var would race every concurrent getenv.

@@ -198,7 +198,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/claim", s.requireToken(s.handleClaim))
 	mux.HandleFunc("GET /v1/volumes", s.requireToken(s.handleVolumes))
-	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleRelease)
+	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleSandboxVerb("release", s.mgr.Release))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/wake", s.handleSandboxVerb("wake", s.mgr.Wake))
 	mux.HandleFunc("GET /v1/sandboxes/{id}", s.requireRoot(s.handleSandbox))
@@ -393,29 +393,6 @@ func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req t
 	return len(owners) > 0 && !s.mgr.HasGolden(ctx, key, tenant) && writeRedirect(w, owners)
 }
 
-// handleRelease releases a claimed sandbox. Two credentials authorize it: the
-// node's root api_token (the operator) may release any sandbox by id, so
-// aggregated/control-plane teardown works without holding the per-sandbox token;
-// a per-sandbox token releases only its own claim. A tenant token is
-// neither — it is not the root api_token, so it resolves as a (non-matching)
-// sandbox token and 404s.
-func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
-	token, ok := sandboxToken(w, r)
-	if !ok {
-		return
-	}
-	id := r.PathValue("id")
-	err := s.mgr.Release(r.Context(), id, s.sandboxCred(token))
-	switch {
-	case writePoolErr(w, err):
-	case err != nil:
-		log.WithFunc("server.handleRelease").Errorf(r.Context(), err, "release %s", id)
-		writeErr(w, http.StatusInternalServerError, "release failed")
-	default:
-		w.WriteHeader(http.StatusNoContent)
-	}
-}
-
 // handleSandbox reports one live claim, so a reconcile need not scan the
 // whole-node listing.
 func (s *Server) handleSandbox(w http.ResponseWriter, r *http.Request) {
@@ -440,9 +417,7 @@ func (s *Server) handleSandboxStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
-// handleSandboxVerb adapts a sandbox-scoped manager call (hibernate, wake) to
-// HTTP: per-sandbox bearer auth, 404 on unknown, 204 on success. The root
-// api_token resolves as an Operator credential instead.
+// handleSandboxVerb shares credential resolution and error mapping for release, hibernate, and wake.
 func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id string, cred pool.Cred) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, ok := sandboxToken(w, r)
@@ -528,25 +503,17 @@ func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCheckpointBlob(w http.ResponseWriter, r *http.Request) {
 	ckptID := r.PathValue("id")
 	dir, meta, release, err := s.mgr.FetchCheckpoint(r.Context(), ckptID)
-	if err != nil {
-		if errors.Is(err, pool.ErrUnknownCheckpoint) {
-			writeErr(w, http.StatusNotFound, "unknown checkpoint")
-			return
+	writeResult(w, r, "fetch checkpoint", ckptID, "fetch checkpoint failed", err, func() {
+		defer release()
+		w.Header().Set("Content-Type", "application/x-tar")
+		// Status is committed before the walk, so a mid-stream failure cannot change
+		// it; the tar's completion marker is what tells the reader the record
+		// arrived whole, and a short transfer is rejected for lacking it.
+		w.WriteHeader(http.StatusOK)
+		if err := peer.TarRecord(dir, meta, w); err != nil {
+			log.WithFunc("server.handleCheckpointBlob").Error(r.Context(), err, "stream checkpoint")
 		}
-		log.WithFunc("server.handleCheckpointBlob").Error(r.Context(), err, "fetch checkpoint")
-		writeErr(w, http.StatusInternalServerError, "fetch checkpoint failed")
-		return
-	}
-	defer release()
-
-	w.Header().Set("Content-Type", "application/x-tar")
-	// Status is committed before the walk, so a mid-stream failure cannot change
-	// it; the tar's completion marker is what tells the reader the record
-	// arrived whole, and a short transfer is rejected for lacking it.
-	w.WriteHeader(http.StatusOK)
-	if err := peer.TarRecord(dir, meta, w); err != nil {
-		log.WithFunc("server.handleCheckpointBlob").Error(r.Context(), err, "stream checkpoint")
-	}
+	})
 }
 
 // handleCheckpointProbe answers a peer's HEAD probe. With a probeKey

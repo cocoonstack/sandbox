@@ -415,11 +415,7 @@ func TestPutPoolsUpdatesTargets(t *testing.T) {
 	}
 }
 
-// TestSandboxVerbFlows drives the per-sandbox-token verb paths. Hibernate runs
-// through handleSandboxVerb; release runs through handleRelease with an unset
-// api token (so isRootToken is always false and it takes the same per-sandbox
-// path) — both share auth, error mapping, and id/token plumbing by construction.
-// TestReleaseOperatorToken covers release's root-token elevation separately.
+// TestSandboxVerbFlows pins shared auth, error mapping, and id/token plumbing for release and hibernate.
 func TestSandboxVerbFlows(t *testing.T) {
 	verbs := []struct {
 		name string

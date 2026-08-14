@@ -65,7 +65,7 @@ class Sandbox:
         boundaries may split multi-byte sequences); returns the exit code."""
         with self._dial() as conn:
             conn.send("exec", argv=argv, cwd=cwd or None, env=env,
-                      user=user or None, session=session or None)
+                      user=user or None, detach=False, session=session or None)
             # The guest stops draining stdin while blocked writing stdout, so
             # feeding it to completion before reading deadlocks.
             pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True)

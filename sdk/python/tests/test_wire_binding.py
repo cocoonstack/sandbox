@@ -1,8 +1,9 @@
 """Binds the SDK's real call sites to the golden corpus: each case drives an
 actual Sandbox method with the fixture's own field values through a real
-Conn over a socketpair, then asserts every field the SDK emitted exists in
-the fixture with the same value. A misspelled field name (living only in
-sandbox.py) fails here; the generic encode round-trip alone cannot see it."""
+Conn over a socketpair, then asserts the emitted frame carries exactly the
+fixture's fields with the same values — both directions, so a misspelled
+field name AND a silently dropped field fail here; the generic encode
+round-trip alone cannot see either."""
 
 import contextlib
 import json
@@ -93,6 +94,10 @@ CASES = [
 ]
 
 
+# Fields no SDK call site emits by design (silkd defaults them; Go omits too).
+UNSENT = {"req_session_create": {"id"}}
+
+
 def _pty_stub(sb, pid):
     return Pty(sb, None, pid)
 
@@ -177,6 +182,10 @@ def test_call_site_matches_fixture(monkeypatch, stem, replies, invoke):
         assert key in fixture, f"field {key!r} not in the golden corpus (typo?)"
         if key != "data":
             assert value == fixture[key], f"field {key!r}: {value!r} != {fixture[key]!r}"
+    for key in fixture:
+        if key in UNSENT.get(stem, ()):
+            continue
+        assert key in frame, f"fixture field {key!r} was never emitted (dropped field?)"
 
 
 def test_enum_value_sets_match_corpus():
