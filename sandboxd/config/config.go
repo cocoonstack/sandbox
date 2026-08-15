@@ -189,6 +189,21 @@ type Config struct {
 	// WorkspaceDiskDir holds the raw disk images on local NVMe; defaults to
 	// <DataDir>/workspaces.
 	WorkspaceDiskDir string `json:"workspace_disk_dir,omitempty"`
+	// WorkspaceVirtiofsd enables the uncached workspace mode by naming the
+	// virtiofsd binary that serves it (typically /usr/libexec/virtiofsd). A
+	// claim may then ask for its workspace mounted straight into the guest
+	// instead of onto a local disk the node syncs. Requires WorkspaceRoot, and
+	// pool VMs booted with shared memory — vhost-user cannot attach without it,
+	// so the node also needs shared_memory set. Empty leaves every claim cached.
+	WorkspaceVirtiofsd string `json:"workspace_virtiofsd,omitempty"`
+	// WorkspaceShareDir holds the per-sandbox virtiofsd sockets; defaults to
+	// <DataDir>/shares.
+	WorkspaceShareDir string `json:"workspace_share_dir,omitempty"`
+	// SharedMemory boots cold VMs — and so the goldens cloned from them — with
+	// shared guest memory, which vhost-user-fs requires. It costs clone speed:
+	// a shared-memory snapshot restores by copying memory rather than mapping
+	// it. Only worth setting on nodes serving uncached workspaces.
+	SharedMemory bool `json:"shared_memory,omitempty"`
 
 	// AdvertiseAddr is the host:port the data plane reaches this node at; it
 	// is returned as a claim's owner address (and, at M2c, gossiped). Defaults

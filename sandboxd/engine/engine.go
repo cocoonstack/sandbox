@@ -38,6 +38,8 @@ const (
 	argOutput     = "--output"
 	argNetwork    = "--network"
 	argBridge     = "--bridge"
+	argSocket     = "--socket"
+	argTag        = "--tag"
 	formatJSON    = "json"
 	silkdPort     = 2048 // silkd's fixed guest vsock port, the claim-ready anchor
 	egressPort    = 2049 // guest→host egress port; VMM maps it to <vsock_socket>_2049
@@ -66,11 +68,12 @@ type StaleCreateOutcome string
 
 // Engine runs cocoon commands on the local node.
 type Engine struct {
-	bin         string
-	bridges     []string
-	networks    []string
-	noDirectIO  bool
-	restoreMode types.RestoreMode
+	bin          string
+	bridges      []string
+	networks     []string
+	noDirectIO   bool
+	restoreMode  types.RestoreMode
+	sharedMemory bool
 }
 
 // New returns a cocoon engine with node-wide network and disk policy. bridges
@@ -79,6 +82,13 @@ type Engine struct {
 func New(bin string, bridges, networks []string, noDirectIO bool, restoreMode types.RestoreMode) *Engine {
 	return &Engine{bin: bin, bridges: bridges, networks: networks, noDirectIO: noDirectIO, restoreMode: restoreMode}
 }
+
+// EnableSharedMemory boots cold VMs with shared guest memory, so a
+// vhost-user-fs share can be hot-attached later (see WorkspaceShareAttach).
+// Goldens are cold-booted too, so their clones inherit it. Call once before
+// serving. The cost is on restore: a shared-memory snapshot cannot be mapped,
+// only copied, so clones pay a full memory copy instead of an mmap.
+func (e *Engine) EnableSharedMemory() { e.sharedMemory = true }
 
 // Version reports cocoon's version string — a "vX.Y.Z" release or a
 // "master-<sha>" dev build.
@@ -362,6 +372,11 @@ func (e *Engine) runColdArgs(name string, key types.PoolKey) []string {
 		// Firecracker is a per-pool cold-boot choice; clones inherit the
 		// hypervisor from the golden's pinned snapshot, so only RunCold flags it.
 		args = append(args, "--fc")
+	}
+	if e.sharedMemory && key.Engine != types.EngineFC {
+		// Fixed at boot and inherited by every clone of this VM's golden; FC
+		// has no vhost-user-fs, so flagging it there would only fail the boot.
+		args = append(args, "--shared-memory")
 	}
 	args = append(args, e.netArgs(name, key, true)...)
 	return append(args, key.Template)

@@ -26,7 +26,7 @@ const (
 // ErrNoWarm means the pool is empty (the caller may redirect or provision).
 // tenant attributes the claim; empty means the operator (root). claimRef is an
 // opaque caller reference recorded on the claim; empty means none.
-func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef, workspace string, volumes []types.Volume) (*types.Sandbox, error) {
+func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, ws types.WorkspaceSpec, volumes []types.Volume) (*types.Sandbox, error) {
 	start := time.Now()
 	if err := m.validate(key); err != nil {
 		return nil, err
@@ -62,7 +62,8 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	}
 	sb.Tenant = tenant
 	sb.ClaimRef = claimRef
-	sb.Workspace = workspace
+	sb.Workspace = ws.Name
+	sb.WorkspaceNoCache = ws.NoCache
 	reserved = nil
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {
@@ -74,14 +75,14 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 
 // ClaimProvision creates a claim-ready sandbox (golden clone or cold boot).
 // claimRef is an opaque caller reference recorded on the claim; empty means none.
-func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef, workspace string, volumes []types.Volume) (*types.Sandbox, error) {
-	return m.claimProvision(ctx, key, ttl, tenant, claimRef, workspace, volumes, false)
+func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, ws types.WorkspaceSpec, volumes []types.Volume) (*types.Sandbox, error) {
+	return m.claimProvision(ctx, key, ttl, tenant, claimRef, ws, volumes, false)
 }
 
 // ClaimProvisionPromoted requires key to resolve from a promoted template and
 // never falls through to a cold image boot.
-func (m *Manager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef, workspace string, volumes []types.Volume) (*types.Sandbox, error) {
-	return m.claimProvision(ctx, key, ttl, tenant, claimRef, workspace, volumes, true)
+func (m *Manager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, ws types.WorkspaceSpec, volumes []types.Volume) (*types.Sandbox, error) {
+	return m.claimProvision(ctx, key, ttl, tenant, claimRef, ws, volumes, true)
 }
 
 // Release destroys a claimed sandbox after authorizing cred.
@@ -331,9 +332,10 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	return nil
 }
 
-// armWorkspace binds a claimed sandbox to its shared workspace and starts the
-// sync loops. No-op when workspace sync is disabled or the sandbox carries no
-// workspace. Best-effort: an error is logged, not returned.
+// armWorkspace binds a claimed sandbox to its shared workspace: a cached claim
+// gets the local disk and the sync loops, an uncached one gets the workspace
+// mounted straight into the guest. No-op when workspace sync is disabled or the
+// sandbox carries no workspace. Best-effort: an error is logged, not returned.
 func (m *Manager) armWorkspace(ctx context.Context, sb *types.Sandbox) {
 	if m.wsMgr == nil || sb.Workspace == "" || sb.VsockSocket == "" {
 		return
@@ -341,14 +343,15 @@ func (m *Manager) armWorkspace(ctx context.Context, sb *types.Sandbox) {
 	ws := filecache.WorkspaceDir(m.wsRoot, sb.Workspace)
 	// One writer per sandbox: the sandbox id is globally unique, so it is a
 	// safe, collision-free writer id across nodes.
-	cfg := filecache.Config{VMName: sb.VMName, DedicatedDisk: m.wsDedicatedDisk}
+	cfg := filecache.Config{VMName: sb.VMName, DedicatedDisk: m.wsDedicatedDisk, NoCache: sb.WorkspaceNoCache}
 	if err := m.wsMgr.Arm(ctx, sb.ID, sb.VsockSocket, ws, sb.ID, cfg); err != nil {
 		log.WithFunc("pool.armWorkspace").Errorf(ctx, err, "arm workspace %s for %s", sb.Workspace, sb.ID)
 	}
 }
 
-// barrierWorkspace runs the final workspace sync for id (publish local changes
-// to the NAS) and stops its loops. No-op when sync is disabled or id has none.
+// barrierWorkspace ends the workspace session for id: a cached one publishes
+// its local changes to the NAS one last time, an uncached one drops its share.
+// No-op when sync is disabled or id has none.
 func (m *Manager) barrierWorkspace(ctx context.Context, id string) {
 	if m.wsMgr == nil {
 		return
@@ -373,6 +376,17 @@ func (m *Manager) EnableWorkspaceDisk(d filecache.Disk, imageRoot string, sizeMB
 	}
 	m.wsMgr.EnableDedicatedDisk(d, imageRoot, sizeMB)
 	m.wsDedicatedDisk = true
+}
+
+// EnableWorkspaceShare turns on the uncached workspace mode, so a claim may ask
+// for its workspace mounted straight into the guest over a vhost-user-fs share
+// served by virtiofsd (binary), sockets under runDir. Requires
+// EnableWorkspaceSync first, and pool VMs booted with shared memory.
+func (m *Manager) EnableWorkspaceShare(s filecache.Share, binary, runDir string) {
+	if m.wsMgr == nil {
+		return
+	}
+	m.wsMgr.EnableShare(s, binary, runDir)
 }
 
 // rollbackClaim unwinds a claim batch after a persist or egress-arm failure:
@@ -556,7 +570,7 @@ func (m *Manager) authed(id, token string) (*types.Sandbox, bool) {
 	return sb, true
 }
 
-func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef, workspace string, volumes []types.Volume, requirePromoted bool) (*types.Sandbox, error) {
+func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, ws types.WorkspaceSpec, volumes []types.Volume, requirePromoted bool) (*types.Sandbox, error) {
 	start := time.Now()
 	if err := m.validate(key); err != nil {
 		return nil, err
@@ -591,7 +605,8 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	sb.TemplateDigest = golden.templateDigest
 	sb.Tenant = tenant
 	sb.ClaimRef = claimRef
-	sb.Workspace = workspace
+	sb.Workspace = ws.Name
+	sb.WorkspaceNoCache = ws.NoCache
 	reserved = nil
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {

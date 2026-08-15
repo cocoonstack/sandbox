@@ -189,6 +189,9 @@ type Sandbox struct {
 	// filecache syncs <root>/<Workspace> with the guest); empty means none.
 	// Persisted so a reconciled/adopted claim re-arms its sync after a restart.
 	Workspace string `json:"workspace,omitempty"`
+	// WorkspaceNoCache records that this claim asked for the uncached
+	// workspace, so a re-arm rebuilds the share rather than the local disk.
+	WorkspaceNoCache bool `json:"workspace_no_cache,omitempty"`
 
 	VsockSocket string `json:"vsock_socket,omitempty"`
 	// TAP is the egress-lane NIC's host tap, captured at provision; empty on
@@ -278,6 +281,14 @@ type VMNetConfig struct {
 // VMConfig is the config subset of VMRecord.
 type VMConfig struct {
 	Name string `json:"name"`
+}
+
+// WorkspaceSpec is a claim's shared-workspace request: which workspace to
+// bind, and whether the node fronts it with the local filecache. A zero value
+// asks for no workspace at all.
+type WorkspaceSpec struct {
+	Name    string
+	NoCache bool
 }
 
 // Volume is one requested or applied dataset mount. Mount is empty only

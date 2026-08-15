@@ -122,3 +122,19 @@ func (e *Engine) WorkspaceDiskDetach(ctx context.Context, vmName, name string) e
 	_, err := e.run(ctx, "vm", "disk", "detach", vmName, argName, name)
 	return err
 }
+
+// WorkspaceShareAttach hot-attaches the vhost-user-fs share served on socket
+// to vmName under tag; the guest then mounts it as `mount -t virtiofs <tag>`.
+// The VM must have been booted with shared guest memory — vhost-user maps the
+// guest's memory into the device backend, and cocoon refuses to flip that on a
+// running VM — which is what the node's SharedMemory setting is for.
+func (e *Engine) WorkspaceShareAttach(ctx context.Context, vmName, socket, tag string) error {
+	_, err := e.run(ctx, "vm", "fs", "attach", vmName, argSocket, socket, argTag, tag)
+	return err
+}
+
+// WorkspaceShareDetach removes the share tagged tag from vmName.
+func (e *Engine) WorkspaceShareDetach(ctx context.Context, vmName, tag string) error {
+	_, err := e.run(ctx, "vm", "fs", "detach", vmName, argTag, tag)
+	return err
+}

@@ -91,6 +91,16 @@ func WithWorkspace(name string) Option {
 	return func(r *claimRequest) { r.Workspace = name }
 }
 
+// WithWorkspaceNoCache asks for the workspace without the node's local cache:
+// the guest mounts the shared workspace itself, so writes are visible to the
+// other sandboxes bound to it as they happen, and reads see theirs without
+// waiting for a poll. Every operation then pays the shared-storage round trip
+// instead of hitting a local disk. Only meaningful with WithWorkspace, and
+// only on nodes configured to serve it.
+func WithWorkspaceNoCache() Option {
+	return func(r *claimRequest) { r.WorkspaceNoCache = true }
+}
+
 // WithNoRedirect pins the claim to the addressed node instead of following a
 // warm-pool redirect to a peer — useful for driving a specific node.
 func WithNoRedirect() Option {

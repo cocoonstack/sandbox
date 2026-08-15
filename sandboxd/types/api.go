@@ -38,11 +38,23 @@ type ClaimRequest struct {
 	// multi-writer, close-to-open contract. Ignored when the node has no
 	// workspace root configured. Optional; a newer field older nodes ignore.
 	Workspace string `json:"workspace,omitempty"`
+	// WorkspaceNoCache asks for the workspace without the local cache: the
+	// guest mounts the shared workspace itself, so its writes are on the NAS
+	// and visible to the other writers as they happen, and it reads what they
+	// wrote without waiting for a poll. The cost is that every operation pays
+	// the NAS round trip instead of hitting a local disk. Ignored without
+	// Workspace, and on nodes that have no share driver.
+	WorkspaceNoCache bool `json:"workspace_no_cache,omitempty"`
 }
 
 // Key resolves the requested pool key with the wire defaults filled.
 func (r ClaimRequest) Key() PoolKey {
 	return PoolKey{Template: r.Template, Net: r.Net, Size: r.Size, Engine: r.Engine}.Defaulted()
+}
+
+// WorkspaceSpec projects the request's workspace fields.
+func (r ClaimRequest) WorkspaceSpec() WorkspaceSpec {
+	return WorkspaceSpec{Name: r.Workspace, NoCache: r.WorkspaceNoCache}
 }
 
 // ClaimResponse is the wire reply of POST /v1/claim. A successful claim

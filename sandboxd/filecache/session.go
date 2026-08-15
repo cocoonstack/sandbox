@@ -19,13 +19,20 @@ type Config struct {
 	PullInterval time.Duration
 	Mount        string // guest workspace dir; default /workspace
 
-	// VMName is the cocoon VM the sandbox runs as; required only for the
-	// dedicated-disk mode (attach acts on the VM, not the guest).
+	// VMName is the cocoon VM the sandbox runs as; required for the
+	// dedicated-disk and uncached modes (attach acts on the VM, not the guest).
 	VMName string
 	// DedicatedDisk, when true, hot-attaches a fresh ext4 virtio-blk disk and
 	// mounts it at Mount before hydration, so the workspace is isolated from
 	// the guest rootfs layer. Requires the Manager to have a Disk driver.
 	DedicatedDisk bool
+	// NoCache turns the cache off for this session: instead of a local disk
+	// the node syncs, the guest mounts the shared workspace itself over
+	// vhost-user-fs, so its writes reach the NAS as they happen and peers see
+	// them without waiting for a push. There is no journal, no hydration, and
+	// no barrier — and no local-disk speed either. Requires the Manager to
+	// have a Share driver; without one the request falls back to the cache.
+	NoCache bool
 }
 
 func (c Config) withDefaults() Config {
@@ -41,15 +48,19 @@ func (c Config) withDefaults() Config {
 	return c
 }
 
-// Session runs the push/pull loops for one sandbox↔workspace binding. A
-// Manager owns one per claimed sandbox that requested a workspace.
+// Session is one sandbox↔workspace binding. A cached session runs the
+// push/pull loops over a local workspace disk; an uncached one holds the
+// vhost-user-fs share instead and has no loops to run. A Manager owns one per
+// claimed sandbox that requested a workspace.
 type Session struct {
-	sy        *syncer
+	sy        *syncer // nil when uncached: there is nothing to sync
 	cfg       Config
 	stop      context.CancelFunc
 	done      chan struct{}
 	id        string
 	dedicated bool
+	share     *shareHandle // non-nil when uncached
+	sock      string       // guest vsock, kept for the uncached teardown
 
 	mu      sync.Mutex
 	stopped bool
@@ -60,7 +71,8 @@ type Session struct {
 // release, all guarded by mu.
 type Manager struct {
 	guest Guest
-	disk  *diskProvisioner // nil disables dedicated-disk mode
+	disk  *diskProvisioner  // nil disables dedicated-disk mode
+	share *shareProvisioner // nil disables the uncached mode
 	mu    sync.Mutex
 	byID  map[string]*Session
 }
@@ -76,6 +88,14 @@ func NewManager(g Guest) *Manager {
 // serving. Without this, DedicatedDisk requests fall back to the rootfs layer.
 func (m *Manager) EnableDedicatedDisk(d Disk, root string, sizeMB int) {
 	m.disk = &diskProvisioner{disk: d, root: root, sizeMB: sizeMB}
+}
+
+// EnableShare turns on the uncached mode: sessions that ask for it get the
+// shared workspace mounted straight into the guest over a vhost-user-fs share
+// served by virtiofsd (binary), with its socket under runDir. Call once before
+// serving. Without this, NoCache requests fall back to the cache.
+func (m *Manager) EnableShare(s Share, binary, runDir string) {
+	m.share = &shareProvisioner{share: s, guest: m.guest, binary: binary, runDir: runDir}
 }
 
 // Arm binds sandbox id (reachable at vsockSocket) to the NAS workspace ws as
@@ -94,6 +114,11 @@ func (m *Manager) Arm(ctx context.Context, id, vsockSocket, ws, writer string, c
 
 	if err := os.MkdirAll(ws, 0o755); err != nil { //nolint:gosec // shared NAS tree; peer nodes traverse it
 		return fmt.Errorf("workspace dir: %w", err)
+	}
+	// Uncached mode: the guest mounts ws itself, so there is no disk to attach,
+	// nothing to hydrate, and no loops to run. Everything below is the cache.
+	if cfg.NoCache && m.share != nil {
+		return m.armShare(ctx, id, vsockSocket, ws, cfg)
 	}
 	// Dedicated-disk mode: attach and mount a fresh ext4 virtio-blk disk at the
 	// mount before hydration, so the workspace is isolated from the rootfs
@@ -119,6 +144,23 @@ func (m *Manager) Arm(ctx context.Context, id, vsockSocket, ws, writer string, c
 	m.mu.Unlock()
 	go sess.run(loopCtx)
 	log.WithFunc("filecache.Arm").Infof(ctx, "workspace armed for %s (ws=%s writer=%s)", id, ws, writer)
+	return nil
+}
+
+// armShare binds the sandbox to ws over a vhost-user-fs share and records the
+// session so the barrier can tear the share down. No goroutine runs for it:
+// the guest talks to the NAS directly, so there is nothing for the node to
+// carry between the two.
+func (m *Manager) armShare(ctx context.Context, id, vsockSocket, ws string, cfg Config) error {
+	h, err := m.share.serveAndMount(ctx, id, cfg.VMName, vsockSocket, ws, cfg.Mount)
+	if err != nil {
+		return err
+	}
+	sess := &Session{cfg: cfg, stop: func() {}, done: closedChan(), id: id, share: h, sock: vsockSocket}
+	m.mu.Lock()
+	m.byID[id] = sess
+	m.mu.Unlock()
+	log.WithFunc("filecache.Arm").Infof(ctx, "workspace shared uncached for %s (ws=%s)", id, ws)
 	return nil
 }
 
@@ -158,6 +200,15 @@ func (m *Manager) Barrier(ctx context.Context, id string) {
 	sess.mu.Unlock()
 	sess.stop()
 	<-sess.done // loops exited; no concurrent cycle
+
+	// An uncached session has no delta to publish — every write already went
+	// to the NAS — so the barrier is just teardown of the share.
+	if sess.share != nil {
+		bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		defer cancel()
+		m.share.unmountAndStop(bctx, sess.share, sess.cfg.VMName, sess.sock, sess.cfg.Mount)
+		return
+	}
 
 	// The barrier is the durability edge: a workspace file not on the NAS when
 	// the VM dies is lost. Budget for a large final delta (a 100k-file
@@ -218,6 +269,14 @@ func (s *Session) run(ctx context.Context) {
 			s.sy.heartbeat()
 		}
 	}
+}
+
+// closedChan returns an already-closed channel, so a session with no loops
+// satisfies the same "wait for the loops to exit" barrier step as one with.
+func closedChan() chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
 }
 
 // WorkspaceDir returns the on-NAS path a sandbox's workspace token maps to

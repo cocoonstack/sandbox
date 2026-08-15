@@ -705,9 +705,9 @@ func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Ma
 // claimAny composes warm-then-provision the way the server does around the
 // redirect decision; production has no single-call form.
 func claimAny(ctx context.Context, m *Manager, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
-	sb, err := m.ClaimWarm(ctx, key, ttl, "", "", "", nil)
+	sb, err := m.ClaimWarm(ctx, key, ttl, "", "", types.WorkspaceSpec{}, nil)
 	if errors.Is(err, ErrNoWarm) {
-		return m.ClaimProvision(ctx, key, ttl, "", "", "", nil)
+		return m.ClaimProvision(ctx, key, ttl, "", "", types.WorkspaceSpec{}, nil)
 	}
 	return sb, err
 }

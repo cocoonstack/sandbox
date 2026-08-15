@@ -426,14 +426,15 @@ func apiError(verb string, resp *http.Response) error {
 // claimRequest mirrors sandboxd's wire type; duplicated so the SDK stays
 // dependency-free — the e2e module guards against drift.
 type claimRequest struct {
-	Template        string   `json:"template"`
-	Net             string   `json:"net,omitempty"`
-	Size            string   `json:"size,omitempty"`
-	Volumes         []Volume `json:"volumes,omitempty"`
-	TTLSeconds      int      `json:"ttl_seconds,omitempty"`
-	NoRedirect      bool     `json:"no_redirect,omitempty"`
-	RequirePromoted bool     `json:"require_promoted,omitempty"`
-	Workspace       string   `json:"workspace,omitempty"`
+	Template         string   `json:"template"`
+	Net              string   `json:"net,omitempty"`
+	Size             string   `json:"size,omitempty"`
+	Volumes          []Volume `json:"volumes,omitempty"`
+	TTLSeconds       int      `json:"ttl_seconds,omitempty"`
+	NoRedirect       bool     `json:"no_redirect,omitempty"`
+	RequirePromoted  bool     `json:"require_promoted,omitempty"`
+	Workspace        string   `json:"workspace,omitempty"`
+	WorkspaceNoCache bool     `json:"workspace_no_cache,omitempty"`
 }
 
 // rejectPinnedAxes fails a snapshot claim (checkpoint, template) that passed

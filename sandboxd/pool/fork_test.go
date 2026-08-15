@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 // TestForkRacingHibernateUsesPrivateSource pins the transition-locked source
@@ -230,7 +232,7 @@ func TestForkChildrenInheritTenantAndQuota(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	m.tenantMax = map[string]int{"acme": 3}
-	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", "", nil)
+	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", types.WorkspaceSpec{}, nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}

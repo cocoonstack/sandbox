@@ -1862,7 +1862,7 @@ type fakeManager struct {
 	draining           bool
 }
 
-func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef, workspace string, volumes []types.Volume) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, ws types.WorkspaceSpec, volumes []types.Volume) (*types.Sandbox, error) {
 	f.warmCalls++
 	f.gotTenant = tenant
 	f.gotClaimRef = claimRef
@@ -1873,11 +1873,11 @@ func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time
 	return f.warmClaim(ctx, key, ttl)
 }
 
-func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef, workspace string, volumes []types.Volume) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, ws types.WorkspaceSpec, volumes []types.Volume) (*types.Sandbox, error) {
 	return fakeClaimProvision(f, ctx, key, ttl, tenant, claimRef, volumes, false)
 }
 
-func (f *fakeManager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef, workspace string, volumes []types.Volume) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, ws types.WorkspaceSpec, volumes []types.Volume) (*types.Sandbox, error) {
 	return fakeClaimProvision(f, ctx, key, ttl, tenant, claimRef, volumes, true)
 }
 

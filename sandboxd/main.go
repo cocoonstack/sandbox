@@ -77,6 +77,9 @@ func main() {
 		}
 	}
 	eng := engine.New(cfg.CocoonBin, cfg.Bridges, cfg.Networks, cfg.NoDirectIO, cfg.RestoreMode)
+	if cfg.SharedMemory {
+		eng.EnableSharedMemory()
+	}
 	if v, warn := eng.VersionWarning(ctx); warn != "" {
 		logger.Warn(ctx, warn)
 	} else {
@@ -97,6 +100,14 @@ func main() {
 			diskDir := cmp.Or(cfg.WorkspaceDiskDir, filepath.Join(cfg.DataDir, "workspaces"))
 			mgr.EnableWorkspaceDisk(diskFS{eng}, diskDir, cfg.WorkspaceDiskMB)
 			logger.Infof(ctx, "workspace dedicated disk enabled (%d MB, dir %s)", cfg.WorkspaceDiskMB, diskDir)
+		}
+		if cfg.WorkspaceVirtiofsd != "" {
+			shareDir := cmp.Or(cfg.WorkspaceShareDir, filepath.Join(cfg.DataDir, "shares"))
+			mgr.EnableWorkspaceShare(shareFS{eng}, cfg.WorkspaceVirtiofsd, shareDir)
+			logger.Infof(ctx, "workspace uncached mode enabled (%s, sockets %s)", cfg.WorkspaceVirtiofsd, shareDir)
+			if !cfg.SharedMemory {
+				logger.Warn(ctx, "workspace uncached mode needs shared_memory: attaching a share to a pool VM will fail")
+			}
 		}
 	}
 
@@ -292,4 +303,16 @@ func (d diskFS) Unmount(ctx context.Context, sock, mount string) error {
 
 func (d diskFS) Detach(ctx context.Context, vmName, name string) error {
 	return d.e.WorkspaceDiskDetach(ctx, vmName, name)
+}
+
+// shareFS adapts *engine.Engine to filecache.Share (cocoon's vhost-user-fs
+// attach/detach verbs).
+type shareFS struct{ e *engine.Engine }
+
+func (s shareFS) Attach(ctx context.Context, vmName, socket, tag string) error {
+	return s.e.WorkspaceShareAttach(ctx, vmName, socket, tag)
+}
+
+func (s shareFS) Detach(ctx context.Context, vmName, tag string) error {
+	return s.e.WorkspaceShareDetach(ctx, vmName, tag)
 }
