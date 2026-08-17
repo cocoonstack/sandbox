@@ -183,18 +183,22 @@ func (m *Manager) poolIntercepts(key types.PoolKey) bool {
 	return m.poolEgress[key].Intercepts()
 }
 
-// effectivePolicy resolves pool ∩ tenant; root has no tenant layer.
+// effectivePolicy resolves pool ∩ tenant; root has no tenant layer, and a
+// promoted template — a key no pool is configured for — has no pool layer.
 func (m *Manager) effectivePolicy(sb *types.Sandbox) (egress.Evaluator, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	poolPol := m.poolEgress[sb.Key]
+	tenantPol := m.tenantEgress[sb.Tenant]
 	if poolPol == nil {
-		return nil, false
+		if m.pools[sb.Key] != nil || sb.Tenant == "" || tenantPol == nil {
+			return nil, false
+		}
+		return *tenantPol, true
 	}
 	if sb.Tenant == "" {
 		return *poolPol, true
 	}
-	tenantPol := m.tenantEgress[sb.Tenant]
 	if tenantPol == nil {
 		return nil, false
 	}
