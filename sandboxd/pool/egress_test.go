@@ -140,19 +140,26 @@ func TestEffectivePolicyComposition(t *testing.T) {
 	cases := []struct {
 		name        string
 		tenant      string
+		pooled      bool
 		pool, tnPol *egress.Policy
 		allow, deny string
 		wantArmed   bool
 	}{
-		{"root takes the pool policy whole", "", both, nil, "a.test", "z.test", true},
-		{"root without a pool policy", "", nil, nil, "", "", false},
-		{"tenant intersects", "acme", both, tenantOnly, "b.test", "a.test", true}, // a.test allowed by pool, denied by tenant
-		{"tenant declaring no policy", "acme", both, nil, "", "", false},
-		{"tenant on a policyless pool", "acme", nil, tenantOnly, "", "", false},
-		{"neither", "acme", nil, nil, "", "", false},
+		{"root takes the pool policy whole", "", true, both, nil, "a.test", "z.test", true},
+		{"root without a pool policy", "", true, nil, nil, "", "", false},
+		{"tenant intersects", "acme", true, both, tenantOnly, "b.test", "a.test", true}, // a.test allowed by pool, denied by tenant
+		{"tenant declaring no policy", "acme", true, both, nil, "", "", false},
+		{"tenant on a policyless pool", "acme", true, nil, tenantOnly, "", "", false},
+		{"tenant on a promoted template", "acme", false, nil, tenantOnly, "b.test", "a.test", true},
+		{"root on a promoted template", "", false, nil, nil, "", "", false},
+		{"neither", "acme", false, nil, nil, "", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			m.pools = map[types.PoolKey]*pool{}
+			if tc.pooled {
+				m.pools[testKey] = &pool{key: testKey}
+			}
 			m.poolEgress = map[types.PoolKey]*egress.Policy{}
 			if tc.pool != nil {
 				m.poolEgress[testKey] = tc.pool
