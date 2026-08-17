@@ -384,7 +384,7 @@ func TestDisarmKeepsLockWhenRemoveFailed(t *testing.T) {
 
 func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 	// The pool API cannot carry egress (config-only), so no SetPools call — warm
-	// change or drain-then-re-add — may widen the effective policy to tenant-only.
+	// change or drain-then-re-add — may drop a pool's policy.
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 	gd := filepath.Join(m.goldensDir(), egKey.Hash())
 	if err := os.MkdirAll(gd, 0o750); err != nil { // on disk so re-add adopts it, sparing an async build
