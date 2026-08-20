@@ -10,7 +10,7 @@ ARG SILKD_IMAGE=ghcr.io/cocoonstack/sandbox/silkd:0.1.0
 FROM ${BOOT_IMAGE} AS boot
 FROM ${SILKD_IMAGE} AS silkd
 
-FROM ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
+FROM ubuntu:25.10@sha256:7cc5e35f6567ee8c66d2abb4aab0fd866669e6207c237c3a8f0947a5c7f17092
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
 # Content hash of the image dir's non-Dockerfile inputs (CI computes it).
