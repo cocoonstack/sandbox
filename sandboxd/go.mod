@@ -7,7 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.36
 	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.2.14
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.105.0
-	github.com/aws/smithy-go v1.27.7
+	github.com/aws/smithy-go v1.27.8
 	github.com/cocoonstack/sandbox/protocol/wire v0.0.0-00010101000000-000000000000
 	github.com/google/nftables v0.3.0
 	github.com/hashicorp/memberlist v0.5.4
