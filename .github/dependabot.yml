@@ -13,6 +13,13 @@ updates:
       interval: weekly
     commit-message:
       prefix: "build"
+    # The base image's Ubuntu release is the product's, encoded in the image dir
+    # and in the published base:24.04 tag; only its digest is dependabot's to move.
+    ignore:
+      - dependency-name: "ubuntu"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
   - package-ecosystem: cargo
     directories:
       - /silkd
