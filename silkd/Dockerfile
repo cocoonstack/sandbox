@@ -9,6 +9,11 @@
 # runners; TARGETARCH picks the musl target triple.
 FROM rust:1-slim@sha256:cc0448b41c3b7b7fea44f5dc50eacba729a56db365b65b7bd5e8a82d5b3db078 AS build
 ARG TARGETARCH
+WORKDIR /silkd
+# Before any rustup/cargo call: the pin, not the base image's default, is the
+# compiler. A digest bump that moves ahead of the pin then costs a toolchain
+# download instead of silently building the guest binary with another rustc.
+COPY rust-toolchain.toml ./
 RUN case "$TARGETARCH" in \
       amd64) echo x86_64-unknown-linux-musl > /musl-target ;; \
       arm64) echo aarch64-unknown-linux-musl > /musl-target ;; \
@@ -17,7 +22,6 @@ RUN case "$TARGETARCH" in \
     rustup target add "$(cat /musl-target)" && \
     apt-get update && apt-get install -y --no-install-recommends musl-tools && \
     rm -rf /var/lib/apt/lists/*
-WORKDIR /silkd
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN cargo build --release --locked && strip target/release/silkd

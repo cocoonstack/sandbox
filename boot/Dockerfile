@@ -78,6 +78,8 @@ RUN set -e; \
 FROM rust:1-alpine@sha256:a10e64dd139b7387337c7fbe8aca31b959b57b2fd4c8ae20a02cf1d6ea424dce AS initbuild
 RUN apk add --no-cache musl-dev
 WORKDIR /build
+# See silkd/Dockerfile: the pin, not the base image's default, is the compiler.
+COPY init/rust-toolchain.toml ./
 COPY init/Cargo.toml init/Cargo.lock ./
 COPY init/src ./src
 RUN cargo build --release --locked && cp target/release/sandbox-init /sandbox-init
