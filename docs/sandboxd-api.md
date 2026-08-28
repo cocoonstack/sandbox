@@ -528,6 +528,8 @@ peers:
  "claimed": 2,
  "hibernated": 1,
  "archived": 0,
+ "at_capacity": true,
+ "at_capacity_reason": "not enough memory",
  "peers": ["10.0.0.6:7777"]}
 ```
 
@@ -535,7 +537,10 @@ peers:
 checkpointed to the store with the local VM dropped (see
 [archive tiers](deploy.md#configuration)); both are included in `claimed`.
 A node cordoned via [`POST /v1/drain`](#post-v1drain) additionally reports
-`"draining": true`.
+`"draining": true`. When refill is parked because the node cannot start
+another VM, `"at_capacity": true` distinguishes a full node from one still
+filling its warm target, and `at_capacity_reason` carries the engine's capacity
+reason. Both capacity fields are omitted while refill is not capacity-blocked.
 
 `golden` reports whether the pool's snapshot exists (refill can clone);
 `warm` at `target` with `golden: true` means warm claims are served in

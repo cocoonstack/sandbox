@@ -38,7 +38,7 @@ Build: `cd mcp && go build -o sandbox-mcp .`
 | `hibernate` | snapshot + stop, freeing memory; wakes on the next tool call |
 | `promote` | publish the sandbox as a named template |
 | `release` | destroy the sandbox |
-| `node_info` | pool and claim counters |
+| `node_info` | pool, claim, drain, and capacity state |
 
 Sandbox handles (and their tokens) are held by the server process for the
 session. Checkpoints outlive sessions: `branch_checkpoint` accepts any known

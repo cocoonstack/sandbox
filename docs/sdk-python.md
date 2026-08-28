@@ -274,8 +274,13 @@ with the sandbox, and a node without `preview_listen` answers 501.
 ## Node info
 
 ```python
-client.info()   # {"pools": [...], "claimed": n, "hibernated": n, "peers": [...]}
+client.info()   # pools, claims, drain, at_capacity/reason, and mesh peers
 ```
+
+`at_capacity: true` means refill is parked because the node cannot start
+another VM, not that it is still filling its warm target;
+`at_capacity_reason` carries the engine's reason. Both keys are absent while
+refill is not capacity-blocked.
 
 ## Running commands
 

@@ -343,8 +343,12 @@ revokes it with no extra state. Answers 501 when the node has no
 ## Node info
 
 ```go
-info, err := client.Info(ctx)   // *NodeInfo: Pools, Claimed, Hibernated, Archived, Peers
+info, err := client.Info(ctx)   // pools, claims, drain, capacity, and mesh peers
 ```
+
+`NodeInfo.AtCapacity` distinguishes a refill parked by node capacity from one
+still filling its target; `AtCapacityReason` carries the engine's reason. Both
+decode to their zero values when the server omits them.
 
 ## Running commands
 
