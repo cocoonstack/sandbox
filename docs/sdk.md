@@ -107,6 +107,8 @@ client, err := sandbox.Connect("10.0.0.5:7777",
   or a tenant token (resource-creating verbs only; operator surfaces like
   `Info` answer it 403). On a cluster every node shares the same root token
   and the same tenants set.
+- `WithHTTPClient(client)` — replace the control-plane HTTP client when the
+  caller needs a custom transport, proxy, or timeout.
 
 ### Connecting to clusters
 
@@ -215,6 +217,13 @@ deployment opts into `idle_hibernate_seconds` (see
 [deploy](deploy.md#configuration)), which hibernates idle claims
 automatically with the same transparent wake.
 
+If that deployment also enables `archive_after_seconds`, archiving replaces
+the original claim deadline with the archive-retention deadline (or no
+deadline when archives are kept forever). Waking an archive starts a fresh
+server-default 5m lease. The existing handle's `Sandbox.Deadline` is the value
+returned when that handle was created; call `Client.Sandboxes` to read the
+current server deadline after an archive/wake transition.
+
 ## Forking
 
 ```go
@@ -270,6 +279,7 @@ ckpt, err := sb.Checkpoint(ctx, "after-setup")  // source keeps running
 branch, err := ckpt.New(ctx)                     // fresh sandbox at the captured moment
 err = ckpt.Delete(ctx)
 ckpts, err := client.Checkpoints(ctx)            // node's checkpoints, newest first
+known := client.Checkpoint("ck_…")               // known id; no listing round-trip
 ```
 
 `Checkpoint` captures the sandbox's full state — memory, disk, running
@@ -278,10 +288,13 @@ processes — without stopping it (the same brief pause a fork takes), and
 moment; the checkpoint's key axes apply and `WithTimeout` may set each
 branch's TTL. Successive checkpoints of sources and branches form a tree.
 Checkpoints live in the node's checkpoint store — a shared FUSE mount or
-`checkpoint_store: s3` object storage lets any node branch them; handles
-stay owner-bound like templates; `client.Checkpoints` lists the connected
-node's. Checkpoint creation is resource-creating and takes the api token,
-like fork.
+`checkpoint_store: s3` object storage lets any node branch them.
+`client.Checkpoints` lists the connected node's records, while
+`client.Checkpoint(id)` creates an entry-node-bound handle for an already known
+id without listing. `Checkpoint.New` follows an owner probe/redirect and may
+heal a missing record locally; `Checkpoint.Delete` acts on the handle's bound
+node. Checkpoint creation is resource-creating and takes the api token, like
+fork.
 
 ## Language servers (LSP)
 

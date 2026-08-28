@@ -69,9 +69,10 @@ export generation fetched for that clone. It is absent for configured pools,
 cold image boots, forks, checkpoints, and templates published by an older
 sandboxd until they are re-promoted.
 
-A claim branched from a checkpoint (fork children included) additionally
-carries `"from_checkpoint": "ck_…"` — the lineage edge for reconstructing
-the checkpoint tree.
+A claim branched directly from a checkpoint additionally carries
+`"from_checkpoint": "ck_…"` — the lineage edge for reconstructing the
+checkpoint tree. Fork children do not repeat that edge: they branch from the
+parent sandbox, not directly from its checkpoint.
 
 `volumes` reports the names, effective mounts, and (`rw` only) mode applied
 and persisted at finalization — `mode` is omitted from the echo for `ro`
@@ -227,7 +228,10 @@ Auth: the sandbox's own token, or the root token by id (operator). Restores
 a hibernated (or archived) sandbox and leaves it running — waking is
 otherwise only a side effect of the next agent access, so this is the
 explicit form for warming a sandbox ahead of use. Idempotent on one already
-running. 204 on success, 404 unknown id or wrong token.
+running. A hibernated sandbox retains its existing deadline. An archived
+sandbox instead uses `archive_delete_after_seconds` as its retention deadline
+while stored, and waking it starts a fresh server-default 5m lease. 204 on
+success, 404 unknown id or wrong token.
 
 ## POST /v1/sandboxes/{id}/fork
 
