@@ -12,12 +12,14 @@ const peersTimeout = 5 * time.Second
 
 // NodeInfo is one node's operational state from GET /v1/info.
 type NodeInfo struct {
-	Pools      []PoolStatus `json:"pools"`
-	Claimed    int          `json:"claimed"`
-	Hibernated int          `json:"hibernated"`
-	Archived   int          `json:"archived"`
-	Draining   bool         `json:"draining,omitempty"`
-	Peers      []string     `json:"peers,omitempty"`
+	Pools            []PoolStatus `json:"pools"`
+	Claimed          int          `json:"claimed"`
+	Hibernated       int          `json:"hibernated"`
+	Archived         int          `json:"archived"`
+	Draining         bool         `json:"draining,omitempty"`
+	Peers            []string     `json:"peers,omitempty"`
+	AtCapacity       bool         `json:"at_capacity,omitempty"`
+	AtCapacityReason string       `json:"at_capacity_reason,omitempty"`
 }
 
 // PoolKey identifies one warm pool on a node.
@@ -53,7 +55,7 @@ type sandboxListResponse struct {
 	Sandboxes []SandboxSummary `json:"sandboxes"`
 }
 
-// Info reports the entry node's pools, claim counts, and mesh peers.
+// Info reports the entry node's pools, claims, capacity state, and mesh peers.
 func (c *Client) Info(ctx context.Context) (*NodeInfo, error) {
 	return doJSONPtr[NodeInfo](ctx, c, http.MethodGet, c.addr, "/v1/info", nil, c.apiToken, "info")
 }

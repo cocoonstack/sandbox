@@ -42,8 +42,9 @@ performance) — source in
   `Fork/Hibernate/Promote/Checkpoint`, `DialPort/ProxyPort/PreviewURL`,
   `StartLsp`, `Spawn/Ps/Kill/Logs/Attach`; `protocol/wire` carries the frame
   vocabulary, `sdk/go/silkd` the conn layer, `silkdtest` a test fake
-- `sdk/python/` — Python SDK (stdlib-only, sync), the same surface for the
-  Python-first agent ecosystem; round-trips the shared fixture corpus
+- `sdk/python/` — Python SDK (stdlib-only, sync), matching the Go guest and
+  data-plane surface for the Python-first agent ecosystem; node pool retuning
+  remains Go-only; round-trips the shared fixture corpus
 - `mcp/` — `sandbox-mcp`, an MCP stdio server exposing the surface as tools
   for Claude Code / Cursor / agent frameworks
 - `sdk/openai/` — `cocoonstack-sandbox-openai`, a custom sandbox provider

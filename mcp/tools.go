@@ -71,7 +71,7 @@ var tools = []tool{
 		schema(props{"sandbox_id": str(""), "template_name": str("template name to publish as")}, "sandbox_id", "template_name"), toolPromote,
 	},
 	{"release", "Release a sandbox; its VM is destroyed.", schema(props{"sandbox_id": str("")}, "sandbox_id"), toolRelease},
-	{"node_info", "The node's pool and claim counters.", schema(props{}), toolNodeInfo},
+	{"node_info", "The node's pool, claim, drain, and capacity state.", schema(props{}), toolNodeInfo},
 }
 
 // tool binds one MCP tool's spec to its handler, so a tool can never exist

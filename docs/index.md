@@ -27,8 +27,8 @@ vsock-only I/O (hardened default); `net=egress` attaches a bridge/CNI NIC.
   metrics, the usage journal
 - [Go SDK](sdk.md) — connecting (single node and clusters), every option,
   the full sandbox surface, error handling
-- [Python SDK](sdk-python.md) — the same surface for the Python-first
-  agent ecosystem, stdlib-only
+- [Python SDK](sdk-python.md) — the guest and data-plane surface for the
+  Python-first agent ecosystem, stdlib-only; node pool retuning remains Go-only
 - [LangChain toolkit](langchain.md) — sandbox tools for LangChain/LangGraph
   agents, with checkpoint branching
 - [MCP server](mcp.md) — sandboxes as Model Context Protocol tools for

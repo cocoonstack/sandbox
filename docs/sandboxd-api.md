@@ -69,9 +69,10 @@ export generation fetched for that clone. It is absent for configured pools,
 cold image boots, forks, checkpoints, and templates published by an older
 sandboxd until they are re-promoted.
 
-A claim branched from a checkpoint (fork children included) additionally
-carries `"from_checkpoint": "ck_…"` — the lineage edge for reconstructing
-the checkpoint tree.
+A claim branched directly from a checkpoint additionally carries
+`"from_checkpoint": "ck_…"` — the lineage edge for reconstructing the
+checkpoint tree. Fork children do not repeat that edge: they branch from the
+parent sandbox, not directly from its checkpoint.
 
 `volumes` reports the names, effective mounts, and (`rw` only) mode applied
 and persisted at finalization — `mode` is omitted from the echo for `ro`
@@ -227,7 +228,10 @@ Auth: the sandbox's own token, or the root token by id (operator). Restores
 a hibernated (or archived) sandbox and leaves it running — waking is
 otherwise only a side effect of the next agent access, so this is the
 explicit form for warming a sandbox ahead of use. Idempotent on one already
-running. 204 on success, 404 unknown id or wrong token.
+running. A hibernated sandbox retains its existing deadline. An archived
+sandbox instead uses `archive_delete_after_seconds` as its retention deadline
+while stored, and waking it starts a fresh server-default 5m lease. 204 on
+success, 404 unknown id or wrong token.
 
 ## POST /v1/sandboxes/{id}/fork
 
@@ -524,6 +528,8 @@ peers:
  "claimed": 2,
  "hibernated": 1,
  "archived": 0,
+ "at_capacity": true,
+ "at_capacity_reason": "not enough memory",
  "peers": ["10.0.0.6:7777"]}
 ```
 
@@ -531,7 +537,10 @@ peers:
 checkpointed to the store with the local VM dropped (see
 [archive tiers](deploy.md#configuration)); both are included in `claimed`.
 A node cordoned via [`POST /v1/drain`](#post-v1drain) additionally reports
-`"draining": true`.
+`"draining": true`. When refill is parked because the node cannot start
+another VM, `"at_capacity": true` distinguishes a full node from one still
+filling its warm target, and `at_capacity_reason` carries the engine's capacity
+reason. Both capacity fields are omitted while refill is not capacity-blocked.
 
 `golden` reports whether the pool's snapshot exists (refill can clone);
 `warm` at `target` with `golden: true` means warm claims are served in

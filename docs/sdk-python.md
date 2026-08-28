@@ -11,7 +11,8 @@ with client.new("ghcr.io/cocoonstack/sandbox/rt:24.04") as sb:
 `pip install cocoonstack-sandbox` — stdlib-only, no dependencies, and
 synchronous by design (agent frameworks that need async wrap calls in
 `asyncio.to_thread`, exactly like the [OpenAI adapter](openai-adapter.md)
-does). The surface is at parity with the [Go SDK](sdk.md); wire fidelity is
+does). It matches the [Go SDK](sdk.md) guest and data-plane surface; operator
+pool retuning (`SetPools`/`SetPoolsCluster`) remains Go-only. Wire fidelity is
 pinned by the shared protocol fixture corpus that the Rust guest, Go, and
 Python all round-trip in CI.
 
@@ -165,6 +166,13 @@ policy, unless the deployment opts into `idle_hibernate_seconds`
 ([deploy](deploy.md#configuration)), which hibernates idle claims
 automatically with the same transparent wake.
 
+If that deployment also enables `archive_after_seconds`, archiving replaces
+the original claim deadline with the archive-retention deadline (or no
+deadline when archives are kept forever). Waking an archive starts a fresh
+server-default 5m lease. The existing handle's `sb.deadline` remains the value
+returned when that handle was created; call `client.sandboxes()` to read the
+current server deadline after an archive/wake transition.
+
 ## Forking
 
 ```python
@@ -216,15 +224,18 @@ branch.read_file("/root/state.txt")        # b"v1"
 sb.read_file("/root/state.txt")            # b"v2" — source unaffected
 ckpt.delete()
 client.checkpoints()                       # node's checkpoints, newest first
+known = client.checkpoint("ck_…")          # known id; no listing round-trip
 ```
 
 A checkpoint captures memory, disk, and running processes without stopping
 the sandbox (the same brief pause a fork takes); `ckpt.new(ttl_seconds=0)`
 branches any number of independent sandboxes from that exact moment, and
-successive checkpoints of sources and branches form a tree. Checkpoints
-live in the node's checkpoint store — a shared FUSE mount or
-`checkpoint_store: s3` lets any node branch them; handles stay owner-bound
-like templates.
+successive checkpoints of sources and branches form a tree. Checkpoints live
+in the node's checkpoint store — a shared FUSE mount or `checkpoint_store: s3`
+lets any node branch them. `client.checkpoints()` lists the connected node's
+records, while `client.checkpoint(id)` creates an entry-node-bound handle for
+an already known id without listing. `new()` follows an owner redirect and may
+heal a missing record locally; `delete()` acts on the handle's bound node.
 
 ## Language servers (LSP)
 
@@ -263,8 +274,13 @@ with the sandbox, and a node without `preview_listen` answers 501.
 ## Node info
 
 ```python
-client.info()   # {"pools": [...], "claimed": n, "hibernated": n, "peers": [...]}
+client.info()   # pools, claims, drain, at_capacity/reason, and mesh peers
 ```
+
+`at_capacity: true` means refill is parked because the node cannot start
+another VM, not that it is still filling its warm target;
+`at_capacity_reason` carries the engine's reason. Both keys are absent while
+refill is not capacity-blocked.
 
 ## Running commands
 

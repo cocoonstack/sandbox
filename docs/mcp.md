@@ -38,11 +38,12 @@ Build: `cd mcp && go build -o sandbox-mcp .`
 | `hibernate` | snapshot + stop, freeing memory; wakes on the next tool call |
 | `promote` | publish the sandbox as a named template |
 | `release` | destroy the sandbox |
-| `node_info` | pool and claim counters |
+| `node_info` | pool, claim, drain, and capacity state |
 
 Sandbox handles (and their tokens) are held by the server process for the
-session. Checkpoints outlive sessions: `branch_checkpoint` resolves ids it
-did not mint against the connected node's listing — on a cluster that
-covers the connected node's checkpoints; one created on a redirected
-(peer-owned) sandbox in a *previous* session needs a server pointed at that
-node.
+session. Checkpoints outlive sessions: `branch_checkpoint` accepts any known
+id without a listing round-trip. If the connected node does not hold it, the
+claim follows a live owner probe and redirect, or heals the checkpoint locally
+when peer healing is enabled. `delete_checkpoint` is different: it acts on the
+node bound to the handle, so deleting an id recovered in a later session needs
+the MCP server pointed at a node that holds it.
