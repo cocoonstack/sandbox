@@ -50,10 +50,10 @@ pub async fn open<W: AsyncWrite + Unpin>(
         cmd.current_dir(dir);
     }
     cmd.env_clear().envs(sysutil::base_env()).envs(&req.env);
-    if let Some(user) = &req.user {
-        if let Err(e) = sysutil::apply_user(&mut cmd, user) {
-            return crate::proto::error_frame(out, ErrorKind::BadRequest, e).await;
-        }
+    if let Some(user) = &req.user
+        && let Err(e) = sysutil::apply_user(&mut cmd, user)
+    {
+        return crate::proto::error_frame(out, ErrorKind::BadRequest, e).await;
     }
     match slave.try_clone().and_then(|i| Ok((i, slave.try_clone()?))) {
         Ok((in_fd, out_fd)) => {

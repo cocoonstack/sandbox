@@ -51,10 +51,10 @@ where
     cmd.env_clear();
     cmd.envs(sysutil::base_env());
     cmd.envs(&req.env);
-    if let Some(ref user) = req.user {
-        if let Err(e) = sysutil::apply_user(&mut cmd, user) {
-            return crate::proto::error_frame(out, ErrorKind::BadRequest, e).await;
-        }
+    if let Some(ref user) = req.user
+        && let Err(e) = sysutil::apply_user(&mut cmd, user)
+    {
+        return crate::proto::error_frame(out, ErrorKind::BadRequest, e).await;
     }
 
     let mut child = match cmd.spawn() {

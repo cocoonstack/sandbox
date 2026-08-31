@@ -299,10 +299,10 @@ fn parse_file_line(line: &str) -> Option<GitFileStatus> {
 /// Splits an author "Name <email>" into (name, email); a missing angle form
 /// leaves the whole string as the name.
 fn split_author(author: &str) -> (&str, &str) {
-    if let Some(open) = author.find('<') {
-        if let Some(close) = author[open..].find('>') {
-            return (author[..open].trim(), &author[open + 1..open + close]);
-        }
+    if let Some(open) = author.find('<')
+        && let Some(close) = author[open..].find('>')
+    {
+        return (author[..open].trim(), &author[open + 1..open + close]);
     }
     (author.trim(), "")
 }

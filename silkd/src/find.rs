@@ -88,10 +88,10 @@ pub async fn replace<W: AsyncWrite + Unpin>(
             caps.expand(&replacement, &mut expanded);
             expanded
         });
-        if count > 0 {
-            if let Err(e) = crate::fs::write_atomic(Path::new(&file), new.as_bytes()).await {
-                return err_frame(w, &e, "write").await;
-            }
+        if count > 0
+            && let Err(e) = crate::fs::write_atomic(Path::new(&file), new.as_bytes()).await
+        {
+            return err_frame(w, &e, "write").await;
         }
         proto::write_frame(
             w,
