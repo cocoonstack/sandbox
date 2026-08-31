@@ -83,7 +83,7 @@ func TestConcurrentSetPoolsPersistLatest(t *testing.T) {
 func TestRestoredEgressPoolNeedsAttachment(t *testing.T) {
 	dir := t.TempDir()
 	pf := poolsFile{Pools: []config.PoolSpec{
-		{PoolKey: types.PoolKey{Template: "eg:24.04", Net: types.NetEgress, Size: types.SizeSmall}, Warm: 1},
+		{Template: "eg:24.04", Net: types.NetEgress, Size: types.SizeSmall, Warm: 1},
 	}}
 	raw, err := json.Marshal(pf)
 	if err != nil {

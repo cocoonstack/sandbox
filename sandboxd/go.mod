@@ -1,6 +1,6 @@
 module github.com/cocoonstack/sandbox/sandboxd
 
-go 1.26.5
+go 1.27.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.43.7

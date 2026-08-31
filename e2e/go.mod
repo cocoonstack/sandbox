@@ -1,11 +1,6 @@
 module github.com/cocoonstack/sandbox/e2e
 
-go 1.26.5
-
-require (
-	github.com/cocoonstack/sandbox/sandboxd v0.0.0
-	github.com/cocoonstack/sandbox/sdk/go v0.0.0
-)
+go 1.27.0
 
 require (
 	github.com/alphadose/haxmap v1.2.0 // indirect
@@ -62,6 +57,10 @@ replace (
 	github.com/cocoonstack/sandbox/sdk/go => ../sdk/go
 )
 
-require github.com/cocoonstack/sandbox/protocol/wire v0.1.7
+require (
+	github.com/cocoonstack/sandbox/protocol/wire v0.1.7
+	github.com/cocoonstack/sandbox/sandboxd v0.0.0
+	github.com/cocoonstack/sandbox/sdk/go v0.0.0
+)
 
 replace github.com/cocoonstack/sandbox/protocol/wire => ../protocol/wire

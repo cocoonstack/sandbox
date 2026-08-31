@@ -100,14 +100,14 @@ func (p *PreviewServer) serve(w http.ResponseWriter, r *http.Request) {
 
 func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claims previewClaims) {
 	rp := &httputil.ReverseProxy{
-		Director: func(req *http.Request) {
-			req.URL.Scheme = "http"
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.Out.URL.Scheme = "http"
 			// The synthetic host carries PreviewDial's target.
-			req.URL.Host = fmt.Sprintf("%s:%d", claims.ID, claims.Port)
-			req.URL.Path = "/" + strings.TrimPrefix(req.URL.Path, "/p/"+r.PathValue("token")+"/")
+			pr.Out.URL.Host = fmt.Sprintf("%s:%d", claims.ID, claims.Port)
+			pr.Out.URL.Path = "/" + strings.TrimPrefix(pr.In.URL.Path, "/p/"+r.PathValue("token")+"/")
 			// Browser credentials for the preview domain must not reach guest code.
-			req.Header.Del("Cookie")
-			req.Header.Del("Authorization")
+			pr.Out.Header.Del("Cookie")
+			pr.Out.Header.Del("Authorization")
 		},
 		Transport: p.transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {

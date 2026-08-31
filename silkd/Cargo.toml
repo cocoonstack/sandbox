@@ -2,7 +2,7 @@
 name = "silkd"
 version = "0.1.7"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.98"
 description = "In-guest sandbox daemon: exec with context, processes, and files over vsock"
 publish = false
 

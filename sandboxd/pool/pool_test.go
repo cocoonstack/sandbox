@@ -459,8 +459,8 @@ func TestSetPoolsRemovalShedsArchivePolicy(t *testing.T) {
 func TestSetPoolsRejectsInvalidSpec(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	err := m.SetPools(t.Context(), []config.PoolSpec{{
-		PoolKey: types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall},
-		Warm:    -1,
+		Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall,
+		Warm: -1,
 	}})
 	if !errors.Is(err, ErrBadCount) {
 		t.Fatalf("got %v, want ErrBadCount", err)
@@ -472,8 +472,8 @@ func TestSetPoolsRejectsInvalidSpec(t *testing.T) {
 func TestSetPoolsRejectsEgress(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	err := m.SetPools(t.Context(), []config.PoolSpec{{
-		PoolKey: types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall},
-		Egress:  &egress.Policy{},
+		Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall,
+		Egress: &egress.Policy{},
 	}})
 	if !errors.Is(err, ErrBadKey) {
 		t.Fatalf("got %v, want ErrBadKey", err)
