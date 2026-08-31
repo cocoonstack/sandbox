@@ -12,7 +12,7 @@ require (
 	github.com/cockroachdb/errors v1.9.1 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b // indirect
 	github.com/cockroachdb/redact v1.1.3 // indirect
-	github.com/cocoonstack/sandbox/protocol/wire v0.1.6 // indirect
+	github.com/cocoonstack/sandbox/protocol/wire v0.1.7 // indirect
 	github.com/getsentry/sentry-go v0.20.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
