@@ -4,7 +4,7 @@
 # under /boot/ for os-image builds to COPY --from. Built per-platform on
 # native runners (a kernel build under QEMU emulation takes hours).
 
-FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS kbuild
+FROM debian:12.15-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS kbuild
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential bc bison flex libelf-dev libssl-dev \
     xz-utils curl ca-certificates python3 \
@@ -75,7 +75,7 @@ RUN set -e; \
     fi; \
     gcc usr/gen_init_cpio.c -o /usr/local/bin/gen_init_cpio
 
-FROM rust:1-alpine@sha256:a10e64dd139b7387337c7fbe8aca31b959b57b2fd4c8ae20a02cf1d6ea424dce AS initbuild
+FROM rust:1.98.0-alpine@sha256:a10e64dd139b7387337c7fbe8aca31b959b57b2fd4c8ae20a02cf1d6ea424dce AS initbuild
 RUN apk add --no-cache musl-dev
 WORKDIR /build
 # See silkd/Dockerfile: the pin, not the base image's default, is the compiler.

@@ -27,7 +27,7 @@ jobs:
       id-token: write # OIDC for PyPI Trusted Publishing
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: Resolve package dir from the tag
         id: pkg
@@ -44,7 +44,7 @@ jobs:
           echo "version=$ver" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
 
@@ -67,6 +67,6 @@ jobs:
           python -m build "${{ steps.pkg.outputs.dir }}"
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@v1.14.2
         with:
           packages-dir: ${{ steps.pkg.outputs.dir }}/dist
