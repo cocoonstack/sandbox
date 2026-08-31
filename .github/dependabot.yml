@@ -20,6 +20,12 @@ updates:
         update-types:
           - "version-update:semver-major"
           - "version-update:semver-minor"
+      # The kbuild stage's Debian release is a kernel-toolchain choice; moving it
+      # is a testbed boot round, not a digest refresh.
+      - dependency-name: "debian"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
   - package-ecosystem: cargo
     directories:
       - /silkd
