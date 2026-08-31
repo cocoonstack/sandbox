@@ -4,7 +4,7 @@
 # under /boot/ for os-image builds to COPY --from. Built per-platform on
 # native runners (a kernel build under QEMU emulation takes hours).
 
-FROM debian:12.15-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS kbuild
+FROM debian:13.6-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS kbuild
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential bc bison flex libelf-dev libssl-dev \
     xz-utils curl ca-certificates python3 \
