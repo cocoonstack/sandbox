@@ -287,9 +287,15 @@ func (f *Fake) fsFind(conn net.Conn, req *wire.FsFind) {
 	if req.Glob != "" {
 		nameRe = globRegexp(req.Glob)
 	}
-	walkErr := filepath.WalkDir(f.abs(req.Path), func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+	root := f.abs(req.Path)
+	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		switch {
+		case err != nil && path == root:
 			return err
+		case err != nil && d != nil && d.IsDir():
+			return fs.SkipDir
+		case err != nil || d.IsDir():
+			return nil
 		}
 		if nameRe != nil && !nameRe.MatchString(d.Name()) {
 			return nil

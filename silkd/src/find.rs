@@ -36,12 +36,15 @@ pub async fn find<W: AsyncWrite + Unpin>(
         Ok(rd) => rd,
         Err(e) => return err_frame(w, &e, "read_dir").await,
     };
+    let mut root = true;
     let mut stack = Vec::new();
     loop {
         loop {
             let ent = match rd.next_entry().await {
                 Ok(Some(ent)) => ent,
-                _ => break,
+                Ok(None) => break,
+                Err(e) if root => return err_frame(w, &e, "read_dir").await,
+                Err(_) => break,
             };
             let Ok(ft) = ent.file_type().await else {
                 continue;
@@ -53,6 +56,7 @@ pub async fn find<W: AsyncWrite + Unpin>(
                 scan_file(w, &re, &p).await?;
             }
         }
+        root = false;
         rd = loop {
             let Some(dir) = stack.pop() else {
                 return proto::write_frame(w, &Response::Done).await;
