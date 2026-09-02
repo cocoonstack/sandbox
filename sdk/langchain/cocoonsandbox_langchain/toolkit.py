@@ -59,8 +59,9 @@ class CocoonToolkit:
             self._tool("sandbox_exec",
                        "Run a shell command in the sandbox and wait for it to exit. "
                        "Returns stdout; a non-empty stderr is appended as a 'stderr:' "
-                       "line and a non-zero status as an 'exit code: N' line. Files "
-                       "and installed packages persist across calls; environment "
+                       "line and a non-zero status as an 'exit code: N' line; a "
+                       "command that prints nothing and exits 0 returns '(no output)'. "
+                       "Files and installed packages persist across calls; environment "
                        "variables and the working directory do not.",
                        ExecInput, self._exec),
             self._tool("sandbox_write_file",
@@ -69,8 +70,8 @@ class CocoonToolkit:
                        WriteFileInput, self._write_file),
             self._tool("sandbox_read_file",
                        "Return the whole content of a file in the sandbox as text "
-                       "(undecodable bytes are replaced). Prefer sandbox_exec with "
-                       "head or tail for large files.",
+                       "(undecodable bytes are replaced); a missing path is a tool "
+                       "error. Prefer sandbox_exec with head or tail for large files.",
                        PathInput, self._read_file),
             self._tool("sandbox_list_dir",
                        "List one directory (not recursive) as a JSON array of "

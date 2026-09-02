@@ -109,9 +109,12 @@ labeled and must only be compared against other nested runs.
 
 The clone-tier row still measures warm hits (see 2026-07-22); the burst
 row is the clone path. Burst reads slower than 2026-07-22 (102 → 208 ms
-p50) on a newer host kernel (7.0.0-30 vs -28); the same sandboxd A/B'd
-against the pre-round main on this host and kernel read within noise, so
-the delta is not the round's code.
+p50) on a newer host kernel (7.0.0-30 vs -28). The same-day A/B of this
+sandboxd (4604b69) against the pre-round main (d5ba35d), three interleaved
+reps each on this host and kernel, read burst p50 104 / 75 / 51 ms vs
+85 / 134 / 159 ms, warm 0.3 ms on both, cold 216–221 vs 213–219 ms, so the
+delta is the host, not the round's code (cocoon-specs
+`tests/2026-09-02-batch0-hardware-regression.md`, B0-05).
 
 | data plane | measured |
 |---|---|
@@ -119,7 +122,6 @@ the delta is not the round's code.
 | fs_pull throughput (128 MiB) | 659.4 MiB/s best of 3 |
 | burst wall (16 concurrent clones) | 458 ms |
 | warm refill recovery (0 → 6) | 3 ms |
-
 
 ### 2026-07-22 — bare metal (3e54866, CH-only round: both lanes on Cloud Hypervisor)
 

@@ -28,16 +28,16 @@ Build: `cd mcp && go build -o sandbox-mcp .`
 | `exec` | run a shell command to completion (5-minute cap); returns stdout, stderr and the exit code; a hibernated sandbox wakes transparently |
 | `spawn` | start a command detached and return its pid; output goes to a 256 KiB ring buffer that `logs` replays |
 | `ps` | list tracked processes (exec, spawn, pty) with state, exit code and start time |
-| `logs` | replay a tracked process's last 256 KiB of stdout/stderr (+ exit code once ended) |
+| `logs` | replay up to 256 KiB of a tracked process's newest whole stdout/stderr chunks (+ exit code once ended) |
 | `kill` | signal a tracked process (0 = SIGKILL); an exited process is a no-op success |
-| `write_file` / `read_file` / `list_dir` | atomic whole-file write (parent must exist), whole-file text read, one-level directory listing |
-| `fork` | clone into N children (1-16) carrying exact memory + disk state, all-or-nothing; the parent keeps running |
+| `write_file` / `read_file` / `list_dir` | atomic whole-file write (parent must exist); whole-file text read (invalid UTF-8 replaced, missing path is an error); one-level listing of `{name, kind, size}` entries |
+| `fork` | clone into N children (1 to the node's `max_fork_count`, default 16) carrying exact memory + disk state, all-or-nothing; the parent keeps running |
 | `checkpoint` | capture full state without stopping; returns a `checkpoint_id` that can be branched repeatedly |
 | `branch_checkpoint` | claim a fresh sandbox from a checkpoint's captured moment |
 | `list_checkpoints` / `delete_checkpoint` | checkpoint lifecycle |
-| `hibernate` | snapshot + stop, freeing memory while keeping id, files and processes; wakes on the next tool call |
+| `hibernate` | snapshot + stop, freeing memory while keeping id, files and processes; the next call that reaches the guest wakes it |
 | `promote` | publish the sandbox as a named template on its node; re-promoting replaces it |
-| `release` | destroy the sandbox and its files; releasing twice succeeds |
+| `release` | destroy the sandbox and its files; the session forgets the id, so a second release is rejected as unknown |
 | `node_info` | warm pools, live claims, drain state, capacity and mesh peers |
 
 Sandbox handles (and their tokens) are held by the server process for the
