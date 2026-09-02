@@ -13,65 +13,65 @@ import (
 
 var tools = []tool{
 	{
-		"create_sandbox", "Claim a fresh microVM sandbox; returns its id. Warm claims are milliseconds.",
-		schema(props{"template": str("template image ref; empty uses the server default"), "net": str("network lane: none (default) or egress"), "size": str("resource tier: small (default), medium, large, xlarge"), "ttl_seconds": integer("sandbox lifetime in seconds; 0 means one hour, and nothing renews it")}), toolCreateSandbox,
+		"create_sandbox", "Claim a fresh microVM sandbox and return its id plus deadline. Warm claims take milliseconds; a cold template boots in well under a second. Every other tool takes the returned sandbox_id. The sandbox is destroyed at its deadline unless released earlier; nothing renews it.",
+		schema(props{"template": str("template image ref, or a name published by promote; empty uses the server default"), "net": str("network lane: none (default, no NIC, vsock-only I/O) or egress (bridge NIC, outbound network)"), "size": str("resource tier: small (default), medium, large, xlarge"), "ttl_seconds": integer("sandbox lifetime in seconds; 0 means one hour, and nothing renews it")}), toolCreateSandbox,
 	},
 	{
-		"exec", "Run a command in a sandbox and return stdout/stderr/exit code. A hibernated sandbox wakes transparently.",
-		schema(props{"sandbox_id": str("sandbox to run in"), "command": str("shell command, run via sh -c"), "cwd": str("working directory (optional)")}, "sandbox_id", "command"), toolExec,
+		"exec", "Run a shell command in a sandbox, wait for it to exit, and return stdout, stderr, and the exit code as JSON. The call is cut off after 5 minutes; for servers or long jobs use spawn instead. A hibernated sandbox wakes transparently on this call.",
+		schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "command": str("shell command, run via sh -c"), "cwd": str("working directory; empty runs in the guest's default")}, "sandbox_id", "command"), toolExec,
 	},
 	{
-		"spawn", "Start a command detached in a sandbox; returns its pid. Read output later with logs.",
-		schema(props{"sandbox_id": str(""), "command": str("shell command, run via sh -c"), "cwd": str("working directory (optional)")}, "sandbox_id", "command"), toolSpawn,
+		"spawn", "Start a shell command detached in a sandbox and return its guest pid immediately. The process keeps running across later tool calls; its output goes to a per-process ring buffer (most recent 256 KiB) that logs replays. Use exec instead when you need the result now.",
+		schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "command": str("shell command, run via sh -c"), "cwd": str("working directory; empty runs in the guest's default")}, "sandbox_id", "command"), toolSpawn,
 	},
 	{
-		"ps", "List a sandbox's tracked processes with state and exit codes.",
-		schema(props{"sandbox_id": str("")}, "sandbox_id"), toolPs,
+		"ps", "List the sandbox's tracked processes (exec, spawn, and pty commands) as JSON: pid, argv, detached, state (running or exited), exit_code once exited, and start time. Processes started inside the guest by other means are not listed.",
+		schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint")}, "sandbox_id"), toolPs,
 	},
 	{
-		"kill", "Signal a tracked process (default SIGKILL).",
-		schema(props{"sandbox_id": str(""), "pid": integer("guest pid from spawn/ps"), "signal": integer("signal number; 0 = SIGKILL")}, "sandbox_id", "pid"), toolKill,
+		"kill", "Send a signal to a tracked process. Killing a process that already exited is a no-op success; the guest never re-signals a reaped pid.",
+		schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "pid": integer("guest pid from spawn or ps"), "signal": integer("signal number, e.g. 15 for SIGTERM; 0 sends SIGKILL")}, "sandbox_id", "pid"), toolKill,
 	},
 	{
-		"logs", "Replay a process's buffered output (stdout/stderr, exit code when ended).",
-		schema(props{"sandbox_id": str(""), "pid": integer("guest pid from spawn/ps")}, "sandbox_id", "pid"), toolLogs,
+		"logs", "Return a tracked process's buffered stdout and stderr, plus exit_code once it has ended. The buffer keeps only the most recent 256 KiB per process, so redirect long output to a file when it must be complete.",
+		schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "pid": integer("guest pid from spawn or ps")}, "sandbox_id", "pid"), toolLogs,
 	},
 	{
-		"write_file", "Write text to a file in a sandbox (atomic on the guest).",
-		schema(props{"sandbox_id": str(""), "path": str("absolute path"), "content": str("file content")}, "sandbox_id", "path", "content"), toolWriteFile,
+		"write_file", "Write text content to a file in a sandbox, replacing any existing file. The write is atomic (temp file plus rename); an existing file keeps its permission bits. The parent directory must already exist.",
+		schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "path": str("absolute path of the file"), "content": str("full file content; written verbatim")}, "sandbox_id", "path", "content"), toolWriteFile,
 	},
 	{
-		"read_file", "Read a text file from a sandbox.",
-		schema(props{"sandbox_id": str(""), "path": str("absolute path")}, "sandbox_id", "path"), toolReadFile,
+		"read_file", "Return the whole content of a file in a sandbox as text. Meant for text files; for large or binary files use exec with head, tail, or a checksum instead. A missing path is an error.",
+		schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "path": str("absolute path of the file")}, "sandbox_id", "path"), toolReadFile,
 	},
 	{
-		"list_dir", "List a directory in a sandbox.",
-		schema(props{"sandbox_id": str(""), "path": str("absolute path")}, "sandbox_id", "path"), toolListDir,
+		"list_dir", "List one directory in a sandbox (not recursive) as JSON entries with name, kind (file, dir, symlink, or other), and size in bytes.",
+		schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "path": str("absolute path of the directory")}, "sandbox_id", "path"), toolListDir,
 	},
 	{
-		"fork", "Clone a sandbox into N independent children carrying its exact memory and disk state; children live one hour.",
-		schema(props{"sandbox_id": str(""), "count": integer("children, 1-16")}, "sandbox_id", "count"), toolFork,
+		"fork", "Clone a sandbox into N independent children that start from its exact memory and disk state, including running processes; each child gets its own id and lives one hour. All-or-nothing: on failure no child survives. The parent keeps running.",
+		schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "count": integer("number of children, 1-16")}, "sandbox_id", "count"), toolFork,
 	},
 	{
-		"checkpoint", "Capture a sandbox's full state without stopping it; returns a checkpoint id to branch from.",
-		schema(props{"sandbox_id": str(""), "name": str("optional label")}, "sandbox_id"), toolCheckpoint,
+		"checkpoint", "Capture a sandbox's full state (memory, disk, running processes) without stopping it and return a checkpoint id. branch_checkpoint claims new sandboxes from that moment any number of times; checkpoints outlive this session until deleted.",
+		schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "name": str("optional human label")}, "sandbox_id"), toolCheckpoint,
 	},
 	{
-		"branch_checkpoint", "Claim a fresh sandbox branched from a checkpoint's exact captured moment; it lives one hour.",
-		schema(props{"checkpoint_id": str("")}, "checkpoint_id"), toolBranchCheckpoint,
+		"branch_checkpoint", "Claim a fresh sandbox that resumes from a checkpoint's exact captured moment and return its id; it lives one hour. The checkpoint is unchanged and can be branched again.",
+		schema(props{"checkpoint_id": str("id returned by checkpoint or list_checkpoints")}, "checkpoint_id"), toolBranchCheckpoint,
 	},
-	{"list_checkpoints", "List checkpoints on the node, newest first.", schema(props{}), toolListCheckpoints},
-	{"delete_checkpoint", "Delete a checkpoint.", schema(props{"checkpoint_id": str("")}, "checkpoint_id"), toolDeleteCheckpoint},
+	{"list_checkpoints", "List the node's checkpoints newest first: checkpoint_id, name, source sandbox_id, created_at.", schema(props{}), toolListCheckpoints},
+	{"delete_checkpoint", "Delete a checkpoint permanently. Sandboxes already branched from it are unaffected.", schema(props{"checkpoint_id": str("id returned by checkpoint or list_checkpoints")}, "checkpoint_id"), toolDeleteCheckpoint},
 	{
-		"hibernate", "Snapshot and stop a sandbox, freeing its memory; any later tool call wakes it transparently.",
-		schema(props{"sandbox_id": str("")}, "sandbox_id"), toolHibernate,
+		"hibernate", "Snapshot a sandbox and stop its VM, freeing memory while keeping its id, files, processes, and shell state. Any later tool call on the id wakes it transparently (tens of milliseconds).",
+		schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint")}, "sandbox_id"), toolHibernate,
 	},
 	{
-		"promote", "Publish a sandbox's state as a named template; later create_sandbox calls can claim it by name.",
-		schema(props{"sandbox_id": str(""), "template_name": str("template name to publish as")}, "sandbox_id", "template_name"), toolPromote,
+		"promote", "Publish the sandbox's current state as a named template on its node; later create_sandbox calls with that name (and the same net and size) start from it. Re-promoting to the same name replaces the template.",
+		schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "template_name": str("template name to publish as")}, "sandbox_id", "template_name"), toolPromote,
 	},
-	{"release", "Release a sandbox; its VM is destroyed.", schema(props{"sandbox_id": str("")}, "sandbox_id"), toolRelease},
-	{"node_info", "The node's pool, claim, drain, and capacity state.", schema(props{}), toolNodeInfo},
+	{"release", "Destroy a sandbox and free its resources; files and processes inside it are lost. Releasing an already-released id succeeds.", schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint")}, "sandbox_id"), toolRelease},
+	{"node_info", "Report the connected node's warm pools, live claims, drain state, capacity, and mesh peers as JSON.", schema(props{}), toolNodeInfo},
 }
 
 // tool binds one MCP tool's spec to its handler, so a tool can never exist

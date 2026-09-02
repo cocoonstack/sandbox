@@ -57,17 +57,24 @@ class CocoonToolkit:
         """The sandbox tool set; sync-native (_run), async via to_thread."""
         return [
             self._tool("sandbox_exec",
-                       "Run a shell command in the sandbox; returns stdout, stderr, "
-                       "and the exit code. State on disk persists across calls.",
+                       "Run a shell command in the sandbox and wait for it to exit. "
+                       "Returns stdout; a non-empty stderr is appended as a 'stderr:' "
+                       "line and a non-zero status as an 'exit code: N' line. Files "
+                       "and installed packages persist across calls; environment "
+                       "variables and the working directory do not.",
                        ExecInput, self._exec),
             self._tool("sandbox_write_file",
-                       "Write a text file in the sandbox (atomic).",
+                       "Write text to a file in the sandbox, replacing any existing "
+                       "file atomically. The parent directory must already exist.",
                        WriteFileInput, self._write_file),
             self._tool("sandbox_read_file",
-                       "Read a text file from the sandbox.",
+                       "Return the whole content of a file in the sandbox as text "
+                       "(undecodable bytes are replaced). Prefer sandbox_exec with "
+                       "head or tail for large files.",
                        PathInput, self._read_file),
             self._tool("sandbox_list_dir",
-                       "List a sandbox directory as JSON entries.",
+                       "List one directory (not recursive) as a JSON array of "
+                       "{name, kind, size}; kind is file, dir, symlink, or other.",
                        PathInput, self._list_dir),
         ]
 
