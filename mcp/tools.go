@@ -61,7 +61,7 @@ var tools = []tool{
 		schema(props{"checkpoint_id": str("id returned by checkpoint or list_checkpoints")}, "checkpoint_id"), toolBranchCheckpoint,
 	},
 	{"list_checkpoints", "List the node's checkpoints newest first: checkpoint_id, name, source sandbox_id, created_at.", schema(props{}), toolListCheckpoints},
-	{"delete_checkpoint", "Delete the node's copy of a checkpoint; a replica a peer node healed stays branchable until its own TTL sweep. Sandboxes already branched from it are unaffected.", schema(props{"checkpoint_id": str("id returned by checkpoint or list_checkpoints")}, "checkpoint_id"), toolDeleteCheckpoint},
+	{"delete_checkpoint", "Delete the node's copy of a checkpoint and tell peers to drop theirs; a peer replica that misses that broadcast stays branchable until its own TTL sweep. Sandboxes already branched from it are unaffected.", schema(props{"checkpoint_id": str("id returned by checkpoint or list_checkpoints")}, "checkpoint_id"), toolDeleteCheckpoint},
 	{
 		"hibernate", "Snapshot a sandbox and stop its VM, freeing memory while keeping its id, files, processes, and shell state. The next call that reaches the guest (exec, spawn, ps, kill, logs, the file tools) wakes it transparently in tens of milliseconds; fork, checkpoint, promote and release act on the snapshot without waking it.",
 		schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint")}, "sandbox_id"), toolHibernate,
