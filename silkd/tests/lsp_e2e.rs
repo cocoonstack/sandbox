@@ -47,6 +47,7 @@ fn manifest_env(server_body: &str) -> TempDir {
 
 #[tokio::test]
 async fn lsp_start_missing_manifest_is_not_found() {
+    let _env_lock = ENV_LOCK.lock().await;
     let frames = timeout(
         DEADLINE,
         one(
