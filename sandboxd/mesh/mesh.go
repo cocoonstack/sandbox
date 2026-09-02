@@ -20,12 +20,15 @@ import (
 	"github.com/projecteru2/core/log"
 )
 
-// leaveTimeout bounds the graceful-leave broadcast on shutdown so a wedged
-// network can't hang the exit path.
-const leaveTimeout = time.Second
+const (
+	// leaveTimeout bounds the graceful-leave broadcast so a wedged network cannot hang the exit path.
+	leaveTimeout = time.Second
 
-// NodeState is one node's gossiped placement view. Epoch resolves merges: the
-// higher epoch for a given node wins.
+	// epochLease keeps the durable floor ahead of the counter, off the gossip tick.
+	epochLease = 1024
+)
+
+// NodeState is one node's gossiped placement view; the higher Epoch wins a merge.
 type NodeState struct {
 	NodeID    string         `json:"node_id"`
 	Addr      string         `json:"addr"` // data-plane advertise address
@@ -40,13 +43,12 @@ type NodeState struct {
 type Mesh struct {
 	ml        *memberlist.Memberlist
 	epochPath string
-	// ctx is the daemon's, for logging inside memberlist callbacks — the
-	// delegate interfaces carry no context of their own.
+	// ctx is the daemon's, for logging inside memberlist callbacks.
 	ctx context.Context
 
-	// updateMu serializes UpdateSelf end-to-end: two updates reading one epoch
-	// would both bump to E+1 and the loser's payload would be dropped.
+	// updateMu serializes UpdateSelf and guards leased; one shared epoch read drops a payload.
 	updateMu sync.Mutex
+	leased   uint64
 
 	mu   sync.Mutex
 	self NodeState
@@ -54,18 +56,15 @@ type Mesh struct {
 	live map[string]struct{}  // members SWIM reports; gossip about anyone else is ignored
 }
 
-// New starts a mesh member listening per cfg. selfAddr is the data-plane
-// address peers should dial for a redirect; secretKey (16/24/32 bytes) enables
-// gossip encryption when non-empty; dataDir holds the persisted epoch.
+// New starts a mesh member listening per cfg.
 func New(ctx context.Context, cfg *memberlist.Config, nodeID, selfAddr string, secretKey []byte, dataDir string) (*Mesh, error) {
 	epochPath := filepath.Join(dataDir, "mesh-epoch")
-	// Seed strictly above the persisted floor (the last epoch peers saw):
-	// seeding at it ties their stale copy and merge's `>` rejects the restart's
-	// fresh state. loadEpoch caps the floor so the +1 cannot wrap.
+	// seed strictly above the persisted floor: merge's `>` rejects a tie with a stale copy.
 	epoch := max(uint64(time.Now().UnixNano()), loadEpoch(epochPath)+1) //nolint:gosec // UnixNano is positive for current times
 	m := &Mesh{
 		ctx:       ctx,
 		epochPath: epochPath,
+		leased:    epoch + epochLease,
 		self: NodeState{
 			NodeID: nodeID,
 			Addr:   selfAddr,
@@ -75,7 +74,7 @@ func New(ctx context.Context, cfg *memberlist.Config, nodeID, selfAddr string, s
 		view: map[string]NodeState{},
 		live: map[string]struct{}{},
 	}
-	if err := m.persistEpoch(epoch); err != nil {
+	if err := m.persistEpoch(m.leased); err != nil {
 		return nil, fmt.Errorf("persist mesh epoch: %w", err)
 	}
 	m.view[nodeID] = m.self
@@ -105,9 +104,7 @@ func (m *Mesh) Join(seeds []string) error {
 	return nil
 }
 
-// UpdateSelf republishes this node's warm-pool counts, promoted-template set,
-// and locally available volumes. An unchanged view does not bump the epoch.
-// templates and volumes must arrive sorted: the compare is order-sensitive.
+// UpdateSelf republishes this node's counts, templates, and volumes; both slices must be sorted.
 func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates, volumes []string) {
 	m.updateMu.Lock()
 	defer m.updateMu.Unlock()
@@ -118,12 +115,14 @@ func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates, 
 	}
 	epoch := m.self.Epoch + 1
 	m.mu.Unlock()
-	// Persist the candidate before publishing it: memberlist gossips self the
-	// instant it enters the view, so a crash before the write would strand peers
-	// on an epoch a backwards-clock restart can't beat.
-	if err := m.persistEpoch(epoch); err != nil {
-		log.WithFunc("mesh.UpdateSelf").Warnf(ctx, "persist epoch: %v", err)
-		return
+	// the durable floor must stay above anything gossiped: memberlist publishes self at once.
+	if epoch > m.leased {
+		leased := epoch + epochLease
+		if err := m.persistEpoch(leased); err != nil {
+			log.WithFunc("mesh.UpdateSelf").Warnf(ctx, "persist epoch: %v", err)
+			return
+		}
+		m.leased = leased
 	}
 	m.mu.Lock()
 	m.self.Epoch = epoch
@@ -134,8 +133,7 @@ func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates, 
 	m.mu.Unlock()
 }
 
-// SetSelfDigest records this node's cluster-invariant config digest so peers can
-// detect divergence; call it once before Join, before any gossip ships.
+// SetSelfDigest records this node's config digest; call it once before Join.
 func (m *Mesh) SetSelfDigest(digest string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -143,8 +141,7 @@ func (m *Mesh) SetSelfDigest(digest string) {
 	m.view[m.self.NodeID] = m.self
 }
 
-// ConfigMismatches counts peers whose config digest differs from this node's —
-// the gauge for alerting on a divergent cluster, recomputed per read.
+// ConfigMismatches counts peers whose config digest differs from this node's.
 func (m *Mesh) ConfigMismatches() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -160,9 +157,7 @@ func (m *Mesh) ConfigMismatches() int {
 	return n
 }
 
-// Candidates returns up to two peer addresses that report warm(keyHash) > 0,
-// chosen power-of-two-choices to avoid herding every waiter onto one node.
-// Self is never a candidate — the caller has already missed locally.
+// Candidates returns up to two peers reporting warm(keyHash) > 0, self excluded.
 func (m *Mesh) Candidates(keyHash string) []string {
 	return m.warmCandidates(keyHash, func(NodeState) bool { return true })
 }
@@ -172,22 +167,17 @@ func (m *Mesh) VolumeCandidates(keyHash string, names []string) []string {
 	return m.warmCandidates(keyHash, func(st NodeState) bool { return containsAll(st.Volumes, names) })
 }
 
-// TemplateOwners returns up to two peer addresses whose gossiped template
-// set contains keyHash — the redirect targets for a name-based claim or
-// delete of a template this node does not hold. Self is excluded: the caller
-// has already checked its own disk.
+// TemplateOwners returns up to two peers whose gossiped template set contains keyHash.
 func (m *Mesh) TemplateOwners(keyHash string) []string {
 	return m.owners(func(st NodeState) bool { return slices.Contains(st.Templates, keyHash) })
 }
 
-// VolumeOwners returns peers that currently advertise every requested volume.
-// Self is excluded because the caller checks local availability first.
+// VolumeOwners returns peers that advertise every requested volume; self is excluded.
 func (m *Mesh) VolumeOwners(names []string) []string {
 	return m.owners(func(st NodeState) bool { return containsAll(st.Volumes, names) })
 }
 
-// TemplateVolumeOwners returns peers that hold both the promoted template and
-// every requested volume, avoiding an incorrect intersection after truncation.
+// TemplateVolumeOwners returns peers holding both the template and every requested volume.
 func (m *Mesh) TemplateVolumeOwners(keyHash string, names []string) []string {
 	return m.owners(func(st NodeState) bool {
 		return slices.Contains(st.Templates, keyHash) && containsAll(st.Volumes, names)
@@ -214,8 +204,7 @@ func (m *Mesh) Members() []NodeState {
 	return slices.Collect(maps.Values(m.view))
 }
 
-// PeerAddrs returns the data-plane addresses of the other nodes, for a
-// client-side Lookup scatter.
+// PeerAddrs returns the data-plane addresses of the other nodes.
 func (m *Mesh) PeerAddrs() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -291,8 +280,7 @@ func (m *Mesh) admit(nodeID string) {
 	m.live[nodeID] = struct{}{}
 }
 
-// forget drops a departed node from the placement view so redirects stop
-// targeting a dead peer; SWIM detected the death, the view must follow.
+// forget drops a departed node from the placement view so redirects stop targeting it.
 func (m *Mesh) forget(nodeID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -302,8 +290,7 @@ func (m *Mesh) forget(nodeID string) {
 	}
 }
 
-// merge absorbs a peer's view, keeping the higher epoch per node and never
-// letting a peer overwrite this node's own authoritative self entry.
+// merge absorbs a peer's view, keeping the higher epoch per node; self is never overwritten.
 func (m *Mesh) merge(states []NodeState) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -318,10 +305,7 @@ func (m *Mesh) merge(states []NodeState) {
 		if ok && st.Epoch <= cur.Epoch {
 			continue
 		}
-		// Warn on each distinct divergent digest (not once per lifetime): a
-		// mismatched api_token/tenants/preview_secret/CA root 401s cross-node
-		// redirects and fails interception. Warn-only — refusing would partition
-		// a rolling credential rotation.
+		// warn-only: refusing a divergent digest would partition a rolling credential rotation.
 		if m.self.Digest != "" && st.Digest != "" && st.Digest != m.self.Digest && (!ok || cur.Digest != st.Digest) {
 			log.WithFunc("mesh.merge").Warnf(m.ctx,
 				"peer %s config digest %s differs from this node's %s: cluster-invariant config diverges (redirects may 401, interception may fail)",
@@ -343,8 +327,7 @@ func containsAll(have, need []string) bool {
 
 var _ memberlist.Delegate = (*delegate)(nil)
 
-// delegate carries this node's full view on each memberlist push/pull sync, so
-// state propagates transitively across the cluster.
+// delegate carries this node's full view on each memberlist push/pull sync.
 type delegate Mesh
 
 func (d *delegate) NodeMeta(int) []byte             { return nil }

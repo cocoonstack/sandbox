@@ -10,8 +10,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// BenchmarkStoreSaveScaling measures the claims-journal persist cost (marshal
-// + write + rename) as the live-claim set grows.
 func BenchmarkStoreSaveScaling(b *testing.B) {
 	for _, n := range []int{10, 100, 1000} {
 		b.Run(fmt.Sprintf("claims=%d", n), func(b *testing.B) {
@@ -26,19 +24,14 @@ func BenchmarkStoreSaveScaling(b *testing.B) {
 	}
 }
 
-// BenchmarkStorePersistContention reports how long a concurrent manager-mutex
-// acquire (a data-plane op) waits while the journal is being persisted, under
-// the old "write under the lock" path (save) vs the new "marshal under the lock,
-// write off it" split (snapshot+commit). The ns/acquire metric is the win.
 func BenchmarkStorePersistContention(b *testing.B) {
 	for _, n := range []int{100, 1000} {
 		claims := benchClaims(n)
-		b.Run(fmt.Sprintf("under-lock/n=%d", n), func(b *testing.B) {
-			benchPersistContention(b, claims, false)
-		})
-		b.Run(fmt.Sprintf("off-lock/n=%d", n), func(b *testing.B) {
-			benchPersistContention(b, claims, true)
-		})
+		for _, arm := range []string{"under-lock", "rebuild", "incremental"} {
+			b.Run(fmt.Sprintf("%s/n=%d", arm, n), func(b *testing.B) {
+				benchPersistContention(b, claims, arm)
+			})
+		}
 	}
 }
 
@@ -55,8 +48,10 @@ func benchClaims(n int) map[string]*types.Sandbox {
 	return claims
 }
 
-func benchPersistContention(b *testing.B, claims map[string]*types.Sandbox, offLock bool) {
+func benchPersistContention(b *testing.B, claims map[string]*types.Sandbox, arm string) {
 	s := newClaimStore(b.TempDir())
+	s.reset(claims)
+	one := claims[fmt.Sprintf("sb_%016x", 0)]
 	var mu sync.Mutex
 	var waitNs, waits atomic.Int64
 	done := make(chan struct{})
@@ -76,15 +71,21 @@ func benchPersistContention(b *testing.B, claims map[string]*types.Sandbox, offL
 	}()
 
 	for b.Loop() {
-		if offLock {
+		switch arm {
+		case "under-lock":
 			mu.Lock()
-			snap := s.snapshot(claims) // marshal under the lock
+			_ = s.save(claims)
 			mu.Unlock()
-			_ = s.commit(snap) // write off the lock
-		} else {
+		case "rebuild":
 			mu.Lock()
-			_ = s.save(claims) // marshal + write both under the lock
+			snap := s.reset(claims)
 			mu.Unlock()
+			_ = s.commit(snap)
+		default:
+			mu.Lock()
+			snap := s.set(one)
+			mu.Unlock()
+			_ = s.commit(snap)
 		}
 	}
 	close(done)

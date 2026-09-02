@@ -9,7 +9,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 )
 
-// TestStatsUnknownSandbox: an unclaimed or bad id must not surface any usage.
 func TestStatsUnknownSandbox(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	if _, ok := m.Stats(t.Context(), "sb_missing"); ok {
@@ -17,9 +16,6 @@ func TestStatsUnknownSandbox(t *testing.T) {
 	}
 }
 
-// TestOperatorReadsRaceFreeUnderHibernate: Sandbox and Stats read fields that
-// hibernate rewrites under m.mu, so they must snapshot under the same lock.
-// Run with -race; without the lock this trips the detector.
 func TestOperatorReadsRaceFreeUnderHibernate(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
@@ -34,8 +30,7 @@ func TestOperatorReadsRaceFreeUnderHibernate(t *testing.T) {
 			_ = m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token})
 		}
 	})
-	// Read continuously for the writer's whole run, so the operator reads and
-	// the lifecycle mutations actually overlap for the detector to see.
+
 	wg.Go(func() {
 		for {
 			select {
@@ -50,9 +45,6 @@ func TestOperatorReadsRaceFreeUnderHibernate(t *testing.T) {
 	wg.Wait()
 }
 
-// TestStatsHibernatedIsUnmeasured: a hibernated claim has no VMM process, so
-// MemUsedMeasured must stay false rather than reading a stale or zero RSS —
-// and Stats must not even ask the engine, which a hibernated claim can't answer.
 func TestStatsHibernatedIsUnmeasured(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
@@ -77,8 +69,6 @@ func TestStatsHibernatedIsUnmeasured(t *testing.T) {
 	}
 }
 
-// TestStatsNoPIDIsUnmeasured: engine.List answering with no PID (VM not found,
-// or not yet running) must not be read as a zero-byte RSS.
 func TestStatsNoPIDIsUnmeasured(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
@@ -93,10 +83,6 @@ func TestStatsNoPIDIsUnmeasured(t *testing.T) {
 	}
 }
 
-// TestStatsReadsResidentSetFromPID proves the PID engine.List reports is the
-// one actually read: pointing it at this test process's own PID, the
-// resident-set read must succeed and land on a real value. /proc is
-// Linux-only, so this is skipped elsewhere.
 func TestStatsReadsResidentSetFromPID(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("/proc/PID/statm is Linux-only")

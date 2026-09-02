@@ -18,8 +18,7 @@ import (
 )
 
 const (
-	// Sidecar, not data_dir: the marker travels with the image and survives a
-	// data_dir wipe.
+	// sidecar, not data_dir: the marker travels with the image and survives a data_dir wipe
 	volumeDirtySuffix = ".dirty"
 	// Caps the per-mount budget below, so teardown can never hang for long.
 	volumeQuiesceMax = 10 * time.Second
@@ -35,8 +34,7 @@ func (v catalogVolume) allowed(tenant string) bool {
 	return tenant == "" || len(v.tenants) == 0 || slices.Contains(v.tenants, tenant)
 }
 
-// volumeHolders is one name's live admission state: a writer excludes every
-// other claim, readers only exclude a writer.
+// volumeHolders is one name's live admission state: a writer excludes every other claim.
 type volumeHolders struct {
 	writers int
 	readers int
@@ -47,17 +45,13 @@ type resolvedVolume struct {
 	applied types.Volume
 }
 
-// volumeTeardown is what a quiesced claim leaves for after its VM is confirmed
-// gone: the admission holds to drop, and the marker paths of the mounts that
-// came down cleanly — captured rather than re-resolved later, because a claim
-// adopted across a restart can name a catalog entry the new config re-pointed.
+// volumeTeardown captures marker paths at quiesce time; a later config can re-point the entry.
 type volumeTeardown struct {
 	holds  []types.Volume
 	clears []string
 }
 
-// Volumes reports the caller-visible fleet catalog, projected through this
-// node's ACL metadata and local path state. Empty tenant means root.
+// Volumes reports the caller-visible fleet catalog; an empty tenant means root.
 func (m *Manager) Volumes(tenant string, holders map[string]int) []types.VolumeInfo {
 	infos := make([]types.VolumeInfo, 0, len(m.volumes))
 	for name, volume := range m.volumes {
@@ -77,8 +71,7 @@ func (m *Manager) Volumes(tenant string, holders map[string]int) []types.VolumeI
 		}
 		infos = append(infos, info)
 	}
-	// Root can safely see peer-only names. Tenant callers need the local catalog
-	// metadata so the access list can be applied without gossiping it.
+	// root can see peer-only names; a tenant needs local catalog metadata to apply the access list
 	if tenant == "" {
 		for name, nodes := range holders {
 			if _, ok := m.volumes[name]; !ok {
@@ -106,8 +99,7 @@ func (m *Manager) VolumeNames() []string {
 	return names
 }
 
-// VolumePlacement checks catalog access and reports whether every named image
-// is currently available on this node. Empty tenant means root.
+// VolumePlacement checks catalog access and reports whether every named image is local.
 func (m *Manager) VolumePlacement(key types.PoolKey, tenant string, names []string) (bool, error) {
 	if err := m.validate(key); err != nil {
 		return false, err
@@ -139,8 +131,7 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 	if len(requested) == 0 {
 		return nil, nil
 	}
-	// An attach-only claim arrives with no mounts to default: re-defaulting
-	// them here would mount what the caller asked to mount itself.
+	// an attach-only claim has no mounts to default; re-defaulting here would mount them
 	applied, err := types.ValidateVolumes(requested, types.VolumesAttachOnly(requested))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrBadVolume, err)
@@ -155,8 +146,7 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 			return nil, fmt.Errorf("%w: volume %q is not writable", ErrBadVolume, volume.Name)
 		}
 		if _, statErr := os.Stat(entry.disk.Path); statErr != nil {
-			// The operator's path stays server-side, and the refusal stays
-			// byte-identical to the unknown and forbidden ones.
+			// the operator's path stays server-side; the refusal matches the unknown one
 			log.WithFunc("pool.resolveVolumes").Warnf(ctx, "stat volume %q image %s: %v", volume.Name, entry.disk.Path, statErr)
 			return nil, ErrVolumeUnavailable
 		}
@@ -168,8 +158,7 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 	return resolved, nil
 }
 
-// confirmVolumesClean refuses a read-only claim of a dirty image: run after
-// holds are taken, so the marker is stable and can only mean a crashed writer.
+// confirmVolumesClean refuses a read-only claim of a dirty image; run after holds are taken.
 func (m *Manager) confirmVolumesClean(volumes []resolvedVolume) error {
 	for _, volume := range volumes {
 		if !volume.applied.RW() && volumeDirty(volume.disk.Path) {
@@ -179,9 +168,7 @@ func (m *Manager) confirmVolumesClean(volumes []resolvedVolume) error {
 	return nil
 }
 
-// applyVolumes brings the resolved set up concurrently: cocoon serializes the
-// attach per VM, so what overlaps is the CLI spawns, settle waits and guest
-// mounts. applied is the request-shaped set, recorded once every mount is up.
+// applyVolumes brings the resolved set up concurrently; cocoon serializes the attach per VM.
 func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes []resolvedVolume, applied []types.Volume) error {
 	switch len(volumes) {
 	case 0:
@@ -225,9 +212,7 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 	return nil
 }
 
-// quiesceVolumes unmounts a claim's writable mounts in reverse order and
-// returns the teardown its VM removal must finish; a failed unmount keeps the
-// image's marker for a recovering writer, never blocking teardown.
+// quiesceVolumes unmounts a claim's writable mounts in reverse; a failed unmount keeps the marker.
 func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeTeardown {
 	td := volumeTeardown{holds: sb.Volumes}
 	mounts := writableMounts(sb.Volumes)
@@ -260,9 +245,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 	return td
 }
 
-// finishVolumeTeardown completes teardown once the VM is confirmed gone: only
-// then is the hypervisor's image lock released, so an earlier marker clear or
-// hold release would hand the name to a claim the still-live writer blocks.
+// finishVolumeTeardown runs only once the VM is gone, when its image lock is finally released.
 func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) {
 	if len(td.holds) == 0 {
 		return
@@ -276,8 +259,7 @@ func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) {
 	m.unreserveVolumes(td.holds)
 }
 
-// reserveVolumes admits one claim's volumes; every name is checked before any
-// is taken, so a refusal leaves the registry untouched. Callers hold m.mu.
+// reserveVolumes admits one claim's volumes atomically; callers hold m.mu.
 func (m *Manager) reserveVolumes(volumes []types.Volume) error {
 	for _, volume := range volumes {
 		holders := m.volumeAdmission[volume.Name]
@@ -289,8 +271,7 @@ func (m *Manager) reserveVolumes(volumes []types.Volume) error {
 	return nil
 }
 
-// adoptVolumes counts volumes an adopted claim already holds, with no
-// admission check. Callers hold m.mu.
+// adoptVolumes counts volumes an adopted claim already holds; callers hold m.mu.
 func (m *Manager) adoptVolumes(volumes []types.Volume) {
 	for _, volume := range volumes {
 		holders := m.volumeAdmission[volume.Name]
@@ -329,8 +310,7 @@ func (m *Manager) unreserveVolumes(volumes []types.Volume) {
 	m.releaseVolumes(volumes)
 }
 
-// quiesceBudget bounds one quiesce: a slice per writable mount plus one for the
-// sync fallback, so a wedged multi-volume guest still gets every umount tried.
+// quiesceBudget bounds one quiesce: a slice per writable mount plus one for the sync fallback.
 func quiesceBudget(mounts int) time.Duration {
 	return min(time.Duration(mounts+1)*engine.VolumeCallTimeout, volumeQuiesceMax)
 }

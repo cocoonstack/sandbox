@@ -6,8 +6,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// Cred is a caller's resolved authority over one sandbox: the per-sandbox
-// token, or Operator for the root api_token the server already verified.
+// Cred is a caller's resolved authority over one sandbox: its token, or Operator for root.
 type Cred struct {
 	Token    string
 	Operator bool
@@ -21,13 +20,11 @@ func (m *Manager) Sandbox(id string) (SandboxSummary, bool) {
 	if sb == nil {
 		return SandboxSummary{}, false
 	}
-	// summarize reads fields hibernate and archive mutate under m.mu, so it
-	// runs here, not after byID has released the lock.
+	// summarize reads fields hibernate and archive mutate under m.mu
 	return summarize(sb), true
 }
 
-// Wake restores a hibernated sandbox and leaves it running: waking is
-// otherwise only a side effect of opening an agent connection. Idempotent.
+// Wake restores a hibernated sandbox and leaves it running. Idempotent.
 func (m *Manager) Wake(ctx context.Context, id string, cred Cred) error {
 	sb, ok := m.resolve(id, cred)
 	if !ok {
@@ -36,8 +33,7 @@ func (m *Manager) Wake(ctx context.Context, id string, cred Cred) error {
 	return m.wake(ctx, sb)
 }
 
-// resolve authorizes id under cred: Operator by id alone, otherwise the token
-// must match — an unclaimed slot must never match an empty token.
+// resolve authorizes id under cred; an unclaimed slot must never match an empty token.
 func (m *Manager) resolve(id string, cred Cred) (*types.Sandbox, bool) {
 	if cred.Operator {
 		return m.byID(id)
@@ -48,8 +44,7 @@ func (m *Manager) resolve(id string, cred Cred) (*types.Sandbox, bool) {
 	return m.claim(id, cred.Token)
 }
 
-// byID resolves a live claim by id alone; callers must already have authorized
-// the Operator credential.
+// byID resolves a live claim by id alone; callers must have authorized the Operator credential.
 func (m *Manager) byID(id string) (*types.Sandbox, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -57,8 +52,7 @@ func (m *Manager) byID(id string) (*types.Sandbox, bool) {
 	return sb, sb != nil
 }
 
-// wake reuses the relay's resolve path, then discards the socket: the caller
-// wants the VM running, not a connection to it.
+// wake reuses the relay's resolve path, then discards the socket.
 func (m *Manager) wake(ctx context.Context, sb *types.Sandbox) error {
 	sb.Touch()
 	_, err := m.wakeResolved(ctx, sb)

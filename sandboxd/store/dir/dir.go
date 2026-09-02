@@ -31,8 +31,7 @@ const (
 	digestWorkerLimit    = 8
 	digestReadBufferSize = 128 << 10
 
-	// generationGrace bounds the shared-mount race where another node is
-	// still cloning a generation it resolved just before a re-publish.
+	// generationGrace bounds the race where another node still clones a generation being re-published.
 	generationGrace = time.Hour
 )
 
@@ -50,9 +49,7 @@ type chunkHasher func(source *digestSource, chunk int, buffer []byte) error
 
 var _ store.Store = (*Store)(nil)
 
-// Store keeps records as <root>/<id>/{meta.json,export-<gen>/...}: the
-// generation dir is immutable and the meta rename is the atomic commit
-// pointer, so readers and writers need no cross-process locks.
+// Store keeps records at <root>/<id>; the meta.json rename is the atomic commit pointer.
 type Store struct {
 	root string
 	idRe *regexp.Regexp
@@ -69,8 +66,6 @@ func (d *Store) Stage(id string) (string, error) {
 	return os.MkdirTemp(d.root, id+"-*.tmp")
 }
 
-// Publish makes the generation fresh before its install, refreshes the
-// outgoing generation at supersession, and commits by renaming meta.json.
 func (d *Store) Publish(ctx context.Context, staging, id string) error {
 	return d.publish(ctx, staging, id, "")
 }
@@ -86,9 +81,6 @@ func (d *Store) PublishDigested(ctx context.Context, staging, id string) (string
 	return digest, nil
 }
 
-// Fetch resolves the committed meta and returns its immutable generation
-// directory; release is a no-op. Records published before per-generation
-// dirs fall back to the flat export layout.
 func (d *Store) Fetch(ctx context.Context, id string) (string, []byte, string, func(), error) {
 	meta, err := d.ReadMeta(ctx, id)
 	if err != nil {
@@ -128,8 +120,6 @@ func (d *Store) Metas(ctx context.Context) ([][]byte, error) {
 	}
 	var metas [][]byte
 	for _, e := range entries {
-		// Only well-formed record dirs in this instance's namespace — a
-		// planted foo/meta.json is not a record.
 		if !e.IsDir() || !d.idRe.MatchString(e.Name()) {
 			continue
 		}
@@ -145,8 +135,6 @@ func (d *Store) Metas(ctx context.Context) ([][]byte, error) {
 	return metas, nil
 }
 
-// Delete removes export generations first and the meta last, so a partially
-// failed delete stays discoverable and a retry converges.
 func (d *Store) Delete(_ context.Context, id string) error {
 	final := filepath.Join(d.root, id)
 	entries, err := os.ReadDir(final)
@@ -167,7 +155,6 @@ func (d *Store) Delete(_ context.Context, id string) error {
 	return errors.Join(os.RemoveAll(final), os.RemoveAll(final+oldSuffix))
 }
 
-// SweepStaging clears crashed staging and delegates generation retention.
 func (d *Store) SweepStaging() error {
 	// ReadDir + suffix, not Glob: the root path may hold glob metacharacters.
 	if err := utils.RemoveDirEntries(d.root, func(name string) bool { return strings.HasSuffix(name, ".tmp") }); err != nil {
@@ -176,7 +163,6 @@ func (d *Store) SweepStaging() error {
 	return d.SweepGenerations()
 }
 
-// SweepGenerations reclaims expired record generations without touching staging.
 func (d *Store) SweepGenerations() error {
 	entries, err := os.ReadDir(d.root)
 	if err != nil {
@@ -254,9 +240,7 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 	return os.RemoveAll(staging)
 }
 
-// sweepGenerations reclaims only entries whose own install or supersession
-// time is outside the grace. Without committed meta it never removes the
-// record directory, so a peer publishing into the same path remains safe.
+// sweepGenerations reclaims only entries whose install or supersession time is outside the grace.
 func (d *Store) sweepGenerations(id string) (err error) {
 	final := filepath.Join(d.root, id)
 	metaFile, err := os.Open(filepath.Join(final, store.MetaFile)) //nolint:gosec // id pinned by the instance idRe

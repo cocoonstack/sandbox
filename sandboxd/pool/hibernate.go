@@ -13,9 +13,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// Hibernate atomically snapshots a claimed sandbox and stops its VM, freeing
-// memory; the next agent access wakes it. Idempotent on an already-hibernated
-// sandbox.
 func (m *Manager) Hibernate(ctx context.Context, id string, cred Cred) error {
 	sb, ok := m.resolve(id, cred)
 	if !ok {
@@ -26,9 +23,6 @@ func (m *Manager) Hibernate(ctx context.Context, id string, cred Cred) error {
 	return m.hibernateLocked(ctx, sb)
 }
 
-// WakeAgentSocket resolves the sandbox's vsock UDS for the relay, first
-// restoring the VM if it is hibernated; concurrent wakes queue on the
-// transition lock and find the fast path.
 func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string, error) {
 	sb, ok := m.claim(id, token)
 	if !ok {
@@ -44,12 +38,10 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		return ErrVolumeCapture
 	}
 	if sb.Key.Net == types.NetEgress {
-		// cocoon resumes the guest before its fresh tap can be re-locked, so a
-		// woken egress guest would egress unlocked; keep the lane live instead.
+		// cocoon resumes the guest before its fresh tap can be re-locked
 		return ErrNoEgressHibernate
 	}
-	// An adopted hibernate was never billed (its confirming list had failed),
-	// so record it even if this resolve's own persist is still converging.
+	// an adopted hibernate was never billed, so record it here
 	adopted, resolveErr := m.resolvePendingSnap(ctx, sb)
 	if adopted {
 		m.recordHibernate(ctx, sb)
@@ -64,24 +56,20 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		}
 		return nil
 	}
-	// A started transition must finish even if the caller hangs up (the
-	// engine bounds every step), or the record would disagree with the VM.
+	// a started transition must finish, or the record disagrees with the VM
 	ctx = context.WithoutCancel(ctx)
-	// VMName-based (cocoon rejects sb.ID's "sb_" underscore) plus a random
-	// suffix so the wake's async snapshot drop can't collide with a re-hibernate.
+	// cocoon rejects sb.ID's underscore, so the snapshot name is VMName-based
 	snap := hibernatePrefix + strings.TrimPrefix(sb.VMName, vmPrefix) + "-" + randHex(3)
-	// Journal the intent before the engine stops anything: an intent that
-	// cannot be written aborts with the VM untouched, and a committed intent
-	// lets Reconcile adopt a hibernate whose final commit never landed.
+	// journal the intent first so Reconcile can adopt a hibernate whose commit never landed
 	if err := m.store.commit(m.setPendingSnap(sb, snap)); err != nil {
 		m.mu.Lock()
 		sb.PendingSnap = ""
+		m.store.set(sb)
 		m.mu.Unlock()
 		return fmt.Errorf("hibernate %s: persist intent: %w", sb.ID, err)
 	}
 	if hibErr := m.eng.Hibernate(ctx, sb.VMName, snap); hibErr != nil {
-		// The engine can report failure after the snapshot landed (a CLI
-		// timeout); resolve the intent against the real snapshot.
+		// the engine can report failure after the snapshot landed
 		adopted, resolveErr := m.resolvePendingSnap(ctx, sb)
 		if adopted {
 			m.recordHibernate(ctx, sb)
@@ -119,8 +107,7 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	if sb.ArchiveCk != "" {
 		return m.wakeArchived(ctx, sb)
 	}
-	// Settle a dangling intent before choosing running vs hibernated; bill an
-	// adopted hibernate before the wake closes its window.
+	// settle a dangling intent before choosing running vs hibernated
 	adopted, err := m.resolvePendingSnap(ctx, sb)
 	if adopted {
 		m.recordHibernate(ctx, sb)
@@ -129,15 +116,13 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
 	if sb.HibernateSnap == "" {
-		// No journal sync here — data-plane fast path; a lagging journal only
-		// says hibernated while the VM runs, which restart Reconcile heals.
+		// no journal sync on this data-plane fast path; restart Reconcile heals the lag
 		if sb.StaleSnap != "" && m.store.synced() {
 			m.dropStale(ctx, sb)
 		}
 		return sb.VsockSocket, nil
 	}
-	// The egress lane never hibernates (its fresh tap can't be locked before the
-	// guest resumes); a hibernated one is corrupt state — fail closed.
+	// the egress lane never hibernates, so a hibernated one is corrupt state
 	if sb.Key.Net == types.NetEgress {
 		return "", fmt.Errorf("wake %s: egress lane cannot resume from hibernation", sb.ID)
 	}
@@ -147,9 +132,7 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	snap := sb.HibernateSnap
 	restoredSock, err := m.eng.Restore(ctx, sb.VMName, snap)
 	if err != nil {
-		// Restore may have booted the VM before the engine errored (a CLI
-		// timeout); tear it down, keeping the snapshot, so the next wake
-		// restores cleanly instead of re-restoring an already-running VM.
+		// restore may have booted the VM before the engine errored
 		m.destroy(ctx, sb.VMName)
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
@@ -174,21 +157,17 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 		return "", ErrUnknownSandbox
 	}
 	if err != nil {
-		// The lagging journal still references the snapshot; park it for
-		// reclaim after a later write lands, not just the restart sweep.
+		// the lagging journal still references the snapshot, so park it for later reclaim
 		sb.StaleSnap = snap
 		return "", fmt.Errorf("wake %s: persist claims: %w", sb.ID, err)
 	}
 	m.dropStale(ctx, sb)
-	// The resume consumed the memory image; reclaim its disk off the wake-
-	// return path (name reuse guarded by randHex, failed drops by the sweep).
+	// the resume consumed the memory image; reclaim its disk off the wake-return path
 	go m.dropSnap(ctx, snap)
 	return sock, nil
 }
 
-// idleOnce hibernates claims idle past their pool's (or the node's)
-// threshold. Best-effort: a connection racing the sweep may see its sandbox
-// hibernate right after — the next call wakes it transparently.
+// idleOnce hibernates claims idle past their pool's (or the node's) threshold.
 func (m *Manager) idleOnce(ctx context.Context) {
 	if !m.idleEnabled {
 		return
@@ -215,8 +194,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 		m.idleSweep.Store(false)
 		return
 	}
-	// Hibernates are seconds-long engine snapshots: fan out off the
-	// housekeeping loop on the refill budget.
+	// hibernates are seconds-long engine snapshots, so fan out off the housekeeping loop
 	go func() {
 		defer m.idleSweep.Store(false)
 		logger := log.WithFunc("pool.idleOnce")
@@ -227,9 +205,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 	}()
 }
 
-// idleHibernate re-validates a sweep victim under the Transition lock: a
-// data-plane connection that arrived after the sweep's snapshot refreshes
-// LastActivity, and hibernating underneath it would cut a live call.
+// idleHibernate re-validates a sweep victim under the Transition lock.
 func (m *Manager) idleHibernate(ctx context.Context, id, token string, sweepStart time.Time) error {
 	sb, ok := m.claim(id, token)
 	if !ok {
@@ -246,10 +222,7 @@ func (m *Manager) idleHibernate(ctx context.Context, id, token string, sweepStar
 	return m.hibernateLocked(ctx, sb)
 }
 
-// commitTransition publishes a hibernate/wake result and persists the journal
-// only if the claim is still live — Release/reap skip the transition lock, and
-// publishing after them resurrects state nobody owns. Returns a failed write
-// (caller must not report success); recommit converges disk in the background.
+// commitTransition publishes a hibernate/wake result only if the claim is still live.
 func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap, sock string) (live bool, err error) {
 	m.mu.Lock()
 	live = m.claimed[sb.ID] == sb
@@ -258,7 +231,7 @@ func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap,
 		sb.HibernateSnap = snap
 		sb.VsockSocket = sock
 		sb.PendingSnap = ""
-		js = m.store.snapshot(m.claimed)
+		js = m.store.set(sb)
 	}
 	m.mu.Unlock()
 	if !live {
@@ -271,9 +244,7 @@ func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap,
 	return true, nil
 }
 
-// syncClaims backs the idempotent hibernate fast path: a retry after a
-// failed persist must not answer success while the journal still lags the
-// transition it reports. The caller holds sb.Transition.
+// syncClaims flushes a lagging journal so a hibernate retry cannot report a false success.
 func (m *Manager) syncClaims(ctx context.Context, sb *types.Sandbox) error {
 	if !m.store.synced() {
 		if err := m.store.commit(m.claimsSnapshot()); err != nil {
@@ -295,13 +266,10 @@ func (m *Manager) setPendingSnap(sb *types.Sandbox, snap string) claimSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sb.PendingSnap = snap
-	return m.store.snapshot(m.claimed)
+	return m.store.set(sb)
 }
 
-// resolvePendingSnap settles a hibernate intent whose engine result was never
-// confirmed: the snapshot's presence decides whether to adopt it as
-// HibernateSnap or clear the intent. An unusable snapshot list keeps the
-// intent and errors. The caller holds sb.Transition.
+// resolvePendingSnap settles an unconfirmed hibernate intent against the engine's snapshot list.
 func (m *Manager) resolvePendingSnap(ctx context.Context, sb *types.Sandbox) (adopted bool, err error) {
 	if sb.PendingSnap == "" {
 		return false, nil
@@ -314,17 +282,17 @@ func (m *Manager) resolvePendingSnap(ctx context.Context, sb *types.Sandbox) (ad
 	live := m.claimed[sb.ID] == sb
 	pending := sb.PendingSnap
 	exists := slices.Contains(snaps, pending)
+	var js claimSnapshot
 	if live {
 		if exists {
 			sb.HibernateSnap = pending
 		}
 		sb.PendingSnap = ""
+		js = m.store.set(sb)
 	}
-	js := m.store.snapshot(m.claimed)
 	m.mu.Unlock()
 	if !live {
-		// Released mid-resolve: Release captured an empty HibernateSnap, so a
-		// completed hibernate's snapshot is an orphan it could not drop.
+		// Release captured an empty HibernateSnap, so a completed hibernate's snapshot is an orphan
 		if exists {
 			m.dropSnap(ctx, pending)
 		}
@@ -332,8 +300,7 @@ func (m *Manager) resolvePendingSnap(ctx context.Context, sb *types.Sandbox) (ad
 	}
 	if err := m.store.commit(js); err != nil {
 		m.recommit(ctx, js)
-		// The transition is decided in memory: report the adoption so the
-		// caller bills it, surfacing the persist error — commitTransition contract.
+		// the transition is decided in memory, so report the adoption for the caller to bill
 		return exists, fmt.Errorf("resolve hibernate intent %s: persist: %w", sb.ID, err)
 	}
 	return exists, nil
@@ -344,9 +311,7 @@ func (m *Manager) recordHibernate(ctx context.Context, sb *types.Sandbox) {
 	m.recordUsage(ctx, usageEvent{Event: "hibernate", ID: sb.ID, VMName: sb.VMName})
 }
 
-// skipIdle reports the claims an idle sweep must leave alone: the egress lane
-// cannot resume, a mounted volume cannot be captured, and an already
-// hibernated or archived claim has nothing left to do.
+// skipIdle reports the claims an idle sweep must leave alone.
 func skipIdle(sb *types.Sandbox, idle time.Duration, now time.Time) bool {
 	return idle <= 0 || sb.Key.Net == types.NetEgress || hasAppliedVolumes(sb) ||
 		sb.HibernateSnap != "" || sb.ArchiveCk != "" || now.Sub(sb.LastSeen()) < idle

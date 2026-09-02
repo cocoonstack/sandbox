@@ -17,15 +17,10 @@ const healBudget = 30 * time.Minute
 // Owners resolves a record id to the peer addresses that hold it.
 type Owners func(id string) []string
 
-// Validate checks a staged pull before Pull trusts the owner that sent it; an
-// error tries the next owner.
+// Validate checks a staged pull before Pull trusts it; an error tries the next owner.
 type Validate func(staging string) error
 
-// Healer pulls a record this node does not hold into a caller-provided
-// staging directory; the caller validates and publishes it. A nil owners or
-// puller makes every Pull a miss (no mesh, no heal). Pull never dedups
-// concurrent calls: each caller owns its destination dir, so dedup belongs to
-// whoever owns the staging — pool.Manager's per-id heal flight.
+// Healer pulls a record this node does not hold into a caller-provided staging directory.
 type Healer struct {
 	owners Owners
 	puller Puller
@@ -34,13 +29,11 @@ type Healer struct {
 	budget time.Duration
 }
 
-// NewHealer builds a Healer wired to owners and puller.
 func NewHealer(owners Owners, puller Puller) *Healer {
 	return &Healer{owners: owners, puller: puller}
 }
 
-// Pull fetches id into staging from the first owner whose transfer validates,
-// bounding every owner tried to one budget.
+// Pull fetches id into staging from the first owner whose transfer validates.
 func (h *Healer) Pull(ctx context.Context, id, staging string, validate Validate) error {
 	if h.owners == nil || h.puller == nil {
 		return store.ErrNotFound

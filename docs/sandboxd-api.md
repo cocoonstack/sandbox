@@ -500,8 +500,9 @@ silently. Folding rules: billable compute seconds per sandbox =
 Σ(hibernate→wake) minus the archived span; archived storage seconds =
 Σ(archive→unarchive/archive_delete), a cheaper store tier than a hibernated
 VM's RAM. An interval left open by a crash clamps to the claim's
-deadline, and the next reconcile emits `reap` for claims it drops. The `vm`
-name joins cocoon's machine-level metering ledger for audit cross-checks.
+deadline; reconcile records nothing for the claims it drops, so a restart
+leaves those intervals without a terminal event. The `vm` name joins
+cocoon's machine-level metering ledger for audit cross-checks.
 
 ## GET /v1/sandboxes/{id}/agent
 

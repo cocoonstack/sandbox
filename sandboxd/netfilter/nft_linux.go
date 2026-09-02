@@ -4,7 +4,6 @@ package netfilter
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/google/nftables"
@@ -14,9 +13,7 @@ import (
 
 const tablePrefix = "sandbox_egress_"
 
-// Lock drops a tap's guest-initiated egress (DHCP renewal excepted) at its
-// ingress hook, forcing all egress through the vsock proxy. One netdev table
-// per tap in the root netns; idempotent.
+// Lock drops a tap's guest egress (DHCP excepted) at its ingress hook; idempotent.
 func Lock(tap string) error {
 	_ = Unlock(tap) // a prior table for this tap would block a clean re-lock
 	c, err := nftables.New()
@@ -34,10 +31,7 @@ func Lock(tap string) error {
 		Policy:   &policy,
 		Device:   tap,
 	})
-	// Accept only IPv4 broadcast DHCP (sport 68 → dport 67, dst 255.255.255.255);
-	// the nfproto guard blocks an IPv6 datagram carrying 0xffffffff at the
-	// IPv4-daddr offset. The unchecked payload can only reach the local L2
-	// segment, so egress VMs must not share a broadcast domain.
+	// accept only IPv4 broadcast DHCP; egress VMs must not share a broadcast domain.
 	c.AddRule(&nftables.Rule{Table: t, Chain: ch, Exprs: []expr.Any{
 		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
 		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.NFPROTO_IPV4}},
@@ -60,21 +54,23 @@ func Lock(tap string) error {
 	return nil
 }
 
-// EnsureLock applies Lock only if the tap has no table yet, so a restart can
-// re-adopt a live VM's surviving lock without a re-lock window.
-func EnsureLock(tap string) error {
+// LockedTaps reports the taps that already carry a table, so a restart re-adopts them.
+func LockedTaps() (map[string]bool, error) {
 	c, err := nftables.New()
 	if err != nil {
-		return fmt.Errorf("nft conn: %w", err)
+		return nil, fmt.Errorf("nft conn: %w", err)
 	}
 	tables, err := c.ListTablesOfFamily(nftables.TableFamilyNetdev)
 	if err != nil {
-		return fmt.Errorf("list netdev tables: %w", err)
+		return nil, fmt.Errorf("list netdev tables: %w", err)
 	}
-	if slices.ContainsFunc(tables, func(t *nftables.Table) bool { return t.Name == tablePrefix+tap }) {
-		return nil
+	locked := make(map[string]bool, len(tables))
+	for _, t := range tables {
+		if tap, ok := strings.CutPrefix(t.Name, tablePrefix); ok {
+			locked[tap] = true
+		}
 	}
-	return Lock(tap)
+	return locked, nil
 }
 
 // Unlock removes the tap's table; a no-op when it is already gone.
@@ -88,9 +84,7 @@ func Unlock(tap string) error {
 	return nil
 }
 
-// SweepExcept drops every per-tap egress table whose tap is not in keep, clearing
-// locks orphaned by VMs that went away while the daemon was down. It owns the
-// whole sandbox_egress_* namespace in the root netns — one sandboxd per host.
+// SweepExcept drops every per-tap egress table whose tap is not in keep; one sandboxd per host.
 func SweepExcept(keep map[string]bool) error {
 	c, err := nftables.New()
 	if err != nil {

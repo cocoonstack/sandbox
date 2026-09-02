@@ -64,8 +64,6 @@ func TestLifecycleArgsApplyDirectIOPolicy(t *testing.T) {
 	}
 }
 
-// TestEgressVMsSpreadOverEveryConfiguredShard pins the point of both shard
-// lists: a shard the hash never picks is bridge capacity that does not exist.
 func TestEgressVMsSpreadOverEveryConfiguredShard(t *testing.T) {
 	shards := []string{"sbx0", "sbx1", "sbx2", "sbx3"}
 	key := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeMedium}
@@ -87,7 +85,6 @@ func TestEgressVMsSpreadOverEveryConfiguredShard(t *testing.T) {
 				counts[args[j+1]]++
 			}
 			for _, s := range shards {
-				// The bound catches a starved shard, not non-uniformity.
 				if counts[s] < 4000/len(shards)/2 {
 					t.Errorf("shard %s got %d of 4000, want a fair share: %v", s, counts[s], counts)
 				}
@@ -96,8 +93,6 @@ func TestEgressVMsSpreadOverEveryConfiguredShard(t *testing.T) {
 	}
 }
 
-// TestNetworkChoiceIsStableForAName guards restore and teardown: the record
-// persists the network a VM was built on, so the choice must not move.
 func TestNetworkChoiceIsStableForAName(t *testing.T) {
 	shards := []string{"a", "b", "c"}
 	first := shardOf(shards, "sbx-pool1-42")
@@ -108,9 +103,6 @@ func TestNetworkChoiceIsStableForAName(t *testing.T) {
 	}
 }
 
-// TestNetArgsHonorsTheLaneAndTheAttachment keeps the three attachment shapes
-// distinct: no NIC on the none lane, a device on the bridge lane, and a
-// single-entry list byte-for-byte the old scalar.
 func TestNetArgsHonorsTheLaneAndTheAttachment(t *testing.T) {
 	none := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeMedium}
 	egress := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeMedium}

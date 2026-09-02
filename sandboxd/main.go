@@ -34,8 +34,7 @@ import (
 const (
 	shutdownGrace  = 5 * time.Second
 	gossipInterval = time.Second
-	// Slowloris protection; ReadTimeout/WriteTimeout must stay zero — cold
-	// claims block up to the cold probe timeout and relays stream forever.
+	// Slowloris protection; ReadTimeout/WriteTimeout must stay zero for streaming relays.
 	readHeaderTimeout = 5 * time.Second
 )
 
@@ -208,8 +207,7 @@ func startMesh(ctx context.Context, cfg *config.Config, mgr *pool.Manager) (*mes
 	return msh, nil
 }
 
-// gossipNodeState republishes this node's warm-pool counts, templates, and
-// locally available volumes every tick so placement tracks filesystem changes.
+// gossipNodeState republishes this node's counts, templates, and volumes every tick.
 func gossipNodeState(ctx context.Context, msh *mesh.Mesh, mgr *pool.Manager) {
 	t := time.NewTicker(gossipInterval)
 	defer t.Stop()

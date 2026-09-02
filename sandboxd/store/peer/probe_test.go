@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// TestOwnersReturnsOnly200: a mixed 200/404 answer set redirects only to the
-// peer that actually holds the record.
 func TestOwnersReturnsOnly200(t *testing.T) {
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -28,7 +26,6 @@ func TestOwnersReturnsOnly200(t *testing.T) {
 	}
 }
 
-// TestOwnersAllMissIsEmpty: nobody answering 200 means nobody to redirect to.
 func TestOwnersAllMissIsEmpty(t *testing.T) {
 	miss := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -41,9 +38,6 @@ func TestOwnersAllMissIsEmpty(t *testing.T) {
 	}
 }
 
-// TestOwnersHungPeerExcludedWithoutBlockingOthers: a wedged peer must not
-// stall the whole probe past its own timeout, nor keep a healthy peer's
-// answer from coming back.
 func TestOwnersHungPeerExcludedWithoutBlockingOthers(t *testing.T) {
 	block := make(chan struct{})
 	hung := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
@@ -67,10 +61,6 @@ func TestOwnersHungPeerExcludedWithoutBlockingOthers(t *testing.T) {
 	}
 }
 
-// TestOwnersReturnsPromptlyWithOneOwner: the common case is a single owner, so
-// the fan-out must return shortly after that owner answers on the grace window,
-// not block on a slow peer's full timeout the way it would waiting for a cap it
-// will never reach.
 func TestOwnersReturnsPromptlyWithOneOwner(t *testing.T) {
 	block := make(chan struct{})
 	hung := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
@@ -94,10 +84,6 @@ func TestOwnersReturnsPromptlyWithOneOwner(t *testing.T) {
 	}
 }
 
-// TestForgetDuringFlightPreventsStaleCache: a delete that lands while a probe
-// is in flight must keep that probe's result out of the cache — the record it
-// names may be the one just deleted, and a cached positive would redirect
-// claims to a node that no longer holds it.
 func TestForgetDuringFlightPreventsStaleCache(t *testing.T) {
 	release := make(chan struct{})
 	inFlight := make(chan struct{})
@@ -106,7 +92,7 @@ func TestForgetDuringFlightPreventsStaleCache(t *testing.T) {
 	owner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
 		probed()
-		<-release // hold the probe open so Forget can land mid-flight
+		<-release
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer owner.Close()
@@ -117,21 +103,20 @@ func TestForgetDuringFlightPreventsStaleCache(t *testing.T) {
 	go func() { owners = p.Owners(t.Context(), testID); close(done) }()
 
 	<-inFlight
-	p.Forget(testID) // the delete lands while the flight is open
+	p.Forget(testID)
 	close(release)
 	<-done
 
 	if len(owners) != 1 {
 		t.Fatalf("owners = %v, want the one that answered", owners)
 	}
-	// The result must not have been cached: a second call re-probes.
+
 	p.Owners(t.Context(), testID)
 	if got := hits.Load(); got != 2 {
 		t.Errorf("owner probed %d times, want 2: a Forget mid-flight must not leave a stale positive cached", got)
 	}
 }
 
-// TestOwnersDedupsAddrs: a duplicated peer list must probe each address once.
 func TestOwnersDedupsAddrs(t *testing.T) {
 	var hits atomic.Int32
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -150,8 +135,6 @@ func TestOwnersDedupsAddrs(t *testing.T) {
 	}
 }
 
-// TestOwnersCapsAtThree: a redirect answer must stay small even with a large
-// fleet behind the record.
 func TestOwnersCapsAtThree(t *testing.T) {
 	var addrs []string
 	for range 4 {
@@ -168,8 +151,6 @@ func TestOwnersCapsAtThree(t *testing.T) {
 	}
 }
 
-// TestOwnersCancelsStragglersOnceCapReached: once the redirect cap is met by
-// fast peers, a straggler beyond it must not add its own timeout to the result.
 func TestOwnersCancelsStragglersOnceCapReached(t *testing.T) {
 	var addrs []string
 	for range maxRedirectOwners {
@@ -198,8 +179,6 @@ func TestOwnersCancelsStragglersOnceCapReached(t *testing.T) {
 	}
 }
 
-// TestHealOwnersReturnsMoreThanRedirectCap: a heal wants the widest source
-// list, not the redirect's couple of candidates.
 func TestHealOwnersReturnsMoreThanRedirectCap(t *testing.T) {
 	const want = maxRedirectOwners + 2
 	var addrs []string
@@ -217,16 +196,13 @@ func TestHealOwnersReturnsMoreThanRedirectCap(t *testing.T) {
 	}
 }
 
-// TestHealOwnersIsExhaustiveDespiteAFastOwner: a heal must collect every owner
-// even when one answers fast, so it does not stop on the grace window a redirect
-// uses and hide slower valid sources behind the quick one.
 func TestHealOwnersIsExhaustiveDespiteAFastOwner(t *testing.T) {
 	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer fast.Close()
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(2 * probeGrace) // answers well after the redirect grace would have closed
+		time.Sleep(2 * probeGrace)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer slow.Close()
@@ -237,13 +213,11 @@ func TestHealOwnersIsExhaustiveDespiteAFastOwner(t *testing.T) {
 	}
 }
 
-// TestOwnersCoalescesConcurrentProbes: concurrent redirect probes for one id
-// must fan out to each peer once, not once per caller.
 func TestOwnersCoalescesConcurrentProbes(t *testing.T) {
 	var hits atomic.Int32
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
-		time.Sleep(50 * time.Millisecond) // widen the window for concurrent callers to overlap
+		time.Sleep(50 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ok.Close()
@@ -259,10 +233,6 @@ func TestOwnersCoalescesConcurrentProbes(t *testing.T) {
 	}
 }
 
-// TestOwnersCacheCollapsesRepeatedRedirects is the hot-checkpoint-behind-a-
-// load-balancer case: a fleet of peers, one of them the owner. Ten
-// sequential redirect probes for the same id, well within the TTL, must
-// fan out to the fleet once total, not once per call.
 func TestOwnersCacheCollapsesRepeatedRedirects(t *testing.T) {
 	const peers = 5
 	var hits atomic.Int32
@@ -290,8 +260,6 @@ func TestOwnersCacheCollapsesRepeatedRedirects(t *testing.T) {
 	}
 }
 
-// TestOwnersCacheExpires: past the TTL, a redirect must re-probe rather than
-// serve a result that could be stale forever.
 func TestOwnersCacheExpires(t *testing.T) {
 	var hits atomic.Int32
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -309,8 +277,6 @@ func TestOwnersCacheExpires(t *testing.T) {
 	}
 }
 
-// TestForgetEvictsCachedEntry: after Forget, the next Owners call must
-// re-probe rather than serve the (possibly now-stale) cached answer.
 func TestForgetEvictsCachedEntry(t *testing.T) {
 	var hits atomic.Int32
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -328,8 +294,6 @@ func TestForgetEvictsCachedEntry(t *testing.T) {
 	}
 }
 
-// TestForgetOtherIDLeavesCacheAlone: Forget must evict only the named id,
-// not the whole cache.
 func TestForgetOtherIDLeavesCacheAlone(t *testing.T) {
 	var hits atomic.Int32
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -347,8 +311,6 @@ func TestForgetOtherIDLeavesCacheAlone(t *testing.T) {
 	}
 }
 
-// TestVerifyProbeMACRejectsWrongKey: a MAC signed with a different key must
-// not verify.
 func TestVerifyProbeMACRejectsWrongKey(t *testing.T) {
 	key := DeriveProbeKey([]byte("cluster-secret"))
 	other := DeriveProbeKey([]byte("different-secret"))
@@ -358,8 +320,6 @@ func TestVerifyProbeMACRejectsWrongKey(t *testing.T) {
 	}
 }
 
-// TestVerifyProbeMACRejectsWrongID: a MAC signed for a different id must not
-// verify -- the id itself must be bound into the signature.
 func TestVerifyProbeMACRejectsWrongID(t *testing.T) {
 	key := DeriveProbeKey([]byte("cluster-secret"))
 	sig := probeMAC(key, testID, currentBucket())
@@ -368,7 +328,6 @@ func TestVerifyProbeMACRejectsWrongID(t *testing.T) {
 	}
 }
 
-// TestVerifyProbeMACRejectsEmptySignature: a missing header must not verify.
 func TestVerifyProbeMACRejectsEmptySignature(t *testing.T) {
 	key := DeriveProbeKey([]byte("cluster-secret"))
 	if VerifyProbeMAC(key, testID, "") {
@@ -376,8 +335,6 @@ func TestVerifyProbeMACRejectsEmptySignature(t *testing.T) {
 	}
 }
 
-// TestVerifyProbeMACToleratesAdjacentBucket: a signature from the bucket
-// just before or after now must still verify, tolerating clock skew.
 func TestVerifyProbeMACToleratesAdjacentBucket(t *testing.T) {
 	key := DeriveProbeKey([]byte("cluster-secret"))
 	for _, delta := range []int64{-1, 1} {
@@ -388,9 +345,6 @@ func TestVerifyProbeMACToleratesAdjacentBucket(t *testing.T) {
 	}
 }
 
-// TestVerifyProbeMACRejectsOutsideWindow: a signature two buckets away is
-// outside the tolerated skew and must be rejected -- the window is bounded,
-// not an unlimited replay allowance.
 func TestVerifyProbeMACRejectsOutsideWindow(t *testing.T) {
 	key := DeriveProbeKey([]byte("cluster-secret"))
 	sig := probeMAC(key, testID, currentBucket()-2)

@@ -37,8 +37,7 @@ func (m *Manager) archiveEnabledFor(key types.PoolKey) bool {
 	return m.archiveAfterFor(key) > 0
 }
 
-// archiveOnce checkpoints hibernated claims idle past their archive threshold
-// to the store and drops their local VM; the next access restores them.
+// archiveOnce checkpoints hibernated claims idle past their archive threshold and drops their VM.
 func (m *Manager) archiveOnce(ctx context.Context) {
 	if !m.archiveEnabled {
 		return
@@ -78,9 +77,7 @@ func (m *Manager) archiveOnce(ctx context.Context) {
 	}()
 }
 
-// archive publishes a hibernated claim's wake image to the store, then swaps
-// its compute backing from local VM to store checkpoint (ArchiveCk), preserving
-// id/token/tenant so a later access restores it (wakeArchived).
+// archive swaps a hibernated claim's backing from local VM to a store checkpoint.
 func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	// Must finish even if the sweep ctx is canceled, or the record diverges from the store.
 	ctx = context.WithoutCancel(ctx)
@@ -91,8 +88,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	if !ok {
 		return errWokeMeanwhile
 	}
-	// Pin the wake image before it exists: from the moment Publish makes it
-	// listable, a tenant/root delete would strand the claim it will back.
+	// pin the ck before Publish makes it listable, or a delete would strand the claim
 	ckID := store.CheckpointID(randHex(8))
 	m.mu.Lock()
 	m.pendingCks[ckID] = struct{}{}
@@ -103,9 +99,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	if err != nil {
 		return err
 	}
-	// Re-validate under Transition+m.mu: the claim must still be hibernated on
-	// the exact snapshot the export captured — a wake, or a wake+re-hibernate
-	// landing inside the publish window, means the checkpoint holds stale state.
+	// the claim must still hold the exact snapshot the export captured, or the ck is stale
 	sb.Transition.Lock()
 	m.mu.Lock()
 	if m.claimed[sb.ID] != sb || sb.HibernateSnap != srcSnap || sb.ArchiveCk != "" {
@@ -122,7 +116,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	} else {
 		sb.Deadline = time.Time{} // keep forever: no retention (reap skips a zero deadline)
 	}
-	js := m.store.snapshot(m.claimed)
+	js := m.store.set(sb)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
 		// Roll back so memory matches the still-durable hibernated record; drop the orphan ck.
@@ -130,15 +124,14 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		sb.ArchiveCk = ""
 		sb.HibernateSnap, sb.VsockSocket, sb.VMName = snap, sock, vmName
 		sb.Deadline = prevDeadline
-		rb := m.store.snapshot(m.claimed)
+		rb := m.store.set(sb)
 		m.mu.Unlock()
 		sb.Transition.Unlock()
 		m.recommit(ctx, rb)
 		m.deleteOrphanArchiveCk(ctx, ck.ID)
 		return fmt.Errorf("archive %s: persist claims: %w", sb.ID, saveErr)
 	}
-	// Disarm under Transition so a wake that runs the instant we release it
-	// re-arms cleanly instead of being clobbered by a late disarm.
+	// disarm under Transition so a wake right after the release is not clobbered by a late disarm
 	m.disarmEgress(sb.ID, true)
 	sb.Transition.Unlock()
 	// Committed: the store ck is authoritative now; reclaim the local footprint.
@@ -149,8 +142,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	return nil
 }
 
-// wakeArchived restores an archived claim from its store checkpoint into a
-// fresh local VM, keeping id/token/tenant; the caller holds the Transition lock.
+// wakeArchived restores an archived claim into a fresh local VM; caller holds Transition.
 func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, error) {
 	// Egress never archives; a corrupt archived egress claim must fail closed.
 	if sb.Key.Net == types.NetEgress {
@@ -158,10 +150,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	}
 	ctx = context.WithoutCancel(ctx)
 	ck := sb.ArchiveCk
-	// Exclusive, not shared: this path deletes the consumed ck below. The
-	// lock releases before eviction is considered, below — evicting while
-	// still held would let a concurrent recLock for ck split onto a
-	// different mutex.
+	// evicting while the lock is held would split a concurrent recLock onto a different mutex
 	l := m.recLock(ck)
 	l.Lock()
 	consumed := false
@@ -206,8 +195,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 			log.WithFunc("pool.wakeArchived").Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
 		}
 	}
-	// Only the none lane reaches here (the egress guard above fails closed), so
-	// this rebinds the none-lane proxy; there is no NIC to re-lock.
+	// only the none lane reaches here, so there is no NIC to re-lock
 	if proxyErr := m.armEgressProxy(ctx, sb); proxyErr != nil {
 		log.WithFunc("pool.wakeArchived").Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 	}
@@ -219,9 +207,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	return built.VsockSocket, nil
 }
 
-// commitWake swaps an archived record back to a live VM if still claimed
-// (Release/reap skip the Transition lock). A failed persist rolls the record
-// back to archived so memory matches disk and the ck stays pinned.
+// commitWake swaps an archived record back to a live VM if the claim is still live.
 func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, sock string) (live, saved bool) {
 	m.mu.Lock()
 	live = m.claimed[sb.ID] == sb
@@ -232,12 +218,12 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 	ck, deadline := sb.ArchiveCk, sb.Deadline
 	sb.VMName, sb.VsockSocket, sb.ArchiveCk = vmName, sock, ""
 	sb.Deadline = time.Now().Add(clampTTL(0)) // a woken sandbox is a fresh lease
-	js := m.store.snapshot(m.claimed)
+	js := m.store.set(sb)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
 		m.mu.Lock()
 		sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.Deadline = "", "", ck, deadline
-		rb := m.store.snapshot(m.claimed)
+		rb := m.store.set(sb)
 		m.mu.Unlock()
 		m.recommit(ctx, rb)
 		log.WithFunc("pool.commitWake").Warnf(ctx, "persist claims: %v", err)

@@ -21,10 +21,7 @@ const (
 	reapPurge                     // archived past retention: delete the store checkpoint
 )
 
-// ClaimWarm transfers ownership of a warm sandbox without provisioning;
-// ErrNoWarm means the pool is empty (the caller may redirect or provision).
-// tenant attributes the claim; empty means the operator (root). claimRef is an
-// opaque caller reference recorded on the claim; empty means none.
+// ClaimWarm transfers ownership of a warm sandbox without provisioning; ErrNoWarm means empty.
 func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
 	start := time.Now()
 	if err := m.validate(key); err != nil {
@@ -71,13 +68,11 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 }
 
 // ClaimProvision creates a claim-ready sandbox (golden clone or cold boot).
-// claimRef is an opaque caller reference recorded on the claim; empty means none.
 func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
 	return m.claimProvision(ctx, key, ttl, tenant, claimRef, volumes, false)
 }
 
-// ClaimProvisionPromoted requires key to resolve from a promoted template and
-// never falls through to a cold image boot.
+// ClaimProvisionPromoted requires key to resolve from a promoted template, never a cold boot.
 func (m *Manager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
 	return m.claimProvision(ctx, key, ttl, tenant, claimRef, volumes, true)
 }
@@ -91,8 +86,7 @@ func (m *Manager) Release(ctx context.Context, id string, cred Cred) error {
 	return m.releaseResolved(ctx, id, sb)
 }
 
-// ClaimDeadline authorizes a sandbox by token and returns its lease
-// deadline — the preview mint clamps a URL's life to it.
+// ClaimDeadline authorizes a sandbox by token and returns its lease deadline.
 func (m *Manager) ClaimDeadline(id, token string) (time.Time, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -120,8 +114,7 @@ func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.
 	return m.eng.DialGuestPort(ctx, sock, port)
 }
 
-// AgentSocket resolves a claimed sandbox's vsock UDS without waking it (the
-// ownership probe must not restore a hibernated VM).
+// AgentSocket resolves a claimed sandbox's vsock UDS without waking it.
 func (m *Manager) AgentSocket(id, token string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -129,15 +122,11 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 	if !ok {
 		return "", ErrUnknownSandbox
 	}
-	// No activity stamp here: owner/Lookup probes use this path, and a
-	// control-plane poll must not keep an idle sandbox awake. The relay's
-	// stamp lives in WakeAgentSocket.
+	// no activity stamp: a control-plane poll must not keep an idle sandbox awake
 	return sb.VsockSocket, nil
 }
 
-// releaseResolved drops the resolved claim and tears down its VM. resolve
-// unlocks before this runs, so it re-checks under m.mu that sb is still the
-// live claim: a second release racing in must not tear down twice.
+// releaseResolved re-checks under m.mu that sb is still the live claim: no double teardown.
 func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sandbox) error {
 	m.mu.Lock()
 	if m.claimed[id] != sb {
@@ -154,14 +143,14 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	}
 	delete(m.claimed, id)
 	m.tenantDelta(sb.Tenant, -1)
-	js := m.store.snapshot(m.claimed)
+	js := m.store.del(id)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
 		m.mu.Lock()
-		m.claimed[id] = sb // roll back so memory matches the still-durable claim; the restored claim re-pins ck
+		m.claimed[id] = sb // roll back so memory matches the still-durable claim
 		m.tenantDelta(sb.Tenant, 1)
 		delete(m.pendingCks, ck)
-		rb := m.store.snapshot(m.claimed)
+		rb := m.store.set(sb)
 		m.mu.Unlock()
 		if ck != "" {
 			if clearErr := m.clearArchiveCk(ck); clearErr != nil {
@@ -192,15 +181,14 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	return err
 }
 
-// overQuota is a cheap advisory precheck; finalizeBatch does the authoritative
-// admission check, so this just spares a doomed request the provision cost.
+// overQuota is an advisory precheck; finalizeBatch does the authoritative admission check.
 func (m *Manager) overQuota(extra int, tenant string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.quotaErr(extra, tenant)
 }
 
-// admitVolumes takes one claim's holds, then the marker check; a refusal on either leaves nothing held.
+// admitVolumes takes one claim's holds; a refusal on either check leaves nothing held.
 func (m *Manager) admitVolumes(tenant string, volumes []resolvedVolume) ([]types.Volume, error) {
 	applied := appliedVolumes(volumes)
 	if err := m.admitClaim(tenant, applied); err != nil {
@@ -213,9 +201,7 @@ func (m *Manager) admitVolumes(tenant string, volumes []resolvedVolume) ([]types
 	return applied, nil
 }
 
-// admitClaim is the provision path's one admission section: the advisory quota
-// precheck plus the authoritative volume reservation, so a busy volume is
-// refused before any VM is built.
+// admitClaim refuses a busy volume or an over-quota tenant before any VM is built.
 func (m *Manager) admitClaim(tenant string, volumes []types.Volume) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -225,8 +211,7 @@ func (m *Manager) admitClaim(tenant string, volumes []types.Volume) error {
 	return m.reserveVolumes(volumes)
 }
 
-// quotaErr answers ErrQuota over the node cap, the tenant cap, or a
-// draining node; callers hold m.mu.
+// quotaErr answers ErrQuota over a cap or a draining node; callers hold m.mu.
 func (m *Manager) quotaErr(extra int, tenant string) error {
 	if m.draining {
 		return fmt.Errorf("%w: node draining", ErrQuota)
@@ -256,8 +241,7 @@ func (m *Manager) tenantDelta(tenant string, delta int) {
 	}
 }
 
-// finalize stamps identity, persists the claim, and destroys the VM if the
-// store write fails so a durable claim always matches a live VM.
+// finalize stamps identity and persists the claim; a failed write destroys the VM.
 func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Duration) (*types.Sandbox, error) {
 	if err := m.finalizeBatch(ctx, []*types.Sandbox{sb}, ttl); err != nil {
 		return nil, err
@@ -265,9 +249,7 @@ func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Dura
 	return sb, nil
 }
 
-// finalizeBatch stamps identities and persists the batch as one journal write;
-// a failed write destroys every VM in it — a durable claim always matches a
-// live VM, all-or-nothing. One tenant per batch (fork children inherit it).
+// finalizeBatch persists the batch as one write, all-or-nothing; one tenant per batch.
 func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration) error {
 	now := time.Now()
 	for _, sb := range sbs {
@@ -278,8 +260,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	if quotaErr := m.quotaErr(len(sbs), sbs[0].Tenant); quotaErr != nil {
 		m.mu.Unlock()
 		for _, sb := range sbs {
-			// Never handed out, but the rw mount itself dirtied the journal — the
-			// clean umount is owed exactly as on the rollback path.
+			// the rw mount dirtied the journal, so the clean umount is still owed
 			td := m.quiesceVolumes(ctx, sb)
 			m.removeOrRetry(ctx, sb.VMName, "", "", td)
 		}
@@ -289,7 +270,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		m.claimed[sb.ID] = sb
 		m.tenantDelta(sb.Tenant, 1)
 	}
-	js := m.store.snapshot(m.claimed)
+	js := m.store.set(sbs...)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
 		m.rollbackClaim(ctx, sbs)
@@ -301,8 +282,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 			return fmt.Errorf("arm egress %s: %w", sb.ID, armErr)
 		}
 	}
-	// Usage lands only after the whole batch armed: a rollback must not leave
-	// claim events with no terminal release/reap in the billing stream.
+	// usage lands only after the batch armed, so a rollback leaves no unterminated claim event
 	for _, sb := range sbs {
 		m.recordUsage(ctx, usageEvent{
 			Event: "claim", //nolint:goconst // event name; other occurrences are test assertions
@@ -314,16 +294,16 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	return nil
 }
 
-// rollbackClaim unwinds a claim batch after a persist or egress-arm failure:
-// drop the claims, reconverge the journal, destroy the VMs — a NIC that
-// cannot be locked must never be handed out.
+// rollbackClaim unwinds a claim batch: a NIC that cannot be locked is never handed out.
 func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	m.mu.Lock()
-	for _, sb := range sbs {
+	ids := make([]string, len(sbs))
+	for i, sb := range sbs {
 		delete(m.claimed, sb.ID)
 		m.tenantDelta(sb.Tenant, -1)
+		ids[i] = sb.ID
 	}
-	rb := m.store.snapshot(m.claimed)
+	rb := m.store.del(ids...)
 	m.mu.Unlock()
 	m.recommit(ctx, rb)
 	for _, sb := range sbs {
@@ -332,8 +312,7 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	}
 }
 
-// abortVolumeClaim removes a failed claim's VM, holds riding the teardown;
-// clearing reserved stops the deferred unreserve from double-releasing them.
+// abortVolumeClaim removes a failed claim's VM and clears reserved against a double release.
 func (m *Manager) abortVolumeClaim(ctx context.Context, vmName string, reserved *[]types.Volume) {
 	m.removeOrRetry(ctx, vmName, "", "", volumeTeardown{holds: *reserved})
 	*reserved = nil
@@ -348,6 +327,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	}
 	m.mu.Lock()
 	var expired []victim
+	var dropped []string
 	for id, sb := range m.claimed {
 		// A zero deadline means no expiry (an archived claim kept forever).
 		if sb.Deadline.IsZero() || !now.After(sb.Deadline) {
@@ -357,8 +337,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		case sb.ArchiveCk != "":
 			expired = append(expired, victim{action: reapPurge, id: id, ck: sb.ArchiveCk, tenant: sb.Tenant, sb: sb})
 		case sb.HibernateSnap != "" && m.archiveEnabledFor(sb.Key):
-			// End-of-lease hibernated + archive-enabled: archive instead of
-			// destroy, kept in m.claimed for archive() to re-validate and move.
+			// archive instead of destroy, kept in m.claimed for archive() to move
 			if _, busy := m.archiving[id]; busy {
 				continue // an archive is already exporting this sandbox
 			}
@@ -368,7 +347,11 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			expired = append(expired, victim{action: reapDestroy, id: id, vmName: sb.VMName, snap: sb.HibernateSnap, tenant: sb.Tenant, sb: sb})
 			delete(m.claimed, id)
 			m.tenantDelta(sb.Tenant, -1)
+			dropped = append(dropped, id)
 		}
+	}
+	if len(dropped) > 0 {
+		m.store.del(dropped...)
 	}
 	m.mu.Unlock()
 	if len(expired) == 0 {
@@ -392,7 +375,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	}
 	m.mu.Lock()
 	keep = expired[:0]
-	var purgeCks []string
+	var purgeCks, purged []string
 	for _, v := range expired {
 		if v.action == reapPurge {
 			if m.claimed[v.id] != v.sb || v.sb.ArchiveCk != v.ck {
@@ -402,6 +385,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			delete(m.claimed, v.id)
 			m.tenantDelta(v.tenant, -1)
 			purgeCks = append(purgeCks, v.ck)
+			purged = append(purged, v.id)
 		}
 		keep = append(keep, v)
 	}
@@ -410,10 +394,11 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		m.mu.Unlock()
 		return
 	}
-	js := m.store.snapshot(m.claimed)
+	js := m.store.del(purged...)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
 		m.mu.Lock()
+		var restored []*types.Sandbox
 		for _, v := range expired {
 			if v.action == reapArchive {
 				delete(m.archiving, v.id) // never removed from m.claimed
@@ -421,9 +406,10 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				m.claimed[v.id] = v.sb // roll back so memory matches the still-durable claim
 				m.tenantDelta(v.tenant, 1)
 				delete(m.pendingCks, v.ck)
+				restored = append(restored, v.sb)
 			}
 		}
-		rb := m.store.snapshot(m.claimed)
+		rb := m.store.set(restored...)
 		m.mu.Unlock()
 		for _, ck := range purgeCks {
 			if clearErr := m.clearArchiveCk(ck); clearErr != nil {
@@ -434,8 +420,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		logger.Error(ctx, saveErr, "persist reap; rolled back")
 		return
 	}
-	// Engine subprocesses (worst case minutes on a hung stop): fan out bounded
-	// so a big batch never stalls the ticker loop.
+	// engine teardown can take minutes, so fan out bounded and never stall the ticker loop
 	m.runBounded(ctx, len(expired), func(ctx context.Context, i int) {
 		v := expired[i]
 		switch v.action {
@@ -468,9 +453,7 @@ func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
 	m.recordUsage(ctx, usageEvent{Event: "archive_delete", ID: id, Reference: ck, Tenant: tenant})
 }
 
-// recommit re-persists a snapshot in the background until its own success or
-// any newer durable write ends the loop (commit coalesces by sequence);
-// detached, because callers may hold the transition lock.
+// recommit re-persists in the background until success or a newer durable write; detached.
 func (m *Manager) recommit(ctx context.Context, snap claimSnapshot) {
 	go func() {
 		backoff := recommitBackoff

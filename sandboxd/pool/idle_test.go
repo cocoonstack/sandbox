@@ -24,7 +24,6 @@ func TestIdleOnceHibernatesPastThreshold(t *testing.T) {
 		m.idleOnce(t.Context())
 		waitFor(t, func() bool { return hibernated(m) == 1 })
 
-		// Idempotent on an already-hibernated claim.
 		m.idleOnce(t.Context())
 		waitFor(t, func() bool { return !m.idleSweep.Load() })
 		if hibernated(m) != 1 {
@@ -37,7 +36,7 @@ func TestIdleOncePolicyScope(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
-		m.idleDefault = time.Second // node default must NOT reach pooled keys
+		m.idleDefault = time.Second
 		m.idleEnabled = true
 
 		sb := mustClaim(t, m, testKey)
@@ -48,7 +47,6 @@ func TestIdleOncePolicyScope(t *testing.T) {
 			t.Fatal("pooled key without the policy was idle-hibernated by the node default")
 		}
 
-		// An unpooled key (template claim shape) takes the node default.
 		unpooled := types.PoolKey{Template: "tpl:v1", Net: types.NetNone, Size: types.SizeSmall}
 		sb2, err := m.ClaimProvision(t.Context(), unpooled, time.Hour, "", "", nil)
 		if err != nil {
@@ -67,7 +65,6 @@ func TestActivityStampsBlockIdleSweep(t *testing.T) {
 		sb := mustClaim(t, m, testKey)
 		backdate(m, sb, 2*time.Second)
 
-		// A data-plane connection refreshes the stamp; the sweep must spare it.
 		if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 			t.Fatalf("WakeAgentSocket: %v", err)
 		}

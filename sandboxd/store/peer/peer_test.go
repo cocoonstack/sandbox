@@ -15,8 +15,6 @@ import (
 
 const testID = "ck_00000000000000aa"
 
-// TestInertWithoutOwnersOrPuller: a node with no mesh must degrade to unable
-// to heal, not fail oddly. Healing is an addition, never a dependency.
 func TestInertWithoutOwnersOrPuller(t *testing.T) {
 	h := NewHealer(nil, nil)
 	if err := h.Pull(t.Context(), testID, t.TempDir(), nil); !errors.Is(err, store.ErrNotFound) {
@@ -24,8 +22,6 @@ func TestInertWithoutOwnersOrPuller(t *testing.T) {
 	}
 }
 
-// TestPullWritesStaging is Pull's whole point: the record lands in the
-// caller-provided staging directory for the caller to validate and publish.
 func TestPullWritesStaging(t *testing.T) {
 	puller := &fakePuller{records: map[string]map[string]string{"peer-a:7777": record()}}
 	h := NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
@@ -39,9 +35,6 @@ func TestPullWritesStaging(t *testing.T) {
 	}
 }
 
-// TestHealTriesNextOwner: a gossiped view can be stale or a peer can be
-// broken. One bad owner must not fail the pull while another can still
-// serve it.
 func TestHealTriesNextOwner(t *testing.T) {
 	puller := &fakePuller{
 		records:  map[string]map[string]string{"peer-b:7777": record()},
@@ -57,9 +50,6 @@ func TestHealTriesNextOwner(t *testing.T) {
 	}
 }
 
-// TestHealAllOwnersMissStaysNotFound: when every owner answers "not found"
-// the gossiped view was simply stale. That must surface as store.ErrNotFound
-// so the caller's existing not-found handling is unchanged.
 func TestHealAllOwnersMissStaysNotFound(t *testing.T) {
 	puller := &fakePuller{records: map[string]map[string]string{}}
 	h := NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
@@ -69,7 +59,6 @@ func TestHealAllOwnersMissStaysNotFound(t *testing.T) {
 	}
 }
 
-// TestHealNoOwners: nothing gossiped the record, so there is nobody to ask.
 func TestHealNoOwners(t *testing.T) {
 	puller := &fakePuller{}
 	h := NewHealer(func(string) []string { return nil }, puller)
@@ -82,9 +71,6 @@ func TestHealNoOwners(t *testing.T) {
 	}
 }
 
-// TestHealErrorIsReported: a peer that fails for a real reason (not a miss)
-// must not be flattened into "not found" — that would hide a broken transfer
-// behind a 404 and send the operator looking for a deleted checkpoint.
 func TestHealErrorIsReported(t *testing.T) {
 	puller := &fakePuller{failAddr: "peer-a:7777"}
 	h := NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
@@ -98,9 +84,6 @@ func TestHealErrorIsReported(t *testing.T) {
 	}
 }
 
-// TestPullDoesNotDedupConcurrentCalls: concurrent Pulls for one id but
-// different staging dirs must each run their own transfer — sharing a result
-// would leave one caller's dir empty but published as real.
 func TestPullDoesNotDedupConcurrentCalls(t *testing.T) {
 	puller := &fakePuller{records: map[string]map[string]string{"peer-a:7777": record()}}
 	h := NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
@@ -128,9 +111,6 @@ func TestPullDoesNotDedupConcurrentCalls(t *testing.T) {
 	}
 }
 
-// TestPullValidateRejectionTriesNextOwner: an owner whose transferred content
-// fails validation is treated like a failed transfer — the next owner gets a
-// chance instead of the whole heal aborting on one bad copy.
 func TestPullValidateRejectionTriesNextOwner(t *testing.T) {
 	puller := &fakePuller{records: map[string]map[string]string{
 		"peer-a:7777": record(),
@@ -154,8 +134,6 @@ func TestPullValidateRejectionTriesNextOwner(t *testing.T) {
 	}
 }
 
-// TestPullValidateRejectsEveryOwner: when every owner's copy fails
-// validation, Pull must report the failures, not silently succeed.
 func TestPullValidateRejectsEveryOwner(t *testing.T) {
 	puller := &fakePuller{records: map[string]map[string]string{"peer-a:7777": record()}}
 	h := NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
@@ -166,13 +144,10 @@ func TestPullValidateRejectsEveryOwner(t *testing.T) {
 	}
 }
 
-// TestPullBudgetBoundsSlowOwners: two owners that each sleep past their
-// per-owner slice must not blow past the overall budget — 30 minutes PER
-// owner (the old design) would let N slow owners run N*30 minutes.
 func TestPullBudgetBoundsSlowOwners(t *testing.T) {
 	puller := &sleepyPuller{sleep: 300 * time.Millisecond}
 	h := NewHealer(func(string) []string { return []string{"peer-a:7777", "peer-b:7777"} }, puller)
-	h.budget = 200 * time.Millisecond // each owner's slice (100ms) is shorter than the sleep
+	h.budget = 200 * time.Millisecond
 
 	start := time.Now()
 	err := h.Pull(t.Context(), testID, t.TempDir(), nil)
@@ -184,10 +159,9 @@ func TestPullBudgetBoundsSlowOwners(t *testing.T) {
 	}
 }
 
-// fakePuller serves records from an in-memory table, recording who was asked.
 type fakePuller struct {
 	mu       sync.Mutex
-	records  map[string]map[string]string // addr → file → content
+	records  map[string]map[string]string
 	asked    []string
 	failAddr string
 }
@@ -215,8 +189,6 @@ func (p *fakePuller) Pull(_ context.Context, addr, _, dst string) error {
 	return nil
 }
 
-// sleepyPuller blocks until ctx expires or sleep elapses, whichever is
-// first — for proving a per-owner slice actually cuts a slow owner off.
 type sleepyPuller struct {
 	sleep time.Duration
 }

@@ -21,9 +21,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
-// poolsFile records the last API-applied pool set so a restart rebuilds from
-// operator intent, not the config.json seed. ConfigSeed is the config pools'
-// hash at write time; a boot finding it changed warns the edit is overridden.
+// poolsFile records the last API-applied pool set so a restart rebuilds from operator intent.
 type poolsFile struct {
 	ConfigSeed string            `json:"config_seed"`
 	Pools      []config.PoolSpec `json:"pools"`
@@ -41,8 +39,7 @@ func newPoolStore(dataDir string) *poolStore {
 	return &poolStore{path: filepath.Join(dataDir, "pools.json")}
 }
 
-// load returns the persisted pool file, or nil when the node has never taken a
-// PUT /v1/pools (config.json seeds the pools, unchanged behavior).
+// load returns the persisted pool file, or nil when the node has never taken a PUT /v1/pools.
 func (s *poolStore) load() (*poolsFile, error) {
 	raw, err := os.ReadFile(s.path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -58,8 +55,7 @@ func (s *poolStore) load() (*poolsFile, error) {
 	return &pf, nil
 }
 
-// commit durably writes the applied set, serialized by s.mu; a seq no newer
-// than the last written is a no-op, so a superseded concurrent write can't win.
+// commit durably writes the applied set; a seq no newer than the last written is a no-op.
 func (s *poolStore) commit(seq uint64, pf poolsFile) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -77,9 +73,7 @@ func (s *poolStore) commit(seq uint64, pf poolsFile) error {
 	return nil
 }
 
-// adoptPersistedPools rebuilds the pools from pools.json (the last API-applied
-// set) over the config seed when present. Egress stays config-owned; a restored
-// pool that no longer validates fails the boot, matching config-load discipline.
+// adoptPersistedPools rebuilds the pools from pools.json over the config seed when present.
 func (m *Manager) adoptPersistedPools(ctx context.Context) error {
 	pf, err := m.poolStore.load()
 	if err != nil {
@@ -103,7 +97,7 @@ func (m *Manager) adoptPersistedPools(ctx context.Context) error {
 		if err := spec.ValidateLimits(); err != nil {
 			return fmt.Errorf("restore pool %q: %w", spec.Template, err)
 		}
-		p := &pool{key: spec.PoolKey}
+		p := newPool(spec.PoolKey)
 		p.applySpec(spec)
 		m.adoptGolden(p)
 		m.pools[spec.PoolKey] = p
@@ -118,8 +112,7 @@ func (m *Manager) adoptPersistedPools(ctx context.Context) error {
 	return nil
 }
 
-// poolSeedHash digests a pool set's warm-target shape, order-independent and
-// egress-excluded, so it tracks exactly the targets pools.json would override.
+// poolSeedHash digests a pool set's warm-target shape, order-independent and egress-excluded.
 func poolSeedHash(specs []config.PoolSpec) string {
 	shaped := slices.Clone(specs)
 	for i := range shaped {

@@ -16,8 +16,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// DeleteScope selects how far a checkpoint delete reaches. Fleet-wide is the
-// zero value, so the narrower local-only delete must be asked for.
+// DeleteScope selects how far a checkpoint delete reaches; fleet-wide is the zero value.
 type DeleteScope int
 
 const (
@@ -31,9 +30,7 @@ var (
 	ErrHealBusy          = errors.New("too many checkpoint heals in flight")
 )
 
-// Checkpoint captures a claimed sandbox's state under a fresh id; the source
-// keeps running (a hibernated one is captured from its wake image). tenant
-// attributes the record; empty means the operator (root).
+// Checkpoint captures a claimed sandbox's state under a fresh id; the source keeps running.
 func (m *Manager) Checkpoint(ctx context.Context, id string, cred Cred, name, tenant string) (types.Checkpoint, error) {
 	sb, ok := m.resolve(id, cred)
 	if !ok {
@@ -59,15 +56,9 @@ func (m *Manager) Checkpoint(ctx context.Context, id string, cred Cred, name, te
 	return ckpt, nil
 }
 
-// ClaimCheckpoint provisions a fresh claim cloned from a checkpoint — a
-// branch. The checkpoint's recorded key applies (snapshots pin size and
-// lane); the checkpoint itself is read-only and reusable. The claim is
-// attributed to tenant, not the checkpoint's recorder — the unguessable id
-// is the capability to branch.
+// ClaimCheckpoint provisions a fresh claim cloned from a checkpoint, attributed to tenant.
 func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error) {
-	// Reject a bad or unknown id before recLock: a rejected id must not leave
-	// a lock-map entry (only a delete evicts one). It precedes quota: a full
-	// node must still answer "not here".
+	// a rejected id must not leave a lock-map entry, so resolve before recLock and quota
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	if err != nil {
 		return nil, err
@@ -78,15 +69,12 @@ func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.D
 	return m.claimLoaded(ctx, ckpt, ttl, tenant)
 }
 
-// ClaimCheckpointHeal claims a checkpoint this node does not hold locally,
-// pulling it from a peer first. The server calls it only after the local
-// claim missed and a redirect could not answer.
+// ClaimCheckpointHeal claims a checkpoint held only by a peer, pulling it first.
 func (m *Manager) ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error) {
 	if m.healer == nil || !store.CheckpointIDRe.MatchString(ckptID) {
 		return nil, ErrUnknownCheckpoint
 	}
-	// Resolving here means moving a guest memory image, so quota rejects a
-	// full node before that cost, not after.
+	// resolving moves a guest memory image, so quota rejects a full node before that cost
 	if err := m.overQuota(1, tenant); err != nil {
 		return nil, err
 	}
@@ -97,11 +85,7 @@ func (m *Manager) ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl ti
 	return m.claimLoaded(ctx, ckpt, ttl, tenant)
 }
 
-// Checkpoints lists the store's checkpoints, newest first — on a shared
-// backend (a FUSE mount, a bucket), that is the cluster's set, not one
-// node's. A non-empty tenant filters to that tenant's records; empty (root)
-// lists everything. Checkpoints backing a live archived claim are hidden:
-// they are lifecycle-internal wake images, not user checkpoints.
+// Checkpoints lists tenant's checkpoints, newest first, hiding archive wake images.
 func (m *Manager) Checkpoints(ctx context.Context, tenant string) ([]types.Checkpoint, error) {
 	metas, err := m.ckpts.Metas(ctx)
 	if err != nil {
@@ -123,13 +107,9 @@ func (m *Manager) Checkpoints(ctx context.Context, tenant string) ([]types.Check
 	return ckpts, nil
 }
 
-// DeleteCheckpoint removes a checkpoint's snapshot and record, then
-// broadcasts to peers when fleet-scoped so a healed copy does not outlive it.
-// A tenant may delete only its own records — anything else answers
-// ErrUnknownCheckpoint, never a hint the id exists; root deletes anything.
+// DeleteCheckpoint removes a checkpoint's snapshot and record, broadcasting when fleet-scoped.
 func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, scope DeleteScope) error {
-	// Reject a bad id before recLock: a rejected id must not leave a
-	// lock-map entry.
+	// a rejected id must not leave a lock-map entry
 	if !store.CheckpointIDRe.MatchString(ckptID) {
 		return ErrUnknownCheckpoint
 	}
@@ -144,8 +124,7 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, s
 	if !tenantOwns(tenant, ckpt.Tenant) {
 		return ErrUnknownCheckpoint
 	}
-	// ckpt.Archive guards wake images across every node sharing the store;
-	// the pin set guards this node's not-yet-committed ones.
+	// ckpt.Archive guards wake images store-wide; the pin set guards uncommitted local ones
 	if _, pinned := m.pinnedArchiveCks()[ckptID]; pinned || ckpt.Archive {
 		return ErrUnknownCheckpoint // backs an archived sandbox, not a deletable checkpoint
 	}
@@ -159,15 +138,13 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, s
 	return nil
 }
 
-// HasCheckpoint answers the ownership probe: a branchable local record, never
-// a fetch.
+// HasCheckpoint answers the ownership probe: a branchable local record, never a fetch.
 func (m *Manager) HasCheckpoint(ctx context.Context, ckptID string) bool {
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	return err == nil && !ckpt.Archive
 }
 
-// FetchCheckpoint materializes a checkpoint's export for a peer transfer,
-// returning the local directory, its meta, and the release to call when done.
+// FetchCheckpoint materializes a checkpoint's export for a peer transfer.
 func (m *Manager) FetchCheckpoint(ctx context.Context, ckptID string) (string, []byte, func(), error) {
 	if _, err := m.loadCheckpoint(ctx, ckptID); err != nil {
 		return "", nil, nil, err
@@ -183,15 +160,11 @@ func (m *Manager) FetchCheckpoint(ctx context.Context, ckptID string) (string, [
 		}
 		return "", nil, nil, fmt.Errorf("fetch checkpoint: %w", err)
 	}
-	// The read lock spans the transfer: a delete must not pull the export out
-	// from under a stream already writing it to a peer.
+	// the read lock spans the transfer so a delete cannot pull the export from under it
 	return dir, meta, func() { release(); l.RUnlock(); m.recDone(ckptID) }, nil
 }
 
-// publishCheckpoint stages the sandbox's exported state, writes the meta, and
-// publishes it to the store, returning the record and the source snapshot the
-// export captured. Shared by Checkpoint and archive; a hibernated source
-// exports its wake image directly (no VM start — refill.sourceSnap).
+// publishCheckpoint stages, writes the meta, and publishes, returning the record and source snap.
 func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID, name, tenant string, archive bool) (types.Checkpoint, string, error) {
 	ckpt := types.Checkpoint{
 		ID:        ckID,
@@ -224,8 +197,7 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 	return ckpt, srcSnap, nil
 }
 
-// claimLoaded is the shared body once ckpt's meta is resolved: it re-fetches
-// under the record lock, so a delete racing the pre-check cannot slip through.
+// claimLoaded re-fetches under the record lock, so a delete racing the pre-check cannot slip in.
 func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl time.Duration, tenant string) (*types.Sandbox, error) {
 	l := m.recLock(ckpt.ID)
 	l.RLock()
@@ -257,10 +229,7 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl ti
 	return out, err
 }
 
-// healCheckpoint dedups concurrent heals of ckptID onto one flight (which
-// owns its own staging dir — never a caller's) and lets THIS call abandon
-// waiting the moment ctx is done; the flight itself runs detached (runHeal),
-// so a client hanging up never abandons a transfer already paid for.
+// healCheckpoint dedups concurrent heals onto one detached flight; only the wait honors ctx.
 func (m *Manager) healCheckpoint(ctx context.Context, ckptID string) (types.Checkpoint, error) {
 	if ckpt, err := m.loadCheckpoint(ctx, ckptID); err == nil {
 		return ckpt, nil
@@ -279,10 +248,7 @@ func (m *Manager) healCheckpoint(ctx context.Context, ckptID string) (types.Chec
 	}
 }
 
-// runHeal is healCheckpoint's flight body: it stages and pulls WITHOUT
-// holding ckptID's record lock — a heal budget runs up to 30 minutes, and
-// holding the lock across it would pin every same-id operation behind an
-// uncancellable wait.
+// runHeal stages and pulls without ckptID's record lock: a pull runs up to 30 minutes.
 func (m *Manager) runHeal(ckptID string) (types.Checkpoint, error) {
 	select {
 	case m.healSem <- struct{}{}:
@@ -325,18 +291,14 @@ func (m *Manager) runHeal(ckptID string) (types.Checkpoint, error) {
 	return m.loadCheckpoint(ctx, ckptID)
 }
 
-// markHealPending records ckptID as staging or pulling, unlocked, so
-// vetoIfHealPending knows a concurrent delete must veto rather than ignore
-// it. Bounded by healSem: at most maxConcurrentHeals entries ever exist.
+// markHealPending records ckptID as staging or pulling, so a delete can veto it.
 func (m *Manager) markHealPending(ckptID string) {
 	m.recLocksMu.Lock()
 	defer m.recLocksMu.Unlock()
 	m.healPending[ckptID] = struct{}{}
 }
 
-// clearHealPending un-marks ckptID and reports whether vetoIfHealPending
-// vetoed it in the meantime; call under ckptID's recLock, so the check and
-// the eventual publish decide together.
+// clearHealPending un-marks ckptID and reports a veto; call under ckptID's recLock.
 func (m *Manager) clearHealPending(ckptID string) (aborted bool) {
 	m.recLocksMu.Lock()
 	defer m.recLocksMu.Unlock()
@@ -347,10 +309,7 @@ func (m *Manager) clearHealPending(ckptID string) (aborted bool) {
 	return aborted
 }
 
-// vetoIfHealPending marks ckptID aborted when a heal is pending, so the
-// heal's locked decide phase (clearHealPending) abandons its publish instead
-// of resurrecting a checkpoint this delete just answered "not here" for. A
-// no-op when no heal is pending, so an unrelated miss leaves no residue.
+// vetoIfHealPending aborts a pending heal so its publish cannot resurrect a deleted checkpoint.
 func (m *Manager) vetoIfHealPending(ckptID string) {
 	m.recLocksMu.Lock()
 	defer m.recLocksMu.Unlock()
@@ -359,9 +318,7 @@ func (m *Manager) vetoIfHealPending(ckptID string) {
 	}
 }
 
-// pinnedArchiveCks is the set of checkpoint ids backing a live archived claim
-// or an archive transition in flight (pendingCks): wake images the listing hides
-// and delete/TTL must spare (deleting one would strand its sandbox).
+// pinnedArchiveCks is the set of wake-image ids the listing hides and delete/TTL must spare.
 func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -377,17 +334,14 @@ func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 	return pinned
 }
 
-// sweepExpiredCheckpoints ages out checkpoints older than the configured
-// TTL; explicit deletes never wait for it. It runs detached from the Run loop.
+// sweepExpiredCheckpoints ages out checkpoints older than the configured TTL.
 func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 	if !m.ckptSweeping.CompareAndSwap(false, true) {
 		return
 	}
 	defer m.ckptSweeping.Store(false)
 	logger := log.WithFunc("pool.sweepExpiredCheckpoints")
-	// Checkpoints already hides archive images backing a live claim, so the
-	// TTL never reaches one; their retention is the claim's own Deadline
-	// (reapPurge).
+	// Checkpoints hides archive images, so the TTL never reaches one; reapPurge retires them
 	ckpts, err := m.Checkpoints(ctx, "")
 	if err != nil {
 		logger.Error(ctx, err, "list for retention")
@@ -404,9 +358,7 @@ func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 	}
 }
 
-// deleteCkLocked removes a checkpoint under its record lock, so the delete
-// never runs beneath an in-flight branch clone, heal, or archived wake; the
-// lock is released before eviction is considered (see recDoneEvict).
+// deleteCkLocked removes a checkpoint under its record lock, releasing it before eviction.
 func (m *Manager) deleteCkLocked(ctx context.Context, ckID string) error {
 	l := m.recLock(ckID)
 	l.Lock()
@@ -434,8 +386,7 @@ func (m *Manager) loadCheckpoint(ctx context.Context, ckptID string) (types.Chec
 	return parseCheckpoint(raw)
 }
 
-// validateHealedCheckpoint checks a staged pull's shape before publishing it:
-// an unreadable or misattributed record would suppress every later heal.
+// validateHealedCheckpoint checks a staged pull's shape: a bad record suppresses later heals.
 func validateHealedCheckpoint(staging, wantID string) error {
 	raw, err := os.ReadFile(filepath.Join(staging, store.MetaFile)) //nolint:gosec // staging dir is this manager's own
 	if err != nil {
@@ -455,17 +406,14 @@ func validateHealedCheckpoint(staging, wantID string) error {
 		return fmt.Errorf("healed record %s has an invalid key: %w", wantID, keyErr)
 	}
 	if !ckpt.Key.Capturable() {
-		// A well-formed egress key is not branchable: publishing it would
-		// poison the id and suppress a good owner; reject, try the next owner.
+		// publishing a non-branchable key would poison the id and suppress a good owner
 		return fmt.Errorf("healed record %s has a non-branchable (egress) key", wantID)
 	}
 	export, err := os.ReadDir(filepath.Join(staging, store.ExportDir))
 	if err != nil {
 		return fmt.Errorf("healed record %s missing export dir: %w", wantID, err)
 	}
-	// A present export with no regular file clones to nothing (an empty dir, or
-	// only empty subdirs); the byte content is cocoon's own format and not
-	// sandboxd's to validate further.
+	// an export with no regular file clones to nothing; deeper content is cocoon's own format
 	if !hasRegularFile(export) {
 		return fmt.Errorf("healed record %s has no export content", wantID)
 	}
@@ -481,8 +429,7 @@ func validateHealedCheckpoint(staging, wantID string) error {
 	return nil
 }
 
-// hasRegularFile reports whether entries holds at least one regular file, so an
-// export of only empty subdirectories is treated as empty.
+// hasRegularFile reports whether entries holds at least one regular file.
 func hasRegularFile(entries []os.DirEntry) bool {
 	return slices.ContainsFunc(entries, func(e os.DirEntry) bool { return e.Type().IsRegular() })
 }

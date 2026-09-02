@@ -19,8 +19,7 @@ import (
 )
 
 const (
-	// A checkpoint carries a guest memory image, so this is generous — but a
-	// wedged peer must fail the pull so the next owner is tried, not hang it.
+	// Generous for a guest memory image, but a wedged peer must fail so the next owner is tried.
 	pullTimeout = 30 * time.Minute
 
 	maxRecordBytes = 1 << 40 // 1 TiB
@@ -28,10 +27,7 @@ const (
 	metaFile     = "meta.json"
 	exportPrefix = "export/"
 
-	// recordTrailer is written last, only after the whole export streamed, so a
-	// receiver that reaches EOF without it knows the transfer stopped early — a
-	// source-side walk or read error leaves a valid but short tar (Close still
-	// writes the footer), and that must not be published as a complete record.
+	// recordTrailer is written last, so EOF without it means the transfer stopped early.
 	recordTrailer = ".record-complete"
 )
 
@@ -45,8 +41,7 @@ type Puller interface {
 
 // HTTPPuller pulls records over sandboxd's control-plane HTTP port.
 type HTTPPuller struct {
-	// A nil Client uses a default with no overall timeout: the per-pull
-	// deadline comes from the context, so a large record is not cut off.
+	// A nil Client uses a default with no overall timeout; the deadline comes from the context.
 	Client *http.Client
 	Token  string
 }
@@ -86,9 +81,7 @@ func (p *HTTPPuller) Pull(ctx context.Context, addr, id, dst string) error {
 	return Untar(resp.Body, dst)
 }
 
-// TarRecord streams a whole store record: export/ plus meta.json. Both are
-// required — the claim path reads the meta's pool key and lineage before it
-// ever touches the export, so an export-only copy fails every read.
+// TarRecord streams a whole store record: export/ plus meta.json, both required by the claim path.
 func TarRecord(exportDir string, meta []byte, w io.Writer) error {
 	tw := tar.NewWriter(w)
 	defer func() { _ = tw.Close() }()
@@ -117,9 +110,7 @@ func TarRecord(exportDir string, meta []byte, w io.Writer) error {
 	return tw.Close()
 }
 
-// Untar writes a tar stream into dst. An authenticated peer is still not
-// allowed to write outside the destination this node chose, so every entry
-// name is validated against traversal.
+// Untar writes a tar stream into dst, validating every entry name against traversal.
 func Untar(r io.Reader, dst string) error {
 	tr := tar.NewReader(r)
 	var written int64
@@ -178,8 +169,7 @@ func writeFile(target string, r io.Reader, mode os.FileMode) error {
 	return f.Close()
 }
 
-// checkpointURL builds the control-plane URL for id's record on addr — the
-// one home for the scheme default a mesh member view omits.
+// checkpointURL builds the control-plane URL for id's record on addr, defaulting the scheme.
 func checkpointURL(addr, id, suffix string) string {
 	if !strings.Contains(addr, "://") {
 		addr = "http://" + addr
@@ -187,14 +177,12 @@ func checkpointURL(addr, id, suffix string) string {
 	return addr + "/v1/checkpoints/" + url.PathEscape(id) + suffix
 }
 
-// safeJoin resolves name under root, rejecting absolute paths and any name
-// that would escape root.
+// safeJoin resolves name under root, rejecting absolute paths and names that escape root.
 func safeJoin(root, name string) (string, error) {
 	if name == "" || filepath.IsAbs(name) || strings.Contains(name, `\`) {
 		return "", fmt.Errorf("untar: refusing entry %q", name)
 	}
-	// Clean as-is, never as "/"+name: a leading slash absorbs a leading "..",
-	// rewriting ../escape to /escape instead of rejecting it.
+	// clean as-is, never "/"+name: a leading slash absorbs a leading ".." instead of rejecting it.
 	clean := filepath.Clean(name)
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
 		return "", fmt.Errorf("untar: entry %q escapes destination", name)
@@ -206,9 +194,7 @@ func safeJoin(root, name string) (string, error) {
 	return target, nil
 }
 
-// tarInto walks src into tw under prefix, emitting only regular files and
-// directories: a symlink or device node would let the reader be steered outside
-// its destination.
+// tarInto emits only regular files and directories: a symlink would steer the reader outside dst.
 func tarInto(src, prefix string, tw *tar.Writer) error {
 	err := filepath.Walk(src, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {

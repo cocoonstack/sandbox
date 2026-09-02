@@ -28,7 +28,6 @@ const (
 	// RequiredCocoon carries the snapshot/store performance baseline.
 	RequiredCocoon = "v0.5.2"
 
-	// Stale-create verdicts, mirroring cocoon's reconcile-stale-create verb.
 	StaleCreateCollected   StaleCreateOutcome = "collected"
 	StaleCreateBusy        StaleCreateOutcome = "busy"
 	StaleCreateNotCreating StaleCreateOutcome = "not-creating"
@@ -47,15 +46,11 @@ const (
 	infoMax       = 4096 // info response frame cap
 	outputTail    = 400
 
-	// portForwardMax caps the port_forward handshake reply line; the byte
-	// stream follows on the same conn.
+	// portForwardMax caps the port_forward handshake reply line.
 	portForwardMax = 4096
 )
 
-// capacitySignatures mean "this node cannot attach another VM", not "this VM
-// failed"; matched as text because cocoon is a subprocess and the distinction
-// survives only in its stderr. "exchange full" is EXFULL from a bridge at
-// BR_MAX_PORTS — permanent until VMs are removed.
+// capacitySignatures mean the node cannot attach another VM, not that this VM failed.
 var capacitySignatures = []string{
 	"exchange full",
 	"no space left on device",
@@ -73,15 +68,12 @@ type Engine struct {
 	restoreMode types.RestoreMode
 }
 
-// New returns a cocoon engine with node-wide network and disk policy. bridges
-// and networks are the egress-lane shard lists (host bridge devices vs CNI
-// conflists) egress VMs spread over; see shardOf.
+// New returns a cocoon engine with node-wide network and disk policy.
 func New(bin string, bridges, networks []string, noDirectIO bool, restoreMode types.RestoreMode) *Engine {
 	return &Engine{bin: bin, bridges: bridges, networks: networks, noDirectIO: noDirectIO, restoreMode: restoreMode}
 }
 
-// Version reports cocoon's version string — a "vX.Y.Z" release or a
-// "master-<sha>" dev build.
+// Version reports cocoon's version string: a "vX.Y.Z" release or a "master-<sha>" dev build.
 func (e *Engine) Version(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -97,9 +89,7 @@ func (e *Engine) Version(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("cocoon version: no Version line in output")
 }
 
-// VersionWarning probes cocoon and returns a non-empty warning when its
-// version is below RequiredCocoon (or unreadable); version is set when known.
-// A dev build (no vX.Y.Z) is assumed current.
+// VersionWarning returns a non-empty warning when cocoon's version is below RequiredCocoon.
 func (e *Engine) VersionWarning(ctx context.Context) (version, warning string) {
 	v, err := e.Version(ctx)
 	if err != nil {
@@ -120,8 +110,7 @@ func (e *Engine) Clone(ctx context.Context, fromDir, name string, key types.Pool
 	return parseRecord(ctx, out), nil
 }
 
-// CloneSnap clones from a local-store snapshot by name — fork's fast path,
-// which skips the export-to-dir copy that `Clone --from-dir` requires.
+// CloneSnap clones from a local-store snapshot by name — fork's fast path.
 func (e *Engine) CloneSnap(ctx context.Context, snap, name string, key types.PoolKey) (types.VMRecord, error) {
 	out, err := e.run(ctx, e.cloneSnapArgs(snap, name, key)...)
 	if err != nil {
@@ -130,8 +119,7 @@ func (e *Engine) CloneSnap(ctx context.Context, snap, name string, key types.Poo
 	return parseRecord(ctx, out), nil
 }
 
-// RunCold boots a VM from the template image (golden builds and cache-miss
-// claims), returning its lifecycle record.
+// RunCold boots a VM from the template image, returning its lifecycle record.
 func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey) (types.VMRecord, error) {
 	out, err := e.run(ctx, e.runColdArgs(name, key)...)
 	if err != nil {
@@ -146,8 +134,7 @@ func (e *Engine) Remove(ctx context.Context, name string) error {
 	return err
 }
 
-// ReconcileStaleCreate reclaims a creating-state record via cocoon's
-// free-ops-lock predicate — safe against an in-flight clone where rm --force is not.
+// ReconcileStaleCreate reclaims a creating-state record via cocoon's free-ops-lock predicate.
 func (e *Engine) ReconcileStaleCreate(ctx context.Context, name string) (StaleCreateOutcome, error) {
 	out, err := e.run(ctx, "vm", "reconcile-stale-create", name, argOutput, formatJSON)
 	if err != nil {
@@ -168,15 +155,13 @@ func (e *Engine) SnapshotSave(ctx context.Context, vmName, snapName string) erro
 	return err
 }
 
-// Hibernate atomically snapshots a running VM under snapName and stops it,
-// freeing its memory; Restore with the snapshot resumes it.
+// Hibernate atomically snapshots a running VM under snapName and stops it.
 func (e *Engine) Hibernate(ctx context.Context, vmName, snapName string) error {
 	_, err := e.run(ctx, "vm", "hibernate", argName, snapName, vmName)
 	return err
 }
 
-// Restore resumes a VM from a snapshot with its memory state and identity
-// intact (cocoon reseeds entropy only on restore), returning its vsock UDS.
+// Restore resumes a VM from a snapshot, returning its vsock UDS.
 func (e *Engine) Restore(ctx context.Context, vmName, snapRef string) (string, error) {
 	out, err := e.run(ctx, e.restoreCmdArgs(vmName, snapRef)...)
 	if err != nil {
@@ -185,8 +170,7 @@ func (e *Engine) Restore(ctx context.Context, vmName, snapRef string) (string, e
 	return parseRecord(ctx, out).VsockSocket, nil
 }
 
-// SnapshotExport exports a snapshot into toDir (cocoon requires it absent or
-// empty); the result pairs with `vm clone --from-dir`.
+// SnapshotExport exports a snapshot into toDir, which cocoon requires absent or empty.
 func (e *Engine) SnapshotExport(ctx context.Context, snapName, toDir string) error {
 	_, err := e.run(ctx, "snapshot", "export", snapName, "--to-dir", toDir)
 	return err
@@ -238,8 +222,7 @@ func (e *Engine) List(ctx context.Context, filters ...string) ([]types.VMRecord,
 	return vms, nil
 }
 
-// DialSilkd connects to a VM's silkd through the hybrid-vsock UDS:
-// dial, send "CONNECT <port>", expect an "OK" reply.
+// DialSilkd connects to a VM's silkd through the hybrid-vsock UDS.
 func (e *Engine) DialSilkd(ctx context.Context, vsockSocket string) (net.Conn, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", vsockSocket)
@@ -267,8 +250,7 @@ func (e *Engine) DialSilkd(ctx context.Context, vsockSocket string) (net.Conn, e
 	return conn, nil
 }
 
-// Probe polls until silkd completes an info round-trip — the claim-ready
-// signal (probe what the product uses, not cocoon-agent).
+// Probe polls until silkd completes an info round-trip — the claim-ready signal.
 func (e *Engine) Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -285,9 +267,7 @@ func (e *Engine) Probe(ctx context.Context, vsockSocket string, timeout time.Dur
 	}
 }
 
-// DialGuestPort opens a raw byte stream to 127.0.0.1:port inside the guest
-// by driving silkd's port_forward handshake, then returns the connection
-// carrying the relayed TCP bytes — the preview server proxies HTTP over it.
+// DialGuestPort opens a raw byte stream to 127.0.0.1:port inside the guest.
 func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error) {
 	conn, err := e.DialSilkd(ctx, vsockSocket)
 	if err != nil {
@@ -304,7 +284,9 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 		_ = conn.Close()
 		return nil, fmt.Errorf("write port_forward: %w", err)
 	}
-	line, readErr := readLine(conn, portForwardMax)
+	// the forwarded stream's own reader takes the handshake reply, so an over-read stays buffered.
+	r := bufio.NewReaderSize(conn, portReadBuf)
+	line, readErr := readBufLine(r, portForwardMax)
 	if readErr != nil {
 		_ = conn.Close()
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -321,13 +303,11 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 		_ = conn.Close()
 		return nil, fmt.Errorf("port_forward %d: %s", port, respFail(resp))
 	}
-	return newGuestPortConn(conn), nil
+	return newGuestPortConn(conn, r), nil
 }
 
 func (e *Engine) cloneArgs(fromDir, name string, key types.PoolKey) []string {
-	// --pull: a checkpoint/template export carries only COW + memory; on a
-	// cross-node claim the base image blobs resolve locally or are pulled
-	// by digest.
+	// --pull: a checkpoint/template export carries only COW + memory, not the base image.
 	args := []string{"vm", "clone", "--from-dir", fromDir, argName, name, "--pull", argOutput, formatJSON, e.directIOArg()}
 	args = append(args, e.restoreArgs()...)
 	return append(args, e.netArgs(name, key, false)...)
@@ -403,8 +383,7 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 	if _, err = conn.Write(append(probe, '\n')); err != nil {
 		return fmt.Errorf("write info: %w", err)
 	}
-	// Unlike the handshake reader, buffered over-read is safe here: the conn
-	// is discarded after this one reply.
+	// buffered over-read is safe here: the conn is discarded after this one reply.
 	reply, err := bufio.NewReader(io.LimitReader(conn, infoMax)).ReadBytes('\n')
 	if err != nil {
 		return fmt.Errorf("read info reply: %w", err)
@@ -419,8 +398,7 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 	return nil
 }
 
-// EgressSocketPath is the host UDS the VMM connects when the guest dials
-// CID2:egressPort — sandboxd listens here to serve the egress proxy.
+// EgressSocketPath is the host UDS the VMM connects when the guest dials CID2:egressPort.
 func EgressSocketPath(vsockSocket string) string {
 	return fmt.Sprintf("%s_%d", vsockSocket, egressPort)
 }
@@ -439,9 +417,7 @@ func CapacitySignature(err error) string {
 	return ""
 }
 
-// shardOf picks a shard by hashing the VM name, not by counter: the record
-// persists the attachment a VM was built on, so the choice must be
-// reproducible without process state.
+// shardOf picks a shard by hashing the VM name, so the choice needs no process state.
 func shardOf(shards []string, name string) string {
 	if len(shards) == 0 {
 		return ""
@@ -452,8 +428,7 @@ func shardOf(shards []string, name string) string {
 	return shards[int(h.Sum32()>>1)%len(shards)]
 }
 
-// respFail renders a non-success reply: the error frame's own text, or the
-// unexpected frame's type.
+// respFail renders a non-success reply: the error text, or the unexpected frame's type.
 func respFail(resp wire.Response) string {
 	if errResp, ok := resp.(*wire.ErrorResp); ok {
 		return errResp.Error()
@@ -461,8 +436,7 @@ func respFail(resp wire.Response) string {
 	return "unexpected frame " + resp.RespType()
 }
 
-// parseRecord reads a lifecycle command's --output json VM record; best-effort,
-// so an unparseable record yields the zero value (callers fall back to vm list).
+// parseRecord is best-effort: an unparseable record yields the zero value.
 func parseRecord(ctx context.Context, out []byte) types.VMRecord {
 	var rec types.VMRecord
 	if err := json.Unmarshal(out, &rec); err != nil {
@@ -472,8 +446,7 @@ func parseRecord(ctx context.Context, out []byte) types.VMRecord {
 	return rec
 }
 
-// belowFloor reports whether cocoon version v is below RequiredCocoon;
-// comparable is false for a non-release build (no vX.Y.Z), assumed current.
+// belowFloor reports whether v is below RequiredCocoon; comparable is false for a dev build.
 func belowFloor(v string) (below, comparable bool) {
 	cur, ok := parseSemver(v)
 	if !ok {
@@ -503,8 +476,19 @@ func parseSemver(s string) ([3]int, bool) {
 	return out, true
 }
 
-// readLine reads byte-wise so nothing past the newline is consumed —
-// the same conn carries the silkd protocol right after the handshake.
+// readBufLine takes one line from r, capped at max bytes.
+func readBufLine(r *bufio.Reader, max int) (string, error) {
+	line, err := r.ReadSlice('\n')
+	if err != nil {
+		return "", err
+	}
+	if len(line) > max {
+		return "", fmt.Errorf("reply exceeds %d bytes", max)
+	}
+	return string(line[:len(line)-1]), nil
+}
+
+// readLine reads byte-wise so nothing past the newline is consumed.
 func readLine(conn net.Conn, max int) (string, error) {
 	var sb strings.Builder
 	var b [1]byte

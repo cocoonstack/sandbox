@@ -70,9 +70,6 @@ func TestInterceptInjectsSecretIntoHTTPS(t *testing.T) {
 }
 
 func TestInterceptBindsInnerRequestToInterceptRule(t *testing.T) {
-	// A broad plain rule precedes the specific intercept rule for the same
-	// host: the inner request must still bind to the intercept rule (inject its
-	// secret), not first-match the shadowing plain rule.
 	policy := Policy{Allow: []Rule{
 		{Host: "*.example.com"},
 		{Host: "api.example.com", Secret: "gh", Intercept: true},
@@ -93,9 +90,6 @@ func TestInterceptBindsInnerRequestToInterceptRule(t *testing.T) {
 }
 
 func TestInterceptCaptureEnforcesRuleMethod(t *testing.T) {
-	// The intercept rule is GET-only; a broad plain rule would allow POST. Once
-	// a host is captured for interception, the intercept rule governs its
-	// decrypted traffic — POST must be denied, not routed via the plain rule.
 	policy := Policy{Allow: []Rule{
 		{Host: "*.example.com"},
 		{Host: "api.example.com", Methods: []string{"GET"}, Intercept: true},
@@ -116,9 +110,6 @@ func TestInterceptCaptureEnforcesRuleMethod(t *testing.T) {
 }
 
 func TestInterceptReachesLaterInterceptRuleByMethod(t *testing.T) {
-	// A wildcard intercept rule (GET) precedes a specific intercept rule (POST)
-	// for the same host. The inner POST must reach the second rule by host+method
-	// — binding the whole tunnel to the first intercept rule makes it unreachable.
 	policy := Policy{Allow: []Rule{
 		{Host: "*.example.com", Methods: []string{"GET"}, Intercept: true},
 		{Host: "api.example.com", Methods: []string{"POST"}, Intercept: true},
@@ -257,8 +248,6 @@ func trustUpstream(upstream *httptest.Server) *x509.CertPool {
 	return pool
 }
 
-// connectTLS opens a CONNECT tunnel through the proxy and completes the guest
-// TLS handshake against the leaf the proxy presents.
 func connectTLS(t *testing.T, proxyAddr, target, serverName string, roots *x509.CertPool) *tls.Conn {
 	t.Helper()
 	conn, err := net.Dial("tcp", proxyAddr)
@@ -318,8 +307,6 @@ func roundTripTLSHost(t *testing.T, tc *tls.Conn, method, host string) *http.Res
 	return resp
 }
 
-// readPreamble reads the CONNECT reply byte-wise up to the blank line, so no
-// TLS bytes are consumed; the proxy sends nothing more until the ClientHello.
 func readPreamble(t *testing.T, conn net.Conn) string {
 	t.Helper()
 	var sb strings.Builder

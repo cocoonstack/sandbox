@@ -61,18 +61,14 @@ func TestBackoffGrowsAndIsCapped(t *testing.T) {
 	}
 }
 
-// TestRefillOnceHonorsTheBackoff pins the property that saves the node:
-// while a pool is backed off, the ticker spawns nothing.
 func TestRefillOnceHonorsTheBackoff(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
-		// Deliberately not a capacitySignature: that parks the node after one
-		// failure; the streak backoff is the fallback for unclassifiable errors.
+
 		eng.cloneErr = errors.New("clone: guest kernel panicked before vsock came up")
 		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 50})
 		m.pools[testKey].goldenDir = "/goldens/x"
 
-		// Concurrency is bounded, so the streak accrues over several ticks.
 		backedOff := false
 		for range 50 {
 			m.refillOnce(t.Context())
@@ -92,8 +88,6 @@ func TestRefillOnceHonorsTheBackoff(t *testing.T) {
 			t.Fatal("a pool whose every refill failed is not backed off")
 		}
 
-		// Pin the expiry far out so the no-spawn assertions cannot race a short
-		// first backoff on a loaded machine.
 		m.mu.Lock()
 		m.pools[testKey].nextRefill = time.Now().Add(time.Hour)
 		m.mu.Unlock()
@@ -104,7 +98,6 @@ func TestRefillOnceHonorsTheBackoff(t *testing.T) {
 			t.Errorf("clones=%d after backing off, want %d: a backed-off pool must not attempt again", n, attempts)
 		}
 
-		// A pause, not a latch: once the wait expires a working engine fills.
 		m.mu.Lock()
 		m.pools[testKey].nextRefill = time.Now().Add(-time.Second)
 		m.mu.Unlock()

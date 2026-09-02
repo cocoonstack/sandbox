@@ -145,8 +145,6 @@ func TestConfirmVolumesCleanCatchesMarkerAfterAdmission(t *testing.T) {
 	m := newVolumeManager(t, newFakeEngine(), []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
 	readOnly := []types.Volume{{Name: "scratch"}}
 
-	// The reader resolves a clean image; a writable claim then fails between
-	// that resolve and admission, leaving its marker but no hold behind.
 	resolved, err := m.resolveVolumes(t.Context(), "", readOnly)
 	if err != nil {
 		t.Fatalf("resolveVolumes: %v", err)
@@ -182,8 +180,7 @@ func TestVolumeAdmissionMatrix(t *testing.T) {
 		wantErr       error
 	}{
 		{"writer excludes writer", types.VolumeModeRW, types.VolumeModeRW, ErrVolumeBusy},
-		// Admission answers first: a live writer is a busy conflict, never the
-		// recovery verdict its own write-ahead marker would otherwise suggest.
+
 		{"writer excludes reader", types.VolumeModeRW, "", ErrVolumeBusy},
 		{"reader excludes writer", "", types.VolumeModeRW, ErrVolumeBusy},
 		{"readers share", "", "", nil},
@@ -392,7 +389,7 @@ func TestPendingRemovalHoldsVolumesUntilDrained(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimProvision: %v", err)
 	}
-	eng.removeErrFor = sb.VMName // survives removal: the VM still holds the image
+	eng.removeErrFor = sb.VMName
 
 	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("Release reported success for a VM that survived removal")
@@ -448,8 +445,7 @@ func TestVolumeDirtyFailsClosed(t *testing.T) {
 	if !volumeDirty(image) {
 		t.Error("marked image reads clean")
 	}
-	// The marker of an image behind a non-directory parent cannot be read at
-	// all; an unreadable marker must never open the image to readers.
+
 	if !volumeDirty(filepath.Join(image, "nested.img")) {
 		t.Error("unreadable marker reads clean")
 	}

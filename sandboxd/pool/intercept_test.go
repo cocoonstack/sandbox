@@ -122,8 +122,7 @@ func TestInterceptPoolAllowsPromote(t *testing.T) {
 	m.mu.Lock()
 	m.claimed[sb.ID] = sb
 	m.mu.Unlock()
-	// The cluster root is shared, so an interception sandbox's disk carries no
-	// node-private material: promote/checkpoint are unrestricted.
+
 	if _, _, err := m.Promote(t.Context(), sb.ID, Cred{Token: "tok"}, "tpl:x", ""); err != nil {
 		t.Errorf("Promote of an interception-pool sandbox: %v, want success", err)
 	}

@@ -62,7 +62,7 @@ func TestJournalRotationKeepsOneBackup(t *testing.T) {
 		t.Fatalf("newJournal: %v", err)
 	}
 	defer func() { _ = j.close() }()
-	j.size = journalMaxBytes // force the next append to rotate
+	j.size = journalMaxBytes
 
 	if err := j.append(usageEvent{Event: "claim", ID: "sb_1"}); err != nil {
 		t.Fatalf("append: %v", err)
@@ -85,7 +85,7 @@ func TestQuotaRefusesClaimsPastCap(t *testing.T) {
 	if _, err := claimAny(t.Context(), m, testKey, time.Hour); !errors.Is(err, ErrQuota) {
 		t.Fatalf("claim past cap: %v, want ErrQuota", err)
 	}
-	// The refused VM must not leak, and the pool state stays sane.
+
 	if err := m.Release(t.Context(), first.ID, Cred{Token: first.Token}); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
@@ -109,8 +109,7 @@ func TestTenantQuotaBindsPerTenant(t *testing.T) {
 	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil); !errors.Is(err, ErrQuota) {
 		t.Fatalf("acme past its cap: %v, want ErrQuota", err)
 	}
-	// The node-wide cap (unset here) stays untouched: other tenants and root
-	// keep claiming while acme is full.
+
 	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "beta", "", nil); err != nil {
 		t.Errorf("beta claim while acme is at cap: %v", err)
 	}

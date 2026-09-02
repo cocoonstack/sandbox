@@ -15,14 +15,11 @@ const (
 	interceptTimeout = 30 * time.Second
 	leafRenewBefore  = 24 * time.Hour
 
-	// maxLeaves bounds one sandbox's leaf cache against a wildcard rule minting
-	// unbounded per-host leaves.
+	// maxLeaves bounds one sandbox's leaf cache against a wildcard rule.
 	maxLeaves = 1024
 )
 
-// serveIntercept terminates a matched CONNECT's TLS with a node-signed leaf the
-// guest trusts, then serves the decrypted HTTP/1.1 through interceptHandler.
-// Upstream is re-originated with real-root verification (mitmTr), never trusted.
+// serveIntercept terminates a matched CONNECT's TLS with a node-signed leaf.
 func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host string) {
 	leaf, err := p.leafFor(host)
 	if err != nil {
@@ -47,8 +44,7 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}
-	// A guest that never sends a ClientHello would pin this goroutine until the
-	// sandbox dies; cleared once the handshake lands.
+	// a guest that never sends a ClientHello would pin this goroutine until the sandbox dies.
 	_ = client.SetDeadline(time.Now().Add(interceptTimeout))
 	tlsConn := tls.Server(client, cfg)
 	if err := tlsConn.HandshakeContext(r.Context()); err != nil {
@@ -63,8 +59,7 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 	_ = srv.Serve(ln)
 }
 
-// leafFor returns this sandbox's cached leaf for host, signing a fresh one on
-// miss or near-expiry; the cache and its flush are per-sandbox.
+// leafFor returns the cached leaf for host, signing a fresh one on miss or near-expiry.
 func (p *Proxy) leafFor(host string) (*tls.Certificate, error) {
 	p.leafMu.Lock()
 	defer p.leafMu.Unlock()
@@ -82,8 +77,7 @@ func (p *Proxy) leafFor(host string) (*tls.Certificate, error) {
 	return crt, nil
 }
 
-// interceptHandler forwards one decrypted request per call: host is the CONNECT
-// authority's hostname (policy + leaf key), authority its host:port (upstream).
+// interceptHandler forwards one decrypted request per call; host is bare, authority host:port.
 type interceptHandler struct {
 	proxy     *Proxy
 	host      string
@@ -96,17 +90,14 @@ func (h *interceptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.relay(w, r, h.host, rule, decision, p.mitmTr, func(out *http.Request) {
 		out.URL.Scheme = "https"
 		out.URL.Host = h.authority
-		// Keep the guest's Host when it names the CONNECT host (SigV4-style
-		// signing breaks on the ":443" rewrite); a foreign Host snaps to the
-		// authority.
+		// keep the guest's Host when it names the CONNECT host: SigV4 signing breaks on a rewrite.
 		if !strings.EqualFold(hostOnly(r.Host), h.host) {
 			out.Host = h.authority
 		}
 	})
 }
 
-// singleConnListener feeds one already-accepted conn to an http.Server and then
-// blocks until that conn closes, so Serve exits once the tunnel ends.
+// singleConnListener feeds one accepted conn to an http.Server, then blocks until it closes.
 type singleConnListener struct {
 	conn   net.Conn
 	handed atomic.Bool

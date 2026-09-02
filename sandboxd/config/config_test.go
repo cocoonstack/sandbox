@@ -23,7 +23,7 @@ func TestClusterDigest(t *testing.T) {
 	if base.ClusterDigest("other-fp") == d {
 		t.Error("an egress CA root change is not reflected")
 	}
-	// Keyless: token material must stay off the (maybe cleartext) wire.
+
 	if (&Config{APIToken: "other", PreviewSecret: "ps", Tenants: base.Tenants}).ClusterDigest("ca-fp") != d {
 		t.Error("api_token leaked into the keyless digest")
 	}
@@ -207,7 +207,6 @@ func TestLoadAcceptsEgressPolicy(t *testing.T) {
 }
 
 func TestLoadAcceptsUnguardedCNINetwork(t *testing.T) {
-	// Only guarded egress needs a bridge; an unguarded CNI network lane is fine.
 	path := writeConfig(t, `{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`)
 	if _, err := Load(path); err != nil {
 		t.Fatalf("Load: %v", err)
@@ -215,8 +214,6 @@ func TestLoadAcceptsUnguardedCNINetwork(t *testing.T) {
 }
 
 func TestLoadAcceptsNoneLanePolicyOnCNI(t *testing.T) {
-	// A none-lane policy rides the vsock proxy and locks no tap, so it is valid on
-	// a CNI network — the bridge requirement is only for a guarded egress lane.
 	for _, body := range []string{
 		`{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"x"}]}}]}`,
 		`{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"egress","size":"small"},{"template":"rt:24.04","net":"none","size":"medium","egress":{"allow":[{"host":"x"}]}}]}`,

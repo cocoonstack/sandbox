@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// TestBroadcastDeleteSendsNoForward: a broadcast delete must carry
-// no_forward=1 so the receiving peer's own delete does not re-broadcast,
-// which would loop forever across the fleet.
 func TestBroadcastDeleteSendsNoForward(t *testing.T) {
 	var gotNoForward, gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -30,8 +27,6 @@ func TestBroadcastDeleteSendsNoForward(t *testing.T) {
 	}
 }
 
-// TestBroadcastDeleteFansOutToEveryPeer: every distinct peer must be
-// contacted, not just the first.
 func TestBroadcastDeleteFansOutToEveryPeer(t *testing.T) {
 	var hits atomic.Int32
 	newSrv := func() *httptest.Server {
@@ -52,8 +47,6 @@ func TestBroadcastDeleteFansOutToEveryPeer(t *testing.T) {
 	}
 }
 
-// TestBroadcastDeleteDedupsRepeatedAddrs: a duplicated peer list must not
-// double-broadcast to the same address.
 func TestBroadcastDeleteDedupsRepeatedAddrs(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -70,9 +63,6 @@ func TestBroadcastDeleteDedupsRepeatedAddrs(t *testing.T) {
 	}
 }
 
-// TestBroadcastDeleteSwallowsFailures: a broadcast never fails the local
-// delete it follows, so an unreachable or erroring peer must not panic or
-// block the caller past the fan-out.
 func TestBroadcastDeleteSwallowsFailures(t *testing.T) {
 	fail := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -86,14 +76,12 @@ func TestBroadcastDeleteSwallowsFailures(t *testing.T) {
 	defer ok.Close()
 
 	b := &Broadcaster{Peers: func() []string { return []string{fail.URL, ok.URL, "127.0.0.1:1"} }}
-	b.Delete(t.Context(), testID) // must return without panicking regardless of peer outcomes
+	b.Delete(t.Context(), testID)
 	if got := reached.Load(); got != 1 {
 		t.Errorf("healthy peer hit %d times, want 1 (fan-out continues past a failure)", got)
 	}
 }
 
-// TestBroadcastDeleteNoPeersNoOp: a single-node deployment must not dial
-// anything.
 func TestBroadcastDeleteNoPeersNoOp(t *testing.T) {
 	b := &Broadcaster{Peers: func() []string { return nil }}
 	b.Delete(t.Context(), testID)

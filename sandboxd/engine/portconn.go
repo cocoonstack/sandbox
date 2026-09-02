@@ -13,30 +13,26 @@ import (
 )
 
 const (
-	// portWriteChunk keeps each data frame (base64 ×4/3 + envelope) well
-	// under silkd's 8MiB frame cap, so a large HTTP body is split across
-	// frames.
+	// portWriteChunk keeps each data frame well under silkd's 8MiB frame cap.
 	portWriteChunk = 1 << 20
 
-	// portReadBuf fits silkd's data frames (32KiB chunks, base64-expanded)
-	// in one buffered read.
+	// portReadBuf fits silkd's data frames in one buffered read.
 	portReadBuf = 64 << 10
 )
 
 var portDataHead = []byte(`{"type":"data","data":"`)
 
-// guestPortConn adapts silkd's newline-JSON data-frame port_forward channel to
-// a plain net.Conn (base64 payloads), the server-side twin of the SDK's
-// PortConn, so a reverse proxy can splice HTTP straight through it.
+// guestPortConn adapts silkd's port_forward data frames to a plain net.Conn.
 type guestPortConn struct {
 	net.Conn
 	r       *bufio.Reader
 	wbuf    []byte
+	rbuf    []byte
 	pending []byte
 }
 
-func newGuestPortConn(conn net.Conn) *guestPortConn {
-	return &guestPortConn{Conn: conn, r: bufio.NewReaderSize(conn, portReadBuf)}
+func newGuestPortConn(conn net.Conn, r *bufio.Reader) *guestPortConn {
+	return &guestPortConn{Conn: conn, r: r}
 }
 
 func (g *guestPortConn) Read(p []byte) (int, error) {
@@ -45,7 +41,7 @@ func (g *guestPortConn) Read(p []byte) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		if data, ok := fastPortData(line); ok {
+		if data, ok := g.fastPortData(line); ok {
 			g.pending = data
 			continue
 		}
@@ -74,8 +70,7 @@ func (g *guestPortConn) Write(p []byte) (int, error) {
 	written := 0
 	for len(p) > 0 {
 		n := min(len(p), portWriteChunk)
-		// The hot relay path renders into one reused buffer instead of
-		// allocating two frame-sized slices per chunk.
+		// the hot relay path reuses one buffer instead of allocating per chunk.
 		g.wbuf = wire.AppendBulkRequest(g.wbuf, "data", p[:n])
 		if _, err := g.Conn.Write(g.wbuf); err != nil {
 			return written, err
@@ -86,10 +81,8 @@ func (g *guestPortConn) Write(p []byte) (int, error) {
 	return written, nil
 }
 
-// fastPortData slices the canonical data frame's base64 out without a JSON
-// parse; the SDK's fastBulk sets the contract: only the exact canonical
-// shape takes the slice, anything else falls back to the full parse.
-func fastPortData(line []byte) ([]byte, bool) {
+// fastPortData slices the canonical data frame's base64 out without a JSON parse.
+func (g *guestPortConn) fastPortData(line []byte) ([]byte, bool) {
 	after, ok := bytes.CutPrefix(line, portDataHead)
 	if !ok {
 		return nil, false
@@ -98,10 +91,14 @@ func fastPortData(line []byte) ([]byte, bool) {
 	if !ok || !bytes.Equal(rest, []byte("}\n")) {
 		return nil, false
 	}
-	out := make([]byte, base64.StdEncoding.DecodedLen(len(b64)))
-	n, err := base64.StdEncoding.Decode(out, b64)
+	if size := base64.StdEncoding.DecodedLen(len(b64)); cap(g.rbuf) < size {
+		g.rbuf = make([]byte, size)
+	} else {
+		g.rbuf = g.rbuf[:size]
+	}
+	n, err := base64.StdEncoding.Decode(g.rbuf, b64)
 	if err != nil || base64.StdEncoding.EncodedLen(n) != len(b64) {
 		return nil, false
 	}
-	return out[:n], true
+	return g.rbuf[:n], true
 }

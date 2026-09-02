@@ -73,9 +73,6 @@ func benchCA(b *testing.B) *CA {
 	return ca
 }
 
-// benchFront serves an HTTPS echo behind the proxy; intercept toggles the rule,
-// and guest roots match: the cluster root when intercepted, the origin's own
-// cert when spliced.
 func benchFront(b *testing.B, intercept bool) (proxyAddr string, roots *x509.CertPool) {
 	b.Helper()
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

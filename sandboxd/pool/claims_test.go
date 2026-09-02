@@ -34,7 +34,7 @@ func TestStoreRoundTrip(t *testing.T) {
 func TestClaimStoreSnapshotDetachesVolumes(t *testing.T) {
 	s := newClaimStore(t.TempDir())
 	sb := &types.Sandbox{ID: "sb_a", Volumes: []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}}
-	snap := s.snapshot(map[string]*types.Sandbox{sb.ID: sb})
+	snap := s.set(sb)
 	sb.Volumes[0].Mount = "/mutated"
 	if err := s.commit(snap); err != nil {
 		t.Fatalf("commit: %v", err)
@@ -73,20 +73,14 @@ func TestStoreLoadCorruptFile(t *testing.T) {
 	}
 }
 
-// TestClaimStoreCommitCoalesces asserts an older snapshot never overwrites a
-// newer one already on disk — the guard that lets the write leave the manager
-// mutex without losing the latest state.
 func TestClaimStoreCommitCoalesces(t *testing.T) {
 	s := newClaimStore(t.TempDir())
-	one := map[string]*types.Sandbox{"sb_a": {ID: "sb_a"}}
-	two := map[string]*types.Sandbox{"sb_a": {ID: "sb_a"}, "sb_b": {ID: "sb_b"}}
-
-	older := s.snapshot(one) // seq 1
-	newer := s.snapshot(two) // seq 2
+	older := s.set(&types.Sandbox{ID: "sb_a"})
+	newer := s.set(&types.Sandbox{ID: "sb_b"})
 	if err := s.commit(newer); err != nil {
 		t.Fatalf("commit newer: %v", err)
 	}
-	if err := s.commit(older); err != nil { // must be a no-op, not an overwrite
+	if err := s.commit(older); err != nil {
 		t.Fatalf("commit older: %v", err)
 	}
 	if got, err := s.load(); err != nil || len(got) != 2 {
@@ -94,14 +88,61 @@ func TestClaimStoreCommitCoalesces(t *testing.T) {
 	}
 }
 
-// TestClaimStoreConcurrentCommits exercises the writer off the manager mutex:
-// many snapshot+commit pairs race, and the file must stay parseable (-race).
+func TestClaimStoreIncrementalProjection(t *testing.T) {
+	s := newClaimStore(t.TempDir())
+	a := &types.Sandbox{ID: "sb_a", VMName: "sbx-1", Key: testKey}
+	b := &types.Sandbox{ID: "sb_b", VMName: "sbx-2", Key: testKey}
+	if err := s.commit(s.set(a, b)); err != nil {
+		t.Fatalf("commit set: %v", err)
+	}
+	a.HibernateSnap = "snap-a"
+	if err := s.commit(s.set(a)); err != nil {
+		t.Fatalf("commit update: %v", err)
+	}
+	got, err := s.load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(got) != 2 || got["sb_a"].HibernateSnap != "snap-a" || got["sb_b"].VMName != "sbx-2" {
+		t.Fatalf("after incremental update: %+v", got)
+	}
+	if delErr := s.commit(s.del("sb_a")); delErr != nil {
+		t.Fatalf("commit del: %v", delErr)
+	}
+	if got, err = s.load(); err != nil || len(got) != 1 || got["sb_b"] == nil {
+		t.Fatalf("after del: %+v, %v", got, err)
+	}
+	if resetErr := s.commit(s.reset(map[string]*types.Sandbox{"sb_c": {ID: "sb_c", Key: testKey}})); resetErr != nil {
+		t.Fatalf("commit reset: %v", resetErr)
+	}
+	if got, err = s.load(); err != nil || len(got) != 1 || got["sb_c"] == nil {
+		t.Fatalf("after reset: %+v, %v", got, err)
+	}
+}
+
+func TestClaimStoreMarkRepersists(t *testing.T) {
+	s := newClaimStore(t.TempDir())
+	s.set(&types.Sandbox{ID: "sb_a", Key: testKey})
+	if s.synced() {
+		t.Fatal("synced with an unwritten change")
+	}
+	if err := s.commit(s.mark()); err != nil {
+		t.Fatalf("commit mark: %v", err)
+	}
+	if !s.synced() {
+		t.Error("not synced after flushing the mark")
+	}
+	if got, err := s.load(); err != nil || len(got) != 1 {
+		t.Errorf("after mark flush: %+v, %v", got, err)
+	}
+}
+
 func TestClaimStoreConcurrentCommits(t *testing.T) {
 	s := newClaimStore(t.TempDir())
-	claims := map[string]*types.Sandbox{"sb_a": {ID: "sb_a"}}
+	sb := &types.Sandbox{ID: "sb_a"}
 	var wg sync.WaitGroup
 	for range 50 {
-		wg.Go(func() { _ = s.commit(s.snapshot(claims)) })
+		wg.Go(func() { _ = s.commit(s.set(sb)) })
 	}
 	wg.Wait()
 	if got, err := s.load(); err != nil || len(got) != 1 {

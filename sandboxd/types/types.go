@@ -31,8 +31,7 @@ const (
 
 	MaxClaimVolumes = 8
 
-	// Also the guest `mount -o` option literals (engine.MountVolume): renaming
-	// the API vocabulary would silently change the mount flags.
+	// Also the guest `mount -o` option literals: renaming them changes the mount flags.
 	VolumeModeRO = "ro"
 	VolumeModeRW = "rw"
 
@@ -42,9 +41,7 @@ const (
 )
 
 var (
-	// NameRe pins caller-chosen names (templates, checkpoints, tenants),
-	// which ride in journal fields and metric labels: one conservative
-	// charset, also accepted by cocoon's snapshot naming.
+	// NameRe pins caller-chosen names to one conservative charset cocoon also accepts.
 	NameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`)
 	// VolumeNameRe is the virtio disk serial grammar shared with cocoon.
 	VolumeNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,19}$`)
@@ -65,8 +62,7 @@ var (
 // NetShape selects whether the Cloud Hypervisor guest has a NIC.
 type NetShape string
 
-// RestoreMode selects cocoon's clone memory-restore strategy; empty leaves
-// cocoon's eager-copy default.
+// RestoreMode selects cocoon's clone memory-restore strategy; empty is cocoon's default.
 type RestoreMode string
 
 // Validate accepts the empty default plus cocoon's known restore modes.
@@ -82,8 +78,7 @@ func (m RestoreMode) Validate() error {
 // Size is a T-shirt resource tier.
 type Size string
 
-// SizeSpec is the concrete allocation behind a tier. Memory is in cocoon flag
-// units; MemoryBytes is the same figure for callers that report bytes.
+// SizeSpec is the concrete allocation behind a tier; Memory is in cocoon flag units.
 type SizeSpec struct {
 	CPU         int
 	Memory      string
@@ -96,33 +91,26 @@ func (s Size) Spec() (SizeSpec, bool) {
 	return spec, ok
 }
 
-// PoolKey identifies one warm pool. Every New() parameter that changes VM
-// construction is an axis here.
+// PoolKey identifies one warm pool.
 type PoolKey struct {
 	Template string   `json:"template"`
 	Net      NetShape `json:"net"`
 	Size     Size     `json:"size"`
 }
 
-// Capturable reports whether state capture (fork, checkpoint, promote) is
-// allowed: the egress lane refuses it — a resumed capture opens an
-// unlocked-NIC window before the tap lock can reapply.
+// Capturable is false on the egress lane: a resumed capture opens an unlocked-NIC window.
 func (k PoolKey) Capturable() bool {
 	return k.Net != NetEgress
 }
 
-// Defaulted fills the wire defaults: the hardened no-NIC lane and the smallest
-// tier — the one home for both the claim and pool-spec paths.
+// Defaulted fills the wire defaults: the no-NIC lane and the smallest tier.
 func (k PoolKey) Defaulted() PoolKey {
 	k.Net = cmp.Or(k.Net, NetNone)
 	k.Size = cmp.Or(k.Size, SizeSmall)
 	return k
 }
 
-// Hash is a stable digest used in VM, snapshot, and golden-dir naming.
-// 128 bits, not a short tag: Promote keys goldens by caller-chosen template
-// names, so a targeted collision with a configured pool's hash must stay a
-// second-preimage problem, never a brute-forceable one.
+// Hash is a stable 128-bit digest for naming; a shorter tag would be brute-forceable.
 func (k PoolKey) Hash() string {
 	sum := sha256.Sum256([]byte(k.Template + "|" + string(k.Net) + "|" + string(k.Size)))
 	return hex.EncodeToString(sum[:16])
@@ -144,13 +132,6 @@ func (k PoolKey) Validate() error {
 	return nil
 }
 
-// TemplateGossipHash scopes a key hash to its owner for the gossip wire, so
-// foreign templates never match an owner query; the tenant itself never travels.
-func TemplateGossipHash(keyHash, tenant string) string {
-	sum := sha256.Sum256([]byte(keyHash + "|" + tenant))
-	return hex.EncodeToString(sum[:16])
-}
-
 // Sandbox is the node-local record of one pooled or claimed VM.
 type Sandbox struct {
 	ID     string  `json:"id"`
@@ -160,52 +141,36 @@ type Sandbox struct {
 	Token    string    `json:"token,omitempty"`
 	Deadline time.Time `json:"deadline,omitzero"`
 
-	// Tenant names the owning tenant; empty means the operator (root)
-	// claimed it. Fork children inherit it from the parent.
+	// Tenant names the owning tenant; empty means the operator claimed it.
 	Tenant string `json:"tenant,omitempty"`
 
-	// ClaimRef is the opaque caller reference recorded at claim time (the
-	// aggregated apiserver passes the k8s "<namespace>/<name>"), carried into
-	// the operator index so a listed sandbox maps back to its claim name.
-	// Empty for warm-pool, fork, and checkpoint-branch claims.
+	// ClaimRef is the opaque caller reference recorded at claim time; empty for pool claims.
 	ClaimRef string `json:"claim_ref,omitempty"`
 	// Volumes records the volumes successfully applied to this claim.
 	Volumes []Volume `json:"volumes,omitempty"`
 
 	VsockSocket string `json:"vsock_socket,omitempty"`
-	// TAP is the egress-lane NIC's host tap, captured at provision; empty on
-	// the none lane and on claims adopted from pre-tap journals.
+	// TAP is the egress-lane NIC's host tap; empty on the none lane.
 	TAP string `json:"tap,omitempty"`
-	// HibernateSnap names the memory snapshot while the VM is hibernated;
-	// empty means running.
+	// HibernateSnap names the memory snapshot while the VM is hibernated; empty means running.
 	HibernateSnap string `json:"hibernate_snap,omitempty"`
-	// PendingSnap is the journaled intent of a hibernate in flight: written
-	// before the engine stops the VM, cleared by the commit. Reconcile
-	// trusts it to adopt a hibernate whose commit never landed.
+	// PendingSnap is the journaled intent of a hibernate in flight, cleared by its commit.
 	PendingSnap string `json:"pending_snap,omitempty"`
-	// ArchiveCk names the store checkpoint holding this sandbox's state while
-	// archived; empty means live or hibernated. While set, VMName/VsockSocket/
-	// HibernateSnap are empty (no local VM) and Deadline is the retention deadline.
+	// ArchiveCk names the store checkpoint holding an archived sandbox; empty means local.
 	ArchiveCk string `json:"archive_ck,omitempty"`
 
-	// FromCheckpoint names the checkpoint this sandbox branched from, for
-	// lineage; empty for pool and template claims.
+	// FromCheckpoint names the checkpoint this sandbox branched from; empty otherwise.
 	FromCheckpoint string `json:"from_checkpoint,omitempty"`
-	// TemplateDigest identifies the promoted-template export this sandbox was
-	// initially cloned from; empty for every other provisioning source.
+	// TemplateDigest identifies the promoted-template export this sandbox was cloned from.
 	TemplateDigest string `json:"template_digest,omitempty"`
 
-	// StaleSnap names a consumed wake snapshot a lagging journal still
-	// references; dropped once a later write lands. Guarded by Transition.
+	// StaleSnap names a consumed wake snapshot a lagging journal references; guarded by Transition.
 	StaleSnap string `json:"-"`
 
-	// lastActivity is unix-nanos of the last data-plane connection, for the
-	// idle policy; lock-free, stamped on the relay hot path. Runtime-only, a
-	// restart resets it to adoption time.
+	// lastActivity is unix-nanos of the last data-plane connection, stamped lock-free.
 	lastActivity atomic.Int64
 
-	// Transition serializes hibernate/wake so concurrent wakes collapse onto
-	// one restore. Lock it before (never under) the manager mutex.
+	// Transition serializes hibernate/wake; lock it before (never under) the manager mutex.
 	Transition sync.Mutex `json:"-"`
 }
 
@@ -218,8 +183,7 @@ func (s *Sandbox) TouchAt(t time.Time) { s.lastActivity.Store(t.UnixNano()) }
 // LastSeen returns the last data-plane activity time.
 func (s *Sandbox) LastSeen() time.Time { return time.Unix(0, s.lastActivity.Load()) }
 
-// Checkpoint is the record of a captured sandbox state: claims cloned from
-// it branch off the exact captured moment. Node-local, like a template.
+// Checkpoint is the record of a captured sandbox state; node-local, like a template.
 type Checkpoint struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name,omitempty"`
@@ -228,14 +192,11 @@ type Checkpoint struct {
 	Tenant    string    `json:"tenant,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 
-	// Archive marks a lifecycle-internal wake image: hidden from listings
-	// and undeletable on every node sharing the store, not just the owner.
+	// Archive marks a lifecycle-internal wake image: hidden from listings and undeletable.
 	Archive bool `json:"archive,omitempty"`
 }
 
-// VMRecord is the subset of cocoon's VM records the control plane reads —
-// the same shape backs `vm list --format json` rows and the lifecycle
-// commands' `--output json` result.
+// VMRecord is the subset of cocoon's VM records the control plane reads.
 type VMRecord struct {
 	State          string        `json:"state"`
 	PID            int           `json:"pid"`
@@ -262,20 +223,23 @@ type VMConfig struct {
 	Name string `json:"name"`
 }
 
-// Volume is one requested or applied dataset mount. Mount is empty before
-// request validation and on an attach-only entry, whose device the caller
-// mounts itself. Mode is normalized to "" (read-only) or VolumeModeRW.
+// Volume is one dataset mount; Mode is normalized to "" (read-only) or VolumeModeRW.
 type Volume struct {
 	Name  string `json:"name"`
 	Mount string `json:"mount,omitempty"`
 	Mode  string `json:"mode,omitempty"`
-	// AttachOnly carries the claim's flag into the pool's own validation pass;
-	// past it the empty Mount is the signal, so it is never stored or sent.
+	// AttachOnly carries the claim's flag into validation; past it the empty Mount is the signal.
 	AttachOnly bool `json:"-"`
 }
 
 // RW reports whether the entry asks for write access.
 func (v Volume) RW() bool { return v.Mode == VolumeModeRW }
+
+// TemplateGossipHash scopes a key hash to its owner so the tenant never travels the wire.
+func TemplateGossipHash(keyHash, tenant string) string {
+	sum := sha256.Sum256([]byte(keyHash + "|" + tenant))
+	return hex.EncodeToString(sum[:16])
+}
 
 // ValidVolumeName reports whether name is a legal cocoon data-disk serial.
 func ValidVolumeName(name string) bool {
@@ -315,16 +279,12 @@ func VolumeRWNames(volumes []Volume) []string {
 	return names
 }
 
-// VolumesAttachOnly reports whether request validation marked the set as the
-// caller's to mount.
+// VolumesAttachOnly reports whether the caller mounts the devices itself.
 func VolumesAttachOnly(volumes []Volume) bool {
 	return slices.ContainsFunc(volumes, func(v Volume) bool { return v.AttachOnly })
 }
 
-// ValidateVolumes validates a request and returns detached entries with every
-// default mount filled and every mode normalized. attachOnly instead leaves
-// every mount empty for the caller to mount itself, and rejects an entry that
-// carries one. The input is not modified.
+// ValidateVolumes returns detached entries with defaults filled and modes normalized.
 func ValidateVolumes(volumes []Volume, attachOnly bool) ([]Volume, error) {
 	if len(volumes) > MaxClaimVolumes {
 		return nil, fmt.Errorf("volumes must contain at most %d entries, got %d", MaxClaimVolumes, len(volumes))

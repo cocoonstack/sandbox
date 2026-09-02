@@ -15,13 +15,10 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
-// retryAfterSeconds hints when to retry a 503. A heal slot frees when a
-// transfer finishes, which can be seconds or minutes, so this bounds a waiting
-// client to a few probes a minute rather than inviting a 1-second hammer.
+// retryAfterSeconds bounds a waiting client to a few probes a minute.
 const retryAfterSeconds = "10"
 
-// tenantKey carries the resolved tenant scope ("" = root) on the request
-// context, from requireToken to the handlers.
+// tenantKey carries the resolved tenant scope ("" = root) on the request context.
 type tenantKey struct{}
 
 func withTenant(ctx context.Context, tenant string) context.Context {
@@ -57,9 +54,7 @@ func decodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	return v, true
 }
 
-// decodeBodyStrict is decodeBody for operator bodies, where a mistyped or
-// repeated key must fail instead of silently no-opping; client-facing bodies
-// stay lenient (newer SDK fields must not break older nodes).
+// decodeBodyStrict is decodeBody for operator bodies, where a mistyped key must fail.
 func decodeBodyStrict[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var v T
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
@@ -74,14 +69,11 @@ func decodeBodyStrict[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	return v, true
 }
 
-// writePoolErr answers a pool-sentinel error per poolErrHTTP, reporting
-// whether it handled err; nil and non-sentinel errors stay the caller's.
+// writePoolErr answers a pool-sentinel error, reporting whether it handled err.
 func writePoolErr(w http.ResponseWriter, err error) bool {
 	for _, m := range poolErrHTTP {
 		if errors.Is(err, m.err) {
-			// 503 here means the node's own resources are momentarily exhausted
-			// (e.g. the concurrent-heal budget), not a caller error — Retry-After
-			// tells the client this is worth retrying, not failing the request.
+			// a 503 is node exhaustion, not a caller error, so the client should retry
 			if m.code == http.StatusServiceUnavailable {
 				w.Header().Set("Retry-After", retryAfterSeconds)
 			}
@@ -103,8 +95,7 @@ func writeResult(w http.ResponseWriter, r *http.Request, op, id, failMsg string,
 	}
 }
 
-// writeRedirect answers with the redirect shape of the claim protocol when
-// addrs is non-empty, reporting whether it did.
+// writeRedirect answers with the claim protocol's redirect shape, reporting whether it did.
 func writeRedirect(w http.ResponseWriter, addrs []string) bool {
 	if len(addrs) == 0 {
 		return false

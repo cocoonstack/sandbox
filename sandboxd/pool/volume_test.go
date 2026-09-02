@@ -97,7 +97,6 @@ func TestClaimProvisionBringsMixedVolumesUpConcurrently(t *testing.T) {
 		{Name: "dataset", Mount: "/volumes/dataset"},
 		{Name: "cache", Mount: "/cache", Mode: types.VolumeModeRW},
 	}
-	// Every attach must be in flight at once: a sequential apply blocks here.
 	var attaches sync.WaitGroup
 	attaches.Add(len(requested))
 	eng.attachRendezvous = &attaches
@@ -324,8 +323,6 @@ func TestClaimProvisionPromotedAppliesVolumesFromTemplate(t *testing.T) {
 	}
 }
 
-// TestPooledKeyOutranksPromotedTemplate: promote, pool, then restart must not
-// arm RequirePromoted against every volume claim for the key.
 func TestPooledKeyOutranksPromotedTemplate(t *testing.T) {
 	path := writeVolumeImage(t, "data.img", "data")
 	catalog := []config.VolumeSpec{{Name: "data", Path: path}}
@@ -520,8 +517,6 @@ func TestVolumeClaimUsageAndScopedSummaries(t *testing.T) {
 	t.Fatal("acme claim usage event not found")
 }
 
-// TestClaimProvisionRefusesUnavailableVolumesIndistinguishably: unknown,
-// forbidden, and vanished refuse alike; any difference enumerates the catalog/ACLs.
 func TestClaimProvisionRefusesUnavailableVolumesIndistinguishably(t *testing.T) {
 	present := writeVolumeImage(t, "present.img", "present")
 	vanished := filepath.Join(t.TempDir(), "vanished.img")
@@ -535,7 +530,7 @@ func TestClaimProvisionRefusesUnavailableVolumesIndistinguishably(t *testing.T) 
 	for _, principal := range []string{"", "beta"} {
 		for _, name := range []string{"vanished", "unknown", "private"} {
 			if principal == "" && name == "private" {
-				continue // root is on every access list, so it has no forbidden case
+				continue
 			}
 			_, err := m.ClaimProvision(t.Context(), testKey, 0, principal, "", []types.Volume{{Name: name}})
 			if !errors.Is(err, ErrVolumeUnavailable) {
@@ -557,8 +552,6 @@ func TestClaimProvisionRefusesUnavailableVolumesIndistinguishably(t *testing.T) 
 	}
 }
 
-// assertVolumeBringUp pins each volume's own marker→attach→mount order and the
-// completeness of the set; cross-volume order is free.
 func assertVolumeBringUp(t *testing.T, eng *fakeEngine, applied []types.Volume) {
 	t.Helper()
 	ops := eng.volumeOpsLog()

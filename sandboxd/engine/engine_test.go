@@ -20,8 +20,7 @@ const (
 
 func TestDialSilkdConsumesOnlyHandshake(t *testing.T) {
 	path := sockPath(t)
-	// Sentinel rides in the same write as the handshake: if DialSilkd
-	// over-reads past the newline, the first Read below loses it.
+
 	listenMuxer(t, path, "OK 2048\nX")
 
 	conn, err := New("cocoon", nil, nil, false, "").DialSilkd(t.Context(), path)
@@ -112,7 +111,7 @@ func TestDialGuestPortCtxCancel(t *testing.T) {
 		if _, err := io.WriteString(conn, "OK 2048\n"); err != nil {
 			return
 		}
-		_, _ = r.ReadString('\n') // consume port_forward, never answer
+		_, _ = r.ReadString('\n')
 		<-hold
 	}()
 
@@ -132,10 +131,6 @@ func TestProbeTimeout(t *testing.T) {
 	}
 }
 
-// listenMuxer fakes the hybrid-vsock muxer on a UDS: per connection it
-// consumes the CONNECT line, replies with handshake, then answers the first
-// frame line of connection i with frames[i] (last frame repeats; no frames
-// means handshake only).
 func listenMuxer(t *testing.T, path, handshake string, frames ...string) {
 	t.Helper()
 	ln, err := net.Listen("unix", path)
@@ -173,8 +168,6 @@ func serveConn(conn net.Conn, handshake, frame string) {
 	_, _ = io.WriteString(conn, frame)
 }
 
-// sockPath returns a socket path in a fresh short-prefix temp dir —
-// t.TempDir() paths can exceed darwin's 104-byte sun_path limit.
 func sockPath(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "sbx")

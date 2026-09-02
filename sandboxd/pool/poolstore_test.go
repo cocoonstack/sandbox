@@ -22,7 +22,7 @@ func TestPersistedPoolsSurviveRestart(t *testing.T) {
 	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: apiKey, Warm: 3}}); err != nil {
 		t.Fatalf("SetPools: %v", err)
 	}
-	// Restart on the same data dir, still config-seeded: must rebuild from pools.json.
+
 	m2 := newTestManagerAt(t, newFakeEngine(), dir, config.PoolSpec{PoolKey: seedKey, Warm: 1})
 	m2.mu.Lock()
 	_, hasSeed := m2.pools[seedKey]
@@ -67,7 +67,7 @@ func TestConcurrentSetPoolsPersistLatest(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	// The last-applied set owns memory; the persisted file must match it.
+
 	m.mu.Lock()
 	want := m.pools[apiKey].floor
 	m.mu.Unlock()
@@ -92,7 +92,7 @@ func TestRestoredEgressPoolNeedsAttachment(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "pools.json"), raw, 0o600); err != nil {
 		t.Fatalf("write pools.json: %v", err)
 	}
-	// A node with no bridge/network must refuse to start a restored egress pool.
+
 	if _, err := NewManager(t.Context(), &config.Config{DataDir: dir}, newFakeEngine(), testSecrets(t)); err == nil {
 		t.Error("NewManager accepted a restored egress-lane pool without an attachment")
 	}

@@ -22,17 +22,13 @@ const (
 	maxHealOwners             = 8 // a heal wants the widest source list a few full/corrupt owners can't hide behind
 	redirectCacheTTL          = 5 * time.Second
 
-	// probeGrace bounds how long a fan-out waits for more owners once it has
-	// its first: a checkpoint usually lives on one node, and without this the
-	// collector would wait out every missing peer's timeout to return it.
+	// probeGrace bounds how long a fan-out waits for more owners once it has its first.
 	probeGrace = 150 * time.Millisecond
 
 	// ProbeHeader carries the base64 probe MAC when a ProbeKey is configured.
 	ProbeHeader = "X-Cocoon-Probe"
 
-	// probeBucketSeconds is the coarse time step the probe MAC is bound to;
-	// VerifyProbeMAC accepts the current bucket plus one on either side, so
-	// clock skew up to a bucket is tolerated without an unbounded replay window.
+	// probeBucketSeconds is the coarse time step the probe MAC is bound to.
 	probeBucketSeconds = 30
 )
 
@@ -42,18 +38,13 @@ type redirectCacheEntry struct {
 	expires time.Time
 }
 
-// HTTPProber finds which peers hold a checkpoint by probing them directly:
-// ownership is stable but unbounded, so it is queried on the rare cross-node
-// miss instead of gossiped every second by every node.
+// HTTPProber finds which peers hold a checkpoint by probing them on a cross-node miss.
 type HTTPProber struct {
-	// A nil Client uses a default with a 2-second timeout: a probe must never
-	// hang on a wedged peer.
+	// A nil Client uses a default 2-second timeout: a probe must never hang on a wedged peer.
 	Client *http.Client
 	Peers  func() []string
 
-	// ProbeKey signs and verifies HEAD probes (see DeriveProbeKey); empty
-	// means an unencrypted mesh, which keeps the older capability-only
-	// posture rather than losing the probe outright.
+	// ProbeKey signs and verifies HEAD probes; empty means an unencrypted mesh.
 	ProbeKey []byte
 
 	redirectFlight singleflight.Group
@@ -61,19 +52,13 @@ type HTTPProber struct {
 
 	cacheMu sync.Mutex
 	cache   map[string]redirectCacheEntry
-	// epoch is bumped by every Forget under cacheMu: a fan-out that started
-	// before a delete must not write its now-suspect result back into the
-	// cache, so cachePut only commits when the epoch it read still holds.
+	// epoch is bumped by every Forget, so a fan-out started before a delete cannot cache its result.
 	epoch uint64
 
 	// cacheTTL overrides redirectCacheTTL; a test seam, 5 seconds is slow to wait out.
 	cacheTTL time.Duration
 }
 
-// Owners fans a HEAD out to every peer and returns up to maxRedirectOwners
-// addresses that answered 200. Cache staleness fails safely: a redirect to a
-// peer that just deleted the record 404s, and the client's no_redirect
-// fallback heals from the origin.
 func (p *HTTPProber) Owners(ctx context.Context, id string) []string {
 	owners, start, hit := p.cacheLookup(id)
 	if hit {
@@ -87,21 +72,15 @@ func (p *HTTPProber) Owners(ctx context.Context, id string) []string {
 	return v.([]string)
 }
 
-// HealOwners is Owners' wide twin: a heal wants the largest source list, so
-// a few full or corrupt owners cannot hide a usable one. Uncached — a heal's
-// source list should reflect the fleet now, not a redirect-tuned snapshot.
+// HealOwners is Owners' wide twin: a heal wants the largest source list, uncached.
 func (p *HTTPProber) HealOwners(ctx context.Context, id string) []string {
 	v, _, _ := p.healFlight.Do(id, func() (any, error) {
-		// No grace: a heal wants every owner it can find, so it must not stop
-		// early on a fast one and hide a slower valid source behind it.
+		// no grace: a heal must not stop early on a fast owner and hide a slower valid source.
 		return p.fanOut(ctx, id, maxHealOwners, 0), nil
 	})
 	return v.([]string)
 }
 
-// Forget evicts any cached Owners result for id -- called after any delete
-// (original or forwarded broadcast) touches id here, since a stale positive
-// would redirect claims to a node that no longer holds the record.
 func (p *HTTPProber) Forget(id string) {
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
@@ -109,10 +88,7 @@ func (p *HTTPProber) Forget(id string) {
 	delete(p.cache, id)
 }
 
-// fanOut probes every peer concurrently, canceling stragglers once maxOwners
-// have answered 200. The context is detached and rebounded internally:
-// singleflight shares one fan-out across callers whose own contexts cancel
-// independently — one client disconnecting must not abort another's probe.
+// fanOut probes every peer concurrently, canceling stragglers once maxOwners have answered 200.
 func (p *HTTPProber) fanOut(ctx context.Context, id string, maxOwners int, grace time.Duration) []string {
 	addrs := dedupAddrs(p.Peers())
 	if len(addrs) == 0 {
@@ -136,10 +112,7 @@ func (p *HTTPProber) fanOut(ctx context.Context, id string, maxOwners int, grace
 	}
 	go func() { wg.Wait(); close(wins) }()
 
-	// grace opens only after the first win: a genuine miss must hear from
-	// every peer before concluding nobody holds the record. graceCh stays nil
-	// when grace is 0 (a heal wants the exhaustive list), so the select then
-	// runs to the cap or until every peer has answered.
+	// grace opens only after the first win: a genuine miss must hear from every peer.
 	var owners []string
 	var graceCh <-chan time.Time
 	for {
@@ -163,9 +136,7 @@ func (p *HTTPProber) fanOut(ctx context.Context, id string, maxOwners int, grace
 	}
 }
 
-// cacheLookup returns id's owners if a still-live positive entry exists, and
-// always the current epoch: the caller carries it into the fan-out so cachePut
-// can tell whether a Forget landed while the probe was in flight.
+// cacheLookup returns id's live owners and the current epoch the caller carries into the fan-out.
 func (p *HTTPProber) cacheLookup(id string) (owners []string, epoch uint64, hit bool) {
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
@@ -176,10 +147,7 @@ func (p *HTTPProber) cacheLookup(id string) (owners []string, epoch uint64, hit 
 	return entry.owners, p.epoch, true
 }
 
-// cachePut records a positive result, unless a Forget bumped the epoch since
-// the fan-out began — that delete may have removed the very record this
-// result names. A miss is never cached: a checkpoint appearing moments later
-// must not hide behind a stale negative for the TTL.
+// cachePut records a positive result unless a Forget bumped the epoch since the fan-out began.
 func (p *HTTPProber) cachePut(id string, owners []string, start uint64) {
 	if len(owners) == 0 {
 		return
@@ -197,24 +165,19 @@ func (p *HTTPProber) cachePut(id string, owners []string, start uint64) {
 	p.cache[id] = redirectCacheEntry{owners: owners, expires: now.Add(cmp.Or(p.cacheTTL, redirectCacheTTL))}
 }
 
-// DeriveProbeKey derives the probe-MAC key from the mesh's cluster_key via
-// one HMAC step — domain separation from the gossip encryption. Call only
-// with a non-empty clusterKey.
+// DeriveProbeKey derives the probe-MAC key from the mesh cluster_key, separated from gossip.
 func DeriveProbeKey(clusterKey []byte) []byte {
 	mac := hmac.New(sha256.New, clusterKey)
 	mac.Write([]byte("cocoon-checkpoint-probe-v1"))
 	return mac.Sum(nil)
 }
 
-// SignProbe returns id's current probe MAC keyed by key — the ProbeHeader
-// value; exported for callers and tests that build a valid probe request.
+// SignProbe returns id's current probe MAC keyed by key — the ProbeHeader value.
 func SignProbe(key []byte, id string) string {
 	return probeMAC(key, id, currentBucket())
 }
 
-// VerifyProbeMAC checks sig against id's current time bucket and the one on
-// either side, tolerating clock skew up to one bucket without an unbounded
-// replay window.
+// VerifyProbeMAC checks sig against id's current time bucket and the one on either side.
 func VerifyProbeMAC(key []byte, id, sig string) bool {
 	if sig == "" {
 		return false
@@ -242,8 +205,7 @@ func currentBucket() int64 {
 	return time.Now().Unix() / probeBucketSeconds
 }
 
-// dedupAddrs drops repeated addresses so a stale or duplicated peer list
-// never probes the same node twice.
+// dedupAddrs drops repeated addresses so a stale peer list never probes the same node twice.
 func dedupAddrs(addrs []string) []string {
 	seen := make(map[string]struct{}, len(addrs))
 	out := make([]string, 0, len(addrs))
@@ -257,9 +219,7 @@ func dedupAddrs(addrs []string) []string {
 	return out
 }
 
-// probeOwner sends a probe MAC when probeKey is set (see DeriveProbeKey);
-// an unencrypted mesh (empty probeKey) falls back to the older
-// capability-only posture -- the id is unguessable, but nothing else guards it.
+// probeOwner sends a probe MAC when probeKey is set; an empty key falls back to capability-only.
 func probeOwner(ctx context.Context, client *http.Client, probeKey []byte, addr, id string) bool {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()

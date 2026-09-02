@@ -15,19 +15,14 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// templateRecord is a template's meta.json: the id carries the key hash
-// (tp_<hash>), which is all resolution needs — claims re-derive the hash
-// from the requested key, never the reverse. Tenant attributes the promote
-// and scopes deletion; empty means the operator (root).
+// templateRecord is a template's meta.json; an empty Tenant means the operator (root).
 type templateRecord struct {
 	ID        string    `json:"id"`
 	Tenant    string    `json:"tenant,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Promote publishes a claimed sandbox as a template under (template, parent
-// net, parent size); later claims for that key clone from it. Re-promoting the
-// same name replaces it, and the caller owns its lifecycle (DeleteTemplate).
+// Promote publishes a claimed sandbox as a template under (template, parent net, parent size).
 func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, tenant string) (types.PoolKey, string, error) {
 	sb, ok := m.resolve(id, cred)
 	if !ok {
@@ -44,17 +39,14 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 	}
 	key := types.PoolKey{Template: template, Net: sb.Key.Net, Size: sb.Key.Size}
 	if m.pooledHash(key.Hash()) {
-		// A configured pool owns this key — promoting over it would
-		// silently change what refills produce.
+		// a configured pool owns this key; promoting over it would change what refills produce
 		return types.PoolKey{}, "", ErrPooledTemplate
 	}
-	// Fast-fail before the export; commitTemplate re-checks under the
-	// template lock, closing the check-then-publish race.
+	// commitTemplate re-checks under the template lock; this only fast-fails before the export
 	if err := m.checkTemplateOwner(ctx, store.TemplateID(key.Hash()), tenant); err != nil {
 		return types.PoolKey{}, "", err
 	}
-	// See Fork: the transition lock pins the source snapshot, and a started
-	// promote must finish even if the caller hangs up.
+	// the transition lock pins the source snapshot; a started promote must finish uncanceled
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	ctx = context.WithoutCancel(ctx)
@@ -76,10 +68,7 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 	return key, digest, nil
 }
 
-// DeleteTemplate removes a promoted template. Configured pools are refused:
-// their goldens are owned by the node config, not an API caller. A tenant
-// may delete only templates it promoted — anything else answers
-// ErrUnknownTemplate; root (empty tenant) deletes anything.
+// DeleteTemplate removes a promoted template; a tenant may delete only what it promoted.
 func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant string) error {
 	if err := m.validate(key); err != nil {
 		return err
@@ -116,15 +105,12 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant 
 	return nil
 }
 
-// TemplateHashes lists the promoted-template key hashes for the mesh's
-// template gossip, from the in-memory set — the 1s gossip tick never
-// touches the store backend. Sorted: the mesh's unchanged-guard compares
-// order-sensitively, and map iteration order would defeat it every tick.
+// TemplateHashes lists the promoted-template key hashes for mesh gossip, sorted for its guard.
 func (m *Manager) TemplateHashes() []string {
 	m.mu.Lock()
 	pooled := make(map[string]struct{}, len(m.pools))
-	for key := range m.pools {
-		pooled[key.Hash()] = struct{}{}
+	for _, p := range m.pools {
+		pooled[p.hash] = struct{}{}
 	}
 	m.mu.Unlock()
 	m.tplMu.Lock()
@@ -140,16 +126,12 @@ func (m *Manager) TemplateHashes() []string {
 	return hashes
 }
 
-// HasGolden reports whether this node can provision the key without a cold
-// boot — a configured pool golden or a promoted template in the store. The
-// tplSet answers without a store read; only a shared-store template promoted
-// elsewhere after startup falls through to the backend.
+// HasGolden reports whether this node can provision the key without a cold boot.
 func (m *Manager) HasGolden(ctx context.Context, key types.PoolKey, tenant string) bool {
 	return m.HasPoolGolden(key) || m.HasPromotedTemplate(ctx, key, tenant)
 }
 
-// HasPoolGolden reports whether a configured pool can serve key from its own
-// golden. That golden is what every claim on this node resolves to.
+// HasPoolGolden reports whether a configured pool can serve key from its own golden.
 func (m *Manager) HasPoolGolden(key types.PoolKey) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -157,9 +139,7 @@ func (m *Manager) HasPoolGolden(key types.PoolKey) bool {
 	return p != nil && p.goldenDir != ""
 }
 
-// HasPromotedTemplate reports whether key resolves to a promoted template this
-// tenant may claim — resolveGolden's test exactly, so routing never promises
-// a golden the claim would then refuse.
+// HasPromotedTemplate is resolveGolden's test exactly, so routing never promises a refused golden.
 func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, tenant string) bool {
 	if m.pooledHash(key.Hash()) {
 		return false
@@ -183,38 +163,32 @@ func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, te
 	return owner == "" || tenantOwns(tenant, owner)
 }
 
-// pooledHash reports whether a configured pool occupies this hash — the
-// guard is on the HASH, not the key: goldens are stored by hash, so a
-// colliding key would reach a pool's golden dir even though the keys differ.
+// pooledHash guards on the hash, not the key: a colliding key would reach a pool's golden dir.
 func (m *Manager) pooledHash(hash string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for key := range m.pools {
-		if key.Hash() == hash {
+	for _, p := range m.pools {
+		if p.hash == hash {
 			return true
 		}
 	}
 	return false
 }
 
-// recLock is the per-record mutation lock: template publish/delete serialize
-// on it directly; checkpoints take it only for delete/fetch (their ids are
-// fresh and unguessable pre-publish). A clone or wake holds it shared, so a
-// delete or re-publish swap never runs under an in-flight read. Every call
-// counts as a live reference — pair it with recDone (or recDoneEvict) once
-// the returned lock is unlocked, so a concurrent evict can never hand a
-// waiter a different mutex for the same id.
+// recLock takes the per-record lock and a live reference; pair every call with recDone.
 func (m *Manager) recLock(id string) *sync.RWMutex {
 	m.recLocksMu.Lock()
 	defer m.recLocksMu.Unlock()
 	m.recRefs[id]++
-	l, _ := m.recLocks.LoadOrStore(id, &sync.RWMutex{})
-	return l.(*sync.RWMutex)
+	l := m.recLocks[id]
+	if l == nil {
+		l = &sync.RWMutex{}
+		m.recLocks[id] = l
+	}
+	return l
 }
 
-// recDone releases a reference taken by recLock; call after Unlock/RUnlock,
-// never before — releasing early is what lets a concurrent recLock observe
-// a fresh mutex while this call's lock is still logically held.
+// recDone releases a reference taken by recLock; call after Unlock/RUnlock, never before.
 func (m *Manager) recDone(id string) {
 	m.recLocksMu.Lock()
 	defer m.recLocksMu.Unlock()
@@ -225,11 +199,7 @@ func (m *Manager) recDone(id string) {
 	}
 }
 
-// recDoneEvict is recDone for a caller that just deleted id's record: once
-// the reference count drops to zero — no one else holds or awaits this id's
-// lock — its recLocks slot is removed so the map can't grow per checkpoint.
-// Template ids (tp_, reused on re-promote) never call this; they stay
-// cached forever, bounded by the promoted set.
+// recDoneEvict is recDone for a just-deleted record: the lock slot goes at zero references.
 func (m *Manager) recDoneEvict(id string) {
 	m.recLocksMu.Lock()
 	defer m.recLocksMu.Unlock()
@@ -237,25 +207,22 @@ func (m *Manager) recDoneEvict(id string) {
 	if m.recRefs[id] <= 0 {
 		delete(m.recRefs, id)
 		delete(m.recEvict, id)
-		m.recLocks.Delete(id)
+		delete(m.recLocks, id)
 		return
 	}
-	// Another holder or waiter is still on this lock; defer the eviction to
-	// whichever call drops the last reference, so it is not lost here.
+	// a holder or waiter remains; the call that drops the last reference evicts instead
 	m.recEvict[id] = struct{}{}
 }
 
-// evictIfPending drops id's lock entry if a delete asked for eviction while a
-// reference still held it; callers hold recLocksMu with the count at zero.
+// evictIfPending drops id's lock entry if a delete asked for eviction; callers hold recLocksMu.
 func (m *Manager) evictIfPending(id string) {
 	if _, ok := m.recEvict[id]; ok {
 		delete(m.recEvict, id)
-		m.recLocks.Delete(id)
+		delete(m.recLocks, id)
 	}
 }
 
-// checkTemplateOwner rejects publishing or deleting over another tenant's
-// record; a meta failure other than absence refuses rather than fail open.
+// checkTemplateOwner rejects publishing or deleting over another tenant's record.
 func (m *Manager) checkTemplateOwner(ctx context.Context, id, tenant string) error {
 	if tenant == "" {
 		return nil
@@ -281,10 +248,7 @@ type goldenResolution struct {
 	release        func()
 }
 
-// resolveGolden resolves a key's clone source: the configured pool's local
-// golden (no release), else a promoted template fetched from the store;
-// empty dir cold-boots. A cross-tenant or absent record cold-boots; a backend
-// failure propagates rather than booting a template name as an image ref.
+// resolveGolden resolves a key's clone source: the pool golden, else a promoted template.
 func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant string) (goldenResolution, error) {
 	m.mu.Lock()
 	var dir string
@@ -328,7 +292,6 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant s
 	}, nil
 }
 
-// publishTemplate exports snap into the store under the key's template id.
 func (m *Manager) publishTemplate(ctx context.Context, snap string, key types.PoolKey, tenant string) (string, error) {
 	id := store.TemplateID(key.Hash())
 	staging, err := m.tpls.Stage(id)

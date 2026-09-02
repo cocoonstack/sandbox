@@ -48,7 +48,6 @@ func TestRemovalRetryConvergesConfirmedSurvivor(t *testing.T) {
 		t.Fatal("surviving VM was not retained for retry")
 	}
 
-	// A failed retry re-queues itself, so the next tick tries again.
 	m.retryRemovals(t.Context()).Wait()
 	m.mu.Lock()
 	_, pending = m.pendingRemovals["survivor"]

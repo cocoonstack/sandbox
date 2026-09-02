@@ -4,8 +4,7 @@ import (
 	"time"
 )
 
-// TTLField is the requested-lease field shared by the claiming request
-// bodies; zero means the server default.
+// TTLField is the shared requested-lease field; zero means the server default.
 type TTLField struct {
 	TTLSeconds int `json:"ttl_seconds,omitempty"`
 }
@@ -15,25 +14,19 @@ func (f TTLField) TTL() time.Duration {
 	return time.Duration(f.TTLSeconds) * time.Second
 }
 
-// ClaimRequest is the wire body of POST /v1/claim. NoRedirect is set by the
-// SDK on a claim it is retrying at a redirect target, so that node warm-or-
-// provisions locally instead of bouncing the claim back on a stale view.
+// ClaimRequest is the wire body of POST /v1/claim.
 type ClaimRequest struct {
 	Template string   `json:"template"`
 	Net      NetShape `json:"net,omitempty"`
 	Size     Size     `json:"size,omitempty"`
 	Volumes  []Volume `json:"volumes,omitempty"`
-	// VolumesAttachOnly attaches every requested volume without mounting it:
-	// the workload finds the device by its serial and owns the mount contract.
+	// VolumesAttachOnly attaches every requested volume without mounting it.
 	VolumesAttachOnly bool `json:"volumes_attach_only,omitempty"`
 	TTLField
 	NoRedirect bool `json:"no_redirect,omitempty"`
-	// RequirePromoted is carried from a promoted-volume redirect to make the
-	// target refuse a cold-image fallback when template gossip is stale.
+	// RequirePromoted makes the target refuse a cold-image fallback.
 	RequirePromoted bool `json:"require_promoted,omitempty"`
-	// ClaimRef is an opaque caller reference (the aggregated apiserver passes
-	// the k8s "<namespace>/<name>") recorded on the claim so the read path can
-	// map a listed sandbox back to the name it was claimed under.
+	// ClaimRef is an opaque caller reference recorded on the claim.
 	ClaimRef string `json:"claim_ref,omitempty"`
 }
 
@@ -42,26 +35,21 @@ func (r ClaimRequest) Key() PoolKey {
 	return PoolKey{Template: r.Template, Net: r.Net, Size: r.Size}.Defaulted()
 }
 
-// ClaimResponse is the wire reply of POST /v1/claim. A successful claim
-// carries ID/Token/Deadline/OwnerAddr; a mesh miss carries Redirect (peer
-// addresses to retry, MOVED-style), and the two are mutually exclusive.
+// ClaimResponse is the wire reply of POST /v1/claim; success and Redirect are exclusive.
 type ClaimResponse struct {
 	ID        string    `json:"id,omitempty"`
 	Token     string    `json:"token,omitempty"`
 	Deadline  time.Time `json:"deadline,omitzero"`
 	OwnerAddr string    `json:"owner_addr,omitempty"`
-	// TemplateDigest is the content identity of the promoted-template export
-	// this claim was cloned from; empty for any other source.
+	// TemplateDigest is the content identity of the export this claim was cloned from.
 	TemplateDigest string `json:"template_digest,omitempty"`
 
-	// FromCheckpoint names the checkpoint a branched claim was born from,
-	// so clients can reconstruct the checkpoint tree.
+	// FromCheckpoint names the checkpoint a branched claim was born from.
 	FromCheckpoint string   `json:"from_checkpoint,omitempty"`
 	Volumes        []Volume `json:"volumes,omitempty"`
 
 	Redirect []string `json:"redirect,omitempty"`
-	// RequirePromoted tells a redirecting client to preserve that requirement
-	// on its no_redirect retry. It is omitted from successful claims.
+	// RequirePromoted tells a redirecting client to preserve that requirement on retry.
 	RequirePromoted bool `json:"require_promoted,omitempty"`
 }
 
@@ -72,8 +60,7 @@ type VolumeInfo struct {
 	SizeBytes    int64  `json:"size_bytes"`
 	Available    bool   `json:"available"`
 	Nodes        int    `json:"nodes"`
-	// Writable reports whether the operator allows rw claims of this name;
-	// unset for a name known only from a peer's advertisement.
+	// Writable reports whether the operator allows rw claims of this name.
 	Writable bool `json:"writable,omitempty"`
 }
 
@@ -82,11 +69,7 @@ type VolumeListResponse struct {
 	Volumes []VolumeInfo `json:"volumes"`
 }
 
-// ForkRequest is the wire body of POST /v1/sandboxes/{id}/fork. The
-// Authorization header carries an api or tenant token (forking creates node
-// resources, like a claim); Token proves ownership of the source sandbox.
-// TTLSeconds applies to every child; zero means the server default, and
-// children never inherit the parent's remainder.
+// ForkRequest is the wire body of POST /v1/sandboxes/{id}/fork.
 type ForkRequest struct {
 	Token string `json:"token"`
 	Count int    `json:"count"`
@@ -99,7 +82,6 @@ type ForkResponse struct {
 }
 
 // CheckpointRequest is the wire body of POST /v1/sandboxes/{id}/checkpoint.
-// Auth mirrors fork: api/tenant token in Authorization, sandbox token here.
 type CheckpointRequest struct {
 	Token string `json:"token"`
 	Name  string `json:"name,omitempty"`
@@ -111,11 +93,9 @@ type CheckpointResponse struct {
 }
 
 // CheckpointClaimRequest is the wire body of POST /v1/checkpoints/{id}/claim.
-// TTLSeconds semantics match a claim's; zero means the server default.
 type CheckpointClaimRequest struct {
 	TTLField
-	// NoRedirect is set by a client retrying at a redirect target, so the retry
-	// resolves locally instead of bouncing between two nodes.
+	// NoRedirect makes the retry resolve locally instead of bouncing between two nodes.
 	NoRedirect bool `json:"no_redirect,omitempty"`
 }
 
@@ -124,23 +104,19 @@ type CheckpointListResponse struct {
 	Checkpoints []Checkpoint `json:"checkpoints"`
 }
 
-// PromoteRequest is the wire body of POST /v1/sandboxes/{id}/promote; auth
-// mirrors ForkRequest (control token in the header, ownership in Token).
+// PromoteRequest is the wire body of POST /v1/sandboxes/{id}/promote.
 type PromoteRequest struct {
 	Token    string `json:"token"`
 	Template string `json:"template"`
 }
 
-// PromoteResponse returns the template's full key and stable identity:
-// templates are node-local, so a cluster client needs the exact key (and this
-// node's address) to claim from or delete the template later.
+// PromoteResponse returns the template's full key and stable identity.
 type PromoteResponse struct {
 	Key           PoolKey `json:"key"`
 	ContentDigest string  `json:"content_digest"`
 }
 
-// PreviewRequest is the wire body of POST /v1/sandboxes/{id}/preview; auth
-// mirrors ForkRequest (control token in the header, ownership in Token).
+// PreviewRequest is the wire body of POST /v1/sandboxes/{id}/preview.
 type PreviewRequest struct {
 	Token string `json:"token"`
 	Port  uint16 `json:"port"`

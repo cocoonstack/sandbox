@@ -11,9 +11,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// TestAttachOnlyClaimAttachesWithoutMounting: the whole mount contract belongs
-// to the caller, so a writable attach-only claim leaves no marker to clear and
-// no mount to quiesce — the device only goes away with the VM.
 func TestAttachOnlyClaimAttachesWithoutMounting(t *testing.T) {
 	path := writeVolumeImage(t, "scratch.img", "data")
 	eng := newFakeEngine()
@@ -76,7 +73,6 @@ func TestAttachOnlyClaimAttachesEveryVolumeConcurrently(t *testing.T) {
 		{Name: "dataset", AttachOnly: true},
 		{Name: "cache", Mode: types.VolumeModeRW, AttachOnly: true},
 	}
-	// Every attach must be in flight at once: a sequential apply blocks here.
 	var attaches sync.WaitGroup
 	attaches.Add(len(requested))
 	eng.attachRendezvous = &attaches
@@ -215,15 +211,11 @@ func TestClaimWarmAttachFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	}
 }
 
-// TestFinalizeQuotaFailureKeepsHoldsUntilRemoval: the finalize re-check loses
-// the quota race with volumes already mounted, so the loser owes a clean umount.
 func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch")
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
 	m.maxClaims = 1
-	// The volume claim parks in its attach, so the volume-less claim below always
-	// takes the last slot and the volume claim always loses the finalize re-check.
 	var attaches sync.WaitGroup
 	attaches.Add(2)
 	eng.attachRendezvous = &attaches
@@ -247,7 +239,7 @@ func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
 		t.Fatalf("volume-less claim: %v", err)
 	}
 	eng.mu.Lock()
-	eng.removeErrFor = vmName // the quota loser's VM survives its removal
+	eng.removeErrFor = vmName
 	eng.attachRendezvous = nil
 	eng.mu.Unlock()
 	attaches.Done()
@@ -294,8 +286,6 @@ func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	}
 }
 
-// TestFinalizeTenantQuotaFailureQuiescesAndUncountsTenant: the tenant limb of
-// the same re-check; its loser must leave the tenant with nothing counted.
 func TestFinalizeTenantQuotaFailureQuiescesAndUncountsTenant(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch")
 	eng := newFakeEngine()
@@ -350,8 +340,6 @@ func TestFinalizeTenantQuotaFailureQuiescesAndUncountsTenant(t *testing.T) {
 	}
 }
 
-// TestAttachOnlyClaimKeepsAdmissionExclusion: what protects other claims is
-// unchanged — only this claim's own mount contract moved to the caller.
 func TestAttachOnlyClaimKeepsAdmissionExclusion(t *testing.T) {
 	path := writeVolumeImage(t, "scratch.img", "data")
 	eng := newFakeEngine()

@@ -8,9 +8,7 @@ import (
 	"golang.org/x/net/http/httpguts"
 )
 
-// nonInjectable rejects secret headers the transport owns or strips —
-// injecting one would audit as done while the request carries something
-// else. Derived from the proxy's hop set so the two lists cannot drift.
+// nonInjectable rejects secret headers the transport owns or strips.
 var nonInjectable = func() map[string]struct{} {
 	m := map[string]struct{}{"host": {}, "content-length": {}}
 	for _, h := range hopHeaders {
@@ -19,9 +17,7 @@ var nonInjectable = func() map[string]struct{} {
 	return m
 }()
 
-// SecretSpec declares a node-side credential the proxy injects: Header is the
-// request header it sets, valued from the ValueEnv env var — the literal
-// never sits in the config file.
+// SecretSpec declares a node-side credential the proxy injects, valued from ValueEnv.
 type SecretSpec struct {
 	Name     string  `json:"name"`
 	Header   string  `json:"header"`
@@ -51,16 +47,12 @@ type resolvedSecret struct {
 	value  string
 }
 
-// SecretStore is the resolved node-side credential registry, implementing the
-// Proxy's Secrets interface. Values live only here — never in a policy or a
-// gossiped struct.
+// SecretStore is the resolved node-side credential registry; values live only here.
 type SecretStore struct {
 	byName map[string]resolvedSecret
 }
 
-// NewSecretStore resolves each spec's value; an unset or empty ValueEnv is an
-// error, never a silently-empty credential, and a value a header cannot carry
-// (CTLs would split the injected request) is rejected before it can be sent.
+// NewSecretStore resolves each spec's value; an unset or invalid one is an error.
 func NewSecretStore(specs []SecretSpec) (*SecretStore, error) {
 	byName := make(map[string]resolvedSecret, len(specs))
 	for _, s := range specs {

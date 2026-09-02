@@ -10,12 +10,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// Fork clones a claimed sandbox into count children, each a fresh claim with
-// its own lease: memory, disk, and guest state (sessions, processes, tmpfs)
-// duplicate at the snapshot point, and cocoon's clone reseed gives every
-// child a distinct machine identity. Children inherit the parent's tenant
-// and count against its quota. All-or-nothing: any child failing destroys
-// the ones already built, so an error means no child survived.
+// Fork clones a claimed sandbox into count children, each a fresh claim; all-or-nothing.
 func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl time.Duration) ([]*types.Sandbox, error) {
 	sb, ok := m.resolve(id, cred)
 	if !ok {
@@ -56,9 +51,7 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	return children, nil
 }
 
-// forkClones builds count children from a claimed source: a running source is
-// cloned straight from a fresh store snapshot (no export copy); a hibernated
-// source stays on the export path (its shared wake image needs a private copy).
+// forkClones clones a running source from a fresh snapshot, a hibernated one from an export.
 func (m *Manager) forkClones(ctx context.Context, sb *types.Sandbox, count int) ([]*types.Sandbox, error) {
 	create, cleanup, err := m.forkSource(ctx, sb)
 	if err != nil {
@@ -68,9 +61,7 @@ func (m *Manager) forkClones(ctx context.Context, sb *types.Sandbox, count int) 
 	return m.cloneBatch(ctx, count, sb.Key, create)
 }
 
-// forkSource decides and captures the fork source under the transition lock
-// (a racing hibernate cannot swap the snapshot out from under the fan-out),
-// returning the per-child provisioner and its cleanup.
+// forkSource captures the fork source under the transition lock, against a racing hibernate.
 func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (vmProvisioner, func(), error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()

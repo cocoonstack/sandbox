@@ -19,27 +19,21 @@ import (
 
 const idleConnTimeout = 90 * time.Second
 
-// hopHeaders are hop-by-hop and proxy-scoped headers this hop owns: stripped
-// from forwarded requests and from relayed responses rather than passed on.
+// hopHeaders are hop-by-hop and proxy-scoped headers this hop owns, never passed on.
 var hopHeaders = []string{
 	"Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
 	"Proxy-Connection", "TE", "Trailer", "Transfer-Encoding", "Upgrade",
 }
 
-// DialFunc opens the upstream connection for a permitted request. The proxy
-// stays transport-agnostic: the node wires the real egress path (a bridge
-// dial, or a checked resolver) behind it.
+// DialFunc opens the upstream connection for a permitted request.
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
-// Secrets resolves a rule's Secret name to the header it injects. The value
-// lives node-side and the proxy is its only holder, so a matched request
-// carries the credential's effect without the guest ever seeing it.
+// Secrets resolves a rule's Secret name to the header it injects.
 type Secrets interface {
 	Header(name string) (header, value string, ok bool)
 }
 
-// Event is one audited egress attempt, keyed by sandbox and tenant. Injected
-// names the credential added to a permitted request, never its value.
+// Event is one audited egress attempt; Injected names the credential, never its value.
 type Event struct {
 	Sandbox  string
 	Tenant   string
@@ -49,10 +43,7 @@ type Event struct {
 	Injected string
 }
 
-// Proxy is one sandbox's forward proxy: an http.Handler serving CONNECT
-// tunnels and absolute-form HTTP, gated by Policy and audited per request.
-// One Proxy carries one sandbox's identity, so the connection a listener
-// hands it needs no in-band token.
+// Proxy is one sandbox's forward proxy, gated by Policy and audited per request.
 type Proxy struct {
 	sandbox string
 	tenant  string
@@ -64,8 +55,7 @@ type Proxy struct {
 	tr      *http.Transport
 	mitmTr  *http.Transport
 
-	// leaves caches this sandbox's interception leaves; per-proxy, so one
-	// sandbox's host churn never evicts or blocks another's.
+	// leaves caches this sandbox's interception leaves; per-proxy, never shared.
 	leafMu sync.Mutex
 	leaves map[string]*tls.Certificate
 
@@ -75,8 +65,7 @@ type Proxy struct {
 	closed bool
 }
 
-// New builds a Proxy for one sandbox. secrets, ca, and audit may be nil (no
-// injection, no HTTPS interception, no audit). dial must be set.
+// New builds a Proxy for one sandbox; secrets, ca, and audit may be nil, dial must not.
 func New(sandbox, tenant string, policy Evaluator, secrets Secrets, ca *CA, dial DialFunc, audit func(Event)) *Proxy {
 	p := &Proxy{
 		sandbox: sandbox,
@@ -86,8 +75,7 @@ func New(sandbox, tenant string, policy Evaluator, secrets Secrets, ca *CA, dial
 		ca:      ca,
 		audit:   audit,
 		dial:    dial,
-		// The stdlib default of 2 idle conns per host re-dials bursty
-		// same-host plaintext traffic.
+		// the stdlib default of 2 idle conns per host re-dials bursty same-host traffic.
 		tr:    &http.Transport{DialContext: dial, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout},
 		conns: map[net.Conn]struct{}{},
 	}
@@ -107,8 +95,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.serveForward(w, r)
 }
 
-// Close ends every hijacked tunnel, which outlives http.Server.Close, so a
-// released claim's guest cannot keep an authorized session. Idempotent.
+// Close ends every hijacked tunnel, which outlives http.Server.Close; idempotent.
 func (p *Proxy) Close() {
 	p.connMu.Lock()
 	conns := slices.Collect(maps.Keys(p.conns))
@@ -145,9 +132,7 @@ func (p *Proxy) untrack(conn net.Conn) {
 // serveConnect gates an HTTPS/opaque tunnel by host.
 func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	host := hostOnly(r.Host)
-	// Host-gate the interception decision: the tunnel's CONNECT verb is not the
-	// request method, so a matched intercept rule enforces its methods on the
-	// decrypted inner request. The plain splice keeps the host+method gate.
+	// host-gate interception: the tunnel's CONNECT verb is not the request method.
 	if rule, d := p.policy.EvalHost(host); d == DecisionAllow && rule.Intercept && p.ca != nil {
 		p.serveIntercept(w, r, host)
 		return
@@ -190,8 +175,7 @@ func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
 	p.relay(w, r, host, rule, decision, p.tr, nil)
 }
 
-// relay forwards one policy-evaluated request upstream and mirrors the
-// response; prepare, when set, rewrites the clone before it leaves.
+// relay forwards one policy-evaluated request upstream and mirrors the response.
 func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, host string, rule Rule, decision Decision, tr *http.Transport, prepare func(*http.Request)) {
 	if decision == DecisionDeny {
 		p.record(Event{Method: r.Method, Host: host, Decision: decision})
@@ -220,9 +204,7 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, host string, rule 
 	_, _ = io.Copy(w, resp.Body)
 }
 
-// inject sets the header the rule's Secret resolves to, overwriting any
-// guest-supplied value, and returns the secret name it applied (empty when
-// the rule names none or the store cannot resolve it).
+// inject sets the rule's secret header, overwriting any guest-supplied value.
 func (p *Proxy) inject(rule Rule, h http.Header) string {
 	if rule.Secret == "" || p.secrets == nil {
 		return ""
@@ -257,8 +239,7 @@ func stripHop(h http.Header) {
 	}
 }
 
-// splice copies bytes both ways until either side ends, then returns; each
-// direction's end half-closes the peer so its EOF propagates.
+// splice copies both ways until either side ends, half-closing the peer so EOF propagates.
 func splice(a, b net.Conn) {
 	done := make(chan struct{})
 	go func() {
@@ -271,14 +252,12 @@ func splice(a, b net.Conn) {
 	<-done
 }
 
-// denied answers a policy rejection with a typed 403 the guest's client
-// surfaces as a distinct failure rather than a hang.
+// denied answers a policy rejection with a 403 rather than a hang.
 func denied(w http.ResponseWriter, host string) {
 	http.Error(w, fmt.Sprintf("egress denied: %s", host), http.StatusForbidden)
 }
 
-// hostOnly strips a port from an authority, tolerating a bare host and IPv6
-// literals.
+// hostOnly strips a port from an authority, tolerating a bare host and IPv6 literals.
 func hostOnly(authority string) string {
 	if host, _, err := net.SplitHostPort(authority); err == nil {
 		return host

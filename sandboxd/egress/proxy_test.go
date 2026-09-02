@@ -115,8 +115,6 @@ func TestForwardNeverInjectsInterceptSecret(t *testing.T) {
 	}
 }
 
-// TestForwardStripsHopHeaders: fixed and Connection-named hop headers die at
-// this hop, in both directions.
 func TestForwardStripsHopHeaders(t *testing.T) {
 	var gotHop, gotConn string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -250,8 +248,6 @@ func (f fakeSecrets) Header(name string) (string, string, bool) {
 	return hv[0], hv[1], ok
 }
 
-// fixedDial ignores the requested address and connects to target, so a test
-// policy can name any host while the bytes land on a local backend.
 func fixedDial(target string) DialFunc {
 	return func(ctx context.Context, network, _ string) (net.Conn, error) {
 		var d net.Dialer
@@ -298,7 +294,6 @@ func readStatus(t *testing.T, br *bufio.Reader) string {
 	return line
 }
 
-// echoServer starts a one-shot TCP echo backend and returns its address.
 func echoServer(t *testing.T) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

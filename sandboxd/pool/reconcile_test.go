@@ -152,8 +152,6 @@ func TestReconcileStaleRunningVMSkipsVerb(t *testing.T) {
 	}
 }
 
-// staleCreateCase drives both the startup sweep and the reap-tick retry
-// through the same outcome/end-state row shape.
 type staleCreateCase struct {
 	name        string
 	outcome     engine.StaleCreateOutcome
