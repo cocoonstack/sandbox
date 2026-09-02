@@ -2,6 +2,8 @@ package sandbox
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -486,6 +488,19 @@ func TestLookupScatter(t *testing.T) {
 	}
 	if sb.ID != "sb_1" || sb.owner != strings.TrimPrefix(owner.URL, "http://") {
 		t.Errorf("handle %+v, want owner=B", sb)
+	}
+}
+
+func TestAPIErrorDrainsOversizedBody(t *testing.T) {
+	body := strings.NewReader(`{"error":"` + strings.Repeat("x", 3*4096) + `"}`)
+	err := apiError("claim", &http.Response{StatusCode: http.StatusTooManyRequests, Body: io.NopCloser(body)})
+
+	var he *APIError
+	if !errors.As(err, &he) || he.Status != http.StatusTooManyRequests {
+		t.Fatalf("apiError = %v, want a 429 APIError", err)
+	}
+	if body.Len() != 0 {
+		t.Errorf("apiError left %d bytes unread; the transport cannot reuse the connection", body.Len())
 	}
 }
 

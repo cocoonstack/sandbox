@@ -136,7 +136,12 @@ impl Broker {
             }
             Some(Some(stdio)) => stdio,
         };
-        proto::write_frame(w, &Response::Ready).await?;
+        // The stdio halves are out of the table, so the attach TTL no longer
+        // covers this server: a client already gone must reap it here.
+        if let Err(e) = proto::write_frame(w, &Response::Ready).await {
+            self.reap(server_id).await;
+            return Err(e);
+        }
 
         let feed = tokio::spawn(feed_stdin(client, stdin));
         let res = pump_stdout(stdout, w).await;

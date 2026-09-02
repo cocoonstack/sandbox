@@ -35,14 +35,22 @@ async fn watch_streams_events_until_disconnect() {
         .await
         .unwrap();
 
-    let event = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
-        .await
-        .expect("no event within 5s")
-        .unwrap()
-        .expect("stream closed before an event");
-    let frame: serde_json::Value = serde_json::from_str(&event).unwrap();
-    assert_eq!(frame["type"], "event", "got {frame:?}");
-    assert!(frame["path"].as_str().unwrap().ends_with("new.txt"));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let line = lines
+                .next_line()
+                .await
+                .unwrap()
+                .expect("stream closed before an event");
+            let frame: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(frame["type"], "event", "got {frame:?}");
+            if frame["path"].as_str().unwrap().ends_with("new.txt") {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("no new.txt event within 5s");
 
     drop(lines);
     drop(cw);

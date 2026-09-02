@@ -28,6 +28,7 @@ IFS= read -r line
 printf 'reply:%s\n' "$line"
 "#;
 
+/// Creates a fake language server and points SILKD_LSP_DIR at its dir.
 fn manifest_env(server_body: &str) -> TempDir {
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("fake-lsp");
@@ -38,6 +39,9 @@ fn manifest_env(server_body: &str) -> TempDir {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
+    // SAFETY: ENV_LOCK, held by the caller for its whole test, serializes every
+    // writer and reader of SILKD_LSP_DIR in this binary.
+    unsafe { std::env::set_var("SILKD_LSP_DIR", dir.path()) };
     dir
 }
 
@@ -83,9 +87,6 @@ async fn lsp_broker_relays_to_the_server() {
         bin.to_string_lossy().as_bytes(),
     )
     .unwrap();
-    // SAFETY: ENV_LOCK (held for this test's whole body) serializes every
-    // writer/reader of SILKD_LSP_DIR in this binary.
-    unsafe { std::env::set_var("SILKD_LSP_DIR", env.path()) };
 
     let state = Arc::new(State::new());
     let start = one(
@@ -157,9 +158,6 @@ async fn lsp_stop_kills_an_idle_server() {
         env.path().join("fake-lsp").to_string_lossy().as_bytes(),
     )
     .unwrap();
-    // SAFETY: ENV_LOCK (held for this test's whole body) serializes every
-    // writer/reader of SILKD_LSP_DIR in this binary.
-    unsafe { std::env::set_var("SILKD_LSP_DIR", env.path()) };
     let state = Arc::new(State::new());
     let start = one(
         &state,
@@ -185,6 +183,49 @@ async fn lsp_stop_kills_an_idle_server() {
 }
 
 #[tokio::test]
+async fn lsp_request_reaps_when_the_client_vanishes_before_ready() {
+    let _env_lock = ENV_LOCK.lock().await;
+    let env = manifest_env("#!/bin/sh\nsleep 60\n");
+    std::fs::write(
+        env.path().join("gonetest"),
+        env.path().join("fake-lsp").to_string_lossy().as_bytes(),
+    )
+    .unwrap();
+    let state = Arc::new(State::new());
+    let start = one(
+        &state,
+        &json!({"op":"lsp_start","language":"gonetest"}).to_string(),
+    )
+    .await;
+    let server_id = start.last().unwrap()["server_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (mut client, server) = tokio::io::duplex(1 << 20);
+    let request = json!({"op":"lsp_request","server_id":server_id}).to_string();
+    client.write_all(request.as_bytes()).await.unwrap();
+    client.write_all(b"\n").await.unwrap();
+    drop(client);
+    let (sr, sw) = tokio::io::split(server);
+    let served = timeout(DEADLINE, state.serve(tokio::io::BufReader::new(sr), sw))
+        .await
+        .expect("deadline");
+    assert!(served.is_err(), "the ready write must fail: {served:?}");
+
+    let gone = one(
+        &state,
+        &json!({"op":"lsp_stop","server_id":server_id}).to_string(),
+    )
+    .await;
+    assert_eq!(
+        gone.last().unwrap()["kind"],
+        "not_found",
+        "a server whose client vanished before ready must be reaped: {gone:?}"
+    );
+}
+
+#[tokio::test]
 async fn lsp_data_end_half_closes_stdin() {
     let _env_lock = ENV_LOCK.lock().await;
     let env = manifest_env("#!/bin/sh\nprintf 'ate:%s\\n' $(cat | wc -c)\n");
@@ -193,9 +234,6 @@ async fn lsp_data_end_half_closes_stdin() {
         env.path().join("fake-lsp").to_string_lossy().as_bytes(),
     )
     .unwrap();
-    // SAFETY: ENV_LOCK (held for this test's whole body) serializes every
-    // writer/reader of SILKD_LSP_DIR in this binary.
-    unsafe { std::env::set_var("SILKD_LSP_DIR", env.path()) };
     let state = Arc::new(State::new());
     let start = one(
         &state,
