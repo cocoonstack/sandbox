@@ -15,12 +15,12 @@ func TestProcVerbs(t *testing.T) {
 		"ps":   {`{"type":"procs","procs":[{"pid":41,"argv":["sleep","30"],"detached":true,"state":"running","started_at_epoch_secs":1}]}`},
 		"kill": {`{"type":"done"}`},
 		"logs": {
-			`{"type":"stdout","data":"aGVsbG8="}`, // "hello"
-			`{"type":"stderr","data":"b29wcw=="}`, // "oops"
-			`{"type":"done"}`,                     // still running: no exit
+			`{"type":"stdout","data":"aGVsbG8="}`,
+			`{"type":"stderr","data":"b29wcw=="}`,
+			`{"type":"done"}`,
 		},
 		"attach": {
-			`{"type":"stdout","data":"bGF0ZQ=="}`, // "late"
+			`{"type":"stdout","data":"bGF0ZQ=="}`,
 			`{"type":"exit","code":7}`,
 		},
 	}
@@ -75,8 +75,6 @@ func TestProcVerbsUnknownPid(t *testing.T) {
 	}
 }
 
-// procServe answers each RPC with a canned frame script keyed by op — the
-// proc verbs are pure frame plumbing, so a scripted fake covers them.
 func procServe(script map[string][]string) func(net.Conn) {
 	return func(conn net.Conn) {
 		defer func() { _ = conn.Close() }()

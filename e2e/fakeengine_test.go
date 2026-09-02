@@ -16,9 +16,8 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
 )
 
-// fakeEngine replaces only the cocoon CLI: every "VM" it creates is a
-// silkdtest daemon behind a real hybrid-vsock UDS, so probing and the data
-// plane run the production code paths end to end.
+// fakeEngine replaces only the cocoon CLI: every "VM" is a silkdtest daemon
+// behind a real hybrid-vsock UDS, so the data plane runs production code.
 type fakeEngine struct {
 	real *engine.Engine
 	dir  string
@@ -82,9 +81,8 @@ func (f *fakeEngine) SnapshotRemove(_ context.Context, _ string) error { return 
 
 func (f *fakeEngine) SnapshotList(_ context.Context) ([]string, error) { return nil, nil }
 
-// Hibernate closes the VM's silkd listener (the "VMM died") and Restore
-// brings a fresh one up, mirroring the real stop/resume observable from the
-// control plane.
+// Hibernate closes the VM's silkd listener and Restore brings a fresh one up,
+// mirroring the stop/resume the control plane observes.
 func (f *fakeEngine) Hibernate(ctx context.Context, name, _ string) error {
 	return f.Remove(ctx, name)
 }

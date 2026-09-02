@@ -12,9 +12,6 @@ import (
 
 const fixtureDir = "fixtures/v1"
 
-// TestFixtureCorpusRoundTrips is the protocol/README contract: every golden
-// frame must decode and re-encode to canonical-JSON equality, both request
-// and response sides — a frame only one implementation round-trips is drift.
 func TestFixtureCorpusRoundTrips(t *testing.T) {
 	entries, err := os.ReadDir(fixtureDir)
 	if err != nil {
@@ -60,17 +57,12 @@ func TestFixtureCorpusRoundTrips(t *testing.T) {
 		}
 		seen++
 	}
-	// Exact, deliberately: adding a verb means adding its fixture and
-	// bumping this — a new frame type outside the corpus is drift waiting
-	// to happen.
+
 	if seen != 60 {
 		t.Fatalf("fixture corpus: %d frames, want exactly 60", seen)
 	}
 }
 
-// TestEveryVerbHasAFixture pins corpus completeness: every request and
-// response type the SDK knows must appear in at least one golden frame, so
-// no verb can exist outside the three-language drift guard.
 func TestEveryVerbHasAFixture(t *testing.T) {
 	allRequests := []Request{
 		Exec{},
@@ -166,10 +158,7 @@ func TestEveryVerbHasAFixture(t *testing.T) {
 	}
 }
 
-// TestEnumValueSetsMatchFixture pins the full enum value lists
-// (order-sensitive): frame fixtures carry one representative value per enum,
-// so a variant renamed or added on only one side would otherwise drift
-// silently. Twin of silkd's enum_value_sets_match_fixture.
+// Twin of silkd's enum_value_sets_match_fixture; the lists are order-sensitive.
 func TestEnumValueSetsMatchFixture(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(fixtureDir, "enums.json"))
 	if err != nil {
@@ -209,8 +198,6 @@ func TestDataFieldsAreBase64(t *testing.T) {
 }
 
 func TestRequestDataNeverNull(t *testing.T) {
-	// silkd's deserializer wants a base64 string; a nil payload must encode
-	// as "" — encoding/json's null would abort the RPC as a protocol error.
 	for _, req := range []Request{&Stdin{}, &Data{}} {
 		frame, err := EncodeRequest(req)
 		if err != nil {
@@ -232,9 +219,6 @@ func TestUnknownFieldsIgnored(t *testing.T) {
 	}
 }
 
-// TestBulkDecodeStrictShape guards the fast bulk slicer: only the exact
-// canonical frame takes the fast path, so a "data" match inside another
-// field or any malformed JSON must never yield a silently wrong payload.
 func TestBulkDecodeStrictShape(t *testing.T) {
 	resp, err := DecodeResponse([]byte(`{"type":"stdout","meta":{"data":"WFhY"},"data":"aGk="}`))
 	if err != nil {

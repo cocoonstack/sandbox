@@ -13,9 +13,6 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
 )
 
-// TestSendBulkMatchesJSONEncoding pins the hand-built data/stdin envelope to
-// byte-for-byte identity with the json.Marshal path — the fast path must not
-// drift from the wire contract silkd parses.
 func TestSendBulkMatchesJSONEncoding(t *testing.T) {
 	for _, req := range []wire.Request{
 		&wire.Data{Data: []byte("hello\x00\xff binary")},

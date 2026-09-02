@@ -10,8 +10,8 @@ SANDBOXD_VERSION ?= $(shell git describe --tags --match 'v*' --always --dirty)
 
 EXTRACT_IMAGE ?= $(BOOT_IMAGE)
 
-# The parent workspace's go.work excludes these modules; GOWORK=off keeps
-# local invocations identical to CI.
+# The parent workspace's go.work includes these modules; GOWORK=off keeps
+# local invocations identical to CI, which has no workspace.
 GO_MODULES := protocol/wire sandboxd sdk/go e2e mcp
 GO_OSES := linux darwin
 

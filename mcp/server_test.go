@@ -81,7 +81,7 @@ func TestServeSpeaksMCP(t *testing.T) {
 	if got := toolText(t, replies[5]); got != "released" {
 		t.Errorf("release: %q", got)
 	}
-	// exec against the released sandbox: an in-band tool error, not a crash.
+
 	execReply := replies[6]["result"].(map[string]any)
 	if execReply["isError"] != true {
 		t.Errorf("exec after release: %+v, want isError", execReply)

@@ -2,10 +2,16 @@ package sandbox
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"testing"
+
+	"github.com/cocoonstack/sandbox/protocol/wire"
+	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
 func TestPtyEchoAndExit(t *testing.T) {
@@ -86,5 +92,50 @@ func TestPtyCloseUnblocksUnreadOutput(t *testing.T) {
 	}
 	if stops != 1 {
 		t.Errorf("stop called %d times, want 1", stops)
+	}
+}
+
+func TestPtyWriteChunksOversizedInput(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	p := &Pty{conn: silkd.NewConn(client)}
+	payload := bytes.Repeat([]byte("x"), stdinChunk*2+1)
+
+	errc := make(chan error, 1)
+	go func() {
+		n, err := p.Write(payload)
+		if err == nil && n != len(payload) {
+			err = fmt.Errorf("Write returned %d, want %d", n, len(payload))
+		}
+		errc <- err
+	}()
+
+	sc := wire.NewFrameScanner(server)
+	var got []byte
+	for len(got) < len(payload) {
+		if !sc.Scan() {
+			t.Fatalf("scan stdin frame: %v", sc.Err())
+		}
+		if len(sc.Bytes()) > wire.MaxFrame {
+			t.Fatalf("frame of %d bytes exceeds the %d cap", len(sc.Bytes()), wire.MaxFrame)
+		}
+		req, err := wire.DecodeRequest(sc.Bytes())
+		if err != nil {
+			t.Fatalf("decode stdin frame: %v", err)
+		}
+		in, ok := req.(*wire.Stdin)
+		if !ok {
+			t.Fatalf("frame %q, want stdin", req.Op())
+		}
+		if len(in.Data) > stdinChunk {
+			t.Fatalf("stdin frame carries %d bytes, want at most %d", len(in.Data), stdinChunk)
+		}
+		got = append(got, in.Data...)
+	}
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Errorf("reassembled %d bytes, want the %d written", len(got), len(payload))
 	}
 }

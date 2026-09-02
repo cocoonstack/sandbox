@@ -96,7 +96,7 @@ func initTree(ctx context.Context, sb *sandbox.Sandbox) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("framework never came up:\n%s", tail(out))
+			return fmt.Errorf("framework never came up:\n%s", head(out))
 		}
 		time.Sleep(3 * time.Second)
 	}
@@ -151,7 +151,7 @@ func dialAdb(ctx context.Context, sb *sandbox.Sandbox) (string, error) {
 	return reply, nil
 }
 
-func tail(s string) string {
+func head(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	if len(lines) > 12 {
 		lines = lines[:12]

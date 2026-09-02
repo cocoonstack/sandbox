@@ -77,7 +77,7 @@ func TestSessionLifecycle(t *testing.T) {
 	if len(ids) != 1 || ids[0] != sess.ID {
 		t.Errorf("sessions %v, want [%s]", ids, sess.ID)
 	}
-	// exec-in-session runs argv (the fake's echo handler).
+
 	out, err := sess.Exec(ctx, "echo", "hi")
 	if err != nil {
 		t.Fatalf("session exec: %v", err)
@@ -109,8 +109,6 @@ func TestReadFileMultiChunk(t *testing.T) {
 	}
 }
 
-// fakeSandbox wires a Sandbox whose data plane is served by a temp-dir-backed
-// silkd Fake behind a hijacking agent endpoint.
 func fakeSandbox(t *testing.T) *Sandbox {
 	t.Helper()
 	fake := silkdtest.NewFake(t.TempDir())
