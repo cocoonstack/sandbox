@@ -52,6 +52,43 @@ func TestForwardAllowInjectsSecretAndOverwritesGuestHeader(t *testing.T) {
 	}
 }
 
+func TestCloseReleasesIdleUpstreamConns(t *testing.T) {
+	closed := make(chan struct{}, 4)
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "hello")
+	}))
+	upstream.Config.ConnState = func(_ net.Conn, st http.ConnState) {
+		if st == http.StateClosed {
+			closed <- struct{}{}
+		}
+	}
+	upstream.Start()
+	defer upstream.Close()
+
+	policy := Policy{Allow: []Rule{{Host: "api.internal"}}}
+	p := New("sb_1", "acme", policy, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://api.internal/x", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := proxyClient(t, front.URL).Do(req)
+	if err != nil {
+		t.Fatalf("proxied GET: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+
+	p.Close()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upstream connection still open after Close")
+	}
+}
+
 func TestForwardNeverInjectsInterceptSecret(t *testing.T) {
 	reached := false
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

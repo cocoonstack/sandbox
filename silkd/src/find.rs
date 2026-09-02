@@ -32,17 +32,16 @@ pub async fn find<W: AsyncWrite + Unpin>(
         Some(Ok(re)) => Some(re),
         Some(Err(e)) => return proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
     };
-    let mut stack = vec![path];
-    while let Some(dir) = stack.pop() {
-        let mut rd = match fs::read_dir(&dir).await {
-            Ok(rd) => rd,
-            Err(e) => return err_frame(w, &e, "read_dir").await,
-        };
+    let mut rd = match fs::read_dir(&path).await {
+        Ok(rd) => rd,
+        Err(e) => return err_frame(w, &e, "read_dir").await,
+    };
+    let mut stack = Vec::new();
+    loop {
         loop {
             let ent = match rd.next_entry().await {
                 Ok(Some(ent)) => ent,
-                Ok(None) => break,
-                Err(e) => return err_frame(w, &e, "read_dir").await,
+                _ => break,
             };
             let Ok(ft) = ent.file_type().await else {
                 continue;
@@ -54,8 +53,15 @@ pub async fn find<W: AsyncWrite + Unpin>(
                 scan_file(w, &re, &p).await?;
             }
         }
+        rd = loop {
+            let Some(dir) = stack.pop() else {
+                return proto::write_frame(w, &Response::Done).await;
+            };
+            if let Ok(rd) = fs::read_dir(&dir).await {
+                break rd;
+            }
+        };
     }
-    proto::write_frame(w, &Response::Done).await
 }
 
 /// Rewrites every `pattern` match to `replacement` in each of `files`,
