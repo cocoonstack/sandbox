@@ -2,7 +2,7 @@
 //! rewrites matches in named files. Regex handling lives here so agents pass a
 //! pattern as data rather than shell-quoting it through exec.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use regex::Regex;
 use tokio::fs;
@@ -32,13 +32,14 @@ pub async fn find<W: AsyncWrite + Unpin>(
         Some(Ok(re)) => Some(re),
         Some(Err(e)) => return proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
     };
-    let mut rd = match fs::read_dir(&path).await {
-        Ok(rd) => rd,
-        Err(e) => return err_frame(w, &e, "read_dir").await,
-    };
+    let mut stack = vec![PathBuf::from(path)];
     let mut root = true;
-    let mut stack = Vec::new();
-    loop {
+    while let Some(dir) = stack.pop() {
+        let mut rd = match fs::read_dir(&dir).await {
+            Ok(rd) => rd,
+            Err(e) if root => return err_frame(w, &e, "read_dir").await,
+            Err(_) => continue,
+        };
         loop {
             let ent = match rd.next_entry().await {
                 Ok(Some(ent)) => ent,
@@ -51,21 +52,14 @@ pub async fn find<W: AsyncWrite + Unpin>(
             };
             let p = ent.path();
             if ft.is_dir() {
-                stack.push(p.to_string_lossy().into_owned());
+                stack.push(p);
             } else if ft.is_file() && name_matches(&p, name_re.as_ref()) {
                 scan_file(w, &re, &p).await?;
             }
         }
         root = false;
-        rd = loop {
-            let Some(dir) = stack.pop() else {
-                return proto::write_frame(w, &Response::Done).await;
-            };
-            if let Ok(rd) = fs::read_dir(&dir).await {
-                break rd;
-            }
-        };
     }
+    proto::write_frame(w, &Response::Done).await
 }
 
 /// Rewrites every `pattern` match to `replacement` in each of `files`,

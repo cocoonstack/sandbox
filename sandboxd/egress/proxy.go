@@ -92,12 +92,8 @@ func New(sandbox, tenant string, policy Evaluator, secrets Secrets, ca *CA, dial
 		conns: map[net.Conn]struct{}{},
 	}
 	if ca != nil {
-		p.mitmTr = &http.Transport{
-			DialContext:         dial,
-			TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
-			MaxIdleConnsPerHost: 8,
-			IdleConnTimeout:     idleConnTimeout,
-		}
+		p.mitmTr = p.tr.Clone()
+		p.mitmTr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		p.leaves = map[string]*tls.Certificate{}
 	}
 	return p
