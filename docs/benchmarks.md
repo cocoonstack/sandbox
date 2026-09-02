@@ -89,6 +89,40 @@ labeled and must only be compared against other nested runs.
 
 <!-- paste `make bench` output below -->
 
+### 2026-09-02 — bare metal (4604b69, Batch 0 close-out round)
+
+| environment | |
+|---|---|
+| host | bare metal, AMD Ryzen 7 9700X 8-Core Processor, 16 cores, 60 GiB |
+| kernel | 7.0.0-30-generic |
+| cpufreq | powersave/balance_performance |
+| cocoon | master-8962579 |
+| cloud-hypervisor | dev 5633d38 (cocoonstack fork, v54.0.0) |
+| template | ghcr.io/cocoonstack/sandbox/rt:24.04 @ sha256:804a596ee808 |
+
+| claim tier | p50 | p90 | max | n |
+|---|---|---|---|---|
+| warm pool hit | 0.3 ms | 0.3 ms | 0.6 ms | 6 |
+| clone from golden | 0.3 ms | 0.4 ms | 0.5 ms | 10 |
+| cold boot (unpooled ghcr.io/cocoonstack/sandbox/python:3.12) | 216.5 ms | 216.5 ms | 218.3 ms | 3 |
+| burst: 16 concurrent clones | 208.5 ms | 247.2 ms | 395.0 ms | 16 |
+
+The clone-tier row still measures warm hits (see 2026-07-22); the burst
+row is the clone path. Burst reads slower than 2026-07-22 (102 → 208 ms
+p50) on a newer host kernel (7.0.0-30 vs -28). The same-day A/B of this
+sandboxd (4604b69) against the pre-round main (d5ba35d), three interleaved
+reps each on this host and kernel, read burst p50 104 / 75 / 51 ms vs
+85 / 134 / 159 ms, warm 0.3 ms on both, cold 216–221 vs 213–219 ms, so the
+delta is the host, not the round's code (cocoon-specs
+`tests/2026-09-02-batch0-hardware-regression.md`, B0-05).
+
+| data plane | measured |
+|---|---|
+| exec RTT (dial per RPC) | n=200 p50=0.14ms p90=0.22ms p99=0.34ms |
+| fs_pull throughput (128 MiB) | 659.4 MiB/s best of 3 |
+| burst wall (16 concurrent clones) | 458 ms |
+| warm refill recovery (0 → 6) | 3 ms |
+
 ### 2026-07-22 — bare metal (3e54866, CH-only round: both lanes on Cloud Hypervisor)
 
 | environment | |
