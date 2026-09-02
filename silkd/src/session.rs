@@ -74,6 +74,9 @@ impl Table {
                 stdin,
                 stdout,
                 _child: child,
+                buf: vec![0u8; READ_CHUNK],
+                acc: Vec::new(),
+                frame: Vec::new(),
             }),
             last_active: Mutex::new(Instant::now()),
         });
@@ -202,10 +205,15 @@ impl Session {
     }
 }
 
+/// The shell's pipes plus converse's scratch buffers, which are per-session
+/// and reused across commands rather than reallocated per call.
 struct Io {
     stdin: ChildStdin,
     stdout: ChildStdout,
     _child: Child,
+    buf: Vec<u8>,
+    acc: Vec<u8>,
+    frame: Vec<u8>,
 }
 
 impl Io {
@@ -219,13 +227,10 @@ impl Io {
         cmd: &str,
         mut out: Option<&mut W>,
     ) -> io::Result<i32> {
-        // Unpredictable marker: the shell runs untrusted code that must not be
-        // able to forge the sentinel and desync the stream. Redirect the
-        // command's stdin from /dev/null so a command that reads stdin (a REPL,
-        // `read`) can't swallow the sentinel printf and wedge the read. The
-        // `{ …; }` group runs in the current shell, so cd/export still persist.
-        // Trim so a trailing newline doesn't put `;` on its own line inside the
-        // group; empty becomes a no-op so `{ }` stays valid.
+        // The marker is unforgeable: the shell runs untrusted code that must
+        // not be able to fake the sentinel and desync the stream. `{ …; }
+        // </dev/null` keeps cd/export in the current shell and stops a
+        // stdin-reading command (a REPL, `read`) from swallowing the printf.
         let body = match cmd.trim_end() {
             "" => ":",
             c => c,
@@ -240,38 +245,40 @@ impl Io {
 
         let mb = marker.as_bytes();
         let keep = mb.len().saturating_sub(1);
-        let mut acc: Vec<u8> = Vec::new();
-        let mut buf = vec![0u8; READ_CHUNK];
-        let mut frame = Vec::new();
+        self.acc.clear();
         loop {
-            let n = self.stdout.read(&mut buf).await?;
+            let n = self.stdout.read(&mut self.buf).await?;
             if n == 0 {
                 return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "shell exited"));
             }
-            acc.extend_from_slice(&buf[..n]);
-            if let Some(pos) = memchr::memmem::find(&acc, mb) {
-                emit(&mut out, &mut frame, &acc[..pos]).await;
-                acc.drain(..pos + mb.len());
-                while !acc.contains(&b'\n') && acc.len() < EXIT_TAIL_MAX {
-                    let m = self.stdout.read(&mut buf).await?;
+            self.acc.extend_from_slice(&self.buf[..n]);
+            if let Some(pos) = memchr::memmem::find(&self.acc, mb) {
+                emit(&mut out, &mut self.frame, &self.acc[..pos]).await;
+                self.acc.drain(..pos + mb.len());
+                while !self.acc.contains(&b'\n') && self.acc.len() < EXIT_TAIL_MAX {
+                    let m = self.stdout.read(&mut self.buf).await?;
                     if m == 0 {
                         break;
                     }
-                    acc.extend_from_slice(&buf[..m]);
+                    self.acc.extend_from_slice(&self.buf[..m]);
                 }
                 // Parse only the exit-code line; a command that left a
                 // background writer can land bytes after the newline, which
                 // must not corrupt the code.
-                let end = acc.iter().position(|&b| b == b'\n').unwrap_or(acc.len());
-                return Ok(String::from_utf8_lossy(&acc[..end])
+                let end = self
+                    .acc
+                    .iter()
+                    .position(|&b| b == b'\n')
+                    .unwrap_or(self.acc.len());
+                return Ok(String::from_utf8_lossy(&self.acc[..end])
                     .trim()
                     .parse()
                     .unwrap_or(-1));
             }
-            if acc.len() > keep {
-                let upto = acc.len() - keep;
-                emit(&mut out, &mut frame, &acc[..upto]).await;
-                acc.drain(..upto);
+            if self.acc.len() > keep {
+                let upto = self.acc.len() - keep;
+                emit(&mut out, &mut self.frame, &self.acc[..upto]).await;
+                self.acc.drain(..upto);
             }
         }
     }

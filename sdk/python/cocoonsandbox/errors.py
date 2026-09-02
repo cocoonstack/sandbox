@@ -41,3 +41,8 @@ class ExitError(SandboxError):
 
 class ProtocolError(SandboxError):
     """The peer broke the frame protocol (unexpected frame, oversized line)."""
+
+
+class StreamTimeout(SandboxError):
+    """A socket operation exceeded the client timeout; the connection is
+    desynced, so retry the call, not the frame."""

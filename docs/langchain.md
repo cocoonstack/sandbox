@@ -19,7 +19,7 @@ schemas, sync-native with `asyncio.to_thread` async bridges):
 
 | tool | what it does |
 |---|---|
-| `sandbox_exec` | run a shell command; stdout/stderr/exit code; disk state persists across calls |
+| `sandbox_exec` | run a shell command, cut off after 5 minutes; stdout/stderr/exit code; disk state persists across calls |
 | `sandbox_write_file` | write a text file (atomic on the guest) |
 | `sandbox_read_file` | read a text file |
 | `sandbox_list_dir` | list a directory as JSON |

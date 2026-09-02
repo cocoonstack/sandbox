@@ -78,9 +78,6 @@ func TestRunContextCancel(t *testing.T) {
 }
 
 func TestUpgradeKeepsCoalescedBytes(t *testing.T) {
-	// The server flushes the 101 and every response frame in a single write
-	// before reading the request; the frames ride into the handshake reader
-	// and must survive.
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", func(w http.ResponseWriter, r *http.Request) {
 		conn, _, err := http.NewResponseController(w).Hijack()
@@ -139,9 +136,6 @@ func TestDialAgentRejectsControlChars(t *testing.T) {
 	}
 }
 
-// newAgentServer serves the agent endpoint by hijacking and handing the conn
-// to serve (a fake silkd), mirroring sandboxd's relay from the SDK's
-// perspective.
 func newAgentServer(t *testing.T, serve func(net.Conn)) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()

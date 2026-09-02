@@ -4,9 +4,10 @@
 import sandbox "github.com/cocoonstack/sandbox/sdk/go"
 ```
 
-The SDK is stdlib-only. One `Client` talks to one entry node; sandbox
-handles dial their owning node directly, so a client works unchanged against
-a single node or a cluster.
+The SDK has no third-party dependencies (only the sibling `protocol/wire`
+module). One `Client` talks to one entry node; sandbox handles dial their
+owning node directly, so a client works unchanged against a single node or a
+cluster.
 
 ## A complete example
 
@@ -529,5 +530,7 @@ if errors.As(err, &e) && e.Kind == wire.KindUnimplemented {
 }
 ```
 
-Context cancellation is honored on every call: canceling the ctx closes the
-underlying connection and the call returns `ctx.Err()`.
+Context cancellation is honored on every call that takes a ctx: canceling it
+closes the underlying connection. Data-plane calls return `ctx.Err()`
+directly; control-plane verbs return a `*url.Error` wrapping it, so test with
+`errors.Is`, never `==`. `Close` is the exception: it takes no ctx.

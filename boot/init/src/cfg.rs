@@ -243,7 +243,6 @@ mod tests {
         assert!(!debug_requested("a sandbox.debug=0 b"));
         assert!(!debug_requested("a sandbox.debugger b"));
         assert!(!debug_requested(""));
-        // Last occurrence wins, like parse().
         assert!(!debug_requested("sandbox.debug=1 x sandbox.debug=0"));
         assert!(debug_requested("sandbox.debug=0 x sandbox.debug"));
     }
@@ -298,7 +297,6 @@ mod tests {
 
     #[test]
     fn parse_cocoon_ip_param() {
-        // Exact shape BuildIPParams emits, with both DNS servers.
         let cfg = parse(
             "cocoon.layers=l0 cocoon.cow=cow \
              ip=172.20.100.5::172.20.100.1:255.255.255.0:vm1:eth0:off:8.8.8.8:8.8.4.4",

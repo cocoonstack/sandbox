@@ -16,19 +16,15 @@ const (
 	defaultDeleteClientTimeout = 10 * time.Second
 )
 
-// Broadcaster fans a checkpoint delete out to every peer after a local
-// delete, so a record healed onto another node does not outlive the source.
+// Broadcaster fans a checkpoint delete out to every peer so a healed copy does not outlive it.
 type Broadcaster struct {
-	// A nil Client uses a default with a short timeout: one wedged peer must
-	// not hold up the fan-out.
+	// A nil Client uses a default with a short timeout: one wedged peer must not hold up the fan-out.
 	Client *http.Client
 	Peers  func() []string
 	Token  string
 }
 
-// Delete sends DELETE ?no_forward=1 to every peer in parallel. Failures are
-// logged and never returned: a broadcast is best-effort and must never fail
-// the local delete it follows.
+// Delete sends DELETE ?no_forward=1 to every peer in parallel; failures are logged, not returned.
 func (b *Broadcaster) Delete(ctx context.Context, id string) {
 	addrs := dedupAddrs(b.Peers())
 	if len(addrs) == 0 {

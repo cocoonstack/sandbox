@@ -11,8 +11,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// SetPools replaces the node's desired warm targets. Existing claims are not
-// affected; only unclaimed warm VMs are trimmed or refilled.
+// SetPools replaces the node's desired warm targets; existing claims are unaffected.
 func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 	desired := make(map[types.PoolKey]config.PoolSpec, len(specs))
 	hashes := make(map[string]types.PoolKey, len(specs))
@@ -24,8 +23,7 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 		if err := spec.ValidateLimits(); err != nil {
 			return fmt.Errorf("%w: %v", ErrBadCount, err)
 		}
-		// Egress is config-owned (validated at load); accepting it here would
-		// silently drop it.
+		// egress is config-owned; accepting it here would silently drop it
 		if spec.Egress != nil {
 			return fmt.Errorf("%w: pool %q: egress is set in the config file, not via the API", ErrBadKey, spec.Template)
 		}
@@ -46,8 +44,7 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 	now := time.Now()
 	for key, p := range m.pools {
 		spec, ok := desired[key]
-		// A removed key gets the zero spec: a lingering pool sheds its whole
-		// policy — a stale archiveAfter would keep archiving its claims.
+		// a removed key gets the zero spec, so a lingering pool sheds a stale archiveAfter
 		p.applySpec(spec)
 		p.removed = !ok
 		trim = append(trim, p.trimWarm(p.effectiveTarget(now))...)
@@ -59,13 +56,12 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 		if p := m.pools[key]; p != nil {
 			continue
 		}
-		p := &pool{key: key}
+		p := newPool(key)
 		p.applySpec(spec)
 		m.adoptGolden(p)
 		m.pools[key] = p
 	}
-	// Recompute rather than latch: removing every idle pool turns the
-	// sweep off again.
+	// recompute rather than latch: removing every idle pool turns the sweep off again
 	m.idleEnabled = m.idleDefault > 0
 	m.archiveEnabled = m.archiveAfterDefault > 0
 	for _, p := range m.pools {
@@ -88,8 +84,7 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 	return m.poolStore.commit(seq, poolsFile{ConfigSeed: m.configSeedHash, Pools: persisted})
 }
 
-// normalizePoolSpec fills the wire defaults: API requests default net/size;
-// config files stay explicit (Validate rejects empty there).
+// normalizePoolSpec fills the wire defaults; config files stay explicit.
 func normalizePoolSpec(spec config.PoolSpec) config.PoolSpec {
 	spec.PoolKey = spec.Defaulted()
 	return spec

@@ -129,8 +129,7 @@ func TestPromoteValidations(t *testing.T) {
 	if _, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: "wrong"}, "tpl:x", ""); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("bad token: %v, want ErrUnknownSandbox", err)
 	}
-	// Same template/net/size as the configured pool: the golden path would
-	// collide with the pool's own.
+
 	if _, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, testKey.Template, ""); !errors.Is(err, ErrPooledTemplate) {
 		t.Errorf("pooled key: %v, want ErrPooledTemplate", err)
 	}
@@ -160,7 +159,7 @@ func TestDeleteTemplate(t *testing.T) {
 	if m.HasGolden(t.Context(), key, "") {
 		t.Error("template still resolvable after delete")
 	}
-	// The next claim for the deleted template cold-boots instead of cloning.
+
 	before := len(eng.colds)
 	if _, err := claimAny(t.Context(), m, key, 0); err != nil {
 		t.Fatalf("Claim after delete: %v", err)
@@ -186,8 +185,6 @@ func TestReconcileSweepsGoldenTmpDirs(t *testing.T) {
 }
 
 func TestResolveGoldenSkipsPromotedEgressTemplate(t *testing.T) {
-	// A template promoted before the egress guard existed must never be resumed:
-	// resolveGolden returns "" for the egress lane so the claim cold-boots.
 	m := newTestManager(t, newFakeEngine())
 	id := store.TemplateID(egKey.Hash())
 	staging, err := m.tpls.Stage(id)
@@ -236,9 +233,6 @@ func TestTemplateTenantScopedDelete(t *testing.T) {
 	}
 }
 
-// TestCommitTemplateRechecksOwnerUnderLock drives the publish-side check
-// directly: two racers that both passed Promote's early check must still
-// serialize on ownership at publish.
 func TestCommitTemplateRechecksOwnerUnderLock(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	id := store.TemplateID(testKey.Hash())
@@ -261,8 +255,6 @@ func TestCommitTemplateRechecksOwnerUnderLock(t *testing.T) {
 	}
 }
 
-// TestPromoteFailsClosedOnMetaError: an unreadable template meta must refuse
-// the promote, never skip the ownership check.
 func TestPromoteFailsClosedOnMetaError(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores file permissions")
@@ -306,7 +298,7 @@ func TestPromoteRefusesCrossTenantOverwrite(t *testing.T) {
 	if _, _, err := m.Promote(t.Context(), b.ID, Cred{Token: b.Token}, "shared:v1", "beta"); !errors.Is(err, ErrTemplateOwned) {
 		t.Errorf("beta overwrite: %v, want ErrTemplateOwned", err)
 	}
-	r := claim("") // root may replace anything
+	r := claim("")
 	if _, _, err := m.Promote(t.Context(), r.ID, Cred{Token: r.Token}, "shared:v1", ""); err != nil {
 		t.Errorf("root replace: %v, want ok", err)
 	}
@@ -370,8 +362,6 @@ func TestHasPromotedTemplateIsTenantScoped(t *testing.T) {
 		t.Fatalf("promote: %v", err)
 	}
 
-	// Routing must answer what a claim would: promising beta a golden here
-	// makes redirectClaim skip the peer hop and cold-boot the name as an image.
 	if m.HasPromotedTemplate(t.Context(), key, "beta") {
 		t.Error("beta sees acme's template as a local golden")
 	}

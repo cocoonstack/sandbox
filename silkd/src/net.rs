@@ -3,7 +3,7 @@
 //! all-builtin kernel auto-creates). Network verbs (git clone/push/pull) and
 //! proxy-env forwarding consult this.
 
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicI8, Ordering};
 
 static LANE_OVERRIDE: AtomicI8 = AtomicI8::new(-1);
@@ -28,13 +28,13 @@ pub fn has_egress() -> bool {
         _ => {}
     }
     // Probed once: the NIC set is fixed for the guest's life.
-    static DEVICE_BACKED: OnceLock<bool> = OnceLock::new();
-    *DEVICE_BACKED.get_or_init(|| {
+    static DEVICE_BACKED: LazyLock<bool> = LazyLock::new(|| {
         let Ok(entries) = std::fs::read_dir("/sys/class/net") else {
             return true;
         };
         entries.flatten().any(|e| e.path().join("device").exists())
-    })
+    });
+    *DEVICE_BACKED
 }
 
 /// Lane override for tests: set_var would race every concurrent getenv.
@@ -44,10 +44,11 @@ pub fn override_egress_for_tests(lane: Option<bool>) {
 
 /// SILKD_NET decoded once: operator config, fixed at service start.
 fn silkd_net() -> i8 {
-    static SILKD_NET: OnceLock<i8> = OnceLock::new();
-    *SILKD_NET.get_or_init(|| match std::env::var("SILKD_NET").as_deref() {
-        Ok("none") => 0,
-        Ok("egress") => 1,
-        _ => -1,
-    })
+    static SILKD_NET: LazyLock<i8> =
+        LazyLock::new(|| match std::env::var("SILKD_NET").as_deref() {
+            Ok("none") => 0,
+            Ok("egress") => 1,
+            _ => -1,
+        });
+    *SILKD_NET
 }

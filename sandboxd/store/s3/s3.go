@@ -34,9 +34,7 @@ const (
 	uploadPartSizeBytes = 16 << 20
 )
 
-// Config selects the bucket and, for MinIO/R2-style endpoints, the
-// addressing mode. Credentials come from the standard AWS chain (env,
-// IAM role, web identity) — never from sandboxd's config file.
+// Config selects the bucket; credentials come from the standard AWS chain, never this config.
 type Config struct {
 	Bucket         string `json:"bucket"`
 	Prefix         string `json:"prefix,omitempty"`
@@ -58,8 +56,7 @@ type transferManager interface {
 
 var _ store.Store = (*Store)(nil)
 
-// Store stages locally under stagingRoot and publishes to the bucket;
-// idRe names the instance's id namespace within the shared prefix.
+// Store stages locally and publishes to the bucket; idRe names the instance's id namespace.
 type Store struct {
 	client  *awss3.Client
 	tm      transferManager
@@ -75,8 +72,7 @@ func New(ctx context.Context, cfg Config, stagingRoot string, idRe *regexp.Regex
 	if cfg.Bucket == "" {
 		return nil, fmt.Errorf("s3 checkpoint store needs a bucket")
 	}
-	// A prefix without its trailing slash would glue onto the id and make
-	// every record invisible to the delimiter listing.
+	// a prefix without its trailing slash hides every record from the delimiter listing.
 	if cfg.Prefix != "" && !strings.HasSuffix(cfg.Prefix, "/") {
 		cfg.Prefix += "/"
 	}
@@ -93,8 +89,7 @@ func New(ctx context.Context, cfg Config, stagingRoot string, idRe *regexp.Regex
 		}
 		o.UsePathStyle = cfg.ForcePathStyle
 	})
-	// Snapshot exports are hundreds of MB: multipart + concurrency keep a
-	// publish/fetch bandwidth-bound instead of latency-bound.
+	// snapshot exports are hundreds of MB: multipart concurrency keeps transfers bandwidth-bound.
 	tm := transfermanager.New(client, func(o *transfermanager.Options) {
 		o.PartSizeBytes = uploadPartSizeBytes
 		o.Concurrency = 8
@@ -106,11 +101,6 @@ func (s *Store) Stage(id string) (string, error) {
 	return os.MkdirTemp(s.staging, id+"-*.tmp")
 }
 
-// Publish uploads every staged file, meta.json last: a lister only sees
-// the record once its commit marker exists. Export objects live under a
-// per-generation prefix derived from the meta bytes, so a re-publish never
-// overwrites keys a concurrent Fetch of the old generation is reading —
-// mixed-generation downloads become impossible, not just unlikely.
 func (s *Store) Publish(ctx context.Context, staging, id string) error {
 	_, err := s.publish(ctx, staging, id, false)
 	return err
@@ -120,11 +110,6 @@ func (s *Store) PublishDigested(ctx context.Context, staging, id string) (string
 	return s.publish(ctx, staging, id, true)
 }
 
-// Fetch materializes the export into a local cache generation keyed by the
-// record's meta hash: an unchanged record's repeat fetch is one meta GET, and
-// a new generation never disturbs a directory an in-flight clone is reading
-// (old generations are reaped at Delete and startup). Concurrent misses share
-// one download; release is a no-op; a missing id is ErrNotFound.
 func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, string, func(), error) {
 	meta, digest, err := s.readMeta(ctx, id)
 	if err != nil {
@@ -150,8 +135,7 @@ func (s *Store) ReadMeta(ctx context.Context, id string) ([]byte, error) {
 }
 
 func (s *Store) Metas(ctx context.Context) ([][]byte, error) {
-	// Delimiter listing yields one CommonPrefix per record instead of
-	// walking every export object of both namespaces under the prefix.
+	// delimiter listing yields one CommonPrefix per record instead of every export object.
 	var ids []string
 	p := awss3.NewListObjectsV2Paginator(s.client, &awss3.ListObjectsV2Input{
 		Bucket: &s.bucket, Prefix: &s.prefix, Delimiter: aws.String("/"),
@@ -203,14 +187,9 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.deleteKeys(ctx, []string{metaKey})
 }
 
-// SweepStaging clears local staging residue AND stale cache generations —
-// it runs at startup, when no clone can be mid-flight. A crash between
-// upload and meta.json leaves orphan objects invisible to Metas; an S3
-// lifecycle rule on the bucket reclaims those (documented in deploy).
+// SweepStaging clears local staging residue at startup; objects orphaned by a crash before meta.json are reclaimed by the bucket's S3 lifecycle rule (see deploy).
 func (s *Store) SweepStaging() error { return utils.RemoveDirEntries(s.staging, nil) }
 
-// SweepGenerations is a no-op: Delete reclaims committed S3 generations, and
-// bucket lifecycle policy handles invisible upload orphans.
 func (s *Store) SweepGenerations() error { return nil }
 
 func (s *Store) readMeta(ctx context.Context, id string) ([]byte, string, error) {
@@ -271,7 +250,7 @@ func (s *Store) publish(ctx context.Context, staging, id string, digested bool) 
 	if err = s.uploadReader(ctx, s.key(id, store.MetaFile), bytes.NewReader(metaRaw), int64(len(metaRaw)), metadata); err != nil {
 		return "", err
 	}
-	// Keep old generations because another node may have selected the previous meta; Delete reclaims them.
+	// keep old generations: another node may have selected the previous meta; Delete reclaims them.
 	if err := os.RemoveAll(staging); err != nil {
 		return "", err
 	}
@@ -427,8 +406,7 @@ func (s *Store) download(ctx context.Context, key, path string) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	// DownloadObject, not GetObject: the WriterAt form downloads parts in
-	// parallel; GetObject's io.Reader is a single sequential stream.
+	// DownloadObject, not GetObject: the WriterAt form downloads parts in parallel.
 	if _, err := s.tm.DownloadObject(ctx, &transfermanager.DownloadObjectInput{Bucket: &s.bucket, Key: &key, WriterAt: f}); err != nil {
 		return fmt.Errorf("download %s: %w", key, err)
 	}
@@ -450,9 +428,7 @@ func (s *Store) deleteKeys(ctx context.Context, keys []string) error {
 			return fmt.Errorf("delete %d objects: %w", len(chunk), err)
 		}
 		for _, e := range out.Errors {
-			// Strict backends report deleting an absent key per-entry where
-			// AWS succeeds silently; tolerating it keeps Delete retries
-			// convergent, matching single-object DeleteObject semantics.
+			// strict backends error on deleting an absent key where AWS succeeds silently.
 			if code := aws.ToString(e.Code); code == "NoSuchKey" || code == "NoSuchVersion" {
 				continue
 			}

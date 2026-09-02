@@ -22,7 +22,7 @@ func TestDialPortEchoAndHalfClose(t *testing.T) {
 	if _, err := io.ReadFull(pc, buf); err != nil || string(buf) != "ping" {
 		t.Fatalf("read %q, %v — want the echo", buf, err)
 	}
-	// Half-close: the fake's server closes, surfacing as EOF.
+
 	if err := pc.CloseWrite(); err != nil {
 		t.Fatalf("close write: %v", err)
 	}

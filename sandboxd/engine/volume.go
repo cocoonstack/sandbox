@@ -13,8 +13,7 @@ import (
 )
 
 const (
-	// VolumeCallTimeout bounds one guest teardown exec; the pool scales its
-	// whole quiesce budget from it.
+	// VolumeCallTimeout bounds one guest teardown exec.
 	VolumeCallTimeout = 2 * time.Second
 
 	volumePollInterval = 10 * time.Millisecond
@@ -69,8 +68,7 @@ func (e *Engine) MountVolume(ctx context.Context, vsockSocket, name, mount strin
 	return nil
 }
 
-// UnmountVolume flushes and detaches a guest mount, so a writable image's
-// dirty state reaches the backing file before the VM is removed.
+// UnmountVolume flushes and detaches a guest mount before the VM is removed.
 func (e *Engine) UnmountVolume(ctx context.Context, vsockSocket, mount string) error {
 	ctx, cancel := context.WithTimeout(ctx, VolumeCallTimeout)
 	defer cancel()
@@ -80,8 +78,7 @@ func (e *Engine) UnmountVolume(ctx context.Context, vsockSocket, mount string) e
 	return nil
 }
 
-// SyncGuest flushes the guest page cache — the only flush left for a mount that
-// refused to unmount, since a lazy unmount would keep writing behind us.
+// SyncGuest flushes the guest page cache, the only flush left for a failed unmount.
 func (e *Engine) SyncGuest(ctx context.Context, vsockSocket string) error {
 	ctx, cancel := context.WithTimeout(ctx, VolumeCallTimeout)
 	defer cancel()

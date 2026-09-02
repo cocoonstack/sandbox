@@ -11,10 +11,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 )
 
-// AuditLineCap bounds how much of a relayed request frame the audit tap
-// captures and records: enough for the op and its addressing fields, never
-// file payloads. The relay's tee and Audit share it, so a captured line is
-// always recordable.
+// AuditLineCap bounds how much of a relayed request frame the audit tap captures and records.
 const AuditLineCap = 4096
 
 // Counters is a monotonic snapshot for /metrics; gauges come from Info.
@@ -34,8 +31,7 @@ type Counters struct {
 	Unarchives     uint64
 	ArchiveDeletes uint64
 
-	// Nanosecond totals paired with the counters above: avg latency for
-	// dashboards without histogram machinery.
+	// nanosecond totals paired with the counters above: avg latency without histograms
 	ClaimNanos uint64
 	WakeNanos  uint64
 }
@@ -86,8 +82,7 @@ func (m *Manager) Counters() Counters {
 	}
 }
 
-// TenantClaims counts live claims per configured tenant for /metrics —
-// configured tenants only, so the label cardinality stays bounded.
+// TenantClaims counts live claims per configured tenant, so label cardinality stays bounded.
 func (m *Manager) TenantClaims() map[string]int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -98,10 +93,7 @@ func (m *Manager) TenantClaims() map[string]int {
 	return counts
 }
 
-// Audit records one relayed request frame against a sandbox when the audit
-// journal is enabled: the op plus its addressing fields, payloads dropped.
-// It is the byte-level adapter over recordAudit for the relay's tee;
-// non-relay sources (preview) call recordAudit with the frame directly.
+// Audit records one relayed request frame against a sandbox: the op and addressing fields only.
 func (m *Manager) Audit(ctx context.Context, id string, line []byte) {
 	if m.audit == nil || len(line) > AuditLineCap {
 		return
@@ -132,8 +124,7 @@ func (m *Manager) recordAudit(ctx context.Context, id string, frame auditFrame) 
 	}
 }
 
-// recordEgress logs one guarded-egress decision to the audit tap (secret name
-// only, never its value) and meters it as an always-on usage event.
+// recordEgress logs one guarded-egress decision and meters it as a usage event.
 func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress.Event) {
 	decision := "deny"
 	if ev.Decision == egress.DecisionAllow {
@@ -143,9 +134,7 @@ func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress
 	m.recordUsage(ctx, usageEvent{Event: "egress", ID: id, Tenant: tenant, Reference: ev.Host})
 }
 
-// recordUsage appends one billing event; failures are logged, never
-// propagated — a claim must not fail because the meter hiccuped (cocoon's
-// machine-level ledger remains the audit backstop).
+// recordUsage appends one billing event; failures are logged, never propagated.
 func (m *Manager) recordUsage(ctx context.Context, ev usageEvent) {
 	ev.Time = time.Now()
 	if err := m.usage.append(ev); err != nil {

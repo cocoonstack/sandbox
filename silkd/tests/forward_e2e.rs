@@ -2,7 +2,9 @@
 //! test runs under a deadline — the regressions this suite exists to catch
 //! (relay deadlocks) would otherwise hang CI instead of failing it.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+mod common;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,8 +15,6 @@ use tokio::net::TcpListener;
 use tokio::time::timeout;
 
 use silkd::server::State;
-
-mod common;
 
 const DEADLINE: Duration = Duration::from_secs(30);
 
@@ -54,7 +54,6 @@ async fn forward_round_trips_and_done_on_server_close() {
         let ready = lines.next_line().await.expect("read").expect("ready");
         assert!(ready.contains("\"ready\""), "got {ready}");
 
-        // "hi" → base64 aGk= ; the echo server must send it straight back.
         cw.write_all(b"{\"v\":1,\"op\":\"data\",\"data\":\"aGk=\"}\n")
             .await
             .expect("send data");
@@ -64,7 +63,6 @@ async fn forward_round_trips_and_done_on_server_close() {
             "got {echoed}"
         );
 
-        // Half-close: the echo server sees EOF, closes, and the verb ends with done.
         cw.write_all(b"{\"v\":1,\"op\":\"data_end\"}\n")
             .await
             .expect("send data_end");
@@ -75,15 +73,10 @@ async fn forward_round_trips_and_done_on_server_close() {
     .expect("test deadline");
 }
 
-// Bidirectional bulk transfer must not head-of-line deadlock: the client
-// streams > socket-buffer worth of input into an echo server that is
-// simultaneously streaming it all back, so both directions have to make
-// progress concurrently. A single-select relay (write_all stalling the read
-// arm) hangs this test.
 #[tokio::test]
 async fn forward_bidirectional_bulk_no_deadlock() {
-    const CHUNK: usize = 3072; // multiple of 3: base64 with no padding
-    const FRAMES: usize = 400; // ~1.2 MiB, well past socket + duplex buffers
+    const CHUNK: usize = 3072;
+    const FRAMES: usize = 400;
 
     timeout(DEADLINE, async {
         let port = echo_listener().await;
@@ -138,7 +131,6 @@ async fn forward_refused_port_is_not_found() {
         let state = Arc::new(State::new());
         let (mut cw, mut lines, _) = common::connect(&state);
 
-        // Port 1 on loopback: nothing listens there in the test environment.
         cw.write_all(b"{\"v\":1,\"op\":\"port_forward\",\"port\":1}\n")
             .await
             .expect("send request");
@@ -165,7 +157,6 @@ async fn forward_stray_frame_is_bad_request() {
         let ready = lines.next_line().await.expect("read").expect("ready");
         assert!(ready.contains("\"ready\""), "got {ready}");
 
-        // A non-data frame mid-relay is a protocol violation, not a clean end.
         cw.write_all(b"{\"v\":1,\"op\":\"ps\"}\n")
             .await
             .expect("send stray");

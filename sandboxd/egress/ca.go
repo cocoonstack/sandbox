@@ -24,8 +24,7 @@ const (
 	pemTypeCertificate = "CERTIFICATE"
 )
 
-// CA signs per-host interception leaves with the node's intermediate. The
-// shared cluster root is baked into guests; the root key never reaches a node.
+// CA signs per-host interception leaves with the node's intermediate.
 type CA struct {
 	rootPEM   []byte
 	rootFP    string
@@ -35,8 +34,7 @@ type CA struct {
 	leafKey   *ecdsa.PrivateKey
 }
 
-// LoadCA builds the node CA; the intermediate must be signed by the bundle's
-// first root cert (a bundle carries old+new roots during a rotation).
+// LoadCA builds the node CA; the intermediate must be signed by the bundle's first cert.
 func LoadCA(rootCertPEM, interCertPEM, interKeyPEM []byte) (*CA, error) {
 	root, err := parseRootBundle(rootCertPEM)
 	if err != nil {
@@ -59,8 +57,7 @@ func LoadCA(rootCertPEM, interCertPEM, interKeyPEM []byte) (*CA, error) {
 	if err = inter.CheckSignatureFrom(root); err != nil {
 		return nil, fmt.Errorf("intermediate not signed by root: %w", err)
 	}
-	// Reject a self-signed intermediate: the root must not double as one, which
-	// would put the root key on the node.
+	// reject a self-signed intermediate: it would put the root key on the node.
 	if inter.CheckSignatureFrom(inter) == nil {
 		return nil, fmt.Errorf("intermediate must not be a self-signed root")
 	}
@@ -86,12 +83,10 @@ func LoadCA(rootCertPEM, interCertPEM, interKeyPEM []byte) (*CA, error) {
 // CertPEM is the cluster root to bake into an intercepted guest's trust store.
 func (c *CA) CertPEM() []byte { return c.rootPEM }
 
-// Fingerprint is the SHA-256 of the baked root PEM; changed bytes rebuild the
-// golden, a rotated intermediate does not.
+// Fingerprint is the SHA-256 of the baked root PEM, so a rotated intermediate keeps it.
 func (c *CA) Fingerprint() string { return c.rootFP }
 
-// SignLeaf issues a fresh interception leaf for host, chained [leaf,
-// intermediate] for a guest that trusts the root.
+// SignLeaf issues a fresh interception leaf for host, chained [leaf, intermediate].
 func (c *CA) SignLeaf(host string) (*tls.Certificate, error) {
 	serial, err := serialNumber()
 	if err != nil {
@@ -146,8 +141,7 @@ func parseCert(pemBytes []byte, what string) (*x509.Certificate, error) {
 	return cert, nil
 }
 
-// parseRootBundle returns the first cert (the anchor) and rejects any non-CA
-// block: the whole file lands in guest trust stores.
+// parseRootBundle returns the anchor and rejects a non-CA block: guests trust the whole file.
 func parseRootBundle(pemBytes []byte) (*x509.Certificate, error) {
 	var anchor *x509.Certificate
 	for rest := pemBytes; ; {

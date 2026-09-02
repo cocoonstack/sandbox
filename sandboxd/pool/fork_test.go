@@ -10,14 +10,6 @@ import (
 	"time"
 )
 
-// TestForkRacingHibernateUsesPrivateSource pins the transition-locked source
-// decision: a hibernate landing between Fork's entry and its capture must
-// never let the fan-out clone the shared wake snapshot.
-//
-// Not a synctest candidate: Fork's block on sb.Transition (a plain
-// sync.Mutex) is never "durably blocked" by synctest's rules, so the bubble
-// can't fast-forward past the 20ms sleep that lets Fork reach it — verified
-// as a real deadlock (times out at 120s), not a flake.
 func TestForkRacingHibernateUsesPrivateSource(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -46,7 +38,7 @@ func TestForkRacingHibernateUsesPrivateSource(t *testing.T) {
 			children = append(children, sb.ID)
 		}
 	})
-	time.Sleep(20 * time.Millisecond) // let Fork reach the transition lock
+	time.Sleep(20 * time.Millisecond)
 	close(eng.hibernateStall)
 	wg.Wait()
 
@@ -78,7 +70,7 @@ func TestForkFromRunning(t *testing.T) {
 	if len(eng.snapSaves) != 1 || !strings.HasPrefix(eng.snapSaves[0], forkPrefix) {
 		t.Errorf("snapSaves %v, want one %s* snapshot", eng.snapSaves, forkPrefix)
 	}
-	// Fast path: clone the children straight from the store snapshot, no export.
+
 	if len(eng.exports) != 0 {
 		t.Errorf("exported %v, want none (fork clones from the snapshot directly)", eng.exports)
 	}
@@ -135,7 +127,7 @@ func TestForkFromHibernatedUsesWakeImage(t *testing.T) {
 	if slices.Contains(eng.snapRemoves, hibSnap) {
 		t.Error("hibernate snapshot dropped by fork — the parent could never wake")
 	}
-	// The parent stays hibernated and must still wake.
+
 	if _, err := m.WakeAgentSocket(t.Context(), parent.ID, parent.Token); err != nil {
 		t.Fatalf("wake after fork: %v", err)
 	}
@@ -167,17 +159,16 @@ func TestForkUnknownSandbox(t *testing.T) {
 func TestForkAllOrNothing(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	parent, err := claimAny(t.Context(), m, testKey, 0) // cold boot, no Clone calls yet
+	parent, err := claimAny(t.Context(), m, testKey, 0)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
-	eng.cloneFailNth = 2 // fail one of the three fork clones
+	eng.cloneFailNth = 2
 
 	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 3, 0); err == nil {
 		t.Fatal("Fork succeeded despite a failed clone")
 	}
-	// Every successfully built child is destroyed; only the parent's claim
-	// survives in memory and on disk.
+
 	if _, g := m.Info(); g.Claimed != 1 {
 		t.Errorf("claimed=%d, want only the parent", g.Claimed)
 	}
@@ -206,11 +197,10 @@ func TestReconcileSweepsOrphanSnapshots(t *testing.T) {
 		hibernatePrefix + "orphan-1",
 		forkPrefix + "stale-2",
 		goldenPrefix + "stale-3",
-		"user-snapshot", // not ours: never touched
+		"user-snapshot",
 	}
 	eng.mu.Unlock()
 
-	// A fresh manager over the same journal models the post-crash restart.
 	m2 := newTestManagerAt(t, eng, dataDir)
 	if err := m2.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -225,7 +215,7 @@ func TestReconcileSweepsOrphanSnapshots(t *testing.T) {
 			t.Errorf("snapshot %q swept but must be kept", keep)
 		}
 	}
-	// The adopted hibernated claim still wakes after the restart.
+
 	if _, err := m2.WakeAgentSocket(t.Context(), parent.ID, parent.Token); err != nil {
 		t.Fatalf("wake after reconcile: %v", err)
 	}
@@ -249,7 +239,7 @@ func TestForkChildrenInheritTenantAndQuota(t *testing.T) {
 			t.Errorf("child %d tenant %q, want acme", i, c.Tenant)
 		}
 	}
-	// Parent plus two children fill acme's cap of 3; one more child is over.
+
 	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 1, 0); !errors.Is(err, ErrQuota) {
 		t.Errorf("fork past the tenant cap: %v, want ErrQuota", err)
 	}

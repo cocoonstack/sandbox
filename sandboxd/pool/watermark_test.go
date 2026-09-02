@@ -15,8 +15,6 @@ func TestEffectiveTargetTracksDemand(t *testing.T) {
 		t.Fatalf("quiet pool target %d, want the floor", got)
 	}
 
-	// A burst of one claim every 100ms → ~10/s; ×0.5s lead ×2 safety = 10,
-	// capped at warmMax.
 	for i := range 20 {
 		p.noteArrival(now.Add(time.Duration(i) * 100 * time.Millisecond))
 	}
@@ -25,7 +23,6 @@ func TestEffectiveTargetTracksDemand(t *testing.T) {
 		t.Errorf("burst target %d, want warmMax 8", got)
 	}
 
-	// Silence decays the rate; minutes later the target is the floor again.
 	if got := p.effectiveTarget(burstEnd.Add(5 * time.Minute)); got != 2 {
 		t.Errorf("post-silence target %d, want the floor", got)
 	}

@@ -24,9 +24,6 @@ func TestDirBackendContract(t *testing.T) {
 	storetest.RunContract(t, st)
 }
 
-// TestFetchPinsGenerationAcrossStoreInstances: a fetched generation must
-// survive a concurrent re-publish from another store instance (another
-// process on a shared mount) — retention replaces the old cross-process lock.
 func TestFetchPinsGenerationAcrossStoreInstances(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	root := t.TempDir()
@@ -300,8 +297,6 @@ func TestSweepGenerationsPairsCurrentAndSupersededDigests(t *testing.T) {
 	}
 }
 
-// TestPublishRetriesAfterExpiredInstall: an expired uncommitted generation is
-// never revived; GC then retry converges, and the committed retry is idempotent.
 func TestPublishRetriesAfterExpiredInstall(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	root := t.TempDir()
@@ -346,9 +341,6 @@ func TestPublishRetriesAfterExpiredInstall(t *testing.T) {
 	}
 }
 
-// TestFetchLegacyFlatLayout: records published before per-generation dirs
-// keep a flat <id>/export; Fetch falls back to it, and a re-publish moves the
-// record onto the generation layout.
 func TestFetchLegacyFlatLayout(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	root := t.TempDir()
@@ -378,8 +370,6 @@ func TestFetchLegacyFlatLayout(t *testing.T) {
 	}
 }
 
-// TestPublishSweepsGenerationsBySupersessionAge: rolling re-promotes reclaim
-// generations outside their own grace without disturbing newer generations.
 func TestPublishSweepsGenerationsBySupersessionAge(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	root := t.TempDir()
@@ -418,8 +408,6 @@ func TestPublishSweepsGenerationsBySupersessionAge(t *testing.T) {
 	}
 }
 
-// TestSweepSparesPublishingGeneration: a peer sweep cannot delete a fresh
-// generation between its install and meta commit.
 func TestSweepSparesPublishingGeneration(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	root := t.TempDir()
@@ -465,8 +453,6 @@ func TestSweepSparesPublishingGeneration(t *testing.T) {
 	}
 }
 
-// TestSweepSparesLegacyFallback: the flat export dir of a never-re-published
-// legacy record is live data; once a re-publish supersedes it, grace applies.
 func TestSweepSparesLegacyFallback(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	root := t.TempDir()
@@ -500,8 +486,6 @@ func TestSweepSparesLegacyFallback(t *testing.T) {
 	}
 }
 
-// TestSweepReclaimsOnlyAgedUncommittedGenerations: an abandoned generation
-// is reclaimed across ids while a peer's uncommitted publish remains intact.
 func TestSweepReclaimsOnlyAgedUncommittedGenerations(t *testing.T) {
 	const (
 		orphanID  = "ck_00000000000000aa"
@@ -574,8 +558,6 @@ func TestSweepReclaimsOnlyAgedUncommittedGenerations(t *testing.T) {
 	}
 }
 
-// TestSweepGenerationsToleratesConcurrentDelete: a record deleted mid-sweep
-// must not fail the pass — the first error aborts every remaining record.
 func TestSweepGenerationsToleratesConcurrentDelete(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	st, err := New(t.TempDir(), store.CheckpointIDRe)
@@ -624,8 +606,6 @@ func TestSweepGenerationsToleratesConcurrentDelete(t *testing.T) {
 	}
 }
 
-// TestDeleteRemovesLegacyResidue: Delete clears a pre-generation <id>.old
-// crash artifact along with the record, and is idempotent on a missing id.
 func TestDeleteRemovesLegacyResidue(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	root := t.TempDir()
@@ -650,8 +630,6 @@ func TestDeleteRemovesLegacyResidue(t *testing.T) {
 	}
 }
 
-// TestMetasSurfacesReadError: a corrupt/unreadable meta must fail the listing,
-// not vanish silently — mirroring the s3 backend.
 func TestMetasSurfacesReadError(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	root := t.TempDir()
@@ -659,7 +637,7 @@ func TestMetasSurfacesReadError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	// A directory where meta.json is expected makes ReadFile fail with EISDIR.
+
 	if err := os.MkdirAll(filepath.Join(root, id, store.MetaFile), 0o750); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -672,8 +650,6 @@ func metaJSON(metaID string) string {
 	return `{"id":"` + metaID + `"}`
 }
 
-// installUncommitted installs metaID's generation without committing
-// meta.json — the state a crash between install and commit leaves.
 func installUncommitted(t *testing.T, st *Store, root, id, metaID string) (meta []byte, gen string) {
 	t.Helper()
 	staging, err := st.Stage(id)
@@ -699,8 +675,6 @@ func installUncommitted(t *testing.T, st *Store, root, id, metaID string) (meta 
 	return meta, gen
 }
 
-// mustPublish stages and publishes a one-file export whose meta is
-// metaJSON(metaID).
 func mustPublish(t *testing.T, st *Store, id, metaID string) {
 	t.Helper()
 	staging, err := st.Stage(id)

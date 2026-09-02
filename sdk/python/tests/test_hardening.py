@@ -11,7 +11,6 @@ from cocoonsandbox.conn import Conn, dial_agent
 
 
 def test_dial_agent_rejects_control_chars_in_identity():
-    # A CR/LF in id or token would split the hand-built HTTP request line.
     with pytest.raises(APIError):
         dial_agent("127.0.0.1:1", "sb\r\nInjected: 1", "tok", 0.5)
     with pytest.raises(APIError):
@@ -23,7 +22,6 @@ def test_watcher_propagates_silkd_error():
     guest_sock.sendall(json.dumps({"type": "error", "kind": "not_found", "message": "gone"}).encode() + b"\n")
     guest_sock.close()
     watcher = Watcher(Conn(client_sock, client_sock.makefile("rb")))
-    # A real server error frame must surface, not read as a clean stream end.
     with pytest.raises(SilkdError):
         for _ in watcher:
             pass
@@ -34,8 +32,6 @@ def test_watcher_ends_cleanly_on_garbage_frame():
     guest_sock.sendall(b"not json at all\n")
     guest_sock.close()
     watcher = Watcher(Conn(client_sock, client_sock.makefile("rb")))
-    # An undecodable frame ends iteration; it must not escape as a raw
-    # ValueError/JSONDecodeError from the public iterator.
     assert list(watcher) == []
 
 
@@ -46,8 +42,6 @@ def test_request_wraps_truncated_body_as_api_error():
     def serve():
         conn, _ = server.accept()
         conn.recv(4096)
-        # Declare more body than is sent: read() raises IncompleteRead,
-        # which is an HTTPException, not an OSError.
         conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort")
         conn.close()
 

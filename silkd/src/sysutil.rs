@@ -3,12 +3,11 @@
 //! lives here (pty.rs holds the one other unsafe block, its pre_exec
 //! registration).
 
-use std::fmt::Write as _;
 use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex};
 
 use tokio::process::Command;
 
@@ -29,6 +28,8 @@ const FORWARDED: [&str; 6] = [
     "NO_PROXY",
 ];
 
+const HEX: [u8; 16] = *b"0123456789abcdef";
+
 /// A suffix unique within this process (pid + monotonic counter), enough to
 /// name a temp file a concurrent write in the same directory won't collide
 /// with. Not cryptographic — just unique.
@@ -43,19 +44,33 @@ pub fn tmp_suffix() -> String {
 /// A 128-bit unpredictable hex token from the OS CSPRNG. Used where an
 /// in-sandbox command must not be able to guess or forge the value (the
 /// session-command sentinel). Falls back to the predictable tmp_suffix only if
-/// /dev/urandom is unreadable, which never happens on a normal guest.
+/// the CSPRNG is unreadable, which never happens on a normal guest.
 pub fn rand_token() -> String {
     let mut b = [0u8; 16];
-    match std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)) {
-        Ok(()) => {
-            let mut s = String::with_capacity(32);
-            for x in b {
-                let _ = write!(s, "{x:02x}");
-            }
-            s
-        }
-        Err(_) => tmp_suffix(),
+    if !fill_random(&mut b) {
+        return tmp_suffix();
     }
+    b.iter()
+        .flat_map(|byte| [HEX[(byte >> 4) as usize], HEX[(byte & 0xf) as usize]])
+        .map(char::from)
+        .collect()
+}
+
+/// Fills `b` from the OS CSPRNG, sparing an async caller the open/read/close a
+/// tokio worker would block on. GRND_NONBLOCK never waits on an early-boot
+/// pool; /dev/urandom is the same source and covers the fallback.
+fn fill_random(b: &mut [u8]) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: getrandom writes at most b.len() bytes into b's live buffer.
+        let n = unsafe { libc::getrandom(b.as_mut_ptr().cast(), b.len(), libc::GRND_NONBLOCK) };
+        if n == b.len() as isize {
+            return true;
+        }
+    }
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(b))
+        .is_ok()
 }
 
 /// SIGKILLs the process group led by `pgid` — a session's shell plus its
@@ -133,8 +148,9 @@ fn compose_env<'a>(nic: bool, proxy: &'a [(&'static str, String)]) -> Vec<(&'sta
 /// The FORWARDED values present in silkd's own environment, read once: the
 /// unit environment is fixed at service start and silkd never mutates it.
 fn proxy_vars() -> &'static [(&'static str, String)] {
-    static PROXY_VARS: OnceLock<Vec<(&'static str, String)>> = OnceLock::new();
-    PROXY_VARS.get_or_init(|| snapshot_proxy(|key| std::env::var(key).ok()))
+    static PROXY_VARS: LazyLock<Vec<(&'static str, String)>> =
+        LazyLock::new(|| snapshot_proxy(|key| std::env::var(key).ok()));
+    &PROXY_VARS
 }
 
 fn snapshot_proxy(get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, String)> {
@@ -202,7 +218,7 @@ pub fn openpty(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
             &mut slave,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            std::ptr::addr_of_mut!(ws),
+            &raw mut ws,
         )
     };
     if rc != 0 {
@@ -320,8 +336,6 @@ mod tests {
         assert!(env.iter().any(|(k, _)| *k == "TERM"));
     }
 
-    /// The no-NIC lane only reaches out if the proxy variables arrive without
-    /// anyone asking; nothing else of silkd's environment is the guest's.
     #[test]
     fn base_env_forwards_only_the_proxy_variables() {
         let proxy = snapshot_proxy(|key| match key {
@@ -346,8 +360,6 @@ mod tests {
         );
     }
 
-    /// A guest with a working NIC must not be steered into the loopback relay,
-    /// which is closed unless the host armed a proxy for this sandbox.
     #[test]
     fn base_env_forwards_nothing_when_a_nic_is_present() {
         let proxy = snapshot_proxy(|_| Some("http://127.0.0.1:3128".to_string()));
@@ -358,8 +370,6 @@ mod tests {
         );
     }
 
-    /// Env-inheriting children (git, language servers) follow the same lane
-    /// rule as cleared ones: scrubbed with a NIC, inherited without.
     #[test]
     fn align_proxy_env_scrubs_only_on_a_nic_lane() {
         let removed = |cmd: &Command| cmd.as_std().get_envs().filter(|(_, v)| v.is_none()).count();

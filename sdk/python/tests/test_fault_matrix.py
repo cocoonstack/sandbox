@@ -5,39 +5,11 @@ candidate error that still tries the next one, every candidate exhausted
 error) — and lookup must not pay a hung or dead peer's full timeout."""
 
 import socket
-import threading
 import time
-from http.server import HTTPServer
 
 import pytest
-from test_client import FakeNode
 
 from cocoonsandbox import APIError, Client
-
-
-@pytest.fixture
-def spawn_node():
-    servers = []
-
-    def spawn(routes):
-        handler = type("Node", (FakeNode,), {"routes": routes})
-        server = HTTPServer(("127.0.0.1", 0), handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        servers.append(server)
-        return f"127.0.0.1:{server.server_port}"
-
-    yield spawn
-    for server in servers:
-        server.shutdown()
-
-
-@pytest.fixture
-def dead_addr():
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return f"127.0.0.1:{port}"
 
 
 @pytest.fixture
@@ -64,8 +36,6 @@ def test_claim_redirect_skips_404_candidate(spawn_node):
 
 
 def test_claim_redirect_all_candidates_fail_then_origin_fallback_fails(spawn_node):
-    # Every candidate is a stale miss (404); once exhausted, new() falls
-    # back to the origin, which this time fails definitively too.
     a = spawn_node({("POST", "/v1/claim"): lambda body, path: (404, {"error": "gone a"})})
     b = spawn_node({("POST", "/v1/claim"): lambda body, path: (404, {"error": "gone b"})})
 
@@ -81,15 +51,11 @@ def test_claim_redirect_all_candidates_fail_then_origin_fallback_fails(spawn_nod
     with pytest.raises(APIError) as exc:
         Client(entry).new("rt:24.04")
     assert exc.value.status == 409 and "origin also failed" in exc.value.message
-    # The last candidate's failure must survive into the message: it is what
-    # says why the claim left the origin in the first place.
     assert "gone b" in exc.value.message
     assert len(calls) == 2 and calls[1]["no_redirect"] is True
 
 
 def test_claim_redirect_all_candidates_fail_then_origin_heals(spawn_node):
-    # The only candidate holds the record but is full (429); once exhausted,
-    # new() falls back to the origin, which heals (provisions locally).
     full_calls = []
 
     def full_claim(body, path):
@@ -115,8 +81,6 @@ def test_claim_redirect_all_candidates_fail_then_origin_heals(spawn_node):
 
 @pytest.mark.parametrize(("status", "message"), [(409, "no egress"), (403, "tenant not allowed")])
 def test_claim_redirect_definitive_error_skips_origin_fallback(spawn_node, status, message):
-    # A definitive 4xx is not worth trying another candidate, and not worth
-    # falling back to the origin either -- the origin would fail the same way.
     bad = spawn_node({("POST", "/v1/claim"): lambda body, path: (status, {"error": message})})
 
     calls = []
@@ -157,9 +121,6 @@ def test_claim_redirect_401_candidate_falls_back_to_origin(spawn_node):
 
 
 def test_claim_redirect_candidate_definitive_error_still_tries_next_candidate(spawn_node):
-    # Candidate one is wrong for this claim (403, definitive) but candidate
-    # two would still succeed -- the per-candidate walk retries broadly, so
-    # one ill-suited candidate must not cost a candidate that would answer.
     forbidden = spawn_node({("POST", "/v1/claim"): lambda body, path: (403, {"error": "tenant not allowed"})})
     good = spawn_node({("POST", "/v1/claim"): lambda body, path: (200, {"id": "sb_3", "token": "t"})})
     entry = spawn_node({("POST", "/v1/claim"): lambda body, path: (200, {"redirect": [forbidden, good]})})

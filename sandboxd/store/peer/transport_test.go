@@ -13,10 +13,6 @@ import (
 	"testing"
 )
 
-// TestTarUntarRoundTrip is the transport's core promise: a record that goes out
-// as a tar comes back byte-identical on the other node, directory structure
-// included. A checkpoint is a guest memory image plus its meta — a transport
-// that silently drops a file would produce a clone of the wrong state.
 func TestTarUntarRoundTrip(t *testing.T) {
 	src := t.TempDir()
 	files := map[string]string{
@@ -56,10 +52,6 @@ func TestTarUntarRoundTrip(t *testing.T) {
 	}
 }
 
-// TestUntarRejectsPathTraversal is the security invariant. A peer authenticates
-// with the fleet token, but an authenticated peer is still not allowed to write
-// outside the destination this node chose — a compromised or buggy one must not
-// be able to overwrite the host's files.
 func TestUntarRejectsPathTraversal(t *testing.T) {
 	for _, name := range []string{
 		"../escape",
@@ -96,9 +88,6 @@ func TestUntarRejectsPathTraversal(t *testing.T) {
 	}
 }
 
-// TestUntarSkipsNonDataEntries keeps symlinks and device nodes out of a record.
-// A record is data; honoring a symlink entry would be an indirect way to make a
-// later write land outside the destination.
 func TestUntarSkipsNonDataEntries(t *testing.T) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
@@ -129,14 +118,12 @@ func TestUntarSkipsNonDataEntries(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(dst, "evil-link")); err == nil {
 		t.Error("symlink entry was materialized; non-data entries must be skipped")
 	}
-	// The legitimate entry alongside it still lands.
+
 	if _, err := os.Stat(filepath.Join(dst, "meta.json")); err != nil {
 		t.Errorf("meta.json missing after skipping the symlink: %v", err)
 	}
 }
 
-// TestTarSkipsSymlinksAtSource is the same rule on the sending side: a record
-// that somehow contains a symlink must not put one on the wire.
 func TestTarSkipsSymlinksAtSource(t *testing.T) {
 	src := t.TempDir()
 	if err := os.WriteFile(filepath.Join(src, "real"), []byte("x"), 0o600); err != nil {
@@ -162,9 +149,6 @@ func TestTarSkipsSymlinksAtSource(t *testing.T) {
 	}
 }
 
-// TestHTTPPullerNotFound maps a peer's 404 to ErrNotFound so the caller keeps
-// trying the next owner instead of failing the whole heal. A gossiped view can
-// be stale — one owner not having the record is normal, not an error.
 func TestHTTPPullerNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -178,8 +162,6 @@ func TestHTTPPullerNotFound(t *testing.T) {
 	}
 }
 
-// TestHTTPPullerPresentsToken proves the fleet token rides on the pull: the
-// serving peer authorizes this exactly like any other control-plane read.
 func TestHTTPPullerPresentsToken(t *testing.T) {
 	var gotAuth, gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -210,11 +192,6 @@ func TestHTTPPullerPresentsToken(t *testing.T) {
 	}
 }
 
-// TestTarRecordRoundTripsAWholeRecord reproduces a bug found in the cluster:
-// the blob endpoint tarred only the export directory Fetch() returns, so a
-// pulled record published cleanly and then failed every read as "unknown
-// checkpoint" — the meta carrying the pool key and lineage was never shipped.
-// A record on the wire must be exactly what the local store lays out.
 func TestTarRecordRoundTripsAWholeRecord(t *testing.T) {
 	exportDir := t.TempDir()
 	for name, content := range map[string]string{
@@ -237,7 +214,6 @@ func TestTarRecordRoundTripsAWholeRecord(t *testing.T) {
 		t.Fatalf("Untar: %v", err)
 	}
 
-	// meta.json at the record root — without it the record is unreadable.
 	got, err := os.ReadFile(filepath.Join(dst, "meta.json"))
 	if err != nil {
 		t.Fatalf("meta.json missing from the shipped record: %v", err)
@@ -245,7 +221,7 @@ func TestTarRecordRoundTripsAWholeRecord(t *testing.T) {
 	if string(got) != string(meta) {
 		t.Errorf("meta.json = %q, want %q", got, meta)
 	}
-	// export/ contents under the export prefix, not at the root.
+
 	for name, want := range map[string]string{
 		"memory-ranges": "guest-pages",
 		"cow.raw":       "disk",
@@ -264,28 +240,21 @@ func TestTarRecordRoundTripsAWholeRecord(t *testing.T) {
 	}
 }
 
-// TestUntarRejectsRecordWithoutCompletionMarker: a transfer cut short by a
-// source-side walk/read error still yields a valid short tar (Close writes the
-// footer regardless), so the receiver must reject a record that arrives without
-// the trailer rather than publish an incomplete one.
 func TestUntarRejectsRecordWithoutCompletionMarker(t *testing.T) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	// meta plus one complete export file, then the walk "fails" — no trailer.
+
 	_ = tw.WriteHeader(&tar.Header{Name: "meta.json", Mode: 0o600, Size: 4, Typeflag: tar.TypeReg})
 	_, _ = tw.Write([]byte(`{"a"`))
 	_ = tw.WriteHeader(&tar.Header{Name: "export/mem", Mode: 0o600, Size: 5, Typeflag: tar.TypeReg})
 	_, _ = tw.Write([]byte("bytes"))
-	_ = tw.Close() // valid footer, no trailer entry
+	_ = tw.Close()
 
 	if err := Untar(&buf, t.TempDir()); err == nil {
 		t.Error("Untar accepted a record with no completion marker (an incomplete transfer)")
 	}
 }
 
-// TestTarRecordUntarRoundTripComplete: the real send/receive pair carries the
-// trailer, so a whole record is accepted and the marker itself is not written
-// to disk (validateHealedCheckpoint would reject an unexpected entry).
 func TestTarRecordUntarRoundTripComplete(t *testing.T) {
 	exportDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(exportDir, "mem"), []byte("state"), 0o600); err != nil {
@@ -307,8 +276,6 @@ func TestTarRecordUntarRoundTripComplete(t *testing.T) {
 	}
 }
 
-// tarDir streams src's contents with no record layout, exercising tarInto and
-// Untar on their own.
 func tarDir(src string, w io.Writer) error {
 	tw := tar.NewWriter(w)
 	defer func() { _ = tw.Close() }()

@@ -108,8 +108,7 @@ func TestTemplateNewVolumeClaimFollowsRedirect(t *testing.T) {
 	if !got.NoRedirect || !got.RequirePromoted || !slices.Equal(got.Volumes, want) {
 		t.Errorf("redirected claim = %+v, want promoted no_redirect with %v", got, want)
 	}
-	// The redirect body carries no principal, so the bearer is what makes the
-	// peer resolve the same tenant — a dropped one would claim as the operator.
+
 	if originAuth != "Bearer tenant-token" || targetAuth != originAuth {
 		t.Errorf("bearer at origin=%q at target=%q, want the caller's token on both hops", originAuth, targetAuth)
 	}

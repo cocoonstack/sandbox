@@ -19,8 +19,7 @@ import (
 
 type vmProvisioner func(name string) (types.VMRecord, error)
 
-// kickRefill nudges Run past its refill ticker after a warm claim; the
-// 1-buffered channel coalesces bursts and never blocks the claim path.
+// kickRefill nudges Run past its refill ticker without blocking the claim path.
 func (m *Manager) kickRefill() {
 	select {
 	case m.refillKick <- struct{}{}:
@@ -35,15 +34,12 @@ func (m *Manager) refillOnce(ctx context.Context) {
 		return
 	}
 	now := time.Now()
-	// Spawning VMs into a full node still takes the global rtnl lock even when
-	// doomed to fail. The park gates spawns only — sweeping removed pools is
-	// pure bookkeeping.
+	// spawning VMs into a full node still takes the global rtnl lock even when doomed to fail
 	parked := now.Before(m.atCapacityUntil)
 	inFlight := 0
 	for key, p := range m.pools {
 		inFlight += p.refilling
-		// SetPools leaves a removed pool in place while a build/refill is in
-		// flight; sweep it once quiescent.
+		// SetPools leaves a removed pool in place while a build or refill is in flight
 		if p.removed {
 			if !p.building && p.refilling == 0 {
 				delete(m.pools, key)
@@ -106,8 +102,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 		p.noteLead(time.Since(start))
 		keep = true
 	}
-	// A canceled context is the daemon going down, and a capacity failure is
-	// the node's fault — neither says anything about this pool's health.
+	// a canceled context or a capacity failure says nothing about this pool's health
 	backedOff := false
 	if ctx.Err() == nil && capReason == "" {
 		backedOff = p.noteRefillResult(now, err != nil)
@@ -122,12 +117,11 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 		switch {
 		case ctx.Err() != nil:
 		case entered:
-			// One line per episode; the storm this replaces wrote 20k an hour.
 			log.WithFunc("pool.refillOne").Errorf(ctx, err,
 				"node is at capacity; parking refill for %s", capacityBackoff)
 		case parked:
 		default:
-			hash := p.key.Hash()
+			hash := p.hash
 			log.WithFunc("pool.refillOne").Errorf(ctx, err, "refill %s", hash)
 			if backedOff {
 				log.WithFunc("pool.refillOne").Warnf(ctx,
@@ -145,8 +139,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 	}
 }
 
-// noteCapacityLocked parks refill node-wide for a capacity failure, reporting
-// whether this call parked it. m.mu held.
+// noteCapacityLocked parks refill node-wide, reporting whether this call parked it.
 func (m *Manager) noteCapacityLocked(now time.Time, reason string) bool {
 	first := !now.Before(m.atCapacityUntil)
 	m.atCapacityUntil = now.Add(capacityBackoff)
@@ -156,7 +149,7 @@ func (m *Manager) noteCapacityLocked(now time.Time, reason string) bool {
 
 func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 	logger := log.WithFunc("pool.buildGolden")
-	hash := p.key.Hash()
+	hash := p.hash
 	name := vmPrefix + "gb-" + hash
 	snap := goldenPrefix + hash
 	final := filepath.Join(m.goldensDir(), hash)
@@ -173,8 +166,7 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 		p.goldenDir = final
 	} else {
 		p.nextBuild = time.Now().Add(buildRetryDelay)
-		// A cold boot hits the same bridge and disk as a refill; feed the park
-		// so a node failing only its builds still publishes at-capacity.
+		// a cold boot hits the same bridge and disk as a refill, so it feeds the park too
 		if reason := engine.CapacitySignature(err); reason != "" {
 			m.noteCapacityLocked(time.Now(), reason)
 		}
@@ -211,8 +203,7 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 	return m.writeGoldenCASidecar(final, caBaked)
 }
 
-// writeGoldenCASidecar records (or clears) the baked-CA fingerprint, so a
-// rotated CA or flipped intercept flag forces a rebuild on restart.
+// writeGoldenCASidecar records or clears the baked-CA fingerprint; a rotated CA forces a rebuild.
 func (m *Manager) writeGoldenCASidecar(final string, caBaked bool) error {
 	path := final + caSidecarSuffix
 	if !caBaked {
@@ -227,17 +218,14 @@ func (m *Manager) writeGoldenCASidecar(final string, caBaked bool) error {
 	return nil
 }
 
-// adoptGolden points p at a golden already on disk from the pool's earlier
-// life, when its baked-CA state still fits; buildGolden covers the rest.
+// adoptGolden points p at an on-disk golden whose baked-CA state still fits.
 func (m *Manager) adoptGolden(p *pool) {
-	if g := filepath.Join(m.goldensDir(), p.key.Hash()); dirExists(g) && m.goldenCAMatches(g, m.poolEgress[p.key].Intercepts()) {
+	if g := filepath.Join(m.goldensDir(), p.hash); dirExists(g) && m.goldenCAMatches(g, m.poolEgress[p.key].Intercepts()) {
 		p.goldenDir = g
 	}
 }
 
-// goldenCAMatches reports whether a golden's baked-CA state fits the pool: a
-// CA-baked one must carry the current fingerprint, a plain one none. The plain
-// case only stats (no read) — it runs under m.mu on the live SetPools path.
+// goldenCAMatches reports whether a golden's baked-CA state fits the pool.
 func (m *Manager) goldenCAMatches(final string, caNeeded bool) bool {
 	if !caNeeded {
 		_, err := os.Stat(final + caSidecarSuffix)
@@ -247,10 +235,7 @@ func (m *Manager) goldenCAMatches(final string, caNeeded bool) bool {
 	return err == nil && m.egressCA != nil && string(fp) == m.egressCA.Fingerprint()
 }
 
-// exportGolden exports snap into final through a unique sibling *.tmp dir:
-// a crash mid-export never leaves a half-written dir that would pass for a
-// golden, and concurrent promotes to one name cannot clobber each other's
-// staging (last rename wins whole).
+// exportGolden exports snap into final through a unique sibling *.tmp dir.
 func (m *Manager) exportGolden(ctx context.Context, snap, final string) error {
 	staging, err := os.MkdirTemp(filepath.Dir(final), filepath.Base(final)+"-*.tmp")
 	if err != nil {
@@ -267,9 +252,7 @@ func (m *Manager) exportGolden(ctx context.Context, snap, final string) error {
 	return os.Rename(tmp, final)
 }
 
-// sourceSnap picks the snapshot to export a claimed sandbox from: the wake
-// image of a hibernated one (kept — the wake still needs it), or a transient
-// capture of a running one, dropped by the returned cleanup.
+// sourceSnap picks the snapshot to export a claimed sandbox from, with its cleanup.
 func (m *Manager) sourceSnap(ctx context.Context, sb *types.Sandbox) (string, func(), error) {
 	if sb.HibernateSnap != "" {
 		return sb.HibernateSnap, func() {}, nil
@@ -281,11 +264,7 @@ func (m *Manager) sourceSnap(ctx context.Context, sb *types.Sandbox) (string, fu
 	return snap, func() { m.dropSnap(ctx, snap) }, nil
 }
 
-// exportSource captures a claimed sandbox's state into exportDir, returning
-// the snapshot name it exported. Only this window holds the transition lock —
-// it pins the source snapshot against a concurrent wake consuming it; the
-// minutes-long clone fan-out after it must not block the source's own
-// wake/hibernate traffic.
+// exportSource captures a claimed sandbox's state into exportDir, returning the snapshot name.
 func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir string) (string, error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
@@ -297,8 +276,7 @@ func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir
 	return snap, m.eng.SnapshotExport(ctx, snap, exportDir)
 }
 
-// provision creates one claim-ready VM: clone from a golden when available,
-// cold-boot the template otherwise.
+// provision creates one claim-ready VM, cloning from a golden when available.
 func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden string) (*types.Sandbox, error) {
 	if golden == "" {
 		sb, err := m.provisionVM(ctx, key, coldProbeTimeout, func(name string) (types.VMRecord, error) {
@@ -307,8 +285,7 @@ func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden strin
 		if err != nil {
 			return nil, err
 		}
-		// A pre-golden cold claim must trust the root too, or its intercepted
-		// hosts fail TLS for the sandbox's whole life.
+		// a pre-golden cold claim must trust the root, or intercepted hosts fail TLS for its life
 		if m.poolIntercepts(key) {
 			if err := m.eng.InstallCACert(ctx, sb.VsockSocket, m.egressCA.CertPEM()); err != nil {
 				m.destroy(ctx, sb.VMName)
@@ -390,9 +367,7 @@ func (m *Manager) cloneBatch(ctx context.Context, count int, key types.PoolKey, 
 	return children, nil
 }
 
-// probeReady waits until a VM's silkd answers, returning its vsock socket. sock
-// is what the lifecycle command reported; when empty (a heavy image can boot
-// past cocoon's post-start inspect) it polls `vm list` until the socket appears.
+// probeReady waits until a VM's silkd answers, polling `vm list` when sock is empty.
 func (m *Manager) probeReady(ctx context.Context, name, sock string, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	if sock == "" {
@@ -438,15 +413,11 @@ func (m *Manager) findVM(ctx context.Context, name string) (types.VMRecord, bool
 	return vms[i], true, nil
 }
 
-// runBounded fans f over n items on the refill semaphore, so engine
-// batches (reap destroys, idle hibernates, reconcile sweeps) share the
-// same node-wide concurrency budget as refills without blocking the
-// caller. Callers that need completion Wait; fire-and-forget drops it.
+// runBounded fans f over n items on the refill semaphore, sharing the node-wide budget.
 func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context, int)) *sync.WaitGroup {
 	var wg sync.WaitGroup
 	for i := range n {
-		// Acquire inside the goroutine: a batch larger than the budget
-		// must not block the caller (Run's select loop).
+		// acquire inside the goroutine so a batch larger than the budget cannot block the caller
 		wg.Go(func() {
 			select {
 			case m.refillSem <- struct{}{}:

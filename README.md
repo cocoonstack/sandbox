@@ -37,7 +37,7 @@ performance) — source in
   writable), signed preview URLs, the HTTP-upgrade byte relay to silkd,
   usage + audit journals, /metrics, reap + restart reconcile, memberlist
   mesh with redirect placement
-- `sdk/go/` — Go SDK (stdlib-only): `Connect/New/Lookup`, `Exec/Run`, files,
+- `sdk/go/` — Go SDK: `Connect/New/Lookup`, `Exec/Run`, files,
   `Push/Pull`, sessions, `Find/Replace`, `Watch`, git verbs, `OpenPty`,
   `Fork/Hibernate/Promote/Checkpoint`, `DialPort/ProxyPort/PreviewURL`,
   `StartLsp`, `Spawn/Ps/Kill/Logs/Attach`; `protocol/wire` carries the frame
@@ -87,8 +87,9 @@ make silkd-image   # silkd release binary in a scratch carrier image
 make images        # base + python images against the local boot + silkd images
 ```
 
-The parent workspace's `go.work` excludes these modules; the Makefile forces
-`GOWORK=off` so local runs match CI. silkd's integration tests spawn real
+The parent workspace's `go.work` includes these modules, which is why the
+Makefile forces `GOWORK=off`: CI has no workspace, and a workspace build
+resolves sibling checkouts instead of the pinned versions. silkd's integration tests spawn real
 processes — run them in a Linux container too (`docker run rust:1 … cargo
 test`) before touching platform-sensitive paths; macOS green alone has hidden
 Linux-only breakage before.

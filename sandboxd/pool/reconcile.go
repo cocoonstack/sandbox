@@ -17,11 +17,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// Reconcile aligns state after a daemon restart: re-adopt persisted claims
-// whose VMs are still running (or hibernated), drop the rest, and remove any
-// sbx-prefixed VM nobody owns (stale pool VMs and golden builders from a
-// previous life). It must run once at startup, before the server: it swaps
-// in fresh records, which would bypass in-flight Transition locks.
+// Reconcile aligns claims and VMs after a restart; it runs before the server because it swaps in fresh records that would bypass in-flight Transition locks.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	claims, err := m.store.load()
 	if err != nil {
@@ -45,26 +41,19 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		rec, ok := live[sb.VMName]
 		switch {
 		case sb.ArchiveCk != "":
-			// Archived: no local VM by design; the store ck is the durable
-			// state. Adopt the stub; the first exec wakes it (wakeArchived).
+			// archived: no local VM by design, so adopt the stub and let the first exec wake it
 			m.claimed[id] = sb
 			m.tenantDelta(sb.Tenant, 1)
 			continue
 		case ok && rec.State == vmStateRunning:
 			sb.VsockSocket = rec.VsockSocket
-			// Running with either flag set = a wake crashed between restore
-			// and commit, or a hibernate intent never reached the engine;
-			// clearing them un-bricks the claim and unreferences the
-			// snapshot for the sweep below.
+			// running with either flag set means a crashed wake or an intent the engine never saw
 			sb.HibernateSnap, sb.PendingSnap = "", ""
 		case ok && sb.HibernateSnap != "":
 			// Hibernated: the VM is stopped by design and wakes on demand.
 			sb.PendingSnap = ""
 		case ok && sb.PendingSnap != "" && (snapsErr != nil || slices.Contains(snaps, sb.PendingSnap)):
-			// Stopped under a journaled hibernate intent whose commit never
-			// landed: the intent names the wake image, adopt it. A verified-
-			// missing image means the hibernate never completed — fall
-			// through and drop; an unverifiable list adopts.
+			// the journaled intent names the wake image, so adopt it when the snapshot is there
 			sb.HibernateSnap, sb.PendingSnap = sb.PendingSnap, ""
 		default:
 			continue
@@ -80,8 +69,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		m.adoptGolden(p)
 	}
 	m.mu.Unlock()
-	// A crash mid-export leaves a *.tmp staging dir no build or promote of
-	// this life will reuse.
+	// a crash mid-export leaves a *.tmp staging dir nothing in this life reuses
 	tmps, _ := filepath.Glob(filepath.Join(m.goldensDir(), "*.tmp"))
 	if err := m.ckpts.SweepStaging(); err != nil {
 		log.WithFunc("pool.Reconcile").Error(ctx, err, "sweep checkpoint staging")
@@ -98,9 +86,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	m.retryArchiveDeletes(ctx)
 	removed := m.sweepStaleVMs(ctx, live, owned)
 
-	// A hibernate snapshot no adopted claim references is an orphan;
-	// fork/golden-build snapshots never span a restart. A list failure only
-	// skips the sweep — GC must not brick startup.
+	// an unreferenced hibernate snapshot is an orphan; fork and golden snapshots never span a restart
 	if snapsErr != nil {
 		logger.Warnf(ctx, "snapshot sweep skipped: %v", snapsErr)
 	} else {
@@ -121,8 +107,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	return saveErr
 }
 
-// sweepStaleVMs removes sbx-prefixed VMs no claim owns and returns the ones
-// confirmed gone; a failed remove is omitted so the egress sweep keeps its lock.
+// sweepStaleVMs removes sbx-prefixed VMs no claim owns and returns the ones confirmed gone.
 func (m *Manager) sweepStaleVMs(ctx context.Context, live map[string]types.VMRecord, owned map[string]bool) map[string]bool {
 	logger := log.WithFunc("pool.sweepStaleVMs")
 	var stale []string
@@ -147,15 +132,11 @@ func (m *Manager) sweepStaleVMs(ctx context.Context, live map[string]types.VMRec
 	return removed
 }
 
-// removeStaleVM reclaims one unowned VM, reporting whether it is gone; a
-// creating-state record goes through reconcile-stale-create first, since
-// rm --force would queue on the ops lock and then delete the VM an
-// in-flight clone just produced.
+// removeStaleVM reclaims one unowned VM, reporting whether it is gone.
 func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRecord) bool {
 	logger := log.WithFunc("pool.removeStaleVM")
 	if rec.State == vmStateCreating {
-		// Cancellation-immune like removeVM: a canceled ctx must not skip
-		// the busy check and fall through to the forced remove it guards.
+		// a canceled ctx must not skip the busy check guarding the forced remove
 		switch outcome, err := m.eng.ReconcileStaleCreate(context.WithoutCancel(ctx), name); {
 		case err != nil:
 			// Verb missing (cocoon < v0.5.8) or failed: keep the old sweep.
@@ -172,11 +153,15 @@ func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRe
 	return m.removeOrRetry(ctx, name, "", rec.TapDevice(), volumeTeardown{})
 }
 
-// resyncEgress re-locks adopted egress claims after a restart, quarantines any
-// it cannot lock, and sweeps tables orphaned by VMs confirmed gone (in removed).
+// resyncEgress re-locks adopted egress claims, quarantining any it cannot lock.
 func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMRecord, removed map[string]bool) {
 	logger := log.WithFunc("pool.resyncEgress")
 	now := time.Now()
+	var locked map[string]bool
+	var lockedErr error
+	if m.lockEgress {
+		locked, lockedErr = netfilter.LockedTaps()
+	}
 	var quarantine []*types.Sandbox
 	for _, sb := range m.claimed {
 		sb.TouchAt(now)
@@ -187,7 +172,11 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 				quarantine = append(quarantine, sb)
 				continue
 			}
-			if err := netfilter.EnsureLock(tap); err != nil {
+			err := lockedErr
+			if err == nil && !locked[tap] {
+				err = netfilter.Lock(tap)
+			}
+			if err != nil {
 				logger.Errorf(ctx, err, "ensure egress lock %s; quarantining", sb.ID)
 				quarantine = append(quarantine, sb)
 				continue
@@ -224,7 +213,7 @@ func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
 	m.mu.Lock()
 	delete(m.claimed, sb.ID)
 	m.tenantDelta(sb.Tenant, -1)
-	js := m.store.snapshot(m.claimed)
+	js := m.store.del(sb.ID)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
 		m.recommit(ctx, js)
@@ -232,8 +221,7 @@ func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
 	return gone
 }
 
-// readoptEgressTap records a live egress-lane claim's tap for lifecycle after a
-// restart and returns it; "" for the none lane or a VM whose tap is not listed.
+// readoptEgressTap records and returns a live egress claim's tap, "" when there is none.
 func (m *Manager) readoptEgressTap(sb *types.Sandbox, live map[string]types.VMRecord) string {
 	if sb.Key.Net != types.NetEgress {
 		return ""
@@ -246,14 +234,12 @@ func (m *Manager) readoptEgressTap(sb *types.Sandbox, live map[string]types.VMRe
 	m.mu.Lock()
 	m.egressTaps[sb.ID] = tap
 	sb.TAP = tap
+	m.store.set(sb)
 	m.mu.Unlock()
 	return tap
 }
 
-// reclaimOrphanArchiveCks reaps archives that crashed between their
-// checkpoint publish and the journal commit: the flag hides them from
-// listings and deletes, so only the journal identifies ours — the sandbox is
-// in it under a different (or no) ArchiveCk.
+// reclaimOrphanArchiveCks reaps archives that crashed between publish and journal commit.
 func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string]*types.Sandbox) {
 	logger := log.WithFunc("pool.reclaimOrphanArchiveCks")
 	metas, err := m.ckpts.Metas(ctx)

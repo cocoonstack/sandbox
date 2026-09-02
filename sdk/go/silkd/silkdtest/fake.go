@@ -242,7 +242,12 @@ func (f *Fake) fsPull(conn net.Conn, path string) {
 		return
 	}
 	_ = tw.Close()
-	send(conn, &wire.DataResp{Data: buf.Bytes()})
+	data := buf.Bytes()
+	for len(data) > 0 {
+		n := min(readChunk, len(data))
+		send(conn, &wire.DataResp{Data: data[:n]})
+		data = data[n:]
+	}
 	send(conn, wire.Done{})
 }
 

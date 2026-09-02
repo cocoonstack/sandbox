@@ -5,26 +5,22 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// claimSnapshot is a sequenced, detached copy of the claim set awaiting a
-// durable write; commit() marshals it off the manager mutex.
+// claimSnapshot sequences one persist request; commit skips it once a newer write has landed.
 type claimSnapshot struct {
-	claims map[string]claimDTO
-	seq    uint64
+	seq uint64
 }
 
-// claimDTO is the persisted projection of a Sandbox (its json fields only),
-// copied by value so commit's marshal runs off the manager mutex without
-// racing the live record's Transition mutex and lastActivity.
+// claimDTO is the persisted projection of a Sandbox, copied so commit marshals off m.mu.
 type claimDTO struct {
 	ID             string         `json:"id"`
 	VMName         string         `json:"vm_name"`
@@ -42,19 +38,20 @@ type claimDTO struct {
 	FromCheckpoint string         `json:"from_checkpoint,omitempty"`
 }
 
-// claimStore persists claimed sandboxes across daemon restarts. Warm pool
-// VMs are deliberately not persisted: they are cheap to rebuild and unsafe
-// to trust after an unsupervised gap.
+// claimStore persists claimed sandboxes across daemon restarts; warm VMs are not persisted.
 type claimStore struct {
 	path string
 
-	seq     atomic.Uint64 // sequence source; bumped in snapshot (mutation order)
+	writeMu sync.Mutex
+
 	mu      sync.Mutex
-	written uint64 // highest sequence on disk; guarded by mu
+	dtos    map[string]claimDTO
+	seq     uint64
+	written uint64
 }
 
 func newClaimStore(dataDir string) *claimStore {
-	return &claimStore{path: filepath.Join(dataDir, "claims.json")}
+	return &claimStore{path: filepath.Join(dataDir, "claims.json"), dtos: map[string]claimDTO{}}
 }
 
 func (s *claimStore) load() (map[string]*types.Sandbox, error) {
@@ -72,33 +69,59 @@ func (s *claimStore) load() (map[string]*types.Sandbox, error) {
 	return claims, nil
 }
 
-// snapshot copies the claim set into a detached, sequenced value; the caller
-// holds the manager mutex, so sequences are handed out in mutation order.
-func (s *claimStore) snapshot(claims map[string]*types.Sandbox) claimSnapshot {
-	seq := s.seq.Add(1)
-	dtos := make(map[string]claimDTO, len(claims))
-	for id, sb := range claims {
-		dtos[id] = claimDTO{
-			ID: sb.ID, VMName: sb.VMName, Key: sb.Key, Token: sb.Token,
-			Deadline: sb.Deadline, Tenant: sb.Tenant, ClaimRef: sb.ClaimRef,
-			Volumes: slices.Clone(sb.Volumes), VsockSocket: sb.VsockSocket,
-			TAP: sb.TAP, HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap,
-			ArchiveCk: sb.ArchiveCk, FromCheckpoint: sb.FromCheckpoint,
-		}
-	}
-	return claimSnapshot{claims: dtos, seq: seq}
-}
-
-// commit marshals a snapshot and atomically replaces claims.json, off the
-// manager mutex; serialized by s.mu, a stale snapshot is a no-op. Unsynced by
-// design (#21): an fsync would sit on the sub-ms warm-claim path.
-func (s *claimStore) commit(snap claimSnapshot) error {
+// set records each sandbox's projection and sequences the write; callers may hold m.mu.
+func (s *claimStore) set(sbs ...*types.Sandbox) claimSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, sb := range sbs {
+		s.dtos[sb.ID] = dtoOf(sb)
+	}
+	s.seq++
+	return claimSnapshot{seq: s.seq}
+}
+
+// del drops the projections of ids and sequences the write; callers may hold m.mu.
+func (s *claimStore) del(ids ...string) claimSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, id := range ids {
+		delete(s.dtos, id)
+	}
+	s.seq++
+	return claimSnapshot{seq: s.seq}
+}
+
+// mark sequences a persist of the projection as it already stands.
+func (s *claimStore) mark() claimSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return claimSnapshot{seq: s.seq}
+}
+
+// reset rebuilds the whole projection; the startup path, before contention exists.
+func (s *claimStore) reset(claims map[string]*types.Sandbox) claimSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dtos = make(map[string]claimDTO, len(claims))
+	for id, sb := range claims {
+		s.dtos[id] = dtoOf(sb)
+	}
+	s.seq++
+	return claimSnapshot{seq: s.seq}
+}
+
+// commit atomically replaces claims.json; unsynced by design (#21) to keep the claim path fast.
+func (s *claimStore) commit(snap claimSnapshot) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	s.mu.Lock()
 	if snap.seq <= s.written {
+		s.mu.Unlock()
 		return nil
 	}
-	raw, err := json.Marshal(snap.claims)
+	dtos, seq := maps.Clone(s.dtos), s.seq
+	s.mu.Unlock()
+	raw, err := json.Marshal(dtos)
 	if err != nil {
 		return fmt.Errorf("encode claims: %w", err)
 	}
@@ -109,19 +132,30 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 	if err := os.Rename(tmp, s.path); err != nil {
 		return fmt.Errorf("commit claims: %w", err)
 	}
-	s.written = snap.seq
+	s.mu.Lock()
+	s.written = seq
+	s.mu.Unlock()
 	return nil
 }
 
-// save is the combined form for the startup Reconcile pass, before contention
-// exists; hot-path callers split snapshot()/commit() around the manager mutex.
+// save is the combined form for the startup Reconcile pass, before contention exists.
 func (s *claimStore) save(claims map[string]*types.Sandbox) error {
-	return s.commit(s.snapshot(claims))
+	return s.commit(s.reset(claims))
 }
 
-// synced reports whether every handed-out snapshot has reached disk.
+// synced reports whether every sequenced change has reached disk.
 func (s *claimStore) synced() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.written == s.seq.Load()
+	return s.written == s.seq
+}
+
+func dtoOf(sb *types.Sandbox) claimDTO {
+	return claimDTO{
+		ID: sb.ID, VMName: sb.VMName, Key: sb.Key, Token: sb.Token,
+		Deadline: sb.Deadline, Tenant: sb.Tenant, ClaimRef: sb.ClaimRef,
+		Volumes: slices.Clone(sb.Volumes), VsockSocket: sb.VsockSocket,
+		TAP: sb.TAP, HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap,
+		ArchiveCk: sb.ArchiveCk, FromCheckpoint: sb.FromCheckpoint,
+	}
 }

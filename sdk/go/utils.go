@@ -12,6 +12,12 @@ import (
 // fsChunk matches silkd's BULK_CHUNK.
 const fsChunk = 256 * 1024
 
+// respPtr is a frame type's pointer form, so a non-Response T fails to compile.
+type respPtr[T any] interface {
+	*T
+	wire.Response
+}
+
 // doneRPC sends a request that answers with Done or an error frame.
 func (s *Sandbox) doneRPC(ctx context.Context, req wire.Request) error {
 	conn, done, err := s.call(ctx, req)
@@ -46,17 +52,17 @@ func (s *Sandbox) downloadRPC(ctx context.Context, req wire.Request, sink func([
 }
 
 // oneShotRPC sends req and returns its single typed reply frame.
-func oneShotRPC[T any](ctx context.Context, s *Sandbox, req wire.Request) (*T, error) {
+func oneShotRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.Request) (*T, error) {
 	conn, done, err := s.call(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	defer done()
-	return expect[T](ctx, conn)
+	return expect[T, PT](ctx, conn)
 }
 
 // collectRPC sends req and gathers every streamed frame of type T until Done.
-func collectRPC[T any](ctx context.Context, s *Sandbox, req wire.Request) ([]T, error) {
+func collectRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.Request) ([]T, error) {
 	conn, done, err := s.call(ctx, req)
 	if err != nil {
 		return nil, err
@@ -68,9 +74,7 @@ func collectRPC[T any](ctx context.Context, s *Sandbox, req wire.Request) ([]T, 
 		if err != nil {
 			return nil, err
 		}
-		// Via any: a direct resp.(*T) assertion is rejected at compile time
-		// (*T is not known to implement Response).
-		if v, ok := any(resp).(*T); ok {
+		if v, ok := resp.(PT); ok {
 			out = append(out, *v)
 			continue
 		}
@@ -136,12 +140,12 @@ func terminalErr(ctx context.Context, conn *silkd.Conn) error {
 
 // expect reads one frame and requires it to be a *T, mapping an error frame
 // to a Go error.
-func expect[T any](ctx context.Context, conn *silkd.Conn) (*T, error) {
+func expect[T any, PT respPtr[T]](ctx context.Context, conn *silkd.Conn) (*T, error) {
 	resp, err := recv(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
-	if v, ok := any(resp).(*T); ok {
+	if v, ok := resp.(PT); ok {
 		return v, nil
 	}
 	if e, ok := resp.(*wire.ErrorResp); ok {

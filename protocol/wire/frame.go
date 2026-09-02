@@ -131,6 +131,17 @@ type Response interface{ RespType() string }
 
 type respDecoder func([]byte) (Response, error)
 
+// reqPtr and respPtr turn a mistyped decoder table entry into a compile error.
+type reqPtr[T any] interface {
+	*T
+	Request
+}
+
+type respPtr[T any] interface {
+	*T
+	Response
+}
+
 // B64 carries request payload bytes. It exists because silkd's deserializer
 // requires a base64 string and rejects null — which is exactly what
 // encoding/json emits for a nil []byte. Decoding needs no counterpart:
@@ -654,7 +665,7 @@ func DecodeRequest(line []byte) (Request, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse request frame: %w", err)
 	}
-	dec, ok := requestDecoders[op]
+	dec, ok := requestDecoders[string(op)]
 	if !ok {
 		return nil, fmt.Errorf("unknown op %q", op)
 	}
@@ -676,7 +687,7 @@ func DecodeResponse(line []byte) (Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse response frame: %w", err)
 	}
-	dec, ok := responseDecoders[typ]
+	dec, ok := responseDecoders[string(typ)]
 	if !ok {
 		return nil, fmt.Errorf("unknown response type %q", typ)
 	}
@@ -737,13 +748,14 @@ func encodeTagged(head string, v any) ([]byte, error) {
 // frameTag returns the frame's dispatch tag: a canonical head (both producers
 // emit the tag first, unescaped) yields it with a prefix cut; anything else
 // takes the full token walk.
-func frameTag(line, head []byte, key string) (string, error) {
+func frameTag(line, head []byte, key string) ([]byte, error) {
 	if rest, ok := bytes.CutPrefix(line, head); ok {
 		if end := bytes.IndexAny(rest, `"\`); end >= 0 && rest[end] == '"' {
-			return string(rest[:end]), nil
+			return rest[:end], nil
 		}
 	}
-	return scanTag(line, key)
+	tag, err := scanTag(line, key)
+	return []byte(tag), err
 }
 
 // scanTag extracts the string value of a top-level key without decoding the
@@ -805,20 +817,18 @@ func decodeAs[T any](line []byte) (*T, error) {
 }
 
 // decodeReq / decodeResp adapt decodeAs to the interface-typed decoder maps.
-// A table entry pairing an op with a non-Request type is caught by the shared
-// fixture round-trip test, not the compiler.
-func decodeReq[T any](line []byte) (Request, error) {
+func decodeReq[T any, PT reqPtr[T]](line []byte) (Request, error) {
 	v, err := decodeAs[T](line)
 	if err != nil {
 		return nil, err
 	}
-	return any(v).(Request), nil
+	return PT(v), nil
 }
 
-func decodeResp[T any](line []byte) (Response, error) {
+func decodeResp[T any, PT respPtr[T]](line []byte) (Response, error) {
 	v, err := decodeAs[T](line)
 	if err != nil {
 		return nil, err
 	}
-	return any(v).(Response), nil
+	return PT(v), nil
 }

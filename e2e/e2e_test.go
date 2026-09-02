@@ -49,8 +49,6 @@ func TestEndToEnd(t *testing.T) {
 	})
 
 	t.Run("refill then warm claim", func(t *testing.T) {
-		// Warm-hit = zero VM ops is proven by the pool unit tests; asserting
-		// create counts here would race the background refill ticker.
 		waitFor(t, func() bool {
 			infos, _ := stack.mgr.Info()
 			return len(infos) == 1 && infos[0].Warm >= 1
@@ -102,8 +100,7 @@ func TestForkEndToEnd(t *testing.T) {
 			t.Fatalf("child %d exec: %q, %v", i, out, err)
 		}
 	}
-	// Children are independent claims: releasing one leaves the sibling and
-	// the parent alive.
+
 	if err := children[0].Close(); err != nil {
 		t.Fatalf("close child 0: %v", err)
 	}
@@ -131,8 +128,7 @@ func TestPromoteEndToEnd(t *testing.T) {
 	if tpl.ContentDigest == "" {
 		t.Fatal("Promote returned an empty content digest")
 	}
-	// Both claim surfaces must work: the owner-bound handle and the
-	// name-based Client call on the (single) node that holds the template.
+
 	child, err := tpl.New(t.Context())
 	if err != nil {
 		t.Fatalf("claim via template handle: %v", err)
@@ -206,9 +202,6 @@ func TestCheckpointEndToEnd(t *testing.T) {
 	}
 }
 
-// TestTwoTenantFlow drives two tenants through the real stack: each claims
-// under its own token, quotas bind per tenant, checkpoint listings are
-// isolated, and operator surfaces refuse tenant tokens with 403.
 func TestTwoTenantFlow(t *testing.T) {
 	tenants := []config.TenantSpec{
 		{Name: "acme", Token: "acme-tok", MaxClaims: 1},
@@ -354,9 +347,6 @@ func TestVolumesEndToEnd(t *testing.T) {
 	}
 }
 
-// TestWritableVolumeEndToEnd drives one writable claim through the whole
-// stack: the SDK's mode reaches the engine as a writable attach, a live writer
-// refuses every other claim on the name, and release unmounts before removal.
 func TestWritableVolumeEndToEnd(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
 	stack := startTenantStack(t, "node-token", nil,
@@ -389,9 +379,8 @@ func TestWritableVolumeEndToEnd(t *testing.T) {
 	}
 }
 
-// TestVolumeModeWireShape pins the claim reply's volume bytes independently of
-// the SDK mirror. The read-only leg runs second on purpose: it is admitted
-// only because the writer's release cleared the dirty marker.
+// The read-only leg runs second: it is admitted only once the writer's
+// release has cleared the dirty marker.
 func TestVolumeModeWireShape(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
 	stack := startTenantStack(t, "node-token", nil,
@@ -448,10 +437,6 @@ func TestClaimRefRoundTrip(t *testing.T) {
 	}
 }
 
-// TestAttachOnlyVolumeEndToEnd drives one attach-only writable claim through
-// the whole stack: the device is attached writable and nothing else happens —
-// no mount, no marker, no unmount at release — while admission still excludes
-// every other claim on the name, which is what protects third parties.
 func TestAttachOnlyVolumeEndToEnd(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
 	stack := startTenantStack(t, "node-token", nil,
@@ -487,9 +472,6 @@ func TestAttachOnlyVolumeEndToEnd(t *testing.T) {
 	assertNoDirtyMarker(t, scratch, "release")
 }
 
-// TestAttachOnlyVolumeWireShape pins both claim replies' volume bytes: an
-// attach-only entry echoes without a mount, the eager entry is unchanged, and
-// the request flag never rides back in either.
 func TestAttachOnlyVolumeWireShape(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
 	stack := startTenantStack(t, "node-token", nil,
@@ -570,7 +552,7 @@ func startStack(t *testing.T, apiToken string, pools ...config.PoolSpec) *stack 
 
 func startTenantStack(t *testing.T, apiToken string, tenants []config.TenantSpec, volumes []config.VolumeSpec, pools ...config.PoolSpec) *stack {
 	t.Helper()
-	// Short prefix: the sockets under it must fit darwin's 104-byte sun_path.
+
 	dir, err := os.MkdirTemp("", "sbx")
 	if err != nil {
 		t.Fatalf("setup: %v", err)

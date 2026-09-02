@@ -22,7 +22,7 @@ func TestJournalRotateFailureDegradesAndRecovers(t *testing.T) {
 		t.Fatalf("new journal: %v", err)
 	}
 	defer func() { _ = j.close() }()
-	// A directory at the backup path makes the rotation rename fail.
+
 	if err = os.Mkdir(path+".1", 0o750); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -50,6 +50,32 @@ func TestJournalRotateFailureDegradesAndRecovers(t *testing.T) {
 	}
 	if got := tail(t, path+".1"); !strings.Contains(got, `"ev":"a"`) || !strings.Contains(got, `"ev":"b"`) {
 		t.Errorf("backup missing degraded events: %q", got)
+	}
+}
+
+func TestJournalRotateReopenFailureKeepsWriting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "usage.jsonl")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.Truncate(path, journalMaxBytes); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	j, err := newJournal(path)
+	if err != nil {
+		t.Fatalf("new journal: %v", err)
+	}
+	defer func() { _ = j.close() }()
+	j.path = filepath.Join(dir, "gone", "usage.jsonl")
+	if err = j.append(map[string]string{"ev": "a"}); err == nil {
+		t.Fatal("append across a failed reopen must surface the error")
+	}
+	if err = j.append(map[string]string{"ev": "b"}); err == nil {
+		t.Fatal("append while the reopen stays blocked must keep surfacing the error")
+	}
+	if got := tail(t, path); !strings.Contains(got, `"ev":"a"`) || !strings.Contains(got, `"ev":"b"`) {
+		t.Errorf("events lost to a closed descriptor: %q", got)
 	}
 }
 

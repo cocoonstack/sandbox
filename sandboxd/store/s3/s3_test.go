@@ -31,9 +31,6 @@ func TestS3BackendContract(t *testing.T) {
 	storetest.RunContract(t, st)
 }
 
-// TestDeleteRetryConverges: a Delete retried after a partial failure re-deletes
-// keys already gone; strict backends answer NoSuchKey per entry and the retry
-// must still converge instead of failing forever.
 func TestDeleteRetryConverges(t *testing.T) {
 	const id = "ck_00000000000000bb"
 	fake := &fakeS3{objects: map[string][]byte{
@@ -123,8 +120,6 @@ func TestDeleteRetainsMetaUntilExportsAreGone(t *testing.T) {
 	}
 }
 
-// TestFetchLegacyExportLayout: records published before per-generation
-// export prefixes keep flat export/ keys; Fetch must fall back to them.
 func TestFetchLegacyExportLayout(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	fake := &fakeS3{objects: map[string][]byte{
@@ -358,10 +353,6 @@ func TestRepublishRetainsGenerationSelectedByAnotherStore(t *testing.T) {
 	}
 }
 
-// TestS3BackendContractRealEndpoint runs the same contract against a real
-// S3 implementation (MinIO on a testbed) when SANDBOX_S3_E2E names its
-// endpoint — real list pagination, checksums, and path-style behavior the
-// in-process fake cannot vouch for.
 func TestS3BackendContractRealEndpoint(t *testing.T) {
 	endpoint := os.Getenv("SANDBOX_S3_E2E")
 	if endpoint == "" {
@@ -413,7 +404,7 @@ func newTestStore(t *testing.T, fake *fakeS3) *Store {
 	t.Cleanup(ts.Close)
 	t.Setenv("AWS_ACCESS_KEY_ID", "test")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
-	// Keep PutObject bodies plain instead of adding aws-chunked trailers the fake would need to decode.
+
 	t.Setenv("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
 	t.Setenv("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
 	st, err := New(t.Context(), Config{

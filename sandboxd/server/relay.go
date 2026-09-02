@@ -16,16 +16,12 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
-// drainGrace bounds how long a finished relay waits for the client to
-// consume the tail and close; past it the client conn is force-closed.
+// drainGrace bounds how long a finished relay waits for the client to close.
 const drainGrace = 30 * time.Second
 
 var switchingProtocols = []byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n")
 
-// CloseRelays force-closes every in-flight relay, refuses new ones, and
-// waits for the drain; http.Server.Shutdown does not track hijacked
-// connections, and a relay hijacked inside the shutdown window would
-// otherwise register after this snapshot and hang the drain forever.
+// CloseRelays force-closes in-flight relays; http.Server.Shutdown does not track hijacked conns.
 func (s *Server) CloseRelays() {
 	s.relayMu.Lock()
 	s.relayClosed = true
@@ -42,15 +38,13 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// The cheap header check runs first: waking is expensive and consumes
-	// the hibernate snapshot, so a non-upgrade GET must not trigger it.
+	// waking consumes the hibernate snapshot, so a non-upgrade GET must not trigger it
 	if !strings.EqualFold(r.Header.Get("Upgrade"), upgradeProto) {
 		w.Header().Set("Upgrade", upgradeProto)
 		writeErr(w, http.StatusUpgradeRequired, "upgrade to "+upgradeProto+" required")
 		return
 	}
-	// WakeAgentSocket restores a hibernated VM first, so the relay is the
-	// transparent wake path: the client's next call just works.
+	// WakeAgentSocket restores a hibernated VM first, making the relay the transparent wake path
 	sock, err := s.mgr.WakeAgentSocket(r.Context(), r.PathValue("id"), token)
 	switch {
 	case writePoolErr(w, err):
@@ -76,8 +70,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	s.relay(r.Context(), r.PathValue("id"), client, bufrw.Reader, guest)
 }
 
-// relay writes the 101 and splices the two connections until the guest side
-// finishes (silkd closes after the terminal frame) or the client vanishes.
+// relay writes the 101 and splices the conns until silkd closes or the client vanishes.
 func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBuf *bufio.Reader, guest net.Conn) {
 	s.relayMu.Lock()
 	if s.relayClosed {
@@ -98,22 +91,19 @@ func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBu
 		s.relayWG.Done()
 	}()
 
-	// The http server may have armed a header-read deadline on this conn.
+	// the http server may have armed a header-read deadline on this conn
 	_ = client.SetDeadline(time.Time{})
 	if _, err := client.Write(switchingProtocols); err != nil {
 		return
 	}
 
-	// Bytes the client pipelined behind the request head already sit in the
-	// server's bufio reader; drain exactly those, never more — reading the
-	// bufio past Buffered() would race the direct conn reads below.
+	// reading the bufio past Buffered() would race the direct conn reads below
 	clientR := io.Reader(client)
 	if n := clientBuf.Buffered(); n > 0 {
 		clientR = io.MultiReader(io.LimitReader(clientBuf, int64(n)), client)
 	}
 	if s.mgr.AuditEnabled() {
-		// One connection is one RPC: the first line client→guest is the
-		// request frame. The tee records it as it flows, then passes through.
+		// one connection is one RPC, so the first line client→guest is the request frame
 		clientR = &auditTee{r: clientR, record: func(line []byte) {
 			s.mgr.Audit(ctx, id, line)
 		}}
@@ -123,23 +113,18 @@ func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBu
 	go func() {
 		defer close(done)
 		_, _ = io.Copy(guest, clientR)
-		// Client done or vanished — either way hard-close: silkd treats
-		// disconnect as abort, and the protocol delimits input with explicit
-		// terminal frames (stdin_close, data_end), so a TCP half-close
-		// carries no meaning worth relaying through the vsock muxer.
+		// silkd delimits input with terminal frames, so a TCP half-close carries no meaning
 		_ = guest.Close()
 	}()
 
 	_, _ = io.Copy(client, guest)
 	utils.CloseWrite(client)
-	// Wait for the client to consume the tail and close its side; the
-	// deadline unblocks the splice goroutine if it never does.
+	// the read deadline unblocks the splice goroutine if the client never closes
 	_ = client.SetReadDeadline(time.Now().Add(drainGrace))
 	<-done
 }
 
-// auditTee captures the first newline-terminated line (capped) flowing
-// through it, hands it to record once, then degrades to a pass-through.
+// auditTee captures the first line flowing through it, then degrades to a pass-through.
 type auditTee struct {
 	r      io.Reader
 	record func([]byte)
@@ -147,9 +132,6 @@ type auditTee struct {
 	done   bool
 }
 
-// WriteTo hands the splice back to io.Copy's fast path once the first line
-// is captured: it reads through Read until the record fires, then delegates
-// the rest of the stream to a direct copy.
 func (t *auditTee) WriteTo(w io.Writer) (int64, error) {
 	var total int64
 	buf := make([]byte, 4096)

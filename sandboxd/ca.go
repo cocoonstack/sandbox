@@ -10,8 +10,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 )
 
-// runCA is the operator PKI tool: mint the cluster root once, then issue a
-// per-node intermediate from it. The root key stays with the operator.
+// runCA is the operator PKI tool: mint the cluster root, then per-node intermediates.
 func runCA(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: sandboxd ca {init|issue-intermediate}")
@@ -103,8 +102,7 @@ func writeCAFiles(dir, name string, certPEM, keyPEM []byte, force bool) error {
 	return nil
 }
 
-// writeKeyMaterial writes path with O_EXCL unless force; the Stat precheck
-// above is a courtesy.
+// writeKeyMaterial writes path with O_EXCL unless force.
 func writeKeyMaterial(path string, data []byte, perm os.FileMode, force bool) error {
 	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	if !force {

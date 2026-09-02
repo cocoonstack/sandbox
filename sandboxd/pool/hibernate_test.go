@@ -13,11 +13,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// TestHibernatePersistFailureSurfacesAndConverges guards the durability fix
-// where a hibernate whose journal write failed still reported success — a
-// restart then dropped the claim and destroyed the VM and snapshot. With the
-// intent write first, an unwritable journal aborts before the engine stops
-// anything; a retry after the store heals runs the full transition.
 func TestHibernatePersistFailureSurfacesAndConverges(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -46,10 +41,6 @@ func TestHibernatePersistFailureSurfacesAndConverges(t *testing.T) {
 	}
 }
 
-// TestWakePersistFailureSurfaces is the wake side of the same fix: retries
-// must surface it, the snapshot the lagging journal references must survive
-// (a fast-path retry keeps serving the awake VM — a restart adopts running
-// VMs, so the lag is harmless there), and it is reclaimed once a write lands.
 func TestWakePersistFailureSurfaces(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -77,8 +68,7 @@ func TestWakePersistFailureSurfaces(t *testing.T) {
 		if err := os.MkdirAll(filepath.Dir(broken), 0o750); err != nil {
 			t.Fatalf("heal store dir: %v", err)
 		}
-		// The background recommit converges the journal; the next fast-path wake
-		// then reclaims the parked snapshot.
+
 		waitFor(t, func() bool {
 			if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 				t.Fatalf("fast-path wake: %v", err)
@@ -92,16 +82,12 @@ func TestWakePersistFailureSurfaces(t *testing.T) {
 	})
 }
 
-// TestHibernateAmbiguousErrorTreatedAsDone: the engine can report failure
-// after the snapshot landed (a CLI timeout). A snapshot the list confirms
-// present means the hibernate happened — the call must not clear the intent
-// or fail, or a restart would destroy a genuinely hibernated claim.
 func TestHibernateAmbiguousErrorTreatedAsDone(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
 	eng.hibernateErr = errors.New("cli timeout")
-	eng.hibernateErrCompletes = true // the snapshot landed before the timeout
+	eng.hibernateErrCompletes = true
 
 	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate: %v, want nil (the snapshot landed despite the error)", err)
@@ -115,14 +101,11 @@ func TestHibernateAmbiguousErrorTreatedAsDone(t *testing.T) {
 	}
 }
 
-// TestHibernateVerifiedFailureClearsIntent: only a snapshot the list confirms
-// absent proves the hibernate did not happen — then the intent clears, the
-// claim stays running, and a retry hibernates cleanly.
 func TestHibernateVerifiedFailureClearsIntent(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	eng.hibernateErr = errors.New("cli failed") // completes=false: no snapshot
+	eng.hibernateErr = errors.New("cli failed")
 
 	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("Hibernate reported success despite a verified failure")
@@ -140,10 +123,6 @@ func TestHibernateVerifiedFailureClearsIntent(t *testing.T) {
 	}
 }
 
-// TestHibernateUnverifiableErrorKeepsIntent: when the engine errors and the
-// snapshot list is also unusable (the same cocoon fault), the outcome is
-// unknown — the call must surface the error and keep the intent for Reconcile,
-// never report success on an unconfirmed transition.
 func TestHibernateUnverifiableErrorKeepsIntent(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -163,10 +142,6 @@ func TestHibernateUnverifiableErrorKeepsIntent(t *testing.T) {
 	}
 }
 
-// TestWakeRestoreErrorDestroysAndRetries: Restore can boot the VM before the
-// engine errors (a CLI timeout); the failed wake must tear it down (keeping
-// the snapshot) so the next wake restores cleanly instead of re-restoring an
-// already-running VM.
 func TestWakeRestoreErrorDestroysAndRetries(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -196,15 +171,11 @@ func TestWakeRestoreErrorDestroysAndRetries(t *testing.T) {
 	}
 }
 
-// TestRetryResolvesDanglingIntent: a hibernate that actually completed but
-// left a dangling intent (CLI and list both timed out) must be resolved by a
-// later retry against the real snapshot — adopted, not overwritten with a
-// fresh name that would strand the real snapshot and drop the claim on restart.
 func TestRetryResolvesDanglingIntent(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	// First hibernate completes, but the CLI and the list both time out.
+
 	eng.hibernateErr = errors.New("cli timeout")
 	eng.hibernateErrCompletes = true
 	eng.snapListErr = errors.New("cocoon unreachable")
@@ -216,7 +187,6 @@ func TestRetryResolvesDanglingIntent(t *testing.T) {
 		t.Fatalf("intent %q, want the real snapshot %q kept", got[sb.ID].PendingSnap, realSnap)
 	}
 
-	// cocoon recovers; the retry must adopt the real snapshot, not re-hibernate.
 	eng.hibernateErr = nil
 	eng.snapListErr = nil
 	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
@@ -240,9 +210,6 @@ func TestRetryResolvesDanglingIntent(t *testing.T) {
 	}
 }
 
-// TestWakeResolvesDanglingIntent: a Wake facing a dangling intent whose
-// snapshot exists must resolve it and restore, not return the stopped VM's
-// stale socket as if it were live.
 func TestWakeResolvesDanglingIntent(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -271,16 +238,12 @@ func TestWakeResolvesDanglingIntent(t *testing.T) {
 	}
 }
 
-// TestResolvePendingSnapReleaseRaceDropsOrphan: a Release landing while a wake
-// is mid-resolve (Release captured an empty HibernateSnap, so it drops
-// nothing) must not strand the intent's real snapshot — resolvePendingSnap
-// sees the claim gone and drops the orphan itself.
 func TestResolvePendingSnapReleaseRaceDropsOrphan(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng)
 		sb := mustClaim(t, m, testKey)
-		// Drive to a dangling intent whose snapshot really exists.
+
 		eng.hibernateErr = errors.New("cli timeout")
 		eng.hibernateErrCompletes = true
 		eng.snapListErr = errors.New("cocoon unreachable")
@@ -289,7 +252,6 @@ func TestResolvePendingSnapReleaseRaceDropsOrphan(t *testing.T) {
 		}
 		realSnap := eng.hibernates[0]
 
-		// A wake resolves, but stalls inside SnapshotList; Release lands first.
 		eng.snapListErr = nil
 		eng.snapListStall = make(chan struct{})
 		callsBefore := eng.snapListCalls()
@@ -311,9 +273,6 @@ func TestResolvePendingSnapReleaseRaceDropsOrphan(t *testing.T) {
 	})
 }
 
-// TestResolveAdoptBillsWhenPersistFails: a real transition must be billed even
-// when the adopting resolve's own journal write fails — memory is authoritative
-// and recommit converges disk, so it must not silently escape metering.
 func TestResolveAdoptBillsWhenPersistFails(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -325,7 +284,7 @@ func TestResolveAdoptBillsWhenPersistFails(t *testing.T) {
 		if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 			t.Fatal("Hibernate reported success on an unconfirmed transition")
 		}
-		// The list recovers, but the claims journal is now unwritable.
+
 		eng.snapListErr = nil
 		broken := filepath.Join(t.TempDir(), "gone", "claims.json")
 		m.store.path = broken
@@ -335,7 +294,7 @@ func TestResolveAdoptBillsWhenPersistFails(t *testing.T) {
 		if n := m.Counters().Hibernates; n != 1 {
 			t.Errorf("hibernates billed=%d, want 1 (billed even while the persist lags)", n)
 		}
-		// Heal so the background recommit converges (and its goroutine exits).
+
 		if err := os.MkdirAll(filepath.Dir(broken), 0o750); err != nil {
 			t.Fatalf("heal store dir: %v", err)
 		}
@@ -346,9 +305,6 @@ func TestResolveAdoptBillsWhenPersistFails(t *testing.T) {
 	})
 }
 
-// TestWakeProbeFailureDestroysAndRetries: a readiness-probe timeout after a
-// successful Restore must tear the booted VM down (keeping the snapshot) so
-// the next wake restores cleanly, instead of re-restoring a running VM.
 func TestWakeProbeFailureDestroysAndRetries(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -378,8 +334,6 @@ func TestWakeProbeFailureDestroysAndRetries(t *testing.T) {
 	}
 }
 
-// TestFlushClaimsClosesShutdownWindow: the shutdown hook persists what the
-// background recommit has not converged yet (here, a wake whose commit failed).
 func TestFlushClaimsClosesShutdownWindow(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -441,12 +395,11 @@ func TestHibernateWakeCycle(t *testing.T) {
 		if len(eng.restores) != 1 {
 			t.Errorf("engine restored %d times, want 1", len(eng.restores))
 		}
-		waitFor(t, func() bool { return eng.snapRemoved(hibSnap) }) // wake drops it off the return path
+		waitFor(t, func() bool { return eng.snapRemoved(hibSnap) })
 		if _, g := m.Info(); g.Hibernated != 0 {
 			t.Errorf("hibernated count %d after wake, want 0", g.Hibernated)
 		}
 
-		// Awake sandbox: the fast path must not touch the engine again.
 		if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 			t.Fatalf("fast-path WakeAgentSocket: %v", err)
 		}
@@ -456,8 +409,6 @@ func TestHibernateWakeCycle(t *testing.T) {
 	})
 }
 
-// TestWakeDropsSnapshotOffReturnPath: wake returns the socket without waiting
-// for the consumed snapshot's (subprocess) removal.
 func TestWakeDropsSnapshotOffReturnPath(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -537,8 +488,6 @@ func TestReleaseMidHibernateDropsOrphanSnapshot(t *testing.T) {
 			return len(eng.hibernates) == 1
 		})
 
-		// Release lands while the engine transition is in flight: the claim is
-		// gone before Hibernate can commit, so its snapshot must not leak.
 		if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 			t.Fatalf("Release: %v", err)
 		}
@@ -555,10 +504,6 @@ func TestReleaseMidHibernateDropsOrphanSnapshot(t *testing.T) {
 	})
 }
 
-// TestReconcileAdoptsJournaledIntent: a hibernate that stopped the VM but
-// whose final commit never landed leaves a journaled intent (PendingSnap)
-// over a stopped VM; reconcile adopts it as hibernated — no heuristics, the
-// intent names the wake image.
 func TestReconcileAdoptsJournaledIntent(t *testing.T) {
 	eng := newFakeEngine()
 	eng.vms["sbx-lagged-1"] = "/vsock/lagged"
@@ -590,10 +535,6 @@ func TestReconcileAdoptsJournaledIntent(t *testing.T) {
 	}
 }
 
-// TestReconcileIgnoresStaleOrphanSnapshot: a leftover wake image without a
-// journaled intent must never be mistaken for a hibernate — adopting it
-// would silently roll the sandbox back to pre-wake state. The claim drops,
-// the orphan sweeps.
 func TestReconcileIgnoresStaleOrphanSnapshot(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -619,8 +560,6 @@ func TestReconcileIgnoresStaleOrphanSnapshot(t *testing.T) {
 	})
 }
 
-// TestReconcileDropsIntentWithoutImage: an intent whose wake image is
-// verified missing means the hibernate never completed; the claim drops.
 func TestReconcileDropsIntentWithoutImage(t *testing.T) {
 	eng := newFakeEngine()
 	eng.vms["sbx-noimg-1"] = "/vsock/noimg"

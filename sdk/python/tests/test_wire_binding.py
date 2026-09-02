@@ -3,7 +3,11 @@ actual Sandbox method with the fixture's own field values through a real
 Conn over a socketpair, then asserts the emitted frame carries exactly the
 fixture's fields with the same values — both directions, so a misspelled
 field name AND a silently dropped field fail here; the generic encode
-round-trip alone cannot see either."""
+round-trip alone cannot see either.
+
+Each CASES entry is (fixture stem, scripted guest replies, invoke(sb, fixture));
+UNSENT lists the fields no SDK call site emits by design, which silkd defaults
+and the Go SDK omits too."""
 
 import contextlib
 import json
@@ -17,11 +21,8 @@ from cocoonsandbox import Client, Lsp, Pty, Sandbox, Session
 from cocoonsandbox.conn import Conn
 from cocoonsandbox.frames import PROTO_VERSION
 
-FIXTURES = pathlib.Path(__file__).parent / ".." / ".." / ".." / "protocol" / "wire" / "fixtures" / "v1"
+FIXTURES = pathlib.Path(__file__).parents[3] / "protocol" / "wire" / "fixtures" / "v1"
 
-# op → (fixture stem, replies the fake guest scripts, invoke(sb, fixture)).
-# Invocations pass the fixture's own values so the subset assertion binds
-# every emitted field name and value to the corpus.
 CASES = [
     ("req_exec", [{"type": "started", "pid": 7}, {"type": "exit", "code": 0}],
      lambda sb, f: sb.run(f["argv"], cwd=f["cwd"], env=f["env"], user=f["user"], session=f["session"])),
@@ -94,7 +95,6 @@ CASES = [
 ]
 
 
-# Fields no SDK call site emits by design (silkd defaults them; Go omits too).
 UNSENT = {"req_session_create": {"id"}}
 
 
@@ -124,7 +124,6 @@ def _fake_sandbox(monkeypatch, replies):
                 sent.append(json.loads(line))
             for reply in replies:
                 guest_sock.sendall(json.dumps(reply).encode() + b"\n")
-            # Drain follow-up frames (data/stdin streams) until EOF.
             while True:
                 line = reader.readline()
                 if not line:

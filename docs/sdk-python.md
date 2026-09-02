@@ -237,6 +237,13 @@ records, while `client.checkpoint(id)` creates an entry-node-bound handle for
 an already known id without listing. `new()` follows an owner redirect and may
 heal a missing record locally; `delete()` acts on the handle's bound node.
 
+`delete()` also asks every peer that node currently sees to drop any replica a
+heal pulled — best-effort eventual cleanup, not a fleet-wide revocation. A peer
+that misses the broadcast (offline, partitioned, or joined later) keeps serving
+branches from its replica until the node's `checkpoint_ttl_hours` ages it out;
+with that TTL at its default of 0 (keep forever), an unreachable peer's replica
+has no cleanup bound at all.
+
 ## Language servers (LSP)
 
 ```python
@@ -244,6 +251,7 @@ lsp = sb.start_lsp("python", "/work")   # flavor image provides the server
 stream = lsp.request()                  # JSON-RPC byte stream (frame it yourself)
 # ... speak Content-Length-framed JSON-RPC over stream.send()/recv() ...
 stream.close()                          # ends the session and reaps the server
+lsp.close()                             # same as lsp.stop(); both are context-managers
 ```
 
 `start_lsp` spawns the language server the flavor image ships for the
@@ -319,7 +327,7 @@ A session is a real persistent shell: cwd, env and shell state survive
 across calls.
 
 ```python
-sess = sb.session(cwd="/work", env={"PATH": "..."})
+sess = sb.session(cwd="/work", env={"PATH": "..."})   # context-manager
 sess.exec("export", "MARK=1")            # persists
 sess.exec("sh", "-c", "echo $MARK")      # "1\n"
 sess.close()
@@ -435,7 +443,8 @@ zero.
 - `SilkdError(kind, message)` — typed guest failure; `kind` is
   `bad_request` / `not_found` / `unimplemented` / `internal`
 - `ExitError(code, stderr, stdout)` — non-zero exit from `exec`
-- `ProtocolError` — broken stream
+- `ProtocolError` — broken stream (EOF, oversized or undecodable frame)
+- `StreamTimeout` — a socket operation hit the client `timeout`; retry the call
 
 ```python
 try:

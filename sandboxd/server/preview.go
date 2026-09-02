@@ -48,6 +48,7 @@ func NewPreviewServer(secret, base, owner string, mgr PreviewManager) *PreviewSe
 	}
 	p := &PreviewServer{secret: []byte(secret), base: base, owner: owner, mgr: mgr}
 	p.transport = &http.Transport{
+		// a pooled guest conn skips PreviewDial, and with it wakeResolved and the Transition lock
 		DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 			id, portStr, err := net.SplitHostPort(addr)
@@ -102,10 +103,10 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme = "http"
-			// The synthetic host carries PreviewDial's target.
+			// the synthetic host carries PreviewDial's target
 			pr.Out.URL.Host = fmt.Sprintf("%s:%d", claims.ID, claims.Port)
 			pr.Out.URL.Path = "/" + strings.TrimPrefix(pr.In.URL.Path, "/p/"+r.PathValue("token")+"/")
-			// Browser credentials for the preview domain must not reach guest code.
+			// browser credentials for the preview domain must not reach guest code
 			pr.Out.Header.Del("Cookie")
 			pr.Out.Header.Del("Authorization")
 		},

@@ -1,6 +1,6 @@
 //! fs.watch E2E: a connection-bound event stream ended by client disconnect.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
 use std::sync::Arc;
@@ -24,7 +24,6 @@ async fn watch_streams_events_until_disconnect() {
     cw.write_all(req.as_bytes()).await.unwrap();
     cw.write_all(b"\n").await.unwrap();
 
-    // The ready frame guarantees the watch is armed — no arming sleep needed.
     let ready = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
         .await
         .expect("no ready within 5s")
@@ -36,16 +35,23 @@ async fn watch_streams_events_until_disconnect() {
         .await
         .unwrap();
 
-    let event = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
-        .await
-        .expect("no event within 5s")
-        .unwrap()
-        .expect("stream closed before an event");
-    let frame: serde_json::Value = serde_json::from_str(&event).unwrap();
-    assert_eq!(frame["type"], "event", "got {frame:?}");
-    assert!(frame["path"].as_str().unwrap().ends_with("new.txt"));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let line = lines
+                .next_line()
+                .await
+                .unwrap()
+                .expect("stream closed before an event");
+            let frame: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(frame["type"], "event", "got {frame:?}");
+            if frame["path"].as_str().unwrap().ends_with("new.txt") {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("no new.txt event within 5s");
 
-    // Disconnect ends the watch: the server task returns promptly.
     drop(lines);
     drop(cw);
     tokio::time::timeout(Duration::from_secs(5), handle)

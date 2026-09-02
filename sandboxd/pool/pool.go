@@ -41,9 +41,7 @@ const (
 	buildRetryDelay   = 30 * time.Second
 	claimProbeTimeout = 15 * time.Second
 	coldProbeTimeout  = 90 * time.Second
-	// A refill has no caller waiting and holds a target-accounting slot for
-	// its whole probe; a clone answers in ~1s even saturated, so a silent one
-	// is replaced, not waited on.
+	// a clone answers in ~1s even saturated, so a silent one is replaced, not waited on
 	warmProbeTimeout = 5 * time.Second
 	// One list; a wrong answer only costs an extra sweep.
 	removeVerifyTimeout = 15 * time.Second
@@ -54,15 +52,12 @@ const (
 	maxTTL             = 24 * time.Hour
 	recommitBackoff    = 20 * time.Millisecond
 	recommitMaxBackoff = 5 * time.Second
-	// One failed boot is ordinary; only an unbroken run of failures says the
-	// next attempt will fail too.
+	// one failed boot is ordinary; only an unbroken run predicts the next failure
 	refillFailStreak = 8
 	// Doubles per failure past the streak.
 	refillBackoffBase = 250 * time.Millisecond
 	refillBackoffMax  = buildRetryDelay
-	// defaultMaxFork/defaultRefill are the fallbacks when a Manager is built
-	// from a Config that skipped config.Load's defaulting (direct construction
-	// in tests).
+	// fallbacks when a Manager is built from a Config that skipped config.Load's defaulting
 	defaultMaxFork = 16
 	defaultRefill  = 4
 
@@ -134,8 +129,7 @@ type SandboxSummary struct {
 	Archived       bool           `json:"archived,omitempty"`
 	FromCheckpoint string         `json:"from_checkpoint,omitempty"`
 	Volumes        []types.Volume `json:"volumes,omitempty"`
-	// ClaimRef echoes the caller reference recorded at claim time; empty for
-	// fork and checkpoint-branch claims.
+	// ClaimRef echoes the caller reference; empty for fork and checkpoint-branch claims.
 	ClaimRef string `json:"claim_ref,omitempty"`
 }
 
@@ -154,8 +148,7 @@ type Gauges struct {
 	Hibernated int
 	Archived   int
 	Draining   bool
-	// AtCapacity marks refill parked because the node refused another VM, so a
-	// placer reads a short warm count as "full", not "still filling".
+	// AtCapacity marks refill parked because the node refused another VM.
 	AtCapacity       bool
 	AtCapacityReason string
 }
@@ -168,11 +161,10 @@ type pendingRemoval struct {
 }
 
 type pool struct {
-	key types.PoolKey
+	key  types.PoolKey
+	hash string
 
-	// floor and warmMax bound the demand-adaptive target (watermark.go);
-	// rate/lead/lastArrival are its EWMA inputs, guarded by the manager
-	// mutex like everything else here.
+	// floor and warmMax bound the demand-adaptive target computed in watermark.go
 	floor         int
 	warmMax       int
 	idle          time.Duration
@@ -189,20 +181,21 @@ type pool struct {
 	warm      []*types.Sandbox
 	refilling int
 
-	// An unbroken failure streak and the retry gate it earns; without them a
-	// node-wide dead cause is retried every tick at full concurrency.
+	// without a streak gate a node-wide dead cause is retried every tick at full concurrency
 	refillFails int
 	nextRefill  time.Time
 }
 
-// refillGated reports whether a refill may not spawn: the backoff wait, or —
-// expired — the single probe already in flight (a success resets the streak).
+func newPool(key types.PoolKey) *pool {
+	return &pool{key: key, hash: key.Hash()}
+}
+
+// refillGated reports whether a refill may not spawn: backoff wait, or one probe in flight.
 func (p *pool) refillGated(now time.Time) bool {
 	return now.Before(p.nextRefill) || (p.refillFails >= refillFailStreak && p.refilling > 0)
 }
 
-// noteRefillResult records one refill outcome and reports whether this call
-// started a backoff, so the caller logs the transition, not every attempt.
+// noteRefillResult records one refill outcome and reports whether it started a backoff.
 func (p *pool) noteRefillResult(now time.Time, failed bool) bool {
 	if !failed {
 		p.refillFails, p.nextRefill = 0, time.Time{}
@@ -226,8 +219,7 @@ func (p *pool) applySpec(spec config.PoolSpec) {
 	p.archiveDelete = time.Duration(spec.ArchiveDeleteAfterSeconds) * time.Second
 }
 
-// trimWarm shrinks p.warm to at most target, returning the trimmed VM names;
-// callers hold m.mu and destroy the returned VMs outside it.
+// trimWarm shrinks p.warm to at most target and returns the trimmed VM names; callers hold m.mu.
 func (p *pool) trimWarm(target int) []string {
 	var trim []string
 	for len(p.warm) > target {
@@ -249,46 +241,32 @@ type Manager struct {
 	maxFork int
 	store   *claimStore
 	volumes map[string]catalogVolume
-	// volumeAdmission counts the live holders of each volume name, mirroring
-	// the hypervisor's own per-image lock so a conflicting claim is refused
-	// before it pays any attach cost; guarded by m.mu.
+	// volumeAdmission counts the live holders of each volume name; guarded by m.mu.
 	volumeAdmission map[string]volumeHolders
 
 	poolStore      *poolStore
 	configSeedHash string // config pools' hash, to warn when a file edit is overridden
 
-	// idleDefault is the idle-hibernate threshold for unpooled keys; pooled
-	// keys carry theirs on the pool struct. Zero means disabled.
+	// idleDefault is the idle-hibernate threshold for unpooled keys; zero disables.
 	idleDefault time.Duration
 	idleEnabled bool
 	idleSweep   atomic.Bool
 
-	// archive*Default are the archive thresholds for unpooled keys; pooled keys
-	// carry theirs on the pool struct. archiveEnabled is set when any pool or
-	// the node default has archiving on; archiveSweep guards the sweep loop.
+	// archive*Default are the archive thresholds for unpooled keys.
 	archiveAfterDefault  time.Duration
 	archiveDeleteDefault time.Duration
 	archiveEnabled       bool
 	archiveSweep         atomic.Bool
 	archiveDeleteSweep   atomic.Bool
-	// archiving holds ids with an archive() export in flight, so the reap tick
-	// and archive sweep don't both re-export the same sandbox; pendingCks pins
-	// checkpoint ids during archive publish and removal commits. Both guarded
-	// by m.mu.
+	// archiving holds ids with an export in flight; pendingCks pins ids mid-commit; both under m.mu.
 	archiving  map[string]struct{}
 	pendingCks map[string]struct{}
-	// egressListeners holds the per-sandbox egress proxy accept point, keyed by
-	// sandbox id; guarded by m.mu.
+	// egressListeners holds the per-sandbox egress proxy accept point; guarded by m.mu.
 	egressListeners map[string]*egressListener
-	// egressTaps holds the nft-locked egress-lane tap per sandbox id, tracked
-	// apart from the proxy so a locked-but-policyless NIC still unlocks on
-	// release; guarded by m.mu.
+	// egressTaps holds the nft-locked egress-lane tap per sandbox id; guarded by m.mu.
 	egressTaps map[string]string
 
-	// maxClaims caps live claims node-wide (0 = unlimited); tenantMax holds
-	// every configured tenant's cap (0 = unlimited) and doubles as the set of
-	// known tenants; tenantLive counts live claims per tenant. usage is the
-	// always-on billing event stream, audit the config-gated request tap.
+	// tenantMax doubles as the set of known tenants; a 0 cap means unlimited.
 	maxClaims    int
 	draining     bool // guarded by m.mu; deliberately not persisted
 	tenantMax    map[string]int
@@ -299,14 +277,10 @@ type Manager struct {
 	audit        *journal
 	counters     counters
 	ckpts        store.Store
-	// A cluster-wide backend resolves every record from every node, so heal
-	// and the delete broadcast are both no-ops against it.
+	// a cluster-wide backend makes heal and the delete broadcast no-ops
 	ckptsShared bool
 	healer      *peer.Healer
-	// healSem bounds concurrent transfers node-wide; healFlights dedups
-	// same-id heals onto one transfer, which owns its own staging dir.
-	// healPending/healAbort (guarded by recLocksMu) let a delete veto a heal
-	// still staging the same id (see vetoIfHealPending).
+	// healPending/healAbort, guarded by recLocksMu, let a delete veto a heal still staging.
 	healSem      chan struct{}
 	healFlights  singleflight.Group
 	healPending  map[string]struct{}
@@ -316,41 +290,26 @@ type Manager struct {
 	ckptTTL      time.Duration
 	ckptSweeping atomic.Bool
 
-	// tplSet caches each template id against its owning tenant ("" = operator),
-	// so the gossip tick and the claim path never pay a store read.
+	// tplSet caches each template id against its owning tenant ("" = operator).
 	tplMu  sync.Mutex
 	tplSet map[string]string
 
-	// recLocks serializes same-id store record mutations and holds off a
-	// re-publish swap while a clone reads the old generation (per id, RW).
-	// recLocksMu guards recRefs, the live-holder count that gates eviction: a
-	// checkpoint id can become live again after a delete (a peer's heal can
-	// republish one), so an entry is only safe to evict once nothing still
-	// holds or awaits it — never on a bare "record deleted" signal.
-	recLocks   sync.Map
+	// recLocks serializes same-id record mutations; an entry evicts only when no holder remains, never on a bare delete, since a peer heal can republish the id.
+	recLocks   map[string]*sync.RWMutex
 	recLocksMu sync.Mutex
 	recRefs    map[string]int
-	// recEvict remembers ids a delete asked to evict while a reference still
-	// held the lock, so the eviction happens when the last holder leaves rather
-	// than being lost — otherwise the recLocks entry leaks for that id.
+	// recEvict defers a delete's eviction to the last holder, else the recLocks entry leaks.
 	recEvict map[string]struct{}
 
-	// notifyTemplates, when set (before serving starts), fires after a
-	// promote or template delete so the mesh republishes immediately
-	// instead of waiting out a gossip tick.
+	// notifyTemplates is set before serving starts and fires after a promote or template delete.
 	notifyTemplates func()
 
-	// egressSecrets resolves a rule's secret name to the injected header, read-only
-	// after startup. guardedEgress arms the proxy (some policy exists); lockEgress
-	// nft-locks every egress-lane NIC default-deny (a bridge lane exists). egressCA
-	// signs HTTPS-interception leaves and is baked into interception pools' goldens;
-	// nil unless a pool rule sets intercept.
+	// egressSecrets is read-only after startup; egressCA is nil unless a pool rule intercepts.
 	egressSecrets *egress.SecretStore
 	egressCA      *egress.CA
 	guardedEgress bool
 	lockEgress    bool
-	// dial and sweep are fields as test seams: the SSRF guard blocks loopback
-	// test origins, and the nft sweep is netlink-only.
+	// dial and sweep are test seams: the SSRF guard blocks loopback, the nft sweep is netlink-only.
 	dial  egress.DialFunc
 	sweep func(map[string]bool) error
 
@@ -359,8 +318,7 @@ type Manager struct {
 	claimed         map[string]*types.Sandbox
 	pendingRemovals map[string]pendingRemoval
 
-	// Node-wide, unlike the per-pool streak backoff: the resource that ran
-	// out — bridge ports, disk — is shared by every pool.
+	// node-wide, unlike the per-pool streak backoff: the exhausted resource is shared
 	atCapacityUntil  time.Time
 	atCapacityReason string
 
@@ -369,9 +327,7 @@ type Manager struct {
 	refillKick chan struct{}
 }
 
-// NewManager builds a manager from the node config; ctx bounds backend
-// construction (the s3 store resolves its credential chain). secrets resolves
-// egress rule references and is shared by every per-sandbox proxy.
+// NewManager builds a manager from the node config; ctx bounds backend construction.
 func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *egress.SecretStore) (*Manager, error) {
 	maxFork := cfg.MaxForkCount
 	if maxFork < 1 {
@@ -399,6 +355,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		pendingCks:      map[string]struct{}{},
 		egressListeners: map[string]*egressListener{},
 		egressTaps:      map[string]string{},
+		recLocks:        map[string]*sync.RWMutex{},
 		recRefs:         map[string]int{},
 		recEvict:        map[string]struct{}{},
 		healPending:     map[string]struct{}{},
@@ -421,9 +378,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("create goldens dir: %w", err)
 	}
-	// Checkpoints and templates are two id-namespaced views over ONE store
-	// root (ck_* vs tp_*): a shared mount or bucket carries both, and each
-	// instance's listing filters to its own records.
+	// checkpoints and templates are two id-namespaced views (ck_*, tp_*) over one store root
 	var err error
 	if m.ckpts, err = newStoreView(ctx, cfg, "checkpoint-staging", store.CheckpointIDRe); err != nil {
 		return nil, err
@@ -471,7 +426,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	m.archiveDeleteDefault = time.Duration(cfg.ArchiveDeleteAfterSeconds) * time.Second
 	m.archiveEnabled = m.archiveAfterDefault > 0
 	for _, spec := range cfg.Pools {
-		p := &pool{key: spec.PoolKey}
+		p := newPool(spec.PoolKey)
 		p.applySpec(spec)
 		m.pools[spec.PoolKey] = p
 		if spec.IdleHibernateSeconds > 0 {
@@ -499,8 +454,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	return m, nil
 }
 
-// EgressCAFingerprint is the egress cluster root's fingerprint, or "" when the
-// node does no interception.
+// EgressCAFingerprint is the egress root's fingerprint, or "" when the node intercepts nothing.
 func (m *Manager) EgressCAFingerprint() string {
 	if m.egressCA == nil {
 		return ""
@@ -514,8 +468,7 @@ func (m *Manager) Run(ctx context.Context) {
 	defer refill.Stop()
 	reap := time.NewTicker(reapInterval)
 	defer reap.Stop()
-	// Store retention is hourly, not per reap tick: shared roots and buckets
-	// make each sweep cluster-visible I/O.
+	// store retention is hourly: each sweep is cluster-visible I/O on a shared root
 	storeSweep := time.NewTicker(time.Hour)
 	defer storeSweep.Stop()
 	if m.ckptTTL > 0 {
@@ -545,14 +498,12 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
-// FlushClaims synchronously persists the current claim set — the shutdown
-// hook that closes the window where a detached recommit has not converged yet.
+// FlushClaims synchronously persists the current claim set at shutdown.
 func (m *Manager) FlushClaims() error {
 	return m.store.commit(m.claimsSnapshot())
 }
 
-// SetTemplateNotifier wires the immediate-republish hook; call it before
-// the server starts serving.
+// SetTemplateNotifier wires the immediate-republish hook; call it before serving starts.
 func (m *Manager) SetTemplateNotifier(fn func()) {
 	m.notifyTemplates = fn
 }
@@ -562,11 +513,15 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now()
-	pools := make([]PoolInfo, 0, len(m.pools))
+	live := make([]*pool, 0, len(m.pools))
 	for _, p := range m.pools {
-		if p.removed {
-			continue
+		if !p.removed {
+			live = append(live, p)
 		}
+	}
+	slices.SortFunc(live, func(a, b *pool) int { return strings.Compare(a.hash, b.hash) })
+	pools := make([]PoolInfo, 0, len(live))
+	for _, p := range live {
 		pools = append(pools, PoolInfo{
 			Key:       p.key,
 			Warm:      len(p.warm),
@@ -575,7 +530,6 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 			Golden:    p.goldenDir != "",
 		})
 	}
-	slices.SortFunc(pools, func(a, b PoolInfo) int { return strings.Compare(a.Key.Hash(), b.Key.Hash()) })
 	g := Gauges{Claimed: len(m.claimed), Draining: m.draining}
 	if now.Before(m.atCapacityUntil) {
 		g.AtCapacity, g.AtCapacityReason = true, m.atCapacityReason
@@ -611,16 +565,15 @@ func (m *Manager) WarmCounts() map[string]int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	counts := make(map[string]int, len(m.pools))
-	for key, p := range m.pools {
+	for _, p := range m.pools {
 		if !p.removed {
-			counts[key.Hash()] = len(p.warm)
+			counts[p.hash] = len(p.warm)
 		}
 	}
 	return counts
 }
 
-// WithPeerHeal installs the healer ClaimCheckpointHeal pulls through, so a
-// peer transfer is paid only once nothing cheaper resolves the claim.
+// WithPeerHeal installs the healer ClaimCheckpointHeal pulls through.
 func (m *Manager) WithPeerHeal(enabled bool, owners peer.Owners, token string) {
 	if !enabled || owners == nil || m.ckptsShared {
 		return
@@ -628,8 +581,7 @@ func (m *Manager) WithPeerHeal(enabled bool, owners peer.Owners, token string) {
 	m.healer = peer.NewHealer(owners, &peer.HTTPPuller{Token: token})
 }
 
-// WithPeerDelete wires the broadcast DeleteCheckpoint makes after a local
-// delete, so a healed replica does not outlive the source record.
+// WithPeerDelete wires the broadcast DeleteCheckpoint makes after a local delete.
 func (m *Manager) WithPeerDelete(fn PeerDeleteFunc) {
 	m.peerDelete = fn
 }
@@ -645,9 +597,7 @@ func (m *Manager) sweepStoreGenerations(ctx context.Context) {
 }
 
 func (m *Manager) claimsSnapshot() claimSnapshot {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.store.snapshot(m.claimed)
+	return m.store.mark()
 }
 
 func (m *Manager) untrack(set map[string]struct{}, key string) {
@@ -714,9 +664,7 @@ func dirExists(path string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// tenantOwns is THE tenancy predicate — every read/delete/overwrite scope
-// check goes through it: root (empty tenant) owns everything, a tenant only
-// records stamped with its own name.
+// tenantOwns is the tenancy predicate: root (empty tenant) owns everything, a tenant its own.
 func tenantOwns(tenant, owner string) bool {
 	return tenant == "" || tenant == owner
 }
@@ -735,8 +683,7 @@ func logSweepResult(ctx context.Context, logger *log.Fields, err error, okMsg, f
 	}
 }
 
-// benignSweepErr reports whether err is the expected outcome of a housekeeping
-// sweep (victim released, woke mid-sweep, or a lane that never hibernates).
+// benignSweepErr reports whether err is the expected outcome of a housekeeping sweep.
 func benignSweepErr(err error) bool {
 	return errors.Is(err, ErrUnknownSandbox) || errors.Is(err, errWokeMeanwhile) ||
 		errors.Is(err, ErrNoEgressHibernate)

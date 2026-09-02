@@ -12,8 +12,7 @@ import (
 
 const silkdChunk = 256 * 1024
 
-// silkdSession is a dialed silkd conn bound to a ctx, with wire-typed
-// request/reply helpers. The hot port-forward relay (portconn.go) does not use it.
+// silkdSession is a dialed silkd conn bound to a ctx, with wire-typed request/reply helpers.
 type silkdSession struct {
 	conn net.Conn
 	sc   *bufio.Scanner
@@ -58,8 +57,7 @@ func (e *Engine) dialSilkdSession(ctx context.Context, vsockSocket string) (*sil
 	}, nil
 }
 
-// silkdStream serves one request per dial: silkd handles a single request
-// per connection.
+// silkdStream serves one request per dial: silkd handles one request per connection.
 func (e *Engine) silkdStream(ctx context.Context, vsockSocket string, req wire.Request, onFrame func(wire.Response) error) error {
 	s, err := e.dialSilkdSession(ctx, vsockSocket)
 	if err != nil {
@@ -119,8 +117,7 @@ func (e *Engine) silkdReadFile(ctx context.Context, vsockSocket, path string) ([
 	return data, nil
 }
 
-// silkdStat answers with a single Stat frame and no terminal Done, so it
-// cannot ride silkdStream.
+// silkdStat answers with a single Stat frame and no Done, so it cannot ride silkdStream.
 func (e *Engine) silkdStat(ctx context.Context, vsockSocket, path string) error {
 	s, err := e.dialSilkdSession(ctx, vsockSocket)
 	if err != nil {

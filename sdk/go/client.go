@@ -426,6 +426,7 @@ func (e *APIError) Error() string {
 func apiError(verb string, resp *http.Response) error {
 	var er errorResponse
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&er)
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return &APIError{Verb: verb, Status: resp.StatusCode, Message: er.Error}
 }
 

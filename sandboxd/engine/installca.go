@@ -13,15 +13,11 @@ import (
 const (
 	caCertGuestPath = "/usr/local/share/ca-certificates/sandbox-egress.crt"
 	caBundlePath    = "/etc/ssl/certs/ca-certificates.crt"
-	// guestExecPATH is set on the guest command because silkd starts it with an
-	// empty environment.
+	// guestExecPATH is set because silkd starts the guest command with an empty environment.
 	guestExecPATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 )
 
-// InstallCACert makes the guest trust the cluster root: drop the cert in the
-// source dir and append it to the active bundle. It avoids update-ca-certificates
-// on purpose — silkd runs before systemd-tmpfiles clears /tmp, where that script
-// stages temp files. Off the claim path (golden build / cold provision).
+// InstallCACert makes the guest trust the cluster root without update-ca-certificates.
 func (e *Engine) InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, cmdTimeout)
 	defer cancel()

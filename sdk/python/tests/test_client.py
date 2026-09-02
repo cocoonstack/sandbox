@@ -121,8 +121,7 @@ def test_claim_omits_volume_mode_ro(node):
     FakeNode.routes[("POST", "/v1/claim")] = claim
     Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "mode": "ro"}])
     Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "mode": ""}])
-    # "ro" and "" both normalize to an omitted key, byte-identical to a v1 request.
-    assert seen[0]["volumes"] == seen[1]["volumes"] == [{"name": "imagenet"}]
+    assert seen[0]["volumes"] == seen[1]["volumes"] == [{"name": "imagenet"}], seen
 
 
 def test_claim_attaches_volumes_without_mounting(node):
@@ -232,8 +231,6 @@ def test_volume_catalog(node):
 
 
 def test_volume_catalog_surfaces_writable(node):
-    # The server omits "writable" for read-only entries (json omitempty); the
-    # client passes both shapes through as-is, key present or absent.
     want = [
         {
             "name": "scratch",

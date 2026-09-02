@@ -2,7 +2,7 @@
 //! (echo, sh), so it runs on any Unix — keep it that way so exec-path bugs
 //! surface on the dev host, not only on Linux CI.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
 use std::sync::Arc;
@@ -23,8 +23,6 @@ async fn exec_streams_stdout_then_exit() {
 
 #[tokio::test]
 async fn large_output_is_delivered_without_loss() {
-    // Exercises the backpressured foreground mpsc with far more chunks than
-    // its buffer; every line must arrive in order, none dropped.
     let frames = roundtrip(r#"{"op":"exec","argv":["/bin/sh","-c","seq 1 20000"]}"#).await;
     let body = stdout_body(&frames);
     let lines: Vec<&str> = body.lines().collect();
@@ -71,8 +69,6 @@ async fn kill_unknown_pid_is_not_found() {
 
 #[tokio::test]
 async fn daemonizing_child_does_not_wedge_the_exec() {
-    // sh forks a process that inherits stdout and outlives it. The exec must
-    // still return an exit frame promptly instead of blocking on pipe EOF.
     let frames = tokio::time::timeout(
         Duration::from_secs(8),
         roundtrip(r#"{"op":"exec","argv":["/bin/sh","-c","sleep 30 & exit 0"]}"#),
@@ -86,9 +82,6 @@ async fn daemonizing_child_does_not_wedge_the_exec() {
 
 #[tokio::test]
 async fn daemonizer_exit_is_the_last_frame() {
-    // A child that leaves a grandchild holding stdout must still end its frame
-    // stream with exit and nothing after it — the post-exit drain aborts the
-    // pump, so no stray stdout can arrive once Exit is sent.
     let frames = tokio::time::timeout(
         Duration::from_secs(8),
         roundtrip(r#"{"op":"exec","argv":["/bin/sh","-c","(sleep 5; echo late) & exit 0"]}"#),
@@ -124,8 +117,6 @@ async fn detached_pid(state: &Arc<State>, script: &str) -> u64 {
 async fn attach_streams_live_output_then_exit() {
     let state = Arc::new(State::new());
     let pid = detached_pid(&state, "sleep 0.3; echo live-chunk").await;
-    // Attach before the echo fires: the chunk must arrive live and the stream
-    // must end with exit.
     let frames = tokio::time::timeout(
         Duration::from_secs(8),
         one(&state, &format!(r#"{{"op":"attach","pid":{pid}}}"#)),
@@ -171,8 +162,6 @@ async fn attach_unknown_pid_is_not_found() {
 async fn kill_actually_terminates_a_live_process() {
     let state = Arc::new(State::new());
     let pid = detached_pid(&state, "sleep 30").await;
-    // Wait for it to register, then kill and confirm it reaches exited well
-    // before the 30s sleep would end.
     for _ in 0..50 {
         let ps = one(&state, r#"{"op":"ps"}"#).await;
         if ps[0]["procs"]
@@ -217,7 +206,6 @@ async fn exec_missing_binary_is_an_internal_error() {
 
 #[tokio::test]
 async fn exec_stdin_is_piped_to_the_child() {
-    // cat echoes its stdin; feed a stdin frame, close it, expect the bytes back.
     let frames = exchange(&[
         r#"{"op":"exec","argv":["/bin/cat"]}"#.to_string(),
         serde_json::json!({"op":"stdin","data":common::b64(b"piped-in\n")}).to_string(),
@@ -292,9 +280,6 @@ async fn detached_exec_is_listed_then_logs_replay_output_and_exit() {
 
 #[tokio::test]
 async fn disconnect_during_drain_publishes_real_exit_code() {
-    // A grandchild holds stdout so the supervisor sits in the post-exit
-    // drain; the foreground client then vanishes mid-drain. The disconnect
-    // fallback must publish the child's real code to attachers, not -1.
     use tokio::io::AsyncWriteExt;
 
     let state = Arc::new(State::new());
@@ -312,9 +297,6 @@ async fn disconnect_during_drain_publishes_real_exit_code() {
     assert_eq!(type_of(&started), "started");
     let pid = started["pid"].as_u64().unwrap();
 
-    // Attach while the proc is live, then drop the exec client: writing the
-    // grandchild's "late" chunk fails and takes the disconnect path while
-    // the supervisor is still mid-drain.
     let st = Arc::clone(&state);
     let attach = tokio::spawn(async move {
         one(

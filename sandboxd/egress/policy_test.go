@@ -19,7 +19,7 @@ func TestPolicyEval(t *testing.T) {
 		{"exact host case-insensitive", "API.GitHub.com", "POST", DecisionAllow, "gh"},
 		{"exact host wrong method falls through to catch-all deny", "api.github.com", "DELETE", DecisionDeny, ""},
 		{"wildcard subdomain", "storage.googleapis.com", "PUT", DecisionAllow, ""},
-		{"wildcard does not match apex", "googleapis.com", "GET", DecisionAllow, ""}, // caught by "*"/GET
+		{"wildcard does not match apex", "googleapis.com", "GET", DecisionAllow, ""},
 		{"catch-all get", "example.com", "GET", DecisionAllow, ""},
 		{"catch-all denies non-get", "example.com", "POST", DecisionDeny, ""},
 	}
@@ -41,8 +41,7 @@ func TestEvalSkipsInterceptRules(t *testing.T) {
 		{Host: "api.github.com", Secret: "gh", Intercept: true},
 		{Host: "plain.github.com"},
 	}}
-	// An intercept-only host must deny the plaintext forward path outright —
-	// matching would inject the rule's secret over cleartext.
+
 	if rule, d := p.Eval("api.github.com", "GET"); d != DecisionDeny || rule.Secret != "" {
 		t.Errorf("Eval on an intercept-only host = %+v/%v, want deny", rule, d)
 	}
@@ -70,7 +69,7 @@ func TestEvalHostPrefersInterceptRule(t *testing.T) {
 
 func TestEvalInnerMatchesOnlyInterceptRulesByMethod(t *testing.T) {
 	p := Policy{Allow: []Rule{
-		{Host: "*.example.com"}, // plain: must not shadow or rescue
+		{Host: "*.example.com"},
 		{Host: "api.example.com", Methods: []string{"GET"}, Secret: "gh", Intercept: true},
 		{Host: "api.example.com", Methods: []string{"POST"}, Intercept: true},
 	}}

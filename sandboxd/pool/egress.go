@@ -20,11 +20,7 @@ import (
 var (
 	nat64Range = netip.MustParsePrefix("64:ff9b::/96") // RFC 6052 NAT64; the embedded v4 is checked instead
 
-	// internalRanges is every IANA special-purpose prefix with Globally Reachable =
-	// false that IsGlobalUnicast/IsPrivate do not already exclude, plus the
-	// deprecated IPv4-compatible embedding, mirrored from the IPv4/IPv6
-	// Special-Purpose registries (snapshot 2026-07-11). 2001::/23 is blocked whole
-	// (its handful of globally-reachable anycast carve-outs are not egress targets).
+	// internalRanges lists the IANA special-purpose prefixes IsGlobalUnicast/IsPrivate leave in.
 	internalRanges = []netip.Prefix{
 		netip.MustParsePrefix("0.0.0.0/8"),       // "this network"
 		netip.MustParsePrefix("100.64.0.0/10"),   // RFC 6598 CGNAT; some clouds host metadata here
@@ -48,9 +44,7 @@ var (
 	}
 )
 
-// egressListener is one sandbox's egress accept point: an http.Server serving
-// egress.Proxy over the per-sandbox UDS the VMM connects when the guest dials
-// CID2:egressPort.
+// egressListener is one sandbox's egress accept point over the per-sandbox UDS.
 type egressListener struct {
 	srv   *http.Server
 	proxy *egress.Proxy
@@ -65,9 +59,7 @@ func (e *egressListener) close() {
 	_ = os.Remove(e.path)
 }
 
-// armEgress locks the egress-lane NIC then binds the proxy: fail-closed (a
-// lock error aborts the claim), and no policy still yields a locked NIC with
-// no proxy — default-deny, never a free NIC.
+// armEgress locks the egress-lane NIC then binds the proxy: fail-closed, never a free NIC.
 func (m *Manager) armEgress(ctx context.Context, sb *types.Sandbox) error {
 	if err := m.lockEgressNIC(ctx, sb); err != nil {
 		return err
@@ -75,8 +67,7 @@ func (m *Manager) armEgress(ctx context.Context, sb *types.Sandbox) error {
 	return m.armEgressProxy(ctx, sb)
 }
 
-// lockEgressNIC nft-locks the egress-lane NIC and records the tap for unlock;
-// the engine lookup is the fallback for claims from pre-tap journals.
+// lockEgressNIC nft-locks the egress-lane NIC and records the tap for unlock.
 func (m *Manager) lockEgressNIC(ctx context.Context, sb *types.Sandbox) error {
 	if !m.lockEgress || sb.Key.Net != types.NetEgress {
 		return nil
@@ -111,9 +102,7 @@ func (m *Manager) tapOf(ctx context.Context, vmName string) (string, error) {
 	return "", fmt.Errorf("no tap for %s", vmName)
 }
 
-// armEgressProxy binds the vsock egress proxy for a claim whose effective policy
-// permits something; a no-op otherwise, so no listener means default-deny (the
-// egress-lane NIC stays nft-locked, the none lane's proxy dial is refused).
+// armEgressProxy binds the egress proxy only when the effective policy permits something.
 func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	if !m.guardedEgress || sb.VsockSocket == "" {
 		return nil
@@ -140,8 +129,7 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	return nil
 }
 
-// disarmIfReleased tears down a proxy armed on a wake path if Release dropped
-// the claim in the arm window (Release skips the Transition lock); reports gone.
+// disarmIfReleased tears down a wake-path proxy if Release dropped the claim in the arm window.
 func (m *Manager) disarmIfReleased(sb *types.Sandbox) bool {
 	m.mu.Lock()
 	live := m.claimed[sb.ID] == sb
@@ -152,8 +140,7 @@ func (m *Manager) disarmIfReleased(sb *types.Sandbox) bool {
 	return !live
 }
 
-// disarmEgress tears down a sandbox's egress proxy listener, and its NIC lock
-// only when removed (a failed removal keeps a running guest locked). Idempotent.
+// disarmEgress tears down a sandbox's egress listener, and its NIC lock only when removed.
 func (m *Manager) disarmEgress(id string, removed bool) {
 	if !m.guardedEgress && !m.lockEgress {
 		return
@@ -175,17 +162,14 @@ func (m *Manager) disarmEgress(id string, removed bool) {
 	}
 }
 
-// poolIntercepts reports whether the configured pool for key HTTPS-intercepts,
-// so its golden bakes the node CA.
+// poolIntercepts reports whether the configured pool for key HTTPS-intercepts.
 func (m *Manager) poolIntercepts(key types.PoolKey) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.poolEgress[key].Intercepts()
 }
 
-// effectivePolicy resolves pool ∩ tenant; root has no tenant layer, and a key
-// no pool is configured for (a promoted template, a cold-booted image) has no
-// pool layer.
+// effectivePolicy resolves pool ∩ tenant; root has no tenant layer, an unpooled key no pool one.
 func (m *Manager) effectivePolicy(sb *types.Sandbox) (egress.Evaluator, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -206,9 +190,7 @@ func (m *Manager) effectivePolicy(sb *types.Sandbox) (egress.Evaluator, bool) {
 	return egress.Compose(*poolPol, *tenantPol), true
 }
 
-// newEgressDialer builds the proxy's upstream dialer: internal targets are
-// blocked (the proxy must not be an SSRF), then exactly the node-named
-// prefixes re-admitted.
+// newEgressDialer blocks internal targets, then re-admits exactly the node-named prefixes.
 func newEgressDialer(allow []netip.Prefix) *net.Dialer {
 	return &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
 		host, _, err := net.SplitHostPort(address)
@@ -224,8 +206,7 @@ func newEgressDialer(allow []netip.Prefix) *net.Dialer {
 			b := ip.As16()
 			ip = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
 		}
-		// After the NAT64 unwrap (a v4-in-v6 target matches as the v4 it is),
-		// before the block, so a named prefix wins.
+		// after the NAT64 unwrap and before the block, so a named prefix wins
 		if slices.ContainsFunc(allow, func(p netip.Prefix) bool { return p.Contains(ip) }) {
 			return nil
 		}
@@ -237,8 +218,7 @@ func newEgressDialer(allow []netip.Prefix) *net.Dialer {
 	}}
 }
 
-// parsePrefixes turns the allow-list into prefixes; config validation already
-// rejected malformed entries, so a leftover is dropped rather than failing dials.
+// parsePrefixes turns the allow-list into prefixes; config validation already rejected bad ones.
 func parsePrefixes(cidrs []string) []netip.Prefix {
 	out := make([]netip.Prefix, 0, len(cidrs))
 	for _, c := range cidrs {

@@ -2,6 +2,8 @@ package sandbox
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -120,8 +122,6 @@ func TestCloseReleases(t *testing.T) {
 }
 
 func TestNewFollowsRedirect(t *testing.T) {
-	// The first node redirects; the second answers with the claim. The SDK
-	// must follow transparently and end up owning the sandbox at node B.
 	var nodeB *httptest.Server
 	nodeB = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(claimResponse{
@@ -150,8 +150,6 @@ func TestNewFollowsRedirect(t *testing.T) {
 }
 
 func TestDeleteTemplateFollowsRedirect(t *testing.T) {
-	// The entry node answers with the owner's address; the SDK retries the
-	// delete there, once.
 	var deletedAtB, gotNoRedirect bool
 	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
@@ -182,9 +180,6 @@ func TestDeleteTemplateFollowsRedirect(t *testing.T) {
 	}
 }
 
-// TestDeleteTemplateRetryPolicy pins the walk semantics shared with the
-// Python SDK: a 404 moves to the next owner, a served error surfaces at
-// once (walking on would let a later 404 mask it).
 func TestDeleteTemplateRetryPolicy(t *testing.T) {
 	status := func(code int, hit *bool) *httptest.Server {
 		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -232,8 +227,6 @@ func TestDeleteTemplateRetryPolicy(t *testing.T) {
 }
 
 func TestRedirectSetsNoRedirect(t *testing.T) {
-	// The retry at a redirect target must carry no_redirect so the target
-	// warm-or-provisions instead of bouncing the claim back.
 	var gotNoRedirect bool
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req claimRequest
@@ -263,7 +256,6 @@ func TestRedirectSetsNoRedirect(t *testing.T) {
 }
 
 func TestRedirectTriesAllCandidates(t *testing.T) {
-	// First candidate is dead; the SDK must fall through to the second.
 	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(claimResponse{ID: "sb_4", Token: "t"})
 	}))
@@ -286,9 +278,6 @@ func TestRedirectTriesAllCandidates(t *testing.T) {
 }
 
 func TestRedirectCandidateDefinitiveErrorStillTriesNextCandidate(t *testing.T) {
-	// Candidate one is wrong for this claim (403, definitive) but candidate
-	// two would still succeed — the per-candidate walk retries broadly, so
-	// one ill-suited candidate must not cost a candidate that would answer.
 	forbidden := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	}))
@@ -316,8 +305,6 @@ func TestRedirectCandidateDefinitiveErrorStillTriesNextCandidate(t *testing.T) {
 }
 
 func TestRedirectFallbackHeals(t *testing.T) {
-	// The only candidate holds the record but is full (429); once it's
-	// exhausted, New must fall back to the origin itself, which heals.
 	var fullCalls int
 	full := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fullCalls++
@@ -360,8 +347,6 @@ func TestRedirectFallbackHeals(t *testing.T) {
 }
 
 func TestRedirectFallbackAlsoFails(t *testing.T) {
-	// Every candidate is full (429); the origin fallback answers too, but
-	// with a definitive error, which must surface as the final error.
 	var fullCalls int
 	full := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fullCalls++
@@ -389,8 +374,7 @@ func TestRedirectFallbackAlsoFails(t *testing.T) {
 	if !strings.Contains(err.Error(), "origin also unavailable") {
 		t.Errorf("err %v, want the origin's failure surfaced", err)
 	}
-	// The candidate's failure must survive into the message too: it is what
-	// says why the claim left the origin in the first place.
+
 	if !strings.Contains(err.Error(), "candidate full") {
 		t.Errorf("err %v, want the candidate's failure surfaced too", err)
 	}
@@ -416,9 +400,6 @@ func TestRedirectDefinitiveErrorSkipsFallback(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// A definitive 4xx is not worth trying another candidate, and
-			// not worth falling back to the origin either — the origin
-			// would fail the exact same way.
 			bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tt.code)
 				_ = json.NewEncoder(w).Encode(errorResponse{Error: tt.want})
@@ -481,8 +462,6 @@ func TestRedirectRotating401CandidateFallsBackToOrigin(t *testing.T) {
 }
 
 func TestLookupScatter(t *testing.T) {
-	// The owner is node B; the entry node A doesn't own the sandbox but lists
-	// B as a peer. Lookup must scatter to B and bind the handle there.
 	var owner *httptest.Server
 	owner = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/sandboxes/sb_1/owner" && r.Header.Get("Authorization") == "Bearer tok" {
@@ -496,7 +475,7 @@ func TestLookupScatter(t *testing.T) {
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/sandboxes/sb_1/owner":
-			w.WriteHeader(http.StatusNotFound) // not owned here
+			w.WriteHeader(http.StatusNotFound)
 		case "/v1/peers":
 			_ = json.NewEncoder(w).Encode(map[string]any{"peers": []string{strings.TrimPrefix(owner.URL, "http://")}})
 		}
@@ -509,6 +488,19 @@ func TestLookupScatter(t *testing.T) {
 	}
 	if sb.ID != "sb_1" || sb.owner != strings.TrimPrefix(owner.URL, "http://") {
 		t.Errorf("handle %+v, want owner=B", sb)
+	}
+}
+
+func TestAPIErrorDrainsOversizedBody(t *testing.T) {
+	body := strings.NewReader(`{"error":"` + strings.Repeat("x", 3*4096) + `"}`)
+	err := apiError("claim", &http.Response{StatusCode: http.StatusTooManyRequests, Body: io.NopCloser(body)})
+
+	var he *APIError
+	if !errors.As(err, &he) || he.Status != http.StatusTooManyRequests {
+		t.Fatalf("apiError = %v, want a 429 APIError", err)
+	}
+	if body.Len() != 0 {
+		t.Errorf("apiError left %d bytes unread; the transport cannot reuse the connection", body.Len())
 	}
 }
 

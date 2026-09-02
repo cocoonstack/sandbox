@@ -24,8 +24,6 @@ func TestKickRefillCoalescesAndNeverBlocks(t *testing.T) {
 	}
 }
 
-// TestNodeAtCapacityParksRefillInsteadOfRetrying pins the difference between
-// "this VM failed to start" and "this node cannot hold another VM".
 func TestNodeAtCapacityParksRefillInsteadOfRetrying(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -49,7 +47,6 @@ func TestNodeAtCapacityParksRefillInsteadOfRetrying(t *testing.T) {
 			t.Fatalf("at-capacity not published: %+v", g)
 		}
 
-		// Every later tick is a no-op until the backoff expires.
 		for range 5 {
 			m.refillOnce(t.Context())
 		}
@@ -57,7 +54,6 @@ func TestNodeAtCapacityParksRefillInsteadOfRetrying(t *testing.T) {
 			t.Errorf("clones=%d after parking, want %d: a parked node must not attempt again", n, attempts)
 		}
 
-		// A park, not a latch: once the backoff expires refill resumes.
 		m.mu.Lock()
 		m.atCapacityUntil = time.Now().Add(-time.Second)
 		m.mu.Unlock()

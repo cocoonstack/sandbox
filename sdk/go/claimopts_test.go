@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// Checkpoint.New and Template.New pin the network lane and size to the
-// snapshot, so WithNetwork/WithSize must fail loud rather than silently no-op.
 func TestSnapshotClaimRejectsPinnedAxes(t *testing.T) {
 	ck := &Checkpoint{ID: "ck_1", c: &Client{}, addr: "node:1"}
 	tpl := &Template{Name: "rt", c: &Client{}, addr: "node:1", net: "none", size: "small"}

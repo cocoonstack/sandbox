@@ -9,9 +9,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
-// loadEpoch reads the persisted gossip epoch, or 0 when the file is absent,
-// unreadable, or above MaxInt64 — a UnixNano-derived counter cannot legitimately
-// exceed it, so a corrupt value falls back to the wall-clock seed.
+// loadEpoch reads the persisted gossip epoch, or 0 when it is absent, unreadable, or corrupt.
 func loadEpoch(path string) uint64 {
 	raw, err := os.ReadFile(path) //nolint:gosec // node-local data-dir path
 	if err != nil {

@@ -13,6 +13,9 @@ from cocoonsandbox import Client, Sandbox
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
+# Mirrors the MCP exec contract the tool description states.
+CALL_TIMEOUT = 300.0
+
 
 class ExecInput(BaseModel):
     command: str = Field(description="shell command, run via sh -c inside the sandbox")
@@ -38,7 +41,7 @@ class CocoonToolkit:
 
     def __init__(self, addr: str, api_token: str = "", template: str = "rt:24.04",
                  net: str = "", ttl_seconds: int = 0, from_checkpoint: str = ""):
-        self._client = Client(addr, api_token=api_token)
+        self._client = Client(addr, api_token=api_token, timeout=CALL_TIMEOUT)
         self._template = template
         self._net = net
         self._ttl = ttl_seconds
@@ -61,6 +64,7 @@ class CocoonToolkit:
                        "Returns stdout; a non-empty stderr is appended as a 'stderr:' "
                        "line and a non-zero status as an 'exit code: N' line; a "
                        "command that prints nothing and exits 0 returns '(no output)'. "
+                       "The call is cut off after 5 minutes. "
                        "Files and installed packages persist across calls; environment "
                        "variables and the working directory do not.",
                        ExecInput, self._exec),

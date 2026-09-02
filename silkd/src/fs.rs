@@ -9,6 +9,7 @@ use std::time::UNIX_EPOCH;
 
 use tokio::fs;
 use tokio::io::{AsyncBufRead, AsyncWrite, AsyncWriteExt};
+use tokio::sync::mpsc;
 
 use crate::proto::{self, DirEntry, FileInfo, FileKind, Response, err_frame};
 
@@ -68,36 +69,25 @@ pub async fn read<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
 /// Lists a directory as a stream of `entries` frames terminated by `done`,
 /// batched so an arbitrarily large directory can never exceed the frame cap.
 pub async fn list<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<()> {
-    let mut rd = match fs::read_dir(&path).await {
-        Ok(r) => r,
-        Err(e) => return err_frame(w, &e, "read_dir").await,
-    };
-    let mut entries = Vec::new();
-    loop {
-        match rd.next_entry().await {
-            Ok(None) => break,
-            Ok(Some(ent)) => {
-                let (kind, size) = match ent.metadata().await {
-                    Ok(m) => (file_kind(&m), m.len()),
-                    Err(_) => (FileKind::Other, 0),
-                };
-                entries.push(DirEntry {
-                    name: ent.file_name().to_string_lossy().into_owned(),
-                    kind,
-                    size,
-                });
-                if entries.len() == LIST_BATCH {
-                    let batch = std::mem::take(&mut entries);
-                    proto::write_frame(w, &Response::Entries { entries: batch }).await?;
-                }
-            }
-            Err(e) => return err_frame(w, &e, "read_dir").await,
+    // One blocking-pool dispatch for the whole directory, not one per entry.
+    let (tx, mut rx) = mpsc::channel::<Vec<DirEntry>>(2);
+    let scan = tokio::task::spawn_blocking(move || scan_dir(&path, &tx));
+    let mut failed = None;
+    while let Some(entries) = rx.recv().await {
+        if let Err(e) = proto::write_frame(w, &Response::Entries { entries }).await {
+            failed = Some(e);
+            break;
         }
     }
-    if !entries.is_empty() {
-        proto::write_frame(w, &Response::Entries { entries }).await?;
+    drop(rx);
+    let scanned = scan.await.map_err(io::Error::other)?;
+    match failed {
+        Some(e) => Err(e),
+        None => match scanned {
+            Ok(()) => proto::write_frame(w, &Response::Done).await,
+            Err(e) => err_frame(w, &e, "read_dir").await,
+        },
     }
-    proto::write_frame(w, &Response::Done).await
 }
 
 /// Writes `bytes` to `path` via a sibling temp file committed into place, so
@@ -175,6 +165,30 @@ pub async fn rename<W: AsyncWrite + Unpin>(w: &mut W, from: String, to: String) 
         Ok(()) => proto::write_frame(w, &Response::Done).await,
         Err(e) => err_frame(w, &e, "rename").await,
     }
+}
+
+/// Reads `path` into `LIST_BATCH`-sized batches, stopping when the writer is gone.
+fn scan_dir(path: &str, tx: &mpsc::Sender<Vec<DirEntry>>) -> io::Result<()> {
+    let mut entries = Vec::new();
+    for ent in std::fs::read_dir(path)? {
+        let ent = ent?;
+        let (kind, size) = match ent.metadata() {
+            Ok(m) => (file_kind(&m), m.len()),
+            Err(_) => (FileKind::Other, 0),
+        };
+        entries.push(DirEntry {
+            name: ent.file_name().to_string_lossy().into_owned(),
+            kind,
+            size,
+        });
+        if entries.len() == LIST_BATCH && tx.blocking_send(std::mem::take(&mut entries)).is_err() {
+            return Ok(());
+        }
+    }
+    if !entries.is_empty() {
+        let _ = tx.blocking_send(entries);
+    }
+    Ok(())
 }
 
 fn tmp_name(path: &str) -> String {

@@ -2,10 +2,12 @@ package engine
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -117,7 +119,7 @@ func serveFakeSilkd(t *testing.T, path string) *fakeSilkd {
 func (f *fakeSilkd) serve(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 	r := bufio.NewReader(conn)
-	if _, err := r.ReadString('\n'); err != nil { // CONNECT line
+	if _, err := r.ReadString('\n'); err != nil {
 		return
 	}
 	if _, err := io.WriteString(conn, "OK 2048\n"); err != nil {
@@ -202,7 +204,7 @@ func (f *fakeSilkd) handleExec(conn net.Conn, argv []string, env map[string]stri
 func (f *fakeSilkd) handleList(conn net.Conn, path string) {
 	f.mu.Lock()
 	f.listCalls++
-	entries, reply := append([]wire.DirEntry(nil), f.block...), f.listErr
+	entries, reply := slices.Clone(f.block), f.listErr
 	f.mu.Unlock()
 	if reply != "" {
 		writeFakeSilkdResponse(conn, &wire.ErrorResp{Kind: wire.KindInternal, Message: reply})
@@ -225,7 +227,7 @@ func (f *fakeSilkd) handleRead(conn net.Conn, path string) {
 		f.readMisses[path]--
 		ok = false
 	}
-	data = append([]byte(nil), data...)
+	data = bytes.Clone(data)
 	f.mu.Unlock()
 	if reply != "" {
 		writeFakeSilkdResponse(conn, &wire.ErrorResp{Kind: wire.KindInternal, Message: reply})

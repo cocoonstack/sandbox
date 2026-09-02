@@ -8,14 +8,10 @@ import (
 	"time"
 )
 
-// journalMaxBytes rotates a journal once it crosses this size; one .1 backup
-// is kept so a slow collector never loses a window silently.
+// journalMaxBytes rotates a journal once it crosses this size; one .1 backup is kept.
 const journalMaxBytes = 64 * 1024 * 1024
 
-// usageEvent is one line of usage.jsonl: the product-level billing stream,
-// folded by the platform collector (compute time = claim→release minus
-// hibernate→wake; hibernated storage = hibernate→wake). VM names ride along
-// so cocoon's machine-level metering ledger can audit the fold.
+// usageEvent is one line of usage.jsonl, the billing stream the platform collector folds.
 type usageEvent struct {
 	Time      time.Time `json:"t"`
 	Event     string    `json:"ev"` // claim|hibernate|wake|fork|promote|checkpoint|release|reap
@@ -29,8 +25,7 @@ type usageEvent struct {
 	Reference string    `json:"ref,omitempty"`        // promote: template; checkpoint: ckpt id
 }
 
-// journal is an append-only JSONL writer with size rotation. Writes happen
-// outside the pool mutex; the journal's own lock only orders appends.
+// journal is an append-only JSONL writer with size rotation; its lock only orders appends.
 type journal struct {
 	mu   sync.Mutex
 	path string
@@ -74,23 +69,22 @@ func (j *journal) close() error {
 	return j.f.Close()
 }
 
-// rotate moves the live file to .1 (replacing any prior backup) and reopens.
-// A failed swap degrades to an oversized journal: reopen, append, retry next time.
+// rotate moves the live file to .1 and reopens; the old descriptor closes last.
 func (j *journal) rotate() error {
-	if err := j.f.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
-		return err
-	}
 	renameErr := os.Rename(j.path, j.path+".1")
 	f, err := os.OpenFile(j.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // under data_dir
 	if err != nil {
 		return errors.Join(renameErr, err)
 	}
+	old := j.f
 	j.f, j.size = f, 0
 	if renameErr != nil {
 		if st, statErr := f.Stat(); statErr == nil {
 			j.size = st.Size()
 		}
-		return renameErr
 	}
-	return nil
+	if closeErr := old.Close(); closeErr != nil && !errors.Is(closeErr, os.ErrClosed) {
+		renameErr = errors.Join(renameErr, closeErr)
+	}
+	return renameErr
 }

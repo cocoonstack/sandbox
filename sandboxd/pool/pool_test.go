@@ -188,10 +188,6 @@ func TestReleaseValidatesToken(t *testing.T) {
 	}
 }
 
-// TestReleaseAfterResolveTearsDownOnce: resolve authorizes off the manager
-// mutex, so two callers can both hold the same resolved claim before either
-// drops it — the state a live double-release reaches. Exactly one may tear the
-// VM down; the loser must read as unknown rather than remove it twice.
 func TestReleaseAfterResolveTearsDownOnce(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -223,11 +219,10 @@ func TestReleaseByOperatorCred(t *testing.T) {
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
 
-	// Unknown id is 404-equivalent, exactly like a token release.
 	if err := m.Release(t.Context(), "sb_nope", Cred{Operator: true}); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("got %v, want ErrUnknownSandbox", err)
 	}
-	// The operator releases by id alone — no per-sandbox token needed.
+
 	if err := m.Release(t.Context(), sb.ID, Cred{Operator: true}); err != nil {
 		t.Fatalf("Release operator: %v", err)
 	}
@@ -239,8 +234,6 @@ func TestReleaseByOperatorCred(t *testing.T) {
 	}
 }
 
-// TestResolveRejectsEmptyToken documents resolve's explicit guard: an
-// unclaimed slot must never match an empty token.
 func TestResolveRejectsEmptyToken(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	sb := mustClaim(t, m, testKey)
@@ -279,7 +272,7 @@ func TestReapDestroysExpiredClaims(t *testing.T) {
 		m.mu.Unlock()
 
 		m.reapOnce(t.Context())
-		// The destroy batch is fanned off the ticker loop; poll for it.
+
 		waitFor(t, func() bool { return eng.removed(sb.VMName) })
 		if _, g := m.Info(); g.Claimed != 0 {
 			t.Errorf("claimed=%d, want 0", g.Claimed)
@@ -427,7 +420,7 @@ func TestRefillServicesEveryPoolUnderTightBudget(t *testing.T) {
 func TestSetPoolsRemovalShedsArchivePolicy(t *testing.T) {
 	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 0, ArchiveAfterSeconds: 60, ArchiveDeleteAfterSeconds: 120})
 	m.mu.Lock()
-	m.pools[testKey].refilling = 1 // keep the removed pool lingering
+	m.pools[testKey].refilling = 1
 	m.mu.Unlock()
 
 	if err := m.SetPools(t.Context(), nil); err != nil {
@@ -467,8 +460,6 @@ func TestSetPoolsRejectsInvalidSpec(t *testing.T) {
 	}
 }
 
-// SetPools neither validates nor keeps egress policy: accepting it would
-// report success and silently drop it.
 func TestSetPoolsRejectsEgress(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	err := m.SetPools(t.Context(), []config.PoolSpec{{
@@ -603,8 +594,6 @@ func TestRefillBudgetFollowsConfig(t *testing.T) {
 	}
 }
 
-// TestRefillReactivelyFillsToTarget: one trigger fills the whole target (not
-// just the concurrency budget), since a finished refill chains the next.
 func TestRefillReactivelyFillsToTarget(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -677,9 +666,6 @@ func TestReapBatchDoesNotStallTheLoop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng)
-		// More expired claims than the concurrency budget (defaultRefill here) so
-		// the batch would block the submit loop if it acquired the semaphore there
-		// instead of per-goroutine.
 		const n = defaultRefill + 3
 		var sbs []*types.Sandbox
 		for range n {
@@ -699,7 +685,7 @@ func TestReapBatchDoesNotStallTheLoop(t *testing.T) {
 		done := make(chan struct{})
 		go func() { m.reapOnce(t.Context()); close(done) }()
 		select {
-		case <-done: // returned while every destroy is parked: the loop never blocked
+		case <-done:
 		case <-time.After(2 * time.Second):
 			t.Fatal("reapOnce blocked on a batch larger than the budget")
 		}
@@ -710,7 +696,7 @@ func TestReapBatchDoesNotStallTheLoop(t *testing.T) {
 
 func TestProbeReadyWaitsForVsock(t *testing.T) {
 	eng := newFakeEngine()
-	eng.vsockLateN = 2 // cocoon reports the socket only once the VMM runs
+	eng.vsockLateN = 2
 	m := newTestManager(t, eng)
 
 	sb, err := claimAny(t.Context(), m, testKey, 0)
@@ -727,8 +713,6 @@ func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Ma
 	return newTestManagerAt(t, eng, t.TempDir(), pools...)
 }
 
-// claimAny composes warm-then-provision the way the server does around the
-// redirect decision; production has no single-call form.
 func claimAny(ctx context.Context, m *Manager, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
 	sb, err := m.ClaimWarm(ctx, key, ttl, "", "", nil)
 	if errors.Is(err, ErrNoWarm) {
@@ -764,6 +748,19 @@ func testSecrets(t *testing.T, specs ...egress.SecretSpec) *egress.SecretStore {
 	return s
 }
 
+func lockCount(m *Manager) int {
+	m.recLocksMu.Lock()
+	defer m.recLocksMu.Unlock()
+	return len(m.recLocks)
+}
+
+func hasRecLock(m *Manager, id string) bool {
+	m.recLocksMu.Lock()
+	defer m.recLocksMu.Unlock()
+	_, ok := m.recLocks[id]
+	return ok
+}
+
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -776,65 +773,56 @@ func waitFor(t *testing.T, cond func() bool) {
 	t.Fatal("condition not met within 3s")
 }
 
-// fakeEngine implements Engine in memory: created VMs land in vms (backing
-// List/vsockOf), destroy removes them, and error fields fail one verb at a
-// time.
 type fakeEngine struct {
-	mu            sync.Mutex
-	vms           map[string]string // VM name → vsock socket path
-	clones        []string
-	cloneFroms    []string
-	colds         []string
-	removes       []string
-	probeTimeouts []time.Duration
-	volumeSpecs   []engine.VolumeSpec
-	volumeMounts  []types.Volume
-	volumeOps     []string
-	// attachDirty records whether an image's dirty marker was already down when
-	// it was attached; removeSeenOps and removeSeenDirty snapshot the volume-op
-	// log and the markers still on disk at each VM removal, so teardown ordering
-	// is checkable on both sides of the removal.
+	mu              sync.Mutex
+	vms             map[string]string
+	clones          []string
+	cloneFroms      []string
+	colds           []string
+	removes         []string
+	probeTimeouts   []time.Duration
+	volumeSpecs     []engine.VolumeSpec
+	volumeMounts    []types.Volume
+	volumeOps       []string
 	attachDirty     map[string]bool
 	removeSeenOps   map[string][]string
 	removeSeenDirty map[string][]string
-	// dirtyPaths are the images removeSeenDirty samples; tests set it to the
-	// catalog paths the claim under test uses.
-	dirtyPaths []string
-	syncs      []string // vsock sockets SyncGuest was called on
+	dirtyPaths      []string
+	syncs           []string
 
 	hibernates, restores, snapRemoves []string
 	snapSaves, exports, snapshots     []string
 	exportContent                     []byte
-	caInstalls                        []string // vsock sockets InstallCACert was called on
-	staleReconciles                   []string // VM names ReconcileStaleCreate was called on
+	caInstalls                        []string
+	staleReconciles                   []string
 	installCAErr                      error
 	diskAttachErr                     error
-	diskAttachErrFor                  string // volume name whose DiskAttach fails; "" = never
+	diskAttachErrFor                  string
 	diskAttachCancel                  context.CancelFunc
 	mountVolumeErr                    error
 	unmountVolumeErr                  error
 	stopped                           map[string]bool
-	creating                          map[string]bool // VMs List reports in the creating state
+	creating                          map[string]bool
 	staleOutcome                      engine.StaleCreateOutcome
 	staleErr                          error
-	pids                              map[string]int // VM name → PID, for Stats' resident-set lookup
-	vsockLateN                        int            // List calls that report no socket yet
+	pids                              map[string]int
+	vsockLateN                        int
 
 	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr, snapSaveErr, snapListErr error
-	removeErrFor                                                                       string // VM name whose Remove fails; "" = never
-	cloneFailNth                                                                       int    // 1-based Clone call to fail; 0 = never
-	hibernateErrCompletes                                                              bool   // hibernateErr fires after the snapshot lands (CLI timeout)
-	tap                                                                                string // non-empty: lifecycle records carry this NIC tap
+	removeErrFor                                                                       string
+	cloneFailNth                                                                       int
+	hibernateErrCompletes                                                              bool
+	tap                                                                                string
 	listCount                                                                          int
 
-	attachRendezvous *sync.WaitGroup // non-nil: DiskAttach waits there until every attach has arrived
+	attachRendezvous *sync.WaitGroup
 
-	cloneStall      chan struct{} // non-nil: Clone blocks until closed
-	probeStall      chan struct{} // non-nil: Probe blocks until closed
-	hibernateStall  chan struct{} // non-nil: Hibernate blocks until closed
-	removeStall     chan struct{} // non-nil: Remove blocks until closed
-	snapRemoveStall chan struct{} // non-nil: SnapshotRemove blocks until closed
-	snapListStall   chan struct{} // non-nil: SnapshotList blocks until closed
+	cloneStall      chan struct{}
+	probeStall      chan struct{}
+	hibernateStall  chan struct{}
+	removeStall     chan struct{}
+	snapRemoveStall chan struct{}
+	snapListStall   chan struct{}
 	snapListCount   int
 }
 
@@ -866,7 +854,6 @@ func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) (t
 }
 
 func (f *fakeEngine) Remove(ctx context.Context, name string) error {
-	// Models exec.CommandContext: a canceled ctx never runs cocoon at all.
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -893,7 +880,6 @@ func (f *fakeEngine) Remove(ctx context.Context, name string) error {
 }
 
 func (f *fakeEngine) ReconcileStaleCreate(ctx context.Context, name string) (engine.StaleCreateOutcome, error) {
-	// Models exec.CommandContext: a canceled ctx never runs cocoon at all.
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -989,7 +975,7 @@ func (f *fakeEngine) Restore(_ context.Context, name, _ string) (string, error) 
 	}
 	f.stopped[name] = false
 	if f.vms[name] == "" {
-		f.vms[name] = "/vsock/" + name // Restore rebuilds the VM from its snapshot
+		f.vms[name] = "/vsock/" + name
 	}
 	return f.lateVsock(f.vms[name]), nil
 }
@@ -1114,7 +1100,6 @@ func (f *fakeEngine) clone(from, name string) (types.VMRecord, error) {
 	return f.record(name), nil
 }
 
-// record builds a lifecycle result for name; callers hold f.mu.
 func (f *fakeEngine) record(name string) types.VMRecord {
 	rec := types.VMRecord{VsockSocket: f.lateVsock(f.vms[name]), Config: types.VMConfig{Name: name}}
 	if f.tap != "" {
@@ -1123,8 +1108,6 @@ func (f *fakeEngine) record(name string) types.VMRecord {
 	return rec
 }
 
-// lateVsock models cocoon's report-once-running lag: while vsockLateN ticks
-// remain it reports no socket (consuming one), forcing the caller's poll.
 func (f *fakeEngine) lateVsock(sock string) string {
 	if f.vsockLateN > 0 {
 		f.vsockLateN--
@@ -1133,8 +1116,6 @@ func (f *fakeEngine) lateVsock(sock string) string {
 	return sock
 }
 
-// removed reports whether name was destroyed, under the fake's own lock —
-// bounded batches append concurrently with test polls.
 func (f *fakeEngine) removed(name string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()

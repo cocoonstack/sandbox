@@ -14,9 +14,7 @@ type SandboxListResponse struct {
 	Sandboxes []pool.SandboxSummary `json:"sandboxes"`
 }
 
-// handleMetrics renders Prometheus text format by hand — counters and
-// gauges only, no client library. Latency rides as *_seconds_total next to
-// its count.
+// handleMetrics renders Prometheus text format by hand, counters and gauges only.
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	pools, g := s.mgr.Info()
 	c := s.mgr.Counters()

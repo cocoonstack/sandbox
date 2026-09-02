@@ -106,8 +106,8 @@ func TestRetentionSweepsExpiredCheckpoints(t *testing.T) {
 			t.Fatalf("setup: %v", err)
 		}
 	}
-	plant("ck_000000000000000a", 2*time.Hour) // expired
-	plant("ck_000000000000000b", time.Minute) // fresh
+	plant("ck_000000000000000a", 2*time.Hour)
+	plant("ck_000000000000000b", time.Minute)
 
 	m.sweepExpiredCheckpoints(t.Context())
 
@@ -147,7 +147,6 @@ func TestCheckpointTenantIsolation(t *testing.T) {
 		t.Errorf("root listing %+v, %v; want both records", ckpts, err)
 	}
 
-	// A tenant cannot delete another's record — and learns nothing beyond 404.
 	if err := m.DeleteCheckpoint(t.Context(), ckA.ID, "beta", DeleteFleet); !errors.Is(err, ErrUnknownCheckpoint) {
 		t.Errorf("cross-tenant delete: %v, want ErrUnknownCheckpoint", err)
 	}
@@ -159,20 +158,12 @@ func TestCheckpointTenantIsolation(t *testing.T) {
 	}
 }
 
-// TestCheckpointDeleteEvictsRecLock proves recLocks does not retain a lock per
-// checkpoint: ck ids are single-use, so a create+delete cycle must leave the
-// map at its prior size, or a long-running node leaks one RWMutex per ck.
 func TestCheckpointDeleteEvictsRecLock(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	src := mustClaim(t, m, testKey)
 
-	countLocks := func() int {
-		n := 0
-		m.recLocks.Range(func(_, _ any) bool { n++; return true })
-		return n
-	}
-	base := countLocks() // the golden-resolve's template lock: bounded, never evicted
+	base := lockCount(m)
 
 	var ids []string
 	for range 5 {
@@ -186,26 +177,18 @@ func TestCheckpointDeleteEvictsRecLock(t *testing.T) {
 		if err := m.DeleteCheckpoint(t.Context(), id, "", DeleteFleet); err != nil {
 			t.Fatalf("delete %s: %v", id, err)
 		}
-		if _, ok := m.recLocks.Load(id); ok {
+		if hasRecLock(m, id) {
 			t.Errorf("recLocks retained a lock for deleted checkpoint %s", id)
 		}
 	}
-	if got := countLocks(); got != base {
+	if got := lockCount(m); got != base {
 		t.Errorf("recLocks grew %d->%d over 5 checkpoint create+delete cycles, want no net growth", base, got)
 	}
 }
 
-// TestRejectedCheckpointOpsLeakNoRecLock: a rejected claim or delete (bad
-// format, unknown, wrong tenant) must not create a lock-map entry — otherwise
-// a guess-loop grows recLocks without bound.
 func TestRejectedCheckpointOpsLeakNoRecLock(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	countLocks := func() int {
-		n := 0
-		m.recLocks.Range(func(_, _ any) bool { n++; return true })
-		return n
-	}
-	base := countLocks()
+	base := lockCount(m)
 
 	for _, id := range []string{"../../etc", "ck_zz", "", "ck_00112233445566ff", "ck_deadbeefdeadbeef"} {
 		if _, err := m.ClaimCheckpoint(t.Context(), id, time.Hour, ""); !errors.Is(err, ErrUnknownCheckpoint) {
@@ -215,21 +198,20 @@ func TestRejectedCheckpointOpsLeakNoRecLock(t *testing.T) {
 			t.Errorf("delete %q: %v, want ErrUnknownCheckpoint", id, err)
 		}
 	}
-	if got := countLocks(); got != base {
+	if got := lockCount(m); got != base {
 		t.Errorf("recLocks grew %d->%d over rejected checkpoint ops, want no growth", base, got)
 	}
 
-	// A wrong-tenant delete of a real checkpoint must also leak nothing.
 	src := mustClaim(t, m, testKey)
 	ckpt, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "", "acme")
 	if err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
-	before := countLocks()
+	before := lockCount(m)
 	if err := m.DeleteCheckpoint(t.Context(), ckpt.ID, "other", DeleteFleet); !errors.Is(err, ErrUnknownCheckpoint) {
 		t.Errorf("wrong-tenant delete: %v, want ErrUnknownCheckpoint", err)
 	}
-	if got := countLocks(); got != before {
+	if got := lockCount(m); got != before {
 		t.Errorf("recLocks grew %d->%d over a wrong-tenant delete, want no growth", before, got)
 	}
 }

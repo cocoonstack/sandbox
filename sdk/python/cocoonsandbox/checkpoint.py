@@ -46,11 +46,7 @@ class Checkpoint:
         return self._client._handle_from(addr, reply)
 
     def delete(self) -> None:
-        """Removes the checkpoint from its node and asks every peer that node
-        currently sees to drop any replica a heal pulled — best-effort eventual
-        cleanup, not a fleet-wide revocation. A peer that misses that broadcast
-        (offline, partitioned, or joined later) keeps serving branches from its
-        replica until the node's checkpoint_ttl_hours ages it out; with that
-        TTL at its default of 0 (keep forever), an unreachable peer's replica
-        has no cleanup bound at all."""
+        """Removes the checkpoint and broadcasts the drop; cleanup is
+        best-effort eventual, bounded by checkpoint_ttl_hours (see
+        docs/sdk-python.md)."""
         self._client._request(self._addr, "DELETE", f"/v1/checkpoints/{self.id}", None, "delete checkpoint")

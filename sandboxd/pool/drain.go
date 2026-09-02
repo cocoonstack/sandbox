@@ -2,9 +2,7 @@ package pool
 
 import "context"
 
-// Drain cordons the node: claim/fork/branch answer 429, warm VMs are
-// destroyed, live claims run to their leases. Not persisted — a restarted
-// node serves again.
+// Drain cordons the node: claims answer 429 and warm VMs are destroyed. Not persisted.
 func (m *Manager) Drain(ctx context.Context) {
 	var trim []string
 	m.mu.Lock()

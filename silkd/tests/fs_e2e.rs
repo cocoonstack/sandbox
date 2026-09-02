@@ -1,6 +1,6 @@
 //! Filesystem verb E2E over the in-memory duplex, against real temp paths.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
 use common::{b64, exchange, type_of};
@@ -174,7 +174,6 @@ async fn overwrite_preserves_destination_mode() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("script.sh");
-    // Original file is executable (0755); overwrite without specifying a mode.
     std::fs::write(&path, b"old").unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     let f = exchange(&[

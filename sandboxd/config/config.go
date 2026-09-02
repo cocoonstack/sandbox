@@ -39,33 +39,23 @@ type PoolSpec struct {
 	types.PoolKey
 	Warm int `json:"warm"`
 
-	// WarmMax, when >0, turns on the demand-adaptive watermark: the warm
-	// target may rise from Warm (the floor) toward WarmMax while claims
-	// arrive faster than the pool provisions, and decays back in silence.
+	// WarmMax, when >0, lets the warm target rise from Warm toward it under demand.
 	WarmMax int `json:"warm_max,omitempty"`
 
-	// Egress is this pool's allow-list, intersected with the tenant's for the
-	// effective policy (a request must pass both); when both matched rules
-	// name a secret, the pool's is injected. Nil denies all egress.
+	// Egress is this pool's allow-list, intersected with the tenant's; nil denies all egress.
 	Egress *egress.Policy `json:"egress,omitempty"`
 
-	// IdleHibernateSeconds, when >0, hibernates this none-lane pool's idle claims
-	// after that many seconds without a data-plane connection; the next
-	// call wakes them transparently. Zero disables.
+	// IdleHibernateSeconds, when >0, hibernates idle claims after that many seconds.
 	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitempty"`
 
-	// ArchiveAfterSeconds, when >0, checkpoints a hibernated claim to the
-	// store after that many idle seconds and drops its local VM; a later call
-	// restores it. Requires IdleHibernateSeconds>0 and must exceed it.
+	// ArchiveAfterSeconds, when >0, archives a hibernated claim; must exceed IdleHibernateSeconds.
 	ArchiveAfterSeconds int `json:"archive_after_seconds,omitempty"`
 
-	// ArchiveDeleteAfterSeconds, when >0, purges an archived claim's store
-	// checkpoint that many seconds after archiving. Zero keeps it forever.
+	// ArchiveDeleteAfterSeconds, when >0, purges the checkpoint that long after archiving.
 	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitempty"`
 }
 
-// ValidateLimits checks the warm/watermark/idle bounds — shared by the
-// config file path and the PUT /v1/pools path so the two cannot drift.
+// ValidateLimits checks the warm/watermark/idle bounds shared by config and PUT /v1/pools.
 func (s PoolSpec) ValidateLimits() error {
 	if s.Warm < 0 {
 		return fmt.Errorf("warm must not be negative")
@@ -88,9 +78,7 @@ type StoreConfig struct {
 	S3   *s3.Config `json:"s3,omitempty"`
 }
 
-// EgressCAConfig provisions HTTPS interception: RootCert is the cluster root
-// baked into guests; IntermediateCert/Key are this node's signing CA. The root
-// private key never appears here.
+// EgressCAConfig provisions HTTPS interception; the root private key never appears here.
 type EgressCAConfig struct {
 	RootCert         string `json:"root_cert"`
 	IntermediateCert string `json:"intermediate_cert"`
@@ -103,9 +91,6 @@ func (e *EgressCAConfig) Set() bool {
 }
 
 // TenantSpec declares one tenant: its bearer token and its live-claim quota.
-// APIToken stays the operator (root) credential with full access; tenant
-// tokens reach the resource-creating verbs only, and everything a tenant
-// creates is stamped with its name.
 type TenantSpec struct {
 	Name      string `json:"name"`
 	Token     string `json:"token"` //nolint:gosec // config field, not a hardcoded credential
@@ -115,9 +100,7 @@ type TenantSpec struct {
 	Egress *egress.Policy `json:"egress,omitempty"`
 }
 
-// VolumeSpec declares one operator-managed dataset disk. The entry — name,
-// access list, mode — is declared fleet-wide; Writable admits rw claims, and
-// the image at Path is held by exactly one node.
+// VolumeSpec declares one operator-managed dataset disk, held by exactly one node.
 type VolumeSpec struct {
 	Name     string   `json:"name"`
 	Path     string   `json:"path"`
@@ -126,10 +109,7 @@ type VolumeSpec struct {
 	Tenants  []string `json:"tenants,omitempty"`
 }
 
-// MeshConfig configures cluster membership. Two v1 constraints: every node
-// shares one APIToken and Tenants set (a redirect replays the claim's token,
-// so a peer missing that tenant answers 401), and only a node with its own
-// egress attachment can take a redirected egress claim.
+// MeshConfig configures cluster membership; every node shares one APIToken and tenant set.
 type MeshConfig struct {
 	NodeID     string   `json:"node_id"`               // unique name; defaults to Bind
 	Bind       string   `json:"bind"`                  // memberlist host:port
@@ -137,8 +117,7 @@ type MeshConfig struct {
 	ClusterKey string   `json:"cluster_key,omitempty"` // base64 gossip-encryption key
 }
 
-// ParsedBind splits Bind into host and port, rejecting a wildcard host —
-// memberlist would advertise an unroutable address.
+// ParsedBind splits Bind into host and port, rejecting a wildcard host.
 func (mc *MeshConfig) ParsedBind() (string, int, error) {
 	host, portStr, err := net.SplitHostPort(mc.Bind)
 	if err != nil {
@@ -177,50 +156,34 @@ type Config struct {
 	DataDir   string `json:"data_dir"`
 	CocoonBin string `json:"cocoon_bin"`
 
-	// AdvertiseAddr is the host:port the data plane reaches this node at; it
-	// is returned as a claim's owner address (and, at M2c, gossiped). Defaults
-	// to Listen, which is correct when Listen is a routable host:port.
+	// AdvertiseAddr is the host:port the data plane reaches this node at; defaults to Listen.
 	AdvertiseAddr string `json:"advertise_addr,omitempty"`
 
-	// Bridges shards egress-lane VMs over several host bridge devices with
-	// the raw TAP-on-bridge attachment: taps stay in the root netns, so
-	// guarded egress can lock them. Mutually exclusive with Networks; with
-	// neither set the node serves only the no-network lane.
+	// Bridges shards egress-lane VMs over host bridges; their taps stay lockable in the root netns.
 	Bridges []string `json:"bridges,omitempty"`
 
-	// Networks shards egress-lane VMs over several CNI conflists, one Linux
-	// bridge each: a bridge holds at most 1024 ports (BR_MAX_PORTS, no
-	// sysctl), so N conflists raise the node's egress ceiling to N×1024.
+	// Networks shards egress-lane VMs over CNI conflists; a bridge holds at most 1024 ports.
 	Networks []string `json:"networks,omitempty"`
 
-	// RestoreMode rides clones and wake restores as cocoon's --restore-mode. Opt-in: mmap
-	// needs every node's cloud-hypervisor to carry CoW restore — an older CH
-	// silently eager-copies while reporting success.
+	// RestoreMode is cocoon's --restore-mode; an older CH silently eager-copies an mmap restore.
 	RestoreMode types.RestoreMode `json:"restore_mode,omitempty"`
 
 	// NoDirectIO enables buffered writable disks for cold boots and clones.
 	NoDirectIO bool `json:"no_direct_io,omitempty"`
 
-	// APIToken, when set, guards claim and info; per-sandbox tokens guard
-	// sandbox-scoped calls regardless.
+	// APIToken, when set, guards claim and info.
 	APIToken string `json:"api_token,omitempty"` //nolint:gosec // config field, not a hardcoded credential
 
-	// Tenants adds per-tenant bearer tokens next to APIToken; empty keeps
-	// the single-token behavior.
+	// Tenants adds per-tenant bearer tokens next to APIToken.
 	Tenants []TenantSpec `json:"tenants,omitempty"`
 
-	// Secrets registers node-side credentials the egress proxy injects by
-	// name; values come from the environment (value_env), never this file.
+	// Secrets registers node-side credentials; values come from value_env, never this file.
 	Secrets []egress.SecretSpec `json:"secrets,omitempty"`
 
-	// IdleHibernateSeconds is the idle policy for unpooled none-lane claims
-	// (template and checkpoint claims); per-pool settings override it for
-	// pooled keys. Zero disables.
+	// IdleHibernateSeconds is the idle policy for unpooled claims; per-pool settings override.
 	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitempty"`
 
-	// ArchiveAfterSeconds / ArchiveDeleteAfterSeconds are the archive policy
-	// for unpooled keys; per-pool settings override them. Same rules as
-	// PoolSpec (archive_after must exceed idle_hibernate).
+	// ArchiveAfterSeconds and ArchiveDeleteAfterSeconds are the archive policy for unpooled keys.
 	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitempty"`
 	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitempty"`
 
@@ -229,58 +192,40 @@ type Config struct {
 	// PreviewAdvertise is the browser-facing base, shareable fleet-wide behind one proxy.
 	PreviewAdvertise string `json:"preview_advertise,omitempty"`
 
-	// CheckpointDir is where checkpoints live; defaults to
-	// <data_dir>/checkpoints. Point it at a shared FUSE mount (JuiceFS over
-	// object storage, NFS) and every node sharing the mount resolves every
-	// checkpoint — the path's filesystem is the operator's choice.
+	// CheckpointDir is where checkpoints live; defaults to <data_dir>/checkpoints.
 	CheckpointDir string `json:"checkpoint_dir,omitempty"`
 
-	// CheckpointStore selects the checkpoint backend; absent means the
-	// dir backend at CheckpointDir. Kind "s3" stores checkpoints in object
-	// storage (credentials from the AWS chain, never this file).
+	// CheckpointStore selects the checkpoint backend; absent means the dir backend.
 	CheckpointStore *StoreConfig `json:"checkpoint_store,omitempty"`
 
-	// CheckpointPeerHeal lets a node pull a checkpoint it lacks from a peer
-	// rather than failing the branch. Requires cluster_key (the pull presents
-	// the fleet token to a probed address) and a nonzero checkpoint TTL (the
-	// revocation bound for a replica a delete broadcast missed). Off by default.
+	// CheckpointPeerHeal lets a node pull a checkpoint it lacks from a peer; off by default.
 	CheckpointPeerHeal bool `json:"checkpoint_peer_heal,omitempty"`
 
-	// EgressInternalAllow re-admits CIDRs through the proxy's SSRF guard,
-	// node-wide (every pool and tenant). Prefixes, not a permit-private
-	// switch: the guest bridges are themselves ULA/RFC1918.
+	// EgressInternalAllow re-admits CIDRs through the proxy's SSRF guard, node-wide.
 	EgressInternalAllow []string `json:"egress_internal_allow,omitempty"`
 
-	// CheckpointTTLHours ages out checkpoints (0 = keep forever); the
-	// sweep runs hourly and on startup.
+	// CheckpointTTLHours ages out checkpoints; 0 keeps them forever.
 	CheckpointTTLHours int `json:"checkpoint_ttl_hours,omitempty"`
 
-	// MaxClaims caps live claims node-wide; 0 means unlimited. Claim,
-	// fork, and checkpoint-branch requests beyond it answer 429.
+	// MaxClaims caps live claims node-wide; 0 means unlimited.
 	MaxClaims int `json:"max_claims,omitempty"`
 
-	// AuditLog, when true, appends every relayed request frame's op and
-	// addressing fields (never payloads) to <data_dir>/audit.jsonl.
+	// AuditLog, when true, appends relayed request ops, never payloads, to audit.jsonl.
 	AuditLog bool `json:"audit_log,omitempty"`
 
-	// MaxForkCount caps children per fork call — each child is a full-RAM VM.
-	// Defaults to 16.
+	// MaxForkCount caps children per fork call; each child is a full-RAM VM.
 	MaxForkCount int `json:"max_fork_count,omitempty"`
 
 	// Volumes is the node-local catalog of operator-managed dataset images.
 	Volumes []VolumeSpec `json:"volumes,omitempty"`
 
-	// RefillConcurrency caps concurrent VM provisioning node-wide — warm-pool
-	// refills, fork clones, and reap/hibernate/reconcile batches share one
-	// budget; 0 auto-scales with the node's CPU count.
+	// RefillConcurrency caps concurrent VM provisioning node-wide; 0 auto-scales with CPUs.
 	RefillConcurrency int `json:"refill_concurrency,omitempty"`
 
-	// Mesh, when set, joins this node to a memberlist cluster for redirect
-	// placement; nil is a single node (mesh of one, no gossip).
+	// Mesh, when set, joins this node to a memberlist cluster; nil is a mesh of one.
 	Mesh *MeshConfig `json:"mesh,omitempty"`
 
-	// EgressCA provisions HTTPS interception; required when any pool has an
-	// intercept rule.
+	// EgressCA provisions HTTPS interception; required for any intercept rule.
 	EgressCA *EgressCAConfig `json:"egress_ca,omitempty"`
 
 	Pools []PoolSpec `json:"pools"`
@@ -291,10 +236,7 @@ func (c *Config) HasEgress() bool {
 	return len(c.Bridges) > 0 || len(c.Networks) > 0
 }
 
-// ClusterDigest fingerprints the must-match config so a divergent node is
-// caught early, not at a later 401 or an outlived replica. With cluster_key it
-// HMACs token material too; without one only tenant names, the CA root and the
-// checkpoint TTL ride the (maybe cleartext) wire.
+// ClusterDigest fingerprints the must-match config; without cluster_key it omits tokens.
 func (c *Config) ClusterDigest(caFingerprint string) string {
 	names := make([]string, len(c.Tenants))
 	for i, t := range c.Tenants {
@@ -320,8 +262,7 @@ func (c *Config) ClusterDigest(caFingerprint string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// guardsEgressLane: any tenant policy counts (claims mint egress keys without a
-// pool), a none-lane pool policy does not (it locks no tap).
+// guardsEgressLane counts any tenant policy, but only an egress-lane pool policy.
 func (c *Config) guardsEgressLane() bool {
 	return slices.ContainsFunc(c.Tenants, func(t TenantSpec) bool { return t.Egress != nil }) ||
 		slices.ContainsFunc(c.Pools, func(p PoolSpec) bool { return p.Net == types.NetEgress && p.Egress != nil })
@@ -350,8 +291,7 @@ func (c *Config) validate() error {
 	if err := c.validateAttachment(); err != nil {
 		return err
 	}
-	// A CNI network's tap lives in the VM netns, unreachable from the root-netns
-	// nft lock; guarded egress needs a bridge.
+	// a CNI network's tap lives in the VM netns, unreachable from the root-netns nft lock.
 	if len(c.Networks) > 0 && c.guardsEgressLane() {
 		return fmt.Errorf("guarded egress needs a bridge lane, not a CNI network: the tap lives in the VM netns and cannot be locked")
 	}
@@ -502,8 +442,7 @@ func (c *Config) validateSecrets() (map[string]struct{}, error) {
 	return names, nil
 }
 
-// validateAttachment checks the egress-lane attachment; a repeated shard
-// would report N shards while filling one bridge.
+// validateAttachment checks the egress-lane attachment; a repeated shard fills one bridge.
 func (c *Config) validateAttachment() error {
 	if len(c.Bridges) > 0 && len(c.Networks) > 0 {
 		return fmt.Errorf("bridges and networks are mutually exclusive")
@@ -514,8 +453,7 @@ func (c *Config) validateAttachment() error {
 	return validateShards(c.Networks, "networks", "conflist")
 }
 
-// validateEgressAllow rejects a malformed prefix at load: a typo would
-// otherwise surface as a refused dial long after startup.
+// validateEgressAllow rejects a malformed prefix at load, not at a later refused dial.
 func (c *Config) validateEgressAllow() error {
 	for _, cidr := range c.EgressInternalAllow {
 		if _, err := netip.ParsePrefix(cidr); err != nil {
@@ -574,8 +512,7 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// validatePolicy checks the rules and that each secret ref is registered; a
-// nil policy is valid (deny-all).
+// validatePolicy checks the rules and secret refs; a nil policy is deny-all.
 func validatePolicy(p *egress.Policy, secrets map[string]struct{}) error {
 	if p == nil {
 		return nil
@@ -594,8 +531,7 @@ func validatePolicy(p *egress.Policy, secrets map[string]struct{}) error {
 	return nil
 }
 
-// validateArchiveWindow checks the archive thresholds shared by PoolSpec and
-// the node Config: non-negative, and archive_after must sit past idle_hibernate.
+// validateArchiveWindow requires archive_after past idle_hibernate, both non-negative.
 func validateArchiveWindow(idle, after, del int) error {
 	if after < 0 || del < 0 {
 		return fmt.Errorf("archive seconds must not be negative")

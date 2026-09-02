@@ -9,11 +9,7 @@ import (
 	"time"
 )
 
-// SandboxStats is one sandbox's resource usage. CPUCount and MemTotalBytes come
-// from the size tier the VM was booted with. MemUsedBytes is the host VMM
-// process's resident set, the only usage signal available without a guest agent;
-// MemUsedMeasured is false when no VMM process was found (a hibernated sandbox
-// has none), so a zero is never read as idle.
+// SandboxStats is one sandbox's resource usage; MemUsedMeasured false means the RSS was unreadable.
 type SandboxStats struct {
 	ID              string    `json:"id"`
 	CPUCount        int       `json:"cpu_count"`
@@ -26,9 +22,7 @@ type SandboxStats struct {
 
 // Stats reports one live claim's resource usage.
 func (m *Manager) Stats(ctx context.Context, id string) (SandboxStats, bool) {
-	// Snapshot the mutable fields under m.mu — hibernate and archive rewrite
-	// HibernateSnap and VMName there — then do the /proc read, which touches no
-	// sandbox state, outside the lock.
+	// hibernate and archive rewrite HibernateSnap and VMName under m.mu; the /proc read needs none
 	m.mu.Lock()
 	sb := m.claimed[id]
 	if sb == nil {
@@ -53,9 +47,7 @@ func (m *Manager) Stats(ctx context.Context, id string) (SandboxStats, bool) {
 	return st, true
 }
 
-// vmResidentBytes reports the resident set of the hypervisor process serving
-// vmName, read straight from engine.List's VMRecord.PID rather than scanning
-// /proc for a matching argv.
+// vmResidentBytes reports the resident set of the hypervisor process serving vmName.
 func (m *Manager) vmResidentBytes(ctx context.Context, vmName string) (int64, bool) {
 	if vmName == "" {
 		return 0, false

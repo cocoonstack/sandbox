@@ -71,8 +71,7 @@ func RunContract(t *testing.T, st store.Store) {
 		t.Fatalf("SweepStaging: %v", err)
 	}
 
-	// Re-publish replaces: the second generation's export fully supersedes
-	// the first (a leftover first-generation file would corrupt a clone).
+	// re-publish replaces: a leftover first-generation file would corrupt a clone.
 	second, err := st.Stage(id)
 	if err != nil {
 		t.Fatalf("Stage second: %v", err)

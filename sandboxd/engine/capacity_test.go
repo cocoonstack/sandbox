@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// TestOnlyNodeWideFailuresCarryACapacitySignature guards the classifier.
-// Parking on an ordinary clone failure would stall a healthy node over one bad VM.
 func TestOnlyNodeWideFailuresCarryACapacitySignature(t *testing.T) {
 	for _, tc := range []struct {
 		name string

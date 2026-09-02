@@ -79,9 +79,6 @@ func TestRelayRoundTrip(t *testing.T) {
 }
 
 func TestRelayDeliversPipelinedBytes(t *testing.T) {
-	// The client sends the request head and the first frame in one write,
-	// before reading the 101 — the frame lands in the server's bufio reader
-	// and must still reach the guest.
 	ts, _ := newRelayServer(t, func(c net.Conn) {
 		defer c.Close()
 		r := bufio.NewReader(c)
@@ -89,7 +86,7 @@ func TestRelayDeliversPipelinedBytes(t *testing.T) {
 		if err != nil {
 			return
 		}
-		_, _ = io.WriteString(c, line) // echo proves receipt
+		_, _ = io.WriteString(c, line)
 	})
 
 	conn, err := net.Dial("tcp", ts.Listener.Addr().String())
@@ -116,7 +113,7 @@ func TestRelayClientDisconnectClosesGuest(t *testing.T) {
 	guestClosed := make(chan struct{})
 	ts, _ := newRelayServer(t, func(c net.Conn) {
 		defer close(guestClosed)
-		_, _ = io.Copy(io.Discard, c) // block until the relay closes our side
+		_, _ = io.Copy(io.Discard, c)
 	})
 
 	conn, _ := upgradeConn(t, ts)
@@ -130,14 +127,14 @@ func TestRelayClientDisconnectClosesGuest(t *testing.T) {
 
 func TestCloseRelaysDrains(t *testing.T) {
 	ts, srv := newRelayServer(t, func(c net.Conn) {
-		_, _ = io.Copy(io.Discard, c) // idle guest: keeps the relay open
+		_, _ = io.Copy(io.Discard, c)
 	})
 
 	_, r := upgradeConn(t, ts)
 	closed := make(chan struct{})
 	go func() {
 		defer close(closed)
-		_, _ = io.Copy(io.Discard, r) // returns when the relay is torn down
+		_, _ = io.Copy(io.Discard, r)
 	}()
 	srv.CloseRelays()
 	select {
@@ -147,8 +144,6 @@ func TestCloseRelaysDrains(t *testing.T) {
 	}
 }
 
-// newRelayServer wires a Server whose dialer hands each relay one end of a
-// net.Pipe and runs guest on the other end.
 func newRelayServer(t *testing.T, guest func(net.Conn)) (*httptest.Server, *Server) {
 	t.Helper()
 	dialer := &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
@@ -165,8 +160,6 @@ func newRelayServer(t *testing.T, guest func(net.Conn)) (*httptest.Server, *Serv
 	return ts, srv
 }
 
-// upgradeConn performs the raw HTTP upgrade handshake; further reads must go
-// through the returned reader — it may have buffered bytes past the 101.
 func upgradeConn(t *testing.T, ts *httptest.Server) (net.Conn, *bufio.Reader) {
 	t.Helper()
 	conn, err := net.Dial("tcp", ts.Listener.Addr().String())
@@ -183,8 +176,6 @@ func upgradeConn(t *testing.T, ts *httptest.Server) (net.Conn, *bufio.Reader) {
 	return conn, r
 }
 
-// readStatus101 consumes exactly the 101 response head; a 1xx response has
-// no body, so http.ReadResponse stops right where the guest bytes begin.
 func readStatus101(t *testing.T, r *bufio.Reader) {
 	t.Helper()
 	resp, err := http.ReadResponse(r, nil)

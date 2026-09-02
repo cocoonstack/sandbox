@@ -24,9 +24,9 @@ const POST_EXIT_DRAIN: Duration = Duration::from_secs(1);
 
 type Master = Arc<AsyncFd<OwnedFd>>;
 
-/// Opens a pty running the guest login shell, streams its output as `stdout`
-/// frames and the exit as `exit`, and consumes client `stdin` frames as pty
-/// input until the shell exits or the client disconnects.
+/// Opens a pty running the guest shell ($SHELL, else bash), streams its output
+/// as `stdout` frames and the exit as `exit`, and consumes client `stdin`
+/// frames as pty input until the shell exits or the client disconnects.
 pub async fn open<W: AsyncWrite + Unpin>(
     table: &Table,
     now: u64,
@@ -55,13 +55,15 @@ pub async fn open<W: AsyncWrite + Unpin>(
     {
         return crate::proto::error_frame(out, ErrorKind::BadRequest, e).await;
     }
-    match slave.try_clone().and_then(|i| Ok((i, slave.try_clone()?))) {
-        Ok((in_fd, out_fd)) => {
+    match (slave.try_clone(), slave.try_clone()) {
+        (Ok(in_fd), Ok(out_fd)) => {
             cmd.stdin(Stdio::from(in_fd))
                 .stdout(Stdio::from(out_fd))
                 .stderr(Stdio::from(slave));
         }
-        Err(e) => return crate::proto::err_frame(out, &e, "dup pty slave").await,
+        (Err(e), _) | (_, Err(e)) => {
+            return crate::proto::err_frame(out, &e, "dup pty slave").await;
+        }
     }
     // SAFETY: make_controlling_tty runs only async-signal-safe syscalls, which
     // is the contract for a post-fork pre_exec hook.
@@ -86,7 +88,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
     let master: Master = match AsyncFd::new(master) {
         Ok(m) => Arc::new(m),
         Err(e) => {
-            child.start_kill().ok();
+            let _ = child.start_kill();
             table.remove_if(pid, &proc);
             return crate::proto::err_frame(out, &e, "watch pty master").await;
         }
@@ -96,7 +98,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
         .is_err()
     {
         // Client vanished before we streamed anything — tear down cleanly.
-        child.start_kill().ok();
+        let _ = child.start_kill();
         finish(&proc, -1);
         table.remove_if(pid, &proc);
         return Ok(());
@@ -163,7 +165,8 @@ async fn pump<W: AsyncWrite + Unpin>(
                     Err(_) => { eof = true; continue }
                 };
                 match guard.try_io(|fd| sysutil::read_fd(fd.get_ref().as_raw_fd(), &mut buf)) {
-                    // 0 (BSD) and EIO (Linux) both mean the slave is fully closed.
+                    // A read of 0 (BSD) or any error (EIO on Linux) means the
+                    // slave is fully closed.
                     Ok(Ok(0)) | Ok(Err(_)) => eof = true,
                     Ok(Ok(n)) => {
                         proc.emit_bytes(false, &buf[..n]);

@@ -9,8 +9,6 @@ import (
 )
 
 func TestCheckpointNewFollowsRedirect(t *testing.T) {
-	// The checkpoint's node no longer holds it and redirects; the retry
-	// must land on node B, bound there, exactly like Client.New's redirect.
 	var nodeACalls int
 	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req checkpointClaimRequest
@@ -48,8 +46,6 @@ func TestCheckpointNewFollowsRedirect(t *testing.T) {
 }
 
 func TestCheckpointNewRedirectAllCandidatesFail(t *testing.T) {
-	// The probed owner transiently fails (500); once exhausted, New falls
-	// back to the origin, which this time fails definitively too.
 	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -87,8 +83,6 @@ func TestCheckpointNewRedirectAllCandidatesFail(t *testing.T) {
 }
 
 func TestCheckpointNewRedirectFallbackHeals(t *testing.T) {
-	// The only probed owner is mid-heal (503); once exhausted, New falls
-	// back to the origin, which heals (pulls the checkpoint) locally.
 	busy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
@@ -124,8 +118,6 @@ func TestCheckpointNewRedirectFallbackHeals(t *testing.T) {
 	}
 }
 
-// TestCheckpointNewRedirectNeverYieldsEmptyID: New must fail loudly, not
-// return a Sandbox with an empty ID, when no redirect candidate answers.
 func TestCheckpointNewRedirectNeverYieldsEmptyID(t *testing.T) {
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(claimResponse{Redirect: []string{"127.0.0.1:1"}})
@@ -144,8 +136,6 @@ func TestCheckpointNewRedirectNeverYieldsEmptyID(t *testing.T) {
 }
 
 func TestCheckpointNewSecondLevelRedirectFails(t *testing.T) {
-	// A compliant server never redirects a no_redirect retry; if one does
-	// anyway, it must be treated as a failed candidate rather than followed.
 	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(claimResponse{Redirect: []string{"127.0.0.1:1"}})
 	}))

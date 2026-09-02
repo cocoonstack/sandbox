@@ -20,10 +20,6 @@ const (
 	testArchiveReap    = "reap"
 )
 
-// TestArchivePublishWindowPinsCheckpoint guards the pre-pin: between an
-// archive's checkpoint publish and the ArchiveCk commit, the checkpoint must
-// be invisible to listings and refuse deletion — a delete landing in that
-// window stranded the claim.
 func TestArchivePublishWindowPinsCheckpoint(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
@@ -53,11 +49,6 @@ func TestArchivePublishWindowPinsCheckpoint(t *testing.T) {
 	}
 }
 
-// TestArchiveWakeRehibernateWindowAborts guards the commit's identity check: a
-// wake + re-hibernate landing inside the publish window leaves HibernateSnap
-// non-empty but pointing at NEWER state than the exported checkpoint —
-// committing would archive stale data and destroy the only copy of the new
-// snapshot.
 func TestArchiveWakeRehibernateWindowAborts(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
@@ -105,10 +96,6 @@ func TestArchiveWakeRehibernateWindowAborts(t *testing.T) {
 	}
 }
 
-// TestArchiveCkHiddenAcrossNodes: on a shared store, another node has no
-// in-memory pin for this node's archive wake images — the meta Archive flag
-// must hide them from its listings, refuse its deletes, and spare its TTL
-// sweep, or a routine cleanup elsewhere strands the claim.
 func TestArchiveCkHiddenAcrossNodes(t *testing.T) {
 	shared := t.TempDir()
 	mkMgr := func() *Manager {
@@ -142,11 +129,6 @@ func TestArchiveCkHiddenAcrossNodes(t *testing.T) {
 	}
 }
 
-// TestReconcileReclaimsOrphanArchiveCk: a crash between an archive's publish
-// and its journal commit leaves a flagged record listings hide and deletes
-// refuse; reconcile identifies it by the journal (the sandbox is ours, under
-// a different ArchiveCk) and reclaims it. A flagged record of an unknown
-// sandbox is left alone.
 func TestReconcileReclaimsOrphanArchiveCk(t *testing.T) {
 	eng := newFakeEngine()
 	dataDir := t.TempDir()
@@ -188,8 +170,6 @@ func TestReconcileReclaimsOrphanArchiveCk(t *testing.T) {
 	}
 }
 
-// TestClaimCheckpointRefusesArchive: wake images are lifecycle-internal —
-// branching from one would race its consumption by the owner's wake.
 func TestClaimCheckpointRefusesArchive(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
@@ -204,9 +184,6 @@ func TestClaimCheckpointRefusesArchive(t *testing.T) {
 	}
 }
 
-// TestArchiveLifecycleRoundTrip exercises the real sweep wiring:
-// claim→idle-hibernate→archive→wake, and asserts the id/token survive the
-// store round-trip while the local VM and its wake image are reclaimed.
 func TestArchiveLifecycleRoundTrip(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -257,12 +234,10 @@ func TestArchiveLifecycleRoundTrip(t *testing.T) {
 	})
 }
 
-// TestArchiveTTLSweepSparesLiveCheckpoint guards the fix where the checkpoint
-// TTL sweep deleted the store image backing a live archived claim, bricking it.
 func TestArchiveTTLSweepSparesLiveCheckpoint(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
-	m.ckptTTL = time.Nanosecond // every checkpoint is instantly age-expired
+	m.ckptTTL = time.Nanosecond
 	sb := mustClaim(t, m, testKey)
 	id, token := sb.ID, sb.Token
 	mustArchive(t, m, sb)
@@ -277,8 +252,6 @@ func TestArchiveTTLSweepSparesLiveCheckpoint(t *testing.T) {
 	}
 }
 
-// TestArchiveKeepsForeverWhenDeleteZero guards the fix where a zero
-// archive-delete window purged archives immediately instead of keeping them.
 func TestArchiveKeepsForeverWhenDeleteZero(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(0))
@@ -303,9 +276,6 @@ func TestArchiveKeepsForeverWhenDeleteZero(t *testing.T) {
 	}
 }
 
-// TestArchiveRetentionPurge covers the reapPurge path: an archive past its
-// retention deadline drops from claims, deletes its checkpoint, and releases
-// its tenant slot.
 func TestArchiveRetentionPurge(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -318,14 +288,12 @@ func TestArchiveRetentionPurge(t *testing.T) {
 		ck := sb.ArchiveCk
 
 		m.mu.Lock()
-		sb.Deadline = time.Now().Add(-time.Second) // retention window elapsed
+		sb.Deadline = time.Now().Add(-time.Second)
 		m.mu.Unlock()
 
 		m.reapOnce(t.Context())
 		waitFor(t, func() bool { return archivedCount(m) == 0 })
-		// archiveDeletes is the purge goroutine's last side effect, sequenced after
-		// the checkpoint delete; waiting on it makes both observable (a bare read
-		// races the async purge, flaking under -race).
+
 		waitFor(t, func() bool { return m.Counters().ArchiveDeletes > 0 })
 		if ckExists(t, m, ck) {
 			t.Error("purge did not delete the archived checkpoint")
@@ -340,9 +308,6 @@ func TestArchiveRetentionPurge(t *testing.T) {
 	})
 }
 
-// TestReleaseArchivedDeletesCheckpoint guards the fix where releasing an
-// archived claim orphaned its store checkpoint and called Remove on an empty
-// VM name.
 func TestReleaseArchivedDeletesCheckpoint(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
@@ -525,9 +490,6 @@ func TestArchiveWakeRequiresDeleteMarker(t *testing.T) {
 	}
 }
 
-// Not a synctest candidate: each subtest holds m.store.mu itself to force the
-// release/reap goroutine to block acquiring it — same plain-sync.Mutex shape
-// as TestArchiveDeleteRetryRechecksWakeRollback, already verified to deadlock.
 func TestArchiveRemovalCommitPinsCheckpoint(t *testing.T) {
 	for _, action := range []string{testArchiveRelease, testArchiveReap} {
 		t.Run(action, func(t *testing.T) {
@@ -542,11 +504,11 @@ func TestArchiveRemovalCommitPinsCheckpoint(t *testing.T) {
 				m.mu.Unlock()
 			}
 
-			m.store.mu.Lock()
+			m.store.writeMu.Lock()
 			locked := true
 			t.Cleanup(func() {
 				if locked {
-					m.store.mu.Unlock()
+					m.store.writeMu.Unlock()
 				}
 			})
 			done := make(chan error, 1)
@@ -570,7 +532,7 @@ func TestArchiveRemovalCommitPinsCheckpoint(t *testing.T) {
 				t.Error("retry deleted the checkpoint before the claims commit")
 			}
 			m.store.path = filepath.Join(t.TempDir(), "gone", "claims.json")
-			m.store.mu.Unlock()
+			m.store.writeMu.Unlock()
 			locked = false
 			if err := <-done; action == testArchiveRelease && err == nil {
 				t.Fatal("release succeeded despite a persist failure")
@@ -639,10 +601,6 @@ func TestArchiveRemovalRequiresDeleteMarker(t *testing.T) {
 	}
 }
 
-// Not a synctest candidate: this test holds m.store.mu itself to force the
-// wake goroutine to block acquiring it — a plain sync.Mutex, never "durably
-// blocked" by synctest's rules, so the waitFor below can't fast-forward past
-// it. Verified as a real deadlock (times out), not a flake.
 func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
@@ -650,11 +608,11 @@ func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 	mustArchive(t, m, sb)
 	id, token, ck := sb.ID, sb.Token, sb.ArchiveCk
 
-	m.store.mu.Lock()
+	m.store.writeMu.Lock()
 	locked := true
 	t.Cleanup(func() {
 		if locked {
-			m.store.mu.Unlock()
+			m.store.writeMu.Unlock()
 		}
 	})
 	woke := make(chan error, 1)
@@ -681,7 +639,7 @@ func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 		return m.recRefs[ck] >= 2
 	})
 	m.store.path = filepath.Join(t.TempDir(), "gone", "claims.json")
-	m.store.mu.Unlock()
+	m.store.writeMu.Unlock()
 	locked = false
 	if err := <-woke; err == nil {
 		t.Fatal("wake succeeded despite a persist failure")
@@ -702,8 +660,6 @@ func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 	}
 }
 
-// TestIdleOnceSkipsArchived guards the fix where the idle sweep tried to
-// hibernate an archived (VM-less) claim, corrupting its record.
 func TestIdleOnceSkipsArchived(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -724,9 +680,6 @@ func TestIdleOnceSkipsArchived(t *testing.T) {
 	})
 }
 
-// TestDeleteCheckpointCannotBrickArchive guards the fix where the archive
-// image was listable and deletable through the ordinary checkpoint API,
-// letting a tenant permanently strand its own archived sandbox.
 func TestDeleteCheckpointCannotBrickArchive(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
@@ -735,8 +688,6 @@ func TestDeleteCheckpointCannotBrickArchive(t *testing.T) {
 	mustArchive(t, m, sb)
 	ck := sb.ArchiveCk
 
-	// The archive image is lifecycle-internal — it must not surface as a user
-	// checkpoint, or be deletable as one.
 	if ckpts, err := m.Checkpoints(t.Context(), ""); err != nil || len(ckpts) != 0 {
 		t.Fatalf("Checkpoints listed %d records, want the archive image hidden (%v)", len(ckpts), err)
 	}
@@ -751,9 +702,6 @@ func TestDeleteCheckpointCannotBrickArchive(t *testing.T) {
 	}
 }
 
-// TestArchivePersistFailureRollsBack guards the durability fix where archive
-// destroyed the local VM+snapshot before its transition reached disk: a failed
-// persist must roll the record back to hibernated and keep the local backing.
 func TestArchivePersistFailureRollsBack(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -784,9 +732,6 @@ func TestArchivePersistFailureRollsBack(t *testing.T) {
 	})
 }
 
-// TestReleaseArchivedRollsBackOnPersistFailure guards the durability fix where
-// a release whose removal did not persist must roll back — the claim survives
-// and its ck stays pinned, so a restart still wakes it.
 func TestReleaseArchivedRollsBackOnPersistFailure(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -810,9 +755,6 @@ func TestReleaseArchivedRollsBackOnPersistFailure(t *testing.T) {
 	})
 }
 
-// TestWakeArchivedRollsBackOnPersistFailure guards the durability fix where a
-// wake whose cleared-ArchiveCk record did not persist must roll back to
-// archived, keeping the ck pinned.
 func TestWakeArchivedRollsBackOnPersistFailure(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -839,8 +781,6 @@ func TestWakeArchivedRollsBackOnPersistFailure(t *testing.T) {
 	})
 }
 
-// TestReapPurgeRollsBackOnPersistFailure guards the same rollback on the reaper:
-// a retention purge that does not persist keeps the claim and its pinned ck.
 func TestReapPurgeRollsBackOnPersistFailure(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -850,7 +790,7 @@ func TestReapPurgeRollsBackOnPersistFailure(t *testing.T) {
 		mustArchive(t, m, sb)
 		ck := sb.ArchiveCk
 		m.mu.Lock()
-		sb.Deadline = time.Now().Add(-time.Second) // retention elapsed
+		sb.Deadline = time.Now().Add(-time.Second)
 		m.mu.Unlock()
 		breakStore(t, m)
 
@@ -868,8 +808,6 @@ func TestReapPurgeRollsBackOnPersistFailure(t *testing.T) {
 	})
 }
 
-// TestArchiveOnceSkipsInFlight guards the in-flight dedup: a sandbox already
-// being archived (marked by a racing reap) must not be exported twice.
 func TestArchiveOnceSkipsInFlight(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -881,7 +819,7 @@ func TestArchiveOnceSkipsInFlight(t *testing.T) {
 		backdate(m, sb, time.Hour)
 
 		m.mu.Lock()
-		m.archiving[sb.ID] = struct{}{} // a reap-triggered archive is already exporting it
+		m.archiving[sb.ID] = struct{}{}
 		m.mu.Unlock()
 		exportsBefore := eng.exportCount()
 
@@ -896,10 +834,6 @@ func TestArchiveOnceSkipsInFlight(t *testing.T) {
 	})
 }
 
-// TestArchiveWakeEvictsRecLock proves the archive->wake cycle leaves no
-// recLocks residue: wakeArchived recLocks the consumed ck, so it must evict it
-// after the delete or a repeatedly idle->archive->wake workload leaks a lock
-// per cycle.
 func TestArchiveWakeEvictsRecLock(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
@@ -907,25 +841,18 @@ func TestArchiveWakeEvictsRecLock(t *testing.T) {
 	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("hibernate: %v", err)
 	}
-	countLocks := func() int {
-		n := 0
-		m.recLocks.Range(func(_, _ any) bool { n++; return true })
-		return n
-	}
-	base := countLocks()
+	base := lockCount(m)
 	if err := m.archive(t.Context(), sb); err != nil {
 		t.Fatalf("archive: %v", err)
 	}
 	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake archived: %v", err)
 	}
-	if got := countLocks(); got != base {
+	if got := lockCount(m); got != base {
 		t.Errorf("recLocks grew %d->%d over an archive+wake cycle, want no growth", base, got)
 	}
 }
 
-// stallingStore parks Publish after the record becomes visible, exposing the
-// window between an archive's publish and its ArchiveCk commit.
 type stallingStore struct {
 	store.Store
 	published chan string
@@ -954,15 +881,11 @@ func (s *failingDeleteStore) Delete(_ context.Context, id string) error {
 	return errors.New("delete failed")
 }
 
-// breakStore points the claim store at a path whose parent is missing, so the
-// next save fails — the fault used to exercise the persist-failure paths.
 func breakStore(t *testing.T, m *Manager) {
 	t.Helper()
 	m.store.path = filepath.Join(t.TempDir(), "gone", "claims.json")
 }
 
-// healStore repairs breakStore's path and waits for the detached recommit to
-// converge, so its retry loop does not outlive the test.
 func healStore(t *testing.T, m *Manager) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(m.store.path), 0o750); err != nil {
@@ -976,8 +899,6 @@ func archivedCount(m *Manager) int {
 	return g.Archived
 }
 
-// archivePool is the pool shape the archive tests share: idle→hibernate at 1s,
-// archive at 2s, a long retention window (overridden per test).
 func archivePool(delete int) config.PoolSpec {
 	return config.PoolSpec{
 		PoolKey:                   testKey,
@@ -988,9 +909,6 @@ func archivePool(delete int) config.PoolSpec {
 	}
 }
 
-// mustArchive drives a fresh claim to the archived state deterministically
-// (hibernate then archive directly), bypassing the sweep thresholds so a test
-// can start from a known archived record.
 func mustArchive(t *testing.T, m *Manager, sb *types.Sandbox) {
 	t.Helper()
 	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
@@ -1016,8 +934,6 @@ func archiveCkMarked(m *Manager, ck string) bool {
 	return err == nil
 }
 
-// pinnedHidden reports whether the store holds exactly one checkpoint and it is
-// hidden from listings — i.e. a live claim's ArchiveCk still pins it.
 func pinnedHidden(t *testing.T, m *Manager, ck string) bool {
 	t.Helper()
 	ckpts, err := m.Checkpoints(t.Context(), "")

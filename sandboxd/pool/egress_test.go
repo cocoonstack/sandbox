@@ -35,9 +35,8 @@ func TestEgressProxyInjectsAndGates(t *testing.T) {
 
 	pol := &egress.Policy{Allow: []egress.Rule{{Host: host, Secret: "gh"}}}
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
-	m.dial = (&net.Dialer{}).DialContext // the test origin is on loopback, which the SSRF guard blocks
+	m.dial = (&net.Dialer{}).DialContext
 
-	// A short socket dir: the UDS path + "_2049" must fit the OS sun_path cap.
 	sockDir, err := os.MkdirTemp("/tmp", "eg")
 	if err != nil {
 		t.Fatalf("sockdir: %v", err)
@@ -78,8 +77,7 @@ func TestEgressProxyInjectsAndGates(t *testing.T) {
 
 func TestArmEgressFailsClosedWhenNICUnlockable(t *testing.T) {
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
-	// The engine reports no NIC tap, so the nft lock cannot apply; arming must
-	// fail rather than hand out an egress-lane NIC that bypasses the proxy.
+
 	sb := &types.Sandbox{ID: "sb_eg_no_tap", Key: egKey, VMName: "sbx-no-tap-1"}
 	if armErr := m.armEgress(t.Context(), sb); armErr == nil {
 		t.Fatal("armEgress must fail closed when the egress-lane NIC cannot be locked")
@@ -87,12 +85,9 @@ func TestArmEgressFailsClosedWhenNICUnlockable(t *testing.T) {
 }
 
 func TestArmEgressLocksEgressLaneWithoutPolicy(t *testing.T) {
-	// guardedEgress on (one pool carries a policy) plus a policyless egress-lane
-	// pool: that lane must still lock the NIC (default-deny), so arming a claim
-	// whose NIC cannot be locked fails rather than handing out a free NIC.
 	m := egressManager(t, newFakeEngine(),
 		config.PoolSpec{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "a.test"}}}},
-		config.PoolSpec{PoolKey: egKey}, // egress lane, no egress policy
+		config.PoolSpec{PoolKey: egKey},
 	)
 	sb := &types.Sandbox{ID: "sb_eg_np", Key: egKey, VMName: "sbx-np-1"}
 	if armErr := m.armEgress(t.Context(), sb); armErr == nil {
@@ -101,8 +96,6 @@ func TestArmEgressLocksEgressLaneWithoutPolicy(t *testing.T) {
 }
 
 func TestEgressLaneDoesNotHibernate(t *testing.T) {
-	// cocoon resumes a guest before its fresh tap can be re-locked, so an
-	// egress-lane sandbox must refuse to hibernate rather than wake unlocked.
 	m := newTestManager(t, newFakeEngine())
 	sb := &types.Sandbox{ID: "sb_eg_h", Key: types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}}
 	sb.Transition.Lock()
@@ -114,7 +107,6 @@ func TestEgressLaneDoesNotHibernate(t *testing.T) {
 }
 
 func TestEgressLaneWakeFailsClosed(t *testing.T) {
-	// A hibernated/archived egress claim (corrupt state) must fail closed on wake.
 	m := newTestManager(t, newFakeEngine())
 	cases := []struct {
 		name string
@@ -147,7 +139,7 @@ func TestEffectivePolicyComposition(t *testing.T) {
 	}{
 		{"root takes the pool policy whole", "", true, both, nil, "a.test", "z.test", true},
 		{"root without a pool policy", "", true, nil, nil, "", "", false},
-		{"tenant intersects", "acme", true, both, tenantOnly, "b.test", "a.test", true}, // a.test allowed by pool, denied by tenant
+		{"tenant intersects", "acme", true, both, tenantOnly, "b.test", "a.test", true},
 		{"tenant declaring no policy", "acme", true, both, nil, "", "", false},
 		{"tenant on a policyless pool", "acme", true, nil, tenantOnly, "", "", false},
 		{"tenant on a promoted template", "acme", false, nil, tenantOnly, "b.test", "a.test", true},
@@ -158,7 +150,7 @@ func TestEffectivePolicyComposition(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m.pools = map[types.PoolKey]*pool{}
 			if tc.pooled {
-				m.pools[testKey] = &pool{key: testKey}
+				m.pools[testKey] = newPool(testKey)
 			}
 			m.poolEgress = map[types.PoolKey]*egress.Policy{}
 			if tc.pool != nil {
@@ -204,7 +196,7 @@ func TestLockUsesProvisionedTapWithoutList(t *testing.T) {
 	}
 	switch {
 	case lockErr != nil && !strings.Contains(lockErr.Error(), "tap-fake0"):
-		t.Errorf("lock failed outside nft: %v", lockErr) // nft itself may fail off-linux/unprivileged
+		t.Errorf("lock failed outside nft: %v", lockErr)
 	case lockErr == nil:
 		m.mu.Lock()
 		got := m.egressTaps[sb.ID]
@@ -222,7 +214,7 @@ func TestLockFallsBackToListForPreTapClaims(t *testing.T) {
 	if _, err := eng.RunCold(t.Context(), "sbx-old", egKey); err != nil {
 		t.Fatalf("seed vm: %v", err)
 	}
-	// A pre-tap-journal claim has no TAP; the lock resolves it through the engine.
+
 	sb := &types.Sandbox{ID: "sb_old", Key: egKey, VMName: "sbx-old"}
 	lockErr := m.lockEgressNIC(t.Context(), sb)
 	if calls := eng.listCalls(); calls != 1 {
@@ -236,8 +228,7 @@ func TestLockFallsBackToListForPreTapClaims(t *testing.T) {
 func TestBatchArmFailureRecordsNoUsage(t *testing.T) {
 	eng := newFakeEngine()
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
-	// Second member (egress, no VM) fails to arm; the rolled-back batch must
-	// leave no claim event, else it stays open forever for the collector.
+
 	sbs := []*types.Sandbox{
 		{VMName: "sbx-ok", Key: testKey},
 		{VMName: "sbx-eg", Key: egKey},
@@ -264,11 +255,11 @@ func TestBatchArmFailureRecordsNoUsage(t *testing.T) {
 func TestRollbackKeepsLockWhenRemoveFails(t *testing.T) {
 	eng := newFakeEngine()
 	eng.removeErrFor = "sbx-r1"
-	// Both VMs are running; sbx-r1's remove fails and the engine keeps listing it.
+
 	eng.vms["sbx-r1"] = "/run/sbx-r1.sock"
 	eng.vms["sbx-r2"] = "/run/sbx-r2.sock"
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
-	// Both members armed before a later batch member failed; sbx-r1's remove fails.
+
 	sbs := []*types.Sandbox{
 		{ID: "sb_r1", VMName: "sbx-r1", Key: egKey},
 		{ID: "sb_r2", VMName: "sbx-r2", Key: egKey},
@@ -300,7 +291,7 @@ func TestRollbackKeepsLockWhenRemoveFails(t *testing.T) {
 func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
 	eng := newFakeEngine()
 	eng.removeErrFor = "sbx-q1"
-	// Running: removeVM reports "still here" only while the engine lists it.
+
 	eng.vms["sbx-q1"] = "/run/sbx-q1.sock"
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 	sb := &types.Sandbox{ID: "sb_q1", VMName: "sbx-q1", Key: egKey, TAP: "tap-q1"}
@@ -328,11 +319,9 @@ func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
 }
 
 func TestEgressLaneLocksWithNoPolicyAnywhere(t *testing.T) {
-	// A bridge egress lane with zero policy on the node: guardedEgress is false,
-	// but the NIC must still be nft-locked (default-deny), never handed out free.
 	eng := newFakeEngine()
 	eng.tap = "tap-nopol"
-	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey}) // egress lane, no policy
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey})
 	if m.guardedEgress {
 		t.Fatal("no policy configured; guardedEgress should be false")
 	}
@@ -342,8 +331,6 @@ func TestEgressLaneLocksWithNoPolicyAnywhere(t *testing.T) {
 	attempted := m.egressTaps[sb.ID] == "tap-nopol"
 	m.mu.Unlock()
 	if lockErr != nil {
-		// nft is linux-only; off Linux the lock fails but must name the tap it
-		// tried, proving lockEgressNIC ran rather than short-circuiting as before.
 		attempted = strings.Contains(lockErr.Error(), "tap-nopol")
 	}
 	if !attempted {
@@ -352,8 +339,6 @@ func TestEgressLaneLocksWithNoPolicyAnywhere(t *testing.T) {
 }
 
 func TestDisarmKeepsLockWhenRemoveFailed(t *testing.T) {
-	// A failed VM removal must tear down the proxy listener (stop credential
-	// injection for the dropped claim) but keep the NIC lock (the guest runs on).
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Egress: egPolicy})
 	m.dial = (&net.Dialer{}).DialContext
 	sockDir, err := os.MkdirTemp("/tmp", "eg")
@@ -366,7 +351,7 @@ func TestDisarmKeepsLockWhenRemoveFailed(t *testing.T) {
 		t.Fatalf("arm proxy: %v", armErr)
 	}
 	m.mu.Lock()
-	m.egressTaps[sb.ID] = "tap-dz" // as lockEgressNIC would record at claim
+	m.egressTaps[sb.ID] = "tap-dz"
 	m.mu.Unlock()
 	path := engine.EgressSocketPath(sb.VsockSocket)
 
@@ -383,11 +368,9 @@ func TestDisarmKeepsLockWhenRemoveFailed(t *testing.T) {
 }
 
 func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
-	// The pool API cannot carry egress (config-only), so no SetPools call — warm
-	// change or drain-then-re-add — may drop a pool's policy.
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 	gd := filepath.Join(m.goldensDir(), egKey.Hash())
-	if err := os.MkdirAll(gd, 0o750); err != nil { // on disk so re-add adopts it, sparing an async build
+	if err := os.MkdirAll(gd, 0o750); err != nil {
 		t.Fatalf("golden dir: %v", err)
 	}
 	m.mu.Lock()
@@ -403,7 +386,7 @@ func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 	if !policyLive() {
 		t.Fatal("a warm change wiped the pool egress policy")
 	}
-	if err := m.SetPools(t.Context(), nil); err != nil { // drain: the pool object is deleted
+	if err := m.SetPools(t.Context(), nil); err != nil {
 		t.Fatalf("SetPools drain: %v", err)
 	}
 	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: egKey}}); err != nil {
@@ -416,31 +399,30 @@ func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 
 func TestEgressDialerBlocksInternal(t *testing.T) {
 	blocked := []string{
-		// Caught by IsGlobalUnicast/IsPrivate/IsLinkLocal.
 		"127.0.0.1:80", "169.254.169.254:80", "10.0.0.5:443", "192.168.1.1:22",
 		"172.16.0.1:80", "255.255.255.255:80", "[::1]:80", "[::ffff:127.0.0.1]:80",
 		"[fe80::1]:80", "[fc00::1]:80", "[ff02::1]:80",
-		// IANA IPv4 special-purpose, Globally Reachable = false (one per table prefix).
+
 		"0.6.6.6:80", "100.100.100.200:80", "192.0.0.1:80", "192.0.2.1:80",
 		"192.88.99.2:80", "198.18.0.1:80", "198.19.255.255:80", "198.51.100.1:80",
 		"203.0.113.1:80", "240.1.2.3:80",
-		// IANA IPv6 special-purpose + deprecated v4-in-v6 embeddings.
+
 		"[100::1]:80", "[100:0:0:1::1]:80", "[2001:db8::1]:80", "[3fff::1]:80",
 		"[5f00::1]:80", "[::127.0.0.1]:80",
-		"[2001::a9fe:a9fe]:80",    // Teredo, within 2001::/23
-		"[2001:2::1]:80",          // benchmarking, within 2001::/23
-		"[2001:10::1]:80",         // ORCHID, within 2001::/23
-		"[64:ff9b:1::8.8.8.8]:80", // RFC 8215 local-use NAT64
-		"[2002:a9fe:a9fe::]:80",   // 6to4-embedded 169.254.169.254
-		"[64:ff9b::a9fe:a9fe]:80", // NAT64-embedded 169.254.169.254
-		"[64:ff9b::a00:1]:80",     // NAT64-embedded 10.0.0.1
+		"[2001::a9fe:a9fe]:80",
+		"[2001:2::1]:80",
+		"[2001:10::1]:80",
+		"[64:ff9b:1::8.8.8.8]:80",
+		"[2002:a9fe:a9fe::]:80",
+		"[64:ff9b::a9fe:a9fe]:80",
+		"[64:ff9b::a00:1]:80",
 	}
 	for _, addr := range blocked {
 		if err := newEgressDialer(nil).Control("tcp", addr, nil); err == nil {
 			t.Errorf("dial to internal %s allowed; SSRF not blocked", addr)
 		}
 	}
-	// public v4 direct, public v6, and a public v4 via the NAT64 well-known prefix
+
 	for _, addr := range []string{"93.184.216.34:443", "[2606:4700:4700::1111]:443", "[64:ff9b::5db8:d822]:443"} {
 		if err := newEgressDialer(nil).Control("tcp", addr, nil); err != nil {
 			t.Errorf("dial to public %s blocked: %v", addr, err)
@@ -465,9 +447,6 @@ func TestEgressLaneCannotForkOrCheckpoint(t *testing.T) {
 	}
 }
 
-// TestEgressDialerAdmitsOnlyNamedInternalPrefixes pins the SSRF boundary:
-// named prefixes re-admit corporate services without re-admitting the guest
-// bridges, which are themselves ULA/RFC1918.
 func TestEgressDialerAdmitsOnlyNamedInternalPrefixes(t *testing.T) {
 	d := newEgressDialer(parsePrefixes([]string{"fdc8::/16", "10.8.0.0/16"}))
 	check := func(addr string) error {
@@ -481,7 +460,7 @@ func TestEgressDialerAdmitsOnlyNamedInternalPrefixes(t *testing.T) {
 		"public v6":    {"[2606:2800:220:1:248:1893:25c8:1946]:443", true},
 		"corporate v6": {"[fdc8:17:9:200f::1]:443", true},
 		"corporate v4": {"10.8.7.149:443", true},
-		// Guests and the host gateway share fc00::/7 with the corporate range.
+
 		"another sandbox on the bridge": {"[fd00:c0c0:38::5]:443", false},
 		"the host's bridge gateway":     {"[fd00:c0c0:38::1]:443", false},
 		"other private v4":              {"192.168.1.1:443", false},
@@ -501,18 +480,15 @@ func TestEgressDialerAdmitsOnlyNamedInternalPrefixes(t *testing.T) {
 	}
 }
 
-// TestEgressDialerWildcardAllowsEverything pins the fully-open form as a
-// deliberate choice — loopback and cloud metadata included — for fleets with
-// a policy-enforcing forward proxy in front.
 func TestEgressDialerWildcardAllowsEverything(t *testing.T) {
 	d := newEgressDialer(parsePrefixes([]string{"0.0.0.0/0", "::/0"}))
 	for _, addr := range []string{
-		"93.184.216.34:443",       // public
-		"[fdc8:17:9:200f::1]:443", // corporate v6
-		"10.8.7.149:443",          // corporate v4
-		"[fd00:c0c0:38::5]:443",   // another sandbox
-		"127.0.0.1:7777",          // the node itself
-		"169.254.169.254:80",      // cloud metadata
+		"93.184.216.34:443",
+		"[fdc8:17:9:200f::1]:443",
+		"10.8.7.149:443",
+		"[fd00:c0c0:38::5]:443",
+		"127.0.0.1:7777",
+		"169.254.169.254:80",
 	} {
 		if err := d.Control("tcp", addr, nil); err != nil {
 			t.Errorf("%s blocked under a wildcard allow-list: %v", addr, err)
@@ -520,9 +496,6 @@ func TestEgressDialerWildcardAllowsEverything(t *testing.T) {
 	}
 }
 
-// egressClient builds an HTTP client that reaches the origin through the
-// per-sandbox egress proxy UDS, exactly as the guest's proxy client would over
-// vsock. Playing the VMM's role lets the host-side path run without a real VM.
 func egressClient(path string) *http.Client {
 	return &http.Client{
 		Timeout: 5 * time.Second,
@@ -547,8 +520,6 @@ func egressManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Man
 	return m
 }
 
-// writeTestEgressCA provisions a cluster root + this node's intermediate to temp
-// files, as `sandboxd ca` would, and returns the config pointing at them.
 func writeTestEgressCA(t *testing.T) *config.EgressCAConfig {
 	t.Helper()
 	rootCert, rootKey, err := egress.GenerateRoot("test cluster ca")
