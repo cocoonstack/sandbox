@@ -249,17 +249,23 @@ impl Ring {
         }
     }
 
+    /// Retained output, coalescing adjacent same-stream segments: reads leave
+    /// tens of thousands of tiny ones and the client concatenates them anyway.
     fn drain_view(&mut self) -> Vec<Chunk> {
         let bytes = self.buf.make_contiguous();
-        let mut out = Vec::with_capacity(self.tags.len());
+        let mut out: Vec<Chunk> = Vec::new();
         let mut off = 0;
         for &(stderr, len) in &self.tags {
-            let slice = bytes[off..off + len].to_vec();
-            out.push(if stderr {
-                Chunk::Stderr(slice)
-            } else {
-                Chunk::Stdout(slice)
-            });
+            let seg = &bytes[off..off + len];
+            match out.last_mut() {
+                Some(Chunk::Stdout(acc)) if !stderr => acc.extend_from_slice(seg),
+                Some(Chunk::Stderr(acc)) if stderr => acc.extend_from_slice(seg),
+                _ => out.push(if stderr {
+                    Chunk::Stderr(seg.to_vec())
+                } else {
+                    Chunk::Stdout(seg.to_vec())
+                }),
+            }
             off += len;
         }
         out

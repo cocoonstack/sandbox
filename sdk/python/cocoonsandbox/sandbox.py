@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from .checkpoint import Checkpoint
 from .conn import Conn, _Closeable, dial_agent
-from .errors import APIError, ExitError, ProtocolError
+from .errors import APIError, ExitError, ProtocolError, StreamTimeout
 from .frames import BULK_CHUNK, FS_CHUNK
 from .template import Template
 
@@ -341,14 +341,18 @@ class Sandbox:
             with contextlib.suppress(OSError):
                 local.close()
 
-        threading.Thread(target=pump_out, daemon=True).start()
+        pump = threading.Thread(target=pump_out, daemon=True)
+        pump.start()
         try:
             while True:
                 chunk = local.recv(FS_CHUNK)
                 if not chunk:
                     break
                 guest.send(chunk)
+            # Half-close, then let the guest finish answering: closing here
+            # would cut the reply the local client is still waiting for.
             guest.close_write()
+            pump.join()
         finally:
             guest.close()
 
@@ -366,7 +370,7 @@ class Sandbox:
             return _pump_stdio(conn, on_stdout, on_stderr)
 
 
-class Session:
+class Session(_Closeable):
     """A persistent shell inside the sandbox, addressed by id."""
 
     def __init__(self, sandbox: Sandbox, id: str):
@@ -395,7 +399,7 @@ class Watcher(_Closeable):
         while True:
             try:
                 frame = self._conn.recv()
-            except (ProtocolError, OSError, ValueError) as e:
+            except (ProtocolError, StreamTimeout) as e:
                 self.error = e
                 return
             if frame["type"] == "event":
@@ -433,7 +437,7 @@ class Pty(_Closeable):
         self._conn.close()
 
 
-class Lsp:
+class Lsp(_Closeable):
     """A language server in the sandbox, spoken to over the relay. silkd is a
     broker: it pipes JSON-RPC bytes; the caller frames and correlates."""
 
@@ -451,6 +455,8 @@ class Lsp:
     def stop(self) -> None:
         """Kills the language server."""
         self._sandbox._done_rpc("lsp_stop", server_id=self.server_id)
+
+    close = stop
 
 
 class PortConn(_Closeable):

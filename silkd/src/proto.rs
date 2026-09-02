@@ -413,16 +413,41 @@ fn cap_check(len: usize) -> io::Result<()> {
     Ok(())
 }
 
-pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, resp: &Response) -> io::Result<()> {
-    let mut buf = serde_json::to_vec(resp).map_err(io::Error::other)?;
+/// Renders one newline-terminated frame onto `buf`, holding the write side to
+/// the same cap the read side enforces — every client rejects a larger frame.
+fn render_frame(buf: &mut Vec<u8>, resp: &Response) -> io::Result<()> {
+    let start = buf.len();
+    serde_json::to_writer(&mut *buf, resp).map_err(io::Error::other)?;
+    cap_check(buf.len() - start)?;
     buf.push(b'\n');
+    Ok(())
+}
+
+pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, resp: &Response) -> io::Result<()> {
+    let mut buf = Vec::new();
+    render_frame(&mut buf, resp)?;
     w.write_all(&buf).await?;
+    w.flush().await
+}
+
+/// Writes `frames` as one buffered batch, so a burst costs one write syscall
+/// instead of one per frame. `buf` is reused across calls.
+pub async fn write_frames<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    buf: &mut Vec<u8>,
+    frames: &[Response],
+) -> io::Result<()> {
+    buf.clear();
+    for frame in frames {
+        render_frame(buf, frame)?;
+    }
+    w.write_all(buf).await?;
     w.flush().await
 }
 
 /// Renders `{"type":KIND,"data":"<base64>"}` into `buf` (reused across calls)
 /// and writes it — the bulk path skips serde's owned Vec + String per chunk.
-/// base64's alphabet needs no JSON escaping. KIND is data|stdout|stderr.
+/// base64's alphabet needs no JSON escaping.
 pub async fn write_chunk_frame<W: AsyncWrite + Unpin>(
     w: &mut W,
     buf: &mut Vec<u8>,
@@ -629,8 +654,6 @@ mod tests {
 
     #[tokio::test]
     async fn chunk_frame_parses_back_to_serde_response() {
-        // Payload lengths 0..=3 cover every base64 padding shape; the full
-        // byte range covers the whole alphabet.
         let payloads: Vec<Vec<u8>> = vec![
             Vec::new(),
             b"a".to_vec(),
@@ -675,9 +698,7 @@ mod tests {
         assert_eq!(got, want);
     }
 
-    /// Perf evidence, not a correctness gate. The serde side pays the
-    /// per-chunk `to_vec` the old producers paid. Run with:
-    /// cargo test --release -- --ignored --nocapture bench_chunk_render
+    /// Run with: cargo test --release -- --ignored --nocapture bench_chunk_render
     #[tokio::test]
     #[ignore]
     async fn bench_chunk_render_old_vs_new() {
@@ -712,10 +733,8 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
-    /// Twin of the Go TestEnumValueSetsMatchFixture: pins each wire enum's
-    /// full value list (order-sensitive) to enums.json — frame fixtures carry
-    /// one representative value per enum, so a rename or an added variant on
-    /// only one side would otherwise drift silently.
+    /// Twin of the Go TestEnumValueSetsMatchFixture: pins every wire enum's
+    /// ordered value list to enums.json, which frame fixtures cannot.
     #[test]
     fn enum_value_sets_match_fixture() {
         fn rendered<T: serde::Serialize>(variants: &[T]) -> Vec<String> {
@@ -781,8 +800,6 @@ mod tests {
         for entry in std::fs::read_dir(dir).expect("fixtures dir") {
             let path = entry.expect("entry").path();
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            // Only the corpus itself; skip editor/OS cruft (.DS_Store,
-            // AppleDouble ._ sidecars) that can land in the dir.
             let Some(stem) = name.strip_suffix(".json") else {
                 continue;
             };
@@ -799,7 +816,6 @@ mod tests {
             }
             seen += 1;
         }
-        // Exact, mirroring the Go guard: a new verb lands with its fixture.
         assert_eq!(
             seen, 60,
             "fixture corpus: adding a verb means adding its fixture"

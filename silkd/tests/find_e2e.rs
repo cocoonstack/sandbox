@@ -1,6 +1,6 @@
 //! Search verb E2E: fs.find streams matches, fs.replace rewrites files.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
 use common::{exchange, type_of};
@@ -34,8 +34,8 @@ async fn find_streams_line_matches() {
             .iter()
             .all(|m| m["content"].as_str().unwrap().contains("TODO"))
     );
-    assert!(matches.iter().any(|m| m["line"] == 2)); // a.rs
-    assert!(matches.iter().any(|m| m["line"] == 1)); // sub/c.rs
+    assert!(matches.iter().any(|m| m["line"] == 2));
+    assert!(matches.iter().any(|m| m["line"] == 1));
     assert_eq!(type_of(frames.last().unwrap()), "done");
 }
 
@@ -45,7 +45,6 @@ async fn find_glob_is_a_real_glob_not_a_substring() {
     write_file(dir.path(), "a.rs", "TODO\n").await;
     write_file(dir.path(), "a.rs.bak", "TODO\n").await;
 
-    // Anchored: "*.rs" must not match the .bak; "?" is a single character.
     let frames = exchange(&[json!({
         "op": "fs_find",
         "path": dir.path().to_str().unwrap(),
@@ -121,6 +120,55 @@ async fn replace_rewrites_and_counts() {
         tokio::fs::read_to_string(&b).await.unwrap(),
         "no match here\n"
     );
+}
+
+#[tokio::test]
+async fn replace_skips_a_file_over_the_size_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    let big = dir.path().join("big.log");
+    let body = format!("foo\n{}", "x".repeat(8 * 1024 * 1024));
+    tokio::fs::write(&big, &body).await.unwrap();
+
+    let frames = exchange(&[json!({
+        "op": "fs_replace",
+        "files": [big.to_str().unwrap()],
+        "pattern": "foo",
+        "replacement": "bar"
+    })
+    .to_string()])
+    .await;
+
+    let replaced: Vec<_> = frames.iter().filter(|f| type_of(f) == "replaced").collect();
+    assert_eq!(replaced.len(), 1, "{frames:?}");
+    assert_eq!(replaced[0]["replacements"], 0);
+    assert_eq!(type_of(frames.last().unwrap()), "done");
+    assert_eq!(
+        tokio::fs::read_to_string(&big).await.unwrap().len(),
+        body.len(),
+        "an oversized file must not be rewritten"
+    );
+}
+
+#[tokio::test]
+async fn find_skips_a_file_over_the_size_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    tokio::fs::write(
+        dir.path().join("big.log"),
+        format!("foo\n{}", "x".repeat(8 * 1024 * 1024)),
+    )
+    .await
+    .unwrap();
+
+    let frames = exchange(&[json!({
+        "op": "fs_find",
+        "path": dir.path().to_str().unwrap(),
+        "pattern": "foo"
+    })
+    .to_string()])
+    .await;
+
+    assert_eq!(frames.iter().filter(|f| type_of(f) == "match").count(), 0);
+    assert_eq!(type_of(frames.last().unwrap()), "done");
 }
 
 #[tokio::test]

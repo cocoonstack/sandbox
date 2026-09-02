@@ -31,7 +31,7 @@ where
     if let Err(e) = tokio::fs::create_dir_all(&dest).await {
         return err_frame(w, &e, "mkdir dest").await;
     }
-    let staging = match stage_dir(&dest) {
+    let staging = match stage_dir(&dest).await {
         Ok(s) => s,
         Err(e) => return err_frame(w, &e, "stage push").await,
     };
@@ -159,9 +159,9 @@ fn spawn_tar(
 
 /// Creates a unique staging dir inside `dest` — the same filesystem, so the
 /// post-extract merge is pure renames.
-fn stage_dir(dest: &str) -> io::Result<String> {
+async fn stage_dir(dest: &str) -> io::Result<String> {
     let staging = format!("{dest}/.silkd-push-{}", sysutil::tmp_suffix());
-    std::fs::create_dir(&staging)?;
+    tokio::fs::create_dir(&staging).await?;
     Ok(staging)
 }
 
@@ -189,8 +189,8 @@ fn merge_tree(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Reads a child's stderr to a string, capped so a pathological tar can't
-/// balloon memory; the tail is what a human error message needs.
+/// Reads a child's stderr to a string, keeping the first CAP bytes so a
+/// pathological tar can't balloon memory — tar's first error is the useful one.
 async fn drain(mut stderr: tokio::process::ChildStderr) -> String {
     const CAP: usize = 16 * 1024;
     let mut out = Vec::new();

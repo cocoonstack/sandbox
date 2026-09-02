@@ -2,7 +2,7 @@
 //! exec calls. Spawns real bash, so Unix-only in practice; kept ungated so
 //! the persistence contract is checked on the dev host too.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
 use std::sync::Arc;
@@ -59,7 +59,6 @@ async fn session_applies_cwd_and_env_at_create() {
     let g = sh(&state, &id, &["sh", "-c", "echo $GREETING"]).await;
     assert_eq!(stdout_body(&g).trim(), "hello-silk");
 
-    // cwd applied: a relative touch lands in the session's directory.
     let t = sh(&state, &id, &["touch", "marker"]).await;
     assert_eq!(type_of(t.last().unwrap()), "exit");
     assert!(dir.path().join("marker").exists(), "cwd was not applied");
@@ -100,16 +99,12 @@ async fn session_list_and_rm() {
 
 #[tokio::test]
 async fn stdin_reading_command_does_not_wedge_the_session() {
-    // A command that reads stdin (here `cat`, which would block forever on the
-    // control pipe) must not hang the session — its stdin is isolated. Bound
-    // with a timeout: a regression would hang instead of returning.
     let state = Arc::new(State::new());
     let id = create(&state, json!({})).await;
     let r = tokio::time::timeout(std::time::Duration::from_secs(8), sh(&state, &id, &["cat"]))
         .await
         .expect("session wedged on a stdin-reading command");
     assert_eq!(type_of(r.last().unwrap()), "exit");
-    // The session is still usable afterward.
     let after = sh(&state, &id, &["echo", "alive"]).await;
     assert_eq!(stdout_body(&after).trim(), "alive");
 }
@@ -118,7 +113,6 @@ async fn stdin_reading_command_does_not_wedge_the_session() {
 async fn shell_killing_command_removes_the_session() {
     let state = Arc::new(State::new());
     let id = create(&state, json!({})).await;
-    // `exit` kills the shell; the session must then stop resolving.
     let _ = sh(&state, &id, &["exit"]).await;
     let again = sh(&state, &id, &["echo", "hi"]).await;
     assert_eq!(type_of(&again[0]), "error");
@@ -127,9 +121,6 @@ async fn shell_killing_command_removes_the_session() {
 
 #[tokio::test]
 async fn forged_sentinel_in_output_does_not_desync() {
-    // A command printing a plausible sentinel must not be mistaken for the
-    // real one (random token) — the real command output is preserved and the
-    // next command still frames correctly.
     let state = Arc::new(State::new());
     let id = create(&state, json!({})).await;
     let r = sh(
@@ -155,7 +146,6 @@ async fn reap_idle_removes_idle_sessions() {
     use std::time::Duration;
     let state = Arc::new(State::new());
     let id = create(&state, json!({})).await;
-    // Everything is "idle" against a zero TTL.
     let reaped = state.sessions.reap_idle(Duration::ZERO);
     assert_eq!(reaped, 1);
     let gone = sh(&state, &id, &["echo", "hi"]).await;
@@ -171,8 +161,6 @@ async fn reap_skips_a_session_running_a_command() {
     use std::time::Duration;
     let state = Arc::new(State::new());
     let id = create(&state, json!({})).await;
-    // Hold the session busy with a slow command while a zero-TTL reap runs;
-    // an actively-running session must not be reaped.
     let busy = {
         let s = Arc::clone(&state);
         let sid = id.clone();
@@ -183,14 +171,11 @@ async fn reap_skips_a_session_running_a_command() {
     assert_eq!(reaped, 0, "a running session must not be reaped");
     let done = busy.await.unwrap();
     assert_eq!(type_of(done.last().unwrap()), "exit");
-    // After it finishes it becomes reapable again.
     assert_eq!(state.sessions.reap_idle(Duration::ZERO), 1);
 }
 
 #[tokio::test]
 async fn session_argv_with_metacharacters_is_one_literal_token() {
-    // A single argv element containing shell metacharacters must be passed as
-    // one literal argument, not interpreted — shell_quote must neutralize it.
     let state = Arc::new(State::new());
     let id = create(&state, json!({})).await;
     let evil = "a b; echo INJECTED $(id) `whoami` 'q'";
@@ -208,10 +193,6 @@ async fn session_argv_with_metacharacters_is_one_literal_token() {
 
 #[tokio::test]
 async fn session_rm_unwedges_a_running_external_command() {
-    // A session running a long external command blocks its run() until the
-    // command exits. session_rm must group-kill the shell AND the command so
-    // the blocked run() unwinds — killing only bash would leave the sleep
-    // holding the stdout pipe open.
     let state = Arc::new(State::new());
     let id = create(&state, json!({})).await;
     let busy = {
@@ -222,7 +203,6 @@ async fn session_rm_unwedges_a_running_external_command() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let rm = one(&state, &json!({"op":"session_rm","id":id}).to_string()).await;
     assert_eq!(type_of(&rm[0]), "done");
-    // The blocked command must now return (shell group killed) within a bound.
     let done = tokio::time::timeout(std::time::Duration::from_secs(5), busy)
         .await
         .expect("session_rm did not unwedge the external command");
@@ -232,8 +212,6 @@ async fn session_rm_unwedges_a_running_external_command() {
 
 #[tokio::test]
 async fn empty_argv_in_session_is_a_bad_request() {
-    // The dispatcher validates argv ahead of the session/process split: an
-    // empty argv must not reach the shell as a successful no-op.
     let state = Arc::new(State::new());
     let id = create(&state, json!({})).await;
     let f = one(
@@ -247,8 +225,6 @@ async fn empty_argv_in_session_is_a_bad_request() {
 
 #[tokio::test]
 async fn detach_with_session_is_a_bad_request() {
-    // silkd's session path has no Started frame to answer a detached exec, so
-    // the combination must be rejected up front rather than silently run.
     let state = Arc::new(State::new());
     let id = create(&state, json!({})).await;
     let f = one(
@@ -270,8 +246,6 @@ async fn exec_in_unknown_session_is_not_found() {
 
 #[tokio::test]
 async fn session_merges_stderr_into_stdout() {
-    // The shell's first init line is `exec 2>&1`: command stderr must arrive
-    // on the session's single output stream.
     let state = Arc::new(State::new());
     let id = create(&state, json!({})).await;
 

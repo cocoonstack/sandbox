@@ -1,7 +1,7 @@
 //! pty.open E2E: a shell under a pseudo-terminal, driven over a duplex.
 //! openpty exists on macOS and Linux, so this runs on the dev host.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
 use std::sync::Arc;
@@ -42,7 +42,6 @@ async fn pty_runs_a_shell_and_echoes() {
     let pid = started["pid"].as_u64().unwrap();
     assert!(pid > 0);
 
-    // A pty echoes input; run a command and look for its output.
     send(
         &mut cw,
         json!({"op":"stdin","data":common::b64(b"echo silk-pty-marker\n")}),
@@ -72,7 +71,6 @@ async fn pty_appears_in_ps_and_resizes() {
         .as_u64()
         .unwrap();
 
-    // ps (shared table) sees the pty as a process; resize succeeds on it.
     let ps = common::one(&state, r#"{"op":"ps"}"#).await;
     assert!(
         ps[0]["procs"]
@@ -105,9 +103,6 @@ async fn resize_unknown_pid_is_not_found() {
 
 #[tokio::test]
 async fn pty_disconnect_tears_down_without_spin() {
-    // Client disconnects while the shell is idle. The pty must tear down (kill
-    // the shell, drop the table entry, end the serve task) instead of
-    // busy-spinning on the closed client channel.
     let state = Arc::new(State::new());
     let (mut cw, mut lines, handle) = common::connect(&state);
     send(&mut cw, json!({"op":"pty_open","cols":80,"rows":24})).await;
@@ -115,13 +110,10 @@ async fn pty_disconnect_tears_down_without_spin() {
         .as_u64()
         .unwrap();
 
-    // Let the shell settle, then disconnect.
     tokio::time::sleep(Duration::from_millis(200)).await;
     drop(lines);
     drop(cw);
 
-    // The serve task returns promptly (no spin); the final Exit-write to the
-    // gone client may error, which is fine — the point is it returns.
     let _ = tokio::time::timeout(Duration::from_secs(5), handle)
         .await
         .expect("pty did not tear down on disconnect");

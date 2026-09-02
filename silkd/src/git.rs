@@ -115,38 +115,36 @@ pub async fn branch<W: AsyncWrite + Unpin>(
     op: GitBranchOp,
     name: Option<String>,
 ) -> std::io::Result<()> {
-    match op {
-        GitBranchOp::List => {
-            let out = git(&path, None, &["branch", "--format=%(refname:short)"]).await?;
-            if !out.status.success() {
-                return terminal(w, "branch", &out).await;
-            }
-            let branches: Vec<String> = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .map(str::to_string)
-                .collect();
-            let cur = git(&path, None, &["rev-parse", "--abbrev-ref", "HEAD"]).await?;
-            let current = String::from_utf8_lossy(&cur.stdout).trim().to_string();
-            proto::write_frame(w, &Response::GitBranches { current, branches }).await
+    let args: Vec<&str> = match (op, &name) {
+        (GitBranchOp::List, _) => return list_branches(w, &path).await,
+        (_, None) => {
+            return proto::write_frame(
+                w,
+                &Response::error(ErrorKind::BadRequest, "branch op needs a name"),
+            )
+            .await;
         }
-        GitBranchOp::Create | GitBranchOp::Delete | GitBranchOp::Checkout => {
-            let Some(name) = name else {
-                return proto::write_frame(
-                    w,
-                    &Response::error(ErrorKind::BadRequest, "branch op needs a name"),
-                )
-                .await;
-            };
-            let args: Vec<&str> = match op {
-                GitBranchOp::Create => vec!["branch", &name],
-                GitBranchOp::Delete => vec!["branch", "-D", &name],
-                GitBranchOp::Checkout => vec!["checkout", &name],
-                GitBranchOp::List => unreachable!(),
-            };
-            let out = git(&path, None, &args).await?;
-            terminal(w, "branch", &out).await
-        }
+        (GitBranchOp::Create, Some(name)) => vec!["branch", name],
+        (GitBranchOp::Delete, Some(name)) => vec!["branch", "-D", name],
+        (GitBranchOp::Checkout, Some(name)) => vec!["checkout", name],
+    };
+    let out = git(&path, None, &args).await?;
+    terminal(w, "branch", &out).await
+}
+
+/// Reports every local branch and the checked-out one.
+async fn list_branches<W: AsyncWrite + Unpin>(w: &mut W, path: &str) -> std::io::Result<()> {
+    let out = git(path, None, &["branch", "--format=%(refname:short)"]).await?;
+    if !out.status.success() {
+        return terminal(w, "branch", &out).await;
     }
+    let branches: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect();
+    let cur = git(path, None, &["rev-parse", "--abbrev-ref", "HEAD"]).await?;
+    let current = String::from_utf8_lossy(&cur.stdout).trim().to_string();
+    proto::write_frame(w, &Response::GitBranches { current, branches }).await
 }
 
 /// push/pull shared body: the egress guard, the bare verb, a terminal frame.
@@ -327,7 +325,6 @@ mod tests {
         let untracked = parse_file_line("? build/out.o").unwrap();
         assert_eq!(untracked.path, "build/out.o");
 
-        // Unmerged entries (kind "u") must surface as conflicted, not vanish.
         let conflict =
             parse_file_line("u UU N... 100644 100644 100644 100644 h1 h2 h3 conflict.rs").unwrap();
         assert_eq!(conflict.path, "conflict.rs");

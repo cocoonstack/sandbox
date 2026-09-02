@@ -1,39 +1,9 @@
 """Checkpoint claim redirect: mirrors the cluster redirect follow tested for
 Client.new in test_fault_matrix.py, applied to Checkpoint.new."""
 
-import socket
-import threading
-from http.server import HTTPServer
-
 import pytest
-from test_client import FakeNode
 
 from cocoonsandbox import APIError, Client
-
-
-@pytest.fixture
-def spawn_node():
-    servers = []
-
-    def spawn(routes):
-        handler = type("Node", (FakeNode,), {"routes": routes})
-        server = HTTPServer(("127.0.0.1", 0), handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        servers.append(server)
-        return f"127.0.0.1:{server.server_port}"
-
-    yield spawn
-    for server in servers:
-        server.shutdown()
-
-
-@pytest.fixture
-def dead_addr():
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return f"127.0.0.1:{port}"
 
 
 def test_checkpoint_new_follows_redirect(spawn_node):
@@ -61,8 +31,6 @@ def test_checkpoint_new_follows_redirect(spawn_node):
 
 
 def test_checkpoint_new_all_candidates_fail(spawn_node):
-    # The probed owner transiently fails (500); once exhausted, new() falls
-    # back to the origin, which this time fails definitively too.
     path = "/v1/checkpoints/ck_2/claim"
     broken = spawn_node({("POST", path): lambda body, p: (500, {"error": "boom"})})
 
@@ -82,8 +50,6 @@ def test_checkpoint_new_all_candidates_fail(spawn_node):
 
 
 def test_checkpoint_new_redirect_fallback_heals(spawn_node):
-    # The only probed owner is mid-heal (503); once exhausted, new() falls
-    # back to the origin, which heals (pulls the checkpoint) locally.
     path = "/v1/checkpoints/ck_5/claim"
     busy = spawn_node({("POST", path): lambda body, p: (503, {"error": "healing"})})
 
@@ -102,9 +68,6 @@ def test_checkpoint_new_redirect_fallback_heals(spawn_node):
 
 
 def test_checkpoint_new_redirect_never_yields_empty_id(spawn_node, dead_addr):
-    # Regression: new() used to hand a bare redirect reply straight to
-    # _handle_from, producing a Sandbox with no id/token. It must now follow
-    # the redirect and raise when no candidate answers.
     entry = spawn_node({("POST", "/v1/checkpoints/ck_3/claim"): lambda body, path: (200, {"redirect": [dead_addr]})})
 
     with pytest.raises(APIError):
@@ -112,8 +75,6 @@ def test_checkpoint_new_redirect_never_yields_empty_id(spawn_node, dead_addr):
 
 
 def test_checkpoint_new_second_level_redirect_fails(spawn_node):
-    # A compliant server never redirects a no_redirect retry; if one does
-    # anyway, it must be treated as a failed candidate rather than followed.
     path = "/v1/checkpoints/ck_4/claim"
     node_b = spawn_node({("POST", path): lambda body, p: (200, {"redirect": ["127.0.0.1:1"]})})
     entry = spawn_node({("POST", path): lambda body, p: (200, {"redirect": [node_b]})})

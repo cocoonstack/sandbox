@@ -1,7 +1,6 @@
 //! Connection handling: read the leading request frame, dispatch to a
 //! handler, and for exec forward subsequent client frames over a channel.
 
-use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::io::{AsyncBufRead, AsyncWrite};
@@ -29,7 +28,7 @@ impl State {
         }
     }
 
-    pub async fn serve<R, W>(self: &Arc<Self>, mut reader: R, mut writer: W) -> std::io::Result<()>
+    pub async fn serve<R, W>(&self, mut reader: R, mut writer: W) -> std::io::Result<()>
     where
         R: AsyncBufRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin,

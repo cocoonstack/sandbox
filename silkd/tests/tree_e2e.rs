@@ -1,7 +1,7 @@
 //! Whole-tree transfer E2E: push a tar stream in, pull a tar stream out,
 //! using the system tar to build/extract the reference archives.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
 use std::path::Path;
@@ -76,7 +76,6 @@ async fn pull_streams_a_tar_of_the_path() {
 
     let out = tempfile::tempdir().unwrap();
     sys_tar_extract(&archive, out.path());
-    // the archive carries the entry under its own name (proj/…)
     assert_eq!(
         std::fs::read(out.path().join("proj/x.txt")).unwrap(),
         b"hello-pull"
@@ -108,8 +107,6 @@ async fn push_then_pull_roundtrips_a_tree() {
 
 #[tokio::test]
 async fn push_truncated_stream_errors() {
-    // Send fs_push + a data frame but no data_end: tar gets a partial archive
-    // and the handler must report an error, not done.
     let dest = tempfile::tempdir().unwrap();
     let frames = exchange(&[
         json!({"op":"fs_push","dest":dest.path().join("p").to_str().unwrap()}).to_string(),
@@ -125,7 +122,6 @@ async fn push_truncated_stream_errors() {
 
 #[tokio::test]
 async fn push_bad_archive_reports_tar_failure() {
-    // A complete stream that isn't a valid tar → tar exits nonzero → Internal.
     let dest = tempfile::tempdir().unwrap();
     let frames = exchange(&[
         json!({"op":"fs_push","dest":dest.path().join("p").to_str().unwrap()}).to_string(),
@@ -139,7 +135,6 @@ async fn push_bad_archive_reports_tar_failure() {
 
 #[tokio::test]
 async fn pull_missing_path_errors() {
-    // Parent exists; the leaf itself is missing.
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("xyz");
     let frames =
@@ -195,8 +190,6 @@ async fn pull_dangling_symlink_archives_the_link() {
 
 #[tokio::test]
 async fn push_failure_leaves_dest_untouched() {
-    // Atomicity: a truncated stream must not mutate a populated dest at all —
-    // no partial files, no staging leftovers.
     let dest = tempfile::tempdir().unwrap();
     std::fs::write(dest.path().join("keep.txt"), b"KEEP").unwrap();
     std::fs::create_dir(dest.path().join("sub")).unwrap();
@@ -228,8 +221,6 @@ async fn push_failure_leaves_dest_untouched() {
 
 #[tokio::test]
 async fn push_overlays_existing_tree_and_cleans_staging() {
-    // tar semantics survive the staged merge: dirs merge recursively, an
-    // existing file is replaced, unrelated files survive, staging vanishes.
     let src = tempfile::tempdir().unwrap();
     std::fs::create_dir(src.path().join("sub")).unwrap();
     std::fs::write(src.path().join("sub/new.txt"), b"NEW").unwrap();

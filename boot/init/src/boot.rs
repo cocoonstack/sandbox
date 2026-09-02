@@ -43,6 +43,7 @@ impl Marks {
 }
 
 pub fn run() -> ! {
+    let mut marks = Marks::new();
     // Best-effort: if devtmpfs fails there is no console either; later
     // failures then power off silently, which is still the right end state.
     let _ = sys::mount(
@@ -65,7 +66,7 @@ pub fn run() -> ! {
         Ok(cfg) => cfg,
         Err(err) => sys::fatal(&err, cfg::debug_requested(&cmdline)),
     };
-    let mut marks = Marks::new();
+    marks.mark("early");
     if let Err(err) = assemble(&cfg, &mut marks) {
         sys::fatal(&err, cfg.debug);
     }
@@ -158,8 +159,9 @@ fn persist_network(cfg: &BootCfg) {
         eprintln!("sandbox-init: WARN: mkdir {dir}: {err}");
         return;
     }
-    for ip in &cfg.ips {
-        let Some(mac) = wait_nic_mac(&ip.device, NIC_TIMEOUT) else {
+    let devices: Vec<&str> = cfg.ips.iter().map(|ip| ip.device.as_str()).collect();
+    for (ip, mac) in cfg.ips.iter().zip(wait_nic_macs(&devices, NIC_TIMEOUT)) {
+        let Some(mac) = mac else {
             eprintln!(
                 "sandbox-init: WARN: NIC {} not found, static config skipped",
                 ip.device
@@ -173,21 +175,28 @@ fn persist_network(cfg: &BootCfg) {
     }
 }
 
-fn wait_nic_mac(device: &str, timeout: Duration) -> Option<String> {
-    let path = format!("/sys/class/net/{device}/address");
+/// Resolves every NIC's MAC in one sysfs sweep per poll iteration, against one
+/// shared deadline — a missing NIC must cost the timeout once, not once each.
+fn wait_nic_macs(devices: &[&str], timeout: Duration) -> Vec<Option<String>> {
     let deadline = Instant::now() + timeout;
+    let mut found: Vec<Option<String>> = vec![None; devices.len()];
     loop {
-        if let Ok(mac) = fs::read_to_string(&path) {
-            let mac = mac.trim_end().to_string();
-            if !mac.is_empty() && mac != "00:00:00:00:00:00" {
-                return Some(mac);
+        for (slot, device) in found.iter_mut().zip(devices) {
+            if slot.is_none() {
+                *slot = read_nic_mac(device);
             }
         }
-        if Instant::now() >= deadline {
-            return None;
+        if found.iter().all(Option::is_some) || Instant::now() >= deadline {
+            return found;
         }
         std::thread::sleep(POLL_INTERVAL);
     }
+}
+
+fn read_nic_mac(device: &str) -> Option<String> {
+    let mac = fs::read_to_string(format!("/sys/class/net/{device}/address")).ok()?;
+    let mac = mac.trim_end();
+    (!mac.is_empty() && mac != "00:00:00:00:00:00").then(|| mac.to_string())
 }
 
 fn mkdir_all(path: &str) -> Result<(), String> {

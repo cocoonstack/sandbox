@@ -20,6 +20,8 @@ use crate::sysutil;
 /// open in a surviving grandchild; a foreground client stalled past this
 /// window can also lose the not-yet-drained pipe tail (bounded, rare).
 const POST_EXIT_DRAIN: Duration = Duration::from_secs(2);
+/// How long an exited detached process stays in the table, so a late
+/// `logs`/`attach` still finds its ring instead of a bare not_found.
 const REAP_DELAY: Duration = Duration::from_secs(300);
 /// Foreground output buffer before the child is backpressured. Bounds how far
 /// ahead of a slow client the child may run, not a loss threshold.

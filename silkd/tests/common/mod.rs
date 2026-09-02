@@ -3,7 +3,7 @@
 //!
 //! Compiled into each test binary separately, so not every helper is used by
 //! every binary — allow the resulting dead_code rather than fragment this.
-#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 #![allow(dead_code)]
 
 use std::sync::Arc;
@@ -19,9 +19,8 @@ use tokio::task::JoinHandle;
 pub type FrameWriter = WriteHalf<DuplexStream>;
 pub type FrameLines = Lines<BufReader<ReadHalf<DuplexStream>>>;
 
-/// Opens a framed connection to a task serving `state`: the write half, a
-/// line reader over the response frames, and the serve task handle. The split
-/// halves let streaming verbs (pty, watch) interleave writes with reads.
+/// Opens a framed connection to a task serving `state`: write half, response
+/// lines, and the serve task handle, split so streaming verbs can interleave.
 pub fn connect(state: &Arc<State>) -> (FrameWriter, FrameLines, JoinHandle<std::io::Result<()>>) {
     let (client, server) = tokio::io::duplex(1 << 20);
     let state = Arc::clone(state);
@@ -36,9 +35,7 @@ pub async fn roundtrip(request_line: &str) -> Vec<Value> {
     request_on(&Arc::new(State::new()), &[request_line.to_string()]).await
 }
 
-/// Runs one or more request lines on a single connection against `state` (so a
-/// write/push can be followed by its data frames, and calls can be chained on
-/// a shared state), returning the response frames.
+/// Runs request lines on one connection against `state`, returning the frames.
 pub async fn request_on(state: &Arc<State>, lines: &[String]) -> Vec<Value> {
     let (mut cw, mut out, handle) = connect(state);
     for line in lines {
@@ -93,8 +90,7 @@ pub fn stdout_body(frames: &[Value]) -> String {
     String::from_utf8_lossy(&payload(frames, "stdout")).into_owned()
 }
 
-/// A `data`-frame stream (16K chunks) terminated by `data_end`, for feeding
-/// fs.write / fs.push.
+/// A `data`-frame stream (16K chunks) terminated by `data_end`.
 pub fn data_frames(bytes: &[u8]) -> Vec<String> {
     let mut lines: Vec<String> = bytes
         .chunks(16 * 1024)

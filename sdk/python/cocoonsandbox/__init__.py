@@ -11,7 +11,7 @@ checkpoints, release it. stdlib-only.
 
 from .checkpoint import Checkpoint
 from .client import Client
-from .errors import APIError, ExitError, ProtocolError, SandboxError, SilkdError
+from .errors import APIError, ExitError, ProtocolError, SandboxError, SilkdError, StreamTimeout
 from .sandbox import Lsp, PortConn, Pty, Sandbox, Session, Watcher
 from .template import Template
 
@@ -28,6 +28,7 @@ __all__ = [
     "SandboxError",
     "Session",
     "SilkdError",
+    "StreamTimeout",
     "Template",
     "Watcher",
 ]

@@ -9,19 +9,20 @@
 //! server's stdin, as in port_forward); `lsp_stop` kills it. v1 is
 //! single-shot per server: the stream ending — clean or dropped — reaps the
 //! server, since an LSP stream loses frame sync on any mid-request cut and a
-//! resynced reattach is not worth the failure surface. The id and `lsp_stop`
+//! resynced reattach is not worth the failure surface. A server no
+//! `lsp_request` ever attaches is reaped on a TTL. The id and `lsp_stop`
 //! still earn their place: `lsp_start` for several languages yields several
 //! ids attached concurrently, and `lsp_stop` tears one down early. The base
 //! image ships no manifests, so `lsp_start` for any language there answers a
 //! typed `not_found` naming the flavor that provides one.
 
 use std::collections::HashMap;
-use std::os::unix::fs::OpenOptionsExt;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
 
@@ -29,6 +30,10 @@ use crate::proto::{self, ErrorKind, Request, Response};
 use crate::sysutil;
 
 const MANIFEST_DIR: &str = "/etc/silkd/lsp.d";
+
+/// A started server nothing attaches is reaped after this: a client that dies
+/// between the calls must not pin a 1-2 GB language server for the VM's life.
+const ATTACH_TTL: Duration = Duration::from_secs(300);
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -51,7 +56,7 @@ impl Broker {
         language: &str,
         root: Option<&str>,
     ) -> std::io::Result<()> {
-        let argv = match read_manifest(language) {
+        let argv = match read_manifest(language).await {
             Some(argv) if !argv.is_empty() => argv,
             _ => {
                 return proto::error_frame(
@@ -82,13 +87,13 @@ impl Broker {
                 .await;
         };
         let server = Server {
-            child: Arc::new(tokio::sync::Mutex::new(child)),
-            stdin: Arc::new(tokio::sync::Mutex::new(Some(stdin))),
-            stdout: Arc::new(tokio::sync::Mutex::new(Some(stdout))),
+            child,
+            stdin: Some(stdin),
+            stdout: Some(stdout),
         };
 
         let id = format!("lsp-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
-        crate::sysutil::lock(&self.inner).insert(id.clone(), server);
+        sysutil::lock(&self.inner).insert(id.clone(), server);
 
         // If the client is already gone, don't leak the server we just spawned.
         if let Err(e) = proto::write_frame(
@@ -102,6 +107,11 @@ impl Broker {
             self.reap(&id).await;
             return Err(e);
         }
+        let broker = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(ATTACH_TTL).await;
+            broker.reap_unattached(&id).await;
+        });
         Ok(())
     }
 
@@ -115,21 +125,20 @@ impl Broker {
         w: &mut W,
         server_id: &str,
     ) -> std::io::Result<()> {
-        let found = crate::sysutil::lock(&self.inner).get(server_id).cloned();
-        let server = match found {
-            Some(s) => s,
+        let taken = sysutil::lock(&self.inner)
+            .get_mut(server_id)
+            .map(|s| s.stdout.take().zip(s.stdin.take()));
+        let (stdout, stdin) = match taken {
             None => return proto::error_frame(w, ErrorKind::NotFound, "no such lsp server").await,
-        };
-        let stdout = match server.stdout.lock().await.take() {
-            Some(out) => out,
-            None => {
+            Some(None) => {
                 return proto::error_frame(w, ErrorKind::BadRequest, "lsp server already attached")
                     .await;
             }
+            Some(Some(stdio)) => stdio,
         };
         proto::write_frame(w, &Response::Ready).await?;
 
-        let feed = tokio::spawn(feed_stdin(client, server.stdin.clone()));
+        let feed = tokio::spawn(feed_stdin(client, stdin));
         let res = pump_stdout(stdout, w).await;
         // The session ends with this connection: stop feeding and reap the
         // server. Aborting is safe here — we are killing the child, so a
@@ -155,50 +164,54 @@ impl Broker {
     /// reap removes a server from the table and kills + waits its child (no
     /// zombie survives), reporting whether it was there.
     async fn reap(&self, server_id: &str) -> bool {
-        let removed = crate::sysutil::lock(&self.inner).remove(server_id);
+        let removed = sysutil::lock(&self.inner).remove(server_id);
+        match removed {
+            Some(server) => {
+                kill(server).await;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// reap for a server no `lsp_request` ever attached; one that is attached
+    /// (its stdout taken) belongs to that connection and is left alone.
+    async fn reap_unattached(&self, server_id: &str) {
+        let removed = {
+            let mut table = sysutil::lock(&self.inner);
+            match table.get(server_id) {
+                Some(server) if server.stdout.is_some() => table.remove(server_id),
+                _ => None,
+            }
+        };
         if let Some(server) = removed {
-            let mut child = server.child.lock().await;
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            true
-        } else {
-            false
+            kill(server).await;
         }
     }
 }
 
-/// One running language server: child + stdio, shared so `lsp_request` reads
-/// stdout, `feed_stdin` writes stdin, and `reap` kills the child. stdin is
-/// Option so `feed_stdin` can drop it to half-close, like stdout for attach.
-#[derive(Clone)]
+/// One running language server. `lsp_request` takes both stdio halves, so a
+/// present stdout is also the flag that no connection has attached yet.
 struct Server {
-    child: Arc<tokio::sync::Mutex<Child>>,
-    stdin: Arc<tokio::sync::Mutex<Option<ChildStdin>>>,
-    stdout: Arc<tokio::sync::Mutex<Option<ChildStdout>>>,
+    child: Child,
+    stdin: Option<ChildStdin>,
+    stdout: Option<ChildStdout>,
 }
 
-async fn feed_stdin(
-    mut client: mpsc::Receiver<Request>,
-    stdin: Arc<tokio::sync::Mutex<Option<ChildStdin>>>,
-) {
+async fn kill(mut server: Server) {
+    let _ = server.child.start_kill();
+    let _ = server.child.wait().await;
+}
+
+async fn feed_stdin(mut client: mpsc::Receiver<Request>, mut stdin: ChildStdin) {
     while let Some(req) = client.recv().await {
-        match req {
-            Request::Data { data } => {
-                let mut guard = stdin.lock().await;
-                let Some(w) = guard.as_mut() else { return };
-                if w.write_all(&data).await.is_err() || w.flush().await.is_err() {
-                    return;
-                }
-            }
-            // DataEnd half-closes, aligned with port_forward: dropping stdin
-            // delivers EOF so the server can flush remaining output and exit
-            // (stdout then EOFs -> Done -> reap). A stray non-data frame gets
-            // the same close — the writer belongs to the stdout pump, so
-            // there is no channel to answer an error frame on.
-            _ => {
-                stdin.lock().await.take();
-                return;
-            }
+        // Anything but data half-closes by dropping stdin, aligned with
+        // port_forward: the server sees EOF, flushes, and exits (stdout then
+        // EOFs -> Done -> reap). A stray frame gets the same close, since the
+        // writer belongs to the stdout pump.
+        let Request::Data { data } = req else { return };
+        if stdin.write_all(&data).await.is_err() || stdin.flush().await.is_err() {
+            return;
         }
     }
 }
@@ -219,19 +232,20 @@ fn manifest_dir() -> String {
     std::env::var("SILKD_LSP_DIR").unwrap_or_else(|_| MANIFEST_DIR.to_string())
 }
 
-fn read_manifest(language: &str) -> Option<Vec<String>> {
+async fn read_manifest(language: &str) -> Option<Vec<String>> {
     if language.is_empty() || language.contains(['/', '\\', '\0']) || language.contains("..") {
         return None; // never let a language name escape the manifest dir
     }
     // O_NOFOLLOW: a symlink planted inside lsp.d must not read a target
     // outside it.
-    let mut f = std::fs::OpenOptions::new()
+    let mut f = tokio::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW)
         .open(format!("{}/{language}", manifest_dir()))
+        .await
         .ok()?;
     let mut raw = String::new();
-    std::io::Read::read_to_string(&mut f, &mut raw).ok()?;
+    f.read_to_string(&mut raw).await.ok()?;
     let argv: Vec<String> = raw.split_whitespace().map(str::to_string).collect();
     (!argv.is_empty()).then_some(argv)
 }

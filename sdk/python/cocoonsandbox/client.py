@@ -60,7 +60,10 @@ class Client:
         mesh peer concurrently, binding to whichever confirms ownership
         first — one dead peer must not cost its full timeout."""
         def probe(addr: str) -> Sandbox:
-            reply = self._request(addr, "GET", f"/v1/sandboxes/{id}/owner", None, "owner", bearer=token)
+            # Bounded like _peers: a scatter loser must not hold a socket for
+            # the full client timeout after the winner has answered.
+            reply = self._request(addr, "GET", f"/v1/sandboxes/{id}/owner", None, "owner",
+                                  bearer=token, timeout=min(_PEERS_TIMEOUT, self.timeout))
             return Sandbox(client=self, id=id, token=token,
                            owner=reply.get("owner_addr") or addr)
 
@@ -296,9 +299,8 @@ def _redirect_fallback(origin: str, candidates: list, post, verb: str):
         except APIError as origin_exc:
             # Both halves matter to whoever reads this: the peers' failure says
             # why the claim left the origin, the origin's why returning did not help.
-            origin_exc.message = f"{origin_exc.message} (after redirect targets failed: {exc.message})"
-            origin_exc.args = (f"{verb}: {origin_exc.message} (HTTP {origin_exc.status})",)
-            raise
+            combined = f"{origin_exc.message} (after redirect targets failed: {exc.message})"
+            raise APIError(verb, origin_exc.status, combined) from origin_exc
 
 
 def _scatter(addrs, probe):

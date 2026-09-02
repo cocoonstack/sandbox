@@ -1,7 +1,7 @@
 //! git verb E2E against a real git binary in temp repos. Local verbs run on
 //! any host; the none-lane guard is exercised via the test lane override.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)] // test code, like #[cfg(test)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
 use common::{exchange, type_of};
@@ -39,7 +39,6 @@ async fn add_commit_status_reports_structured_state() {
     let p = repo.path().to_str().unwrap();
     std::fs::write(repo.path().join("a.txt"), "hello\n").unwrap();
 
-    // Untracked file shows in status.
     let st = exchange(&[json!({"op":"git_status","path":p}).to_string()]).await;
     assert_eq!(type_of(&st[0]), "git_status_result");
     assert_eq!(st[0]["branch"], "main");
@@ -50,7 +49,6 @@ async fn add_commit_status_reports_structured_state() {
             .any(|f| f["path"] == "a.txt" && f["staged"] == "?")
     );
 
-    // Stage and commit; a hash comes back.
     let add = exchange(&[json!({"op":"git_add","path":p,"files":["a.txt"]}).to_string()]).await;
     assert_eq!(type_of(last(&add)), "done");
     let commit = exchange(&[json!({
@@ -61,7 +59,6 @@ async fn add_commit_status_reports_structured_state() {
     assert_eq!(type_of(&commit[0]), "git_commit_result");
     assert_eq!(commit[0]["hash"].as_str().unwrap().len(), 40);
 
-    // Clean tree now.
     let st2 = exchange(&[json!({"op":"git_status","path":p}).to_string()]).await;
     assert!(
         st2[0]["files"].as_array().unwrap().is_empty(),
@@ -103,7 +100,7 @@ async fn branch_create_list_checkout() {
 
 #[tokio::test]
 async fn commit_failure_surfaces_git_error() {
-    let repo = init_repo(); // nothing staged
+    let repo = init_repo();
     let p = repo.path().to_str().unwrap();
     let frames = exchange(&[json!({
         "op":"git_commit","path":p,"message":"empty","author":"Dev <dev@example.com>"
@@ -113,10 +110,8 @@ async fn commit_failure_surfaces_git_error() {
     assert_eq!(type_of(&frames[0]), "error");
 }
 
-// One test owns the lane override so the two cases cannot fight over it.
 #[tokio::test]
 async fn clone_lane_behavior() {
-    // none lane refuses with a typed error pointing at fs.push.
     silkd::net::override_egress_for_tests(Some(false));
     let none = exchange(&[json!({
         "op":"git_clone","url":"https://example.com/x.git","path":"/tmp/silkd-x"
@@ -127,7 +122,6 @@ async fn clone_lane_behavior() {
     assert_eq!(none[0]["kind"], "unimplemented");
     assert!(none[0]["message"].as_str().unwrap().contains("fs.push"));
 
-    // egress lane clones (exercised against a local source repo).
     let src = init_repo();
     std::fs::write(src.path().join("r.txt"), "body\n").unwrap();
     git(src.path(), &["add", "r.txt"]);
