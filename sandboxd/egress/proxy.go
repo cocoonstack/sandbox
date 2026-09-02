@@ -12,9 +12,12 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
+
+const idleConnTimeout = 90 * time.Second
 
 // hopHeaders are hop-by-hop and proxy-scoped headers this hop owns: stripped
 // from forwarded requests and from relayed responses rather than passed on.
@@ -85,15 +88,12 @@ func New(sandbox, tenant string, policy Evaluator, secrets Secrets, ca *CA, dial
 		dial:    dial,
 		// The stdlib default of 2 idle conns per host re-dials bursty
 		// same-host plaintext traffic.
-		tr:    &http.Transport{DialContext: dial, MaxIdleConnsPerHost: 8},
+		tr:    &http.Transport{DialContext: dial, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout},
 		conns: map[net.Conn]struct{}{},
 	}
 	if ca != nil {
-		p.mitmTr = &http.Transport{
-			DialContext:         dial,
-			TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
-			MaxIdleConnsPerHost: 8,
-		}
+		p.mitmTr = p.tr.Clone()
+		p.mitmTr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		p.leaves = map[string]*tls.Certificate{}
 	}
 	return p
@@ -117,6 +117,10 @@ func (p *Proxy) Close() {
 	p.connMu.Unlock()
 	for _, conn := range conns {
 		_ = conn.Close()
+	}
+	p.tr.CloseIdleConnections()
+	if p.mitmTr != nil {
+		p.mitmTr.CloseIdleConnections()
 	}
 }
 
