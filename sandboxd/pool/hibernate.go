@@ -162,7 +162,7 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 		return "", fmt.Errorf("wake %s: persist claims: %w", sb.ID, err)
 	}
 	m.dropStale(ctx, sb)
-	// the resume consumed the memory image; reclaim its disk off the wake-return path
+	// the resume consumed the memory image; reclaim its disk off the wake-return path (the randHex suffix keeps a re-hibernate from reusing the name)
 	go m.dropSnap(ctx, snap)
 	return sock, nil
 }

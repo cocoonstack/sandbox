@@ -17,7 +17,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// Reconcile aligns claims and VMs after a restart; it must run before the server starts.
+// Reconcile aligns claims and VMs after a restart; it runs before the server because it swaps in fresh records that would bypass in-flight Transition locks.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	claims, err := m.store.load()
 	if err != nil {

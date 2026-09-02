@@ -175,7 +175,7 @@ func (m *Manager) pooledHash(hash string) bool {
 	return false
 }
 
-// recLock takes the per-record lock and a live reference; pair every call with recDone.
+// recLock takes the per-record lock and a live reference (pair with recDone); clones and wakes hold it shared so a delete or re-publish never runs under an in-flight read.
 func (m *Manager) recLock(id string) *sync.RWMutex {
 	m.recLocksMu.Lock()
 	defer m.recLocksMu.Unlock()

@@ -294,7 +294,7 @@ type Manager struct {
 	tplMu  sync.Mutex
 	tplSet map[string]string
 
-	// recLocks serializes same-id record mutations; an entry evicts only when no holder remains.
+	// recLocks serializes same-id record mutations; an entry evicts only when no holder remains, never on a bare delete, since a peer heal can republish the id.
 	recLocks   map[string]*sync.RWMutex
 	recLocksMu sync.Mutex
 	recRefs    map[string]int

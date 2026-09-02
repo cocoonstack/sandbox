@@ -187,6 +187,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.deleteKeys(ctx, []string{metaKey})
 }
 
+// SweepStaging clears local staging residue at startup; objects orphaned by a crash before meta.json are reclaimed by the bucket's S3 lifecycle rule (see deploy).
 func (s *Store) SweepStaging() error { return utils.RemoveDirEntries(s.staging, nil) }
 
 func (s *Store) SweepGenerations() error { return nil }
