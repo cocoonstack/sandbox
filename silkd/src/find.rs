@@ -37,7 +37,7 @@ impl MatchBudget {
         }
     }
 
-    /// Blocks the walking thread until n bytes fit; false once the writer is gone.
+    /// Blocks until n bytes fit or the budget closes.
     fn reserve(&self, n: usize) -> bool {
         let n = n as u32;
         if let Ok(permit) = self.bytes.try_acquire_many(n) {
