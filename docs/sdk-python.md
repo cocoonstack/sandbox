@@ -367,6 +367,8 @@ path on the no-network lane.
 
 ```python
 matches = sb.find("/work", r"TODO|FIXME", glob="*.py")
+from contextlib import closing
+
 with closing(sb.find_iter("/work", r"TODO")) as stream:   # streamed; closing ends the walk in the guest
     for m in stream:
         if m["line"] > 100:

@@ -67,9 +67,10 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
-    /// Walks `root` depth-first, sending a `match` frame per matching line. A
-    /// failure on the root propagates; deeper ones skip only that directory.
-    fn run(&self, root: PathBuf) -> std::io::Result<()> {
+    /// Walks `root` depth-first, sending a `match` frame per matching line; false
+    /// means the receiver went away. A failure on the root propagates; deeper
+    /// ones skip only that directory.
+    fn run(&self, root: PathBuf) -> std::io::Result<bool> {
         let mut stack = vec![root];
         let mut root = true;
         while let Some(dir) = stack.pop() {
@@ -79,6 +80,9 @@ impl Walk<'_> {
                 Err(_) => continue,
             };
             for ent in rd {
+                if self.tx.is_closed() {
+                    return Ok(false);
+                }
                 let ent = match ent {
                     Ok(ent) => ent,
                     Err(e) if root => return Err(e),
@@ -91,12 +95,12 @@ impl Walk<'_> {
                 if ft.is_dir() {
                     stack.push(p);
                 } else if ft.is_file() && name_matches(&p, self.name_re) && !self.scan_file(&p) {
-                    return Ok(());
+                    return Ok(false);
                 }
             }
             root = false;
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Scans one file, reporting whether the receiver is still listening. The size
@@ -269,7 +273,7 @@ where
         return Err(e);
     }
     match walked {
-        Ok(()) => proto::write_frame(w, &Response::Done).await,
+        Ok(_) => proto::write_frame(w, &Response::Done).await,
         Err(e) => err_frame(w, &e, "read_dir").await,
     }
 }
@@ -394,6 +398,24 @@ mod tests {
         drop(w);
         let out = reader.await.expect("join");
         assert!(!out.contains("\"type\":\"done\""), "{out}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn walk_stops_at_the_next_entry_once_the_receiver_is_gone() {
+        let dir = tree(50, 1).await;
+        let re = Regex::new("needle").expect("regex");
+        let (tx, rx) = mpsc::channel::<Response>(MATCH_QUEUE);
+        drop(rx);
+        let budget = MatchBudget::new(MATCH_QUEUE_BYTES, Handle::current());
+        let walk = Walk {
+            re: &re,
+            name_re: None,
+            tx: &tx,
+            budget: &budget,
+        };
+        let completed =
+            tokio::task::block_in_place(|| walk.run(dir.path().to_path_buf())).expect("walk");
+        assert!(!completed);
     }
 
     #[tokio::test(flavor = "multi_thread")]
