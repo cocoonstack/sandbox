@@ -348,12 +348,12 @@ func (m *Manager) retryArchiveDelete(ctx context.Context, ckID string) {
 	l.Unlock()
 	if err != nil {
 		m.recDone(ckID)
-		log.WithFunc("pool.retryArchiveDeletes").Warnf(ctx, "delete %s: %v", ckID, err)
+		log.WithFunc("pool.retryArchiveDelete").Warnf(ctx, "delete %s: %v", ckID, err)
 		return
 	}
 	m.recDoneEvict(ckID)
 	if err := m.clearArchiveCk(ckID); err != nil {
-		log.WithFunc("pool.retryArchiveDeletes").Warnf(ctx, "clear %s: %v", ckID, err)
+		log.WithFunc("pool.retryArchiveDelete").Warnf(ctx, "clear %s: %v", ckID, err)
 	}
 }
 

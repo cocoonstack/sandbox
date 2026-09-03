@@ -39,6 +39,8 @@ type NodeState struct {
 	Digest    string         `json:"digest,omitempty"`    // cluster-invariant config digest
 }
 
+type nodeMatch func(NodeState) bool
+
 // Mesh is the node's view of the cluster and its own gossiped state.
 type Mesh struct {
 	ml        *memberlist.Memberlist
@@ -223,7 +225,7 @@ func (m *Mesh) Shutdown() error {
 	return m.ml.Shutdown()
 }
 
-func (m *Mesh) warmCandidates(keyHash string, match func(NodeState) bool) []string {
+func (m *Mesh) warmCandidates(keyHash string, match nodeMatch) []string {
 	m.mu.Lock()
 	type cand struct {
 		addr string
@@ -262,7 +264,7 @@ func (m *Mesh) persistEpoch(epoch uint64) error {
 	return storeEpoch(m.epochPath, epoch)
 }
 
-func (m *Mesh) owners(match func(NodeState) bool) []string {
+func (m *Mesh) owners(match nodeMatch) []string {
 	m.mu.Lock()
 	var owners []string
 	for id, st := range m.view {

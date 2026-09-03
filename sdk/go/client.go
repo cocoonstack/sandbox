@@ -306,10 +306,14 @@ func retryTransient(err error) bool {
 	}
 }
 
+type claimEncoder func(noRedirect, requirePromoted bool) ([]byte, error)
+
+type claimPoster func(addr string, body []byte) (claimResponse, error)
+
 // claimFollow runs the claim protocol from origin: claim there, and on a
 // redirect re-encode with no_redirect and follow via redirectFallback. Only
 // the fallback error carries the verb — first-contact errors return raw.
-func claimFollow(origin, verb string, encode func(noRedirect, requirePromoted bool) ([]byte, error), claimAt func(addr string, body []byte) (claimResponse, error)) (string, claimResponse, error) {
+func claimFollow(origin, verb string, encode claimEncoder, claimAt claimPoster) (string, claimResponse, error) {
 	body, err := encode(false, false)
 	if err != nil {
 		return "", claimResponse{}, err

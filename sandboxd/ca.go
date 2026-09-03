@@ -102,7 +102,6 @@ func writeCAFiles(dir, name string, certPEM, keyPEM []byte, force bool) error {
 	return nil
 }
 
-// writeKeyMaterial writes path with O_EXCL unless force.
 func writeKeyMaterial(path string, data []byte, perm os.FileMode, force bool) error {
 	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	if !force {

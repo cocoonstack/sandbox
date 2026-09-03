@@ -158,7 +158,6 @@ func TestEveryVerbHasAFixture(t *testing.T) {
 	}
 }
 
-// Twin of silkd's enum_value_sets_match_fixture; the lists are order-sensitive.
 func TestEnumValueSetsMatchFixture(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(fixtureDir, "enums.json"))
 	if err != nil {
@@ -244,8 +243,6 @@ func TestBulkDecodeStrictShape(t *testing.T) {
 	}
 }
 
-// TestTagAfterOtherKeys pins the tokenizer fallback: producers emit the tag
-// first, but the protocol never promised order.
 func TestTagAfterOtherKeys(t *testing.T) {
 	resp, err := DecodeResponse([]byte(`{"data":"aGk=","type":"stdout"}`))
 	if err != nil {

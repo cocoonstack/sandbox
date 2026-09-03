@@ -196,6 +196,16 @@ type Checkpoint struct {
 	Archive bool `json:"archive,omitempty"`
 }
 
+// VMNetConfig is the per-NIC host tap the egress-lane nft lock binds.
+type VMNetConfig struct {
+	TAP string `json:"tap"`
+}
+
+// VMConfig is the config subset of VMRecord.
+type VMConfig struct {
+	Name string `json:"name"`
+}
+
 // VMRecord is the subset of cocoon's VM records the control plane reads.
 type VMRecord struct {
 	State          string        `json:"state"`
@@ -211,16 +221,6 @@ func (r VMRecord) TapDevice() string {
 		return ""
 	}
 	return r.NetworkConfigs[0].TAP
-}
-
-// VMNetConfig is the per-NIC host tap the egress-lane nft lock binds.
-type VMNetConfig struct {
-	TAP string `json:"tap"`
-}
-
-// VMConfig is the config subset of VMRecord.
-type VMConfig struct {
-	Name string `json:"name"`
 }
 
 // Volume is one dataset mount; Mode is normalized to "" (read-only) or VolumeModeRW.

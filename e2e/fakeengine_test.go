@@ -16,8 +16,6 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
 )
 
-// fakeEngine replaces only the cocoon CLI: every "VM" is a silkdtest daemon
-// behind a real hybrid-vsock UDS, so the data plane runs production code.
 type fakeEngine struct {
 	real *engine.Engine
 	dir  string
@@ -81,8 +79,6 @@ func (f *fakeEngine) SnapshotRemove(_ context.Context, _ string) error { return 
 
 func (f *fakeEngine) SnapshotList(_ context.Context) ([]string, error) { return nil, nil }
 
-// Hibernate closes the VM's silkd listener and Restore brings a fresh one up,
-// mirroring the stop/resume the control plane observes.
 func (f *fakeEngine) Hibernate(ctx context.Context, name, _ string) error {
 	return f.Remove(ctx, name)
 }
@@ -143,8 +139,6 @@ func (f *fakeEngine) SyncGuest(_ context.Context, _ string) error {
 	return nil
 }
 
-// Removals join the trace only for VMs that carried a volume, so warm-pool
-// churn cannot perturb the order.
 func (f *fakeEngine) volumeOpsLog() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
