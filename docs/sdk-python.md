@@ -154,7 +154,7 @@ before provisioning.
 
 ```python
 sb.hibernate()                        # snapshot + stop atomically; memory freed
-sb.exec("cat", "/tmp/state")          # any later call wakes it transparently
+sb.exec("cat", "/tmp/state")          # the next call that reaches the guest wakes it transparently
 ```
 
 `hibernate` snapshots the VM and stops it in one atomic step. The handle

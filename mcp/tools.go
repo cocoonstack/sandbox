@@ -354,7 +354,7 @@ func toolHibernate(ctx context.Context, s *server, raw json.RawMessage) (string,
 	if err := sb.Hibernate(ctx); err != nil {
 		return "", err
 	}
-	return "hibernated (any later call wakes it transparently)", nil
+	return "hibernated (the next call that reaches the guest wakes it transparently)", nil
 }
 
 type promoteArgs struct {

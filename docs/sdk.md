@@ -203,7 +203,7 @@ before provisioning.
 
 ```go
 err := sb.Hibernate(ctx)   // snapshot + stop atomically; memory freed
-// ... any later call wakes it transparently:
+// ... the next call that reaches the guest wakes it transparently:
 out, err := sb.Exec(ctx, "cat", "/tmp/state")   // sessions & memory intact
 ```
 

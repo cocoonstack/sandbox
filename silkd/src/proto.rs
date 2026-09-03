@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -261,7 +262,7 @@ pub enum Response {
         sessions: Vec<String>,
     },
     Match {
-        file: String,
+        file: Arc<str>,
         line: u64,
         content: String,
     },
@@ -368,6 +369,13 @@ pub struct ProcInfo {
     pub started_at_epoch_secs: u64,
 }
 
+/// Why a `data`/`data_end` upload stream ended without a clean `data_end`.
+pub enum FeedError {
+    Io(io::Error, &'static str),
+    Protocol,
+    Truncated,
+}
+
 /// Reads one newline-terminated frame (newline stripped); None on clean EOF.
 /// One-shot callers (the leading request frame) use this; streaming loops use
 /// `read_frame_into` so bulk uploads pay no per-frame growth reallocations.
@@ -403,26 +411,6 @@ pub async fn read_frame_into<R: AsyncBufRead + Unpin>(
     }
 }
 
-fn cap_check(len: usize) -> io::Result<()> {
-    if len > MAX_FRAME {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "frame exceeds cap",
-        ));
-    }
-    Ok(())
-}
-
-/// Renders one newline-terminated frame onto `buf`, holding the write side to
-/// the same cap the read side enforces — every client rejects a larger frame.
-fn render_frame(buf: &mut Vec<u8>, resp: &Response) -> io::Result<()> {
-    let start = buf.len();
-    serde_json::to_writer(&mut *buf, resp).map_err(io::Error::other)?;
-    cap_check(buf.len() - start)?;
-    buf.push(b'\n');
-    Ok(())
-}
-
 pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, resp: &Response) -> io::Result<()> {
     let mut buf = Vec::new();
     render_frame(&mut buf, resp)?;
@@ -431,7 +419,8 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, resp: &Response) -> i
 }
 
 /// Writes `frames` as one buffered batch, so a burst costs one write syscall
-/// instead of one per frame. `buf` is reused across calls.
+/// instead of one per frame; a batch past one frame cap flushes early to bound
+/// the staging buffer. `buf` is reused across calls.
 pub async fn write_frames<W: AsyncWrite + Unpin>(
     w: &mut W,
     buf: &mut Vec<u8>,
@@ -440,6 +429,10 @@ pub async fn write_frames<W: AsyncWrite + Unpin>(
     buf.clear();
     for frame in frames {
         render_frame(buf, frame)?;
+        if buf.len() > MAX_FRAME {
+            w.write_all(buf).await?;
+            buf.clear();
+        }
     }
     w.write_all(buf).await?;
     w.flush().await
@@ -541,13 +534,6 @@ where
     }
 }
 
-/// Why a `data`/`data_end` upload stream ended without a clean `data_end`.
-pub enum FeedError {
-    Io(io::Error, &'static str),
-    Protocol,
-    Truncated,
-}
-
 /// Feeds client `data` frames into `sink` until `data_end`. Shared by fs.write
 /// (sink = temp file) and fs.push (sink = tar stdin); the caller flushes/closes
 /// the sink and, on error, reports via `write_feed_error`.
@@ -594,6 +580,26 @@ pub async fn write_feed_error<W: AsyncWrite + Unpin>(w: &mut W, err: FeedError) 
             .await
         }
     }
+}
+
+fn cap_check(len: usize) -> io::Result<()> {
+    if len > MAX_FRAME {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "frame exceeds cap",
+        ));
+    }
+    Ok(())
+}
+
+/// Renders one newline-terminated frame onto `buf`, holding the write side to
+/// the same cap the read side enforces — every client rejects a larger frame.
+fn render_frame(buf: &mut Vec<u8>, resp: &Response) -> io::Result<()> {
+    let start = buf.len();
+    serde_json::to_writer(&mut *buf, resp).map_err(io::Error::other)?;
+    cap_check(buf.len() - start)?;
+    buf.push(b'\n');
+    Ok(())
 }
 
 mod b64 {
@@ -661,7 +667,7 @@ mod tests {
             b"abc".to_vec(),
             (0u8..=255).collect(),
         ];
-        let mut frame = Vec::new(); // shared across sizes, as producers reuse it
+        let mut frame = Vec::new();
         for kind in ["data", "stdout", "stderr"] {
             for payload in &payloads {
                 let mut rendered = Vec::new();
@@ -698,7 +704,6 @@ mod tests {
         assert_eq!(got, want);
     }
 
-    /// Run with: cargo test --release -- --ignored --nocapture bench_chunk_render
     #[tokio::test]
     #[ignore]
     async fn bench_chunk_render_old_vs_new() {
@@ -733,8 +738,6 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
-    /// Twin of the Go TestEnumValueSetsMatchFixture: pins every wire enum's
-    /// ordered value list to enums.json, which frame fixtures cannot.
     #[test]
     fn enum_value_sets_match_fixture() {
         fn rendered<T: serde::Serialize>(variants: &[T]) -> Vec<String> {
