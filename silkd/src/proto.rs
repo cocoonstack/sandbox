@@ -369,6 +369,13 @@ pub struct ProcInfo {
     pub started_at_epoch_secs: u64,
 }
 
+/// Why a `data`/`data_end` upload stream ended without a clean `data_end`.
+pub enum FeedError {
+    Io(io::Error, &'static str),
+    Protocol,
+    Truncated,
+}
+
 /// Reads one newline-terminated frame (newline stripped); None on clean EOF.
 /// One-shot callers (the leading request frame) use this; streaming loops use
 /// `read_frame_into` so bulk uploads pay no per-frame growth reallocations.
@@ -402,26 +409,6 @@ pub async fn read_frame_into<R: AsyncBufRead + Unpin>(
         r.consume(n);
         cap_check(line.len())?;
     }
-}
-
-fn cap_check(len: usize) -> io::Result<()> {
-    if len > MAX_FRAME {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "frame exceeds cap",
-        ));
-    }
-    Ok(())
-}
-
-/// Renders one newline-terminated frame onto `buf`, holding the write side to
-/// the same cap the read side enforces — every client rejects a larger frame.
-fn render_frame(buf: &mut Vec<u8>, resp: &Response) -> io::Result<()> {
-    let start = buf.len();
-    serde_json::to_writer(&mut *buf, resp).map_err(io::Error::other)?;
-    cap_check(buf.len() - start)?;
-    buf.push(b'\n');
-    Ok(())
 }
 
 pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, resp: &Response) -> io::Result<()> {
@@ -547,13 +534,6 @@ where
     }
 }
 
-/// Why a `data`/`data_end` upload stream ended without a clean `data_end`.
-pub enum FeedError {
-    Io(io::Error, &'static str),
-    Protocol,
-    Truncated,
-}
-
 /// Feeds client `data` frames into `sink` until `data_end`. Shared by fs.write
 /// (sink = temp file) and fs.push (sink = tar stdin); the caller flushes/closes
 /// the sink and, on error, reports via `write_feed_error`.
@@ -600,6 +580,26 @@ pub async fn write_feed_error<W: AsyncWrite + Unpin>(w: &mut W, err: FeedError) 
             .await
         }
     }
+}
+
+fn cap_check(len: usize) -> io::Result<()> {
+    if len > MAX_FRAME {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "frame exceeds cap",
+        ));
+    }
+    Ok(())
+}
+
+/// Renders one newline-terminated frame onto `buf`, holding the write side to
+/// the same cap the read side enforces — every client rejects a larger frame.
+fn render_frame(buf: &mut Vec<u8>, resp: &Response) -> io::Result<()> {
+    let start = buf.len();
+    serde_json::to_writer(&mut *buf, resp).map_err(io::Error::other)?;
+    cap_check(buf.len() - start)?;
+    buf.push(b'\n');
+    Ok(())
 }
 
 mod b64 {
