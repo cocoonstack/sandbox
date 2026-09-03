@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -261,7 +262,7 @@ pub enum Response {
         sessions: Vec<String>,
     },
     Match {
-        file: String,
+        file: Arc<str>,
         line: u64,
         content: String,
     },
@@ -431,9 +432,8 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, resp: &Response) -> i
 }
 
 /// Writes `frames` as one buffered batch, so a burst costs one write syscall
-/// instead of one per frame; a batch past one frame cap flushes early, so the
-/// staging buffer never holds more than the cap plus one frame. `buf` is
-/// reused across calls.
+/// instead of one per frame; a batch past one frame cap flushes early to bound
+/// the staging buffer. `buf` is reused across calls.
 pub async fn write_frames<W: AsyncWrite + Unpin>(
     w: &mut W,
     buf: &mut Vec<u8>,
@@ -441,11 +441,10 @@ pub async fn write_frames<W: AsyncWrite + Unpin>(
 ) -> io::Result<()> {
     buf.clear();
     for frame in frames {
-        let start = buf.len();
         render_frame(buf, frame)?;
-        if start > 0 && buf.len() > MAX_FRAME {
-            w.write_all(&buf[..start]).await?;
-            buf.drain(..start);
+        if buf.len() > MAX_FRAME {
+            w.write_all(buf).await?;
+            buf.clear();
         }
     }
     w.write_all(buf).await?;

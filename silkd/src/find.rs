@@ -21,41 +21,112 @@ const FIND_MAX_FILE: u64 = 8 * 1024 * 1024;
 /// Match frames in flight between the walking thread and the writer.
 const MATCH_QUEUE: usize = 256;
 
-/// Bytes of match content in flight; the frame count alone lets 256 size-bound single-line files pin gigabytes.
+/// Bytes of match content in flight; 256 size-bound single-line frames would pin gigabytes.
 const MATCH_QUEUE_BYTES: usize = 8 * FIND_MAX_FILE as usize;
 
 struct MatchBudget {
     bytes: Semaphore,
-    cap: usize,
+    rt: Handle,
 }
 
 impl MatchBudget {
-    fn new(cap: usize) -> Self {
+    fn new(cap: usize, rt: Handle) -> Self {
         Self {
             bytes: Semaphore::new(cap),
-            cap,
+            rt,
         }
     }
 
     /// Blocks the walking thread until n bytes fit; false once the writer is gone.
     fn reserve(&self, n: usize) -> bool {
-        let n = n.min(self.cap) as u32;
+        let n = n as u32;
         if let Ok(permit) = self.bytes.try_acquire_many(n) {
             permit.forget();
             return true;
         }
-        Handle::current()
+        self.rt
             .block_on(self.bytes.acquire_many(n))
             .map(SemaphorePermit::forget)
             .is_ok()
     }
 
     fn release(&self, n: usize) {
-        self.bytes.add_permits(n.min(self.cap));
+        self.bytes.add_permits(n);
     }
 
     fn close(&self) {
         self.bytes.close();
+    }
+}
+
+struct Walk<'a> {
+    re: &'a Regex,
+    name_re: Option<&'a Regex>,
+    tx: &'a mpsc::Sender<Response>,
+    budget: &'a MatchBudget,
+}
+
+impl Walk<'_> {
+    /// Walks `root` depth-first, sending a `match` frame per matching line. A
+    /// failure on the root propagates; deeper ones skip only that directory.
+    fn run(&self, root: PathBuf) -> std::io::Result<()> {
+        let mut stack = vec![root];
+        let mut root = true;
+        while let Some(dir) = stack.pop() {
+            let rd = match std::fs::read_dir(&dir) {
+                Ok(rd) => rd,
+                Err(e) if root => return Err(e),
+                Err(_) => continue,
+            };
+            for ent in rd {
+                let ent = match ent {
+                    Ok(ent) => ent,
+                    Err(e) if root => return Err(e),
+                    Err(_) => break,
+                };
+                let Ok(ft) = ent.file_type() else {
+                    continue;
+                };
+                let p = ent.path();
+                if ft.is_dir() {
+                    stack.push(p);
+                } else if ft.is_file() && name_matches(&p, self.name_re) && !self.scan_file(&p) {
+                    return Ok(());
+                }
+            }
+            root = false;
+        }
+        Ok(())
+    }
+
+    /// Scans one file, reporting whether the receiver is still listening. The size
+    /// bound comes off the open handle, so the check and the read see one file.
+    fn scan_file(&self, path: &Path) -> bool {
+        let Ok(mut file) = std::fs::File::open(path) else {
+            return true;
+        };
+        if file.metadata().is_ok_and(|m| m.len() > FIND_MAX_FILE) {
+            return true;
+        }
+        let mut body = String::new();
+        if file.read_to_string(&mut body).is_err() {
+            return true;
+        }
+        let name: Arc<str> = path.to_string_lossy().into();
+        for (i, line) in body.lines().enumerate() {
+            if self.re.is_match(line) {
+                let frame = Response::Match {
+                    file: name.clone(),
+                    line: i as u64 + 1,
+                    content: line.to_string(),
+                };
+                if !self.budget.reserve(match_cost(&frame)) || self.tx.blocking_send(frame).is_err()
+                {
+                    return false;
+                }
+            }
+        }
+        true
     }
 }
 
@@ -138,16 +209,16 @@ async fn find_bounded<W: AsyncWrite + Unpin>(
     };
     // One blocking-pool dispatch for the whole tree, not three per file.
     let (tx, mut rx) = mpsc::channel::<Response>(MATCH_QUEUE);
-    let budget = Arc::new(MatchBudget::new(budget_bytes));
+    let budget = Arc::new(MatchBudget::new(budget_bytes, Handle::current()));
     let walker_budget = budget.clone();
     let walk = tokio::task::spawn_blocking(move || {
-        walk(
-            PathBuf::from(path),
-            &re,
-            name_re.as_ref(),
-            &tx,
-            &walker_budget,
-        )
+        Walk {
+            re: &re,
+            name_re: name_re.as_ref(),
+            tx: &tx,
+            budget: &walker_budget,
+        }
+        .run(PathBuf::from(path))
     });
     let mut batch = Vec::new();
     let mut buf = Vec::new();
@@ -164,13 +235,15 @@ async fn find_bounded<W: AsyncWrite + Unpin>(
     drop(rx);
     budget.close();
     let walked = walk.await.map_err(std::io::Error::other)?;
-    match failed {
-        Some(e) if e.kind() == std::io::ErrorKind::InvalidData => err_frame(w, &e, "find").await,
-        Some(e) => Err(e),
-        None => match walked {
-            Ok(()) => proto::write_frame(w, &Response::Done).await,
-            Err(e) => err_frame(w, &e, "read_dir").await,
-        },
+    if let Some(e) = failed {
+        if e.kind() == std::io::ErrorKind::InvalidData {
+            return err_frame(w, &e, "find").await;
+        }
+        return Err(e);
+    }
+    match walked {
+        Ok(()) => proto::write_frame(w, &Response::Done).await,
+        Err(e) => err_frame(w, &e, "read_dir").await,
     }
 }
 
@@ -178,73 +251,6 @@ async fn oversized(file: &str) -> bool {
     fs::metadata(file)
         .await
         .is_ok_and(|m| m.len() > FIND_MAX_FILE)
-}
-
-/// Walks `root` depth-first, sending a `match` frame per matching line. A
-/// failure on the root propagates; deeper ones skip only that directory.
-fn walk(
-    root: PathBuf,
-    re: &Regex,
-    name_re: Option<&Regex>,
-    tx: &mpsc::Sender<Response>,
-    budget: &MatchBudget,
-) -> std::io::Result<()> {
-    let mut stack = vec![root];
-    let mut root = true;
-    while let Some(dir) = stack.pop() {
-        let rd = match std::fs::read_dir(&dir) {
-            Ok(rd) => rd,
-            Err(e) if root => return Err(e),
-            Err(_) => continue,
-        };
-        for ent in rd {
-            let ent = match ent {
-                Ok(ent) => ent,
-                Err(e) if root => return Err(e),
-                Err(_) => break,
-            };
-            let Ok(ft) = ent.file_type() else {
-                continue;
-            };
-            let p = ent.path();
-            if ft.is_dir() {
-                stack.push(p);
-            } else if ft.is_file() && name_matches(&p, name_re) && !scan_file(&p, re, tx, budget) {
-                return Ok(());
-            }
-        }
-        root = false;
-    }
-    Ok(())
-}
-
-/// Scans one file, reporting whether the receiver is still listening. The size
-/// bound comes off the open handle, so the check and the read see one file.
-fn scan_file(path: &Path, re: &Regex, tx: &mpsc::Sender<Response>, budget: &MatchBudget) -> bool {
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return true;
-    };
-    if file.metadata().is_ok_and(|m| m.len() > FIND_MAX_FILE) {
-        return true;
-    }
-    let mut body = String::new();
-    if file.read_to_string(&mut body).is_err() {
-        return true;
-    }
-    let name = path.to_string_lossy();
-    for (i, line) in body.lines().enumerate() {
-        if re.is_match(line) {
-            let frame = Response::Match {
-                file: name.to_string(),
-                line: i as u64 + 1,
-                content: line.to_string(),
-            };
-            if !budget.reserve(match_cost(&frame)) || tx.blocking_send(frame).is_err() {
-                return false;
-            }
-        }
-    }
-    true
 }
 
 fn match_cost(frame: &Response) -> usize {
@@ -272,7 +278,8 @@ fn glob_regex(glob: &str) -> Result<Regex, regex::Error> {
 mod tests {
     use std::time::Duration;
 
-    use tokio::io::AsyncReadExt;
+    use tokio::io::{AsyncReadExt, DuplexStream};
+    use tokio::task::JoinHandle;
 
     use super::*;
 
@@ -287,24 +294,25 @@ mod tests {
         dir
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn find_delivers_every_match_under_a_byte_budget() {
-        let dir = tree(40, 25).await;
-        let (mut w, mut r) = tokio::io::duplex(1 << 16);
+    fn sink() -> (DuplexStream, JoinHandle<String>) {
+        let (w, mut r) = tokio::io::duplex(1 << 16);
         let reader = tokio::spawn(async move {
             let mut out = String::new();
             r.read_to_string(&mut out).await.expect("read");
             out
         });
-        find_bounded(
-            &mut w,
-            dir.path().display().to_string(),
-            "needle".into(),
-            None,
-            512,
-        )
-        .await
-        .expect("find");
+        (w, reader)
+    }
+
+    async fn run(w: &mut DuplexStream, dir: &Path, budget: usize) -> std::io::Result<()> {
+        find_bounded(w, dir.display().to_string(), "needle".into(), None, budget).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn find_delivers_every_match_under_a_byte_budget() {
+        let dir = tree(40, 25).await;
+        let (mut w, reader) = sink();
+        run(&mut w, dir.path(), 512).await.expect("find");
         drop(w);
         let out = reader.await.expect("join");
         assert_eq!(out.matches("\"type\":\"match\"").count(), 1000);
@@ -316,18 +324,32 @@ mod tests {
         let dir = tree(40, 25).await;
         let (mut w, r) = tokio::io::duplex(64);
         drop(r);
-        let found = tokio::time::timeout(
-            Duration::from_secs(10),
-            find_bounded(
-                &mut w,
-                dir.path().display().to_string(),
-                "needle".into(),
-                None,
-                512,
-            ),
-        )
-        .await
-        .expect("walk must end once the writer is gone");
+        let found = tokio::time::timeout(Duration::from_secs(10), run(&mut w, dir.path(), 512))
+            .await
+            .expect("walk must end once the writer is gone");
         assert!(found.is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn find_reports_an_oversized_match_as_an_error_frame() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let line = "\u{1}".repeat(proto::MAX_FRAME / 4);
+        tokio::fs::write(dir.path().join("blob.txt"), format!("needle {line}\n"))
+            .await
+            .expect("write");
+        let (mut w, reader) = sink();
+        run(&mut w, dir.path(), MATCH_QUEUE_BYTES)
+            .await
+            .expect("find");
+        drop(w);
+        let out = reader.await.expect("join");
+        assert_eq!(out.matches("\"type\":\"match\"").count(), 0);
+        assert!(
+            out.trim_end()
+                .rsplit('\n')
+                .next()
+                .is_some_and(|last| last.contains("\"type\":\"error\"")),
+            "{out}"
+        );
     }
 }
