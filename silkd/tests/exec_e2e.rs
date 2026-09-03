@@ -1,6 +1,4 @@
-//! exec/procs verb E2E over the in-memory duplex. Spawns real processes
-//! (echo, sh), so it runs on any Unix — keep it that way so exec-path bugs
-//! surface on the dev host, not only on Linux CI.
+//! exec/procs verb E2E over the in-memory duplex, spawning real processes so it runs on any Unix.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;

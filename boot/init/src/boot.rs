@@ -145,11 +145,7 @@ fn assemble(cfg: &BootCfg, marks: &mut Marks) -> Result<(), String> {
     Ok(())
 }
 
-/// Materializes kernel ip= params (cocoon CNI static flow) as MAC-matched
-/// networkd units in the new root — persistence only, nothing is configured
-/// in the initramfs; networkd applies them once the real init is up. A NIC
-/// that never shows up degrades that interface to the DHCP fallback instead
-/// of failing the boot, matching the old init-bottom hook.
+/// Persists kernel ip= params as MAC-matched networkd units in the new root; a missing NIC degrades to the DHCP fallback.
 fn persist_network(cfg: &BootCfg) {
     if cfg.ips.is_empty() {
         return;

@@ -1,6 +1,4 @@
-//! Session verb E2E: a persistent shell whose cwd/env/state survive across
-//! exec calls. Spawns real bash, so Unix-only in practice; kept ungated so
-//! the persistence contract is checked on the dev host too.
+//! Session verb E2E: a persistent shell whose cwd/env/state survive across exec calls.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;

@@ -1,8 +1,4 @@
-//! LSP broker integration: a fake "language server" (a shell script that
-//! echoes a canned reply) stands in for pylsp, so the broker mechanism —
-//! manifest lookup, spawn, bidirectional relay, stop — is exercised without a
-//! real language server. Every test runs under a deadline so a relay deadlock
-//! fails CI instead of hanging it.
+//! LSP broker integration against a fake language server, each test under a deadline so a relay deadlock fails CI.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use std::io::Write;
@@ -28,7 +24,6 @@ IFS= read -r line
 printf 'reply:%s\n' "$line"
 "#;
 
-/// Creates a fake language server and points SILKD_LSP_DIR at its dir.
 fn manifest_env(server_body: &str) -> TempDir {
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("fake-lsp");

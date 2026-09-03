@@ -232,8 +232,7 @@ async fn pump_stdout<W: AsyncWrite + Unpin>(
     proto::write_frame(w, &Response::Done).await
 }
 
-/// manifest_dir allows tests (and an operator) to relocate the manifest dir
-/// via SILKD_LSP_DIR, mirroring silkd's other env overrides.
+/// SILKD_LSP_DIR relocates the manifest dir for tests and operators.
 fn manifest_dir() -> Cow<'static, str> {
     std::env::var("SILKD_LSP_DIR").map_or(Cow::Borrowed(MANIFEST_DIR), Cow::Owned)
 }

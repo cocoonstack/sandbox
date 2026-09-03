@@ -82,12 +82,7 @@ where
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
-    // Foreground consumes a backpressured mpsc: when the client falls behind,
-    // the sends block, the pipe fills, and the child slows down — nothing
-    // drops while the child lives (POST_EXIT_DRAIN bounds only the post-exit
-    // tail). Attachers still ride the best-effort broadcast (a secondary
-    // observer may drop under extreme lag). Detached has no client to pace
-    // it, so it gets no foreground sender.
+    // a backpressured mpsc paces the child to the foreground client; attachers ride the lossy broadcast.
     let (fg_tx, fg_rx) = mpsc::channel::<Chunk>(FG_CAP);
     let pump_fg = (!req.detach).then(|| fg_tx.clone());
     let sup_fg = (!req.detach).then(|| fg_tx.clone());
@@ -97,12 +92,7 @@ where
     let pump_abort = pump.abort_handle();
     tokio::spawn(pump_stdin(stdin, client, req.detach));
 
-    // One supervisor per exec: reap the child, drain output within a grace
-    // window (so a daemonizer holding the pipe can't wedge us), then publish
-    // the terminal Exit — to the broadcast (attachers) and the foreground mpsc.
-    // The reaped code is recorded before the drain: a disconnect can abort the
-    // supervisor mid-drain, and its fallback must publish the real code, not
-    // fabricate -1 for a child that already exited cleanly.
+    // record the reaped code before the drain: an abort mid-drain must publish the real code, not -1.
     let reaped: Arc<OnceLock<i32>> = Arc::new(OnceLock::new());
     let sup_reaped = Arc::clone(&reaped);
     let sup_proc = Arc::clone(&proc);

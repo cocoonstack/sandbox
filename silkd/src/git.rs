@@ -165,11 +165,7 @@ async fn net_verb<W: AsyncWrite + Unpin>(
     terminal(w, verb, &out).await
 }
 
-/// Builds a `git -C dir` command with config and stdio policy applied. Config
-/// (an auth token, and quotePath=false so paths come back raw) rides in
-/// `GIT_CONFIG_*` env vars, not `-c` args: the process environ is root-only,
-/// whereas argv is world-readable via /proc/<pid>/cmdline — a de-escalated
-/// exec could otherwise scrape the token.
+/// Builds a `git -C dir` command; config rides in `GIT_CONFIG_*` env vars because argv is world-readable via /proc.
 fn git_cmd(dir: &str, auth: Option<&str>) -> Command {
     let mut cmd = Command::new("git");
     sysutil::align_proxy_env(&mut cmd);
@@ -262,13 +258,7 @@ fn parse_ahead_behind(rest: &str) -> (u32, u32) {
     (ahead, behind)
 }
 
-/// Parses one porcelain-v2 entry. XY is field 2; the path is the last
-/// space-field (kept intact even with spaces — core.quotePath=false keeps it
-/// raw). Ordinary changes ("1") have the path at field 9; renames/copies ("2")
-/// add an Xscore field, so the path is field 10 and carries "<new>\t<orig>",
-/// of which we keep the new path; unmerged ("u") entries carry four modes and
-/// three hashes, putting the bare path at field 11. Untracked ("?") is a
-/// bare path.
+/// Parses one porcelain-v2 entry: XY is field 2, the path the last space-field at 9 ("1"), 10 ("2") or 11 ("u").
 fn parse_file_line(line: &str) -> Option<GitFileStatus> {
     let kind = line.split(' ').next()?;
     match kind {

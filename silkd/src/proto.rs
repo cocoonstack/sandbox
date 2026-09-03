@@ -387,10 +387,7 @@ pub async fn read_frame<R: AsyncBufRead + Unpin>(r: &mut R) -> io::Result<Option
     Ok(read_frame_into(r, &mut line).await?.then_some(line))
 }
 
-/// Reads one frame into `line` (cleared first, reused across calls — the
-/// inbound twin of `write_chunk_frame`'s buffer reuse); false on clean EOF.
-/// Scans the buffered reader chunk by chunk so a peer that never sends a
-/// newline is cut off at MAX_FRAME instead of growing the line unbounded.
+/// Reads one frame into `line` (cleared first, reused across calls), capped at MAX_FRAME; false on clean EOF.
 pub async fn read_frame_into<R: AsyncBufRead + Unpin>(
     r: &mut R,
     line: &mut Vec<u8>,
@@ -514,10 +511,7 @@ pub async fn error_frame<W: AsyncWrite + Unpin>(
     write_frame(w, &Response::error(kind, message)).await
 }
 
-/// Streams `reader` back as `data` frames until EOF — the outbound twin of
-/// `feed_data_frames`, shared by fs.read and fs.pull. A frame-write error
-/// propagates as the outer error; a source read error comes back as the inner
-/// one so the caller can clean up (reap a tar child) before mapping it.
+/// Streams `reader` back as `data` frames until EOF; a source read error returns as the inner error so the caller can reap.
 pub async fn stream_data_frames<R, W>(
     reader: &mut R,
     w: &mut W,

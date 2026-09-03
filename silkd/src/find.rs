@@ -151,13 +151,7 @@ where
     find_bounded(reader, w, path, pattern, glob, MATCH_QUEUE_BYTES).await
 }
 
-/// Rewrites every `pattern` match to `replacement` in each of `files`,
-/// streaming one `replaced` frame per file (with its match count) and a
-/// terminal `done`. A file over the find size bound is skipped with a zero
-/// count rather than read into memory. A read/write failure on one file ends
-/// the stream with an error — files whose `replaced` frame already went out
-/// are committed (each file is atomic; the list is not). An invalid pattern is
-/// rejected before any file is touched.
+/// Rewrites `pattern` to `replacement` in each of `files`, one `replaced` frame each; per-file atomic, not per-list.
 pub async fn replace<W: AsyncWrite + Unpin>(
     w: &mut W,
     files: Vec<String>,

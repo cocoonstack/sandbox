@@ -54,8 +54,7 @@ pub fn parse(cmdline: &str) -> Result<BootCfg, String> {
         debug: false,
         trace: false,
     };
-    for tok in cmdline.split_ascii_whitespace() {
-        let (key, val) = tok.split_once('=').unwrap_or((tok, ""));
+    for (key, val) in params(cmdline) {
         match key {
             "cocoon.layers" => {
                 cfg.layers = val
@@ -92,18 +91,11 @@ pub fn parse(cmdline: &str) -> Result<BootCfg, String> {
     Ok(cfg)
 }
 
-/// Debug check for the path where parse() itself failed and cfg.debug is
-/// unavailable. Token handling mirrors parse() exactly: same value
-/// predicate, last occurrence wins.
+/// Debug check for the path where parse() itself failed and cfg.debug is unavailable.
 pub fn debug_requested(cmdline: &str) -> bool {
-    let mut debug = false;
-    for tok in cmdline.split_ascii_whitespace() {
-        let (key, val) = tok.split_once('=').unwrap_or((tok, ""));
-        if key == "sandbox.debug" {
-            debug = debug_token(val);
-        }
-    }
-    debug
+    params(cmdline)
+        .rfind(|&(key, _)| key == "sandbox.debug")
+        .is_some_and(|(_, val)| debug_token(val))
 }
 
 /// Overlay mount data. Layer mountpoints are index-based (/l/0, /l/1, …) so
@@ -130,6 +122,13 @@ pub fn network_unit(ip: &IpParam, mac: &str) -> String {
         let _ = writeln!(unit, "DNS={dns}");
     }
     unit
+}
+
+/// Kernel cmdline tokens as (key, value); a bare token carries an empty value.
+fn params(cmdline: &str) -> impl DoubleEndedIterator<Item = (&str, &str)> {
+    cmdline
+        .split_ascii_whitespace()
+        .map(|tok| tok.split_once('=').unwrap_or((tok, "")))
 }
 
 /// sandbox.debug value semantics, shared by parse() and debug_requested().

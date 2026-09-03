@@ -101,9 +101,7 @@ impl Table {
             io.converse::<tokio::io::Sink>(&init, None).await?;
         }
 
-        // Reserve the id atomically: a concurrent create with the same id
-        // must not silently replace (and orphan) the loser. Dropping the loser
-        // Arc here fires kill_on_drop on its shell.
+        // reserve the id atomically: a concurrent create must not orphan the loser's shell.
         let mut map = sysutil::lock(&self.inner);
         if map.contains_key(&id) {
             return Err(io::Error::new(
@@ -171,11 +169,7 @@ pub struct Session {
 }
 
 impl Session {
-    /// Runs `argv` in the session shell, streaming stdout frames to `w` and
-    /// ending with an exit frame. argv is shell-quoted and joined so a fresh
-    /// `cd`/`export` persists to later calls while ordinary argv still runs.
-    /// Returns whether the session shell is still alive; a dead shell is
-    /// removed by the caller so its id stops resolving.
+    /// Runs `argv` in the session shell, shell-quoted so `cd`/`export` persist; false once the shell is dead.
     pub async fn run<W: AsyncWrite + Unpin>(&self, argv: &[String], w: &mut W) -> bool {
         let mut cmdline = String::new();
         for (i, a) in argv.iter().enumerate() {
@@ -217,11 +211,7 @@ struct Io {
 }
 
 impl Io {
-    /// Writes `cmd` to the shell followed by a unique sentinel printf, then
-    /// reads output up to the sentinel — emitting the preceding bytes as
-    /// stdout frames on `out` (None discards, used for init) and returning the
-    /// command's exit code. A tiny tail is held back so a marker split across
-    /// reads is still found.
+    /// Runs `cmd` up to a unique sentinel, streaming the bytes before it to `out` and returning the exit code.
     async fn converse<W: AsyncWrite + Unpin>(
         &mut self,
         cmd: &str,
