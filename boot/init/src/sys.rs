@@ -61,7 +61,7 @@ pub fn sethostname(name: &str) -> Result<(), String> {
 /// (recursive delete would cost more than the memory is worth).
 pub fn switch_root(newroot: &str) -> Result<(), String> {
     std::env::set_current_dir(newroot).map_err(|err| format!("chdir {newroot}: {err}"))?;
-    mount(".", "/", None, libc::MS_MOVE, None)?;
+    move_mount(".", "/")?;
     // SAFETY: the literal is a live 'static CStr for the duration of the call.
     if unsafe { libc::chroot(c".".as_ptr()) } != 0 {
         return Err(format!("chroot: {}", io::Error::last_os_error()));
