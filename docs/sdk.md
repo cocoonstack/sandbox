@@ -441,6 +441,11 @@ err = sb.Pull(ctx, "/work", tarWriter)   // stream /work back as a tar
 ```go
 matches, err := sb.Find(ctx, "/work", `TODO|FIXME`, "*.go")
 // []wire.Match{File, Line, Content}; glob is anchored *? wildcards on the file name
+for m, err := range sb.FindSeq(ctx, "/work", `TODO`, "") { // streamed; a break ends the walk in the guest
+	if err != nil || m.Line > 100 {
+		break
+	}
+}
 
 results, err := sb.Replace(ctx, []string{"/work/main.go"}, `foo`, "bar")
 // []wire.Replaced{File, Replacements}; per-file atomic
@@ -468,7 +473,7 @@ overflow instead of the stream silently dropping events.
 
 ```go
 err  = sb.GitClone(ctx, url, "/work/repo", "main", 0, token) // egress lane only; depth > 0 = shallow
-st,  err := sb.GitStatus(ctx, "/work/repo")   // Branch, Ahead, Behind, Files[]
+st,  err := sb.GitStatus(ctx, "/work/repo")   // Branch, Ahead, Behind, Files[]; Truncated when the list was cut at ~1 MiB
 err  = sb.GitAdd(ctx, "/work/repo", "a.txt")
 hash, err := sb.GitCommit(ctx, "/work/repo", "message", "Dev <dev@example.com>")
 err  = sb.GitPush(ctx, "/work/repo", token)   // egress lane only

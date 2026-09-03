@@ -594,10 +594,11 @@ func (Event) RespType() string { return "event" }
 
 // GitStatusResult answers GitStatus.
 type GitStatusResult struct {
-	Branch string          `json:"branch"`
-	Ahead  uint32          `json:"ahead"`
-	Behind uint32          `json:"behind"`
-	Files  []GitFileStatus `json:"files"`
+	Branch    string          `json:"branch"`
+	Ahead     uint32          `json:"ahead"`
+	Behind    uint32          `json:"behind"`
+	Files     []GitFileStatus `json:"files"`
+	Truncated bool            `json:"truncated,omitempty"`
 }
 
 func (GitStatusResult) RespType() string { return "git_status_result" }

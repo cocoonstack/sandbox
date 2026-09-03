@@ -367,6 +367,7 @@ path on the no-network lane.
 
 ```python
 matches = sb.find("/work", r"TODO|FIXME", glob="*.py")
+for m in sb.find_iter("/work", r"TODO"):        # streamed; leaving the loop ends the walk in the guest
 # [{"file", "line", "content"}]; glob is anchored *? wildcards on the file name
 
 results = sb.replace(["/work/main.py"], r"foo", "bar")
@@ -394,7 +395,7 @@ when the relay drops, which `w.error` tells apart from a clean close (`None`).
 
 ```python
 sb.git_clone(url, "/work/repo", branch="main", depth=1, auth=token)  # egress lane only
-st = sb.git_status("/work/repo")          # {"branch", "ahead", "behind", "files"}
+st = sb.git_status("/work/repo")          # {"branch", "ahead", "behind", "files", "truncated"?}
 sb.git_add("/work/repo", ["a.txt"])
 sha = sb.git_commit("/work/repo", "message", "Dev <dev@example.com>")
 sb.git_push("/work/repo", auth=token)     # egress lane only

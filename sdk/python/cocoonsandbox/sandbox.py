@@ -157,9 +157,16 @@ class Sandbox:
             return _drain_data(conn)
 
     def find(self, path: str, pattern: str, glob: str = "") -> list[dict]:
+        return list(self.find_iter(path, pattern, glob))
+
+    def find_iter(self, path: str, pattern: str, glob: str = "") -> Iterator[dict]:
+        """Yields matches as they stream; leaving the loop early closes the
+        connection, which ends the walk in the guest."""
         with self._dial() as conn:
             conn.send("fs_find", path=path, pattern=pattern, glob=glob or None)
-            return [f for f in conn.recv_until("done") if f["type"] == "match"]
+            for f in conn.recv_until("done"):
+                if f["type"] == "match":
+                    yield f
 
     def replace(self, files: list[str], pattern: str, replacement: str) -> list[dict]:
         with self._dial() as conn:
