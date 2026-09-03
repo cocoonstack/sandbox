@@ -17,7 +17,8 @@ All bodies are JSON. Three token kinds:
 
 Endpoints below that say "node API token" accept root or tenant unless
 marked root-only. Errors are `{"error": "message"}` with the status codes
-listed per endpoint.
+listed per endpoint. Request bodies are capped at 1 MiB; a larger one is
+rejected with `400 {"error": "invalid request body"}`.
 
 ## POST /v1/claim
 
@@ -374,15 +375,16 @@ Checkpoints are node-local (unless the store is shared — see
 [Configuration](deploy.md#configuration)), so a miss here runs a tier order:
 
 1. This node checks its own store first.
-2. On a miss, it probes up to 3 peers directly — a parallel `HEAD` to each
+2. On a miss, it probes every mesh peer directly — a parallel `HEAD` to each
    (authenticated on an encrypted mesh, see below) — and answers exactly like
    a warm-miss
    [`POST /v1/claim`](#post-v1claim): `200 {"redirect": ["10.0.0.6:7777",
    "10.0.0.7:7777"]}`, retry the same body (+`no_redirect: true`) at each
-   candidate until one answers. The probe and the follow-up claim are not
-   atomic: a peer can answer the probe, then lose the record — a delete's
-   broadcast lands, or its own TTL sweep runs (below) — before the retry
-   reaches it, so a redirect can go stale between the two calls.
+   candidate until one answers. The answer is capped at 3 addresses: a hint,
+   not an exhaustive list of every owner. The probe and the follow-up claim
+   are not atomic: a peer can answer the probe, then lose the record — a
+   delete's broadcast lands, or its own TTL sweep runs (below) — before the
+   retry reaches it, so a redirect can go stale between the two calls.
 3. If nothing answers the probe (or `no_redirect` is set), and the node has
    `checkpoint_peer_heal` enabled, it pulls the record from a probed peer
    itself, validates it, publishes it locally, and serves the claim from

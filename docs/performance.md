@@ -20,7 +20,7 @@ bare metal, `small` tier:
 | tier | latency | what happens |
 |---|---|---|
 | warm pool hit | **0.2–0.7 ms** | ownership transfer only; refill re-tops the pool in the background |
-| pool miss, golden exists | **~45–75 ms** | clone from the golden snapshot + entropy/machine-id reseed + readiness probe |
+| pool miss, golden exists | **~26–39 ms** | clone from the golden snapshot + entropy/machine-id reseed + readiness probe |
 | cold boot (no golden yet) | **~200–350 ms** | full boot from the template image to silkd answering |
 
 Cloud Hypervisor lifecycle latency (bare metal, vsock agent-ready):
@@ -62,10 +62,12 @@ HTTP-upgrade relay and vsock hops:
 ## Boot chain
 
 Kernel entry → rootfs handoff (custom all-builtin kernel + Rust initramfs,
-single-layer image): **~120–130 ms** on the bench node; the initramfs
-itself accounts for ~4 ms (per-phase µs trace via `sandbox.trace=1`).
-Agent-ready ~490 ms nested / ~206–230 ms bare metal. silkd starts in
-parallel at sysinit and adds ~1–10 ms cold / ~3–12 ms on restore paths.
+single-layer image): **~40–50 ms** on the bench node — kernel→sandbox-init is
+effectively all of it, and init→handoff rounds to 0 ms (per-phase µs trace
+via `sandbox.trace=1`). Spawn → silkd answering measures ~136–208 ms bare
+metal, median ~151. silkd starts in parallel at sysinit and adds ~1–10 ms
+cold / ~3–12 ms on restore paths. The dated rows behind both figures are in
+[Benchmarks](benchmarks.md#results-log).
 
 ## Hibernate
 

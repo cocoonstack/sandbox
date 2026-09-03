@@ -24,7 +24,7 @@ Build: `cd mcp && go build -o sandbox-mcp .`
 
 | tool | what it does |
 |---|---|
-| `create_sandbox` | claim a microVM and return its id plus deadline; warm claims take milliseconds, nothing renews the deadline |
+| `create_sandbox` | claim a microVM and return its id plus deadline; optional `template`, `net` (`none` default, or `egress`), `size` (`small` default, `medium`, `large`, `xlarge`) and `ttl_seconds` (0 means one hour); warm claims take milliseconds, nothing renews the deadline |
 | `exec` | run a shell command to completion (5-minute cap); returns stdout, stderr and the exit code; a hibernated sandbox wakes transparently |
 | `spawn` | start a command detached and return its pid; output goes to a 256 KiB ring buffer that `logs` replays |
 | `ps` | list tracked processes (exec, spawn, pty) with state, exit code and start time |

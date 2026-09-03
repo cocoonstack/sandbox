@@ -1,9 +1,10 @@
 # silkd
 
 silkd is the in-guest product daemon: a Rust binary baked into every
-template image, listening on guest vsock port 2048, started at sysinit in
-parallel with boot. It is what actually "runs something" inside a sandbox;
-sandboxd relays SDK connections to it byte-for-byte. Reaching silkd is the
+template image, listening on guest vsock port 2048 (`SILKD_PORT` overrides
+the port), started at sysinit in parallel with boot. It is what actually
+"runs something" inside a sandbox; sandboxd relays SDK connections to it
+byte-for-byte. Reaching silkd is the
 claim-readiness signal — a claim returns only once silkd answers.
 
 Most users never speak the protocol directly — the [Go SDK](sdk.md) covers
@@ -31,17 +32,17 @@ a frame only one side can parse fails CI.
 | group | ops | response flow |
 |---|---|---|
 | exec | `exec {argv, cwd?, env?, user?, detach?, session?}` | `started{pid}` → `stdout/stderr{data}`… → `exit{code}`; the client may stream `stdin{data}` / `stdin_close`. `detach` returns after `started`; the process keeps a bounded output ring for later `logs`/`attach`; not combinable with `session` |
-| procs | `ps` / `kill {pid, signal?}` / `attach {pid}` / `logs {pid}` | handles are guest pids; any connection can list, signal, replay, or re-attach live |
-| sessions | `session_create {id?, cwd?, env?}` / `session_list` / `session_rm {id}` | a session is a real persistent bash; `exec` with `session` runs inside it. Idle sessions are reaped after 30 minutes |
-| fs | `fs_write {path, mode?}` (+`data`/`data_end` frames) / `fs_read` / `fs_list` / `fs_stat` / `fs_mkdir {parents?}` / `fs_rm {recursive?}` / `fs_rename {from, to}` | streaming both directions; write commits atomically via temp+rename and inherits an overwritten file's mode; `fs_list` streams 4096-entry batches |
-| tree | `fs_push {dest}` (+tar as `data` frames) / `fs_pull {path}` | whole trees as tar streams through the guest tar |
+| procs | `ps` / `kill {pid, signal?}` / `attach {pid}` / `logs {pid}` | `ps` answers one `procs{procs}` frame, `kill` a bare `done`; `logs` and `attach` stream `stdout/stderr{data}`… then `exit{code}` (`logs` closes with `done`, and so does `attach` when the process is gone before its exit). Handles are guest pids; any connection can list, signal, replay, or re-attach live |
+| sessions | `session_create {id?, cwd?, env?}` / `session_list` / `session_rm {id}` | `session_created{id}` / `sessions{sessions}` / `done`. A session is a real persistent bash; `exec` with `session` runs inside it. Idle sessions are reaped after 30 minutes |
+| fs | `fs_write {path, mode?}` (+`data`/`data_end` frames) / `fs_read` / `fs_list` / `fs_stat` / `fs_mkdir {parents?}` / `fs_rm {recursive?}` / `fs_rename {from, to}` | `fs_read` streams `data{data}`… → `done`, `fs_list` streams 4096-entry `entries{entries}` batches → `done`, `fs_stat` answers one `stat{info}`, and the mutating verbs terminate with `done`. Streaming runs both directions; write commits atomically via temp+rename and inherits an overwritten file's mode |
+| tree | `fs_push {dest}` (+tar as `data` frames) / `fs_pull {path}` | whole trees as tar streams through the guest tar: `fs_pull` streams `data{data}`… → `done`, `fs_push` terminates with `done` |
 | search | `fs_find {path, pattern, glob?}` → `match{file, line, content}`… → `done` / `fs_replace {files, pattern, replacement}` → `replaced{file, replacements}`… → `done` | regex as data, no shell quoting; `glob` is anchored `*`/`?` wildcards over file names; find skips binary and >8 MiB files, and replace skips the same 8 MiB bound with a zero count |
 | watch | `fs_watch {path, recursive?}` | `ready` once armed (events after it are guaranteed captured), then `event{kind, path}` until the client disconnects; watcher or delivery-queue overflow errors arrive as a terminal `error` instead of silently losing events |
-| pty | `pty_open {cols, rows, cwd?, env?, user?}` / `pty_resize {pid, cols, rows}` | a shell under a pseudo-terminal; output as `stdout` frames, input as `stdin` frames, exit terminal. PTYs register in the proc table like any exec |
-| git | `git_clone {url, path, branch?, depth?, auth?}` / `git_status {path}` / `git_add {path, files}` / `git_commit {path, message, author}` / `git_push {path, auth?}` / `git_pull {path, auth?}` / `git_branch {path, action, name?}` | structured results (porcelain-v2 status, commit hash, branch list). A status past about 1 MiB of entries carries `truncated: true` with the head of the list, so one frame never exceeds the cap. `auth` is injected as an in-memory header, never written to guest disk |
+| pty | `pty_open {cols, rows, cwd?, env?, user?}` / `pty_resize {pid, cols, rows}` | `pty_open` answers `started{pid}`, then a shell under a pseudo-terminal: output as `stdout` frames, input as `stdin` frames, `exit{code}` terminal; `pty_resize` answers `done`. PTYs register in the proc table like any exec |
+| git | `git_clone {url, path, branch?, depth?, auth?}` / `git_status {path}` / `git_add {path, files}` / `git_commit {path, message, author}` / `git_push {path, auth?}` / `git_pull {path, auth?}` / `git_branch {path, action, name?}` | `git_status_result` (porcelain v2), `git_commit_result{hash}`, `git_branches{current, branches}` for `git_branch {action: "list"}`; every other verb terminates with `done`. A status past about 1 MiB of entries carries `truncated: true` with the head of the list, so one frame never exceeds the cap. `auth` is injected as an in-memory header, never written to guest disk |
 | port | `port_forward {port}` | relays guest TCP 127.0.0.1:port over this connection: `ready` once connected, then `data` both ways (`data_end` half-closes the guest socket); the server closing ends the stream with `done`. Works on both lanes — the no-network lane's only way in |
 | lsp | `lsp_start {language, root?}` / `lsp_request {server_id}` / `lsp_stop {server_id}` | a broker for the language server a flavor image ships: `lsp_start` spawns the argv named in `/etc/silkd/lsp.d/<language>` (absent on the base image → `not_found` naming the flavor) and answers `lsp_started{server_id}`; `lsp_request` attaches the JSON-RPC byte stream (`ready`, then `data` both ways — silkd pipes bytes, it never parses LSP; `data_end` half-closes the server's stdin) and the stream ending reaps the server (v1 single-shot); `lsp_stop` kills it early, and a server nothing attaches within 5 minutes is reaped |
-| misc | `info` | `{version, proto, uptime_secs, procs, sessions}` — the in-guest readiness probe (sandboxd consumes it; no SDK surface). Distinct from the control plane's `GET /v1/info`, which reports node pools and claims |
+| misc | `info` | `info{version, proto, uptime_secs, procs, sessions}` — the in-guest readiness probe (sandboxd consumes it; no SDK surface). Distinct from the control plane's `GET /v1/info`, which reports node pools and claims |
 
 ## Error kinds
 

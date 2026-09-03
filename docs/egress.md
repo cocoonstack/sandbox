@@ -184,6 +184,9 @@ done
 #   dist/node-b/…  dist/node-c/…
 ```
 
+Both subcommands refuse to overwrite an existing `.crt`/`.key`; pass
+`-force` to replace one deliberately.
+
 That gives one shared root and a per-node signing key:
 
 ```
