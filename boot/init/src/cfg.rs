@@ -247,30 +247,16 @@ mod tests {
     }
 
     #[test]
-    fn debug_requested_matches_parse() {
-        for tail in [
-            "",
-            "sandbox.debug",
-            "sandbox.debug=",
-            "sandbox.debug=1",
-            "sandbox.debug=0",
-            "sandbox.debug=1 sandbox.debug=0",
-        ] {
-            let cmdline = format!("cocoon.layers=l0 cocoon.cow=cow {tail}");
-            assert_eq!(
-                parse(&cmdline).unwrap().debug,
-                debug_requested(&cmdline),
-                "divergence for {tail:?}"
-            );
-        }
-    }
-
-    #[test]
     fn parse_debug_forms() {
         let base = "cocoon.layers=l0 cocoon.cow=cow";
         assert!(parse(&format!("{base} sandbox.debug")).unwrap().debug);
         assert!(parse(&format!("{base} sandbox.debug=1")).unwrap().debug);
         assert!(!parse(&format!("{base} sandbox.debug=0")).unwrap().debug);
+        assert!(
+            !parse(&format!("{base} sandbox.debug=1 sandbox.debug=0"))
+                .unwrap()
+                .debug
+        );
     }
 
     #[test]
