@@ -33,6 +33,37 @@ func TestFindStreamsMatches(t *testing.T) {
 	}
 }
 
+func TestFindSeqStopsAfterTheCallerBreaks(t *testing.T) {
+	sb := fakeSandbox(t)
+	ctx := t.Context()
+	if err := sb.Mkdir(ctx, "/work", true); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := sb.WriteFile(ctx, "/work/many.txt", []byte(strings.Repeat("TODO\n", 500)), nil); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	var seen []wire.Match
+	for m, err := range sb.FindSeq(ctx, "/work", "TODO", "") {
+		if err != nil {
+			t.Fatalf("FindSeq: %v", err)
+		}
+		if seen = append(seen, m); len(seen) == 3 {
+			break
+		}
+	}
+	if len(seen) != 3 || seen[2].Line != 3 {
+		t.Fatalf("seen %+v, want the first three lines", seen)
+	}
+	all, err := sb.Find(ctx, "/work", "TODO", "")
+	if err != nil {
+		t.Fatalf("Find after an abandoned stream: %v", err)
+	}
+	if len(all) != 500 {
+		t.Errorf("Find returned %d matches, want 500", len(all))
+	}
+}
+
 func TestFindBadPatternIsTypedError(t *testing.T) {
 	sb := fakeSandbox(t)
 	_, err := sb.Find(t.Context(), "/", "(", "")

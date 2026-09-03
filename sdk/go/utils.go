@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"iter"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
@@ -63,28 +64,46 @@ func oneShotRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.
 
 // collectRPC sends req and gathers every streamed frame of type T until Done.
 func collectRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.Request) ([]T, error) {
-	conn, done, err := s.call(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	defer done()
 	var out []T
-	for {
-		resp, err := recv(ctx, conn)
+	for v, err := range streamRPC[T, PT](ctx, s, req) {
 		if err != nil {
 			return nil, err
 		}
-		if v, ok := resp.(PT); ok {
-			out = append(out, *v)
-			continue
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// streamRPC sends req and yields each streamed frame of type T until Done; breaking out closes the connection, which ends the guest-side producer.
+func streamRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.Request) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		var zero T
+		conn, done, err := s.call(ctx, req)
+		if err != nil {
+			yield(zero, err)
+			return
 		}
-		switch r := resp.(type) {
-		case *wire.Done:
-			return out, nil
-		case *wire.ErrorResp:
-			return nil, r
-		default:
-			return nil, unexpected(resp)
+		defer done()
+		for {
+			resp, err := recv(ctx, conn)
+			if err != nil {
+				yield(zero, err)
+				return
+			}
+			if v, ok := resp.(PT); ok {
+				if !yield(*v, nil) {
+					return
+				}
+				continue
+			}
+			switch r := resp.(type) {
+			case *wire.Done:
+			case *wire.ErrorResp:
+				yield(zero, r)
+			default:
+				yield(zero, unexpected(resp))
+			}
+			return
 		}
 	}
 }

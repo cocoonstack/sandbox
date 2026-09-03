@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use regex::Regex;
 use tokio::fs;
-use tokio::io::AsyncWrite;
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite};
 use tokio::runtime::Handle;
 use tokio::sync::{Semaphore, SemaphorePermit, mpsc};
 
@@ -67,9 +67,10 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
-    /// Walks `root` depth-first, sending a `match` frame per matching line. A
-    /// failure on the root propagates; deeper ones skip only that directory.
-    fn run(&self, root: PathBuf) -> std::io::Result<()> {
+    /// Walks `root` depth-first, sending a `match` frame per matching line; false
+    /// means the receiver went away. A failure on the root propagates; deeper
+    /// ones skip only that directory.
+    fn run(&self, root: PathBuf) -> std::io::Result<bool> {
         let mut stack = vec![root];
         let mut root = true;
         while let Some(dir) = stack.pop() {
@@ -79,6 +80,9 @@ impl Walk<'_> {
                 Err(_) => continue,
             };
             for ent in rd {
+                if self.tx.is_closed() {
+                    return Ok(false);
+                }
                 let ent = match ent {
                     Ok(ent) => ent,
                     Err(e) if root => return Err(e),
@@ -91,12 +95,12 @@ impl Walk<'_> {
                 if ft.is_dir() {
                     stack.push(p);
                 } else if ft.is_file() && name_matches(&p, self.name_re) && !self.scan_file(&p) {
-                    return Ok(());
+                    return Ok(false);
                 }
             }
             root = false;
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Scans one file, reporting whether the receiver is still listening. The size
@@ -133,13 +137,18 @@ impl Walk<'_> {
 /// Streams `match` frames for every line under `path` matching `pattern`,
 /// terminated by `done`. `glob` narrows the walk to file names matching it
 /// (`*` and `?` wildcards); an invalid pattern is a bad-request error.
-pub async fn find<W: AsyncWrite + Unpin>(
+pub async fn find<R, W>(
+    reader: &mut R,
     w: &mut W,
     path: String,
     pattern: String,
     glob: Option<String>,
-) -> std::io::Result<()> {
-    find_bounded(w, path, pattern, glob, MATCH_QUEUE_BYTES).await
+) -> std::io::Result<()>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    find_bounded(reader, w, path, pattern, glob, MATCH_QUEUE_BYTES).await
 }
 
 /// Rewrites every `pattern` match to `replacement` in each of `files`,
@@ -191,13 +200,18 @@ pub async fn replace<W: AsyncWrite + Unpin>(
     proto::write_frame(w, &Response::Done).await
 }
 
-async fn find_bounded<W: AsyncWrite + Unpin>(
+async fn find_bounded<R, W>(
+    reader: &mut R,
     w: &mut W,
     path: String,
     pattern: String,
     glob: Option<String>,
     budget_bytes: usize,
-) -> std::io::Result<()> {
+) -> std::io::Result<()>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
     let re = match Regex::new(&pattern) {
         Ok(re) => re,
         Err(e) => return proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
@@ -223,18 +237,35 @@ async fn find_bounded<W: AsyncWrite + Unpin>(
     let mut batch = Vec::new();
     let mut buf = Vec::new();
     let mut failed = None;
-    while rx.recv_many(&mut batch, MATCH_QUEUE).await > 0 {
-        let sent = proto::write_frames(w, &mut buf, &batch).await;
-        budget.release(batch.iter().map(match_cost).sum());
-        batch.clear();
-        if let Err(e) = sent {
-            failed = Some(e);
-            break;
+    let mut gone = false;
+    loop {
+        tokio::select! {
+            biased;
+            // The client sends nothing during a find, so any readable state ends the walk.
+            _ = reader.fill_buf() => {
+                gone = true;
+                break;
+            }
+            n = rx.recv_many(&mut batch, MATCH_QUEUE) => {
+                if n == 0 {
+                    break;
+                }
+                let sent = proto::write_frames(w, &mut buf, &batch).await;
+                budget.release(batch.iter().map(match_cost).sum());
+                batch.clear();
+                if let Err(e) = sent {
+                    failed = Some(e);
+                    break;
+                }
+            }
         }
     }
     drop(rx);
     budget.close();
     let walked = walk.await.map_err(std::io::Error::other)?;
+    if gone {
+        return Ok(());
+    }
     if let Some(e) = failed {
         if e.kind() == std::io::ErrorKind::InvalidData {
             return err_frame(w, &e, "find").await;
@@ -242,7 +273,7 @@ async fn find_bounded<W: AsyncWrite + Unpin>(
         return Err(e);
     }
     match walked {
-        Ok(()) => proto::write_frame(w, &Response::Done).await,
+        Ok(_) => proto::write_frame(w, &Response::Done).await,
         Err(e) => err_frame(w, &e, "read_dir").await,
     }
 }
@@ -278,7 +309,7 @@ fn glob_regex(glob: &str) -> Result<Regex, regex::Error> {
 mod tests {
     use std::time::Duration;
 
-    use tokio::io::{AsyncReadExt, DuplexStream};
+    use tokio::io::{AsyncReadExt, BufReader, DuplexStream};
     use tokio::task::JoinHandle;
 
     use super::*;
@@ -304,8 +335,22 @@ mod tests {
         (w, reader)
     }
 
+    fn silent_client() -> (DuplexStream, BufReader<DuplexStream>) {
+        let (peer, r) = tokio::io::duplex(64);
+        (peer, BufReader::new(r))
+    }
+
     async fn run(w: &mut DuplexStream, dir: &Path, budget: usize) -> std::io::Result<()> {
-        find_bounded(w, dir.display().to_string(), "needle".into(), None, budget).await
+        let (_peer, mut reader) = silent_client();
+        find_bounded(
+            &mut reader,
+            w,
+            dir.display().to_string(),
+            "needle".into(),
+            None,
+            budget,
+        )
+        .await
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -328,6 +373,49 @@ mod tests {
             .await
             .expect("walk must end once the writer is gone");
         assert!(found.is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn find_stops_without_done_when_the_client_disconnects() {
+        let dir = tree(2000, 1).await;
+        let (mut w, reader) = sink();
+        let (peer, mut client) = silent_client();
+        drop(peer);
+        let found = tokio::time::timeout(
+            Duration::from_secs(10),
+            find_bounded(
+                &mut client,
+                &mut w,
+                dir.path().display().to_string(),
+                "needle".into(),
+                None,
+                MATCH_QUEUE_BYTES,
+            ),
+        )
+        .await
+        .expect("walk must end once the client is gone");
+        found.expect("find");
+        drop(w);
+        let out = reader.await.expect("join");
+        assert!(!out.contains("\"type\":\"done\""), "{out}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn walk_stops_at_the_next_entry_once_the_receiver_is_gone() {
+        let dir = tree(50, 1).await;
+        let re = Regex::new("needle").expect("regex");
+        let (tx, rx) = mpsc::channel::<Response>(MATCH_QUEUE);
+        drop(rx);
+        let budget = MatchBudget::new(MATCH_QUEUE_BYTES, Handle::current());
+        let walk = Walk {
+            re: &re,
+            name_re: None,
+            tx: &tx,
+            budget: &budget,
+        };
+        let completed =
+            tokio::task::block_in_place(|| walk.run(dir.path().to_path_buf())).expect("walk");
+        assert!(!completed);
     }
 
     #[tokio::test(flavor = "multi_thread")]

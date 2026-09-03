@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"iter"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
@@ -11,6 +12,12 @@ import (
 // `?` wildcards).
 func (s *Sandbox) Find(ctx context.Context, path, pattern, glob string) ([]wire.Match, error) {
 	return collectRPC[wire.Match](ctx, s, &wire.FsFind{Path: path, Pattern: pattern, Glob: glob})
+}
+
+// FindSeq streams the matches Find would collect; breaking out of the loop
+// ends the walk in the guest, so the caller bounds the result.
+func (s *Sandbox) FindSeq(ctx context.Context, path, pattern, glob string) iter.Seq2[wire.Match, error] {
+	return streamRPC[wire.Match](ctx, s, &wire.FsFind{Path: path, Pattern: pattern, Glob: glob})
 }
 
 // Replace rewrites pattern (a regular expression) to replacement in each of
