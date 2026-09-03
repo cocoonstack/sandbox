@@ -56,7 +56,7 @@ replace (
 )
 
 require (
-	github.com/cocoonstack/sandbox/protocol/wire v0.1.8
+	github.com/cocoonstack/sandbox/protocol/wire v0.1.9
 	github.com/cocoonstack/sandbox/sandboxd v0.0.0
 	github.com/cocoonstack/sandbox/sdk/go v0.0.0
 )

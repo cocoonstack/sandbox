@@ -444,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "silkd"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "base64",
  "libc",
