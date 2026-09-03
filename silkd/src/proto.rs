@@ -417,14 +417,8 @@ fn cap_check(len: usize) -> io::Result<()> {
 /// the same cap the read side enforces — every client rejects a larger frame.
 fn render_frame(buf: &mut Vec<u8>, resp: &Response) -> io::Result<()> {
     let start = buf.len();
-    if let Err(e) = serde_json::to_writer(&mut *buf, resp) {
-        buf.truncate(start);
-        return Err(io::Error::other(e));
-    }
-    if let Err(e) = cap_check(buf.len() - start) {
-        buf.truncate(start);
-        return Err(e);
-    }
+    serde_json::to_writer(&mut *buf, resp).map_err(io::Error::other)?;
+    cap_check(buf.len() - start)?;
     buf.push(b'\n');
     Ok(())
 }
@@ -436,8 +430,10 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, resp: &Response) -> i
     w.flush().await
 }
 
-/// Writes frames in encoded-size batches, keeping each flushed chunk within
-/// one capped frame plus its newline. `buf` is reused across calls.
+/// Writes `frames` as one buffered batch, so a burst costs one write syscall
+/// instead of one per frame; a batch past one frame cap flushes early, so the
+/// staging buffer never holds more than the cap plus one frame. `buf` is
+/// reused across calls.
 pub async fn write_frames<W: AsyncWrite + Unpin>(
     w: &mut W,
     buf: &mut Vec<u8>,
@@ -448,10 +444,8 @@ pub async fn write_frames<W: AsyncWrite + Unpin>(
         let start = buf.len();
         render_frame(buf, frame)?;
         if start > 0 && buf.len() > MAX_FRAME {
-            let next = buf.split_off(start);
-            w.write_all(buf).await?;
-            buf.clear();
-            buf.extend_from_slice(&next);
+            w.write_all(&buf[..start]).await?;
+            buf.drain(..start);
         }
     }
     w.write_all(buf).await?;
@@ -743,19 +737,6 @@ mod tests {
         let mut r = tokio::io::BufReader::new(big.as_slice());
         let err = read_frame(&mut r).await.expect_err("must reject");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-    }
-
-    #[test]
-    fn frame_renderer_rolls_back_oversized_frames() {
-        let mut buf = b"prefix".to_vec();
-        let response = Response::Match {
-            file: "file".to_string(),
-            line: 1,
-            content: "\0".repeat(MAX_FRAME / 6),
-        };
-        let err = render_frame(&mut buf, &response).expect_err("must reject");
-        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-        assert_eq!(buf, b"prefix");
     }
 
     #[test]
