@@ -22,7 +22,7 @@ const FIND_MAX_FILE: u64 = 8 * 1024 * 1024;
 const MATCH_QUEUE: usize = 256;
 
 /// Bytes of match content in flight; 256 size-bound single-line frames would pin gigabytes.
-const MATCH_QUEUE_BYTES: usize = 8 * FIND_MAX_FILE as usize;
+const MATCH_QUEUE_BYTES: usize = 2 * FIND_MAX_FILE as usize;
 
 struct MatchBudget {
     bytes: Semaphore,
@@ -254,10 +254,10 @@ async fn oversized(file: &str) -> bool {
 }
 
 fn match_cost(frame: &Response) -> usize {
-    match frame {
-        Response::Match { file, content, .. } => file.len() + content.len(),
-        _ => 0,
-    }
+    let Response::Match { file, content, .. } = frame else {
+        return 0;
+    };
+    file.len() + content.len()
 }
 
 fn name_matches(path: &Path, name_re: Option<&Regex>) -> bool {
