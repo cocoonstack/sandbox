@@ -617,6 +617,13 @@ type Event struct {
 
 func (Event) RespType() string { return "event" }
 
+// GitFileStatus is one porcelain-v2 entry; Staged/Unstaged are XY status codes.
+type GitFileStatus struct {
+	Path     string `json:"path"`
+	Staged   string `json:"staged"`
+	Unstaged string `json:"unstaged"`
+}
+
 // GitStatusResult answers GitStatus.
 type GitStatusResult struct {
 	Branch    string          `json:"branch"`
@@ -627,13 +634,6 @@ type GitStatusResult struct {
 }
 
 func (GitStatusResult) RespType() string { return "git_status_result" }
-
-// GitFileStatus is one porcelain-v2 entry; Staged/Unstaged are XY status codes.
-type GitFileStatus struct {
-	Path     string `json:"path"`
-	Staged   string `json:"staged"`
-	Unstaged string `json:"unstaged"`
-}
 
 // GitCommitResult answers GitCommit with the new commit hash.
 type GitCommitResult struct {
