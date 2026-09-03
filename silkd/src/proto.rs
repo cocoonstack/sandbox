@@ -279,6 +279,8 @@ pub enum Response {
         ahead: u32,
         behind: u32,
         files: Vec<GitFileStatus>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        truncated: bool,
     },
     GitCommitResult {
         hash: String,
@@ -820,7 +822,7 @@ mod tests {
             seen += 1;
         }
         assert_eq!(
-            seen, 60,
+            seen, 61,
             "fixture corpus: adding a verb means adding its fixture"
         );
     }

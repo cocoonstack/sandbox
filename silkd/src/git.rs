@@ -12,6 +12,10 @@ use tokio::process::Command;
 use crate::proto::{self, ErrorKind, GitBranchOp, GitFileStatus, Response};
 use crate::sysutil;
 
+/// Estimated JSON bytes of file entries one status frame carries before it truncates; an eighth of the frame cap leaves room for escaping.
+const STATUS_FILES_BYTES: usize = proto::MAX_FRAME / 8;
+const STATUS_ENTRY_OVERHEAD: usize = 40;
+
 /// Clones `url` into `path` (optionally a branch, shallow depth), then Done.
 pub async fn clone<W: AsyncWrite + Unpin>(
     w: &mut W,
@@ -220,12 +224,19 @@ fn parse_status(text: &str) -> Response {
     let mut branch = String::new();
     let (mut ahead, mut behind) = (0, 0);
     let mut files = Vec::new();
+    let mut bytes = 0;
+    let mut truncated = false;
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("# branch.head ") {
             branch = rest.to_string();
         } else if let Some(rest) = line.strip_prefix("# branch.ab ") {
             (ahead, behind) = parse_ahead_behind(rest);
         } else if let Some(f) = parse_file_line(line) {
+            bytes += f.path.len() + STATUS_ENTRY_OVERHEAD;
+            if bytes > STATUS_FILES_BYTES {
+                truncated = true;
+                break;
+            }
             files.push(f);
         }
     }
@@ -234,6 +245,7 @@ fn parse_status(text: &str) -> Response {
         ahead,
         behind,
         files,
+        truncated,
     }
 }
 
@@ -308,6 +320,25 @@ fn split_author(author: &str) -> (&str, &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_truncates_past_the_frame_budget() {
+        let text: String = (0..200_000).map(|i| format!("? f{i}\n")).collect();
+        let Response::GitStatusResult {
+            files, truncated, ..
+        } = parse_status(&text)
+        else {
+            panic!("status frame")
+        };
+        assert!(truncated);
+        assert!(!files.is_empty() && files.len() < 200_000);
+        assert!(serde_json::to_vec(&parse_status(&text)).unwrap().len() < proto::MAX_FRAME);
+
+        let Response::GitStatusResult { truncated, .. } = parse_status("? one\n") else {
+            panic!("status frame")
+        };
+        assert!(!truncated);
+    }
 
     #[test]
     fn parses_ordinary_rename_untracked_and_conflict() {
