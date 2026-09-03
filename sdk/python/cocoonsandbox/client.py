@@ -49,8 +49,7 @@ class Client:
         candidates = (reply or {}).get("redirect") or []
         if not candidates:
             return
-        # The retry carries no_redirect, mirroring the claim protocol: the
-        # owner answers for itself, never a second hop.
+        # the owner answers for itself under no_redirect, never a second hop.
         query["no_redirect"] = "1"
         path = "/v1/templates?" + urllib.parse.urlencode(query)
         _try_each(candidates, lambda peer: self._request(peer, "DELETE", path, None, "delete template"))
@@ -60,8 +59,7 @@ class Client:
         mesh peer concurrently, binding to whichever confirms ownership
         first — one dead peer must not cost its full timeout."""
         def probe(addr: str) -> Sandbox:
-            # Bounded like _peers: a scatter loser must not hold a socket for
-            # the full client timeout after the winner has answered.
+            # bounded like _peers: a scatter loser must not hold a socket for the full timeout.
             reply = self._request(addr, "GET", f"/v1/sandboxes/{id}/owner", None, "owner",
                                   bearer=token, timeout=min(_PEERS_TIMEOUT, self.timeout))
             return Sandbox(client=self, id=id, token=token,
@@ -128,11 +126,7 @@ class Client:
         return self._handle_from(owner, reply)
 
     def _peers(self) -> list:
-        # /v1/peers is tenant-accessible (cluster topology); /v1/info is
-        # operator-only, so a tenant lookup cannot read peers from it. A
-        # single node has none — degrade to just the entry node. Bounded
-        # tighter than the client default (mirrors the Go SDK's peersTimeout)
-        # so one slow entry node cannot stall the scatter it feeds.
+        # /v1/peers is tenant-accessible; /v1/info is operator-only, so a tenant cannot read peers from it.
         try:
             return self._request(self.addr, "GET", "/v1/peers", None, "peers",
                                  timeout=min(_PEERS_TIMEOUT, self.timeout)).get("peers") or []
@@ -297,8 +291,7 @@ def _redirect_fallback(origin: str, candidates: list, post, verb: str):
         try:
             return attempt(origin)
         except APIError as origin_exc:
-            # Both halves matter to whoever reads this: the peers' failure says
-            # why the claim left the origin, the origin's why returning did not help.
+            # both halves matter: why the claim left the origin, and why returning did not help.
             combined = f"{origin_exc.message} (after redirect targets failed: {exc.message})"
             raise APIError(verb, origin_exc.status, combined) from origin_exc
 

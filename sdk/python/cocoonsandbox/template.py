@@ -26,8 +26,7 @@ class Template:
             mount: bool = True) -> Sandbox:
         """Claims the template, following placement when volumes require it.
         mount=False attaches the volumes without mounting them."""
-        # Local import: a top-level one would close the client → sandbox →
-        # template cycle.
+        # local import: a top-level one closes the client -> sandbox -> template cycle.
         from .client import _claim_body
 
         claim = _claim_body(self.name, self.net, self.size, ttl_seconds, volumes, mount)

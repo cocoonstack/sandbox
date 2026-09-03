@@ -27,8 +27,7 @@ class Checkpoint:
         redirect to the node that actually holds it; if every candidate
         fails transiently, the claim falls back to the origin once so it
         heals (pulls the checkpoint) locally."""
-        # Local import: a top-level one would close the client -> sandbox ->
-        # checkpoint cycle.
+        # local import: a top-level one closes the client -> sandbox -> checkpoint cycle.
         from .client import _redirect_fallback
 
         claim = {"ttl_seconds": ttl_seconds} if ttl_seconds else {}
