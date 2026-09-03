@@ -12,7 +12,7 @@ use tokio::process::Command;
 use crate::proto::{self, ErrorKind, Response, err_frame};
 use crate::sysutil;
 
-/// Extracts a client tar stream into `dest`, creating it; any failure leaves `dest` unchanged.
+/// Extracts a client tar stream into `dest`, creating it; a stream failure leaves `dest` unchanged.
 pub async fn push<R, W>(mut reader: R, w: &mut W, dest: String) -> io::Result<()>
 where
     R: AsyncBufRead + Unpin,

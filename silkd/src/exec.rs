@@ -13,11 +13,11 @@ use crate::proc::{Chunk, Proc, Table, synth_pid};
 use crate::proto::{ErrorKind, ExecReq, Request, Response};
 use crate::sysutil;
 
-/// Post-exit drain window; it bounds a daemonizing child that leaves stdout open in a grandchild.
+/// Post-exit drain window; it bounds a daemonizing grandchild, and a stalled client loses the undrained tail.
 const POST_EXIT_DRAIN: Duration = Duration::from_secs(2);
 /// How long an exited detached process stays in the table for a late `logs`/`attach`.
 const REAP_DELAY: Duration = Duration::from_secs(300);
-/// Foreground output depth; the child backpressures here, so nothing is dropped.
+/// Foreground output depth; while the child runs it backpressures here instead of dropping output.
 const FG_CAP: usize = 256;
 
 /// Runs an exec request, writing response frames to `out`; the dispatcher guarantees argv is non-empty.
