@@ -1,6 +1,4 @@
-//! `fs.watch`: stream filesystem events under a path until the client
-//! disconnects. Like every connection-bound verb, an event feed has no
-//! meaningful detached state, so it lives only as long as its connection.
+//! `fs.watch` streams filesystem events until the client disconnects; the feed has no detached state.
 
 use notify::{RecursiveMode, Watcher};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite};
@@ -10,8 +8,7 @@ use crate::proto::{self, ErrorKind, EventKind, Response};
 
 const OVERFLOW_MESSAGE: &str = "watch event queue overflow";
 
-/// Events written per syscall. A build tool emits them in tight bursts, so
-/// draining the queue in batches also keeps it far from its 256-slot cap.
+/// Events written per syscall; batching keeps the queue far from its 256-slot cap.
 const EVENT_BATCH: usize = 64;
 
 /// Watches `path`, writing `ready`, ordered events, or a terminal error until disconnect.
@@ -62,8 +59,7 @@ where
                     return Ok(());
                 }
             },
-            // The client sends nothing during a watch, so any readable state —
-            // EOF (disconnect), a stray frame, or an error — ends the watch.
+            // the client sends nothing during a watch, so any readable state ends it.
             _ = reader.fill_buf() => return Ok(()),
         }
     }
@@ -82,8 +78,7 @@ fn forward_frames(tx: &mut Option<mpsc::Sender<Response>>, frames: &mut Vec<Resp
     }
 }
 
-/// Renders one notify event onto `out`, which the caller reuses — nearly every
-/// event carries a single path.
+/// Renders one notify event onto `out`, which the caller reuses.
 fn to_frames(res: notify::Result<notify::Event>, out: &mut Vec<Response>) {
     use notify::EventKind as N;
     let event = match res {

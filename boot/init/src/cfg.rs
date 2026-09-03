@@ -1,13 +1,11 @@
-//! Kernel cmdline contract, shared with cocoon (hypervisor/utils.go builds
-//! the cmdline; this module is the consuming end).
+//! Kernel cmdline contract shared with cocoon, whose hypervisor/utils.go builds the cmdline.
 
 use std::fmt::Write as _;
 use std::time::Duration;
 
 pub const DEFAULT_INIT: &str = "/sbin/init";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
-// Cap: `Instant + Duration` panics on overflow, and a panic in PID 1 with
-// panic=abort is a kernel panic — a hung VM instead of fatal()'s poweroff.
+// cap the timeout: `Instant + Duration` panics on overflow, and a PID 1 panic is a kernel panic.
 const MAX_TIMEOUT_SECS: u64 = 86_400;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -19,8 +17,7 @@ pub struct BootCfg {
     /// Per-device wait budget.
     pub timeout: Duration,
     pub hostname: Option<String>,
-    /// Static per-NIC config from kernel ip= params (cocoon CNI flow).
-    /// Persisted as systemd-networkd units, never applied in the initramfs.
+    /// Static per-NIC config, persisted as networkd units and never applied in the initramfs.
     pub ips: Vec<IpParam>,
     /// Handoff target inside the assembled rootfs.
     pub init: String,
@@ -30,16 +27,14 @@ pub struct BootCfg {
     pub trace: bool,
 }
 
-/// One `ip=<addr>::<gw>:<mask>:<host>:<dev>:off[:dns0[:dns1]]` param
-/// (the shape cocoon's BuildIPParams emits, one per NIC).
+/// One `ip=<addr>::<gw>:<mask>:<host>:<dev>:off[:dns0[:dns1]]` param, as cocoon emits it per NIC.
 #[derive(Debug, PartialEq, Eq)]
 pub struct IpParam {
     pub addr: String,
     pub prefix: u8,
     pub gateway: Option<String>,
     pub dns: Vec<String>,
-    /// Initramfs-time device name (ethN) — only used to look up the MAC;
-    /// the persisted unit matches by MAC so rootfs udev renames don't matter.
+    /// Initramfs-time device name, used only to look up the MAC the persisted unit matches on.
     pub device: String,
 }
 
@@ -98,8 +93,7 @@ pub fn debug_requested(cmdline: &str) -> bool {
         .is_some_and(|(_, val)| debug_token(val))
 }
 
-/// Overlay mount data. Layer mountpoints are index-based (/l/0, /l/1, …) so
-/// arbitrary serial strings can never break lowerdir parsing (':' or ',').
+/// Overlay mount data; index-based layer mountpoints keep a serial string out of lowerdir parsing.
 pub fn overlay_data(lower: &[String], cow_dir: &str) -> String {
     format!(
         "lowerdir={},upperdir={cow_dir}/upper,workdir={cow_dir}/work,index=on,redirect_dir=on,metacopy=on,xino=on",
@@ -107,9 +101,7 @@ pub fn overlay_data(lower: &[String], cow_dir: &str) -> String {
     )
 }
 
-/// systemd-networkd unit for one static NIC. MAC-matched (device names may
-/// change once rootfs udev renames), named 10-<mac>.network so it sorts
-/// before the image's 20-wired.network DHCP fallback.
+/// systemd-networkd unit for one static NIC, named to sort before the image's DHCP fallback.
 pub fn network_unit(ip: &IpParam, mac: &str) -> String {
     let mut unit = format!(
         "[Match]\nMACAddress={mac}\n\n[Network]\nAddress={}/{}\n",

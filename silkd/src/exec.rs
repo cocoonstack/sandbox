@@ -1,6 +1,4 @@
-//! exec handler: spawn a child, register it in the process table, stream
-//! stdout/stderr as frames, and pump client stdin frames into it. Detached
-//! execs return after `started` and keep running for later attach/logs.
+//! exec handler: a detached exec returns after `started` and stays in the table for attach/logs.
 
 use std::process::Stdio;
 use std::sync::{Arc, OnceLock};
@@ -15,22 +13,14 @@ use crate::proc::{Chunk, Proc, Table, synth_pid};
 use crate::proto::{ErrorKind, ExecReq, Request, Response};
 use crate::sysutil;
 
-/// After the child is reaped, wait at most this long for the pump to finish
-/// before publishing Exit. It bounds a daemonizing child that leaves stdout
-/// open in a surviving grandchild; a foreground client stalled past this
-/// window can also lose the not-yet-drained pipe tail (bounded, rare).
+/// Post-exit drain window; it bounds a daemonizing child that leaves stdout open in a grandchild.
 const POST_EXIT_DRAIN: Duration = Duration::from_secs(2);
-/// How long an exited detached process stays in the table, so a late
-/// `logs`/`attach` still finds its ring instead of a bare not_found.
+/// How long an exited detached process stays in the table for a late `logs`/`attach`.
 const REAP_DELAY: Duration = Duration::from_secs(300);
-/// Foreground output buffer before the child is backpressured. Bounds how far
-/// ahead of a slow client the child may run, not a loss threshold.
+/// Foreground output depth; the child backpressures here, so nothing is dropped.
 const FG_CAP: usize = 256;
 
-/// Runs an exec request to completion (or to `started` when detached),
-/// writing response frames to `out`. `client` yields further client frames
-/// (stdin / stdin_close) for the foreground case. argv is non-empty — the
-/// dispatcher validates it before the session/process split.
+/// Runs an exec request, writing response frames to `out`; the dispatcher guarantees argv is non-empty.
 pub async fn run<W>(
     table: &Table,
     now_secs: u64,
@@ -70,9 +60,7 @@ where
     let pid = child.id().unwrap_or_else(synth_pid);
     let proc = table.register(pid, req.argv, req.detach, now_secs);
     if let Err(e) = crate::proto::write_frame(out, &Response::Started { pid }).await {
-        // The relay never learned this pid, so nothing will ever supervise or
-        // reap it: drop the table entry and kill the just-spawned child rather
-        // than leave a permanent Running ghost (and, when detached, an orphan).
+        // the client never learned this pid, so nothing else will ever reap the child.
         table.remove_if(pid, &proc);
         let _ = child.start_kill();
         return Err(e);
@@ -125,10 +113,7 @@ where
 
     let mut rx = fg_rx;
     if let Err(e) = stream_to_client(&mut rx, out).await {
-        // Client gone: abort supervise (kills the child via kill_on_drop) and
-        // the pump (else its handle only detaches, leaking task/fds behind a
-        // silent pipe-holder), then publish the terminal state the abort may
-        // have pre-empted — else an attacher on this pid waits forever.
+        // client gone: publish the terminal state the abort pre-empts, else an attacher waits forever.
         supervise.abort();
         pump_abort.abort();
         let _ = supervise.await;
@@ -164,11 +149,7 @@ where
     Ok(())
 }
 
-/// Reads stdout and stderr concurrently within this one task, so aborting the
-/// pump (POST_EXIT_DRAIN timeout) cancels both. A nested spawn would survive
-/// the abort and keep emitting a daemonizer's output after Exit. Each chunk
-/// goes to the ring+broadcast (attachers/replay) and, for a foreground exec,
-/// to the backpressured `fg` sender.
+/// Reads both streams in this one task, so a nested spawn cannot outlive the pump abort.
 async fn pump_out(
     proc: Arc<Proc>,
     stdout: Option<tokio::process::ChildStdout>,
@@ -202,15 +183,11 @@ where
             Ok(n) => n,
         };
         let Some(fg) = fg else {
-            // Detached: no foreground consumer, so the ring takes the slice
-            // and no owned chunk is built unless an attacher listens.
             proc.emit_bytes(stderr, &buf[..n]);
             continue;
         };
         let chunk = make(buf[..n].to_vec());
         proc.emit(&chunk);
-        // The foreground client backpressures here; emit above is
-        // best-effort fan-out to attachers.
         if fg.send(chunk).await.is_err() {
             break;
         }
@@ -224,7 +201,7 @@ async fn pump_stdin(
 ) {
     let Some(mut sink) = stdin else { return };
     if detach {
-        return; // detached execs take no client stdin
+        return;
     }
     while let Some(frame) = client.recv().await {
         match frame {

@@ -1,20 +1,6 @@
-//! LSP broker: silkd spawns the language server a flavor image ships for a
-//! language (its argv named in `/etc/silkd/lsp.d/<language>`), keeps it
-//! running addressed by a server id, and relays JSON-RPC bytes between the
-//! client and the server's stdio. silkd is a broker, not a gateway: it never
-//! parses LSP method semantics — the server multiplexes, silkd just pipes.
-//!
-//! `lsp_start` spawns and returns an id; `lsp_request` attaches the byte
-//! stream and pumps until either side closes (`data_end` half-closes the
-//! server's stdin, as in port_forward); `lsp_stop` kills it. v1 is
-//! single-shot per server: the stream ending — clean or dropped — reaps the
-//! server, since an LSP stream loses frame sync on any mid-request cut and a
-//! resynced reattach is not worth the failure surface. A server no
-//! `lsp_request` ever attaches is reaped on a TTL. The id and `lsp_stop`
-//! still earn their place: `lsp_start` for several languages yields several
-//! ids attached concurrently, and `lsp_stop` tears one down early. The base
-//! image ships no manifests, so `lsp_start` for any language there answers a
-//! typed `not_found` naming the flavor that provides one.
+//! LSP broker: silkd spawns the language server named by
+//! `/etc/silkd/lsp.d/<language>` and pipes JSON-RPC bytes, never parsing LSP
+//! semantics. A session is single-shot: the stream ending reaps the server.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -32,8 +18,7 @@ use crate::sysutil;
 
 const MANIFEST_DIR: &str = "/etc/silkd/lsp.d";
 
-/// A started server nothing attaches is reaped after this: a client that dies
-/// between the calls must not pin a 1-2 GB language server for the VM's life.
+/// Reap TTL for an unattached server: a dead client must not pin a 1-2 GB server.
 const ATTACH_TTL: Duration = Duration::from_secs(300);
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -49,8 +34,7 @@ impl Broker {
         Self::default()
     }
 
-    /// start spawns the manifested language server for `language`, rooted at
-    /// `root`, and returns its id. Absent manifest → typed not_found.
+    /// start spawns the manifested language server for `language` and returns its id.
     pub async fn start<W: AsyncWrite + Unpin>(
         &self,
         w: &mut W,
@@ -96,7 +80,7 @@ impl Broker {
         let id = format!("lsp-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
         sysutil::lock(&self.inner).insert(id.clone(), server);
 
-        // If the client is already gone, don't leak the server we just spawned.
+        // if the client is already gone, do not leak the server just spawned.
         if let Err(e) = proto::write_frame(
             w,
             &Response::LspStarted {
@@ -116,10 +100,7 @@ impl Broker {
         Ok(())
     }
 
-    /// request attaches this connection to the server's stdio: client `data`
-    /// frames feed its stdin, its stdout streams back as `data` frames. When
-    /// either side closes the session is over — the server is reaped, so a
-    /// dropped connection never leaves a half-written stdin for a next caller.
+    /// request attaches this connection to the server's stdio and reaps the server on close.
     pub async fn request<W: AsyncWrite + Unpin>(
         &self,
         client: mpsc::Receiver<Request>,
@@ -137,8 +118,7 @@ impl Broker {
             }
             Some(Some(stdio)) => stdio,
         };
-        // The stdio halves are out of the table, so the attach TTL no longer
-        // covers this server: a client already gone must reap it here.
+        // the attach TTL no longer covers a server whose stdio halves are taken.
         if let Err(e) = proto::write_frame(w, &Response::Ready).await {
             self.reap(server_id).await;
             return Err(e);
@@ -146,9 +126,7 @@ impl Broker {
 
         let feed = tokio::spawn(feed_stdin(client, stdin));
         let res = pump_stdout(stdout, w).await;
-        // The session ends with this connection: stop feeding and reap the
-        // server. Aborting is safe here — we are killing the child, so a
-        // partially-written stdin frame goes nowhere.
+        // aborting mid-write is safe: the child is killed next.
         feed.abort();
         let _ = self.reap(server_id).await;
         res
@@ -167,8 +145,6 @@ impl Broker {
         }
     }
 
-    /// reap removes a server from the table and kills + waits its child (no
-    /// zombie survives), reporting whether it was there.
     async fn reap(&self, server_id: &str) -> bool {
         let removed = sysutil::lock(&self.inner).remove(server_id);
         match removed {
@@ -180,8 +156,7 @@ impl Broker {
         }
     }
 
-    /// reap for a server no `lsp_request` ever attached; one that is attached
-    /// (its stdout taken) belongs to that connection and is left alone.
+    /// reap for a server no `lsp_request` ever attached.
     async fn reap_unattached(&self, server_id: &str) {
         let removed = {
             let mut table = sysutil::lock(&self.inner);
@@ -196,8 +171,7 @@ impl Broker {
     }
 }
 
-/// One running language server. `lsp_request` takes both stdio halves, so a
-/// present stdout is also the flag that no connection has attached yet.
+/// One running language server; a present `stdout` means no connection has attached.
 struct Server {
     child: Child,
     stdin: Option<ChildStdin>,
@@ -211,10 +185,7 @@ async fn kill(mut server: Server) {
 
 async fn feed_stdin(mut client: mpsc::Receiver<Request>, mut stdin: ChildStdin) {
     while let Some(req) = client.recv().await {
-        // Anything but data half-closes by dropping stdin, aligned with
-        // port_forward: the server sees EOF, flushes, and exits (stdout then
-        // EOFs -> Done -> reap). A stray frame gets the same close, since the
-        // writer belongs to the stdout pump.
+        // a stray frame closes rather than errors: this task has no writer.
         let Request::Data { data } = req else { return };
         if stdin.write_all(&data).await.is_err() || stdin.flush().await.is_err() {
             return;
@@ -241,8 +212,7 @@ async fn read_manifest(language: &str) -> Option<Vec<String>> {
     if language.is_empty() || language.contains(['/', '\\', '\0']) || language.contains("..") {
         return None; // never let a language name escape the manifest dir
     }
-    // O_NOFOLLOW: a symlink planted inside lsp.d must not read a target
-    // outside it.
+    // O_NOFOLLOW: a symlink in lsp.d must not read a target outside it.
     let mut f = tokio::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW)

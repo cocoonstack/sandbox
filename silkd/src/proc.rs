@@ -1,7 +1,4 @@
-//! Process table: every exec is registered so `ps`/`kill`/`attach`/`logs`
-//! work against a guest pid regardless of which connection started it.
-//! Detached processes keep a bounded output ring so a later `logs`/`attach`
-//! can replay what already streamed.
+//! Process table: every exec is registered so `ps`/`kill`/`attach`/`logs` work across connections.
 
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
@@ -18,8 +15,7 @@ use crate::sysutil;
 const LOG_RING_BYTES: usize = 256 * 1024;
 const OUTPUT_FANOUT: usize = 256;
 
-/// Monotonic fallback pids for a spawned child with no reported OS pid; kept
-/// below i32::MAX so a later signal cast to pid_t stays a valid pid.
+/// Fallback pids for a child with no OS pid, masked below i32::MAX so a pid_t cast stays valid.
 static SYNTH: AtomicU64 = AtomicU64::new(1 << 30);
 
 /// A chunk of process output tagged by stream, shared with live attachers.
@@ -31,7 +27,6 @@ pub enum Chunk {
 }
 
 impl Chunk {
-    /// The response frame that carries this chunk to a client.
     pub fn into_response(self) -> Response {
         match self {
             Chunk::Stdout(data) => Response::Stdout { data },
@@ -75,8 +70,7 @@ impl Table {
         sysutil::lock(&self.inner).get(&pid).cloned()
     }
 
-    /// Looks up a pid, writing a NotFound frame and returning None on a miss —
-    /// the shared prelude of kill/logs/attach/pty.resize.
+    /// Looks up a pid, writing a NotFound frame and returning None on a miss.
     pub async fn get_or_not_found<W: AsyncWrite + Unpin>(
         &self,
         w: &mut W,
@@ -98,9 +92,7 @@ impl Table {
             .collect()
     }
 
-    /// Removes the entry only if it is still `proc`. OS pids are recycled, so
-    /// a deferred cleanup that removed by pid alone could evict a newer
-    /// process that reused the number.
+    /// Removes the entry only if it is still `proc`, because a recycled pid could name a newer process.
     pub fn remove_if(&self, pid: u32, proc: &Arc<Proc>) {
         let mut map = sysutil::lock(&self.inner);
         if map.get(&pid).is_some_and(|cur| Arc::ptr_eq(cur, proc)) {
@@ -117,10 +109,7 @@ impl Table {
     }
 }
 
-/// One tracked process. `tx` fans out live output; `ring` retains a bounded
-/// tail for replay; `state` flips to exited when the child is reaped.
-/// `pty_master` holds a dup of a pty's master fd (None for a plain exec) so
-/// `pty.resize` can ioctl it without racing the I/O task's own fd.
+/// One tracked process; `pty_master` is a dup, so `resize` cannot race the I/O task's fd.
 pub struct Proc {
     pub pid: u32,
     pub argv: Vec<String>,
@@ -133,12 +122,7 @@ pub struct Proc {
 }
 
 impl Proc {
-    /// Records output for replay and fans it out to live attachers, holding
-    /// the ring lock across the broadcast send so an `attach` racing this
-    /// emit sees the chunk in exactly one of replay or the live stream.
-    /// The broadcast clone is skipped when nobody listens (the common case
-    /// on the output hot path); `attach_stream` subscribes under this same
-    /// ring lock, so the receiver count cannot change mid-emit.
+    /// Records output and fans it out; the ring lock spans the send, so a racing `attach` cannot double a chunk.
     pub fn emit(&self, chunk: &Chunk) {
         let mut ring = sysutil::lock(&self.ring);
         if let Chunk::Stdout(d) | Chunk::Stderr(d) = chunk {
@@ -149,9 +133,7 @@ impl Proc {
         }
     }
 
-    /// `emit` for produced bytes: the ring takes the borrowed slice, and the
-    /// owned Chunk is built only when an attacher is actually listening — a
-    /// pty or detached exec pays no allocation on its output path otherwise.
+    /// `emit` for borrowed bytes; the owned Chunk is built only when an attacher listens.
     pub fn emit_bytes(&self, stderr: bool, data: &[u8]) {
         let mut ring = sysutil::lock(&self.ring);
         ring.push(stderr, data);
@@ -186,8 +168,6 @@ impl Proc {
     }
 
     /// The exit code if the process has already exited; None while running.
-    /// Lets `logs`/`attach`/`kill` act on terminal state instead of waiting
-    /// on (or signalling against) a pid whose child is already reaped.
     pub fn exit_code(&self) -> Option<i32> {
         match *sysutil::lock(&self.state) {
             State::Running => None,
@@ -200,9 +180,7 @@ impl Proc {
         sysutil::lock(&self.ring).drain_view()
     }
 
-    /// Atomically snapshots retained output and subscribes to live output
-    /// under one lock, so a chunk emitted concurrently lands in the replay or
-    /// the receiver but never both (no duplicate in the client's stream).
+    /// Snapshots retained output and subscribes to live output under one lock.
     pub fn attach_stream(&self) -> (Vec<Chunk>, broadcast::Receiver<Chunk>) {
         let mut ring = sysutil::lock(&self.ring);
         (ring.drain_view(), self.tx.subscribe())
@@ -236,9 +214,7 @@ impl Ring {
         self.trim();
     }
 
-    /// Drops whole oldest segments until the buffer fits the cap. VecDeque
-    /// front-drains are O(dropped), not O(remaining), so a chatty process
-    /// does not pay a full-buffer memmove per chunk.
+    /// Drops whole oldest segments until the buffer fits the cap; a front-drain is O(dropped).
     fn trim(&mut self) {
         let mut over = self.buf.len().saturating_sub(LOG_RING_BYTES);
         while over > 0 {
@@ -250,8 +226,7 @@ impl Ring {
         }
     }
 
-    /// Retained output, coalescing adjacent same-stream segments: reads leave
-    /// tens of thousands of tiny ones and the client concatenates them anyway.
+    /// Retained output, with adjacent same-stream segments coalesced into one chunk.
     fn drain_view(&mut self) -> Vec<Chunk> {
         let bytes = self.buf.make_contiguous();
         let mut out: Vec<Chunk> = Vec::new();

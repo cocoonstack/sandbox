@@ -1,5 +1,4 @@
-//! Boot sequence: early mounts → resolve disks → overlay → network persist →
-//! switch_root → exec.
+//! Boot sequence: early mounts, resolve disks, overlay, persist network, switch_root, exec.
 
 use std::fs;
 use std::path::Path;
@@ -12,8 +11,7 @@ const LAYER_DIR: &str = "/l";
 const COW_DIR: &str = "/cow";
 const NEWROOT: &str = "/newroot";
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
-// NICs probe in single-digit ms; a missing one must degrade to the DHCP
-// fallback, not stall rootfs handoff for the full disk budget (10s).
+// a missing NIC must degrade to the DHCP fallback, not stall handoff for the disk budget.
 const NIC_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// Cumulative µs checkpoints since sandbox-init start.
@@ -44,8 +42,7 @@ impl Marks {
 
 pub fn run() -> ! {
     let mut marks = Marks::new();
-    // Best-effort: if devtmpfs fails there is no console either; later
-    // failures then power off silently, which is still the right end state.
+    // best-effort: without devtmpfs there is no console, so a later failure powers off silently.
     let _ = sys::mount(
         "devtmpfs",
         "/dev",
@@ -57,8 +54,7 @@ pub fn run() -> ! {
     let _ = sys::mount("proc", "/proc", Some("proc"), sys::MNT_SECURE, None);
     let _ = sys::mount("sysfs", "/sys", Some("sysfs"), sys::MNT_SECURE, None);
 
-    // Start marker: kernel-relative and visible at production loglevel,
-    // where the kernel's own boot lines are suppressed. One console write.
+    // start marker, visible at production loglevel where the kernel's own boot lines are suppressed.
     println!("sandbox-init: start at {}s", uptime());
 
     let cmdline = fs::read_to_string("/proc/cmdline").unwrap_or_default();
@@ -71,13 +67,11 @@ pub fn run() -> ! {
         sys::fatal(&err, cfg.debug);
     }
 
-    // One deferred trace line (µs, cumulative since sandbox-init start):
-    // per-phase console writes would perturb exactly what they measure.
+    // one deferred line: per-phase console writes would perturb what they measure.
     if cfg.trace {
         println!("sandbox-init: trace{}", marks.render());
     }
-    // Single marker line; boot-bench.sh keys on it. Uptime is kernel-relative,
-    // directly comparable with printk timestamps on the serial log.
+    // boot-bench.sh keys on this line; the uptime is comparable with printk timestamps.
     println!(
         "sandbox-init: rootfs ready at {}s, handing off to {}",
         uptime(),
@@ -171,8 +165,7 @@ fn persist_network(cfg: &BootCfg) {
     }
 }
 
-/// Resolves every NIC's MAC in one sysfs sweep per poll iteration, against one
-/// shared deadline — a missing NIC must cost the timeout once, not once each.
+/// Resolves every NIC MAC against one shared deadline, so a missing NIC costs the timeout once.
 fn wait_nic_macs(devices: &[&str], timeout: Duration) -> Vec<Option<String>> {
     let deadline = Instant::now() + timeout;
     let mut found: Vec<Option<String>> = vec![None; devices.len()];

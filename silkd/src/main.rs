@@ -1,7 +1,4 @@
-//! silkd: the in-guest sandbox daemon. Listens on a hybrid-vsock port for
-//! newline-JSON RPC frames from the host (relayed by sandboxd) and runs
-//! commands with context, tracks processes, moves files, and holds sessions.
-//! `proto::Request` is the authoritative verb list.
+//! silkd: the in-guest daemon serving newline-JSON RPC frames over hybrid-vsock; `proto::Request` is the verb list.
 
 use std::sync::Arc;
 
@@ -23,8 +20,7 @@ async fn main() {
         session::IDLE_TTL,
         session::REAP_INTERVAL,
     ));
-    // Loopback→host egress relay: harmless when the host wired no proxy (the
-    // per-conn vsock dial is refused), so it needs no lane gate here.
+    // no lane gate needed: an unwired host refuses the per-conn vsock dial.
     tokio::spawn(net_egress::serve(
         net_egress::LOOPBACK_PORT,
         net_egress::HOST_VSOCK_PORT,

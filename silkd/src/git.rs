@@ -1,8 +1,4 @@
-//! git verbs: wrap the guest git binary and return structured results
-//! (branch, ahead/behind, per-file status, commit hash) rather than stdout to
-//! scrape. clone/push/pull need the network, so on the none lane they fail
-//! with a typed error pointing at fs.push; the rest are local and always work.
-//! An auth token rides in an in-memory `http.extraHeader`, never the guest disk.
+//! git verbs wrap the guest git binary into structured results; the none lane fails clone/push/pull with a typed error.
 
 use std::borrow::Cow;
 use std::process::Stdio;
@@ -66,16 +62,14 @@ pub async fn add<W: AsyncWrite + Unpin>(
     terminal(w, "add", &out).await
 }
 
-/// Commits staged changes with `message` and `author` ("Name <email>"),
-/// returning the new commit hash.
+/// Commits staged changes and returns the new commit hash.
 pub async fn commit<W: AsyncWrite + Unpin>(
     w: &mut W,
     path: String,
     message: String,
     author: String,
 ) -> std::io::Result<()> {
-    // A fresh guest has no committer identity, so git commit would fail to
-    // auto-detect one; derive the committer from the author.
+    // a fresh guest has no committer identity, so derive one from the author.
     let (name, email) = split_author(&author);
     let mut cmd = git_cmd(&path, None);
     cmd.env("GIT_COMMITTER_NAME", name)
@@ -303,8 +297,7 @@ fn parse_file_line(line: &str) -> Option<GitFileStatus> {
     }
 }
 
-/// Splits an author "Name <email>" into (name, email); a missing angle form
-/// leaves the whole string as the name.
+/// Splits an author "Name <email>" into (name, email); a missing angle form is all name.
 fn split_author(author: &str) -> (&str, &str) {
     if let Some(open) = author.find('<')
         && let Some(close) = author[open..].find('>')

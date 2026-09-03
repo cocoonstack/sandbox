@@ -1,21 +1,11 @@
-//! Guest network-lane detection. The egress lane has a device-backed NIC;
-//! the none lane carries only virtual interfaces (lo, plus the tunnels an
-//! all-builtin kernel auto-creates). Network verbs (git clone/push/pull) and
-//! proxy-env forwarding consult this.
+//! Guest network-lane detection: the egress lane has a device-backed NIC, the none lane only virtual interfaces.
 
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicI8, Ordering};
 
 static LANE_OVERRIDE: AtomicI8 = AtomicI8::new(-1);
 
-/// Reports whether the guest can reach a network. `SILKD_NET` overrides the
-/// probe (`none` / `egress`) for operators; otherwise an interface under
-/// /sys/class/net backed by a real device (a `device` symlink) counts.
-/// Name filtering is not enough: the all-builtin sandbox kernel auto-creates
-/// virtual tunnels (sit0 and friends) even on the no-NIC lane, and `lo` is
-/// virtual too — only a virtio/physical NIC has a device backing. On
-/// non-Linux dev hosts (no /sys/class/net) it defaults to true so git verbs
-/// are testable.
+/// Reports whether the guest can reach a network; only a `device`-backed interface counts, since the kernel auto-creates virtual tunnels.
 pub fn has_egress() -> bool {
     match LANE_OVERRIDE.load(Ordering::Relaxed) {
         0 => return false,
