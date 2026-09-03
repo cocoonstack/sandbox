@@ -52,8 +52,7 @@ def test_spawn_returns_pid(monkeypatch):
 
 
 def test_ps_lists_procs(monkeypatch):
-    procs = [{"pid": 41, "argv": ["sleep"], "detached": True, "state": "running",
-              "started_at_epoch_secs": 1}]
+    procs = [{"pid": 41, "argv": ["sleep"], "detached": True, "state": "running", "started_at_epoch_secs": 1}]
     sb, _ = fake_sandbox(monkeypatch, [{"type": "procs", "procs": procs}])
     assert sb.ps() == procs
 
@@ -65,9 +64,7 @@ def test_kill_sends_signal(monkeypatch):
 
 
 def test_logs_running_proc_has_no_code(monkeypatch):
-    frames = [{"type": "stdout", "data": b"hello"},
-              {"type": "stderr", "data": b"oops"},
-              {"type": "done"}]
+    frames = [{"type": "stdout", "data": b"hello"}, {"type": "stderr", "data": b"oops"}, {"type": "done"}]
     sb, _ = fake_sandbox(monkeypatch, frames)
     out, errs = [], []
     assert sb.logs(41, on_stdout=out.append, on_stderr=errs.append) is None

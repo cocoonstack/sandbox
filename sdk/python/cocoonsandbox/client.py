@@ -28,8 +28,16 @@ class Client:
         self.api_token = api_token
         self.timeout = timeout
 
-    def new(self, template: str, net: str = "", size: str = "", ttl_seconds: int = 0, claim_ref: str = "",
-            volumes: list[str | Mapping[str, str]] | None = None, mount: bool = True) -> Sandbox:
+    def new(
+        self,
+        template: str,
+        net: str = "",
+        size: str = "",
+        ttl_seconds: int = 0,
+        claim_ref: str = "",
+        volumes: list[str | Mapping[str, str]] | None = None,
+        mount: bool = True,
+    ) -> Sandbox:
         """Claims a sandbox; a warm hit is milliseconds. On a cluster a warm
         miss may redirect to a peer, followed transparently; if every
         candidate fails transiently, the claim falls back to the origin
@@ -58,12 +66,19 @@ class Client:
         """Relocates a handle from id + token: asks the entry node and every
         mesh peer concurrently, binding to whichever confirms ownership
         first — one dead peer must not cost its full timeout."""
+
         def probe(addr: str) -> Sandbox:
             # bounded like _peers: a scatter loser must not hold a socket for the full timeout.
-            reply = self._request(addr, "GET", f"/v1/sandboxes/{id}/owner", None, "owner",
-                                  bearer=token, timeout=min(_PEERS_TIMEOUT, self.timeout))
-            return Sandbox(client=self, id=id, token=token,
-                           owner=reply.get("owner_addr") or addr)
+            reply = self._request(
+                addr,
+                "GET",
+                f"/v1/sandboxes/{id}/owner",
+                None,
+                "owner",
+                bearer=token,
+                timeout=min(_PEERS_TIMEOUT, self.timeout),
+            )
+            return Sandbox(client=self, id=id, token=token, owner=reply.get("owner_addr") or addr)
 
         addrs = [self.addr, *self._peers()]
         try:
@@ -128,8 +143,12 @@ class Client:
     def _peers(self) -> list:
         # /v1/peers is tenant-accessible; /v1/info is operator-only, so a tenant cannot read peers from it.
         try:
-            return self._request(self.addr, "GET", "/v1/peers", None, "peers",
-                                 timeout=min(_PEERS_TIMEOUT, self.timeout)).get("peers") or []
+            return (
+                self._request(
+                    self.addr, "GET", "/v1/peers", None, "peers", timeout=min(_PEERS_TIMEOUT, self.timeout)
+                ).get("peers")
+                or []
+            )
         except APIError:
             return []
 
@@ -148,8 +167,9 @@ class Client:
     def _post_json(self, addr: str, path: str, body: dict, verb: str) -> dict:
         return self._request(addr, "POST", path, body, verb)
 
-    def _request(self, addr: str, method: str, path: str, body, verb: str, bearer: str = "",
-                 timeout: float = 0.0) -> dict:
+    def _request(
+        self, addr: str, method: str, path: str, body, verb: str, bearer: str = "", timeout: float = 0.0
+    ) -> dict:
         """Issues one control-plane request. bearer overrides the api token —
         sandbox-scoped verbs (release, hibernate) authenticate with the
         per-sandbox token instead; timeout overrides the client default (0 keeps it)."""
@@ -182,9 +202,15 @@ class Client:
             raise APIError(verb, 0, "malformed JSON in response") from exc
 
 
-def _claim_body(template: str, net: str, size: str, ttl_seconds: int,
-                volumes: list[str | Mapping[str, str]] | None = None, mount: bool = True,
-                claim_ref: str = "") -> dict:
+def _claim_body(
+    template: str,
+    net: str,
+    size: str,
+    ttl_seconds: int,
+    volumes: list[str | Mapping[str, str]] | None = None,
+    mount: bool = True,
+    claim_ref: str = "",
+) -> dict:
     claim = {"template": template}
     if net:
         claim["net"] = net
@@ -209,7 +235,8 @@ def _volume_body(volume: str | Mapping[str, str], mount: bool) -> dict:
     unknown = sorted(set(volume) - {"name", "mount", "mode"})
     if unknown:
         raise TypeError(
-            f"volume mapping accepts only name, mount, and mode, got unexpected key(s): {', '.join(unknown)}")
+            f"volume mapping accepts only name, mount, and mode, got unexpected key(s): {', '.join(unknown)}"
+        )
     if not mount and "mount" in volume:
         raise TypeError("volume mount is meaningless with mount=False, which leaves mounting to the caller")
     body = dict(volume)
@@ -277,6 +304,7 @@ def _redirect_fallback(origin: str, candidates: list, post, verb: str):
     would fail the same way. A second-level redirect (a compliant server
     never sends one once no_redirect is set) fails the candidate rather than
     being followed. Returns (addr, reply)."""
+
     def attempt(addr):
         reply = post(addr)
         if reply.get("redirect"):

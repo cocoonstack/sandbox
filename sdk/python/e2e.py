@@ -41,6 +41,7 @@ def main() -> int:
         def wrap(fn):
             steps.append((name, fn))
             return fn
+
         return wrap
 
     @step("exec")
@@ -128,7 +129,7 @@ def main() -> int:
         branch = ckpt.new()
         try:
             assert branch.read_file("/root/ck.txt") == b"v1"  # captured moment
-            assert sb.read_file("/root/ck.txt") == b"v2"      # source unaffected
+            assert sb.read_file("/root/ck.txt") == b"v2"  # source unaffected
         finally:
             branch.close()
         listed = [c.id for c in client.checkpoints()]

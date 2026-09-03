@@ -171,10 +171,12 @@ def test_delete_template_server_error_raises_immediately(spawn_node):
 
 def test_lookup_dead_peer_resolves_fast(spawn_node, dead_addr):
     owner = spawn_node({("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (200, {"owner_addr": "10.0.0.9:7777"})})
-    entry = spawn_node({
-        ("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (404, {"error": "not here"}),
-        ("GET", "/v1/peers"): lambda body, path: (200, {"peers": [dead_addr, owner]}),
-    })
+    entry = spawn_node(
+        {
+            ("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (404, {"error": "not here"}),
+            ("GET", "/v1/peers"): lambda body, path: (200, {"peers": [dead_addr, owner]}),
+        }
+    )
     start = time.monotonic()
     sb = Client(entry, timeout=10.0).lookup("sb_1", "tok")
     elapsed = time.monotonic() - start
@@ -184,10 +186,12 @@ def test_lookup_dead_peer_resolves_fast(spawn_node, dead_addr):
 
 def test_lookup_hung_peer_resolves_fast(spawn_node, hung_addr):
     owner = spawn_node({("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (200, {"owner_addr": "10.0.0.9:7777"})})
-    entry = spawn_node({
-        ("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (404, {"error": "not here"}),
-        ("GET", "/v1/peers"): lambda body, path: (200, {"peers": [hung_addr, owner]}),
-    })
+    entry = spawn_node(
+        {
+            ("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (404, {"error": "not here"}),
+            ("GET", "/v1/peers"): lambda body, path: (200, {"peers": [hung_addr, owner]}),
+        }
+    )
     start = time.monotonic()
     sb = Client(entry, timeout=10.0).lookup("sb_1", "tok")
     elapsed = time.monotonic() - start
@@ -196,10 +200,12 @@ def test_lookup_hung_peer_resolves_fast(spawn_node, hung_addr):
 
 
 def test_lookup_all_miss(spawn_node, dead_addr):
-    entry = spawn_node({
-        ("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (404, {"error": "not here"}),
-        ("GET", "/v1/peers"): lambda body, path: (200, {"peers": [dead_addr]}),
-    })
+    entry = spawn_node(
+        {
+            ("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (404, {"error": "not here"}),
+            ("GET", "/v1/peers"): lambda body, path: (200, {"peers": [dead_addr]}),
+        }
+    )
     with pytest.raises(APIError) as exc:
         Client(entry).lookup("sb_1", "tok")
     assert exc.value.status == 404 and "no owner found" in exc.value.message
