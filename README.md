@@ -61,7 +61,7 @@ performance) — source in
   perf drivers
 - `boot/kernel/` — kernel version pin (`VERSION` + matching tarball `SHA256`,
   bump both together) + config fragment (amd64: over `x86_64_defconfig` +
-  `kvm_guest.config`; arm64: over `defconfig` + `sandbox-arm64.config`)
+  `kvm_guest.config`; arm64: over `defconfig`, then `sandbox-arm64.config`)
 - `boot/init/` — `sandbox-init`, the entire initramfs userland (Rust, static
   musl build)
 - `boot/Dockerfile` — multi-stage: kernel → init → cpio → scratch image with
@@ -107,9 +107,9 @@ TEMPLATE=rt:24.04 scripts/sandboxd-e2e.sh
 #   `ip link add br0 type bridge` with no uplink is enough (NIC, not network).
 # SANDBOXD_BIN/DEMO_BIN/SMOKE_BIN point at prebuilt binaries for nodes
 #   without a Go toolchain.
-# VOLUME_IMAGE=/absolute/dataset.img enables the volumes proof (ro sharing
-#   + rw claim/release); the image contains volume-e2e.txt. Prebuilt runs
-#   also set VOLUME_SMOKE_BIN.
+# VOLUME_IMAGE=/absolute/dataset.img enables the volumes proof (ro sharing;
+#   the image contains volume-e2e.txt); VOLUME_RW_IMAGE=/absolute/scratch.img
+#   adds the rw claim/release leg. Prebuilt runs also set VOLUME_SMOKE_BIN.
 ```
 
 ## CI

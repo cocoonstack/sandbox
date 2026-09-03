@@ -112,10 +112,11 @@ snapshot paths.
 ## Claims-journal write path
 
 `claim`/`release`/`hibernate`/`wake` persist `claims.json`, but the write is
-kept off the manager mutex — the lock every data-plane op contends. `snapshot()`
-takes a cheap by-value copy of the claim map under the mutex; `commit()` marshals
-it, writes, and renames off the mutex, serialized and coalescing by sequence so
-an older snapshot never overwrites a newer one. Only the startup `Reconcile`
+kept off the manager mutex — the lock every data-plane op contends. `set`/`del`
+update a projection map and bump a sequence under the store's own mutex;
+`commit()` clones that map under it, then marshals, writes, and renames off
+every mutex, serialized and coalescing by sequence so an older snapshot never
+overwrites a newer one. Only the startup `Reconcile`
 pass (pre-contention) still marshals and writes in one call under the lock.
 
 `BenchmarkStorePersistContention` measures the ns a concurrent manager-mutex

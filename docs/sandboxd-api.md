@@ -287,11 +287,12 @@ every node resolve it. Under exactly this key:
 ```
 
 `content_digest` is SHA-256 over a versioned canonical stream of the published
-export's regular files: slash-relative path, byte length, and bytes, ordered
-lexically. Directory entries, modes, mtimes, and the template's ownership/
-creation metadata do not affect it. The digest is computed once while
-promoting, stored in `meta.json`, and therefore has identical semantics on the
-directory and S3 backends. Re-promoting unchanged export bytes keeps the
+export's regular files: slash-relative path, byte length, and the SHA-256 of
+each 16 MiB chunk of its bytes, ordered lexically. Directory entries, modes,
+mtimes, and the template's ownership/creation metadata do not affect it. The
+digest is computed once while promoting, stored beside `meta.json` (a sibling
+digest file on the directory backend, object metadata on S3), and therefore has
+identical semantics on both. Re-promoting unchanged export bytes keeps the
 digest; changing any exported path or bytes changes it.
 
 400 invalid name, 401 bad api token, 409 when the name collides with a
