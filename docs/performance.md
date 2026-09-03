@@ -21,7 +21,7 @@ bare metal, `small` tier:
 |---|---|---|
 | warm pool hit | **0.2–0.7 ms** | ownership transfer only; refill re-tops the pool in the background |
 | pool miss, golden exists | **~26–39 ms** | clone from the golden snapshot + entropy/machine-id reseed + readiness probe |
-| cold boot (no golden yet) | **~200–350 ms** | full boot from the template image to silkd answering |
+| cold boot (no golden yet) | **~215–400 ms** | full boot from the template image to silkd answering |
 
 Cloud Hypervisor lifecycle latency (bare metal, vsock agent-ready):
 
