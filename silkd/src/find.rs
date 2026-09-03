@@ -17,7 +17,7 @@ use crate::proto::{self, ErrorKind, Response, err_frame};
 const FIND_MAX_FILE: u64 = 8 * 1024 * 1024;
 
 /// Match frames in flight between the walking thread and the writer.
-const MATCH_QUEUE: usize = 256;
+const MATCH_QUEUE: usize = 8;
 
 /// Streams `match` frames for every line under `path` matching `pattern`,
 /// terminated by `done`. `glob` narrows the walk to file names matching it
@@ -55,6 +55,7 @@ pub async fn find<W: AsyncWrite + Unpin>(
     drop(rx);
     let walked = walk.await.map_err(std::io::Error::other)?;
     match failed {
+        Some(e) if e.kind() == std::io::ErrorKind::InvalidData => err_frame(w, &e, "find").await,
         Some(e) => Err(e),
         None => match walked {
             Ok(()) => proto::write_frame(w, &Response::Done).await,
