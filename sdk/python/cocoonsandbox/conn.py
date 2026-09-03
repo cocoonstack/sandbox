@@ -84,7 +84,10 @@ def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float) -> Conn:
         if any(c in value for c in "\r\n\0"):
             raise APIError("agent upgrade", 0, f"{name} contains a control character")
     host, port = addr.rsplit(":", 1)
-    sock = socket.create_connection((host, int(port)), timeout=timeout)
+    try:
+        sock = socket.create_connection((host, int(port)), timeout=timeout)
+    except OSError as exc:
+        raise ProtocolError(f"dial {addr}: {exc}") from exc
     # Nagle off: exec/write send small back-to-back frames before the first read.
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     reader = None

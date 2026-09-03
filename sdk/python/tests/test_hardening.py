@@ -17,6 +17,11 @@ def test_dial_agent_rejects_control_chars_in_identity():
         dial_agent("127.0.0.1:1", "sb_1", "tok\r\nX-Evil: 1", 0.5)
 
 
+def test_dial_agent_wraps_refused_connection(dead_addr):
+    with pytest.raises(ProtocolError):
+        dial_agent(dead_addr, "sb_1", "tok", 0.5)
+
+
 def test_watcher_propagates_silkd_error():
     client_sock, guest_sock = socket.socketpair()
     guest_sock.sendall(json.dumps({"type": "error", "kind": "not_found", "message": "gone"}).encode() + b"\n")
