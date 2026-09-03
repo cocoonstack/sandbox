@@ -442,7 +442,10 @@ err = sb.Pull(ctx, "/work", tarWriter)   // stream /work back as a tar
 matches, err := sb.Find(ctx, "/work", `TODO|FIXME`, "*.go")
 // []wire.Match{File, Line, Content}; glob is anchored *? wildcards on the file name
 for m, err := range sb.FindSeq(ctx, "/work", `TODO`, "") { // streamed; a break ends the walk in the guest
-	if err != nil || m.Line > 100 {
+	if err != nil {
+		return err
+	}
+	if m.Line > 100 {
 		break
 	}
 }

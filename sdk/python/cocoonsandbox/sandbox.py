@@ -160,8 +160,9 @@ class Sandbox:
         return list(self.find_iter(path, pattern, glob))
 
     def find_iter(self, path: str, pattern: str, glob: str = "") -> Iterator[dict]:
-        """Yields matches as they stream; leaving the loop early closes the
-        connection, which ends the walk in the guest."""
+        """Yields matches as they stream. Closing the generator (a `for` loop
+        that owns it, or contextlib.closing) closes the connection, which ends
+        the walk in the guest."""
         with self._dial() as conn:
             conn.send("fs_find", path=path, pattern=pattern, glob=glob or None)
             for f in conn.recv_until("done"):

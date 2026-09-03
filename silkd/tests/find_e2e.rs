@@ -3,11 +3,33 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
+use std::sync::Arc;
+
+use serde_json::{Value, json};
+use silkd::server::State;
+use tokio::io::AsyncWriteExt;
+
 use common::{exchange, type_of};
-use serde_json::json;
 
 async fn write_file(dir: &std::path::Path, name: &str, body: &str) {
     tokio::fs::write(dir.join(name), body).await.unwrap();
+}
+
+async fn find_frames(req: Value) -> Vec<Value> {
+    let (mut cw, mut out, handle) = common::connect(&Arc::new(State::new()));
+    cw.write_all(format!("{req}\n").as_bytes()).await.unwrap();
+    let mut frames = Vec::new();
+    while let Some(l) = out.next_line().await.unwrap() {
+        let frame: Value = serde_json::from_str(&l).unwrap();
+        let terminal = matches!(type_of(&frame), "done" | "error");
+        frames.push(frame);
+        if terminal {
+            break;
+        }
+    }
+    drop(cw);
+    handle.await.unwrap().unwrap();
+    frames
 }
 
 #[tokio::test]
@@ -18,13 +40,12 @@ async fn find_streams_line_matches() {
     tokio::fs::create_dir(dir.path().join("sub")).await.unwrap();
     write_file(&dir.path().join("sub"), "c.rs", "// TODO nested\n").await;
 
-    let frames = exchange(&[json!({
+    let frames = find_frames(json!({
         "op": "fs_find",
         "path": dir.path().to_str().unwrap(),
         "pattern": "TODO",
         "glob": "*.rs"
-    })
-    .to_string()])
+    }))
     .await;
 
     let matches: Vec<_> = frames.iter().filter(|f| type_of(f) == "match").collect();
@@ -45,13 +66,12 @@ async fn find_glob_is_a_real_glob_not_a_substring() {
     write_file(dir.path(), "a.rs", "TODO\n").await;
     write_file(dir.path(), "a.rs.bak", "TODO\n").await;
 
-    let frames = exchange(&[json!({
+    let frames = find_frames(json!({
         "op": "fs_find",
         "path": dir.path().to_str().unwrap(),
         "pattern": "TODO",
         "glob": "*.rs"
-    })
-    .to_string()])
+    }))
     .await;
     let files: Vec<_> = frames
         .iter()
@@ -61,13 +81,12 @@ async fn find_glob_is_a_real_glob_not_a_substring() {
     assert_eq!(files.len(), 1, "{files:?}");
     assert!(files[0].ends_with("a.rs"));
 
-    let frames = exchange(&[json!({
+    let frames = find_frames(json!({
         "op": "fs_find",
         "path": dir.path().to_str().unwrap(),
         "pattern": "TODO",
         "glob": "?.rs"
-    })
-    .to_string()])
+    }))
     .await;
     assert_eq!(
         frames.iter().filter(|f| type_of(f) == "match").count(),
@@ -79,12 +98,11 @@ async fn find_glob_is_a_real_glob_not_a_substring() {
 #[tokio::test]
 async fn find_rejects_bad_pattern() {
     let dir = tempfile::tempdir().unwrap();
-    let frames = exchange(&[json!({
+    let frames = find_frames(json!({
         "op": "fs_find",
         "path": dir.path().to_str().unwrap(),
         "pattern": "("
-    })
-    .to_string()])
+    }))
     .await;
     assert_eq!(type_of(&frames[0]), "error");
     assert_eq!(frames[0]["kind"], "bad_request");
@@ -159,12 +177,11 @@ async fn find_skips_a_file_over_the_size_bound() {
     .await
     .unwrap();
 
-    let frames = exchange(&[json!({
+    let frames = find_frames(json!({
         "op": "fs_find",
         "path": dir.path().to_str().unwrap(),
         "pattern": "foo"
-    })
-    .to_string()])
+    }))
     .await;
 
     assert_eq!(frames.iter().filter(|f| type_of(f) == "match").count(), 0);

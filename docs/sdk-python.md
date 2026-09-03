@@ -367,7 +367,10 @@ path on the no-network lane.
 
 ```python
 matches = sb.find("/work", r"TODO|FIXME", glob="*.py")
-for m in sb.find_iter("/work", r"TODO"):        # streamed; leaving the loop ends the walk in the guest
+with closing(sb.find_iter("/work", r"TODO")) as stream:   # streamed; closing ends the walk in the guest
+    for m in stream:
+        if m["line"] > 100:
+            break
 # [{"file", "line", "content"}]; glob is anchored *? wildcards on the file name
 
 results = sb.replace(["/work/main.py"], r"foo", "bar")

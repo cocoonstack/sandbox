@@ -136,7 +136,7 @@ impl State {
                 path,
                 pattern,
                 glob,
-            } => find::find(&mut writer, path, pattern, glob).await,
+            } => find::find(&mut reader, &mut writer, path, pattern, glob).await,
             Request::FsReplace {
                 files,
                 pattern,
