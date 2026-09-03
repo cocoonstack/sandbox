@@ -24,9 +24,17 @@ if TYPE_CHECKING:
 class Sandbox:
     """One claimed microVM."""
 
-    def __init__(self, client: Client, id: str, token: str, owner: str,
-                 deadline: str = "", from_checkpoint: str = "", template_digest: str = "",
-                 volumes: list[dict] | None = None):
+    def __init__(
+        self,
+        client: Client,
+        id: str,
+        token: str,
+        owner: str,
+        deadline: str = "",
+        from_checkpoint: str = "",
+        template_digest: str = "",
+        volumes: list[dict] | None = None,
+    ):
         self._client = client
         self.id = id
         self.token = token
@@ -46,26 +54,43 @@ class Sandbox:
             if exc[0] is None:  # a clean block surfaces a real release failure
                 raise
 
-    def exec(self, *argv: str, cwd: str = "", env: dict | None = None,
-             user: str = "", session: str = "", stdin: bytes = b"") -> str:
+    def exec(
+        self, *argv: str, cwd: str = "", env: dict | None = None, user: str = "", session: str = "", stdin: bytes = b""
+    ) -> str:
         """Runs argv to completion and returns stdout; a non-zero exit raises
         ExitError carrying stderr."""
         out, err = bytearray(), bytearray()
-        code = self.run(list(argv), cwd=cwd, env=env, user=user, session=session,
-                        stdin=stdin, on_stdout=out.extend, on_stderr=err.extend)
+        code = self.run(
+            list(argv),
+            cwd=cwd,
+            env=env,
+            user=user,
+            session=session,
+            stdin=stdin,
+            on_stdout=out.extend,
+            on_stderr=err.extend,
+        )
         if code != 0:
             raise ExitError(code, err.decode(errors="replace"), out.decode(errors="replace"))
         return out.decode(errors="replace")
 
-    def run(self, argv: list[str], cwd: str = "", env: dict | None = None,
-            user: str = "", session: str = "", stdin: bytes = b"",
-            on_stdout: Callable[[bytes], object] | None = None,
-            on_stderr: Callable[[bytes], object] | None = None) -> int:
+    def run(
+        self,
+        argv: list[str],
+        cwd: str = "",
+        env: dict | None = None,
+        user: str = "",
+        session: str = "",
+        stdin: bytes = b"",
+        on_stdout: Callable[[bytes], object] | None = None,
+        on_stderr: Callable[[bytes], object] | None = None,
+    ) -> int:
         """Runs argv streaming stdio through the callbacks (raw bytes — chunk
         boundaries may split multi-byte sequences); returns the exit code."""
         with self._dial() as conn:
-            conn.send("exec", argv=argv, cwd=cwd or None, env=env,
-                      user=user or None, detach=False, session=session or None)
+            conn.send(
+                "exec", argv=argv, cwd=cwd or None, env=env, user=user or None, detach=False, session=session or None
+            )
             # the guest stops draining stdin while blocked on stdout, so feeding it fully first deadlocks.
             pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True)
             pump.start()
@@ -75,12 +100,12 @@ class Sandbox:
             raise ProtocolError("exec stream ended without an exit frame")
         return code
 
-    def spawn(self, *argv: str, cwd: str = "", env: dict | None = None,
-              user: str = "") -> int:
+    def spawn(self, *argv: str, cwd: str = "", env: dict | None = None, user: str = "") -> int:
         """Starts argv detached, returning its pid immediately; the process
         keeps a bounded output ring readable later via logs()/attach()."""
-        started = self._call("exec", "started", argv=list(argv), cwd=cwd or None,
-                             env=env, user=user or None, detach=True)
+        started = self._call(
+            "exec", "started", argv=list(argv), cwd=cwd or None, env=env, user=user or None, detach=True
+        )
         return started["pid"]
 
     def ps(self) -> list[dict]:
@@ -93,14 +118,22 @@ class Sandbox:
         already exited is a no-op success."""
         self._done_rpc("kill", pid=pid, signal=signal or None)
 
-    def logs(self, pid: int, on_stdout: Callable[[bytes], object] | None = None,
-             on_stderr: Callable[[bytes], object] | None = None) -> int | None:
+    def logs(
+        self,
+        pid: int,
+        on_stdout: Callable[[bytes], object] | None = None,
+        on_stderr: Callable[[bytes], object] | None = None,
+    ) -> int | None:
         """Replays a process's ring-buffered output through the callbacks;
         returns its exit code if it already exited, else None."""
         return self._drain_proc("logs", pid, on_stdout, on_stderr)
 
-    def attach(self, pid: int, on_stdout: Callable[[bytes], object] | None = None,
-               on_stderr: Callable[[bytes], object] | None = None) -> int | None:
+    def attach(
+        self,
+        pid: int,
+        on_stdout: Callable[[bytes], object] | None = None,
+        on_stderr: Callable[[bytes], object] | None = None,
+    ) -> int | None:
         """Replays buffered output then follows live output until the
         process exits, returning its exit code (None only if the proc table
         dropped it mid-attach)."""
@@ -176,8 +209,7 @@ class Sandbox:
     def git_clone(self, url: str, path: str, branch: str = "", depth: int = 0, auth: str = "") -> None:
         """Clones into path (egress lane only; the none lane answers a typed
         unimplemented error pointing at push)."""
-        self._done_rpc("git_clone", url=url, path=path, branch=branch or None,
-                       depth=depth or None, auth=auth or None)
+        self._done_rpc("git_clone", url=url, path=path, branch=branch or None, depth=depth or None, auth=auth or None)
 
     def git_status(self, path: str) -> dict:
         return self._call("git_status", "git_status_result", path=path)
@@ -187,8 +219,7 @@ class Sandbox:
 
     def git_commit(self, path: str, message: str, author: str) -> str:
         """Commits staged changes; returns the commit hash."""
-        return self._call("git_commit", "git_commit_result",
-                          path=path, message=message, author=author).get("hash", "")
+        return self._call("git_commit", "git_commit_result", path=path, message=message, author=author).get("hash", "")
 
     def git_push(self, path: str, auth: str = "") -> None:
         self._done_rpc("git_push", path=path, auth=auth or None)
@@ -235,8 +266,9 @@ class Sandbox:
     def hibernate(self) -> None:
         """Snapshots and stops the VM, freeing its memory; the next call that
         reaches the guest wakes it transparently, state intact."""
-        self._client._request(self.owner, "POST", f"/v1/sandboxes/{self.id}/hibernate",
-                              None, "hibernate", bearer=self.token)
+        self._client._request(
+            self.owner, "POST", f"/v1/sandboxes/{self.id}/hibernate", None, "hibernate", bearer=self.token
+        )
 
     def checkpoint(self, name: str = "") -> Checkpoint:
         """Captures full state without stopping the sandbox; the returned
@@ -250,11 +282,16 @@ class Sandbox:
     def promote(self, template: str) -> Template:
         """Publishes this sandbox's state as a claimable template on its
         node; the returned handle is bound to that node."""
-        reply = self._client._post_json(self.owner, f"/v1/sandboxes/{self.id}/promote",
-                                        {"token": self.token, "template": template}, "promote")
+        reply = self._client._post_json(
+            self.owner, f"/v1/sandboxes/{self.id}/promote", {"token": self.token, "template": template}, "promote"
+        )
         key = reply["key"]
         return Template(
-            self._client, self.owner, key["template"], key.get("net", ""), key.get("size", ""),
+            self._client,
+            self.owner,
+            key["template"],
+            key.get("net", ""),
+            key.get("size", ""),
             reply.get("content_digest", ""),
         )
 
@@ -265,12 +302,12 @@ class Sandbox:
         started = self._call("lsp_start", "lsp_started", language=language, root=root or None)
         return Lsp(self, started["server_id"])
 
-    def open_pty(self, cols: int = 80, rows: int = 24, cwd: str = "",
-                 env: dict | None = None, user: str = "") -> Pty:
+    def open_pty(self, cols: int = 80, rows: int = 24, cwd: str = "", env: dict | None = None, user: str = "") -> Pty:
         """Runs the guest shell under a pty; returns a byte-stream handle.
         A pty is a process guest-side: resize goes through its pid."""
-        conn, started = self._open_stream("pty_open", expect="started", cols=cols,
-                                          rows=rows, cwd=cwd or None, env=env, user=user or None)
+        conn, started = self._open_stream(
+            "pty_open", expect="started", cols=cols, rows=rows, cwd=cwd or None, env=env, user=user or None
+        )
         return Pty(self, conn, started["pid"])
 
     def proxy_port(self, local_addr: str, port: int) -> socket.socket:
@@ -279,8 +316,7 @@ class Sandbox:
         is "host:port"; port 0 picks a free one."""
         host, _, lport = local_addr.rpartition(":")
         listener = socket.create_server((host or "127.0.0.1", int(lport)))
-        threading.Thread(target=self._proxy_accept_loop,
-                         args=(listener, port), daemon=True).start()
+        threading.Thread(target=self._proxy_accept_loop, args=(listener, port), daemon=True).start()
         return listener
 
     def preview_url(self, port: int, ttl_seconds: int = 0) -> str:
@@ -303,8 +339,9 @@ class Sandbox:
         gone is not an error — double-release and reap races stay silent,
         matching the Go SDK."""
         try:
-            self._client._request(self.owner, "POST", f"/v1/sandboxes/{self.id}/release",
-                                  None, "release", bearer=self.token)
+            self._client._request(
+                self.owner, "POST", f"/v1/sandboxes/{self.id}/release", None, "release", bearer=self.token
+            )
         except APIError as exc:
             if exc.status != 404:
                 raise
@@ -328,8 +365,7 @@ class Sandbox:
         with contextlib.suppress(OSError):
             while True:
                 local, _ = listener.accept()
-                threading.Thread(target=self._proxy_conn,
-                                 args=(local, port), daemon=True).start()
+                threading.Thread(target=self._proxy_conn, args=(local, port), daemon=True).start()
 
     def _proxy_conn(self, local: socket.socket, port: int) -> None:
         try:
@@ -495,7 +531,7 @@ class PortConn(_Closeable):
 def _send_chunks(conn: Conn, data: bytes, op: str = "data", chunk: int = FS_CHUNK) -> None:
     view = memoryview(data)
     for off in range(0, len(view), chunk):
-        conn.send(op, data=view[off:off + chunk])
+        conn.send(op, data=view[off : off + chunk])
 
 
 def _feed_stdin(conn: Conn, stdin: bytes) -> None:

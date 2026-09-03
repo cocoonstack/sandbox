@@ -55,7 +55,9 @@ def node():
 
 def test_claim_happy_path(node):
     FakeNode.routes[("POST", "/v1/claim")] = lambda body, path: (
-        200, {"id": "sb_1", "token": "tok", "owner_addr": node, "template_digest": "sha256:task"})
+        200,
+        {"id": "sb_1", "token": "tok", "owner_addr": node, "template_digest": "sha256:task"},
+    )
     sb = Client(node).new("rt:24.04")
     assert sb.id == "sb_1" and sb.owner == node
     assert sb.template_digest == "sha256:task"
@@ -66,29 +68,40 @@ def test_claim_sends_volumes(node):
 
     def claim(body, path):
         seen.append(body)
-        return 200, {"id": "sb_1", "token": "tok", "volumes": [
-            {"name": "imagenet", "mount": "/volumes/imagenet"},
-            {"name": "weights-llama", "mount": "/models"},
-        ]}
+        return 200, {
+            "id": "sb_1",
+            "token": "tok",
+            "volumes": [
+                {"name": "imagenet", "mount": "/volumes/imagenet"},
+                {"name": "weights-llama", "mount": "/models"},
+            ],
+        }
 
     FakeNode.routes[("POST", "/v1/claim")] = claim
-    sb = Client(node).new("rt:24.04", volumes=[
-        "imagenet", {"name": "weights-llama", "mount": "/models"}])
-    assert seen == [{"template": "rt:24.04", "volumes": [
-        {"name": "imagenet"},
-        {"name": "weights-llama", "mount": "/models"},
-    ]}]
+    sb = Client(node).new("rt:24.04", volumes=["imagenet", {"name": "weights-llama", "mount": "/models"}])
+    assert seen == [
+        {
+            "template": "rt:24.04",
+            "volumes": [
+                {"name": "imagenet"},
+                {"name": "weights-llama", "mount": "/models"},
+            ],
+        }
+    ]
     assert sb.volumes == [
         {"name": "imagenet", "mount": "/volumes/imagenet"},
         {"name": "weights-llama", "mount": "/models"},
     ]
 
 
-@pytest.mark.parametrize(("volumes", "match"), [
-    ([("imagenet", "/datasets/imagenet")], "name string or mapping"),
-    ([{"name": "imagenet", "mode": "rwx"}], "volume 'imagenet': mode must be 'rw' or 'ro', got 'rwx'"),
-    ([{"name": "imagenet", "bogus": "x"}], r"unexpected key\(s\): bogus"),
-])
+@pytest.mark.parametrize(
+    ("volumes", "match"),
+    [
+        ([("imagenet", "/datasets/imagenet")], "name string or mapping"),
+        ([{"name": "imagenet", "mode": "rwx"}], "volume 'imagenet': mode must be 'rw' or 'ro', got 'rwx'"),
+        ([{"name": "imagenet", "bogus": "x"}], r"unexpected key\(s\): bogus"),
+    ],
+)
 def test_claim_rejects_invalid_volumes(node, volumes, match):
     with pytest.raises(TypeError, match=match):
         Client(node).new("rt:24.04", volumes=volumes)
@@ -99,15 +112,24 @@ def test_claim_sends_volume_mode_rw(node):
 
     def claim(body, path):
         seen.append(body)
-        return 200, {"id": "sb_1", "token": "tok", "volumes": [
-            {"name": "scratch", "mount": "/data", "mode": "rw"},
-        ]}
+        return 200, {
+            "id": "sb_1",
+            "token": "tok",
+            "volumes": [
+                {"name": "scratch", "mount": "/data", "mode": "rw"},
+            ],
+        }
 
     FakeNode.routes[("POST", "/v1/claim")] = claim
     sb = Client(node).new("rt:24.04", volumes=[{"name": "scratch", "mount": "/data", "mode": "rw"}])
-    assert seen == [{"template": "rt:24.04", "volumes": [
-        {"name": "scratch", "mount": "/data", "mode": "rw"},
-    ]}]
+    assert seen == [
+        {
+            "template": "rt:24.04",
+            "volumes": [
+                {"name": "scratch", "mount": "/data", "mode": "rw"},
+            ],
+        }
+    ]
     assert sb.volumes == [{"name": "scratch", "mount": "/data", "mode": "rw"}]
 
 
@@ -129,17 +151,24 @@ def test_claim_attaches_volumes_without_mounting(node):
 
     def claim(body, path):
         seen.append(body)
-        return 200, {"id": "sb_1", "token": "tok", "volumes": [
-            {"name": "imagenet"}, {"name": "scratch", "mode": "rw"},
-        ]}
+        return 200, {
+            "id": "sb_1",
+            "token": "tok",
+            "volumes": [
+                {"name": "imagenet"},
+                {"name": "scratch", "mode": "rw"},
+            ],
+        }
 
     FakeNode.routes[("POST", "/v1/claim")] = claim
     sb = Client(node).new("rt:24.04", volumes=["imagenet", {"name": "scratch", "mode": "rw"}], mount=False)
-    assert seen == [{
-        "template": "rt:24.04",
-        "volumes": [{"name": "imagenet"}, {"name": "scratch", "mode": "rw"}],
-        "volumes_attach_only": True,
-    }]
+    assert seen == [
+        {
+            "template": "rt:24.04",
+            "volumes": [{"name": "imagenet"}, {"name": "scratch", "mode": "rw"}],
+            "volumes_attach_only": True,
+        }
+    ]
     assert sb.volumes == [{"name": "imagenet"}, {"name": "scratch", "mode": "rw"}]
 
 
@@ -151,8 +180,7 @@ def test_template_claim_attaches_volumes_without_mounting(node):
         return 200, {"id": "sb_2", "token": "tok", "volumes": [{"name": "imagenet"}]}
 
     FakeNode.routes[("POST", "/v1/claim")] = claim
-    sb = Template(Client(node), node, "task:v1", "none", "small").new(
-        volumes=["imagenet"], mount=False)
+    sb = Template(Client(node), node, "task:v1", "none", "small").new(volumes=["imagenet"], mount=False)
     assert seen[0]["volumes_attach_only"] is True
     assert seen[0]["volumes"] == [{"name": "imagenet"}]
     assert sb.volumes == [{"name": "imagenet"}]
@@ -163,7 +191,8 @@ def test_claim_rejects_mount_without_mounting(node):
         Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "mount": "/datasets"}], mount=False)
     with pytest.raises(TypeError, match="meaningless with mount=False"):
         Template(Client(node), node, "task:v1", "none", "small").new(
-            volumes=[{"name": "imagenet", "mount": "/datasets"}], mount=False)
+            volumes=[{"name": "imagenet", "mount": "/datasets"}], mount=False
+        )
 
 
 def test_claim_keeps_mounting_by_default(node):
@@ -183,19 +212,26 @@ def test_template_claim_sends_volumes(node):
 
     def claim(body, path):
         seen.append(body)
-        return 200, {"id": "sb_2", "token": "tok", "volumes": [
-            {"name": "imagenet", "mount": "/datasets/imagenet"},
-        ]}
+        return 200, {
+            "id": "sb_2",
+            "token": "tok",
+            "volumes": [
+                {"name": "imagenet", "mount": "/datasets/imagenet"},
+            ],
+        }
 
     FakeNode.routes[("POST", "/v1/claim")] = claim
     sb = Template(Client(node), node, "task:v1", "none", "small").new(
-        volumes=[{"name": "imagenet", "mount": "/datasets/imagenet"}])
-    assert seen == [{
-        "template": "task:v1",
-        "net": "none",
-        "size": "small",
-        "volumes": [{"name": "imagenet", "mount": "/datasets/imagenet"}],
-    }]
+        volumes=[{"name": "imagenet", "mount": "/datasets/imagenet"}]
+    )
+    assert seen == [
+        {
+            "template": "task:v1",
+            "net": "none",
+            "size": "small",
+            "volumes": [{"name": "imagenet", "mount": "/datasets/imagenet"}],
+        }
+    ]
     assert sb.volumes == [{"name": "imagenet", "mount": "/datasets/imagenet"}]
 
 
@@ -210,7 +246,8 @@ def test_template_volume_claim_follows_redirect(node):
 
     FakeNode.routes[("POST", "/v1/claim")] = claim
     sb = Template(Client(node), node, "task:v1", "none", "small").new(
-        volumes=[{"name": "imagenet", "mount": "/datasets/imagenet"}])
+        volumes=[{"name": "imagenet", "mount": "/datasets/imagenet"}]
+    )
     assert "no_redirect" not in seen[0]
     assert seen[1]["no_redirect"] is True
     assert seen[1]["require_promoted"] is True
@@ -219,13 +256,15 @@ def test_template_volume_claim_follows_redirect(node):
 
 
 def test_volume_catalog(node):
-    want = [{
-        "name": "imagenet",
-        "default_mount": "/volumes/imagenet",
-        "size_bytes": 42,
-        "available": True,
-        "nodes": 3,
-    }]
+    want = [
+        {
+            "name": "imagenet",
+            "default_mount": "/volumes/imagenet",
+            "size_bytes": 42,
+            "available": True,
+            "nodes": 3,
+        }
+    ]
     FakeNode.routes[("GET", "/v1/volumes")] = lambda body, path: (200, {"volumes": want})
     assert Client(node).volumes() == want
 
@@ -257,12 +296,16 @@ def test_volume_catalog_surfaces_writable(node):
 
 def test_promote_returns_content_digest(node):
     FakeNode.routes[("POST", "/v1/claim")] = lambda body, path: (
-        200, {"id": "sb_1", "token": "tok", "owner_addr": node})
+        200,
+        {"id": "sb_1", "token": "tok", "owner_addr": node},
+    )
     FakeNode.routes[("POST", "/v1/sandboxes/sb_1/promote")] = lambda body, path: (
-        200, {
+        200,
+        {
             "key": {"template": "task:v1", "net": "none", "size": "small"},
             "content_digest": "sha256:promoted",
-        })
+        },
+    )
 
     tpl = Client(node).new("rt:24.04").promote("task:v1")
     assert tpl.name == "task:v1"
@@ -284,9 +327,13 @@ def test_claim_follows_redirect_with_no_redirect(node):
     assert sb.id == "sb_2"
     assert "no_redirect" not in seen[0]
     assert seen[1]["no_redirect"] is True
-    assert seen[0]["volumes"] == seen[1]["volumes"] == [
-        {"name": "imagenet", "mount": "/datasets/imagenet"},
-    ]
+    assert (
+        seen[0]["volumes"]
+        == seen[1]["volumes"]
+        == [
+            {"name": "imagenet", "mount": "/datasets/imagenet"},
+        ]
+    )
 
 
 def test_api_error_carries_server_message(node):
@@ -298,11 +345,15 @@ def test_api_error_carries_server_message(node):
 
 def test_checkpoint_listing_binds_handles(node):
     FakeNode.routes[("GET", "/v1/checkpoints")] = lambda body, path: (
-        200, {"checkpoints": [{"id": "ck_0011223344556677", "name": "s1", "sandbox_id": "sb_1"}]})
+        200,
+        {"checkpoints": [{"id": "ck_0011223344556677", "name": "s1", "sandbox_id": "sb_1"}]},
+    )
     ckpts = Client(node).checkpoints()
     assert len(ckpts) == 1 and ckpts[0].id == "ck_0011223344556677"
 
     FakeNode.routes[("POST", "/v1/checkpoints/ck_0011223344556677/claim")] = lambda body, path: (
-        200, {"id": "sb_branch", "token": "t2"})
+        200,
+        {"id": "sb_branch", "token": "t2"},
+    )
     branch = ckpts[0].new()
     assert branch.id == "sb_branch"

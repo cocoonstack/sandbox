@@ -22,8 +22,9 @@ class Template:
         self.size = size
         self.content_digest = content_digest
 
-    def new(self, ttl_seconds: int = 0, volumes: list[str | Mapping[str, str]] | None = None,
-            mount: bool = True) -> Sandbox:
+    def new(
+        self, ttl_seconds: int = 0, volumes: list[str | Mapping[str, str]] | None = None, mount: bool = True
+    ) -> Sandbox:
         """Claims the template, following placement when volumes require it.
         mount=False attaches the volumes without mounting them."""
         # local import: a top-level one closes the client -> sandbox -> template cycle.
@@ -42,5 +43,6 @@ class Template:
 
         query = _template_query(self.name, self.net, self.size)
         query["no_redirect"] = "1"
-        self._client._request(self._addr, "DELETE", "/v1/templates?" + urllib.parse.urlencode(query),
-                              None, "delete template")
+        self._client._request(
+            self._addr, "DELETE", "/v1/templates?" + urllib.parse.urlencode(query), None, "delete template"
+        )
