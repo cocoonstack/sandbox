@@ -7,10 +7,12 @@ package s3
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -41,12 +43,20 @@ type Config struct {
 	Endpoint       string `json:"endpoint,omitempty"`
 	Region         string `json:"region,omitempty"`
 	ForcePathStyle bool   `json:"force_path_style,omitempty"`
+	Sparse         bool   `json:"sparse,omitempty"`
 }
 
 type publishFile struct {
 	path       string
 	key        string
 	digestPath string
+}
+
+type publishChunk struct {
+	path    string
+	key     string
+	size    int64
+	extents []sparseExtent
 }
 
 type transferManager interface {
@@ -64,6 +74,7 @@ type Store struct {
 	prefix  string
 	staging string
 	idRe    *regexp.Regexp
+	sparse  bool
 	fetches singleflight.Group
 }
 
@@ -94,7 +105,10 @@ func New(ctx context.Context, cfg Config, stagingRoot string, idRe *regexp.Regex
 		o.PartSizeBytes = uploadPartSizeBytes
 		o.Concurrency = 8
 	})
-	return &Store{client: client, tm: tm, bucket: cfg.Bucket, prefix: cfg.Prefix, staging: stagingRoot, idRe: idRe}, nil
+	return &Store{
+		client: client, tm: tm, bucket: cfg.Bucket, prefix: cfg.Prefix,
+		staging: stagingRoot, idRe: idRe, sparse: cfg.Sparse,
+	}, nil
 }
 
 func (s *Store) Stage(id string) (string, error) {
@@ -216,7 +230,8 @@ func (s *Store) publish(ctx context.Context, staging, id string, digested bool) 
 	if err != nil {
 		return "", fmt.Errorf("staging has no %s: %w", store.MetaFile, err)
 	}
-	files, err := s.publishFiles(staging, id, store.ExportGen(metaRaw), digested)
+	gen := store.ExportGen(metaRaw)
+	files, chunks, sparse, err := s.publishFiles(staging, id, gen, digested)
 	if err != nil {
 		return "", err
 	}
@@ -235,8 +250,26 @@ func (s *Store) publish(ctx context.Context, staging, id string, digested bool) 
 			return digestErr
 		})
 	}
+	for _, chunk := range chunks {
+		g.Go(func() error {
+			return s.uploadExtents(gctx, chunk.key, chunk.path, chunk.size, chunk.extents)
+		})
+	}
 	if err = g.Wait(); err != nil {
 		return "", err
+	}
+	if len(sparse.Files) > 0 {
+		raw, marshalErr := json.Marshal(sparse)
+		if marshalErr != nil {
+			return "", fmt.Errorf("encode sparse manifest: %w", marshalErr)
+		}
+		if len(raw) > sparseManifestMaxBytes {
+			return "", fmt.Errorf("sparse manifest exceeds %d bytes", sparseManifestMaxBytes)
+		}
+		manifestKey := s.key(id, gen+"/"+sparseManifestObject)
+		if err = s.uploadReader(ctx, manifestKey, bytes.NewReader(raw), int64(len(raw)), nil); err != nil {
+			return "", err
+		}
 	}
 	digest := ""
 	var metadata map[string]string
@@ -257,12 +290,24 @@ func (s *Store) publish(ctx context.Context, staging, id string, digested bool) 
 	return digest, nil
 }
 
-func (s *Store) publishFiles(staging, id, gen string, digested bool) ([]publishFile, error) {
-	root := staging
+func (s *Store) publishFiles(
+	staging, id, gen string,
+	digested bool,
+) ([]publishFile, []publishChunk, sparseManifest, error) {
 	if digested {
-		root = filepath.Join(staging, store.ExportDir)
+		files, err := s.publishDigestFiles(filepath.Join(staging, store.ExportDir), id, gen)
+		return files, nil, sparseManifest{Version: sparseManifestVersion}, err
 	}
+	return s.publishCheckpointFiles(filepath.Join(staging, store.ExportDir), id, gen, s.sparse)
+}
+
+func (s *Store) publishCheckpointFiles(
+	root, id, gen string,
+	sparseEnabled bool,
+) ([]publishFile, []publishChunk, sparseManifest, error) {
 	var files []publishFile
+	var chunks []publishChunk
+	manifest := sparseManifest{Version: sparseManifestVersion}
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
 			return err
@@ -271,17 +316,44 @@ func (s *Store) publishFiles(staging, id, gen string, digested bool) ([]publishF
 		if err != nil {
 			return err
 		}
-		if !digested {
-			if rel == store.MetaFile {
+		exportRel := filepath.ToSlash(rel)
+		if exportRel == sparseObjectPrefix || strings.HasPrefix(exportRel, sparseObjectPrefix+"/") {
+			return fmt.Errorf("export path %s uses reserved sparse namespace", exportRel)
+		}
+		if sparseEnabled {
+			sparseFile, sparseChunks, ok, sparseErr := planSparseFile(path, exportRel)
+			if sparseErr != nil {
+				return sparseErr
+			}
+			if ok {
+				manifest.Files = append(manifest.Files, sparseFile)
+				for _, chunk := range sparseChunks {
+					chunks = append(chunks, publishChunk{
+						path: path, key: s.key(id, gen+"/"+chunk.Object),
+						size: chunk.Size, extents: chunk.Extents,
+					})
+				}
 				return nil
 			}
-			files = append(files, publishFile{
-				path: path,
-				key:  s.key(id, gen+strings.TrimPrefix(rel, store.ExportDir)),
-			})
-			return nil
+		}
+		files = append(files, publishFile{path: path, key: s.key(id, gen+"/"+exportRel)})
+		return nil
+	})
+	slices.SortFunc(manifest.Files, func(a, b sparseFile) int { return strings.Compare(a.Path, b.Path) })
+	return files, chunks, manifest, err
+}
+
+func (s *Store) publishDigestFiles(root, id, gen string) ([]publishFile, error) {
+	var files []publishFile
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
 		}
 		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
 		}
@@ -324,14 +396,44 @@ func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string
 	if len(keys) == 0 {
 		return fmt.Errorf("record %s has no export", id)
 	}
+	manifest, hasSparse, err := s.readSparseManifest(ctx, exportPrefix, keys)
+	if err != nil {
+		return err
+	}
+	exportRoot := filepath.Join(local, store.ExportDir)
+	if err := materializeSparseFiles(exportRoot, manifest.Files); err != nil {
+		return err
+	}
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(4)
 	for _, key := range keys {
+		if hasSparse && (key == exportPrefix+sparseManifestObject || strings.HasPrefix(key, exportPrefix+sparseObjectPrefix+"/")) {
+			continue
+		}
+		destination, pathErr := exportPath(exportRoot, strings.TrimPrefix(key, exportPrefix))
+		if pathErr != nil {
+			return pathErr
+		}
 		g.Go(func() error {
-			return s.download(gctx, key, filepath.Join(local, store.ExportDir, strings.TrimPrefix(key, exportPrefix)))
+			return s.download(gctx, key, destination)
 		})
 	}
+	for _, file := range manifest.Files {
+		destination, pathErr := exportPath(exportRoot, file.Path)
+		if pathErr != nil {
+			return pathErr
+		}
+		for _, chunk := range file.Chunks {
+			key := exportPrefix + chunk.Object
+			g.Go(func() error {
+				return s.downloadExtents(gctx, key, destination, chunk)
+			})
+		}
+	}
 	if err := g.Wait(); err != nil {
+		return err
+	}
+	if err := chmodSparseFiles(exportRoot, manifest.Files); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(local, store.MetaFile), meta, 0o600); err != nil {
@@ -361,6 +463,24 @@ func (s *Store) upload(ctx context.Context, key, path string) error {
 		return err
 	}
 	return s.uploadReader(ctx, key, f, info.Size(), nil)
+}
+
+func (s *Store) uploadExtents(
+	ctx context.Context,
+	key, path string,
+	size int64,
+	extents []sparseExtent,
+) error {
+	f, err := os.Open(path) //nolint:gosec // path walked from our own staging dir
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	readers := make([]io.Reader, len(extents))
+	for i, extent := range extents {
+		readers[i] = io.NewSectionReader(f, extent.Offset, extent.Size)
+	}
+	return s.uploadReader(ctx, key, io.MultiReader(readers...), size, nil)
 }
 
 func (s *Store) uploadDigested(ctx context.Context, key, path, digestPath string) (store.DigestFile, error) {
@@ -411,6 +531,65 @@ func (s *Store) download(ctx context.Context, key, path string) error {
 		return fmt.Errorf("download %s: %w", key, err)
 	}
 	return nil
+}
+
+func (s *Store) downloadExtents(ctx context.Context, key, path string, chunk sparseChunk) error {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0) //nolint:gosec // validated path under our temp dir
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	writer := newExtentWriterAt(f, chunk.Extents)
+	if _, err := s.tm.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
+		Bucket: &s.bucket, Key: &key, WriterAt: writer,
+	}); err != nil {
+		return fmt.Errorf("download sparse chunk %s: %w", key, err)
+	}
+	return nil
+}
+
+func (s *Store) readSparseManifest(
+	ctx context.Context,
+	exportPrefix string,
+	keys []string,
+) (sparseManifest, bool, error) {
+	manifestKey := exportPrefix + sparseManifestObject
+	if !slices.Contains(keys, manifestKey) {
+		return sparseManifest{}, false, nil
+	}
+	out, err := s.client.GetObject(ctx, &awss3.GetObjectInput{Bucket: &s.bucket, Key: &manifestKey})
+	if err != nil {
+		return sparseManifest{}, false, fmt.Errorf("read sparse manifest: %w", err)
+	}
+	defer func() { _ = out.Body.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(out.Body, sparseManifestMaxBytes+1))
+	if err != nil {
+		return sparseManifest{}, false, fmt.Errorf("read sparse manifest: %w", err)
+	}
+	if len(raw) > sparseManifestMaxBytes {
+		return sparseManifest{}, false, fmt.Errorf("sparse manifest exceeds %d bytes", sparseManifestMaxBytes)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var manifest sparseManifest
+	if err := decoder.Decode(&manifest); err != nil {
+		return sparseManifest{}, false, fmt.Errorf("decode sparse manifest: %w", err)
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return sparseManifest{}, false, fmt.Errorf("decode sparse manifest: trailing data")
+	}
+	if err := validateSparseManifest(manifest, exportPrefix, keys); err != nil {
+		return sparseManifest{}, false, err
+	}
+	return manifest, true, nil
+}
+
+func exportPath(root, name string) (string, error) {
+	clean := pathpkg.Clean(name)
+	if clean == "." || clean == ".." || pathpkg.IsAbs(clean) || strings.HasPrefix(clean, "../") {
+		return "", fmt.Errorf("invalid export path %q", name)
+	}
+	return filepath.Join(root, filepath.FromSlash(clean)), nil
 }
 
 func (s *Store) deleteKeys(ctx context.Context, keys []string) error {

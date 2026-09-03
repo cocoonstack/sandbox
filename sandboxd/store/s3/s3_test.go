@@ -19,7 +19,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/storetest"
@@ -135,6 +137,256 @@ func TestFetchLegacyExportLayout(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(dir, "disk.img")) //nolint:gosec // test path
 	if err != nil || string(got) != "legacy-bytes" {
 		t.Fatalf("fetched legacy export: %q, %v", got, err)
+	}
+}
+
+func TestSparseCheckpointUploadsOnlyAllocatedExtents(t *testing.T) {
+	const (
+		id          = "ck_00000000000000cc"
+		logicalSize = int64(128 << 20)
+	)
+	meta := []byte(`{"id":"` + id + `"}`)
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	st.sparse = true
+	staging, err := st.Stage(id)
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	export := filepath.Join(staging, store.ExportDir)
+	if mkdirErr := os.MkdirAll(export, 0o750); mkdirErr != nil {
+		t.Fatalf("mkdir export: %v", mkdirErr)
+	}
+	disk := filepath.Join(export, "disk.raw")
+	f, err := os.OpenFile(disk, os.O_CREATE|os.O_RDWR, 0o640)
+	if err != nil {
+		t.Fatalf("create sparse disk: %v", err)
+	}
+	if truncateErr := f.Truncate(logicalSize); truncateErr != nil {
+		t.Fatalf("truncate sparse disk: %v", truncateErr)
+	}
+	markers := map[int64][]byte{
+		4 << 10:                 []byte("first-extent"),
+		logicalSize - (8 << 10): []byte("last-extent"),
+	}
+	for offset, marker := range markers {
+		if _, writeErr := f.WriteAt(marker, offset); writeErr != nil {
+			t.Fatalf("write sparse marker: %v", writeErr)
+		}
+	}
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatalf("close sparse disk: %v", closeErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); writeErr != nil {
+		t.Fatalf("write meta: %v", writeErr)
+	}
+
+	planned, _, sparse, err := planSparseFile(disk, "disk.raw")
+	if err != nil {
+		t.Fatalf("plan sparse file: %v", err)
+	}
+	if !sparse {
+		t.Fatal("test filesystem did not expose sparse extents")
+	}
+	if planned.Size != logicalSize || len(planned.Chunks) == 0 {
+		t.Fatalf("sparse plan = %+v", planned)
+	}
+	if publishErr := st.Publish(t.Context(), staging, id); publishErr != nil {
+		t.Fatalf("Publish: %v", publishErr)
+	}
+
+	exportPrefix := "ck/" + id + "/" + store.ExportGen(meta) + "/"
+	fake.mu.Lock()
+	objects := maps.Clone(fake.objects)
+	fake.mu.Unlock()
+	if _, ok := objects[exportPrefix+"disk.raw"]; ok {
+		t.Fatal("sparse disk was uploaded as one logical-size object")
+	}
+	if _, ok := objects[exportPrefix+sparseManifestObject]; !ok {
+		t.Fatal("sparse manifest was not uploaded")
+	}
+	var uploaded int64
+	for key, body := range objects {
+		if strings.HasPrefix(key, exportPrefix+sparseObjectPrefix+"/chunks/") {
+			uploaded += int64(len(body))
+		}
+	}
+	if uploaded == 0 || uploaded >= logicalSize/8 {
+		t.Fatalf("uploaded sparse data = %d, logical size = %d", uploaded, logicalSize)
+	}
+
+	dir, _, _, release, err := st.Fetch(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	defer release()
+	restored := filepath.Join(dir, "disk.raw")
+	info, err := os.Stat(restored)
+	if err != nil {
+		t.Fatalf("stat restored disk: %v", err)
+	}
+	if info.Size() != logicalSize || info.Mode().Perm() != 0o640 {
+		t.Fatalf("restored disk size/mode = %d/%#o, want %d/%#o", info.Size(), info.Mode().Perm(), logicalSize, 0o640)
+	}
+	restoredFile, err := os.Open(restored) //nolint:gosec // test path
+	if err != nil {
+		t.Fatalf("open restored disk: %v", err)
+	}
+	defer func() { _ = restoredFile.Close() }()
+	for offset, marker := range markers {
+		got := make([]byte, len(marker))
+		if _, err := restoredFile.ReadAt(got, offset); err != nil {
+			t.Fatalf("read marker at %d: %v", offset, err)
+		}
+		if !bytes.Equal(got, marker) {
+			t.Errorf("marker at %d = %q, want %q", offset, got, marker)
+		}
+	}
+	hole := make([]byte, 4096)
+	if _, err := restoredFile.ReadAt(hole, logicalSize/2); err != nil {
+		t.Fatalf("read restored hole: %v", err)
+	}
+	if !bytes.Equal(hole, make([]byte, len(hole))) {
+		t.Fatal("restored hole contains non-zero data")
+	}
+}
+
+func TestSparseCheckpointEncodingIsOptIn(t *testing.T) {
+	const id = "ck_00000000000000cf"
+	meta := []byte(`{"id":"` + id + `"}`)
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	staging, err := st.Stage(id)
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	export := filepath.Join(staging, store.ExportDir)
+	if mkdirErr := os.MkdirAll(export, 0o750); mkdirErr != nil {
+		t.Fatalf("mkdir export: %v", mkdirErr)
+	}
+	f, err := os.Create(filepath.Join(export, "disk.raw")) //nolint:gosec // test path
+	if err != nil {
+		t.Fatalf("create sparse disk: %v", err)
+	}
+	if truncateErr := f.Truncate(1 << 20); truncateErr != nil {
+		t.Fatalf("truncate sparse disk: %v", truncateErr)
+	}
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatalf("close sparse disk: %v", closeErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); writeErr != nil {
+		t.Fatalf("write meta: %v", writeErr)
+	}
+	if publishErr := st.Publish(t.Context(), staging, id); publishErr != nil {
+		t.Fatalf("Publish: %v", publishErr)
+	}
+	key := "ck/" + id + "/" + store.ExportGen(meta) + "/disk.raw"
+	fake.mu.Lock()
+	got := len(fake.objects[key])
+	fake.mu.Unlock()
+	if got != 1<<20 {
+		t.Fatalf("default dense object size = %d, want %d", got, 1<<20)
+	}
+}
+
+func TestSparseManifestRejectsMissingChunk(t *testing.T) {
+	manifest := sparseManifest{
+		Version: sparseManifestVersion,
+		Files: []sparseFile{{
+			Path: "disk.raw", Size: 4096,
+			Chunks: []sparseChunk{{
+				Size: 4096, Object: sparseObjectPrefix + "/chunks/file/0000",
+				Extents: []sparseExtent{{Offset: 0, Size: 4096}},
+			}},
+		}},
+	}
+	err := validateSparseManifest(manifest, "ck/id/export/", []string{"ck/id/export/" + sparseManifestObject})
+	if err == nil || !strings.Contains(err.Error(), "missing sparse chunk") {
+		t.Fatalf("validate missing chunk = %v", err)
+	}
+}
+
+func TestAllHoleCheckpointNeedsNoDataObject(t *testing.T) {
+	const (
+		id          = "ck_00000000000000cd"
+		logicalSize = int64(32 << 20)
+	)
+	meta := []byte(`{"id":"` + id + `"}`)
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	st.sparse = true
+	staging, err := st.Stage(id)
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	export := filepath.Join(staging, store.ExportDir)
+	if mkdirErr := os.MkdirAll(export, 0o750); mkdirErr != nil {
+		t.Fatalf("mkdir export: %v", mkdirErr)
+	}
+	disk := filepath.Join(export, "empty.raw")
+	f, err := os.Create(disk) //nolint:gosec // test path
+	if err != nil {
+		t.Fatalf("create sparse disk: %v", err)
+	}
+	if truncateErr := f.Truncate(logicalSize); truncateErr != nil {
+		t.Fatalf("truncate sparse disk: %v", truncateErr)
+	}
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatalf("close sparse disk: %v", closeErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); writeErr != nil {
+		t.Fatalf("write meta: %v", writeErr)
+	}
+	if publishErr := st.Publish(t.Context(), staging, id); publishErr != nil {
+		t.Fatalf("Publish: %v", publishErr)
+	}
+
+	exportPrefix := "ck/" + id + "/" + store.ExportGen(meta) + "/"
+	fake.mu.Lock()
+	for key := range fake.objects {
+		if strings.HasPrefix(key, exportPrefix+sparseObjectPrefix+"/chunks/") {
+			fake.mu.Unlock()
+			t.Fatalf("all-hole disk uploaded data object %s", key)
+		}
+	}
+	fake.mu.Unlock()
+	dir, _, _, release, err := st.Fetch(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	defer release()
+	info, err := os.Stat(filepath.Join(dir, "empty.raw"))
+	if err != nil {
+		t.Fatalf("stat restored all-hole disk: %v", err)
+	}
+	if info.Size() != logicalSize {
+		t.Fatalf("restored all-hole disk size = %d, want %d", info.Size(), logicalSize)
+	}
+}
+
+func TestExtentWriterMapsPackedObject(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "disk.raw")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	if truncateErr := f.Truncate(32); truncateErr != nil {
+		t.Fatalf("truncate target: %v", truncateErr)
+	}
+	writer := newExtentWriterAt(f, []sparseExtent{{Offset: 3, Size: 4}, {Offset: 20, Size: 5}})
+	if _, writeErr := writer.WriteAt([]byte("cdefghi"), 2); writeErr != nil {
+		t.Fatalf("cross-extent WriteAt: %v", writeErr)
+	}
+	if _, writeErr := writer.WriteAt([]byte("ab"), 0); writeErr != nil {
+		t.Fatalf("leading WriteAt: %v", writeErr)
+	}
+	got, err := os.ReadFile(path) //nolint:gosec // test path
+	if err != nil {
+		t.Fatalf("read target: %v", err)
+	}
+	if string(got[3:7]) != "abcd" || string(got[20:25]) != "efghi" {
+		t.Fatalf("mapped extents = %q/%q, want abcd/efghi", got[3:7], got[20:25])
 	}
 }
 
@@ -364,11 +616,87 @@ func TestS3BackendContractRealEndpoint(t *testing.T) {
 		Endpoint:       endpoint,
 		Region:         "us-east-1",
 		ForcePathStyle: true,
+		Sparse:         true,
 	}, t.TempDir(), store.CheckpointIDRe)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	storetest.RunContract(t, st)
+	t.Run("sparse multipart", func(t *testing.T) { runSparseRealEndpoint(t, st) })
+}
+
+func runSparseRealEndpoint(t *testing.T, st *Store) {
+	t.Helper()
+	const (
+		id          = "ck_00000000000000ce"
+		logicalSize = int64(96 << 20)
+		dataOffset  = int64(8 << 20)
+	)
+	meta := []byte(`{"id":"` + id + `"}`)
+	staging, err := st.Stage(id)
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	export := filepath.Join(staging, store.ExportDir)
+	if mkdirErr := os.MkdirAll(export, 0o750); mkdirErr != nil {
+		t.Fatalf("mkdir export: %v", mkdirErr)
+	}
+	disk := filepath.Join(export, "disk.raw")
+	f, err := os.OpenFile(disk, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("create sparse disk: %v", err)
+	}
+	if truncateErr := f.Truncate(logicalSize); truncateErr != nil {
+		t.Fatalf("truncate sparse disk: %v", truncateErr)
+	}
+	data := bytes.Repeat([]byte{0x5a}, 20<<20) // exceeds multipart's 16 MiB part size.
+	if _, writeErr := f.WriteAt(data, dataOffset); writeErr != nil {
+		t.Fatalf("write sparse extent: %v", writeErr)
+	}
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatalf("close sparse disk: %v", closeErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); writeErr != nil {
+		t.Fatalf("write meta: %v", writeErr)
+	}
+	if publishErr := st.Publish(t.Context(), staging, id); publishErr != nil {
+		t.Fatalf("Publish: %v", publishErr)
+	}
+	t.Cleanup(func() { _ = st.Delete(context.Background(), id) })
+
+	exportPrefix := st.key(id, store.ExportGen(meta)) + "/"
+	keys, err := st.list(t.Context(), exportPrefix+sparseObjectPrefix+"/chunks/")
+	if err != nil {
+		t.Fatalf("list sparse chunks: %v", err)
+	}
+	var uploaded int64
+	for _, key := range keys {
+		head, headErr := st.client.HeadObject(t.Context(), &awss3.HeadObjectInput{Bucket: &st.bucket, Key: &key})
+		if headErr != nil {
+			t.Fatalf("head sparse chunk: %v", headErr)
+		}
+		uploaded += aws.ToInt64(head.ContentLength)
+	}
+	if uploaded < int64(len(data)) || uploaded >= logicalSize/2 {
+		t.Fatalf("uploaded sparse bytes = %d, data/logical = %d/%d", uploaded, len(data), logicalSize)
+	}
+	dir, _, _, release, err := st.Fetch(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	defer release()
+	restored, err := os.Open(filepath.Join(dir, "disk.raw")) //nolint:gosec // test path
+	if err != nil {
+		t.Fatalf("open restored disk: %v", err)
+	}
+	defer func() { _ = restored.Close() }()
+	probe := make([]byte, 4096)
+	if _, err := restored.ReadAt(probe, dataOffset+(4<<20)); err != nil {
+		t.Fatalf("read restored extent: %v", err)
+	}
+	if !bytes.Equal(probe, bytes.Repeat([]byte{0x5a}, len(probe))) {
+		t.Fatal("restored multipart extent differs")
+	}
 }
 
 func publishRecord(t *testing.T, st *Store, id string, meta []byte, content string) {
