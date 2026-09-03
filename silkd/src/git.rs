@@ -262,28 +262,18 @@ fn parse_file_line(line: &str) -> Option<GitFileStatus> {
     let kind = line.split(' ').next()?;
     match kind {
         "1" | "2" | "u" => {
-            let mut fields = line.split(' ');
-            let xy = fields.nth(1)?; // field 2
-            let mut chars = xy.chars();
+            let mut chars = line.split(' ').nth(1)?.chars();
             let staged = chars.next()?;
             let unstaged = chars.next()?;
-            let skip = match kind {
-                "2" => 7,
-                "u" => 8,
-                _ => 6,
-            }; // to reach the path field
-            let path = fields.nth(skip)?;
-            // Rejoin any spaces the split consumed, then drop a rename's \t<orig>.
-            let mut full = String::from(path);
-            for tok in fields {
-                full.push(' ');
-                full.push_str(tok);
-            }
-            if let Some(tab) = full.find('\t') {
-                full.truncate(tab);
-            }
+            let start = match kind {
+                "2" => 9,
+                "u" => 10,
+                _ => 8,
+            };
+            let path = line.splitn(start + 1, ' ').nth(start)?;
+            let path = path.split_once('\t').map_or(path, |(p, _)| p);
             Some(GitFileStatus {
-                path: full,
+                path: path.to_string(),
                 staged,
                 unstaged,
             })

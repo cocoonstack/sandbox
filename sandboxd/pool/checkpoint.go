@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -322,10 +323,7 @@ func (m *Manager) vetoIfHealPending(ckptID string) {
 func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	pinned := make(map[string]struct{}, len(m.pendingCks))
-	for id := range m.pendingCks {
-		pinned[id] = struct{}{}
-	}
+	pinned := maps.Clone(m.pendingCks)
 	for _, sb := range m.claimed {
 		if sb.ArchiveCk != "" {
 			pinned[sb.ArchiveCk] = struct{}{}
@@ -429,7 +427,6 @@ func validateHealedCheckpoint(staging, wantID string) error {
 	return nil
 }
 
-// hasRegularFile reports whether entries holds at least one regular file.
 func hasRegularFile(entries []os.DirEntry) bool {
 	return slices.ContainsFunc(entries, func(e os.DirEntry) bool { return e.Type().IsRegular() })
 }

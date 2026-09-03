@@ -9,7 +9,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
-use crate::proc::{Chunk, Proc, Table, synth_pid};
+use crate::proc::{Chunk, Proc, Table, synth_pid, write_chunk};
 use crate::proto::{ErrorKind, ExecReq, Request, Response};
 use crate::sysutil;
 
@@ -136,15 +136,10 @@ where
 {
     let mut frame = Vec::new();
     while let Some(chunk) = rx.recv().await {
-        match chunk {
-            Chunk::Exit(_) => return Ok(()),
-            Chunk::Stdout(data) => {
-                crate::proto::write_chunk_frame(out, &mut frame, "stdout", &data).await?
-            }
-            Chunk::Stderr(data) => {
-                crate::proto::write_chunk_frame(out, &mut frame, "stderr", &data).await?
-            }
+        if matches!(chunk, Chunk::Exit(_)) {
+            return Ok(());
         }
+        write_chunk(out, &mut frame, chunk).await?;
     }
     Ok(())
 }

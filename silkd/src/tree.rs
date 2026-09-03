@@ -4,7 +4,7 @@
 
 use std::io;
 use std::path::Path;
-use std::process::{ExitStatus, Stdio};
+use std::process::Stdio;
 
 use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncWrite};
 use tokio::process::Command;
@@ -69,7 +69,7 @@ pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
     }
     let status = child.wait().await?;
     let msg = err_task.await.unwrap_or_default();
-    tar_result(w, status, &msg, "tar create").await
+    proto::subprocess_result(w, status.success(), "tar create", msg.as_bytes()).await
 }
 
 /// The caller owns removing `staging` on every path.
@@ -101,7 +101,7 @@ where
         return proto::write_feed_error(w, fail).await;
     }
     if !status.success() {
-        return tar_result(w, status, &msg, "tar extract").await;
+        return proto::subprocess_result(w, status.success(), "tar extract", msg.as_bytes()).await;
     }
     let src = staging.to_owned();
     // spawn_blocking: a big tree is thousands of local fs syscalls.
@@ -113,15 +113,6 @@ where
         Ok(()) => proto::write_frame(w, &Response::Done).await,
         Err(e) => err_frame(w, &e, "merge push").await,
     }
-}
-
-async fn tar_result<W: AsyncWrite + Unpin>(
-    w: &mut W,
-    status: ExitStatus,
-    msg: &str,
-    label: &str,
-) -> io::Result<()> {
-    proto::subprocess_result(w, status.success(), label, msg.as_bytes()).await
 }
 
 /// Spawns tar draining stderr on its own task, so a full stderr pipe cannot deadlock.

@@ -100,12 +100,8 @@ impl Table {
         }
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         sysutil::lock(&self.inner).len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 }
 
@@ -252,6 +248,19 @@ impl Ring {
 enum State {
     Running,
     Exited(i32),
+}
+
+/// Stdout/Stderr ride the reused-buffer bulk path; serde's per-chunk allocations dominate replay otherwise.
+pub async fn write_chunk<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    buf: &mut Vec<u8>,
+    chunk: Chunk,
+) -> std::io::Result<()> {
+    match chunk {
+        Chunk::Stdout(data) => proto::write_chunk_frame(w, buf, "stdout", &data).await,
+        Chunk::Stderr(data) => proto::write_chunk_frame(w, buf, "stderr", &data).await,
+        other => proto::write_frame(w, &other.into_response()).await,
+    }
 }
 
 pub fn synth_pid() -> u32 {

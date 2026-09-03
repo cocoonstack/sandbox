@@ -26,7 +26,7 @@ pub const READ_CHUNK: usize = 32 * 1024;
 pub const BULK_CHUNK: usize = 256 * 1024;
 
 /// Client → server frames; unknown JSON fields are ignored, which is forward compatibility.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
     Exec(ExecReq),
@@ -175,7 +175,7 @@ pub enum Request {
     DataEnd,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 pub struct ExecReq {
     pub argv: Vec<String>,
     #[serde(default)]
@@ -191,7 +191,7 @@ pub struct ExecReq {
     pub session: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 pub struct PtyReq {
     pub cols: u16,
     pub rows: u16,

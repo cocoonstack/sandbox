@@ -34,7 +34,7 @@ impl Broker {
         Self::default()
     }
 
-    /// start spawns the manifested language server for `language` and returns its id.
+    /// Spawns the manifested language server for `language` and returns its id.
     pub async fn start<W: AsyncWrite + Unpin>(
         &self,
         w: &mut W,
@@ -100,7 +100,7 @@ impl Broker {
         Ok(())
     }
 
-    /// request attaches this connection to the server's stdio and reaps the server on close.
+    /// Attaches this connection to the server's stdio and reaps the server on close.
     pub async fn request<W: AsyncWrite + Unpin>(
         &self,
         client: mpsc::Receiver<Request>,
@@ -132,7 +132,7 @@ impl Broker {
         res
     }
 
-    /// stop kills a server and reaps it.
+    /// Kills a server and reaps it.
     pub async fn stop<W: AsyncWrite + Unpin>(
         &self,
         w: &mut W,
@@ -156,7 +156,7 @@ impl Broker {
         }
     }
 
-    /// reap for a server no `lsp_request` ever attached.
+    /// Reaps a server no `lsp_request` ever attached.
     async fn reap_unattached(&self, server_id: &str) {
         let removed = {
             let mut table = sysutil::lock(&self.inner);

@@ -356,6 +356,6 @@ mod tests {
     fn root_resolves() {
         let (uid, _, home) = lookup_user("root").expect("root must exist");
         assert_eq!(uid, 0);
-        assert!(!home.is_empty()); // /root on Linux, /var/root on macOS
+        assert!(!home.is_empty());
     }
 }

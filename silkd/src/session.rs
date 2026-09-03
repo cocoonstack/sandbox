@@ -121,12 +121,8 @@ impl Table {
         removed.is_some()
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         sysutil::lock(&self.inner).len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     /// Removes and kills sessions idle longer than `ttl`; a session holding the io lock is never idle.

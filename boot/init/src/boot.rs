@@ -167,14 +167,24 @@ fn persist_network(cfg: &BootCfg) {
 
 /// Resolves every NIC MAC against one shared deadline, so a missing NIC costs the timeout once.
 fn wait_nic_macs(devices: &[&str], timeout: Duration) -> Vec<Option<String>> {
-    let deadline = Instant::now() + timeout;
-    let mut found: Vec<Option<String>> = vec![None; devices.len()];
-    loop {
+    poll_slots(devices.len(), timeout, |found| {
         for (slot, device) in found.iter_mut().zip(devices) {
             if slot.is_none() {
                 *slot = read_nic_mac(device);
             }
         }
+    })
+}
+
+fn poll_slots(
+    n: usize,
+    timeout: Duration,
+    mut fill: impl FnMut(&mut [Option<String>]),
+) -> Vec<Option<String>> {
+    let deadline = Instant::now() + timeout;
+    let mut found: Vec<Option<String>> = vec![None; n];
+    loop {
+        fill(&mut found);
         if found.iter().all(Option::is_some) || Instant::now() >= deadline {
             return found;
         }
@@ -194,24 +204,17 @@ fn mkdir_all(path: &str) -> Result<(), String> {
 
 /// Resolves every virtio-blk serial in one sysfs sweep per poll iteration.
 fn resolve_disks(ids: &[&str], timeout: Duration) -> Result<Vec<String>, String> {
-    let deadline = Instant::now() + timeout;
-    let mut found: Vec<Option<String>> = vec![None; ids.len()];
-    loop {
-        scan_serials(ids, &mut found);
-        if found.iter().all(Option::is_some) {
-            return Ok(found.into_iter().flatten().collect());
-        }
-        if Instant::now() >= deadline {
-            let missing: Vec<&str> = ids
-                .iter()
-                .zip(&found)
-                .filter(|(_, f)| f.is_none())
-                .map(|(id, _)| *id)
-                .collect();
-            return Err(format!("disks not found within {timeout:?}: {missing:?}"));
-        }
-        std::thread::sleep(POLL_INTERVAL);
+    let found = poll_slots(ids.len(), timeout, |found| scan_serials(ids, found));
+    if found.iter().all(Option::is_some) {
+        return Ok(found.into_iter().flatten().collect());
     }
+    let missing: Vec<&str> = ids
+        .iter()
+        .zip(&found)
+        .filter(|(_, f)| f.is_none())
+        .map(|(id, _)| *id)
+        .collect();
+    Err(format!("disks not found within {timeout:?}: {missing:?}"))
 }
 
 fn scan_serials(ids: &[&str], found: &mut [Option<String>]) {

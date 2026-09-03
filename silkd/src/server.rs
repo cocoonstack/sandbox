@@ -6,7 +6,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
 
-use crate::proc::{Chunk, Table};
+use crate::proc::{Chunk, Table, write_chunk};
 use crate::proto::{self, ErrorKind, ProcInfo, Request, Response};
 use crate::{exec, find, forward, fs, git, lsp, pty, session, tree, watch};
 
@@ -292,19 +292,6 @@ where
 {
     let (tx, rx) = mpsc::channel(16);
     (rx, Feeder(tokio::spawn(feed_client(reader, tx))))
-}
-
-/// Stdout/Stderr ride the reused-buffer bulk path; serde's per-chunk allocations dominate replay otherwise.
-async fn write_chunk<W: AsyncWrite + Unpin>(
-    w: &mut W,
-    buf: &mut Vec<u8>,
-    chunk: Chunk,
-) -> std::io::Result<()> {
-    match chunk {
-        Chunk::Stdout(data) => proto::write_chunk_frame(w, buf, "stdout", &data).await,
-        Chunk::Stderr(data) => proto::write_chunk_frame(w, buf, "stderr", &data).await,
-        other => proto::write_frame(w, &other.into_response()).await,
-    }
 }
 
 /// Forwards post-request client frames to the handler until the connection half-closes.
