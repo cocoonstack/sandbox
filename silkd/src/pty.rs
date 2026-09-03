@@ -1,7 +1,4 @@
-//! `pty.open` / `pty.resize`: run a shell under a pseudo-terminal. A PTY is a
-//! process, so it registers in the proc table and `ps`/`kill`/`attach`/`logs`
-//! apply unchanged — output rides the same `stdout` chunk stream, input arrives
-//! as `stdin` frames, and the child's exit is the terminal frame.
+//! `pty.open` / `pty.resize`: a pty is a process, so it registers in the proc table and `ps`/`kill`/`attach`/`logs` apply unchanged.
 
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::process::Stdio;
@@ -18,15 +15,12 @@ use crate::proc::{Chunk, Proc, Table, synth_pid};
 use crate::proto::{ErrorKind, PtyReq, READ_CHUNK, Request, Response};
 use crate::sysutil;
 
-/// After the shell exits, drain the master's buffered tail for at most this
-/// long so the last screenful isn't lost, without wedging on a stuck fd.
+/// Bounds the post-exit drain of the master's buffered tail so a stuck fd cannot wedge teardown.
 const POST_EXIT_DRAIN: Duration = Duration::from_secs(1);
 
 type Master = Arc<AsyncFd<OwnedFd>>;
 
-/// Opens a pty running the guest shell ($SHELL, else bash), streams its output
-/// as `stdout` frames and the exit as `exit`, and consumes client `stdin`
-/// frames as pty input until the shell exits or the client disconnects.
+/// Opens a pty on the guest shell, streams its output as `stdout` frames, and feeds client `stdin` frames to it.
 pub async fn open<W: AsyncWrite + Unpin>(
     table: &Table,
     now: u64,
@@ -76,9 +70,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
         Ok(c) => c,
         Err(e) => return crate::proto::err_frame(out, &e, "spawn shell").await,
     };
-    // Drop cmd so its Stdio dups of the slave close: otherwise silkd keeps the
-    // slave open and the master never sees the shell's exit (no EOF/EIO), so
-    // the pump would hang forever.
+    // drop cmd so its slave dups close, else the master never sees the shell's exit and the pump hangs.
     drop(cmd);
 
     let pid = child.id().unwrap_or_else(synth_pid);
@@ -97,7 +89,6 @@ pub async fn open<W: AsyncWrite + Unpin>(
         .await
         .is_err()
     {
-        // Client vanished before we streamed anything — tear down cleanly.
         let _ = child.start_kill();
         finish(&proc, -1);
         table.remove_if(pid, &proc);
@@ -127,9 +118,7 @@ pub async fn resize<W: AsyncWrite + Unpin>(
     }
 }
 
-/// Streams master output to the client and client stdin to the master until
-/// the shell exits or the client disconnects, returning the exit code (-1 on
-/// a kill or a client-gone teardown). The exit frame is written by the caller.
+/// Pumps master output to the client and client stdin to the master; the caller writes the exit frame.
 async fn pump<W: AsyncWrite + Unpin>(
     master: &Master,
     proc: &Arc<Proc>,
@@ -137,8 +126,7 @@ async fn pump<W: AsyncWrite + Unpin>(
     out: &mut W,
     child: &mut tokio::process::Child,
 ) -> i32 {
-    // Stdin rides its own task so a slow write can't stall output or reaping;
-    // a client disconnect (recv None) signals teardown via disc.
+    // stdin rides its own task so a slow write cannot stall output or reaping.
     let (disc_tx, mut disc_rx) = oneshot::channel::<()>();
     tokio::spawn(pump_stdin(Arc::clone(master), client, disc_tx));
 
@@ -153,8 +141,7 @@ async fn pump<W: AsyncWrite + Unpin>(
                 drain(master, proc, out, &mut buf, &mut frame).await;
                 return code;
             }
-            // Client closed the terminal: kill the shell and let child.wait
-            // publish its real (signalled) code on the next iteration.
+            // kill the shell so child.wait publishes its real signalled code.
             _ = &mut disc_rx, if !disc => {
                 disc = true;
                 let _ = child.start_kill();
@@ -165,13 +152,11 @@ async fn pump<W: AsyncWrite + Unpin>(
                     Err(_) => { eof = true; continue }
                 };
                 match guard.try_io(|fd| sysutil::read_fd(fd.get_ref().as_raw_fd(), &mut buf)) {
-                    // A read of 0 (BSD) or any error (EIO on Linux) means the
-                    // slave is fully closed.
+                    // a read of 0 (BSD) or any error (EIO on Linux) means the slave is fully closed.
                     Ok(Ok(0)) | Ok(Err(_)) => eof = true,
                     Ok(Ok(n)) => {
                         proc.emit_bytes(false, &buf[..n]);
                         if crate::proto::write_chunk_frame(out, &mut frame, "stdout", &buf[..n]).await.is_err() {
-                            // Client gone mid-output: kill and reap for the real code.
                             let _ = child.start_kill();
                             return sysutil::wait_code(child).await;
                         }
@@ -183,9 +168,7 @@ async fn pump<W: AsyncWrite + Unpin>(
     }
 }
 
-/// Writes client stdin frames into the master until the client disconnects,
-/// then signals teardown. StdinClose does not close the master — a pty stays
-/// alive after EOF on its input.
+/// Writes client stdin frames into the master; StdinClose is ignored because a pty outlives input EOF.
 async fn pump_stdin(
     master: Master,
     mut client: mpsc::Receiver<Request>,
@@ -207,8 +190,7 @@ async fn pump_stdin(
     }
 }
 
-/// Reads whatever the master buffered after the shell exits, bounded so a
-/// wedged fd can't hang teardown.
+/// Reads the master's buffered tail after the shell exits, bounded by POST_EXIT_DRAIN.
 async fn drain<W: AsyncWrite + Unpin>(
     master: &Master,
     proc: &Arc<Proc>,
@@ -239,8 +221,7 @@ async fn drain<W: AsyncWrite + Unpin>(
     .await;
 }
 
-/// finish publishes the terminal state once, so attachers on this pid always
-/// see an Exit (and never hang waiting for one).
+/// Publishes the terminal state once so attachers always see an Exit.
 fn finish(proc: &Arc<Proc>, code: i32) {
     if proc.exit_code().is_none() {
         proc.mark_exited(code);

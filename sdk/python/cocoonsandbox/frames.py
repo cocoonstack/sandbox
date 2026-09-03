@@ -11,8 +11,7 @@ import json
 PROTO_VERSION = 1
 MAX_FRAME = 8 * 1024 * 1024
 FS_CHUNK = 256 * 1024  # silkd's per-frame chunk size, distinct from BULK_CHUNK below
-# Bulk streams (push tars, port bytes) chunk larger — fewer frames for the
-# same bytes, still far under MAX_FRAME after base64; mirrors the Go SDK.
+# bulk streams chunk larger: fewer frames per byte, still under MAX_FRAME after base64.
 BULK_CHUNK = 1 << 20
 
 
@@ -32,10 +31,7 @@ def encode_request(op: str, **fields) -> bytes:
 def decode_response(line: bytes) -> dict:
     """Parses one response frame; the returned dict carries its tag under
     "type" and any binary payload decoded under "data"."""
-    # base64 is JSON-escape-free, so a frame shaped exactly {"type":...,
-    # "data":...} can be sliced directly, skipping json.loads; any other
-    # shape (extra fields, trailing bytes, non-alphabet bytes) falls through
-    # to the full parse instead of risking a silently wrong slice.
+    # base64 is JSON-escape-free, so an exactly-shaped data frame slices without json.loads.
     if line.startswith(b'{"type":"'):
         te = line.find(b'"', 9)
         if te > 0 and line[9:te] in (b"stdout", b"stderr", b"data") and line.startswith(b'","data":"', te):

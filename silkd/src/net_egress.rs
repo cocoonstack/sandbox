@@ -1,10 +1,4 @@
-//! Guest→host egress relay. Binds a loopback proxy port; for each accepted TCP
-//! connection it opens one guest→host vsock connection to sandboxd's egress
-//! proxy and splices raw bytes. One vsock connection per proxied connection,
-//! mirroring the host→guest `port_forward` model — the proxy speaks HTTP on top
-//! of this byte pipe, so nothing here frames or inspects the payload. The none
-//! lane's only route out; when the host has not wired a proxy, the per-conn
-//! vsock dial is refused and the guest client sees a closed proxy (default-deny).
+//! Guest→host egress relay, one vsock connection per proxied connection; an unwired host refuses the dial (default-deny).
 
 use std::io;
 

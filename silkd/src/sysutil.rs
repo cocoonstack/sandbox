@@ -1,7 +1,4 @@
-//! Small OS helpers: the base environment for spawned commands, best-effort
-//! user de-escalation, and the one signal syscall — the crate's unsafe work
-//! lives here (pty.rs holds the one other unsafe block, its pre_exec
-//! registration).
+//! Small OS helpers; the crate's unsafe work lives here, except pty.rs's pre_exec registration.
 
 use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -11,14 +8,12 @@ use std::sync::{LazyLock, Mutex};
 
 use tokio::process::Command;
 
-/// Serializes getpwnam, whose result points into a process-global static
-/// buffer the next call clobbers — not safe across tokio's worker threads.
+/// Serializes getpwnam, whose result points into a static buffer the next call clobbers.
 static NSS_LOCK: Mutex<()> = Mutex::new(());
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// Forwarded from silkd's own environment into every exec: the loopback proxy
-/// relay is the no-NIC lane's only way out, and nothing else may leak.
+/// Forwarded into every exec: the loopback proxy relay is the no-NIC lane's only way out.
 const FORWARDED: [&str; 6] = [
     "http_proxy",
     "https_proxy",
@@ -30,9 +25,7 @@ const FORWARDED: [&str; 6] = [
 
 const HEX: [u8; 16] = *b"0123456789abcdef";
 
-/// A suffix unique within this process (pid + monotonic counter), enough to
-/// name a temp file a concurrent write in the same directory won't collide
-/// with. Not cryptographic — just unique.
+/// A suffix unique within this process, enough to name a temp file; not cryptographic.
 pub fn tmp_suffix() -> String {
     format!(
         "{}-{}",
@@ -41,10 +34,7 @@ pub fn tmp_suffix() -> String {
     )
 }
 
-/// A 128-bit unpredictable hex token from the OS CSPRNG. Used where an
-/// in-sandbox command must not be able to guess or forge the value (the
-/// session-command sentinel). Falls back to the predictable tmp_suffix only if
-/// the CSPRNG is unreadable, which never happens on a normal guest.
+/// A 128-bit CSPRNG hex token, used where an in-sandbox command must not forge the value.
 pub fn rand_token() -> String {
     let mut b = [0u8; 16];
     if !fill_random(&mut b) {
@@ -56,32 +46,9 @@ pub fn rand_token() -> String {
         .collect()
 }
 
-/// Fills `b` from the OS CSPRNG, sparing an async caller the open/read/close a
-/// tokio worker would block on. GRND_NONBLOCK never waits on an early-boot
-/// pool; /dev/urandom is the same source and covers the fallback.
-fn fill_random(b: &mut [u8]) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        // SAFETY: getrandom writes at most b.len() bytes into b's live buffer.
-        let n = unsafe { libc::getrandom(b.as_mut_ptr().cast(), b.len(), libc::GRND_NONBLOCK) };
-        if n == b.len() as isize {
-            return true;
-        }
-    }
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(b))
-        .is_ok()
-}
-
-/// SIGKILLs the process group led by `pgid` — a session's shell plus its
-/// foreground children, so tearing down a session that is running an external
-/// command actually stops the command (killing only the shell would leave the
-/// child holding the stdout pipe open). The shell is spawned as its own group
-/// leader (pgid == its pid).
+/// SIGKILLs the group led by `pgid`, so a session's external command dies with its shell.
 pub fn kill_group(pgid: u32) {
-    // kill(-0) targets the CALLER's group (silkd itself). Synthetic ids pass
-    // the guard: synth_pid() keeps them ≤ i32::MAX and above pid_max, so they
-    // reach kill() and miss with ESRCH.
+    // kill(-0) would target silkd's own group; a synthetic id passes the guard and misses with ESRCH.
     if !valid_pid(pgid) {
         return;
     }
@@ -90,11 +57,9 @@ pub fn kill_group(pgid: u32) {
     unsafe { libc::kill(-(pgid as libc::pid_t), libc::SIGKILL) };
 }
 
-/// Sends `sig` to `pid`, ignoring the result: an ESRCH against a
-/// just-exited pid already satisfies the caller's goal (the process is gone).
+/// Sends `sig` to `pid`, ignoring ESRCH against a just-exited pid.
 pub fn signal_pid(pid: u32, sig: i32) {
-    // pid 0 means "my whole process group" to kill(2) — signalling it would
-    // take down silkd and every child (see kill_group for synthetic ids).
+    // pid 0 means silkd's whole process group to kill(2).
     if !valid_pid(pid) {
         return;
     }
@@ -103,68 +68,17 @@ pub fn signal_pid(pid: u32, sig: i32) {
     unsafe { libc::kill(pid as libc::pid_t, sig) };
 }
 
-/// Rejects pid 0 and anything that would go negative through the pid_t cast
-/// (and so hit a process group instead of a pid).
-fn valid_pid(id: u32) -> bool {
-    id != 0 && id <= i32::MAX as u32
-}
-
-/// The environment every exec starts from before the request's env is layered
-/// on — a sane PATH and TERM, plus the proxy snapshot on the no-network lane
-/// (a lane with its own NIC would be steered into a closed relay).
+/// The environment every exec starts from; the proxy snapshot rides only on the no-network lane.
 pub fn base_env() -> Vec<(&'static str, &'static str)> {
     compose_env(crate::net::has_egress(), proxy_vars())
 }
 
-/// Applies base_env's lane rule to an env-inheriting child (git, language
-/// servers): with a network of its own, the proxy variables come off.
+/// Applies base_env's lane rule to an env-inheriting child: an own NIC drops the proxy variables.
 pub fn align_proxy_env(cmd: &mut Command) {
     align_proxy_env_for(cmd, crate::net::has_egress());
 }
 
-fn align_proxy_env_for(cmd: &mut Command, nic: bool) {
-    if !nic {
-        return;
-    }
-    for key in FORWARDED {
-        cmd.env_remove(key);
-    }
-}
-
-fn compose_env<'a>(nic: bool, proxy: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a str)> {
-    let mut env = vec![
-        (
-            "PATH",
-            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        ),
-        ("TERM", "xterm-256color"),
-    ];
-    if !nic {
-        env.extend(proxy.iter().map(|(k, v)| (*k, v.as_str())));
-    }
-    env
-}
-
-/// The FORWARDED values present in silkd's own environment, read once: the
-/// unit environment is fixed at service start and silkd never mutates it.
-fn proxy_vars() -> &'static [(&'static str, String)] {
-    static PROXY_VARS: LazyLock<Vec<(&'static str, String)>> =
-        LazyLock::new(|| snapshot_proxy(|key| std::env::var(key).ok()));
-    &PROXY_VARS
-}
-
-fn snapshot_proxy(get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, String)> {
-    FORWARDED
-        .iter()
-        .filter_map(|&key| match get(key) {
-            Some(v) if !v.is_empty() => Some((key, v)),
-            _ => None,
-        })
-        .collect()
-}
-
-/// Resolves a username to uid/gid via getpwnam and sets them on the command.
-/// silkd runs as root, so this de-escalates; unknown users are rejected.
+/// Resolves a username via getpwnam and de-escalates the command onto it.
 pub fn apply_user(cmd: &mut Command, user: &str) -> Result<(), String> {
     let (uid, gid, home) = lookup_user(user)?;
     cmd.uid(uid).gid(gid);
@@ -173,31 +87,7 @@ pub fn apply_user(cmd: &mut Command, user: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn lookup_user(user: &str) -> Result<(u32, u32, String), String> {
-    use std::ffi::CString;
-    let cname = CString::new(user).map_err(|_| format!("invalid user {user:?}"))?;
-    // Hold NSS_LOCK across the call and every read of the returned static
-    // buffer, so a concurrent lookup on another worker thread cannot clobber
-    // it mid-read (which would de-escalate to the wrong uid).
-    let _guard = lock(&NSS_LOCK);
-    // SAFETY: cname is a live NUL-terminated CString for the call.
-    let pw = unsafe { libc::getpwnam(cname.as_ptr()) };
-    if pw.is_null() {
-        return Err(format!("unknown user {user:?}"));
-    }
-    // SAFETY: pw is non-null (checked) and, with NSS_LOCK still held, points to
-    // a valid passwd whose pw_dir is a NUL-terminated string it owns.
-    let pw = unsafe { &*pw };
-    // SAFETY: pw_dir is NUL-terminated and stays valid while NSS_LOCK is held.
-    let home = unsafe { std::ffi::CStr::from_ptr(pw.pw_dir) }
-        .to_string_lossy()
-        .into_owned();
-    Ok((pw.pw_uid, pw.pw_gid, home))
-}
-
-/// Opens a pseudo-terminal, returning the (master, slave) fds. The master is
-/// set non-blocking for async I/O; the slave becomes the child's controlling
-/// terminal after setsid (see `pty::open`).
+/// Opens a pty, returning the (master, slave) fds; the master is non-blocking for async I/O.
 pub fn openpty(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
     let mut master: libc::c_int = 0;
     let mut slave: libc::c_int = 0;
@@ -249,9 +139,7 @@ pub fn set_winsize(fd: RawFd, cols: u16, rows: u16) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Makes the calling process a session leader and adopts fd 0 as its
-/// controlling terminal. Called in the child between fork and exec, so it must
-/// touch nothing but the two syscalls.
+/// Makes the calling process a session leader and adopts fd 0 as its controlling terminal.
 ///
 /// # Safety
 /// Only async-signal-safe syscalls; valid in a post-fork child.
@@ -269,8 +157,7 @@ pub unsafe fn make_controlling_tty() -> std::io::Result<()> {
     }
 }
 
-/// Reads from a raw fd (the pty master), returning bytes read; a WouldBlock
-/// error is surfaced to the caller's readiness loop.
+/// Reads from a raw fd, surfacing WouldBlock to the caller's readiness loop.
 pub fn read_fd(fd: RawFd, buf: &mut [u8]) -> std::io::Result<usize> {
     // SAFETY: fd is a live open fd; buf is a valid mutable slice of buf.len().
     let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
@@ -290,21 +177,7 @@ pub fn write_fd(fd: RawFd, buf: &[u8]) -> std::io::Result<usize> {
     Ok(n as usize)
 }
 
-fn set_nonblocking(fd: RawFd) -> std::io::Result<()> {
-    // SAFETY: fd is open; F_GETFL/F_SETFL only read and set its flags.
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: same fd; F_SETFL only sets the just-read flags plus O_NONBLOCK.
-    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-/// Locks a std mutex, panicking on poisoning: silkd's critical sections never
-/// panic, so a poisoned lock is unreachable.
+/// Locks a std mutex, panicking on poisoning: silkd's critical sections never panic.
 #[allow(clippy::unwrap_used)]
 pub fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap()
@@ -319,10 +192,102 @@ pub fn exit_code(status: ExitStatus) -> i32 {
     status.signal().map_or(-1, |s| 128 + s)
 }
 
-/// Reaps the child and maps its status via `exit_code`; -1 when the wait
-/// itself fails.
+/// Reaps the child and maps its status via `exit_code`; -1 when the wait fails.
 pub async fn wait_code(child: &mut tokio::process::Child) -> i32 {
     child.wait().await.map_or(-1, exit_code)
+}
+
+/// Fills `b` from the OS CSPRNG without blocking a tokio worker; /dev/urandom covers the fallback.
+fn fill_random(b: &mut [u8]) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: getrandom writes at most b.len() bytes into b's live buffer.
+        let n = unsafe { libc::getrandom(b.as_mut_ptr().cast(), b.len(), libc::GRND_NONBLOCK) };
+        if n == b.len() as isize {
+            return true;
+        }
+    }
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(b))
+        .is_ok()
+}
+
+/// Rejects pid 0 and anything that would go negative through the pid_t cast.
+fn valid_pid(id: u32) -> bool {
+    id != 0 && id <= i32::MAX as u32
+}
+
+fn align_proxy_env_for(cmd: &mut Command, nic: bool) {
+    if !nic {
+        return;
+    }
+    for key in FORWARDED {
+        cmd.env_remove(key);
+    }
+}
+
+fn compose_env<'a>(nic: bool, proxy: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a str)> {
+    let mut env = vec![
+        (
+            "PATH",
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        ),
+        ("TERM", "xterm-256color"),
+    ];
+    if !nic {
+        env.extend(proxy.iter().map(|(k, v)| (*k, v.as_str())));
+    }
+    env
+}
+
+/// The FORWARDED values in silkd's own environment, read once: the unit environment is fixed.
+fn proxy_vars() -> &'static [(&'static str, String)] {
+    static PROXY_VARS: LazyLock<Vec<(&'static str, String)>> =
+        LazyLock::new(|| snapshot_proxy(|key| std::env::var(key).ok()));
+    &PROXY_VARS
+}
+
+fn snapshot_proxy(get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, String)> {
+    FORWARDED
+        .iter()
+        .filter_map(|&key| match get(key) {
+            Some(v) if !v.is_empty() => Some((key, v)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn lookup_user(user: &str) -> Result<(u32, u32, String), String> {
+    use std::ffi::CString;
+    let cname = CString::new(user).map_err(|_| format!("invalid user {user:?}"))?;
+    // hold NSS_LOCK across every read of the static buffer, else a concurrent lookup clobbers it.
+    let _guard = lock(&NSS_LOCK);
+    // SAFETY: cname is a live NUL-terminated CString for the call.
+    let pw = unsafe { libc::getpwnam(cname.as_ptr()) };
+    if pw.is_null() {
+        return Err(format!("unknown user {user:?}"));
+    }
+    // SAFETY: pw is non-null (checked) and, with NSS_LOCK still held, points to
+    // a valid passwd whose pw_dir is a NUL-terminated string it owns.
+    let pw = unsafe { &*pw };
+    // SAFETY: pw_dir is NUL-terminated and stays valid while NSS_LOCK is held.
+    let home = unsafe { std::ffi::CStr::from_ptr(pw.pw_dir) }
+        .to_string_lossy()
+        .into_owned();
+    Ok((pw.pw_uid, pw.pw_gid, home))
+}
+
+fn set_nonblocking(fd: RawFd) -> std::io::Result<()> {
+    // SAFETY: fd is open; F_GETFL/F_SETFL only read and set its flags.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: same fd; F_SETFL only sets the just-read flags plus O_NONBLOCK.
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1,10 +1,8 @@
-//! Filesystem verbs: the guest is the sandbox, so paths are taken as-is
-//! against the guest root (the vsock boundary is the trust boundary). write
-//! consumes a `data` frame stream from the client; read streams `data` frames
-//! back; the rest are one-shot.
+//! Filesystem verbs: the vsock boundary is the trust boundary, so paths are taken as-is.
 
 use std::io;
 use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use tokio::fs;
@@ -13,15 +11,10 @@ use tokio::sync::mpsc;
 
 use crate::proto::{self, DirEntry, FileInfo, FileKind, Response, err_frame};
 
-/// Entries per `entries` frame. Worst-case entry (255-byte name, fully
-/// JSON-escaped) is ~1.6KiB, so a full batch stays under MAX_FRAME.
+/// Entries per `entries` frame; a worst-case 1.6KiB entry keeps a full batch under MAX_FRAME.
 pub const LIST_BATCH: usize = 4096;
 
-/// Streams `data` frames from the client into `path`, applying `mode` if
-/// given, until a `data_end` frame. Writes go to a sibling temp file that is
-/// renamed over `path` only on clean completion, so a mid-stream failure or
-/// early disconnect never leaves a truncated file at the destination and
-/// `done` means "path is exactly what you sent".
+/// Streams client `data` frames into `path` via a temp file renamed only on clean completion.
 pub async fn write<R, W>(
     mut reader: R,
     w: &mut W,
@@ -32,7 +25,8 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let tmp = tmp_name(&path);
+    let path = Path::new(&path);
+    let tmp = tmp_name(path);
     let mut file = match fs::File::create(&tmp).await {
         Ok(f) => f,
         Err(e) => return err_frame(w, &e, "create").await,
@@ -48,7 +42,7 @@ where
         let _ = fs::remove_file(&tmp).await;
         return proto::write_feed_error(w, fail).await;
     }
-    if let Err(e) = commit_tmp(&tmp, &path, mode).await {
+    if let Err(e) = commit_tmp(&tmp, path, mode).await {
         return err_frame(w, &e, "commit").await;
     }
     proto::write_frame(w, &Response::Done).await
@@ -66,8 +60,7 @@ pub async fn read<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
     proto::write_frame(w, &Response::Done).await
 }
 
-/// Lists a directory as a stream of `entries` frames terminated by `done`,
-/// batched so an arbitrarily large directory can never exceed the frame cap.
+/// Lists a directory as `entries` frames terminated by `done`, batched under the frame cap.
 pub async fn list<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<()> {
     // One blocking-pool dispatch for the whole directory, not one per entry.
     let (tx, mut rx) = mpsc::channel::<Vec<DirEntry>>(2);
@@ -90,16 +83,14 @@ pub async fn list<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
     }
 }
 
-/// Writes `bytes` to `path` via a sibling temp file committed into place, so
-/// a crash never leaves a truncated file.
-pub async fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
-    let path = path.display().to_string();
-    let tmp = tmp_name(&path);
+/// Writes `bytes` to `path` via a sibling temp file, so a crash never leaves a truncated file.
+pub async fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let tmp = tmp_name(path);
     if let Err(e) = fs::write(&tmp, bytes).await {
         let _ = fs::remove_file(&tmp).await;
         return Err(e);
     }
-    commit_tmp(&tmp, &path, None).await
+    commit_tmp(&tmp, path, None).await
 }
 
 /// Reports metadata for `path` (following symlinks).
@@ -177,7 +168,10 @@ fn scan_dir(path: &str, tx: &mpsc::Sender<Vec<DirEntry>>) -> io::Result<()> {
             Err(_) => (FileKind::Other, 0),
         };
         entries.push(DirEntry {
-            name: ent.file_name().to_string_lossy().into_owned(),
+            name: ent
+                .file_name()
+                .into_string()
+                .unwrap_or_else(|os| os.to_string_lossy().into_owned()),
             kind,
             size,
         });
@@ -191,16 +185,16 @@ fn scan_dir(path: &str, tx: &mpsc::Sender<Vec<DirEntry>>) -> io::Result<()> {
     Ok(())
 }
 
-fn tmp_name(path: &str) -> String {
-    format!("{path}.silkd-{}.tmp", crate::sysutil::tmp_suffix())
+fn tmp_name(path: &Path) -> PathBuf {
+    let mut tmp = path.as_os_str().to_os_string();
+    tmp.push(".silkd-");
+    tmp.push(crate::sysutil::tmp_suffix());
+    tmp.push(".tmp");
+    PathBuf::from(tmp)
 }
 
-/// Commits a fully-written temp file over `path`. An explicit mode wins;
-/// otherwise an overwrite inherits the destination's permission bits so
-/// replacing an executable script doesn't silently strip its exec bit
-/// (rename alone would leave the temp's create default). The temp is
-/// removed on any failure.
-async fn commit_tmp(tmp: &str, path: &str, mode: Option<u32>) -> io::Result<()> {
+/// Commits a temp file over `path`; without an explicit mode an overwrite inherits the destination's bits.
+async fn commit_tmp(tmp: &Path, path: &Path, mode: Option<u32>) -> io::Result<()> {
     let outcome = async {
         let effective = match mode {
             Some(m) => Some(m),

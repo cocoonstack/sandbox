@@ -1,5 +1,4 @@
-//! Thin wrappers over the handful of syscalls the boot path needs; all the
-//! unsafe lives here.
+//! Thin wrappers over the syscalls the boot path needs; all the unsafe lives here.
 
 use std::ffi::CString;
 use std::io;
@@ -56,12 +55,10 @@ pub fn sethostname(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Re-root into the assembled overlay. The old-root layer mounts stay pinned
-/// by the overlay's references; the ~1MiB initramfs is deliberately not freed
-/// (recursive delete would cost more than the memory is worth).
+/// Re-roots into the assembled overlay; the ~1MiB initramfs is deliberately never freed.
 pub fn switch_root(newroot: &str) -> Result<(), String> {
     std::env::set_current_dir(newroot).map_err(|err| format!("chdir {newroot}: {err}"))?;
-    mount(".", "/", None, libc::MS_MOVE, None)?;
+    move_mount(".", "/")?;
     // SAFETY: the literal is a live 'static CStr for the duration of the call.
     if unsafe { libc::chroot(c".".as_ptr()) } != 0 {
         return Err(format!("chroot: {}", io::Error::last_os_error()));
@@ -86,8 +83,7 @@ pub fn exec_init(path: &str) -> String {
     io::Error::last_os_error().to_string()
 }
 
-/// Route PID 1 stdio to /dev/console. The kernel already did this when the
-/// cpio carries the console node; this also covers cpios built without it.
+/// Routes PID 1 stdio to /dev/console, covering a cpio built without the console node.
 pub fn claim_console() {
     // SAFETY: the literal is a live 'static CStr; the fd is validated (>=0)
     // before any dup2/close and only closed when it is not already a std stream.
@@ -104,9 +100,7 @@ pub fn claim_console() {
     }
 }
 
-/// Terminal state: report, then either hand the operator a shell (debug
-/// initramfs) or power off so the orchestrator sees a dead VM immediately
-/// instead of a hung boot.
+/// Terminal state: hands the operator a debug shell, else powers off so the VM dies visibly.
 pub fn fatal(msg: &str, debug: bool) -> ! {
     eprintln!("sandbox-init: FATAL: {msg}");
     if debug {

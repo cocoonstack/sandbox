@@ -1,6 +1,4 @@
-//! silkd library surface, exposed so integration tests (and, later, the
-//! sandboxd relay's conformance checks) can drive the server in-process.
-//! The binary in `main.rs` is a thin wrapper over `vsock::serve`.
+//! silkd library surface, exposed so integration tests can drive the server in-process.
 
 pub mod exec;
 pub mod find;

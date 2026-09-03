@@ -1,5 +1,4 @@
-//! Whole-tree transfer E2E: push a tar stream in, pull a tar stream out,
-//! using the system tar to build/extract the reference archives.
+//! Whole-tree transfer E2E: push a tar stream in, pull a tar stream out, via the system tar.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;

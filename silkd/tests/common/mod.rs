@@ -1,8 +1,5 @@
-//! Shared harness for the integration tests: drive silkd's server over an
-//! in-memory duplex exactly as a relayed host connection would.
-//!
-//! Compiled into each test binary separately, so not every helper is used by
-//! every binary — allow the resulting dead_code rather than fragment this.
+//! Shared harness: drives silkd's server over an in-memory duplex as a relayed host connection would.
+//! Each test binary compiles it separately, so #![allow(dead_code)] covers the helpers one binary skips.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![allow(dead_code)]
 
@@ -19,8 +16,6 @@ use tokio::task::JoinHandle;
 pub type FrameWriter = WriteHalf<DuplexStream>;
 pub type FrameLines = Lines<BufReader<ReadHalf<DuplexStream>>>;
 
-/// Opens a framed connection to a task serving `state`: write half, response
-/// lines, and the serve task handle, split so streaming verbs can interleave.
 pub fn connect(state: &Arc<State>) -> (FrameWriter, FrameLines, JoinHandle<std::io::Result<()>>) {
     let (client, server) = tokio::io::duplex(1 << 20);
     let state = Arc::clone(state);
@@ -30,12 +25,10 @@ pub fn connect(state: &Arc<State>) -> (FrameWriter, FrameLines, JoinHandle<std::
     (cw, BufReader::new(cr).lines(), handle)
 }
 
-/// Runs one request line against a fresh server, returning the response frames.
 pub async fn roundtrip(request_line: &str) -> Vec<Value> {
     request_on(&Arc::new(State::new()), &[request_line.to_string()]).await
 }
 
-/// Runs request lines on one connection against `state`, returning the frames.
 pub async fn request_on(state: &Arc<State>, lines: &[String]) -> Vec<Value> {
     let (mut cw, mut out, handle) = connect(state);
     for line in lines {
@@ -52,12 +45,10 @@ pub async fn request_on(state: &Arc<State>, lines: &[String]) -> Vec<Value> {
     frames
 }
 
-/// Convenience for the many single-line-on-shared-state calls.
 pub async fn one(state: &Arc<State>, request_line: &str) -> Vec<Value> {
     request_on(state, &[request_line.to_string()]).await
 }
 
-/// Runs multiple request lines on one connection against a fresh server.
 pub async fn exchange(lines: &[String]) -> Vec<Value> {
     request_on(&Arc::new(State::new()), lines).await
 }
@@ -76,7 +67,6 @@ pub fn decode(frame: &Value) -> Vec<u8> {
         .unwrap()
 }
 
-/// Concatenated `data` of every frame of the given type (e.g. "stdout", "data").
 pub fn payload(frames: &[Value], frame_type: &str) -> Vec<u8> {
     frames
         .iter()
@@ -85,12 +75,10 @@ pub fn payload(frames: &[Value], frame_type: &str) -> Vec<u8> {
         .collect()
 }
 
-/// UTF-8 text of the concatenated stdout frames.
 pub fn stdout_body(frames: &[Value]) -> String {
     String::from_utf8_lossy(&payload(frames, "stdout")).into_owned()
 }
 
-/// A `data`-frame stream (16K chunks) terminated by `data_end`.
 pub fn data_frames(bytes: &[u8]) -> Vec<String> {
     let mut lines: Vec<String> = bytes
         .chunks(16 * 1024)

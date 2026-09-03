@@ -1,6 +1,4 @@
-//! Search verbs: `fs.find` walks a tree and streams regex matches; `fs.replace`
-//! rewrites matches in named files. Regex handling lives here so agents pass a
-//! pattern as data rather than shell-quoting it through exec.
+//! Search verbs: a pattern travels as data, never shell-quoted through exec.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -14,8 +12,7 @@ use tokio::sync::{Semaphore, SemaphorePermit, mpsc};
 
 use crate::proto::{self, ErrorKind, Response, err_frame};
 
-/// The number of bytes a file may have before find skips it as binary/huge —
-/// grep-scale line scanning is for source trees, not blobs.
+/// Size above which find skips a file as binary or huge.
 const FIND_MAX_FILE: u64 = 8 * 1024 * 1024;
 
 /// Match frames in flight between the walking thread and the writer.
@@ -67,9 +64,7 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
-    /// Walks `root` depth-first, sending a `match` frame per matching line; false
-    /// means the receiver went away. A failure on the root propagates; deeper
-    /// ones skip only that directory.
+    /// Walks `root` depth-first per matching line; a failure below the root skips only that directory.
     fn run(&self, root: PathBuf) -> std::io::Result<bool> {
         let mut stack = vec![root];
         let mut root = true;
@@ -103,8 +98,7 @@ impl Walk<'_> {
         Ok(true)
     }
 
-    /// Scans one file, reporting whether the receiver is still listening. The size
-    /// bound comes off the open handle, so the check and the read see one file.
+    /// Scans one file; the size bound comes off the open handle, so check and read see one file.
     fn scan_file(&self, path: &Path) -> bool {
         let Ok(mut file) = std::fs::File::open(path) else {
             return true;
@@ -134,9 +128,7 @@ impl Walk<'_> {
     }
 }
 
-/// Streams `match` frames for every line under `path` matching `pattern`,
-/// terminated by `done`. `glob` narrows the walk to file names matching it
-/// (`*` and `?` wildcards); an invalid pattern is a bad-request error.
+/// Streams `match` frames for every line under `path` matching `pattern`, terminated by `done`.
 pub async fn find<R, W>(
     reader: &mut R,
     w: &mut W,
@@ -151,13 +143,7 @@ where
     find_bounded(reader, w, path, pattern, glob, MATCH_QUEUE_BYTES).await
 }
 
-/// Rewrites every `pattern` match to `replacement` in each of `files`,
-/// streaming one `replaced` frame per file (with its match count) and a
-/// terminal `done`. A file over the find size bound is skipped with a zero
-/// count rather than read into memory. A read/write failure on one file ends
-/// the stream with an error — files whose `replaced` frame already went out
-/// are committed (each file is atomic; the list is not). An invalid pattern is
-/// rejected before any file is touched.
+/// Rewrites `pattern` to `replacement` in each of `files`, one `replaced` frame each; per-file atomic, not per-list.
 pub async fn replace<W: AsyncWrite + Unpin>(
     w: &mut W,
     files: Vec<String>,
@@ -297,9 +283,7 @@ fn name_matches(path: &Path, name_re: Option<&Regex>) -> bool {
         .is_some_and(|n| re.is_match(&n.to_string_lossy()))
 }
 
-/// Compiles a `*`/`?` glob into an anchored regex over the whole file name;
-/// every other character matches literally. escape() turns the wildcards
-/// into exactly `\*`/`\?`, which the replaces then rewrite.
+/// Compiles a `*`/`?` glob into an anchored regex over the whole file name.
 fn glob_regex(glob: &str) -> Result<Regex, regex::Error> {
     let pat = regex::escape(glob).replace(r"\*", ".*").replace(r"\?", ".");
     Regex::new(&format!("^{pat}$"))

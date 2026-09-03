@@ -1,5 +1,4 @@
 //! pty.open E2E: a shell under a pseudo-terminal, driven over a duplex.
-//! openpty exists on macOS and Linux, so this runs on the dev host.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
@@ -17,7 +16,6 @@ async fn send(cw: &mut FrameWriter, frame: Value) {
     cw.write_all(b"\n").await.unwrap();
 }
 
-/// Reads frames until one satisfies `pred` or 5s elapses.
 async fn read_until(lines: &mut FrameLines, pred: impl Fn(&Value) -> bool) -> Value {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {

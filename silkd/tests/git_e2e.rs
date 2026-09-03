@@ -1,5 +1,4 @@
-//! git verb E2E against a real git binary in temp repos. Local verbs run on
-//! any host; the none-lane guard is exercised via the test lane override.
+//! git verb E2E against a real git binary in temp repos; the none-lane guard uses the test lane override.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;

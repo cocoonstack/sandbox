@@ -1,6 +1,6 @@
-//! Connection handling: read the leading request frame, dispatch to a
-//! handler, and for exec forward subsequent client frames over a channel.
+//! Connection handling: read the leading request frame, dispatch to a handler, and forward later client frames over a channel.
 
+use std::borrow::Cow;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::io::{AsyncBufRead, AsyncWrite};
@@ -55,9 +55,7 @@ impl State {
             Request::Logs { pid } => self.logs(&mut writer, pid).await,
             Request::Attach { pid } => self.attach(&mut writer, pid).await,
             Request::Exec(e) => {
-                // Validated here, ahead of the session/process split, so an
-                // empty argv answers the same error on both paths (the session
-                // shell would otherwise run it as a successful no-op).
+                // validated ahead of the session/process split so an empty argv errors on both paths.
                 if e.argv.is_empty() {
                     return proto::error_frame(
                         &mut writer,
@@ -199,7 +197,7 @@ impl State {
         proto::write_frame(
             w,
             &Response::Info {
-                version: env!("CARGO_PKG_VERSION").to_string(),
+                version: Cow::Borrowed(env!("CARGO_PKG_VERSION")),
                 proto: proto::PROTO_VERSION,
                 uptime_secs: self.started.elapsed().as_secs(),
                 procs: self.table.len(),
@@ -224,9 +222,7 @@ impl State {
         let Some(proc) = self.table.get_or_not_found(w, pid).await? else {
             return Ok(());
         };
-        // An exited process's pid may already be recycled by the guest OS —
-        // signalling it would hit an unrelated process, so treat kill as a
-        // no-op success once the child is reaped.
+        // an exited pid may already be recycled, so signalling it would hit an unrelated process.
         if proc.exit_code().is_none() {
             crate::sysutil::signal_pid(proc.pid, signal.unwrap_or(libc::SIGKILL));
         }
@@ -251,9 +247,7 @@ impl State {
         let Some(proc) = self.table.get_or_not_found(w, pid).await? else {
             return Ok(());
         };
-        // Snapshot replay and subscribe atomically so a chunk emitted right
-        // now lands in one or the other, never both; if already exited, report
-        // the code instead of waiting on an Exit that fired before we listened.
+        // snapshot replay and subscribe atomically so a chunk lands in exactly one of them.
         let (replay, mut rx) = proc.attach_stream();
         let mut frame = Vec::new();
         for chunk in replay {
@@ -283,8 +277,7 @@ impl Default for State {
     }
 }
 
-/// Aborts the spawned feeder on drop, so no streaming arm can leak the task
-/// (and the reader half it owns) on any return path.
+/// Aborts the spawned feeder on drop so no streaming arm leaks the task and its reader half.
 struct Feeder(tokio::task::JoinHandle<()>);
 
 impl Drop for Feeder {
@@ -301,8 +294,7 @@ where
     (rx, Feeder(tokio::spawn(feed_client(reader, tx))))
 }
 
-/// Stdout/Stderr ride the reused-buffer bulk path (serde's per-chunk Vec +
-/// base64 String otherwise dominate replay/attach); Exit stays a one-off frame.
+/// Stdout/Stderr ride the reused-buffer bulk path; serde's per-chunk allocations dominate replay otherwise.
 async fn write_chunk<W: AsyncWrite + Unpin>(
     w: &mut W,
     buf: &mut Vec<u8>,
@@ -315,8 +307,7 @@ async fn write_chunk<W: AsyncWrite + Unpin>(
     }
 }
 
-/// Forwards post-request client frames (stdin/stdin_close) to the exec
-/// handler until the connection half-closes.
+/// Forwards post-request client frames to the handler until the connection half-closes.
 async fn feed_client<R>(mut reader: R, tx: mpsc::Sender<Request>)
 where
     R: AsyncBufRead + Unpin,

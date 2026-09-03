@@ -1,9 +1,4 @@
-//! `port_forward`: relay a guest TCP port over the RPC connection, so the
-//! host reaches in-guest servers (dev servers, sshd) on either lane — the
-//! vsock relay is the only transport the no-network lane has. After `ready`,
-//! client `data` frames feed the socket (`data_end` half-closes it) and
-//! socket bytes stream back as `data` frames; the guest server closing ends
-//! the stream with `done`.
+//! `port_forward` relays a guest TCP port: the no-network lane's only host reach.
 
 use std::io;
 
@@ -14,11 +9,7 @@ use tokio::sync::mpsc;
 
 use crate::proto::{self, BULK_CHUNK, ErrorKind, Request, Response};
 
-/// Connects to 127.0.0.1:port and relays until either side finishes. The two
-/// directions run on separate tasks: a blocking `write_all` into the guest
-/// socket must never stall draining the guest's output (a single select loop
-/// would head-of-line deadlock any bidirectional bulk transfer), mirroring
-/// exec's split pump_stdin/pump_out.
+/// Relays 127.0.0.1:port with one task per direction, against a head-of-line deadlock.
 pub async fn run<W: AsyncWrite + Unpin>(
     port: u16,
     client: mpsc::Receiver<Request>,
@@ -46,10 +37,8 @@ pub async fn run<W: AsyncWrite + Unpin>(
     let res = loop {
         tokio::select! {
             r = tr.read(&mut buf) => match r {
-                // Guest closed its write side: the stream is done.
                 Ok(0) => break proto::write_frame(w, &Response::Done).await,
-                // A read failure (RST, server crash) must not pass for a
-                // clean close — the client would mistake truncation for EOF.
+                // a read failure must not reach the client as a clean close.
                 Err(e) => {
                     break proto::error_frame(
                         w,
@@ -65,9 +54,7 @@ pub async fn run<W: AsyncWrite + Unpin>(
                     }
                 }
             },
-            // A clean feeder end (data_end, client gone) keeps draining the
-            // socket; a protocol violation terminates the relay with its
-            // error instead of masquerading as a clean close.
+            // only a protocol violation from the feeder ends the relay.
             f = &mut feed, if !feed_done => {
                 feed_done = true;
                 if let Ok(Err(resp)) = f {
@@ -82,11 +69,6 @@ pub async fn run<W: AsyncWrite + Unpin>(
     res
 }
 
-/// Writes client `data` frames into the guest socket until `data_end`
-/// (half-close) or the client disconnects; a stray frame is a protocol
-/// violation, reported like the fs feeders do. Owns the write half so its
-/// `write_all` can block on a slow guest without stalling the output
-/// direction.
 async fn feed_socket(
     mut client: mpsc::Receiver<Request>,
     mut tw: OwnedWriteHalf,

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -196,7 +197,7 @@ func safeJoin(root, name string) (string, error) {
 
 // tarInto emits only regular files and directories: a symlink would steer the reader outside dst.
 func tarInto(src, prefix string, tw *tar.Writer) error {
-	err := filepath.Walk(src, func(path string, fi os.FileInfo, err error) error {
+	err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -207,33 +208,36 @@ func tarInto(src, prefix string, tw *tar.Writer) error {
 		if rel == "." {
 			return nil
 		}
+		if !entry.IsDir() && !entry.Type().IsRegular() {
+			return nil
+		}
+		fi, err := entry.Info()
+		if err != nil {
+			return err
+		}
 		name := prefix + rel
-		switch {
-		case fi.IsDir():
+		if entry.IsDir() {
 			return tw.WriteHeader(&tar.Header{
 				Name:     name + "/",
 				Mode:     int64(fi.Mode().Perm()),
 				Typeflag: tar.TypeDir,
 			})
-		case fi.Mode().IsRegular():
-			if err := tw.WriteHeader(&tar.Header{
-				Name:     name,
-				Mode:     int64(fi.Mode().Perm()),
-				Size:     fi.Size(),
-				Typeflag: tar.TypeReg,
-			}); err != nil {
-				return err
-			}
-			f, err := os.Open(path) //nolint:gosec // path comes from Walk over src
-			if err != nil {
-				return err
-			}
-			defer func() { _ = f.Close() }()
-			_, err = io.Copy(tw, f)
-			return err
-		default:
-			return nil
 		}
+		if err = tw.WriteHeader(&tar.Header{
+			Name:     name,
+			Mode:     int64(fi.Mode().Perm()),
+			Size:     fi.Size(),
+			Typeflag: tar.TypeReg,
+		}); err != nil {
+			return err
+		}
+		f, err := os.Open(path) //nolint:gosec // path comes from WalkDir over src
+		if err != nil {
+			return err
+		}
+		defer func() { _ = f.Close() }()
+		_, err = io.Copy(tw, f)
+		return err
 	})
 	if err != nil {
 		return fmt.Errorf("tar %s: %w", src, err)

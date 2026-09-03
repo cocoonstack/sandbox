@@ -1,6 +1,4 @@
-//! port_forward integration: a real TCP echo server behind the verb. Every
-//! test runs under a deadline — the regressions this suite exists to catch
-//! (relay deadlocks) would otherwise hang CI instead of failing it.
+//! port_forward integration against a real TCP echo server; every test runs under a deadline so a relay deadlock fails CI.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
@@ -118,7 +116,6 @@ async fn forward_bidirectional_bulk_no_deadlock() {
     .expect("test deadline");
 }
 
-/// Extracts the base64 body of a `data` response frame; None for ready/done.
 fn data_payload(line: &str) -> Option<&str> {
     let start = line.find("\"data\":\"")? + "\"data\":\"".len();
     let rest = &line[start..];

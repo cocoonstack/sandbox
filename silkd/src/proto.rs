@@ -4,6 +4,7 @@
 //! (exit / done / error). Binary payloads ride as base64 (`data` fields),
 //! matching Go's default []byte JSON encoding for the SDK side.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
@@ -21,13 +22,10 @@ pub const PROTO_VERSION: u32 = 1;
 
 /// Chunk size for streaming a file back over `fs.read`.
 pub const READ_CHUNK: usize = 32 * 1024;
-/// Bulk streams (fs read/pull, port bytes) chunk larger: fewer frames and
-/// fewer flushes for the same bytes, still far under MAX_FRAME after base64.
-/// Reads return what is available, so interactivity is unaffected.
+/// Bulk streams chunk larger: fewer frames and flushes per byte, still under MAX_FRAME after base64.
 pub const BULK_CHUNK: usize = 256 * 1024;
 
-/// Client → server frames. Unknown JSON fields (e.g. a future `v`) are
-/// ignored by construction, which is the forward-compatibility story.
+/// Client → server frames; unknown JSON fields are ignored, which is forward compatibility.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
@@ -188,8 +186,7 @@ pub struct ExecReq {
     pub user: Option<String>,
     #[serde(default)]
     pub detach: bool,
-    /// When set, run inside the named persistent shell session (cwd/env/state
-    /// persist across calls) instead of spawning a fresh process.
+    /// When set, run inside the named persistent shell session instead of a fresh process.
     #[serde(default)]
     pub session: Option<String>,
 }
@@ -225,15 +222,14 @@ pub enum Response {
         code: i32,
     },
     Done,
-    /// Acknowledges an armed watch (events after it are guaranteed captured)
-    /// or a connected port_forward.
+    /// Acknowledges an armed watch (later events are guaranteed captured) or a connected port_forward.
     Ready,
     Error {
         kind: ErrorKind,
         message: String,
     },
     Info {
-        version: String,
+        version: Cow<'static, str>,
         proto: u32,
         uptime_secs: u64,
         procs: usize,
@@ -318,13 +314,12 @@ pub enum GitBranchOp {
     Checkout,
 }
 
-/// One porcelain-v2 file entry: `staged`/`unstaged` are the XY status codes
-/// (e.g. "M", "A", "?"), `path` the working-tree path.
+/// One porcelain-v2 file entry; `staged`/`unstaged` are the XY status codes.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GitFileStatus {
     pub path: String,
-    pub staged: String,
-    pub unstaged: String,
+    pub staged: char,
+    pub unstaged: char,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -365,7 +360,7 @@ pub struct ProcInfo {
     pub pid: u32,
     pub argv: Vec<String>,
     pub detached: bool,
-    pub state: String,
+    pub state: Cow<'static, str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     pub started_at_epoch_secs: u64,
@@ -379,17 +374,12 @@ pub enum FeedError {
 }
 
 /// Reads one newline-terminated frame (newline stripped); None on clean EOF.
-/// One-shot callers (the leading request frame) use this; streaming loops use
-/// `read_frame_into` so bulk uploads pay no per-frame growth reallocations.
 pub async fn read_frame<R: AsyncBufRead + Unpin>(r: &mut R) -> io::Result<Option<Vec<u8>>> {
     let mut line = Vec::new();
     Ok(read_frame_into(r, &mut line).await?.then_some(line))
 }
 
-/// Reads one frame into `line` (cleared first, reused across calls — the
-/// inbound twin of `write_chunk_frame`'s buffer reuse); false on clean EOF.
-/// Scans the buffered reader chunk by chunk so a peer that never sends a
-/// newline is cut off at MAX_FRAME instead of growing the line unbounded.
+/// Reads one frame into `line` (cleared first, reused across calls), capped at MAX_FRAME; false on clean EOF.
 pub async fn read_frame_into<R: AsyncBufRead + Unpin>(
     r: &mut R,
     line: &mut Vec<u8>,
@@ -420,9 +410,7 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, resp: &Response) -> i
     w.flush().await
 }
 
-/// Writes `frames` as one buffered batch, so a burst costs one write syscall
-/// instead of one per frame; a batch past one frame cap flushes early to bound
-/// the staging buffer. `buf` is reused across calls.
+/// Writes `frames` as one buffered batch, so a burst costs one write syscall; `buf` is reused.
 pub async fn write_frames<W: AsyncWrite + Unpin>(
     w: &mut W,
     buf: &mut Vec<u8>,
@@ -440,9 +428,7 @@ pub async fn write_frames<W: AsyncWrite + Unpin>(
     w.flush().await
 }
 
-/// Renders `{"type":KIND,"data":"<base64>"}` into `buf` (reused across calls)
-/// and writes it — the bulk path skips serde's owned Vec + String per chunk.
-/// base64's alphabet needs no JSON escaping.
+/// Hand-renders `{"type":KIND,"data":"<base64>"}` into `buf`; base64 needs no JSON escaping.
 pub async fn write_chunk_frame<W: AsyncWrite + Unpin>(
     w: &mut W,
     buf: &mut Vec<u8>,
@@ -455,8 +441,7 @@ pub async fn write_chunk_frame<W: AsyncWrite + Unpin>(
     let b64_len = base64::encoded_len(data.len(), true)
         .ok_or_else(|| io::Error::other("chunk too large to encode"))?;
     let total = PRE.len() + kind.len() + MID.len() + b64_len + END.len();
-    // Grow-only, never cleared: resize's zero-fill runs once at high-water
-    // instead of per chunk; buf[..total] is fully overwritten below.
+    // grow-only: buf[..total] is fully overwritten, so the zero-fill runs once at high-water.
     if buf.len() < total {
         buf.resize(total, 0);
     }
@@ -474,8 +459,7 @@ pub async fn write_chunk_frame<W: AsyncWrite + Unpin>(
     w.flush().await
 }
 
-/// Maps an io error to an Error frame, classifying NotFound so a client can
-/// tell a missing path from a real failure. Shared by the fs and tree verbs.
+/// Maps an io error to an Error frame, classifying NotFound apart from a real failure.
 pub async fn err_frame<W: AsyncWrite + Unpin>(
     w: &mut W,
     e: &io::Error,
@@ -489,8 +473,7 @@ pub async fn err_frame<W: AsyncWrite + Unpin>(
     write_frame(w, &Response::error(kind, format!("{op}: {e}"))).await
 }
 
-/// Writes the terminal frame of a finished subprocess verb: Done on success,
-/// else `label: trimmed stderr` as an Internal error. Shared by git and tree.
+/// Writes a finished subprocess verb's terminal frame: Done, else `label: stderr` as Internal.
 pub async fn subprocess_result<W: AsyncWrite + Unpin>(
     w: &mut W,
     success: bool,
@@ -513,10 +496,7 @@ pub async fn error_frame<W: AsyncWrite + Unpin>(
     write_frame(w, &Response::error(kind, message)).await
 }
 
-/// Streams `reader` back as `data` frames until EOF — the outbound twin of
-/// `feed_data_frames`, shared by fs.read and fs.pull. A frame-write error
-/// propagates as the outer error; a source read error comes back as the inner
-/// one so the caller can clean up (reap a tar child) before mapping it.
+/// Streams `reader` back as `data` frames until EOF; a source read error returns as the inner error so the caller can reap.
 pub async fn stream_data_frames<R, W>(
     reader: &mut R,
     w: &mut W,
@@ -536,9 +516,7 @@ where
     }
 }
 
-/// Feeds client `data` frames into `sink` until `data_end`. Shared by fs.write
-/// (sink = temp file) and fs.push (sink = tar stdin); the caller flushes/closes
-/// the sink and, on error, reports via `write_feed_error`.
+/// Feeds client `data` frames into `sink` until `data_end`; the caller flushes and closes `sink`.
 pub async fn feed_data_frames<R, S>(reader: &mut R, sink: &mut S) -> Result<(), FeedError>
 where
     R: AsyncBufRead + Unpin,
@@ -594,8 +572,7 @@ fn cap_check(len: usize) -> io::Result<()> {
     Ok(())
 }
 
-/// Renders one newline-terminated frame onto `buf`, holding the write side to
-/// the same cap the read side enforces — every client rejects a larger frame.
+/// Renders one newline-terminated frame onto `buf`, capped because every client rejects a larger one.
 fn render_frame(buf: &mut Vec<u8>, resp: &Response) -> io::Result<()> {
     let start = buf.len();
     serde_json::to_writer(&mut *buf, resp).map_err(io::Error::other)?;
@@ -613,9 +590,7 @@ mod b64 {
         s.serialize_str(&STANDARD.encode(data))
     }
 
-    /// Decodes inside the visitor so bulk `data` frames (43KB-1.3MB on the
-    /// wire) never allocate an intermediate String — serde hands the borrowed
-    /// slice straight to the base64 decoder.
+    /// Decodes inside the visitor so a bulk `data` frame never allocates an intermediate String.
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
         struct B64Visitor;
         impl serde::de::Visitor<'_> for B64Visitor {

@@ -1,11 +1,7 @@
-//! Persistent shell sessions: each session owns a long-lived bash whose cwd,
-//! environment, and shell state survive across `exec {session}` calls.
-//! A command is injected into the shell and
-//! delimited by a unique sentinel that also carries its exit code; stderr is
-//! merged into stdout (`exec 2>&1`) so one stream frames cleanly without a
-//! pipe deadlock, which is the conventional interactive-shell behaviour.
+//! Persistent shell sessions: each owns a long-lived bash whose cwd, env, and shell state survive across `exec {session}` calls.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::io;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -17,14 +13,11 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use crate::proto::{self, ErrorKind, READ_CHUNK, Response};
 use crate::sysutil;
 
-/// Idle sessions (no command run within this window) are reaped so an
-/// abandoned session's shell + fds don't accumulate.
+/// Idle sessions are reaped so an abandoned session's shell and fds do not accumulate.
 pub const IDLE_TTL: Duration = Duration::from_secs(30 * 60);
 pub const REAP_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Bounds the post-marker scan for the exit-code line's newline: the line is
-/// tiny and atomic with the marker, so this only caps a backgrounded child
-/// flooding stdout without a newline.
+/// Caps the post-marker scan for the exit-code newline against a backgrounded child flooding stdout.
 const EXIT_TAIL_MAX: usize = 64 * 1024;
 
 /// Registry of live shell sessions, addressed by id across connections.
@@ -38,8 +31,7 @@ impl Table {
         Self::default()
     }
 
-    /// Spawns a bash session, applies cwd/env, and registers it. A blank id
-    /// yields a generated one; a duplicate id is refused.
+    /// Spawns a bash session, applies cwd/env, and registers it; a blank id is generated, a duplicate refused.
     pub async fn create(
         &self,
         id: Option<String>,
@@ -51,17 +43,14 @@ impl Table {
             _ => format!("sess-{}", sysutil::tmp_suffix()),
         };
         let mut child = Command::new("bash")
-            // The same sanitized baseline as exec/pty ("nothing inherited
-            // from silkd"); the request's cwd/env layer on via the init line.
+            // same sanitized baseline as exec/pty; the request's cwd/env layer on via the init line.
             .env_clear()
             .envs(sysutil::base_env())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            // Null, not piped: nothing ever reads a stderr pipe, and the init
-            // line `exec 2>&1` repoints fd 2 at the stdout pipe anyway.
+            // null, not piped: the init line `exec 2>&1` repoints fd 2 at the stdout pipe.
             .stderr(Stdio::null())
-            // Own process group (leader pgid == pid) so teardown can group-kill
-            // the shell together with whatever external command it is running.
+            // own process group so teardown can group-kill the shell with its running command.
             .process_group(0)
             .kill_on_drop(true)
             .spawn()?;
@@ -74,6 +63,7 @@ impl Table {
                 stdin,
                 stdout,
                 _child: child,
+                cmd_buf: String::new(),
                 buf: vec![0u8; READ_CHUNK],
                 acc: Vec::new(),
                 frame: Vec::new(),
@@ -81,8 +71,7 @@ impl Table {
             last_active: Mutex::new(Instant::now()),
         });
 
-        // Merge stderr, then apply cwd/env; sync on a sentinel so the first
-        // real command reads a clean stream.
+        // sync on a sentinel so the first real command reads a clean stream.
         let mut init = String::from("exec 2>&1\n");
         if let Some(dir) = cwd {
             init.push_str("cd ");
@@ -101,9 +90,7 @@ impl Table {
             io.converse::<tokio::io::Sink>(&init, None).await?;
         }
 
-        // Reserve the id atomically: a concurrent create with the same id
-        // must not silently replace (and orphan) the loser. Dropping the loser
-        // Arc here fires kill_on_drop on its shell.
+        // reserve the id atomically: a concurrent create must not orphan the loser's shell.
         let mut map = sysutil::lock(&self.inner);
         if map.contains_key(&id) {
             return Err(io::Error::new(
@@ -125,9 +112,7 @@ impl Table {
         ids
     }
 
-    /// Removes and kills a session's shell. The explicit kill (not just
-    /// kill_on_drop) unwedges a session whose command is blocked while a
-    /// run() still holds the io lock and its Arc.
+    /// Removes and kills a session's shell; the explicit kill unwedges a blocked command holding the io lock.
     pub fn remove(&self, id: &str) -> bool {
         let removed = sysutil::lock(&self.inner).remove(id);
         if let Some(s) = &removed {
@@ -144,9 +129,7 @@ impl Table {
         self.len() == 0
     }
 
-    /// Removes and kills sessions idle longer than `ttl`. A session currently
-    /// running a command (io lock held) is never idle, so it is skipped even
-    /// if its last stamp is old (a long-running command). Returns the count.
+    /// Removes and kills sessions idle longer than `ttl`; a session holding the io lock is never idle.
     pub fn reap_idle(&self, ttl: Duration) -> usize {
         let mut map = sysutil::lock(&self.inner);
         let before = map.len();
@@ -161,9 +144,7 @@ impl Table {
     }
 }
 
-/// One persistent shell. `io` serializes commands so a session runs one at a
-/// time; the child is killed on drop, and `pid` allows an explicit kill to
-/// unwedge a session whose command is blocked while the io lock is held.
+/// One persistent shell; `io` serializes commands so a session runs one at a time.
 pub struct Session {
     pid: u32,
     io: tokio::sync::Mutex<Io>,
@@ -171,11 +152,7 @@ pub struct Session {
 }
 
 impl Session {
-    /// Runs `argv` in the session shell, streaming stdout frames to `w` and
-    /// ending with an exit frame. argv is shell-quoted and joined so a fresh
-    /// `cd`/`export` persists to later calls while ordinary argv still runs.
-    /// Returns whether the session shell is still alive; a dead shell is
-    /// removed by the caller so its id stops resolving.
+    /// Runs `argv` in the session shell, shell-quoted so `cd`/`export` persist; false once the shell is dead.
     pub async fn run<W: AsyncWrite + Unpin>(&self, argv: &[String], w: &mut W) -> bool {
         let mut cmdline = String::new();
         for (i, a) in argv.iter().enumerate() {
@@ -186,10 +163,7 @@ impl Session {
         }
         let mut io = self.io.lock().await;
         let outcome = io.converse(&cmdline, Some(w)).await;
-        // Stamp while io is still held: the reaper skips a session whose io lock
-        // is held, so it can't mis-reap in the gap between the command finishing
-        // and the fresh stamp landing (a long-running command isn't idle either
-        // — io stays held for its whole duration).
+        // stamp while io is held so the reaper cannot mis-reap in the gap before the stamp lands.
         *sysutil::lock(&self.last_active) = Instant::now();
         drop(io);
         match outcome {
@@ -205,42 +179,37 @@ impl Session {
     }
 }
 
-/// The shell's pipes plus converse's scratch buffers, which are per-session
-/// and reused across commands rather than reallocated per call.
+/// The shell's pipes plus converse's scratch buffers, reused across commands.
 struct Io {
     stdin: ChildStdin,
     stdout: ChildStdout,
     _child: Child,
+    cmd_buf: String,
     buf: Vec<u8>,
     acc: Vec<u8>,
     frame: Vec<u8>,
 }
 
 impl Io {
-    /// Writes `cmd` to the shell followed by a unique sentinel printf, then
-    /// reads output up to the sentinel — emitting the preceding bytes as
-    /// stdout frames on `out` (None discards, used for init) and returning the
-    /// command's exit code. A tiny tail is held back so a marker split across
-    /// reads is still found.
+    /// Runs `cmd` up to a unique sentinel, streaming the bytes before it to `out` and returning the exit code.
     async fn converse<W: AsyncWrite + Unpin>(
         &mut self,
         cmd: &str,
         mut out: Option<&mut W>,
     ) -> io::Result<i32> {
-        // The marker is unforgeable: the shell runs untrusted code that must
-        // not be able to fake the sentinel and desync the stream. `{ …; }
-        // </dev/null` keeps cd/export in the current shell and stops a
-        // stdin-reading command (a REPL, `read`) from swallowing the printf.
         let body = match cmd.trim_end() {
             "" => ":",
             c => c,
         };
+        // the marker must be unforgeable: the shell runs untrusted code that could fake a sentinel.
         let marker = format!("__SILK_{}__", sysutil::rand_token());
-        self.stdin
-            .write_all(
-                format!("{{ {body} ; }} </dev/null\nprintf '{marker} %s\\n' \"$?\"\n").as_bytes(),
-            )
-            .await?;
+        self.cmd_buf.clear();
+        // `{ …; } </dev/null` keeps cd/export in this shell and stops a stdin reader eating the printf.
+        let _ = write!(
+            self.cmd_buf,
+            "{{ {body} ; }} </dev/null\nprintf '{marker} %s\\n' \"$?\"\n"
+        );
+        self.stdin.write_all(self.cmd_buf.as_bytes()).await?;
         self.stdin.flush().await?;
 
         let mb = marker.as_bytes();
@@ -262,9 +231,7 @@ impl Io {
                     }
                     self.acc.extend_from_slice(&self.buf[..m]);
                 }
-                // Parse only the exit-code line; a command that left a
-                // background writer can land bytes after the newline, which
-                // must not corrupt the code.
+                // parse only the exit-code line: a background writer can land bytes after the newline.
                 let end = self
                     .acc
                     .iter()
@@ -295,10 +262,7 @@ pub async fn reap_loop(table: Table, ttl: Duration, interval: Duration) {
     }
 }
 
-/// Best-effort emit of a stdout frame. A client-write failure drops the
-/// client (`*out = None`) but does not abort the caller, so converse keeps
-/// draining the shell to its sentinel — a mid-command disconnect must not
-/// leave the persistent shell out of sync for the next exec.
+/// Best-effort emit: a client-write failure drops the client but lets converse drain to its sentinel.
 async fn emit<W: AsyncWrite + Unpin>(out: &mut Option<&mut W>, frame: &mut Vec<u8>, data: &[u8]) {
     if data.is_empty() {
         return;
@@ -319,8 +283,7 @@ fn take_pipe<T>(pipe: Option<T>, name: &str) -> io::Result<T> {
     pipe.ok_or_else(|| io::Error::other(format!("child {name} not piped")))
 }
 
-/// POSIX single-quote quoting: wraps `s` in '…' onto the end of `out`,
-/// closing/reopening around any embedded single quote.
+/// POSIX single-quote quoting: wraps `s` in '…' onto `out`, reopening around embedded quotes.
 fn shell_quote_into(out: &mut String, s: &str) {
     out.push('\'');
     for c in s.chars() {

@@ -379,8 +379,6 @@ func TestWritableVolumeEndToEnd(t *testing.T) {
 	}
 }
 
-// The read-only leg runs second: it is admitted only once the writer's
-// release has cleared the dirty marker.
 func TestVolumeModeWireShape(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
 	stack := startTenantStack(t, "node-token", nil,
@@ -523,8 +521,6 @@ func TestAttachOnlyVolumeWireShape(t *testing.T) {
 	}
 }
 
-// TestDirtyVolumeRefusesReader: the marker a crashed writer leaves behind
-// (pre-created here) turns read-only claims into 409s over the wire.
 func TestDirtyVolumeRefusesReader(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
 	if err := os.WriteFile(scratch+".dirty", nil, 0o600); err != nil {
@@ -601,8 +597,6 @@ func writeVolumeImage(t *testing.T, name, content string) string {
 	return image
 }
 
-// assertNoDirtyMarker fails if the image carries the write-ahead marker: an
-// attach-only claim makes no consistency promise, so it must never write one.
 func assertNoDirtyMarker(t *testing.T, image, when string) {
 	t.Helper()
 	if _, err := os.Stat(image + ".dirty"); !errors.Is(err, os.ErrNotExist) {
@@ -610,8 +604,6 @@ func assertNoDirtyMarker(t *testing.T, image, when string) {
 	}
 }
 
-// rawClaimResponse decodes the volume entries generically, so the assertion
-// is the server's own JSON rather than the SDK's mirror of it.
 type rawClaimResponse struct {
 	ID      string           `json:"id"`
 	Token   string           `json:"token"`

@@ -1,9 +1,6 @@
-//! git verbs: wrap the guest git binary and return structured results
-//! (branch, ahead/behind, per-file status, commit hash) rather than stdout to
-//! scrape. clone/push/pull need the network, so on the none lane they fail
-//! with a typed error pointing at fs.push; the rest are local and always work.
-//! An auth token rides in an in-memory `http.extraHeader`, never the guest disk.
+//! git verbs wrap the guest git binary into structured results; the none lane fails clone/push/pull with a typed error.
 
+use std::borrow::Cow;
 use std::process::Stdio;
 
 use tokio::io::AsyncWrite;
@@ -65,16 +62,14 @@ pub async fn add<W: AsyncWrite + Unpin>(
     terminal(w, "add", &out).await
 }
 
-/// Commits staged changes with `message` and `author` ("Name <email>"),
-/// returning the new commit hash.
+/// Commits staged changes and returns the new commit hash.
 pub async fn commit<W: AsyncWrite + Unpin>(
     w: &mut W,
     path: String,
     message: String,
     author: String,
 ) -> std::io::Result<()> {
-    // A fresh guest has no committer identity, so git commit would fail to
-    // auto-detect one; derive the committer from the author.
+    // a fresh guest has no committer identity, so derive one from the author.
     let (name, email) = split_author(&author);
     let mut cmd = git_cmd(&path, None);
     cmd.env("GIT_COMMITTER_NAME", name)
@@ -165,11 +160,7 @@ async fn net_verb<W: AsyncWrite + Unpin>(
     terminal(w, verb, &out).await
 }
 
-/// Builds a `git -C dir` command with config and stdio policy applied. Config
-/// (an auth token, and quotePath=false so paths come back raw) rides in
-/// `GIT_CONFIG_*` env vars, not `-c` args: the process environ is root-only,
-/// whereas argv is world-readable via /proc/<pid>/cmdline — a de-escalated
-/// exec could otherwise scrape the token.
+/// Builds a `git -C dir` command; config rides in `GIT_CONFIG_*` env vars because argv is world-readable via /proc.
 fn git_cmd(dir: &str, auth: Option<&str>) -> Command {
     let mut cmd = Command::new("git");
     sysutil::align_proxy_env(&mut cmd);
@@ -193,14 +184,18 @@ async fn git(
 
 /// Injects git config as GIT_CONFIG_COUNT/KEY_n/VALUE_n env pairs.
 fn apply_config(cmd: &mut Command, auth: Option<&str>) {
-    let mut pairs: Vec<(&str, String)> = vec![("core.quotePath", "false".to_string())];
+    let mut pairs: Vec<(&str, Cow<'static, str>)> =
+        vec![("core.quotePath", Cow::Borrowed("false"))];
     if let Some(token) = auth {
-        pairs.push(("http.extraHeader", format!("Authorization: Bearer {token}")));
+        pairs.push((
+            "http.extraHeader",
+            Cow::Owned(format!("Authorization: Bearer {token}")),
+        ));
     }
     cmd.env("GIT_CONFIG_COUNT", pairs.len().to_string());
     for (i, (key, value)) in pairs.iter().enumerate() {
         cmd.env(format!("GIT_CONFIG_KEY_{i}"), key);
-        cmd.env(format!("GIT_CONFIG_VALUE_{i}"), value);
+        cmd.env(format!("GIT_CONFIG_VALUE_{i}"), value.as_ref());
     }
 }
 
@@ -262,13 +257,7 @@ fn parse_ahead_behind(rest: &str) -> (u32, u32) {
     (ahead, behind)
 }
 
-/// Parses one porcelain-v2 entry. XY is field 2; the path is the last
-/// space-field (kept intact even with spaces — core.quotePath=false keeps it
-/// raw). Ordinary changes ("1") have the path at field 9; renames/copies ("2")
-/// add an Xscore field, so the path is field 10 and carries "<new>\t<orig>",
-/// of which we keep the new path; unmerged ("u") entries carry four modes and
-/// three hashes, putting the bare path at field 11. Untracked ("?") is a
-/// bare path.
+/// Parses one porcelain-v2 entry: XY is field 2, the path the last space-field at 9 ("1"), 10 ("2") or 11 ("u").
 fn parse_file_line(line: &str) -> Option<GitFileStatus> {
     let kind = line.split(' ').next()?;
     match kind {
@@ -276,8 +265,8 @@ fn parse_file_line(line: &str) -> Option<GitFileStatus> {
             let mut fields = line.split(' ');
             let xy = fields.nth(1)?; // field 2
             let mut chars = xy.chars();
-            let staged = chars.next()?.to_string();
-            let unstaged = chars.next()?.to_string();
+            let staged = chars.next()?;
+            let unstaged = chars.next()?;
             let skip = match kind {
                 "2" => 7,
                 "u" => 8,
@@ -285,29 +274,30 @@ fn parse_file_line(line: &str) -> Option<GitFileStatus> {
             }; // to reach the path field
             let path = fields.nth(skip)?;
             // Rejoin any spaces the split consumed, then drop a rename's \t<orig>.
-            let rest: Vec<&str> = fields.collect();
-            let full = if rest.is_empty() {
-                path.to_string()
-            } else {
-                format!("{path} {}", rest.join(" "))
-            };
+            let mut full = String::from(path);
+            for tok in fields {
+                full.push(' ');
+                full.push_str(tok);
+            }
+            if let Some(tab) = full.find('\t') {
+                full.truncate(tab);
+            }
             Some(GitFileStatus {
-                path: full.split('\t').next()?.to_string(),
+                path: full,
                 staged,
                 unstaged,
             })
         }
         "?" => Some(GitFileStatus {
             path: line.get(2..)?.to_string(),
-            staged: "?".to_string(),
-            unstaged: "?".to_string(),
+            staged: '?',
+            unstaged: '?',
         }),
         _ => None,
     }
 }
 
-/// Splits an author "Name <email>" into (name, email); a missing angle form
-/// leaves the whole string as the name.
+/// Splits an author "Name <email>" into (name, email); a missing angle form is all name.
 fn split_author(author: &str) -> (&str, &str) {
     if let Some(open) = author.find('<')
         && let Some(close) = author[open..].find('>')
@@ -344,10 +334,7 @@ mod tests {
     fn parses_ordinary_rename_untracked_and_conflict() {
         let ordinary = parse_file_line("1 .M N... 100644 100644 100644 h1 h2 src/main.rs").unwrap();
         assert_eq!(ordinary.path, "src/main.rs");
-        assert_eq!(
-            (ordinary.staged.as_str(), ordinary.unstaged.as_str()),
-            (".", "M")
-        );
+        assert_eq!((ordinary.staged, ordinary.unstaged), ('.', 'M'));
 
         let rename =
             parse_file_line("2 R. N... 100644 100644 100644 h1 h2 R100 new.rs\told.rs").unwrap();
@@ -359,9 +346,6 @@ mod tests {
         let conflict =
             parse_file_line("u UU N... 100644 100644 100644 100644 h1 h2 h3 conflict.rs").unwrap();
         assert_eq!(conflict.path, "conflict.rs");
-        assert_eq!(
-            (conflict.staged.as_str(), conflict.unstaged.as_str()),
-            ("U", "U")
-        );
+        assert_eq!((conflict.staged, conflict.unstaged), ('U', 'U'));
     }
 }

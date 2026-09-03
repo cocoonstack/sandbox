@@ -518,6 +518,16 @@ type InfoResp struct {
 
 func (InfoResp) RespType() string { return "info" }
 
+// ProcInfo is one entry of Procs; ExitCode is absent while running.
+type ProcInfo struct {
+	PID                uint32   `json:"pid"`
+	Argv               []string `json:"argv"`
+	Detached           bool     `json:"detached"`
+	State              string   `json:"state"`
+	ExitCode           *int32   `json:"exit_code,omitempty"`
+	StartedAtEpochSecs uint64   `json:"started_at_epoch_secs"`
+}
+
 // Procs answers Ps.
 type Procs struct {
 	Procs []ProcInfo `json:"procs"`
@@ -532,12 +542,27 @@ type DataResp struct {
 
 func (DataResp) RespType() string { return "data" }
 
+// DirEntry is one entry of Entries; Kind is one of the FileKind* consts.
+type DirEntry struct {
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+	Size uint64 `json:"size"`
+}
+
 // Entries answers FsList.
 type Entries struct {
 	Entries []DirEntry `json:"entries"`
 }
 
 func (Entries) RespType() string { return "entries" }
+
+// FileInfo is the Stat payload; Mode carries permission bits only.
+type FileInfo struct {
+	Kind           string `json:"kind"`
+	Size           uint64 `json:"size"`
+	Mode           uint32 `json:"mode"`
+	MtimeEpochSecs uint64 `json:"mtime_epoch_secs"`
+}
 
 // Stat answers FsStat.
 type Stat struct {
@@ -624,31 +649,6 @@ type GitBranches struct {
 }
 
 func (GitBranches) RespType() string { return "git_branches" }
-
-// ProcInfo is one entry of Procs; ExitCode is absent while running.
-type ProcInfo struct {
-	PID                uint32   `json:"pid"`
-	Argv               []string `json:"argv"`
-	Detached           bool     `json:"detached"`
-	State              string   `json:"state"`
-	ExitCode           *int32   `json:"exit_code,omitempty"`
-	StartedAtEpochSecs uint64   `json:"started_at_epoch_secs"`
-}
-
-// DirEntry is one entry of Entries; Kind is one of the FileKind* consts.
-type DirEntry struct {
-	Name string `json:"name"`
-	Kind string `json:"kind"`
-	Size uint64 `json:"size"`
-}
-
-// FileInfo is the Stat payload; Mode carries permission bits only.
-type FileInfo struct {
-	Kind           string `json:"kind"`
-	Size           uint64 `json:"size"`
-	Mode           uint32 `json:"mode"`
-	MtimeEpochSecs uint64 `json:"mtime_epoch_secs"`
-}
 
 // EncodeRequest renders {"v":1,"op":...,fields} without a trailing newline.
 func EncodeRequest(r Request) ([]byte, error) {

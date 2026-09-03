@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from .checkpoint import Checkpoint
 from .conn import Conn, _Closeable, dial_agent
-from .errors import APIError, ExitError, ProtocolError, StreamTimeout
+from .errors import APIError, ExitError, ProtocolError, SandboxError, StreamTimeout
 from .frames import BULK_CHUNK, FS_CHUNK
 from .template import Template
 
@@ -66,8 +66,7 @@ class Sandbox:
         with self._dial() as conn:
             conn.send("exec", argv=argv, cwd=cwd or None, env=env,
                       user=user or None, detach=False, session=session or None)
-            # The guest stops draining stdin while blocked writing stdout, so
-            # feeding it to completion before reading deadlocks.
+            # the guest stops draining stdin while blocked on stdout, so feeding it fully first deadlocks.
             pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True)
             pump.start()
             code = _pump_stdio(conn, on_stdout, on_stderr)
@@ -335,12 +334,12 @@ class Sandbox:
     def _proxy_conn(self, local: socket.socket, port: int) -> None:
         try:
             guest = self.dial_port(port)
-        except Exception:
+        except (SandboxError, OSError):
             local.close()
             return
 
         def pump_out():
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(SandboxError, OSError):
                 while True:
                     chunk = guest.recv()
                     if not chunk:
@@ -357,8 +356,7 @@ class Sandbox:
                 if not chunk:
                     break
                 guest.send(chunk)
-            # Half-close, then let the guest finish answering: closing here
-            # would cut the reply the local client is still waiting for.
+            # half-close, not close: the guest's reply is still in flight.
             guest.close_write()
             pump.join()
         finally:
@@ -401,9 +399,7 @@ class Watcher(_Closeable):
         self.error: Exception | None = None
 
     def __iter__(self) -> Iterator[dict]:
-        # Connection-bound: a close, drop, or undecodable frame ends iteration;
-        # a real server error frame (SilkdError) propagates. error tells a
-        # clean close (None) from a relay that dropped mid-stream.
+        # a transport failure ends iteration and sets error; a SilkdError frame propagates.
         while True:
             try:
                 frame = self._conn.recv()
@@ -503,7 +499,7 @@ def _send_chunks(conn: Conn, data: bytes, op: str = "data", chunk: int = FS_CHUN
 
 
 def _feed_stdin(conn: Conn, stdin: bytes) -> None:
-    with contextlib.suppress(Exception):  # the reader reports the real failure
+    with contextlib.suppress(SandboxError, OSError):  # the reader reports the real failure
         if stdin:
             _send_chunks(conn, stdin, op="stdin")
         conn.send("stdin_close")

@@ -1,8 +1,6 @@
-//! sandbox-init: the entire initramfs userland. Assembles the EROFS + overlay
-//! rootfs described on the kernel cmdline and hands off to the real init.
+//! sandbox-init: assembles the EROFS+overlay rootfs named on the kernel cmdline, then execs the real init.
 
-// Off Linux only cfg's own tests use it; the bin compiles it dead so
-// `cargo test` still covers the cmdline parsing on dev hosts.
+// compiled dead off Linux so `cargo test` still covers cmdline parsing on a dev host.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod cfg;
 
