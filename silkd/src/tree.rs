@@ -49,7 +49,7 @@ where
 pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<()> {
     let p = Path::new(&path);
     let (parent, name) = match (p.parent(), p.file_name()) {
-        (Some(par), Some(n)) if !n.is_empty() => (par.to_path_buf(), n.to_os_string()),
+        (Some(par), Some(n)) if !n.is_empty() => (par, n),
         _ => return proto::error_frame(w, ErrorKind::BadRequest, "invalid path").await,
     };
     // symlink_metadata, not metadata: a dangling symlink is a valid tar source
@@ -58,7 +58,7 @@ pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
         return err_frame(w, &e, "stat source").await;
     }
     let cwd = if parent.as_os_str().is_empty() {
-        Path::new(".").to_path_buf()
+        Path::new(".")
     } else {
         parent
     };
@@ -66,9 +66,9 @@ pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
     // `--` so a basename starting with `-` is a path, not a tar option.
     cmd.arg("-c")
         .arg("-C")
-        .arg(&cwd)
+        .arg(cwd)
         .arg("--")
-        .arg(&name)
+        .arg(name)
         .stdout(Stdio::piped());
     let (mut child, err_task) = match spawn_tar(cmd) {
         Ok(pair) => pair,
@@ -203,5 +203,5 @@ async fn drain(mut stderr: tokio::process::ChildStderr) -> String {
             out.extend_from_slice(&buf[..(n.min(CAP - out.len()))]);
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }

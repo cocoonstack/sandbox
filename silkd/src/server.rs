@@ -1,6 +1,7 @@
 //! Connection handling: read the leading request frame, dispatch to a
 //! handler, and for exec forward subsequent client frames over a channel.
 
+use std::borrow::Cow;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::io::{AsyncBufRead, AsyncWrite};
@@ -199,7 +200,7 @@ impl State {
         proto::write_frame(
             w,
             &Response::Info {
-                version: env!("CARGO_PKG_VERSION").to_string(),
+                version: Cow::Borrowed(env!("CARGO_PKG_VERSION")),
                 proto: proto::PROTO_VERSION,
                 uptime_secs: self.started.elapsed().as_secs(),
                 procs: self.table.len(),

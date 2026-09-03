@@ -276,8 +276,8 @@ fn parse_file_line(line: &str) -> Option<GitFileStatus> {
             let mut fields = line.split(' ');
             let xy = fields.nth(1)?; // field 2
             let mut chars = xy.chars();
-            let staged = chars.next()?.to_string();
-            let unstaged = chars.next()?.to_string();
+            let staged = chars.next()?;
+            let unstaged = chars.next()?;
             let skip = match kind {
                 "2" => 7,
                 "u" => 8,
@@ -286,21 +286,24 @@ fn parse_file_line(line: &str) -> Option<GitFileStatus> {
             let path = fields.nth(skip)?;
             // Rejoin any spaces the split consumed, then drop a rename's \t<orig>.
             let rest: Vec<&str> = fields.collect();
-            let full = if rest.is_empty() {
+            let mut full = if rest.is_empty() {
                 path.to_string()
             } else {
                 format!("{path} {}", rest.join(" "))
             };
+            if let Some(tab) = full.find('\t') {
+                full.truncate(tab);
+            }
             Some(GitFileStatus {
-                path: full.split('\t').next()?.to_string(),
+                path: full,
                 staged,
                 unstaged,
             })
         }
         "?" => Some(GitFileStatus {
             path: line.get(2..)?.to_string(),
-            staged: "?".to_string(),
-            unstaged: "?".to_string(),
+            staged: '?',
+            unstaged: '?',
         }),
         _ => None,
     }
@@ -344,10 +347,7 @@ mod tests {
     fn parses_ordinary_rename_untracked_and_conflict() {
         let ordinary = parse_file_line("1 .M N... 100644 100644 100644 h1 h2 src/main.rs").unwrap();
         assert_eq!(ordinary.path, "src/main.rs");
-        assert_eq!(
-            (ordinary.staged.as_str(), ordinary.unstaged.as_str()),
-            (".", "M")
-        );
+        assert_eq!((ordinary.staged, ordinary.unstaged), ('.', 'M'));
 
         let rename =
             parse_file_line("2 R. N... 100644 100644 100644 h1 h2 R100 new.rs\told.rs").unwrap();
@@ -359,9 +359,6 @@ mod tests {
         let conflict =
             parse_file_line("u UU N... 100644 100644 100644 100644 h1 h2 h3 conflict.rs").unwrap();
         assert_eq!(conflict.path, "conflict.rs");
-        assert_eq!(
-            (conflict.staged.as_str(), conflict.unstaged.as_str()),
-            ("U", "U")
-        );
+        assert_eq!((conflict.staged, conflict.unstaged), ('U', 'U'));
     }
 }

@@ -3,6 +3,7 @@
 //! Detached processes keep a bounded output ring so a later `logs`/`attach`
 //! can replay what already streamed.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -209,8 +210,8 @@ impl Proc {
 
     fn info(&self) -> ProcInfo {
         let (state, exit_code) = match *sysutil::lock(&self.state) {
-            State::Running => ("running".to_string(), None),
-            State::Exited(c) => ("exited".to_string(), Some(c)),
+            State::Running => (Cow::Borrowed("running"), None),
+            State::Exited(c) => (Cow::Borrowed("exited"), Some(c)),
         };
         ProcInfo {
             pid: self.pid,

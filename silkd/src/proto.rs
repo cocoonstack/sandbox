@@ -4,6 +4,7 @@
 //! (exit / done / error). Binary payloads ride as base64 (`data` fields),
 //! matching Go's default []byte JSON encoding for the SDK side.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
@@ -233,7 +234,7 @@ pub enum Response {
         message: String,
     },
     Info {
-        version: String,
+        version: Cow<'static, str>,
         proto: u32,
         uptime_secs: u64,
         procs: usize,
@@ -323,8 +324,8 @@ pub enum GitBranchOp {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GitFileStatus {
     pub path: String,
-    pub staged: String,
-    pub unstaged: String,
+    pub staged: char,
+    pub unstaged: char,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -365,7 +366,7 @@ pub struct ProcInfo {
     pub pid: u32,
     pub argv: Vec<String>,
     pub detached: bool,
-    pub state: String,
+    pub state: Cow<'static, str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     pub started_at_epoch_secs: u64,

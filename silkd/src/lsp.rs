@@ -16,6 +16,7 @@
 //! image ships no manifests, so `lsp_start` for any language there answers a
 //! typed `not_found` naming the flavor that provides one.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -233,8 +234,8 @@ async fn pump_stdout<W: AsyncWrite + Unpin>(
 
 /// manifest_dir allows tests (and an operator) to relocate the manifest dir
 /// via SILKD_LSP_DIR, mirroring silkd's other env overrides.
-fn manifest_dir() -> String {
-    std::env::var("SILKD_LSP_DIR").unwrap_or_else(|_| MANIFEST_DIR.to_string())
+fn manifest_dir() -> Cow<'static, str> {
+    std::env::var("SILKD_LSP_DIR").map_or(Cow::Borrowed(MANIFEST_DIR), Cow::Owned)
 }
 
 async fn read_manifest(language: &str) -> Option<Vec<String>> {
