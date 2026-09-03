@@ -6,6 +6,7 @@
 //! pipe deadlock, which is the conventional interactive-shell behaviour.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::io;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -74,6 +75,7 @@ impl Table {
                 stdin,
                 stdout,
                 _child: child,
+                cmd_buf: String::new(),
                 buf: vec![0u8; READ_CHUNK],
                 acc: Vec::new(),
                 frame: Vec::new(),
@@ -205,6 +207,7 @@ struct Io {
     stdin: ChildStdin,
     stdout: ChildStdout,
     _child: Child,
+    cmd_buf: String,
     buf: Vec<u8>,
     acc: Vec<u8>,
     frame: Vec<u8>,
@@ -226,11 +229,12 @@ impl Io {
             c => c,
         };
         let marker = format!("__SILK_{}__", sysutil::rand_token());
-        self.stdin
-            .write_all(
-                format!("{{ {body} ; }} </dev/null\nprintf '{marker} %s\\n' \"$?\"\n").as_bytes(),
-            )
-            .await?;
+        self.cmd_buf.clear();
+        let _ = write!(
+            self.cmd_buf,
+            "{{ {body} ; }} </dev/null\nprintf '{marker} %s\\n' \"$?\"\n"
+        );
+        self.stdin.write_all(self.cmd_buf.as_bytes()).await?;
         self.stdin.flush().await?;
 
         let mb = marker.as_bytes();

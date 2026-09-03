@@ -4,6 +4,7 @@
 //! with a typed error pointing at fs.push; the rest are local and always work.
 //! An auth token rides in an in-memory `http.extraHeader`, never the guest disk.
 
+use std::borrow::Cow;
 use std::process::Stdio;
 
 use tokio::io::AsyncWrite;
@@ -189,14 +190,18 @@ async fn git(
 
 /// Injects git config as GIT_CONFIG_COUNT/KEY_n/VALUE_n env pairs.
 fn apply_config(cmd: &mut Command, auth: Option<&str>) {
-    let mut pairs: Vec<(&str, String)> = vec![("core.quotePath", "false".to_string())];
+    let mut pairs: Vec<(&str, Cow<'static, str>)> =
+        vec![("core.quotePath", Cow::Borrowed("false"))];
     if let Some(token) = auth {
-        pairs.push(("http.extraHeader", format!("Authorization: Bearer {token}")));
+        pairs.push((
+            "http.extraHeader",
+            Cow::Owned(format!("Authorization: Bearer {token}")),
+        ));
     }
     cmd.env("GIT_CONFIG_COUNT", pairs.len().to_string());
     for (i, (key, value)) in pairs.iter().enumerate() {
         cmd.env(format!("GIT_CONFIG_KEY_{i}"), key);
-        cmd.env(format!("GIT_CONFIG_VALUE_{i}"), value);
+        cmd.env(format!("GIT_CONFIG_VALUE_{i}"), value.as_ref());
     }
 }
 
@@ -275,12 +280,11 @@ fn parse_file_line(line: &str) -> Option<GitFileStatus> {
             }; // to reach the path field
             let path = fields.nth(skip)?;
             // Rejoin any spaces the split consumed, then drop a rename's \t<orig>.
-            let rest: Vec<&str> = fields.collect();
-            let mut full = if rest.is_empty() {
-                path.to_string()
-            } else {
-                format!("{path} {}", rest.join(" "))
-            };
+            let mut full = String::from(path);
+            for tok in fields {
+                full.push(' ');
+                full.push_str(tok);
+            }
             if let Some(tab) = full.find('\t') {
                 full.truncate(tab);
             }
