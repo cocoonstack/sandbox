@@ -68,7 +68,8 @@ performance) — source in
   `/boot/vmlinuz-sandbox` + `/boot/initrd.img-sandbox`
 - `os-image/` — VM images consuming the boot artifact: `base` (layered,
   for builds), `rt` (base squashed to one layer — the default template in
-  examples), `python`, `python-rt`, `browser`, and `android`
+  examples), `python`, `python-rt`, `node`, `node-rt`, `browser`, and
+  `android`
 - `scripts/` — `boot-bench.sh` (boot phase timing), `bench.sh` (the published
   benchmark procedure), `sandboxd-e2e.sh` (bare-metal e2e, below), plus the
   `archive`/`egress`/`intercept` e2e drivers
