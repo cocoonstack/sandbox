@@ -11,7 +11,7 @@ require (
 	github.com/cocoonstack/sandbox/protocol/wire v0.0.0-00010101000000-000000000000
 	github.com/google/nftables v0.3.0
 	github.com/hashicorp/memberlist v0.6.0
-	github.com/projecteru2/core v0.1.3
+	github.com/projecteru2/core v0.1.4
 	golang.org/x/net v0.58.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
@@ -63,7 +63,7 @@ require (
 	golang.org/x/mod v0.39.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/tools v0.49.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260825221802-da73d73af1c5 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260904194346-d0f1323225a4 // indirect
 	google.golang.org/grpc v1.83.1 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
