@@ -516,6 +516,25 @@ the connection is a byte-for-byte relay to the guest's silkd (one silkd RPC
 per connection — see [silkd](silkd.md)). 426 without the upgrade header, 404
 unknown sandbox, 502 guest unreachable.
 
+## POST /v1/sandboxes/{id}/exec
+
+Auth: the sandbox's own token. A buffered exec for clients that cannot hold
+an upgraded connection — plain JSON in, plain JSON out, so it multiplexes over
+HTTP/2 through a TLS proxy:
+
+```json
+{"argv": ["node", "-v"], "cwd": "/work", "env": {"CI": "1"}, "timeout_seconds": 60}
+```
+
+→ `200 {"exit_code": 0, "stdout": "v22.23.2\n", "stderr": ""}`. The command
+runs to completion (no stdin, no streaming, no detach — use the relay for
+those); `timeout_seconds` 0 means no limit beyond the request itself, and a
+timeout closes the guest connection, which kills the command, then answers
+504. 400 empty `argv` or a silkd `bad_request`, 404 unknown sandbox or wrong
+token, 413 when stdout+stderr exceed 8 MiB, 502 guest unreachable or any
+other silkd error, and a hibernated sandbox wakes transparently like on the
+relay.
+
 ## GET /v1/sandboxes/{id}/owner
 
 Auth: the sandbox's own token. Answers `{"owner_addr": "host:port"}` when
