@@ -198,6 +198,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/drain", s.requireRoot(s.handleDrain))
 	mux.HandleFunc("DELETE /v1/drain", s.requireRoot(s.handleUncordon))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", s.handleAgent)
+	mux.HandleFunc("POST /v1/sandboxes/{id}/exec", s.handleExec)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/owner", s.handleOwner)
 	mux.HandleFunc("GET /v1/info", s.requireRoot(s.handleInfo))
 	mux.HandleFunc("GET /v1/peers", s.requireToken(s.handlePeers))
