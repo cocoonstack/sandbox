@@ -14,7 +14,7 @@ require (
 	github.com/projecteru2/core v0.1.3
 	golang.org/x/net v0.58.0
 	golang.org/x/sync v0.22.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.48.0
 )
 
 require (
