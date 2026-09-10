@@ -20,10 +20,11 @@ const (
 	NetNone   NetShape = "none"
 	NetEgress NetShape = "egress"
 
-	SizeSmall  Size = "small"
-	SizeMedium Size = "medium"
-	SizeLarge  Size = "large"
-	SizeXLarge Size = "xlarge"
+	SizeSmall   Size = "small"
+	SizeMedium  Size = "medium"
+	SizeLarge   Size = "large"
+	SizeXLarge  Size = "xlarge"
+	Size2XLarge Size = "2xlarge"
 
 	RestoreCopy     RestoreMode = "copy"
 	RestoreOnDemand RestoreMode = "ondemand"
@@ -47,10 +48,11 @@ var (
 	VolumeNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,19}$`)
 
 	sizeSpecs = map[Size]SizeSpec{
-		SizeSmall:  {CPU: 1, Memory: "512M", MemoryBytes: 512 << 20},
-		SizeMedium: {CPU: 2, Memory: "1G", MemoryBytes: 1 << 30},
-		SizeLarge:  {CPU: 4, Memory: "4G", MemoryBytes: 4 << 30},
-		SizeXLarge: {CPU: 4, Memory: "8G", MemoryBytes: 8 << 30},
+		SizeSmall:   {CPU: 1, Memory: "512M", MemoryBytes: 512 << 20},
+		SizeMedium:  {CPU: 2, Memory: "1G", MemoryBytes: 1 << 30},
+		SizeLarge:   {CPU: 4, Memory: "4G", MemoryBytes: 4 << 30},
+		SizeXLarge:  {CPU: 4, Memory: "8G", MemoryBytes: 8 << 30},
+		Size2XLarge: {CPU: 8, Memory: "16G", MemoryBytes: 16 << 30},
 	}
 
 	guestOSMountRoots = []string{

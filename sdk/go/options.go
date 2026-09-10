@@ -11,10 +11,11 @@ const (
 	// NetEgress attaches the node's bridge or CNI network.
 	NetEgress NetShape = "egress"
 
-	Small  Size = "small"
-	Medium Size = "medium"
-	Large  Size = "large"
-	XLarge Size = "xlarge"
+	Small   Size = "small"
+	Medium  Size = "medium"
+	Large   Size = "large"
+	XLarge  Size = "xlarge"
+	XXLarge Size = "2xlarge"
 
 	volumeModeRO = "ro"
 	volumeModeRW = "rw"
