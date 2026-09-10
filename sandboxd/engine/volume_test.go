@@ -24,7 +24,7 @@ func TestDiskAttachArgsModeAndDirectIO(t *testing.T) {
 		{"writable", "", true, "off"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			e := New("cocoon", nil, nil, false, "")
+			e := New("cocoon", nil, nil, false, false, "")
 			args, err := e.diskAttachArgs("sbx-1", VolumeSpec{
 				Name: "imagenet", Path: "/srv/datasets/imagenet.img", DirectIO: tt.directIO, RW: tt.rw,
 			})
@@ -48,7 +48,7 @@ func TestDiskAttachArgsModeAndDirectIO(t *testing.T) {
 }
 
 func TestDiskAttachArgsRejectBadOptions(t *testing.T) {
-	_, err := New("cocoon", nil, nil, false, "").diskAttachArgs("sbx-1", VolumeSpec{DirectIO: "maybe"})
+	_, err := New("cocoon", nil, nil, false, false, "").diskAttachArgs("sbx-1", VolumeSpec{DirectIO: "maybe"})
 	if err == nil || !strings.Contains(err.Error(), "on, off, or auto") {
 		t.Errorf("got %v, want directio validation error", err)
 	}
@@ -67,7 +67,7 @@ func TestMountVolumeUsesSysfsAndRequestedMode(t *testing.T) {
 			path := sockPath(t)
 			fake := serveFakeSilkd(t, path)
 			configureVolumeDevices(fake)
-			if err := New("cocoon", nil, nil, false, "").MountVolume(
+			if err := New("cocoon", nil, nil, false, false, "").MountVolume(
 				t.Context(), path, "imagenet", "/datasets/training", tt.rw,
 			); err != nil {
 				t.Fatalf("MountVolume: %v", err)
@@ -103,7 +103,7 @@ func TestUnmountVolumeExecsBoundedUmount(t *testing.T) {
 	}
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
-	e := New("cocoon", nil, nil, false, "")
+	e := New("cocoon", nil, nil, false, false, "")
 	if err := e.UnmountVolume(t.Context(), path, "/datasets/training"); err != nil {
 		t.Fatalf("UnmountVolume: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestUnmountVolumeExecsBoundedUmount(t *testing.T) {
 func TestSyncGuestExecsPlainSync(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
-	e := New("cocoon", nil, nil, false, "")
+	e := New("cocoon", nil, nil, false, false, "")
 	if err := e.SyncGuest(t.Context(), path); err != nil {
 		t.Fatalf("SyncGuest: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestMountVolumeWaitsForDelayedSysfsSerial(t *testing.T) {
 	fake.mu.Lock()
 	fake.readMisses["/sys/block/vdc/serial"] = 1
 	fake.mu.Unlock()
-	if err := New("cocoon", nil, nil, false, "").MountVolume(
+	if err := New("cocoon", nil, nil, false, false, "").MountVolume(
 		t.Context(), path, "imagenet", "/datasets/training", false,
 	); err != nil {
 		t.Fatalf("MountVolume: %v", err)
@@ -171,7 +171,7 @@ func TestMountVolumeWaitsForDelayedDevNode(t *testing.T) {
 	fake.mu.Lock()
 	fake.statMisses["/dev/vdc"] = 3
 	fake.mu.Unlock()
-	if err := New("cocoon", nil, nil, false, "").MountVolume(
+	if err := New("cocoon", nil, nil, false, false, "").MountVolume(
 		t.Context(), path, "imagenet", "/datasets/training", false,
 	); err != nil {
 		t.Fatalf("MountVolume: %v", err)
@@ -207,7 +207,7 @@ func TestMountVolumeStopsAtFailedStage(t *testing.T) {
 			fake.mu.Lock()
 			tt.prepare(fake)
 			fake.mu.Unlock()
-			err := New("cocoon", nil, nil, false, "").MountVolume(
+			err := New("cocoon", nil, nil, false, false, "").MountVolume(
 				t.Context(), path, "imagenet", "/datasets/training", false,
 			)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
@@ -231,7 +231,7 @@ func TestMountVolumeDeviceProbeIsBoundedAndCancelable(t *testing.T) {
 	configureVolumeDevices(fake)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	err := New("cocoon", nil, nil, false, "").MountVolume(
+	err := New("cocoon", nil, nil, false, false, "").MountVolume(
 		ctx, path, "missing", "/datasets/training", false,
 	)
 	if !errors.Is(err, context.Canceled) {
@@ -246,7 +246,7 @@ func TestMountVolumeDevNodeNeverAppearsTimesOut(t *testing.T) {
 	fake.mu.Lock()
 	delete(fake.stat, "/dev/vdc")
 	fake.mu.Unlock()
-	err := New("cocoon", nil, nil, false, "").MountVolume(
+	err := New("cocoon", nil, nil, false, false, "").MountVolume(
 		t.Context(), path, "imagenet", "/datasets/training", false,
 	)
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "wait for volume device imagenet") {

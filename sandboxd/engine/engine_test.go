@@ -23,7 +23,7 @@ func TestDialSilkdConsumesOnlyHandshake(t *testing.T) {
 
 	listenMuxer(t, path, "OK 2048\nX")
 
-	conn, err := New("cocoon", nil, nil, false, "").DialSilkd(t.Context(), path)
+	conn, err := New("cocoon", nil, nil, false, false, "").DialSilkd(t.Context(), path)
 	if err != nil {
 		t.Fatalf("DialSilkd: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestDialSilkdRejectedHandshake(t *testing.T) {
 	path := sockPath(t)
 	listenMuxer(t, path, "ERR no guest listener\n")
 
-	_, err := New("cocoon", nil, nil, false, "").DialSilkd(t.Context(), path)
+	_, err := New("cocoon", nil, nil, false, false, "").DialSilkd(t.Context(), path)
 	if err == nil || !strings.Contains(err.Error(), "no guest listener") {
 		t.Errorf("got %v, want handshake rejection", err)
 	}
@@ -51,7 +51,7 @@ func TestProbeSucceeds(t *testing.T) {
 	path := sockPath(t)
 	listenMuxer(t, path, "OK 2048\n", infoFrame)
 
-	if err := New("cocoon", nil, nil, false, "").Probe(t.Context(), path, 2*time.Second); err != nil {
+	if err := New("cocoon", nil, nil, false, false, "").Probe(t.Context(), path, 2*time.Second); err != nil {
 		t.Errorf("Probe: %v", err)
 	}
 }
@@ -60,7 +60,7 @@ func TestInfoRoundTripRejectsErrorFrame(t *testing.T) {
 	path := sockPath(t)
 	listenMuxer(t, path, "OK 2048\n", errFrame)
 
-	err := New("cocoon", nil, nil, false, "").infoRoundTrip(t.Context(), path)
+	err := New("cocoon", nil, nil, false, false, "").infoRoundTrip(t.Context(), path)
 	if err == nil || !strings.Contains(err.Error(), `info reply type "error"`) {
 		t.Errorf("got %v, want error-frame rejection", err)
 	}
@@ -70,7 +70,7 @@ func TestProbeRetriesPastFailures(t *testing.T) {
 	path := sockPath(t)
 	listenMuxer(t, path, "OK 2048\n", errFrame, errFrame, infoFrame)
 
-	if err := New("cocoon", nil, nil, false, "").Probe(t.Context(), path, 2*time.Second); err != nil {
+	if err := New("cocoon", nil, nil, false, false, "").Probe(t.Context(), path, 2*time.Second); err != nil {
 		t.Errorf("Probe: %v", err)
 	}
 }
@@ -79,7 +79,7 @@ func TestProbeRetriesUntilListenerAppears(t *testing.T) {
 	path := sockPath(t)
 	done := make(chan error, 1)
 	go func() {
-		done <- New("cocoon", nil, nil, false, "").Probe(t.Context(), path, 2*time.Second)
+		done <- New("cocoon", nil, nil, false, false, "").Probe(t.Context(), path, 2*time.Second)
 	}()
 
 	time.Sleep(60 * time.Millisecond)
@@ -117,7 +117,7 @@ func TestDialGuestPortCtxCancel(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
 	defer cancel()
-	if _, err := New("cocoon", nil, nil, false, "").DialGuestPort(ctx, path, 8080); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := New("cocoon", nil, nil, false, false, "").DialGuestPort(ctx, path, 8080); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("got %v, want context.DeadlineExceeded", err)
 	}
 }
@@ -125,7 +125,7 @@ func TestDialGuestPortCtxCancel(t *testing.T) {
 func TestProbeTimeout(t *testing.T) {
 	path := sockPath(t)
 
-	err := New("cocoon", nil, nil, false, "").Probe(t.Context(), path, 150*time.Millisecond)
+	err := New("cocoon", nil, nil, false, false, "").Probe(t.Context(), path, 150*time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "silkd probe") {
 		t.Errorf("got %v, want probe timeout", err)
 	}

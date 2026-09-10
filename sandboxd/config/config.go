@@ -177,6 +177,9 @@ type Config struct {
 	// NoDirectIO enables buffered writable disks for cold boots and clones.
 	NoDirectIO bool `json:"no_direct_io,omitempty"`
 
+	// NoBalloon boots VMs without the virtio-balloon, so a guest keeps its whole memory.
+	NoBalloon bool `json:"no_balloon,omitempty"`
+
 	// APIToken, when set, guards claim and info.
 	APIToken string `json:"api_token,omitempty"` //nolint:gosec // config field, not a hardcoded credential
 
