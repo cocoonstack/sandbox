@@ -14,7 +14,7 @@ const (
 	caCertGuestPath = "/usr/local/share/ca-certificates/sandbox-egress.crt"
 	caBundlePath    = "/etc/ssl/certs/ca-certificates.crt"
 	// guestExecPATH is set because silkd starts the guest command with an empty environment.
-	guestExecPATH = "/usr/sbin:/usr/bin:/sbin:/bin"
+	guestExecPATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 )
 
 // InstallCACert makes the guest trust the cluster root without update-ca-certificates.

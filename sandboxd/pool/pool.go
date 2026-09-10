@@ -71,7 +71,8 @@ const (
 	vmStateRunning  = "running"
 	vmStateCreating = "creating"
 
-	caSidecarSuffix = ".cafp"
+	caSidecarSuffix     = ".cafp"
+	warmupSidecarSuffix = ".warmup"
 )
 
 var (
@@ -114,6 +115,7 @@ type Engine interface {
 	Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error
 	DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error)
 	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error
+	Warmup(ctx context.Context, vsockSocket string, argv []string) error
 	DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error
 	MountVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
 	UnmountVolume(ctx context.Context, vsockSocket, mount string) error
@@ -273,6 +275,7 @@ type Manager struct {
 	tenantLive   map[string]int
 	tenantEgress map[string]*egress.Policy // per-tenant allow-list; nil = no tenant policy
 	poolEgress   map[types.PoolKey]*egress.Policy
+	poolWarmups  map[types.PoolKey][]string
 	usage        *journal
 	audit        *journal
 	counters     counters
@@ -413,6 +416,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	m.tenantMax = make(map[string]int, len(cfg.Tenants))
 	m.tenantEgress = make(map[string]*egress.Policy, len(cfg.Tenants))
 	m.poolEgress = make(map[types.PoolKey]*egress.Policy, len(cfg.Pools))
+	m.poolWarmups = make(map[types.PoolKey][]string, len(cfg.Pools))
 	for _, tn := range cfg.Tenants {
 		m.tenantMax[tn.Name] = tn.MaxClaims
 		if tn.Egress != nil {
@@ -438,6 +442,9 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		if spec.Egress != nil {
 			m.poolEgress[spec.PoolKey] = spec.Egress
 			m.guardedEgress = true
+		}
+		if len(spec.Warmup) > 0 {
+			m.poolWarmups[spec.PoolKey] = spec.Warmup
 		}
 	}
 	if slices.ContainsFunc(cfg.Pools, func(s config.PoolSpec) bool { return s.Egress.Intercepts() }) {

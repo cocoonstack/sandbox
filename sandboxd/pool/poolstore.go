@@ -112,11 +112,12 @@ func (m *Manager) adoptPersistedPools(ctx context.Context) error {
 	return nil
 }
 
-// poolSeedHash digests a pool set's warm-target shape, order-independent and egress-excluded.
+// poolSeedHash digests a pool set's warm-target shape, order-independent, without the config-owned egress and warmup.
 func poolSeedHash(specs []config.PoolSpec) string {
 	shaped := slices.Clone(specs)
 	for i := range shaped {
 		shaped[i].Egress = nil
+		shaped[i].Warmup = nil
 	}
 	slices.SortFunc(shaped, func(a, b config.PoolSpec) int { return strings.Compare(a.Hash(), b.Hash()) })
 	raw, _ := json.Marshal(shaped)

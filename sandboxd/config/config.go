@@ -45,6 +45,9 @@ type PoolSpec struct {
 	// Egress is this pool's allow-list, intersected with the tenant's; nil denies all egress.
 	Egress *egress.Policy `json:"egress,omitempty"`
 
+	// Warmup runs in the golden VM before its snapshot, so every clone starts with its page cache.
+	Warmup []string `json:"warmup,omitempty"`
+
 	// IdleHibernateSeconds, when >0, hibernates idle claims after that many seconds.
 	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitempty"`
 
@@ -68,6 +71,9 @@ func (s PoolSpec) ValidateLimits() error {
 	}
 	if s.Net == types.NetEgress && s.IdleHibernateSeconds > 0 {
 		return fmt.Errorf("idle_hibernate_seconds is not supported for egress pools")
+	}
+	if slices.Contains(s.Warmup, "") {
+		return fmt.Errorf("warmup must not contain an empty argument")
 	}
 	return validateArchiveWindow(s.IdleHibernateSeconds, s.ArchiveAfterSeconds, s.ArchiveDeleteAfterSeconds)
 }

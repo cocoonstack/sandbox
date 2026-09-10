@@ -325,7 +325,8 @@ targets online — no restart, live claims untouched:
 Pools omitted from the list are drained: their unclaimed warm VMs are
 destroyed and the pool entry retires. `net`/`size` default like a claim's.
 Answers the fresh `GET /v1/info` payload. 400 bad key, negative warm/idle,
-`warm_max` below `warm`, or duplicate pool; 401 bad api token; 409 egress
+`warm_max` below `warm`, duplicate pool, or a config-owned `egress`/`warmup`
+field; 401 bad api token; 409 egress
 pool on a node without an egress attachment.
 
 ## POST /v1/drain
