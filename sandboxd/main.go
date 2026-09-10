@@ -74,7 +74,7 @@ func main() {
 			logger.Warnf(ctx, "volume %s path %s unavailable at startup: %v", volume.Name, volume.Path, statErr)
 		}
 	}
-	eng := engine.New(cfg.CocoonBin, cfg.Bridges, cfg.Networks, cfg.NoDirectIO, cfg.RestoreMode)
+	eng := engine.New(cfg.CocoonBin, cfg.Bridges, cfg.Networks, cfg.NoDirectIO, cfg.NoBalloon, cfg.RestoreMode)
 	if v, warn := eng.VersionWarning(ctx); warn != "" {
 		logger.Warn(ctx, warn)
 	} else {
