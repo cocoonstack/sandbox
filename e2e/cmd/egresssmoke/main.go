@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -49,6 +50,9 @@ func main() {
 }
 
 func run(addr, token, template, wantToken, netShape, reach, nicAddr, echo string, guarded bool) error {
+	if guarded && wantToken == "" {
+		return errors.New("-secret is required for the injection check")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 

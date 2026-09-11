@@ -64,11 +64,8 @@ def test_claim_happy_path(node):
 
 
 def test_claim_sends_volumes(node):
-    seen = []
-
-    def claim(body, path):
-        seen.append(body)
-        return 200, {
+    seen = recording_claim(
+        {
             "id": "sb_1",
             "token": "tok",
             "volumes": [
@@ -76,8 +73,7 @@ def test_claim_sends_volumes(node):
                 {"name": "weights-llama", "mount": "/models"},
             ],
         }
-
-    FakeNode.routes[("POST", "/v1/claim")] = claim
+    )
     sb = Client(node).new("rt:24.04", volumes=["imagenet", {"name": "weights-llama", "mount": "/models"}])
     assert seen == [
         {
@@ -108,19 +104,9 @@ def test_claim_rejects_invalid_volumes(node, volumes, match):
 
 
 def test_claim_sends_volume_mode_rw(node):
-    seen = []
-
-    def claim(body, path):
-        seen.append(body)
-        return 200, {
-            "id": "sb_1",
-            "token": "tok",
-            "volumes": [
-                {"name": "scratch", "mount": "/data", "mode": "rw"},
-            ],
-        }
-
-    FakeNode.routes[("POST", "/v1/claim")] = claim
+    seen = recording_claim(
+        {"id": "sb_1", "token": "tok", "volumes": [{"name": "scratch", "mount": "/data", "mode": "rw"}]}
+    )
     sb = Client(node).new("rt:24.04", volumes=[{"name": "scratch", "mount": "/data", "mode": "rw"}])
     assert seen == [
         {
@@ -134,33 +120,16 @@ def test_claim_sends_volume_mode_rw(node):
 
 
 def test_claim_omits_volume_mode_ro(node):
-    seen = []
-
-    def claim(body, path):
-        seen.append(body)
-        return 200, {"id": "sb_1", "token": "tok"}
-
-    FakeNode.routes[("POST", "/v1/claim")] = claim
+    seen = recording_claim({"id": "sb_1", "token": "tok"})
     Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "mode": "ro"}])
     Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "mode": ""}])
     assert seen[0]["volumes"] == seen[1]["volumes"] == [{"name": "imagenet"}], seen
 
 
 def test_claim_attaches_volumes_without_mounting(node):
-    seen = []
-
-    def claim(body, path):
-        seen.append(body)
-        return 200, {
-            "id": "sb_1",
-            "token": "tok",
-            "volumes": [
-                {"name": "imagenet"},
-                {"name": "scratch", "mode": "rw"},
-            ],
-        }
-
-    FakeNode.routes[("POST", "/v1/claim")] = claim
+    seen = recording_claim(
+        {"id": "sb_1", "token": "tok", "volumes": [{"name": "imagenet"}, {"name": "scratch", "mode": "rw"}]}
+    )
     sb = Client(node).new("rt:24.04", volumes=["imagenet", {"name": "scratch", "mode": "rw"}], mount=False)
     assert seen == [
         {
@@ -173,13 +142,7 @@ def test_claim_attaches_volumes_without_mounting(node):
 
 
 def test_template_claim_attaches_volumes_without_mounting(node):
-    seen = []
-
-    def claim(body, path):
-        seen.append(body)
-        return 200, {"id": "sb_2", "token": "tok", "volumes": [{"name": "imagenet"}]}
-
-    FakeNode.routes[("POST", "/v1/claim")] = claim
+    seen = recording_claim({"id": "sb_2", "token": "tok", "volumes": [{"name": "imagenet"}]})
     sb = Template(Client(node), node, "task:v1", "none", "small").new(volumes=["imagenet"], mount=False)
     assert seen[0]["volumes_attach_only"] is True
     assert seen[0]["volumes"] == [{"name": "imagenet"}]
@@ -196,31 +159,15 @@ def test_claim_rejects_mount_without_mounting(node):
 
 
 def test_claim_keeps_mounting_by_default(node):
-    seen = []
-
-    def claim(body, path):
-        seen.append(body)
-        return 200, {"id": "sb_1", "token": "tok"}
-
-    FakeNode.routes[("POST", "/v1/claim")] = claim
+    seen = recording_claim({"id": "sb_1", "token": "tok"})
     Client(node).new("rt:24.04", volumes=["imagenet"])
     assert "volumes_attach_only" not in seen[0]
 
 
 def test_template_claim_sends_volumes(node):
-    seen = []
-
-    def claim(body, path):
-        seen.append(body)
-        return 200, {
-            "id": "sb_2",
-            "token": "tok",
-            "volumes": [
-                {"name": "imagenet", "mount": "/datasets/imagenet"},
-            ],
-        }
-
-    FakeNode.routes[("POST", "/v1/claim")] = claim
+    seen = recording_claim(
+        {"id": "sb_2", "token": "tok", "volumes": [{"name": "imagenet", "mount": "/datasets/imagenet"}]}
+    )
     sb = Template(Client(node), node, "task:v1", "none", "small").new(
         volumes=[{"name": "imagenet", "mount": "/datasets/imagenet"}]
     )
@@ -357,3 +304,14 @@ def test_checkpoint_listing_binds_handles(node):
     )
     branch = ckpts[0].new()
     assert branch.id == "sb_branch"
+
+
+def recording_claim(reply):
+    seen = []
+
+    def claim(body, path):
+        seen.append(body)
+        return 200, reply
+
+    FakeNode.routes[("POST", "/v1/claim")] = claim
+    return seen

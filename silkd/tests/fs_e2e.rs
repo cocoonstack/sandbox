@@ -3,9 +3,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
+use std::os::unix::fs::PermissionsExt;
+
 use serde_json::json;
 
-use common::{b64, exchange, type_of};
+use common::{b64, exchange, payload, type_of};
 
 #[tokio::test]
 async fn write_then_read_roundtrips_bytes() {
@@ -26,7 +28,7 @@ async fn write_then_read_roundtrips_bytes() {
     );
 
     let read = exchange(&[json!({"op":"fs_read","path":path}).to_string()]).await;
-    assert_eq!(common::payload(&read, "data"), b"silk file body");
+    assert_eq!(payload(&read, "data"), b"silk file body");
     assert_eq!(type_of(read.last().unwrap()), "done");
 }
 
@@ -172,7 +174,6 @@ async fn truncated_write_leaves_no_file_and_reports_error() {
 
 #[tokio::test]
 async fn overwrite_preserves_destination_mode() {
-    use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("script.sh");
     std::fs::write(&path, b"old").unwrap();

@@ -213,14 +213,10 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 	return writeGoldenSidecar(final+warmupSidecarSuffix, warmupStamp(warmup))
 }
 
-func (m *Manager) poolWarmup(key types.PoolKey) []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.poolWarmups[key]
-}
-
 func (m *Manager) runWarmup(ctx context.Context, key types.PoolKey, sock string) ([]string, error) {
-	warmup := m.poolWarmup(key)
+	m.mu.Lock()
+	warmup := m.poolWarmups[key]
+	m.mu.Unlock()
 	if len(warmup) == 0 {
 		return nil, nil
 	}

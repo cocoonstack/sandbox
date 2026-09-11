@@ -14,6 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/textproto"
 	"os"
 	"slices"
 	"strconv"
@@ -274,8 +275,11 @@ func smokeGit(ctx context.Context, sb *sandbox.Sandbox) error {
 	if err = sb.GitCheckout(ctx, "/work", "feature"); err != nil {
 		return err
 	}
-	if br, err = sb.GitBranches(ctx, "/work"); err != nil || br.Current != "feature" {
-		return fmt.Errorf("after checkout: current=%q err=%v", br.Current, err)
+	if br, err = sb.GitBranches(ctx, "/work"); err != nil {
+		return fmt.Errorf("branches after checkout: %w", err)
+	}
+	if br.Current != "feature" {
+		return fmt.Errorf("after checkout: current=%q, want feature", br.Current)
 	}
 
 	// This sandbox is on the no-network lane: push must fail with the typed
@@ -706,25 +710,15 @@ func lspWrite(w io.Writer, body string) error {
 // id arrives (server-initiated requests also carry ids but have a method;
 // notifications have no id — both are skipped), returning its result.
 func lspReadResponse(r *bufio.Reader, id int) (json.RawMessage, error) {
+	tp := textproto.NewReader(r)
 	for {
-		length := 0
-		for {
-			line, err := r.ReadString('\n')
-			if err != nil {
-				return nil, err
-			}
-			line = strings.TrimRight(line, "\r\n")
-			if line == "" {
-				break
-			}
-			if v, ok := strings.CutPrefix(line, "Content-Length: "); ok {
-				if length, err = strconv.Atoi(v); err != nil {
-					return nil, fmt.Errorf("content-length %q: %w", v, err)
-				}
-			}
+		hdr, err := tp.ReadMIMEHeader()
+		if err != nil {
+			return nil, err
 		}
-		if length <= 0 {
-			return nil, fmt.Errorf("lsp frame without content-length")
+		length, err := strconv.Atoi(hdr.Get("Content-Length"))
+		if err != nil || length <= 0 {
+			return nil, fmt.Errorf("lsp frame content-length %q", hdr.Get("Content-Length"))
 		}
 		body := make([]byte, length)
 		if _, err := io.ReadFull(r, body); err != nil {

@@ -10,8 +10,6 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-const silkdChunk = 256 * 1024
-
 // silkdSession is a dialed silkd conn bound to a ctx, with wire-typed request/reply helpers.
 type silkdSession struct {
 	conn net.Conn

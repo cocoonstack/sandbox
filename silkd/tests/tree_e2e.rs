@@ -3,6 +3,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
+use std::io::Write;
+use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::process::Command;
 
@@ -23,7 +25,6 @@ fn sys_tar_create(dir: &Path) -> Vec<u8> {
 }
 
 fn sys_tar_extract(archive: &[u8], into: &Path) {
-    use std::io::Write;
     let mut child = Command::new("tar")
         .arg("-x")
         .arg("-C")
@@ -160,7 +161,6 @@ async fn pull_missing_parent_errors_not_found() {
 
 #[tokio::test]
 async fn pull_dangling_symlink_archives_the_link() {
-    use std::os::unix::fs::symlink;
     let src = tempfile::tempdir().unwrap();
     let link = src.path().join("dangling");
     symlink("/no/such/target", &link).unwrap();
@@ -202,13 +202,12 @@ async fn push_failure_leaves_dest_untouched() {
     .await;
     assert_eq!(type_of(frames.last().unwrap()), "error");
 
-    let names: Vec<String> = std::fs::read_dir(dest.path())
+    let mut names: Vec<String> = std::fs::read_dir(dest.path())
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
-    let mut sorted = names.clone();
-    sorted.sort();
-    assert_eq!(sorted, ["keep.txt", "sub"], "dest mutated: {names:?}");
+    names.sort();
+    assert_eq!(names, ["keep.txt", "sub"], "dest mutated: {names:?}");
     assert_eq!(
         std::fs::read(dest.path().join("keep.txt")).unwrap(),
         b"KEEP"

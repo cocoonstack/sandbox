@@ -8,14 +8,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use silkd::server::State;
-use tokio::io::AsyncWriteExt;
 
-use common::{FrameLines, FrameWriter};
-
-async fn send(cw: &mut FrameWriter, frame: Value) {
-    cw.write_all(frame.to_string().as_bytes()).await.unwrap();
-    cw.write_all(b"\n").await.unwrap();
-}
+use common::{FrameLines, b64, connect, decode, exchange, one, send, type_of};
 
 async fn read_until(lines: &mut FrameLines, pred: impl Fn(&Value) -> bool) -> Value {
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -34,7 +28,7 @@ async fn read_until(lines: &mut FrameLines, pred: impl Fn(&Value) -> bool) -> Va
 #[tokio::test]
 async fn pty_runs_a_shell_and_echoes() {
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, handle) = common::connect(&state);
+    let (mut cw, mut lines, handle) = connect(&state);
     send(&mut cw, json!({"op":"pty_open","cols":80,"rows":24})).await;
 
     let started = read_until(&mut lines, |v| v["type"] == "started").await;
@@ -43,17 +37,15 @@ async fn pty_runs_a_shell_and_echoes() {
 
     send(
         &mut cw,
-        json!({"op":"stdin","data":common::b64(b"echo silk-pty-marker\n")}),
+        json!({"op":"stdin","data":b64(b"echo silk-pty-marker\n")}),
     )
     .await;
-    let out = read_until(&mut lines, |v| {
-        v["type"] == "stdout"
-            && String::from_utf8_lossy(&common::decode(v)).contains("silk-pty-marker")
+    read_until(&mut lines, |v| {
+        v["type"] == "stdout" && String::from_utf8_lossy(&decode(v)).contains("silk-pty-marker")
     })
     .await;
-    assert_eq!(out["type"], "stdout");
 
-    send(&mut cw, json!({"op":"stdin","data":common::b64(b"exit\n")})).await;
+    send(&mut cw, json!({"op":"stdin","data":b64(b"exit\n")})).await;
     let exit = read_until(&mut lines, |v| v["type"] == "exit").await;
     assert!(exit["code"].is_number());
 
@@ -64,13 +56,13 @@ async fn pty_runs_a_shell_and_echoes() {
 #[tokio::test]
 async fn pty_appears_in_ps_and_resizes() {
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, _) = common::connect(&state);
+    let (mut cw, mut lines, _) = connect(&state);
     send(&mut cw, json!({"op":"pty_open","cols":80,"rows":24})).await;
     let pid = read_until(&mut lines, |v| v["type"] == "started").await["pid"]
         .as_u64()
         .unwrap();
 
-    let ps = common::one(&state, r#"{"op":"ps"}"#).await;
+    let ps = one(&state, r#"{"op":"ps"}"#).await;
     assert!(
         ps[0]["procs"]
             .as_array()
@@ -79,12 +71,12 @@ async fn pty_appears_in_ps_and_resizes() {
             .any(|p| p["pid"].as_u64() == Some(pid)),
         "pty not in ps: {ps:?}"
     );
-    let resized = common::one(
+    let resized = one(
         &state,
         &json!({"op":"pty_resize","pid":pid,"cols":120,"rows":40}).to_string(),
     )
     .await;
-    assert_eq!(common::type_of(&resized[0]), "done");
+    assert_eq!(type_of(&resized[0]), "done");
 
     drop(cw);
 }
@@ -92,18 +84,15 @@ async fn pty_appears_in_ps_and_resizes() {
 #[tokio::test]
 async fn resize_unknown_pid_is_not_found() {
     let frames =
-        common::exchange(
-            &[json!({"op":"pty_resize","pid":999999,"cols":80,"rows":24}).to_string()],
-        )
-        .await;
-    assert_eq!(common::type_of(&frames[0]), "error");
+        exchange(&[json!({"op":"pty_resize","pid":999999,"cols":80,"rows":24}).to_string()]).await;
+    assert_eq!(type_of(&frames[0]), "error");
     assert_eq!(frames[0]["kind"], "not_found");
 }
 
 #[tokio::test]
 async fn pty_disconnect_tears_down_without_spin() {
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, handle) = common::connect(&state);
+    let (mut cw, mut lines, handle) = connect(&state);
     send(&mut cw, json!({"op":"pty_open","cols":80,"rows":24})).await;
     let pid = read_until(&mut lines, |v| v["type"] == "started").await["pid"]
         .as_u64()
@@ -116,7 +105,7 @@ async fn pty_disconnect_tears_down_without_spin() {
     let _ = tokio::time::timeout(Duration::from_secs(5), handle)
         .await
         .expect("pty did not tear down on disconnect");
-    let ps = common::one(&state, r#"{"op":"ps"}"#).await;
+    let ps = one(&state, r#"{"op":"ps"}"#).await;
     assert!(
         !ps[0]["procs"]
             .as_array()

@@ -1,7 +1,6 @@
 package sandbox
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -63,38 +62,11 @@ func (s *Sandbox) Attach(ctx context.Context, pid uint32, stdout, stderr io.Writ
 	return s.drainProc(ctx, &wire.Attach{PID: pid}, stdout, stderr)
 }
 
-// drainProc pumps stdout/stderr frames until the terminal frame: exit
-// carries the code, done means the stream ended without one.
 func (s *Sandbox) drainProc(ctx context.Context, req wire.Request, stdout, stderr io.Writer) (int32, bool, error) {
 	conn, done, err := s.call(ctx, req)
 	if err != nil {
 		return 0, false, err
 	}
 	defer done()
-	stdout = cmp.Or(stdout, io.Discard)
-	stderr = cmp.Or(stderr, io.Discard)
-	for {
-		resp, err := recv(ctx, conn)
-		if err != nil {
-			return 0, false, err
-		}
-		switch resp := resp.(type) {
-		case *wire.Stdout:
-			if _, err := stdout.Write(resp.Data); err != nil {
-				return 0, false, err
-			}
-		case *wire.Stderr:
-			if _, err := stderr.Write(resp.Data); err != nil {
-				return 0, false, err
-			}
-		case *wire.Exit:
-			return resp.Code, true, nil
-		case *wire.Done:
-			return 0, false, nil
-		case *wire.ErrorResp:
-			return 0, false, resp
-		default:
-			return 0, false, unexpected(resp)
-		}
-	}
+	return pumpStdio(ctx, conn, stdout, stderr)
 }

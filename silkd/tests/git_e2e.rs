@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
-use serde_json::{Value, json};
+use serde_json::json;
 
 use common::{exchange, type_of};
 
@@ -29,10 +29,6 @@ fn init_repo() -> tempfile::TempDir {
     dir
 }
 
-fn last(frames: &[Value]) -> &Value {
-    frames.last().unwrap()
-}
-
 #[tokio::test]
 async fn add_commit_status_reports_structured_state() {
     let repo = init_repo();
@@ -50,7 +46,7 @@ async fn add_commit_status_reports_structured_state() {
     );
 
     let add = exchange(&[json!({"op":"git_add","path":p,"files":["a.txt"]}).to_string()]).await;
-    assert_eq!(type_of(last(&add)), "done");
+    assert_eq!(type_of(add.last().unwrap()), "done");
     let commit = exchange(&[json!({
         "op":"git_commit","path":p,"message":"first","author":"Dev <dev@example.com>"
     })
@@ -78,7 +74,7 @@ async fn branch_create_list_checkout() {
         json!({"op":"git_branch","path":p,"action":"create","name":"feature"}).to_string(),
     ])
     .await;
-    assert_eq!(type_of(last(&created)), "done");
+    assert_eq!(type_of(created.last().unwrap()), "done");
 
     let list = exchange(&[json!({"op":"git_branch","path":p,"action":"list"}).to_string()]).await;
     assert_eq!(type_of(&list[0]), "git_branches");
@@ -95,7 +91,7 @@ async fn branch_create_list_checkout() {
         json!({"op":"git_branch","path":p,"action":"checkout","name":"feature"}).to_string(),
     ])
     .await;
-    assert_eq!(type_of(last(&co)), "done");
+    assert_eq!(type_of(co.last().unwrap()), "done");
 }
 
 #[tokio::test]
@@ -135,7 +131,7 @@ async fn clone_lane_behavior() {
     .to_string()])
     .await;
     silkd::net::override_egress_for_tests(None);
-    assert_eq!(type_of(last(&ok)), "done", "clone failed: {ok:?}");
+    assert_eq!(type_of(ok.last().unwrap()), "done", "clone failed: {ok:?}");
     assert!(target.join("r.txt").exists());
 }
 
@@ -183,7 +179,7 @@ async fn commit_works_without_preconfigured_identity() {
     std::fs::write(dir.path().join("f"), "x").unwrap();
     let p = dir.path().to_str().unwrap();
     let add = exchange(&[json!({"op":"git_add","path":p,"files":["f"]}).to_string()]).await;
-    assert_eq!(type_of(last(&add)), "done");
+    assert_eq!(type_of(add.last().unwrap()), "done");
     let commit = exchange(&[json!({
         "op":"git_commit","path":p,"message":"m","author":"Dev <dev@example.com>"
     })

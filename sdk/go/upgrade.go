@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // dialAgent opens the data-plane connection to the owner node: a raw TCP dial
@@ -21,9 +20,6 @@ func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (net.Con
 	}
 	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
 	defer stop()
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = raw.SetDeadline(deadline)
-	}
 
 	// id/token interpolate into the raw request; CR/LF would inject headers.
 	if strings.ContainsAny(id, "\r\n\x00") || strings.ContainsAny(token, "\r\n\x00") {
@@ -52,7 +48,6 @@ func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (net.Con
 		_ = raw.Close()
 		return nil, err
 	}
-	_ = raw.SetDeadline(time.Time{})
 	return &upgradedConn{Conn: raw, r: br}, nil
 }
 

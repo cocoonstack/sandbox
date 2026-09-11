@@ -77,9 +77,6 @@ func (m *Manager) retryRemovals(ctx context.Context) *sync.WaitGroup {
 		}
 	}
 	m.mu.Unlock()
-	if len(batch) == 0 {
-		return new(sync.WaitGroup)
-	}
 	names := slices.Collect(maps.Keys(batch))
 	return m.runBounded(ctx, len(names), func(ctx context.Context, i int) {
 		m.retryRemoval(ctx, names[i], batch[names[i]])

@@ -79,7 +79,7 @@ impl Table {
         }
         for (k, v) in env {
             init.push_str("export ");
-            init.push_str(k);
+            shell_quote_into(&mut init, k);
             init.push('=');
             shell_quote_into(&mut init, v);
             init.push('\n');
@@ -89,7 +89,7 @@ impl Table {
             io.converse::<tokio::io::Sink>(&init, None).await?;
         }
 
-        // reserve the id atomically: a concurrent create must not orphan the loser's shell.
+        // reserve the id under the table lock so a concurrent create with the same id sees AlreadyExists.
         let mut map = sysutil::lock(&self.inner);
         if map.contains_key(&id) {
             return Err(io::Error::new(
@@ -219,7 +219,7 @@ impl Io {
             if let Some(pos) = memchr::memmem::find(&self.acc, mb) {
                 emit(&mut out, &mut self.frame, &self.acc[..pos]).await;
                 self.acc.drain(..pos + mb.len());
-                while !self.acc.contains(&b'\n') && self.acc.len() < EXIT_TAIL_MAX {
+                while memchr::memchr(b'\n', &self.acc).is_none() && self.acc.len() < EXIT_TAIL_MAX {
                     let m = self.stdout.read(&mut self.buf).await?;
                     if m == 0 {
                         break;
@@ -227,11 +227,7 @@ impl Io {
                     self.acc.extend_from_slice(&self.buf[..m]);
                 }
                 // parse only the exit-code line: a background writer can land bytes after the newline.
-                let end = self
-                    .acc
-                    .iter()
-                    .position(|&b| b == b'\n')
-                    .unwrap_or(self.acc.len());
+                let end = memchr::memchr(b'\n', &self.acc).unwrap_or(self.acc.len());
                 return Ok(String::from_utf8_lossy(&self.acc[..end])
                     .trim()
                     .parse()

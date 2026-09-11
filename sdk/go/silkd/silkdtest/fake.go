@@ -19,9 +19,6 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-// readChunk mirrors silkd's BULK_CHUNK so downloads exercise real framing.
-const readChunk = 256 * 1024
-
 // Fake is a stateful silkd fake backing the fs verbs with a real directory
 // and tracking sessions, so an SDK write-then-read round-trips through it.
 // exec/info reuse the stateless handlers. It exists for host-side unit tests;
@@ -474,7 +471,7 @@ func drainUpload(r *bufio.Reader) ([]byte, error) {
 
 func sendChunked(conn net.Conn, data []byte) {
 	for len(data) > 0 {
-		n := min(readChunk, len(data))
+		n := min(wire.BulkChunk, len(data))
 		send(conn, &wire.DataResp{Data: data[:n]})
 		data = data[n:]
 	}

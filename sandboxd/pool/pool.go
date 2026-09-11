@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -428,20 +429,12 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		}
 	}
 	m.idleDefault = time.Duration(cfg.IdleHibernateSeconds) * time.Second
-	m.idleEnabled = m.idleDefault > 0
 	m.archiveAfterDefault = time.Duration(cfg.ArchiveAfterSeconds) * time.Second
 	m.archiveDeleteDefault = time.Duration(cfg.ArchiveDeleteAfterSeconds) * time.Second
-	m.archiveEnabled = m.archiveAfterDefault > 0
 	for _, spec := range cfg.Pools {
 		p := newPool(spec.PoolKey)
 		p.applySpec(spec)
 		m.pools[spec.PoolKey] = p
-		if spec.IdleHibernateSeconds > 0 {
-			m.idleEnabled = true
-		}
-		if spec.ArchiveAfterSeconds > 0 {
-			m.archiveEnabled = true
-		}
 		if spec.Egress != nil {
 			m.poolEgress[spec.PoolKey] = spec.Egress
 			m.guardedEgress = true
@@ -461,6 +454,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	if err := m.adoptPersistedPools(ctx); err != nil {
 		return nil, err
 	}
+	m.recomputeSweepFlags()
 	return m, nil
 }
 
@@ -510,7 +504,7 @@ func (m *Manager) Run(ctx context.Context) {
 
 // FlushClaims synchronously persists the current claim set at shutdown.
 func (m *Manager) FlushClaims() error {
-	return m.store.commit(m.claimsSnapshot())
+	return m.store.commit(m.store.mark())
 }
 
 // SetTemplateNotifier wires the immediate-republish hook; call it before serving starts.
@@ -523,15 +517,11 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now()
-	live := make([]*pool, 0, len(m.pools))
-	for _, p := range m.pools {
-		if !p.removed {
-			live = append(live, p)
+	pools := make([]PoolInfo, 0, len(m.pools))
+	for _, p := range slices.SortedFunc(maps.Values(m.pools), func(a, b *pool) int { return strings.Compare(a.hash, b.hash) }) {
+		if p.removed {
+			continue
 		}
-	}
-	slices.SortFunc(live, func(a, b *pool) int { return strings.Compare(a.hash, b.hash) })
-	pools := make([]PoolInfo, 0, len(live))
-	for _, p := range live {
 		pools = append(pools, PoolInfo{
 			Key:       p.key,
 			Warm:      len(p.warm),
@@ -606,8 +596,14 @@ func (m *Manager) sweepStoreGenerations(ctx context.Context) {
 	}
 }
 
-func (m *Manager) claimsSnapshot() claimSnapshot {
-	return m.store.mark()
+// recomputeSweepFlags derives the sweep switches from the live pool set rather than latching them: removing every idle pool turns the sweep off again.
+func (m *Manager) recomputeSweepFlags() {
+	m.idleEnabled = m.idleDefault > 0
+	m.archiveEnabled = m.archiveAfterDefault > 0
+	for _, p := range m.pools {
+		m.idleEnabled = m.idleEnabled || p.idle > 0
+		m.archiveEnabled = m.archiveEnabled || p.archiveAfter > 0
+	}
 }
 
 func (m *Manager) untrack(set map[string]struct{}, key string) {

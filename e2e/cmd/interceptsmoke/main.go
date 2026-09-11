@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -34,6 +35,9 @@ func main() {
 }
 
 func run(addr, token, template, echo, secret, issuer string) error {
+	if secret == "" {
+		return errors.New("-secret is required for the injection check")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 

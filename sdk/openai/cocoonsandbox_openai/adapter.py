@@ -19,7 +19,7 @@ from agents.sandbox.session.sandbox_session import SandboxSession
 from agents.sandbox.session.sandbox_session_state import SandboxSessionState
 from agents.sandbox.snapshot import SnapshotBase, SnapshotSpec, resolve_snapshot
 from agents.sandbox.types import ExecResult, ExposedPortEndpoint, User
-from cocoonsandbox import APIError, Client, Sandbox, SilkdError
+from cocoonsandbox import Client, Sandbox, SandboxError, SilkdError
 
 
 class CocoonSandboxClientOptions(BaseSandboxClientOptions):
@@ -59,12 +59,10 @@ class CocoonSandboxSession(BaseSandboxSession):
 
     async def _prepare_backend_workspace(self) -> None:
         sb = self._sandbox()
-        await asyncio.to_thread(sb.mkdir, str(self.state.manifest.root), True)
+        await asyncio.to_thread(sb.mkdir, str(self.state.manifest.root), parents=True)
 
     async def _exec_internal(self, *command: str | Path, timeout: float | None = None) -> ExecResult:
-        # Bound the blocking SDK call by the socket timeout too, so a
-        # wait_for cancellation is matched by the worker thread actually
-        # unblocking (recv wakes) instead of lingering.
+        # the socket timeout bounds the blocking SDK call too, so a wait_for cancellation unblocks the worker thread
         sb = self._sandbox(timeout=timeout)
         argv = [str(part) for part in command]
         stdout, stderr = bytearray(), bytearray()
@@ -95,7 +93,7 @@ class CocoonSandboxSession(BaseSandboxSession):
     async def running(self) -> bool:
         try:
             await asyncio.to_thread(self._sandbox().stat, "/")
-        except (APIError, SilkdError, OSError):
+        except (SandboxError, OSError):
             return False
         return True
 
@@ -115,8 +113,7 @@ class CocoonSandboxSession(BaseSandboxSession):
         return ExposedPortEndpoint(host="127.0.0.1", port=listener.getsockname()[1], tls=False)
 
     async def _shutdown_backend(self) -> None:
-        # The sandbox itself outlives shutdown (delete releases it); only the
-        # local port proxies belong to this process.
+        # the sandbox outlives shutdown (delete releases it); only the local port proxies belong to this process
         for listener in self._proxies:
             listener.close()
         self._proxies.clear()
@@ -179,7 +176,6 @@ class CocoonSandboxClient(BaseSandboxClient[CocoonSandboxClientOptions]):
 
 
 def _reject_user(user: str | User | None) -> None:
-    # fs_read/fs_write carry no per-call user on the wire; fail loud rather
-    # than silently running as the guest default.
+    # fs_read/fs_write carry no per-call user on the wire; fail loud rather than run as the guest default
     if user is not None:
         raise NotImplementedError("per-call user impersonation is not supported by the cocoon backend")

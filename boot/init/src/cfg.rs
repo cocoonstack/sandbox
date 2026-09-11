@@ -59,7 +59,7 @@ pub fn parse(cmdline: &str) -> Result<BootCfg, String> {
                     .collect();
             }
             "cocoon.cow" => cfg.cow = val.to_string(),
-            // A junk value keeps the default, matching the old initramfs hook.
+            // a junk value keeps the default, matching the old initramfs hook.
             "cocoon.timeout" => {
                 if let Ok(secs) = val.parse::<u64>() {
                     cfg.timeout = Duration::from_secs(secs.min(MAX_TIMEOUT_SECS));
@@ -155,7 +155,7 @@ fn parse_ip_param(val: &str) -> Option<IpParam> {
 fn mask_to_prefix(mask: &str) -> Option<u8> {
     let bits = u32::from(mask.parse::<std::net::Ipv4Addr>().ok()?);
     let prefix = bits.leading_ones();
-    // Reject non-contiguous masks.
+    // reject non-contiguous masks.
     (bits == u32::MAX.checked_shl(32 - prefix).unwrap_or(0)).then_some(prefix as u8)
 }
 

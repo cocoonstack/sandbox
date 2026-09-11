@@ -141,6 +141,8 @@ func dialAgent(ctx context.Context, addr, id, token string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
+	defer stop()
 	req, err := http.NewRequest(http.MethodGet, "http://"+addr+"/v1/sandboxes/"+id+"/agent", nil)
 	if err != nil {
 		_ = raw.Close()

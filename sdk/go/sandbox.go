@@ -2,7 +2,6 @@ package sandbox
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -110,38 +109,21 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	defer done()
 
 	if cmd.Stdin == nil {
-		if err := conn.Send(wire.StdinClose{}); err != nil {
+		if err = conn.Send(wire.StdinClose{}); err != nil {
 			return 0, fmt.Errorf("close stdin: %w", err)
 		}
 	} else {
 		go pumpStdin(conn, cmd.Stdin)
 	}
 
-	stdout := cmp.Or(cmd.Stdout, io.Discard)
-	stderr := cmp.Or(cmd.Stderr, io.Discard)
-	for {
-		resp, err := recv(ctx, conn)
-		if err != nil {
-			return 0, err
-		}
-		switch resp := resp.(type) {
-		case *wire.Started:
-		case *wire.Stdout:
-			if _, err := stdout.Write(resp.Data); err != nil {
-				return 0, err
-			}
-		case *wire.Stderr:
-			if _, err := stderr.Write(resp.Data); err != nil {
-				return 0, err
-			}
-		case *wire.Exit:
-			return int(resp.Code), nil
-		case *wire.ErrorResp:
-			return 0, resp
-		default:
-			return 0, unexpected(resp)
-		}
+	code, exited, err := pumpStdio(ctx, conn, cmd.Stdout, cmd.Stderr)
+	if err != nil {
+		return 0, err
 	}
+	if !exited {
+		return 0, unexpected(&wire.Done{})
+	}
+	return int(code), nil
 }
 
 // Fork clones the sandbox into count children — memory, disk, and guest

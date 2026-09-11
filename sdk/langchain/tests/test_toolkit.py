@@ -8,39 +8,6 @@ import pytest
 from cocoonsandbox_langchain import CocoonToolkit
 
 
-class FakeSandbox:
-    def __init__(self):
-        self.closed = 0
-        self.files = {}
-
-    def run(self, argv, cwd="", on_stdout=None, on_stderr=None, **_):
-        assert argv[:2] == ["sh", "-c"]
-        if argv[2] == "boom":
-            on_stderr(b"kaboom\n")
-            return 3
-        on_stdout(f"ran: {argv[2]}\n".encode())
-        return 0
-
-    def write_file(self, path, data):
-        self.files[path] = data
-
-    def read_file(self, path):
-        return self.files[path]
-
-    def list_dir(self, path):
-        return [{"name": "a.txt", "kind": "file", "size": 3}]
-
-    def close(self):
-        self.closed += 1
-
-
-def hooked(monkeypatch):
-    kit = CocoonToolkit("127.0.0.1:1")
-    fake = FakeSandbox()
-    monkeypatch.setattr(kit, "_claim", lambda: fake)
-    return kit, fake
-
-
 def test_tools_shape(monkeypatch):
     kit, _ = hooked(monkeypatch)
     tools = kit.get_tools()
@@ -86,3 +53,36 @@ def test_use_after_close_raises(monkeypatch):
     kit.close()
     with pytest.raises(RuntimeError):
         kit.sandbox()
+
+
+class FakeSandbox:
+    def __init__(self):
+        self.closed = 0
+        self.files = {}
+
+    def run(self, argv, cwd="", on_stdout=None, on_stderr=None, **_):
+        assert argv[:2] == ["sh", "-c"]
+        if argv[2] == "boom":
+            on_stderr(b"kaboom\n")
+            return 3
+        on_stdout(f"ran: {argv[2]}\n".encode())
+        return 0
+
+    def write_file(self, path, data):
+        self.files[path] = data
+
+    def read_file(self, path):
+        return self.files[path]
+
+    def list_dir(self, path):
+        return [{"name": "a.txt", "kind": "file", "size": 3}]
+
+    def close(self):
+        self.closed += 1
+
+
+def hooked(monkeypatch):
+    kit = CocoonToolkit("127.0.0.1:1")
+    fake = FakeSandbox()
+    monkeypatch.setattr(kit, "_claim", lambda: fake)
+    return kit, fake

@@ -22,6 +22,10 @@ const (
 	ProtoVersion = 1
 	// MaxFrame mirrors silkd's frame cap.
 	MaxFrame = 8 << 20
+	// BulkChunk mirrors silkd's BULK_CHUNK, the payload of one bulk data frame.
+	BulkChunk = 256 * 1024
+	// PortWriteChunk keeps a port data frame (payload x4/3 base64 plus envelope) well under MaxFrame.
+	PortWriteChunk = 1 << 20
 
 	// GitBranch.Action values (silkd's GitBranchOp).
 	BranchList     = "list"

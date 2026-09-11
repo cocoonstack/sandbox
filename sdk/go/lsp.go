@@ -33,12 +33,7 @@ func (l *Lsp) Stop(ctx context.Context) error {
 // (rooted at root), returning a handle. On the base image, which ships no
 // language servers, this fails with silkd's typed not_found.
 func (s *Sandbox) StartLsp(ctx context.Context, language, root string) (*Lsp, error) {
-	conn, done, err := s.call(ctx, &wire.LspStart{Language: language, Root: root})
-	if err != nil {
-		return nil, err
-	}
-	defer done()
-	started, err := expect[wire.LspStarted](ctx, conn)
+	started, err := oneShotRPC[wire.LspStarted](ctx, s, &wire.LspStart{Language: language, Root: root})
 	if err != nil {
 		return nil, err
 	}

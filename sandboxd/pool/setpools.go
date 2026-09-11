@@ -59,17 +59,7 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 		m.adoptGolden(p)
 		m.pools[key] = p
 	}
-	// recompute rather than latch: removing every idle pool turns the sweep off again
-	m.idleEnabled = m.idleDefault > 0
-	m.archiveEnabled = m.archiveAfterDefault > 0
-	for _, p := range m.pools {
-		if p.idle > 0 {
-			m.idleEnabled = true
-		}
-		if p.archiveAfter > 0 {
-			m.archiveEnabled = true
-		}
-	}
+	m.recomputeSweepFlags()
 	m.mu.Unlock()
 
 	runCtx := context.WithoutCancel(ctx)

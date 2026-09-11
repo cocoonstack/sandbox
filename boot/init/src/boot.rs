@@ -122,7 +122,7 @@ fn assemble(cfg: &BootCfg, marks: &mut Marks) -> Result<(), String> {
     if let Some(hostname) = &cfg.hostname {
         sys::sethostname(hostname)?;
     }
-    // Empty machine-id => systemd generates a fresh one per VM (clone identity).
+    // empty machine-id => systemd generates a fresh one per VM (clone identity).
     let _ = fs::write(format!("{NEWROOT}/etc/machine-id"), "");
 
     persist_network(cfg);
@@ -139,7 +139,7 @@ fn assemble(cfg: &BootCfg, marks: &mut Marks) -> Result<(), String> {
     Ok(())
 }
 
-/// Persists kernel ip= params as MAC-matched networkd units in the new root; a missing NIC degrades to the DHCP fallback.
+/// Persists kernel ip= params as MAC-matched networkd units in the new root.
 fn persist_network(cfg: &BootCfg) {
     if cfg.ips.is_empty() {
         return;
@@ -228,7 +228,7 @@ fn scan_serials(ids: &[&str], found: &mut [Option<String>]) {
         if !name.starts_with("vd") {
             continue;
         }
-        // The serial attribute location varies by kernel version.
+        // the serial attribute location varies by kernel version.
         let paths = [
             format!("/sys/block/{name}/serial"),
             format!("/sys/block/{name}/device/serial"),

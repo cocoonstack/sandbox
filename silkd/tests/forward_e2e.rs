@@ -4,16 +4,14 @@
 mod common;
 
 use std::sync::Arc;
-use std::time::Duration;
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
+use serde_json::json;
 use silkd::server::State;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::timeout;
 
-const DEADLINE: Duration = Duration::from_secs(30);
+use common::{DEADLINE, FrameLines, FrameWriter, b64, connect, decode, next_frame, send, type_of};
 
 async fn echo_listener() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -38,10 +36,12 @@ async fn echo_listener() -> u16 {
     port
 }
 
-fn data_payload(line: &str) -> Option<&str> {
-    let start = line.find("\"data\":\"")? + "\"data\":\"".len();
-    let rest = &line[start..];
-    Some(&rest[..rest.find('"')?])
+async fn forwarded(state: &Arc<State>, port: u16) -> (FrameWriter, FrameLines) {
+    let (mut cw, mut lines, _) = connect(state);
+    send(&mut cw, json!({"v":1,"op":"port_forward","port":port})).await;
+    let ready = next_frame(&mut lines).await;
+    assert_eq!(type_of(&ready), "ready", "got {ready}");
+    (cw, lines)
 }
 
 #[tokio::test]
@@ -49,28 +49,16 @@ async fn forward_round_trips_and_done_on_server_close() {
     timeout(DEADLINE, async {
         let port = echo_listener().await;
         let state = Arc::new(State::new());
-        let (mut cw, mut lines, _) = common::connect(&state);
+        let (mut cw, mut lines) = forwarded(&state, port).await;
 
-        cw.write_all(format!("{{\"v\":1,\"op\":\"port_forward\",\"port\":{port}}}\n").as_bytes())
-            .await
-            .expect("send request");
-        let ready = lines.next_line().await.expect("read").expect("ready");
-        assert!(ready.contains("\"ready\""), "got {ready}");
+        send(&mut cw, json!({"v":1,"op":"data","data":b64(b"hi")})).await;
+        let echoed = next_frame(&mut lines).await;
+        assert_eq!(type_of(&echoed), "data", "got {echoed}");
+        assert_eq!(decode(&echoed), b"hi");
 
-        cw.write_all(b"{\"v\":1,\"op\":\"data\",\"data\":\"aGk=\"}\n")
-            .await
-            .expect("send data");
-        let echoed = lines.next_line().await.expect("read").expect("data");
-        assert!(
-            echoed.contains("\"data\"") && echoed.contains("aGk="),
-            "got {echoed}"
-        );
-
-        cw.write_all(b"{\"v\":1,\"op\":\"data_end\"}\n")
-            .await
-            .expect("send data_end");
-        let done = lines.next_line().await.expect("read").expect("done");
-        assert!(done.contains("\"done\""), "got {done}");
+        send(&mut cw, json!({"v":1,"op":"data_end"})).await;
+        let done = next_frame(&mut lines).await;
+        assert_eq!(type_of(&done), "done", "got {done}");
     })
     .await
     .expect("test deadline");
@@ -84,34 +72,21 @@ async fn forward_bidirectional_bulk_no_deadlock() {
     timeout(DEADLINE, async {
         let port = echo_listener().await;
         let state = Arc::new(State::new());
-        let (mut cw, mut lines, _) = common::connect(&state);
+        let (mut cw, mut lines) = forwarded(&state, port).await;
 
-        cw.write_all(format!("{{\"v\":1,\"op\":\"port_forward\",\"port\":{port}}}\n").as_bytes())
-            .await
-            .expect("send request");
-        let ready = lines.next_line().await.expect("read").expect("ready");
-        assert!(ready.contains("\"ready\""), "got {ready}");
-
-        let payload = STANDARD.encode(vec![b'x'; CHUNK]);
-        let frame = format!("{{\"v\":1,\"op\":\"data\",\"data\":\"{payload}\"}}\n");
+        let frame = json!({"v":1,"op":"data","data":b64(&[b'x'; CHUNK])}).to_string() + "\n";
         let writer = tokio::spawn(async move {
             for _ in 0..FRAMES {
                 cw.write_all(frame.as_bytes()).await.expect("write frame");
             }
-            cw.write_all(b"{\"v\":1,\"op\":\"data_end\"}\n")
-                .await
-                .expect("data_end");
+            send(&mut cw, json!({"v":1,"op":"data_end"})).await;
         });
 
         let mut got = 0usize;
         while got < CHUNK * FRAMES {
-            let line = lines
-                .next_line()
-                .await
-                .expect("read")
-                .expect("stream ended before all bytes echoed");
-            if let Some(b64) = data_payload(&line) {
-                got += STANDARD.decode(b64).expect("decode").len();
+            let frame = next_frame(&mut lines).await;
+            if type_of(&frame) == "data" {
+                got += decode(&frame).len();
             }
         }
         writer.await.expect("writer");
@@ -125,16 +100,12 @@ async fn forward_bidirectional_bulk_no_deadlock() {
 async fn forward_refused_port_is_not_found() {
     timeout(DEADLINE, async {
         let state = Arc::new(State::new());
-        let (mut cw, mut lines, _) = common::connect(&state);
+        let (mut cw, mut lines, _) = connect(&state);
 
-        cw.write_all(b"{\"v\":1,\"op\":\"port_forward\",\"port\":1}\n")
-            .await
-            .expect("send request");
-        let err = lines.next_line().await.expect("read").expect("error");
-        assert!(
-            err.contains("\"error\"") && err.contains("not_found"),
-            "got {err}"
-        );
+        send(&mut cw, json!({"v":1,"op":"port_forward","port":1})).await;
+        let err = next_frame(&mut lines).await;
+        assert_eq!(type_of(&err), "error", "got {err}");
+        assert_eq!(err["kind"], "not_found", "got {err}");
     })
     .await
     .expect("test deadline");
@@ -145,22 +116,12 @@ async fn forward_stray_frame_is_bad_request() {
     timeout(DEADLINE, async {
         let port = echo_listener().await;
         let state = Arc::new(State::new());
-        let (mut cw, mut lines, _) = common::connect(&state);
+        let (mut cw, mut lines) = forwarded(&state, port).await;
 
-        cw.write_all(format!("{{\"v\":1,\"op\":\"port_forward\",\"port\":{port}}}\n").as_bytes())
-            .await
-            .expect("send request");
-        let ready = lines.next_line().await.expect("read").expect("ready");
-        assert!(ready.contains("\"ready\""), "got {ready}");
-
-        cw.write_all(b"{\"v\":1,\"op\":\"ps\"}\n")
-            .await
-            .expect("send stray");
-        let err = lines.next_line().await.expect("read").expect("error");
-        assert!(
-            err.contains("\"error\"") && err.contains("bad_request"),
-            "got {err}"
-        );
+        send(&mut cw, json!({"v":1,"op":"ps"})).await;
+        let err = next_frame(&mut lines).await;
+        assert_eq!(type_of(&err), "error", "got {err}");
+        assert_eq!(err["kind"], "bad_request", "got {err}");
     })
     .await
     .expect("test deadline");

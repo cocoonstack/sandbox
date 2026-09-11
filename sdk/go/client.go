@@ -107,7 +107,8 @@ func (c *Client) Lookup(ctx context.Context, id, token string) (*Sandbox, error)
 	if owner, err := c.ownerAt(ctx, c.addr, id, token); err == nil {
 		return &Sandbox{ID: id, token: token, c: c, owner: owner}, nil
 	}
-	owner, ok := scatter(ctx, c.peers(ctx), func(ctx context.Context, addr string) (string, error) {
+	addrs, _ := c.peersOrErr(ctx)
+	owner, ok := scatter(ctx, addrs, func(ctx context.Context, addr string) (string, error) {
 		return c.ownerAt(ctx, addr, id, token)
 	})
 	if !ok {

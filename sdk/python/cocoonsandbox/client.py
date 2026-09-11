@@ -11,11 +11,14 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from typing import TypeVar
 
 from .checkpoint import Checkpoint
 from .errors import APIError
 from .sandbox import Sandbox
+
+T = TypeVar("T")
 
 _PEERS_TIMEOUT = 5.0
 
@@ -192,7 +195,7 @@ class Client:
         except urllib.error.URLError as exc:
             raise APIError(verb, 0, str(exc.reason)) from None
         except (OSError, http.client.HTTPException) as exc:
-            # A reset or truncated body read is neither HTTPError nor URLError.
+            # a reset or truncated body read is neither HTTPError nor URLError
             raise APIError(verb, 0, str(exc)) from None
         if not raw:
             return {}
@@ -266,11 +269,16 @@ def _error_message(raw: bytes) -> str:
         return raw.decode(errors="replace").strip()
 
 
-def _try_each(candidates, call, retry=lambda exc: exc.status in (404, 0)):
-    """Calls call against each candidate in turn, returning the first
-    success. An APIError for which retry(exc) is true moves on to the next
+def _retry_miss(exc: APIError) -> bool:
+    """Default _try_each policy: only a miss (404) or a dead peer (status 0) moves on."""
+    return exc.status in (404, 0)
+
+
+def _try_each(
+    candidates: Iterable[str], call: Callable[[str], T], retry: Callable[[APIError], bool] = _retry_miss
+) -> T:
+    """An APIError for which retry(exc) is true moves on to the next
     candidate and the last such error propagates; any other raises at once.
-    The default retries only a miss (404 or a dead peer, status 0);
     candidates must be non-empty."""
     last_error = None
     for addr in candidates:
@@ -293,17 +301,18 @@ def _retry_transient(exc: APIError) -> bool:
     return exc.status in (0, 401, 404, 429, 503, 500, 502, 504)
 
 
-def _redirect_fallback(origin: str, candidates: list, post, verb: str):
-    """Walks candidates via post(addr) -> raw reply dict, retrying broadly
-    (any candidate failure moves to the next) so one wrong candidate doesn't
-    cost a candidate that would still succeed. If every candidate is
-    exhausted and the last failure was transient (_retry_transient), gives
-    the origin one more no_redirect attempt -- the node that issued the
-    redirect provisions or heals locally instead of leaving the claim stuck
-    on stale gossip. A definitive last failure skips the fallback: the origin
-    would fail the same way. A second-level redirect (a compliant server
-    never sends one once no_redirect is set) fails the candidate rather than
-    being followed. Returns (addr, reply)."""
+def _redirect_fallback(
+    origin: str, candidates: Sequence[str], post: Callable[[str], dict], verb: str
+) -> tuple[str, dict]:
+    """Retries broadly across candidates (any failure moves to the next) so
+    one wrong candidate doesn't cost one that would still succeed. If every
+    candidate is exhausted and the last failure was transient
+    (_retry_transient), gives the origin one more no_redirect attempt -- the
+    node that issued the redirect provisions or heals locally instead of
+    leaving the claim stuck on stale gossip. A definitive last failure skips
+    the fallback: the origin would fail the same way. A second-level redirect
+    (a compliant server never sends one once no_redirect is set) fails the
+    candidate rather than being followed."""
 
     def attempt(addr):
         reply = post(addr)
@@ -324,11 +333,10 @@ def _redirect_fallback(origin: str, candidates: list, post, verb: str):
             raise APIError(verb, origin_exc.status, combined) from origin_exc
 
 
-def _scatter(addrs, probe):
-    """Probes every addr concurrently and returns the first success; when
-    all probes fail the last error propagates. Loser threads are daemons
-    whose requests die with _request's own timeout; the queue is bounded by
-    len(addrs) so they never block. addrs must be non-empty."""
+def _scatter(addrs: Sequence[str], probe: Callable[[str], T]) -> T:
+    """When all probes fail the last error propagates. Loser threads are
+    daemons whose requests die with _request's own timeout; the queue is
+    bounded by len(addrs) so they never block. addrs must be non-empty."""
     results = queue.Queue(maxsize=len(addrs))
 
     def run(addr):
