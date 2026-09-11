@@ -530,10 +530,10 @@ HTTP/2 through a TLS proxy:
 runs to completion (no stdin, no streaming, no detach — use the relay for
 those); `timeout_seconds` 0 means no limit beyond the request itself, and a
 timeout closes the guest connection, which kills the command, then answers
-504. 400 empty `argv` or a silkd `bad_request`, 404 unknown sandbox or wrong
-token, 413 when stdout+stderr exceed 8 MiB, 502 guest unreachable or any
-other silkd error, and a hibernated sandbox wakes transparently like on the
-relay.
+504. 400 empty `argv`, negative `timeout_seconds`, or a silkd `bad_request`;
+401 missing bearer token; 404 unknown sandbox or wrong token; 413 when
+stdout+stderr exceed 8 MiB; 502 guest unreachable or any other silkd error.
+A hibernated sandbox wakes transparently like on the relay.
 
 ## GET /v1/sandboxes/{id}/owner
 
