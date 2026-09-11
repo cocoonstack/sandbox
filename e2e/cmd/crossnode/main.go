@@ -55,6 +55,7 @@ func run(addrA, addrB, token, template string) error {
 	if err != nil {
 		return fmt.Errorf("checkpoint on A: %w", err)
 	}
+	defer func() { _ = ck.Delete(context.WithoutCancel(ctx)) }()
 	fmt.Printf("  A: checkpoint %s published to the store in %.1fs\n", ck.ID, time.Since(t0).Seconds())
 
 	cb, err := sandbox.Connect(addrB, sandbox.WithAPIToken(token))

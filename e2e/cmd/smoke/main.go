@@ -274,8 +274,11 @@ func smokeGit(ctx context.Context, sb *sandbox.Sandbox) error {
 	if err = sb.GitCheckout(ctx, "/work", "feature"); err != nil {
 		return err
 	}
-	if br, err = sb.GitBranches(ctx, "/work"); err != nil || br.Current != "feature" {
-		return fmt.Errorf("after checkout: current=%q err=%v", br.Current, err)
+	if br, err = sb.GitBranches(ctx, "/work"); err != nil {
+		return fmt.Errorf("branches after checkout: %w", err)
+	}
+	if br.Current != "feature" {
+		return fmt.Errorf("after checkout: current=%q, want feature", br.Current)
 	}
 
 	// This sandbox is on the no-network lane: push must fail with the typed
