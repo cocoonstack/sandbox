@@ -109,7 +109,7 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	defer done()
 
 	if cmd.Stdin == nil {
-		if err := conn.Send(wire.StdinClose{}); err != nil {
+		if err = conn.Send(wire.StdinClose{}); err != nil {
 			return 0, fmt.Errorf("close stdin: %w", err)
 		}
 	} else {
