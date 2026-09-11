@@ -41,9 +41,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # wrapper shadows the packaged launcher on PATH and in the .desktop entry.
     # Chrome 136+ ignores --remote-debugging-port on the default profile dir,
     # and OSWorld task configs pass that flag without a --user-data-dir.
+    # An uninitialized profile opens the terms-of-service window instead of
+    # starting, so the debug port never binds; --no-first-run skips it.
     && printf '%s\n' \
       '#!/bin/sh' \
-      'exec /opt/google/chrome/google-chrome --user-data-dir=/home/user/.config/google-chrome-osworld --no-sandbox --disable-dev-shm-usage --disable-gpu --test-type "$@"' \
+      'exec /opt/google/chrome/google-chrome --user-data-dir=/home/user/.config/google-chrome-osworld --no-sandbox --disable-dev-shm-usage --disable-gpu --test-type --no-first-run --no-default-browser-check "$@"' \
       > /usr/local/bin/google-chrome \
     && chmod 0755 /usr/local/bin/google-chrome \
     && sed -i 's|^Exec=/usr/bin/google-chrome-stable|Exec=/usr/local/bin/google-chrome|' /usr/share/applications/google-chrome.desktop \
