@@ -214,6 +214,30 @@ func TestReleaseAfterResolveTearsDownOnce(t *testing.T) {
 	}
 }
 
+func TestReleaseDelayDefersTeardown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng)
+		m.releaseDelay = 2 * time.Second
+		sb := mustClaim(t, m, testKey)
+
+		if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+			t.Fatalf("release: %v", err)
+		}
+		if _, g := m.Info(); g.Claimed != 0 {
+			t.Fatalf("claimed=%d after release, want 0", g.Claimed)
+		}
+		if removed := eng.removedNames(); len(removed) != 0 {
+			t.Fatalf("removes=%v before the delay, want none", removed)
+		}
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		if removed := eng.removedNames(); len(removed) != 1 || removed[0] != sb.VMName {
+			t.Fatalf("removes=%v after the delay, want %s", removed, sb.VMName)
+		}
+	})
+}
+
 func TestReleaseByOperatorCred(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)

@@ -325,9 +325,10 @@ type Manager struct {
 	atCapacityUntil  time.Time
 	atCapacityReason string
 
-	refillSem  chan struct{}
-	probeSem   chan struct{}
-	refillKick chan struct{}
+	refillSem    chan struct{}
+	releaseDelay time.Duration
+	probeSem     chan struct{}
+	refillKick   chan struct{}
 }
 
 // NewManager builds a manager from the node config; ctx bounds backend construction.
@@ -367,6 +368,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		dial:            newEgressDialer(parsePrefixes(cfg.EgressInternalAllow)).DialContext,
 		sweep:           netfilter.SweepExcept,
 		refillSem:       make(chan struct{}, refill),
+		releaseDelay:    time.Duration(cfg.ReleaseDelaySeconds) * time.Second,
 		probeSem:        make(chan struct{}, refill),
 		refillKick:      make(chan struct{}, 1),
 		healSem:         make(chan struct{}, maxConcurrentHeals),

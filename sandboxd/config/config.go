@@ -231,6 +231,9 @@ type Config struct {
 	// RefillConcurrency caps concurrent VM provisioning node-wide; 0 auto-scales with CPUs.
 	RefillConcurrency int `json:"refill_concurrency,omitzero"`
 
+	// ReleaseDelaySeconds, when >0, delays a released VM's teardown so it stays out of a claim burst.
+	ReleaseDelaySeconds int `json:"release_delay_seconds,omitempty"`
+
 	// Mesh, when set, joins this node to a memberlist cluster; nil is a mesh of one.
 	Mesh *MeshConfig `json:"mesh,omitempty"`
 
@@ -297,6 +300,20 @@ func (c *Config) applyDefaults() {
 }
 
 func (c *Config) validate() error {
+	for _, n := range []struct {
+		name  string
+		value int
+	}{
+		{"release_delay_seconds", c.ReleaseDelaySeconds},
+		{"refill_concurrency", c.RefillConcurrency},
+		{"max_claims", c.MaxClaims},
+		{"idle_hibernate_seconds", c.IdleHibernateSeconds},
+		{"checkpoint_ttl_hours", c.CheckpointTTLHours},
+	} {
+		if n.value < 0 {
+			return fmt.Errorf("%s must not be negative, got %d", n.name, n.value)
+		}
+	}
 	if err := c.validateAttachment(); err != nil {
 		return err
 	}
@@ -307,20 +324,11 @@ func (c *Config) validate() error {
 	if c.MaxForkCount < 1 {
 		return fmt.Errorf("max_fork_count must be at least 1, got %d", c.MaxForkCount)
 	}
-	if c.RefillConcurrency < 0 {
-		return fmt.Errorf("refill_concurrency must not be negative, got %d", c.RefillConcurrency)
-	}
 	if err := c.RestoreMode.Validate(); err != nil {
 		return fmt.Errorf("restore_mode: %w", err)
 	}
-	if c.MaxClaims < 0 {
-		return fmt.Errorf("max_claims must not be negative, got %d", c.MaxClaims)
-	}
 	if c.PreviewListen != "" && c.PreviewSecret == "" {
 		return fmt.Errorf("preview_listen needs preview_secret")
-	}
-	if c.IdleHibernateSeconds < 0 {
-		return fmt.Errorf("idle_hibernate_seconds must not be negative, got %d", c.IdleHibernateSeconds)
 	}
 	if err := validateArchiveWindow(c.IdleHibernateSeconds, c.ArchiveAfterSeconds, c.ArchiveDeleteAfterSeconds); err != nil {
 		return err
@@ -335,9 +343,6 @@ func (c *Config) validate() error {
 		default:
 			return fmt.Errorf("checkpoint_store kind %q: want dir or s3", cs.Kind)
 		}
-	}
-	if c.CheckpointTTLHours < 0 {
-		return fmt.Errorf("checkpoint_ttl_hours must not be negative")
 	}
 	if c.CheckpointPeerHeal && (c.Mesh == nil || c.Mesh.ClusterKey == "") {
 		return fmt.Errorf("checkpoint_peer_heal requires an encrypted mesh (set mesh.cluster_key)")
