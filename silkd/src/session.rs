@@ -43,7 +43,6 @@ impl Table {
             _ => format!("sess-{}", sysutil::tmp_suffix()),
         };
         let mut child = Command::new("bash")
-            // same sanitized baseline as exec/pty; the request's cwd/env layer on via the init line.
             .env_clear()
             .envs(sysutil::base_env())
             .stdin(Stdio::piped())

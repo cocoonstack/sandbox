@@ -106,7 +106,7 @@ func TestUpdateSelfConcurrentDropsNothing(t *testing.T) {
 		wg.Go(func() { m.UpdateSelf(t.Context(), b, nil, nil) })
 		wg.Wait()
 
-		want := base + uint64(2*(i+1)) //nolint:gosec // loop index is small and positive
+		want := base + uint64(2*(i+1))
 		if m.self.Epoch != want {
 			t.Fatalf("round %d: epoch %d, want %d (an update was dropped)", i, m.self.Epoch, want)
 		}

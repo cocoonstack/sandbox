@@ -117,12 +117,7 @@ func (f *Fake) fsRead(conn net.Conn, path string) {
 		errFrame(conn, wire.KindNotFound, err.Error())
 		return
 	}
-	for len(data) > 0 {
-		n := min(readChunk, len(data))
-		send(conn, &wire.DataResp{Data: data[:n]})
-		data = data[n:]
-	}
-	send(conn, wire.Done{})
+	sendChunked(conn, data)
 }
 
 func (f *Fake) fsList(conn net.Conn, path string) {
@@ -243,12 +238,7 @@ func (f *Fake) fsPull(conn net.Conn, path string) {
 	}
 	_ = tw.Close()
 	data := buf.Bytes()
-	for len(data) > 0 {
-		n := min(readChunk, len(data))
-		send(conn, &wire.DataResp{Data: data[:n]})
-		data = data[n:]
-	}
-	send(conn, wire.Done{})
+	sendChunked(conn, data)
 }
 
 func (f *Fake) sessionCreate(conn net.Conn, req *wire.SessionCreate) {
@@ -480,4 +470,13 @@ func drainUpload(r *bufio.Reader) ([]byte, error) {
 			return nil, os.ErrInvalid
 		}
 	}
+}
+
+func sendChunked(conn net.Conn, data []byte) {
+	for len(data) > 0 {
+		n := min(readChunk, len(data))
+		send(conn, &wire.DataResp{Data: data[:n]})
+		data = data[n:]
+	}
+	send(conn, wire.Done{})
 }

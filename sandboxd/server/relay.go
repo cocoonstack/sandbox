@@ -44,20 +44,8 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUpgradeRequired, "upgrade to "+upgradeProto+" required")
 		return
 	}
-	// WakeAgentSocket restores a hibernated VM first, making the relay the transparent wake path
-	sock, err := s.mgr.WakeAgentSocket(r.Context(), r.PathValue("id"), token)
-	switch {
-	case writePoolErr(w, err):
-		return
-	case err != nil:
-		log.WithFunc("server.handleAgent").Errorf(r.Context(), err, "agent socket for %s", r.PathValue("id"))
-		writeErr(w, http.StatusInternalServerError, "sandbox lookup failed")
-		return
-	}
-	guest, err := s.dialer.DialSilkd(r.Context(), sock)
-	if err != nil {
-		log.WithFunc("server.handleAgent").Errorf(r.Context(), err, "dial silkd for %s", r.PathValue("id"))
-		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
+	guest, ok := s.wakeGuest(r.Context(), w, r.PathValue("id"), token)
+	if !ok {
 		return
 	}
 	client, bufrw, err := http.NewResponseController(w).Hijack()
@@ -68,6 +56,27 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.relay(r.Context(), r.PathValue("id"), client, bufrw.Reader, guest)
+}
+
+// wakeGuest resolves the sandbox's agent socket, waking a hibernated VM first, and dials silkd;
+// on failure it has already answered the request.
+func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id, token string) (net.Conn, bool) {
+	sock, err := s.mgr.WakeAgentSocket(ctx, id, token)
+	switch {
+	case writePoolErr(w, err):
+		return nil, false
+	case err != nil:
+		log.WithFunc("server.wakeGuest").Errorf(ctx, err, "agent socket for %s", id)
+		writeErr(w, http.StatusInternalServerError, "sandbox lookup failed")
+		return nil, false
+	}
+	guest, err := s.dialer.DialSilkd(ctx, sock)
+	if err != nil {
+		log.WithFunc("server.wakeGuest").Errorf(ctx, err, "dial silkd for %s", id)
+		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
+		return nil, false
+	}
+	return guest, true
 }
 
 // relay writes the 101 and splices the conns until silkd closes or the client vanishes.

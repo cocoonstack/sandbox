@@ -57,11 +57,11 @@ func WriteFileSync(path string, data []byte, perm os.FileMode) error {
 	if err != nil {
 		return fmt.Errorf("open dir: %w", err)
 	}
-	defer func() { _ = d.Close() }()
 	if err = d.Sync(); err != nil {
+		_ = d.Close()
 		return fmt.Errorf("sync dir: %w", err)
 	}
-	return nil
+	return d.Close()
 }
 
 // RemoveDirEntries removes dir's entries for which match returns true; nil matches all.

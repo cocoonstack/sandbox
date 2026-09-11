@@ -223,9 +223,6 @@ func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
 
 // readoptEgressTap records and returns a live egress claim's tap, "" when there is none.
 func (m *Manager) readoptEgressTap(sb *types.Sandbox, live map[string]types.VMRecord) string {
-	if sb.Key.Net != types.NetEgress {
-		return ""
-	}
 	rec, ok := live[sb.VMName]
 	tap := rec.TapDevice()
 	if !ok || tap == "" {

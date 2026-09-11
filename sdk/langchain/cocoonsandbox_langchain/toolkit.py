@@ -39,8 +39,15 @@ class CocoonToolkit:
     prepared state.
     """
 
-    def __init__(self, addr: str, api_token: str = "", template: str = "rt:24.04",
-                 net: str = "", ttl_seconds: int = 0, from_checkpoint: str = ""):
+    def __init__(
+        self,
+        addr: str,
+        api_token: str = "",
+        template: str = "rt:24.04",
+        net: str = "",
+        ttl_seconds: int = 0,
+        from_checkpoint: str = "",
+    ):
         self._client = Client(addr, api_token=api_token, timeout=CALL_TIMEOUT)
         self._template = template
         self._net = net
@@ -59,28 +66,40 @@ class CocoonToolkit:
     def get_tools(self) -> list[StructuredTool]:
         """The sandbox tool set; sync-native (_run), async via to_thread."""
         return [
-            self._tool("sandbox_exec",
-                       "Run a shell command in the sandbox and wait for it to exit. "
-                       "Returns stdout; a non-empty stderr is appended as a 'stderr:' "
-                       "line and a non-zero status as an 'exit code: N' line; a "
-                       "command that prints nothing and exits 0 returns '(no output)'. "
-                       "The call is cut off after 5 minutes. "
-                       "Files and installed packages persist across calls; environment "
-                       "variables and the working directory do not.",
-                       ExecInput, self._exec),
-            self._tool("sandbox_write_file",
-                       "Write text to a file in the sandbox, replacing any existing "
-                       "file atomically. The parent directory must already exist.",
-                       WriteFileInput, self._write_file),
-            self._tool("sandbox_read_file",
-                       "Return the whole content of a file in the sandbox as text "
-                       "(undecodable bytes are replaced); a missing path is a tool "
-                       "error. Prefer sandbox_exec with head or tail for large files.",
-                       PathInput, self._read_file),
-            self._tool("sandbox_list_dir",
-                       "List one directory (not recursive) as a JSON array of "
-                       "{name, kind, size}; kind is file, dir, symlink, or other.",
-                       PathInput, self._list_dir),
+            self._tool(
+                "sandbox_exec",
+                "Run a shell command in the sandbox and wait for it to exit. "
+                "Returns stdout; a non-empty stderr is appended as a 'stderr:' "
+                "line and a non-zero status as an 'exit code: N' line; a "
+                "command that prints nothing and exits 0 returns '(no output)'. "
+                "The call is cut off after 5 minutes. "
+                "Files and installed packages persist across calls; environment "
+                "variables and the working directory do not.",
+                ExecInput,
+                self._exec,
+            ),
+            self._tool(
+                "sandbox_write_file",
+                "Write text to a file in the sandbox, replacing any existing "
+                "file atomically. The parent directory must already exist.",
+                WriteFileInput,
+                self._write_file,
+            ),
+            self._tool(
+                "sandbox_read_file",
+                "Return the whole content of a file in the sandbox as text "
+                "(undecodable bytes are replaced); a missing path is a tool "
+                "error. Prefer sandbox_exec with head or tail for large files.",
+                PathInput,
+                self._read_file,
+            ),
+            self._tool(
+                "sandbox_list_dir",
+                "List one directory (not recursive) as a JSON array of "
+                "{name, kind, size}; kind is file, dir, symlink, or other.",
+                PathInput,
+                self._list_dir,
+            ),
         ]
 
     def close(self) -> None:
@@ -111,14 +130,14 @@ class CocoonToolkit:
         async def arun(**kwargs):
             return await asyncio.to_thread(func, **kwargs)
 
-        return StructuredTool.from_function(func=func, coroutine=arun, name=name,
-                                            description=description, args_schema=schema)
+        return StructuredTool.from_function(
+            func=func, coroutine=arun, name=name, description=description, args_schema=schema
+        )
 
     def _exec(self, command: str, cwd: str = "") -> str:
         out: list[bytes] = []
         errs: list[bytes] = []
-        code = self.sandbox().run(["sh", "-c", command], cwd=cwd,
-                                  on_stdout=out.append, on_stderr=errs.append)
+        code = self.sandbox().run(["sh", "-c", command], cwd=cwd, on_stdout=out.append, on_stderr=errs.append)
         stdout = b"".join(out).decode(errors="replace")
         stderr = b"".join(errs).decode(errors="replace")
         result = stdout

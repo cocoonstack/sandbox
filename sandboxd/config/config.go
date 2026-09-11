@@ -40,7 +40,7 @@ type PoolSpec struct {
 	Warm int `json:"warm"`
 
 	// WarmMax, when >0, lets the warm target rise from Warm toward it under demand.
-	WarmMax int `json:"warm_max,omitempty"`
+	WarmMax int `json:"warm_max,omitzero"`
 
 	// Egress is this pool's allow-list, intersected with the tenant's; nil denies all egress.
 	Egress *egress.Policy `json:"egress,omitempty"`
@@ -49,13 +49,13 @@ type PoolSpec struct {
 	Warmup []string `json:"warmup,omitempty"`
 
 	// IdleHibernateSeconds, when >0, hibernates idle claims after that many seconds.
-	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitempty"`
+	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitzero"`
 
 	// ArchiveAfterSeconds, when >0, archives a hibernated claim; must exceed IdleHibernateSeconds.
-	ArchiveAfterSeconds int `json:"archive_after_seconds,omitempty"`
+	ArchiveAfterSeconds int `json:"archive_after_seconds,omitzero"`
 
 	// ArchiveDeleteAfterSeconds, when >0, purges the checkpoint that long after archiving.
-	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitempty"`
+	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitzero"`
 }
 
 // ValidateLimits checks the warm/watermark/idle bounds shared by config and PUT /v1/pools.
@@ -100,7 +100,7 @@ func (e *EgressCAConfig) Set() bool {
 type TenantSpec struct {
 	Name      string `json:"name"`
 	Token     string `json:"token"` //nolint:gosec // config field, not a hardcoded credential
-	MaxClaims int    `json:"max_claims,omitempty"`
+	MaxClaims int    `json:"max_claims,omitzero"`
 
 	// Egress is the tenant's allow-list (see PoolSpec.Egress).
 	Egress *egress.Policy `json:"egress,omitempty"`
@@ -111,7 +111,7 @@ type VolumeSpec struct {
 	Name     string   `json:"name"`
 	Path     string   `json:"path"`
 	DirectIO string   `json:"directio,omitempty"`
-	Writable bool     `json:"writable,omitempty"`
+	Writable bool     `json:"writable,omitzero"`
 	Tenants  []string `json:"tenants,omitempty"`
 }
 
@@ -175,10 +175,10 @@ type Config struct {
 	RestoreMode types.RestoreMode `json:"restore_mode,omitempty"`
 
 	// NoDirectIO enables buffered writable disks for cold boots and clones.
-	NoDirectIO bool `json:"no_direct_io,omitempty"`
+	NoDirectIO bool `json:"no_direct_io,omitzero"`
 
 	// NoBalloon boots VMs without the virtio-balloon, so a guest keeps its whole memory.
-	NoBalloon bool `json:"no_balloon,omitempty"`
+	NoBalloon bool `json:"no_balloon,omitzero"`
 
 	// APIToken, when set, guards claim and info.
 	APIToken string `json:"api_token,omitempty"` //nolint:gosec // config field, not a hardcoded credential
@@ -190,11 +190,11 @@ type Config struct {
 	Secrets []egress.SecretSpec `json:"secrets,omitempty"`
 
 	// IdleHibernateSeconds is the idle policy for unpooled claims; per-pool settings override.
-	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitempty"`
+	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitzero"`
 
 	// ArchiveAfterSeconds and ArchiveDeleteAfterSeconds are the archive policy for unpooled keys.
-	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitempty"`
-	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitempty"`
+	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitzero"`
+	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitzero"`
 
 	PreviewListen string `json:"preview_listen,omitempty"`
 	PreviewSecret string `json:"preview_secret,omitempty"` //nolint:gosec // config field, not a hardcoded credential
@@ -208,28 +208,28 @@ type Config struct {
 	CheckpointStore *StoreConfig `json:"checkpoint_store,omitempty"`
 
 	// CheckpointPeerHeal lets a node pull a checkpoint it lacks from a peer; off by default.
-	CheckpointPeerHeal bool `json:"checkpoint_peer_heal,omitempty"`
+	CheckpointPeerHeal bool `json:"checkpoint_peer_heal,omitzero"`
 
 	// EgressInternalAllow re-admits CIDRs through the proxy's SSRF guard, node-wide.
 	EgressInternalAllow []string `json:"egress_internal_allow,omitempty"`
 
 	// CheckpointTTLHours ages out checkpoints; 0 keeps them forever.
-	CheckpointTTLHours int `json:"checkpoint_ttl_hours,omitempty"`
+	CheckpointTTLHours int `json:"checkpoint_ttl_hours,omitzero"`
 
 	// MaxClaims caps live claims node-wide; 0 means unlimited.
-	MaxClaims int `json:"max_claims,omitempty"`
+	MaxClaims int `json:"max_claims,omitzero"`
 
 	// AuditLog, when true, appends relayed request ops, never payloads, to audit.jsonl.
-	AuditLog bool `json:"audit_log,omitempty"`
+	AuditLog bool `json:"audit_log,omitzero"`
 
 	// MaxForkCount caps children per fork call; each child is a full-RAM VM.
-	MaxForkCount int `json:"max_fork_count,omitempty"`
+	MaxForkCount int `json:"max_fork_count,omitzero"`
 
 	// Volumes is the node-local catalog of operator-managed dataset images.
 	Volumes []VolumeSpec `json:"volumes,omitempty"`
 
 	// RefillConcurrency caps concurrent VM provisioning node-wide; 0 auto-scales with CPUs.
-	RefillConcurrency int `json:"refill_concurrency,omitempty"`
+	RefillConcurrency int `json:"refill_concurrency,omitzero"`
 
 	// Mesh, when set, joins this node to a memberlist cluster; nil is a mesh of one.
 	Mesh *MeshConfig `json:"mesh,omitempty"`

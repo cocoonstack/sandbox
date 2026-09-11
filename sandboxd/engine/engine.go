@@ -276,11 +276,7 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	req, err := wire.EncodeRequest(wire.PortForward{Port: port})
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
+	req, _ := wire.EncodeRequest(wire.PortForward{Port: port})
 	if _, err := conn.Write(append(req, '\n')); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("write port_forward: %w", err)
@@ -380,10 +376,7 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 	defer func() { _ = conn.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	probe, err := wire.EncodeRequest(wire.Info{})
-	if err != nil {
-		return fmt.Errorf("encode info: %w", err)
-	}
+	probe, _ := wire.EncodeRequest(wire.Info{})
 	if _, err = conn.Write(append(probe, '\n')); err != nil {
 		return fmt.Errorf("write info: %w", err)
 	}

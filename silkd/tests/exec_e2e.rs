@@ -6,8 +6,20 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{decode, exchange, one, roundtrip, stdout_body, type_of};
 use silkd::server::State;
+
+use common::{decode, exchange, one, roundtrip, stdout_body, type_of};
+
+async fn detached_pid(state: &Arc<State>, script: &str) -> u64 {
+    let argv = serde_json::json!(["/bin/sh", "-c", script]);
+    let started = one(
+        state,
+        &serde_json::json!({"op":"exec","argv":argv,"detach":true}).to_string(),
+    )
+    .await;
+    assert_eq!(type_of(&started[0]), "started");
+    started[0]["pid"].as_u64().unwrap()
+}
 
 #[tokio::test]
 async fn exec_streams_stdout_then_exit() {
@@ -98,17 +110,6 @@ async fn daemonizer_exit_is_the_last_frame() {
             .any(|f| String::from_utf8_lossy(&decode(f)).contains("late")),
         "grandchild output must not leak after exit"
     );
-}
-
-async fn detached_pid(state: &Arc<State>, script: &str) -> u64 {
-    let argv = serde_json::json!(["/bin/sh", "-c", script]);
-    let started = one(
-        state,
-        &serde_json::json!({"op":"exec","argv":argv,"detach":true}).to_string(),
-    )
-    .await;
-    assert_eq!(type_of(&started[0]), "started");
-    started[0]["pid"].as_u64().unwrap()
 }
 
 #[tokio::test]

@@ -126,10 +126,10 @@ type InfoResponse struct {
 	Claimed    int             `json:"claimed"`
 	Hibernated int             `json:"hibernated"`
 	Archived   int             `json:"archived"`
-	Draining   bool            `json:"draining,omitempty"`
+	Draining   bool            `json:"draining,omitzero"`
 	Peers      []string        `json:"peers,omitempty"`
 	// AtCapacity marks refill parked because the node refused another VM.
-	AtCapacity       bool   `json:"at_capacity,omitempty"`
+	AtCapacity       bool   `json:"at_capacity,omitzero"`
 	AtCapacityReason string `json:"at_capacity_reason,omitempty"`
 }
 
@@ -245,7 +245,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req types.ClaimRequest, key types.PoolKey, hash, tenant string) {
 	volumes, err := types.ValidateVolumes(req.Volumes, req.VolumesAttachOnly)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("%w: %v", pool.ErrBadVolume, err).Error())
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("%v: %v", pool.ErrBadVolume, err))
 		return
 	}
 	req.Volumes = volumes

@@ -20,6 +20,24 @@ const (
 	defaultToolTTL  = time.Hour
 )
 
+type rpcRequest struct {
+	ID     json.RawMessage `json:"id"`
+	Method string          `json:"method"`
+	Params json.RawMessage `json:"params"`
+}
+
+type rpcResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  any             `json:"result,omitempty"`
+	Error   *rpcErrorBody   `json:"error,omitempty"`
+}
+
+type rpcErrorBody struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
 // server owns one sandboxd client and the handles minted over this stdio
 // session: MCP tools address sandboxes and checkpoints by id, so the live
 // handles (with their tokens) stay here.
@@ -177,24 +195,6 @@ func (s *server) dropCkpt(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.ckpts, id)
-}
-
-type rpcRequest struct {
-	ID     json.RawMessage `json:"id"`
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params"`
-}
-
-type rpcResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id"`
-	Result  any             `json:"result,omitempty"`
-	Error   *rpcErrorBody   `json:"error,omitempty"`
-}
-
-type rpcErrorBody struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
 }
 
 func result(id json.RawMessage, v any) rpcResponse {

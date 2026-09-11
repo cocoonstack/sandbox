@@ -193,7 +193,7 @@ type Checkpoint struct {
 	CreatedAt time.Time `json:"created_at"`
 
 	// Archive marks a lifecycle-internal wake image: hidden from listings and undeletable.
-	Archive bool `json:"archive,omitempty"`
+	Archive bool `json:"archive,omitzero"`
 }
 
 // VMNetConfig is the per-NIC host tap the egress-lane nft lock binds.

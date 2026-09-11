@@ -128,7 +128,7 @@ type SandboxSummary struct {
 	Key            types.PoolKey  `json:"key"`
 	Deadline       time.Time      `json:"deadline"`
 	Hibernated     bool           `json:"hibernated"`
-	Archived       bool           `json:"archived,omitempty"`
+	Archived       bool           `json:"archived,omitzero"`
 	FromCheckpoint string         `json:"from_checkpoint,omitempty"`
 	Volumes        []types.Volume `json:"volumes,omitempty"`
 	// ClaimRef echoes the caller reference; empty for fork and checkpoint-branch claims.

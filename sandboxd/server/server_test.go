@@ -1506,7 +1506,8 @@ func TestPreviewHandlerZeroDeadlineMintsLiveToken(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	token := strings.TrimSuffix(out.URL[strings.Index(out.URL, "/p/")+3:], "/")
+	_, token, _ := strings.Cut(out.URL, "/p/")
+	token = strings.TrimSuffix(token, "/")
 	claims, ok := ps.verify(token)
 	if !ok {
 		t.Fatalf("minted token %q does not verify", token)

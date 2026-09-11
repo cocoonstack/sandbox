@@ -11,7 +11,7 @@ client = Client("10.0.0.5:7777", api_token="...")
 with client.new("ghcr.io/cocoonstack/sandbox/rt:24.04") as sb:
     print(sb.exec("echo", "hello"))
     ckpt = sb.checkpoint("after-setup")
-    branch = ckpt.new()          # a fresh sandbox at the captured moment
+    branch = ckpt.new()  # a fresh sandbox at the captured moment
 ```
 
 stdlib-only and synchronous — `pip install cocoonstack-sandbox` brings no

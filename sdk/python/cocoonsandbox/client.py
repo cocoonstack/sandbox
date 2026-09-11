@@ -125,8 +125,8 @@ class Client:
         """The node's pool/claim counters, as served by GET /v1/info."""
         return self._request(self.addr, "GET", "/v1/info", None, "info")
 
-    def _claim_from(self, addr: str, claim: dict) -> Sandbox:
-        reply = self._post_json(addr, "/v1/claim", claim, "claim")
+    def _claim_from(self, addr: str, claim: dict, path: str = "/v1/claim", verb: str = "claim") -> Sandbox:
+        reply = self._post_json(addr, path, claim, verb)
         redirect = reply.get("redirect") or []
         if not redirect:
             return self._handle_from(addr, reply)
@@ -135,9 +135,9 @@ class Client:
             claim["require_promoted"] = True
 
         def post(peer):
-            return self._post_json(peer, "/v1/claim", claim, "claim")
+            return self._post_json(peer, path, claim, verb)
 
-        owner, reply = _redirect_fallback(addr, redirect, post, "claim")
+        owner, reply = _redirect_fallback(addr, redirect, post, verb)
         return self._handle_from(owner, reply)
 
     def _peers(self) -> list:

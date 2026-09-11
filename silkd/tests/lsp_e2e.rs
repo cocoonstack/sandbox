@@ -1,18 +1,18 @@
 //! LSP broker integration against a fake language server, each test under a deadline so a relay deadlock fails CI.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+mod common;
+
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
+use silkd::server::State;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
-use silkd::server::State;
-
-mod common;
 use common::{b64, connect, decode, one, type_of};
 
 const DEADLINE: Duration = Duration::from_secs(30);
@@ -90,10 +90,7 @@ async fn lsp_broker_relays_to_the_server() {
         &json!({"op":"lsp_start","language":"faketest"}).to_string(),
     )
     .await;
-    let server_id = start.last().unwrap()["server_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let server_id = start.last().unwrap()["server_id"].as_str().unwrap();
 
     let (mut cw, mut out, handle) = connect(&state);
     cw.write_all(
@@ -160,10 +157,7 @@ async fn lsp_stop_kills_an_idle_server() {
         &json!({"op":"lsp_start","language":"idletest"}).to_string(),
     )
     .await;
-    let server_id = start.last().unwrap()["server_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let server_id = start.last().unwrap()["server_id"].as_str().unwrap();
     let stop = one(
         &state,
         &json!({"op":"lsp_stop","server_id":server_id}).to_string(),
@@ -193,10 +187,7 @@ async fn lsp_request_reaps_when_the_client_vanishes_before_ready() {
         &json!({"op":"lsp_start","language":"gonetest"}).to_string(),
     )
     .await;
-    let server_id = start.last().unwrap()["server_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let server_id = start.last().unwrap()["server_id"].as_str().unwrap();
 
     let (mut client, server) = tokio::io::duplex(1 << 20);
     let request = json!({"op":"lsp_request","server_id":server_id}).to_string();

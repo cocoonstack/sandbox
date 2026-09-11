@@ -25,7 +25,7 @@ type ExecRequest struct {
 	Argv           []string          `json:"argv"`
 	Cwd            string            `json:"cwd,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
-	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
+	TimeoutSeconds int               `json:"timeout_seconds,omitzero"`
 }
 
 // ExecResponse is the exit code and complete output of a buffered exec.
@@ -54,19 +54,8 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	id := r.PathValue("id")
-	sock, err := s.mgr.WakeAgentSocket(ctx, id, token)
-	switch {
-	case writePoolErr(w, err):
-		return
-	case err != nil:
-		log.WithFunc("server.handleExec").Errorf(ctx, err, "agent socket for %s", id)
-		writeErr(w, http.StatusInternalServerError, "sandbox lookup failed")
-		return
-	}
-	guest, err := s.dialer.DialSilkd(ctx, sock)
-	if err != nil {
-		log.WithFunc("server.handleExec").Errorf(ctx, err, "dial silkd for %s", id)
-		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
+	guest, ok := s.wakeGuest(ctx, w, id, token)
+	if !ok {
 		return
 	}
 	if req.TimeoutSeconds > 0 {
@@ -79,23 +68,15 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		stop()
 		_ = guest.Close()
 	}()
-	frame, err := wire.EncodeRequest(wire.Exec{Argv: req.Argv, Cwd: req.Cwd, Env: req.Env})
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
+	frame, _ := wire.EncodeRequest(wire.Exec{Argv: req.Argv, Cwd: req.Cwd, Env: req.Env})
 	frame = append(frame, '\n')
 	if s.mgr.AuditEnabled() {
 		s.mgr.Audit(ctx, id, frame)
 	}
-	stdinClose, err := wire.EncodeRequest(wire.StdinClose{})
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "command setup failed")
-		return
-	}
+	stdinClose, _ := wire.EncodeRequest(wire.StdinClose{})
 	frame = append(frame, stdinClose...)
 	frame = append(frame, '\n')
-	if _, err = guest.Write(frame); err != nil {
+	if _, err := guest.Write(frame); err != nil {
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
 		return
 	}
@@ -104,7 +85,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		// a dropped connection only reaches a child that writes; a silent one needs the kill
 		s.killExec(ctx, id, token, pid)
 	}
-	var silkdErr *wire.ErrorResp
+	silkdErr, isSilkd := errors.AsType[*wire.ErrorResp](err)
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, resp)
@@ -112,9 +93,9 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusGatewayTimeout, "command timed out")
 	case errors.Is(ctx.Err(), context.Canceled):
 		return
-	case errors.As(err, &silkdErr) && silkdErr.Kind == "bad_request":
+	case isSilkd && silkdErr.Kind == "bad_request":
 		writeErr(w, http.StatusBadRequest, silkdErr.Message)
-	case errors.As(err, &silkdErr):
+	case isSilkd:
 		writeErr(w, http.StatusBadGateway, silkdErr.Error())
 	case errors.Is(err, errExecOutputCap):
 		writeErr(w, http.StatusRequestEntityTooLarge, err.Error())
@@ -154,16 +135,19 @@ func collectExec(guest net.Conn) (resp ExecResponse, pid uint32, err error) {
 		case *wire.Started:
 			pid = f.PID
 		case *wire.Stdout:
+			if len(stdout)+len(stderr)+len(f.Data) > execOutputCap {
+				return ExecResponse{}, pid, errExecOutputCap
+			}
 			stdout = append(stdout, f.Data...)
 		case *wire.Stderr:
+			if len(stdout)+len(stderr)+len(f.Data) > execOutputCap {
+				return ExecResponse{}, pid, errExecOutputCap
+			}
 			stderr = append(stderr, f.Data...)
 		case *wire.Exit:
 			return ExecResponse{ExitCode: f.Code, Stdout: string(stdout), Stderr: string(stderr)}, 0, nil
 		case *wire.ErrorResp:
 			return ExecResponse{}, 0, f
-		}
-		if len(stdout)+len(stderr) > execOutputCap {
-			return ExecResponse{}, pid, errExecOutputCap
 		}
 	}
 	if err := sc.Err(); err != nil {

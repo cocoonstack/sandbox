@@ -6,7 +6,7 @@ import (
 
 // TTLField is the shared requested-lease field; zero means the server default.
 type TTLField struct {
-	TTLSeconds int `json:"ttl_seconds,omitempty"`
+	TTLSeconds int `json:"ttl_seconds,omitzero"`
 }
 
 // TTL converts the wire seconds to a duration.
@@ -21,11 +21,11 @@ type ClaimRequest struct {
 	Size     Size     `json:"size,omitempty"`
 	Volumes  []Volume `json:"volumes,omitempty"`
 	// VolumesAttachOnly attaches every requested volume without mounting it.
-	VolumesAttachOnly bool `json:"volumes_attach_only,omitempty"`
+	VolumesAttachOnly bool `json:"volumes_attach_only,omitzero"`
 	TTLField
-	NoRedirect bool `json:"no_redirect,omitempty"`
+	NoRedirect bool `json:"no_redirect,omitzero"`
 	// RequirePromoted makes the target refuse a cold-image fallback.
-	RequirePromoted bool `json:"require_promoted,omitempty"`
+	RequirePromoted bool `json:"require_promoted,omitzero"`
 	// ClaimRef is an opaque caller reference recorded on the claim.
 	ClaimRef string `json:"claim_ref,omitempty"`
 }
@@ -50,7 +50,7 @@ type ClaimResponse struct {
 
 	Redirect []string `json:"redirect,omitempty"`
 	// RequirePromoted tells a redirecting client to preserve that requirement on retry.
-	RequirePromoted bool `json:"require_promoted,omitempty"`
+	RequirePromoted bool `json:"require_promoted,omitzero"`
 }
 
 // VolumeInfo is the caller-visible, host-path-free catalog projection.
@@ -61,7 +61,7 @@ type VolumeInfo struct {
 	Available    bool   `json:"available"`
 	Nodes        int    `json:"nodes"`
 	// Writable reports whether the operator allows rw claims of this name.
-	Writable bool `json:"writable,omitempty"`
+	Writable bool `json:"writable,omitzero"`
 }
 
 // VolumeListResponse is the wire reply of GET /v1/volumes.
@@ -96,7 +96,7 @@ type CheckpointResponse struct {
 type CheckpointClaimRequest struct {
 	TTLField
 	// NoRedirect makes the retry resolve locally instead of bouncing between two nodes.
-	NoRedirect bool `json:"no_redirect,omitempty"`
+	NoRedirect bool `json:"no_redirect,omitzero"`
 }
 
 // CheckpointListResponse is the wire reply of GET /v1/checkpoints.

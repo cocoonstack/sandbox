@@ -6,10 +6,11 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{FrameLines, FrameWriter};
 use serde_json::{Value, json};
 use silkd::server::State;
 use tokio::io::AsyncWriteExt;
+
+use common::{FrameLines, FrameWriter};
 
 async fn send(cw: &mut FrameWriter, frame: Value) {
     cw.write_all(frame.to_string().as_bytes()).await.unwrap();

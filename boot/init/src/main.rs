@@ -14,7 +14,6 @@ fn main() {
     boot::run()
 }
 
-/// Keeps `cargo test` runnable on non-Linux dev hosts (cfg logic tests).
 #[cfg(not(target_os = "linux"))]
 fn main() {
     eprintln!("sandbox-init is Linux-only");

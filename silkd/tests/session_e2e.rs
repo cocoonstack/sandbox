@@ -4,15 +4,19 @@
 mod common;
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use common::{one, stdout_body, type_of};
 use serde_json::{Value, json};
 use silkd::server::State;
 
+use common::{one, stdout_body, type_of};
+
 async fn create(state: &Arc<State>, extra: Value) -> String {
     let mut req = json!({"op":"session_create"});
-    for (k, v) in extra.as_object().unwrap() {
-        req[k] = v.clone();
+    if let Value::Object(map) = extra {
+        for (k, v) in map {
+            req[k] = v;
+        }
     }
     let f = one(state, &req.to_string()).await;
     assert_eq!(type_of(&f[0]), "session_created", "create failed: {f:?}");
@@ -141,7 +145,6 @@ async fn forged_sentinel_in_output_does_not_desync() {
 
 #[tokio::test]
 async fn reap_idle_removes_idle_sessions() {
-    use std::time::Duration;
     let state = Arc::new(State::new());
     let id = create(&state, json!({})).await;
     let reaped = state.sessions.reap_idle(Duration::ZERO);
@@ -156,7 +159,6 @@ async fn reap_idle_removes_idle_sessions() {
 
 #[tokio::test]
 async fn reap_skips_a_session_running_a_command() {
-    use std::time::Duration;
     let state = Arc::new(State::new());
     let id = create(&state, json!({})).await;
     let busy = {

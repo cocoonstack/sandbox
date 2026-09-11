@@ -3,8 +3,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
-use common::{b64, exchange, type_of};
 use serde_json::json;
+
+use common::{b64, exchange, type_of};
 
 #[tokio::test]
 async fn write_then_read_roundtrips_bytes() {

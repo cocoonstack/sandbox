@@ -40,7 +40,7 @@ type Config struct {
 	Prefix         string `json:"prefix,omitempty"`
 	Endpoint       string `json:"endpoint,omitempty"`
 	Region         string `json:"region,omitempty"`
-	ForcePathStyle bool   `json:"force_path_style,omitempty"`
+	ForcePathStyle bool   `json:"force_path_style,omitzero"`
 }
 
 type publishFile struct {
@@ -197,8 +197,8 @@ func (s *Store) readMeta(ctx context.Context, id string) ([]byte, string, error)
 		Bucket: &s.bucket, Key: aws.String(s.key(id, store.MetaFile)),
 	})
 	if err != nil {
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound") { //nolint:goconst // AWS API error codes, compared as literals
+		apiErr, ok := errors.AsType[smithy.APIError](err)
+		if ok && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound") { //nolint:goconst // AWS API error codes, compared as literals
 			return nil, "", store.ErrNotFound
 		}
 		return nil, "", fmt.Errorf("record %s: %w", id, err)

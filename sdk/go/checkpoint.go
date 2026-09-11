@@ -123,8 +123,8 @@ type checkpointResponse struct {
 }
 
 type checkpointClaimRequest struct {
-	TTLSeconds int  `json:"ttl_seconds,omitempty"`
-	NoRedirect bool `json:"no_redirect,omitempty"`
+	TTLSeconds int  `json:"ttl_seconds,omitzero"`
+	NoRedirect bool `json:"no_redirect,omitzero"`
 }
 
 type checkpointListResponse struct {

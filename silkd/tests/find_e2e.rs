@@ -73,10 +73,10 @@ async fn find_glob_is_a_real_glob_not_a_substring() {
         "glob": "*.rs"
     }))
     .await;
-    let files: Vec<_> = frames
+    let files: Vec<&str> = frames
         .iter()
         .filter(|f| type_of(f) == "match")
-        .map(|m| m["file"].as_str().unwrap().to_string())
+        .map(|m| m["file"].as_str().unwrap())
         .collect();
     assert_eq!(files.len(), 1, "{files:?}");
     assert!(files[0].ends_with("a.rs"));

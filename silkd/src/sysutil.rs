@@ -49,7 +49,7 @@ pub fn rand_token() -> String {
 /// SIGKILLs the group led by `pgid`, so a session's external command dies with its shell.
 pub fn kill_group(pgid: u32) {
     // kill(-0) would target silkd's own group; a synthetic id passes the guard and misses with ESRCH.
-    if !valid_pid(pgid) {
+    if !is_valid_pid(pgid) {
         return;
     }
     // SAFETY: kill(2) takes no pointers; the guards above keep the pid_t cast
@@ -60,7 +60,7 @@ pub fn kill_group(pgid: u32) {
 /// Sends `sig` to `pid`, ignoring ESRCH against a just-exited pid.
 pub fn signal_pid(pid: u32, sig: i32) {
     // pid 0 means silkd's whole process group to kill(2).
-    if !valid_pid(pid) {
+    if !is_valid_pid(pid) {
         return;
     }
     // SAFETY: kill(2) takes no pointers; the guards above keep the pid_t cast
@@ -213,7 +213,7 @@ fn fill_random(b: &mut [u8]) -> bool {
 }
 
 /// Rejects pid 0 and anything that would go negative through the pid_t cast.
-fn valid_pid(id: u32) -> bool {
+fn is_valid_pid(id: u32) -> bool {
     id != 0 && id <= i32::MAX as u32
 }
 

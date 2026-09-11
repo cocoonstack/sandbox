@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"slices"
 	"testing"
 	"time"
 )
@@ -134,7 +135,7 @@ func TestLoadCARootBundle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("intermediate: %v", err)
 	}
-	bundle := append(append([]byte{}, rootA...), rootB...)
+	bundle := slices.Concat(rootA, rootB)
 	ca, err := LoadCA(bundle, interCert, interKey)
 	if err != nil {
 		t.Fatalf("LoadCA rotation bundle: %v", err)
@@ -160,7 +161,7 @@ func TestLoadCARejectsNonCertBlockInRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("intermediate: %v", err)
 	}
-	polluted := append(append([]byte{}, rootCert...), rootKey...)
+	polluted := slices.Concat(rootCert, rootKey)
 	if _, err := LoadCA(polluted, interCert, interKey); err == nil {
 		t.Error("LoadCA accepted a non-certificate pem block in the root bundle")
 	}

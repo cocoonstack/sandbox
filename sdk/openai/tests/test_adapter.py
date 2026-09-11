@@ -57,7 +57,6 @@ def test_create_claims_and_state_round_trips(node):
         inner = session._inner
         assert inner.state.sandbox_id == "sb_1" and inner.state.sandbox_token == "tok"
 
-        # serialize → deserialize must reattach to the same claim.
         payload = client.serialize_session_state(inner.state)
         restored = client.deserialize_session_state(payload)
         assert isinstance(restored, CocoonSandboxSessionState)

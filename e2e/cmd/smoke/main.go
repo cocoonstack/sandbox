@@ -376,11 +376,11 @@ func smokeFork(ctx context.Context, sb *sandbox.Sandbox) error {
 	}
 	for i := range children {
 		if _, err := children[1-i].Stat(ctx, fmt.Sprintf("/work/child-%d.txt", i)); err == nil {
-			return fmt.Errorf("child %d write visible in sibling — shared disk?", i)
+			return fmt.Errorf("child %d write visible in sibling: shared disk", i)
 		}
 	}
 	if _, err := sb.Stat(ctx, "/work/child-0.txt"); err == nil {
-		return errors.New("child write visible in parent — shared disk?")
+		return errors.New("child write visible in parent: shared disk")
 	}
 	return nil
 }
@@ -693,8 +693,8 @@ func want(got, exp string) error {
 }
 
 func isSilkdKind(err error, kind string) bool {
-	var er *wire.ErrorResp
-	return errors.As(err, &er) && er.Kind == kind
+	er, ok := errors.AsType[*wire.ErrorResp](err)
+	return ok && er.Kind == kind
 }
 
 func lspWrite(w io.Writer, body string) error {

@@ -94,10 +94,7 @@ func (p *HTTPProber) fanOut(ctx context.Context, id string, maxOwners int, grace
 	if len(addrs) == 0 {
 		return nil
 	}
-	client := p.Client
-	if client == nil {
-		client = &http.Client{Timeout: defaultProbeClientTimeout}
-	}
+	client := cmp.Or(p.Client, &http.Client{Timeout: defaultProbeClientTimeout})
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultProbeClientTimeout)
 	defer cancel()
 

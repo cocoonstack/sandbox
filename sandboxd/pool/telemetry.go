@@ -55,9 +55,9 @@ type auditFrame struct {
 	To       string   `json:"to,omitempty"`
 	URL      string   `json:"url,omitempty"`
 	Session  string   `json:"session,omitempty"`
-	Port     uint16   `json:"port,omitempty"`
-	Decision string   `json:"decision,omitempty"` // egress: allow|deny
-	Secret   string   `json:"secret,omitempty"`   //nolint:gosec // the secret's ref name, never its value
+	Port     uint16   `json:"port,omitzero"`
+	Decision string   `json:"decision,omitempty"`
+	Secret   string   `json:"secret,omitempty"` //nolint:gosec // the secret's ref name, never its value
 }
 
 // Counters snapshots the monotonic telemetry counters.

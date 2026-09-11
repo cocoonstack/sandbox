@@ -68,6 +68,7 @@ impl Walk<'_> {
     fn run(&self, root: PathBuf) -> std::io::Result<bool> {
         let mut stack = vec![root];
         let mut root = true;
+        let mut body = String::new();
         while let Some(dir) = stack.pop() {
             let rd = match std::fs::read_dir(&dir) {
                 Ok(rd) => rd,
@@ -89,7 +90,10 @@ impl Walk<'_> {
                 let p = ent.path();
                 if ft.is_dir() {
                     stack.push(p);
-                } else if ft.is_file() && name_matches(&p, self.name_re) && !self.scan_file(&p) {
+                } else if ft.is_file()
+                    && name_matches(&p, self.name_re)
+                    && !self.scan_file(&p, &mut body)
+                {
                     return Ok(false);
                 }
             }
@@ -99,15 +103,15 @@ impl Walk<'_> {
     }
 
     /// Scans one file; the size bound comes off the open handle, so check and read see one file.
-    fn scan_file(&self, path: &Path) -> bool {
+    fn scan_file(&self, path: &Path, body: &mut String) -> bool {
         let Ok(mut file) = std::fs::File::open(path) else {
             return true;
         };
         if file.metadata().is_ok_and(|m| m.len() > FIND_MAX_FILE) {
             return true;
         }
-        let mut body = String::new();
-        if file.read_to_string(&mut body).is_err() {
+        body.clear();
+        if file.read_to_string(body).is_err() {
             return true;
         }
         let name: Arc<str> = path.to_string_lossy().into();
@@ -156,7 +160,7 @@ pub async fn replace<W: AsyncWrite + Unpin>(
     };
     for file in files {
         let mut count: u64 = 0;
-        if !oversized(&file).await {
+        if !is_oversized(&file).await {
             let body = match fs::read_to_string(&file).await {
                 Ok(body) => body,
                 Err(e) => return err_frame(w, &e, "read").await,
@@ -264,7 +268,7 @@ where
     }
 }
 
-async fn oversized(file: &str) -> bool {
+async fn is_oversized(file: &str) -> bool {
     fs::metadata(file)
         .await
         .is_ok_and(|m| m.len() > FIND_MAX_FILE)

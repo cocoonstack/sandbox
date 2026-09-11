@@ -93,10 +93,7 @@ func (c *CA) SignLeaf(host string) (*tls.Certificate, error) {
 		return nil, err
 	}
 	now := time.Now()
-	// Guests reject a chain whose leaf outlives or postdates its intermediate.
-	if now.After(c.interCert.NotAfter) {
-		return nil, fmt.Errorf("sign leaf %s: intermediate expired %s", host, c.interCert.NotAfter.Format(time.RFC3339))
-	}
+	// Guests reject a chain whose leaf outlives its intermediate.
 	notAfter := now.Add(leafValidity)
 	if notAfter.After(c.interCert.NotAfter) {
 		notAfter = c.interCert.NotAfter

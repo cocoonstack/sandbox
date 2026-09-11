@@ -38,7 +38,7 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 		return types.PoolKey{}, "", ErrNoEgressFork
 	}
 	key := types.PoolKey{Template: template, Net: sb.Key.Net, Size: sb.Key.Size}
-	if m.pooledHash(key.Hash()) {
+	if m.pooled(key) {
 		// a configured pool owns this key; promoting over it would change what refills produce
 		return types.PoolKey{}, "", ErrPooledTemplate
 	}
@@ -73,7 +73,7 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant 
 	if err := m.validate(key); err != nil {
 		return err
 	}
-	if m.pooledHash(key.Hash()) {
+	if m.pooled(key) {
 		return ErrPooledTemplate
 	}
 	id := store.TemplateID(key.Hash())
@@ -141,7 +141,7 @@ func (m *Manager) HasPoolGolden(key types.PoolKey) bool {
 
 // HasPromotedTemplate is resolveGolden's test exactly, so routing never promises a refused golden.
 func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, tenant string) bool {
-	if m.pooledHash(key.Hash()) {
+	if m.pooled(key) {
 		return false
 	}
 	id := store.TemplateID(key.Hash())
@@ -163,16 +163,11 @@ func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, te
 	return owner == "" || tenantOwns(tenant, owner)
 }
 
-// pooledHash guards on the hash, not the key: a colliding key would reach a pool's golden dir.
-func (m *Manager) pooledHash(hash string) bool {
+func (m *Manager) pooled(key types.PoolKey) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, p := range m.pools {
-		if p.hash == hash {
-			return true
-		}
-	}
-	return false
+	_, ok := m.pools[key]
+	return ok
 }
 
 // recLock takes the per-record lock and a live reference (pair with recDone); clones and wakes hold it shared so a delete or re-publish never runs under an in-flight read.

@@ -182,7 +182,7 @@ func closeWrite(conn net.Conn) {
 type previewRequest struct {
 	Token      string `json:"token"`
 	Port       uint16 `json:"port"`
-	TTLSeconds int    `json:"ttl_seconds,omitempty"`
+	TTLSeconds int    `json:"ttl_seconds,omitzero"`
 }
 
 type previewResponse struct {

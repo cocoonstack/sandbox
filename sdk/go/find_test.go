@@ -67,8 +67,8 @@ func TestFindSeqStopsAfterTheCallerBreaks(t *testing.T) {
 func TestFindBadPatternIsTypedError(t *testing.T) {
 	sb := fakeSandbox(t)
 	_, err := sb.Find(t.Context(), "/", "(", "")
-	var e *wire.ErrorResp
-	if !errors.As(err, &e) || e.Kind != wire.KindBadRequest {
+	e, ok := errors.AsType[*wire.ErrorResp](err)
+	if !ok || e.Kind != wire.KindBadRequest {
 		t.Errorf("got %v, want bad_request error frame", err)
 	}
 }
