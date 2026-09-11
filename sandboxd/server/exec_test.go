@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -78,15 +79,28 @@ func TestExecMapsSilkdErrors(t *testing.T) {
 	}
 }
 
-func TestExecTimesOutAndClosesGuest(t *testing.T) {
+func TestExecTimeoutKillsTheCommand(t *testing.T) {
+	var conns atomic.Int32
+	killed := make(chan uint32, 1)
 	closed := make(chan struct{})
 	ts, _ := newRelayServer(t, func(conn net.Conn) {
-		defer close(closed)
 		r := bufio.NewReader(conn)
-		_, _ = r.ReadBytes('\n')
-		_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n")
-		_, _ = r.ReadBytes('\n')
-		_, _ = r.ReadBytes('\n')
+		if conns.Add(1) == 1 {
+			defer close(closed)
+			_, _ = r.ReadBytes('\n')
+			_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n")
+			_, _ = r.ReadBytes('\n')
+			_, _ = r.ReadBytes('\n')
+			return
+		}
+		defer conn.Close()
+		line, _ := r.ReadBytes('\n')
+		if req, _ := wire.DecodeRequest(bytes.TrimSpace(line)); req != nil {
+			if kill, ok := req.(*wire.Kill); ok {
+				killed <- kill.PID
+			}
+		}
+		_, _ = io.WriteString(conn, `{"type":"done"}`+"\n")
 	})
 	if status, _ := postExec(t, ts, `{"argv":["sleep","60"],"timeout_seconds":1}`); status != http.StatusGatewayTimeout {
 		t.Fatalf("status %d, want 504", status)
@@ -95,6 +109,21 @@ func TestExecTimesOutAndClosesGuest(t *testing.T) {
 	case <-closed:
 	case <-time.After(3 * time.Second):
 		t.Fatal("guest conn still open after the timeout")
+	}
+	select {
+	case pid := <-killed:
+		if pid != 7 {
+			t.Errorf("killed pid %d, want 7", pid)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no kill reached the guest after the timeout")
+	}
+}
+
+func TestExecRejectsUnknownFields(t *testing.T) {
+	ts, _ := newRelayServer(t, func(conn net.Conn) { _ = conn.Close() })
+	if status, _ := postExec(t, ts, `{"argv":["whoami"],"user":"nobody"}`); status != http.StatusBadRequest {
+		t.Errorf("status %d, want 400", status)
 	}
 }
 

@@ -13,7 +13,10 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-const execOutputCap = 8 << 20
+const (
+	execOutputCap = 8 << 20
+	execKillWait  = 5 * time.Second
+)
 
 var errExecOutputCap = errors.New("command output exceeds the buffered exec cap")
 
@@ -37,7 +40,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	req, ok := decodeBody[ExecRequest](w, r)
+	req, ok := decodeBodyStrict[ExecRequest](w, r)
 	if !ok {
 		return
 	}
@@ -71,7 +74,6 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutSeconds)*time.Second)
 		defer cancel()
 	}
-	// silkd kills a non-detached child when its connection drops, so a canceled ctx ends the command
 	stop := context.AfterFunc(ctx, func() { _ = guest.Close() })
 	defer func() {
 		stop()
@@ -97,7 +99,11 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
 		return
 	}
-	resp, err := collectExec(guest)
+	resp, pid, err := collectExec(guest)
+	if err != nil && pid != 0 {
+		// a dropped connection only reaches a child that writes; a silent one needs the kill
+		s.killExec(ctx, id, token, pid)
+	}
 	var silkdErr *wire.ErrorResp
 	switch {
 	case err == nil:
@@ -118,30 +124,50 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func collectExec(guest net.Conn) (ExecResponse, error) {
+func (s *Server) killExec(ctx context.Context, id, token string, pid uint32) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), execKillWait)
+	defer cancel()
+	sock, err := s.mgr.WakeAgentSocket(ctx, id, token)
+	if err == nil {
+		var guest net.Conn
+		if guest, err = s.dialer.DialSilkd(ctx, sock); err == nil {
+			defer func() { _ = guest.Close() }()
+			frame, _ := wire.EncodeRequest(wire.Kill{PID: pid})
+			if _, err = guest.Write(append(frame, '\n')); err == nil {
+				wire.NewFrameScanner(guest).Scan()
+				return
+			}
+		}
+	}
+	log.WithFunc("server.killExec").Errorf(ctx, err, "kill exec pid %d in %s", pid, id)
+}
+
+func collectExec(guest net.Conn) (resp ExecResponse, pid uint32, err error) {
 	var stdout, stderr []byte
 	sc := wire.NewFrameScanner(guest)
 	for sc.Scan() {
 		frame, err := wire.DecodeResponse(sc.Bytes())
 		if err != nil {
-			return ExecResponse{}, err
+			return ExecResponse{}, pid, err
 		}
 		switch f := frame.(type) {
+		case *wire.Started:
+			pid = f.PID
 		case *wire.Stdout:
 			stdout = append(stdout, f.Data...)
 		case *wire.Stderr:
 			stderr = append(stderr, f.Data...)
 		case *wire.Exit:
-			return ExecResponse{ExitCode: f.Code, Stdout: string(stdout), Stderr: string(stderr)}, nil
+			return ExecResponse{ExitCode: f.Code, Stdout: string(stdout), Stderr: string(stderr)}, 0, nil
 		case *wire.ErrorResp:
-			return ExecResponse{}, f
+			return ExecResponse{}, 0, f
 		}
 		if len(stdout)+len(stderr) > execOutputCap {
-			return ExecResponse{}, errExecOutputCap
+			return ExecResponse{}, pid, errExecOutputCap
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return ExecResponse{}, err
+		return ExecResponse{}, pid, err
 	}
-	return ExecResponse{}, io.ErrUnexpectedEOF
+	return ExecResponse{}, pid, io.ErrUnexpectedEOF
 }

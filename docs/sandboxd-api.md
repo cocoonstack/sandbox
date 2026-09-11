@@ -528,12 +528,15 @@ HTTP/2 through a TLS proxy:
 
 → `200 {"exit_code": 0, "stdout": "v22.23.2\n", "stderr": ""}`. The command
 runs to completion (no stdin, no streaming, no detach — use the relay for
-those); `timeout_seconds` 0 means no limit beyond the request itself, and a
-timeout closes the guest connection, which kills the command, then answers
-504. 400 empty `argv`, negative `timeout_seconds`, or a silkd `bad_request`;
-401 missing bearer token; 404 unknown sandbox or wrong token; 413 when
-stdout+stderr exceed 8 MiB; 502 guest unreachable or any other silkd error.
-A hibernated sandbox wakes transparently like on the relay.
+those); `timeout_seconds` 0 means no limit beyond the request itself. When
+the node gives up on a started command — timeout, client gone, output cap —
+it kills the child through silkd before answering, so nothing keeps running
+behind a 504. Output comes back as JSON strings: bytes that are not valid
+UTF-8 are replaced with U+FFFD, so binary output belongs on the relay. 400
+empty `argv`, negative `timeout_seconds`, an unknown field, or a silkd
+`bad_request`; 401 missing bearer token; 404 unknown sandbox or wrong token;
+413 when stdout+stderr exceed 8 MiB; 502 guest unreachable or any other
+silkd error. A hibernated sandbox wakes transparently like on the relay.
 
 ## GET /v1/sandboxes/{id}/owner
 
