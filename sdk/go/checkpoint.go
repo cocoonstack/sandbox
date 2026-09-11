@@ -32,8 +32,8 @@ func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error)
 	for _, opt := range opts {
 		opt(&claim)
 	}
-	if len(claim.Volumes) > 0 {
-		return nil, errors.New("checkpoint claims do not accept WithVolumes")
+	if len(claim.Volumes) > 0 || claim.ClaimRef != "" {
+		return nil, errors.New("checkpoint claims do not accept WithVolumes or WithClaimRef")
 	}
 	if err := claim.rejectPinnedAxes(); err != nil {
 		return nil, err

@@ -45,6 +45,17 @@ func TestCheckpointNewFollowsRedirect(t *testing.T) {
 	}
 }
 
+func TestCheckpointNewRejectsClaimRefLocally(t *testing.T) {
+	ck := &Checkpoint{}
+	sb, err := ck.New(t.Context(), WithClaimRef("ns/claim"))
+	if err == nil || !strings.Contains(err.Error(), "WithClaimRef") {
+		t.Errorf("err %v, want local WithClaimRef rejection", err)
+	}
+	if sb != nil {
+		t.Errorf("sandbox %+v, want nil", sb)
+	}
+}
+
 func TestCheckpointNewRedirectAllCandidatesFail(t *testing.T) {
 	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
