@@ -247,7 +247,7 @@ func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap,
 // syncClaims flushes a lagging journal so a hibernate retry cannot report a false success.
 func (m *Manager) syncClaims(ctx context.Context, sb *types.Sandbox) error {
 	if !m.store.synced() {
-		if err := m.store.commit(m.claimsSnapshot()); err != nil {
+		if err := m.store.commit(m.store.mark()); err != nil {
 			return err
 		}
 	}

@@ -438,11 +438,7 @@ func jsonText(v any) string {
 type props map[string]map[string]any
 
 func str(description string) map[string]any {
-	p := map[string]any{"type": "string"}
-	if description != "" {
-		p["description"] = description
-	}
-	return p
+	return map[string]any{"type": "string", "description": description}
 }
 
 func integer(description string) map[string]any {

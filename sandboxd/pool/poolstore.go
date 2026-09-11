@@ -87,8 +87,6 @@ func (m *Manager) adoptPersistedPools(ctx context.Context) error {
 		logger.Warnf(ctx, "config.json pools differ from the API-applied set and are overridden; delete %s to return to config-owned pools", m.poolStore.path)
 	}
 	clear(m.pools)
-	m.idleEnabled = m.idleDefault > 0
-	m.archiveEnabled = m.archiveAfterDefault > 0
 	for _, spec := range pf.Pools {
 		spec = normalizePoolSpec(spec)
 		if err := m.validate(spec.PoolKey); err != nil {
@@ -101,12 +99,6 @@ func (m *Manager) adoptPersistedPools(ctx context.Context) error {
 		p.applySpec(spec)
 		m.adoptGolden(p)
 		m.pools[spec.PoolKey] = p
-		if spec.IdleHibernateSeconds > 0 {
-			m.idleEnabled = true
-		}
-		if spec.ArchiveAfterSeconds > 0 {
-			m.archiveEnabled = true
-		}
 	}
 	logger.Infof(ctx, "restored %d API-applied pools from pools.json", len(pf.Pools))
 	return nil
