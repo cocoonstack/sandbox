@@ -4,13 +4,10 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -108,28 +105,10 @@ func openTarget(ctx context.Context, sb *sandbox.Sandbox) error {
 	return nil
 }
 
-// cdpJSON hand-rolls one HTTP request over the port relay; Chrome's DevTools
-// Host allowlist accepts "localhost" but not proxied vhosts.
 func cdpJSON(ctx context.Context, sb *sandbox.Sandbox, method, path string) (map[string]any, error) {
-	pc, err := sb.DialPort(ctx, cdpPort)
+	body, err := harness.HTTPOverPort(ctx, sb, cdpPort, method, path, nil)
 	if err != nil {
 		return nil, err
-	}
-	defer func() { _ = pc.Close() }()
-	if _, err = fmt.Fprintf(pc, "%s %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", method, path); err != nil {
-		return nil, err
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(pc), nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(body)))
 	}
 	var out map[string]any
 	if err := json.Unmarshal(body, &out); err != nil {

@@ -4,14 +4,11 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -87,7 +84,7 @@ func run(addr, token, template string) error {
 func waitScreenshot(ctx context.Context, sb *sandbox.Sandbox) error {
 	deadline := time.Now().Add(serverWait)
 	for {
-		body, err := serverRequest(ctx, sb, "GET", "/screenshot", nil)
+		body, err := harness.HTTPOverPort(ctx, sb, serverPort, "GET", "/screenshot", nil)
 		if err == nil {
 			if bytes.HasPrefix(body, pngMagic) {
 				fmt.Printf("  server: /screenshot → PNG, %d bytes\n", len(body))
@@ -103,7 +100,7 @@ func waitScreenshot(ctx context.Context, sb *sandbox.Sandbox) error {
 }
 
 func accessibilityTree(ctx context.Context, sb *sandbox.Sandbox) error {
-	body, err := serverRequest(ctx, sb, "GET", "/accessibility", nil)
+	body, err := harness.HTTPOverPort(ctx, sb, serverPort, "GET", "/accessibility", nil)
 	if err != nil {
 		return fmt.Errorf("accessibility: %w", err)
 	}
@@ -124,7 +121,7 @@ func accessibilityTree(ctx context.Context, sb *sandbox.Sandbox) error {
 func clickAndReadCursor(ctx context.Context, sb *sandbox.Sandbox) error {
 	action := fmt.Sprintf("import pyautogui; pyautogui.moveTo(%d, %d); pyautogui.click()", clickX, clickY)
 	req, _ := json.Marshal(map[string]any{"command": []string{"python", "-c", action}, "shell": false, "timeout": 15})
-	body, err := serverRequest(ctx, sb, "POST", "/execute", req)
+	body, err := harness.HTTPOverPort(ctx, sb, serverPort, "POST", "/execute", req)
 	if err != nil {
 		return fmt.Errorf("execute: %w", err)
 	}
@@ -139,7 +136,7 @@ func clickAndReadCursor(ctx context.Context, sb *sandbox.Sandbox) error {
 	if exec.Status != "success" || exec.ReturnCode != 0 {
 		return fmt.Errorf("execute: %s rc=%d: %s", exec.Status, exec.ReturnCode, strings.TrimSpace(exec.Error))
 	}
-	body, err = serverRequest(ctx, sb, "GET", "/cursor_position", nil)
+	body, err = harness.HTTPOverPort(ctx, sb, serverPort, "GET", "/cursor_position", nil)
 	if err != nil {
 		return fmt.Errorf("cursor_position: %w", err)
 	}
@@ -152,29 +149,4 @@ func clickAndReadCursor(ctx context.Context, sb *sandbox.Sandbox) error {
 	}
 	fmt.Printf("  server: /execute pyautogui click → /cursor_position %v\n", pos)
 	return nil
-}
-
-// serverRequest hand-rolls one HTTP request to osworld-server over the port relay.
-func serverRequest(ctx context.Context, sb *sandbox.Sandbox, method, path string, body []byte) ([]byte, error) {
-	pc, err := sb.DialPort(ctx, serverPort)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = pc.Close() }()
-	if _, err = fmt.Fprintf(pc, "%s %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", method, path, len(body), body); err != nil {
-		return nil, err
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(pc), nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	out, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(out)))
-	}
-	return out, nil
 }
