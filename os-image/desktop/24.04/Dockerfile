@@ -1,0 +1,173 @@
+# desktop sandbox flavor: base + a GNOME session on Xvfb with the OSWorld
+# guest server (osworld-server) on guest loopback 5000, the OSWorld Chrome
+# CDP bridge on loopback 9222, and the OSWorld app set (Chrome, LibreOffice,
+# GIMP, VLC). The microVM has no display device, so the session runs on a
+# virtual framebuffer with Mesa software GL; nothing needs a VT or DRM.
+ARG BASE_IMAGE=ghcr.io/cocoonstack/sandbox/base:24.04
+
+FROM ${BASE_IMAGE}
+ENV DEBIAN_FRONTEND=noninteractive
+# See base: cache-busts the layers below when non-Dockerfile inputs change.
+ARG INPUTS_HASH=
+
+# xlang-ai/osworld-server pin; the guest half of the OSWorld control contract.
+ARG OSWORLD_SERVER_REF=a3cc3f0c64e463f020d1a44780307e9b46cbcab1
+ARG SCREEN=1920x1080
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb xauth x11-utils x11-xserver-utils dbus-x11 dbus-user-session \
+    libgl1-mesa-dri libglx-mesa0 \
+    gnome-session gnome-shell gnome-settings-daemon gnome-control-center \
+    ubuntu-session yaru-theme-gnome-shell yaru-theme-gtk yaru-theme-icon \
+    gnome-shell-extension-ubuntu-dock gnome-shell-extension-appindicator \
+    nautilus gnome-terminal gnome-text-editor gnome-calculator eog evince \
+    fonts-ubuntu fonts-dejavu-core fonts-liberation fonts-noto-color-emoji \
+    at-spi2-core gir1.2-atspi-2.0 python3-pyatspi gsettings-desktop-schemas dconf-cli \
+    gnome-screenshot scrot wmctrl xdotool xclip ffmpeg socat sudo xdg-user-dirs locales \
+    python3 python3-venv python3-tk python3-dev python3-gi \
+    libreoffice gimp vlc \
+    pulseaudio pulseaudio-utils \
+    gnupg \
+    && install -d -m 0755 /etc/apt/keyrings \
+    && curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
+      | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+      > /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/* \
+    && locale-gen en_US.UTF-8 && update-locale LANG=en_US.UTF-8 \
+    # Chrome userns sandboxing cannot function in-guest; the microVM is the
+    # isolation boundary. OSWorld launches "google-chrome" by name, so the
+    # wrapper shadows the packaged launcher on PATH and in the .desktop entry.
+    # Chrome 136+ ignores --remote-debugging-port on the default profile dir,
+    # and OSWorld task configs pass that flag without a --user-data-dir.
+    && printf '%s\n' \
+      '#!/bin/sh' \
+      'exec /opt/google/chrome/google-chrome --user-data-dir=/home/user/.config/google-chrome-osworld --no-sandbox --disable-dev-shm-usage --disable-gpu --test-type "$@"' \
+      > /usr/local/bin/google-chrome \
+    && chmod 0755 /usr/local/bin/google-chrome \
+    && sed -i 's|^Exec=/usr/bin/google-chrome-stable|Exec=/usr/local/bin/google-chrome|' /usr/share/applications/google-chrome.desktop \
+    # osworld-server: pinned checkout, venv on system site-packages so the
+    # apt pyatspi binding is importable; PyAutoGUI/python3-xlib pins mirror
+    # its requirements.txt.
+    && git clone -q https://github.com/xlang-ai/osworld-server.git /opt/osworld-server \
+    && git -C /opt/osworld-server checkout -q "${OSWORLD_SERVER_REF}" \
+    && rm -rf /opt/osworld-server/.git \
+    && python3 -m venv --system-site-packages /opt/osworld-server/.venv \
+    && /opt/osworld-server/.venv/bin/pip install --no-cache-dir \
+      "python3-xlib==0.15" "PyAutoGUI==0.9.54" Pillow flask fastapi uvicorn websockets numpy lxml requests \
+    # The desktop user is uid 1000 like the OSWorld AMI (units below assume
+    # /run/user/1000); the stock ubuntu user gives up the uid.
+    && if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi \
+    && useradd -m -u 1000 -s /bin/bash -G sudo,audio,video user \
+    && echo 'user:password' | chpasswd \
+    && echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user \
+    && chmod 0440 /etc/sudoers.d/user \
+    && install -d -o user -g user /home/user/Desktop /home/user/Documents /home/user/Downloads \
+    # python-xlib insists the XAUTHORITY file exists even though Xvfb -ac ignores it.
+    && install -o user -g user -m 0600 /dev/null /home/user/.Xauthority \
+    && chown -R user:user /opt/osworld-server \
+    && install -d /var/lib/systemd/linger && touch /var/lib/systemd/linger/user \
+    # Session defaults: a11y on (AT-SPI tree), no lock/idle/animations.
+    && install -d /etc/dconf/profile /etc/dconf/db/local.d \
+    && printf 'user-db:user\nsystem-db:local\n' > /etc/dconf/profile/user \
+    && printf '%s\n' \
+      '[org/gnome/desktop/interface]' \
+      'toolkit-accessibility=true' \
+      'enable-animations=false' \
+      '[org/gnome/desktop/session]' \
+      'idle-delay=uint32 0' \
+      '[org/gnome/desktop/screensaver]' \
+      'lock-enabled=false' \
+      'idle-activation-enabled=false' \
+      '[org/gnome/settings-daemon/plugins/power]' \
+      'sleep-inactive-ac-type='"'"'nothing'"'"'' \
+      '[org/gnome/shell]' \
+      'welcome-dialog-last-shown-version='"'"'999'"'"'' \
+      > /etc/dconf/db/local.d/00-sandbox \
+    && dconf update \
+    && printf '%s\n' \
+      '[Unit]' \
+      'Description=virtual X display for the desktop session' \
+      'After=silkd.service' \
+      '' \
+      '[Service]' \
+      'Type=simple' \
+      "ExecStart=/usr/bin/Xvfb :1 -screen 0 ${SCREEN}x24 -ac -noreset -nolisten tcp +extension GLX +extension RANDR +render" \
+      'Restart=always' \
+      'RestartSec=1s' \
+      '' \
+      '[Install]' \
+      'WantedBy=multi-user.target' \
+      > /etc/systemd/system/xvfb.service \
+    && printf '%s\n' \
+      '[Unit]' \
+      'Description=GNOME session on the virtual display' \
+      'Requires=xvfb.service user@1000.service' \
+      'After=xvfb.service user@1000.service' \
+      '' \
+      '[Service]' \
+      'Type=simple' \
+      'User=user' \
+      'WorkingDirectory=/home/user' \
+      'Environment=DISPLAY=:1' \
+      'Environment=HOME=/home/user' \
+      'Environment=XDG_RUNTIME_DIR=/run/user/1000' \
+      'Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus' \
+      'Environment=XDG_SESSION_TYPE=x11' \
+      'Environment=XDG_SESSION_CLASS=user' \
+      'Environment=XDG_CURRENT_DESKTOP=ubuntu:GNOME' \
+      'Environment=GNOME_SHELL_SESSION_MODE=ubuntu' \
+      'Environment=LIBGL_ALWAYS_SOFTWARE=1' \
+      'Environment=GTK_MODULES=gail:atk-bridge' \
+      'Environment=QT_ACCESSIBILITY=1' \
+      'Environment=NO_AT_BRIDGE=0' \
+      'ExecStartPre=/usr/bin/systemctl --user import-environment DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP GNOME_SHELL_SESSION_MODE LIBGL_ALWAYS_SOFTWARE GTK_MODULES QT_ACCESSIBILITY NO_AT_BRIDGE' \
+      'ExecStart=/usr/bin/gnome-session --session=ubuntu' \
+      'Restart=always' \
+      'RestartSec=2s' \
+      '' \
+      '[Install]' \
+      'WantedBy=multi-user.target' \
+      > /etc/systemd/system/desktop-session.service \
+    && printf '%s\n' \
+      '[Unit]' \
+      'Description=OSWorld guest server on loopback 5000' \
+      'After=desktop-session.service' \
+      'Wants=desktop-session.service' \
+      '' \
+      '[Service]' \
+      'Type=simple' \
+      'User=user' \
+      'WorkingDirectory=/opt/osworld-server' \
+      'Environment=DISPLAY=:1' \
+      'Environment=HOME=/home/user' \
+      'Environment=XDG_RUNTIME_DIR=/run/user/1000' \
+      'Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus' \
+      'Environment=PATH=/opt/osworld-server/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+      'Environment=OSWORLD_SERVER_HOST=127.0.0.1' \
+      'Environment=OSWORLD_SERVER_PORT=5000' \
+      'ExecStart=/opt/osworld-server/.venv/bin/python /opt/osworld-server/main.py' \
+      'Restart=always' \
+      'RestartSec=2s' \
+      '' \
+      '[Install]' \
+      'WantedBy=multi-user.target' \
+      > /etc/systemd/system/osworld-server.service \
+    # OSWorld task configs start Chrome with --remote-debugging-port=1337 and
+    # reach CDP on 9222; the bridge is what the official guest image runs.
+    && printf '%s\n' \
+      '[Unit]' \
+      'Description=OSWorld Chrome CDP bridge 9222 -> 1337' \
+      'After=xvfb.service' \
+      '' \
+      '[Service]' \
+      'Type=simple' \
+      'ExecStart=/usr/bin/socat TCP-LISTEN:9222,bind=127.0.0.1,fork,reuseaddr TCP:127.0.0.1:1337' \
+      'Restart=always' \
+      'RestartSec=2s' \
+      '' \
+      '[Install]' \
+      'WantedBy=multi-user.target' \
+      > /etc/systemd/system/cdp-bridge.service \
+    && systemctl enable xvfb.service desktop-session.service osworld-server.service cdp-bridge.service

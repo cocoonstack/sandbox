@@ -40,6 +40,9 @@ vsock-only I/O (hardened default); `net=egress` attaches a bridge/CNI NIC.
 - [Browser sandboxes](browser.md) — headless Chromium with CDP through
   the relay: Playwright/Puppeteer access, checkpoint/branch of a live
   browser
+- [Desktop sandboxes](desktop.md) — the GNOME flavor with the OSWorld
+  guest server: claim shape, the guest control contract over the relay,
+  running the OSWorld harness on sandboxd
 - [Guarded egress](egress.md) — allow-listed, audited outbound access with
   host-side credential injection, on both lanes: no NIC (none) or an
   nftables-locked NIC (egress)
