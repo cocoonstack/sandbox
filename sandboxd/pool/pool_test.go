@@ -795,6 +795,9 @@ type fakeEngine struct {
 	exportContent                     []byte
 	caInstalls                        []string
 	warmups                           [][]string
+	warmupSocks                       []string
+	warmupSnaps                       []int
+	warmupErr                         error
 	staleReconciles                   []string
 	installCAErr                      error
 	diskAttachErr                     error
@@ -1031,14 +1034,13 @@ func (f *fakeEngine) InstallCACert(_ context.Context, vsockSocket string, _ []by
 	return f.installCAErr
 }
 
-func (f *fakeEngine) Warmup(_ context.Context, _ string, argv []string) error {
+func (f *fakeEngine) Warmup(_ context.Context, sock string, argv []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.snapSaves) > 0 {
-		return fmt.Errorf("warmup after snapshot")
-	}
 	f.warmups = append(f.warmups, argv)
-	return nil
+	f.warmupSocks = append(f.warmupSocks, sock)
+	f.warmupSnaps = append(f.warmupSnaps, len(f.snapSaves))
+	return f.warmupErr
 }
 
 func (f *fakeEngine) DiskAttach(_ context.Context, _ string, spec engine.VolumeSpec) error {
