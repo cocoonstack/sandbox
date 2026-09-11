@@ -13,9 +13,6 @@ import (
 )
 
 const (
-	// portWriteChunk keeps each data frame well under silkd's 8MiB frame cap.
-	portWriteChunk = 1 << 20
-
 	// portReadBuf fits silkd's data frames in one buffered read.
 	portReadBuf = 64 << 10
 )
@@ -69,7 +66,7 @@ func (g *guestPortConn) Read(p []byte) (int, error) {
 func (g *guestPortConn) Write(p []byte) (int, error) {
 	written := 0
 	for len(p) > 0 {
-		n := min(len(p), portWriteChunk)
+		n := min(len(p), wire.PortWriteChunk)
 		// the hot relay path reuses one buffer instead of allocating per chunk.
 		g.wbuf = wire.AppendBulkRequest(g.wbuf, "data", p[:n])
 		if _, err := g.Conn.Write(g.wbuf); err != nil {

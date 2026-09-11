@@ -11,9 +11,6 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
-// fsChunk matches silkd's BULK_CHUNK.
-const fsChunk = 256 * 1024
-
 // respPtr is a frame type's pointer form, so a non-Response T fails to compile.
 type respPtr[T any] interface {
 	*T
@@ -143,7 +140,7 @@ func streamRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.R
 // uploadStream chunks r into Data frames terminated by DataEnd; shared by the
 // FsWrite payload and the FsPush tar stream.
 func uploadStream(conn *silkd.Conn, r io.Reader) error {
-	buf := make([]byte, fsChunk)
+	buf := make([]byte, wire.BulkChunk)
 	for {
 		n, readErr := r.Read(buf)
 		if n > 0 {

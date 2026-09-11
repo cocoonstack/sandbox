@@ -14,10 +14,6 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
-// portWriteChunk keeps a data frame (payload ×4/3 base64 + envelope) well
-// under wire.MaxFrame.
-const portWriteChunk = 1 << 20
-
 var _ net.Conn = (*PortConn)(nil)
 
 // PortConn is a net.Conn to a TCP port inside the sandbox, relayed over the
@@ -39,7 +35,7 @@ func (p *PortConn) Read(b []byte) (int, error) { return p.out.Read(b) }
 func (p *PortConn) Write(b []byte) (int, error) {
 	sent := 0
 	for len(b) > 0 {
-		chunk := b[:min(len(b), portWriteChunk)]
+		chunk := b[:min(len(b), wire.PortWriteChunk)]
 		if err := p.conn.Send(&wire.Data{Data: chunk}); err != nil {
 			return sent, err
 		}

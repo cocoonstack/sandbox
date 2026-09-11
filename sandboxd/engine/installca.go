@@ -41,7 +41,7 @@ func (e *Engine) silkdWriteFile(ctx context.Context, vsockSocket, path string, m
 		if serr := s.send(wire.FsWrite{Path: path, Mode: &mode}); serr != nil {
 			return serr
 		}
-		for chunk := range slices.Chunk(data, silkdChunk) {
+		for chunk := range slices.Chunk(data, wire.BulkChunk) {
 			if serr := s.send(wire.Data{Data: chunk}); serr != nil {
 				return serr
 			}
