@@ -5,6 +5,8 @@ uses. Prints MCP-E2E PASS.
     python3 e2e.py --bin ./sandbox-mcp --addr 127.0.0.1:7777 --token e2e --template rt2:24.04
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import subprocess
@@ -12,13 +14,17 @@ import sys
 
 
 class McpClient:
-    def __init__(self, argv):
-        self.proc = subprocess.Popen(
-            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE
-        )
+    def __init__(self, argv: list[str]) -> None:
+        self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         self.seq = 0
 
-    def call(self, method, params=None):
+    def __enter__(self) -> McpClient:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def call(self, method: str, params: dict | None = None) -> dict:
         self.seq += 1
         req = {"jsonrpc": "2.0", "id": self.seq, "method": method}
         if params is not None:
@@ -31,7 +37,7 @@ class McpClient:
         assert "error" not in resp, resp
         return resp["result"]
 
-    def tool(self, tool_name, **arguments):
+    def tool(self, tool_name: str, **arguments: object) -> object:
         result = self.call("tools/call", {"name": tool_name, "arguments": arguments})
         text = result["content"][0]["text"]
         if result.get("isError"):
@@ -41,9 +47,14 @@ class McpClient:
         except ValueError:
             return text
 
-    def close(self):
+    def close(self) -> None:
         self.proc.stdin.close()
-        self.proc.wait(timeout=10)
+        self.proc.stdout.close()
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait()
 
 
 def main() -> int:
@@ -54,18 +65,11 @@ def main() -> int:
     parser.add_argument("--template", default="rt:24.04")
     args = parser.parse_args()
 
-    mcp = McpClient(
-        [args.bin, "-addr", args.addr, "-token", args.token, "-template", args.template]
-    )
-    try:
-        init = mcp.call(
-            "initialize", {"protocolVersion": "2024-11-05", "capabilities": {}}
-        )
+    with McpClient([args.bin, "-addr", args.addr, "-token", args.token, "-template", args.template]) as mcp:
+        init = mcp.call("initialize", {"protocolVersion": "2024-11-05", "capabilities": {}})
         assert init["serverInfo"]["name"] == "sandbox-mcp", init
         tools = {t["name"] for t in mcp.call("tools/list")["tools"]}
-        assert {"create_sandbox", "exec", "checkpoint", "branch_checkpoint"} <= tools, (
-            tools
-        )
+        assert {"create_sandbox", "exec", "checkpoint", "branch_checkpoint"} <= tools, tools
         print(f"  initialize + tools/list ok ({len(tools)} tools)")
 
         sandbox_id = mcp.tool("create_sandbox")["sandbox_id"]
@@ -75,15 +79,11 @@ def main() -> int:
 
         mcp.tool("write_file", sandbox_id=sandbox_id, path="/root/m.txt", content="v1")
         assert mcp.tool("read_file", sandbox_id=sandbox_id, path="/root/m.txt") == "v1"
-        names = {
-            e["name"] for e in mcp.tool("list_dir", sandbox_id=sandbox_id, path="/root")
-        }
+        names = {e["name"] for e in mcp.tool("list_dir", sandbox_id=sandbox_id, path="/root")}
         assert "m.txt" in names, names
         print("  files ok")
 
-        ckpt = mcp.tool("checkpoint", sandbox_id=sandbox_id, name="mcp-step")[
-            "checkpoint_id"
-        ]
+        ckpt = mcp.tool("checkpoint", sandbox_id=sandbox_id, name="mcp-step")["checkpoint_id"]
         mcp.tool("write_file", sandbox_id=sandbox_id, path="/root/m.txt", content="v2")
         branch = mcp.tool("branch_checkpoint", checkpoint_id=ckpt)["sandbox_id"]
         assert mcp.tool("read_file", sandbox_id=branch, path="/root/m.txt") == "v1"
@@ -109,8 +109,6 @@ def main() -> int:
         info = mcp.tool("node_info")
         assert "pools" in info, info
         print("  cleanup + node_info ok")
-    finally:
-        mcp.close()
     print("MCP-E2E PASS")
     return 0
 

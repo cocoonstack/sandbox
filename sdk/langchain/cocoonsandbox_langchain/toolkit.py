@@ -8,12 +8,13 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from collections.abc import Callable
 
 from cocoonsandbox import Client, Sandbox
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-# Mirrors the MCP exec contract the tool description states.
+# a socket inactivity bound, not a wall clock; the tool description states it
 CALL_TIMEOUT = 300.0
 
 
@@ -72,7 +73,7 @@ class CocoonToolkit:
                 "Returns stdout; a non-empty stderr is appended as a 'stderr:' "
                 "line and a non-zero status as an 'exit code: N' line; a "
                 "command that prints nothing and exits 0 returns '(no output)'. "
-                "The call is cut off after 5 minutes. "
+                "The call is cut off after 5 minutes without output. "
                 "Files and installed packages persist across calls; environment "
                 "variables and the working directory do not.",
                 ExecInput,
@@ -126,7 +127,7 @@ class CocoonToolkit:
             return self._client.checkpoint(self._from_checkpoint).new(ttl_seconds=self._ttl)
         return self._client.new(self._template, net=self._net, ttl_seconds=self._ttl)
 
-    def _tool(self, name: str, description: str, schema: type[BaseModel], func) -> StructuredTool:
+    def _tool(self, name: str, description: str, schema: type[BaseModel], func: Callable[..., str]) -> StructuredTool:
         async def arun(**kwargs):
             return await asyncio.to_thread(func, **kwargs)
 

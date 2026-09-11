@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
-from cocoonsandbox import SilkdError
+from cocoonsandbox import ProtocolError, SilkdError
 
 from cocoonsandbox_openai import CocoonSandboxClient, CocoonSandboxClientOptions, CocoonSandboxSessionState
 
@@ -68,7 +68,6 @@ def test_create_claims_and_state_round_trips(node):
 
 
 def test_exec_maps_stdio_and_exit(node, monkeypatch):
-
     class FakeSandbox:
         def __init__(self, **kw):
             self.id = "sb_1"
@@ -102,6 +101,21 @@ def test_read_missing_maps_to_filenotfound(node, monkeypatch):
         monkeypatch.setattr(inner, "_sandbox", lambda timeout=None: FakeSandbox())
         with pytest.raises(FileNotFoundError):
             await inner.read(Path("/nope"))
+
+    asyncio.run(go())
+
+
+def test_running_is_false_when_the_dial_fails(node, monkeypatch):
+    class FakeSandbox:
+        def stat(self, path):
+            raise ProtocolError("dial 127.0.0.1:1: connection refused")
+
+    async def go():
+        client = CocoonSandboxClient()
+        session = await client.create(options=CocoonSandboxClientOptions(addr=node))
+        inner = session._inner
+        monkeypatch.setattr(inner, "_sandbox", lambda timeout=None: FakeSandbox())
+        assert await inner.running() is False
 
     asyncio.run(go())
 
