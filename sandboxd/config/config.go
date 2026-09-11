@@ -45,7 +45,7 @@ type PoolSpec struct {
 	// Egress is this pool's allow-list, intersected with the tenant's; nil denies all egress.
 	Egress *egress.Policy `json:"egress,omitempty"`
 
-	// Warmup runs in the golden VM before its snapshot, so every clone starts with its page cache.
+	// Warmup runs in the golden VM before its snapshot and again in each clone after restore.
 	Warmup []string `json:"warmup,omitempty"`
 
 	// IdleHibernateSeconds, when >0, hibernates idle claims after that many seconds.

@@ -90,6 +90,9 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 		}
 		sb, err = m.readyBounded(ctx, sb, time.Now().Add(warmProbeTimeout))
 	}
+	if err == nil {
+		err = m.warmClone(ctx, p.key, sb)
+	}
 	keep := false
 	var fails int
 	var wait time.Duration
@@ -216,6 +219,20 @@ func (m *Manager) poolWarmup(key types.PoolKey) []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.poolWarmups[key]
+}
+
+// warmClone re-runs the pool warmup in a restored clone: a restore maps the golden memory lazily,
+// so the pages the warmup touched fault in here, at refill, instead of under the first claim.
+func (m *Manager) warmClone(ctx context.Context, key types.PoolKey, sb *types.Sandbox) error {
+	warmup := m.poolWarmup(key)
+	if len(warmup) == 0 {
+		return nil
+	}
+	if err := m.eng.Warmup(ctx, sb.VsockSocket, warmup); err != nil {
+		m.destroy(ctx, sb.VMName)
+		return fmt.Errorf("clone warmup: %w", err)
+	}
+	return nil
 }
 
 // writeGoldenCASidecar records or clears the baked-CA fingerprint; a rotated CA forces a rebuild.
