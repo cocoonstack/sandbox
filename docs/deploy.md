@@ -124,6 +124,7 @@ fragment the warm pools):
 | `medium` | 2 | 1G |
 | `large` | 4 | 4G |
 | `xlarge` | 4 | 8G |
+| `2xlarge` | 8 | 16G |
 
 ### Dataset volumes
 

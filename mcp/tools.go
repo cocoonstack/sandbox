@@ -14,7 +14,7 @@ import (
 var tools = []tool{
 	{
 		"create_sandbox", "Claim a fresh microVM sandbox and return its id plus deadline. Warm claims take milliseconds; a cold template boots in well under a second. Every sandbox-scoped tool takes the returned sandbox_id. The sandbox is destroyed at its deadline unless released earlier; nothing renews it.",
-		schema(props{"template": str("template image ref, or a name published by promote; empty uses the server default"), "net": str("network lane: none (default, no NIC, vsock-only I/O) or egress (bridge NIC, outbound network)"), "size": str("resource tier: small (default), medium, large, xlarge"), "ttl_seconds": integer("sandbox lifetime in seconds; 0 means one hour, and nothing renews it")}), toolCreateSandbox,
+		schema(props{"template": str("template image ref, or a name published by promote; empty uses the server default"), "net": str("network lane: none (default, no NIC, vsock-only I/O) or egress (bridge NIC, outbound network)"), "size": str("resource tier: small (default), medium, large, xlarge, 2xlarge"), "ttl_seconds": integer("sandbox lifetime in seconds; 0 means one hour, and nothing renews it")}), toolCreateSandbox,
 	},
 	{
 		"exec", "Run a shell command in a sandbox, wait for it to exit, and return stdout, stderr, and the exit code as JSON. The call is cut off after 5 minutes; for servers or long jobs use spawn instead. A hibernated sandbox wakes transparently on this call.",
