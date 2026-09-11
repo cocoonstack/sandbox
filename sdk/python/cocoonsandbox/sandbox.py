@@ -406,7 +406,13 @@ class Sandbox:
     def _done_rpc(self, op: str, **fields) -> None:
         self._call(op, "done", **fields)
 
-    def _drain_proc(self, op: str, pid: int, on_stdout, on_stderr) -> int | None:
+    def _drain_proc(
+        self,
+        op: str,
+        pid: int,
+        on_stdout: Callable[[bytes], object] | None,
+        on_stderr: Callable[[bytes], object] | None,
+    ) -> int | None:
         with self._dial() as conn:
             conn.send(op, pid=pid)
             return _pump_stdio(conn, on_stdout, on_stderr)
@@ -541,7 +547,9 @@ def _feed_stdin(conn: Conn, stdin: bytes) -> None:
         conn.send("stdin_close")
 
 
-def _pump_stdio(conn: Conn, on_stdout, on_stderr) -> int | None:
+def _pump_stdio(
+    conn: Conn, on_stdout: Callable[[bytes], object] | None, on_stderr: Callable[[bytes], object] | None
+) -> int | None:
     """Streams stdout/stderr frames into the callbacks until the terminal
     frame: the exit code, or None when the stream ends with done."""
     for frame in conn.recv_until("exit", "done"):

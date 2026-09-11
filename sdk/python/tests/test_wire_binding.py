@@ -60,7 +60,7 @@ CASES = [
     ),
     ("req_git_push", [{"type": "done"}], lambda sb, f: sb.git_push(f["path"], auth=f["auth"])),
     ("req_git_pull", [{"type": "done"}], lambda sb, f: sb.git_pull(f["path"], auth=f["auth"])),
-    ("req_pty_resize", [{"type": "done"}], lambda sb, f: _pty_stub(sb, f["pid"]).resize(f["cols"], f["rows"])),
+    ("req_pty_resize", [{"type": "done"}], lambda sb, f: Pty(sb, None, f["pid"]).resize(f["cols"], f["rows"])),
     ("req_exec_detach", [{"type": "started", "pid": 7}], lambda sb, f: sb.spawn(*f["argv"])),
     ("req_ps", [{"type": "procs", "procs": []}], lambda sb, f: sb.ps()),
     ("req_kill", [{"type": "done"}], lambda sb, f: sb.kill(f["pid"], signal=f["signal"])),
@@ -68,14 +68,14 @@ CASES = [
     ("req_attach", [{"type": "exit", "code": 0}], lambda sb, f: sb.attach(f["pid"])),
     ("req_fs_watch", [{"type": "ready"}], lambda sb, f: sb.watch(f["path"], recursive=f["recursive"]).close()),
     ("req_git_branch", [{"type": "done"}], lambda sb, f: sb.git_create_branch(f["path"], f["name"])),
-    ("req_session_rm", [{"type": "done"}], lambda sb, f: _session_stub(sb, f["id"]).close()),
+    ("req_session_rm", [{"type": "done"}], lambda sb, f: Session(sb, f["id"]).close()),
     (
         "req_lsp_start",
         [{"type": "lsp_started", "server_id": "lsp-1"}],
         lambda sb, f: sb.start_lsp(f["language"], root=f["root"]),
     ),
-    ("req_lsp_request", [{"type": "ready"}], lambda sb, f: _lsp_stub(sb, f["server_id"]).request().close()),
-    ("req_lsp_stop", [{"type": "done"}], lambda sb, f: _lsp_stub(sb, f["server_id"]).stop()),
+    ("req_lsp_request", [{"type": "ready"}], lambda sb, f: Lsp(sb, f["server_id"]).request().close()),
+    ("req_lsp_stop", [{"type": "done"}], lambda sb, f: Lsp(sb, f["server_id"]).stop()),
     ("req_port_forward", [{"type": "ready"}], lambda sb, f: sb.dial_port(f["port"]).close()),
     (
         "req_pty_open",
@@ -88,78 +88,10 @@ CASES = [
 UNSENT = {"req_session_create": {"id"}}
 
 
-class BranchActionConn:
-    """Records the action each git_branch verb puts on the wire."""
-
-    def __init__(self, sent):
-        self.sent = sent
-        self.action = ""
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        pass
-
-    def send(self, op, **fields):
-        self.action = fields.get("action")
-        self.sent.append(self.action)
-
-    def recv(self):
-        if self.action == "list":
-            return {"type": "git_branches", "branches": [], "current": ""}
-        return {"type": "done"}
-
-    def recv_until(self, *terminal):
-        yield self.recv()
-
-
-def _pty_stub(sb, pid):
-    return Pty(sb, None, pid)
-
-
-def _session_stub(sb, id):
-    return Session(sb, id)
-
-
-def _lsp_stub(sb, server_id):
-    return Lsp(sb, server_id)
-
-
-def _fake_sandbox(monkeypatch, replies):
-    """A Sandbox whose _dial yields a real Conn over a socketpair; a guest
-    thread records inbound frames and answers the scripted replies."""
-    sent = []
-    client_sock, guest_sock = socket.socketpair()
-
-    def guest():
-        reader = guest_sock.makefile("rb")
-        with contextlib.suppress(Exception):
-            line = reader.readline()
-            if line:
-                sent.append(json.loads(line))
-            for reply in replies:
-                guest_sock.sendall(json.dumps(reply).encode() + b"\n")
-            while True:
-                line = reader.readline()
-                if not line:
-                    break
-                sent.append(json.loads(line))
-        with contextlib.suppress(OSError):
-            guest_sock.close()
-
-    thread = threading.Thread(target=guest, daemon=True)
-    thread.start()
-
-    sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
-    monkeypatch.setattr(sb, "_dial", lambda: Conn(client_sock, client_sock.makefile("rb")))
-    return sb, sent, thread
-
-
 @pytest.mark.parametrize("stem,replies,invoke", CASES, ids=lambda c: c if isinstance(c, str) else "")
 def test_call_site_matches_fixture(monkeypatch, stem, replies, invoke):
     fixture = json.loads((FIXTURES / f"{stem}.json").read_text())
-    sb, sent, thread = _fake_sandbox(monkeypatch, replies)
+    sb, sent, thread = fake_sandbox(monkeypatch, replies)
     invoke(sb, fixture)
     thread.join(timeout=5)
 
@@ -196,3 +128,59 @@ def test_git_branch_actions_come_from_the_corpus(monkeypatch):
     sb.git_delete_branch("/w", "b")
     sb.git_checkout("/w", "b")
     assert set(sent) == set(enums["git_branch_action"])
+
+
+class BranchActionConn:
+    """Records the action each git_branch verb puts on the wire."""
+
+    def __init__(self, sent):
+        self.sent = sent
+        self.action = ""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+    def send(self, op, **fields):
+        self.action = fields.get("action")
+        self.sent.append(self.action)
+
+    def recv(self):
+        if self.action == "list":
+            return {"type": "git_branches", "branches": [], "current": ""}
+        return {"type": "done"}
+
+    def recv_until(self, *terminal):
+        yield self.recv()
+
+
+def fake_sandbox(monkeypatch, replies):
+    """A Sandbox whose _dial yields a real Conn over a socketpair; a guest
+    thread records inbound frames and answers the scripted replies."""
+    sent = []
+    client_sock, guest_sock = socket.socketpair()
+
+    def guest():
+        reader = guest_sock.makefile("rb")
+        with contextlib.suppress(Exception):
+            line = reader.readline()
+            if line:
+                sent.append(json.loads(line))
+            for reply in replies:
+                guest_sock.sendall(json.dumps(reply).encode() + b"\n")
+            while True:
+                line = reader.readline()
+                if not line:
+                    break
+                sent.append(json.loads(line))
+        with contextlib.suppress(OSError):
+            guest_sock.close()
+
+    thread = threading.Thread(target=guest, daemon=True)
+    thread.start()
+
+    sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
+    monkeypatch.setattr(sb, "_dial", lambda: Conn(client_sock, client_sock.makefile("rb")))
+    return sb, sent, thread
