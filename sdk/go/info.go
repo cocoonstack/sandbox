@@ -6,8 +6,7 @@ import (
 	"time"
 )
 
-// peersTimeout bounds the best-effort peer discovery inside Lookup so one
-// slow entry node cannot stall the scatter.
+// peersTimeout bounds peer discovery so one slow entry node cannot stall the caller.
 const peersTimeout = 5 * time.Second
 
 // NodeInfo is one node's operational state from GET /v1/info.
@@ -67,12 +66,6 @@ func (c *Client) Sandboxes(ctx context.Context) ([]SandboxSummary, error) {
 		return nil, err
 	}
 	return reply.Sandboxes, nil
-}
-
-// peers fetches the cluster's node addresses, best-effort (nil on failure).
-func (c *Client) peers(ctx context.Context) []string {
-	addrs, _ := c.peersOrErr(ctx)
-	return addrs
 }
 
 // peersOrErr fetches the node addresses, surfacing a discovery failure. It reads

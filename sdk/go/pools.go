@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 )
 
@@ -44,15 +45,7 @@ func (c *Client) SetPools(ctx context.Context, pools []PoolSpec) (*NodeInfo, err
 // was reached — an incomplete apply to retry, not a single-node cluster (nil).
 func (c *Client) SetPoolsCluster(ctx context.Context, pools []PoolSpec) ([]PoolResult, error) {
 	peers, peersErr := c.peersOrErr(ctx)
-	seen := map[string]struct{}{}
-	var addrs []string
-	for _, a := range append([]string{c.addr}, peers...) {
-		if _, dup := seen[a]; dup {
-			continue
-		}
-		seen[a] = struct{}{}
-		addrs = append(addrs, a)
-	}
+	addrs := slices.Compact(slices.Sorted(slices.Values(append([]string{c.addr}, peers...))))
 	results := make([]PoolResult, len(addrs))
 	var wg sync.WaitGroup
 	for i, addr := range addrs {
