@@ -19,6 +19,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG INPUTS_HASH=
 
 RUN --mount=type=secret,id=sandbox_install_agent \
+    # [Apt] HTTPS mirrors: Canonical's port-80 frontends drop out at times; 443 stays up.
+    sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources && \
     apt-get update && apt-get install -y --no-install-recommends \
     systemd \
     systemd-sysv \
