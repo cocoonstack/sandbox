@@ -79,7 +79,7 @@ impl Table {
         }
         for (k, v) in env {
             init.push_str("export ");
-            init.push_str(k);
+            shell_quote_into(&mut init, k);
             init.push('=');
             shell_quote_into(&mut init, v);
             init.push('\n');

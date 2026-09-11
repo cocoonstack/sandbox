@@ -59,6 +59,7 @@ async fn lsp_start_missing_manifest_is_not_found() {
 
 #[tokio::test]
 async fn lsp_start_language_name_cannot_escape() {
+    let _env_lock = ENV_LOCK.lock().await;
     for bad in ["../etc/passwd", "a/b", ".."] {
         let frames = one(
             &Arc::new(State::new()),

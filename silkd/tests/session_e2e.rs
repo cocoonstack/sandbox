@@ -67,6 +67,24 @@ async fn session_applies_cwd_and_env_at_create() {
 }
 
 #[tokio::test]
+async fn session_create_with_hostile_env_key_still_answers() {
+    let state = Arc::new(State::new());
+    let created = tokio::time::timeout(
+        Duration::from_secs(8),
+        one(
+            &state,
+            &json!({"op":"session_create","env":{"BAD KEY'\n": "v", "GOOD": "ok"}}).to_string(),
+        ),
+    )
+    .await
+    .expect("session_create hung on a hostile env key");
+    assert_eq!(type_of(&created[0]), "session_created", "{created:?}");
+    let id = created[0]["id"].as_str().unwrap();
+    let got = sh(&state, id, &["sh", "-c", "echo $GOOD"]).await;
+    assert_eq!(stdout_body(&got).trim(), "ok", "{got:?}");
+}
+
+#[tokio::test]
 async fn session_exit_code_propagates() {
     let state = Arc::new(State::new());
     let id = create(&state, json!({})).await;
