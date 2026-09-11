@@ -12,8 +12,8 @@ use tokio::sync::{Semaphore, SemaphorePermit, mpsc};
 
 use crate::proto::{self, ErrorKind, Response, err_frame};
 
-/// Size above which find skips a file as binary or huge.
-const FIND_MAX_FILE: u64 = 8 * 1024 * 1024;
+/// Size above which find skips a file unread.
+pub const FIND_MAX_FILE: u64 = 8 * 1024 * 1024;
 
 /// Match frames in flight between the walking thread and the writer.
 const MATCH_QUEUE: usize = 256;

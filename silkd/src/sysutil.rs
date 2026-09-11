@@ -1,7 +1,9 @@
 //! Small OS helpers; the crate's unsafe work lives here, except pty.rs's pre_exec registration.
 
+use std::ffi::{CStr, CString};
 use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -46,26 +48,18 @@ pub fn rand_token() -> String {
         .collect()
 }
 
-/// SIGKILLs the group led by `pgid`, so a session's external command dies with its shell.
+/// SIGKILLs the group led by `pgid`, so a session's external command dies with its shell; a synthetic id misses with ESRCH.
 pub fn kill_group(pgid: u32) {
-    // kill(-0) would target silkd's own group; a synthetic id passes the guard and misses with ESRCH.
-    if !is_valid_pid(pgid) {
-        return;
+    if is_valid_pid(pgid) {
+        send_signal(-(pgid as libc::pid_t), libc::SIGKILL);
     }
-    // SAFETY: kill(2) takes no pointers; the guards above keep the pid_t cast
-    // in range and away from silkd's own group.
-    unsafe { libc::kill(-(pgid as libc::pid_t), libc::SIGKILL) };
 }
 
 /// Sends `sig` to `pid`, ignoring ESRCH against a just-exited pid.
 pub fn signal_pid(pid: u32, sig: i32) {
-    // pid 0 means silkd's whole process group to kill(2).
-    if !is_valid_pid(pid) {
-        return;
+    if is_valid_pid(pid) {
+        send_signal(pid as libc::pid_t, sig);
     }
-    // SAFETY: kill(2) takes no pointers; the guards above keep the pid_t cast
-    // in range and away from silkd's own group.
-    unsafe { libc::kill(pid as libc::pid_t, sig) };
 }
 
 /// The environment every exec starts from; the proxy snapshot rides only on the no-network lane.
@@ -97,11 +91,8 @@ pub fn openpty(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
-    // SAFETY: openpty writes two valid fds into master/slave on success; ws is a
-    // fully-initialized winsize (openpty only reads it). We take ownership of
-    // both fds immediately. A raw `*mut` pointer for winp works across libc's
-    // platform-varying signature (*mut on macOS, *const on Linux) without the
-    // &mut that clippy flags as unnecessary on Linux.
+    // a raw `*mut` for winp fits both libc signatures (*mut on macOS, *const on Linux).
+    // SAFETY: openpty writes two valid fds into master/slave on success and only reads ws; both fds are owned immediately.
     let rc = unsafe {
         libc::openpty(
             &mut master,
@@ -185,7 +176,6 @@ pub fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// Maps a wait() status to the shell convention (128 + signal when killed).
 pub fn exit_code(status: ExitStatus) -> i32 {
-    use std::os::unix::process::ExitStatusExt;
     if let Some(code) = status.code() {
         return code;
     }
@@ -212,9 +202,14 @@ fn fill_random(b: &mut [u8]) -> bool {
         .is_ok()
 }
 
-/// Rejects pid 0 and anything that would go negative through the pid_t cast.
+/// Rejects pid 0, which kill(2) reads as silkd's own process group, and anything that would go negative through the pid_t cast.
 fn is_valid_pid(id: u32) -> bool {
     id != 0 && id <= i32::MAX as u32
+}
+
+fn send_signal(target: libc::pid_t, sig: i32) {
+    // SAFETY: kill(2) takes no pointers; every caller vets the target with is_valid_pid first.
+    unsafe { libc::kill(target, sig) };
 }
 
 fn align_proxy_env_for(cmd: &mut Command, nic: bool) {
@@ -258,9 +253,7 @@ fn snapshot_proxy(get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, St
 }
 
 fn lookup_user(user: &str) -> Result<(u32, u32, String), String> {
-    use std::ffi::CString;
     let cname = CString::new(user).map_err(|_| format!("invalid user {user:?}"))?;
-    // hold NSS_LOCK across every read of the static buffer, else a concurrent lookup clobbers it.
     let _guard = lock(&NSS_LOCK);
     // SAFETY: cname is a live NUL-terminated CString for the call.
     let pw = unsafe { libc::getpwnam(cname.as_ptr()) };
@@ -271,7 +264,7 @@ fn lookup_user(user: &str) -> Result<(u32, u32, String), String> {
     // a valid passwd whose pw_dir is a NUL-terminated string it owns.
     let pw = unsafe { &*pw };
     // SAFETY: pw_dir is NUL-terminated and stays valid while NSS_LOCK is held.
-    let home = unsafe { std::ffi::CStr::from_ptr(pw.pw_dir) }
+    let home = unsafe { CStr::from_ptr(pw.pw_dir) }
         .to_string_lossy()
         .into_owned();
     Ok((pw.pw_uid, pw.pw_gid, home))
