@@ -46,11 +46,6 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	if req.TimeoutSeconds > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutSeconds)*time.Second)
-		defer cancel()
-	}
 	id := r.PathValue("id")
 	sock, err := s.mgr.WakeAgentSocket(ctx, id, token)
 	switch {
@@ -67,6 +62,11 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
 		return
 	}
+	if req.TimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutSeconds)*time.Second)
+		defer cancel()
+	}
 	// silkd kills a non-detached child when its connection drops, so a canceled ctx ends the command
 	stop := context.AfterFunc(ctx, func() { _ = guest.Close() })
 	defer func() {
@@ -82,6 +82,13 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	if s.mgr.AuditEnabled() {
 		s.mgr.Audit(ctx, id, frame)
 	}
+	stdinClose, err := wire.EncodeRequest(wire.StdinClose{})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "command setup failed")
+		return
+	}
+	frame = append(frame, stdinClose...)
+	frame = append(frame, '\n')
 	if _, err = guest.Write(frame); err != nil {
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
 		return
