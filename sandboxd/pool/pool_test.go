@@ -214,7 +214,7 @@ func TestReleaseAfterResolveTearsDownOnce(t *testing.T) {
 	}
 }
 
-func TestReleaseDelayDefersTeardown(t *testing.T) {
+func TestReleaseDelayQueuesTeardown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng)
@@ -227,11 +227,12 @@ func TestReleaseDelayDefersTeardown(t *testing.T) {
 		if _, g := m.Info(); g.Claimed != 0 {
 			t.Fatalf("claimed=%d after release, want 0", g.Claimed)
 		}
+		m.retryRemovals(t.Context()).Wait()
 		if removed := eng.removedNames(); len(removed) != 0 {
 			t.Fatalf("removes=%v before the delay, want none", removed)
 		}
 		time.Sleep(2 * time.Second)
-		synctest.Wait()
+		m.retryRemovals(t.Context()).Wait()
 		if removed := eng.removedNames(); len(removed) != 1 || removed[0] != sb.VMName {
 			t.Fatalf("removes=%v after the delay, want %s", removed, sb.VMName)
 		}

@@ -167,30 +167,23 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
 		m.untrack(m.pendingCks, ck)
 	}
-	m.counters.releases.Add(1)
-	m.recordUsage(ctx, usageEvent{Event: "release", ID: id, VMName: vmName})
-	if m.releaseDelay > 0 && vmName != "" {
-		time.AfterFunc(m.releaseDelay, func() {
-			if err := m.teardown(ctx, id, sb, vmName, snap); err != nil {
-				log.WithFunc("pool.releaseResolved").Errorf(ctx, err, "delayed teardown of %s", id)
-			}
-		})
-		return nil
-	}
-	return m.teardown(ctx, id, sb, vmName, snap)
-}
-
-// teardown frees what a released claim still holds: volumes, the VM, its egress state and snapshot.
-func (m *Manager) teardown(ctx context.Context, id string, sb *types.Sandbox, vmName, snap string) error {
 	td := m.quiesceVolumes(ctx, sb)
 	var err error
-	if vmName == "" {
+	removed := vmName == ""
+	switch {
+	case removed:
 		m.finishVolumeTeardown(ctx, td) // archived: no VM to confirm gone
-	} else if !m.removeOrRetry(ctx, vmName, id, "", td) {
-		err = fmt.Errorf("vm %s survived removal", vmName)
+	case m.releaseDelay > 0:
+		m.queueRemoval(vmName, id, "", td, time.Now().Add(m.releaseDelay))
+	default:
+		if removed = m.removeOrRetry(ctx, vmName, id, "", td); !removed {
+			err = fmt.Errorf("vm %s survived removal", vmName)
+		}
 	}
-	m.disarmEgress(id, err == nil)
+	m.disarmEgress(id, removed)
 	m.dropSnap(ctx, snap)
+	m.counters.releases.Add(1)
+	m.recordUsage(ctx, usageEvent{Event: "release", ID: id, VMName: vmName})
 	return err
 }
 

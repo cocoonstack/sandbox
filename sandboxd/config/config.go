@@ -231,8 +231,8 @@ type Config struct {
 	// RefillConcurrency caps concurrent VM provisioning node-wide; 0 auto-scales with CPUs.
 	RefillConcurrency int `json:"refill_concurrency,omitzero"`
 
-	// ReleaseDelaySeconds, when >0, delays a released VM's teardown so it stays out of a claim burst.
-	ReleaseDelaySeconds int `json:"release_delay_seconds,omitempty"`
+	// ReleaseDelaySeconds, when >0, parks a released VM in the removal queue for that long instead of removing it inline.
+	ReleaseDelaySeconds int `json:"release_delay_seconds,omitzero"`
 
 	// Mesh, when set, joins this node to a memberlist cluster; nil is a mesh of one.
 	Mesh *MeshConfig `json:"mesh,omitempty"`

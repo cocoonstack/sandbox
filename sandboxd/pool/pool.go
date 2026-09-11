@@ -160,6 +160,7 @@ type pendingRemoval struct {
 	tap         string
 	staleCreate bool
 	volumes     volumeTeardown
+	notBefore   time.Time
 }
 
 type pool struct {
