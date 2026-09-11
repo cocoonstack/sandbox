@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -83,7 +84,9 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	resp, pid, err := collectExec(guest)
 	if err != nil && pid != 0 {
 		// a dropped connection only reaches a child that writes; a silent one needs the kill
-		s.killExec(ctx, id, token, pid)
+		if killErr := s.killExec(ctx, id, token, pid); killErr != nil {
+			log.WithFunc("server.handleExec").Errorf(ctx, killErr, "kill exec pid %d in %s", pid, id)
+		}
 	}
 	silkdErr, isSilkd := errors.AsType[*wire.ErrorResp](err)
 	switch {
@@ -93,7 +96,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusGatewayTimeout, "command timed out")
 	case errors.Is(ctx.Err(), context.Canceled):
 		return
-	case isSilkd && silkdErr.Kind == "bad_request":
+	case isSilkd && silkdErr.Kind == wire.KindBadRequest:
 		writeErr(w, http.StatusBadRequest, silkdErr.Message)
 	case isSilkd:
 		writeErr(w, http.StatusBadGateway, silkdErr.Error())
@@ -105,22 +108,38 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) killExec(ctx context.Context, id, token string, pid uint32) {
+func (s *Server) killExec(ctx context.Context, id, token string, pid uint32) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), execKillWait)
 	defer cancel()
 	sock, err := s.mgr.WakeAgentSocket(ctx, id, token)
-	if err == nil {
-		var guest net.Conn
-		if guest, err = s.dialer.DialSilkd(ctx, sock); err == nil {
-			defer func() { _ = guest.Close() }()
-			frame, _ := wire.EncodeRequest(wire.Kill{PID: pid})
-			if _, err = guest.Write(append(frame, '\n')); err == nil {
-				wire.NewFrameScanner(guest).Scan()
-				return
-			}
-		}
+	if err != nil {
+		return err
 	}
-	log.WithFunc("server.killExec").Errorf(ctx, err, "kill exec pid %d in %s", pid, id)
+	guest, err := s.dialer.DialSilkd(ctx, sock)
+	if err != nil {
+		return err
+	}
+	stop := context.AfterFunc(ctx, func() { _ = guest.Close() })
+	defer func() {
+		stop()
+		_ = guest.Close()
+	}()
+	frame, _ := wire.EncodeRequest(wire.Kill{PID: pid})
+	if _, err = guest.Write(append(frame, '\n')); err != nil {
+		return err
+	}
+	sc := wire.NewFrameScanner(guest)
+	if !sc.Scan() {
+		return cmp.Or(sc.Err(), io.ErrUnexpectedEOF)
+	}
+	reply, err := wire.DecodeResponse(sc.Bytes())
+	if err != nil {
+		return err
+	}
+	if silkdErr, ok := reply.(*wire.ErrorResp); ok && silkdErr.Kind != wire.KindNotFound {
+		return silkdErr
+	}
+	return nil
 }
 
 func collectExec(guest net.Conn) (resp ExecResponse, pid uint32, err error) {
