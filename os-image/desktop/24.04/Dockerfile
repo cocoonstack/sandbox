@@ -41,9 +41,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # wrapper shadows the packaged launcher on PATH and in the .desktop entry.
     # Chrome 136+ ignores --remote-debugging-port on the default profile dir,
     # and OSWorld task configs pass that flag without a --user-data-dir.
+    # An uninitialized profile opens the terms-of-service window instead of
+    # starting, so the debug port never binds; --no-first-run skips it.
     && printf '%s\n' \
       '#!/bin/sh' \
-      'exec /opt/google/chrome/google-chrome --user-data-dir=/home/user/.config/google-chrome-osworld --no-sandbox --disable-dev-shm-usage --disable-gpu --test-type "$@"' \
+      'exec /opt/google/chrome/google-chrome --user-data-dir=/home/user/.config/google-chrome-osworld --no-sandbox --disable-dev-shm-usage --disable-gpu --test-type --no-first-run --no-default-browser-check "$@"' \
       > /usr/local/bin/google-chrome \
     && chmod 0755 /usr/local/bin/google-chrome \
     && sed -i 's|^Exec=/usr/bin/google-chrome-stable|Exec=/usr/local/bin/google-chrome|' /usr/share/applications/google-chrome.desktop \
@@ -86,6 +88,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'welcome-dialog-last-shown-version='"'"'999'"'"'' \
       > /etc/dconf/db/local.d/00-sandbox \
     && dconf update \
+    # the GTK file chooser routed through xdg-desktop-portal-gtk deadlocks the
+    # session when Chrome opens one; a system-wide default covers both the
+    # session and the commands osworld-server spawns.
+    && install -d /etc/systemd/system.conf.d \
+    && printf '[Manager]\nDefaultEnvironment=GTK_USE_PORTAL=0\n' \
+      > /etc/systemd/system.conf.d/10-gtk-portal.conf \
+    && printf 'GTK_USE_PORTAL=0\n' >> /etc/environment \
     && printf '%s\n' \
       '[Unit]' \
       'Description=virtual X display for the desktop session' \

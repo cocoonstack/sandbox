@@ -66,6 +66,8 @@ Configure it with `SANDBOXD_ADDR`, `SANDBOXD_TOKEN`, `COCOON_TEMPLATE`
 - Chrome runs `--no-sandbox` (the microVM is the isolation boundary) and a
   fixed `--user-data-dir`, because Chrome 136+ refuses remote debugging on
   the default profile.
+- `GTK_USE_PORTAL=0` is a system-wide default: the portal file chooser
+  deadlocks the session when Chrome opens one.
 - No Thunderbird or VS Code yet (snap-only on 24.04 / vendor repo); tasks
   targeting them are out of scope for this flavor version.
 - x86_64 only.
