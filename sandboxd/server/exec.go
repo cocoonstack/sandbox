@@ -45,6 +45,10 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "argv must not be empty")
 		return
 	}
+	if req.TimeoutSeconds < 0 {
+		writeErr(w, http.StatusBadRequest, "timeout_seconds must not be negative")
+		return
+	}
 	ctx := r.Context()
 	id := r.PathValue("id")
 	sock, err := s.mgr.WakeAgentSocket(ctx, id, token)
@@ -100,6 +104,8 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, resp)
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		writeErr(w, http.StatusGatewayTimeout, "command timed out")
+	case errors.Is(ctx.Err(), context.Canceled):
+		return
 	case errors.As(err, &silkdErr) && silkdErr.Kind == "bad_request":
 		writeErr(w, http.StatusBadRequest, silkdErr.Message)
 	case errors.As(err, &silkdErr):
