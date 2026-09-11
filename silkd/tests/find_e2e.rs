@@ -3,20 +3,17 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
+use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
 use silkd::server::State;
 use tokio::io::AsyncWriteExt;
 
-use common::{exchange, type_of};
-
-async fn write_file(dir: &std::path::Path, name: &str, body: &str) {
-    tokio::fs::write(dir.join(name), body).await.unwrap();
-}
+use common::{connect, exchange, type_of};
 
 async fn find_frames(req: Value) -> Vec<Value> {
-    let (mut cw, mut out, handle) = common::connect(&Arc::new(State::new()));
+    let (mut cw, mut out, handle) = connect(&Arc::new(State::new()));
     cw.write_all(format!("{req}\n").as_bytes()).await.unwrap();
     let mut frames = Vec::new();
     while let Some(l) = out.next_line().await.unwrap() {
@@ -35,10 +32,19 @@ async fn find_frames(req: Value) -> Vec<Value> {
 #[tokio::test]
 async fn find_streams_line_matches() {
     let dir = tempfile::tempdir().unwrap();
-    write_file(dir.path(), "a.rs", "fn main() {\n    // TODO: fix\n}\n").await;
-    write_file(dir.path(), "b.txt", "TODO ignore me (wrong glob)\n").await;
+    tokio::fs::write(
+        dir.path().join("a.rs"),
+        "fn main() {\n    // TODO: fix\n}\n",
+    )
+    .await
+    .unwrap();
+    tokio::fs::write(dir.path().join("b.txt"), "TODO ignore me (wrong glob)\n")
+        .await
+        .unwrap();
     tokio::fs::create_dir(dir.path().join("sub")).await.unwrap();
-    write_file(&dir.path().join("sub"), "c.rs", "// TODO nested\n").await;
+    tokio::fs::write(dir.path().join("sub/c.rs"), "// TODO nested\n")
+        .await
+        .unwrap();
 
     let frames = find_frames(json!({
         "op": "fs_find",
@@ -63,8 +69,12 @@ async fn find_streams_line_matches() {
 #[tokio::test]
 async fn find_glob_is_a_real_glob_not_a_substring() {
     let dir = tempfile::tempdir().unwrap();
-    write_file(dir.path(), "a.rs", "TODO\n").await;
-    write_file(dir.path(), "a.rs.bak", "TODO\n").await;
+    tokio::fs::write(dir.path().join("a.rs"), "TODO\n")
+        .await
+        .unwrap();
+    tokio::fs::write(dir.path().join("a.rs.bak"), "TODO\n")
+        .await
+        .unwrap();
 
     let frames = find_frames(json!({
         "op": "fs_find",
@@ -144,7 +154,7 @@ async fn replace_rewrites_and_counts() {
 async fn replace_skips_a_file_over_the_size_bound() {
     let dir = tempfile::tempdir().unwrap();
     let big = dir.path().join("big.log");
-    let body = format!("foo\n{}", "x".repeat(8 * 1024 * 1024));
+    let body = format!("foo\n{}", "x".repeat(silkd::find::FIND_MAX_FILE as usize));
     tokio::fs::write(&big, &body).await.unwrap();
 
     let frames = exchange(&[json!({
@@ -172,7 +182,7 @@ async fn find_skips_a_file_over_the_size_bound() {
     let dir = tempfile::tempdir().unwrap();
     tokio::fs::write(
         dir.path().join("big.log"),
-        format!("foo\n{}", "x".repeat(8 * 1024 * 1024)),
+        format!("foo\n{}", "x".repeat(silkd::find::FIND_MAX_FILE as usize)),
     )
     .await
     .unwrap();
@@ -190,7 +200,6 @@ async fn find_skips_a_file_over_the_size_bound() {
 
 #[tokio::test]
 async fn replace_preserves_exec_bit() {
-    use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let script = dir.path().join("run.sh");
     tokio::fs::write(&script, "#!/bin/sh\nfoo\n").await.unwrap();

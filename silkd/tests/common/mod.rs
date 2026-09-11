@@ -1,17 +1,20 @@
-//! Shared harness: drives silkd's server over an in-memory duplex as a relayed host connection would.
-//! Each test binary compiles it separately, so #![allow(dead_code)] covers the helpers one binary skips.
+//! Shared harness: drives silkd's server over an in-memory duplex as a relayed host connection would; each test binary compiles it separately, hence allow(dead_code).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![allow(dead_code)]
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use base64::Engine;
-use serde_json::Value;
+use serde_json::{Value, json};
 use silkd::server::State;
 use tokio::io::{
     AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, Lines, ReadHalf, WriteHalf,
 };
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
+
+pub const DEADLINE: Duration = Duration::from_secs(30);
 
 pub type FrameWriter = WriteHalf<DuplexStream>;
 pub type FrameLines = Lines<BufReader<ReadHalf<DuplexStream>>>;
@@ -23,6 +26,20 @@ pub fn connect(state: &Arc<State>) -> (FrameWriter, FrameLines, JoinHandle<std::
     let handle = tokio::spawn(async move { state.serve(BufReader::new(sr), sw).await });
     let (cr, cw) = tokio::io::split(client);
     (cw, BufReader::new(cr).lines(), handle)
+}
+
+pub async fn send(cw: &mut FrameWriter, frame: Value) {
+    cw.write_all(frame.to_string().as_bytes()).await.unwrap();
+    cw.write_all(b"\n").await.unwrap();
+}
+
+pub async fn next_frame(lines: &mut FrameLines) -> Value {
+    let line = timeout(DEADLINE, lines.next_line())
+        .await
+        .expect("deadline")
+        .unwrap()
+        .expect("stream closed");
+    serde_json::from_str(&line).unwrap()
 }
 
 pub async fn roundtrip(request_line: &str) -> Vec<Value> {
@@ -82,7 +99,7 @@ pub fn stdout_body(frames: &[Value]) -> String {
 pub fn data_frames(bytes: &[u8]) -> Vec<String> {
     let mut lines: Vec<String> = bytes
         .chunks(16 * 1024)
-        .map(|c| serde_json::json!({"op":"data","data":b64(c)}).to_string())
+        .map(|c| json!({"op":"data","data":b64(c)}).to_string())
         .collect();
     lines.push(r#"{"op":"data_end"}"#.to_string());
     lines

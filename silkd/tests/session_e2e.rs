@@ -8,16 +8,15 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use silkd::server::State;
+use tokio::task::JoinHandle;
 
 use common::{one, stdout_body, type_of};
 
-async fn create(state: &Arc<State>, extra: Value) -> String {
-    let mut req = json!({"op":"session_create"});
-    if let Value::Object(map) = extra {
-        for (k, v) in map {
-            req[k] = v;
-        }
-    }
+async fn create(state: &Arc<State>) -> String {
+    create_with(state, json!({"op":"session_create"})).await
+}
+
+async fn create_with(state: &Arc<State>, req: Value) -> String {
     let f = one(state, &req.to_string()).await;
     assert_eq!(type_of(&f[0]), "session_created", "create failed: {f:?}");
     f[0]["id"].as_str().unwrap().to_string()
@@ -32,10 +31,16 @@ async fn sh(state: &Arc<State>, id: &str, cmd: &[&str]) -> Vec<Value> {
     .await
 }
 
+fn spawn_sh(state: &Arc<State>, id: &str, cmd: &'static [&'static str]) -> JoinHandle<Vec<Value>> {
+    let s = Arc::clone(state);
+    let sid = id.to_string();
+    tokio::spawn(async move { sh(&s, &sid, cmd).await })
+}
+
 #[tokio::test]
 async fn session_persists_env_across_calls() {
     let state = Arc::new(State::new());
-    let id = create(&state, json!({})).await;
+    let id = create(&state).await;
 
     let set = sh(&state, &id, &["export", "MARKER=silk123"]).await;
     assert_eq!(type_of(set.last().unwrap()), "exit");
@@ -52,9 +57,9 @@ async fn session_persists_env_across_calls() {
 async fn session_applies_cwd_and_env_at_create() {
     let dir = tempfile::tempdir().unwrap();
     let state = Arc::new(State::new());
-    let id = create(
+    let id = create_with(
         &state,
-        json!({"cwd": dir.path().to_str().unwrap(), "env": {"GREETING": "hello-silk"}}),
+        json!({"op":"session_create","cwd": dir.path().to_str().unwrap(), "env": {"GREETING": "hello-silk"}}),
     )
     .await;
 
@@ -87,7 +92,7 @@ async fn session_create_with_hostile_env_key_still_answers() {
 #[tokio::test]
 async fn session_exit_code_propagates() {
     let state = Arc::new(State::new());
-    let id = create(&state, json!({})).await;
+    let id = create(&state).await;
 
     let ok = sh(&state, &id, &["true"]).await;
     assert_eq!(ok.last().unwrap()["code"], 0);
@@ -98,7 +103,7 @@ async fn session_exit_code_propagates() {
 #[tokio::test]
 async fn session_list_and_rm() {
     let state = Arc::new(State::new());
-    let id = create(&state, json!({})).await;
+    let id = create(&state).await;
 
     let listed = one(&state, r#"{"op":"session_list"}"#).await;
     assert!(
@@ -120,8 +125,8 @@ async fn session_list_and_rm() {
 #[tokio::test]
 async fn stdin_reading_command_does_not_wedge_the_session() {
     let state = Arc::new(State::new());
-    let id = create(&state, json!({})).await;
-    let r = tokio::time::timeout(std::time::Duration::from_secs(8), sh(&state, &id, &["cat"]))
+    let id = create(&state).await;
+    let r = tokio::time::timeout(Duration::from_secs(8), sh(&state, &id, &["cat"]))
         .await
         .expect("session wedged on a stdin-reading command");
     assert_eq!(type_of(r.last().unwrap()), "exit");
@@ -132,7 +137,7 @@ async fn stdin_reading_command_does_not_wedge_the_session() {
 #[tokio::test]
 async fn shell_killing_command_removes_the_session() {
     let state = Arc::new(State::new());
-    let id = create(&state, json!({})).await;
+    let id = create(&state).await;
     let _ = sh(&state, &id, &["exit"]).await;
     let again = sh(&state, &id, &["echo", "hi"]).await;
     assert_eq!(type_of(&again[0]), "error");
@@ -142,7 +147,7 @@ async fn shell_killing_command_removes_the_session() {
 #[tokio::test]
 async fn forged_sentinel_in_output_does_not_desync() {
     let state = Arc::new(State::new());
-    let id = create(&state, json!({})).await;
+    let id = create(&state).await;
     let r = sh(
         &state,
         &id,
@@ -164,7 +169,7 @@ async fn forged_sentinel_in_output_does_not_desync() {
 #[tokio::test]
 async fn reap_idle_removes_idle_sessions() {
     let state = Arc::new(State::new());
-    let id = create(&state, json!({})).await;
+    let id = create(&state).await;
     let reaped = state.sessions.reap_idle(Duration::ZERO);
     assert_eq!(reaped, 1);
     let gone = sh(&state, &id, &["echo", "hi"]).await;
@@ -178,12 +183,8 @@ async fn reap_idle_removes_idle_sessions() {
 #[tokio::test]
 async fn reap_skips_a_session_running_a_command() {
     let state = Arc::new(State::new());
-    let id = create(&state, json!({})).await;
-    let busy = {
-        let s = Arc::clone(&state);
-        let sid = id.clone();
-        tokio::spawn(async move { sh(&s, &sid, &["sleep", "1"]).await })
-    };
+    let id = create(&state).await;
+    let busy = spawn_sh(&state, &id, &["sleep", "1"]);
     tokio::time::sleep(Duration::from_millis(150)).await;
     let reaped = state.sessions.reap_idle(Duration::ZERO);
     assert_eq!(reaped, 0, "a running session must not be reaped");
@@ -195,7 +196,7 @@ async fn reap_skips_a_session_running_a_command() {
 #[tokio::test]
 async fn session_argv_with_metacharacters_is_one_literal_token() {
     let state = Arc::new(State::new());
-    let id = create(&state, json!({})).await;
+    let id = create(&state).await;
     let evil = "a b; echo INJECTED $(id) `whoami` 'q'";
     let r = sh(&state, &id, &["printf", "%s", evil]).await;
     assert_eq!(
@@ -212,16 +213,12 @@ async fn session_argv_with_metacharacters_is_one_literal_token() {
 #[tokio::test]
 async fn session_rm_unwedges_a_running_external_command() {
     let state = Arc::new(State::new());
-    let id = create(&state, json!({})).await;
-    let busy = {
-        let s = Arc::clone(&state);
-        let sid = id.clone();
-        tokio::spawn(async move { sh(&s, &sid, &["sleep", "3600"]).await })
-    };
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let id = create(&state).await;
+    let busy = spawn_sh(&state, &id, &["sleep", "3600"]);
+    tokio::time::sleep(Duration::from_millis(200)).await;
     let rm = one(&state, &json!({"op":"session_rm","id":id}).to_string()).await;
     assert_eq!(type_of(&rm[0]), "done");
-    let done = tokio::time::timeout(std::time::Duration::from_secs(5), busy)
+    let done = tokio::time::timeout(Duration::from_secs(5), busy)
         .await
         .expect("session_rm did not unwedge the external command");
     let frames = done.unwrap();
@@ -231,7 +228,7 @@ async fn session_rm_unwedges_a_running_external_command() {
 #[tokio::test]
 async fn empty_argv_in_session_is_a_bad_request() {
     let state = Arc::new(State::new());
-    let id = create(&state, json!({})).await;
+    let id = create(&state).await;
     let f = one(
         &state,
         &json!({"op":"exec","argv":[],"session":id}).to_string(),
@@ -244,7 +241,7 @@ async fn empty_argv_in_session_is_a_bad_request() {
 #[tokio::test]
 async fn detach_with_session_is_a_bad_request() {
     let state = Arc::new(State::new());
-    let id = create(&state, json!({})).await;
+    let id = create(&state).await;
     let f = one(
         &state,
         &json!({"op":"exec","argv":["true"],"session":id,"detach":true}).to_string(),
@@ -265,7 +262,7 @@ async fn exec_in_unknown_session_is_not_found() {
 #[tokio::test]
 async fn session_merges_stderr_into_stdout() {
     let state = Arc::new(State::new());
-    let id = create(&state, json!({})).await;
+    let id = create(&state).await;
 
     let frames = sh(&state, &id, &["sh", "-c", "echo oops >&2"]).await;
     assert_eq!(
