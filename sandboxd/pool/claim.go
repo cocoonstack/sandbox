@@ -167,6 +167,21 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
 		m.untrack(m.pendingCks, ck)
 	}
+	m.counters.releases.Add(1)
+	m.recordUsage(ctx, usageEvent{Event: "release", ID: id, VMName: vmName})
+	if m.releaseDelay > 0 && vmName != "" {
+		time.AfterFunc(m.releaseDelay, func() {
+			if err := m.teardown(ctx, id, sb, vmName, snap); err != nil {
+				log.WithFunc("pool.releaseResolved").Errorf(ctx, err, "delayed teardown of %s", id)
+			}
+		})
+		return nil
+	}
+	return m.teardown(ctx, id, sb, vmName, snap)
+}
+
+// teardown frees what a released claim still holds: volumes, the VM, its egress state and snapshot.
+func (m *Manager) teardown(ctx context.Context, id string, sb *types.Sandbox, vmName, snap string) error {
 	td := m.quiesceVolumes(ctx, sb)
 	var err error
 	if vmName == "" {
@@ -176,8 +191,6 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	}
 	m.disarmEgress(id, err == nil)
 	m.dropSnap(ctx, snap)
-	m.counters.releases.Add(1)
-	m.recordUsage(ctx, usageEvent{Event: "release", ID: id, VMName: vmName})
 	return err
 }
 
