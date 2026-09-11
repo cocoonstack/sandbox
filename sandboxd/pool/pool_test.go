@@ -214,6 +214,31 @@ func TestReleaseAfterResolveTearsDownOnce(t *testing.T) {
 	}
 }
 
+func TestReleaseDelayQueuesTeardown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng)
+		m.releaseDelay = 2 * time.Second
+		sb := mustClaim(t, m, testKey)
+
+		if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+			t.Fatalf("release: %v", err)
+		}
+		if _, g := m.Info(); g.Claimed != 0 {
+			t.Fatalf("claimed=%d after release, want 0", g.Claimed)
+		}
+		m.retryRemovals(t.Context()).Wait()
+		if removed := eng.removedNames(); len(removed) != 0 {
+			t.Fatalf("removes=%v before the delay, want none", removed)
+		}
+		time.Sleep(2 * time.Second)
+		m.retryRemovals(t.Context()).Wait()
+		if removed := eng.removedNames(); len(removed) != 1 || removed[0] != sb.VMName {
+			t.Fatalf("removes=%v after the delay, want %s", removed, sb.VMName)
+		}
+	})
+}
+
 func TestReleaseByOperatorCred(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -795,6 +820,9 @@ type fakeEngine struct {
 	exportContent                     []byte
 	caInstalls                        []string
 	warmups                           [][]string
+	warmupSocks                       []string
+	warmupAfterSnap                   bool
+	warmupErr                         error
 	staleReconciles                   []string
 	installCAErr                      error
 	diskAttachErr                     error
@@ -1031,14 +1059,13 @@ func (f *fakeEngine) InstallCACert(_ context.Context, vsockSocket string, _ []by
 	return f.installCAErr
 }
 
-func (f *fakeEngine) Warmup(_ context.Context, _ string, argv []string) error {
+func (f *fakeEngine) Warmup(_ context.Context, sock string, argv []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.snapSaves) > 0 {
-		return fmt.Errorf("warmup after snapshot")
-	}
 	f.warmups = append(f.warmups, argv)
-	return nil
+	f.warmupSocks = append(f.warmupSocks, sock)
+	f.warmupAfterSnap = f.warmupAfterSnap || len(f.snapSaves) > 0
+	return f.warmupErr
 }
 
 func (f *fakeEngine) DiskAttach(_ context.Context, _ string, spec engine.VolumeSpec) error {

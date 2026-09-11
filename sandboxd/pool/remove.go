@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/projecteru2/core/log"
 
@@ -48,13 +49,13 @@ func (m *Manager) removeOrRetry(ctx context.Context, name, sandboxID, tap string
 		m.finishVolumeTeardown(ctx, td)
 		return true
 	}
-	m.queueRemoval(name, sandboxID, tap, td)
+	m.queueRemoval(name, sandboxID, tap, td, time.Time{})
 	return false
 }
 
-func (m *Manager) queueRemoval(name, sandboxID, tap string, td volumeTeardown) {
+func (m *Manager) queueRemoval(name, sandboxID, tap string, td volumeTeardown, notBefore time.Time) {
 	m.mu.Lock()
-	m.pendingRemovals[name] = pendingRemoval{sandboxID: sandboxID, tap: tap, volumes: td}
+	m.pendingRemovals[name] = pendingRemoval{sandboxID: sandboxID, tap: tap, volumes: td, notBefore: notBefore}
 	m.mu.Unlock()
 }
 
@@ -64,16 +65,21 @@ func (m *Manager) queueStaleCreate(name, tap string) {
 	m.mu.Unlock()
 }
 
-// retryRemovals empties the queue to dispatch, so the next tick cannot double-dispatch.
+// retryRemovals moves the due entries out of the queue to dispatch, so the next tick cannot double-dispatch.
 func (m *Manager) retryRemovals(ctx context.Context) *sync.WaitGroup {
+	now := time.Now()
+	batch := map[string]pendingRemoval{}
 	m.mu.Lock()
-	if len(m.pendingRemovals) == 0 {
-		m.mu.Unlock()
+	for name, pending := range m.pendingRemovals {
+		if !now.Before(pending.notBefore) {
+			batch[name] = pending
+			delete(m.pendingRemovals, name)
+		}
+	}
+	m.mu.Unlock()
+	if len(batch) == 0 {
 		return new(sync.WaitGroup)
 	}
-	batch := m.pendingRemovals
-	m.pendingRemovals = map[string]pendingRemoval{}
-	m.mu.Unlock()
 	names := slices.Collect(maps.Keys(batch))
 	return m.runBounded(ctx, len(names), func(ctx context.Context, i int) {
 		m.retryRemoval(ctx, names[i], batch[names[i]])
@@ -96,7 +102,7 @@ func (m *Manager) retryRemoval(ctx context.Context, name string, pending pending
 		}
 	}
 	if !m.removeVM(ctx, name) {
-		m.queueRemoval(name, pending.sandboxID, pending.tap, pending.volumes)
+		m.queueRemoval(name, pending.sandboxID, pending.tap, pending.volumes, time.Time{})
 		return
 	}
 	m.finishRemoval(ctx, pending)

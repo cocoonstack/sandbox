@@ -160,6 +160,7 @@ type pendingRemoval struct {
 	tap         string
 	staleCreate bool
 	volumes     volumeTeardown
+	notBefore   time.Time
 }
 
 type pool struct {
@@ -270,6 +271,7 @@ type Manager struct {
 
 	// tenantMax doubles as the set of known tenants; a 0 cap means unlimited.
 	maxClaims    int
+	releaseDelay time.Duration
 	draining     bool // guarded by m.mu; deliberately not persisted
 	tenantMax    map[string]int
 	tenantLive   map[string]int
@@ -345,6 +347,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		dataDir:         cfg.DataDir,
 		egress:          cfg.HasEgress(),
 		lockEgress:      len(cfg.Bridges) > 0,
+		releaseDelay:    time.Duration(cfg.ReleaseDelaySeconds) * time.Second,
 		maxFork:         maxFork,
 		store:           newClaimStore(cfg.DataDir),
 		volumes:         make(map[string]catalogVolume, len(cfg.Volumes)),

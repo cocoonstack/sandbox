@@ -90,6 +90,9 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 		}
 		sb, err = m.readyBounded(ctx, sb, time.Now().Add(warmProbeTimeout))
 	}
+	if err == nil {
+		err = m.warmClone(ctx, sb)
+	}
 	keep := false
 	var fails int
 	var wait time.Duration
@@ -190,15 +193,13 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 	}
 	caBaked := m.poolIntercepts(key)
 	if caBaked {
-		if err := m.eng.InstallCACert(ctx, sock, m.egressCA.CertPEM()); err != nil {
+		if err = m.eng.InstallCACert(ctx, sock, m.egressCA.CertPEM()); err != nil {
 			return fmt.Errorf("install egress ca: %w", err)
 		}
 	}
-	warmup := m.poolWarmup(key)
-	if len(warmup) > 0 {
-		if err := m.eng.Warmup(ctx, sock, warmup); err != nil {
-			return fmt.Errorf("warmup: %w", err)
-		}
+	warmup, err := m.runWarmup(ctx, key, sock)
+	if err != nil {
+		return fmt.Errorf("warmup: %w", err)
 	}
 	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
 		return err
@@ -216,6 +217,23 @@ func (m *Manager) poolWarmup(key types.PoolKey) []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.poolWarmups[key]
+}
+
+func (m *Manager) runWarmup(ctx context.Context, key types.PoolKey, sock string) ([]string, error) {
+	warmup := m.poolWarmup(key)
+	if len(warmup) == 0 {
+		return nil, nil
+	}
+	return warmup, m.eng.Warmup(ctx, sock, warmup)
+}
+
+// a restore maps the golden memory lazily, so the warmup's pages fault in here instead of under the first claim
+func (m *Manager) warmClone(ctx context.Context, sb *types.Sandbox) error {
+	if _, err := m.runWarmup(ctx, sb.Key, sb.VsockSocket); err != nil {
+		m.destroy(ctx, sb.VMName)
+		return fmt.Errorf("clone warmup: %w", err)
+	}
+	return nil
 }
 
 // writeGoldenCASidecar records or clears the baked-CA fingerprint; a rotated CA forces a rebuild.

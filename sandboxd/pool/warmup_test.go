@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 )
@@ -21,6 +22,9 @@ func TestGoldenBuildRunsWarmupBeforeSnapshot(t *testing.T) {
 	}
 	if len(eng.warmups) != 1 || !slices.Equal(eng.warmups[0], argv) {
 		t.Fatalf("warmups = %v, want [%v]", eng.warmups, argv)
+	}
+	if eng.warmupAfterSnap {
+		t.Fatal("golden warmup ran after the snapshot save")
 	}
 	stamp, err := os.ReadFile(final + warmupSidecarSuffix)
 	if err != nil {
@@ -86,4 +90,51 @@ func TestPoolSpecRejectsEmptyWarmupArgument(t *testing.T) {
 	if err := spec.ValidateLimits(); err == nil || !strings.Contains(err.Error(), "warmup") {
 		t.Errorf("ValidateLimits error = %v, want an empty-argument rejection", err)
 	}
+}
+
+func TestRefillWarmsEveryClone(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		argv := []string{"node", "-e", "0"}
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2, Warmup: argv})
+		m.pools[testKey].goldenDir = "/goldens/x"
+
+		m.refillOnce(t.Context())
+		waitFor(t, func() bool {
+			infos, _ := m.Info()
+			return infos[0].Warm == 2 && infos[0].Refilling == 0
+		})
+		eng.mu.Lock()
+		warmups, socks := slices.Clone(eng.warmups), slices.Clone(eng.warmupSocks)
+		eng.mu.Unlock()
+		if len(warmups) != 2 || !slices.Equal(warmups[0], argv) || !slices.Equal(warmups[1], argv) {
+			t.Fatalf("warmups = %v, want %v once per clone", warmups, argv)
+		}
+		if socks[0] == "" || socks[0] == socks[1] {
+			t.Errorf("warmup sockets = %v, want one per clone", socks)
+		}
+	})
+}
+
+func TestRefillCloneWarmupFailureCleansUp(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.warmupErr = errors.New("node: not found")
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Warmup: []string{"node", "-e", "0"}})
+		m.pools[testKey].goldenDir = "/goldens/x"
+
+		m.refillOnce(t.Context())
+		waitFor(t, func() bool {
+			infos, _ := m.Info()
+			return infos[0].Warm == 0 && infos[0].Refilling == 0 && len(eng.removedNames()) == 1
+		})
+		eng.mu.Lock()
+		eng.warmupErr = nil
+		eng.mu.Unlock()
+		m.refillOnce(t.Context())
+		waitFor(t, func() bool {
+			infos, _ := m.Info()
+			return infos[0].Warm == 1 && infos[0].Refilling == 0
+		})
+	})
 }

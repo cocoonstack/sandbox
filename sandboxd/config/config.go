@@ -45,7 +45,7 @@ type PoolSpec struct {
 	// Egress is this pool's allow-list, intersected with the tenant's; nil denies all egress.
 	Egress *egress.Policy `json:"egress,omitempty"`
 
-	// Warmup runs in the golden VM before its snapshot, so every clone starts with its page cache.
+	// Warmup runs in the golden VM before its snapshot and again in each clone after restore.
 	Warmup []string `json:"warmup,omitempty"`
 
 	// IdleHibernateSeconds, when >0, hibernates idle claims after that many seconds.
@@ -231,6 +231,9 @@ type Config struct {
 	// RefillConcurrency caps concurrent VM provisioning node-wide; 0 auto-scales with CPUs.
 	RefillConcurrency int `json:"refill_concurrency,omitzero"`
 
+	// ReleaseDelaySeconds, when >0, parks a released VM in the removal queue for that long instead of removing it inline.
+	ReleaseDelaySeconds int `json:"release_delay_seconds,omitzero"`
+
 	// Mesh, when set, joins this node to a memberlist cluster; nil is a mesh of one.
 	Mesh *MeshConfig `json:"mesh,omitempty"`
 
@@ -297,6 +300,20 @@ func (c *Config) applyDefaults() {
 }
 
 func (c *Config) validate() error {
+	for _, field := range []struct {
+		name  string
+		value int
+	}{
+		{"idle_hibernate_seconds", c.IdleHibernateSeconds},
+		{"checkpoint_ttl_hours", c.CheckpointTTLHours},
+		{"max_claims", c.MaxClaims},
+		{"refill_concurrency", c.RefillConcurrency},
+		{"release_delay_seconds", c.ReleaseDelaySeconds},
+	} {
+		if field.value < 0 {
+			return fmt.Errorf("%s must not be negative, got %d", field.name, field.value)
+		}
+	}
 	if err := c.validateAttachment(); err != nil {
 		return err
 	}
@@ -307,20 +324,11 @@ func (c *Config) validate() error {
 	if c.MaxForkCount < 1 {
 		return fmt.Errorf("max_fork_count must be at least 1, got %d", c.MaxForkCount)
 	}
-	if c.RefillConcurrency < 0 {
-		return fmt.Errorf("refill_concurrency must not be negative, got %d", c.RefillConcurrency)
-	}
 	if err := c.RestoreMode.Validate(); err != nil {
 		return fmt.Errorf("restore_mode: %w", err)
 	}
-	if c.MaxClaims < 0 {
-		return fmt.Errorf("max_claims must not be negative, got %d", c.MaxClaims)
-	}
 	if c.PreviewListen != "" && c.PreviewSecret == "" {
 		return fmt.Errorf("preview_listen needs preview_secret")
-	}
-	if c.IdleHibernateSeconds < 0 {
-		return fmt.Errorf("idle_hibernate_seconds must not be negative, got %d", c.IdleHibernateSeconds)
 	}
 	if err := validateArchiveWindow(c.IdleHibernateSeconds, c.ArchiveAfterSeconds, c.ArchiveDeleteAfterSeconds); err != nil {
 		return err
@@ -335,9 +343,6 @@ func (c *Config) validate() error {
 		default:
 			return fmt.Errorf("checkpoint_store kind %q: want dir or s3", cs.Kind)
 		}
-	}
-	if c.CheckpointTTLHours < 0 {
-		return fmt.Errorf("checkpoint_ttl_hours must not be negative")
 	}
 	if c.CheckpointPeerHeal && (c.Mesh == nil || c.Mesh.ClusterKey == "") {
 		return fmt.Errorf("checkpoint_peer_heal requires an encrypted mesh (set mesh.cluster_key)")

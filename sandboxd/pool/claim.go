@@ -169,12 +169,18 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	}
 	td := m.quiesceVolumes(ctx, sb)
 	var err error
-	if vmName == "" {
+	removed := vmName == ""
+	switch {
+	case removed:
 		m.finishVolumeTeardown(ctx, td) // archived: no VM to confirm gone
-	} else if !m.removeOrRetry(ctx, vmName, id, "", td) {
-		err = fmt.Errorf("vm %s survived removal", vmName)
+	case m.releaseDelay > 0:
+		m.queueRemoval(vmName, id, "", td, time.Now().Add(m.releaseDelay))
+	default:
+		if removed = m.removeOrRetry(ctx, vmName, id, "", td); !removed {
+			err = fmt.Errorf("vm %s survived removal", vmName)
+		}
 	}
-	m.disarmEgress(id, err == nil)
+	m.disarmEgress(id, removed)
 	m.dropSnap(ctx, snap)
 	m.counters.releases.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "release", ID: id, VMName: vmName})
