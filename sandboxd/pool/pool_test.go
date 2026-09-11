@@ -821,7 +821,7 @@ type fakeEngine struct {
 	caInstalls                        []string
 	warmups                           [][]string
 	warmupSocks                       []string
-	warmupSnaps                       []int
+	warmupAfterSnap                   bool
 	warmupErr                         error
 	staleReconciles                   []string
 	installCAErr                      error
@@ -1064,7 +1064,7 @@ func (f *fakeEngine) Warmup(_ context.Context, sock string, argv []string) error
 	defer f.mu.Unlock()
 	f.warmups = append(f.warmups, argv)
 	f.warmupSocks = append(f.warmupSocks, sock)
-	f.warmupSnaps = append(f.warmupSnaps, len(f.snapSaves))
+	f.warmupAfterSnap = f.warmupAfterSnap || len(f.snapSaves) > 0
 	return f.warmupErr
 }
 

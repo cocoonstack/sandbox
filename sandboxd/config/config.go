@@ -300,18 +300,18 @@ func (c *Config) applyDefaults() {
 }
 
 func (c *Config) validate() error {
-	for _, n := range []struct {
+	for _, field := range []struct {
 		name  string
 		value int
 	}{
-		{"release_delay_seconds", c.ReleaseDelaySeconds},
-		{"refill_concurrency", c.RefillConcurrency},
-		{"max_claims", c.MaxClaims},
 		{"idle_hibernate_seconds", c.IdleHibernateSeconds},
 		{"checkpoint_ttl_hours", c.CheckpointTTLHours},
+		{"max_claims", c.MaxClaims},
+		{"refill_concurrency", c.RefillConcurrency},
+		{"release_delay_seconds", c.ReleaseDelaySeconds},
 	} {
-		if n.value < 0 {
-			return fmt.Errorf("%s must not be negative, got %d", n.name, n.value)
+		if field.value < 0 {
+			return fmt.Errorf("%s must not be negative, got %d", field.name, field.value)
 		}
 	}
 	if err := c.validateAttachment(); err != nil {

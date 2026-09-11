@@ -23,8 +23,8 @@ func TestGoldenBuildRunsWarmupBeforeSnapshot(t *testing.T) {
 	if len(eng.warmups) != 1 || !slices.Equal(eng.warmups[0], argv) {
 		t.Fatalf("warmups = %v, want [%v]", eng.warmups, argv)
 	}
-	if eng.warmupSnaps[0] != 0 {
-		t.Fatalf("golden warmup ran after %d snapshot saves, want 0", eng.warmupSnaps[0])
+	if eng.warmupAfterSnap {
+		t.Fatal("golden warmup ran after the snapshot save")
 	}
 	stamp, err := os.ReadFile(final + warmupSidecarSuffix)
 	if err != nil {
@@ -105,12 +105,13 @@ func TestRefillWarmsEveryClone(t *testing.T) {
 			return infos[0].Warm == 2 && infos[0].Refilling == 0
 		})
 		eng.mu.Lock()
-		defer eng.mu.Unlock()
-		if len(eng.warmups) != 2 || !slices.Equal(eng.warmups[0], argv) || !slices.Equal(eng.warmups[1], argv) {
-			t.Fatalf("warmups = %v, want %v once per clone", eng.warmups, argv)
+		warmups, socks := slices.Clone(eng.warmups), slices.Clone(eng.warmupSocks)
+		eng.mu.Unlock()
+		if len(warmups) != 2 || !slices.Equal(warmups[0], argv) || !slices.Equal(warmups[1], argv) {
+			t.Fatalf("warmups = %v, want %v once per clone", warmups, argv)
 		}
-		if eng.warmupSocks[0] == "" || eng.warmupSocks[0] == eng.warmupSocks[1] {
-			t.Errorf("warmup sockets = %v, want one per clone", eng.warmupSocks)
+		if socks[0] == "" || socks[0] == socks[1] {
+			t.Errorf("warmup sockets = %v, want one per clone", socks)
 		}
 	})
 }

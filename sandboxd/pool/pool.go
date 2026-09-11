@@ -271,6 +271,7 @@ type Manager struct {
 
 	// tenantMax doubles as the set of known tenants; a 0 cap means unlimited.
 	maxClaims    int
+	releaseDelay time.Duration
 	draining     bool // guarded by m.mu; deliberately not persisted
 	tenantMax    map[string]int
 	tenantLive   map[string]int
@@ -326,10 +327,9 @@ type Manager struct {
 	atCapacityUntil  time.Time
 	atCapacityReason string
 
-	refillSem    chan struct{}
-	releaseDelay time.Duration
-	probeSem     chan struct{}
-	refillKick   chan struct{}
+	refillSem  chan struct{}
+	probeSem   chan struct{}
+	refillKick chan struct{}
 }
 
 // NewManager builds a manager from the node config; ctx bounds backend construction.
@@ -347,6 +347,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		dataDir:         cfg.DataDir,
 		egress:          cfg.HasEgress(),
 		lockEgress:      len(cfg.Bridges) > 0,
+		releaseDelay:    time.Duration(cfg.ReleaseDelaySeconds) * time.Second,
 		maxFork:         maxFork,
 		store:           newClaimStore(cfg.DataDir),
 		volumes:         make(map[string]catalogVolume, len(cfg.Volumes)),
@@ -369,7 +370,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		dial:            newEgressDialer(parsePrefixes(cfg.EgressInternalAllow)).DialContext,
 		sweep:           netfilter.SweepExcept,
 		refillSem:       make(chan struct{}, refill),
-		releaseDelay:    time.Duration(cfg.ReleaseDelaySeconds) * time.Second,
 		probeSem:        make(chan struct{}, refill),
 		refillKick:      make(chan struct{}, 1),
 		healSem:         make(chan struct{}, maxConcurrentHeals),
