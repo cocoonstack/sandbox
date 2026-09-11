@@ -75,7 +75,7 @@ def test_file_tools_round_trip(monkeypatch):
 
 def test_close_releases_once(monkeypatch):
     kit, fake = hooked(monkeypatch)
-    kit.get_tools()[0].invoke({"command": "x"})  # forces the claim
+    kit.get_tools()[0].invoke({"command": "x"})
     kit.close()
     kit.close()
     assert fake.closed == 1

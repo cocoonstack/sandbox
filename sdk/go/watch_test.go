@@ -40,8 +40,8 @@ func TestWatchDeliversEventsUntilClose(t *testing.T) {
 func TestWatchMissingPathFailsSynchronously(t *testing.T) {
 	sb := fakeSandbox(t)
 	_, err := sb.Watch(t.Context(), "/nope", false)
-	var e *wire.ErrorResp
-	if !errors.As(err, &e) || e.Kind != wire.KindNotFound {
+	e, ok := errors.AsType[*wire.ErrorResp](err)
+	if !ok || e.Kind != wire.KindNotFound {
 		t.Errorf("Watch = %v, want synchronous not_found (no ready frame)", err)
 	}
 }

@@ -23,7 +23,7 @@ type Rule struct {
 	Host      string   `json:"host"`
 	Methods   []string `json:"methods,omitempty"`
 	Secret    string   `json:"secret,omitempty"` //nolint:gosec // reference name of a node-side secret, never a value
-	Intercept bool     `json:"intercept,omitempty"`
+	Intercept bool     `json:"intercept,omitzero"`
 }
 
 // matches expects host already lowercased by Eval.

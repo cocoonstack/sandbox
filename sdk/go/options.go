@@ -42,7 +42,7 @@ type VolumeInfo struct {
 	SizeBytes    int64  `json:"size_bytes"`
 	Available    bool   `json:"available"`
 	Nodes        int    `json:"nodes"`
-	Writable     bool   `json:"writable,omitempty"`
+	Writable     bool   `json:"writable,omitzero"`
 }
 
 // Option configures a New claim.

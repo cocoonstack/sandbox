@@ -59,10 +59,7 @@ func (p *HTTPPuller) Pull(ctx context.Context, addr, id, dst string) error {
 		req.Header.Set("Authorization", "Bearer "+p.Token)
 	}
 
-	client := p.Client
-	if client == nil {
-		client = http.DefaultClient
-	}
+	client := cmp.Or(p.Client, http.DefaultClient)
 	resp, err := client.Do(req) //nolint:gosec // addr comes from the mesh's own member view
 	if err != nil {
 		return fmt.Errorf("pull %s from %s: %w", id, addr, err)

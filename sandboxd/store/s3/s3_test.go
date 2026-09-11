@@ -132,7 +132,7 @@ func TestFetchLegacyExportLayout(t *testing.T) {
 		t.Fatalf("Fetch: %v", err)
 	}
 	defer release()
-	got, err := os.ReadFile(filepath.Join(dir, "disk.img")) //nolint:gosec // test path
+	got, err := os.ReadFile(filepath.Join(dir, "disk.img"))
 	if err != nil || string(got) != "legacy-bytes" {
 		t.Fatalf("fetched legacy export: %q, %v", got, err)
 	}
@@ -296,7 +296,7 @@ func TestPublishDigestedFailurePreservesCommittedGeneration(t *testing.T) {
 		t.Fatalf("Fetch old generation: %v", err)
 	}
 	defer release()
-	content, err := os.ReadFile(filepath.Join(dir, "disk.img")) //nolint:gosec // test path
+	content, err := os.ReadFile(filepath.Join(dir, "disk.img"))
 	if err != nil {
 		t.Fatalf("read old generation: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestPublishDigestedFailurePreservesCommittedGeneration(t *testing.T) {
 		t.Fatalf("Fetch replacement: %v", err)
 	}
 	defer release()
-	content, err = os.ReadFile(filepath.Join(dir, "disk.img")) //nolint:gosec // test path
+	content, err = os.ReadFile(filepath.Join(dir, "disk.img"))
 	if err != nil {
 		t.Fatalf("read replacement: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestRepublishRetainsGenerationSelectedByAnotherStore(t *testing.T) {
 	if err = reader.populate(t.Context(), id, selected, gen); err != nil {
 		t.Fatalf("fetch selected first generation after re-publish: %v", err)
 	}
-	got, err := os.ReadFile(filepath.Join(gen, store.ExportDir, "disk.img")) //nolint:gosec // test path
+	got, err := os.ReadFile(filepath.Join(gen, store.ExportDir, "disk.img"))
 	if err != nil || string(got) != "first" {
 		t.Fatalf("selected generation bytes: %q, %v, want first", got, err)
 	}

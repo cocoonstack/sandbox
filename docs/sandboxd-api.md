@@ -325,7 +325,8 @@ targets online — no restart, live claims untouched:
 Pools omitted from the list are drained: their unclaimed warm VMs are
 destroyed and the pool entry retires. `net`/`size` default like a claim's.
 Answers the fresh `GET /v1/info` payload. 400 bad key, negative warm/idle,
-`warm_max` below `warm`, or duplicate pool; 401 bad api token; 409 egress
+`warm_max` below `warm`, duplicate pool, or a config-owned `egress`/`warmup`
+field; 401 bad api token; 409 egress
 pool on a node without an egress attachment.
 
 ## POST /v1/drain
@@ -514,6 +515,28 @@ Auth: the sandbox's own token. Requires `Upgrade: silkd` +
 the connection is a byte-for-byte relay to the guest's silkd (one silkd RPC
 per connection — see [silkd](silkd.md)). 426 without the upgrade header, 404
 unknown sandbox, 502 guest unreachable.
+
+## POST /v1/sandboxes/{id}/exec
+
+Auth: the sandbox's own token. A buffered exec for clients that cannot hold
+an upgraded connection — plain JSON in, plain JSON out, so it multiplexes over
+HTTP/2 through a TLS proxy:
+
+```json
+{"argv": ["node", "-v"], "cwd": "/work", "env": {"CI": "1"}, "timeout_seconds": 60}
+```
+
+→ `200 {"exit_code": 0, "stdout": "v22.23.2\n", "stderr": ""}`. The command
+runs to completion (no stdin, no streaming, no detach — use the relay for
+those); `timeout_seconds` 0 means no limit beyond the request itself. When
+the node gives up on a started command — timeout, client gone, output cap —
+it kills the child through silkd before answering, so nothing keeps running
+behind a 504. Output comes back as JSON strings: bytes that are not valid
+UTF-8 are replaced with U+FFFD, so binary output belongs on the relay. 400
+empty `argv`, negative `timeout_seconds`, an unknown field, or a silkd
+`bad_request`; 401 missing bearer token; 404 unknown sandbox or wrong token;
+413 when stdout+stderr exceed 8 MiB; 502 guest unreachable or any other
+silkd error. A hibernated sandbox wakes transparently like on the relay.
 
 ## GET /v1/sandboxes/{id}/owner
 

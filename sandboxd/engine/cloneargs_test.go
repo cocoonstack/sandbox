@@ -23,7 +23,7 @@ func TestCloneArgsRestoreMode(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			e := New("cocoon", []string{"br0"}, nil, false, tc.mode)
+			e := New("cocoon", []string{"br0"}, nil, false, false, tc.mode)
 			for _, args := range [][]string{
 				e.cloneArgs("/goldens/g1", "sbx-1", tc.key),
 				e.cloneSnapArgs("ck_1", "sbx-1", tc.key),
@@ -45,7 +45,7 @@ func TestLifecycleArgsApplyDirectIOPolicy(t *testing.T) {
 	key := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeMedium}
 	for _, noDirectIO := range []bool{false, true} {
 		t.Run(strconv.FormatBool(noDirectIO), func(t *testing.T) {
-			e := New("cocoon", nil, nil, noDirectIO, "")
+			e := New("cocoon", nil, nil, noDirectIO, false, "")
 			want := "--no-direct-io=" + strconv.FormatBool(noDirectIO)
 			cold := e.runColdArgs("sbx-1", key)
 			for _, args := range [][]string{
@@ -71,8 +71,8 @@ func TestEgressVMsSpreadOverEveryConfiguredShard(t *testing.T) {
 		e    *Engine
 		flag string
 	}{
-		"networks": {New("cocoon", nil, shards, false, ""), "--network"},
-		"bridges":  {New("cocoon", shards, nil, false, ""), "--bridge"},
+		"networks": {New("cocoon", nil, shards, false, false, ""), "--network"},
+		"bridges":  {New("cocoon", shards, nil, false, false, ""), "--bridge"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			counts := map[string]int{}
@@ -107,13 +107,28 @@ func TestNetArgsHonorsTheLaneAndTheAttachment(t *testing.T) {
 	none := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeMedium}
 	egress := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeMedium}
 
-	if args := New("cocoon", nil, []string{"cni"}, false, "").netArgs("sbx-1", none, false); len(args) != 0 {
+	if args := New("cocoon", nil, []string{"cni"}, false, false, "").netArgs("sbx-1", none, false); len(args) != 0 {
 		t.Errorf("none lane took an attachment: %v", args)
 	}
-	if args := New("cocoon", []string{"br0"}, nil, false, "").netArgs("sbx-1", egress, false); !slices.Equal(args, []string{"--bridge", "br0"}) {
+	if args := New("cocoon", []string{"br0"}, nil, false, false, "").netArgs("sbx-1", egress, false); !slices.Equal(args, []string{"--bridge", "br0"}) {
 		t.Errorf("bridge lane args = %v", args)
 	}
-	if args := New("cocoon", nil, []string{"cocoon-dhcp"}, false, "").netArgs("sbx-1", egress, false); !slices.Equal(args, []string{"--network", "cocoon-dhcp"}) {
+	if args := New("cocoon", nil, []string{"cocoon-dhcp"}, false, false, "").netArgs("sbx-1", egress, false); !slices.Equal(args, []string{"--network", "cocoon-dhcp"}) {
 		t.Errorf("single-network args = %v", args)
+	}
+}
+
+func TestNoBalloonReachesColdBootsOnly(t *testing.T) {
+	key := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
+	for _, noBalloon := range []bool{false, true} {
+		t.Run(strconv.FormatBool(noBalloon), func(t *testing.T) {
+			e := New("cocoon", nil, nil, false, noBalloon, "")
+			if got := slices.Contains(e.runColdArgs("sbx-1", key), "--no-balloon"); got != noBalloon {
+				t.Errorf("cold args carry --no-balloon = %v, want %v", got, noBalloon)
+			}
+			if slices.Contains(e.cloneArgs("/goldens/g1", "sbx-1", key), "--no-balloon") {
+				t.Error("clone args carry --no-balloon; clones inherit it from the golden")
+			}
+		})
 	}
 }

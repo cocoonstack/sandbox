@@ -88,6 +88,32 @@ CASES = [
 UNSENT = {"req_session_create": {"id"}}
 
 
+class BranchActionConn:
+    """Records the action each git_branch verb puts on the wire."""
+
+    def __init__(self, sent):
+        self.sent = sent
+        self.action = ""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+    def send(self, op, **fields):
+        self.action = fields.get("action")
+        self.sent.append(self.action)
+
+    def recv(self):
+        if self.action == "list":
+            return {"type": "git_branches", "branches": [], "current": ""}
+        return {"type": "done"}
+
+    def recv_until(self, *terminal):
+        yield self.recv()
+
+
 def _pty_stub(sb, pid):
     return Pty(sb, None, pid)
 
@@ -128,32 +154,6 @@ def _fake_sandbox(monkeypatch, replies):
     sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
     monkeypatch.setattr(sb, "_dial", lambda: Conn(client_sock, client_sock.makefile("rb")))
     return sb, sent, thread
-
-
-class BranchActionConn:
-    """Records the action each git_branch verb puts on the wire."""
-
-    def __init__(self, sent):
-        self.sent = sent
-        self.action = ""
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        pass
-
-    def send(self, op, **fields):
-        self.action = fields.get("action")
-        self.sent.append(self.action)
-
-    def recv(self):
-        if self.action == "list":
-            return {"type": "git_branches", "branches": [], "current": ""}
-        return {"type": "done"}
-
-    def recv_until(self, *terminal):
-        yield self.recv()
 
 
 @pytest.mark.parametrize("stem,replies,invoke", CASES, ids=lambda c: c if isinstance(c, str) else "")

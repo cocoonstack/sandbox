@@ -495,8 +495,8 @@ func TestAPIErrorDrainsOversizedBody(t *testing.T) {
 	body := strings.NewReader(`{"error":"` + strings.Repeat("x", 3*4096) + `"}`)
 	err := apiError("claim", &http.Response{StatusCode: http.StatusTooManyRequests, Body: io.NopCloser(body)})
 
-	var he *APIError
-	if !errors.As(err, &he) || he.Status != http.StatusTooManyRequests {
+	he, ok := errors.AsType[*APIError](err)
+	if !ok || he.Status != http.StatusTooManyRequests {
 		t.Fatalf("apiError = %v, want a 429 APIError", err)
 	}
 	if body.Len() != 0 {

@@ -50,7 +50,7 @@ class Sandbox:
     def __exit__(self, *exc) -> None:
         try:
             self.close()
-        except Exception:
+        except APIError:
             if exc[0] is None:  # a clean block surfaces a real release failure
                 raise
 

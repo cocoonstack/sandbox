@@ -233,11 +233,16 @@ fn scan_serials(ids: &[&str], found: &mut [Option<String>]) {
             format!("/sys/block/{name}/serial"),
             format!("/sys/block/{name}/device/serial"),
         ];
+        let device = format!("/dev/{name}");
         for path in paths {
             let Ok(serial) = fs::read_to_string(&path) else {
                 continue;
             };
-            record_serial(ids, found, serial.trim_end(), &format!("/dev/{name}"));
+            if serial.trim_end().is_empty() {
+                continue;
+            }
+            record_serial(ids, found, serial.trim_end(), &device);
+            break;
         }
     }
 }

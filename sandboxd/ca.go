@@ -10,7 +10,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 )
 
-// runCA is the operator PKI tool: mint the cluster root, then per-node intermediates.
 func runCA(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: sandboxd ca {init|issue-intermediate}")

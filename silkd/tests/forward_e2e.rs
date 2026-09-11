@@ -8,11 +8,10 @@ use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use silkd::server::State;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::timeout;
-
-use silkd::server::State;
 
 const DEADLINE: Duration = Duration::from_secs(30);
 
@@ -37,6 +36,12 @@ async fn echo_listener() -> u16 {
         }
     });
     port
+}
+
+fn data_payload(line: &str) -> Option<&str> {
+    let start = line.find("\"data\":\"")? + "\"data\":\"".len();
+    let rest = &line[start..];
+    Some(&rest[..rest.find('"')?])
 }
 
 #[tokio::test]
@@ -114,12 +119,6 @@ async fn forward_bidirectional_bulk_no_deadlock() {
     })
     .await
     .expect("test deadline");
-}
-
-fn data_payload(line: &str) -> Option<&str> {
-    let start = line.find("\"data\":\"")? + "\"data\":\"".len();
-    let rest = &line[start..];
-    Some(&rest[..rest.find('"')?])
 }
 
 #[tokio::test]

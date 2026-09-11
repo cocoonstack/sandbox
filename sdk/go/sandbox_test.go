@@ -33,8 +33,8 @@ func TestExecNonZeroExit(t *testing.T) {
 	sb := testSandbox(t, newAgentServer(t, silkdtest.ServeConn))
 
 	_, err := sb.Exec(t.Context(), "false")
-	var exitErr *ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+	exitErr, ok := errors.AsType[*ExitError](err)
+	if !ok || exitErr.Code != 1 {
 		t.Errorf("got %v, want ExitError code 1", err)
 	}
 }
@@ -43,8 +43,8 @@ func TestExecSurfacesErrorFrame(t *testing.T) {
 	sb := testSandbox(t, newAgentServer(t, silkdtest.ServeConn))
 
 	_, err := sb.Exec(t.Context(), "no-such-binary")
-	var silkdErr *wire.ErrorResp
-	if !errors.As(err, &silkdErr) || silkdErr.Kind != wire.KindNotFound {
+	silkdErr, ok := errors.AsType[*wire.ErrorResp](err)
+	if !ok || silkdErr.Kind != wire.KindNotFound {
 		t.Errorf("got %v, want silkd not_found error", err)
 	}
 }

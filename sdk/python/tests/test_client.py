@@ -21,6 +21,9 @@ class FakeNode(BaseHTTPRequestHandler):
     def do_DELETE(self):
         self._dispatch("DELETE")
 
+    def log_message(self, *args):
+        pass
+
     def _dispatch(self, method):
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length)) if length else {}
@@ -38,9 +41,6 @@ class FakeNode(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
-
-    def log_message(self, *args):
-        pass
 
 
 @pytest.fixture

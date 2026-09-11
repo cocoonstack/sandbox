@@ -105,11 +105,11 @@ func run(addr, token, template, volume, rwVolume, probe string) error {
 	}
 
 	_, err = sbA.Exec(ctx, "touch", path.Join(mountA, ".sandboxd-write-probe"))
-	var exitErr *sandbox.ExitError
 	if err == nil {
 		return errors.New("write to read-only volume succeeded")
 	}
-	if !errors.As(err, &exitErr) || !strings.Contains(strings.ToLower(exitErr.Stderr), "read-only file system") {
+	exitErr, ok := errors.AsType[*sandbox.ExitError](err)
+	if !ok || !strings.Contains(strings.ToLower(exitErr.Stderr), "read-only file system") {
 		return fmt.Errorf("write failed without EROFS: %w", err)
 	}
 

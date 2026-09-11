@@ -27,22 +27,8 @@ class Checkpoint:
         redirect to the node that actually holds it; if every candidate
         fails transiently, the claim falls back to the origin once so it
         heals (pulls the checkpoint) locally."""
-        # local import: a top-level one closes the client -> sandbox -> checkpoint cycle.
-        from .client import _redirect_fallback
-
         claim = {"ttl_seconds": ttl_seconds} if ttl_seconds else {}
-        path = f"/v1/checkpoints/{self.id}/claim"
-        reply = self._client._post_json(self._addr, path, claim, "claim checkpoint")
-        redirect = reply.get("redirect") or []
-        if not redirect:
-            return self._client._handle_from(self._addr, reply)
-        claim["no_redirect"] = True
-
-        def post(peer):
-            return self._client._post_json(peer, path, claim, "claim checkpoint")
-
-        addr, reply = _redirect_fallback(self._addr, redirect, post, "claim checkpoint")
-        return self._client._handle_from(addr, reply)
+        return self._client._claim_from(self._addr, claim, f"/v1/checkpoints/{self.id}/claim", "claim checkpoint")
 
     def delete(self) -> None:
         """Removes the checkpoint and broadcasts the drop; cleanup is

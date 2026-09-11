@@ -37,6 +37,26 @@ class FakeConn:
         pass
 
 
+class BlockingStdinConn(FakeConn):
+    """A guest that stops draining stdin until its output is read: send blocks
+    past the buffer, exactly as the real socket pair does."""
+
+    def __init__(self, frames, buffer_frames):
+        super().__init__(frames)
+        self._room = threading.Semaphore(buffer_frames)
+        self._read = False
+
+    def send(self, op, **fields):
+        if op == "stdin" and not self._read and not self._room.acquire(blocking=False):
+            assert self._room.acquire(timeout=5), "stdin send deadlocked"
+        super().send(op, **fields)
+
+    def recv(self):
+        self._read = True
+        self._room.release()
+        return super().recv()
+
+
 def fake_sandbox(monkeypatch, frames):
     sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
     conn = FakeConn(frames)
@@ -77,26 +97,6 @@ def test_attach_returns_exit_code(monkeypatch):
     out = []
     assert sb.attach(41, on_stdout=out.append) == 7
     assert out == [b"late"]
-
-
-class BlockingStdinConn(FakeConn):
-    """A guest that stops draining stdin until its output is read: send blocks
-    past the buffer, exactly as the real socket pair does."""
-
-    def __init__(self, frames, buffer_frames):
-        super().__init__(frames)
-        self._room = threading.Semaphore(buffer_frames)
-        self._read = False
-
-    def send(self, op, **fields):
-        if op == "stdin" and not self._read and not self._room.acquire(blocking=False):
-            assert self._room.acquire(timeout=5), "stdin send deadlocked"
-        super().send(op, **fields)
-
-    def recv(self):
-        self._read = True
-        self._room.release()
-        return super().recv()
 
 
 def test_run_pumps_stdin_while_reading_output(monkeypatch):

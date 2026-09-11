@@ -155,6 +155,6 @@ func (e *Engine) diskAttachArgs(vmName string, spec VolumeSpec) ([]string, error
 }
 
 func isNotFound(err error) bool {
-	var respErr *wire.ErrorResp
-	return errors.As(err, &respErr) && respErr.Kind == wire.KindNotFound
+	respErr, ok := errors.AsType[*wire.ErrorResp](err)
+	return ok && respErr.Kind == wire.KindNotFound
 }

@@ -1,6 +1,7 @@
 package peer
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -30,10 +31,7 @@ func (b *Broadcaster) Delete(ctx context.Context, id string) {
 	if len(addrs) == 0 {
 		return
 	}
-	client := b.Client
-	if client == nil {
-		client = &http.Client{Timeout: defaultDeleteClientTimeout}
-	}
+	client := cmp.Or(b.Client, &http.Client{Timeout: defaultDeleteClientTimeout})
 	logger := log.WithFunc("peer.Broadcaster.Delete")
 	var wg sync.WaitGroup
 	for _, addr := range addrs {

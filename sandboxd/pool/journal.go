@@ -14,7 +14,7 @@ const journalMaxBytes = 64 * 1024 * 1024
 // usageEvent is one line of usage.jsonl, the billing stream the platform collector folds.
 type usageEvent struct {
 	Time      time.Time `json:"t"`
-	Event     string    `json:"ev"` // claim|hibernate|wake|fork|promote|checkpoint|release|reap
+	Event     string    `json:"ev"`
 	ID        string    `json:"id"`
 	VMName    string    `json:"vm,omitempty"`
 	KeyHash   string    `json:"key,omitempty"`        // claim only
@@ -83,8 +83,5 @@ func (j *journal) rotate() error {
 			j.size = st.Size()
 		}
 	}
-	if closeErr := old.Close(); closeErr != nil && !errors.Is(closeErr, os.ErrClosed) {
-		renameErr = errors.Join(renameErr, closeErr)
-	}
-	return renameErr
+	return errors.Join(renameErr, old.Close())
 }

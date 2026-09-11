@@ -182,7 +182,7 @@ func (Ps) Op() string { return "ps" }
 // Kill signals a process; nil Signal means SIGKILL.
 type Kill struct {
 	PID    uint32 `json:"pid"`
-	Signal *int32 `json:"signal,omitempty"`
+	Signal *int32 `json:"signal,omitzero"`
 }
 
 func (Kill) Op() string { return "kill" }
@@ -238,7 +238,7 @@ func (StdinClose) Op() string { return "stdin_close" }
 // defaults.
 type FsWrite struct {
 	Path string  `json:"path"`
-	Mode *uint32 `json:"mode,omitempty"`
+	Mode *uint32 `json:"mode,omitzero"`
 }
 
 func (FsWrite) Op() string { return "fs_write" }
@@ -366,7 +366,7 @@ type GitClone struct {
 	URL    string `json:"url"`
 	Path   string `json:"path"`
 	Branch string `json:"branch,omitempty"`
-	Depth  uint32 `json:"depth,omitempty"`
+	Depth  uint32 `json:"depth,omitzero"`
 	Auth   string `json:"auth,omitempty"`
 }
 
@@ -524,7 +524,7 @@ type ProcInfo struct {
 	Argv               []string `json:"argv"`
 	Detached           bool     `json:"detached"`
 	State              string   `json:"state"`
-	ExitCode           *int32   `json:"exit_code,omitempty"`
+	ExitCode           *int32   `json:"exit_code,omitzero"`
 	StartedAtEpochSecs uint64   `json:"started_at_epoch_secs"`
 }
 
@@ -630,7 +630,7 @@ type GitStatusResult struct {
 	Ahead     uint32          `json:"ahead"`
 	Behind    uint32          `json:"behind"`
 	Files     []GitFileStatus `json:"files"`
-	Truncated bool            `json:"truncated,omitempty"`
+	Truncated bool            `json:"truncated,omitzero"`
 }
 
 func (GitStatusResult) RespType() string { return "git_status_result" }

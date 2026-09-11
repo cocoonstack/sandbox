@@ -202,7 +202,7 @@ func (s *Sandbox) Hibernate(ctx context.Context) error {
 func (s *Sandbox) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
 	defer cancel()
-	resp, err := s.post(ctx, "release", nil)
+	resp, err := s.c.roundTrip(ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/release", nil, s.token)
 	if err != nil {
 		return err
 	}
@@ -237,12 +237,6 @@ func (s *Sandbox) call(ctx context.Context, req wire.Request) (*silkd.Conn, func
 		return nil, nil, err
 	}
 	return conn, done, nil
-}
-
-// post sends a sandbox-scoped verb to the owning node (which holds the
-// claim); a non-nil body is JSON.
-func (s *Sandbox) post(ctx context.Context, verb string, body io.Reader) (*http.Response, error) {
-	return s.c.roundTrip(ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/"+verb, body, s.token)
 }
 
 // pumpStdin chunks the reader into stdin frames; Send's own locking keeps

@@ -3,8 +3,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
-use common::{exchange, type_of};
 use serde_json::{Value, json};
+
+use common::{exchange, type_of};
 
 fn git(dir: &std::path::Path, args: &[&str]) {
     let ok = std::process::Command::new("git")

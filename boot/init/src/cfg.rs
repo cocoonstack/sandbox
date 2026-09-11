@@ -128,9 +128,7 @@ fn debug_token(val: &str) -> bool {
     val.is_empty() || val == "1"
 }
 
-/// Kernel ip= fields: client:server:gw:netmask:hostname:device:autoconf[:dns0[:dns1]].
-/// Shorthand forms (ip=dhcp, ip=off) and malformed params are ignored — the
-/// baked DHCP .network fallback then covers the NIC, like the old hook did.
+/// Kernel ip= fields: client:server:gw:netmask:hostname:device:autoconf[:dns0[:dns1]]; anything else is ignored.
 fn parse_ip_param(val: &str) -> Option<IpParam> {
     let f: Vec<&str> = val.split(':').collect();
     if f.len() < 7 || f[0].is_empty() || f[5].is_empty() {

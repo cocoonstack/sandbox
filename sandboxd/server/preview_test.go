@@ -176,6 +176,6 @@ func newGuestServer(t *testing.T, body func(r *http.Request) string) string {
 }
 
 func mintToken(ps *PreviewServer, id string, port uint16, ttl time.Duration) string {
-	url := ps.Mint(id, port, ttl)
-	return strings.TrimSuffix(url[strings.Index(url, "/p/")+3:], "/")
+	_, token, _ := strings.Cut(ps.Mint(id, port, ttl), "/p/")
+	return strings.TrimSuffix(token, "/")
 }

@@ -21,16 +21,15 @@ def test_nested_data_field_not_shadowed():
     assert frame["meta"] == {"data": "WFhY"}
 
 
-def test_trailing_bytes_rejected():
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b'{"type":"stdout","data":"aGk="}garbage',
+        b'{"type":"data","data":"QUJD\r\nREVG"}',
+        b'{"type":"stdout","data":"aGk="',
+    ],
+    ids=["trailing_bytes", "control_bytes_in_base64", "unterminated_frame"],
+)
+def test_malformed_frame_rejected(raw):
     with pytest.raises(json.JSONDecodeError):
-        frames.decode_response(b'{"type":"stdout","data":"aGk="}garbage')
-
-
-def test_control_bytes_in_base64_rejected():
-    with pytest.raises(json.JSONDecodeError):
-        frames.decode_response(b'{"type":"data","data":"QUJD\r\nREVG"}')
-
-
-def test_unterminated_frame_rejected():
-    with pytest.raises(json.JSONDecodeError):
-        frames.decode_response(b'{"type":"stdout","data":"aGk="')
+        frames.decode_response(raw)

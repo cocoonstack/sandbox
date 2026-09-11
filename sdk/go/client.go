@@ -47,6 +47,23 @@ type Client struct {
 	hc       *http.Client
 }
 
+// Connect returns a client for a sandboxd node. addr accepts a
+// comma-separated seed list for forward compatibility; v0 uses the first
+// entry. Calls are bounded by their ctx — checkpoint and promote run as long
+// as the snapshot takes, so the client sets no blanket deadline.
+func Connect(addr string, opts ...ClientOption) (*Client, error) {
+	first, _, _ := strings.Cut(addr, ",")
+	first = strings.TrimSpace(first)
+	if first == "" {
+		return nil, fmt.Errorf("empty sandboxd address")
+	}
+	c := &Client{addr: first, hc: &http.Client{}}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c, nil
+}
+
 // New claims a sandbox for template. Without options the node serves its
 // defaults: the no-network lane and the smallest size tier. New returns when
 // the sandbox's silkd is reachable. Against a cluster, a warm miss redirects
@@ -198,23 +215,6 @@ func (c *Client) roundTrip(ctx context.Context, method, addr, path string, body 
 	return c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
 }
 
-// Connect returns a client for a sandboxd node. addr accepts a
-// comma-separated seed list for forward compatibility; v0 uses the first
-// entry. Calls are bounded by their ctx — checkpoint and promote run as long
-// as the snapshot takes, so the client sets no blanket deadline.
-func Connect(addr string, opts ...ClientOption) (*Client, error) {
-	first, _, _ := strings.Cut(addr, ",")
-	first = strings.TrimSpace(first)
-	if first == "" {
-		return nil, fmt.Errorf("empty sandboxd address")
-	}
-	c := &Client{addr: first, hc: &http.Client{}}
-	for _, opt := range opts {
-		opt(c)
-	}
-	return c, nil
-}
-
 // doJSON issues one control-plane request and decodes a 200 reply into T;
 // any other status maps through apiError under verb. The shared plumbing
 // behind every decode-a-reply verb in this file and its siblings.
@@ -276,8 +276,8 @@ func tryEach(candidates []string, call func(addr string) error, retry func(error
 // retryMiss retries a miss (the next candidate may own the record) or a
 // transport failure (dead peer); a served error is real and stops the walk.
 func retryMiss(err error) bool {
-	var he *APIError
-	return !errors.As(err, &he) || he.Status == http.StatusNotFound
+	he, ok := errors.AsType[*APIError](err)
+	return !ok || he.Status == http.StatusNotFound
 }
 
 // retryAny retries a redirect candidate's failure unconditionally: one
@@ -292,8 +292,8 @@ func retryAny(error) bool { return true }
 // request, a forbidden token, or an egress conflict is definitive: the
 // origin would fail the same way.
 func retryTransient(err error) bool {
-	var he *APIError
-	if !errors.As(err, &he) {
+	he, ok := errors.AsType[*APIError](err)
+	if !ok {
 		return true
 	}
 	switch he.Status {
@@ -441,10 +441,10 @@ type claimRequest struct {
 	Net               string   `json:"net,omitempty"`
 	Size              string   `json:"size,omitempty"`
 	Volumes           []Volume `json:"volumes,omitempty"`
-	VolumesAttachOnly bool     `json:"volumes_attach_only,omitempty"`
-	TTLSeconds        int      `json:"ttl_seconds,omitempty"`
-	NoRedirect        bool     `json:"no_redirect,omitempty"`
-	RequirePromoted   bool     `json:"require_promoted,omitempty"`
+	VolumesAttachOnly bool     `json:"volumes_attach_only,omitzero"`
+	TTLSeconds        int      `json:"ttl_seconds,omitzero"`
+	NoRedirect        bool     `json:"no_redirect,omitzero"`
+	RequirePromoted   bool     `json:"require_promoted,omitzero"`
 	ClaimRef          string   `json:"claim_ref,omitempty"`
 }
 
@@ -480,7 +480,7 @@ type claimResponse struct {
 	TemplateDigest  string    `json:"template_digest,omitempty"`
 	Volumes         []Volume  `json:"volumes,omitempty"`
 	Redirect        []string  `json:"redirect,omitempty"`
-	RequirePromoted bool      `json:"require_promoted,omitempty"`
+	RequirePromoted bool      `json:"require_promoted,omitzero"`
 }
 
 type volumeListResponse struct {
@@ -490,7 +490,7 @@ type volumeListResponse struct {
 type forkRequest struct {
 	Token      string `json:"token"`
 	Count      int    `json:"count"`
-	TTLSeconds int    `json:"ttl_seconds,omitempty"`
+	TTLSeconds int    `json:"ttl_seconds,omitzero"`
 }
 
 type forkResponse struct {

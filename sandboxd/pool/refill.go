@@ -194,33 +194,44 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 			return fmt.Errorf("install egress ca: %w", err)
 		}
 	}
+	warmup := m.poolWarmup(key)
+	if len(warmup) > 0 {
+		if err := m.eng.Warmup(ctx, sock, warmup); err != nil {
+			return fmt.Errorf("warmup: %w", err)
+		}
+	}
 	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
 		return err
 	}
 	if err := m.exportGolden(ctx, snap, final); err != nil {
 		return err
 	}
-	return m.writeGoldenCASidecar(final, caBaked)
+	if err := m.writeGoldenCASidecar(final, caBaked); err != nil {
+		return err
+	}
+	return writeGoldenSidecar(final+warmupSidecarSuffix, warmupStamp(warmup))
+}
+
+func (m *Manager) poolWarmup(key types.PoolKey) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.poolWarmups[key]
 }
 
 // writeGoldenCASidecar records or clears the baked-CA fingerprint; a rotated CA forces a rebuild.
 func (m *Manager) writeGoldenCASidecar(final string, caBaked bool) error {
-	path := final + caSidecarSuffix
-	if !caBaked {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("clear ca sidecar: %w", err)
-		}
-		return nil
+	var stamp string
+	if caBaked {
+		stamp = m.egressCA.Fingerprint()
 	}
-	if err := os.WriteFile(path, []byte(m.egressCA.Fingerprint()), 0o644); err != nil { //nolint:gosec // public fingerprint
-		return fmt.Errorf("write ca sidecar: %w", err)
-	}
-	return nil
+	return writeGoldenSidecar(final+caSidecarSuffix, stamp)
 }
 
-// adoptGolden points p at an on-disk golden whose baked-CA state still fits.
+// adoptGolden points p at an on-disk golden whose baked-CA state and warmup still fit.
 func (m *Manager) adoptGolden(p *pool) {
-	if g := filepath.Join(m.goldensDir(), p.hash); dirExists(g) && m.goldenCAMatches(g, m.poolEgress[p.key].Intercepts()) {
+	g := filepath.Join(m.goldensDir(), p.hash)
+	if dirExists(g) && m.goldenCAMatches(g, m.poolEgress[p.key].Intercepts()) &&
+		goldenSidecarMatches(g+warmupSidecarSuffix, warmupStamp(m.poolWarmups[p.key])) {
 		p.goldenDir = g
 	}
 }
@@ -228,11 +239,9 @@ func (m *Manager) adoptGolden(p *pool) {
 // goldenCAMatches reports whether a golden's baked-CA state fits the pool.
 func (m *Manager) goldenCAMatches(final string, caNeeded bool) bool {
 	if !caNeeded {
-		_, err := os.Stat(final + caSidecarSuffix)
-		return errors.Is(err, os.ErrNotExist)
+		return goldenSidecarMatches(final+caSidecarSuffix, "")
 	}
-	fp, err := os.ReadFile(final + caSidecarSuffix) //nolint:gosec // node-local golden path
-	return err == nil && m.egressCA != nil && string(fp) == m.egressCA.Fingerprint()
+	return m.egressCA != nil && goldenSidecarMatches(final+caSidecarSuffix, m.egressCA.Fingerprint())
 }
 
 // exportGolden exports snap into final through a unique sibling *.tmp dir.
@@ -439,4 +448,29 @@ func (m *Manager) dropSnap(ctx context.Context, snap string) {
 	if err := m.eng.SnapshotRemove(ctx, snap); err != nil {
 		log.WithFunc("pool.dropSnap").Warnf(ctx, "drop snapshot %s: %v", snap, err)
 	}
+}
+
+func writeGoldenSidecar(path, stamp string) error {
+	if stamp == "" {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("clear golden sidecar %s: %w", filepath.Base(path), err)
+		}
+		return nil
+	}
+	if err := os.WriteFile(path, []byte(stamp), 0o644); err != nil { //nolint:gosec // public stamp
+		return fmt.Errorf("write golden sidecar %s: %w", filepath.Base(path), err)
+	}
+	return nil
+}
+
+func goldenSidecarMatches(path, stamp string) bool {
+	got, err := os.ReadFile(path) //nolint:gosec // node-local golden path
+	if stamp == "" {
+		return errors.Is(err, os.ErrNotExist)
+	}
+	return err == nil && string(got) == stamp
+}
+
+func warmupStamp(argv []string) string {
+	return strings.Join(argv, "\x00")
 }

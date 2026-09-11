@@ -14,7 +14,6 @@ import (
 // SetPools replaces the node's desired warm targets; existing claims are unaffected.
 func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 	desired := make(map[types.PoolKey]config.PoolSpec, len(specs))
-	hashes := make(map[string]types.PoolKey, len(specs))
 	for _, spec := range specs {
 		spec = normalizePoolSpec(spec)
 		if err := m.validate(spec.PoolKey); err != nil {
@@ -27,13 +26,12 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 		if spec.Egress != nil {
 			return fmt.Errorf("%w: pool %q: egress is set in the config file, not via the API", ErrBadKey, spec.Template)
 		}
-		if existing, ok := hashes[spec.Hash()]; ok && existing != spec.PoolKey {
-			return fmt.Errorf("%w: pool key hash collision between %q and %q", ErrBadKey, existing.Template, spec.Template)
+		if spec.Warmup != nil {
+			return fmt.Errorf("%w: pool %q: warmup is set in the config file, not via the API", ErrBadKey, spec.Template)
 		}
 		if _, ok := desired[spec.PoolKey]; ok {
 			return fmt.Errorf("%w: duplicate pool %q", ErrBadKey, spec.Template)
 		}
-		hashes[spec.Hash()] = spec.PoolKey
 		desired[spec.PoolKey] = spec
 	}
 

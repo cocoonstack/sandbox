@@ -15,10 +15,10 @@ type PoolSpec struct {
 	Net                       NetShape `json:"net,omitempty"`
 	Size                      Size     `json:"size,omitempty"`
 	Warm                      int      `json:"warm"`
-	WarmMax                   int      `json:"warm_max,omitempty"`
-	IdleHibernateSeconds      int      `json:"idle_hibernate_seconds,omitempty"`
-	ArchiveAfterSeconds       int      `json:"archive_after_seconds,omitempty"`
-	ArchiveDeleteAfterSeconds int      `json:"archive_delete_after_seconds,omitempty"`
+	WarmMax                   int      `json:"warm_max,omitzero"`
+	IdleHibernateSeconds      int      `json:"idle_hibernate_seconds,omitzero"`
+	ArchiveAfterSeconds       int      `json:"archive_after_seconds,omitzero"`
+	ArchiveDeleteAfterSeconds int      `json:"archive_delete_after_seconds,omitzero"`
 }
 
 // PoolResult is one node's outcome from SetPoolsCluster.

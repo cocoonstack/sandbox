@@ -16,9 +16,9 @@ type NodeInfo struct {
 	Claimed          int          `json:"claimed"`
 	Hibernated       int          `json:"hibernated"`
 	Archived         int          `json:"archived"`
-	Draining         bool         `json:"draining,omitempty"`
+	Draining         bool         `json:"draining,omitzero"`
 	Peers            []string     `json:"peers,omitempty"`
-	AtCapacity       bool         `json:"at_capacity,omitempty"`
+	AtCapacity       bool         `json:"at_capacity,omitzero"`
 	AtCapacityReason string       `json:"at_capacity_reason,omitempty"`
 }
 
@@ -45,7 +45,7 @@ type SandboxSummary struct {
 	Key            PoolKey   `json:"key"`
 	Deadline       time.Time `json:"deadline"`
 	Hibernated     bool      `json:"hibernated"`
-	Archived       bool      `json:"archived,omitempty"`
+	Archived       bool      `json:"archived,omitzero"`
 	FromCheckpoint string    `json:"from_checkpoint,omitempty"`
 	Volumes        []Volume  `json:"volumes,omitempty"`
 	ClaimRef       string    `json:"claim_ref,omitempty"`

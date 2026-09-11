@@ -145,9 +145,7 @@ class CocoonSandboxClient(BaseSandboxClient[CocoonSandboxClientOptions]):
         options: CocoonSandboxClientOptions,
     ) -> SandboxSession:
         client = Client(options.addr, api_token=options.api_token)
-        sb = await asyncio.to_thread(
-            client.new, options.template, net=options.net, ttl_seconds=options.ttl_seconds
-        )
+        sb = await asyncio.to_thread(client.new, options.template, net=options.net, ttl_seconds=options.ttl_seconds)
         if manifest is None:
             manifest = Manifest(root="/workspace")
         session_id = uuid.uuid4()

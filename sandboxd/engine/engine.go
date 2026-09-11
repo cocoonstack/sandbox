@@ -65,12 +65,13 @@ type Engine struct {
 	bridges     []string
 	networks    []string
 	noDirectIO  bool
+	noBalloon   bool
 	restoreMode types.RestoreMode
 }
 
 // New returns a cocoon engine with node-wide network and disk policy.
-func New(bin string, bridges, networks []string, noDirectIO bool, restoreMode types.RestoreMode) *Engine {
-	return &Engine{bin: bin, bridges: bridges, networks: networks, noDirectIO: noDirectIO, restoreMode: restoreMode}
+func New(bin string, bridges, networks []string, noDirectIO, noBalloon bool, restoreMode types.RestoreMode) *Engine {
+	return &Engine{bin: bin, bridges: bridges, networks: networks, noDirectIO: noDirectIO, noBalloon: noBalloon, restoreMode: restoreMode}
 }
 
 // Version reports cocoon's version string: a "vX.Y.Z" release or a "master-<sha>" dev build.
@@ -275,11 +276,7 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	req, err := wire.EncodeRequest(wire.PortForward{Port: port})
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
+	req, _ := wire.EncodeRequest(wire.PortForward{Port: port})
 	if _, err := conn.Write(append(req, '\n')); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("write port_forward: %w", err)
@@ -338,6 +335,9 @@ func (e *Engine) restoreArgs() []string {
 func (e *Engine) runColdArgs(name string, key types.PoolKey) []string {
 	spec, _ := key.Size.Spec()
 	args := []string{"vm", "run", argName, name, argOutput, formatJSON, "--cpu", strconv.Itoa(spec.CPU), "--memory", spec.Memory, e.directIOArg()}
+	if e.noBalloon {
+		args = append(args, "--no-balloon")
+	}
 	args = append(args, e.netArgs(name, key, true)...)
 	return append(args, key.Template)
 }
@@ -376,10 +376,7 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 	defer func() { _ = conn.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	probe, err := wire.EncodeRequest(wire.Info{})
-	if err != nil {
-		return fmt.Errorf("encode info: %w", err)
-	}
+	probe, _ := wire.EncodeRequest(wire.Info{})
 	if _, err = conn.Write(append(probe, '\n')); err != nil {
 		return fmt.Errorf("write info: %w", err)
 	}
