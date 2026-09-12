@@ -68,6 +68,9 @@ Configure it with `SANDBOXD_ADDR`, `SANDBOXD_TOKEN`, `COCOON_TEMPLATE`
   the default profile.
 - `GTK_USE_PORTAL=0` is a system-wide default: the portal file chooser
   deadlocks the session when Chrome opens one.
+- `chromium` is a second launcher onto the same engine, for an agent that
+  needs a browser the tasks do not pkill and rebind. It takes the caller's
+  profile and debugging port.
 - No Thunderbird or VS Code yet (snap-only on 24.04 / vendor repo); tasks
   targeting them are out of scope for this flavor version.
 - x86_64 only.

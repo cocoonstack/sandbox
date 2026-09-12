@@ -49,6 +49,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       > /usr/local/bin/google-chrome \
     && chmod 0755 /usr/local/bin/google-chrome \
     && sed -i 's|^Exec=/usr/bin/google-chrome-stable|Exec=/usr/local/bin/google-chrome|' /usr/share/applications/google-chrome.desktop \
+    # An agent driving the desktop needs a browser of its own: OSWorld tasks
+    # pkill and rebind the Chrome on 1337/9222 mid-run, so a second engine is
+    # what keeps the agent's CDP session alive. Callers launch it as "chromium"
+    # (the upstream guest image ships the snap) and pass their own profile and
+    # debugging port, so the shim adds only the in-guest flags.
+    && printf '%s\n' \
+      '#!/bin/sh' \
+      'exec /opt/google/chrome/google-chrome --no-sandbox --disable-dev-shm-usage --disable-gpu --test-type "$@"' \
+      > /usr/local/bin/chromium \
+    && chmod 0755 /usr/local/bin/chromium \
     # osworld-server: pinned checkout, venv on system site-packages so the
     # apt pyatspi binding is importable; PyAutoGUI/python3-xlib pins mirror
     # its requirements.txt.
