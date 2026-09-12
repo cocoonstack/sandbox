@@ -55,7 +55,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'exec /opt/google/chrome/google-chrome --user-data-dir=/home/user/.config/google-chrome-osworld --no-sandbox --disable-dev-shm-usage --disable-gpu --test-type --no-first-run --no-default-browser-check "$@"' \
       > /usr/local/bin/google-chrome \
     && chmod 0755 /usr/local/bin/google-chrome \
-    && sed -i 's|^Exec=/usr/bin/google-chrome-stable|Exec=/usr/local/bin/google-chrome|' /usr/share/applications/google-chrome.desktop \
+    # the deb ships two entries and the hidden one wins the mime defaults
+    && sed -i 's|^Exec=/usr/bin/google-chrome-stable|Exec=/usr/local/bin/google-chrome|' \
+      /usr/share/applications/google-chrome.desktop \
+      /usr/share/applications/com.google.Chrome.desktop \
     # An agent driving the desktop needs a browser of its own: OSWorld tasks
     # pkill and rebind the Chrome on 1337/9222 mid-run, so a second engine is
     # what keeps the agent's CDP session alive. Callers launch it as "chromium"
