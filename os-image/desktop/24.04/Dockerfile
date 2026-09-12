@@ -12,6 +12,13 @@ ARG INPUTS_HASH=
 
 # xlang-ai/osworld-server pin; the guest half of the OSWorld control contract.
 ARG OSWORLD_SERVER_REF=a3cc3f0c64e463f020d1a44780307e9b46cbcab1
+# Thunderbird pins the build the task profiles carry, so none of them migrate.
+ARG THUNDERBIRD_VERSION=115.10.1
+ARG WPS_BUILD=11.1.0.11723
+ARG ZOTERO_VERSION=7.0.11
+ARG REAPER_BUILD=735
+ARG CODE_VERSION=1.137.0-1788902055
+ARG SHOTCUT_VERSION=24.02.29+ds-1build1
 ARG SCREEN=1920x1080
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -48,15 +55,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'exec /opt/google/chrome/google-chrome --user-data-dir=/home/user/.config/google-chrome-osworld --no-sandbox --disable-dev-shm-usage --disable-gpu --test-type --no-first-run --no-default-browser-check "$@"' \
       > /usr/local/bin/google-chrome \
     && chmod 0755 /usr/local/bin/google-chrome \
-    && sed -i 's|^Exec=/usr/bin/google-chrome-stable|Exec=/usr/local/bin/google-chrome|' /usr/share/applications/google-chrome.desktop \
+    # the deb ships two entries and the hidden one wins the mime defaults
+    && sed -i 's|^Exec=/usr/bin/google-chrome-stable|Exec=/usr/local/bin/google-chrome|' \
+      /usr/share/applications/google-chrome.desktop \
+      /usr/share/applications/com.google.Chrome.desktop \
     # An agent driving the desktop needs a browser of its own: OSWorld tasks
     # pkill and rebind the Chrome on 1337/9222 mid-run, so a second engine is
     # what keeps the agent's CDP session alive. Callers launch it as "chromium"
     # (the upstream guest image ships the snap) and pass their own profile and
-    # debugging port, so the shim adds only the in-guest flags.
+    # debugging port; a profile they have just created needs the same
+    # first-run suppression, or the terms-of-service window takes the port's
+    # place.
     && printf '%s\n' \
       '#!/bin/sh' \
-      'exec /opt/google/chrome/google-chrome --no-sandbox --disable-dev-shm-usage --disable-gpu --test-type "$@"' \
+      'exec /opt/google/chrome/google-chrome --no-sandbox --disable-dev-shm-usage --disable-gpu --test-type --no-first-run --no-default-browser-check "$@"' \
       > /usr/local/bin/chromium \
     && chmod 0755 /usr/local/bin/chromium \
     # osworld-server: pinned checkout, venv on system site-packages so the
@@ -212,6 +224,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'Environment=XDG_RUNTIME_DIR=/run/user/1000' \
       'Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus' \
       'Environment=PATH=/opt/osworld-server/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+      # without it xdg-open here picks a different application than the session
+      'Environment=XDG_CURRENT_DESKTOP=ubuntu:GNOME' \
       'Environment=OSWORLD_SERVER_HOST=127.0.0.1' \
       'Environment=OSWORLD_SERVER_PORT=5000' \
       'ExecStart=/opt/osworld-server/.venv/bin/python /opt/osworld-server/main.py' \
@@ -238,3 +252,70 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'WantedBy=multi-user.target' \
       > /etc/systemd/system/cdp-bridge.service \
     && systemctl enable guest-proxy.service xvfb.service desktop-session.service osworld-server.service cdp-bridge.service
+
+# Six more applications the OSWorld task set drives. bsdextrautils and
+# xdg-utils: WPS's postinst exits 127 without them and wedges apt.
+# libdbus-glib-1-2: Thunderbird and Zotero dlopen it, undeclared.
+# WPS blocks on a modal EULA and nags about absent symbol fonts.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bsdextrautils xdg-utils desktop-file-utils shared-mime-info bzip2 xz-utils \
+    libdbus-glib-1-2 shotcut=${SHOTCUT_VERSION} \
+    && install -d -m 0755 /etc/apt/keyrings \
+    && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+      | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/code stable main" \
+      > /etc/apt/sources.list.d/vscode.list \
+    && apt-get update && apt-get install -y --no-install-recommends code=${CODE_VERSION} \
+    # the task profiles name /usr/lib/thunderbird, one task runs /usr/bin/thunderbird
+    && curl -fsSL -o /tmp/thunderbird.tar.bz2 \
+      "https://download-installer.cdn.mozilla.net/pub/thunderbird/releases/${THUNDERBIRD_VERSION}/linux-x86_64/en-US/thunderbird-${THUNDERBIRD_VERSION}.tar.bz2" \
+    && install -d /usr/lib/thunderbird \
+    && tar -xjf /tmp/thunderbird.tar.bz2 -C /usr/lib/thunderbird --strip-components=1 \
+    && ln -sf /usr/lib/thunderbird/thunderbird /usr/bin/thunderbird \
+    && printf '%s\n' \
+      '[Desktop Entry]' \
+      'Type=Application' \
+      'Name=Thunderbird Mail' \
+      'Exec=/usr/bin/thunderbird %u' \
+      'Icon=/usr/lib/thunderbird/chrome/icons/default/default128.png' \
+      'Terminal=false' \
+      'StartupWMClass=thunderbird' \
+      'Categories=Network;Email;' \
+      'MimeType=x-scheme-handler/mailto;message/rfc822;' \
+      > /usr/share/applications/thunderbird.desktop \
+    && curl -fsSL -o /tmp/wps.deb \
+      "https://wdl1.pcfg.cache.wpscdn.com/wpsdl/wpsoffice/download/linux/${WPS_BUILD##*.}/wps-office_${WPS_BUILD}.XA_amd64.deb" \
+    && apt-get install -y --no-install-recommends /tmp/wps.deb \
+    # install -d owns only the operands, so .config has to be named too
+    && install -d -o user -g user -m 0755 /home/user/.config /home/user/.config/Kingsoft \
+    && printf '%s\n' \
+      '[6.0]' \
+      'common\AcceptedEULA=true' \
+      'common\system_check\no_necessary_symbol_fonts=false' \
+      > /home/user/.config/Kingsoft/Office.conf \
+    && chown user:user /home/user/.config/Kingsoft/Office.conf \
+    && curl -fsSL -o /tmp/zotero.tar.bz2 \
+      "https://www.zotero.org/download/client/dl?channel=release&platform=linux-x86_64&version=${ZOTERO_VERSION}" \
+    && install -d /opt/zotero \
+    && tar -xjf /tmp/zotero.tar.bz2 -C /opt/zotero --strip-components=1 \
+    && ln -sf /opt/zotero/zotero /usr/local/bin/zotero \
+    && printf '%s\n' \
+      '[Desktop Entry]' \
+      'Type=Application' \
+      'Name=Zotero' \
+      'Exec=/opt/zotero/zotero -url %U' \
+      'Icon=/opt/zotero/chrome/icons/default/default256.png' \
+      'Terminal=false' \
+      'StartupWMClass=Zotero' \
+      'Categories=Office;' \
+      'MimeType=x-scheme-handler/zotero;text/x-bibtex;application/x-bibtex;' \
+      > /usr/share/applications/zotero.desktop \
+    && curl -fsSL -o /tmp/reaper.tar.xz \
+      "https://www.reaper.fm/files/7.x/reaper${REAPER_BUILD}_linux_x86_64.tar.xz" \
+    && install -d /tmp/reaper \
+    && tar -xJf /tmp/reaper.tar.xz -C /tmp/reaper --strip-components=1 \
+    && /tmp/reaper/install-reaper.sh --install /opt --integrate-desktop --quiet \
+    && ln -sf /opt/REAPER/reaper /usr/local/bin/reaper \
+    && update-desktop-database /usr/share/applications \
+    && rm -rf /tmp/thunderbird.tar.bz2 /tmp/wps.deb /tmp/zotero.tar.bz2 \
+      /tmp/reaper /tmp/reaper.tar.xz /var/lib/apt/lists/*
