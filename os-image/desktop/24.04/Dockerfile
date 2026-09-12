@@ -224,6 +224,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'Environment=XDG_RUNTIME_DIR=/run/user/1000' \
       'Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus' \
       'Environment=PATH=/opt/osworld-server/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+      # without it xdg-open here picks a different application than the session
+      'Environment=XDG_CURRENT_DESKTOP=ubuntu:GNOME' \
       'Environment=OSWORLD_SERVER_HOST=127.0.0.1' \
       'Environment=OSWORLD_SERVER_PORT=5000' \
       'ExecStart=/opt/osworld-server/.venv/bin/python /opt/osworld-server/main.py' \
