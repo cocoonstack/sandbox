@@ -1,5 +1,5 @@
-// qaab drives one A/B arm against a live sandboxd — a concurrent cold-claim
-// burst, then a concurrent in-guest direct-write burst — and prints one JSON row.
+// qaab measures one A/B arm against a live sandboxd: a concurrent cold-claim
+// burst, then a concurrent in-guest write burst, reported as one JSON row.
 package main
 
 import (
@@ -17,7 +17,7 @@ import (
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
-// ddScript fans out one writer per queue: a single dd keeps exactly one virtio queue busy.
+// one dd keeps exactly one virtio queue busy, so the writers are the queue fan-out
 const ddScript = `for i in $(seq 1 %d); do dd if=/dev/zero of=/root/qaab.$i bs=%s count=%d oflag=direct conv=fsync 2>/dev/null & done; wait`
 
 type stats struct {
@@ -60,6 +60,10 @@ func main() {
 }
 
 func run(addr, token, template, size, label, ioBS string, n, ioCount, ioJobs int) error {
+	blockSize := blockBytes(ioBS)
+	if blockSize == 0 {
+		return fmt.Errorf("--io-bs %q must be a plain byte count or carry a k or M suffix", ioBS)
+	}
 	ctx := context.Background()
 	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(token))
 	if err != nil {
@@ -124,7 +128,7 @@ func run(addr, token, template, size, label, ioBS string, n, ioCount, ioJobs int
 		Failures: failed(claimErrs) + failed(ioErrs),
 	}
 	if ioWall > 0 {
-		written := float64(len(ioOK)*ioCount*ioJobs) * float64(blockBytes(ioBS)) / (1 << 20)
+		written := float64(len(ioOK)*ioCount*ioJobs) * float64(blockSize) / (1 << 20)
 		out.IOMiBps = written / (ioWall / 1000)
 	}
 	encoded, err := json.Marshal(out)
@@ -159,7 +163,13 @@ func blockBytes(bs string) int {
 }
 
 func failed(errs []error) int {
-	return len(slices.DeleteFunc(slices.Clone(errs), func(e error) bool { return e == nil }))
+	n := 0
+	for _, e := range errs {
+		if e != nil {
+			n++
+		}
+	}
+	return n
 }
 
 func observed(values []float64, errs []error) []float64 {
