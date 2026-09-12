@@ -18,7 +18,7 @@ import (
 )
 
 // one dd keeps exactly one virtio queue busy, so the writers are the queue fan-out
-const ddScript = `for i in $(seq 1 %d); do dd if=/dev/zero of=/root/qaab.$i bs=%s count=%d oflag=direct conv=fsync 2>/dev/null & done; wait`
+const ddScript = `pids=; for i in $(seq 1 %d); do dd if=/dev/zero of=/root/qaab.$i bs=%s count=%d oflag=direct conv=fsync 2>/dev/null & pids="$pids $!"; done; status=0; for pid in $pids; do wait "$pid" || status=1; done; exit "$status"`
 
 type stats struct {
 	P50 float64 `json:"p50"`
@@ -113,9 +113,12 @@ func run(addr, token, template, size, label, ioBS string, n, ioCount, ioJobs int
 	writes.Wait()
 	ioWall := msSince(ioStart)
 
-	for _, sb := range boxes {
+	releaseErrs := make([]error, n)
+	for i, sb := range boxes {
 		if sb != nil {
-			_ = sb.Close()
+			if closeErr := sb.Close(); closeErr != nil {
+				releaseErrs[i] = fmt.Errorf("release sandbox %s: %w", sb.ID, closeErr)
+			}
 		}
 	}
 
@@ -125,7 +128,7 @@ func run(addr, token, template, size, label, ioBS string, n, ioCount, ioJobs int
 		Label: label, N: n, IOBlock: ioBS, IOCount: ioCount, IOJobs: ioJobs,
 		Claim: summarize(claimOK), ClaimWallMS: claimWall,
 		IO: summarize(ioOK), IOWallMS: ioWall,
-		Failures: failed(claimErrs) + failed(ioErrs),
+		Failures: failed(claimErrs) + failed(ioErrs) + failed(releaseErrs),
 	}
 	if ioWall > 0 {
 		written := float64(len(ioOK)*ioCount*ioJobs) * float64(blockSize) / (1 << 20)
@@ -137,7 +140,7 @@ func run(addr, token, template, size, label, ioBS string, n, ioCount, ioJobs int
 	}
 	fmt.Println(string(encoded))
 
-	for _, e := range slices.Concat(claimErrs, ioErrs) {
+	for _, e := range slices.Concat(claimErrs, ioErrs, releaseErrs) {
 		if e != nil {
 			return e
 		}
