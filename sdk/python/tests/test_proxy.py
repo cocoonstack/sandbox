@@ -31,6 +31,28 @@ class FakePortConn:
         self._closed = True
 
 
+class ClosedPortConn:
+    """A guest port whose upstream refuses, reported while the client is idle."""
+
+    def __init__(self):
+        self._dialled = False
+
+    def send(self, data: bytes) -> None:
+        pass
+
+    def recv(self) -> bytes:
+        if not self._dialled:
+            self._dialled = True
+            time.sleep(0.3)
+        return b""
+
+    def close_write(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
 def test_proxy_port_accepts_and_pipes(monkeypatch):
     sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
     monkeypatch.setattr(sb, "dial_port", lambda port: FakePortConn())
@@ -50,29 +72,6 @@ def test_proxy_port_accepts_and_pipes(monkeypatch):
         c.close()
     finally:
         listener.close()
-
-
-class ClosedPortConn:
-    """A guest port whose upstream refuses, so silkd reports the close while
-    the local client is still idle and the proxy is blocked reading it."""
-
-    def __init__(self):
-        self._dialled = False
-
-    def send(self, data: bytes) -> None:
-        pass
-
-    def recv(self) -> bytes:
-        if not self._dialled:
-            self._dialled = True
-            time.sleep(0.3)
-        return b""
-
-    def close_write(self) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
 
 
 def test_proxy_port_ends_the_local_connection_when_the_guest_port_is_closed(monkeypatch):

@@ -381,8 +381,7 @@ class Sandbox:
                     if not chunk:
                         break
                     local.sendall(chunk)
-            # half-close: closing here cannot wake the read below, and the
-            # socket lives until that read ends, so the client never sees EOF.
+            # a close cannot wake the read below, and the socket outlives it
             with contextlib.suppress(OSError):
                 local.shutdown(socket.SHUT_WR)
 
