@@ -381,22 +381,28 @@ class Sandbox:
                     if not chunk:
                         break
                     local.sendall(chunk)
+            # half-close: closing here cannot wake the read below, and the
+            # socket lives until that read ends, so the client never sees EOF.
             with contextlib.suppress(OSError):
-                local.close()
+                local.shutdown(socket.SHUT_WR)
 
         pump = threading.Thread(target=pump_out, daemon=True)
         pump.start()
         try:
-            while True:
-                chunk = local.recv(FS_CHUNK)
-                if not chunk:
-                    break
-                guest.send(chunk)
+            with contextlib.suppress(OSError):
+                while True:
+                    chunk = local.recv(FS_CHUNK)
+                    if not chunk:
+                        break
+                    guest.send(chunk)
             # half-close, not close: the guest's reply is still in flight.
-            guest.close_write()
+            with contextlib.suppress(SandboxError, OSError):
+                guest.close_write()
             pump.join()
         finally:
             guest.close()
+            with contextlib.suppress(OSError):
+                local.close()
 
     def _call(self, op: str, expect: str, **fields) -> dict:
         with self._dial() as conn:
