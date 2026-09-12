@@ -79,7 +79,7 @@ performance) — source in
 ```bash
 make help          # this list
 make lint test     # Rust: boot/init + silkd (fmt --check, clippy -D warnings, tests)
-make go-lint       # Go: sandboxd + sdk/go + e2e + mcp, GOOS linux AND darwin
+make go-lint       # Go: protocol/wire + sandboxd + sdk/go + e2e + mcp, GOOS linux AND darwin
 make go-test       # Go: go test -race across the Go modules
 make sandboxd      # build dist/sandboxd
 make boot          # kernel + initramfs artifact image (docker)

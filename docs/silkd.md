@@ -52,7 +52,7 @@ A failed verb terminates with `error {kind, message}`:
 |---|---|
 | `bad_request` | malformed frame, empty argv, invalid pattern |
 | `not_found` | unknown pid/session/path |
-| `unimplemented` | verb unavailable on this lane — notably git clone/push/pull on the no-network lane, whose message points at `fs_push` |
+| `unimplemented` | verb unavailable on this lane — notably git clone/push/pull on the no-network lane, whose message points at `fs.push` |
 | `internal` | everything else (spawn failures, git errors, I/O) |
 
 ## Network lanes

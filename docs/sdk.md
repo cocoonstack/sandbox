@@ -145,7 +145,7 @@ defer sb.Close()
 | option | values | default | meaning |
 |---|---|---|---|
 | `WithNetwork(n)` | `NetNone`, `NetEgress` | `NetNone` | Cloud Hypervisor network shape: `NetNone` disables the NIC and uses vsock-only I/O; `NetEgress` attaches a bridge/CNI NIC |
-| `WithSize(s)` | `Small`, `Medium`, `Large`, `XLarge` | `Small` | resource tier: 1cpu/512M, 2cpu/1G, 4cpu/4G, 4cpu/8G |
+| `WithSize(s)` | `Small`, `Medium`, `Large`, `XLarge`, `XXLarge` | `Small` | resource tier: 1cpu/512M, 2cpu/1G, 4cpu/4G, 4cpu/8G, 8cpu/16G |
 | `WithVolumes(volumes...)` | `Volume{Name, Mount?, Mode?}` entries | none | attach and mount up to eight unique catalog dataset disks; `Mount` defaults to `/volumes/<name>`; `Mode` is `"ro"` (default) or `"rw"` — `"rw"` requires the catalog entry's `writable: true`; supported by `Client.New` and `Template.New` |
 | `WithVolumesAttachOnly()` | — | mount | attach the requested volumes without mounting them; the workload finds each device and owns the mount. Rejects a `Volume.Mount` locally |
 | `WithTimeout(d)` | duration | server default 5m | sandbox TTL, rounded up to seconds, server-capped at 24h. The node reaps the sandbox after the TTL even if the client vanishes |
@@ -164,8 +164,8 @@ node, and `Token()` returns the per-sandbox bearer to persist with `ID` for a
 later `Lookup`; `Close()` releases the sandbox (releasing one already gone is
 not an error, and `Close` is bounded internally so it stays defer-friendly).
 Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Passing
-`WithVolumes` to `Checkpoint.New` returns a local error because checkpoint
-branches do not support volumes of either mode in this version.
+`WithVolumes` or `WithClaimRef` to `Checkpoint.New` returns a local error:
+checkpoint branches support neither volumes nor a claim reference in this version.
 
 `WithVolumesAttachOnly()` claims the same volumes without mounting them: the
 entries in `Sandbox.Volumes` carry an empty `Mount`, and the workload finds
@@ -289,7 +289,7 @@ processes — without stopping it (the same brief pause a fork takes), and
 moment; the checkpoint's key axes apply and `WithTimeout` may set each
 branch's TTL. Successive checkpoints of sources and branches form a tree.
 Checkpoints live in the node's checkpoint store — a shared FUSE mount or
-`checkpoint_store: s3` object storage lets any node branch them.
+a `checkpoint_store` of kind `s3` lets any node branch them.
 `client.Checkpoints` lists the connected node's records, while
 `client.Checkpoint(id)` creates an entry-node-bound handle for an already known
 id without listing. `Checkpoint.New` follows an owner probe/redirect and may

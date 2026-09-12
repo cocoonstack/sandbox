@@ -231,8 +231,8 @@ A checkpoint captures memory, disk, and running processes without stopping
 the sandbox (the same brief pause a fork takes); `ckpt.new(ttl_seconds=0)`
 branches any number of independent sandboxes from that exact moment, and
 successive checkpoints of sources and branches form a tree. Checkpoints live
-in the node's checkpoint store — a shared FUSE mount or `checkpoint_store: s3`
-lets any node branch them. `client.checkpoints()` lists the connected node's
+in the node's checkpoint store — a shared FUSE mount or a `checkpoint_store` of
+kind `s3` lets any node branch them. `client.checkpoints()` lists the connected node's
 records, while `client.checkpoint(id)` creates an entry-node-bound handle for
 an already known id without listing. `new()` follows an owner redirect and may
 heal a missing record locally; `delete()` acts on the handle's bound node.

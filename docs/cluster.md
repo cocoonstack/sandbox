@@ -272,7 +272,7 @@ Some config must match on every node or the cluster fails in confusing ways:
 | `egress_ca` cluster root | a guest checkpointed/redirected across nodes trusts the root; a divergent root fails interception |
 
 Each node gossips a digest of these (HMAC-keyed by `cluster_key` when set;
-otherwise a token-free digest of tenant names + the CA root, so nothing
+otherwise a token-free digest of tenant names + the CA root + `checkpoint_ttl_hours`, so nothing
 brute-forceable rides cleartext gossip). A mismatch logs a warning at the moment
 the divergent node appears — not at the first unlucky redirect — and raises the
 `sandboxd_config_digest_mismatch` gauge. It is warn-only: a rolling credential
