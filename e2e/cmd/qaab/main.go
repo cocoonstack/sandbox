@@ -115,10 +115,11 @@ func run(addr, token, template, size, label, ioBS string, n, ioCount, ioJobs int
 
 	releaseErrs := make([]error, n)
 	for i, sb := range boxes {
-		if sb != nil {
-			if closeErr := sb.Close(); closeErr != nil {
-				releaseErrs[i] = fmt.Errorf("release sandbox %s: %w", sb.ID, closeErr)
-			}
+		if sb == nil {
+			continue
+		}
+		if closeErr := sb.Close(); closeErr != nil {
+			releaseErrs[i] = fmt.Errorf("release sandbox %s: %w", sb.ID, closeErr)
 		}
 	}
 
@@ -154,11 +155,11 @@ func blockBytes(bs string) int {
 	unit := 1
 	switch {
 	case strings.HasSuffix(bs, "k"), strings.HasSuffix(bs, "K"):
-		unit = 1 << 10
+		unit, bs = 1<<10, bs[:len(bs)-1]
 	case strings.HasSuffix(bs, "M"):
-		unit = 1 << 20
+		unit, bs = 1<<20, bs[:len(bs)-1]
 	}
-	n, err := strconv.Atoi(strings.TrimRight(bs, "kKM"))
+	n, err := strconv.Atoi(bs)
 	if err != nil {
 		return 0
 	}
