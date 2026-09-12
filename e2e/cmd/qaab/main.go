@@ -8,10 +8,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
@@ -64,7 +66,8 @@ func run(addr, token, template, size, label, ioBS string, n, ioCount, ioJobs int
 	if blockSize == 0 {
 		return fmt.Errorf("--io-bs %q must be a plain byte count or carry a k or M suffix", ioBS)
 	}
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(token))
 	if err != nil {
 		return err
