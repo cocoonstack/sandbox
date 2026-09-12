@@ -105,6 +105,51 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && printf '[Manager]\nDefaultEnvironment=GTK_USE_PORTAL=0\n' \
       > /etc/systemd/system.conf.d/10-gtk-portal.conf \
     && printf 'GTK_USE_PORTAL=0\n' >> /etc/environment \
+    # Only silkd carries the base image's proxy variables, and only into the
+    # execs it spawns, so the session's browsers and the commands
+    # osworld-server runs have no way out on the none lane. The NIC test is
+    # silkd's own: a lane that routes directly must not be pointed at a relay
+    # whose host side is closed.
+    && printf '%s\n' \
+      'http_proxy=http://127.0.0.1:3128' \
+      'https_proxy=http://127.0.0.1:3128' \
+      'no_proxy=localhost,127.0.0.1,::1' \
+      > /usr/local/share/guest-proxy.env \
+    && printf '%s\n' \
+      '[system/proxy]' \
+      'mode='"'"'manual'"'"'' \
+      'ignore-hosts=['"'"'localhost'"'"','"'"'127.0.0.0/8'"'"','"'"'::1'"'"']' \
+      '[system/proxy/http]' \
+      'host='"'"'127.0.0.1'"'"'' \
+      'port=3128' \
+      '[system/proxy/https]' \
+      'host='"'"'127.0.0.1'"'"'' \
+      'port=3128' \
+      > /usr/local/share/guest-proxy.dconf \
+    && printf '%s\n' \
+      '#!/bin/sh' \
+      'set -e' \
+      ': > /run/guest-proxy.env' \
+      'for n in /sys/class/net/*; do case ${n##*/} in lo|sit0) ;; *) exit 0;; esac; done' \
+      'cat /usr/local/share/guest-proxy.env > /run/guest-proxy.env' \
+      'cat /usr/local/share/guest-proxy.dconf > /etc/dconf/db/local.d/01-proxy' \
+      'dconf update' \
+      > /usr/local/sbin/guest-proxy-setup \
+    && chmod 0755 /usr/local/sbin/guest-proxy-setup \
+    && printf '%s\n' \
+      '[Unit]' \
+      'Description=point the desktop at the guest proxy relay' \
+      'After=silkd.service' \
+      'Before=desktop-session.service osworld-server.service' \
+      '' \
+      '[Service]' \
+      'Type=oneshot' \
+      'RemainAfterExit=yes' \
+      'ExecStart=/usr/local/sbin/guest-proxy-setup' \
+      '' \
+      '[Install]' \
+      'WantedBy=multi-user.target' \
+      > /etc/systemd/system/guest-proxy.service \
     && printf '%s\n' \
       '[Unit]' \
       'Description=virtual X display for the desktop session' \
@@ -123,12 +168,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       '[Unit]' \
       'Description=GNOME session on the virtual display' \
       'Requires=xvfb.service user@1000.service' \
+      'After=guest-proxy.service' \
       'After=xvfb.service user@1000.service' \
       '' \
       '[Service]' \
       'Type=simple' \
       'User=user' \
       'WorkingDirectory=/home/user' \
+      'EnvironmentFile=-/run/guest-proxy.env' \
       'Environment=DISPLAY=:1' \
       'Environment=HOME=/home/user' \
       'Environment=XDG_RUNTIME_DIR=/run/user/1000' \
@@ -159,6 +206,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'Type=simple' \
       'User=user' \
       'WorkingDirectory=/opt/osworld-server' \
+      'EnvironmentFile=-/run/guest-proxy.env' \
       'Environment=DISPLAY=:1' \
       'Environment=HOME=/home/user' \
       'Environment=XDG_RUNTIME_DIR=/run/user/1000' \
@@ -189,4 +237,4 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       '[Install]' \
       'WantedBy=multi-user.target' \
       > /etc/systemd/system/cdp-bridge.service \
-    && systemctl enable xvfb.service desktop-session.service osworld-server.service cdp-bridge.service
+    && systemctl enable guest-proxy.service xvfb.service desktop-session.service osworld-server.service cdp-bridge.service

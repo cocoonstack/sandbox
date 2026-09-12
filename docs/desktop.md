@@ -71,6 +71,9 @@ Configure it with `SANDBOXD_ADDR`, `SANDBOXD_TOKEN`, `COCOON_TEMPLATE`
 - `chromium` is a second launcher onto the same engine, for an agent that
   needs a browser the tasks do not pkill and rebind. It takes the caller's
   profile and debugging port.
+- On a guest with no NIC, `guest-proxy.service` points the session's browsers
+  and `osworld-server`'s commands at silkd's loopback relay; a guest with a
+  NIC routes directly and the unit does nothing.
 - No Thunderbird or VS Code yet (snap-only on 24.04 / vendor repo); tasks
   targeting them are out of scope for this flavor version.
 - x86_64 only.
