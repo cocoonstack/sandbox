@@ -157,7 +157,7 @@ func socksProxy(t *testing.T, policy Policy, ca *CA, dial DialFunc, events chan 
 		_ = ln.Close()
 		p.Close()
 	})
-	go func() { _ = p.ServeSOCKS(t.Context(), ln) }()
+	go p.ServeSOCKS(t.Context(), ln)
 	return p, ln.Addr().String()
 }
 

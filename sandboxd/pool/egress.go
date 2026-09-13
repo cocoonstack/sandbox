@@ -157,7 +157,7 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	m.mu.Unlock()
 	go func() { _ = el.srv.Serve(el.ln) }()
 	if el.socks != nil {
-		go func() { _ = proxy.ServeSOCKS(evCtx, el.socks) }()
+		go proxy.ServeSOCKS(evCtx, el.socks)
 	}
 	return nil
 }
