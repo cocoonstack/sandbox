@@ -47,11 +47,13 @@ through the same code: a rule with `methods` that does not name `CONNECT`
 denies it, and a rule with a `secret` opens it without injecting anything, on
 both ports. The one difference is `intercept`: on 3128 such a rule terminates
 the TLS and filters the requests inside, on 1080 there is no HTTP to filter, so
-the tunnel is refused. The listener is bound only when the effective policy
-holds at least one rule a tunnel could match; a pool whose rules are all
-method-restricted or intercepted pays nothing for it, and with no policy at all
-the host side stays unwired, so the guest's dial is refused like the HTTP one.
-Audit lines carry `"method":"SOCKS5"`.
+the tunnel is refused. The listener is bound only when some rule could admit a
+tunnel — a conservative test: each side of a pool/tenant pair is checked on its
+own, so disjoint host sets still bind a listener that denies everything. A pool
+whose rules all carry `methods` without `CONNECT`, or all `intercept`, pays
+nothing for it, and with no policy at all the host side stays unwired, so the
+guest's dial is refused like the HTTP one. Audit lines carry
+`"method":"SOCKS5"`.
 
 ```sh
 curl --socks5-hostname 127.0.0.1:1080 imaps://imap.example.com/   # allowed: {"host": "imap.example.com"}
