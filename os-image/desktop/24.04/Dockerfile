@@ -128,6 +128,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'no_proxy=localhost,127.0.0.1,::1' \
       > /usr/local/share/guest-proxy.env \
     && printf '%s\n' \
+      'Acquire::http::Proxy "http://127.0.0.1:3128";' \
+      'Acquire::https::Proxy "http://127.0.0.1:3128";' \
+      > /usr/local/share/guest-proxy.apt \
+    && printf '%s\n' \
       '[system/proxy]' \
       'mode='"'"'manual'"'"'' \
       'ignore-hosts=['"'"'localhost'"'"','"'"'127.0.0.0/8'"'"','"'"'::1'"'"']' \
@@ -149,6 +153,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'cat /usr/local/share/guest-proxy.env > /run/guest-proxy.env' \
       'cat /usr/local/share/guest-proxy.dconf > /etc/dconf/db/local.d/01-proxy' \
       'dconf update' \
+      'cat /usr/local/share/guest-proxy.apt > /etc/apt/apt.conf.d/01-guest-proxy' \
       > /usr/local/sbin/guest-proxy-setup \
     && chmod 0755 /usr/local/sbin/guest-proxy-setup \
     && printf '%s\n' \
@@ -283,7 +288,7 @@ COPY --chmod=0755 24.04/socks-connect.py /usr/local/sbin/socks-connect
 # WPS blocks on a modal EULA and nags about absent symbol fonts.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bsdextrautils xdg-utils desktop-file-utils shared-mime-info bzip2 xz-utils \
-    libdbus-glib-1-2 shotcut=${SHOTCUT_VERSION} \
+    libdbus-glib-1-2 tinyproxy shotcut=${SHOTCUT_VERSION} \
     && install -d -m 0755 /etc/apt/keyrings \
     && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
       | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg \
@@ -347,6 +352,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && tar -xJf /tmp/reaper.tar.xz -C /tmp/reaper --strip-components=1 \
     && /tmp/reaper/install-reaper.sh --install /opt --integrate-desktop --quiet \
     && ln -sf /opt/REAPER/reaper /usr/local/bin/reaper \
+    # the harness starts its own instance per task against a residential upstream
+    && systemctl disable tinyproxy.service \
     && update-desktop-database /usr/share/applications \
     && rm -rf /tmp/thunderbird.tar.bz2 /tmp/wps.deb /tmp/zotero.tar.bz2 \
       /tmp/reaper /tmp/reaper.tar.xz /var/lib/apt/lists/*
