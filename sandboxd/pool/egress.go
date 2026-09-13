@@ -44,12 +44,14 @@ var (
 	}
 )
 
-// egressListener is one sandbox's egress accept point over the per-sandbox UDS.
+// egressListener is one sandbox's egress accept points over the per-sandbox UDS pair.
 type egressListener struct {
-	srv   *http.Server
-	proxy *egress.Proxy
-	ln    net.Listener
-	path  string
+	srv       *http.Server
+	proxy     *egress.Proxy
+	ln        net.Listener
+	socks     net.Listener
+	path      string
+	socksPath string
 }
 
 func (e *egressListener) close() {
@@ -57,6 +59,10 @@ func (e *egressListener) close() {
 	e.proxy.Close()
 	_ = e.ln.Close()
 	_ = os.Remove(e.path)
+	if e.socks != nil {
+		_ = e.socks.Close()
+		_ = os.Remove(e.socksPath)
+	}
 }
 
 // armEgress locks the egress-lane NIC then binds the proxy: fail-closed, never a free NIC.
@@ -111,21 +117,33 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	if !ok {
 		return nil
 	}
-	path := engine.EgressSocketPath(sb.VsockSocket)
-	_ = os.Remove(path) // a stale socket from a prior life would block the bind
-	ln, err := net.Listen("unix", path)
-	if err != nil {
-		return fmt.Errorf("listen egress %s: %w", sb.ID, err)
-	}
 	id, tenant := sb.ID, sb.Tenant
 	evCtx := context.WithoutCancel(ctx)
 	proxy := egress.New(id, tenant, policy, m.egressSecrets, m.egressCA, m.dial,
 		func(ev egress.Event) { m.recordEgress(evCtx, id, tenant, ev) })
-	el := &egressListener{srv: &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}, proxy: proxy, ln: ln, path: path}
+	el := &egressListener{
+		srv:       &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second},
+		proxy:     proxy,
+		path:      engine.EgressSocketPath(sb.VsockSocket),
+		socksPath: engine.SocksSocketPath(sb.VsockSocket),
+	}
+	var err error
+	if el.ln, err = listenUnix(el.path); err != nil {
+		return fmt.Errorf("listen egress %s: %w", id, err)
+	}
+	if policy.Tunnels() {
+		if el.socks, err = listenUnix(el.socksPath); err != nil {
+			el.close()
+			return fmt.Errorf("listen socks %s: %w", id, err)
+		}
+	}
 	m.mu.Lock()
 	m.egressListeners[id] = el
 	m.mu.Unlock()
-	go func() { _ = el.srv.Serve(ln) }()
+	go func() { _ = el.srv.Serve(el.ln) }()
+	if el.socks != nil {
+		go func() { _ = proxy.ServeStream(evCtx, el.socks) }()
+	}
 	return nil
 }
 
@@ -188,6 +206,12 @@ func (m *Manager) effectivePolicy(sb *types.Sandbox) (egress.Evaluator, bool) {
 		return nil, false
 	}
 	return egress.Compose(*poolPol, *tenantPol), true
+}
+
+// listenUnix binds path after clearing a stale socket from a prior life that would block the bind.
+func listenUnix(path string) (net.Listener, error) {
+	_ = os.Remove(path)
+	return net.Listen("unix", path)
 }
 
 // newEgressDialer blocks internal targets, then re-admits exactly the node-named prefixes.

@@ -40,6 +40,7 @@ const (
 	formatJSON    = "json"
 	silkdPort     = 2048 // silkd's fixed guest vsock port, the claim-ready anchor
 	egressPort    = 2049 // guest→host egress port; VMM maps it to <vsock_socket>_2049
+	socksPort     = 2050
 	cmdTimeout    = 2 * time.Minute
 	probeInterval = 20 * time.Millisecond
 	connectMax    = 64   // "OK <port>" handshake reply cap
@@ -398,6 +399,11 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 // EgressSocketPath is the host UDS the VMM connects when the guest dials CID2:egressPort.
 func EgressSocketPath(vsockSocket string) string {
 	return fmt.Sprintf("%s_%d", vsockSocket, egressPort)
+}
+
+// SocksSocketPath is the host UDS the VMM connects when the guest dials CID2:socksPort.
+func SocksSocketPath(vsockSocket string) string {
+	return fmt.Sprintf("%s_%d", vsockSocket, socksPort)
 }
 
 // CapacitySignature returns the node-capacity signature err carries, or "".

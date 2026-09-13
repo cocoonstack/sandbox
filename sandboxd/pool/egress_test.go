@@ -75,6 +75,50 @@ func TestEgressProxyInjectsAndGates(t *testing.T) {
 	}
 }
 
+func TestArmEgressBindsSocksOnlyForTunnelRules(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy *egress.Policy
+		want   bool
+	}{
+		{"bare host rule", &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}, true},
+		{"GET-only rule", &egress.Policy{Allow: []egress.Rule{{Host: "example.com", Methods: []string{"GET"}}}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: tt.policy})
+			sockDir, err := os.MkdirTemp("/tmp", "eg")
+			if err != nil {
+				t.Fatalf("sockdir: %v", err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+			sb := &types.Sandbox{ID: "sb_socks", Key: testKey, VsockSocket: filepath.Join(sockDir, "v")}
+			if armErr := m.armEgressProxy(t.Context(), sb); armErr != nil {
+				t.Fatalf("arm proxy: %v", armErr)
+			}
+			path := engine.SocksSocketPath(sb.VsockSocket)
+			conn, err := net.Dial("unix", path)
+			if (err == nil) != tt.want {
+				t.Fatalf("socks listener bound = %v, want %v", err == nil, tt.want)
+			}
+			if err == nil {
+				if _, err = conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
+					t.Fatalf("write greeting: %v", err)
+				}
+				choice := make([]byte, 2)
+				if _, err = io.ReadFull(conn, choice); err != nil || choice[1] != 0x00 {
+					t.Errorf("method choice = %v, %v; want no-auth", choice, err)
+				}
+				_ = conn.Close()
+			}
+			m.disarmEgress(sb.ID, true)
+			if _, err := net.Dial("unix", path); err == nil {
+				t.Error("socks socket still accepts after disarm")
+			}
+		})
+	}
+}
+
 func TestArmEgressFailsClosedWhenNICUnlockable(t *testing.T) {
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 
