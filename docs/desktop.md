@@ -73,7 +73,10 @@ Configure it with `SANDBOXD_ADDR`, `SANDBOXD_TOKEN`, `COCOON_TEMPLATE`
   profile and debugging port.
 - On a guest with no NIC, `guest-proxy.service` points the session's browsers
   and `osworld-server`'s commands at silkd's loopback relay; a guest with a
-  NIC routes directly and the unit does nothing.
+  NIC routes directly and the unit does nothing. The unit tests NIC presence
+  only — it runs before the host can mark a locked NIC, so it does not follow
+  the locked-NIC marker silkd honors on the bridge egress lane; run desktop
+  pools on the none lane.
 - No Thunderbird or VS Code yet (snap-only on 24.04 / vendor repo); tasks
   targeting them are out of scope for this flavor version.
 - x86_64 only.
