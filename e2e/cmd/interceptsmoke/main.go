@@ -73,7 +73,7 @@ func run(addr, token, template, echo, secret, issuer string) error {
 		fmt.Printf("  guest's TLS leaf issued by this node's intermediate (%s)\n", strings.TrimSpace(gotIssuer))
 	}
 
-	blocked, _ := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -s -m 3 https://%s/ >/dev/null 2>&1 && echo REACHED || echo BLOCKED", echo))
+	blocked, _ := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -s -m 3 --noproxy '*' https://%s/ >/dev/null 2>&1 && echo REACHED || echo BLOCKED", echo))
 	if strings.TrimSpace(blocked) != "BLOCKED" {
 		return fmt.Errorf("guest reached the origin without the proxy: %q", strings.TrimSpace(blocked))
 	}
