@@ -137,6 +137,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       '[system/proxy/https]' \
       'host='"'"'127.0.0.1'"'"'' \
       'port=3128' \
+      '[system/proxy/socks]' \
+      'host='"'"'127.0.0.1'"'"'' \
+      'port=1080' \
       > /usr/local/share/guest-proxy.dconf \
     && printf '%s\n' \
       '#!/bin/sh' \
@@ -162,6 +165,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       '[Install]' \
       'WantedBy=multi-user.target' \
       > /etc/systemd/system/guest-proxy.service \
+    # IMAP and SMTP have no HTTP-proxy form, so the mail client speaks SOCKS5
+    # to the same relay; names travel to the proxy, which is the only resolver.
+    && printf '%s\n' \
+      '[Unit]' \
+      'Description=SOCKS5 front end for the guest proxy relay' \
+      'After=guest-proxy.service' \
+      'Wants=guest-proxy.service' \
+      'Before=desktop-session.service osworld-server.service' \
+      '' \
+      '[Service]' \
+      'Type=simple' \
+      'EnvironmentFile=-/run/guest-proxy.env' \
+      'ExecStart=/usr/local/sbin/socks-connect' \
+      'Restart=always' \
+      'RestartSec=2s' \
+      '' \
+      '[Install]' \
+      'WantedBy=multi-user.target' \
+      > /etc/systemd/system/socks-connect.service \
     && printf '%s\n' \
       '[Unit]' \
       'Description=virtual X display for the desktop session' \
@@ -251,7 +273,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       '[Install]' \
       'WantedBy=multi-user.target' \
       > /etc/systemd/system/cdp-bridge.service \
-    && systemctl enable guest-proxy.service xvfb.service desktop-session.service osworld-server.service cdp-bridge.service
+    && systemctl enable guest-proxy.service socks-connect.service xvfb.service desktop-session.service osworld-server.service cdp-bridge.service
+
+COPY --chmod=0755 24.04/socks-connect.py /usr/local/sbin/socks-connect
 
 # Six more applications the OSWorld task set drives. bsdextrautils and
 # xdg-utils: WPS's postinst exits 127 without them and wedges apt.
@@ -283,6 +307,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'Categories=Network;Email;' \
       'MimeType=x-scheme-handler/mailto;message/rfc822;' \
       > /usr/share/applications/thunderbird.desktop \
+    # a task seeds its own profile, so the proxy has to come from policy
+    && install -d /usr/lib/thunderbird/distribution \
+    && printf '%s\n' \
+      '{"policies":{"Proxy":{"Mode":"manual","SOCKSProxy":"127.0.0.1:1080",' \
+      '"SOCKSVersion":5,"UseProxyForDNS":true,"Locked":true,' \
+      '"Passthrough":"localhost, 127.0.0.1"}}}' \
+      > /usr/lib/thunderbird/distribution/policies.json \
     && curl -fsSL -o /tmp/wps.deb \
       "https://wdl1.pcfg.cache.wpscdn.com/wpsdl/wpsoffice/download/linux/${WPS_BUILD##*.}/wps-office_${WPS_BUILD}.XA_amd64.deb" \
     && apt-get install -y --no-install-recommends /tmp/wps.deb \
