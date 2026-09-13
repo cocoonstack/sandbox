@@ -28,18 +28,20 @@ const (
 	socksBadCmd    = 0x07
 	socksBadAtyp   = 0x08
 
-	socksTimeout = 30 * time.Second
+	socksTimeout       = 30 * time.Second
+	socksAcceptBackoff = 50 * time.Millisecond
 )
 
 // ServeSOCKS serves SOCKS5 on ln until it closes; a tunnel takes the decision of an un-intercepted CONNECT.
-func (p *Proxy) ServeSOCKS(ctx context.Context, ln net.Listener) error {
+func (p *Proxy) ServeSOCKS(ctx context.Context, ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
+		if errors.Is(err, net.ErrClosed) {
+			return
+		}
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				return nil
-			}
-			return err
+			time.Sleep(socksAcceptBackoff)
+			continue
 		}
 		go p.serveSocks(ctx, conn)
 	}
