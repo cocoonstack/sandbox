@@ -96,12 +96,12 @@ impl State {
                         proto::write_frame(&mut writer, &Response::SessionCreated { id }).await
                     }
                     Err(e) => {
-                        proto::error_frame(
-                            &mut writer,
-                            ErrorKind::Internal,
-                            format!("session create: {e}"),
-                        )
-                        .await
+                        let kind = if e.kind() == std::io::ErrorKind::InvalidInput {
+                            ErrorKind::BadRequest
+                        } else {
+                            ErrorKind::Internal
+                        };
+                        proto::error_frame(&mut writer, kind, format!("session create: {e}")).await
                     }
                 }
             }
