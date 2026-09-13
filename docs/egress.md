@@ -31,6 +31,31 @@ curl https://evil.example/                                  # 403 egress denied:
 curl -x http://127.0.0.1:3128 https://api.github.com/user   # explicit form, same path
 ```
 
+### Non-HTTP traffic (SOCKS5)
+
+Clients that speak no HTTP proxy for their own protocol — IMAP and SMTP, SSH
+via `ProxyCommand`, database drivers, `rclone` and friends over `ALL_PROXY` —
+use the SOCKS5 listener silkd binds at `127.0.0.1:1080` and relays over
+`CID2:2050` (`<vsock_socket>_2050`). It is the same per-sandbox proxy behind a
+second door: CONNECT only (BIND and UDP ASSOCIATE answer *command not
+supported*), no authentication (the socket path already carries the sandbox's
+identity), and a `DOMAINNAME` destination is resolved host-side, so the guest
+still needs no resolver.
+
+A SOCKS5 tunnel takes exactly the decision an HTTP `CONNECT` to the same host
+takes: a rule with `methods` that does not name `CONNECT` denies it, a rule
+with `intercept` denies it (the tunnel carries no HTTP to filter), and a rule
+with a `secret` opens it without injecting anything. A rule therefore means the
+same thing on both ports, and neither port can grant what the other refuses.
+The listener is bound only when the effective policy holds at least one rule a
+tunnel could match; a pool whose rules are all method-restricted or
+intercepted pays nothing for it, and with no policy at all the guest's dial is
+refused like the HTTP one. Audit lines carry `"method":"SOCKS5"`.
+
+```sh
+curl --socks5-hostname 127.0.0.1:1080 imaps://imap.example.com/   # allowed: {"host": "imap.example.com"}
+```
+
 ## How it works (egress lane)
 
 A `net:"egress"` guest owns a real NIC on the host bridge and reaches the same

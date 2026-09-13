@@ -64,8 +64,10 @@ kernel auto-creates virtual tunnels (`sit0` and friends) even on the no-NIC
 lane. `SILKD_NET=none|egress` overrides the probe for tests and operators.
 
 On every lane silkd also binds `127.0.0.1:3128` and relays each connection to
-the host's [guarded-egress](egress.md) proxy over vsock (`CID2:2049`); when the
-host wired no policy the per-connection dial is refused, so the port is inert.
+the host's [guarded-egress](egress.md) proxy over vsock (`CID2:2049`), and
+`127.0.0.1:1080` to its SOCKS5 door (`CID2:2050`) for clients whose protocol
+has no HTTP-proxy form; when the host wired no policy the per-connection dial
+is refused, so the ports are inert.
 On the no-network lane silkd forwards the image-baked proxy variables
 (`http_proxy` and friends) into every exec, so unconfigured clients use the
 relay without being told; a lane with its own network never gets them.

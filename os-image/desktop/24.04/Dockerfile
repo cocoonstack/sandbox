@@ -173,25 +173,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       '[Install]' \
       'WantedBy=multi-user.target' \
       > /etc/systemd/system/guest-proxy.service \
-    # IMAP and SMTP have no HTTP-proxy form, so the mail client speaks SOCKS5
-    # to the same relay; names travel to the proxy, which is the only resolver.
-    && printf '%s\n' \
-      '[Unit]' \
-      'Description=SOCKS5 front end for the guest proxy relay' \
-      'After=guest-proxy.service' \
-      'Wants=guest-proxy.service' \
-      'Before=desktop-session.service osworld-server.service' \
-      '' \
-      '[Service]' \
-      'Type=simple' \
-      'EnvironmentFile=-/run/guest-proxy.env' \
-      'ExecStart=/usr/local/sbin/socks-connect' \
-      'Restart=always' \
-      'RestartSec=2s' \
-      '' \
-      '[Install]' \
-      'WantedBy=multi-user.target' \
-      > /etc/systemd/system/socks-connect.service \
     && printf '%s\n' \
       '[Unit]' \
       'Description=virtual X display for the desktop session' \
@@ -281,9 +262,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       '[Install]' \
       'WantedBy=multi-user.target' \
       > /etc/systemd/system/cdp-bridge.service \
-    && systemctl enable guest-proxy.service socks-connect.service xvfb.service desktop-session.service osworld-server.service cdp-bridge.service
-
-COPY --chmod=0755 24.04/socks-connect.py /usr/local/sbin/socks-connect
+    && systemctl enable guest-proxy.service xvfb.service desktop-session.service osworld-server.service cdp-bridge.service
 
 # Six more applications the OSWorld task set drives. bsdextrautils and
 # xdg-utils: WPS's postinst exits 127 without them and wedges apt.
