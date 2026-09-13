@@ -285,13 +285,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --chmod=0755 24.04/socks-connect.py /usr/local/sbin/socks-connect
 
-# Six more applications the OSWorld task set drives. bsdextrautils and
-# xdg-utils: WPS's postinst exits 127 without them and wedges apt.
-# libdbus-glib-1-2: Thunderbird and Zotero dlopen it, undeclared.
-# WPS blocks on a modal EULA and nags about absent symbol fonts.
+# The applications and command-line tools the OSWorld task set drives, beyond
+# what the flavor already carried. bsdextrautils and xdg-utils: WPS's postinst
+# exits 127 without them and wedges apt. libdbus-glib-1-2: Thunderbird and
+# Zotero dlopen it, undeclared. WPS blocks on a modal EULA and nags about
+# absent symbol fonts. Archive packages take the version the suite froze.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bsdextrautils xdg-utils desktop-file-utils shared-mime-info bzip2 xz-utils \
     libdbus-glib-1-2 tinyproxy shotcut=${SHOTCUT_VERSION} \
+    unzip zip poppler-utils imagemagick sqlite3 psmisc \
+    python-is-python3 python3-pip nodejs npm \
     && install -d -m 0755 /etc/apt/keyrings \
     && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
       | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg \
