@@ -68,9 +68,11 @@ the host's [guarded-egress](egress.md) proxy over vsock (`CID2:2049`), and
 `127.0.0.1:1080` to its SOCKS5 door (`CID2:2050`) for clients whose protocol
 has no HTTP-proxy form; when the host wired no policy the per-connection dial
 is refused, so the ports are inert.
-On the no-network lane silkd forwards the image-baked proxy variables
-(`http_proxy` and friends) into every exec, so unconfigured clients use the
-relay without being told; a lane with its own network never gets them.
+Where nothing routes directly — the no-network lane, or a NIC the host has
+nft-locked and marked as such via `/run/silkd-nic-locked` — silkd forwards the
+image-baked proxy variables (`http_proxy` and friends) into every exec, so
+unconfigured clients use the relay without being told; a lane with its own
+routed network never gets them.
 
 ## Limits
 

@@ -62,14 +62,14 @@ pub fn signal_pid(pid: u32, sig: i32) {
     }
 }
 
-/// The environment every exec starts from; the proxy snapshot rides only on the no-network lane.
+/// The environment every exec starts from; the proxy snapshot rides only where nothing routes directly.
 pub fn base_env() -> Vec<(&'static str, &'static str)> {
-    compose_env(crate::net::has_egress(), proxy_vars())
+    compose_env(crate::net::routes_directly(), proxy_vars())
 }
 
-/// Applies base_env's lane rule to an env-inheriting child: an own NIC drops the proxy variables.
+/// Applies base_env's lane rule to an env-inheriting child: a routed NIC drops the proxy variables.
 pub fn align_proxy_env(cmd: &mut Command) {
-    align_proxy_env_for(cmd, crate::net::has_egress());
+    align_proxy_env_for(cmd, crate::net::routes_directly());
 }
 
 /// Resolves a username via getpwnam and de-escalates the command onto it.
