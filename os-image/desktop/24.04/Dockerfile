@@ -364,6 +364,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'Categories=Office;' \
       'MimeType=x-scheme-handler/zotero;text/x-bibtex;application/x-bibtex;' \
       > /usr/share/applications/zotero.desktop \
+    && install -d /opt/zotero/app/defaults/preferences \
+    && printf '%s\n' \
+      'pref("extensions.zotero.firstRun2", false);' \
+      'pref("extensions.zoteroOpenOfficeIntegration.skipInstallation", true);' \
+      > /opt/zotero/app/defaults/preferences/osworld.js \
     && curl -fsSL -o /tmp/musescore.AppImage \
       "https://github.com/musescore/MuseScore/releases/download/v${MUSESCORE_BUILD%.*}/MuseScore-Studio-${MUSESCORE_BUILD}-x86_64.AppImage" \
     && chmod 0755 /tmp/musescore.AppImage \
