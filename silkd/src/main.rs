@@ -25,6 +25,10 @@ async fn main() {
         net_egress::LOOPBACK_PORT,
         net_egress::HOST_VSOCK_PORT,
     ));
+    tokio::spawn(net_egress::serve(
+        net_egress::SOCKS_LOOPBACK_PORT,
+        net_egress::SOCKS_HOST_VSOCK_PORT,
+    ));
     if let Err(e) = vsock::serve(port, state).await {
         eprintln!("silkd: fatal: {e}");
         std::process::exit(1);
