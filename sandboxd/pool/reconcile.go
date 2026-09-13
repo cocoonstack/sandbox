@@ -50,7 +50,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			// running with either flag set means a crashed wake or an intent the engine never saw
 			sb.HibernateSnap, sb.PendingSnap = "", ""
 		case ok && sb.HibernateSnap != "":
-			// Hibernated: the VM is stopped by design and wakes on demand.
+			// hibernated: the VM is stopped by design and wakes on demand.
 			sb.PendingSnap = ""
 		case ok && sb.PendingSnap != "" && (snapsErr != nil || slices.Contains(snaps, sb.PendingSnap)):
 			// the journaled intent names the wake image, so adopt it when the snapshot is there
@@ -139,7 +139,7 @@ func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRe
 		// a canceled ctx must not skip the busy check guarding the forced remove
 		switch outcome, err := m.eng.ReconcileStaleCreate(context.WithoutCancel(ctx), name); {
 		case err != nil:
-			// Verb missing (cocoon < v0.5.8) or failed: keep the old sweep.
+			// verb missing (cocoon < v0.5.8) or failed: keep the old sweep.
 			logger.Warnf(ctx, "reconcile stale create %s: %v; removing", name, err)
 		case outcome == engine.StaleCreateCollected, outcome == engine.StaleCreateNotFound:
 			return true
@@ -176,6 +176,9 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 			if err == nil && !locked[tap] {
 				err = netfilter.Lock(tap)
 			}
+			if err == nil && !locked[tap] {
+				err = m.markLockedNIC(ctx, sb.Key, sb.VsockSocket)
+			}
 			if err != nil {
 				logger.Errorf(ctx, err, "ensure egress lock %s; quarantining", sb.ID)
 				quarantine = append(quarantine, sb)
@@ -186,7 +189,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 			logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 		}
 	}
-	// Quarantine before the sweep so a failed remove's still-running tap is kept.
+	// quarantine before the sweep so a failed remove's still-running tap is kept.
 	keep := make(map[string]bool, len(live))
 	for _, sb := range quarantine {
 		if m.quarantineClaim(ctx, sb) {
@@ -195,7 +198,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 			keep[sb.TAP] = true
 		}
 	}
-	// Keep every still-running VM's tap; sweep only a confirmed-gone VM's table.
+	// keep every still-running VM's tap; sweep only a confirmed-gone VM's table.
 	for name, rec := range live {
 		if tap := rec.TapDevice(); tap != "" && !removed[name] {
 			keep[tap] = true
@@ -206,7 +209,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 	}
 }
 
-// A failed remove stays out of service and queued until teardown succeeds.
+// quarantineClaim parks a claim whose teardown failed: out of service and queued until a remove succeeds.
 func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
 	td := m.quiesceVolumes(ctx, sb)
 	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID, "", td)
