@@ -19,6 +19,7 @@ ARG ZOTERO_VERSION=7.0.11
 ARG REAPER_BUILD=735
 ARG CODE_VERSION=1.137.0-1788902055
 ARG SHOTCUT_VERSION=24.02.29+ds-1build1
+ARG OBSIDIAN_VERSION=1.13.7
 # noble dropped freecad; the project's own archive still builds for it.
 ARG FREECAD_VERSION=2:0.21.2+dfsg1~202407140123~ubuntu24.04.1
 ARG FREECAD_FINGERPRINT=A728AE60A790F0EB
@@ -359,6 +360,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'Categories=Office;' \
       'MimeType=x-scheme-handler/zotero;text/x-bibtex;application/x-bibtex;' \
       > /usr/share/applications/zotero.desktop \
+    && curl -fsSL -o /tmp/obsidian.deb \
+      "https://github.com/obsidianmd/obsidian-releases/releases/download/v${OBSIDIAN_VERSION}/obsidian_${OBSIDIAN_VERSION}_amd64.deb" \
+    && apt-get install -y --no-install-recommends /tmp/obsidian.deb \
+    # Electron's sandbox cannot start in-guest, the same as Chrome's
+    && printf '%s\n' '#!/bin/sh' 'exec /opt/Obsidian/obsidian --no-sandbox "$@"' > /usr/local/bin/obsidian \
+    && chmod 0755 /usr/local/bin/obsidian \
+    && sed -i 's|^Exec=/opt/Obsidian/obsidian|Exec=/usr/local/bin/obsidian|' \
+      /usr/share/applications/md.obsidian.Obsidian.desktop \
+    # both Obsidian tasks use this vault and never register it; unregistered, the app opens on its chooser
+    && install -d -o user -g user -m 0755 /home/user/Documents "/home/user/Documents/Obsidian Vault" \
+      /home/user/.config/obsidian \
+    && printf '%s' '{"vaults":{"6a2f4c1e9b7d3a05":{"path":"/home/user/Documents/Obsidian Vault","ts":1789000000000,"open":true}}}' \
+      > /home/user/.config/obsidian/obsidian.json \
+    && chown user:user /home/user/.config/obsidian/obsidian.json \
     && curl -fsSL -o /tmp/reaper.tar.xz \
       "https://www.reaper.fm/files/7.x/reaper${REAPER_BUILD}_linux_x86_64.tar.xz" \
     && install -d /tmp/reaper \
@@ -376,5 +391,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && systemctl disable tinyproxy.service \
     && update-desktop-database /usr/share/applications \
     && apt-get update \
-    && rm -rf /tmp/thunderbird.tar.bz2 /tmp/wps.deb /tmp/zotero.tar.bz2 \
+    && rm -rf /tmp/thunderbird.tar.bz2 /tmp/wps.deb /tmp/zotero.tar.bz2 /tmp/obsidian.deb \
       /tmp/reaper /tmp/reaper.tar.xz
