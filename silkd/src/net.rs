@@ -4,8 +4,8 @@ use std::path::Path;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicI8, Ordering};
 
-/// Marker the host writes when it has nft-locked the guest's NIC; the relay is then the only route out.
-const NIC_LOCKED_MARK: &str = "/run/silkd-nic-locked";
+/// Marker the host writes when it has nft-locked the guest's NIC; on the root filesystem so a guest reboot keeps it.
+const NIC_LOCKED_MARK: &str = "/etc/silkd-nic-locked";
 
 static LANE_OVERRIDE: AtomicI8 = AtomicI8::new(-1);
 

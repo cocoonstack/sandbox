@@ -15,7 +15,7 @@ static NSS_LOCK: Mutex<()> = Mutex::new(());
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// Forwarded into every exec: the loopback proxy relay is the no-NIC lane's only way out.
+/// Forwarded into every exec that has no direct route: the loopback proxy relay is its only way out.
 const FORWARDED: [&str; 6] = [
     "http_proxy",
     "https_proxy",

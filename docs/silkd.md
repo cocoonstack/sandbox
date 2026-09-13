@@ -69,7 +69,7 @@ the host's [guarded-egress](egress.md) proxy over vsock (`CID2:2049`), and
 has no HTTP-proxy form; when the host wired no policy the per-connection dial
 is refused, so the ports are inert.
 Where nothing routes directly — the no-network lane, or a NIC the host has
-nft-locked and marked as such via `/run/silkd-nic-locked` — silkd forwards the
+nft-locked and marked as such via `/etc/silkd-nic-locked` — silkd forwards the
 image-baked proxy variables (`http_proxy` and friends) into every exec, so
 unconfigured clients use the relay without being told; a lane with its own
 routed network never gets them.
