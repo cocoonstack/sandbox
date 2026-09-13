@@ -329,6 +329,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'MimeType=x-scheme-handler/mailto;message/rfc822;' \
       > /usr/share/applications/thunderbird.desktop \
     # a task seeds its own profile, so the proxy has to come from policy
+    # the task set predates PEP 668 and pip-installs into the system interpreter
+    && printf '%s\n' '[global]' 'break-system-packages = true' > /etc/pip.conf \
     && install -d /usr/lib/thunderbird/distribution \
     && printf '%s\n' \
       '{"policies":{"Proxy":{"Mode":"manual","SOCKSProxy":"127.0.0.1:1080",' \
@@ -379,6 +381,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'Categories=AudioVideo;Audio;' \
       'MimeType=application/x-musescore;application/x-musescore+xml;' \
       > /usr/share/applications/musescore.desktop \
+    # the guest root is overlayfs, which overlay2 cannot stack on, and dockerd
+    # does not read the guest proxy environment; both apply once a task installs docker
+    && install -d /etc/docker /etc/systemd/system/docker.service.d \
+    && printf '%s\n' '{"storage-driver": "vfs", "features": {"containerd-snapshotter": false}}' \
+      > /etc/docker/daemon.json \
+    && printf '%s\n' '[Service]' \
+      'Environment=HTTP_PROXY=http://127.0.0.1:3128' \
+      'Environment=HTTPS_PROXY=http://127.0.0.1:3128' \
+      'Environment=NO_PROXY=localhost,127.0.0.1' \
+      > /etc/systemd/system/docker.service.d/proxy.conf \
     && curl -fsSL -o /tmp/obsidian.deb \
       "https://github.com/obsidianmd/obsidian-releases/releases/download/v${OBSIDIAN_VERSION}/obsidian_${OBSIDIAN_VERSION}_amd64.deb" \
     && apt-get install -y --no-install-recommends /tmp/obsidian.deb \
