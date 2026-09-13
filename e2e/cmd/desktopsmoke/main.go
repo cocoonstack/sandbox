@@ -19,8 +19,7 @@ import (
 
 const (
 	serverPort = 5000
-	// The GNOME session and osworld-server start after silkd; a cold first
-	// launch on a loaded node can take tens of seconds.
+	// the GNOME session and osworld-server start after silkd; a cold first launch on a loaded node takes tens of seconds.
 	serverWait = 3 * time.Minute
 	clickX     = 300
 	clickY     = 300

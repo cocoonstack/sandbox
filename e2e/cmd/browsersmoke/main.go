@@ -18,8 +18,7 @@ import (
 
 const (
 	cdpPort = 9222
-	// Chromium starts after silkd, so the claim returns before CDP is up;
-	// a cold first launch on a loaded node can take tens of seconds.
+	// Chromium starts after silkd, so the claim returns before CDP is up; a cold first launch takes tens of seconds.
 	cdpWait = 3 * time.Minute
 )
 
