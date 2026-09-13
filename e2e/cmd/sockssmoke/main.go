@@ -1,8 +1,8 @@
 // Command sockssmoke proves the SOCKS5 egress channel from inside a claimed
 // sandbox: an allowed host tunnels over 127.0.0.1:1080, a GET-only host is
 // reachable on the HTTP proxy but refused on SOCKS5, an unlisted host is
-// refused, IMAPS rides the tunnel, and a pool without a policy leaves the
-// host door unwired so the guest's dial is refused.
+// refused, IMAPS rides the tunnel, and no tunnel opens from a pool without a
+// policy.
 package main
 
 import (
@@ -84,9 +84,9 @@ func run(addr, token, template, echo, getOnly, imap string) error {
 	}
 	defer func() { _ = bare.Close() }()
 	if code := curl(ctx, bare, "--socks5-hostname", socksProxy, "http://"+echo+"/get"); code != "000" {
-		return fmt.Errorf("policy-less pool served SOCKS5 with %q, want the host door unwired and the dial refused", code)
+		return fmt.Errorf("policy-less pool opened a SOCKS5 tunnel with %q, want none", code)
 	}
-	fmt.Println("  pool without a policy: host door unwired, guest dial refused")
+	fmt.Println("  pool without a policy: no SOCKS5 tunnel opens")
 	return nil
 }
 
