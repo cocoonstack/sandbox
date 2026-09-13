@@ -20,10 +20,13 @@ proxy evaluates the policy, injects the matched rule's secret host-side, dials
 the origin, and relays the response.
 
 The base image sets `http_proxy`/`https_proxy`/`no_proxy` on silkd's unit, and
-silkd forwards exactly those variables into every exec — only when the guest
-has no NIC beyond `lo`/`sit0`, so a lane with a working NIC is never steered
-into a relay whose host side is closed. An unconfigured client just works, and
-`-x` still does:
+silkd forwards exactly those variables into every exec — whenever nothing
+routes directly: the guest has no NIC beyond `lo`/`sit0`, or the host has
+nft-locked the NIC it has (the bridge egress lane below), which sandboxd
+signals by writing the marker `/run/silkd-nic-locked` into the guest right
+after the readiness probe of a golden build or a cold boot. A lane with a
+working NIC is never steered into a relay whose host side is closed. An
+unconfigured client just works, and `-x` still does:
 
 ```sh
 curl https://api.github.com/user                            # allowed + credentialed
