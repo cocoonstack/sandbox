@@ -26,7 +26,7 @@ _PEERS_TIMEOUT = 5.0
 class Client:
     """Talks to one sandboxd node (and, transparently, its cluster)."""
 
-    def __init__(self, addr: str, api_token: str = "", timeout: float = 120.0):
+    def __init__(self, addr: str, api_token: str = "", timeout: float = 120.0) -> None:
         self.addr = addr.split(",")[0].strip()
         self.api_token = api_token
         self.timeout = timeout
@@ -143,7 +143,7 @@ class Client:
         owner, reply = _redirect_fallback(addr, redirect, post, verb)
         return self._handle_from(owner, reply)
 
-    def _peers(self) -> list:
+    def _peers(self) -> list[str]:
         # /v1/peers is tenant-accessible; /v1/info is operator-only, so a tenant cannot read peers from it.
         try:
             return (
@@ -171,7 +171,7 @@ class Client:
         return self._request(addr, "POST", path, body, verb)
 
     def _request(
-        self, addr: str, method: str, path: str, body, verb: str, bearer: str = "", timeout: float = 0.0
+        self, addr: str, method: str, path: str, body: dict | None, verb: str, bearer: str = "", timeout: float = 0.0
     ) -> dict:
         """Issues one control-plane request. bearer overrides the api token —
         sandbox-scoped verbs (release, hibernate) authenticate with the

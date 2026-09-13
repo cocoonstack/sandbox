@@ -48,7 +48,7 @@ class CocoonToolkit:
         net: str = "",
         ttl_seconds: int = 0,
         from_checkpoint: str = "",
-    ):
+    ) -> None:
         self._client = Client(addr, api_token=api_token, timeout=CALL_TIMEOUT)
         self._template = template
         self._net = net
@@ -61,7 +61,7 @@ class CocoonToolkit:
     def __enter__(self) -> CocoonToolkit:
         return self
 
-    def __exit__(self, *exc) -> None:
+    def __exit__(self, *exc: object) -> None:
         self.close()
 
     def get_tools(self) -> list[StructuredTool]:
