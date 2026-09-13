@@ -93,6 +93,26 @@ async fn session_create_rejects_an_env_name_bash_cannot_export() {
 }
 
 #[tokio::test]
+async fn session_create_fails_when_bash_refuses_an_export() {
+    let state = Arc::new(State::new());
+    let f = tokio::time::timeout(
+        Duration::from_secs(8),
+        one(
+            &state,
+            &json!({"op":"session_create","env":{"UID":"1"}}).to_string(),
+        ),
+    )
+    .await
+    .expect("session_create hung on a readonly variable");
+    assert_eq!(type_of(&f[0]), "error", "{f:?}");
+    assert!(
+        state.sessions.list().is_empty(),
+        "{:?}",
+        state.sessions.list()
+    );
+}
+
+#[tokio::test]
 async fn session_exit_code_propagates() {
     let state = Arc::new(State::new());
     let id = create(&state).await;

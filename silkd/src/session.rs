@@ -88,7 +88,7 @@ impl Table {
             shell_quote_into(&mut init, k);
             init.push('=');
             shell_quote_into(&mut init, v);
-            init.push('\n');
+            init.push_str(" || exit 1\n");
         }
         {
             let mut io = session.io.lock().await;
