@@ -165,7 +165,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 	var quarantine []*types.Sandbox
 	for _, sb := range m.claimed {
 		sb.TouchAt(now)
-		if m.lockEgress && sb.Key.Net == types.NetEgress {
+		if m.locksNIC(sb.Key) {
 			tap := m.readoptEgressTap(sb, live)
 			if tap == "" {
 				logger.Errorf(ctx, errNoEgressTap, "egress claim %s has no lockable tap; quarantining", sb.ID)

@@ -1,11 +1,11 @@
 //! Guest network-lane detection: the egress lane has a device-backed NIC, the none lane only virtual interfaces.
 
 use std::path::Path;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicI8, Ordering};
-use std::sync::{LazyLock, OnceLock};
 
 /// Marker the host writes when it has nft-locked the guest's NIC; the relay is then the only route out.
-pub const NIC_LOCKED_MARK: &str = "/run/silkd-nic-locked";
+const NIC_LOCKED_MARK: &str = "/run/silkd-nic-locked";
 
 static LANE_OVERRIDE: AtomicI8 = AtomicI8::new(-1);
 
@@ -31,27 +31,14 @@ pub fn has_egress() -> bool {
     *DEVICE_BACKED
 }
 
-/// Reports whether execs route directly: a NIC the host has not locked. A locked NIC leaves the relay as the way out.
+/// Reports whether execs route directly: a NIC the host has not locked.
 pub fn routes_directly() -> bool {
-    has_egress() && !nic_locked()
+    has_egress() && !Path::new(NIC_LOCKED_MARK).exists()
 }
 
 /// Lane override for tests: set_var would race every concurrent getenv.
 pub fn override_egress_for_tests(lane: Option<bool>) {
     LANE_OVERRIDE.store(lane.map_or(-1, i8::from), Ordering::Relaxed);
-}
-
-/// The host writes the marker before any exec runs, so a hit is cached and a miss is re-checked.
-fn nic_locked() -> bool {
-    static LOCKED: OnceLock<()> = OnceLock::new();
-    if LOCKED.get().is_some() {
-        return true;
-    }
-    if !Path::new(NIC_LOCKED_MARK).exists() {
-        return false;
-    }
-    let _ = LOCKED.set(());
-    true
 }
 
 /// SILKD_NET decoded once: operator config, fixed at service start.
