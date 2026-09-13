@@ -19,6 +19,9 @@ ARG ZOTERO_VERSION=7.0.11
 ARG REAPER_BUILD=735
 ARG CODE_VERSION=1.137.0-1788902055
 ARG SHOTCUT_VERSION=24.02.29+ds-1build1
+# noble dropped freecad; the project's own archive still builds for it.
+ARG FREECAD_VERSION=2:0.21.2+dfsg1~202407140123~ubuntu24.04.1
+ARG FREECAD_KEY=A728AE60A790F0EB
 ARG SCREEN=1920x1080
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -294,7 +297,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg \
     && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/code stable main" \
       > /etc/apt/sources.list.d/vscode.list \
+    && curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x${FREECAD_KEY}" \
+      | gpg --dearmor -o /etc/apt/keyrings/freecad.gpg \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/freecad.gpg] https://ppa.launchpadcontent.net/freecad-maintainers/freecad-stable/ubuntu noble main" \
+      > /etc/apt/sources.list.d/freecad.list \
     && apt-get update && apt-get install -y --no-install-recommends code=${CODE_VERSION} \
+      "freecad=${FREECAD_VERSION}" python3-numpy python3-scipy \
     # the task profiles name /usr/lib/thunderbird, one task runs /usr/bin/thunderbird
     && curl -fsSL -o /tmp/thunderbird.tar.bz2 \
       "https://download-installer.cdn.mozilla.net/pub/thunderbird/releases/${THUNDERBIRD_VERSION}/linux-x86_64/en-US/thunderbird-${THUNDERBIRD_VERSION}.tar.bz2" \
@@ -355,5 +363,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # the harness starts its own instance per task against a residential upstream
     && systemctl disable tinyproxy.service \
     && update-desktop-database /usr/share/applications \
+    && apt-get update \
     && rm -rf /tmp/thunderbird.tar.bz2 /tmp/wps.deb /tmp/zotero.tar.bz2 \
-      /tmp/reaper /tmp/reaper.tar.xz /var/lib/apt/lists/*
+      /tmp/reaper /tmp/reaper.tar.xz
