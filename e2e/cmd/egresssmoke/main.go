@@ -81,7 +81,7 @@ func run(addr, token, template, wantToken, netShape, reach, nicAddr, echo string
 		}
 	}
 
-	out, _ := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -s -m 3 %s || echo BLOCKED", target))
+	out, _ := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -s -m 3 --noproxy '*' %s || echo BLOCKED", target))
 	if guarded && !strings.Contains(out, "BLOCKED") {
 		return fmt.Errorf("guest reached the origin without the proxy: %q", out)
 	}
@@ -105,6 +105,12 @@ func run(addr, token, template, wantToken, netShape, reach, nicAddr, echo string
 		return fmt.Errorf("origin %s did not echo injected token %q: %q", echo, wantToken, strings.TrimSpace(seen))
 	}
 	fmt.Println("  allowed origin reached; injected credential observed host-side")
+
+	implicit, _ := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -s -m 10 http://%s/get", echo))
+	if !strings.Contains(implicit, wantToken) {
+		return fmt.Errorf("origin %s not reached without -x: silkd did not hand the proxy variables to the exec: %q", echo, strings.TrimSpace(implicit))
+	}
+	fmt.Println("  allowed origin reached with no -x: proxy variables present in the exec")
 
 	if out, _ := sb.Exec(ctx, "sh", "-c", "env; cat /proc/1/environ 2>/dev/null | tr '\\0' '\\n'"); wantToken != "" && strings.Contains(out, wantToken) {
 		return fmt.Errorf("secret value leaked into the guest")
