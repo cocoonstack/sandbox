@@ -70,8 +70,7 @@ func run(addr, token, template, wantToken, netShape, reach, nicAddr, echo string
 	defer func() { _ = sb.Close() }()
 	fmt.Printf("  claimed %s-lane sandbox %s\n", netShape, sb.ID)
 
-	// The image does not configure the NIC, so bring it up statically to give the
-	// guest a real route toward -reach; a blocked direct egress is then the lock.
+	// the image leaves the NIC unconfigured; a static address gives the guest a route toward -reach, so a blocked direct egress is the lock.
 	if nicAddr != "" {
 		out, cfgErr := sb.Exec(ctx, "sh", "-c", fmt.Sprintf(
 			"nic=$(ip -o link | awk -F': ' '$2 ~ /^(eth|en)/{sub(/@.*/,\"\",$2); print $2; exit}'); "+
@@ -94,9 +93,7 @@ func run(addr, token, template, wantToken, netShape, reach, nicAddr, echo string
 	}
 	fmt.Println("  direct egress blocked")
 
-	// The injection origin is a public echo reached through the proxy: post-#26
-	// the SSRF guard refuses private/loopback destinations even when allow-listed
-	// (issue #27, Option A), so a private origin cannot exercise injection.
+	// the SSRF guard refuses private and loopback destinations even when allow-listed, so injection needs a public echo.
 	seen, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -s -x %s http://%s/get", proxy, echo))
 	if err != nil {
 		return fmt.Errorf("proxied exec: %w", err)

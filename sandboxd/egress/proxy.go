@@ -28,6 +28,9 @@ var hopHeaders = []string{
 // DialFunc opens the upstream connection for a permitted request.
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
+// AuditFunc receives every egress decision the proxy takes.
+type AuditFunc func(Event)
+
 // Secrets resolves a rule's Secret name to the header it injects.
 type Secrets interface {
 	Header(name string) (header, value string, ok bool)
@@ -50,7 +53,7 @@ type Proxy struct {
 	policy  Evaluator
 	secrets Secrets
 	ca      *CA
-	audit   func(Event)
+	audit   AuditFunc
 	dial    DialFunc
 	tr      *http.Transport
 	mitmTr  *http.Transport
@@ -66,7 +69,7 @@ type Proxy struct {
 }
 
 // New builds a Proxy for one sandbox; secrets, ca, and audit may be nil, dial must not.
-func New(sandbox, tenant string, policy Evaluator, secrets Secrets, ca *CA, dial DialFunc, audit func(Event)) *Proxy {
+func New(sandbox, tenant string, policy Evaluator, secrets Secrets, ca *CA, dial DialFunc, audit AuditFunc) *Proxy {
 	p := &Proxy{
 		sandbox: sandbox,
 		tenant:  tenant,

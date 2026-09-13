@@ -112,7 +112,7 @@ func (p Policy) EvalInner(host, method string) (Rule, Decision) {
 	return Rule{}, DecisionDeny
 }
 
-// Tunnels reports whether some rule can admit an opaque tunnel; false leaves the SOCKS5 listener unbound, and a composite answers true even when its two host sets never meet.
+// Tunnels reports whether some rule can admit an opaque tunnel; a composite answers true even when its two host sets never meet.
 func (p Policy) Tunnels() bool {
 	return slices.ContainsFunc(p.Allow, func(r Rule) bool { return !r.Intercept && r.matchMethod(http.MethodConnect) })
 }
