@@ -213,6 +213,9 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 	if err := m.writeGoldenCASidecar(final, caBaked); err != nil {
 		return err
 	}
+	if err := writeGoldenSidecar(final+nicSidecarSuffix, nicStamp(m.locksNIC(key))); err != nil {
+		return err
+	}
 	return writeGoldenSidecar(final+warmupSidecarSuffix, warmupStamp(warmup))
 }
 
@@ -224,17 +227,6 @@ func (m *Manager) runWarmup(ctx context.Context, key types.PoolKey, sock string)
 		return nil, nil
 	}
 	return warmup, m.eng.Warmup(ctx, sock, warmup)
-}
-
-// markLockedNIC tells the guest its NIC is nft-locked; silkd cannot see the hook from inside.
-func (m *Manager) markLockedNIC(ctx context.Context, key types.PoolKey, sock string) error {
-	if !m.lockEgress || key.Net != types.NetEgress {
-		return nil
-	}
-	if err := m.eng.MarkNICLocked(ctx, sock); err != nil {
-		return fmt.Errorf("mark nic locked: %w", err)
-	}
-	return nil
 }
 
 // a restore maps the golden memory lazily, so the warmup's pages fault in here instead of under the first claim
@@ -259,6 +251,7 @@ func (m *Manager) writeGoldenCASidecar(final string, caBaked bool) error {
 func (m *Manager) adoptGolden(p *pool) {
 	g := filepath.Join(m.goldensDir(), p.hash)
 	if dirExists(g) && m.goldenCAMatches(g, m.poolEgress[p.key].Intercepts()) &&
+		goldenSidecarMatches(g+nicSidecarSuffix, nicStamp(m.locksNIC(p.key))) &&
 		goldenSidecarMatches(g+warmupSidecarSuffix, warmupStamp(m.poolWarmups[p.key])) {
 		p.goldenDir = g
 	}
@@ -509,4 +502,11 @@ func goldenSidecarMatches(path, stamp string) bool {
 
 func warmupStamp(argv []string) string {
 	return strings.Join(argv, "\x00")
+}
+
+func nicStamp(locked bool) string {
+	if locked {
+		return "locked"
+	}
+	return ""
 }

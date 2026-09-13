@@ -22,11 +22,9 @@ the origin, and relays the response.
 The base image sets `http_proxy`/`https_proxy`/`no_proxy` on silkd's unit, and
 silkd forwards exactly those variables into every exec — whenever nothing
 routes directly: the guest has no NIC beyond `lo`/`sit0`, or the host has
-nft-locked the NIC it has (the bridge egress lane below), which sandboxd
-signals by writing the marker `/run/silkd-nic-locked` into the guest right
-after the readiness probe of a golden build or a cold boot. A lane with a
-working NIC is never steered into a relay whose host side is closed. An
-unconfigured client just works, and `-x` still does:
+locked the NIC it has (the egress lane below). A lane with a working NIC is
+never steered into a relay whose host side is closed. An unconfigured client
+just works, and `-x` still does:
 
 ```sh
 curl https://api.github.com/user                            # allowed + credentialed
@@ -75,6 +73,12 @@ one. It lives in the host root netns and is removed once the VM is gone (a faile
 remove keeps an existing lock in place; the next restart retries the remove). A
 lock that never applied plus a failed remove leaves the VM unguarded until a
 later remove succeeds.
+
+Because the lock is invisible from inside the guest, sandboxd also tells silkd
+about it: a marker written into the guest before the golden snapshot (or on a
+cold boot) makes silkd hand the proxy variables to every exec on this lane
+exactly as on the none lane, while git keeps running as on any lane with a NIC.
+A golden built before the marker existed is rebuilt, not adopted.
 
 Egress-lane sandboxes do not hibernate, archive, fork, checkpoint, or promote:
 cocoon resumes a guest before its fresh tap can be re-locked, so any resume from

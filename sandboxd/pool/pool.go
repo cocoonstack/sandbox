@@ -73,6 +73,7 @@ const (
 	vmStateCreating = "creating"
 
 	caSidecarSuffix     = ".cafp"
+	nicSidecarSuffix    = ".nic"
 	warmupSidecarSuffix = ".warmup"
 )
 

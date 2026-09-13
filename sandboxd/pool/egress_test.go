@@ -102,6 +102,58 @@ func TestArmEgressBindsSocksOnlyForTunnelRules(t *testing.T) {
 	}
 }
 
+func TestLockedLaneMarksGuestOnColdBoots(t *testing.T) {
+	tests := []struct {
+		name string
+		key  types.PoolKey
+		cold bool
+		want int
+	}{
+		{"golden build on the egress lane", egKey, false, 1},
+		{"golden build on the none lane", testKey, false, 0},
+		{"cold provision on the egress lane", egKey, true, 1},
+		{"cold provision on the none lane", testKey, true, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := egressManager(t, eng, config.PoolSpec{PoolKey: tt.key, Warm: 1, Egress: egPolicy})
+			if tt.cold {
+				sb, err := m.provision(t.Context(), tt.key, "")
+				if err != nil {
+					t.Fatalf("cold provision: %v", err)
+				}
+				m.destroy(t.Context(), sb.VMName)
+			} else if err := m.buildGoldenSteps(t.Context(), tt.key, "sbx-gb", "snap", filepath.Join(m.goldensDir(), tt.key.Hash())); err != nil {
+				t.Fatalf("buildGoldenSteps: %v", err)
+			}
+			if got := len(eng.nicMarks); got != tt.want {
+				t.Errorf("MarkNICLocked calls = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGoldenNICSidecarGatesAdoption(t *testing.T) {
+	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Warm: 1, Egress: egPolicy})
+	p := m.pools[egKey]
+	g := filepath.Join(m.goldensDir(), egKey.Hash())
+	if err := os.MkdirAll(g, 0o750); err != nil {
+		t.Fatalf("stage golden: %v", err)
+	}
+	m.adoptGolden(p)
+	if p.goldenDir != "" {
+		t.Error("adopted an egress-lane golden that never marked its guest; want rebuild")
+	}
+	if err := writeGoldenSidecar(g+nicSidecarSuffix, nicStamp(true)); err != nil {
+		t.Fatalf("write sidecar: %v", err)
+	}
+	m.adoptGolden(p)
+	if p.goldenDir != g {
+		t.Error("rejected an egress-lane golden whose sidecar says the guest was marked")
+	}
+}
+
 func TestArmEgressFailsClosedWhenNICUnlockable(t *testing.T) {
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 
