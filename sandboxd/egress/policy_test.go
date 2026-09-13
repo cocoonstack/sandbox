@@ -124,3 +124,33 @@ func TestPolicyValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestPolicyTunnels(t *testing.T) {
+	tests := []struct {
+		name  string
+		rules []Rule
+		want  bool
+	}{
+		{"empty", nil, false},
+		{"bare host", []Rule{{Host: "a.internal"}}, true},
+		{"methods without CONNECT", []Rule{{Host: "a.internal", Methods: []string{"GET"}}}, false},
+		{"methods with CONNECT", []Rule{{Host: "a.internal", Methods: []string{"connect"}}}, true},
+		{"intercept only", []Rule{{Host: "a.internal", Intercept: true}}, false},
+		{"secret", []Rule{{Host: "a.internal", Secret: "s"}}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := (Policy{Allow: tt.rules}).Tunnels(); got != tt.want {
+				t.Errorf("Tunnels() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	bare := Policy{Allow: []Rule{{Host: "a.internal"}}}
+	getOnly := Policy{Allow: []Rule{{Host: "a.internal", Methods: []string{"GET"}}}}
+	if Compose(bare, getOnly).Tunnels() {
+		t.Error("composite Tunnels() = true with a GET-only tenant, want false")
+	}
+	if !Compose(bare, bare).Tunnels() {
+		t.Error("composite Tunnels() = false with two bare policies, want true")
+	}
+}

@@ -132,12 +132,11 @@ func (p *Proxy) untrack(conn net.Conn) {
 // serveConnect gates an HTTPS/opaque tunnel by host.
 func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	host := hostOnly(r.Host)
-	// host-gate interception: the tunnel's CONNECT verb is not the request method.
-	if rule, d := p.policy.EvalHost(host); d == DecisionAllow && rule.Intercept && p.ca != nil {
+	decision, intercept := p.tunnelDecision(host)
+	if intercept {
 		p.serveIntercept(w, r, host)
 		return
 	}
-	_, decision := p.policy.Eval(host, r.Method)
 	p.record(Event{Method: r.Method, Host: host, Decision: decision})
 	if decision == DecisionDeny {
 		denied(w, host)
@@ -163,6 +162,15 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	splice(client, upstream)
+}
+
+func (p *Proxy) tunnelDecision(host string) (decision Decision, intercept bool) {
+	// host-gate interception: the tunnel's CONNECT verb is not the request method.
+	if rule, d := p.policy.EvalHost(host); d == DecisionAllow && rule.Intercept && p.ca != nil {
+		return DecisionAllow, true
+	}
+	_, decision = p.policy.Eval(host, http.MethodConnect)
+	return decision, false
 }
 
 func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
