@@ -20,6 +20,8 @@ ARG REAPER_BUILD=735
 ARG CODE_VERSION=1.137.0-1788902055
 ARG SHOTCUT_VERSION=24.02.29+ds-1build1
 ARG OBSIDIAN_VERSION=1.13.7
+# The task scores were written by MuseScore 4.6.5; noble's 3.x cannot open them.
+ARG MUSESCORE_BUILD=4.6.5.253511702
 # noble dropped freecad; the project's own archive still builds for it.
 ARG FREECAD_VERSION=2:0.21.2+dfsg1~202407140123~ubuntu24.04.1
 ARG FREECAD_FINGERPRINT=A728AE60A790F0EB
@@ -360,6 +362,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'Categories=Office;' \
       'MimeType=x-scheme-handler/zotero;text/x-bibtex;application/x-bibtex;' \
       > /usr/share/applications/zotero.desktop \
+    && curl -fsSL -o /tmp/musescore.AppImage \
+      "https://github.com/musescore/MuseScore/releases/download/v${MUSESCORE_BUILD%.*}/MuseScore-Studio-${MUSESCORE_BUILD}-x86_64.AppImage" \
+    && chmod 0755 /tmp/musescore.AppImage \
+    && cd /opt && /tmp/musescore.AppImage --appimage-extract >/dev/null \
+    && mv /opt/squashfs-root /opt/musescore4 && cd / \
+    && printf '%s\n' '#!/bin/sh' 'exec /opt/musescore4/AppRun "$@"' > /usr/local/bin/musescore \
+    && chmod 0755 /usr/local/bin/musescore && ln -sf musescore /usr/local/bin/mscore \
+    && printf '%s\n' \
+      '[Desktop Entry]' \
+      'Type=Application' \
+      'Name=MuseScore Studio' \
+      'Exec=/usr/local/bin/musescore %F' \
+      'Icon=/opt/musescore4/.DirIcon' \
+      'Terminal=false' \
+      'Categories=AudioVideo;Audio;' \
+      'MimeType=application/x-musescore;application/x-musescore+xml;' \
+      > /usr/share/applications/musescore.desktop \
     && curl -fsSL -o /tmp/obsidian.deb \
       "https://github.com/obsidianmd/obsidian-releases/releases/download/v${OBSIDIAN_VERSION}/obsidian_${OBSIDIAN_VERSION}_amd64.deb" \
     && apt-get install -y --no-install-recommends /tmp/obsidian.deb \
@@ -391,5 +410,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && systemctl disable tinyproxy.service \
     && update-desktop-database /usr/share/applications \
     && apt-get update \
-    && rm -rf /tmp/thunderbird.tar.bz2 /tmp/wps.deb /tmp/zotero.tar.bz2 /tmp/obsidian.deb \
+    && rm -rf /tmp/thunderbird.tar.bz2 /tmp/wps.deb /tmp/zotero.tar.bz2 /tmp/musescore.AppImage /tmp/obsidian.deb \
       /tmp/reaper /tmp/reaper.tar.xz
