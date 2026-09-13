@@ -122,16 +122,16 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	proxy := egress.New(id, tenant, policy, m.egressSecrets, m.egressCA, m.dial,
 		func(ev egress.Event) { m.recordEgress(evCtx, id, tenant, ev) })
 	el := &egressListener{
-		srv:       &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second},
-		proxy:     proxy,
-		path:      engine.EgressSocketPath(sb.VsockSocket),
-		socksPath: engine.SocksSocketPath(sb.VsockSocket),
+		srv:   &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second},
+		proxy: proxy,
+		path:  engine.EgressSocketPath(sb.VsockSocket),
 	}
 	var err error
 	if el.ln, err = listenUnix(el.path); err != nil {
 		return fmt.Errorf("listen egress %s: %w", id, err)
 	}
 	if policy.Tunnels() {
+		el.socksPath = engine.SocksSocketPath(sb.VsockSocket)
 		if el.socks, err = listenUnix(el.socksPath); err != nil {
 			el.close()
 			return fmt.Errorf("listen socks %s: %w", id, err)
@@ -142,7 +142,7 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	m.mu.Unlock()
 	go func() { _ = el.srv.Serve(el.ln) }()
 	if el.socks != nil {
-		go func() { _ = proxy.ServeStream(evCtx, el.socks) }()
+		go func() { _ = proxy.ServeSOCKS(evCtx, el.socks) }()
 	}
 	return nil
 }

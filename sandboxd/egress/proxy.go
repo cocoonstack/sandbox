@@ -59,7 +59,7 @@ type Proxy struct {
 	leafMu sync.Mutex
 	leaves map[string]*tls.Certificate
 
-	// conns tracks hijacked tunnels, which http.Server.Close no longer reaches.
+	// conns tracks hijacked tunnels and SOCKS5 connections, which http.Server.Close does not reach.
 	connMu sync.Mutex
 	conns  map[net.Conn]struct{}
 	closed bool
@@ -166,8 +166,10 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 
 func (p *Proxy) tunnelDecision(host string) (decision Decision, intercept bool) {
 	// host-gate interception: the tunnel's CONNECT verb is not the request method.
-	if rule, d := p.policy.EvalHost(host); d == DecisionAllow && rule.Intercept && p.ca != nil {
-		return DecisionAllow, true
+	if p.ca != nil {
+		if rule, d := p.policy.EvalHost(host); d == DecisionAllow && rule.Intercept {
+			return DecisionAllow, true
+		}
 	}
 	_, decision = p.policy.Eval(host, http.MethodConnect)
 	return decision, false

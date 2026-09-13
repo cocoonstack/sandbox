@@ -31,17 +31,16 @@ func main() {
 	echo := flag.String("echo", "postman-echo.com", "public HTTP host the policy allows without a method restriction")
 	getOnly := flag.String("get-only", "example.com", "public HTTP host the policy allows for GET only")
 	imap := flag.String("imap", "imap.163.com", "IMAPS host the policy allows, for the non-HTTP leg; empty skips it")
-	bareSize := flag.String("bare-size", "medium", "size tier of the pool that carries no egress policy")
 	flag.Parse()
 
-	if err := run(*addr, *token, *template, *echo, *getOnly, *imap, *bareSize); err != nil {
+	if err := run(*addr, *token, *template, *echo, *getOnly, *imap); err != nil {
 		fmt.Fprintln(os.Stderr, "sockssmoke:", err)
 		os.Exit(1)
 	}
 	fmt.Println("sockssmoke: PASS")
 }
 
-func run(addr, token, template, echo, getOnly, imap, bareSize string) error {
+func run(addr, token, template, echo, getOnly, imap string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -79,7 +78,7 @@ func run(addr, token, template, echo, getOnly, imap, bareSize string) error {
 		fmt.Println("  IMAPS handshake rides the tunnel; the server refused the probe login")
 	}
 
-	_, bare, err := harness.Claim(ctx, addr, token, template, sandbox.WithSize(sandbox.Size(bareSize)))
+	_, bare, err := harness.Claim(ctx, addr, token, template, sandbox.WithSize(sandbox.Medium))
 	if err != nil {
 		return fmt.Errorf("claim from the policy-less pool: %w", err)
 	}

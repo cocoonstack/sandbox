@@ -1,19 +1,23 @@
 package egress
 
 import (
+	"bufio"
 	"encoding/binary"
 	"io"
 	"net"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
+
+var socksGreeting = []byte{socksVersion, 1, socksNoAuth}
 
 func TestSocksAllowTunnels(t *testing.T) {
 	echo := echoServer(t)
 	events := make(chan Event, 4)
 	_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, fixedDial(echo), events)
 
-	conn, reply := socksExchange(t, addr, []byte{socksVersion, 1, socksNoAuth}, socksNameRequest("echo.internal", 443))
+	conn, reply := socksExchange(t, addr, socksGreeting, socksNameRequest("echo.internal", 443))
 	if reply[1] != socksGranted {
 		t.Fatalf("reply code = %#x, want granted", reply[1])
 	}
@@ -35,29 +39,42 @@ func TestSocksAllowTunnels(t *testing.T) {
 func TestSocksDecisionMirrorsConnect(t *testing.T) {
 	ca, _ := testCA(t)
 	tests := []struct {
-		name   string
-		policy Policy
-		ca     *CA
-		want   byte
+		name      string
+		policy    Policy
+		ca        *CA
+		intercept bool
 	}{
-		{"bare host allows", Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, socksGranted},
-		{"methods-restricted rule denies", Policy{Allow: []Rule{{Host: "echo.internal", Methods: []string{"GET"}}}}, nil, socksDenied},
-		{"explicit CONNECT method allows", Policy{Allow: []Rule{{Host: "echo.internal", Methods: []string{"CONNECT"}}}}, nil, socksGranted},
-		{"intercept rule denies", Policy{Allow: []Rule{{Host: "echo.internal", Intercept: true}}}, ca, socksDenied},
-		{"secret rule tunnels without injection", Policy{Allow: []Rule{{Host: "echo.internal", Secret: "s"}}}, nil, socksGranted},
-		{"unknown host denies", Policy{Allow: []Rule{{Host: "other.internal"}}}, nil, socksDenied},
+		{"bare host", Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, false},
+		{"methods-restricted rule", Policy{Allow: []Rule{{Host: "echo.internal", Methods: []string{"GET"}}}}, nil, false},
+		{"explicit CONNECT method", Policy{Allow: []Rule{{Host: "echo.internal", Methods: []string{"CONNECT"}}}}, nil, false},
+		{"intercept rule is the one exception", Policy{Allow: []Rule{{Host: "echo.internal", Intercept: true}}}, ca, true},
+		{"secret rule tunnels without injection", Policy{Allow: []Rule{{Host: "echo.internal", Secret: "s"}}}, nil, false},
+		{"unknown host", Policy{Allow: []Rule{{Host: "other.internal"}}}, nil, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			events := make(chan Event, 4)
-			_, addr := socksProxy(t, tt.policy, tt.ca, fixedDial(echoServer(t)), events)
-			_, reply := socksExchange(t, addr, []byte{socksVersion, 1, socksNoAuth}, socksNameRequest("echo.internal", 443))
-			if reply[1] != tt.want {
-				t.Errorf("reply code = %#x, want %#x", reply[1], tt.want)
+			p, socksAddr := socksProxy(t, tt.policy, tt.ca, fixedDial(echoServer(t)), events)
+			front := httptest.NewServer(p)
+			defer front.Close()
+
+			_, reply := socksExchange(t, socksAddr, socksGreeting, socksNameRequest("echo.internal", 443))
+			socksOK := reply[1] == socksGranted
+			if ev := recvEvent(t, events); ev.Method != methodSOCKS || (ev.Decision == DecisionAllow) != socksOK || ev.Injected != "" {
+				t.Errorf("audit event = %+v, want SOCKS5 decision matching reply %#x and no injection", ev, reply[1])
 			}
-			ev := recvEvent(t, events)
-			if allowed := ev.Decision == DecisionAllow; allowed != (tt.want == socksGranted) || ev.Injected != "" {
-				t.Errorf("audit event = %+v, want decision matching reply %#x and no injection", ev, tt.want)
+
+			conn := dialConnect(t, front.Listener.Addr().String(), "echo.internal:443")
+			defer func() { _ = conn.Close() }()
+			connectOK := readStatus(t, bufio.NewReader(conn)) == "HTTP/1.1 200 Connection Established"
+			if tt.intercept {
+				if !connectOK || socksOK {
+					t.Errorf("CONNECT intercepted = %v, SOCKS5 granted = %v; want the tunnel intercepted on 3128 and refused on 1080", connectOK, socksOK)
+				}
+				return
+			}
+			if connectOK != socksOK {
+				t.Errorf("CONNECT granted = %v, SOCKS5 granted = %v; the two doors must agree", connectOK, socksOK)
 			}
 		})
 	}
@@ -71,9 +88,9 @@ func TestSocksRefusesWhatItCannotServe(t *testing.T) {
 		want     []byte
 	}{
 		{"no-auth not offered", []byte{socksVersion, 1, 0x02}, nil, []byte{socksVersion, socksNoMethod}},
-		{"bind command", []byte{socksVersion, 1, socksNoAuth}, []byte{socksVersion, 0x02, 0, socksAtypIPv4, 127, 0, 0, 1, 1, 187}, []byte{socksVersion, socksBadCmd}},
-		{"udp associate", []byte{socksVersion, 1, socksNoAuth}, []byte{socksVersion, 0x03, 0, socksAtypIPv4, 127, 0, 0, 1, 1, 187}, []byte{socksVersion, socksBadCmd}},
-		{"unknown address type", []byte{socksVersion, 1, socksNoAuth}, []byte{socksVersion, socksConnect, 0, 0x05}, []byte{socksVersion, socksBadAtyp}},
+		{"bind command", socksGreeting, []byte{socksVersion, 0x02, 0, socksAtypIPv4, 127, 0, 0, 1, 1, 187}, []byte{socksVersion, socksBadCmd}},
+		{"udp associate", socksGreeting, []byte{socksVersion, 0x03, 0, socksAtypIPv4, 127, 0, 0, 1, 1, 187}, []byte{socksVersion, socksBadCmd}},
+		{"unknown address type", socksGreeting, []byte{socksVersion, socksConnect, 0, 0x05}, []byte{socksVersion, socksBadAtyp}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -96,7 +113,7 @@ func TestSocksIPv4TargetMatchesLiteralRule(t *testing.T) {
 	events := make(chan Event, 4)
 	_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "127.0.0.1"}}}, nil, fixedDial(echoServer(t)), events)
 	request := []byte{socksVersion, socksConnect, 0, socksAtypIPv4, 127, 0, 0, 1, 1, 187}
-	_, reply := socksExchange(t, addr, []byte{socksVersion, 1, socksNoAuth}, request)
+	_, reply := socksExchange(t, addr, socksGreeting, request)
 	if reply[1] != socksGranted {
 		t.Fatalf("reply code = %#x, want granted", reply[1])
 	}
@@ -107,11 +124,11 @@ func TestSocksIPv4TargetMatchesLiteralRule(t *testing.T) {
 
 func TestCloseEndsSocksTunnelAndHandshake(t *testing.T) {
 	p, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, fixedDial(echoServer(t)), nil)
-	tunnel, reply := socksExchange(t, addr, []byte{socksVersion, 1, socksNoAuth}, socksNameRequest("echo.internal", 443))
+	tunnel, reply := socksExchange(t, addr, socksGreeting, socksNameRequest("echo.internal", 443))
 	if reply[1] != socksGranted {
 		t.Fatalf("reply code = %#x, want granted", reply[1])
 	}
-	pending, _ := socksExchange(t, addr, []byte{socksVersion, 1, socksNoAuth}, nil)
+	pending, _ := socksExchange(t, addr, socksGreeting, nil)
 
 	p.Close()
 
@@ -140,7 +157,7 @@ func socksProxy(t *testing.T, policy Policy, ca *CA, dial DialFunc, events chan 
 		_ = ln.Close()
 		p.Close()
 	})
-	go func() { _ = p.ServeStream(t.Context(), ln) }()
+	go func() { _ = p.ServeSOCKS(t.Context(), ln) }()
 	return p, ln.Addr().String()
 }
 

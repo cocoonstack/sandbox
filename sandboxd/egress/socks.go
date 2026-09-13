@@ -31,13 +31,8 @@ const (
 	socksTimeout = 30 * time.Second
 )
 
-var (
-	errSocksVersion = errors.New("socks: unsupported version")
-	errSocksRefused = errors.New("socks: request refused")
-)
-
-// ServeStream serves SOCKS5 on ln until it closes; a tunnel takes the same decision as a CONNECT.
-func (p *Proxy) ServeStream(ctx context.Context, ln net.Listener) error {
+// ServeSOCKS serves SOCKS5 on ln until it closes; a tunnel takes the same decision as a CONNECT.
+func (p *Proxy) ServeSOCKS(ctx context.Context, ln net.Listener) error {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -57,8 +52,8 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 	}
 	defer p.untrack(conn)
 	_ = conn.SetDeadline(time.Now().Add(socksTimeout))
-	host, port, err := socksHandshake(conn)
-	if err != nil {
+	host, port, ok := socksHandshake(conn)
+	if !ok {
 		return
 	}
 	decision, intercept := p.tunnelDecision(host)
@@ -85,32 +80,26 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 	splice(conn, upstream)
 }
 
-// socksHandshake negotiates no-auth and parses one CONNECT request; a refusal is answered before it returns.
-func socksHandshake(conn net.Conn) (host, port string, err error) {
+// socksHandshake negotiates no-auth and parses one CONNECT request; a refusal is answered before it returns false.
+func socksHandshake(conn net.Conn) (host, port string, ok bool) {
 	greeting, err := readN(conn, 2)
-	if err != nil {
-		return "", "", err
-	}
-	if greeting[0] != socksVersion {
-		return "", "", errSocksVersion
+	if err != nil || greeting[0] != socksVersion {
+		return "", "", false
 	}
 	methods, err := readN(conn, int(greeting[1]))
 	if err != nil {
-		return "", "", err
+		return "", "", false
 	}
 	if !slices.Contains(methods, byte(socksNoAuth)) {
 		_, _ = conn.Write([]byte{socksVersion, socksNoMethod})
-		return "", "", errSocksRefused
+		return "", "", false
 	}
 	if _, err = conn.Write([]byte{socksVersion, socksNoAuth}); err != nil {
-		return "", "", err
+		return "", "", false
 	}
 	req, err := readN(conn, 4)
-	if err != nil {
-		return "", "", err
-	}
-	if req[0] != socksVersion {
-		return "", "", errSocksVersion
+	if err != nil || req[0] != socksVersion {
+		return "", "", false
 	}
 	addrLen := 0
 	switch req[3] {
@@ -121,30 +110,28 @@ func socksHandshake(conn net.Conn) (host, port string, err error) {
 	case socksAtypName:
 		var n []byte
 		if n, err = readN(conn, 1); err != nil {
-			return "", "", err
+			return "", "", false
 		}
 		addrLen = int(n[0])
 	default:
 		_ = socksReply(conn, socksBadAtyp)
-		return "", "", errSocksRefused
+		return "", "", false
 	}
-	addr, err := readN(conn, addrLen)
+	target, err := readN(conn, addrLen+2)
 	if err != nil {
-		return "", "", err
-	}
-	portBytes, err := readN(conn, 2)
-	if err != nil {
-		return "", "", err
+		return "", "", false
 	}
 	if req[1] != socksConnect {
 		_ = socksReply(conn, socksBadCmd)
-		return "", "", errSocksRefused
+		return "", "", false
 	}
+	addr := target[:addrLen]
 	host = string(addr)
-	if ip, ok := netip.AddrFromSlice(addr); ok && req[3] != socksAtypName {
+	if req[3] != socksAtypName {
+		ip, _ := netip.AddrFromSlice(addr)
 		host = ip.String()
 	}
-	return host, strconv.Itoa(int(binary.BigEndian.Uint16(portBytes))), nil
+	return host, strconv.Itoa(int(binary.BigEndian.Uint16(target[addrLen:]))), true
 }
 
 // socksReply answers with an all-zero IPv4 bind address, which every client ignores for CONNECT.

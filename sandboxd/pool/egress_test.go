@@ -37,12 +37,7 @@ func TestEgressProxyInjectsAndGates(t *testing.T) {
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
 	m.dial = (&net.Dialer{}).DialContext
 
-	sockDir, err := os.MkdirTemp("/tmp", "eg")
-	if err != nil {
-		t.Fatalf("sockdir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
-	sb := &types.Sandbox{ID: "sb_egress", Key: testKey, VsockSocket: filepath.Join(sockDir, "v")}
+	sb := vsockSandbox(t, "sb_egress")
 	if armErr := m.armEgress(t.Context(), sb); armErr != nil {
 		t.Fatalf("arm egress: %v", armErr)
 	}
@@ -87,12 +82,7 @@ func TestArmEgressBindsSocksOnlyForTunnelRules(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: tt.policy})
-			sockDir, err := os.MkdirTemp("/tmp", "eg")
-			if err != nil {
-				t.Fatalf("sockdir: %v", err)
-			}
-			t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
-			sb := &types.Sandbox{ID: "sb_socks", Key: testKey, VsockSocket: filepath.Join(sockDir, "v")}
+			sb := vsockSandbox(t, "sb_socks")
 			if armErr := m.armEgressProxy(t.Context(), sb); armErr != nil {
 				t.Fatalf("arm proxy: %v", armErr)
 			}
@@ -101,14 +91,7 @@ func TestArmEgressBindsSocksOnlyForTunnelRules(t *testing.T) {
 			if (err == nil) != tt.want {
 				t.Fatalf("socks listener bound = %v, want %v", err == nil, tt.want)
 			}
-			if err == nil {
-				if _, err = conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
-					t.Fatalf("write greeting: %v", err)
-				}
-				choice := make([]byte, 2)
-				if _, err = io.ReadFull(conn, choice); err != nil || choice[1] != 0x00 {
-					t.Errorf("method choice = %v, %v; want no-auth", choice, err)
-				}
+			if conn != nil {
 				_ = conn.Close()
 			}
 			m.disarmEgress(sb.ID, true)
@@ -385,12 +368,7 @@ func TestEgressLaneLocksWithNoPolicyAnywhere(t *testing.T) {
 func TestDisarmKeepsLockWhenRemoveFailed(t *testing.T) {
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Egress: egPolicy})
 	m.dial = (&net.Dialer{}).DialContext
-	sockDir, err := os.MkdirTemp("/tmp", "eg")
-	if err != nil {
-		t.Fatalf("sockdir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
-	sb := &types.Sandbox{ID: "sb_dz", Key: testKey, VsockSocket: filepath.Join(sockDir, "v")}
+	sb := vsockSandbox(t, "sb_dz")
 	if armErr := m.armEgressProxy(t.Context(), sb); armErr != nil {
 		t.Fatalf("arm proxy: %v", armErr)
 	}
@@ -586,6 +564,16 @@ func writeTestEgressCA(t *testing.T) *config.EgressCAConfig {
 		}
 	}
 	return ca
+}
+
+func vsockSandbox(t *testing.T, id string) *types.Sandbox {
+	t.Helper()
+	sockDir, err := os.MkdirTemp("/tmp", "eg")
+	if err != nil {
+		t.Fatalf("sockdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+	return &types.Sandbox{ID: id, Key: testKey, VsockSocket: filepath.Join(sockDir, "v")}
 }
 
 func mustHostname(t *testing.T, raw string) string {
