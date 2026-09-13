@@ -42,15 +42,16 @@ supported*), no authentication (the socket path already carries the sandbox's
 identity), and a `DOMAINNAME` destination is resolved host-side, so the guest
 still needs no resolver.
 
-A SOCKS5 tunnel takes exactly the decision an HTTP `CONNECT` to the same host
-takes: a rule with `methods` that does not name `CONNECT` denies it, a rule
-with `intercept` denies it (the tunnel carries no HTTP to filter), and a rule
-with a `secret` opens it without injecting anything. A rule therefore means the
-same thing on both ports, and neither port can grant what the other refuses.
-The listener is bound only when the effective policy holds at least one rule a
-tunnel could match; a pool whose rules are all method-restricted or
-intercepted pays nothing for it, and with no policy at all the guest's dial is
-refused like the HTTP one. Audit lines carry `"method":"SOCKS5"`.
+A SOCKS5 tunnel takes the decision an HTTP `CONNECT` to the same host takes,
+through the same code: a rule with `methods` that does not name `CONNECT`
+denies it, and a rule with a `secret` opens it without injecting anything, on
+both ports. The one difference is `intercept`: on 3128 such a rule terminates
+the TLS and filters the requests inside, on 1080 there is no HTTP to filter, so
+the tunnel is refused. The listener is bound only when the effective policy
+holds at least one rule a tunnel could match; a pool whose rules are all
+method-restricted or intercepted pays nothing for it, and with no policy at all
+the host side stays unwired, so the guest's dial is refused like the HTTP one.
+Audit lines carry `"method":"SOCKS5"`.
 
 ```sh
 curl --socks5-hostname 127.0.0.1:1080 imaps://imap.example.com/   # allowed: {"host": "imap.example.com"}

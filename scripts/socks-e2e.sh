@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Bare-metal acceptance for SOCKS5 egress: a none-lane sandbox tunnels to an
 # allowed host over 127.0.0.1:1080, a GET-only host and an unlisted host are
-# refused there, IMAPS rides the tunnel, and a pool without a policy has no
-# listener. Runs a dedicated sandboxd on port 7780 (7779=egress).
+# refused there, IMAPS rides the tunnel, and a pool without a policy leaves the
+# host door unwired. Runs a dedicated sandboxd on port 7780 (7779=egress).
 set -euo pipefail
 
 TEMPLATE=${TEMPLATE:-rt:24.04}

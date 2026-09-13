@@ -31,7 +31,7 @@ const (
 	socksTimeout = 30 * time.Second
 )
 
-// ServeSOCKS serves SOCKS5 on ln until it closes; a tunnel takes the same decision as a CONNECT.
+// ServeSOCKS serves SOCKS5 on ln until it closes; a tunnel takes the decision of an un-intercepted CONNECT.
 func (p *Proxy) ServeSOCKS(ctx context.Context, ln net.Listener) error {
 	for {
 		conn, err := ln.Accept()
@@ -134,7 +134,7 @@ func socksHandshake(conn net.Conn) (host, port string, ok bool) {
 	return host, strconv.Itoa(int(binary.BigEndian.Uint16(target[addrLen:]))), true
 }
 
-// socksReply answers with an all-zero IPv4 bind address, which every client ignores for CONNECT.
+// socksReply answers with an all-zero bind address: CONNECT clients ignore it, and the node's own address stays out of the guest.
 func socksReply(w io.Writer, code byte) error {
 	_, err := w.Write([]byte{socksVersion, code, 0, socksAtypIPv4, 0, 0, 0, 0, 0, 0})
 	return err
