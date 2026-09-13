@@ -21,7 +21,7 @@ ARG CODE_VERSION=1.137.0-1788902055
 ARG SHOTCUT_VERSION=24.02.29+ds-1build1
 # noble dropped freecad; the project's own archive still builds for it.
 ARG FREECAD_VERSION=2:0.21.2+dfsg1~202407140123~ubuntu24.04.1
-ARG FREECAD_KEY=A728AE60A790F0EB
+ARG FREECAD_FINGERPRINT=A728AE60A790F0EB
 ARG SCREEN=1920x1080
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -297,7 +297,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg \
     && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/code stable main" \
       > /etc/apt/sources.list.d/vscode.list \
-    && curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x${FREECAD_KEY}" \
+    && curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x${FREECAD_FINGERPRINT}" \
       | gpg --dearmor -o /etc/apt/keyrings/freecad.gpg \
     && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/freecad.gpg] https://ppa.launchpadcontent.net/freecad-maintainers/freecad-stable/ubuntu noble main" \
       > /etc/apt/sources.list.d/freecad.list \
@@ -360,6 +360,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && tar -xJf /tmp/reaper.tar.xz -C /tmp/reaper --strip-components=1 \
     && /tmp/reaper/install-reaper.sh --install /opt --integrate-desktop --quiet \
     && ln -sf /opt/REAPER/reaper /usr/local/bin/reaper \
+    # the CAD evaluators are entry-guarded on __main__, which FreeCAD's own
+    # launcher does not give a script: it runs one under its file name
+    && printf '%s\n' \
+      '#!/bin/sh' \
+      'exec env PYTHONPATH=/usr/lib/freecad-python3/lib python3 "$@"' \
+      > /usr/local/bin/freecadcmd \
+    && chmod 0755 /usr/local/bin/freecadcmd \
     # the harness starts its own instance per task against a residential upstream
     && systemctl disable tinyproxy.service \
     && update-desktop-database /usr/share/applications \
