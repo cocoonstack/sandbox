@@ -295,6 +295,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libdbus-glib-1-2 tinyproxy shotcut=${SHOTCUT_VERSION} \
     unzip zip poppler-utils imagemagick sqlite3 psmisc \
     python-is-python3 python3-pip nodejs npm \
+    blender kicad solvespace labplot geogebra logisim openboard \
+    gnome-calendar \
     && install -d -m 0755 /etc/apt/keyrings \
     && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
       | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg \
