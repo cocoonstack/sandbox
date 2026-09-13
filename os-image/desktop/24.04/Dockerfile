@@ -19,6 +19,9 @@ ARG ZOTERO_VERSION=7.0.11
 ARG REAPER_BUILD=735
 ARG CODE_VERSION=1.137.0-1788902055
 ARG SHOTCUT_VERSION=24.02.29+ds-1build1
+# noble dropped freecad; the project's own archive still builds for it.
+ARG FREECAD_VERSION=2:0.21.2+dfsg1~202407140123~ubuntu24.04.1
+ARG FREECAD_FINGERPRINT=A728AE60A790F0EB
 ARG SCREEN=1920x1080
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -128,6 +131,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'no_proxy=localhost,127.0.0.1,::1' \
       > /usr/local/share/guest-proxy.env \
     && printf '%s\n' \
+      'Acquire::http::Proxy "http://127.0.0.1:3128";' \
+      'Acquire::https::Proxy "http://127.0.0.1:3128";' \
+      > /usr/local/share/guest-proxy.apt \
+    && printf '%s\n' \
       '[system/proxy]' \
       'mode='"'"'manual'"'"'' \
       'ignore-hosts=['"'"'localhost'"'"','"'"'127.0.0.0/8'"'"','"'"'::1'"'"']' \
@@ -137,6 +144,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       '[system/proxy/https]' \
       'host='"'"'127.0.0.1'"'"'' \
       'port=3128' \
+      '[system/proxy/socks]' \
+      'host='"'"'127.0.0.1'"'"'' \
+      'port=1080' \
       > /usr/local/share/guest-proxy.dconf \
     && printf '%s\n' \
       '#!/bin/sh' \
@@ -146,6 +156,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'cat /usr/local/share/guest-proxy.env > /run/guest-proxy.env' \
       'cat /usr/local/share/guest-proxy.dconf > /etc/dconf/db/local.d/01-proxy' \
       'dconf update' \
+      'cat /usr/local/share/guest-proxy.apt > /etc/apt/apt.conf.d/01-guest-proxy' \
       > /usr/local/sbin/guest-proxy-setup \
     && chmod 0755 /usr/local/sbin/guest-proxy-setup \
     && printf '%s\n' \
@@ -162,6 +173,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       '[Install]' \
       'WantedBy=multi-user.target' \
       > /etc/systemd/system/guest-proxy.service \
+    # IMAP and SMTP have no HTTP-proxy form, so the mail client speaks SOCKS5
+    # to the same relay; names travel to the proxy, which is the only resolver.
+    && printf '%s\n' \
+      '[Unit]' \
+      'Description=SOCKS5 front end for the guest proxy relay' \
+      'After=guest-proxy.service' \
+      'Wants=guest-proxy.service' \
+      'Before=desktop-session.service osworld-server.service' \
+      '' \
+      '[Service]' \
+      'Type=simple' \
+      'EnvironmentFile=-/run/guest-proxy.env' \
+      'ExecStart=/usr/local/sbin/socks-connect' \
+      'Restart=always' \
+      'RestartSec=2s' \
+      '' \
+      '[Install]' \
+      'WantedBy=multi-user.target' \
+      > /etc/systemd/system/socks-connect.service \
     && printf '%s\n' \
       '[Unit]' \
       'Description=virtual X display for the desktop session' \
@@ -251,7 +281,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       '[Install]' \
       'WantedBy=multi-user.target' \
       > /etc/systemd/system/cdp-bridge.service \
-    && systemctl enable guest-proxy.service xvfb.service desktop-session.service osworld-server.service cdp-bridge.service
+    && systemctl enable guest-proxy.service socks-connect.service xvfb.service desktop-session.service osworld-server.service cdp-bridge.service
+
+COPY --chmod=0755 24.04/socks-connect.py /usr/local/sbin/socks-connect
 
 # Six more applications the OSWorld task set drives. bsdextrautils and
 # xdg-utils: WPS's postinst exits 127 without them and wedges apt.
@@ -259,13 +291,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # WPS blocks on a modal EULA and nags about absent symbol fonts.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bsdextrautils xdg-utils desktop-file-utils shared-mime-info bzip2 xz-utils \
-    libdbus-glib-1-2 shotcut=${SHOTCUT_VERSION} \
+    libdbus-glib-1-2 tinyproxy shotcut=${SHOTCUT_VERSION} \
     && install -d -m 0755 /etc/apt/keyrings \
     && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
       | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg \
     && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/code stable main" \
       > /etc/apt/sources.list.d/vscode.list \
+    && curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x${FREECAD_FINGERPRINT}" \
+      | gpg --dearmor -o /etc/apt/keyrings/freecad.gpg \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/freecad.gpg] https://ppa.launchpadcontent.net/freecad-maintainers/freecad-stable/ubuntu noble main" \
+      > /etc/apt/sources.list.d/freecad.list \
     && apt-get update && apt-get install -y --no-install-recommends code=${CODE_VERSION} \
+      "freecad=${FREECAD_VERSION}" python3-numpy python3-scipy \
     # the task profiles name /usr/lib/thunderbird, one task runs /usr/bin/thunderbird
     && curl -fsSL -o /tmp/thunderbird.tar.bz2 \
       "https://download-installer.cdn.mozilla.net/pub/thunderbird/releases/${THUNDERBIRD_VERSION}/linux-x86_64/en-US/thunderbird-${THUNDERBIRD_VERSION}.tar.bz2" \
@@ -283,6 +320,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'Categories=Network;Email;' \
       'MimeType=x-scheme-handler/mailto;message/rfc822;' \
       > /usr/share/applications/thunderbird.desktop \
+    # a task seeds its own profile, so the proxy has to come from policy
+    && install -d /usr/lib/thunderbird/distribution \
+    && printf '%s\n' \
+      '{"policies":{"Proxy":{"Mode":"manual","SOCKSProxy":"127.0.0.1:1080",' \
+      '"SOCKSVersion":5,"UseProxyForDNS":true,"Locked":true,' \
+      '"Passthrough":"localhost, 127.0.0.1"}}}' \
+      > /usr/lib/thunderbird/distribution/policies.json \
     && curl -fsSL -o /tmp/wps.deb \
       "https://wdl1.pcfg.cache.wpscdn.com/wpsdl/wpsoffice/download/linux/${WPS_BUILD##*.}/wps-office_${WPS_BUILD}.XA_amd64.deb" \
     && apt-get install -y --no-install-recommends /tmp/wps.deb \
@@ -316,6 +360,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && tar -xJf /tmp/reaper.tar.xz -C /tmp/reaper --strip-components=1 \
     && /tmp/reaper/install-reaper.sh --install /opt --integrate-desktop --quiet \
     && ln -sf /opt/REAPER/reaper /usr/local/bin/reaper \
+    # the CAD evaluators are entry-guarded on __main__, which FreeCAD's own
+    # launcher does not give a script: it runs one under its file name
+    && printf '%s\n' \
+      '#!/bin/sh' \
+      'exec env PYTHONPATH=/usr/lib/freecad-python3/lib python3 "$@"' \
+      > /usr/local/bin/freecadcmd \
+    && chmod 0755 /usr/local/bin/freecadcmd \
+    # the harness starts its own instance per task against a residential upstream
+    && systemctl disable tinyproxy.service \
     && update-desktop-database /usr/share/applications \
+    && apt-get update \
     && rm -rf /tmp/thunderbird.tar.bz2 /tmp/wps.deb /tmp/zotero.tar.bz2 \
-      /tmp/reaper /tmp/reaper.tar.xz /var/lib/apt/lists/*
+      /tmp/reaper /tmp/reaper.tar.xz
