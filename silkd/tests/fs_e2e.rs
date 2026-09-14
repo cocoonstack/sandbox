@@ -140,6 +140,16 @@ async fn mkdir_rename_rm_lifecycle() {
 }
 
 #[tokio::test]
+async fn read_of_a_non_regular_file_is_bad_request() {
+    let dir = tempfile::tempdir().unwrap();
+    for path in [dir.path().to_str().unwrap(), "/dev/null"] {
+        let frames = exchange(&[json!({"op":"fs_read","path":path}).to_string()]).await;
+        assert_eq!(type_of(&frames[0]), "error", "{path}: {frames:?}");
+        assert_eq!(frames[0]["kind"], "bad_request", "{path}");
+    }
+}
+
+#[tokio::test]
 async fn read_missing_path_is_not_found() {
     let frames = exchange(&[json!({"op":"fs_read","path":"/no/such/file/xyz"}).to_string()]).await;
     assert_eq!(type_of(&frames[0]), "error");

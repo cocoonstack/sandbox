@@ -9,7 +9,7 @@ use tokio::fs;
 use tokio::io::{AsyncBufRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
-use crate::proto::{self, DirEntry, FileInfo, FileKind, Response, err_frame};
+use crate::proto::{self, DirEntry, ErrorKind, FileInfo, FileKind, Response, err_frame};
 
 /// Entries per `entries` frame; a worst-case 1.6KiB entry keeps a full batch under MAX_FRAME.
 pub const LIST_BATCH: usize = 4096;
@@ -48,8 +48,21 @@ where
     proto::write_frame(w, &Response::Done).await
 }
 
-/// Streams the file at `path` back as `data` frames, then `done`.
+/// Streams the regular file at `path` back as `data` frames, then `done`.
 pub async fn read<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<()> {
+    // a device streams forever and a writerless FIFO blocks in open, so only a regular file is read
+    match fs::metadata(&path).await {
+        Ok(meta) if !meta.is_file() => {
+            return proto::error_frame(
+                w,
+                ErrorKind::BadRequest,
+                format!("{path}: not a regular file"),
+            )
+            .await;
+        }
+        Err(e) => return err_frame(w, &e, "stat").await,
+        Ok(_) => {}
+    }
     let mut file = match fs::File::open(&path).await {
         Ok(f) => f,
         Err(e) => return err_frame(w, &e, "open").await,
