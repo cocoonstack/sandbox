@@ -55,8 +55,9 @@ every tunnel through the door as they gate `CONNECT`, so the tenant does not
 opt in separately; its own `socks5` counts only on a claim outside any
 configured pool, where the tenant policy is the whole policy. A policy that
 opts in with rules that all carry `methods` without `CONNECT`, or all
-`intercept`, is rejected at load. A policy that does not opt in pays nothing
-for the door on the claim path. Audit lines carry `"method":"SOCKS5"`.
+`intercept`, is rejected at load. A pool whose policy does not opt in pays
+nothing for the door on the claim path, whatever its tenants' policies say.
+Audit lines carry `"method":"SOCKS5"`.
 
 ```sh
 curl --socks5-hostname 127.0.0.1:1080 imaps://imap.example.com/   # allowed: {"socks5": true, "allow": [{"host": "imap.example.com"}]}

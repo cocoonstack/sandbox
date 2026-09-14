@@ -66,8 +66,9 @@ lane. `SILKD_NET=none|egress` overrides the probe for tests and operators.
 On every lane silkd also binds `127.0.0.1:3128` and relays each connection to
 the host's [guarded-egress](egress.md) proxy over vsock (`CID2:2049`), and
 `127.0.0.1:1080` to its SOCKS5 door (`CID2:2050`) for clients whose protocol
-has no HTTP-proxy form; when the host wired no policy, or the policy did not
-opt into the SOCKS5 door, the per-connection dial is refused, so the ports are
+has no HTTP-proxy form; when the host wired no policy, or the door-owning
+policy (the pool's, or the tenant's on a claim outside any pool) did not opt
+into the SOCKS5 door, the per-connection dial is refused, so the ports are
 inert.
 Where nothing routes directly — the no-network lane, or a NIC whose host
 verdict in `/etc/silkd-lane` reads `relay` because it is nft-locked — silkd

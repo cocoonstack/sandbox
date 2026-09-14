@@ -285,11 +285,13 @@ func denied(w http.ResponseWriter, host string) {
 	http.Error(w, fmt.Sprintf("egress denied: %s", host), http.StatusForbidden)
 }
 
-// hostPort splits an authority; a bare host takes def, a port outside 1-65535 is refused rather than defaulted.
+// hostPort splits an authority; a bare host takes def, a port outside 1-65535 or a malformed authority is refused rather than defaulted.
 func hostPort(authority string, def uint16) (host string, port uint16, ok bool) {
 	host, text, err := net.SplitHostPort(authority)
 	if err != nil {
-		return authority, def, true
+		bare := !strings.Contains(authority, ":") ||
+			(strings.HasPrefix(authority, "[") && strings.HasSuffix(authority, "]"))
+		return authority, def, bare
 	}
 	n, err := strconv.ParseUint(text, 10, 16)
 	return host, uint16(n), err == nil && n != 0

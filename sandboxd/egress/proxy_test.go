@@ -312,11 +312,26 @@ func TestUnparsablePortIsDeniedNotDefaulted(t *testing.T) {
 		t.Fatalf("dial proxy: %v", err)
 	}
 	defer func() { _ = raw.Close() }()
-	if _, err := io.WriteString(raw, "CONNECT /x HTTP/1.1\r\nHost: echo.internal:+8443\r\n\r\n"); err != nil {
+	if _, err = io.WriteString(raw, "CONNECT /x HTTP/1.1\r\nHost: echo.internal:+8443\r\n\r\n"); err != nil {
 		t.Fatalf("write path-form CONNECT: %v", err)
 	}
 	if status := readStatus(t, bufio.NewReader(raw)); status != "HTTP/1.1 403 Forbidden" {
 		t.Errorf("path-form CONNECT with a signed port = %q, want 403 (the dialer would have accepted +8443)", status)
+	}
+	if ev := recvEvent(t, events); ev.Port != 0 || ev.Decision != DecisionDeny {
+		t.Errorf("audit event = %+v, want deny with no port", ev)
+	}
+
+	malformed, err := net.Dial("tcp", front.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer func() { _ = malformed.Close() }()
+	if _, err = io.WriteString(malformed, "CONNECT /x HTTP/1.1\r\nHost: echo.internal:443:8443\r\n\r\n"); err != nil {
+		t.Fatalf("write malformed CONNECT: %v", err)
+	}
+	if status := readStatus(t, bufio.NewReader(malformed)); status != "HTTP/1.1 403 Forbidden" {
+		t.Errorf("path-form CONNECT with two ports = %q, want 403, not a bare-host default", status)
 	}
 	if ev := recvEvent(t, events); ev.Port != 0 || ev.Decision != DecisionDeny {
 		t.Errorf("audit event = %+v, want deny with no port", ev)

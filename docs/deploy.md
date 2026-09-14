@@ -51,9 +51,11 @@ guest image from another release reads a different file or none, which on a
 locked bridge lane leaves its execs routing into the lock. Roll the images
 with the daemon. A config that uses the `socks5` or `ports` policy keys does
 not load on an older sandboxd (unknown keys are rejected), so a rollback takes
-the config with it. The SOCKS5 door is opt-in: a policy that relied on the
-door binding for any bare host rule adds `"socks5": true` or loses the door
-silently, since its config still loads.
+the config with it. The SOCKS5 door is opt-in and the pool policy owns it: a
+pool that relied on the door binding for any bare host rule adds
+`"socks5": true` to its policy or loses the door silently, since its config
+still loads; a tenant policy's flag counts only on a claim outside any
+configured pool, where it is the whole policy.
 
 ## Configuration
 
