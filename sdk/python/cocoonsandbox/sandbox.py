@@ -105,21 +105,21 @@ class Sandbox:
         expired = threading.Event()
         try:
             conn = self._dial(deadline)
-        except ProtocolError:
+        except (ProtocolError, TimeoutError):
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError(f"command did not finish within {timeout}s") from None
             raise
         with conn:
-            conn.send(
-                "exec", argv=argv, cwd=cwd or None, env=env, user=user or None, detach=False, session=session or None
-            )
-            # the guest stops draining stdin while blocked on stdout, so feeding it fully first deadlocks.
-            pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True)
-            pump.start()
             watchdog = _arm_watchdog(conn, deadline, expired)
             try:
+                conn.send(
+                    "exec", argv=argv, cwd=cwd or None, env=env, user=user or None, detach=False, session=session or None
+                )
+                # the guest stops draining stdin while blocked on stdout, so feeding it fully first deadlocks.
+                pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True)
+                pump.start()
                 code = _pump_stdio(conn, on_stdout, on_stderr)
-            except ProtocolError:
+            except (ProtocolError, OSError):
                 if expired.is_set():
                     raise TimeoutError(f"command did not finish within {timeout}s") from None
                 raise
@@ -378,10 +378,7 @@ class Sandbox:
                 raise
 
     def _dial(self, deadline: float | None = None) -> Conn:
-        timeout = self._client.timeout
-        if deadline is not None:
-            timeout = max(min(timeout, deadline - time.monotonic()), 0.001)
-        return dial_agent(self.owner, self.id, self.token, timeout)
+        return dial_agent(self.owner, self.id, self.token, self._client.timeout, deadline)
 
     def _open_stream(self, op: str, expect: str = "ready", **fields) -> tuple[Conn, dict]:
         """Dials, sends op, and waits for the handshake frame, closing the

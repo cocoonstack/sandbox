@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import socket
+import time
 from collections.abc import Iterator
 from typing import BinaryIO, TypeVar
 
@@ -35,7 +36,7 @@ class Conn(_Closeable):
         self._sock.sendall(encode_request(op, **fields))
 
     def abort(self) -> None:
-        """Unblocks a reader parked in recv from another thread; close() still owns the socket."""
+        """Unblocks a socket operation from another thread; close() still owns the socket."""
         with contextlib.suppress(OSError):
             self._sock.shutdown(socket.SHUT_RDWR)
 
@@ -73,23 +74,22 @@ class Conn(_Closeable):
             self._sock.shutdown(socket.SHUT_WR)
 
     def close(self) -> None:
+        self.abort()
         try:
             self._reader.close()
         finally:
             self._sock.close()
 
 
-def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float) -> Conn:
-    """Opens the data-plane connection: TCP dial plus a hand-rolled HTTP
-    Upgrade, both bounded by timeout, so nothing pools or proxies underneath
-    the byte stream; the stream itself has no idle timeout."""
+def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float, deadline: float | None = None) -> Conn:
+    """Opens one TCP/HTTP Upgrade relay within timeout and the optional deadline."""
     # id/token interpolate into the raw request line; CR/LF would inject headers.
     for name, value in (("sandbox id", sandbox_id), ("token", token)):
         if any(c in value for c in "\r\n\0"):
             raise APIError("agent upgrade", 0, f"{name} contains a control character")
     host, port = addr.rsplit(":", 1)
     try:
-        sock = socket.create_connection((host, int(port)), timeout=timeout)
+        sock = socket.create_connection((host, int(port)), timeout=_remaining_timeout(timeout, deadline))
     except OSError as exc:
         raise ProtocolError(f"dial {addr}: {exc}") from exc
     # Nagle off: exec/write send small back-to-back frames before the first read.
@@ -104,13 +104,16 @@ def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float) -> Conn:
             f"Authorization: Bearer {token}\r\n"
             "\r\n"
         )
+        sock.settimeout(_remaining_timeout(timeout, deadline))
         sock.sendall(request.encode())
         reader = sock.makefile("rb")
+        sock.settimeout(_remaining_timeout(timeout, deadline))
         status = reader.readline(1024).decode(errors="replace")
         parts = status.split(" ", 2)
         code = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
         body_len = 0
         while True:
+            sock.settimeout(_remaining_timeout(timeout, deadline))
             header = reader.readline(4096)
             if header in (b"\r\n", b"\n", b""):
                 break
@@ -124,8 +127,10 @@ def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float) -> Conn:
                     raise ProtocolError("invalid content-length in upgrade reply") from exc
         if code != 101:
             # a bogus content-length must not buffer unbounded bytes.
+            sock.settimeout(_remaining_timeout(timeout, deadline))
             body = reader.read(min(body_len, MAX_FRAME)).decode(errors="replace") if body_len else ""
             raise APIError("agent upgrade", code, body.strip() or status.strip())
+        _remaining_timeout(timeout, deadline)
         sock.settimeout(None)
         return Conn(sock, reader)
     except Exception:
@@ -134,3 +139,12 @@ def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float) -> Conn:
             reader.close()
         sock.close()
         raise
+
+
+def _remaining_timeout(timeout: float, deadline: float | None) -> float:
+    if deadline is None:
+        return timeout
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("agent dial timed out")
+    return min(timeout, remaining)
