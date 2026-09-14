@@ -175,8 +175,9 @@ door; the egress-lane pool additionally gets its NIC locked at claim, so its
 policy governs the only route out just like the none lane's. sandboxd binds a
 warm clone's doors when it joins the pool and starts serving them at claim, so
 the bind is off the claim path (a refill-time bind failure is logged and that
-clone binds at claim); whatever the guest connected before its claim is
-dropped unserved, and an unpooled or woken sandbox binds at arm time.
+clone binds at claim); a door the guest reached while the clone was warm is
+bound afresh at claim, which resets what waited in it, and an unpooled or
+woken sandbox binds at arm time.
 
 - `host`: an exact name, a `*.`-prefixed suffix wildcard, or `*`. Case-insensitive.
 - `methods`: empty means any. Enforced on plaintext and on intercepted HTTPS. A
