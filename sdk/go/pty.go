@@ -81,8 +81,9 @@ func (p *Pty) ExitCode() (code int, ok bool) {
 	return p.exitCode, p.exited
 }
 
-// drain relays response frames into the output pipe and terminal state.
-func (p *Pty) drain(ctx context.Context, pw *io.PipeWriter) {
+// drain relays response frames into the output pipe and terminal state, releasing the relay when they end.
+func (p *Pty) drain(ctx context.Context, pw *io.PipeWriter, stop func()) {
+	defer stop()
 	for {
 		resp, err := recv(ctx, p.conn)
 		if err != nil {
@@ -126,6 +127,6 @@ func (s *Sandbox) OpenPty(ctx context.Context, opts PtyOpts) (*Pty, error) {
 
 	pr, pw := io.Pipe()
 	p := &Pty{PID: started.PID, sb: s, conn: conn, stop: done, out: pr}
-	go p.drain(ctx, pw)
+	go p.drain(ctx, pw, done)
 	return p, nil
 }
