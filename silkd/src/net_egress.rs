@@ -6,6 +6,10 @@ use std::io;
 pub const LOOPBACK_PORT: u16 = 3128;
 /// Host vsock port the VMM maps to sandboxd's `<vsock_socket>_<PORT>` UDS.
 pub const HOST_VSOCK_PORT: u32 = 2049;
+/// Loopback port the guest reaches the SOCKS5 proxy at.
+pub const SOCKS_LOOPBACK_PORT: u16 = 1080;
+/// Host vsock port of the SOCKS5 proxy, mapped like `HOST_VSOCK_PORT`.
+pub const SOCKS_HOST_VSOCK_PORT: u32 = 2050;
 
 #[cfg(target_os = "linux")]
 pub async fn serve(loopback_port: u16, host_vsock_port: u32) -> io::Result<()> {

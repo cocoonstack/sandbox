@@ -6,6 +6,7 @@ package egress
 
 import (
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 )
@@ -111,11 +112,17 @@ func (p Policy) EvalInner(host, method string) (Rule, Decision) {
 	return Rule{}, DecisionDeny
 }
 
+// Tunnels reports whether some rule can admit an opaque tunnel; false leaves the SOCKS5 listener unbound, and a composite answers true even when its two host sets never meet.
+func (p Policy) Tunnels() bool {
+	return slices.ContainsFunc(p.Allow, func(r Rule) bool { return !r.Intercept && r.matchMethod(http.MethodConnect) })
+}
+
 // Evaluator is what the proxy consults per request.
 type Evaluator interface {
 	Eval(host, method string) (Rule, Decision)
 	EvalHost(host string) (Rule, Decision)
 	EvalInner(host, method string) (Rule, Decision)
+	Tunnels() bool
 }
 
 // Compose intersects a pool and a tenant policy; the pool rule wins on a double allow.
@@ -158,4 +165,8 @@ func (c composite) EvalInner(host, method string) (Rule, Decision) {
 		return Rule{}, DecisionDeny
 	}
 	return rule, DecisionAllow
+}
+
+func (c composite) Tunnels() bool {
+	return c.pool.Tunnels() && c.tenant.Tunnels()
 }
