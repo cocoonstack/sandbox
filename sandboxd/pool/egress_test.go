@@ -587,6 +587,11 @@ func TestWarmClaimServesTheDoorsRefillBound(t *testing.T) {
 	if el == nil || el.socks == nil || el.srv != nil {
 		t.Fatalf("refill left prebound=%+v, want both doors bound and nothing served", el)
 	}
+	early, err := net.Dial("unix", engine.EgressSocketPath(warm.VsockSocket))
+	if err != nil {
+		t.Fatalf("pre-claim dial: %v", err)
+	}
+	defer early.Close()
 
 	sb := mustClaim(t, m, testKey)
 	m.mu.Lock()
@@ -594,6 +599,10 @@ func TestWarmClaimServesTheDoorsRefillBound(t *testing.T) {
 	m.mu.Unlock()
 	if armed != el || left != 0 {
 		t.Fatalf("claim armed %p from prebound %p with %d left, want the refill-bound pair", armed, el, left)
+	}
+	_ = early.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := early.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("a connection queued before the claim was kept: read err=%v, want closed", err)
 	}
 	for _, path := range []string{engine.EgressSocketPath(sb.VsockSocket), engine.SocksSocketPath(sb.VsockSocket)} {
 		conn, err := net.Dial("unix", path)

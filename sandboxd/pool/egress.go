@@ -162,6 +162,11 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 		if el, err = bindEgress(sb.VsockSocket, policy.ServesSocks()); err != nil {
 			return err
 		}
+	} else {
+		dropQueued(el.ln)
+		if el.socks != nil {
+			dropQueued(el.socks)
+		}
 	}
 	el.srv = &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}
 	el.proxy = proxy
@@ -286,6 +291,23 @@ func bindEgress(vsock string, socks bool) (*egressListener, error) {
 func listenUnix(path string) (net.Listener, error) {
 	_ = os.Remove(path)
 	return net.Listen("unix", path)
+}
+
+// dropQueued closes what a warm guest connected to a door before it was armed; nothing pre-claim is served under the claim's identity.
+func dropQueued(ln net.Listener) {
+	rc, err := ln.(syscall.Conn).SyscallConn()
+	if err != nil {
+		return
+	}
+	_ = rc.Control(func(fd uintptr) {
+		for {
+			nfd, _, err := syscall.Accept(int(fd)) //nolint:gosec // a descriptor, not arithmetic
+			if err != nil {
+				return
+			}
+			_ = syscall.Close(nfd)
+		}
+	})
 }
 
 // newEgressDialer blocks internal targets, then re-admits exactly the node-named prefixes.
