@@ -13,12 +13,16 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
+	"golang.org/x/net/netutil"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
+
+// egressDoorConns bounds one sandbox's open connections per door; the guest's next dial waits in the backlog.
+const egressDoorConns = 256
 
 var (
 	nat64Range = netip.MustParsePrefix("64:ff9b::/96") // RFC 6052 NAT64; the embedded v4 is checked instead
@@ -176,6 +180,10 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	}
 	el.srv = &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}
 	el.proxy = proxy
+	el.ln = netutil.LimitListener(el.ln, egressDoorConns)
+	if el.socks != nil {
+		el.socks = netutil.LimitListener(el.socks, egressDoorConns)
+	}
 	m.mu.Lock()
 	displaced := m.egressListeners[id]
 	m.egressListeners[id] = el
