@@ -221,7 +221,7 @@ func (m *Manager) idleHibernate(ctx context.Context, id, token string, sweepStar
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
-	woke := sb.LastSeen().After(sweepStart) || sb.HibernateSnap != "" || m.active(sb)
+	woke := m.active(sb) || sb.LastSeen().After(sweepStart) || sb.HibernateSnap != ""
 	m.mu.Unlock()
 	if woke {
 		return errWokeMeanwhile

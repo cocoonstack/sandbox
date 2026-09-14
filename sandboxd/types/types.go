@@ -190,10 +190,10 @@ func (s *Sandbox) LastSeen() time.Time { return time.Unix(0, s.lastActivity.Load
 // Hold registers an open data-plane connection; the idle sweep leaves a held sandbox alone.
 func (s *Sandbox) Hold() { s.open.Add(1) }
 
-// Unhold ends a Hold and restarts the idle clock.
+// Unhold restarts the idle clock, then ends the Hold; a sweep that sees the hold gone also sees the fresh stamp.
 func (s *Sandbox) Unhold() {
-	s.open.Add(-1)
 	s.Touch()
+	s.open.Add(-1)
 }
 
 // Busy reports whether a data-plane connection is held.
