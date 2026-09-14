@@ -1,9 +1,13 @@
 package sandbox
 
 import (
+	"bufio"
 	"errors"
+	"io"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
@@ -34,6 +38,38 @@ func TestWatchDeliversEventsUntilClose(t *testing.T) {
 	}
 	if err := w.Err(); err != nil {
 		t.Errorf("Err after clean close: %v", err)
+	}
+}
+
+func TestWatchReleasesTheRelayWhenTheSandboxEnds(t *testing.T) {
+	released := make(chan struct{})
+	ts := newAgentServer(t, func(conn net.Conn) {
+		defer conn.Close()
+		r := bufio.NewReader(conn)
+		if _, err := r.ReadString('\n'); err != nil {
+			t.Errorf("read watch request: %v", err)
+			return
+		}
+		_, _ = io.WriteString(conn, `{"type":"ready"}`+"\n"+
+			`{"type":"event","kind":"created","path":"/work/a"}`+"\n"+
+			`{"type":"error","kind":"internal","message":"watcher died"}`+"\n")
+		_, _ = r.ReadByte()
+		close(released)
+	})
+	sb := testSandbox(t, ts)
+	w, err := sb.Watch(t.Context(), "/work", true)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	for range w.Events() {
+	}
+	if e, ok := errors.AsType[*wire.ErrorResp](w.Err()); !ok || e.Message != "watcher died" {
+		t.Fatalf("Err = %v, want the sandbox's error frame", w.Err())
+	}
+	select {
+	case <-released:
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay connection still open after the watch ended on its own")
 	}
 }
 
