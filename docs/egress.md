@@ -54,8 +54,9 @@ is refused like the HTTP one with no policy. The tenant policy's rules gate
 every tunnel through the door as they gate `CONNECT`, so the tenant does not
 opt in separately; its own `socks5` counts only on a claim outside any
 configured pool, where the tenant policy is the whole policy. A policy that
-opts in with rules that all carry `methods` without `CONNECT`, or all
-`intercept`, is rejected at load. A pool whose policy does not opt in pays
+opts in with rules that all carry a nonempty `methods` list without
+`CONNECT`, or all `intercept`, is rejected at load. A pool whose policy does
+not opt in pays
 nothing for the door on the claim path, whatever its tenants' policies say.
 Audit lines carry `"method":"SOCKS5"`.
 
