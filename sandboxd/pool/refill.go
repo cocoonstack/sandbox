@@ -93,6 +93,9 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 	if err == nil {
 		err = m.warmClone(ctx, sb)
 	}
+	if err == nil {
+		m.prebindEgress(ctx, sb)
+	}
 	keep := false
 	var fails int
 	var wait time.Duration

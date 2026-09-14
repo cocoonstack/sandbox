@@ -269,6 +269,8 @@ type Manager struct {
 	pendingCks map[string]struct{}
 	// egressListeners holds the per-sandbox egress proxy accept point; guarded by m.mu.
 	egressListeners map[string]*egressListener
+	// egressPrebound holds the doors refill bound for warm VMs, by VM name; guarded by m.mu.
+	egressPrebound map[string]*egressListener
 	// egressTaps holds the nft-locked egress-lane tap per sandbox id; guarded by m.mu.
 	egressTaps map[string]string
 
@@ -363,6 +365,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		archiving:       map[string]struct{}{},
 		pendingCks:      map[string]struct{}{},
 		egressListeners: map[string]*egressListener{},
+		egressPrebound:  map[string]*egressListener{},
 		egressTaps:      map[string]string{},
 		recLocks:        map[string]*sync.RWMutex{},
 		recRefs:         map[string]int{},
