@@ -587,11 +587,6 @@ func TestWarmClaimServesTheDoorsRefillBound(t *testing.T) {
 	if el == nil || el.socks == nil || el.srv != nil {
 		t.Fatalf("refill left prebound=%+v, want both doors bound and nothing served", el)
 	}
-	early, err := net.Dial("unix", engine.EgressSocketPath(warm.VsockSocket))
-	if err != nil {
-		t.Fatalf("pre-claim dial: %v", err)
-	}
-	defer early.Close()
 
 	sb := mustClaim(t, m, testKey)
 	m.mu.Lock()
@@ -600,21 +595,41 @@ func TestWarmClaimServesTheDoorsRefillBound(t *testing.T) {
 	if armed != el || left != 0 {
 		t.Fatalf("claim armed %p from prebound %p with %d left, want the refill-bound pair", armed, el, left)
 	}
-	_ = early.SetReadDeadline(time.Now().Add(2 * time.Second))
-	if _, err := early.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("a connection queued before the claim was kept: read err=%v, want closed", err)
-	}
-	for _, path := range []string{engine.EgressSocketPath(sb.VsockSocket), engine.SocksSocketPath(sb.VsockSocket)} {
-		conn, err := net.Dial("unix", path)
-		if err != nil {
-			t.Fatalf("door %s: %v", path, err)
-		}
-		_ = conn.Close()
-	}
+	dialDoors(t, sb)
 	m.disarmEgress(sb.ID, true)
 	if _, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
 		t.Error("egress socket still accepts after disarm")
 	}
+}
+
+func TestWarmClaimRebindsADoorTheGuestReachedEarly(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	pol := &egress.Policy{Socks5: true, Allow: []egress.Rule{{Host: "example.com"}}}
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
+	warm := refillWarmVM(t, m)
+	m.mu.Lock()
+	prebound := m.egressPrebound[warm.VMName]
+	m.mu.Unlock()
+	early, err := net.Dial("unix", engine.SocksSocketPath(warm.VsockSocket))
+	if err != nil {
+		t.Fatalf("pre-claim dial: %v", err)
+	}
+	defer early.Close()
+
+	sb := mustClaim(t, m, testKey)
+	m.mu.Lock()
+	armed := m.egressListeners[sb.ID]
+	m.mu.Unlock()
+	if armed == prebound {
+		t.Fatal("claim served the pair a guest had already reached")
+	}
+	_ = early.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := early.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("a connection queued before the claim was kept: read err=%v, want closed", err)
+	}
+	dialDoors(t, sb)
+	m.disarmEgress(sb.ID, true)
 }
 
 func TestTrimmedWarmVMClosesItsDoors(t *testing.T) {
@@ -639,6 +654,17 @@ func TestTrimmedWarmVMClosesItsDoors(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err == nil {
 		t.Error("door socket survives its VM")
+	}
+}
+
+func dialDoors(t *testing.T, sb *types.Sandbox) {
+	t.Helper()
+	for _, path := range []string{engine.EgressSocketPath(sb.VsockSocket), engine.SocksSocketPath(sb.VsockSocket)} {
+		conn, err := net.Dial("unix", path)
+		if err != nil {
+			t.Fatalf("door %s: %v", path, err)
+		}
+		_ = conn.Close()
 	}
 }
 

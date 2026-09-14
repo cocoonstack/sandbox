@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -157,15 +158,15 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	el := m.egressPrebound[sb.VMName]
 	delete(m.egressPrebound, sb.VMName)
 	m.mu.Unlock()
+	if el != nil && (reached(el.ln) || (el.socks != nil && reached(el.socks))) {
+		// a fresh bind resets everything the guest queued before its claim
+		el.close()
+		el = nil
+	}
 	if el == nil {
 		var err error
 		if el, err = bindEgress(sb.VsockSocket, policy.ServesSocks()); err != nil {
 			return err
-		}
-	} else {
-		dropQueued(el.ln)
-		if el.socks != nil {
-			dropQueued(el.socks)
 		}
 	}
 	el.srv = &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}
@@ -293,21 +294,24 @@ func listenUnix(path string) (net.Listener, error) {
 	return net.Listen("unix", path)
 }
 
-// dropQueued closes what a warm guest connected to a door before it was armed; nothing pre-claim is served under the claim's identity.
-func dropQueued(ln net.Listener) {
+// reached reports whether a guest connected to a door before it was armed; only a clean EAGAIN says no.
+func reached(ln net.Listener) bool {
 	rc, err := ln.(syscall.Conn).SyscallConn()
 	if err != nil {
-		return
+		return true
 	}
+	waiting := true
 	_ = rc.Control(func(fd uintptr) {
-		for {
-			nfd, _, err := syscall.Accept(int(fd)) //nolint:gosec // a descriptor, not arithmetic
-			if err != nil {
-				return
-			}
+		syscall.ForkLock.RLock()
+		defer syscall.ForkLock.RUnlock()
+		nfd, _, err := syscall.Accept(int(fd)) //nolint:gosec // a descriptor, not arithmetic
+		if err == nil {
 			_ = syscall.Close(nfd)
+			return
 		}
+		waiting = !errors.Is(err, syscall.EAGAIN)
 	})
+	return waiting
 }
 
 // newEgressDialer blocks internal targets, then re-admits exactly the node-named prefixes.
