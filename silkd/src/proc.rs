@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use tokio::io::AsyncWrite;
 use tokio::sync::broadcast;
@@ -48,13 +48,12 @@ impl Table {
     }
 
     pub fn register(&self, pid: u32, argv: Vec<String>, detached: bool, now: u64) -> Arc<Proc> {
-        let (tx, _) = broadcast::channel(OUTPUT_FANOUT);
         let proc = Arc::new(Proc {
             pid,
             argv,
             detached,
             started_at_epoch_secs: now,
-            tx,
+            tx: OnceLock::new(),
             ring: Mutex::new(Ring {
                 buf: VecDeque::new(),
                 tags: VecDeque::new(),
@@ -111,7 +110,7 @@ pub struct Proc {
     pub argv: Vec<String>,
     pub detached: bool,
     pub started_at_epoch_secs: u64,
-    tx: broadcast::Sender<Chunk>,
+    tx: OnceLock<broadcast::Sender<Chunk>>,
     ring: Mutex<Ring>,
     state: Mutex<State>,
     pty_master: Mutex<Option<OwnedFd>>,
@@ -124,8 +123,8 @@ impl Proc {
         if let Chunk::Stdout(d) | Chunk::Stderr(d) = chunk {
             ring.push(matches!(chunk, Chunk::Stderr(_)), d);
         }
-        if self.tx.receiver_count() > 0 {
-            let _ = self.tx.send(chunk.clone());
+        if let Some(tx) = self.attached() {
+            let _ = tx.send(chunk.clone());
         }
     }
 
@@ -133,13 +132,13 @@ impl Proc {
     pub fn emit_bytes(&self, stderr: bool, data: &[u8]) {
         let mut ring = sysutil::lock(&self.ring);
         ring.push(stderr, data);
-        if self.tx.receiver_count() > 0 {
+        if let Some(tx) = self.attached() {
             let chunk = if stderr {
                 Chunk::Stderr(data.to_vec())
             } else {
                 Chunk::Stdout(data.to_vec())
             };
-            let _ = self.tx.send(chunk);
+            let _ = tx.send(chunk);
         }
     }
 
@@ -179,7 +178,12 @@ impl Proc {
     /// Snapshots retained output and subscribes to live output under one lock.
     pub fn attach_stream(&self) -> (Vec<Chunk>, broadcast::Receiver<Chunk>) {
         let mut ring = sysutil::lock(&self.ring);
-        (ring.drain_view(), self.tx.subscribe())
+        let tx = self.tx.get_or_init(|| broadcast::channel(OUTPUT_FANOUT).0);
+        (ring.drain_view(), tx.subscribe())
+    }
+
+    fn attached(&self) -> Option<&broadcast::Sender<Chunk>> {
+        self.tx.get().filter(|tx| tx.receiver_count() > 0)
     }
 
     fn info(&self) -> ProcInfo {
@@ -265,4 +269,31 @@ pub async fn write_chunk<W: AsyncWrite + Unpin>(
 
 pub fn synth_pid() -> u32 {
     (SYNTH.fetch_add(1, Ordering::Relaxed) & (i32::MAX as u64)) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fan_out_is_built_by_the_first_attacher() {
+        let table = Table::new();
+        let proc = table.register(7, vec!["true".to_string()], true, 0);
+        proc.emit_bytes(false, b"before");
+        assert!(
+            proc.tx.get().is_none(),
+            "an unattached exec owns no fan-out ring"
+        );
+
+        let (replay, mut rx) = proc.attach_stream();
+        assert_eq!(replay.len(), 1);
+        assert!(proc.tx.get().is_some());
+        proc.emit_bytes(true, b"after");
+        assert!(matches!(rx.try_recv(), Ok(Chunk::Stderr(d)) if d == b"after"));
+
+        let (_, mut second) = proc.attach_stream();
+        proc.emit(&Chunk::Exit(3));
+        assert!(matches!(rx.try_recv(), Ok(Chunk::Exit(3))));
+        assert!(matches!(second.try_recv(), Ok(Chunk::Exit(3))));
+    }
 }
