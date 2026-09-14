@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Bare-metal acceptance for SOCKS5 egress: a none-lane sandbox tunnels to an
 # allowed host over 127.0.0.1:1080, a GET-only host and an unlisted host are
-# refused there, IMAPS rides the tunnel, and a pool without a policy leaves the
-# host door unwired. Runs a dedicated sandboxd on port 7780 (7779=egress).
+# refused there, IMAPS rides the tunnel, and a pool without a policy or without
+# socks5 leaves the host door unwired. Runs a dedicated sandboxd on port 7780
+# (7779=egress).
 set -euo pipefail
 
 TEMPLATE=${TEMPLATE:-rt:24.04}
@@ -55,19 +56,22 @@ cat >"$DATA/config.json" <<EOF
   "audit_log": true,
   "pools": [
     {"template": "$TEMPLATE", "net": "none", "size": "small", "warm": 1,
-     "egress": {"allow": [{"host": "$ECHO"}, {"host": "$GET_ONLY", "methods": ["GET"]}, {"host": "$IMAP"}]}},
-    {"template": "$TEMPLATE", "net": "none", "size": "medium", "warm": 1}
+     "egress": {"socks5": true,
+                "allow": [{"host": "$ECHO"}, {"host": "$GET_ONLY", "methods": ["GET"]}, {"host": "$IMAP"}]}},
+    {"template": "$TEMPLATE", "net": "none", "size": "medium", "warm": 1},
+    {"template": "$TEMPLATE", "net": "none", "size": "large", "warm": 1,
+     "egress": {"allow": [{"host": "$ECHO"}]}}
   ]
 }
 EOF
 
-echo "== start sandboxd (small pool with a tunnel-eligible policy, medium pool without one)"
+echo "== start sandboxd (small pool opted into SOCKS5, medium pool without a policy, large pool with a policy that did not opt in)"
 "$DATA/sandboxd" -config "$DATA/config.json" >>"$DATA/daemon.log" 2>&1 &
 DAEMON_PID=$!
 for _ in $(seq 1 40); do curl -sf "http://$ADDR/healthz" >/dev/null && break; sleep 0.5; done
 for _ in $(seq 1 180); do
   curl -sf -H "Authorization: Bearer $TOKEN" "http://$ADDR/v1/info" 2>/dev/null |
-    jq -e '(.pools | length) == 2 and all(.pools[]; .warm >= 1)' >/dev/null 2>&1 && break
+    jq -e '(.pools | length) == 3 and all(.pools[]; .warm >= 1)' >/dev/null 2>&1 && break
   sleep 1
 done
 
