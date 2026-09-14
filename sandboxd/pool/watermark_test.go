@@ -15,16 +15,32 @@ func TestEffectiveTargetTracksDemand(t *testing.T) {
 		t.Fatalf("quiet pool target %d, want the floor", got)
 	}
 
-	for i := range 20 {
+	for i := range 60 {
 		p.noteArrival(now.Add(time.Duration(i) * 100 * time.Millisecond))
 	}
-	burstEnd := now.Add(2 * time.Second)
-	if got := p.effectiveTarget(burstEnd); got != 8 {
-		t.Errorf("burst target %d, want warmMax 8", got)
+	sustainedEnd := now.Add(6 * time.Second)
+	if got := p.effectiveTarget(sustainedEnd); got != 8 {
+		t.Errorf("sustained 10/s target %d, want warmMax 8", got)
 	}
 
-	if got := p.effectiveTarget(burstEnd.Add(5 * time.Minute)); got != 2 {
+	if got := p.effectiveTarget(sustainedEnd.Add(5 * time.Minute)); got != 2 {
 		t.Errorf("post-silence target %d, want the floor", got)
+	}
+}
+
+func TestEffectiveTargetIgnoresATwoClaimBurst(t *testing.T) {
+	now := time.Now()
+	p := &pool{key: types.PoolKey{}, floor: 2, warmMax: 20, lead: 500 * time.Millisecond}
+
+	p.noteArrival(now)
+	p.noteArrival(now.Add(time.Millisecond))
+	if got := p.effectiveTarget(now.Add(time.Second)); got != 2 {
+		t.Errorf("target %d after two claims 1 ms apart, want the floor", got)
+	}
+
+	p.noteArrival(now.Add(2 * time.Second))
+	if got := p.effectiveTarget(now.Add(2 * time.Second)); got != 2 {
+		t.Errorf("target %d after the burst's bin closed at 1/s, want the floor", got)
 	}
 }
 
