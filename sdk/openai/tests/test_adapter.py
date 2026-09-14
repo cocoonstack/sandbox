@@ -72,8 +72,8 @@ def test_exec_maps_stdio_and_exit(node, monkeypatch):
         def __init__(self, **kw):
             self.id = "sb_1"
 
-        def run(self, argv, on_stdout=None, on_stderr=None):
-            assert argv == ["echo", "hi"]
+        def run(self, argv, on_stdout=None, on_stderr=None, timeout=None):
+            assert argv == ["echo", "hi"] and timeout is None
             on_stdout(b"hi\n")
             return 0
 
@@ -89,14 +89,16 @@ def test_exec_maps_stdio_and_exit(node, monkeypatch):
     asyncio.run(go())
 
 
-def test_exec_timeout_runs_under_guest_timeout(node, monkeypatch):
+def test_exec_timeout_reaches_the_sdk_and_surfaces_as_timeouterror(node, monkeypatch):
     seen = []
 
     class FakeSandbox:
-        def run(self, argv, on_stdout=None, on_stderr=None):
-            seen.append(argv)
+        def run(self, argv, on_stdout=None, on_stderr=None, timeout=None):
+            seen.append(timeout)
             on_stdout(b"partial\n")
-            return 124
+            if timeout is not None:
+                raise TimeoutError("cut")
+            return 0
 
     async def go():
         client = CocoonSandboxClient()
@@ -105,9 +107,8 @@ def test_exec_timeout_runs_under_guest_timeout(node, monkeypatch):
         monkeypatch.setattr(inner, "_sandbox", lambda: FakeSandbox())
         with pytest.raises(TimeoutError):
             await inner._exec_internal("sleep", "9", timeout=1.5)
-        assert seen == [["timeout", "-s", "KILL", "1.5", "sleep", "9"]]
         result = await inner._exec_internal("sleep", "9")
-        assert seen[-1] == ["sleep", "9"] and result.exit_code == 124
+        assert seen == [1.5, None] and result.exit_code == 0
 
     asyncio.run(go())
 

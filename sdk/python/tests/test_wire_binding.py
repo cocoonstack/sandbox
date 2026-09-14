@@ -121,7 +121,7 @@ def test_git_branch_actions_come_from_the_corpus(monkeypatch):
     enums = json.loads((FIXTURES / "enums.json").read_text())
     sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
     sent = []
-    monkeypatch.setattr(sb, "_dial", lambda: BranchActionConn(sent))
+    monkeypatch.setattr(sb, "_dial", lambda deadline=None: BranchActionConn(sent))
 
     sb.git_branches("/w")
     sb.git_create_branch("/w", "b")
@@ -182,5 +182,5 @@ def fake_sandbox(monkeypatch, replies):
     thread.start()
 
     sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
-    monkeypatch.setattr(sb, "_dial", lambda: Conn(client_sock, client_sock.makefile("rb")))
+    monkeypatch.setattr(sb, "_dial", lambda deadline=None: Conn(client_sock, client_sock.makefile("rb")))
     return sb, sent, thread

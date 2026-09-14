@@ -26,6 +26,18 @@ def serve_port_forward(server: socket.socket, quiet: float, ops: list[str]) -> N
     conn.close()
 
 
+def serve_started_then_hang(server: socket.socket, quiet: float) -> None:
+    conn, _ = server.accept()
+    reader = conn.makefile("rb")
+    while reader.readline() not in (b"\r\n", b""):
+        pass
+    conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\n\r\n")
+    reader.readline()
+    conn.sendall(b'{"type":"started","pid":7}\n')
+    time.sleep(quiet)
+    conn.close()
+
+
 def serve_silence(server: socket.socket) -> None:
     conn, _ = server.accept()
     conn.recv(4096)
@@ -46,6 +58,26 @@ def test_port_stream_outlives_the_client_timeout():
     finally:
         server.close()
     assert ops == ["port_forward"]
+
+
+def test_run_timeout_cuts_a_silent_command():
+    server = socket.create_server(("127.0.0.1", 0))
+    addr = f"127.0.0.1:{server.getsockname()[1]}"
+    threading.Thread(target=serve_started_then_hang, args=(server, 5 * TIMEOUT), daemon=True).start()
+    sb = Sandbox(client=Client(addr, timeout=TIMEOUT), id="sb_1", token="tok", owner=addr)
+    started = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError):
+            sb.run(["sleep", "9"], timeout=TIMEOUT)
+    finally:
+        server.close()
+    assert time.monotonic() - started < 3 * TIMEOUT
+
+
+def test_run_rejects_a_non_positive_timeout():
+    sb = Sandbox(client=Client("127.0.0.1:1", timeout=TIMEOUT), id="sb_1", token="tok", owner="127.0.0.1:1")
+    with pytest.raises(ValueError):
+        sb.run(["true"], timeout=0)
 
 
 def test_dial_is_still_bounded_by_the_client_timeout():

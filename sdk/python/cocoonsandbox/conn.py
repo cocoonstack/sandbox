@@ -34,6 +34,11 @@ class Conn(_Closeable):
     def send(self, op: str, **fields: object) -> None:
         self._sock.sendall(encode_request(op, **fields))
 
+    def abort(self) -> None:
+        """Unblocks a reader parked in recv from another thread; close() still owns the socket."""
+        with contextlib.suppress(OSError):
+            self._sock.shutdown(socket.SHUT_RDWR)
+
     def recv(self) -> dict:
         """Returns the next frame; raises SilkdError on an error frame and
         ProtocolError on EOF, an oversized line, or an undecodable one — every

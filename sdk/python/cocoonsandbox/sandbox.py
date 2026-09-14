@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import socket
 import threading
+import time
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING
 
@@ -55,10 +56,17 @@ class Sandbox:
                 raise
 
     def exec(
-        self, *argv: str, cwd: str = "", env: dict | None = None, user: str = "", session: str = "", stdin: bytes = b""
+        self,
+        *argv: str,
+        cwd: str = "",
+        env: dict | None = None,
+        user: str = "",
+        session: str = "",
+        stdin: bytes = b"",
+        timeout: float | None = None,
     ) -> str:
         """Runs argv to completion and returns stdout; a non-zero exit raises
-        ExitError carrying stderr."""
+        ExitError carrying stderr. timeout is run()'s wall clock."""
         out, err = bytearray(), bytearray()
         code = self.run(
             list(argv),
@@ -69,6 +77,7 @@ class Sandbox:
             stdin=stdin,
             on_stdout=out.extend,
             on_stderr=err.extend,
+            timeout=timeout,
         )
         if code != 0:
             raise ExitError(code, err.decode(errors="replace"), out.decode(errors="replace"))
@@ -84,17 +93,39 @@ class Sandbox:
         stdin: bytes = b"",
         on_stdout: Callable[[bytes], object] | None = None,
         on_stderr: Callable[[bytes], object] | None = None,
+        timeout: float | None = None,
     ) -> int:
         """Runs argv streaming stdio through the callbacks (raw bytes — chunk
-        boundaries may split multi-byte sequences); returns the exit code."""
-        with self._dial() as conn:
+        boundaries may split multi-byte sequences); returns the exit code.
+        timeout is a wall clock over the dial and the run: at its end the
+        connection is cut, which kills the command, and TimeoutError is raised."""
+        if timeout is not None and timeout <= 0:
+            raise ValueError("timeout must be positive")
+        deadline = None if timeout is None else time.monotonic() + timeout
+        expired = threading.Event()
+        try:
+            conn = self._dial(deadline)
+        except ProtocolError:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError(f"command did not finish within {timeout}s") from None
+            raise
+        with conn:
             conn.send(
                 "exec", argv=argv, cwd=cwd or None, env=env, user=user or None, detach=False, session=session or None
             )
             # the guest stops draining stdin while blocked on stdout, so feeding it fully first deadlocks.
             pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True)
             pump.start()
-            code = _pump_stdio(conn, on_stdout, on_stderr)
+            watchdog = _arm_watchdog(conn, deadline, expired)
+            try:
+                code = _pump_stdio(conn, on_stdout, on_stderr)
+            except ProtocolError:
+                if expired.is_set():
+                    raise TimeoutError(f"command did not finish within {timeout}s") from None
+                raise
+            finally:
+                if watchdog is not None:
+                    watchdog.cancel()
         pump.join()  # the closed conn fails a stalled send, so this cannot hang
         if code is None:
             raise ProtocolError("exec stream ended without an exit frame")
@@ -346,8 +377,11 @@ class Sandbox:
             if exc.status != 404:
                 raise
 
-    def _dial(self) -> Conn:
-        return dial_agent(self.owner, self.id, self.token, self._client.timeout)
+    def _dial(self, deadline: float | None = None) -> Conn:
+        timeout = self._client.timeout
+        if deadline is not None:
+            timeout = max(min(timeout, deadline - time.monotonic()), 0.001)
+        return dial_agent(self.owner, self.id, self.token, timeout)
 
     def _open_stream(self, op: str, expect: str = "ready", **fields) -> tuple[Conn, dict]:
         """Dials, sends op, and waits for the handshake frame, closing the
@@ -543,6 +577,20 @@ def _send_chunks(conn: Conn, data: bytes, op: str = "data", chunk: int = FS_CHUN
     view = memoryview(data)
     for off in range(0, len(view), chunk):
         conn.send(op, data=view[off : off + chunk])
+
+
+def _arm_watchdog(conn: Conn, deadline: float | None, expired: threading.Event) -> threading.Timer | None:
+    if deadline is None:
+        return None
+
+    def cut() -> None:
+        expired.set()
+        conn.abort()
+
+    watchdog = threading.Timer(max(deadline - time.monotonic(), 0), cut)
+    watchdog.daemon = True
+    watchdog.start()
+    return watchdog
 
 
 def _feed_stdin(conn: Conn, stdin: bytes) -> None:
