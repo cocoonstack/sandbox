@@ -25,7 +25,7 @@ func TestPolicyEval(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rule, got := policy.Eval(tt.host, tt.method)
+			rule, got := policy.Eval(tt.host, tt.method, 443)
 			if got != tt.want {
 				t.Fatalf("Eval(%q,%q) = %v, want %v", tt.host, tt.method, got, tt.want)
 			}
@@ -42,13 +42,13 @@ func TestEvalSkipsInterceptRules(t *testing.T) {
 		{Host: "plain.github.com"},
 	}}
 
-	if rule, d := p.Eval("api.github.com", "GET"); d != DecisionDeny || rule.Secret != "" {
+	if rule, d := p.Eval("api.github.com", "GET", 443); d != DecisionDeny || rule.Secret != "" {
 		t.Errorf("Eval on an intercept-only host = %+v/%v, want deny", rule, d)
 	}
-	if _, d := p.Eval("plain.github.com", "GET"); d != DecisionAllow {
+	if _, d := p.Eval("plain.github.com", "GET", 443); d != DecisionAllow {
 		t.Error("plain rule must still allow the forward path")
 	}
-	if _, d := p.EvalHost("api.github.com"); d != DecisionAllow {
+	if _, d := p.EvalHost("api.github.com", 443); d != DecisionAllow {
 		t.Error("EvalHost must still allow the intercepted CONNECT path")
 	}
 }
@@ -58,11 +58,11 @@ func TestEvalHostPrefersInterceptRule(t *testing.T) {
 		{Host: "api.github.com", Methods: []string{"GET"}},
 		{Host: "api.github.com", Intercept: true},
 	}}
-	rule, d := p.EvalHost("api.github.com")
+	rule, d := p.EvalHost("api.github.com", 443)
 	if d != DecisionAllow || !rule.Intercept {
 		t.Errorf("EvalHost = %+v/%v, want the intercept rule over the earlier plain match", rule, d)
 	}
-	if rule, d := p.EvalHost("other.com"); d != DecisionDeny || rule.Intercept {
+	if rule, d := p.EvalHost("other.com", 443); d != DecisionDeny || rule.Intercept {
 		t.Errorf("EvalHost(other.com) = %+v/%v, want deny", rule, d)
 	}
 }
@@ -73,13 +73,13 @@ func TestEvalInnerMatchesOnlyInterceptRulesByMethod(t *testing.T) {
 		{Host: "api.example.com", Methods: []string{"GET"}, Secret: "gh", Intercept: true},
 		{Host: "api.example.com", Methods: []string{"POST"}, Intercept: true},
 	}}
-	if rule, d := p.EvalInner("api.example.com", "GET"); d != DecisionAllow || rule.Secret != "gh" {
+	if rule, d := p.EvalInner("api.example.com", "GET", 443); d != DecisionAllow || rule.Secret != "gh" {
 		t.Errorf("EvalInner GET = %+v/%v, want the GET intercept rule with secret gh", rule, d)
 	}
-	if rule, d := p.EvalInner("api.example.com", "POST"); d != DecisionAllow || rule.Secret != "" {
+	if rule, d := p.EvalInner("api.example.com", "POST", 443); d != DecisionAllow || rule.Secret != "" {
 		t.Errorf("EvalInner POST = %+v/%v, want the POST intercept rule (later rule reachable)", rule, d)
 	}
-	if _, d := p.EvalInner("api.example.com", "DELETE"); d != DecisionDeny {
+	if _, d := p.EvalInner("api.example.com", "DELETE", 443); d != DecisionDeny {
 		t.Error("EvalInner DELETE allowed; the plain rule must not rescue a method no intercept rule covers")
 	}
 }
@@ -87,20 +87,20 @@ func TestEvalInnerMatchesOnlyInterceptRulesByMethod(t *testing.T) {
 func TestCompositeEvalInnerIntersectsTenant(t *testing.T) {
 	pool := Policy{Allow: []Rule{{Host: "api.example.com", Secret: "gh", Intercept: true}}}
 	ev := Compose(pool, Policy{Allow: []Rule{{Host: "api.example.com", Methods: []string{"GET"}}}})
-	if rule, d := ev.EvalInner("api.example.com", "GET"); d != DecisionAllow || rule.Secret != "gh" {
+	if rule, d := ev.EvalInner("api.example.com", "GET", 443); d != DecisionAllow || rule.Secret != "gh" {
 		t.Errorf("EvalInner GET = %+v/%v, want allow with the pool secret", rule, d)
 	}
-	if _, d := ev.EvalInner("api.example.com", "POST"); d != DecisionDeny {
+	if _, d := ev.EvalInner("api.example.com", "POST", 443); d != DecisionDeny {
 		t.Error("EvalInner POST allowed though the tenant permits only GET; want tenant intersection")
 	}
 }
 
 func TestWildcardApexIsNotMatched(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "*.example.com"}}}
-	if _, d := policy.Eval("example.com", "GET"); d != DecisionDeny {
+	if _, d := policy.Eval("example.com", "GET", 443); d != DecisionDeny {
 		t.Errorf("apex example.com matched *.example.com, want deny")
 	}
-	if _, d := policy.Eval("a.example.com", "GET"); d != DecisionAllow {
+	if _, d := policy.Eval("a.example.com", "GET", 443); d != DecisionAllow {
 		t.Errorf("a.example.com did not match *.example.com, want allow")
 	}
 }
@@ -117,6 +117,9 @@ func TestPolicyValidate(t *testing.T) {
 		{"bare wildcard", Policy{Allow: []Rule{{Host: "*."}}}, true},
 		{"socks5 with a tunnel rule", Policy{Socks5: true, Allow: []Rule{{Host: "api.github.com"}}}, false},
 		{"socks5 without a tunnel rule", Policy{Socks5: true, Allow: []Rule{{Host: "api.github.com", Methods: []string{"GET"}}}}, true},
+		{"ports", Policy{Allow: []Rule{{Host: "api.github.com", Ports: []uint16{443, 993}}}}, false},
+		{"port 0", Policy{Allow: []Rule{{Host: "api.github.com", Ports: []uint16{0}}}}, true},
+		{"repeated port", Policy{Allow: []Rule{{Host: "api.github.com", Ports: []uint16{443, 443}}}}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -159,5 +162,49 @@ func TestPolicyServesSocks(t *testing.T) {
 	}
 	if !Compose(bare, bare).ServesSocks() {
 		t.Error("composite ServesSocks() = false with two opted-in bare policies, want true")
+	}
+}
+
+func TestRulePorts(t *testing.T) {
+	policy := Policy{Allow: []Rule{
+		{Host: "db.internal", Ports: []uint16{5432}},
+		{Host: "mail.internal", Ports: []uint16{993, 465}, Intercept: true},
+		{Host: "*.open.internal"},
+	}}
+	tests := []struct {
+		name string
+		host string
+		port uint16
+		want Decision
+	}{
+		{"listed port", "db.internal", 5432, DecisionAllow},
+		{"unlisted port", "db.internal", 5433, DecisionDeny},
+		{"no ports means any", "a.open.internal", 8080, DecisionAllow},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, got := policy.Eval(tt.host, "CONNECT", tt.port); got != tt.want {
+				t.Errorf("Eval(%q, CONNECT, %d) = %v, want %v", tt.host, tt.port, got, tt.want)
+			}
+		})
+	}
+	if rule, d := policy.EvalHost("mail.internal", 993); d != DecisionAllow || !rule.Intercept {
+		t.Errorf("EvalHost(mail.internal, 993) = %+v/%v, want the intercept rule", rule, d)
+	}
+	if _, d := policy.EvalHost("mail.internal", 143); d != DecisionDeny {
+		t.Error("EvalHost(mail.internal, 143) allowed; the intercept rule lists 993 and 465 only")
+	}
+	if _, d := policy.EvalInner("mail.internal", "GET", 143); d != DecisionDeny {
+		t.Error("EvalInner(mail.internal, GET, 143) allowed; want the port checked on the inner request too")
+	}
+	ev := Compose(
+		Policy{Allow: []Rule{{Host: "db.internal", Ports: []uint16{5432, 6432}}}},
+		Policy{Allow: []Rule{{Host: "db.internal", Ports: []uint16{6432}}}},
+	)
+	if _, d := ev.Eval("db.internal", "CONNECT", 5432); d != DecisionDeny {
+		t.Error("composite allowed 5432 though the tenant lists 6432 only; want intersection")
+	}
+	if _, d := ev.Eval("db.internal", "CONNECT", 6432); d != DecisionAllow {
+		t.Error("composite denied 6432 though both sides list it")
 	}
 }

@@ -20,7 +20,7 @@ const (
 )
 
 // serveIntercept terminates a matched CONNECT's TLS with a node-signed leaf.
-func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host string) {
+func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host string, port uint16) {
 	leaf, err := p.leafFor(host)
 	if err != nil {
 		http.Error(w, "egress: intercept setup failed", http.StatusInternalServerError)
@@ -53,7 +53,7 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 	_ = client.SetDeadline(time.Time{})
 	ln := &singleConnListener{conn: tlsConn, done: make(chan struct{})}
 	srv := &http.Server{
-		Handler:           &interceptHandler{proxy: p, host: host, authority: r.Host},
+		Handler:           &interceptHandler{proxy: p, host: host, port: port, authority: r.Host},
 		ReadHeaderTimeout: interceptTimeout,
 	}
 	_ = srv.Serve(ln)
@@ -81,13 +81,15 @@ func (p *Proxy) leafFor(host string) (*tls.Certificate, error) {
 type interceptHandler struct {
 	proxy     *Proxy
 	host      string
+	port      uint16
 	authority string
 }
 
 func (h *interceptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p := h.proxy
-	rule, decision := p.policy.EvalInner(h.host, r.Method)
-	p.relay(w, r, h.host, rule, decision, p.mitmTr, func(out *http.Request) {
+	rule, decision := p.policy.EvalInner(h.host, r.Method, h.port)
+	ev := Event{Method: r.Method, Host: h.host, Port: h.port, Decision: decision}
+	p.relay(w, r, ev, rule, p.mitmTr, func(out *http.Request) {
 		out.URL.Scheme = "https"
 		out.URL.Host = h.authority
 		// keep the guest's Host when it names the CONNECT host: SigV4 signing breaks on a rewrite.

@@ -142,6 +142,29 @@ func TestCloseEndsSocksTunnelAndHandshake(t *testing.T) {
 	}
 }
 
+func TestSocksPortRuleGatesTheTunnel(t *testing.T) {
+	events := make(chan Event, 4)
+	_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "mail.internal", Ports: []uint16{993}}}}, nil, fixedDial(echoServer(t)), events)
+
+	conn, reply := socksExchange(t, addr, socksGreeting, socksNameRequest("mail.internal", 993))
+	defer func() { _ = conn.Close() }()
+	if reply[1] != socksGranted {
+		t.Fatalf("listed port reply = %#x, want granted", reply[1])
+	}
+	if ev := recvEvent(t, events); ev.Port != 993 || ev.Decision != DecisionAllow {
+		t.Errorf("audit event = %+v, want allow on port 993", ev)
+	}
+
+	denied, reply := socksExchange(t, addr, socksGreeting, socksNameRequest("mail.internal", 143))
+	defer func() { _ = denied.Close() }()
+	if reply[1] != socksDenied {
+		t.Fatalf("unlisted port reply = %#x, want denied", reply[1])
+	}
+	if ev := recvEvent(t, events); ev.Port != 143 || ev.Decision != DecisionDeny {
+		t.Errorf("audit event = %+v, want deny on port 143", ev)
+	}
+}
+
 func socksProxy(t *testing.T, policy Policy, ca *CA, dial DialFunc, events chan Event) (*Proxy, string) {
 	t.Helper()
 	var audit func(Event)

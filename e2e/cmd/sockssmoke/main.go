@@ -1,8 +1,10 @@
 // Command sockssmoke proves the SOCKS5 egress channel from inside a claimed
 // sandbox: an allowed host tunnels over 127.0.0.1:1080, a GET-only host is
-// reachable on the HTTP proxy but refused on SOCKS5, an unlisted host is
-// refused, IMAPS rides the tunnel, and no tunnel opens from a pool without a
-// policy or from one whose policy did not opt in.
+// reachable on the HTTP proxy but refused on SOCKS5, an unlisted host and an
+// unlisted port are refused, IMAPS rides the tunnel on its listed port, the
+// HTTP door refuses unlisted ports on CONNECT and forward requests, and no
+// tunnel opens from a pool without a policy or from one whose policy did not
+// opt in.
 package main
 
 import (
@@ -28,9 +30,9 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:7780", "sandboxd address")
 	token := flag.String("token", "", "node api token")
 	template := flag.String("template", "rt:24.04", "template of the policy-bearing small pool")
-	echo := flag.String("echo", "postman-echo.com", "public HTTP host the policy allows without a method restriction")
+	echo := flag.String("echo", "postman-echo.com", "public HTTP host the policy allows on port 80 without a method restriction")
 	getOnly := flag.String("get-only", "example.com", "public HTTP host the policy allows for GET only")
-	imap := flag.String("imap", "imap.163.com", "IMAPS host the policy allows, for the non-HTTP leg; empty skips it")
+	imap := flag.String("imap", "imap.163.com", "IMAPS host the policy allows on port 993, for the non-HTTP leg; empty skips it")
 	flag.Parse()
 
 	if err := run(*addr, *token, *template, *echo, *getOnly, *imap); err != nil {
@@ -76,7 +78,19 @@ func run(addr, token, template, echo, getOnly, imap string) error {
 			return fmt.Errorf("IMAPS over SOCKS5 did not reach the login step: %q", strings.TrimSpace(out))
 		}
 		fmt.Println("  IMAPS handshake rides the tunnel; the server refused the probe login")
+		if code := curl(ctx, sb, "--socks5-hostname", socksProxy, "imap://"+imap+":143/"); code != "000" {
+			return fmt.Errorf("IMAP on the unlisted port 143 returned %q, want a refused tunnel", code)
+		}
+		fmt.Println("  IMAP on the unlisted port refused on 1080")
 	}
+
+	if code := curl(ctx, sb, "-x", httpProxy, "https://"+echo+"/get"); code != "000" {
+		return fmt.Errorf("CONNECT to the unlisted port 443 returned %q, want a refused tunnel", code)
+	}
+	if code := curl(ctx, sb, "-x", httpProxy, "http://"+echo+":8080/get"); code != "403" {
+		return fmt.Errorf("forward request to the unlisted port 8080 returned %q, want 403", code)
+	}
+	fmt.Println("  unlisted ports refused on 3128 for CONNECT and forward requests")
 
 	_, bare, err := harness.Claim(ctx, addr, token, template, sandbox.WithSize(sandbox.Medium))
 	if err != nil {

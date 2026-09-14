@@ -175,14 +175,19 @@ policy governs the only route out just like the none lane's.
   non-intercepted CONNECT tunnel is opaque — the method cannot be checked — so a
   methods-restricted rule without `intercept` denies CONNECT outright rather
   than tunneling unchecked.
+- `ports`: empty means any; otherwise the destination port must be listed. The
+  port is the tunnel's target on CONNECT and SOCKS5, the URL's port (or the
+  scheme's default) on the forward path, and the CONNECT's port for every
+  request inside an intercepted tunnel. Exact ports only; `0` and repeats are
+  rejected at load.
 - `secret`: injects the named registered secret's header. A guest-supplied value
   for the same header is overwritten. On HTTPS the injection needs `intercept`.
 - `intercept`: terminate a matched HTTPS CONNECT so the request is filtered by
   method and the secret injected (see below). Only a pool rule may set it.
 - No policy on a claim ⇒ no egress at all (the proxy is not started).
 
-Each decision is written to `audit.jsonl` (`op:"egress"`, host, allow/deny, the
-secret **name**) and metered as an `egress` usage event.
+Each decision is written to `audit.jsonl` (`op:"egress"`, host, port,
+allow/deny, the secret **name**) and metered as an `egress` usage event.
 
 ## HTTPS interception
 

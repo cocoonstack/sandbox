@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Bare-metal acceptance for SOCKS5 egress: a none-lane sandbox tunnels to an
-# allowed host over 127.0.0.1:1080, a GET-only host and an unlisted host are
-# refused there, IMAPS rides the tunnel, and a pool without a policy or without
-# socks5 leaves the host door unwired. Runs a dedicated sandboxd on port 7780
-# (7779=egress).
+# allowed host over 127.0.0.1:1080, a GET-only host, an unlisted host and an
+# unlisted port are refused there, IMAPS rides the tunnel on its listed port,
+# the HTTP door refuses unlisted ports on CONNECT and forward requests, and a
+# pool without a policy or without socks5 leaves the host door unwired. Runs a
+# dedicated sandboxd on port 7780 (7779=egress).
 set -euo pipefail
 
 TEMPLATE=${TEMPLATE:-rt:24.04}
@@ -57,7 +58,7 @@ cat >"$DATA/config.json" <<EOF
   "pools": [
     {"template": "$TEMPLATE", "net": "none", "size": "small", "warm": 1,
      "egress": {"socks5": true,
-                "allow": [{"host": "$ECHO"}, {"host": "$GET_ONLY", "methods": ["GET"]}, {"host": "$IMAP"}]}},
+                "allow": [{"host": "$ECHO", "ports": [80]}, {"host": "$GET_ONLY", "methods": ["GET"]}, {"host": "$IMAP", "ports": [993]}]}},
     {"template": "$TEMPLATE", "net": "none", "size": "medium", "warm": 1},
     {"template": "$TEMPLATE", "net": "none", "size": "large", "warm": 1,
      "egress": {"allow": [{"host": "$ECHO"}]}}

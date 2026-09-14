@@ -58,18 +58,18 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 	if !ok {
 		return
 	}
-	decision, intercept := p.tunnelDecision(host)
+	decision, intercept := p.tunnelDecision(host, port)
 	if intercept {
 		decision = DecisionDeny
 	}
-	p.record(Event{Method: methodSOCKS, Host: host, Decision: decision})
+	p.record(Event{Method: methodSOCKS, Host: host, Port: port, Decision: decision})
 	if decision == DecisionDeny {
 		_ = socksReply(conn, socksDenied)
 		return
 	}
 	dialCtx, cancel := context.WithTimeout(ctx, socksTimeout)
 	defer cancel()
-	upstream, err := p.dial(dialCtx, "tcp", net.JoinHostPort(host, port))
+	upstream, err := p.dial(dialCtx, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
 	if err != nil {
 		_ = socksReply(conn, socksUnreached)
 		return
@@ -83,25 +83,25 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 }
 
 // socksHandshake negotiates no-auth and parses one CONNECT request; a refusal is answered before it returns false.
-func socksHandshake(conn net.Conn) (host, port string, ok bool) {
+func socksHandshake(conn net.Conn) (host string, port uint16, ok bool) {
 	greeting, err := readN(conn, 2)
 	if err != nil || greeting[0] != socksVersion {
-		return "", "", false
+		return "", 0, false
 	}
 	methods, err := readN(conn, int(greeting[1]))
 	if err != nil {
-		return "", "", false
+		return "", 0, false
 	}
 	if !slices.Contains(methods, byte(socksNoAuth)) {
 		_, _ = conn.Write([]byte{socksVersion, socksNoMethod})
-		return "", "", false
+		return "", 0, false
 	}
 	if _, err = conn.Write([]byte{socksVersion, socksNoAuth}); err != nil {
-		return "", "", false
+		return "", 0, false
 	}
 	req, err := readN(conn, 4)
 	if err != nil || req[0] != socksVersion {
-		return "", "", false
+		return "", 0, false
 	}
 	addrLen := 0
 	switch req[3] {
@@ -112,20 +112,20 @@ func socksHandshake(conn net.Conn) (host, port string, ok bool) {
 	case socksAtypName:
 		var n []byte
 		if n, err = readN(conn, 1); err != nil {
-			return "", "", false
+			return "", 0, false
 		}
 		addrLen = int(n[0])
 	default:
 		_ = socksReply(conn, socksBadAtyp)
-		return "", "", false
+		return "", 0, false
 	}
 	target, err := readN(conn, addrLen+2)
 	if err != nil {
-		return "", "", false
+		return "", 0, false
 	}
 	if req[1] != socksConnect {
 		_ = socksReply(conn, socksBadCmd)
-		return "", "", false
+		return "", 0, false
 	}
 	addr := target[:addrLen]
 	host = string(addr)
@@ -133,7 +133,7 @@ func socksHandshake(conn net.Conn) (host, port string, ok bool) {
 		ip, _ := netip.AddrFromSlice(addr)
 		host = ip.String()
 	}
-	return host, strconv.Itoa(int(binary.BigEndian.Uint16(target[addrLen:]))), true
+	return host, binary.BigEndian.Uint16(target[addrLen:]), true
 }
 
 // socksReply answers with an all-zero bind address: CONNECT clients ignore it, and the node's own address stays out of the guest.
