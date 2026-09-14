@@ -20,8 +20,12 @@ up a few seconds later — poll `GET /screenshot` until it returns 200.
 
 ## Claim shape
 
-- **Lane**: `net=none` for local tasks (os, office, file work); `net=egress`
-  when tasks visit the OSWorld mocked websites or the real web.
+- **Lane**: `net=none` — for local tasks (os, office, file work) as it is, and
+  with an [egress policy](egress.md) when tasks visit the OSWorld mocked
+  websites or the real web; the session's browsers reach the web through the
+  relay. `net=egress` on a guarded bridge gives the desktop no web: the NIC is
+  locked and the session's proxy setup does not follow the lock marker (a
+  CNI-backed lane still routes directly).
 - **Size**: `2xlarge` (8 CPU / 16G) — the t3.xlarge class the OSWorld AWS
   image runs on; the idle session is ~0.5 GB anonymous memory with
   gnome-shell around 290 MB RSS, and the headroom is for the apps.
@@ -73,7 +77,9 @@ Configure it with `SANDBOXD_ADDR`, `SANDBOXD_TOKEN`, `COCOON_TEMPLATE`
   profile and debugging port.
 - On a guest with no NIC, `guest-proxy.service` points the session's browsers
   and `osworld-server`'s commands at silkd's loopback relay; a guest with a
-  NIC routes directly and the unit does nothing.
+  NIC routes directly and the unit does nothing. The unit tests NIC presence
+  only, so it does not follow the locked-NIC marker silkd honors on the bridge
+  egress lane; run desktop pools on the none lane.
 - No Thunderbird or VS Code yet (snap-only on 24.04 / vendor repo); tasks
   targeting them are out of scope for this flavor version.
 - x86_64 only.

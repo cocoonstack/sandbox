@@ -44,9 +44,9 @@ const (
 	coldProbeTimeout  = 90 * time.Second
 	// a clone answers in ~1s even saturated, so a silent one is replaced, not waited on
 	warmProbeTimeout = 5 * time.Second
-	// One list; a wrong answer only costs an extra sweep.
+	// one list; a wrong answer only costs an extra sweep.
 	removeVerifyTimeout = 15 * time.Second
-	// A full node clears only when VMs go away; retrying sooner buys nothing.
+	// a full node clears only when VMs go away; retrying sooner buys nothing.
 	capacityBackoff    = buildRetryDelay
 	vsockPollInterval  = 100 * time.Millisecond
 	defaultTTL         = 5 * time.Minute
@@ -55,14 +55,14 @@ const (
 	recommitMaxBackoff = 5 * time.Second
 	// one failed boot is ordinary; only an unbroken run predicts the next failure
 	refillFailStreak = 8
-	// Doubles per failure past the streak.
+	// doubles per failure past the streak.
 	refillBackoffBase = 250 * time.Millisecond
 	refillBackoffMax  = buildRetryDelay
 	// fallbacks when a Manager is built from a Config that skipped config.Load's defaulting
 	defaultMaxFork = 16
 	defaultRefill  = 4
 
-	// A heal pulls a whole guest memory image, so a few saturate disk and NIC.
+	// a heal pulls a whole guest memory image, so a few saturate disk and NIC.
 	maxConcurrentHeals = 4
 
 	vmPrefix        = "sbx-"
@@ -92,7 +92,7 @@ var (
 	ErrNoEgressFork      = errors.New("egress-lane sandboxes cannot fork, checkpoint, or promote: a resumed guest egresses before its fresh tap can be locked")
 	ErrVolumeCapture     = errors.New("sandboxes with volumes cannot hibernate, fork, checkpoint, or promote")
 	ErrVolumeBusy        = errors.New("volume is held by another claim")
-	// Replaying a journal takes a writable mount, so readers stay out.
+	// replaying a journal takes a writable mount, so readers stay out.
 	ErrVolumeNeedsRecovery = errors.New("volume needs recovery by a writable claim")
 	ErrQuota               = errors.New("node claim quota reached")
 
@@ -691,7 +691,6 @@ func logSweepResult(ctx context.Context, logger *log.Fields, err error, okMsg, f
 	}
 }
 
-// benignSweepErr reports whether err is the expected outcome of a housekeeping sweep.
 func benignSweepErr(err error) bool {
 	return errors.Is(err, ErrUnknownSandbox) || errors.Is(err, errWokeMeanwhile) ||
 		errors.Is(err, ErrNoEgressHibernate)

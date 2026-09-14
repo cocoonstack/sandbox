@@ -42,6 +42,12 @@ impl Table {
             Some(s) if !s.is_empty() => s,
             _ => format!("sess-{}", sysutil::tmp_suffix()),
         };
+        if let Some(name) = env.keys().find(|k| !is_env_name(k)) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("environment name {name:?} is not a shell identifier"),
+            ));
+        }
         let mut child = Command::new("bash")
             .env_clear()
             .envs(sysutil::base_env())
@@ -82,7 +88,7 @@ impl Table {
             shell_quote_into(&mut init, k);
             init.push('=');
             shell_quote_into(&mut init, v);
-            init.push('\n');
+            init.push_str(" || exit 1\n");
         }
         {
             let mut io = session.io.lock().await;
@@ -287,9 +293,27 @@ fn shell_quote_into(out: &mut String, s: &str) {
     out.push('\'');
 }
 
+fn is_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
+        && chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_env_name_accepts_only_shell_identifiers() {
+        for ok in ["A", "_x", "HTTP_PROXY", "a1"] {
+            assert!(is_env_name(ok), "{ok:?}");
+        }
+        for bad in ["", "1a", "A B", "a-b", "a=b", "é"] {
+            assert!(!is_env_name(bad), "{bad:?}");
+        }
+    }
 
     #[test]
     fn shell_quote_into_pins_exact_output() {

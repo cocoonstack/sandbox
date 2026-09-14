@@ -479,7 +479,6 @@ func parseSemver(s string) ([3]int, bool) {
 	return out, true
 }
 
-// readBufLine takes one line from r, capped at max bytes.
 func readBufLine(r *bufio.Reader, max int) (string, error) {
 	line, err := r.ReadSlice('\n')
 	if err != nil {

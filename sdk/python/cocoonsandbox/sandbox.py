@@ -34,7 +34,7 @@ class Sandbox:
         from_checkpoint: str = "",
         template_digest: str = "",
         volumes: list[dict] | None = None,
-    ):
+    ) -> None:
         self._client = client
         self.id = id
         self.token = token
@@ -426,7 +426,7 @@ class Sandbox:
 class Session(_Closeable):
     """A persistent shell inside the sandbox, addressed by id."""
 
-    def __init__(self, sandbox: Sandbox, id: str):
+    def __init__(self, sandbox: Sandbox, id: str) -> None:
         self._sandbox = sandbox
         self.id = id
 
@@ -441,7 +441,7 @@ class Session(_Closeable):
 class Watcher(_Closeable):
     """A live filesystem event stream; iterate for {kind, path} events."""
 
-    def __init__(self, conn: Conn):
+    def __init__(self, conn: Conn) -> None:
         self._conn = conn
         self.error: Exception | None = None
 
@@ -463,7 +463,7 @@ class Watcher(_Closeable):
 class Pty(_Closeable):
     """An interactive shell under a guest pty; read/write are raw bytes."""
 
-    def __init__(self, sandbox: Sandbox, conn: Conn, pid: int):
+    def __init__(self, sandbox: Sandbox, conn: Conn, pid: int) -> None:
         self._sandbox = sandbox
         self._conn = conn
         self.pid = pid
@@ -492,7 +492,7 @@ class Lsp(_Closeable):
     """A language server in the sandbox, spoken to over the relay. silkd is a
     broker: it pipes JSON-RPC bytes; the caller frames and correlates."""
 
-    def __init__(self, sandbox: Sandbox, server_id: str):
+    def __init__(self, sandbox: Sandbox, server_id: str) -> None:
         self._sandbox = sandbox
         self.server_id = server_id
 
@@ -513,7 +513,7 @@ class Lsp(_Closeable):
 class PortConn(_Closeable):
     """A byte stream to a guest port, relayed over the silkd connection."""
 
-    def __init__(self, conn: Conn):
+    def __init__(self, conn: Conn) -> None:
         self._conn = conn
         self._eof = False
 

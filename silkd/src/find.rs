@@ -18,7 +18,7 @@ pub const FIND_MAX_FILE: u64 = 8 * 1024 * 1024;
 /// Match frames in flight between the walking thread and the writer.
 const MATCH_QUEUE: usize = 256;
 
-/// Bytes of match content in flight; 256 size-bound single-line frames would pin gigabytes.
+/// Bytes of match content in flight: above the largest single match, so a reserve never blocks forever, and far below the gigabytes 256 size-bound frames would pin.
 const MATCH_QUEUE_BYTES: usize = 2 * FIND_MAX_FILE as usize;
 
 struct MatchBudget {

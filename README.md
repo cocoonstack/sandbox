@@ -56,8 +56,8 @@ performance) — source in
 - `e2e/` — in-process full-stack tests (real pool/engine/relay/SDK, fake
   cocoon+guest) plus bare-metal acceptance drivers under `cmd/`: `demo`,
   `smoke`, `meshsmoke`, `crossnode`, `coldproof`, `egresssmoke`,
-  `interceptsmoke`, `volumesmoke`, `lifecycle` (idle→hibernate→archive),
-  `androidsmoke`, `browsersmoke`, `desktopsmoke`, and the `pullbench`/`pushbench`/`rpcbench`
+  `interceptsmoke`, `sockssmoke`, `volumesmoke`, `lifecycle` (idle→hibernate→archive),
+  `androidsmoke`, `browsersmoke`, `desktopsmoke`, and the `pullbench`/`pushbench`/`rpcbench`/`qaab`
   perf drivers
 - `boot/kernel/` — kernel version pin (`VERSION` + matching tarball `SHA256`,
   bump both together) + config fragment (amd64: over `x86_64_defconfig` +

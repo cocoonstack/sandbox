@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -80,9 +81,11 @@ func TestAutoRefillConcurrency(t *testing.T) {
 		{cpus: 384, want: 256},
 		{cpus: 768, want: 256},
 	} {
-		if got := autoRefillConcurrency(tt.cpus); got != tt.want {
-			t.Errorf("autoRefillConcurrency(%d) = %d, want %d", tt.cpus, got, tt.want)
-		}
+		t.Run(strconv.Itoa(tt.cpus)+" cpus", func(t *testing.T) {
+			if got := autoRefillConcurrency(tt.cpus); got != tt.want {
+				t.Errorf("autoRefillConcurrency(%d) = %d, want %d", tt.cpus, got, tt.want)
+			}
+		})
 	}
 }
 

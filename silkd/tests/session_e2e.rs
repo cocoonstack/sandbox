@@ -72,9 +72,9 @@ async fn session_applies_cwd_and_env_at_create() {
 }
 
 #[tokio::test]
-async fn session_create_with_hostile_env_key_still_answers() {
+async fn session_create_rejects_an_env_name_bash_cannot_export() {
     let state = Arc::new(State::new());
-    let created = tokio::time::timeout(
+    let f = tokio::time::timeout(
         Duration::from_secs(8),
         one(
             &state,
@@ -83,10 +83,33 @@ async fn session_create_with_hostile_env_key_still_answers() {
     )
     .await
     .expect("session_create hung on a hostile env key");
-    assert_eq!(type_of(&created[0]), "session_created", "{created:?}");
-    let id = created[0]["id"].as_str().unwrap();
-    let got = sh(&state, id, &["sh", "-c", "echo $GOOD"]).await;
-    assert_eq!(stdout_body(&got).trim(), "ok", "{got:?}");
+    assert_eq!(type_of(&f[0]), "error", "{f:?}");
+    assert_eq!(f[0]["kind"], "bad_request", "{f:?}");
+    assert!(
+        state.sessions.list().is_empty(),
+        "{:?}",
+        state.sessions.list()
+    );
+}
+
+#[tokio::test]
+async fn session_create_fails_when_bash_refuses_an_export() {
+    let state = Arc::new(State::new());
+    let f = tokio::time::timeout(
+        Duration::from_secs(8),
+        one(
+            &state,
+            &json!({"op":"session_create","env":{"UID":"1"}}).to_string(),
+        ),
+    )
+    .await
+    .expect("session_create hung on a readonly variable");
+    assert_eq!(type_of(&f[0]), "error", "{f:?}");
+    assert!(
+        state.sessions.list().is_empty(),
+        "{:?}",
+        state.sessions.list()
+    );
 }
 
 #[tokio::test]
