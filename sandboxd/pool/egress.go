@@ -159,7 +159,6 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	delete(m.egressPrebound, sb.VMName)
 	m.mu.Unlock()
 	if el != nil && (reached(el.ln) || (el.socks != nil && reached(el.socks))) {
-		// a fresh bind resets everything the guest queued before its claim
 		el.close()
 		el = nil
 	}
