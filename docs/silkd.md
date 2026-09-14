@@ -50,10 +50,10 @@ A failed verb terminates with `error {kind, message}`:
 
 | kind | meaning |
 |---|---|
-| `bad_request` | malformed frame, empty argv, invalid pattern |
+| `bad_request` | malformed frame, empty argv, invalid pattern, an exec argv or cwd the guest cannot spawn (missing, not a directory, not executable) |
 | `not_found` | unknown pid/session/path |
 | `unimplemented` | verb unavailable on this lane — notably git clone/push/pull on the no-network lane, whose message points at `fs.push` |
-| `internal` | everything else (spawn failures, git errors, I/O) |
+| `internal` | everything else (other spawn failures, git errors, I/O) |
 
 ## Network lanes
 

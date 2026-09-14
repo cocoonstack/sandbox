@@ -52,8 +52,7 @@ where
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            return crate::proto::error_frame(out, ErrorKind::Internal, format!("spawn: {e}"))
-                .await;
+            return crate::proto::error_frame(out, spawn_kind(&e), format!("spawn: {e}")).await;
         }
     };
 
@@ -128,6 +127,16 @@ where
     let code = supervise.await.unwrap_or(-1);
     table.remove_if(pid, &proc);
     crate::proto::write_frame(out, &Response::Exit { code }).await
+}
+
+/// A missing or unrunnable argv or cwd is the caller's mistake; anything else is the guest's.
+fn spawn_kind(e: &std::io::Error) -> ErrorKind {
+    match e.kind() {
+        std::io::ErrorKind::NotFound
+        | std::io::ErrorKind::NotADirectory
+        | std::io::ErrorKind::PermissionDenied => ErrorKind::BadRequest,
+        _ => ErrorKind::Internal,
+    }
 }
 
 async fn stream_to_client<W>(rx: &mut mpsc::Receiver<Chunk>, out: &mut W) -> std::io::Result<()>

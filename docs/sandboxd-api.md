@@ -534,7 +534,8 @@ it kills the child through silkd before answering, so nothing keeps running
 behind a 504. Output comes back as JSON strings: bytes that are not valid
 UTF-8 are replaced with U+FFFD, so binary output belongs on the relay. 400
 empty `argv`, negative `timeout_seconds`, an unknown field, or a silkd
-`bad_request`; 401 missing bearer token; 404 unknown sandbox or wrong token;
+`bad_request` — a command that is missing or not executable and a `cwd` that
+does not exist are the caller's, not 502s; 401 missing bearer token; 404 unknown sandbox or wrong token;
 413 when stdout+stderr exceed 8 MiB; 502 guest unreachable or any other
 silkd error; 504 when the command outlives `timeout_seconds` or the request. A hibernated sandbox wakes transparently like on the relay.
 
