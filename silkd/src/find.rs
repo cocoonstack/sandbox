@@ -102,16 +102,16 @@ impl Walk<'_> {
         Ok(true)
     }
 
-    /// Scans one file; the size bound comes off the open handle, so check and read see one file.
+    /// Scans one file; the size check and the read share one handle, and the read itself stops at the bound.
     fn scan_file(&self, path: &Path, body: &mut String) -> bool {
-        let Ok(mut file) = std::fs::File::open(path) else {
+        let Ok(file) = std::fs::File::open(path) else {
             return true;
         };
         if file.metadata().is_ok_and(|m| m.len() > FIND_MAX_FILE) {
             return true;
         }
         body.clear();
-        if file.read_to_string(body).is_err() {
+        if file.take(FIND_MAX_FILE).read_to_string(body).is_err() {
             return true;
         }
         let name: Arc<str> = path.to_string_lossy().into();

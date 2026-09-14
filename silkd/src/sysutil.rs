@@ -37,15 +37,17 @@ pub fn tmp_suffix() -> String {
 }
 
 /// A 128-bit CSPRNG hex token, used where an in-sandbox command must not forge the value.
-pub fn rand_token() -> String {
+pub fn rand_token() -> std::io::Result<String> {
     let mut b = [0u8; 16];
     if !fill_random(&mut b) {
-        return tmp_suffix();
+        return Err(std::io::Error::other(
+            "no entropy source for a session marker",
+        ));
     }
-    b.iter()
+    Ok(b.iter()
         .flat_map(|byte| [HEX[(byte >> 4) as usize], HEX[(byte & 0xf) as usize]])
         .map(char::from)
-        .collect()
+        .collect())
 }
 
 /// SIGKILLs the group led by `pgid`, so a session's external command dies with its shell; a synthetic id misses with ESRCH.

@@ -3,13 +3,14 @@
 use std::fs::File;
 use std::io::Read;
 use std::sync::LazyLock;
-use std::sync::atomic::{AtomicBool, AtomicI8, Ordering};
+use std::sync::atomic::{AtomicI8, Ordering};
 
 /// File the host writes with its lane verdict, `relay` or `direct`; on the root filesystem so a guest reboot keeps it.
 const LANE_FILE: &str = "/etc/silkd-lane";
 
 static LANE_OVERRIDE: AtomicI8 = AtomicI8::new(-1);
-static LANE_RELAY: AtomicBool = AtomicBool::new(false);
+/// The lane file's verdict once read: -1 not yet present, 0 direct, 1 relay.
+static LANE: AtomicI8 = AtomicI8::new(-1);
 
 /// Reports whether the guest can reach a network; only a `device`-backed interface counts, since the kernel auto-creates virtual tunnels.
 pub fn has_egress() -> bool {
@@ -38,15 +39,18 @@ pub fn routes_directly() -> bool {
     if !has_egress() {
         return false;
     }
-    // relay latches: the host never unlocks a lane, but a late lock can land after the first exec.
-    if LANE_RELAY.load(Ordering::Relaxed) {
-        return false;
-    }
-    let relay = lane_is_relay(LANE_FILE);
-    if relay {
-        LANE_RELAY.store(true, Ordering::Relaxed);
-    }
-    !relay
+    // the host writes the file once per claim, so a present verdict latches; only absence re-reads.
+    let lane = match LANE.load(Ordering::Relaxed) {
+        -1 => match lane_verdict(LANE_FILE) {
+            Some(relay) => {
+                LANE.store(i8::from(relay), Ordering::Relaxed);
+                relay
+            }
+            None => false,
+        },
+        v => v == 1,
+    };
+    !lane
 }
 
 /// Lane override for tests: set_var would race every concurrent getenv.
@@ -65,26 +69,26 @@ fn silkd_net() -> i8 {
     *SILKD_NET
 }
 
-fn lane_is_relay(path: &str) -> bool {
+/// Reads the lane file: `Some(true)` for relay, `Some(false)` for direct, `None` while the host has not written it.
+fn lane_verdict(path: &str) -> Option<bool> {
     let mut buf = [0u8; 8];
-    File::open(path)
-        .and_then(|mut f| f.read(&mut buf))
-        .is_ok_and(|n| buf[..n].trim_ascii() == b"relay")
+    let n = File::open(path).and_then(|mut f| f.read(&mut buf)).ok()?;
+    Some(buf[..n].trim_ascii() == b"relay")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::lane_is_relay;
+    use super::lane_verdict;
 
     #[test]
     fn lane_file_decides_relay() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lane");
         let text = path.to_str().unwrap();
-        assert!(!lane_is_relay(text));
+        assert_eq!(lane_verdict(text), None);
         std::fs::write(&path, "direct\n").unwrap();
-        assert!(!lane_is_relay(text));
+        assert_eq!(lane_verdict(text), Some(false));
         std::fs::write(&path, "relay\n").unwrap();
-        assert!(lane_is_relay(text));
+        assert_eq!(lane_verdict(text), Some(true));
     }
 }
