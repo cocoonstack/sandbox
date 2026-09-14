@@ -107,7 +107,12 @@ func TestReadFileStopsAtTheCap(t *testing.T) {
 		if _, err := io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n"); err != nil {
 			return true
 		}
-		if _, err := br.ReadString('\n'); err != nil {
+		req, err := br.ReadString('\n')
+		if err != nil {
+			return true
+		}
+		if strings.Contains(req, `"op":"fs_stat"`) {
+			_, _ = io.WriteString(conn, `{"type":"stat","info":{"kind":"file","size":0}}`+"\n")
 			return true
 		}
 		for range 8 {

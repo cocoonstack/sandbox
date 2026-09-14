@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cocoonstack/sandbox/protocol/wire"
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
@@ -282,6 +283,14 @@ func toolReadFile(ctx context.Context, s *server, raw json.RawMessage) (string, 
 	args, sb, err := parseAndBox[pathArgs](s, raw)
 	if err != nil {
 		return "", err
+	}
+	// a device or a FIFO is not a file: /dev/null reads as empty and a writerless FIFO blocks in open
+	info, err := sb.Stat(ctx, args.Path)
+	if err != nil {
+		return "", err
+	}
+	if info.Kind != wire.FileKindFile {
+		return "", fmt.Errorf("%s is a %s; read_file reads a regular file", args.Path, info.Kind)
 	}
 	out := cappedOutput{stopAtCap: true}
 	if err := sb.ReadFileTo(ctx, args.Path, &out); errors.Is(err, errOutputCap) {
