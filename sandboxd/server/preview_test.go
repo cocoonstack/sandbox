@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/pool"
 )
 
 func TestPreviewTokenRoundTrip(t *testing.T) {
@@ -40,12 +42,12 @@ func TestPreviewRejectsExpired(t *testing.T) {
 }
 
 func TestPreviewProxiesToGuest(t *testing.T) {
-	guestAddr := newGuestServer(t, func(r *http.Request) string { return "guest saw " + r.URL.Path })
+	guestAddr := newGuestServer(t, func(r *http.Request) string { return "guest saw " + r.URL.EscapedPath() })
 
-	dialed := false
+	dialed := 0
 	ps := NewPreviewServer("secret", "node:9000", "node:7777", &fakePreviewMgr{
 		dial: func(id string, port uint16) (net.Conn, error) {
-			dialed = true
+			dialed++
 			if id != "sb_1" || port != 8080 {
 				t.Errorf("dial %s:%d", id, port)
 			}
@@ -56,15 +58,23 @@ func TestPreviewProxiesToGuest(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	token := mintToken(ps, "sb_1", 8080, time.Hour)
-
-	resp, err := http.Get(ts.URL + "/p/" + token + "/hello/world")
-	if err != nil {
-		t.Fatalf("get: %v", err)
+	for _, tt := range []struct{ prefix, path string }{
+		{"/p/", "/hello/world"},
+		{"/p/", "/repo/a%2Fb/tree"},
+		{"/%70/", "/repo/a%2Fb/tree"},
+	} {
+		resp, err := http.Get(ts.URL + tt.prefix + token + tt.path)
+		if err != nil {
+			t.Fatalf("get %s: %v", tt.path, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if string(body) != "guest saw "+tt.path {
+			t.Errorf("%s%s: body %q, want the guest to see %s verbatim", tt.prefix, tt.path, body, tt.path)
+		}
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if !dialed || string(body) != "guest saw /hello/world" {
-		t.Errorf("body %q dialed=%v", body, dialed)
+	if dialed != 3 {
+		t.Errorf("dialed %d times, want one per request", dialed)
 	}
 }
 
@@ -158,6 +168,27 @@ func TestPreviewForwardsToOwner(t *testing.T) {
 	}
 }
 
+func TestPreviewServesAHeldClaimUnderAStaleOwnerName(t *testing.T) {
+	guestAddr := newGuestServer(t, func(r *http.Request) string { return "guest saw " + r.URL.Path })
+	ps := NewPreviewServer("secret", "https://preview.example.com", "renamed:7777", &fakePreviewMgr{
+		dial: func(string, uint16) (net.Conn, error) { return net.Dial("tcp", guestAddr) },
+		held: map[string]bool{"sb_1": true},
+	})
+	ts := httptest.NewServer(ps.Handler())
+	t.Cleanup(ts.Close)
+
+	minter := NewPreviewServer("secret", "https://preview.example.com", "old:7777", &fakePreviewMgr{})
+	resp, err := http.Get(ts.URL + "/p/" + mintToken(minter, "sb_1", 8080, time.Hour) + "/x")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "guest saw /x" {
+		t.Errorf("body %q, want the held claim served locally despite the old owner name", body)
+	}
+}
+
 func TestPreviewForwardStopsAfterOneHop(t *testing.T) {
 	entry := httptest.NewUnstartedServer(nil)
 	entryAddr := entry.Listener.Addr().String()
@@ -178,31 +209,17 @@ func TestPreviewForwardStopsAfterOneHop(t *testing.T) {
 	}
 }
 
-func TestPreviewKeepsEncodedSlashes(t *testing.T) {
-	guestAddr := newGuestServer(t, func(r *http.Request) string { return "guest saw " + r.URL.EscapedPath() })
-	ps := NewPreviewServer("secret", "node:9000", "node:7777", &fakePreviewMgr{
-		dial: func(string, uint16) (net.Conn, error) { return net.Dial("tcp", guestAddr) },
-	})
-	ts := httptest.NewServer(ps.Handler())
-	t.Cleanup(ts.Close)
-
-	resp, err := http.Get(ts.URL + "/p/" + mintToken(ps, "sb_1", 8080, time.Hour) + "/repo/a%2Fb/tree")
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if string(body) != "guest saw /repo/a%2Fb/tree" {
-		t.Errorf("body %q, want the encoded slash preserved", body)
-	}
-}
-
 type fakePreviewMgr struct {
 	dial func(id string, port uint16) (net.Conn, error)
+	held map[string]bool
 }
 
 func (f *fakePreviewMgr) PreviewDial(_ context.Context, id string, port uint16) (net.Conn, error) {
 	return f.dial(id, port)
+}
+
+func (f *fakePreviewMgr) Sandbox(id string) (pool.SandboxSummary, bool) {
+	return pool.SandboxSummary{ID: id}, f.held[id]
 }
 
 func newGuestServer(t *testing.T, body func(r *http.Request) string) string {

@@ -84,11 +84,11 @@ func writePoolErr(w http.ResponseWriter, err error) bool {
 	return false
 }
 
-func writeResult(w http.ResponseWriter, r *http.Request, op string, id any, failMsg string, err error, ok func()) {
+func writeResult(w http.ResponseWriter, r *http.Request, op, id, failMsg string, err error, ok func()) {
 	switch {
 	case writePoolErr(w, err):
 	case err != nil:
-		log.WithFunc("server.writeResult").Errorf(r.Context(), err, "%s %v", op, id)
+		log.WithFunc("server.writeResult").Errorf(r.Context(), err, "%s %s", op, id)
 		writeErr(w, http.StatusInternalServerError, failMsg)
 	default:
 		ok()

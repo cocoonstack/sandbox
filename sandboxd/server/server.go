@@ -15,6 +15,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"sync"
 	"time"
@@ -49,6 +50,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrVolumeCapture, http.StatusConflict, ""},
 	{pool.ErrVolumeBusy, http.StatusConflict, ""},
 	{pool.ErrVolumeNeedsRecovery, http.StatusConflict, ""},
+	{pool.ErrArchived, http.StatusConflict, ""},
 	{pool.ErrQuota, http.StatusTooManyRequests, ""},
 	{pool.ErrHealBusy, http.StatusServiceUnavailable, ""},
 	{pool.ErrPooledTemplate, http.StatusConflict, ""},
@@ -158,6 +160,12 @@ type Server struct {
 
 // New returns a Server; an empty apiToken with no tenants leaves node-level endpoints open.
 func New(apiToken string, tenants []config.TenantSpec, advertise string, mgr Manager, dialer Dialer, placer Placer, prober CheckpointProber, probeKey []byte, preview *PreviewServer) *Server {
+	// an unspecified host names nothing a remote client can dial; an empty owner makes the SDK reuse the address it reached
+	if host, _, err := net.SplitHostPort(advertise); err == nil {
+		if ip, _ := netip.ParseAddr(host); host == "" || ip.IsUnspecified() {
+			advertise = ""
+		}
+	}
 	return &Server{
 		mgr:       mgr,
 		dialer:    dialer,
@@ -236,7 +244,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		writeRedirect(w, s.placer.Candidates(key.Hash())) {
 		return
 	}
-	writeResult(w, r, "claim", key, "provisioning failed", err, func() {
+	writeResult(w, r, "claim", key.Template, "provisioning failed", err, func() {
 		writeJSON(w, http.StatusOK, s.claimResponse(sb))
 	})
 }
@@ -250,7 +258,7 @@ func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req t
 	req.Volumes = volumes
 	redirected, err := s.redirectVolumeClaim(r.Context(), w, &req, key, hash, tenant)
 	if err != nil {
-		writeResult(w, r, "claim", hash, "provisioning failed", err, func() {})
+		writeResult(w, r, "claim", key.Template, "provisioning failed", err, func() {})
 		return
 	}
 	if redirected {
@@ -268,7 +276,7 @@ func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req t
 			sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Volumes)
 		}
 	}
-	writeResult(w, r, "claim", hash, "provisioning failed", err, func() {
+	writeResult(w, r, "claim", key.Template, "provisioning failed", err, func() {
 		writeJSON(w, http.StatusOK, s.claimResponse(sb))
 	})
 }

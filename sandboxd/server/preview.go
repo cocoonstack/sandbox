@@ -17,6 +17,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -33,6 +34,7 @@ type previewClaims struct {
 // PreviewManager is the slice of the pool manager the preview path needs.
 type PreviewManager interface {
 	PreviewDial(ctx context.Context, id string, port uint16) (net.Conn, error)
+	Sandbox(id string) (pool.SandboxSummary, bool)
 }
 
 // PreviewServer serves signed guest HTTP URLs and forwards requests to their owner node.
@@ -95,7 +97,8 @@ func (p *PreviewServer) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid or expired preview token", http.StatusForbidden)
 		return
 	}
-	if claims.Owner != p.owner {
+	// the token names the owner by its advertise address at mint time; holding the claim is what counts
+	if _, held := p.mgr.Sandbox(claims.ID); !held && claims.Owner != p.owner {
 		if r.Header.Get(forwardedHeader) != "" {
 			http.Error(w, "preview owner is not this node", http.StatusBadGateway)
 			return
@@ -112,9 +115,17 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 			pr.Out.URL.Scheme = "http"
 			// the synthetic host carries PreviewDial's target
 			pr.Out.URL.Host = fmt.Sprintf("%s:%d", claims.ID, claims.Port)
-			prefix := "/p/" + r.PathValue("token") + "/"
-			pr.Out.URL.Path = "/" + strings.TrimPrefix(pr.In.URL.Path, prefix)
-			pr.Out.URL.RawPath = "/" + strings.TrimPrefix(pr.In.URL.EscapedPath(), prefix)
+			pr.Out.URL.Path = "/" + strings.TrimPrefix(pr.In.URL.Path, "/p/"+r.PathValue("token")+"/")
+			// the raw form drops the same two segments however the client spelled them, so %2F survives
+			raw := pr.In.URL.EscapedPath()
+			for range 2 {
+				if i := strings.IndexByte(raw[1:], '/'); i >= 0 {
+					raw = raw[i+1:]
+				} else {
+					raw = "/"
+				}
+			}
+			pr.Out.URL.RawPath = raw
 			// browser credentials for the preview domain must not reach guest code
 			pr.Out.Header.Del("Cookie")
 			pr.Out.Header.Del("Authorization")

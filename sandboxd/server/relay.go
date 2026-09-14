@@ -181,6 +181,7 @@ func (t *auditTee) Read(p []byte) (int, error) {
 	t.buf = append(t.buf, chunk...)
 	if len(t.buf) > pool.AuditLineCap {
 		t.done = true // a frame this large is payload, not addressing
+		t.record(t.buf)
 		t.buf = nil
 	}
 	return n, err
