@@ -49,10 +49,10 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 		}
 	}
 	m.mu.Unlock()
+	m.kickRefill()
 	if sb == nil {
 		return nil, ErrNoWarm
 	}
-	m.kickRefill()
 	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs, applied); volumeErr != nil {
 		m.abortVolumeClaim(ctx, sb.VMName, &reserved)
 		return nil, volumeErr
@@ -294,6 +294,10 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		if armErr := m.armEgress(ctx, sb); armErr != nil {
 			m.rollbackClaim(ctx, sbs)
 			return fmt.Errorf("arm egress %s: %w", sb.ID, armErr)
+		}
+		// the claim was visible before it was armed, so a release in that window must find nothing left behind
+		if m.guardedEgress || m.lockEgress {
+			m.disarmIfReleased(sb)
 		}
 	}
 	// usage lands only after the batch armed, so a rollback leaves no unterminated claim event

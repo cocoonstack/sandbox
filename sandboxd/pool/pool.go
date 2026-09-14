@@ -94,6 +94,7 @@ var (
 	ErrVolumeBusy        = errors.New("volume is held by another claim")
 	// replaying a journal takes a writable mount, so readers stay out.
 	ErrVolumeNeedsRecovery = errors.New("volume needs recovery by a writable claim")
+	ErrArchived            = errors.New("sandbox is archived; an exec or file call wakes it first")
 	ErrQuota               = errors.New("node claim quota reached")
 
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
@@ -255,13 +256,13 @@ type Manager struct {
 
 	// idleDefault is the idle-hibernate threshold for unpooled keys; zero disables.
 	idleDefault time.Duration
-	idleEnabled bool
+	idleEnabled atomic.Bool
 	idleSweep   atomic.Bool
 
 	// archive*Default are the archive thresholds for unpooled keys.
 	archiveAfterDefault  time.Duration
 	archiveDeleteDefault time.Duration
-	archiveEnabled       bool
+	archiveEnabled       atomic.Bool
 	archiveSweep         atomic.Bool
 	archiveDeleteSweep   atomic.Bool
 	// archiving holds ids with an export in flight; pendingCks pins ids mid-commit; both under m.mu.
@@ -480,9 +481,7 @@ func (m *Manager) Run(ctx context.Context) {
 	// store retention is hourly: each sweep is cluster-visible I/O on a shared root
 	storeSweep := time.NewTicker(time.Hour)
 	defer storeSweep.Stop()
-	if m.ckptTTL > 0 {
-		m.sweepExpiredCheckpoints(ctx)
-	}
+	m.sweepExpiredCheckpoints(ctx)
 	m.refillOnce(ctx)
 	for {
 		select {
@@ -500,9 +499,7 @@ func (m *Manager) Run(ctx context.Context) {
 			go m.retryArchiveDeletes(ctx)
 		case <-storeSweep.C:
 			m.sweepStoreGenerations(ctx)
-			if m.ckptTTL > 0 {
-				m.sweepExpiredCheckpoints(ctx)
-			}
+			m.sweepExpiredCheckpoints(ctx)
 		}
 	}
 }
@@ -553,7 +550,6 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 // Sandboxes lists live claims visible to tenant; empty tenant means root.
 func (m *Manager) Sandboxes(tenant string) []SandboxSummary {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	out := make([]SandboxSummary, 0, len(m.claimed))
 	for _, sb := range m.claimed {
 		if !tenantOwns(tenant, sb.Tenant) {
@@ -561,6 +557,7 @@ func (m *Manager) Sandboxes(tenant string) []SandboxSummary {
 		}
 		out = append(out, summarize(sb))
 	}
+	m.mu.Unlock()
 	slices.SortFunc(out, func(a, b SandboxSummary) int { return strings.Compare(a.ID, b.ID) })
 	return out
 }
@@ -603,12 +600,13 @@ func (m *Manager) sweepStoreGenerations(ctx context.Context) {
 
 // recomputeSweepFlags derives the sweep switches from the live pool set rather than latching them: removing every idle pool turns the sweep off again.
 func (m *Manager) recomputeSweepFlags() {
-	m.idleEnabled = m.idleDefault > 0
-	m.archiveEnabled = m.archiveAfterDefault > 0
+	idle, archive := m.idleDefault > 0, m.archiveAfterDefault > 0
 	for _, p := range m.pools {
-		m.idleEnabled = m.idleEnabled || p.idle > 0
-		m.archiveEnabled = m.archiveEnabled || p.archiveAfter > 0
+		idle = idle || p.idle > 0
+		archive = archive || p.archiveAfter > 0
 	}
+	m.idleEnabled.Store(idle)
+	m.archiveEnabled.Store(archive)
 }
 
 func (m *Manager) untrack(set map[string]struct{}, key string) {

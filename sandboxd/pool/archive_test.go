@@ -234,6 +234,45 @@ func TestArchiveLifecycleRoundTrip(t *testing.T) {
 	})
 }
 
+func TestArchivedClaimRefusesCaptureVerbs(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, archivePool(3600))
+	sb := mustClaim(t, m, testKey)
+	mustArchive(t, m, sb)
+	cred := Cred{Token: sb.Token}
+
+	if _, err := m.Checkpoint(t.Context(), sb.ID, cred, "", ""); !errors.Is(err, ErrArchived) {
+		t.Errorf("Checkpoint = %v, want ErrArchived", err)
+	}
+	if _, _, err := m.Promote(t.Context(), sb.ID, cred, "tpl", ""); !errors.Is(err, ErrArchived) {
+		t.Errorf("Promote = %v, want ErrArchived", err)
+	}
+	if _, err := m.Fork(t.Context(), sb.ID, cred, 1, 0); !errors.Is(err, ErrArchived) {
+		t.Errorf("Fork = %v, want ErrArchived", err)
+	}
+	if err := m.Hibernate(t.Context(), sb.ID, cred); err != nil {
+		t.Errorf("Hibernate of an archived claim = %v, want the no-op success", err)
+	}
+	if sb.PendingSnap != "" {
+		t.Errorf("Hibernate journaled intent %q onto an archived claim", sb.PendingSnap)
+	}
+}
+
+func TestSweepExpiredCheckpointsIsANoopWithoutTTL(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, archivePool(3600))
+	sb := mustClaim(t, m, testKey)
+	ck, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "", "")
+	if err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	m.ckptTTL = 0
+	m.sweepExpiredCheckpoints(t.Context())
+	if !ckExists(t, m, ck.ID) {
+		t.Fatal("a zero TTL sweep deleted a checkpoint")
+	}
+}
+
 func TestArchiveTTLSweepSparesLiveCheckpoint(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))

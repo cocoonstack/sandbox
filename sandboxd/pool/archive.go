@@ -39,7 +39,7 @@ func (m *Manager) archiveEnabledFor(key types.PoolKey) bool {
 
 // archiveOnce checkpoints hibernated claims idle past their archive threshold and drops their VM.
 func (m *Manager) archiveOnce(ctx context.Context) {
-	if !m.archiveEnabled {
+	if !m.archiveEnabled.Load() {
 		return
 	}
 	if !m.archiveSweep.CompareAndSwap(false, true) {
@@ -121,10 +121,14 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	if saveErr := m.store.commit(js); saveErr != nil {
 		// roll back so memory matches the still-durable hibernated record; drop the orphan ck.
 		m.mu.Lock()
-		sb.ArchiveCk = ""
-		sb.HibernateSnap, sb.VsockSocket, sb.VMName = snap, sock, vmName
-		sb.Deadline = prevDeadline
-		rb := m.store.set(sb)
+		var rb claimSnapshot
+		// a Release that landed meanwhile already deleted the claim; re-setting it would resurrect it
+		if m.claimed[sb.ID] == sb {
+			sb.ArchiveCk = ""
+			sb.HibernateSnap, sb.VsockSocket, sb.VMName = snap, sock, vmName
+			sb.Deadline = prevDeadline
+			rb = m.store.set(sb)
+		}
 		m.mu.Unlock()
 		sb.Transition.Unlock()
 		m.recommit(ctx, rb)
@@ -222,8 +226,11 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
 		m.mu.Lock()
-		sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.Deadline = "", "", ck, deadline
-		rb := m.store.set(sb)
+		var rb claimSnapshot
+		if m.claimed[sb.ID] == sb {
+			sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.Deadline = "", "", ck, deadline
+			rb = m.store.set(sb)
+		}
 		m.mu.Unlock()
 		m.recommit(ctx, rb)
 		log.WithFunc("pool.commitWake").Warnf(ctx, "persist claims: %v", err)

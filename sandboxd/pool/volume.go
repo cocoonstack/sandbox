@@ -238,7 +238,10 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 		}
 	}
 	if stuck {
-		if err := m.eng.SyncGuest(ctx, sb.VsockSocket); err != nil {
+		// the unmounts may have spent the whole budget; the fallback flush gets its own
+		syncCtx, cancelSync := context.WithTimeout(context.WithoutCancel(ctx), engine.VolumeCallTimeout)
+		defer cancelSync()
+		if err := m.eng.SyncGuest(syncCtx, sb.VsockSocket); err != nil {
 			logger.Errorf(ctx, err, "sync guest of %s", sb.ID)
 		}
 	}

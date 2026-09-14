@@ -25,6 +25,9 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	if !sb.Key.Capturable() {
 		return nil, ErrNoEgressFork
 	}
+	if sb.ArchiveCk != "" {
+		return nil, ErrArchived
+	}
 	if err := m.overQuota(count, sb.Tenant); err != nil {
 		return nil, err
 	}

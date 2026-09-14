@@ -46,6 +46,9 @@ func (m *Manager) Checkpoint(ctx context.Context, id string, cred Cred, name, te
 	if !sb.Key.Capturable() {
 		return types.Checkpoint{}, ErrNoEgressFork
 	}
+	if sb.ArchiveCk != "" {
+		return types.Checkpoint{}, ErrArchived
+	}
 	// See Hibernate: a started capture must finish even if the caller hangs up.
 	ctx = context.WithoutCancel(ctx)
 	ckpt, _, err := m.publishCheckpoint(ctx, sb, store.CheckpointID(randHex(8)), name, tenant, false)
@@ -126,7 +129,7 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, s
 		return ErrUnknownCheckpoint
 	}
 	// ckpt.Archive guards wake images store-wide; the pin set guards uncommitted local ones
-	if _, pinned := m.pinnedArchiveCks()[ckptID]; pinned || ckpt.Archive {
+	if ckpt.Archive || m.archiveCkPinned(ckptID) {
 		return ErrUnknownCheckpoint // backs an archived sandbox, not a deletable checkpoint
 	}
 	if err := m.ckpts.Delete(ctx, ckptID); err != nil {
@@ -334,7 +337,7 @@ func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 
 // sweepExpiredCheckpoints ages out checkpoints older than the configured TTL.
 func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
-	if !m.ckptSweeping.CompareAndSwap(false, true) {
+	if m.ckptTTL <= 0 || !m.ckptSweeping.CompareAndSwap(false, true) {
 		return
 	}
 	defer m.ckptSweeping.Store(false)

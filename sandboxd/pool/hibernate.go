@@ -41,6 +41,9 @@ func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string
 
 // hibernateLocked is Hibernate's body; the caller holds sb.Transition.
 func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error {
+	if sb.ArchiveCk != "" {
+		return nil // already off the node
+	}
 	if hasAppliedVolumes(sb) {
 		return ErrVolumeCapture
 	}
@@ -176,7 +179,7 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 
 // idleOnce hibernates claims idle past their pool's (or the node's) threshold.
 func (m *Manager) idleOnce(ctx context.Context) {
-	if !m.idleEnabled {
+	if !m.idleEnabled.Load() {
 		return
 	}
 	if !m.idleSweep.CompareAndSwap(false, true) {

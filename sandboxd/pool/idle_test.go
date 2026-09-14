@@ -43,7 +43,7 @@ func TestIdleOncePolicyScope(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
 		m.idleDefault = time.Second
-		m.idleEnabled = true
+		m.idleEnabled.Store(true)
 
 		sb := mustClaim(t, m, testKey)
 		backdate(m, sb, time.Hour)
