@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -87,6 +88,42 @@ func TestExecKeepsOutputWhenTheGuestDrops(t *testing.T) {
 	text := toolText(t, replies[2])
 	if execResult["isError"] != true || !strings.Contains(text, `"stdout":"partial"`) || !strings.Contains(text, `"error"`) {
 		t.Errorf("exec reply %v: want isError with the partial stdout and an error field", text)
+	}
+}
+
+func TestReadFileStopsAtTheCap(t *testing.T) {
+	chunk := `{"type":"data","data":"` + base64.StdEncoding.EncodeToString(make([]byte, 256<<10)) + `"}` + "\n"
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) bool {
+		if !strings.HasSuffix(r.URL.Path, "/agent") {
+			return false
+		}
+		conn, _, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return true
+		}
+		defer conn.Close()
+		br := bufio.NewReader(conn)
+		if _, err := io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n"); err != nil {
+			return true
+		}
+		if _, err := br.ReadString('\n'); err != nil {
+			return true
+		}
+		for range 8 {
+			if _, err := io.WriteString(conn, chunk); err != nil {
+				return true
+			}
+		}
+		_, _ = io.WriteString(conn, `{"type":"done"}`+"\n")
+		return true
+	})
+	replies := serveLines(t, srv,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_sandbox","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_file","arguments":{"sandbox_id":"sb_1","path":"/dev/zero"}}}`,
+	)
+	if text := toolText(t, replies[2]); !strings.Contains(text, "read_file cap") {
+		t.Errorf("read_file past the cap answered %q, want the cap error", text)
 	}
 }
 

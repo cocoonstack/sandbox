@@ -4,15 +4,18 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/cocoonstack/sandbox/protocol/wire"
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
-var tools = []tool{
+var (
+	errOutputCap = errors.New("output past the cap")
+
+	tools = []tool{
 	{
 		"create_sandbox", "Claim a fresh microVM sandbox and return its id plus deadline. Warm claims take milliseconds; a cold template boots in well under a second. Every sandbox-scoped tool takes the returned sandbox_id. The sandbox is destroyed at its deadline unless released earlier; nothing renews it.",
 		schema(props{"template": str("template image ref, or a name published by promote; empty uses the server default"), "net": str("network lane: none (default, no NIC, vsock-only I/O) or egress (bridge NIC, outbound network)"), "size": str("resource tier: small (default), medium, large, xlarge, 2xlarge"), "ttl_seconds": integer("sandbox lifetime in seconds; 0 means one hour, and nothing renews it")}), toolCreateSandbox,
@@ -73,7 +76,8 @@ var tools = []tool{
 	},
 	{"release", "Destroy a sandbox and free its resources; files and processes inside it are lost. This session forgets the id, so a second release of it is rejected as unknown.", schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint")}, "sandbox_id"), toolRelease},
 	{"node_info", "Report the connected node's warm pools, live claims, drain state, capacity, and mesh peers as JSON.", schema(props{}), toolNodeInfo},
-}
+	}
+)
 
 // tool binds one MCP tool's spec to its handler, so a tool can never exist
 // in the listing without a dispatch entry.
@@ -148,14 +152,19 @@ type cmdArgs struct {
 }
 
 // cappedOutput keeps the first execOutputCap bytes; an agent that tails a firehose must not grow this process.
+// An exec keeps draining past the cap so the command runs on; a read stops there instead.
 type cappedOutput struct {
 	strings.Builder
+	stopAtCap bool
 	truncated bool
 }
 
 func (o *cappedOutput) Write(p []byte) (int, error) {
 	n := len(p)
 	if room := execOutputCap - o.Len(); len(p) > room {
+		if o.stopAtCap {
+			return 0, errOutputCap
+		}
 		p, o.truncated = p[:room], true
 	}
 	_, _ = o.Builder.Write(p)
@@ -274,18 +283,13 @@ func toolReadFile(ctx context.Context, s *server, raw json.RawMessage) (string, 
 	if err != nil {
 		return "", err
 	}
-	info, err := sb.Stat(ctx, args.Path)
-	if err != nil {
+	out := cappedOutput{stopAtCap: true}
+	if err := sb.ReadFileTo(ctx, args.Path, &out); errors.Is(err, errOutputCap) {
+		return "", fmt.Errorf("%s exceeds the %d-byte read_file cap; use exec with head, tail, or a checksum", args.Path, execOutputCap)
+	} else if err != nil {
 		return "", err
 	}
-	if info.Kind != wire.FileKindFile || info.Size > execOutputCap {
-		return "", fmt.Errorf("%s is a %s of %d bytes; read_file returns a regular file up to %d bytes, use exec with head or tail", args.Path, info.Kind, info.Size, execOutputCap)
-	}
-	data, err := sb.ReadFile(ctx, args.Path)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
+	return out.String(), nil
 }
 
 func toolListDir(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
