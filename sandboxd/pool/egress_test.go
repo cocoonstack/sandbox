@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -672,8 +673,12 @@ func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
 	path := engine.EgressSocketPath(sb.VsockSocket)
 
 	idle := make([]net.Conn, 0, egressDoorConns)
-	for range egressDoorConns {
+	for len(idle) < egressDoorConns {
 		conn, err := net.Dial("unix", path)
+		if errors.Is(err, syscall.ECONNREFUSED) {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
 		if err != nil {
 			t.Fatalf("idle dial %d: %v", len(idle), err)
 		}
