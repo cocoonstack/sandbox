@@ -66,8 +66,9 @@ branch from.
   `sandbox-id:port`, which Chrome's DevTools allowlist rejects. Use
   `ProxyPort`/`DialPort` for CDP; preview URLs serve human-facing HTTP the
   workload chooses to expose (a live-view page, a screenshot server).
-- Guest env knobs on the unit: `CDP_PORT` (default 9222),
-  `CHROMIUM_FLAGS` (extra flags).
+- Guest env knobs read by `/usr/local/bin/chromium-cdp`: `CDP_PORT` (default
+  9222) and `CHROMIUM_FLAGS` (extra flags); set them with a `chromium.service`
+  drop-in, the unit itself declares no environment.
 - No stealth build: headless Chromium is fingerprintable; this flavor
   targets automation, not anti-bot evasion.
 - One browser per sandbox by design — the VM is the isolation and

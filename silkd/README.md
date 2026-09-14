@@ -9,9 +9,12 @@ attach with a bounded output ring), streaming fs + tar tree push/pull
 (both atomic), find/replace, watch (ready-acked), pty, structured git,
 guest port relay (`port_forward`), and an LSP broker that spawns the
 language server a flavor image ships under `/etc/silkd/lsp.d/<language>`.
+Plus two loopback egress relays — `127.0.0.1:3128` and `127.0.0.1:1080` over
+vsock to the host proxy (`src/net_egress.rs`) — and the lane verdict that
+decides whether an exec inherits the proxy variables (`src/net.rs`).
 
 - `src/proto.rs` — frame types + caps; the golden corpus in
-  `../protocol/wire/fixtures/` is round-tripped by the Rust, Go, and Python
+  `../protocol/wire/fixtures/v1/` is round-tripped by the Rust, Go, and Python
   sides, so wire drift fails CI
 - `src/server.rs` — dispatch; one module per verb family
 - `tests/` — e2e suites driving the daemon in-process

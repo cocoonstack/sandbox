@@ -82,7 +82,7 @@ directly. To recover a handle when only `id` + `token` survived (say,
 across a process restart):
 
 ```python
-sb = client.lookup(id, token)   # asks the entry node, then each mesh peer
+sb = client.lookup(id, token)   # probes the entry node and every mesh peer concurrently
 ```
 
 ## Claiming
@@ -166,7 +166,9 @@ running — a hibernated sandbox is still reaped at its deadline, so claim
 with a `ttl_seconds` that covers the idle period. When to hibernate is your
 policy, unless the deployment opts into `idle_hibernate_seconds`
 ([deploy](deploy.md#configuration)), which hibernates idle claims
-automatically with the same transparent wake.
+automatically with the same transparent wake. A claim with a live connection
+(a relay stream, a buffered exec, a preview dial, an egress request) is never
+swept mid-call; the idle clock restarts when that connection ends.
 
 If that deployment also enables `archive_after_seconds`, archiving replaces
 the original claim deadline with the archive-retention deadline (or no
@@ -277,7 +279,8 @@ context-manager) relayed over the silkd protocol — it works on the
 no-network lane, where the vsock relay is the only way in. A dead port
 raises silkd's `not_found`. `proxy_port` serves the port on a local
 listener for unmodified local tools (browsers, curl); close the returned
-socket to stop. `preview_url` mints a signed URL served by the node's
+socket to stop, and a guest port that closes ends the local connection too.
+`preview_url` mints a signed URL served by the node's
 preview listener, clamped to the claim's remaining lease — the URL dies
 with the sandbox, and a node without `preview_listen` answers 501.
 
@@ -454,7 +457,9 @@ zero.
 
 - `APIError(verb, status, message)` — control plane (HTTP status)
 - `SilkdError(kind, message)` — typed guest failure; `kind` is
-  `bad_request` / `not_found` / `unimplemented` / `internal`
+  `bad_request` (including a spawn the guest cannot start: missing binary, a
+  cwd that is not a directory, no exec bit) / `not_found` / `unimplemented` /
+  `internal`
 - `ExitError(code, stderr, stdout)` — non-zero exit from `exec`
 - `ProtocolError` — broken stream (EOF, oversized or undecodable frame)
 

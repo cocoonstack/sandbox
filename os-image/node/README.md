@@ -2,7 +2,7 @@
 
 `base:24.04` plus Node.js 22 LTS (official tarball, sha256-pinned per
 architecture, unpacked into `/usr/local`) and the native-module build
-toolchain — build-essential, python3, unzip — so package installs with
+toolchain — build-essential, python3, python3-setuptools, unzip — so package installs with
 node-gyp steps need only the packages themselves from the network. `node-rt`
 is the same rootfs squashed to one layer for latency-sensitive pools (see
 `rt`).

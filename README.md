@@ -81,6 +81,7 @@ make help          # this list
 make lint test     # Rust: boot/init + silkd (fmt --check, clippy -D warnings, tests)
 make go-lint       # Go: protocol/wire + sandboxd + sdk/go + e2e + mcp, GOOS linux AND darwin
 make go-test       # Go: go test -race across the Go modules
+make sh-lint       # shellcheck every tracked shell script
 make sandboxd      # build dist/sandboxd
 make boot          # kernel + initramfs artifact image (docker)
                    #   KERNEL_MIRROR=… if kernel.org tarball paths 404 locally
@@ -135,7 +136,7 @@ On a fresh repo run build-boot first — images build `FROM` the boot artifact.
 
 ```
 cloud-hypervisor
-  → vmlinux (PVH ELF, everything =y, no decompress stage)
+  → guest kernel (amd64: PVH ELF vmlinux, everything =y, no decompress stage; arm64: flat Image)
   → uncompressed ~1.5MB cpio: /init = sandbox-init (static Rust)
   → resolve virtio-blk serials via sysfs (2ms poll, no udev)
   → mount EROFS layers → overlayfs + ext4 COW → switch_root

@@ -85,16 +85,16 @@ and the image's units wait for the same file instead of guessing from NIC
 presence; git keeps running as on any lane with a NIC. A golden built under
 another verdict is rebuilt, not adopted.
 
-Egress-lane sandboxes do not hibernate, archive, fork, checkpoint, or promote:
-cocoon resumes a guest before its fresh tap can be re-locked, so any resume from
-a snapshot would open an unlocked-NIC window. Keeping the lane live holds the
-lock unbroken from claim to release; those operations are refused (409) on the
-lane.
+Egress-lane sandboxes never archive and do not hibernate, fork, checkpoint, or
+promote: cocoon resumes a guest before its fresh tap can be re-locked, so any
+resume from a snapshot would open an unlocked-NIC window. Keeping the lane live
+holds the lock unbroken from claim to release; the idle sweep skips the lane and
+those four verbs are refused (409) on it.
 
 The proxy also refuses to connect to internal addresses — every IANA
 special-purpose range that is not globally reachable (loopback, link-local
 incl. cloud metadata, private, carrier-grade NAT, benchmarking, documentation,
-reserved, per the registry snapshot in `egress.go`) plus the IPv4-embedding
+reserved, per the registry snapshot in `sandboxd/pool/egress.go`) plus the IPv4-embedding
 IPv6 forms (NAT64, 6to4, Teredo, IPv4-compatible) — so an allow-listed host
 that resolves, or is rebound, to one cannot reach the sandboxd host or a
 sibling VM.
@@ -107,8 +107,10 @@ whose sandboxes legitimately need internal services:
 ```
 
 It is node-wide (every pool and tenant on the node gets the same re-admission)
-and checked after NAT64 unwrapping, so an embedded IPv4 matches as the IPv4 it
-is. Name service prefixes, never the whole private space: the guest bridges are
+and checked after the well-known `64:ff9b::/96` unwrap, so an IPv4 embedded in
+that prefix matches as the IPv4 it is; an address in the local-use
+`64:ff9b:1::/48` is blocked as a whole and needs that prefix itself in the list.
+Name service prefixes, never the whole private space: the guest bridges are
 themselves ULA/RFC1918, so a blanket permit would open sandbox-to-sandbox and
 the host's own gateway. `0.0.0.0/0` + `::/0` turns the guard off entirely — for
 fleets with a policy-enforcing proxy in front — and requests still pass the
@@ -125,7 +127,9 @@ domain policy first; the allow-list widens the IP gate only.
 - **Bridge lane only (egress lane).** A CNI network's tap lives in the VM netns,
   out of reach of the root-netns lock, so a guarded egress *lane* needs the
   `bridges` form (those taps stay in the root netns) and is rejected on CNI
-  `networks`. None-lane policies ride the proxy and work on either. A bridge
+  `networks`. A none-lane *pool* policy rides the proxy and works on either; a
+  tenant policy does not, because it could land on an egress-lane claim, so
+  `networks` plus any tenant `egress` block is rejected at load. A bridge
   egress lane locks every NIC default-deny, even with no policy configured.
 - **No custom NAT64/DNS64 prefix routed to the host.** The SSRF guard folds the
   standard NAT64 forms (RFC 6052 well-known `64:ff9b::/96`, RFC 8215 local-use
@@ -182,8 +186,8 @@ woken sandbox binds at arm time.
 - `host`: an exact name, a `*.`-prefixed suffix wildcard, or `*`. Case-insensitive.
 - `methods`: empty means any. Enforced on plaintext and on intercepted HTTPS. A
   non-intercepted CONNECT tunnel is opaque — the method cannot be checked — so a
-  methods-restricted rule without `intercept` denies CONNECT outright rather
-  than tunneling unchecked.
+  rule whose `methods` does not name `CONNECT`, and does not `intercept`, denies
+  the tunnel outright rather than tunneling unchecked.
 - `ports`: empty means any; otherwise the destination port must be listed. The
   port is the tunnel's target on CONNECT and SOCKS5, the URL's port (or the
   scheme's default) on the forward path, and the CONNECT's port for every
@@ -195,8 +199,9 @@ woken sandbox binds at arm time.
   method and the secret injected (see below). Only a pool rule may set it.
 - No policy on a claim ⇒ no egress at all (the proxy is not started).
 
-Each decision is written to `audit.jsonl` (`op:"egress"`, host, port,
-allow/deny, the secret **name**) and metered as an `egress` usage event.
+Each decision is written to `audit.jsonl` (`op:"egress"`, `dest`, `port`,
+`decision`, and the secret **name** in `secret`) and metered as an `egress`
+usage event.
 
 ## HTTPS interception
 
@@ -273,7 +278,8 @@ every other node, is unaffected.
 
 `egress_ca` is required whenever a pool has an intercept rule. The root cert is
 baked into a guest **when the guest is created** — at golden build, or at a
-pre-golden cold claim's provision (both via silkd, off the claim path). It is
+pre-golden cold claim's provision (both via silkd; only the golden-build
+install is off the claim path). It is
 **not** re-installed on re-claim: a clone, checkpoint restore, archive wake, or
 reconcile adopts the guest with whatever root it was born with. A `.cafp`
 sidecar ties golden adoption to the baked bytes, so a changed root rebuilds

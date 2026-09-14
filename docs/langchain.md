@@ -1,7 +1,8 @@
 # LangChain toolkit
 
 `cocoonstack-sandbox-langchain` turns one sandbox into a LangChain tool
-set: `pip install cocoonstack-sandbox-langchain`.
+set: `pip install cocoonstack-sandbox-langchain` (the example below also
+needs `langgraph`, which the package does not pull in).
 
 ```python
 from cocoonsandbox_langchain import CocoonToolkit
@@ -20,7 +21,7 @@ schemas, sync-native with `asyncio.to_thread` async bridges):
 | tool | what it does |
 |---|---|
 | `sandbox_exec` | run a shell command, cut off after 5 minutes with the reply saying so; stdout/stderr/exit code; disk state persists across calls |
-| `sandbox_write_file` | write a text file (atomic on the guest) |
+| `sandbox_write_file` | write a text file (atomic on the guest; the parent directory must exist) |
 | `sandbox_read_file` | read a text file |
 | `sandbox_list_dir` | list a directory as JSON |
 

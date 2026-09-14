@@ -53,9 +53,8 @@ func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error)
 // currently sees to drop any replica a heal pulled — best-effort eventual
 // cleanup, not a fleet-wide revocation. A peer that misses that broadcast
 // (offline, partitioned, or joined later) keeps serving branches from its
-// replica until the node's checkpoint_ttl_hours ages it out; with that TTL
-// at its default of 0 (keep forever), an unreachable peer's replica has no
-// cleanup bound at all.
+// replica until the node's checkpoint_ttl_hours ages it out, which enabling
+// peer heal requires to be set.
 func (ck *Checkpoint) Delete(ctx context.Context) error {
 	return doNoContent(ctx, ck.c, http.MethodDelete, ck.addr, "/v1/checkpoints/"+ck.ID, nil, ck.c.apiToken, "delete checkpoint")
 }

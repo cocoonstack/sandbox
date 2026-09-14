@@ -327,9 +327,10 @@ targets online — no restart, live claims untouched:
 Pools omitted from the list are drained: their unclaimed warm VMs are
 destroyed and the pool entry retires. `net`/`size` default like a claim's.
 Answers the fresh `GET /v1/info` payload. 400 bad key, negative warm/idle,
-`warm_max` below `warm`, duplicate pool, or a config-owned `egress`/`warmup`
-field; 401 bad api token; 409 egress
-pool on a node without an egress attachment.
+`warm_max` below `warm`, `idle_hibernate_seconds` on an egress pool, an
+`archive_after_seconds` not above the pool's `idle_hibernate_seconds`,
+duplicate pool, or a config-owned `egress`/`warmup` field; 401 bad api
+token; 409 egress pool on a node without an egress attachment.
 
 ## POST /v1/drain
 
@@ -418,7 +419,7 @@ part of the public API; an SDK caller has no reason to call it directly.
   `X-Cocoon-Probe` is absent or expired. On a mesh with `cluster_key` set the
   request must carry `X-Cocoon-Probe`, an HMAC over the id and a coarse time
   bucket keyed off a probe-specific derivation of the cluster key — verified
-  before any disk is touched, replayable for roughly a minute at most. On a
+  before any disk is touched, replayable for roughly ninety seconds at most. On a
   keyless mesh (redirect-only fleets have no shared secret to sign with) the
   id itself remains the only capability, matching the mesh's own posture.
   Repeat probes for one id are answered from a short positive cache on the
@@ -427,13 +428,15 @@ part of the public API; an SDK caller has no reason to call it directly.
 ## GET /v1/checkpoints
 
 Auth: node API token. Lists this node's checkpoints, newest first. A tenant
-sees only its own records; root sees everything.
+sees only its own records; root sees everything. A checkpoint backing an
+archived claim is that claim's wake image, not a listable record.
 
 ## DELETE /v1/checkpoints/{id}
 
 Auth: node API token. A tenant may delete only its own records — anything
 else is 404, never a hint the id exists; root deletes anything. 204 on
-success, 404 unknown.
+success, 404 unknown — including the checkpoint behind an archived claim,
+which only that claim's release or retention window removes.
 
 **Delete removes the local record, then best-effort broadcasts to peers so a
 healed replica does not outlive it — eventual cleanup, not a fleet-wide
@@ -495,8 +498,9 @@ truth is the usage journal below.
 Always on: every lifecycle transition appends one JSONL event to
 `<data_dir>/usage.jsonl` — `{"t": <RFC3339>, "ev":
 "claim|hibernate|wake|fork|checkpoint|promote|release|reap|archive|unarchive|archive_delete|egress",
-"id": "sb_…", "vm": "sbx-…"}` plus `key` and `tenant` (the pool key's stable
-hash and the owning tenant, claim events), `children` (fork) and `ref` (the promoted
+"id": "sb_…", "vm": "sbx-…"}` plus `key` (the pool key's stable hash, claim
+events), `tenant` (the owning tenant, on claim, egress, archive, unarchive and
+archive_delete), `children` (fork) and `ref` (the promoted
 template / checkpoint id, or the egress host). A volume claim also carries
 `volumes`, the applied catalog names, and — omitted when empty — `volumes_rw`,
 the subset of those names claimed `rw`, so billing can discriminate write

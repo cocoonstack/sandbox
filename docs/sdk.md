@@ -216,7 +216,9 @@ claim with a `WithTimeout` that covers the idle period. When to hibernate
 is your policy; the node only provides the transition — unless the
 deployment opts into `idle_hibernate_seconds` (see
 [deploy](deploy.md#configuration)), which hibernates idle claims
-automatically with the same transparent wake.
+automatically with the same transparent wake. A claim with a live connection
+(a relay stream, a buffered exec, a preview dial, an egress request) is never
+swept mid-call; the idle clock restarts when that connection ends.
 
 If that deployment also enables `archive_after_seconds`, archiving replaces
 the original claim deadline with the archive-retention deadline (or no
@@ -296,6 +298,13 @@ id without listing. `Checkpoint.New` follows an owner probe/redirect and may
 heal a missing record locally; `Checkpoint.Delete` acts on the handle's bound
 node. Checkpoint creation is resource-creating and takes the api token, like
 fork.
+
+`Checkpoint.Delete` also asks every peer that node currently sees to drop any
+replica a heal pulled — best-effort eventual cleanup, not a fleet-wide
+revocation. A peer that misses the broadcast (offline, partitioned, or joined
+later) keeps serving branches from its replica until the node's
+`checkpoint_ttl_hours` ages it out; enabling peer heal requires that TTL to be
+set, so every healed replica has a cleanup bound.
 
 ## Language servers (LSP)
 
@@ -508,7 +517,8 @@ ctx) tears the shell down.
 
 ## Node operations
 
-Root-token verbs for operating a node, plus the reference the aggregated
+Verbs for operating a node — `Drain`, `Uncordon`, `SetPools` and
+`SetPoolsCluster` need the root token — plus the reference the aggregated
 apiserver claims under:
 
 ```go
@@ -528,8 +538,10 @@ claims. `Drain` leaves live claims alone — poll `Info` until `Claimed` is zero
 
 - `*sandbox.ExitError` — non-zero exit from `Exec` (`Code`, `Stderr`)
 - `*wire.ErrorResp` — a typed guest-side failure; `Kind` is one of
-  `wire.KindBadRequest`, `KindNotFound`, `KindUnimplemented`,
-  `KindInternal` (import `github.com/cocoonstack/sandbox/protocol/wire`)
+  `wire.KindBadRequest` (including a spawn the guest cannot start: missing
+  binary, a cwd that is not a directory, no exec bit), `KindNotFound`,
+  `KindUnimplemented`, `KindInternal` (import
+  `github.com/cocoonstack/sandbox/protocol/wire`)
 
 ```go
 var e *wire.ErrorResp
