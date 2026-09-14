@@ -71,7 +71,9 @@ client = Client("10.0.0.5:7777", api_token="...", timeout=120.0)
 `api_token` is the node token — a root `api_token` (full access) or a
 tenant token (resource-creating verbs only; operator surfaces answer it
 403). On a cluster every node shares the root token and the same tenants
-set. `timeout` bounds every socket operation.
+set. `timeout` bounds every control-plane request and the data-plane dial
+and upgrade; a guest stream then lives until the guest ends it, as in the
+Go SDK.
 
 **Clusters need nothing extra**: dial any node. On a warm miss the entry
 node answers with a redirect and `new` follows it transparently; the
@@ -450,7 +452,6 @@ zero.
   `bad_request` / `not_found` / `unimplemented` / `internal`
 - `ExitError(code, stderr, stdout)` — non-zero exit from `exec`
 - `ProtocolError` — broken stream (EOF, oversized or undecodable frame)
-- `StreamTimeout` — a socket operation hit the client `timeout`; retry the call
 
 ```python
 try:
