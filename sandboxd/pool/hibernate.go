@@ -23,13 +23,20 @@ func (m *Manager) Hibernate(ctx context.Context, id string, cred Cred) error {
 	return m.hibernateLocked(ctx, sb)
 }
 
-func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string, error) {
+// WakeAgentSocket resolves a data-plane connection's guest socket; the returned func ends the hold it takes.
+func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string, func(), error) {
 	sb, ok := m.claim(id, token)
 	if !ok {
-		return "", ErrUnknownSandbox
+		return "", nil, ErrUnknownSandbox
 	}
 	sb.Touch()
-	return m.wakeResolved(ctx, sb)
+	sb.Hold()
+	sock, err := m.wakeResolved(ctx, sb)
+	if err != nil {
+		sb.Unhold()
+		return "", nil, err
+	}
+	return sock, sb.Unhold, nil
 }
 
 // hibernateLocked is Hibernate's body; the caller holds sb.Transition.
@@ -214,7 +221,7 @@ func (m *Manager) idleHibernate(ctx context.Context, id, token string, sweepStar
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
-	woke := sb.LastSeen().After(sweepStart) || sb.HibernateSnap != ""
+	woke := sb.Busy() || sb.LastSeen().After(sweepStart) || sb.HibernateSnap != ""
 	m.mu.Unlock()
 	if woke {
 		return errWokeMeanwhile
@@ -314,5 +321,5 @@ func (m *Manager) recordHibernate(ctx context.Context, sb *types.Sandbox) {
 // skipIdle reports the claims an idle sweep must leave alone.
 func skipIdle(sb *types.Sandbox, idle time.Duration, now time.Time) bool {
 	return idle <= 0 || sb.Key.Net == types.NetEgress || hasAppliedVolumes(sb) ||
-		sb.HibernateSnap != "" || sb.ArchiveCk != "" || now.Sub(sb.LastSeen()) < idle
+		sb.HibernateSnap != "" || sb.ArchiveCk != "" || sb.Busy() || now.Sub(sb.LastSeen()) < idle
 }

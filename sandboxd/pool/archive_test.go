@@ -44,7 +44,7 @@ func TestArchivePublishWindowPinsCheckpoint(t *testing.T) {
 	if err := <-archived; err != nil {
 		t.Fatalf("archive: %v", err)
 	}
-	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake archived: %v", err)
 	}
 }
@@ -63,7 +63,7 @@ func TestArchiveWakeRehibernateWindowAborts(t *testing.T) {
 	go func() { archived <- m.archive(t.Context(), sb) }()
 	ck := <-stall.published
 
-	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake mid-publish: %v", err)
 	}
 	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
@@ -91,7 +91,7 @@ func TestArchiveWakeRehibernateWindowAborts(t *testing.T) {
 	if dropped {
 		t.Error("abort dropped the newer hibernate snapshot")
 	}
-	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake after aborted archive: %v", err)
 	}
 }
@@ -124,7 +124,7 @@ func TestArchiveCkHiddenAcrossNodes(t *testing.T) {
 	if !ckExists(t, mA, ck) {
 		t.Fatal("peer TTL sweep deleted the archive wake image")
 	}
-	if _, err := mA.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, err := mA.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("owner wake after peer sweep: %v", err)
 	}
 }
@@ -179,7 +179,7 @@ func TestClaimCheckpointRefusesArchive(t *testing.T) {
 	if _, err := m.ClaimCheckpoint(t.Context(), sb.ArchiveCk, 0, ""); !errors.Is(err, ErrUnknownCheckpoint) {
 		t.Errorf("branch from archive ck: %v, want ErrUnknownCheckpoint", err)
 	}
-	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("owner wake: %v", err)
 	}
 }
@@ -212,7 +212,7 @@ func TestArchiveLifecycleRoundTrip(t *testing.T) {
 		}
 		waitFor(t, func() bool { return eng.removed(origVM) })
 
-		sock, err := m.WakeAgentSocket(t.Context(), id, token)
+		sock, _, err := m.WakeAgentSocket(t.Context(), id, token)
 		if err != nil {
 			t.Fatalf("wake archived: %v", err)
 		}
@@ -247,7 +247,7 @@ func TestArchiveTTLSweepSparesLiveCheckpoint(t *testing.T) {
 	if !ckExists(t, m, ck) {
 		t.Fatal("TTL sweep deleted the checkpoint backing a live archived sandbox")
 	}
-	if _, err := m.WakeAgentSocket(t.Context(), id, token); err != nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), id, token); err != nil {
 		t.Fatalf("wake after sweep: %v", err)
 	}
 }
@@ -271,7 +271,7 @@ func TestArchiveKeepsForeverWhenDeleteZero(t *testing.T) {
 	if archivedCount(m) != 1 || !ckExists(t, m, ck) {
 		t.Fatal("reap purged a keep-forever archived sandbox")
 	}
-	if _, err := m.WakeAgentSocket(t.Context(), id, token); err != nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), id, token); err != nil {
 		t.Fatalf("wake keep-forever archive: %v", err)
 	}
 }
@@ -410,7 +410,7 @@ func TestReconcileClearsLiveArchiveMarker(t *testing.T) {
 	if !ckExists(t, m2, ck) || archiveCkMarked(m2, ck) {
 		t.Fatal("reconcile did not retain the live archive unmarked")
 	}
-	if _, err := m2.WakeAgentSocket(t.Context(), id, token); err != nil {
+	if _, _, err := m2.WakeAgentSocket(t.Context(), id, token); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	if archiveCkMarked(m2, ck) {
@@ -428,7 +428,7 @@ func TestArchiveWakeDeleteFailureRetries(t *testing.T) {
 	failed := &failingDeleteStore{Store: base, attempts: make(chan string, 1)}
 	m.ckpts = failed
 
-	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	select {
@@ -462,7 +462,7 @@ func TestArchiveWakeRequiresDeleteMarker(t *testing.T) {
 	}
 	removesBefore := len(eng.removedNames())
 
-	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
 		t.Fatal("wake succeeded with an unwritable marker dir")
 	}
 	m.mu.Lock()
@@ -482,7 +482,7 @@ func TestArchiveWakeRequiresDeleteMarker(t *testing.T) {
 	if err := os.Remove(blocker); err != nil {
 		t.Fatalf("unblock marker dir: %v", err)
 	}
-	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake after heal: %v", err)
 	}
 	if ckExists(t, m, ck) || archiveCkMarked(m, ck) {
@@ -549,7 +549,7 @@ func TestArchiveRemovalCommitPinsCheckpoint(t *testing.T) {
 				t.Error("retry deleted the checkpoint restored by rollback")
 			}
 			healStore(t, m)
-			if _, err := m.WakeAgentSocket(t.Context(), id, token); err != nil {
+			if _, _, err := m.WakeAgentSocket(t.Context(), id, token); err != nil {
 				t.Fatalf("wake after rollback: %v", err)
 			}
 		})
@@ -617,7 +617,7 @@ func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 	})
 	woke := make(chan error, 1)
 	go func() {
-		_, err := m.WakeAgentSocket(t.Context(), id, token)
+		_, _, err := m.WakeAgentSocket(t.Context(), id, token)
 		woke <- err
 	}()
 	waitFor(t, func() bool {
@@ -652,7 +652,7 @@ func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 		t.Fatal("retry deleted the archive restored by wake rollback")
 	}
 	healStore(t, m)
-	if _, err := m.WakeAgentSocket(t.Context(), id, token); err != nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), id, token); err != nil {
 		t.Fatalf("wake after rollback: %v", err)
 	}
 	if ckExists(t, m, ck) || archiveCkMarked(m, ck) {
@@ -697,7 +697,7 @@ func TestDeleteCheckpointCannotBrickArchive(t *testing.T) {
 	if !ckExists(t, m, ck) {
 		t.Fatal("DeleteCheckpoint removed the archive image backing a live sandbox")
 	}
-	if _, err := m.WakeAgentSocket(t.Context(), id, token); err != nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), id, token); err != nil {
 		t.Fatalf("wake after delete attempt: %v", err)
 	}
 }
@@ -765,7 +765,7 @@ func TestWakeArchivedRollsBackOnPersistFailure(t *testing.T) {
 		ck := sb.ArchiveCk
 		breakStore(t, m)
 
-		if _, err := m.WakeAgentSocket(t.Context(), id, token); err == nil {
+		if _, _, err := m.WakeAgentSocket(t.Context(), id, token); err == nil {
 			t.Fatal("wake succeeded despite a persist failure")
 		}
 		m.mu.Lock()
@@ -845,7 +845,7 @@ func TestArchiveWakeEvictsRecLock(t *testing.T) {
 	if err := m.archive(t.Context(), sb); err != nil {
 		t.Fatalf("archive: %v", err)
 	}
-	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake archived: %v", err)
 	}
 	if got := lockCount(m); got != base {

@@ -44,10 +44,11 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUpgradeRequired, "upgrade to "+upgradeProto+" required")
 		return
 	}
-	guest, ok := s.wakeGuest(r.Context(), w, r.PathValue("id"), token)
+	guest, done, ok := s.wakeGuest(r.Context(), w, r.PathValue("id"), token)
 	if !ok {
 		return
 	}
+	defer done()
 	client, bufrw, err := http.NewResponseController(w).Hijack()
 	if err != nil {
 		_ = guest.Close()
@@ -59,24 +60,25 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 // wakeGuest resolves the sandbox's agent socket, waking a hibernated VM first, and dials silkd;
-// on failure it has already answered the request.
-func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id, token string) (net.Conn, bool) {
-	sock, err := s.mgr.WakeAgentSocket(ctx, id, token)
+// on failure it has already answered the request. done ends the sandbox hold when the connection is over.
+func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id, token string) (guest net.Conn, done func(), ok bool) {
+	sock, done, err := s.mgr.WakeAgentSocket(ctx, id, token)
 	switch {
 	case writePoolErr(w, err):
-		return nil, false
+		return nil, nil, false
 	case err != nil:
 		log.WithFunc("server.wakeGuest").Errorf(ctx, err, "agent socket for %s", id)
 		writeErr(w, http.StatusInternalServerError, "sandbox lookup failed")
-		return nil, false
+		return nil, nil, false
 	}
-	guest, err := s.dialer.DialSilkd(ctx, sock)
+	guest, err = s.dialer.DialSilkd(ctx, sock)
 	if err != nil {
+		done()
 		log.WithFunc("server.wakeGuest").Errorf(ctx, err, "dial silkd for %s", id)
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
-		return nil, false
+		return nil, nil, false
 	}
-	return guest, true
+	return guest, done, true
 }
 
 // relay writes the 101 and splices the conns until silkd closes or the client vanishes.

@@ -20,7 +20,7 @@ func TestUsageJournalRecordsLifecycle(t *testing.T) {
 	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
-	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("Wake: %v", err)
 	}
 	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {

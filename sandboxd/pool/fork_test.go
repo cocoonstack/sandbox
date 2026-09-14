@@ -128,7 +128,7 @@ func TestForkFromHibernatedUsesWakeImage(t *testing.T) {
 		t.Error("hibernate snapshot dropped by fork — the parent could never wake")
 	}
 
-	if _, err := m.WakeAgentSocket(t.Context(), parent.ID, parent.Token); err != nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), parent.ID, parent.Token); err != nil {
 		t.Fatalf("wake after fork: %v", err)
 	}
 }
@@ -216,7 +216,7 @@ func TestReconcileSweepsOrphanSnapshots(t *testing.T) {
 		}
 	}
 
-	if _, err := m2.WakeAgentSocket(t.Context(), parent.ID, parent.Token); err != nil {
+	if _, _, err := m2.WakeAgentSocket(t.Context(), parent.ID, parent.Token); err != nil {
 		t.Fatalf("wake after reconcile: %v", err)
 	}
 }

@@ -147,7 +147,7 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	id, tenant := sb.ID, sb.Tenant
 	evCtx := context.WithoutCancel(ctx)
 	proxy := egress.New(id, tenant, policy, m.egressSecrets, m.egressCA, m.dial,
-		func(ev egress.Event) { m.recordEgress(evCtx, id, tenant, ev) })
+		func(ev egress.Event) { m.recordEgress(evCtx, id, tenant, ev) }, sb)
 	el := &egressListener{
 		srv:   &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second},
 		proxy: proxy,

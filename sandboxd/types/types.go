@@ -171,6 +171,8 @@ type Sandbox struct {
 
 	// lastActivity is unix-nanos of the last data-plane connection, stamped lock-free.
 	lastActivity atomic.Int64
+	// open counts the data-plane connections held right now.
+	open atomic.Int32
 
 	// Transition serializes hibernate/wake; lock it before (never under) the manager mutex.
 	Transition sync.Mutex `json:"-"`
@@ -184,6 +186,18 @@ func (s *Sandbox) TouchAt(t time.Time) { s.lastActivity.Store(t.UnixNano()) }
 
 // LastSeen returns the last data-plane activity time.
 func (s *Sandbox) LastSeen() time.Time { return time.Unix(0, s.lastActivity.Load()) }
+
+// Hold registers an open data-plane connection; the idle sweep leaves a held sandbox alone.
+func (s *Sandbox) Hold() { s.open.Add(1) }
+
+// Unhold restarts the idle clock, then ends the Hold; a sweep that sees the hold gone also sees the fresh stamp.
+func (s *Sandbox) Unhold() {
+	s.Touch()
+	s.open.Add(-1)
+}
+
+// Busy reports whether a data-plane connection is held.
+func (s *Sandbox) Busy() bool { return s.open.Load() > 0 }
 
 // Checkpoint is the record of a captured sandbox state; node-local, like a template.
 type Checkpoint struct {

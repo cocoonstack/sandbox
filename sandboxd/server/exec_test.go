@@ -182,8 +182,9 @@ type execManager struct {
 	wake func(context.Context, string, string) (string, error)
 }
 
-func (m *execManager) WakeAgentSocket(ctx context.Context, id, token string) (string, error) {
-	return m.wake(ctx, id, token)
+func (m *execManager) WakeAgentSocket(ctx context.Context, id, token string) (string, func(), error) {
+	sock, err := m.wake(ctx, id, token)
+	return sock, func() {}, err
 }
 
 func postExec(t *testing.T, ts *httptest.Server, body string) (int, []byte) {

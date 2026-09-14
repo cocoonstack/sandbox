@@ -1957,8 +1957,9 @@ func (f *fakeManager) AgentSocket(id, token string) (string, error) {
 	return f.socket(id, token)
 }
 
-func (f *fakeManager) WakeAgentSocket(_ context.Context, id, token string) (string, error) {
-	return f.AgentSocket(id, token)
+func (f *fakeManager) WakeAgentSocket(_ context.Context, id, token string) (string, func(), error) {
+	sock, err := f.AgentSocket(id, token)
+	return sock, func() {}, err
 }
 
 func (f *fakeManager) Hibernate(_ context.Context, id string, cred pool.Cred) error {

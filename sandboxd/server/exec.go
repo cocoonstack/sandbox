@@ -55,10 +55,11 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	id := r.PathValue("id")
-	guest, ok := s.wakeGuest(ctx, w, id, token)
+	guest, done, ok := s.wakeGuest(ctx, w, id, token)
 	if !ok {
 		return
 	}
+	defer done()
 	if req.TimeoutSeconds > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutSeconds)*time.Second)
@@ -111,10 +112,11 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 func (s *Server) killExec(ctx context.Context, id, token string, pid uint32) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), execKillWait)
 	defer cancel()
-	sock, err := s.mgr.WakeAgentSocket(ctx, id, token)
+	sock, done, err := s.mgr.WakeAgentSocket(ctx, id, token)
 	if err != nil {
 		return err
 	}
+	defer done()
 	guest, err := s.dialer.DialSilkd(ctx, sock)
 	if err != nil {
 		return err
