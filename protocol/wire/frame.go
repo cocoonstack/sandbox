@@ -27,6 +27,9 @@ const (
 	// PortWriteChunk keeps a port data frame (payload x4/3 base64 plus envelope) well under MaxFrame.
 	PortWriteChunk = 1 << 20
 
+	// maxSkipDepth bounds a tag scan past nested siblings; wire values nest two deep.
+	maxSkipDepth = 16
+
 	// GitBranch.Action values (silkd's GitBranchOp).
 	BranchList     = "list"
 	BranchCreate   = "create"
@@ -796,21 +799,27 @@ func scanTag(line []byte, key string) (string, error) {
 	return "", nil
 }
 
-// skipValue consumes one JSON value, recursing into containers.
+// skipValue consumes one JSON value; a guest cannot grow the host stack with nesting.
 func skipValue(dec *json.Decoder) error {
-	tok, err := dec.Token()
-	if err != nil {
-		return err
-	}
-	if d, ok := tok.(json.Delim); ok && (d == '{' || d == '[') {
-		for dec.More() {
-			if err = skipValue(dec); err != nil {
-				return err
+	depth := 0
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if d, ok := tok.(json.Delim); ok {
+			if d == '{' || d == '[' {
+				if depth++; depth > maxSkipDepth {
+					return fmt.Errorf("value nested deeper than %d", maxSkipDepth)
+				}
+			} else {
+				depth--
 			}
 		}
-		_, err = dec.Token()
+		if depth == 0 {
+			return nil
+		}
 	}
-	return err
 }
 
 func decodeAs[T any](line []byte) (*T, error) {
