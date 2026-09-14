@@ -110,6 +110,8 @@ func (f *fakeEngine) DialGuestPort(context.Context, string, uint16) (net.Conn, e
 
 func (f *fakeEngine) InstallCACert(context.Context, string, []byte) error { return nil }
 
+func (f *fakeEngine) MarkNICLocked(context.Context, string) error { return nil }
+
 func (f *fakeEngine) Warmup(context.Context, string, []string) error { return nil }
 
 func (f *fakeEngine) DiskAttach(_ context.Context, vmName string, spec engine.VolumeSpec) error {

@@ -73,6 +73,7 @@ const (
 	vmStateCreating = "creating"
 
 	caSidecarSuffix     = ".cafp"
+	nicSidecarSuffix    = ".nic"
 	warmupSidecarSuffix = ".warmup"
 )
 
@@ -116,6 +117,7 @@ type Engine interface {
 	Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error
 	DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error)
 	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error
+	MarkNICLocked(ctx context.Context, vsockSocket string) error
 	Warmup(ctx context.Context, vsockSocket string, argv []string) error
 	DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error
 	MountVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error

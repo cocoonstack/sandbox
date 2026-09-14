@@ -75,7 +75,7 @@ func (m *Manager) armEgress(ctx context.Context, sb *types.Sandbox) error {
 
 // lockEgressNIC nft-locks the egress-lane NIC and records the tap for unlock.
 func (m *Manager) lockEgressNIC(ctx context.Context, sb *types.Sandbox) error {
-	if !m.lockEgress || sb.Key.Net != types.NetEgress {
+	if !m.locksNIC(sb.Key) {
 		return nil
 	}
 	tap := sb.TAP
@@ -92,6 +92,21 @@ func (m *Manager) lockEgressNIC(ctx context.Context, sb *types.Sandbox) error {
 	m.egressTaps[sb.ID] = tap
 	m.mu.Unlock()
 	return nil
+}
+
+// markLockedNIC tells the guest its NIC is nft-locked; silkd cannot see the hook from inside.
+func (m *Manager) markLockedNIC(ctx context.Context, key types.PoolKey, sock string) error {
+	if !m.locksNIC(key) {
+		return nil
+	}
+	if err := m.eng.MarkNICLocked(ctx, sock); err != nil {
+		return fmt.Errorf("mark nic locked: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) locksNIC(key types.PoolKey) bool {
+	return m.lockEgress && key.Net == types.NetEgress
 }
 
 func (m *Manager) tapOf(ctx context.Context, vmName string) (string, error) {

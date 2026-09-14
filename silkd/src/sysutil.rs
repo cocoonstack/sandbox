@@ -15,7 +15,7 @@ static NSS_LOCK: Mutex<()> = Mutex::new(());
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// Forwarded into every exec: the loopback proxy relay is the no-NIC lane's only way out.
+/// Forwarded into every exec that has no direct route: the loopback proxy relay is its only way out.
 const FORWARDED: [&str; 6] = [
     "http_proxy",
     "https_proxy",
@@ -62,14 +62,14 @@ pub fn signal_pid(pid: u32, sig: i32) {
     }
 }
 
-/// The environment every exec starts from; the proxy snapshot rides only on the no-network lane.
+/// The environment every exec starts from; the proxy snapshot rides only where nothing routes directly.
 pub fn base_env() -> Vec<(&'static str, &'static str)> {
-    compose_env(crate::net::has_egress(), proxy_vars())
+    compose_env(crate::net::routes_directly(), proxy_vars())
 }
 
-/// Applies base_env's lane rule to an env-inheriting child: an own NIC drops the proxy variables.
+/// Applies base_env's lane rule to an env-inheriting child: a routed NIC drops the proxy variables.
 pub fn align_proxy_env(cmd: &mut Command) {
-    align_proxy_env_for(cmd, crate::net::has_egress());
+    align_proxy_env_for(cmd, crate::net::routes_directly());
 }
 
 /// Resolves a username via getpwnam and de-escalates the command onto it.
@@ -212,8 +212,8 @@ fn send_signal(target: libc::pid_t, sig: i32) {
     unsafe { libc::kill(target, sig) };
 }
 
-fn align_proxy_env_for(cmd: &mut Command, nic: bool) {
-    if !nic {
+fn align_proxy_env_for(cmd: &mut Command, direct: bool) {
+    if !direct {
         return;
     }
     for key in FORWARDED {
@@ -221,7 +221,10 @@ fn align_proxy_env_for(cmd: &mut Command, nic: bool) {
     }
 }
 
-fn compose_env<'a>(nic: bool, proxy: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a str)> {
+fn compose_env<'a>(
+    direct: bool,
+    proxy: &'a [(&'static str, String)],
+) -> Vec<(&'static str, &'a str)> {
     let mut env = vec![
         (
             "PATH",
@@ -229,7 +232,7 @@ fn compose_env<'a>(nic: bool, proxy: &'a [(&'static str, String)]) -> Vec<(&'sta
         ),
         ("TERM", "xterm-256color"),
     ];
-    if !nic {
+    if !direct {
         env.extend(proxy.iter().map(|(k, v)| (*k, v.as_str())));
     }
     env
@@ -319,25 +322,25 @@ mod tests {
     }
 
     #[test]
-    fn base_env_forwards_nothing_when_a_nic_is_present() {
+    fn base_env_forwards_nothing_when_the_nic_routes() {
         let proxy = snapshot_proxy(|_| Some("http://127.0.0.1:3128".to_string()));
         let env = compose_env(true, &proxy);
         assert!(
             !env.iter().any(|(k, _)| *k == "http_proxy"),
-            "proxy variables must stay off a lane with its own NIC",
+            "proxy variables must stay off a lane that routes directly",
         );
     }
 
     #[test]
-    fn align_proxy_env_scrubs_only_on_a_nic_lane() {
+    fn align_proxy_env_scrubs_only_where_the_nic_routes() {
         let removed = |cmd: &Command| cmd.as_std().get_envs().filter(|(_, v)| v.is_none()).count();
-        let mut with_nic = Command::new("true");
-        align_proxy_env_for(&mut with_nic, true);
-        assert_eq!(removed(&with_nic), FORWARDED.len());
+        let mut direct = Command::new("true");
+        align_proxy_env_for(&mut direct, true);
+        assert_eq!(removed(&direct), FORWARDED.len());
 
-        let mut without_nic = Command::new("true");
-        align_proxy_env_for(&mut without_nic, false);
-        assert_eq!(removed(&without_nic), 0);
+        let mut relayed = Command::new("true");
+        align_proxy_env_for(&mut relayed, false);
+        assert_eq!(removed(&relayed), 0);
     }
 
     #[test]

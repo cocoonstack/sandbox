@@ -191,6 +191,9 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 	if err != nil {
 		return err
 	}
+	if err = m.markLockedNIC(ctx, key, sock); err != nil {
+		return err
+	}
 	caBaked := m.poolIntercepts(key)
 	if caBaked {
 		if err = m.eng.InstallCACert(ctx, sock, m.egressCA.CertPEM()); err != nil {
@@ -208,6 +211,9 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 		return err
 	}
 	if err := m.writeGoldenCASidecar(final, caBaked); err != nil {
+		return err
+	}
+	if err := writeGoldenSidecar(final+nicSidecarSuffix, nicStamp(m.locksNIC(key))); err != nil {
 		return err
 	}
 	return writeGoldenSidecar(final+warmupSidecarSuffix, warmupStamp(warmup))
@@ -245,6 +251,7 @@ func (m *Manager) writeGoldenCASidecar(final string, caBaked bool) error {
 func (m *Manager) adoptGolden(p *pool) {
 	g := filepath.Join(m.goldensDir(), p.hash)
 	if dirExists(g) && m.goldenCAMatches(g, m.poolEgress[p.key].Intercepts()) &&
+		goldenSidecarMatches(g+nicSidecarSuffix, nicStamp(m.locksNIC(p.key))) &&
 		goldenSidecarMatches(g+warmupSidecarSuffix, warmupStamp(m.poolWarmups[p.key])) {
 		p.goldenDir = g
 	}
@@ -302,24 +309,32 @@ func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir
 // provision creates one claim-ready VM, cloning from a golden when available.
 func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden string) (*types.Sandbox, error) {
 	if golden == "" {
-		sb, err := m.provisionVM(ctx, key, coldProbeTimeout, func(name string) (types.VMRecord, error) {
-			return m.eng.RunCold(ctx, name, key)
-		})
-		if err != nil {
-			return nil, err
-		}
-		// a pre-golden cold claim must trust the root, or intercepted hosts fail TLS for its life
-		if m.poolIntercepts(key) {
-			if err := m.eng.InstallCACert(ctx, sb.VsockSocket, m.egressCA.CertPEM()); err != nil {
-				m.destroy(ctx, sb.VMName)
-				return nil, fmt.Errorf("install egress ca: %w", err)
-			}
-		}
-		return sb, nil
+		return m.provisionCold(ctx, key)
 	}
 	return m.provisionVM(ctx, key, claimProbeTimeout, func(name string) (types.VMRecord, error) {
 		return m.eng.Clone(ctx, golden, name, key)
 	})
+}
+
+func (m *Manager) provisionCold(ctx context.Context, key types.PoolKey) (*types.Sandbox, error) {
+	sb, err := m.provisionVM(ctx, key, coldProbeTimeout, func(name string) (types.VMRecord, error) {
+		return m.eng.RunCold(ctx, name, key)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := m.markLockedNIC(ctx, key, sb.VsockSocket); err != nil {
+		m.destroy(ctx, sb.VMName)
+		return nil, err
+	}
+	// a pre-golden cold claim must trust the root, or intercepted hosts fail TLS for its life
+	if m.poolIntercepts(key) {
+		if err := m.eng.InstallCACert(ctx, sb.VsockSocket, m.egressCA.CertPEM()); err != nil {
+			m.destroy(ctx, sb.VMName)
+			return nil, fmt.Errorf("install egress ca: %w", err)
+		}
+	}
+	return sb, nil
 }
 
 func (m *Manager) provisionVM(ctx context.Context, key types.PoolKey, probeTimeout time.Duration, create vmProvisioner) (*types.Sandbox, error) {
@@ -487,4 +502,11 @@ func goldenSidecarMatches(path, stamp string) bool {
 
 func warmupStamp(argv []string) string {
 	return strings.Join(argv, "\x00")
+}
+
+func nicStamp(locked bool) string {
+	if locked {
+		return "locked"
+	}
+	return ""
 }

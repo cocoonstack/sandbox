@@ -1,7 +1,11 @@
 //! Guest network-lane detection: the egress lane has a device-backed NIC, the none lane only virtual interfaces.
 
+use std::path::Path;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicI8, Ordering};
+
+/// Marker the host writes when it has nft-locked the guest's NIC; on the root filesystem so a guest reboot keeps it.
+const NIC_LOCKED_MARK: &str = "/etc/silkd-nic-locked";
 
 static LANE_OVERRIDE: AtomicI8 = AtomicI8::new(-1);
 
@@ -25,6 +29,11 @@ pub fn has_egress() -> bool {
         entries.flatten().any(|e| e.path().join("device").exists())
     });
     *DEVICE_BACKED
+}
+
+/// Reports whether execs route directly: a NIC the host has not locked.
+pub fn routes_directly() -> bool {
+    has_egress() && !Path::new(NIC_LOCKED_MARK).exists()
 }
 
 /// Lane override for tests: set_var would race every concurrent getenv.
