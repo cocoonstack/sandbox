@@ -203,7 +203,7 @@ impl Io {
             c => c,
         };
         // the marker must be unforgeable: the shell runs untrusted code that could fake a sentinel.
-        let marker = format!("__SILK_{}__", sysutil::rand_token());
+        let marker = format!("__SILK_{}__", sysutil::rand_token()?);
         self.cmd_buf.clear();
         // `{ …; } </dev/null` keeps cd/export in this shell and stops a stdin reader eating the printf.
         let _ = write!(

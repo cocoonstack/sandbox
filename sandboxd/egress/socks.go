@@ -76,6 +76,10 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 		return
 	}
 	defer func() { _ = upstream.Close() }()
+	if !p.track(upstream) {
+		return
+	}
+	defer p.untrack(upstream)
 	if socksReply(conn, socksGranted) != nil {
 		return
 	}

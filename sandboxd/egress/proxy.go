@@ -72,7 +72,7 @@ type Proxy struct {
 	leafMu sync.Mutex
 	leaves map[string]*tls.Certificate
 
-	// conns tracks hijacked tunnels and SOCKS5 connections, which http.Server.Close does not reach.
+	// conns tracks both halves of every tunnel and SOCKS5 connection, which http.Server.Close does not reach.
 	connMu sync.Mutex
 	conns  map[net.Conn]struct{}
 	closed bool
@@ -176,6 +176,10 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = upstream.Close() }()
+	if !p.track(upstream) {
+		return
+	}
+	defer p.untrack(upstream)
 	client, _, err := http.NewResponseController(w).Hijack()
 	if err != nil {
 		http.Error(w, "egress: connection cannot be hijacked", http.StatusInternalServerError)
@@ -235,6 +239,7 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 		prepare(out)
 	}
 	out.RequestURI = ""
+	out.Close = false // the guest's Connection: close is its own; the upstream pool keeps the conn
 	stripHop(out.Header)
 	ev.Injected = p.inject(rule, out.Header)
 	p.record(ev)

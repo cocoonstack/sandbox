@@ -152,12 +152,18 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	}
 	id, tenant := sb.ID, sb.Tenant
 	evCtx := context.WithoutCancel(ctx)
-	proxy := egress.New(id, tenant, policy, m.egressSecrets, m.egressCA, m.dial,
-		func(ev egress.Event) { m.recordEgress(evCtx, id, tenant, ev) }, sb)
 	m.mu.Lock()
 	el := m.egressPrebound[sb.VMName]
 	delete(m.egressPrebound, sb.VMName)
+	intercepts := m.poolEgress[sb.Key].Intercepts()
 	m.mu.Unlock()
+	// only an intercepting pool pays for the TLS transport and leaf cache
+	ca := m.egressCA
+	if !intercepts {
+		ca = nil
+	}
+	proxy := egress.New(id, tenant, policy, m.egressSecrets, ca, m.dial,
+		func(ev egress.Event) { m.recordEgress(evCtx, id, tenant, ev) }, sb)
 	if el != nil && (reached(el.ln) || (el.socks != nil && reached(el.socks))) {
 		el.close()
 		el = nil
@@ -171,8 +177,12 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	el.srv = &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}
 	el.proxy = proxy
 	m.mu.Lock()
+	displaced := m.egressListeners[id]
 	m.egressListeners[id] = el
 	m.mu.Unlock()
+	if displaced != nil {
+		displaced.close()
+	}
 	go func() { _ = el.srv.Serve(el.ln) }()
 	if el.socks != nil {
 		go proxy.ServeSOCKS(evCtx, el.socks)
@@ -322,7 +332,7 @@ func newEgressDialer(allow []netip.Prefix) *net.Dialer {
 		}
 		ip, err := netip.ParseAddr(host)
 		if err != nil {
-			return fmt.Errorf("egress: unresolved address %q", host)
+			return fmt.Errorf("egress: unresolved address %q: %w", host, err)
 		}
 		ip = ip.Unmap()
 		if nat64Range.Contains(ip) {

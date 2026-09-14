@@ -17,23 +17,26 @@ real microVM sandboxes with no glue code.
 }
 ```
 
-Flags fall back to `SANDBOXD_ADDR`, `SANDBOXD_TOKEN`, `SANDBOXD_TEMPLATE`.
-Build: `cd mcp && go build -o sandbox-mcp .`
+Flags fall back to `SANDBOXD_ADDR`, `SANDBOXD_TOKEN`, `SANDBOXD_TEMPLATE`,
+then to `127.0.0.1:7777` and `rt:24.04`. Build: `cd mcp && go build -o
+sandbox-mcp .`
 
 ## Tools
+
+Every tool call is capped at 5 minutes.
 
 | tool | what it does |
 |---|---|
 | `create_sandbox` | claim a microVM and return its id plus deadline; optional `template`, `net` (`none` default, or `egress`), `size` (`small` default, `medium`, `large`, `xlarge`, `2xlarge`) and `ttl_seconds` (0 means one hour); warm claims take milliseconds, nothing renews the deadline |
-| `exec` | run a shell command to completion (5-minute cap); returns stdout, stderr and the exit code; a hibernated sandbox wakes transparently |
+| `exec` | run a shell command to completion; returns stdout, stderr and the exit code, each stream keeping its first 1 MiB with `truncated` set past that; a cut-off or dropped run returns the output collected so far next to an `error` field; a hibernated sandbox wakes transparently |
 | `spawn` | start a command detached and return its pid; output goes to a 256 KiB ring buffer that `logs` replays |
 | `ps` | list tracked processes (exec, spawn, pty) with state, exit code and start time |
 | `logs` | replay up to 256 KiB of a tracked process's newest whole stdout/stderr chunks (+ exit code once ended) |
 | `kill` | signal a tracked process (0 = SIGKILL); an exited process is a no-op success |
-| `write_file` / `read_file` / `list_dir` | atomic whole-file write (parent must exist); whole-file text read (invalid UTF-8 replaced, missing path is an error); one-level listing of `{name, kind, size}` entries |
-| `fork` | clone into N children (1 to the node's `max_fork_count`, default 16) carrying exact memory + disk state, all-or-nothing; the parent keeps running |
+| `write_file` / `read_file` / `list_dir` | atomic whole-file write (parent must exist); whole-file text read of a regular file up to 1 MiB (a larger file, a directory or a device is an error, invalid UTF-8 replaced, missing path is an error); one-level listing of `{name, kind, size}` entries |
+| `fork` | clone into N children (1 to the node's `max_fork_count`, default 16) carrying exact memory + disk state, all-or-nothing; the parent keeps running and each child lives one hour |
 | `checkpoint` | capture full state without stopping; returns a `checkpoint_id` that can be branched repeatedly |
-| `branch_checkpoint` | claim a fresh sandbox from a checkpoint's captured moment |
+| `branch_checkpoint` | claim a fresh sandbox from a checkpoint's captured moment; it lives one hour |
 | `list_checkpoints` / `delete_checkpoint` | checkpoint lifecycle |
 | `hibernate` | snapshot + stop, freeing memory while keeping id, files and processes; the next call that reaches the guest wakes it |
 | `promote` | publish the sandbox as a named template on its node; re-promoting replaces it |

@@ -24,7 +24,9 @@ exposing any part of a deployment beyond a single trusted host.
   guest can lie to its own client about its own state, but gains nothing
   toward the host, siblings, or the network beyond its lanes.
 - **What a compromised guest can reach.** On the none lane: nothing but
-  vsock — the relay back to its own client and the guarded-egress proxy.
+  vsock — the relay back to its own client and the guarded-egress proxy,
+  plus, on a policy that opts into `socks5`, a SOCKS5 door to the same
+  allow-list that carries arbitrary TCP rather than HTTP only.
   On the egress lane: the same vsock paths plus a NIC whose every
   guest-initiated packet except IPv4 broadcast DHCP is dropped by an nftables lock in the host
   root netns ([egress](egress.md)); the lock is fail-closed and applied

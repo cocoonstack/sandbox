@@ -39,7 +39,7 @@ type Store interface {
 	// PublishDigested applies Publish semantics and returns the export digest.
 	PublishDigested(ctx context.Context, staging, id string) (string, error)
 	// Fetch materializes a record's export locally and returns a release to hold until the clone ends.
-	Fetch(ctx context.Context, id string) (dir string, meta []byte, digest string, release func(), err error)
+	Fetch(ctx context.Context, id string) (dir string, meta []byte, digest string, err error)
 	// ReadMeta returns a record's metadata, or an error when the record does not exist.
 	ReadMeta(ctx context.Context, id string) ([]byte, error)
 	// Metas lists the metadata of every record in this instance's id namespace.

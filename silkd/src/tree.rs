@@ -12,6 +12,8 @@ use tokio::process::Command;
 use crate::proto::{self, ErrorKind, Response, err_frame};
 use crate::sysutil;
 
+const STDERR_CAP: usize = 16 * 1024;
+
 /// Extracts a client tar stream into `dest`, creating it; a stream failure leaves `dest` unchanged.
 pub async fn push<R, W>(mut reader: R, w: &mut W, dest: String) -> io::Result<()>
 where
@@ -154,17 +156,16 @@ fn merge_tree(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Reads a child's stderr, capped at CAP bytes; tar's first error is the useful one.
+/// Reads a child's stderr up to STDERR_CAP; tar's first error is the useful one.
 async fn drain(mut stderr: tokio::process::ChildStderr) -> String {
-    const CAP: usize = 16 * 1024;
     let mut out = Vec::new();
     let mut buf = [0u8; 4096];
     while let Ok(n) = stderr.read(&mut buf).await {
         if n == 0 {
             break;
         }
-        if out.len() < CAP {
-            out.extend_from_slice(&buf[..(n.min(CAP - out.len()))]);
+        if out.len() < STDERR_CAP {
+            out.extend_from_slice(&buf[..(n.min(STDERR_CAP - out.len()))]);
         }
     }
     String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())

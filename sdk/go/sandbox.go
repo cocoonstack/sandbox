@@ -109,9 +109,8 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	defer done()
 
 	if cmd.Stdin == nil {
-		if err = conn.Send(wire.StdinClose{}); err != nil {
-			return 0, fmt.Errorf("close stdin: %w", err)
-		}
+		// a guest that already answered and closed fails this send; the frames it sent still come back below
+		_ = conn.Send(wire.StdinClose{})
 	} else {
 		go pumpStdin(conn, cmd.Stdin)
 	}
@@ -195,8 +194,7 @@ func (s *Sandbox) Close() error {
 	return apiError("release", resp)
 }
 
-// dial opens one relayed silkd connection and arms ctx cancellation to close
-// it; the returned cleanup must be deferred. One connection carries one RPC.
+// dial opens one relayed silkd connection, closed by ctx cancellation or the returned cleanup; one connection carries one RPC.
 func (s *Sandbox) dial(ctx context.Context) (*silkd.Conn, func(), error) {
 	raw, err := s.c.dialAgent(ctx, s.owner, s.ID, s.token)
 	if err != nil {

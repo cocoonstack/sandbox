@@ -139,9 +139,7 @@ func (c *Client) DeleteTemplate(ctx context.Context, template string, opts ...Op
 	if err != nil || len(redirect) == 0 {
 		return err
 	}
-	// The entry node doesn't hold the template but gossip named its owners.
-	// The retry carries no_redirect, mirroring the claim protocol: the owner
-	// answers for itself, never a second hop.
+	// gossip named the template's owners; no_redirect makes the owner answer for itself, never a second hop
 	u.Set(noRedirectQueryParam, "1")
 	if tryErr := tryEach(redirect, func(addr string) error {
 		_, retryErr := c.deleteTemplates(ctx, addr, u)
@@ -216,9 +214,7 @@ func (c *Client) roundTrip(ctx context.Context, method, addr, path string, body 
 	return c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
 }
 
-// doJSON issues one control-plane request and decodes a 200 reply into T;
-// any other status maps through apiError under verb. The shared plumbing
-// behind every decode-a-reply verb in this file and its siblings.
+// doJSON issues one control-plane request and decodes a 200 reply into T; any other status maps through apiError under verb.
 func doJSON[T any](ctx context.Context, c *Client, method, addr, path string, body io.Reader, bearer, verb string) (T, error) {
 	var out T
 	resp, err := c.roundTrip(ctx, method, addr, path, body, bearer)
@@ -256,10 +252,7 @@ func doNoContent(ctx context.Context, c *Client, method, addr, path string, body
 	return nil
 }
 
-// tryEach calls call against each candidate in turn, stopping at the first
-// success. An error for which retry is true moves on to the next candidate
-// and the last such error propagates; any other error returns at once. The
-// per-verb retry policy mirrors the Python SDK's _try_each.
+// tryEach walks candidates until call succeeds: an error retry accepts moves on (the last one propagates), any other returns at once.
 func tryEach(candidates []string, call func(addr string) error, retry func(error) bool) error {
 	var lastErr error
 	for _, addr := range candidates {
@@ -281,17 +274,7 @@ func retryMiss(err error) bool {
 	return !ok || he.Status == http.StatusNotFound
 }
 
-// retryAny retries a redirect candidate's failure unconditionally: one
-// candidate being wrong for the claim (no egress, a stale name) must not
-// stop the walk from reaching a candidate that would still succeed.
-func retryAny(error) bool { return true }
-
-// retryTransient reports whether an origin-fallback is worth the round-trip:
-// true for a transport failure, a miss (404), full (429), mid-heal (503), an
-// engine/proxy failure (500/502/504), or a mid-rotation 401 (the origin
-// proved the token valid by issuing the redirect). A served 4xx like a bad
-// request, a forbidden token, or an egress conflict is definitive: the
-// origin would fail the same way.
+// retryTransient reports whether origin can still answer differently; a served 4xx outside the list would fail there the same way.
 func retryTransient(err error) bool {
 	he, ok := errors.AsType[*APIError](err)
 	if !ok {
@@ -311,9 +294,7 @@ type claimEncoder func(noRedirect, requirePromoted bool) ([]byte, error)
 
 type claimPoster func(addr string, body []byte) (claimResponse, error)
 
-// claimFollow runs the claim protocol from origin: claim there, and on a
-// redirect re-encode with no_redirect and follow via redirectFallback. Only
-// the fallback error carries the verb — first-contact errors return raw.
+// claimFollow claims at origin and follows a redirect through redirectFallback; only the fallback error carries the verb.
 func claimFollow(origin, verb string, encode claimEncoder, claimAt claimPoster) (string, claimResponse, error) {
 	body, err := encode(false, false)
 	if err != nil {
@@ -338,14 +319,9 @@ func claimFollow(origin, verb string, encode claimEncoder, claimAt claimPoster) 
 	return addr, target, nil
 }
 
-// redirectFallback walks candidates via claimAt, retrying broadly (retryAny).
-// If every candidate is exhausted and the last failure was transient
-// (retryTransient), it gives origin one more no_redirect attempt — the node
-// that issued the redirect provisions or heals locally instead of leaving
-// the claim stuck on stale gossip. A definitive last failure (a bad request,
-// an auth rejection, a conflict) skips the fallback: origin would fail the
-// same way. A second-level redirect (a compliant server never sends one
-// once no_redirect is set) fails the candidate rather than being followed.
+// redirectFallback claims at every candidate with no_redirect; when the last failure was transient
+// (retryTransient) origin gets one more attempt, since it provisions or heals locally instead of
+// leaving the claim on stale gossip.
 func redirectFallback(origin string, candidates []string, claimAt func(addr string) (claimResponse, error)) (string, claimResponse, error) {
 	claimNoRedirect := func(target string) (claimResponse, error) {
 		cr, err := claimAt(target)
@@ -357,28 +333,21 @@ func redirectFallback(origin string, candidates []string, claimAt func(addr stri
 		}
 		return cr, nil
 	}
-
-	var won string
-	var cr claimResponse
-	tryErr := tryEach(candidates, func(addr string) error {
-		target, err := claimNoRedirect(addr)
-		if err != nil {
-			return err
+	var lastErr error
+	for _, addr := range candidates {
+		cr, err := claimNoRedirect(addr)
+		if err == nil {
+			return addr, cr, nil
 		}
-		won, cr = addr, target
-		return nil
-	}, retryAny)
-	if tryErr == nil {
-		return won, cr, nil
+		lastErr = err
 	}
-	if !retryTransient(tryErr) {
-		return "", claimResponse{}, fmt.Errorf("all redirect targets failed: %w", tryErr)
+	if !retryTransient(lastErr) {
+		return "", claimResponse{}, fmt.Errorf("all redirect targets failed: %w", lastErr)
 	}
 	cr, err := claimNoRedirect(origin)
 	if err != nil {
-		// Both halves matter to whoever reads this: the peers' failures say why
-		// the claim left the origin, the origin's says why coming back did not help.
-		return "", claimResponse{}, fmt.Errorf("all redirect targets failed, origin fallback failed: %w", errors.Join(tryErr, err))
+		// the peers' failures say why the claim left origin, origin's says why coming back did not help
+		return "", claimResponse{}, fmt.Errorf("all redirect targets failed, origin fallback failed: %w", errors.Join(lastErr, err))
 	}
 	return origin, cr, nil
 }

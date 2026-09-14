@@ -79,7 +79,7 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant 
 	id := store.TemplateID(key.Hash())
 	l := m.recLock(id)
 	l.Lock()
-	defer func() { l.Unlock(); m.recDone(id) }()
+	defer func() { l.Unlock(); m.recDoneEvict(id) }()
 	raw, err := m.tpls.ReadMeta(ctx, id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -149,7 +149,7 @@ func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, te
 	owner, cached := m.tplSet[id]
 	m.tplMu.Unlock()
 	if !cached {
-		// Only a shared-store template promoted elsewhere after startup.
+		// only a shared-store template promoted elsewhere after startup.
 		raw, err := m.tpls.ReadMeta(ctx, id)
 		if err != nil {
 			return false
@@ -260,16 +260,18 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant s
 	id := store.TemplateID(key.Hash())
 	l := m.recLock(id)
 	l.RLock()
-	dir, meta, digest, release, err := m.tpls.Fetch(ctx, id)
+	dir, meta, digest, err := m.tpls.Fetch(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		l.RUnlock()
+		m.recDoneEvict(id)
+		return goldenResolution{release: func() {}}, nil
+	}
 	if err != nil {
 		l.RUnlock()
 		m.recDone(id)
-		if errors.Is(err, store.ErrNotFound) {
-			return goldenResolution{release: func() {}}, nil
-		}
 		return goldenResolution{release: func() {}}, err
 	}
-	cleanup := func() { release(); l.RUnlock(); m.recDone(id) }
+	cleanup := func() { l.RUnlock(); m.recDone(id) }
 	var rec templateRecord
 	if err := json.Unmarshal(meta, &rec); err != nil {
 		cleanup()

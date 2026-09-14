@@ -8,14 +8,15 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from collections.abc import Callable
 
 from cocoonsandbox import Client, Sandbox
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-# a socket inactivity bound, not a wall clock; the tool description states it
-CALL_TIMEOUT = 300.0
+# one call's wall clock over the claim, the dial and the command; the tool description states it
+CALL_TIMEOUT = 300
 
 
 class ExecInput(BaseModel):
@@ -73,7 +74,7 @@ class CocoonToolkit:
                 "Returns stdout; a non-empty stderr is appended as a 'stderr:' "
                 "line and a non-zero status as an 'exit code: N' line; a "
                 "command that prints nothing and exits 0 returns '(no output)'. "
-                "The call is cut off after 5 minutes without output. "
+                "The call is cut off after 5 minutes and the reply says so. "
                 "Files and installed packages persist across calls; environment "
                 "variables and the working directory do not.",
                 ExecInput,
@@ -136,16 +137,27 @@ class CocoonToolkit:
         )
 
     def _exec(self, command: str, cwd: str = "") -> str:
+        deadline = time.monotonic() + CALL_TIMEOUT
         out: list[bytes] = []
         errs: list[bytes] = []
-        code = self.sandbox().run(["sh", "-c", command], cwd=cwd, on_stdout=out.append, on_stderr=errs.append)
+        tail = ""
+        try:
+            sb = self.sandbox()
+            timeout = deadline - time.monotonic()
+            if timeout <= 0:
+                raise TimeoutError("the claim used the whole call budget")
+            code = sb.run(["sh", "-c", command], cwd=cwd, on_stdout=out.append, on_stderr=errs.append, timeout=timeout)
+            if code != 0:
+                tail = f"exit code: {code}"
+        except TimeoutError:
+            tail = f"cut off after {CALL_TIMEOUT}s"
         stdout = b"".join(out).decode(errors="replace")
         stderr = b"".join(errs).decode(errors="replace")
         result = stdout
         if stderr:
             result += ("\n" if result else "") + "stderr: " + stderr
-        if code != 0:
-            result += ("\n" if result else "") + f"exit code: {code}"
+        if tail:
+            result += ("\n" if result else "") + tail
         return result or "(no output)"
 
     def _write_file(self, path: str, content: str) -> str:

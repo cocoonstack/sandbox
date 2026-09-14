@@ -2,10 +2,14 @@ package sandbox
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
+	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
 )
+
+var errLimit = errors.New("limit")
 
 func TestFilesRoundTrip(t *testing.T) {
 	sb := fakeSandbox(t)
@@ -49,6 +53,23 @@ func TestFilesRoundTrip(t *testing.T) {
 	}
 	if _, err := sb.ReadFile(ctx, "/work/b.txt"); err == nil {
 		t.Error("read of removed file succeeded")
+	}
+}
+
+func TestReadFileToStopsWhenTheWriterRefuses(t *testing.T) {
+	sb := fakeSandbox(t)
+	ctx := t.Context()
+	body := bytes.Repeat([]byte("x"), 3*wire.BulkChunk)
+	if err := sb.WriteFile(ctx, "/big", body, nil); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var whole bytes.Buffer
+	if err := sb.ReadFileTo(ctx, "/big", &whole); err != nil || whole.Len() != len(body) {
+		t.Fatalf("ReadFileTo: %d bytes, %v; want the whole file", whole.Len(), err)
+	}
+	limit := &limitWriter{max: wire.BulkChunk}
+	if err := sb.ReadFileTo(ctx, "/big", limit); !errors.Is(err, errLimit) {
+		t.Fatalf("ReadFileTo past the limit = %v, want the writer's error", err)
 	}
 }
 
@@ -113,4 +134,16 @@ func fakeSandbox(t *testing.T) *Sandbox {
 	t.Helper()
 	fake := silkdtest.NewFake(t.TempDir())
 	return testSandbox(t, newAgentServer(t, fake.ServeConn))
+}
+
+type limitWriter struct {
+	n, max int
+}
+
+func (w *limitWriter) Write(p []byte) (int, error) {
+	if w.n+len(p) > w.max {
+		return 0, errLimit
+	}
+	w.n += len(p)
+	return len(p), nil
 }

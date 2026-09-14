@@ -3,7 +3,8 @@
 A cluster is a set of sandboxd nodes joined through a
 [hashicorp/memberlist](https://github.com/hashicorp/memberlist) SWIM mesh.
 Gossip carries only placement hints — per-pool warm counts, promoted-template
-hashes, available volume names, and each node's data-plane address.
+hashes, available volume names, each node's data-plane address, and a digest
+of the cluster-invariant config.
 Per-sandbox state never leaves its owning node, so a stale view costs at most
 one extra redirect, never correctness. A single node with no seeds is a valid
 mesh of one.
@@ -65,7 +66,8 @@ membership is node-local and deliberately excluded from the cluster config
 digest. Nodes gossip only their currently available catalog names: host paths
 and access lists never leave the node. After config load the set appears on the
 next gossip tick; later image distribution or removal is detected the same way.
-The node epoch bumps only when the advertised name set changes.
+The node epoch bumps only when one of the gossiped sets — warm counts,
+template hashes, volume names — actually changes.
 
 A writable name (`writable: true`) still needs its catalog entry — name,
 access list, and the `writable` flag — declared identically on every node

@@ -255,8 +255,8 @@ func (c *Config) ClusterDigest(caFingerprint string) string {
 		names[i] = t.Name
 	}
 	slices.Sort(names)
-	if c.Mesh != nil && c.Mesh.ClusterKey != "" {
-		if key, err := base64.StdEncoding.DecodeString(c.Mesh.ClusterKey); err == nil {
+	if c.Mesh != nil {
+		if key, _ := c.Mesh.DecodedKey(); key != nil {
 			type auth struct{ Name, Token string }
 			tenants := make([]auth, len(c.Tenants))
 			for i, t := range c.Tenants {
@@ -274,7 +274,6 @@ func (c *Config) ClusterDigest(caFingerprint string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// guardsEgressLane counts any tenant policy, but only an egress-lane pool policy.
 func (c *Config) guardsEgressLane() bool {
 	return slices.ContainsFunc(c.Tenants, func(t TenantSpec) bool { return t.Egress != nil }) ||
 		slices.ContainsFunc(c.Pools, func(p PoolSpec) bool { return p.Net == types.NetEgress && p.Egress != nil })
@@ -291,7 +290,9 @@ func (c *Config) applyDefaults() {
 		c.RefillConcurrency = autoRefillConcurrency(runtime.NumCPU())
 	}
 	for i := range c.Pools {
-		c.Pools[i].Warm = cmp.Or(c.Pools[i].Warm, defaultWarm)
+		if c.Pools[i].Warm == 0 && c.Pools[i].WarmMax == 0 {
+			c.Pools[i].Warm = defaultWarm
+		}
 		c.Pools[i].PoolKey = c.Pools[i].Defaulted()
 	}
 	for i := range c.Volumes {
@@ -317,7 +318,6 @@ func (c *Config) validate() error {
 	if err := c.validateAttachment(); err != nil {
 		return err
 	}
-	// a CNI network's tap lives in the VM netns, unreachable from the root-netns nft lock.
 	if len(c.Networks) > 0 && c.guardsEgressLane() {
 		return fmt.Errorf("guarded egress needs a bridge lane, not a CNI network: the tap lives in the VM netns and cannot be locked")
 	}
@@ -409,8 +409,17 @@ func (c *Config) validateMesh() error {
 	if _, _, err := c.Mesh.ParsedBind(); err != nil {
 		return err
 	}
-	_, err := c.Mesh.DecodedKey()
-	return err
+	if _, err := c.Mesh.DecodedKey(); err != nil {
+		return err
+	}
+	host, _, err := net.SplitHostPort(c.AdvertiseAddr)
+	if err != nil {
+		return fmt.Errorf("advertise_addr: %w", err)
+	}
+	if ip, _ := netip.ParseAddr(host); host == "" || ip.IsUnspecified() {
+		return fmt.Errorf("advertise_addr %q is gossiped to peers and must name a routable host", c.AdvertiseAddr)
+	}
+	return nil
 }
 
 func (c *Config) validateEgress(secrets map[string]struct{}) error {
@@ -515,7 +524,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 	cfg := &Config{}
-	// Hand-edited file: a typo must fail load, not silently change policy.
+	// hand-edited file: a typo must fail load, not silently change policy.
 	if err := utils.DecodeStrictJSON(raw, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
@@ -545,7 +554,6 @@ func validatePolicy(p *egress.Policy, secrets map[string]struct{}) error {
 	return nil
 }
 
-// validateArchiveWindow requires archive_after past idle_hibernate, both non-negative.
 func validateArchiveWindow(idle, after, del int) error {
 	if after < 0 || del < 0 {
 		return fmt.Errorf("archive seconds must not be negative")

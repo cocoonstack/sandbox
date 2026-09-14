@@ -59,8 +59,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	s.relay(r.Context(), r.PathValue("id"), client, bufrw.Reader, guest)
 }
 
-// wakeGuest resolves the sandbox's agent socket, waking a hibernated VM first, and dials silkd;
-// on failure it has already answered the request. done ends the sandbox hold when the connection is over.
+// wakeGuest dials the sandbox's silkd, waking a hibernated VM first; on failure it has already answered the request.
 func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id, token string) (guest net.Conn, done func(), ok bool) {
 	sock, done, err := s.mgr.WakeAgentSocket(ctx, id, token)
 	switch {
@@ -155,6 +154,9 @@ func (t *auditTee) WriteTo(w io.Writer) (int64, error) {
 				return total, werr
 			}
 		}
+		if err == io.EOF {
+			return total, nil
+		}
 		if err != nil {
 			return total, err
 		}
@@ -179,6 +181,7 @@ func (t *auditTee) Read(p []byte) (int, error) {
 	t.buf = append(t.buf, chunk...)
 	if len(t.buf) > pool.AuditLineCap {
 		t.done = true // a frame this large is payload, not addressing
+		t.record(t.buf)
 		t.buf = nil
 	}
 	return n, err

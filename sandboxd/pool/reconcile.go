@@ -90,13 +90,12 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if snapsErr != nil {
 		logger.Warnf(ctx, "snapshot sweep skipped: %v", snapsErr)
 	} else {
-		var orphans []string
-		for _, snap := range snaps {
-			orphanHib := strings.HasPrefix(snap, hibernatePrefix) && !referenced[snap]
-			if orphanHib || strings.HasPrefix(snap, forkPrefix) || strings.HasPrefix(snap, goldenPrefix) {
-				orphans = append(orphans, snap)
+		orphans := slices.DeleteFunc(snaps, func(snap string) bool {
+			if strings.HasPrefix(snap, hibernatePrefix) {
+				return referenced[snap]
 			}
-		}
+			return !strings.HasPrefix(snap, forkPrefix) && !strings.HasPrefix(snap, goldenPrefix)
+		})
 		m.runBounded(ctx, len(orphans), func(ctx context.Context, i int) {
 			m.dropSnap(ctx, orphans[i])
 			logger.Infof(ctx, "removed orphan snapshot %s", orphans[i])
@@ -165,6 +164,10 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 	var quarantine []*types.Sandbox
 	for _, sb := range m.claimed {
 		sb.TouchAt(now)
+		// a hibernated or archived claim has no guest to serve; its wake arms the door
+		if sb.HibernateSnap != "" || sb.ArchiveCk != "" {
+			continue
+		}
 		if m.locksNIC(sb.Key) {
 			tap := m.readoptEgressTap(sb, live)
 			if tap == "" {

@@ -43,7 +43,7 @@ func (h *Healer) Pull(ctx context.Context, id, staging string, validate Validate
 		return store.ErrNotFound
 	}
 	budget := cmp.Or(h.budget, healBudget)
-	// A client hanging up must not abandon a started pull; the budget bounds it.
+	// a client hanging up must not abandon a started pull; the budget bounds it.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
 	defer cancel()
 	return h.pullFrom(ctx, id, staging, addrs, budget, validate)
@@ -53,7 +53,7 @@ func (h *Healer) pullFrom(ctx context.Context, id, staging string, addrs []strin
 	perOwner := budget / time.Duration(len(addrs))
 	var errs []error
 	for _, addr := range addrs {
-		// One peer's rejected or partial transfer must not linger into the next's.
+		// one peer's rejected or partial transfer must not linger into the next's.
 		if err := utils.RemoveDirEntries(staging, nil); err != nil {
 			return fmt.Errorf("reset staging: %w", err)
 		}

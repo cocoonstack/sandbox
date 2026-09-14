@@ -17,6 +17,7 @@ import (
 const (
 	protocolVersion = "2024-11-05"
 	execTimeout     = 5 * time.Minute
+	execOutputCap   = 1 << 20
 	defaultToolTTL  = time.Hour
 )
 
@@ -118,8 +119,11 @@ func (s *server) dispatch(ctx context.Context, req *rpcRequest) rpcResponse {
 		}
 		text, err := s.callTool(ctx, call.Name, call.Arguments)
 		if err != nil {
+			if text == "" {
+				text = err.Error()
+			}
 			return result(req.ID, map[string]any{
-				"content": []map[string]any{{"type": "text", "text": err.Error()}},
+				"content": []map[string]any{{"type": "text", "text": text}},
 				"isError": true,
 			})
 		}

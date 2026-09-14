@@ -36,7 +36,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	if err != nil {
 		return nil, err
 	}
-	// Holds belong to this path until finalize; past it the sandbox carries them.
+	// holds belong to this path until finalize; past it the sandbox carries them.
 	reserved := applied
 	defer func() { m.unreserveVolumes(reserved) }()
 	m.mu.Lock()
@@ -49,10 +49,10 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 		}
 	}
 	m.mu.Unlock()
+	m.kickRefill()
 	if sb == nil {
 		return nil, ErrNoWarm
 	}
-	m.kickRefill()
 	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs, applied); volumeErr != nil {
 		m.abortVolumeClaim(ctx, sb.VMName, &reserved)
 		return nil, volumeErr
@@ -136,17 +136,26 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 
 // releaseResolved re-checks under m.mu that sb is still the live claim: no double teardown.
 func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sandbox) error {
+	var marked string
 	m.mu.Lock()
-	if m.claimed[id] != sb {
+	for {
+		if m.claimed[id] != sb {
+			m.mu.Unlock()
+			return ErrUnknownSandbox
+		}
+		ck := sb.ArchiveCk
+		if ck == "" || ck == marked {
+			break
+		}
 		m.mu.Unlock()
-		return ErrUnknownSandbox
+		if markErr := m.markArchiveCk(ck); markErr != nil {
+			return fmt.Errorf("release %s: track archive checkpoint: %w", id, markErr)
+		}
+		marked = ck
+		m.mu.Lock()
 	}
 	snap, ck, vmName := sb.HibernateSnap, sb.ArchiveCk, sb.VMName
 	if ck != "" {
-		if markErr := m.markArchiveCk(ck); markErr != nil {
-			m.mu.Unlock()
-			return fmt.Errorf("release %s: track archive checkpoint: %w", id, markErr)
-		}
 		m.pendingCks[ck] = struct{}{}
 	}
 	delete(m.claimed, id)
@@ -169,7 +178,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		log.WithFunc("pool.releaseResolved").Errorf(ctx, saveErr, "persist release of %s", id)
 		return fmt.Errorf("release %s: %w", id, saveErr)
 	}
-	// Cleanup must survive the caller hanging up; the claim is already dropped.
+	// cleanup must survive the caller hanging up; the claim is already dropped.
 	ctx = context.WithoutCancel(ctx)
 	if ck != "" {
 		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
@@ -343,7 +352,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	var expired []victim
 	var dropped []string
 	for id, sb := range m.claimed {
-		// A zero deadline means no expiry (an archived claim kept forever).
+		// a zero deadline means no expiry (an archived claim kept forever).
 		if sb.Deadline.IsZero() || !now.After(sb.Deadline) {
 			continue
 		}

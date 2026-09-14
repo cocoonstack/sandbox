@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -49,6 +50,32 @@ func TestForwardAllowInjectsSecretAndOverwritesGuestHeader(t *testing.T) {
 	ev := recvEvent(t, events)
 	if ev.Decision != DecisionAllow || ev.Injected != "gh" || ev.Sandbox != "sb_1" || ev.Tenant != "acme" {
 		t.Errorf("audit event = %+v, want allow/gh/sb_1/acme", ev)
+	}
+}
+
+func TestRelayKeepsTheUpstreamConnForAClosingGuest(t *testing.T) {
+	closeSeen := make(chan bool, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		closeSeen <- r.Close
+		_, _ = io.WriteString(w, "hello")
+	}))
+	defer upstream.Close()
+	p := New("sb_1", "acme", Policy{Allow: []Rule{{Host: "api.internal"}}}, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://api.internal/x", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Close = true
+	resp, err := proxyClient(t, front.URL).Do(req)
+	if err != nil {
+		t.Fatalf("proxied GET: %v", err)
+	}
+	_ = resp.Body.Close()
+	if <-closeSeen {
+		t.Error("the guest's Connection: close reached the upstream hop")
 	}
 }
 
@@ -228,6 +255,26 @@ func TestCloseEndsSplicedTunnel(t *testing.T) {
 	}
 }
 
+func TestCloseEndsTunnelWhoseUpstreamStaysSilent(t *testing.T) {
+	var held holdCounter
+	p := New("sb_1", "", Policy{Allow: []Rule{{Host: "quiet.internal"}}}, nil, nil, fixedDial(silentServer(t)), nil, &held)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	conn := dialConnect(t, front.Listener.Addr().String(), "quiet.internal:443")
+	defer func() { _ = conn.Close() }()
+	if status := readStatus(t, bufio.NewReader(conn)); status != "HTTP/1.1 200 Connection Established" {
+		t.Fatalf("CONNECT status = %q, want 200 Connection Established", status)
+	}
+	if got := held.Load(); got != 1 {
+		t.Fatalf("holds = %d while the tunnel is up, want 1", got)
+	}
+
+	p.Close()
+
+	waitHolds(t, &held, 0)
+}
+
 func TestConnectDeniedIsTyped(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "echo.internal"}}}
 	p := New("sb_1", "acme", policy, nil, nil, fixedDial("127.0.0.1:1"), nil, nil)
@@ -384,6 +431,12 @@ func (f fakeSecrets) Header(name string) (string, string, bool) {
 	return hv[0], hv[1], ok
 }
 
+type holdCounter struct{ atomic.Int32 }
+
+func (h *holdCounter) Hold() { h.Add(1) }
+
+func (h *holdCounter) Unhold() { h.Add(-1) }
+
 func fixedDial(target string) DialFunc {
 	return func(ctx context.Context, network, _ string) (net.Conn, error) {
 		var d net.Dialer
@@ -448,6 +501,29 @@ func echoServer(t *testing.T) string {
 	return ln.Addr().String()
 }
 
+func silentServer(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen silent: %v", err)
+	}
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		close(done)
+		_ = ln.Close()
+	})
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, conn)
+		<-done
+		_ = conn.Close()
+	}()
+	return ln.Addr().String()
+}
+
 func recvEvent(t *testing.T, events <-chan Event) Event {
 	t.Helper()
 	select {
@@ -456,5 +532,16 @@ func recvEvent(t *testing.T, events <-chan Event) Event {
 	case <-time.After(2 * time.Second):
 		t.Fatalf("no audit event recorded")
 		return Event{}
+	}
+}
+
+func waitHolds(t *testing.T, held *holdCounter, want int32) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for held.Load() != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("holds = %d after proxy Close, want %d", held.Load(), want)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

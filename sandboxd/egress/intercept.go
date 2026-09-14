@@ -64,7 +64,8 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 func (p *Proxy) leafFor(host string) (*tls.Certificate, error) {
 	p.leafMu.Lock()
 	defer p.leafMu.Unlock()
-	if crt, ok := p.leaves[host]; ok && time.Now().Before(crt.Leaf.NotAfter.Add(-leafRenewBefore)) {
+	// a leaf clamped to the intermediate's own end has nothing to renew into
+	if crt, ok := p.leaves[host]; ok && (time.Now().Before(crt.Leaf.NotAfter.Add(-leafRenewBefore)) || !crt.Leaf.NotAfter.Before(p.ca.interCert.NotAfter)) {
 		return crt, nil
 	}
 	crt, err := p.ca.SignLeaf(host)

@@ -52,7 +52,7 @@ func run(addr, token, template, netShape string, wait time.Duration) error {
 	}
 	fmt.Printf("idle-hibernated then archived in %.1fs (local VM dropped)\n", elapsed.Seconds())
 
-	// The first access on an archived id is the cold wake: fetch the
+	// the first access on an archived id is the cold wake: fetch the
 	// checkpoint, provision a fresh local VM, keep the id/token.
 	wakeStart := time.Now()
 	got, err := sb.ReadFile(ctx, markerPath)

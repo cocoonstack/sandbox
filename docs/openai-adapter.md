@@ -32,15 +32,16 @@ pair over the sync [Python SDK](sdk-python.md), bridged with
 | SDK surface | cocoon |
 |---|---|
 | `create` | `Client.new` — one claimed sandbox per session |
-| session `exec` | `Sandbox.run` (stdout/stderr/exit) |
-| `read` / `write` | `Sandbox.read_file` / `write_file`; missing → `FileNotFoundError` |
+| session `exec` | `Sandbox.run` (stdout/stderr/exit); a per-call `timeout` is `run`'s wall clock and surfaces as `TimeoutError` |
+| `read` / `write` | `Sandbox.read_file` / `write_file`; a missing path on `read` → `FileNotFoundError` |
 | `persist_workspace` / `hydrate_workspace` | `Sandbox.pull` / `push` (tar) |
 | exposed port | `Sandbox.proxy_port` |
 | `delete` | `Sandbox.close` (release) |
-| `resume` | reattach by id + token from the serialized session state |
+| `resume` | reattach from the serialized session state: node address, api token, sandbox id, sandbox token, owner |
 
 `CocoonSandboxClientOptions` carries the node address, api token, template
-ref, network lane (`none`/`egress`), and TTL. The session state is
+ref, network lane (empty for the node's default, or `none`/`egress`), and
+TTL. The session state is
 JSON-serializable, so a run can be resumed against the same sandbox after a
 process restart. Requires Python 3.10+ (the Agents SDK floor); the
 underlying `cocoonsandbox` stays 3.9+.

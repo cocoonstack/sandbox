@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
@@ -49,6 +50,38 @@ func TestPtyEchoAndExit(t *testing.T) {
 	code, ok := pty.ExitCode()
 	if !ok || code != 0 {
 		t.Errorf("exit code %d ok=%v, want 0 true", code, ok)
+	}
+}
+
+func TestPtyReleasesTheRelayWhenTheShellExits(t *testing.T) {
+	released := make(chan struct{})
+	ts := newAgentServer(t, func(conn net.Conn) {
+		defer conn.Close()
+		r := bufio.NewReader(conn)
+		if _, err := r.ReadString('\n'); err != nil {
+			t.Errorf("read pty request: %v", err)
+			return
+		}
+		_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n"+
+			`{"type":"stdout","data":"aGk="}`+"\n"+`{"type":"exit","code":3}`+"\n")
+		_, _ = r.ReadByte()
+		close(released)
+	})
+	pty, err := testSandbox(t, ts).OpenPty(t.Context(), PtyOpts{Cols: 80, Rows: 24})
+	if err != nil {
+		t.Fatalf("OpenPty: %v", err)
+	}
+	out, err := io.ReadAll(pty)
+	if err != nil || string(out) != "hi" {
+		t.Fatalf("read %q, %v; want hi to EOF", out, err)
+	}
+	if code, ok := pty.ExitCode(); !ok || code != 3 {
+		t.Errorf("exit code %d ok=%v, want 3 true", code, ok)
+	}
+	select {
+	case <-released:
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay connection still open after the shell exited")
 	}
 }
 

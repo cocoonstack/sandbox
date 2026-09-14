@@ -1,7 +1,7 @@
 //! Filesystem verbs: the vsock boundary is the trust boundary, so paths are taken as-is.
 
 use std::io;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -9,7 +9,7 @@ use tokio::fs;
 use tokio::io::{AsyncBufRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
-use crate::proto::{self, DirEntry, FileInfo, FileKind, Response, err_frame};
+use crate::proto::{self, DirEntry, ErrorKind, FileInfo, FileKind, Response, err_frame};
 
 /// Entries per `entries` frame; a worst-case 1.6KiB entry keeps a full batch under MAX_FRAME.
 pub const LIST_BATCH: usize = 4096;
@@ -48,10 +48,25 @@ where
     proto::write_frame(w, &Response::Done).await
 }
 
-/// Streams the file at `path` back as `data` frames, then `done`.
+/// Streams the regular file at `path` back as `data` frames, then `done`.
 pub async fn read<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<()> {
-    let mut file = match fs::File::open(&path).await {
-        Ok(f) => f,
+    // O_NONBLOCK keeps a writerless FIFO from parking the open; the kind check runs on the opened fd, so a swap
+    // between check and open cannot turn the read into a device stream
+    let opened = tokio::task::spawn_blocking(move || {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&path)?;
+        let regular = file.metadata()?.is_file();
+        Ok::<_, io::Error>((file, regular))
+    })
+    .await
+    .map_err(io::Error::other)?;
+    let mut file = match opened {
+        Ok((file, true)) => fs::File::from_std(file),
+        Ok((_, false)) => {
+            return proto::error_frame(w, ErrorKind::BadRequest, "not a regular file").await;
+        }
         Err(e) => return err_frame(w, &e, "open").await,
     };
     if let Err(e) = proto::stream_data_frames(&mut file, w).await? {
@@ -62,7 +77,7 @@ pub async fn read<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
 
 /// Lists a directory as `entries` frames terminated by `done`, batched under the frame cap.
 pub async fn list<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<()> {
-    // One blocking-pool dispatch for the whole directory, not one per entry.
+    // one blocking-pool dispatch for the whole directory, not one per entry.
     let (tx, mut rx) = mpsc::channel::<Vec<DirEntry>>(2);
     let scan = tokio::task::spawn_blocking(move || scan_dir(&path, &tx));
     let mut failed = None;

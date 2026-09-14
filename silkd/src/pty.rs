@@ -61,11 +61,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
             return crate::proto::err_frame(out, &e, "dup pty slave").await;
         }
     }
-    // SAFETY: make_controlling_tty runs only async-signal-safe syscalls, which
-    // is the contract for a post-fork pre_exec hook.
-    unsafe {
-        cmd.pre_exec(|| sysutil::make_controlling_tty());
-    }
+    sysutil::adopt_controlling_tty(&mut cmd);
     cmd.kill_on_drop(true);
 
     let mut child = match cmd.spawn() {
@@ -225,10 +221,8 @@ async fn drain<W: AsyncWrite + Unpin>(
 
 /// Publishes the terminal state once so attachers always see an Exit.
 fn finish(proc: &Arc<Proc>, code: i32) {
-    if proc.exit_code().is_none() {
-        proc.mark_exited(code);
-        proc.emit(&Chunk::Exit(code));
-    }
+    proc.mark_exited(code);
+    proc.emit(&Chunk::Exit(code));
 }
 
 async fn write_all(master: &Master, mut data: &[u8]) -> std::io::Result<()> {

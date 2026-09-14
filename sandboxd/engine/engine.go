@@ -190,7 +190,7 @@ func (e *Engine) SnapshotList(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	// An empty store prints a human line ("No snapshots found."), not JSON.
+	// an empty store prints a human line ("No snapshots found."), not JSON.
 	out = bytes.TrimSpace(out)
 	if len(out) == 0 || out[0] != '[' {
 		return nil, nil

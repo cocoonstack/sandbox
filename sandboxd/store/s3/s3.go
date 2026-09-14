@@ -110,23 +110,23 @@ func (s *Store) PublishDigested(ctx context.Context, staging, id string) (string
 	return s.publish(ctx, staging, id, true)
 }
 
-func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, string, func(), error) {
+func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, string, error) {
 	meta, digest, err := s.readMeta(ctx, id)
 	if err != nil {
-		return "", nil, "", nil, err
+		return "", nil, "", err
 	}
 	gen := filepath.Join(s.staging, "cache", id, store.ExportGenHash(meta))
 	export := filepath.Join(gen, store.ExportDir)
 	if _, statErr := os.Stat(export); statErr == nil {
-		return export, meta, digest, func() {}, nil
+		return export, meta, digest, nil
 	}
 	_, err, _ = s.fetches.Do(gen, func() (any, error) {
 		return nil, s.populate(ctx, id, meta, gen)
 	})
 	if err != nil {
-		return "", nil, "", nil, err
+		return "", nil, "", err
 	}
-	return export, meta, digest, func() {}, nil
+	return export, meta, digest, nil
 }
 
 func (s *Store) ReadMeta(ctx context.Context, id string) ([]byte, error) {
@@ -179,7 +179,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	// Keep the commit marker so a failed export cleanup remains discoverable on retry.
+	// keep the commit marker so a failed export cleanup remains discoverable on retry.
 	keys = slices.DeleteFunc(keys, func(key string) bool { return key == metaKey })
 	if err := s.deleteKeys(ctx, keys); err != nil {
 		return err
@@ -315,7 +315,7 @@ func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string
 		return err
 	}
 	if len(keys) == 0 {
-		// Records published before per-generation prefixes.
+		// records published before per-generation prefixes.
 		exportPrefix = s.key(id, store.ExportDir) + "/"
 		if keys, err = s.list(ctx, exportPrefix); err != nil {
 			return err

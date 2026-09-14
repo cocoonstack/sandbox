@@ -2,7 +2,10 @@
 
 The `desktop` flavor boots a GNOME session (Ubuntu session on Xvfb, 1920x1080)
 with the OSWorld guest server on guest loopback `5000` and the OSWorld app
-set (Google Chrome, LibreOffice, GIMP, VLC). A computer-use agent or the
+set (Google Chrome, LibreOffice, GIMP, VLC, Thunderbird, VS Code, Zotero,
+Obsidian, Shotcut, FreeCAD, WPS Office, MuseScore, REAPER and the CAD, EDA
+and teaching tools the task set drives — the full list is in
+[`os-image/desktop/README.md`](../os-image/desktop/README.md)). A computer-use agent or the
 [OSWorld](https://github.com/xlang-ai/OSWorld-V2) harness claims it and
 drives the desktop through the same HTTP contract the OSWorld AWS and
 docker guests speak — screenshot, AT-SPI accessibility tree, PyAutoGUI
@@ -24,12 +27,14 @@ up a few seconds later — poll `GET /screenshot` until it returns 200.
   with an [egress policy](egress.md) when tasks visit the OSWorld mocked
   websites or the real web; the session's browsers reach the web through the
   relay. Thunderbird's mail policy is pinned to the SOCKS5 door, so a pool that
-  runs mail tasks sets `"socks5": true` in its policy. `net=egress` on a
+  runs mail tasks sets `"socks5": true` in its policy alongside at least one
+  allow rule that admits CONNECT (a bare-host rule, or one whose `methods`
+  names it); the policy is rejected at load otherwise. `net=egress` on a
   guarded bridge works the same way: the session's proxy setup waits for the
   host's lane verdict in `/etc/silkd-lane` and follows it, so the locked NIC
   costs the desktop nothing (a CNI-backed lane is told `direct` and routes).
-- **Size**: `2xlarge` (8 CPU / 16G) — the t3.xlarge class the OSWorld AWS
-  image runs on; the idle session is ~0.5 GB anonymous memory with
+- **Size**: `2xlarge` (8 CPU / 16G) — the memory the OSWorld AWS image's
+  workload is sized for; the idle session is ~0.5 GB anonymous memory with
   gnome-shell around 290 MB RSS, and the headroom is for the apps.
 - **Template**: `ghcr.io/cocoonstack/sandbox/desktop:24.04` — `base:24.04`
   plus GNOME on Xvfb, `osworld-server` at a pinned commit, Chrome from
@@ -50,9 +55,10 @@ Both bind guest loopback; reach them with `DialPort`/`ProxyPort`.
 OSWorld's `DesktopEnv` drives VMs through a `Provider` whose
 `get_ip_address` may return `localhost:<server>:<chromium>:<vnc>:<vlc>`
 with per-environment ports — the shape its docker provider uses. A cocoon
-provider claims one sandbox per environment, serves the four guest ports on
-loopback listeners with `proxy_port`, and implements `revert_to_snapshot` as
-release + fresh claim, so a warm pool is the snapshot revert:
+provider (kept with the harness, not in this repository) claims one sandbox
+per environment, serves the four guest ports on loopback listeners with
+`proxy_port`, and implements `revert_to_snapshot` as release + fresh claim,
+so a warm pool is the snapshot revert:
 
 ```
 DesktopEnv(provider_name="cocoon") ── localhost:<p5000> ── sandboxd ── desktop VM :5000
@@ -88,3 +94,8 @@ Configure it with `SANDBOXD_ADDR`, `SANDBOXD_TOKEN`, `COCOON_TEMPLATE`
   to a bridge after the claim) reaches silkd's execs at once but the session
   only through a re-claim.
 - x86_64 only.
+
+The hardware acceptance is `e2e/cmd/desktopsmoke`: claim → `/screenshot` and
+the AT-SPI tree over the relay → a PyAutoGUI click echoed by
+`/cursor_position` → a checkpoint/branch of the warmed desktop on the none
+lane, a fetch through the session's proxy environment on the egress lane.

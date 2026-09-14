@@ -39,7 +39,7 @@ func (m *Manager) archiveEnabledFor(key types.PoolKey) bool {
 
 // archiveOnce checkpoints hibernated claims idle past their archive threshold and drops their VM.
 func (m *Manager) archiveOnce(ctx context.Context) {
-	if !m.archiveEnabled {
+	if !m.archiveEnabled.Load() {
 		return
 	}
 	if !m.archiveSweep.CompareAndSwap(false, true) {
@@ -79,7 +79,7 @@ func (m *Manager) archiveOnce(ctx context.Context) {
 
 // archive swaps a hibernated claim's backing from local VM to a store checkpoint.
 func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
-	// Must finish even if the sweep ctx is canceled, or the record diverges from the store.
+	// must finish even if the sweep ctx is canceled, or the record diverges from the store.
 	ctx = context.WithoutCancel(ctx)
 	defer m.untrack(m.archiving, sb.ID)
 	m.mu.Lock()
@@ -94,7 +94,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	m.pendingCks[ckID] = struct{}{}
 	m.mu.Unlock()
 	defer m.untrack(m.pendingCks, ckID)
-	// A hibernated source is copied from its wake image, so no VM starts.
+	// a hibernated source is copied from its wake image, so no VM starts.
 	ck, srcSnap, err := m.publishCheckpoint(ctx, sb, ckID, "archive", sb.Tenant, true)
 	if err != nil {
 		return err
@@ -119,12 +119,16 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
-		// Roll back so memory matches the still-durable hibernated record; drop the orphan ck.
+		// roll back so memory matches the still-durable hibernated record; drop the orphan ck.
 		m.mu.Lock()
-		sb.ArchiveCk = ""
-		sb.HibernateSnap, sb.VsockSocket, sb.VMName = snap, sock, vmName
-		sb.Deadline = prevDeadline
-		rb := m.store.set(sb)
+		var rb claimSnapshot
+		// a Release that landed meanwhile already deleted the claim; re-setting it would resurrect it
+		if m.claimed[sb.ID] == sb {
+			sb.ArchiveCk = ""
+			sb.HibernateSnap, sb.VsockSocket, sb.VMName = snap, sock, vmName
+			sb.Deadline = prevDeadline
+			rb = m.store.set(sb)
+		}
 		m.mu.Unlock()
 		sb.Transition.Unlock()
 		m.recommit(ctx, rb)
@@ -134,7 +138,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	// disarm under Transition so a wake right after the release is not clobbered by a late disarm
 	m.disarmEgress(sb.ID, true)
 	sb.Transition.Unlock()
-	// Committed: the store ck is authoritative now; reclaim the local footprint.
+	// committed: the store ck is authoritative now; reclaim the local footprint.
 	m.destroy(ctx, vmName)
 	m.dropSnap(ctx, snap)
 	m.counters.archives.Add(1)
@@ -144,7 +148,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 
 // wakeArchived restores an archived claim into a fresh local VM; caller holds Transition.
 func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, error) {
-	// Egress never archives; a corrupt archived egress claim must fail closed.
+	// egress never archives; a corrupt archived egress claim must fail closed.
 	if sb.Key.Net == types.NetEgress {
 		return "", fmt.Errorf("wake %s: egress lane cannot resume from archive", sb.ID)
 	}
@@ -162,7 +166,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 			m.recDone(ck)
 		}
 	}()
-	dir, _, _, release, err := m.ckpts.Fetch(ctx, ck)
+	dir, _, _, err := m.ckpts.Fetch(ctx, ck)
 	if errors.Is(err, store.ErrNotFound) {
 		return "", ErrUnknownSandbox // record disagrees with the store
 	}
@@ -170,7 +174,6 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		return "", fmt.Errorf("wake %s: fetch archive: %w", sb.ID, err)
 	}
 	built, err := m.provision(ctx, sb.Key, dir)
-	release()
 	if err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
@@ -186,7 +189,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		}
 		return "", fmt.Errorf("wake %s: persist claims", sb.ID)
 	}
-	// The pre-commit marker keeps a failed delete retryable after the journal update.
+	// the pre-commit marker keeps a failed delete retryable after the journal update.
 	if delErr := m.ckpts.Delete(ctx, ck); delErr != nil {
 		log.WithFunc("pool.wakeArchived").Warnf(ctx, "delete consumed archive ck %s: %v", ck, delErr)
 	} else {
@@ -222,8 +225,11 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
 		m.mu.Lock()
-		sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.Deadline = "", "", ck, deadline
-		rb := m.store.set(sb)
+		var rb claimSnapshot
+		if m.claimed[sb.ID] == sb {
+			sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.Deadline = "", "", ck, deadline
+			rb = m.store.set(sb)
+		}
 		m.mu.Unlock()
 		m.recommit(ctx, rb)
 		log.WithFunc("pool.commitWake").Warnf(ctx, "persist claims: %v", err)

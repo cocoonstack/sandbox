@@ -44,6 +44,7 @@ func (w *Watcher) Err() error {
 // closed channel keeps it from blocking on a consumer that stopped reading.
 func (w *Watcher) drain(ctx context.Context, conn *silkd.Conn) {
 	defer close(w.events)
+	defer w.stop()
 	for {
 		resp, err := recv(ctx, conn)
 		if err != nil {

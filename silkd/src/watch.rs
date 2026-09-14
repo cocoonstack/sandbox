@@ -46,13 +46,13 @@ where
     loop {
         tokio::select! {
             n = rx.recv_many(&mut batch, EVENT_BATCH) => {
-                // Only overflow drops the sender mid-watch; the buffered prefix is already out.
+                // only overflow drops the sender mid-watch; the buffered prefix is already out.
                 if n == 0 {
                     return proto::error_frame(w, ErrorKind::Internal, OVERFLOW_MESSAGE).await;
                 }
                 let terminal = batch.iter().position(|f| matches!(f, Response::Error { .. }));
                 let upto = terminal.map_or(batch.len(), |i| i + 1);
-                // A failed write is the disconnect the EOF arm can lose the select to.
+                // a failed write is the disconnect the EOF arm can lose the select to.
                 let sent = proto::write_frames(w, &mut buf, &batch[..upto]).await;
                 batch.clear();
                 if sent.is_err() || terminal.is_some() {

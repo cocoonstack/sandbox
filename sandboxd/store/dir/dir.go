@@ -81,28 +81,28 @@ func (d *Store) PublishDigested(ctx context.Context, staging, id string) (string
 	return digest, nil
 }
 
-func (d *Store) Fetch(ctx context.Context, id string) (string, []byte, string, func(), error) {
+func (d *Store) Fetch(ctx context.Context, id string) (string, []byte, string, error) {
 	meta, err := d.ReadMeta(ctx, id)
 	if err != nil {
-		return "", nil, "", nil, err
+		return "", nil, "", err
 	}
 	dir := filepath.Join(d.root, id, store.ExportGen(meta))
 	if _, statErr := os.Stat(dir); errors.Is(statErr, fs.ErrNotExist) {
 		dir = filepath.Join(d.root, id, store.ExportDir)
 		switch _, legacyErr := os.Stat(dir); {
 		case errors.Is(legacyErr, fs.ErrNotExist):
-			return "", nil, "", nil, store.ErrNotFound
+			return "", nil, "", store.ErrNotFound
 		case legacyErr != nil:
-			return "", nil, "", nil, legacyErr
+			return "", nil, "", legacyErr
 		}
 	} else if statErr != nil {
-		return "", nil, "", nil, statErr
+		return "", nil, "", statErr
 	}
 	digest, err := os.ReadFile(filepath.Join(d.root, id, digestName(meta))) //nolint:gosec // id pinned by the instance idRe
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return "", nil, "", nil, fmt.Errorf("read digest: %w", err)
+		return "", nil, "", fmt.Errorf("read digest: %w", err)
 	}
-	return dir, meta, string(digest), func() {}, nil
+	return dir, meta, string(digest), nil
 }
 
 func (d *Store) ReadMeta(_ context.Context, id string) ([]byte, error) {
@@ -195,7 +195,7 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 	switch {
 	case errors.Is(statErr, fs.ErrNotExist):
 		stagedExport := filepath.Join(staging, store.ExportDir)
-		// Make the generation fresh before a peer can observe it without committed meta.
+		// make the generation fresh before a peer can observe it without committed meta.
 		if err := os.Chtimes(stagedExport, now, now); err != nil { //nolint:gosec // our own staging dir
 			return err
 		}
@@ -213,7 +213,7 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 		if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
 			return readErr
 		}
-		// A sweep may already have selected an expired path for removal.
+		// a sweep may already have selected an expired path for removal.
 		if time.Since(genInfo.ModTime()) >= generationGrace {
 			return fmt.Errorf("generation %s expired before commit; retry after sweep", filepath.Base(genDir))
 		}
@@ -225,7 +225,7 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 		_ = d.sweepGenerations(id)
 		return os.RemoveAll(staging)
 	}
-	// Age the previous current generation from supersession, not publication.
+	// age the previous current generation from supersession, not publication.
 	if err := touchCurrentGeneration(final, now); err != nil {
 		return err
 	}
@@ -263,7 +263,7 @@ func (d *Store) sweepGenerations(id string) (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, metaFile.Close()) }()
-	// The open file pins one inode across a concurrent meta rename.
+	// the open file pins one inode across a concurrent meta rename.
 	meta, err := io.ReadAll(metaFile)
 	if err != nil {
 		return err

@@ -41,6 +41,9 @@ func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string
 
 // hibernateLocked is Hibernate's body; the caller holds sb.Transition.
 func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error {
+	if sb.ArchiveCk != "" {
+		return nil // already off the node
+	}
 	if hasAppliedVolumes(sb) {
 		return ErrVolumeCapture
 	}
@@ -97,7 +100,7 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		m.dropSnap(ctx, snap)
 		return ErrUnknownSandbox
 	}
-	// The VM is hibernated either way, so the billing window closes here.
+	// the VM is hibernated either way, so the billing window closes here.
 	m.recordHibernate(ctx, sb)
 	m.disarmEgress(sb.ID, true)
 	if err != nil {
@@ -161,6 +164,10 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 		log.WithFunc("pool.wakeResolved").Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 	}
 	if m.disarmIfReleased(sb) {
+		if err == nil {
+			m.dropStale(ctx, sb)
+			m.dropSnap(ctx, snap)
+		}
 		return "", ErrUnknownSandbox
 	}
 	if err != nil {
@@ -176,7 +183,7 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 
 // idleOnce hibernates claims idle past their pool's (or the node's) threshold.
 func (m *Manager) idleOnce(ctx context.Context) {
-	if !m.idleEnabled {
+	if !m.idleEnabled.Load() {
 		return
 	}
 	if !m.idleSweep.CompareAndSwap(false, true) {

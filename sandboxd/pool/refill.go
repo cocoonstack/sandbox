@@ -260,7 +260,6 @@ func (m *Manager) adoptGolden(p *pool) {
 	}
 }
 
-// goldenCAMatches reports whether a golden's baked-CA state fits the pool.
 func (m *Manager) goldenCAMatches(final string, caNeeded bool) bool {
 	if !caNeeded {
 		return goldenSidecarMatches(final+caSidecarSuffix, "")
@@ -285,8 +284,12 @@ func (m *Manager) exportGolden(ctx context.Context, snap, final string) error {
 	return os.Rename(tmp, final)
 }
 
-// sourceSnap picks the snapshot to export a claimed sandbox from, with its cleanup.
+// sourceSnap picks the snapshot to export a claimed sandbox from, with its cleanup; the caller holds sb.Transition.
 func (m *Manager) sourceSnap(ctx context.Context, sb *types.Sandbox) (string, func(), error) {
+	// archive() clears VMName under the same lock, so this is the check that cannot race it
+	if sb.ArchiveCk != "" {
+		return "", nil, ErrArchived
+	}
 	if sb.HibernateSnap != "" {
 		return sb.HibernateSnap, func() {}, nil
 	}

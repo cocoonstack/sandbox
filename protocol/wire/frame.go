@@ -27,6 +27,9 @@ const (
 	// PortWriteChunk keeps a port data frame (payload x4/3 base64 plus envelope) well under MaxFrame.
 	PortWriteChunk = 1 << 20
 
+	// maxSkipDepth bounds a tag scan past nested siblings; wire values nest two deep.
+	maxSkipDepth = 16
+
 	// GitBranch.Action values (silkd's GitBranchOp).
 	BranchList     = "list"
 	BranchCreate   = "create"
@@ -99,9 +102,7 @@ var (
 		"data_end":       decodeReq[DataEnd],
 	}
 
-	// responseDecoders maps each type tag to a decoder. Two-stage dispatch is
-	// required because the same key differs in shape across variants (info's
-	// procs is a count, ps's procs is a list).
+	// responseDecoders dispatches on the type tag first: one key differs in shape across variants.
 	responseDecoders = map[string]respDecoder{
 		"started":           decodeResp[Started],
 		"stdout":            fastBulk("stdout", decodeResp[Stdout], func(d []byte) Response { return &Stdout{Data: d} }),
@@ -146,10 +147,7 @@ type respPtr[T any] interface {
 	Response
 }
 
-// B64 carries request payload bytes. It exists because silkd's deserializer
-// requires a base64 string and rejects null — which is exactly what
-// encoding/json emits for a nil []byte. Decoding needs no counterpart:
-// []byte-kinded types already base64-decode by default.
+// B64 carries request payload bytes; a nil slice marshals as "" because silkd rejects null.
 type B64 []byte
 
 func (b B64) MarshalJSON() ([]byte, error) {
@@ -416,8 +414,7 @@ type GitPull struct {
 
 func (GitPull) Op() string { return "git_pull" }
 
-// GitBranch lists, creates, deletes, or checks out a branch. Action is
-// list|create|delete|checkout ("op" is reserved by the frame tag).
+// GitBranch lists, creates, deletes, or checks out a branch; Action carries the verb because "op" is the frame tag.
 type GitBranch struct {
 	Path   string `json:"path"`
 	Action string `json:"action"`
@@ -796,21 +793,27 @@ func scanTag(line []byte, key string) (string, error) {
 	return "", nil
 }
 
-// skipValue consumes one JSON value, recursing into containers.
+// skipValue consumes one JSON value; a guest cannot grow the host stack with nesting.
 func skipValue(dec *json.Decoder) error {
-	tok, err := dec.Token()
-	if err != nil {
-		return err
-	}
-	if d, ok := tok.(json.Delim); ok && (d == '{' || d == '[') {
-		for dec.More() {
-			if err = skipValue(dec); err != nil {
-				return err
+	depth := 0
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if d, ok := tok.(json.Delim); ok {
+			if d == '{' || d == '[' {
+				if depth++; depth > maxSkipDepth {
+					return fmt.Errorf("value nested deeper than %d", maxSkipDepth)
+				}
+			} else {
+				depth--
 			}
 		}
-		_, err = dec.Token()
+		if depth == 0 {
+			return nil
+		}
 	}
-	return err
 }
 
 func decodeAs[T any](line []byte) (*T, error) {

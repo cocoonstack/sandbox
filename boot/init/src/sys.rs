@@ -5,7 +5,7 @@ use std::io;
 use std::ptr;
 use std::time::Duration;
 
-/// nosuid|nodev|noexec for the kernel API filesystems.
+/// Mount flags for the kernel API filesystems.
 pub const MNT_SECURE: libc::c_ulong = libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC;
 
 pub fn mount(

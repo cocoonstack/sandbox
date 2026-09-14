@@ -15,7 +15,7 @@ var socksGreeting = []byte{socksVersion, 1, socksNoAuth}
 func TestSocksAllowTunnels(t *testing.T) {
 	echo := echoServer(t)
 	events := make(chan Event, 4)
-	_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, fixedDial(echo), events)
+	_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, fixedDial(echo), events, nil)
 
 	conn, reply := socksExchange(t, addr, socksGreeting, socksNameRequest("echo.internal", 443))
 	if reply[1] != socksGranted {
@@ -54,7 +54,7 @@ func TestSocksDecisionMirrorsConnect(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			events := make(chan Event, 4)
-			p, socksAddr := socksProxy(t, tt.policy, tt.ca, fixedDial(echoServer(t)), events)
+			p, socksAddr := socksProxy(t, tt.policy, tt.ca, fixedDial(echoServer(t)), events, nil)
 			front := httptest.NewServer(p)
 			defer front.Close()
 
@@ -95,7 +95,7 @@ func TestSocksRefusesWhatItCannotServe(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			events := make(chan Event, 4)
-			_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "*"}}}, nil, fixedDial("127.0.0.1:1"), events)
+			_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "*"}}}, nil, fixedDial("127.0.0.1:1"), events, nil)
 			_, reply := socksExchange(t, addr, tt.greeting, tt.request)
 			if string(reply[:2]) != string(tt.want) {
 				t.Errorf("reply = %v, want prefix %v", reply, tt.want)
@@ -111,7 +111,7 @@ func TestSocksRefusesWhatItCannotServe(t *testing.T) {
 
 func TestSocksIPv4TargetMatchesLiteralRule(t *testing.T) {
 	events := make(chan Event, 4)
-	_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "127.0.0.1"}}}, nil, fixedDial(echoServer(t)), events)
+	_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "127.0.0.1"}}}, nil, fixedDial(echoServer(t)), events, nil)
 	request := []byte{socksVersion, socksConnect, 0, socksAtypIPv4, 127, 0, 0, 1, 1, 187}
 	_, reply := socksExchange(t, addr, socksGreeting, request)
 	if reply[1] != socksGranted {
@@ -123,7 +123,7 @@ func TestSocksIPv4TargetMatchesLiteralRule(t *testing.T) {
 }
 
 func TestCloseEndsSocksTunnelAndHandshake(t *testing.T) {
-	p, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, fixedDial(echoServer(t)), nil)
+	p, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, fixedDial(echoServer(t)), nil, nil)
 	tunnel, reply := socksExchange(t, addr, socksGreeting, socksNameRequest("echo.internal", 443))
 	if reply[1] != socksGranted {
 		t.Fatalf("reply code = %#x, want granted", reply[1])
@@ -142,9 +142,25 @@ func TestCloseEndsSocksTunnelAndHandshake(t *testing.T) {
 	}
 }
 
+func TestCloseEndsSocksTunnelWhoseUpstreamStaysSilent(t *testing.T) {
+	var held holdCounter
+	p, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "quiet.internal"}}}, nil, fixedDial(silentServer(t)), nil, &held)
+	_, reply := socksExchange(t, addr, socksGreeting, socksNameRequest("quiet.internal", 443))
+	if reply[1] != socksGranted {
+		t.Fatalf("reply code = %#x, want granted", reply[1])
+	}
+	if got := held.Load(); got != 1 {
+		t.Fatalf("holds = %d while the tunnel is up, want 1", got)
+	}
+
+	p.Close()
+
+	waitHolds(t, &held, 0)
+}
+
 func TestSocksPortRuleGatesTheTunnel(t *testing.T) {
 	events := make(chan Event, 4)
-	_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "mail.internal", Ports: []uint16{993}}}}, nil, fixedDial(echoServer(t)), events)
+	_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "mail.internal", Ports: []uint16{993}}}}, nil, fixedDial(echoServer(t)), events, nil)
 
 	conn, reply := socksExchange(t, addr, socksGreeting, socksNameRequest("mail.internal", 993))
 	defer func() { _ = conn.Close() }()
@@ -167,7 +183,7 @@ func TestSocksPortRuleGatesTheTunnel(t *testing.T) {
 
 func TestSocksPortZeroIsDeniedEvenByABareRule(t *testing.T) {
 	events := make(chan Event, 4)
-	_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "mail.internal"}}}, nil, fixedDial(echoServer(t)), events)
+	_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "mail.internal"}}}, nil, fixedDial(echoServer(t)), events, nil)
 	conn, reply := socksExchange(t, addr, socksGreeting, socksNameRequest("mail.internal", 0))
 	defer func() { _ = conn.Close() }()
 	if reply[1] != socksDenied {
@@ -178,13 +194,13 @@ func TestSocksPortZeroIsDeniedEvenByABareRule(t *testing.T) {
 	}
 }
 
-func socksProxy(t *testing.T, policy Policy, ca *CA, dial DialFunc, events chan Event) (*Proxy, string) {
+func socksProxy(t *testing.T, policy Policy, ca *CA, dial DialFunc, events chan Event, holder Holder) (*Proxy, string) {
 	t.Helper()
 	var audit func(Event)
 	if events != nil {
 		audit = func(ev Event) { events <- ev }
 	}
-	p := New("sb_1", "acme", policy, nil, ca, dial, audit, nil)
+	p := New("sb_1", "acme", policy, nil, ca, dial, audit, holder)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen socks: %v", err)

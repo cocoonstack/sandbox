@@ -68,8 +68,7 @@ func (c *Client) Sandboxes(ctx context.Context) ([]SandboxSummary, error) {
 	return reply.Sandboxes, nil
 }
 
-// peersOrErr fetches the node addresses, surfacing a discovery failure. It reads
-// /v1/peers (tenant-accessible), so it works under a tenant token.
+// peersOrErr reads /v1/peers, which a tenant token may call too, surfacing a discovery failure.
 func (c *Client) peersOrErr(ctx context.Context) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, peersTimeout)
 	defer cancel()

@@ -68,7 +68,7 @@ func LoadCA(rootCertPEM, interCertPEM, interKeyPEM []byte) (*CA, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate leaf key: %w", err)
 	}
-	// Fingerprint the whole file: CertPEM bakes it verbatim.
+	// fingerprint the whole file: CertPEM bakes it verbatim.
 	sum := sha256.Sum256(rootCertPEM)
 	return &CA{
 		rootPEM:   rootCertPEM,
@@ -93,7 +93,7 @@ func (c *CA) SignLeaf(host string) (*tls.Certificate, error) {
 		return nil, err
 	}
 	now := time.Now()
-	// Guests reject a chain whose leaf outlives its intermediate.
+	// guests reject a chain whose leaf outlives its intermediate.
 	notAfter := now.Add(leafValidity)
 	if notAfter.After(c.interCert.NotAfter) {
 		notAfter = c.interCert.NotAfter

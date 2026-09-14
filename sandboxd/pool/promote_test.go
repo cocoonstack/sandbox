@@ -33,11 +33,10 @@ func TestPromoteThenClaimClonesFromTemplate(t *testing.T) {
 	if gotDigest == "" {
 		t.Fatal("Promote returned an empty content digest")
 	}
-	golden, _, _, release, err := m.tpls.Fetch(t.Context(), store.TemplateID(key.Hash()))
+	golden, _, _, err := m.tpls.Fetch(t.Context(), store.TemplateID(key.Hash()))
 	if err != nil {
 		t.Fatalf("template export missing: %v", err)
 	}
-	release()
 
 	child, err := claimAny(t.Context(), m, key, 0)
 	if err != nil {
@@ -166,6 +165,36 @@ func TestDeleteTemplate(t *testing.T) {
 	}
 	if len(eng.colds) != before+1 {
 		t.Errorf("colds %v, want a cold boot after the golden vanished", eng.colds)
+	}
+}
+
+func TestTemplateRecordLockEvictsWithTheRecord(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 0})
+	parent := mustClaim(t, m, testKey)
+	key := types.PoolKey{Template: "tpl:evict", Net: testKey.Net, Size: testKey.Size}
+	id := store.TemplateID(key.Hash())
+	base := lockCount(m)
+
+	if _, err := claimAny(t.Context(), m, key, 0); err != nil {
+		t.Fatalf("Claim of an unpromoted key: %v", err)
+	}
+	if hasRecLock(m, id) {
+		t.Error("recLocks kept an entry for a template that was never promoted")
+	}
+	if _, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, key.Template, ""); err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	if !hasRecLock(m, id) {
+		t.Error("recLocks dropped the entry of a live template")
+	}
+	if err := m.DeleteTemplate(t.Context(), key, ""); err != nil {
+		t.Fatalf("DeleteTemplate: %v", err)
+	}
+	if hasRecLock(m, id) {
+		t.Error("recLocks retained a lock for the deleted template")
+	}
+	if got := lockCount(m); got != base {
+		t.Errorf("recLocks grew %d->%d over claim, promote and delete, want no net growth", base, got)
 	}
 }
 

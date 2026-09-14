@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -145,7 +146,7 @@ func (s *Server) killExec(ctx context.Context, id, token string, pid uint32) err
 }
 
 func collectExec(guest net.Conn) (resp ExecResponse, pid uint32, err error) {
-	var stdout, stderr []byte
+	var stdout, stderr strings.Builder
 	sc := wire.NewFrameScanner(guest)
 	for sc.Scan() {
 		frame, err := wire.DecodeResponse(sc.Bytes())
@@ -156,17 +157,17 @@ func collectExec(guest net.Conn) (resp ExecResponse, pid uint32, err error) {
 		case *wire.Started:
 			pid = f.PID
 		case *wire.Stdout:
-			if len(stdout)+len(stderr)+len(f.Data) > execOutputCap {
+			if stdout.Len()+stderr.Len()+len(f.Data) > execOutputCap {
 				return ExecResponse{}, pid, errExecOutputCap
 			}
-			stdout = append(stdout, f.Data...)
+			stdout.Write(f.Data)
 		case *wire.Stderr:
-			if len(stdout)+len(stderr)+len(f.Data) > execOutputCap {
+			if stdout.Len()+stderr.Len()+len(f.Data) > execOutputCap {
 				return ExecResponse{}, pid, errExecOutputCap
 			}
-			stderr = append(stderr, f.Data...)
+			stderr.Write(f.Data)
 		case *wire.Exit:
-			return ExecResponse{ExitCode: f.Code, Stdout: string(stdout), Stderr: string(stderr)}, 0, nil
+			return ExecResponse{ExitCode: f.Code, Stdout: stdout.String(), Stderr: stderr.String()}, 0, nil
 		case *wire.ErrorResp:
 			return ExecResponse{}, 0, f
 		}

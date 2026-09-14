@@ -21,7 +21,7 @@ the stop line.
 | **warm pool hit** | ownership transfer of a pre-booted, probed VM; no VM lifecycle work on the request path |
 | **clone from golden** | restore a full VM (memory + disk) from a golden snapshot, reseed entropy/machine identity, re-probe readiness |
 | **cold boot** | boot from the template image: kernel + initramfs + rootfs assembly + init to a probed silkd |
-| **burst** | `BURST_N` clone-tier claims issued concurrently — per-claim latency under restore contention plus the batch wall clock. Runs last so its churn cannot contaminate the RTT and throughput windows |
+| **burst** | `BURST_N` clone-tier claims issued concurrently — per-claim latency under restore contention plus the batch wall clock. Runs after the RTT and throughput windows so its churn cannot contaminate them |
 
 The harness also reports **warm refill recovery**: after fully draining the
 warm pool it times the refill loop rebuilding to target — the number bounded
@@ -72,7 +72,9 @@ table stamped with the host evidence: virtualization
 Knobs (environment variables): `WARM`/`WARM_N` (warm-pool depth and burst
 size — the burst must stay within the depth, or refill loses the race and
 the tail measures clones), `CLONE_N`, `COLD_N`, `RPC_N`, `PULL_MB`,
-`PULL_N`, `BURST_N` (concurrent clone-claim burst; 0 skips the stage).
+`PULL_N`, `BURST_N` (concurrent clone-claim burst; 0 skips the stage),
+`ADDR`/`TOKEN` (the throwaway daemon's listen address and token; change them
+to run beside a live sandboxd).
 
 Boot anatomy (where inside the cold tier the milliseconds go — kernel,
 initramfs phases, rootfs handoff) has its own harness:

@@ -45,7 +45,6 @@ async def main() -> int:
         assert tar and len(tar) > 0
         print(f"  persist_workspace: {len(tar)} tar bytes captured")
 
-    # Resume from the serialized state must reattach to the same sandbox.
     payload = client.serialize_session_state(session._inner.state)
     resumed = await client.resume(client.deserialize_session_state(payload))
     async with resumed:

@@ -90,10 +90,10 @@ func (m *Manager) adoptPersistedPools(ctx context.Context) error {
 	for _, spec := range pf.Pools {
 		spec = normalizePoolSpec(spec)
 		if err := m.validate(spec.PoolKey); err != nil {
-			return fmt.Errorf("restore pool %q: %w", spec.Template, err)
+			return fmt.Errorf("restore pool %q from %s: %w", spec.Template, m.poolStore.path, err)
 		}
 		if err := spec.ValidateLimits(); err != nil {
-			return fmt.Errorf("restore pool %q: %w", spec.Template, err)
+			return fmt.Errorf("restore pool %q from %s: %w", spec.Template, m.poolStore.path, err)
 		}
 		p := newPool(spec.PoolKey)
 		p.applySpec(spec)

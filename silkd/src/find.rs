@@ -4,8 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use regex::Regex;
-use tokio::fs;
+use regex::{Regex, Replacer};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite};
 use tokio::runtime::Handle;
 use tokio::sync::{Semaphore, SemaphorePermit, mpsc};
@@ -18,7 +17,7 @@ pub const FIND_MAX_FILE: u64 = 8 * 1024 * 1024;
 /// Match frames in flight between the walking thread and the writer.
 const MATCH_QUEUE: usize = 256;
 
-/// Bytes of match content in flight: above the largest single match, so a reserve never blocks forever, and far below the gigabytes 256 size-bound frames would pin.
+/// Bytes of match content in flight: above one size-bound match, so a reserve never blocks forever, far below 256 of them.
 const MATCH_QUEUE_BYTES: usize = 2 * FIND_MAX_FILE as usize;
 
 struct MatchBudget {
@@ -102,16 +101,9 @@ impl Walk<'_> {
         Ok(true)
     }
 
-    /// Scans one file; the size bound comes off the open handle, so check and read see one file.
+    /// Scans one file; an unreadable or oversized file is skipped, not an error.
     fn scan_file(&self, path: &Path, body: &mut String) -> bool {
-        let Ok(mut file) = std::fs::File::open(path) else {
-            return true;
-        };
-        if file.metadata().is_ok_and(|m| m.len() > FIND_MAX_FILE) {
-            return true;
-        }
-        body.clear();
-        if file.read_to_string(body).is_err() {
+        if !matches!(read_bounded(path, body), Ok(true)) {
             return true;
         }
         let name: Arc<str> = path.to_string_lossy().into();
@@ -129,6 +121,19 @@ impl Walk<'_> {
             }
         }
         true
+    }
+}
+
+/// Counts replacements while expanding `$n` groups straight into the output, no String per match.
+struct Counting<'a> {
+    replacement: &'a str,
+    count: u64,
+}
+
+impl regex::Replacer for Counting<'_> {
+    fn replace_append(&mut self, caps: &regex::Captures<'_>, dst: &mut String) {
+        self.count += 1;
+        caps.expand(self.replacement, dst);
     }
 }
 
@@ -159,20 +164,24 @@ pub async fn replace<W: AsyncWrite + Unpin>(
         Err(e) => return proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
     };
     for file in files {
-        let mut count: u64 = 0;
-        if !is_oversized(&file).await {
-            let body = match fs::read_to_string(&file).await {
-                Ok(body) => body,
-                Err(e) => return err_frame(w, &e, "read").await,
-            };
-            // expand keeps the &str replacer's $n capture-group semantics.
-            let new = re.replace_all(&body, |caps: &regex::Captures| {
-                count += 1;
-                let mut expanded = String::new();
-                caps.expand(&replacement, &mut expanded);
-                expanded
-            });
-            if count > 0
+        let mut counting = Counting {
+            replacement: &replacement,
+            count: 0,
+        };
+        let path = PathBuf::from(&file);
+        let read = tokio::task::spawn_blocking(move || {
+            let mut body = String::new();
+            read_bounded(&path, &mut body).map(|within| within.then_some(body))
+        })
+        .await;
+        let body = match read {
+            Ok(Ok(body)) => body,
+            Ok(Err(e)) => return err_frame(w, &e, "read").await,
+            Err(e) => return err_frame(w, &std::io::Error::other(e), "read").await,
+        };
+        if let Some(body) = body {
+            let new = re.replace_all(&body, counting.by_ref());
+            if counting.count > 0
                 && let Err(e) = crate::fs::write_atomic(Path::new(&file), new.as_bytes()).await
             {
                 return err_frame(w, &e, "write").await;
@@ -182,7 +191,7 @@ pub async fn replace<W: AsyncWrite + Unpin>(
             w,
             &Response::Replaced {
                 file,
-                replacements: count,
+                replacements: counting.count,
             },
         )
         .await?;
@@ -211,7 +220,7 @@ where
         Some(Ok(re)) => Some(re),
         Some(Err(e)) => return proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
     };
-    // One blocking-pool dispatch for the whole tree, not three per file.
+    // one blocking-pool dispatch for the whole tree, not three per file.
     let (tx, mut rx) = mpsc::channel::<Response>(MATCH_QUEUE);
     let budget = Arc::new(MatchBudget::new(budget_bytes, Handle::current()));
     let walker_budget = budget.clone();
@@ -231,7 +240,7 @@ where
     loop {
         tokio::select! {
             biased;
-            // The client sends nothing during a find, so any readable state ends the walk.
+            // the client sends nothing during a find, so any readable state ends the walk.
             _ = reader.fill_buf() => {
                 gone = true;
                 break;
@@ -268,10 +277,17 @@ where
     }
 }
 
-async fn is_oversized(file: &str) -> bool {
-    fs::metadata(file)
-        .await
-        .is_ok_and(|m| m.len() > FIND_MAX_FILE)
+/// Reads a file into `body` through one handle, stopping at FIND_MAX_FILE; `Ok(false)` when the file is above the bound.
+fn read_bounded(path: &Path, body: &mut String) -> std::io::Result<bool> {
+    let file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    if len > FIND_MAX_FILE {
+        return Ok(false);
+    }
+    body.clear();
+    body.reserve(len as usize);
+    file.take(FIND_MAX_FILE).read_to_string(body)?;
+    Ok(true)
 }
 
 fn match_cost(frame: &Response) -> usize {

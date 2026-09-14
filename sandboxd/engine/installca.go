@@ -36,7 +36,7 @@ func (e *Engine) silkdWriteFile(ctx context.Context, vsockSocket, path string, m
 		return err
 	}
 	defer s.close()
-	// A send racing the guest's early answer+close hits EPIPE; prefer the buffered verdict.
+	// a send racing the guest's early answer+close hits EPIPE; prefer the buffered verdict.
 	sendErr := func() error {
 		if serr := s.send(wire.FsWrite{Path: path, Mode: &mode}); serr != nil {
 			return serr
@@ -70,7 +70,7 @@ func (e *Engine) silkdExec(ctx context.Context, vsockSocket string, argv ...stri
 	defer s.close()
 	sendErr := s.send(wire.Exec{Argv: argv, Env: map[string]string{"PATH": guestExecPATH}})
 	if sendErr == nil {
-		// A child exiting without reading stdin races this close; prefer the buffered exit frame.
+		// a child exiting without reading stdin races this close; prefer the buffered exit frame.
 		sendErr = s.send(wire.StdinClose{})
 	}
 	var out []byte

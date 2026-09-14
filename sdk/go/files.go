@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"io"
 	"slices"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
@@ -29,6 +30,14 @@ func (s *Sandbox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 		return chunks[0], nil
 	}
 	return slices.Concat(chunks...), nil
+}
+
+// ReadFileTo streams path into w; an error from w ends the read there.
+func (s *Sandbox) ReadFileTo(ctx context.Context, path string, w io.Writer) error {
+	return s.downloadRPC(ctx, &wire.FsRead{Path: path}, func(b []byte) error {
+		_, err := w.Write(b)
+		return err
+	})
 }
 
 // ListDir returns the entries of a directory (batched frames are concatenated).

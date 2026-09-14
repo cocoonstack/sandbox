@@ -19,7 +19,7 @@ const (
 
 // Broadcaster fans a checkpoint delete out to every peer so a healed copy does not outlive it.
 type Broadcaster struct {
-	// A nil Client uses a default with a short timeout: one wedged peer must not hold up the fan-out.
+	// a nil Client uses a default with a short timeout: one wedged peer must not hold up the fan-out.
 	Client *http.Client
 	Peers  func() []string
 	Token  string

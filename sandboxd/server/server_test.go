@@ -23,6 +23,15 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+func TestOwnerAddrOmitsAnUnspecifiedHost(t *testing.T) {
+	for advertise, want := range map[string]string{":7777": "", "0.0.0.0:7777": "", "[::]:7777": "", "10.0.0.5:7777": "10.0.0.5:7777"} {
+		srv := New("", nil, advertise, &fakeManager{}, &fakeDialer{}, nil, nil, nil, nil)
+		if got := srv.claimResponse(&types.Sandbox{ID: "sb_1"}).OwnerAddr; got != want {
+			t.Errorf("advertise %q: owner_addr %q, want %q", advertise, got, want)
+		}
+	}
+}
+
 func TestClaimHappyPath(t *testing.T) {
 	var gotKey types.PoolKey
 	var gotTTL time.Duration

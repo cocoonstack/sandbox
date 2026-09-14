@@ -23,6 +23,10 @@ bare metal, `small` tier:
 | pool miss, golden exists | **~26–39 ms** | clone from the golden snapshot + entropy/machine-id reseed + readiness probe |
 | cold boot (no golden yet) | **~215–400 ms** | full boot from the template image to silkd answering |
 
+A guarded-egress claim binds its proxy doors at refill rather than at claim
+(#177): on bare metal that took the warm claim with the HTTP door from 307 to
+263 µs p50, and with both doors from 351 to 274 µs.
+
 Cloud Hypervisor lifecycle latency (bare metal, vsock agent-ready):
 
 | path | latency |
@@ -115,8 +119,9 @@ snapshot paths.
 kept off the manager mutex — the lock every data-plane op contends. `set`/`del`
 update a projection map and bump a sequence under the store's own mutex;
 `commit()` clones that map under it, then marshals, writes, and renames off
-every mutex, serialized and coalescing by sequence so an older snapshot never
-overwrites a newer one. Only the startup `Reconcile`
+both the manager and the store mutex, serialized by its own write lock and
+coalescing by sequence so an older snapshot never overwrites a newer one.
+Only the startup `Reconcile`
 pass (pre-contention) still marshals and writes in one call under the lock.
 
 `BenchmarkStorePersistContention` measures the ns a concurrent manager-mutex

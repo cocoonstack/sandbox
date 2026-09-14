@@ -50,7 +50,7 @@ func run(addr, token, template, lspTemplate string, egress bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Explicitly the no-network lane: the git step asserts its typed error.
+	// explicitly the no-network lane: the git step asserts its typed error.
 	client, sb, err := harness.Claim(ctx, addr, token, template, sandbox.WithNetwork(sandbox.NetNone))
 	if err != nil {
 		return err
@@ -209,7 +209,7 @@ func smokeWatch(ctx context.Context, sb *sandbox.Sandbox) error {
 			if !ok {
 				return fmt.Errorf("watch ended early: %v", w.Err())
 			}
-			// The atomic write surfaces as temp-file events too; any event
+			// the atomic write surfaces as temp-file events too; any event
 			// whose path carries the name proves the stream.
 			if strings.Contains(ev.Path, "w.txt") {
 				return nil
@@ -282,7 +282,7 @@ func smokeGit(ctx context.Context, sb *sandbox.Sandbox) error {
 		return fmt.Errorf("after checkout: current=%q, want feature", br.Current)
 	}
 
-	// This sandbox is on the no-network lane: push must fail with the typed
+	// this sandbox is on the no-network lane: push must fail with the typed
 	// unimplemented error, not hang on an unreachable remote.
 	if err := sb.GitPush(ctx, "/work", ""); !isSilkdKind(err, wire.KindUnimplemented) {
 		return fmt.Errorf("push on none lane: %v, want unimplemented", err)
@@ -553,7 +553,7 @@ func smokeTree(ctx context.Context, sb *sandbox.Sandbox) error {
 // (socket-activated in the base image) answers on 22, so its banner must
 // arrive through DialPort; a dead port must fail with the typed not_found.
 func smokePortForward(ctx context.Context, sb *sandbox.Sandbox) error {
-	// The step proves the relay, not sshd's readiness SLA: the guest's
+	// the step proves the relay, not sshd's readiness SLA: the guest's
 	// socket-activated sshd can transiently refuse, so the positive probe
 	// retries briefly; the dead-port negative below stays strict.
 	pc, err := sb.DialPort(ctx, 22)
@@ -664,7 +664,7 @@ func smokeProcs(ctx context.Context, sb *sandbox.Sandbox) error {
 		return fmt.Errorf("logs replay %q missing mark", out.String())
 	}
 
-	// A long-runner dies to kill; its pid must be gone from the next attach.
+	// a long-runner dies to kill; its pid must be gone from the next attach.
 	pid, err = sb.Spawn(ctx, sandbox.Cmd{Argv: []string{"sleep", "30"}})
 	if err != nil {
 		return fmt.Errorf("spawn sleeper: %w", err)

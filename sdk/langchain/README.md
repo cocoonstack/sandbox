@@ -19,7 +19,7 @@ with CocoonToolkit("10.0.0.5:7777", api_token="...") as kit:
 captured moment instead of a clean template — agents resume from prepared
 state (dependencies installed, repo cloned) in milliseconds.
 
-Sync-native (`_run` calls the stdlib-only cocoonstack-sandbox SDK
-directly); async agents get `_arun` bridged via `asyncio.to_thread`.
+Sync-native (each tool's function calls the stdlib-only cocoonstack-sandbox
+SDK directly); async agents get a coroutine bridged via `asyncio.to_thread`.
 
 Full reference: https://cocoonstack.github.io/sandbox/langchain
