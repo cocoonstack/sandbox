@@ -21,7 +21,8 @@ func (p *pool) noteArrival(now time.Time) {
 	case p.binStart.IsZero():
 		p.binStart = now
 	case elapsed >= rateBin:
-		p.rate = ewmaAlpha*(float64(p.binCount)/elapsed.Seconds()) + (1-ewmaAlpha)*p.rate
+		decayed := p.rate * math.Exp(-elapsed.Seconds()/rateDecayTau.Seconds())
+		p.rate = ewmaAlpha*(float64(p.binCount)/elapsed.Seconds()) + (1-ewmaAlpha)*decayed
 		p.binStart, p.binCount = now, 0
 	}
 	p.binCount++

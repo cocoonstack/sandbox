@@ -44,6 +44,24 @@ func TestEffectiveTargetIgnoresATwoClaimBurst(t *testing.T) {
 	}
 }
 
+func TestEffectiveTargetForgetsRateAcrossSilence(t *testing.T) {
+	now := time.Now()
+	p := &pool{key: types.PoolKey{}, floor: 2, warmMax: 8, lead: 500 * time.Millisecond}
+	for i := range 60 {
+		p.noteArrival(now.Add(time.Duration(i) * 100 * time.Millisecond))
+	}
+	if got := p.effectiveTarget(now.Add(6 * time.Second)); got != 8 {
+		t.Fatalf("sustained target %d, want warmMax 8", got)
+	}
+
+	later := now.Add(10 * time.Minute)
+	p.noteArrival(later)
+	p.noteArrival(later.Add(time.Second))
+	if got := p.effectiveTarget(later.Add(time.Second)); got != 2 {
+		t.Errorf("target %d after two claims following ten minutes of silence, want the floor", got)
+	}
+}
+
 func TestEffectiveTargetOffWithoutWarmMax(t *testing.T) {
 	now := time.Now()
 	p := &pool{floor: 1, lead: time.Second}
