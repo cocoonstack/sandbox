@@ -126,6 +126,8 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"guarded egress on cni pool", `{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"egress","size":"small","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
 		{"guarded egress on cni tenant", `{"api_token":"root","networks":["cni"],"pools":[{"template":"rt:24.04","net":"egress","size":"small"}],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
 		{"cni tenant egress no egress pool", `{"api_token":"root","networks":["cni"],"pools":[{"template":"rt:24.04","net":"none","size":"small"}],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
+		{"mesh with wildcard advertise", `{"listen":":7777","pools":[],"mesh":{"bind":"node1:7946"}}`, "routable host"},
+		{"mesh with unspecified advertise", `{"advertise_addr":"0.0.0.0:7777","pools":[],"mesh":{"bind":"node1:7946"}}`, "routable host"},
 		{"mesh bind missing port", `{"pools":[],"mesh":{"bind":"node1"}}`, "mesh bind"},
 		{"mesh bind wildcard host", `{"pools":[],"mesh":{"bind":":7946"}}`, "explicit host"},
 		{"mesh cluster key not base64", `{"pools":[],"mesh":{"bind":"node1:7946","cluster_key":"not!base64"}}`, "not valid base64"},
@@ -259,6 +261,21 @@ func TestHasEgress(t *testing.T) {
 	}
 	if !(&Config{Bridges: []string{"br0", "br1"}}).HasEgress() || !(&Config{Networks: []string{"cni"}}).HasEgress() {
 		t.Error("bridges or networks must enable egress")
+	}
+}
+
+func TestLoadKeepsWarmZeroUnderWarmMax(t *testing.T) {
+	path := writeConfig(t, `{"pools":[{"template":"rt:24.04","net":"none","size":"small","warm":0,"warm_max":8},
+		{"template":"rt:24.04","net":"none","size":"medium","warm":0}]}`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Pools[0].Warm != 0 || cfg.Pools[0].WarmMax != 8 {
+		t.Errorf("adaptive pool %+v, want warm 0 kept under warm_max 8", cfg.Pools[0])
+	}
+	if cfg.Pools[1].Warm != defaultWarm {
+		t.Errorf("static pool warm %d, want the default %d", cfg.Pools[1].Warm, defaultWarm)
 	}
 }
 

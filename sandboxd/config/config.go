@@ -291,7 +291,9 @@ func (c *Config) applyDefaults() {
 		c.RefillConcurrency = autoRefillConcurrency(runtime.NumCPU())
 	}
 	for i := range c.Pools {
-		c.Pools[i].Warm = cmp.Or(c.Pools[i].Warm, defaultWarm)
+		if c.Pools[i].Warm == 0 && c.Pools[i].WarmMax == 0 {
+			c.Pools[i].Warm = defaultWarm
+		}
 		c.Pools[i].PoolKey = c.Pools[i].Defaulted()
 	}
 	for i := range c.Volumes {
@@ -409,8 +411,17 @@ func (c *Config) validateMesh() error {
 	if _, _, err := c.Mesh.ParsedBind(); err != nil {
 		return err
 	}
-	_, err := c.Mesh.DecodedKey()
-	return err
+	if _, err := c.Mesh.DecodedKey(); err != nil {
+		return err
+	}
+	host, _, err := net.SplitHostPort(c.AdvertiseAddr)
+	if err != nil {
+		return fmt.Errorf("advertise_addr: %w", err)
+	}
+	if ip, _ := netip.ParseAddr(host); host == "" || ip.IsUnspecified() {
+		return fmt.Errorf("advertise_addr %q is gossiped to peers and must name a routable host", c.AdvertiseAddr)
+	}
+	return nil
 }
 
 func (c *Config) validateEgress(secrets map[string]struct{}) error {
