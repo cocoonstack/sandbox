@@ -200,10 +200,31 @@ async fn exec_unknown_user_is_rejected() {
 }
 
 #[tokio::test]
-async fn exec_missing_binary_is_an_internal_error() {
+async fn exec_missing_binary_is_a_bad_request() {
     let frames = roundtrip(r#"{"op":"exec","argv":["/no/such/binary-xyz"]}"#).await;
     assert_eq!(type_of(&frames[0]), "error");
-    assert_eq!(frames[0]["kind"], "internal");
+    assert_eq!(frames[0]["kind"], "bad_request");
+    assert!(frames[0]["message"].as_str().unwrap().contains("spawn"));
+}
+
+#[tokio::test]
+async fn exec_missing_cwd_is_a_bad_request() {
+    let frames = roundtrip(r#"{"op":"exec","argv":["true"],"cwd":"/no/such/dir-xyz"}"#).await;
+    assert_eq!(type_of(&frames[0]), "error");
+    assert_eq!(frames[0]["kind"], "bad_request");
+}
+
+#[tokio::test]
+async fn exec_non_executable_file_is_a_bad_request() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let state = Arc::new(State::new());
+    let frames = one(
+        &state,
+        &json!({"op":"exec","argv":[file.path()]}).to_string(),
+    )
+    .await;
+    assert_eq!(type_of(&frames[0]), "error");
+    assert_eq!(frames[0]["kind"], "bad_request");
     assert!(frames[0]["message"].as_str().unwrap().contains("spawn"));
 }
 
