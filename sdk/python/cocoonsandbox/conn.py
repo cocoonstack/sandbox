@@ -78,7 +78,8 @@ class Conn(_Closeable):
 
 def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float) -> Conn:
     """Opens the data-plane connection: TCP dial plus a hand-rolled HTTP
-    Upgrade, so nothing pools or proxies underneath the byte stream."""
+    Upgrade, both bounded by timeout, so nothing pools or proxies underneath
+    the byte stream; the stream itself has no idle timeout."""
     # id/token interpolate into the raw request line; CR/LF would inject headers.
     for name, value in (("sandbox id", sandbox_id), ("token", token)):
         if any(c in value for c in "\r\n\0"):
@@ -122,6 +123,7 @@ def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float) -> Conn:
             # A bogus content-length must not buffer unbounded bytes.
             body = reader.read(min(body_len, MAX_FRAME)).decode(errors="replace") if body_len else ""
             raise APIError("agent upgrade", code, body.strip() or status.strip())
+        sock.settimeout(None)
         return Conn(sock, reader)
     except Exception:
         # makefile() holds a ref on the socket; close it too or the fd lingers.
