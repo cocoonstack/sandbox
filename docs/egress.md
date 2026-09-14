@@ -161,7 +161,7 @@ file.
       "egress": { "allow": [{ "host": "api.github.com", "secret": "gh" }] } }
   ],
   "tenants": [
-    { "name": "acme", "token": "…", "egress": { "allow": [{ "host": "api.github.com" }] } }
+    { "name": "acme", "token": "…", "egress": { "socks5": true, "allow": [{ "host": "api.github.com" }] } }
   ]
 }
 ```
