@@ -339,7 +339,7 @@ func TestUnparsablePortIsDeniedNotDefaulted(t *testing.T) {
 }
 
 func TestBracketedIPv6AuthorityIsUnwrapped(t *testing.T) {
-	policy := Policy{Allow: []Rule{{Host: "2606:4700:4700::1111"}}}
+	policy := Policy{Allow: []Rule{{Host: "*"}}}
 	events := make(chan Event, 4)
 	p := New("sb_1", "acme", policy, nil, nil, fixedDial(echoServer(t)), func(ev Event) { events <- ev })
 	front := httptest.NewServer(p)
@@ -353,6 +353,7 @@ func TestBracketedIPv6AuthorityIsUnwrapped(t *testing.T) {
 		{"[2606:4700:4700::1111]", "HTTP/1.1 200 Connection Established", DecisionAllow},
 		{"[2606:4700:4700::1111]:443", "HTTP/1.1 200 Connection Established", DecisionAllow},
 		{"[not-an-address]", "HTTP/1.1 403 Forbidden", DecisionDeny},
+		{"[2606:4700:4700::1111", "HTTP/1.1 403 Forbidden", DecisionDeny},
 	} {
 		conn, err := net.Dial("tcp", front.Listener.Addr().String())
 		if err != nil {
@@ -365,8 +366,11 @@ func TestBracketedIPv6AuthorityIsUnwrapped(t *testing.T) {
 			t.Errorf("CONNECT with Host %s = %q, want %q", tc.authority, status, tc.status)
 		}
 		_ = conn.Close()
-		if ev := recvEvent(t, events); ev.Decision != tc.decision || (tc.decision == DecisionAllow && (ev.Host != "2606:4700:4700::1111" || ev.Port != 443)) {
-			t.Errorf("audit event for %s = %+v, want %v on the bare address and port 443", tc.authority, ev, tc.decision)
+		ev := recvEvent(t, events)
+		allowed := ev.Decision == DecisionAllow && ev.Host == "2606:4700:4700::1111" && ev.Port == 443
+		denied := ev.Decision == DecisionDeny && ev.Port == 0
+		if (tc.decision == DecisionAllow) != allowed || (tc.decision == DecisionDeny) != denied {
+			t.Errorf("audit event for %s = %+v, want %v (allow on the bare address and 443, or deny with no port)", tc.authority, ev, tc.decision)
 		}
 	}
 }

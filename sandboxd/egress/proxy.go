@@ -290,13 +290,13 @@ func denied(w http.ResponseWriter, host string) {
 func hostPort(authority string, def uint16) (host string, port uint16, ok bool) {
 	host, text, err := net.SplitHostPort(authority)
 	if err != nil {
-		if !strings.Contains(authority, ":") {
-			return authority, def, true
-		}
 		literal, bracketed := strings.CutPrefix(authority, "[")
+		if !bracketed {
+			return authority, def, !strings.Contains(authority, ":")
+		}
 		literal, closed := strings.CutSuffix(literal, "]")
 		addr, parseErr := netip.ParseAddr(literal)
-		return literal, def, bracketed && closed && parseErr == nil && addr.Is6()
+		return literal, def, closed && parseErr == nil && addr.Is6()
 	}
 	n, err := strconv.ParseUint(text, 10, 16)
 	return host, uint16(n), err == nil && n != 0
