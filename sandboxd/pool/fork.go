@@ -47,8 +47,15 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	for i, c := range children {
 		ids[i] = c.ID
 	}
-	m.recordUsage(ctx, usageEvent{Event: "fork", ID: sb.ID, VMName: sb.VMName, Children: ids})
+	m.recordUsage(ctx, usageEvent{Event: "fork", ID: sb.ID, VMName: lockedVMName(sb), Children: ids})
 	return children, nil
+}
+
+// lockedVMName reads the VM name under the lock that archive() clears it under.
+func lockedVMName(sb *types.Sandbox) string {
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	return sb.VMName
 }
 
 // forkClones clones a running source from a fresh snapshot, a hibernated one from an export.
