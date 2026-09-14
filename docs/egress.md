@@ -75,11 +75,13 @@ remove keeps an existing lock in place; the next restart retries the remove). A
 lock that never applied plus a failed remove leaves the VM unguarded until a
 later remove succeeds.
 
-Because the lock is invisible from inside the guest, sandboxd also tells silkd
-about it: a marker written into the guest before the golden snapshot (or on a
-cold boot) makes silkd hand the proxy variables to every exec on this lane
-exactly as on the none lane, while git keeps running as on any lane with a NIC.
-A golden built before the marker existed is rebuilt, not adopted.
+Because the lock is invisible from inside the guest, sandboxd writes its
+verdict into `/etc/silkd-lane` before the golden snapshot (or on a cold boot):
+`relay` on a locked bridge lane, `direct` on a CNI lane. Where silkd reads
+`relay` it hands the proxy variables to every exec exactly as on the none lane,
+and the image's units wait for the same file instead of guessing from NIC
+presence; git keeps running as on any lane with a NIC. A golden built under
+another verdict is rebuilt, not adopted.
 
 Egress-lane sandboxes do not hibernate, archive, fork, checkpoint, or promote:
 cocoon resumes a guest before its fresh tap can be re-locked, so any resume from

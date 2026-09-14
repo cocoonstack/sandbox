@@ -26,9 +26,9 @@ up a few seconds later — poll `GET /screenshot` until it returns 200.
   relay. Thunderbird's mail policy is pinned to the SOCKS5 door, so a pool that
   runs mail tasks sets `"socks5": true` in its policy, and so does the tenant
   policy when the claim carries one. `net=egress` on a
-  guarded bridge gives the desktop no web: the NIC is locked and the session's
-  proxy setup does not follow the lock marker (a CNI-backed lane still routes
-  directly).
+  guarded bridge works the same way: the session's proxy setup waits for the
+  host's lane verdict in `/etc/silkd-lane` and follows it, so the locked NIC
+  costs the desktop nothing (a CNI-backed lane is told `direct` and routes).
 - **Size**: `2xlarge` (8 CPU / 16G) — the t3.xlarge class the OSWorld AWS
   image runs on; the idle session is ~0.5 GB anonymous memory with
   gnome-shell around 290 MB RSS, and the headroom is for the apps.
@@ -78,9 +78,9 @@ Configure it with `SANDBOXD_ADDR`, `SANDBOXD_TOKEN`, `COCOON_TEMPLATE`
 - `chromium` is a second launcher onto the same engine, for an agent that
   needs a browser the tasks do not pkill and rebind. It takes the caller's
   profile and debugging port.
-- On a guest with no NIC, `guest-proxy.service` points the session's browsers
-  and `osworld-server`'s commands at silkd's loopback relay; a guest with a
-  NIC routes directly and the unit does nothing. The unit tests NIC presence
-  only, so it does not follow the locked-NIC marker silkd honors on the bridge
-  egress lane; run desktop pools on the none lane.
+- `guest-proxy.service` points the session's browsers and `osworld-server`'s
+  commands at silkd's loopback relay on a guest with no NIC, and on a guest
+  whose NIC the host reports as `relay` in `/etc/silkd-lane`; it waits up to
+  30 s for that verdict before the session starts. A NIC the host calls
+  `direct`, or a host that writes nothing, leaves the unit idle.
 - x86_64 only.

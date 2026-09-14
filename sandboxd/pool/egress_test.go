@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -103,22 +104,25 @@ func TestArmEgressBindsSocksOnlyWhenOptedIn(t *testing.T) {
 	}
 }
 
-func TestLockedLaneMarksGuestOnColdBoots(t *testing.T) {
+func TestLaneVerdictReachesGuestOnColdBoots(t *testing.T) {
 	tests := []struct {
-		name string
-		key  types.PoolKey
-		cold bool
-		want int
+		name   string
+		key    types.PoolKey
+		locked bool
+		cold   bool
+		want   []string
 	}{
-		{"golden build on the egress lane", egKey, false, 1},
-		{"golden build on the none lane", testKey, false, 0},
-		{"cold provision on the egress lane", egKey, true, 1},
-		{"cold provision on the none lane", testKey, true, 0},
+		{"golden build on a locked egress lane", egKey, true, false, []string{"relay"}},
+		{"golden build on an unlocked egress lane", egKey, false, false, []string{"direct"}},
+		{"golden build on the none lane", testKey, true, false, nil},
+		{"cold provision on a locked egress lane", egKey, true, true, []string{"relay"}},
+		{"cold provision on the none lane", testKey, true, true, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()
 			m := egressManager(t, eng, config.PoolSpec{PoolKey: tt.key, Warm: 1, Egress: egPolicy})
+			m.lockEgress = tt.locked
 			if tt.cold {
 				sb, err := m.provision(t.Context(), tt.key, "")
 				if err != nil {
@@ -128,8 +132,8 @@ func TestLockedLaneMarksGuestOnColdBoots(t *testing.T) {
 			} else if err := m.buildGoldenSteps(t.Context(), tt.key, "sbx-gb", "snap", filepath.Join(m.goldensDir(), tt.key.Hash())); err != nil {
 				t.Fatalf("buildGoldenSteps: %v", err)
 			}
-			if got := len(eng.nicMarks); got != tt.want {
-				t.Errorf("MarkNICLocked calls = %d, want %d", got, tt.want)
+			if !slices.Equal(eng.laneMarks, tt.want) {
+				t.Errorf("MarkLane verdicts = %q, want %q", eng.laneMarks, tt.want)
 			}
 		})
 	}
@@ -146,7 +150,7 @@ func TestGoldenNICSidecarGatesAdoption(t *testing.T) {
 	if p.goldenDir != "" {
 		t.Error("adopted an egress-lane golden that never marked its guest; want rebuild")
 	}
-	if err := writeGoldenSidecar(g+nicSidecarSuffix, nicStamp(true)); err != nil {
+	if err := writeGoldenSidecar(g+nicSidecarSuffix, string(engine.LaneRelay)); err != nil {
 		t.Fatalf("write sidecar: %v", err)
 	}
 	m.adoptGolden(p)

@@ -177,7 +177,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 				err = netfilter.Lock(tap)
 			}
 			if err == nil && !locked[tap] {
-				err = m.markLockedNIC(ctx, sb.Key, sb.VsockSocket)
+				err = m.markLane(ctx, sb.Key, sb.VsockSocket)
 			}
 			if err != nil {
 				logger.Errorf(ctx, err, "ensure egress lock %s; quarantining", sb.ID)
