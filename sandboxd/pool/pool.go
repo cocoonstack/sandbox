@@ -180,6 +180,8 @@ type pool struct {
 	rate          float64
 	lead          time.Duration
 	lastArrival   time.Time
+	binStart      time.Time
+	binCount      int
 
 	goldenDir string
 	building  bool

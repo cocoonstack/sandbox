@@ -8,19 +8,24 @@ import (
 const (
 	// ewmaAlpha weights the newest observation in the arrival-rate and provision-lead averages
 	ewmaAlpha = 0.3
+	rateBin   = time.Second
 	// rateDecayTau halves the observed arrival rate roughly every 40s of silence
 	rateDecayTau = 60 * time.Second
 	// leadSafety over-provisions against the measured lead: arrivals are bursty, not uniform
 	leadSafety = 2.0
 )
 
-// noteArrival folds one claim into the arrival-rate EWMA. Caller holds the manager mutex.
+// noteArrival counts one claim; a bin that has spanned rateBin folds its arrivals per second into the rate EWMA. Caller holds the manager mutex.
 func (p *pool) noteArrival(now time.Time) {
-	if !p.lastArrival.IsZero() {
-		if dt := now.Sub(p.lastArrival).Seconds(); dt > 0 {
-			p.rate = ewmaAlpha*(1/dt) + (1-ewmaAlpha)*p.rate
-		}
+	switch elapsed := now.Sub(p.binStart); {
+	case p.binStart.IsZero():
+		p.binStart = now
+	case elapsed >= rateBin:
+		decayed := p.rate * math.Exp(-elapsed.Seconds()/rateDecayTau.Seconds())
+		p.rate = ewmaAlpha*(float64(p.binCount)/elapsed.Seconds()) + (1-ewmaAlpha)*decayed
+		p.binStart, p.binCount = now, 0
 	}
+	p.binCount++
 	p.lastArrival = now
 }
 

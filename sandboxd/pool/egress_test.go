@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -655,6 +656,58 @@ func TestTrimmedWarmVMClosesItsDoors(t *testing.T) {
 	if _, err := os.Stat(path); err == nil {
 		t.Error("door socket survives its VM")
 	}
+}
+
+func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	t.Cleanup(origin.Close)
+	pol := &egress.Policy{Allow: []egress.Rule{{Host: mustHostname(t, origin.URL)}}}
+	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
+	m.dial = (&net.Dialer{}).DialContext
+	sb := vsockSandbox(t, "sb_cap")
+	if err := m.armEgress(t.Context(), sb); err != nil {
+		t.Fatalf("arm egress: %v", err)
+	}
+	path := engine.EgressSocketPath(sb.VsockSocket)
+
+	idle := make([]net.Conn, 0, egressDoorConns)
+	for len(idle) < egressDoorConns {
+		conn, err := net.Dial("unix", path)
+		if errors.Is(err, syscall.ECONNREFUSED) {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		if err != nil {
+			t.Fatalf("idle dial %d: %v", len(idle), err)
+		}
+		idle = append(idle, conn)
+	}
+	t.Cleanup(func() {
+		for _, conn := range idle {
+			_ = conn.Close()
+		}
+	})
+
+	client := egressClient(path)
+	client.Timeout = 500 * time.Millisecond
+	if resp, err := client.Get(origin.URL + "/"); err == nil {
+		resp.Body.Close()
+		t.Fatal("a request past the door cap was served")
+	}
+
+	_ = idle[0].Close()
+	client.Timeout = 5 * time.Second
+	resp, err := client.Get(origin.URL + "/")
+	if err != nil {
+		t.Fatalf("request after a slot freed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status %d after a slot freed, want 200", resp.StatusCode)
+	}
+	m.disarmEgress(sb.ID, true)
 }
 
 func dialDoors(t *testing.T, sb *types.Sandbox) {

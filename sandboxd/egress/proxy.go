@@ -19,7 +19,11 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
-const idleConnTimeout = 90 * time.Second
+const (
+	idleConnTimeout = 90 * time.Second
+	// maxIdleConns bounds the upstream pool per sandbox; a guest walking many hosts cannot park a descriptor per host.
+	maxIdleConns = 64
+)
 
 // hopHeaders are hop-by-hop and proxy-scoped headers this hop owns, never passed on.
 var hopHeaders = []string{
@@ -90,7 +94,7 @@ func New(sandbox, tenant string, policy Evaluator, secrets Secrets, ca *CA, dial
 		dial:    dial,
 		holder:  holder,
 		// the stdlib default of 2 idle conns per host re-dials bursty same-host traffic.
-		tr:    &http.Transport{DialContext: dial, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout},
+		tr:    &http.Transport{DialContext: dial, MaxIdleConns: maxIdleConns, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout},
 		conns: map[net.Conn]struct{}{},
 	}
 	if ca != nil {
