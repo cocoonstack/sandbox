@@ -109,9 +109,8 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	defer done()
 
 	if cmd.Stdin == nil {
-		if err = conn.Send(wire.StdinClose{}); err != nil {
-			return 0, fmt.Errorf("close stdin: %w", err)
-		}
+		// a guest that already answered and closed fails this send; the frames it sent still come back below
+		_ = conn.Send(wire.StdinClose{})
 	} else {
 		go pumpStdin(conn, cmd.Stdin)
 	}
