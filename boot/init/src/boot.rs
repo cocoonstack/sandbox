@@ -1,6 +1,5 @@
 //! Boot sequence: early mounts, resolve disks, overlay, persist network, switch_root, exec.
 
-use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -34,11 +33,10 @@ impl Marks {
     }
 
     fn render(&self) -> String {
-        let mut out = String::new();
-        for (label, us) in &self.points {
-            let _ = write!(out, " {label}@{us}us");
-        }
-        out
+        self.points
+            .iter()
+            .map(|(label, us)| format!(" {label}@{us}us"))
+            .collect()
     }
 }
 

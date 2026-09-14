@@ -40,17 +40,13 @@ pub fn routes_directly() -> bool {
         return false;
     }
     // the host writes the file once per claim, so a present verdict latches; only absence re-reads.
-    let lane = match LANE.load(Ordering::Relaxed) {
-        -1 => match lane_verdict(LANE_FILE) {
-            Some(relay) => {
-                LANE.store(i8::from(relay), Ordering::Relaxed);
-                relay
-            }
-            None => false,
-        },
+    let relay = match LANE.load(Ordering::Relaxed) {
+        -1 => lane_verdict(LANE_FILE)
+            .inspect(|&r| LANE.store(i8::from(r), Ordering::Relaxed))
+            .unwrap_or(false),
         v => v == 1,
     };
-    !lane
+    !relay
 }
 
 /// Lane override for tests: set_var would race every concurrent getenv.
