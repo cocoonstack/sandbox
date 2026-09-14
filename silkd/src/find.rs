@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use regex::{Regex, Replacer};
-use tokio::fs;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite};
 use tokio::runtime::Handle;
 use tokio::sync::{Semaphore, SemaphorePermit, mpsc};
@@ -102,16 +101,9 @@ impl Walk<'_> {
         Ok(true)
     }
 
-    /// Scans one file; the size check and the read share one handle, and the read itself stops at the bound.
+    /// Scans one file; an unreadable or oversized file is skipped, not an error.
     fn scan_file(&self, path: &Path, body: &mut String) -> bool {
-        let Ok(file) = std::fs::File::open(path) else {
-            return true;
-        };
-        if file.metadata().is_ok_and(|m| m.len() > FIND_MAX_FILE) {
-            return true;
-        }
-        body.clear();
-        if file.take(FIND_MAX_FILE).read_to_string(body).is_err() {
+        if !matches!(read_bounded(path, body), Ok(true)) {
             return true;
         }
         let name: Arc<str> = path.to_string_lossy().into();
@@ -176,11 +168,18 @@ pub async fn replace<W: AsyncWrite + Unpin>(
             replacement: &replacement,
             count: 0,
         };
-        if !is_oversized(&file).await {
-            let body = match fs::read_to_string(&file).await {
-                Ok(body) => body,
-                Err(e) => return err_frame(w, &e, "read").await,
-            };
+        let path = PathBuf::from(&file);
+        let read = tokio::task::spawn_blocking(move || {
+            let mut body = String::new();
+            read_bounded(&path, &mut body).map(|within| within.then_some(body))
+        })
+        .await;
+        let body = match read {
+            Ok(Ok(body)) => body,
+            Ok(Err(e)) => return err_frame(w, &e, "read").await,
+            Err(e) => return err_frame(w, &std::io::Error::other(e), "read").await,
+        };
+        if let Some(body) = body {
             let new = re.replace_all(&body, counting.by_ref());
             if counting.count > 0
                 && let Err(e) = crate::fs::write_atomic(Path::new(&file), new.as_bytes()).await
@@ -278,10 +277,17 @@ where
     }
 }
 
-async fn is_oversized(file: &str) -> bool {
-    fs::metadata(file)
-        .await
-        .is_ok_and(|m| m.len() > FIND_MAX_FILE)
+/// Reads a file into `body` through one handle, stopping at FIND_MAX_FILE; `Ok(false)` when the file is above the bound.
+fn read_bounded(path: &Path, body: &mut String) -> std::io::Result<bool> {
+    let file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    if len > FIND_MAX_FILE {
+        return Ok(false);
+    }
+    body.clear();
+    body.reserve(len as usize);
+    file.take(FIND_MAX_FILE).read_to_string(body)?;
+    Ok(true)
 }
 
 fn match_cost(frame: &Response) -> usize {
