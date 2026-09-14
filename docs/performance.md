@@ -23,6 +23,10 @@ bare metal, `small` tier:
 | pool miss, golden exists | **~26–39 ms** | clone from the golden snapshot + entropy/machine-id reseed + readiness probe |
 | cold boot (no golden yet) | **~215–400 ms** | full boot from the template image to silkd answering |
 
+A guarded-egress claim binds its proxy doors at refill rather than at claim
+(#177): on bare metal that took the warm claim with the HTTP door from 307 to
+263 µs p50, and with both doors from 351 to 274 µs.
+
 Cloud Hypervisor lifecycle latency (bare metal, vsock agent-ready):
 
 | path | latency |

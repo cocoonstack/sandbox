@@ -243,8 +243,8 @@ heal a missing record locally; `delete()` acts on the handle's bound node.
 heal pulled — best-effort eventual cleanup, not a fleet-wide revocation. A peer
 that misses the broadcast (offline, partitioned, or joined later) keeps serving
 branches from its replica until the node's `checkpoint_ttl_hours` ages it out;
-with that TTL at its default of 0 (keep forever), an unreachable peer's replica
-has no cleanup bound at all.
+enabling peer heal requires that TTL to be set, so every healed replica has a
+cleanup bound.
 
 ## Language servers (LSP)
 
@@ -301,8 +301,13 @@ code = sb.run(["bash", "-c", "make test"],
               cwd="/work", env={"CI": "1"}, user="ubuntu",
               stdin=input_bytes,
               on_stdout=lambda b: sys.stdout.buffer.write(b),
-              on_stderr=lambda b: sys.stderr.buffer.write(b))
+              on_stderr=lambda b: sys.stderr.buffer.write(b),
+              timeout=600)                          # seconds; TimeoutError past it
 ```
+
+`timeout` on `exec` and `run` is a wall clock over the dial and the run: at
+its end the connection is cut, which makes silkd kill the command, and
+`TimeoutError` is raised.
 
 `exec` returns stdout and raises `ExitError` on a non-zero exit — carrying
 `code`, `stderr`, and the `stdout` produced before it failed. `run` streams raw bytes through the callbacks (chunk boundaries may

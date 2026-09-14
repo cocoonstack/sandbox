@@ -6,7 +6,8 @@ plus a GNOME session (Ubuntu session, dock, Yaru) on an Xvfb `:1` display at
 ([xlang-ai/osworld-server](https://github.com/xlang-ai/osworld-server),
 pinned commit) on guest loopback `5000`, the OSWorld Chrome CDP bridge on
 loopback `9222`, and the OSWorld app set: Google Chrome, LibreOffice, GIMP,
-VLC, Thunderbird, VS Code, Zotero, Obsidian, Shotcut, FreeCAD and WPS Office.
+VLC, Thunderbird, VS Code, Zotero, Obsidian, Shotcut, FreeCAD, WPS Office and
+MuseScore.
 The intended pool shape is `size: 2xlarge` (8 CPU / 16G); the session idles
 at ~0.5 GB anonymous memory with gnome-shell around 290 MB RSS.
 

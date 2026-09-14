@@ -259,7 +259,8 @@ All-or-nothing: on error no child survived. 200 with one claim per child:
 Children inherit the parent's tenant and count against its `max_claims`,
 whoever calls. 400 invalid count or body, 401 bad api token, 404 unknown id
 or wrong sandbox token, 409 egress-lane or volume parent (neither forks,
-checkpoints, or promotes; see [egress](egress.md)), 429 node or the parent's
+checkpoints, or promotes; see [egress](egress.md)) or an archived parent (an
+exec or file call wakes it first), 429 node or the parent's
 tenant at `max_claims`, or the node draining.
 
 ## POST /v1/sandboxes/{id}/promote
@@ -297,7 +298,8 @@ digest; changing any exported path or bytes changes it.
 
 400 invalid name, 401 bad api token, 409 when the name collides with a
 configured pool, the template is owned by another tenant, or the sandbox is
-on the egress lane or has volumes attached (see [egress](egress.md)), 404 unknown id or wrong
+on the egress lane, has volumes attached (see [egress](egress.md)), or is
+archived (an exec or file call wakes it first), 404 unknown id or wrong
 sandbox token.
 
 ## DELETE /v1/templates?template=…&net=…&size=…
@@ -363,8 +365,9 @@ Auth: node API token; body `{"token": "<sandbox token>", "name": "..."}`
 answers `200 {"checkpoint": {id, name, sandbox_id, key, tenant?,
 created_at}}` — `tenant` records the calling tenant, absent for root.
 400 bad body or name, 401 bad api token, 404 unknown id or wrong sandbox
-token, 409 egress-lane sandbox or one with volumes attached (see
-[egress](egress.md)).
+token, 409 egress-lane sandbox, one with volumes attached (see
+[egress](egress.md)), or an archived one (an exec or file call wakes it
+first).
 
 ## POST /v1/checkpoints/{id}/claim
 

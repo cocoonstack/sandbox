@@ -32,7 +32,7 @@ pair over the sync [Python SDK](sdk-python.md), bridged with
 | SDK surface | cocoon |
 |---|---|
 | `create` | `Client.new` — one claimed sandbox per session |
-| session `exec` | `Sandbox.run` (stdout/stderr/exit) |
+| session `exec` | `Sandbox.run` (stdout/stderr/exit); a per-call `timeout` is `run`'s wall clock and surfaces as `TimeoutError` |
 | `read` / `write` | `Sandbox.read_file` / `write_file`; missing → `FileNotFoundError` |
 | `persist_workspace` / `hydrate_workspace` | `Sandbox.pull` / `push` (tar) |
 | exposed port | `Sandbox.proxy_port` |

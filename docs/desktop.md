@@ -2,7 +2,8 @@
 
 The `desktop` flavor boots a GNOME session (Ubuntu session on Xvfb, 1920x1080)
 with the OSWorld guest server on guest loopback `5000` and the OSWorld app
-set (Google Chrome, LibreOffice, GIMP, VLC). A computer-use agent or the
+set (Google Chrome, LibreOffice, GIMP, VLC, Thunderbird, VS Code, Zotero,
+Obsidian, Shotcut, FreeCAD, WPS Office, MuseScore). A computer-use agent or the
 [OSWorld](https://github.com/xlang-ai/OSWorld-V2) harness claims it and
 drives the desktop through the same HTTP contract the OSWorld AWS and
 docker guests speak — screenshot, AT-SPI accessibility tree, PyAutoGUI

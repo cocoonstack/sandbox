@@ -36,7 +36,7 @@ vsock-only I/O (hardened default); `net=egress` attaches a bridge/CNI NIC.
 - [OpenAI Agents SDK adapter](openai-adapter.md) — run Agents SDK tools
   inside cocoon microVMs via the custom sandbox-provider interface
 - [Android sandboxes](android.md) — the redroid flavor: claim shape, adb
-  access through the relay or the network, checkpoint/branch
+  access through the relay, checkpoint/branch
 - [Browser sandboxes](browser.md) — headless Chromium with CDP through
   the relay: Playwright/Puppeteer access, checkpoint/branch of a live
   browser
