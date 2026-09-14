@@ -13,28 +13,16 @@ import (
 )
 
 func TestServeSpeaksMCP(t *testing.T) {
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v1/claim":
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": "sb_1", "token": "tok"})
-		case strings.HasSuffix(r.URL.Path, "/checkpoint"):
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"checkpoint": map[string]any{"id": "ck_0011223344556677", "name": "s1", "sandbox_id": "sb_1"},
-			})
-		case strings.HasSuffix(r.URL.Path, "/release"):
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			http.Error(w, `{"error":"no route"}`, http.StatusNotFound)
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) bool {
+		if !strings.HasSuffix(r.URL.Path, "/checkpoint") {
+			return false
 		}
-	}))
-	t.Cleanup(node.Close)
-
-	srv, err := newServer(strings.TrimPrefix(node.URL, "http://"), "", "rt:24.04")
-	if err != nil {
-		t.Fatalf("newServer: %v", err)
-	}
-
-	lines := []string{
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"checkpoint": map[string]any{"id": "ck_0011223344556677", "name": "s1", "sandbox_id": "sb_1"},
+		})
+		return true
+	})
+	replies := serveLines(t, srv,
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
@@ -42,23 +30,7 @@ func TestServeSpeaksMCP(t *testing.T) {
 		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"checkpoint","arguments":{"sandbox_id":"sb_1","name":"s1"}}}`,
 		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"release","arguments":{"sandbox_id":"sb_1"}}}`,
 		`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"exec","arguments":{"sandbox_id":"sb_1","command":"true"}}}`,
-	}
-	var out bytes.Buffer
-	in := bufio.NewReader(strings.NewReader(strings.Join(lines, "\n") + "\n"))
-	if err := srv.serve(t.Context(), in, &out); err != nil {
-		t.Fatalf("serve: %v", err)
-	}
-
-	replies := map[int]map[string]any{}
-	dec := json.NewDecoder(&out)
-	for dec.More() {
-		var resp map[string]any
-		if err := dec.Decode(&resp); err != nil {
-			t.Fatalf("decode reply: %v", err)
-		}
-		id := int(resp["id"].(float64))
-		replies[id] = resp
-	}
+	)
 	if len(replies) != 6 {
 		t.Fatalf("got %d replies, want 6 (notification unanswered)", len(replies))
 	}
@@ -93,52 +65,36 @@ func TestServeSpeaksMCP(t *testing.T) {
 }
 
 func TestExecKeepsOutputWhenTheGuestDrops(t *testing.T) {
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v1/claim":
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": "sb_1", "token": "tok"})
-		case strings.HasSuffix(r.URL.Path, "/agent"):
-			conn, _, err := http.NewResponseController(w).Hijack()
-			if err != nil {
-				t.Errorf("hijack: %v", err)
-				return
-			}
-			_, _ = io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n"+
-				`{"type":"started","pid":7}`+"\n"+`{"type":"stdout","data":"cGFydGlhbA=="}`+"\n")
-			_ = conn.Close()
-		default:
-			http.Error(w, `{"error":"no route"}`, http.StatusNotFound)
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) bool {
+		if !strings.HasSuffix(r.URL.Path, "/agent") {
+			return false
 		}
-	}))
-	t.Cleanup(node.Close)
-	srv, err := newServer(strings.TrimPrefix(node.URL, "http://"), "", "rt:24.04")
-	if err != nil {
-		t.Fatalf("newServer: %v", err)
-	}
-	lines := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_sandbox","arguments":{}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"exec","arguments":{"sandbox_id":"sb_1","command":"yes"}}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"create_sandbox","arguments":{"ttl_seconds":-5}}}
-`
-	var out bytes.Buffer
-	if err := srv.serve(t.Context(), bufio.NewReader(strings.NewReader(lines)), &out); err != nil {
-		t.Fatalf("serve: %v", err)
-	}
-	var replies []map[string]any
-	dec := json.NewDecoder(&out)
-	for dec.More() {
-		var resp map[string]any
-		if err := dec.Decode(&resp); err != nil {
-			t.Fatalf("decode reply: %v", err)
+		conn, _, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return true
 		}
-		replies = append(replies, resp)
-	}
-	execResult := replies[1]["result"].(map[string]any)
-	text := toolText(t, replies[1])
+		_, _ = io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n"+
+			`{"type":"started","pid":7}`+"\n"+`{"type":"stdout","data":"cGFydGlhbA=="}`+"\n")
+		_ = conn.Close()
+		return true
+	})
+	replies := serveLines(t, srv,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_sandbox","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"exec","arguments":{"sandbox_id":"sb_1","command":"yes"}}}`,
+	)
+	execResult := replies[2]["result"].(map[string]any)
+	text := toolText(t, replies[2])
 	if execResult["isError"] != true || !strings.Contains(text, `"stdout":"partial"`) || !strings.Contains(text, `"error"`) {
 		t.Errorf("exec reply %v: want isError with the partial stdout and an error field", text)
 	}
-	if !strings.Contains(toolText(t, replies[2]), "ttl_seconds must not be negative") {
-		t.Errorf("negative ttl accepted: %q", toolText(t, replies[2]))
+}
+
+func TestCreateSandboxRejectsNegativeTTL(t *testing.T) {
+	replies := serveLines(t, newTestServer(t, nil),
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_sandbox","arguments":{"ttl_seconds":-5}}}`)
+	if !strings.Contains(toolText(t, replies[1]), "ttl_seconds must not be negative") {
+		t.Errorf("negative ttl accepted: %q", toolText(t, replies[1]))
 	}
 }
 
@@ -163,4 +119,44 @@ func toolText(t *testing.T, resp map[string]any) string {
 	}
 	content := res["content"].([]any)
 	return fmt.Sprintf("%v", content[0].(map[string]any)["text"])
+}
+
+func newTestServer(t *testing.T, extra func(http.ResponseWriter, *http.Request) bool) *server {
+	t.Helper()
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/claim":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "sb_1", "token": "tok"})
+		case strings.HasSuffix(r.URL.Path, "/release"):
+			w.WriteHeader(http.StatusNoContent)
+		case extra != nil && extra(w, r):
+		default:
+			http.Error(w, `{"error":"no route"}`, http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(node.Close)
+	srv, err := newServer(strings.TrimPrefix(node.URL, "http://"), "", "rt:24.04")
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+	return srv
+}
+
+func serveLines(t *testing.T, srv *server, lines ...string) map[int]map[string]any {
+	t.Helper()
+	var out bytes.Buffer
+	in := bufio.NewReader(strings.NewReader(strings.Join(lines, "\n") + "\n"))
+	if err := srv.serve(t.Context(), in, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	replies := map[int]map[string]any{}
+	dec := json.NewDecoder(&out)
+	for dec.More() {
+		var resp map[string]any
+		if err := dec.Decode(&resp); err != nil {
+			t.Fatalf("decode reply: %v", err)
+		}
+		replies[int(resp["id"].(float64))] = resp
+	}
+	return replies
 }

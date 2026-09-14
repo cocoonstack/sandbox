@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cocoonstack/sandbox/protocol/wire"
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
@@ -41,7 +42,7 @@ var tools = []tool{
 		schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "path": str("absolute path of the file"), "content": str("full file content; written verbatim")}, "sandbox_id", "path", "content"), toolWriteFile,
 	},
 	{
-		"read_file", "Return the whole content of a file in a sandbox as text; bytes that are not valid UTF-8 are replaced, so binary content is lossy. For large or binary files use exec with head, tail, or a checksum instead. A missing path is an error.",
+		"read_file", "Return the whole content of a regular file up to 1 MiB in a sandbox as text; bytes that are not valid UTF-8 are replaced, so binary content is lossy. A larger file, a directory, or a device is an error: use exec with head, tail, or a checksum instead. A missing path is an error.",
 		schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "path": str("absolute path of the file")}, "sandbox_id", "path"), toolReadFile,
 	},
 	{
@@ -272,6 +273,13 @@ func toolReadFile(ctx context.Context, s *server, raw json.RawMessage) (string, 
 	args, sb, err := parseAndBox[pathArgs](s, raw)
 	if err != nil {
 		return "", err
+	}
+	info, err := sb.Stat(ctx, args.Path)
+	if err != nil {
+		return "", err
+	}
+	if info.Kind != wire.FileKindFile || info.Size > execOutputCap {
+		return "", fmt.Errorf("%s is a %s of %d bytes; read_file returns a regular file up to %d bytes, use exec with head or tail", args.Path, info.Kind, info.Size, execOutputCap)
 	}
 	data, err := sb.ReadFile(ctx, args.Path)
 	if err != nil {
