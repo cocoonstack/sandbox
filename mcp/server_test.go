@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -88,6 +89,69 @@ func TestServeSpeaksMCP(t *testing.T) {
 	}
 	if !strings.Contains(toolText(t, replies[6]), "sb_1") {
 		t.Errorf("exec error should name the released id: %q", toolText(t, replies[6]))
+	}
+}
+
+func TestExecKeepsOutputWhenTheGuestDrops(t *testing.T) {
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/claim":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "sb_1", "token": "tok"})
+		case strings.HasSuffix(r.URL.Path, "/agent"):
+			conn, _, err := http.NewResponseController(w).Hijack()
+			if err != nil {
+				t.Errorf("hijack: %v", err)
+				return
+			}
+			_, _ = io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n"+
+				`{"type":"started","pid":7}`+"\n"+`{"type":"stdout","data":"cGFydGlhbA=="}`+"\n")
+			_ = conn.Close()
+		default:
+			http.Error(w, `{"error":"no route"}`, http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(node.Close)
+	srv, err := newServer(strings.TrimPrefix(node.URL, "http://"), "", "rt:24.04")
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+	lines := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_sandbox","arguments":{}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"exec","arguments":{"sandbox_id":"sb_1","command":"yes"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"create_sandbox","arguments":{"ttl_seconds":-5}}}
+`
+	var out bytes.Buffer
+	if err := srv.serve(t.Context(), bufio.NewReader(strings.NewReader(lines)), &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	var replies []map[string]any
+	dec := json.NewDecoder(&out)
+	for dec.More() {
+		var resp map[string]any
+		if err := dec.Decode(&resp); err != nil {
+			t.Fatalf("decode reply: %v", err)
+		}
+		replies = append(replies, resp)
+	}
+	execResult := replies[1]["result"].(map[string]any)
+	text := toolText(t, replies[1])
+	if execResult["isError"] != true || !strings.Contains(text, `"stdout":"partial"`) || !strings.Contains(text, `"error"`) {
+		t.Errorf("exec reply %v: want isError with the partial stdout and an error field", text)
+	}
+	if !strings.Contains(toolText(t, replies[2]), "ttl_seconds must not be negative") {
+		t.Errorf("negative ttl accepted: %q", toolText(t, replies[2]))
+	}
+}
+
+func TestCappedOutputMarksTruncation(t *testing.T) {
+	var o cappedOutput
+	chunk := bytes.Repeat([]byte("x"), execOutputCap/2+1)
+	for range 3 {
+		if n, err := o.Write(chunk); n != len(chunk) || err != nil {
+			t.Fatalf("Write = %d, %v; want the full length accepted", n, err)
+		}
+	}
+	if o.Len() != execOutputCap || !o.truncated {
+		t.Errorf("kept %d bytes, truncated=%v; want the cap and the flag", o.Len(), o.truncated)
 	}
 }
 

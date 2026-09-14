@@ -17,7 +17,7 @@ var tools = []tool{
 		schema(props{"template": str("template image ref, or a name published by promote; empty uses the server default"), "net": str("network lane: none (default, no NIC, vsock-only I/O) or egress (bridge NIC, outbound network)"), "size": str("resource tier: small (default), medium, large, xlarge, 2xlarge"), "ttl_seconds": integer("sandbox lifetime in seconds; 0 means one hour, and nothing renews it")}), toolCreateSandbox,
 	},
 	{
-		"exec", "Run a shell command in a sandbox, wait for it to exit, and return stdout, stderr, and the exit code as JSON. The call is cut off after 5 minutes; for servers or long jobs use spawn instead. A hibernated sandbox wakes transparently on this call.",
+		"exec", "Run a shell command in a sandbox, wait for it to exit, and return stdout, stderr, and the exit code as JSON. The call is cut off after 5 minutes; for servers or long jobs use spawn instead. A failed or cut-off call still returns the output collected so far next to an error field. Each stream keeps its first 1 MiB and sets truncated beyond that. A hibernated sandbox wakes transparently on this call.",
 		schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "command": str("shell command, run via sh -c"), "cwd": str("working directory; empty runs in the guest's default")}, "sandbox_id", "command"), toolExec,
 	},
 	{
@@ -101,8 +101,10 @@ func toolCreateSandbox(ctx context.Context, s *server, raw json.RawMessage) (str
 	if err := parse(raw, &args); err != nil {
 		return "", err
 	}
-	// An agent session outlives the node's 5-minute default and nothing renews
-	// a lease, so the sandbox would vanish mid-conversation.
+	if args.TTLSeconds < 0 {
+		return "", fmt.Errorf("ttl_seconds must not be negative, got %d", args.TTLSeconds)
+	}
+	// an agent session outlives the node's 5-minute default, and nothing renews a lease
 	ttl := cmp.Or(time.Duration(args.TTLSeconds)*time.Second, defaultToolTTL)
 	opts := []sandbox.Option{sandbox.WithTimeout(ttl)}
 	if args.Net != "" {
@@ -144,20 +146,41 @@ type cmdArgs struct {
 	Cwd     string `json:"cwd"`
 }
 
+// cappedOutput keeps the first execOutputCap bytes; an agent that tails a firehose must not grow this process.
+type cappedOutput struct {
+	strings.Builder
+	truncated bool
+}
+
+func (o *cappedOutput) Write(p []byte) (int, error) {
+	n := len(p)
+	if room := execOutputCap - o.Len(); len(p) > room {
+		p, o.truncated = p[:room], true
+	}
+	_, _ = o.Builder.Write(p)
+	return n, nil
+}
+
 func toolExec(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
 	args, sb, err := parseAndBox[cmdArgs](s, raw)
 	if err != nil {
 		return "", err
 	}
-	var stdout, stderr strings.Builder
+	var stdout, stderr cappedOutput
 	code, err := sb.Run(ctx, sandbox.Cmd{
 		Argv: []string{"sh", "-c", args.Command}, Cwd: args.Cwd,
 		Stdout: &stdout, Stderr: &stderr,
 	})
-	if err != nil {
-		return "", err
+	out := map[string]any{"stdout": stdout.String(), "stderr": stderr.String()}
+	if stdout.truncated || stderr.truncated {
+		out["truncated"] = true
 	}
-	return jsonText(map[string]any{"exit_code": code, "stdout": stdout.String(), "stderr": stderr.String()}), nil
+	if err != nil {
+		out["error"] = err.Error()
+	} else {
+		out["exit_code"] = code
+	}
+	return jsonText(out), err
 }
 
 func toolSpawn(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
