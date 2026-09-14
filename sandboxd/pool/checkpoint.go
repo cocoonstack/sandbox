@@ -46,9 +46,6 @@ func (m *Manager) Checkpoint(ctx context.Context, id string, cred Cred, name, te
 	if !sb.Key.Capturable() {
 		return types.Checkpoint{}, ErrNoEgressFork
 	}
-	if sb.ArchiveCk != "" {
-		return types.Checkpoint{}, ErrArchived
-	}
 	// See Hibernate: a started capture must finish even if the caller hangs up.
 	ctx = context.WithoutCancel(ctx)
 	ckpt, _, err := m.publishCheckpoint(ctx, sb, store.CheckpointID(randHex(8)), name, tenant, false)
