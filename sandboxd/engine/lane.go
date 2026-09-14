@@ -3,10 +3,10 @@ package engine
 import "context"
 
 const (
-	laneFile = "/etc/silkd-lane"
-
 	LaneRelay  Lane = "relay"
 	LaneDirect Lane = "direct"
+
+	laneFile = "/etc/silkd-lane"
 )
 
 // Lane is the host's verdict on how a guest's traffic leaves: through the relay when its NIC is nft-locked, directly when the NIC routes.

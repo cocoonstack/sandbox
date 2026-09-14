@@ -63,8 +63,16 @@ pub fn signal_pid(pid: u32, sig: i32) {
 }
 
 /// The environment every exec starts from; the proxy snapshot rides only where nothing routes directly.
-pub fn base_env() -> Vec<(&'static str, &'static str)> {
-    compose_env(crate::net::routes_directly(), proxy_vars())
+pub fn base_env() -> &'static [(&'static str, &'static str)] {
+    static DIRECT: LazyLock<Vec<(&'static str, &'static str)>> =
+        LazyLock::new(|| compose_env(true, proxy_vars()));
+    static RELAYED: LazyLock<Vec<(&'static str, &'static str)>> =
+        LazyLock::new(|| compose_env(false, proxy_vars()));
+    if crate::net::routes_directly() {
+        &DIRECT
+    } else {
+        &RELAYED
+    }
 }
 
 /// Applies base_env's lane rule to an env-inheriting child: a routed NIC drops the proxy variables.

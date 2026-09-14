@@ -275,6 +275,108 @@ func TestPortRuleGatesConnectAndForward(t *testing.T) {
 	}
 }
 
+func TestUnparsablePortIsDeniedNotDefaulted(t *testing.T) {
+	policy := Policy{Allow: []Rule{{Host: "echo.internal", Ports: []uint16{443}}}}
+	events := make(chan Event, 4)
+	p := New("sb_1", "acme", policy, nil, nil, fixedDial(echoServer(t)), func(ev Event) { events <- ev })
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	conn := dialConnect(t, front.Listener.Addr().String(), "echo.internal:99999")
+	defer func() { _ = conn.Close() }()
+	if status := readStatus(t, bufio.NewReader(conn)); status != "HTTP/1.1 403 Forbidden" {
+		t.Errorf("CONNECT with an out-of-range port = %q, want 403 Forbidden", status)
+	}
+	if ev := recvEvent(t, events); ev.Port != 0 || ev.Decision != DecisionDeny {
+		t.Errorf("audit event = %+v, want deny with no port, not the 443 default", ev)
+	}
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://echo.internal:99999/x", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := proxyClient(t, front.URL).Do(req)
+	if err != nil {
+		t.Fatalf("proxied GET: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("forward GET with an out-of-range port = %d, want 403", resp.StatusCode)
+	}
+	if ev := recvEvent(t, events); ev.Port != 0 || ev.Decision != DecisionDeny {
+		t.Errorf("audit event = %+v, want deny with no port", ev)
+	}
+
+	raw, err := net.Dial("tcp", front.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer func() { _ = raw.Close() }()
+	if _, err = io.WriteString(raw, "CONNECT /x HTTP/1.1\r\nHost: echo.internal:+8443\r\n\r\n"); err != nil {
+		t.Fatalf("write path-form CONNECT: %v", err)
+	}
+	if status := readStatus(t, bufio.NewReader(raw)); status != "HTTP/1.1 403 Forbidden" {
+		t.Errorf("path-form CONNECT with a signed port = %q, want 403 (the dialer would have accepted +8443)", status)
+	}
+	if ev := recvEvent(t, events); ev.Port != 0 || ev.Decision != DecisionDeny {
+		t.Errorf("audit event = %+v, want deny with no port", ev)
+	}
+
+	malformed, err := net.Dial("tcp", front.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer func() { _ = malformed.Close() }()
+	if _, err = io.WriteString(malformed, "CONNECT /x HTTP/1.1\r\nHost: echo.internal:443:8443\r\n\r\n"); err != nil {
+		t.Fatalf("write malformed CONNECT: %v", err)
+	}
+	if status := readStatus(t, bufio.NewReader(malformed)); status != "HTTP/1.1 403 Forbidden" {
+		t.Errorf("path-form CONNECT with two ports = %q, want 403, not a bare-host default", status)
+	}
+	if ev := recvEvent(t, events); ev.Port != 0 || ev.Decision != DecisionDeny {
+		t.Errorf("audit event = %+v, want deny with no port", ev)
+	}
+}
+
+func TestBracketedIPv6AuthorityIsUnwrapped(t *testing.T) {
+	policy := Policy{Allow: []Rule{{Host: "*"}}}
+	events := make(chan Event, 4)
+	p := New("sb_1", "acme", policy, nil, nil, fixedDial(echoServer(t)), func(ev Event) { events <- ev })
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	for _, tc := range []struct {
+		authority string
+		status    string
+		decision  Decision
+	}{
+		{"[2606:4700:4700::1111]", "HTTP/1.1 200 Connection Established", DecisionAllow},
+		{"[2606:4700:4700::1111]:443", "HTTP/1.1 200 Connection Established", DecisionAllow},
+		{"[not-an-address]", "HTTP/1.1 403 Forbidden", DecisionDeny},
+		{"[2606:4700:4700::1111", "HTTP/1.1 403 Forbidden", DecisionDeny},
+		{"echo.internal]", "HTTP/1.1 403 Forbidden", DecisionDeny},
+		{"", "HTTP/1.1 403 Forbidden", DecisionDeny},
+	} {
+		conn, err := net.Dial("tcp", front.Listener.Addr().String())
+		if err != nil {
+			t.Fatalf("dial proxy: %v", err)
+		}
+		if _, err = io.WriteString(conn, "CONNECT /x HTTP/1.1\r\nHost: "+tc.authority+"\r\n\r\n"); err != nil {
+			t.Fatalf("write CONNECT: %v", err)
+		}
+		if status := readStatus(t, bufio.NewReader(conn)); status != tc.status {
+			t.Errorf("CONNECT with Host %s = %q, want %q", tc.authority, status, tc.status)
+		}
+		_ = conn.Close()
+		ev := recvEvent(t, events)
+		allowed := ev.Decision == DecisionAllow && ev.Host == "2606:4700:4700::1111" && ev.Port == 443
+		denied := ev.Decision == DecisionDeny && ev.Port == 0
+		if (tc.decision == DecisionAllow) != allowed || (tc.decision == DecisionDeny) != denied {
+			t.Errorf("audit event for %s = %+v, want %v (allow on the bare address and 443, or deny with no port)", tc.authority, ev, tc.decision)
+		}
+	}
+}
+
 type fakeSecrets map[string][2]string
 
 func (f fakeSecrets) Header(name string) (string, string, bool) {

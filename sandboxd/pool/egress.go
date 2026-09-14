@@ -94,7 +94,6 @@ func (m *Manager) lockEgressNIC(ctx context.Context, sb *types.Sandbox) error {
 	return nil
 }
 
-// markLane tells the guest how its traffic leaves; the nft lock is invisible from inside.
 func (m *Manager) markLane(ctx context.Context, key types.PoolKey, sock string) error {
 	lane := m.laneOf(key)
 	if lane == "" {

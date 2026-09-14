@@ -48,14 +48,16 @@ through the same code: a rule with `methods` that does not name `CONNECT`
 denies it, and a rule with a `secret` opens it without injecting anything, on
 both ports. The one difference is `intercept`: on 3128 such a rule terminates
 the TLS and filters the requests inside, on 1080 there is no HTTP to filter, so
-the tunnel is refused. The door is opt-in: the policy sets `"socks5": true`
-and some rule of it can admit a tunnel, otherwise the host side stays unwired
-and the guest's dial is refused like the HTTP one with no policy. Both sides of
-a pool/tenant pair must opt in, each checked on its own, so disjoint host sets
-still bind a listener that denies everything. A policy that opts in with rules
-that all carry `methods` without `CONNECT`, or all `intercept`, is rejected at
-load. A policy that does not opt in pays nothing for the door on the claim
-path. Audit lines carry `"method":"SOCKS5"`.
+the tunnel is refused. The door is opt-in: the pool policy sets
+`"socks5": true`, otherwise the host side stays unwired and the guest's dial
+is refused like the HTTP one with no policy. The tenant policy's rules gate
+every tunnel through the door as they gate `CONNECT`, so the tenant does not
+opt in separately; its own `socks5` counts only on a claim outside any
+configured pool, where the tenant policy is the whole policy. A policy that
+opts in with rules that all carry `methods` without `CONNECT`, or all
+`intercept`, is rejected at load. A pool whose policy does not opt in pays
+nothing for the door on the claim path, whatever its tenants' policies say.
+Audit lines carry `"method":"SOCKS5"`.
 
 ```sh
 curl --socks5-hostname 127.0.0.1:1080 imaps://imap.example.com/   # allowed: {"socks5": true, "allow": [{"host": "imap.example.com"}]}
@@ -163,7 +165,7 @@ file.
       "egress": { "allow": [{ "host": "api.github.com", "secret": "gh" }] } }
   ],
   "tenants": [
-    { "name": "acme", "token": "…", "egress": { "socks5": true, "allow": [{ "host": "api.github.com" }] } }
+    { "name": "acme", "token": "…", "egress": { "allow": [{ "host": "api.github.com" }] } }
   ]
 }
 ```

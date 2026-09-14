@@ -95,9 +95,14 @@ fn to_frames(res: notify::Result<notify::Event>, out: &mut Vec<Response>) {
         N::Remove(_) => EventKind::Deleted,
         _ => return,
     };
-    out.extend(event.paths.into_iter().map(|p| Response::Event {
-        kind,
-        path: p.to_string_lossy().into_owned(),
+    out.extend(event.paths.into_iter().map(|p| {
+        Response::Event {
+            kind,
+            path: p
+                .into_os_string()
+                .into_string()
+                .unwrap_or_else(|os| os.to_string_lossy().into_owned()),
+        }
     }));
 }
 

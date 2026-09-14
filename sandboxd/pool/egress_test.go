@@ -79,7 +79,6 @@ func TestArmEgressBindsSocksOnlyWhenOptedIn(t *testing.T) {
 	}{
 		{"opted in with a bare host rule", &egress.Policy{Socks5: true, Allow: []egress.Rule{{Host: "example.com"}}}, true},
 		{"bare host rule without opting in", &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}, false},
-		{"opted in with a GET-only rule", &egress.Policy{Socks5: true, Allow: []egress.Rule{{Host: "example.com", Methods: []string{"GET"}}}}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -116,6 +115,7 @@ func TestLaneVerdictReachesGuestOnColdBoots(t *testing.T) {
 		{"golden build on an unlocked egress lane", egKey, false, false, []string{"direct"}},
 		{"golden build on the none lane", testKey, true, false, nil},
 		{"cold provision on a locked egress lane", egKey, true, true, []string{"relay"}},
+		{"cold provision on an unlocked egress lane", egKey, false, true, []string{"direct"}},
 		{"cold provision on the none lane", testKey, true, true, nil},
 	}
 	for _, tt := range tests {

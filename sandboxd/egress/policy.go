@@ -64,7 +64,7 @@ func (p *Policy) Intercepts() bool {
 	return p != nil && slices.ContainsFunc(p.Allow, func(r Rule) bool { return r.Intercept })
 }
 
-// Validate rejects an empty or bare-wildcard host, a zero or repeated port, and socks5 without a tunnel rule; an empty allow-list denies everything.
+// Validate rejects a policy the proxy could never honor; an empty allow-list is valid and denies everything.
 func (p Policy) Validate() error {
 	for i, r := range p.Allow {
 		switch r.Host {
@@ -131,9 +131,9 @@ func (p Policy) EvalInner(host, method string, port uint16) (Rule, Decision) {
 	return Rule{}, DecisionDeny
 }
 
-// ServesSocks reports whether the SOCKS5 door is bound: opted in, with some rule that can admit a tunnel.
+// ServesSocks reports whether the policy opted into the SOCKS5 door; Validate holds the rule that makes the door usable.
 func (p Policy) ServesSocks() bool {
-	return p.Socks5 && p.admitsTunnel()
+	return p.Socks5
 }
 
 func (p Policy) admitsTunnel() bool {
@@ -190,7 +190,7 @@ func (c composite) EvalInner(host, method string, port uint16) (Rule, Decision) 
 	return rule, DecisionAllow
 }
 
-// ServesSocks is conservative: two host sets that never meet still bind a door that denies everything.
+// ServesSocks is the pool's call: the tenant's rules already gate every tunnel through Eval.
 func (c composite) ServesSocks() bool {
-	return c.pool.ServesSocks() && c.tenant.ServesSocks()
+	return c.pool.ServesSocks()
 }

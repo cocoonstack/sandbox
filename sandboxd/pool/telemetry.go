@@ -61,7 +61,6 @@ type auditFrame struct {
 	Secret   string   `json:"secret,omitempty"` //nolint:gosec // the secret's ref name, never its value
 }
 
-// Counters snapshots the monotonic telemetry counters.
 func (m *Manager) Counters() Counters {
 	c := &m.counters
 	return Counters{

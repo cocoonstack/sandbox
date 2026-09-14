@@ -117,17 +117,17 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 	parked := now.Before(m.atCapacityUntil)
 	m.mu.Unlock()
 	if err != nil {
+		logger := log.WithFunc("pool.refillOne")
 		switch {
 		case ctx.Err() != nil:
 		case entered:
-			log.WithFunc("pool.refillOne").Errorf(ctx, err,
-				"node is at capacity; parking refill for %s", capacityBackoff)
+			logger.Errorf(ctx, err, "node is at capacity; parking refill for %s", capacityBackoff)
 		case parked:
 		default:
 			hash := p.hash
-			log.WithFunc("pool.refillOne").Errorf(ctx, err, "refill %s", hash)
+			logger.Errorf(ctx, err, "refill %s", hash)
 			if backedOff {
-				log.WithFunc("pool.refillOne").Warnf(ctx,
+				logger.Warnf(ctx,
 					"refill %s failed %d times running; pausing refill for %s",
 					hash, fails, wait.Round(time.Millisecond))
 			}

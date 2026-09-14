@@ -71,17 +71,17 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	m.mu.Unlock()
 	// a crash mid-export leaves a *.tmp staging dir nothing in this life reuses
 	tmps, _ := filepath.Glob(filepath.Join(m.goldensDir(), "*.tmp"))
+	logger := log.WithFunc("pool.Reconcile")
 	if err := m.ckpts.SweepStaging(); err != nil {
-		log.WithFunc("pool.Reconcile").Error(ctx, err, "sweep checkpoint staging")
+		logger.Error(ctx, err, "sweep checkpoint staging")
 	}
 	if err := m.tpls.SweepStaging(); err != nil {
-		log.WithFunc("pool.Reconcile").Error(ctx, err, "sweep template staging")
+		logger.Error(ctx, err, "sweep template staging")
 	}
 	for _, tmp := range tmps {
 		_ = os.RemoveAll(tmp)
 	}
 
-	logger := log.WithFunc("pool.Reconcile")
 	m.reclaimOrphanArchiveCks(ctx, claims)
 	m.retryArchiveDeletes(ctx)
 	removed := m.sweepStaleVMs(ctx, live, owned)
