@@ -281,11 +281,6 @@ func retryMiss(err error) bool {
 	return !ok || he.Status == http.StatusNotFound
 }
 
-// retryAny retries a redirect candidate's failure unconditionally: one
-// candidate being wrong for the claim (no egress, a stale name) must not
-// stop the walk from reaching a candidate that would still succeed.
-func retryAny(error) bool { return true }
-
 // retryTransient reports whether an origin-fallback is worth the round-trip:
 // true for a transport failure, a miss (404), full (429), mid-heal (503), an
 // engine/proxy failure (500/502/504), or a mid-rotation 401 (the origin
@@ -338,14 +333,9 @@ func claimFollow(origin, verb string, encode claimEncoder, claimAt claimPoster) 
 	return addr, target, nil
 }
 
-// redirectFallback walks candidates via claimAt, retrying broadly (retryAny).
-// If every candidate is exhausted and the last failure was transient
-// (retryTransient), it gives origin one more no_redirect attempt — the node
-// that issued the redirect provisions or heals locally instead of leaving
-// the claim stuck on stale gossip. A definitive last failure (a bad request,
-// an auth rejection, a conflict) skips the fallback: origin would fail the
-// same way. A second-level redirect (a compliant server never sends one
-// once no_redirect is set) fails the candidate rather than being followed.
+// redirectFallback claims at every candidate with no_redirect; when the last failure was transient
+// (retryTransient) origin gets one more attempt, since it provisions or heals locally instead of
+// leaving the claim on stale gossip.
 func redirectFallback(origin string, candidates []string, claimAt func(addr string) (claimResponse, error)) (string, claimResponse, error) {
 	claimNoRedirect := func(target string) (claimResponse, error) {
 		cr, err := claimAt(target)
@@ -357,28 +347,21 @@ func redirectFallback(origin string, candidates []string, claimAt func(addr stri
 		}
 		return cr, nil
 	}
-
-	var won string
-	var cr claimResponse
-	tryErr := tryEach(candidates, func(addr string) error {
-		target, err := claimNoRedirect(addr)
-		if err != nil {
-			return err
+	var lastErr error
+	for _, addr := range candidates {
+		cr, err := claimNoRedirect(addr)
+		if err == nil {
+			return addr, cr, nil
 		}
-		won, cr = addr, target
-		return nil
-	}, retryAny)
-	if tryErr == nil {
-		return won, cr, nil
+		lastErr = err
 	}
-	if !retryTransient(tryErr) {
-		return "", claimResponse{}, fmt.Errorf("all redirect targets failed: %w", tryErr)
+	if !retryTransient(lastErr) {
+		return "", claimResponse{}, fmt.Errorf("all redirect targets failed: %w", lastErr)
 	}
 	cr, err := claimNoRedirect(origin)
 	if err != nil {
-		// Both halves matter to whoever reads this: the peers' failures say why
-		// the claim left the origin, the origin's says why coming back did not help.
-		return "", claimResponse{}, fmt.Errorf("all redirect targets failed, origin fallback failed: %w", errors.Join(tryErr, err))
+		// the peers' failures say why the claim left origin, origin's says why coming back did not help
+		return "", claimResponse{}, fmt.Errorf("all redirect targets failed, origin fallback failed: %w", errors.Join(lastErr, err))
 	}
 	return origin, cr, nil
 }

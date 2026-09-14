@@ -217,27 +217,26 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := req.Key()
-	hash := key.Hash()
 	tenant := tenantFrom(r.Context())
 	if len(req.Volumes) > 0 || req.VolumesAttachOnly {
-		s.handleVolumeClaim(w, r, req, key, hash, tenant)
+		s.handleVolumeClaim(w, r, req, key, key.Hash(), tenant)
 		return
 	}
 
 	// the data plane must be direct, so a warm peer gets the claim by redirect, not proxy
 	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef, nil)
 	if errors.Is(err, pool.ErrNoWarm) {
-		if s.redirectClaim(r.Context(), w, req, key, hash, tenant) {
+		if s.redirectClaim(r.Context(), w, req, key, key.Hash(), tenant) {
 			return
 		}
 		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, nil)
 	}
 	// quota is per node, so a full node bounces the claim to a peer before answering 429
 	if errors.Is(err, pool.ErrQuota) && s.placer != nil && !req.NoRedirect &&
-		writeRedirect(w, s.placer.Candidates(hash)) {
+		writeRedirect(w, s.placer.Candidates(key.Hash())) {
 		return
 	}
-	writeResult(w, r, "claim", hash, "provisioning failed", err, func() {
+	writeResult(w, r, "claim", key, "provisioning failed", err, func() {
 		writeJSON(w, http.StatusOK, s.claimResponse(sb))
 	})
 }

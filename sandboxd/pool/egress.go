@@ -322,7 +322,7 @@ func newEgressDialer(allow []netip.Prefix) *net.Dialer {
 		}
 		ip, err := netip.ParseAddr(host)
 		if err != nil {
-			return fmt.Errorf("egress: unresolved address %q", host)
+			return fmt.Errorf("egress: unresolved address %q: %w", host, err)
 		}
 		ip = ip.Unmap()
 		if nat64Range.Contains(ip) {

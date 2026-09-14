@@ -20,7 +20,7 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 			return err
 		}
 		if err := spec.ValidateLimits(); err != nil {
-			return fmt.Errorf("%w: %v", ErrBadCount, err)
+			return fmt.Errorf("%w: %w", ErrBadCount, err)
 		}
 		// egress is config-owned; accepting it here would silently drop it
 		if spec.Egress != nil {

@@ -12,10 +12,8 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-const (
-	// portReadBuf fits silkd's data frames in one buffered read.
-	portReadBuf = 64 << 10
-)
+// portReadBuf fits silkd's data frames in one buffered read.
+const portReadBuf = 64 << 10
 
 var portDataHead = []byte(`{"type":"data","data":"`)
 

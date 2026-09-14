@@ -90,13 +90,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if snapsErr != nil {
 		logger.Warnf(ctx, "snapshot sweep skipped: %v", snapsErr)
 	} else {
-		var orphans []string
-		for _, snap := range snaps {
-			orphanHib := strings.HasPrefix(snap, hibernatePrefix) && !referenced[snap]
-			if orphanHib || strings.HasPrefix(snap, forkPrefix) || strings.HasPrefix(snap, goldenPrefix) {
-				orphans = append(orphans, snap)
-			}
-		}
+		orphans := slices.DeleteFunc(snaps, func(snap string) bool {
+			return strings.HasPrefix(snap, hibernatePrefix) && referenced[snap] ||
+				!strings.HasPrefix(snap, hibernatePrefix) && !strings.HasPrefix(snap, forkPrefix) && !strings.HasPrefix(snap, goldenPrefix)
+		})
 		m.runBounded(ctx, len(orphans), func(ctx context.Context, i int) {
 			m.dropSnap(ctx, orphans[i])
 			logger.Infof(ctx, "removed orphan snapshot %s", orphans[i])

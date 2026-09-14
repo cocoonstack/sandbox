@@ -255,8 +255,8 @@ func (c *Config) ClusterDigest(caFingerprint string) string {
 		names[i] = t.Name
 	}
 	slices.Sort(names)
-	if c.Mesh != nil && c.Mesh.ClusterKey != "" {
-		if key, err := base64.StdEncoding.DecodeString(c.Mesh.ClusterKey); err == nil {
+	if c.Mesh != nil {
+		if key, _ := c.Mesh.DecodedKey(); key != nil {
 			type auth struct{ Name, Token string }
 			tenants := make([]auth, len(c.Tenants))
 			for i, t := range c.Tenants {
