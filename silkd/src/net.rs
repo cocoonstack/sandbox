@@ -3,12 +3,13 @@
 use std::fs::File;
 use std::io::Read;
 use std::sync::LazyLock;
-use std::sync::atomic::{AtomicI8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI8, Ordering};
 
 /// File the host writes with its lane verdict, `relay` or `direct`; on the root filesystem so a guest reboot keeps it.
 const LANE_FILE: &str = "/etc/silkd-lane";
 
 static LANE_OVERRIDE: AtomicI8 = AtomicI8::new(-1);
+static LANE_RELAY: AtomicBool = AtomicBool::new(false);
 
 /// Reports whether the guest can reach a network; only a `device`-backed interface counts, since the kernel auto-creates virtual tunnels.
 pub fn has_egress() -> bool {
@@ -34,7 +35,18 @@ pub fn has_egress() -> bool {
 
 /// Reports whether execs route directly: a NIC the host did not mark as relayed.
 pub fn routes_directly() -> bool {
-    has_egress() && !lane_is_relay(LANE_FILE)
+    if !has_egress() {
+        return false;
+    }
+    // relay latches: the host never unlocks a lane, but a late lock can land after the first exec.
+    if LANE_RELAY.load(Ordering::Relaxed) {
+        return false;
+    }
+    let relay = lane_is_relay(LANE_FILE);
+    if relay {
+        LANE_RELAY.store(true, Ordering::Relaxed);
+    }
+    !relay
 }
 
 /// Lane override for tests: set_var would race every concurrent getenv.

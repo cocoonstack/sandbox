@@ -23,7 +23,8 @@ const (
 	socksProxy = "127.0.0.1:1080"
 	httpProxy  = "http://127.0.0.1:3128"
 
-	curlLoginDenied = "exit=67"
+	curlLoginDenied  = "exit=67"
+	curlProxyRefused = "exit=97"
 )
 
 func main() {
@@ -78,8 +79,10 @@ func run(addr, token, template, echo, getOnly, imap string) error {
 			return fmt.Errorf("IMAPS over SOCKS5 did not reach the login step: %q", strings.TrimSpace(out))
 		}
 		fmt.Println("  IMAPS handshake rides the tunnel; the server refused the probe login")
-		if code := curl(ctx, sb, "--socks5-hostname", socksProxy, "imap://"+imap+":143/"); code != "000" {
-			return fmt.Errorf("IMAP on the unlisted port 143 returned %q, want a refused tunnel", code)
+		out, _ = sb.Exec(ctx, "sh", "-c", fmt.Sprintf(
+			"curl -sS -m 30 --socks5-hostname %s imap://%s:143/ 2>&1; echo exit=$?", socksProxy, imap))
+		if !strings.Contains(out, curlProxyRefused) {
+			return fmt.Errorf("IMAP on the unlisted port 143 did not fail at the SOCKS5 handshake: %q", strings.TrimSpace(out))
 		}
 		fmt.Println("  IMAP on the unlisted port refused on 1080")
 	}

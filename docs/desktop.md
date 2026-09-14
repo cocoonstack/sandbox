@@ -24,8 +24,7 @@ up a few seconds later — poll `GET /screenshot` until it returns 200.
   with an [egress policy](egress.md) when tasks visit the OSWorld mocked
   websites or the real web; the session's browsers reach the web through the
   relay. Thunderbird's mail policy is pinned to the SOCKS5 door, so a pool that
-  runs mail tasks sets `"socks5": true` in its policy, and so does the tenant
-  policy when the claim carries one. `net=egress` on a
+  runs mail tasks sets `"socks5": true` in its policy. `net=egress` on a
   guarded bridge works the same way: the session's proxy setup waits for the
   host's lane verdict in `/etc/silkd-lane` and follows it, so the locked NIC
   costs the desktop nothing (a CNI-backed lane is told `direct` and routes).
@@ -79,8 +78,13 @@ Configure it with `SANDBOXD_ADDR`, `SANDBOXD_TOKEN`, `COCOON_TEMPLATE`
   needs a browser the tasks do not pkill and rebind. It takes the caller's
   profile and debugging port.
 - `guest-proxy.service` points the session's browsers and `osworld-server`'s
-  commands at silkd's loopback relay on a guest with no NIC, and on a guest
-  whose NIC the host reports as `relay` in `/etc/silkd-lane`; it waits up to
-  30 s for that verdict before the session starts. A NIC the host calls
-  `direct`, or a host that writes nothing, leaves the unit idle.
+  commands at silkd's loopback relay on a guest with no device-backed NIC, and
+  on a guest whose NIC the host reports as `relay` in `/etc/silkd-lane`; on a
+  NIC-bearing guest it holds the session until that verdict lands, up to 300 s,
+  longer than the host's own probe and write timeouts, so a verdict that never
+  comes means a host that already gave the boot up or an old sandboxd that
+  writes none: the unit then fails visibly and the session routes directly. A
+  verdict that changes under a running desktop (a node moved from CNI networks
+  to a bridge after the claim) reaches silkd's execs at once but the session
+  only through a re-claim.
 - x86_64 only.

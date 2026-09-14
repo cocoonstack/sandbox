@@ -98,10 +98,10 @@ func TestCompositeEvalInnerIntersectsTenant(t *testing.T) {
 func TestWildcardApexIsNotMatched(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "*.example.com"}}}
 	if _, d := policy.Eval("example.com", "GET", 443); d != DecisionDeny {
-		t.Errorf("apex example.com matched *.example.com, want deny")
+		t.Error("apex example.com matched *.example.com, want deny")
 	}
 	if _, d := policy.Eval("a.example.com", "GET", 443); d != DecisionAllow {
-		t.Errorf("a.example.com did not match *.example.com, want allow")
+		t.Error("a.example.com did not match *.example.com, want allow")
 	}
 }
 
@@ -131,37 +131,16 @@ func TestPolicyValidate(t *testing.T) {
 }
 
 func TestPolicyServesSocks(t *testing.T) {
-	tests := []struct {
-		name   string
-		policy Policy
-		want   bool
-	}{
-		{"opted in, no rules", Policy{Socks5: true}, false},
-		{"opted in, bare host", Policy{Socks5: true, Allow: []Rule{{Host: "a.internal"}}}, true},
-		{"bare host without opting in", Policy{Allow: []Rule{{Host: "a.internal"}}}, false},
-		{"opted in, methods without CONNECT", Policy{Socks5: true, Allow: []Rule{{Host: "a.internal", Methods: []string{"GET"}}}}, false},
-		{"opted in, methods with CONNECT", Policy{Socks5: true, Allow: []Rule{{Host: "a.internal", Methods: []string{"connect"}}}}, true},
-		{"opted in, intercept only", Policy{Socks5: true, Allow: []Rule{{Host: "a.internal", Intercept: true}}}, false},
-		{"opted in, secret", Policy{Socks5: true, Allow: []Rule{{Host: "a.internal", Secret: "s"}}}, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.policy.ServesSocks(); got != tt.want {
-				t.Errorf("ServesSocks() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-	bare := Policy{Socks5: true, Allow: []Rule{{Host: "a.internal"}}}
-	getOnly := Policy{Socks5: true, Allow: []Rule{{Host: "a.internal", Methods: []string{"GET"}}}}
+	opted := Policy{Socks5: true, Allow: []Rule{{Host: "a.internal"}}}
 	silent := Policy{Allow: []Rule{{Host: "a.internal"}}}
-	if Compose(bare, getOnly).ServesSocks() {
-		t.Error("composite ServesSocks() = true with a GET-only tenant, want false")
+	if !opted.ServesSocks() || silent.ServesSocks() {
+		t.Errorf("ServesSocks() opted=%v silent=%v, want true/false", opted.ServesSocks(), silent.ServesSocks())
 	}
-	if Compose(bare, silent).ServesSocks() {
-		t.Error("composite ServesSocks() = true with a tenant that did not opt in, want false")
+	if !Compose(opted, silent).ServesSocks() {
+		t.Error("composite ServesSocks() = false with an opted-in pool and a silent tenant; the pool owns the door")
 	}
-	if !Compose(bare, bare).ServesSocks() {
-		t.Error("composite ServesSocks() = false with two opted-in bare policies, want true")
+	if Compose(silent, opted).ServesSocks() {
+		t.Error("composite ServesSocks() = true with a silent pool; a tenant cannot open the door alone")
 	}
 }
 

@@ -151,19 +151,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'host='"'"'127.0.0.1'"'"'' \
       'port=1080' \
       > /usr/local/share/guest-proxy.dconf \
-    # a NIC alone says nothing about routing: the host writes /etc/silkd-lane once silkd answers, so a NIC-bearing guest waits for the verdict
+    # a NIC alone says nothing about routing: the host writes /etc/silkd-lane once silkd answers; the wait outlives the host's
+    # probe (90 s) and write (120 s) timeouts, so a guest still waiting belongs to a boot the host already gave up on
     && printf '%s\n' \
       '#!/bin/sh' \
       'set -e' \
       ': > /run/guest-proxy.env' \
       'nic=0' \
-      'for n in /sys/class/net/*; do case ${n##*/} in lo|sit0) ;; *) nic=1;; esac; done' \
+      'for n in /sys/class/net/*; do if [ -e "$n/device" ]; then nic=1; fi; done' \
       'if [ $nic = 1 ]; then' \
       '  i=0' \
-      '  while [ ! -e /etc/silkd-lane ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done' \
-      '  if [ ! -e /etc/silkd-lane ]; then echo "guest-proxy: no lane verdict from the host; routing directly" >&2; exit 0; fi' \
-      '  read -r lane < /etc/silkd-lane' \
-      '  [ "$lane" = relay ] || exit 0' \
+      '  while [ ! -e /etc/silkd-lane ] && [ $i -lt 3000 ]; do sleep 0.1; i=$((i+1)); done' \
+      '  if [ ! -e /etc/silkd-lane ]; then echo "guest-proxy: no lane verdict from the host after 300 s; routing directly" >&2; exit 1; fi' \
+      '  [ "$(cat /etc/silkd-lane)" = relay ] || exit 0' \
       'fi' \
       'cat /usr/local/share/guest-proxy.env > /run/guest-proxy.env' \
       'cat /usr/local/share/guest-proxy.dconf > /etc/dconf/db/local.d/01-proxy' \

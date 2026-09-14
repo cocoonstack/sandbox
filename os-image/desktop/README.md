@@ -6,13 +6,15 @@ plus a GNOME session (Ubuntu session, dock, Yaru) on an Xvfb `:1` display at
 ([xlang-ai/osworld-server](https://github.com/xlang-ai/osworld-server),
 pinned commit) on guest loopback `5000`, the OSWorld Chrome CDP bridge on
 loopback `9222`, and the OSWorld app set: Google Chrome, LibreOffice, GIMP,
-VLC. The intended pool shape is `size: 2xlarge` (8 CPU / 16G); the session
-idles at ~0.5 GB anonymous memory with gnome-shell around 290 MB RSS.
+VLC, Thunderbird, VS Code, Zotero, Obsidian, Shotcut, FreeCAD and WPS Office.
+The intended pool shape is `size: 2xlarge` (8 CPU / 16G); the session idles
+at ~0.5 GB anonymous memory with gnome-shell around 290 MB RSS.
 
 An OSWorld harness or the Sai driver claims a sandbox and reaches the guest
 server through the silkd port relay (`DialPort`/`ProxyPort` 5000, 9222), so
 the `none` lane works for local tasks; tasks that visit the OSWorld mocked
-websites need the `egress` lane.
+websites or the web add an egress policy, on the `none` lane or a guarded
+bridge `egress` lane alike (see `docs/desktop.md`).
 
 ## Guest contract
 
@@ -27,6 +29,12 @@ websites need the `egress` lane.
   `cdp-bridge` unit forwards loopback `9222` to Chrome's `1337`.
 - dconf defaults turn on `toolkit-accessibility`, and turn off animations,
   idle, screen lock, and the welcome dialog.
+- `guest-proxy.service` writes the session's proxy environment, the dconf
+  proxy entry and the apt proxy when the guest has no device-backed NIC, or
+  when the host's verdict in `/etc/silkd-lane` reads `relay`; on a NIC-bearing
+  guest it holds the session for that verdict up to 300 s and fails visibly
+  without it. Thunderbird's policy pins mail to the SOCKS5 door on `1080`, so
+  a pool that runs mail tasks opts its policy into `socks5`.
 
 ## Build
 

@@ -145,19 +145,19 @@ func clickAndReadCursor(ctx context.Context, sb *sandbox.Sandbox) error {
 
 // proxyReachesSession proves the session's environment carries the relay and the relay reaches an allowed origin.
 func proxyReachesSession(ctx context.Context, sb *sandbox.Sandbox, probe string) error {
-	script := `test -n "$http_proxy" && curl -sS -m 20 -o /dev/null -w '%{http_code}' ` + probe
-	out, err := execute(ctx, sb, []string{"sh", "-c", script}, 30)
+	script := `systemctl is-active guest-proxy.service >&2 || exit 1; [ -n "$http_proxy" ] || { echo http_proxy unset in the session >&2; exit 1; }; exec curl -sS -m 20 -o /dev/null -w '%{http_code}' "$1"`
+	out, err := execute(ctx, sb, []string{"sh", "-c", script, "sh", probe}, 30)
 	if err != nil {
 		return fmt.Errorf("proxy leg: %w", err)
 	}
 	if strings.TrimSpace(out) != "200" {
 		return fmt.Errorf("proxy leg: fetch through the session's proxy returned %q, want 200", strings.TrimSpace(out))
 	}
-	fmt.Println("  proxy: the session's environment carries the relay and an allowed origin answers 200")
+	fmt.Println("  proxy: guest-proxy.service active, the session's environment carries the relay, an allowed origin answers 200")
 	return nil
 }
 
-// execute runs one command through osworld-server and returns its output; a non-zero exit is an error.
+// execute runs one command through osworld-server and returns its output.
 func execute(ctx context.Context, sb *sandbox.Sandbox, command []string, timeout int) (string, error) {
 	req, _ := json.Marshal(map[string]any{"command": command, "shell": false, "timeout": timeout})
 	body, err := harness.HTTPOverPort(ctx, sb, serverPort, "POST", "/execute", req)

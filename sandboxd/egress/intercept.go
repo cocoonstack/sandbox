@@ -94,7 +94,7 @@ func (h *interceptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		out.URL.Scheme = "https"
 		out.URL.Host = h.authority
 		// keep the guest's Host when it names the CONNECT host: SigV4 signing breaks on a rewrite.
-		if !strings.EqualFold(hostOnly(r.Host), h.host) {
+		if inner, _, _ := hostPort(r.Host, 0); !strings.EqualFold(inner, h.host) {
 			out.Host = h.authority
 		}
 	})

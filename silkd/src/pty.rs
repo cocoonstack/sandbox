@@ -43,7 +43,9 @@ pub async fn open<W: AsyncWrite + Unpin>(
     if let Some(dir) = &req.cwd {
         cmd.current_dir(dir);
     }
-    cmd.env_clear().envs(sysutil::base_env()).envs(&req.env);
+    cmd.env_clear()
+        .envs(sysutil::base_env().iter().copied())
+        .envs(&req.env);
     if let Some(user) = &req.user
         && let Err(e) = sysutil::apply_user(&mut cmd, user)
     {

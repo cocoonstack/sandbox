@@ -50,7 +50,7 @@ impl Table {
         }
         let mut child = Command::new("bash")
             .env_clear()
-            .envs(sysutil::base_env())
+            .envs(sysutil::base_env().iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // null, not piped: the init line `exec 2>&1` repoints fd 2 at the stdout pipe.

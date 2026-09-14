@@ -134,7 +134,6 @@ func (p *Proxy) untrack(conn net.Conn) {
 	p.connMu.Unlock()
 }
 
-// serveConnect gates an HTTPS/opaque tunnel by host and port.
 func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	host, port, ok := hostPort(r.Host, 443)
 	if !ok {
@@ -284,14 +283,6 @@ func splice(a, b net.Conn) {
 // denied answers a policy rejection with a 403 rather than a hang.
 func denied(w http.ResponseWriter, host string) {
 	http.Error(w, fmt.Sprintf("egress denied: %s", host), http.StatusForbidden)
-}
-
-// hostOnly strips a port from an authority, tolerating a bare host and IPv6 literals.
-func hostOnly(authority string) string {
-	if host, _, err := net.SplitHostPort(authority); err == nil {
-		return host
-	}
-	return authority
 }
 
 // hostPort splits an authority; a bare host takes def, a port outside 1-65535 is refused rather than defaulted.

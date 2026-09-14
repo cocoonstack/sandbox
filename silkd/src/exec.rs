@@ -4,7 +4,7 @@ use std::process::Stdio;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -41,7 +41,7 @@ where
         cmd.current_dir(cwd);
     }
     cmd.env_clear();
-    cmd.envs(sysutil::base_env());
+    cmd.envs(sysutil::base_env().iter().copied());
     cmd.envs(&req.env);
     if let Some(ref user) = req.user
         && let Err(e) = sysutil::apply_user(&mut cmd, user)
@@ -167,9 +167,8 @@ async fn pump_out(
 
 async fn copy_stream<R>(mut r: R, proc: &Proc, stderr: bool, fg: Option<&mpsc::Sender<Chunk>>)
 where
-    R: tokio::io::AsyncRead + Unpin,
+    R: AsyncRead + Unpin,
 {
-    use tokio::io::AsyncReadExt;
     let make: fn(Vec<u8>) -> Chunk = if stderr { Chunk::Stderr } else { Chunk::Stdout };
     let mut buf = [0u8; crate::proto::READ_CHUNK];
     loop {

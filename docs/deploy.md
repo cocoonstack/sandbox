@@ -45,6 +45,16 @@ volume claim has finalized, do not roll a node back to an older sandboxd until
 all volume claims are gone; the older daemon cannot preserve the volume
 claims' admission holds and marker bookkeeping recorded in `claims.json`.
 
+The guest images and sandboxd move together on the egress lane: sandboxd tells
+a NIC-bearing guest how its traffic leaves through `/etc/silkd-lane`, and a
+guest image from another release reads a different file or none, which on a
+locked bridge lane leaves its execs routing into the lock. Roll the images
+with the daemon. A config that uses the `socks5` or `ports` policy keys does
+not load on an older sandboxd (unknown keys are rejected), so a rollback takes
+the config with it. The SOCKS5 door is opt-in: a policy that relied on the
+door binding for any bare host rule adds `"socks5": true` or loses the door
+silently, since its config still loads.
+
 ## Configuration
 
 sandboxd reads one JSON file (`-config`, default
