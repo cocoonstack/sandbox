@@ -90,7 +90,7 @@ type Manager interface {
 	HasPoolGolden(key types.PoolKey) bool
 	HasPromotedTemplate(ctx context.Context, key types.PoolKey, tenant string) bool
 	AgentSocket(id, token string) (string, error)
-	WakeAgentSocket(ctx context.Context, id, token string) (string, error)
+	WakeAgentSocket(ctx context.Context, id, token string) (string, func(), error)
 	SetPools(ctx context.Context, pools []config.PoolSpec) error
 	Drain(ctx context.Context)
 	Uncordon(ctx context.Context)

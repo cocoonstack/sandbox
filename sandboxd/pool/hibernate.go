@@ -23,13 +23,20 @@ func (m *Manager) Hibernate(ctx context.Context, id string, cred Cred) error {
 	return m.hibernateLocked(ctx, sb)
 }
 
-func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string, error) {
+// WakeAgentSocket resolves a data-plane connection's guest socket; the returned func ends the hold it takes.
+func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string, func(), error) {
 	sb, ok := m.claim(id, token)
 	if !ok {
-		return "", ErrUnknownSandbox
+		return "", nil, ErrUnknownSandbox
 	}
 	sb.Touch()
-	return m.wakeResolved(ctx, sb)
+	sb.Hold()
+	sock, err := m.wakeResolved(ctx, sb)
+	if err != nil {
+		sb.Unhold()
+		return "", nil, err
+	}
+	return sock, sb.Unhold, nil
 }
 
 // hibernateLocked is Hibernate's body; the caller holds sb.Transition.
@@ -184,7 +191,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 		if p, pooled := m.activePool(sb.Key); pooled {
 			idle = p.idle
 		}
-		if skipIdle(sb, idle, now) {
+		if m.skipIdle(sb, idle, now) {
 			continue
 		}
 		victims = append(victims, victim{sb.ID, sb.Token})
@@ -214,7 +221,7 @@ func (m *Manager) idleHibernate(ctx context.Context, id, token string, sweepStar
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
-	woke := sb.LastSeen().After(sweepStart) || sb.HibernateSnap != ""
+	woke := sb.LastSeen().After(sweepStart) || sb.HibernateSnap != "" || m.active(sb)
 	m.mu.Unlock()
 	if woke {
 		return errWokeMeanwhile
@@ -311,8 +318,17 @@ func (m *Manager) recordHibernate(ctx context.Context, sb *types.Sandbox) {
 	m.recordUsage(ctx, usageEvent{Event: "hibernate", ID: sb.ID, VMName: sb.VMName})
 }
 
-// skipIdle reports the claims an idle sweep must leave alone.
-func skipIdle(sb *types.Sandbox, idle time.Duration, now time.Time) bool {
+// skipIdle reports the claims an idle sweep must leave alone; callers hold m.mu.
+func (m *Manager) skipIdle(sb *types.Sandbox, idle time.Duration, now time.Time) bool {
 	return idle <= 0 || sb.Key.Net == types.NetEgress || hasAppliedVolumes(sb) ||
-		sb.HibernateSnap != "" || sb.ArchiveCk != "" || now.Sub(sb.LastSeen()) < idle
+		sb.HibernateSnap != "" || sb.ArchiveCk != "" || m.active(sb) || now.Sub(sb.LastSeen()) < idle
+}
+
+// active reports a held data-plane connection or an egress request in flight; callers hold m.mu.
+func (m *Manager) active(sb *types.Sandbox) bool {
+	if sb.Busy() {
+		return true
+	}
+	el := m.egressListeners[sb.ID]
+	return el != nil && el.proxy.Active() > 0
 }

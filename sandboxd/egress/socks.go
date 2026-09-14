@@ -49,6 +49,8 @@ func (p *Proxy) ServeSOCKS(ctx context.Context, ln net.Listener) {
 
 func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 	defer func() { _ = conn.Close() }()
+	p.active.Add(1)
+	defer p.active.Add(-1)
 	if !p.track(conn) {
 		return
 	}

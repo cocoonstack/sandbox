@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
@@ -69,6 +70,8 @@ type Proxy struct {
 	connMu sync.Mutex
 	conns  map[net.Conn]struct{}
 	closed bool
+	// active counts the requests and tunnels in flight, read by the idle sweep.
+	active atomic.Int32
 }
 
 // New builds a Proxy for one sandbox; secrets, ca, and audit may be nil, dial must not.
@@ -94,12 +97,17 @@ func New(sandbox, tenant string, policy Evaluator, secrets Secrets, ca *CA, dial
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	p.active.Add(1)
+	defer p.active.Add(-1)
 	if r.Method == http.MethodConnect {
 		p.serveConnect(w, r)
 		return
 	}
 	p.serveForward(w, r)
 }
+
+// Active counts the requests and tunnels the proxy is serving right now.
+func (p *Proxy) Active() int { return int(p.active.Load()) }
 
 // Close ends every hijacked tunnel, which outlives http.Server.Close; idempotent.
 func (p *Proxy) Close() {

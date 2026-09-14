@@ -53,13 +53,13 @@ func TestWakePersistFailureSurfaces(t *testing.T) {
 		broken := filepath.Join(t.TempDir(), "gone", "claims.json")
 		m.store.path = broken
 
-		if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
+		if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
 			t.Fatal("wake reported success despite a persist failure")
 		}
 		if eng.snapRemoved(snap) {
 			t.Error("wake dropped the snapshot the lagging journal references")
 		}
-		if sock, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil || sock == "" {
+		if sock, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil || sock == "" {
 			t.Fatalf("fast-path wake of the awake VM: %q, %v", sock, err)
 		}
 		if eng.snapRemoved(snap) {
@@ -70,7 +70,7 @@ func TestWakePersistFailureSurfaces(t *testing.T) {
 		}
 
 		waitFor(t, func() bool {
-			if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+			if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 				t.Fatalf("fast-path wake: %v", err)
 			}
 			return eng.snapRemoved(snap)
@@ -152,7 +152,7 @@ func TestWakeRestoreErrorDestroysAndRetries(t *testing.T) {
 	snap := eng.hibernates[0]
 	eng.restoreErr = errors.New("restore timeout")
 
-	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
 		t.Fatal("wake reported success despite a restore error")
 	}
 	if !eng.removed(sb.VMName) {
@@ -162,7 +162,7 @@ func TestWakeRestoreErrorDestroysAndRetries(t *testing.T) {
 		t.Error("restore error dropped the snapshot needed to retry")
 	}
 	eng.restoreErr = nil
-	sock, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+	sock, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
 	if err != nil || sock == "" {
 		t.Fatalf("wake retry after restore recovered: %q, %v", sock, err)
 	}
@@ -202,7 +202,7 @@ func TestRetryResolvesDanglingIntent(t *testing.T) {
 	if n := m.Counters().Hibernates; n != 1 {
 		t.Errorf("hibernates billed=%d, want 1 (the adopted transition is recorded)", n)
 	}
-	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake after resolve: %v", err)
 	}
 	if len(eng.restores) != 1 {
@@ -223,7 +223,7 @@ func TestWakeResolvesDanglingIntent(t *testing.T) {
 
 	eng.hibernateErr = nil
 	eng.snapListErr = nil
-	sock, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+	sock, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
 	if err != nil {
 		t.Fatalf("wake: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestResolvePendingSnapReleaseRaceDropsOrphan(t *testing.T) {
 		callsBefore := eng.snapListCalls()
 		wakeErr := make(chan error, 1)
 		go func() {
-			_, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+			_, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
 			wakeErr <- err
 		}()
 		waitFor(t, func() bool { return eng.snapListCalls() > callsBefore })
@@ -315,7 +315,7 @@ func TestWakeProbeFailureDestroysAndRetries(t *testing.T) {
 	snap := eng.hibernates[0]
 	eng.probeErr = errors.New("probe timeout")
 
-	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
 		t.Fatal("wake reported success despite a probe timeout")
 	}
 	if !eng.removed(sb.VMName) {
@@ -325,7 +325,7 @@ func TestWakeProbeFailureDestroysAndRetries(t *testing.T) {
 		t.Error("probe failure dropped the snapshot needed to retry")
 	}
 	eng.probeErr = nil
-	sock, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+	sock, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
 	if err != nil || sock == "" {
 		t.Fatalf("wake retry after the probe recovered: %q, %v", sock, err)
 	}
@@ -344,7 +344,7 @@ func TestFlushClaimsClosesShutdownWindow(t *testing.T) {
 	broken := filepath.Join(t.TempDir(), "gone", "claims.json")
 	m.store.path = broken
 
-	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
 		t.Fatal("wake reported success despite a persist failure")
 	}
 	if err := os.MkdirAll(filepath.Dir(broken), 0o750); err != nil {
@@ -385,7 +385,7 @@ func TestHibernateWakeCycle(t *testing.T) {
 			t.Errorf("snapshot name %q, want %s prefix", hibSnap, hibernatePrefix)
 		}
 
-		sock, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+		sock, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
 		if err != nil {
 			t.Fatalf("WakeAgentSocket: %v", err)
 		}
@@ -400,7 +400,7 @@ func TestHibernateWakeCycle(t *testing.T) {
 			t.Errorf("hibernated count %d after wake, want 0", g.Hibernated)
 		}
 
-		if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 			t.Fatalf("fast-path WakeAgentSocket: %v", err)
 		}
 		if len(eng.restores) != 1 {
@@ -419,7 +419,7 @@ func TestWakeDropsSnapshotOffReturnPath(t *testing.T) {
 		}
 		eng.snapRemoveStall = make(chan struct{})
 
-		sock, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+		sock, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
 		if err != nil {
 			t.Fatalf("wake: %v", err)
 		}
@@ -443,7 +443,7 @@ func TestWakeFailureKeepsHibernated(t *testing.T) {
 	}
 
 	eng.restoreErr = errors.New("restore boom")
-	if _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
 		t.Fatal("WakeAgentSocket succeeded despite restore failure")
 	}
 	if _, g := m.Info(); g.Hibernated != 1 {
@@ -530,7 +530,7 @@ func TestReconcileAdoptsJournaledIntent(t *testing.T) {
 	if eng.snapRemoved(hibernatePrefix + "lagged-1-abc123") {
 		t.Error("reconcile swept the wake image it adopted")
 	}
-	if _, err := m.WakeAgentSocket(t.Context(), "sb_lag", "tok"); err != nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), "sb_lag", "tok"); err != nil {
 		t.Fatalf("wake adopted claim: %v", err)
 	}
 }
@@ -609,7 +609,7 @@ func TestReconcileAdoptsHibernated(t *testing.T) {
 	if _, g := m.Info(); g.Hibernated != 1 {
 		t.Errorf("hibernated count %d after reconcile, want 1", g.Hibernated)
 	}
-	if _, err := m.WakeAgentSocket(t.Context(), "sb_hib", "tok"); err != nil {
+	if _, _, err := m.WakeAgentSocket(t.Context(), "sb_hib", "tok"); err != nil {
 		t.Fatalf("wake after reconcile: %v", err)
 	}
 	if len(eng.restores) != 1 {

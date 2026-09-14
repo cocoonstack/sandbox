@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -107,11 +108,18 @@ func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.
 	}
 	sb.Touch()
 	m.recordAudit(ctx, id, auditFrame{Op: "preview", Port: port})
+	sb.Hold()
 	sock, err := m.wakeResolved(ctx, sb)
 	if err != nil {
+		sb.Unhold()
 		return nil, err
 	}
-	return m.eng.DialGuestPort(ctx, sock, port)
+	conn, err := m.eng.DialGuestPort(ctx, sock, port)
+	if err != nil {
+		sb.Unhold()
+		return nil, err
+	}
+	return &heldConn{Conn: conn, release: sync.OnceFunc(sb.Unhold)}, nil
 }
 
 // AgentSocket resolves a claimed sandbox's vsock UDS without waking it.
@@ -549,4 +557,15 @@ func clampTTL(ttl time.Duration) time.Duration {
 		return defaultTTL
 	}
 	return min(ttl, maxTTL)
+}
+
+// heldConn keeps its sandbox held until the preview connection closes.
+type heldConn struct {
+	net.Conn
+	release func()
+}
+
+func (c *heldConn) Close() error {
+	c.release()
+	return c.Conn.Close()
 }
