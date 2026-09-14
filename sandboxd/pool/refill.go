@@ -260,7 +260,6 @@ func (m *Manager) adoptGolden(p *pool) {
 	}
 }
 
-// goldenCAMatches reports whether a golden's baked-CA state fits the pool.
 func (m *Manager) goldenCAMatches(final string, caNeeded bool) bool {
 	if !caNeeded {
 		return goldenSidecarMatches(final+caSidecarSuffix, "")

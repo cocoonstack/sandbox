@@ -31,7 +31,7 @@ class Conn(_Closeable):
         self._sock = sock
         self._reader = reader
 
-    def send(self, op: str, **fields) -> None:
+    def send(self, op: str, **fields: object) -> None:
         self._sock.sendall(encode_request(op, **fields))
 
     def recv(self) -> dict:
@@ -118,7 +118,7 @@ def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float) -> Conn:
                 except ValueError as exc:
                     raise ProtocolError("invalid content-length in upgrade reply") from exc
         if code != 101:
-            # A bogus content-length must not buffer unbounded bytes.
+            # a bogus content-length must not buffer unbounded bytes.
             body = reader.read(min(body_len, MAX_FRAME)).decode(errors="replace") if body_len else ""
             raise APIError("agent upgrade", code, body.strip() or status.strip())
         sock.settimeout(None)

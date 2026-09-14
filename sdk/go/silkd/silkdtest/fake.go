@@ -19,10 +19,7 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-// Fake is a stateful silkd fake backing the fs verbs with a real directory
-// and tracking sessions, so an SDK write-then-read round-trips through it.
-// exec/info reuse the stateless handlers. It exists for host-side unit tests;
-// the authoritative fs/session behavior is silkd's own Rust test suite.
+// Fake is a stateful silkd fake: fs verbs run on a real directory and sessions are tracked, so a write-then-read round-trips.
 type Fake struct {
 	Root string
 

@@ -221,7 +221,7 @@ where
         Some(Ok(re)) => Some(re),
         Some(Err(e)) => return proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
     };
-    // One blocking-pool dispatch for the whole tree, not three per file.
+    // one blocking-pool dispatch for the whole tree, not three per file.
     let (tx, mut rx) = mpsc::channel::<Response>(MATCH_QUEUE);
     let budget = Arc::new(MatchBudget::new(budget_bytes, Handle::current()));
     let walker_budget = budget.clone();
@@ -241,7 +241,7 @@ where
     loop {
         tokio::select! {
             biased;
-            // The client sends nothing during a find, so any readable state ends the walk.
+            // the client sends nothing during a find, so any readable state ends the walk.
             _ = reader.fill_buf() => {
                 gone = true;
                 break;

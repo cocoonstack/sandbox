@@ -143,7 +143,6 @@ func clickAndReadCursor(ctx context.Context, sb *sandbox.Sandbox) error {
 	return nil
 }
 
-// proxyReachesSession proves the session's environment carries the relay and the relay reaches an allowed origin.
 func proxyReachesSession(ctx context.Context, sb *sandbox.Sandbox, probe string) error {
 	script := `systemctl is-active guest-proxy.service >&2 || exit 1; [ -n "$http_proxy" ] || { echo http_proxy unset in the session >&2; exit 1; }; exec curl -sS -m 20 -o /dev/null -w '%{http_code}' "$1"`
 	out, err := execute(ctx, sb, []string{"sh", "-c", script, "sh", probe}, 30)
@@ -157,7 +156,6 @@ func proxyReachesSession(ctx context.Context, sb *sandbox.Sandbox, probe string)
 	return nil
 }
 
-// execute runs one command through osworld-server and returns its output.
 func execute(ctx context.Context, sb *sandbox.Sandbox, command []string, timeout int) (string, error) {
 	req, _ := json.Marshal(map[string]any{"command": command, "shell": false, "timeout": timeout})
 	body, err := harness.HTTPOverPort(ctx, sb, serverPort, "POST", "/execute", req)

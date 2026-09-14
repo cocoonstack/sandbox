@@ -40,7 +40,7 @@ type redirectCacheEntry struct {
 
 // HTTPProber finds which peers hold a checkpoint by probing them on a cross-node miss.
 type HTTPProber struct {
-	// A nil Client uses a default 2-second timeout: a probe must never hang on a wedged peer.
+	// a nil Client uses a default 2-second timeout: a probe must never hang on a wedged peer.
 	Client *http.Client
 	Peers  func() []string
 
@@ -188,7 +188,6 @@ func VerifyProbeMAC(key []byte, id, sig string) bool {
 	return false
 }
 
-// probeMAC returns the base64 HMAC-SHA256 tag for id in bucket, keyed by key.
 func probeMAC(key []byte, id string, bucket int64) string {
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(id))

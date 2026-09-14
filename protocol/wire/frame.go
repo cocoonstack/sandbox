@@ -102,9 +102,7 @@ var (
 		"data_end":       decodeReq[DataEnd],
 	}
 
-	// responseDecoders maps each type tag to a decoder. Two-stage dispatch is
-	// required because the same key differs in shape across variants (info's
-	// procs is a count, ps's procs is a list).
+	// responseDecoders dispatches on the type tag first: one key differs in shape across variants.
 	responseDecoders = map[string]respDecoder{
 		"started":           decodeResp[Started],
 		"stdout":            fastBulk("stdout", decodeResp[Stdout], func(d []byte) Response { return &Stdout{Data: d} }),
@@ -149,10 +147,7 @@ type respPtr[T any] interface {
 	Response
 }
 
-// B64 carries request payload bytes. It exists because silkd's deserializer
-// requires a base64 string and rejects null — which is exactly what
-// encoding/json emits for a nil []byte. Decoding needs no counterpart:
-// []byte-kinded types already base64-decode by default.
+// B64 carries request payload bytes; a nil slice marshals as "" because silkd rejects null.
 type B64 []byte
 
 func (b B64) MarshalJSON() ([]byte, error) {
@@ -419,8 +414,7 @@ type GitPull struct {
 
 func (GitPull) Op() string { return "git_pull" }
 
-// GitBranch lists, creates, deletes, or checks out a branch. Action is
-// list|create|delete|checkout ("op" is reserved by the frame tag).
+// GitBranch lists, creates, deletes, or checks out a branch; Action carries the verb because "op" is the frame tag.
 type GitBranch struct {
 	Path   string `json:"path"`
 	Action string `json:"action"`

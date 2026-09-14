@@ -143,7 +143,6 @@ func (s *claimStore) save(claims map[string]*types.Sandbox) error {
 	return s.commit(s.reset(claims))
 }
 
-// synced reports whether every sequenced change has reached disk.
 func (s *claimStore) synced() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

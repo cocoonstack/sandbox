@@ -132,7 +132,7 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, s
 	if err := m.ckpts.Delete(ctx, ckptID); err != nil {
 		return fmt.Errorf("delete checkpoint: %w", err)
 	}
-	// A shared backend has no per-node replicas to chase.
+	// a shared backend has no per-node replicas to chase.
 	if scope == DeleteFleet && m.peerDelete != nil && !m.ckptsShared {
 		m.peerDelete(context.WithoutCancel(ctx), ckptID)
 	}

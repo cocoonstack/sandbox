@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	// Generous for a guest memory image, but a wedged peer must fail so the next owner is tried.
+	// generous for a guest memory image, but a wedged peer must fail so the next owner is tried.
 	pullTimeout = 30 * time.Minute
 
 	maxRecordBytes = 1 << 40 // 1 TiB
@@ -42,7 +42,7 @@ type Puller interface {
 
 // HTTPPuller pulls records over sandboxd's control-plane HTTP port.
 type HTTPPuller struct {
-	// A nil Client uses a default with no overall timeout; the deadline comes from the context.
+	// a nil Client uses a default with no overall timeout; the deadline comes from the context.
 	Client *http.Client
 	Token  string
 }
@@ -167,7 +167,6 @@ func writeFile(target string, r io.Reader, mode os.FileMode) error {
 	return f.Close()
 }
 
-// checkpointURL builds the control-plane URL for id's record on addr, defaulting the scheme.
 func checkpointURL(addr, id, suffix string) string {
 	if !strings.Contains(addr, "://") {
 		addr = "http://" + addr

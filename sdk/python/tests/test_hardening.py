@@ -66,6 +66,7 @@ def test_dial_agent_rejects_negative_content_length():
         conn, _ = server.accept()
         conn.recv(4096)
         conn.sendall(b"HTTP/1.1 500 nope\r\nContent-Length: -1\r\n\r\nboom")
+        conn.close()
 
     threading.Thread(target=serve, daemon=True).start()
     try:

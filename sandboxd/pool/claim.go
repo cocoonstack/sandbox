@@ -36,7 +36,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	if err != nil {
 		return nil, err
 	}
-	// Holds belong to this path until finalize; past it the sandbox carries them.
+	// holds belong to this path until finalize; past it the sandbox carries them.
 	reserved := applied
 	defer func() { m.unreserveVolumes(reserved) }()
 	m.mu.Lock()
@@ -169,7 +169,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		log.WithFunc("pool.releaseResolved").Errorf(ctx, saveErr, "persist release of %s", id)
 		return fmt.Errorf("release %s: %w", id, saveErr)
 	}
-	// Cleanup must survive the caller hanging up; the claim is already dropped.
+	// cleanup must survive the caller hanging up; the claim is already dropped.
 	ctx = context.WithoutCancel(ctx)
 	if ck != "" {
 		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
@@ -343,7 +343,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	var expired []victim
 	var dropped []string
 	for id, sb := range m.claimed {
-		// A zero deadline means no expiry (an archived claim kept forever).
+		// a zero deadline means no expiry (an archived claim kept forever).
 		if sb.Deadline.IsZero() || !now.After(sb.Deadline) {
 			continue
 		}

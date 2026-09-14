@@ -37,7 +37,7 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 
 	var trim []string
 	m.mu.Lock()
-	// Sequenced under the mutex (apply order) so commit drops a write a later apply superseded.
+	// sequenced under the mutex (apply order) so commit drops a write a later apply superseded.
 	seq := m.poolStore.seq.Add(1)
 	now := time.Now()
 	for key, p := range m.pools {
@@ -67,7 +67,7 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 		m.destroy(ctx, trim[i])
 	}).Wait()
 	m.refillOnce(runCtx)
-	// Persist the applied set so a restart rebuilds from it, not the config seed.
+	// persist the applied set so a restart rebuilds from it, not the config seed.
 	persisted := slices.Collect(maps.Values(desired))
 	return m.poolStore.commit(seq, poolsFile{ConfigSeed: m.configSeedHash, Pools: persisted})
 }

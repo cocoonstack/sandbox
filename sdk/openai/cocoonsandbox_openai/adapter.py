@@ -60,26 +60,6 @@ class CocoonSandboxSession(BaseSandboxSession):
     def from_state(cls, state: CocoonSandboxSessionState) -> CocoonSandboxSession:
         return cls(state=state)
 
-    async def _prepare_backend_workspace(self) -> None:
-        sb = self._sandbox()
-        await asyncio.to_thread(sb.mkdir, str(self.state.manifest.root), parents=True)
-
-    async def _exec_internal(self, *command: str | Path, timeout: float | None = None) -> ExecResult:
-        sb = self._sandbox()
-        argv = [str(part) for part in command]
-        if timeout is not None:
-            # the guest enforces the cutoff: a stream has no socket timeout, so a cancelled wait strands the worker
-            argv = ["timeout", "-s", "KILL", str(timeout), *argv]
-        stdout, stderr = bytearray(), bytearray()
-
-        def run() -> int:
-            return sb.run(argv, on_stdout=stdout.extend, on_stderr=stderr.extend)
-
-        code = await asyncio.to_thread(run)
-        if timeout is not None and code == TIMEOUT_EXIT:
-            raise TimeoutError(f"command did not finish within {timeout}s")
-        return ExecResult(stdout=bytes(stdout), stderr=bytes(stderr), exit_code=code)
-
     async def read(self, path: Path, *, user: str | User | None = None) -> io.IOBase:
         _reject_user(user)
         sb = self._sandbox()
@@ -112,6 +92,26 @@ class CocoonSandboxSession(BaseSandboxSession):
     async def hydrate_workspace(self, data: io.IOBase) -> None:
         sb = self._sandbox()
         await asyncio.to_thread(sb.push, str(self.state.manifest.root), data.read())
+
+    async def _prepare_backend_workspace(self) -> None:
+        sb = self._sandbox()
+        await asyncio.to_thread(sb.mkdir, str(self.state.manifest.root), parents=True)
+
+    async def _exec_internal(self, *command: str | Path, timeout: float | None = None) -> ExecResult:
+        sb = self._sandbox()
+        argv = [str(part) for part in command]
+        if timeout is not None:
+            # the guest enforces the cutoff: a stream has no socket timeout, so a cancelled wait strands the worker
+            argv = ["timeout", "-s", "KILL", str(timeout), *argv]
+        stdout, stderr = bytearray(), bytearray()
+
+        def run() -> int:
+            return sb.run(argv, on_stdout=stdout.extend, on_stderr=stderr.extend)
+
+        code = await asyncio.to_thread(run)
+        if timeout is not None and code == TIMEOUT_EXIT:
+            raise TimeoutError(f"command did not finish within {timeout}s")
+        return ExecResult(stdout=bytes(stdout), stderr=bytes(stderr), exit_code=code)
 
     async def _resolve_exposed_port(self, port: int) -> ExposedPortEndpoint:
         sb = self._sandbox()

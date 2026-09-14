@@ -92,7 +92,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// A node that cannot reconcile cannot trust its view of local VMs.
+	// a node that cannot reconcile cannot trust its view of local VMs.
 	if err := mgr.Reconcile(ctx); err != nil {
 		logger.Fatalf(ctx, err, "reconcile")
 	}
@@ -157,7 +157,7 @@ func main() {
 	drained := make(chan struct{})
 	context.AfterFunc(ctx, func() {
 		defer close(drained)
-		// Must outlive the canceled signal ctx to bound the drain.
+		// must outlive the canceled signal ctx to bound the drain.
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownGrace)
 		defer cancel()
 		_ = httpSrv.Shutdown(sctx)
@@ -169,7 +169,7 @@ func main() {
 		logger.Fatalf(ctx, err, "serve")
 	}
 	<-drained
-	// A detached recommit may not have converged; leave disk matching memory.
+	// a detached recommit may not have converged; leave disk matching memory.
 	if err := mgr.FlushClaims(); err != nil {
 		logger.Error(ctx, err, "flush claims")
 	}
@@ -197,7 +197,7 @@ func startMesh(ctx context.Context, cfg *config.Config, mgr *pool.Manager) (*mes
 	if err != nil {
 		return nil, err
 	}
-	// Publish the config digest before Join, so the first gossip carries it.
+	// publish the config digest before Join, so the first gossip carries it.
 	msh.SetSelfDigest(cfg.ClusterDigest(mgr.EgressCAFingerprint()))
 	msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
 	if err := msh.Join(mc.Join); err != nil {

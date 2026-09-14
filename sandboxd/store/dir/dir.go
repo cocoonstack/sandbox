@@ -195,7 +195,7 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 	switch {
 	case errors.Is(statErr, fs.ErrNotExist):
 		stagedExport := filepath.Join(staging, store.ExportDir)
-		// Make the generation fresh before a peer can observe it without committed meta.
+		// make the generation fresh before a peer can observe it without committed meta.
 		if err := os.Chtimes(stagedExport, now, now); err != nil { //nolint:gosec // our own staging dir
 			return err
 		}
@@ -213,7 +213,7 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 		if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
 			return readErr
 		}
-		// A sweep may already have selected an expired path for removal.
+		// a sweep may already have selected an expired path for removal.
 		if time.Since(genInfo.ModTime()) >= generationGrace {
 			return fmt.Errorf("generation %s expired before commit; retry after sweep", filepath.Base(genDir))
 		}
@@ -225,7 +225,7 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 		_ = d.sweepGenerations(id)
 		return os.RemoveAll(staging)
 	}
-	// Age the previous current generation from supersession, not publication.
+	// age the previous current generation from supersession, not publication.
 	if err := touchCurrentGeneration(final, now); err != nil {
 		return err
 	}
@@ -263,7 +263,7 @@ func (d *Store) sweepGenerations(id string) (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, metaFile.Close()) }()
-	// The open file pins one inode across a concurrent meta rename.
+	// the open file pins one inode across a concurrent meta rename.
 	meta, err := io.ReadAll(metaFile)
 	if err != nil {
 		return err

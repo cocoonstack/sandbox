@@ -20,7 +20,7 @@ import (
 const (
 	// sidecar, not data_dir: the marker travels with the image and survives a data_dir wipe
 	volumeDirtySuffix = ".dirty"
-	// Caps the per-mount budget below, so teardown can never hang for long.
+	// caps the per-mount budget below, so teardown can never hang for long.
 	volumeQuiesceMax = 10 * time.Second
 )
 
@@ -192,9 +192,9 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 
 // applyVolume keeps one volume's steps strictly ordered; siblings overlap freely.
 func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume resolvedVolume) error {
-	// Attach-only mounts nothing, so there is no umount to verify and no marker.
+	// attach-only mounts nothing, so there is no umount to verify and no marker.
 	attachOnly := volume.applied.Mount == ""
-	// Write-ahead: the marker must be durable before any guest write can be.
+	// write-ahead: the marker must be durable before any guest write can be.
 	if volume.disk.RW && !attachOnly {
 		if err := markVolumeDirty(volume.disk.Path); err != nil {
 			return fmt.Errorf("mark volume %q dirty: %w", volume.applied.Name, err)
@@ -220,7 +220,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 		return td
 	}
 	logger := log.WithFunc("pool.quiesceVolumes")
-	// Cancellation-immune like removal: a caller hanging up must not skip the flush.
+	// cancellation-immune like removal: a caller hanging up must not skip the flush.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), quiesceBudget(mounts))
 	defer cancel()
 	stuck := false

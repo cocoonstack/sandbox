@@ -10,12 +10,12 @@ import json
 
 PROTO_VERSION = 1
 MAX_FRAME = 8 * 1024 * 1024
-FS_CHUNK = 256 * 1024  # silkd's per-frame chunk size, distinct from BULK_CHUNK below
-# bulk streams chunk larger: fewer frames per byte, still under MAX_FRAME after base64.
+FS_CHUNK = 256 * 1024
+# bulk streams chunk larger than silkd's FS_CHUNK: fewer frames per byte, still under MAX_FRAME after base64.
 BULK_CHUNK = 1 << 20
 
 
-def encode_request(op: str, **fields) -> bytes:
+def encode_request(op: str, **fields: object) -> bytes:
     """Renders {"v":1,"op":...,fields} with a trailing newline; None fields
     are omitted and bytes values ride base64 under their field name."""
     frame = {"v": PROTO_VERSION, "op": op}

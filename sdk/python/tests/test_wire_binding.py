@@ -164,7 +164,7 @@ def fake_sandbox(monkeypatch, replies):
 
     def guest():
         reader = guest_sock.makefile("rb")
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(OSError, ValueError):
             line = reader.readline()
             if line:
                 sent.append(json.loads(line))

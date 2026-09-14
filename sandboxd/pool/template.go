@@ -149,7 +149,7 @@ func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, te
 	owner, cached := m.tplSet[id]
 	m.tplMu.Unlock()
 	if !cached {
-		// Only a shared-store template promoted elsewhere after startup.
+		// only a shared-store template promoted elsewhere after startup.
 		raw, err := m.tpls.ReadMeta(ctx, id)
 		if err != nil {
 			return false

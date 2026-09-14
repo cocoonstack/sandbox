@@ -104,7 +104,7 @@ def main() -> int:
         sess = sb.session()
         sess.exec("export", "HIB=alive")
         sb.hibernate()
-        assert sess.exec("sh", "-c", "echo $HIB") == "alive\n"  # transparent wake
+        assert sess.exec("sh", "-c", "echo $HIB") == "alive\n"
         sess.close()
 
     @step("fork")
@@ -128,8 +128,8 @@ def main() -> int:
         sb.write_file("/root/ck.txt", b"v2")
         branch = ckpt.new()
         try:
-            assert branch.read_file("/root/ck.txt") == b"v1"  # captured moment
-            assert sb.read_file("/root/ck.txt") == b"v2"  # source unaffected
+            assert branch.read_file("/root/ck.txt") == b"v1"
+            assert sb.read_file("/root/ck.txt") == b"v2"
         finally:
             branch.close()
         listed = [c.id for c in client.checkpoints()]
@@ -173,7 +173,7 @@ def main() -> int:
                 raise
             print(f"  {name:<18} ok ({int((time.time() - start) * 1000)}ms)")
     finally:
-        # Never mask a step failure with a close error.
+        # never mask a step failure with a close error.
         with contextlib.suppress(Exception):
             sb.close()
     print("PY-E2E PASS")

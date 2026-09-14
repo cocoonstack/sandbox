@@ -62,7 +62,7 @@ pub async fn read<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
 
 /// Lists a directory as `entries` frames terminated by `done`, batched under the frame cap.
 pub async fn list<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<()> {
-    // One blocking-pool dispatch for the whole directory, not one per entry.
+    // one blocking-pool dispatch for the whole directory, not one per entry.
     let (tx, mut rx) = mpsc::channel::<Vec<DirEntry>>(2);
     let scan = tokio::task::spawn_blocking(move || scan_dir(&path, &tx));
     let mut failed = None;

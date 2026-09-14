@@ -16,7 +16,7 @@ import (
 
 func (m *Manager) removeVM(ctx context.Context, name string) bool {
 	m.closePrebound(name)
-	// Cancellation-immune: on a canceled ctx `cocoon vm rm` no-ops and orphans.
+	// cancellation-immune: on a canceled ctx `cocoon vm rm` no-ops and orphans.
 	ctx = context.WithoutCancel(ctx)
 	err := m.eng.Remove(ctx, name)
 	if err == nil {

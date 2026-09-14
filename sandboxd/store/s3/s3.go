@@ -179,7 +179,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	// Keep the commit marker so a failed export cleanup remains discoverable on retry.
+	// keep the commit marker so a failed export cleanup remains discoverable on retry.
 	keys = slices.DeleteFunc(keys, func(key string) bool { return key == metaKey })
 	if err := s.deleteKeys(ctx, keys); err != nil {
 		return err
@@ -315,7 +315,7 @@ func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string
 		return err
 	}
 	if len(keys) == 0 {
-		// Records published before per-generation prefixes.
+		// records published before per-generation prefixes.
 		exportPrefix = s.key(id, store.ExportDir) + "/"
 		if keys, err = s.list(ctx, exportPrefix); err != nil {
 			return err

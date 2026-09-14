@@ -195,8 +195,7 @@ func (s *Sandbox) Close() error {
 	return apiError("release", resp)
 }
 
-// dial opens one relayed silkd connection and arms ctx cancellation to close
-// it; the returned cleanup must be deferred. One connection carries one RPC.
+// dial opens one relayed silkd connection, closed by ctx cancellation or the returned cleanup; one connection carries one RPC.
 func (s *Sandbox) dial(ctx context.Context) (*silkd.Conn, func(), error) {
 	raw, err := s.c.dialAgent(ctx, s.owner, s.ID, s.token)
 	if err != nil {

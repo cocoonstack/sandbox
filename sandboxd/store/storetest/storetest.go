@@ -52,7 +52,7 @@ func RunContract(t *testing.T, st store.Store) {
 	}
 	release()
 
-	// A half-published checkpoint (no meta) is invisible to Metas.
+	// a half-published checkpoint (no meta) is invisible to Metas.
 	orphan, err := st.Stage("ck_00000000000000bb")
 	if err != nil {
 		t.Fatalf("Stage orphan: %v", err)

@@ -47,7 +47,7 @@ func run(addr, token, template string, n int) error {
 
 	dial := func() (net.Conn, error) { return dialAgent(ctx, sb.Owner(), sb.ID, sb.Token()) }
 
-	// Warm the path (wake resolution, page cache) before either mode.
+	// warm the path (wake resolution, page cache) before either mode.
 	for range 5 {
 		conn, err := dial()
 		if err != nil {

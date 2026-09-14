@@ -97,7 +97,7 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		m.dropSnap(ctx, snap)
 		return ErrUnknownSandbox
 	}
-	// The VM is hibernated either way, so the billing window closes here.
+	// the VM is hibernated either way, so the billing window closes here.
 	m.recordHibernate(ctx, sb)
 	m.disarmEgress(sb.ID, true)
 	if err != nil {
