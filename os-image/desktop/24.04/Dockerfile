@@ -374,15 +374,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'Categories=AudioVideo;Audio;' \
       'MimeType=application/x-musescore;application/x-musescore+xml;' \
       > /usr/share/applications/musescore.desktop \
-    # the guest root is overlayfs, which overlay2 cannot stack on, and dockerd
-    # does not read the guest proxy environment; both apply once a task installs docker
+    # the guest root is overlayfs, which overlay2 cannot stack on; dockerd reads
+    # the lane-selected proxy environment once a task installs docker
     && install -d /etc/docker /etc/systemd/system/docker.service.d \
     && printf '%s\n' '{"storage-driver": "vfs", "features": {"containerd-snapshotter": false}}' \
       > /etc/docker/daemon.json \
     && printf '%s\n' '[Service]' \
-      'Environment=HTTP_PROXY=http://127.0.0.1:3128' \
-      'Environment=HTTPS_PROXY=http://127.0.0.1:3128' \
-      'Environment=NO_PROXY=localhost,127.0.0.1' \
+      'EnvironmentFile=-/run/guest-proxy.env' \
       > /etc/systemd/system/docker.service.d/proxy.conf \
     && curl -fsSL -o /tmp/obsidian.deb \
       "https://github.com/obsidianmd/obsidian-releases/releases/download/v${OBSIDIAN_VERSION}/obsidian_${OBSIDIAN_VERSION}_amd64.deb" \

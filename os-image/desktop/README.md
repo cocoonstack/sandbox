@@ -38,8 +38,8 @@ bridge `egress` lane alike (see `docs/desktop.md`).
   without it. Thunderbird's policy pins mail to the SOCKS5 door on `1080`, so
   a pool that runs mail tasks opts its policy into `socks5`.
 - dockerd, once a task installs it, is pinned to the `vfs` storage driver and
-  carries its own proxy drop-in: the guest root is overlayfs, which overlay2
-  cannot stack on, and dockerd does not read the guest proxy environment.
+  reads the lane-selected `/run/guest-proxy.env` through its systemd drop-in:
+  the guest root is overlayfs, which overlay2 cannot stack on.
   `/etc/pip.conf` sets `break-system-packages`, since the task set pip-installs
   into the system interpreter.
 
