@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
@@ -39,6 +38,12 @@ type Secrets interface {
 	Header(name string) (header, value string, ok bool)
 }
 
+// Holder is held for the life of every request and tunnel the proxy serves.
+type Holder interface {
+	Hold()
+	Unhold()
+}
+
 // Event is one audited egress attempt; Injected names the credential, never its value.
 type Event struct {
 	Sandbox  string
@@ -59,6 +64,7 @@ type Proxy struct {
 	ca      *CA
 	audit   AuditFunc
 	dial    DialFunc
+	holder  Holder
 	tr      *http.Transport
 	mitmTr  *http.Transport
 
@@ -70,12 +76,10 @@ type Proxy struct {
 	connMu sync.Mutex
 	conns  map[net.Conn]struct{}
 	closed bool
-	// active counts the requests and tunnels in flight, read by the idle sweep.
-	active atomic.Int32
 }
 
-// New builds a Proxy for one sandbox; secrets, ca, and audit may be nil, dial must not.
-func New(sandbox, tenant string, policy Evaluator, secrets Secrets, ca *CA, dial DialFunc, audit AuditFunc) *Proxy {
+// New builds a Proxy for one sandbox; secrets, ca, audit and holder may be nil, dial must not.
+func New(sandbox, tenant string, policy Evaluator, secrets Secrets, ca *CA, dial DialFunc, audit AuditFunc, holder Holder) *Proxy {
 	p := &Proxy{
 		sandbox: sandbox,
 		tenant:  tenant,
@@ -84,6 +88,7 @@ func New(sandbox, tenant string, policy Evaluator, secrets Secrets, ca *CA, dial
 		ca:      ca,
 		audit:   audit,
 		dial:    dial,
+		holder:  holder,
 		// the stdlib default of 2 idle conns per host re-dials bursty same-host traffic.
 		tr:    &http.Transport{DialContext: dial, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout},
 		conns: map[net.Conn]struct{}{},
@@ -97,17 +102,13 @@ func New(sandbox, tenant string, policy Evaluator, secrets Secrets, ca *CA, dial
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	p.active.Add(1)
-	defer p.active.Add(-1)
+	defer p.hold()()
 	if r.Method == http.MethodConnect {
 		p.serveConnect(w, r)
 		return
 	}
 	p.serveForward(w, r)
 }
-
-// Active counts the requests and tunnels the proxy is serving right now.
-func (p *Proxy) Active() int { return int(p.active.Load()) }
 
 // Close ends every hijacked tunnel, which outlives http.Server.Close; idempotent.
 func (p *Proxy) Close() {
@@ -141,6 +142,15 @@ func (p *Proxy) untrack(conn net.Conn) {
 	p.connMu.Lock()
 	delete(p.conns, conn)
 	p.connMu.Unlock()
+}
+
+// hold takes the holder for one request and returns its release.
+func (p *Proxy) hold() func() {
+	if p.holder == nil {
+		return func() {}
+	}
+	p.holder.Hold()
+	return p.holder.Unhold
 }
 
 func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {

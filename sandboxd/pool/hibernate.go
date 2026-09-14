@@ -191,7 +191,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 		if p, pooled := m.activePool(sb.Key); pooled {
 			idle = p.idle
 		}
-		if m.skipIdle(sb, idle, now) {
+		if skipIdle(sb, idle, now) {
 			continue
 		}
 		victims = append(victims, victim{sb.ID, sb.Token})
@@ -221,7 +221,7 @@ func (m *Manager) idleHibernate(ctx context.Context, id, token string, sweepStar
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
-	woke := m.active(sb) || sb.LastSeen().After(sweepStart) || sb.HibernateSnap != ""
+	woke := sb.Busy() || sb.LastSeen().After(sweepStart) || sb.HibernateSnap != ""
 	m.mu.Unlock()
 	if woke {
 		return errWokeMeanwhile
@@ -318,17 +318,8 @@ func (m *Manager) recordHibernate(ctx context.Context, sb *types.Sandbox) {
 	m.recordUsage(ctx, usageEvent{Event: "hibernate", ID: sb.ID, VMName: sb.VMName})
 }
 
-// skipIdle reports the claims an idle sweep must leave alone; callers hold m.mu.
-func (m *Manager) skipIdle(sb *types.Sandbox, idle time.Duration, now time.Time) bool {
+// skipIdle reports the claims an idle sweep must leave alone.
+func skipIdle(sb *types.Sandbox, idle time.Duration, now time.Time) bool {
 	return idle <= 0 || sb.Key.Net == types.NetEgress || hasAppliedVolumes(sb) ||
-		sb.HibernateSnap != "" || sb.ArchiveCk != "" || m.active(sb) || now.Sub(sb.LastSeen()) < idle
-}
-
-// active reports a held data-plane connection or an egress request in flight; callers hold m.mu.
-func (m *Manager) active(sb *types.Sandbox) bool {
-	if sb.Busy() {
-		return true
-	}
-	el := m.egressListeners[sb.ID]
-	return el != nil && el.proxy.Active() > 0
+		sb.HibernateSnap != "" || sb.ArchiveCk != "" || sb.Busy() || now.Sub(sb.LastSeen()) < idle
 }

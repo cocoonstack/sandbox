@@ -15,7 +15,7 @@ import (
 
 func TestInterceptLeafCaches(t *testing.T) {
 	ca, _ := testCA(t)
-	p := New("s", "", Policy{}, nil, ca, fixedDial("127.0.0.1:1"), nil)
+	p := New("s", "", Policy{}, nil, ca, fixedDial("127.0.0.1:1"), nil, nil)
 	a, err := p.leafFor("example.com")
 	if err != nil {
 		t.Fatalf("leaf a: %v", err)
@@ -31,7 +31,7 @@ func TestInterceptLeafCaches(t *testing.T) {
 
 func TestInterceptLeafCacheBounded(t *testing.T) {
 	ca, _ := testCA(t)
-	p := New("s", "", Policy{}, nil, ca, fixedDial("127.0.0.1:1"), nil)
+	p := New("s", "", Policy{}, nil, ca, fixedDial("127.0.0.1:1"), nil, nil)
 	for i := range maxLeaves + 50 {
 		if _, err := p.leafFor(fmt.Sprintf("h%d.example.com", i)); err != nil {
 			t.Fatalf("leaf %d: %v", i, err)
@@ -233,7 +233,7 @@ func interceptProxyPolicy(t *testing.T, policy Policy, events chan Event) (*Prox
 			events <- ev
 		}
 	}
-	p := New("sb_1", "acme", policy, secrets, ca, fixedDial(upstream.Listener.Addr().String()), audit)
+	p := New("sb_1", "acme", policy, secrets, ca, fixedDial(upstream.Listener.Addr().String()), audit, nil)
 
 	guestRoots := x509.NewCertPool()
 	if !guestRoots.AppendCertsFromPEM(ca.CertPEM()) {

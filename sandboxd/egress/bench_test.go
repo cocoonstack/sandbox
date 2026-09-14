@@ -90,7 +90,7 @@ func benchFront(b *testing.B, intercept bool) (proxyAddr string, roots *x509.Cer
 	} else {
 		roots.AddCert(upstream.Certificate())
 	}
-	p := New("sb_b", "", Policy{Allow: []Rule{rule}}, nil, ca, fixedDial(upstream.Listener.Addr().String()), nil)
+	p := New("sb_b", "", Policy{Allow: []Rule{rule}}, nil, ca, fixedDial(upstream.Listener.Addr().String()), nil, nil)
 	if ca != nil {
 		p.mitmTr.TLSClientConfig.RootCAs = func() *x509.CertPool {
 			pool := x509.NewCertPool()

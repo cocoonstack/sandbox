@@ -132,12 +132,6 @@ func TestEgressRequestInFlightBlocksIdleSweep(t *testing.T) {
 	if armErr := m.armEgressProxy(t.Context(), sb); armErr != nil {
 		t.Fatalf("arm proxy: %v", armErr)
 	}
-	inFlight := func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		return m.active(sb)
-	}
-
 	result := make(chan error, 1)
 	go func() {
 		resp, err := egressClient(engine.EgressSocketPath(sb.VsockSocket)).Get(origin.URL + "/")
@@ -146,7 +140,7 @@ func TestEgressRequestInFlightBlocksIdleSweep(t *testing.T) {
 		}
 		result <- err
 	}()
-	waitFor(t, inFlight)
+	waitFor(t, sb.Busy)
 	backdate(m, sb, time.Hour)
 	m.idleOnce(t.Context())
 	waitFor(t, func() bool { return !m.idleSweep.Load() })
@@ -158,7 +152,12 @@ func TestEgressRequestInFlightBlocksIdleSweep(t *testing.T) {
 	if err := <-result; err != nil {
 		t.Fatalf("request through the proxy: %v", err)
 	}
-	waitFor(t, func() bool { return !inFlight() })
+	waitFor(t, func() bool { return !sb.Busy() })
+	m.idleOnce(t.Context())
+	waitFor(t, func() bool { return !m.idleSweep.Load() })
+	if hibernated(m) != 0 {
+		t.Fatal("idle clock did not restart when the egress request ended")
+	}
 	backdate(m, sb, time.Hour)
 	m.idleOnce(t.Context())
 	waitFor(t, func() bool { return hibernated(m) == 1 })
