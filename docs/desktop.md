@@ -83,6 +83,4 @@ Configure it with `SANDBOXD_ADDR`, `SANDBOXD_TOKEN`, `COCOON_TEMPLATE`
   NIC routes directly and the unit does nothing. The unit tests NIC presence
   only, so it does not follow the locked-NIC marker silkd honors on the bridge
   egress lane; run desktop pools on the none lane.
-- No VS Code yet (vendor repo); tasks targeting it are out of scope for this
-  flavor version.
 - x86_64 only.
