@@ -143,7 +143,9 @@ class CocoonToolkit:
         tail = ""
         try:
             sb = self.sandbox()
-            timeout = max(deadline - time.monotonic(), 1)
+            timeout = deadline - time.monotonic()
+            if timeout <= 0:
+                raise TimeoutError("the claim used the whole call budget")
             code = sb.run(["sh", "-c", command], cwd=cwd, on_stdout=out.append, on_stderr=errs.append, timeout=timeout)
             if code != 0:
                 tail = f"exit code: {code}"
