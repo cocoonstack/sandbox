@@ -1,11 +1,12 @@
 //! Guest network-lane detection: the egress lane has a device-backed NIC, the none lane only virtual interfaces.
 
-use std::path::Path;
+use std::fs::File;
+use std::io::Read;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicI8, Ordering};
 
-/// Marker the host writes when it has nft-locked the guest's NIC; on the root filesystem so a guest reboot keeps it.
-const NIC_LOCKED_MARK: &str = "/etc/silkd-nic-locked";
+/// File the host writes with its lane verdict, `relay` or `direct`; on the root filesystem so a guest reboot keeps it.
+const LANE_FILE: &str = "/etc/silkd-lane";
 
 static LANE_OVERRIDE: AtomicI8 = AtomicI8::new(-1);
 
@@ -31,9 +32,9 @@ pub fn has_egress() -> bool {
     *DEVICE_BACKED
 }
 
-/// Reports whether execs route directly: a NIC the host has not locked.
+/// Reports whether execs route directly: a NIC the host did not mark as relayed.
 pub fn routes_directly() -> bool {
-    has_egress() && !Path::new(NIC_LOCKED_MARK).exists()
+    has_egress() && !lane_is_relay(LANE_FILE)
 }
 
 /// Lane override for tests: set_var would race every concurrent getenv.
@@ -50,4 +51,28 @@ fn silkd_net() -> i8 {
             _ => -1,
         });
     *SILKD_NET
+}
+
+fn lane_is_relay(path: &str) -> bool {
+    let mut buf = [0u8; 8];
+    File::open(path)
+        .and_then(|mut f| f.read(&mut buf))
+        .is_ok_and(|n| buf[..n].trim_ascii() == b"relay")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lane_is_relay;
+
+    #[test]
+    fn lane_file_decides_relay() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lane");
+        let text = path.to_str().unwrap();
+        assert!(!lane_is_relay(text));
+        std::fs::write(&path, "direct\n").unwrap();
+        assert!(!lane_is_relay(text));
+        std::fs::write(&path, "relay\n").unwrap();
+        assert!(lane_is_relay(text));
+    }
 }

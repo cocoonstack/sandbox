@@ -94,15 +94,28 @@ func (m *Manager) lockEgressNIC(ctx context.Context, sb *types.Sandbox) error {
 	return nil
 }
 
-// markLockedNIC tells the guest its NIC is nft-locked; silkd cannot see the hook from inside.
-func (m *Manager) markLockedNIC(ctx context.Context, key types.PoolKey, sock string) error {
-	if !m.locksNIC(key) {
+// markLane tells the guest how its traffic leaves; the nft lock is invisible from inside.
+func (m *Manager) markLane(ctx context.Context, key types.PoolKey, sock string) error {
+	lane := m.laneOf(key)
+	if lane == "" {
 		return nil
 	}
-	if err := m.eng.MarkNICLocked(ctx, sock); err != nil {
-		return fmt.Errorf("mark nic locked: %w", err)
+	if err := m.eng.MarkLane(ctx, sock, lane); err != nil {
+		return fmt.Errorf("mark lane: %w", err)
 	}
 	return nil
+}
+
+// laneOf is the verdict a guest receives; the none lane has no NIC to route through and gets none.
+func (m *Manager) laneOf(key types.PoolKey) engine.Lane {
+	switch {
+	case key.Net != types.NetEgress:
+		return ""
+	case m.locksNIC(key):
+		return engine.LaneRelay
+	default:
+		return engine.LaneDirect
+	}
 }
 
 func (m *Manager) locksNIC(key types.PoolKey) bool {

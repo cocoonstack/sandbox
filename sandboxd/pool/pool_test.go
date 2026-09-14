@@ -813,7 +813,7 @@ type fakeEngine struct {
 	removeSeenOps   map[string][]string
 	removeSeenDirty map[string][]string
 	dirtyPaths      []string
-	nicMarks        []string
+	laneMarks       []string
 	syncs           []string
 
 	hibernates, restores, snapRemoves []string
@@ -1060,10 +1060,10 @@ func (f *fakeEngine) InstallCACert(_ context.Context, vsockSocket string, _ []by
 	return f.installCAErr
 }
 
-func (f *fakeEngine) MarkNICLocked(_ context.Context, vsockSocket string) error {
+func (f *fakeEngine) MarkLane(_ context.Context, _ string, lane engine.Lane) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.nicMarks = append(f.nicMarks, vsockSocket)
+	f.laneMarks = append(f.laneMarks, string(lane))
 	return nil
 }
 
