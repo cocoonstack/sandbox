@@ -104,7 +104,7 @@ func TestReadFileStopsAtTheCap(t *testing.T) {
 		}
 		defer conn.Close()
 		br := bufio.NewReader(conn)
-		if _, err := io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n"); err != nil {
+		if _, err = io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n"); err != nil {
 			return true
 		}
 		req, err := br.ReadString('\n')

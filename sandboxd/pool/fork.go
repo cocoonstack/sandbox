@@ -51,13 +51,6 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	return children, nil
 }
 
-// lockedVMName reads the VM name under the lock that archive() clears it under.
-func lockedVMName(sb *types.Sandbox) string {
-	sb.Transition.Lock()
-	defer sb.Transition.Unlock()
-	return sb.VMName
-}
-
 // forkClones clones a running source from a fresh snapshot, a hibernated one from an export.
 func (m *Manager) forkClones(ctx context.Context, sb *types.Sandbox, count int) ([]*types.Sandbox, error) {
 	create, cleanup, err := m.forkSource(ctx, sb)
@@ -91,4 +84,11 @@ func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (vmProvisio
 	}
 	return func(name string) (types.VMRecord, error) { return m.eng.Clone(ctx, exportDir, name, sb.Key) },
 		func() { _ = os.RemoveAll(dir) }, nil
+}
+
+// lockedVMName reads the VM name under the lock that archive() clears it under.
+func lockedVMName(sb *types.Sandbox) string {
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	return sb.VMName
 }
