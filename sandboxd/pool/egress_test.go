@@ -248,10 +248,10 @@ func TestEffectivePolicyComposition(t *testing.T) {
 			if !ok {
 				return
 			}
-			if _, d := eval.Eval(tc.allow, "GET"); d != egress.DecisionAllow {
+			if _, d := eval.Eval(tc.allow, "GET", 443); d != egress.DecisionAllow {
 				t.Errorf("%s should allow", tc.allow)
 			}
-			if _, d := eval.Eval(tc.deny, "GET"); d != egress.DecisionDeny {
+			if _, d := eval.Eval(tc.deny, "GET", 443); d != egress.DecisionDeny {
 				t.Errorf("%s should deny", tc.deny)
 			}
 		})

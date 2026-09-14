@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,7 @@ type Event struct {
 	Tenant   string
 	Method   string
 	Host     string
+	Port     uint16
 	Decision Decision
 	Injected string
 }
@@ -132,15 +134,15 @@ func (p *Proxy) untrack(conn net.Conn) {
 	p.connMu.Unlock()
 }
 
-// serveConnect gates an HTTPS/opaque tunnel by host.
+// serveConnect gates an HTTPS/opaque tunnel by host and port.
 func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
-	host := hostOnly(r.Host)
-	decision, intercept := p.tunnelDecision(host)
+	host, port := hostPort(r.Host, 443)
+	decision, intercept := p.tunnelDecision(host, port)
 	if intercept {
-		p.serveIntercept(w, r, host)
+		p.serveIntercept(w, r, host, port)
 		return
 	}
-	p.record(Event{Method: r.Method, Host: host, Decision: decision})
+	p.record(Event{Method: r.Method, Host: host, Port: port, Decision: decision})
 	if decision == DecisionDeny {
 		denied(w, host)
 		return
@@ -167,14 +169,14 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	splice(client, upstream)
 }
 
-func (p *Proxy) tunnelDecision(host string) (decision Decision, intercept bool) {
+func (p *Proxy) tunnelDecision(host string, port uint16) (decision Decision, intercept bool) {
 	// host-gate interception: the tunnel's CONNECT verb is not the request method.
 	if p.ca != nil {
-		if rule, d := p.policy.EvalHost(host); d == DecisionAllow && rule.Intercept {
+		if rule, d := p.policy.EvalHost(host, port); d == DecisionAllow && rule.Intercept {
 			return DecisionAllow, true
 		}
 	}
-	_, decision = p.policy.Eval(host, http.MethodConnect)
+	_, decision = p.policy.Eval(host, http.MethodConnect, port)
 	return decision, false
 }
 
@@ -183,16 +185,20 @@ func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "egress: proxy requires an absolute-form request URI", http.StatusBadRequest)
 		return
 	}
-	host := hostOnly(r.URL.Host)
-	rule, decision := p.policy.Eval(host, r.Method)
-	p.relay(w, r, host, rule, decision, p.tr, nil)
+	def := uint16(80)
+	if r.URL.Scheme == "https" {
+		def = 443
+	}
+	host, port := hostPort(r.URL.Host, def)
+	rule, decision := p.policy.Eval(host, r.Method, port)
+	p.relay(w, r, Event{Method: r.Method, Host: host, Port: port, Decision: decision}, rule, p.tr, nil)
 }
 
 // relay forwards one policy-evaluated request upstream and mirrors the response.
-func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, host string, rule Rule, decision Decision, tr *http.Transport, prepare func(*http.Request)) {
-	if decision == DecisionDeny {
-		p.record(Event{Method: r.Method, Host: host, Decision: decision})
-		denied(w, host)
+func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rule, tr *http.Transport, prepare func(*http.Request)) {
+	if ev.Decision == DecisionDeny {
+		p.record(ev)
+		denied(w, ev.Host)
 		return
 	}
 
@@ -202,8 +208,8 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, host string, rule 
 	}
 	out.RequestURI = ""
 	stripHop(out.Header)
-	injected := p.inject(rule, out.Header)
-	p.record(Event{Method: r.Method, Host: host, Decision: decision, Injected: injected})
+	ev.Injected = p.inject(rule, out.Header)
+	p.record(ev)
 
 	resp, err := tr.RoundTrip(out)
 	if err != nil {
@@ -276,4 +282,16 @@ func hostOnly(authority string) string {
 		return host
 	}
 	return authority
+}
+
+// hostPort splits an authority into host and port; a bare host or an unparsable port takes def.
+func hostPort(authority string, def uint16) (string, uint16) {
+	host, portText, err := net.SplitHostPort(authority)
+	if err != nil {
+		return authority, def
+	}
+	if port, err := strconv.ParseUint(portText, 10, 16); err == nil {
+		return host, uint16(port)
+	}
+	return host, def
 }

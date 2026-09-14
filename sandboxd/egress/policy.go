@@ -19,17 +19,18 @@ const (
 // Decision is the policy verdict for one request.
 type Decision int
 
-// Rule allows requests matching Host (exact, "*." suffix, or "*") and Methods; empty means any.
+// Rule allows requests matching Host (exact, "*." suffix, or "*"), Methods and Ports; empty means any.
 type Rule struct {
 	Host      string   `json:"host"`
 	Methods   []string `json:"methods,omitempty"`
+	Ports     []uint16 `json:"ports,omitempty"`
 	Secret    string   `json:"secret,omitempty"` //nolint:gosec // reference name of a node-side secret, never a value
 	Intercept bool     `json:"intercept,omitzero"`
 }
 
 // matches expects host already lowercased by Eval.
-func (r Rule) matches(host, method string) bool {
-	return r.matchHost(host) && r.matchMethod(method)
+func (r Rule) matches(host, method string, port uint16) bool {
+	return r.matchHost(host) && r.matchMethod(method) && r.matchPort(port)
 }
 
 func (r Rule) matchHost(host string) bool {
@@ -48,6 +49,10 @@ func (r Rule) matchMethod(method string) bool {
 		slices.ContainsFunc(r.Methods, func(m string) bool { return strings.EqualFold(m, method) })
 }
 
+func (r Rule) matchPort(port uint16) bool {
+	return len(r.Ports) == 0 || slices.Contains(r.Ports, port)
+}
+
 // Policy is one sandbox's egress allow-list; a request matching no rule is denied.
 type Policy struct {
 	Allow  []Rule `json:"allow"`
@@ -59,7 +64,7 @@ func (p *Policy) Intercepts() bool {
 	return p != nil && slices.ContainsFunc(p.Allow, func(r Rule) bool { return r.Intercept })
 }
 
-// Validate rejects an empty or bare-wildcard host and socks5 without a tunnel rule; an empty allow-list denies everything.
+// Validate rejects an empty or bare-wildcard host, a zero or repeated port, and socks5 without a tunnel rule; an empty allow-list denies everything.
 func (p Policy) Validate() error {
 	for i, r := range p.Allow {
 		switch r.Host {
@@ -67,6 +72,16 @@ func (p Policy) Validate() error {
 			return fmt.Errorf("allow[%d]: host must not be empty", i)
 		case "*.":
 			return fmt.Errorf("allow[%d]: host %q needs a domain after the wildcard", i, r.Host)
+		}
+		seen := make(map[uint16]struct{}, len(r.Ports))
+		for _, port := range r.Ports {
+			if port == 0 {
+				return fmt.Errorf("allow[%d]: port 0 is not a destination", i)
+			}
+			if _, dup := seen[port]; dup {
+				return fmt.Errorf("allow[%d]: port %d repeated", i, port)
+			}
+			seen[port] = struct{}{}
 		}
 	}
 	if p.Socks5 && !p.admitsTunnel() {
@@ -76,23 +91,23 @@ func (p Policy) Validate() error {
 }
 
 // Eval returns the first matching non-intercept rule; matching one here would leak its secret.
-func (p Policy) Eval(host, method string) (Rule, Decision) {
+func (p Policy) Eval(host, method string, port uint16) (Rule, Decision) {
 	host = strings.ToLower(host)
 	for _, r := range p.Allow {
-		if !r.Intercept && r.matches(host, method) {
+		if !r.Intercept && r.matches(host, method, port) {
 			return r, DecisionAllow
 		}
 	}
 	return Rule{}, DecisionDeny
 }
 
-// EvalHost matches by host only, preferring an intercept rule over an earlier plain match.
-func (p Policy) EvalHost(host string) (Rule, Decision) {
+// EvalHost matches by host and port only, preferring an intercept rule over an earlier plain match.
+func (p Policy) EvalHost(host string, port uint16) (Rule, Decision) {
 	host = strings.ToLower(host)
 	first := -1
 	for i, r := range p.Allow {
 		switch {
-		case !r.matchHost(host):
+		case !r.matchHost(host) || !r.matchPort(port):
 		case r.Intercept:
 			return r, DecisionAllow
 		case first < 0:
@@ -106,10 +121,10 @@ func (p Policy) EvalHost(host string) (Rule, Decision) {
 }
 
 // EvalInner matches only intercept rules, so a plain rule cannot shadow or rescue one.
-func (p Policy) EvalInner(host, method string) (Rule, Decision) {
+func (p Policy) EvalInner(host, method string, port uint16) (Rule, Decision) {
 	host = strings.ToLower(host)
 	for _, r := range p.Allow {
-		if r.Intercept && r.matches(host, method) {
+		if r.Intercept && r.matches(host, method, port) {
 			return r, DecisionAllow
 		}
 	}
@@ -127,9 +142,9 @@ func (p Policy) admitsTunnel() bool {
 
 // Evaluator is what the proxy consults per request.
 type Evaluator interface {
-	Eval(host, method string) (Rule, Decision)
-	EvalHost(host string) (Rule, Decision)
-	EvalInner(host, method string) (Rule, Decision)
+	Eval(host, method string, port uint16) (Rule, Decision)
+	EvalHost(host string, port uint16) (Rule, Decision)
+	EvalInner(host, method string, port uint16) (Rule, Decision)
 	ServesSocks() bool
 }
 
@@ -142,34 +157,34 @@ type composite struct {
 	pool, tenant Policy
 }
 
-func (c composite) Eval(host, method string) (Rule, Decision) {
-	rule, pd := c.pool.Eval(host, method)
+func (c composite) Eval(host, method string, port uint16) (Rule, Decision) {
+	rule, pd := c.pool.Eval(host, method, port)
 	if pd != DecisionAllow {
 		return Rule{}, DecisionDeny
 	}
-	if _, td := c.tenant.Eval(host, method); td != DecisionAllow {
+	if _, td := c.tenant.Eval(host, method, port); td != DecisionAllow {
 		return Rule{}, DecisionDeny
 	}
 	return rule, DecisionAllow
 }
 
-func (c composite) EvalHost(host string) (Rule, Decision) {
-	rule, pd := c.pool.EvalHost(host)
+func (c composite) EvalHost(host string, port uint16) (Rule, Decision) {
+	rule, pd := c.pool.EvalHost(host, port)
 	if pd != DecisionAllow {
 		return Rule{}, DecisionDeny
 	}
-	if _, td := c.tenant.EvalHost(host); td != DecisionAllow {
+	if _, td := c.tenant.EvalHost(host, port); td != DecisionAllow {
 		return Rule{}, DecisionDeny
 	}
 	return rule, DecisionAllow
 }
 
-func (c composite) EvalInner(host, method string) (Rule, Decision) {
-	rule, pd := c.pool.EvalInner(host, method)
+func (c composite) EvalInner(host, method string, port uint16) (Rule, Decision) {
+	rule, pd := c.pool.EvalInner(host, method, port)
 	if pd != DecisionAllow {
 		return Rule{}, DecisionDeny
 	}
-	if _, td := c.tenant.Eval(host, method); td != DecisionAllow {
+	if _, td := c.tenant.Eval(host, method, port); td != DecisionAllow {
 		return Rule{}, DecisionDeny
 	}
 	return rule, DecisionAllow

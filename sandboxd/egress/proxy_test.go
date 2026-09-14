@@ -241,6 +241,40 @@ func TestConnectDeniedIsTyped(t *testing.T) {
 	}
 }
 
+func TestPortRuleGatesConnectAndForward(t *testing.T) {
+	echo := echoServer(t)
+	policy := Policy{Allow: []Rule{{Host: "echo.internal", Ports: []uint16{443}}}}
+	events := make(chan Event, 4)
+	p := New("sb_1", "acme", policy, nil, nil, fixedDial(echo), func(ev Event) { events <- ev })
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	conn := dialConnect(t, front.Listener.Addr().String(), "echo.internal:8443")
+	defer func() { _ = conn.Close() }()
+	if status := readStatus(t, bufio.NewReader(conn)); status != "HTTP/1.1 403 Forbidden" {
+		t.Errorf("CONNECT to an unlisted port = %q, want 403 Forbidden", status)
+	}
+	if ev := recvEvent(t, events); ev.Port != 8443 || ev.Decision != DecisionDeny {
+		t.Errorf("audit event = %+v, want deny on port 8443", ev)
+	}
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://echo.internal/x", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := proxyClient(t, front.URL).Do(req)
+	if err != nil {
+		t.Fatalf("proxied GET: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("forward GET on port 80 = %d, want 403 with a rule that lists 443 only", resp.StatusCode)
+	}
+	if ev := recvEvent(t, events); ev.Port != 80 || ev.Decision != DecisionDeny {
+		t.Errorf("audit event = %+v, want deny on port 80", ev)
+	}
+}
+
 type fakeSecrets map[string][2]string
 
 func (f fakeSecrets) Header(name string) (string, string, bool) {

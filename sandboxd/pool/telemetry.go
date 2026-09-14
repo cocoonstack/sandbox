@@ -131,7 +131,7 @@ func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress
 	if ev.Decision == egress.DecisionAllow {
 		decision = "allow"
 	}
-	m.recordAudit(ctx, id, auditFrame{Op: "egress", Dest: ev.Host, Method: ev.Method, Decision: decision, Secret: ev.Injected})
+	m.recordAudit(ctx, id, auditFrame{Op: "egress", Dest: ev.Host, Port: ev.Port, Method: ev.Method, Decision: decision, Secret: ev.Injected})
 	m.recordUsage(ctx, usageEvent{Event: "egress", ID: id, Tenant: tenant, Reference: ev.Host})
 }
 
