@@ -26,7 +26,7 @@ up a few seconds later — poll `GET /screenshot` until it returns 200.
 - **Lane**: `net=none` — for local tasks (os, office, file work) as it is, and
   with an [egress policy](egress.md) when tasks visit the OSWorld mocked
   websites or the real web; the session's browsers reach the web through the
-  relay. Thunderbird's mail policy is pinned to the SOCKS5 door, so a pool that
+  relay. On a relay lane Thunderbird's mail policy is pinned to the SOCKS5 door, so a pool that
   runs mail tasks sets `"socks5": true` in its policy alongside at least one
   allow rule that admits CONNECT (a bare-host rule, or one whose `methods`
   names it); the policy is rejected at load otherwise. `net=egress` on a

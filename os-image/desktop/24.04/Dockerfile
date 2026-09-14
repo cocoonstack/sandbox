@@ -157,6 +157,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       '#!/bin/sh' \
       'set -e' \
       ': > /run/guest-proxy.env' \
+      'rm -f /usr/lib/thunderbird/distribution/policies.json' \
       'nic=0' \
       'for n in /sys/class/net/*; do if [ -e "$n/device" ]; then nic=1; fi; done' \
       'if [ $nic = 1 ]; then' \
@@ -169,6 +170,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'cat /usr/local/share/guest-proxy.dconf > /etc/dconf/db/local.d/01-proxy' \
       'dconf update' \
       'cat /usr/local/share/guest-proxy.apt > /etc/apt/apt.conf.d/01-guest-proxy' \
+      'cat /usr/local/share/guest-proxy.thunderbird > /usr/lib/thunderbird/distribution/policies.json' \
       > /usr/local/sbin/guest-proxy-setup \
     && chmod 0755 /usr/local/sbin/guest-proxy-setup \
     && printf '%s\n' \
@@ -324,7 +326,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       '{"policies":{"Proxy":{"Mode":"manual","SOCKSProxy":"127.0.0.1:1080",' \
       '"SOCKSVersion":5,"UseProxyForDNS":true,"Locked":true,' \
       '"Passthrough":"localhost, 127.0.0.1"}}}' \
-      > /usr/lib/thunderbird/distribution/policies.json \
+      > /usr/local/share/guest-proxy.thunderbird \
     && curl -fsSL -o /tmp/wps.deb \
       "https://wdl1.pcfg.cache.wpscdn.com/wpsdl/wpsoffice/download/linux/${WPS_BUILD##*.}/wps-office_${WPS_BUILD}.XA_amd64.deb" \
     && apt-get install -y --no-install-recommends /tmp/wps.deb \
@@ -374,15 +376,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'Categories=AudioVideo;Audio;' \
       'MimeType=application/x-musescore;application/x-musescore+xml;' \
       > /usr/share/applications/musescore.desktop \
-    # the guest root is overlayfs, which overlay2 cannot stack on, and dockerd
-    # does not read the guest proxy environment; both apply once a task installs docker
+    # the guest root is overlayfs, which overlay2 cannot stack on; dockerd reads
+    # the lane-selected proxy environment once a task installs docker
     && install -d /etc/docker /etc/systemd/system/docker.service.d \
     && printf '%s\n' '{"storage-driver": "vfs", "features": {"containerd-snapshotter": false}}' \
       > /etc/docker/daemon.json \
     && printf '%s\n' '[Service]' \
-      'Environment=HTTP_PROXY=http://127.0.0.1:3128' \
-      'Environment=HTTPS_PROXY=http://127.0.0.1:3128' \
-      'Environment=NO_PROXY=localhost,127.0.0.1' \
+      'EnvironmentFile=-/run/guest-proxy.env' \
       > /etc/systemd/system/docker.service.d/proxy.conf \
     && curl -fsSL -o /tmp/obsidian.deb \
       "https://github.com/obsidianmd/obsidian-releases/releases/download/v${OBSIDIAN_VERSION}/obsidian_${OBSIDIAN_VERSION}_amd64.deb" \
