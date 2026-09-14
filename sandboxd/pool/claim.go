@@ -295,10 +295,6 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 			m.rollbackClaim(ctx, sbs)
 			return fmt.Errorf("arm egress %s: %w", sb.ID, armErr)
 		}
-		// the claim was visible before it was armed, so a release in that window must find nothing left behind
-		if m.guardedEgress || m.lockEgress {
-			m.disarmIfReleased(sb)
-		}
 	}
 	// usage lands only after the batch armed, so a rollback leaves no unterminated claim event
 	for _, sb := range sbs {
