@@ -136,17 +136,26 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 
 // releaseResolved re-checks under m.mu that sb is still the live claim: no double teardown.
 func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sandbox) error {
+	var marked string
 	m.mu.Lock()
-	if m.claimed[id] != sb {
+	for {
+		if m.claimed[id] != sb {
+			m.mu.Unlock()
+			return ErrUnknownSandbox
+		}
+		ck := sb.ArchiveCk
+		if ck == "" || ck == marked {
+			break
+		}
 		m.mu.Unlock()
-		return ErrUnknownSandbox
+		if markErr := m.markArchiveCk(ck); markErr != nil {
+			return fmt.Errorf("release %s: track archive checkpoint: %w", id, markErr)
+		}
+		marked = ck
+		m.mu.Lock()
 	}
 	snap, ck, vmName := sb.HibernateSnap, sb.ArchiveCk, sb.VMName
 	if ck != "" {
-		if markErr := m.markArchiveCk(ck); markErr != nil {
-			m.mu.Unlock()
-			return fmt.Errorf("release %s: track archive checkpoint: %w", id, markErr)
-		}
 		m.pendingCks[ck] = struct{}{}
 	}
 	delete(m.claimed, id)
