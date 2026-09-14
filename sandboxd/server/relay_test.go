@@ -2,11 +2,13 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -122,6 +124,15 @@ func TestRelayClientDisconnectClosesGuest(t *testing.T) {
 	case <-guestClosed:
 	case <-time.After(3 * time.Second):
 		t.Fatal("guest side not closed after client disconnect")
+	}
+}
+
+func TestAuditTeeWriteToEndsCleanlyBeforeALine(t *testing.T) {
+	tee := &auditTee{r: strings.NewReader("partial"), record: func([]byte) { t.Error("recorded a line that never ended") }}
+	var out bytes.Buffer
+	n, err := tee.WriteTo(&out)
+	if err != nil || n != 7 || out.String() != "partial" {
+		t.Errorf("WriteTo = %d, %v, %q; want 7, nil, the bytes", n, err, out.String())
 	}
 }
 

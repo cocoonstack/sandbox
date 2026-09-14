@@ -158,6 +158,45 @@ func TestPreviewForwardsToOwner(t *testing.T) {
 	}
 }
 
+func TestPreviewForwardStopsAfterOneHop(t *testing.T) {
+	entry := httptest.NewUnstartedServer(nil)
+	entryAddr := entry.Listener.Addr().String()
+	ps := NewPreviewServer("secret", "https://preview.example.com", "renamed:7777", &fakePreviewMgr{})
+	entry.Config.Handler = ps.Handler()
+	entry.Start()
+	t.Cleanup(entry.Close)
+
+	minter := NewPreviewServer("secret", "https://preview.example.com", entryAddr, &fakePreviewMgr{})
+	resp, err := http.Get(entry.URL + "/p/" + mintToken(minter, "sb_1", 8080, time.Hour) + "/x")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(body), "not this node") {
+		t.Errorf("status %d body %q, want one forward hop then 502", resp.StatusCode, body)
+	}
+}
+
+func TestPreviewKeepsEncodedSlashes(t *testing.T) {
+	guestAddr := newGuestServer(t, func(r *http.Request) string { return "guest saw " + r.URL.EscapedPath() })
+	ps := NewPreviewServer("secret", "node:9000", "node:7777", &fakePreviewMgr{
+		dial: func(string, uint16) (net.Conn, error) { return net.Dial("tcp", guestAddr) },
+	})
+	ts := httptest.NewServer(ps.Handler())
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Get(ts.URL + "/p/" + mintToken(ps, "sb_1", 8080, time.Hour) + "/repo/a%2Fb/tree")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "guest saw /repo/a%2Fb/tree" {
+		t.Errorf("body %q, want the encoded slash preserved", body)
+	}
+}
+
 type fakePreviewMgr struct {
 	dial func(id string, port uint16) (net.Conn, error)
 }

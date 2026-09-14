@@ -20,6 +20,9 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+// forwardedHeader marks a request one owner already forwarded; a token whose owner string no longer names this node must not bounce forever.
+const forwardedHeader = "X-Sandbox-Preview-Forwarded"
+
 type previewClaims struct {
 	ID    string `json:"id"`
 	Port  uint16 `json:"port"`
@@ -93,6 +96,10 @@ func (p *PreviewServer) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if claims.Owner != p.owner {
+		if r.Header.Get(forwardedHeader) != "" {
+			http.Error(w, "preview owner is not this node", http.StatusBadGateway)
+			return
+		}
 		p.forward(w, r, claims.Owner)
 		return
 	}
@@ -105,7 +112,9 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 			pr.Out.URL.Scheme = "http"
 			// the synthetic host carries PreviewDial's target
 			pr.Out.URL.Host = fmt.Sprintf("%s:%d", claims.ID, claims.Port)
-			pr.Out.URL.Path = "/" + strings.TrimPrefix(pr.In.URL.Path, "/p/"+r.PathValue("token")+"/")
+			prefix := "/p/" + r.PathValue("token") + "/"
+			pr.Out.URL.Path = "/" + strings.TrimPrefix(pr.In.URL.Path, prefix)
+			pr.Out.URL.RawPath = "/" + strings.TrimPrefix(pr.In.URL.EscapedPath(), prefix)
 			// browser credentials for the preview domain must not reach guest code
 			pr.Out.Header.Del("Cookie")
 			pr.Out.Header.Del("Authorization")
@@ -121,10 +130,15 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 
 func (p *PreviewServer) forward(w http.ResponseWriter, r *http.Request, owner string) {
 	target := &url.URL{Scheme: "http", Host: owner}
-	rp := httputil.NewSingleHostReverseProxy(target)
-	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.WithFunc("server.forward").Errorf(r.Context(), err, "forward to owner %s", owner)
-		http.Error(w, "owner node unreachable", http.StatusBadGateway)
+	rp := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(target)
+			pr.Out.Header.Set(forwardedHeader, p.owner)
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			log.WithFunc("server.forward").Errorf(r.Context(), err, "forward to owner %s", owner)
+			http.Error(w, "owner node unreachable", http.StatusBadGateway)
+		},
 	}
 	rp.ServeHTTP(w, r) //nolint:gosec // owner host comes from an HMAC-signed token
 }

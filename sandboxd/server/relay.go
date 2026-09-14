@@ -155,6 +155,9 @@ func (t *auditTee) WriteTo(w io.Writer) (int64, error) {
 				return total, werr
 			}
 		}
+		if err == io.EOF {
+			return total, nil
+		}
 		if err != nil {
 			return total, err
 		}
