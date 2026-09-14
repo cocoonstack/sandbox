@@ -169,6 +169,36 @@ func TestDeleteTemplate(t *testing.T) {
 	}
 }
 
+func TestTemplateRecordLockEvictsWithTheRecord(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 0})
+	parent := mustClaim(t, m, testKey)
+	key := types.PoolKey{Template: "tpl:evict", Net: testKey.Net, Size: testKey.Size}
+	id := store.TemplateID(key.Hash())
+	base := lockCount(m)
+
+	if _, err := claimAny(t.Context(), m, key, 0); err != nil {
+		t.Fatalf("Claim of an unpromoted key: %v", err)
+	}
+	if hasRecLock(m, id) {
+		t.Error("recLocks kept an entry for a template that was never promoted")
+	}
+	if _, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, key.Template, ""); err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	if !hasRecLock(m, id) {
+		t.Error("recLocks dropped the entry of a live template")
+	}
+	if err := m.DeleteTemplate(t.Context(), key, ""); err != nil {
+		t.Fatalf("DeleteTemplate: %v", err)
+	}
+	if hasRecLock(m, id) {
+		t.Error("recLocks retained a lock for the deleted template")
+	}
+	if got := lockCount(m); got != base {
+		t.Errorf("recLocks grew %d->%d over claim, promote and delete, want no net growth", base, got)
+	}
+}
+
 func TestReconcileSweepsGoldenTmpDirs(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)

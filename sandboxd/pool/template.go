@@ -79,7 +79,7 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant 
 	id := store.TemplateID(key.Hash())
 	l := m.recLock(id)
 	l.Lock()
-	defer func() { l.Unlock(); m.recDone(id) }()
+	defer func() { l.Unlock(); m.recDoneEvict(id) }()
 	raw, err := m.tpls.ReadMeta(ctx, id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -261,12 +261,14 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant s
 	l := m.recLock(id)
 	l.RLock()
 	dir, meta, digest, release, err := m.tpls.Fetch(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		l.RUnlock()
+		m.recDoneEvict(id)
+		return goldenResolution{release: func() {}}, nil
+	}
 	if err != nil {
 		l.RUnlock()
 		m.recDone(id)
-		if errors.Is(err, store.ErrNotFound) {
-			return goldenResolution{release: func() {}}, nil
-		}
 		return goldenResolution{release: func() {}}, err
 	}
 	cleanup := func() { release(); l.RUnlock(); m.recDone(id) }
