@@ -235,6 +235,7 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 		prepare(out)
 	}
 	out.RequestURI = ""
+	out.Close = false // the guest's Connection: close is its own; the upstream pool keeps the conn
 	stripHop(out.Header)
 	ev.Injected = p.inject(rule, out.Header)
 	p.record(ev)

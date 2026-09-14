@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestInterceptLeafCaches(t *testing.T) {
@@ -26,6 +27,23 @@ func TestInterceptLeafCaches(t *testing.T) {
 	}
 	if a != b {
 		t.Error("per-sandbox leaf cache missed for the same host")
+	}
+}
+
+func TestInterceptLeafClampedToTheIntermediateStaysCached(t *testing.T) {
+	ca, _ := testCA(t)
+	ca.interCert.NotAfter = time.Now().Add(time.Hour).Truncate(time.Second)
+	p := New("s", "", Policy{}, nil, ca, fixedDial("127.0.0.1:1"), nil, nil)
+	a, err := p.leafFor("example.com")
+	if err != nil {
+		t.Fatalf("leafFor: %v", err)
+	}
+	b, err := p.leafFor("example.com")
+	if err != nil {
+		t.Fatalf("leafFor again: %v", err)
+	}
+	if a != b {
+		t.Error("leaf re-signed although its end is the intermediate's own")
 	}
 }
 
