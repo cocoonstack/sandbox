@@ -113,7 +113,13 @@ class Sandbox:
             watchdog = _arm_watchdog(conn, deadline, expired)
             try:
                 conn.send(
-                    "exec", argv=argv, cwd=cwd or None, env=env, user=user or None, detach=False, session=session or None
+                    "exec",
+                    argv=argv,
+                    cwd=cwd or None,
+                    env=env,
+                    user=user or None,
+                    detach=False,
+                    session=session or None,
                 )
                 # the guest stops draining stdin while blocked on stdout, so feeding it fully first deadlocks.
                 pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True)
