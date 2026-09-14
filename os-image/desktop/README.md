@@ -32,11 +32,12 @@ bridge `egress` lane alike (see `docs/desktop.md`).
 - dconf defaults turn on `toolkit-accessibility`, and turn off animations,
   idle, screen lock, and the welcome dialog.
 - `guest-proxy.service` writes the session's proxy environment, the dconf
-  proxy entry and the apt proxy when the guest has no device-backed NIC, or
-  when the host's verdict in `/etc/silkd-lane` reads `relay`; on a NIC-bearing
-  guest it holds the session for that verdict up to 300 s and fails visibly
-  without it. Thunderbird's policy pins mail to the SOCKS5 door on `1080`, so
-  a pool that runs mail tasks opts its policy into `socks5`.
+  proxy entry, the apt proxy and Thunderbird's policy when the guest has no
+  device-backed NIC, or when the host's verdict in `/etc/silkd-lane` reads
+  `relay`; on a NIC-bearing guest it holds the session for that verdict up to
+  300 s and fails visibly without it. That Thunderbird policy pins mail to the
+  SOCKS5 door on `1080`, so a pool that runs mail tasks opts its policy into
+  `socks5`; on a direct lane no policy is installed and mail routes directly.
 - dockerd, once a task installs it, is pinned to the `vfs` storage driver and
   reads the lane-selected `/run/guest-proxy.env` through its systemd drop-in:
   the guest root is overlayfs, which overlay2 cannot stack on.
