@@ -164,6 +164,10 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 		log.WithFunc("pool.wakeResolved").Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 	}
 	if m.disarmIfReleased(sb) {
+		if err == nil {
+			m.dropStale(ctx, sb)
+			m.dropSnap(ctx, snap)
+		}
 		return "", ErrUnknownSandbox
 	}
 	if err != nil {
