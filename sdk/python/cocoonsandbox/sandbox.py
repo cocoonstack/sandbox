@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from .checkpoint import Checkpoint
 from .conn import Conn, _Closeable, dial_agent
-from .errors import APIError, ExitError, ProtocolError, SandboxError, StreamTimeout
+from .errors import APIError, ExitError, ProtocolError, SandboxError
 from .frames import BULK_CHUNK, FS_CHUNK
 from .template import Template
 
@@ -450,7 +450,7 @@ class Watcher(_Closeable):
         while True:
             try:
                 frame = self._conn.recv()
-            except (ProtocolError, StreamTimeout) as e:
+            except ProtocolError as e:
                 self.error = e
                 return
             if frame["type"] == "event":

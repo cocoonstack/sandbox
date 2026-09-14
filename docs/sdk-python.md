@@ -452,7 +452,6 @@ zero.
   `bad_request` / `not_found` / `unimplemented` / `internal`
 - `ExitError(code, stderr, stdout)` — non-zero exit from `exec`
 - `ProtocolError` — broken stream (EOF, oversized or undecodable frame)
-- `StreamTimeout` — a socket operation hit the client `timeout`; retry the call
 
 ```python
 try:

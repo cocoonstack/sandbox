@@ -8,7 +8,7 @@ import socket
 from collections.abc import Iterator
 from typing import BinaryIO, TypeVar
 
-from .errors import APIError, ProtocolError, SilkdError, StreamTimeout
+from .errors import APIError, ProtocolError, SilkdError
 from .frames import MAX_FRAME, decode_response, encode_request
 
 _CloseableT = TypeVar("_CloseableT", bound="_Closeable")
@@ -35,13 +35,11 @@ class Conn(_Closeable):
         self._sock.sendall(encode_request(op, **fields))
 
     def recv(self) -> dict:
-        """Returns the next frame; raises SilkdError on an error frame,
-        StreamTimeout when the socket times out, and ProtocolError on EOF, an
-        oversized line, or an undecodable one — every failure is typed."""
+        """Returns the next frame; raises SilkdError on an error frame and
+        ProtocolError on EOF, an oversized line, or an undecodable one — every
+        failure is typed."""
         try:
             line = self._reader.readline(MAX_FRAME + 1)
-        except socket.timeout as exc:
-            raise StreamTimeout(f"read timed out: {exc}") from exc
         except OSError as exc:
             raise ProtocolError(f"read failed: {exc}") from exc
         if not line:
