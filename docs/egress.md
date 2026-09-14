@@ -48,16 +48,17 @@ through the same code: a rule with `methods` that does not name `CONNECT`
 denies it, and a rule with a `secret` opens it without injecting anything, on
 both ports. The one difference is `intercept`: on 3128 such a rule terminates
 the TLS and filters the requests inside, on 1080 there is no HTTP to filter, so
-the tunnel is refused. The listener is bound only when some rule could admit a
-tunnel — a conservative test: each side of a pool/tenant pair is checked on its
-own, so disjoint host sets still bind a listener that denies everything. A pool
-whose rules all carry `methods` without `CONNECT`, or all `intercept`, pays
-nothing for it, and with no policy at all the host side stays unwired, so the
-guest's dial is refused like the HTTP one. Audit lines carry
-`"method":"SOCKS5"`.
+the tunnel is refused. The door is opt-in: the policy sets `"socks5": true`
+and some rule of it can admit a tunnel, otherwise the host side stays unwired
+and the guest's dial is refused like the HTTP one with no policy. Both sides of
+a pool/tenant pair must opt in, each checked on its own, so disjoint host sets
+still bind a listener that denies everything. A policy that opts in with rules
+that all carry `methods` without `CONNECT`, or all `intercept`, is rejected at
+load. A policy that does not opt in pays nothing for the door on the claim
+path. Audit lines carry `"method":"SOCKS5"`.
 
 ```sh
-curl --socks5-hostname 127.0.0.1:1080 imaps://imap.example.com/   # allowed: {"host": "imap.example.com"}
+curl --socks5-hostname 127.0.0.1:1080 imaps://imap.example.com/   # allowed: {"socks5": true, "allow": [{"host": "imap.example.com"}]}
 ```
 
 ## How it works (egress lane)
@@ -152,7 +153,7 @@ file.
   ],
   "pools": [
     { "template": "rt:24.04", "net": "none", "size": "small", "warm": 2,
-      "egress": { "allow": [
+      "egress": { "socks5": true, "allow": [
         { "host": "api.github.com", "methods": ["GET", "POST"], "secret": "gh", "intercept": true },
         { "host": "*.googleapis.com" }
       ] } },
@@ -160,14 +161,14 @@ file.
       "egress": { "allow": [{ "host": "api.github.com", "secret": "gh" }] } }
   ],
   "tenants": [
-    { "name": "acme", "token": "…", "egress": { "allow": [{ "host": "api.github.com" }] } }
+    { "name": "acme", "token": "…", "egress": { "socks5": true, "allow": [{ "host": "api.github.com" }] } }
   ]
 }
 ```
 
-Both pools serve the proxy the same way; the egress-lane pool additionally gets
-its NIC locked at claim, so its policy governs the only route out just like the
-none lane's.
+Both pools serve the proxy the same way, and the first also opens the SOCKS5
+door; the egress-lane pool additionally gets its NIC locked at claim, so its
+policy governs the only route out just like the none lane's.
 
 - `host`: an exact name, a `*.`-prefixed suffix wildcard, or `*`. Case-insensitive.
 - `methods`: empty means any. Enforced on plaintext and on intercepted HTTPS. A

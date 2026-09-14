@@ -70,14 +70,15 @@ func TestEgressProxyInjectsAndGates(t *testing.T) {
 	}
 }
 
-func TestArmEgressBindsSocksOnlyForTunnelRules(t *testing.T) {
+func TestArmEgressBindsSocksOnlyWhenOptedIn(t *testing.T) {
 	tests := []struct {
 		name   string
 		policy *egress.Policy
 		want   bool
 	}{
-		{"bare host rule", &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}, true},
-		{"GET-only rule", &egress.Policy{Allow: []egress.Rule{{Host: "example.com", Methods: []string{"GET"}}}}, false},
+		{"opted in with a bare host rule", &egress.Policy{Socks5: true, Allow: []egress.Rule{{Host: "example.com"}}}, true},
+		{"bare host rule without opting in", &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}, false},
+		{"opted in with a GET-only rule", &egress.Policy{Socks5: true, Allow: []egress.Rule{{Host: "example.com", Methods: []string{"GET"}}}}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -145,7 +145,7 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	if el.ln, err = listenUnix(el.path); err != nil {
 		return fmt.Errorf("listen egress %s: %w", id, err)
 	}
-	if policy.Tunnels() {
+	if policy.ServesSocks() {
 		el.socksPath = engine.SocksSocketPath(sb.VsockSocket)
 		if el.socks, err = listenUnix(el.socksPath); err != nil {
 			el.close()

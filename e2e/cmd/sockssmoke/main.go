@@ -2,7 +2,7 @@
 // sandbox: an allowed host tunnels over 127.0.0.1:1080, a GET-only host is
 // reachable on the HTTP proxy but refused on SOCKS5, an unlisted host is
 // refused, IMAPS rides the tunnel, and no tunnel opens from a pool without a
-// policy.
+// policy or from one whose policy did not opt in.
 package main
 
 import (
@@ -87,6 +87,19 @@ func run(addr, token, template, echo, getOnly, imap string) error {
 		return fmt.Errorf("policy-less pool opened a SOCKS5 tunnel with %q, want none", code)
 	}
 	fmt.Println("  pool without a policy: no SOCKS5 tunnel opens")
+
+	_, silent, err := harness.Claim(ctx, addr, token, template, sandbox.WithSize(sandbox.Large))
+	if err != nil {
+		return fmt.Errorf("claim from the pool that did not opt in: %w", err)
+	}
+	defer func() { _ = silent.Close() }()
+	if code := curl(ctx, silent, "--socks5-hostname", socksProxy, "http://"+echo+"/get"); code != "000" {
+		return fmt.Errorf("pool that did not opt in opened a SOCKS5 tunnel with %q, want none", code)
+	}
+	if code := curl(ctx, silent, "-x", httpProxy, "http://"+echo+"/get"); code != "200" {
+		return fmt.Errorf("pool that did not opt in returned %q on the HTTP proxy, want 200", code)
+	}
+	fmt.Println("  pool that did not opt in: HTTP door open, no SOCKS5 tunnel")
 	return nil
 }
 

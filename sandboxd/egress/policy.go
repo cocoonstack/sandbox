@@ -50,7 +50,8 @@ func (r Rule) matchMethod(method string) bool {
 
 // Policy is one sandbox's egress allow-list; a request matching no rule is denied.
 type Policy struct {
-	Allow []Rule `json:"allow"`
+	Allow  []Rule `json:"allow"`
+	Socks5 bool   `json:"socks5,omitzero"` // opts the SOCKS5 door in; a rule must still admit CONNECT
 }
 
 // Intercepts reports whether any rule terminates HTTPS; nil is false.
@@ -58,7 +59,7 @@ func (p *Policy) Intercepts() bool {
 	return p != nil && slices.ContainsFunc(p.Allow, func(r Rule) bool { return r.Intercept })
 }
 
-// Validate rejects an empty or bare-wildcard host; an empty allow-list denies everything.
+// Validate rejects an empty or bare-wildcard host and socks5 without a tunnel rule; an empty allow-list denies everything.
 func (p Policy) Validate() error {
 	for i, r := range p.Allow {
 		switch r.Host {
@@ -67,6 +68,9 @@ func (p Policy) Validate() error {
 		case "*.":
 			return fmt.Errorf("allow[%d]: host %q needs a domain after the wildcard", i, r.Host)
 		}
+	}
+	if p.Socks5 && !p.admitsTunnel() {
+		return fmt.Errorf("socks5 needs a rule that admits CONNECT")
 	}
 	return nil
 }
@@ -112,8 +116,12 @@ func (p Policy) EvalInner(host, method string) (Rule, Decision) {
 	return Rule{}, DecisionDeny
 }
 
-// Tunnels reports whether some rule can admit an opaque tunnel; a composite answers true even when its two host sets never meet.
-func (p Policy) Tunnels() bool {
+// ServesSocks reports whether the SOCKS5 door is bound: opted in, with some rule that can admit a tunnel.
+func (p Policy) ServesSocks() bool {
+	return p.Socks5 && p.admitsTunnel()
+}
+
+func (p Policy) admitsTunnel() bool {
 	return slices.ContainsFunc(p.Allow, func(r Rule) bool { return !r.Intercept && r.matchMethod(http.MethodConnect) })
 }
 
@@ -122,7 +130,7 @@ type Evaluator interface {
 	Eval(host, method string) (Rule, Decision)
 	EvalHost(host string) (Rule, Decision)
 	EvalInner(host, method string) (Rule, Decision)
-	Tunnels() bool
+	ServesSocks() bool
 }
 
 // Compose intersects a pool and a tenant policy; the pool rule wins on a double allow.
@@ -167,6 +175,7 @@ func (c composite) EvalInner(host, method string) (Rule, Decision) {
 	return rule, DecisionAllow
 }
 
-func (c composite) Tunnels() bool {
-	return c.pool.Tunnels() && c.tenant.Tunnels()
+// ServesSocks is conservative: two host sets that never meet still bind a door that denies everything.
+func (c composite) ServesSocks() bool {
+	return c.pool.ServesSocks() && c.tenant.ServesSocks()
 }

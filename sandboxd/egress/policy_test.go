@@ -115,6 +115,8 @@ func TestPolicyValidate(t *testing.T) {
 		{"good rules", Policy{Allow: []Rule{{Host: "api.github.com"}, {Host: "*.dev"}, {Host: "*"}}}, false},
 		{"empty host", Policy{Allow: []Rule{{Host: ""}}}, true},
 		{"bare wildcard", Policy{Allow: []Rule{{Host: "*."}}}, true},
+		{"socks5 with a tunnel rule", Policy{Socks5: true, Allow: []Rule{{Host: "api.github.com"}}}, false},
+		{"socks5 without a tunnel rule", Policy{Socks5: true, Allow: []Rule{{Host: "api.github.com", Methods: []string{"GET"}}}}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -125,32 +127,37 @@ func TestPolicyValidate(t *testing.T) {
 	}
 }
 
-func TestPolicyTunnels(t *testing.T) {
+func TestPolicyServesSocks(t *testing.T) {
 	tests := []struct {
-		name  string
-		rules []Rule
-		want  bool
+		name   string
+		policy Policy
+		want   bool
 	}{
-		{"empty", nil, false},
-		{"bare host", []Rule{{Host: "a.internal"}}, true},
-		{"methods without CONNECT", []Rule{{Host: "a.internal", Methods: []string{"GET"}}}, false},
-		{"methods with CONNECT", []Rule{{Host: "a.internal", Methods: []string{"connect"}}}, true},
-		{"intercept only", []Rule{{Host: "a.internal", Intercept: true}}, false},
-		{"secret", []Rule{{Host: "a.internal", Secret: "s"}}, true},
+		{"opted in, no rules", Policy{Socks5: true}, false},
+		{"opted in, bare host", Policy{Socks5: true, Allow: []Rule{{Host: "a.internal"}}}, true},
+		{"bare host without opting in", Policy{Allow: []Rule{{Host: "a.internal"}}}, false},
+		{"opted in, methods without CONNECT", Policy{Socks5: true, Allow: []Rule{{Host: "a.internal", Methods: []string{"GET"}}}}, false},
+		{"opted in, methods with CONNECT", Policy{Socks5: true, Allow: []Rule{{Host: "a.internal", Methods: []string{"connect"}}}}, true},
+		{"opted in, intercept only", Policy{Socks5: true, Allow: []Rule{{Host: "a.internal", Intercept: true}}}, false},
+		{"opted in, secret", Policy{Socks5: true, Allow: []Rule{{Host: "a.internal", Secret: "s"}}}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := (Policy{Allow: tt.rules}).Tunnels(); got != tt.want {
-				t.Errorf("Tunnels() = %v, want %v", got, tt.want)
+			if got := tt.policy.ServesSocks(); got != tt.want {
+				t.Errorf("ServesSocks() = %v, want %v", got, tt.want)
 			}
 		})
 	}
-	bare := Policy{Allow: []Rule{{Host: "a.internal"}}}
-	getOnly := Policy{Allow: []Rule{{Host: "a.internal", Methods: []string{"GET"}}}}
-	if Compose(bare, getOnly).Tunnels() {
-		t.Error("composite Tunnels() = true with a GET-only tenant, want false")
+	bare := Policy{Socks5: true, Allow: []Rule{{Host: "a.internal"}}}
+	getOnly := Policy{Socks5: true, Allow: []Rule{{Host: "a.internal", Methods: []string{"GET"}}}}
+	silent := Policy{Allow: []Rule{{Host: "a.internal"}}}
+	if Compose(bare, getOnly).ServesSocks() {
+		t.Error("composite ServesSocks() = true with a GET-only tenant, want false")
 	}
-	if !Compose(bare, bare).Tunnels() {
-		t.Error("composite Tunnels() = false with two bare policies, want true")
+	if Compose(bare, silent).ServesSocks() {
+		t.Error("composite ServesSocks() = true with a tenant that did not opt in, want false")
+	}
+	if !Compose(bare, bare).ServesSocks() {
+		t.Error("composite ServesSocks() = false with two opted-in bare policies, want true")
 	}
 }
