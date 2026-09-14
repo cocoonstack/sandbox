@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -10,6 +11,8 @@ import (
 	"slices"
 	"syscall"
 	"time"
+
+	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
@@ -55,8 +58,10 @@ type egressListener struct {
 }
 
 func (e *egressListener) close() {
-	_ = e.srv.Close()
-	e.proxy.Close()
+	if e.srv != nil {
+		_ = e.srv.Close()
+		e.proxy.Close()
+	}
 	_ = e.ln.Close()
 	_ = os.Remove(e.path)
 	if e.socks != nil {
@@ -135,35 +140,36 @@ func (m *Manager) tapOf(ctx context.Context, vmName string) (string, error) {
 	return "", fmt.Errorf("no tap for %s", vmName)
 }
 
-// armEgressProxy binds the egress proxy only when the effective policy permits something.
+// armEgressProxy serves the egress proxy when the effective policy permits something, on the doors refill pre-bound where it could.
 func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	if !m.guardedEgress || sb.VsockSocket == "" {
 		return nil
 	}
 	policy, ok := m.effectivePolicy(sb)
 	if !ok {
+		m.closePrebound(sb.VMName)
 		return nil
 	}
 	id, tenant := sb.ID, sb.Tenant
 	evCtx := context.WithoutCancel(ctx)
 	proxy := egress.New(id, tenant, policy, m.egressSecrets, m.egressCA, m.dial,
 		func(ev egress.Event) { m.recordEgress(evCtx, id, tenant, ev) }, sb)
-	el := &egressListener{
-		srv:   &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second},
-		proxy: proxy,
-		path:  engine.EgressSocketPath(sb.VsockSocket),
+	m.mu.Lock()
+	el := m.egressPrebound[sb.VMName]
+	delete(m.egressPrebound, sb.VMName)
+	m.mu.Unlock()
+	if el != nil && (reached(el.ln) || (el.socks != nil && reached(el.socks))) {
+		el.close()
+		el = nil
 	}
-	var err error
-	if el.ln, err = listenUnix(el.path); err != nil {
-		return fmt.Errorf("listen egress %s: %w", id, err)
-	}
-	if policy.ServesSocks() {
-		el.socksPath = engine.SocksSocketPath(sb.VsockSocket)
-		if el.socks, err = listenUnix(el.socksPath); err != nil {
-			el.close()
-			return fmt.Errorf("listen socks %s: %w", id, err)
+	if el == nil {
+		var err error
+		if el, err = bindEgress(sb.VsockSocket, policy.ServesSocks()); err != nil {
+			return err
 		}
 	}
+	el.srv = &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}
+	el.proxy = proxy
 	m.mu.Lock()
 	m.egressListeners[id] = el
 	m.mu.Unlock()
@@ -172,6 +178,35 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 		go proxy.ServeSOCKS(evCtx, el.socks)
 	}
 	return nil
+}
+
+// prebindEgress binds a warm VM's doors at refill, so a claim only has to start serving them.
+func (m *Manager) prebindEgress(ctx context.Context, sb *types.Sandbox) {
+	m.mu.Lock()
+	policy := m.poolEgress[sb.Key]
+	m.mu.Unlock()
+	if !m.guardedEgress || policy == nil || sb.VsockSocket == "" {
+		return
+	}
+	el, err := bindEgress(sb.VsockSocket, policy.ServesSocks())
+	if err != nil {
+		log.WithFunc("pool.prebindEgress").Warnf(ctx, "pre-bind %s: %v; the claim binds instead", sb.VMName, err)
+		return
+	}
+	m.mu.Lock()
+	m.egressPrebound[sb.VMName] = el
+	m.mu.Unlock()
+}
+
+// closePrebound drops the doors bound for a warm VM that is going away or will not be served.
+func (m *Manager) closePrebound(name string) {
+	m.mu.Lock()
+	el := m.egressPrebound[name]
+	delete(m.egressPrebound, name)
+	m.mu.Unlock()
+	if el != nil {
+		el.close()
+	}
 }
 
 // disarmIfReleased tears down a wake-path proxy if Release dropped the claim in the arm window.
@@ -235,10 +270,47 @@ func (m *Manager) effectivePolicy(sb *types.Sandbox) (egress.Evaluator, bool) {
 	return egress.Compose(*poolPol, *tenantPol), true
 }
 
+// bindEgress binds the HTTP door and, when the policy serves it, the SOCKS5 door of one VM.
+func bindEgress(vsock string, socks bool) (*egressListener, error) {
+	el := &egressListener{path: engine.EgressSocketPath(vsock)}
+	var err error
+	if el.ln, err = listenUnix(el.path); err != nil {
+		return nil, fmt.Errorf("listen egress: %w", err)
+	}
+	if socks {
+		el.socksPath = engine.SocksSocketPath(vsock)
+		if el.socks, err = listenUnix(el.socksPath); err != nil {
+			el.close()
+			return nil, fmt.Errorf("listen socks: %w", err)
+		}
+	}
+	return el, nil
+}
+
 // listenUnix binds path after clearing a stale socket from a prior life that would block the bind.
 func listenUnix(path string) (net.Listener, error) {
 	_ = os.Remove(path)
 	return net.Listen("unix", path)
+}
+
+// reached reports whether a guest connected to a door before it was armed; only a clean EAGAIN says no.
+func reached(ln net.Listener) bool {
+	rc, err := ln.(syscall.Conn).SyscallConn()
+	if err != nil {
+		return true
+	}
+	waiting := true
+	_ = rc.Control(func(fd uintptr) {
+		syscall.ForkLock.RLock()
+		defer syscall.ForkLock.RUnlock()
+		nfd, _, err := syscall.Accept(int(fd)) //nolint:gosec // a descriptor, not arithmetic
+		if err == nil {
+			_ = syscall.Close(nfd)
+			return
+		}
+		waiting = !errors.Is(err, syscall.EAGAIN)
+	})
+	return waiting
 }
 
 // newEgressDialer blocks internal targets, then re-admits exactly the node-named prefixes.

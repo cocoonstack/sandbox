@@ -837,6 +837,7 @@ type fakeEngine struct {
 	staleErr                          error
 	pids                              map[string]int
 	vsockLateN                        int
+	sockRoot                          string
 
 	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr, snapSaveErr, snapListErr error
 	removeErrFor                                                                       string
@@ -860,6 +861,7 @@ func newFakeEngine() *fakeEngine {
 	return &fakeEngine{
 		vms: map[string]string{}, stopped: map[string]bool{}, creating: map[string]bool{}, pids: map[string]int{},
 		attachDirty: map[string]bool{}, removeSeenOps: map[string][]string{}, removeSeenDirty: map[string][]string{},
+		sockRoot: "/vsock",
 	}
 }
 
@@ -879,7 +881,7 @@ func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) (t
 	if f.runColdErr != nil {
 		return types.VMRecord{}, f.runColdErr
 	}
-	f.vms[name] = "/vsock/" + name
+	f.vms[name] = f.sockRoot + "/" + name
 	return f.record(name), nil
 }
 
@@ -1142,7 +1144,7 @@ func (f *fakeEngine) clone(from, name string) (types.VMRecord, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.vms[name] = "/vsock/" + name
+	f.vms[name] = f.sockRoot + "/" + name
 	return f.record(name), nil
 }
 

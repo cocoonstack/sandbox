@@ -575,6 +575,120 @@ func TestEgressDialerWildcardAllowsEverything(t *testing.T) {
 	}
 }
 
+func TestWarmClaimServesTheDoorsRefillBound(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	pol := &egress.Policy{Socks5: true, Allow: []egress.Rule{{Host: "example.com"}}}
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
+	warm := refillWarmVM(t, m)
+	m.mu.Lock()
+	el := m.egressPrebound[warm.VMName]
+	m.mu.Unlock()
+	if el == nil || el.socks == nil || el.srv != nil {
+		t.Fatalf("refill left prebound=%+v, want both doors bound and nothing served", el)
+	}
+
+	sb := mustClaim(t, m, testKey)
+	m.mu.Lock()
+	armed, left := m.egressListeners[sb.ID], len(m.egressPrebound)
+	m.mu.Unlock()
+	if armed != el || left != 0 {
+		t.Fatalf("claim armed %p from prebound %p with %d left, want the refill-bound pair", armed, el, left)
+	}
+	dialDoors(t, sb)
+	m.disarmEgress(sb.ID, true)
+	if _, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
+		t.Error("egress socket still accepts after disarm")
+	}
+}
+
+func TestWarmClaimRebindsADoorTheGuestReachedEarly(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	pol := &egress.Policy{Socks5: true, Allow: []egress.Rule{{Host: "example.com"}}}
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
+	warm := refillWarmVM(t, m)
+	m.mu.Lock()
+	prebound := m.egressPrebound[warm.VMName]
+	m.mu.Unlock()
+	early, err := net.Dial("unix", engine.SocksSocketPath(warm.VsockSocket))
+	if err != nil {
+		t.Fatalf("pre-claim dial: %v", err)
+	}
+	defer early.Close()
+
+	sb := mustClaim(t, m, testKey)
+	m.mu.Lock()
+	armed := m.egressListeners[sb.ID]
+	m.mu.Unlock()
+	if armed == prebound {
+		t.Fatal("claim served the pair a guest had already reached")
+	}
+	_ = early.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := early.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("a connection queued before the claim was kept: read err=%v, want closed", err)
+	}
+	dialDoors(t, sb)
+	m.disarmEgress(sb.ID, true)
+}
+
+func TestTrimmedWarmVMClosesItsDoors(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: egPolicy})
+	warm := refillWarmVM(t, m)
+	path := engine.EgressSocketPath(warm.VsockSocket)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("refill did not bind the door: %v", err)
+	}
+
+	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey}}); err != nil {
+		t.Fatalf("SetPools: %v", err)
+	}
+	waitFor(t, func() bool { return eng.removed(warm.VMName) })
+	m.mu.Lock()
+	left := len(m.egressPrebound)
+	m.mu.Unlock()
+	if left != 0 {
+		t.Errorf("%d prebound doors survive their VM", left)
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Error("door socket survives its VM")
+	}
+}
+
+func dialDoors(t *testing.T, sb *types.Sandbox) {
+	t.Helper()
+	for _, path := range []string{engine.EgressSocketPath(sb.VsockSocket), engine.SocksSocketPath(sb.VsockSocket)} {
+		conn, err := net.Dial("unix", path)
+		if err != nil {
+			t.Fatalf("door %s: %v", path, err)
+		}
+		_ = conn.Close()
+	}
+}
+
+func refillWarmVM(t *testing.T, m *Manager) *types.Sandbox {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(m.goldensDir(), testKey.Hash()), 0o750); err != nil {
+		t.Fatalf("setup golden: %v", err)
+	}
+	m.mu.Lock()
+	m.adoptGolden(m.pools[testKey])
+	m.mu.Unlock()
+	m.refillOnce(t.Context())
+	var warm *types.Sandbox
+	waitFor(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if p := m.pools[testKey]; p != nil && len(p.warm) > 0 {
+			warm = p.warm[0]
+		}
+		return warm != nil
+	})
+	return warm
+}
+
 func egressClient(path string) *http.Client {
 	return &http.Client{
 		Timeout: 5 * time.Second,
@@ -625,12 +739,17 @@ func writeTestEgressCA(t *testing.T) *config.EgressCAConfig {
 
 func vsockSandbox(t *testing.T, id string) *types.Sandbox {
 	t.Helper()
-	sockDir, err := os.MkdirTemp("/tmp", "eg")
+	return &types.Sandbox{ID: id, Key: testKey, VsockSocket: filepath.Join(sockRoot(t), "v")}
+}
+
+func sockRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "eg")
 	if err != nil {
 		t.Fatalf("sockdir: %v", err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
-	return &types.Sandbox{ID: id, Key: testKey, VsockSocket: filepath.Join(sockDir, "v")}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }
 
 func mustHostname(t *testing.T, raw string) string {
