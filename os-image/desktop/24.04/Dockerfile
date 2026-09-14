@@ -19,6 +19,9 @@ ARG ZOTERO_VERSION=7.0.11
 ARG REAPER_BUILD=735
 ARG CODE_VERSION=1.137.0-1788902055
 ARG SHOTCUT_VERSION=24.02.29+ds-1build1
+ARG OBSIDIAN_VERSION=1.13.7
+# The task scores were written by MuseScore 4.6.5; noble's 3.x cannot open them.
+ARG MUSESCORE_BUILD=4.6.5.253511702
 # noble dropped freecad; the project's own archive still builds for it.
 ARG FREECAD_VERSION=2:0.21.2+dfsg1~202407140123~ubuntu24.04.1
 ARG FREECAD_FINGERPRINT=A728AE60A790F0EB
@@ -285,13 +288,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --chmod=0755 24.04/socks-connect.py /usr/local/sbin/socks-connect
 
-# Six more applications the OSWorld task set drives. bsdextrautils and
-# xdg-utils: WPS's postinst exits 127 without them and wedges apt.
-# libdbus-glib-1-2: Thunderbird and Zotero dlopen it, undeclared.
-# WPS blocks on a modal EULA and nags about absent symbol fonts.
+# The applications and command-line tools the OSWorld task set drives, beyond
+# what the flavor already carried. bsdextrautils and xdg-utils: WPS's postinst
+# exits 127 without them and wedges apt. libdbus-glib-1-2: Thunderbird and
+# Zotero dlopen it, undeclared. WPS blocks on a modal EULA and nags about
+# absent symbol fonts. Archive packages take the version the suite froze.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bsdextrautils xdg-utils desktop-file-utils shared-mime-info bzip2 xz-utils \
     libdbus-glib-1-2 tinyproxy shotcut=${SHOTCUT_VERSION} \
+    unzip zip poppler-utils imagemagick sqlite3 psmisc \
+    python-is-python3 python3-pip nodejs npm \
+    blender kicad solvespace labplot geogebra logisim openboard \
+    gnome-calendar \
     && install -d -m 0755 /etc/apt/keyrings \
     && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
       | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg \
@@ -321,6 +329,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'MimeType=x-scheme-handler/mailto;message/rfc822;' \
       > /usr/share/applications/thunderbird.desktop \
     # a task seeds its own profile, so the proxy has to come from policy
+    # the task set predates PEP 668 and pip-installs into the system interpreter
+    && printf '%s\n' '[global]' 'break-system-packages = true' > /etc/pip.conf \
     && install -d /usr/lib/thunderbird/distribution \
     && printf '%s\n' \
       '{"policies":{"Proxy":{"Mode":"manual","SOCKSProxy":"127.0.0.1:1080",' \
@@ -354,6 +364,52 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       'Categories=Office;' \
       'MimeType=x-scheme-handler/zotero;text/x-bibtex;application/x-bibtex;' \
       > /usr/share/applications/zotero.desktop \
+    && install -d /opt/zotero/app/defaults/preferences \
+    && printf '%s\n' \
+      'pref("extensions.zotero.firstRun2", false);' \
+      'pref("extensions.zoteroOpenOfficeIntegration.skipInstallation", true);' \
+      > /opt/zotero/app/defaults/preferences/osworld.js \
+    && curl -fsSL -o /tmp/musescore.AppImage \
+      "https://github.com/musescore/MuseScore/releases/download/v${MUSESCORE_BUILD%.*}/MuseScore-Studio-${MUSESCORE_BUILD}-x86_64.AppImage" \
+    && chmod 0755 /tmp/musescore.AppImage \
+    && cd /opt && /tmp/musescore.AppImage --appimage-extract >/dev/null \
+    && mv /opt/squashfs-root /opt/musescore4 && cd / \
+    && printf '%s\n' '#!/bin/sh' 'exec /opt/musescore4/AppRun "$@"' > /usr/local/bin/musescore \
+    && chmod 0755 /usr/local/bin/musescore && ln -sf musescore /usr/local/bin/mscore \
+    && printf '%s\n' \
+      '[Desktop Entry]' \
+      'Type=Application' \
+      'Name=MuseScore Studio' \
+      'Exec=/usr/local/bin/musescore %F' \
+      'Icon=/opt/musescore4/.DirIcon' \
+      'Terminal=false' \
+      'Categories=AudioVideo;Audio;' \
+      'MimeType=application/x-musescore;application/x-musescore+xml;' \
+      > /usr/share/applications/musescore.desktop \
+    # the guest root is overlayfs, which overlay2 cannot stack on, and dockerd
+    # does not read the guest proxy environment; both apply once a task installs docker
+    && install -d /etc/docker /etc/systemd/system/docker.service.d \
+    && printf '%s\n' '{"storage-driver": "vfs", "features": {"containerd-snapshotter": false}}' \
+      > /etc/docker/daemon.json \
+    && printf '%s\n' '[Service]' \
+      'Environment=HTTP_PROXY=http://127.0.0.1:3128' \
+      'Environment=HTTPS_PROXY=http://127.0.0.1:3128' \
+      'Environment=NO_PROXY=localhost,127.0.0.1' \
+      > /etc/systemd/system/docker.service.d/proxy.conf \
+    && curl -fsSL -o /tmp/obsidian.deb \
+      "https://github.com/obsidianmd/obsidian-releases/releases/download/v${OBSIDIAN_VERSION}/obsidian_${OBSIDIAN_VERSION}_amd64.deb" \
+    && apt-get install -y --no-install-recommends /tmp/obsidian.deb \
+    # Electron's sandbox cannot start in-guest, the same as Chrome's
+    && printf '%s\n' '#!/bin/sh' 'exec /opt/Obsidian/obsidian --no-sandbox "$@"' > /usr/local/bin/obsidian \
+    && chmod 0755 /usr/local/bin/obsidian \
+    && sed -i 's|^Exec=/opt/Obsidian/obsidian|Exec=/usr/local/bin/obsidian|' \
+      /usr/share/applications/md.obsidian.Obsidian.desktop \
+    # both Obsidian tasks use this vault and never register it; unregistered, the app opens on its chooser
+    && install -d -o user -g user -m 0755 /home/user/Documents "/home/user/Documents/Obsidian Vault" \
+      /home/user/.config/obsidian \
+    && printf '%s' '{"vaults":{"6a2f4c1e9b7d3a05":{"path":"/home/user/Documents/Obsidian Vault","ts":1789000000000,"open":true}}}' \
+      > /home/user/.config/obsidian/obsidian.json \
+    && chown user:user /home/user/.config/obsidian/obsidian.json \
     && curl -fsSL -o /tmp/reaper.tar.xz \
       "https://www.reaper.fm/files/7.x/reaper${REAPER_BUILD}_linux_x86_64.tar.xz" \
     && install -d /tmp/reaper \
@@ -371,5 +427,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && systemctl disable tinyproxy.service \
     && update-desktop-database /usr/share/applications \
     && apt-get update \
-    && rm -rf /tmp/thunderbird.tar.bz2 /tmp/wps.deb /tmp/zotero.tar.bz2 \
+    && rm -rf /tmp/thunderbird.tar.bz2 /tmp/wps.deb /tmp/zotero.tar.bz2 /tmp/musescore.AppImage /tmp/obsidian.deb \
       /tmp/reaper /tmp/reaper.tar.xz
