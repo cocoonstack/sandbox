@@ -221,10 +221,8 @@ async fn drain<W: AsyncWrite + Unpin>(
 
 /// Publishes the terminal state once so attachers always see an Exit.
 fn finish(proc: &Arc<Proc>, code: i32) {
-    if proc.exit_code().is_none() {
-        proc.mark_exited(code);
-        proc.emit(&Chunk::Exit(code));
-    }
+    proc.mark_exited(code);
+    proc.emit(&Chunk::Exit(code));
 }
 
 async fn write_all(master: &Master, mut data: &[u8]) -> std::io::Result<()> {

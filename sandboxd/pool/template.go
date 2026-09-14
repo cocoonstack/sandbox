@@ -260,7 +260,7 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant s
 	id := store.TemplateID(key.Hash())
 	l := m.recLock(id)
 	l.RLock()
-	dir, meta, digest, release, err := m.tpls.Fetch(ctx, id)
+	dir, meta, digest, err := m.tpls.Fetch(ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
 		l.RUnlock()
 		m.recDoneEvict(id)
@@ -271,7 +271,7 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant s
 		m.recDone(id)
 		return goldenResolution{release: func() {}}, err
 	}
-	cleanup := func() { release(); l.RUnlock(); m.recDone(id) }
+	cleanup := func() { l.RUnlock(); m.recDone(id) }
 	var rec templateRecord
 	if err := json.Unmarshal(meta, &rec); err != nil {
 		cleanup()

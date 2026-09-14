@@ -36,7 +36,7 @@ func RunContract(t *testing.T, st store.Store) {
 		t.Fatalf("ReadMeta: %q, %v", raw, err)
 	}
 
-	dir, meta, digest, release, err := st.Fetch(ctx, id)
+	dir, meta, digest, err := st.Fetch(ctx, id)
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -50,7 +50,6 @@ func RunContract(t *testing.T, st store.Store) {
 	if err != nil || string(got) != "snapshot-bytes" {
 		t.Fatalf("fetched export: %q, %v", got, err)
 	}
-	release()
 
 	// a half-published checkpoint (no meta) is invisible to Metas.
 	orphan, err := st.Stage("ck_00000000000000bb")
@@ -83,7 +82,7 @@ func RunContract(t *testing.T, st store.Store) {
 	if err = st.Publish(ctx, second, id); err != nil {
 		t.Fatalf("Publish second: %v", err)
 	}
-	dir, meta, digest, release, err = st.Fetch(ctx, id)
+	dir, meta, digest, err = st.Fetch(ctx, id)
 	if err != nil {
 		t.Fatalf("Fetch second: %v", err)
 	}
@@ -99,7 +98,6 @@ func RunContract(t *testing.T, st store.Store) {
 	if got, readErr := os.ReadFile(filepath.Join(dir, "disk2.img")); readErr != nil || string(got) != "second-gen" { //nolint:gosec // test path
 		t.Errorf("second-generation export: %q, %v", got, readErr)
 	}
-	release()
 
 	if err = st.Delete(ctx, id); err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -107,7 +105,7 @@ func RunContract(t *testing.T, st store.Store) {
 	if _, err = st.ReadMeta(ctx, id); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("ReadMeta after Delete: %v, want store.ErrNotFound", err)
 	}
-	if _, _, _, _, err = st.Fetch(ctx, id); !errors.Is(err, store.ErrNotFound) {
+	if _, _, _, err = st.Fetch(ctx, id); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Fetch after Delete: %v, want store.ErrNotFound", err)
 	}
 	if metas, err = st.Metas(ctx); err != nil || len(metas) != 0 {
@@ -137,14 +135,13 @@ func runDigestContract(t *testing.T, st store.Store) {
 	if digest != want {
 		t.Fatalf("PublishDigested digest %q, want %q", digest, want)
 	}
-	_, _, fetchedDigest, release, err := st.Fetch(ctx, id)
+	_, _, fetchedDigest, err := st.Fetch(ctx, id)
 	if err != nil {
 		t.Fatalf("Fetch digested: %v", err)
 	}
 	if fetchedDigest != want {
 		t.Errorf("Fetch digest %q, want %q", fetchedDigest, want)
 	}
-	release()
 	rejectNonRegularReplacement(t, st, id, want)
 	if err = st.Delete(ctx, id); err != nil {
 		t.Fatalf("Delete digested: %v", err)
@@ -171,11 +168,10 @@ func rejectNonRegularReplacement(t *testing.T, st store.Store, id, wantDigest st
 	if _, err = st.PublishDigested(t.Context(), staging, id); err == nil {
 		t.Fatal("PublishDigested accepted a non-regular export entry")
 	}
-	dir, meta, digest, release, err := st.Fetch(t.Context(), id)
+	dir, meta, digest, err := st.Fetch(t.Context(), id)
 	if err != nil {
 		t.Fatalf("Fetch after rejected replacement: %v", err)
 	}
-	defer release()
 	if string(meta) != `{"id":"`+id+`"}` || digest != wantDigest {
 		t.Errorf("committed meta/digest after rejection = %q/%q, want original/%q", meta, digest, wantDigest)
 	}

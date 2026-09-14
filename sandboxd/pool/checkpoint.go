@@ -152,7 +152,7 @@ func (m *Manager) FetchCheckpoint(ctx context.Context, ckptID string) (string, [
 	}
 	l := m.recLock(ckptID)
 	l.RLock()
-	dir, meta, _, release, err := m.ckpts.Fetch(ctx, ckptID)
+	dir, meta, _, err := m.ckpts.Fetch(ctx, ckptID)
 	if err != nil {
 		l.RUnlock()
 		m.recDone(ckptID)
@@ -162,7 +162,7 @@ func (m *Manager) FetchCheckpoint(ctx context.Context, ckptID string) (string, [
 		return "", nil, nil, fmt.Errorf("fetch checkpoint: %w", err)
 	}
 	// the read lock spans the transfer so a delete cannot pull the export from under it
-	return dir, meta, func() { release(); l.RUnlock(); m.recDone(ckptID) }, nil
+	return dir, meta, func() { l.RUnlock(); m.recDone(ckptID) }, nil
 }
 
 // publishCheckpoint stages, writes the meta, and publishes, returning the record and source snap.
@@ -203,14 +203,13 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl ti
 	l := m.recLock(ckpt.ID)
 	l.RLock()
 	defer func() { l.RUnlock(); m.recDone(ckpt.ID) }()
-	dir, _, _, release, err := m.ckpts.Fetch(ctx, ckpt.ID)
+	dir, _, _, err := m.ckpts.Fetch(ctx, ckpt.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, ErrUnknownCheckpoint // deleted between the pre-check and the lock
 	}
 	if err != nil {
 		return nil, fmt.Errorf("fetch checkpoint: %w", err)
 	}
-	defer release()
 	if ckpt.Archive {
 		return nil, ErrUnknownCheckpoint // a wake image, not a branchable checkpoint
 	}

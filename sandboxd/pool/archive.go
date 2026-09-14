@@ -166,7 +166,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 			m.recDone(ck)
 		}
 	}()
-	dir, _, _, release, err := m.ckpts.Fetch(ctx, ck)
+	dir, _, _, err := m.ckpts.Fetch(ctx, ck)
 	if errors.Is(err, store.ErrNotFound) {
 		return "", ErrUnknownSandbox // record disagrees with the store
 	}
@@ -174,7 +174,6 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		return "", fmt.Errorf("wake %s: fetch archive: %w", sb.ID, err)
 	}
 	built, err := m.provision(ctx, sb.Key, dir)
-	release()
 	if err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}

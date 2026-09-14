@@ -81,28 +81,28 @@ func (d *Store) PublishDigested(ctx context.Context, staging, id string) (string
 	return digest, nil
 }
 
-func (d *Store) Fetch(ctx context.Context, id string) (string, []byte, string, func(), error) {
+func (d *Store) Fetch(ctx context.Context, id string) (string, []byte, string, error) {
 	meta, err := d.ReadMeta(ctx, id)
 	if err != nil {
-		return "", nil, "", nil, err
+		return "", nil, "", err
 	}
 	dir := filepath.Join(d.root, id, store.ExportGen(meta))
 	if _, statErr := os.Stat(dir); errors.Is(statErr, fs.ErrNotExist) {
 		dir = filepath.Join(d.root, id, store.ExportDir)
 		switch _, legacyErr := os.Stat(dir); {
 		case errors.Is(legacyErr, fs.ErrNotExist):
-			return "", nil, "", nil, store.ErrNotFound
+			return "", nil, "", store.ErrNotFound
 		case legacyErr != nil:
-			return "", nil, "", nil, legacyErr
+			return "", nil, "", legacyErr
 		}
 	} else if statErr != nil {
-		return "", nil, "", nil, statErr
+		return "", nil, "", statErr
 	}
 	digest, err := os.ReadFile(filepath.Join(d.root, id, digestName(meta))) //nolint:gosec // id pinned by the instance idRe
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return "", nil, "", nil, fmt.Errorf("read digest: %w", err)
+		return "", nil, "", fmt.Errorf("read digest: %w", err)
 	}
-	return dir, meta, string(digest), func() {}, nil
+	return dir, meta, string(digest), nil
 }
 
 func (d *Store) ReadMeta(_ context.Context, id string) ([]byte, error) {

@@ -960,12 +960,8 @@ func mustArchive(t *testing.T, m *Manager, sb *types.Sandbox) {
 
 func ckExists(t *testing.T, m *Manager, ck string) bool {
 	t.Helper()
-	_, _, _, release, err := m.ckpts.Fetch(t.Context(), ck) //nolint:dogsled
-	if err != nil {
-		return false
-	}
-	release()
-	return true
+	_, _, _, err := m.ckpts.Fetch(t.Context(), ck) //nolint:dogsled
+	return err == nil
 }
 
 func archiveCkMarked(m *Manager, ck string) bool {

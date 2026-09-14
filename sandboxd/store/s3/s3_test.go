@@ -127,11 +127,10 @@ func TestFetchLegacyExportLayout(t *testing.T) {
 		"ck/" + id + "/" + store.ExportDir + "/disk.img": []byte("legacy-bytes"),
 	}}
 	st := newTestStore(t, fake)
-	dir, _, _, release, err := st.Fetch(t.Context(), id)
+	dir, _, _, err := st.Fetch(t.Context(), id)
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
-	defer release()
 	got, err := os.ReadFile(filepath.Join(dir, "disk.img"))
 	if err != nil || string(got) != "legacy-bytes" {
 		t.Fatalf("fetched legacy export: %q, %v", got, err)
@@ -228,33 +227,30 @@ func TestPublishDigestedRetryAndMetaRequestAccounting(t *testing.T) {
 	}
 
 	fake.resetRequests()
-	_, _, fetchedDigest, release, err := st.Fetch(t.Context(), id)
+	_, _, fetchedDigest, err := st.Fetch(t.Context(), id)
 	if err != nil {
 		t.Fatalf("Fetch miss: %v", err)
 	}
-	release()
 	if fetchedDigest != want {
 		t.Errorf("Fetch miss digest = %q, want %q", fetchedDigest, want)
 	}
 	assertSingleMetaGet(t, fake, metaKey)
 
 	fake.resetRequests()
-	_, _, fetchedDigest, release, err = st.Fetch(t.Context(), id)
+	_, _, fetchedDigest, err = st.Fetch(t.Context(), id)
 	if err != nil {
 		t.Fatalf("Fetch hit: %v", err)
 	}
-	release()
 	if fetchedDigest != want {
 		t.Errorf("Fetch hit digest = %q, want %q", fetchedDigest, want)
 	}
 	assertSingleMetaGet(t, fake, metaKey)
 
 	publishRecord(t, st, id, []byte(`{"id":"`+id+`","gen":2}`), "plain")
-	_, _, fetchedDigest, release, err = st.Fetch(t.Context(), id)
+	_, _, fetchedDigest, err = st.Fetch(t.Context(), id)
 	if err != nil {
 		t.Fatalf("Fetch plain replacement: %v", err)
 	}
-	release()
 	if fetchedDigest != "" {
 		t.Errorf("plain replacement digest = %q, want empty", fetchedDigest)
 	}
@@ -291,11 +287,10 @@ func TestPublishDigestedFailurePreservesCommittedGeneration(t *testing.T) {
 		t.Errorf("marker PUT requests after export failure = %d, want %d", got, markerPuts)
 	}
 
-	dir, meta, fetchedDigest, release, err := st.Fetch(t.Context(), id)
+	dir, meta, fetchedDigest, err := st.Fetch(t.Context(), id)
 	if err != nil {
 		t.Fatalf("Fetch old generation: %v", err)
 	}
-	defer release()
 	content, err := os.ReadFile(filepath.Join(dir, "disk.img"))
 	if err != nil {
 		t.Fatalf("read old generation: %v", err)
@@ -309,11 +304,10 @@ func TestPublishDigestedFailurePreservesCommittedGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retry PublishDigested: %v", err)
 	}
-	dir, meta, fetchedDigest, release, err = st.Fetch(t.Context(), id)
+	dir, meta, fetchedDigest, err = st.Fetch(t.Context(), id)
 	if err != nil {
 		t.Fatalf("Fetch replacement: %v", err)
 	}
-	defer release()
 	content, err = os.ReadFile(filepath.Join(dir, "disk.img"))
 	if err != nil {
 		t.Fatalf("read replacement: %v", err)

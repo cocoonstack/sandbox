@@ -33,11 +33,10 @@ func TestPromoteThenClaimClonesFromTemplate(t *testing.T) {
 	if gotDigest == "" {
 		t.Fatal("Promote returned an empty content digest")
 	}
-	golden, _, _, release, err := m.tpls.Fetch(t.Context(), store.TemplateID(key.Hash()))
+	golden, _, _, err := m.tpls.Fetch(t.Context(), store.TemplateID(key.Hash()))
 	if err != nil {
 		t.Fatalf("template export missing: %v", err)
 	}
-	release()
 
 	child, err := claimAny(t.Context(), m, key, 0)
 	if err != nil {
