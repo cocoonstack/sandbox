@@ -264,18 +264,31 @@ func TestHasEgress(t *testing.T) {
 	}
 }
 
-func TestLoadKeepsWarmZeroUnderWarmMax(t *testing.T) {
-	path := writeConfig(t, `{"pools":[{"template":"rt:24.04","net":"none","size":"small","warm":0,"warm_max":8},
-		{"template":"rt:24.04","net":"none","size":"medium","warm":0}]}`)
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+func TestLoadDefaultsWarmOnlyWhenOmitted(t *testing.T) {
+	tests := []struct {
+		name string
+		pool string
+		want int
+	}{
+		{"omitted", `{"template":"rt:24.04","net":"none","size":"small"}`, defaultWarm},
+		{"explicit zero", `{"template":"rt:24.04","net":"none","size":"small","warm":0}`, 0},
+		{"explicit zero under warm_max", `{"template":"rt:24.04","net":"none","size":"small","warm":0,"warm_max":8}`, 0},
+		{"explicit zero, other case", `{"template":"rt:24.04","net":"none","size":"small","WARM":0}`, 0},
+		{"explicit three", `{"template":"rt:24.04","net":"none","size":"small","warm":3}`, 3},
 	}
-	if cfg.Pools[0].Warm != 0 || cfg.Pools[0].WarmMax != 8 {
-		t.Errorf("adaptive pool %+v, want warm 0 kept under warm_max 8", cfg.Pools[0])
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, `{"pools":[`+tt.pool+`]}`))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.Pools[0].Warm != tt.want {
+				t.Errorf("warm %d, want %d", cfg.Pools[0].Warm, tt.want)
+			}
+		})
 	}
-	if cfg.Pools[1].Warm != defaultWarm {
-		t.Errorf("static pool warm %d, want the default %d", cfg.Pools[1].Warm, defaultWarm)
+	if _, err := Load(writeConfig(t, `{"pools":[{"template":"rt:24.04","net":"none","size":"small","warmth":2}]}`)); err == nil {
+		t.Error("an unknown pool member loaded")
 	}
 }
 
