@@ -275,6 +275,54 @@ func TestPortRuleGatesConnectAndForward(t *testing.T) {
 	}
 }
 
+func TestUnparsablePortIsDeniedNotDefaulted(t *testing.T) {
+	policy := Policy{Allow: []Rule{{Host: "echo.internal", Ports: []uint16{443}}}}
+	events := make(chan Event, 4)
+	p := New("sb_1", "acme", policy, nil, nil, fixedDial(echoServer(t)), func(ev Event) { events <- ev })
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	conn := dialConnect(t, front.Listener.Addr().String(), "echo.internal:99999")
+	defer func() { _ = conn.Close() }()
+	if status := readStatus(t, bufio.NewReader(conn)); status != "HTTP/1.1 403 Forbidden" {
+		t.Errorf("CONNECT with an out-of-range port = %q, want 403 Forbidden", status)
+	}
+	if ev := recvEvent(t, events); ev.Port != 0 || ev.Decision != DecisionDeny {
+		t.Errorf("audit event = %+v, want deny with no port, not the 443 default", ev)
+	}
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://echo.internal:99999/x", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := proxyClient(t, front.URL).Do(req)
+	if err != nil {
+		t.Fatalf("proxied GET: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("forward GET with an out-of-range port = %d, want 403", resp.StatusCode)
+	}
+	if ev := recvEvent(t, events); ev.Port != 0 || ev.Decision != DecisionDeny {
+		t.Errorf("audit event = %+v, want deny with no port", ev)
+	}
+
+	raw, err := net.Dial("tcp", front.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer func() { _ = raw.Close() }()
+	if _, err := io.WriteString(raw, "CONNECT /x HTTP/1.1\r\nHost: echo.internal:+8443\r\n\r\n"); err != nil {
+		t.Fatalf("write path-form CONNECT: %v", err)
+	}
+	if status := readStatus(t, bufio.NewReader(raw)); status != "HTTP/1.1 403 Forbidden" {
+		t.Errorf("path-form CONNECT with a signed port = %q, want 403 (the dialer would have accepted +8443)", status)
+	}
+	if ev := recvEvent(t, events); ev.Port != 0 || ev.Decision != DecisionDeny {
+		t.Errorf("audit event = %+v, want deny with no port", ev)
+	}
+}
+
 type fakeSecrets map[string][2]string
 
 func (f fakeSecrets) Header(name string) (string, string, bool) {

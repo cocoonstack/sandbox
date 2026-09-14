@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -53,7 +54,7 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 	_ = client.SetDeadline(time.Time{})
 	ln := &singleConnListener{conn: tlsConn, done: make(chan struct{})}
 	srv := &http.Server{
-		Handler:           &interceptHandler{proxy: p, host: host, port: port, authority: r.Host},
+		Handler:           &interceptHandler{proxy: p, host: host, port: port, authority: net.JoinHostPort(host, strconv.Itoa(int(port)))},
 		ReadHeaderTimeout: interceptTimeout,
 	}
 	_ = srv.Serve(ln)

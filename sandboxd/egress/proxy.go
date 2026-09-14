@@ -136,7 +136,12 @@ func (p *Proxy) untrack(conn net.Conn) {
 
 // serveConnect gates an HTTPS/opaque tunnel by host and port.
 func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
-	host, port := hostPort(r.Host, 443)
+	host, port, ok := hostPort(r.Host, 443)
+	if !ok {
+		p.record(Event{Method: r.Method, Host: host, Decision: DecisionDeny})
+		denied(w, host)
+		return
+	}
 	decision, intercept := p.tunnelDecision(host, port)
 	if intercept {
 		p.serveIntercept(w, r, host, port)
@@ -147,7 +152,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		denied(w, host)
 		return
 	}
-	upstream, err := p.dial(r.Context(), "tcp", r.Host)
+	upstream, err := p.dial(r.Context(), "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
 	if err != nil {
 		http.Error(w, "egress: upstream unreachable", http.StatusBadGateway)
 		return
@@ -189,7 +194,12 @@ func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Scheme == "https" {
 		def = 443
 	}
-	host, port := hostPort(r.URL.Host, def)
+	host, port, ok := hostPort(r.URL.Host, def)
+	if !ok {
+		p.record(Event{Method: r.Method, Host: host, Decision: DecisionDeny})
+		denied(w, host)
+		return
+	}
 	rule, decision := p.policy.Eval(host, r.Method, port)
 	p.relay(w, r, Event{Method: r.Method, Host: host, Port: port, Decision: decision}, rule, p.tr, nil)
 }
@@ -284,14 +294,12 @@ func hostOnly(authority string) string {
 	return authority
 }
 
-// hostPort splits an authority into host and port; a bare host or an unparsable port takes def.
-func hostPort(authority string, def uint16) (string, uint16) {
-	host, portText, err := net.SplitHostPort(authority)
+// hostPort splits an authority; a bare host takes def, a port outside 1-65535 is refused rather than defaulted.
+func hostPort(authority string, def uint16) (host string, port uint16, ok bool) {
+	host, text, err := net.SplitHostPort(authority)
 	if err != nil {
-		return authority, def
+		return authority, def, true
 	}
-	if port, err := strconv.ParseUint(portText, 10, 16); err == nil {
-		return host, uint16(port)
-	}
-	return host, def
+	n, err := strconv.ParseUint(text, 10, 16)
+	return host, uint16(n), err == nil && n != 0
 }
