@@ -65,7 +65,7 @@ impl Table {
         proc
     }
 
-    pub fn get(&self, pid: u32) -> Option<Arc<Proc>> {
+    pub(crate) fn get(&self, pid: u32) -> Option<Arc<Proc>> {
         sysutil::lock(&self.inner).get(&pid).cloned()
     }
 

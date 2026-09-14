@@ -1,5 +1,6 @@
 //! Boot sequence: early mounts, resolve disks, overlay, persist network, switch_root, exec.
 
+use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -33,10 +34,11 @@ impl Marks {
     }
 
     fn render(&self) -> String {
-        self.points
-            .iter()
-            .map(|(label, us)| format!(" {label}@{us}us"))
-            .collect()
+        let mut out = String::new();
+        for (label, us) in &self.points {
+            let _ = write!(out, " {label}@{us}us");
+        }
+        out
     }
 }
 
@@ -54,7 +56,7 @@ pub fn run() -> ! {
     let _ = sys::mount("proc", "/proc", Some("proc"), sys::MNT_SECURE, None);
     let _ = sys::mount("sysfs", "/sys", Some("sysfs"), sys::MNT_SECURE, None);
 
-    // start marker, visible at production loglevel where the kernel's own boot lines are suppressed.
+    // printed at the production loglevel, which suppresses the kernel's own boot lines.
     println!("sandbox-init: start at {}s", uptime());
 
     let cmdline = fs::read_to_string("/proc/cmdline").unwrap_or_default();
@@ -193,9 +195,9 @@ fn poll_slots(
 }
 
 fn read_nic_mac(device: &str) -> Option<String> {
-    let mac = fs::read_to_string(format!("/sys/class/net/{device}/address")).ok()?;
-    let mac = mac.trim_end();
-    (!mac.is_empty() && mac != "00:00:00:00:00:00").then(|| mac.to_string())
+    let mut mac = fs::read_to_string(format!("/sys/class/net/{device}/address")).ok()?;
+    mac.truncate(mac.trim_end().len());
+    (!mac.is_empty() && mac != "00:00:00:00:00:00").then_some(mac)
 }
 
 fn mkdir_all(path: &str) -> Result<(), String> {
@@ -233,7 +235,6 @@ fn scan_serials(ids: &[&str], found: &mut [Option<String>]) {
             format!("/sys/block/{name}/serial"),
             format!("/sys/block/{name}/device/serial"),
         ];
-        let device = format!("/dev/{name}");
         for path in paths {
             let Ok(serial) = fs::read_to_string(&path) else {
                 continue;
@@ -241,7 +242,7 @@ fn scan_serials(ids: &[&str], found: &mut [Option<String>]) {
             if serial.trim_end().is_empty() {
                 continue;
             }
-            record_serial(ids, found, serial.trim_end(), &device);
+            record_serial(ids, found, serial.trim_end(), &format!("/dev/{name}"));
             break;
         }
     }

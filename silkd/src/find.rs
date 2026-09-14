@@ -4,7 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use regex::Regex;
+use regex::{Regex, Replacer};
 use tokio::fs;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite};
 use tokio::runtime::Handle;
@@ -18,7 +18,7 @@ pub const FIND_MAX_FILE: u64 = 8 * 1024 * 1024;
 /// Match frames in flight between the walking thread and the writer.
 const MATCH_QUEUE: usize = 256;
 
-/// Bytes of match content in flight: above the largest single match, so a reserve never blocks forever, and far below the gigabytes 256 size-bound frames would pin.
+/// Bytes of match content in flight: above one size-bound match, so a reserve never blocks forever, far below 256 of them.
 const MATCH_QUEUE_BYTES: usize = 2 * FIND_MAX_FILE as usize;
 
 struct MatchBudget {
@@ -132,6 +132,19 @@ impl Walk<'_> {
     }
 }
 
+/// Counts replacements while expanding `$n` groups straight into the output, no String per match.
+struct Counting<'a> {
+    replacement: &'a str,
+    count: u64,
+}
+
+impl regex::Replacer for Counting<'_> {
+    fn replace_append(&mut self, caps: &regex::Captures<'_>, dst: &mut String) {
+        self.count += 1;
+        caps.expand(self.replacement, dst);
+    }
+}
+
 /// Streams `match` frames for every line under `path` matching `pattern`, terminated by `done`.
 pub async fn find<R, W>(
     reader: &mut R,
@@ -159,20 +172,17 @@ pub async fn replace<W: AsyncWrite + Unpin>(
         Err(e) => return proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
     };
     for file in files {
-        let mut count: u64 = 0;
+        let mut counting = Counting {
+            replacement: &replacement,
+            count: 0,
+        };
         if !is_oversized(&file).await {
             let body = match fs::read_to_string(&file).await {
                 Ok(body) => body,
                 Err(e) => return err_frame(w, &e, "read").await,
             };
-            // expand keeps the &str replacer's $n capture-group semantics.
-            let new = re.replace_all(&body, |caps: &regex::Captures| {
-                count += 1;
-                let mut expanded = String::new();
-                caps.expand(&replacement, &mut expanded);
-                expanded
-            });
-            if count > 0
+            let new = re.replace_all(&body, counting.by_ref());
+            if counting.count > 0
                 && let Err(e) = crate::fs::write_atomic(Path::new(&file), new.as_bytes()).await
             {
                 return err_frame(w, &e, "write").await;
@@ -182,7 +192,7 @@ pub async fn replace<W: AsyncWrite + Unpin>(
             w,
             &Response::Replaced {
                 file,
-                replacements: count,
+                replacements: counting.count,
             },
         )
         .await?;

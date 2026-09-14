@@ -61,11 +61,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
             return crate::proto::err_frame(out, &e, "dup pty slave").await;
         }
     }
-    // SAFETY: make_controlling_tty runs only async-signal-safe syscalls, which
-    // is the contract for a post-fork pre_exec hook.
-    unsafe {
-        cmd.pre_exec(|| sysutil::make_controlling_tty());
-    }
+    sysutil::adopt_controlling_tty(&mut cmd);
     cmd.kill_on_drop(true);
 
     let mut child = match cmd.spawn() {
