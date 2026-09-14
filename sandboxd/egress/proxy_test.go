@@ -354,6 +354,8 @@ func TestBracketedIPv6AuthorityIsUnwrapped(t *testing.T) {
 		{"[2606:4700:4700::1111]:443", "HTTP/1.1 200 Connection Established", DecisionAllow},
 		{"[not-an-address]", "HTTP/1.1 403 Forbidden", DecisionDeny},
 		{"[2606:4700:4700::1111", "HTTP/1.1 403 Forbidden", DecisionDeny},
+		{"echo.internal]", "HTTP/1.1 403 Forbidden", DecisionDeny},
+		{"", "HTTP/1.1 403 Forbidden", DecisionDeny},
 	} {
 		conn, err := net.Dial("tcp", front.Listener.Addr().String())
 		if err != nil {

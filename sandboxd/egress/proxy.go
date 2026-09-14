@@ -292,7 +292,7 @@ func hostPort(authority string, def uint16) (host string, port uint16, ok bool) 
 	if err != nil {
 		literal, bracketed := strings.CutPrefix(authority, "[")
 		if !bracketed {
-			return authority, def, !strings.Contains(authority, ":")
+			return authority, def, authority != "" && !strings.ContainsAny(authority, ":[]")
 		}
 		literal, closed := strings.CutSuffix(literal, "]")
 		addr, parseErr := netip.ParseAddr(literal)
