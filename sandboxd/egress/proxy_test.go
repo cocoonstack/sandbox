@@ -338,6 +338,39 @@ func TestUnparsablePortIsDeniedNotDefaulted(t *testing.T) {
 	}
 }
 
+func TestBracketedIPv6AuthorityIsUnwrapped(t *testing.T) {
+	policy := Policy{Allow: []Rule{{Host: "2606:4700:4700::1111"}}}
+	events := make(chan Event, 4)
+	p := New("sb_1", "acme", policy, nil, nil, fixedDial(echoServer(t)), func(ev Event) { events <- ev })
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	for _, tc := range []struct {
+		authority string
+		status    string
+		decision  Decision
+	}{
+		{"[2606:4700:4700::1111]", "HTTP/1.1 200 Connection Established", DecisionAllow},
+		{"[2606:4700:4700::1111]:443", "HTTP/1.1 200 Connection Established", DecisionAllow},
+		{"[not-an-address]", "HTTP/1.1 403 Forbidden", DecisionDeny},
+	} {
+		conn, err := net.Dial("tcp", front.Listener.Addr().String())
+		if err != nil {
+			t.Fatalf("dial proxy: %v", err)
+		}
+		if _, err = io.WriteString(conn, "CONNECT /x HTTP/1.1\r\nHost: "+tc.authority+"\r\n\r\n"); err != nil {
+			t.Fatalf("write CONNECT: %v", err)
+		}
+		if status := readStatus(t, bufio.NewReader(conn)); status != tc.status {
+			t.Errorf("CONNECT with Host %s = %q, want %q", tc.authority, status, tc.status)
+		}
+		_ = conn.Close()
+		if ev := recvEvent(t, events); ev.Decision != tc.decision || (tc.decision == DecisionAllow && (ev.Host != "2606:4700:4700::1111" || ev.Port != 443)) {
+			t.Errorf("audit event for %s = %+v, want %v on the bare address and port 443", tc.authority, ev, tc.decision)
+		}
+	}
+}
+
 type fakeSecrets map[string][2]string
 
 func (f fakeSecrets) Header(name string) (string, string, bool) {

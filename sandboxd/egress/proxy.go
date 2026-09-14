@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/textproto"
 	"slices"
 	"strconv"
@@ -289,9 +290,13 @@ func denied(w http.ResponseWriter, host string) {
 func hostPort(authority string, def uint16) (host string, port uint16, ok bool) {
 	host, text, err := net.SplitHostPort(authority)
 	if err != nil {
-		bare := !strings.Contains(authority, ":") ||
-			(strings.HasPrefix(authority, "[") && strings.HasSuffix(authority, "]"))
-		return authority, def, bare
+		if !strings.Contains(authority, ":") {
+			return authority, def, true
+		}
+		literal, bracketed := strings.CutPrefix(authority, "[")
+		literal, closed := strings.CutSuffix(literal, "]")
+		addr, parseErr := netip.ParseAddr(literal)
+		return literal, def, bracketed && closed && parseErr == nil && addr.Is6()
 	}
 	n, err := strconv.ParseUint(text, 10, 16)
 	return host, uint16(n), err == nil && n != 0
