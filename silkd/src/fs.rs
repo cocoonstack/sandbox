@@ -1,7 +1,7 @@
 //! Filesystem verbs: the vsock boundary is the trust boundary, so paths are taken as-is.
 
 use std::io;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -50,21 +50,23 @@ where
 
 /// Streams the regular file at `path` back as `data` frames, then `done`.
 pub async fn read<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<()> {
-    // a device streams forever and a writerless FIFO blocks in open, so only a regular file is read
-    match fs::metadata(&path).await {
-        Ok(meta) if !meta.is_file() => {
-            return proto::error_frame(
-                w,
-                ErrorKind::BadRequest,
-                format!("{path}: not a regular file"),
-            )
-            .await;
+    // O_NONBLOCK keeps a writerless FIFO from parking the open; the kind check runs on the opened fd, so a swap
+    // between check and open cannot turn the read into a device stream
+    let opened = tokio::task::spawn_blocking(move || {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&path)?;
+        let regular = file.metadata()?.is_file();
+        Ok::<_, io::Error>((file, regular))
+    })
+    .await
+    .map_err(io::Error::other)?;
+    let mut file = match opened {
+        Ok((file, true)) => fs::File::from_std(file),
+        Ok((_, false)) => {
+            return proto::error_frame(w, ErrorKind::BadRequest, "not a regular file").await;
         }
-        Err(e) => return err_frame(w, &e, "stat").await,
-        Ok(_) => {}
-    }
-    let mut file = match fs::File::open(&path).await {
-        Ok(f) => f,
         Err(e) => return err_frame(w, &e, "open").await,
     };
     if let Err(e) = proto::stream_data_frames(&mut file, w).await? {

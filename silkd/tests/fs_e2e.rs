@@ -142,7 +142,15 @@ async fn mkdir_rename_rm_lifecycle() {
 #[tokio::test]
 async fn read_of_a_non_regular_file_is_bad_request() {
     let dir = tempfile::tempdir().unwrap();
-    for path in [dir.path().to_str().unwrap(), "/dev/null"] {
+    let fifo = dir.path().join("pipe");
+    let c_fifo = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+    // SAFETY: a valid NUL-terminated path; mkfifo touches nothing else.
+    assert_eq!(unsafe { libc::mkfifo(c_fifo.as_ptr(), 0o600) }, 0);
+    for path in [
+        dir.path().to_str().unwrap(),
+        "/dev/null",
+        fifo.to_str().unwrap(),
+    ] {
         let frames = exchange(&[json!({"op":"fs_read","path":path}).to_string()]).await;
         assert_eq!(type_of(&frames[0]), "error", "{path}: {frames:?}");
         assert_eq!(frames[0]["kind"], "bad_request", "{path}");
