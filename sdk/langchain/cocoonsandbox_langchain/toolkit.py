@@ -14,8 +14,8 @@ from cocoonsandbox import Client, Sandbox
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-# a socket inactivity bound, not a wall clock; the tool description states it
-CALL_TIMEOUT = 300.0
+# one exec's wall clock, enforced by the guest's timeout(1); the tool description states it
+CALL_TIMEOUT = 300
 
 
 class ExecInput(BaseModel):
@@ -73,7 +73,7 @@ class CocoonToolkit:
                 "Returns stdout; a non-empty stderr is appended as a 'stderr:' "
                 "line and a non-zero status as an 'exit code: N' line; a "
                 "command that prints nothing and exits 0 returns '(no output)'. "
-                "The call is cut off after 5 minutes without output. "
+                "The call is cut off after 5 minutes (exit code 124). "
                 "Files and installed packages persist across calls; environment "
                 "variables and the working directory do not.",
                 ExecInput,
@@ -138,7 +138,8 @@ class CocoonToolkit:
     def _exec(self, command: str, cwd: str = "") -> str:
         out: list[bytes] = []
         errs: list[bytes] = []
-        code = self.sandbox().run(["sh", "-c", command], cwd=cwd, on_stdout=out.append, on_stderr=errs.append)
+        argv = ["timeout", "-s", "KILL", str(CALL_TIMEOUT), "sh", "-c", command]
+        code = self.sandbox().run(argv, cwd=cwd, on_stdout=out.append, on_stderr=errs.append)
         stdout = b"".join(out).decode(errors="replace")
         stderr = b"".join(errs).decode(errors="replace")
         result = stdout

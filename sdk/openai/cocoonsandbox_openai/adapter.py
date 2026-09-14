@@ -21,6 +21,9 @@ from agents.sandbox.snapshot import SnapshotBase, SnapshotSpec, resolve_snapshot
 from agents.sandbox.types import ExecResult, ExposedPortEndpoint, User
 from cocoonsandbox import Client, Sandbox, SandboxError, SilkdError
 
+# timeout(1) answers 124 when the command it ran was cut off
+TIMEOUT_EXIT = 124
+
 
 class CocoonSandboxClientOptions(BaseSandboxClientOptions):
     """Connection settings for a sandboxd node (or cluster entry node)."""
@@ -62,15 +65,19 @@ class CocoonSandboxSession(BaseSandboxSession):
         await asyncio.to_thread(sb.mkdir, str(self.state.manifest.root), parents=True)
 
     async def _exec_internal(self, *command: str | Path, timeout: float | None = None) -> ExecResult:
-        # the socket timeout bounds the blocking SDK call too, so a wait_for cancellation unblocks the worker thread
-        sb = self._sandbox(timeout=timeout)
+        sb = self._sandbox()
         argv = [str(part) for part in command]
+        if timeout is not None:
+            # the guest enforces the cutoff: a stream has no socket timeout, so a cancelled wait strands the worker
+            argv = ["timeout", "-s", "KILL", str(timeout), *argv]
         stdout, stderr = bytearray(), bytearray()
 
         def run() -> int:
             return sb.run(argv, on_stdout=stdout.extend, on_stderr=stderr.extend)
 
-        code = await asyncio.wait_for(asyncio.to_thread(run), timeout=timeout)
+        code = await asyncio.to_thread(run)
+        if timeout is not None and code == TIMEOUT_EXIT:
+            raise TimeoutError(f"command did not finish within {timeout}s")
         return ExecResult(stdout=bytes(stdout), stderr=bytes(stderr), exit_code=code)
 
     async def read(self, path: Path, *, user: str | User | None = None) -> io.IOBase:
@@ -118,10 +125,9 @@ class CocoonSandboxSession(BaseSandboxSession):
             listener.close()
         self._proxies.clear()
 
-    def _sandbox(self, timeout: float | None = None) -> Sandbox:
+    def _sandbox(self) -> Sandbox:
         s = self.state
-        kwargs = {"timeout": timeout} if timeout is not None else {}
-        client = Client(s.addr, api_token=s.api_token, **kwargs)
+        client = Client(s.addr, api_token=s.api_token)
         return Sandbox(client=client, id=s.sandbox_id, token=s.sandbox_token, owner=s.owner or s.addr)
 
     def _abs(self, path: Path | str) -> Path:

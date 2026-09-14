@@ -61,11 +61,11 @@ class FakeSandbox:
         self.files = {}
 
     def run(self, argv, cwd="", on_stdout=None, on_stderr=None, **_):
-        assert argv[:2] == ["sh", "-c"]
-        if argv[2] == "boom":
+        assert argv[:6] == ["timeout", "-s", "KILL", "300", "sh", "-c"], argv
+        if argv[6] == "boom":
             on_stderr(b"kaboom\n")
             return 3
-        on_stdout(f"ran: {argv[2]}\n".encode())
+        on_stdout(f"ran: {argv[6]}\n".encode())
         return 0
 
     def write_file(self, path, data):

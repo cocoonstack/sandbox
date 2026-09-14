@@ -81,10 +81,33 @@ def test_exec_maps_stdio_and_exit(node, monkeypatch):
         client = CocoonSandboxClient()
         session = await client.create(options=CocoonSandboxClientOptions(addr=node))
         inner = session._inner
-        monkeypatch.setattr(inner, "_sandbox", lambda timeout=None: FakeSandbox())
+        monkeypatch.setattr(inner, "_sandbox", lambda: FakeSandbox())
         result = await inner._exec_internal("echo", "hi")
         assert result.exit_code == 0 and result.stdout == b"hi\n"
         assert result.ok()
+
+    asyncio.run(go())
+
+
+def test_exec_timeout_runs_under_guest_timeout(node, monkeypatch):
+    seen = []
+
+    class FakeSandbox:
+        def run(self, argv, on_stdout=None, on_stderr=None):
+            seen.append(argv)
+            on_stdout(b"partial\n")
+            return 124
+
+    async def go():
+        client = CocoonSandboxClient()
+        session = await client.create(options=CocoonSandboxClientOptions(addr=node))
+        inner = session._inner
+        monkeypatch.setattr(inner, "_sandbox", lambda: FakeSandbox())
+        with pytest.raises(TimeoutError):
+            await inner._exec_internal("sleep", "9", timeout=1.5)
+        assert seen == [["timeout", "-s", "KILL", "1.5", "sleep", "9"]]
+        result = await inner._exec_internal("sleep", "9")
+        assert seen[-1] == ["sleep", "9"] and result.exit_code == 124
 
     asyncio.run(go())
 
@@ -98,7 +121,7 @@ def test_read_missing_maps_to_filenotfound(node, monkeypatch):
         client = CocoonSandboxClient()
         session = await client.create(options=CocoonSandboxClientOptions(addr=node))
         inner = session._inner
-        monkeypatch.setattr(inner, "_sandbox", lambda timeout=None: FakeSandbox())
+        monkeypatch.setattr(inner, "_sandbox", lambda: FakeSandbox())
         with pytest.raises(FileNotFoundError):
             await inner.read(Path("/nope"))
 
@@ -114,7 +137,7 @@ def test_running_is_false_when_the_dial_fails(node, monkeypatch):
         client = CocoonSandboxClient()
         session = await client.create(options=CocoonSandboxClientOptions(addr=node))
         inner = session._inner
-        monkeypatch.setattr(inner, "_sandbox", lambda timeout=None: FakeSandbox())
+        monkeypatch.setattr(inner, "_sandbox", lambda: FakeSandbox())
         assert await inner.running() is False
 
     asyncio.run(go())
@@ -138,7 +161,7 @@ def test_write_and_persist_use_tree_verbs(node, monkeypatch):
         client = CocoonSandboxClient()
         session = await client.create(options=CocoonSandboxClientOptions(addr=node))
         inner = session._inner
-        monkeypatch.setattr(inner, "_sandbox", lambda timeout=None: FakeSandbox())
+        monkeypatch.setattr(inner, "_sandbox", lambda: FakeSandbox())
         await inner.write(Path("/workspace/a.txt"), io.BytesIO(b"body"))
         assert calls["write"] == ("/workspace/a.txt", b"body")
         tar = await inner.persist_workspace()
