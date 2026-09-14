@@ -8,6 +8,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"net"
 	"net/netip"
@@ -56,6 +58,26 @@ type PoolSpec struct {
 
 	// ArchiveDeleteAfterSeconds, when >0, purges the checkpoint that long after archiving.
 	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitzero"`
+
+	warmSet bool
+}
+
+// UnmarshalJSONFrom records whether the object named warm, so an explicit 0 survives the config default.
+func (s *PoolSpec) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	raw, err := dec.ReadValue()
+	if err != nil {
+		return err
+	}
+	type plain PoolSpec
+	if err := jsonv2.Unmarshal(raw, (*plain)(s), dec.Options()); err != nil {
+		return err
+	}
+	var probe struct {
+		Warm *int `json:"warm"`
+	}
+	_ = jsonv2.Unmarshal(raw, &probe, jsonv2.MatchCaseInsensitiveNames(true))
+	s.warmSet = probe.Warm != nil
+	return nil
 }
 
 // ValidateLimits checks the warm/watermark/idle bounds shared by config and PUT /v1/pools.
@@ -290,7 +312,7 @@ func (c *Config) applyDefaults() {
 		c.RefillConcurrency = autoRefillConcurrency(runtime.NumCPU())
 	}
 	for i := range c.Pools {
-		if c.Pools[i].Warm == 0 && c.Pools[i].WarmMax == 0 {
+		if !c.Pools[i].warmSet && c.Pools[i].Warm == 0 && c.Pools[i].WarmMax == 0 {
 			c.Pools[i].Warm = defaultWarm
 		}
 		c.Pools[i].PoolKey = c.Pools[i].Defaulted()
