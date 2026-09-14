@@ -44,8 +44,8 @@ identity), and a `DOMAINNAME` destination is resolved host-side, so the guest
 still needs no resolver.
 
 A SOCKS5 tunnel takes the decision an HTTP `CONNECT` to the same host takes,
-through the same code: a rule with `methods` that does not name `CONNECT`
-denies it, and a rule with a `secret` opens it without injecting anything, on
+through the same code: a rule with a nonempty `methods` list that omits
+`CONNECT` denies it, and a rule with a `secret` opens it without injecting anything, on
 both ports. The one difference is `intercept`: on 3128 such a rule terminates
 the TLS and filters the requests inside, on 1080 there is no HTTP to filter, so
 the tunnel is refused. The door is opt-in: the pool policy sets
@@ -186,8 +186,8 @@ woken sandbox binds at arm time.
 - `host`: an exact name, a `*.`-prefixed suffix wildcard, or `*`. Case-insensitive.
 - `methods`: empty means any. Enforced on plaintext and on intercepted HTTPS. A
   non-intercepted CONNECT tunnel is opaque — the method cannot be checked — so a
-  rule whose `methods` does not name `CONNECT`, and does not `intercept`, denies
-  the tunnel outright rather than tunneling unchecked.
+  rule with a nonempty `methods` list that omits `CONNECT`, and no `intercept`,
+  denies the tunnel outright rather than tunneling unchecked.
 - `ports`: empty means any; otherwise the destination port must be listed. The
   port is the tunnel's target on CONNECT and SOCKS5, the URL's port (or the
   scheme's default) on the forward path, and the CONNECT's port for every

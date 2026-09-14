@@ -216,9 +216,9 @@ claim with a `WithTimeout` that covers the idle period. When to hibernate
 is your policy; the node only provides the transition — unless the
 deployment opts into `idle_hibernate_seconds` (see
 [deploy](deploy.md#configuration)), which hibernates idle claims
-automatically with the same transparent wake. A claim with a live connection
-(a relay stream, a buffered exec, a preview dial, an egress request) is never
-swept mid-call; the idle clock restarts when that connection ends.
+automatically with the same transparent wake. A claim with a connection live
+when the sweep checks it (a relay stream, a buffered exec, a preview dial, an
+egress request) is not swept; the idle clock restarts when that connection ends.
 
 If that deployment also enables `archive_after_seconds`, archiving replaces
 the original claim deadline with the archive-retention deadline (or no
@@ -304,7 +304,9 @@ replica a heal pulled — best-effort eventual cleanup, not a fleet-wide
 revocation. A peer that misses the broadcast (offline, partitioned, or joined
 later) keeps serving branches from its replica until the node's
 `checkpoint_ttl_hours` ages it out; enabling peer heal requires that TTL to be
-set, so every healed replica has a cleanup bound.
+set, so every healed replica has a cleanup bound while healing stays on. A node
+later run with healing off and that TTL back at 0 keeps such a replica until an
+explicit delete.
 
 ## Language servers (LSP)
 
