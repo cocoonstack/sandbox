@@ -18,6 +18,10 @@ on:
         description: sha-pinned boot image ref this run pushed
         value: ${{ jobs.merge.outputs.image }}
   workflow_dispatch:
+    inputs:
+      no_cache:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
