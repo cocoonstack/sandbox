@@ -21,6 +21,24 @@ ln = sb.proxy_port("127.0.0.1:0", 5000)
 The claim returns when silkd answers; the session and the guest server come
 up a few seconds later — poll `GET /screenshot` until it returns 200.
 
+That gap is there on every claim, not just the first boot: the golden VM is
+snapshotted once silkd answers, so its restored clones start the session and
+the guest server themselves and a claim taken seconds after a refill can beat
+`5000` to the listen. A client that dials once instead of polling sees an
+intermittent `connection refused`. A pool [`warmup`](deploy.md#configuration)
+closes it — the argv runs in the golden before its snapshot and in every clone
+before it joins the warm pool, so the snapshot already carries a listening
+server:
+
+```json
+"warmup": ["bash", "-lc", "for i in $(seq 1 1100); do curl -sf -m 2 -o /dev/null http://127.0.0.1:5000/screenshot && exit 0; sleep 0.1; done; exit 1"]
+```
+
+Measured on a 192-core node running the OSWorld task set at 96 concurrent
+claims: without it, claim to first `200` was 1.1 s p50 and 9 s p90 and a burst
+of claims had 8 of 24 first dials refused; with it, 0.10 s p50 and 0.20 s p90
+over 67 claims with no refusal.
+
 ## Claim shape
 
 - **Lane**: `net=none` — for local tasks (os, office, file work) as it is, and
