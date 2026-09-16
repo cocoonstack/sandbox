@@ -29,7 +29,8 @@ performance) — source in
   persistent shell sessions, streaming fs, tar-stream tree push/pull,
   find/replace, watch (ready-acked), pty, structured git, guest port
   relay (`port_forward`), and an LSP broker for flavor-shipped language
-  servers — newline-JSON frames over vsock 2048, one connection per RPC;
+  servers — newline-JSON frames over vsock 2048, RPCs back to back on one
+  connection;
   baked into the base image
 - `sandboxd/` — per-node control plane (Go): warm pools refilled from golden
   snapshot exports (online-retunable), claim/release/hibernate/fork/promote/

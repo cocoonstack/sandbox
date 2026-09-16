@@ -1,7 +1,8 @@
 // Package wire is the Go binding of the silkd wire protocol, shared by the
 // SDK and sandboxd:
-// newline-delimited JSON frames over one connection per RPC, requests tagged
-// by "op", responses by "type", binary payloads base64 in data fields. The
+// newline-delimited JSON frames, RPCs back to back on one connection,
+// requests tagged by "op", responses by "type", binary payloads base64 in
+// data fields. The
 // authoritative contract is the shared corpus in protocol/wire/fixtures/v1 —
 // silkd's Rust tests and this package's tests round-trip the same files.
 package wire
@@ -13,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 )
 
@@ -60,6 +62,13 @@ var (
 
 	reqTagHead  = []byte(requestHead)
 	respTagHead = []byte(`{"type":"`)
+
+	continuationHeads = [][]byte{
+		[]byte(requestHead + `data"`),
+		[]byte(requestHead + `data_end"`),
+		[]byte(requestHead + `stdin"`),
+		[]byte(requestHead + `stdin_close"`),
+	}
 
 	requestDecoders = map[string]func([]byte) (Request, error){
 		"exec":           decodeReq[Exec],
@@ -705,6 +714,11 @@ func AppendBulkRequest(buf []byte, op string, data []byte) []byte {
 	buf = append(buf, `","data":"`...)
 	buf = base64.StdEncoding.AppendEncode(buf, data)
 	return append(buf, '"', '}', '\n')
+}
+
+// IsContinuation reports, from the canonical head every encoder here emits, whether a request line carries input for the RPC in flight rather than opening one.
+func IsContinuation(line []byte) bool {
+	return slices.ContainsFunc(continuationHeads, func(head []byte) bool { return bytes.HasPrefix(line, head) })
 }
 
 // fastBulk slices the base64 data out of a canonical bulk frame, skipping the

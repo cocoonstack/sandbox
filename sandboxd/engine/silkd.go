@@ -55,7 +55,7 @@ func (e *Engine) dialSilkdSession(ctx context.Context, vsockSocket string) (*sil
 	}, nil
 }
 
-// silkdStream serves one request per dial: silkd handles one request per connection.
+// silkdStream dials per request; the node's own calls are too rare to keep a connection.
 func (e *Engine) silkdStream(ctx context.Context, vsockSocket string, req wire.Request, onFrame func(wire.Response) error) error {
 	s, err := e.dialSilkdSession(ctx, vsockSocket)
 	if err != nil {

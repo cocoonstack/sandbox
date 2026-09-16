@@ -12,6 +12,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
@@ -113,7 +114,6 @@ func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBu
 		clientR = io.MultiReader(io.LimitReader(clientBuf, int64(n)), client)
 	}
 	if s.mgr.AuditEnabled() {
-		// one connection is one RPC, so the first line client→guest is the request frame
 		clientR = &auditTee{r: clientR, record: func(line []byte) {
 			s.mgr.Audit(ctx, id, line)
 		}}
@@ -134,55 +134,50 @@ func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBu
 	<-done
 }
 
-// auditTee captures the first line flowing through it, then degrades to a pass-through.
+// auditTee records each request line it relays; input frames and the bytes past the cap pass unrecorded.
 type auditTee struct {
 	r      io.Reader
 	record func([]byte)
 	buf    []byte
-	done   bool
-}
-
-func (t *auditTee) WriteTo(w io.Writer) (int64, error) {
-	var total int64
-	buf := make([]byte, 4096)
-	for !t.done {
-		n, err := t.Read(buf)
-		if n > 0 {
-			wn, werr := w.Write(buf[:n])
-			total += int64(wn)
-			if werr != nil {
-				return total, werr
-			}
-		}
-		if err == io.EOF {
-			return total, nil
-		}
-		if err != nil {
-			return total, err
-		}
-	}
-	n, err := io.Copy(w, t.r)
-	return total + n, err
+	skip   bool
 }
 
 func (t *auditTee) Read(p []byte) (int, error) {
 	n, err := t.r.Read(p)
-	if t.done || n == 0 {
-		return n, err
-	}
-	chunk := p[:n]
-	if i := bytes.IndexByte(chunk, '\n'); i >= 0 {
-		t.buf = append(t.buf, chunk[:i+1]...)
-		t.done = true
-		t.record(t.buf)
-		t.buf = nil
-		return n, err
-	}
-	t.buf = append(t.buf, chunk...)
-	if len(t.buf) > pool.AuditLineCap {
-		t.done = true // a frame this large is payload, not addressing
-		t.record(t.buf)
-		t.buf = nil
+	rest := p[:n]
+	for len(rest) > 0 {
+		i := bytes.IndexByte(rest, '\n')
+		if i < 0 {
+			t.take(rest)
+			break
+		}
+		t.take(rest[:i])
+		t.endLine()
+		rest = rest[i+1:]
 	}
 	return n, err
+}
+
+// take keeps a line's head up to the cap; a request frame that outgrows it is recorded once, oversized.
+func (t *auditTee) take(b []byte) {
+	if t.skip {
+		return
+	}
+	t.buf = append(t.buf, b...)
+	if len(t.buf) <= pool.AuditLineCap {
+		return
+	}
+	t.skip = true
+	if !wire.IsContinuation(t.buf) {
+		t.record(t.buf)
+	}
+	t.buf = t.buf[:0]
+}
+
+func (t *auditTee) endLine() {
+	if !t.skip && len(t.buf) > 0 && !wire.IsContinuation(t.buf) {
+		t.record(t.buf)
+	}
+	t.buf = t.buf[:0]
+	t.skip = false
 }

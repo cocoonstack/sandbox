@@ -8,13 +8,22 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/pool"
 )
 
 const (
-	execFrame = `{"v":1,"op":"exec","argv":["echo","42"],"detach":false}` + "\n"
+	execFrame       = `{"v":1,"op":"exec","argv":["echo","42"],"detach":false}` + "\n"
+	statFrame       = `{"v":1,"op":"fs_stat","path":"/"}`
+	dataFrame       = `{"v":1,"op":"data","data":"aGk="}` + "\n"
+	dataEndFrame    = `{"v":1,"op":"data_end"}` + "\n"
+	stdinFrame      = `{"v":1,"op":"stdin","data":"aGk="}` + "\n"
+	stdinCloseFrame = `{"v":1,"op":"stdin_close"}` + "\n"
 
 	agentRequest = "GET /v1/sandboxes/sb_1/agent HTTP/1.1\r\n" +
 		"Host: sandboxd\r\n" +
@@ -127,12 +136,45 @@ func TestRelayClientDisconnectClosesGuest(t *testing.T) {
 	}
 }
 
-func TestAuditTeeWriteToEndsCleanlyBeforeALine(t *testing.T) {
-	tee := &auditTee{r: strings.NewReader("partial"), record: func([]byte) { t.Error("recorded a line that never ended") }}
-	var out bytes.Buffer
-	n, err := tee.WriteTo(&out)
-	if err != nil || n != 7 || out.String() != "partial" {
-		t.Errorf("WriteTo = %d, %v, %q; want 7, nil, the bytes", n, err, out.String())
+func TestAuditTeeRecordsRequestLines(t *testing.T) {
+	big := `{"v":1,"op":"exec","argv":["` + strings.Repeat("x", pool.AuditLineCap) + `"],"detach":false}`
+	chunk := `{"v":1,"op":"data","data":"` + strings.Repeat("A", 3*pool.AuditLineCap) + `"}`
+	for _, tt := range []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"requests back to back", execFrame + statFrame + "\n", []string{strings.TrimSuffix(execFrame, "\n"), statFrame}},
+		{"upload input skipped", statFrame + "\n" + dataFrame + chunk + "\n" + dataEndFrame + execFrame, []string{statFrame, strings.TrimSuffix(execFrame, "\n")}},
+		{"stdin skipped", execFrame + stdinFrame + stdinCloseFrame, []string{strings.TrimSuffix(execFrame, "\n")}},
+		{"oversized request recorded once", big + "\n" + statFrame + "\n", []string{"oversized", statFrame}},
+		{"partial tail never recorded", execFrame + "partial", []string{strings.TrimSuffix(execFrame, "\n")}},
+	} {
+		for _, rd := range []struct {
+			name string
+			wrap func(io.Reader) io.Reader
+		}{
+			{"whole", func(r io.Reader) io.Reader { return r }},
+			{"byte at a time", iotest.OneByteReader},
+		} {
+			t.Run(tt.name+"/"+rd.name, func(t *testing.T) {
+				var got []string
+				tee := &auditTee{r: rd.wrap(strings.NewReader(tt.in)), record: func(line []byte) {
+					if len(line) > pool.AuditLineCap {
+						got = append(got, "oversized")
+						return
+					}
+					got = append(got, string(line))
+				}}
+				var out bytes.Buffer
+				if _, err := io.Copy(&out, tee); err != nil || out.String() != tt.in {
+					t.Fatalf("copy: %v, relayed %d bytes of %d", err, out.Len(), len(tt.in))
+				}
+				if !slices.Equal(got, tt.want) {
+					t.Errorf("recorded %q, want %q", got, tt.want)
+				}
+			})
+		}
 	}
 }
 
