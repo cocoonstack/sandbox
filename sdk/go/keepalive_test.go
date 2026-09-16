@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
+	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
 )
 
@@ -51,6 +52,29 @@ func TestOldDaemonDialsPerCall(t *testing.T) {
 	}
 	if got := upgrades.Load(); got != 4 {
 		t.Errorf("upgrades = %d, want 4: the proto probe plus one per call", got)
+	}
+}
+
+func TestOldDaemonConnectionIsNotParked(t *testing.T) {
+	if !canProbe {
+		t.Skip("no parked-connection probe on this platform")
+	}
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = server.Close() })
+	sb := &Sandbox{c: &Client{keepAlive: time.Minute}}
+	t.Cleanup(sb.pool.drain)
+	sb.proto.Store(1)
+	l := lease{
+		s:    sb,
+		conn: &agentConn{Conn: silkd.NewConn(client)},
+		stop: func() bool { return true },
+	}
+	l.reuse()
+	sb.pool.mu.Lock()
+	parked := len(sb.pool.idle)
+	sb.pool.mu.Unlock()
+	if parked != 0 {
+		t.Errorf("parked connections = %d, want 0", parked)
 	}
 }
 

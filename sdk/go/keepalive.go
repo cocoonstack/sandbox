@@ -159,7 +159,7 @@ func (l *lease) reuse() {
 	if !l.over.CompareAndSwap(false, true) {
 		return
 	}
-	if !l.stop() || !canProbe || l.s.c.keepAlive <= 0 {
+	if !l.stop() || !canProbe || l.s.c.keepAlive <= 0 || l.s.proto.Load() < wire.KeepAliveProto {
 		_ = l.conn.Close()
 		return
 	}
