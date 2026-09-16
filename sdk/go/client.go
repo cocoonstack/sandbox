@@ -18,6 +18,8 @@ import (
 )
 
 const (
+	idleConnsPerHost = 100
+
 	templateQueryParam   = "template"
 	netQueryParam        = "net"
 	sizeQueryParam       = "size"

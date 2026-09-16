@@ -13,23 +13,28 @@ import (
 const httpsScheme = "https"
 
 func (c *Client) configureTLS() error {
-	transport := cmp.Or(c.hc.Transport, http.DefaultTransport)
-	tr, ok := transport.(*http.Transport)
-	if !ok {
-		if c.tlsConfig != nil {
-			return fmt.Errorf("tls configuration requires an http.Transport")
+	tr, ok := cmp.Or(c.hc.Transport, http.DefaultTransport).(*http.Transport)
+	switch {
+	case !ok && c.tlsConfig != nil:
+		return fmt.Errorf("tls configuration requires an http.Transport")
+	case !ok:
+		c.tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	case c.tlsConfig == nil && c.hc.Transport != nil:
+		c.tlsConfig = cmp.Or(tr.TLSClientConfig.Clone(), &tls.Config{MinVersion: tls.VersionTLS12})
+	default:
+		c.tlsConfig = cmp.Or(c.tlsConfig, &tls.Config{MinVersion: tls.VersionTLS12})
+		hc := *c.hc
+		tr = tr.Clone()
+		tr.TLSClientConfig = c.tlsConfig
+		if c.hc.Transport == nil {
+			tr.MaxIdleConnsPerHost = idleConnsPerHost
 		}
-		return nil
+		hc.Transport = tr
+		c.hc = &hc
 	}
-	if c.tlsConfig == nil {
-		c.tlsConfig = tr.TLSClientConfig.Clone()
-		return nil
+	if c.tlsConfig.ClientSessionCache == nil {
+		c.tlsConfig.ClientSessionCache = tls.NewLRUClientSessionCache(0)
 	}
-	hc := *c.hc
-	tr = tr.Clone()
-	tr.TLSClientConfig = c.tlsConfig.Clone()
-	hc.Transport = tr
-	c.hc = &hc
 	return nil
 }
 

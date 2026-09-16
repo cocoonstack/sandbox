@@ -35,10 +35,7 @@ func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (net.Con
 	defer stop()
 	conn := raw
 	if scheme == httpsScheme {
-		cfg := &tls.Config{MinVersion: tls.VersionTLS12}
-		if c.tlsConfig != nil {
-			cfg = c.tlsConfig.Clone()
-		}
+		cfg := c.tlsConfig.Clone()
 		if cfg.ServerName == "" {
 			cfg.ServerName, _, _ = net.SplitHostPort(target)
 		}
