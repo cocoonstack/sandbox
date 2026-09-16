@@ -44,6 +44,7 @@ def test_attach_returns_exit_code(monkeypatch):
 
 def test_run_pumps_stdin_while_reading_output(monkeypatch):
     sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
+    sb._pool.proto = 1
     blocking = BlockingStdinConn([{"type": "exit", "code": 0}], buffer_frames=1)
     monkeypatch.setattr(sb, "_dial", lambda deadline=None: blocking)
 
@@ -104,6 +105,7 @@ class BlockingStdinConn(FakeConn):
 
 def fake_sandbox(monkeypatch, frames):
     sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
+    sb._pool.proto = 1
     conn = FakeConn(frames)
     monkeypatch.setattr(sb, "_dial", lambda deadline=None: conn)
     return sb, conn

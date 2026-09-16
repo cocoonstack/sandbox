@@ -8,6 +8,8 @@ import json
 from typing import Any
 
 PROTO_VERSION = 1
+# the info proto from which silkd serves RPCs back to back on one connection
+KEEP_ALIVE_PROTO = 2
 MAX_FRAME = 8 * 1024 * 1024
 FS_CHUNK = 256 * 1024
 # bulk streams chunk larger than silkd's FS_CHUNK: fewer frames per byte, still under MAX_FRAME after base64.

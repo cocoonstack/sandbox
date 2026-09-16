@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import contextlib
+import select
 import socket
 import ssl
+import threading
 import time
 import urllib.parse
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any, BinaryIO, Protocol, TypeVar
 
 from .errors import APIError, ProtocolError, SilkdError
-from .frames import MAX_FRAME, decode_response, encode_request
+from .frames import KEEP_ALIVE_PROTO, MAX_FRAME, decode_response, encode_request
+
+KEEP_ALIVE_CONNS = 8
 
 _CloseableT = TypeVar("_CloseableT", bound="_Closeable")
 
@@ -69,12 +73,74 @@ class Conn(_Closeable):
             if frame["type"] in terminal:
                 return
 
+    def quiet(self) -> bool:
+        """Reports whether the peer has neither hung up nor spoken since the last frame."""
+        try:
+            readable, _, _ = select.select([self._sock], [], [], 0)
+        except (OSError, ValueError):
+            return False
+        return not readable
+
     def close(self) -> None:
         self.abort()
         try:
             self._reader.close()
         finally:
             self._sock.close()
+
+
+class _Parked:
+    def __init__(self, conn: Conn, idle: float, evict: Callable[[_Parked], None]) -> None:
+        self.conn = conn
+        self.timer = threading.Timer(idle, evict, (self,))
+        self.timer.daemon = True
+
+
+class ConnPool:
+    """Parks a handle's idle relay connections between calls; silkd serves RPCs back to back from proto 2."""
+
+    def __init__(self, idle: float) -> None:
+        self.proto = 0
+        self._idle = idle
+        self._lock = threading.Lock()
+        self._parked: list[_Parked] = []
+
+    def take(self) -> Conn | None:
+        """Returns a parked connection whose peer is still there, or None."""
+        while True:
+            with self._lock:
+                if not self._parked:
+                    return None
+                entry = self._parked.pop()
+            entry.timer.cancel()
+            if entry.conn.quiet():
+                return entry.conn
+            entry.conn.close()
+
+    def park(self, conn: Conn) -> None:
+        """Keeps conn for the next call until idle passes; a daemon before proto 2 or a zero window closes it."""
+        with self._lock:
+            keep = self._idle > 0 and self.proto >= KEEP_ALIVE_PROTO and len(self._parked) < KEEP_ALIVE_CONNS
+            if keep:
+                entry = _Parked(conn, self._idle, self._evict)
+                self._parked.append(entry)
+                entry.timer.start()
+        if not keep:
+            conn.close()
+
+    def drain(self) -> None:
+        with self._lock:
+            parked, self._parked = self._parked, []
+        for entry in parked:
+            entry.timer.cancel()
+            entry.conn.close()
+
+    def _evict(self, entry: _Parked) -> None:
+        with self._lock:
+            if entry not in self._parked:
+                return
+            self._parked.remove(entry)
+        entry.conn.close()
 
 
 def dial_agent(

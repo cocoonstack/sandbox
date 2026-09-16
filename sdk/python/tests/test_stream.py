@@ -30,6 +30,15 @@ class BlockedSendConn:
     def abort(self) -> None:
         self.aborted.set()
 
+    def close(self) -> None:
+        pass
+
+
+def legacy_sandbox(addr: str) -> Sandbox:
+    sb = Sandbox(client=Client(addr, timeout=TIMEOUT), id="sb_1", token="tok", owner=addr)
+    sb._pool.proto = 1
+    return sb
+
 
 def serve_port_forward(server: socket.socket, quiet: float, ops: list[str]) -> None:
     conn, _ = server.accept()
@@ -68,7 +77,7 @@ def test_port_stream_outlives_the_client_timeout():
     addr = f"127.0.0.1:{server.getsockname()[1]}"
     ops: list[str] = []
     threading.Thread(target=serve_port_forward, args=(server, 3 * TIMEOUT, ops), daemon=True).start()
-    sb = Sandbox(client=Client(addr, timeout=TIMEOUT), id="sb_1", token="tok", owner=addr)
+    sb = legacy_sandbox(addr)
     try:
         with sb.dial_port(5000) as port:
             assert port.recv() == b"late"
@@ -82,7 +91,7 @@ def test_run_timeout_cuts_a_silent_command():
     server = socket.create_server(("127.0.0.1", 0))
     addr = f"127.0.0.1:{server.getsockname()[1]}"
     threading.Thread(target=serve_started_then_hang, args=(server, 5 * TIMEOUT), daemon=True).start()
-    sb = Sandbox(client=Client(addr, timeout=TIMEOUT), id="sb_1", token="tok", owner=addr)
+    sb = legacy_sandbox(addr)
     started = time.monotonic()
     try:
         with pytest.raises(TimeoutError):
@@ -93,7 +102,7 @@ def test_run_timeout_cuts_a_silent_command():
 
 
 def test_run_timeout_cuts_a_blocked_exec_send(monkeypatch):
-    sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
+    sb = legacy_sandbox("127.0.0.1:1")
     conn = BlockedSendConn()
     monkeypatch.setattr(sb, "_dial", lambda deadline=None: conn)
     with pytest.raises(TimeoutError):
@@ -111,7 +120,7 @@ def test_dial_is_still_bounded_by_the_client_timeout():
     server = socket.create_server(("127.0.0.1", 0))
     addr = f"127.0.0.1:{server.getsockname()[1]}"
     threading.Thread(target=serve_silence, args=(server,), daemon=True).start()
-    sb = Sandbox(client=Client(addr, timeout=TIMEOUT), id="sb_1", token="tok", owner=addr)
+    sb = legacy_sandbox(addr)
     started = time.monotonic()
     try:
         with pytest.raises(OSError):

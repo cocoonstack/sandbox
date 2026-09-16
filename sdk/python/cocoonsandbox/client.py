@@ -28,8 +28,15 @@ class Client:
     """Talks to one sandboxd node (and, transparently, its cluster)."""
 
     def __init__(
-        self, addr: str, api_token: str = "", timeout: float = 120.0, *, ssl_context: ssl.SSLContext | None = None
+        self,
+        addr: str,
+        api_token: str = "",
+        timeout: float = 120.0,
+        *,
+        ssl_context: ssl.SSLContext | None = None,
+        keep_alive: float = 30.0,
     ) -> None:
+        """keep_alive bounds how long a handle keeps an idle relay connection for its next call; 0 dials per call."""
         endpoint = _endpoint_url(addr.split(",")[0].strip())
         self.addr = endpoint.geturl().removeprefix("http://")
         self._scheme = endpoint.scheme
@@ -39,6 +46,7 @@ class Client:
         self._opener: urllib.request.OpenerDirector | None = None
         self.api_token = api_token
         self.timeout = timeout
+        self.keep_alive = keep_alive
 
     def new(
         self,
