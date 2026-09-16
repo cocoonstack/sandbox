@@ -41,7 +41,7 @@ func (f *Fake) ServeConn(conn net.Conn) {
 	serveConn(conn, bufio.NewReader(conn), wire.KeepAliveProto, f.serve)
 }
 
-func (f *Fake) serve(conn net.Conn, r *bufio.Reader, req wire.Request, proto uint32) {
+func (f *Fake) serve(conn net.Conn, r *bufio.Reader, req wire.Request) {
 	switch req := req.(type) {
 	case *wire.FsWrite:
 		f.fsWrite(conn, r, req)
@@ -82,7 +82,7 @@ func (f *Fake) serve(conn net.Conn, r *bufio.Reader, req wire.Request, proto uin
 	case *wire.PtyResize:
 		send(conn, wire.Done{})
 	default:
-		if !serveCommon(conn, r, req, proto) {
+		if !serveCommon(conn, r, req) {
 			errFrame(conn, wire.KindUnimplemented, "silkdtest: "+req.Op())
 		}
 	}

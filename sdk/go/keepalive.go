@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
@@ -25,11 +26,10 @@ func WithKeepAlive(idle time.Duration) ClientOption {
 	return func(c *Client) { c.keepAlive = idle }
 }
 
-// agentPool parks a handle's idle relay connections between calls; silkd serves RPCs back to back from proto 2.
+// agentPool parks a handle's idle relay connections between calls.
 type agentPool struct {
-	mu    sync.Mutex
-	idle  []*agentConn
-	proto atomic.Uint32
+	mu   sync.Mutex
+	idle []*agentConn
 }
 
 // take returns a parked connection whose peer is still there, or nil.
@@ -44,7 +44,7 @@ func (p *agentPool) take() *agentConn {
 		c := p.idle[n-1]
 		p.idle = p.idle[:n-1]
 		p.mu.Unlock()
-		if c.timer.Stop() && peerQuiet(c.raw.tcp) {
+		if c.timer.Stop() && c.quiet() {
 			return c
 		}
 		_ = c.Close()
@@ -59,12 +59,15 @@ func (p *agentPool) park(c *agentConn, idle time.Duration) {
 		_ = c.Close()
 		return
 	}
-	c.timer = time.AfterFunc(idle, func() { p.evict(c) })
+	if c.timer == nil {
+		c.timer = time.AfterFunc(idle, func() { p.evict(c) })
+	} else {
+		c.timer.Reset(idle)
+	}
 	p.idle = append(p.idle, c)
 	p.mu.Unlock()
 }
 
-// drain closes every parked connection.
 func (p *agentPool) drain() {
 	p.mu.Lock()
 	idle := p.idle
@@ -85,11 +88,36 @@ func (p *agentPool) evict(c *agentConn) {
 	_ = c.Close()
 }
 
-// agentConn is one relayed silkd connection, with the upgraded conn underneath for the liveness probe.
+// agentConn is one relayed silkd connection, with the TCP socket's raw handle for the liveness peek.
 type agentConn struct {
 	*silkd.Conn
-	raw   *upgradedConn
-	timer *time.Timer
+	sock   syscall.RawConn
+	peek   peek
+	peekFn func(uintptr) bool
+	timer  *time.Timer
+}
+
+func newAgentConn(raw *upgradedConn) *agentConn {
+	c := &agentConn{Conn: silkd.NewConn(raw)}
+	if sc, ok := raw.tcp.(syscall.Conn); ok {
+		c.sock, _ = sc.SyscallConn()
+	}
+	c.peekFn = c.peek.read
+	return c
+}
+
+// quiet reports whether the parked connection's peer has neither hung up nor spoken.
+func (c *agentConn) quiet() bool {
+	return c.sock != nil && c.sock.Read(c.peekFn) == nil && c.peek.quiet
+}
+
+// sent sends req on c and hands it back, closing it on failure.
+func (c *agentConn) sent(req wire.Request) (*agentConn, error) {
+	if err := c.Send(req); err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+	return c, nil
 }
 
 // probeProto pipelines info ahead of req and reads the daemon's answer.
@@ -119,8 +147,7 @@ type lease struct {
 
 // done ends the RPC: a terminal frame, error frames included, parks the connection; any other failure drops it.
 func (l *lease) done(err error) error {
-	var frame *wire.ErrorResp
-	if err == nil || errors.As(err, &frame) {
+	if _, frame := errors.AsType[*wire.ErrorResp](err); err == nil || frame {
 		l.reuse()
 	} else {
 		l.close()

@@ -144,13 +144,9 @@ func newAgentServer(t *testing.T, serve func(net.Conn)) *httptest.Server {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		conn, _, err := http.NewResponseController(w).Hijack()
+		conn, err := silkdtest.Upgrade(w)
 		if err != nil {
-			t.Errorf("hijack: %v", err)
-			return
-		}
-		if _, err := io.WriteString(conn, upgrade101); err != nil {
-			_ = conn.Close()
+			t.Errorf("upgrade: %v", err)
 			return
 		}
 		serve(conn)
@@ -171,6 +167,6 @@ func testSandbox(t *testing.T, ts *httptest.Server, opts ...ClientOption) *Sandb
 func legacySandbox(t *testing.T, ts *httptest.Server) *Sandbox {
 	t.Helper()
 	sb := testSandbox(t, ts)
-	sb.pool.proto.Store(1)
+	sb.proto.Store(1)
 	return sb
 }

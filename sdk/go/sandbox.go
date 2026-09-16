@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
@@ -68,6 +69,7 @@ type Sandbox struct {
 	c     *Client
 	token string
 	owner string // data-plane address (owner node), from the claim
+	proto atomic.Uint32
 	pool  agentPool
 }
 
@@ -208,47 +210,49 @@ func (s *Sandbox) Close() error {
 	return apiError("release", resp)
 }
 
-// call sends req on the handle's parked connection or a fresh dial and hands back the lease that ends the RPC; ctx cancellation closes the connection under it.
+// call sends req on a relay connection and hands back the lease that ends the RPC; ctx cancellation closes the connection under it.
 func (s *Sandbox) call(ctx context.Context, req wire.Request) (*silkd.Conn, *lease, error) {
-	c := s.pool.take()
-	if c == nil {
-		var err error
-		if c, err = s.dial(ctx, req); err != nil {
-			return nil, nil, err
-		}
-	} else if err := c.Send(req); err != nil {
-		_ = c.Close()
+	c, err := s.connect(ctx, req)
+	if err != nil {
 		return nil, nil, err
 	}
 	return c.Conn, &lease{s: s, conn: c, stop: context.AfterFunc(ctx, func() { _ = c.Close() })}, nil
 }
 
-// dial opens a relay connection and sends req on it; the handle's first connection pipelines info ahead of req, and a daemon that closes after answering never read req, so the send repeats on a fresh dial.
-func (s *Sandbox) dial(ctx context.Context, req wire.Request) (*agentConn, error) {
-	for {
-		raw, err := s.c.dialAgent(ctx, s.owner, s.ID, s.token)
-		if err != nil {
-			return nil, err
-		}
-		c := &agentConn{Conn: silkd.NewConn(raw), raw: raw}
-		if s.pool.proto.Load() != 0 {
-			if err = c.Send(req); err != nil {
-				_ = c.Close()
-				return nil, err
-			}
-			return c, nil
-		}
-		proto, err := c.probeProto(ctx, req)
-		if err != nil {
-			_ = c.Close()
-			return nil, err
-		}
-		s.pool.proto.Store(proto)
-		if proto >= wire.KeepAliveProto {
-			return c, nil
-		}
-		_ = c.Close()
+// connect sends req on a parked connection or a fresh dial; a handle's first dial pipelines info ahead of req, and a daemon before proto 2 closes after answering it without reading req, hence the second dial.
+func (s *Sandbox) connect(ctx context.Context, req wire.Request) (*agentConn, error) {
+	if c := s.pool.take(); c != nil {
+		return c.sent(req)
 	}
+	c, err := s.dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s.proto.Load() != 0 {
+		return c.sent(req)
+	}
+	proto, err := c.probeProto(ctx, req)
+	if err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+	s.proto.Store(proto)
+	if proto >= wire.KeepAliveProto {
+		return c, nil
+	}
+	_ = c.Close()
+	if c, err = s.dial(ctx); err != nil {
+		return nil, err
+	}
+	return c.sent(req)
+}
+
+func (s *Sandbox) dial(ctx context.Context) (*agentConn, error) {
+	raw, err := s.c.dialAgent(ctx, s.owner, s.ID, s.token)
+	if err != nil {
+		return nil, err
+	}
+	return newAgentConn(raw), nil
 }
 
 // pumpStdin chunks the reader into stdin frames; Send's own locking keeps

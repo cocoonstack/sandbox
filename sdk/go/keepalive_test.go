@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bufio"
 	"io"
 	"net"
 	"sync/atomic"
@@ -110,14 +111,14 @@ func TestPeerHangUpIsNoticedBeforeReuse(t *testing.T) {
 		t.Skip("no parked-connection probe on this platform")
 	}
 	var upgrades atomic.Int32
-	gone := make(chan struct{}, 4)
+	gone := make(chan struct{}, 2)
 	fake := silkdtest.NewFake(t.TempDir())
 	sb := testSandbox(t, newAgentServer(t, func(c net.Conn) {
 		upgrades.Add(1)
 		fake.ServeConn(&hangUpAfterReply{Conn: c})
 		gone <- struct{}{}
 	}))
-	sb.pool.proto.Store(wire.KeepAliveProto)
+	sb.proto.Store(wire.KeepAliveProto)
 	if _, err := sb.Stat(t.Context(), "/"); err != nil {
 		t.Fatalf("stat: %v", err)
 	}
@@ -151,19 +152,20 @@ func TestPeerQuiet(t *testing.T) {
 	}
 	defer client.Close()
 	server := <-accepted
-	if !peerQuiet(client) {
+	probe := newAgentConn(&upgradedConn{Conn: client, tcp: client, r: bufio.NewReader(client)})
+	if !probe.quiet() {
 		t.Error("a silent peer reported as gone")
 	}
 	if _, err := server.Write([]byte("x")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	waitUntil(t, func() bool { return !peerQuiet(client) }, "unprompted byte not noticed")
+	waitUntil(t, func() bool { return !probe.quiet() }, "unprompted byte not noticed")
 	var b [1]byte
 	if n, err := client.Read(b[:]); err != nil || n != 1 || b[0] != 'x' {
 		t.Errorf("read after the probe = %q, %v; want the peeked byte intact", b[:n], err)
 	}
 	_ = server.Close()
-	waitUntil(t, func() bool { return !peerQuiet(client) }, "hang-up not noticed")
+	waitUntil(t, func() bool { return !probe.quiet() }, "hang-up not noticed")
 }
 
 func waitUntil(t *testing.T, cond func() bool, msg string) {

@@ -11,7 +11,18 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/cocoonstack/sandbox/protocol/wire"
+	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
 )
+
+var infoFrame = func() string {
+	frame, err := wire.EncodeResponse(&wire.InfoResp{Version: "test", Proto: wire.KeepAliveProto})
+	if err != nil {
+		panic(err)
+	}
+	return string(frame) + "\n"
+}()
 
 func TestServeSpeaksMCP(t *testing.T) {
 	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) bool {
@@ -155,22 +166,19 @@ func agentRoute(t *testing.T, reply func(req string) (frames string, drop bool))
 		if !strings.HasSuffix(r.URL.Path, "/agent") {
 			return false
 		}
-		conn, _, err := http.NewResponseController(w).Hijack()
+		conn, err := silkdtest.Upgrade(w)
 		if err != nil {
-			t.Errorf("hijack: %v", err)
+			t.Errorf("upgrade: %v", err)
 			return true
 		}
 		defer conn.Close()
 		br := bufio.NewReader(conn)
-		if _, err = io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n"); err != nil {
-			return true
-		}
 		for {
 			req, err := br.ReadString('\n')
 			if err != nil {
 				return true
 			}
-			frames, drop := `{"type":"info","version":"test","proto":2,"uptime_secs":0,"procs":0,"sessions":0}`+"\n", false
+			frames, drop := infoFrame, false
 			if !strings.Contains(req, `"op":"info"`) {
 				frames, drop = reply(req)
 			}

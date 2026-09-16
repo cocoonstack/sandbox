@@ -27,7 +27,7 @@ func (s *Sandbox) doneRPC(ctx context.Context, req wire.Request) error {
 	return l.done(terminalErr(ctx, conn))
 }
 
-// uploadRPC sends req, streams r as Data frames terminated by DataEnd, and expects a terminal Done; a terminal frame arriving early is the guest rejecting the upload, so the stream stops there.
+// uploadRPC streams r as Data frames after req and expects Done; an early terminal frame is the guest rejecting the upload and stops the stream.
 func (s *Sandbox) uploadRPC(ctx context.Context, req wire.Request, r io.Reader) error {
 	conn, l, err := s.call(ctx, req)
 	if err != nil {

@@ -2,8 +2,8 @@
 
 package sandbox
 
-import "net"
-
 const canProbe = false
 
-func peerQuiet(net.Conn) bool { return false }
+type peek struct{ quiet bool }
+
+func (*peek) read(uintptr) bool { return true }
