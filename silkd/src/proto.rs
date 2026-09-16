@@ -177,7 +177,7 @@ pub enum Request {
 }
 
 impl Request {
-    /// Reports whether the frame is input for the RPC in flight rather than a new request.
+    /// Reports whether the frame feeds the RPC in flight instead of opening one.
     pub fn is_continuation(&self) -> bool {
         matches!(
             self,
@@ -382,12 +382,6 @@ pub enum FeedError {
     Io(io::Error, &'static str),
     Protocol,
     Truncated,
-}
-
-/// Reads one newline-terminated frame (newline stripped); None on clean EOF.
-pub async fn read_frame<R: AsyncBufRead + Unpin>(r: &mut R) -> io::Result<Option<Vec<u8>>> {
-    let mut line = Vec::new();
-    Ok(read_frame_into(r, &mut line).await?.then_some(line))
 }
 
 /// Reads one frame into `line` (cleared first, reused across calls), capped at MAX_FRAME; false on clean EOF.
@@ -722,7 +716,9 @@ mod tests {
     async fn frame_reader_caps_oversized_lines() {
         let big = vec![b'a'; MAX_FRAME + 2];
         let mut r = tokio::io::BufReader::new(big.as_slice());
-        let err = read_frame(&mut r).await.expect_err("must reject");
+        let err = read_frame_into(&mut r, &mut Vec::new())
+            .await
+            .expect_err("must reject");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 

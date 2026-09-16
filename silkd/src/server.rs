@@ -5,9 +5,10 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use crate::proc::{Chunk, Table, write_chunk};
-use crate::proto::{self, ErrorKind, ProcInfo, Request, Response};
+use crate::proto::{self, ErrorKind, ExecReq, ProcInfo, Request, Response};
 use crate::{exec, find, forward, fs, git, lsp, pty, session, tree, watch};
 
 /// Shared daemon state handed to every connection.
@@ -33,15 +34,16 @@ impl State {
         R: AsyncBufRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin,
     {
+        let mut line = Vec::new();
         let mut next: Option<Request> = None;
         let mut served = false;
         loop {
             let req = match next.take() {
                 Some(req) => req,
                 None => {
-                    let Some(line) = proto::read_frame(&mut reader).await? else {
+                    if !proto::read_frame_into(&mut reader, &mut line).await? {
                         return Ok(());
-                    };
+                    }
                     match serde_json::from_slice(&line) {
                         Ok(req) => req,
                         Err(e) => {
@@ -81,36 +83,7 @@ impl State {
             Request::Kill { pid, signal } => self.kill(writer, pid, signal).await,
             Request::Logs { pid } => self.logs(writer, pid).await,
             Request::Attach { pid } => self.attach(writer, pid).await,
-            Request::Exec(e) => {
-                // validated ahead of the session/process split so an empty argv errors on both paths.
-                if e.argv.is_empty() {
-                    proto::error_frame(writer, ErrorKind::BadRequest, "argv must not be empty")
-                        .await
-                } else if e.detach && e.session.is_some() {
-                    proto::error_frame(
-                        writer,
-                        ErrorKind::BadRequest,
-                        "detach is not supported with session",
-                    )
-                    .await
-                } else if let Some(sid) = e.session.as_deref() {
-                    match self.sessions.get(sid) {
-                        None => {
-                            proto::error_frame(writer, ErrorKind::NotFound, "no such session").await
-                        }
-                        Some(sess) => {
-                            if !sess.run(&e.argv, writer).await {
-                                self.sessions.remove(sid);
-                            }
-                            Ok(())
-                        }
-                    }
-                } else {
-                    let (rx, feeder) = spawn_feeder(reader);
-                    let res = exec::run(&self.table, now_secs(), e, rx, writer).await;
-                    return feeder.finish(res).await;
-                }
-            }
+            Request::Exec(e) => return self.exec(e, reader, writer).await,
             Request::SessionCreate { id, cwd, env } => {
                 match self.sessions.create(id, cwd, &env).await {
                     Ok(id) => proto::write_frame(writer, &Response::SessionCreated { id }).await,
@@ -165,7 +138,7 @@ impl State {
             Request::PtyOpen(req) => {
                 let (rx, feeder) = spawn_feeder(reader);
                 let res = pty::open(&self.table, now_secs(), req, rx, writer).await;
-                return feeder.finish(res).await;
+                return finish_feeder(feeder, res).await;
             }
             Request::PtyResize { pid, cols, rows } => {
                 pty::resize(&self.table, writer, pid, cols, rows).await
@@ -176,13 +149,13 @@ impl State {
             Request::LspRequest { server_id } => {
                 let (rx, feeder) = spawn_feeder(reader);
                 let res = self.lsp.request(rx, writer, &server_id).await;
-                return feeder.finish(res).await;
+                return finish_feeder(feeder, res).await;
             }
             Request::LspStop { server_id } => self.lsp.stop(writer, &server_id).await,
             Request::PortForward { port } => {
                 let (rx, feeder) = spawn_feeder(reader);
                 let res = forward::run(port, rx, writer).await;
-                return feeder.finish(res).await;
+                return finish_feeder(feeder, res).await;
             }
             Request::GitClone {
                 url,
@@ -211,6 +184,46 @@ impl State {
             }
         };
         res.map(|()| (reader, None))
+    }
+
+    async fn exec<R, W>(
+        &self,
+        e: ExecReq,
+        reader: R,
+        writer: &mut W,
+    ) -> std::io::Result<(R, Option<Request>)>
+    where
+        R: AsyncBufRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin,
+    {
+        // validated ahead of the session/process split so an empty argv errors on both paths.
+        if e.argv.is_empty() {
+            proto::error_frame(writer, ErrorKind::BadRequest, "argv must not be empty").await?;
+            return Ok((reader, None));
+        }
+        if e.detach && e.session.is_some() {
+            proto::error_frame(
+                writer,
+                ErrorKind::BadRequest,
+                "detach is not supported with session",
+            )
+            .await?;
+            return Ok((reader, None));
+        }
+        if let Some(sid) = e.session.as_deref() {
+            match self.sessions.get(sid) {
+                Some(sess) => {
+                    if !sess.run(&e.argv, writer).await {
+                        self.sessions.remove(sid);
+                    }
+                }
+                None => proto::error_frame(writer, ErrorKind::NotFound, "no such session").await?,
+            }
+            return Ok((reader, None));
+        }
+        let (rx, feeder) = spawn_feeder(reader);
+        let res = exec::run(&self.table, now_secs(), e, rx, writer).await;
+        finish_feeder(feeder, res).await
     }
 
     async fn info<W: AsyncWrite + Unpin>(&self, w: &mut W) -> std::io::Result<()> {
@@ -297,28 +310,29 @@ impl Default for State {
     }
 }
 
-/// Reads the client's frames during a streaming RPC: input frames go to the handler, the next request ends the feed.
-struct Feeder<R>(tokio::task::JoinHandle<(R, Option<Request>)>);
-
-impl<R> Feeder<R> {
-    /// Joins the feeder once its RPC is done; a failed RPC aborts it instead, the connection being gone.
-    async fn finish(self, res: std::io::Result<()>) -> std::io::Result<(R, Option<Request>)> {
-        if let Err(e) = res {
-            self.0.abort();
-            return Err(e);
-        }
-        self.0.await.map_err(std::io::Error::other)
-    }
-}
+type Feeder<R> = JoinHandle<(R, Option<Request>)>;
 
 fn spawn_feeder<R>(reader: R) -> (mpsc::Receiver<Request>, Feeder<R>)
 where
     R: AsyncBufRead + Unpin + Send + 'static,
 {
     let (tx, rx) = mpsc::channel(16);
-    (rx, Feeder(tokio::spawn(feed_client(reader, tx))))
+    (rx, tokio::spawn(feed_client(reader, tx)))
 }
 
+/// Joins the feeder once its RPC is done; a failed RPC aborts it instead, the connection being gone.
+async fn finish_feeder<R>(
+    feeder: Feeder<R>,
+    res: std::io::Result<()>,
+) -> std::io::Result<(R, Option<Request>)> {
+    if let Err(e) = res {
+        feeder.abort();
+        return Err(e);
+    }
+    feeder.await.map_err(std::io::Error::other)
+}
+
+/// Reads the client's frames during a streaming RPC: input frames go to the handler, the next request ends the feed.
 async fn feed_client<R>(mut reader: R, tx: mpsc::Sender<Request>) -> (R, Option<Request>)
 where
     R: AsyncBufRead + Unpin,
