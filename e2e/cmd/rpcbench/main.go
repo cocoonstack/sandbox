@@ -2,8 +2,9 @@
 // what the alternatives buy: mode A dials+upgrades per RPC by hand; mode C
 // is the SDK's own path, one kept connection serving RPCs back to back; mode
 // B keeps one hand-dialed connection ahead, hiding the handshake behind the
-// previous call (H-4's decision data). Run by hand against a claimed
-// sandbox:
+// previous call (H-4's decision data). A and C interleave sample by sample
+// and swap which one leads, so node drift cannot land on one arm. Run by
+// hand against a claimed sandbox:
 //
 //	rpcbench -addr <node> -token <api token> -template <ref> -n 200
 package main
@@ -59,31 +60,33 @@ func run(addr, token, template string, n int) error {
 		}
 	}
 
-	a := make([]time.Duration, 0, n)
-	for range n {
-		start := time.Now()
-		conn, err := dial()
-		if err != nil {
-			return err
-		}
-		if err := statRPC(conn); err != nil {
-			return err
-		}
-		a = append(a, time.Since(start))
-	}
-	report("A dial-per-RPC", a)
-
 	if _, err := sb.Stat(ctx, "/"); err != nil {
 		return err
 	}
+	a := make([]time.Duration, 0, n)
 	c := make([]time.Duration, 0, n)
-	for range n {
-		start := time.Now()
-		if _, err := sb.Stat(ctx, "/"); err != nil {
+	for i := range n {
+		dialFirst := i%2 == 0
+		if dialFirst {
+			d, err := sampleDial(dial)
+			if err != nil {
+				return err
+			}
+			a = append(a, d)
+		}
+		d, err := sampleKept(ctx, sb)
+		if err != nil {
 			return err
 		}
-		c = append(c, time.Since(start))
+		c = append(c, d)
+		if !dialFirst {
+			if d, err = sampleDial(dial); err != nil {
+				return err
+			}
+			a = append(a, d)
+		}
 	}
+	report("A dial-per-RPC", a)
 	report("C SDK keep-alive", c)
 
 	spare := make(chan net.Conn, 1)
@@ -120,6 +123,28 @@ func run(addr, token, template string, n int) error {
 	cancel()
 	report("B pre-dialed spare", b)
 	return nil
+}
+
+// sampleDial times one RPC on a freshly dialed and upgraded connection.
+func sampleDial(dial func() (net.Conn, error)) (time.Duration, error) {
+	start := time.Now()
+	conn, err := dial()
+	if err != nil {
+		return 0, err
+	}
+	if err := statRPC(conn); err != nil {
+		return 0, err
+	}
+	return time.Since(start), nil
+}
+
+// sampleKept times one RPC on the SDK's kept connection, probe and all.
+func sampleKept(ctx context.Context, sb *sandbox.Sandbox) (time.Duration, error) {
+	start := time.Now()
+	if _, err := sb.Stat(ctx, "/"); err != nil {
+		return 0, err
+	}
+	return time.Since(start), nil
 }
 
 // statRPC drives one hand-dialed connection through one RPC and closes it.
