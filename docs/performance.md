@@ -63,6 +63,32 @@ HTTP-upgrade relay and vsock hops:
 | git add+commit+status (real repo) | 30–130 ms |
 | pty open→echo→exit | 5–28 ms |
 
+## Relay connection reuse
+
+Every data-plane RPC used to pay a TCP dial, an HTTP Upgrade and, behind a
+TLS edge, a handshake. From proto 2 silkd serves RPCs back to back, and both
+SDKs keep one relay connection per handle with a 30s idle window.
+
+`e2e/cmd/rpcbench`, warm `rt:24.04` sandbox, `net=none`, n=200 `fs_stat`
+RPCs per arm, bare metal, client on the node. The two arms interleave sample
+by sample and swap which one leads, so drift cannot land on one of them.
+
+| per-RPC wall | plain p50 | plain p90 | TLS edge p50 | TLS edge p90 |
+| --- | --- | --- | --- | --- |
+| dial per RPC | 0.29ms | 0.33ms | 1.15ms | 1.34ms |
+| kept connection | 0.10ms | 0.13ms | 0.12ms | 0.16ms |
+| pre-dialed spare | 0.19ms | 0.25ms | 0.95ms | 1.24ms |
+
+Reuse removes ~0.19ms per RPC on a plain node and ~1.0ms behind the edge,
+where the handshake dominates and the kept connection is the only arm that
+escapes it. Three runs per leg agreed within 0.02ms at p50; one run on a
+loaded node moved every arm together and left the ratio intact.
+
+The edge here is a local HTTP/1.1 TLS terminator on loopback, so its
+handshake carries no network RTT — a client across a WAN saves more, not
+less. An old daemon reporting proto 1 makes the SDK dial per call, which is
+the plain dial-per-RPC row.
+
 ## Boot chain
 
 Kernel entry → rootfs handoff (custom all-builtin kernel + Rust initramfs,
@@ -134,11 +160,12 @@ Reconcile uses) stays as a regression sentinel.
 ## Measured and declined (decision data)
 
 **Pre-dialed relay connections** (2026-07-07, GCE nested, n=300
-`fs_stat` RPCs): dial-per-RPC (today) p50 1.23ms / p90 4.69ms / p99
-10.51ms; one connection pre-dialed ahead p50 1.05ms / p90 4.47ms / p99
-15.49ms. The handshake is not the dominant cost — the win is ~0.2ms at
-p50, nothing at p90, and the background dialer degrades p99. Decision:
-keep one-connection-per-RPC; revisit only with a protocol-level mux.
+`fs_stat` RPCs): dial-per-RPC p50 1.23ms / p90 4.69ms / p99 10.51ms; one
+connection pre-dialed ahead p50 1.05ms / p90 4.47ms / p99 15.49ms. The
+win is ~0.2ms at p50, nothing at p90, and the background dialer degrades
+p99. Decision: pre-dialing stays declined — it hides a handshake only
+while RPCs arrive slower than a dial completes. Reusing the connection
+instead is what paid off; see Relay connection reuse above.
 `e2e/cmd/rpcbench` reproduces the experiment.
 
 **Template pre-check meta GET**: a single `ReadMeta` against MinIO
