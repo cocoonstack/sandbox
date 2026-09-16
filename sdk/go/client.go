@@ -1,10 +1,11 @@
-// Package sandbox is the Go SDK for the cocoon sandbox control plane: claim a microVM from a sandboxd node, run commands in it over the relayed silkd protocol, release it.
+// Package sandbox controls sandboxes and relays guest operations through sandboxd.
 package sandbox
 
 import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -121,9 +122,11 @@ func (r claimRequest) validateVolumes() error {
 
 // Client talks to one sandboxd node.
 type Client struct {
-	addr     string
-	apiToken string
-	hc       *http.Client
+	addr      string
+	scheme    string
+	apiToken  string
+	hc        *http.Client
+	tlsConfig *tls.Config
 }
 
 // Connect returns a client for a sandboxd node.
@@ -133,9 +136,16 @@ func Connect(addr string, opts ...ClientOption) (*Client, error) {
 	if first == "" {
 		return nil, fmt.Errorf("empty sandboxd address")
 	}
-	c := &Client{addr: first, hc: &http.Client{}}
+	u, err := endpointURL(first, "http")
+	if err != nil {
+		return nil, err
+	}
+	c := &Client{addr: first, scheme: u.Scheme, hc: &http.Client{}}
 	for _, opt := range opts {
 		opt(c)
+	}
+	if err := c.configureTLS(); err != nil {
+		return nil, err
 	}
 	return c, nil
 }
@@ -170,7 +180,7 @@ func (c *Client) Volumes(ctx context.Context) ([]VolumeInfo, error) {
 	return resp.Volumes, nil
 }
 
-// Lookup relocates a sandbox handle whose owner address was lost, given its id and token: it asks the entry node, then scatters across the cluster's peers concurrently, and returns a handle bound to whichever node confirms ownership first — one hung peer must not stall the whole lookup.
+// Lookup finds the sandbox owner using its id and token.
 func (c *Client) Lookup(ctx context.Context, id, token string) (*Sandbox, error) {
 	if owner, err := c.ownerAt(ctx, c.addr, id, token); err == nil {
 		return &Sandbox{ID: id, token: token, c: c, owner: owner}, nil
@@ -254,7 +264,11 @@ func (c *Client) deleteTemplates(ctx context.Context, addr string, u url.Values)
 }
 
 func (c *Client) roundTrip(ctx context.Context, method, addr, path string, body io.Reader, bearer string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, "http://"+addr+path, body)
+	u, err := endpointURL(addr, c.scheme)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u.String()+path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +281,7 @@ func (c *Client) roundTrip(ctx context.Context, method, addr, path string, body 
 	return c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
 }
 
-// WithAPIToken sets the operator bearer for every node-scoped call — claim and info, plus drain, pools, templates, checkpoints, and fork/promote/preview.
+// WithAPIToken sets the bearer for node-scoped calls.
 func WithAPIToken(token string) ClientOption {
 	return func(c *Client) { c.apiToken = token }
 }

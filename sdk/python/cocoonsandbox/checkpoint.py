@@ -1,10 +1,8 @@
-"""Checkpoint: a captured sandbox state bound to the node that holds it.
-Branch any number of fresh sandboxes from the captured moment; the source
-keeps running and can be checkpointed again, so captures form a tree."""
+"""Checkpoint handles bound to the node that holds their captured state."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .client import Client
@@ -14,7 +12,7 @@ if TYPE_CHECKING:
 class Checkpoint:
     """A captured sandbox state on its owner node."""
 
-    def __init__(self, client: Client, addr: str, rec: dict):
+    def __init__(self, client: Client, addr: str, rec: dict[str, Any]) -> None:
         self._client = client
         self._addr = addr
         self.id = rec["id"]
@@ -23,15 +21,10 @@ class Checkpoint:
         self.created_at = rec.get("created_at", "")
 
     def new(self, ttl_seconds: int = 0) -> Sandbox:
-        """Claims a fresh sandbox branched from the checkpoint, following a
-        redirect to the node that actually holds it; if every candidate
-        fails transiently, the claim falls back to the origin once so it
-        heals (pulls the checkpoint) locally."""
+        """Claims from the checkpoint, following redirects with one origin fallback."""
         claim = {"ttl_seconds": ttl_seconds} if ttl_seconds else {}
         return self._client._claim_from(self._addr, claim, f"/v1/checkpoints/{self.id}/claim", "claim checkpoint")
 
     def delete(self) -> None:
-        """Removes the checkpoint and broadcasts the drop; cleanup is
-        best-effort eventual, bounded by checkpoint_ttl_hours (see
-        docs/sdk-python.md)."""
+        """Deletes the checkpoint with eventual peer cleanup bounded by checkpoint_ttl_hours."""
         self._client._request(self._addr, "DELETE", f"/v1/checkpoints/{self.id}", None, "delete checkpoint")

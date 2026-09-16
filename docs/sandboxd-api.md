@@ -550,8 +550,9 @@ silkd error; 504 when the command outlives `timeout_seconds` or the request. A h
 ## GET /v1/sandboxes/{id}/owner
 
 Auth: the sandbox's own token. Answers `{"owner_addr": "host:port"}` when
-this node owns the sandbox, 404 otherwise. Used by the SDK's `Lookup`
-scatter.
+this node owns the sandbox, 404 otherwise. With `client_advertise` configured,
+`owner_addr` is that node's full HTTP(S) origin instead; the same contract applies
+to claim and fork responses. Used by the SDK's `Lookup` scatter.
 
 ## GET /v1/info
 

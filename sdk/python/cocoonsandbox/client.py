@@ -1,20 +1,20 @@
-"""Client: the control-plane entry point. Dial any node of a cluster; a
-claim either lands locally or follows one MOVED-style redirect to the node
-that has capacity, and the returned Sandbox is bound to its owner."""
+"""Client: the control-plane entry point."""
 
 from __future__ import annotations
 
 import http.client
 import json
 import queue
+import ssl
 import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import TypeVar
+from typing import Any, TypeVar, cast
 
 from .checkpoint import Checkpoint
+from .endpoint import _endpoint_url
 from .errors import APIError
 from .sandbox import Sandbox
 
@@ -26,8 +26,13 @@ _PEERS_TIMEOUT = 5.0
 class Client:
     """Talks to one sandboxd node (and, transparently, its cluster)."""
 
-    def __init__(self, addr: str, api_token: str = "", timeout: float = 120.0) -> None:
+    def __init__(
+        self, addr: str, api_token: str = "", timeout: float = 120.0, *, ssl_context: ssl.SSLContext | None = None
+    ) -> None:
         self.addr = addr.split(",")[0].strip()
+        self._scheme = _endpoint_url(self.addr).scheme
+        self._ssl_context = ssl_context or ssl.create_default_context()
+        self._ssl_context.set_alpn_protocols(["http/1.1"])
         self.api_token = api_token
         self.timeout = timeout
 
@@ -41,37 +46,26 @@ class Client:
         volumes: list[str | Mapping[str, str]] | None = None,
         mount: bool = True,
     ) -> Sandbox:
-        """Claims a sandbox; a warm hit is milliseconds. On a cluster a warm
-        miss may redirect to a peer, followed transparently; if every
-        candidate fails transiently, the claim falls back to the origin
-        once so it provisions or heals locally. mount=False attaches the
-        volumes without mounting them, leaving that — and the flush — to
-        the workload: releasing without a clean self-umount discards
-        unsynced guest pages, since the sandbox performs no sync."""
+        """Claims a sandbox; a warm hit is milliseconds."""
         claim = _claim_body(template, net, size, ttl_seconds, volumes, mount, claim_ref)
         return self._claim_from(self.addr, claim)
 
     def delete_template(self, template: str, net: str = "", size: str = "") -> None:
-        """Removes a promoted template by name; on a cluster the delete
-        follows gossip to the owner node (one hop)."""
+        """Removes a promoted template by name; on a cluster the delete follows gossip to the owner node (one hop)."""
         query = _template_query(template, net, size)
         path = "/v1/templates?" + urllib.parse.urlencode(query)
         reply = self._request(self.addr, "DELETE", path, None, "delete template")
         candidates = (reply or {}).get("redirect") or []
         if not candidates:
             return
-        # the owner answers for itself under no_redirect, never a second hop.
         query["no_redirect"] = "1"
         path = "/v1/templates?" + urllib.parse.urlencode(query)
         _try_each(candidates, lambda peer: self._request(peer, "DELETE", path, None, "delete template"))
 
     def lookup(self, id: str, token: str) -> Sandbox:
-        """Relocates a handle from id + token: asks the entry node and every
-        mesh peer concurrently, binding to whichever confirms ownership
-        first — one dead peer must not cost its full timeout."""
+        """Finds the owner by probing the entry and peers concurrently."""
 
         def probe(addr: str) -> Sandbox:
-            # bounded like _peers: a scatter loser must not hold a socket for the full timeout.
             reply = self._request(
                 addr,
                 "GET",
@@ -90,28 +84,24 @@ class Client:
             raise APIError("lookup", 404, f"no owner found for {id}") from None
 
     def attach(self, owner_addr: str, id: str, token: str) -> Sandbox:
-        """Binds a handle to an already-claimed sandbox whose owner address is
-        known (an apiserver annotation, say), with no lookup round-trip."""
+        """Binds a handle to a known owner without a lookup."""
         return Sandbox(client=self, id=id, token=token, owner=owner_addr)
 
-    def sandboxes(self) -> list[dict]:
-        """Lists the claims this token may see: id, key, deadline, claim_ref —
-        never tokens or host paths."""
+    def sandboxes(self) -> list[dict[str, Any]]:
+        """Lists the claims this token may see: id, key, deadline, claim_ref — never tokens or host paths."""
         reply = self._request(self.addr, "GET", "/v1/sandboxes", None, "list sandboxes")
         return [dict(sb) for sb in reply.get("sandboxes") or []]
 
-    def drain(self) -> dict:
-        """Cordons the node (root token): new claims are refused, live ones run
-        to their leases."""
+    def drain(self) -> dict[str, Any]:
+        """Cordons the node (root token): new claims are refused, live ones run to their leases."""
         return self._request(self.addr, "POST", "/v1/drain", None, "drain")
 
-    def uncordon(self) -> dict:
+    def uncordon(self) -> dict[str, Any]:
         """Lifts a drain on the node (root token)."""
         return self._request(self.addr, "DELETE", "/v1/drain", None, "uncordon")
 
     def checkpoint(self, id: str) -> Checkpoint:
-        """A handle for a known checkpoint id, bound to the entry node — no
-        listing round-trip; an unknown id surfaces as 404 at claim time."""
+        """Binds a checkpoint handle to the entry node without a lookup."""
         return Checkpoint(self, self.addr, {"id": id})
 
     def checkpoints(self) -> list[Checkpoint]:
@@ -119,16 +109,16 @@ class Client:
         reply = self._request(self.addr, "GET", "/v1/checkpoints", None, "list checkpoints")
         return [Checkpoint(self, self.addr, rec) for rec in reply.get("checkpoints") or []]
 
-    def volumes(self) -> list[dict]:
+    def volumes(self) -> list[dict[str, Any]]:
         """Lists the caller-visible fleet catalog; availability is local."""
         reply = self._request(self.addr, "GET", "/v1/volumes", None, "list volumes")
         return [dict(volume) for volume in reply.get("volumes") or []]
 
-    def info(self) -> dict:
+    def info(self) -> dict[str, Any]:
         """The node's pool/claim counters, as served by GET /v1/info."""
         return self._request(self.addr, "GET", "/v1/info", None, "info")
 
-    def _claim_from(self, addr: str, claim: dict, path: str = "/v1/claim", verb: str = "claim") -> Sandbox:
+    def _claim_from(self, addr: str, claim: dict[str, Any], path: str = "/v1/claim", verb: str = "claim") -> Sandbox:
         reply = self._post_json(addr, path, claim, verb)
         redirect = reply.get("redirect") or []
         if not redirect:
@@ -137,14 +127,13 @@ class Client:
         if reply.get("require_promoted"):
             claim["require_promoted"] = True
 
-        def post(peer):
+        def post(peer: str) -> dict[str, Any]:
             return self._post_json(peer, path, claim, verb)
 
         owner, reply = _redirect_fallback(addr, redirect, post, verb)
         return self._handle_from(owner, reply)
 
     def _peers(self) -> list[str]:
-        # /v1/peers is tenant-accessible; /v1/info is operator-only, so a tenant cannot read peers from it.
         try:
             return (
                 self._request(
@@ -155,7 +144,7 @@ class Client:
         except APIError:
             return []
 
-    def _handle_from(self, dialed: str, reply: dict) -> Sandbox:
+    def _handle_from(self, dialed: str, reply: dict[str, Any]) -> Sandbox:
         return Sandbox(
             client=self,
             id=reply["id"],
@@ -167,24 +156,28 @@ class Client:
             volumes=reply.get("volumes") or [],
         )
 
-    def _post_json(self, addr: str, path: str, body: dict, verb: str) -> dict:
+    def _post_json(self, addr: str, path: str, body: dict[str, Any], verb: str) -> dict[str, Any]:
         return self._request(addr, "POST", path, body, verb)
 
     def _request(
-        self, addr: str, method: str, path: str, body: dict | None, verb: str, bearer: str = "", timeout: float = 0.0
-    ) -> dict:
-        """Issues one control-plane request. bearer overrides the api token —
-        sandbox-scoped verbs (release, hibernate) authenticate with the
-        per-sandbox token instead; timeout overrides the client default (0 keeps it)."""
+        self,
+        addr: str,
+        method: str,
+        path: str,
+        body: dict[str, Any] | None,
+        verb: str,
+        bearer: str = "",
+        timeout: float = 0.0,
+    ) -> dict[str, Any]:
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(f"http://{addr}{path}", data=data, method=method)
+        req = urllib.request.Request(_endpoint_url(addr, self._scheme).geturl() + path, data=data, method=method)
         if data is not None:
             req.add_header("Content-Type", "application/json")
         token = bearer or self.api_token
         if token:
             req.add_header("Authorization", f"Bearer {token}")
         try:
-            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout, context=self._ssl_context) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as exc:
             try:
@@ -195,12 +188,11 @@ class Client:
         except urllib.error.URLError as exc:
             raise APIError(verb, 0, str(exc.reason)) from None
         except (OSError, http.client.HTTPException) as exc:
-            # a reset or truncated body read is neither HTTPError nor URLError
             raise APIError(verb, 0, str(exc)) from None
         if not raw:
             return {}
         try:
-            return json.loads(raw)
+            return cast(dict[str, Any], json.loads(raw))
         except json.JSONDecodeError as exc:
             raise APIError(verb, 0, "malformed JSON in response") from exc
 
@@ -213,8 +205,8 @@ def _claim_body(
     volumes: list[str | Mapping[str, str]] | None = None,
     mount: bool = True,
     claim_ref: str = "",
-) -> dict:
-    claim = {"template": template}
+) -> dict[str, Any]:
+    claim: dict[str, Any] = {"template": template}
     if net:
         claim["net"] = net
     if size:
@@ -230,7 +222,7 @@ def _claim_body(
     return claim
 
 
-def _volume_body(volume: str | Mapping[str, str], mount: bool) -> dict:
+def _volume_body(volume: str | Mapping[str, str], mount: bool) -> dict[str, str]:
     if isinstance(volume, str):
         return {"name": volume}
     if not isinstance(volume, Mapping):
@@ -253,7 +245,7 @@ def _volume_body(volume: str | Mapping[str, str], mount: bool) -> dict:
     return body
 
 
-def _template_query(template: str, net: str, size: str) -> dict:
+def _template_query(template: str, net: str, size: str) -> dict[str, str]:
     query = {"template": template}
     if net:
         query["net"] = net
@@ -264,22 +256,18 @@ def _template_query(template: str, net: str, size: str) -> dict:
 
 def _error_message(raw: bytes) -> str:
     try:
-        return json.loads(raw)["error"]
+        return cast(str, json.loads(raw)["error"])
     except (ValueError, KeyError, TypeError):
         return raw.decode(errors="replace").strip()
 
 
 def _retry_miss(exc: APIError) -> bool:
-    """Default _try_each policy: only a miss (404) or a dead peer (status 0) moves on."""
     return exc.status in (404, 0)
 
 
 def _try_each(
     candidates: Iterable[str], call: Callable[[str], T], retry: Callable[[APIError], bool] = _retry_miss
 ) -> T:
-    """An APIError for which retry(exc) is true moves on to the next
-    candidate and the last such error propagates; any other raises at once.
-    candidates must be non-empty."""
     last_error = None
     for addr in candidates:
         try:
@@ -288,33 +276,18 @@ def _try_each(
             if not retry(exc):
                 raise
             last_error = exc
-    raise last_error
+    raise cast(APIError, last_error)
 
 
 def _retry_transient(exc: APIError) -> bool:
-    """Origin-fallback policy: worth the round-trip for a transport failure
-    (status 0), a miss (404), full (429), mid-heal (503), an engine/proxy
-    failure (500/502/504), or a mid-rotation 401 (the origin proved the
-    token valid by issuing the redirect). A served 4xx like a bad request,
-    a forbidden token, or an egress conflict is definitive: the origin
-    would fail the same way."""
     return exc.status in (0, 401, 404, 429, 503, 500, 502, 504)
 
 
 def _redirect_fallback(
-    origin: str, candidates: Sequence[str], post: Callable[[str], dict], verb: str
-) -> tuple[str, dict]:
-    """Retries broadly across candidates (any failure moves to the next) so
-    one wrong candidate doesn't cost one that would still succeed. If every
-    candidate is exhausted and the last failure was transient
-    (_retry_transient), gives the origin one more no_redirect attempt -- the
-    node that issued the redirect provisions or heals locally instead of
-    leaving the claim stuck on stale gossip. A definitive last failure skips
-    the fallback: the origin would fail the same way. A second-level redirect
-    (a compliant server never sends one once no_redirect is set) fails the
-    candidate rather than being followed."""
+    origin: str, candidates: Sequence[str], post: Callable[[str], dict[str, Any]], verb: str
+) -> tuple[str, dict[str, Any]]:
 
-    def attempt(addr):
+    def attempt(addr: str) -> tuple[str, dict[str, Any]]:
         reply = post(addr)
         if reply.get("redirect"):
             raise APIError(verb, 0, f"{addr} redirected again despite no_redirect")
@@ -328,18 +301,14 @@ def _redirect_fallback(
         try:
             return attempt(origin)
         except APIError as origin_exc:
-            # both halves matter: why the claim left the origin, and why returning did not help.
             combined = f"{origin_exc.message} (after redirect targets failed: {exc.message})"
             raise APIError(verb, origin_exc.status, combined) from origin_exc
 
 
 def _scatter(addrs: Sequence[str], probe: Callable[[str], T]) -> T:
-    """When all probes fail the last error propagates. Loser threads are
-    daemons whose requests die with _request's own timeout; the queue is
-    bounded by len(addrs) so they never block. addrs must be non-empty."""
-    results = queue.Queue(maxsize=len(addrs))
+    results: queue.Queue[tuple[T | None, Exception | None]] = queue.Queue(maxsize=len(addrs))
 
-    def run(addr):
+    def run(addr: str) -> None:
         try:
             results.put((probe(addr), None))
         except Exception as exc:  # any escape would hang the drain below
@@ -351,6 +320,6 @@ def _scatter(addrs: Sequence[str], probe: Callable[[str], T]) -> T:
     for _ in addrs:
         value, error = results.get()
         if error is None:
-            return value
+            return cast(T, value)
         last_error = error
-    raise last_error
+    raise cast(Exception, last_error)

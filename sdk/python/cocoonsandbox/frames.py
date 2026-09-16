@@ -1,12 +1,11 @@
-"""silkd wire frames: newline-delimited JSON, requests tagged by "op",
-responses by "type", binary payloads base64 in "data" fields. Mirrors the Go
-and Rust implementations; all three round-trip protocol/wire/fixtures/v1."""
+"""Silkd newline-delimited JSON frames with base64 binary payloads."""
 
 from __future__ import annotations
 
 import base64
 import binascii
 import json
+from typing import Any
 
 PROTO_VERSION = 1
 MAX_FRAME = 8 * 1024 * 1024
@@ -16,8 +15,7 @@ BULK_CHUNK = 1 << 20
 
 
 def encode_request(op: str, **fields: object) -> bytes:
-    """Renders {"v":1,"op":...,fields} with a trailing newline; None fields
-    are omitted and bytes values ride base64 under their field name."""
+    """Encodes one request, omitting None fields and base64-encoding byte values."""
     frame = {"v": PROTO_VERSION, "op": op}
     for key, value in fields.items():
         if value is None:
@@ -28,9 +26,8 @@ def encode_request(op: str, **fields: object) -> bytes:
     return json.dumps(frame, separators=(",", ":")).encode() + b"\n"
 
 
-def decode_response(line: bytes) -> dict:
-    """Parses one response frame; the returned dict carries its tag under
-    "type" and any binary payload decoded under "data"."""
+def decode_response(line: bytes) -> dict[str, Any]:
+    """Decodes one response with binary payloads under data."""
     # base64 is JSON-escape-free, so an exactly-shaped data frame slices without json.loads.
     if line.startswith(b'{"type":"'):
         te = line.find(b'"', 9)

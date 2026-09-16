@@ -1,6 +1,4 @@
-// Package silkdtest fakes a silkd daemon for host-side tests: deterministic
-// frame semantics over any listener, plus the hybrid-vsock muxer
-// handshake for tests that dial a UDS the way sandboxd does.
+// Package silkdtest fakes a silkd daemon for host-side tests: deterministic frame semantics over any listener, plus the hybrid-vsock muxer handshake for tests that dial a UDS the way sandboxd does.
 package silkdtest
 
 import (
@@ -13,24 +11,17 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-// Serve accepts connections until l closes, speaking one RPC per connection
-// and closing it after the terminal frame, like silkd. Semantics: info →
-// InfoResp; exec echo → stdout of the args; exec cat → echoes stdin frames
-// until stdin_close; exec false → exit 1; exec sleep → started, then blocks
-// until the client disconnects; anything else → an error frame.
+// Serve accepts connections until l closes, speaking one RPC per connection and closing it after the terminal frame, like silkd.
 func Serve(l net.Listener) {
 	acceptLoop(l, ServeConn)
 }
 
-// ServeConn speaks one RPC on an already-open connection and closes it —
-// for tests that produce the conn themselves (e.g. after an HTTP hijack).
+// ServeConn handles one RPC on an open connection, then closes it.
 func ServeConn(conn net.Conn) {
 	handle(conn, bufio.NewReader(conn))
 }
 
-// ListenHybrid serves the muxer handshake on a UDS: each connection must
-// open with "CONNECT <port>", is answered "OK <port>", then speaks the
-// Serve protocol. The returned closer stops the listener.
+// ListenHybrid serves the muxer handshake on a UDS: each connection must open with "CONNECT <port>", is answered "OK <port>", then speaks the Serve protocol.
 func ListenHybrid(sockPath string, port int) (io.Closer, error) {
 	l, err := net.Listen("unix", sockPath)
 	if err != nil {
@@ -52,8 +43,6 @@ func ListenHybrid(sockPath string, port int) (io.Closer, error) {
 	return l, nil
 }
 
-// handle speaks one RPC; r must be the connection's only reader — a second
-// buffered layer would swallow frames the first one read ahead.
 func handle(conn net.Conn, r *bufio.Reader) {
 	defer func() { _ = conn.Close() }()
 	req, err := recvRequest(r)
@@ -65,14 +54,14 @@ func handle(conn net.Conn, r *bufio.Reader) {
 	}
 }
 
-// serveCommon handles the verbs shared by the stateless server and the Fake,
-// reporting whether it recognized the request.
 func serveCommon(conn net.Conn, r *bufio.Reader, req wire.Request) bool {
 	switch req := req.(type) {
 	case *wire.Info:
 		send(conn, &wire.InfoResp{Version: "silkdtest", Proto: wire.ProtoVersion})
 	case *wire.Exec:
 		serveExec(conn, r, req)
+	case *wire.PortForward:
+		portEcho(conn, r, req.Port)
 	default:
 		return false
 	}
