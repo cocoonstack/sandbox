@@ -1880,16 +1880,24 @@ func credToken(cred pool.Cred) string {
 	return cred.Token
 }
 
+type claimFunc func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error)
+
+type sandboxVerbFunc func(string, string) error
+
+type checkpointClaimFunc func(string) (*types.Sandbox, error)
+
+type idActionFunc func(string) error
+
 type fakeManager struct {
 	ckptDir              string
 	hasCheckpoint        map[string]bool
-	claim                func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
-	warmClaim            func(ctx context.Context, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error)
-	release              func(id, token string) error
-	releaseOp            func(id string) error
+	claim                claimFunc
+	warmClaim            claimFunc
+	release              sandboxVerbFunc
+	releaseOp            idActionFunc
 	socket               func(id, token string) (string, error)
-	hibernate            func(id, token string) error
-	wake                 func(id, token string) error
+	hibernate            sandboxVerbFunc
+	wake                 sandboxVerbFunc
 	fork                 func(id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
 	promote              func(id, token, template string) error
 	promoteContentDigest string
@@ -1901,11 +1909,11 @@ type fakeManager struct {
 
 	audited          func(id string, line []byte)
 	checkpoint       func(id, token, name string) (types.Checkpoint, error)
-	claimCheckpoint  func(ckptID string) (*types.Sandbox, error)
-	healCheckpoint   func(ckptID string) (*types.Sandbox, error)
+	claimCheckpoint  checkpointClaimFunc
+	healCheckpoint   checkpointClaimFunc
 	healCalls        int
 	checkpoints      []types.Checkpoint
-	deleteCheckpoint func(ckptID string) error
+	deleteCheckpoint idActionFunc
 	setPools         func(pools []config.PoolSpec) error
 	infoPools        []pool.PoolInfo
 	claimDeadline    func(id, token string) (time.Time, error)
@@ -2208,6 +2216,7 @@ func (f *fakePlacer) TemplateVolumeOwners(probe string, _ []string) []string {
 }
 func (f *fakePlacer) VolumeHolders() map[string]int { return f.volumeHolders }
 func (f *fakePlacer) PeerAddrs() []string           { return f.addrs }
+func (f *fakePlacer) ClientAddr(addr string) string { return addr }
 func (f *fakePlacer) ConfigMismatches() int         { return 0 }
 
 type fakeProber struct {

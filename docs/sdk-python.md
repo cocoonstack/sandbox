@@ -462,7 +462,8 @@ zero.
   cwd that is not a directory, no exec bit) / `not_found` / `unimplemented` /
   `internal`
 - `ExitError(code, stderr, stdout)` — non-zero exit from `exec`
-- `ProtocolError` — broken stream (EOF, oversized or undecodable frame)
+- `ProtocolError` — a failed relay dial or TLS handshake, or a broken stream
+  (EOF, oversized or undecodable frame)
 
 ```python
 try:

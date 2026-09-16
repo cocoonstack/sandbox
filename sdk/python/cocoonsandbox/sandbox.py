@@ -1,7 +1,4 @@
-"""Sandbox: the data-plane handle. Every RPC opens one relayed silkd
-connection via the owner node; sessions and processes are server-side state,
-so nothing is lost between calls — including across a transparent hibernate
-wake."""
+"""Sandbox: the data-plane handle."""
 
 from __future__ import annotations
 
@@ -10,10 +7,10 @@ import socket
 import threading
 import time
 from collections.abc import Callable, Iterator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from .checkpoint import Checkpoint
-from .conn import Conn, _Closeable, dial_agent
+from .conn import Conn, _Closeable
 from .errors import APIError, ExitError, ProtocolError, SandboxError
 from .frames import BULK_CHUNK, FS_CHUNK
 from .template import Template
@@ -34,7 +31,7 @@ class Sandbox:
         deadline: str = "",
         from_checkpoint: str = "",
         template_digest: str = "",
-        volumes: list[dict] | None = None,
+        volumes: list[dict[str, str]] | None = None,
     ) -> None:
         self._client = client
         self.id = id
@@ -48,7 +45,7 @@ class Sandbox:
     def __enter__(self) -> Sandbox:
         return self
 
-    def __exit__(self, *exc) -> None:
+    def __exit__(self, *exc: object) -> None:
         try:
             self.close()
         except APIError:
@@ -59,14 +56,13 @@ class Sandbox:
         self,
         *argv: str,
         cwd: str = "",
-        env: dict | None = None,
+        env: dict[str, str] | None = None,
         user: str = "",
         session: str = "",
         stdin: bytes = b"",
         timeout: float | None = None,
     ) -> str:
-        """Runs argv to completion and returns stdout; a non-zero exit raises
-        ExitError carrying stderr. timeout is run()'s wall clock."""
+        """Runs argv to completion and returns stdout; a non-zero exit raises ExitError carrying stderr."""
         out, err = bytearray(), bytearray()
         code = self.run(
             list(argv),
@@ -87,7 +83,7 @@ class Sandbox:
         self,
         argv: list[str],
         cwd: str = "",
-        env: dict | None = None,
+        env: dict[str, str] | None = None,
         user: str = "",
         session: str = "",
         stdin: bytes = b"",
@@ -95,10 +91,7 @@ class Sandbox:
         on_stderr: Callable[[bytes], object] | None = None,
         timeout: float | None = None,
     ) -> int:
-        """Runs argv streaming stdio through the callbacks (raw bytes — chunk
-        boundaries may split multi-byte sequences); returns the exit code.
-        timeout is a wall clock over the dial and the run: at its end the
-        connection is cut, which kills the command, and TimeoutError is raised."""
+        """Streams raw output bytes and returns the exit code; timeout bounds the entire call."""
         if timeout is not None and timeout <= 0:
             raise ValueError("timeout must be positive")
         deadline = None if timeout is None else time.monotonic() + timeout
@@ -121,7 +114,6 @@ class Sandbox:
                     detach=False,
                     session=session or None,
                 )
-                # the guest stops draining stdin while blocked on stdout, so feeding it fully first deadlocks.
                 pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True)
                 pump.start()
                 code = _pump_stdio(conn, on_stdout, on_stderr)
@@ -137,22 +129,19 @@ class Sandbox:
             raise ProtocolError("exec stream ended without an exit frame")
         return code
 
-    def spawn(self, *argv: str, cwd: str = "", env: dict | None = None, user: str = "") -> int:
-        """Starts argv detached, returning its pid immediately; the process
-        keeps a bounded output ring readable later via logs()/attach()."""
+    def spawn(self, *argv: str, cwd: str = "", env: dict[str, str] | None = None, user: str = "") -> int:
+        """Starts a detached process with a bounded output ring and returns its pid."""
         started = self._call(
             "exec", "started", argv=list(argv), cwd=cwd or None, env=env, user=user or None, detach=True
         )
-        return started["pid"]
+        return cast(int, started["pid"])
 
-    def ps(self) -> list[dict]:
-        """Lists tracked processes: {pid, argv, detached, state,
-        exit_code?, started_at_epoch_secs}."""
-        return self._call("ps", "procs")["procs"]
+    def ps(self) -> list[dict[str, Any]]:
+        """Lists tracked processes: {pid, argv, detached, state, exit_code?, started_at_epoch_secs}."""
+        return cast(list[dict[str, Any]], self._call("ps", "procs")["procs"])
 
     def kill(self, pid: int, signal: int | None = None) -> None:
-        """Signals a tracked process (default SIGKILL); killing one that
-        already exited is a no-op success."""
+        """Signals a tracked process (default SIGKILL); killing one that already exited is a no-op success."""
         self._done_rpc("kill", pid=pid, signal=signal or None)
 
     def logs(
@@ -161,8 +150,7 @@ class Sandbox:
         on_stdout: Callable[[bytes], object] | None = None,
         on_stderr: Callable[[bytes], object] | None = None,
     ) -> int | None:
-        """Replays a process's ring-buffered output through the callbacks;
-        returns its exit code if it already exited, else None."""
+        """Replays buffered output and returns the exit code, or None if the process still runs."""
         return self._drain_proc("logs", pid, on_stdout, on_stderr)
 
     def attach(
@@ -171,9 +159,7 @@ class Sandbox:
         on_stdout: Callable[[bytes], object] | None = None,
         on_stderr: Callable[[bytes], object] | None = None,
     ) -> int | None:
-        """Replays buffered output then follows live output until the
-        process exits, returning its exit code (None only if the proc table
-        dropped it mid-attach)."""
+        """Replays then follows output; returns None if the process record disappears."""
         return self._drain_proc("attach", pid, on_stdout, on_stderr)
 
     def write_file(self, path: str, data: bytes, mode: int | None = None) -> None:
@@ -189,17 +175,17 @@ class Sandbox:
             conn.send("fs_read", path=path)
             return _drain_data(conn)
 
-    def list_dir(self, path: str) -> list[dict]:
+    def list_dir(self, path: str) -> list[dict[str, Any]]:
         with self._dial() as conn:
             conn.send("fs_list", path=path)
-            entries: list[dict] = []
+            entries: list[dict[str, Any]] = []
             for frame in conn.recv_until("done"):
                 entries.extend(frame.get("entries") or [])
             return entries
 
-    def stat(self, path: str) -> dict:
+    def stat(self, path: str) -> dict[str, Any]:
         """Returns {kind, size, mode, mtime_epoch_secs} for path."""
-        return self._call("fs_stat", "stat", path=path)["info"]
+        return cast(dict[str, Any], self._call("fs_stat", "stat", path=path)["info"])
 
     def mkdir(self, path: str, parents: bool = False) -> None:
         self._done_rpc("fs_mkdir", path=path, parents=parents or None)
@@ -211,8 +197,7 @@ class Sandbox:
         self._done_rpc("fs_rename", **{"from": src, "to": dst})
 
     def push(self, dest: str, tar_stream: bytes) -> None:
-        """Extracts a tar archive into dest — atomic against a truncated
-        stream; the only project-ingestion path on the no-network lane."""
+        """Extracts a tar stream into dest; a truncated stream leaves dest untouched."""
         with self._dial() as conn:
             conn.send("fs_push", dest=dest)
             _send_chunks(conn, tar_stream, chunk=BULK_CHUNK)
@@ -225,30 +210,27 @@ class Sandbox:
             conn.send("fs_pull", path=path)
             return _drain_data(conn)
 
-    def find(self, path: str, pattern: str, glob: str = "") -> list[dict]:
+    def find(self, path: str, pattern: str, glob: str = "") -> list[dict[str, Any]]:
         return list(self.find_iter(path, pattern, glob))
 
-    def find_iter(self, path: str, pattern: str, glob: str = "") -> Iterator[dict]:
-        """Yields matches as they stream. Closing the generator closes the
-        connection and ends the walk in the guest; wrap it in contextlib.closing
-        for deterministic cleanup, since only CPython finalizes on refcount."""
+    def find_iter(self, path: str, pattern: str, glob: str = "") -> Iterator[dict[str, Any]]:
+        """Yields matches as they stream."""
         with self._dial() as conn:
             conn.send("fs_find", path=path, pattern=pattern, glob=glob or None)
             for f in conn.recv_until("done"):
                 if f["type"] == "match":
                     yield f
 
-    def replace(self, files: list[str], pattern: str, replacement: str) -> list[dict]:
+    def replace(self, files: list[str], pattern: str, replacement: str) -> list[dict[str, Any]]:
         with self._dial() as conn:
             conn.send("fs_replace", files=files, pattern=pattern, replacement=replacement)
             return [f for f in conn.recv_until("done") if f["type"] == "replaced"]
 
     def git_clone(self, url: str, path: str, branch: str = "", depth: int = 0, auth: str = "") -> None:
-        """Clones into path (egress lane only; the none lane answers a typed
-        unimplemented error pointing at push)."""
+        """Clones into path (egress lane only; the none lane answers a typed unimplemented error pointing at push)."""
         self._done_rpc("git_clone", url=url, path=path, branch=branch or None, depth=depth or None, auth=auth or None)
 
-    def git_status(self, path: str) -> dict:
+    def git_status(self, path: str) -> dict[str, Any]:
         return self._call("git_status", "git_status_result", path=path)
 
     def git_add(self, path: str, files: list[str]) -> None:
@@ -256,7 +238,10 @@ class Sandbox:
 
     def git_commit(self, path: str, message: str, author: str) -> str:
         """Commits staged changes; returns the commit hash."""
-        return self._call("git_commit", "git_commit_result", path=path, message=message, author=author).get("hash", "")
+        return cast(
+            str,
+            self._call("git_commit", "git_commit_result", path=path, message=message, author=author).get("hash", ""),
+        )
 
     def git_push(self, path: str, auth: str = "") -> None:
         self._done_rpc("git_push", path=path, auth=auth or None)
@@ -264,7 +249,7 @@ class Sandbox:
     def git_pull(self, path: str, auth: str = "") -> None:
         self._done_rpc("git_pull", path=path, auth=auth or None)
 
-    def git_branches(self, path: str) -> dict:
+    def git_branches(self, path: str) -> dict[str, Any]:
         return self._call("git_branch", "git_branches", path=path, action="list")
 
     def git_checkout(self, path: str, name: str) -> None:
@@ -277,14 +262,12 @@ class Sandbox:
         self._done_rpc("git_branch", path=path, action="delete", name=name)
 
     def watch(self, path: str, recursive: bool = False) -> Watcher:
-        """Streams filesystem events under path; events after the returned
-        Watcher exists are guaranteed captured. Close it to stop."""
+        """Streams filesystem events under path; events after the returned Watcher exists are guaranteed captured."""
         conn, _ = self._open_stream("fs_watch", path=path, recursive=recursive or None)
         return Watcher(conn)
 
-    def session(self, cwd: str = "", env: dict | None = None) -> Session:
-        """Creates a persistent shell: cd/export/aliases survive across exec
-        calls routed into it."""
+    def session(self, cwd: str = "", env: dict[str, str] | None = None) -> Session:
+        """Creates a persistent shell: cd/export/aliases survive across exec calls routed into it."""
         created = self._call("session_create", "session_created", cwd=cwd or None, env=env)
         return Session(self, created["id"])
 
@@ -292,8 +275,7 @@ class Sandbox:
         return self._call("session_list", "sessions").get("sessions") or []
 
     def fork(self, count: int, ttl_seconds: int = 0) -> list[Sandbox]:
-        """Clones this sandbox into count independent children carrying its
-        exact memory and disk state; all-or-nothing."""
+        """Clones memory and disk into independent children, all-or-nothing."""
         body = {"token": self.token, "count": count}
         if ttl_seconds:
             body["ttl_seconds"] = ttl_seconds
@@ -301,15 +283,13 @@ class Sandbox:
         return [self._client._handle_from(self.owner, child) for child in reply.get("children") or []]
 
     def hibernate(self) -> None:
-        """Snapshots and stops the VM, freeing its memory; the next call that
-        reaches the guest wakes it transparently, state intact."""
+        """Snapshots and stops the VM; the next guest call restores its state."""
         self._client._request(
             self.owner, "POST", f"/v1/sandboxes/{self.id}/hibernate", None, "hibernate", bearer=self.token
         )
 
     def checkpoint(self, name: str = "") -> Checkpoint:
-        """Captures full state without stopping the sandbox; the returned
-        Checkpoint branches fresh sandboxes from that exact moment."""
+        """Captures a branchable snapshot without stopping the sandbox."""
         body = {"token": self.token}
         if name:
             body["name"] = name
@@ -317,8 +297,7 @@ class Sandbox:
         return Checkpoint(self._client, self.owner, reply["checkpoint"])
 
     def promote(self, template: str) -> Template:
-        """Publishes this sandbox's state as a claimable template on its
-        node; the returned handle is bound to that node."""
+        """Publishes a claimable template and returns an owner-bound handle."""
         reply = self._client._post_json(
             self.owner, f"/v1/sandboxes/{self.id}/promote", {"token": self.token, "template": template}, "promote"
         )
@@ -333,38 +312,33 @@ class Sandbox:
         )
 
     def start_lsp(self, language: str, root: str = "") -> Lsp:
-        """Spawns the language server the flavor image provides for language;
-        the base image ships none, so it raises SilkdError(kind="not_found").
-        The returned handle streams JSON-RPC over the relay."""
+        """Starts the registered language server; missing servers raise not_found."""
         started = self._call("lsp_start", "lsp_started", language=language, root=root or None)
         return Lsp(self, started["server_id"])
 
-    def open_pty(self, cols: int = 80, rows: int = 24, cwd: str = "", env: dict | None = None, user: str = "") -> Pty:
-        """Runs the guest shell under a pty; returns a byte-stream handle.
-        A pty is a process guest-side: resize goes through its pid."""
+    def open_pty(
+        self, cols: int = 80, rows: int = 24, cwd: str = "", env: dict[str, str] | None = None, user: str = ""
+    ) -> Pty:
+        """Runs the guest shell under a pty; returns a byte-stream handle."""
         conn, started = self._open_stream(
             "pty_open", expect="started", cols=cols, rows=rows, cwd=cwd or None, env=env, user=user or None
         )
         return Pty(self, conn, started["pid"])
 
     def proxy_port(self, local_addr: str, port: int) -> socket.socket:
-        """Serves a guest port on a local listener for unmodified local
-        tools; returns the listening socket (close it to stop). local_addr
-        is "host:port"; port 0 picks a free one."""
+        """Serves a guest port on a local socket; closing the listener stops new connections."""
         host, _, lport = local_addr.rpartition(":")
         listener = socket.create_server((host or "127.0.0.1", int(lport)))
         threading.Thread(target=self._proxy_accept_loop, args=(listener, port), daemon=True).start()
         return listener
 
     def preview_url(self, port: int, ttl_seconds: int = 0) -> str:
-        """Mints a shareable URL serving the guest HTTP port from a browser,
-        valid for ttl_seconds (the node clamps it to the claim's lease).
-        Requires the node to have preview configured."""
+        """Mints a guest HTTP URL whose lifetime is clamped to the claim's lease."""
         body = {"token": self.token, "port": port}
         if ttl_seconds:
             body["ttl_seconds"] = ttl_seconds
         reply = self._client._post_json(self.owner, f"/v1/sandboxes/{self.id}/preview", body, "preview")
-        return reply["url"]
+        return cast(str, reply["url"])
 
     def dial_port(self, port: int) -> PortConn:
         """Opens a byte stream to 127.0.0.1:port inside the guest."""
@@ -372,9 +346,7 @@ class Sandbox:
         return PortConn(conn)
 
     def close(self) -> None:
-        """Releases the sandbox; its VM is destroyed. Releasing one already
-        gone is not an error — double-release and reap races stay silent,
-        matching the Go SDK."""
+        """Releases the sandbox; its VM is destroyed."""
         try:
             self._client._request(
                 self.owner, "POST", f"/v1/sandboxes/{self.id}/release", None, "release", bearer=self.token
@@ -384,11 +356,9 @@ class Sandbox:
                 raise
 
     def _dial(self, deadline: float | None = None) -> Conn:
-        return dial_agent(self.owner, self.id, self.token, self._client.timeout, deadline)
+        return self._client._dial(self.owner, self.id, self.token, deadline)
 
-    def _open_stream(self, op: str, expect: str = "ready", **fields) -> tuple[Conn, dict]:
-        """Dials, sends op, and waits for the handshake frame, closing the
-        conn on any failure so no socket leaks on the error path."""
+    def _open_stream(self, op: str, expect: str = "ready", **fields: object) -> tuple[Conn, dict[str, Any]]:
         conn = self._dial()
         try:
             conn.send(op, **fields)
@@ -411,14 +381,13 @@ class Sandbox:
             local.close()
             return
 
-        def pump_out():
+        def pump_out() -> None:
             with contextlib.suppress(SandboxError, OSError):
                 while True:
                     chunk = guest.recv()
                     if not chunk:
                         break
                     local.sendall(chunk)
-            # a close cannot wake the read below, and the socket outlives it
             with contextlib.suppress(OSError):
                 local.shutdown(socket.SHUT_WR)
 
@@ -431,7 +400,6 @@ class Sandbox:
                     if not chunk:
                         break
                     guest.send(chunk)
-            # half-close, not close: the guest's reply is still in flight.
             with contextlib.suppress(SandboxError, OSError):
                 guest.close_write()
             pump.join()
@@ -440,12 +408,12 @@ class Sandbox:
             with contextlib.suppress(OSError):
                 local.close()
 
-    def _call(self, op: str, expect: str, **fields) -> dict:
+    def _call(self, op: str, expect: str, **fields: object) -> dict[str, Any]:
         with self._dial() as conn:
             conn.send(op, **fields)
             return _expect(conn, expect)
 
-    def _done_rpc(self, op: str, **fields) -> None:
+    def _done_rpc(self, op: str, **fields: object) -> None:
         self._call(op, "done", **fields)
 
     def _drain_proc(
@@ -482,8 +450,7 @@ class Watcher(_Closeable):
         self._conn = conn
         self.error: Exception | None = None
 
-    def __iter__(self) -> Iterator[dict]:
-        # a transport failure ends iteration and sets error; a SilkdError frame propagates.
+    def __iter__(self) -> Iterator[dict[str, Any]]:
         while True:
             try:
                 frame = self._conn.recv()
@@ -507,8 +474,7 @@ class Pty(_Closeable):
         self.exit_code: int | None = None
 
     def read(self) -> bytes:
-        """The next output chunk; b'' once the shell exits, after which
-        exit_code holds the shell's status."""
+        """The next output chunk; b'' once the shell exits, after which exit_code holds the shell's status."""
         frame = self._conn.recv()
         if frame["type"] == "exit":
             self.exit_code = frame.get("code")
@@ -526,17 +492,14 @@ class Pty(_Closeable):
 
 
 class Lsp(_Closeable):
-    """A language server in the sandbox, spoken to over the relay. silkd is a
-    broker: it pipes JSON-RPC bytes; the caller frames and correlates."""
+    """A language server in the sandbox, spoken to over the relay."""
 
     def __init__(self, sandbox: Sandbox, server_id: str) -> None:
         self._sandbox = sandbox
         self.server_id = server_id
 
     def request(self) -> PortConn:
-        """Opens the JSON-RPC byte stream: writes go to the server's stdin,
-        recv returns its stdout. A server serves one request for its
-        lifetime; closing the stream ends the session and reaps it."""
+        """Opens the JSON-RPC byte stream: writes go to the server's stdin, recv returns its stdout."""
         conn, _ = self._sandbox._open_stream("lsp_request", server_id=self.server_id)
         return PortConn(conn)
 
@@ -570,7 +533,6 @@ class PortConn(_Closeable):
     def close_write(self) -> None:
         """Half-close: signals EOF to the guest side; reads keep working."""
         self._conn.send("data_end")
-        self._conn.close_write()
 
     def close(self) -> None:
         self._conn.close()
@@ -606,8 +568,6 @@ def _feed_stdin(conn: Conn, stdin: bytes) -> None:
 def _pump_stdio(
     conn: Conn, on_stdout: Callable[[bytes], object] | None, on_stderr: Callable[[bytes], object] | None
 ) -> int | None:
-    """Streams stdout/stderr frames into the callbacks until the terminal
-    frame: the exit code, or None when the stream ends with done."""
     for frame in conn.recv_until("exit", "done"):
         t = frame["type"]
         if t == "stdout" and on_stdout:
@@ -615,11 +575,11 @@ def _pump_stdio(
         elif t == "stderr" and on_stderr:
             on_stderr(frame["data"])
         elif t == "exit":
-            return frame["code"]
+            return cast(int, frame["code"])
     return None
 
 
-def _expect(conn: Conn, frame_type: str) -> dict:
+def _expect(conn: Conn, frame_type: str) -> dict[str, Any]:
     frame = conn.recv()
     if frame["type"] != frame_type:
         raise ProtocolError(f"expected {frame_type}, got {frame['type']}")

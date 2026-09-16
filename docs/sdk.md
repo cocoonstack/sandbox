@@ -109,7 +109,59 @@ client, err := sandbox.Connect("10.0.0.5:7777",
   `Info` answer it 403). On a cluster every node shares the same root token
   and the same tenants set.
 - `WithHTTPClient(client)` — replace the control-plane HTTP client when the
-  caller needs a custom transport, proxy, or timeout.
+  caller needs a custom transport, proxy, or timeout. An `http.Transport`'s
+  TLS configuration also supplies the agent relay's certificate settings;
+  HTTP proxies and custom dialers apply only to control requests.
+- `WithTLSConfig(config)` — set certificate verification for both HTTPS
+  requests and agent relays. With `WithHTTPClient`, its transport must be an
+  `*http.Transport`; the SDK clones it rather than changing the caller's client.
+
+### HTTPS endpoints
+
+Both SDKs accept `host:port` (plain HTTP), `http://host[:port]`, or
+`https://host[:port]`. The default ports are 80 and 443. IPv6 hosts use brackets.
+Endpoints are origins: no userinfo, path prefix, query, or fragment.
+
+For a public certificate, only the address changes:
+
+```go
+client, err := sandbox.Connect("https://node-a.sandbox.example.com",
+    sandbox.WithAPIToken(os.Getenv("SANDBOXD_TOKEN")))
+```
+
+For a private CA, load it into an `x509.CertPool` and pass
+`sandbox.WithTLSConfig(&tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12})`.
+The same trust configuration covers control requests and every agent relay.
+Certificate and hostname verification are enabled by default.
+
+Python uses a standard `ssl.SSLContext`:
+
+```python
+import os
+import ssl
+from cocoonsandbox import Client
+
+client = Client(
+    "https://node-a.sandbox.example.com",
+    api_token=os.environ["SANDBOXD_TOKEN"],
+    ssl_context=ssl.create_default_context(cafile="edge-ca.pem"),
+)
+with client.new("rt:24.04") as sb:
+    assert sb.run(["true"]) == 0
+```
+
+Omit `ssl_context` for system trust. The SDK configures that context for
+HTTP/1.1; use a dedicated context if another caller requires a different ALPN.
+TLS handshakes share the existing dial timeout/cancellation budget. The agent
+connection then uses HTTP/1.1 `Upgrade: silkd` and remains a bidirectional
+stream; the guest protocol and port-forwarding frames do not change.
+
+An explicit scheme in an owner, redirect, peer, or `Attach` address wins;
+a bare address inherits the entry client's scheme. Trust settings are shared
+across these connections. The SDK does not translate private addresses to
+public names: configure each node's `client_advertise` as described in
+[TLS deployment](deploy.md#tls-for-sdk-clients). Persist the complete owner URL
+with the sandbox ID and token when using `Attach` in another process.
 
 ### Connecting to clusters
 

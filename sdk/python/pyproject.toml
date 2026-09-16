@@ -13,6 +13,10 @@ readme = "README.md"
 [tool.setuptools.packages.find]
 include = ["cocoonsandbox*"]
 
+[tool.mypy]
+strict = true
+files = ["cocoonsandbox"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py39"

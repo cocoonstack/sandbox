@@ -1,6 +1,4 @@
-// sandboxd is the per-node sandbox control plane: it keeps warm pools of
-// claim-ready microVMs, serves claims over HTTP, and relays the silkd data
-// plane between clients and guests.
+// sandboxd is the per-node sandbox control plane: it keeps warm pools of claim-ready microVMs, serves claims over HTTP, and relays the silkd data plane between clients and guests.
 package main
 
 import (
@@ -32,13 +30,11 @@ import (
 )
 
 const (
-	shutdownGrace  = 5 * time.Second
-	gossipInterval = time.Second
-	// Slowloris protection; ReadTimeout/WriteTimeout must stay zero for streaming relays.
+	shutdownGrace     = 5 * time.Second
+	gossipInterval    = time.Second
 	readHeaderTimeout = 5 * time.Second
 )
 
-// Stamped via -ldflags at release; devel builds fall back to the VCS revision.
 var version = "devel"
 
 func main() {
@@ -92,7 +88,6 @@ func main() {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// a node that cannot reconcile cannot trust its view of local VMs.
 	if err := mgr.Reconcile(ctx); err != nil {
 		logger.Fatalf(ctx, err, "reconcile")
 	}
@@ -133,7 +128,7 @@ func main() {
 	if cfg.PreviewListen != "" {
 		preview = server.NewPreviewServer(cfg.PreviewSecret, cfg.PreviewAdvertise, cfg.AdvertiseAddr, mgr)
 	}
-	srv := server.New(cfg.APIToken, cfg.Tenants, cfg.AdvertiseAddr, mgr, eng, placer, prober, probeKey, preview)
+	srv := server.New(cfg.APIToken, cfg.Tenants, cmp.Or(cfg.ClientAdvertise, cfg.AdvertiseAddr), mgr, eng, placer, prober, probeKey, preview)
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           srv.Handler(),
@@ -157,7 +152,6 @@ func main() {
 	drained := make(chan struct{})
 	context.AfterFunc(ctx, func() {
 		defer close(drained)
-		// must outlive the canceled signal ctx to bound the drain.
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownGrace)
 		defer cancel()
 		_ = httpSrv.Shutdown(sctx)
@@ -169,7 +163,6 @@ func main() {
 		logger.Fatalf(ctx, err, "serve")
 	}
 	<-drained
-	// a detached recommit may not have converged; leave disk matching memory.
 	if err := mgr.FlushClaims(); err != nil {
 		logger.Error(ctx, err, "flush claims")
 	}
@@ -197,7 +190,7 @@ func startMesh(ctx context.Context, cfg *config.Config, mgr *pool.Manager) (*mes
 	if err != nil {
 		return nil, err
 	}
-	// publish the config digest before Join, so the first gossip carries it.
+	msh.SetSelfClientAddr(cfg.ClientAdvertise)
 	msh.SetSelfDigest(cfg.ClusterDigest(mgr.EgressCAFingerprint()))
 	msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
 	if err := msh.Join(mc.Join); err != nil {

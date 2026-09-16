@@ -1,13 +1,14 @@
-"""One relayed silkd connection per RPC: a raw TCP socket hand-upgraded to
-the sandboxd agent relay (Upgrade: silkd), then newline-JSON frames."""
+"""Silkd frames over an HTTP(S) Upgrade relay."""
 
 from __future__ import annotations
 
 import contextlib
 import socket
+import ssl
 import time
+import urllib.parse
 from collections.abc import Iterator
-from typing import BinaryIO, TypeVar
+from typing import Any, BinaryIO, Protocol, TypeVar
 
 from .errors import APIError, ProtocolError, SilkdError
 from .frames import MAX_FRAME, decode_response, encode_request
@@ -15,20 +16,22 @@ from .frames import MAX_FRAME, decode_response, encode_request
 _CloseableT = TypeVar("_CloseableT", bound="_Closeable")
 
 
-class _Closeable:
+class _Closeable(Protocol):
     """Context-manager mixin for handles whose exit is just close()."""
 
     def __enter__(self: _CloseableT) -> _CloseableT:
         return self
 
-    def __exit__(self, *exc) -> None:
+    def __exit__(self, *exc: object) -> None:
         self.close()
+
+    def close(self) -> None: ...
 
 
 class Conn(_Closeable):
     """A live frame stream to one sandbox's silkd, via the owner node."""
 
-    def __init__(self, sock: socket.socket, reader: BinaryIO):
+    def __init__(self, sock: socket.socket, reader: BinaryIO) -> None:
         self._sock = sock
         self._reader = reader
 
@@ -40,10 +43,8 @@ class Conn(_Closeable):
         with contextlib.suppress(OSError):
             self._sock.shutdown(socket.SHUT_RDWR)
 
-    def recv(self) -> dict:
-        """Returns the next frame; raises SilkdError on an error frame and
-        ProtocolError on EOF, an oversized line, or an undecodable one — every
-        failure is typed."""
+    def recv(self) -> dict[str, Any]:
+        """Reads one frame or raises a typed protocol or guest error."""
         try:
             line = self._reader.readline(MAX_FRAME + 1)
         except OSError as exc:
@@ -60,18 +61,13 @@ class Conn(_Closeable):
             raise SilkdError(frame.get("kind", "internal"), frame.get("message", ""))
         return frame
 
-    def recv_until(self, *terminal: str) -> Iterator[dict]:
-        """Yields frames until one of the terminal types arrives; the
-        terminal frame is yielded last."""
+    def recv_until(self, *terminal: str) -> Iterator[dict[str, Any]]:
+        """Yields frames until one of the terminal types arrives; the terminal frame is yielded last."""
         while True:
             frame = self.recv()
             yield frame
             if frame["type"] in terminal:
                 return
-
-    def close_write(self) -> None:
-        with contextlib.suppress(OSError):
-            self._sock.shutdown(socket.SHUT_WR)
 
     def close(self) -> None:
         self.abort()
@@ -81,24 +77,40 @@ class Conn(_Closeable):
             self._sock.close()
 
 
-def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float, deadline: float | None = None) -> Conn:
+def dial_agent(
+    addr: str,
+    sandbox_id: str,
+    token: str,
+    timeout: float,
+    deadline: float | None = None,
+    *,
+    ssl_context: ssl.SSLContext | None = None,
+) -> Conn:
     """Opens one TCP/HTTP Upgrade relay within timeout and the optional deadline."""
-    # id/token interpolate into the raw request line; CR/LF would inject headers.
     for name, value in (("sandbox id", sandbox_id), ("token", token)):
         if any(c in value for c in "\r\n\0"):
             raise APIError("agent upgrade", 0, f"{name} contains a control character")
-    host, port = addr.rsplit(":", 1)
+    endpoint = urllib.parse.urlsplit(addr if "://" in addr else f"http://{addr}")
+    host = endpoint.hostname
+    port = endpoint.port or (443 if endpoint.scheme == "https" else 80)
     try:
-        sock = socket.create_connection((host, int(port)), timeout=_remaining_timeout(timeout, deadline))
+        sock = socket.create_connection((host, port), timeout=_remaining_timeout(timeout, deadline))
     except OSError as exc:
         raise ProtocolError(f"dial {addr}: {exc}") from exc
-    # Nagle off: exec/write send small back-to-back frames before the first read.
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     reader = None
     try:
+        if endpoint.scheme == "https":
+            context = ssl_context or ssl.create_default_context()
+            sock = context.wrap_socket(sock, server_hostname=host, do_handshake_on_connect=False)
+            sock.settimeout(_remaining_timeout(timeout, deadline))
+            try:
+                sock.do_handshake()
+            except OSError as exc:
+                raise ProtocolError(f"tls handshake {addr}: {exc}") from exc
         request = (
             f"GET /v1/sandboxes/{sandbox_id}/agent HTTP/1.1\r\n"
-            f"Host: {addr}\r\n"
+            f"Host: {endpoint.netloc}\r\n"
             "Connection: Upgrade\r\n"
             "Upgrade: silkd\r\n"
             f"Authorization: Bearer {token}\r\n"
@@ -126,7 +138,6 @@ def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float, deadline:
                 except ValueError as exc:
                     raise ProtocolError("invalid content-length in upgrade reply") from exc
         if code != 101:
-            # a bogus content-length must not buffer unbounded bytes.
             sock.settimeout(_remaining_timeout(timeout, deadline))
             body = reader.read(min(body_len, MAX_FRAME)).decode(errors="replace") if body_len else ""
             raise APIError("agent upgrade", code, body.strip() or status.strip())
@@ -134,7 +145,6 @@ def dial_agent(addr: str, sandbox_id: str, token: str, timeout: float, deadline:
         sock.settimeout(None)
         return Conn(sock, reader)
     except Exception:
-        # makefile() holds a ref on the socket; close it too or the fd lingers.
         if reader is not None:
             reader.close()
         sock.close()

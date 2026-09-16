@@ -54,6 +54,10 @@ A claim always enters at whatever node the client dialed:
 
 The data plane is never proxied between nodes: the claim response carries
 `owner_addr` and all sandbox traffic dials the owner directly.
+Behind a TLS edge, set each node's `client_advertise` to its own public HTTPS
+origin. Owner, redirect, and peer responses use these origins; gossip, peer
+probes, and preview forwarding retain the internal `advertise_addr`. See
+[TLS termination](deploy.md#tls-for-sdk-clients) for the edge setup.
 
 Node death is honest: a dead node's sandboxes die with it (memory state is
 node-local by design). SWIM detects the death and peers stop redirecting to

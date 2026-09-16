@@ -15,11 +15,28 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
-// retryAfterSeconds bounds a waiting client to a few probes a minute.
 const retryAfterSeconds = "10"
 
-// tenantKey carries the resolved tenant scope ("" = root) on the request context.
 type tenantKey struct{}
+
+func (s *Server) writeRedirect(w http.ResponseWriter, addrs []string) bool {
+	if len(addrs) == 0 {
+		return false
+	}
+	writeJSON(w, http.StatusOK, types.ClaimResponse{Redirect: s.clientAddrs(addrs)})
+	return true
+}
+
+func (s *Server) clientAddrs(addrs []string) []string {
+	if s.placer == nil {
+		return addrs
+	}
+	clients := make([]string, len(addrs))
+	for i, addr := range addrs {
+		clients[i] = s.placer.ClientAddr(addr)
+	}
+	return clients
+}
 
 func withTenant(ctx context.Context, tenant string) context.Context {
 	return context.WithValue(ctx, tenantKey{}, tenant)
@@ -35,7 +52,6 @@ func bearerToken(r *http.Request) (string, bool) {
 	return token, ok && token != ""
 }
 
-// sandboxToken extracts the per-sandbox bearer token, answering 401 itself.
 func sandboxToken(w http.ResponseWriter, r *http.Request) (string, bool) {
 	token, ok := bearerToken(r)
 	if !ok {
@@ -44,7 +60,6 @@ func sandboxToken(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return token, ok
 }
 
-// decodeBody parses a JSON request body, answering 400 itself on failure.
 func decodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var v T
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&v); err != nil {
@@ -54,7 +69,6 @@ func decodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	return v, true
 }
 
-// decodeBodyStrict is decodeBody for operator bodies, where a mistyped key must fail.
 func decodeBodyStrict[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var v T
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
@@ -69,11 +83,9 @@ func decodeBodyStrict[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	return v, true
 }
 
-// writePoolErr answers a pool-sentinel error, reporting whether it handled err.
 func writePoolErr(w http.ResponseWriter, err error) bool {
 	for _, m := range poolErrHTTP {
 		if errors.Is(err, m.err) {
-			// a 503 is node exhaustion, not a caller error, so the client should retry
 			if m.code == http.StatusServiceUnavailable {
 				w.Header().Set("Retry-After", retryAfterSeconds)
 			}
@@ -93,15 +105,6 @@ func writeResult(w http.ResponseWriter, r *http.Request, op, id, failMsg string,
 	default:
 		ok()
 	}
-}
-
-// writeRedirect answers with the claim protocol's redirect shape, reporting whether it did.
-func writeRedirect(w http.ResponseWriter, addrs []string) bool {
-	if len(addrs) == 0 {
-		return false
-	}
-	writeJSON(w, http.StatusOK, types.ClaimResponse{Redirect: addrs})
-	return true
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

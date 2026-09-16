@@ -83,8 +83,6 @@ func (f *Fake) ServeConn(conn net.Conn) {
 		ptyEcho(conn, r)
 	case *wire.PtyResize:
 		send(conn, wire.Done{})
-	case *wire.PortForward:
-		portEcho(conn, r, req.Port)
 	default:
 		if !serveCommon(conn, r, req) {
 			errFrame(conn, wire.KindUnimplemented, "silkdtest: "+req.Op())

@@ -99,7 +99,8 @@ sandboxd reads one JSON file (`-config`, default
 | `restore_mode` | unset | clone and wake-restore memory mode: `copy`, `ondemand`, or `mmap`; use `mmap` for dense pools |
 | `no_direct_io` | false | use buffered writable disks for Cloud Hypervisor cold boots and clones; recommended for dense ephemeral pools to avoid direct-I/O CoW journal contention |
 | `no_balloon` | false | boot pool and template VMs without the virtio-balloon (cocoon otherwise returns 25% of guest memory to the host); clones inherit it from the golden. A guest that thrashes before deflate-on-OOM fires — a 16G build tier running a large typecheck — needs its whole memory |
-| `advertise_addr` | = `listen` | the host:port clients reach this node at; returned as a claim's owner address and gossiped to peers. Must be routable when `listen` is a wildcard; a node with `mesh` set refuses to load while it names an unspecified host |
+| `advertise_addr` | = `listen` | internal HTTP host:port for peer traffic and preview forwarding; also used by clients when `client_advertise` is unset. Must be routable when `listen` is a wildcard; a node with `mesh` set refuses to load while it names an unspecified host |
+| `client_advertise` | unset | client-facing HTTP(S) origin for this node, e.g. `https://node-a.sandbox.example.com`; published in owner, redirect, and peer responses. No path, query, fragment, or userinfo |
 | `bridges` / `networks` | unset | egress-lane attachment: a list of host bridge devices, or a list of CNI conflist names. Mutually exclusive; with neither set the node serves only the no-network lane. A Linux bridge holds at most 1024 ports (kernel `BR_MAX_PORTS`), so an N-entry list raises the node's egress ceiling to N×1024 — VMs spread over the list by a stable hash of the VM name, so size it with headroom (the spread is statistical, not exact). `bridges` keeps the raw TAP-on-bridge attachment (taps in the root netns, no per-VM network namespace or CNI plugin execution); `networks` runs the CNI chain per VM. [Guarded egress](egress.md) on the egress lane (an egress-lane pool policy or any tenant policy) needs `bridges` and rejects a CNI network at load; none-lane pool policies ride the proxy on either |
 | `volumes` | unset | node-local catalog of operator-managed dataset images: `[ {"name":"imagenet","path":"/srv/datasets/imagenet.img","directio":"off","tenants":["acme"]}, {"name":"scratch-db","path":"/srv/datasets/scratch.img","writable":true} ]`. Names match `^[a-z][a-z0-9_-]{0,19}$` and cannot start with `cocoon-`; paths are absolute; `directio` is `on`, `off`, or `auto` and defaults to `off` for both read-only and writable entries. `tenants` is an optional access list: empty means every authenticated scope, while every listed name must exist in the node's `tenants` config; root always has access. `writable` (default `false`) lets a claim request `mode: "rw"` on that entry — see [Dataset volumes](#dataset-volumes). The catalog is intentionally not part of the cluster digest |
 | `secrets` | unset | node-side credentials the egress proxy injects by name: `[{"name": "gh", "header": "Authorization", "value_env": "GH_TOKEN"}]`. A pool or tenant rule references the name; the value comes from the environment, never this file. See [egress](egress.md) |
@@ -457,6 +458,84 @@ using prebuilt binaries, also set `VOLUME_SMOKE_BIN` beside `SANDBOXD_BIN`,
 Add `VOLUME_RW_IMAGE=/srv/datasets/scratch.img` (a second, writable image) to
 also run the writable leg: a durable write across release, second-writer
 exclusion, and a clean read-only claim afterward.
+
+## TLS for SDK clients
+
+sandboxd serves plain HTTP behind a TLS-terminating proxy. Configure a stable
+client origin on **every node** reachable through that proxy:
+
+```json
+{
+  "listen": ":7777",
+  "advertise_addr": "node-a.internal:7777",
+  "client_advertise": "https://node-a.sandbox.example.com"
+}
+```
+
+The mesh gossips both addresses. Client-facing owner replies, claim/template/
+checkpoint redirects, and peer discovery use `client_advertise`. Checkpoint
+probing, healing, deletion broadcasts, and preview forwarding continue to use
+`advertise_addr` over internal HTTP. When `client_advertise` is unset, direct
+HTTP deployments keep their existing address behavior. Configure all cluster
+members before using external clients; a member without a client origin still
+advertises its internal address to clients. Internal SDK users must also be
+able to reach the configured client origins.
+
+One proxy can serve the whole cluster, but each owner origin must route to
+one particular node. An entry load balancer may choose any node for the initial
+claim; a shared random-balancing owner origin cannot route later agent and
+release requests to the owning node. Unlike Preview URLs, the SDK API does not
+forward arbitrary sandbox requests between nodes.
+
+Caddy reference configuration (node B uses the corresponding hostname and
+internal upstream):
+
+```caddyfile
+node-a.sandbox.example.com {
+    reverse_proxy node-a.internal:7777 {
+        transport http {
+            versions 1.1
+        }
+    }
+}
+
+node-b.sandbox.example.com {
+    reverse_proxy node-b.internal:7777 {
+        transport http {
+            versions 1.1
+        }
+    }
+}
+```
+
+For a private development CA, add `tls internal` to each site and provide
+Caddy's root certificate to both SDKs using the
+[TLS client settings](sdk.md#https-endpoints). For public DNS names, Caddy can
+manage the certificates. Keep the upstream listeners and mesh private.
+
+The edge must pass HTTP/1.1 `Connection: Upgrade`, `Upgrade: silkd`, and the
+101 response, then relay both byte streams without response buffering. A
+WebSocket-only upgrade allowlist is insufficient. Agent connections must not
+negotiate HTTP/2. Configure stream/idle timeouts to exceed the longest relay;
+Caddy's default stream timeout is unlimited. Configuration reloads may close
+active streams; set `stream_close_delay` when reloads need a drain window.
+The Upgrade tunnel does not need `flush_interval -1`.
+
+The pinned Caddy integration runs both SDKs against two real sandboxd HTTP
+handlers and relays (with a fake VM/guest), with an unreachable internal owner
+address. It checks redirects, lookup, exec, port forwarding, half-close,
+release, and certificate rejection:
+
+```bash
+cd e2e
+CADDY_BIN=/path/to/caddy GOWORK=off go test -race -run TestCaddyTLSCluster -v .
+```
+
+For hardware acceptance, run the same SDK sequence from outside the node
+network, including a guest HTTP server through `proxy_port`, and confirm an
+A-to-B claim never dials B's internal address. A client-side TLS bridge alone
+does not translate returned owners or redirects; use it only when every
+returned endpoint is deliberately mapped through a local bridge.
 
 ## Preview URLs
 

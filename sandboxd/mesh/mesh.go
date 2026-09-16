@@ -1,11 +1,8 @@
-// Package mesh gossips per-node warm counts, promoted templates, and available
-// volume names over a hashicorp/memberlist SWIM cluster. Gossip carries only
-// placement hints — per-sandbox state stays node-local — so a stale view costs
-// at most one failed redirect, never correctness. A single node with no seeds
-// is a valid mesh of one.
+// Package mesh gossips per-node warm counts, promoted templates, and available volume names over a hashicorp/memberlist SWIM cluster.
 package mesh
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -21,22 +18,21 @@ import (
 )
 
 const (
-	// leaveTimeout bounds the graceful-leave broadcast so a wedged network cannot hang the exit path.
 	leaveTimeout = time.Second
 
-	// epochLease keeps the durable floor ahead of the counter, off the gossip tick.
 	epochLease = 1024
 )
 
 // NodeState is one node's gossiped placement view; the higher Epoch wins a merge.
 type NodeState struct {
-	NodeID    string         `json:"node_id"`
-	Addr      string         `json:"addr"` // data-plane advertise address
-	Epoch     uint64         `json:"epoch"`
-	Pools     map[string]int `json:"pools"`               // PoolKey hash → warm count
-	Templates []string       `json:"templates,omitempty"` // promoted-template key hashes on disk
-	Volumes   []string       `json:"volumes,omitempty"`   // locally available dataset names
-	Digest    string         `json:"digest,omitempty"`    // cluster-invariant config digest
+	NodeID     string         `json:"node_id"`
+	Addr       string         `json:"addr"` // data-plane advertise address
+	ClientAddr string         `json:"client_addr,omitempty"`
+	Epoch      uint64         `json:"epoch"`
+	Pools      map[string]int `json:"pools"`               // PoolKey hash → warm count
+	Templates  []string       `json:"templates,omitempty"` // promoted-template key hashes on disk
+	Volumes    []string       `json:"volumes,omitempty"`   // locally available dataset names
+	Digest     string         `json:"digest,omitempty"`    // cluster-invariant config digest
 }
 
 type nodeMatch func(NodeState) bool
@@ -45,10 +41,8 @@ type nodeMatch func(NodeState) bool
 type Mesh struct {
 	ml        *memberlist.Memberlist
 	epochPath string
-	// ctx is the daemon's, for logging inside memberlist callbacks.
-	ctx context.Context
+	ctx       context.Context
 
-	// updateMu serializes UpdateSelf and guards leased; one shared epoch read drops a payload.
 	updateMu sync.Mutex
 	leased   uint64
 
@@ -61,7 +55,6 @@ type Mesh struct {
 // New starts a mesh member listening per cfg.
 func New(ctx context.Context, cfg *memberlist.Config, nodeID, selfAddr string, secretKey []byte, dataDir string) (*Mesh, error) {
 	epochPath := filepath.Join(dataDir, "mesh-epoch")
-	// seed strictly above the persisted floor: merge's `>` rejects a tie with a stale copy.
 	epoch := max(uint64(time.Now().UnixNano()), loadEpoch(epochPath)+1) //nolint:gosec // UnixNano is positive for current times
 	m := &Mesh{
 		ctx:       ctx,
@@ -117,7 +110,6 @@ func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates, 
 	}
 	epoch := m.self.Epoch + 1
 	m.mu.Unlock()
-	// the durable floor must stay above anything gossiped: memberlist publishes self at once.
 	if epoch > m.leased {
 		leased := epoch + epochLease
 		if err := m.persistEpoch(leased); err != nil {
@@ -141,6 +133,26 @@ func (m *Mesh) SetSelfDigest(digest string) {
 	defer m.mu.Unlock()
 	m.self.Digest = digest
 	m.view[m.self.NodeID] = m.self
+}
+
+// SetSelfClientAddr sets the client origin before Join publishes this node.
+func (m *Mesh) SetSelfClientAddr(addr string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.self.ClientAddr = addr
+	m.view[m.self.NodeID] = m.self
+}
+
+// ClientAddr resolves an internal address to its advertised client origin.
+func (m *Mesh) ClientAddr(addr string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, st := range m.view {
+		if st.Addr == addr {
+			return cmp.Or(st.ClientAddr, addr)
+		}
+	}
+	return addr
 }
 
 // ConfigMismatches counts peers whose config digest differs from this node's.
@@ -282,7 +294,6 @@ func (m *Mesh) admit(nodeID string) {
 	m.live[nodeID] = struct{}{}
 }
 
-// forget drops a departed node from the placement view so redirects stop targeting it.
 func (m *Mesh) forget(nodeID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -292,7 +303,6 @@ func (m *Mesh) forget(nodeID string) {
 	}
 }
 
-// merge absorbs a peer's view, keeping the higher epoch per node; self is never overwritten.
 func (m *Mesh) merge(states []NodeState) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -307,7 +317,6 @@ func (m *Mesh) merge(states []NodeState) {
 		if ok && st.Epoch <= cur.Epoch {
 			continue
 		}
-		// warn-only: refusing a divergent digest would partition a rolling credential rotation.
 		if m.self.Digest != "" && st.Digest != "" && st.Digest != m.self.Digest && (!ok || cur.Digest != st.Digest) {
 			log.WithFunc("mesh.merge").Warnf(m.ctx,
 				"peer %s config digest %s differs from this node's %s: cluster-invariant config diverges (redirects may 401, interception may fail)",
@@ -329,7 +338,6 @@ func containsAll(have, need []string) bool {
 
 var _ memberlist.Delegate = (*delegate)(nil)
 
-// delegate carries this node's full view on each memberlist push/pull sync.
 type delegate Mesh
 
 func (d *delegate) NodeMeta(int) []byte             { return nil }
@@ -350,7 +358,6 @@ func (d *delegate) MergeRemoteState(buf []byte, _ bool) {
 
 var _ memberlist.EventDelegate = (*eventDelegate)(nil)
 
-// eventDelegate tracks SWIM membership: admit on join, prune the view on leave.
 type eventDelegate Mesh
 
 func (e *eventDelegate) NotifyJoin(n *memberlist.Node) { (*Mesh)(e).admit(n.Name) }

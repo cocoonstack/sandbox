@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -41,22 +42,16 @@ type PoolSpec struct {
 	types.PoolKey
 	Warm int `json:"warm"`
 
-	// WarmMax, when >0, lets the warm target rise from Warm toward it under demand.
 	WarmMax int `json:"warm_max,omitzero"`
 
-	// Egress is this pool's allow-list, intersected with the tenant's; nil denies all egress.
 	Egress *egress.Policy `json:"egress,omitempty"`
 
-	// Warmup runs in the golden VM before its snapshot and again in each clone after restore.
 	Warmup []string `json:"warmup,omitempty"`
 
-	// IdleHibernateSeconds, when >0, hibernates idle claims after that many seconds.
 	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitzero"`
 
-	// ArchiveAfterSeconds, when >0, archives a hibernated claim; must exceed IdleHibernateSeconds.
 	ArchiveAfterSeconds int `json:"archive_after_seconds,omitzero"`
 
-	// ArchiveDeleteAfterSeconds, when >0, purges the checkpoint that long after archiving.
 	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitzero"`
 
 	warmSet bool
@@ -124,7 +119,6 @@ type TenantSpec struct {
 	Token     string `json:"token"` //nolint:gosec // config field, not a hardcoded credential
 	MaxClaims int    `json:"max_claims,omitzero"`
 
-	// Egress is the tenant's allow-list (see PoolSpec.Egress).
 	Egress *egress.Policy `json:"egress,omitempty"`
 }
 
@@ -184,82 +178,58 @@ type Config struct {
 	DataDir   string `json:"data_dir"`
 	CocoonBin string `json:"cocoon_bin"`
 
-	// AdvertiseAddr is the host:port the data plane reaches this node at; defaults to Listen.
-	AdvertiseAddr string `json:"advertise_addr,omitempty"`
+	AdvertiseAddr   string `json:"advertise_addr,omitempty"`
+	ClientAdvertise string `json:"client_advertise,omitempty"`
 
-	// Bridges shards egress-lane VMs over host bridges; their taps stay lockable in the root netns.
 	Bridges []string `json:"bridges,omitempty"`
 
-	// Networks shards egress-lane VMs over CNI conflists; a bridge holds at most 1024 ports.
 	Networks []string `json:"networks,omitempty"`
 
-	// RestoreMode is cocoon's --restore-mode; an older CH silently eager-copies an mmap restore.
 	RestoreMode types.RestoreMode `json:"restore_mode,omitempty"`
 
-	// NoDirectIO enables buffered writable disks for cold boots and clones.
 	NoDirectIO bool `json:"no_direct_io,omitzero"`
 
-	// NoBalloon boots VMs without the virtio-balloon, so a guest keeps its whole memory.
 	NoBalloon bool `json:"no_balloon,omitzero"`
 
-	// APIToken, when set, guards claim and info.
 	APIToken string `json:"api_token,omitempty"` //nolint:gosec // config field, not a hardcoded credential
 
-	// Tenants adds per-tenant bearer tokens next to APIToken.
 	Tenants []TenantSpec `json:"tenants,omitempty"`
 
-	// Secrets registers node-side credentials; values come from value_env, never this file.
 	Secrets []egress.SecretSpec `json:"secrets,omitempty"`
 
-	// IdleHibernateSeconds is the idle policy for unpooled claims; per-pool settings override.
 	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitzero"`
 
-	// ArchiveAfterSeconds and ArchiveDeleteAfterSeconds are the archive policy for unpooled keys.
 	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitzero"`
 	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitzero"`
 
-	PreviewListen string `json:"preview_listen,omitempty"`
-	PreviewSecret string `json:"preview_secret,omitempty"` //nolint:gosec // config field, not a hardcoded credential
-	// PreviewAdvertise is the browser-facing base, shareable fleet-wide behind one proxy.
+	PreviewListen    string `json:"preview_listen,omitempty"`
+	PreviewSecret    string `json:"preview_secret,omitempty"` //nolint:gosec // config field, not a hardcoded credential
 	PreviewAdvertise string `json:"preview_advertise,omitempty"`
 
-	// CheckpointDir is where checkpoints live; defaults to <data_dir>/checkpoints.
 	CheckpointDir string `json:"checkpoint_dir,omitempty"`
 
-	// CheckpointStore selects the checkpoint backend; absent means the dir backend.
 	CheckpointStore *StoreConfig `json:"checkpoint_store,omitempty"`
 
-	// CheckpointPeerHeal lets a node pull a checkpoint it lacks from a peer; off by default.
 	CheckpointPeerHeal bool `json:"checkpoint_peer_heal,omitzero"`
 
-	// EgressInternalAllow re-admits CIDRs through the proxy's SSRF guard, node-wide.
 	EgressInternalAllow []string `json:"egress_internal_allow,omitempty"`
 
-	// CheckpointTTLHours ages out checkpoints; 0 keeps them forever.
 	CheckpointTTLHours int `json:"checkpoint_ttl_hours,omitzero"`
 
-	// MaxClaims caps live claims node-wide; 0 means unlimited.
 	MaxClaims int `json:"max_claims,omitzero"`
 
-	// AuditLog, when true, appends relayed request ops, never payloads, to audit.jsonl.
 	AuditLog bool `json:"audit_log,omitzero"`
 
-	// MaxForkCount caps children per fork call; each child is a full-RAM VM.
 	MaxForkCount int `json:"max_fork_count,omitzero"`
 
-	// Volumes is the node-local catalog of operator-managed dataset images.
 	Volumes []VolumeSpec `json:"volumes,omitempty"`
 
-	// RefillConcurrency caps concurrent VM provisioning node-wide; 0 auto-scales with CPUs.
 	RefillConcurrency int `json:"refill_concurrency,omitzero"`
 
-	// ReleaseDelaySeconds, when >0, parks a released VM in the removal queue for that long instead of removing it inline.
 	ReleaseDelaySeconds int `json:"release_delay_seconds,omitzero"`
 
-	// Mesh, when set, joins this node to a memberlist cluster; nil is a mesh of one.
 	Mesh *MeshConfig `json:"mesh,omitempty"`
 
-	// EgressCA provisions HTTPS interception; required for any intercept rule.
 	EgressCA *EgressCAConfig `json:"egress_ca,omitempty"`
 
 	Pools []PoolSpec `json:"pools"`
@@ -323,6 +293,9 @@ func (c *Config) applyDefaults() {
 }
 
 func (c *Config) validate() error {
+	if err := c.validateClientAdvertise(); err != nil {
+		return err
+	}
 	for _, field := range []struct {
 		name  string
 		value int
@@ -423,7 +396,31 @@ func (c *Config) validateVolumes() error {
 	return nil
 }
 
-// validateMesh fails at load what would otherwise only surface at startMesh.
+func (c *Config) validateClientAdvertise() error {
+	if c.ClientAdvertise == "" {
+		return nil
+	}
+	u, err := url.Parse(c.ClientAdvertise)
+	if err != nil {
+		return fmt.Errorf("client_advertise: %w", err)
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil ||
+		(u.Path != "" && u.Path != "/") || strings.ContainsAny(c.ClientAdvertise, "?#") {
+		return fmt.Errorf("client_advertise must be an http or https origin")
+	}
+	if ip, _ := netip.ParseAddr(u.Hostname()); ip.IsUnspecified() {
+		return fmt.Errorf("client_advertise must name a routable host")
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("client_advertise port must be between 1 and 65535")
+		}
+	}
+	c.ClientAdvertise = strings.TrimSuffix(c.ClientAdvertise, "/")
+	return nil
+}
+
 func (c *Config) validateMesh() error {
 	if c.Mesh == nil {
 		return nil
@@ -487,7 +484,6 @@ func (c *Config) validateSecrets() (map[string]struct{}, error) {
 	return names, nil
 }
 
-// validateAttachment checks the egress-lane attachment; a repeated shard fills one bridge.
 func (c *Config) validateAttachment() error {
 	if len(c.Bridges) > 0 && len(c.Networks) > 0 {
 		return fmt.Errorf("bridges and networks are mutually exclusive")
@@ -498,7 +494,6 @@ func (c *Config) validateAttachment() error {
 	return validateShards(c.Networks, "networks", "conflist")
 }
 
-// validateEgressAllow rejects a malformed prefix at load, not at a later refused dial.
 func (c *Config) validateEgressAllow() error {
 	for _, cidr := range c.EgressInternalAllow {
 		if _, err := netip.ParsePrefix(cidr); err != nil {
@@ -546,7 +541,6 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 	cfg := &Config{}
-	// hand-edited file: a typo must fail load, not silently change policy.
 	if err := utils.DecodeStrictJSON(raw, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
@@ -557,7 +551,6 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// validatePolicy checks the rules and secret refs; a nil policy is deny-all.
 func validatePolicy(p *egress.Policy, secrets map[string]struct{}) error {
 	if p == nil {
 		return nil
