@@ -1,4 +1,4 @@
-//! Connection handling: read the leading request frame, dispatch to a handler, and forward later client frames over a channel.
+//! Connection handling: dispatch request frames back to back, forwarding each RPC's client input over a channel, until the peer closes.
 
 use std::borrow::Cow;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -33,81 +33,100 @@ impl State {
         R: AsyncBufRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin,
     {
-        let Some(first) = proto::read_frame(&mut reader).await? else {
-            return Ok(());
-        };
-        let req: Request = match serde_json::from_slice(&first) {
-            Ok(r) => r,
-            Err(e) => {
-                return proto::error_frame(
-                    &mut writer,
-                    ErrorKind::BadRequest,
-                    format!("parse: {e}"),
-                )
-                .await;
+        let mut next: Option<Request> = None;
+        let mut served = false;
+        loop {
+            let req = match next.take() {
+                Some(req) => req,
+                None => {
+                    let Some(line) = proto::read_frame(&mut reader).await? else {
+                        return Ok(());
+                    };
+                    match serde_json::from_slice(&line) {
+                        Ok(req) => req,
+                        Err(e) => {
+                            return proto::error_frame(
+                                &mut writer,
+                                ErrorKind::BadRequest,
+                                format!("parse: {e}"),
+                            )
+                            .await;
+                        }
+                    }
+                }
+            };
+            // a finished RPC's input frames can still be in flight
+            if served && req.is_continuation() {
+                continue;
             }
-        };
+            served = true;
+            (reader, next) = self.dispatch(req, reader, &mut writer).await?;
+        }
+    }
 
-        match req {
-            Request::Info => self.info(&mut writer).await,
-            Request::Ps => self.ps(&mut writer).await,
-            Request::Kill { pid, signal } => self.kill(&mut writer, pid, signal).await,
-            Request::Logs { pid } => self.logs(&mut writer, pid).await,
-            Request::Attach { pid } => self.attach(&mut writer, pid).await,
+    /// Runs one RPC and hands the reader back with the request the feeder read past it, if any.
+    async fn dispatch<R, W>(
+        &self,
+        req: Request,
+        mut reader: R,
+        writer: &mut W,
+    ) -> std::io::Result<(R, Option<Request>)>
+    where
+        R: AsyncBufRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin,
+    {
+        let res = match req {
+            Request::Info => self.info(writer).await,
+            Request::Ps => self.ps(writer).await,
+            Request::Kill { pid, signal } => self.kill(writer, pid, signal).await,
+            Request::Logs { pid } => self.logs(writer, pid).await,
+            Request::Attach { pid } => self.attach(writer, pid).await,
             Request::Exec(e) => {
                 // validated ahead of the session/process split so an empty argv errors on both paths.
                 if e.argv.is_empty() {
-                    return proto::error_frame(
-                        &mut writer,
-                        ErrorKind::BadRequest,
-                        "argv must not be empty",
-                    )
-                    .await;
-                }
-                if e.detach && e.session.is_some() {
-                    return proto::error_frame(
-                        &mut writer,
+                    proto::error_frame(writer, ErrorKind::BadRequest, "argv must not be empty")
+                        .await
+                } else if e.detach && e.session.is_some() {
+                    proto::error_frame(
+                        writer,
                         ErrorKind::BadRequest,
                         "detach is not supported with session",
                     )
-                    .await;
-                }
-                if let Some(sid) = e.session.as_deref() {
-                    let Some(sess) = self.sessions.get(sid) else {
-                        return proto::error_frame(
-                            &mut writer,
-                            ErrorKind::NotFound,
-                            "no such session",
-                        )
-                        .await;
-                    };
-                    if !sess.run(&e.argv, &mut writer).await {
-                        self.sessions.remove(sid);
+                    .await
+                } else if let Some(sid) = e.session.as_deref() {
+                    match self.sessions.get(sid) {
+                        None => {
+                            proto::error_frame(writer, ErrorKind::NotFound, "no such session").await
+                        }
+                        Some(sess) => {
+                            if !sess.run(&e.argv, writer).await {
+                                self.sessions.remove(sid);
+                            }
+                            Ok(())
+                        }
                     }
-                    Ok(())
                 } else {
-                    let (rx, _feeder) = spawn_feeder(reader);
-                    exec::run(&self.table, now_secs(), e, rx, &mut writer).await
+                    let (rx, feeder) = spawn_feeder(reader);
+                    let res = exec::run(&self.table, now_secs(), e, rx, writer).await;
+                    return feeder.finish(res).await;
                 }
             }
             Request::SessionCreate { id, cwd, env } => {
                 match self.sessions.create(id, cwd, &env).await {
-                    Ok(id) => {
-                        proto::write_frame(&mut writer, &Response::SessionCreated { id }).await
-                    }
+                    Ok(id) => proto::write_frame(writer, &Response::SessionCreated { id }).await,
                     Err(e) => {
                         let kind = if e.kind() == std::io::ErrorKind::InvalidInput {
                             ErrorKind::BadRequest
                         } else {
                             ErrorKind::Internal
                         };
-                        proto::error_frame(&mut writer, kind, format!("session create: {e}")).await
+                        proto::error_frame(writer, kind, format!("session create: {e}")).await
                     }
                 }
             }
             Request::SessionList => {
                 proto::write_frame(
-                    &mut writer,
+                    writer,
                     &Response::Sessions {
                         sessions: self.sessions.list(),
                     },
@@ -116,53 +135,54 @@ impl State {
             }
             Request::SessionRm { id } => {
                 if self.sessions.remove(&id) {
-                    proto::write_frame(&mut writer, &Response::Done).await
+                    proto::write_frame(writer, &Response::Done).await
                 } else {
-                    proto::error_frame(&mut writer, ErrorKind::NotFound, "no such session").await
+                    proto::error_frame(writer, ErrorKind::NotFound, "no such session").await
                 }
             }
-            Request::FsWrite { path, mode } => fs::write(reader, &mut writer, path, mode).await,
-            Request::FsRead { path } => fs::read(&mut writer, path).await,
-            Request::FsList { path } => fs::list(&mut writer, path).await,
-            Request::FsStat { path } => fs::stat(&mut writer, path).await,
-            Request::FsMkdir { path, parents } => fs::mkdir(&mut writer, path, parents).await,
-            Request::FsRm { path, recursive } => fs::rm(&mut writer, path, recursive).await,
-            Request::FsRename { from, to } => fs::rename(&mut writer, from, to).await,
-            Request::FsPush { dest } => tree::push(reader, &mut writer, dest).await,
-            Request::FsPull { path } => tree::pull(&mut writer, path).await,
+            Request::FsWrite { path, mode } => fs::write(&mut reader, writer, path, mode).await,
+            Request::FsRead { path } => fs::read(writer, path).await,
+            Request::FsList { path } => fs::list(writer, path).await,
+            Request::FsStat { path } => fs::stat(writer, path).await,
+            Request::FsMkdir { path, parents } => fs::mkdir(writer, path, parents).await,
+            Request::FsRm { path, recursive } => fs::rm(writer, path, recursive).await,
+            Request::FsRename { from, to } => fs::rename(writer, from, to).await,
+            Request::FsPush { dest } => tree::push(&mut reader, writer, dest).await,
+            Request::FsPull { path } => tree::pull(writer, path).await,
             Request::FsFind {
                 path,
                 pattern,
                 glob,
-            } => find::find(&mut reader, &mut writer, path, pattern, glob).await,
+            } => find::find(&mut reader, writer, path, pattern, glob).await,
             Request::FsReplace {
                 files,
                 pattern,
                 replacement,
-            } => find::replace(&mut writer, files, pattern, replacement).await,
+            } => find::replace(writer, files, pattern, replacement).await,
             Request::FsWatch { path, recursive } => {
-                watch::watch(&mut reader, &mut writer, path, recursive).await
+                watch::watch(&mut reader, writer, path, recursive).await
             }
             Request::PtyOpen(req) => {
-                let (rx, _feeder) = spawn_feeder(reader);
-                pty::open(&self.table, now_secs(), req, rx, &mut writer).await
+                let (rx, feeder) = spawn_feeder(reader);
+                let res = pty::open(&self.table, now_secs(), req, rx, writer).await;
+                return feeder.finish(res).await;
             }
             Request::PtyResize { pid, cols, rows } => {
-                pty::resize(&self.table, &mut writer, pid, cols, rows).await
+                pty::resize(&self.table, writer, pid, cols, rows).await
             }
             Request::LspStart { language, root } => {
-                self.lsp
-                    .start(&mut writer, &language, root.as_deref())
-                    .await
+                self.lsp.start(writer, &language, root.as_deref()).await
             }
             Request::LspRequest { server_id } => {
-                let (rx, _feeder) = spawn_feeder(reader);
-                self.lsp.request(rx, &mut writer, &server_id).await
+                let (rx, feeder) = spawn_feeder(reader);
+                let res = self.lsp.request(rx, writer, &server_id).await;
+                return feeder.finish(res).await;
             }
-            Request::LspStop { server_id } => self.lsp.stop(&mut writer, &server_id).await,
+            Request::LspStop { server_id } => self.lsp.stop(writer, &server_id).await,
             Request::PortForward { port } => {
-                let (rx, _feeder) = spawn_feeder(reader);
-                forward::run(port, rx, &mut writer).await
+                let (rx, feeder) = spawn_feeder(reader);
+                let res = forward::run(port, rx, writer).await;
+                return feeder.finish(res).await;
             }
             Request::GitClone {
                 url,
@@ -170,27 +190,27 @@ impl State {
                 branch,
                 depth,
                 auth,
-            } => git::clone(&mut writer, url, path, branch, depth, auth).await,
-            Request::GitStatus { path } => git::status(&mut writer, path).await,
-            Request::GitAdd { path, files } => git::add(&mut writer, path, files).await,
+            } => git::clone(writer, url, path, branch, depth, auth).await,
+            Request::GitStatus { path } => git::status(writer, path).await,
+            Request::GitAdd { path, files } => git::add(writer, path, files).await,
             Request::GitCommit {
                 path,
                 message,
                 author,
-            } => git::commit(&mut writer, path, message, author).await,
-            Request::GitPush { path, auth } => git::push(&mut writer, path, auth).await,
-            Request::GitPull { path, auth } => git::pull(&mut writer, path, auth).await,
+            } => git::commit(writer, path, message, author).await,
+            Request::GitPush { path, auth } => git::push(writer, path, auth).await,
+            Request::GitPull { path, auth } => git::pull(writer, path, auth).await,
             Request::GitBranch { path, action, name } => {
-                git::branch(&mut writer, path, action, name).await
+                git::branch(writer, path, action, name).await
             }
             Request::Stdin { .. }
             | Request::StdinClose
             | Request::Data { .. }
             | Request::DataEnd => {
-                proto::error_frame(&mut writer, ErrorKind::BadRequest, "stray data/stdin frame")
-                    .await
+                proto::error_frame(writer, ErrorKind::BadRequest, "stray data/stdin frame").await
             }
-        }
+        };
+        res.map(|()| (reader, None))
     }
 
     async fn info<W: AsyncWrite + Unpin>(&self, w: &mut W) -> std::io::Result<()> {
@@ -277,16 +297,21 @@ impl Default for State {
     }
 }
 
-/// Aborts the spawned feeder on drop so no streaming arm leaks the task and its reader half.
-struct Feeder(tokio::task::JoinHandle<()>);
+/// Reads the client's frames during a streaming RPC: input frames go to the handler, the next request ends the feed.
+struct Feeder<R>(tokio::task::JoinHandle<(R, Option<Request>)>);
 
-impl Drop for Feeder {
-    fn drop(&mut self) {
-        self.0.abort();
+impl<R> Feeder<R> {
+    /// Joins the feeder once its RPC is done; a failed RPC aborts it instead, the connection being gone.
+    async fn finish(self, res: std::io::Result<()>) -> std::io::Result<(R, Option<Request>)> {
+        if let Err(e) = res {
+            self.0.abort();
+            return Err(e);
+        }
+        self.0.await.map_err(std::io::Error::other)
     }
 }
 
-fn spawn_feeder<R>(reader: R) -> (mpsc::Receiver<Request>, Feeder)
+fn spawn_feeder<R>(reader: R) -> (mpsc::Receiver<Request>, Feeder<R>)
 where
     R: AsyncBufRead + Unpin + Send + 'static,
 {
@@ -294,22 +319,22 @@ where
     (rx, Feeder(tokio::spawn(feed_client(reader, tx))))
 }
 
-/// Forwards post-request client frames to the handler until the connection half-closes.
-async fn feed_client<R>(mut reader: R, tx: mpsc::Sender<Request>)
+async fn feed_client<R>(mut reader: R, tx: mpsc::Sender<Request>) -> (R, Option<Request>)
 where
     R: AsyncBufRead + Unpin,
 {
     let mut line = Vec::new();
     while let Ok(true) = proto::read_frame_into(&mut reader, &mut line).await {
-        match serde_json::from_slice::<Request>(&line) {
-            Ok(req) => {
-                if tx.send(req).await.is_err() {
-                    return;
-                }
-            }
-            Err(_) => return,
+        let Ok(req) = serde_json::from_slice::<Request>(&line) else {
+            break;
+        };
+        if !req.is_continuation() {
+            return (reader, Some(req));
         }
+        // a closed channel is a finished handler, whose late input is dropped
+        let _ = tx.send(req).await;
     }
+    (reader, None)
 }
 
 fn now_secs() -> u64 {

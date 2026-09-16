@@ -1,8 +1,9 @@
 # silkd
 
 The in-guest product daemon (Rust, tokio): newline-JSON frames over vsock
-port 2048, one connection per RPC, 8 MiB frame cap. sandboxd relays client
-bytes to it verbatim; it is the entire product surface inside the guest.
+port 2048, RPCs back to back on one connection, 8 MiB frame cap. sandboxd
+relays client bytes to it verbatim; it is the entire product surface inside
+the guest.
 
 Verbs: exec (streaming stdio, detach, sessions), proc table (ps/kill/logs/
 attach with a bounded output ring), streaming fs + tar tree push/pull

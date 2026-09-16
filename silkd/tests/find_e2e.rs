@@ -24,7 +24,7 @@ async fn find_frames(req: Value) -> Vec<Value> {
             break;
         }
     }
-    drop(cw);
+    cw.shutdown().await.unwrap();
     handle.await.unwrap().unwrap();
     frames
 }

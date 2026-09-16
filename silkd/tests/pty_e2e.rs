@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use silkd::server::State;
+use tokio::io::AsyncWriteExt;
 
 use common::{FrameLines, b64, connect, decode, exchange, one, send, type_of};
 
@@ -49,7 +50,7 @@ async fn pty_runs_a_shell_and_echoes() {
     let exit = read_until(&mut lines, |v| v["type"] == "exit").await;
     assert!(exit["code"].is_number());
 
-    drop(cw);
+    cw.shutdown().await.unwrap();
     handle.await.unwrap().unwrap();
 }
 

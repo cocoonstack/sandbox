@@ -1,6 +1,6 @@
-//! Wire protocol: newline-delimited JSON frames, one connection per RPC.
-//! The first frame on a connection is the request; for exec, later frames
-//! from the client carry stdin. Server frames stream until a terminal one
+//! Wire protocol: newline-delimited JSON frames, RPCs back to back on one
+//! connection. A request frame opens an RPC; stdin/data frames from the
+//! client carry its input. Server frames stream until a terminal one
 //! (exit / done / error). Binary payloads ride as base64 (`data` fields),
 //! matching Go's default []byte JSON encoding for the SDK side.
 
@@ -18,7 +18,8 @@ use tokio::io::{
 
 /// Mirrors cocoon-agent's frame cap so a malformed peer can't OOM us.
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
-pub const PROTO_VERSION: u32 = 1;
+/// 2 serves RPCs back to back on one connection; 1 closed after one.
+pub const PROTO_VERSION: u32 = 2;
 
 /// Chunk size for streaming a file back over `fs.read`.
 pub const READ_CHUNK: usize = 32 * 1024;
@@ -173,6 +174,16 @@ pub enum Request {
         data: Vec<u8>,
     },
     DataEnd,
+}
+
+impl Request {
+    /// Reports whether the frame is input for the RPC in flight rather than a new request.
+    pub fn is_continuation(&self) -> bool {
+        matches!(
+            self,
+            Request::Stdin { .. } | Request::StdinClose | Request::Data { .. } | Request::DataEnd
+        )
+    }
 }
 
 #[derive(Debug, Deserialize)]

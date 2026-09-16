@@ -112,16 +112,17 @@ async fn forward_refused_port_is_not_found() {
 }
 
 #[tokio::test]
-async fn forward_stray_frame_is_bad_request() {
+async fn a_request_during_forward_ends_its_input_and_runs_after_it() {
     timeout(DEADLINE, async {
         let port = echo_listener().await;
         let state = Arc::new(State::new());
         let (mut cw, mut lines) = forwarded(&state, port).await;
 
         send(&mut cw, json!({"v":1,"op":"ps"})).await;
-        let err = next_frame(&mut lines).await;
-        assert_eq!(type_of(&err), "error", "got {err}");
-        assert_eq!(err["kind"], "bad_request", "got {err}");
+        let done = next_frame(&mut lines).await;
+        assert_eq!(type_of(&done), "done", "got {done}");
+        let procs = next_frame(&mut lines).await;
+        assert_eq!(type_of(&procs), "procs", "got {procs}");
     })
     .await
     .expect("test deadline");

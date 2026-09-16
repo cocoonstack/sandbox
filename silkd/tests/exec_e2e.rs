@@ -96,7 +96,7 @@ async fn empty_argv_is_a_bad_request() {
 async fn info_reports_version_and_proto() {
     let frames = roundtrip(r#"{"op":"info"}"#).await;
     assert_eq!(type_of(&frames[0]), "info");
-    assert_eq!(frames[0]["proto"], 1);
+    assert_eq!(frames[0]["proto"], 2);
     assert!(frames[0]["version"].as_str().is_some());
 }
 

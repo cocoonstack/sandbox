@@ -13,11 +13,17 @@ debugging.
 
 ## Protocol
 
-Newline-delimited JSON frames, **one connection per RPC**. The first frame
-is the request, tagged `"op"`; the server streams response frames tagged
-`"type"` until a terminal one (`exit`, `done`, or `error`). Binary payloads
-ride base64 in `data` fields. Frames are capped at 8 MiB; requests carry
-`"v": 1` and unknown fields are ignored (the forward-compatibility story).
+Newline-delimited JSON frames, **RPCs back to back on one connection**. A
+request frame, tagged `"op"`, opens an RPC; the server streams response
+frames tagged `"type"` until a terminal one (`exit`, `done`, or `error`),
+then reads the next request on the same connection. `stdin`, `stdin_close`,
+`data` and `data_end` frames are input for the RPC in flight: after its
+terminal frame they are dropped, and a request frame sent while a streaming
+RPC still runs ends that RPC's input and is served after it. A client that
+closes after one RPC is served exactly as before; `info` reports `proto: 2`
+on a daemon that keeps the connection. Binary payloads ride base64 in `data`
+fields. Frames are capped at 8 MiB; requests carry `"v": 1` and unknown
+fields are ignored (the forward-compatibility story).
 
 Sessions and processes are server-side state addressed by id — a dropped
 connection loses nothing (`attach` resumes). The connection-bound verbs are
