@@ -7,7 +7,6 @@ import socket
 import threading
 import time
 from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, cast
 
 from .checkpoint import Checkpoint
@@ -43,6 +42,7 @@ class Sandbox:
         self.template_digest = template_digest
         self.volumes = [dict(volume) for volume in volumes or []]
         self._pool = ConnPool(client.keep_alive)
+        self._proto = 0
 
     def __enter__(self) -> Sandbox:
         return self
@@ -104,9 +104,9 @@ class Sandbox:
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError(f"command did not finish within {timeout}s") from None
             raise
-        with self._park_after(conn):
+        with self._lease(conn):
             watchdog = _arm_watchdog(conn, deadline, expired)
-            pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True)
+            pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True) if stdin else None
             try:
                 conn.send(
                     "exec",
@@ -117,19 +117,25 @@ class Sandbox:
                     detach=False,
                     session=session or None,
                 )
-                pump.start()
+                if pump is not None:
+                    pump.start()
+                else:
+                    with contextlib.suppress(OSError):
+                        conn.send("stdin_close")
                 code = _pump_stdio(conn, on_stdout, on_stderr)
             except (ProtocolError, OSError):
                 if expired.is_set():
                     raise TimeoutError(f"command did not finish within {timeout}s") from None
                 raise
             except SilkdError:
-                pump.join()
+                if pump is not None:
+                    pump.join()
                 raise
             finally:
                 if watchdog is not None:
                     watchdog.cancel()
-            pump.join()  # the pump's frames must not land on the next RPC; silkd drains what the command left unread
+            if pump is not None:
+                pump.join()  # the pump's frames must not land on the next RPC
         if code is None:
             raise ProtocolError("exec stream ended without an exit frame")
         return code
@@ -156,7 +162,7 @@ class Sandbox:
         on_stderr: Callable[[bytes], object] | None = None,
     ) -> int | None:
         """Replays buffered output and returns the exit code, or None if the process still runs."""
-        return self._drain_proc("logs", pid, on_stdout, on_stderr)
+        return self._drain_proc("logs", pid, on_stdout, on_stderr, trailing_done=True)
 
     def attach(
         self,
@@ -366,40 +372,45 @@ class Sandbox:
         return self._client._dial(self.owner, self.id, self.token, deadline)
 
     def _connect(self, deadline: float | None = None) -> Conn:
-        """Takes the parked connection or dials; the first dial asks the daemon's proto and redials one that closed."""
+        """Takes a parked connection or dials one, asking the daemon's proto on a handle's first kept dial."""
         conn = self._pool.take()
         if conn is not None:
             return conn
         conn = self._dial(deadline)
-        if self._pool.proto:
+        if self._proto or self._client.keep_alive <= 0:
             return conn
         try:
             conn.send("info")
             proto = int(_expect(conn, "info").get("proto") or 1)
-        except BaseException:
+        except Exception:
             conn.close()
             raise
-        self._pool.proto = proto
+        self._proto = proto
         if proto >= KEEP_ALIVE_PROTO:
             return conn
         conn.close()
         return self._dial(deadline)
 
     @contextlib.contextmanager
-    def _park_after(self, conn: Conn) -> Iterator[Conn]:
-        """Runs one RPC on conn: a terminal frame, error frames included, parks it; anything else drops it."""
+    def _lease(self, conn: Conn | None = None) -> Iterator[Conn]:
+        """Runs one RPC on conn, dialed when absent; a terminal frame parks it and anything else drops it."""
+        if conn is None:
+            conn = self._connect()
         try:
             yield conn
         except SilkdError:
-            self._pool.park(conn)
+            self._park(conn)
             raise
         except BaseException:
             conn.close()
             raise
-        self._pool.park(conn)
+        self._park(conn)
 
-    def _lease(self) -> AbstractContextManager[Conn]:
-        return self._park_after(self._connect())
+    def _park(self, conn: Conn) -> None:
+        if self._proto >= KEEP_ALIVE_PROTO:
+            self._pool.park(conn)
+        else:
+            conn.close()
 
     def _open_stream(self, op: str, expect: str = "ready", **fields: object) -> tuple[Conn, dict[str, Any]]:
         conn = self._connect()
@@ -465,12 +476,13 @@ class Sandbox:
         pid: int,
         on_stdout: Callable[[bytes], object] | None,
         on_stderr: Callable[[bytes], object] | None,
+        trailing_done: bool = False,
     ) -> int | None:
         with self._lease() as conn:
             conn.send(op, pid=pid)
             code = _pump_stdio(conn, on_stdout, on_stderr)
-            if op == "logs" and code is not None:
-                _expect(conn, "done")  # logs closes with done after the exit frame
+            if trailing_done and code is not None:
+                _expect(conn, "done")
             return code
 
 

@@ -7,8 +7,9 @@ import threading
 import time
 
 import pytest
+from conftest import accept_upgrade, sandbox_at
 
-from cocoonsandbox import Client, Sandbox
+from cocoonsandbox import Sandbox
 
 TIMEOUT = 0.2
 
@@ -35,17 +36,12 @@ class BlockedSendConn:
 
 
 def legacy_sandbox(addr: str) -> Sandbox:
-    sb = Sandbox(client=Client(addr, timeout=TIMEOUT), id="sb_1", token="tok", owner=addr)
-    sb._pool.proto = 1
-    return sb
+    return sandbox_at(addr, timeout=TIMEOUT, keep_alive=0)
 
 
 def serve_port_forward(server: socket.socket, quiet: float, ops: list[str]) -> None:
     conn, _ = server.accept()
-    reader = conn.makefile("rb")
-    while reader.readline() not in (b"\r\n", b""):
-        pass
-    conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\n\r\n")
+    reader = accept_upgrade(conn)
     ops.append(json.loads(reader.readline())["op"])
     conn.sendall(b'{"type":"ready"}\n')
     time.sleep(quiet)
@@ -55,10 +51,7 @@ def serve_port_forward(server: socket.socket, quiet: float, ops: list[str]) -> N
 
 def serve_started_then_hang(server: socket.socket, quiet: float) -> None:
     conn, _ = server.accept()
-    reader = conn.makefile("rb")
-    while reader.readline() not in (b"\r\n", b""):
-        pass
-    conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\n\r\n")
+    reader = accept_upgrade(conn)
     reader.readline()
     conn.sendall(b'{"type":"started","pid":7}\n')
     time.sleep(quiet)
@@ -111,7 +104,7 @@ def test_run_timeout_cuts_a_blocked_exec_send(monkeypatch):
 
 
 def test_run_rejects_a_non_positive_timeout():
-    sb = Sandbox(client=Client("127.0.0.1:1", timeout=TIMEOUT), id="sb_1", token="tok", owner="127.0.0.1:1")
+    sb = legacy_sandbox("127.0.0.1:1")
     with pytest.raises(ValueError):
         sb.run(["true"], timeout=0)
 

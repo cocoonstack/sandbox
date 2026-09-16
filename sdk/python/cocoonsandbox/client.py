@@ -36,7 +36,7 @@ class Client:
         ssl_context: ssl.SSLContext | None = None,
         keep_alive: float = 30.0,
     ) -> None:
-        """keep_alive bounds how long a handle keeps an idle relay connection for its next call; 0 dials per call."""
+        """keep_alive keeps a handle's idle relay connection, which holds the sandbox's idle clock; 0 dials per call."""
         endpoint = _endpoint_url(addr.split(",")[0].strip())
         self.addr = endpoint.geturl().removeprefix("http://")
         self._scheme = endpoint.scheme

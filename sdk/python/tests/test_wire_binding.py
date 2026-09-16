@@ -16,8 +16,9 @@ import socket
 import threading
 
 import pytest
+from conftest import sandbox_at
 
-from cocoonsandbox import Client, Lsp, Pty, Sandbox, Session
+from cocoonsandbox import Lsp, Pty, Session
 from cocoonsandbox.conn import Conn
 from cocoonsandbox.frames import PROTO_VERSION
 
@@ -119,8 +120,7 @@ def test_enum_value_sets_match_corpus():
 
 def test_git_branch_actions_come_from_the_corpus(monkeypatch):
     enums = json.loads((FIXTURES / "enums.json").read_text())
-    sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
-    sb._pool.proto = 1
+    sb = sandbox_at("127.0.0.1:1", keep_alive=0)
     sent = []
     monkeypatch.setattr(sb, "_dial", lambda deadline=None: BranchActionConn(sent))
 
@@ -185,7 +185,6 @@ def fake_sandbox(monkeypatch, replies):
     thread = threading.Thread(target=guest, daemon=True)
     thread.start()
 
-    sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
-    sb._pool.proto = 1
+    sb = sandbox_at("127.0.0.1:1", keep_alive=0)
     monkeypatch.setattr(sb, "_dial", lambda deadline=None: Conn(client_sock, client_sock.makefile("rb")))
     return sb, sent, thread
