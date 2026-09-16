@@ -11,32 +11,36 @@ import (
 )
 
 func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (net.Conn, error) {
-	u, err := endpointURL(addr, c.scheme)
-	if err != nil {
-		return nil, err
+	if strings.ContainsAny(id, "\r\n\x00") || strings.ContainsAny(token, "\r\n\x00") {
+		return nil, fmt.Errorf("agent upgrade: id or token contains a control character")
 	}
-	port := u.Port()
-	if port == "" {
-		port = "80"
-		if u.Scheme == httpsScheme {
+	scheme, authority := c.scheme, addr
+	if s, a, ok := strings.Cut(addr, "://"); ok {
+		scheme, authority = s, a
+	}
+	target := authority
+	if _, _, err := net.SplitHostPort(authority); err != nil {
+		port := "80"
+		if scheme == httpsScheme {
 			port = "443"
 		}
+		target = net.JoinHostPort(authority, port)
 	}
 	var d net.Dialer
-	raw, err := d.DialContext(ctx, "tcp", net.JoinHostPort(u.Hostname(), port))
+	raw, err := d.DialContext(ctx, "tcp", target)
 	if err != nil {
 		return nil, err
 	}
 	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
 	defer stop()
 	conn := raw
-	if u.Scheme == httpsScheme {
+	if scheme == httpsScheme {
 		cfg := &tls.Config{MinVersion: tls.VersionTLS12}
 		if c.tlsConfig != nil {
 			cfg = c.tlsConfig.Clone()
 		}
 		if cfg.ServerName == "" {
-			cfg.ServerName = u.Hostname()
+			cfg.ServerName, _, _ = net.SplitHostPort(target)
 		}
 		cfg.NextProtos = []string{"http/1.1"}
 		secured := tls.Client(raw, cfg)
@@ -47,11 +51,7 @@ func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (net.Con
 		conn = secured
 	}
 
-	if strings.ContainsAny(id, "\r\n\x00") || strings.ContainsAny(token, "\r\n\x00") {
-		_ = raw.Close()
-		return nil, fmt.Errorf("agent upgrade: id or token contains a control character")
-	}
-	req := "GET /v1/sandboxes/" + id + "/agent HTTP/1.1\r\nHost: " + u.Host +
+	req := "GET /v1/sandboxes/" + id + "/agent HTTP/1.1\r\nHost: " + authority +
 		"\r\nConnection: Upgrade\r\nUpgrade: silkd\r\nAuthorization: Bearer " + token + "\r\n\r\n"
 	if _, err = conn.Write([]byte(req)); err != nil {
 		_ = raw.Close()

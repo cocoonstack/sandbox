@@ -22,9 +22,7 @@ func (c *Client) configureTLS() error {
 		return nil
 	}
 	if c.tlsConfig == nil {
-		if tr.TLSClientConfig != nil {
-			c.tlsConfig = tr.TLSClientConfig.Clone()
-		}
+		c.tlsConfig = tr.TLSClientConfig.Clone()
 		return nil
 	}
 	hc := *c.hc
@@ -49,8 +47,7 @@ func endpointURL(addr, scheme string) (*url.URL, error) {
 		return nil, fmt.Errorf("parse sandboxd endpoint: %w", err)
 	}
 	if (u.Scheme != "http" && u.Scheme != httpsScheme) || u.Hostname() == "" || u.User != nil ||
-		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" ||
-		strings.ContainsAny(u.Host, "\r\n\x00") {
+		(u.Path != "" && u.Path != "/") || strings.ContainsAny(addr, "?#") {
 		return nil, fmt.Errorf("sandboxd endpoint must be an http or https origin")
 	}
 	if port := u.Port(); port != "" {

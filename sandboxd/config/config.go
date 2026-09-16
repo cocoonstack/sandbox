@@ -405,7 +405,7 @@ func (c *Config) validateClientAdvertise() error {
 		return fmt.Errorf("client_advertise: %w", err)
 	}
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil ||
-		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		(u.Path != "" && u.Path != "/") || strings.ContainsAny(c.ClientAdvertise, "?#") {
 		return fmt.Errorf("client_advertise must be an http or https origin")
 	}
 	if ip, _ := netip.ParseAddr(u.Hostname()); ip.IsUnspecified() {

@@ -20,6 +20,10 @@ def _endpoint_url(addr: str, scheme: str = "http") -> urllib.parse.SplitResult:
         or "#" in addr
     ):
         raise ValueError("sandboxd endpoint must be an http or https origin")
-    if endpoint.port == 0:
+    try:
+        port = endpoint.port
+    except ValueError:
+        port = 0
+    if port == 0:
         raise ValueError("sandboxd endpoint port must be between 1 and 65535")
     return endpoint._replace(path="")

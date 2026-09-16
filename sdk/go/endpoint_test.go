@@ -32,7 +32,7 @@ func TestEndpointURL(t *testing.T) {
 			}
 		})
 	}
-	for _, addr := range []string{"", "https://", "ftp://node", "https://user:pass@node", "https://node/path", "https://node?", "https://node#frag", "https://node:0", "https://node:65536", "https://node:bad", "https://node\r\nX: bad"} {
+	for _, addr := range []string{"", "https://", "ftp://node", "https://user:pass@node", "https://node/path", "https://node?", "https://node#", "https://node#frag", "https://node:0", "https://node:65536", "https://node:bad", "https://node\r\nX: bad"} {
 		t.Run(addr, func(t *testing.T) {
 			if _, err := endpointURL(addr, "http"); err == nil {
 				t.Fatalf("accepted %q", addr)

@@ -10,7 +10,7 @@ from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, cast
 
 from .checkpoint import Checkpoint
-from .conn import Conn, _Closeable, dial_agent
+from .conn import Conn, _Closeable
 from .errors import APIError, ExitError, ProtocolError, SandboxError
 from .frames import BULK_CHUNK, FS_CHUNK
 from .template import Template
@@ -197,7 +197,7 @@ class Sandbox:
         self._done_rpc("fs_rename", **{"from": src, "to": dst})
 
     def push(self, dest: str, tar_stream: bytes) -> None:
-        """Extracts a tar stream into dest with per-file atomicity."""
+        """Extracts a tar stream into dest; a truncated stream leaves dest untouched."""
         with self._dial() as conn:
             conn.send("fs_push", dest=dest)
             _send_chunks(conn, tar_stream, chunk=BULK_CHUNK)
@@ -356,15 +356,7 @@ class Sandbox:
                 raise
 
     def _dial(self, deadline: float | None = None) -> Conn:
-        return dial_agent(
-            self.owner,
-            self.id,
-            self.token,
-            self._client.timeout,
-            deadline,
-            ssl_context=self._client._ssl_context,
-            scheme=self._client._scheme,
-        )
+        return self._client._dial(self.owner, self.id, self.token, deadline)
 
     def _open_stream(self, op: str, expect: str = "ready", **fields: object) -> tuple[Conn, dict[str, Any]]:
         conn = self._dial()

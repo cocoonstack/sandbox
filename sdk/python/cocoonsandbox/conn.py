@@ -6,10 +6,10 @@ import contextlib
 import socket
 import ssl
 import time
+import urllib.parse
 from collections.abc import Iterator
 from typing import Any, BinaryIO, Protocol, TypeVar
 
-from .endpoint import _endpoint_url
 from .errors import APIError, ProtocolError, SilkdError
 from .frames import MAX_FRAME, decode_response, encode_request
 
@@ -85,13 +85,12 @@ def dial_agent(
     deadline: float | None = None,
     *,
     ssl_context: ssl.SSLContext | None = None,
-    scheme: str = "http",
 ) -> Conn:
     """Opens one TCP/HTTP Upgrade relay within timeout and the optional deadline."""
     for name, value in (("sandbox id", sandbox_id), ("token", token)):
         if any(c in value for c in "\r\n\0"):
             raise APIError("agent upgrade", 0, f"{name} contains a control character")
-    endpoint = _endpoint_url(addr, scheme)
+    endpoint = urllib.parse.urlsplit(addr if "://" in addr else f"http://{addr}")
     host = endpoint.hostname
     port = endpoint.port or (443 if endpoint.scheme == "https" else 80)
     try:
@@ -105,7 +104,10 @@ def dial_agent(
             context = ssl_context or ssl.create_default_context()
             sock = context.wrap_socket(sock, server_hostname=host, do_handshake_on_connect=False)
             sock.settimeout(_remaining_timeout(timeout, deadline))
-            sock.do_handshake()
+            try:
+                sock.do_handshake()
+            except OSError as exc:
+                raise ProtocolError(f"tls handshake {addr}: {exc}") from exc
         request = (
             f"GET /v1/sandboxes/{sandbox_id}/agent HTTP/1.1\r\n"
             f"Host: {endpoint.netloc}\r\n"

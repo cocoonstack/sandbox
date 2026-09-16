@@ -4,7 +4,7 @@ import socket
 import ssl
 import sys
 
-from cocoonsandbox import APIError, Client
+from cocoonsandbox import APIError, Client, ProtocolError
 
 
 def main() -> None:
@@ -42,7 +42,7 @@ def main() -> None:
             raise AssertionError("control request accepted an untrusted certificate")
         try:
             untrusted.attach(owner, sb.id, sb.token).exec("echo", "untrusted")
-        except ssl.SSLCertVerificationError:
+        except ProtocolError:
             pass
         else:
             raise AssertionError("relay accepted an untrusted certificate")

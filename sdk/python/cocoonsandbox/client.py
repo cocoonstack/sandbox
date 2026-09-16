@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, TypeVar, cast
 
 from .checkpoint import Checkpoint
+from .conn import Conn, dial_agent
 from .endpoint import _endpoint_url
 from .errors import APIError
 from .sandbox import Sandbox
@@ -29,10 +30,13 @@ class Client:
     def __init__(
         self, addr: str, api_token: str = "", timeout: float = 120.0, *, ssl_context: ssl.SSLContext | None = None
     ) -> None:
-        self.addr = addr.split(",")[0].strip()
-        self._scheme = _endpoint_url(self.addr).scheme
-        self._ssl_context = ssl_context or ssl.create_default_context()
-        self._ssl_context.set_alpn_protocols(["http/1.1"])
+        endpoint = _endpoint_url(addr.split(",")[0].strip())
+        self.addr = endpoint.geturl().removeprefix("http://")
+        self._scheme = endpoint.scheme
+        self._ssl_context = ssl_context
+        if ssl_context is not None:
+            ssl_context.set_alpn_protocols(["http/1.1"])
+        self._opener: urllib.request.OpenerDirector | None = None
         self.api_token = api_token
         self.timeout = timeout
 
@@ -170,14 +174,15 @@ class Client:
         timeout: float = 0.0,
     ) -> dict[str, Any]:
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(_endpoint_url(addr, self._scheme).geturl() + path, data=data, method=method)
+        url = addr + path if "://" in addr else f"{self._scheme}://{addr}{path}"
+        req = urllib.request.Request(url, data=data, method=method)
         if data is not None:
             req.add_header("Content-Type", "application/json")
         token = bearer or self.api_token
         if token:
             req.add_header("Authorization", f"Bearer {token}")
         try:
-            with urllib.request.urlopen(req, timeout=timeout or self.timeout, context=self._ssl_context) as resp:
+            with self._open(req, timeout or self.timeout) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as exc:
             try:
@@ -195,6 +200,24 @@ class Client:
             return cast(dict[str, Any], json.loads(raw))
         except json.JSONDecodeError as exc:
             raise APIError(verb, 0, "malformed JSON in response") from exc
+
+    def _dial(self, addr: str, sandbox_id: str, token: str, deadline: float | None = None) -> Conn:
+        origin = addr if "://" in addr else f"{self._scheme}://{addr}"
+        context = self._tls() if origin.startswith("https://") else None
+        return dial_agent(origin, sandbox_id, token, self.timeout, deadline, ssl_context=context)
+
+    def _open(self, req: urllib.request.Request, timeout: float) -> Any:
+        if req.type != "https":
+            return urllib.request.urlopen(req, timeout=timeout)
+        if self._opener is None:
+            self._opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=self._tls()))
+        return self._opener.open(req, timeout=timeout)
+
+    def _tls(self) -> ssl.SSLContext:
+        if self._ssl_context is None:
+            self._ssl_context = ssl.create_default_context()
+            self._ssl_context.set_alpn_protocols(["http/1.1"])
+        return self._ssl_context
 
 
 def _claim_body(
@@ -286,7 +309,6 @@ def _retry_transient(exc: APIError) -> bool:
 def _redirect_fallback(
     origin: str, candidates: Sequence[str], post: Callable[[str], dict[str, Any]], verb: str
 ) -> tuple[str, dict[str, Any]]:
-
     def attempt(addr: str) -> tuple[str, dict[str, Any]]:
         reply = post(addr)
         if reply.get("redirect"):

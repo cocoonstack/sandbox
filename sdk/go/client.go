@@ -140,7 +140,7 @@ func Connect(addr string, opts ...ClientOption) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{addr: first, scheme: u.Scheme, hc: &http.Client{}}
+	c := &Client{addr: strings.TrimPrefix(u.String(), "http://"), scheme: u.Scheme, hc: &http.Client{}}
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -263,12 +263,15 @@ func (c *Client) deleteTemplates(ctx context.Context, addr string, u url.Values)
 	}
 }
 
-func (c *Client) roundTrip(ctx context.Context, method, addr, path string, body io.Reader, bearer string) (*http.Response, error) {
-	u, err := endpointURL(addr, c.scheme)
-	if err != nil {
-		return nil, err
+func (c *Client) requestURL(addr, path string) string {
+	if strings.Contains(addr, "://") {
+		return addr + path
 	}
-	req, err := http.NewRequestWithContext(ctx, method, u.String()+path, body)
+	return c.scheme + "://" + addr + path
+}
+
+func (c *Client) roundTrip(ctx context.Context, method, addr, path string, body io.Reader, bearer string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.requestURL(addr, path), body)
 	if err != nil {
 		return nil, err
 	}

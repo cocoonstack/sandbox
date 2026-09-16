@@ -27,7 +27,8 @@ func TestCaddyTLSCluster(t *testing.T) {
 	}
 	dir := t.TempDir()
 	cert, key, roots := edgeCertificate(t, dir)
-	a, b := freeEdgeAddress(t), freeEdgeAddress(t)
+	la, lb := reserveEdgePort(t), reserveEdgePort(t)
+	a, b := la.Addr().String(), lb.Addr().String()
 	owner := "https://" + b
 	entry := "https://" + a
 	st := startStack(t, "node-token")
@@ -68,6 +69,7 @@ func TestCaddyTLSCluster(t *testing.T) {
 	cmd := exec.CommandContext(t.Context(), bin, "run", "--config", configPath)
 	cmd.Env = append(os.Environ(), "XDG_DATA_HOME="+dir, "XDG_CONFIG_HOME="+dir)
 	cmd.Stdout, cmd.Stderr = &logs, &logs
+	_, _ = la.Close(), lb.Close()
 	if err = cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -177,14 +179,13 @@ func edgeCertificate(t *testing.T, dir string) (string, string, *x509.CertPool) 
 	return certPath, keyPath, roots
 }
 
-func freeEdgeAddress(t *testing.T) string {
+func reserveEdgePort(t *testing.T) net.Listener {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
-	return l.Addr().String()
+	return l
 }
 
 type edgePlacer struct {
