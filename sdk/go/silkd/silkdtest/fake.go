@@ -35,15 +35,13 @@ func NewFake(root string) *Fake {
 	return &Fake{Root: root, sessions: map[string]bool{}, branches: []string{"main"}, current: "main"}
 }
 
-// ServeConn speaks one RPC on an already-open connection (e.g. after an HTTP
-// hijack) and closes it.
+// ServeConn serves RPCs on an already-open connection (e.g. after an HTTP
+// hijack) until the peer closes it.
 func (f *Fake) ServeConn(conn net.Conn) {
-	defer func() { _ = conn.Close() }()
-	r := bufio.NewReader(conn)
-	req, err := recvRequest(r)
-	if err != nil {
-		return
-	}
+	serveConn(conn, bufio.NewReader(conn), wire.KeepAliveProto, f.serve)
+}
+
+func (f *Fake) serve(conn net.Conn, r *bufio.Reader, req wire.Request) {
 	switch req := req.(type) {
 	case *wire.FsWrite:
 		f.fsWrite(conn, r, req)

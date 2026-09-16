@@ -54,15 +54,7 @@ func (p *Pty) Write(b []byte) (int, error) {
 
 // Resize adjusts the terminal window; it is a separate RPC keyed by pid.
 func (p *Pty) Resize(ctx context.Context, cols, rows uint16) error {
-	conn, done, err := p.sb.dial(ctx)
-	if err != nil {
-		return err
-	}
-	defer done()
-	if err := conn.Send(&wire.PtyResize{PID: p.PID, Cols: cols, Rows: rows}); err != nil {
-		return err
-	}
-	return terminalErr(ctx, conn)
+	return p.sb.doneRPC(ctx, &wire.PtyResize{PID: p.PID, Cols: cols, Rows: rows})
 }
 
 // Close ends the pty session (silkd sees the disconnect and kills the shell).
@@ -115,18 +107,18 @@ func (p *Pty) drain(ctx context.Context, pw *io.PipeWriter, stop func()) {
 // OpenPty starts a shell whose lifetime is governed by ctx or Close.
 func (s *Sandbox) OpenPty(ctx context.Context, opts PtyOpts) (*Pty, error) {
 	req := &wire.PtyOpen{Cols: opts.Cols, Rows: opts.Rows, Cwd: opts.Cwd, Env: opts.Env, User: opts.User}
-	conn, done, err := s.call(ctx, req)
+	conn, l, err := s.call(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	started, err := expect[wire.Started](ctx, conn)
 	if err != nil {
-		done()
+		l.close()
 		return nil, err
 	}
 
 	pr, pw := io.Pipe()
-	p := &Pty{PID: started.PID, sb: s, conn: conn, stop: done, out: pr}
-	go p.drain(ctx, pw, done)
+	p := &Pty{PID: started.PID, sb: s, conn: conn, stop: l.close, out: pr}
+	go p.drain(ctx, pw, l.close)
 	return p, nil
 }

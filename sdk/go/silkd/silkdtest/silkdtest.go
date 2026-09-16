@@ -6,19 +6,38 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"strings"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-// Serve accepts connections until l closes, speaking one RPC per connection and closing it after the terminal frame, like silkd.
+// Serve accepts connections until l closes, serving RPCs back to back on each like silkd.
 func Serve(l net.Listener) {
 	acceptLoop(l, ServeConn)
 }
 
-// ServeConn handles one RPC on an open connection, then closes it.
+// ServeConn serves RPCs on an open connection until the peer closes it.
 func ServeConn(conn net.Conn) {
-	handle(conn, bufio.NewReader(conn))
+	serveConn(conn, bufio.NewReader(conn), wire.KeepAliveProto, serveStateless)
+}
+
+// ServeConnOnce serves one RPC and closes, like a daemon from before proto 2.
+func ServeConnOnce(conn net.Conn) {
+	serveConn(conn, bufio.NewReader(conn), 1, serveStateless)
+}
+
+// Upgrade hijacks an agent request and answers the 101, handing back the relay connection.
+func Upgrade(w http.ResponseWriter) (net.Conn, error) {
+	conn, _, err := http.NewResponseController(w).Hijack()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n"); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return conn, nil
 }
 
 // ListenHybrid serves the muxer handshake on a UDS: each connection must open with "CONNECT <port>", is answered "OK <port>", then speaks the Serve protocol.
@@ -38,17 +57,34 @@ func ListenHybrid(sockPath string, port int) (io.Closer, error) {
 			_ = c.Close()
 			return
 		}
-		handle(c, r)
+		serveConn(c, r, wire.KeepAliveProto, serveStateless)
 	})
 	return l, nil
 }
 
-func handle(conn net.Conn, r *bufio.Reader) {
+// serveConn answers info with proto and dispatches the other requests until the peer closes, or after one when proto predates keep-alive; input frames outside an RPC are dropped as silkd drops them.
+func serveConn(conn net.Conn, r *bufio.Reader, proto uint32, serve func(net.Conn, *bufio.Reader, wire.Request)) {
 	defer func() { _ = conn.Close() }()
-	req, err := recvRequest(r)
-	if err != nil {
-		return
+	for {
+		req, err := recvRequest(r)
+		if err != nil {
+			return
+		}
+		switch req.(type) {
+		case *wire.Stdin, *wire.StdinClose, *wire.Data, *wire.DataEnd:
+			continue
+		case *wire.Info:
+			send(conn, &wire.InfoResp{Version: "silkdtest", Proto: proto})
+		default:
+			serve(conn, r, req)
+		}
+		if proto < wire.KeepAliveProto {
+			return
+		}
 	}
+}
+
+func serveStateless(conn net.Conn, r *bufio.Reader, req wire.Request) {
 	if !serveCommon(conn, r, req) {
 		errFrame(conn, wire.KindUnimplemented, "silkdtest: "+req.Op())
 	}
@@ -56,8 +92,6 @@ func handle(conn net.Conn, r *bufio.Reader) {
 
 func serveCommon(conn net.Conn, r *bufio.Reader, req wire.Request) bool {
 	switch req := req.(type) {
-	case *wire.Info:
-		send(conn, &wire.InfoResp{Version: "silkdtest", Proto: wire.ProtoVersion})
 	case *wire.Exec:
 		serveExec(conn, r, req)
 	case *wire.PortForward:

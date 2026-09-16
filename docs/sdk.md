@@ -156,6 +156,16 @@ TLS handshakes share the existing dial timeout/cancellation budget. The agent
 connection then uses HTTP/1.1 `Upgrade: silkd` and remains a bidirectional
 stream; the guest protocol and port-forwarding frames do not change.
 
+Data-plane calls share a handle's relay connection: after a call the SDK
+keeps the connection for 30 seconds (`WithKeepAlive` tunes the window; 0
+dials per call) and the next call on that handle sends its request on it, so
+a busy handle pays the dial, upgrade and TLS handshake once. A kept
+connection counts as live for `idle_hibernate_seconds` until it closes, so
+keep the window below that setting; `Close` and `Hibernate` drop it at once.
+Long-lived streams (`Watch`, `OpenPty`, `DialPort`, an LSP session) take a
+connection of their own, and a guest whose silkd predates the back-to-back
+protocol gets one connection per call as before.
+
 An explicit scheme in an owner, redirect, peer, or `Attach` address wins;
 a bare address inherits the entry client's scheme. Trust settings are shared
 across these connections. The SDK does not translate private addresses to

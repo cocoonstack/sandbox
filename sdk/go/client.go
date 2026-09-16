@@ -129,6 +129,7 @@ type Client struct {
 	apiToken  string
 	hc        *http.Client
 	tlsConfig *tls.Config
+	keepAlive time.Duration
 }
 
 // Connect returns a client for a sandboxd node.
@@ -142,7 +143,7 @@ func Connect(addr string, opts ...ClientOption) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{addr: strings.TrimPrefix(u.String(), "http://"), scheme: u.Scheme, hc: &http.Client{}}
+	c := &Client{addr: strings.TrimPrefix(u.String(), "http://"), scheme: u.Scheme, hc: &http.Client{}, keepAlive: keepAliveIdle}
 	for _, opt := range opts {
 		opt(c)
 	}

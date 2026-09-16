@@ -1,8 +1,9 @@
 // rpcbench measures the one-connection-per-RPC overhead on a live node and
-// what a pre-dialed spare connection would buy (H-4's decision data): mode A
-// dials+upgrades per RPC like the SDK does today; mode B keeps one dialed
-// connection ahead, hiding the handshake behind the previous call. Run by
-// hand against a claimed sandbox:
+// what the alternatives buy: mode A dials+upgrades per RPC by hand; mode C
+// is the SDK's own path, one kept connection serving RPCs back to back; mode
+// B keeps one hand-dialed connection ahead, hiding the handshake behind the
+// previous call (H-4's decision data). Run by hand against a claimed
+// sandbox:
 //
 //	rpcbench -addr <node> -token <api token> -template <ref> -n 200
 package main
@@ -70,7 +71,20 @@ func run(addr, token, template string, n int) error {
 		}
 		a = append(a, time.Since(start))
 	}
-	report("A dial-per-RPC (today)", a)
+	report("A dial-per-RPC", a)
+
+	if _, err := sb.Stat(ctx, "/"); err != nil {
+		return err
+	}
+	c := make([]time.Duration, 0, n)
+	for range n {
+		start := time.Now()
+		if _, err := sb.Stat(ctx, "/"); err != nil {
+			return err
+		}
+		c = append(c, time.Since(start))
+	}
+	report("C SDK keep-alive", c)
 
 	spare := make(chan net.Conn, 1)
 	errs := make(chan error, 1)
@@ -104,11 +118,11 @@ func run(addr, token, template string, n int) error {
 		b = append(b, time.Since(start))
 	}
 	cancel()
-	report("B pre-dialed spare   ", b)
+	report("B pre-dialed spare", b)
 	return nil
 }
 
-// statRPC: the protocol is one RPC per connection.
+// statRPC drives one hand-dialed connection through one RPC and closes it.
 func statRPC(conn net.Conn) error {
 	defer func() { _ = conn.Close() }()
 	sc := silkd.NewConn(conn)
@@ -172,7 +186,7 @@ func dialAgent(ctx context.Context, addr, id, token string) (net.Conn, error) {
 func report(label string, samples []time.Duration) {
 	slices.Sort(samples)
 	pct := func(p float64) time.Duration { return samples[int(p*float64(len(samples)-1))] }
-	fmt.Printf("%s  n=%d p50=%.2fms p90=%.2fms p99=%.2fms\n",
+	fmt.Printf("%-22s n=%d p50=%.2fms p90=%.2fms p99=%.2fms\n",
 		label, len(samples), ms(pct(0.50)), ms(pct(0.90)), ms(pct(0.99)))
 }
 

@@ -99,7 +99,7 @@ func TestUpgradeKeepsCoalescedBytes(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	var out strings.Builder
-	code, err := testSandbox(t, ts).Run(t.Context(), Cmd{Argv: []string{"echo", "42"}, Stdout: &out})
+	code, err := legacySandbox(t, ts).Run(t.Context(), Cmd{Argv: []string{"echo", "42"}, Stdout: &out})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -144,13 +144,9 @@ func newAgentServer(t *testing.T, serve func(net.Conn)) *httptest.Server {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		conn, _, err := http.NewResponseController(w).Hijack()
+		conn, err := silkdtest.Upgrade(w)
 		if err != nil {
-			t.Errorf("hijack: %v", err)
-			return
-		}
-		if _, err := io.WriteString(conn, upgrade101); err != nil {
-			_ = conn.Close()
+			t.Errorf("upgrade: %v", err)
 			return
 		}
 		serve(conn)
@@ -160,8 +156,17 @@ func newAgentServer(t *testing.T, serve func(net.Conn)) *httptest.Server {
 	return ts
 }
 
-func testSandbox(t *testing.T, ts *httptest.Server) *Sandbox {
+func testSandbox(t *testing.T, ts *httptest.Server, opts ...ClientOption) *Sandbox {
 	t.Helper()
-	c := testClient(t, ts)
-	return &Sandbox{ID: "sb_1", c: c, token: "tok", owner: c.addr}
+	c := testClient(t, ts, opts...)
+	sb := &Sandbox{ID: "sb_1", c: c, token: "tok", owner: c.addr}
+	t.Cleanup(sb.pool.drain)
+	return sb
+}
+
+func legacySandbox(t *testing.T, ts *httptest.Server) *Sandbox {
+	t.Helper()
+	sb := testSandbox(t, ts)
+	sb.proto.Store(1)
+	return sb
 }

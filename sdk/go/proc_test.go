@@ -24,7 +24,7 @@ func TestProcVerbs(t *testing.T) {
 			`{"type":"exit","code":7}`,
 		},
 	}
-	sb := testSandbox(t, newAgentServer(t, procServe(script)))
+	sb := legacySandbox(t, newAgentServer(t, procServe(script)))
 	ctx := t.Context()
 
 	pid, err := sb.Spawn(ctx, Cmd{Argv: []string{"sleep", "30"}})
@@ -68,7 +68,7 @@ func TestProcVerbsUnknownPid(t *testing.T) {
 	script := map[string][]string{
 		"logs": {`{"type":"error","kind":"not_found","message":"no such pid"}`},
 	}
-	sb := testSandbox(t, newAgentServer(t, procServe(script)))
+	sb := legacySandbox(t, newAgentServer(t, procServe(script)))
 	_, _, err := sb.Logs(t.Context(), 999, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "not_found") {
 		t.Fatalf("Logs unknown pid: %v, want typed not_found", err)

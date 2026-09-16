@@ -11,7 +11,18 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/cocoonstack/sandbox/protocol/wire"
+	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
 )
+
+var infoFrame = func() string {
+	frame, err := wire.EncodeResponse(&wire.InfoResp{Version: "test", Proto: wire.KeepAliveProto})
+	if err != nil {
+		panic(err)
+	}
+	return string(frame) + "\n"
+}()
 
 func TestServeSpeaksMCP(t *testing.T) {
 	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) bool {
@@ -66,20 +77,9 @@ func TestServeSpeaksMCP(t *testing.T) {
 }
 
 func TestExecKeepsOutputWhenTheGuestDrops(t *testing.T) {
-	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) bool {
-		if !strings.HasSuffix(r.URL.Path, "/agent") {
-			return false
-		}
-		conn, _, err := http.NewResponseController(w).Hijack()
-		if err != nil {
-			t.Errorf("hijack: %v", err)
-			return true
-		}
-		_, _ = io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n"+
-			`{"type":"started","pid":7}`+"\n"+`{"type":"stdout","data":"cGFydGlhbA=="}`+"\n")
-		_ = conn.Close()
-		return true
-	})
+	srv := newTestServer(t, agentRoute(t, func(string) (string, bool) {
+		return `{"type":"started","pid":7}` + "\n" + `{"type":"stdout","data":"cGFydGlhbA=="}` + "\n", true
+	}))
 	replies := serveLines(t, srv,
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_sandbox","arguments":{}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"exec","arguments":{"sandbox_id":"sb_1","command":"yes"}}}`,
@@ -93,36 +93,12 @@ func TestExecKeepsOutputWhenTheGuestDrops(t *testing.T) {
 
 func TestReadFileStopsAtTheCap(t *testing.T) {
 	chunk := `{"type":"data","data":"` + base64.StdEncoding.EncodeToString(make([]byte, 256<<10)) + `"}` + "\n"
-	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) bool {
-		if !strings.HasSuffix(r.URL.Path, "/agent") {
-			return false
-		}
-		conn, _, err := http.NewResponseController(w).Hijack()
-		if err != nil {
-			t.Errorf("hijack: %v", err)
-			return true
-		}
-		defer conn.Close()
-		br := bufio.NewReader(conn)
-		if _, err = io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n"); err != nil {
-			return true
-		}
-		req, err := br.ReadString('\n')
-		if err != nil {
-			return true
-		}
+	srv := newTestServer(t, agentRoute(t, func(req string) (string, bool) {
 		if strings.Contains(req, `"op":"fs_stat"`) {
-			_, _ = io.WriteString(conn, `{"type":"stat","info":{"kind":"file","size":0}}`+"\n")
-			return true
+			return `{"type":"stat","info":{"kind":"file","size":0}}` + "\n", false
 		}
-		for range 8 {
-			if _, err := io.WriteString(conn, chunk); err != nil {
-				return true
-			}
-		}
-		_, _ = io.WriteString(conn, `{"type":"done"}`+"\n")
-		return true
-	})
+		return strings.Repeat(chunk, 8) + `{"type":"done"}` + "\n", false
+	}))
 	replies := serveLines(t, srv,
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_sandbox","arguments":{}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_file","arguments":{"sandbox_id":"sb_1","path":"/dev/zero"}}}`,
@@ -182,6 +158,35 @@ func newTestServer(t *testing.T, extra func(http.ResponseWriter, *http.Request) 
 		t.Fatalf("newServer: %v", err)
 	}
 	return srv
+}
+
+func agentRoute(t *testing.T, reply func(req string) (frames string, drop bool)) func(http.ResponseWriter, *http.Request) bool {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) bool {
+		if !strings.HasSuffix(r.URL.Path, "/agent") {
+			return false
+		}
+		conn, err := silkdtest.Upgrade(w)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return true
+		}
+		defer conn.Close()
+		br := bufio.NewReader(conn)
+		for {
+			req, err := br.ReadString('\n')
+			if err != nil {
+				return true
+			}
+			frames, drop := infoFrame, false
+			if !strings.Contains(req, `"op":"info"`) {
+				frames, drop = reply(req)
+			}
+			if _, err := io.WriteString(conn, frames); err != nil || drop {
+				return true
+			}
+		}
+	}
 }
 
 func serveLines(t *testing.T, srv *server, lines ...string) map[int]map[string]any {
