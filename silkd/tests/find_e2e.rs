@@ -10,21 +10,13 @@ use serde_json::{Value, json};
 use silkd::server::State;
 use tokio::io::AsyncWriteExt;
 
-use common::{connect, exchange, type_of};
+use common::{connect, exchange, frames_until, send, type_of};
 
 async fn find_frames(req: Value) -> Vec<Value> {
     let (mut cw, mut out, handle) = connect(&Arc::new(State::new()));
-    cw.write_all(format!("{req}\n").as_bytes()).await.unwrap();
-    let mut frames = Vec::new();
-    while let Some(l) = out.next_line().await.unwrap() {
-        let frame: Value = serde_json::from_str(&l).unwrap();
-        let terminal = matches!(type_of(&frame), "done" | "error");
-        frames.push(frame);
-        if terminal {
-            break;
-        }
-    }
-    drop(cw);
+    send(&mut cw, req).await;
+    let frames = frames_until(&mut out, |f| matches!(type_of(f), "done" | "error")).await;
+    cw.shutdown().await.unwrap();
     handle.await.unwrap().unwrap();
     frames
 }

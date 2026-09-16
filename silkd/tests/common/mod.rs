@@ -42,6 +42,18 @@ pub async fn next_frame(lines: &mut FrameLines) -> Value {
     serde_json::from_str(&line).unwrap()
 }
 
+pub async fn frames_until(lines: &mut FrameLines, pred: impl Fn(&Value) -> bool) -> Vec<Value> {
+    let mut frames = Vec::new();
+    loop {
+        let frame = next_frame(lines).await;
+        let hit = pred(&frame);
+        frames.push(frame);
+        if hit {
+            return frames;
+        }
+    }
+}
+
 pub async fn roundtrip(request_line: &str) -> Vec<Value> {
     request_on(&Arc::new(State::new()), &[request_line.to_string()]).await
 }

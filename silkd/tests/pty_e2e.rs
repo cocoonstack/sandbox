@@ -8,21 +8,12 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use silkd::server::State;
+use tokio::io::AsyncWriteExt;
 
-use common::{FrameLines, b64, connect, decode, exchange, one, send, type_of};
+use common::{FrameLines, b64, connect, decode, exchange, frames_until, one, send, type_of};
 
 async fn read_until(lines: &mut FrameLines, pred: impl Fn(&Value) -> bool) -> Value {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let line = lines.next_line().await.unwrap().expect("stream closed");
-            let v: Value = serde_json::from_str(&line).unwrap();
-            if pred(&v) {
-                return v;
-            }
-        }
-    })
-    .await
-    .expect("frame never arrived")
+    frames_until(lines, pred).await.pop().unwrap()
 }
 
 #[tokio::test]
@@ -49,7 +40,7 @@ async fn pty_runs_a_shell_and_echoes() {
     let exit = read_until(&mut lines, |v| v["type"] == "exit").await;
     assert!(exit["code"].is_number());
 
-    drop(cw);
+    cw.shutdown().await.unwrap();
     handle.await.unwrap().unwrap();
 }
 
