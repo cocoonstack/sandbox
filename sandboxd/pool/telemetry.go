@@ -105,7 +105,7 @@ func (m *Manager) Audit(ctx context.Context, id string, line []byte) {
 	}
 	var frame auditFrame
 	if err := json.Unmarshal(line, &frame); err != nil || frame.Op == "" {
-		return // torn cap boundary or a non-frame first line: nothing to record
+		return // torn cap boundary or a non-frame line: nothing to record
 	}
 	m.recordAudit(ctx, id, frame)
 }

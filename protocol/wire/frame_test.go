@@ -311,6 +311,35 @@ func TestAppendBulkRequestMatchesEncodeRequest(t *testing.T) {
 	}
 }
 
+func TestIsContinuation(t *testing.T) {
+	encoded := func(r Request) string {
+		line, err := EncodeRequest(r)
+		if err != nil {
+			t.Fatalf("EncodeRequest(%s): %v", r.Op(), err)
+		}
+		return string(line)
+	}
+	for _, tt := range []struct {
+		line string
+		want bool
+	}{
+		{encoded(Data{Data: []byte("hi")}), true},
+		{encoded(DataEnd{}), true},
+		{encoded(Stdin{Data: []byte("hi")}), true},
+		{encoded(StdinClose{}), true},
+		{string(AppendBulkRequest(nil, "stdin", []byte("hi"))), true},
+		{`{"op":"data","v":1,"data":"aGk="}`, true},
+		{encoded(Exec{Argv: []string{"true"}}), false},
+		{encoded(FsStat{Path: "/"}), false},
+		{encoded(Info{}), false},
+		{"", false},
+	} {
+		if got := IsContinuation([]byte(tt.line)); got != tt.want {
+			t.Errorf("IsContinuation(%q) = %v, want %v", tt.line, got, tt.want)
+		}
+	}
+}
+
 func jsonEqual(t *testing.T, a, b []byte) bool {
 	t.Helper()
 	var av, bv any

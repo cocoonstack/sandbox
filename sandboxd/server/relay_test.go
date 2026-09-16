@@ -8,19 +8,29 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
+
+	"github.com/cocoonstack/sandbox/protocol/wire"
+	"github.com/cocoonstack/sandbox/sandboxd/pool"
 )
 
-const (
-	execFrame = `{"v":1,"op":"exec","argv":["echo","42"],"detach":false}` + "\n"
+const agentRequest = "GET /v1/sandboxes/sb_1/agent HTTP/1.1\r\n" +
+	"Host: sandboxd\r\n" +
+	"Authorization: Bearer tok\r\n" +
+	"Upgrade: silkd\r\n" +
+	"Connection: Upgrade\r\n\r\n"
 
-	agentRequest = "GET /v1/sandboxes/sb_1/agent HTTP/1.1\r\n" +
-		"Host: sandboxd\r\n" +
-		"Authorization: Bearer tok\r\n" +
-		"Upgrade: silkd\r\n" +
-		"Connection: Upgrade\r\n\r\n"
+var (
+	execFrame       = line(wire.Exec{Argv: []string{"echo", "42"}})
+	statFrame       = line(wire.FsStat{Path: "/"})
+	dataFrame       = line(&wire.Data{Data: []byte("hi")})
+	dataEndFrame    = line(wire.DataEnd{})
+	stdinFrame      = line(&wire.Stdin{Data: []byte("hi")})
+	stdinCloseFrame = line(wire.StdinClose{})
 )
 
 func TestCloseRelaysRefusesLateRelays(t *testing.T) {
@@ -127,12 +137,46 @@ func TestRelayClientDisconnectClosesGuest(t *testing.T) {
 	}
 }
 
-func TestAuditTeeWriteToEndsCleanlyBeforeALine(t *testing.T) {
-	tee := &auditTee{r: strings.NewReader("partial"), record: func([]byte) { t.Error("recorded a line that never ended") }}
-	var out bytes.Buffer
-	n, err := tee.WriteTo(&out)
-	if err != nil || n != 7 || out.String() != "partial" {
-		t.Errorf("WriteTo = %d, %v, %q; want 7, nil, the bytes", n, err, out.String())
+func TestAuditTeeRecordsRequestLines(t *testing.T) {
+	big := line(wire.Exec{Argv: []string{strings.Repeat("x", pool.AuditLineCap)}})
+	chunk := line(&wire.Data{Data: make([]byte, 3*pool.AuditLineCap)})
+	exec, stat := strings.TrimSuffix(execFrame, "\n"), strings.TrimSuffix(statFrame, "\n")
+	for _, tt := range []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"requests back to back", execFrame + statFrame, []string{exec, stat}},
+		{"upload input skipped", statFrame + dataFrame + chunk + dataEndFrame + execFrame, []string{stat, exec}},
+		{"stdin skipped", execFrame + stdinFrame + stdinCloseFrame, []string{exec}},
+		{"oversized request recorded once", big + statFrame, []string{"oversized", stat}},
+		{"partial tail never recorded", execFrame + "partial", []string{exec}},
+	} {
+		for _, rd := range []struct {
+			name string
+			wrap func(io.Reader) io.Reader
+		}{
+			{"whole", func(r io.Reader) io.Reader { return r }},
+			{"byte at a time", iotest.OneByteReader},
+		} {
+			t.Run(tt.name+"/"+rd.name, func(t *testing.T) {
+				var got []string
+				tee := &auditTee{r: rd.wrap(strings.NewReader(tt.in)), record: func(line []byte) {
+					if len(line) > pool.AuditLineCap {
+						got = append(got, "oversized")
+						return
+					}
+					got = append(got, string(line))
+				}}
+				var out bytes.Buffer
+				if _, err := io.Copy(&out, tee); err != nil || out.String() != tt.in {
+					t.Fatalf("copy: %v, relayed %d bytes of %d", err, out.Len(), len(tt.in))
+				}
+				if !slices.Equal(got, tt.want) {
+					t.Errorf("recorded %q, want %q", got, tt.want)
+				}
+			})
+		}
 	}
 }
 
@@ -185,6 +229,14 @@ func upgradeConn(t *testing.T, ts *httptest.Server) (net.Conn, *bufio.Reader) {
 	r := bufio.NewReader(conn)
 	readStatus101(t, r)
 	return conn, r
+}
+
+func line(r wire.Request) string {
+	frame, err := wire.EncodeRequest(r)
+	if err != nil {
+		panic(err)
+	}
+	return string(frame) + "\n"
 }
 
 func readStatus101(t *testing.T, r *bufio.Reader) {

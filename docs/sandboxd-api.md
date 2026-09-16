@@ -520,8 +520,10 @@ cocoon's machine-level metering ledger for audit cross-checks.
 
 Auth: the sandbox's own token. Requires `Upgrade: silkd` +
 `Connection: Upgrade`; answers `101 Switching Protocols` and from then on
-the connection is a byte-for-byte relay to the guest's silkd (one silkd RPC
-per connection — see [silkd](silkd.md)). 426 without the upgrade header, 404
+the connection is a byte-for-byte relay to the guest's silkd, carrying RPCs
+back to back (see [silkd](silkd.md)). An open relay holds the sandbox's idle
+clock, so a client that keeps a connection warm must close it when idle for
+`idle_hibernate_seconds` to apply. 426 without the upgrade header, 404
 unknown sandbox, 502 guest unreachable.
 
 ## POST /v1/sandboxes/{id}/exec

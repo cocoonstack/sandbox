@@ -1,9 +1,9 @@
 // Package wire is the Go binding of the silkd wire protocol, shared by the
-// SDK and sandboxd:
-// newline-delimited JSON frames over one connection per RPC, requests tagged
-// by "op", responses by "type", binary payloads base64 in data fields. The
-// authoritative contract is the shared corpus in protocol/wire/fixtures/v1 —
-// silkd's Rust tests and this package's tests round-trip the same files.
+// SDK and sandboxd: newline-delimited JSON frames, RPCs back to back on one
+// connection, requests tagged by "op", responses by "type", binary payloads
+// base64 in data fields. The authoritative contract is the shared corpus in
+// protocol/wire/fixtures/v1 — silkd's Rust tests and this package's tests
+// round-trip the same files.
 package wire
 
 import (
@@ -705,6 +705,19 @@ func AppendBulkRequest(buf []byte, op string, data []byte) []byte {
 	buf = append(buf, `","data":"`...)
 	buf = base64.StdEncoding.AppendEncode(buf, data)
 	return append(buf, '"', '}', '\n')
+}
+
+// IsContinuation reports whether a request line feeds the RPC in flight instead of opening one.
+func IsContinuation(line []byte) bool {
+	op, err := frameTag(line, reqTagHead, "op")
+	if err != nil {
+		return false
+	}
+	switch string(op) {
+	case Data{}.Op(), DataEnd{}.Op(), Stdin{}.Op(), StdinClose{}.Op():
+		return true
+	}
+	return false
 }
 
 // fastBulk slices the base64 data out of a canonical bulk frame, skipping the
