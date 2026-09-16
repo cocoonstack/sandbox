@@ -14,18 +14,7 @@ func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (net.Con
 	if strings.ContainsAny(id, "\r\n\x00") || strings.ContainsAny(token, "\r\n\x00") {
 		return nil, fmt.Errorf("agent upgrade: id or token contains a control character")
 	}
-	scheme, authority := c.scheme, addr
-	if s, a, ok := strings.Cut(addr, "://"); ok {
-		scheme, authority = s, a
-	}
-	target := authority
-	if _, _, err := net.SplitHostPort(authority); err != nil {
-		port := "80"
-		if scheme == httpsScheme {
-			port = "443"
-		}
-		target = net.JoinHostPort(authority, port)
-	}
+	scheme, authority, target := agentEndpoint(addr, c.scheme)
 	var d net.Dialer
 	raw, err := d.DialContext(ctx, "tcp", target)
 	if err != nil {
@@ -79,3 +68,20 @@ type upgradedConn struct {
 }
 
 func (u *upgradedConn) Read(p []byte) (int, error) { return u.r.Read(p) }
+
+func agentEndpoint(addr, scheme string) (string, string, string) {
+	authority := addr
+	if s, a, ok := strings.Cut(addr, "://"); ok {
+		scheme, authority = strings.ToLower(s), a
+	}
+	target := authority
+	if _, _, err := net.SplitHostPort(authority); err != nil {
+		port := "80"
+		if scheme == httpsScheme {
+			port = "443"
+		}
+		host := strings.TrimSuffix(strings.TrimPrefix(authority, "["), "]")
+		target = net.JoinHostPort(host, port)
+	}
+	return scheme, authority, target
+}

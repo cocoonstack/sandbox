@@ -41,6 +41,24 @@ func TestEndpointURL(t *testing.T) {
 	}
 }
 
+func TestAgentEndpoint(t *testing.T) {
+	for _, tt := range []struct {
+		addr, scheme, wantScheme, wantAuthority, wantTarget string
+	}{
+		{"node:7777", "http", "http", "node:7777", "node:7777"},
+		{"HTTPS://node", "http", "https", "node", "node:443"},
+		{"https://[::1]", "http", "https", "[::1]", "[::1]:443"},
+		{"[::1]:7777", "https", "https", "[::1]:7777", "[::1]:7777"},
+	} {
+		t.Run(tt.addr, func(t *testing.T) {
+			scheme, authority, target := agentEndpoint(tt.addr, tt.scheme)
+			if scheme != tt.wantScheme || authority != tt.wantAuthority || target != tt.wantTarget {
+				t.Fatalf("agent endpoint = %q, %q, %q; want %q, %q, %q", scheme, authority, target, tt.wantScheme, tt.wantAuthority, tt.wantTarget)
+			}
+		})
+	}
+}
+
 func TestTLSControlAndRelay(t *testing.T) {
 	agent := newAgentServer(t, silkdtest.ServeConn)
 	secure := httptest.NewTLSServer(agent.Config.Handler)
