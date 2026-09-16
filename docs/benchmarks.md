@@ -64,10 +64,13 @@ make bench
 The harness starts a throwaway sandboxd on its own port and data dir,
 builds one warm pool (small, the warm tier), one golden-only pool
 (medium, warm=0 — every claim is a clone), claims the cold tier from an
-unpooled template, then measures the data plane (exec round-trips via
-`rpcbench`, `fs_pull` throughput via `pullbench`). It prints a markdown
-table stamped with the host evidence: virtualization
-(`systemd-detect-virt`), CPU, kernel, cocoon version, image digest.
+unpooled template, then measures the data plane (`fs_stat` round-trips via
+`rpcbench`, `fs_pull` throughput via `pullbench`). `rpcbench` prints A
+(dial per RPC), C (the current SDK keep-alive path), and B (a pre-dialed
+spare); `make bench` keeps A in its table so new runs remain comparable with
+the dated log below. It prints a markdown table stamped with the host evidence:
+virtualization (`systemd-detect-virt`), CPU, kernel, cocoon version, image
+digest.
 
 Knobs (environment variables): `WARM`/`WARM_N` (warm-pool depth and burst
 size — the burst must stay within the depth, or refill loses the race and
@@ -120,7 +123,7 @@ delta is the host, not the round's code (cocoon-specs
 
 | data plane | measured |
 |---|---|
-| exec RTT (dial per RPC) | n=200 p50=0.14ms p90=0.22ms p99=0.34ms |
+| fs_stat RTT (dial per RPC) | n=200 p50=0.14ms p90=0.22ms p99=0.34ms |
 | fs_pull throughput (128 MiB) | 659.4 MiB/s best of 3 |
 | burst wall (16 concurrent clones) | 458 ms |
 | warm refill recovery (0 → 6) | 3 ms |
@@ -150,7 +153,7 @@ burst row is the real clone-path number.
 
 | data plane | measured |
 |---|---|
-| exec RTT (dial per RPC) | n=200 p50=0.19ms p90=0.25ms p99=0.40ms |
+| fs_stat RTT (dial per RPC) | n=200 p50=0.19ms p90=0.25ms p99=0.40ms |
 | fs_pull throughput (128 MiB) | 925.0 MiB/s best of 3 |
 | burst wall (16 concurrent clones) | 295 ms |
 | warm refill recovery (0 → 6) | 207 ms |
@@ -190,7 +193,7 @@ mmap`, `no_direct_io: true`): golden build 0.8 s, then 16 warm in 1.9 s
 
 | data plane | measured |
 |---|---|
-| exec RTT (dial per RPC) | n=200 p50=0.20ms p90=0.26ms p99=0.37ms |
+| fs_stat RTT (dial per RPC) | n=200 p50=0.20ms p90=0.26ms p99=0.37ms |
 | fs_pull throughput (128 MiB) | 595.2 MiB/s best of 3 |
 | burst wall (16 concurrent clones) | 285 ms |
 | warm refill recovery (0 → 6) | 1639 ms |
@@ -222,7 +225,7 @@ rides along, so treat the split between the two as unattributed.
 
 | data plane | measured |
 |---|---|
-| exec RTT (dial per RPC) | n=200 p50=0.19ms p90=0.23ms p99=0.36ms |
+| fs_stat RTT (dial per RPC) | n=200 p50=0.19ms p90=0.23ms p99=0.36ms |
 | fs_pull throughput (128 MiB) | 611.6 MiB/s best of 3 |
 | burst wall (16 concurrent clones) | 308 ms |
 | warm refill recovery (0 → 6) | 1638 ms |
@@ -252,10 +255,10 @@ restore-bound; measure the tick before re-tuning refill admission.
 
 | data plane | measured |
 |---|---|
-| exec RTT (dial per RPC) | n=200 p50=0.21ms p90=1.27ms p99=2.56ms |
+| fs_stat RTT (dial per RPC) | n=200 p50=0.21ms p90=1.27ms p99=2.56ms |
 | fs_pull throughput (128 MiB) | 609.5 MiB/s best of 3 |
 
-exec RTT is power-policy sensitive on this host: under the performance
+fs_stat RTT is power-policy sensitive on this host: under the performance
 governor the same stack measures p50=0.18 p90=0.22 p99=0.27 (n=1000, ×2),
 reproducing the 07-08 entry; a host reboot reset the policy to
 powersave, whose C-state/freq-ramp latency lands in the tail. The guest is
@@ -279,7 +282,7 @@ answers long before a console login prompt would appear.
 
 | data plane | measured |
 |---|---|
-| exec RTT (dial per RPC) | n=200 p50=0.22ms p90=1.71ms p99=3.40ms |
+| fs_stat RTT (dial per RPC) | n=200 p50=0.22ms p90=1.71ms p99=3.40ms |
 | fs_pull throughput (128 MiB) | 595.9 MiB/s best of 3 |
 
 ### 2026-07-08 — bare metal
@@ -299,7 +302,7 @@ answers long before a console login prompt would appear.
 
 | data plane | measured |
 |---|---|
-| exec RTT (dial per RPC) | n=200 p50=0.17ms p90=0.22ms p99=0.26ms |
+| fs_stat RTT (dial per RPC) | n=200 p50=0.17ms p90=0.22ms p99=0.26ms |
 | fs_pull throughput (128 MiB) | 232.6 MiB/s best of 3 |
 
 ### 2026-07-07 — nested (google)
@@ -319,5 +322,5 @@ answers long before a console login prompt would appear.
 
 | data plane | measured |
 |---|---|
-| exec RTT (dial per RPC) | n=200 p50=1.43ms p90=5.49ms p99=8.27ms |
+| fs_stat RTT (dial per RPC) | n=200 p50=1.43ms p90=5.49ms p99=8.27ms |
 | fs_pull throughput (128 MiB) | 95.7 MiB/s best of 3 |

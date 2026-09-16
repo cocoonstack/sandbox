@@ -6,9 +6,9 @@ sub-millisecond; a pool miss clones from a golden snapshot in tens of
 milliseconds; cold boot is ~200ms on bare metal.
 
 ```
-SDK (Go)                sandboxd (per node)              guest microVM
-sandbox.New() ── HTTP ─► claim: warm pool / golden clone  Cloud Hypervisor
-sb.Exec/Files/… ─ HTTP upgrade ─► byte relay ── vsock ──► silkd :2048
+SDK (Go/Python)         sandboxd (per node)              guest microVM
+client.New/new ─ HTTP ─► claim: warm pool / golden clone   Cloud Hypervisor
+exec/files/… ─ HTTP upgrade (kept) ─► byte relay ─ vsock ─► silkd :2048
                         memberlist mesh: warm-count gossip,
                         MOVED-style redirect to the owning node
 ```
