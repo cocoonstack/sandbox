@@ -92,7 +92,7 @@ func (p *agentPool) evict(c *agentConn) {
 type agentConn struct {
 	*silkd.Conn
 	sock   syscall.RawConn
-	peek   peek
+	peeked bool
 	peekFn func(uintptr) bool
 	timer  *time.Timer
 }
@@ -102,13 +102,13 @@ func newAgentConn(raw *upgradedConn) *agentConn {
 	if sc, ok := raw.tcp.(syscall.Conn); ok {
 		c.sock, _ = sc.SyscallConn()
 	}
-	c.peekFn = c.peek.read
+	c.peekFn = c.peek
 	return c
 }
 
 // quiet reports whether the parked connection's peer has neither hung up nor spoken.
 func (c *agentConn) quiet() bool {
-	return c.sock != nil && c.sock.Read(c.peekFn) == nil && c.peek.quiet
+	return c.sock != nil && c.sock.Read(c.peekFn) == nil && c.peeked
 }
 
 // sent sends req on c and hands it back, closing it on failure.
