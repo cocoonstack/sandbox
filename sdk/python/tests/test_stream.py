@@ -7,8 +7,9 @@ import threading
 import time
 
 import pytest
+from conftest import accept_upgrade, sandbox_at
 
-from cocoonsandbox import Client, Sandbox
+from cocoonsandbox import Sandbox
 
 TIMEOUT = 0.2
 
@@ -30,13 +31,17 @@ class BlockedSendConn:
     def abort(self) -> None:
         self.aborted.set()
 
+    def close(self) -> None:
+        pass
+
+
+def legacy_sandbox(addr: str) -> Sandbox:
+    return sandbox_at(addr, timeout=TIMEOUT, keep_alive=0)
+
 
 def serve_port_forward(server: socket.socket, quiet: float, ops: list[str]) -> None:
     conn, _ = server.accept()
-    reader = conn.makefile("rb")
-    while reader.readline() not in (b"\r\n", b""):
-        pass
-    conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\n\r\n")
+    reader = accept_upgrade(conn)
     ops.append(json.loads(reader.readline())["op"])
     conn.sendall(b'{"type":"ready"}\n')
     time.sleep(quiet)
@@ -46,10 +51,7 @@ def serve_port_forward(server: socket.socket, quiet: float, ops: list[str]) -> N
 
 def serve_started_then_hang(server: socket.socket, quiet: float) -> None:
     conn, _ = server.accept()
-    reader = conn.makefile("rb")
-    while reader.readline() not in (b"\r\n", b""):
-        pass
-    conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\n\r\n")
+    reader = accept_upgrade(conn)
     reader.readline()
     conn.sendall(b'{"type":"started","pid":7}\n')
     time.sleep(quiet)
@@ -68,7 +70,7 @@ def test_port_stream_outlives_the_client_timeout():
     addr = f"127.0.0.1:{server.getsockname()[1]}"
     ops: list[str] = []
     threading.Thread(target=serve_port_forward, args=(server, 3 * TIMEOUT, ops), daemon=True).start()
-    sb = Sandbox(client=Client(addr, timeout=TIMEOUT), id="sb_1", token="tok", owner=addr)
+    sb = legacy_sandbox(addr)
     try:
         with sb.dial_port(5000) as port:
             assert port.recv() == b"late"
@@ -82,7 +84,7 @@ def test_run_timeout_cuts_a_silent_command():
     server = socket.create_server(("127.0.0.1", 0))
     addr = f"127.0.0.1:{server.getsockname()[1]}"
     threading.Thread(target=serve_started_then_hang, args=(server, 5 * TIMEOUT), daemon=True).start()
-    sb = Sandbox(client=Client(addr, timeout=TIMEOUT), id="sb_1", token="tok", owner=addr)
+    sb = legacy_sandbox(addr)
     started = time.monotonic()
     try:
         with pytest.raises(TimeoutError):
@@ -93,7 +95,7 @@ def test_run_timeout_cuts_a_silent_command():
 
 
 def test_run_timeout_cuts_a_blocked_exec_send(monkeypatch):
-    sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
+    sb = legacy_sandbox("127.0.0.1:1")
     conn = BlockedSendConn()
     monkeypatch.setattr(sb, "_dial", lambda deadline=None: conn)
     with pytest.raises(TimeoutError):
@@ -102,7 +104,7 @@ def test_run_timeout_cuts_a_blocked_exec_send(monkeypatch):
 
 
 def test_run_rejects_a_non_positive_timeout():
-    sb = Sandbox(client=Client("127.0.0.1:1", timeout=TIMEOUT), id="sb_1", token="tok", owner="127.0.0.1:1")
+    sb = legacy_sandbox("127.0.0.1:1")
     with pytest.raises(ValueError):
         sb.run(["true"], timeout=0)
 
@@ -111,7 +113,7 @@ def test_dial_is_still_bounded_by_the_client_timeout():
     server = socket.create_server(("127.0.0.1", 0))
     addr = f"127.0.0.1:{server.getsockname()[1]}"
     threading.Thread(target=serve_silence, args=(server,), daemon=True).start()
-    sb = Sandbox(client=Client(addr, timeout=TIMEOUT), id="sb_1", token="tok", owner=addr)
+    sb = legacy_sandbox(addr)
     started = time.monotonic()
     try:
         with pytest.raises(OSError):

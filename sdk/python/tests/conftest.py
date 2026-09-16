@@ -1,12 +1,37 @@
-"""Fixtures shared by the cluster-behavior suites: in-process fake nodes and
-addresses that refuse a connection."""
+"""Fixtures and helpers shared by the suites: in-process fake nodes, addresses
+that refuse a connection, and the relay-side upgrade handshake."""
 
 import socket
 import threading
+import time
 from http.server import HTTPServer
+from typing import BinaryIO, Callable
 
 import pytest
 from test_client import FakeNode
+
+from cocoonsandbox import Client, Sandbox
+
+
+def sandbox_at(addr: str, **client_kwargs) -> Sandbox:
+    return Sandbox(client=Client(addr, **client_kwargs), id="sb_1", token="tok", owner=addr)
+
+
+def accept_upgrade(conn: socket.socket) -> BinaryIO:
+    reader = conn.makefile("rb")
+    while reader.readline() not in (b"\r\n", b""):
+        pass
+    conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\n\r\n")
+    return reader
+
+
+def wait_until(cond: Callable[[], bool], message: str) -> None:
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        if cond():
+            return
+        time.sleep(0.01)
+    raise AssertionError(message)
 
 
 @pytest.fixture

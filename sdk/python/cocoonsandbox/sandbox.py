@@ -10,9 +10,9 @@ from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, cast
 
 from .checkpoint import Checkpoint
-from .conn import Conn, _Closeable
-from .errors import APIError, ExitError, ProtocolError, SandboxError
-from .frames import BULK_CHUNK, FS_CHUNK
+from .conn import Conn, ConnPool, _Closeable
+from .errors import APIError, ExitError, ProtocolError, SandboxError, SilkdError
+from .frames import BULK_CHUNK, FS_CHUNK, KEEP_ALIVE_PROTO
 from .template import Template
 
 if TYPE_CHECKING:
@@ -41,6 +41,8 @@ class Sandbox:
         self.from_checkpoint = from_checkpoint
         self.template_digest = template_digest
         self.volumes = [dict(volume) for volume in volumes or []]
+        self._pool = ConnPool(client.keep_alive)
+        self._proto = 0
 
     def __enter__(self) -> Sandbox:
         return self
@@ -97,13 +99,14 @@ class Sandbox:
         deadline = None if timeout is None else time.monotonic() + timeout
         expired = threading.Event()
         try:
-            conn = self._dial(deadline)
+            conn = self._connect(deadline)
         except (ProtocolError, TimeoutError):
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError(f"command did not finish within {timeout}s") from None
             raise
-        with conn:
+        with self._lease(conn):
             watchdog = _arm_watchdog(conn, deadline, expired)
+            pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True) if stdin else None
             try:
                 conn.send(
                     "exec",
@@ -114,17 +117,25 @@ class Sandbox:
                     detach=False,
                     session=session or None,
                 )
-                pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True)
-                pump.start()
+                if pump is not None:
+                    pump.start()
+                else:
+                    with contextlib.suppress(OSError):
+                        conn.send("stdin_close")
                 code = _pump_stdio(conn, on_stdout, on_stderr)
             except (ProtocolError, OSError):
                 if expired.is_set():
                     raise TimeoutError(f"command did not finish within {timeout}s") from None
                 raise
+            except SilkdError:
+                if pump is not None:
+                    pump.join()
+                raise
             finally:
                 if watchdog is not None:
                     watchdog.cancel()
-        pump.join()  # the closed conn fails a stalled send, so this cannot hang
+            if pump is not None:
+                pump.join()  # the pump's frames must not land on the next RPC
         if code is None:
             raise ProtocolError("exec stream ended without an exit frame")
         return code
@@ -151,7 +162,7 @@ class Sandbox:
         on_stderr: Callable[[bytes], object] | None = None,
     ) -> int | None:
         """Replays buffered output and returns the exit code, or None if the process still runs."""
-        return self._drain_proc("logs", pid, on_stdout, on_stderr)
+        return self._drain_proc("logs", pid, on_stdout, on_stderr, trailing_done=True)
 
     def attach(
         self,
@@ -164,19 +175,19 @@ class Sandbox:
 
     def write_file(self, path: str, data: bytes, mode: int | None = None) -> None:
         """Writes data to path atomically (temp + rename on the guest)."""
-        with self._dial() as conn:
+        with self._lease() as conn:
             conn.send("fs_write", path=path, mode=mode)
             _send_chunks(conn, data)
             conn.send("data_end")
             _expect(conn, "done")
 
     def read_file(self, path: str) -> bytes:
-        with self._dial() as conn:
+        with self._lease() as conn:
             conn.send("fs_read", path=path)
             return _drain_data(conn)
 
     def list_dir(self, path: str) -> list[dict[str, Any]]:
-        with self._dial() as conn:
+        with self._lease() as conn:
             conn.send("fs_list", path=path)
             entries: list[dict[str, Any]] = []
             for frame in conn.recv_until("done"):
@@ -198,7 +209,7 @@ class Sandbox:
 
     def push(self, dest: str, tar_stream: bytes) -> None:
         """Extracts a tar stream into dest; a truncated stream leaves dest untouched."""
-        with self._dial() as conn:
+        with self._lease() as conn:
             conn.send("fs_push", dest=dest)
             _send_chunks(conn, tar_stream, chunk=BULK_CHUNK)
             conn.send("data_end")
@@ -206,7 +217,7 @@ class Sandbox:
 
     def pull(self, path: str) -> bytes:
         """Returns path (file or tree) as a tar archive."""
-        with self._dial() as conn:
+        with self._lease() as conn:
             conn.send("fs_pull", path=path)
             return _drain_data(conn)
 
@@ -215,14 +226,14 @@ class Sandbox:
 
     def find_iter(self, path: str, pattern: str, glob: str = "") -> Iterator[dict[str, Any]]:
         """Yields matches as they stream."""
-        with self._dial() as conn:
+        with self._lease() as conn:
             conn.send("fs_find", path=path, pattern=pattern, glob=glob or None)
             for f in conn.recv_until("done"):
                 if f["type"] == "match":
                     yield f
 
     def replace(self, files: list[str], pattern: str, replacement: str) -> list[dict[str, Any]]:
-        with self._dial() as conn:
+        with self._lease() as conn:
             conn.send("fs_replace", files=files, pattern=pattern, replacement=replacement)
             return [f for f in conn.recv_until("done") if f["type"] == "replaced"]
 
@@ -284,6 +295,7 @@ class Sandbox:
 
     def hibernate(self) -> None:
         """Snapshots and stops the VM; the next guest call restores its state."""
+        self._pool.drain()
         self._client._request(
             self.owner, "POST", f"/v1/sandboxes/{self.id}/hibernate", None, "hibernate", bearer=self.token
         )
@@ -347,6 +359,7 @@ class Sandbox:
 
     def close(self) -> None:
         """Releases the sandbox; its VM is destroyed."""
+        self._pool.drain()
         try:
             self._client._request(
                 self.owner, "POST", f"/v1/sandboxes/{self.id}/release", None, "release", bearer=self.token
@@ -358,8 +371,49 @@ class Sandbox:
     def _dial(self, deadline: float | None = None) -> Conn:
         return self._client._dial(self.owner, self.id, self.token, deadline)
 
+    def _connect(self, deadline: float | None = None) -> Conn:
+        """Takes a parked connection or dials one, asking the daemon's proto on a handle's first kept dial."""
+        conn = self._pool.take()
+        if conn is not None:
+            return conn
+        conn = self._dial(deadline)
+        if self._proto or self._client.keep_alive <= 0:
+            return conn
+        try:
+            conn.send("info")
+            proto = int(_expect(conn, "info").get("proto") or 1)
+        except Exception:
+            conn.close()
+            raise
+        self._proto = proto
+        if proto >= KEEP_ALIVE_PROTO:
+            return conn
+        conn.close()
+        return self._dial(deadline)
+
+    @contextlib.contextmanager
+    def _lease(self, conn: Conn | None = None) -> Iterator[Conn]:
+        """Runs one RPC on conn, dialed when absent; a terminal frame parks it and anything else drops it."""
+        if conn is None:
+            conn = self._connect()
+        try:
+            yield conn
+        except SilkdError:
+            self._park(conn)
+            raise
+        except BaseException:
+            conn.close()
+            raise
+        self._park(conn)
+
+    def _park(self, conn: Conn) -> None:
+        if self._proto >= KEEP_ALIVE_PROTO:
+            self._pool.park(conn)
+        else:
+            conn.close()
+
     def _open_stream(self, op: str, expect: str = "ready", **fields: object) -> tuple[Conn, dict[str, Any]]:
-        conn = self._dial()
+        conn = self._connect()
         try:
             conn.send(op, **fields)
             frame = _expect(conn, expect)
@@ -409,7 +463,7 @@ class Sandbox:
                 local.close()
 
     def _call(self, op: str, expect: str, **fields: object) -> dict[str, Any]:
-        with self._dial() as conn:
+        with self._lease() as conn:
             conn.send(op, **fields)
             return _expect(conn, expect)
 
@@ -422,10 +476,14 @@ class Sandbox:
         pid: int,
         on_stdout: Callable[[bytes], object] | None,
         on_stderr: Callable[[bytes], object] | None,
+        trailing_done: bool = False,
     ) -> int | None:
-        with self._dial() as conn:
+        with self._lease() as conn:
             conn.send(op, pid=pid)
-            return _pump_stdio(conn, on_stdout, on_stderr)
+            code = _pump_stdio(conn, on_stdout, on_stderr)
+            if trailing_done and code is not None:
+                _expect(conn, "done")
+            return code
 
 
 class Session(_Closeable):

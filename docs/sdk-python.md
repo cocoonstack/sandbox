@@ -170,6 +170,16 @@ automatically with the same transparent wake. A claim with a connection live
 when the sweep checks it (a relay stream, a buffered exec, a preview dial, an
 egress request) is not swept; the idle clock restarts when that connection ends.
 
+Data-plane calls share a handle's relay connection: after a call the SDK
+keeps the connection for 30 seconds (`Client(..., keep_alive=...)` tunes the
+window; 0 dials per call) and the next call on that handle sends its request
+on it, so a busy handle pays the dial, upgrade and TLS handshake once. A kept
+connection counts as live for `idle_hibernate_seconds` until it closes, so
+keep the window below that setting; `close` and `hibernate` drop it at once.
+Streams (`watch`, `open_pty`, `dial_port`, an LSP session) take a connection
+of their own, and a guest whose silkd predates the back-to-back protocol
+gets one connection per call as before.
+
 If that deployment also enables `archive_after_seconds`, archiving replaces
 the original claim deadline with the archive-retention deadline (or no
 deadline when archives are kept forever). Waking an archive starts a fresh

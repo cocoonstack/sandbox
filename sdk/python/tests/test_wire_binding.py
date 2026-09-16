@@ -16,8 +16,9 @@ import socket
 import threading
 
 import pytest
+from conftest import sandbox_at
 
-from cocoonsandbox import Client, Lsp, Pty, Sandbox, Session
+from cocoonsandbox import Lsp, Pty, Session
 from cocoonsandbox.conn import Conn
 from cocoonsandbox.frames import PROTO_VERSION
 
@@ -64,7 +65,7 @@ CASES = [
     ("req_exec_detach", [{"type": "started", "pid": 7}], lambda sb, f: sb.spawn(*f["argv"])),
     ("req_ps", [{"type": "procs", "procs": []}], lambda sb, f: sb.ps()),
     ("req_kill", [{"type": "done"}], lambda sb, f: sb.kill(f["pid"], signal=f["signal"])),
-    ("req_logs", [{"type": "exit", "code": 0}], lambda sb, f: sb.logs(f["pid"])),
+    ("req_logs", [{"type": "exit", "code": 0}, {"type": "done"}], lambda sb, f: sb.logs(f["pid"])),
     ("req_attach", [{"type": "exit", "code": 0}], lambda sb, f: sb.attach(f["pid"])),
     ("req_fs_watch", [{"type": "ready"}], lambda sb, f: sb.watch(f["path"], recursive=f["recursive"]).close()),
     ("req_git_branch", [{"type": "done"}], lambda sb, f: sb.git_create_branch(f["path"], f["name"])),
@@ -119,7 +120,7 @@ def test_enum_value_sets_match_corpus():
 
 def test_git_branch_actions_come_from_the_corpus(monkeypatch):
     enums = json.loads((FIXTURES / "enums.json").read_text())
-    sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
+    sb = sandbox_at("127.0.0.1:1", keep_alive=0)
     sent = []
     monkeypatch.setattr(sb, "_dial", lambda deadline=None: BranchActionConn(sent))
 
@@ -155,6 +156,9 @@ class BranchActionConn:
     def recv_until(self, *terminal):
         yield self.recv()
 
+    def close(self):
+        pass
+
 
 def fake_sandbox(monkeypatch, replies):
     """A Sandbox whose _dial yields a real Conn over a socketpair; a guest
@@ -181,6 +185,6 @@ def fake_sandbox(monkeypatch, replies):
     thread = threading.Thread(target=guest, daemon=True)
     thread.start()
 
-    sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
+    sb = sandbox_at("127.0.0.1:1", keep_alive=0)
     monkeypatch.setattr(sb, "_dial", lambda deadline=None: Conn(client_sock, client_sock.makefile("rb")))
     return sb, sent, thread

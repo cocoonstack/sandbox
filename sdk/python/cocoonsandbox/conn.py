@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import contextlib
+import select
 import socket
 import ssl
+import threading
 import time
 import urllib.parse
 from collections.abc import Iterator
@@ -12,6 +14,8 @@ from typing import Any, BinaryIO, Protocol, TypeVar
 
 from .errors import APIError, ProtocolError, SilkdError
 from .frames import MAX_FRAME, decode_response, encode_request
+
+KEEP_ALIVE_CONNS = 8
 
 _CloseableT = TypeVar("_CloseableT", bound="_Closeable")
 
@@ -69,12 +73,74 @@ class Conn(_Closeable):
             if frame["type"] in terminal:
                 return
 
+    def quiet(self) -> bool:
+        """Reports whether the peer has neither hung up nor spoken since the last frame."""
+        try:
+            readable, _, _ = select.select([self._sock], [], [], 0)
+        except (OSError, ValueError):
+            return False
+        return not readable
+
     def close(self) -> None:
         self.abort()
         try:
             self._reader.close()
         finally:
             self._sock.close()
+
+
+class ConnPool:
+    """Parks a handle's idle relay connections between calls; one sweeper timer closes them as they expire."""
+
+    def __init__(self, idle: float) -> None:
+        self._idle = idle
+        self._lock = threading.Lock()
+        self._parked: list[tuple[float, Conn]] = []
+        self._sweep: threading.Timer | None = None
+
+    def take(self) -> Conn | None:
+        while True:
+            with self._lock:
+                if not self._parked:
+                    return None
+                expires, conn = self._parked.pop()
+            if time.monotonic() < expires and conn.quiet():
+                return conn
+            conn.close()
+
+    def park(self, conn: Conn) -> None:
+        with self._lock:
+            if self._idle > 0 and len(self._parked) < KEEP_ALIVE_CONNS:
+                self._parked.append((time.monotonic() + self._idle, conn))
+                if self._sweep is None:
+                    self._arm(self._idle)
+                return
+        conn.close()
+
+    def drain(self) -> None:
+        with self._lock:
+            parked, self._parked = self._parked, []
+            if self._sweep is not None:
+                self._sweep.cancel()
+                self._sweep = None
+        for _, conn in parked:
+            conn.close()
+
+    def _arm(self, delay: float) -> None:
+        self._sweep = threading.Timer(delay, self._evict)
+        self._sweep.daemon = True
+        self._sweep.start()
+
+    def _evict(self) -> None:
+        now = time.monotonic()
+        with self._lock:
+            expired = [conn for expires, conn in self._parked if expires <= now]
+            self._parked = [entry for entry in self._parked if entry[0] > now]
+            self._sweep = None
+            if self._parked:
+                self._arm(self._parked[0][0] - now)
+        for conn in expired:
+            conn.close()
 
 
 def dial_agent(
