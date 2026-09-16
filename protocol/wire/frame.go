@@ -20,6 +20,8 @@ const (
 	// ProtoVersion is stamped into every request as "v"; silkd ignores
 	// unknown fields, which is the forward-compatibility story.
 	ProtoVersion = 1
+	// KeepAliveProto is the InfoResp.Proto from which silkd serves RPCs back to back on one connection.
+	KeepAliveProto = 2
 	// MaxFrame mirrors silkd's frame cap.
 	MaxFrame = 8 << 20
 	// BulkChunk mirrors silkd's BULK_CHUNK, the payload of one bulk data frame.

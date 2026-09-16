@@ -63,10 +63,15 @@ func (s *Sandbox) Attach(ctx context.Context, pid uint32, stdout, stderr io.Writ
 }
 
 func (s *Sandbox) drainProc(ctx context.Context, req wire.Request, stdout, stderr io.Writer) (int32, bool, error) {
-	conn, done, err := s.call(ctx, req)
+	conn, l, err := s.call(ctx, req)
 	if err != nil {
 		return 0, false, err
 	}
-	defer done()
-	return pumpStdio(ctx, conn, stdout, stderr)
+	defer l.close()
+	code, exited, err := pumpStdio(ctx, conn, stdout, stderr)
+	// logs closes with done after the exit frame
+	if _, replay := req.(*wire.Logs); replay && exited && err == nil {
+		err = terminalErr(ctx, conn)
+	}
+	return code, exited, l.done(err)
 }

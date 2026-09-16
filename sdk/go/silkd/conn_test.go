@@ -2,7 +2,6 @@ package silkd_test
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"net"
 	"strings"
@@ -47,8 +46,13 @@ func TestConnInfoRoundTrip(t *testing.T) {
 	if !ok || info.Version != "silkdtest" {
 		t.Errorf("got %#v, want silkdtest info", resp)
 	}
-	if _, err := conn.Recv(); !errors.Is(err, io.EOF) {
-		t.Errorf("got %v after terminal frame, want EOF", err)
+	if err := conn.Send(wire.Info{}); err != nil {
+		t.Fatalf("send on the kept connection: %v", err)
+	}
+	if resp, err := conn.Recv(); err != nil {
+		t.Fatalf("recv on the kept connection: %v", err)
+	} else if _, ok := resp.(*wire.InfoResp); !ok {
+		t.Errorf("got %#v on the kept connection, want the next info", resp)
 	}
 }
 

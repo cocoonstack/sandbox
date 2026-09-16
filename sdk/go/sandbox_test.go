@@ -99,7 +99,7 @@ func TestUpgradeKeepsCoalescedBytes(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	var out strings.Builder
-	code, err := testSandbox(t, ts).Run(t.Context(), Cmd{Argv: []string{"echo", "42"}, Stdout: &out})
+	code, err := legacySandbox(t, ts).Run(t.Context(), Cmd{Argv: []string{"echo", "42"}, Stdout: &out})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -160,8 +160,17 @@ func newAgentServer(t *testing.T, serve func(net.Conn)) *httptest.Server {
 	return ts
 }
 
-func testSandbox(t *testing.T, ts *httptest.Server) *Sandbox {
+func testSandbox(t *testing.T, ts *httptest.Server, opts ...ClientOption) *Sandbox {
 	t.Helper()
-	c := testClient(t, ts)
-	return &Sandbox{ID: "sb_1", c: c, token: "tok", owner: c.addr}
+	c := testClient(t, ts, opts...)
+	sb := &Sandbox{ID: "sb_1", c: c, token: "tok", owner: c.addr}
+	t.Cleanup(sb.pool.drain)
+	return sb
+}
+
+func legacySandbox(t *testing.T, ts *httptest.Server) *Sandbox {
+	t.Helper()
+	sb := testSandbox(t, ts)
+	sb.pool.proto.Store(1)
+	return sb
 }

@@ -56,7 +56,7 @@ func TestWatchReleasesTheRelayWhenTheSandboxEnds(t *testing.T) {
 		_, _ = r.ReadByte()
 		close(released)
 	})
-	sb := testSandbox(t, ts)
+	sb := legacySandbox(t, ts)
 	w, err := sb.Watch(t.Context(), "/work", true)
 	if err != nil {
 		t.Fatalf("Watch: %v", err)

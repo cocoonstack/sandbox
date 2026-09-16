@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (net.Conn, error) {
+func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (*upgradedConn, error) {
 	if strings.ContainsAny(id, "\r\n\x00") || strings.ContainsAny(token, "\r\n\x00") {
 		return nil, fmt.Errorf("agent upgrade: id or token contains a control character")
 	}
@@ -59,12 +59,13 @@ func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (net.Con
 		_ = raw.Close()
 		return nil, err
 	}
-	return &upgradedConn{Conn: conn, r: br}, nil
+	return &upgradedConn{Conn: conn, tcp: raw, r: br}, nil
 }
 
 type upgradedConn struct {
 	net.Conn
-	r *bufio.Reader
+	tcp net.Conn // under any TLS, for the parked-connection probe
+	r   *bufio.Reader
 }
 
 func (u *upgradedConn) Read(p []byte) (int, error) { return u.r.Read(p) }

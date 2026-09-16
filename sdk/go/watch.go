@@ -82,17 +82,17 @@ func (w *Watcher) setErr(err error) {
 // returns once the sandbox acknowledges the watch is armed, so events caused
 // after Watch returns are guaranteed captured.
 func (s *Sandbox) Watch(ctx context.Context, path string, recursive bool) (*Watcher, error) {
-	conn, done, err := s.call(ctx, &wire.FsWatch{Path: path, Recursive: recursive})
+	conn, l, err := s.call(ctx, &wire.FsWatch{Path: path, Recursive: recursive})
 	if err != nil {
 		return nil, err
 	}
 	if _, err = expect[wire.Ready](ctx, conn); err != nil {
-		done()
+		l.close()
 		return nil, err
 	}
 	w := &Watcher{
 		events: make(chan wire.Event, 16),
-		stop:   done,
+		stop:   l.close,
 		closed: make(chan struct{}),
 	}
 	go w.drain(ctx, conn)

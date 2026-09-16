@@ -132,16 +132,16 @@ func (s *Sandbox) ProxyPort(ctx context.Context, localAddr string, port uint16) 
 // openStream drives the call → Ready → attach dance shared by every verb
 // that turns the connection into a raw byte stream (DialPort, Lsp.Request).
 func (s *Sandbox) openStream(ctx context.Context, req wire.Request) (*PortConn, error) {
-	conn, done, err := s.call(ctx, req)
+	conn, l, err := s.call(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	if _, err = expect[wire.Ready](ctx, conn); err != nil {
-		done()
+		l.close()
 		return nil, err
 	}
 	pr, pw := io.Pipe()
-	p := &PortConn{conn: conn, stop: done, out: pr}
+	p := &PortConn{conn: conn, stop: l.close, out: pr}
 	go p.drain(ctx, pw)
 	return p, nil
 }

@@ -68,6 +68,7 @@ type Sandbox struct {
 	c     *Client
 	token string
 	owner string // data-plane address (owner node), from the claim
+	pool  agentPool
 }
 
 // Owner returns the data-plane address of the node that owns the sandbox —
@@ -102,20 +103,31 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	if len(cmd.Argv) == 0 {
 		return 0, fmt.Errorf("empty argv")
 	}
-	conn, done, err := s.call(ctx, &wire.Exec{Argv: cmd.Argv, Cwd: cmd.Cwd, Env: cmd.Env, User: cmd.User, Session: cmd.Session})
+	conn, l, err := s.call(ctx, &wire.Exec{Argv: cmd.Argv, Cwd: cmd.Cwd, Env: cmd.Env, User: cmd.User, Session: cmd.Session})
 	if err != nil {
 		return 0, err
 	}
-	defer done()
+	defer l.close()
 
+	stdinDone := make(chan struct{})
 	if cmd.Stdin == nil {
 		// a guest that already answered and closed fails this send; the frames it sent still come back below
 		_ = conn.Send(wire.StdinClose{})
+		close(stdinDone)
 	} else {
-		go pumpStdin(conn, cmd.Stdin)
+		go func() {
+			defer close(stdinDone)
+			pumpStdin(conn, cmd.Stdin)
+		}()
 	}
 
 	code, exited, err := pumpStdio(ctx, conn, cmd.Stdout, cmd.Stderr)
+	// a pump still parked in Read would write into the next RPC, so its connection is not kept
+	select {
+	case <-stdinDone:
+		err = l.done(err)
+	default:
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -175,12 +187,14 @@ func (s *Sandbox) Promote(ctx context.Context, template string) (*Template, erro
 // sessions, processes, and memory state intact. The TTL keeps running — a
 // hibernated sandbox is still reaped at its deadline.
 func (s *Sandbox) Hibernate(ctx context.Context) error {
+	s.pool.drain()
 	return doNoContent(ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/hibernate", nil, s.token, "hibernate")
 }
 
 // Close releases the sandbox on its node; releasing one already gone is not
 // an error. It takes no ctx so it stays defer-friendly — bounded internally.
 func (s *Sandbox) Close() error {
+	s.pool.drain()
 	ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
 	defer cancel()
 	resp, err := s.c.roundTrip(ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/release", nil, s.token)
@@ -194,29 +208,47 @@ func (s *Sandbox) Close() error {
 	return apiError("release", resp)
 }
 
-// dial opens one relayed silkd connection, closed by ctx cancellation or the returned cleanup; one connection carries one RPC.
-func (s *Sandbox) dial(ctx context.Context) (*silkd.Conn, func(), error) {
-	raw, err := s.c.dialAgent(ctx, s.owner, s.ID, s.token)
-	if err != nil {
+// call sends req on the handle's parked connection or a fresh dial and hands back the lease that ends the RPC; ctx cancellation closes the connection under it.
+func (s *Sandbox) call(ctx context.Context, req wire.Request) (*silkd.Conn, *lease, error) {
+	c := s.pool.take()
+	if c == nil {
+		var err error
+		if c, err = s.dial(ctx, req); err != nil {
+			return nil, nil, err
+		}
+	} else if err := c.Send(req); err != nil {
+		_ = c.Close()
 		return nil, nil, err
 	}
-	conn := silkd.NewConn(raw)
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	return conn, func() { stop(); _ = conn.Close() }, nil
+	return c.Conn, &lease{s: s, conn: c, stop: context.AfterFunc(ctx, func() { _ = c.Close() })}, nil
 }
 
-// call dials one RPC connection and sends its leading request, cleaning up
-// itself on a send failure; the returned cleanup must be deferred.
-func (s *Sandbox) call(ctx context.Context, req wire.Request) (*silkd.Conn, func(), error) {
-	conn, done, err := s.dial(ctx)
-	if err != nil {
-		return nil, nil, err
+// dial opens a relay connection and sends req on it; the handle's first connection pipelines info ahead of req, and a daemon that closes after answering never read req, so the send repeats on a fresh dial.
+func (s *Sandbox) dial(ctx context.Context, req wire.Request) (*agentConn, error) {
+	for {
+		raw, err := s.c.dialAgent(ctx, s.owner, s.ID, s.token)
+		if err != nil {
+			return nil, err
+		}
+		c := &agentConn{Conn: silkd.NewConn(raw), raw: raw}
+		if s.pool.proto.Load() != 0 {
+			if err = c.Send(req); err != nil {
+				_ = c.Close()
+				return nil, err
+			}
+			return c, nil
+		}
+		proto, err := c.probeProto(ctx, req)
+		if err != nil {
+			_ = c.Close()
+			return nil, err
+		}
+		s.pool.proto.Store(proto)
+		if proto >= wire.KeepAliveProto {
+			return c, nil
+		}
+		_ = c.Close()
 	}
-	if err := conn.Send(req); err != nil {
-		done()
-		return nil, nil, err
-	}
-	return conn, done, nil
 }
 
 // pumpStdin chunks the reader into stdin frames; Send's own locking keeps
