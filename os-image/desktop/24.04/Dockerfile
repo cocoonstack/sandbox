@@ -94,7 +94,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user \
     && chmod 0440 /etc/sudoers.d/user \
     && install -d -o user -g user /home/user/Desktop /home/user/Documents /home/user/Downloads \
-    # python-xlib insists the XAUTHORITY file exists even though Xvfb -ac ignores it.
+    # python-xlib needs an entry for the display, written once Xvfb is up; a bare file only turns the failure into a stdout warning
     && install -o user -g user -m 0600 /dev/null /home/user/.Xauthority \
     && chown -R user:user /opt/osworld-server \
     && install -d /var/lib/systemd/linger && touch /var/lib/systemd/linger/user \
@@ -195,6 +195,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       '[Service]' \
       'Type=simple' \
       "ExecStart=/usr/bin/Xvfb :1 -screen 0 ${SCREEN}x24 -ac -noreset -nolisten tcp +extension GLX +extension RANDR +render" \
+      'ExecStartPost=/bin/sh -c "for i in $(seq 1 50); do [ -S /tmp/.X11-unix/X1 ] && break; sleep 0.1; done; runuser -u user -- xauth -f /home/user/.Xauthority add :1 . $(mcookie)"' \
       'Restart=always' \
       'RestartSec=1s' \
       '' \
