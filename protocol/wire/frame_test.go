@@ -328,6 +328,7 @@ func TestIsContinuation(t *testing.T) {
 		{encoded(Stdin{Data: []byte("hi")}), true},
 		{encoded(StdinClose{}), true},
 		{string(AppendBulkRequest(nil, "stdin", []byte("hi"))), true},
+		{`{"op":"data","v":1,"data":"aGk="}`, true},
 		{encoded(Exec{Argv: []string{"true"}}), false},
 		{encoded(FsStat{Path: "/"}), false},
 		{encoded(Info{}), false},
