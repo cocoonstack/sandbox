@@ -65,6 +65,32 @@ keep an idle relay for 30 seconds and send later RPCs on it; use mode C of
 | git add+commit+status (real repo) | 30–130 ms |
 | pty open→echo→exit | 5–28 ms |
 
+## Relay connection reuse
+
+Every data-plane RPC used to pay a TCP dial, an HTTP Upgrade and, behind a
+TLS edge, a handshake. From proto 2 silkd serves RPCs back to back, and both
+SDKs keep one relay connection per handle with a 30s idle window.
+
+`e2e/cmd/rpcbench`, warm `rt:24.04` sandbox, `net=none`, n=200 `fs_stat`
+RPCs per arm, bare metal, client on the node. The two arms interleave sample
+by sample and swap which one leads, so drift cannot land on one of them.
+
+| per-RPC wall | plain p50 | plain p90 | TLS edge p50 | TLS edge p90 |
+| --- | --- | --- | --- | --- |
+| dial per RPC | 0.29ms | 0.33ms | 1.15ms | 1.34ms |
+| kept connection | 0.10ms | 0.13ms | 0.12ms | 0.16ms |
+| pre-dialed spare | 0.19ms | 0.25ms | 0.95ms | 1.24ms |
+
+Reuse removes ~0.19ms per RPC on a plain node and ~1.0ms behind the edge,
+where the handshake dominates and the kept connection is the only arm that
+escapes it. Three runs per leg agreed within 0.02ms at p50; one run on a
+loaded node moved every arm together and left the ratio intact.
+
+The edge here is a local HTTP/1.1 TLS terminator on loopback, so its
+handshake carries no network RTT — a client across a WAN saves more, not
+less. An old daemon reporting proto 1 makes the SDK dial per call, which is
+the plain dial-per-RPC row.
+
 ## Boot chain
 
 Kernel entry → rootfs handoff (custom all-builtin kernel + Rust initramfs,
@@ -142,9 +168,11 @@ That experiment rejected the background pre-dialer because its ~0.2ms p50 win
 did not survive the tail. Current main instead implements protocol-level
 sequential reuse: silkd proto 2 serves RPCs back to back and each SDK handle
 parks completed relay connections for its next call. This is neither the
-pre-dialer nor concurrent multiplexing. `e2e/cmd/rpcbench` now reports all
-three paths as A (dial per RPC), C (SDK keep-alive), and B (pre-dialed spare);
-rerun it before publishing current comparative numbers.
+pre-dialer nor concurrent multiplexing. `e2e/cmd/rpcbench` reports all three
+paths as A (dial per RPC), C (SDK keep-alive), and B (pre-dialed spare); the
+current numbers are in Relay connection reuse above, and they keep the
+pre-dialer declined — behind a TLS edge it tracks the dial arm, because it
+hides a handshake only while RPCs arrive slower than a dial completes.
 
 **Template pre-check meta GET**: a single `ReadMeta` against MinIO
 measures 4.76ms cross-host (sub-ms node-local, 20-50ms on WAN S3). It
