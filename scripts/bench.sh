@@ -121,8 +121,8 @@ if [[ -n $COLD_TEMPLATE ]]; then
   cold_row=$(claim_ms -template "$COLD_TEMPLATE" -n "$COLD_N" | stats)
 fi
 
-echo "== data plane: exec RTT (rpcbench n=$RPC_N) + fs_pull throughput (${PULL_MB}MiB ×$PULL_N)"
-rpc_line=$("$DATA/rpcbench" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -n "$RPC_N" |
+echo "== data plane: fs_stat RTT (rpcbench n=$RPC_N) + fs_pull throughput (${PULL_MB}MiB ×$PULL_N)"
+stat_line=$("$DATA/rpcbench" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -n "$RPC_N" |
   sed -n 's/.*dial-per-RPC[^n]*\(n=.*\)/\1/p')
 pull_best=$("$DATA/pullbench" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -size "$PULL_MB" -n "$PULL_N" |
   sed -n 's/.* \([0-9.]*\) MiB\/s/\1/p' | sort -n | tail -1)
@@ -190,7 +190,7 @@ cat <<EOF
 
 | data plane | measured |
 |---|---|
-| exec RTT (dial per RPC) | $rpc_line |
+| fs_stat RTT (dial per RPC) | $stat_line |
 | fs_pull throughput (${PULL_MB} MiB) | ${pull_best:-?} MiB/s best of $PULL_N |
 | burst wall ($BURST_N concurrent clones) | $burst_wall ms |
 | warm refill recovery (0 → $WARM) | $refill_ms ms |

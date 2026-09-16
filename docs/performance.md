@@ -49,8 +49,10 @@ drain ([Benchmarks](benchmarks.md)).
 
 ## Verb round-trips (SDK over the relay, bare metal)
 
-Steady-state times from the e2e smoke, one live sandbox, including the
-HTTP-upgrade relay and vsock hops:
+The published smoke ranges below predate connection reuse: each call includes
+a fresh HTTP upgrade and vsock connection. Current Go and Python SDK handles
+keep an idle relay for 30 seconds and send later RPCs on it; use mode C of
+`rpcbench` for the current steady-state path.
 
 | verb | typical RTT |
 |---|---|
@@ -131,15 +133,18 @@ marshal-off-lock split alone is a ~6× drop at 1000 live claims, a margin that
 grows with claim count. `BenchmarkStoreSaveScaling` (the combined `save()`
 Reconcile uses) stays as a regression sentinel.
 
-## Measured and declined (decision data)
+## Decision data
 
-**Pre-dialed relay connections** (2026-07-07, GCE nested, n=300
-`fs_stat` RPCs): dial-per-RPC (today) p50 1.23ms / p90 4.69ms / p99
-10.51ms; one connection pre-dialed ahead p50 1.05ms / p90 4.47ms / p99
-15.49ms. The handshake is not the dominant cost — the win is ~0.2ms at
-p50, nothing at p90, and the background dialer degrades p99. Decision:
-keep one-connection-per-RPC; revisit only with a protocol-level mux.
-`e2e/cmd/rpcbench` reproduces the experiment.
+**Relay connection strategies** (2026-07-07, GCE nested, n=300 `fs_stat`
+RPCs): dial-per-RPC measured p50 1.23ms / p90 4.69ms / p99 10.51ms; one
+connection pre-dialed ahead measured p50 1.05ms / p90 4.47ms / p99 15.49ms.
+That experiment rejected the background pre-dialer because its ~0.2ms p50 win
+did not survive the tail. Current main instead implements protocol-level
+sequential reuse: silkd proto 2 serves RPCs back to back and each SDK handle
+parks completed relay connections for its next call. This is neither the
+pre-dialer nor concurrent multiplexing. `e2e/cmd/rpcbench` now reports all
+three paths as A (dial per RPC), C (SDK keep-alive), and B (pre-dialed spare);
+rerun it before publishing current comparative numbers.
 
 **Template pre-check meta GET**: a single `ReadMeta` against MinIO
 measures 4.76ms cross-host (sub-ms node-local, 20-50ms on WAN S3). It
