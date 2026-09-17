@@ -202,9 +202,11 @@ fn mkdir_all(path: &str) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|err| format!("mkdir {path}: {err}"))
 }
 
-/// Resolves every virtio-blk serial in one sysfs sweep per poll iteration.
 fn resolve_disks(ids: &[&str], timeout: Duration) -> Result<Vec<String>, String> {
-    let found = poll_slots(ids.len(), timeout, |found| scan_serials(ids, found));
+    let found = poll_slots(ids.len(), timeout, |found| {
+        record_devices(ids, found);
+        scan_serials(ids, found);
+    });
     if found.iter().all(Option::is_some) {
         return Ok(found.into_iter().flatten().collect());
     }
@@ -246,6 +248,15 @@ fn scan_serials(ids: &[&str], found: &mut [Option<String>]) {
     }
 }
 
+// cocoon's Firecracker lane names the device node itself; there is no virtio serial to match
+fn record_devices(ids: &[&str], found: &mut [Option<String>]) {
+    for (slot, id) in found.iter_mut().zip(ids) {
+        if slot.is_none() && id.starts_with("/dev/") && Path::new(id).exists() {
+            *slot = Some((*id).into());
+        }
+    }
+}
+
 fn record_serial(ids: &[&str], found: &mut [Option<String>], serial: &str, device: &str) {
     for (i, id) in ids.iter().enumerate() {
         if found[i].is_none() && *id == serial && Path::new(device).exists() {
@@ -280,5 +291,16 @@ mod tests {
 
         record_serial(&ids, &mut found, "layer", "/dev/null");
         assert_eq!(found[0].as_deref(), Some("/dev/null"));
+    }
+
+    #[test]
+    fn device_path_ids_resolve_once_the_node_exists() {
+        let ids = ["/dev/null", "/dev/sandbox-init-missing-device", "layer"];
+        let mut found = [None, None, None];
+
+        record_devices(&ids, &mut found);
+        assert_eq!(found[0].as_deref(), Some("/dev/null"));
+        assert!(found[1].is_none());
+        assert!(found[2].is_none());
     }
 }
