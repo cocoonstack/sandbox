@@ -13,10 +13,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/projecteru2/core/log"
 	coretypes "github.com/projecteru2/core/types"
 )
+
+// shutdownGrace bounds the wait for a tool call the signal interrupted.
+const shutdownGrace = 10 * time.Second
 
 func main() {
 	ctx := context.Background()
@@ -43,6 +47,12 @@ func main() {
 			log.WithFunc("main").Fatalf(ctx, err, "serve stdio")
 		}
 	case <-ctx.Done():
-		srv.closeBoxes()
+		// the canceled ctx ends the tool call in flight; closing stdin ends the read loop, whose defer releases every claim
+		_ = os.Stdin.Close()
+		select {
+		case <-served:
+		case <-time.After(shutdownGrace):
+			srv.closeBoxes()
+		}
 	}
 }

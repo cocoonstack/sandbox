@@ -152,7 +152,7 @@ Boot contract (cmdline keys consumed by sandbox-init):
 |---|---|
 | `cocoon.layers=a,b,…` | EROFS layer disks resolved from virtio-blk serials (or `/dev/vdX` paths, as the Firecracker lane passes them), lowerdir order |
 | `cocoon.cow=x` | writable ext4 COW disk (same resolution rules) |
-| `cocoon.timeout=10` | wait budget for the whole disk and NIC set, seconds |
+| `cocoon.timeout=10` | wait budget for the whole disk set, seconds (NIC MACs get a fixed 200 ms) |
 | `cocoon.hostname=h` | set via `sethostname(2)` before handoff |
 | `ip=addr::gw:mask:host:ethN:off[:dns0[:dns1]]` | cocoon CNI static config: persisted as a MAC-matched networkd unit in the new root (not applied in the initramfs); absent → the image's DHCP fallback covers the NIC |
 | `sandbox.init=/path` | handoff target, default `/sbin/init` |

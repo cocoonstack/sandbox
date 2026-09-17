@@ -45,9 +45,10 @@ type server struct {
 	client   *sandbox.Client
 	template string
 
-	mu    sync.Mutex
-	boxes map[string]*sandbox.Sandbox
-	ckpts map[string]*sandbox.Checkpoint
+	mu     sync.Mutex
+	closed bool
+	boxes  map[string]*sandbox.Sandbox
+	ckpts  map[string]*sandbox.Checkpoint
 }
 
 func newServer(addr, token, template string) (*server, error) {
@@ -160,6 +161,7 @@ func (s *server) box(id string) (*sandbox.Sandbox, error) {
 // otherwise hold the VMs until it expires.
 func (s *server) closeBoxes() {
 	s.mu.Lock()
+	s.closed = true
 	boxes := slices.Collect(maps.Values(s.boxes))
 	clear(s.boxes)
 	s.mu.Unlock()
@@ -170,8 +172,14 @@ func (s *server) closeBoxes() {
 
 func (s *server) trackBox(sb *sandbox.Sandbox) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.boxes[sb.ID] = sb
+	closed := s.closed
+	if !closed {
+		s.boxes[sb.ID] = sb
+	}
+	s.mu.Unlock()
+	if closed {
+		_ = sb.Close() // claimed after the session's release ran; nothing else would ever release it
+	}
 }
 
 func (s *server) dropBox(id string) {

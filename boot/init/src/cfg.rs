@@ -14,7 +14,7 @@ pub struct BootCfg {
     pub layers: Vec<String>,
     /// Writable ext4 COW disk ID (same resolution rules as layers).
     pub cow: String,
-    /// One wait budget shared by the whole disk and NIC set.
+    /// Wait budget for the whole disk set; NICs get a fixed 200 ms.
     pub timeout: Duration,
     pub hostname: Option<String>,
     /// Static per-NIC config, persisted as networkd units and never applied in the initramfs.

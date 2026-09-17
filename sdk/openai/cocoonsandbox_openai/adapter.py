@@ -6,6 +6,7 @@ claimed sandbox; delete releases it, resume reattaches by id + token."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import socket
 import uuid
@@ -157,7 +158,8 @@ class CocoonSandboxClient(BaseSandboxClient[CocoonSandboxClientOptions]):
                 owner=sb.owner,
             )
         except BaseException:
-            await asyncio.to_thread(sb.close)
+            with contextlib.suppress(Exception):  # the construction error is the one worth reading
+                await asyncio.to_thread(sb.close)
             raise
         return self._wrap_session(CocoonSandboxSession.from_state(state))
 
