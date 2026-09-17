@@ -128,7 +128,7 @@ impl Broker {
         let res = pump_stdout(stdout, w).await;
         // aborting mid-write is safe: the child is killed next.
         feed.abort();
-        let _ = self.reap(server_id).await;
+        self.reap(server_id).await;
         res
     }
 

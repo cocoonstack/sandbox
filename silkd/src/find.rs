@@ -11,7 +11,7 @@ use tokio::sync::{Semaphore, SemaphorePermit, mpsc};
 
 use crate::proto::{self, ErrorKind, Response, err_frame};
 
-/// Size above which find skips a file unread.
+/// Size above which find skips a file unread and replace reports zero replacements.
 pub const FIND_MAX_FILE: u64 = 8 * 1024 * 1024;
 
 /// Match frames in flight between the walking thread and the writer.
@@ -223,7 +223,7 @@ where
     // one blocking-pool dispatch for the whole tree, not three per file.
     let (tx, mut rx) = mpsc::channel::<Response>(MATCH_QUEUE);
     let budget = Arc::new(MatchBudget::new(budget_bytes, Handle::current()));
-    let walker_budget = budget.clone();
+    let walker_budget = Arc::clone(&budget);
     let walk = tokio::task::spawn_blocking(move || {
         Walk {
             re: &re,

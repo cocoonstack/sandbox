@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
 use crate::proc::{Chunk, Proc, Table, synth_pid};
-use crate::proto::{ErrorKind, PtyReq, READ_CHUNK, Request, Response};
+use crate::proto::{self, ErrorKind, PtyReq, READ_CHUNK, Request, Response};
 use crate::sysutil;
 
 /// Bounds the post-exit drain of the master's buffered tail so a stuck fd cannot wedge teardown.
@@ -30,11 +30,11 @@ pub async fn open<W: AsyncWrite + Unpin>(
 ) -> std::io::Result<()> {
     let (master, slave) = match sysutil::openpty(req.cols, req.rows) {
         Ok(pair) => pair,
-        Err(e) => return crate::proto::err_frame(out, &e, "openpty").await,
+        Err(e) => return proto::err_frame(out, &e, "openpty").await,
     };
     let resize_fd = match master.try_clone() {
         Ok(fd) => fd,
-        Err(e) => return crate::proto::err_frame(out, &e, "dup pty master").await,
+        Err(e) => return proto::err_frame(out, &e, "dup pty master").await,
     };
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
@@ -49,7 +49,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
     if let Some(user) = &req.user
         && let Err(e) = sysutil::apply_user(&mut cmd, user)
     {
-        return crate::proto::error_frame(out, ErrorKind::BadRequest, e).await;
+        return proto::error_frame(out, ErrorKind::BadRequest, e).await;
     }
     match (slave.try_clone(), slave.try_clone()) {
         (Ok(in_fd), Ok(out_fd)) => {
@@ -58,7 +58,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
                 .stderr(Stdio::from(slave));
         }
         (Err(e), _) | (_, Err(e)) => {
-            return crate::proto::err_frame(out, &e, "dup pty slave").await;
+            return proto::err_frame(out, &e, "dup pty slave").await;
         }
     }
     sysutil::adopt_controlling_tty(&mut cmd);
@@ -66,7 +66,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return crate::proto::err_frame(out, &e, "spawn shell").await,
+        Err(e) => return proto::err_frame(out, &e, "spawn shell").await,
     };
     // drop cmd so its slave dups close, else the master never sees the shell's exit and the pump hangs.
     drop(cmd);
@@ -80,10 +80,10 @@ pub async fn open<W: AsyncWrite + Unpin>(
         Err(e) => {
             let _ = child.start_kill();
             table.remove_if(pid, &proc);
-            return crate::proto::err_frame(out, &e, "watch pty master").await;
+            return proto::err_frame(out, &e, "watch pty master").await;
         }
     };
-    if let Err(e) = crate::proto::write_frame(out, &Response::Started { pid }).await {
+    if let Err(e) = proto::write_frame(out, &Response::Started { pid }).await {
         let _ = child.start_kill();
         finish(&proc, -1);
         table.remove_if(pid, &proc);
@@ -93,7 +93,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
     let code = pump(&master, &proc, client, out, &mut child).await;
     finish(&proc, code);
     table.remove_if(pid, &proc);
-    crate::proto::write_frame(out, &Response::Exit { code }).await
+    proto::write_frame(out, &Response::Exit { code }).await
 }
 
 /// Applies a resize to a live pty by pid.
@@ -108,8 +108,8 @@ pub async fn resize<W: AsyncWrite + Unpin>(
         return Ok(());
     };
     match proc.resize(cols, rows) {
-        Ok(()) => crate::proto::write_frame(w, &Response::Done).await,
-        Err(e) => crate::proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
+        Ok(()) => proto::write_frame(w, &Response::Done).await,
+        Err(e) => proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
     }
 }
 
@@ -151,7 +151,7 @@ async fn pump<W: AsyncWrite + Unpin>(
                     Ok(Ok(0)) | Ok(Err(_)) => eof = true,
                     Ok(Ok(n)) => {
                         proc.emit_bytes(false, &buf[..n]);
-                        if crate::proto::write_chunk_frame(out, &mut frame, "stdout", &buf[..n]).await.is_err() {
+                        if proto::write_chunk_frame(out, &mut frame, "stdout", &buf[..n]).await.is_err() {
                             let _ = child.start_kill();
                             return sysutil::wait_code(child).await;
                         }
@@ -202,7 +202,7 @@ async fn drain<W: AsyncWrite + Unpin>(
                 Ok(Ok(0)) | Ok(Err(_)) => return,
                 Ok(Ok(n)) => {
                     proc.emit_bytes(false, &buf[..n]);
-                    if crate::proto::write_chunk_frame(out, frame, "stdout", &buf[..n])
+                    if proto::write_chunk_frame(out, frame, "stdout", &buf[..n])
                         .await
                         .is_err()
                     {

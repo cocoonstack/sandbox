@@ -59,7 +59,7 @@ where
                     return Ok(());
                 }
             },
-            // the client sends nothing during a watch, so any readable state ends it.
+            // a watch is connection-bound: a hang-up or a request pipelined behind it ends it
             _ = reader.fill_buf() => return Ok(()),
         }
     }

@@ -50,8 +50,8 @@ where
 
 /// Streams the regular file at `path` back as `data` frames, then `done`.
 pub async fn read<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<()> {
-    // O_NONBLOCK keeps a writerless FIFO from parking the open; the kind check runs on the opened fd, so a swap
-    // between check and open cannot turn the read into a device stream
+    // O_NONBLOCK keeps a writerless FIFO from parking the open
+    // the kind check runs on the opened fd, so a path swap cannot turn the read into a device stream
     let opened = tokio::task::spawn_blocking(move || {
         let file = std::fs::OpenOptions::new()
             .read(true)
