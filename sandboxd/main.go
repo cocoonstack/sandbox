@@ -18,7 +18,6 @@ import (
 
 	"github.com/hashicorp/memberlist"
 	"github.com/projecteru2/core/log"
-	coretypes "github.com/projecteru2/core/types"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
@@ -56,7 +55,7 @@ func main() {
 	ctx := context.Background()
 	logLevel := cmp.Or(os.Getenv("SANDBOXD_LOG_LEVEL"), "info")
 	logger := log.WithFunc("main")
-	if err := log.SetupLog(ctx, &coretypes.ServerLogConfig{Level: logLevel}, ""); err != nil {
+	if err := setupLog(ctx, logLevel); err != nil {
 		logger.Fatalf(ctx, err, "setup log")
 	}
 	logger.Infof(ctx, "sandboxd %s", versionString())

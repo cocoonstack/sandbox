@@ -429,6 +429,12 @@ Environment=SANDBOXD_LOG_LEVEL=info
 WantedBy=multi-user.target
 ```
 
+Each record carries its syslog level, so alerting keys on systemd priority:
+`journalctl -u sandboxd -p err` lists the errors and `-p warning` the
+degradations. `journalctl` answers an empty range with `-- No entries --`, so
+a check that counts lines reads one problem where there are none — count
+records (`-o json | wc -l`) or test the output for emptiness.
+
 Stopping sandboxd leaves VMs alive; the next start reconciles them. Claimed
 sandboxes are reaped when their TTL expires (default 5m, capped at 24h).
 
