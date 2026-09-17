@@ -12,7 +12,7 @@ import (
 )
 
 func BenchmarkSignLeaf(b *testing.B) {
-	ca := benchCA(b)
+	ca := testCAOnly(b)
 	for b.Loop() {
 		if _, err := ca.SignLeaf("bench.example.com"); err != nil {
 			b.Fatalf("sign: %v", err)
@@ -56,23 +56,6 @@ func BenchmarkSplicedHandshake(b *testing.B) {
 	}
 }
 
-func benchCA(b *testing.B) *CA {
-	b.Helper()
-	rootCert, rootKey, err := GenerateRoot("bench root")
-	if err != nil {
-		b.Fatalf("root: %v", err)
-	}
-	interCert, interKey, err := IssueIntermediate(rootCert, rootKey, "bench")
-	if err != nil {
-		b.Fatalf("intermediate: %v", err)
-	}
-	ca, err := LoadCA(rootCert, interCert, interKey)
-	if err != nil {
-		b.Fatalf("load ca: %v", err)
-	}
-	return ca
-}
-
 func benchFront(b *testing.B, intercept bool) (proxyAddr string, roots *x509.CertPool) {
 	b.Helper()
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -83,14 +66,14 @@ func benchFront(b *testing.B, intercept bool) (proxyAddr string, roots *x509.Cer
 	var ca *CA
 	roots = x509.NewCertPool()
 	if intercept {
-		ca = benchCA(b)
+		ca = testCAOnly(b)
 		if !roots.AppendCertsFromPEM(ca.CertPEM()) {
 			b.Fatal("append cluster root")
 		}
 	} else {
 		roots.AddCert(upstream.Certificate())
 	}
-	p := New("sb_b", "", Policy{Allow: []Rule{rule}}, nil, ca, fixedDial(upstream.Listener.Addr().String()), nil, nil)
+	p := New(Policy{Allow: []Rule{rule}}, nil, ca, fixedDial(upstream.Listener.Addr().String()), nil, nil)
 	if ca != nil {
 		p.mitmTr.TLSClientConfig.RootCAs = func() *x509.CertPool {
 			pool := x509.NewCertPool()

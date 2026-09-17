@@ -203,18 +203,18 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl ti
 	l := m.recLock(ckpt.ID)
 	l.RLock()
 	defer func() { l.RUnlock(); m.recDone(ckpt.ID) }()
+	if ckpt.Archive {
+		return nil, ErrUnknownCheckpoint // a wake image, not a branchable checkpoint
+	}
+	if !ckpt.Key.Capturable() {
+		return nil, ErrNoEgressFork
+	}
 	dir, _, _, err := m.ckpts.Fetch(ctx, ckpt.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, ErrUnknownCheckpoint // deleted between the pre-check and the lock
 	}
 	if err != nil {
 		return nil, fmt.Errorf("fetch checkpoint: %w", err)
-	}
-	if ckpt.Archive {
-		return nil, ErrUnknownCheckpoint // a wake image, not a branchable checkpoint
-	}
-	if !ckpt.Key.Capturable() {
-		return nil, ErrNoEgressFork
 	}
 	sb, err := m.provision(ctx, ckpt.Key, dir)
 	if err != nil {

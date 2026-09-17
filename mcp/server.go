@@ -141,12 +141,11 @@ func (s *server) dispatch(ctx context.Context, req *rpcRequest) rpcResponse {
 func (s *server) callTool(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, execTimeout)
 	defer cancel()
-	for _, t := range tools {
-		if t.name == name {
-			return t.handler(ctx, s, args)
-		}
+	i := slices.IndexFunc(tools, func(t tool) bool { return t.name == name })
+	if i < 0 {
+		return "", fmt.Errorf("unknown tool %q", name)
 	}
-	return "", fmt.Errorf("unknown tool %q", name)
+	return tools[i].handler(ctx, s, args)
 }
 
 func (s *server) box(id string) (*sandbox.Sandbox, error) {

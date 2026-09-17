@@ -201,7 +201,7 @@ func socksProxy(t *testing.T, policy Policy, ca *CA, dial DialFunc, events chan 
 	if events != nil {
 		audit = func(ev Event) { events <- ev }
 	}
-	p := New("sb_1", "acme", policy, nil, ca, dial, audit, holder)
+	p := New(policy, nil, ca, dial, audit, holder)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen socks: %v", err)

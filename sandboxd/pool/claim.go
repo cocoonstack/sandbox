@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
@@ -98,7 +99,7 @@ func (m *Manager) ClaimDeadline(id, token string) (time.Time, error) {
 	return sb.Deadline, nil
 }
 
-// PreviewDial authorizes one preview request and opens its guest connection.
+// PreviewDial opens a preview request's guest connection; the caller verified the HMAC token.
 func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.Conn, error) {
 	m.mu.Lock()
 	sb, ok := m.claimed[id]
@@ -382,22 +383,21 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	}
 
 	logger := log.WithFunc("pool.reapOnce")
-	keep := expired[:0]
-	for _, v := range expired {
-		if v.action == reapPurge {
-			if markErr := m.markArchiveCk(v.ck); markErr != nil {
-				logger.Errorf(ctx, markErr, "mark archive ck %s; keeping %s", v.ck, v.id)
-				continue
-			}
+	expired = slices.DeleteFunc(expired, func(v victim) bool {
+		if v.action != reapPurge {
+			return false
 		}
-		keep = append(keep, v)
-	}
-	expired = keep
+		markErr := m.markArchiveCk(v.ck)
+		if markErr != nil {
+			logger.Errorf(ctx, markErr, "mark archive ck %s; keeping %s", v.ck, v.id)
+		}
+		return markErr != nil
+	})
 	if len(expired) == 0 {
 		return
 	}
 	m.mu.Lock()
-	keep = expired[:0]
+	keep := expired[:0]
 	var purgeCks, purged []string
 	for _, v := range expired {
 		if v.action == reapPurge {

@@ -84,7 +84,7 @@ func run(addr, token, template, echo, secret, issuer string) error {
 
 func grepLine(out, needle string) string {
 	for line := range strings.SplitSeq(out, "\n") {
-		if strings.Contains(strings.ToLower(line), needle) {
+		if strings.Contains(strings.ToLower(line), strings.ToLower(needle)) {
 			return line
 		}
 	}

@@ -95,9 +95,6 @@ func (m *Manager) TenantClaims() map[string]int {
 
 // Audit records one relayed request frame against a sandbox: the op and addressing fields only.
 func (m *Manager) Audit(ctx context.Context, id string, line []byte) {
-	if m.audit == nil {
-		return
-	}
 	if len(line) > AuditLineCap {
 		// the addressing fields stay unread at this size, but a padded frame must not escape the journal
 		m.recordAudit(ctx, id, auditFrame{Op: "oversized"})

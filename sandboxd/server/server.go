@@ -354,7 +354,7 @@ func (s *Server) handleSandbox(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	sb, ok := s.mgr.Sandbox(id)
 	if !ok {
-		writeErr(w, http.StatusNotFound, "unknown sandbox")
+		writePoolErr(w, pool.ErrUnknownSandbox)
 		return
 	}
 	writeJSON(w, http.StatusOK, sb)
@@ -364,7 +364,7 @@ func (s *Server) handleSandboxStats(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	st, ok := s.mgr.Stats(r.Context(), id)
 	if !ok {
-		writeErr(w, http.StatusNotFound, "unknown sandbox")
+		writePoolErr(w, pool.ErrUnknownSandbox)
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
@@ -495,18 +495,13 @@ func (s *Server) handleDeleteCheckpoint(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	req := types.ClaimRequest{
-		Template: q.Get("template"),
-		Net:      types.NetShape(q.Get("net")),
-		Size:     types.Size(q.Get("size")),
-	}
-	key := req.Key()
+	key := types.PoolKey{Template: q.Get("template"), Net: types.NetShape(q.Get("net")), Size: types.Size(q.Get("size"))}.Defaulted()
 	err := s.mgr.DeleteTemplate(r.Context(), key, tenantFrom(r.Context()))
 	if errors.Is(err, pool.ErrUnknownTemplate) && s.placer != nil && q.Get("no_redirect") == "" &&
 		s.writeRedirect(w, s.templateOwners(s.placer.TemplateOwners, key.Hash(), tenantFrom(r.Context()))) {
 		return
 	}
-	writeResult(w, r, "delete template", req.Template, "delete template failed", err, func() {
+	writeResult(w, r, "delete template", key.Template, "delete template failed", err, func() {
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

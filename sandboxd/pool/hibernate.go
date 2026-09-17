@@ -51,13 +51,8 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		// cocoon resumes the guest before its fresh tap can be re-locked
 		return ErrNoEgressHibernate
 	}
-	// an adopted hibernate was never billed, so record it here
-	adopted, resolveErr := m.resolvePendingSnap(ctx, sb)
-	if adopted {
-		m.recordHibernate(ctx, sb)
-	}
-	if resolveErr != nil {
-		return resolveErr
+	if _, err := m.settlePendingSnap(ctx, sb); err != nil {
+		return err
 	}
 	if sb.HibernateSnap != "" {
 		m.disarmEgress(sb.ID, true)
@@ -80,9 +75,8 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	}
 	if hibErr := m.eng.Hibernate(ctx, sb.VMName, snap); hibErr != nil {
 		// the engine can report failure after the snapshot landed
-		adopted, resolveErr := m.resolvePendingSnap(ctx, sb)
+		adopted, resolveErr := m.settlePendingSnap(ctx, sb)
 		if adopted {
-			m.recordHibernate(ctx, sb)
 			m.disarmEgress(sb.ID, true)
 			if resolveErr != nil {
 				return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, resolveErr)
@@ -118,11 +112,7 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 		return m.wakeArchived(ctx, sb)
 	}
 	// settle a dangling intent before choosing running vs hibernated
-	adopted, err := m.resolvePendingSnap(ctx, sb)
-	if adopted {
-		m.recordHibernate(ctx, sb)
-	}
-	if err != nil {
+	if _, err := m.settlePendingSnap(ctx, sb); err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
 	if sb.HibernateSnap == "" {
@@ -281,6 +271,15 @@ func (m *Manager) setPendingSnap(sb *types.Sandbox, snap string) claimSnapshot {
 	defer m.mu.Unlock()
 	sb.PendingSnap = snap
 	return m.store.set(sb)
+}
+
+// settlePendingSnap settles a dangling hibernate intent and bills an adopted one, which never was.
+func (m *Manager) settlePendingSnap(ctx context.Context, sb *types.Sandbox) (adopted bool, err error) {
+	adopted, err = m.resolvePendingSnap(ctx, sb)
+	if adopted {
+		m.recordHibernate(ctx, sb)
+	}
+	return adopted, err
 }
 
 // resolvePendingSnap settles an unconfirmed hibernate intent against the engine's snapshot list.

@@ -240,7 +240,13 @@ type goldenResolution struct {
 	dir            string
 	templateDigest string
 	promoted       bool
-	release        func()
+	unlock         func()
+}
+
+func (g goldenResolution) release() {
+	if g.unlock != nil {
+		g.unlock()
+	}
 }
 
 // resolveGolden resolves a key's clone source: the pool golden, else a promoted template.
@@ -252,10 +258,10 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant s
 	}
 	m.mu.Unlock()
 	if dir != "" {
-		return goldenResolution{dir: dir, release: func() {}}, nil
+		return goldenResolution{dir: dir}, nil
 	}
 	if key.Net == types.NetEgress {
-		return goldenResolution{release: func() {}}, nil // never resume a live-captured template on the egress lane; cold-boot instead
+		return goldenResolution{}, nil // never resume a live-captured template on the egress lane; cold-boot instead
 	}
 	id := store.TemplateID(key.Hash())
 	l := m.recLock(id)
@@ -264,28 +270,28 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant s
 	if errors.Is(err, store.ErrNotFound) {
 		l.RUnlock()
 		m.recDoneEvict(id)
-		return goldenResolution{release: func() {}}, nil
+		return goldenResolution{}, nil
 	}
 	if err != nil {
 		l.RUnlock()
 		m.recDone(id)
-		return goldenResolution{release: func() {}}, err
+		return goldenResolution{}, err
 	}
 	cleanup := func() { l.RUnlock(); m.recDone(id) }
 	var rec templateRecord
 	if err := json.Unmarshal(meta, &rec); err != nil {
 		cleanup()
-		return goldenResolution{release: func() {}}, fmt.Errorf("decode template metadata: %w", err)
+		return goldenResolution{}, fmt.Errorf("decode template metadata: %w", err)
 	}
 	if rec.Tenant != "" && !tenantOwns(tenant, rec.Tenant) {
 		cleanup()
-		return goldenResolution{release: func() {}}, nil
+		return goldenResolution{}, nil
 	}
 	return goldenResolution{
 		dir:            dir,
 		templateDigest: digest,
 		promoted:       true,
-		release:        cleanup,
+		unlock:         cleanup,
 	}, nil
 }
 

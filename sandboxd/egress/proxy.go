@@ -50,8 +50,6 @@ type Holder interface {
 
 // Event is one audited egress attempt; Injected names the credential, never its value.
 type Event struct {
-	Sandbox  string
-	Tenant   string
 	Method   string
 	Host     string
 	Port     uint16
@@ -61,8 +59,6 @@ type Event struct {
 
 // Proxy is one sandbox's forward proxy, gated by Policy and audited per request.
 type Proxy struct {
-	sandbox string
-	tenant  string
 	policy  Evaluator
 	secrets Secrets
 	ca      *CA
@@ -83,10 +79,8 @@ type Proxy struct {
 }
 
 // New builds a Proxy for one sandbox; secrets, ca, audit and holder may be nil, dial must not.
-func New(sandbox, tenant string, policy Evaluator, secrets Secrets, ca *CA, dial DialFunc, audit AuditFunc, holder Holder) *Proxy {
+func New(policy Evaluator, secrets Secrets, ca *CA, dial DialFunc, audit AuditFunc, holder Holder) *Proxy {
 	p := &Proxy{
-		sandbox: sandbox,
-		tenant:  tenant,
 		policy:  policy,
 		secrets: secrets,
 		ca:      ca,
@@ -148,7 +142,6 @@ func (p *Proxy) untrack(conn net.Conn) {
 	p.connMu.Unlock()
 }
 
-// hold takes the holder for one request and returns its release.
 func (p *Proxy) hold() func() {
 	if p.holder == nil {
 		return func() {}
@@ -274,11 +267,9 @@ func (p *Proxy) inject(rule Rule, h http.Header) string {
 }
 
 func (p *Proxy) record(ev Event) {
-	if p.audit == nil {
-		return
+	if p.audit != nil {
+		p.audit(ev)
 	}
-	ev.Sandbox, ev.Tenant = p.sandbox, p.tenant
-	p.audit(ev)
 }
 
 func stripHop(h http.Header) {

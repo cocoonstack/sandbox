@@ -71,7 +71,7 @@ func IssueIntermediate(rootCertPEM, rootKeyPEM []byte, nodeID string) (certPEM, 
 	return marshalCA(tmpl, root, &key.PublicKey, rootKey, key)
 }
 
-func marshalCA(tmpl, parent *x509.Certificate, pub, signer, keyToPEM any) (certPEM, keyPEM []byte, err error) {
+func marshalCA(tmpl, parent *x509.Certificate, pub *ecdsa.PublicKey, signer, keyToPEM *ecdsa.PrivateKey) (certPEM, keyPEM []byte, err error) {
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, pub, signer)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create cert: %w", err)

@@ -66,11 +66,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutSeconds)*time.Second)
 		defer cancel()
 	}
-	stop := context.AfterFunc(ctx, func() { _ = guest.Close() })
-	defer func() {
-		stop()
-		_ = guest.Close()
-	}()
+	defer closeOnCancel(ctx, guest)()
 	frame, _ := wire.EncodeRequest(wire.Exec{Argv: req.Argv, Cwd: req.Cwd, Env: req.Env})
 	frame = append(frame, '\n')
 	if s.mgr.AuditEnabled() {
@@ -122,11 +118,7 @@ func (s *Server) killExec(ctx context.Context, id, token string, pid uint32) err
 	if err != nil {
 		return err
 	}
-	stop := context.AfterFunc(ctx, func() { _ = guest.Close() })
-	defer func() {
-		stop()
-		_ = guest.Close()
-	}()
+	defer closeOnCancel(ctx, guest)()
 	frame, _ := wire.EncodeRequest(wire.Kill{PID: pid})
 	if _, err = guest.Write(append(frame, '\n')); err != nil {
 		return err
@@ -176,4 +168,13 @@ func collectExec(guest net.Conn) (resp ExecResponse, pid uint32, err error) {
 		return ExecResponse{}, pid, err
 	}
 	return ExecResponse{}, pid, io.ErrUnexpectedEOF
+}
+
+// closeOnCancel closes conn when ctx ends and once more when the returned func runs.
+func closeOnCancel(ctx context.Context, conn net.Conn) func() {
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	return func() {
+		stop()
+		_ = conn.Close()
+	}
 }

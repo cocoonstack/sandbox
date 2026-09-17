@@ -294,104 +294,37 @@ func TestClaimCheckpointHealConcurrencyCapRejectsExtra(t *testing.T) {
 	}
 }
 
-func TestValidateHealedCheckpointAcceptsValid(t *testing.T) {
-	dir := t.TempDir()
-	plantHealedRecord(t, dir, types.Checkpoint{ID: "ck_00000000000000aa"})
-	if err := validateHealedCheckpoint(dir, "ck_00000000000000aa"); err != nil {
-		t.Errorf("validate: %v, want a valid record accepted", err)
-	}
-}
-
-func TestValidateHealedCheckpointRejectsMismatchedID(t *testing.T) {
-	dir := t.TempDir()
-	plantHealedRecord(t, dir, types.Checkpoint{ID: "ck_00000000000000bb"})
-	if err := validateHealedCheckpoint(dir, "ck_00000000000000aa"); err == nil {
-		t.Error("validate accepted a mismatched id")
-	}
-}
-
-func TestValidateHealedCheckpointRejectsMissingMeta(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, store.ExportDir), 0o750); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	if err := validateHealedCheckpoint(dir, "ck_00000000000000aa"); err == nil {
-		t.Error("validate accepted a record with no meta.json")
-	}
-}
-
-func TestValidateHealedCheckpointRejectsMissingExport(t *testing.T) {
-	dir := t.TempDir()
-
-	meta, err := json.Marshal(types.Checkpoint{ID: "ck_00000000000000aa", Key: testKey})
-	if err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, store.MetaFile), meta, 0o600); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	if err := validateHealedCheckpoint(dir, "ck_00000000000000aa"); err == nil {
-		t.Error("validate accepted a record with no export dir")
-	}
-}
-
-func TestValidateHealedCheckpointRejectsArchive(t *testing.T) {
-	dir := t.TempDir()
-	plantHealedRecord(t, dir, types.Checkpoint{ID: "ck_00000000000000aa", Archive: true})
-	if err := validateHealedCheckpoint(dir, "ck_00000000000000aa"); err == nil {
-		t.Error("validate accepted an archive-flagged record")
-	}
-}
-
-func TestValidateHealedCheckpointRejectsEmptyExport(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, store.ExportDir), 0o750); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	meta, err := json.Marshal(types.Checkpoint{ID: "ck_00000000000000aa", Key: testKey})
-	if err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, store.MetaFile), meta, 0o600); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	if err := validateHealedCheckpoint(dir, "ck_00000000000000aa"); err == nil {
-		t.Error("validate accepted a record with an empty export")
-	}
-}
-
-func TestValidateHealedCheckpointRejectsInvalidKey(t *testing.T) {
-	dir := t.TempDir()
-	plantHealedRecord(t, dir, types.Checkpoint{ID: "ck_00000000000000aa", Key: types.PoolKey{Net: "bogus"}})
-	if err := validateHealedCheckpoint(dir, "ck_00000000000000aa"); err == nil {
-		t.Error("validate accepted a record with an invalid key")
-	}
-}
-
-func TestValidateHealedCheckpointRejectsEgressKey(t *testing.T) {
-	dir := t.TempDir()
+func TestValidateHealedCheckpoint(t *testing.T) {
+	const id = "ck_00000000000000aa"
+	valid := types.Checkpoint{ID: id, Key: testKey}
 	egress := testKey
 	egress.Net = types.NetEgress
-	plantHealedRecord(t, dir, types.Checkpoint{ID: "ck_00000000000000aa", Key: egress})
-	if err := validateHealedCheckpoint(dir, "ck_00000000000000aa"); err == nil {
-		t.Error("validate accepted a non-branchable egress-lane record")
+	tests := []struct {
+		name  string
+		plant func(t *testing.T, dir string)
+		want  bool
+	}{
+		{"accepts a valid record", func(t *testing.T, dir string) { plantHealedRecord(t, dir, types.Checkpoint{ID: id}) }, true},
+		{"rejects a mismatched id", func(t *testing.T, dir string) { plantHealedRecord(t, dir, types.Checkpoint{ID: "ck_00000000000000bb"}) }, false},
+		{"rejects a missing meta", func(t *testing.T, dir string) { plantExportDir(t, dir) }, false},
+		{"rejects a missing export", func(t *testing.T, dir string) { plantMeta(t, dir, valid) }, false},
+		{"rejects an archive", func(t *testing.T, dir string) { plantHealedRecord(t, dir, types.Checkpoint{ID: id, Archive: true}) }, false},
+		{"rejects an empty export", func(t *testing.T, dir string) { plantExportDir(t, dir); plantMeta(t, dir, valid) }, false},
+		{"rejects an invalid key", func(t *testing.T, dir string) {
+			plantHealedRecord(t, dir, types.Checkpoint{ID: id, Key: types.PoolKey{Net: "bogus"}})
+		}, false},
+		{"rejects an egress key", func(t *testing.T, dir string) { plantHealedRecord(t, dir, types.Checkpoint{ID: id, Key: egress}) }, false},
+		{"rejects a contentless export", func(t *testing.T, dir string) { plantExportDir(t, dir, "sub"); plantMeta(t, dir, valid) }, false},
 	}
-}
-
-func TestValidateHealedCheckpointRejectsContentlessExport(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, store.ExportDir, "sub"), 0o750); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	meta, err := json.Marshal(types.Checkpoint{ID: "ck_00000000000000aa", Key: testKey})
-	if err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, store.MetaFile), meta, 0o600); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	if err := validateHealedCheckpoint(dir, "ck_00000000000000aa"); err == nil {
-		t.Error("validate accepted an export with no regular file")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tt.plant(t, dir)
+			err := validateHealedCheckpoint(dir, id)
+			if (err == nil) != tt.want {
+				t.Errorf("validate: %v, want accepted=%v", err, tt.want)
+			}
+		})
 	}
 }
 
@@ -528,6 +461,24 @@ func plantHealedRecord(t *testing.T, dir string, ckpt types.Checkpoint) {
 		t.Fatalf("setup: %v", err)
 	}
 	meta, err := json.Marshal(ckpt)
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, store.MetaFile), meta, 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+}
+
+func plantExportDir(t *testing.T, dir string, sub ...string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(append([]string{dir, store.ExportDir}, sub...)...), 0o750); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+}
+
+func plantMeta(t *testing.T, dir string, ck types.Checkpoint) {
+	t.Helper()
+	meta, err := json.Marshal(ck)
 	if err != nil {
 		t.Fatalf("setup: %v", err)
 	}

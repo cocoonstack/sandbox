@@ -16,7 +16,7 @@ import (
 
 func TestInterceptLeafCaches(t *testing.T) {
 	ca, _ := testCA(t)
-	p := New("s", "", Policy{}, nil, ca, fixedDial("127.0.0.1:1"), nil, nil)
+	p := New(Policy{}, nil, ca, fixedDial("127.0.0.1:1"), nil, nil)
 	a, err := p.leafFor("example.com")
 	if err != nil {
 		t.Fatalf("leaf a: %v", err)
@@ -33,7 +33,7 @@ func TestInterceptLeafCaches(t *testing.T) {
 func TestInterceptLeafClampedToTheIntermediateStaysCached(t *testing.T) {
 	ca, _ := testCA(t)
 	ca.interCert.NotAfter = time.Now().Add(time.Hour).Truncate(time.Second)
-	p := New("s", "", Policy{}, nil, ca, fixedDial("127.0.0.1:1"), nil, nil)
+	p := New(Policy{}, nil, ca, fixedDial("127.0.0.1:1"), nil, nil)
 	a, err := p.leafFor("example.com")
 	if err != nil {
 		t.Fatalf("leafFor: %v", err)
@@ -49,7 +49,7 @@ func TestInterceptLeafClampedToTheIntermediateStaysCached(t *testing.T) {
 
 func TestInterceptLeafCacheBounded(t *testing.T) {
 	ca, _ := testCA(t)
-	p := New("s", "", Policy{}, nil, ca, fixedDial("127.0.0.1:1"), nil, nil)
+	p := New(Policy{}, nil, ca, fixedDial("127.0.0.1:1"), nil, nil)
 	for i := range maxLeaves + 50 {
 		if _, err := p.leafFor(fmt.Sprintf("h%d.example.com", i)); err != nil {
 			t.Fatalf("leaf %d: %v", i, err)
@@ -236,25 +236,14 @@ func interceptProxyPolicy(t *testing.T, policy Policy, events chan Event) (*Prox
 	}))
 	t.Cleanup(upstream.Close)
 
-	rootCert, rootKey, err := GenerateRoot("test root")
-	if err != nil {
-		t.Fatalf("generate root: %v", err)
-	}
-	interCert, interKey, err := IssueIntermediate(rootCert, rootKey, "node1")
-	if err != nil {
-		t.Fatalf("issue intermediate: %v", err)
-	}
-	ca, err := LoadCA(rootCert, interCert, interKey)
-	if err != nil {
-		t.Fatalf("load ca: %v", err)
-	}
+	ca, _ := testCA(t)
 	secrets := fakeSecrets{"gh": {"Authorization", "Bearer SECRET"}}
 	audit := func(ev Event) {
 		if events != nil {
 			events <- ev
 		}
 	}
-	p := New("sb_1", "acme", policy, secrets, ca, fixedDial(upstream.Listener.Addr().String()), audit, nil)
+	p := New(policy, secrets, ca, fixedDial(upstream.Listener.Addr().String()), audit, nil)
 
 	guestRoots := x509.NewCertPool()
 	if !guestRoots.AppendCertsFromPEM(ca.CertPEM()) {

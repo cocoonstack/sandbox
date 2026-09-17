@@ -109,7 +109,7 @@ func run(addr, token, template, wantToken, netShape, reach, nicAddr, echo string
 	}
 	fmt.Println("  allowed origin reached with no -x: proxy variables present in the exec")
 
-	if out, _ := sb.Exec(ctx, "sh", "-c", "env; cat /proc/1/environ 2>/dev/null | tr '\\0' '\\n'"); wantToken != "" && strings.Contains(out, wantToken) {
+	if out, _ := sb.Exec(ctx, "sh", "-c", "env; cat /proc/1/environ 2>/dev/null | tr '\\0' '\\n'"); strings.Contains(out, wantToken) {
 		return fmt.Errorf("secret value leaked into the guest")
 	}
 	fmt.Println("  secret absent from guest env")

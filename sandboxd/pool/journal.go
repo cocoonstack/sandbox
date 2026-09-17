@@ -63,12 +63,6 @@ func (j *journal) append(v any) error {
 	return errors.Join(rotateErr, err)
 }
 
-func (j *journal) close() error {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	return j.f.Close()
-}
-
 // rotate moves the live file to .1 and reopens; the old descriptor closes last.
 func (j *journal) rotate() error {
 	renameErr := os.Rename(j.path, j.path+".1")

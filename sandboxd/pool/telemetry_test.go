@@ -61,7 +61,6 @@ func TestJournalRotationKeepsOneBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newJournal: %v", err)
 	}
-	defer func() { _ = j.close() }()
 	j.size = journalMaxBytes
 
 	if err := j.append(usageEvent{Event: "claim", ID: "sb_1"}); err != nil {

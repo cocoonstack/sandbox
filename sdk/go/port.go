@@ -33,16 +33,7 @@ func (p *PortConn) Read(b []byte) (int, error) { return p.out.Read(b) }
 // Write chunks b so no frame (with its base64 and envelope overhead) can
 // exceed the protocol cap — one oversized frame would kill the relay.
 func (p *PortConn) Write(b []byte) (int, error) {
-	sent := 0
-	for len(b) > 0 {
-		chunk := b[:min(len(b), wire.PortWriteChunk)]
-		if err := p.conn.Send(&wire.Data{Data: chunk}); err != nil {
-			return sent, err
-		}
-		sent += len(chunk)
-		b = b[len(chunk):]
-	}
-	return sent, nil
+	return sendChunks(p.conn, wire.PortWriteChunk, func(chunk []byte) wire.Request { return &wire.Data{Data: chunk} }, b)
 }
 
 // CloseWrite half-closes the guest socket (the server sees EOF) while reads

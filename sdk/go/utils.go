@@ -226,3 +226,17 @@ func recv(ctx context.Context, conn *silkd.Conn) (wire.Response, error) {
 func unexpected(resp wire.Response) error {
 	return fmt.Errorf("unexpected frame %q", resp.RespType())
 }
+
+// sendChunks feeds b to conn in frames of at most size bytes, so no frame outgrows the protocol cap.
+func sendChunks(conn *silkd.Conn, size int, frame func([]byte) wire.Request, b []byte) (int, error) {
+	sent := 0
+	for len(b) > 0 {
+		chunk := b[:min(len(b), size)]
+		if err := conn.Send(frame(chunk)); err != nil {
+			return sent, err
+		}
+		sent += len(chunk)
+		b = b[len(chunk):]
+	}
+	return sent, nil
+}

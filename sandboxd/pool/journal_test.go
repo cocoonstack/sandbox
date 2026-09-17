@@ -21,7 +21,6 @@ func TestJournalRotateFailureDegradesAndRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new journal: %v", err)
 	}
-	defer func() { _ = j.close() }()
 
 	if err = os.Mkdir(path+".1", 0o750); err != nil {
 		t.Fatalf("setup: %v", err)
@@ -66,7 +65,6 @@ func TestJournalRotateReopenFailureKeepsWriting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new journal: %v", err)
 	}
-	defer func() { _ = j.close() }()
 	j.path = filepath.Join(dir, "gone", "usage.jsonl")
 	if err = j.append(map[string]string{"ev": "a"}); err == nil {
 		t.Fatal("append across a failed reopen must surface the error")

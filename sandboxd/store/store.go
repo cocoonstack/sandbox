@@ -10,6 +10,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"io/fs"
 	"regexp"
 	"strings"
 )
@@ -65,4 +67,12 @@ func ExportGen(meta []byte) string { return ExportDir + "-" + ExportGenHash(meta
 func ExportGenHash(meta []byte) string {
 	sum := sha256.Sum256(meta)
 	return hex.EncodeToString(sum[:8])
+}
+
+// RequireRegular rejects an export entry that is not a regular file.
+func RequireRegular(rel string, mode fs.FileMode) error {
+	if !mode.IsRegular() {
+		return fmt.Errorf("export entry %s is not a regular file (%s)", rel, mode.Type())
+	}
+	return nil
 }

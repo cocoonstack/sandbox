@@ -209,7 +209,7 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	if !intercepts {
 		ca = nil
 	}
-	proxy := egress.New(id, tenant, policy, m.egressSecrets, ca, m.dial,
+	proxy := egress.New(policy, m.egressSecrets, ca, m.dial,
 		func(ev egress.Event) { m.recordEgress(evCtx, id, tenant, ev) }, sb)
 	if el != nil && (reached(el.ln) || (el.socks != nil && reached(el.socks))) {
 		el.close()

@@ -439,8 +439,8 @@ func collectDigestSources(root string) ([]digestSource, error) {
 		if infoErr != nil {
 			return infoErr
 		}
-		if !entryInfo.Mode().IsRegular() {
-			return fmt.Errorf("unsupported export entry %s (%s)", rel, entryInfo.Mode().Type())
+		if err := store.RequireRegular(rel, entryInfo.Mode()); err != nil {
+			return err
 		}
 		sources = append(sources, digestSource{
 			path: path,

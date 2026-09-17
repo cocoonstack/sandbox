@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	caCertGuestPath = "/usr/local/share/ca-certificates/sandbox-egress.crt"
-	caBundlePath    = "/etc/ssl/certs/ca-certificates.crt"
+	caCertGuestPath  = "/usr/local/share/ca-certificates/sandbox-egress.crt"
+	caBundlePath     = "/etc/ssl/certs/ca-certificates.crt"
+	installOutputMax = 4096
 	// guestExecPATH is set because silkd starts the guest command with an empty environment.
 	guestExecPATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 )
@@ -98,9 +99,8 @@ func (e *Engine) silkdExec(ctx context.Context, vsockSocket string, argv ...stri
 	}
 }
 
-// appendCapped keeps the first 4096 bytes of combined output for error context.
 func appendCapped(out, data []byte) []byte {
-	if room := 4096 - len(out); room > 0 {
+	if room := installOutputMax - len(out); room > 0 {
 		out = append(out, data[:min(len(data), room)]...)
 	}
 	return out
