@@ -255,7 +255,10 @@ func (m *Manager) markArchiveCk(ckID string) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, ckID), nil, 0o600)
+	if err := os.WriteFile(filepath.Join(dir, ckID), nil, 0o600); err != nil {
+		return err
+	}
+	return syncDir(dir)
 }
 
 func (m *Manager) archiveDeleteMarkers() ([]string, error) {
