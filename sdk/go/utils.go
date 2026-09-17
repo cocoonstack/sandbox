@@ -3,6 +3,7 @@ package sandbox
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -49,7 +50,7 @@ func (s *Sandbox) uploadRPC(ctx context.Context, req wire.Request, r io.Reader) 
 				return err
 			}
 		}
-		if readErr == io.EOF {
+		if errors.Is(readErr, io.EOF) {
 			break
 		}
 		if readErr != nil {
@@ -214,7 +215,7 @@ func recv(ctx context.Context, conn *silkd.Conn) (wire.Response, error) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("connection closed before a terminal frame")
 		}
 		return nil, err

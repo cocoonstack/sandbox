@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"bytes"
+	"errors"
 	"io"
 	"io/fs"
 	"maps"
@@ -171,7 +172,7 @@ func (f *Fake) fsPush(conn net.Conn, r *bufio.Reader, dest string) {
 	tr := tar.NewReader(bytes.NewReader(data))
 	for {
 		hdr, err := tr.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
