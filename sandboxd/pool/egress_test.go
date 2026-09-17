@@ -686,27 +686,27 @@ func TestEgressDoorHalfCloseReachesTheGuest(t *testing.T) {
 	}
 	t.Cleanup(func() { m.disarmEgress(sb.ID, true) })
 
-	door, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket))
-	if err != nil {
-		t.Fatalf("dial door: %v", err)
+	door, dialErr := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket))
+	if dialErr != nil {
+		t.Fatalf("dial door: %v", dialErr)
 	}
 	t.Cleanup(func() { _ = door.Close() })
 	_ = door.SetDeadline(time.Now().Add(5 * time.Second))
 	target := origin.Addr().String()
-	if _, err = fmt.Fprintf(door, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target); err != nil {
-		t.Fatalf("connect: %v", err)
+	if _, writeErr := fmt.Fprintf(door, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target); writeErr != nil {
+		t.Fatalf("connect: %v", writeErr)
 	}
-	br := bufio.NewReader(door)
-	resp, err := http.ReadResponse(br, nil)
-	if err != nil {
-		t.Fatalf("read connect reply: %v", err)
+	resp, readErr := http.ReadResponse(bufio.NewReader(door), nil)
+	if readErr != nil {
+		t.Fatalf("read connect reply: %v", readErr)
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("connect status %d, want 200", resp.StatusCode)
 	}
-	body, err := io.ReadAll(br)
-	if err != nil {
-		t.Fatalf("tunnel did not end with EOF after the origin closed: %v", err)
+	body, bodyErr := io.ReadAll(resp.Body)
+	if bodyErr != nil {
+		t.Fatalf("tunnel did not end with EOF after the origin closed: %v", bodyErr)
 	}
 	if string(body) != "hello" {
 		t.Errorf("tunnel body %q, want hello", body)

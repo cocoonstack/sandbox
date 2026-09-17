@@ -305,18 +305,11 @@ func (c *Config) validate() error {
 	if err := c.RestoreMode.Validate(); err != nil {
 		return fmt.Errorf("restore_mode: %w", err)
 	}
-	if c.PreviewListen != "" && c.PreviewSecret == "" {
-		return fmt.Errorf("preview_listen needs preview_secret")
+	if err := c.validatePreview(); err != nil {
+		return err
 	}
-	if c.PreviewListen != "" && !namesHost(c.PreviewAdvertise) {
-		return fmt.Errorf("preview_advertise %q is minted into every preview URL and must name a routable host", c.PreviewAdvertise)
-	}
-	pools := make(map[types.PoolKey]struct{}, len(c.Pools))
-	for _, p := range c.Pools {
-		if _, ok := pools[p.PoolKey]; ok {
-			return fmt.Errorf("duplicate pool %s %s/%s", p.Template, p.Net, p.Size)
-		}
-		pools[p.PoolKey] = struct{}{}
+	if err := c.validatePoolKeys(); err != nil {
+		return err
 	}
 	if err := validateArchiveWindow(c.IdleHibernateSeconds, c.ArchiveAfterSeconds, c.ArchiveDeleteAfterSeconds); err != nil {
 		return err
@@ -390,6 +383,30 @@ func (c *Config) validateVolumes() error {
 				return fmt.Errorf("volume %q references unknown tenant %q", volume.Name, tenant)
 			}
 		}
+	}
+	return nil
+}
+
+func (c *Config) validatePreview() error {
+	if c.PreviewListen == "" {
+		return nil
+	}
+	if c.PreviewSecret == "" {
+		return fmt.Errorf("preview_listen needs preview_secret")
+	}
+	if !namesHost(c.PreviewAdvertise) {
+		return fmt.Errorf("preview_advertise %q is minted into every preview URL and must name a routable host", c.PreviewAdvertise)
+	}
+	return nil
+}
+
+func (c *Config) validatePoolKeys() error {
+	pools := make(map[types.PoolKey]struct{}, len(c.Pools))
+	for _, p := range c.Pools {
+		if _, ok := pools[p.PoolKey]; ok {
+			return fmt.Errorf("duplicate pool %s %s/%s", p.Template, p.Net, p.Size)
+		}
+		pools[p.PoolKey] = struct{}{}
 	}
 	return nil
 }

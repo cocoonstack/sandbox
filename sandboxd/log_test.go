@@ -36,7 +36,7 @@ func TestJournalWriterPrefixesEveryRecordWithItsSyslogLevel(t *testing.T) {
 				t.Errorf("line = %q, want exactly one record", line)
 			}
 			if strings.Contains(line, "\x1b[") {
-				t.Errorf("line = %q, want no ANSI colour in a journald record", line)
+				t.Errorf("line = %q, want no ANSI color in a journald record", line)
 			}
 		})
 	}
