@@ -7,6 +7,7 @@ import json
 import queue
 import ssl
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -212,10 +213,11 @@ class Client:
             except (OSError, http.client.HTTPException) as read_exc:
                 detail = str(read_exc)
             raise APIError(verb, exc.code, detail) from None
-        except urllib.error.URLError as exc:
-            raise APIError(verb, 0, str(exc.reason)) from None
-        except (OSError, http.client.HTTPException) as exc:
-            raise APIError(verb, 0, str(exc)) from None
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError(f"{verb} timed out") from None
+            detail = str(exc.reason) if isinstance(exc, urllib.error.URLError) else str(exc)
+            raise APIError(verb, 0, detail) from None
         if not raw:
             return {}
         try:
