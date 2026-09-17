@@ -90,9 +90,9 @@ func (m *Manager) shrinkOnce(ctx context.Context) {
 	if len(trim) == 0 {
 		return
 	}
-	m.runBounded(context.WithoutCancel(ctx), len(trim), func(ctx context.Context, i int) {
+	m.runBounded(ctx, len(trim), func(ctx context.Context, i int) {
 		m.destroy(ctx, trim[i])
-	}).Wait()
+	})
 }
 
 func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {

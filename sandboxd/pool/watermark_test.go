@@ -142,8 +142,8 @@ func TestShrinkOnceDestroysWhatTheDecayedTargetDropped(t *testing.T) {
 	}
 
 	m.shrinkOnce(t.Context())
-	if len(p.warm) != 4 || len(eng.removes) != 0 {
-		t.Fatalf("warm %d and %d removes on the first sweep, want 4 and 0", len(p.warm), len(eng.removes))
+	if removed := eng.removedNames(); len(p.warm) != 4 || len(removed) != 0 {
+		t.Fatalf("warm %d and %d removes on the first sweep, want 4 and 0", len(p.warm), len(removed))
 	}
 
 	p.overTargetSince = time.Now().Add(-warmShrinkDwell - time.Second)
@@ -151,8 +151,9 @@ func TestShrinkOnceDestroysWhatTheDecayedTargetDropped(t *testing.T) {
 	if len(p.warm) != 2 {
 		t.Errorf("warm %d after the dwell, want the floor", len(p.warm))
 	}
-	if want := []string{"sbx-warm-2", "sbx-warm-3"}; !slices.Equal(slices.Sorted(slices.Values(eng.removes)), want) {
-		t.Errorf("removes %v, want the two above the floor", eng.removes)
+	waitFor(t, func() bool { return len(eng.removedNames()) == 2 })
+	if got, want := slices.Sorted(slices.Values(eng.removedNames())), []string{"sbx-warm-2", "sbx-warm-3"}; !slices.Equal(got, want) {
+		t.Errorf("removes %v, want %v", got, want)
 	}
 }
 
