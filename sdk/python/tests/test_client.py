@@ -308,13 +308,7 @@ def test_checkpoint_listing_binds_handles(node):
 
 
 def test_claim_refuses_a_spent_deadline(node):
-    seen = []
-
-    def claim(body, path):
-        seen.append(body)
-        return 200, {"id": "sb_1", "token": "tok"}
-
-    FakeNode.routes[("POST", "/v1/claim")] = claim
+    seen = recording_claim({"id": "sb_1", "token": "tok"})
     with pytest.raises(TimeoutError):
         Client(node).new("rt:24.04", deadline=time.monotonic() - 1)
     assert seen == [], "a spent deadline still reached the node"
