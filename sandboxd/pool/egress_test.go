@@ -1,8 +1,10 @@
 package pool
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -655,6 +657,56 @@ func TestTrimmedWarmVMClosesItsDoors(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err == nil {
 		t.Error("door socket survives its VM")
+	}
+}
+
+func TestEgressDoorHalfCloseReachesTheGuest(t *testing.T) {
+	origin, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("origin: %v", err)
+	}
+	t.Cleanup(func() { _ = origin.Close() })
+	go func() {
+		conn, acceptErr := origin.Accept()
+		if acceptErr != nil {
+			return
+		}
+		_, _ = io.WriteString(conn, "hello")
+		_ = conn.Close()
+	}()
+	pol := &egress.Policy{Allow: []egress.Rule{{Host: "127.0.0.1"}}}
+	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
+	m.dial = (&net.Dialer{}).DialContext
+	sb := vsockSandbox(t, "sb_halfclose")
+	if err := m.armEgress(t.Context(), sb); err != nil {
+		t.Fatalf("arm egress: %v", err)
+	}
+	t.Cleanup(func() { m.disarmEgress(sb.ID, true) })
+
+	door, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket))
+	if err != nil {
+		t.Fatalf("dial door: %v", err)
+	}
+	t.Cleanup(func() { _ = door.Close() })
+	_ = door.SetDeadline(time.Now().Add(5 * time.Second))
+	target := origin.Addr().String()
+	if _, err = fmt.Fprintf(door, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	br := bufio.NewReader(door)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("read connect reply: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("connect status %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(br)
+	if err != nil {
+		t.Fatalf("tunnel did not end with EOF after the origin closed: %v", err)
+	}
+	if string(body) != "hello" {
+		t.Errorf("tunnel body %q, want hello", body)
 	}
 }
 

@@ -9,11 +9,11 @@ import (
 	"net/netip"
 	"os"
 	"slices"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/projecteru2/core/log"
-	"golang.org/x/net/netutil"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
@@ -72,6 +72,49 @@ func (e *egressListener) close() {
 		_ = e.socks.Close()
 		_ = os.Remove(e.socksPath)
 	}
+}
+
+// doorListener caps a door's live connections; the accepted conn stays a *net.UnixConn so splice and half-close keep working.
+type doorListener struct {
+	*net.UnixListener
+	slots chan struct{}
+	done  chan struct{}
+	once  sync.Once
+}
+
+func limitDoor(ln *net.UnixListener) *doorListener {
+	return &doorListener{UnixListener: ln, slots: make(chan struct{}, egressDoorConns), done: make(chan struct{})}
+}
+
+func (l *doorListener) Accept() (net.Conn, error) {
+	select {
+	case l.slots <- struct{}{}:
+	case <-l.done:
+		return nil, net.ErrClosed
+	}
+	conn, err := l.AcceptUnix()
+	if err != nil {
+		<-l.slots
+		return nil, err
+	}
+	return &doorConn{UnixConn: conn, slots: l.slots}, nil
+}
+
+func (l *doorListener) Close() error {
+	l.once.Do(func() { close(l.done) })
+	return l.UnixListener.Close()
+}
+
+type doorConn struct {
+	*net.UnixConn
+	slots chan struct{}
+	once  sync.Once
+}
+
+func (c *doorConn) Close() error {
+	err := c.UnixConn.Close()
+	c.once.Do(func() { <-c.slots })
+	return err
 }
 
 // armEgress locks the egress-lane NIC then binds the proxy: fail-closed, never a free NIC.
@@ -180,10 +223,6 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	}
 	el.srv = &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}
 	el.proxy = proxy
-	el.ln = netutil.LimitListener(el.ln, egressDoorConns)
-	if el.socks != nil {
-		el.socks = netutil.LimitListener(el.socks, egressDoorConns)
-	}
 	m.mu.Lock()
 	displaced := m.egressListeners[id]
 	m.egressListeners[id] = el
@@ -291,24 +330,26 @@ func (m *Manager) effectivePolicy(sb *types.Sandbox) (egress.Evaluator, bool) {
 // bindEgress binds the HTTP door and, when the policy serves it, the SOCKS5 door of one VM.
 func bindEgress(vsock string, socks bool) (*egressListener, error) {
 	el := &egressListener{path: engine.EgressSocketPath(vsock)}
-	var err error
-	if el.ln, err = listenUnix(el.path); err != nil {
+	ln, err := listenUnix(el.path)
+	if err != nil {
 		return nil, fmt.Errorf("listen egress: %w", err)
 	}
+	el.ln = limitDoor(ln)
 	if socks {
 		el.socksPath = engine.SocksSocketPath(vsock)
-		if el.socks, err = listenUnix(el.socksPath); err != nil {
+		if ln, err = listenUnix(el.socksPath); err != nil {
 			el.close()
 			return nil, fmt.Errorf("listen socks: %w", err)
 		}
+		el.socks = limitDoor(ln)
 	}
 	return el, nil
 }
 
 // listenUnix binds path after clearing a stale socket from a prior life that would block the bind.
-func listenUnix(path string) (net.Listener, error) {
+func listenUnix(path string) (*net.UnixListener, error) {
 	_ = os.Remove(path)
-	return net.Listen("unix", path)
+	return net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 }
 
 // reached reports whether a guest connected to a door before it was armed; only a clean EAGAIN says no.
