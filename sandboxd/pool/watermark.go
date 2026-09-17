@@ -13,6 +13,8 @@ const (
 	rateDecayTau = 60 * time.Second
 	// leadSafety over-provisions against the measured lead: arrivals are bursty, not uniform
 	leadSafety = 2.0
+	// warmShrinkDwell holds a decayed target for one decay period before trimming, so a fluctuating load does not churn the pool
+	warmShrinkDwell = rateDecayTau
 )
 
 // noteArrival counts one claim; a bin that has spanned rateBin folds its arrivals per second into the rate EWMA. Caller holds the manager mutex.
@@ -49,4 +51,19 @@ func (p *pool) effectiveTarget(now time.Time) int {
 	}
 	dynamic := int(math.Ceil(rate * p.lead.Seconds() * leadSafety))
 	return max(p.floor, min(dynamic, p.warmMax))
+}
+
+// shrink trims the pool to its target once the warm count has stayed above it for warmShrinkDwell, returning the trimmed VM names. Caller holds the manager mutex.
+func (p *pool) shrink(now time.Time) []string {
+	target := p.effectiveTarget(now)
+	switch {
+	case len(p.warm) <= target:
+		p.overTargetSince = time.Time{}
+	case p.overTargetSince.IsZero():
+		p.overTargetSince = now
+	case now.Sub(p.overTargetSince) >= warmShrinkDwell:
+		p.overTargetSince = time.Time{}
+		return p.trimWarm(target)
+	}
+	return nil
 }

@@ -1,9 +1,12 @@
 package pool
 
 import (
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -85,4 +88,78 @@ func TestNoteLeadConverges(t *testing.T) {
 	if p.lead > 150*time.Millisecond {
 		t.Errorf("lead %v did not converge toward the recent samples", p.lead)
 	}
+}
+
+func TestShrinkWaitsOutTheDwell(t *testing.T) {
+	now := time.Now()
+	p := warmPool(4)
+
+	if trimmed := p.shrink(now); trimmed != nil {
+		t.Errorf("trimmed %v on the first tick above target, want the dwell to start", trimmed)
+	}
+	if trimmed := p.shrink(now.Add(warmShrinkDwell - time.Second)); trimmed != nil {
+		t.Errorf("trimmed %v inside the dwell", trimmed)
+	}
+
+	trimmed := p.shrink(now.Add(warmShrinkDwell))
+	if len(trimmed) != 2 || len(p.warm) != 2 {
+		t.Errorf("trimmed %v leaving %d warm, want 2 and 2", trimmed, len(p.warm))
+	}
+	if !p.overTargetSince.IsZero() {
+		t.Error("dwell still running after a trim")
+	}
+}
+
+func TestShrinkRestartsTheDwellWhenDemandReturns(t *testing.T) {
+	now := time.Now()
+	p := warmPool(4)
+	p.shrink(now)
+
+	for i := range 60 {
+		p.noteArrival(now.Add(time.Duration(i) * 100 * time.Millisecond))
+	}
+	hot := now.Add(6 * time.Second)
+	if trimmed := p.shrink(hot); trimmed != nil || !p.overTargetSince.IsZero() {
+		t.Fatalf("trimmed %v with the target back at warmMax, want the dwell cleared", trimmed)
+	}
+
+	quiet := hot.Add(10 * time.Minute)
+	if trimmed := p.shrink(quiet); trimmed != nil {
+		t.Errorf("trimmed %v on the first quiet tick, want a fresh dwell", trimmed)
+	}
+	trimmed := p.shrink(quiet.Add(warmShrinkDwell))
+	if len(trimmed) != 2 || len(p.warm) != 2 {
+		t.Errorf("trimmed %v leaving %d warm after the fresh dwell, want 2 and 2", trimmed, len(p.warm))
+	}
+}
+
+func TestShrinkOnceDestroysWhatTheDecayedTargetDropped(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2, WarmMax: 8})
+	p := m.pools[testKey]
+	for i := range 4 {
+		p.warm = append(p.warm, &types.Sandbox{VMName: fmt.Sprintf("sbx-warm-%d", i), Key: testKey})
+	}
+
+	m.shrinkOnce(t.Context())
+	if len(p.warm) != 4 || len(eng.removes) != 0 {
+		t.Fatalf("warm %d and %d removes on the first sweep, want 4 and 0", len(p.warm), len(eng.removes))
+	}
+
+	p.overTargetSince = time.Now().Add(-warmShrinkDwell - time.Second)
+	m.shrinkOnce(t.Context())
+	if len(p.warm) != 2 {
+		t.Errorf("warm %d after the dwell, want the floor", len(p.warm))
+	}
+	if want := []string{"sbx-warm-2", "sbx-warm-3"}; !slices.Equal(slices.Sorted(slices.Values(eng.removes)), want) {
+		t.Errorf("removes %v, want the two above the floor", eng.removes)
+	}
+}
+
+func warmPool(warm int) *pool {
+	p := &pool{key: testKey, floor: 2, warmMax: 8, lead: 500 * time.Millisecond}
+	for i := range warm {
+		p.warm = append(p.warm, &types.Sandbox{VMName: fmt.Sprintf("sbx-warm-%d", i), Key: testKey})
+	}
+	return p
 }

@@ -78,6 +78,23 @@ func (m *Manager) refillOnce(ctx context.Context) {
 	}
 }
 
+// shrinkOnce destroys the warm VMs a decayed target no longer wants; refill only ever fills.
+func (m *Manager) shrinkOnce(ctx context.Context) {
+	var trim []string
+	m.mu.Lock()
+	now := time.Now()
+	for _, p := range m.pools {
+		trim = append(trim, p.shrink(now)...)
+	}
+	m.mu.Unlock()
+	if len(trim) == 0 {
+		return
+	}
+	m.runBounded(context.WithoutCancel(ctx), len(trim), func(ctx context.Context, i int) {
+		m.destroy(ctx, trim[i])
+	}).Wait()
+}
+
 func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 	start := time.Now()
 	sb, err := m.startVM(ctx, p.key, func(name string) (types.VMRecord, error) {
