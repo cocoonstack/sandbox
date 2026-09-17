@@ -45,10 +45,12 @@ type server struct {
 	client   *sandbox.Client
 	template string
 
-	mu     sync.Mutex
-	closed bool
-	boxes  map[string]*sandbox.Sandbox
-	ckpts  map[string]*sandbox.Checkpoint
+	mu       sync.Mutex
+	closed   bool
+	boxes    map[string]*sandbox.Sandbox
+	ckpts    map[string]*sandbox.Checkpoint
+	release  sync.Once
+	released chan struct{}
 }
 
 func newServer(addr, token, template string) (*server, error) {
@@ -65,6 +67,7 @@ func newServer(addr, token, template string) (*server, error) {
 		template: template,
 		boxes:    map[string]*sandbox.Sandbox{},
 		ckpts:    map[string]*sandbox.Checkpoint{},
+		released: make(chan struct{}),
 	}, nil
 }
 
@@ -157,17 +160,22 @@ func (s *server) box(id string) (*sandbox.Sandbox, error) {
 	return sb, nil
 }
 
-// closeBoxes releases everything this session claimed; the lease would
-// otherwise hold the VMs until it expires.
+// closeBoxes releases everything this session claimed and returns once the releases are done; a second caller waits for the first.
 func (s *server) closeBoxes() {
-	s.mu.Lock()
-	s.closed = true
-	boxes := slices.Collect(maps.Values(s.boxes))
-	clear(s.boxes)
-	s.mu.Unlock()
-	for _, sb := range boxes {
-		_ = sb.Close()
-	}
+	s.release.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		boxes := slices.Collect(maps.Values(s.boxes))
+		clear(s.boxes)
+		s.mu.Unlock()
+		var wg sync.WaitGroup
+		for _, sb := range boxes {
+			wg.Go(func() { _ = sb.Close() })
+		}
+		wg.Wait()
+		close(s.released)
+	})
+	<-s.released
 }
 
 func (s *server) trackBox(sb *sandbox.Sandbox) {

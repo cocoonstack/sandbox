@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
@@ -135,6 +137,34 @@ func TestTrackBoxAfterCloseReleasesTheClaim(t *testing.T) {
 	}
 	if len(srv.boxes) != 0 {
 		t.Errorf("boxes = %d after a late track, want 0", len(srv.boxes))
+	}
+}
+
+func TestCloseBoxesWaitsForEveryReleaseOnce(t *testing.T) {
+	var releases atomic.Int32
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/release") {
+			time.Sleep(200 * time.Millisecond)
+			releases.Add(1)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(node.Close)
+	addr := strings.TrimPrefix(node.URL, "http://")
+	srv, err := newServer(addr, "", "rt:24.04")
+	if err != nil {
+		t.Fatalf("server: %v", err)
+	}
+	for _, id := range []string{"sb_a", "sb_b", "sb_c"} {
+		srv.trackBox(srv.client.Attach(addr, id, "tok"))
+	}
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Go(srv.closeBoxes)
+	}
+	wg.Wait()
+	if got := releases.Load(); got != 3 {
+		t.Errorf("releases = %d after closeBoxes returned, want 3", got)
 	}
 }
 

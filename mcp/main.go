@@ -19,7 +19,7 @@ import (
 	coretypes "github.com/projecteru2/core/types"
 )
 
-// shutdownGrace bounds the wait for a tool call the signal interrupted.
+// shutdownGrace bounds the wait for the read loop to notice its closed stdin before main releases the claims itself.
 const shutdownGrace = 10 * time.Second
 
 func main() {
@@ -52,7 +52,7 @@ func main() {
 		select {
 		case <-served:
 		case <-time.After(shutdownGrace):
-			srv.closeBoxes()
+			srv.closeBoxes() // waits for a release the read loop's defer already started
 		}
 	}
 }

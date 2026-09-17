@@ -172,6 +172,24 @@ def test_write_and_persist_use_tree_verbs(node, monkeypatch):
     asyncio.run(go())
 
 
+def test_create_keeps_the_construction_error_when_the_release_also_fails(node, monkeypatch):
+    def bad_snapshot(*args, **kwargs):
+        raise ValueError("bad snapshot")
+
+    def bad_close(self):
+        raise RuntimeError("node gone")
+
+    monkeypatch.setattr("cocoonsandbox_openai.adapter.resolve_snapshot", bad_snapshot)
+    monkeypatch.setattr("cocoonsandbox.Sandbox.close", bad_close)
+
+    async def go():
+        client = CocoonSandboxClient()
+        with pytest.raises(ValueError, match="bad snapshot"):
+            await client.create(options=CocoonSandboxClientOptions(addr=node))
+
+    asyncio.run(go())
+
+
 def test_create_releases_the_claim_when_state_construction_fails(node, monkeypatch):
     released = []
 
