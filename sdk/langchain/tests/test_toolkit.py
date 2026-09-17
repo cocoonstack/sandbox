@@ -5,7 +5,7 @@ import asyncio
 import time
 
 import pytest
-
+from cocoonsandbox import SilkdError
 from cocoonsandbox_langchain import CocoonToolkit
 from cocoonsandbox_langchain.toolkit import CALL_TIMEOUT
 
@@ -117,3 +117,14 @@ def hooked(monkeypatch):
     fake = FakeSandbox()
     monkeypatch.setattr(kit, "_claim", lambda deadline=None: fake)
     return kit, fake
+
+
+def test_read_file_reports_a_missing_path_as_a_tool_error(monkeypatch):
+    kit, fake = hooked(monkeypatch)
+
+    def missing(path):
+        raise SilkdError("not_found", "no such file")
+
+    fake.read_file = missing
+    tool = next(t for t in kit.get_tools() if t.name == "sandbox_read_file")
+    assert "no such file" in tool.invoke({"path": "/nope"})

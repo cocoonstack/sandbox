@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 from cocoonsandbox import ProtocolError, SilkdError
-
 from cocoonsandbox_openai import CocoonSandboxClient, CocoonSandboxClientOptions, CocoonSandboxSessionState
 
 
@@ -171,3 +170,21 @@ def test_write_and_persist_use_tree_verbs(node, monkeypatch):
         assert calls["push"] == ("/workspace", b"tar-in")
 
     asyncio.run(go())
+
+
+def test_create_releases_the_claim_when_state_construction_fails(node, monkeypatch):
+    released = []
+
+    def bad_snapshot(*args, **kwargs):
+        raise ValueError("bad snapshot")
+
+    monkeypatch.setattr("cocoonsandbox_openai.adapter.resolve_snapshot", bad_snapshot)
+    monkeypatch.setattr("cocoonsandbox.Sandbox.close", lambda self: released.append(self.id))
+
+    async def go():
+        client = CocoonSandboxClient()
+        with pytest.raises(ValueError):
+            await client.create(options=CocoonSandboxClientOptions(addr=node))
+
+    asyncio.run(go())
+    assert released == ["sb_1"]

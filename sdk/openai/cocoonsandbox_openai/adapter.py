@@ -142,19 +142,23 @@ class CocoonSandboxClient(BaseSandboxClient[CocoonSandboxClientOptions]):
     ) -> SandboxSession:
         client = Client(options.addr, api_token=options.api_token)
         sb = await asyncio.to_thread(client.new, options.template, net=options.net, ttl_seconds=options.ttl_seconds)
-        if manifest is None:
-            manifest = Manifest(root="/workspace")
-        session_id = uuid.uuid4()
-        state = CocoonSandboxSessionState(
-            session_id=session_id,
-            manifest=manifest,
-            snapshot=resolve_snapshot(snapshot, str(session_id)),
-            addr=options.addr,
-            api_token=options.api_token,
-            sandbox_id=sb.id,
-            sandbox_token=sb.token,
-            owner=sb.owner,
-        )
+        try:
+            if manifest is None:
+                manifest = Manifest(root="/workspace")
+            session_id = uuid.uuid4()
+            state = CocoonSandboxSessionState(
+                session_id=session_id,
+                manifest=manifest,
+                snapshot=resolve_snapshot(snapshot, str(session_id)),
+                addr=options.addr,
+                api_token=options.api_token,
+                sandbox_id=sb.id,
+                sandbox_token=sb.token,
+                owner=sb.owner,
+            )
+        except BaseException:
+            await asyncio.to_thread(sb.close)
+            raise
         return self._wrap_session(CocoonSandboxSession.from_state(state))
 
     async def delete(self, session: SandboxSession) -> SandboxSession:

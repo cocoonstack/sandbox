@@ -11,8 +11,8 @@ import threading
 import time
 from collections.abc import Callable
 
-from cocoonsandbox import Client, Sandbox
-from langchain_core.tools import StructuredTool
+from cocoonsandbox import Client, Sandbox, SilkdError
+from langchain_core.tools import StructuredTool, ToolException
 from pydantic import BaseModel, Field
 
 # one call's wall clock over the claim, the dial and the command; the tool description states it
@@ -34,12 +34,7 @@ class PathInput(BaseModel):
 
 
 class CocoonToolkit:
-    """LangChain tools backed by one sandbox, claimed on first tool use.
-
-    from_checkpoint branches a fresh sandbox from that checkpoint's captured
-    moment instead of claiming a clean template — agents resume from
-    prepared state.
-    """
+    """LangChain tools over one sandbox, claimed on first tool use; from_checkpoint branches it from a checkpoint."""
 
     def __init__(
         self,
@@ -105,9 +100,7 @@ class CocoonToolkit:
         ]
 
     def close(self) -> None:
-        """Releases the sandbox; safe to call twice or before any claim.
-        Tools invoked after close raise instead of silently claiming a
-        sandbox nothing would ever release."""
+        """Releases the sandbox; safe to call twice or before any claim, and tools invoked afterwards raise."""
         with self._lock:
             sb, self._sb = self._sb, None
             self._closed = True
@@ -133,7 +126,7 @@ class CocoonToolkit:
             return await asyncio.to_thread(func, **kwargs)
 
         return StructuredTool.from_function(
-            func=func, coroutine=arun, name=name, description=description, args_schema=schema
+            func=func, coroutine=arun, name=name, description=description, args_schema=schema, handle_tool_error=True
         )
 
     def _exec(self, command: str, cwd: str = "") -> str:
@@ -165,7 +158,12 @@ class CocoonToolkit:
         return f"wrote {path}"
 
     def _read_file(self, path: str) -> str:
-        return self.sandbox().read_file(path).decode(errors="replace")
+        try:
+            return self.sandbox().read_file(path).decode(errors="replace")
+        except SilkdError as exc:
+            if exc.kind != "not_found":
+                raise
+            raise ToolException(f"{path}: no such file") from None
 
     def _list_dir(self, path: str) -> str:
         return json.dumps(self.sandbox().list_dir(path))
