@@ -2,10 +2,12 @@
 shaping, lazy claim, and double-close safety — no real node."""
 
 import asyncio
+import time
 
 import pytest
 
 from cocoonsandbox_langchain import CocoonToolkit
+from cocoonsandbox_langchain.toolkit import CALL_TIMEOUT
 
 
 def test_tools_shape(monkeypatch):
@@ -39,6 +41,30 @@ def test_file_tools_round_trip(monkeypatch):
     assert write.invoke({"path": "/w/a.txt", "content": "body"}) == "wrote /w/a.txt"
     assert read.invoke({"path": "/w/a.txt"}) == "body"
     assert "a.txt" in list_dir.invoke({"path": "/w"})
+
+
+def test_exec_claims_inside_the_call_budget(monkeypatch):
+    kit = CocoonToolkit("127.0.0.1:1")
+    seen = []
+
+    def claim(deadline=None):
+        seen.append(deadline)
+        return FakeSandbox()
+
+    monkeypatch.setattr(kit, "_claim", claim)
+    kit.get_tools()[0].invoke({"command": "echo hi"})
+    assert len(seen) == 1 and seen[0] is not None
+    assert 0 < seen[0] - time.monotonic() <= CALL_TIMEOUT, seen[0]
+
+
+def test_exec_reports_a_claim_that_outlives_the_budget(monkeypatch):
+    kit = CocoonToolkit("127.0.0.1:1")
+
+    def claim(deadline=None):
+        raise TimeoutError("claim timed out")
+
+    monkeypatch.setattr(kit, "_claim", claim)
+    assert kit.get_tools()[0].invoke({"command": "echo hi"}) == f"cut off after {CALL_TIMEOUT}s"
 
 
 def test_close_releases_once(monkeypatch):
@@ -89,5 +115,5 @@ class FakeSandbox:
 def hooked(monkeypatch):
     kit = CocoonToolkit("127.0.0.1:1")
     fake = FakeSandbox()
-    monkeypatch.setattr(kit, "_claim", lambda: fake)
+    monkeypatch.setattr(kit, "_claim", lambda deadline=None: fake)
     return kit, fake

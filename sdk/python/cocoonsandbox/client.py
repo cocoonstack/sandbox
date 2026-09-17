@@ -7,6 +7,7 @@ import json
 import queue
 import ssl
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -14,7 +15,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, TypeVar, cast
 
 from .checkpoint import Checkpoint
-from .conn import Conn, dial_agent
+from .conn import Conn, dial_agent, remaining_timeout
 from .endpoint import _endpoint_url
 from .errors import APIError
 from .sandbox import Sandbox
@@ -57,10 +58,12 @@ class Client:
         claim_ref: str = "",
         volumes: list[str | Mapping[str, str]] | None = None,
         mount: bool = True,
+        *,
+        deadline: float | None = None,
     ) -> Sandbox:
-        """Claims a sandbox; a warm hit is milliseconds."""
+        """Claims a sandbox; a warm hit is milliseconds. deadline is a time.monotonic() bound over the whole claim."""
         claim = _claim_body(template, net, size, ttl_seconds, volumes, mount, claim_ref)
-        return self._claim_from(self.addr, claim)
+        return self._claim_from(self.addr, claim, deadline=deadline)
 
     def delete_template(self, template: str, net: str = "", size: str = "") -> None:
         """Removes a promoted template by name; on a cluster the delete follows gossip to the owner node (one hop)."""
@@ -130,8 +133,16 @@ class Client:
         """The node's pool/claim counters, as served by GET /v1/info."""
         return self._request(self.addr, "GET", "/v1/info", None, "info")
 
-    def _claim_from(self, addr: str, claim: dict[str, Any], path: str = "/v1/claim", verb: str = "claim") -> Sandbox:
-        reply = self._post_json(addr, path, claim, verb)
+    def _claim_from(
+        self,
+        addr: str,
+        claim: dict[str, Any],
+        path: str = "/v1/claim",
+        verb: str = "claim",
+        *,
+        deadline: float | None = None,
+    ) -> Sandbox:
+        reply = self._post_json(addr, path, claim, verb, deadline=deadline)
         redirect = reply.get("redirect") or []
         if not redirect:
             return self._handle_from(addr, reply)
@@ -140,7 +151,7 @@ class Client:
             claim["require_promoted"] = True
 
         def post(peer: str) -> dict[str, Any]:
-            return self._post_json(peer, path, claim, verb)
+            return self._post_json(peer, path, claim, verb, deadline=deadline)
 
         owner, reply = _redirect_fallback(addr, redirect, post, verb)
         return self._handle_from(owner, reply)
@@ -168,8 +179,10 @@ class Client:
             volumes=reply.get("volumes") or [],
         )
 
-    def _post_json(self, addr: str, path: str, body: dict[str, Any], verb: str) -> dict[str, Any]:
-        return self._request(addr, "POST", path, body, verb)
+    def _post_json(
+        self, addr: str, path: str, body: dict[str, Any], verb: str, *, deadline: float | None = None
+    ) -> dict[str, Any]:
+        return self._request(addr, "POST", path, body, verb, deadline=deadline)
 
     def _request(
         self,
@@ -180,7 +193,9 @@ class Client:
         verb: str,
         bearer: str = "",
         timeout: float = 0.0,
+        deadline: float | None = None,
     ) -> dict[str, Any]:
+        timeout = remaining_timeout(timeout or self.timeout, deadline, verb)
         data = json.dumps(body).encode() if body is not None else None
         url = addr + path if "://" in addr else f"{self._scheme}://{addr}{path}"
         req = urllib.request.Request(url, data=data, method=method)
@@ -190,7 +205,7 @@ class Client:
         if token:
             req.add_header("Authorization", f"Bearer {token}")
         try:
-            with self._open(req, timeout or self.timeout) as resp:
+            with self._open(req, timeout) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as exc:
             try:
@@ -198,10 +213,11 @@ class Client:
             except (OSError, http.client.HTTPException) as read_exc:
                 detail = str(read_exc)
             raise APIError(verb, exc.code, detail) from None
-        except urllib.error.URLError as exc:
-            raise APIError(verb, 0, str(exc.reason)) from None
-        except (OSError, http.client.HTTPException) as exc:
-            raise APIError(verb, 0, str(exc)) from None
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError(f"{verb} timed out") from None
+            detail = str(exc.reason) if isinstance(exc, urllib.error.URLError) else str(exc)
+            raise APIError(verb, 0, detail) from None
         if not raw:
             return {}
         try:

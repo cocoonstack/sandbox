@@ -160,7 +160,7 @@ def dial_agent(
     host = endpoint.hostname
     port = endpoint.port or (443 if endpoint.scheme == "https" else 80)
     try:
-        sock = socket.create_connection((host, port), timeout=_remaining_timeout(timeout, deadline))
+        sock = socket.create_connection((host, port), timeout=remaining_timeout(timeout, deadline))
     except OSError as exc:
         raise ProtocolError(f"dial {addr}: {exc}") from exc
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -169,7 +169,7 @@ def dial_agent(
         if endpoint.scheme == "https":
             context = ssl_context or ssl.create_default_context()
             sock = context.wrap_socket(sock, server_hostname=host, do_handshake_on_connect=False)
-            sock.settimeout(_remaining_timeout(timeout, deadline))
+            sock.settimeout(remaining_timeout(timeout, deadline))
             try:
                 sock.do_handshake()
             except OSError as exc:
@@ -182,16 +182,16 @@ def dial_agent(
             f"Authorization: Bearer {token}\r\n"
             "\r\n"
         )
-        sock.settimeout(_remaining_timeout(timeout, deadline))
+        sock.settimeout(remaining_timeout(timeout, deadline))
         sock.sendall(request.encode())
         reader = sock.makefile("rb")
-        sock.settimeout(_remaining_timeout(timeout, deadline))
+        sock.settimeout(remaining_timeout(timeout, deadline))
         status = reader.readline(1024).decode(errors="replace")
         parts = status.split(" ", 2)
         code = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
         body_len = 0
         while True:
-            sock.settimeout(_remaining_timeout(timeout, deadline))
+            sock.settimeout(remaining_timeout(timeout, deadline))
             header = reader.readline(4096)
             if header in (b"\r\n", b"\n", b""):
                 break
@@ -204,10 +204,10 @@ def dial_agent(
                 except ValueError as exc:
                     raise ProtocolError("invalid content-length in upgrade reply") from exc
         if code != 101:
-            sock.settimeout(_remaining_timeout(timeout, deadline))
+            sock.settimeout(remaining_timeout(timeout, deadline))
             body = reader.read(min(body_len, MAX_FRAME)).decode(errors="replace") if body_len else ""
             raise APIError("agent upgrade", code, body.strip() or status.strip())
-        _remaining_timeout(timeout, deadline)
+        remaining_timeout(timeout, deadline)
         sock.settimeout(None)
         return Conn(sock, reader)
     except Exception:
@@ -217,10 +217,11 @@ def dial_agent(
         raise
 
 
-def _remaining_timeout(timeout: float, deadline: float | None) -> float:
+def remaining_timeout(timeout: float, deadline: float | None, what: str = "agent dial") -> float:
+    """What is left of timeout under an optional absolute monotonic deadline; raises once it is spent."""
     if deadline is None:
         return timeout
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise TimeoutError("agent dial timed out")
+        raise TimeoutError(f"{what} timed out")
     return min(timeout, remaining)
