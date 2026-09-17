@@ -265,7 +265,7 @@ powersave, whose C-state/freq-ramp latency lands in the tail. The guest is
 up 0.26s (its own /proc/uptime) when the first cold exec returns — silkd
 answers long before a console login prompt would appear.
 
-### 2026-07-10 — bare metal
+### 2026-07-10 — bare metal (commit not recorded)
 
 | environment | |
 |---|---|
@@ -285,7 +285,7 @@ answers long before a console login prompt would appear.
 | fs_stat RTT (dial per RPC) | n=200 p50=0.22ms p90=1.71ms p99=3.40ms |
 | fs_pull throughput (128 MiB) | 595.9 MiB/s best of 3 |
 
-### 2026-07-08 — bare metal
+### 2026-07-08 — bare metal (commit not recorded)
 
 | environment | |
 |---|---|
@@ -305,7 +305,7 @@ answers long before a console login prompt would appear.
 | fs_stat RTT (dial per RPC) | n=200 p50=0.17ms p90=0.22ms p99=0.26ms |
 | fs_pull throughput (128 MiB) | 232.6 MiB/s best of 3 |
 
-### 2026-07-07 — nested (google)
+### 2026-07-07 — nested (google, commit not recorded)
 
 | environment | |
 |---|---|

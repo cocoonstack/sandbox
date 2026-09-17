@@ -3,8 +3,9 @@
 A sandbox gets the **effect** of a credential, never the credential. Outbound
 access is an allow-listed, audited resource enforced on the host: the secret
 lives host-side and enters no guest memory, so prompt injection can exfiltrate
-at most the proxy's answers, and every credentialed call lands in the audit and
-usage journals keyed by sandbox and tenant. Default-deny.
+at most the proxy's answers, and every credentialed call lands in the usage
+journal keyed by sandbox and tenant (and in the audit journal when `audit_log`
+is on). Default-deny.
 
 The same host proxy also serves the **none lane** (a NIC-less Cloud Hypervisor
 guest) over vsock, so a network-less sandbox can call approved APIs with
@@ -61,7 +62,7 @@ opts in with rules that all carry a nonempty `methods` list without
 `CONNECT`, or all `intercept`, is rejected at load. A pool whose policy does
 not opt in pays
 nothing for the door on the claim path, whatever its tenants' policies say.
-Audit lines carry `"method":"SOCKS5"`.
+Audit lines (with `audit_log` on) carry `"method":"SOCKS5"`.
 
 ```sh
 curl --socks5-hostname 127.0.0.1:1080 imaps://imap.example.com/   # allowed: {"socks5": true, "allow": [{"host": "imap.example.com"}]}
@@ -203,9 +204,10 @@ woken sandbox binds at arm time.
   method and the secret injected (see below). Only a pool rule may set it.
 - No policy on a claim ⇒ no egress at all (the proxy is not started).
 
-Each decision is written to `audit.jsonl` (`op:"egress"`, `dest`, `port`,
-`decision`, and the secret **name** in `secret`) and metered as an `egress`
-usage event.
+Each decision is metered as an `egress` usage event and, when `audit_log` is
+on, written to `audit.jsonl` (`op:"egress"`, `dest`, `port`, `method`,
+`decision`, and the secret **name** in `secret`); an intercepted `CONNECT` is
+recorded as a decision of its own before its inner requests.
 
 ## HTTPS interception
 

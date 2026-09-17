@@ -4,7 +4,7 @@ MicroVM sandboxes for AI agents, built on
 [cocoon](https://github.com/cocoonstack/cocoon): a fast-boot guest stack, an
 in-guest product daemon, a per-node control plane with warm pools, and SDKs
 for Go and Python. Warm claims are sub-millisecond; a pool miss clones from a
-golden snapshot in tens of milliseconds; cold boot is ~200ms on bare metal.
+golden snapshot in tens of milliseconds; cold boot is ~0.2–0.4 s on bare metal.
 
 ```
 SDK (Go/Python)         sandboxd (per node)              guest microVM
@@ -74,16 +74,18 @@ performance) — source in
 - `scripts/` — `boot-bench.sh` (boot phase timing), `bench.sh` (the published
   benchmark procedure), `sandboxd-e2e.sh` (bare-metal e2e, below), plus the
   `archive`/`egress`/`intercept`/`socks` e2e drivers
+- `packaging/` — the systemd unit deploy installs
 
 ## Build & test
 
 ```bash
-make help          # this list
+make help          # every target; the ones below are the daily set
 make lint test     # Rust: boot/init + silkd (fmt --check, clippy -D warnings, tests)
 make go-lint       # Go: protocol/wire + sandboxd + sdk/go + e2e + mcp, GOOS linux AND darwin
 make go-test       # Go: go test -race across the Go modules
 make sh-lint       # shellcheck every tracked shell script
 make sandboxd      # build dist/sandboxd
+make bench         # claim-tier + data-plane benchmarks on this node
 make boot          # kernel + initramfs artifact image (docker)
                    #   KERNEL_MIRROR=… if kernel.org tarball paths 404 locally
 make silkd-image   # silkd release binary in a scratch carrier image
@@ -148,9 +150,9 @@ Boot contract (cmdline keys consumed by sandbox-init):
 
 | cmdline key | meaning |
 |---|---|
-| `cocoon.layers=a,b,…` | EROFS layer disks resolved from virtio-blk serials, lowerdir order |
+| `cocoon.layers=a,b,…` | EROFS layer disks resolved from virtio-blk serials (or `/dev/vdX` paths, as the Firecracker lane passes them), lowerdir order |
 | `cocoon.cow=x` | writable ext4 COW disk (same resolution rules) |
-| `cocoon.timeout=10` | per-disk wait budget, seconds |
+| `cocoon.timeout=10` | wait budget for the whole disk and NIC set, seconds |
 | `cocoon.hostname=h` | set via `sethostname(2)` before handoff |
 | `ip=addr::gw:mask:host:ethN:off[:dns0[:dns1]]` | cocoon CNI static config: persisted as a MAC-matched networkd unit in the new root (not applied in the initramfs); absent → the image's DHCP fallback covers the NIC |
 | `sandbox.init=/path` | handoff target, default `/sbin/init` |

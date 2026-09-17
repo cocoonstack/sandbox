@@ -1,7 +1,7 @@
 # desktop sandbox flavor: base + a GNOME session on Xvfb with the OSWorld
 # guest server (osworld-server) on guest loopback 5000, the OSWorld Chrome
 # CDP bridge on loopback 9222, and the OSWorld app set (Chrome, LibreOffice,
-# GIMP, VLC). The microVM has no display device, so the session runs on a
+# GIMP, VLC and the second-layer apps the README lists). The microVM has no display device, so the session runs on a
 # virtual framebuffer with Mesa software GL; nothing needs a VT or DRM.
 ARG BASE_IMAGE=ghcr.io/cocoonstack/sandbox/base:24.04
 

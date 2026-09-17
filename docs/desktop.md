@@ -31,7 +31,7 @@ before it joins the warm pool, so the snapshot already carries a listening
 server:
 
 ```json
-"warmup": ["bash", "-lc", "for i in $(seq 1 1100); do curl -sf -m 2 -o /dev/null http://127.0.0.1:5000/screenshot && exit 0; sleep 0.1; done; exit 1"]
+"warmup": ["bash", "-lc", "end=$((SECONDS+100)); until curl -sf -m 2 -o /dev/null http://127.0.0.1:5000/screenshot; do [ $SECONDS -ge $end ] && exit 1; sleep 0.1; done"]
 ```
 
 Measured on a 192-core node running the OSWorld task set at 96 concurrent

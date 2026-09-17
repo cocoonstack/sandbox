@@ -11,8 +11,11 @@ with client.new("ghcr.io/cocoonstack/sandbox/rt:24.04") as sb:
 `pip install cocoonstack-sandbox` — stdlib-only, no dependencies, and
 synchronous by design (agent frameworks that need async wrap calls in
 `asyncio.to_thread`, exactly like the [OpenAI adapter](openai-adapter.md)
-does). It matches the [Go SDK](sdk.md) guest and data-plane surface; operator
-pool retuning (`SetPools`/`SetPoolsCluster`) remains Go-only. Wire fidelity is
+does). It matches the [Go SDK](sdk.md) guest and data-plane surface, with two
+exceptions: operator pool retuning (`SetPools`/`SetPoolsCluster`) remains
+Go-only, and file and tar payloads are whole `bytes` values rather than
+streams (`read_file`/`pull` return them, `write_file`/`push` take them; the
+wire is chunked, the caller's copy is not). Wire fidelity is
 pinned by the shared protocol fixture corpus that the Rust guest, Go, and
 Python all round-trip in CI.
 
@@ -175,9 +178,10 @@ egress request) is not swept; the idle clock restarts when that connection ends.
 Data-plane calls share a handle's relay connection: after a call the SDK
 keeps the connection for 30 seconds (`Client(..., keep_alive=...)` tunes the
 window; 0 dials per call) and the next call on that handle sends its request
-on it, so a busy handle pays the dial, upgrade and TLS handshake once. A kept
-connection counts as live for `idle_hibernate_seconds` until it closes, so
-keep the window below that setting; `close` and `hibernate` drop it at once.
+on it, so a busy handle pays the dial, upgrade and TLS handshake once. A
+handle parks at most 8 idle connections. A kept connection counts as live for
+`idle_hibernate_seconds` until it closes, so keep the window below that
+setting; `close` and `hibernate` drop it at once.
 Streams (`watch`, `open_pty`, `dial_port`, an LSP session) take a connection
 of their own, and a guest whose silkd predates the back-to-back protocol
 gets one connection per call as before.
@@ -295,7 +299,8 @@ listener for unmodified local tools (browsers, curl); close the returned
 socket to stop, and a guest port that closes ends the local connection too.
 `preview_url` mints a signed URL served by the node's
 preview listener, clamped to the claim's remaining lease — the URL dies
-with the sandbox, and a node without `preview_listen` answers 501.
+with the sandbox, and a node without `preview_listen` answers 501. Minting
+is resource-creating and takes the api token, like fork and checkpoint.
 
 ## Node info
 
@@ -396,10 +401,10 @@ with closing(sb.find_iter("/work", r"TODO")) as stream:   # streamed; closing en
     for m in stream:
         if m["line"] > 100:
             break
-# [{"file", "line", "content"}]; glob is anchored *? wildcards on the file name
+# [{"type", "file", "line", "content"}]; glob is anchored *? wildcards on the file name
 
 results = sb.replace(["/work/main.py"], r"foo", "bar")
-# [{"file", "replacements"}]; per-file atomic
+# [{"type", "file", "replacements"}]; per-file atomic
 ```
 
 Patterns are regular expressions evaluated in the guest — no shell quoting.
@@ -408,7 +413,7 @@ Patterns are regular expressions evaluated in the guest — no shell quoting.
 
 ```python
 w = sb.watch("/work", recursive=True)
-for ev in w:                       # {"kind", "path"}
+for ev in w:                       # {"type", "kind", "path"}
     print(ev["kind"], ev["path"])  # created|modified|deleted|renamed
 w.close()
 ```
@@ -423,12 +428,12 @@ when the relay drops, which `w.error` tells apart from a clean close (`None`).
 
 ```python
 sb.git_clone(url, "/work/repo", branch="main", depth=1, auth=token)  # egress lane only
-st = sb.git_status("/work/repo")          # {"branch", "ahead", "behind", "files", "truncated"?}
+st = sb.git_status("/work/repo")          # {"type", "branch", "ahead", "behind", "files", "truncated"?}
 sb.git_add("/work/repo", ["a.txt"])
 sha = sb.git_commit("/work/repo", "message", "Dev <dev@example.com>")
 sb.git_push("/work/repo", auth=token)     # egress lane only
 sb.git_pull("/work/repo", auth=token)     # egress lane only
-br = sb.git_branches("/work/repo")        # {"current", "branches"}
+br = sb.git_branches("/work/repo")        # {"type", "current", "branches"}
 sb.git_create_branch("/work/repo", "feature")
 sb.git_checkout("/work/repo", "feature")
 sb.git_delete_branch("/work/repo", "feature")

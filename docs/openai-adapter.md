@@ -33,7 +33,7 @@ pair over the sync [Python SDK](sdk-python.md), bridged with
 |---|---|
 | `create` | `Client.new` — one claimed sandbox per session |
 | session `exec` | `Sandbox.run` (stdout/stderr/exit); a per-call `timeout` is `run`'s wall clock and surfaces as `TimeoutError` |
-| `read` / `write` | `Sandbox.read_file` / `write_file`; a missing path on `read` → `FileNotFoundError` |
+| `read` / `write` | `Sandbox.read_file` / `write_file`; a missing path on `read` → `FileNotFoundError`; a per-call `user` raises `NotImplementedError` (fs verbs carry no user on the wire) |
 | `persist_workspace` / `hydrate_workspace` | `Sandbox.pull` / `push` (tar) |
 | exposed port | `Sandbox.proxy_port` |
 | `delete` | `Sandbox.close` (release) |

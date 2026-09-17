@@ -9,6 +9,7 @@ directory listing, with disk state persisting across calls.
 
 ```python
 from cocoonsandbox_langchain import CocoonToolkit
+from langgraph.prebuilt import create_react_agent  # langgraph is a separate install
 
 with CocoonToolkit("10.0.0.5:7777", api_token="...") as kit:
     agent = create_react_agent(model, kit.get_tools())

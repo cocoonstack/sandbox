@@ -15,8 +15,9 @@ with client.new("ghcr.io/cocoonstack/sandbox/rt:24.04") as sb:
 ```
 
 stdlib-only and synchronous — `pip install cocoonstack-sandbox` brings no
-dependencies. The surface mirrors the Go SDK: exec/run, streaming files,
-tar push/pull, find/replace, watch, persistent sessions, git verbs, pty,
+dependencies. The surface mirrors the Go SDK (files and tar streams as whole
+`bytes` values): exec/run, file read/write, tar push/pull, find/replace,
+watch, persistent sessions, git verbs, pty,
 port dial/proxy/preview URLs, background processes (spawn/ps/kill/
 logs/attach), fork, hibernate, promote, checkpoints, and the LSP broker.
 Wire fidelity is pinned by the shared protocol fixture corpus (Rust + Go +
