@@ -220,24 +220,27 @@ func TestEffectivePolicyComposition(t *testing.T) {
 		name        string
 		tenant      string
 		pooled      bool
+		removed     bool
 		pool, tnPol *egress.Policy
 		allow, deny string
 		wantArmed   bool
 	}{
-		{"root takes the pool policy whole", "", true, both, nil, "a.test", "z.test", true},
-		{"root without a pool policy", "", true, nil, nil, "", "", false},
-		{"tenant intersects", "acme", true, both, tenantOnly, "b.test", "a.test", true},
-		{"tenant declaring no policy", "acme", true, both, nil, "", "", false},
-		{"tenant on a policyless pool", "acme", true, nil, tenantOnly, "", "", false},
-		{"tenant on a promoted template", "acme", false, nil, tenantOnly, "b.test", "a.test", true},
-		{"root on a promoted template", "", false, nil, nil, "", "", false},
-		{"neither", "acme", false, nil, nil, "", "", false},
+		{"root takes the pool policy whole", "", true, false, both, nil, "a.test", "z.test", true},
+		{"root without a pool policy", "", true, false, nil, nil, "", "", false},
+		{"tenant intersects", "acme", true, false, both, tenantOnly, "b.test", "a.test", true},
+		{"tenant declaring no policy", "acme", true, false, both, nil, "", "", false},
+		{"tenant on a policyless pool", "acme", true, false, nil, tenantOnly, "", "", false},
+		{"tenant on a policyless pool being removed", "acme", true, true, nil, tenantOnly, "b.test", "a.test", true},
+		{"tenant on a promoted template", "acme", false, false, nil, tenantOnly, "b.test", "a.test", true},
+		{"root on a promoted template", "", false, false, nil, nil, "", "", false},
+		{"neither", "acme", false, false, nil, nil, "", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m.pools = map[types.PoolKey]*pool{}
 			if tc.pooled {
 				m.pools[testKey] = newPool(testKey)
+				m.pools[testKey].removed = tc.removed
 			}
 			m.poolEgress = map[types.PoolKey]*egress.Policy{}
 			if tc.pool != nil {
