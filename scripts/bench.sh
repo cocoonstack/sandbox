@@ -64,7 +64,11 @@ stats() {
 }
 
 echo "== build"
-if [[ -n ${SANDBOXD_BIN:-} && -n ${DEMO_BIN:-} ]]; then
+if [[ -n ${SANDBOXD_BIN:-} || -n ${DEMO_BIN:-} || -n ${RPCBENCH_BIN:-} || -n ${PULLBENCH_BIN:-} ]]; then
+  [[ -n ${SANDBOXD_BIN:-} && -n ${DEMO_BIN:-} && -n ${RPCBENCH_BIN:-} && -n ${PULLBENCH_BIN:-} ]] || {
+    echo "prebuilt runs need SANDBOXD_BIN, DEMO_BIN, RPCBENCH_BIN and PULLBENCH_BIN together"
+    exit 1
+  }
   cp "$SANDBOXD_BIN" "$DATA/sandboxd" && cp "$DEMO_BIN" "$DATA/demo"
   cp "$RPCBENCH_BIN" "$DATA/rpcbench" && cp "$PULLBENCH_BIN" "$DATA/pullbench"
 else
@@ -179,6 +183,7 @@ cat <<EOF
 | kernel | $(uname -r) |
 | cpufreq | $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo unknown)/$(cat /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference 2>/dev/null || echo -) |
 | cocoon | $(cocoon version 2>/dev/null | awk '/Version/{print $2; exit}') |
+| sandboxd | $("$DATA/sandboxd" -version 2>/dev/null || echo unknown) |
 | template | $TEMPLATE @ ${digest:-unknown} |
 
 | claim tier | p50 | p90 | max | n |
