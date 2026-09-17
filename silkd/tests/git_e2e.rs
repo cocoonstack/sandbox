@@ -8,7 +8,7 @@ use serde_json::json;
 use common::{exchange, type_of};
 
 fn git(dir: &std::path::Path, args: &[&str]) {
-    let ok = std::process::Command::new("git")
+    let out = std::process::Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -17,10 +17,12 @@ fn git(dir: &std::path::Path, args: &[&str]) {
         .env("GIT_COMMITTER_NAME", "t")
         .env("GIT_COMMITTER_EMAIL", "t@e")
         .output()
-        .unwrap()
-        .status
-        .success();
-    assert!(ok, "git {args:?} failed");
+        .expect("run git");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 fn init_repo() -> tempfile::TempDir {
@@ -104,6 +106,7 @@ async fn commit_failure_surfaces_git_error() {
     .to_string()])
     .await;
     assert_eq!(type_of(&frames[0]), "error");
+    assert_eq!(frames[0]["kind"], "internal", "{frames:?}");
 }
 
 #[tokio::test]

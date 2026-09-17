@@ -8,49 +8,31 @@ use std::time::Duration;
 
 use serde_json::json;
 use silkd::server::State;
-use tokio::io::AsyncWriteExt;
+
+use common::{connect, exchange, next_frame, send, type_of};
 
 #[tokio::test]
 async fn watch_streams_events_until_disconnect() {
     let dir = tempfile::tempdir().unwrap();
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, handle) = common::connect(&state);
-    let req = json!({
-        "op": "fs_watch",
-        "path": dir.path().to_str().unwrap(),
-        "recursive": true
-    })
-    .to_string();
-    cw.write_all(req.as_bytes()).await.unwrap();
-    cw.write_all(b"\n").await.unwrap();
-
-    let ready = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
-        .await
-        .expect("no ready within 5s")
-        .unwrap()
-        .expect("stream closed before ready");
-    let frame: serde_json::Value = serde_json::from_str(&ready).unwrap();
-    assert_eq!(frame["type"], "ready", "got {frame:?}");
+    let (mut cw, mut lines, handle) = connect(&state);
+    send(
+        &mut cw,
+        json!({"op": "fs_watch", "path": dir.path().to_str().unwrap(), "recursive": true}),
+    )
+    .await;
+    assert_eq!(type_of(&next_frame(&mut lines).await), "ready");
     tokio::fs::write(dir.path().join("new.txt"), b"hi")
         .await
         .unwrap();
 
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let line = lines
-                .next_line()
-                .await
-                .unwrap()
-                .expect("stream closed before an event");
-            let frame: serde_json::Value = serde_json::from_str(&line).unwrap();
-            assert_eq!(frame["type"], "event", "got {frame:?}");
-            if frame["path"].as_str().unwrap().ends_with("new.txt") {
-                return;
-            }
+    loop {
+        let frame = next_frame(&mut lines).await;
+        assert_eq!(type_of(&frame), "event", "got {frame:?}");
+        if frame["path"].as_str().unwrap().ends_with("new.txt") {
+            break;
         }
-    })
-    .await
-    .expect("no new.txt event within 5s");
+    }
 
     drop(lines);
     drop(cw);
@@ -63,11 +45,9 @@ async fn watch_streams_events_until_disconnect() {
 
 #[tokio::test]
 async fn watch_missing_path_is_error() {
-    let frames = common::exchange(&[json!({
-        "op": "fs_watch",
-        "path": "/no/such/dir/silkd-watch"
-    })
-    .to_string()])
-    .await;
-    assert_eq!(common::type_of(&frames[0]), "error");
+    let frames =
+        exchange(&[json!({"op": "fs_watch", "path": "/no/such/dir/silkd-watch"}).to_string()])
+            .await;
+    assert_eq!(type_of(&frames[0]), "error");
+    assert_eq!(frames[0]["kind"], "not_found", "{frames:?}");
 }

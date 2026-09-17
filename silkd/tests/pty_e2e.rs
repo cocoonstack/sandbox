@@ -38,7 +38,7 @@ async fn pty_runs_a_shell_and_echoes() {
 
     send(&mut cw, json!({"op":"stdin","data":b64(b"exit\n")})).await;
     let exit = read_until(&mut lines, |v| v["type"] == "exit").await;
-    assert!(exit["code"].is_number());
+    assert_eq!(exit["code"], 0, "{exit:?}");
 
     cw.shutdown().await.unwrap();
     handle.await.unwrap().unwrap();
