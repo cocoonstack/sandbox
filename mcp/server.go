@@ -40,9 +40,7 @@ type rpcErrorBody struct {
 	Message string `json:"message"`
 }
 
-// server owns one sandboxd client and the handles minted over this stdio
-// session: MCP tools address sandboxes and checkpoints by id, so the live
-// handles (with their tokens) stay here.
+// server owns one sandboxd client and the live handles (with their tokens) this stdio session minted.
 type server struct {
 	client   *sandbox.Client
 	template string

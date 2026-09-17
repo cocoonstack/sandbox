@@ -9,7 +9,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
-// loadEpoch reads the persisted gossip epoch, or 0 when it is absent, unreadable, or corrupt.
 func loadEpoch(path string) uint64 {
 	raw, err := os.ReadFile(path) //nolint:gosec // node-local data-dir path
 	if err != nil {

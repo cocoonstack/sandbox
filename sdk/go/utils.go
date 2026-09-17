@@ -18,7 +18,6 @@ type respPtr[T any] interface {
 	wire.Response
 }
 
-// doneRPC sends a request that answers with Done or an error frame.
 func (s *Sandbox) doneRPC(ctx context.Context, req wire.Request) error {
 	conn, l, err := s.call(ctx, req)
 	if err != nil {
@@ -63,7 +62,6 @@ func (s *Sandbox) uploadRPC(ctx context.Context, req wire.Request, r io.Reader) 
 	return l.done(<-terminal)
 }
 
-// downloadRPC sends req and drains its Data stream into sink until Done.
 func (s *Sandbox) downloadRPC(ctx context.Context, req wire.Request, sink func([]byte) error) error {
 	conn, l, err := s.call(ctx, req)
 	if err != nil {
@@ -104,7 +102,6 @@ func pumpStdio(ctx context.Context, conn *silkd.Conn, stdout, stderr io.Writer) 
 	}
 }
 
-// oneShotRPC sends req and returns its single typed reply frame.
 func oneShotRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.Request) (*T, error) {
 	conn, l, err := s.call(ctx, req)
 	if err != nil {
@@ -115,7 +112,6 @@ func oneShotRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.
 	return v, l.done(err)
 }
 
-// collectRPC sends req and gathers every streamed frame of type T until Done.
 func collectRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.Request) ([]T, error) {
 	var out []T
 	for v, err := range streamRPC[T, PT](ctx, s, req) {
@@ -186,7 +182,6 @@ func drainData(ctx context.Context, conn *silkd.Conn, sink func([]byte) error) e
 	}
 }
 
-// terminalErr reads one frame and requires it to be Done (else the error).
 func terminalErr(ctx context.Context, conn *silkd.Conn) error {
 	_, err := expect[wire.Done](ctx, conn)
 	return err

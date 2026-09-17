@@ -88,9 +88,7 @@ func (ck *Checkpoint) claimAt(ctx context.Context, addr string, body []byte) (cl
 	return doJSON[claimResponse](ctx, ck.c, http.MethodPost, addr, "/v1/checkpoints/"+ck.ID+"/claim", bytes.NewReader(body), ck.c.apiToken, "claim checkpoint")
 }
 
-// Checkpoint captures the sandbox's full state — memory, disk, running
-// processes — without stopping it, and returns a handle that branches new
-// sandboxes from that exact moment. name is an optional label.
+// Checkpoint captures the sandbox's full state (memory, disk, running processes) without stopping it and returns a handle that branches new sandboxes from that moment.
 func (s *Sandbox) Checkpoint(ctx context.Context, name string) (*Checkpoint, error) {
 	body, err := encodeBody("checkpoint", checkpointRequest{Token: s.token, Name: name})
 	if err != nil {

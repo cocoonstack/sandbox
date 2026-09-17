@@ -171,7 +171,6 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	return sock, nil
 }
 
-// idleOnce hibernates claims idle past their pool's (or the node's) threshold.
 func (m *Manager) idleOnce(ctx context.Context) {
 	if !m.idleEnabled.Load() {
 		return
@@ -324,7 +323,6 @@ func (m *Manager) recordHibernate(ctx context.Context, sb *types.Sandbox) {
 	m.recordUsage(ctx, usageEvent{Event: "hibernate", ID: sb.ID, VMName: sb.VMName})
 }
 
-// skipIdle reports the claims an idle sweep must leave alone.
 func skipIdle(sb *types.Sandbox, idle time.Duration, now time.Time) bool {
 	return idle <= 0 || sb.Key.Net == types.NetEgress || hasAppliedVolumes(sb) ||
 		sb.HibernateSnap != "" || sb.ArchiveCk != "" || sb.Busy() || now.Sub(sb.LastSeen()) < idle

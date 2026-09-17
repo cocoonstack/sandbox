@@ -51,7 +51,6 @@ var (
 	}
 )
 
-// egressListener is one sandbox's egress accept points over the per-sandbox UDS pair.
 type egressListener struct {
 	srv       *http.Server
 	proxy     *egress.Proxy
@@ -187,7 +186,7 @@ func (m *Manager) tapOf(ctx context.Context, vmName string) (string, error) {
 	return "", fmt.Errorf("no tap for %s", vmName)
 }
 
-// armEgressProxy serves the egress proxy when the effective policy permits something, on the doors refill pre-bound where it could.
+// armEgressProxy serves the proxy on the pre-bound doors, binding them when refill could not, once the effective policy permits anything.
 func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	if !m.guardedEgress || sb.VsockSocket == "" {
 		return nil
@@ -299,7 +298,6 @@ func (m *Manager) disarmEgress(id string, removed bool) {
 	}
 }
 
-// poolIntercepts reports whether the configured pool for key HTTPS-intercepts.
 func (m *Manager) poolIntercepts(key types.PoolKey) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -327,7 +325,6 @@ func (m *Manager) effectivePolicy(sb *types.Sandbox) (egress.Evaluator, bool) {
 	return egress.Compose(*poolPol, *tenantPol), true
 }
 
-// bindEgress binds the HTTP door and, when the policy serves it, the SOCKS5 door of one VM.
 func bindEgress(vsock string, socks bool) (*egressListener, error) {
 	el := &egressListener{path: engine.EgressSocketPath(vsock)}
 	ln, err := listenUnix(el.path)
@@ -372,7 +369,6 @@ func reached(ln net.Listener) bool {
 	return waiting
 }
 
-// newEgressDialer blocks internal targets, then re-admits exactly the node-named prefixes.
 func newEgressDialer(allow []netip.Prefix) *net.Dialer {
 	return &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
 		host, _, err := net.SplitHostPort(address)

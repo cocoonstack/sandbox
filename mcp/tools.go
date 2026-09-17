@@ -160,8 +160,7 @@ func parseCommand(s *server, raw json.RawMessage) (cmdArgs, *sandbox.Sandbox, er
 	return args, sb, err
 }
 
-// cappedOutput keeps the first execOutputCap bytes; an agent that tails a firehose must not grow this process.
-// An exec keeps draining past the cap so the command runs on; a read stops there instead.
+// cappedOutput keeps the first execOutputCap bytes: an agent that tails a firehose must not grow this process.
 type cappedOutput struct {
 	strings.Builder
 	stopAtCap bool

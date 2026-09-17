@@ -2,7 +2,7 @@ package pool
 
 import "sync"
 
-// recLock takes the per-record lock and a live reference (pair with recDone); clones and wakes hold it shared so a delete or re-publish never runs under an in-flight read.
+// recLock takes the per-record lock and a live reference; pair with recDone.
 func (m *Manager) recLock(id string) *sync.RWMutex {
 	m.recLocksMu.Lock()
 	defer m.recLocksMu.Unlock()

@@ -1,8 +1,7 @@
 // sandbox-mcp is a Model Context Protocol server over stdio: it exposes the
 // sandbox surface (claim, exec, files, fork, checkpoint, promote, hibernate)
-// as MCP tools, so MCP clients — Claude Code, Cursor, agent frameworks —
-// drive real microVM sandboxes with no extra glue. One process serves one
-// sandboxd endpoint, configured by flags or environment.
+// as MCP tools. One process serves one sandboxd endpoint, configured by
+// flags or environment.
 package main
 
 import (

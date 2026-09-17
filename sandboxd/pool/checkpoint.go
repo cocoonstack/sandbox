@@ -110,7 +110,6 @@ func (m *Manager) Checkpoints(ctx context.Context, tenant string) ([]types.Check
 
 // DeleteCheckpoint removes a checkpoint's snapshot and record, broadcasting when fleet-scoped.
 func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, scope DeleteScope) error {
-	// a rejected id must not leave a lock-map entry
 	if !store.CheckpointIDRe.MatchString(ckptID) {
 		return ErrUnknownCheckpoint
 	}
@@ -165,7 +164,6 @@ func (m *Manager) FetchCheckpoint(ctx context.Context, ckptID string) (string, [
 	return dir, meta, func() { l.RUnlock(); m.recDone(ckptID) }, nil
 }
 
-// publishCheckpoint stages, writes the meta, and publishes, returning the record and source snap.
 func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID, name, tenant string, archive bool) (types.Checkpoint, string, error) {
 	ckpt := types.Checkpoint{
 		ID:        ckID,
@@ -298,7 +296,7 @@ func (m *Manager) markHealPending(ckptID string) {
 	m.healPending[ckptID] = struct{}{}
 }
 
-// clearHealPending un-marks ckptID and reports a veto; call under ckptID's recLock.
+// clearHealPending un-marks ckptID and reports a veto.
 func (m *Manager) clearHealPending(ckptID string) (aborted bool) {
 	m.recLocksMu.Lock()
 	defer m.recLocksMu.Unlock()
@@ -331,7 +329,6 @@ func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 	return pinned
 }
 
-// sweepExpiredCheckpoints ages out checkpoints older than the configured TTL.
 func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 	if m.ckptTTL <= 0 || !m.ckptSweeping.CompareAndSwap(false, true) {
 		return

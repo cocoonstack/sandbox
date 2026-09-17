@@ -14,7 +14,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// reapAction is what reapOnce does with an expired claim.
 type reapAction int
 
 const (
@@ -190,7 +189,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	removed := vmName == ""
 	switch {
 	case removed:
-		m.finishVolumeTeardown(ctx, td) // archived: no VM to confirm gone
+		m.finishVolumeTeardown(ctx, td)
 	case m.releaseDelay > 0:
 		m.queueRemoval(vmName, id, "", td, time.Now().Add(m.releaseDelay))
 	default:

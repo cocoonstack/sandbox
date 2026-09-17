@@ -33,22 +33,20 @@ const (
 	StaleCreateNotCreating StaleCreateOutcome = "not-creating"
 	StaleCreateNotFound    StaleCreateOutcome = "not-found"
 
-	argName       = "--name"
-	argOutput     = "--output"
-	argNetwork    = "--network"
-	argBridge     = "--bridge"
-	formatJSON    = "json"
-	silkdPort     = 2048 // silkd's fixed guest vsock port, the claim-ready anchor
-	egressPort    = 2049 // guest→host egress port; VMM maps it to <vsock_socket>_2049
-	socksPort     = 2050
-	cmdTimeout    = 2 * time.Minute
-	probeInterval = 20 * time.Millisecond
-	connectMax    = 64   // "OK <port>" handshake reply cap
-	infoMax       = 4096 // info response frame cap
-	outputTail    = 400
-
-	// portForwardMax caps the port_forward handshake reply line.
-	portForwardMax = 4096
+	argName        = "--name"
+	argOutput      = "--output"
+	argNetwork     = "--network"
+	argBridge      = "--bridge"
+	formatJSON     = "json"
+	silkdPort      = 2048 // silkd's fixed guest vsock port, the claim-ready anchor
+	egressPort     = 2049 // guest→host egress port; VMM maps it to <vsock_socket>_2049
+	socksPort      = 2050
+	cmdTimeout     = 2 * time.Minute
+	probeInterval  = 20 * time.Millisecond
+	connectMax     = 64   // "OK <port>" handshake reply cap
+	infoMax        = 4096 // info response frame cap
+	outputTail     = 400
+	portForwardMax = 4096 // port_forward handshake reply line cap
 )
 
 // capacitySignatures mean the node cannot attach another VM, not that this VM failed.
@@ -431,7 +429,6 @@ func shardOf(shards []string, name string) string {
 	return shards[int(h.Sum32()>>1)%len(shards)]
 }
 
-// respFail renders a non-success reply: the error text, or the unexpected frame's type.
 func respFail(resp wire.Response) string {
 	if errResp, ok := resp.(*wire.ErrorResp); ok {
 		return errResp.Error()
@@ -439,7 +436,6 @@ func respFail(resp wire.Response) string {
 	return "unexpected frame " + resp.RespType()
 }
 
-// parseRecord is best-effort: an unparseable record yields the zero value.
 func parseRecord(ctx context.Context, out []byte) types.VMRecord {
 	var rec types.VMRecord
 	if err := json.Unmarshal(out, &rec); err != nil {

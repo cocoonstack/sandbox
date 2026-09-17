@@ -186,12 +186,12 @@ func (m *Mesh) TemplateOwners(keyHash string) []string {
 	return m.owners(func(st NodeState) bool { return slices.Contains(st.Templates, keyHash) })
 }
 
-// VolumeOwners returns peers that advertise every requested volume; self is excluded.
+// VolumeOwners returns up to two peers that advertise every requested volume; self is excluded.
 func (m *Mesh) VolumeOwners(names []string) []string {
 	return m.owners(func(st NodeState) bool { return containsAll(st.Volumes, names) })
 }
 
-// TemplateVolumeOwners returns peers holding both the template and every requested volume.
+// TemplateVolumeOwners returns up to two peers holding both the template and every requested volume.
 func (m *Mesh) TemplateVolumeOwners(keyHash string, names []string) []string {
 	return m.owners(func(st NodeState) bool {
 		return slices.Contains(st.Templates, keyHash) && containsAll(st.Volumes, names)
