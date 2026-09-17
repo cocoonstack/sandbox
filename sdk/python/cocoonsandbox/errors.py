@@ -1,8 +1,14 @@
 """Error types raised by the SDK."""
 
+from typing import Any
+
 
 class SandboxError(Exception):
     """Base class for all SDK errors."""
+
+
+class SandboxTimeout(SandboxError, TimeoutError):
+    """A caller's timeout or deadline expired before the call finished."""
 
 
 class APIError(SandboxError):
@@ -41,3 +47,10 @@ class ExitError(SandboxError):
 
 class ProtocolError(SandboxError):
     """The peer broke the frame protocol (unexpected frame, oversized line)."""
+
+
+def require_field(reply: dict[str, Any], key: str, verb: str) -> Any:
+    """The named member of a control-plane reply, or an APIError naming the verb that got a truncated one."""
+    if key not in reply:
+        raise APIError(verb, 0, f"reply without {key}")
+    return reply[key]

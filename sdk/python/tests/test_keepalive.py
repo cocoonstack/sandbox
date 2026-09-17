@@ -5,7 +5,9 @@ import contextlib
 import json
 import socket
 import threading
+import time
 
+import pytest
 from conftest import accept_upgrade, sandbox_at, wait_until
 
 from cocoonsandbox.frames import KEEP_ALIVE_PROTO
@@ -70,6 +72,26 @@ def test_peer_hang_up_is_noticed_before_reuse():
         sb._pool.drain()
         agent.stop()
     assert agent.upgrades == 2
+
+
+def test_run_timeout_bounds_the_proto_probe():
+    server = socket.create_server(("127.0.0.1", 0))
+
+    def serve():
+        conn, _ = server.accept()
+        accept_upgrade(conn)
+        time.sleep(3)
+        conn.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    sb = sandbox_at(f"127.0.0.1:{server.getsockname()[1]}")
+    started = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError):
+            sb.run(["true"], timeout=0.5)
+    finally:
+        server.close()
+    assert time.monotonic() - started < 2, "the unanswered info probe outlived the run timeout"
 
 
 def test_close_drains_the_parked_connection(monkeypatch):

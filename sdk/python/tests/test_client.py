@@ -1,47 +1,13 @@
 """Control-plane claims, redirects, volume discovery, errors, and checkpoints."""
 
-import json
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import HTTPServer
 
 import pytest
+from conftest import FakeNode
 
 from cocoonsandbox import APIError, Client, Template
-
-
-class FakeNode(BaseHTTPRequestHandler):
-    routes = {}
-
-    def do_POST(self):
-        self._dispatch("POST")
-
-    def do_GET(self):
-        self._dispatch("GET")
-
-    def do_DELETE(self):
-        self._dispatch("DELETE")
-
-    def log_message(self, *args):
-        pass
-
-    def _dispatch(self, method):
-        length = int(self.headers.get("Content-Length") or 0)
-        body = json.loads(self.rfile.read(length)) if length else {}
-        handler = self.routes.get((method, self.path.split("?")[0]))
-        if handler is None:
-            self._reply(404, {"error": "no route"})
-            return
-        code, reply = handler(body, self.path)
-        self._reply(code, reply)
-
-    def _reply(self, code, payload):
-        raw = json.dumps(payload).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(raw)))
-        self.end_headers()
-        self.wfile.write(raw)
 
 
 @pytest.fixture

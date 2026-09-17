@@ -2,6 +2,7 @@
 inside a nested unknown field or trailing bytes after the frame must never
 yield a silently wrong payload — unexpected shapes take the full parse."""
 
+import base64
 import json
 
 import pytest
@@ -54,3 +55,11 @@ def test_tag_after_other_keys_takes_the_full_parse():
 def test_malformed_frame_rejected(raw):
     with pytest.raises(json.JSONDecodeError):
         frames.decode_response(raw)
+
+
+def test_bare_data_frame_fast_path_matches_the_generic_encoding():
+    payload = bytes(range(256))
+    fast = frames.encode_request("data", data=payload)
+    generic = frames.encode_request("stdin", data=payload, extra=None).replace(b'"op":"stdin"', b'"op":"data"')
+    assert fast == generic
+    assert json.loads(fast)["data"] == base64.b64encode(payload).decode()

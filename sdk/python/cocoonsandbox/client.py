@@ -17,7 +17,7 @@ from typing import Any, TypeVar, cast
 from .checkpoint import Checkpoint
 from .conn import Conn, dial_agent, remaining_timeout
 from .endpoint import _endpoint_url
-from .errors import APIError
+from .errors import APIError, SandboxTimeout, require_field
 from .sandbox import Sandbox
 
 T = TypeVar("T")
@@ -37,7 +37,10 @@ class Client:
         ssl_context: ssl.SSLContext | None = None,
         keep_alive: float = 30.0,
     ) -> None:
-        """keep_alive keeps a handle's idle relay connection, which holds the sandbox's idle clock; 0 dials per call."""
+        """keep_alive keeps a handle's idle relay connection, which holds the sandbox's idle clock; 0 dials per call.
+
+        ssl_context is set to offer ALPN http/1.1, which the relay upgrade needs; pass a dedicated context.
+        """
         endpoint = _endpoint_url(addr.split(",")[0].strip())
         self.addr = endpoint.geturl().removeprefix("http://")
         self._scheme = endpoint.scheme
@@ -145,7 +148,7 @@ class Client:
         reply = self._post_json(addr, path, claim, verb, deadline=deadline)
         redirect = reply.get("redirect") or []
         if not redirect:
-            return self._handle_from(addr, reply)
+            return self._handle_from(addr, reply, verb)
         claim["no_redirect"] = True
         if reply.get("require_promoted"):
             claim["require_promoted"] = True
@@ -154,7 +157,7 @@ class Client:
             return self._post_json(peer, path, claim, verb, deadline=deadline)
 
         owner, reply = _redirect_fallback(addr, redirect, post, verb)
-        return self._handle_from(owner, reply)
+        return self._handle_from(owner, reply, verb)
 
     def _peers(self) -> list[str]:
         try:
@@ -167,11 +170,11 @@ class Client:
         except APIError:
             return []
 
-    def _handle_from(self, dialed: str, reply: dict[str, Any]) -> Sandbox:
+    def _handle_from(self, dialed: str, reply: dict[str, Any], verb: str = "claim") -> Sandbox:
         return Sandbox(
             client=self,
-            id=reply["id"],
-            token=reply["token"],
+            id=require_field(reply, "id", verb),
+            token=require_field(reply, "token", verb),
             owner=reply.get("owner_addr") or dialed,
             deadline=reply.get("deadline", ""),
             from_checkpoint=reply.get("from_checkpoint", ""),
@@ -215,7 +218,7 @@ class Client:
             raise APIError(verb, exc.code, detail) from None
         except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
             if deadline is not None and time.monotonic() >= deadline:
-                raise TimeoutError(f"{verb} timed out") from None
+                raise SandboxTimeout(f"{verb} timed out") from None
             detail = str(exc.reason) if isinstance(exc, urllib.error.URLError) else str(exc)
             raise APIError(verb, 0, detail) from None
         if not raw:
