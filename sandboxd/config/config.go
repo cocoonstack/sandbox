@@ -612,17 +612,13 @@ func validateShards(names []string, field, kind string) error {
 	return nil
 }
 
-// namesHost reports whether addr, a URL, host:port, or bare host, carries a host a client could dial.
+// namesHost reads addr the way Mint does and reports whether it carries a host a client could dial.
 func namesHost(addr string) bool {
-	if strings.Contains(addr, "://") {
-		u, err := url.Parse(addr)
-		return err == nil && u.Hostname() != "" && !isUnspecifiedHost(u.Hostname())
+	if !strings.Contains(addr, "://") {
+		addr = "http://" + addr
 	}
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		host = addr
-	}
-	return host != "" && !isUnspecifiedHost(host)
+	u, err := url.Parse(addr)
+	return err == nil && u.Hostname() != "" && !isUnspecifiedHost(u.Hostname())
 }
 
 func isUnspecifiedHost(host string) bool {
