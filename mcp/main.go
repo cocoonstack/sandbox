@@ -12,13 +12,16 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/projecteru2/core/log"
 	coretypes "github.com/projecteru2/core/types"
 )
 
 func main() {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	if err := log.SetupLog(ctx, &coretypes.ServerLogConfig{Level: "error"}, ""); err != nil {
 		fmt.Fprintln(os.Stderr, "setup log:", err)
 		os.Exit(1)
@@ -32,7 +35,14 @@ func main() {
 	if err != nil {
 		log.WithFunc("main").Fatalf(ctx, err, "connect sandboxd")
 	}
-	if err := srv.serve(ctx, bufio.NewReader(os.Stdin), os.Stdout); err != nil {
-		log.WithFunc("main").Fatalf(ctx, err, "serve stdio")
+	served := make(chan error, 1)
+	go func() { served <- srv.serve(ctx, bufio.NewReader(os.Stdin), os.Stdout) }()
+	select {
+	case err := <-served:
+		if err != nil {
+			log.WithFunc("main").Fatalf(ctx, err, "serve stdio")
+		}
+	case <-ctx.Done():
+		srv.closeBoxes()
 	}
 }

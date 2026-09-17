@@ -108,6 +108,18 @@ func TestReadFileStopsAtTheCap(t *testing.T) {
 	}
 }
 
+func TestExecRejectsAnEmptyCommand(t *testing.T) {
+	replies := serveLines(t, newTestServer(t, nil),
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_sandbox","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"exec","arguments":{"sandbox_id":"sb_1"}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"spawn","arguments":{"sandbox_id":"sb_1","command":""}}}`)
+	for _, id := range []int{2, 3} {
+		if !strings.Contains(toolText(t, replies[id]), "command must not be empty") {
+			t.Errorf("reply %d accepted an empty command: %q", id, toolText(t, replies[id]))
+		}
+	}
+}
+
 func TestCreateSandboxRejectsNegativeTTL(t *testing.T) {
 	replies := serveLines(t, newTestServer(t, nil),
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_sandbox","arguments":{"ttl_seconds":-5}}}`)

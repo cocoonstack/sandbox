@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -76,7 +77,7 @@ func (s *server) serve(ctx context.Context, r *bufio.Reader, w io.Writer) error 
 	for {
 		line, err := r.ReadBytes('\n')
 		if len(line) == 0 && err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			return err
