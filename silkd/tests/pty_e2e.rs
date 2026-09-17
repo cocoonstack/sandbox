@@ -3,17 +3,57 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
+use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use serde_json::{Value, json};
+use silkd::proc::Table;
+use silkd::proto::PtyReq;
+use silkd::pty;
 use silkd::server::State;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::sync::mpsc;
 
 use common::{FrameLines, b64, connect, decode, exchange, frames_until, one, send, type_of};
 
+struct FailingSink(Vec<u8>);
+
+impl AsyncWrite for FailingSink {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        self.0.extend_from_slice(buf);
+        Poll::Ready(Err(std::io::Error::other("client gone")))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
 async fn read_until(lines: &mut FrameLines, pred: impl Fn(&Value) -> bool) -> Value {
     frames_until(lines, pred).await.pop().unwrap()
+}
+
+async fn wait_gone(pid: u32) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    // SAFETY: kill(2) with signal 0 only probes whether the pid exists; it takes no pointers.
+    while unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "shell {pid} still alive 5 s after the started write failed"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 #[tokio::test]
@@ -105,4 +145,32 @@ async fn pty_disconnect_tears_down_without_spin() {
             .any(|p| p["pid"].as_u64() == Some(pid)),
         "pty still in table after disconnect: {ps:?}"
     );
+}
+
+#[tokio::test]
+async fn pty_started_write_failure_kills_the_shell_and_unregisters_it() {
+    let table = Table::new();
+    let (_client, client_rx) = mpsc::channel(1);
+    let req = PtyReq {
+        cols: 80,
+        rows: 24,
+        cwd: None,
+        env: HashMap::new(),
+        user: None,
+    };
+    let mut sink = FailingSink(Vec::new());
+
+    let err = pty::open(&table, 0, req, client_rx, &mut sink)
+        .await
+        .expect_err("open must propagate the started write failure");
+    assert_eq!(err.to_string(), "client gone");
+
+    let started: Value = serde_json::from_slice(&sink.0).expect("started frame reached the writer");
+    assert_eq!(started["type"], "started");
+    let pid = started["pid"].as_u64().unwrap() as u32;
+    assert!(
+        table.list().is_empty(),
+        "pty still registered after the write failure"
+    );
+    wait_gone(pid).await;
 }

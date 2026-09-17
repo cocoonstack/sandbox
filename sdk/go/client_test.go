@@ -491,6 +491,28 @@ func TestLookupScatter(t *testing.T) {
 	}
 }
 
+func TestLookupReportsAFailedPeerDiscovery(t *testing.T) {
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/sandboxes/sb_1/owner":
+			w.WriteHeader(http.StatusNotFound)
+		case "/v1/peers":
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"error":"gossip not ready"}`)
+		}
+	}))
+	t.Cleanup(entry.Close)
+
+	_, err := testClient(t, entry).Lookup(t.Context(), "sb_1", "tok")
+	he, ok := errors.AsType[*APIError](err)
+	if !ok || he.Verb != "peers" || he.Status != http.StatusServiceUnavailable {
+		t.Fatalf("Lookup: %v, want the peers 503 joined into the error", err)
+	}
+	if !strings.Contains(err.Error(), "no owner found") {
+		t.Errorf("Lookup: %v, want the no-owner verdict kept alongside", err)
+	}
+}
+
 func TestAPIErrorDrainsOversizedBody(t *testing.T) {
 	body := strings.NewReader(`{"error":"` + strings.Repeat("x", 3*4096) + `"}`)
 	err := apiError("claim", &http.Response{StatusCode: http.StatusTooManyRequests, Body: io.NopCloser(body)})
