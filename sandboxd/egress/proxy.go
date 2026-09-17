@@ -165,11 +165,11 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	decision, intercept := p.tunnelDecision(host, port)
+	p.record(Event{Method: r.Method, Host: host, Port: port, Decision: decision})
 	if intercept {
 		p.serveIntercept(w, r, host, port)
 		return
 	}
-	p.record(Event{Method: r.Method, Host: host, Port: port, Decision: decision})
 	if decision == DecisionDeny {
 		denied(w, host)
 		return

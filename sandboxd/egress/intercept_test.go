@@ -82,6 +82,9 @@ func TestInterceptInjectsSecretIntoHTTPS(t *testing.T) {
 	if seen := resp.Header.Get("X-Host-Seen"); seen != "example.com" {
 		t.Errorf("upstream saw Host %q, want the guest's own header preserved", seen)
 	}
+	if ev := recvEvent(t, events); ev.Method != http.MethodConnect || ev.Host != "example.com" || ev.Decision != DecisionAllow {
+		t.Errorf("tunnel audit event = %+v, want CONNECT/example.com/allow", ev)
+	}
 	if ev := recvEvent(t, events); ev.Method != http.MethodGet || ev.Injected != "gh" || ev.Decision != DecisionAllow {
 		t.Errorf("audit event = %+v, want GET/gh/allow", ev)
 	}

@@ -23,6 +23,7 @@ const (
 	socksAtypName  = 0x03
 	socksAtypIPv6  = 0x04
 	socksGranted   = 0x00
+	socksFailure   = 0x01
 	socksDenied    = 0x02
 	socksUnreached = 0x04
 	socksBadCmd    = 0x07
@@ -119,7 +120,10 @@ func socksHandshake(conn net.Conn) (host string, port uint16, ok bool) {
 		if n, err = readN(conn, 1); err != nil {
 			return "", 0, false
 		}
-		addrLen = int(n[0])
+		if addrLen = int(n[0]); addrLen == 0 {
+			_ = socksReply(conn, socksFailure)
+			return "", 0, false
+		}
 	default:
 		_ = socksReply(conn, socksBadAtyp)
 		return "", 0, false
