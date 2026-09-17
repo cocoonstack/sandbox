@@ -484,7 +484,7 @@ func (m *Manager) Run(ctx context.Context) {
 	// store retention is hourly: each sweep is cluster-visible I/O on a shared root
 	storeSweep := time.NewTicker(time.Hour)
 	defer storeSweep.Stop()
-	m.sweepExpiredCheckpoints(ctx)
+	go m.sweepExpiredCheckpoints(ctx)
 	m.refillOnce(ctx)
 	for {
 		select {
@@ -503,7 +503,7 @@ func (m *Manager) Run(ctx context.Context) {
 			go m.retryArchiveDeletes(ctx)
 		case <-storeSweep.C:
 			m.sweepStoreGenerations(ctx)
-			m.sweepExpiredCheckpoints(ctx)
+			go m.sweepExpiredCheckpoints(ctx)
 		}
 	}
 }
