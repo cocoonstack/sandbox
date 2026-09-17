@@ -2,6 +2,7 @@
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -315,3 +316,26 @@ def recording_claim(reply):
 
     FakeNode.routes[("POST", "/v1/claim")] = claim
     return seen
+
+
+def test_claim_refuses_a_spent_deadline(node):
+    seen = []
+
+    def claim(body, path):
+        seen.append(body)
+        return 200, {"id": "sb_1", "token": "tok"}
+
+    FakeNode.routes[("POST", "/v1/claim")] = claim
+    with pytest.raises(TimeoutError):
+        Client(node).new("rt:24.04", deadline=time.monotonic() - 1)
+    assert seen == [], "a spent deadline still reached the node"
+
+
+def test_claim_deadline_bounds_the_redirect_walk(node, black_hole):
+    FakeNode.routes[("POST", "/v1/claim")] = lambda body, path: (200, {"redirect": [black_hole, black_hole]})
+    client = Client(node, timeout=2.0)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        client.new("rt:24.04", deadline=started + 0.3)
+    elapsed = time.monotonic() - started
+    assert elapsed < 1.5, elapsed

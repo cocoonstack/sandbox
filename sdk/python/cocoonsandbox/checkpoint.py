@@ -20,10 +20,12 @@ class Checkpoint:
         self.sandbox_id = rec.get("sandbox_id", "")
         self.created_at = rec.get("created_at", "")
 
-    def new(self, ttl_seconds: int = 0) -> Sandbox:
+    def new(self, ttl_seconds: int = 0, *, deadline: float | None = None) -> Sandbox:
         """Claims from the checkpoint, following redirects with one origin fallback."""
         claim = {"ttl_seconds": ttl_seconds} if ttl_seconds else {}
-        return self._client._claim_from(self._addr, claim, f"/v1/checkpoints/{self.id}/claim", "claim checkpoint")
+        return self._client._claim_from(
+            self._addr, claim, f"/v1/checkpoints/{self.id}/claim", "claim checkpoint", deadline=deadline
+        )
 
     def delete(self) -> None:
         """Deletes the checkpoint with eventual peer cleanup bounded by checkpoint_ttl_hours."""

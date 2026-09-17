@@ -23,7 +23,12 @@ class Template:
         self.content_digest = content_digest
 
     def new(
-        self, ttl_seconds: int = 0, volumes: list[str | Mapping[str, str]] | None = None, mount: bool = True
+        self,
+        ttl_seconds: int = 0,
+        volumes: list[str | Mapping[str, str]] | None = None,
+        mount: bool = True,
+        *,
+        deadline: float | None = None,
     ) -> Sandbox:
         """Claims the template, following placement when volumes require it.
         mount=False attaches the volumes without mounting them."""
@@ -32,9 +37,9 @@ class Template:
 
         claim = _claim_body(self.name, self.net, self.size, ttl_seconds, volumes, mount)
         if volumes:
-            return self._client._claim_from(self._addr, claim)
+            return self._client._claim_from(self._addr, claim, deadline=deadline)
         claim["no_redirect"] = True
-        reply = self._client._post_json(self._addr, "/v1/claim", claim, "claim")
+        reply = self._client._post_json(self._addr, "/v1/claim", claim, "claim", deadline=deadline)
         return self._client._handle_from(self._addr, reply)
 
     def delete(self) -> None:

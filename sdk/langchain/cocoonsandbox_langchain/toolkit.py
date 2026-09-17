@@ -114,19 +114,19 @@ class CocoonToolkit:
         if sb is not None:
             sb.close()
 
-    def sandbox(self) -> Sandbox:
-        """The claimed sandbox, claiming (or branching) on first use."""
+    def sandbox(self, deadline: float | None = None) -> Sandbox:
+        """The claimed sandbox, claiming (or branching) on first use within the caller's deadline."""
         with self._lock:
             if self._closed:
                 raise RuntimeError("toolkit is closed")
             if self._sb is None:
-                self._sb = self._claim()
+                self._sb = self._claim(deadline)
             return self._sb
 
-    def _claim(self) -> Sandbox:
+    def _claim(self, deadline: float | None = None) -> Sandbox:
         if self._from_checkpoint:
-            return self._client.checkpoint(self._from_checkpoint).new(ttl_seconds=self._ttl)
-        return self._client.new(self._template, net=self._net, ttl_seconds=self._ttl)
+            return self._client.checkpoint(self._from_checkpoint).new(ttl_seconds=self._ttl, deadline=deadline)
+        return self._client.new(self._template, net=self._net, ttl_seconds=self._ttl, deadline=deadline)
 
     def _tool(self, name: str, description: str, schema: type[BaseModel], func: Callable[..., str]) -> StructuredTool:
         async def arun(**kwargs):
@@ -142,7 +142,7 @@ class CocoonToolkit:
         errs: list[bytes] = []
         tail = ""
         try:
-            sb = self.sandbox()
+            sb = self.sandbox(deadline)
             timeout = deadline - time.monotonic()
             if timeout <= 0:
                 raise TimeoutError("the claim used the whole call budget")

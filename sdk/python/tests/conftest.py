@@ -51,6 +51,15 @@ def spawn_node():
 
 
 @pytest.fixture
+def black_hole():
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(8)
+    yield f"127.0.0.1:{sock.getsockname()[1]}"
+    sock.close()
+
+
+@pytest.fixture
 def dead_addr():
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
