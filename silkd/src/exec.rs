@@ -71,9 +71,7 @@ where
 
     // a backpressured mpsc paces the child to the foreground client; attachers ride the lossy broadcast.
     let (fg_tx, fg_rx) = mpsc::channel::<Chunk>(FG_CAP);
-    let pump_fg = (!req.detach).then(|| fg_tx.clone());
-    let sup_fg = (!req.detach).then(|| fg_tx.clone());
-    drop(fg_tx); // only the pump/supervise clones keep fg_rx open
+    let (pump_fg, sup_fg) = (!req.detach).then(|| (fg_tx.clone(), fg_tx)).unzip();
 
     let pump = tokio::spawn(pump_out(Arc::clone(&proc), stdout, stderr, pump_fg));
     let pump_abort = pump.abort_handle();

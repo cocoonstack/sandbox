@@ -26,16 +26,6 @@ pub enum Chunk {
     Exit(i32),
 }
 
-impl Chunk {
-    pub fn into_response(self) -> Response {
-        match self {
-            Chunk::Stdout(data) => Response::Stdout { data },
-            Chunk::Stderr(data) => Response::Stderr { data },
-            Chunk::Exit(code) => Response::Exit { code },
-        }
-    }
-}
-
 /// Registry of running and recently-exited processes.
 #[derive(Clone, Default)]
 pub struct Table {
@@ -263,7 +253,7 @@ pub async fn write_chunk<W: AsyncWrite + Unpin>(
     match chunk {
         Chunk::Stdout(data) => proto::write_chunk_frame(w, buf, "stdout", &data).await,
         Chunk::Stderr(data) => proto::write_chunk_frame(w, buf, "stderr", &data).await,
-        other => proto::write_frame(w, &other.into_response()).await,
+        Chunk::Exit(code) => proto::write_frame(w, &Response::Exit { code }).await,
     }
 }
 

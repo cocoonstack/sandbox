@@ -237,13 +237,18 @@ where
     let mut buf = Vec::new();
     let mut failed = None;
     let mut gone = false;
+    let mut pipelined = false;
     loop {
         tokio::select! {
             biased;
-            // the client sends nothing during a find, so any readable state ends the walk.
-            _ = reader.fill_buf() => {
-                gone = true;
-                break;
+            // a hung-up client ends the walk; a request pipelined behind the find waits for done
+            r = reader.fill_buf(), if !pipelined => {
+                if matches!(r, Ok(buf) if !buf.is_empty()) {
+                    pipelined = true;
+                } else {
+                    gone = true;
+                    break;
+                }
             }
             n = rx.recv_many(&mut batch, MATCH_QUEUE) => {
                 if n == 0 {

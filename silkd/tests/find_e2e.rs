@@ -22,6 +22,27 @@ async fn find_frames(req: Value) -> Vec<Value> {
 }
 
 #[tokio::test]
+async fn find_serves_a_request_pipelined_behind_it_after_done() {
+    let dir = tempfile::tempdir().unwrap();
+    tokio::fs::write(dir.path().join("a.txt"), "needle\n")
+        .await
+        .unwrap();
+    let (mut cw, mut out, handle) = connect(&Arc::new(State::new()));
+    send(
+        &mut cw,
+        json!({"op":"fs_find","path":dir.path().to_str().unwrap(),"pattern":"needle"}),
+    )
+    .await;
+    send(&mut cw, json!({"op":"info"})).await;
+    let frames = frames_until(&mut out, |f| matches!(type_of(f), "done" | "error")).await;
+    assert_eq!(type_of(frames.last().unwrap()), "done", "{frames:?}");
+    assert!(frames.iter().any(|f| type_of(f) == "match"), "{frames:?}");
+    assert_eq!(type_of(&common::next_frame(&mut out).await), "info");
+    cw.shutdown().await.unwrap();
+    handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn find_streams_line_matches() {
     let dir = tempfile::tempdir().unwrap();
     tokio::fs::write(

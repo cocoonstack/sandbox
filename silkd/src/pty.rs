@@ -83,14 +83,11 @@ pub async fn open<W: AsyncWrite + Unpin>(
             return crate::proto::err_frame(out, &e, "watch pty master").await;
         }
     };
-    if crate::proto::write_frame(out, &Response::Started { pid })
-        .await
-        .is_err()
-    {
+    if let Err(e) = crate::proto::write_frame(out, &Response::Started { pid }).await {
         let _ = child.start_kill();
         finish(&proc, -1);
         table.remove_if(pid, &proc);
-        return Ok(());
+        return Err(e);
     }
 
     let code = pump(&master, &proc, client, out, &mut child).await;
