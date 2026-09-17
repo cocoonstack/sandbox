@@ -172,16 +172,17 @@ type pool struct {
 	hash string
 
 	// floor and warmMax bound the demand-adaptive target computed in watermark.go
-	floor         int
-	warmMax       int
-	idle          time.Duration
-	archiveAfter  time.Duration
-	archiveDelete time.Duration
-	rate          float64
-	lead          time.Duration
-	lastArrival   time.Time
-	binStart      time.Time
-	binCount      int
+	floor           int
+	warmMax         int
+	idle            time.Duration
+	archiveAfter    time.Duration
+	archiveDelete   time.Duration
+	rate            float64
+	lead            time.Duration
+	lastArrival     time.Time
+	binStart        time.Time
+	binCount        int
+	overTargetSince time.Time
 
 	goldenDir string
 	building  bool
@@ -498,6 +499,7 @@ func (m *Manager) Run(ctx context.Context) {
 			m.reapOnce(ctx)
 			m.idleOnce(ctx)
 			m.archiveOnce(ctx)
+			m.shrinkOnce(ctx)
 			go m.retryArchiveDeletes(ctx)
 		case <-storeSweep.C:
 			m.sweepStoreGenerations(ctx)
