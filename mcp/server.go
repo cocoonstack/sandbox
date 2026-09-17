@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -39,16 +40,17 @@ type rpcErrorBody struct {
 	Message string `json:"message"`
 }
 
-// server owns one sandboxd client and the handles minted over this stdio
-// session: MCP tools address sandboxes and checkpoints by id, so the live
-// handles (with their tokens) stay here.
+// server owns one sandboxd client and the live handles (with their tokens) this stdio session minted.
 type server struct {
 	client   *sandbox.Client
 	template string
 
-	mu    sync.Mutex
-	boxes map[string]*sandbox.Sandbox
-	ckpts map[string]*sandbox.Checkpoint
+	mu       sync.Mutex
+	closed   bool
+	boxes    map[string]*sandbox.Sandbox
+	ckpts    map[string]*sandbox.Checkpoint
+	release  sync.Once
+	released chan struct{}
 }
 
 func newServer(addr, token, template string) (*server, error) {
@@ -65,6 +67,7 @@ func newServer(addr, token, template string) (*server, error) {
 		template: template,
 		boxes:    map[string]*sandbox.Sandbox{},
 		ckpts:    map[string]*sandbox.Checkpoint{},
+		released: make(chan struct{}),
 	}, nil
 }
 
@@ -76,7 +79,7 @@ func (s *server) serve(ctx context.Context, r *bufio.Reader, w io.Writer) error 
 	for {
 		line, err := r.ReadBytes('\n')
 		if len(line) == 0 && err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			return err
@@ -140,12 +143,11 @@ func (s *server) dispatch(ctx context.Context, req *rpcRequest) rpcResponse {
 func (s *server) callTool(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, execTimeout)
 	defer cancel()
-	for _, t := range tools {
-		if t.name == name {
-			return t.handler(ctx, s, args)
-		}
+	i := slices.IndexFunc(tools, func(t tool) bool { return t.name == name })
+	if i < 0 {
+		return "", fmt.Errorf("unknown tool %q", name)
 	}
-	return "", fmt.Errorf("unknown tool %q", name)
+	return tools[i].handler(ctx, s, args)
 }
 
 func (s *server) box(id string) (*sandbox.Sandbox, error) {
@@ -158,22 +160,34 @@ func (s *server) box(id string) (*sandbox.Sandbox, error) {
 	return sb, nil
 }
 
-// closeBoxes releases everything this session claimed; the lease would
-// otherwise hold the VMs until it expires.
+// closeBoxes releases everything this session claimed and returns once the releases are done; a second caller waits for the first.
 func (s *server) closeBoxes() {
-	s.mu.Lock()
-	boxes := slices.Collect(maps.Values(s.boxes))
-	clear(s.boxes)
-	s.mu.Unlock()
-	for _, sb := range boxes {
-		_ = sb.Close()
-	}
+	s.release.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		boxes := slices.Collect(maps.Values(s.boxes))
+		clear(s.boxes)
+		s.mu.Unlock()
+		var wg sync.WaitGroup
+		for _, sb := range boxes {
+			wg.Go(func() { _ = sb.Close() })
+		}
+		wg.Wait()
+		close(s.released)
+	})
+	<-s.released
 }
 
 func (s *server) trackBox(sb *sandbox.Sandbox) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.boxes[sb.ID] = sb
+	closed := s.closed
+	if !closed {
+		s.boxes[sb.ID] = sb
+	}
+	s.mu.Unlock()
+	if closed {
+		_ = sb.Close() // claimed after the session's release ran; nothing else would ever release it
+	}
 }
 
 func (s *server) dropBox(id string) {

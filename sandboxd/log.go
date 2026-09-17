@@ -48,9 +48,12 @@ func setupLog(ctx context.Context, level string) error {
 		return err
 	}
 	logger := log.GetGlobalLogger()
-	w := journalWriter{console: zerolog.ConsoleWriter{TimeFormat: time.RFC822}, out: os.Stderr}
-	*logger = zerolog.New(w).With().Timestamp().Logger().Level(logger.GetLevel())
+	*logger = zerolog.New(newJournalWriter(os.Stderr)).With().Timestamp().Logger().Level(logger.GetLevel())
 	return nil
+}
+
+func newJournalWriter(out io.Writer) journalWriter {
+	return journalWriter{console: zerolog.ConsoleWriter{TimeFormat: time.RFC822, NoColor: true}, out: out}
 }
 
 func syslogPrefix(level zerolog.Level) string {

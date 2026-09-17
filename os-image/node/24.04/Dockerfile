@@ -1,6 +1,6 @@
 # node sandbox flavor: base + Node.js 22 LTS from the official tarball into
 # /usr/local, plus the native-module build toolchain (build-essential,
-# python3, unzip) so package installs with node-gyp steps need only the
+# python3, python3-setuptools, unzip) so package installs with node-gyp steps need only the
 # packages themselves from the network.
 ARG BASE_IMAGE=ghcr.io/cocoonstack/sandbox/base:24.04
 

@@ -1,8 +1,10 @@
 package pool
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -218,24 +220,27 @@ func TestEffectivePolicyComposition(t *testing.T) {
 		name        string
 		tenant      string
 		pooled      bool
+		removed     bool
 		pool, tnPol *egress.Policy
 		allow, deny string
 		wantArmed   bool
 	}{
-		{"root takes the pool policy whole", "", true, both, nil, "a.test", "z.test", true},
-		{"root without a pool policy", "", true, nil, nil, "", "", false},
-		{"tenant intersects", "acme", true, both, tenantOnly, "b.test", "a.test", true},
-		{"tenant declaring no policy", "acme", true, both, nil, "", "", false},
-		{"tenant on a policyless pool", "acme", true, nil, tenantOnly, "", "", false},
-		{"tenant on a promoted template", "acme", false, nil, tenantOnly, "b.test", "a.test", true},
-		{"root on a promoted template", "", false, nil, nil, "", "", false},
-		{"neither", "acme", false, nil, nil, "", "", false},
+		{"root takes the pool policy whole", "", true, false, both, nil, "a.test", "z.test", true},
+		{"root without a pool policy", "", true, false, nil, nil, "", "", false},
+		{"tenant intersects", "acme", true, false, both, tenantOnly, "b.test", "a.test", true},
+		{"tenant declaring no policy", "acme", true, false, both, nil, "", "", false},
+		{"tenant on a policyless pool", "acme", true, false, nil, tenantOnly, "", "", false},
+		{"tenant on a policyless pool being removed", "acme", true, true, nil, tenantOnly, "b.test", "a.test", true},
+		{"tenant on a promoted template", "acme", false, false, nil, tenantOnly, "b.test", "a.test", true},
+		{"root on a promoted template", "", false, false, nil, nil, "", "", false},
+		{"neither", "acme", false, false, nil, nil, "", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m.pools = map[types.PoolKey]*pool{}
 			if tc.pooled {
 				m.pools[testKey] = newPool(testKey)
+				m.pools[testKey].removed = tc.removed
 			}
 			m.poolEgress = map[types.PoolKey]*egress.Policy{}
 			if tc.pool != nil {
@@ -655,6 +660,56 @@ func TestTrimmedWarmVMClosesItsDoors(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err == nil {
 		t.Error("door socket survives its VM")
+	}
+}
+
+func TestEgressDoorHalfCloseReachesTheGuest(t *testing.T) {
+	origin, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("origin: %v", err)
+	}
+	t.Cleanup(func() { _ = origin.Close() })
+	go func() {
+		conn, acceptErr := origin.Accept()
+		if acceptErr != nil {
+			return
+		}
+		_, _ = io.WriteString(conn, "hello")
+		_ = conn.Close()
+	}()
+	pol := &egress.Policy{Allow: []egress.Rule{{Host: "127.0.0.1"}}}
+	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
+	m.dial = (&net.Dialer{}).DialContext
+	sb := vsockSandbox(t, "sb_halfclose")
+	if err := m.armEgress(t.Context(), sb); err != nil {
+		t.Fatalf("arm egress: %v", err)
+	}
+	t.Cleanup(func() { m.disarmEgress(sb.ID, true) })
+
+	door, dialErr := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket))
+	if dialErr != nil {
+		t.Fatalf("dial door: %v", dialErr)
+	}
+	t.Cleanup(func() { _ = door.Close() })
+	_ = door.SetDeadline(time.Now().Add(5 * time.Second))
+	target := origin.Addr().String()
+	if _, writeErr := fmt.Fprintf(door, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target); writeErr != nil {
+		t.Fatalf("connect: %v", writeErr)
+	}
+	resp, readErr := http.ReadResponse(bufio.NewReader(door), nil)
+	if readErr != nil {
+		t.Fatalf("read connect reply: %v", readErr)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("connect status %d, want 200", resp.StatusCode)
+	}
+	body, bodyErr := io.ReadAll(resp.Body)
+	if bodyErr != nil {
+		t.Fatalf("tunnel did not end with EOF after the origin closed: %v", bodyErr)
+	}
+	if string(body) != "hello" {
+		t.Errorf("tunnel body %q, want hello", body)
 	}
 }
 

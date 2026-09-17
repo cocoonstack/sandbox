@@ -676,14 +676,6 @@ func DecodeRequest(line []byte) (Request, error) {
 	return dec(line)
 }
 
-// NewFrameScanner wraps r for newline-delimited frames capped at MaxFrame.
-// No pre-sized buffer: bulk frames outgrow any fixed start anyway.
-func NewFrameScanner(r io.Reader) *bufio.Scanner {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(nil, MaxFrame)
-	return sc
-}
-
 // DecodeResponse parses one frame into its type's concrete Go type. Byte
 // fields are freshly allocated per frame, so callers may retain them.
 func DecodeResponse(line []byte) (Response, error) {
@@ -696,6 +688,14 @@ func DecodeResponse(line []byte) (Response, error) {
 		return nil, fmt.Errorf("unknown response type %q", typ)
 	}
 	return dec(line)
+}
+
+// NewFrameScanner wraps r for newline-delimited frames capped at MaxFrame.
+// No pre-sized buffer: bulk frames outgrow any fixed start anyway.
+func NewFrameScanner(r io.Reader) *bufio.Scanner {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(nil, MaxFrame)
+	return sc
 }
 
 // AppendBulkRequest renders a data-carrying request frame —
@@ -745,9 +745,7 @@ func fastBulk(tag string, slow respDecoder, mk func([]byte) Response) respDecode
 	}
 }
 
-// encodeTagged marshals v as a flat object and splices the tag head in front
-// of its fields, so wire tags never live on the structs themselves. The
-// spare capacity byte lets Conn.Send append the newline without a copy.
+// encodeTagged splices the tag head in front of v's fields, so wire tags never live on the structs; the spare capacity byte lets Conn.Send append the newline without a copy.
 func encodeTagged(head string, v any) ([]byte, error) {
 	body, err := json.Marshal(v)
 	if err != nil {
@@ -762,9 +760,7 @@ func encodeTagged(head string, v any) ([]byte, error) {
 	return append(frame, body[1:]...), nil
 }
 
-// frameTag returns the frame's dispatch tag: a canonical head (both producers
-// emit the tag first, unescaped) yields it with a prefix cut; anything else
-// takes the full token walk.
+// frameTag cuts the dispatch tag off a canonical head (both producers emit it first, unescaped) and falls back to the token walk.
 func frameTag(line, head []byte, key string) ([]byte, error) {
 	if rest, ok := bytes.CutPrefix(line, head); ok {
 		if end := bytes.IndexAny(rest, `"\`); end >= 0 && rest[end] == '"' {
@@ -775,9 +771,7 @@ func frameTag(line, head []byte, key string) ([]byte, error) {
 	return []byte(tag), err
 }
 
-// scanTag extracts the string value of a top-level key without decoding the
-// whole frame; key order never affects correctness, only how early the walk
-// stops. A missing tag returns "" (the callers' unknown-tag error).
+// scanTag walks the top-level keys without decoding the frame; a missing tag returns "" for the callers' unknown-tag error.
 func scanTag(line []byte, key string) (string, error) {
 	dec := json.NewDecoder(bytes.NewReader(line))
 	tok, err := dec.Token()
@@ -839,7 +833,6 @@ func decodeAs[T any](line []byte) (*T, error) {
 	return v, nil
 }
 
-// decodeReq / decodeResp adapt decodeAs to the interface-typed decoder maps.
 func decodeReq[T any, PT reqPtr[T]](line []byte) (Request, error) {
 	v, err := decodeAs[T](line)
 	if err != nil {

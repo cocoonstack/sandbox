@@ -4,8 +4,8 @@
 # local-build fallback and may lag the pin.
 ARG BOOT_IMAGE=ghcr.io/cocoonstack/sandbox/boot:6.18.37
 # silkd carrier image (built from silkd/Dockerfile). CI overrides with the
-# version-pinned tag; a silkd change refreshes this via the workflow_run chain.
-ARG SILKD_IMAGE=ghcr.io/cocoonstack/sandbox/silkd:0.1.0
+# version-pinned tag from images.yml; the default is only a local-build fallback.
+ARG SILKD_IMAGE=ghcr.io/cocoonstack/sandbox/silkd:0.1.11
 
 FROM ${BOOT_IMAGE} AS boot
 FROM ${SILKD_IMAGE} AS silkd

@@ -45,14 +45,26 @@ func TestCheckpointNewFollowsRedirect(t *testing.T) {
 	}
 }
 
-func TestCheckpointNewRejectsClaimRefLocally(t *testing.T) {
-	ck := &Checkpoint{}
-	sb, err := ck.New(t.Context(), WithClaimRef("ns/claim"))
-	if err == nil || !strings.Contains(err.Error(), "WithClaimRef") {
-		t.Errorf("err %v, want local WithClaimRef rejection", err)
+func TestCheckpointNewRejectsVolumeOptionsLocally(t *testing.T) {
+	tests := []struct {
+		name string
+		opt  Option
+	}{
+		{"WithClaimRef", WithClaimRef("ns/claim")},
+		{"WithVolumesAttachOnly", WithVolumesAttachOnly()},
+		{"WithVolumes", WithVolumes(Volume{Name: "data"})},
 	}
-	if sb != nil {
-		t.Errorf("sandbox %+v, want nil", sb)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ck := &Checkpoint{}
+			sb, err := ck.New(t.Context(), tt.opt)
+			if err == nil || !strings.Contains(err.Error(), tt.name) {
+				t.Errorf("err %v, want local %s rejection", err, tt.name)
+			}
+			if sb != nil {
+				t.Errorf("sandbox %+v, want nil", sb)
+			}
+		})
 	}
 }
 

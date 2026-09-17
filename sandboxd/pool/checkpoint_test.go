@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -117,6 +120,37 @@ func TestRetentionSweepsExpiredCheckpoints(t *testing.T) {
 	}
 }
 
+func TestRunRefillsWhileTheRetentionSweepBlocks(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	m.pools[testKey].goldenDir = "/goldens/x"
+	m.ckptTTL = time.Hour
+	stall := &stallingMetasStore{Store: m.ckpts, entered: make(chan struct{}, 1), release: make(chan struct{})}
+	m.ckpts = stall
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		m.Run(ctx)
+		close(done)
+	}()
+	defer func() {
+		close(stall.release)
+		cancel()
+		<-done
+	}()
+	<-stall.entered
+
+	waitFor(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return len(m.pools[testKey].warm) > 0
+	})
+	if got := eng.cloneCount(); got != 1 {
+		t.Errorf("clones=%d, want one warm VM spawned while the store listing is stuck", got)
+	}
+}
+
 func TestCheckpointTenantIsolation(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -214,4 +248,19 @@ func TestRejectedCheckpointOpsLeakNoRecLock(t *testing.T) {
 	if got := lockCount(m); got != before {
 		t.Errorf("recLocks grew %d->%d over a wrong-tenant delete, want no growth", before, got)
 	}
+}
+
+type stallingMetasStore struct {
+	store.Store
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *stallingMetasStore) Metas(ctx context.Context) ([][]byte, error) {
+	select {
+	case s.entered <- struct{}{}:
+	default:
+	}
+	<-s.release
+	return s.Store.Metas(ctx)
 }

@@ -5,7 +5,6 @@ use std::io;
 use std::ptr;
 use std::time::Duration;
 
-/// Mount flags for the kernel API filesystems.
 pub const MNT_SECURE: libc::c_ulong = libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC;
 
 pub fn mount(
@@ -83,7 +82,7 @@ pub fn exec_init(path: &str) -> String {
     io::Error::last_os_error().to_string()
 }
 
-/// Routes PID 1 stdio to /dev/console, covering a cpio built without the console node.
+/// Routes PID 1 stdio to /dev/console once devtmpfs is mounted.
 pub fn claim_console() {
     // SAFETY: the literal is a live 'static CStr; the fd is validated (>=0)
     // before any dup2/close and only closed when it is not already a std stream.

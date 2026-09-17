@@ -228,7 +228,7 @@ func (s *Sandbox) connect(ctx context.Context, req wire.Request) (*agentConn, er
 	if err != nil {
 		return nil, err
 	}
-	if s.proto.Load() != 0 {
+	if s.proto.Load() != 0 || !canProbe || s.c.keepAlive <= 0 {
 		return c.sent(req)
 	}
 	proto, err := c.probeProto(ctx, req)

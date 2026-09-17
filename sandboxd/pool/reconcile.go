@@ -69,8 +69,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		m.adoptGolden(p)
 	}
 	m.mu.Unlock()
-	// a crash mid-export leaves a *.tmp staging dir nothing in this life reuses
+	// a crash mid-export leaves a golden *.tmp or a fork-* staging dir nothing in this life reuses
 	tmps, _ := filepath.Glob(filepath.Join(m.goldensDir(), "*.tmp"))
+	forks, _ := filepath.Glob(filepath.Join(m.dataDir, "fork-*"))
 	logger := log.WithFunc("pool.Reconcile")
 	if err := m.ckpts.SweepStaging(); err != nil {
 		logger.Error(ctx, err, "sweep checkpoint staging")
@@ -78,7 +79,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err := m.tpls.SweepStaging(); err != nil {
 		logger.Error(ctx, err, "sweep template staging")
 	}
-	for _, tmp := range tmps {
+	for _, tmp := range slices.Concat(tmps, forks) {
 		_ = os.RemoveAll(tmp)
 	}
 

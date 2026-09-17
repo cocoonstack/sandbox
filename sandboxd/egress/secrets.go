@@ -3,19 +3,14 @@ package egress
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"golang.org/x/net/http/httpguts"
 )
 
-// nonInjectable rejects secret headers the transport owns or strips.
-var nonInjectable = func() map[string]struct{} {
-	m := map[string]struct{}{"host": {}, "content-length": {}}
-	for _, h := range hopHeaders {
-		m[strings.ToLower(h)] = struct{}{}
-	}
-	return m
-}()
+// nonInjectable lists the secret headers the transport owns or strips.
+var nonInjectable = slices.Concat([]string{"Host", "Content-Length"}, hopHeaders)
 
 // SecretSpec declares a node-side credential the proxy injects, valued from ValueEnv.
 type SecretSpec struct {
@@ -35,8 +30,7 @@ func (s SecretSpec) Validate() error {
 		return fmt.Errorf("secret %q: header %q is not a valid header name", s.Name, s.Header)
 	case s.ValueEnv == "":
 		return fmt.Errorf("secret %q: needs value_env", s.Name)
-	}
-	if _, bad := nonInjectable[strings.ToLower(s.Header)]; bad {
+	case slices.ContainsFunc(nonInjectable, func(h string) bool { return strings.EqualFold(h, s.Header) }):
 		return fmt.Errorf("secret %q: header %s is not injectable", s.Name, s.Header)
 	}
 	return nil

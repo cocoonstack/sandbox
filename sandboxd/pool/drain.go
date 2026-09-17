@@ -11,9 +11,7 @@ func (m *Manager) Drain(ctx context.Context) {
 		trim = append(trim, p.trimWarm(0)...)
 	}
 	m.mu.Unlock()
-	m.runBounded(context.WithoutCancel(ctx), len(trim), func(ctx context.Context, i int) {
-		m.destroy(ctx, trim[i])
-	}).Wait()
+	m.destroyAll(context.WithoutCancel(ctx), trim).Wait()
 }
 
 // Uncordon lifts a drain and kicks an immediate refill.

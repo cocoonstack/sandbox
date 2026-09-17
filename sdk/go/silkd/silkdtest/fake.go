@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"bytes"
+	"errors"
 	"io"
 	"io/fs"
 	"maps"
@@ -158,9 +159,7 @@ func (f *Fake) fsRm(conn net.Conn, req *wire.FsRm) {
 	}
 }
 
-// fsPush extracts the uploaded tar under dest; fsPull streams a path back
-// as a tar with the basename as the entry root — matching silkd's contract
-// closely enough for SDK round-trip tests.
+// fsPush extracts the uploaded tar under dest, close enough to silkd for SDK round trips.
 func (f *Fake) fsPush(conn net.Conn, r *bufio.Reader, dest string) {
 	data, err := drainUpload(r)
 	if err != nil {
@@ -171,7 +170,7 @@ func (f *Fake) fsPush(conn net.Conn, r *bufio.Reader, dest string) {
 	tr := tar.NewReader(bytes.NewReader(data))
 	for {
 		hdr, err := tr.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -198,6 +197,7 @@ func (f *Fake) fsPush(conn net.Conn, r *bufio.Reader, dest string) {
 	f.done(conn, nil)
 }
 
+// fsPull streams path back as a tar rooted at its basename.
 func (f *Fake) fsPull(conn net.Conn, path string) {
 	root := f.abs(path)
 	base := filepath.Base(path)
@@ -332,9 +332,7 @@ func (f *Fake) fsReplace(conn net.Conn, req *wire.FsReplace) {
 	send(conn, wire.Done{})
 }
 
-// fsWatch fakes a watch: ready, one synthetic created event, then it holds
-// the stream open until the client disconnects — the connection-bound
-// contract.
+// fsWatch answers ready and one synthetic created event, then holds the stream until the client disconnects.
 func (f *Fake) fsWatch(conn net.Conn, r *bufio.Reader, req *wire.FsWatch) {
 	if _, err := os.Stat(f.abs(req.Path)); err != nil {
 		errFrame(conn, wire.KindNotFound, err.Error())
@@ -384,9 +382,7 @@ func (f *Fake) abs(path string) string {
 	return filepath.Join(f.Root, filepath.Clean("/"+path))
 }
 
-// portEcho fakes port_forward: port 1 is refused (not_found, mirroring a
-// dead port), anything else answers Ready and echoes Data frames until
-// DataEnd (→ Done, like the server closing after EOF) or disconnect.
+// portEcho refuses port 1 as not_found and echoes Data frames on any other port until DataEnd (Done) or disconnect.
 func portEcho(conn net.Conn, r *bufio.Reader, port uint16) {
 	if port == 1 {
 		errFrame(conn, wire.KindNotFound, "connect refused")
@@ -411,8 +407,7 @@ func portEcho(conn net.Conn, r *bufio.Reader, port uint16) {
 	}
 }
 
-// ptyEcho fakes a pty: Started, then echo each stdin chunk as stdout until a
-// chunk contains "exit" (→ Exit 0) or the client disconnects.
+// ptyEcho echoes each stdin chunk as stdout until a chunk contains "exit" (Exit 0) or the client disconnects.
 func ptyEcho(conn net.Conn, r *bufio.Reader) {
 	send(conn, &wire.Started{PID: 9999})
 	for {
@@ -430,9 +425,7 @@ func ptyEcho(conn net.Conn, r *bufio.Reader) {
 	}
 }
 
-// globRegexp mirrors silkd's glob translation exactly — `*`/`?` wildcards,
-// everything else literal (never `filepath.Match`, whose char classes silkd
-// does not have). The quoted pattern always compiles.
+// globRegexp mirrors silkd's translation: * and ? wildcards, everything else literal, never filepath.Match's char classes.
 func globRegexp(glob string) *regexp.Regexp {
 	pat := regexp.QuoteMeta(glob)
 	pat = strings.ReplaceAll(pat, `\*`, ".*")

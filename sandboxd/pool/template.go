@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
@@ -170,53 +169,6 @@ func (m *Manager) pooled(key types.PoolKey) bool {
 	return ok
 }
 
-// recLock takes the per-record lock and a live reference (pair with recDone); clones and wakes hold it shared so a delete or re-publish never runs under an in-flight read.
-func (m *Manager) recLock(id string) *sync.RWMutex {
-	m.recLocksMu.Lock()
-	defer m.recLocksMu.Unlock()
-	m.recRefs[id]++
-	l := m.recLocks[id]
-	if l == nil {
-		l = &sync.RWMutex{}
-		m.recLocks[id] = l
-	}
-	return l
-}
-
-// recDone releases a reference taken by recLock; call after Unlock/RUnlock, never before.
-func (m *Manager) recDone(id string) {
-	m.recLocksMu.Lock()
-	defer m.recLocksMu.Unlock()
-	m.recRefs[id]--
-	if m.recRefs[id] <= 0 {
-		delete(m.recRefs, id)
-		m.evictIfPending(id)
-	}
-}
-
-// recDoneEvict is recDone for a just-deleted record: the lock slot goes at zero references.
-func (m *Manager) recDoneEvict(id string) {
-	m.recLocksMu.Lock()
-	defer m.recLocksMu.Unlock()
-	m.recRefs[id]--
-	if m.recRefs[id] <= 0 {
-		delete(m.recRefs, id)
-		delete(m.recEvict, id)
-		delete(m.recLocks, id)
-		return
-	}
-	// a holder or waiter remains; the call that drops the last reference evicts instead
-	m.recEvict[id] = struct{}{}
-}
-
-// evictIfPending drops id's lock entry if a delete asked for eviction; callers hold recLocksMu.
-func (m *Manager) evictIfPending(id string) {
-	if _, ok := m.recEvict[id]; ok {
-		delete(m.recEvict, id)
-		delete(m.recLocks, id)
-	}
-}
-
 // checkTemplateOwner rejects publishing or deleting over another tenant's record.
 func (m *Manager) checkTemplateOwner(ctx context.Context, id, tenant string) error {
 	if tenant == "" {
@@ -234,59 +186,6 @@ func (m *Manager) checkTemplateOwner(ctx context.Context, id, tenant string) err
 		return ErrTemplateOwned
 	}
 	return nil
-}
-
-type goldenResolution struct {
-	dir            string
-	templateDigest string
-	promoted       bool
-	release        func()
-}
-
-// resolveGolden resolves a key's clone source: the pool golden, else a promoted template.
-func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant string) (goldenResolution, error) {
-	m.mu.Lock()
-	var dir string
-	if p := m.pools[key]; p != nil {
-		dir = p.goldenDir
-	}
-	m.mu.Unlock()
-	if dir != "" {
-		return goldenResolution{dir: dir, release: func() {}}, nil
-	}
-	if key.Net == types.NetEgress {
-		return goldenResolution{release: func() {}}, nil // never resume a live-captured template on the egress lane; cold-boot instead
-	}
-	id := store.TemplateID(key.Hash())
-	l := m.recLock(id)
-	l.RLock()
-	dir, meta, digest, err := m.tpls.Fetch(ctx, id)
-	if errors.Is(err, store.ErrNotFound) {
-		l.RUnlock()
-		m.recDoneEvict(id)
-		return goldenResolution{release: func() {}}, nil
-	}
-	if err != nil {
-		l.RUnlock()
-		m.recDone(id)
-		return goldenResolution{release: func() {}}, err
-	}
-	cleanup := func() { l.RUnlock(); m.recDone(id) }
-	var rec templateRecord
-	if err := json.Unmarshal(meta, &rec); err != nil {
-		cleanup()
-		return goldenResolution{release: func() {}}, fmt.Errorf("decode template metadata: %w", err)
-	}
-	if rec.Tenant != "" && !tenantOwns(tenant, rec.Tenant) {
-		cleanup()
-		return goldenResolution{release: func() {}}, nil
-	}
-	return goldenResolution{
-		dir:            dir,
-		templateDigest: digest,
-		promoted:       true,
-		release:        cleanup,
-	}, nil
 }
 
 func (m *Manager) publishTemplate(ctx context.Context, snap string, key types.PoolKey, tenant string) (string, error) {
@@ -324,4 +223,63 @@ func (m *Manager) commitTemplate(ctx context.Context, staging, id, tenant string
 	m.tplSet[id] = tenant
 	m.tplMu.Unlock()
 	return digest, nil
+}
+
+type goldenResolution struct {
+	dir            string
+	templateDigest string
+	promoted       bool
+	unlock         func()
+}
+
+func (g goldenResolution) release() {
+	if g.unlock != nil {
+		g.unlock()
+	}
+}
+
+// resolveGolden resolves a key's clone source: the pool golden, else a promoted template.
+func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant string) (goldenResolution, error) {
+	m.mu.Lock()
+	var dir string
+	if p := m.pools[key]; p != nil {
+		dir = p.goldenDir
+	}
+	m.mu.Unlock()
+	if dir != "" {
+		return goldenResolution{dir: dir}, nil
+	}
+	if key.Net == types.NetEgress {
+		return goldenResolution{}, nil // never resume a live-captured template on the egress lane; cold-boot instead
+	}
+	id := store.TemplateID(key.Hash())
+	l := m.recLock(id)
+	l.RLock()
+	dir, meta, digest, err := m.tpls.Fetch(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		l.RUnlock()
+		m.recDoneEvict(id)
+		return goldenResolution{}, nil
+	}
+	if err != nil {
+		l.RUnlock()
+		m.recDone(id)
+		return goldenResolution{}, err
+	}
+	cleanup := func() { l.RUnlock(); m.recDone(id) }
+	var rec templateRecord
+	if err := json.Unmarshal(meta, &rec); err != nil {
+		cleanup()
+		return goldenResolution{}, fmt.Errorf("decode template metadata: %w", err)
+	}
+	if rec.Tenant != "" && !tenantOwns(tenant, rec.Tenant) {
+		cleanup()
+		return goldenResolution{}, nil
+	}
+	return goldenResolution{
+		dir:            dir,
+		templateDigest: digest,
+		promoted:       true,
+		unlock:         cleanup,
+	}, nil
 }

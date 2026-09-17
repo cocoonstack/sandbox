@@ -24,7 +24,7 @@ func TestForwardAllowInjectsSecretAndOverwritesGuestHeader(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "api.internal", Secret: "gh"}}}
 	secrets := fakeSecrets{"gh": {"Authorization", "Bearer SECRET"}}
 	events := make(chan Event, 4)
-	p := New("sb_1", "acme", policy, secrets, nil, fixedDial(upstream.Listener.Addr().String()), func(ev Event) { events <- ev }, nil)
+	p := New(policy, secrets, nil, fixedDial(upstream.Listener.Addr().String()), func(ev Event) { events <- ev }, nil)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -48,8 +48,8 @@ func TestForwardAllowInjectsSecretAndOverwritesGuestHeader(t *testing.T) {
 		t.Errorf("upstream saw Authorization %q, want the injected secret (guest value overwritten)", gotAuth)
 	}
 	ev := recvEvent(t, events)
-	if ev.Decision != DecisionAllow || ev.Injected != "gh" || ev.Sandbox != "sb_1" || ev.Tenant != "acme" {
-		t.Errorf("audit event = %+v, want allow/gh/sb_1/acme", ev)
+	if ev.Decision != DecisionAllow || ev.Injected != "gh" {
+		t.Errorf("audit event = %+v, want allow/gh", ev)
 	}
 }
 
@@ -60,7 +60,7 @@ func TestRelayKeepsTheUpstreamConnForAClosingGuest(t *testing.T) {
 		_, _ = io.WriteString(w, "hello")
 	}))
 	defer upstream.Close()
-	p := New("sb_1", "acme", Policy{Allow: []Rule{{Host: "api.internal"}}}, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
+	p := New(Policy{Allow: []Rule{{Host: "api.internal"}}}, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -93,7 +93,7 @@ func TestCloseReleasesIdleUpstreamConns(t *testing.T) {
 	defer upstream.Close()
 
 	policy := Policy{Allow: []Rule{{Host: "api.internal"}}}
-	p := New("sb_1", "acme", policy, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
+	p := New(policy, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -125,7 +125,7 @@ func TestForwardNeverInjectsInterceptSecret(t *testing.T) {
 
 	policy := Policy{Allow: []Rule{{Host: "api.internal", Secret: "gh", Intercept: true}}}
 	secrets := fakeSecrets{"gh": {"Authorization", "Bearer SECRET"}}
-	p := New("sb_1", "acme", policy, secrets, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
+	p := New(policy, secrets, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -154,7 +154,7 @@ func TestForwardStripsHopHeaders(t *testing.T) {
 	defer upstream.Close()
 
 	policy := Policy{Allow: []Rule{{Host: "api.internal"}}}
-	p := New("sb_1", "", policy, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
+	p := New(policy, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -181,7 +181,7 @@ func TestForwardStripsHopHeaders(t *testing.T) {
 func TestForwardDeniedIsTyped(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "api.internal"}}}
 	events := make(chan Event, 4)
-	p := New("sb_1", "acme", policy, nil, nil, fixedDial("127.0.0.1:1"), func(ev Event) { events <- ev }, nil)
+	p := New(policy, nil, nil, fixedDial("127.0.0.1:1"), func(ev Event) { events <- ev }, nil)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -202,7 +202,7 @@ func TestConnectAllowTunnels(t *testing.T) {
 	echo := echoServer(t)
 	policy := Policy{Allow: []Rule{{Host: "echo.internal"}}}
 	events := make(chan Event, 4)
-	p := New("sb_1", "acme", policy, nil, nil, fixedDial(echo), func(ev Event) { events <- ev }, nil)
+	p := New(policy, nil, nil, fixedDial(echo), func(ev Event) { events <- ev }, nil)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -229,7 +229,7 @@ func TestConnectAllowTunnels(t *testing.T) {
 
 func TestCloseEndsSplicedTunnel(t *testing.T) {
 	echo := echoServer(t)
-	p := New("sb_1", "", Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, nil, fixedDial(echo), nil, nil)
+	p := New(Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, nil, fixedDial(echo), nil, nil)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -257,7 +257,7 @@ func TestCloseEndsSplicedTunnel(t *testing.T) {
 
 func TestCloseEndsTunnelWhoseUpstreamStaysSilent(t *testing.T) {
 	var held holdCounter
-	p := New("sb_1", "", Policy{Allow: []Rule{{Host: "quiet.internal"}}}, nil, nil, fixedDial(silentServer(t)), nil, &held)
+	p := New(Policy{Allow: []Rule{{Host: "quiet.internal"}}}, nil, nil, fixedDial(silentServer(t)), nil, &held)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -277,7 +277,7 @@ func TestCloseEndsTunnelWhoseUpstreamStaysSilent(t *testing.T) {
 
 func TestConnectDeniedIsTyped(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "echo.internal"}}}
-	p := New("sb_1", "acme", policy, nil, nil, fixedDial("127.0.0.1:1"), nil, nil)
+	p := New(policy, nil, nil, fixedDial("127.0.0.1:1"), nil, nil)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -292,7 +292,7 @@ func TestPortRuleGatesConnectAndForward(t *testing.T) {
 	echo := echoServer(t)
 	policy := Policy{Allow: []Rule{{Host: "echo.internal", Ports: []uint16{443}}}}
 	events := make(chan Event, 4)
-	p := New("sb_1", "acme", policy, nil, nil, fixedDial(echo), func(ev Event) { events <- ev }, nil)
+	p := New(policy, nil, nil, fixedDial(echo), func(ev Event) { events <- ev }, nil)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -325,7 +325,7 @@ func TestPortRuleGatesConnectAndForward(t *testing.T) {
 func TestUnparsablePortIsDeniedNotDefaulted(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "echo.internal", Ports: []uint16{443}}}}
 	events := make(chan Event, 4)
-	p := New("sb_1", "acme", policy, nil, nil, fixedDial(echoServer(t)), func(ev Event) { events <- ev }, nil)
+	p := New(policy, nil, nil, fixedDial(echoServer(t)), func(ev Event) { events <- ev }, nil)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -388,7 +388,7 @@ func TestUnparsablePortIsDeniedNotDefaulted(t *testing.T) {
 func TestBracketedIPv6AuthorityIsUnwrapped(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "*"}}}
 	events := make(chan Event, 4)
-	p := New("sb_1", "acme", policy, nil, nil, fixedDial(echoServer(t)), func(ev Event) { events <- ev }, nil)
+	p := New(policy, nil, nil, fixedDial(echoServer(t)), func(ev Event) { events <- ev }, nil)
 	front := httptest.NewServer(p)
 	defer front.Close()
 

@@ -451,8 +451,7 @@ func (m *recordingTransferManager) UploadObject(
 	_ ...func(*transfermanager.Options),
 ) (*transfermanager.UploadObjectOutput, error) {
 	if input.ContentLength != nil {
-		length := *input.ContentLength
-		m.contentLength = &length
+		m.contentLength = new(*input.ContentLength)
 	}
 	read, err := io.CopyBuffer(io.Discard, input.Body, make([]byte, 113<<10))
 	m.read = read

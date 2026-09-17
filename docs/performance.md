@@ -24,8 +24,8 @@ bare metal, `small` tier:
 | cold boot (no golden yet) | **~215–400 ms** | full boot from the template image to silkd answering |
 
 A guarded-egress claim binds its proxy doors at refill rather than at claim
-(#177): on bare metal that took the warm claim with the HTTP door from 307 to
-263 µs p50, and with both doors from 351 to 274 µs.
+(#177, cocoon-test2 bare metal, 2026-09-14): that took the warm claim with the
+HTTP door from 307 to 263 µs p50, and with both doors from 351 to 274 µs.
 
 Cloud Hypervisor lifecycle latency (bare metal, vsock agent-ready):
 
@@ -72,8 +72,9 @@ TLS edge, a handshake. From proto 2 silkd serves RPCs back to back, and both
 SDKs keep one relay connection per handle with a 30s idle window.
 
 `e2e/cmd/rpcbench`, warm `rt:24.04` sandbox, `net=none`, n=200 `fs_stat`
-RPCs per arm, bare metal, client on the node. The two arms interleave sample
-by sample and swap which one leads, so drift cannot land on one of them.
+RPCs per arm, cocoon-test1 bare metal, client on the node, 2026-09-16 at
+5158a14. The two arms interleave sample by sample and swap which one leads,
+so drift cannot land on one of them.
 
 | per-RPC wall | plain p50 | plain p90 | TLS edge p50 | TLS edge p90 |
 | --- | --- | --- | --- | --- |
@@ -175,7 +176,8 @@ pre-dialer declined — behind a TLS edge it tracks the dial arm, because it
 hides a handshake only while RPCs arrive slower than a dial completes.
 
 **Template pre-check meta GET**: a single `ReadMeta` against MinIO
-measures 4.76ms cross-host (sub-ms node-local, 20-50ms on WAN S3). It
+measured 4.76ms cross-host (sub-ms node-local, 20-50ms on WAN S3; a
+2026-07 spot check, host and commit not recorded). It
 would fire once per warm-miss claim of a promoted template whose key
 gossip advertises, against a provision that already costs a >=48ms clone
 plus the export fetch. Declined until a measurement shows it matters.

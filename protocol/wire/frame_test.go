@@ -98,6 +98,9 @@ func TestEveryVerbHasAFixture(t *testing.T) {
 		GitPush{},
 		GitPull{},
 		GitBranch{},
+		LspStart{},
+		LspRequest{},
+		LspStop{},
 		Data{},
 		DataEnd{},
 	}
@@ -122,6 +125,7 @@ func TestEveryVerbHasAFixture(t *testing.T) {
 		GitStatusResult{},
 		GitCommitResult{},
 		GitBranches{},
+		LspStarted{},
 	}
 
 	entries, err := os.ReadDir(fixtureDir)

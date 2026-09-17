@@ -5,14 +5,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
-
-	"github.com/cocoonstack/sandbox/sandboxd/pool"
 )
-
-// SandboxListResponse is the wire reply of GET /v1/sandboxes.
-type SandboxListResponse struct {
-	Sandboxes []pool.SandboxSummary `json:"sandboxes"`
-}
 
 // handleMetrics renders Prometheus text format by hand, counters and gauges only.
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
@@ -83,9 +76,4 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		metric(row.name, "counter", row.help)
 		_, _ = fmt.Fprintf(w, "sandboxd_%s %d\n", row.name, row.value)
 	}
-}
-
-// handleSandboxes lists the live claims visible to the caller — never tokens.
-func (s *Server) handleSandboxes(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, SandboxListResponse{Sandboxes: s.mgr.Sandboxes(tenantFrom(r.Context()))})
 }

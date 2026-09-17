@@ -37,7 +37,6 @@ func (m *Manager) archiveEnabledFor(key types.PoolKey) bool {
 	return m.archiveAfterFor(key) > 0
 }
 
-// archiveOnce checkpoints hibernated claims idle past their archive threshold and drops their VM.
 func (m *Manager) archiveOnce(ctx context.Context) {
 	if !m.archiveEnabled.Load() {
 		return
@@ -77,7 +76,6 @@ func (m *Manager) archiveOnce(ctx context.Context) {
 	}()
 }
 
-// archive swaps a hibernated claim's backing from local VM to a store checkpoint.
 func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	// must finish even if the sweep ctx is canceled, or the record diverges from the store.
 	ctx = context.WithoutCancel(ctx)
@@ -119,7 +117,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
-		// roll back so memory matches the still-durable hibernated record; drop the orphan ck.
+		// roll back so memory matches the still-durable hibernated record
 		m.mu.Lock()
 		var rb claimSnapshot
 		// a Release that landed meanwhile already deleted the claim; re-setting it would resurrect it
@@ -138,7 +136,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	// disarm under Transition so a wake right after the release is not clobbered by a late disarm
 	m.disarmEgress(sb.ID, true)
 	sb.Transition.Unlock()
-	// committed: the store ck is authoritative now; reclaim the local footprint.
+	// the store ck is authoritative from here
 	m.destroy(ctx, vmName)
 	m.dropSnap(ctx, snap)
 	m.counters.archives.Add(1)
@@ -239,7 +237,6 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 	return true, true
 }
 
-// deleteOrphanArchiveCk drops the published ck when archive() aborts pre-commit.
 func (m *Manager) deleteOrphanArchiveCk(ctx context.Context, ckID string) {
 	if err := m.deleteArchiveCk(ctx, ckID); err != nil {
 		log.WithFunc("pool.deleteOrphanArchiveCk").Warnf(ctx, "delete orphaned archive ck %s: %v", ckID, err)
@@ -255,7 +252,10 @@ func (m *Manager) markArchiveCk(ckID string) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, ckID), nil, 0o600)
+	if err := os.WriteFile(filepath.Join(dir, ckID), nil, 0o600); err != nil {
+		return err
+	}
+	return syncDir(dir)
 }
 
 func (m *Manager) archiveDeleteMarkers() ([]string, error) {
@@ -364,15 +364,6 @@ func (m *Manager) retryArchiveDelete(ctx context.Context, ckID string) {
 }
 
 func (m *Manager) archiveCkPinned(ckID string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.pendingCks[ckID]; ok {
-		return true
-	}
-	for _, sb := range m.claimed {
-		if sb.ArchiveCk == ckID {
-			return true
-		}
-	}
-	return false
+	_, pinned := m.pinnedArchiveCks()[ckID]
+	return pinned
 }

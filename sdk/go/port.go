@@ -14,6 +14,16 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
+type previewRequest struct {
+	Token      string `json:"token"`
+	Port       uint16 `json:"port"`
+	TTLSeconds int    `json:"ttl_seconds,omitzero"`
+}
+
+type previewResponse struct {
+	URL string `json:"url"`
+}
+
 var _ net.Conn = (*PortConn)(nil)
 
 // PortConn is a net.Conn to a TCP port inside the sandbox, relayed over the
@@ -33,16 +43,7 @@ func (p *PortConn) Read(b []byte) (int, error) { return p.out.Read(b) }
 // Write chunks b so no frame (with its base64 and envelope overhead) can
 // exceed the protocol cap — one oversized frame would kill the relay.
 func (p *PortConn) Write(b []byte) (int, error) {
-	sent := 0
-	for len(b) > 0 {
-		chunk := b[:min(len(b), wire.PortWriteChunk)]
-		if err := p.conn.Send(&wire.Data{Data: chunk}); err != nil {
-			return sent, err
-		}
-		sent += len(chunk)
-		b = b[len(chunk):]
-	}
-	return sent, nil
+	return sendChunks(p.conn, wire.PortWriteChunk, func(chunk []byte) wire.Request { return &wire.Data{Data: chunk} }, b)
 }
 
 // CloseWrite half-closes the guest socket (the server sees EOF) while reads
@@ -167,21 +168,11 @@ func (s *Sandbox) proxyConn(ctx context.Context, local net.Conn, port uint16) {
 	<-done
 }
 
-// Half-close so the peer sees EOF while the tail still drains.
+// closeWrite half-closes so the peer sees EOF while the tail still drains.
 func closeWrite(conn net.Conn) {
 	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
 		_ = cw.CloseWrite()
 	}
-}
-
-type previewRequest struct {
-	Token      string `json:"token"`
-	Port       uint16 `json:"port"`
-	TTLSeconds int    `json:"ttl_seconds,omitzero"`
-}
-
-type previewResponse struct {
-	URL string `json:"url"`
 }
 
 type portAddr string

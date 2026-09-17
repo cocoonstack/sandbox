@@ -51,7 +51,6 @@ func RunContract(t *testing.T, st store.Store) {
 		t.Fatalf("fetched export: %q, %v", got, err)
 	}
 
-	// a half-published checkpoint (no meta) is invisible to Metas.
 	orphan, err := st.Stage("ck_00000000000000bb")
 	if err != nil {
 		t.Fatalf("Stage orphan: %v", err)
@@ -70,7 +69,6 @@ func RunContract(t *testing.T, st store.Store) {
 		t.Fatalf("SweepStaging: %v", err)
 	}
 
-	// re-publish replaces: a leftover first-generation file would corrupt a clone.
 	second, err := st.Stage(id)
 	if err != nil {
 		t.Fatalf("Stage second: %v", err)

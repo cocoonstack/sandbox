@@ -26,16 +26,6 @@ pub enum Chunk {
     Exit(i32),
 }
 
-impl Chunk {
-    pub fn into_response(self) -> Response {
-        match self {
-            Chunk::Stdout(data) => Response::Stdout { data },
-            Chunk::Stderr(data) => Response::Stderr { data },
-            Chunk::Exit(code) => Response::Exit { code },
-        }
-    }
-}
-
 /// Registry of running and recently-exited processes.
 #[derive(Clone, Default)]
 pub struct Table {
@@ -154,7 +144,7 @@ impl Proc {
     /// Resizes the pty's window; errors if this proc is a plain exec.
     pub fn resize(&self, cols: u16, rows: u16) -> std::io::Result<()> {
         match &*sysutil::lock(&self.pty_master) {
-            Some(fd) => crate::sysutil::set_winsize(fd.as_raw_fd(), cols, rows),
+            Some(fd) => sysutil::set_winsize(fd.as_raw_fd(), cols, rows),
             None => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "not a pty",
@@ -172,14 +162,14 @@ impl Proc {
 
     /// Snapshot of retained output for `logs`.
     pub fn replay(&self) -> Vec<Chunk> {
-        sysutil::lock(&self.ring).drain_view()
+        sysutil::lock(&self.ring).snapshot()
     }
 
     /// Snapshots retained output and subscribes to live output under one lock.
     pub fn attach_stream(&self) -> (Vec<Chunk>, broadcast::Receiver<Chunk>) {
         let mut ring = sysutil::lock(&self.ring);
         let tx = self.tx.get_or_init(|| broadcast::channel(OUTPUT_FANOUT).0);
-        (ring.drain_view(), tx.subscribe())
+        (ring.snapshot(), tx.subscribe())
     }
 
     fn attached(&self) -> Option<&broadcast::Sender<Chunk>> {
@@ -227,7 +217,7 @@ impl Ring {
     }
 
     /// Retained output, with adjacent same-stream segments coalesced into one chunk.
-    fn drain_view(&mut self) -> Vec<Chunk> {
+    fn snapshot(&mut self) -> Vec<Chunk> {
         let bytes = self.buf.make_contiguous();
         let mut out: Vec<Chunk> = Vec::new();
         let mut off = 0;
@@ -263,7 +253,7 @@ pub async fn write_chunk<W: AsyncWrite + Unpin>(
     match chunk {
         Chunk::Stdout(data) => proto::write_chunk_frame(w, buf, "stdout", &data).await,
         Chunk::Stderr(data) => proto::write_chunk_frame(w, buf, "stderr", &data).await,
-        other => proto::write_frame(w, &other.into_response()).await,
+        Chunk::Exit(code) => proto::write_frame(w, &Response::Exit { code }).await,
     }
 }
 

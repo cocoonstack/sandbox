@@ -29,17 +29,18 @@ pub fn connect(state: &Arc<State>) -> (FrameWriter, FrameLines, JoinHandle<std::
 }
 
 pub async fn send(cw: &mut FrameWriter, frame: Value) {
-    cw.write_all(frame.to_string().as_bytes()).await.unwrap();
-    cw.write_all(b"\n").await.unwrap();
+    let mut line = serde_json::to_vec(&frame).expect("encode frame");
+    line.push(b'\n');
+    cw.write_all(&line).await.expect("write frame");
 }
 
 pub async fn next_frame(lines: &mut FrameLines) -> Value {
     let line = timeout(DEADLINE, lines.next_line())
         .await
         .expect("deadline")
-        .unwrap()
+        .expect("read line")
         .expect("stream closed");
-    serde_json::from_str(&line).unwrap()
+    serde_json::from_str(&line).unwrap_or_else(|e| panic!("bad frame {line:?}: {e}"))
 }
 
 pub async fn frames_until(lines: &mut FrameLines, pred: impl Fn(&Value) -> bool) -> Vec<Value> {
@@ -58,7 +59,7 @@ pub async fn roundtrip(request_line: &str) -> Vec<Value> {
     request_on(&Arc::new(State::new()), &[request_line.to_string()]).await
 }
 
-pub async fn request_on(state: &Arc<State>, lines: &[String]) -> Vec<Value> {
+async fn request_on(state: &Arc<State>, lines: &[String]) -> Vec<Value> {
     let (mut cw, mut out, handle) = connect(state);
     for line in lines {
         cw.write_all(line.as_bytes()).await.unwrap();

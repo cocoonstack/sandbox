@@ -8,6 +8,31 @@ import (
 	"time"
 )
 
+type checkpointRequest struct {
+	Token string `json:"token"`
+	Name  string `json:"name,omitempty"`
+}
+
+type checkpointRecord struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name,omitempty"`
+	SandboxID string    `json:"sandbox_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type checkpointResponse struct {
+	Checkpoint checkpointRecord `json:"checkpoint"`
+}
+
+type checkpointClaimRequest struct {
+	TTLSeconds int  `json:"ttl_seconds,omitzero"`
+	NoRedirect bool `json:"no_redirect,omitzero"`
+}
+
+type checkpointListResponse struct {
+	Checkpoints []checkpointRecord `json:"checkpoints"`
+}
+
 // Checkpoint is a captured sandbox state bound to the node that holds it.
 // New claims fresh sandboxes branched from the captured moment, any number
 // of times; the source sandbox is unaffected and can keep being
@@ -32,8 +57,8 @@ func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error)
 	for _, opt := range opts {
 		opt(&claim)
 	}
-	if len(claim.Volumes) > 0 || claim.ClaimRef != "" {
-		return nil, errors.New("checkpoint claims do not accept WithVolumes or WithClaimRef")
+	if len(claim.Volumes) > 0 || claim.VolumesAttachOnly || claim.ClaimRef != "" {
+		return nil, errors.New("checkpoint claims do not accept WithVolumes, WithVolumesAttachOnly or WithClaimRef")
 	}
 	if err := claim.rejectPinnedAxes(); err != nil {
 		return nil, err
@@ -63,9 +88,7 @@ func (ck *Checkpoint) claimAt(ctx context.Context, addr string, body []byte) (cl
 	return doJSON[claimResponse](ctx, ck.c, http.MethodPost, addr, "/v1/checkpoints/"+ck.ID+"/claim", bytes.NewReader(body), ck.c.apiToken, "claim checkpoint")
 }
 
-// Checkpoint captures the sandbox's full state — memory, disk, running
-// processes — without stopping it, and returns a handle that branches new
-// sandboxes from that exact moment. name is an optional label.
+// Checkpoint captures the sandbox's full state (memory, disk, running processes) without stopping it and returns a handle that branches new sandboxes from that moment.
 func (s *Sandbox) Checkpoint(ctx context.Context, name string) (*Checkpoint, error) {
 	body, err := encodeBody("checkpoint", checkpointRequest{Token: s.token, Name: name})
 	if err != nil {
@@ -103,29 +126,4 @@ func checkpointHandle(c *Client, addr string, rec checkpointRecord) *Checkpoint 
 		ID: rec.ID, Name: rec.Name, SandboxID: rec.SandboxID, CreatedAt: rec.CreatedAt,
 		c: c, addr: addr,
 	}
-}
-
-type checkpointRequest struct {
-	Token string `json:"token"`
-	Name  string `json:"name,omitempty"`
-}
-
-type checkpointRecord struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name,omitempty"`
-	SandboxID string    `json:"sandbox_id"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-type checkpointResponse struct {
-	Checkpoint checkpointRecord `json:"checkpoint"`
-}
-
-type checkpointClaimRequest struct {
-	TTLSeconds int  `json:"ttl_seconds,omitzero"`
-	NoRedirect bool `json:"no_redirect,omitzero"`
-}
-
-type checkpointListResponse struct {
-	Checkpoints []checkpointRecord `json:"checkpoints"`
 }

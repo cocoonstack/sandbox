@@ -10,7 +10,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
@@ -105,6 +108,75 @@ func TestReadFileStopsAtTheCap(t *testing.T) {
 	)
 	if text := toolText(t, replies[2]); !strings.Contains(text, "read_file cap") {
 		t.Errorf("read_file past the cap answered %q, want the cap error", text)
+	}
+}
+
+func TestTrackBoxAfterCloseReleasesTheClaim(t *testing.T) {
+	released := make(chan string, 1)
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/release") {
+			released <- r.URL.Path
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(node.Close)
+	addr := strings.TrimPrefix(node.URL, "http://")
+	srv, err := newServer(addr, "", "rt:24.04")
+	if err != nil {
+		t.Fatalf("server: %v", err)
+	}
+	srv.closeBoxes()
+	srv.trackBox(srv.client.Attach(addr, "sb_late", "tok"))
+	select {
+	case path := <-released:
+		if !strings.Contains(path, "sb_late") {
+			t.Errorf("released %s, want sb_late", path)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a claim tracked after closeBoxes was never released")
+	}
+	if len(srv.boxes) != 0 {
+		t.Errorf("boxes = %d after a late track, want 0", len(srv.boxes))
+	}
+}
+
+func TestCloseBoxesWaitsForEveryReleaseOnce(t *testing.T) {
+	var releases atomic.Int32
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/release") {
+			time.Sleep(200 * time.Millisecond)
+			releases.Add(1)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(node.Close)
+	addr := strings.TrimPrefix(node.URL, "http://")
+	srv, err := newServer(addr, "", "rt:24.04")
+	if err != nil {
+		t.Fatalf("server: %v", err)
+	}
+	for _, id := range []string{"sb_a", "sb_b", "sb_c"} {
+		srv.trackBox(srv.client.Attach(addr, id, "tok"))
+	}
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Go(srv.closeBoxes)
+	}
+	wg.Wait()
+	if got := releases.Load(); got != 3 {
+		t.Errorf("releases = %d after closeBoxes returned, want 3", got)
+	}
+}
+
+func TestExecRejectsAnEmptyCommand(t *testing.T) {
+	replies := serveLines(t, newTestServer(t, nil),
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_sandbox","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"exec","arguments":{"sandbox_id":"sb_1"}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"spawn","arguments":{"sandbox_id":"sb_1","command":""}}}`)
+	for _, id := range []int{2, 3} {
+		if !strings.Contains(toolText(t, replies[id]), "command must not be empty") {
+			t.Errorf("reply %d accepted an empty command: %q", id, toolText(t, replies[id]))
+		}
 	}
 }
 

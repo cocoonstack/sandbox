@@ -178,27 +178,20 @@ type Config struct {
 	DataDir   string `json:"data_dir"`
 	CocoonBin string `json:"cocoon_bin"`
 
-	AdvertiseAddr   string `json:"advertise_addr,omitempty"`
-	ClientAdvertise string `json:"client_advertise,omitempty"`
-
-	Bridges []string `json:"bridges,omitempty"`
-
-	Networks []string `json:"networks,omitempty"`
+	AdvertiseAddr   string   `json:"advertise_addr,omitempty"`
+	ClientAdvertise string   `json:"client_advertise,omitempty"`
+	Bridges         []string `json:"bridges,omitempty"`
+	Networks        []string `json:"networks,omitempty"`
 
 	RestoreMode types.RestoreMode `json:"restore_mode,omitempty"`
+	NoDirectIO  bool              `json:"no_direct_io,omitzero"`
+	NoBalloon   bool              `json:"no_balloon,omitzero"`
 
-	NoDirectIO bool `json:"no_direct_io,omitzero"`
+	APIToken string              `json:"api_token,omitempty"` //nolint:gosec // config field, not a hardcoded credential
+	Tenants  []TenantSpec        `json:"tenants,omitempty"`
+	Secrets  []egress.SecretSpec `json:"secrets,omitempty"`
 
-	NoBalloon bool `json:"no_balloon,omitzero"`
-
-	APIToken string `json:"api_token,omitempty"` //nolint:gosec // config field, not a hardcoded credential
-
-	Tenants []TenantSpec `json:"tenants,omitempty"`
-
-	Secrets []egress.SecretSpec `json:"secrets,omitempty"`
-
-	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitzero"`
-
+	IdleHibernateSeconds      int `json:"idle_hibernate_seconds,omitzero"`
 	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitzero"`
 	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitzero"`
 
@@ -206,33 +199,23 @@ type Config struct {
 	PreviewSecret    string `json:"preview_secret,omitempty"` //nolint:gosec // config field, not a hardcoded credential
 	PreviewAdvertise string `json:"preview_advertise,omitempty"`
 
-	CheckpointDir string `json:"checkpoint_dir,omitempty"`
+	CheckpointDir      string       `json:"checkpoint_dir,omitempty"`
+	CheckpointStore    *StoreConfig `json:"checkpoint_store,omitempty"`
+	CheckpointPeerHeal bool         `json:"checkpoint_peer_heal,omitzero"`
+	CheckpointTTLHours int          `json:"checkpoint_ttl_hours,omitzero"`
 
-	CheckpointStore *StoreConfig `json:"checkpoint_store,omitempty"`
+	EgressInternalAllow []string        `json:"egress_internal_allow,omitempty"`
+	EgressCA            *EgressCAConfig `json:"egress_ca,omitempty"`
 
-	CheckpointPeerHeal bool `json:"checkpoint_peer_heal,omitzero"`
-
-	EgressInternalAllow []string `json:"egress_internal_allow,omitempty"`
-
-	CheckpointTTLHours int `json:"checkpoint_ttl_hours,omitzero"`
-
-	MaxClaims int `json:"max_claims,omitzero"`
-
-	AuditLog bool `json:"audit_log,omitzero"`
-
-	MaxForkCount int `json:"max_fork_count,omitzero"`
+	MaxClaims           int  `json:"max_claims,omitzero"`
+	MaxForkCount        int  `json:"max_fork_count,omitzero"`
+	RefillConcurrency   int  `json:"refill_concurrency,omitzero"`
+	ReleaseDelaySeconds int  `json:"release_delay_seconds,omitzero"`
+	AuditLog            bool `json:"audit_log,omitzero"`
 
 	Volumes []VolumeSpec `json:"volumes,omitempty"`
-
-	RefillConcurrency int `json:"refill_concurrency,omitzero"`
-
-	ReleaseDelaySeconds int `json:"release_delay_seconds,omitzero"`
-
-	Mesh *MeshConfig `json:"mesh,omitempty"`
-
-	EgressCA *EgressCAConfig `json:"egress_ca,omitempty"`
-
-	Pools []PoolSpec `json:"pools"`
+	Mesh    *MeshConfig  `json:"mesh,omitempty"`
+	Pools   []PoolSpec   `json:"pools"`
 }
 
 // HasEgress reports whether the node can attach egress-lane VMs.
@@ -322,8 +305,11 @@ func (c *Config) validate() error {
 	if err := c.RestoreMode.Validate(); err != nil {
 		return fmt.Errorf("restore_mode: %w", err)
 	}
-	if c.PreviewListen != "" && c.PreviewSecret == "" {
-		return fmt.Errorf("preview_listen needs preview_secret")
+	if err := c.validatePreview(); err != nil {
+		return err
+	}
+	if err := c.validatePoolKeys(); err != nil {
+		return err
 	}
 	if err := validateArchiveWindow(c.IdleHibernateSeconds, c.ArchiveAfterSeconds, c.ArchiveDeleteAfterSeconds); err != nil {
 		return err
@@ -369,6 +355,7 @@ func (c *Config) validate() error {
 
 func (c *Config) validateVolumes() error {
 	names := make(map[string]struct{}, len(c.Volumes))
+	paths := make(map[string]string, len(c.Volumes))
 	tenants := make(map[string]struct{}, len(c.Tenants))
 	for _, tenant := range c.Tenants {
 		tenants[tenant.Name] = struct{}{}
@@ -384,6 +371,10 @@ func (c *Config) validateVolumes() error {
 		if !filepath.IsAbs(volume.Path) {
 			return fmt.Errorf("volume %q path must be absolute", volume.Name)
 		}
+		if other, ok := paths[filepath.Clean(volume.Path)]; ok {
+			return fmt.Errorf("volume %q shares its path with volume %q: admission is keyed by name", volume.Name, other)
+		}
+		paths[filepath.Clean(volume.Path)] = volume.Name
 		if !types.ValidDirectIO(volume.DirectIO) {
 			return fmt.Errorf("volume %q directio must be on, off, or auto, got %q", volume.Name, volume.DirectIO)
 		}
@@ -392,6 +383,30 @@ func (c *Config) validateVolumes() error {
 				return fmt.Errorf("volume %q references unknown tenant %q", volume.Name, tenant)
 			}
 		}
+	}
+	return nil
+}
+
+func (c *Config) validatePreview() error {
+	if c.PreviewListen == "" {
+		return nil
+	}
+	if c.PreviewSecret == "" {
+		return fmt.Errorf("preview_listen needs preview_secret")
+	}
+	if !namesHost(c.PreviewAdvertise) {
+		return fmt.Errorf("preview_advertise %q is minted into every preview URL and must name a routable host", c.PreviewAdvertise)
+	}
+	return nil
+}
+
+func (c *Config) validatePoolKeys() error {
+	pools := make(map[types.PoolKey]struct{}, len(c.Pools))
+	for _, p := range c.Pools {
+		if _, ok := pools[p.PoolKey]; ok {
+			return fmt.Errorf("duplicate pool %s %s/%s", p.Template, p.Net, p.Size)
+		}
+		pools[p.PoolKey] = struct{}{}
 	}
 	return nil
 }
@@ -595,4 +610,18 @@ func validateShards(names []string, field, kind string) error {
 		seen[n] = struct{}{}
 	}
 	return nil
+}
+
+// namesHost reads addr the way Mint does and reports whether it carries a host a client could dial.
+func namesHost(addr string) bool {
+	if !strings.Contains(addr, "://") {
+		addr = "http://" + addr
+	}
+	u, err := url.Parse(addr)
+	return err == nil && u.Hostname() != "" && !isUnspecifiedHost(u.Hostname())
+}
+
+func isUnspecifiedHost(host string) bool {
+	ip, _ := netip.ParseAddr(host)
+	return ip.IsUnspecified()
 }

@@ -188,7 +188,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	deadline, err := s.mgr.ClaimDeadline(id, req.Token)
 	if err != nil {
-		writePoolErr(w, err)
+		writeResult(w, r, "preview", id, "preview failed", err, func() {})
 		return
 	}
 	ttl := req.TTL()

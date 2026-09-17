@@ -40,16 +40,7 @@ func (p *Pty) Read(b []byte) (int, error) {
 
 // Write feeds input to the terminal, chunked to stay under the frame cap.
 func (p *Pty) Write(b []byte) (int, error) {
-	sent := 0
-	for len(b) > 0 {
-		chunk := b[:min(len(b), stdinChunk)]
-		if err := p.conn.Send(&wire.Stdin{Data: chunk}); err != nil {
-			return sent, err
-		}
-		sent += len(chunk)
-		b = b[len(chunk):]
-	}
-	return sent, nil
+	return sendChunks(p.conn, stdinChunk, func(chunk []byte) wire.Request { return &wire.Stdin{Data: chunk} }, b)
 }
 
 // Resize adjusts the terminal window; it is a separate RPC keyed by pid.

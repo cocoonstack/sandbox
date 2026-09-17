@@ -34,7 +34,8 @@ func main() {
 }
 
 func run(addr, token, template, netShape string, wait time.Duration) error {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), wait+5*time.Minute)
+	defer cancel()
 	client, sb, err := harness.Claim(ctx, addr, token, template, sandbox.WithNetwork(sandbox.NetShape(netShape)))
 	if err != nil {
 		return err

@@ -24,16 +24,6 @@ const (
 	volumeQuiesceMax = 10 * time.Second
 )
 
-type catalogVolume struct {
-	disk     engine.VolumeSpec
-	tenants  []string
-	writable bool
-}
-
-func (v catalogVolume) allowed(tenant string) bool {
-	return tenant == "" || len(v.tenants) == 0 || slices.Contains(v.tenants, tenant)
-}
-
 // volumeHolders is one name's live admission state: a writer excludes every other claim.
 type volumeHolders struct {
 	writers int
@@ -49,6 +39,16 @@ type resolvedVolume struct {
 type volumeTeardown struct {
 	holds  []types.Volume
 	clears []string
+}
+
+type catalogVolume struct {
+	disk     engine.VolumeSpec
+	tenants  []string
+	writable bool
+}
+
+func (v catalogVolume) allowed(tenant string) bool {
+	return tenant == "" || len(v.tenants) == 0 || slices.Contains(v.tenants, tenant)
 }
 
 // Volumes reports the caller-visible fleet catalog; an empty tenant means root.
@@ -170,21 +170,15 @@ func (m *Manager) confirmVolumesClean(volumes []resolvedVolume) error {
 
 // applyVolumes brings the resolved set up concurrently; cocoon serializes the attach per VM.
 func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes []resolvedVolume, applied []types.Volume) error {
-	switch len(volumes) {
-	case 0:
+	if len(volumes) == 0 {
 		return nil
-	case 1:
-		if err := m.applyVolume(ctx, sb, volumes[0]); err != nil {
-			return err
-		}
-	default:
-		group, groupCtx := errgroup.WithContext(ctx)
-		for _, volume := range volumes {
-			group.Go(func() error { return m.applyVolume(groupCtx, sb, volume) })
-		}
-		if err := group.Wait(); err != nil {
-			return err
-		}
+	}
+	group, groupCtx := errgroup.WithContext(ctx)
+	for _, volume := range volumes {
+		group.Go(func() error { return m.applyVolume(groupCtx, sb, volume) })
+	}
+	if err := group.Wait(); err != nil {
+		return err
 	}
 	sb.Volumes = applied
 	return nil
@@ -225,7 +219,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 	defer cancel()
 	stuck := false
 	for _, volume := range slices.Backward(sb.Volumes) {
-		if !volume.RW() || volume.Mount == "" {
+		if !needsUnmount(volume) {
 			continue // attach-only: no mount to bring down, VM removal closes the device
 		}
 		if err := m.eng.UnmountVolume(ctx, sb.VsockSocket, volume.Mount); err != nil {
@@ -321,11 +315,15 @@ func quiesceBudget(mounts int) time.Duration {
 func writableMounts(volumes []types.Volume) int {
 	mounts := 0
 	for _, volume := range volumes {
-		if volume.RW() && volume.Mount != "" {
+		if needsUnmount(volume) {
 			mounts++
 		}
 	}
 	return mounts
+}
+
+func needsUnmount(volume types.Volume) bool {
+	return volume.RW() && volume.Mount != ""
 }
 
 func appliedVolumes(volumes []resolvedVolume) []types.Volume {

@@ -87,12 +87,7 @@ func (m *Manager) shrinkOnce(ctx context.Context) {
 		trim = append(trim, p.shrink(now)...)
 	}
 	m.mu.Unlock()
-	if len(trim) == 0 {
-		return
-	}
-	m.runBounded(ctx, len(trim), func(ctx context.Context, i int) {
-		m.destroy(ctx, trim[i])
-	})
+	m.destroyAll(ctx, trim)
 }
 
 func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
@@ -475,6 +470,10 @@ func (m *Manager) findVM(ctx context.Context, name string) (types.VMRecord, bool
 }
 
 // runBounded fans f over n items on the refill semaphore, sharing the node-wide budget.
+func (m *Manager) destroyAll(ctx context.Context, names []string) *sync.WaitGroup {
+	return m.runBounded(ctx, len(names), func(ctx context.Context, i int) { m.destroy(ctx, names[i]) })
+}
+
 func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context, int)) *sync.WaitGroup {
 	var wg sync.WaitGroup
 	for i := range n {

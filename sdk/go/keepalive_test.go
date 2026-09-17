@@ -55,6 +55,22 @@ func TestOldDaemonDialsPerCall(t *testing.T) {
 	}
 }
 
+func TestKeepAliveOffSkipsTheProbe(t *testing.T) {
+	var upgrades atomic.Int32
+	sb := testSandbox(t, newAgentServer(t, func(c net.Conn) {
+		upgrades.Add(1)
+		silkdtest.ServeConnOnce(c)
+	}), WithKeepAlive(0))
+	for range 3 {
+		if out, err := sb.Exec(t.Context(), "echo", "42"); err != nil || out != "42\n" {
+			t.Fatalf("exec: %q, %v", out, err)
+		}
+	}
+	if got := upgrades.Load(); got != 3 {
+		t.Errorf("upgrades = %d, want 3: nothing can park, so no probe dial", got)
+	}
+}
+
 func TestOldDaemonConnectionIsNotParked(t *testing.T) {
 	if !canProbe {
 		t.Skip("no parked-connection probe on this platform")

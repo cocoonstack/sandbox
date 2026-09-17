@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use crate::proc::{Chunk, Proc, Table, synth_pid, write_chunk};
-use crate::proto::{ErrorKind, ExecReq, Request, Response};
+use crate::proto::{self, ErrorKind, ExecReq, Request, Response};
 use crate::sysutil;
 
 /// Post-exit drain window; it bounds a daemonizing grandchild, and a stalled client loses the undrained tail.
@@ -46,19 +46,19 @@ where
     if let Some(ref user) = req.user
         && let Err(e) = sysutil::apply_user(&mut cmd, user)
     {
-        return crate::proto::error_frame(out, ErrorKind::BadRequest, e).await;
+        return proto::error_frame(out, ErrorKind::BadRequest, e).await;
     }
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            return crate::proto::error_frame(out, spawn_kind(&e), format!("spawn: {e}")).await;
+            return proto::error_frame(out, spawn_kind(&e), format!("spawn: {e}")).await;
         }
     };
 
     let pid = child.id().unwrap_or_else(synth_pid);
     let proc = table.register(pid, req.argv, req.detach, now_secs);
-    if let Err(e) = crate::proto::write_frame(out, &Response::Started { pid }).await {
+    if let Err(e) = proto::write_frame(out, &Response::Started { pid }).await {
         // the client never learned this pid, so nothing else will ever reap the child.
         table.remove_if(pid, &proc);
         let _ = child.start_kill();
@@ -71,9 +71,7 @@ where
 
     // a backpressured mpsc paces the child to the foreground client; attachers ride the lossy broadcast.
     let (fg_tx, fg_rx) = mpsc::channel::<Chunk>(FG_CAP);
-    let pump_fg = (!req.detach).then(|| fg_tx.clone());
-    let sup_fg = (!req.detach).then(|| fg_tx.clone());
-    drop(fg_tx); // only the pump/supervise clones keep fg_rx open
+    let (pump_fg, sup_fg) = (!req.detach).then(|| (fg_tx.clone(), fg_tx)).unzip();
 
     let pump = tokio::spawn(pump_out(Arc::clone(&proc), stdout, stderr, pump_fg));
     let pump_abort = pump.abort_handle();
@@ -127,7 +125,7 @@ where
     }
     let code = supervise.await.unwrap_or(-1);
     table.remove_if(pid, &proc);
-    crate::proto::write_frame(out, &Response::Exit { code }).await
+    proto::write_frame(out, &Response::Exit { code }).await
 }
 
 /// A missing or unrunnable argv or cwd is the caller's mistake; anything else is the guest's.
@@ -180,7 +178,7 @@ where
     R: AsyncRead + Unpin,
 {
     let make: fn(Vec<u8>) -> Chunk = if stderr { Chunk::Stderr } else { Chunk::Stdout };
-    let mut buf = [0u8; crate::proto::READ_CHUNK];
+    let mut buf = [0u8; proto::READ_CHUNK];
     loop {
         let n = match r.read(&mut buf).await {
             Ok(0) | Err(_) => break,

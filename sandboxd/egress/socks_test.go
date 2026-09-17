@@ -91,6 +91,7 @@ func TestSocksRefusesWhatItCannotServe(t *testing.T) {
 		{"bind command", socksGreeting, []byte{socksVersion, 0x02, 0, socksAtypIPv4, 127, 0, 0, 1, 1, 187}, []byte{socksVersion, socksBadCmd}},
 		{"udp associate", socksGreeting, []byte{socksVersion, 0x03, 0, socksAtypIPv4, 127, 0, 0, 1, 1, 187}, []byte{socksVersion, socksBadCmd}},
 		{"unknown address type", socksGreeting, []byte{socksVersion, socksConnect, 0, 0x05}, []byte{socksVersion, socksBadAtyp}},
+		{"zero-length domain name", socksGreeting, []byte{socksVersion, socksConnect, 0, socksAtypName, 0, 1, 187}, []byte{socksVersion, socksFailure}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -200,7 +201,7 @@ func socksProxy(t *testing.T, policy Policy, ca *CA, dial DialFunc, events chan 
 	if events != nil {
 		audit = func(ev Event) { events <- ev }
 	}
-	p := New("sb_1", "acme", policy, nil, ca, dial, audit, holder)
+	p := New(policy, nil, ca, dial, audit, holder)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen socks: %v", err)

@@ -12,7 +12,7 @@ import urllib.parse
 from collections.abc import Iterator
 from typing import Any, BinaryIO, Protocol, TypeVar
 
-from .errors import APIError, ProtocolError, SilkdError
+from .errors import APIError, ProtocolError, SandboxTimeout, SilkdError
 from .frames import MAX_FRAME, decode_response, encode_request
 
 KEEP_ALIVE_CONNS = 8
@@ -41,6 +41,9 @@ class Conn(_Closeable):
 
     def send(self, op: str, **fields: object) -> None:
         self._sock.sendall(encode_request(op, **fields))
+
+    def settimeout(self, timeout: float | None) -> None:
+        self._sock.settimeout(timeout)
 
     def abort(self) -> None:
         """Unblocks a socket operation from another thread; close() still owns the socket."""
@@ -223,5 +226,5 @@ def remaining_timeout(timeout: float, deadline: float | None, what: str = "agent
         return timeout
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise TimeoutError(f"{what} timed out")
+        raise SandboxTimeout(f"{what} timed out")
     return min(timeout, remaining)

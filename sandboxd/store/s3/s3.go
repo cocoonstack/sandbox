@@ -32,6 +32,11 @@ import (
 const (
 	digestMetadataKey   = "content-digest"
 	uploadPartSizeBytes = 16 << 20
+	uploadConcurrency   = 8 // multipart parts in flight per transfer
+	metaReadConcurrency = 8
+	publishConcurrency  = 4 // files in parallel; each already multiparts internally
+	fetchConcurrency    = 4
+	deleteBatch         = 1000 // DeleteObjects caps one request at 1000 keys
 )
 
 // Config selects the bucket; credentials come from the standard AWS chain, never this config.
@@ -92,7 +97,7 @@ func New(ctx context.Context, cfg Config, stagingRoot string, idRe *regexp.Regex
 	// snapshot exports are hundreds of MB: multipart concurrency keeps transfers bandwidth-bound.
 	tm := transfermanager.New(client, func(o *transfermanager.Options) {
 		o.PartSizeBytes = uploadPartSizeBytes
-		o.Concurrency = 8
+		o.Concurrency = uploadConcurrency
 	})
 	return &Store{client: client, tm: tm, bucket: cfg.Bucket, prefix: cfg.Prefix, staging: stagingRoot, idRe: idRe}, nil
 }
@@ -154,15 +159,17 @@ func (s *Store) Metas(ctx context.Context) ([][]byte, error) {
 	}
 	metas := make([][]byte, len(ids))
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(8)
+	g.SetLimit(metaReadConcurrency)
 	for i, id := range ids {
 		g.Go(func() error {
 			raw, err := s.ReadMeta(gctx, id)
-			if err == nil {
-				metas[i] = raw
-			} else if !errors.Is(err, store.ErrNotFound) {
-				return err // absence mid-list is a race, not a failure
+			if errors.Is(err, store.ErrNotFound) {
+				return nil // absence mid-list is a race, not a failure
 			}
+			if err != nil {
+				return err
+			}
+			metas[i] = raw
 			return nil
 		})
 	}
@@ -187,8 +194,10 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.deleteKeys(ctx, []string{metaKey})
 }
 
-// SweepStaging clears local staging residue at startup; objects orphaned by a crash before meta.json are reclaimed by the bucket's S3 lifecycle rule (see deploy).
-func (s *Store) SweepStaging() error { return utils.RemoveDirEntries(s.staging, nil) }
+// SweepStaging clears local staging residue at startup.
+func (s *Store) SweepStaging() error {
+	return utils.RemoveDirEntries(s.staging, nil) // objects orphaned before meta.json fall to the bucket's lifecycle rule
+}
 
 func (s *Store) SweepGenerations() error { return nil }
 
@@ -222,7 +231,7 @@ func (s *Store) publish(ctx context.Context, staging, id string, digested bool) 
 	}
 	digestFiles := make([]store.DigestFile, len(files))
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(4) // files in parallel; each already multiparts internally
+	g.SetLimit(publishConcurrency)
 	for i, file := range files {
 		g.Go(func() error {
 			if !digested {
@@ -277,7 +286,7 @@ func (s *Store) publishFiles(staging, id, gen string, digested bool) ([]publishF
 			}
 			files = append(files, publishFile{
 				path: path,
-				key:  s.key(id, gen+strings.TrimPrefix(rel, store.ExportDir)),
+				key:  s.key(id, gen+"/"+strings.TrimPrefix(rel, store.ExportDir+"/")),
 			})
 			return nil
 		}
@@ -286,8 +295,8 @@ func (s *Store) publishFiles(staging, id, gen string, digested bool) ([]publishF
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("digest export %s is not a regular file", rel)
+		if err := store.RequireRegular(rel, info.Mode()); err != nil {
+			return err
 		}
 		files = append(files, publishFile{
 			path:       path,
@@ -325,7 +334,7 @@ func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string
 		return fmt.Errorf("record %s has no export", id)
 	}
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(4)
+	g.SetLimit(fetchConcurrency)
 	for _, key := range keys {
 		g.Go(func() error {
 			return s.download(gctx, key, filepath.Join(local, store.ExportDir, strings.TrimPrefix(key, exportPrefix)))
@@ -373,8 +382,8 @@ func (s *Store) uploadDigested(ctx context.Context, key, path, digestPath string
 	if err != nil {
 		return store.DigestFile{}, err
 	}
-	if !info.Mode().IsRegular() {
-		return store.DigestFile{}, fmt.Errorf("digest export %s is not a regular file", digestPath)
+	if err := store.RequireRegular(digestPath, info.Mode()); err != nil {
+		return store.DigestFile{}, err
 	}
 	reader := newDigestReader(f, digestPath, info.Size())
 	if err := s.uploadReader(ctx, key, reader, info.Size(), nil); err != nil {
@@ -414,8 +423,7 @@ func (s *Store) download(ctx context.Context, key, path string) error {
 }
 
 func (s *Store) deleteKeys(ctx context.Context, keys []string) error {
-	// DeleteObjects caps one batch at 1000 keys.
-	for chunk := range slices.Chunk(keys, 1000) {
+	for chunk := range slices.Chunk(keys, deleteBatch) {
 		objs := make([]s3types.ObjectIdentifier, len(chunk))
 		for i := range chunk {
 			objs[i] = s3types.ObjectIdentifier{Key: &chunk[i]}

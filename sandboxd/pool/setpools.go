@@ -63,9 +63,7 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 	m.mu.Unlock()
 
 	runCtx := context.WithoutCancel(ctx)
-	m.runBounded(runCtx, len(trim), func(ctx context.Context, i int) {
-		m.destroy(ctx, trim[i])
-	}).Wait()
+	m.destroyAll(runCtx, trim).Wait()
 	m.refillOnce(runCtx)
 	// persist the applied set so a restart rebuilds from it, not the config seed.
 	persisted := slices.Collect(maps.Values(desired))

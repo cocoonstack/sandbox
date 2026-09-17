@@ -187,19 +187,24 @@ func TestFingerprintIsRootAndStable(t *testing.T) {
 	}
 }
 
-func testCA(t *testing.T) (*CA, []byte) {
-	t.Helper()
+func testCA(tb testing.TB) (*CA, []byte) {
+	tb.Helper()
 	rootCert, rootKey, err := GenerateRoot("test root")
 	if err != nil {
-		t.Fatalf("generate root: %v", err)
+		tb.Fatalf("generate root: %v", err)
 	}
 	interCert, interKey, err := IssueIntermediate(rootCert, rootKey, "node1")
 	if err != nil {
-		t.Fatalf("issue intermediate: %v", err)
+		tb.Fatalf("issue intermediate: %v", err)
 	}
 	ca, err := LoadCA(rootCert, interCert, interKey)
 	if err != nil {
-		t.Fatalf("load ca: %v", err)
+		tb.Fatalf("load ca: %v", err)
 	}
 	return ca, rootCert
+}
+
+func testCAOnly(tb testing.TB) *CA {
+	ca, _ := testCA(tb)
+	return ca
 }

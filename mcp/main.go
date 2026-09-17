@@ -1,8 +1,7 @@
 // sandbox-mcp is a Model Context Protocol server over stdio: it exposes the
 // sandbox surface (claim, exec, files, fork, checkpoint, promote, hibernate)
-// as MCP tools, so MCP clients — Claude Code, Cursor, agent frameworks —
-// drive real microVM sandboxes with no extra glue. One process serves one
-// sandboxd endpoint, configured by flags or environment.
+// as MCP tools. One process serves one sandboxd endpoint, configured by
+// flags or environment.
 package main
 
 import (
@@ -12,10 +11,16 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/projecteru2/core/log"
 	coretypes "github.com/projecteru2/core/types"
 )
+
+// shutdownGrace bounds the wait for the read loop to notice its closed stdin before main releases the claims itself.
+const shutdownGrace = 10 * time.Second
 
 func main() {
 	ctx := context.Background()
@@ -23,6 +28,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "setup log:", err)
 		os.Exit(1)
 	}
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	addr := flag.String("addr", cmp.Or(os.Getenv("SANDBOXD_ADDR"), "127.0.0.1:7777"), "sandboxd address")
 	token := flag.String("token", os.Getenv("SANDBOXD_TOKEN"), "node api token")
 	template := flag.String("template", cmp.Or(os.Getenv("SANDBOXD_TEMPLATE"), "rt:24.04"), "default template ref")
@@ -32,7 +39,20 @@ func main() {
 	if err != nil {
 		log.WithFunc("main").Fatalf(ctx, err, "connect sandboxd")
 	}
-	if err := srv.serve(ctx, bufio.NewReader(os.Stdin), os.Stdout); err != nil {
-		log.WithFunc("main").Fatalf(ctx, err, "serve stdio")
+	served := make(chan error, 1)
+	go func() { served <- srv.serve(ctx, bufio.NewReader(os.Stdin), os.Stdout) }()
+	select {
+	case err := <-served:
+		if err != nil {
+			log.WithFunc("main").Fatalf(ctx, err, "serve stdio")
+		}
+	case <-ctx.Done():
+		// the canceled ctx ends the tool call in flight; closing stdin ends the read loop, whose defer releases every claim
+		_ = os.Stdin.Close()
+		select {
+		case <-served:
+		case <-time.After(shutdownGrace):
+			srv.closeBoxes() // waits for a release the read loop's defer already started
+		}
 	}
 }

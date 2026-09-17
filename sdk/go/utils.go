@@ -3,6 +3,7 @@ package sandbox
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -17,7 +18,6 @@ type respPtr[T any] interface {
 	wire.Response
 }
 
-// doneRPC sends a request that answers with Done or an error frame.
 func (s *Sandbox) doneRPC(ctx context.Context, req wire.Request) error {
 	conn, l, err := s.call(ctx, req)
 	if err != nil {
@@ -49,7 +49,7 @@ func (s *Sandbox) uploadRPC(ctx context.Context, req wire.Request, r io.Reader) 
 				return err
 			}
 		}
-		if readErr == io.EOF {
+		if errors.Is(readErr, io.EOF) {
 			break
 		}
 		if readErr != nil {
@@ -62,7 +62,6 @@ func (s *Sandbox) uploadRPC(ctx context.Context, req wire.Request, r io.Reader) 
 	return l.done(<-terminal)
 }
 
-// downloadRPC sends req and drains its Data stream into sink until Done.
 func (s *Sandbox) downloadRPC(ctx context.Context, req wire.Request, sink func([]byte) error) error {
 	conn, l, err := s.call(ctx, req)
 	if err != nil {
@@ -103,7 +102,6 @@ func pumpStdio(ctx context.Context, conn *silkd.Conn, stdout, stderr io.Writer) 
 	}
 }
 
-// oneShotRPC sends req and returns its single typed reply frame.
 func oneShotRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.Request) (*T, error) {
 	conn, l, err := s.call(ctx, req)
 	if err != nil {
@@ -114,7 +112,6 @@ func oneShotRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.
 	return v, l.done(err)
 }
 
-// collectRPC sends req and gathers every streamed frame of type T until Done.
 func collectRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.Request) ([]T, error) {
 	var out []T
 	for v, err := range streamRPC[T, PT](ctx, s, req) {
@@ -185,7 +182,6 @@ func drainData(ctx context.Context, conn *silkd.Conn, sink func([]byte) error) e
 	}
 }
 
-// terminalErr reads one frame and requires it to be Done (else the error).
 func terminalErr(ctx context.Context, conn *silkd.Conn) error {
 	_, err := expect[wire.Done](ctx, conn)
 	return err
@@ -214,7 +210,7 @@ func recv(ctx context.Context, conn *silkd.Conn) (wire.Response, error) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("connection closed before a terminal frame")
 		}
 		return nil, err
@@ -224,4 +220,18 @@ func recv(ctx context.Context, conn *silkd.Conn) (wire.Response, error) {
 
 func unexpected(resp wire.Response) error {
 	return fmt.Errorf("unexpected frame %q", resp.RespType())
+}
+
+// sendChunks feeds b to conn in frames of at most size bytes, so no frame outgrows the protocol cap.
+func sendChunks(conn *silkd.Conn, size int, frame func([]byte) wire.Request, b []byte) (int, error) {
+	sent := 0
+	for len(b) > 0 {
+		chunk := b[:min(len(b), size)]
+		if err := conn.Send(frame(chunk)); err != nil {
+			return sent, err
+		}
+		sent += len(chunk)
+		b = b[len(chunk):]
+	}
+	return sent, nil
 }

@@ -201,8 +201,9 @@ permits it. `nodes` counts members advertising the name; `size_bytes` and
 `available` are a best-effort stat of the answering node's image. Membership is
 eventually consistent by one gossip tick.
 `writable` is the entry's catalog configuration, fleet-uniform like the access
-list; the field is emitted (as `true`) only for a writable entry and omitted
-otherwise, so a read-only entry's response is byte-identical to v1.
+list; the field is emitted (as `true`) only for a writable entry this node
+declares and omitted otherwise (peer-only rows never carry it), so a read-only
+entry's response is byte-identical to v1.
 
 ## POST /v1/sandboxes/{id}/release
 
@@ -547,7 +548,7 @@ empty `argv`, negative `timeout_seconds`, an unknown field, or a silkd
 `bad_request` — a command that is missing or not executable and a `cwd` that
 does not exist are the caller's, not 502s; 401 missing bearer token; 404 unknown sandbox or wrong token;
 413 when stdout+stderr exceed 8 MiB; 502 guest unreachable or any other
-silkd error; 504 when the command outlives `timeout_seconds` or the request. A hibernated sandbox wakes transparently like on the relay.
+silkd error; 504 when the command outlives `timeout_seconds`. A client that hangs up first gets no reply and the command is killed. A hibernated sandbox wakes transparently like on the relay.
 
 ## GET /v1/sandboxes/{id}/owner
 

@@ -311,14 +311,7 @@ func TestPromoteFailsClosedOnMetaError(t *testing.T) {
 func TestPromoteRefusesCrossTenantOverwrite(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	claim := func(tenant string) *types.Sandbox {
-		t.Helper()
-		sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, tenant, "", nil)
-		if err != nil {
-			t.Fatalf("claim %q: %v", tenant, err)
-		}
-		return sb
-	}
+	claim := func(tenant string) *types.Sandbox { return claimTenant(t, m, tenant) }
 	a := claim("acme")
 	if _, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "shared:v1", "acme"); err != nil {
 		t.Fatalf("acme promote: %v", err)
@@ -336,14 +329,7 @@ func TestPromoteRefusesCrossTenantOverwrite(t *testing.T) {
 func TestTemplateClaimIsTenantScoped(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	claim := func(tenant string) *types.Sandbox {
-		t.Helper()
-		sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, tenant, "", nil)
-		if err != nil {
-			t.Fatalf("claim %q: %v", tenant, err)
-		}
-		return sb
-	}
+	claim := func(tenant string) *types.Sandbox { return claimTenant(t, m, tenant) }
 
 	a := claim("acme")
 	private, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "acme-private", "acme")
@@ -442,4 +428,13 @@ func TestTemplateHashesSortedForMeshCompare(t *testing.T) {
 	if !slices.IsSorted(hashes) {
 		t.Errorf("TemplateHashes not sorted: %v", hashes)
 	}
+}
+
+func claimTenant(t *testing.T, m *Manager, tenant string) *types.Sandbox {
+	t.Helper()
+	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, tenant, "", nil)
+	if err != nil {
+		t.Fatalf("claim %q: %v", tenant, err)
+	}
+	return sb
 }

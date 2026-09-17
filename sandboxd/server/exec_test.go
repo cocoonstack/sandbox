@@ -189,16 +189,7 @@ func (m *execManager) WakeAgentSocket(ctx context.Context, id, token string) (st
 
 func postExec(t *testing.T, ts *httptest.Server, body string) (int, []byte) {
 	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/exec", strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer tok")
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := ts.Client().Do(req)
-	if err != nil {
-		t.Fatalf("post exec: %v", err)
-	}
+	resp := postJSON(t, ts.URL+"/v1/sandboxes/sb_1/exec", "tok", body)
 	defer resp.Body.Close()
 	out, err := io.ReadAll(resp.Body)
 	if err != nil {

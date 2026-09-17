@@ -24,7 +24,7 @@ pub fn has_egress() -> bool {
         1 => return true,
         _ => {}
     }
-    // Probed once: the NIC set is fixed for the guest's life.
+    // probed once: the NIC set is fixed for the guest's life
     static DEVICE_BACKED: LazyLock<bool> = LazyLock::new(|| {
         let Ok(entries) = std::fs::read_dir("/sys/class/net") else {
             return true;

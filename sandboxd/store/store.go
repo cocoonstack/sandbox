@@ -10,6 +10,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"io/fs"
 	"regexp"
 	"strings"
 )
@@ -38,7 +40,7 @@ type Store interface {
 	Publish(ctx context.Context, staging, id string) error
 	// PublishDigested applies Publish semantics and returns the export digest.
 	PublishDigested(ctx context.Context, staging, id string) (string, error)
-	// Fetch materializes a record's export locally and returns a release to hold until the clone ends.
+	// Fetch materializes a record's export locally; the caller holds the record lock until the clone ends.
 	Fetch(ctx context.Context, id string) (dir string, meta []byte, digest string, err error)
 	// ReadMeta returns a record's metadata, or an error when the record does not exist.
 	ReadMeta(ctx context.Context, id string) ([]byte, error)
@@ -65,4 +67,12 @@ func ExportGen(meta []byte) string { return ExportDir + "-" + ExportGenHash(meta
 func ExportGenHash(meta []byte) string {
 	sum := sha256.Sum256(meta)
 	return hex.EncodeToString(sum[:8])
+}
+
+// RequireRegular rejects an export entry that is not a regular file.
+func RequireRegular(rel string, mode fs.FileMode) error {
+	if !mode.IsRegular() {
+		return fmt.Errorf("export entry %s is not a regular file (%s)", rel, mode.Type())
+	}
+	return nil
 }

@@ -152,8 +152,15 @@ type cmdArgs struct {
 	Cwd     string `json:"cwd"`
 }
 
-// cappedOutput keeps the first execOutputCap bytes; an agent that tails a firehose must not grow this process.
-// An exec keeps draining past the cap so the command runs on; a read stops there instead.
+func parseCommand(s *server, raw json.RawMessage) (cmdArgs, *sandbox.Sandbox, error) {
+	args, sb, err := parseAndBox[cmdArgs](s, raw)
+	if err == nil && args.Command == "" {
+		return args, nil, errors.New("command must not be empty")
+	}
+	return args, sb, err
+}
+
+// cappedOutput keeps the first execOutputCap bytes: an agent that tails a firehose must not grow this process.
 type cappedOutput struct {
 	strings.Builder
 	stopAtCap bool
@@ -173,7 +180,7 @@ func (o *cappedOutput) Write(p []byte) (int, error) {
 }
 
 func toolExec(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	args, sb, err := parseAndBox[cmdArgs](s, raw)
+	args, sb, err := parseCommand(s, raw)
 	if err != nil {
 		return "", err
 	}
@@ -195,7 +202,7 @@ func toolExec(ctx context.Context, s *server, raw json.RawMessage) (string, erro
 }
 
 func toolSpawn(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
-	args, sb, err := parseAndBox[cmdArgs](s, raw)
+	args, sb, err := parseCommand(s, raw)
 	if err != nil {
 		return "", err
 	}

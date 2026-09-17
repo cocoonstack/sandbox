@@ -5,7 +5,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/rs/zerolog"
 )
@@ -36,6 +35,9 @@ func TestJournalWriterPrefixesEveryRecordWithItsSyslogLevel(t *testing.T) {
 			if strings.Count(line, "\n") != 1 {
 				t.Errorf("line = %q, want exactly one record", line)
 			}
+			if strings.Contains(line, "\x1b[") {
+				t.Errorf("line = %q, want no ANSI color in a journald record", line)
+			}
 		})
 	}
 }
@@ -60,7 +62,7 @@ func TestSyslogPrefixMapsFatalToCritical(t *testing.T) {
 }
 
 func testLogger(out io.Writer) zerolog.Logger {
-	return zerolog.New(journalWriter{console: zerolog.ConsoleWriter{TimeFormat: time.RFC822, NoColor: true}, out: out})
+	return zerolog.New(newJournalWriter(out))
 }
 
 type countingWriter struct {

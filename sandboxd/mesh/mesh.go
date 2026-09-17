@@ -69,7 +69,7 @@ func New(ctx context.Context, cfg *memberlist.Config, nodeID, selfAddr string, s
 		view: map[string]NodeState{},
 		live: map[string]struct{}{},
 	}
-	if err := m.persistEpoch(m.leased); err != nil {
+	if err := storeEpoch(m.epochPath, m.leased); err != nil {
 		return nil, fmt.Errorf("persist mesh epoch: %w", err)
 	}
 	m.view[nodeID] = m.self
@@ -112,7 +112,7 @@ func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates, 
 	m.mu.Unlock()
 	if epoch > m.leased {
 		leased := epoch + epochLease
-		if err := m.persistEpoch(leased); err != nil {
+		if err := storeEpoch(m.epochPath, leased); err != nil {
 			log.WithFunc("mesh.UpdateSelf").Warnf(ctx, "persist epoch: %v", err)
 			return
 		}
@@ -186,12 +186,12 @@ func (m *Mesh) TemplateOwners(keyHash string) []string {
 	return m.owners(func(st NodeState) bool { return slices.Contains(st.Templates, keyHash) })
 }
 
-// VolumeOwners returns peers that advertise every requested volume; self is excluded.
+// VolumeOwners returns up to two peers that advertise every requested volume; self is excluded.
 func (m *Mesh) VolumeOwners(names []string) []string {
 	return m.owners(func(st NodeState) bool { return containsAll(st.Volumes, names) })
 }
 
-// TemplateVolumeOwners returns peers holding both the template and every requested volume.
+// TemplateVolumeOwners returns up to two peers holding both the template and every requested volume.
 func (m *Mesh) TemplateVolumeOwners(keyHash string, names []string) []string {
 	return m.owners(func(st NodeState) bool {
 		return slices.Contains(st.Templates, keyHash) && containsAll(st.Volumes, names)
@@ -272,10 +272,6 @@ func (m *Mesh) warmCandidates(keyHash string, match nodeMatch) []string {
 	return []string{a.addr, b.addr}
 }
 
-func (m *Mesh) persistEpoch(epoch uint64) error {
-	return storeEpoch(m.epochPath, epoch)
-}
-
 func (m *Mesh) owners(match nodeMatch) []string {
 	m.mu.Lock()
 	var owners []string
@@ -326,16 +322,6 @@ func (m *Mesh) merge(states []NodeState) {
 	}
 }
 
-func short(digest string) string {
-	return digest[:min(len(digest), 12)]
-}
-
-func containsAll(have, need []string) bool {
-	return len(need) > 0 && !slices.ContainsFunc(need, func(name string) bool {
-		return !slices.Contains(have, name)
-	})
-}
-
 var _ memberlist.Delegate = (*delegate)(nil)
 
 type delegate Mesh
@@ -364,4 +350,14 @@ func (e *eventDelegate) NotifyJoin(n *memberlist.Node) { (*Mesh)(e).admit(n.Name
 func (e *eventDelegate) NotifyUpdate(*memberlist.Node) {}
 func (e *eventDelegate) NotifyLeave(n *memberlist.Node) {
 	(*Mesh)(e).forget(n.Name)
+}
+
+func short(digest string) string {
+	return digest[:min(len(digest), 12)]
+}
+
+func containsAll(have, need []string) bool {
+	return len(need) > 0 && !slices.ContainsFunc(need, func(name string) bool {
+		return !slices.Contains(have, name)
+	})
 }

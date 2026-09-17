@@ -14,7 +14,7 @@ pub struct BootCfg {
     pub layers: Vec<String>,
     /// Writable ext4 COW disk ID (same resolution rules as layers).
     pub cow: String,
-    /// Per-device wait budget.
+    /// Wait budget for the whole disk set; NICs get a fixed 200 ms.
     pub timeout: Duration,
     pub hostname: Option<String>,
     /// Static per-NIC config, persisted as networkd units and never applied in the initramfs.
@@ -27,7 +27,7 @@ pub struct BootCfg {
     pub trace: bool,
 }
 
-/// One `ip=<addr>::<gw>:<mask>:<host>:<dev>:off[:dns0[:dns1]]` param, as cocoon emits it per NIC.
+/// One kernel `ip=` param, as cocoon emits it per NIC.
 #[derive(Debug, PartialEq, Eq)]
 pub struct IpParam {
     pub addr: String,
@@ -123,7 +123,6 @@ fn params(cmdline: &str) -> impl DoubleEndedIterator<Item = (&str, &str)> {
         .map(|tok| tok.split_once('=').unwrap_or((tok, "")))
 }
 
-/// sandbox.debug value semantics, shared by parse() and debug_requested().
 fn debug_token(val: &str) -> bool {
     val.is_empty() || val == "1"
 }
@@ -136,9 +135,7 @@ fn parse_ip_param(val: &str) -> Option<IpParam> {
     }
     let prefix = mask_to_prefix(f[3])?;
     let gateway = (!f[2].is_empty() && f[2] != "0.0.0.0").then(|| f[2].to_string());
-    let dns = f
-        .get(7..)
-        .unwrap_or(&[])
+    let dns = f[7..]
         .iter()
         .filter(|d| !d.is_empty() && **d != "0.0.0.0")
         .map(|d| d.to_string())

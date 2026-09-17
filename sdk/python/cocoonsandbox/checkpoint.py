@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from .errors import require_field
+
 if TYPE_CHECKING:
     from .client import Client
     from .sandbox import Sandbox
@@ -15,7 +17,7 @@ class Checkpoint:
     def __init__(self, client: Client, addr: str, rec: dict[str, Any]) -> None:
         self._client = client
         self._addr = addr
-        self.id = rec["id"]
+        self.id = require_field(rec, "id", "checkpoint")
         self.name = rec.get("name", "")
         self.sandbox_id = rec.get("sandbox_id", "")
         self.created_at = rec.get("created_at", "")

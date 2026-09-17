@@ -3,7 +3,7 @@
 MicroVM sandboxes for AI agents, built on
 [cocoon](https://github.com/cocoonstack/cocoon). Warm claims are
 sub-millisecond; a pool miss clones from a golden snapshot in tens of
-milliseconds; cold boot is ~200ms on bare metal.
+milliseconds; cold boot is ~0.2–0.4 s on bare metal.
 
 ```
 SDK (Go/Python)         sandboxd (per node)              guest microVM

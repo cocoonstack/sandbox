@@ -94,7 +94,7 @@ func writeCAFiles(dir, name string, certPEM, keyPEM []byte, force bool) error {
 	if err := writeKeyMaterial(keyPath, keyPEM, 0o600, force); err != nil {
 		return fmt.Errorf("write key: %w", err)
 	}
-	// Create sets the mode only on a new file; an overwrite must not keep looser bits.
+	// O_CREATE sets the mode only on a new file; an overwrite must not keep looser bits.
 	if err := os.Chmod(keyPath, 0o600); err != nil {
 		return fmt.Errorf("chmod key: %w", err)
 	}

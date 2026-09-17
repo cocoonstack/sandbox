@@ -3,6 +3,8 @@ package pool
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -149,6 +151,24 @@ func TestReconcileStaleRunningVMSkipsVerb(t *testing.T) {
 	}
 	if !eng.removed("sbx-orphan-1") {
 		t.Error("unowned running VM not removed")
+	}
+}
+
+func TestReconcileSweepsInterruptedForkExports(t *testing.T) {
+	dir := t.TempDir()
+	stale := filepath.Join(dir, "fork-abc123", "export")
+	if err := os.MkdirAll(stale, 0o750); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "disk.img"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	m := newTestManagerAt(t, newFakeEngine(), dir)
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(stale)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("fork export dir survived Reconcile: %v", err)
 	}
 }
 

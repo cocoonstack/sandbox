@@ -54,8 +54,7 @@ const (
 	recommitBackoff    = 20 * time.Millisecond
 	recommitMaxBackoff = 5 * time.Second
 	// one failed boot is ordinary; only an unbroken run predicts the next failure
-	refillFailStreak = 8
-	// doubles per failure past the streak.
+	refillFailStreak  = 8
 	refillBackoffBase = 250 * time.Millisecond
 	refillBackoffMax  = buildRetryDelay
 	// fallbacks when a Manager is built from a Config that skipped config.Load's defaulting
@@ -484,7 +483,7 @@ func (m *Manager) Run(ctx context.Context) {
 	// store retention is hourly: each sweep is cluster-visible I/O on a shared root
 	storeSweep := time.NewTicker(time.Hour)
 	defer storeSweep.Stop()
-	m.sweepExpiredCheckpoints(ctx)
+	go m.sweepExpiredCheckpoints(ctx)
 	m.refillOnce(ctx)
 	for {
 		select {
@@ -503,7 +502,7 @@ func (m *Manager) Run(ctx context.Context) {
 			go m.retryArchiveDeletes(ctx)
 		case <-storeSweep.C:
 			m.sweepStoreGenerations(ctx)
-			m.sweepExpiredCheckpoints(ctx)
+			go m.sweepExpiredCheckpoints(ctx)
 		}
 	}
 }
@@ -664,7 +663,7 @@ func loadEgressCA(cfg *config.EgressCAConfig) (*egress.CA, error) {
 	return egress.LoadCA(root, interCert, interKey)
 }
 
-// The dir default lives here, not config.applyDefaults: tests build Config directly.
+// the dir default lives here, not config.applyDefaults: tests build Config directly
 func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe *regexp.Regexp) (store.Store, error) {
 	if cs := cfg.CheckpointStore; cs != nil && cs.Kind == "s3" {
 		return s3.New(ctx, *cs.S3, filepath.Join(cfg.DataDir, staging), idRe)
@@ -703,6 +702,13 @@ func benignSweepErr(err error) bool {
 
 func vmName(key types.PoolKey) string {
 	return vmPrefix + key.Hash() + "-" + randHex(6)
+}
+
+// lockedVMName reads the VM name under the lock that archive() clears it under.
+func lockedVMName(sb *types.Sandbox) string {
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	return sb.VMName
 }
 
 func randHex(n int) string {

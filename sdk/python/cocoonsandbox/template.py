@@ -43,7 +43,6 @@ class Template:
         return self._client._handle_from(self._addr, reply)
 
     def delete(self) -> None:
-        """Removes the template from its node."""
         from .client import _template_query
 
         query = _template_query(self.name, self.net, self.size)

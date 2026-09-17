@@ -85,10 +85,3 @@ func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (vmProvisio
 	return func(name string) (types.VMRecord, error) { return m.eng.Clone(ctx, exportDir, name, sb.Key) },
 		func() { _ = os.RemoveAll(dir) }, nil
 }
-
-// lockedVMName reads the VM name under the lock that archive() clears it under.
-func lockedVMName(sb *types.Sandbox) string {
-	sb.Transition.Lock()
-	defer sb.Transition.Unlock()
-	return sb.VMName
-}

@@ -52,7 +52,6 @@ func (m *Manager) byID(id string) (*types.Sandbox, bool) {
 	return sb, sb != nil
 }
 
-// wake reuses the relay's resolve path, then discards the socket.
 func (m *Manager) wake(ctx context.Context, sb *types.Sandbox) error {
 	sb.Touch()
 	_, err := m.wakeResolved(ctx, sb)

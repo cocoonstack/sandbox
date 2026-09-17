@@ -423,7 +423,12 @@ pub async fn write_frames<W: AsyncWrite + Unpin>(
 ) -> io::Result<()> {
     buf.clear();
     for frame in frames {
-        render_frame(buf, frame)?;
+        if let Err(e) = render_frame(buf, frame) {
+            // the frames rendered before the oversized one still reach the client
+            w.write_all(buf).await?;
+            w.flush().await?;
+            return Err(e);
+        }
         if buf.len() > MAX_FRAME {
             w.write_all(buf).await?;
             buf.clear();
@@ -581,7 +586,10 @@ fn cap_check(len: usize) -> io::Result<()> {
 fn render_frame(buf: &mut Vec<u8>, resp: &Response) -> io::Result<()> {
     let start = buf.len();
     serde_json::to_writer(&mut *buf, resp).map_err(io::Error::other)?;
-    cap_check(buf.len() - start)?;
+    if let Err(e) = cap_check(buf.len() - start) {
+        buf.truncate(start);
+        return Err(e);
+    }
     buf.push(b'\n');
     Ok(())
 }
@@ -713,6 +721,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn write_frames_keeps_the_frames_before_an_oversized_one() {
+        let mut sink = Vec::new();
+        let mut buf = Vec::new();
+        let frames = [
+            Response::Match {
+                file: "a.txt".into(),
+                line: 1,
+                content: "short".into(),
+            },
+            Response::Match {
+                file: "b.txt".into(),
+                line: 1,
+                content: "\u{1}".repeat(MAX_FRAME / 4),
+            },
+        ];
+        let err = write_frames(&mut sink, &mut buf, &frames)
+            .await
+            .expect_err("oversized frame must fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        let sent = String::from_utf8(sink).expect("utf8");
+        assert_eq!(
+            sent.lines().count(),
+            1,
+            "exactly the short frame reached the sink"
+        );
+        assert!(sent.contains("a.txt"), "{sent}");
+    }
+
+    #[tokio::test]
     async fn frame_reader_caps_oversized_lines() {
         let big = vec![b'a'; MAX_FRAME + 2];
         let mut r = tokio::io::BufReader::new(big.as_slice());
@@ -797,7 +834,11 @@ mod tests {
             if stem.starts_with("req_") {
                 serde_json::from_slice::<Request>(&raw).unwrap_or_else(|e| panic!("{name}: {e}"));
             } else if stem.starts_with("resp_") {
-                serde_json::from_slice::<Response>(&raw).unwrap_or_else(|e| panic!("{name}: {e}"));
+                let resp: Response =
+                    serde_json::from_slice(&raw).unwrap_or_else(|e| panic!("{name}: {e}"));
+                let back = serde_json::to_value(&resp).expect("encode response");
+                let want: serde_json::Value = serde_json::from_slice(&raw).expect("fixture json");
+                assert_eq!(back, want, "{name}: round-trip drift");
             } else {
                 continue;
             }

@@ -159,12 +159,14 @@ stream; the guest protocol and port-forwarding frames do not change.
 Data-plane calls share a handle's relay connection: after a call the SDK
 keeps the connection for 30 seconds (`WithKeepAlive` tunes the window; 0
 dials per call) and the next call on that handle sends its request on it, so
-a busy handle pays the dial, upgrade and TLS handshake once. A kept
-connection counts as live for `idle_hibernate_seconds` until it closes, so
-keep the window below that setting; `Close` and `Hibernate` drop it at once.
-Long-lived streams (`Watch`, `OpenPty`, `DialPort`, an LSP session) take a
-connection of their own, and a guest whose silkd predates the back-to-back
-protocol gets one connection per call as before.
+a busy handle pays the dial, upgrade and TLS handshake once. A handle parks
+at most 8 idle connections. A kept connection counts as live for
+`idle_hibernate_seconds` until it closes, so keep the window below that
+setting; `Close` and `Hibernate` drop it at once. Long-lived streams
+(`Watch`, `OpenPty`, `DialPort`, an LSP session) take a connection of their
+own. Reuse needs a Unix client (the liveness peek is a `MSG_PEEK`); on
+Windows, and against a guest whose silkd predates the back-to-back protocol,
+every call dials as before.
 
 An explicit scheme in an owner, redirect, peer, or `Attach` address wins;
 a bare address inherits the entry client's scheme. Trust settings are shared
@@ -409,8 +411,9 @@ url, err := sb.PreviewURL(ctx, 8080, 30*time.Minute)
 ```
 
 Mints a signed, shareable URL serving the guest HTTP port from a plain
-browser via the node's preview listener. The TTL is clamped to the claim's
-remaining lease, and the URL dies with the sandbox — release or reap
+browser via the node's preview listener. Minting is resource-creating and
+takes the api token, like fork and checkpoint. The TTL is clamped to the
+claim's remaining lease, and the URL dies with the sandbox — release or reap
 revokes it with no extra state. Answers 501 when the node has no
 `preview_listen` configured; see [deploy](deploy.md#preview-urls).
 
@@ -489,6 +492,7 @@ Idle sessions are reaped guest-side after 30 minutes.
 ```go
 err  := sb.WriteFile(ctx, "/work/a.txt", data, nil)   // atomic; *uint32 mode optional
 data, err := sb.ReadFile(ctx, "/work/a.txt")
+err  = sb.ReadFileTo(ctx, "/work/big.bin", w)          // streams into an io.Writer
 ents, err := sb.ListDir(ctx, "/work")                  // []wire.DirEntry{Name,Kind,Size}
 info, err := sb.Stat(ctx, "/work/a.txt")               // wire.FileInfo{Kind,Size,Mode,MtimeEpochSecs}
 err  = sb.Mkdir(ctx, "/work/sub", true)                // parents

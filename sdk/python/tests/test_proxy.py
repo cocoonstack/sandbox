@@ -5,7 +5,7 @@ can't see it, only running the accept loop does."""
 import socket
 import time
 
-from cocoonsandbox import Client, Sandbox
+from conftest import sandbox_at
 
 
 class FakePortConn:
@@ -19,8 +19,8 @@ class FakePortConn:
         self._inbox.append(b"echo:" + data)
 
     def recv(self) -> bytes:
-        deadline = time.time() + 5
-        while not self._inbox and not self._closed and time.time() < deadline:
+        deadline = time.monotonic() + 5
+        while not self._inbox and not self._closed and time.monotonic() < deadline:
             time.sleep(0.01)
         return self._inbox.pop(0) if self._inbox else b""
 
@@ -54,7 +54,7 @@ class ClosedPortConn:
 
 
 def test_proxy_port_accepts_and_pipes(monkeypatch):
-    sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
+    sb = sandbox_at("127.0.0.1:1")
     monkeypatch.setattr(sb, "dial_port", lambda port: FakePortConn())
 
     listener = sb.proxy_port("127.0.0.1:0", 8080)
@@ -62,8 +62,8 @@ def test_proxy_port_accepts_and_pipes(monkeypatch):
         c = socket.create_connection(listener.getsockname(), timeout=5)
         c.sendall(b"hello")
         c.settimeout(5)
-        got, deadline = b"", time.time() + 5
-        while b"echo:hello" not in got and time.time() < deadline:
+        got, deadline = b"", time.monotonic() + 5
+        while b"echo:hello" not in got and time.monotonic() < deadline:
             chunk = c.recv(256)
             if not chunk:
                 break
@@ -75,7 +75,7 @@ def test_proxy_port_accepts_and_pipes(monkeypatch):
 
 
 def test_proxy_port_ends_the_local_connection_when_the_guest_port_is_closed(monkeypatch):
-    sb = Sandbox(client=Client("127.0.0.1:1"), id="sb_1", token="tok", owner="127.0.0.1:1")
+    sb = sandbox_at("127.0.0.1:1")
     monkeypatch.setattr(sb, "dial_port", lambda port: ClosedPortConn())
 
     listener = sb.proxy_port("127.0.0.1:0", 8080)

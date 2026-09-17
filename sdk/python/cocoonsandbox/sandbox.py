@@ -10,8 +10,8 @@ from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, cast
 
 from .checkpoint import Checkpoint
-from .conn import Conn, ConnPool, _Closeable
-from .errors import APIError, ExitError, ProtocolError, SandboxError, SilkdError
+from .conn import Conn, ConnPool, _Closeable, remaining_timeout
+from .errors import APIError, ExitError, ProtocolError, SandboxError, SandboxTimeout, SilkdError, require_field
 from .frames import BULK_CHUNK, FS_CHUNK, KEEP_ALIVE_PROTO
 from .template import Template
 
@@ -102,7 +102,7 @@ class Sandbox:
             conn = self._connect(deadline)
         except (ProtocolError, TimeoutError):
             if deadline is not None and time.monotonic() >= deadline:
-                raise TimeoutError(f"command did not finish within {timeout}s") from None
+                raise SandboxTimeout(f"command did not finish within {timeout}s") from None
             raise
         with self._lease(conn):
             watchdog = _arm_watchdog(conn, deadline, expired)
@@ -125,7 +125,7 @@ class Sandbox:
                 code = _pump_stdio(conn, on_stdout, on_stderr)
             except (ProtocolError, OSError):
                 if expired.is_set():
-                    raise TimeoutError(f"command did not finish within {timeout}s") from None
+                    raise SandboxTimeout(f"command did not finish within {timeout}s") from None
                 raise
             except SilkdError:
                 if pump is not None:
@@ -136,8 +136,8 @@ class Sandbox:
                     watchdog.cancel()
             if pump is not None:
                 pump.join()  # the pump's frames must not land on the next RPC
-        if code is None:
-            raise ProtocolError("exec stream ended without an exit frame")
+            if code is None:
+                raise ProtocolError("exec stream ended without an exit frame")
         return code
 
     def spawn(self, *argv: str, cwd: str = "", env: dict[str, str] | None = None, user: str = "") -> int:
@@ -145,11 +145,11 @@ class Sandbox:
         started = self._call(
             "exec", "started", argv=list(argv), cwd=cwd or None, env=env, user=user or None, detach=True
         )
-        return cast(int, started["pid"])
+        return cast(int, _need(started, "pid"))
 
     def ps(self) -> list[dict[str, Any]]:
         """Lists tracked processes: {pid, argv, detached, state, exit_code?, started_at_epoch_secs}."""
-        return cast(list[dict[str, Any]], self._call("ps", "procs")["procs"])
+        return cast(list[dict[str, Any]], _need(self._call("ps", "procs"), "procs"))
 
     def kill(self, pid: int, signal: int | None = None) -> None:
         """Signals a tracked process (default SIGKILL); killing one that already exited is a no-op success."""
@@ -196,7 +196,7 @@ class Sandbox:
 
     def stat(self, path: str) -> dict[str, Any]:
         """Returns {kind, size, mode, mtime_epoch_secs} for path."""
-        return cast(dict[str, Any], self._call("fs_stat", "stat", path=path)["info"])
+        return cast(dict[str, Any], _need(self._call("fs_stat", "stat", path=path), "info"))
 
     def mkdir(self, path: str, parents: bool = False) -> None:
         self._done_rpc("fs_mkdir", path=path, parents=parents or None)
@@ -280,7 +280,7 @@ class Sandbox:
     def session(self, cwd: str = "", env: dict[str, str] | None = None) -> Session:
         """Creates a persistent shell: cd/export/aliases survive across exec calls routed into it."""
         created = self._call("session_create", "session_created", cwd=cwd or None, env=env)
-        return Session(self, created["id"])
+        return Session(self, _need(created, "id"))
 
     def sessions(self) -> list[str]:
         return self._call("session_list", "sessions").get("sessions") or []
@@ -291,7 +291,7 @@ class Sandbox:
         if ttl_seconds:
             body["ttl_seconds"] = ttl_seconds
         reply = self._client._post_json(self.owner, f"/v1/sandboxes/{self.id}/fork", body, "fork")
-        return [self._client._handle_from(self.owner, child) for child in reply.get("children") or []]
+        return [self._client._handle_from(self.owner, child, "fork") for child in reply.get("children") or []]
 
     def hibernate(self) -> None:
         """Snapshots and stops the VM; the next guest call restores its state."""
@@ -306,14 +306,14 @@ class Sandbox:
         if name:
             body["name"] = name
         reply = self._client._post_json(self.owner, f"/v1/sandboxes/{self.id}/checkpoint", body, "checkpoint")
-        return Checkpoint(self._client, self.owner, reply["checkpoint"])
+        return Checkpoint(self._client, self.owner, require_field(reply, "checkpoint", "checkpoint"))
 
     def promote(self, template: str) -> Template:
         """Publishes a claimable template and returns an owner-bound handle."""
         reply = self._client._post_json(
             self.owner, f"/v1/sandboxes/{self.id}/promote", {"token": self.token, "template": template}, "promote"
         )
-        key = reply["key"]
+        key = require_field(reply, "key", "promote")
         return Template(
             self._client,
             self.owner,
@@ -326,7 +326,7 @@ class Sandbox:
     def start_lsp(self, language: str, root: str = "") -> Lsp:
         """Starts the registered language server; missing servers raise not_found."""
         started = self._call("lsp_start", "lsp_started", language=language, root=root or None)
-        return Lsp(self, started["server_id"])
+        return Lsp(self, _need(started, "server_id"))
 
     def open_pty(
         self, cols: int = 80, rows: int = 24, cwd: str = "", env: dict[str, str] | None = None, user: str = ""
@@ -335,7 +335,7 @@ class Sandbox:
         conn, started = self._open_stream(
             "pty_open", expect="started", cols=cols, rows=rows, cwd=cwd or None, env=env, user=user or None
         )
-        return Pty(self, conn, started["pid"])
+        return Pty(self, conn, _need(started, "pid"))
 
     def proxy_port(self, local_addr: str, port: int) -> socket.socket:
         """Serves a guest port on a local socket; closing the listener stops new connections."""
@@ -350,7 +350,7 @@ class Sandbox:
         if ttl_seconds:
             body["ttl_seconds"] = ttl_seconds
         reply = self._client._post_json(self.owner, f"/v1/sandboxes/{self.id}/preview", body, "preview")
-        return cast(str, reply["url"])
+        return cast(str, require_field(reply, "url", "preview"))
 
     def dial_port(self, port: int) -> PortConn:
         """Opens a byte stream to 127.0.0.1:port inside the guest."""
@@ -380,9 +380,11 @@ class Sandbox:
         if self._proto or self._client.keep_alive <= 0:
             return conn
         try:
+            conn.settimeout(remaining_timeout(self._client.timeout, deadline, "agent probe"))
             conn.send("info")
             proto = int(_expect(conn, "info").get("proto") or 1)
-        except Exception:
+            conn.settimeout(None)
+        except BaseException:
             conn.close()
             raise
         self._proto = proto
@@ -417,7 +419,7 @@ class Sandbox:
         try:
             conn.send(op, **fields)
             frame = _expect(conn, expect)
-        except Exception:
+        except BaseException:
             conn.close()
             raise
         return conn, frame
@@ -498,7 +500,8 @@ class Session(_Closeable):
         return self._sandbox.exec(*argv, session=self.id)
 
     def close(self) -> None:
-        self._sandbox._done_rpc("session_rm", id=self.id)
+        """Ends the shell; a session already gone is not an error."""
+        _rpc_ignoring_not_found(self._sandbox, "session_rm", id=self.id)
 
 
 class Watcher(_Closeable):
@@ -506,6 +509,7 @@ class Watcher(_Closeable):
 
     def __init__(self, conn: Conn) -> None:
         self._conn = conn
+        self._closed = False
         self.error: Exception | None = None
 
     def __iter__(self) -> Iterator[dict[str, Any]]:
@@ -513,12 +517,14 @@ class Watcher(_Closeable):
             try:
                 frame = self._conn.recv()
             except ProtocolError as e:
-                self.error = e
+                if not self._closed:
+                    self.error = e
                 return
             if frame["type"] == "event":
                 yield frame
 
     def close(self) -> None:
+        self._closed = True
         self._conn.close()
 
 
@@ -530,17 +536,21 @@ class Pty(_Closeable):
         self._conn = conn
         self.pid = pid
         self.exit_code: int | None = None
+        self._eof = False
 
     def read(self) -> bytes:
         """The next output chunk; b'' once the shell exits, after which exit_code holds the shell's status."""
+        if self._eof:
+            return b""
         frame = self._conn.recv()
         if frame["type"] == "exit":
             self.exit_code = frame.get("code")
+            self._eof = True
             return b""
         return frame.get("data") or b""
 
     def write(self, data: bytes) -> None:
-        self._conn.send("stdin", data=data)
+        _send_chunks(self._conn, data, op="stdin")
 
     def resize(self, cols: int, rows: int) -> None:
         self._sandbox._done_rpc("pty_resize", pid=self.pid, cols=cols, rows=rows)
@@ -557,13 +567,13 @@ class Lsp(_Closeable):
         self.server_id = server_id
 
     def request(self) -> PortConn:
-        """Opens the JSON-RPC byte stream: writes go to the server's stdin, recv returns its stdout."""
+        """Opens the one JSON-RPC stream a server serves; its end reaps the server, so start a new one to work again."""
         conn, _ = self._sandbox._open_stream("lsp_request", server_id=self.server_id)
         return PortConn(conn)
 
     def stop(self) -> None:
-        """Kills the language server."""
-        self._sandbox._done_rpc("lsp_stop", server_id=self.server_id)
+        """Kills the language server early; one already reaped is not an error."""
+        _rpc_ignoring_not_found(self._sandbox, "lsp_stop", server_id=self.server_id)
 
     close = stop
 
@@ -642,6 +652,20 @@ def _expect(conn: Conn, frame_type: str) -> dict[str, Any]:
     if frame["type"] != frame_type:
         raise ProtocolError(f"expected {frame_type}, got {frame['type']}")
     return frame
+
+
+def _need(frame: dict[str, Any], key: str) -> Any:
+    if key not in frame:
+        raise ProtocolError(f"{frame['type']} frame without {key}")
+    return frame[key]
+
+
+def _rpc_ignoring_not_found(sandbox: Sandbox, op: str, **fields: object) -> None:
+    try:
+        sandbox._done_rpc(op, **fields)
+    except SilkdError as exc:
+        if exc.kind != "not_found":
+            raise
 
 
 def _drain_data(conn: Conn) -> bytes:

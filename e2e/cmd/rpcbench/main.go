@@ -145,7 +145,6 @@ func run(addr, token, template, caCert string, n int) error {
 	return nil
 }
 
-// sampleDial times one RPC on a freshly dialed and upgraded connection.
 func sampleDial(dial func() (net.Conn, error)) (time.Duration, error) {
 	start := time.Now()
 	conn, err := dial()
@@ -167,7 +166,6 @@ func sampleKept(ctx context.Context, sb *sandbox.Sandbox) (time.Duration, error)
 	return time.Since(start), nil
 }
 
-// statRPC drives one hand-dialed connection through one RPC and closes it.
 func statRPC(conn net.Conn) error {
 	defer func() { _ = conn.Close() }()
 	sc := silkd.NewConn(conn)

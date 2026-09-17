@@ -118,24 +118,35 @@ func TestTemplateNewVolumeClaimFollowsRedirect(t *testing.T) {
 }
 
 func TestClientVolumes(t *testing.T) {
-	want := []VolumeInfo{{Name: "imagenet", DefaultMount: "/volumes/imagenet", SizeBytes: 42, Available: true, Nodes: 3}}
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/v1/volumes" {
-			t.Errorf("request = %s %s", r.Method, r.URL.Path)
-		}
-		if got := r.Header.Get("Authorization"); got != "Bearer sekret" {
-			t.Errorf("authorization = %q", got)
-		}
-		_ = json.NewEncoder(w).Encode(volumeListResponse{Volumes: want})
-	}))
-	t.Cleanup(ts.Close)
-
-	got, err := testClient(t, ts, WithAPIToken("sekret")).Volumes(t.Context())
-	if err != nil {
-		t.Fatalf("Volumes: %v", err)
+	imagenet := VolumeInfo{Name: "imagenet", DefaultMount: "/volumes/imagenet", SizeBytes: 42, Available: true, Nodes: 3}
+	tests := []struct {
+		name string
+		want []VolumeInfo
+	}{
+		{"read-only catalog", []VolumeInfo{imagenet}},
+		{"writable entry decodes", []VolumeInfo{imagenet, {Name: "scratch", DefaultMount: "/volumes/scratch", SizeBytes: 7, Available: true, Nodes: 1, Writable: true}}},
 	}
-	if !slices.Equal(got, want) {
-		t.Errorf("volumes = %+v, want %+v", got, want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/v1/volumes" {
+					t.Errorf("request = %s %s", r.Method, r.URL.Path)
+				}
+				if got := r.Header.Get("Authorization"); got != "Bearer sekret" {
+					t.Errorf("authorization = %q", got)
+				}
+				_ = json.NewEncoder(w).Encode(volumeListResponse{Volumes: tt.want})
+			}))
+			t.Cleanup(ts.Close)
+
+			got, err := testClient(t, ts, WithAPIToken("sekret")).Volumes(t.Context())
+			if err != nil {
+				t.Fatalf("Volumes: %v", err)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("volumes = %+v, want %+v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -302,24 +313,5 @@ func TestSandboxVolumesEchoMode(t *testing.T) {
 	}
 	if !slices.Equal(sb.Volumes, want) {
 		t.Errorf("volumes = %+v, want %+v", sb.Volumes, want)
-	}
-}
-
-func TestClientVolumesDecodesWritable(t *testing.T) {
-	want := []VolumeInfo{
-		{Name: "imagenet", DefaultMount: "/volumes/imagenet", SizeBytes: 42, Available: true, Nodes: 3},
-		{Name: "scratch", DefaultMount: "/volumes/scratch", SizeBytes: 7, Available: true, Nodes: 1, Writable: true},
-	}
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(volumeListResponse{Volumes: want})
-	}))
-	t.Cleanup(ts.Close)
-
-	got, err := testClient(t, ts).Volumes(t.Context())
-	if err != nil {
-		t.Fatalf("Volumes: %v", err)
-	}
-	if !slices.Equal(got, want) {
-		t.Errorf("volumes = %+v, want %+v", got, want)
 	}
 }

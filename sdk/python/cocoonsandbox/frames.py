@@ -12,12 +12,15 @@ PROTO_VERSION = 1
 KEEP_ALIVE_PROTO = 2
 MAX_FRAME = 8 * 1024 * 1024
 FS_CHUNK = 256 * 1024
-# bulk streams chunk larger than silkd's FS_CHUNK: fewer frames per byte, still under MAX_FRAME after base64.
+# tar and port streams chunk at 1 MiB: fewer frames per byte, still under MAX_FRAME after base64
 BULK_CHUNK = 1 << 20
 
 
 def encode_request(op: str, **fields: object) -> bytes:
     """Encodes one request, omitting None fields and base64-encoding byte values."""
+    if len(fields) == 1 and isinstance(data := fields.get("data"), (bytes, bytearray, memoryview)):
+        # base64 needs no JSON escaping, so a bare data frame renders without a str round trip
+        return b'{"v":%d,"op":"%s","data":"%s"}\n' % (PROTO_VERSION, op.encode(), base64.b64encode(data))
     frame = {"v": PROTO_VERSION, "op": op}
     for key, value in fields.items():
         if value is None:

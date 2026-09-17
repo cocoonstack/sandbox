@@ -20,7 +20,7 @@ type usageEvent struct {
 	KeyHash   string    `json:"key,omitempty"`        // claim only
 	Tenant    string    `json:"tenant,omitempty"`     // claim only
 	Volumes   []string  `json:"volumes,omitempty"`    // claim only
-	VolumesRW []string  `json:"volumes_rw,omitempty"` // claim only: the write-enabled subset
+	VolumesRW []string  `json:"volumes_rw,omitempty"` // claim only
 	Children  []string  `json:"children,omitempty"`   // fork only
 	Reference string    `json:"ref,omitempty"`        // promote: template; checkpoint: ckpt id
 }
@@ -61,12 +61,6 @@ func (j *journal) append(v any) error {
 	n, err := j.f.Write(line)
 	j.size += int64(n)
 	return errors.Join(rotateErr, err)
-}
-
-func (j *journal) close() error {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	return j.f.Close()
 }
 
 // rotate moves the live file to .1 and reopens; the old descriptor closes last.
