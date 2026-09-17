@@ -19,12 +19,13 @@ import (
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	ctx := context.Background()
 	if err := log.SetupLog(ctx, &coretypes.ServerLogConfig{Level: "error"}, ""); err != nil {
 		fmt.Fprintln(os.Stderr, "setup log:", err)
 		os.Exit(1)
 	}
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	addr := flag.String("addr", cmp.Or(os.Getenv("SANDBOXD_ADDR"), "127.0.0.1:7777"), "sandboxd address")
 	token := flag.String("token", os.Getenv("SANDBOXD_TOKEN"), "node api token")
 	template := flag.String("template", cmp.Or(os.Getenv("SANDBOXD_TEMPLATE"), "rt:24.04"), "default template ref")
