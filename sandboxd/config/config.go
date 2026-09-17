@@ -325,6 +325,16 @@ func (c *Config) validate() error {
 	if c.PreviewListen != "" && c.PreviewSecret == "" {
 		return fmt.Errorf("preview_listen needs preview_secret")
 	}
+	if c.PreviewListen != "" && !namesHost(c.PreviewAdvertise) {
+		return fmt.Errorf("preview_advertise %q is minted into every preview URL and must name a routable host", c.PreviewAdvertise)
+	}
+	pools := make(map[types.PoolKey]struct{}, len(c.Pools))
+	for _, p := range c.Pools {
+		if _, ok := pools[p.PoolKey]; ok {
+			return fmt.Errorf("duplicate pool %s %s/%s", p.Template, p.Net, p.Size)
+		}
+		pools[p.PoolKey] = struct{}{}
+	}
 	if err := validateArchiveWindow(c.IdleHibernateSeconds, c.ArchiveAfterSeconds, c.ArchiveDeleteAfterSeconds); err != nil {
 		return err
 	}
@@ -369,6 +379,7 @@ func (c *Config) validate() error {
 
 func (c *Config) validateVolumes() error {
 	names := make(map[string]struct{}, len(c.Volumes))
+	paths := make(map[string]string, len(c.Volumes))
 	tenants := make(map[string]struct{}, len(c.Tenants))
 	for _, tenant := range c.Tenants {
 		tenants[tenant.Name] = struct{}{}
@@ -384,6 +395,10 @@ func (c *Config) validateVolumes() error {
 		if !filepath.IsAbs(volume.Path) {
 			return fmt.Errorf("volume %q path must be absolute", volume.Name)
 		}
+		if other, ok := paths[filepath.Clean(volume.Path)]; ok {
+			return fmt.Errorf("volume %q shares its path with volume %q: admission is keyed by name", volume.Name, other)
+		}
+		paths[filepath.Clean(volume.Path)] = volume.Name
 		if !types.ValidDirectIO(volume.DirectIO) {
 			return fmt.Errorf("volume %q directio must be on, off, or auto, got %q", volume.Name, volume.DirectIO)
 		}
@@ -439,6 +454,21 @@ func (c *Config) validateMesh() error {
 		return fmt.Errorf("advertise_addr %q is gossiped to peers and must name a routable host", c.AdvertiseAddr)
 	}
 	return nil
+}
+
+// namesHost reports whether addr, a URL or host:port, carries a host a client could dial.
+func namesHost(addr string) bool {
+	if strings.Contains(addr, "://") {
+		u, err := url.Parse(addr)
+		return err == nil && u.Hostname() != "" && !isUnspecifiedHost(u.Hostname())
+	}
+	host, _, err := net.SplitHostPort(addr)
+	return err == nil && host != "" && !isUnspecifiedHost(host)
+}
+
+func isUnspecifiedHost(host string) bool {
+	ip, _ := netip.ParseAddr(host)
+	return ip.IsUnspecified()
 }
 
 func (c *Config) validateEgress(secrets map[string]struct{}) error {
