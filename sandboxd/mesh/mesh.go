@@ -322,16 +322,6 @@ func (m *Mesh) merge(states []NodeState) {
 	}
 }
 
-func short(digest string) string {
-	return digest[:min(len(digest), 12)]
-}
-
-func containsAll(have, need []string) bool {
-	return len(need) > 0 && !slices.ContainsFunc(need, func(name string) bool {
-		return !slices.Contains(have, name)
-	})
-}
-
 var _ memberlist.Delegate = (*delegate)(nil)
 
 type delegate Mesh
@@ -360,4 +350,14 @@ func (e *eventDelegate) NotifyJoin(n *memberlist.Node) { (*Mesh)(e).admit(n.Name
 func (e *eventDelegate) NotifyUpdate(*memberlist.Node) {}
 func (e *eventDelegate) NotifyLeave(n *memberlist.Node) {
 	(*Mesh)(e).forget(n.Name)
+}
+
+func short(digest string) string {
+	return digest[:min(len(digest), 12)]
+}
+
+func containsAll(have, need []string) bool {
+	return len(need) > 0 && !slices.ContainsFunc(need, func(name string) bool {
+		return !slices.Contains(have, name)
+	})
 }

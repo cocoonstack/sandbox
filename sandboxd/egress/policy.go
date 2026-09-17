@@ -148,13 +148,13 @@ type Evaluator interface {
 	ServesSocks() bool
 }
 
+type composite struct {
+	pool, tenant Policy
+}
+
 // Compose intersects a pool and a tenant policy; the pool rule wins on a double allow.
 func Compose(pool, tenant Policy) Evaluator {
 	return composite{pool: pool, tenant: tenant}
-}
-
-type composite struct {
-	pool, tenant Policy
 }
 
 func (c composite) Eval(host, method string, port uint16) (Rule, Decision) {

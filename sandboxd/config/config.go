@@ -178,27 +178,20 @@ type Config struct {
 	DataDir   string `json:"data_dir"`
 	CocoonBin string `json:"cocoon_bin"`
 
-	AdvertiseAddr   string `json:"advertise_addr,omitempty"`
-	ClientAdvertise string `json:"client_advertise,omitempty"`
-
-	Bridges []string `json:"bridges,omitempty"`
-
-	Networks []string `json:"networks,omitempty"`
+	AdvertiseAddr   string   `json:"advertise_addr,omitempty"`
+	ClientAdvertise string   `json:"client_advertise,omitempty"`
+	Bridges         []string `json:"bridges,omitempty"`
+	Networks        []string `json:"networks,omitempty"`
 
 	RestoreMode types.RestoreMode `json:"restore_mode,omitempty"`
+	NoDirectIO  bool              `json:"no_direct_io,omitzero"`
+	NoBalloon   bool              `json:"no_balloon,omitzero"`
 
-	NoDirectIO bool `json:"no_direct_io,omitzero"`
+	APIToken string              `json:"api_token,omitempty"` //nolint:gosec // config field, not a hardcoded credential
+	Tenants  []TenantSpec        `json:"tenants,omitempty"`
+	Secrets  []egress.SecretSpec `json:"secrets,omitempty"`
 
-	NoBalloon bool `json:"no_balloon,omitzero"`
-
-	APIToken string `json:"api_token,omitempty"` //nolint:gosec // config field, not a hardcoded credential
-
-	Tenants []TenantSpec `json:"tenants,omitempty"`
-
-	Secrets []egress.SecretSpec `json:"secrets,omitempty"`
-
-	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitzero"`
-
+	IdleHibernateSeconds      int `json:"idle_hibernate_seconds,omitzero"`
 	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitzero"`
 	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitzero"`
 
@@ -206,33 +199,23 @@ type Config struct {
 	PreviewSecret    string `json:"preview_secret,omitempty"` //nolint:gosec // config field, not a hardcoded credential
 	PreviewAdvertise string `json:"preview_advertise,omitempty"`
 
-	CheckpointDir string `json:"checkpoint_dir,omitempty"`
+	CheckpointDir      string       `json:"checkpoint_dir,omitempty"`
+	CheckpointStore    *StoreConfig `json:"checkpoint_store,omitempty"`
+	CheckpointPeerHeal bool         `json:"checkpoint_peer_heal,omitzero"`
+	CheckpointTTLHours int          `json:"checkpoint_ttl_hours,omitzero"`
 
-	CheckpointStore *StoreConfig `json:"checkpoint_store,omitempty"`
+	EgressInternalAllow []string        `json:"egress_internal_allow,omitempty"`
+	EgressCA            *EgressCAConfig `json:"egress_ca,omitempty"`
 
-	CheckpointPeerHeal bool `json:"checkpoint_peer_heal,omitzero"`
-
-	EgressInternalAllow []string `json:"egress_internal_allow,omitempty"`
-
-	CheckpointTTLHours int `json:"checkpoint_ttl_hours,omitzero"`
-
-	MaxClaims int `json:"max_claims,omitzero"`
-
-	AuditLog bool `json:"audit_log,omitzero"`
-
-	MaxForkCount int `json:"max_fork_count,omitzero"`
+	MaxClaims           int  `json:"max_claims,omitzero"`
+	MaxForkCount        int  `json:"max_fork_count,omitzero"`
+	RefillConcurrency   int  `json:"refill_concurrency,omitzero"`
+	ReleaseDelaySeconds int  `json:"release_delay_seconds,omitzero"`
+	AuditLog            bool `json:"audit_log,omitzero"`
 
 	Volumes []VolumeSpec `json:"volumes,omitempty"`
-
-	RefillConcurrency int `json:"refill_concurrency,omitzero"`
-
-	ReleaseDelaySeconds int `json:"release_delay_seconds,omitzero"`
-
-	Mesh *MeshConfig `json:"mesh,omitempty"`
-
-	EgressCA *EgressCAConfig `json:"egress_ca,omitempty"`
-
-	Pools []PoolSpec `json:"pools"`
+	Mesh    *MeshConfig  `json:"mesh,omitempty"`
+	Pools   []PoolSpec   `json:"pools"`
 }
 
 // HasEgress reports whether the node can attach egress-lane VMs.
@@ -456,21 +439,6 @@ func (c *Config) validateMesh() error {
 	return nil
 }
 
-// namesHost reports whether addr, a URL or host:port, carries a host a client could dial.
-func namesHost(addr string) bool {
-	if strings.Contains(addr, "://") {
-		u, err := url.Parse(addr)
-		return err == nil && u.Hostname() != "" && !isUnspecifiedHost(u.Hostname())
-	}
-	host, _, err := net.SplitHostPort(addr)
-	return err == nil && host != "" && !isUnspecifiedHost(host)
-}
-
-func isUnspecifiedHost(host string) bool {
-	ip, _ := netip.ParseAddr(host)
-	return ip.IsUnspecified()
-}
-
 func (c *Config) validateEgress(secrets map[string]struct{}) error {
 	for _, p := range c.Pools {
 		if err := p.Validate(); err != nil {
@@ -625,4 +593,19 @@ func validateShards(names []string, field, kind string) error {
 		seen[n] = struct{}{}
 	}
 	return nil
+}
+
+// namesHost reports whether addr, a URL or host:port, carries a host a client could dial.
+func namesHost(addr string) bool {
+	if strings.Contains(addr, "://") {
+		u, err := url.Parse(addr)
+		return err == nil && u.Hostname() != "" && !isUnspecifiedHost(u.Hostname())
+	}
+	host, _, err := net.SplitHostPort(addr)
+	return err == nil && host != "" && !isUnspecifiedHost(host)
+}
+
+func isUnspecifiedHost(host string) bool {
+	ip, _ := netip.ParseAddr(host)
+	return ip.IsUnspecified()
 }

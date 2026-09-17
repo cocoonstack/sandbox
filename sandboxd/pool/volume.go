@@ -24,16 +24,6 @@ const (
 	volumeQuiesceMax = 10 * time.Second
 )
 
-type catalogVolume struct {
-	disk     engine.VolumeSpec
-	tenants  []string
-	writable bool
-}
-
-func (v catalogVolume) allowed(tenant string) bool {
-	return tenant == "" || len(v.tenants) == 0 || slices.Contains(v.tenants, tenant)
-}
-
 // volumeHolders is one name's live admission state: a writer excludes every other claim.
 type volumeHolders struct {
 	writers int
@@ -49,6 +39,16 @@ type resolvedVolume struct {
 type volumeTeardown struct {
 	holds  []types.Volume
 	clears []string
+}
+
+type catalogVolume struct {
+	disk     engine.VolumeSpec
+	tenants  []string
+	writable bool
+}
+
+func (v catalogVolume) allowed(tenant string) bool {
+	return tenant == "" || len(v.tenants) == 0 || slices.Contains(v.tenants, tenant)
 }
 
 // Volumes reports the caller-visible fleet catalog; an empty tenant means root.

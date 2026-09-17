@@ -705,6 +705,13 @@ func vmName(key types.PoolKey) string {
 	return vmPrefix + key.Hash() + "-" + randHex(6)
 }
 
+// lockedVMName reads the VM name under the lock that archive() clears it under.
+func lockedVMName(sb *types.Sandbox) string {
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	return sb.VMName
+}
+
 func randHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b) // never fails per crypto/rand contract

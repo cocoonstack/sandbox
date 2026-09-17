@@ -14,6 +14,16 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
+type previewRequest struct {
+	Token      string `json:"token"`
+	Port       uint16 `json:"port"`
+	TTLSeconds int    `json:"ttl_seconds,omitzero"`
+}
+
+type previewResponse struct {
+	URL string `json:"url"`
+}
+
 var _ net.Conn = (*PortConn)(nil)
 
 // PortConn is a net.Conn to a TCP port inside the sandbox, relayed over the
@@ -163,16 +173,6 @@ func closeWrite(conn net.Conn) {
 	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
 		_ = cw.CloseWrite()
 	}
-}
-
-type previewRequest struct {
-	Token      string `json:"token"`
-	Port       uint16 `json:"port"`
-	TTLSeconds int    `json:"ttl_seconds,omitzero"`
-}
-
-type previewResponse struct {
-	URL string `json:"url"`
 }
 
 type portAddr string

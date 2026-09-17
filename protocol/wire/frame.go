@@ -676,14 +676,6 @@ func DecodeRequest(line []byte) (Request, error) {
 	return dec(line)
 }
 
-// NewFrameScanner wraps r for newline-delimited frames capped at MaxFrame.
-// No pre-sized buffer: bulk frames outgrow any fixed start anyway.
-func NewFrameScanner(r io.Reader) *bufio.Scanner {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(nil, MaxFrame)
-	return sc
-}
-
 // DecodeResponse parses one frame into its type's concrete Go type. Byte
 // fields are freshly allocated per frame, so callers may retain them.
 func DecodeResponse(line []byte) (Response, error) {
@@ -696,6 +688,14 @@ func DecodeResponse(line []byte) (Response, error) {
 		return nil, fmt.Errorf("unknown response type %q", typ)
 	}
 	return dec(line)
+}
+
+// NewFrameScanner wraps r for newline-delimited frames capped at MaxFrame.
+// No pre-sized buffer: bulk frames outgrow any fixed start anyway.
+func NewFrameScanner(r io.Reader) *bufio.Scanner {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(nil, MaxFrame)
+	return sc
 }
 
 // AppendBulkRequest renders a data-carrying request frame —

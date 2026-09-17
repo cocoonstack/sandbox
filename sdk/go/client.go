@@ -33,18 +33,6 @@ type claimEncoder func(noRedirect, requirePromoted bool) ([]byte, error)
 
 type claimPoster func(addr string, body []byte) (claimResponse, error)
 
-type claimResponse struct {
-	ID              string    `json:"id"`
-	Token           string    `json:"token"`
-	Deadline        time.Time `json:"deadline"`
-	OwnerAddr       string    `json:"owner_addr,omitempty"`
-	FromCheckpoint  string    `json:"from_checkpoint,omitempty"`
-	TemplateDigest  string    `json:"template_digest,omitempty"`
-	Volumes         []Volume  `json:"volumes,omitempty"`
-	Redirect        []string  `json:"redirect,omitempty"`
-	RequirePromoted bool      `json:"require_promoted,omitzero"`
-}
-
 type volumeListResponse struct {
 	Volumes []VolumeInfo `json:"volumes"`
 }
@@ -120,6 +108,18 @@ func (r claimRequest) validateVolumes() error {
 		}
 	}
 	return nil
+}
+
+type claimResponse struct {
+	ID              string    `json:"id"`
+	Token           string    `json:"token"`
+	Deadline        time.Time `json:"deadline"`
+	OwnerAddr       string    `json:"owner_addr,omitempty"`
+	FromCheckpoint  string    `json:"from_checkpoint,omitempty"`
+	TemplateDigest  string    `json:"template_digest,omitempty"`
+	Volumes         []Volume  `json:"volumes,omitempty"`
+	Redirect        []string  `json:"redirect,omitempty"`
+	RequirePromoted bool      `json:"require_promoted,omitzero"`
 }
 
 // Client talks to one sandboxd node.

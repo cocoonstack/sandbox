@@ -128,6 +128,11 @@ type InfoResponse struct {
 	AtCapacityReason string          `json:"at_capacity_reason,omitempty"`
 }
 
+// SandboxListResponse is the wire reply of GET /v1/sandboxes.
+type SandboxListResponse struct {
+	Sandboxes []pool.SandboxSummary `json:"sandboxes"`
+}
+
 // PoolUpdateRequest is the wire body of PUT /v1/pools; omitted pools are drained.
 type PoolUpdateRequest struct {
 	Pools []config.PoolSpec `json:"pools"`
@@ -358,6 +363,11 @@ func (s *Server) handleSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, sb)
+}
+
+// handleSandboxes lists the live claims visible to the caller — never tokens.
+func (s *Server) handleSandboxes(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, SandboxListResponse{Sandboxes: s.mgr.Sandboxes(tenantFrom(r.Context()))})
 }
 
 func (s *Server) handleSandboxStats(w http.ResponseWriter, r *http.Request) {

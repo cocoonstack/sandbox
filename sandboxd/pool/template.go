@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
@@ -170,53 +169,6 @@ func (m *Manager) pooled(key types.PoolKey) bool {
 	return ok
 }
 
-// recLock takes the per-record lock and a live reference (pair with recDone); clones and wakes hold it shared so a delete or re-publish never runs under an in-flight read.
-func (m *Manager) recLock(id string) *sync.RWMutex {
-	m.recLocksMu.Lock()
-	defer m.recLocksMu.Unlock()
-	m.recRefs[id]++
-	l := m.recLocks[id]
-	if l == nil {
-		l = &sync.RWMutex{}
-		m.recLocks[id] = l
-	}
-	return l
-}
-
-// recDone releases a reference taken by recLock; call after Unlock/RUnlock, never before.
-func (m *Manager) recDone(id string) {
-	m.recLocksMu.Lock()
-	defer m.recLocksMu.Unlock()
-	m.recRefs[id]--
-	if m.recRefs[id] <= 0 {
-		delete(m.recRefs, id)
-		m.evictIfPending(id)
-	}
-}
-
-// recDoneEvict is recDone for a just-deleted record: the lock slot goes at zero references.
-func (m *Manager) recDoneEvict(id string) {
-	m.recLocksMu.Lock()
-	defer m.recLocksMu.Unlock()
-	m.recRefs[id]--
-	if m.recRefs[id] <= 0 {
-		delete(m.recRefs, id)
-		delete(m.recEvict, id)
-		delete(m.recLocks, id)
-		return
-	}
-	// a holder or waiter remains; the call that drops the last reference evicts instead
-	m.recEvict[id] = struct{}{}
-}
-
-// evictIfPending drops id's lock entry if a delete asked for eviction; callers hold recLocksMu.
-func (m *Manager) evictIfPending(id string) {
-	if _, ok := m.recEvict[id]; ok {
-		delete(m.recEvict, id)
-		delete(m.recLocks, id)
-	}
-}
-
 // checkTemplateOwner rejects publishing or deleting over another tenant's record.
 func (m *Manager) checkTemplateOwner(ctx context.Context, id, tenant string) error {
 	if tenant == "" {
@@ -234,6 +186,43 @@ func (m *Manager) checkTemplateOwner(ctx context.Context, id, tenant string) err
 		return ErrTemplateOwned
 	}
 	return nil
+}
+
+func (m *Manager) publishTemplate(ctx context.Context, snap string, key types.PoolKey, tenant string) (string, error) {
+	id := store.TemplateID(key.Hash())
+	staging, err := m.tpls.Stage(id)
+	if err != nil {
+		return "", fmt.Errorf("stage template: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(staging) }()
+	if err = m.eng.SnapshotExport(ctx, snap, filepath.Join(staging, store.ExportDir)); err != nil {
+		return "", fmt.Errorf("export template: %w", err)
+	}
+	return m.commitTemplate(ctx, staging, id, tenant)
+}
+
+func (m *Manager) commitTemplate(ctx context.Context, staging, id, tenant string) (string, error) {
+	l := m.recLock(id)
+	l.Lock()
+	defer func() { l.Unlock(); m.recDone(id) }()
+	if ownerErr := m.checkTemplateOwner(ctx, id, tenant); ownerErr != nil {
+		return "", ownerErr
+	}
+	meta, err := json.Marshal(templateRecord{ID: id, Tenant: tenant, CreatedAt: time.Now()})
+	if err != nil {
+		return "", err
+	}
+	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); err != nil {
+		return "", err
+	}
+	digest, err := m.tpls.PublishDigested(ctx, staging, id)
+	if err != nil {
+		return "", fmt.Errorf("publish template: %w", err)
+	}
+	m.tplMu.Lock()
+	m.tplSet[id] = tenant
+	m.tplMu.Unlock()
+	return digest, nil
 }
 
 type goldenResolution struct {
@@ -293,41 +282,4 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant s
 		promoted:       true,
 		unlock:         cleanup,
 	}, nil
-}
-
-func (m *Manager) publishTemplate(ctx context.Context, snap string, key types.PoolKey, tenant string) (string, error) {
-	id := store.TemplateID(key.Hash())
-	staging, err := m.tpls.Stage(id)
-	if err != nil {
-		return "", fmt.Errorf("stage template: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(staging) }()
-	if err = m.eng.SnapshotExport(ctx, snap, filepath.Join(staging, store.ExportDir)); err != nil {
-		return "", fmt.Errorf("export template: %w", err)
-	}
-	return m.commitTemplate(ctx, staging, id, tenant)
-}
-
-func (m *Manager) commitTemplate(ctx context.Context, staging, id, tenant string) (string, error) {
-	l := m.recLock(id)
-	l.Lock()
-	defer func() { l.Unlock(); m.recDone(id) }()
-	if ownerErr := m.checkTemplateOwner(ctx, id, tenant); ownerErr != nil {
-		return "", ownerErr
-	}
-	meta, err := json.Marshal(templateRecord{ID: id, Tenant: tenant, CreatedAt: time.Now()})
-	if err != nil {
-		return "", err
-	}
-	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); err != nil {
-		return "", err
-	}
-	digest, err := m.tpls.PublishDigested(ctx, staging, id)
-	if err != nil {
-		return "", fmt.Errorf("publish template: %w", err)
-	}
-	m.tplMu.Lock()
-	m.tplSet[id] = tenant
-	m.tplMu.Unlock()
-	return digest, nil
 }
