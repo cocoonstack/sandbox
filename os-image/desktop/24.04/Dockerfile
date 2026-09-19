@@ -79,13 +79,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && chmod 0755 /usr/local/bin/chromium \
     # osworld-server: pinned checkout, venv on system site-packages so the
     # apt pyatspi binding is importable; PyAutoGUI/python3-xlib pins mirror
-    # its requirements.txt.
+    # its requirements.txt, numpy the apt build system packages link against.
     && git clone -q https://github.com/xlang-ai/osworld-server.git /opt/osworld-server \
     && git -C /opt/osworld-server checkout -q "${OSWORLD_SERVER_REF}" \
     && rm -rf /opt/osworld-server/.git \
     && python3 -m venv --system-site-packages /opt/osworld-server/.venv \
     && /opt/osworld-server/.venv/bin/pip install --no-cache-dir \
-      "python3-xlib==0.15" "PyAutoGUI==0.9.54" Pillow flask fastapi uvicorn websockets numpy lxml requests \
+      "python3-xlib==0.15" "PyAutoGUI==0.9.54" "numpy==1.26.4" Pillow flask fastapi uvicorn websockets lxml requests \
     # The desktop user is uid 1000 like the OSWorld AMI (units below assume
     # /run/user/1000); the stock ubuntu user gives up the uid.
     && if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi \
