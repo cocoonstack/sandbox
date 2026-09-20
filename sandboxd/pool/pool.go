@@ -302,6 +302,7 @@ type Manager struct {
 	tpls         store.Store
 	ckptTTL      time.Duration
 	ckptSweeping atomic.Bool
+	genSweeping  atomic.Bool
 
 	// tplSet caches each template id against its owning tenant ("" = operator).
 	tplMu  sync.Mutex
@@ -594,6 +595,10 @@ func (m *Manager) WithPeerDelete(fn PeerDeleteFunc) {
 }
 
 func (m *Manager) sweepStoreGenerations(ctx context.Context) {
+	if !m.genSweeping.CompareAndSwap(false, true) {
+		return
+	}
+	defer m.genSweeping.Store(false)
 	logger := log.WithFunc("pool.sweepStoreGenerations")
 	if err := m.ckpts.SweepGenerations(); err != nil {
 		logger.Error(ctx, err, "sweep checkpoint generations")
