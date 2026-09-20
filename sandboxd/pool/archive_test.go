@@ -351,7 +351,7 @@ func TestArchiveRetentionPurge(t *testing.T) {
 	})
 }
 
-func TestArchiveWakeGrantsTheLeaseTheClaimAskedFor(t *testing.T) {
+func TestArchiveWakeRegrantsTheClaimsLease(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
 	sb, err := m.ClaimProvision(t.Context(), testKey, 2*time.Hour, "acme", "", nil)

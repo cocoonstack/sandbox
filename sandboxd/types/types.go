@@ -148,7 +148,7 @@ type Sandbox struct {
 
 	Token    string    `json:"token,omitempty"`
 	Deadline time.Time `json:"deadline,omitzero"`
-	// LeaseSeconds is the lease the claim asked for; a wake from the archive grants it again.
+	// LeaseSeconds is the lease the claim was granted; a wake from the archive grants it again.
 	LeaseSeconds int `json:"lease_seconds,omitzero"`
 	// Layer is empty on a record older than the field, which resolves against the live pool set.
 	Layer PolicyLayer `json:"policy_layer,omitempty"`

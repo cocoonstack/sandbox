@@ -481,7 +481,7 @@ func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
 	m.recordUsage(ctx, usageEvent{Event: "archive_delete", ID: id, Reference: ck, Tenant: tenant})
 }
 
-// recommit re-persists in the background until success or a newer durable write; detached.
+// recommit keeps claims.json catching up with the store: one retrier at a time writes the current state until it is durable and nothing newer is pending.
 func (m *Manager) recommit(ctx context.Context, snap claimSnapshot) {
 	if !m.recommitting.CompareAndSwap(false, true) {
 		return
