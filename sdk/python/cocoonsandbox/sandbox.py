@@ -504,13 +504,11 @@ class Sandbox:
 
     def _kill_after_cut(self, pid: int) -> None:
         deadline = time.monotonic() + _KILL_WAIT_SECONDS
-        with contextlib.suppress(SandboxError, OSError):
-            conn = self._connect(deadline)
+        with contextlib.suppress(SandboxError, OSError), self._lease(self._connect(deadline)) as conn:
             watchdog = _arm_watchdog(conn, deadline, threading.Event())
             try:
-                with self._lease(conn):
-                    conn.send("kill", pid=pid)
-                    _expect(conn, "done")
+                conn.send("kill", pid=pid)
+                _expect(conn, "done")
             finally:
                 watchdog.cancel()
 
