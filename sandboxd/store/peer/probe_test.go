@@ -10,14 +10,8 @@ import (
 )
 
 func TestOwnersReturnsOnly200(t *testing.T) {
-	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ok.Close()
-	miss := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer miss.Close()
+	ok := statusServer(t, http.StatusOK)
+	miss := statusServer(t, http.StatusNotFound)
 
 	p := &HTTPProber{Peers: func() []string { return []string{ok.URL, miss.URL} }}
 	owners := p.Owners(t.Context(), testID)
@@ -27,10 +21,7 @@ func TestOwnersReturnsOnly200(t *testing.T) {
 }
 
 func TestOwnersAllMissIsEmpty(t *testing.T) {
-	miss := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer miss.Close()
+	miss := statusServer(t, http.StatusNotFound)
 
 	p := &HTTPProber{Peers: func() []string { return []string{miss.URL} }}
 	if owners := p.Owners(t.Context(), testID); len(owners) != 0 {
@@ -39,16 +30,8 @@ func TestOwnersAllMissIsEmpty(t *testing.T) {
 }
 
 func TestOwnersHungPeerExcludedWithoutBlockingOthers(t *testing.T) {
-	block := make(chan struct{})
-	hung := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
-		<-block
-	}))
-	defer hung.Close()
-	defer close(block)
-	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ok.Close()
+	hung := hungServer(t)
+	ok := statusServer(t, http.StatusOK)
 
 	start := time.Now()
 	p := &HTTPProber{Peers: func() []string { return []string{hung.URL, ok.URL} }}
@@ -62,16 +45,8 @@ func TestOwnersHungPeerExcludedWithoutBlockingOthers(t *testing.T) {
 }
 
 func TestOwnersReturnsPromptlyWithOneOwner(t *testing.T) {
-	block := make(chan struct{})
-	hung := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
-		<-block
-	}))
-	defer hung.Close()
-	defer close(block)
-	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ok.Close()
+	hung := hungServer(t)
+	ok := statusServer(t, http.StatusOK)
 
 	p := &HTTPProber{Peers: func() []string { return []string{hung.URL, ok.URL} }}
 	start := time.Now()
@@ -138,11 +113,7 @@ func TestOwnersDedupsAddrs(t *testing.T) {
 func TestOwnersCapsAtThree(t *testing.T) {
 	var addrs []string
 	for range 4 {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-		defer srv.Close()
-		addrs = append(addrs, srv.URL)
+		addrs = append(addrs, statusServer(t, http.StatusOK).URL)
 	}
 
 	p := &HTTPProber{Peers: func() []string { return addrs }}
@@ -154,19 +125,9 @@ func TestOwnersCapsAtThree(t *testing.T) {
 func TestOwnersCancelsStragglersOnceCapReached(t *testing.T) {
 	var addrs []string
 	for range maxRedirectOwners {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-		defer srv.Close()
-		addrs = append(addrs, srv.URL)
+		addrs = append(addrs, statusServer(t, http.StatusOK).URL)
 	}
-	block := make(chan struct{})
-	hung := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
-		<-block
-	}))
-	defer hung.Close()
-	defer close(block)
-	addrs = append(addrs, hung.URL)
+	addrs = append(addrs, hungServer(t).URL)
 
 	start := time.Now()
 	p := &HTTPProber{Peers: func() []string { return addrs }}
@@ -183,11 +144,7 @@ func TestHealOwnersReturnsMoreThanRedirectCap(t *testing.T) {
 	const want = maxRedirectOwners + 2
 	var addrs []string
 	for range want {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-		defer srv.Close()
-		addrs = append(addrs, srv.URL)
+		addrs = append(addrs, statusServer(t, http.StatusOK).URL)
 	}
 
 	p := &HTTPProber{Peers: func() []string { return addrs }}
@@ -197,10 +154,7 @@ func TestHealOwnersReturnsMoreThanRedirectCap(t *testing.T) {
 }
 
 func TestHealOwnersIsExhaustiveDespiteAFastOwner(t *testing.T) {
-	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer fast.Close()
+	fast := statusServer(t, http.StatusOK)
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(2 * probeGrace)
 		w.WriteHeader(http.StatusOK)
@@ -351,4 +305,19 @@ func TestVerifyProbeMACRejectsOutsideWindow(t *testing.T) {
 	if VerifyProbeMAC(key, testID, sig) {
 		t.Error("VerifyProbeMAC accepted a bucket two steps away, want rejected")
 	}
+}
+
+func statusServer(t *testing.T, code int) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(code) }))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func hungServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-block }))
+	t.Cleanup(func() { close(block); srv.Close() })
+	return srv
 }
