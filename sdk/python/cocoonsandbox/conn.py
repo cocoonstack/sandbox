@@ -12,7 +12,7 @@ import urllib.parse
 from collections.abc import Iterator
 from typing import Any, BinaryIO, Protocol, TypeVar
 
-from .errors import APIError, ProtocolError, SandboxTimeout, SilkdError
+from .errors import APIError, ProtocolError, SandboxError, SandboxTimeout, SilkdError
 from .frames import MAX_FRAME, decode_response, encode_request
 
 KEEP_ALIVE_CONNS = 8
@@ -168,7 +168,7 @@ def dial_agent(
     try:
         sock = socket.create_connection((host, port), timeout=remaining_timeout(timeout, deadline))
     except OSError as exc:
-        raise ProtocolError(f"dial {addr}: {exc}") from exc
+        raise _handshake_error(f"dial {addr}", exc) from exc
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     reader = None
     try:
@@ -179,7 +179,7 @@ def dial_agent(
             try:
                 sock.do_handshake()
             except OSError as exc:
-                raise ProtocolError(f"tls handshake {addr}: {exc}") from exc
+                raise _handshake_error(f"tls handshake {addr}", exc) from exc
         request = (
             f"GET /v1/sandboxes/{sandbox_id}/agent HTTP/1.1\r\n"
             f"Host: {endpoint.netloc}\r\n"
@@ -216,10 +216,12 @@ def dial_agent(
         remaining_timeout(timeout, deadline)
         sock.settimeout(None)
         return Conn(sock, reader)
-    except Exception:
+    except Exception as exc:
         if reader is not None:
             reader.close()
         sock.close()
+        if isinstance(exc, OSError) and not isinstance(exc, SandboxError):
+            raise _handshake_error(f"agent upgrade {addr}", exc) from exc
         raise
 
 
@@ -231,3 +233,9 @@ def remaining_timeout(timeout: float, deadline: float | None, what: str = "agent
     if remaining <= 0:
         raise SandboxTimeout(f"{what} timed out")
     return min(timeout, remaining)
+
+
+def _handshake_error(what: str, exc: OSError) -> SandboxError:
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return SandboxTimeout(f"{what} timed out")
+    return ProtocolError(f"{what}: {exc}")

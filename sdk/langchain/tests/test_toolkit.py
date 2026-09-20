@@ -2,10 +2,12 @@
 shaping, lazy claim, and double-close safety — no real node."""
 
 import asyncio
+import socket
+import threading
 import time
 
 import pytest
-from cocoonsandbox import SilkdError
+from cocoonsandbox import Sandbox, SilkdError
 from cocoonsandbox_langchain import CocoonToolkit
 from cocoonsandbox_langchain.toolkit import CALL_TIMEOUT
 
@@ -125,6 +127,20 @@ def test_read_file_reports_a_missing_path_as_a_tool_error(monkeypatch):
     assert "no such file" in tool.invoke({"path": "/nope"})
 
 
+def test_a_stalled_agent_upgrade_comes_back_as_a_tool_error():
+    server = socket.create_server(("127.0.0.1", 0))
+    addr = f"127.0.0.1:{server.getsockname()[1]}"
+    threading.Thread(target=serve_silence, args=(server,), daemon=True).start()
+    kit = CocoonToolkit(addr)
+    kit._client.timeout = 0.2
+    kit._sb = Sandbox(kit._client, "sb_1", "tok", addr)
+    tool = next(t for t in kit.get_tools() if t.name == "sandbox_read_file")
+    try:
+        assert "timed out" in tool.invoke({"path": "/etc/hostname"})
+    finally:
+        server.close()
+
+
 class FakeSandbox:
     def __init__(self):
         self.closed = 0
@@ -160,3 +176,10 @@ def hooked(monkeypatch):
     fake = FakeSandbox()
     monkeypatch.setattr(kit, "_claim", lambda deadline=None: fake)
     return kit, fake
+
+
+def serve_silence(server: socket.socket) -> None:
+    conn, _ = server.accept()
+    conn.recv(4096)
+    time.sleep(1)
+    conn.close()

@@ -3,7 +3,7 @@ import threading
 
 import pytest
 
-from cocoonsandbox import Client, ProtocolError
+from cocoonsandbox import Client, SandboxTimeout
 from cocoonsandbox.conn import dial_agent
 from cocoonsandbox.endpoint import _endpoint_url
 
@@ -58,7 +58,7 @@ def test_tls_handshake_timeout_closes_socket() -> None:
 
         thread = threading.Thread(target=stall, daemon=True)
         thread.start()
-        with pytest.raises(ProtocolError):
+        with pytest.raises(SandboxTimeout):
             dial_agent(f"https://127.0.0.1:{server.getsockname()[1]}", "sb_1", "token", 0.05)
         assert done.wait(5), "timed-out handshake kept its socket open"
         thread.join()

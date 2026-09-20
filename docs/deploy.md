@@ -93,8 +93,9 @@ sandboxd reads one JSON file (`-config`, default
 
 As written the `egress` pool's guests reach nothing: on a bridge lane the NIC
 is locked default-deny and the proxy door is bound only for a claim that has a
-policy, so give the pool (or its tenants) an [`egress`](egress.md) block before
-expecting traffic.
+policy. Give the pool an [`egress`](egress.md) block before expecting traffic;
+a tenant's claim of it (`acme` above) needs the tenant's own block as well and
+gets the intersection of the two.
 
 | field | default | meaning |
 |---|---|---|

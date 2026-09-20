@@ -10,7 +10,8 @@ import time
 import pytest
 from conftest import accept_upgrade, sandbox_at
 
-from cocoonsandbox import Sandbox
+from cocoonsandbox import ProtocolError, Sandbox, SandboxTimeout
+from cocoonsandbox import conn as conn_module
 from cocoonsandbox import sandbox as sandbox_module
 
 TIMEOUT = 0.2
@@ -156,8 +157,13 @@ def test_dial_is_still_bounded_by_the_client_timeout():
     sb = legacy_sandbox(addr)
     started = time.monotonic()
     try:
-        with pytest.raises(OSError):
+        with pytest.raises(SandboxTimeout):
             sb.dial_port(5000)
     finally:
         server.close()
     assert time.monotonic() - started < 3 * TIMEOUT
+
+
+@pytest.mark.parametrize(("exc", "want"), [(socket.timeout(), SandboxTimeout), (ConnectionResetError(), ProtocolError)])
+def test_handshake_failures_are_typed(exc, want):
+    assert isinstance(conn_module._handshake_error("agent upgrade", exc), want)
