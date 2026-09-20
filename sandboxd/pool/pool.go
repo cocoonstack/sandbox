@@ -303,6 +303,7 @@ type Manager struct {
 	ckptTTL      time.Duration
 	ckptSweeping atomic.Bool
 	genSweeping  atomic.Bool
+	recommitting atomic.Bool
 
 	// tplSet caches each template id against its owning tenant ("" = operator).
 	tplMu  sync.Mutex

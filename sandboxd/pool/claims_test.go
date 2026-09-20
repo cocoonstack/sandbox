@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -11,6 +12,32 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
+
+func TestRecommitKeepsOneRetrierWhileWritesFail(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	dir := filepath.Join(t.TempDir(), "absent")
+	m.store.path = filepath.Join(dir, "claims.json")
+
+	before := runtime.NumGoroutine()
+	for range 50 {
+		m.mu.Lock()
+		snap := m.store.set(sb)
+		m.mu.Unlock()
+		m.recommit(t.Context(), snap)
+	}
+	if grown := runtime.NumGoroutine() - before; grown > 2 {
+		t.Fatalf("%d goroutines for 50 failed persists, want one retrier", grown)
+	}
+
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	waitFor(t, func() bool {
+		_, err := os.Stat(m.store.path)
+		return err == nil && !m.recommitting.Load()
+	})
+}
 
 func TestStoreRoundTrip(t *testing.T) {
 	s := newClaimStore(t.TempDir())

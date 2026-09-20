@@ -479,7 +479,11 @@ func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
 
 // recommit re-persists in the background until success or a newer durable write; detached.
 func (m *Manager) recommit(ctx context.Context, snap claimSnapshot) {
+	if !m.recommitting.CompareAndSwap(false, true) {
+		return
+	}
 	go func() {
+		defer m.recommitting.Store(false)
 		backoff := recommitBackoff
 		for {
 			err := m.store.commit(snap)
