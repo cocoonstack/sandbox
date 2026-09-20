@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from cocoonsandbox import Client, Sandbox, SilkdError
+from cocoonsandbox import Client, Sandbox, SandboxError
 from langchain_core.tools import StructuredTool, ToolException
 from pydantic import BaseModel, Field
 
@@ -122,11 +122,17 @@ class CocoonToolkit:
         return self._client.new(self._template, net=self._net, ttl_seconds=self._ttl, deadline=deadline)
 
     def _tool(self, name: str, description: str, schema: type[BaseModel], func: Callable[..., str]) -> StructuredTool:
+        def run(**kwargs: object) -> str:
+            try:
+                return func(**kwargs)
+            except SandboxError as exc:
+                raise ToolException(str(exc)) from exc
+
         async def arun(**kwargs):
-            return await asyncio.to_thread(func, **kwargs)
+            return await asyncio.to_thread(run, **kwargs)
 
         return StructuredTool.from_function(
-            func=func, coroutine=arun, name=name, description=description, args_schema=schema, handle_tool_error=True
+            func=run, coroutine=arun, name=name, description=description, args_schema=schema, handle_tool_error=True
         )
 
     def _exec(self, command: str, cwd: str = "") -> str:
@@ -158,12 +164,7 @@ class CocoonToolkit:
         return f"wrote {path}"
 
     def _read_file(self, path: str) -> str:
-        try:
-            return self.sandbox().read_file(path).decode(errors="replace")
-        except SilkdError as exc:
-            if exc.kind != "not_found":
-                raise
-            raise ToolException(f"{path}: no such file") from None
+        return self.sandbox().read_file(path).decode(errors="replace")
 
     def _list_dir(self, path: str) -> str:
         return json.dumps(self.sandbox().list_dir(path))

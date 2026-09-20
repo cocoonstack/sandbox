@@ -75,6 +75,17 @@ def test_exec_reports_a_claim_that_outlives_the_budget(monkeypatch):
     assert kit.get_tools()[0].invoke({"command": "echo hi"}) == f"cut off after {CALL_TIMEOUT}s"
 
 
+def test_a_guest_error_comes_back_as_a_tool_error(monkeypatch):
+    kit, fake = hooked(monkeypatch)
+
+    def refused(path, data):
+        raise SilkdError("not_found", "no such directory")
+
+    fake.write_file = refused
+    tool = next(t for t in kit.get_tools() if t.name == "sandbox_write_file")
+    assert "no such directory" in tool.invoke({"path": "/nope/a.txt", "content": "body"})
+
+
 def test_close_releases_once(monkeypatch):
     kit, fake = hooked(monkeypatch)
     kit.get_tools()[0].invoke({"command": "x"})

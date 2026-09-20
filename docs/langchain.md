@@ -25,6 +25,11 @@ schemas, sync-native with `asyncio.to_thread` async bridges):
 | `sandbox_read_file` | read a text file |
 | `sandbox_list_dir` | list a directory as JSON |
 
+A failed call — a missing path, a guest error, an expired or unreachable
+sandbox — comes back to the model as the tool's error text, not as an
+exception out of the agent run. Every tool's first call claims the sandbox
+inside the same 5-minute budget.
+
 **Branching**: `CocoonToolkit(..., from_checkpoint="ck_...")` claims the
 sandbox from a [checkpoint](sdk-python.md#checkpoints--branching-and-time-travel)'s
 captured moment instead of a clean template — agents start from prepared
