@@ -111,6 +111,20 @@ func TestReadFileStopsAtTheCap(t *testing.T) {
 	}
 }
 
+func TestLogsKeepsAtMostTheCap(t *testing.T) {
+	chunk := `{"type":"stdout","data":"` + base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 256<<10)) + `"}` + "\n"
+	srv := newTestServer(t, agentRoute(t, func(string) (string, bool) {
+		return strings.Repeat(chunk, 8) + `{"type":"done"}` + "\n", false
+	}))
+	replies := serveLines(t, srv,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_sandbox","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"logs","arguments":{"sandbox_id":"sb_1","pid":7}}}`,
+	)
+	if n := strings.Count(toolText(t, replies[2]), "x"); n != execOutputCap {
+		t.Errorf("logs kept %d bytes of a 2 MiB replay, want the %d cap", n, execOutputCap)
+	}
+}
+
 func TestTrackBoxAfterCloseReleasesTheClaim(t *testing.T) {
 	released := make(chan string, 1)
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

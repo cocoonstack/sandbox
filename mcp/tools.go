@@ -252,7 +252,7 @@ func toolLogs(ctx context.Context, s *server, raw json.RawMessage) (string, erro
 	if err != nil {
 		return "", err
 	}
-	var stdout, stderr strings.Builder
+	var stdout, stderr cappedOutput
 	code, exited, err := sb.Logs(ctx, args.PID, &stdout, &stderr)
 	if err != nil {
 		return "", err
