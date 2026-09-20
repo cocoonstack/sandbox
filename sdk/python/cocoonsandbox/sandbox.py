@@ -421,6 +421,9 @@ class Sandbox:
         try:
             conn.send(op, **fields)
             frame = _expect(conn, expect)
+        except SilkdError:
+            self._park(conn)
+            raise
         except BaseException:
             conn.close()
             raise
