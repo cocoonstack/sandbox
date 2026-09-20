@@ -4,7 +4,6 @@ import (
 	"errors"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -73,9 +72,7 @@ func TestAttachOnlyClaimAttachesEveryVolumeConcurrently(t *testing.T) {
 		{Name: "dataset", AttachOnly: true},
 		{Name: "cache", Mode: types.VolumeModeRW, AttachOnly: true},
 	}
-	var attaches sync.WaitGroup
-	attaches.Add(len(requested))
-	eng.attachRendezvous = &attaches
+	rendezvousAttaches(eng, len(requested))
 
 	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", requested)
 	if err != nil {
@@ -104,9 +101,7 @@ func TestClaimProvisionAttachFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	eng := newFakeEngine()
 	eng.diskAttachErrFor = "broken"
 	eng.removeStall = make(chan struct{})
-	var attaches sync.WaitGroup
-	attaches.Add(2)
-	eng.attachRendezvous = &attaches
+	attaches := rendezvousAttaches(eng, 2)
 	m := newVolumeManager(t, eng, []config.VolumeSpec{
 		{Name: "scratch", Path: scratch, Writable: true},
 		{Name: "broken", Path: broken},
@@ -170,9 +165,7 @@ func TestClaimWarmAttachFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	eng.diskAttachErrFor = "broken"
 	eng.removeErrFor = "sbx-warm"
 	eng.vms["sbx-warm"] = "/vsock/warm"
-	var attaches sync.WaitGroup
-	attaches.Add(2)
-	eng.attachRendezvous = &attaches
+	rendezvousAttaches(eng, 2)
 	m := newVolumePoolManager(t, eng, t.TempDir(), []config.VolumeSpec{
 		{Name: "scratch", Path: scratch, Writable: true},
 		{Name: "broken", Path: broken},
@@ -216,9 +209,7 @@ func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
 	m.maxClaims = 1
-	var attaches sync.WaitGroup
-	attaches.Add(2)
-	eng.attachRendezvous = &attaches
+	attaches := rendezvousAttaches(eng, 2)
 	writable := []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}
 
 	claimErr := make(chan error, 1)
@@ -291,9 +282,7 @@ func TestFinalizeTenantQuotaFailureQuiescesAndUncountsTenant(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
 	m.tenantMax = map[string]int{"acme": 1}
-	var attaches sync.WaitGroup
-	attaches.Add(2)
-	eng.attachRendezvous = &attaches
+	attaches := rendezvousAttaches(eng, 2)
 
 	claimErr := make(chan error, 1)
 	go func() {
