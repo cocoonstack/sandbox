@@ -49,11 +49,15 @@ def serve_port_forward(server: socket.socket, quiet: float, ops: list[str]) -> N
     conn.close()
 
 
-def serve_started_then_hang(server: socket.socket, quiet: float) -> None:
+def serve_started_then_hang(server: socket.socket, quiet: float, kills: list[dict]) -> None:
     conn, _ = server.accept()
     reader = accept_upgrade(conn)
     reader.readline()
     conn.sendall(b'{"type":"started","pid":7}\n')
+    killer, _ = server.accept()
+    kills.append(json.loads(accept_upgrade(killer).readline()))
+    killer.sendall(b'{"type":"done"}\n')
+    killer.close()
     time.sleep(quiet)
     conn.close()
 
@@ -80,10 +84,11 @@ def test_port_stream_outlives_the_client_timeout():
     assert ops == ["port_forward"]
 
 
-def test_run_timeout_cuts_a_silent_command():
+def test_run_timeout_cuts_a_silent_command_and_kills_it():
     server = socket.create_server(("127.0.0.1", 0))
     addr = f"127.0.0.1:{server.getsockname()[1]}"
-    threading.Thread(target=serve_started_then_hang, args=(server, 5 * TIMEOUT), daemon=True).start()
+    kills: list[dict] = []
+    threading.Thread(target=serve_started_then_hang, args=(server, 5 * TIMEOUT, kills), daemon=True).start()
     sb = legacy_sandbox(addr)
     started = time.monotonic()
     try:
@@ -92,6 +97,7 @@ def test_run_timeout_cuts_a_silent_command():
     finally:
         server.close()
     assert time.monotonic() - started < 3 * TIMEOUT
+    assert kills == [{"v": 1, "op": "kill", "pid": 7}], kills
 
 
 def test_run_timeout_cuts_a_blocked_exec_send(monkeypatch):

@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .client import Client
 
 _ACCEPT_POLL_SECONDS = 1.0
+_KILL_WAIT_SECONDS = 5.0
 
 
 class Sandbox:
@@ -95,11 +96,12 @@ class Sandbox:
         on_stderr: Callable[[bytes], object] | None = None,
         timeout: float | None = None,
     ) -> int:
-        """Streams raw output bytes and returns the exit code; timeout bounds the entire call."""
+        """Streams raw output bytes and returns the exit code; timeout bounds the call and kills what it cuts."""
         if timeout is not None and timeout <= 0:
             raise ValueError("timeout must be positive")
         deadline = None if timeout is None else time.monotonic() + timeout
         expired = threading.Event()
+        started: list[int] = []
         try:
             conn = self._connect(deadline)
         except (ProtocolError, TimeoutError):
@@ -124,9 +126,11 @@ class Sandbox:
                 else:
                     with contextlib.suppress(ProtocolError):
                         conn.send("stdin_close")
-                code = _pump_stdio(conn, on_stdout, on_stderr)
+                code = _pump_stdio(conn, on_stdout, on_stderr, started.append)
             except (ProtocolError, OSError):
                 if expired.is_set():
+                    if started:
+                        self._kill_after_cut(started[0])
                     raise SandboxTimeout(f"command did not finish within {timeout}s") from None
                 raise
             except SilkdError:
@@ -497,6 +501,17 @@ class Sandbox:
                 _expect(conn, "done")
             return code
 
+    def _kill_after_cut(self, pid: int) -> None:
+        with contextlib.suppress(SandboxError, OSError):
+            conn = self._connect(time.monotonic() + _KILL_WAIT_SECONDS)
+            with self._lease(conn):
+                conn.settimeout(_KILL_WAIT_SECONDS)
+                try:
+                    conn.send("kill", pid=pid)
+                    _expect(conn, "done")
+                finally:
+                    conn.settimeout(None)
+
 
 class Session(_Closeable):
     """A persistent shell inside the sandbox, addressed by id."""
@@ -644,11 +659,16 @@ def _feed_stdin(conn: Conn, stdin: bytes) -> None:
 
 
 def _pump_stdio(
-    conn: Conn, on_stdout: Callable[[bytes], object] | None, on_stderr: Callable[[bytes], object] | None
+    conn: Conn,
+    on_stdout: Callable[[bytes], object] | None,
+    on_stderr: Callable[[bytes], object] | None,
+    on_started: Callable[[int], object] | None = None,
 ) -> int | None:
     for frame in conn.recv_until("exit", "done"):
         t = frame["type"]
-        if t == "stdout" and on_stdout:
+        if t == "started" and on_started:
+            on_started(cast(int, _need(frame, "pid")))
+        elif t == "stdout" and on_stdout:
             on_stdout(_need(frame, "data"))
         elif t == "stderr" and on_stderr:
             on_stderr(_need(frame, "data"))

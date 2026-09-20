@@ -1,6 +1,8 @@
 package sandbox
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -74,6 +76,49 @@ func TestRunContextCancel(t *testing.T) {
 	_, err := sb.Run(ctx, Cmd{Argv: []string{"sleep", "300"}})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("got %v, want deadline exceeded", err)
+	}
+}
+
+func TestRunCancelKillsTheCommandItStarted(t *testing.T) {
+	killed := make(chan uint32, 1)
+	sb := testSandbox(t, newAgentServer(t, func(conn net.Conn) {
+		defer conn.Close()
+		r := bufio.NewReader(conn)
+		for {
+			line, err := r.ReadBytes('\n')
+			if err != nil {
+				return
+			}
+			req, err := wire.DecodeRequest(bytes.TrimSpace(line))
+			if err != nil {
+				return
+			}
+			switch req := req.(type) {
+			case *wire.Info:
+				_, _ = io.WriteString(conn, `{"type":"info","version":"test","proto":2}`+"\n")
+			case *wire.Exec:
+				_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n")
+				_, _ = io.Copy(io.Discard, r)
+				return
+			case *wire.Kill:
+				killed <- req.PID
+				_, _ = io.WriteString(conn, `{"type":"done"}`+"\n")
+			}
+		}
+	}))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := sb.Run(ctx, Cmd{Argv: []string{"sleep", "300"}}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v, want deadline exceeded", err)
+	}
+	select {
+	case pid := <-killed:
+		if pid != 7 {
+			t.Errorf("killed pid %d, want 7", pid)
+		}
+	default:
+		t.Fatal("no kill reached the guest before Run returned")
 	}
 }
 
