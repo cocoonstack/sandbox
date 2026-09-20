@@ -13,6 +13,7 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 const (
@@ -63,7 +64,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	defer done()
 	if req.TimeoutSeconds > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutSeconds)*time.Second)
+		ctx, cancel = context.WithTimeout(ctx, types.Seconds(req.TimeoutSeconds))
 		defer cancel()
 	}
 	defer closeOnCancel(ctx, guest)()

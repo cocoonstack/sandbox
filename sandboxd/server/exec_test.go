@@ -80,6 +80,23 @@ func TestExecAuditsTheFrameWithoutItsDelimiter(t *testing.T) {
 	}
 }
 
+func TestExecRunsUnderAnOverflowingTimeout(t *testing.T) {
+	ts, _ := newRelayServer(t, func(conn net.Conn) {
+		defer conn.Close()
+		r := bufio.NewReader(conn)
+		for range 2 {
+			if _, err := r.ReadBytes('\n'); err != nil {
+				return
+			}
+		}
+		_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n"+`{"type":"exit","code":0}`+"\n")
+	})
+	status, body := postExec(t, ts, `{"argv":["true"],"timeout_seconds":10000000000}`)
+	if status != http.StatusOK {
+		t.Fatalf("status %d, want 200: a huge timeout_seconds must not wrap into an expired deadline: %s", status, body)
+	}
+}
+
 func TestExecMapsSilkdErrors(t *testing.T) {
 	for _, tt := range []struct {
 		kind string

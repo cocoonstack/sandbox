@@ -1,6 +1,24 @@
 package types
 
-import "testing"
+import (
+	"math"
+	"testing"
+	"time"
+)
+
+func TestSecondsSaturatesInsteadOfWrapping(t *testing.T) {
+	for _, n := range []int{9223372037, 10_000_000_000, math.MaxInt64} {
+		if got := Seconds(n); got <= 24*time.Hour {
+			t.Errorf("Seconds(%d) = %v, want a duration past any cap, never a wrapped one", n, got)
+		}
+	}
+	if got := (TTLField{TTLSeconds: 9223372037}).TTL(); got <= 24*time.Hour {
+		t.Errorf("TTL() = %v for a huge ttl_seconds, want it to reach the 24h clamp", got)
+	}
+	if got := Seconds(90); got != 90*time.Second {
+		t.Errorf("Seconds(90) = %v", got)
+	}
+}
 
 func TestValidateSizes(t *testing.T) {
 	for _, tt := range []struct {
