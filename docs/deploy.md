@@ -423,6 +423,7 @@ After=network-online.target
 [Service]
 ExecStart=/usr/local/bin/sandboxd -config /etc/sandboxd/config.json
 Restart=on-failure
+KillMode=process
 Environment=SANDBOXD_LOG_LEVEL=info
 
 [Install]
@@ -435,7 +436,10 @@ degradations. `journalctl` answers an empty range with `-- No entries --`, so
 a check that counts lines reads one problem where there are none — count
 records (`-o json | wc -l`) or test the output for emptiness.
 
-Stopping sandboxd leaves VMs alive; the next start reconciles them. Claimed
+Stopping sandboxd leaves VMs alive; the next start reconciles them. The unit's
+`KillMode=process` is what guarantees it: systemd signals sandboxd alone, so a
+VMM that cocoon could not move into its own scope, and any `cocoon` call still
+in flight, outlive the stop instead of dying with the service's cgroup. Claimed
 sandboxes are reaped when their TTL expires (default 5m, capped at 24h).
 
 To empty a node for maintenance, cordon it first:
