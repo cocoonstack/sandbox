@@ -73,7 +73,9 @@ curl --socks5-hostname 127.0.0.1:1080 imaps://imap.example.com/   # allowed: {"s
 
 A `net:"egress"` guest owns a real NIC on the host bridge and reaches the same
 proxy over the same vsock path. To stop it bypassing the proxy, sandboxd locks
-the NIC at claim: an nftables netdev table (`sandbox_egress_<tap>`) with an
+the NIC at claim — until then a warm VM of the pool, and the pool's golden
+build, sit on the bridge unlocked, running only the image's own services, never
+tenant code: an nftables netdev table (`sandbox_egress_<tap>`) with an
 ingress hook on the guest's tap drops every guest-initiated packet except IPv4
 broadcast DHCP, so the guest's only routed egress is the audited vsock proxy. The
 lock is fail-closed — a claim whose NIC cannot be locked is rejected, not handed
@@ -200,7 +202,10 @@ woken sandbox binds at arm time.
   request inside an intercepted tunnel. Exact ports only; `0` and repeats are
   rejected at load.
 - `secret`: injects the named registered secret's header. A guest-supplied value
-  for the same header is overwritten. On HTTPS the injection needs `intercept`.
+  for the same header is overwritten. Inside an HTTPS `CONNECT` tunnel the
+  injection needs `intercept`; an absolute-form `https://` request on the
+  forward door needs none — the proxy dials the origin over verified TLS
+  itself, checks the method, and injects.
 - `intercept`: terminate a matched HTTPS CONNECT so the request is filtered by
   method and the secret injected (see below). Only a pool rule may set it.
 - No policy on a claim ⇒ no egress at all (the proxy is not started).

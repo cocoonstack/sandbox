@@ -351,11 +351,16 @@ fresh info payload.
 
 ## POST /v1/sandboxes/{id}/preview
 
-Auth: like fork — node `api_token` in the header, the sandbox's own token
-in the body. Mints a signed URL serving a
+Auth: node `api_token` in the header, the sandbox's own token in the body.
+Unlike fork, promote and checkpoint — where the root token with an empty body
+token acts by id as the operator — preview has no operator path: the body
+token is required. Mints a signed URL serving a
 guest HTTP port from a browser: body `{"token": "...", "port": 8080,
 "ttl_seconds": 0}` → `{"url": "http://<preview_advertise>/p/<token>/"}`.
-The URL's life is clamped to the claim's remaining lease. 501 when the node
+The URL's life is clamped to the claim's remaining lease; an archived claim
+kept forever (`archive_delete_after_seconds: 0`) has no lease, so there the
+requested `ttl_seconds` stands and releasing the sandbox is what ends the URL.
+501 when the node
 has no `preview_listen`. The signed token embeds the sandbox id, port, and
 owner `advertise_addr`, so any node's preview listener can serve it (forwarding
 to the owner's main listener) and a released sandbox's URL simply stops

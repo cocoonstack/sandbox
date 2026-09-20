@@ -446,7 +446,13 @@ code, err := sb.Run(ctx, sandbox.Cmd{
 `Cmd` fields: `Argv` (required), `Cwd`, `Env`, `User` (de-escalation inside
 the guest), `Session` (run inside a persistent session, below), `Stdin`
 (nil closes the child's stdin immediately; do not share one blocking reader
-across Runs), `Stdout`/`Stderr` (nil discards).
+across Runs), `Stdout`/`Stderr` (nil discards). With `Session` set only
+`Argv` applies: the session owns the cwd, environment and user, its commands
+read `/dev/null`, and stderr arrives merged into stdout. A command's
+environment is `PATH`, `TERM` and the lane's proxy variables plus `Env` — not
+the image's `ENV`; `HOME` and `USER` are set only with `User`. A dropped
+connection kills a foreground command; use `Spawn` for work that must outlive
+it.
 
 Non-zero exits surface as `*sandbox.ExitError{Code, Stderr}` from `Exec`
 (alongside partial stdout); `Run` returns the code directly.
@@ -467,7 +473,8 @@ the process has ended (`exited=false` while running); `Attach` follows live
 output until exit — the replay and the live stream hand off atomically, so
 no chunk is lost or doubled between them. Killing an already-exited process
 is a no-op success (its OS pid may be recycled; silkd never signals a
-reaped child).
+reaped child). An exited process leaves the table after 5 minutes; from then
+on its pid answers `not_found` to every verb.
 
 ## Sessions
 
@@ -532,6 +539,10 @@ results, err := sb.Replace(ctx, []string{"/work/main.go"}, `foo`, "bar")
 ```
 
 Patterns are regular expressions evaluated in the guest — no shell quoting.
+`Replace` is atomic per file, not per list: it fails at the first missing,
+unreadable or non-UTF-8 path and the files before it stay rewritten, so pass it
+paths a `Find` just returned. A `Find` fails as a whole when one match's frame
+would pass the 8 MiB cap.
 
 ## Watching
 

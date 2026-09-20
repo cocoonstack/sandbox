@@ -11,9 +11,9 @@ with client.new("ghcr.io/cocoonstack/sandbox/rt:24.04") as sb:
 `pip install cocoonstack-sandbox` — stdlib-only, no dependencies, and
 synchronous by design (agent frameworks that need async wrap calls in
 `asyncio.to_thread`, exactly like the [OpenAI adapter](openai-adapter.md)
-does). It matches the [Go SDK](sdk.md) guest and data-plane surface, with two
+does). It matches the [Go SDK](sdk.md) guest and data-plane surface, with three
 exceptions: operator pool retuning (`SetPools`/`SetPoolsCluster`) remains
-Go-only, and file and tar payloads are whole `bytes` values rather than
+Go-only, `Template.new` takes no `claim_ref`, and file and tar payloads are whole `bytes` values rather than
 streams (`read_file`/`pull` return them, `write_file`/`push` take them; the
 wire is chunked, the caller's copy is not). Wire fidelity is
 pinned by the shared protocol fixture corpus that the Rust guest, Go, and
@@ -75,8 +75,10 @@ client = Client("10.0.0.5:7777", api_token="...", timeout=120.0)
 tenant token (resource-creating verbs only; operator surfaces answer it
 403). On a cluster every node shares the root token and the same tenants
 set. `timeout` bounds every control-plane request and the data-plane dial
-and upgrade; a guest stream then lives until the guest ends it, as in the
-Go SDK. A caller with a wall clock of its own passes `deadline` to a claim
+and upgrade; a guest stream then lives until the guest ends it. Unlike the
+Go SDK, where a canceled context closes any call, only `run`/`exec` take a
+`timeout` here: every other data-plane call blocks until the guest answers
+or the connection drops. A caller with a wall clock of its own passes `deadline` to a claim
 (below) so the redirect walk cannot outlive it.
 
 **Clusters need nothing extra**: dial any node. On a warm miss the entry
@@ -333,7 +335,11 @@ its end the connection is cut, which makes silkd kill the command, and
 `exec` returns stdout and raises `ExitError` on a non-zero exit — carrying
 `code`, `stderr`, and the `stdout` produced before it failed. `run` streams raw bytes through the callbacks (chunk boundaries may
 split multi-byte sequences) and returns the exit code. `user` de-escalates
-inside the guest; `session=` routes the command into a persistent session.
+inside the guest; `session=` routes the command into a persistent session,
+where only `argv` applies — the session owns the cwd, environment and user,
+and stderr arrives merged into stdout. A command's environment is `PATH`,
+`TERM` and the lane's proxy variables plus `env`, not the image's `ENV`. A
+dropped connection kills a foreground command; `spawn` outlives it.
 
 ## Background processes
 
@@ -348,6 +354,8 @@ sb.kill(pid)                                  # default SIGKILL
 `spawn` starts the command detached with a bounded output ring; `logs`
 replays it, `attach` follows live output until exit (replay and live stream
 hand off atomically). Killing an already-exited process is a no-op success.
+An exited process leaves the table after 5 minutes; from then on its pid
+raises `SilkdError` `not_found`.
 
 ## Sessions
 
@@ -408,6 +416,10 @@ results = sb.replace(["/work/main.py"], r"foo", "bar")
 ```
 
 Patterns are regular expressions evaluated in the guest — no shell quoting.
+`replace` is atomic per file, not per list: it raises at the first missing,
+unreadable or non-UTF-8 path and the files before it stay rewritten, so pass it
+paths a `find` just returned. A `find` fails as a whole when one match's frame
+would pass the 8 MiB cap.
 
 ## Watching
 

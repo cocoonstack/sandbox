@@ -31,7 +31,7 @@ Every tool call is capped at 5 minutes.
 | `exec` | run a shell command to completion; returns stdout, stderr and the exit code, each stream keeping its first 1 MiB with `truncated` set past that; a cut-off or dropped run returns the output collected so far next to an `error` field; a hibernated sandbox wakes transparently |
 | `spawn` | start a command detached and return its pid; output goes to a 256 KiB ring buffer that `logs` replays |
 | `ps` | list tracked processes (exec, spawn, pty) with state, exit code and start time |
-| `logs` | replay up to 256 KiB of a tracked process's newest whole stdout/stderr chunks (+ exit code once ended) |
+| `logs` | replay up to 256 KiB of a tracked process's newest whole stdout/stderr chunks (+ exit code once ended); an exited process is forgotten after 5 minutes |
 | `kill` | signal a tracked process (0 = SIGKILL); an exited process is a no-op success |
 | `write_file` / `read_file` / `list_dir` | atomic whole-file write (parent must exist); whole-file text read of a regular file up to 1 MiB (a larger file, a directory or a device is an error, invalid UTF-8 replaced, missing path is an error); one-level listing of `{name, kind, size}` entries |
 | `fork` | clone into N children (1 to the node's `max_fork_count`, default 16) carrying exact memory + disk state, all-or-nothing; the parent keeps running and each child lives one hour |
