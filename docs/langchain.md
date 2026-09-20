@@ -20,7 +20,7 @@ schemas, sync-native with `asyncio.to_thread` async bridges):
 
 | tool | what it does |
 |---|---|
-| `sandbox_exec` | run a shell command, cut off and killed after 5 minutes with the reply saying so; the budget is one wall clock over the claim, the dial and the command, so a first call that waits on a slow or redirecting cluster still answers inside it; stdout/stderr/exit code; disk state persists across calls |
+| `sandbox_exec` | run a shell command, cut off after 5 minutes with the reply saying so (the cut also kills the command in the guest, which can hold the reply up to 5 s more); the budget is one wall clock over the claim, the dial and the command, so a first call that waits on a slow or redirecting cluster still answers inside it; stdout/stderr/exit code; disk state persists across calls |
 | `sandbox_write_file` | write a text file (atomic on the guest; the parent directory must exist) |
 | `sandbox_read_file` | read a text file |
 | `sandbox_list_dir` | list a directory as JSON |
