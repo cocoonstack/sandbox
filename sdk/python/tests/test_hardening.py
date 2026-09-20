@@ -26,6 +26,17 @@ def test_dial_agent_wraps_refused_connection(dead_addr):
         dial_agent(dead_addr, "sb_1", "tok", 0.5)
 
 
+def test_send_on_a_dead_socket_raises_a_typed_error():
+    ours, theirs = socket.socketpair()
+    theirs.close()
+    conn = Conn(ours, ours.makefile("rb"))
+    try:
+        with pytest.raises(ProtocolError):
+            conn.send("info")
+    finally:
+        conn.close()
+
+
 def test_watcher_propagates_silkd_error():
     client_sock, guest_sock = socket.socketpair()
     guest_sock.sendall(json.dumps({"type": "error", "kind": "not_found", "message": "gone"}).encode() + b"\n")

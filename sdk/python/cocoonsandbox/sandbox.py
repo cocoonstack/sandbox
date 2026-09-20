@@ -122,7 +122,7 @@ class Sandbox:
                 if pump is not None:
                     pump.start()
                 else:
-                    with contextlib.suppress(OSError):
+                    with contextlib.suppress(ProtocolError):
                         conn.send("stdin_close")
                 code = _pump_stdio(conn, on_stdout, on_stderr)
             except (ProtocolError, OSError):
@@ -460,7 +460,7 @@ class Sandbox:
         pump = threading.Thread(target=pump_out, daemon=True)
         pump.start()
         try:
-            with contextlib.suppress(OSError):
+            with contextlib.suppress(SandboxError, OSError):
                 while True:
                     chunk = local.recv(FS_CHUNK)
                     if not chunk:

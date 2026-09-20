@@ -40,7 +40,10 @@ class Conn(_Closeable):
         self._reader = reader
 
     def send(self, op: str, **fields: object) -> None:
-        self._sock.sendall(encode_request(op, **fields))
+        try:
+            self._sock.sendall(encode_request(op, **fields))
+        except OSError as exc:
+            raise ProtocolError(f"write failed: {exc}") from exc
 
     def settimeout(self, timeout: float | None) -> None:
         self._sock.settimeout(timeout)
