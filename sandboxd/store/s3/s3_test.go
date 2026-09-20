@@ -122,23 +122,6 @@ func TestDeleteRetainsMetaUntilExportsAreGone(t *testing.T) {
 	}
 }
 
-func TestFetchLegacyExportLayout(t *testing.T) {
-	const id = "ck_00000000000000aa"
-	fake := &fakeS3{objects: map[string][]byte{
-		"ck/" + id + "/" + store.MetaFile:                []byte(`{"id":"` + id + `"}`),
-		"ck/" + id + "/" + store.ExportDir + "/disk.img": []byte("legacy-bytes"),
-	}}
-	st := newTestStore(t, fake)
-	dir, _, _, err := st.Fetch(t.Context(), id)
-	if err != nil {
-		t.Fatalf("Fetch: %v", err)
-	}
-	got, err := os.ReadFile(filepath.Join(dir, "disk.img"))
-	if err != nil || string(got) != "legacy-bytes" {
-		t.Fatalf("fetched legacy export: %q, %v", got, err)
-	}
-}
-
 func TestFetchReportsMetaWithoutExportAsNotFound(t *testing.T) {
 	const id = "ck_00000000000000cc"
 	fake := &fakeS3{objects: map[string][]byte{

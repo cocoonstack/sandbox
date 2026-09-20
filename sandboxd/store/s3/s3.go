@@ -333,13 +333,6 @@ func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string
 		return err
 	}
 	if len(keys) == 0 {
-		// records published before per-generation prefixes.
-		exportPrefix = s.key(id, store.ExportDir) + "/"
-		if keys, err = s.list(ctx, exportPrefix); err != nil {
-			return err
-		}
-	}
-	if len(keys) == 0 {
 		return store.ErrNotFound
 	}
 	g, gctx := errgroup.WithContext(ctx)
