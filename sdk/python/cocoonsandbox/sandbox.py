@@ -639,11 +639,11 @@ def _pump_stdio(
     for frame in conn.recv_until("exit", "done"):
         t = frame["type"]
         if t == "stdout" and on_stdout:
-            on_stdout(frame["data"])
+            on_stdout(_need(frame, "data"))
         elif t == "stderr" and on_stderr:
-            on_stderr(frame["data"])
+            on_stderr(_need(frame, "data"))
         elif t == "exit":
-            return cast(int, frame["code"])
+            return cast(int, _need(frame, "code"))
     return None
 
 
@@ -672,5 +672,5 @@ def _drain_data(conn: Conn) -> bytes:
     chunks = []
     for frame in conn.recv_until("done"):
         if frame["type"] == "data":
-            chunks.append(frame["data"])
+            chunks.append(_need(frame, "data"))
     return b"".join(chunks)
