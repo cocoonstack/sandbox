@@ -287,7 +287,7 @@ egress request) is not swept; the idle clock restarts when that connection ends.
 If that deployment also enables `archive_after_seconds`, archiving replaces
 the original claim deadline with the archive-retention deadline (or no
 deadline when archives are kept forever). Waking an archive starts a fresh
-lease of the TTL the claim was made with (the server default when it asked
+lease of the length the claim was granted (the server default when it asked
 for none). The existing handle's `Sandbox.Deadline` is the value
 returned when that handle was created; call `Client.Sandboxes` to read the
 current server deadline after an archive/wake transition.

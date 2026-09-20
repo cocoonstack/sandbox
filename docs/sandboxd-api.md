@@ -233,8 +233,7 @@ otherwise only a side effect of the next agent access, so this is the
 explicit form for warming a sandbox ahead of use. Idempotent on one already
 running. A hibernated sandbox retains its existing deadline. An archived
 sandbox instead uses `archive_delete_after_seconds` as its retention deadline
-while stored, and waking it starts a fresh lease of the TTL the claim was made
-with (the server default when it asked for none). 204 on
+while stored, and waking it starts a fresh lease of the length the claim was granted (the server default when it asked for none). 204 on
 success, 404 unknown id or wrong token.
 
 ## POST /v1/sandboxes/{id}/fork
