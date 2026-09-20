@@ -7,10 +7,12 @@ on:
     branches: [main]
     paths:
       - "**.sh"
+      - "Makefile"
       - ".github/workflows/shell.yml"
   pull_request:
     paths:
       - "**.sh"
+      - "Makefile"
       - ".github/workflows/shell.yml"
   workflow_dispatch:
 
