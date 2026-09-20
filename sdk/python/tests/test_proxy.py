@@ -3,6 +3,7 @@ where proxy_port references a helper that does not exist — a static import
 can't see it, only running the accept loop does."""
 
 import socket
+import threading
 import time
 
 from conftest import sandbox_at
@@ -86,3 +87,13 @@ def test_proxy_port_ends_the_local_connection_when_the_guest_port_is_closed(monk
         c.close()
     finally:
         listener.close()
+
+
+def test_proxy_port_retires_its_accept_thread_when_the_listener_closes():
+    sb = sandbox_at("127.0.0.1:1", keep_alive=0)
+    known = set(threading.enumerate())
+    listener = sb.proxy_port("127.0.0.1:0", 80)
+    (accept_loop,) = set(threading.enumerate()) - known
+    listener.close()
+    accept_loop.join(5)
+    assert not accept_loop.is_alive()

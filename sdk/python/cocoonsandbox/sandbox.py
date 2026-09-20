@@ -18,6 +18,8 @@ from .template import Template
 if TYPE_CHECKING:
     from .client import Client
 
+_ACCEPT_POLL_SECONDS = 1.0
+
 
 class Sandbox:
     """One claimed microVM."""
@@ -425,10 +427,15 @@ class Sandbox:
         return conn, frame
 
     def _proxy_accept_loop(self, listener: socket.socket, port: int) -> None:
-        with contextlib.suppress(OSError):
-            while True:
+        listener.settimeout(_ACCEPT_POLL_SECONDS)
+        while True:
+            try:
                 local, _ = listener.accept()
-                threading.Thread(target=self._proxy_conn, args=(local, port), daemon=True).start()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            threading.Thread(target=self._proxy_conn, args=(local, port), daemon=True).start()
 
     def _proxy_conn(self, local: socket.socket, port: int) -> None:
         try:
