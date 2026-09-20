@@ -27,7 +27,10 @@ Give every node a `mesh` block:
   would advertise an unroutable address). Open **TCP and UDP** on this port
   between nodes
 - `join` — any existing members to contact at startup; an empty list starts
-  a new mesh
+  a new mesh. A node that reaches none of them exits at start (`start mesh:
+  join mesh: … connection refused`), so two nodes that name only each other
+  cannot cold-start together: list the node's own `bind` alongside its peers
+  and every node comes up in any order, joining whoever is already there
 - `cluster_key` — optional base64 key (16/24/32 bytes) enabling gossip
   encryption; all members must share it
 
@@ -276,6 +279,7 @@ Some config must match on every node or the cluster fails in confusing ways:
 | `preview_secret` | a preview URL signed on one node fails verification on another |
 | `mesh.cluster_key` | nodes cannot join / decrypt gossip at all |
 | `egress_ca` cluster root | a guest checkpointed/redirected across nodes trusts the root; a divergent root fails interception |
+| the engine root path (cocoon's `root_dir`) | a checkpoint or template export pins the base image blobs' absolute path under the root that captured it; a node whose root sits at another path refuses to clone a record it healed or pulled (`untrusted storage path in snapshot metadata`) — the heal succeeds, the branch fails. Not part of the gossiped digest below |
 
 Each node gossips a digest of these (HMAC-keyed by `cluster_key` when set;
 otherwise a token-free digest of tenant names + the CA root + `checkpoint_ttl_hours`, so nothing
@@ -288,8 +292,12 @@ the mesh.
 ## Cluster checklist
 
 - memberlist port (e.g. 7946) open node-to-node, TCP **and** UDP
+- `mesh.join` on every node lists the node's own `bind` plus its peers, so a
+  fleet-wide restart comes up in any order
 - `advertise_addr` set to a routable address on every node (never loopback,
   never a wildcard)
+- the same engine root path (cocoon's `root_dir`) on every node; it is not in
+  the digest, so a mismatch shows only at the first cross-node branch
 - same `api_token`, `tenants`, `preview_secret`, and `egress_ca` root everywhere
   (a mismatch warns and shows in `sandboxd_config_digest_mismatch`)
 - `cluster_key` set if the gossip network is not otherwise trusted
