@@ -22,6 +22,7 @@ $(LOCALBIN):
 
 ## Tool versions
 GOLANGCILINT_VERSION ?= v2.13.2
+GO_VERSION := $(shell sed -n 's/^go //p' sandboxd/go.mod)
 GOLANGCILINT_ROOT := $(LOCALBIN)/golangci-lint-$(GOLANGCILINT_VERSION)
 GOLANGCILINT := $(GOLANGCILINT_ROOT)/golangci-lint
 
@@ -32,7 +33,7 @@ GOLANGCILINT := $(GOLANGCILINT_ROOT)/golangci-lint
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCILINT)
 $(GOLANGCILINT):
-	GOBIN=$(GOLANGCILINT_ROOT) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCILINT_VERSION)
+	GOBIN=$(GOLANGCILINT_ROOT) GOTOOLCHAIN=go$(GO_VERSION) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCILINT_VERSION)
 
 cloc: ## Count lines of code excluding tests (requires cloc)
 	cloc --exclude-dir=target,dist,node_modules --exclude-ext=json \
