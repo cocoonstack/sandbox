@@ -6,11 +6,38 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
+
+func TestReconcileJournalsAnAdoptedHibernate(t *testing.T) {
+	eng := newFakeEngine()
+	dir := t.TempDir()
+	m := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	sb := mustClaim(t, m, testKey)
+	snap := hibernatePrefix + strings.TrimPrefix(sb.VMName, vmPrefix) + "-abc"
+	if err := eng.Hibernate(t.Context(), sb.VMName, snap); err != nil {
+		t.Fatalf("engine hibernate: %v", err)
+	}
+	if err := m.store.commit(m.setPendingSnap(sb, snap)); err != nil {
+		t.Fatalf("journal intent: %v", err)
+	}
+
+	restarted := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if _, _, err := restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	if got, want := usageEventsOf(t, restarted, sb.ID), "claim,hibernate,wake"; got != want {
+		t.Errorf("events %s, want %s", got, want)
+	}
+}
 
 func TestReconcileStaleCreateSweep(t *testing.T) {
 	tests := []staleCreateCase{
