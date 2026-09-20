@@ -288,6 +288,15 @@ type stallingMetasStore struct {
 	release chan struct{}
 }
 
+func (s *stallingMetasStore) Metas(ctx context.Context) ([][]byte, error) {
+	select {
+	case s.entered <- struct{}{}:
+	default:
+	}
+	<-s.release
+	return s.Store.Metas(ctx)
+}
+
 type stallingSweepStore struct {
 	store.Store
 	entered chan struct{}
@@ -301,13 +310,4 @@ func (s *stallingSweepStore) SweepGenerations() error {
 	}
 	<-s.release
 	return s.Store.SweepGenerations()
-}
-
-func (s *stallingMetasStore) Metas(ctx context.Context) ([][]byte, error) {
-	select {
-	case s.entered <- struct{}{}:
-	default:
-	}
-	<-s.release
-	return s.Store.Metas(ctx)
 }
