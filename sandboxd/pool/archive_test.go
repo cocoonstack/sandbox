@@ -351,6 +351,25 @@ func TestArchiveRetentionPurge(t *testing.T) {
 	})
 }
 
+func TestArchiveWakeGrantsTheLeaseTheClaimAskedFor(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, archivePool(3600))
+	sb, err := m.ClaimProvision(t.Context(), testKey, 2*time.Hour, "acme", "", nil)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	mustArchive(t, m, sb)
+	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	m.mu.Lock()
+	lease := time.Until(sb.Deadline)
+	m.mu.Unlock()
+	if lease < time.Hour || lease > 2*time.Hour {
+		t.Errorf("lease after the wake = %v, want the 2h the claim asked for", lease)
+	}
+}
+
 func TestReleaseArchivedDeletesCheckpoint(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))

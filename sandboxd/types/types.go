@@ -142,6 +142,8 @@ type Sandbox struct {
 
 	Token    string    `json:"token,omitempty"`
 	Deadline time.Time `json:"deadline,omitzero"`
+	// LeaseSeconds is the lease the claim asked for; a wake from the archive grants it again.
+	LeaseSeconds int `json:"lease_seconds,omitzero"`
 
 	// Tenant names the owning tenant; empty means the operator claimed it.
 	Tenant string `json:"tenant,omitempty"`

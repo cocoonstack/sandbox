@@ -567,6 +567,7 @@ func stampIdentity(sb *types.Sandbox, ttl time.Duration) {
 	sb.ID = "sb_" + randHex(8)
 	sb.Token = randHex(16)
 	sb.Deadline = time.Now().Add(ttl)
+	sb.LeaseSeconds = int(ttl / time.Second)
 }
 
 func clampTTL(ttl time.Duration) time.Duration {

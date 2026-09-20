@@ -27,6 +27,7 @@ type claimDTO struct {
 	Key            types.PoolKey  `json:"key"`
 	Token          string         `json:"token,omitempty"`
 	Deadline       time.Time      `json:"deadline,omitzero"`
+	LeaseSeconds   int            `json:"lease_seconds,omitzero"`
 	Tenant         string         `json:"tenant,omitempty"`
 	ClaimRef       string         `json:"claim_ref,omitempty"`
 	Volumes        []types.Volume `json:"volumes,omitempty"`
@@ -158,7 +159,8 @@ func (s *claimStore) synced() bool {
 func dtoOf(sb *types.Sandbox) claimDTO {
 	return claimDTO{
 		ID: sb.ID, VMName: sb.VMName, Key: sb.Key, Token: sb.Token,
-		Deadline: sb.Deadline, Tenant: sb.Tenant, ClaimRef: sb.ClaimRef,
+		Deadline: sb.Deadline, LeaseSeconds: sb.LeaseSeconds,
+		Tenant: sb.Tenant, ClaimRef: sb.ClaimRef,
 		Volumes: slices.Clone(sb.Volumes), VsockSocket: sb.VsockSocket,
 		TAP: sb.TAP, HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap,
 		ArchiveCk: sb.ArchiveCk, FromCheckpoint: sb.FromCheckpoint,
