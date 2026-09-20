@@ -95,6 +95,14 @@ func TestEffectiveTargetGrowsAnEmptyPoolAndReturnsItToEmpty(t *testing.T) {
 	}
 }
 
+func TestEffectiveTargetKeepsASlowPoolAheadOfSparseDemand(t *testing.T) {
+	now := time.Now()
+	p := &pool{key: types.PoolKey{}, floor: 1, warmMax: 3, lead: 2 * time.Minute, rate: 0.01, lastArrival: now}
+	if got := p.effectiveTarget(now); got != 3 {
+		t.Errorf("target %d at 0.01/s with a two minute lead, want 3: the empty-floor cutoff must not reach a sized pool", got)
+	}
+}
+
 func TestRefillGrowsAnEmptyPoolOnDemand(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, WarmMax: 4})

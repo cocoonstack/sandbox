@@ -49,13 +49,13 @@ func (p *pool) effectiveTarget(now time.Time) int {
 	if !p.lastArrival.IsZero() {
 		rate *= math.Exp(-now.Sub(p.lastArrival).Seconds() / rateDecayTau.Seconds())
 	}
-	if rate*rateDecayTau.Seconds() < 1 {
-		return p.floor
-	}
-	if p.lead == 0 {
-		return max(p.floor, 1)
-	}
 	dynamic := int(math.Ceil(rate * p.lead.Seconds() * leadSafety))
+	if p.lead == 0 && rate > 0 {
+		dynamic = 1
+	}
+	if dynamic == 1 && rate*rateDecayTau.Seconds() < 1 {
+		dynamic = 0
+	}
 	return max(p.floor, min(dynamic, p.warmMax))
 }
 
