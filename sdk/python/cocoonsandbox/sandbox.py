@@ -6,6 +6,7 @@ import contextlib
 import socket
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, cast
 
@@ -101,7 +102,7 @@ class Sandbox:
             raise ValueError("timeout must be positive")
         deadline = None if timeout is None else time.monotonic() + timeout
         expired = threading.Event()
-        started: list[int] = []
+        started: deque[int] = deque(maxlen=1)
         try:
             conn = self._connect(deadline)
         except (ProtocolError, TimeoutError):
@@ -109,7 +110,7 @@ class Sandbox:
                 raise SandboxTimeout(f"command did not finish within {timeout}s") from None
             raise
         with self._lease(conn):
-            watchdog = _arm_watchdog(conn, deadline, expired)
+            watchdog = None if deadline is None else _arm_watchdog(conn, deadline, expired)
             pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True) if stdin else None
             try:
                 conn.send(
@@ -502,15 +503,16 @@ class Sandbox:
             return code
 
     def _kill_after_cut(self, pid: int) -> None:
+        deadline = time.monotonic() + _KILL_WAIT_SECONDS
         with contextlib.suppress(SandboxError, OSError):
-            conn = self._connect(time.monotonic() + _KILL_WAIT_SECONDS)
-            with self._lease(conn):
-                conn.settimeout(_KILL_WAIT_SECONDS)
-                try:
+            conn = self._connect(deadline)
+            watchdog = _arm_watchdog(conn, deadline, threading.Event())
+            try:
+                with self._lease(conn):
                     conn.send("kill", pid=pid)
                     _expect(conn, "done")
-                finally:
-                    conn.settimeout(None)
+            finally:
+                watchdog.cancel()
 
 
 class Session(_Closeable):
@@ -637,10 +639,7 @@ def _send_chunks(conn: Conn, data: bytes, op: str = "data", chunk: int = FS_CHUN
         conn.send(op, data=view[off : off + chunk])
 
 
-def _arm_watchdog(conn: Conn, deadline: float | None, expired: threading.Event) -> threading.Timer | None:
-    if deadline is None:
-        return None
-
+def _arm_watchdog(conn: Conn, deadline: float, expired: threading.Event) -> threading.Timer:
     def cut() -> None:
         expired.set()
         conn.abort()
