@@ -503,7 +503,7 @@ func (m *Manager) Run(ctx context.Context) {
 			m.shrinkOnce(ctx)
 			go m.retryArchiveDeletes(ctx)
 		case <-storeSweep.C:
-			m.sweepStoreGenerations(ctx)
+			go m.sweepStoreGenerations(ctx)
 			go m.sweepExpiredCheckpoints(ctx)
 		}
 	}
