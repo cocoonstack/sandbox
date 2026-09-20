@@ -129,7 +129,7 @@ type PreviewResponse struct {
 	URL string `json:"url"`
 }
 
-// Seconds converts wire seconds to a duration and saturates where the multiply would overflow.
+// Seconds converts wire seconds to a duration: a negative count is zero and a huge one saturates instead of wrapping.
 func Seconds(n int) time.Duration {
-	return time.Duration(min(int64(n), math.MaxInt64/int64(time.Second))) * time.Second
+	return time.Duration(min(max(int64(n), 0), math.MaxInt64/int64(time.Second))) * time.Second
 }

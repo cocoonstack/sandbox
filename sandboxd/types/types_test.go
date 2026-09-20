@@ -15,6 +15,11 @@ func TestSecondsSaturatesInsteadOfWrapping(t *testing.T) {
 	if got := (TTLField{TTLSeconds: 9223372037}).TTL(); got <= 24*time.Hour {
 		t.Errorf("TTL() = %v for a huge ttl_seconds, want it to reach the 24h clamp", got)
 	}
+	for _, n := range []int{-1, -10_000_000_000, math.MinInt64} {
+		if got := Seconds(n); got != 0 {
+			t.Errorf("Seconds(%d) = %v, want 0 (the server default), never a wrapped positive", n, got)
+		}
+	}
 	if got := Seconds(90); got != 90*time.Second {
 		t.Errorf("Seconds(90) = %v", got)
 	}
