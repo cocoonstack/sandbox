@@ -86,6 +86,19 @@ def test_a_guest_error_comes_back_as_a_tool_error(monkeypatch):
     assert "no such directory" in tool.invoke({"path": "/nope/a.txt", "content": "body"})
 
 
+def test_default_lease_outlives_an_agent_run(monkeypatch):
+    kit = CocoonToolkit("127.0.0.1:1")
+    seen = {}
+
+    def new(template, **kwargs):
+        seen.update(kwargs)
+        return FakeSandbox()
+
+    monkeypatch.setattr(kit._client, "new", new)
+    kit.get_tools()[0].invoke({"command": "echo hi"})
+    assert seen["ttl_seconds"] == 3600, seen
+
+
 def test_close_releases_once(monkeypatch):
     kit, fake = hooked(monkeypatch)
     kit.get_tools()[0].invoke({"command": "x"})

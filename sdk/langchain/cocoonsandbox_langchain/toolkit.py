@@ -42,7 +42,7 @@ class CocoonToolkit:
         api_token: str = "",
         template: str = "rt:24.04",
         net: str = "",
-        ttl_seconds: int = 0,
+        ttl_seconds: int = 3600,
         from_checkpoint: str = "",
     ) -> None:
         self._client = Client(addr, api_token=api_token, timeout=CALL_TIMEOUT)

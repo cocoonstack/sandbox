@@ -14,12 +14,15 @@ import pytest
 from cocoonsandbox import ProtocolError, SilkdError
 from cocoonsandbox_openai import CocoonSandboxClient, CocoonSandboxClientOptions, CocoonSandboxSessionState
 
+CLAIMS: list = []
+
 
 class FakeNode(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
-        _ = self.rfile.read(length)
+        body = self.rfile.read(length)
         if self.path == "/v1/claim":
+            self.server.claims.append(json.loads(body))
             self._reply(200, {"id": "sb_1", "token": "tok", "owner_addr": self.headers["Host"]})
         elif self.path.endswith("/release"):
             self._reply(204, None)
@@ -44,6 +47,8 @@ class FakeNode(BaseHTTPRequestHandler):
 @pytest.fixture
 def node():
     server = HTTPServer(("127.0.0.1", 0), FakeNode)
+    server.claims = CLAIMS
+    CLAIMS.clear()
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"127.0.0.1:{server.server_port}"
     server.shutdown()
@@ -64,6 +69,16 @@ def test_create_claims_and_state_round_trips(node):
         await client.delete(session)
 
     asyncio.run(go())
+
+
+def test_default_lease_outlives_an_agent_run(node):
+    async def go():
+        client = CocoonSandboxClient()
+        session = await client.create(options=CocoonSandboxClientOptions(addr=node))
+        await client.delete(session)
+
+    asyncio.run(go())
+    assert CLAIMS[0]["ttl_seconds"] == 3600, CLAIMS
 
 
 def test_operations_share_one_sandbox_handle(node):

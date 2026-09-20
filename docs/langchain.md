@@ -25,6 +25,10 @@ schemas, sync-native with `asyncio.to_thread` async bridges):
 | `sandbox_read_file` | read a text file |
 | `sandbox_list_dir` | list a directory as JSON |
 
+The claim's lease is `ttl_seconds`, one hour by default: nothing renews a
+lease, and an agent run outlives the node's 5-minute default. Once the lease
+ends the sandbox is gone and every later tool call reports it.
+
 A failed call — a missing path, a guest error, an expired or unreachable
 sandbox — comes back to the model as the tool's error text, not as an
 exception out of the agent run. Every tool's first call claims the sandbox

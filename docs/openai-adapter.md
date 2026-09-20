@@ -41,7 +41,8 @@ pair over the sync [Python SDK](sdk-python.md), bridged with
 
 `CocoonSandboxClientOptions` carries the node address, api token, template
 ref, network lane (empty for the node's default, or `none`/`egress`), and
-TTL. The session state is
+`ttl_seconds`, which defaults to one hour: nothing renews a lease, and a
+session outlives the node's 5-minute default. The session state is
 JSON-serializable, so a run can be resumed against the same sandbox after a
 process restart. Requires Python 3.10+ (the Agents SDK floor); the
 underlying `cocoonsandbox` stays 3.9+.
