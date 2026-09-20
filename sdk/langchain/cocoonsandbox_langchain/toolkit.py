@@ -108,12 +108,12 @@ class CocoonToolkit:
             sb.close()
 
     def sandbox(self, deadline: float | None = None) -> Sandbox:
-        """The claimed sandbox, claiming (or branching) on first use within the caller's deadline."""
+        """The claimed sandbox, claiming (or branching) on first use by deadline, else within CALL_TIMEOUT."""
         with self._lock:
             if self._closed:
                 raise RuntimeError("toolkit is closed")
             if self._sb is None:
-                self._sb = self._claim(deadline)
+                self._sb = self._claim(time.monotonic() + CALL_TIMEOUT if deadline is None else deadline)
             return self._sb
 
     def _claim(self, deadline: float | None = None) -> Sandbox:

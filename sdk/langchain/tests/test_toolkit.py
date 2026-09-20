@@ -43,7 +43,15 @@ def test_file_tools_round_trip(monkeypatch):
     assert "a.txt" in list_dir.invoke({"path": "/w"})
 
 
-def test_exec_claims_inside_the_call_budget(monkeypatch):
+@pytest.mark.parametrize(
+    ("name", "args"),
+    [
+        ("sandbox_exec", {"command": "echo hi"}),
+        ("sandbox_write_file", {"path": "/w/a.txt", "content": "body"}),
+        ("sandbox_list_dir", {"path": "/w"}),
+    ],
+)
+def test_first_tool_call_claims_inside_the_call_budget(monkeypatch, name, args):
     kit = CocoonToolkit("127.0.0.1:1")
     seen = []
 
@@ -52,7 +60,7 @@ def test_exec_claims_inside_the_call_budget(monkeypatch):
         return FakeSandbox()
 
     monkeypatch.setattr(kit, "_claim", claim)
-    kit.get_tools()[0].invoke({"command": "echo hi"})
+    next(t for t in kit.get_tools() if t.name == name).invoke(args)
     assert len(seen) == 1 and seen[0] is not None
     assert 0 < seen[0] - time.monotonic() <= CALL_TIMEOUT, seen[0]
 
