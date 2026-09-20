@@ -34,7 +34,8 @@ sandbox — comes back to the model as the tool's error text, not as an
 exception out of the agent run. Every tool's first call claims the sandbox
 inside the same 5-minute budget.
 
-**Branching**: `CocoonToolkit(..., from_checkpoint="ck_...")` claims the
+**Branching**: `CocoonToolkit(..., from_checkpoint="ck_...")` — the checkpoint
+pins the template, lane and size, so `template` and `net` are ignored — claims the
 sandbox from a [checkpoint](sdk-python.md#checkpoints--branching-and-time-travel)'s
 captured moment instead of a clean template — agents start from prepared
 state (dependencies installed, repo cloned) in milliseconds, and every

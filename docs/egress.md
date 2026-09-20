@@ -157,7 +157,10 @@ and the secret injection that rides it — is always an explicit act. Root
 claims have no tenant layer and take the pool's policy whole; a key with no
 configured pool — a promoted template, or an image cold-booted on demand — has
 no pool layer, so a tenant's claim of one takes the tenant's policy alone (a
-root claim of one stays denied). Secrets are registered separately and
+root claim of one stays denied). The layers are read against the pool set of
+the moment, not pinned at claim time: after a `PUT /v1/pools` adds or drops a
+pool, a live claim of that key follows the change at its next wake or the next
+restart. Secrets are registered separately and
 referenced by name — the value comes from the environment, never the config
 file.
 

@@ -40,9 +40,10 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
 - `claim_ref` is an optional opaque caller reference echoed by the scoped
   sandbox index; the aggregated apiserver uses `<namespace>/<name>`
 - `no_redirect` is set by the SDK when retrying at a redirect target
-- `require_promoted` is an internal redirect field. When a redirect response
-  sets it, copy it into the `no_redirect` retry so the target cannot cold-boot
-  a promoted template name if its gossip view is stale
+- `require_promoted` is an internal redirect field of volume claims, the only
+  path that sets or reads it. When a redirect response sets it, copy it into
+  the `no_redirect` retry so the target cannot cold-boot a promoted template
+  name if its gossip view is stale
 - `volumes` is an ordered list of at most eight unique catalog names. `mount`
   defaults to `/volumes/<name>`; a custom value must be absolute and clean,
   outside the guest OS tree, unique, and non-nesting within the request.
@@ -318,7 +319,12 @@ protocol: a node answering a `no_redirect` delete speaks only for itself.
 ## PUT /v1/pools
 
 Auth: root only (tenant tokens get 403). Replaces the node's desired warm
-targets online — no restart, live claims untouched:
+targets online — no restart, and no live claim's VM is touched. One thing does
+follow the pool set on a node with egress policies: whether a key is pooled
+decides which [policy layers](egress.md) apply to it, and a live claim picks
+that up at its next wake or the next restart — a key that gains a pool with no
+`egress` block loses tenant egress, a key that loses such a pool falls back to
+the tenant's policy alone:
 
 ```json
 {"pools": [{"template": "base:24.04", "net": "none", "size": "small",
@@ -359,7 +365,8 @@ guest HTTP port from a browser: body `{"token": "...", "port": 8080,
 "ttl_seconds": 0}` → `{"url": "http://<preview_advertise>/p/<token>/"}`.
 The URL's life is clamped to the claim's remaining lease; an archived claim
 kept forever (`archive_delete_after_seconds: 0`) has no lease, so there the
-requested `ttl_seconds` stands and releasing the sandbox is what ends the URL.
+requested `ttl_seconds` stands unclamped and `ttl_seconds: 0` mints a one-hour
+URL; releasing the sandbox ends it early either way.
 501 when the node
 has no `preview_listen`. The signed token embeds the sandbox id, port, and
 owner `advertise_addr`, so any node's preview listener can serve it (forwarding

@@ -451,8 +451,10 @@ across Runs), `Stdout`/`Stderr` (nil discards). With `Session` set only
 read `/dev/null`, and stderr arrives merged into stdout. A command's
 environment is `PATH`, `TERM` and the lane's proxy variables plus `Env` — not
 the image's `ENV`; `HOME` and `USER` are set only with `User`. A dropped
-connection kills a foreground command; use `Spawn` for work that must outlive
-it.
+connection — a canceled ctx included — kills a foreground command only once it
+next writes output; a silent one (`sleep`, a quiet build) runs on in the guest.
+Use `Spawn` for work that must outlive the connection; to stop a command that
+is still running after a drop, find its pid with `Ps` and `Kill` it.
 
 Non-zero exits surface as `*sandbox.ExitError{Code, Stderr}` from `Exec`
 (alongside partial stdout); `Run` returns the code directly.
@@ -492,7 +494,9 @@ err = sess.Close(ctx)
 ids, err := sb.Sessions(ctx)                       // live session ids
 ```
 
-Idle sessions are reaped guest-side after 30 minutes.
+Idle sessions are reaped guest-side after 30 minutes. `Close` on a session
+that is already gone — and `Lsp.Stop` on a server that already exited — answers
+silkd's `not_found`; ignore it in a deferred cleanup.
 
 ## Files
 

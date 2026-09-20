@@ -44,7 +44,10 @@ Every tool call is capped at 5 minutes.
 | `node_info` | warm pools, live claims, drain state, capacity and mesh peers |
 
 Sandbox handles (and their tokens) are held by the server process for the
-session. Checkpoints outlive sessions: `branch_checkpoint` accepts any known
+session, and released with it: when the MCP client disconnects or the server
+is signalled, it destroys every sandbox that session claimed, whatever
+`ttl_seconds` asked for. `checkpoint` first if the state must survive.
+Checkpoints outlive sessions: `branch_checkpoint` accepts any known
 id without a listing round-trip. If the connected node does not hold it, the
 claim follows a live owner probe and redirect, or heals the checkpoint locally
 when peer healing is enabled. `delete_checkpoint` is different: it acts on the

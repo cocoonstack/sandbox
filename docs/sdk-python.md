@@ -339,7 +339,9 @@ inside the guest; `session=` routes the command into a persistent session,
 where only `argv` applies — the session owns the cwd, environment and user,
 and stderr arrives merged into stdout. A command's environment is `PATH`,
 `TERM` and the lane's proxy variables plus `env`, not the image's `ENV`. A
-dropped connection kills a foreground command; `spawn` outlives it.
+dropped connection — a `run(timeout=)` cut included — kills a foreground command
+only once it next writes output; a silent one runs on in the guest. `spawn`
+outlives the connection by design; `ps` then `kill` stops one still running.
 
 ## Background processes
 
