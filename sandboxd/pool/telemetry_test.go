@@ -27,23 +27,8 @@ func TestUsageJournalRecordsLifecycle(t *testing.T) {
 		t.Fatalf("Release: %v", err)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
-	if err != nil {
-		t.Fatalf("read journal: %v", err)
-	}
-	var events []string
-	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
-		var ev usageEvent
-		if err := json.Unmarshal([]byte(line), &ev); err != nil {
-			t.Fatalf("bad journal line %q: %v", line, err)
-		}
-		if ev.ID == sb.ID {
-			events = append(events, ev.Event)
-		}
-	}
-	want := []string{"claim", "hibernate", "wake", "release"}
-	if strings.Join(events, ",") != strings.Join(want, ",") {
-		t.Errorf("events %v, want %v", events, want)
+	if got, want := usageEventsOf(t, m, sb.ID), "claim,hibernate,wake,release"; got != want {
+		t.Errorf("events %s, want %s", got, want)
 	}
 
 	c := m.Counters()
@@ -215,4 +200,23 @@ func TestPreviewDialWritesAuditEvent(t *testing.T) {
 	if ev.ID != sb.ID || ev.Op != "preview" || ev.Port != 8080 {
 		t.Errorf("audit event %+v", ev)
 	}
+}
+
+func usageEventsOf(t *testing.T, m *Manager, id string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
+	if err != nil {
+		t.Fatalf("read journal: %v", err)
+	}
+	var events []string
+	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
+		var ev usageEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("bad journal line %q: %v", line, err)
+		}
+		if ev.ID == id {
+			events = append(events, ev.Event)
+		}
+	}
+	return strings.Join(events, ",")
 }

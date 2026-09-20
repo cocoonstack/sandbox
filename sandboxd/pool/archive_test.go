@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -333,9 +334,12 @@ func TestArchiveRetentionPurge(t *testing.T) {
 		m.reapOnce(t.Context())
 		waitFor(t, func() bool { return archivedCount(m) == 0 })
 
-		waitFor(t, func() bool { return m.Counters().ArchiveDeletes > 0 })
+		waitFor(t, func() bool { return m.Counters().Reaps > 0 })
 		if ckExists(t, m, ck) {
 			t.Error("purge did not delete the archived checkpoint")
+		}
+		if got := usageEventsOf(t, m, sb.ID); !strings.HasSuffix(got, "archive,archive_delete,reap") {
+			t.Errorf("events %s, want the purge to close the claim with a reap", got)
 		}
 
 		m.mu.Lock()

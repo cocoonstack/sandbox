@@ -450,6 +450,8 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			m.disarmEgress(v.id, true)
 			m.purgeArchiveCk(ctx, v.id, v.ck, v.tenant)
 			m.untrack(m.pendingCks, v.ck)
+			m.counters.reaps.Add(1)
+			m.recordUsage(ctx, usageEvent{Event: "reap", ID: v.id})
 			logger.Infof(ctx, "purged archived sandbox %s", v.id)
 		case reapArchive:
 			logSweepResult(ctx, logger, m.archive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
