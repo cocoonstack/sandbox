@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -134,6 +135,17 @@ func TestFetchLegacyExportLayout(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(dir, "disk.img"))
 	if err != nil || string(got) != "legacy-bytes" {
 		t.Fatalf("fetched legacy export: %q, %v", got, err)
+	}
+}
+
+func TestFetchReportsMetaWithoutExportAsNotFound(t *testing.T) {
+	const id = "ck_00000000000000cc"
+	fake := &fakeS3{objects: map[string][]byte{
+		"ck/" + id + "/" + store.MetaFile: []byte(`{"id":"` + id + `"}`),
+	}}
+	st := newTestStore(t, fake)
+	if _, _, _, err := st.Fetch(t.Context(), id); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Fetch = %v, want store.ErrNotFound", err)
 	}
 }
 

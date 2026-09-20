@@ -331,7 +331,7 @@ func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string
 		}
 	}
 	if len(keys) == 0 {
-		return fmt.Errorf("record %s has no export", id)
+		return store.ErrNotFound
 	}
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(fetchConcurrency)
