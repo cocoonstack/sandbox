@@ -58,6 +58,28 @@ func TestExecReturnsBufferedOutput(t *testing.T) {
 	}
 }
 
+func TestExecAuditsTheFrameWithoutItsDelimiter(t *testing.T) {
+	ts, srv := newRelayServer(t, func(conn net.Conn) {
+		defer conn.Close()
+		r := bufio.NewReader(conn)
+		for range 2 {
+			if _, err := r.ReadBytes('\n'); err != nil {
+				return
+			}
+		}
+		_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n"+`{"type":"exit","code":0}`+"\n")
+	})
+	audited := make(chan []byte, 1)
+	srv.mgr.(*fakeManager).audited = func(_ string, line []byte) { audited <- bytes.Clone(line) }
+	if status, body := postExec(t, ts, `{"argv":["true"]}`); status != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", status, body)
+	}
+	want, _ := wire.EncodeRequest(wire.Exec{Argv: []string{"true"}})
+	if got := <-audited; !bytes.Equal(got, want) {
+		t.Errorf("audited %q, want the bare frame %q", got, want)
+	}
+}
+
 func TestExecMapsSilkdErrors(t *testing.T) {
 	for _, tt := range []struct {
 		kind string

@@ -68,10 +68,10 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	}
 	defer closeOnCancel(ctx, guest)()
 	frame, _ := wire.EncodeRequest(wire.Exec{Argv: req.Argv, Cwd: req.Cwd, Env: req.Env})
-	frame = append(frame, '\n')
 	if s.mgr.AuditEnabled() {
 		s.mgr.Audit(ctx, id, frame)
 	}
+	frame = append(frame, '\n')
 	stdinClose, _ := wire.EncodeRequest(wire.StdinClose{})
 	frame = append(frame, stdinClose...)
 	frame = append(frame, '\n')
