@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -36,6 +37,7 @@ const (
 	metaReadConcurrency = 8
 	publishConcurrency  = 4 // files in parallel; each already multiparts internally
 	fetchConcurrency    = 4
+	fetchBudget         = 30 * time.Minute
 	deleteBatch         = 1000 // DeleteObjects caps one request at 1000 keys
 )
 
@@ -126,7 +128,9 @@ func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, string, e
 		return export, meta, digest, nil
 	}
 	_, err, _ = s.fetches.Do(gen, func() (any, error) {
-		return nil, s.populate(ctx, id, meta, gen)
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchBudget)
+		defer cancel()
+		return nil, s.populate(fctx, id, meta, gen)
 	})
 	if err != nil {
 		return "", nil, "", err
