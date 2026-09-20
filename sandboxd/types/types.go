@@ -26,6 +26,9 @@ const (
 	SizeXLarge  Size = "xlarge"
 	Size2XLarge Size = "2xlarge"
 
+	LayerPooled   PolicyLayer = "pooled"
+	LayerUnpooled PolicyLayer = "unpooled"
+
 	RestoreCopy     RestoreMode = "copy"
 	RestoreOnDemand RestoreMode = "ondemand"
 	RestoreMmap     RestoreMode = "mmap"
@@ -63,6 +66,9 @@ var (
 
 // NetShape selects whether the Cloud Hypervisor guest has a NIC.
 type NetShape string
+
+// PolicyLayer pins, at claim time, whether the key had a pool layer in its egress policy.
+type PolicyLayer string
 
 // RestoreMode selects cocoon's clone memory-restore strategy; empty is cocoon's default.
 type RestoreMode string
@@ -144,6 +150,8 @@ type Sandbox struct {
 	Deadline time.Time `json:"deadline,omitzero"`
 	// LeaseSeconds is the lease the claim asked for; a wake from the archive grants it again.
 	LeaseSeconds int `json:"lease_seconds,omitzero"`
+	// Layer is empty on a record older than the field, which resolves against the live pool set.
+	Layer PolicyLayer `json:"policy_layer,omitempty"`
 
 	// Tenant names the owning tenant; empty means the operator claimed it.
 	Tenant string `json:"tenant,omitempty"`

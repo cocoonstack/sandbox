@@ -211,6 +211,36 @@ func TestEgressLaneWakeFailsClosed(t *testing.T) {
 	}
 }
 
+func TestEffectivePolicyKeepsTheLayerPinnedAtClaim(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	m.tenantEgress = map[string]*egress.Policy{"acme": {Allow: []egress.Rule{{Host: "b.test"}}}}
+	m.poolEgress = map[types.PoolKey]*egress.Policy{}
+
+	m.pools = map[types.PoolKey]*pool{testKey: newPool(testKey)}
+	if _, ok := m.effectivePolicy(&types.Sandbox{Key: testKey, Tenant: "acme", Layer: types.LayerUnpooled}); !ok {
+		t.Error("a claim made on an unpooled key lost its tenant policy when the key gained a pool")
+	}
+	m.pools = map[types.PoolKey]*pool{}
+	if _, ok := m.effectivePolicy(&types.Sandbox{Key: testKey, Tenant: "acme", Layer: types.LayerPooled}); ok {
+		t.Error("a claim made on a policy-less pool gained the tenant policy when the pool was dropped")
+	}
+}
+
+func TestClaimRecordsItsPolicyLayer(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
+	if sb := mustClaim(t, m, testKey); sb.Layer != types.LayerPooled {
+		t.Errorf("pooled claim layer %q, want %q", sb.Layer, types.LayerPooled)
+	}
+	unpooled := types.PoolKey{Template: "promoted-name", Net: types.NetNone, Size: types.SizeSmall}
+	sb, err := m.ClaimProvision(t.Context(), unpooled, time.Hour, "acme", "", nil)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if sb.Layer != types.LayerUnpooled {
+		t.Errorf("unpooled claim layer %q, want %q", sb.Layer, types.LayerUnpooled)
+	}
+}
+
 func TestEffectivePolicyComposition(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	both := &egress.Policy{Allow: []egress.Rule{{Host: "a.test"}, {Host: "b.test"}}}

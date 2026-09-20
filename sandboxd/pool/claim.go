@@ -290,6 +290,10 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		return quotaErr
 	}
 	for _, sb := range sbs {
+		sb.Layer = types.LayerUnpooled
+		if _, pooled := m.activePool(sb.Key); pooled {
+			sb.Layer = types.LayerPooled
+		}
 		m.claimed[sb.ID] = sb
 		m.tenantDelta(sb.Tenant, 1)
 	}
