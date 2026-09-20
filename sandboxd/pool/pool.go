@@ -404,12 +404,14 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	}
 	m.ckptTTL = time.Duration(cfg.CheckpointTTLHours) * time.Hour
 	m.tplSet = map[string]string{}
-	if metas, listErr := m.tpls.Metas(ctx); listErr == nil {
-		for _, raw := range metas {
-			var rec templateRecord
-			if json.Unmarshal(raw, &rec) == nil && rec.ID != "" {
-				m.tplSet[rec.ID] = rec.Tenant
-			}
+	metas, listErr := m.tpls.Metas(ctx)
+	if listErr != nil {
+		log.WithFunc("pool.NewManager").Warnf(ctx, "list templates skipped: %v", listErr)
+	}
+	for _, raw := range metas {
+		var rec templateRecord
+		if json.Unmarshal(raw, &rec) == nil && rec.ID != "" {
+			m.tplSet[rec.ID] = rec.Tenant
 		}
 	}
 	usage, err := newJournal(filepath.Join(cfg.DataDir, "usage.jsonl"))
