@@ -98,6 +98,12 @@ func (s *claimStore) mark() claimSnapshot {
 	return claimSnapshot{seq: s.seq}
 }
 
+func (s *claimStore) pending(snap claimSnapshot) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return snap.seq > s.written
+}
+
 // reset rebuilds the whole projection; the startup path, before contention exists.
 func (s *claimStore) reset(claims map[string]*types.Sandbox) claimSnapshot {
 	s.mu.Lock()

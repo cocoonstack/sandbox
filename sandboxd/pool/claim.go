@@ -483,12 +483,15 @@ func (m *Manager) recommit(ctx context.Context, snap claimSnapshot) {
 		return
 	}
 	go func() {
-		defer m.recommitting.Store(false)
 		backoff := recommitBackoff
 		for {
 			err := m.store.commit(snap)
 			if err == nil {
-				return
+				m.recommitting.Store(false)
+				if snap = m.store.mark(); !m.store.pending(snap) || !m.recommitting.CompareAndSwap(false, true) {
+					return
+				}
+				continue
 			}
 			log.WithFunc("pool.recommit").Error(ctx, err, "persist claims")
 			time.Sleep(backoff)
