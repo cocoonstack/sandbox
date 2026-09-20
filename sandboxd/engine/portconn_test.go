@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
 func TestGuestPortConnFramesBothWays(t *testing.T) {
@@ -98,5 +100,15 @@ func TestGuestPortConnRoundTripsFixtures(t *testing.T) {
 	n, _ = silk3.Read(line)
 	if want := fixture("req_data.json"); !bytes.Equal(line[:n], want) {
 		t.Errorf("write frame %q, want fixture %q", line[:n], want)
+	}
+}
+
+func TestPortReadBufHoldsOneBulkFrame(t *testing.T) {
+	frame, err := wire.EncodeResponse(wire.DataResp{Data: make([]byte, wire.BulkChunk)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(frame) + 1; n > portReadBuf {
+		t.Errorf("a full bulk data frame is %d bytes with its delimiter, portReadBuf %d cannot take it in one read", n, portReadBuf)
 	}
 }
