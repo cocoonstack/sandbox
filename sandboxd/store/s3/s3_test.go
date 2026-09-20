@@ -175,11 +175,19 @@ func TestFetchOutlivesTheCallerThatStartedIt(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond)
 	hangUp()
+	select {
+	case err := <-started:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("first caller's Fetch = %v, want its own cancellation", err)
+		}
+	case <-time.After(5 * time.Second):
+		close(fake.exportGate)
+		t.Fatal("first caller's Fetch still blocked on the stalled download after it hung up")
+	}
 	close(fake.exportGate)
 	if err := <-joined; err != nil {
 		t.Fatalf("second caller's Fetch = %v after the first caller hung up, want the shared download", err)
 	}
-	<-started
 }
 
 func TestDigestReaderIgnoresReadBoundaries(t *testing.T) {

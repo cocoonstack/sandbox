@@ -127,13 +127,18 @@ func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, string, e
 	if _, statErr := os.Stat(export); statErr == nil {
 		return export, meta, digest, nil
 	}
-	_, err, _ = s.fetches.Do(gen, func() (any, error) {
+	flight := s.fetches.DoChan(gen, func() (any, error) {
 		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchBudget)
 		defer cancel()
 		return nil, s.populate(fctx, id, meta, gen)
 	})
-	if err != nil {
-		return "", nil, "", err
+	select {
+	case res := <-flight:
+		if res.Err != nil {
+			return "", nil, "", res.Err
+		}
+	case <-ctx.Done():
+		return "", nil, "", ctx.Err()
 	}
 	return export, meta, digest, nil
 }
