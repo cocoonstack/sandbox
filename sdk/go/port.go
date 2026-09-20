@@ -138,8 +138,7 @@ func (s *Sandbox) openStream(ctx context.Context, req wire.Request) (*PortConn, 
 		return nil, err
 	}
 	if _, err = expect[wire.Ready](ctx, conn); err != nil {
-		l.close()
-		return nil, err
+		return nil, l.done(err)
 	}
 	pr, pw := io.Pipe()
 	p := &PortConn{conn: conn, stop: l.close, out: pr}
