@@ -2,10 +2,12 @@
 shaping, lazy claim, and double-close safety — no real node."""
 
 import asyncio
+import socket
+import threading
 import time
 
 import pytest
-from cocoonsandbox import SilkdError
+from cocoonsandbox import Sandbox, SilkdError
 from cocoonsandbox_langchain import CocoonToolkit
 from cocoonsandbox_langchain.toolkit import CALL_TIMEOUT
 
@@ -43,7 +45,15 @@ def test_file_tools_round_trip(monkeypatch):
     assert "a.txt" in list_dir.invoke({"path": "/w"})
 
 
-def test_exec_claims_inside_the_call_budget(monkeypatch):
+@pytest.mark.parametrize(
+    ("name", "args"),
+    [
+        ("sandbox_exec", {"command": "echo hi"}),
+        ("sandbox_write_file", {"path": "/w/a.txt", "content": "body"}),
+        ("sandbox_list_dir", {"path": "/w"}),
+    ],
+)
+def test_first_tool_call_claims_inside_the_call_budget(monkeypatch, name, args):
     kit = CocoonToolkit("127.0.0.1:1")
     seen = []
 
@@ -52,7 +62,7 @@ def test_exec_claims_inside_the_call_budget(monkeypatch):
         return FakeSandbox()
 
     monkeypatch.setattr(kit, "_claim", claim)
-    kit.get_tools()[0].invoke({"command": "echo hi"})
+    next(t for t in kit.get_tools() if t.name == name).invoke(args)
     assert len(seen) == 1 and seen[0] is not None
     assert 0 < seen[0] - time.monotonic() <= CALL_TIMEOUT, seen[0]
 
@@ -65,6 +75,30 @@ def test_exec_reports_a_claim_that_outlives_the_budget(monkeypatch):
 
     monkeypatch.setattr(kit, "_claim", claim)
     assert kit.get_tools()[0].invoke({"command": "echo hi"}) == f"cut off after {CALL_TIMEOUT}s"
+
+
+def test_a_guest_error_comes_back_as_a_tool_error(monkeypatch):
+    kit, fake = hooked(monkeypatch)
+
+    def refused(path, data):
+        raise SilkdError("not_found", "no such directory")
+
+    fake.write_file = refused
+    tool = next(t for t in kit.get_tools() if t.name == "sandbox_write_file")
+    assert "no such directory" in tool.invoke({"path": "/nope/a.txt", "content": "body"})
+
+
+def test_default_lease_outlives_an_agent_run(monkeypatch):
+    kit = CocoonToolkit("127.0.0.1:1")
+    seen = {}
+
+    def new(template, **kwargs):
+        seen.update(kwargs)
+        return FakeSandbox()
+
+    monkeypatch.setattr(kit._client, "new", new)
+    kit.get_tools()[0].invoke({"command": "echo hi"})
+    assert seen["ttl_seconds"] == 3600, seen
 
 
 def test_close_releases_once(monkeypatch):
@@ -80,6 +114,31 @@ def test_use_after_close_raises(monkeypatch):
     kit.close()
     with pytest.raises(RuntimeError):
         kit.sandbox()
+
+
+def test_read_file_reports_a_missing_path_as_a_tool_error(monkeypatch):
+    kit, fake = hooked(monkeypatch)
+
+    def missing(path):
+        raise SilkdError("not_found", "no such file")
+
+    fake.read_file = missing
+    tool = next(t for t in kit.get_tools() if t.name == "sandbox_read_file")
+    assert "no such file" in tool.invoke({"path": "/nope"})
+
+
+def test_a_stalled_agent_upgrade_comes_back_as_a_tool_error():
+    server = socket.create_server(("127.0.0.1", 0))
+    addr = f"127.0.0.1:{server.getsockname()[1]}"
+    threading.Thread(target=serve_silence, args=(server,), daemon=True).start()
+    kit = CocoonToolkit(addr)
+    kit._client.timeout = 0.2
+    kit._sb = Sandbox(kit._client, "sb_1", "tok", addr)
+    tool = next(t for t in kit.get_tools() if t.name == "sandbox_read_file")
+    try:
+        assert "timed out" in tool.invoke({"path": "/etc/hostname"})
+    finally:
+        server.close()
 
 
 class FakeSandbox:
@@ -119,12 +178,8 @@ def hooked(monkeypatch):
     return kit, fake
 
 
-def test_read_file_reports_a_missing_path_as_a_tool_error(monkeypatch):
-    kit, fake = hooked(monkeypatch)
-
-    def missing(path):
-        raise SilkdError("not_found", "no such file")
-
-    fake.read_file = missing
-    tool = next(t for t in kit.get_tools() if t.name == "sandbox_read_file")
-    assert "no such file" in tool.invoke({"path": "/nope"})
+def serve_silence(server: socket.socket) -> None:
+    conn, _ = server.accept()
+    conn.recv(4096)
+    time.sleep(1)
+    conn.close()

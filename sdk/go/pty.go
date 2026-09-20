@@ -104,8 +104,7 @@ func (s *Sandbox) OpenPty(ctx context.Context, opts PtyOpts) (*Pty, error) {
 	}
 	started, err := expect[wire.Started](ctx, conn)
 	if err != nil {
-		l.close()
-		return nil, err
+		return nil, l.done(err)
 	}
 
 	pr, pw := io.Pipe()

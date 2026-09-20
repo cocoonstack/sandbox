@@ -70,9 +70,10 @@ echo "== start sandboxd (small pool opted into SOCKS5, medium pool without a pol
 "$DATA/sandboxd" -config "$DATA/config.json" >>"$DATA/daemon.log" 2>&1 &
 DAEMON_PID=$!
 for _ in $(seq 1 40); do curl -sf "http://$ADDR/healthz" >/dev/null && break; sleep 0.5; done
-for _ in $(seq 1 180); do
+for i in $(seq 1 180); do
   curl -sf -H "Authorization: Bearer $TOKEN" "http://$ADDR/v1/info" 2>/dev/null |
     jq -e '(.pools | length) == 3 and all(.pools[]; .warm >= 1)' >/dev/null 2>&1 && break
+  [[ $i == 180 ]] && { echo "pools never became warm"; exit 1; }
   sleep 1
 done
 

@@ -1,6 +1,7 @@
 package types
 
 import (
+	"math"
 	"time"
 )
 
@@ -11,7 +12,7 @@ type TTLField struct {
 
 // TTL converts the wire seconds to a duration.
 func (f TTLField) TTL() time.Duration {
-	return time.Duration(f.TTLSeconds) * time.Second
+	return Seconds(f.TTLSeconds)
 }
 
 // ClaimRequest is the wire body of POST /v1/claim.
@@ -126,4 +127,9 @@ type PreviewRequest struct {
 // PreviewResponse carries the minted URL.
 type PreviewResponse struct {
 	URL string `json:"url"`
+}
+
+// Seconds converts wire seconds to a duration: a negative count is zero and a huge one saturates instead of wrapping.
+func Seconds(n int) time.Duration {
+	return time.Duration(min(max(int64(n), 0), math.MaxInt64/int64(time.Second))) * time.Second
 }

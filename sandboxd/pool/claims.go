@@ -22,20 +22,22 @@ type claimSnapshot struct {
 
 // claimDTO is the persisted projection of a Sandbox, copied so commit marshals off m.mu.
 type claimDTO struct {
-	ID             string         `json:"id"`
-	VMName         string         `json:"vm_name"`
-	Key            types.PoolKey  `json:"key"`
-	Token          string         `json:"token,omitempty"`
-	Deadline       time.Time      `json:"deadline,omitzero"`
-	Tenant         string         `json:"tenant,omitempty"`
-	ClaimRef       string         `json:"claim_ref,omitempty"`
-	Volumes        []types.Volume `json:"volumes,omitempty"`
-	VsockSocket    string         `json:"vsock_socket,omitempty"`
-	TAP            string         `json:"tap,omitempty"`
-	HibernateSnap  string         `json:"hibernate_snap,omitempty"`
-	PendingSnap    string         `json:"pending_snap,omitempty"`
-	ArchiveCk      string         `json:"archive_ck,omitempty"`
-	FromCheckpoint string         `json:"from_checkpoint,omitempty"`
+	ID             string            `json:"id"`
+	VMName         string            `json:"vm_name"`
+	Key            types.PoolKey     `json:"key"`
+	Token          string            `json:"token,omitempty"`
+	Deadline       time.Time         `json:"deadline,omitzero"`
+	LeaseSeconds   int               `json:"lease_seconds,omitzero"`
+	Layer          types.PolicyLayer `json:"policy_layer,omitempty"`
+	Tenant         string            `json:"tenant,omitempty"`
+	ClaimRef       string            `json:"claim_ref,omitempty"`
+	Volumes        []types.Volume    `json:"volumes,omitempty"`
+	VsockSocket    string            `json:"vsock_socket,omitempty"`
+	TAP            string            `json:"tap,omitempty"`
+	HibernateSnap  string            `json:"hibernate_snap,omitempty"`
+	PendingSnap    string            `json:"pending_snap,omitempty"`
+	ArchiveCk      string            `json:"archive_ck,omitempty"`
+	FromCheckpoint string            `json:"from_checkpoint,omitempty"`
 }
 
 // claimStore persists claimed sandboxes across daemon restarts; warm VMs are not persisted.
@@ -98,6 +100,12 @@ func (s *claimStore) mark() claimSnapshot {
 	return claimSnapshot{seq: s.seq}
 }
 
+func (s *claimStore) pending(snap claimSnapshot) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return snap.seq > s.written
+}
+
 // reset rebuilds the whole projection; the startup path, before contention exists.
 func (s *claimStore) reset(claims map[string]*types.Sandbox) claimSnapshot {
 	s.mu.Lock()
@@ -152,7 +160,8 @@ func (s *claimStore) synced() bool {
 func dtoOf(sb *types.Sandbox) claimDTO {
 	return claimDTO{
 		ID: sb.ID, VMName: sb.VMName, Key: sb.Key, Token: sb.Token,
-		Deadline: sb.Deadline, Tenant: sb.Tenant, ClaimRef: sb.ClaimRef,
+		Deadline: sb.Deadline, LeaseSeconds: sb.LeaseSeconds, Layer: sb.Layer,
+		Tenant: sb.Tenant, ClaimRef: sb.ClaimRef,
 		Volumes: slices.Clone(sb.Volumes), VsockSocket: sb.VsockSocket,
 		TAP: sb.TAP, HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap,
 		ArchiveCk: sb.ArchiveCk, FromCheckpoint: sb.FromCheckpoint,

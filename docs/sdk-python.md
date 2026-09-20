@@ -11,9 +11,9 @@ with client.new("ghcr.io/cocoonstack/sandbox/rt:24.04") as sb:
 `pip install cocoonstack-sandbox` — stdlib-only, no dependencies, and
 synchronous by design (agent frameworks that need async wrap calls in
 `asyncio.to_thread`, exactly like the [OpenAI adapter](openai-adapter.md)
-does). It matches the [Go SDK](sdk.md) guest and data-plane surface, with two
+does). It matches the [Go SDK](sdk.md) guest and data-plane surface, with three
 exceptions: operator pool retuning (`SetPools`/`SetPoolsCluster`) remains
-Go-only, and file and tar payloads are whole `bytes` values rather than
+Go-only, `Template.new` takes no `claim_ref`, and file and tar payloads are whole `bytes` values rather than
 streams (`read_file`/`pull` return them, `write_file`/`push` take them; the
 wire is chunked, the caller's copy is not). Wire fidelity is
 pinned by the shared protocol fixture corpus that the Rust guest, Go, and
@@ -75,8 +75,10 @@ client = Client("10.0.0.5:7777", api_token="...", timeout=120.0)
 tenant token (resource-creating verbs only; operator surfaces answer it
 403). On a cluster every node shares the root token and the same tenants
 set. `timeout` bounds every control-plane request and the data-plane dial
-and upgrade; a guest stream then lives until the guest ends it, as in the
-Go SDK. A caller with a wall clock of its own passes `deadline` to a claim
+and upgrade; a guest stream then lives until the guest ends it. Unlike the
+Go SDK, where a canceled context closes any call, only `run`/`exec` take a
+`timeout` here: every other data-plane call blocks until the guest answers
+or the connection drops. A caller with a wall clock of its own passes `deadline` to a claim
 (below) so the redirect walk cannot outlive it.
 
 **Clusters need nothing extra**: dial any node. On a warm miss the entry
@@ -189,7 +191,8 @@ gets one connection per call as before.
 If that deployment also enables `archive_after_seconds`, archiving replaces
 the original claim deadline with the archive-retention deadline (or no
 deadline when archives are kept forever). Waking an archive starts a fresh
-server-default 5m lease. The existing handle's `sb.deadline` remains the value
+lease of the length the claim was granted (the server default when it asked
+for none). The existing handle's `sb.deadline` remains the value
 returned when that handle was created; call `client.sandboxes()` to read the
 current server deadline after an archive/wake transition.
 
@@ -333,7 +336,19 @@ its end the connection is cut, which makes silkd kill the command, and
 `exec` returns stdout and raises `ExitError` on a non-zero exit — carrying
 `code`, `stderr`, and the `stdout` produced before it failed. `run` streams raw bytes through the callbacks (chunk boundaries may
 split multi-byte sequences) and returns the exit code. `user` de-escalates
-inside the guest; `session=` routes the command into a persistent session.
+inside the guest; `session=` routes the command into a persistent session,
+where only `argv` applies — the session owns the cwd, environment and user,
+and stderr arrives merged into stdout. A command's environment is `PATH`,
+`TERM` and the lane's proxy variables plus `env`, not the image's `ENV`. The
+guest kills a foreground command whose connection dropped only once it next
+writes output, so a `run(timeout=)` cut does not leave that to the drop: once
+the guest has reported the command's pid, the cut sends that pid a `kill` over
+a connection of its own (best effort, bounded to 5 s) before `SandboxTimeout`
+is raised. A client that only drops the connection leaves a silent command
+running in the guest; `ps` then `kill` stops it. `spawn` outlives the
+connection by design. A command run through a session is the session's: it
+reports no pid, so no cut kills it and it is not in `ps`; it runs to
+completion, and the session's `close()` is what ends the session.
 
 ## Background processes
 
@@ -348,6 +363,8 @@ sb.kill(pid)                                  # default SIGKILL
 `spawn` starts the command detached with a bounded output ring; `logs`
 replays it, `attach` follows live output until exit (replay and live stream
 hand off atomically). Killing an already-exited process is a no-op success.
+An exited process leaves the table after 5 minutes; from then on its pid
+raises `SilkdError` `not_found`.
 
 ## Sessions
 
@@ -408,6 +425,10 @@ results = sb.replace(["/work/main.py"], r"foo", "bar")
 ```
 
 Patterns are regular expressions evaluated in the guest — no shell quoting.
+`replace` is atomic per file, not per list: it raises at the first missing,
+unreadable or non-UTF-8 path and the files before it stay rewritten, so pass it
+paths a `find` just returned. A `find` fails as a whole when one match's frame
+would pass the 8 MiB cap.
 
 ## Watching
 
@@ -459,14 +480,15 @@ pty.close()
 
 ```python
 sb = client.new("rt:24.04", claim_ref="ns/workload")
-client.sandboxes()                     # id, key, deadline, claim_ref — never tokens
+client.sandboxes()                     # one summary dict per live claim — never tokens
 client.drain()                         # cordon: refuse new claims, run leases out
 client.uncordon()
 client.attach(owner_addr, id, token)   # bind a known handle, no lookup round-trip
 ```
 
 `sandboxes()` is scoped to the calling token, so a tenant sees only its own
-claims. `drain()` leaves live claims alone — poll `info()` until `claimed` is
+claims; the fields are those of [`GET /v1/sandboxes`](sandboxd-api.md#get-v1sandboxes).
+`drain()` leaves live claims alone — poll `info()` until `claimed` is
 zero.
 
 ## Errors

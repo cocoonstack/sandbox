@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	// ExportDir is the snapshot export under a record: <id>/export.
+	// ExportDir is the snapshot export inside a staging dir; publish renames it to its ExportGen.
 	ExportDir = "export"
 	// MetaFile is the record's metadata, written last so a lister never sees a half-published record.
 	MetaFile = "meta.json"

@@ -39,6 +39,23 @@ func TestCallsShareOneConnection(t *testing.T) {
 	}
 }
 
+func TestRefusedStreamOpenKeepsItsConnection(t *testing.T) {
+	var upgrades atomic.Int32
+	fake := silkdtest.NewFake(t.TempDir())
+	sb := testSandbox(t, newAgentServer(t, func(c net.Conn) {
+		upgrades.Add(1)
+		fake.ServeConn(c)
+	}))
+	for range 3 {
+		if _, err := sb.Watch(t.Context(), "/missing", false); err == nil {
+			t.Fatal("watch on a missing path succeeded")
+		}
+	}
+	if got := upgrades.Load(); got != 1 {
+		t.Errorf("upgrades = %d, want 1: an error frame ends the RPC, not the connection", got)
+	}
+}
+
 func TestOldDaemonDialsPerCall(t *testing.T) {
 	var upgrades atomic.Int32
 	sb := testSandbox(t, newAgentServer(t, func(c net.Conn) {

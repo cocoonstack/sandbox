@@ -25,9 +25,14 @@ on a daemon that keeps the connection. Binary payloads ride base64 in `data`
 fields. Frames are capped at 8 MiB; requests carry `"v": 1` and unknown
 fields are ignored (the forward-compatibility story).
 
-Sessions and processes are server-side state addressed by id — a dropped
-connection loses nothing (`attach` resumes). The connection-bound verbs are
-`fs_watch`, `pty_open`, `lsp_request`, and `port_forward`.
+Sessions and detached processes are server-side state addressed by id — a
+dropped connection loses nothing (`attach` resumes). A foreground `exec` is
+bound to its connection, but silkd learns of a drop only when a write to the
+client fails: a child that is producing output is killed and its pid freed, a
+silent one runs to completion — which is why the SDKs' `Run`/`run` answer a
+canceled ctx or a timeout with a `kill` of the pid `started` reported. The other
+connection-bound verbs are `fs_watch`, `pty_open`, `lsp_request`, and
+`port_forward`.
 
 The authoritative wire contract is the shared fixture corpus in
 `protocol/wire/fixtures/v1`, round-tripped by the Rust, Go, and Python test
@@ -37,12 +42,12 @@ suites — a frame only one side can parse fails CI.
 
 | group | ops | response flow |
 |---|---|---|
-| exec | `exec {argv, cwd?, env?, user?, detach?, session?}` | `started{pid}` → `stdout/stderr{data}`… → `exit{code}`; the client may stream `stdin{data}` / `stdin_close`. `detach` returns after `started`; the process keeps a bounded output ring for later `logs`/`attach`; not combinable with `session` |
+| exec | `exec {argv, cwd?, env?, user?, detach?, session?}` | `started{pid}` → `stdout/stderr{data}`… → `exit{code}`; the client may stream `stdin{data}` / `stdin_close`. `detach` returns after `started`; the process keeps a bounded output ring for later `logs`/`attach` and leaves the table 5 minutes after it exits, after which its pid answers `not_found`; not combinable with `session`. With `session` only `argv` is used — `cwd`, `env`, `user` and `stdin` frames are ignored (the session owns them, and its commands read `/dev/null`) — no `started` is sent, and stderr arrives merged into `stdout`. A child's environment is cleared to `PATH`, `TERM` and the lane's proxy variables plus `env`; `HOME` and `USER` are set only with `user` |
 | procs | `ps` / `kill {pid, signal?}` / `attach {pid}` / `logs {pid}` | `ps` answers one `procs{procs}` frame, `kill` a bare `done`; `logs` and `attach` stream `stdout/stderr{data}`… then `exit{code}` (`logs` closes with `done`, and so does `attach` when the process is gone before its exit). Handles are guest pids; any connection can list, signal, replay, or re-attach live |
 | sessions | `session_create {id?, cwd?, env?}` / `session_list` / `session_rm {id}` | `session_created{id}` / `sessions{sessions}` / `done`. A session is a real persistent bash; `exec` with `session` runs inside it. Idle sessions are reaped after 30 minutes |
 | fs | `fs_write {path, mode?}` (+`data`/`data_end` frames) / `fs_read` / `fs_list` / `fs_stat` / `fs_mkdir {parents?}` / `fs_rm {recursive?}` / `fs_rename {from, to}` | `fs_read` streams `data{data}`… → `done` for a regular file and answers `bad_request` for a directory, device or FIFO, `fs_list` streams 4096-entry `entries{entries}` batches → `done`, `fs_stat` answers one `stat{info}`, and the mutating verbs terminate with `done`. Streaming runs both directions; write commits atomically via temp+rename and inherits an overwritten file's mode |
 | tree | `fs_push {dest}` (+tar as `data` frames) / `fs_pull {path}` | whole trees as tar streams through the guest tar: `fs_pull` streams `data{data}`… → `done`, `fs_push` terminates with `done` |
-| search | `fs_find {path, pattern, glob?}` → `match{file, line, content}`… → `done` / `fs_replace {files, pattern, replacement}` → `replaced{file, replacements}`… → `done` | regex as data, no shell quoting; `glob` is anchored `*`/`?` wildcards over file names; find skips binary and >8 MiB files, and replace skips the same 8 MiB bound with a zero count |
+| search | `fs_find {path, pattern, glob?}` → `match{file, line, content}`… → `done` / `fs_replace {files, pattern, replacement}` → `replaced{file, replacements}`… → `done` | regex as data, no shell quoting; `glob` is anchored `*`/`?` wildcards over file names; find skips binary and >8 MiB files, and replace skips the same 8 MiB bound with a zero count. One match whose frame would pass the 8 MiB cap ends the find with an `error`. Replace is atomic per file, not per list: it stops with an `error` at the first missing, unreadable or non-UTF-8 file, and the files before it stay rewritten |
 | watch | `fs_watch {path, recursive?}` | `ready` once armed (events after it are guaranteed captured), then `event{kind, path}` until the client disconnects; watcher or delivery-queue overflow errors arrive as a terminal `error` instead of silently losing events |
 | pty | `pty_open {cols, rows, cwd?, env?, user?}` / `pty_resize {pid, cols, rows}` | `pty_open` answers `started{pid}`, then a shell under a pseudo-terminal: output as `stdout` frames, input as `stdin` frames, `exit{code}` terminal; `pty_resize` answers `done`. PTYs register in the proc table like any exec |
 | git | `git_clone {url, path, branch?, depth?, auth?}` / `git_status {path}` / `git_add {path, files}` / `git_commit {path, message, author}` / `git_push {path, auth?}` / `git_pull {path, auth?}` / `git_branch {path, action, name?}` | `git_status_result` (porcelain v2), `git_commit_result{hash}`, `git_branches{current, branches}` for `git_branch {action: "list"}`; every other verb terminates with `done`. A status past about 1 MiB of entries carries `truncated: true` with the head of the list, so one frame never exceeds the cap. `auth` is injected as an in-memory header, never written to guest disk |
@@ -85,10 +90,14 @@ own routed network never gets them.
 ## Limits
 
 - 8 MiB frame cap (a malformed peer cannot OOM the daemon)
-- foreground exec output is backpressured: a slow client paces the child
-  rather than losing output; detached observers ride a best-effort broadcast
+- foreground exec output is backpressured while the child runs: a slow client
+  paces it rather than losing output. Once the child exits, the client has 2
+  seconds to drain what is still queued (up to 8 MiB) before `exit` is sent
+  and the rest is dropped. Detached observers ride a best-effort broadcast
 - no fsync durability on writes (guest page cache semantics)
 - `fs_push` is network-failure atomic: the stream extracts into a staging
   dir inside `dest` and merges (local renames) only after the tar terminates
-  cleanly, so a truncated stream or dropped connection leaves `dest`
-  untouched; the residual crash window is the merge itself, microseconds
+  cleanly, so a truncated stream or dropped connection leaves `dest`'s
+  contents untouched; `dest` itself and any missing parent are created before
+  the stream starts and stay behind, empty, on failure. The residual crash
+  window is the merge itself, microseconds

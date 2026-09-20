@@ -6,6 +6,7 @@ import contextlib
 import socket
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, cast
 
@@ -17,6 +18,9 @@ from .template import Template
 
 if TYPE_CHECKING:
     from .client import Client
+
+_ACCEPT_POLL_SECONDS = 1.0
+_KILL_WAIT_SECONDS = 5.0
 
 
 class Sandbox:
@@ -93,11 +97,12 @@ class Sandbox:
         on_stderr: Callable[[bytes], object] | None = None,
         timeout: float | None = None,
     ) -> int:
-        """Streams raw output bytes and returns the exit code; timeout bounds the entire call."""
+        """Streams raw output bytes and returns the exit code; timeout bounds the call and kills what it cuts."""
         if timeout is not None and timeout <= 0:
             raise ValueError("timeout must be positive")
         deadline = None if timeout is None else time.monotonic() + timeout
         expired = threading.Event()
+        started: deque[int] = deque(maxlen=1)
         try:
             conn = self._connect(deadline)
         except (ProtocolError, TimeoutError):
@@ -105,7 +110,7 @@ class Sandbox:
                 raise SandboxTimeout(f"command did not finish within {timeout}s") from None
             raise
         with self._lease(conn):
-            watchdog = _arm_watchdog(conn, deadline, expired)
+            watchdog = None if deadline is None else _arm_watchdog(conn, deadline, expired)
             pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True) if stdin else None
             try:
                 conn.send(
@@ -120,11 +125,13 @@ class Sandbox:
                 if pump is not None:
                     pump.start()
                 else:
-                    with contextlib.suppress(OSError):
+                    with contextlib.suppress(ProtocolError):
                         conn.send("stdin_close")
-                code = _pump_stdio(conn, on_stdout, on_stderr)
+                code = _pump_stdio(conn, on_stdout, on_stderr, started.append)
             except (ProtocolError, OSError):
                 if expired.is_set():
+                    if started:
+                        self._kill_after_cut(started[0])
                     raise SandboxTimeout(f"command did not finish within {timeout}s") from None
                 raise
             except SilkdError:
@@ -419,16 +426,24 @@ class Sandbox:
         try:
             conn.send(op, **fields)
             frame = _expect(conn, expect)
+        except SilkdError:
+            self._park(conn)
+            raise
         except BaseException:
             conn.close()
             raise
         return conn, frame
 
     def _proxy_accept_loop(self, listener: socket.socket, port: int) -> None:
-        with contextlib.suppress(OSError):
-            while True:
+        listener.settimeout(_ACCEPT_POLL_SECONDS)
+        while True:
+            try:
                 local, _ = listener.accept()
-                threading.Thread(target=self._proxy_conn, args=(local, port), daemon=True).start()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            threading.Thread(target=self._proxy_conn, args=(local, port), daemon=True).start()
 
     def _proxy_conn(self, local: socket.socket, port: int) -> None:
         try:
@@ -450,7 +465,7 @@ class Sandbox:
         pump = threading.Thread(target=pump_out, daemon=True)
         pump.start()
         try:
-            with contextlib.suppress(OSError):
+            with contextlib.suppress(SandboxError, OSError):
                 while True:
                     chunk = local.recv(FS_CHUNK)
                     if not chunk:
@@ -486,6 +501,16 @@ class Sandbox:
             if trailing_done and code is not None:
                 _expect(conn, "done")
             return code
+
+    def _kill_after_cut(self, pid: int) -> None:
+        deadline = time.monotonic() + _KILL_WAIT_SECONDS
+        with contextlib.suppress(SandboxError, OSError), self._lease(self._connect(deadline)) as conn:
+            watchdog = _arm_watchdog(conn, deadline, threading.Event())
+            try:
+                conn.send("kill", pid=pid)
+                _expect(conn, "done")
+            finally:
+                watchdog.cancel()
 
 
 class Session(_Closeable):
@@ -612,10 +637,7 @@ def _send_chunks(conn: Conn, data: bytes, op: str = "data", chunk: int = FS_CHUN
         conn.send(op, data=view[off : off + chunk])
 
 
-def _arm_watchdog(conn: Conn, deadline: float | None, expired: threading.Event) -> threading.Timer | None:
-    if deadline is None:
-        return None
-
+def _arm_watchdog(conn: Conn, deadline: float, expired: threading.Event) -> threading.Timer:
     def cut() -> None:
         expired.set()
         conn.abort()
@@ -634,16 +656,21 @@ def _feed_stdin(conn: Conn, stdin: bytes) -> None:
 
 
 def _pump_stdio(
-    conn: Conn, on_stdout: Callable[[bytes], object] | None, on_stderr: Callable[[bytes], object] | None
+    conn: Conn,
+    on_stdout: Callable[[bytes], object] | None,
+    on_stderr: Callable[[bytes], object] | None,
+    on_started: Callable[[int], object] | None = None,
 ) -> int | None:
     for frame in conn.recv_until("exit", "done"):
         t = frame["type"]
-        if t == "stdout" and on_stdout:
-            on_stdout(frame["data"])
+        if t == "started" and on_started:
+            on_started(cast(int, _need(frame, "pid")))
+        elif t == "stdout" and on_stdout:
+            on_stdout(_need(frame, "data"))
         elif t == "stderr" and on_stderr:
-            on_stderr(frame["data"])
+            on_stderr(_need(frame, "data"))
         elif t == "exit":
-            return cast(int, frame["code"])
+            return cast(int, _need(frame, "code"))
     return None
 
 
@@ -672,5 +699,5 @@ def _drain_data(conn: Conn) -> bytes:
     chunks = []
     for frame in conn.recv_until("done"):
         if frame["type"] == "data":
-            chunks.append(frame["data"])
+            chunks.append(_need(frame, "data"))
     return b"".join(chunks)

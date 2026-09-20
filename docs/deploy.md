@@ -91,6 +91,12 @@ sandboxd reads one JSON file (`-config`, default
 }
 ```
 
+As written the `egress` pool's guests reach nothing: on a bridge lane the NIC
+is locked default-deny and the proxy door is bound only for a claim that has a
+policy. Give the pool an [`egress`](egress.md) block before expecting traffic;
+a tenant's claim of it (`acme` above) needs the tenant's own block as well and
+gets the intersection of the two.
+
 | field | default | meaning |
 |---|---|---|
 | `listen` | `:7777` | control- and data-plane HTTP listener |
@@ -120,10 +126,10 @@ sandboxd reads one JSON file (`-config`, default
 | `checkpoint_peer_heal` | false | on a cluster, lets a node pull a checkpoint it lacks from a peer — found via a live probe, not gossip — rather than failing the branch; see [placement lifecycle](cluster.md#checkpoints-on-a-cluster). Three requirements, all enforced at config load: a nonempty `api_token` (the blob transfer between peers authenticates with it; without one the raw record stream would be open), `mesh.cluster_key` set (the pull presents the fleet `api_token` to an address learned from the peer probe, so the gossip layer carrying that address must itself be authenticated), and `checkpoint_ttl_hours` nonzero (a replica a delete broadcast missed becomes eligible for expiry after it, and its next successful hourly sweep removes it — so it is the finite eligibility point, not an exact ceiling). A shared checkpoint store (`checkpoint_store` kind `s3`) ignores this setting — every node already resolves every checkpoint directly, so there is nothing to heal |
 | `warm_max` (pool entry) | 0 (static) | turns on the demand-adaptive watermark for that pool: the warm target rises from `warm` toward `warm_max` while claims arrive faster than the measured provision lead covers, and decays back over ~a minute of silence. The pool follows the target down: warm VMs above it are destroyed once the count has stayed above it for a full decay period, so a burst does not leave the pool parked at its high-water mark |
 | `warmup` (pool entry) | unset | argv run in the golden VM after readiness and before its snapshot, so the files it touches are page-cache-resident in every clone, and again in every clone before it joins the warm pool, so those pages are already faulted into the restored VM when the first command runs — e.g. `["node", "-e", "0"]` on a Node flavor. It runs under the engine's 2-minute command timeout in silkd's base environment (`PATH`, `TERM`, and the guest image's proxy variables wherever nothing routes directly — the none lane and the locked bridge egress lane — with the proxy not yet serving, since a door pre-bound at refill only starts serving at claim); a non-zero exit or a timeout fails the golden build, so the pool stays unfilled until the config is fixed. Config-owned like `egress`: `PUT /v1/pools` rejects it, and a golden built with a different warmup is rebuilt |
-| `max_claims` | 0 (unlimited) | node-wide cap on live claims; claim/fork/branch requests beyond it answer 429 with the pool state unharmed (on a cluster, normal warm-candidate placement applies, with volume claims limited to candidates holding every requested volume) |
+| `max_claims` | 0 (unlimited) | node-wide cap on live claims; claim/fork/branch requests beyond it answer 429 with the pool state unharmed (on a cluster a non-volume claim tries a warm-peer redirect first; a volume claim answers the 429 with no redirect) |
 | `audit_log` | false | append every relayed frame that opens an RPC — its op + addressing fields, never payloads — to `<data_dir>/audit.jsonl`; continuation `data`, `data_end`, `stdin`, and `stdin_close` frames pass through unrecorded. The file is size-rotated with one `.1` backup. Records are `{t, id, op}` plus whichever addressing fields the op carries (`argv`, `path`, `dest`, `from`, `to`, `url`, `session`, `port`), plus `method` (`GET`, `CONNECT`, `SOCKS5`, …), `decision` and `secret` (the ref name, never its value) on `egress` records; preview accesses record as op `preview`, one per request. An opening frame whose first line exceeds 4 KiB records as op `oversized` with no addressing fields |
 | `idle_hibernate_seconds` | 0 (off) | node-wide idle policy for unpooled claims (template/checkpoint claims): a none-lane claim is hibernated once it has had no open data-plane connection (relay, buffered exec, preview) and no egress request in flight for this long; the clock restarts when the last connection closes, so a long command is never cut short. The next call that reaches the guest wakes it transparently. Per-pool `idle_hibernate_seconds` does the same for that pool's claims; pooled keys ignore the node-wide value, and egress pools reject it because they cannot resume safely. Opt in deliberately: a wake costs latency and the snapshot, so callers with their own idle logic must not pay twice |
-| `archive_after_seconds` | 0 (off) | tier below hibernation: a hibernated claim idle this long is checkpointed to the store and its local VM dropped, freeing the node entirely; the next call that reaches the guest restores it transparently (a checkpoint restore's latency) with a fresh server-default 5m lease. Requires `idle_hibernate_seconds > 0` and must exceed it. Node-wide for unpooled keys; per-pool overrides for that pool |
+| `archive_after_seconds` | 0 (off) | tier below hibernation: a hibernated claim idle this long is checkpointed to the store and its local VM dropped, freeing the node entirely; the next call that reaches the guest restores it transparently (a checkpoint restore's latency) with a fresh lease of the length the claim was granted (the server default of 5m when it asked for none); nothing renews a lease. Keep `idle_hibernate_seconds` under the leases your claims use, or a woken sandbox that idles again is destroyed by the reap before it can hibernate, its archive already consumed by the wake; one still in use when its lease ends is destroyed the same way. Requires `idle_hibernate_seconds > 0` and must exceed it. Node-wide for unpooled keys; per-pool overrides for that pool |
 | `archive_delete_after_seconds` | 0 (keep) | purge an archived claim's store checkpoint this long after it was archived, reclaiming storage; the claim is then gone for good. On archive this retention window replaces the live claim deadline; 0 clears the deadline so the archive is kept forever. Same node-wide/per-pool split |
 | `mesh` | unset | join a cluster ([Clusters](cluster.md)); unset = single node |
 | `pools[]` | — | warm pools, keyed by `(template, net, size)`. `warm` defaults to 4 only when both `warm` and `warm_max` are omitted; an explicit `warm: 0` is kept, so `warm: 0` under a `warm_max` starts the pool empty and grows it on demand, and `warm: 0` alone registers the key with no warm VMs (`PUT /v1/pools` never defaults `warm`); `net` is `none` or `egress`; `size` is a tier, below. Retune online without a restart via [`PUT /v1/pools`](sandboxd-api.md#put-v1pools) — omitted pools drain. This is the **first-boot seed**: once a node takes a `PUT /v1/pools`, the applied set persists to `<data_dir>/pools.json` and overrides this section on every later boot (a startup log notes it); delete `pools.json` to return to config-owned pools. Egress stays config-owned either way. See [state ownership](cluster.md#state-ownership) |
@@ -299,7 +305,7 @@ here validates on load:
 
   "max_claims": 200,
   "audit_log": true,
-  "idle_hibernate_seconds": 300,
+  "idle_hibernate_seconds": 120,
   "archive_after_seconds": 3600,
   "archive_delete_after_seconds": 604800,
 
@@ -423,6 +429,7 @@ After=network-online.target
 [Service]
 ExecStart=/usr/local/bin/sandboxd -config /etc/sandboxd/config.json
 Restart=on-failure
+KillMode=process
 Environment=SANDBOXD_LOG_LEVEL=info
 
 [Install]
@@ -435,7 +442,10 @@ degradations. `journalctl` answers an empty range with `-- No entries --`, so
 a check that counts lines reads one problem where there are none — count
 records (`-o json | wc -l`) or test the output for emptiness.
 
-Stopping sandboxd leaves VMs alive; the next start reconciles them. Claimed
+Stopping sandboxd leaves VMs alive; the next start reconciles them. The unit's
+`KillMode=process` is what guarantees it: systemd signals sandboxd alone, so a
+VMM that cocoon could not move into its own scope, and any `cocoon` call still
+in flight, outlive the stop instead of dying with the service's cgroup. Claimed
 sandboxes are reaped when their TTL expires (default 5m, capped at 24h).
 
 To empty a node for maintenance, cordon it first:

@@ -71,33 +71,34 @@ func (s *Sandbox) downloadRPC(ctx context.Context, req wire.Request, sink func([
 	return l.done(drainData(ctx, conn, sink))
 }
 
-// pumpStdio copies stdout/stderr frames to the writers until the terminal frame: exit carries the code, done means the stream ended without one.
-func pumpStdio(ctx context.Context, conn *silkd.Conn, stdout, stderr io.Writer) (code int32, exited bool, err error) {
+// pumpStdio copies stdout/stderr frames to the writers until the terminal frame: exit carries the code, done means the stream ended without one; pid is the one started reported, zero before it.
+func pumpStdio(ctx context.Context, conn *silkd.Conn, stdout, stderr io.Writer) (pid uint32, code int32, exited bool, err error) {
 	stdout = cmp.Or(stdout, io.Discard)
 	stderr = cmp.Or(stderr, io.Discard)
 	for {
 		resp, err := recv(ctx, conn)
 		if err != nil {
-			return 0, false, err
+			return pid, 0, false, err
 		}
 		switch resp := resp.(type) {
 		case *wire.Started:
+			pid = resp.PID
 		case *wire.Stdout:
 			if _, err := stdout.Write(resp.Data); err != nil {
-				return 0, false, err
+				return pid, 0, false, err
 			}
 		case *wire.Stderr:
 			if _, err := stderr.Write(resp.Data); err != nil {
-				return 0, false, err
+				return pid, 0, false, err
 			}
 		case *wire.Exit:
-			return resp.Code, true, nil
+			return pid, resp.Code, true, nil
 		case *wire.Done:
-			return 0, false, nil
+			return pid, 0, false, nil
 		case *wire.ErrorResp:
-			return 0, false, resp
+			return pid, 0, false, resp
 		default:
-			return 0, false, unexpected(resp)
+			return pid, 0, false, unexpected(resp)
 		}
 	}
 }

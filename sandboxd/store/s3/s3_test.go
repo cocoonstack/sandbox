@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 
@@ -120,20 +122,54 @@ func TestDeleteRetainsMetaUntilExportsAreGone(t *testing.T) {
 	}
 }
 
-func TestFetchLegacyExportLayout(t *testing.T) {
-	const id = "ck_00000000000000aa"
+func TestFetchReportsMetaWithoutExportAsNotFound(t *testing.T) {
+	const id = "ck_00000000000000cc"
 	fake := &fakeS3{objects: map[string][]byte{
-		"ck/" + id + "/" + store.MetaFile:                []byte(`{"id":"` + id + `"}`),
-		"ck/" + id + "/" + store.ExportDir + "/disk.img": []byte("legacy-bytes"),
+		"ck/" + id + "/" + store.MetaFile: []byte(`{"id":"` + id + `"}`),
 	}}
 	st := newTestStore(t, fake)
-	dir, _, _, err := st.Fetch(t.Context(), id)
-	if err != nil {
-		t.Fatalf("Fetch: %v", err)
+	if _, _, _, err := st.Fetch(t.Context(), id); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Fetch = %v, want store.ErrNotFound", err)
 	}
-	got, err := os.ReadFile(filepath.Join(dir, "disk.img"))
-	if err != nil || string(got) != "legacy-bytes" {
-		t.Fatalf("fetched legacy export: %q, %v", got, err)
+}
+
+func TestFetchOutlivesTheCallerThatStartedIt(t *testing.T) {
+	const id = "ck_00000000000000dd"
+	metaKey := "ck/" + id + "/" + store.MetaFile
+	fake := &fakeS3{objects: map[string][]byte{}, exportGate: make(chan struct{}), exportEntered: make(chan struct{}, 1)}
+	st := newTestStore(t, fake)
+	publishRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "payload")
+	fake.resetRequests()
+
+	first, hangUp := context.WithCancel(t.Context())
+	started := make(chan error, 1)
+	go func() {
+		_, _, _, err := st.Fetch(first, id)
+		started <- err
+	}()
+	<-fake.exportEntered
+	joined := make(chan error, 1)
+	go func() {
+		_, _, _, err := st.Fetch(t.Context(), id)
+		joined <- err
+	}()
+	for fake.requestCount(http.MethodGet, metaKey) < 2 {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	hangUp()
+	select {
+	case err := <-started:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("first caller's Fetch = %v, want its own cancellation", err)
+		}
+	case <-time.After(5 * time.Second):
+		close(fake.exportGate)
+		t.Fatal("first caller's Fetch still blocked on the stalled download after it hung up")
+	}
+	close(fake.exportGate)
+	if err := <-joined; err != nil {
+		t.Fatalf("second caller's Fetch = %v after the first caller hung up, want the shared download", err)
 	}
 }
 
@@ -481,12 +517,21 @@ type fakeS3 struct {
 	deleteBatches [][]string
 	failList      bool
 	failDelete    bool
+	exportGate    chan struct{}
+	exportEntered chan struct{}
 }
 
 func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	key := strings.TrimPrefix(r.URL.Path, "/testbucket/")
+	if f.exportGate != nil && r.Method == http.MethodGet && strings.Contains(key, "/"+store.ExportDir) {
+		select {
+		case f.exportEntered <- struct{}{}:
+		default:
+		}
+		<-f.exportGate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	key := strings.TrimPrefix(r.URL.Path, "/testbucket/")
 	if f.requests == nil {
 		f.requests = map[fakeRequest]int{}
 	}

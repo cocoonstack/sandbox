@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -36,6 +37,7 @@ const (
 	metaReadConcurrency = 8
 	publishConcurrency  = 4 // files in parallel; each already multiparts internally
 	fetchConcurrency    = 4
+	fetchBudget         = 30 * time.Minute
 	deleteBatch         = 1000 // DeleteObjects caps one request at 1000 keys
 )
 
@@ -125,11 +127,18 @@ func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, string, e
 	if _, statErr := os.Stat(export); statErr == nil {
 		return export, meta, digest, nil
 	}
-	_, err, _ = s.fetches.Do(gen, func() (any, error) {
-		return nil, s.populate(ctx, id, meta, gen)
+	flight := s.fetches.DoChan(gen, func() (any, error) {
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchBudget)
+		defer cancel()
+		return nil, s.populate(fctx, id, meta, gen)
 	})
-	if err != nil {
-		return "", nil, "", err
+	select {
+	case res := <-flight:
+		if res.Err != nil {
+			return "", nil, "", res.Err
+		}
+	case <-ctx.Done():
+		return "", nil, "", ctx.Err()
 	}
 	return export, meta, digest, nil
 }
@@ -324,14 +333,7 @@ func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string
 		return err
 	}
 	if len(keys) == 0 {
-		// records published before per-generation prefixes.
-		exportPrefix = s.key(id, store.ExportDir) + "/"
-		if keys, err = s.list(ctx, exportPrefix); err != nil {
-			return err
-		}
-	}
-	if len(keys) == 0 {
-		return fmt.Errorf("record %s has no export", id)
+		return store.ErrNotFound
 	}
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(fetchConcurrency)

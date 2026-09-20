@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -151,6 +152,37 @@ func TestRunRefillsWhileTheRetentionSweepBlocks(t *testing.T) {
 	}
 }
 
+func TestRunRefillsWhileTheGenerationSweepBlocks(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+		m.pools[testKey].goldenDir = "/goldens/x"
+		stall := &stallingSweepStore{Store: m.ckpts, entered: make(chan struct{}, 1), release: make(chan struct{})}
+		m.ckpts = stall
+
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			m.Run(ctx)
+			close(done)
+		}()
+		defer func() {
+			close(stall.release)
+			cancel()
+			<-done
+		}()
+		time.Sleep(time.Hour + time.Second)
+		<-stall.entered
+
+		mustClaim(t, m, testKey)
+		waitFor(t, func() bool {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			return len(m.pools[testKey].warm) > 0
+		})
+	})
+}
+
 func TestCheckpointTenantIsolation(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -263,4 +295,19 @@ func (s *stallingMetasStore) Metas(ctx context.Context) ([][]byte, error) {
 	}
 	<-s.release
 	return s.Store.Metas(ctx)
+}
+
+type stallingSweepStore struct {
+	store.Store
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *stallingSweepStore) SweepGenerations() error {
+	select {
+	case s.entered <- struct{}{}:
+	default:
+	}
+	<-s.release
+	return s.Store.SweepGenerations()
 }

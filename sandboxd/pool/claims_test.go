@@ -1,16 +1,78 @@
 package pool
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
+
+func TestRecommitKeepsOneRetrierWhileWritesFail(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	dir := filepath.Join(t.TempDir(), "absent")
+	m.store.path = filepath.Join(dir, "claims.json")
+
+	before := runtime.NumGoroutine()
+	for range 50 {
+		m.mu.Lock()
+		snap := m.store.set(sb)
+		m.mu.Unlock()
+		m.recommit(t.Context(), snap)
+	}
+	if grown := runtime.NumGoroutine() - before; grown > 2 {
+		t.Fatalf("%d goroutines for 50 failed persists, want one retrier", grown)
+	}
+
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	waitFor(t, func() bool {
+		_, err := os.Stat(m.store.path)
+		return err == nil && !m.recommitting.Load()
+	})
+}
+
+func TestRecommitDrainsAChangeItWasTooBusyToSee(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	m.store.path = filepath.Join(t.TempDir(), "claims.json")
+	fifo := m.store.path + ".tmp"
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+	change := func() claimSnapshot {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.store.set(sb)
+	}
+
+	m.recommit(t.Context(), change())
+	waitFor(t, func() bool {
+		if m.store.writeMu.TryLock() {
+			m.store.writeMu.Unlock()
+			return false
+		}
+		return true
+	})
+	m.recommit(t.Context(), change())
+
+	r, err := os.Open(fifo)
+	if err != nil {
+		t.Fatalf("open fifo: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, r)
+	_ = r.Close()
+	waitFor(t, func() bool { return !m.recommitting.Load() && !m.store.pending(m.store.mark()) })
+}
 
 func TestStoreRoundTrip(t *testing.T) {
 	s := newClaimStore(t.TempDir())

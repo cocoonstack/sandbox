@@ -36,6 +36,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 
 	owned := map[string]bool{}
 	referenced := map[string]bool{}
+	var adopted []*types.Sandbox
 	m.mu.Lock()
 	for id, sb := range claims {
 		rec, ok := live[sb.VMName]
@@ -55,6 +56,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		case ok && sb.PendingSnap != "" && (snapsErr != nil || slices.Contains(snaps, sb.PendingSnap)):
 			// the journaled intent names the wake image, so adopt it when the snapshot is there
 			sb.HibernateSnap, sb.PendingSnap = sb.PendingSnap, ""
+			adopted = append(adopted, sb)
 		default:
 			continue
 		}
@@ -69,6 +71,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		m.adoptGolden(p)
 	}
 	m.mu.Unlock()
+	for _, sb := range adopted {
+		m.recordHibernate(ctx, sb)
+	}
 	// a crash mid-export leaves a golden *.tmp or a fork-* staging dir nothing in this life reuses
 	tmps, _ := filepath.Glob(filepath.Join(m.goldensDir(), "*.tmp"))
 	forks, _ := filepath.Glob(filepath.Join(m.dataDir, "fork-*"))

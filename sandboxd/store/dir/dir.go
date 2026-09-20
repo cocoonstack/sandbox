@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"slices"
 	"strings"
 	"time"
 
@@ -26,7 +25,6 @@ import (
 )
 
 const (
-	oldSuffix            = ".old" // pre-generation crash artifacts, reclaimed at Delete
 	digestPrefix         = "digest-"
 	digestWorkerLimit    = 8
 	digestReadBufferSize = 128 << 10
@@ -87,15 +85,10 @@ func (d *Store) Fetch(ctx context.Context, id string) (string, []byte, string, e
 		return "", nil, "", err
 	}
 	dir := filepath.Join(d.root, id, store.ExportGen(meta))
-	if _, statErr := os.Stat(dir); errors.Is(statErr, fs.ErrNotExist) {
-		dir = filepath.Join(d.root, id, store.ExportDir)
-		switch _, legacyErr := os.Stat(dir); {
-		case errors.Is(legacyErr, fs.ErrNotExist):
-			return "", nil, "", store.ErrNotFound
-		case legacyErr != nil:
-			return "", nil, "", legacyErr
-		}
-	} else if statErr != nil {
+	switch _, statErr := os.Stat(dir); {
+	case errors.Is(statErr, fs.ErrNotExist):
+		return "", nil, "", store.ErrNotFound
+	case statErr != nil:
 		return "", nil, "", statErr
 	}
 	digest, err := os.ReadFile(filepath.Join(d.root, id, digestName(meta))) //nolint:gosec // id pinned by the instance idRe
@@ -139,7 +132,7 @@ func (d *Store) Delete(_ context.Context, id string) error {
 	final := filepath.Join(d.root, id)
 	entries, err := os.ReadDir(final)
 	if errors.Is(err, fs.ErrNotExist) {
-		return os.RemoveAll(final + oldSuffix)
+		return nil
 	}
 	if err != nil {
 		return err
@@ -152,7 +145,7 @@ func (d *Store) Delete(_ context.Context, id string) error {
 			return err
 		}
 	}
-	return errors.Join(os.RemoveAll(final), os.RemoveAll(final+oldSuffix))
+	return os.RemoveAll(final)
 }
 
 func (d *Store) SweepStaging() error {
@@ -277,14 +270,9 @@ func (d *Store) sweepGenerations(id string) (err error) {
 	}
 	current := store.ExportGen(meta)
 	currentDigest := digestName(meta)
-	hasCurrent := slices.ContainsFunc(entries, func(e fs.DirEntry) bool { return e.Name() == current })
 	for _, e := range entries {
-		name := e.Name()
-		if name == store.MetaFile || name == current || name == currentDigest {
+		if name := e.Name(); name == store.MetaFile || name == current || name == currentDigest {
 			continue
-		}
-		if name == store.ExportDir && !hasCurrent {
-			continue // the legacy flat layout still backs the current meta
 		}
 		if removeErr := removeAgedEntry(final, e); removeErr != nil {
 			return removeErr
@@ -303,9 +291,6 @@ func touchCurrentGeneration(final string, now time.Time) error {
 	}
 	current := filepath.Join(final, store.ExportGen(meta))
 	exportErr := os.Chtimes(current, now, now) //nolint:gosec // current is a hash-derived name under our root
-	if errors.Is(exportErr, fs.ErrNotExist) {
-		exportErr = os.Chtimes(filepath.Join(final, store.ExportDir), now, now)
-	}
 	if errors.Is(exportErr, fs.ErrNotExist) {
 		return nil
 	}

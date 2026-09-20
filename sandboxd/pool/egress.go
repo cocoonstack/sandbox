@@ -311,7 +311,11 @@ func (m *Manager) effectivePolicy(sb *types.Sandbox) (egress.Evaluator, bool) {
 	poolPol := m.poolEgress[sb.Key]
 	tenantPol := m.tenantEgress[sb.Tenant]
 	if poolPol == nil {
-		if _, pooled := m.activePool(sb.Key); pooled || sb.Tenant == "" || tenantPol == nil {
+		pooled := sb.Layer == types.LayerPooled
+		if sb.Layer == "" {
+			_, pooled = m.activePool(sb.Key)
+		}
+		if pooled || sb.Tenant == "" || tenantPol == nil {
 			return nil, false
 		}
 		return *tenantPol, true

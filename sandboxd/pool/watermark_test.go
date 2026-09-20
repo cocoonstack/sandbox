@@ -76,6 +76,53 @@ func TestEffectiveTargetOffWithoutWarmMax(t *testing.T) {
 	}
 }
 
+func TestEffectiveTargetGrowsAnEmptyPoolAndReturnsItToEmpty(t *testing.T) {
+	now := time.Now()
+	p := &pool{key: types.PoolKey{}, warmMax: 8}
+	for i := range 60 {
+		p.noteArrival(now.Add(time.Duration(i) * 100 * time.Millisecond))
+	}
+	busy := now.Add(6 * time.Second)
+	if got := p.effectiveTarget(busy); got != 1 {
+		t.Fatalf("target %d under demand with no measured lead, want 1 so a refill can measure it", got)
+	}
+	p.noteLead(500 * time.Millisecond)
+	if got := p.effectiveTarget(busy); got != 8 {
+		t.Errorf("target %d at 10/s with a 500 ms lead, want warmMax 8", got)
+	}
+	if got := p.effectiveTarget(busy.Add(10 * time.Minute)); got != 0 {
+		t.Errorf("target %d after ten silent minutes, want the empty floor", got)
+	}
+}
+
+func TestEffectiveTargetKeepsASlowPoolAheadOfSparseDemand(t *testing.T) {
+	now := time.Now()
+	p := &pool{key: types.PoolKey{}, floor: 1, warmMax: 3, lead: 2 * time.Minute, rate: 0.01, lastArrival: now}
+	if got := p.effectiveTarget(now); got != 3 {
+		t.Errorf("target %d at 0.01/s with a two minute lead, want 3: the empty-floor cutoff must not reach a sized pool", got)
+	}
+}
+
+func TestRefillGrowsAnEmptyPoolOnDemand(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, WarmMax: 4})
+	p := m.pools[testKey]
+	p.goldenDir = "/goldens/x"
+	start := time.Now().Add(-3 * time.Second)
+	m.mu.Lock()
+	for i := range 30 {
+		p.noteArrival(start.Add(time.Duration(i) * 100 * time.Millisecond))
+	}
+	m.mu.Unlock()
+
+	m.refillOnce(t.Context())
+	waitFor(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return len(p.warm) > 0 && p.lead > 0
+	})
+}
+
 func TestNoteLeadConverges(t *testing.T) {
 	p := &pool{}
 	p.noteLead(time.Second)

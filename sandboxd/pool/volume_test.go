@@ -97,9 +97,7 @@ func TestClaimProvisionBringsMixedVolumesUpConcurrently(t *testing.T) {
 		{Name: "dataset", Mount: "/volumes/dataset"},
 		{Name: "cache", Mount: "/cache", Mode: types.VolumeModeRW},
 	}
-	var attaches sync.WaitGroup
-	attaches.Add(len(requested))
-	eng.attachRendezvous = &attaches
+	rendezvousAttaches(eng, len(requested))
 
 	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", requested)
 	if err != nil {
@@ -584,6 +582,13 @@ func assertVolumeBringUp(t *testing.T, eng *fakeEngine, applied []types.Volume) 
 func newVolumeManager(t *testing.T, eng *fakeEngine, volumes []config.VolumeSpec) *Manager {
 	t.Helper()
 	return newVolumeManagerAt(t, eng, t.TempDir(), volumes)
+}
+
+func rendezvousAttaches(eng *fakeEngine, n int) *sync.WaitGroup {
+	var attaches sync.WaitGroup
+	attaches.Add(n)
+	eng.attachRendezvous = &attaches
+	return &attaches
 }
 
 func newVolumePoolManager(t *testing.T, eng *fakeEngine, dataDir string, volumes []config.VolumeSpec) *Manager {

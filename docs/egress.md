@@ -44,8 +44,9 @@ supported*), no authentication (the socket path already carries the sandbox's
 identity), and a `DOMAINNAME` destination is resolved host-side, so the guest
 still needs no resolver. Each door serves at most 256 connections per sandbox
 at a time; later ones sit unserved in the socket backlog until one closes, and
-the proxy keeps at most 64 idle upstream connections per sandbox, so a guest
-cannot turn its proxy into a host descriptor sink.
+the proxy keeps at most 64 idle upstream connections per sandbox — 64 more for
+decrypted traffic when the pool intercepts — so a guest cannot turn its proxy
+into a host descriptor sink.
 
 A SOCKS5 tunnel takes the decision an HTTP `CONNECT` to the same host takes,
 through the same code: a rule with a nonempty `methods` list that omits
@@ -72,7 +73,9 @@ curl --socks5-hostname 127.0.0.1:1080 imaps://imap.example.com/   # allowed: {"s
 
 A `net:"egress"` guest owns a real NIC on the host bridge and reaches the same
 proxy over the same vsock path. To stop it bypassing the proxy, sandboxd locks
-the NIC at claim: an nftables netdev table (`sandbox_egress_<tap>`) with an
+the NIC at claim — until then a warm VM of the pool, and the pool's golden
+build, sit on the bridge unlocked, running only the image's own services, never
+tenant code: an nftables netdev table (`sandbox_egress_<tap>`) with an
 ingress hook on the guest's tap drops every guest-initiated packet except IPv4
 broadcast DHCP, so the guest's only routed egress is the audited vsock proxy. The
 lock is fail-closed — a claim whose NIC cannot be locked is rejected, not handed
@@ -154,7 +157,10 @@ and the secret injection that rides it — is always an explicit act. Root
 claims have no tenant layer and take the pool's policy whole; a key with no
 configured pool — a promoted template, or an image cold-booted on demand — has
 no pool layer, so a tenant's claim of one takes the tenant's policy alone (a
-root claim of one stays denied). Secrets are registered separately and
+root claim of one stays denied). Which layers a claim has is settled when it
+is made and kept for its life: a `PUT /v1/pools` that adds or drops a pool
+changes the claims made after it, never a live one (a record from before this
+rule resolves against the live pool set). Secrets are registered separately and
 referenced by name — the value comes from the environment, never the config
 file.
 
@@ -199,7 +205,10 @@ woken sandbox binds at arm time.
   request inside an intercepted tunnel. Exact ports only; `0` and repeats are
   rejected at load.
 - `secret`: injects the named registered secret's header. A guest-supplied value
-  for the same header is overwritten. On HTTPS the injection needs `intercept`.
+  for the same header is overwritten. Inside an HTTPS `CONNECT` tunnel the
+  injection needs `intercept`; an absolute-form `https://` request on the
+  forward door needs none — the proxy dials the origin over verified TLS
+  itself, checks the method, and injects.
 - `intercept`: terminate a matched HTTPS CONNECT so the request is filtered by
   method and the secret injected (see below). Only a pool rule may set it.
 - No policy on a claim ⇒ no egress at all (the proxy is not started).

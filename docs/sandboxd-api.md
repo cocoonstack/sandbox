@@ -40,9 +40,10 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
 - `claim_ref` is an optional opaque caller reference echoed by the scoped
   sandbox index; the aggregated apiserver uses `<namespace>/<name>`
 - `no_redirect` is set by the SDK when retrying at a redirect target
-- `require_promoted` is an internal redirect field. When a redirect response
-  sets it, copy it into the `no_redirect` retry so the target cannot cold-boot
-  a promoted template name if its gossip view is stale
+- `require_promoted` is an internal redirect field of volume claims, the only
+  path that sets or reads it. When a redirect response sets it, copy it into
+  the `no_redirect` retry so the target cannot cold-boot a promoted template
+  name if its gossip view is stale
 - `volumes` is an ordered list of at most eight unique catalog names. `mount`
   defaults to `/volumes/<name>`; a custom value must be absolute and clean,
   outside the guest OS tree, unique, and non-nesting within the request.
@@ -232,7 +233,7 @@ otherwise only a side effect of the next agent access, so this is the
 explicit form for warming a sandbox ahead of use. Idempotent on one already
 running. A hibernated sandbox retains its existing deadline. An archived
 sandbox instead uses `archive_delete_after_seconds` as its retention deadline
-while stored, and waking it starts a fresh server-default 5m lease. 204 on
+while stored, and waking it starts a fresh lease of the length the claim was granted (the server default when it asked for none). 204 on
 success, 404 unknown id or wrong token.
 
 ## POST /v1/sandboxes/{id}/fork
@@ -318,7 +319,12 @@ protocol: a node answering a `no_redirect` delete speaks only for itself.
 ## PUT /v1/pools
 
 Auth: root only (tenant tokens get 403). Replaces the node's desired warm
-targets online — no restart, live claims untouched:
+targets online — no restart, and no live claim's VM is touched. On a node with egress policies,
+whether a key is pooled decides which [policy layers](egress.md) a claim of it
+gets; that is settled when the claim is made, so adding or dropping a pool here
+changes only claims made afterwards — a key that gains a pool with no `egress`
+block leaves new tenant claims without egress, a key that loses such a pool
+gives new tenant claims the tenant's policy alone:
 
 ```json
 {"pools": [{"template": "base:24.04", "net": "none", "size": "small",
@@ -351,11 +357,17 @@ fresh info payload.
 
 ## POST /v1/sandboxes/{id}/preview
 
-Auth: like fork — node `api_token` in the header, the sandbox's own token
-in the body. Mints a signed URL serving a
+Auth: node `api_token` in the header, the sandbox's own token in the body.
+Unlike fork, promote and checkpoint — where the root token with an empty body
+token acts by id as the operator — preview has no operator path: the body
+token is required. Mints a signed URL serving a
 guest HTTP port from a browser: body `{"token": "...", "port": 8080,
 "ttl_seconds": 0}` → `{"url": "http://<preview_advertise>/p/<token>/"}`.
-The URL's life is clamped to the claim's remaining lease. 501 when the node
+The URL's life is clamped to the claim's remaining lease; an archived claim
+kept forever (`archive_delete_after_seconds: 0`) has no lease, so there the
+requested `ttl_seconds` stands unclamped and `ttl_seconds: 0` mints a one-hour
+URL; releasing the sandbox ends it early either way.
+501 when the node
 has no `preview_listen`. The signed token embeds the sandbox id, port, and
 owner `advertise_addr`, so any node's preview listener can serve it (forwarding
 to the owner's main listener) and a released sandbox's URL simply stops

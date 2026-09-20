@@ -290,6 +290,10 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		return quotaErr
 	}
 	for _, sb := range sbs {
+		sb.Layer = types.LayerUnpooled
+		if _, pooled := m.activePool(sb.Key); pooled {
+			sb.Layer = types.LayerPooled
+		}
 		m.claimed[sb.ID] = sb
 		m.tenantDelta(sb.Tenant, 1)
 	}
@@ -450,6 +454,8 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			m.disarmEgress(v.id, true)
 			m.purgeArchiveCk(ctx, v.id, v.ck, v.tenant)
 			m.untrack(m.pendingCks, v.ck)
+			m.counters.reaps.Add(1)
+			m.recordUsage(ctx, usageEvent{Event: "reap", ID: v.id})
 			logger.Infof(ctx, "purged archived sandbox %s", v.id)
 		case reapArchive:
 			logSweepResult(ctx, logger, m.archive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
@@ -475,14 +481,21 @@ func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
 	m.recordUsage(ctx, usageEvent{Event: "archive_delete", ID: id, Reference: ck, Tenant: tenant})
 }
 
-// recommit re-persists in the background until success or a newer durable write; detached.
+// recommit keeps claims.json catching up with the store: one retrier at a time writes the current state until it is durable and nothing newer is pending.
 func (m *Manager) recommit(ctx context.Context, snap claimSnapshot) {
+	if !m.recommitting.CompareAndSwap(false, true) {
+		return
+	}
 	go func() {
 		backoff := recommitBackoff
 		for {
 			err := m.store.commit(snap)
 			if err == nil {
-				return
+				m.recommitting.Store(false)
+				if snap = m.store.mark(); !m.store.pending(snap) || !m.recommitting.CompareAndSwap(false, true) {
+					return
+				}
+				continue
 			}
 			log.WithFunc("pool.recommit").Error(ctx, err, "persist claims")
 			time.Sleep(backoff)
@@ -558,6 +571,7 @@ func stampIdentity(sb *types.Sandbox, ttl time.Duration) {
 	sb.ID = "sb_" + randHex(8)
 	sb.Token = randHex(16)
 	sb.Deadline = time.Now().Add(ttl)
+	sb.LeaseSeconds = int(ttl / time.Second)
 }
 
 func clampTTL(ttl time.Duration) time.Duration {

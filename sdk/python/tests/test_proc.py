@@ -3,8 +3,10 @@ plumbing, so the fake pins the framing and terminal semantics."""
 
 import threading
 
+import pytest
 from conftest import sandbox_at
 
+from cocoonsandbox import ProtocolError
 from cocoonsandbox.frames import FS_CHUNK
 
 
@@ -41,6 +43,13 @@ def test_attach_returns_exit_code(monkeypatch):
     out = []
     assert sb.attach(41, on_stdout=out.append) == 7
     assert out == [b"late"]
+
+
+@pytest.mark.parametrize("frame", [{"type": "stdout"}, {"type": "stderr"}, {"type": "exit"}])
+def test_attach_reports_a_frame_without_its_field_as_a_protocol_error(monkeypatch, frame):
+    sb, _ = fake_sandbox(monkeypatch, [frame])
+    with pytest.raises(ProtocolError):
+        sb.attach(41, on_stdout=bytes, on_stderr=bytes)
 
 
 def test_run_pumps_stdin_while_reading_output(monkeypatch):

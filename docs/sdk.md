@@ -287,7 +287,8 @@ egress request) is not swept; the idle clock restarts when that connection ends.
 If that deployment also enables `archive_after_seconds`, archiving replaces
 the original claim deadline with the archive-retention deadline (or no
 deadline when archives are kept forever). Waking an archive starts a fresh
-server-default 5m lease. The existing handle's `Sandbox.Deadline` is the value
+lease of the length the claim was granted (the server default when it asked
+for none). The existing handle's `Sandbox.Deadline` is the value
 returned when that handle was created; call `Client.Sandboxes` to read the
 current server deadline after an archive/wake transition.
 
@@ -446,7 +447,20 @@ code, err := sb.Run(ctx, sandbox.Cmd{
 `Cmd` fields: `Argv` (required), `Cwd`, `Env`, `User` (de-escalation inside
 the guest), `Session` (run inside a persistent session, below), `Stdin`
 (nil closes the child's stdin immediately; do not share one blocking reader
-across Runs), `Stdout`/`Stderr` (nil discards).
+across Runs), `Stdout`/`Stderr` (nil discards). With `Session` set only
+`Argv` applies: the session owns the cwd, environment and user, its commands
+read `/dev/null`, and stderr arrives merged into stdout. A command's
+environment is `PATH`, `TERM` and the lane's proxy variables plus `Env` — not
+the image's `ENV`; `HOME` and `USER` are set only with `User`. The guest kills
+a foreground command whose connection dropped only once it next writes output,
+so `Run` does not leave that to the drop: when its ctx ends after the guest
+reported the command's pid, `Run` sends that pid a `kill` over a connection of
+its own (best effort, bounded to 5 s) before returning the ctx error. A client
+that only drops the connection leaves a silent command (`sleep`, a quiet build)
+running in the guest; find its pid with `Ps` and `Kill` it. Use `Spawn` for
+work that must outlive the connection. A command run inside a `Session` is the
+session's: it reports no pid, so no cancel kills it and it does not appear in
+`Ps`; it runs to completion, and `Session.Close` is what ends the session.
 
 Non-zero exits surface as `*sandbox.ExitError{Code, Stderr}` from `Exec`
 (alongside partial stdout); `Run` returns the code directly.
@@ -467,7 +481,8 @@ the process has ended (`exited=false` while running); `Attach` follows live
 output until exit — the replay and the live stream hand off atomically, so
 no chunk is lost or doubled between them. Killing an already-exited process
 is a no-op success (its OS pid may be recycled; silkd never signals a
-reaped child).
+reaped child). An exited process leaves the table after 5 minutes; from then
+on its pid answers `not_found` to every verb.
 
 ## Sessions
 
@@ -485,7 +500,9 @@ err = sess.Close(ctx)
 ids, err := sb.Sessions(ctx)                       // live session ids
 ```
 
-Idle sessions are reaped guest-side after 30 minutes.
+Idle sessions are reaped guest-side after 30 minutes. `Close` on a session
+that is already gone — and `Lsp.Stop` on a server that already exited — answers
+silkd's `not_found`; ignore it in a deferred cleanup.
 
 ## Files
 
@@ -532,6 +549,10 @@ results, err := sb.Replace(ctx, []string{"/work/main.go"}, `foo`, "bar")
 ```
 
 Patterns are regular expressions evaluated in the guest — no shell quoting.
+`Replace` is atomic per file, not per list: it fails at the first missing,
+unreadable or non-UTF-8 path and the files before it stay rewritten, so pass it
+paths a `Find` just returned. A `Find` fails as a whole when one match's frame
+would pass the 8 MiB cap.
 
 ## Watching
 
@@ -591,7 +612,7 @@ apiserver claims under:
 
 ```go
 sb, _ := client.New(ctx, "rt:24.04", sandbox.WithClaimRef("ns/workload"))
-list, _ := client.Sandboxes(ctx)          // id, key, deadline, claim_ref — never tokens
+list, _ := client.Sandboxes(ctx)          // one SandboxSummary per live claim — never tokens
 info, _ := client.Drain(ctx)              // cordon: refuse new claims, run leases out
 info, _ = client.Uncordon(ctx)
 info, _ = client.SetPools(ctx, pools)     // retune warm targets without a restart
@@ -600,7 +621,8 @@ sb = client.Attach(ownerAddr, id, token)  // bind a known handle, no lookup roun
 ```
 
 `Sandboxes` is scoped to the calling token, so a tenant sees only its own
-claims. `Drain` leaves live claims alone — poll `Info` until `Claimed` is zero.
+claims; the fields are those of [`GET /v1/sandboxes`](sandboxd-api.md#get-v1sandboxes).
+`Drain` leaves live claims alone — poll `Info` until `Claimed` is zero.
 
 ## Error handling
 

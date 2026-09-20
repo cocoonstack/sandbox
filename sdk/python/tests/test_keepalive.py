@@ -10,6 +10,7 @@ import time
 import pytest
 from conftest import accept_upgrade, sandbox_at, wait_until
 
+from cocoonsandbox import SilkdError
 from cocoonsandbox.frames import KEEP_ALIVE_PROTO
 
 INPUT_OPS = ("stdin", "stdin_close", "data", "data_end")
@@ -22,6 +23,19 @@ def test_calls_share_one_connection():
         for _ in range(3):
             assert sb.stat("/")["kind"] == "dir"
         assert sb.exec("echo", "42") == "42\n"
+    finally:
+        sb._pool.drain()
+        agent.stop()
+    assert agent.upgrades == 1
+
+
+def test_a_refused_stream_open_keeps_its_connection():
+    agent = FakeAgent()
+    sb = sandbox_at(agent.addr)
+    try:
+        for _ in range(3):
+            with pytest.raises(SilkdError):
+                sb.watch("/missing")
     finally:
         sb._pool.drain()
         agent.stop()

@@ -423,7 +423,7 @@ func (c *Config) validateClientAdvertise() error {
 		(u.Path != "" && u.Path != "/") || strings.ContainsAny(c.ClientAdvertise, "?#") {
 		return fmt.Errorf("client_advertise must be an http or https origin")
 	}
-	if ip, _ := netip.ParseAddr(u.Hostname()); ip.IsUnspecified() {
+	if !routableHost(u.Hostname()) {
 		return fmt.Errorf("client_advertise must name a routable host")
 	}
 	if port := u.Port(); port != "" {
@@ -450,7 +450,7 @@ func (c *Config) validateMesh() error {
 	if err != nil {
 		return fmt.Errorf("advertise_addr: %w", err)
 	}
-	if ip, _ := netip.ParseAddr(host); host == "" || ip.IsUnspecified() {
+	if !routableHost(host) {
 		return fmt.Errorf("advertise_addr %q is gossiped to peers and must name a routable host", c.AdvertiseAddr)
 	}
 	return nil
@@ -618,10 +618,10 @@ func namesHost(addr string) bool {
 		addr = "http://" + addr
 	}
 	u, err := url.Parse(addr)
-	return err == nil && u.Hostname() != "" && !isUnspecifiedHost(u.Hostname())
+	return err == nil && routableHost(u.Hostname())
 }
 
-func isUnspecifiedHost(host string) bool {
+func routableHost(host string) bool {
 	ip, _ := netip.ParseAddr(host)
-	return ip.IsUnspecified()
+	return host != "" && !ip.IsUnspecified()
 }

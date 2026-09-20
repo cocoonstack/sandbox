@@ -16,6 +16,7 @@ import (
 
 const (
 	releaseTimeout = 30 * time.Second
+	killWait       = 5 * time.Second
 	stdinChunk     = 32 * 1024
 )
 
@@ -100,7 +101,7 @@ func (s *Sandbox) Exec(ctx context.Context, argv ...string) (string, error) {
 }
 
 // Run executes cmd in the sandbox, streaming stdio over one relayed silkd
-// connection, and returns the exit code.
+// connection, and returns the exit code; a ctx that ends first kills the command.
 func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	if len(cmd.Argv) == 0 {
 		return 0, fmt.Errorf("empty argv")
@@ -123,7 +124,7 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 		}()
 	}
 
-	code, exited, err := pumpStdio(ctx, conn, cmd.Stdout, cmd.Stderr)
+	pid, code, exited, err := pumpStdio(ctx, conn, cmd.Stdout, cmd.Stderr)
 	// a pump still parked in Read would write into the next RPC, so its connection is not kept
 	select {
 	case <-stdinDone:
@@ -131,6 +132,11 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	default:
 	}
 	if err != nil {
+		if ctx.Err() != nil && pid != 0 {
+			kctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killWait)
+			_ = s.Kill(kctx, pid, 0)
+			cancel()
+		}
 		return 0, err
 	}
 	if !exited {

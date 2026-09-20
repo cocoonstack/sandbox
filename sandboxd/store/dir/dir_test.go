@@ -333,33 +333,6 @@ func TestPublishRetriesAfterExpiredInstall(t *testing.T) {
 	}
 }
 
-func TestFetchLegacyFlatLayout(t *testing.T) {
-	const id = "ck_00000000000000aa"
-	root := t.TempDir()
-	st, err := New(root, store.CheckpointIDRe)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	seedRecord(t, filepath.Join(root, id), "legacy")
-
-	dir, meta, digest, err := st.Fetch(t.Context(), id)
-	if err != nil {
-		t.Fatalf("fetch legacy: %v", err)
-	}
-	if string(meta) != metaJSON("legacy") || digest != "" || dir != filepath.Join(root, id, store.ExportDir) {
-		t.Fatalf("legacy fetch = %q %q %q, want the flat export dir without digest", dir, meta, digest)
-	}
-
-	mustPublish(t, st, id, "modern")
-	dir, meta, digest, err = st.Fetch(t.Context(), id)
-	if err != nil {
-		t.Fatalf("fetch after re-publish: %v", err)
-	}
-	if string(meta) != metaJSON("modern") || digest != "" || dir == filepath.Join(root, id, store.ExportDir) {
-		t.Fatalf("re-published fetch = %q %q %q, want a generation dir without digest", dir, meta, digest)
-	}
-}
-
 func TestPublishSweepsGenerationsBySupersessionAge(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	root := t.TempDir()
@@ -438,37 +411,6 @@ func TestSweepSparesPublishingGeneration(t *testing.T) {
 	}
 	if got, readErr := os.ReadFile(filepath.Join(dir, "disk.img")); readErr != nil || string(got) != "new" {
 		t.Fatalf("fetch export %q, %v, want new generation", got, readErr)
-	}
-}
-
-func TestSweepSparesLegacyFallback(t *testing.T) {
-	const id = "ck_00000000000000aa"
-	root := t.TempDir()
-	st, err := New(root, store.CheckpointIDRe)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	seedRecord(t, filepath.Join(root, id), "legacy")
-	backdate(t, filepath.Join(root, id, store.MetaFile))
-
-	if err := st.SweepStaging(); err != nil {
-		t.Fatalf("sweep: %v", err)
-	}
-	if _, _, _, err := st.Fetch(t.Context(), id); err != nil {
-		t.Fatalf("legacy record swept while still current: %v", err)
-	}
-
-	backdate(t, filepath.Join(root, id, store.ExportDir))
-	mustPublish(t, st, id, "modern")
-	if _, err := os.Stat(filepath.Join(root, id, store.ExportDir)); err != nil {
-		t.Fatalf("legacy export reclaimed inside the grace: %v", err)
-	}
-	backdate(t, filepath.Join(root, id, store.ExportDir))
-	if err := st.SweepStaging(); err != nil {
-		t.Fatalf("sweep after re-publish: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, id, store.ExportDir)); !os.IsNotExist(err) {
-		t.Fatalf("superseded legacy export survived the graced sweep: %v", err)
 	}
 }
 
@@ -588,30 +530,6 @@ func TestSweepGenerationsToleratesConcurrentDelete(t *testing.T) {
 	})
 	if err := g.Wait(); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestDeleteRemovesLegacyResidue(t *testing.T) {
-	const id = "ck_00000000000000aa"
-	root := t.TempDir()
-	st, err := New(root, store.CheckpointIDRe)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	seedRecord(t, filepath.Join(root, id), id)
-	seedRecord(t, filepath.Join(root, id+oldSuffix), "stale")
-
-	if err := st.Delete(t.Context(), id); err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
-	if _, err := st.ReadMeta(t.Context(), id); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("ReadMeta after Delete: %v, want store.ErrNotFound", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, id+oldSuffix)); !os.IsNotExist(err) {
-		t.Errorf("legacy .old residue survived Delete: %v", err)
-	}
-	if err := st.Delete(t.Context(), id); err != nil {
-		t.Errorf("Delete of a missing record: %v, want nil", err)
 	}
 }
 

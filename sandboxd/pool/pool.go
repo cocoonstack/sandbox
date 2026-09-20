@@ -302,6 +302,8 @@ type Manager struct {
 	tpls         store.Store
 	ckptTTL      time.Duration
 	ckptSweeping atomic.Bool
+	genSweeping  atomic.Bool
+	recommitting atomic.Bool
 
 	// tplSet caches each template id against its owning tenant ("" = operator).
 	tplMu  sync.Mutex
@@ -404,12 +406,14 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	}
 	m.ckptTTL = time.Duration(cfg.CheckpointTTLHours) * time.Hour
 	m.tplSet = map[string]string{}
-	if metas, listErr := m.tpls.Metas(ctx); listErr == nil {
-		for _, raw := range metas {
-			var rec templateRecord
-			if json.Unmarshal(raw, &rec) == nil && rec.ID != "" {
-				m.tplSet[rec.ID] = rec.Tenant
-			}
+	metas, listErr := m.tpls.Metas(ctx)
+	if listErr != nil {
+		log.WithFunc("pool.NewManager").Warnf(ctx, "list templates skipped: %v", listErr)
+	}
+	for _, raw := range metas {
+		var rec templateRecord
+		if json.Unmarshal(raw, &rec) == nil && rec.ID != "" {
+			m.tplSet[rec.ID] = rec.Tenant
 		}
 	}
 	usage, err := newJournal(filepath.Join(cfg.DataDir, "usage.jsonl"))
@@ -501,7 +505,7 @@ func (m *Manager) Run(ctx context.Context) {
 			m.shrinkOnce(ctx)
 			go m.retryArchiveDeletes(ctx)
 		case <-storeSweep.C:
-			m.sweepStoreGenerations(ctx)
+			go m.sweepStoreGenerations(ctx)
 			go m.sweepExpiredCheckpoints(ctx)
 		}
 	}
@@ -592,6 +596,10 @@ func (m *Manager) WithPeerDelete(fn PeerDeleteFunc) {
 }
 
 func (m *Manager) sweepStoreGenerations(ctx context.Context) {
+	if !m.genSweeping.CompareAndSwap(false, true) {
+		return
+	}
+	defer m.genSweeping.Store(false)
 	logger := log.WithFunc("pool.sweepStoreGenerations")
 	if err := m.ckpts.SweepGenerations(); err != nil {
 		logger.Error(ctx, err, "sweep checkpoint generations")

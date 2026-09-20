@@ -23,7 +23,8 @@ sandbox-mcp .`
 
 ## Tools
 
-Every tool call is capped at 5 minutes.
+Every tool call is capped at 5 minutes; an `exec` that hits the cap is killed
+in the guest, which can hold its reply up to 5 s past the cap.
 
 | tool | what it does |
 |---|---|
@@ -31,7 +32,7 @@ Every tool call is capped at 5 minutes.
 | `exec` | run a shell command to completion; returns stdout, stderr and the exit code, each stream keeping its first 1 MiB with `truncated` set past that; a cut-off or dropped run returns the output collected so far next to an `error` field; a hibernated sandbox wakes transparently |
 | `spawn` | start a command detached and return its pid; output goes to a 256 KiB ring buffer that `logs` replays |
 | `ps` | list tracked processes (exec, spawn, pty) with state, exit code and start time |
-| `logs` | replay up to 256 KiB of a tracked process's newest whole stdout/stderr chunks (+ exit code once ended) |
+| `logs` | replay up to 256 KiB of a tracked process's newest whole stdout/stderr chunks (+ exit code once ended); an exited process is forgotten after 5 minutes |
 | `kill` | signal a tracked process (0 = SIGKILL); an exited process is a no-op success |
 | `write_file` / `read_file` / `list_dir` | atomic whole-file write (parent must exist); whole-file text read of a regular file up to 1 MiB (a larger file, a directory or a device is an error, invalid UTF-8 replaced, missing path is an error); one-level listing of `{name, kind, size}` entries |
 | `fork` | clone into N children (1 to the node's `max_fork_count`, default 16) carrying exact memory + disk state, all-or-nothing; the parent keeps running and each child lives one hour |
@@ -44,7 +45,10 @@ Every tool call is capped at 5 minutes.
 | `node_info` | warm pools, live claims, drain state, capacity and mesh peers |
 
 Sandbox handles (and their tokens) are held by the server process for the
-session. Checkpoints outlive sessions: `branch_checkpoint` accepts any known
+session, and released with it: when the MCP client disconnects or the server
+is signalled, it destroys every sandbox that session claimed, whatever
+`ttl_seconds` asked for. `checkpoint` first if the state must survive.
+Checkpoints outlive sessions: `branch_checkpoint` accepts any known
 id without a listing round-trip. If the connected node does not hold it, the
 claim follows a live owner probe and redirect, or heals the checkpoint locally
 when peer healing is enabled. `delete_checkpoint` is different: it acts on the

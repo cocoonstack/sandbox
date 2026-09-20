@@ -87,8 +87,7 @@ func (s *Sandbox) Watch(ctx context.Context, path string, recursive bool) (*Watc
 		return nil, err
 	}
 	if _, err = expect[wire.Ready](ctx, conn); err != nil {
-		l.close()
-		return nil, err
+		return nil, l.done(err)
 	}
 	w := &Watcher{
 		events: make(chan wire.Event, 16),

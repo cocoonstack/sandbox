@@ -13,7 +13,7 @@ import (
 )
 
 // portReadBuf fits silkd's data frames in one buffered read.
-const portReadBuf = 64 << 10
+const portReadBuf = wire.BulkChunk*4/3 + 64
 
 var portDataHead = []byte(`{"type":"data","data":"`)
 

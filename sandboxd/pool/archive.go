@@ -218,7 +218,7 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 	}
 	ck, deadline := sb.ArchiveCk, sb.Deadline
 	sb.VMName, sb.VsockSocket, sb.ArchiveCk = vmName, sock, ""
-	sb.Deadline = time.Now().Add(clampTTL(0)) // a woken sandbox is a fresh lease
+	sb.Deadline = time.Now().Add(clampTTL(types.Seconds(sb.LeaseSeconds))) // a woken sandbox is a fresh lease
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {

@@ -77,8 +77,9 @@ the root `api_token` (operator surfaces, full access), tenant tokens
 (resource-creating verbs, everything stamped and quota'd per tenant), and
 per-sandbox tokens (that sandbox only — holding a handle amplifies to
 nothing node-level). Two capability tokens ride on top: preview URLs are
-HMAC-signed, expire with the claim's lease, and die with the sandbox (no
-revocation list to leak); a checkpoint id is the unguessable capability to
+HMAC-signed, expire with the claim's lease (an archived claim kept forever
+has none, so its URL runs for the TTL it was minted with), and die with the
+sandbox (no revocation list to leak); a checkpoint id is the unguessable capability to
 branch it. On a cluster, deleting a checkpoint does not revoke that
 capability fleet-wide the instant it runs: the delete is best-effort —
 broadcast to every peer the node currently sees — so a peer that is offline

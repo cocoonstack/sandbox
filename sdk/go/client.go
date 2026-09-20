@@ -215,13 +215,15 @@ func (c *Client) DeleteTemplate(ctx context.Context, template string, opts ...Op
 		return err
 	}
 	u.Set(noRedirectQueryParam, "1")
-	if tryErr := tryEach(redirect, func(addr string) error {
-		_, retryErr := c.deleteTemplates(ctx, addr, u)
-		return retryErr
-	}, retryMiss); tryErr != nil {
-		return fmt.Errorf("delete template at owner: %w", tryErr)
+	for _, addr := range redirect {
+		if _, err = c.deleteTemplates(ctx, addr, u); err == nil {
+			return nil
+		}
+		if he, ok := errors.AsType[*APIError](err); ok && he.Status != http.StatusNotFound {
+			break
+		}
 	}
-	return nil
+	return fmt.Errorf("delete template at owner: %w", err)
 }
 
 func (c *Client) ownerAt(ctx context.Context, addr, id, token string) (string, error) {
@@ -331,25 +333,6 @@ func doNoContent(ctx context.Context, c *Client, method, addr, path string, body
 		return apiError(verb, resp)
 	}
 	return nil
-}
-
-func tryEach(candidates []string, call func(addr string) error, retry func(error) bool) error {
-	var lastErr error
-	for _, addr := range candidates {
-		lastErr = call(addr)
-		if lastErr == nil {
-			return nil
-		}
-		if !retry(lastErr) {
-			return lastErr
-		}
-	}
-	return lastErr
-}
-
-func retryMiss(err error) bool {
-	he, ok := errors.AsType[*APIError](err)
-	return !ok || he.Status == http.StatusNotFound
 }
 
 func retryTransient(err error) bool {

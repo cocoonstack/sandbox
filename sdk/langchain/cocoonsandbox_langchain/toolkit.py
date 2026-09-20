@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from cocoonsandbox import Client, Sandbox, SilkdError
+from cocoonsandbox import Client, Sandbox, SandboxError
 from langchain_core.tools import StructuredTool, ToolException
 from pydantic import BaseModel, Field
 
@@ -42,7 +42,7 @@ class CocoonToolkit:
         api_token: str = "",
         template: str = "rt:24.04",
         net: str = "",
-        ttl_seconds: int = 0,
+        ttl_seconds: int = 3600,
         from_checkpoint: str = "",
     ) -> None:
         self._client = Client(addr, api_token=api_token, timeout=CALL_TIMEOUT)
@@ -108,12 +108,12 @@ class CocoonToolkit:
             sb.close()
 
     def sandbox(self, deadline: float | None = None) -> Sandbox:
-        """The claimed sandbox, claiming (or branching) on first use within the caller's deadline."""
+        """The claimed sandbox, claiming (or branching) on first use by deadline, else within CALL_TIMEOUT."""
         with self._lock:
             if self._closed:
                 raise RuntimeError("toolkit is closed")
             if self._sb is None:
-                self._sb = self._claim(deadline)
+                self._sb = self._claim(time.monotonic() + CALL_TIMEOUT if deadline is None else deadline)
             return self._sb
 
     def _claim(self, deadline: float | None = None) -> Sandbox:
@@ -122,11 +122,17 @@ class CocoonToolkit:
         return self._client.new(self._template, net=self._net, ttl_seconds=self._ttl, deadline=deadline)
 
     def _tool(self, name: str, description: str, schema: type[BaseModel], func: Callable[..., str]) -> StructuredTool:
+        def run(**kwargs: object) -> str:
+            try:
+                return func(**kwargs)
+            except SandboxError as exc:
+                raise ToolException(str(exc)) from exc
+
         async def arun(**kwargs):
-            return await asyncio.to_thread(func, **kwargs)
+            return await asyncio.to_thread(run, **kwargs)
 
         return StructuredTool.from_function(
-            func=func, coroutine=arun, name=name, description=description, args_schema=schema, handle_tool_error=True
+            func=run, coroutine=arun, name=name, description=description, args_schema=schema, handle_tool_error=True
         )
 
     def _exec(self, command: str, cwd: str = "") -> str:
@@ -158,12 +164,7 @@ class CocoonToolkit:
         return f"wrote {path}"
 
     def _read_file(self, path: str) -> str:
-        try:
-            return self.sandbox().read_file(path).decode(errors="replace")
-        except SilkdError as exc:
-            if exc.kind != "not_found":
-                raise
-            raise ToolException(f"{path}: no such file") from None
+        return self.sandbox().read_file(path).decode(errors="replace")
 
     def _list_dir(self, path: str) -> str:
         return json.dumps(self.sandbox().list_dir(path))
