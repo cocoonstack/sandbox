@@ -53,6 +53,7 @@ class CocoonSandboxSession(BaseSandboxSession):
     def __init__(self, *, state: CocoonSandboxSessionState) -> None:
         self.state = state
         self._proxies: list[socket.socket] = []
+        self._sb: Sandbox | None = None
 
     @classmethod
     def from_state(cls, state: CocoonSandboxSessionState) -> CocoonSandboxSession:
@@ -120,9 +121,11 @@ class CocoonSandboxSession(BaseSandboxSession):
         self._proxies.clear()
 
     def _sandbox(self) -> Sandbox:
-        s = self.state
-        client = Client(s.addr, api_token=s.api_token)
-        return Sandbox(client=client, id=s.sandbox_id, token=s.sandbox_token, owner=s.owner or s.addr)
+        if self._sb is None:
+            s = self.state
+            client = Client(s.addr, api_token=s.api_token)
+            self._sb = Sandbox(client=client, id=s.sandbox_id, token=s.sandbox_token, owner=s.owner or s.addr)
+        return self._sb
 
     def _abs(self, path: Path | str) -> Path:
         path = Path(path)

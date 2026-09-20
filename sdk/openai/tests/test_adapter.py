@@ -66,6 +66,17 @@ def test_create_claims_and_state_round_trips(node):
     asyncio.run(go())
 
 
+def test_operations_share_one_sandbox_handle(node):
+    async def go():
+        client = CocoonSandboxClient()
+        session = await client.create(options=CocoonSandboxClientOptions(addr=node, template="rt:24.04"))
+        inner = session._inner
+        assert inner._sandbox() is inner._sandbox()
+        await client.delete(session)
+
+    asyncio.run(go())
+
+
 def test_exec_maps_stdio_and_exit(node, monkeypatch):
     class FakeSandbox:
         def __init__(self, **kw):
