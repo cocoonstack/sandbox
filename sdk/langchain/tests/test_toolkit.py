@@ -101,6 +101,17 @@ def test_use_after_close_raises(monkeypatch):
         kit.sandbox()
 
 
+def test_read_file_reports_a_missing_path_as_a_tool_error(monkeypatch):
+    kit, fake = hooked(monkeypatch)
+
+    def missing(path):
+        raise SilkdError("not_found", "no such file")
+
+    fake.read_file = missing
+    tool = next(t for t in kit.get_tools() if t.name == "sandbox_read_file")
+    assert "no such file" in tool.invoke({"path": "/nope"})
+
+
 class FakeSandbox:
     def __init__(self):
         self.closed = 0
@@ -136,14 +147,3 @@ def hooked(monkeypatch):
     fake = FakeSandbox()
     monkeypatch.setattr(kit, "_claim", lambda deadline=None: fake)
     return kit, fake
-
-
-def test_read_file_reports_a_missing_path_as_a_tool_error(monkeypatch):
-    kit, fake = hooked(monkeypatch)
-
-    def missing(path):
-        raise SilkdError("not_found", "no such file")
-
-    fake.read_file = missing
-    tool = next(t for t in kit.get_tools() if t.name == "sandbox_read_file")
-    assert "no such file" in tool.invoke({"path": "/nope"})

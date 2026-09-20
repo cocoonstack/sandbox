@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 class Template:
     """A promoted template on its owner node."""
 
-    def __init__(self, client: Client, addr: str, name: str, net: str, size: str, content_digest: str = ""):
+    def __init__(self, client: Client, addr: str, name: str, net: str, size: str, content_digest: str = "") -> None:
         self._client = client
         self._addr = addr
         self.name = name
