@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -32,6 +33,9 @@ func main() {
 }
 
 func run(addr, peer, token, template string) error {
+	if peer == "" {
+		return errors.New("peer is required")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
@@ -40,7 +44,7 @@ func run(addr, peer, token, template string) error {
 		return fmt.Errorf("via %s: %w", addr, err)
 	}
 	defer func() { _ = sb.Close() }()
-	if peer != "" && sb.Owner() != peer {
+	if sb.Owner() != peer {
 		return fmt.Errorf("claim owner %s, want redirect to %s", sb.Owner(), peer)
 	}
 	fmt.Printf("  redirect: claim entered at %s, owned by %s\n", addr, sb.Owner())
@@ -76,7 +80,7 @@ func run(addr, peer, token, template string) error {
 	if got := strings.TrimSpace(out); got != "mesh-marker" {
 		return fmt.Errorf("marker %q, want mesh-marker (clone not from the promoted golden)", got)
 	}
-	if peer != "" && clone.Owner() != peer {
+	if clone.Owner() != peer {
 		return fmt.Errorf("clone owner %s, want %s (template owner)", clone.Owner(), peer)
 	}
 	fmt.Printf("  name-based claim: clone on %s carries the marker\n", clone.Owner())

@@ -81,9 +81,10 @@ echo "== start sandboxd ($NET-lane pool + egress policy, reach=$REACH)"
 DAEMON_PID=$!
 for _ in $(seq 1 40); do curl -sf "http://$ADDR/healthz" >/dev/null && break; sleep 0.5; done
 # Wait for the warm pool so the claim is a warm hit (proxy armed at claim).
-for _ in $(seq 1 120); do
+for i in $(seq 1 120); do
   curl -sf -H "Authorization: Bearer $TOKEN" "http://$ADDR/v1/info" 2>/dev/null |
     jq -e '.pools[0].warm >= 1' >/dev/null 2>&1 && break
+  [[ $i == 120 ]] && { echo "pool never became warm"; exit 1; }
   sleep 1
 done
 
