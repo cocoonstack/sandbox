@@ -29,7 +29,8 @@ Sessions and detached processes are server-side state addressed by id — a
 dropped connection loses nothing (`attach` resumes). A foreground `exec` is
 bound to its connection, but silkd learns of a drop only when a write to the
 client fails: a child that is producing output is killed and its pid freed, a
-silent one runs to completion. The other
+silent one runs to completion — which is why the SDKs' `Run`/`run` answer a
+canceled ctx or a timeout with a `kill` of the pid `started` reported. The other
 connection-bound verbs are `fs_watch`, `pty_open`, `lsp_request`, and
 `port_forward`.
 

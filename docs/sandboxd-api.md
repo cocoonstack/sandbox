@@ -233,7 +233,8 @@ otherwise only a side effect of the next agent access, so this is the
 explicit form for warming a sandbox ahead of use. Idempotent on one already
 running. A hibernated sandbox retains its existing deadline. An archived
 sandbox instead uses `archive_delete_after_seconds` as its retention deadline
-while stored, and waking it starts a fresh server-default 5m lease. 204 on
+while stored, and waking it starts a fresh lease of the TTL the claim was made
+with (the server default when it asked for none). 204 on
 success, 404 unknown id or wrong token.
 
 ## POST /v1/sandboxes/{id}/fork
@@ -319,12 +320,12 @@ protocol: a node answering a `no_redirect` delete speaks only for itself.
 ## PUT /v1/pools
 
 Auth: root only (tenant tokens get 403). Replaces the node's desired warm
-targets online — no restart, and no live claim's VM is touched. One thing does
-follow the pool set on a node with egress policies: whether a key is pooled
-decides which [policy layers](egress.md) apply to it, and a live claim picks
-that up at its next wake or the next restart — a key that gains a pool with no
-`egress` block loses tenant egress, a key that loses such a pool falls back to
-the tenant's policy alone:
+targets online — no restart, and no live claim's VM is touched. On a node with egress policies,
+whether a key is pooled decides which [policy layers](egress.md) a claim of it
+gets; that is settled when the claim is made, so adding or dropping a pool here
+changes only claims made afterwards — a key that gains a pool with no `egress`
+block leaves new tenant claims without egress, a key that loses such a pool
+gives new tenant claims the tenant's policy alone:
 
 ```json
 {"pools": [{"template": "base:24.04", "net": "none", "size": "small",

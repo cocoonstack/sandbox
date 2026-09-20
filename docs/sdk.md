@@ -287,7 +287,8 @@ egress request) is not swept; the idle clock restarts when that connection ends.
 If that deployment also enables `archive_after_seconds`, archiving replaces
 the original claim deadline with the archive-retention deadline (or no
 deadline when archives are kept forever). Waking an archive starts a fresh
-server-default 5m lease. The existing handle's `Sandbox.Deadline` is the value
+lease of the TTL the claim was made with (the server default when it asked
+for none). The existing handle's `Sandbox.Deadline` is the value
 returned when that handle was created; call `Client.Sandboxes` to read the
 current server deadline after an archive/wake transition.
 
@@ -450,11 +451,16 @@ across Runs), `Stdout`/`Stderr` (nil discards). With `Session` set only
 `Argv` applies: the session owns the cwd, environment and user, its commands
 read `/dev/null`, and stderr arrives merged into stdout. A command's
 environment is `PATH`, `TERM` and the lane's proxy variables plus `Env` — not
-the image's `ENV`; `HOME` and `USER` are set only with `User`. A dropped
-connection — a canceled ctx included — kills a foreground command only once it
-next writes output; a silent one (`sleep`, a quiet build) runs on in the guest.
-Use `Spawn` for work that must outlive the connection; to stop a command that
-is still running after a drop, find its pid with `Ps` and `Kill` it.
+the image's `ENV`; `HOME` and `USER` are set only with `User`. The guest kills
+a foreground command whose connection dropped only once it next writes output,
+so `Run` does not leave that to the drop: when its ctx ends after the guest
+reported the command's pid, `Run` sends that pid a `kill` over a connection of
+its own (best effort, bounded to 5 s) before returning the ctx error. A client
+that only drops the connection leaves a silent command (`sleep`, a quiet build)
+running in the guest; find its pid with `Ps` and `Kill` it. Use `Spawn` for
+work that must outlive the connection. A command run inside a `Session` is the
+session's: it reports no pid, so no cancel kills it and it does not appear in
+`Ps`; it runs to completion, and `Session.Close` is what ends the session.
 
 Non-zero exits surface as `*sandbox.ExitError{Code, Stderr}` from `Exec`
 (alongside partial stdout); `Run` returns the code directly.

@@ -191,7 +191,8 @@ gets one connection per call as before.
 If that deployment also enables `archive_after_seconds`, archiving replaces
 the original claim deadline with the archive-retention deadline (or no
 deadline when archives are kept forever). Waking an archive starts a fresh
-server-default 5m lease. The existing handle's `sb.deadline` remains the value
+lease of the TTL the claim was made with (the server default when it asked
+for none). The existing handle's `sb.deadline` remains the value
 returned when that handle was created; call `client.sandboxes()` to read the
 current server deadline after an archive/wake transition.
 
@@ -338,10 +339,16 @@ split multi-byte sequences) and returns the exit code. `user` de-escalates
 inside the guest; `session=` routes the command into a persistent session,
 where only `argv` applies — the session owns the cwd, environment and user,
 and stderr arrives merged into stdout. A command's environment is `PATH`,
-`TERM` and the lane's proxy variables plus `env`, not the image's `ENV`. A
-dropped connection — a `run(timeout=)` cut included — kills a foreground command
-only once it next writes output; a silent one runs on in the guest. `spawn`
-outlives the connection by design; `ps` then `kill` stops one still running.
+`TERM` and the lane's proxy variables plus `env`, not the image's `ENV`. The
+guest kills a foreground command whose connection dropped only once it next
+writes output, so a `run(timeout=)` cut does not leave that to the drop: once
+the guest has reported the command's pid, the cut sends that pid a `kill` over
+a connection of its own (best effort, bounded to 5 s) before `SandboxTimeout`
+is raised. A client that only drops the connection leaves a silent command
+running in the guest; `ps` then `kill` stops it. `spawn` outlives the
+connection by design. A command run through a session is the session's: it
+reports no pid, so no cut kills it and it is not in `ps`; it runs to
+completion, and the session's `close()` is what ends the session.
 
 ## Background processes
 

@@ -23,7 +23,8 @@ sandbox-mcp .`
 
 ## Tools
 
-Every tool call is capped at 5 minutes.
+Every tool call is capped at 5 minutes; an `exec` that hits the cap is killed
+in the guest.
 
 | tool | what it does |
 |---|---|
