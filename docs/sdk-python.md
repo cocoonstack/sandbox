@@ -459,14 +459,15 @@ pty.close()
 
 ```python
 sb = client.new("rt:24.04", claim_ref="ns/workload")
-client.sandboxes()                     # id, key, deadline, claim_ref — never tokens
+client.sandboxes()                     # one summary dict per live claim — never tokens
 client.drain()                         # cordon: refuse new claims, run leases out
 client.uncordon()
 client.attach(owner_addr, id, token)   # bind a known handle, no lookup round-trip
 ```
 
 `sandboxes()` is scoped to the calling token, so a tenant sees only its own
-claims. `drain()` leaves live claims alone — poll `info()` until `claimed` is
+claims; the fields are those of [`GET /v1/sandboxes`](sandboxd-api.md#get-v1sandboxes).
+`drain()` leaves live claims alone — poll `info()` until `claimed` is
 zero.
 
 ## Errors

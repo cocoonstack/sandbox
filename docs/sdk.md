@@ -591,7 +591,7 @@ apiserver claims under:
 
 ```go
 sb, _ := client.New(ctx, "rt:24.04", sandbox.WithClaimRef("ns/workload"))
-list, _ := client.Sandboxes(ctx)          // id, key, deadline, claim_ref — never tokens
+list, _ := client.Sandboxes(ctx)          // one SandboxSummary per live claim — never tokens
 info, _ := client.Drain(ctx)              // cordon: refuse new claims, run leases out
 info, _ = client.Uncordon(ctx)
 info, _ = client.SetPools(ctx, pools)     // retune warm targets without a restart
@@ -600,7 +600,8 @@ sb = client.Attach(ownerAddr, id, token)  // bind a known handle, no lookup roun
 ```
 
 `Sandboxes` is scoped to the calling token, so a tenant sees only its own
-claims. `Drain` leaves live claims alone — poll `Info` until `Claimed` is zero.
+claims; the fields are those of [`GET /v1/sandboxes`](sandboxd-api.md#get-v1sandboxes).
+`Drain` leaves live claims alone — poll `Info` until `Claimed` is zero.
 
 ## Error handling
 
