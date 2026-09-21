@@ -144,24 +144,7 @@ type auditTee struct {
 
 // WriteTo keeps an audited upload at bulk-sized reads; io.Copy's own buffer would split each frame into eight.
 func (t *auditTee) WriteTo(w io.Writer) (int64, error) {
-	var total int64
-	buf := make([]byte, wire.BulkChunk)
-	for {
-		n, err := t.Read(buf)
-		if n > 0 {
-			wn, werr := w.Write(buf[:n])
-			total += int64(wn)
-			if werr != nil {
-				return total, werr
-			}
-		}
-		if err == io.EOF {
-			return total, nil
-		}
-		if err != nil {
-			return total, err
-		}
-	}
+	return io.CopyBuffer(struct{ io.Writer }{w}, struct{ io.Reader }{t}, make([]byte, wire.BulkChunk))
 }
 
 func (t *auditTee) Read(p []byte) (int, error) {

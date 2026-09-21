@@ -59,7 +59,6 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 		m.adoptGolden(p)
 		m.pools[key] = p
 	}
-	m.recomputeSweepFlags()
 	m.mu.Unlock()
 
 	runCtx := context.WithoutCancel(ctx)

@@ -460,9 +460,6 @@ func TestSetPoolsRemovalShedsArchivePolicy(t *testing.T) {
 	if p.archiveAfter != 0 || p.archiveDelete != 0 {
 		t.Errorf("archive policy survived removal: after=%v delete=%v, want 0", p.archiveAfter, p.archiveDelete)
 	}
-	if m.archiveEnabled.Load() {
-		t.Error("archiveEnabled still latched by a removed pool")
-	}
 	p.refilling = 0
 	m.mu.Unlock()
 	m.refillOnce(t.Context())

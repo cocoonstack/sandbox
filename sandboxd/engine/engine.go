@@ -13,12 +13,12 @@ import (
 	"io"
 	"net"
 	"os/exec"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/projecteru2/core/log"
+	"golang.org/x/mod/semver"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -103,29 +103,17 @@ func (e *Engine) VersionWarning(ctx context.Context) (version, warning string) {
 
 // Clone restores a VM from an exported golden directory.
 func (e *Engine) Clone(ctx context.Context, fromDir, name string, key types.PoolKey) (types.VMRecord, error) {
-	out, err := e.run(ctx, e.cloneArgs(fromDir, name, key)...)
-	if err != nil {
-		return types.VMRecord{}, err
-	}
-	return parseRecord(ctx, out), nil
+	return e.runRecord(ctx, e.cloneArgs(fromDir, name, key)...)
 }
 
 // CloneSnap clones from a local-store snapshot by name — fork's fast path.
 func (e *Engine) CloneSnap(ctx context.Context, snap, name string, key types.PoolKey) (types.VMRecord, error) {
-	out, err := e.run(ctx, e.cloneSnapArgs(snap, name, key)...)
-	if err != nil {
-		return types.VMRecord{}, err
-	}
-	return parseRecord(ctx, out), nil
+	return e.runRecord(ctx, e.cloneSnapArgs(snap, name, key)...)
 }
 
 // RunCold boots a VM from the template image, returning its lifecycle record.
 func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey) (types.VMRecord, error) {
-	out, err := e.run(ctx, e.runColdArgs(name, key)...)
-	if err != nil {
-		return types.VMRecord{}, err
-	}
-	return parseRecord(ctx, out), nil
+	return e.runRecord(ctx, e.runColdArgs(name, key)...)
 }
 
 // Remove force-deletes a VM.
@@ -163,11 +151,8 @@ func (e *Engine) Hibernate(ctx context.Context, vmName, snapName string) error {
 
 // Restore resumes a VM from a snapshot, returning its vsock UDS.
 func (e *Engine) Restore(ctx context.Context, vmName, snapRef string) (string, error) {
-	out, err := e.run(ctx, e.restoreCmdArgs(vmName, snapRef)...)
-	if err != nil {
-		return "", err
-	}
-	return parseRecord(ctx, out).VsockSocket, nil
+	rec, err := e.runRecord(ctx, e.restoreCmdArgs(vmName, snapRef)...)
+	return rec.VsockSocket, err
 }
 
 // SnapshotExport exports a snapshot into toDir, which cocoon requires absent or empty.
@@ -367,6 +352,19 @@ func (e *Engine) run(ctx context.Context, args ...string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
+func (e *Engine) runRecord(ctx context.Context, args ...string) (types.VMRecord, error) {
+	out, err := e.run(ctx, args...)
+	if err != nil {
+		return types.VMRecord{}, err
+	}
+	var rec types.VMRecord
+	if err := json.Unmarshal(out, &rec); err != nil {
+		log.WithFunc("engine.runRecord").Warnf(ctx, "parse vm record, will poll for vsock: %v", err)
+		return types.VMRecord{}, nil
+	}
+	return rec, nil
+}
+
 func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 	conn, err := e.DialSilkd(ctx, vsockSocket)
 	if err != nil {
@@ -436,43 +434,13 @@ func respFail(resp wire.Response) string {
 	return "unexpected frame " + resp.RespType()
 }
 
-func parseRecord(ctx context.Context, out []byte) types.VMRecord {
-	var rec types.VMRecord
-	if err := json.Unmarshal(out, &rec); err != nil {
-		log.WithFunc("engine.parseRecord").Warnf(ctx, "parse vm record, will poll for vsock: %v", err)
-		return types.VMRecord{}
-	}
-	return rec
-}
-
 // belowFloor reports whether v is below RequiredCocoon; comparable is false for a dev build.
 func belowFloor(v string) (below, comparable bool) {
-	cur, ok := parseSemver(v)
-	if !ok {
+	v = "v" + strings.TrimPrefix(v, "v")
+	if semver.Canonical(v) != v {
 		return false, false
 	}
-	floor, _ := parseSemver(RequiredCocoon)
-	return slices.Compare(cur[:], floor[:]) < 0, true
-}
-
-func parseSemver(s string) ([3]int, bool) {
-	s = strings.TrimPrefix(s, "v")
-	if i := strings.IndexAny(s, "-+"); i >= 0 {
-		s = s[:i]
-	}
-	parts := strings.Split(s, ".")
-	if len(parts) != 3 {
-		return [3]int{}, false
-	}
-	var out [3]int
-	for i, p := range parts {
-		n, err := strconv.Atoi(p)
-		if err != nil {
-			return [3]int{}, false
-		}
-		out[i] = n
-	}
-	return out, true
+	return semver.Compare(v, RequiredCocoon) < 0, true
 }
 
 func readBufLine(r *bufio.Reader, max int) (string, error) {

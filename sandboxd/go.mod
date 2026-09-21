@@ -13,6 +13,7 @@ require (
 	github.com/hashicorp/memberlist v0.6.0
 	github.com/projecteru2/core v0.1.5
 	github.com/rs/zerolog v1.35.1
+	golang.org/x/mod v0.40.0
 	golang.org/x/net v0.58.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.48.0
@@ -60,7 +61,6 @@ require (
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
-	golang.org/x/mod v0.40.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/tools v0.49.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260904194346-d0f1323225a4 // indirect
