@@ -272,32 +272,6 @@ func (m *Manager) archiveDeleteMarkers() ([]string, error) {
 	return ids, nil
 }
 
-func (m *Manager) clearCanceledArchiveDeletes(ctx context.Context, claims map[string]*types.Sandbox) {
-	logger := log.WithFunc("pool.clearCanceledArchiveDeletes")
-	ids, err := m.archiveDeleteMarkers()
-	if err != nil {
-		logger.Warnf(ctx, "list: %v", err)
-		return
-	}
-	if len(ids) == 0 {
-		return
-	}
-	live := make(map[string]struct{})
-	for _, sb := range claims {
-		if sb.ArchiveCk != "" {
-			live[sb.ArchiveCk] = struct{}{}
-		}
-	}
-	for _, id := range ids {
-		if _, ok := live[id]; !ok {
-			continue
-		}
-		if err := m.clearArchiveCk(id); err != nil {
-			logger.Warnf(ctx, "clear %s: %v", id, err)
-		}
-	}
-}
-
 func (m *Manager) clearArchiveCk(ckID string) error {
 	err := os.Remove(filepath.Join(m.dataDir, archiveDeleteDir, ckID))
 	if errors.Is(err, fs.ErrNotExist) {

@@ -451,35 +451,6 @@ func TestArchiveDeleteRetryAfterRestart(t *testing.T) {
 	}
 }
 
-func TestReconcileClearsLiveArchiveMarker(t *testing.T) {
-	eng := newFakeEngine()
-	dataDir := t.TempDir()
-	m := newTestManagerAt(t, eng, dataDir, archivePool(3600))
-	sb := mustClaim(t, m, testKey)
-	mustArchive(t, m, sb)
-	id, token, ck := sb.ID, sb.Token, sb.ArchiveCk
-	if archiveCkMarked(m, ck) {
-		t.Fatal("archive left a delete marker for its live checkpoint")
-	}
-	if err := m.markArchiveCk(ck); err != nil {
-		t.Fatalf("seed live archive marker: %v", err)
-	}
-
-	m2 := newTestManagerAt(t, eng, dataDir, archivePool(3600))
-	if err := m2.Reconcile(t.Context()); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if !ckExists(t, m2, ck) || archiveCkMarked(m2, ck) {
-		t.Fatal("reconcile did not retain the live archive unmarked")
-	}
-	if _, _, err := m2.WakeAgentSocket(t.Context(), id, token); err != nil {
-		t.Fatalf("wake: %v", err)
-	}
-	if archiveCkMarked(m2, ck) {
-		t.Fatal("wake left an archive delete marker")
-	}
-}
-
 func TestArchiveWakeDeleteFailureRetries(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
