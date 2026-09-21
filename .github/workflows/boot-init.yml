@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - "boot/init/**"
+      - ".github/workflows/boot-init.yml"
   pull_request:
     paths:
       - "boot/init/**"
@@ -27,5 +28,5 @@ jobs:
         working-directory: boot/init
         run: |
           cargo fmt --check
-          cargo clippy --all-targets -- -D warnings
-          cargo test
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked

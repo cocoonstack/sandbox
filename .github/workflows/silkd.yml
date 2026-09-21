@@ -9,6 +9,7 @@ on:
     paths:
       - "silkd/**"
       - "protocol/**"
+      - ".github/workflows/silkd.yml"
   pull_request:
     paths:
       - "silkd/**"
@@ -29,5 +30,5 @@ jobs:
         working-directory: silkd
         run: |
           cargo fmt --check
-          cargo clippy --all-targets -- -D warnings
-          cargo test
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
