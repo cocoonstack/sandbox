@@ -394,7 +394,7 @@ pub async fn read_frame_into<R: AsyncBufRead + Unpin>(
         if available.is_empty() {
             return Ok(!line.is_empty());
         }
-        if let Some(pos) = available.iter().position(|&b| b == b'\n') {
+        if let Some(pos) = memchr::memchr(b'\n', available) {
             line.extend_from_slice(&available[..pos]);
             r.consume(pos + 1);
             cap_check(line.len())?;
