@@ -106,11 +106,13 @@ impl Walk<'_> {
         if !matches!(read_bounded(path, body), Ok(true)) {
             return true;
         }
-        let name: Arc<str> = path.to_string_lossy().into();
+        let mut name: Option<Arc<str>> = None;
         for (i, line) in body.lines().enumerate() {
             if self.re.is_match(line) {
                 let frame = Response::Match {
-                    file: name.clone(),
+                    file: name
+                        .get_or_insert_with(|| path.to_string_lossy().into())
+                        .clone(),
                     line: i as u64 + 1,
                     content: line.to_string(),
                 };
@@ -124,7 +126,7 @@ impl Walk<'_> {
     }
 }
 
-/// Counts replacements while expanding `$n` groups straight into the output, no String per match.
+/// Counts replacements in the same pass that expands `$n` groups, at the price of the literal fast path.
 struct Counting<'a> {
     replacement: &'a str,
     count: u64,

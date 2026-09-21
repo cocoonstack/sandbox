@@ -200,41 +200,45 @@ struct Ring {
 impl Ring {
     fn push(&mut self, stderr: bool, data: &[u8]) {
         self.buf.extend(data);
-        self.tags.push_back((stderr, data.len()));
+        match self.tags.back_mut() {
+            Some((run, len)) if *run == stderr => *len += data.len(),
+            _ => self.tags.push_back((stderr, data.len())),
+        }
         self.trim();
     }
 
-    /// Drops whole oldest segments until the buffer fits the cap; a front-drain is O(dropped).
+    /// Drops the oldest bytes past the cap; the oldest run shrinks or goes entirely.
     fn trim(&mut self) {
         let mut over = self.buf.len().saturating_sub(LOG_RING_BYTES);
+        self.buf.drain(..over);
         while over > 0 {
-            let Some((_, len)) = self.tags.pop_front() else {
+            let Some((stderr, len)) = self.tags.pop_front() else {
                 break;
             };
-            self.buf.drain(..len);
-            over = over.saturating_sub(len);
+            if len > over {
+                self.tags.push_front((stderr, len - over));
+                break;
+            }
+            over -= len;
         }
     }
 
-    /// Retained output, with adjacent same-stream segments coalesced into one chunk.
+    /// Retained output, one chunk per stream run.
     fn snapshot(&mut self) -> Vec<Chunk> {
         let bytes = self.buf.make_contiguous();
-        let mut out: Vec<Chunk> = Vec::new();
         let mut off = 0;
-        for &(stderr, len) in &self.tags {
-            let seg = &bytes[off..off + len];
-            match out.last_mut() {
-                Some(Chunk::Stdout(acc)) if !stderr => acc.extend_from_slice(seg),
-                Some(Chunk::Stderr(acc)) if stderr => acc.extend_from_slice(seg),
-                _ => out.push(if stderr {
-                    Chunk::Stderr(seg.to_vec())
+        self.tags
+            .iter()
+            .map(|&(stderr, len)| {
+                let seg = bytes[off..off + len].to_vec();
+                off += len;
+                if stderr {
+                    Chunk::Stderr(seg)
                 } else {
-                    Chunk::Stdout(seg.to_vec())
-                }),
-            }
-            off += len;
-        }
-        out
+                    Chunk::Stdout(seg)
+                }
+            })
+            .collect()
     }
 }
 
@@ -285,5 +289,53 @@ mod tests {
         proc.emit(&Chunk::Exit(3));
         assert!(matches!(rx.try_recv(), Ok(Chunk::Exit(3))));
         assert!(matches!(second.try_recv(), Ok(Chunk::Exit(3))));
+    }
+
+    #[test]
+    fn ring_keeps_one_tag_per_stream_run() {
+        let mut ring = Ring {
+            buf: VecDeque::new(),
+            tags: VecDeque::new(),
+        };
+        for i in 0..LOG_RING_BYTES + 1000 {
+            ring.push(false, &[(i % 251) as u8]);
+        }
+        assert_eq!(ring.buf.len(), LOG_RING_BYTES);
+        assert_eq!(
+            ring.tags.len(),
+            1,
+            "one stdout run is one tag, whatever the write size"
+        );
+        assert_eq!(ring.tags.iter().map(|t| t.1).sum::<usize>(), ring.buf.len());
+        ring.push(true, b"err");
+        ring.push(false, b"out");
+        assert_eq!(ring.tags.len(), 3);
+        assert_eq!(ring.snapshot().len(), 3);
+    }
+
+    #[test]
+    fn ring_overflow_keeps_the_exact_newest_bytes() {
+        let mut ring = Ring {
+            buf: VecDeque::new(),
+            tags: VecDeque::new(),
+        };
+        ring.push(false, &vec![b'a'; 200 * 1024]);
+        ring.push(false, &vec![b'b'; 100 * 1024]);
+        assert_eq!(
+            ring.buf.len(),
+            LOG_RING_BYTES,
+            "a big oldest segment is thinned, not dropped"
+        );
+        assert_eq!(ring.tags.iter().map(|t| t.1).sum::<usize>(), ring.buf.len());
+        let snap = ring.snapshot();
+        assert_eq!(snap.len(), 1);
+        let Chunk::Stdout(kept) = &snap[0] else {
+            panic!("stdout run")
+        };
+        assert_eq!(kept.len(), LOG_RING_BYTES);
+        assert_eq!(
+            &kept[kept.len() - 100 * 1024..],
+            &vec![b'b'; 100 * 1024][..]
+        );
     }
 }

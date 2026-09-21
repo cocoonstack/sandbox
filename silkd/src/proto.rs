@@ -380,8 +380,7 @@ pub struct ProcInfo {
 /// Why a `data`/`data_end` upload stream ended without a clean `data_end`.
 pub enum FeedError {
     Io(io::Error, &'static str),
-    Protocol,
-    Truncated,
+    Bad(&'static str),
 }
 
 /// Reads one frame into `line` (cleared first, reused across calls), capped at MAX_FRAME; false on clean EOF.
@@ -395,7 +394,7 @@ pub async fn read_frame_into<R: AsyncBufRead + Unpin>(
         if available.is_empty() {
             return Ok(!line.is_empty());
         }
-        if let Some(pos) = available.iter().position(|&b| b == b'\n') {
+        if let Some(pos) = memchr::memchr(b'\n', available) {
             line.extend_from_slice(&available[..pos]);
             r.consume(pos + 1);
             cap_check(line.len())?;
@@ -538,7 +537,7 @@ where
             .await
             .map_err(|e| FeedError::Io(e, "read"))?
         {
-            return Err(FeedError::Truncated);
+            return Err(FeedError::Bad("stream ended before data_end"));
         }
         match serde_json::from_slice::<Request>(&frame) {
             Ok(Request::Data { data }) => sink
@@ -546,7 +545,7 @@ where
                 .await
                 .map_err(|e| FeedError::Io(e, "write"))?,
             Ok(Request::DataEnd) => return Ok(()),
-            _ => return Err(FeedError::Protocol),
+            _ => return Err(FeedError::Bad("expected data or data_end")),
         }
     }
 }
@@ -555,20 +554,7 @@ where
 pub async fn write_feed_error<W: AsyncWrite + Unpin>(w: &mut W, err: FeedError) -> io::Result<()> {
     match err {
         FeedError::Io(e, op) => err_frame(w, &e, op).await,
-        FeedError::Protocol => {
-            write_frame(
-                w,
-                &Response::error(ErrorKind::BadRequest, "expected data or data_end"),
-            )
-            .await
-        }
-        FeedError::Truncated => {
-            write_frame(
-                w,
-                &Response::error(ErrorKind::BadRequest, "stream ended before data_end"),
-            )
-            .await
-        }
+        FeedError::Bad(message) => error_frame(w, ErrorKind::BadRequest, message).await,
     }
 }
 
@@ -848,5 +834,28 @@ mod tests {
             seen, 61,
             "fixture corpus: adding a verb means adding its fixture"
         );
+    }
+
+    #[tokio::test]
+    async fn a_failed_upload_renders_a_bad_request_frame() {
+        let cases: [(&[u8], &str); 2] = [
+            (b"{\"v\":1,\"op\":\"ps\"}\n", "expected data or data_end"),
+            (b"", "stream ended before data_end"),
+        ];
+        for (input, message) in cases {
+            let mut reader = tokio::io::BufReader::new(input);
+            let mut sink = Vec::new();
+            let err = feed_data_frames(&mut reader, &mut sink)
+                .await
+                .expect_err("the upload must fail");
+            let mut out = Vec::new();
+            write_feed_error(&mut out, err).await.expect("write");
+            assert_eq!(
+                String::from_utf8(out).expect("utf8"),
+                format!(
+                    "{{\"type\":\"error\",\"kind\":\"bad_request\",\"message\":\"{message}\"}}\n"
+                )
+            );
+        }
     }
 }
