@@ -9,7 +9,18 @@ import time
 import pytest
 from conftest import sandbox_at
 
-from cocoonsandbox import APIError, Client, Lsp, ProtocolError, Pty, SandboxError, Session, SilkdError, Watcher
+from cocoonsandbox import (
+    APIError,
+    Client,
+    Lsp,
+    ProtocolError,
+    Pty,
+    SandboxError,
+    SandboxTimeout,
+    Session,
+    SilkdError,
+    Watcher,
+)
 from cocoonsandbox.conn import Conn, dial_agent, remaining_timeout
 from cocoonsandbox.frames import FS_CHUNK
 
@@ -151,3 +162,39 @@ def test_sandbox_timeout_is_both_hierarchies():
         remaining_timeout(1.0, time.monotonic() - 1, "probe")
     with pytest.raises(TimeoutError):
         remaining_timeout(1.0, time.monotonic() - 1, "probe")
+
+
+def test_recv_after_close_is_a_protocol_error() -> None:
+    a, b = socket.socketpair()
+    conn = Conn(a, a.makefile("rb"))
+    conn.close()
+    b.close()
+    with pytest.raises(ProtocolError):
+        conn.recv()
+
+
+def test_dial_timeout_bounds_the_whole_upgrade() -> None:
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+
+    def slow_headers() -> None:
+        peer, _ = server.accept()
+        peer.sendall(b"HTTP/1.1 101 Switching Protocols\r\n")
+        for n in range(8):
+            time.sleep(0.15)
+            try:
+                peer.sendall(f"X-Slow-{n}: 1\r\n".encode())
+            except OSError:
+                break
+        peer.close()
+
+    threading.Thread(target=slow_headers, daemon=True).start()
+    addr = f"127.0.0.1:{server.getsockname()[1]}"
+    started = time.monotonic()
+    with pytest.raises(SandboxTimeout):
+        dial_agent(addr, "sb_x", "tok", timeout=0.2)
+    assert time.monotonic() - started < 0.6, (
+        "each header arrived under the per-read timeout; only a whole-dial budget stops this"
+    )
+    server.close()

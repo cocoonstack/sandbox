@@ -57,7 +57,7 @@ class Conn(_Closeable):
         """Reads one frame or raises a typed protocol or guest error."""
         try:
             line = self._reader.readline(MAX_FRAME + 1)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             raise ProtocolError(f"read failed: {exc}") from exc
         if not line:
             raise ProtocolError("connection closed mid-stream")
@@ -159,6 +159,8 @@ def dial_agent(
     ssl_context: ssl.SSLContext | None = None,
 ) -> Conn:
     """Opens one TCP/HTTP Upgrade relay within timeout and the optional deadline."""
+    budget = time.monotonic() + timeout
+    deadline = budget if deadline is None else min(deadline, budget)
     for name, value in (("sandbox id", sandbox_id), ("token", token)):
         if any(c in value for c in "\r\n\0"):
             raise APIError("agent upgrade", 0, f"{name} contains a control character")
