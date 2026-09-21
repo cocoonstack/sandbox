@@ -258,13 +258,11 @@ type Manager struct {
 
 	// idleDefault is the idle-hibernate threshold for unpooled keys; zero disables.
 	idleDefault time.Duration
-	idleEnabled atomic.Bool
 	idleSweep   atomic.Bool
 
 	// archive*Default are the archive thresholds for unpooled keys.
 	archiveAfterDefault  time.Duration
 	archiveDeleteDefault time.Duration
-	archiveEnabled       atomic.Bool
 	archiveSweep         atomic.Bool
 	archiveDeleteSweep   atomic.Bool
 	// archiving holds ids with an export in flight; pendingCks pins ids mid-commit; both under m.mu.
@@ -466,7 +464,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	if err := m.adoptPersistedPools(ctx); err != nil {
 		return nil, err
 	}
-	m.recomputeSweepFlags()
 	return m, nil
 }
 
@@ -607,17 +604,6 @@ func (m *Manager) sweepStoreGenerations(ctx context.Context) {
 	if err := m.tpls.SweepGenerations(); err != nil {
 		logger.Error(ctx, err, "sweep template generations")
 	}
-}
-
-// recomputeSweepFlags derives the sweep switches from the live pool set rather than latching them: removing every idle pool turns the sweep off again.
-func (m *Manager) recomputeSweepFlags() {
-	idle, archive := m.idleDefault > 0, m.archiveAfterDefault > 0
-	for _, p := range m.pools {
-		idle = idle || p.idle > 0
-		archive = archive || p.archiveAfter > 0
-	}
-	m.idleEnabled.Store(idle)
-	m.archiveEnabled.Store(archive)
 }
 
 func (m *Manager) untrack(set map[string]struct{}, key string) {

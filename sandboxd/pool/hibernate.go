@@ -172,9 +172,6 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 }
 
 func (m *Manager) idleOnce(ctx context.Context) {
-	if !m.idleEnabled.Load() {
-		return
-	}
 	if !m.idleSweep.CompareAndSwap(false, true) {
 		return // the previous sweep's hibernates are still draining
 	}

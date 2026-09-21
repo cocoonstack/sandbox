@@ -38,9 +38,6 @@ func (m *Manager) archiveEnabledFor(key types.PoolKey) bool {
 }
 
 func (m *Manager) archiveOnce(ctx context.Context) {
-	if !m.archiveEnabled.Load() {
-		return
-	}
 	if !m.archiveSweep.CompareAndSwap(false, true) {
 		return // the previous sweep's archives are still draining
 	}
