@@ -63,6 +63,7 @@ type Manager interface {
 	Release(ctx context.Context, id string, cred pool.Cred) error
 	Hibernate(ctx context.Context, id string, cred pool.Cred) error
 	Wake(ctx context.Context, id string, cred pool.Cred) error
+	Renew(ctx context.Context, id string, cred pool.Cred, ttl time.Duration) (time.Time, error)
 	Fork(ctx context.Context, id string, cred pool.Cred, count int, ttl time.Duration) ([]*types.Sandbox, error)
 	Promote(ctx context.Context, id string, cred pool.Cred, template, tenant string) (types.PoolKey, string, error)
 	DeleteTemplate(ctx context.Context, key types.PoolKey, tenant string) error
@@ -188,6 +189,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleSandboxVerb("release", s.mgr.Release))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/wake", s.handleSandboxVerb("wake", s.mgr.Wake))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/renew", s.handleRenew)
 	mux.HandleFunc("GET /v1/sandboxes/{id}", s.requireRoot(s.handleSandbox))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/stats", s.requireRoot(s.handleSandboxStats))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.requireToken(s.handleFork))
@@ -396,6 +398,22 @@ func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id 
 			w.WriteHeader(http.StatusNoContent)
 		})
 	}
+}
+
+func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
+	token, ok := sandboxToken(w, r)
+	if !ok {
+		return
+	}
+	req, ok := decodeBody[types.RenewRequest](w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	deadline, err := s.mgr.Renew(r.Context(), id, s.sandboxCred(token), req.TTL())
+	writeResult(w, r, "renew", id, "renew failed", err, func() {
+		writeJSON(w, http.StatusOK, types.RenewResponse{Deadline: deadline})
+	})
 }
 
 func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {

@@ -730,6 +730,66 @@ func TestProbeReadyWaitsForVsock(t *testing.T) {
 	}
 }
 
+func TestRenewExtendsTheLease(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	before := sb.Deadline
+
+	got, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour)
+	if err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	if !got.After(before) {
+		t.Errorf("deadline %v, want after %v", got, before)
+	}
+	if sb.Deadline != got || sb.LeaseSeconds != int(time.Hour/time.Second) {
+		t.Errorf("claim carries deadline %v lease %ds", sb.Deadline, sb.LeaseSeconds)
+	}
+	if list := m.Sandboxes(""); len(list) != 1 || !list[0].Deadline.Equal(got) {
+		t.Errorf("index %+v does not report the granted deadline", list)
+	}
+}
+
+func TestRenewClampsAndDefaults(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+
+	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, 0); err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	if want := int(defaultTTL / time.Second); sb.LeaseSeconds != want {
+		t.Errorf("zero ttl granted %ds, want the %ds default", sb.LeaseSeconds, want)
+	}
+	got, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, 999*time.Hour)
+	if err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	if want := int(maxTTL / time.Second); sb.LeaseSeconds != want {
+		t.Errorf("oversized ttl granted %ds, want the %ds cap", sb.LeaseSeconds, want)
+	}
+	if !got.Before(time.Now().Add(maxTTL + time.Minute)) {
+		t.Errorf("deadline %v outruns the cap", got)
+	}
+}
+
+func TestRenewAuthorizesByToken(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	before := sb.Deadline
+
+	for _, cred := range []Cred{{Token: "wrong"}, {}} {
+		if _, err := m.Renew(t.Context(), sb.ID, cred, time.Hour); !errors.Is(err, ErrUnknownSandbox) {
+			t.Errorf("cred %+v: %v, want ErrUnknownSandbox", cred, err)
+		}
+	}
+	if _, err := m.Renew(t.Context(), "sb_missing", Cred{Token: sb.Token}, time.Hour); !errors.Is(err, ErrUnknownSandbox) {
+		t.Errorf("unknown id: %v, want ErrUnknownSandbox", err)
+	}
+	if sb.Deadline != before {
+		t.Error("a rejected renew moved the deadline")
+	}
+}
+
 func TestDialPortAuthorizesByToken(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	sb := mustClaim(t, m, testKey)

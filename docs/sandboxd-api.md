@@ -236,6 +236,23 @@ sandbox instead uses `archive_delete_after_seconds` as its retention deadline
 while stored, and waking it starts a fresh lease of the length the claim was granted (the server default when it asked for none). 204 on
 success, 404 unknown id or wrong token.
 
+## POST /v1/sandboxes/{id}/renew
+
+Auth: the sandbox's own token, or the root token by id (operator). Resets the
+lease to `ttl_seconds` from now, so a client holding a sandbox longer than its
+claim asked for does not have to claim a new one:
+
+```json
+{"ttl_seconds": 3600}
+```
+
+→ `200 {"deadline": "2026-09-22T12:00:00Z"}`. The grant, not the request, is
+authoritative: `ttl_seconds` 0 means the node default and anything past the
+24 h cap is clamped, and the reply always carries what was granted. The new
+lease also becomes the one a wake from the archive grants again. A renew can
+shorten a lease as well as extend it. 400 a malformed body; 401 missing
+bearer token; 404 unknown id or wrong token.
+
 ## POST /v1/sandboxes/{id}/fork
 
 Auth: the node `api_token` (Bearer) — forking creates node resources, like a

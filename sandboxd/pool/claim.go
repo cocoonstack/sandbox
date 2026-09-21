@@ -103,6 +103,37 @@ func (m *Manager) DialPort(ctx context.Context, id string, cred Cred, port uint1
 	return m.dialPort(ctx, id, cred, port, "port")
 }
 
+// Renew resets a claim's lease to ttl from now after authorizing cred, and reports the granted deadline.
+func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Duration) (time.Time, error) {
+	sb, ok := m.resolve(id, cred)
+	if !ok {
+		return time.Time{}, ErrUnknownSandbox
+	}
+	lease := clampTTL(ttl)
+	m.mu.Lock()
+	if m.claimed[id] != sb {
+		m.mu.Unlock()
+		return time.Time{}, ErrUnknownSandbox
+	}
+	prev, prevLease := sb.Deadline, sb.LeaseSeconds
+	sb.Deadline, sb.LeaseSeconds = time.Now().Add(lease), int(lease/time.Second)
+	deadline, js := sb.Deadline, m.store.set(sb)
+	m.mu.Unlock()
+	if err := m.store.commit(js); err != nil {
+		m.mu.Lock()
+		var rb claimSnapshot
+		if m.claimed[id] == sb {
+			sb.Deadline, sb.LeaseSeconds = prev, prevLease
+			rb = m.store.set(sb)
+		}
+		m.mu.Unlock()
+		m.recommit(ctx, rb)
+		return time.Time{}, fmt.Errorf("renew %s: persist claims: %w", id, err)
+	}
+	sb.Touch()
+	return deadline, nil
+}
+
 // PreviewDial opens a preview request's guest connection; the caller verified the HMAC token.
 func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.Conn, error) {
 	return m.dialPort(ctx, id, Cred{Operator: true}, port, "preview")
