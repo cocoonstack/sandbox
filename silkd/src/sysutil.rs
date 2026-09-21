@@ -1,17 +1,13 @@
 //! Small OS helpers; the crate's unsafe work lives here.
 
-use std::ffi::{CStr, CString};
 use std::io::Read;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use tokio::process::Command;
-
-/// Serializes getpwnam, whose result points into a static buffer the next call clobbers.
-static NSS_LOCK: Mutex<()> = Mutex::new(());
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -93,35 +89,15 @@ pub fn apply_user(cmd: &mut Command, user: &str) -> Result<(), String> {
 
 /// Opens a pty, returning the (master, slave) fds; the master is non-blocking for async I/O.
 pub fn openpty(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
-    let mut master: libc::c_int = 0;
-    let mut slave: libc::c_int = 0;
-    let mut ws = libc::winsize {
+    let ws = nix::pty::Winsize {
         ws_row: rows,
         ws_col: cols,
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
-    // a raw `*mut` for winp fits both libc signatures (*mut on macOS, *const on Linux).
-    // SAFETY: openpty writes two valid fds into master/slave on success and only reads ws; both fds are owned immediately.
-    let rc = unsafe {
-        libc::openpty(
-            &mut master,
-            &mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &raw mut ws,
-        )
-    };
-    if rc != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: openpty just handed us these fds; wrapping transfers ownership so
-    // they close on drop.
-    let master = unsafe { OwnedFd::from_raw_fd(master) };
-    // SAFETY: same transfer for the slave end.
-    let slave = unsafe { OwnedFd::from_raw_fd(slave) };
-    set_nonblocking(master.as_raw_fd())?;
-    Ok((master, slave))
+    let pty = nix::pty::openpty(&ws, None)?;
+    set_nonblocking(pty.master.as_raw_fd())?;
+    Ok((pty.master, pty.slave))
 }
 
 /// Resizes a pty via TIOCSWINSZ on its master fd.
@@ -274,21 +250,15 @@ fn snapshot_proxy(get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, St
 }
 
 fn lookup_user(user: &str) -> Result<(u32, u32, String), String> {
-    let cname = CString::new(user).map_err(|_| format!("invalid user {user:?}"))?;
-    let _guard = lock(&NSS_LOCK);
-    // SAFETY: cname is a live NUL-terminated CString for the call.
-    let pw = unsafe { libc::getpwnam(cname.as_ptr()) };
-    if pw.is_null() {
-        return Err(format!("unknown user {user:?}"));
+    match nix::unistd::User::from_name(user) {
+        Ok(Some(pw)) => Ok((
+            pw.uid.as_raw(),
+            pw.gid.as_raw(),
+            pw.dir.to_string_lossy().into_owned(),
+        )),
+        Ok(None) => Err(format!("unknown user {user:?}")),
+        Err(e) => Err(format!("look up user {user:?}: {e}")),
     }
-    // SAFETY: pw is non-null (checked) and, with NSS_LOCK still held, points to
-    // a valid passwd whose pw_dir is a NUL-terminated string it owns.
-    let pw = unsafe { &*pw };
-    // SAFETY: pw_dir is NUL-terminated and stays valid while NSS_LOCK is held.
-    let home = unsafe { CStr::from_ptr(pw.pw_dir) }
-        .to_string_lossy()
-        .into_owned();
-    Ok((pw.pw_uid, pw.pw_gid, home))
 }
 
 fn set_nonblocking(fd: RawFd) -> std::io::Result<()> {
