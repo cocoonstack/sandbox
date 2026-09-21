@@ -38,11 +38,6 @@ type digestSource struct {
 	digest store.DigestFile
 }
 
-type digestJob struct {
-	file  int
-	chunk int
-}
-
 type chunkHasher func(source *digestSource, chunk int, buffer []byte) error
 
 var _ store.Store = (*Store)(nil)
@@ -364,39 +359,18 @@ func hashExport(ctx context.Context, root string) (string, error) {
 }
 
 func hashChunks(ctx context.Context, sources []digestSource, workers int, hashFn chunkHasher) error {
-	jobs := make(chan digestJob)
 	group, groupCtx := errgroup.WithContext(ctx)
-	for range workers {
-		group.Go(func() error {
-			buffer := make([]byte, digestReadBufferSize)
-			for {
-				select {
-				case <-groupCtx.Done():
-					return groupCtx.Err()
-				case job, ok := <-jobs:
-					if !ok {
-						return nil
-					}
-					if err := hashFn(&sources[job.file], job.chunk, buffer); err != nil {
-						return err
-					}
+	group.SetLimit(workers)
+	for i := range sources {
+		for chunk := range sources[i].digest.Chunks {
+			group.Go(func() error {
+				if err := groupCtx.Err(); err != nil {
+					return err
 				}
-			}
-		})
-	}
-	group.Go(func() error {
-		defer close(jobs)
-		for i := range sources {
-			for chunk := range sources[i].digest.Chunks {
-				select {
-				case <-groupCtx.Done():
-					return groupCtx.Err()
-				case jobs <- digestJob{file: i, chunk: chunk}:
-				}
-			}
+				return hashFn(&sources[i], chunk, make([]byte, digestReadBufferSize))
+			})
 		}
-		return nil
-	})
+	}
 	return group.Wait()
 }
 
