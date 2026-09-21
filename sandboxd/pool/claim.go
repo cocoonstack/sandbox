@@ -98,28 +98,14 @@ func (m *Manager) ClaimDeadline(id, token string) (time.Time, error) {
 	return sb.Deadline, nil
 }
 
+// DialPort opens a byte stream to a guest port after authorizing cred, waking a hibernated VM first.
+func (m *Manager) DialPort(ctx context.Context, id string, cred Cred, port uint16) (net.Conn, error) {
+	return m.dialPort(ctx, id, cred, port, "port")
+}
+
 // PreviewDial opens a preview request's guest connection; the caller verified the HMAC token.
 func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.Conn, error) {
-	m.mu.Lock()
-	sb, ok := m.claimed[id]
-	m.mu.Unlock()
-	if !ok {
-		return nil, ErrUnknownSandbox
-	}
-	sb.Touch()
-	m.recordAudit(ctx, id, auditFrame{Op: "preview", Port: port})
-	sb.Hold()
-	sock, err := m.wakeResolved(ctx, sb)
-	if err != nil {
-		sb.Unhold()
-		return nil, err
-	}
-	conn, err := m.eng.DialGuestPort(ctx, sock, port)
-	if err != nil {
-		sb.Unhold()
-		return nil, err
-	}
-	return &heldConn{Conn: conn, release: sync.OnceFunc(sb.Unhold)}, nil
+	return m.dialPort(ctx, id, Cred{Operator: true}, port, "preview")
 }
 
 // AgentSocket resolves a claimed sandbox's vsock UDS without waking it.
@@ -132,6 +118,28 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 	}
 	// no activity stamp: a control-plane poll must not keep an idle sandbox awake
 	return sb.VsockSocket, nil
+}
+
+// dialPort holds the sandbox for the connection's lifetime, so an idle sweep cannot reap a live stream.
+func (m *Manager) dialPort(ctx context.Context, id string, cred Cred, port uint16, op string) (net.Conn, error) {
+	sb, ok := m.resolve(id, cred)
+	if !ok {
+		return nil, ErrUnknownSandbox
+	}
+	sb.Touch()
+	m.recordAudit(ctx, id, auditFrame{Op: op, Port: port})
+	sb.Hold()
+	sock, err := m.wakeResolved(ctx, sb)
+	if err != nil {
+		sb.Unhold()
+		return nil, err
+	}
+	conn, err := m.eng.DialGuestPort(ctx, sock, port)
+	if err != nil {
+		sb.Unhold()
+		return nil, err
+	}
+	return &heldConn{Conn: conn, release: sync.OnceFunc(sb.Unhold)}, nil
 }
 
 // releaseResolved re-checks under m.mu that sb is still the live claim: no double teardown.

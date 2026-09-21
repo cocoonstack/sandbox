@@ -539,6 +539,22 @@ clock, so a client that keeps a connection warm must close it when idle for
 `idle_hibernate_seconds` to apply. 426 without the upgrade header, 404
 unknown sandbox, 502 guest unreachable.
 
+## GET /v1/sandboxes/{id}/ports/{port}
+
+Auth: the sandbox's own token. Requires `Upgrade: tcp` +
+`Connection: Upgrade`; answers `101 Switching Protocols` and from then on
+the connection is a raw byte relay to `127.0.0.1:{port}` inside the guest,
+over the same vsock `port_forward` preview uses. Nothing of ours frames the
+stream, so HTTP/1.1, HTTP/2 and any other protocol pass through unchanged,
+and a half-close in either direction is carried to the peer. This is how an
+edge proxy reaches a guest listener on a `net=none` sandbox, which has no NIC.
+
+An open relay holds the sandbox's idle clock exactly like the silkd relay, and
+a hibernated sandbox wakes transparently — which is why the upgrade header is
+mandatory: a bare `GET` must not consume a hibernate snapshot. 400 a port
+outside 1-65535; 401 missing bearer token; 404 unknown sandbox or wrong token;
+426 without the upgrade header; 502 when the guest has no listener on that port.
+
 ## POST /v1/sandboxes/{id}/exec
 
 Auth: the sandbox's own token. A buffered exec for clients that cannot hold

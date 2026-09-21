@@ -172,33 +172,53 @@ func TestSandboxesIndexOmitsTokens(t *testing.T) {
 	}
 }
 
-func TestPreviewDialWritesAuditEvent(t *testing.T) {
-	eng := newFakeEngine()
-	dir := t.TempDir()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}, eng, testSecrets(t))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
+func TestGuestPortDialsWriteAuditEvents(t *testing.T) {
+	tests := []struct {
+		name string
+		op   string
+		dial func(m *Manager, sb *types.Sandbox) error
+	}{
+		{"preview", "preview", func(m *Manager, sb *types.Sandbox) error {
+			_, err := m.PreviewDial(t.Context(), sb.ID, 8080)
+			return err
+		}},
+		{"port passthrough", "port", func(m *Manager, sb *types.Sandbox) error {
+			_, err := m.DialPort(t.Context(), sb.ID, Cred{Token: sb.Token}, 8080)
+			return err
+		}},
 	}
-	sb := mustClaim(t, m, testKey)
-	if _, dialErr := m.PreviewDial(t.Context(), sb.ID, 8080); dialErr == nil {
-		t.Fatal("fake engine dial unexpectedly succeeded")
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			m, err := NewManager(t.Context(), &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}, newFakeEngine(), testSecrets(t))
+			if err != nil {
+				t.Fatalf("setup manager: %v", err)
+			}
+			sb := mustClaim(t, m, testKey)
+			if dialErr := tt.dial(m, sb); dialErr == nil {
+				t.Fatal("fake engine dial unexpectedly succeeded")
+			}
 
-	raw, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
-	if err != nil {
-		t.Fatalf("read audit journal: %v", err)
-	}
-	var ev struct {
-		ID   string `json:"id"`
-		Op   string `json:"op"`
-		Port uint16 `json:"port"`
-	}
-	line := strings.TrimSpace(string(raw))
-	if err := json.Unmarshal([]byte(line), &ev); err != nil {
-		t.Fatalf("bad audit line %q: %v", line, err)
-	}
-	if ev.ID != sb.ID || ev.Op != "preview" || ev.Port != 8080 {
-		t.Errorf("audit event %+v", ev)
+			raw, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
+			if err != nil {
+				t.Fatalf("read audit journal: %v", err)
+			}
+			var ev struct {
+				ID   string `json:"id"`
+				Op   string `json:"op"`
+				Port uint16 `json:"port"`
+			}
+			line := strings.TrimSpace(string(raw))
+			if err := json.Unmarshal([]byte(line), &ev); err != nil {
+				t.Fatalf("bad audit line %q: %v", line, err)
+			}
+			if ev.ID != sb.ID || ev.Op != tt.op || ev.Port != 8080 {
+				t.Errorf("audit event %+v", ev)
+			}
+			if strings.Contains(string(raw), sb.Token) {
+				t.Error("audit journal leaked the sandbox token")
+			}
+		})
 	}
 }
 

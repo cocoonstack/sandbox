@@ -24,8 +24,10 @@ import (
 
 const (
 	upgradeProto = "silkd"
-	maxBodyBytes = 1 << 20
-	previewTTL   = time.Hour
+	// upgradeProtoTCP names the guest-port passthrough: raw bytes, no framing of ours.
+	upgradeProtoTCP = "tcp"
+	maxBodyBytes    = 1 << 20
+	previewTTL      = time.Hour
 )
 
 var poolErrHTTP = []struct {
@@ -85,6 +87,7 @@ type Manager interface {
 	HasPoolGolden(key types.PoolKey) bool
 	HasPromotedTemplate(ctx context.Context, key types.PoolKey, tenant string) bool
 	AgentSocket(id, token string) (string, error)
+	DialPort(ctx context.Context, id string, cred pool.Cred, port uint16) (net.Conn, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, func(), error)
 	SetPools(ctx context.Context, pools []config.PoolSpec) error
 	Drain(ctx context.Context)
@@ -201,6 +204,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/drain", s.requireRoot(s.handleDrain))
 	mux.HandleFunc("DELETE /v1/drain", s.requireRoot(s.handleUncordon))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", s.handleAgent)
+	mux.HandleFunc("GET /v1/sandboxes/{id}/ports/{port}", s.handlePort)
 	mux.HandleFunc("POST /v1/sandboxes/{id}/exec", s.handleExec)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/owner", s.handleOwner)
 	mux.HandleFunc("GET /v1/info", s.requireRoot(s.handleInfo))

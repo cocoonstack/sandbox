@@ -56,6 +56,26 @@ func TestGuestPortConnWriteWrapsInDataFrame(t *testing.T) {
 	}
 }
 
+func TestGuestPortConnCloseWriteSendsDataEnd(t *testing.T) {
+	client, silk := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = silk.Close() })
+	gc := newGuestPortConn(client, bufio.NewReaderSize(client, portReadBuf))
+
+	go func() { _ = gc.CloseWrite() }()
+
+	line, err := bufio.NewReader(silk).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read frame: %v", err)
+	}
+	want, err := wire.EncodeRequest(wire.DataEnd{})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if line != string(want)+"\n" {
+		t.Errorf("got %q, want %q", line, string(want)+"\n")
+	}
+}
+
 func TestGuestPortConnRoundTripsFixtures(t *testing.T) {
 	const fixtureDir = "../../protocol/wire/fixtures/v1"
 	fixture := func(name string) []byte {

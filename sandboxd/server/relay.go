@@ -83,24 +83,11 @@ func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id, token
 
 // relay writes the 101 and splices the conns until silkd closes or the client vanishes.
 func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBuf *bufio.Reader, guest net.Conn) {
-	s.relayMu.Lock()
-	if s.relayClosed {
-		s.relayMu.Unlock()
-		_ = client.Close()
-		_ = guest.Close()
+	release, ok := s.trackRelay(client, guest)
+	if !ok {
 		return
 	}
-	s.relays[client] = guest
-	s.relayWG.Add(1)
-	s.relayMu.Unlock()
-	defer func() {
-		_ = client.Close()
-		_ = guest.Close()
-		s.relayMu.Lock()
-		delete(s.relays, client)
-		s.relayMu.Unlock()
-		s.relayWG.Done()
-	}()
+	defer release()
 
 	// the http server may have armed a header-read deadline on this conn
 	_ = client.SetDeadline(time.Time{})
@@ -108,11 +95,7 @@ func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBu
 		return
 	}
 
-	// reading the bufio past Buffered() would race the direct conn reads below
-	clientR := io.Reader(client)
-	if n := clientBuf.Buffered(); n > 0 {
-		clientR = io.MultiReader(io.LimitReader(clientBuf, int64(n)), client)
-	}
+	clientR := clientReader(client, clientBuf)
 	if s.mgr.AuditEnabled() {
 		clientR = &auditTee{r: clientR, record: func(line []byte) {
 			s.mgr.Audit(ctx, id, line)
@@ -132,6 +115,36 @@ func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBu
 	// the read deadline unblocks the splice goroutine if the client never closes
 	_ = client.SetReadDeadline(time.Now().Add(drainGrace))
 	<-done
+}
+
+// trackRelay registers a hijacked pair for CloseRelays; !ok means the server is already draining.
+func (s *Server) trackRelay(client, guest net.Conn) (func(), bool) {
+	s.relayMu.Lock()
+	if s.relayClosed {
+		s.relayMu.Unlock()
+		_ = client.Close()
+		_ = guest.Close()
+		return nil, false
+	}
+	s.relays[client] = guest
+	s.relayWG.Add(1)
+	s.relayMu.Unlock()
+	return func() {
+		_ = client.Close()
+		_ = guest.Close()
+		s.relayMu.Lock()
+		delete(s.relays, client)
+		s.relayMu.Unlock()
+		s.relayWG.Done()
+	}, true
+}
+
+// clientReader replays what the http server already buffered; reading the bufio past Buffered() would race the direct conn reads.
+func clientReader(client net.Conn, clientBuf *bufio.Reader) io.Reader {
+	if n := clientBuf.Buffered(); n > 0 {
+		return io.MultiReader(io.LimitReader(clientBuf, int64(n)), client)
+	}
+	return client
 }
 
 // auditTee records each request line it relays; input frames and the bytes past the cap pass unrecorded.

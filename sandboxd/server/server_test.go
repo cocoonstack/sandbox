@@ -1896,6 +1896,7 @@ type fakeManager struct {
 	release              sandboxVerbFunc
 	releaseOp            idActionFunc
 	socket               func(id, token string) (string, error)
+	dialPort             func(id, token string, port uint16) (net.Conn, error)
 	hibernate            sandboxVerbFunc
 	wake                 sandboxVerbFunc
 	fork                 func(id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
@@ -1977,6 +1978,13 @@ func (f *fakeManager) AgentSocket(id, token string) (string, error) {
 func (f *fakeManager) WakeAgentSocket(_ context.Context, id, token string) (string, func(), error) {
 	sock, err := f.AgentSocket(id, token)
 	return sock, func() {}, err
+}
+
+func (f *fakeManager) DialPort(_ context.Context, id string, cred pool.Cred, port uint16) (net.Conn, error) {
+	if f.dialPort == nil {
+		return nil, pool.ErrUnknownSandbox
+	}
+	return f.dialPort(id, credToken(cred), port)
 }
 
 func (f *fakeManager) Hibernate(_ context.Context, id string, cred pool.Cred) error {

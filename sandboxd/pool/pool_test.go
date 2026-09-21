@@ -730,6 +730,24 @@ func TestProbeReadyWaitsForVsock(t *testing.T) {
 	}
 }
 
+func TestDialPortAuthorizesByToken(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+
+	if _, err := m.DialPort(t.Context(), sb.ID, Cred{Token: "wrong"}, 49983); !errors.Is(err, ErrUnknownSandbox) {
+		t.Errorf("wrong token: %v, want ErrUnknownSandbox", err)
+	}
+	if _, err := m.DialPort(t.Context(), sb.ID, Cred{}, 49983); !errors.Is(err, ErrUnknownSandbox) {
+		t.Errorf("empty token: %v, want ErrUnknownSandbox", err)
+	}
+	if _, err := m.DialPort(t.Context(), "sb_missing", Cred{Token: sb.Token}, 49983); !errors.Is(err, ErrUnknownSandbox) {
+		t.Errorf("unknown id: %v, want ErrUnknownSandbox", err)
+	}
+	if _, err := m.DialPort(t.Context(), sb.ID, Cred{Token: sb.Token}, 49983); errors.Is(err, ErrUnknownSandbox) {
+		t.Error("right token was rejected as an unknown sandbox")
+	}
+}
+
 func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	return newTestManagerAt(t, eng, t.TempDir(), pools...)
