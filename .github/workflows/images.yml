@@ -15,6 +15,10 @@ on:
       - "silkd/**"
       - "protocol/**"
       - "os-image/**"
+      - ".github/workflows/images.yml"
+      - ".github/workflows/build-os-images.yml"
+      - ".github/workflows/build-silkd.yml"
+      - ".github/workflows/build-boot.yml"
   workflow_dispatch:
     inputs:
       no-cache:

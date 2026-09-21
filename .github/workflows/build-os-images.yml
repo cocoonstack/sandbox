@@ -109,7 +109,7 @@ jobs:
               needs_no_cache="true"
             elif [[ -n "$all_changed" ]]; then
               while IFS= read -r f; do
-                [[ -z "$f" ]] && continue
+                [[ -z "$f" || "$f" == *.md ]] && continue
                 depth=$(echo "$f" | awk -F'/' '{print NF}')
                 base_name=$(basename "$f")
                 if [[ "$depth" -eq 3 ]] || { [[ "$depth" -eq 4 ]] && [[ "$base_name" != "Dockerfile" ]]; }; then
@@ -195,7 +195,7 @@ jobs:
       - name: Hash image inputs
         id: inputs
         run: |
-          hash=$(find "os-image/${{ matrix.name }}" -type f ! -name Dockerfile -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+          hash=$(find "os-image/${{ matrix.name }}" -type f ! -name Dockerfile ! -name '*.md' -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
           echo "hash=$hash" >> "$GITHUB_OUTPUT"
 
       - name: Discover secret files
@@ -286,7 +286,7 @@ jobs:
       - name: Hash image inputs
         id: inputs
         run: |
-          hash=$(find "os-image/${{ matrix.name }}" -type f ! -name Dockerfile -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+          hash=$(find "os-image/${{ matrix.name }}" -type f ! -name Dockerfile ! -name '*.md' -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
           echo "hash=$hash" >> "$GITHUB_OUTPUT"
 
       - name: Discover secret files

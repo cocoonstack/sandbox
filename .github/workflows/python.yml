@@ -2,6 +2,7 @@ name: python
 
 on:
   push:
+    branches: [main]
     paths:
       - "sdk/python/**"
       - "sdk/openai/**"
@@ -20,6 +21,8 @@ on:
       - "e2e/**/*.py"
       - "ruff.toml"
       - "protocol/**"
+      - ".github/workflows/python.yml"
+  workflow_dispatch:
 
 jobs:
   test:
