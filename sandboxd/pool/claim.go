@@ -630,3 +630,13 @@ func (c *heldConn) Close() error {
 	c.release()
 	return c.Conn.Close()
 }
+
+// CloseWrite forwards the half-close: net.Conn does not carry it, so embedding
+// the interface cannot promote it and a relay's data_end would be dropped here.
+func (c *heldConn) CloseWrite() error {
+	cw, ok := c.Conn.(interface{ CloseWrite() error })
+	if !ok {
+		return nil
+	}
+	return cw.CloseWrite()
+}

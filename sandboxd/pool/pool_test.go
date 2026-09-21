@@ -730,6 +730,28 @@ func TestProbeReadyWaitsForVsock(t *testing.T) {
 	}
 }
 
+func TestHeldConnForwardsCloseWrite(t *testing.T) {
+	inner := &closeWriteConn{}
+	held := &heldConn{Conn: inner, release: func() {}}
+
+	if _, ok := any(held).(interface{ CloseWrite() error }); !ok {
+		t.Fatal("heldConn does not expose CloseWrite; a relay half-close would be dropped")
+	}
+	if err := held.CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite: %v", err)
+	}
+	if !inner.closedWrite {
+		t.Error("CloseWrite did not reach the wrapped connection")
+	}
+}
+
+func TestHeldConnCloseWriteIsANoopWithoutSupport(t *testing.T) {
+	held := &heldConn{Conn: &plainConn{}, release: func() {}}
+	if err := held.CloseWrite(); err != nil {
+		t.Errorf("CloseWrite on a conn without one: %v, want nil", err)
+	}
+}
+
 func TestRenewExtendsTheLease(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	sb := mustClaim(t, m, testKey)
@@ -806,6 +828,23 @@ func TestDialPortAuthorizesByToken(t *testing.T) {
 	if _, err := m.DialPort(t.Context(), sb.ID, Cred{Token: sb.Token}, 49983); errors.Is(err, ErrUnknownSandbox) {
 		t.Error("right token was rejected as an unknown sandbox")
 	}
+}
+
+// plainConn is a net.Conn with no half-close of its own.
+type plainConn struct {
+	net.Conn
+}
+
+// closeWriteConn records a forwarded half-close.
+type closeWriteConn struct {
+	net.Conn
+
+	closedWrite bool
+}
+
+func (c *closeWriteConn) CloseWrite() error {
+	c.closedWrite = true
+	return nil
 }
 
 func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
