@@ -70,10 +70,11 @@ performance) — source in
 - `os-image/` — VM images consuming the boot artifact: `base` (layered,
   for builds), `rt` (base squashed to one layer — the default template in
   examples), `python`, `python-rt`, `node`, `node-rt`, `browser`,
-  `desktop`, and `android`
+  `desktop`, `android`, and `e2b-rt` (rt plus e2b's envd, for the
+  e2b-compatible data plane)
 - `scripts/` — `boot-bench.sh` (boot phase timing), `bench.sh` (the published
   benchmark procedure), `sandboxd-e2e.sh` (bare-metal e2e, below), plus the
-  `archive`/`egress`/`intercept`/`socks` e2e drivers
+  `archive`/`egress`/`intercept`/`socks`/`port`/`envd` e2e drivers
 - `packaging/` — the systemd unit deploy installs
 
 ## Build & test
