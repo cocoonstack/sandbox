@@ -58,8 +58,8 @@ performance) — source in
   cocoon+guest) plus bare-metal acceptance drivers under `cmd/`: `demo`,
   `smoke`, `meshsmoke`, `crossnode`, `coldproof`, `egresssmoke`,
   `interceptsmoke`, `sockssmoke`, `volumesmoke`, `lifecycle` (idle→hibernate→archive),
-  `androidsmoke`, `browsersmoke`, `desktopsmoke`, and the `pullbench`/`pushbench`/`rpcbench`/`qaab`
-  perf drivers
+  `androidsmoke`, `browsersmoke`, `desktopsmoke`, `ringsmoke` (output ring cap, exec as a user),
+  and the `pullbench`/`pushbench`/`rpcbench`/`qaab` perf drivers
 - `boot/kernel/` — kernel version pin (`VERSION` + matching tarball `SHA256`,
   bump both together) + config fragment (amd64: over `x86_64_defconfig` +
   `kvm_guest.config`; arm64: over `defconfig`, then `sandbox-arm64.config`)
@@ -158,6 +158,11 @@ Boot contract (cmdline keys consumed by sandbox-init):
 | `sandbox.init=/path` | handoff target, default `/sbin/init` |
 | `sandbox.debug=1` | fatal errors drop to `/bin/sh` (debug initramfs) instead of poweroff |
 | `sandbox.trace=1` | emit one pre-handoff line with per-phase µs timings |
+
+The pinned kernel builds no 8250 UART, so on cocoon's Firecracker lane
+(`console=ttyS0`) the trace line, the debug shell and the fatal-error
+message all go nowhere; they are visible on the Cloud Hypervisor lane's
+virtio console.
 
 `boot=cocoon-overlay` is ignored. Everything cocoon passes today keeps
 working — images built here boot with an unmodified cocoon.

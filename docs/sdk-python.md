@@ -498,9 +498,11 @@ zero.
 - `APIError(verb, status, message)` — control plane (HTTP status)
 - `SilkdError(kind, message)` — typed guest failure; `kind` is
   `bad_request` (including a spawn the guest cannot start: missing binary, a
-  cwd that is not a directory, no exec bit) / `not_found` / `unimplemented` /
-  `internal`
+  cwd that is not a directory, no exec bit, a `user` the guest cannot
+  resolve) / `not_found` / `unimplemented` / `internal`
 - `ExitError(code, stderr, stdout)` — non-zero exit from `exec`
+- `SandboxTimeout` — a caller's timeout or deadline expired before the call
+  finished; also a `TimeoutError`
 - `ProtocolError` — a failed relay dial or TLS handshake, or a broken stream
   (EOF, oversized or undecodable frame)
 
