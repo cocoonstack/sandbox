@@ -71,6 +71,11 @@ func ringTail(ctx context.Context, sb *sandbox.Sandbox) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+	stdout.Reset()
+	stderr.Reset()
+	if _, _, err := sb.Logs(ctx, pid, &stdout, &stderr); err != nil {
+		return fmt.Errorf("logs after exit: %w", err)
+	}
 	if stderr.String() != stderrTail {
 		return fmt.Errorf("stderr replay %q, want %q", stderr.String(), stderrTail)
 	}
