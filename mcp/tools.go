@@ -26,7 +26,7 @@ var (
 			schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "command": str("shell command, run via sh -c"), "cwd": str("working directory; empty runs in the guest's default")}, "sandbox_id", "command"), toolExec,
 		},
 		{
-			"spawn", "Start a shell command detached in a sandbox and return its guest pid immediately. The process keeps running across later tool calls; its output goes to a per-process ring buffer that keeps up to 256 KiB of the newest whole output chunks, which logs replays. Use exec instead when you need the result now.",
+			"spawn", "Start a shell command detached in a sandbox and return its guest pid immediately. The process keeps running across later tool calls; its output goes to a per-process ring buffer that keeps the newest 256 KiB, which logs replays. Use exec instead when you need the result now.",
 			schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "command": str("shell command, run via sh -c"), "cwd": str("working directory; empty runs in the guest's default")}, "sandbox_id", "command"), toolSpawn,
 		},
 		{
@@ -38,7 +38,7 @@ var (
 			schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "pid": integer("guest pid from spawn or ps"), "signal": integer("signal number, e.g. 15 for SIGTERM; 0 sends SIGKILL")}, "sandbox_id", "pid"), toolKill,
 		},
 		{
-			"logs", "Return a tracked process's buffered stdout and stderr, plus exit_code once it has ended. The buffer keeps up to 256 KiB of the newest whole output chunks per process, so redirect long output to a file when it must be complete.",
+			"logs", "Return a tracked process's buffered stdout and stderr, plus exit_code once it has ended. The buffer keeps the newest 256 KiB per process, so redirect long output to a file when it must be complete.",
 			schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "pid": integer("guest pid from spawn or ps")}, "sandbox_id", "pid"), toolLogs,
 		},
 		{

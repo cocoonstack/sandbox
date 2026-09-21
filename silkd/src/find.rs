@@ -126,7 +126,7 @@ impl Walk<'_> {
     }
 }
 
-/// Counts replacements while expanding `$n` groups straight into the output, no String per match.
+/// Counts replacements in the same pass that expands `$n` groups, at the price of the literal fast path.
 struct Counting<'a> {
     replacement: &'a str,
     count: u64,
