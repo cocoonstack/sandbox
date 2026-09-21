@@ -13,12 +13,12 @@ import (
 	"io"
 	"net"
 	"os/exec"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/projecteru2/core/log"
+	"golang.org/x/mod/semver"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -436,32 +436,11 @@ func respFail(resp wire.Response) string {
 
 // belowFloor reports whether v is below RequiredCocoon; comparable is false for a dev build.
 func belowFloor(v string) (below, comparable bool) {
-	cur, ok := parseSemver(v)
-	if !ok {
+	v = "v" + strings.TrimPrefix(v, "v")
+	if semver.Canonical(v) != v {
 		return false, false
 	}
-	floor, _ := parseSemver(RequiredCocoon)
-	return slices.Compare(cur[:], floor[:]) < 0, true
-}
-
-func parseSemver(s string) ([3]int, bool) {
-	s = strings.TrimPrefix(s, "v")
-	if i := strings.IndexAny(s, "-+"); i >= 0 {
-		s = s[:i]
-	}
-	parts := strings.Split(s, ".")
-	if len(parts) != 3 {
-		return [3]int{}, false
-	}
-	var out [3]int
-	for i, p := range parts {
-		n, err := strconv.Atoi(p)
-		if err != nil {
-			return [3]int{}, false
-		}
-		out[i] = n
-	}
-	return out, true
+	return semver.Compare(v, RequiredCocoon) < 0, true
 }
 
 func readBufLine(r *bufio.Reader, max int) (string, error) {
