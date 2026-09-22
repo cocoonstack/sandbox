@@ -14,7 +14,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -261,25 +260,32 @@ func envelope(payload string) string {
 	return string(head) + payload
 }
 
-// readEnvelopes unframes a Connect server stream; the last one carries the end-of-stream flag.
+// readEnvelopes unframes a Connect server stream, whose trailing envelope carries the RPC's error; the HTTP status is 200 either way.
 func readEnvelopes(r io.Reader) ([]string, error) {
 	var out []string
 	head := make([]byte, 5)
 	for {
 		if _, err := io.ReadFull(r, head); err != nil {
-			if errors.Is(err, io.EOF) {
-				return out, nil
-			}
-			return out, err
+			return out, fmt.Errorf("stream ended before its end-of-stream envelope: %w", err)
 		}
 		body := make([]byte, binary.BigEndian.Uint32(head[1:]))
 		if _, err := io.ReadFull(r, body); err != nil {
 			return out, err
 		}
-		out = append(out, string(body))
-		if head[0]&0x02 != 0 {
-			return out, nil
+		if head[0]&0x02 == 0 {
+			out = append(out, string(body))
+			continue
 		}
+		var end struct {
+			Error json.RawMessage `json:"error"`
+		}
+		if err := json.Unmarshal(body, &end); err != nil {
+			return out, fmt.Errorf("parse end-of-stream envelope %q: %w", body, err)
+		}
+		if len(end.Error) > 0 {
+			return out, fmt.Errorf("rpc failed: %s", end.Error)
+		}
+		return out, nil
 	}
 }
 
