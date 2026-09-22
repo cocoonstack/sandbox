@@ -3,6 +3,7 @@ dist/
 boot/init/target/
 silkd/target/
 e2e/demo
+e2e/envdsmoke
 e2e/guestserver
 e2e/portsmoke
 e2e/smoke
