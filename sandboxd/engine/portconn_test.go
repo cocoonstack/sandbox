@@ -15,9 +15,7 @@ import (
 )
 
 func TestGuestPortConnFramesBothWays(t *testing.T) {
-	client, silk := net.Pipe()
-	t.Cleanup(func() { _ = client.Close(); _ = silk.Close() })
-	gc := newGuestPortConn(client, bufio.NewReaderSize(client, portReadBuf))
+	silk, gc := newTestGuestPortConn(t)
 
 	go func() {
 		frame, _ := json.Marshal(map[string]string{"type": "data", "data": base64.StdEncoding.EncodeToString([]byte("HTTP/1.1 200 OK"))})
@@ -35,9 +33,7 @@ func TestGuestPortConnFramesBothWays(t *testing.T) {
 }
 
 func TestGuestPortConnWriteWrapsInDataFrame(t *testing.T) {
-	client, silk := net.Pipe()
-	t.Cleanup(func() { _ = client.Close(); _ = silk.Close() })
-	gc := newGuestPortConn(client, bufio.NewReaderSize(client, portReadBuf))
+	silk, gc := newTestGuestPortConn(t)
 
 	go func() { _, _ = gc.Write([]byte("GET / HTTP/1.1\r\n")) }()
 
@@ -57,9 +53,7 @@ func TestGuestPortConnWriteWrapsInDataFrame(t *testing.T) {
 }
 
 func TestGuestPortConnCloseWriteSendsDataEnd(t *testing.T) {
-	client, silk := net.Pipe()
-	t.Cleanup(func() { _ = client.Close(); _ = silk.Close() })
-	gc := newGuestPortConn(client, bufio.NewReaderSize(client, portReadBuf))
+	silk, gc := newTestGuestPortConn(t)
 
 	go func() { _ = gc.CloseWrite() }()
 
@@ -87,9 +81,7 @@ func TestGuestPortConnRoundTripsFixtures(t *testing.T) {
 		return append(bytes.TrimSpace(raw), '\n')
 	}
 
-	client, silk := net.Pipe()
-	t.Cleanup(func() { _ = client.Close(); _ = silk.Close() })
-	gc := newGuestPortConn(client, bufio.NewReaderSize(client, portReadBuf))
+	silk, gc := newTestGuestPortConn(t)
 
 	go func() {
 		_, _ = silk.Write(fixture("resp_data.json"))
@@ -131,4 +123,11 @@ func TestPortReadBufHoldsOneBulkFrame(t *testing.T) {
 	if n := len(frame) + 1; n > portReadBuf {
 		t.Errorf("a full bulk data frame is %d bytes with its delimiter, portReadBuf %d cannot take it in one read", n, portReadBuf)
 	}
+}
+
+func newTestGuestPortConn(t *testing.T) (net.Conn, *guestPortConn) {
+	t.Helper()
+	client, silk := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = silk.Close() })
+	return silk, newGuestPortConn(client, bufio.NewReaderSize(client, portReadBuf))
 }

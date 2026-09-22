@@ -6,7 +6,7 @@
 set -uo pipefail
 K=${K:?kit dir}
 ADDR=${ADDR:-127.0.0.1:7990}
-TOKEN=${TOKEN:-e2bport}
+TOKEN=${TOKEN:-portrelay}
 TEMPLATE=${TEMPLATE:-rt:24.04}
 WARM=${WARM:-2}
 export PATH=$K/bin:$PATH

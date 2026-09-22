@@ -38,6 +38,7 @@ echo "== start sandboxd $("$K/bin/sandboxd" -version 2>/dev/null)"
 "$K/bin/sandboxd" -config "$DATA/config.json" >>"$DATA/daemon.log" 2>&1 &
 DAEMON_PID=$!
 for _ in $(seq 1 40); do curl -sf "http://$ADDR/healthz" >/dev/null && break; sleep 0.5; done
+curl -sf "http://$ADDR/healthz" >/dev/null || { echo "daemon never came up"; exit 1; }
 echo "== wait for golden + warm (warmup gates on envd /health)"
 for i in $(seq 1 300); do
   curl -sf -H "Authorization: Bearer $TOKEN" "http://$ADDR/v1/info" |

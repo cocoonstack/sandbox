@@ -248,10 +248,15 @@ claim asked for does not have to claim a new one:
 
 → `200 {"deadline": "2026-09-22T12:00:00Z"}`. The grant, not the request, is
 authoritative: `ttl_seconds` 0 means the node default and anything past the
-24 h cap is clamped, and the reply always carries what was granted. The new
-lease also becomes the one a wake from the archive grants again. A renew can
-shorten a lease as well as extend it. 400 a malformed body; 401 missing
-bearer token; 404 unknown id or wrong token.
+24 h cap is clamped, and the reply always carries what was granted. An absent
+body means the same as `ttl_seconds` 0. The new lease also becomes the one a
+wake from the archive grants again. A renew can shorten a lease as well as
+extend it.
+
+An archived sandbox is refused: off-node, its deadline is the store's retention
+window rather than a lease, and a TTL written over it would schedule the
+checkpoint for deletion. Wake it first. 400 a malformed body; 401 missing bearer
+token; 404 unknown id or wrong token; 409 archived, or being archived right now.
 
 ## POST /v1/sandboxes/{id}/fork
 
@@ -558,19 +563,30 @@ unknown sandbox, 502 guest unreachable.
 
 ## GET /v1/sandboxes/{id}/ports/{port}
 
-Auth: the sandbox's own token. Requires `Upgrade: tcp` +
-`Connection: Upgrade`; answers `101 Switching Protocols` and from then on
+Auth: the sandbox's own token. Send `Upgrade: tcp` + `Connection: Upgrade`
+(the gate reads `Upgrade` alone, as `/agent`'s does); answers
+`101 Switching Protocols` and from then on
 the connection is a raw byte relay to `127.0.0.1:{port}` inside the guest,
 over the same vsock `port_forward` preview uses. Nothing of ours frames the
-stream, so HTTP/1.1, HTTP/2 and any other protocol pass through unchanged,
-and a half-close in either direction is carried to the peer. This is how an
-edge proxy reaches a guest listener on a `net=none` sandbox, which has no NIC.
+stream, so HTTP/1.1, HTTP/2 and any other protocol pass through unchanged.
+This is how an edge proxy reaches a guest listener on a `net=none` sandbox,
+which has no NIC.
+
+Half-close is **one-way**: a client shutdown reaches the guest socket as a
+shutdown, but a guest shutdown ends the whole relay, because silkd's
+`port_forward` stops feeding the socket once the guest side reports EOF. The
+connection is therefore closed toward the client rather than half-closed — a
+write direction that silently discarded what it accepted would be worse than
+an error. Request/response protocols do not notice; a peer that half-closes
+early and keeps reading does.
 
 An open relay holds the sandbox's idle clock exactly like the silkd relay, and
 a hibernated sandbox wakes transparently — which is why the upgrade header is
 mandatory: a bare `GET` must not consume a hibernate snapshot. 400 a port
 outside 1-65535; 401 missing bearer token; 404 unknown sandbox or wrong token;
-426 without the upgrade header; 502 when the guest has no listener on that port.
+426 without the upgrade header; 502 when the guest cannot be reached on that
+port — no listener, or a hibernated sandbox whose restore failed. The node log
+carries which.
 
 ## POST /v1/sandboxes/{id}/exec
 

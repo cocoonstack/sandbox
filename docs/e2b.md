@@ -31,7 +31,7 @@ the same property that makes the lane the security default. No client learns a
 node address, and the guest is never given a listener the network can reach.
 
 See [sandboxd-api](sandboxd-api.md#get-v1sandboxesidportsport) for the relay
-endpoint, and `envd-proxy`'s own docs for the edge.
+endpoint. The edge half lives in sandbox-operator and is not released yet.
 
 ## Running a pool
 
@@ -46,10 +46,10 @@ warmup fails is destroyed and replaced:
    "for i in $(seq 1 200); do curl -sf -o /dev/null http://127.0.0.1:49983/health && exit 0; sleep 0.05; done; exit 1"]}
 ```
 
-The apiserver's `--e2b-envd-version` must name the version this image ships
-(`/etc/envd-version` records it). The SDK version-compares that value and
-**kills the sandbox** when it cannot parse one, so reporting a floor instead of
-the truth is not a safe default.
+The image records the version it ships in `/etc/envd-version`. Whatever serves
+the e2b control plane must report that value: the SDK version-compares it and
+**kills the sandbox** when it cannot parse one, so a floor is not a safe stand-in
+for the truth.
 
 ## What the flavor does
 
@@ -67,11 +67,14 @@ have bound; the rule is what holds on the egress lane, whose NIC is real.
 
 - **`envd` serves HTTP/1.1 only** in the clear as of 0.8.0 — it installs no h2c
   handler. The relay is protocol-blind, so this is a property of the daemon, not
-  of the path; `envd-proxy` matches it and has a flag for the day it changes.
+  of the path; whatever proxies to it has to match, not assume.
 - **Pause is not `envd`'s.** Its `/freeze`, `/init` and siblings are the
   orchestrator control plane e2b runs on Firecracker; cocoon hibernates the
   whole VM instead, through `POST /v1/sandboxes/{id}/hibernate`. The edge
   refuses those paths.
+- **Half-close is one-way** through the relay (see
+  [sandboxd-api](sandboxd-api.md#get-v1sandboxesidportsport)). `envd` speaks
+  request/response, so it does not notice.
 - **`envd` also runs a port forwarder** that tries to republish guest listeners
   on `eth0`. There is no `eth0` on the `none` lane, so it finds nothing to do.
 
@@ -86,5 +89,5 @@ ConnectRPC unary — while asserting silkd still answers on the same VM.
 K=<kit> TEMPLATE=ghcr.io/cocoonstack/sandbox/e2b-rt:24.04 bash scripts/envd-e2e.sh
 ```
 
-`envdsmoke -hold` then keeps that sandbox alive for sandbox-operator's
-`envdproxysmoke -guest envd`, which puts the real proxy in front of it.
+`envdsmoke -hold` then keeps that sandbox alive for an out-of-tree harness that
+puts a real edge proxy in front of it.
