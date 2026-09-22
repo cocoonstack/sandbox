@@ -1,15 +1,10 @@
-# Squashed runtime image carrying e2b's envd alongside silkd, for the
-# e2b-compatible data plane (sandbox-operator's envd-proxy reaches it through
-# sandboxd's guest-port relay). Same one-layer shape as rt: the whole rootfs
-# flattened so the guest probes 1 disk + COW, not 4.
-#
-# envd is an addition, never a replacement. silkd stays the product daemon that
-# the native SDKs, MCP, preview, LSP and the egress lane all speak to; envd
-# serves only unmodified e2b clients.
+# rt's one-layer shape plus e2b's envd, for the e2b-compatible data plane.
+# envd is an addition, never a replacement: silkd stays the daemon the native
+# SDKs, MCP, preview, LSP and the egress lane speak to.
 #
 # amd64 only: e2b publishes no arm64 build of envd.
 ARG BASE_IMAGE=ghcr.io/cocoonstack/sandbox/base:24.04
-# Pinned by digest, not by tag: the URL is a mutable object in a public bucket.
+# The bucket object is mutable, so the build verifies a SHA-256 rather than trusting the URL.
 ARG ENVD_VERSION=v0.8.0
 ARG ENVD_SHA256=752cfbc7ba66649ec1bffdc9b59529dd3527e7d3899c69351e05bd21dfc0dbf0
 

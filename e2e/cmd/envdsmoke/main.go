@@ -32,6 +32,9 @@ const (
 	readyWait = 60 * time.Second
 	// claimTTL outlasts the run so a lease expiry cannot look like a relay fault.
 	claimTTL = 30 * time.Minute
+
+	uploadPath  = "/tmp/envdsmoke-probe.txt"
+	uploadProbe = "envd-wrote-this"
 )
 
 func main() {
@@ -71,7 +74,7 @@ func run(addr, token, template, wantVersion string, hold time.Duration) error {
 
 	for _, step := range []struct {
 		name string
-		run  func(context.Context, *harness.PortRelay) error
+		run  func(context.Context, *harness.PortRelay, *sandbox.Sandbox) error
 	}{
 		{"GET /health", stepHealth},
 		{"GET /files", stepDownload},
@@ -80,7 +83,7 @@ func run(addr, token, template, wantVersion string, hold time.Duration) error {
 		{"envd serves http/1.1 only", stepProtocol},
 	} {
 		t0 := time.Now()
-		if err := step.run(ctx, rt); err != nil {
+		if err := step.run(ctx, rt, sb); err != nil {
 			return fmt.Errorf("%s: %w", step.name, err)
 		}
 		fmt.Printf("  ok  %-30s %5.1fms\n", step.name, float64(time.Since(t0).Microseconds())/1000)
@@ -130,7 +133,7 @@ func waitReady(ctx context.Context, rt *harness.PortRelay) error {
 	return fmt.Errorf("envd never answered /health: %w", last)
 }
 
-func stepHealth(ctx context.Context, rt *harness.PortRelay) error {
+func stepHealth(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
 	resp, err := rt.Do(ctx, envdPort, http.MethodGet, "/health", nil, nil)
 	if err != nil {
 		return err
@@ -142,9 +145,8 @@ func stepHealth(ctx context.Context, rt *harness.PortRelay) error {
 	return nil
 }
 
-// stepDownload reads a file through envd's HTTP surface, the path the SDK's
-// files.read takes.
-func stepDownload(ctx context.Context, rt *harness.PortRelay) error {
+// stepDownload takes the path the SDK's files.read takes.
+func stepDownload(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
 	resp, err := rt.Do(ctx, envdPort, http.MethodGet, "/files?path=/etc/envd-version&username=root", nil, nil)
 	if err != nil {
 		return err
@@ -160,14 +162,13 @@ func stepDownload(ctx context.Context, rt *harness.PortRelay) error {
 	return nil
 }
 
-// stepUpload writes a file through envd and reads it back through silkd's own
-// view, so the two daemons are proven to share one filesystem.
-func stepUpload(ctx context.Context, rt *harness.PortRelay) error {
+// stepUpload writes through envd and reads back through silkd, so the two daemons share one filesystem.
+func stepUpload(ctx context.Context, rt *harness.PortRelay, sb *sandbox.Sandbox) error {
 	const boundary = "envdsmoke"
 	body := fmt.Sprintf("--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"probe.txt\"\r\n"+
-		"Content-Type: text/plain\r\n\r\nenvd-wrote-this\r\n--%s--\r\n", boundary, boundary)
+		"Content-Type: text/plain\r\n\r\n%s\r\n--%s--\r\n", boundary, uploadProbe, boundary)
 	headers := http.Header{"Content-Type": []string{"multipart/form-data; boundary=" + boundary}}
-	resp, err := rt.Do(ctx, envdPort, http.MethodPost, "/files?path=/tmp/probe.txt&username=root", headers, strings.NewReader(body))
+	resp, err := rt.Do(ctx, envdPort, http.MethodPost, "/files?path="+uploadPath+"&username=root", headers, strings.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -176,12 +177,18 @@ func stepUpload(ctx context.Context, rt *harness.PortRelay) error {
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return fmt.Errorf("status %s: %s", resp.Status, out)
 	}
+	seen, err := sb.ReadFile(ctx, uploadPath)
+	if err != nil {
+		return fmt.Errorf("silkd read back: %w", err)
+	}
+	if strings.TrimSpace(string(seen)) != uploadProbe {
+		return fmt.Errorf("silkd sees %q at %s, envd wrote %q", seen, uploadPath, uploadProbe)
+	}
 	return nil
 }
 
-// stepConnectH1 drives one ConnectRPC unary call the way connect-web does over
-// HTTP/1.1: the SDK's filesystem and process services are all Connect.
-func stepConnectH1(ctx context.Context, rt *harness.PortRelay) error {
+// stepConnectH1 drives one unary call the way connect-web does; the SDK's services are all Connect.
+func stepConnectH1(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
 	headers := http.Header{
 		"Content-Type":             []string{"application/json"},
 		"Connect-Protocol-Version": []string{"1"},
@@ -207,11 +214,8 @@ func stepConnectH1(ctx context.Context, rt *harness.PortRelay) error {
 	return nil
 }
 
-// stepProtocol records what envd actually serves in the clear. envd 0.8.0 sets
-// no h2c handler, so an edge that forwards HTTP/2 upstream would break every
-// request; this fails the moment that stops being true, which is when the
-// proxy's upstream should be revisited.
-func stepProtocol(ctx context.Context, rt *harness.PortRelay) error {
+// stepProtocol fails the day envd gains h2c, which is when a proxy may forward HTTP/2 upstream.
+func stepProtocol(ctx context.Context, rt *harness.PortRelay, sb *sandbox.Sandbox) error {
 	var protocols http.Protocols
 	protocols.SetUnencryptedHTTP2(true)
 	client := &http.Client{Transport: &http.Transport{
@@ -223,9 +227,10 @@ func stepProtocol(ctx context.Context, rt *harness.PortRelay) error {
 		return err
 	}
 	resp, err := client.Do(req)
-	if err != nil {
-		return nil // h2c refused, as expected
+	if err == nil {
+		defer func() { _ = resp.Body.Close() }()
+		return fmt.Errorf("envd answered h2c with %s", resp.Status)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	return fmt.Errorf("envd answered h2c with %s: the proxy may now forward HTTP/2 upstream", resp.Status)
+	// an error here must mean h2c specifically, not a guest that stopped answering at all
+	return stepHealth(ctx, rt, sb)
 }
