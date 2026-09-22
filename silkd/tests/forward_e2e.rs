@@ -9,6 +9,7 @@ use serde_json::json;
 use silkd::server::State;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 use common::{DEADLINE, FrameLines, FrameWriter, b64, connect, decode, next_frame, send, type_of};
@@ -59,6 +60,55 @@ async fn forward_round_trips_and_done_on_server_close() {
         send(&mut cw, json!({"v":1,"op":"data_end"})).await;
         let done = next_frame(&mut lines).await;
         assert_eq!(type_of(&done), "done", "got {done}");
+    })
+    .await
+    .expect("test deadline");
+}
+/// A guest that half-closes must not take the client's write direction with it.
+/// What it reads afterwards travels back to the test body: an assertion inside a
+/// spawned task is swallowed, so it would pass either way.
+async fn half_close_listener() -> (u16, oneshot::Receiver<Vec<u8>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (tx, rx) = oneshot::channel();
+    tokio::spawn(async move {
+        let (conn, _) = listener.accept().await.expect("accept");
+        let (mut r, mut w) = conn.into_split();
+        w.write_all(b"greeting").await.expect("greeting");
+        w.shutdown().await.expect("shutdown");
+        let mut got = Vec::new();
+        let _ = r.read_to_end(&mut got).await;
+        let _ = tx.send(got);
+    });
+    (port, rx)
+}
+
+#[tokio::test]
+async fn forward_accepts_client_writes_after_the_guest_half_closes() {
+    timeout(DEADLINE, async {
+        let (port, got) = half_close_listener().await;
+        let state = Arc::new(State::new());
+        let (mut cw, mut lines) = forwarded(&state, port).await;
+
+        let greeting = next_frame(&mut lines).await;
+        assert_eq!(type_of(&greeting), "data", "got {greeting}");
+        assert_eq!(decode(&greeting), b"greeting");
+
+        let done = next_frame(&mut lines).await;
+        assert_eq!(type_of(&done), "done", "got {done}");
+
+        send(
+            &mut cw,
+            json!({"v":1,"op":"data","data":b64(b"after-done")}),
+        )
+        .await;
+        send(&mut cw, json!({"v":1,"op":"data_end"})).await;
+
+        let seen = got.await.expect("guest reported what it read");
+        assert_eq!(
+            seen, b"after-done",
+            "guest lost the client's post-done bytes"
+        );
     })
     .await
     .expect("test deadline");
