@@ -72,9 +72,9 @@ have bound; the rule is what holds on the egress lane, whose NIC is real.
   orchestrator control plane e2b runs on Firecracker; cocoon hibernates the
   whole VM instead, through `POST /v1/sandboxes/{id}/hibernate`. The edge
   refuses those paths.
-- **Half-close is one-way** through the relay (see
-  [sandboxd-api](sandboxd-api.md#get-v1sandboxesidportsport)). `envd` speaks
-  request/response, so it does not notice.
+- **Half-close works in both directions** through the relay: either peer can
+  stop writing and keep reading (see
+  [sandboxd-api](sandboxd-api.md#get-v1sandboxesidportsport)).
 - **`envd` also runs a port forwarder** that tries to republish guest listeners
   on `eth0`. There is no `eth0` on the `none` lane, so it finds nothing to do.
 
