@@ -57,8 +57,8 @@ func serveGuestFirstHalfClose(listener net.Listener) error {
 		return err
 	}
 	defer conn.Close()
-	if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
-		return err
+	if deadlineErr := conn.SetDeadline(time.Now().Add(3 * time.Second)); deadlineErr != nil {
+		return deadlineErr
 	}
 	reader := bufio.NewReader(conn)
 	req, err := http.ReadRequest(reader)
@@ -66,11 +66,11 @@ func serveGuestFirstHalfClose(listener net.Listener) error {
 		return err
 	}
 	_ = req.Body.Close()
-	if _, err := io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\nhello"); err != nil {
-		return err
+	if _, writeErr := io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\nhello"); writeErr != nil {
+		return writeErr
 	}
-	if err := conn.(*net.TCPConn).CloseWrite(); err != nil {
-		return err
+	if closeErr := conn.(*net.TCPConn).CloseWrite(); closeErr != nil {
+		return closeErr
 	}
 	tail, err := io.ReadAll(reader)
 	if err != nil {
