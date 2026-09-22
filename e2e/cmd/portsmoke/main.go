@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	// guestPort is arbitrary; the relay is port-agnostic.
+	// guestPort is envd's; the relay is port-agnostic either way.
 	guestPort = 49983
 	// halfClosePort greets and shuts its write side, then keeps reading.
 	halfClosePort = 49984
@@ -97,7 +97,7 @@ func run(addr, token, template, listener string, hold time.Duration) error {
 		fmt.Printf("  ok  %-24s %5.1fs\n", step.name, time.Since(t0).Seconds())
 	}
 	if hold > 0 {
-		// the listener is live now, for a second harness to drive from outside
+		// the listener is live now, for the operator's envd-proxy smoke to drive
 		fmt.Printf("SANDBOX %s %s %s %d\n", sb.ID, sb.Token(), sb.Owner(), guestPort)
 		select {
 		case <-time.After(hold):
@@ -107,7 +107,7 @@ func run(addr, token, template, listener string, hold time.Duration) error {
 	return nil
 }
 
-// startGuestListener ships a listener in: the stock image has no python, netcat or HTTP server.
+// startGuestListener ships an envd stand-in in: the stock image has no python, netcat or HTTP server.
 func startGuestListener(ctx context.Context, sb *sandbox.Sandbox, listener string) error {
 	bin, err := os.ReadFile(listener) //nolint:gosec // the path is an operator-supplied flag on a test harness
 	if err != nil {

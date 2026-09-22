@@ -43,6 +43,9 @@ vsock-only I/O (hardened default); `net=egress` attaches a bridge/CNI NIC.
 - [Desktop sandboxes](desktop.md) — the GNOME flavor with the OSWorld
   guest server: claim shape, the guest control contract over the relay,
   running the OSWorld harness on sandboxd
+- [e2b sandboxes](e2b.md) — the e2b-rt flavor: e2b's envd on loopback beside
+  silkd, the guest half of the e2b-compatible data plane, and the warm-pool
+  gate that keeps a claim from outrunning it
 - [Guarded egress](egress.md) — allow-listed, audited outbound access with
   host-side credential injection, on both lanes: no NIC (none) or an
   nftables-locked NIC (egress)
