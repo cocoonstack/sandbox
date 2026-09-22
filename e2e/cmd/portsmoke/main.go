@@ -27,11 +27,9 @@ const (
 	// halfClosePort greets and shuts its write side, then keeps reading.
 	halfClosePort = 49984
 	// deadPort has no listener, so silkd's connect refusal must surface as 502.
-	deadPort = 49985
-	// listenerReadyWait bounds the wait for the in-guest listener to bind.
+	deadPort          = 49985
 	listenerReadyWait = 20 * time.Second
-	// guestServerPath is where the uploaded listener lands in the guest.
-	guestServerPath = "/usr/local/bin/guestserver"
+	guestServerPath   = "/usr/local/bin/guestserver"
 	// claimTTL outlasts the run; the node default would reap the sandbox mid-test.
 	claimTTL = 30 * time.Minute
 )
@@ -167,7 +165,6 @@ func stepHTTP2(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) e
 	return wantReport(string(out), "proto=2", "method=POST")
 }
 
-// wantReport asserts guestserver reported each expected line.
 func wantReport(body string, want ...string) error {
 	for _, line := range want {
 		if !strings.Contains(body, line) {

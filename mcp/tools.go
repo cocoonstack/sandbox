@@ -80,8 +80,7 @@ var (
 	}
 )
 
-// tool binds one MCP tool's spec to its handler, so a tool can never exist
-// in the listing without a dispatch entry.
+// tool binds one MCP tool's spec to its handler, so a tool can never exist in the listing without a dispatch entry.
 type tool struct {
 	name        string
 	description string
@@ -135,8 +134,7 @@ func (a sandboxArg) id() string { return a.SandboxID }
 
 type sandboxIDer interface{ id() string }
 
-// parseAndBox decodes a tool's arguments and resolves their sandbox_id to a
-// live handle — the prologue every sandbox-scoped tool shares.
+// parseAndBox decodes a tool's arguments and resolves their sandbox_id to a live handle, the prologue every sandbox-scoped tool shares.
 func parseAndBox[T sandboxIDer](s *server, raw json.RawMessage) (T, *sandbox.Sandbox, error) {
 	var args T
 	if err := parse(raw, &args); err != nil {
@@ -450,8 +448,7 @@ func (s *server) boxArg(raw json.RawMessage) (*sandbox.Sandbox, error) {
 	return sb, err
 }
 
-// checkpointArg resolves a checkpoint_id argument: a handle minted in this
-// session when available, else a fresh one — checkpoints outlive sessions.
+// checkpointArg resolves a checkpoint_id argument: a handle minted in this session when available, else a fresh one, because checkpoints outlive sessions.
 func (s *server) checkpointArg(raw json.RawMessage) (*sandbox.Checkpoint, error) {
 	var args struct {
 		CheckpointID string `json:"checkpoint_id"`

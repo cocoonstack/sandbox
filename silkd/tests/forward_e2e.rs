@@ -64,9 +64,7 @@ async fn forward_round_trips_and_done_on_server_close() {
     .await
     .expect("test deadline");
 }
-/// A guest that half-closes must not take the client's write direction with it.
-/// What it reads afterwards travels back to the test body: an assertion inside a
-/// spawned task is swallowed, so it would pass either way.
+
 async fn half_close_listener() -> (u16, oneshot::Receiver<Vec<u8>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let port = listener.local_addr().expect("addr").port();

@@ -626,7 +626,7 @@ func clampTTL(ttl time.Duration) time.Duration {
 	return min(ttl, maxTTL)
 }
 
-// heldConn keeps its sandbox held until the preview connection closes.
+// heldConn keeps its sandbox held until the guest connection closes.
 type heldConn struct {
 	net.Conn
 	release func()
