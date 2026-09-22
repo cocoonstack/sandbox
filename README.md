@@ -73,7 +73,7 @@ performance) — source in
   `desktop`, and `android`
 - `scripts/` — `boot-bench.sh` (boot phase timing), `bench.sh` (the published
   benchmark procedure), `sandboxd-e2e.sh` (bare-metal e2e, below), plus the
-  `archive`/`egress`/`intercept`/`socks` e2e drivers
+  `archive`/`egress`/`intercept`/`socks`/`port` e2e drivers
 - `packaging/` — the systemd unit deploy installs
 
 ## Build & test

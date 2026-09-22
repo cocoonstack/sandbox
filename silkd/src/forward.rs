@@ -31,13 +31,22 @@ pub async fn run<W: AsyncWrite + Unpin>(
     let (mut tr, tw) = stream.into_split();
     let mut feed = tokio::spawn(feed_socket(client, tw));
     let mut feed_done = false;
+    let mut guest_write_closed = false;
 
     let mut buf = vec![0u8; BULK_CHUNK];
     let mut frame = Vec::new();
     let res = loop {
+        if guest_write_closed && feed_done {
+            break Ok(());
+        }
         tokio::select! {
-            r = tr.read(&mut buf) => match r {
-                Ok(0) => break proto::write_frame(w, &Response::Done).await,
+            r = tr.read(&mut buf), if !guest_write_closed => match r {
+                Ok(0) => {
+                    guest_write_closed = true;
+                    if let Err(e) = proto::write_frame(w, &Response::Done).await {
+                        break Err(e);
+                    }
+                }
                 // a read failure must not reach the client as a clean close.
                 Err(e) => {
                     break proto::error_frame(
@@ -54,10 +63,13 @@ pub async fn run<W: AsyncWrite + Unpin>(
                     }
                 }
             },
-            // only a protocol violation from the feeder ends the relay.
             f = &mut feed, if !feed_done => {
                 feed_done = true;
                 if let Ok(Err(resp)) = f {
+                    // Done already ended the response stream, so a late violation has nowhere to go.
+                    if guest_write_closed {
+                        break Ok(());
+                    }
                     break proto::write_frame(w, &resp).await;
                 }
             }

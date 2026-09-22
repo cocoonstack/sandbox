@@ -61,6 +61,16 @@ func (g *guestPortConn) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+// CloseWrite half-closes the guest socket; silkd turns data_end into a TCP shutdown.
+func (g *guestPortConn) CloseWrite() error {
+	req, err := wire.EncodeRequest(wire.DataEnd{})
+	if err != nil {
+		return err
+	}
+	_, err = g.Conn.Write(append(req, '\n'))
+	return err
+}
+
 func (g *guestPortConn) Write(p []byte) (int, error) {
 	written := 0
 	for len(p) > 0 {

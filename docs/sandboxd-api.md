@@ -236,6 +236,28 @@ sandbox instead uses `archive_delete_after_seconds` as its retention deadline
 while stored, and waking it starts a fresh lease of the length the claim was granted (the server default when it asked for none). 204 on
 success, 404 unknown id or wrong token.
 
+## POST /v1/sandboxes/{id}/renew
+
+Auth: the sandbox's own token, or the root token by id (operator). Resets the
+lease to `ttl_seconds` from now, so a client holding a sandbox longer than its
+claim asked for does not have to claim a new one:
+
+```json
+{"ttl_seconds": 3600}
+```
+
+→ `200 {"deadline": "2026-09-22T12:00:00Z"}`. The grant, not the request, is
+authoritative: `ttl_seconds` 0 means the node default and anything past the
+24 h cap is clamped, and the reply always carries what was granted. An absent
+body means the same as `ttl_seconds` 0. The new lease also becomes the one a
+wake from the archive grants again. A renew can shorten a lease as well as
+extend it.
+
+An archived sandbox is refused: off-node, its deadline is the store's retention
+window rather than a lease, and a TTL written over it would schedule the
+checkpoint for deletion. Wake it first. 400 a malformed body; 401 missing bearer
+token; 404 unknown id or wrong token; 409 archived, or being archived right now.
+
 ## POST /v1/sandboxes/{id}/fork
 
 Auth: the node `api_token` (Bearer) — forking creates node resources, like a
@@ -538,6 +560,30 @@ back to back (see [silkd](silkd.md)). An open relay holds the sandbox's idle
 clock, so a client that keeps a connection warm must close it when idle for
 `idle_hibernate_seconds` to apply. 426 without the upgrade header, 404
 unknown sandbox, 502 guest unreachable.
+
+## GET /v1/sandboxes/{id}/ports/{port}
+
+Auth: the sandbox's own token. Send `Upgrade: tcp` + `Connection: Upgrade`
+(the gate reads `Upgrade` alone, as `/agent`'s does); answers
+`101 Switching Protocols` and from then on
+the connection is a raw byte relay to `127.0.0.1:{port}` inside the guest,
+over the same vsock `port_forward` preview uses. Nothing of ours frames the
+stream, so HTTP/1.1, HTTP/2 and any other protocol pass through unchanged.
+This is how an edge proxy reaches a guest listener on a `net=none` sandbox,
+which has no NIC.
+
+Half-close works in **both directions**: a client write shutdown reaches the
+guest socket, and a guest write shutdown reaches the client without ending
+the client's writes. Each direction stays open until its own EOF. A relay
+copy error closes both connections and releases the sandbox hold.
+
+An open relay holds the sandbox's idle clock exactly like the silkd relay, and
+a hibernated sandbox wakes transparently — which is why the upgrade header is
+mandatory: a bare `GET` must not consume a hibernate snapshot. 400 a port
+outside 1-65535; 401 missing bearer token; 404 unknown sandbox or wrong token;
+426 without the upgrade header; 502 when the guest cannot be reached on that
+port — no listener, or a hibernated sandbox whose restore failed. The node log
+carries which.
 
 ## POST /v1/sandboxes/{id}/exec
 

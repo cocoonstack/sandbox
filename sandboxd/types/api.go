@@ -117,6 +117,16 @@ type PromoteResponse struct {
 	ContentDigest string  `json:"content_digest"`
 }
 
+// RenewRequest is the wire body of POST /v1/sandboxes/{id}/renew.
+type RenewRequest struct {
+	TTLField
+}
+
+// RenewResponse carries the lease deadline the node granted.
+type RenewResponse struct {
+	Deadline time.Time `json:"deadline"`
+}
+
 // PreviewRequest is the wire body of POST /v1/sandboxes/{id}/preview.
 type PreviewRequest struct {
 	Token string `json:"token"`

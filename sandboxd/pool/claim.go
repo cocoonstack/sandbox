@@ -98,28 +98,51 @@ func (m *Manager) ClaimDeadline(id, token string) (time.Time, error) {
 	return sb.Deadline, nil
 }
 
-// PreviewDial opens a preview request's guest connection; the caller verified the HMAC token.
-func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.Conn, error) {
-	m.mu.Lock()
-	sb, ok := m.claimed[id]
-	m.mu.Unlock()
+// DialPort opens a byte stream to a guest port after authorizing cred, waking a hibernated VM first.
+func (m *Manager) DialPort(ctx context.Context, id string, cred Cred, port uint16) (net.Conn, error) {
+	return m.dialPort(ctx, id, cred, port, "port")
+}
+
+// Renew resets a claim's lease to ttl from now after authorizing cred, and reports the granted deadline.
+func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Duration) (time.Time, error) {
+	sb, ok := m.resolve(id, cred)
 	if !ok {
-		return nil, ErrUnknownSandbox
+		return time.Time{}, ErrUnknownSandbox
+	}
+	lease := clampTTL(ttl)
+	m.mu.Lock()
+	if m.claimed[id] != sb {
+		m.mu.Unlock()
+		return time.Time{}, ErrUnknownSandbox
+	}
+	// an archived claim's Deadline is a retention window, not a lease: a TTL over it schedules a purge
+	if _, archiving := m.archiving[id]; sb.ArchiveCk != "" || archiving {
+		m.mu.Unlock()
+		return time.Time{}, ErrArchived
+	}
+	prev, prevLease := sb.Deadline, sb.LeaseSeconds
+	sb.Deadline, sb.LeaseSeconds = time.Now().Add(lease), int(lease/time.Second)
+	deadline, js := sb.Deadline, m.store.set(sb)
+	m.mu.Unlock()
+	if err := m.store.commit(js); err != nil {
+		m.mu.Lock()
+		var rb claimSnapshot
+		// a concurrent renew that landed keeps its grant: roll back only what this call wrote
+		if m.claimed[id] == sb && sb.Deadline.Equal(deadline) {
+			sb.Deadline, sb.LeaseSeconds = prev, prevLease
+			rb = m.store.set(sb)
+		}
+		m.mu.Unlock()
+		m.recommit(ctx, rb)
+		return time.Time{}, fmt.Errorf("renew %s: persist claims: %w", id, err)
 	}
 	sb.Touch()
-	m.recordAudit(ctx, id, auditFrame{Op: "preview", Port: port})
-	sb.Hold()
-	sock, err := m.wakeResolved(ctx, sb)
-	if err != nil {
-		sb.Unhold()
-		return nil, err
-	}
-	conn, err := m.eng.DialGuestPort(ctx, sock, port)
-	if err != nil {
-		sb.Unhold()
-		return nil, err
-	}
-	return &heldConn{Conn: conn, release: sync.OnceFunc(sb.Unhold)}, nil
+	return deadline, nil
+}
+
+// PreviewDial opens a preview request's guest connection; the caller verified the HMAC token.
+func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.Conn, error) {
+	return m.dialPort(ctx, id, Cred{Operator: true}, port, "preview")
 }
 
 // AgentSocket resolves a claimed sandbox's vsock UDS without waking it.
@@ -132,6 +155,28 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 	}
 	// no activity stamp: a control-plane poll must not keep an idle sandbox awake
 	return sb.VsockSocket, nil
+}
+
+// dialPort holds the sandbox for the connection's lifetime, so an idle sweep cannot reap a live stream.
+func (m *Manager) dialPort(ctx context.Context, id string, cred Cred, port uint16, op string) (net.Conn, error) {
+	sb, ok := m.resolve(id, cred)
+	if !ok {
+		return nil, ErrUnknownSandbox
+	}
+	sb.Touch()
+	m.recordAudit(ctx, id, auditFrame{Op: op, Port: port})
+	sb.Hold()
+	sock, err := m.wakeResolved(ctx, sb)
+	if err != nil {
+		sb.Unhold()
+		return nil, err
+	}
+	conn, err := m.eng.DialGuestPort(ctx, sock, port)
+	if err != nil {
+		sb.Unhold()
+		return nil, err
+	}
+	return &heldConn{Conn: conn, release: sync.OnceFunc(sb.Unhold)}, nil
 }
 
 // releaseResolved re-checks under m.mu that sb is still the live claim: no double teardown.
@@ -590,4 +635,13 @@ type heldConn struct {
 func (c *heldConn) Close() error {
 	c.release()
 	return c.Conn.Close()
+}
+
+// CloseWrite forwards the half-close; net.Conn does not carry it, so embedding cannot promote one.
+func (c *heldConn) CloseWrite() error {
+	cw, ok := c.Conn.(interface{ CloseWrite() error })
+	if !ok {
+		return nil
+	}
+	return cw.CloseWrite()
 }

@@ -730,6 +730,180 @@ func TestProbeReadyWaitsForVsock(t *testing.T) {
 	}
 }
 
+func TestHeldConnForwardsCloseWrite(t *testing.T) {
+	inner := &closeWriteConn{}
+	held := &heldConn{Conn: inner, release: func() {}}
+
+	if _, ok := any(held).(interface{ CloseWrite() error }); !ok {
+		t.Fatal("heldConn does not expose CloseWrite; a relay half-close would be dropped")
+	}
+	if err := held.CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite: %v", err)
+	}
+	if !inner.closedWrite {
+		t.Error("CloseWrite did not reach the wrapped connection")
+	}
+}
+
+func TestHeldConnCloseWriteIsANoopWithoutSupport(t *testing.T) {
+	held := &heldConn{Conn: &plainConn{}, release: func() {}}
+	if err := held.CloseWrite(); err != nil {
+		t.Errorf("CloseWrite on a conn without one: %v, want nil", err)
+	}
+}
+
+func TestRenewExtendsTheLease(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	before := sb.Deadline
+
+	got, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour)
+	if err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	if !got.After(before) {
+		t.Errorf("deadline %v, want after %v", got, before)
+	}
+	if sb.Deadline != got || sb.LeaseSeconds != int(time.Hour/time.Second) {
+		t.Errorf("claim carries deadline %v lease %ds", sb.Deadline, sb.LeaseSeconds)
+	}
+	if list := m.Sandboxes(""); len(list) != 1 || !list[0].Deadline.Equal(got) {
+		t.Errorf("index %+v does not report the granted deadline", list)
+	}
+}
+
+func TestRenewClampsAndDefaults(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+
+	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, 0); err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	if want := int(defaultTTL / time.Second); sb.LeaseSeconds != want {
+		t.Errorf("zero ttl granted %ds, want the %ds default", sb.LeaseSeconds, want)
+	}
+	got, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, 999*time.Hour)
+	if err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	if want := int(maxTTL / time.Second); sb.LeaseSeconds != want {
+		t.Errorf("oversized ttl granted %ds, want the %ds cap", sb.LeaseSeconds, want)
+	}
+	if !got.Before(time.Now().Add(maxTTL + time.Minute)) {
+		t.Errorf("deadline %v outruns the cap", got)
+	}
+}
+
+func TestRenewRefusesAnArchivedClaim(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	m.mu.Lock()
+	sb.ArchiveCk, sb.Deadline = "ck_1", time.Time{}
+	m.mu.Unlock()
+
+	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, 0); !errors.Is(err, ErrArchived) {
+		t.Fatalf("renew on an archived claim: %v, want ErrArchived", err)
+	}
+	if !sb.Deadline.IsZero() {
+		t.Errorf("deadline %v; a kept-forever archive must not gain an expiry the reaper acts on", sb.Deadline)
+	}
+}
+
+func TestRenewRefusesAClaimBeingArchived(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	before := sb.Deadline
+	m.mu.Lock()
+	m.archiving[sb.ID] = struct{}{}
+	m.mu.Unlock()
+
+	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour); !errors.Is(err, ErrArchived) {
+		t.Fatalf("renew during an export: %v, want ErrArchived", err)
+	}
+	if !sb.Deadline.Equal(before) {
+		t.Error("a renew the landing archive would overwrite was still reported as granted")
+	}
+}
+
+func TestRenewRollsBackOnPersistFailure(t *testing.T) {
+	dir := t.TempDir()
+	m := newTestManagerAt(t, newFakeEngine(), dir)
+	sb := mustClaim(t, m, testKey)
+	before, beforeLease := sb.Deadline, sb.LeaseSeconds
+
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	_, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour)
+	if chmodErr := os.Chmod(dir, 0o700); chmodErr != nil {
+		t.Fatalf("restore mode: %v", chmodErr)
+	}
+	if err == nil {
+		t.Fatal("renew reported success while the claim store was unwritable")
+	}
+	if !sb.Deadline.Equal(before) || sb.LeaseSeconds != beforeLease {
+		t.Errorf("deadline %v lease %ds after a failed persist, want %v / %ds", sb.Deadline, sb.LeaseSeconds, before, beforeLease)
+	}
+	granted, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour)
+	if err != nil {
+		t.Fatalf("renew after a rolled-back one: %v", err)
+	}
+	if !sb.Deadline.Equal(granted) {
+		t.Errorf("deadline %v, want the %v just granted", sb.Deadline, granted)
+	}
+}
+
+func TestRenewAuthorizesByToken(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	before := sb.Deadline
+
+	for _, cred := range []Cred{{Token: "wrong"}, {}} {
+		if _, err := m.Renew(t.Context(), sb.ID, cred, time.Hour); !errors.Is(err, ErrUnknownSandbox) {
+			t.Errorf("cred %+v: %v, want ErrUnknownSandbox", cred, err)
+		}
+	}
+	if _, err := m.Renew(t.Context(), "sb_missing", Cred{Token: sb.Token}, time.Hour); !errors.Is(err, ErrUnknownSandbox) {
+		t.Errorf("unknown id: %v, want ErrUnknownSandbox", err)
+	}
+	if sb.Deadline != before {
+		t.Error("a rejected renew moved the deadline")
+	}
+}
+
+func TestDialPortAuthorizesByToken(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+
+	if _, err := m.DialPort(t.Context(), sb.ID, Cred{Token: "wrong"}, 49983); !errors.Is(err, ErrUnknownSandbox) {
+		t.Errorf("wrong token: %v, want ErrUnknownSandbox", err)
+	}
+	if _, err := m.DialPort(t.Context(), sb.ID, Cred{}, 49983); !errors.Is(err, ErrUnknownSandbox) {
+		t.Errorf("empty token: %v, want ErrUnknownSandbox", err)
+	}
+	if _, err := m.DialPort(t.Context(), "sb_missing", Cred{Token: sb.Token}, 49983); !errors.Is(err, ErrUnknownSandbox) {
+		t.Errorf("unknown id: %v, want ErrUnknownSandbox", err)
+	}
+	if _, err := m.DialPort(t.Context(), sb.ID, Cred{Token: sb.Token}, 49983); errors.Is(err, ErrUnknownSandbox) {
+		t.Error("right token was rejected as an unknown sandbox")
+	}
+}
+
+type plainConn struct {
+	net.Conn
+}
+
+type closeWriteConn struct {
+	net.Conn
+
+	closedWrite bool
+}
+
+func (c *closeWriteConn) CloseWrite() error {
+	c.closedWrite = true
+	return nil
+}
+
 func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	return newTestManagerAt(t, eng, t.TempDir(), pools...)

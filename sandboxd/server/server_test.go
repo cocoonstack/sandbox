@@ -127,6 +127,67 @@ func TestHibernateVolumeCaptureMapsConflict(t *testing.T) {
 	}
 }
 
+func TestRenewGrantsAndReportsTheDeadline(t *testing.T) {
+	want := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	var gotTTL time.Duration
+	mgr := &fakeManager{renew: func(_, token string, ttl time.Duration) (time.Time, error) {
+		gotTTL = ttl
+		if token != "tok" {
+			return time.Time{}, pool.ErrUnknownSandbox
+		}
+		return want, nil
+	}}
+	ts := newTestServer(t, "", mgr, nil)
+
+	resp := postJSON(t, ts.URL+"/v1/sandboxes/sb_1/renew", "tok", `{"ttl_seconds":3600}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	var got types.RenewResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !got.Deadline.Equal(want) {
+		t.Errorf("deadline %v, want %v", got.Deadline, want)
+	}
+	if gotTTL != time.Hour {
+		t.Errorf("ttl %v, want 1h", gotTTL)
+	}
+}
+
+func TestRenewWithoutABodyTakesTheNodeDefault(t *testing.T) {
+	var gotTTL time.Duration
+	called := false
+	mgr := &fakeManager{renew: func(_, _ string, ttl time.Duration) (time.Time, error) {
+		gotTTL, called = ttl, true
+		return time.Now().Add(time.Minute), nil
+	}}
+	ts := newTestServer(t, "", mgr, nil)
+
+	resp := postJSON(t, ts.URL+"/v1/sandboxes/sb_1/renew", "tok", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200: an absent body is the documented way to ask for the default", resp.StatusCode)
+	}
+	if !called || gotTTL != 0 {
+		t.Errorf("manager saw ttl %v (called=%v), want the zero that means the node default", gotTTL, called)
+	}
+}
+
+func TestRenewRejectsWrongToken(t *testing.T) {
+	mgr := &fakeManager{renew: func(string, string, time.Duration) (time.Time, error) {
+		return time.Time{}, pool.ErrUnknownSandbox
+	}}
+	ts := newTestServer(t, "", mgr, nil)
+
+	resp := postJSON(t, ts.URL+"/v1/sandboxes/sb_1/renew", "wrong", `{"ttl_seconds":60}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status %d, want 404", resp.StatusCode)
+	}
+}
+
 func TestAPITokenGuard(t *testing.T) {
 	ts := newTestServer(t, "sekret", &fakeManager{}, nil)
 
@@ -1896,8 +1957,10 @@ type fakeManager struct {
 	release              sandboxVerbFunc
 	releaseOp            idActionFunc
 	socket               func(id, token string) (string, error)
+	dialPort             func(id, token string, port uint16) (net.Conn, error)
 	hibernate            sandboxVerbFunc
 	wake                 sandboxVerbFunc
+	renew                func(id, token string, ttl time.Duration) (time.Time, error)
 	fork                 func(id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error)
 	promote              func(id, token, template string) error
 	promoteContentDigest string
@@ -1977,6 +2040,20 @@ func (f *fakeManager) AgentSocket(id, token string) (string, error) {
 func (f *fakeManager) WakeAgentSocket(_ context.Context, id, token string) (string, func(), error) {
 	sock, err := f.AgentSocket(id, token)
 	return sock, func() {}, err
+}
+
+func (f *fakeManager) Renew(_ context.Context, id string, cred pool.Cred, ttl time.Duration) (time.Time, error) {
+	if f.renew == nil {
+		return time.Time{}, pool.ErrUnknownSandbox
+	}
+	return f.renew(id, credToken(cred), ttl)
+}
+
+func (f *fakeManager) DialPort(_ context.Context, id string, cred pool.Cred, port uint16) (net.Conn, error) {
+	if f.dialPort == nil {
+		return nil, pool.ErrUnknownSandbox
+	}
+	return f.dialPort(id, credToken(cred), port)
 }
 
 func (f *fakeManager) Hibernate(_ context.Context, id string, cred pool.Cred) error {

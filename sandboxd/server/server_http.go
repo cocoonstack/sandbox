@@ -1,11 +1,13 @@
 package server
 
 import (
+	"bufio"
 	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 
@@ -60,9 +62,49 @@ func sandboxToken(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return token, ok
 }
 
+// upgradeGate refuses a bare GET: waking the sandbox consumes its hibernate snapshot.
+func upgradeGate(w http.ResponseWriter, r *http.Request, proto string) (string, bool) {
+	token, ok := sandboxToken(w, r)
+	if !ok {
+		return "", false
+	}
+	if !strings.EqualFold(r.Header.Get("Upgrade"), proto) {
+		w.Header().Set("Upgrade", proto)
+		writeErr(w, http.StatusUpgradeRequired, "upgrade to "+proto+" required")
+		return "", false
+	}
+	return token, true
+}
+
+// hijackClient on failure has already closed guest and answered the request.
+func hijackClient(ctx context.Context, w http.ResponseWriter, guest net.Conn) (net.Conn, *bufio.Reader, bool) {
+	client, bufrw, err := http.NewResponseController(w).Hijack()
+	if err != nil {
+		_ = guest.Close()
+		log.WithFunc("server.hijackClient").Error(ctx, err, "hijack")
+		writeErr(w, http.StatusInternalServerError, "connection cannot be hijacked")
+		return nil, nil, false
+	}
+	return client, bufrw.Reader, true
+}
+
 func decodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var v T
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&v); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return v, false
+	}
+	return v, true
+}
+
+// decodeOptionalBody reads an absent body as the zero value, for verbs whose fields all default.
+func decodeOptionalBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
+	var v T
+	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&v)
+	if errors.Is(err, io.EOF) {
+		return v, true
+	}
+	if err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return v, false
 	}
