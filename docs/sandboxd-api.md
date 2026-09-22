@@ -489,10 +489,12 @@ an SDK caller should set.
 ## GET /v1/sandboxes
 
 Auth: node API token. Root sees every live claim; a tenant sees only its own.
-The index is `{"sandboxes": [{id, key, deadline, hibernated, archived?,
-from_checkpoint?, claim_ref?, volumes?: [{name, mount, mode?}]}]}` — `mode` is
-omitted for `ro`, matching the claim echo; never sandbox tokens, volume host
-paths, or catalog access lists.
+The index is `{"sandboxes": [{id, key, deadline, claimed_at?, hibernated,
+archived?, from_checkpoint?, claim_ref?, volumes?: [{name, mount, mode?}]}]}` —
+`mode` is omitted for `ro`, matching the claim echo; never sandbox tokens,
+volume host paths, or catalog access lists. `claimed_at` is the first grant
+(renew and wake move `deadline` only) and is absent for a claim recorded before
+the field existed.
 
 ## GET /v1/sandboxes/{id}
 

@@ -130,6 +130,7 @@ type SandboxSummary struct {
 	ID             string         `json:"id"`
 	Key            types.PoolKey  `json:"key"`
 	Deadline       time.Time      `json:"deadline"`
+	ClaimedAt      time.Time      `json:"claimed_at,omitzero"`
 	Hibernated     bool           `json:"hibernated"`
 	Archived       bool           `json:"archived,omitzero"`
 	FromCheckpoint string         `json:"from_checkpoint,omitempty"`
@@ -634,7 +635,7 @@ func (m *Manager) goldensDir() string {
 
 func summarize(sb *types.Sandbox) SandboxSummary {
 	return SandboxSummary{
-		ID: sb.ID, Key: sb.Key, Deadline: sb.Deadline,
+		ID: sb.ID, Key: sb.Key, Deadline: sb.Deadline, ClaimedAt: sb.ClaimedAt,
 		Hibernated: sb.HibernateSnap != "", Archived: sb.ArchiveCk != "",
 		FromCheckpoint: sb.FromCheckpoint, ClaimRef: sb.ClaimRef,
 		Volumes: slices.Clone(sb.Volumes),

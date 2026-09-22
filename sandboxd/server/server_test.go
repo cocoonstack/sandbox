@@ -307,6 +307,31 @@ func TestSandboxIndexReturnsScopedAppliedVolumes(t *testing.T) {
 	}
 }
 
+func TestSandboxesReportClaimedAt(t *testing.T) {
+	claimed := time.Date(2026, 9, 23, 1, 2, 3, 0, time.UTC)
+	mgr := &fakeManager{sandboxIndex: func(string) []pool.SandboxSummary {
+		return []pool.SandboxSummary{{ID: "sb_1", ClaimedAt: claimed}}
+	}}
+	ts := newTenantTestServer(t, "root", nil, mgr, nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/sandboxes", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer root")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("sandboxes: %v", err)
+	}
+	defer resp.Body.Close()
+	var got SandboxListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Sandboxes) != 1 || !got.Sandboxes[0].ClaimedAt.Equal(claimed) {
+		t.Errorf("sandboxes = %+v, want claimed_at %v", got.Sandboxes, claimed)
+	}
+}
+
 func TestTenantAuthMatrix(t *testing.T) {
 	mgr := &fakeManager{tenantClaims: map[string]int{"acme": 2}}
 	tenants := []config.TenantSpec{{Name: "acme", Token: "acme-tok"}, {Name: "beta", Token: "beta-tok"}}

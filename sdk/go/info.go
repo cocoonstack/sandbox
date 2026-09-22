@@ -43,6 +43,7 @@ type SandboxSummary struct {
 	ID             string    `json:"id"`
 	Key            PoolKey   `json:"key"`
 	Deadline       time.Time `json:"deadline"`
+	ClaimedAt      time.Time `json:"claimed_at,omitzero"`
 	Hibernated     bool      `json:"hibernated"`
 	Archived       bool      `json:"archived,omitzero"`
 	FromCheckpoint string    `json:"from_checkpoint,omitempty"`
