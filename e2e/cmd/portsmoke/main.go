@@ -25,8 +25,10 @@ const (
 	// guestPort stands in for envd's 49983: the relay is port-agnostic, and a
 	// high port proves nothing is special-cased about the SDK's default.
 	guestPort = 49983
+	// halfClosePort greets and shuts its write side, then keeps reading.
+	halfClosePort = 49984
 	// deadPort has no listener, so silkd's connect refusal must surface as 502.
-	deadPort = 49984
+	deadPort = 49985
 	// listenerReadyWait bounds the wait for the in-guest listener to bind.
 	listenerReadyWait = 20 * time.Second
 	// guestServerPath is where the uploaded listener lands in the guest.
@@ -82,6 +84,7 @@ func run(addr, token, template, listener string, hold time.Duration) error {
 		{"http round trip", stepHTTP},
 		{"http2 round trip", stepHTTP2},
 		{"half close", stepHalfClose},
+		{"guest half close", stepGuestHalfClose},
 		{"wrong token is 404", stepWrongToken},
 		{"missing token is 401", stepNoToken},
 		{"bad port is 400", stepBadPort},
@@ -118,7 +121,11 @@ func startGuestListener(ctx context.Context, sb *sandbox.Sandbox, listener strin
 	if err := sb.WriteFile(ctx, guestServerPath, bin, &guestServerMode); err != nil {
 		return fmt.Errorf("upload listener: %w", err)
 	}
-	argv := []string{guestServerPath, "-addr", fmt.Sprintf("127.0.0.1:%d", guestPort)}
+	argv := []string{
+		guestServerPath,
+		"-addr", fmt.Sprintf("127.0.0.1:%d", guestPort),
+		"-half-close-addr", fmt.Sprintf("127.0.0.1:%d", halfClosePort),
+	}
 	if _, err := sb.Spawn(ctx, sandbox.Cmd{Argv: argv}); err != nil {
 		return fmt.Errorf("spawn listener: %w", err)
 	}
@@ -199,6 +206,45 @@ func stepHalfClose(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbo
 		return err
 	}
 	return wantReport(string(out), "200 OK", "path=/half")
+}
+
+// stepGuestHalfClose proves the two directions end independently: the guest shuts
+// its write side first, and what the client sends afterwards still arrives.
+func stepGuestHalfClose(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
+	conn, err := rt.Dial(ctx, halfClosePort)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	greeting := make([]byte, len("greeting"))
+	if _, err := io.ReadFull(conn, greeting); err != nil {
+		return fmt.Errorf("read greeting: %w", err)
+	}
+	if n, err := conn.Read(make([]byte, 1)); err != io.EOF {
+		return fmt.Errorf("after the guest shut its write side: read %d, %v, want EOF", n, err)
+	}
+	if _, err := io.WriteString(conn, "after-done"); err != nil {
+		return fmt.Errorf("write after the guest half close: %w", err)
+	}
+	cw, ok := conn.(interface{ CloseWrite() error })
+	if !ok {
+		return errors.New("relay conn does not support CloseWrite")
+	}
+	if err := cw.CloseWrite(); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(listenerReadyWait)
+	for time.Now().Before(deadline) {
+		seen, err := relayGet(ctx, rt, guestPort, "/half-close-seen")
+		if err != nil {
+			return err
+		}
+		if seen == "after-done" {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return errors.New("the guest never saw what the client sent after its own half close")
 }
 
 func stepWrongToken(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {

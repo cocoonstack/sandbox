@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 const portRequest = "GET /v1/sandboxes/sb_1/ports/49983 HTTP/1.1\r\n" +
@@ -133,6 +135,40 @@ func TestPortRelayEndsOnGuestClose(t *testing.T) {
 	if string(rest) != "bye" {
 		t.Errorf("got %q, want %q", rest, "bye")
 	}
+}
+
+func TestSpliceTearsDownWhenTheClientDies(t *testing.T) {
+	srv := New("", nil, "node:7777", &fakeManager{}, &fakeDialer{}, nil, nil, nil, nil)
+	t.Cleanup(srv.CloseRelays)
+	client, clientPeer := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = clientPeer.Close() })
+	guest, guestPeer := net.Pipe()
+	t.Cleanup(func() { _ = guestPeer.Close() })
+	go func() { _, _ = io.Copy(io.Discard, clientPeer) }()
+
+	guestClosed := make(chan error, 1)
+	go func() {
+		_, err := guestPeer.Read(make([]byte, 1))
+		guestClosed <- err
+	}()
+
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		srv.splice(client, iotest.ErrReader(errors.New("client vanished")), guest,
+			switchingProtocolsTCP, utils.CloseWrite, utils.CloseWrite)
+	}()
+
+	select {
+	case err := <-guestClosed:
+		if err == nil {
+			t.Error("guest read succeeded; the relay should have closed it")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("a dead client left the guest connection open; the relay holds the sandbox")
+	}
+	_ = client.Close()
+	<-ended
 }
 
 func TestPortRelayRefusedAfterCloseRelays(t *testing.T) {

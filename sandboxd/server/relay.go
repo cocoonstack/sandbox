@@ -16,8 +16,16 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
-// drainGrace bounds how long a finished relay waits for the client to close.
-const drainGrace = 30 * time.Second
+const (
+	// drainGrace bounds how long a finished silkd relay waits for the client to close.
+	drainGrace = 30 * time.Second
+
+	// keepAliveIdle, keepAliveInterval and keepAliveCount fail a relay whose client
+	// vanished without a FIN in about two minutes.
+	keepAliveIdle     = 60 * time.Second
+	keepAliveInterval = 15 * time.Second
+	keepAliveCount    = 4
+)
 
 var switchingProtocols = []byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n")
 
@@ -98,11 +106,17 @@ func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hell
 		return
 	}
 
+	keepAlive(client)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		// the wrappers hide ReadFrom/WriteTo so the copy keeps silkd's frame size instead of io.Copy's 32 KiB
-		_, _ = io.CopyBuffer(struct{ io.Writer }{guest}, struct{ io.Reader }{clientR}, make([]byte, wire.BulkChunk))
+		_, err := io.CopyBuffer(struct{ io.Writer }{guest}, struct{ io.Reader }{clientR}, make([]byte, wire.BulkChunk))
+		if err != nil {
+			// the client died rather than half-closing, so nothing is left to answer it
+			_ = guest.Close()
+			return
+		}
 		endWrite(guest)
 	}()
 
@@ -131,6 +145,21 @@ func (s *Server) trackRelay(client, guest net.Conn) (func(), bool) {
 		s.relayMu.Unlock()
 		s.relayWG.Done()
 	}, true
+}
+
+// keepAlive bounds a client that dies without a FIN: without it the splice
+// goroutine blocks in Read forever, and with it the sandbox's hold.
+func keepAlive(client net.Conn) {
+	tcp, ok := client.(*net.TCPConn)
+	if !ok {
+		return
+	}
+	_ = tcp.SetKeepAliveConfig(net.KeepAliveConfig{
+		Enable:   true,
+		Idle:     keepAliveIdle,
+		Interval: keepAliveInterval,
+		Count:    keepAliveCount,
+	})
 }
 
 // drainClient half-closes and waits: the silkd relay's client is one long-lived

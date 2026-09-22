@@ -1,7 +1,6 @@
 package server
 
 import (
-	"net"
 	"net/http"
 	"strconv"
 
@@ -38,8 +37,6 @@ func (s *Server) handlePort(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// silkd stops feeding the guest socket once the guest reports EOF, so half-closing
-	// toward the client would advertise a write direction that discards what it accepts
 	s.splice(client, clientReader(client, clientBuf), guest, switchingProtocolsTCP,
-		utils.CloseWrite, func(client net.Conn) { _ = client.Close() })
+		utils.CloseWrite, utils.CloseWrite)
 }

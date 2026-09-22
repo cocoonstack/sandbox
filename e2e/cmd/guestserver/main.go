@@ -11,18 +11,29 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 )
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:49983", "loopback address to listen on")
+	halfClose := flag.String("half-close-addr", "", "raw address that greets, shuts its write side, then reads")
 	flag.Parse()
+
+	var seen halfCloseSink
+	if *halfClose != "" {
+		go seen.serve(*halfClose)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /half-close-seen", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, seen.read())
 	})
 	mux.HandleFunc("/", report)
 
@@ -46,4 +57,54 @@ func report(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	_, _ = io.WriteString(w, body.String())
+}
+
+// halfCloseSink proves the relay carries each direction's half-close on its own:
+// it greets, shuts its write side, and keeps reading what the client sends after.
+type halfCloseSink struct {
+	mu   sync.Mutex
+	got  string
+	done bool
+}
+
+func (h *halfCloseSink) serve(addr string) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "guestserver: half-close listen:", err)
+		return
+	}
+	for {
+		conn, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			return
+		}
+		go h.greetThenRead(conn)
+	}
+}
+
+func (h *halfCloseSink) greetThenRead(conn net.Conn) {
+	defer func() { _ = conn.Close() }()
+	tcp, ok := conn.(*net.TCPConn)
+	if !ok {
+		return
+	}
+	if _, err := io.WriteString(tcp, "greeting"); err != nil {
+		return
+	}
+	if err := tcp.CloseWrite(); err != nil {
+		return
+	}
+	rest, _ := io.ReadAll(tcp)
+	h.mu.Lock()
+	h.got, h.done = string(rest), true
+	h.mu.Unlock()
+}
+
+func (h *halfCloseSink) read() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.done {
+		return ""
+	}
+	return h.got
 }
