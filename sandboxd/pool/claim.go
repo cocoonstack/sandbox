@@ -115,6 +115,13 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 		m.mu.Unlock()
 		return time.Time{}, ErrUnknownSandbox
 	}
+	// an archived claim's Deadline is the store's retention window, not a lease: writing a
+	// TTL over it turns "keep forever" into a purge on the next sweep. An export already in
+	// flight ends the same way, and it overwrites the Deadline when it lands.
+	if _, archiving := m.archiving[id]; sb.ArchiveCk != "" || archiving {
+		m.mu.Unlock()
+		return time.Time{}, ErrArchived
+	}
 	prev, prevLease := sb.Deadline, sb.LeaseSeconds
 	sb.Deadline, sb.LeaseSeconds = time.Now().Add(lease), int(lease/time.Second)
 	deadline, js := sb.Deadline, m.store.set(sb)
@@ -122,7 +129,8 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 	if err := m.store.commit(js); err != nil {
 		m.mu.Lock()
 		var rb claimSnapshot
-		if m.claimed[id] == sb {
+		// a concurrent renew that landed keeps its grant: roll back only what this call wrote
+		if m.claimed[id] == sb && sb.Deadline.Equal(deadline) {
 			sb.Deadline, sb.LeaseSeconds = prev, prevLease
 			rb = m.store.set(sb)
 		}
@@ -631,8 +639,7 @@ func (c *heldConn) Close() error {
 	return c.Conn.Close()
 }
 
-// CloseWrite forwards the half-close: net.Conn does not carry it, so embedding
-// the interface cannot promote it and a relay's data_end would be dropped here.
+// CloseWrite forwards the half-close; net.Conn does not carry it, so embedding cannot promote one.
 func (c *heldConn) CloseWrite() error {
 	cw, ok := c.Conn.(interface{ CloseWrite() error })
 	if !ok {

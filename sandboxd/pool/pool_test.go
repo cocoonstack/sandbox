@@ -794,6 +794,65 @@ func TestRenewClampsAndDefaults(t *testing.T) {
 	}
 }
 
+func TestRenewRefusesAnArchivedClaim(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	m.mu.Lock()
+	sb.ArchiveCk, sb.Deadline = "ck_1", time.Time{}
+	m.mu.Unlock()
+
+	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, 0); !errors.Is(err, ErrArchived) {
+		t.Fatalf("renew on an archived claim: %v, want ErrArchived", err)
+	}
+	if !sb.Deadline.IsZero() {
+		t.Errorf("deadline %v; a kept-forever archive must not gain an expiry the reaper acts on", sb.Deadline)
+	}
+}
+
+func TestRenewRefusesAClaimBeingArchived(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	before := sb.Deadline
+	m.mu.Lock()
+	m.archiving[sb.ID] = struct{}{}
+	m.mu.Unlock()
+
+	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour); !errors.Is(err, ErrArchived) {
+		t.Fatalf("renew during an export: %v, want ErrArchived", err)
+	}
+	if !sb.Deadline.Equal(before) {
+		t.Error("a renew the landing archive would overwrite was still reported as granted")
+	}
+}
+
+func TestRenewRollsBackOnPersistFailure(t *testing.T) {
+	dir := t.TempDir()
+	m := newTestManagerAt(t, newFakeEngine(), dir)
+	sb := mustClaim(t, m, testKey)
+	before, beforeLease := sb.Deadline, sb.LeaseSeconds
+
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	_, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour)
+	if chmodErr := os.Chmod(dir, 0o700); chmodErr != nil {
+		t.Fatalf("restore mode: %v", chmodErr)
+	}
+	if err == nil {
+		t.Fatal("renew reported success while the claim store was unwritable")
+	}
+	if !sb.Deadline.Equal(before) || sb.LeaseSeconds != beforeLease {
+		t.Errorf("deadline %v lease %ds after a failed persist, want %v / %ds", sb.Deadline, sb.LeaseSeconds, before, beforeLease)
+	}
+	granted, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour)
+	if err != nil {
+		t.Fatalf("renew after a rolled-back one: %v", err)
+	}
+	if !sb.Deadline.Equal(granted) {
+		t.Errorf("deadline %v, want the %v just granted", sb.Deadline, granted)
+	}
+}
+
 func TestRenewAuthorizesByToken(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	sb := mustClaim(t, m, testKey)
@@ -830,12 +889,10 @@ func TestDialPortAuthorizesByToken(t *testing.T) {
 	}
 }
 
-// plainConn is a net.Conn with no half-close of its own.
 type plainConn struct {
 	net.Conn
 }
 
-// closeWriteConn records a forwarded half-close.
 type closeWriteConn struct {
 	net.Conn
 
