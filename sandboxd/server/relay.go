@@ -20,14 +20,18 @@ const (
 	// drainGrace bounds how long a finished silkd relay waits for the client to close.
 	drainGrace = 30 * time.Second
 
-	// keepAliveIdle, keepAliveInterval and keepAliveCount fail a relay whose client
-	// vanished without a FIN in about two minutes.
+	// the keepAlive trio fails a relay whose client vanished without a FIN in about two minutes.
 	keepAliveIdle     = 60 * time.Second
 	keepAliveInterval = 15 * time.Second
 	keepAliveCount    = 4
 )
 
-var switchingProtocols = []byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n")
+var (
+	switchingProtocols = []byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n")
+
+	// silkd delimits input with terminal frames, so a TCP half-close carries no meaning here.
+	silkdEnds = relayEnds{guest: func(c net.Conn) { _ = c.Close() }, client: drainClient}
+)
 
 // CloseRelays force-closes in-flight relays; http.Server.Shutdown does not track hijacked conns.
 func (s *Server) CloseRelays() {
@@ -86,14 +90,16 @@ func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBu
 			s.mgr.Audit(ctx, id, line)
 		}}
 	}
-	// silkd delimits input with terminal frames, so a TCP half-close carries no meaning
-	s.splice(client, clientR, guest, switchingProtocols, func(guest net.Conn) { _ = guest.Close() }, drainClient)
+	s.splice(client, clientR, guest, switchingProtocols, silkdEnds)
 }
 
-// splice writes hello and copies both directions until either side ends; endWrite is what a
-// finished client direction means to the guest, endClient what a finished guest direction
-// means to the client.
-func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hello []byte, endWrite, endClient func(net.Conn)) {
+// relayEnds is what a finished direction means to the peer that did not end it.
+type relayEnds struct {
+	guest  func(net.Conn)
+	client func(net.Conn)
+}
+
+func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hello []byte, ends relayEnds) {
 	release, ok := s.trackRelay(client, guest)
 	if !ok {
 		return
@@ -102,11 +108,11 @@ func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hell
 
 	// the http server may have armed a header-read deadline on this conn
 	_ = client.SetDeadline(time.Time{})
+	keepAlive(client)
 	if _, err := client.Write(hello); err != nil {
 		return
 	}
 
-	keepAlive(client)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -117,11 +123,11 @@ func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hell
 			_ = guest.Close()
 			return
 		}
-		endWrite(guest)
+		ends.guest(guest)
 	}()
 
 	_, _ = io.Copy(client, guest)
-	endClient(client)
+	ends.client(client)
 	<-done
 }
 
@@ -147,8 +153,7 @@ func (s *Server) trackRelay(client, guest net.Conn) (func(), bool) {
 	}, true
 }
 
-// keepAlive bounds a client that dies without a FIN: without it the splice
-// goroutine blocks in Read forever, and with it the sandbox's hold.
+// keepAlive bounds a client that dies without a FIN; without it the splice goroutine blocks forever.
 func keepAlive(client net.Conn) {
 	tcp, ok := client.(*net.TCPConn)
 	if !ok {
@@ -162,8 +167,7 @@ func keepAlive(client net.Conn) {
 	})
 }
 
-// drainClient half-closes and waits: the silkd relay's client is one long-lived
-// connection, so the read deadline is what unblocks the splice goroutine.
+// drainClient half-closes; the read deadline is what unblocks the splice goroutine.
 func drainClient(client net.Conn) {
 	utils.CloseWrite(client)
 	_ = client.SetReadDeadline(time.Now().Add(drainGrace))

@@ -22,8 +22,7 @@ import (
 )
 
 const (
-	// guestPort is arbitrary: the relay is port-agnostic, and a high one proves
-	// nothing is special-cased.
+	// guestPort is arbitrary; the relay is port-agnostic.
 	guestPort = 49983
 	// halfClosePort greets and shuts its write side, then keeps reading.
 	halfClosePort = 49984
@@ -33,8 +32,7 @@ const (
 	listenerReadyWait = 20 * time.Second
 	// guestServerPath is where the uploaded listener lands in the guest.
 	guestServerPath = "/usr/local/bin/guestserver"
-	// claimTTL outlasts the whole run: the node's default lease would reap the
-	// sandbox mid-test and turn a relay bug into a misleading 404.
+	// claimTTL outlasts the run; the node default would reap the sandbox mid-test.
 	claimTTL = 30 * time.Minute
 )
 
@@ -99,8 +97,7 @@ func run(addr, token, template, listener string, hold time.Duration) error {
 		fmt.Printf("  ok  %-24s %5.1fs\n", step.name, time.Since(t0).Seconds())
 	}
 	if hold > 0 {
-		// the guest listener is live now; a second harness (the operator's
-		// harness) drives this same sandbox from outside.
+		// the listener is live now, for a second harness to drive from outside
 		fmt.Printf("SANDBOX %s %s %s %d\n", sb.ID, sb.Token(), sb.Owner(), guestPort)
 		select {
 		case <-time.After(hold):
@@ -110,9 +107,7 @@ func run(addr, token, template, listener string, hold time.Duration) error {
 	return nil
 }
 
-// startGuestListener uploads guestserver and runs it on the guest's loopback.
-// The stock image has no python, no netcat and no HTTP server of any kind, so
-// the listener is shipped in rather than improvised.
+// startGuestListener ships a listener in: the stock image has no python, netcat or HTTP server.
 func startGuestListener(ctx context.Context, sb *sandbox.Sandbox, listener string) error {
 	bin, err := os.ReadFile(listener) //nolint:gosec // the path is an operator-supplied flag on a test harness
 	if err != nil {
@@ -148,8 +143,7 @@ func stepHTTP(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) er
 	return wantReport(body, "proto=1", "path=/echo?a=1")
 }
 
-// stepHTTP2 proves the relay is protocol-blind: ConnectRPC streaming needs
-// HTTP/2, and nothing on this path may reframe it.
+// stepHTTP2 proves the relay is protocol-blind; ConnectRPC streaming needs HTTP/2.
 func stepHTTP2(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
 	var protocols http.Protocols
 	protocols.SetUnencryptedHTTP2(true)
@@ -183,8 +177,7 @@ func wantReport(body string, want ...string) error {
 	return nil
 }
 
-// stepHalfClose proves a client shutdown reaches the guest as data_end without
-// tearing the read direction down: the answer must still arrive afterwards.
+// stepHalfClose proves a client shutdown reaches the guest without ending its answer.
 func stepHalfClose(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
 	conn, err := rt.Dial(ctx, guestPort)
 	if err != nil {
@@ -208,8 +201,7 @@ func stepHalfClose(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbo
 	return wantReport(string(out), "200 OK", "path=/half")
 }
 
-// stepGuestHalfClose proves the two directions end independently: the guest shuts
-// its write side first, and what the client sends afterwards still arrives.
+// stepGuestHalfClose proves the guest can shut its write side and still receive.
 func stepGuestHalfClose(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
 	conn, err := rt.Dial(ctx, halfClosePort)
 	if err != nil {
@@ -273,8 +265,7 @@ func stepDeadPort(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox
 	return relayWantStatus(ctx, rt, rt.URL(deadPort), rt.Token, true, http.StatusBadGateway)
 }
 
-// stepHibernate proves the relay wakes a hibernated sandbox: the listener is a
-// live process in the snapshot, so it must answer again after the restore.
+// stepHibernate proves the relay wakes a hibernated sandbox; the listener survives in the snapshot.
 func stepHibernate(ctx context.Context, rt *harness.PortRelay, sb *sandbox.Sandbox) error {
 	if err := sb.Hibernate(ctx); err != nil {
 		return fmt.Errorf("hibernate: %w", err)
@@ -307,8 +298,7 @@ func relayGet(ctx context.Context, r *harness.PortRelay, port uint16, path strin
 	return string(out), err
 }
 
-// wantStatus asserts a refusal: these must be answered as HTTP, never by
-// silently opening a relay into the guest.
+// relayWantStatus asserts a refusal is answered as HTTP, never by opening a relay.
 func relayWantStatus(ctx context.Context, r *harness.PortRelay, url, token string, upgrade bool, want int) error {
 	req, err := r.Request(ctx, url, token, upgrade)
 	if err != nil {

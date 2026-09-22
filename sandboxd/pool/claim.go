@@ -115,9 +115,7 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 		m.mu.Unlock()
 		return time.Time{}, ErrUnknownSandbox
 	}
-	// an archived claim's Deadline is the store's retention window, not a lease: writing a
-	// TTL over it turns "keep forever" into a purge on the next sweep. An export already in
-	// flight ends the same way, and it overwrites the Deadline when it lands.
+	// an archived claim's Deadline is a retention window, not a lease: a TTL over it schedules a purge
 	if _, archiving := m.archiving[id]; sb.ArchiveCk != "" || archiving {
 		m.mu.Unlock()
 		return time.Time{}, ErrArchived

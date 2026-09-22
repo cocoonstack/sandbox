@@ -62,7 +62,7 @@ func sandboxToken(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return token, ok
 }
 
-// upgradeGate authorizes the caller and insists on the protocol upgrade; waking consumes the hibernate snapshot, so a bare GET must not reach the guest.
+// upgradeGate refuses a bare GET: waking the sandbox consumes its hibernate snapshot.
 func upgradeGate(w http.ResponseWriter, r *http.Request, proto string) (string, bool) {
 	token, ok := sandboxToken(w, r)
 	if !ok {
@@ -76,7 +76,7 @@ func upgradeGate(w http.ResponseWriter, r *http.Request, proto string) (string, 
 	return token, true
 }
 
-// hijackClient takes the connection over; on failure it has closed guest and answered the request.
+// hijackClient on failure has already closed guest and answered the request.
 func hijackClient(ctx context.Context, w http.ResponseWriter, guest net.Conn) (net.Conn, *bufio.Reader, bool) {
 	client, bufrw, err := http.NewResponseController(w).Hijack()
 	if err != nil {
@@ -97,8 +97,7 @@ func decodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	return v, true
 }
 
-// decodeOptionalBody accepts an absent body as the zero value, for verbs whose fields all
-// have a documented default.
+// decodeOptionalBody reads an absent body as the zero value, for verbs whose fields all default.
 func decodeOptionalBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var v T
 	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&v)

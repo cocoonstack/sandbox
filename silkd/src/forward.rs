@@ -31,19 +31,18 @@ pub async fn run<W: AsyncWrite + Unpin>(
     let (mut tr, tw) = stream.into_split();
     let mut feed = tokio::spawn(feed_socket(client, tw));
     let mut feed_done = false;
-    let mut guest_done = false;
+    let mut guest_write_closed = false;
 
     let mut buf = vec![0u8; BULK_CHUNK];
     let mut frame = Vec::new();
     let res = loop {
-        if guest_done && feed_done {
+        if guest_write_closed && feed_done {
             break Ok(());
         }
         tokio::select! {
-            r = tr.read(&mut buf), if !guest_done => match r {
-                // the guest closed its write side; the client keeps writing until data_end.
+            r = tr.read(&mut buf), if !guest_write_closed => match r {
                 Ok(0) => {
-                    guest_done = true;
+                    guest_write_closed = true;
                     if let Err(e) = proto::write_frame(w, &Response::Done).await {
                         break Err(e);
                     }
@@ -68,7 +67,7 @@ pub async fn run<W: AsyncWrite + Unpin>(
                 feed_done = true;
                 if let Ok(Err(resp)) = f {
                     // Done already ended the response stream, so a late violation has nowhere to go.
-                    if guest_done {
+                    if guest_write_closed {
                         break Ok(());
                     }
                     break proto::write_frame(w, &resp).await;

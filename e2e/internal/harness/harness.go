@@ -57,9 +57,7 @@ func HTTPOverPort(ctx context.Context, sb *sandbox.Sandbox, port uint16, method,
 	return out, nil
 }
 
-// PortRelay drives a node's guest-port endpoint the way an edge proxy does:
-// the raw upgrade, not the SDK's own DialPort. Proving that wire path is the
-// whole point of the tools that use it.
+// PortRelay drives the guest-port endpoint the way an edge proxy does, not via the SDK's DialPort.
 type PortRelay struct {
 	Owner string
 	ID    string

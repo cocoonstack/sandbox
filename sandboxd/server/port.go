@@ -10,9 +10,13 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
-var switchingProtocolsTCP = []byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: " + upgradeProtoTCP + "\r\nConnection: Upgrade\r\n\r\n")
+var (
+	switchingProtocolsTCP = []byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: " + upgradeProtoTCP + "\r\nConnection: Upgrade\r\n\r\n")
 
-// handlePort splices the caller onto 127.0.0.1:port inside the guest, so an edge proxy reaches a guest listener without a NIC.
+	tunnelEnds = relayEnds{guest: utils.CloseWrite, client: utils.CloseWrite}
+)
+
+// handlePort is how an edge proxy reaches a guest listener on a sandbox with no NIC.
 func (s *Server) handlePort(w http.ResponseWriter, r *http.Request) {
 	token, ok := upgradeGate(w, r, upgradeProtoTCP)
 	if !ok {
@@ -37,6 +41,5 @@ func (s *Server) handlePort(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.splice(client, clientReader(client, clientBuf), guest, switchingProtocolsTCP,
-		utils.CloseWrite, utils.CloseWrite)
+	s.splice(client, clientReader(client, clientBuf), guest, switchingProtocolsTCP, tunnelEnds)
 }

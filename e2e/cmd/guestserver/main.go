@@ -47,8 +47,7 @@ func main() {
 	}
 }
 
-// report answers with what the guest actually received, so the caller can
-// assert that the relay changed nothing on the way in.
+// report answers with what the guest received, so a caller can assert the relay changed nothing.
 func report(w http.ResponseWriter, r *http.Request) {
 	body := new(strings.Builder)
 	fmt.Fprintf(body, "proto=%d\nmethod=%s\npath=%s\nhost=%s\n", r.ProtoMajor, r.Method, r.URL.RequestURI(), r.Host)
@@ -59,8 +58,7 @@ func report(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, body.String())
 }
 
-// halfCloseSink proves the relay carries each direction's half-close on its own:
-// it greets, shuts its write side, and keeps reading what the client sends after.
+// halfCloseSink greets, shuts its write side, and keeps reading what the client sends after.
 type halfCloseSink struct {
 	mu   sync.Mutex
 	got  string

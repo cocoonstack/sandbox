@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
-	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 const portRequest = "GET /v1/sandboxes/sb_1/ports/49983 HTTP/1.1\r\n" +
@@ -156,7 +155,7 @@ func TestSpliceTearsDownWhenTheClientDies(t *testing.T) {
 	go func() {
 		defer close(ended)
 		srv.splice(client, iotest.ErrReader(errors.New("client vanished")), guest,
-			switchingProtocolsTCP, utils.CloseWrite, utils.CloseWrite)
+			switchingProtocolsTCP, tunnelEnds)
 	}()
 
 	select {
