@@ -629,7 +629,8 @@ claims; the fields are those of [`GET /v1/sandboxes`](sandboxd-api.md#get-v1sand
 - `*sandbox.ExitError` — non-zero exit from `Exec` (`Code`, `Stderr`)
 - `*wire.ErrorResp` — a typed guest-side failure; `Kind` is one of
   `wire.KindBadRequest` (including a spawn the guest cannot start: missing
-  binary, a cwd that is not a directory, no exec bit), `KindNotFound`,
+  binary, a cwd that is not a directory, no exec bit, a `User` the guest
+  cannot resolve), `KindNotFound`,
   `KindUnimplemented`, `KindInternal` (import
   `github.com/cocoonstack/sandbox/protocol/wire`)
 

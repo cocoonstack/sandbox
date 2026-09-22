@@ -91,6 +91,7 @@ base: silkd-image ## base VM image against the local boot + silkd images
 	docker build -t sandbox-base:dev \
 		--build-arg BOOT_IMAGE=$(BOOT_IMAGE) \
 		--build-arg SILKD_IMAGE=$(SILKD_IMAGE) \
+		--build-arg INPUTS_HASH=$$(find os-image/base -type f ! -name Dockerfile -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -d' ' -f1) \
 		--secret id=sandbox_install_agent,src=os-image/base/install-agent.sh \
 		-f os-image/base/24.04/Dockerfile os-image/base
 
@@ -99,4 +100,4 @@ python: base ## python flavor image on top of base
 		--build-arg BASE_IMAGE=sandbox-base:dev \
 		-f os-image/python/3.12/Dockerfile os-image/python
 
-images: base python ## all VM images
+images: base python ## the local base and python images (CI builds every flavor)

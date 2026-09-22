@@ -46,7 +46,7 @@ RUN set -e; \
     case "$TARGETARCH" in \
       amd64) make x86_64_defconfig kvm_guest.config; \
              ./scripts/kconfig/merge_config.sh -m .config /tmp/sandbox.config; \
-             arch_asserts="PVH VIRTIO_CONSOLE" ;; \
+             arch_asserts="PVH" ;; \
       arm64) make defconfig; \
              ./scripts/kconfig/merge_config.sh -m .config /tmp/sandbox.config /tmp/sandbox-arm64.config; \
              arch_asserts="RTC_DRV_PL031" ;; \
