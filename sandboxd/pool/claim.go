@@ -613,9 +613,11 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 }
 
 func stampIdentity(sb *types.Sandbox, ttl time.Duration) {
+	now := time.Now()
 	sb.ID = "sb_" + randHex(8)
 	sb.Token = randHex(16)
-	sb.Deadline = time.Now().Add(ttl)
+	sb.ClaimedAt = now
+	sb.Deadline = now.Add(ttl)
 	sb.LeaseSeconds = int(ttl / time.Second)
 }
 

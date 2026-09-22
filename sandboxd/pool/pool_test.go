@@ -772,6 +772,26 @@ func TestRenewExtendsTheLease(t *testing.T) {
 	}
 }
 
+func TestClaimedAtIsTheFirstGrant(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	before := time.Now()
+	sb := mustClaim(t, m, testKey)
+	if sb.ClaimedAt.Before(before) || sb.ClaimedAt.After(time.Now()) {
+		t.Fatalf("claimed_at %v, want the moment of the claim", sb.ClaimedAt)
+	}
+	claimed := sb.ClaimedAt
+
+	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour); err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	if !sb.ClaimedAt.Equal(claimed) {
+		t.Errorf("renew moved claimed_at to %v, want %v", sb.ClaimedAt, claimed)
+	}
+	if list := m.Sandboxes(""); len(list) != 1 || !list[0].ClaimedAt.Equal(claimed) {
+		t.Errorf("index %+v does not report claimed_at", list)
+	}
+}
+
 func TestRenewClampsAndDefaults(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	sb := mustClaim(t, m, testKey)
