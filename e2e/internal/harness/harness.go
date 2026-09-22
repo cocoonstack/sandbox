@@ -85,7 +85,8 @@ func (p PortRelay) Dial(ctx context.Context, port uint16) (net.Conn, error) {
 		_ = conn.Close()
 		return nil, writeErr
 	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, req)
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -99,7 +100,7 @@ func (p PortRelay) Dial(ctx context.Context, port uint16) (net.Conn, error) {
 		_ = conn.Close()
 		return nil, fmt.Errorf("upgrade header %q, want tcp", got)
 	}
-	return conn, nil
+	return &portRelayConn{Conn: conn, reader: reader}, nil
 }
 
 // Do sends one request over a fresh relay connection; closing the body closes it.
@@ -144,7 +145,19 @@ func (p PortRelay) Request(ctx context.Context, url, token string, upgrade bool)
 	return req, nil
 }
 
-// connBody closes the relay connection with the response body.
+type portRelayConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *portRelayConn) Read(p []byte) (int, error) {
+	return c.reader.Read(p)
+}
+
+func (c *portRelayConn) CloseWrite() error {
+	return c.Conn.(*net.TCPConn).CloseWrite()
+}
+
 type connBody struct {
 	io.ReadCloser
 	conn net.Conn
