@@ -61,7 +61,10 @@ for the truth.
 `envd` hardcodes a `0.0.0.0` listener and takes no bind address, so the image
 drops inbound traffic to 49983 from anything but loopback (`envd-guard.service`,
 one nftables rule). On the `none` lane there is no other interface for it to
-have bound; the rule is what holds on the egress lane, whose NIC is real.
+have bound. On the egress lane the NIC is real, but sandboxd locks the tap
+first — a netdev ingress chain that passes only broadcast DHCP — so nothing
+off the guest reaches it anyway. The guard is the layer underneath, for the
+window where that lock is absent.
 
 ## Limits worth knowing
 
@@ -93,5 +96,9 @@ K=<kit> TEMPLATE=ghcr.io/cocoonstack/sandbox/e2b-rt:24.04 bash scripts/envd-e2e.
 `envdsmoke -hold` then keeps that sandbox alive for an out-of-tree harness that
 puts a real edge proxy in front of it.
 
-The suite does **not** cover the nftables guard's drop: that needs an
-egress-lane sandbox with a non-loopback interface to send from.
+The suite does **not** cover the guard's drop. Reaching 49983 from off the
+guest means lifting sandboxd's tap lock, which no e2e run should do. Measured
+by hand instead, on one egress claim: with the lock on, neither 49983 nor an
+unguarded control port answered and ARP never resolved; with it lifted, the
+control port answered `204` while 49983 timed out, and the relay answered
+`101` throughout.
