@@ -92,7 +92,7 @@ K=<kit> TEMPLATE=ghcr.io/cocoonstack/sandbox/e2b-rt:24.04 bash scripts/envd-e2e.
 `envdsmoke -hold` then keeps that sandbox alive for an out-of-tree harness that
 puts a real edge proxy in front of it.
 
-Two things the suite does **not** cover, because the `none` lane gives it no way
-to: the nftables guard's drop (there is no non-loopback interface to send from),
-and `envd`'s process service under `-no-cgroups`. Both need an egress-lane
-sandbox to exercise.
+The suite does **not** cover the nftables guard's drop or `envd`'s process
+service under `-no-cgroups`. The guard needs an egress-lane sandbox with a
+non-loopback interface. Process RPCs can run through the same relay on the
+`none` lane; the current suite exercises filesystem RPCs only.
