@@ -11,7 +11,10 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -35,6 +38,10 @@ const (
 
 	uploadPath  = "/tmp/envdsmoke-probe.txt"
 	uploadProbe = "envd-wrote-this"
+
+	processProbe = "envd-process-ok"
+
+	contentType = "Content-Type"
 )
 
 func main() {
@@ -80,6 +87,7 @@ func run(addr, token, template, wantVersion string, hold time.Duration) error {
 		{"GET /files", stepDownload},
 		{"POST /files", stepUpload},
 		{"connect unary over http/1.1", stepConnectH1},
+		{"process start under -no-cgroups", stepProcessStart},
 		{"envd serves http/1.1 only", stepProtocol},
 	} {
 		t0 := time.Now()
@@ -167,7 +175,7 @@ func stepUpload(ctx context.Context, rt *harness.PortRelay, sb *sandbox.Sandbox)
 	const boundary = "envdsmoke"
 	body := fmt.Sprintf("--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"probe.txt\"\r\n"+
 		"Content-Type: text/plain\r\n\r\n%s\r\n--%s--\r\n", boundary, uploadProbe, boundary)
-	headers := http.Header{"Content-Type": []string{"multipart/form-data; boundary=" + boundary}}
+	headers := http.Header{contentType: []string{"multipart/form-data; boundary=" + boundary}}
 	resp, err := rt.Do(ctx, envdPort, http.MethodPost, "/files?path="+uploadPath+"&username=root", headers, strings.NewReader(body))
 	if err != nil {
 		return err
@@ -190,7 +198,7 @@ func stepUpload(ctx context.Context, rt *harness.PortRelay, sb *sandbox.Sandbox)
 // stepConnectH1 drives one unary call the way connect-web does; the SDK's services are all Connect.
 func stepConnectH1(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
 	headers := http.Header{
-		"Content-Type":             []string{"application/json"},
+		contentType:                []string{"application/json"},
 		"Connect-Protocol-Version": []string{"1"},
 		"X-User":                   []string{"root"},
 	}
@@ -212,6 +220,67 @@ func stepConnectH1(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbo
 		return fmt.Errorf("stat reply carries no entry: %s", body)
 	}
 	return nil
+}
+
+// stepProcessStart spawns through envd's process service, the half the image runs with
+// -no-cgroups, and reads its Connect server stream back over HTTP/1.1.
+func stepProcessStart(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
+	headers := http.Header{
+		contentType:                []string{"application/connect+json"},
+		"Connect-Protocol-Version": []string{"1"},
+		"X-User":                   []string{"root"},
+	}
+	req := fmt.Sprintf(`{"process":{"cmd":"/bin/echo","args":[%q]}}`, processProbe)
+	resp, err := rt.Do(ctx, envdPort, http.MethodPost, "/process.Process/Start", headers, strings.NewReader(envelope(req)))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("status %s: %s", resp.Status, body)
+	}
+	events, err := readEnvelopes(resp.Body)
+	if err != nil {
+		return err
+	}
+	joined := strings.Join(events, "\n")
+	if !strings.Contains(joined, `"start"`) {
+		return fmt.Errorf("no start event in the stream:\n%s", joined)
+	}
+	if !strings.Contains(joined, base64.StdEncoding.EncodeToString([]byte(processProbe+"\n"))) {
+		return fmt.Errorf("the command's stdout never arrived:\n%s", joined)
+	}
+	return nil
+}
+
+// envelope frames one Connect streaming message: a flag byte, then a big-endian length.
+func envelope(payload string) string {
+	head := make([]byte, 5)
+	binary.BigEndian.PutUint32(head[1:], uint32(len(payload))) //nolint:gosec // a probe payload is tens of bytes
+	return string(head) + payload
+}
+
+// readEnvelopes unframes a Connect server stream; the last one carries the end-of-stream flag.
+func readEnvelopes(r io.Reader) ([]string, error) {
+	var out []string
+	head := make([]byte, 5)
+	for {
+		if _, err := io.ReadFull(r, head); err != nil {
+			if errors.Is(err, io.EOF) {
+				return out, nil
+			}
+			return out, err
+		}
+		body := make([]byte, binary.BigEndian.Uint32(head[1:]))
+		if _, err := io.ReadFull(r, body); err != nil {
+			return out, err
+		}
+		out = append(out, string(body))
+		if head[0]&0x02 != 0 {
+			return out, nil
+		}
+	}
 }
 
 // stepProtocol fails the day envd gains h2c, which is when a proxy may forward HTTP/2 upstream.

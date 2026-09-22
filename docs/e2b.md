@@ -82,8 +82,9 @@ have bound; the rule is what holds on the egress lane, whose NIC is real.
 
 `scripts/envd-e2e.sh` runs the guest half on a node: it builds the pool with the
 warmup gate above and then drives `envdsmoke`, which claims a sandbox and
-reaches the real `envd` through the relay — health, `GET`/`POST /files`, and a
-ConnectRPC unary — while asserting silkd still answers on the same VM.
+reaches the real `envd` through the relay — health, `GET`/`POST /files`, a
+ConnectRPC unary, and a `process.Process/Start` whose output comes back over the
+Connect server stream — while asserting silkd still answers on the same VM.
 
 ```bash
 K=<kit> TEMPLATE=ghcr.io/cocoonstack/sandbox/e2b-rt:24.04 bash scripts/envd-e2e.sh
@@ -92,7 +93,5 @@ K=<kit> TEMPLATE=ghcr.io/cocoonstack/sandbox/e2b-rt:24.04 bash scripts/envd-e2e.
 `envdsmoke -hold` then keeps that sandbox alive for an out-of-tree harness that
 puts a real edge proxy in front of it.
 
-The suite does **not** cover the nftables guard's drop or `envd`'s process
-service under `-no-cgroups`. The guard needs an egress-lane sandbox with a
-non-loopback interface. Process RPCs can run through the same relay on the
-`none` lane; the current suite exercises filesystem RPCs only.
+The suite does **not** cover the nftables guard's drop: that needs an
+egress-lane sandbox with a non-loopback interface to send from.
