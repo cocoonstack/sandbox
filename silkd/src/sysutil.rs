@@ -124,24 +124,6 @@ pub fn adopt_controlling_tty(cmd: &mut Command) {
     }
 }
 
-/// Makes the calling process a session leader and adopts fd 0 as its controlling terminal.
-///
-/// # Safety
-/// Only async-signal-safe syscalls; valid in a post-fork child.
-unsafe fn make_controlling_tty() -> std::io::Result<()> {
-    // SAFETY: setsid and ioctl are async-signal-safe and take no pointers; the
-    // caller guarantees a post-fork child (see # Safety).
-    unsafe {
-        if libc::setsid() < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        if libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(())
-    }
-}
-
 /// Reads from a raw fd, surfacing WouldBlock to the caller's readiness loop.
 pub fn read_fd(fd: RawFd, buf: &mut [u8]) -> std::io::Result<usize> {
     // SAFETY: fd is a live open fd; buf is a valid mutable slice of buf.len().
@@ -179,6 +161,24 @@ pub fn exit_code(status: ExitStatus) -> i32 {
 /// Reaps the child and maps its status via `exit_code`; -1 when the wait fails.
 pub async fn wait_code(child: &mut tokio::process::Child) -> i32 {
     child.wait().await.map_or(-1, exit_code)
+}
+
+/// Makes the calling process a session leader and adopts fd 0 as its controlling terminal.
+///
+/// # Safety
+/// Only async-signal-safe syscalls; valid in a post-fork child.
+unsafe fn make_controlling_tty() -> std::io::Result<()> {
+    // SAFETY: setsid and ioctl are async-signal-safe and take no pointers; the
+    // caller guarantees a post-fork child (see # Safety).
+    unsafe {
+        if libc::setsid() < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
 }
 
 /// Fills `b` from the OS CSPRNG without blocking a tokio worker; /dev/urandom covers the fallback.

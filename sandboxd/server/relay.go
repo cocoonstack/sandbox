@@ -157,7 +157,6 @@ func (s *Server) trackRelay(client, guest net.Conn) (func(), bool) {
 	}, true
 }
 
-// keepAlive bounds a client that dies without a FIN; without it the splice goroutine blocks forever.
 func keepAlive(client net.Conn) {
 	tcp, ok := client.(*net.TCPConn)
 	if !ok {

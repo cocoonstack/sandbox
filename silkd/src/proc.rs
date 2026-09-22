@@ -26,6 +26,12 @@ pub enum Chunk {
     Exit(i32),
 }
 
+#[derive(Clone, Copy)]
+enum State {
+    Running,
+    Exited(i32),
+}
+
 /// Registry of running and recently-exited processes.
 #[derive(Clone, Default)]
 pub struct Table {
@@ -240,12 +246,6 @@ impl Ring {
             })
             .collect()
     }
-}
-
-#[derive(Clone, Copy)]
-enum State {
-    Running,
-    Exited(i32),
 }
 
 /// Stdout/Stderr ride the reused-buffer bulk path; serde's per-chunk allocations dominate replay otherwise.

@@ -29,8 +29,7 @@ import (
 
 const (
 	// envdPort is envd's fixed listener; the SDK derives its host from it.
-	envdPort = 49983
-	// readyWait bounds the wait for envd to answer after the claim.
+	envdPort  = 49983
 	readyWait = 60 * time.Second
 	// claimTTL outlasts the run so a lease expiry cannot look like a relay fault.
 	claimTTL = 30 * time.Minute
@@ -105,8 +104,7 @@ func run(addr, token, template, wantVersion string, hold time.Duration) error {
 	return nil
 }
 
-// reportGuest asks the guest what it is running, over silkd — the native data
-// plane, which must keep working alongside envd.
+// reportGuest asks the guest what it runs over silkd, the native data plane that must keep working beside envd.
 func reportGuest(ctx context.Context, sb *sandbox.Sandbox, wantVersion string) error {
 	version, err := sb.Exec(ctx, "/usr/local/bin/envd", "-version")
 	if err != nil {
@@ -221,8 +219,7 @@ func stepConnectH1(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbo
 	return nil
 }
 
-// stepProcessStart spawns through envd's process service, the half the image runs with
-// -no-cgroups, and reads its Connect server stream back over HTTP/1.1.
+// stepProcessStart spawns through envd's process service, which the image runs with -no-cgroups, and reads its Connect server stream back.
 func stepProcessStart(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
 	headers := http.Header{
 		contentType:                []string{"application/connect+json"},
