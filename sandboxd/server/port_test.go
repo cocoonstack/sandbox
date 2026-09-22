@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 	"testing/iotest"
+	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
@@ -170,6 +171,34 @@ func TestSpliceTearsDownWhenTheClientDies(t *testing.T) {
 	<-ended
 }
 
+func TestSpliceTearsDownWhenTheGuestFails(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := New("", nil, "node:7777", &fakeManager{}, &fakeDialer{}, nil, nil, nil, nil)
+		t.Cleanup(srv.CloseRelays)
+		client, clientPeer := net.Pipe()
+		t.Cleanup(func() { _ = client.Close(); _ = clientPeer.Close() })
+		guest, guestPeer := net.Pipe()
+		t.Cleanup(func() { _ = guest.Close(); _ = guestPeer.Close() })
+		go func() { _, _ = io.Copy(io.Discard, clientPeer) }()
+
+		ended := make(chan struct{})
+		go func() {
+			defer close(ended)
+			srv.splice(client, client, &failedGuestConn{Conn: guest}, switchingProtocolsTCP, tunnelEnds)
+		}()
+
+		synctest.Wait()
+		select {
+		case <-ended:
+		default:
+			t.Fatal("a guest failure left the relay waiting for the client's write direction")
+		}
+		if _, err := guestPeer.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+			t.Errorf("guest read: %v, want EOF", err)
+		}
+	})
+}
+
 func TestPortRelayRefusedAfterCloseRelays(t *testing.T) {
 	ts, srv := newPortServer(t, func(c net.Conn) { _, _ = io.Copy(io.Discard, c) })
 	srv.CloseRelays()
@@ -228,4 +257,12 @@ func getPort(t *testing.T, ts *httptest.Server, path, token string, upgrade bool
 		t.Fatalf("do: %v", err)
 	}
 	return resp
+}
+
+type failedGuestConn struct {
+	net.Conn
+}
+
+func (c *failedGuestConn) Read([]byte) (int, error) {
+	return 0, errors.New("guest connection reset")
 }

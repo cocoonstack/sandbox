@@ -126,8 +126,12 @@ func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hell
 		ends.guest(guest)
 	}()
 
-	_, _ = io.Copy(client, guest)
-	ends.client(client)
+	if _, err := io.Copy(client, guest); err != nil {
+		_ = client.Close()
+		_ = guest.Close()
+	} else {
+		ends.client(client)
+	}
 	<-done
 }
 

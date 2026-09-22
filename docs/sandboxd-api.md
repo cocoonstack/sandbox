@@ -572,13 +572,10 @@ stream, so HTTP/1.1, HTTP/2 and any other protocol pass through unchanged.
 This is how an edge proxy reaches a guest listener on a `net=none` sandbox,
 which has no NIC.
 
-Half-close is **one-way**: a client shutdown reaches the guest socket as a
-shutdown, but a guest shutdown ends the whole relay, because silkd's
-`port_forward` stops feeding the socket once the guest side reports EOF. The
-connection is therefore closed toward the client rather than half-closed — a
-write direction that silently discarded what it accepted would be worse than
-an error. Request/response protocols do not notice; a peer that half-closes
-early and keeps reading does.
+Half-close works in **both directions**: a client write shutdown reaches the
+guest socket, and a guest write shutdown reaches the client without ending
+the client's writes. Each direction stays open until its own EOF. A relay
+copy error closes both connections and releases the sandbox hold.
 
 An open relay holds the sandbox's idle clock exactly like the silkd relay, and
 a hibernated sandbox wakes transparently — which is why the upgrade header is
