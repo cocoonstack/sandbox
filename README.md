@@ -33,11 +33,11 @@ performance) — source in
   connection;
   baked into the base image
 - `sandboxd/` — per-node control plane (Go): warm pools refilled from golden
-  snapshot exports (online-retunable), claim/release/hibernate/fork/promote/
-  checkpoint HTTP API, operator-catalog dataset volumes (read-only or
-  writable), signed preview URLs, the HTTP-upgrade byte relay to silkd,
-  usage + audit journals, /metrics, reap + restart reconcile, memberlist
-  mesh with redirect placement
+  snapshot exports (online-retunable), claim/release/renew/hibernate/fork/
+  promote/checkpoint HTTP API, operator-catalog dataset volumes (read-only or
+  writable), signed preview URLs, the HTTP-upgrade byte relays to silkd and
+  to any guest port, usage + audit journals, /metrics, reap + restart
+  reconcile, memberlist mesh with redirect placement
 - `sdk/go/` — Go SDK: `Connect/New/Lookup`, `Exec/Run`, files,
   `Push/Pull`, sessions, `Find/Replace`, `Watch`, git verbs, `OpenPty`,
   `Fork/Hibernate/Promote/Checkpoint`, `DialPort/ProxyPort/PreviewURL`,
@@ -59,6 +59,7 @@ performance) — source in
   `smoke`, `meshsmoke`, `crossnode`, `coldproof`, `egresssmoke`,
   `interceptsmoke`, `sockssmoke`, `volumesmoke`, `lifecycle` (idle→hibernate→archive),
   `androidsmoke`, `browsersmoke`, `desktopsmoke`, `ringsmoke` (output ring cap, exec as a user),
+  `portsmoke` (the guest-port relay), `envdsmoke` (the e2b flavor's envd through it),
   and the `pullbench`/`pushbench`/`rpcbench`/`qaab` perf drivers
 - `boot/kernel/` — kernel version pin (`VERSION` + matching tarball `SHA256`,
   bump both together) + config fragment (amd64: over `x86_64_defconfig` +
