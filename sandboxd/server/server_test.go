@@ -156,6 +156,25 @@ func TestRenewGrantsAndReportsTheDeadline(t *testing.T) {
 	}
 }
 
+func TestRenewWithoutABodyTakesTheNodeDefault(t *testing.T) {
+	var gotTTL time.Duration
+	called := false
+	mgr := &fakeManager{renew: func(_, _ string, ttl time.Duration) (time.Time, error) {
+		gotTTL, called = ttl, true
+		return time.Now().Add(time.Minute), nil
+	}}
+	ts := newTestServer(t, "", mgr, nil)
+
+	resp := postJSON(t, ts.URL+"/v1/sandboxes/sb_1/renew", "tok", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200: an absent body is the documented way to ask for the default", resp.StatusCode)
+	}
+	if !called || gotTTL != 0 {
+		t.Errorf("manager saw ttl %v (called=%v), want the zero that means the node default", gotTTL, called)
+	}
+}
+
 func TestRenewRejectsWrongToken(t *testing.T) {
 	mgr := &fakeManager{renew: func(string, string, time.Duration) (time.Time, error) {
 		return time.Time{}, pool.ErrUnknownSandbox

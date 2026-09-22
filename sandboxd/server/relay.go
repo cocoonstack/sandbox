@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -35,14 +34,8 @@ func (s *Server) CloseRelays() {
 }
 
 func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
-	token, ok := sandboxToken(w, r)
+	token, ok := upgradeGate(w, r, upgradeProto)
 	if !ok {
-		return
-	}
-	// waking consumes the hibernate snapshot, so a non-upgrade GET must not trigger it
-	if !strings.EqualFold(r.Header.Get("Upgrade"), upgradeProto) {
-		w.Header().Set("Upgrade", upgradeProto)
-		writeErr(w, http.StatusUpgradeRequired, "upgrade to "+upgradeProto+" required")
 		return
 	}
 	guest, done, ok := s.wakeGuest(r.Context(), w, r.PathValue("id"), token)
@@ -50,14 +43,11 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer done()
-	client, bufrw, err := http.NewResponseController(w).Hijack()
-	if err != nil {
-		_ = guest.Close()
-		log.WithFunc("server.handleAgent").Error(r.Context(), err, "hijack")
-		writeErr(w, http.StatusInternalServerError, "connection cannot be hijacked")
+	client, clientBuf, ok := hijackClient(r.Context(), w, guest)
+	if !ok {
 		return
 	}
-	s.relay(r.Context(), r.PathValue("id"), client, bufrw.Reader, guest)
+	s.relay(r.Context(), r.PathValue("id"), client, clientBuf, guest)
 }
 
 // wakeGuest dials the sandbox's silkd, waking a hibernated VM first; on failure it has already answered the request.
@@ -81,8 +71,21 @@ func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id, token
 	return guest, done, true
 }
 
-// relay writes the 101 and splices the conns until silkd closes or the client vanishes.
 func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBuf *bufio.Reader, guest net.Conn) {
+	clientR := clientReader(client, clientBuf)
+	if s.mgr.AuditEnabled() {
+		clientR = &auditTee{r: clientR, record: func(line []byte) {
+			s.mgr.Audit(ctx, id, line)
+		}}
+	}
+	// silkd delimits input with terminal frames, so a TCP half-close carries no meaning
+	s.splice(client, clientR, guest, switchingProtocols, func(guest net.Conn) { _ = guest.Close() }, drainClient)
+}
+
+// splice writes hello and copies both directions until either side ends; endWrite is what a
+// finished client direction means to the guest, endClient what a finished guest direction
+// means to the client.
+func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hello []byte, endWrite, endClient func(net.Conn)) {
 	release, ok := s.trackRelay(client, guest)
 	if !ok {
 		return
@@ -91,29 +94,20 @@ func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBu
 
 	// the http server may have armed a header-read deadline on this conn
 	_ = client.SetDeadline(time.Time{})
-	if _, err := client.Write(switchingProtocols); err != nil {
+	if _, err := client.Write(hello); err != nil {
 		return
-	}
-
-	clientR := clientReader(client, clientBuf)
-	if s.mgr.AuditEnabled() {
-		clientR = &auditTee{r: clientR, record: func(line []byte) {
-			s.mgr.Audit(ctx, id, line)
-		}}
 	}
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = io.Copy(guest, clientR)
-		// silkd delimits input with terminal frames, so a TCP half-close carries no meaning
-		_ = guest.Close()
+		// the wrappers hide ReadFrom/WriteTo so the copy keeps silkd's frame size instead of io.Copy's 32 KiB
+		_, _ = io.CopyBuffer(struct{ io.Writer }{guest}, struct{ io.Reader }{clientR}, make([]byte, wire.BulkChunk))
+		endWrite(guest)
 	}()
 
 	_, _ = io.Copy(client, guest)
-	utils.CloseWrite(client)
-	// the read deadline unblocks the splice goroutine if the client never closes
-	_ = client.SetReadDeadline(time.Now().Add(drainGrace))
+	endClient(client)
 	<-done
 }
 
@@ -139,6 +133,13 @@ func (s *Server) trackRelay(client, guest net.Conn) (func(), bool) {
 	}, true
 }
 
+// drainClient half-closes and waits: the silkd relay's client is one long-lived
+// connection, so the read deadline is what unblocks the splice goroutine.
+func drainClient(client net.Conn) {
+	utils.CloseWrite(client)
+	_ = client.SetReadDeadline(time.Now().Add(drainGrace))
+}
+
 // clientReader replays what the http server already buffered; reading the bufio past Buffered() would race the direct conn reads.
 func clientReader(client net.Conn, clientBuf *bufio.Reader) io.Reader {
 	if n := clientBuf.Buffered(); n > 0 {
@@ -153,11 +154,6 @@ type auditTee struct {
 	record func([]byte)
 	buf    []byte
 	skip   bool
-}
-
-// WriteTo keeps an audited upload at bulk-sized reads; io.Copy's own buffer would split each frame into eight.
-func (t *auditTee) WriteTo(w io.Writer) (int64, error) {
-	return io.CopyBuffer(struct{ io.Writer }{w}, struct{ io.Reader }{t}, make([]byte, wire.BulkChunk))
 }
 
 func (t *auditTee) Read(p []byte) (int, error) {

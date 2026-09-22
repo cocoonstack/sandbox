@@ -1,13 +1,9 @@
 package server
 
 import (
-	"bufio"
-	"io"
 	"net"
 	"net/http"
 	"strconv"
-	"strings"
-	"time"
 
 	"github.com/projecteru2/core/log"
 
@@ -19,14 +15,8 @@ var switchingProtocolsTCP = []byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade:
 
 // handlePort splices the caller onto 127.0.0.1:port inside the guest, so an edge proxy reaches a guest listener without a NIC.
 func (s *Server) handlePort(w http.ResponseWriter, r *http.Request) {
-	token, ok := sandboxToken(w, r)
+	token, ok := upgradeGate(w, r, upgradeProtoTCP)
 	if !ok {
-		return
-	}
-	// waking consumes the hibernate snapshot, so a non-upgrade GET must not trigger it
-	if !strings.EqualFold(r.Header.Get("Upgrade"), upgradeProtoTCP) {
-		w.Header().Set("Upgrade", upgradeProtoTCP)
-		writeErr(w, http.StatusUpgradeRequired, "upgrade to "+upgradeProtoTCP+" required")
 		return
 	}
 	port, err := strconv.ParseUint(r.PathValue("port"), 10, 16)
@@ -44,40 +34,12 @@ func (s *Server) handlePort(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "guest port unreachable")
 		return
 	}
-	client, bufrw, err := http.NewResponseController(w).Hijack()
-	if err != nil {
-		_ = guest.Close()
-		log.WithFunc("server.handlePort").Error(r.Context(), err, "hijack")
-		writeErr(w, http.StatusInternalServerError, "connection cannot be hijacked")
-		return
-	}
-	s.relayPort(client, bufrw.Reader, guest)
-}
-
-// relayPort splices a hijacked client onto a guest port, carrying each direction's half-close through.
-func (s *Server) relayPort(client net.Conn, clientBuf *bufio.Reader, guest net.Conn) {
-	release, ok := s.trackRelay(client, guest)
+	client, clientBuf, ok := hijackClient(r.Context(), w, guest)
 	if !ok {
 		return
 	}
-	defer release()
-
-	// the http server may have armed a header-read deadline on this conn
-	_ = client.SetDeadline(time.Time{})
-	if _, err := client.Write(switchingProtocolsTCP); err != nil {
-		return
-	}
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_, _ = io.Copy(guest, clientReader(client, clientBuf))
-		utils.CloseWrite(guest)
-	}()
-
-	_, _ = io.Copy(client, guest)
-	utils.CloseWrite(client)
-	// the read deadline unblocks the splice goroutine if the client never closes
-	_ = client.SetReadDeadline(time.Now().Add(drainGrace))
-	<-done
+	// silkd stops feeding the guest socket once the guest reports EOF, so half-closing
+	// toward the client would advertise a write direction that discards what it accepts
+	s.splice(client, clientReader(client, clientBuf), guest, switchingProtocolsTCP,
+		utils.CloseWrite, func(client net.Conn) { _ = client.Close() })
 }

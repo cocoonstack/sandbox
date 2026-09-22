@@ -405,7 +405,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	req, ok := decodeBody[types.RenewRequest](w, r)
+	req, ok := decodeOptionalBody[types.RenewRequest](w, r)
 	if !ok {
 		return
 	}
