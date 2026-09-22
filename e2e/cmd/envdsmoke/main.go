@@ -10,17 +10,14 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"maps"
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -67,14 +64,14 @@ func run(addr, token, template, wantVersion string, hold time.Duration) error {
 	if err := reportGuest(ctx, sb, wantVersion); err != nil {
 		return err
 	}
-	rt := &relay{owner: sb.Owner(), id: sb.ID, token: sb.Token()}
+	rt := &harness.PortRelay{Owner: sb.Owner(), ID: sb.ID, Token: sb.Token()}
 	if err := waitReady(ctx, rt); err != nil {
 		return err
 	}
 
 	for _, step := range []struct {
 		name string
-		run  func(context.Context, *relay) error
+		run  func(context.Context, *harness.PortRelay) error
 	}{
 		{"GET /health", stepHealth},
 		{"GET /files", stepDownload},
@@ -118,11 +115,11 @@ func reportGuest(ctx context.Context, sb *sandbox.Sandbox, wantVersion string) e
 	return nil
 }
 
-func waitReady(ctx context.Context, rt *relay) error {
+func waitReady(ctx context.Context, rt *harness.PortRelay) error {
 	deadline := time.Now().Add(readyWait)
 	var last error
 	for time.Now().Before(deadline) {
-		resp, err := rt.do(ctx, http.MethodGet, "/health", nil, nil)
+		resp, err := rt.Do(ctx, envdPort, http.MethodGet, "/health", nil, nil)
 		if err == nil {
 			_ = resp.Body.Close()
 			return nil
@@ -133,8 +130,8 @@ func waitReady(ctx context.Context, rt *relay) error {
 	return fmt.Errorf("envd never answered /health: %w", last)
 }
 
-func stepHealth(ctx context.Context, rt *relay) error {
-	resp, err := rt.do(ctx, http.MethodGet, "/health", nil, nil)
+func stepHealth(ctx context.Context, rt *harness.PortRelay) error {
+	resp, err := rt.Do(ctx, envdPort, http.MethodGet, "/health", nil, nil)
 	if err != nil {
 		return err
 	}
@@ -147,8 +144,8 @@ func stepHealth(ctx context.Context, rt *relay) error {
 
 // stepDownload reads a file through envd's HTTP surface, the path the SDK's
 // files.read takes.
-func stepDownload(ctx context.Context, rt *relay) error {
-	resp, err := rt.do(ctx, http.MethodGet, "/files?path=/etc/envd-version&username=root", nil, nil)
+func stepDownload(ctx context.Context, rt *harness.PortRelay) error {
+	resp, err := rt.Do(ctx, envdPort, http.MethodGet, "/files?path=/etc/envd-version&username=root", nil, nil)
 	if err != nil {
 		return err
 	}
@@ -165,12 +162,12 @@ func stepDownload(ctx context.Context, rt *relay) error {
 
 // stepUpload writes a file through envd and reads it back through silkd's own
 // view, so the two daemons are proven to share one filesystem.
-func stepUpload(ctx context.Context, rt *relay) error {
+func stepUpload(ctx context.Context, rt *harness.PortRelay) error {
 	const boundary = "envdsmoke"
 	body := fmt.Sprintf("--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"probe.txt\"\r\n"+
 		"Content-Type: text/plain\r\n\r\nenvd-wrote-this\r\n--%s--\r\n", boundary, boundary)
 	headers := http.Header{"Content-Type": []string{"multipart/form-data; boundary=" + boundary}}
-	resp, err := rt.do(ctx, http.MethodPost, "/files?path=/tmp/probe.txt&username=root", headers, strings.NewReader(body))
+	resp, err := rt.Do(ctx, envdPort, http.MethodPost, "/files?path=/tmp/probe.txt&username=root", headers, strings.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -184,14 +181,14 @@ func stepUpload(ctx context.Context, rt *relay) error {
 
 // stepConnectH1 drives one ConnectRPC unary call the way connect-web does over
 // HTTP/1.1: the SDK's filesystem and process services are all Connect.
-func stepConnectH1(ctx context.Context, rt *relay) error {
+func stepConnectH1(ctx context.Context, rt *harness.PortRelay) error {
 	headers := http.Header{
 		"Content-Type":             []string{"application/json"},
 		"Connect-Protocol-Version": []string{"1"},
 		"X-User":                   []string{"root"},
 	}
 	payload := `{"path":"/etc/envd-version"}`
-	resp, err := rt.do(ctx, http.MethodPost, "/filesystem.Filesystem/Stat", headers, strings.NewReader(payload))
+	resp, err := rt.Do(ctx, envdPort, http.MethodPost, "/filesystem.Filesystem/Stat", headers, strings.NewReader(payload))
 	if err != nil {
 		return err
 	}
@@ -214,12 +211,12 @@ func stepConnectH1(ctx context.Context, rt *relay) error {
 // no h2c handler, so an edge that forwards HTTP/2 upstream would break every
 // request; this fails the moment that stops being true, which is when the
 // proxy's upstream should be revisited.
-func stepProtocol(ctx context.Context, rt *relay) error {
+func stepProtocol(ctx context.Context, rt *harness.PortRelay) error {
 	var protocols http.Protocols
 	protocols.SetUnencryptedHTTP2(true)
 	client := &http.Client{Transport: &http.Transport{
 		Protocols:   &protocols,
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return rt.dial(ctx) },
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return rt.Dial(ctx, envdPort) },
 	}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://guest/health", nil)
 	if err != nil {
@@ -231,81 +228,4 @@ func stepProtocol(ctx context.Context, rt *relay) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	return fmt.Errorf("envd answered h2c with %s: the proxy may now forward HTTP/2 upstream", resp.Status)
-}
-
-// relay drives the node's guest-port endpoint the way an edge proxy does.
-type relay struct {
-	owner string
-	id    string
-	token string
-}
-
-// do sends one request over a fresh relay connection.
-func (r *relay) do(ctx context.Context, method, path string, headers http.Header, body io.Reader) (*http.Response, error) {
-	conn, err := r.dial(ctx)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, method, "http://guest"+path, body)
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	maps.Copy(req.Header, headers)
-	req.Close = true
-	if writeErr := req.Write(conn); writeErr != nil {
-		_ = conn.Close()
-		return nil, writeErr
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	resp.Body = &connBody{ReadCloser: resp.Body, conn: conn}
-	return resp, nil
-}
-
-// dial upgrades to the raw relay and returns the connection.
-func (r *relay) dial(ctx context.Context) (net.Conn, error) {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", r.owner)
-	if err != nil {
-		return nil, err
-	}
-	url := "http://" + r.owner + "/v1/sandboxes/" + r.id + "/ports/" + strconv.Itoa(envdPort)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+r.token)
-	req.Header.Set("Upgrade", "tcp")
-	req.Header.Set("Connection", "Upgrade")
-	if writeErr := req.Write(conn); writeErr != nil {
-		_ = conn.Close()
-		return nil, writeErr
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		_ = conn.Close()
-		return nil, fmt.Errorf("upgrade: %s", resp.Status)
-	}
-	return conn, nil
-}
-
-// connBody closes the relay connection with the response body.
-type connBody struct {
-	io.ReadCloser
-	conn net.Conn
-}
-
-func (b *connBody) Close() error {
-	_ = b.ReadCloser.Close()
-	return b.conn.Close()
 }

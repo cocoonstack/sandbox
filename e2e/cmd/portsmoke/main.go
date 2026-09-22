@@ -14,7 +14,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -74,11 +73,11 @@ func run(addr, token, template, listener string, hold time.Duration) error {
 		return err
 	}
 	fmt.Printf("  listener up in %.1fs\n", time.Since(start).Seconds())
-	rt := &relay{owner: sb.Owner(), id: sb.ID, token: sb.Token()}
+	rt := &harness.PortRelay{Owner: sb.Owner(), ID: sb.ID, Token: sb.Token()}
 
 	for _, step := range []struct {
 		name string
-		run  func(context.Context, *relay, *sandbox.Sandbox) error
+		run  func(context.Context, *harness.PortRelay, *sandbox.Sandbox) error
 	}{
 		{"http round trip", stepHTTP},
 		{"http2 round trip", stepHTTP2},
@@ -134,8 +133,8 @@ func startGuestListener(ctx context.Context, sb *sandbox.Sandbox, listener strin
 	return fmt.Errorf("listener never bound 127.0.0.1:%d", guestPort)
 }
 
-func stepHTTP(ctx context.Context, rt *relay, _ *sandbox.Sandbox) error {
-	body, err := rt.get(ctx, guestPort, "/echo?a=1")
+func stepHTTP(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
+	body, err := relayGet(ctx, rt, guestPort, "/echo?a=1")
 	if err != nil {
 		return err
 	}
@@ -144,12 +143,12 @@ func stepHTTP(ctx context.Context, rt *relay, _ *sandbox.Sandbox) error {
 
 // stepHTTP2 proves the relay is protocol-blind: ConnectRPC streaming needs
 // HTTP/2, and nothing on this path may reframe it.
-func stepHTTP2(ctx context.Context, rt *relay, _ *sandbox.Sandbox) error {
+func stepHTTP2(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
 	var protocols http.Protocols
 	protocols.SetUnencryptedHTTP2(true)
 	client := &http.Client{Transport: &http.Transport{
 		Protocols:   &protocols,
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return rt.dial(ctx, guestPort) },
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return rt.Dial(ctx, guestPort) },
 	}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://guest/echo", strings.NewReader("{}"))
 	if err != nil {
@@ -179,8 +178,8 @@ func wantReport(body string, want ...string) error {
 
 // stepHalfClose proves a client shutdown reaches the guest as data_end without
 // tearing the read direction down: the answer must still arrive afterwards.
-func stepHalfClose(ctx context.Context, rt *relay, _ *sandbox.Sandbox) error {
-	conn, err := rt.dial(ctx, guestPort)
+func stepHalfClose(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
+	conn, err := rt.Dial(ctx, guestPort)
 	if err != nil {
 		return err
 	}
@@ -202,92 +201,47 @@ func stepHalfClose(ctx context.Context, rt *relay, _ *sandbox.Sandbox) error {
 	return wantReport(string(out), "200 OK", "path=/half")
 }
 
-func stepWrongToken(ctx context.Context, rt *relay, _ *sandbox.Sandbox) error {
-	return rt.wantStatus(ctx, rt.url(guestPort), "wrong-token", true, http.StatusNotFound)
+func stepWrongToken(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
+	return relayWantStatus(ctx, rt, rt.URL(guestPort), "wrong-token", true, http.StatusNotFound)
 }
 
-func stepNoToken(ctx context.Context, rt *relay, _ *sandbox.Sandbox) error {
-	return rt.wantStatus(ctx, rt.url(guestPort), "", true, http.StatusUnauthorized)
+func stepNoToken(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
+	return relayWantStatus(ctx, rt, rt.URL(guestPort), "", true, http.StatusUnauthorized)
 }
 
-func stepBadPort(ctx context.Context, rt *relay, _ *sandbox.Sandbox) error {
+func stepBadPort(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
 	for _, port := range []string{"0", "65536", "+22", "http"} {
-		url := fmt.Sprintf("http://%s/v1/sandboxes/%s/ports/%s", rt.owner, rt.id, port)
-		if err := rt.wantStatus(ctx, url, rt.token, true, http.StatusBadRequest); err != nil {
+		url := fmt.Sprintf("http://%s/v1/sandboxes/%s/ports/%s", rt.Owner, rt.ID, port)
+		if err := relayWantStatus(ctx, rt, url, rt.Token, true, http.StatusBadRequest); err != nil {
 			return fmt.Errorf("port %q: %w", port, err)
 		}
 	}
 	return nil
 }
 
-func stepNoUpgrade(ctx context.Context, rt *relay, _ *sandbox.Sandbox) error {
-	return rt.wantStatus(ctx, rt.url(guestPort), rt.token, false, http.StatusUpgradeRequired)
+func stepNoUpgrade(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
+	return relayWantStatus(ctx, rt, rt.URL(guestPort), rt.Token, false, http.StatusUpgradeRequired)
 }
 
-func stepDeadPort(ctx context.Context, rt *relay, _ *sandbox.Sandbox) error {
-	return rt.wantStatus(ctx, rt.url(deadPort), rt.token, true, http.StatusBadGateway)
+func stepDeadPort(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
+	return relayWantStatus(ctx, rt, rt.URL(deadPort), rt.Token, true, http.StatusBadGateway)
 }
 
 // stepHibernate proves the relay wakes a hibernated sandbox: the listener is a
 // live process in the snapshot, so it must answer again after the restore.
-func stepHibernate(ctx context.Context, rt *relay, sb *sandbox.Sandbox) error {
+func stepHibernate(ctx context.Context, rt *harness.PortRelay, sb *sandbox.Sandbox) error {
 	if err := sb.Hibernate(ctx); err != nil {
 		return fmt.Errorf("hibernate: %w", err)
 	}
-	body, err := rt.get(ctx, guestPort, "/after-wake")
+	body, err := relayGet(ctx, rt, guestPort, "/after-wake")
 	if err != nil {
 		return err
 	}
 	return wantReport(body, "path=/after-wake")
 }
 
-// relay drives the node's guest-port endpoint the way an edge proxy does.
-type relay struct {
-	owner string
-	id    string
-	token string
-}
-
-func (r *relay) url(port uint16) string {
-	return "http://" + r.owner + "/v1/sandboxes/" + r.id + "/ports/" + strconv.FormatUint(uint64(port), 10)
-}
-
-// dial upgrades to the raw relay and returns the connection.
-func (r *relay) dial(ctx context.Context, port uint16) (net.Conn, error) {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", r.owner)
-	if err != nil {
-		return nil, err
-	}
-	req, err := r.request(ctx, r.url(port), r.token, true)
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	if writeErr := req.Write(conn); writeErr != nil {
-		_ = conn.Close()
-		return nil, writeErr
-	}
-	br := bufio.NewReader(conn)
-	resp, err := http.ReadResponse(br, req)
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		_ = conn.Close()
-		return nil, fmt.Errorf("upgrade: %s", resp.Status)
-	}
-	if got := resp.Header.Get("Upgrade"); got != "tcp" {
-		_ = conn.Close()
-		return nil, fmt.Errorf("upgrade header %q, want tcp", got)
-	}
-	return conn, nil
-}
-
-func (r *relay) get(ctx context.Context, port uint16, path string) (string, error) {
-	conn, err := r.dial(ctx, port)
+func relayGet(ctx context.Context, r *harness.PortRelay, port uint16, path string) (string, error) {
+	conn, err := r.Dial(ctx, port)
 	if err != nil {
 		return "", err
 	}
@@ -309,8 +263,8 @@ func (r *relay) get(ctx context.Context, port uint16, path string) (string, erro
 
 // wantStatus asserts a refusal: these must be answered as HTTP, never by
 // silently opening a relay into the guest.
-func (r *relay) wantStatus(ctx context.Context, url, token string, upgrade bool, want int) error {
-	req, err := r.request(ctx, url, token, upgrade)
+func relayWantStatus(ctx context.Context, r *harness.PortRelay, url, token string, upgrade bool, want int) error {
+	req, err := r.Request(ctx, url, token, upgrade)
 	if err != nil {
 		return err
 	}
@@ -324,19 +278,4 @@ func (r *relay) wantStatus(ctx context.Context, url, token string, upgrade bool,
 		return fmt.Errorf("status %d, want %d", resp.StatusCode, want)
 	}
 	return nil
-}
-
-func (r *relay) request(ctx context.Context, url, token string, upgrade bool) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	if upgrade {
-		req.Header.Set("Upgrade", "tcp")
-		req.Header.Set("Connection", "Upgrade")
-	}
-	return req, nil
 }
