@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	// guestPort stands in for envd's 49983: the relay is port-agnostic, and a
-	// high port proves nothing is special-cased about the SDK's default.
+	// guestPort is arbitrary: the relay is port-agnostic, and a high one proves
+	// nothing is special-cased.
 	guestPort = 49983
 	// halfClosePort greets and shuts its write side, then keeps reading.
 	halfClosePort = 49984
@@ -100,7 +100,7 @@ func run(addr, token, template, listener string, hold time.Duration) error {
 	}
 	if hold > 0 {
 		// the guest listener is live now; a second harness (the operator's
-		// envd-proxy smoke) drives this same sandbox from outside.
+		// harness) drives this same sandbox from outside.
 		fmt.Printf("SANDBOX %s %s %s %d\n", sb.ID, sb.Token(), sb.Owner(), guestPort)
 		select {
 		case <-time.After(hold):
@@ -112,7 +112,7 @@ func run(addr, token, template, listener string, hold time.Duration) error {
 
 // startGuestListener uploads guestserver and runs it on the guest's loopback.
 // The stock image has no python, no netcat and no HTTP server of any kind, so
-// the stand-in for envd is shipped in rather than improvised.
+// the listener is shipped in rather than improvised.
 func startGuestListener(ctx context.Context, sb *sandbox.Sandbox, listener string) error {
 	bin, err := os.ReadFile(listener) //nolint:gosec // the path is an operator-supplied flag on a test harness
 	if err != nil {

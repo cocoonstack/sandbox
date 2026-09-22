@@ -1,6 +1,6 @@
 // guestserver is the in-guest listener the port-relay e2e drives: a loopback
 // HTTP server that reports the protocol it was reached over. It stands in for
-// e2b's envd during hardware tests — the relay carries bytes, so proving
+// a guest daemon during hardware tests — the relay carries bytes, so proving
 // HTTP/1.1 and h2c both survive it needs a server that speaks both.
 //
 // It is uploaded into a claimed sandbox by portsmoke; nothing in the stock
