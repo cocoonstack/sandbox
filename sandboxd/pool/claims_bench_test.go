@@ -13,7 +13,7 @@ import (
 func BenchmarkStoreSaveScaling(b *testing.B) {
 	for _, n := range []int{10, 100, 1000} {
 		b.Run(fmt.Sprintf("claims=%d", n), func(b *testing.B) {
-			st := newClaimStore(b.TempDir())
+			st := newClaimStore(b.TempDir(), false)
 			claims := benchClaims(n)
 			for b.Loop() {
 				if err := st.save(claims); err != nil {
@@ -49,7 +49,7 @@ func benchClaims(n int) map[string]*types.Sandbox {
 }
 
 func benchPersistContention(b *testing.B, claims map[string]*types.Sandbox, arm string) {
-	s := newClaimStore(b.TempDir())
+	s := newClaimStore(b.TempDir(), false)
 	s.reset(claims)
 	one := claims[fmt.Sprintf("sb_%016x", 0)]
 	var mu sync.Mutex

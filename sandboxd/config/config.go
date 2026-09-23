@@ -182,6 +182,7 @@ type Config struct {
 	RestoreMode types.RestoreMode `json:"restore_mode,omitempty"`
 	NoDirectIO  bool              `json:"no_direct_io,omitzero"`
 	NoBalloon   bool              `json:"no_balloon,omitzero"`
+	SyncClaims  bool              `json:"sync_claims,omitzero"`
 
 	APIToken string              `json:"api_token,omitempty"` //nolint:gosec // config field, not a hardcoded credential
 	Tenants  []TenantSpec        `json:"tenants,omitempty"`

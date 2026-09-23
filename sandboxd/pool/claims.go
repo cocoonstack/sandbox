@@ -45,6 +45,7 @@ type claimDTO struct {
 // claimStore persists claimed sandboxes across daemon restarts; warm VMs are not persisted.
 type claimStore struct {
 	path string
+	sync bool
 
 	writeMu sync.Mutex
 
@@ -54,8 +55,8 @@ type claimStore struct {
 	written uint64
 }
 
-func newClaimStore(dataDir string) *claimStore {
-	return &claimStore{path: filepath.Join(dataDir, "claims.json"), dtos: map[string]claimDTO{}}
+func newClaimStore(dataDir string, sync bool) *claimStore {
+	return &claimStore{path: filepath.Join(dataDir, "claims.json"), sync: sync, dtos: map[string]claimDTO{}}
 }
 
 func (s *claimStore) load() (map[string]*types.Sandbox, error) {
@@ -120,7 +121,7 @@ func (s *claimStore) reset(claims map[string]*types.Sandbox) claimSnapshot {
 	return claimSnapshot{seq: s.seq}
 }
 
-// commit durably replaces claims.json; a rename without fsync can leave an empty file after a power loss.
+// commit atomically replaces claims.json; fsync is opt-in (sync_claims) so the claim path stays fast by default.
 func (s *claimStore) commit(snap claimSnapshot) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -135,16 +136,34 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 	if err != nil {
 		return fmt.Errorf("encode claims: %w", err)
 	}
-	f, err := os.OpenFile(s.path+".tmp", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // our own data-dir path
+	if err := s.replace(raw); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.written = seq
+	s.mu.Unlock()
+	return nil
+}
+
+// replace swaps claims.json for raw through the fixed temp name, durably when sync is set.
+func (s *claimStore) replace(raw []byte) error {
+	tmp := s.path + ".tmp"
+	if !s.sync {
+		if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+			return fmt.Errorf("write claims: %w", err)
+		}
+		if err := os.Rename(tmp, s.path); err != nil {
+			return fmt.Errorf("commit claims: %w", err)
+		}
+		return nil
+	}
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // our own data-dir path
 	if err != nil {
 		return fmt.Errorf("write claims: %w", err)
 	}
 	if err := utils.ReplaceFileSync(f, s.path, raw); err != nil {
 		return fmt.Errorf("commit claims: %w", err)
 	}
-	s.mu.Lock()
-	s.written = seq
-	s.mu.Unlock()
 	return nil
 }
 
