@@ -176,7 +176,7 @@ func (Exec) Op() string { return "exec" }
 // Info asks for the daemon's identity and counters — the readiness probe.
 type Info struct{}
 
-func (Info) Op() string { return "info" } //nolint:goconst // wire tag shared with the response type by design
+func (Info) Op() string { return "info" }
 
 // Ps lists tracked processes.
 type Ps struct{}
@@ -453,7 +453,7 @@ type Data struct {
 	Data B64 `json:"data"`
 }
 
-func (Data) Op() string { return "data" } //nolint:goconst // wire tag shared with the response type by design
+func (Data) Op() string { return "data" }
 
 // DataEnd terminates an upload stream.
 type DataEnd struct{}

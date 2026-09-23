@@ -294,7 +294,7 @@ func (c *Client) roundTrip(ctx context.Context, method, addr, path string, body 
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
-	return c.hc.Do(req) //nolint:gosec // dialing the caller-configured node is the SDK's purpose
+	return c.hc.Do(req)
 }
 
 // WithAPIToken sets the bearer for node-scoped calls.

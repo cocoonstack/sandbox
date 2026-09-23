@@ -184,7 +184,7 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 	case errors.Is(statErr, fs.ErrNotExist):
 		stagedExport := filepath.Join(staging, store.ExportDir)
 		// make the generation fresh before a peer can observe it without committed meta.
-		if err := os.Chtimes(stagedExport, now, now); err != nil { //nolint:gosec // our own staging dir
+		if err := os.Chtimes(stagedExport, now, now); err != nil {
 			return err
 		}
 		if err := os.Rename(stagedExport, genDir); err != nil { //nolint:gosec // G703: our own staging dir
@@ -285,14 +285,14 @@ func touchCurrentGeneration(final string, now time.Time) error {
 		return err
 	}
 	current := filepath.Join(final, store.ExportGen(meta))
-	exportErr := os.Chtimes(current, now, now) //nolint:gosec // current is a hash-derived name under our root
+	exportErr := os.Chtimes(current, now, now)
 	if errors.Is(exportErr, fs.ErrNotExist) {
 		return nil
 	}
 	if exportErr != nil {
 		return exportErr
 	}
-	digestErr := os.Chtimes(filepath.Join(final, digestName(meta)), now, now) //nolint:gosec // hash-derived path under our root
+	digestErr := os.Chtimes(filepath.Join(final, digestName(meta)), now, now)
 	if errors.Is(digestErr, fs.ErrNotExist) {
 		return nil
 	}
@@ -413,7 +413,7 @@ func collectDigestSources(root string) ([]digestSource, error) {
 }
 
 func hashChunk(source *digestSource, chunk int, buffer []byte) error {
-	f, err := os.Open(source.path) //nolint:gosec // path walked from private export staging
+	f, err := os.Open(source.path)
 	if err != nil {
 		return fmt.Errorf("open export entry %s: %w", source.digest.Path, err)
 	}

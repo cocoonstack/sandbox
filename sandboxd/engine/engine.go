@@ -470,7 +470,7 @@ func readLine(conn net.Conn, max int) (string, error) {
 		if b[0] == '\n' {
 			return sb.String(), nil
 		}
-		sb.WriteByte(b[0]) //nolint:gosec // G602 false positive on [1]byte in gosec ≤ v2.9.0
+		sb.WriteByte(b[0])
 	}
 	return "", fmt.Errorf("reply exceeds %d bytes", max)
 }

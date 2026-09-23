@@ -363,7 +363,7 @@ func reached(ln net.Listener) bool {
 	_ = rc.Control(func(fd uintptr) {
 		syscall.ForkLock.RLock()
 		defer syscall.ForkLock.RUnlock()
-		nfd, _, err := syscall.Accept(int(fd)) //nolint:gosec // a descriptor, not arithmetic
+		nfd, _, err := syscall.Accept(int(fd))
 		if err == nil {
 			_ = syscall.Close(nfd)
 			return

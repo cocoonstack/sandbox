@@ -48,7 +48,7 @@ func (g *guestPortConn) Read(p []byte) (int, error) {
 			return 0, fmt.Errorf("port frame: %w", err)
 		}
 		switch frame.Type {
-		case "data": //nolint:goconst // wire tag, kept literal by design
+		case "data":
 			g.pending = frame.Data
 		case "done", "":
 			return 0, io.EOF // the guest closed the forwarded port

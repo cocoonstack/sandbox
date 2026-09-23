@@ -24,7 +24,7 @@ type Rule struct {
 	Host      string   `json:"host"`
 	Methods   []string `json:"methods,omitempty"`
 	Ports     []uint16 `json:"ports,omitempty"`
-	Secret    string   `json:"secret,omitempty"` //nolint:gosec // reference name of a node-side secret, never a value
+	Secret    string   `json:"secret,omitempty"`
 	Intercept bool     `json:"intercept,omitzero"`
 }
 

@@ -58,7 +58,7 @@ type auditFrame struct {
 	Session  string   `json:"session,omitempty"`
 	Port     uint16   `json:"port,omitzero"`
 	Decision string   `json:"decision,omitempty"`
-	Secret   string   `json:"secret,omitempty"` //nolint:gosec // the secret's ref name, never its value
+	Secret   string   `json:"secret,omitempty"`
 }
 
 func (m *Manager) Counters() Counters {

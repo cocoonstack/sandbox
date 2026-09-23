@@ -189,7 +189,7 @@ func (s *Store) Metas(ctx context.Context) ([][]byte, error) {
 }
 
 func (s *Store) Delete(ctx context.Context, id string) error {
-	_ = os.RemoveAll(filepath.Join(s.staging, "cache", id)) //nolint:gosec // id pinned by idRe
+	_ = os.RemoveAll(filepath.Join(s.staging, "cache", id))
 	metaKey := s.key(id, store.MetaFile)
 	keys, err := s.list(ctx, s.key(id, "")+"/")
 	if err != nil {
@@ -216,7 +216,7 @@ func (s *Store) readMeta(ctx context.Context, id string) ([]byte, string, error)
 	})
 	if err != nil {
 		apiErr, ok := errors.AsType[smithy.APIError](err)
-		if ok && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound") { //nolint:goconst // AWS API error codes, compared as literals
+		if ok && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound") {
 			return nil, "", store.ErrNotFound
 		}
 		return nil, "", fmt.Errorf("record %s: %w", id, err)

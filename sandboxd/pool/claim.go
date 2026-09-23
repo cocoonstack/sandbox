@@ -360,7 +360,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	// usage lands only after the batch armed, so a rollback leaves no unterminated claim event
 	for _, sb := range sbs {
 		m.recordUsage(ctx, usageEvent{
-			Event: "claim", //nolint:goconst // event name; other occurrences are test assertions
+			Event: "claim",
 			ID:    sb.ID, VMName: sb.VMName,
 			KeyHash: sb.Key.Hash(), Tenant: sb.Tenant,
 			Volumes: types.VolumeNames(sb.Volumes), VolumesRW: types.VolumeRWNames(sb.Volumes),

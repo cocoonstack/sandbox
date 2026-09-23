@@ -650,15 +650,15 @@ func summarize(sb *types.Sandbox) SandboxSummary {
 }
 
 func loadEgressCA(cfg *config.EgressCAConfig) (*egress.CA, error) {
-	root, err := os.ReadFile(cfg.RootCert) //nolint:gosec // operator-configured ca path
+	root, err := os.ReadFile(cfg.RootCert)
 	if err != nil {
 		return nil, fmt.Errorf("read root cert: %w", err)
 	}
-	interCert, err := os.ReadFile(cfg.IntermediateCert) //nolint:gosec // operator-configured ca path
+	interCert, err := os.ReadFile(cfg.IntermediateCert)
 	if err != nil {
 		return nil, fmt.Errorf("read intermediate cert: %w", err)
 	}
-	interKey, err := os.ReadFile(cfg.IntermediateKey) //nolint:gosec // operator-configured ca path
+	interKey, err := os.ReadFile(cfg.IntermediateKey)
 	if err != nil {
 		return nil, fmt.Errorf("read intermediate key: %w", err)
 	}

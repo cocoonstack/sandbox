@@ -66,7 +66,7 @@ func (j *journal) append(v any) error {
 // rotate moves the live file to .1 and reopens; the old descriptor closes last.
 func (j *journal) rotate() error {
 	renameErr := os.Rename(j.path, j.path+".1")
-	f, err := os.OpenFile(j.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // under data_dir
+	f, err := os.OpenFile(j.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return errors.Join(renameErr, err)
 	}

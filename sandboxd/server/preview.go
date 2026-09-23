@@ -136,7 +136,7 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 			http.Error(w, "preview target unreachable", http.StatusBadGateway)
 		},
 	}
-	rp.ServeHTTP(w, r) //nolint:gosec // target derived from an HMAC-signed token, not client input
+	rp.ServeHTTP(w, r)
 }
 
 func (p *PreviewServer) forward(w http.ResponseWriter, r *http.Request, owner string) {
@@ -151,7 +151,7 @@ func (p *PreviewServer) forward(w http.ResponseWriter, r *http.Request, owner st
 			http.Error(w, "owner node unreachable", http.StatusBadGateway)
 		},
 	}
-	rp.ServeHTTP(w, r) //nolint:gosec // owner host comes from an HMAC-signed token
+	rp.ServeHTTP(w, r)
 }
 
 func (p *PreviewServer) sign(enc string) string {
