@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -22,7 +21,7 @@ func BenchmarkSignLeaf(b *testing.B) {
 
 func BenchmarkInterceptedRequest(b *testing.B) {
 	addr, roots := benchFront(b, true)
-	tc := benchSession(b, addr, roots)
+	tc := connectTLS(b, addr, "example.com:443", "example.com", roots)
 	defer func() { _ = tc.Close() }()
 	br := bufio.NewReader(tc)
 	for b.Loop() {
@@ -32,7 +31,7 @@ func BenchmarkInterceptedRequest(b *testing.B) {
 
 func BenchmarkSplicedRequest(b *testing.B) {
 	addr, roots := benchFront(b, false)
-	tc := benchSession(b, addr, roots)
+	tc := connectTLS(b, addr, "example.com:443", "example.com", roots)
 	defer func() { _ = tc.Close() }()
 	br := bufio.NewReader(tc)
 	for b.Loop() {
@@ -43,7 +42,7 @@ func BenchmarkSplicedRequest(b *testing.B) {
 func BenchmarkInterceptedHandshake(b *testing.B) {
 	addr, roots := benchFront(b, true)
 	for b.Loop() {
-		tc := benchSession(b, addr, roots)
+		tc := connectTLS(b, addr, "example.com:443", "example.com", roots)
 		_ = tc.Close()
 	}
 }
@@ -51,7 +50,7 @@ func BenchmarkInterceptedHandshake(b *testing.B) {
 func BenchmarkSplicedHandshake(b *testing.B) {
 	addr, roots := benchFront(b, false)
 	for b.Loop() {
-		tc := benchSession(b, addr, roots)
+		tc := connectTLS(b, addr, "example.com:443", "example.com", roots)
 		_ = tc.Close()
 	}
 }
@@ -75,42 +74,11 @@ func benchFront(b *testing.B, intercept bool) (proxyAddr string, roots *x509.Cer
 	}
 	p := New(Policy{Allow: []Rule{rule}}, nil, ca, fixedDial(upstream.Listener.Addr().String()), nil, nil)
 	if ca != nil {
-		p.mitmTr.TLSClientConfig.RootCAs = func() *x509.CertPool {
-			pool := x509.NewCertPool()
-			pool.AddCert(upstream.Certificate())
-			return pool
-		}()
+		p.mitmTr.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	}
 	front := httptest.NewServer(p)
 	b.Cleanup(front.Close)
 	return front.Listener.Addr().String(), roots
-}
-
-func benchSession(b *testing.B, proxyAddr string, roots *x509.CertPool) *tls.Conn {
-	b.Helper()
-	conn, err := net.Dial("tcp", proxyAddr)
-	if err != nil {
-		b.Fatalf("dial proxy: %v", err)
-	}
-	if _, err := io.WriteString(conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"); err != nil {
-		b.Fatalf("write CONNECT: %v", err)
-	}
-	buf := make([]byte, 1)
-	preamble := make([]byte, 0, 64)
-	for {
-		if _, err := io.ReadFull(conn, buf); err != nil {
-			b.Fatalf("read CONNECT reply: %v", err)
-		}
-		preamble = append(preamble, buf[0])
-		if len(preamble) >= 4 && string(preamble[len(preamble)-4:]) == "\r\n\r\n" {
-			break
-		}
-	}
-	tc := tls.Client(conn, &tls.Config{ServerName: "example.com", RootCAs: roots})
-	if err := tc.Handshake(); err != nil {
-		b.Fatalf("handshake: %v", err)
-	}
-	return tc
 }
 
 func benchRoundTrip(b *testing.B, tc *tls.Conn, br *bufio.Reader) {
