@@ -248,7 +248,7 @@ func TestArchivedClaimRefusesCaptureVerbs(t *testing.T) {
 	if _, _, err := m.Promote(t.Context(), sb.ID, cred, "tpl", ""); !errors.Is(err, ErrArchived) {
 		t.Errorf("Promote = %v, want ErrArchived", err)
 	}
-	if _, err := m.Fork(t.Context(), sb.ID, cred, 1, 0); !errors.Is(err, ErrArchived) {
+	if _, err := m.Fork(t.Context(), sb.ID, cred, 1, 0, ""); !errors.Is(err, ErrArchived) {
 		t.Errorf("Fork = %v, want ErrArchived", err)
 	}
 	if err := m.Hibernate(t.Context(), sb.ID, cred); err != nil {

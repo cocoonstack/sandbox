@@ -23,7 +23,7 @@ func TestVolumeClaimRejectsDirectCapture(t *testing.T) {
 	}{
 		{"direct hibernate", func(t *testing.T) error { return m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}) }},
 		{"fork", func(t *testing.T) error {
-			_, err := m.Fork(t.Context(), sb.ID, Cred{Token: sb.Token}, 1, time.Hour)
+			_, err := m.Fork(t.Context(), sb.ID, Cred{Token: sb.Token}, 1, time.Hour, "")
 			return err
 		}},
 		{"checkpoint", func(t *testing.T) error {
@@ -91,7 +91,7 @@ func TestReconcileRetainsVolumeCaptureGateWithoutCatalog(t *testing.T) {
 	}{
 		{"after restart hibernate", func() error { return m2.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}) }},
 		{"after restart fork", func() error {
-			_, forkErr := m2.Fork(t.Context(), sb.ID, Cred{Token: sb.Token}, 1, time.Hour)
+			_, forkErr := m2.Fork(t.Context(), sb.ID, Cred{Token: sb.Token}, 1, time.Hour, "")
 			return forkErr
 		}},
 		{"after restart checkpoint", func() error {

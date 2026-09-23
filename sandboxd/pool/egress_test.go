@@ -353,7 +353,7 @@ func TestBatchArmFailureRecordsNoUsage(t *testing.T) {
 		{VMName: "sbx-ok", Key: testKey},
 		{VMName: "sbx-eg", Key: egKey},
 	}
-	if err := m.finalizeBatch(t.Context(), sbs, time.Minute); err == nil {
+	if err := m.finalizeBatch(t.Context(), sbs, time.Minute, ""); err == nil {
 		t.Fatal("finalizeBatch must fail when a batch member cannot arm")
 	}
 	waitFor(t, m.store.synced)
@@ -551,7 +551,7 @@ func TestEgressLaneCannotForkOrCheckpoint(t *testing.T) {
 	m.mu.Lock()
 	m.claimed[sb.ID] = sb
 	m.mu.Unlock()
-	if _, err := m.Fork(t.Context(), sb.ID, Cred{Token: "tok"}, 1, time.Minute); !errors.Is(err, ErrNoEgressFork) {
+	if _, err := m.Fork(t.Context(), sb.ID, Cred{Token: "tok"}, 1, time.Minute, ""); !errors.Is(err, ErrNoEgressFork) {
 		t.Errorf("Fork on egress lane: got %v, want ErrNoEgressFork", err)
 	}
 	if _, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: "tok"}, "", ""); !errors.Is(err, ErrNoEgressFork) {

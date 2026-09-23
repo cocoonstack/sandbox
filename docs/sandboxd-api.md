@@ -264,9 +264,12 @@ Auth: the node `api_token` (Bearer) — forking creates node resources, like a
 claim. The sandbox's own token rides in the body as the ownership proof:
 
 ```json
-{"token": "…", "count": 2, "ttl_seconds": 300}
+{"token": "…", "count": 2, "ttl_seconds": 300, "claim_ref_prefix": "team-a/"}
 ```
 
+`claim_ref_prefix`, when set, records each child under `prefix + child id` as
+its `claim_ref`, so a control plane that names claims `<namespace>/<name>`
+addresses the children by name; without it children carry no `claim_ref`.
 Clones the sandbox into `count` fresh claims (1 up to the node's
 `max_fork_count`, default 16). Memory, disk, and guest
 state (sessions, processes, tmpfs) duplicate at the fork point; cocoon's

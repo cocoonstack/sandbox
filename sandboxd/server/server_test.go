@@ -2154,7 +2154,7 @@ func (f *fakeManager) Hibernate(_ context.Context, id string, cred pool.Cred) er
 	return f.hibernate(id, credToken(cred))
 }
 
-func (f *fakeManager) Fork(_ context.Context, id string, cred pool.Cred, count int, ttl time.Duration) ([]*types.Sandbox, error) {
+func (f *fakeManager) Fork(_ context.Context, id string, cred pool.Cred, count int, ttl time.Duration, _ string) ([]*types.Sandbox, error) {
 	if f.fork == nil {
 		return nil, pool.ErrUnknownSandbox
 	}
