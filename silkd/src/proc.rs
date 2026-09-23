@@ -26,12 +26,6 @@ pub enum Chunk {
     Exit(i32),
 }
 
-#[derive(Clone, Copy)]
-enum State {
-    Running,
-    Exited(i32),
-}
-
 /// Registry of running and recently-exited processes.
 #[derive(Clone, Default)]
 pub struct Table {
@@ -197,6 +191,12 @@ impl Proc {
             started_at_epoch_secs: self.started_at_epoch_secs,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum State {
+    Running,
+    Exited(i32),
 }
 
 struct Ring {
