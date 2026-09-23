@@ -494,7 +494,9 @@ archived?, from_checkpoint?, claim_ref?, volumes?: [{name, mount, mode?}]}]}` â€
 `mode` is omitted for `ro`, matching the claim echo; never sandbox tokens,
 volume host paths, or catalog access lists. `claimed_at` is the first grant
 (renew and wake move `deadline` only) and is absent for a claim recorded before
-the field existed.
+the field existed. `?claim_ref=<ref>` keeps only the claims recorded under
+exactly that reference, so a caller that named its claim reads its row without
+the rest of the index; an empty value lists everything.
 
 ## GET /v1/sandboxes/{id}
 
