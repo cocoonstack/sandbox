@@ -792,6 +792,18 @@ func TestClaimedAtIsTheFirstGrant(t *testing.T) {
 	}
 }
 
+func TestTheByIDReadCarriesTheTokenAndTheIndexDoesNot(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+
+	if got, ok := m.Sandbox(sb.ID); !ok || got.Token != sb.Token {
+		t.Errorf("Sandbox(%s) token %q, want the claim's %q", sb.ID, got.Token, sb.Token)
+	}
+	if list := m.Sandboxes("", ""); len(list) != 1 || list[0].Token != "" {
+		t.Errorf("index %+v carries a token", list)
+	}
+}
+
 func TestRenewClampsAndDefaults(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	sb := mustClaim(t, m, testKey)

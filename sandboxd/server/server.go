@@ -368,6 +368,9 @@ func (s *Server) handleSandbox(w http.ResponseWriter, r *http.Request) {
 		writePoolErr(w, pool.ErrUnknownSandbox)
 		return
 	}
+	if !s.rootRequest(r) {
+		sb.Token = ""
+	}
 	writeJSON(w, http.StatusOK, sb)
 }
 

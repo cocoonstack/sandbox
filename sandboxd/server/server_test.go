@@ -332,6 +332,41 @@ func TestSandboxesReportClaimedAt(t *testing.T) {
 	}
 }
 
+func TestSandboxByIDCarriesTheTokenOnlyForTheRootCredential(t *testing.T) {
+	mgr := &fakeManager{sandboxByID: func(string) (pool.SandboxSummary, bool) {
+		return pool.SandboxSummary{ID: "sb_1", Token: "victim"}, true
+	}}
+	for _, tt := range []struct {
+		name, apiToken, bearer, want string
+	}{
+		{"open node", "", "", ""},
+		{"root", "root", "root", "victim"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := newTestServer(t, tt.apiToken, mgr, nil)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/sandboxes/sb_1", nil)
+			if err != nil {
+				t.Fatalf("request: %v", err)
+			}
+			if tt.bearer != "" {
+				req.Header.Set("Authorization", "Bearer "+tt.bearer)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("sandbox: %v", err)
+			}
+			defer resp.Body.Close()
+			var got pool.SandboxSummary
+			if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if resp.StatusCode != http.StatusOK || got.Token != tt.want {
+				t.Errorf("status %d token %q, want 200 and %q", resp.StatusCode, got.Token, tt.want)
+			}
+		})
+	}
+}
+
 func TestSandboxesNarrowToAClaimRef(t *testing.T) {
 	for _, tt := range []struct {
 		path string
@@ -2050,6 +2085,7 @@ type fakeManager struct {
 	placementNames     []string
 	volumeCatalog      func(tenant string, holders map[string]int) []types.VolumeInfo
 	sandboxIndex       func(tenant, claimRef string) []pool.SandboxSummary
+	sandboxByID        func(id string) (pool.SandboxSummary, bool)
 	draining           bool
 }
 
@@ -2199,8 +2235,11 @@ func (f *fakeManager) Sandboxes(tenant, claimRef string) []pool.SandboxSummary {
 	return f.sandboxIndex(tenant, claimRef)
 }
 
-func (f *fakeManager) Sandbox(string) (pool.SandboxSummary, bool) {
-	return pool.SandboxSummary{}, false
+func (f *fakeManager) Sandbox(id string) (pool.SandboxSummary, bool) {
+	if f.sandboxByID == nil {
+		return pool.SandboxSummary{}, false
+	}
+	return f.sandboxByID(id)
 }
 
 func (f *fakeManager) Stats(context.Context, string) (pool.SandboxStats, bool) {

@@ -42,26 +42,26 @@ const (
 	buildRetryDelay   = 30 * time.Second
 	claimProbeTimeout = 15 * time.Second
 	coldProbeTimeout  = 90 * time.Second
-	// a clone answers in ~1s even saturated, so a silent one is replaced, not waited on
+	// A clone answers in ~1s even saturated, so a silent one is replaced, not waited on
 	warmProbeTimeout = 5 * time.Second
-	// one list; a wrong answer only costs an extra sweep.
+	// One list; a wrong answer only costs an extra sweep.
 	removeVerifyTimeout = 15 * time.Second
-	// a full node clears only when VMs go away; retrying sooner buys nothing.
+	// A full node clears only when VMs go away; retrying sooner buys nothing.
 	capacityBackoff    = buildRetryDelay
 	vsockPollInterval  = 100 * time.Millisecond
 	defaultTTL         = 5 * time.Minute
 	maxTTL             = 24 * time.Hour
 	recommitBackoff    = 20 * time.Millisecond
 	recommitMaxBackoff = 5 * time.Second
-	// one failed boot is ordinary; only an unbroken run predicts the next failure
+	// One failed boot is ordinary; only an unbroken run predicts the next failure
 	refillFailStreak  = 8
 	refillBackoffBase = 250 * time.Millisecond
 	refillBackoffMax  = buildRetryDelay
-	// fallbacks when a Manager is built from a Config that skipped config.Load's defaulting
+	// Fallbacks when a Manager is built from a Config that skipped config.Load's defaulting
 	defaultMaxFork = 16
 	defaultRefill  = 4
 
-	// a heal pulls a whole guest memory image, so a few saturate disk and NIC.
+	// A heal pulls a whole guest memory image, so a few saturate disk and NIC.
 	maxConcurrentHeals = 4
 
 	vmPrefix        = "sbx-"
@@ -91,7 +91,7 @@ var (
 	ErrNoEgressFork      = errors.New("egress-lane sandboxes cannot fork, checkpoint, or promote: a resumed guest egresses before its fresh tap can be locked")
 	ErrVolumeCapture     = errors.New("sandboxes with volumes cannot hibernate, fork, checkpoint, or promote")
 	ErrVolumeBusy        = errors.New("volume is held by another claim")
-	// replaying a journal takes a writable mount, so readers stay out.
+	// Replaying a journal takes a writable mount, so readers stay out.
 	ErrVolumeNeedsRecovery = errors.New("volume needs recovery by a writable claim")
 	ErrArchived            = errors.New("sandbox is archived; an exec or file call wakes it first")
 	ErrQuota               = errors.New("node claim quota reached")
@@ -125,7 +125,7 @@ type Engine interface {
 	SyncGuest(ctx context.Context, vsockSocket string) error
 }
 
-// SandboxSummary is the ops view of one live claim — no tokens.
+// SandboxSummary is the ops view of one live claim.
 type SandboxSummary struct {
 	ID             string         `json:"id"`
 	Key            types.PoolKey  `json:"key"`
@@ -137,6 +137,8 @@ type SandboxSummary struct {
 	Volumes        []types.Volume `json:"volumes,omitempty"`
 	// ClaimRef echoes the caller reference; empty for fork and checkpoint-branch claims.
 	ClaimRef string `json:"claim_ref,omitempty"`
+	// Token is the sandbox's own bearer token; only the root by-id read carries it.
+	Token string `json:"token,omitempty"`
 }
 
 // PoolInfo is the ops view of one pool.
@@ -191,7 +193,7 @@ type pool struct {
 	warm      []*types.Sandbox
 	refilling int
 
-	// without a streak gate a node-wide dead cause is retried every tick at full concurrency
+	// Without a streak gate a node-wide dead cause is retried every tick at full concurrency
 	refillFails int
 	nextRefill  time.Time
 }
@@ -289,7 +291,7 @@ type Manager struct {
 	audit        *journal
 	counters     counters
 	ckpts        store.Store
-	// a cluster-wide backend makes heal and the delete broadcast no-ops
+	// A cluster-wide backend makes heal and the delete broadcast no-ops
 	ckptsShared bool
 	healer      *peer.Healer
 	// healPending/healAbort, guarded by recLocksMu, let a delete veto a heal still staging.
@@ -332,7 +334,7 @@ type Manager struct {
 	claimed         map[string]*types.Sandbox
 	pendingRemovals map[string]pendingRemoval
 
-	// node-wide, unlike the per-pool streak backoff: the exhausted resource is shared
+	// Node-wide, unlike the per-pool streak backoff: the exhausted resource is shared
 	atCapacityUntil  time.Time
 	atCapacityReason string
 
@@ -394,7 +396,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("create goldens dir: %w", err)
 	}
-	// checkpoints and templates are two id-namespaced views (ck_*, tp_*) over one store root
+	// Checkpoints and templates are two id-namespaced views (ck_*, tp_*) over one store root
 	var err error
 	if m.ckpts, err = newStoreView(ctx, cfg, "checkpoint-staging", store.CheckpointIDRe); err != nil {
 		return nil, err
@@ -482,7 +484,7 @@ func (m *Manager) Run(ctx context.Context) {
 	defer refill.Stop()
 	reap := time.NewTicker(reapInterval)
 	defer reap.Stop()
-	// store retention is hourly: each sweep is cluster-visible I/O on a shared root
+	// Store retention is hourly: each sweep is cluster-visible I/O on a shared root
 	storeSweep := time.NewTicker(time.Hour)
 	defer storeSweep.Stop()
 	go m.sweepExpiredCheckpoints(ctx)
@@ -662,7 +664,7 @@ func loadEgressCA(cfg *config.EgressCAConfig) (*egress.CA, error) {
 	return egress.LoadCA(root, interCert, interKey)
 }
 
-// the dir default lives here, not config.applyDefaults: tests build Config directly
+// The dir default lives here, not config.applyDefaults: tests build Config directly
 func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe *regexp.Regexp) (store.Store, error) {
 	if cs := cfg.CheckpointStore; cs != nil && cs.Kind == "s3" {
 		return s3.New(ctx, *cs.S3, filepath.Join(cfg.DataDir, staging), idRe)
