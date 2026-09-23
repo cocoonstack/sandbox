@@ -26,12 +26,6 @@ pub enum Chunk {
     Exit(i32),
 }
 
-#[derive(Clone, Copy)]
-enum State {
-    Running,
-    Exited(i32),
-}
-
 /// Registry of running and recently-exited processes.
 #[derive(Clone, Default)]
 pub struct Table {
@@ -166,16 +160,17 @@ impl Proc {
         }
     }
 
-    /// Snapshot of retained output for `logs`.
-    pub fn replay(&self) -> Vec<Chunk> {
-        sysutil::lock(&self.ring).snapshot()
+    /// Snapshot of retained output and the exit state under one lock, for `logs`.
+    pub fn replay(&self) -> (Vec<Chunk>, Option<i32>) {
+        let mut ring = sysutil::lock(&self.ring);
+        (ring.snapshot(), self.exit_code())
     }
 
-    /// Snapshots retained output and subscribes to live output under one lock.
-    pub fn attach_stream(&self) -> (Vec<Chunk>, broadcast::Receiver<Chunk>) {
+    /// Snapshots retained output and the exit state and subscribes to live output under one lock.
+    pub fn attach_stream(&self) -> (Vec<Chunk>, broadcast::Receiver<Chunk>, Option<i32>) {
         let mut ring = sysutil::lock(&self.ring);
         let tx = self.tx.get_or_init(|| broadcast::channel(OUTPUT_FANOUT).0);
-        (ring.snapshot(), tx.subscribe())
+        (ring.snapshot(), tx.subscribe(), self.exit_code())
     }
 
     fn attached(&self) -> Option<&broadcast::Sender<Chunk>> {
@@ -196,6 +191,12 @@ impl Proc {
             started_at_epoch_secs: self.started_at_epoch_secs,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum State {
+    Running,
+    Exited(i32),
 }
 
 struct Ring {
@@ -279,16 +280,48 @@ mod tests {
             "an unattached exec owns no fan-out ring"
         );
 
-        let (replay, mut rx) = proc.attach_stream();
+        let (replay, mut rx, _) = proc.attach_stream();
         assert_eq!(replay.len(), 1);
         assert!(proc.tx.get().is_some());
         proc.emit_bytes(true, b"after");
         assert!(matches!(rx.try_recv(), Ok(Chunk::Stderr(d)) if d == b"after"));
 
-        let (_, mut second) = proc.attach_stream();
+        let (_, mut second, _) = proc.attach_stream();
         proc.emit(&Chunk::Exit(3));
         assert!(matches!(rx.try_recv(), Ok(Chunk::Exit(3))));
         assert!(matches!(second.try_recv(), Ok(Chunk::Exit(3))));
+    }
+
+    #[test]
+    fn attach_after_exit_replays_the_tail_with_the_code() {
+        let table = Table::new();
+        let proc = table.register(8, vec!["true".to_string()], true, 0);
+        proc.emit_bytes(false, b"tail");
+        proc.mark_exited(5);
+        proc.emit(&Chunk::Exit(5));
+
+        let (replay, _rx, exit) = proc.attach_stream();
+        assert_eq!(exit, Some(5));
+        assert!(matches!(replay.as_slice(), [Chunk::Stdout(d)] if d == b"tail"));
+        let (logs, exit) = proc.replay();
+        assert_eq!(exit, Some(5));
+        assert!(matches!(logs.as_slice(), [Chunk::Stdout(d)] if d == b"tail"));
+    }
+
+    #[test]
+    fn attach_before_exit_receives_the_tail_then_the_exit() {
+        let table = Table::new();
+        let proc = table.register(9, vec!["true".to_string()], true, 0);
+        let (replay, mut rx, exit) = proc.attach_stream();
+        assert!(replay.is_empty());
+        assert_eq!(exit, None);
+        assert_eq!(proc.replay().1, None);
+
+        proc.emit_bytes(false, b"tail");
+        proc.mark_exited(5);
+        proc.emit(&Chunk::Exit(5));
+        assert!(matches!(rx.try_recv(), Ok(Chunk::Stdout(d)) if d == b"tail"));
+        assert!(matches!(rx.try_recv(), Ok(Chunk::Exit(5))));
     }
 
     #[test]

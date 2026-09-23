@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
+use silkd::proc::Chunk;
 use silkd::server::State;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use common::{
     b64, connect, decode, exchange, next_frame, one, roundtrip, send, stdout_body, type_of,
@@ -171,6 +173,44 @@ async fn attach_to_exited_process_returns_exit_immediately() {
     .await
     .expect("attach to an exited process must not hang");
     assert!(stdout_body(&frames).contains("done-fast"));
+    assert_eq!(type_of(frames.last().unwrap()), "exit");
+}
+
+#[tokio::test]
+async fn attach_keeps_a_tail_emitted_during_the_replay() {
+    let state = Arc::new(State::new());
+    let proc = state.table.register(4242, vec!["x".to_string()], true, 0);
+    proc.emit_bytes(false, &[b'r'; 64 * 1024]);
+    let (client, server) = tokio::io::duplex(1024);
+    let (sr, sw) = tokio::io::split(server);
+    let st = Arc::clone(&state);
+    let serve = tokio::spawn(async move { st.serve(BufReader::new(sr), sw).await });
+    let (mut cr, mut cw) = tokio::io::split(client);
+    cw.write_all(b"{\"op\":\"attach\",\"pid\":4242}\n")
+        .await
+        .unwrap();
+    let mut out = vec![0u8];
+    cr.read_exact(&mut out).await.unwrap();
+
+    proc.emit_bytes(false, b"tail");
+    proc.mark_exited(0);
+    proc.emit(&Chunk::Exit(0));
+    cw.shutdown().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(8), cr.read_to_end(&mut out))
+        .await
+        .expect("attach hung")
+        .unwrap();
+    serve.await.unwrap().unwrap();
+
+    let frames: Vec<Value> = out
+        .split(|&b| b == b'\n')
+        .filter(|l| !l.is_empty())
+        .map(|l| serde_json::from_slice(l).unwrap())
+        .collect();
+    assert!(
+        stdout_body(&frames).ends_with("rtail"),
+        "attach dropped the tail emitted during the replay"
+    );
     assert_eq!(type_of(frames.last().unwrap()), "exit");
 }
 
