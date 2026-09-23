@@ -2101,11 +2101,11 @@ func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time
 }
 
 func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
-	return fakeClaimProvision(f, ctx, key, ttl, tenant, claimRef, volumes, false)
+	return fakeClaimProvision(ctx, f, key, ttl, tenant, claimRef, volumes, false)
 }
 
 func (f *fakeManager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
-	return fakeClaimProvision(f, ctx, key, ttl, tenant, claimRef, volumes, true)
+	return fakeClaimProvision(ctx, f, key, ttl, tenant, claimRef, volumes, true)
 }
 
 func (f *fakeManager) Release(_ context.Context, id string, cred pool.Cred) error {
@@ -2420,7 +2420,7 @@ func postJSON(t *testing.T, url, token, body string) *http.Response {
 	return resp
 }
 
-func fakeClaimProvision(f *fakeManager, ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume, requirePromoted bool) (*types.Sandbox, error) {
+func fakeClaimProvision(ctx context.Context, f *fakeManager, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume, requirePromoted bool) (*types.Sandbox, error) {
 	f.provisionCalls++
 	f.gotTenant = tenant
 	f.gotClaimRef = claimRef

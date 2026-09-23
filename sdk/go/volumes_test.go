@@ -275,12 +275,12 @@ func TestWithVolumesAttachOnlyRejectsMountLocally(t *testing.T) {
 func TestRejectsInvalidVolumeModeLocally(t *testing.T) {
 	tests := []struct {
 		name  string
-		claim func(c *Client, ctx context.Context) (*Sandbox, error)
+		claim func(ctx context.Context, c *Client) (*Sandbox, error)
 	}{
-		{"Client.New", func(c *Client, ctx context.Context) (*Sandbox, error) {
+		{"Client.New", func(ctx context.Context, c *Client) (*Sandbox, error) {
 			return c.New(ctx, "rt:24.04", WithVolumes(Volume{Name: "a", Mode: "readwrite"}))
 		}},
-		{"Template.New", func(c *Client, ctx context.Context) (*Sandbox, error) {
+		{"Template.New", func(ctx context.Context, c *Client) (*Sandbox, error) {
 			tpl := &Template{Name: "task:v1", c: c, addr: c.addr, net: "none", size: "small"}
 			return tpl.New(ctx, WithVolumes(Volume{Name: "a", Mode: "bogus"}))
 		}},
@@ -292,7 +292,7 @@ func TestRejectsInvalidVolumeModeLocally(t *testing.T) {
 			}))
 			t.Cleanup(ts.Close)
 
-			_, err := tt.claim(testClient(t, ts), t.Context())
+			_, err := tt.claim(t.Context(), testClient(t, ts))
 			if err == nil || !strings.Contains(err.Error(), "mode must be") {
 				t.Errorf("err = %v, want local mode rejection", err)
 			}
