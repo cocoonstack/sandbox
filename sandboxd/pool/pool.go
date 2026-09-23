@@ -106,6 +106,7 @@ type Engine interface {
 	CloneSnap(ctx context.Context, snap, name string, key types.PoolKey) (types.VMRecord, error)
 	RunCold(ctx context.Context, name string, key types.PoolKey) (types.VMRecord, error)
 	Remove(ctx context.Context, name string) error
+	Stop(ctx context.Context, name string) error
 	ReconcileStaleCreate(ctx context.Context, name string) (engine.StaleCreateOutcome, error)
 	SnapshotSave(ctx context.Context, vmName, snapName string) error
 	SnapshotExport(ctx context.Context, snapName, toDir string) error

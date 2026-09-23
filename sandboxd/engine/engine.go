@@ -122,6 +122,11 @@ func (e *Engine) Remove(ctx context.Context, name string) error {
 	return err
 }
 
+func (e *Engine) Stop(ctx context.Context, name string) error {
+	_, err := e.run(ctx, "vm", "stop", "--force", name)
+	return err
+}
+
 // ReconcileStaleCreate reclaims a creating-state record via cocoon's free-ops-lock predicate.
 func (e *Engine) ReconcileStaleCreate(ctx context.Context, name string) (StaleCreateOutcome, error) {
 	out, err := e.run(ctx, "vm", "reconcile-stale-create", name, argOutput, formatJSON)
