@@ -33,7 +33,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install tooling
-        run: pip install ruff==0.15.20 pytest==8.4.2 mypy==1.19.1 && pip install -e sdk/python -e sdk/openai -e sdk/langchain
+        run: pip install ruff==0.15.22 pytest==8.4.2 mypy==1.20.2 && pip install -e sdk/python -e sdk/openai -e sdk/langchain
       - name: Lint
         run: ruff format --check . && ruff check .
       - name: Test cocoonsandbox
