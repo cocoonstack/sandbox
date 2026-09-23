@@ -136,7 +136,7 @@ type SandboxSummary struct {
 	Archived       bool           `json:"archived,omitzero"`
 	FromCheckpoint string         `json:"from_checkpoint,omitempty"`
 	Volumes        []types.Volume `json:"volumes,omitempty"`
-	// ClaimRef echoes the caller reference; empty for fork and checkpoint-branch claims.
+	// ClaimRef echoes the caller reference; empty for checkpoint branches and unprefixed forks.
 	ClaimRef string `json:"claim_ref,omitempty"`
 	// Token is the sandbox's own bearer token; only the root by-id read carries it.
 	Token string `json:"token,omitempty"`
