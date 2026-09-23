@@ -555,9 +555,13 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 // Sandboxes lists live claims visible to tenant (empty means root), narrowed to claimRef when it is set.
 func (m *Manager) Sandboxes(tenant, claimRef string) []SandboxSummary {
 	m.mu.Lock()
-	out := make([]SandboxSummary, 0, len(m.claimed))
+	size := len(m.claimed)
+	if claimRef != "" {
+		size = 1
+	}
+	out := make([]SandboxSummary, 0, size)
 	for _, sb := range m.claimed {
-		if !tenantOwns(tenant, sb.Tenant) || claimRef != "" && sb.ClaimRef != claimRef {
+		if !tenantOwns(tenant, sb.Tenant) || (claimRef != "" && sb.ClaimRef != claimRef) {
 			continue
 		}
 		out = append(out, summarize(sb))

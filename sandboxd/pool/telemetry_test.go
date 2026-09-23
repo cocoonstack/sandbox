@@ -177,7 +177,7 @@ func TestSandboxesFilterByClaimRef(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	a := mustClaim(t, m, testKey)
 	b := mustClaim(t, m, testKey)
-	pooled := mustClaim(t, m, testKey)
+	unnamed := mustClaim(t, m, testKey)
 	m.mu.Lock()
 	a.ClaimRef, a.Tenant = "team-a/demo", "acme"
 	b.ClaimRef = "team-a/other"
@@ -191,7 +191,7 @@ func TestSandboxesFilterByClaimRef(t *testing.T) {
 		{"acme", "team-a/demo", []string{a.ID}},
 		{"beta", "team-a/demo", nil},
 		{"", "team-a/missing", nil},
-		{"", "", []string{a.ID, b.ID, pooled.ID}},
+		{"", "", []string{a.ID, b.ID, unnamed.ID}},
 	} {
 		var got []string
 		for _, row := range m.Sandboxes(tt.tenant, tt.claimRef) {
