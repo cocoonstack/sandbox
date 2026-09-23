@@ -95,7 +95,7 @@ func TestHibernateAmbiguousErrorTreatedAsDone(t *testing.T) {
 	if _, g := m.Info(); g.Hibernated != 1 {
 		t.Errorf("hibernated %d, want 1", g.Hibernated)
 	}
-	got, _ := newClaimStore(m.dataDir).load()
+	got, _ := newClaimStore(m.dataDir, false).load()
 	if got[sb.ID] == nil || got[sb.ID].HibernateSnap == "" || got[sb.ID].PendingSnap != "" {
 		t.Fatalf("journal %+v, want HibernateSnap set + PendingSnap clear", got[sb.ID])
 	}
@@ -113,7 +113,7 @@ func TestHibernateVerifiedFailureClearsIntent(t *testing.T) {
 	if _, g := m.Info(); g.Hibernated != 0 {
 		t.Errorf("hibernated %d, want 0 (still running)", g.Hibernated)
 	}
-	got, _ := newClaimStore(m.dataDir).load()
+	got, _ := newClaimStore(m.dataDir, false).load()
 	if got[sb.ID] == nil || got[sb.ID].HibernateSnap != "" || got[sb.ID].PendingSnap != "" {
 		t.Fatalf("journal %+v, want running (no snaps)", got[sb.ID])
 	}
@@ -136,7 +136,7 @@ func TestHibernateUnverifiableErrorKeepsIntent(t *testing.T) {
 	if _, g := m.Info(); g.Hibernated != 0 {
 		t.Errorf("hibernated %d, want 0 (unconfirmed, not committed)", g.Hibernated)
 	}
-	got, _ := newClaimStore(m.dataDir).load()
+	got, _ := newClaimStore(m.dataDir, false).load()
 	if got[sb.ID] == nil || got[sb.ID].HibernateSnap != "" || got[sb.ID].PendingSnap == "" {
 		t.Fatalf("journal %+v, want the intent kept for Reconcile", got[sb.ID])
 	}
@@ -183,7 +183,7 @@ func TestRetryResolvesDanglingIntent(t *testing.T) {
 		t.Fatal("Hibernate reported success on an unconfirmed transition")
 	}
 	realSnap := eng.hibernates[0]
-	if got, _ := newClaimStore(m.dataDir).load(); got[sb.ID].PendingSnap != realSnap {
+	if got, _ := newClaimStore(m.dataDir, false).load(); got[sb.ID].PendingSnap != realSnap {
 		t.Fatalf("intent %q, want the real snapshot %q kept", got[sb.ID].PendingSnap, realSnap)
 	}
 
@@ -195,7 +195,7 @@ func TestRetryResolvesDanglingIntent(t *testing.T) {
 	if len(eng.hibernates) != 1 {
 		t.Errorf("engine hibernated %d times, want 1 (retry adopted the existing snapshot)", len(eng.hibernates))
 	}
-	got, _ := newClaimStore(m.dataDir).load()
+	got, _ := newClaimStore(m.dataDir, false).load()
 	if got[sb.ID].HibernateSnap != realSnap || got[sb.ID].PendingSnap != "" {
 		t.Fatalf("journal %+v, want HibernateSnap=%q + no pending", got[sb.ID], realSnap)
 	}
@@ -377,7 +377,7 @@ func TestHibernateWakeCycle(t *testing.T) {
 		if _, g := m.Info(); g.Hibernated != 1 {
 			t.Errorf("hibernated count %d, want 1", g.Hibernated)
 		}
-		if got, _ := newClaimStore(m.dataDir).load(); got[sb.ID] == nil || got[sb.ID].HibernateSnap == "" {
+		if got, _ := newClaimStore(m.dataDir, false).load(); got[sb.ID] == nil || got[sb.ID].HibernateSnap == "" {
 			t.Error("hibernation flag not persisted")
 		}
 		hibSnap := eng.hibernates[0]
@@ -516,7 +516,7 @@ func TestReconcileAdoptsJournaledIntent(t *testing.T) {
 			VsockSocket: "/vsock/lagged", PendingSnap: hibernatePrefix + "lagged-1-abc123",
 		},
 	}
-	if err := newClaimStore(dataDir).save(claims); err != nil {
+	if err := newClaimStore(dataDir, false).save(claims); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	m := newTestManagerAt(t, eng, dataDir)
@@ -545,7 +545,7 @@ func TestReconcileIgnoresStaleOrphanSnapshot(t *testing.T) {
 		claims := map[string]*types.Sandbox{
 			"sb_orp": {ID: "sb_orp", VMName: "sbx-orphan-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/orphan"},
 		}
-		if err := newClaimStore(dataDir).save(claims); err != nil {
+		if err := newClaimStore(dataDir, false).save(claims); err != nil {
 			t.Fatalf("setup: %v", err)
 		}
 		m := newTestManagerAt(t, eng, dataDir)
@@ -571,7 +571,7 @@ func TestReconcileDropsIntentWithoutImage(t *testing.T) {
 			VsockSocket: "/vsock/noimg", PendingSnap: hibernatePrefix + "noimg-1-abc123",
 		},
 	}
-	if err := newClaimStore(dataDir).save(claims); err != nil {
+	if err := newClaimStore(dataDir, false).save(claims); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	m := newTestManagerAt(t, eng, dataDir)
@@ -595,7 +595,7 @@ func TestReconcileAdoptsHibernated(t *testing.T) {
 			HibernateSnap: hibernatePrefix + "hibernated-1",
 		},
 	}
-	if err := newClaimStore(dataDir).save(claims); err != nil {
+	if err := newClaimStore(dataDir, false).save(claims); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	m := newTestManagerAt(t, eng, dataDir, config.PoolSpec{PoolKey: testKey, Warm: 1})

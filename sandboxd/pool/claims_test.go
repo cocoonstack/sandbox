@@ -1,7 +1,9 @@
 package pool
 
 import (
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -75,26 +77,30 @@ func TestRecommitDrainsAChangeItWasTooBusyToSee(t *testing.T) {
 }
 
 func TestStoreRoundTrip(t *testing.T) {
-	s := newClaimStore(t.TempDir())
 	claims := map[string]*types.Sandbox{
 		"sb_a": {ID: "sb_a", VMName: "sbx-1", Key: testKey, Token: "t1", Deadline: time.Now().Add(time.Minute).UTC(), ClaimedAt: time.Now().Add(-time.Minute).UTC(), ClaimRef: "ns/workload", Volumes: []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}, VsockSocket: "/v/1"},
 		"sb_b": {ID: "sb_b", VMName: "sbx-2", Key: testKey, Token: "t2"},
 	}
-
-	if err := s.save(claims); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-	got, err := s.load()
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if !reflect.DeepEqual(got, claims) {
-		t.Errorf("got %+v, want %+v", got, claims)
+	for _, sync := range []bool{false, true} {
+		s := newClaimStore(t.TempDir(), sync)
+		if err := s.save(claims); err != nil {
+			t.Fatalf("save (sync=%v): %v", sync, err)
+		}
+		got, err := s.load()
+		if err != nil {
+			t.Fatalf("load (sync=%v): %v", sync, err)
+		}
+		if !reflect.DeepEqual(got, claims) {
+			t.Errorf("sync=%v: got %+v, want %+v", sync, got, claims)
+		}
+		if _, err := os.Stat(s.path + ".tmp"); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("sync=%v: temp file left behind: %v", sync, err)
+		}
 	}
 }
 
 func TestClaimStoreSnapshotDetachesVolumes(t *testing.T) {
-	s := newClaimStore(t.TempDir())
+	s := newClaimStore(t.TempDir(), false)
 	sb := &types.Sandbox{ID: "sb_a", Volumes: []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}}
 	snap := s.set(sb)
 	sb.Volumes[0].Mount = "/mutated"
@@ -115,7 +121,7 @@ func TestClaimStoreSnapshotDetachesVolumes(t *testing.T) {
 }
 
 func TestStoreLoadMissingFile(t *testing.T) {
-	got, err := newClaimStore(t.TempDir()).load()
+	got, err := newClaimStore(t.TempDir(), false).load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -130,13 +136,13 @@ func TestStoreLoadCorruptFile(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	if _, err := newClaimStore(dir).load(); err == nil {
+	if _, err := newClaimStore(dir, false).load(); err == nil {
 		t.Error("load succeeded on corrupt file")
 	}
 }
 
 func TestClaimStoreCommitCoalesces(t *testing.T) {
-	s := newClaimStore(t.TempDir())
+	s := newClaimStore(t.TempDir(), false)
 	older := s.set(&types.Sandbox{ID: "sb_a"})
 	newer := s.set(&types.Sandbox{ID: "sb_b"})
 	if err := s.commit(newer); err != nil {
@@ -151,7 +157,7 @@ func TestClaimStoreCommitCoalesces(t *testing.T) {
 }
 
 func TestClaimStoreIncrementalProjection(t *testing.T) {
-	s := newClaimStore(t.TempDir())
+	s := newClaimStore(t.TempDir(), false)
 	a := &types.Sandbox{ID: "sb_a", VMName: "sbx-1", Key: testKey}
 	b := &types.Sandbox{ID: "sb_b", VMName: "sbx-2", Key: testKey}
 	if err := s.commit(s.set(a, b)); err != nil {
@@ -183,7 +189,7 @@ func TestClaimStoreIncrementalProjection(t *testing.T) {
 }
 
 func TestClaimStoreMarkRepersists(t *testing.T) {
-	s := newClaimStore(t.TempDir())
+	s := newClaimStore(t.TempDir(), false)
 	s.set(&types.Sandbox{ID: "sb_a", Key: testKey})
 	if s.synced() {
 		t.Fatal("synced with an unwritten change")
@@ -200,7 +206,7 @@ func TestClaimStoreMarkRepersists(t *testing.T) {
 }
 
 func TestClaimStoreConcurrentCommits(t *testing.T) {
-	s := newClaimStore(t.TempDir())
+	s := newClaimStore(t.TempDir(), false)
 	sb := &types.Sandbox{ID: "sb_a"}
 	var wg sync.WaitGroup
 	for range 50 {

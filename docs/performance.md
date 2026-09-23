@@ -149,7 +149,11 @@ kept off the manager mutex — the lock every data-plane op contends. `set`/`del
 update a projection map and bump a sequence under the store's own mutex;
 `commit()` clones that map under it, then marshals, writes, and renames off
 both the manager and the store mutex, serialized by its own write lock and
-coalescing by sequence so an older snapshot never overwrites a newer one.
+coalescing by sequence so an older snapshot never overwrites a newer one. The
+write is unsynced by default: `sync_claims` adds an fsync of the file and its
+directory, about 0.3 ms per commit on NVMe (2000 claims, 280 KB) against
+0.05 ms, for a fleet that must keep its hibernated and archived sandboxes
+through a host power loss.
 Only the startup `Reconcile`
 pass (pre-contention) still marshals and writes in one call under the lock.
 

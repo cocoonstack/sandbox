@@ -52,7 +52,7 @@ func TestClaimProvisionAppliesVolumesInRequestOrder(t *testing.T) {
 	if !slices.Equal(specs, wantSpecs) {
 		t.Errorf("attached specs=%+v, want %+v", specs, wantSpecs)
 	}
-	persisted, err := newClaimStore(m.dataDir).load()
+	persisted, err := newClaimStore(m.dataDir, false).load()
 	if err != nil {
 		t.Fatalf("load claims: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestClaimProvisionVolumeFailureDestroysVM(t *testing.T) {
 			if _, gauges := m.Info(); gauges.Claimed != 0 {
 				t.Errorf("claimed=%d, want 0", gauges.Claimed)
 			}
-			if persisted, err := newClaimStore(m.dataDir).load(); err != nil || len(persisted) != 0 {
+			if persisted, err := newClaimStore(m.dataDir, false).load(); err != nil || len(persisted) != 0 {
 				t.Errorf("persisted=%v err=%v, want no claim", persisted, err)
 			}
 		})

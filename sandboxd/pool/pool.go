@@ -358,7 +358,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		lockEgress:      len(cfg.Bridges) > 0,
 		releaseDelay:    time.Duration(cfg.ReleaseDelaySeconds) * time.Second,
 		maxFork:         maxFork,
-		store:           newClaimStore(cfg.DataDir),
+		store:           newClaimStore(cfg.DataDir, cfg.SyncClaims),
 		volumes:         make(map[string]catalogVolume, len(cfg.Volumes)),
 		volumeAdmission: map[string]volumeHolders{},
 		poolStore:       newPoolStore(cfg.DataDir),

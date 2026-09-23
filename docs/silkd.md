@@ -2,7 +2,8 @@
 
 silkd is the in-guest product daemon: a Rust binary baked into every
 template image, listening on guest vsock port 2048 (`SILKD_PORT` overrides
-the port), started at sysinit in parallel with boot. It is what actually
+the port) for the host only — a peer with any other vsock CID is refused —
+and started at sysinit in parallel with boot. It is what actually
 "runs something" inside a sandbox; sandboxd relays SDK connections to it
 byte-for-byte. Reaching silkd is the
 claim-readiness signal — a claim returns only once silkd answers.

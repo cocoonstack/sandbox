@@ -18,22 +18,27 @@ func CloseWrite(conn net.Conn) {
 
 // WriteFileSync durably replaces path with data (temp + fsync + rename + dir fsync).
 func WriteFileSync(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temp: %w", err)
 	}
-	tmp := f.Name()
+	if err = f.Chmod(perm); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name()) //nolint:gosec // our own just-created temp under a caller-owned data-dir path
+		return fmt.Errorf("chmod %s: %w", f.Name(), err)
+	}
+	return ReplaceFileSync(f, path, data)
+}
+
+// ReplaceFileSync writes data to the open temp file f, fsyncs it, renames it over path and fsyncs the directory; f is closed and removed on failure.
+func ReplaceFileSync(f *os.File, path string, data []byte) (err error) {
+	dir, tmp := filepath.Dir(path), f.Name()
 	renamed := false
 	defer func() {
 		if !renamed {
-			_ = os.Remove(tmp) //nolint:gosec // our own just-created temp under a caller-owned data-dir path
+			_ = os.Remove(tmp) //nolint:gosec // the caller's own temp under its data-dir path
 		}
 	}()
-	if err = f.Chmod(perm); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("chmod %s: %w", tmp, err)
-	}
 	if _, err = f.Write(data); err != nil {
 		_ = f.Close()
 		return fmt.Errorf("write %s: %w", tmp, err)

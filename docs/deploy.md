@@ -104,6 +104,7 @@ gets the intersection of the two.
 | `cocoon_bin` | `cocoon` | cocoon CLI binary |
 | `restore_mode` | unset | clone and wake-restore memory mode: `copy`, `ondemand`, or `mmap`; use `mmap` for dense pools |
 | `no_direct_io` | false | use buffered writable disks for Cloud Hypervisor cold boots and clones; recommended for dense ephemeral pools to avoid direct-I/O CoW journal contention |
+| `sync_claims` | false | fsync `claims.json` and its directory on every claim, release, hibernate and wake commit, about 0.3 ms each on NVMe; without it a host power loss can leave an empty journal, and the next reconcile treats every hibernated and archived sandbox's snapshot as an orphan. Off, because a power loss takes the running VMs anyway |
 | `no_balloon` | false | boot pool and template VMs without the virtio-balloon (cocoon otherwise returns 25% of guest memory to the host); clones inherit it from the golden. A guest that thrashes before deflate-on-OOM fires — a 16G build tier running a large typecheck — needs its whole memory |
 | `advertise_addr` | = `listen` | internal HTTP host:port for peer traffic and preview forwarding; also used by clients when `client_advertise` is unset. Must be routable when `listen` is a wildcard; a node with `mesh` set refuses to load while it names an unspecified host |
 | `client_advertise` | unset | client-facing HTTP(S) origin for this node, e.g. `https://node-a.sandbox.example.com`; published in owner, redirect, and peer responses. No path, query, fragment, or userinfo |
