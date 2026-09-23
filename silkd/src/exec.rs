@@ -177,7 +177,7 @@ async fn copy_stream<R>(mut r: R, proc: &Proc, stderr: bool, fg: Option<&mpsc::S
 where
     R: AsyncRead + Unpin,
 {
-    let make: fn(Vec<u8>) -> Chunk = if stderr { Chunk::Stderr } else { Chunk::Stdout };
+    let make: fn(Arc<[u8]>) -> Chunk = if stderr { Chunk::Stderr } else { Chunk::Stdout };
     let mut buf = [0u8; proto::READ_CHUNK];
     loop {
         let n = match r.read(&mut buf).await {
@@ -188,7 +188,7 @@ where
             proc.emit_bytes(stderr, &buf[..n]);
             continue;
         };
-        let chunk = make(buf[..n].to_vec());
+        let chunk = make(buf[..n].into());
         proc.emit(&chunk);
         if fg.send(chunk).await.is_err() {
             break;

@@ -21,8 +21,8 @@ static SYNTH: AtomicU64 = AtomicU64::new(1 << 30);
 /// A chunk of process output tagged by stream, shared with live attachers.
 #[derive(Clone)]
 pub enum Chunk {
-    Stdout(Vec<u8>),
-    Stderr(Vec<u8>),
+    Stdout(Arc<[u8]>),
+    Stderr(Arc<[u8]>),
     Exit(i32),
 }
 
@@ -124,9 +124,9 @@ impl Proc {
         ring.push(stderr, data);
         if let Some(tx) = self.attached() {
             let chunk = if stderr {
-                Chunk::Stderr(data.to_vec())
+                Chunk::Stderr(data.into())
             } else {
-                Chunk::Stdout(data.to_vec())
+                Chunk::Stdout(data.into())
             };
             let _ = tx.send(chunk);
         }
@@ -237,7 +237,7 @@ impl Ring {
         self.tags
             .iter()
             .map(|&(stderr, len)| {
-                let seg = bytes[off..off + len].to_vec();
+                let seg: Arc<[u8]> = bytes[off..off + len].into();
                 off += len;
                 if stderr {
                     Chunk::Stderr(seg)
@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(replay.len(), 1);
         assert!(proc.tx.get().is_some());
         proc.emit_bytes(true, b"after");
-        assert!(matches!(rx.try_recv(), Ok(Chunk::Stderr(d)) if d == b"after"));
+        assert!(matches!(rx.try_recv(), Ok(Chunk::Stderr(d)) if &*d == b"after"));
 
         let (_, mut second, _) = proc.attach_stream();
         proc.emit(&Chunk::Exit(3));
@@ -302,10 +302,10 @@ mod tests {
 
         let (replay, _rx, exit) = proc.attach_stream();
         assert_eq!(exit, Some(5));
-        assert!(matches!(replay.as_slice(), [Chunk::Stdout(d)] if d == b"tail"));
+        assert!(matches!(replay.as_slice(), [Chunk::Stdout(d)] if &**d == b"tail"));
         let (logs, exit) = proc.replay();
         assert_eq!(exit, Some(5));
-        assert!(matches!(logs.as_slice(), [Chunk::Stdout(d)] if d == b"tail"));
+        assert!(matches!(logs.as_slice(), [Chunk::Stdout(d)] if &**d == b"tail"));
     }
 
     #[test]
@@ -320,7 +320,7 @@ mod tests {
         proc.emit_bytes(false, b"tail");
         proc.mark_exited(5);
         proc.emit(&Chunk::Exit(5));
-        assert!(matches!(rx.try_recv(), Ok(Chunk::Stdout(d)) if d == b"tail"));
+        assert!(matches!(rx.try_recv(), Ok(Chunk::Stdout(d)) if &*d == b"tail"));
         assert!(matches!(rx.try_recv(), Ok(Chunk::Exit(5))));
     }
 
