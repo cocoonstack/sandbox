@@ -9,7 +9,7 @@
 ARG ANDROID_BASE_IMAGE=ghcr.io/cocoonstack/cocoon/android:15.0
 # silkd carrier image (built from silkd/Dockerfile); CI passes the
 # version-pinned tag.
-ARG SILKD_IMAGE=ghcr.io/cocoonstack/sandbox/silkd:0.1.12
+ARG SILKD_IMAGE=ghcr.io/cocoonstack/sandbox/silkd:0.1.13
 
 FROM ${SILKD_IMAGE} AS silkd
 

@@ -55,9 +55,9 @@ RUN --mount=type=secret,id=sandbox_install_agent \
     # the agent — this is the sandbox product's readiness signal. Same
     # measured-fast ordering as the agent unit (no local-fs wait).
     #
-    # 3128 is silkd's loopback relay over vsock to the host proxy, the none
-    # lane's only way out. silkd forwards these into execs only on the
-    # no-network lane, so a lane with its own NIC never dials a closed relay.
+    # 3128 is silkd's loopback relay over vsock to the host proxy. silkd
+    # forwards these into execs only when nothing routes directly (no NIC, or
+    # a relay verdict in /etc/silkd-lane), so a routed NIC never dials a closed relay.
     printf '%s\n' \
       '[Unit]' \
       'Description=silkd (sandbox product daemon: exec, files, sessions over vsock)' \
