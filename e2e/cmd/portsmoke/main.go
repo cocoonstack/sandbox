@@ -34,8 +34,6 @@ const (
 	claimTTL = 30 * time.Minute
 )
 
-var guestServerMode = uint32(0o755)
-
 func main() {
 	addr := flag.String("addr", "127.0.0.1:7777", "sandboxd address")
 	token := flag.String("token", "", "node api token")
@@ -111,7 +109,7 @@ func startGuestListener(ctx context.Context, sb *sandbox.Sandbox, listener strin
 	if err != nil {
 		return fmt.Errorf("read listener: %w", err)
 	}
-	if err := sb.WriteFile(ctx, guestServerPath, bin, &guestServerMode); err != nil {
+	if err := sb.WriteFile(ctx, guestServerPath, bin, new(uint32(0o755))); err != nil {
 		return fmt.Errorf("upload listener: %w", err)
 	}
 	argv := []string{
