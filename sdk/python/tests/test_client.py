@@ -1,4 +1,4 @@
-"""Control-plane claims, redirects, volume discovery, errors, and checkpoints."""
+"""Control-plane claims, redirects, volume discovery, errors, promote, renew, checkpoints, and deadlines."""
 
 import threading
 import time

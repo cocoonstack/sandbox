@@ -291,8 +291,8 @@ stays valid: the first call that reaches the guest restores the VM (adding
 roughly a restore's latency, tens of milliseconds on bare metal). The TTL
 keeps running — a hibernated sandbox is still reaped at its deadline, so
 claim with a `WithTimeout` that covers the idle period or `Renew` before it
-ends. When to hibernate is your policy; the node only provides the transition — unless the
-deployment opts into `idle_hibernate_seconds` (see
+ends. When to hibernate is your policy; the node only provides the
+transition — unless the deployment opts into `idle_hibernate_seconds` (see
 [deploy](deploy.md#configuration)), which hibernates idle claims
 automatically with the same transparent wake. A claim with a connection live
 when the sweep checks it (a relay stream, a buffered exec, a preview dial, an

@@ -185,11 +185,12 @@ stays valid: the first call that reaches the guest restores the VM (roughly
 a restore's latency, tens of milliseconds on bare metal). The TTL keeps
 running — a hibernated sandbox is still reaped at its deadline, so claim
 with a `ttl_seconds` that covers the idle period or `renew` before it ends.
-When to hibernate is your policy, unless the deployment opts into `idle_hibernate_seconds`
-([deploy](deploy.md#configuration)), which hibernates idle claims
-automatically with the same transparent wake. A claim with a connection live
-when the sweep checks it (a relay stream, a buffered exec, a preview dial, an
-egress request) is not swept; the idle clock restarts when that connection ends.
+When to hibernate is your policy, unless the deployment opts into
+`idle_hibernate_seconds` ([deploy](deploy.md#configuration)), which
+hibernates idle claims automatically with the same transparent wake. A claim
+with a connection live when the sweep checks it (a relay stream, a buffered
+exec, a preview dial, an egress request) is not swept; the idle clock
+restarts when that connection ends.
 
 Data-plane calls share a handle's relay connection: after a call the SDK
 keeps the connection for 30 seconds (`Client(..., keep_alive=...)` tunes the

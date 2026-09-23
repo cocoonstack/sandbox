@@ -200,7 +200,7 @@ func TestRenewSendsTheSandboxTokenAndRecordsTheGrant(t *testing.T) {
 				if got := r.Header.Get("Authorization"); got != "Bearer tok" {
 					t.Errorf("authorization %q, want the sandbox's own token", got)
 				}
-				if body, _ := io.ReadAll(r.Body); strings.TrimSpace(string(body)) != tt.body {
+				if body, _ := io.ReadAll(r.Body); string(body) != tt.body {
 					t.Errorf("body %s, want %s", body, tt.body)
 				}
 				_, _ = io.WriteString(w, `{"deadline":"2026-09-23T12:00:00Z"}`)
