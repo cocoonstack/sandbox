@@ -1008,6 +1008,7 @@ type fakeEngine struct {
 	cloneFroms      []string
 	colds           []string
 	removes         []string
+	stops           []string
 	probeTimeouts   []time.Duration
 	volumeSpecs     []engine.VolumeSpec
 	volumeMounts    []types.Volume
@@ -1114,6 +1115,14 @@ func (f *fakeEngine) Remove(ctx context.Context, name string) error {
 	return nil
 }
 
+func (f *fakeEngine) Stop(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stops = append(f.stops, name)
+	f.stopped[name] = true
+	return nil
+}
+
 func (f *fakeEngine) ReconcileStaleCreate(ctx context.Context, name string) (engine.StaleCreateOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -1208,10 +1217,10 @@ func (f *fakeEngine) Restore(_ context.Context, name, _ string) (string, error) 
 	if f.restoreErr != nil {
 		return "", f.restoreErr
 	}
-	f.stopped[name] = false
-	if f.vms[name] == "" {
-		f.vms[name] = "/vsock/" + name
+	if _, ok := f.vms[name]; !ok {
+		return "", fmt.Errorf("vm %s not found", name)
 	}
+	f.stopped[name] = false
 	return f.lateVsock(f.vms[name]), nil
 }
 

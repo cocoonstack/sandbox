@@ -142,7 +142,7 @@ func TestHibernateUnverifiableErrorKeepsIntent(t *testing.T) {
 	}
 }
 
-func TestWakeRestoreErrorDestroysAndRetries(t *testing.T) {
+func TestWakeRestoreErrorStopsAndRetries(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
@@ -155,11 +155,17 @@ func TestWakeRestoreErrorDestroysAndRetries(t *testing.T) {
 	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
 		t.Fatal("wake reported success despite a restore error")
 	}
-	if !eng.removed(sb.VMName) {
-		t.Error("restore error left a possibly-booted VM behind")
+	if !slices.Contains(eng.stops, sb.VMName) || !eng.stopped[sb.VMName] {
+		t.Errorf("stops=%v, want the possibly-booted VM stopped", eng.stops)
+	}
+	if eng.removed(sb.VMName) {
+		t.Error("restore error removed the VM the retry restores into")
 	}
 	if eng.snapRemoved(snap) {
 		t.Error("restore error dropped the snapshot needed to retry")
+	}
+	if got, _ := newClaimStore(m.dataDir, false).load(); got[sb.ID] == nil || got[sb.ID].HibernateSnap != snap {
+		t.Fatalf("journal %+v, want HibernateSnap=%q kept for the retry", got[sb.ID], snap)
 	}
 	eng.restoreErr = nil
 	sock, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
@@ -305,7 +311,7 @@ func TestResolveAdoptBillsWhenPersistFails(t *testing.T) {
 	})
 }
 
-func TestWakeProbeFailureDestroysAndRetries(t *testing.T) {
+func TestWakeProbeFailureStopsAndRetries(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
@@ -318,11 +324,17 @@ func TestWakeProbeFailureDestroysAndRetries(t *testing.T) {
 	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
 		t.Fatal("wake reported success despite a probe timeout")
 	}
-	if !eng.removed(sb.VMName) {
-		t.Error("probe failure left the restored VM running")
+	if !slices.Contains(eng.stops, sb.VMName) || !eng.stopped[sb.VMName] {
+		t.Errorf("stops=%v, want the restored VM stopped", eng.stops)
+	}
+	if eng.removed(sb.VMName) {
+		t.Error("probe failure removed the VM the retry restores into")
 	}
 	if eng.snapRemoved(snap) {
 		t.Error("probe failure dropped the snapshot needed to retry")
+	}
+	if got, _ := newClaimStore(m.dataDir, false).load(); got[sb.ID] == nil || got[sb.ID].HibernateSnap != snap {
+		t.Fatalf("journal %+v, want HibernateSnap=%q kept for the retry", got[sb.ID], snap)
 	}
 	eng.probeErr = nil
 	sock, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)

@@ -133,12 +133,12 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	restoredSock, err := m.eng.Restore(ctx, sb.VMName, snap)
 	if err != nil {
 		// restore may have booted the VM before the engine errored
-		m.destroy(ctx, sb.VMName)
+		m.stopVM(ctx, sb.VMName)
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
 	sock, err := m.probeReady(ctx, sb.VMName, restoredSock, claimProbeTimeout)
 	if err != nil {
-		m.destroy(ctx, sb.VMName)
+		m.stopVM(ctx, sb.VMName)
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
 	live, err := m.commitTransition(ctx, sb, "", sock)
@@ -169,6 +169,12 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	// the resume consumed the memory image; reclaim its disk off the wake-return path (the randHex suffix keeps a re-hibernate from reusing the name)
 	go m.dropSnap(ctx, snap)
 	return sock, nil
+}
+
+func (m *Manager) stopVM(ctx context.Context, name string) {
+	if err := m.eng.Stop(ctx, name); err != nil {
+		log.WithFunc("pool.stopVM").Warnf(ctx, "stop vm %s: %v", name, err)
+	}
 }
 
 func (m *Manager) idleOnce(ctx context.Context) {

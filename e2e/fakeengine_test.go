@@ -65,6 +65,10 @@ func (f *fakeEngine) Remove(_ context.Context, name string) error {
 	return nil
 }
 
+func (f *fakeEngine) Stop(ctx context.Context, name string) error {
+	return f.Remove(ctx, name)
+}
+
 func (f *fakeEngine) ReconcileStaleCreate(context.Context, string) (engine.StaleCreateOutcome, error) {
 	return engine.StaleCreateNotCreating, nil
 }
