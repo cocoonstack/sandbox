@@ -6,13 +6,18 @@ use crate::server::State;
 
 #[cfg(target_os = "linux")]
 pub async fn serve(port: u32, state: Arc<State>) -> std::io::Result<()> {
-    use tokio_vsock::{VMADDR_CID_ANY, VsockAddr, VsockListener};
+    use tokio_vsock::{VMADDR_CID_ANY, VMADDR_CID_HOST, VsockAddr, VsockListener};
 
     let listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, port))?;
     loop {
         // a transient accept error must not tear down the daemon and lose every session.
         let conn = match listener.accept().await {
-            Ok((conn, _)) => conn,
+            Ok((conn, peer)) if peer.cid() == VMADDR_CID_HOST => conn,
+            // only the host may drive silkd; a guest-side vsock loopback peer would exec as root
+            Ok((_, peer)) => {
+                eprintln!("silkd: refused peer cid {}", peer.cid());
+                continue;
+            }
             Err(e) => {
                 eprintln!("silkd: accept: {e}");
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
