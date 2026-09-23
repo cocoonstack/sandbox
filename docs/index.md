@@ -40,9 +40,6 @@ vsock-only I/O (hardened default); `net=egress` attaches a bridge/CNI NIC.
 - [Browser sandboxes](browser.md) — headless Chromium with CDP through
   the relay: Playwright/Puppeteer access, checkpoint/branch of a live
   browser
-- [Desktop sandboxes](desktop.md) — the GNOME flavor with the OSWorld
-  guest server: claim shape, the guest control contract over the relay,
-  running the OSWorld harness on sandboxd
 - [e2b sandboxes](e2b.md) — the e2b-rt flavor: e2b's envd on loopback beside
   silkd, the guest half of the e2b-compatible data plane, and the warm-pool
   gate that keeps a claim from outrunning it
