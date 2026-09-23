@@ -21,7 +21,9 @@ func (m *Manager) Sandbox(id string) (SandboxSummary, bool) {
 		return SandboxSummary{}, false
 	}
 	// summarize reads fields hibernate and archive mutate under m.mu
-	return summarize(sb), true
+	out := summarize(sb)
+	out.Token = sb.Token
+	return out, true
 }
 
 // Wake restores a hibernated sandbox and leaves it running. Idempotent.

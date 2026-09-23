@@ -500,9 +500,11 @@ the rest of the index; an empty value lists everything.
 
 ## GET /v1/sandboxes/{id}
 
-Auth: root only. One live claim in the index-row shape above, so a
-reconcile loop can read a single sandbox without scanning the whole node
-listing. 404 unknown id.
+Auth: root only. One live claim in the index-row shape above plus `token`,
+the sandbox's own bearer token, so a reconcile loop can read a single sandbox
+without scanning the whole node listing and a control plane can hand a
+returning client its data-plane credential without keeping a copy. 404
+unknown id.
 
 ## GET /v1/sandboxes/{id}/stats
 
