@@ -72,7 +72,7 @@ type Manager interface {
 	TenantClaims() map[string]int
 	VolumePlacement(key types.PoolKey, tenant string, names []string) (bool, error)
 	Volumes(tenant string, holders map[string]int) []types.VolumeInfo
-	Sandboxes(tenant string) []pool.SandboxSummary
+	Sandboxes(tenant, claimRef string) []pool.SandboxSummary
 	Sandbox(id string) (pool.SandboxSummary, bool)
 	Stats(ctx context.Context, id string) (pool.SandboxStats, bool)
 	Audit(ctx context.Context, id string, line []byte)
@@ -373,7 +373,7 @@ func (s *Server) handleSandbox(w http.ResponseWriter, r *http.Request) {
 
 // handleSandboxes lists the live claims visible to the caller — never tokens.
 func (s *Server) handleSandboxes(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, SandboxListResponse{Sandboxes: s.mgr.Sandboxes(tenantFrom(r.Context()))})
+	writeJSON(w, http.StatusOK, SandboxListResponse{Sandboxes: s.mgr.Sandboxes(tenantFrom(r.Context()), r.URL.Query().Get("claim_ref"))})
 }
 
 func (s *Server) handleSandboxStats(w http.ResponseWriter, r *http.Request) {

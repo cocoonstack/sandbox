@@ -486,10 +486,10 @@ func TestVolumeClaimUsageAndScopedSummaries(t *testing.T) {
 		t.Fatalf("beta claim: %v", betaErr)
 	}
 
-	if got := m.Sandboxes("acme"); len(got) != 1 || got[0].ID != acme.ID || !slices.Equal(got[0].Volumes, wantApplied) {
+	if got := m.Sandboxes("acme", ""); len(got) != 1 || got[0].ID != acme.ID || !slices.Equal(got[0].Volumes, wantApplied) {
 		t.Errorf("acme summaries=%+v, want only its volume claim", got)
 	}
-	if got := m.Sandboxes(""); len(got) != 2 {
+	if got := m.Sandboxes("", ""); len(got) != 2 {
 		t.Errorf("root summaries=%+v, want both claims", got)
 	}
 	if got, ok := m.Sandbox(acme.ID); !ok || !slices.Equal(got.Volumes, wantApplied) {

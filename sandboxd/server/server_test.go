@@ -278,7 +278,7 @@ func TestVolumeCatalogReturnsScopedFleetProjection(t *testing.T) {
 }
 
 func TestSandboxIndexReturnsScopedAppliedVolumes(t *testing.T) {
-	mgr := &fakeManager{sandboxIndex: func(tenant string) []pool.SandboxSummary {
+	mgr := &fakeManager{sandboxIndex: func(tenant, _ string) []pool.SandboxSummary {
 		if tenant != "acme" {
 			t.Errorf("tenant = %q, want acme", tenant)
 		}
@@ -309,7 +309,7 @@ func TestSandboxIndexReturnsScopedAppliedVolumes(t *testing.T) {
 
 func TestSandboxesReportClaimedAt(t *testing.T) {
 	claimed := time.Date(2026, 9, 23, 1, 2, 3, 0, time.UTC)
-	mgr := &fakeManager{sandboxIndex: func(string) []pool.SandboxSummary {
+	mgr := &fakeManager{sandboxIndex: func(string, string) []pool.SandboxSummary {
 		return []pool.SandboxSummary{{ID: "sb_1", ClaimedAt: claimed}}
 	}}
 	ts := newTenantTestServer(t, "root", nil, mgr, nil)
@@ -329,6 +329,36 @@ func TestSandboxesReportClaimedAt(t *testing.T) {
 	}
 	if len(got.Sandboxes) != 1 || !got.Sandboxes[0].ClaimedAt.Equal(claimed) {
 		t.Errorf("sandboxes = %+v, want claimed_at %v", got.Sandboxes, claimed)
+	}
+}
+
+func TestSandboxesNarrowToAClaimRef(t *testing.T) {
+	for _, tt := range []struct {
+		path string
+		want string
+	}{
+		{"/v1/sandboxes?claim_ref=team-a%2Fdemo", "team-a/demo"},
+		{"/v1/sandboxes", ""},
+	} {
+		got := "unset"
+		mgr := &fakeManager{sandboxIndex: func(_, claimRef string) []pool.SandboxSummary {
+			got = claimRef
+			return nil
+		}}
+		ts := newTenantTestServer(t, "root", nil, mgr, nil)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+tt.path, nil)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer root")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("sandboxes: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || got != tt.want {
+			t.Errorf("%s: status %d, manager saw claim_ref %q, want %q", tt.path, resp.StatusCode, got, tt.want)
+		}
 	}
 }
 
@@ -2019,7 +2049,7 @@ type fakeManager struct {
 	placementCalls     int
 	placementNames     []string
 	volumeCatalog      func(tenant string, holders map[string]int) []types.VolumeInfo
-	sandboxIndex       func(tenant string) []pool.SandboxSummary
+	sandboxIndex       func(tenant, claimRef string) []pool.SandboxSummary
 	draining           bool
 }
 
@@ -2161,12 +2191,12 @@ func (f *fakeManager) Volumes(tenant string, holders map[string]int) []types.Vol
 	return f.volumeCatalog(tenant, holders)
 }
 
-func (f *fakeManager) Sandboxes(tenant string) []pool.SandboxSummary {
+func (f *fakeManager) Sandboxes(tenant, claimRef string) []pool.SandboxSummary {
 	f.gotTenant = tenant
 	if f.sandboxIndex == nil {
 		return nil
 	}
-	return f.sandboxIndex(tenant)
+	return f.sandboxIndex(tenant, claimRef)
 }
 
 func (f *fakeManager) Sandbox(string) (pool.SandboxSummary, bool) {

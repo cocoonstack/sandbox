@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -162,13 +163,44 @@ func TestSandboxesIndexOmitsTokens(t *testing.T) {
 	sb.ClaimRef = "ns/workload"
 	m.mu.Unlock()
 
-	list := m.Sandboxes("")
+	list := m.Sandboxes("", "")
 	if len(list) != 1 || list[0].ID != sb.ID || list[0].ClaimRef != "ns/workload" || list[0].Hibernated {
 		t.Fatalf("index %+v", list)
 	}
 	raw, _ := json.Marshal(list)
 	if strings.Contains(string(raw), sb.Token) {
 		t.Error("index leaked a token")
+	}
+}
+
+func TestSandboxesFilterByClaimRef(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	a := mustClaim(t, m, testKey)
+	b := mustClaim(t, m, testKey)
+	pooled := mustClaim(t, m, testKey)
+	m.mu.Lock()
+	a.ClaimRef, a.Tenant = "team-a/demo", "acme"
+	b.ClaimRef = "team-a/other"
+	m.mu.Unlock()
+
+	for _, tt := range []struct {
+		tenant, claimRef string
+		want             []string
+	}{
+		{"", "team-a/demo", []string{a.ID}},
+		{"acme", "team-a/demo", []string{a.ID}},
+		{"beta", "team-a/demo", nil},
+		{"", "team-a/missing", nil},
+		{"", "", []string{a.ID, b.ID, pooled.ID}},
+	} {
+		var got []string
+		for _, row := range m.Sandboxes(tt.tenant, tt.claimRef) {
+			got = append(got, row.ID)
+		}
+		slices.Sort(tt.want)
+		if !slices.Equal(got, tt.want) {
+			t.Errorf("Sandboxes(%q, %q) = %v, want %v", tt.tenant, tt.claimRef, got, tt.want)
+		}
 	}
 }
 
