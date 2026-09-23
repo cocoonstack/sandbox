@@ -159,6 +159,20 @@ peer advertising both the template and every volume; when that intersection is
 empty, one volume holder may self-verify access to a shared template store
 before provisioning.
 
+## Renewing
+
+```python
+sb.renew(3600)                        # the lease now ends an hour from now
+```
+
+`renew` resets the lease to `ttl_seconds` from now and returns the granted
+deadline, which it also stores in `sb.deadline`. 0 asks for the node default
+of 5m, and the node caps the TTL at 24h. The grant is authoritative, and a
+renew can shorten a lease as well as extend it. `renew` authenticates with the
+sandbox's own token, so a handle from `client.lookup` can renew. An archived
+sandbox is refused with an `APIError` of status 409: any call that reaches the
+guest wakes it, and then it can renew.
+
 ## Hibernating
 
 ```python
@@ -170,12 +184,13 @@ sb.exec("cat", "/tmp/state")          # the next call that reaches the guest wak
 stays valid: the first call that reaches the guest restores the VM (roughly
 a restore's latency, tens of milliseconds on bare metal). The TTL keeps
 running — a hibernated sandbox is still reaped at its deadline, so claim
-with a `ttl_seconds` that covers the idle period. When to hibernate is your
-policy, unless the deployment opts into `idle_hibernate_seconds`
-([deploy](deploy.md#configuration)), which hibernates idle claims
-automatically with the same transparent wake. A claim with a connection live
-when the sweep checks it (a relay stream, a buffered exec, a preview dial, an
-egress request) is not swept; the idle clock restarts when that connection ends.
+with a `ttl_seconds` that covers the idle period or `renew` before it ends.
+When to hibernate is your policy, unless the deployment opts into
+`idle_hibernate_seconds` ([deploy](deploy.md#configuration)), which
+hibernates idle claims automatically with the same transparent wake. A claim
+with a connection live when the sweep checks it (a relay stream, a buffered
+exec, a preview dial, an egress request) is not swept; the idle clock
+restarts when that connection ends.
 
 Data-plane calls share a handle's relay connection: after a call the SDK
 keeps the connection for 30 seconds (`Client(..., keep_alive=...)` tunes the
@@ -193,8 +208,9 @@ the original claim deadline with the archive-retention deadline (or no
 deadline when archives are kept forever). Waking an archive starts a fresh
 lease of the length the claim was granted (the server default when it asked
 for none). The existing handle's `sb.deadline` remains the value
-returned when that handle was created; call `client.sandboxes()` to read the
-current server deadline after an archive/wake transition.
+returned when that handle was created or last renewed; call
+`client.sandboxes()` to read the current server deadline after an
+archive/wake transition.
 
 ## Forking
 

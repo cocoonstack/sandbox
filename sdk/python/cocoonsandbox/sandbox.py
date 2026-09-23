@@ -307,6 +307,15 @@ class Sandbox:
             self.owner, "POST", f"/v1/sandboxes/{self.id}/hibernate", None, "hibernate", bearer=self.token
         )
 
+    def renew(self, ttl_seconds: int = 0) -> str:
+        """Resets the lease to ttl_seconds from now (0 means the node default) and records the granted deadline."""
+        body = {"ttl_seconds": ttl_seconds} if ttl_seconds else None
+        reply = self._client._request(
+            self.owner, "POST", f"/v1/sandboxes/{self.id}/renew", body, "renew", bearer=self.token
+        )
+        self.deadline = cast(str, require_field(reply, "deadline", "renew"))
+        return self.deadline
+
     def checkpoint(self, name: str = "") -> Checkpoint:
         """Captures a branchable snapshot without stopping the sandbox."""
         body = {"token": self.token}

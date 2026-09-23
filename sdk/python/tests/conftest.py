@@ -15,6 +15,7 @@ from cocoonsandbox import Client, Sandbox
 
 class FakeNode(BaseHTTPRequestHandler):
     routes = {}
+    last_headers = {}
 
     def do_POST(self):
         self._dispatch("POST")
@@ -29,6 +30,7 @@ class FakeNode(BaseHTTPRequestHandler):
         pass
 
     def _dispatch(self, method):
+        FakeNode.last_headers = dict(self.headers)
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length)) if length else {}
         handler = self.routes.get((method, self.path.split("?")[0]))

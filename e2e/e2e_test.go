@@ -158,6 +158,39 @@ func TestPromoteEndToEnd(t *testing.T) {
 	}
 }
 
+func TestRenewEndToEnd(t *testing.T) {
+	stack := startStack(t, "node-token")
+	sb, err := stack.client.New(t.Context(), "rt:24.04")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer sb.Close()
+
+	longer, err := sb.Renew(t.Context(), time.Hour)
+	if err != nil {
+		t.Fatalf("Renew: %v", err)
+	}
+	if left := time.Until(longer); left < 59*time.Minute || left > time.Hour {
+		t.Errorf("an hour's renew left %v on the lease", left)
+	}
+	if !sb.Deadline.Equal(longer) {
+		t.Errorf("handle deadline %v, want the grant %v", sb.Deadline, longer)
+	}
+	code, raw := rawJSON(t, stack, http.MethodGet, "/v1/sandboxes/"+sb.ID, "")
+	var held types.Sandbox
+	if code != http.StatusOK || json.Unmarshal(raw, &held) != nil || !held.Deadline.Equal(longer) {
+		t.Errorf("node holds %s (HTTP %d), want deadline %v", raw, code, longer)
+	}
+
+	shorter, err := sb.Renew(t.Context(), 2*time.Minute)
+	if err != nil {
+		t.Fatalf("shortening Renew: %v", err)
+	}
+	if !shorter.Before(longer) {
+		t.Errorf("a two-minute renew granted %v, not before the hour's %v", shorter, longer)
+	}
+}
+
 func TestCheckpointEndToEnd(t *testing.T) {
 	stack := startStack(t, "node-token")
 	src, err := stack.client.New(t.Context(), "rt:24.04")
