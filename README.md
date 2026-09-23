@@ -40,7 +40,7 @@ performance) — source in
   reconcile, memberlist mesh with redirect placement
 - `sdk/go/` — Go SDK: `Connect/New/Lookup`, `Exec/Run`, files,
   `Push/Pull`, sessions, `Find/Replace`, `Watch`, git verbs, `OpenPty`,
-  `Fork/Hibernate/Promote/Checkpoint`, `DialPort/ProxyPort/PreviewURL`,
+  `Renew/Fork/Hibernate/Promote/Checkpoint`, `DialPort/ProxyPort/PreviewURL`,
   `StartLsp`, `Spawn/Ps/Kill/Logs/Attach`; `protocol/wire` carries the frame
   vocabulary, `sdk/go/silkd` the conn layer, `silkdtest` a test fake
 - `sdk/python/` — Python SDK (stdlib-only, sync), matching the Go guest and

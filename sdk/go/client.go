@@ -61,6 +61,14 @@ type promoteResponse struct {
 	ContentDigest string `json:"content_digest"`
 }
 
+type renewRequest struct {
+	TTLSeconds int `json:"ttl_seconds,omitzero"`
+}
+
+type renewResponse struct {
+	Deadline time.Time `json:"deadline"`
+}
+
 type errorResponse struct {
 	Error string `json:"error"`
 }

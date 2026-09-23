@@ -199,6 +199,20 @@ func (s *Sandbox) Hibernate(ctx context.Context) error {
 	return doNoContent(ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/hibernate", nil, s.token, "hibernate")
 }
 
+// Renew resets the lease to ttl from now (zero means the server default) and records the granted deadline in Deadline.
+func (s *Sandbox) Renew(ctx context.Context, ttl time.Duration) (time.Time, error) {
+	body, err := encodeBody("renew", renewRequest{TTLSeconds: ttlSeconds(ttl)})
+	if err != nil {
+		return time.Time{}, err
+	}
+	rr, err := doJSON[renewResponse](ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/renew", bytes.NewReader(body), s.token, "renew")
+	if err != nil {
+		return time.Time{}, err
+	}
+	s.Deadline = rr.Deadline
+	return rr.Deadline, nil
+}
+
 // Close releases the sandbox on its node; releasing one already gone is not
 // an error. It takes no ctx so it stays defer-friendly — bounded internally.
 func (s *Sandbox) Close() error {

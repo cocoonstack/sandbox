@@ -263,6 +263,20 @@ peer advertising both the template and every volume; when that intersection is
 empty, one volume holder may self-verify access to a shared template store
 before provisioning.
 
+## Renewing
+
+```go
+deadline, err := sb.Renew(ctx, time.Hour)   // the lease now ends an hour from now
+```
+
+`Renew` resets the lease to the given TTL from now and returns the granted
+deadline, which it also stores in `Sandbox.Deadline`. Zero asks for the server
+default of 5m; the TTL is rounded up to seconds and capped at 24h, as with
+`WithTimeout`. The grant is authoritative, and a renew can shorten a lease as
+well as extend it. `Renew` authenticates with the sandbox's own token, so a
+handle from `Lookup` can renew. An archived sandbox is refused with a 409
+`*APIError`: any call that reaches the guest wakes it, and then it can renew.
+
 ## Hibernating
 
 ```go
@@ -276,8 +290,8 @@ guest does can fall between the snapshot point and the stop. The handle
 stays valid: the first call that reaches the guest restores the VM (adding
 roughly a restore's latency, tens of milliseconds on bare metal). The TTL
 keeps running — a hibernated sandbox is still reaped at its deadline, so
-claim with a `WithTimeout` that covers the idle period. When to hibernate
-is your policy; the node only provides the transition — unless the
+claim with a `WithTimeout` that covers the idle period or `Renew` before it
+ends. When to hibernate is your policy; the node only provides the transition — unless the
 deployment opts into `idle_hibernate_seconds` (see
 [deploy](deploy.md#configuration)), which hibernates idle claims
 automatically with the same transparent wake. A claim with a connection live
@@ -289,8 +303,9 @@ the original claim deadline with the archive-retention deadline (or no
 deadline when archives are kept forever). Waking an archive starts a fresh
 lease of the length the claim was granted (the server default when it asked
 for none). The existing handle's `Sandbox.Deadline` is the value
-returned when that handle was created; call `Client.Sandboxes` to read the
-current server deadline after an archive/wake transition.
+returned when that handle was created or last renewed; call
+`Client.Sandboxes` to read the current server deadline after an
+archive/wake transition.
 
 ## Forking
 

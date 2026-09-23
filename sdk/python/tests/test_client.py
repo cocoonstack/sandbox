@@ -5,7 +5,7 @@ import time
 from http.server import HTTPServer
 
 import pytest
-from conftest import FakeNode
+from conftest import FakeNode, sandbox_at
 
 from cocoonsandbox import APIError, Client, Template
 
@@ -224,6 +224,32 @@ def test_promote_returns_content_digest(node):
     tpl = Client(node).new("rt:24.04").promote("task:v1")
     assert tpl.name == "task:v1"
     assert tpl.content_digest == "sha256:promoted"
+
+
+@pytest.mark.parametrize(("ttl", "sent"), [(90, {"ttl_seconds": 90}), (0, {})])
+def test_renew_sends_the_sandbox_token_and_records_the_grant(node, ttl, sent):
+    seen = []
+
+    def renew(body, path):
+        seen.append(body)
+        return 200, {"deadline": "2026-09-23T12:00:00Z"}
+
+    FakeNode.routes[("POST", "/v1/sandboxes/sb_1/renew")] = renew
+    sb = sandbox_at(node, api_token="api")
+    assert sb.renew(ttl) == "2026-09-23T12:00:00Z"
+    assert sb.deadline == "2026-09-23T12:00:00Z"
+    assert seen == [sent]
+    assert FakeNode.last_headers["Authorization"] == "Bearer tok"
+
+
+def test_renew_refusal_leaves_the_deadline(node):
+    FakeNode.routes[("POST", "/v1/sandboxes/sb_1/renew")] = lambda body, path: (409, {"error": "sandbox archived"})
+    sb = sandbox_at(node)
+    sb.deadline = "2026-09-23T11:00:00Z"
+    with pytest.raises(APIError) as refused:
+        sb.renew(60)
+    assert refused.value.status == 409
+    assert sb.deadline == "2026-09-23T11:00:00Z"
 
 
 def test_claim_follows_redirect_with_no_redirect(node):

@@ -11,7 +11,7 @@ out, _ := sb.Exec(ctx, "echo", "hello")
 ```
 
 - `client.go` — claim/redirect follow, `Lookup` scatter, template delete
-- `sandbox.go` — exec/run, fork, hibernate (transparent wake)
+- `sandbox.go` — exec/run, renew, fork, hibernate (transparent wake)
 - `session.go` — persistent shell sessions
 - `files.go` / `tree.go` — streaming file verbs, tar push/pull
 - `port.go` — `DialPort`/`ProxyPort` (net.Conn over the relay), `PreviewURL`
