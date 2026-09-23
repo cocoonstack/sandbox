@@ -147,9 +147,13 @@ snapshot paths.
 `claim`/`release`/`hibernate`/`wake` persist `claims.json`, but the write is
 kept off the manager mutex — the lock every data-plane op contends. `set`/`del`
 update a projection map and bump a sequence under the store's own mutex;
-`commit()` clones that map under it, then marshals, writes, and renames off
-both the manager and the store mutex, serialized by its own write lock and
-coalescing by sequence so an older snapshot never overwrites a newer one.
+`commit()` clones that map under it, then marshals, writes, fsyncs and
+renames off both the manager and the store mutex, serialized by its own write
+lock and coalescing by sequence so an older snapshot never overwrites a newer
+one. The fsync of the file and its directory costs about 0.3 ms per commit on
+NVMe (2000 claims, 280 KB), against 0.05 ms unsynced; without it a power loss
+could leave an empty `claims.json`, whose next reconcile would sweep every
+hibernated and archived sandbox's snapshot as an orphan.
 Only the startup `Reconcile`
 pass (pre-contention) still marshals and writes in one call under the lock.
 

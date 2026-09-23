@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 // claimSnapshot sequences one persist request; commit skips it once a newer write has landed.
@@ -119,7 +120,7 @@ func (s *claimStore) reset(claims map[string]*types.Sandbox) claimSnapshot {
 	return claimSnapshot{seq: s.seq}
 }
 
-// commit atomically replaces claims.json; unsynced by design (#21) to keep the claim path fast.
+// commit durably replaces claims.json; a rename without fsync can leave an empty file after a power loss.
 func (s *claimStore) commit(snap claimSnapshot) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -134,11 +135,11 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 	if err != nil {
 		return fmt.Errorf("encode claims: %w", err)
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+	f, err := os.OpenFile(s.path+".tmp", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // our own data-dir path
+	if err != nil {
 		return fmt.Errorf("write claims: %w", err)
 	}
-	if err := os.Rename(tmp, s.path); err != nil {
+	if err := utils.ReplaceFileSync(f, s.path, raw); err != nil {
 		return fmt.Errorf("commit claims: %w", err)
 	}
 	s.mu.Lock()
