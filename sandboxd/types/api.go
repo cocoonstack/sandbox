@@ -74,6 +74,8 @@ type VolumeListResponse struct {
 type ForkRequest struct {
 	Token string `json:"token"`
 	Count int    `json:"count"`
+	// ClaimRefPrefix, when set, records each child under prefix + its id.
+	ClaimRefPrefix string `json:"claim_ref_prefix,omitempty"`
 	TTLField
 }
 

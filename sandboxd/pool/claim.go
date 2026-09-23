@@ -311,17 +311,20 @@ func (m *Manager) tenantDelta(tenant string, delta int) {
 
 // finalize stamps identity and persists the claim; a failed write destroys the VM.
 func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Duration) (*types.Sandbox, error) {
-	if err := m.finalizeBatch(ctx, []*types.Sandbox{sb}, ttl); err != nil {
+	if err := m.finalizeBatch(ctx, []*types.Sandbox{sb}, ttl, ""); err != nil {
 		return nil, err
 	}
 	return sb, nil
 }
 
 // finalizeBatch persists the batch as one write, all-or-nothing; one tenant per batch.
-func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration) error {
+func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration, claimRefPrefix string) error {
 	now := time.Now()
 	for _, sb := range sbs {
 		stampIdentity(sb, clampTTL(ttl))
+		if claimRefPrefix != "" {
+			sb.ClaimRef = claimRefPrefix + sb.ID
+		}
 		sb.TouchAt(now)
 	}
 	m.mu.Lock()

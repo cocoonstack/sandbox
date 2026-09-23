@@ -64,7 +64,7 @@ type Manager interface {
 	Hibernate(ctx context.Context, id string, cred pool.Cred) error
 	Wake(ctx context.Context, id string, cred pool.Cred) error
 	Renew(ctx context.Context, id string, cred pool.Cred, ttl time.Duration) (time.Time, error)
-	Fork(ctx context.Context, id string, cred pool.Cred, count int, ttl time.Duration) ([]*types.Sandbox, error)
+	Fork(ctx context.Context, id string, cred pool.Cred, count int, ttl time.Duration, claimRefPrefix string) ([]*types.Sandbox, error)
 	Promote(ctx context.Context, id string, cred pool.Cred, template, tenant string) (types.PoolKey, string, error)
 	DeleteTemplate(ctx context.Context, key types.PoolKey, tenant string) error
 	Checkpoint(ctx context.Context, id string, cred pool.Cred, name, tenant string) (types.Checkpoint, error)
@@ -425,7 +425,7 @@ func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	children, err := s.mgr.Fork(r.Context(), id, s.bodyCred(r, req.Token), req.Count, req.TTL())
+	children, err := s.mgr.Fork(r.Context(), id, s.bodyCred(r, req.Token), req.Count, req.TTL(), req.ClaimRefPrefix)
 	writeResult(w, r, "fork", id, "fork failed", err, func() {
 		resp := types.ForkResponse{Children: make([]types.ClaimResponse, len(children))}
 		for i, c := range children {
