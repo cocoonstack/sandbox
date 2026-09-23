@@ -40,18 +40,14 @@ const (
 // PoolSpec declares one warm pool and its target of claim-ready VMs.
 type PoolSpec struct {
 	types.PoolKey
-	Warm int `json:"warm"`
-
+	Warm    int `json:"warm"`
 	WarmMax int `json:"warm_max,omitzero"`
 
 	Egress *egress.Policy `json:"egress,omitempty"`
+	Warmup []string       `json:"warmup,omitempty"`
 
-	Warmup []string `json:"warmup,omitempty"`
-
-	IdleHibernateSeconds int `json:"idle_hibernate_seconds,omitzero"`
-
-	ArchiveAfterSeconds int `json:"archive_after_seconds,omitzero"`
-
+	IdleHibernateSeconds      int `json:"idle_hibernate_seconds,omitzero"`
+	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitzero"`
 	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitzero"`
 
 	warmSet bool
