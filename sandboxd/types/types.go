@@ -158,7 +158,7 @@ type Sandbox struct {
 	// Tenant names the owning tenant; empty means the operator claimed it.
 	Tenant string `json:"tenant,omitempty"`
 
-	// ClaimRef is the opaque caller reference recorded at claim time; empty for pool claims.
+	// ClaimRef is the opaque caller reference; empty for checkpoint branches and unprefixed forks.
 	ClaimRef string `json:"claim_ref,omitempty"`
 	// Volumes records the volumes successfully applied to this claim.
 	Volumes []Volume `json:"volumes,omitempty"`
