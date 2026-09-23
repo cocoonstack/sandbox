@@ -266,11 +266,12 @@ impl State {
         let Some(proc) = self.table.get_or_not_found(w, pid).await? else {
             return Ok(());
         };
+        let (replay, exit) = proc.replay();
         let mut frame = Vec::new();
-        for chunk in proc.replay() {
+        for chunk in replay {
             write_chunk(w, &mut frame, chunk).await?;
         }
-        if let Some(code) = proc.exit_code() {
+        if let Some(code) = exit {
             proto::write_frame(w, &Response::Exit { code }).await?;
         }
         proto::write_frame(w, &Response::Done).await
@@ -281,12 +282,12 @@ impl State {
             return Ok(());
         };
         // snapshot replay and subscribe atomically so a chunk lands in exactly one of them.
-        let (replay, mut rx) = proc.attach_stream();
+        let (replay, mut rx, exit) = proc.attach_stream();
         let mut frame = Vec::new();
         for chunk in replay {
             write_chunk(w, &mut frame, chunk).await?;
         }
-        if let Some(code) = proc.exit_code() {
+        if let Some(code) = exit {
             return proto::write_frame(w, &Response::Exit { code }).await;
         }
         loop {
