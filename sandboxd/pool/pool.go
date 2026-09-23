@@ -125,7 +125,7 @@ type Engine interface {
 	SyncGuest(ctx context.Context, vsockSocket string) error
 }
 
-// SandboxSummary is the ops view of one live claim — no tokens.
+// SandboxSummary is the ops view of one live claim.
 type SandboxSummary struct {
 	ID             string         `json:"id"`
 	Key            types.PoolKey  `json:"key"`
