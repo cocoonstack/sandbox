@@ -4,7 +4,7 @@
 # under /boot/ for os-image builds to COPY --from. Built per-platform on
 # native runners (a kernel build under QEMU emulation takes hours).
 
-FROM debian:12.15-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS kbuild
+FROM debian:12.15-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS kbuild
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential bc bison flex libelf-dev libssl-dev \
     xz-utils curl ca-certificates python3 \
@@ -84,7 +84,7 @@ COPY init/Cargo.toml init/Cargo.lock ./
 COPY init/src ./src
 RUN cargo build --release --locked && cp target/release/sandbox-init /sandbox-init
 
-FROM busybox:musl@sha256:32b5cdad7cce41dfd53d0ae06baebcf8357a147ee7694dc706911c373bc30c37 AS bb
+FROM busybox:musl@sha256:ea2b9914a16a4ac1981994af97b318f7c7d4db76b580c56177f08bf76f4a0be8 AS bb
 
 FROM kbuild AS pack
 ARG INITRD_DEBUG=0
