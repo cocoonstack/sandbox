@@ -491,6 +491,9 @@ func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 	if err := os.MkdirAll(gd, 0o750); err != nil {
 		t.Fatalf("golden dir: %v", err)
 	}
+	if err := os.WriteFile(gd+goldenStampSuffix, []byte(m.goldenStamp(egKey, m.poolIntercepts(egKey), nil)), 0o644); err != nil {
+		t.Fatalf("golden stamp: %v", err)
+	}
 	m.mu.Lock()
 	m.pools[egKey].goldenDir = gd
 	m.mu.Unlock()
