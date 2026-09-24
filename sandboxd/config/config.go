@@ -112,7 +112,7 @@ func (e *EgressCAConfig) Set() bool {
 // TenantSpec declares one tenant: its bearer token and its live-claim quota.
 type TenantSpec struct {
 	Name      string `json:"name"`
-	Token     string `json:"token"` //nolint:gosec // config field, not a hardcoded credential
+	Token     string `json:"token"`
 	MaxClaims int    `json:"max_claims,omitzero"`
 
 	Egress *egress.Policy `json:"egress,omitempty"`
@@ -184,7 +184,7 @@ type Config struct {
 	NoBalloon   bool              `json:"no_balloon,omitzero"`
 	SyncClaims  bool              `json:"sync_claims,omitzero"`
 
-	APIToken string              `json:"api_token,omitempty"` //nolint:gosec // config field, not a hardcoded credential
+	APIToken string              `json:"api_token,omitempty"`
 	Tenants  []TenantSpec        `json:"tenants,omitempty"`
 	Secrets  []egress.SecretSpec `json:"secrets,omitempty"`
 
@@ -193,7 +193,7 @@ type Config struct {
 	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitzero"`
 
 	PreviewListen    string `json:"preview_listen,omitempty"`
-	PreviewSecret    string `json:"preview_secret,omitempty"` //nolint:gosec // config field, not a hardcoded credential
+	PreviewSecret    string `json:"preview_secret,omitempty"`
 	PreviewAdvertise string `json:"preview_advertise,omitempty"`
 
 	CheckpointDir      string       `json:"checkpoint_dir,omitempty"`

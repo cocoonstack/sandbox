@@ -258,21 +258,21 @@ func trustUpstream(upstream *httptest.Server) *x509.CertPool {
 	return pool
 }
 
-func connectTLS(t *testing.T, proxyAddr, target, serverName string, roots *x509.CertPool) *tls.Conn {
-	t.Helper()
+func connectTLS(tb testing.TB, proxyAddr, target, serverName string, roots *x509.CertPool) *tls.Conn {
+	tb.Helper()
 	conn, err := net.Dial("tcp", proxyAddr)
 	if err != nil {
-		t.Fatalf("dial proxy: %v", err)
+		tb.Fatalf("dial proxy: %v", err)
 	}
 	if _, err := io.WriteString(conn, "CONNECT "+target+" HTTP/1.1\r\nHost: "+target+"\r\n\r\n"); err != nil {
-		t.Fatalf("write CONNECT: %v", err)
+		tb.Fatalf("write CONNECT: %v", err)
 	}
-	if status := readPreamble(t, conn); !strings.Contains(status, "200") {
-		t.Fatalf("CONNECT status = %q, want 200", status)
+	if status := readPreamble(tb, conn); !strings.Contains(status, "200") {
+		tb.Fatalf("CONNECT status = %q, want 200", status)
 	}
 	tc := tls.Client(conn, &tls.Config{ServerName: serverName, RootCAs: roots})
 	if err := tc.Handshake(); err != nil {
-		t.Fatalf("guest tls handshake: %v", err)
+		tb.Fatalf("guest tls handshake: %v", err)
 	}
 	return tc
 }
@@ -317,13 +317,13 @@ func roundTripTLSHost(t *testing.T, tc *tls.Conn, method, host string) *http.Res
 	return resp
 }
 
-func readPreamble(t *testing.T, conn net.Conn) string {
-	t.Helper()
+func readPreamble(tb testing.TB, conn net.Conn) string {
+	tb.Helper()
 	var sb strings.Builder
 	var b [1]byte
 	for sb.Len() < 512 {
 		if _, err := io.ReadFull(conn, b[:]); err != nil {
-			t.Fatalf("read CONNECT preamble: %v", err)
+			tb.Fatalf("read CONNECT preamble: %v", err)
 		}
 		sb.WriteByte(b[0])
 		if strings.HasSuffix(sb.String(), "\r\n\r\n") {

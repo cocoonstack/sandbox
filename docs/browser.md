@@ -52,9 +52,9 @@ through an authorized claim and never sits on a guest NIC.
 
 ## Checkpoint / branch a live browser
 
-`sb.Checkpoint` + `ck.New` fork a warmed browser — in-memory tabs,
-cookies, localStorage — in checkpoint-restore time; the branch answers
-`/json/version` without relaunching Chrome. Hosted browser services
+On the `none` lane, `sb.Checkpoint` + `ck.New` fork a warmed browser —
+in-memory tabs, cookies, localStorage — in checkpoint-restore time; the
+branch answers `/json/version` without relaunching Chrome. Hosted browser services
 cold-start a browser per session; here a warmed profile is a template you
 branch from.
 

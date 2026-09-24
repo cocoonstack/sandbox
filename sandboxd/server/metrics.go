@@ -71,7 +71,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		{"reaps_total", "claims reaped at deadline", c.Reaps},
 		{"archives_total", "claims archived to the store", c.Archives},
 		{"unarchives_total", "archived claims restored", c.Unarchives},
-		{"archive_deletes_total", "archived checkpoints purged at retention", c.ArchiveDeletes},
+		{"archive_deletes_total", "archived checkpoints deleted at release or retention", c.ArchiveDeletes},
 	} {
 		metric(row.name, "counter", row.help)
 		_, _ = fmt.Fprintf(w, "sandboxd_%s %d\n", row.name, row.value)

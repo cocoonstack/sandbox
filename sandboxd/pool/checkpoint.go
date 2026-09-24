@@ -233,7 +233,7 @@ func (m *Manager) healCheckpoint(ctx context.Context, ckptID string) (types.Chec
 		return ckpt, nil
 	}
 	resCh := m.healFlights.DoChan(ckptID, func() (any, error) {
-		return m.runHeal(ckptID)
+		return m.runHeal(context.WithoutCancel(ctx), ckptID)
 	})
 	select {
 	case res := <-resCh:
@@ -247,7 +247,7 @@ func (m *Manager) healCheckpoint(ctx context.Context, ckptID string) (types.Chec
 }
 
 // runHeal stages and pulls without ckptID's record lock: a pull runs up to 30 minutes.
-func (m *Manager) runHeal(ckptID string) (types.Checkpoint, error) {
+func (m *Manager) runHeal(ctx context.Context, ckptID string) (types.Checkpoint, error) {
 	select {
 	case m.healSem <- struct{}{}:
 		defer func() { <-m.healSem }()
@@ -261,7 +261,6 @@ func (m *Manager) runHeal(ckptID string) (types.Checkpoint, error) {
 		return types.Checkpoint{}, fmt.Errorf("stage healed checkpoint: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
-	ctx := context.Background()
 	validate := func(dir string) error { return validateHealedCheckpoint(dir, ckptID) }
 	if err := m.healer.Pull(ctx, ckptID, staging, validate); err != nil {
 		m.clearHealPending(ckptID)

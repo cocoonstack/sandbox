@@ -42,7 +42,7 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 		return nil, fmt.Errorf("fork %s: %w", sb.ID, err)
 	}
 	m.counters.forks.Add(1)
-	m.counters.claimsClone.Add(uint64(len(children))) //nolint:gosec // count is bounded by maxFork
+	m.counters.claimsClone.Add(uint64(len(children)))
 	ids := make([]string, len(children))
 	for i, c := range children {
 		ids[i] = c.ID

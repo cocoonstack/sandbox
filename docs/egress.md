@@ -296,17 +296,19 @@ baked into a guest **when the guest is created** — at golden build, or at a
 pre-golden cold claim's provision (both via silkd; only the golden-build
 install is off the claim path). It is
 **not** re-installed on re-claim: a clone, checkpoint restore, archive wake, or
-reconcile adopts the guest with whatever root it was born with. A `.cafp`
-sidecar ties golden adoption to the baked bytes, so a changed root rebuilds
-goldens — but nothing rebuilds an existing checkpoint, archive, promoted
-template, or live/hibernated claim. Because the baked cert is the shared cluster
-root, promote/checkpoint/archive carry no node-private material and stay
-unrestricted.
+reconcile adopts the guest with whatever root it was born with. Each golden's
+`.stamp` file records what it baked (the root fingerprint, the lane verdict,
+and the warmup argv), and a golden is adopted only when its stamp exists and
+matches, so a changed root rebuilds goldens; a golden from before the stamp
+has none and is rebuilt once. Nothing rebuilds an existing checkpoint,
+archive, promoted template, or live/hibernated claim. Because the baked cert
+is the shared cluster root, promote/checkpoint/archive carry no node-private
+material and stay unrestricted.
 
 **Intermediate rotation is seamless.** Issue a fresh intermediate from the same
 root, point the node's config at it, restart: leaves still chain to the root
-every guest already trusts, and `.cafp` (the root fingerprint) is unchanged, so
-no golden rebuilds.
+every guest already trusts, and the root fingerprint in each golden's `.stamp`
+is unchanged, so no golden rebuilds.
 
 **Root rotation needs a drain, not a hot swap.** A guest verifies leaves only
 against the root(s) it was born with, so the node's leaves must chain to a root

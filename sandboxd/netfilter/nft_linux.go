@@ -21,14 +21,13 @@ func Lock(tap string) error {
 		return fmt.Errorf("nft conn: %w", err)
 	}
 	t := c.AddTable(&nftables.Table{Family: nftables.TableFamilyNetdev, Name: tablePrefix + tap})
-	policy := nftables.ChainPolicyAccept
 	ch := c.AddChain(&nftables.Chain{
 		Name:     "ingress",
 		Table:    t,
 		Type:     nftables.ChainTypeFilter,
 		Hooknum:  nftables.ChainHookIngress,
 		Priority: nftables.ChainPriorityFilter,
-		Policy:   &policy,
+		Policy:   new(nftables.ChainPolicyAccept),
 		Device:   tap,
 	})
 	// accept only IPv4 broadcast DHCP; egress VMs must not share a broadcast domain.

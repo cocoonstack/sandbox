@@ -10,7 +10,7 @@ ARG SILKD_IMAGE=ghcr.io/cocoonstack/sandbox/silkd:0.1.13
 FROM ${BOOT_IMAGE} AS boot
 FROM ${SILKD_IMAGE} AS silkd
 
-FROM ubuntu:24.04@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254
+FROM ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
 # Content hash of the image dir's non-Dockerfile inputs (CI computes it).
@@ -55,9 +55,9 @@ RUN --mount=type=secret,id=sandbox_install_agent \
     # the agent — this is the sandbox product's readiness signal. Same
     # measured-fast ordering as the agent unit (no local-fs wait).
     #
-    # 3128 is silkd's loopback relay over vsock to the host proxy, the none
-    # lane's only way out. silkd forwards these into execs only on the
-    # no-network lane, so a lane with its own NIC never dials a closed relay.
+    # 3128 is silkd's loopback relay over vsock to the host proxy. silkd
+    # forwards these into execs only when nothing routes directly (no NIC, or
+    # a relay verdict in /etc/silkd-lane), so a routed NIC never dials a closed relay.
     printf '%s\n' \
       '[Unit]' \
       'Description=silkd (sandbox product daemon: exec, files, sessions over vsock)' \

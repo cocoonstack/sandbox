@@ -12,6 +12,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -465,6 +466,69 @@ func TestClaimRefRoundTrip(t *testing.T) {
 	}
 	if list[i].ClaimRef != "ns/workload" {
 		t.Errorf("claim_ref %q, want ns/workload", list[i].ClaimRef)
+	}
+}
+
+func TestForkClaimRefPrefixWireShape(t *testing.T) {
+	st := startStack(t, "node-token")
+	status, body := rawJSON(t, st, http.MethodPost, "/v1/claim", `{"template":"rt:24.04"}`)
+	if status != http.StatusOK {
+		t.Fatalf("claim: %d %s", status, body)
+	}
+	var parent rawClaimResponse
+	if err := json.Unmarshal(body, &parent); err != nil {
+		t.Fatalf("decode claim %s: %v", body, err)
+	}
+
+	fork := func(extra string) []rawClaimResponse {
+		t.Helper()
+		status, body := rawJSON(t, st, http.MethodPost, "/v1/sandboxes/"+parent.ID+"/fork",
+			fmt.Sprintf(`{"token":%q,"count":2,"ttl_seconds":60%s}`, parent.Token, extra))
+		if status != http.StatusOK {
+			t.Fatalf("fork: %d %s", status, body)
+		}
+		var resp struct {
+			Children []rawClaimResponse `json:"children"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			t.Fatalf("decode fork %s: %v", body, err)
+		}
+		if len(resp.Children) != 2 {
+			t.Fatalf("fork children %s, want 2", body)
+		}
+		return resp.Children
+	}
+	row := func(route string) map[string]any {
+		t.Helper()
+		status, body := rawJSON(t, st, http.MethodGet, route, "")
+		if status != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", route, status, body)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatalf("decode %s: %v", body, err)
+		}
+		return out
+	}
+
+	for _, child := range fork(`,"claim_ref_prefix":"ns/"`) {
+		want := "ns/" + child.ID
+		list, ok := row("/v1/sandboxes?claim_ref=" + url.QueryEscape(want))["sandboxes"].([]any)
+		if !ok || len(list) != 1 {
+			t.Fatalf("claim_ref=%s lists %v, want exactly child %s", want, list, child.ID)
+		}
+		listed, _ := list[0].(map[string]any)
+		if listed["id"] != child.ID || listed["claim_ref"] != want {
+			t.Errorf("claim_ref=%s row %v, want id %s claim_ref %s", want, listed, child.ID, want)
+		}
+		if got := row("/v1/sandboxes/" + child.ID)["claim_ref"]; got != want {
+			t.Errorf("by-id claim_ref %v, want %s", got, want)
+		}
+	}
+	for _, child := range fork("") {
+		if got, ok := row("/v1/sandboxes/" + child.ID)["claim_ref"]; ok {
+			t.Errorf("unprefixed fork child %s carries claim_ref %v", child.ID, got)
+		}
 	}
 }
 

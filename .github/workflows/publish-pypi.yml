@@ -58,7 +58,7 @@ jobs:
           # The in-repo base SDK installs first, so an adapter release never
           # resolves (or fails to resolve) cocoonstack-sandbox from PyPI.
           python -m pip install -q ./sdk/python
-          python -m pip install -q "${{ steps.pkg.outputs.dir }}" ruff==0.15.20 pytest==8.4.2
+          python -m pip install -q "${{ steps.pkg.outputs.dir }}" ruff==0.15.22 pytest==8.4.2
           (cd "${{ steps.pkg.outputs.dir }}" && ruff check . && python -m pytest -q)
 
       - name: Build sdist + wheel

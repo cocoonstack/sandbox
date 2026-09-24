@@ -55,7 +55,7 @@ func deleteOn(ctx context.Context, client *http.Client, addr, id, token string) 
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := client.Do(req) //nolint:gosec // addr comes from the mesh's own member view
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}

@@ -17,12 +17,12 @@ type usageEvent struct {
 	Event     string    `json:"ev"`
 	ID        string    `json:"id"`
 	VMName    string    `json:"vm,omitempty"`
-	KeyHash   string    `json:"key,omitempty"`        // claim only
-	Tenant    string    `json:"tenant,omitempty"`     // claim only
-	Volumes   []string  `json:"volumes,omitempty"`    // claim only
-	VolumesRW []string  `json:"volumes_rw,omitempty"` // claim only
-	Children  []string  `json:"children,omitempty"`   // fork only
-	Reference string    `json:"ref,omitempty"`        // promote: template; checkpoint: ckpt id
+	KeyHash   string    `json:"key,omitempty"`
+	Tenant    string    `json:"tenant,omitempty"`
+	Volumes   []string  `json:"volumes,omitempty"`
+	VolumesRW []string  `json:"volumes_rw,omitempty"`
+	Children  []string  `json:"children,omitempty"`
+	Reference string    `json:"ref,omitempty"`
 }
 
 // journal is an append-only JSONL writer with size rotation; its lock only orders appends.
@@ -66,7 +66,7 @@ func (j *journal) append(v any) error {
 // rotate moves the live file to .1 and reopens; the old descriptor closes last.
 func (j *journal) rotate() error {
 	renameErr := os.Rename(j.path, j.path+".1")
-	f, err := os.OpenFile(j.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // under data_dir
+	f, err := os.OpenFile(j.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return errors.Join(renameErr, err)
 	}

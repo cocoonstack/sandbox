@@ -212,7 +212,7 @@ func (f *Fake) fsPull(conn net.Conn, path string) {
 		if d.IsDir() {
 			return tw.WriteHeader(&tar.Header{Name: name + "/", Typeflag: tar.TypeDir, Mode: 0o750})
 		}
-		body, err := os.ReadFile(p) //nolint:gosec // test fake, paths under the fake root
+		body, err := os.ReadFile(p)
 		if err != nil {
 			return err
 		}

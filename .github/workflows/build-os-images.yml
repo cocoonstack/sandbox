@@ -174,10 +174,10 @@ jobs:
           echo "silkd=$(sed -n 's/^version = "\(.*\)"/\1/p' silkd/Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4.3.0
+        uses: docker/setup-qemu-action@v4.4.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4.3.0
+        uses: docker/setup-buildx-action@v4.4.1
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v4.6.0
@@ -225,7 +225,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Build and push
-        uses: docker/build-push-action@v7.3.0
+        uses: docker/build-push-action@v7.4.0
         with:
           context: os-image/${{ matrix.name }}
           file: os-image/${{ matrix.name }}/${{ matrix.tag }}/Dockerfile
@@ -265,10 +265,10 @@ jobs:
         run: echo "silkd=$(sed -n 's/^version = "\(.*\)"/\1/p' silkd/Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4.3.0
+        uses: docker/setup-qemu-action@v4.4.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4.3.0
+        uses: docker/setup-buildx-action@v4.4.1
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v4.6.0
@@ -316,7 +316,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Build and push
-        uses: docker/build-push-action@v7.3.0
+        uses: docker/build-push-action@v7.4.0
         with:
           context: os-image/${{ matrix.name }}
           file: os-image/${{ matrix.name }}/${{ matrix.tag }}/Dockerfile

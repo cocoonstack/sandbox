@@ -88,7 +88,7 @@ func writeCAFiles(dir, name string, certPEM, keyPEM []byte, force bool) error {
 			}
 		}
 	}
-	if err := writeKeyMaterial(certPath, certPEM, 0o644, force); err != nil { //nolint:gosec // public cert
+	if err := writeKeyMaterial(certPath, certPEM, 0o644, force); err != nil {
 		return fmt.Errorf("write cert: %w", err)
 	}
 	if err := writeKeyMaterial(keyPath, keyPEM, 0o600, force); err != nil {

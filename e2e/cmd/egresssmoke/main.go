@@ -36,7 +36,7 @@ func main() {
 	template := flag.String("template", "rt:24.04", "template with an egress policy")
 	wantToken := flag.String("secret", "", "the value the origin should observe injected")
 	netShape := flag.String("net", "none", "claim lane: none|egress")
-	reach := flag.String("reach", "127.0.0.1", "host the guest reaches the origin at (policy must allow it)")
+	reach := flag.String("reach", "127.0.0.1", "host the guest reaches the origin at")
 	nicAddr := flag.String("nicaddr", "", "static CIDR to bring the egress-lane NIC up with (default route via -reach)")
 	guarded := flag.Bool("guarded", true, "pool has an egress policy; false asserts the unlocked NIC reaches directly (negative control)")
 	echo := flag.String("echo", "postman-echo.com", "public HTTP host echoing request headers at /get, for the injection check")
@@ -122,18 +122,13 @@ func run(addr, token, template, wantToken, netShape, reach, nicAddr, echo string
 	return nil
 }
 
-// startOrigin serves one echo endpoint that returns the credential header the
-// proxy injected, on a host-local port.
+// startOrigin serves the host-local negative control, answering REACHED to a guest that dials it directly.
 func startOrigin() (*http.Server, int, error) {
 	ln, err := net.Listen("tcp", "0.0.0.0:0") //nolint:gosec // test origin the egress-lane guest reaches via the bridge
 	if err != nil {
 		return nil, 0, err
 	}
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if v := r.Header.Get("X-Egress-Token"); v != "" {
-			_, _ = io.WriteString(w, v) //nolint:gosec // test origin echoing the token we injected
-			return
-		}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "REACHED")
 	}), ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = srv.Serve(ln) }()

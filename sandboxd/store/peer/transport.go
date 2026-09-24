@@ -60,7 +60,7 @@ func (p *HTTPPuller) Pull(ctx context.Context, addr, id, dst string) error {
 	}
 
 	client := cmp.Or(p.Client, http.DefaultClient)
-	resp, err := client.Do(req) //nolint:gosec // addr comes from the mesh's own member view
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("pull %s from %s: %w", id, addr, err)
 	}

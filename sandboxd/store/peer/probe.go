@@ -227,7 +227,7 @@ func probeOwner(ctx context.Context, client *http.Client, probeKey []byte, addr,
 	if len(probeKey) > 0 {
 		req.Header.Set(ProbeHeader, SignProbe(probeKey, id))
 	}
-	resp, err := client.Do(req) //nolint:gosec // addr comes from the mesh's own member view
+	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}

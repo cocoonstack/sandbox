@@ -55,7 +55,7 @@ type Mesh struct {
 // New starts a mesh member listening per cfg.
 func New(ctx context.Context, cfg *memberlist.Config, nodeID, selfAddr string, secretKey []byte, dataDir string) (*Mesh, error) {
 	epochPath := filepath.Join(dataDir, "mesh-epoch")
-	epoch := max(uint64(time.Now().UnixNano()), loadEpoch(epochPath)+1) //nolint:gosec // UnixNano is positive for current times
+	epoch := max(uint64(time.Now().UnixNano()), loadEpoch(epochPath)+1)
 	m := &Mesh{
 		ctx:       ctx,
 		epochPath: epochPath,

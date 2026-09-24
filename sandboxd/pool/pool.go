@@ -71,9 +71,7 @@ const (
 	vmStateRunning  = "running"
 	vmStateCreating = "creating"
 
-	caSidecarSuffix     = ".cafp"
-	nicSidecarSuffix    = ".nic"
-	warmupSidecarSuffix = ".warmup"
+	goldenStampSuffix = ".stamp"
 )
 
 var (
@@ -136,7 +134,7 @@ type SandboxSummary struct {
 	Archived       bool           `json:"archived,omitzero"`
 	FromCheckpoint string         `json:"from_checkpoint,omitempty"`
 	Volumes        []types.Volume `json:"volumes,omitempty"`
-	// ClaimRef echoes the caller reference; empty for fork and checkpoint-branch claims.
+	// ClaimRef echoes the caller reference; empty for checkpoint branches and unprefixed forks.
 	ClaimRef string `json:"claim_ref,omitempty"`
 	// Token is the sandbox's own bearer token; only the root by-id read carries it.
 	Token string `json:"token,omitempty"`
@@ -650,15 +648,15 @@ func summarize(sb *types.Sandbox) SandboxSummary {
 }
 
 func loadEgressCA(cfg *config.EgressCAConfig) (*egress.CA, error) {
-	root, err := os.ReadFile(cfg.RootCert) //nolint:gosec // operator-configured ca path
+	root, err := os.ReadFile(cfg.RootCert)
 	if err != nil {
 		return nil, fmt.Errorf("read root cert: %w", err)
 	}
-	interCert, err := os.ReadFile(cfg.IntermediateCert) //nolint:gosec // operator-configured ca path
+	interCert, err := os.ReadFile(cfg.IntermediateCert)
 	if err != nil {
 		return nil, fmt.Errorf("read intermediate cert: %w", err)
 	}
-	interKey, err := os.ReadFile(cfg.IntermediateKey) //nolint:gosec // operator-configured ca path
+	interKey, err := os.ReadFile(cfg.IntermediateKey)
 	if err != nil {
 		return nil, fmt.Errorf("read intermediate key: %w", err)
 	}

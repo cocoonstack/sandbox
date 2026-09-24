@@ -15,7 +15,7 @@ notify = "8"
 regex = "1"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
-tokio = { version = "1", features = ["fs", "rt-multi-thread", "macros", "io-util", "net", "process", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "rt-multi-thread", "macros", "io-util", "net", "process", "sync", "time"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tokio-vsock = "0.7"

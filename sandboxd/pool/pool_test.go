@@ -322,10 +322,7 @@ func TestReconcile(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 	m := newTestManagerAt(t, eng, dataDir, config.PoolSpec{PoolKey: testKey, Warm: 1})
-	goldenDir := filepath.Join(dataDir, "goldens", testKey.Hash())
-	if err := os.MkdirAll(goldenDir, 0o750); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
+	goldenDir := seedGolden(t, m)
 
 	if err := m.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -372,10 +369,7 @@ func TestSetPoolsGrowShrinkAndDrain(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng)
-		goldenDir := filepath.Join(m.goldensDir(), testKey.Hash())
-		if err := os.MkdirAll(goldenDir, 0o750); err != nil {
-			t.Fatalf("setup golden: %v", err)
-		}
+		seedGolden(t, m)
 
 		if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 2}}); err != nil {
 			t.Fatalf("SetPools grow: %v", err)
@@ -999,6 +993,18 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("condition not met within 3s")
+}
+
+func seedGolden(t *testing.T, m *Manager) string {
+	t.Helper()
+	g := filepath.Join(m.goldensDir(), testKey.Hash())
+	if err := os.MkdirAll(g, 0o750); err != nil {
+		t.Fatalf("seed golden: %v", err)
+	}
+	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(testKey, false, nil)), 0o644); err != nil {
+		t.Fatalf("seed golden stamp: %v", err)
+	}
+	return g
 }
 
 type fakeEngine struct {

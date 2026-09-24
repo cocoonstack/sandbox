@@ -3,6 +3,7 @@
 use std::io::Read;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::process::ExitStatusExt;
+use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -249,13 +250,9 @@ fn snapshot_proxy(get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, St
         .collect()
 }
 
-fn lookup_user(user: &str) -> Result<(u32, u32, String), String> {
+fn lookup_user(user: &str) -> Result<(u32, u32, PathBuf), String> {
     match nix::unistd::User::from_name(user) {
-        Ok(Some(pw)) => Ok((
-            pw.uid.as_raw(),
-            pw.gid.as_raw(),
-            pw.dir.to_string_lossy().into_owned(),
-        )),
+        Ok(Some(pw)) => Ok((pw.uid.as_raw(), pw.gid.as_raw(), pw.dir)),
         Ok(None) => Err(format!("unknown user {user:?}")),
         Err(e) => Err(format!("look up user {user:?}: {e}")),
     }
@@ -340,6 +337,6 @@ mod tests {
     fn root_resolves() {
         let (uid, _, home) = lookup_user("root").expect("root must exist");
         assert_eq!(uid, 0);
-        assert!(!home.is_empty());
+        assert!(!home.as_os_str().is_empty());
     }
 }

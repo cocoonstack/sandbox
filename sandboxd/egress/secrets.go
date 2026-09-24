@@ -17,7 +17,7 @@ type SecretSpec struct {
 	Name     string  `json:"name"`
 	Header   string  `json:"header"`
 	Value    *string `json:"value,omitempty"` // rejected whenever present — value_env is the only source
-	ValueEnv string  `json:"value_env"`       //nolint:gosec // env var name, not a value
+	ValueEnv string  `json:"value_env"`
 }
 
 func (s SecretSpec) Validate() error {

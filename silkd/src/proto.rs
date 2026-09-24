@@ -26,6 +26,8 @@ pub const READ_CHUNK: usize = 32 * 1024;
 /// Bulk streams chunk larger: fewer frames and flushes per byte, still under MAX_FRAME after base64.
 pub const BULK_CHUNK: usize = 256 * 1024;
 
+const DATA_FRAME_HEAD: &[u8] = b"{\"v\":1,\"op\":\"data\",\"data\":\"";
+
 /// Client → server frames; unknown JSON fields are ignored, which is forward compatibility.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -532,12 +534,19 @@ where
     S: AsyncWrite + Unpin,
 {
     let mut frame = Vec::new();
+    let mut decoded = Vec::new();
     loop {
         if !read_frame_into(reader, &mut frame)
             .await
             .map_err(|e| FeedError::Io(e, "read"))?
         {
             return Err(FeedError::Bad("stream ended before data_end"));
+        }
+        if let Some(n) = decode_data_frame(&frame, &mut decoded) {
+            sink.write_all(&decoded[..n])
+                .await
+                .map_err(|e| FeedError::Io(e, "write"))?;
+            continue;
         }
         match serde_json::from_slice::<Request>(&frame) {
             Ok(Request::Data { data }) => sink
@@ -556,6 +565,12 @@ pub async fn write_feed_error<W: AsyncWrite + Unpin>(w: &mut W, err: FeedError) 
         FeedError::Io(e, op) => err_frame(w, &e, op).await,
         FeedError::Bad(message) => error_frame(w, ErrorKind::BadRequest, message).await,
     }
+}
+
+fn decode_data_frame(frame: &[u8], out: &mut Vec<u8>) -> Option<usize> {
+    let b64 = frame.strip_prefix(DATA_FRAME_HEAD)?.strip_suffix(b"\"}")?;
+    out.resize(base64::decoded_len_estimate(b64.len()), 0);
+    STANDARD.decode_slice(b64, out).ok()
 }
 
 fn cap_check(len: usize) -> io::Result<()> {
@@ -837,9 +852,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fast_and_serde_data_frames_feed_the_same_bytes() {
+        let payloads: [&[u8]; 4] = [b"", b"a", b"\xff\xff\xfe", &[0x5a; 1000]];
+        let mut input = Vec::new();
+        let mut want = Vec::new();
+        for payload in payloads {
+            let b64 = STANDARD.encode(payload);
+            for line in [
+                format!("{{\"v\":1,\"op\":\"data\",\"data\":\"{b64}\"}}\n"),
+                format!(
+                    "{{\"v\":1,\"op\":\"data\",\"data\":\"{}\"}}\n",
+                    b64.replace('/', "\\/")
+                ),
+                format!("{{\"op\":\"data\",\"data\":\"{b64}\",\"future\":1}}\n"),
+            ] {
+                input.extend_from_slice(line.as_bytes());
+                want.extend_from_slice(payload);
+            }
+        }
+        input.extend_from_slice(b"{\"v\":1,\"op\":\"data_end\"}\n");
+        let mut reader = tokio::io::BufReader::new(input.as_slice());
+        let mut sink = Vec::new();
+        assert!(feed_data_frames(&mut reader, &mut sink).await.is_ok());
+        assert_eq!(sink, want);
+    }
+
+    #[tokio::test]
     async fn a_failed_upload_renders_a_bad_request_frame() {
-        let cases: [(&[u8], &str); 2] = [
+        let cases: [(&[u8], &str); 3] = [
             (b"{\"v\":1,\"op\":\"ps\"}\n", "expected data or data_end"),
+            (
+                b"{\"v\":1,\"op\":\"data\",\"data\":\"!!!\"}\n",
+                "expected data or data_end",
+            ),
             (b"", "stream ended before data_end"),
         ];
         for (input, message) in cases {

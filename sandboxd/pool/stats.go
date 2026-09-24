@@ -61,7 +61,7 @@ func (m *Manager) vmResidentBytes(ctx context.Context, vmName string) (int64, bo
 
 // residentBytes reads a process's resident page count from statm's second field.
 func residentBytes(pid int) (int64, bool) {
-	b, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "statm")) //nolint:gosec // pid comes from cocoon's own VM record
+	b, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "statm"))
 	if err != nil {
 		return 0, false
 	}

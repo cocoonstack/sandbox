@@ -2,8 +2,6 @@ package pool
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 	"testing/synctest"
 
@@ -14,10 +12,7 @@ func TestDrainRefusesClaimsTrimsWarmAndUncordonRefills(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng)
-		goldenDir := filepath.Join(m.goldensDir(), testKey.Hash())
-		if err := os.MkdirAll(goldenDir, 0o750); err != nil {
-			t.Fatalf("setup golden: %v", err)
-		}
+		seedGolden(t, m)
 		if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 2}}); err != nil {
 			t.Fatalf("SetPools: %v", err)
 		}
