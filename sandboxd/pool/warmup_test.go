@@ -26,12 +26,12 @@ func TestGoldenBuildRunsWarmupBeforeSnapshot(t *testing.T) {
 	if eng.warmupAfterSnap {
 		t.Fatal("golden warmup ran after the snapshot save")
 	}
-	stamp, err := os.ReadFile(final + warmupSidecarSuffix)
+	stamp, err := os.ReadFile(final + goldenStampSuffix)
 	if err != nil {
-		t.Fatalf("read warmup sidecar: %v", err)
+		t.Fatalf("read golden stamp: %v", err)
 	}
-	if string(stamp) != warmupStamp(argv) {
-		t.Errorf("sidecar = %q, want %q", stamp, warmupStamp(argv))
+	if want := m.goldenStamp(testKey, false, argv); string(stamp) != want {
+		t.Errorf("stamp = %q, want %q", stamp, want)
 	}
 }
 
@@ -45,8 +45,8 @@ func TestGoldenBuildSkipsWarmupWhenUnset(t *testing.T) {
 	if len(eng.warmups) != 0 {
 		t.Errorf("Warmup called %d times for a pool without one", len(eng.warmups))
 	}
-	if _, err := os.Stat(final + warmupSidecarSuffix); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("warmup sidecar present for a pool without one: %v", err)
+	if stamp, err := os.ReadFile(final + goldenStampSuffix); err != nil || string(stamp) != m.goldenStamp(testKey, false, nil) {
+		t.Errorf("stamp = %q (%v), want one without a warmup", stamp, err)
 	}
 }
 
@@ -56,20 +56,23 @@ func TestAdoptGoldenRequiresMatchingWarmup(t *testing.T) {
 	if err := os.MkdirAll(final, 0o755); err != nil {
 		t.Fatalf("mkdir golden: %v", err)
 	}
+	if err := os.WriteFile(final+goldenStampSuffix, []byte(m.goldenStamp(testKey, false, nil)), 0o644); err != nil {
+		t.Fatalf("write stamp: %v", err)
+	}
 	p := m.pools[testKey]
 	m.adoptGolden(p)
 	if p.goldenDir != "" {
 		t.Error("adopted a golden built without the warmup")
 	}
-	if err := os.WriteFile(final+warmupSidecarSuffix, []byte(warmupStamp([]string{"python3", "-c", "0"})), 0o644); err != nil {
-		t.Fatalf("write sidecar: %v", err)
+	if err := os.WriteFile(final+goldenStampSuffix, []byte(m.goldenStamp(testKey, false, []string{"python3", "-c", "0"})), 0o644); err != nil {
+		t.Fatalf("write stamp: %v", err)
 	}
 	m.adoptGolden(p)
 	if p.goldenDir != "" {
 		t.Error("adopted a golden built with a different warmup")
 	}
-	if err := os.WriteFile(final+warmupSidecarSuffix, []byte(warmupStamp([]string{"node", "-e", "0"})), 0o644); err != nil {
-		t.Fatalf("write sidecar: %v", err)
+	if err := os.WriteFile(final+goldenStampSuffix, []byte(m.goldenStamp(testKey, false, []string{"node", "-e", "0"})), 0o644); err != nil {
+		t.Fatalf("write stamp: %v", err)
 	}
 	m.adoptGolden(p)
 	if p.goldenDir != final {

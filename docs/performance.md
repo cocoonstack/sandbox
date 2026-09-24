@@ -74,7 +74,8 @@ SDKs keep one relay connection per handle with a 30s idle window.
 `e2e/cmd/rpcbench`, warm `rt:24.04` sandbox, `net=none`, n=200 `fs_stat`
 RPCs per arm, cocoon-test1 bare metal, client on the node, 2026-09-16 at
 5158a14. The two arms interleave sample by sample and swap which one leads,
-so drift cannot land on one of them.
+so drift cannot land on one of them. The pre-dialed spare row is a third arm
+that rpcbench ran after them at that commit and no longer carries.
 
 | per-RPC wall | plain p50 | plain p90 | TLS edge p50 | TLS edge p90 |
 | --- | --- | --- | --- | --- |
@@ -173,11 +174,11 @@ That experiment rejected the background pre-dialer because its ~0.2ms p50 win
 did not survive the tail. Current main instead implements protocol-level
 sequential reuse: silkd proto 2 serves RPCs back to back and each SDK handle
 parks completed relay connections for its next call. This is neither the
-pre-dialer nor concurrent multiplexing. `e2e/cmd/rpcbench` reports all three
-paths as A (dial per RPC), C (SDK keep-alive), and B (pre-dialed spare); the
-current numbers are in Relay connection reuse above, and they keep the
-pre-dialer declined — behind a TLS edge it tracks the dial arm, because it
-hides a handshake only while RPCs arrive slower than a dial completes.
+pre-dialer nor concurrent multiplexing. `e2e/cmd/rpcbench` reports A (dial
+per RPC) and C (SDK keep-alive); the numbers in Relay connection reuse above,
+the pre-dialed spare row included, keep the pre-dialer declined — behind a TLS
+edge it tracks the dial arm, because it hides a handshake only while RPCs
+arrive slower than a dial completes.
 
 **Template pre-check meta GET**: a single `ReadMeta` against MinIO
 measured 4.76ms cross-host (sub-ms node-local, 20-50ms on WAN S3; a

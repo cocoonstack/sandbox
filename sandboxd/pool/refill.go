@@ -225,13 +225,11 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 	if err := m.exportGolden(ctx, snap, final); err != nil {
 		return err
 	}
-	if err := m.writeGoldenCASidecar(final, caBaked); err != nil {
-		return err
+	stamp := m.goldenStamp(key, caBaked, warmup)
+	if err := os.WriteFile(final+goldenStampSuffix, []byte(stamp), 0o644); err != nil { //nolint:gosec // public stamp
+		return fmt.Errorf("write golden stamp: %w", err)
 	}
-	if err := writeGoldenSidecar(final+nicSidecarSuffix, string(m.laneOf(key))); err != nil {
-		return err
-	}
-	return writeGoldenSidecar(final+warmupSidecarSuffix, warmupStamp(warmup))
+	return nil
 }
 
 func (m *Manager) runWarmup(ctx context.Context, key types.PoolKey, sock string) ([]string, error) {
@@ -253,30 +251,22 @@ func (m *Manager) warmClone(ctx context.Context, sb *types.Sandbox) error {
 	return nil
 }
 
-// writeGoldenCASidecar records or clears the baked-CA fingerprint; a rotated CA forces a rebuild.
-func (m *Manager) writeGoldenCASidecar(final string, caBaked bool) error {
-	var stamp string
-	if caBaked {
-		stamp = m.egressCA.Fingerprint()
-	}
-	return writeGoldenSidecar(final+caSidecarSuffix, stamp)
-}
-
-// adoptGolden points p at an on-disk golden whose baked-CA state and warmup still fit.
+// adoptGolden points p at an on-disk golden whose stamp matches what the pool bakes now.
 func (m *Manager) adoptGolden(p *pool) {
 	g := filepath.Join(m.goldensDir(), p.hash)
-	if dirExists(g) && m.goldenCAMatches(g, m.poolEgress[p.key].Intercepts()) &&
-		goldenSidecarMatches(g+nicSidecarSuffix, string(m.laneOf(p.key))) &&
-		goldenSidecarMatches(g+warmupSidecarSuffix, warmupStamp(m.poolWarmups[p.key])) {
+	stamp, err := os.ReadFile(g + goldenStampSuffix) //nolint:gosec // node-local golden path
+	want := m.goldenStamp(p.key, m.poolEgress[p.key].Intercepts(), m.poolWarmups[p.key])
+	if err == nil && string(stamp) == want && dirExists(g) {
 		p.goldenDir = g
 	}
 }
 
-func (m *Manager) goldenCAMatches(final string, caNeeded bool) bool {
-	if !caNeeded {
-		return goldenSidecarMatches(final+caSidecarSuffix, "")
+func (m *Manager) goldenStamp(key types.PoolKey, caBaked bool, warmup []string) string {
+	var fp string
+	if caBaked {
+		fp = m.EgressCAFingerprint()
 	}
-	return m.egressCA != nil && goldenSidecarMatches(final+caSidecarSuffix, m.egressCA.Fingerprint())
+	return strings.Join(append([]string{fp, string(m.laneOf(key))}, warmup...), "\x00")
 }
 
 // exportGolden exports snap into final through a unique sibling *.tmp dir.
@@ -499,29 +489,4 @@ func (m *Manager) dropSnap(ctx context.Context, snap string) {
 	if err := m.eng.SnapshotRemove(ctx, snap); err != nil {
 		log.WithFunc("pool.dropSnap").Warnf(ctx, "drop snapshot %s: %v", snap, err)
 	}
-}
-
-func writeGoldenSidecar(path, stamp string) error {
-	if stamp == "" {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("clear golden sidecar %s: %w", filepath.Base(path), err)
-		}
-		return nil
-	}
-	if err := os.WriteFile(path, []byte(stamp), 0o644); err != nil { //nolint:gosec // public stamp
-		return fmt.Errorf("write golden sidecar %s: %w", filepath.Base(path), err)
-	}
-	return nil
-}
-
-func goldenSidecarMatches(path, stamp string) bool {
-	got, err := os.ReadFile(path) //nolint:gosec // node-local golden path
-	if stamp == "" {
-		return errors.Is(err, os.ErrNotExist)
-	}
-	return err == nil && string(got) == stamp
-}
-
-func warmupStamp(argv []string) string {
-	return strings.Join(argv, "\x00")
 }

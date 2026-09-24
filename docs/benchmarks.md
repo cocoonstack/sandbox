@@ -66,11 +66,10 @@ builds one warm pool (small, the warm tier), one golden-only pool
 (medium, warm=0 — every claim is a clone), claims the cold tier from an
 unpooled template, then measures the data plane (`fs_stat` round-trips via
 `rpcbench`, `fs_pull` throughput via `pullbench`). `rpcbench` prints A
-(dial per RPC), C (the current SDK keep-alive path), and B (a pre-dialed
-spare); `make bench` keeps A in its table so new runs remain comparable with
-the dated log below. It prints a markdown table stamped with the host evidence:
-virtualization (`systemd-detect-virt`), CPU, kernel, cocoon version, image
-digest.
+(dial per RPC) and C (the current SDK keep-alive path); `make bench` keeps A
+in its table so new runs remain comparable with the dated log below. It
+prints a markdown table stamped with the host evidence: virtualization
+(`systemd-detect-virt`), CPU, kernel, cocoon version, image digest.
 
 Knobs (environment variables): `WARM`/`WARM_N` (warm-pool depth and burst
 size — the burst must stay within the depth, or refill loses the race and

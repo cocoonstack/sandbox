@@ -142,23 +142,26 @@ func TestLaneVerdictReachesGuestOnColdBoots(t *testing.T) {
 	}
 }
 
-func TestGoldenNICSidecarGatesAdoption(t *testing.T) {
+func TestGoldenStampGatesAdoptionOnLane(t *testing.T) {
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Warm: 1, Egress: egPolicy})
 	p := m.pools[egKey]
 	g := filepath.Join(m.goldensDir(), egKey.Hash())
 	if err := os.MkdirAll(g, 0o750); err != nil {
 		t.Fatalf("stage golden: %v", err)
 	}
+	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(testKey, false, nil)), 0o644); err != nil {
+		t.Fatalf("write stamp: %v", err)
+	}
 	m.adoptGolden(p)
 	if p.goldenDir != "" {
 		t.Error("adopted an egress-lane golden that never marked its guest; want rebuild")
 	}
-	if err := writeGoldenSidecar(g+nicSidecarSuffix, string(engine.LaneRelay)); err != nil {
-		t.Fatalf("write sidecar: %v", err)
+	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(egKey, false, nil)), 0o644); err != nil {
+		t.Fatalf("write stamp: %v", err)
 	}
 	m.adoptGolden(p)
 	if p.goldenDir != g {
-		t.Error("rejected an egress-lane golden whose sidecar says the guest was marked")
+		t.Error("rejected an egress-lane golden whose stamp says the guest was marked")
 	}
 }
 
@@ -808,9 +811,7 @@ func dialDoors(t *testing.T, sb *types.Sandbox) {
 
 func refillWarmVM(t *testing.T, m *Manager) *types.Sandbox {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Join(m.goldensDir(), testKey.Hash()), 0o750); err != nil {
-		t.Fatalf("setup golden: %v", err)
-	}
+	seedGolden(t, m)
 	m.mu.Lock()
 	m.adoptGolden(m.pools[testKey])
 	m.mu.Unlock()

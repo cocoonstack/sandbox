@@ -1,14 +1,12 @@
-// rpcbench measures the one-connection-per-RPC overhead on a live node and
-// what the alternatives buy: mode A dials+upgrades per RPC by hand; mode C
-// is the SDK's own path, one kept connection serving RPCs back to back; mode
-// B keeps one hand-dialed connection ahead, hiding the handshake behind the
-// previous call (H-4's decision data). A and C interleave sample by sample
+// rpcbench measures the one-connection-per-RPC overhead on a live node: mode
+// A dials+upgrades per RPC by hand; mode C is the SDK's own path, one kept
+// connection serving RPCs back to back. A and C interleave sample by sample
 // and swap which one leads, so node drift cannot land on one arm. Run by
 // hand against a claimed sandbox:
 //
 //	rpcbench -addr <node> -token <api token> -template <ref> -n 200
 //
-// An https:// address drives both hand-dialed modes through the TLS edge the
+// An https:// address drives the hand-dialed mode through the TLS edge the
 // SDK already uses, so A pays a handshake per RPC the way a real client does.
 package main
 
@@ -108,40 +106,6 @@ func run(addr, token, template, caCert string, n int) error {
 	}
 	report("A dial-per-RPC", a)
 	report("C SDK keep-alive", c)
-
-	spare := make(chan net.Conn, 1)
-	errs := make(chan error, 1)
-	go func() {
-		for {
-			conn, err := dial()
-			if err != nil {
-				errs <- err
-				return
-			}
-			select {
-			case spare <- conn:
-			case <-ctx.Done():
-				_ = conn.Close()
-				return
-			}
-		}
-	}()
-	b := make([]time.Duration, 0, n)
-	for range n {
-		start := time.Now()
-		var conn net.Conn
-		select {
-		case conn = <-spare:
-		case err := <-errs:
-			return err
-		}
-		if err := statRPC(conn); err != nil {
-			return err
-		}
-		b = append(b, time.Since(start))
-	}
-	cancel()
-	report("B pre-dialed spare", b)
 	return nil
 }
 

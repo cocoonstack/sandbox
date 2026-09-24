@@ -71,9 +71,7 @@ const (
 	vmStateRunning  = "running"
 	vmStateCreating = "creating"
 
-	caSidecarSuffix     = ".cafp"
-	nicSidecarSuffix    = ".nic"
-	warmupSidecarSuffix = ".warmup"
+	goldenStampSuffix = ".stamp"
 )
 
 var (
