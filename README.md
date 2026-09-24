@@ -58,7 +58,7 @@ performance) — source in
   cocoon+guest) plus bare-metal acceptance drivers under `cmd/`: `demo`,
   `smoke`, `meshsmoke`, `crossnode`, `coldproof`, `egresssmoke`,
   `interceptsmoke`, `sockssmoke`, `volumesmoke`, `lifecycle` (idle→hibernate→archive),
-  `androidsmoke`, `browsersmoke`, `desktopsmoke`, `ringsmoke` (output ring cap, exec as a user),
+  `androidsmoke`, `browsersmoke`, `ringsmoke` (output ring cap, exec as a user),
   `portsmoke` (the guest-port relay), `envdsmoke` (the e2b flavor's envd through it),
   and the `pullbench`/`pushbench`/`rpcbench`/`qaab` perf drivers
 - `boot/kernel/` — kernel version pin (`VERSION` + matching tarball `SHA256`,
@@ -71,7 +71,7 @@ performance) — source in
 - `os-image/` — VM images consuming the boot artifact: `base` (layered,
   for builds), `rt` (base squashed to one layer — the default template in
   examples), `python`, `python-rt`, `node`, `node-rt`, `browser`,
-  `desktop`, `android`, and `e2b-rt` (rt plus e2b's envd, for the
+  `android`, and `e2b-rt` (rt plus e2b's envd, for the
   e2b-compatible data plane)
 - `scripts/` — `boot-bench.sh` (boot phase timing), `bench.sh` (the published
   benchmark procedure), `sandboxd-e2e.sh` (bare-metal e2e, below), plus the
