@@ -19,6 +19,7 @@ on:
       - ".github/workflows/build-os-images.yml"
       - ".github/workflows/build-silkd.yml"
       - ".github/workflows/build-boot.yml"
+      - "!**/*.md"
   workflow_dispatch:
     inputs:
       no-cache:
@@ -58,7 +59,7 @@ jobs:
           if [[ "$EVT" == "workflow_dispatch" || -z "$BEFORE" || "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
             boot=true; silkd=true; osimage=true
           else
-            changed() { git diff --name-only "$BEFORE" "$SHA" -- "$@" | grep -q .; }
+            changed() { git diff --name-only "$BEFORE" "$SHA" -- "$@" ':!*.md' | grep -q .; }
             # Each area carries its own build workflow: changing how an image is
             # built must rebuild it, or the run goes green having built nothing.
             wf=.github/workflows

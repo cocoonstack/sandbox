@@ -118,7 +118,7 @@ func TestCloseReleasesIdleUpstreamConns(t *testing.T) {
 
 func TestForwardNeverInjectsInterceptSecret(t *testing.T) {
 	reached := false
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		reached = true
 	}))
 	defer upstream.Close()

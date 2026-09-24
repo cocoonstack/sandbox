@@ -26,6 +26,7 @@ var _ zerolog.LevelWriter = journalWriter{}
 type journalWriter struct {
 	console zerolog.ConsoleWriter
 	out     io.Writer
+	json    bool
 }
 
 func (j journalWriter) Write(p []byte) (int, error) { return j.WriteLevel(zerolog.NoLevel, p) }
@@ -33,9 +34,13 @@ func (j journalWriter) Write(p []byte) (int, error) { return j.WriteLevel(zerolo
 func (j journalWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
 	buf := &bytes.Buffer{}
 	buf.WriteString(syslogPrefix(level))
-	j.console.Out = buf
-	if _, err := j.console.Write(p); err != nil {
-		return 0, err
+	if j.json {
+		buf.Write(p)
+	} else {
+		j.console.Out = buf
+		if _, err := j.console.Write(p); err != nil {
+			return 0, err
+		}
 	}
 	if _, err := j.out.Write(buf.Bytes()); err != nil {
 		return 0, err
@@ -48,12 +53,12 @@ func setupLog(ctx context.Context, level string) error {
 		return err
 	}
 	logger := log.GetGlobalLogger()
-	*logger = zerolog.New(newJournalWriter(os.Stderr)).With().Timestamp().Logger().Level(logger.GetLevel())
+	*logger = zerolog.New(newJournalWriter(os.Stderr, !stderrIsTerminal())).With().Timestamp().Logger().Level(logger.GetLevel())
 	return nil
 }
 
-func newJournalWriter(out io.Writer) journalWriter {
-	return journalWriter{console: zerolog.ConsoleWriter{TimeFormat: time.RFC822, NoColor: true}, out: out}
+func newJournalWriter(out io.Writer, json bool) journalWriter {
+	return journalWriter{console: zerolog.ConsoleWriter{TimeFormat: time.RFC822, NoColor: true}, out: out, json: json}
 }
 
 func syslogPrefix(level zerolog.Level) string {
@@ -69,4 +74,9 @@ func syslogPrefix(level zerolog.Level) string {
 	default:
 		return syslogInfo
 	}
+}
+
+func stderrIsTerminal() bool {
+	fi, err := os.Stderr.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }

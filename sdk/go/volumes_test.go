@@ -260,7 +260,7 @@ func TestWithVolumesAttachOnlySendsFlagAndDecodesMountlessEcho(t *testing.T) {
 }
 
 func TestWithVolumesAttachOnlyRejectsMountLocally(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Error("server should not be contacted for a locally invalid claim")
 	}))
 	t.Cleanup(ts.Close)
@@ -287,7 +287,7 @@ func TestRejectsInvalidVolumeModeLocally(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 				t.Error("server should not be contacted for a locally invalid mode")
 			}))
 			t.Cleanup(ts.Close)

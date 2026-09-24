@@ -1,3 +1,4 @@
+// Package silkd frames a relay connection into silkd wire RPCs.
 package silkd
 
 import (

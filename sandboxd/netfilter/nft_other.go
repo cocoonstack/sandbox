@@ -11,4 +11,4 @@ func Unlock(string) error { return errors.ErrUnsupported }
 
 func LockedTaps() (map[string]bool, error) { return nil, errors.ErrUnsupported }
 
-func SweepExcept(keep map[string]bool) error { return nil }
+func SweepExcept(map[string]bool) error { return nil }

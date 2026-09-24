@@ -34,7 +34,8 @@ func TestWatchDeliversEventsUntilClose(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	for range w.Events() {
+	for ev := range w.Events() {
+		t.Logf("drained %+v", ev)
 	}
 	if err := w.Err(); err != nil {
 		t.Errorf("Err after clean close: %v", err)
@@ -61,7 +62,8 @@ func TestWatchReleasesTheRelayWhenTheSandboxEnds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
-	for range w.Events() {
+	for ev := range w.Events() {
+		t.Logf("drained %+v", ev)
 	}
 	if e, ok := errors.AsType[*wire.ErrorResp](w.Err()); !ok || e.Message != "watcher died" {
 		t.Fatalf("Err = %v, want the sandbox's error frame", w.Err())

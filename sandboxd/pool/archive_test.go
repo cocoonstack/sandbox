@@ -932,13 +932,13 @@ func archivedCount(m *Manager) int {
 	return g.Archived
 }
 
-func archivePool(delete int) config.PoolSpec {
+func archivePool(deleteAfter int) config.PoolSpec {
 	return config.PoolSpec{
 		PoolKey:                   testKey,
 		Warm:                      1,
 		IdleHibernateSeconds:      1,
 		ArchiveAfterSeconds:       2,
-		ArchiveDeleteAfterSeconds: delete,
+		ArchiveDeleteAfterSeconds: deleteAfter,
 	}
 }
 

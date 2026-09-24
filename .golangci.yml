@@ -24,6 +24,7 @@ linters:
     - modernize
     - nakedret
     - nestif
+    - nolintlint
     - revive
     - staticcheck
     - unconvert
@@ -38,9 +39,12 @@ linters:
       disable:
         - fieldalignment
     revive:
+      enable-default-rules: true
       rules:
         - name: exported
           disabled: true
+    nolintlint:
+      allow-unused: false
     misspell:
       locale: US
     goconst:

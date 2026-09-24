@@ -85,7 +85,7 @@ jobs:
             all_names
             all_changed=""
           else
-            all_changed=$(git diff --name-only "$BEFORE" "$SHA" -- 'os-image/' | sort -u)
+            all_changed=$(git diff --name-only "$BEFORE" "$SHA" -- 'os-image/' ':!*.md' | sort -u)
             declare -A names
             for f in $all_changed; do
               name=$(echo "$f" | cut -d'/' -f2)
@@ -112,7 +112,7 @@ jobs:
               needs_no_cache="true"
             elif [[ -n "$all_changed" ]]; then
               while IFS= read -r f; do
-                [[ -z "$f" || "$f" == *.md ]] && continue
+                [[ -z "$f" ]] && continue
                 depth=$(echo "$f" | awk -F'/' '{print NF}')
                 base_name=$(basename "$f")
                 if [[ "$depth" -eq 3 ]] || { [[ "$depth" -eq 4 ]] && [[ "$base_name" != "Dockerfile" ]]; }; then
