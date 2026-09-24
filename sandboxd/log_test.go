@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"strings"
 	"testing"
@@ -61,8 +62,18 @@ func TestSyslogPrefixMapsFatalToCritical(t *testing.T) {
 	}
 }
 
+func TestJournalWriterKeepsJSONRecordsBehindThePrefix(t *testing.T) {
+	counter := &countingWriter{}
+	logger := zerolog.New(newJournalWriter(counter, true))
+	logger.Error().Str("k", "v").Msg("boom")
+	line := counter.buf.String()
+	if counter.writes != 1 || !strings.HasPrefix(line, syslogErr+"{") || !json.Valid([]byte(line[len(syslogErr):])) {
+		t.Errorf("writes = %d, line = %q, want one write of %q and one JSON record", counter.writes, line, syslogErr)
+	}
+}
+
 func testLogger(out io.Writer) zerolog.Logger {
-	return zerolog.New(newJournalWriter(out))
+	return zerolog.New(newJournalWriter(out, false))
 }
 
 type countingWriter struct {

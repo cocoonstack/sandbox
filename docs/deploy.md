@@ -439,9 +439,11 @@ WantedBy=multi-user.target
 
 Each record carries its syslog level, so alerting keys on systemd priority:
 `journalctl -u sandboxd -p err` lists the errors and `-p warning` the
-degradations. `journalctl` answers an empty range with `-- No entries --`, so
-a check that counts lines reads one problem where there are none — count
-records (`-o json | wc -l`) or test the output for emptiness.
+degradations. With stderr off a terminal, as under this unit, the record
+itself is one JSON object; a terminal gets the console format. `journalctl`
+answers an empty range with `-- No entries --`, so a check that counts lines
+reads one problem where there are none — count records (`-o json | wc -l`) or
+test the output for emptiness.
 
 Stopping sandboxd leaves VMs alive; the next start reconciles them. The unit's
 `KillMode=process` is what guarantees it: systemd signals sandboxd alone, so a

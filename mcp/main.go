@@ -24,7 +24,7 @@ const shutdownGrace = 10 * time.Second
 
 func main() {
 	ctx := context.Background()
-	if err := log.SetupLog(ctx, &coretypes.ServerLogConfig{Level: "error"}, ""); err != nil {
+	if err := log.SetupLog(ctx, &coretypes.ServerLogConfig{Level: "error", UseJSON: !stderrIsTerminal()}, ""); err != nil {
 		fmt.Fprintln(os.Stderr, "setup log:", err)
 		os.Exit(1)
 	}
@@ -55,4 +55,9 @@ func main() {
 			srv.closeBoxes() // waits for a release the read loop's defer already started
 		}
 	}
+}
+
+func stderrIsTerminal() bool {
+	fi, err := os.Stderr.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
