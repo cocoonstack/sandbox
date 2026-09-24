@@ -1,6 +1,6 @@
 module github.com/cocoonstack/sandbox/mcp
 
-go 1.27.0
+go 1.27.1
 
 require (
 	github.com/cocoonstack/sandbox/protocol/wire v0.1.13
