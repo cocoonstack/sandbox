@@ -704,7 +704,7 @@ func TestAgentErrorPaths(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mgr := &fakeManager{socket: func(id, token string) (string, error) { return "/v/sock", tt.sockErr }}
+			mgr := &fakeManager{socket: func(string, string) (string, error) { return "/v/sock", tt.sockErr }}
 			dialer := &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
 				if tt.dialErr != nil {
 					return nil, tt.dialErr
@@ -737,7 +737,7 @@ func TestAgentErrorPaths(t *testing.T) {
 }
 
 func TestForkFlow(t *testing.T) {
-	mgr := &fakeManager{fork: func(id, token string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
+	mgr := &fakeManager{fork: func(_, token string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
 		switch {
 		case token != "tok":
 			return nil, pool.ErrUnknownSandbox
@@ -808,7 +808,7 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 	var gotKey types.PoolKey
 	mgr := &fakeManager{
 		promoteContentDigest: "sha256:promoted-digest",
-		promote: func(id, token, template string) error {
+		promote: func(_, token, template string) error {
 			switch {
 			case token != "tok":
 				return pool.ErrUnknownSandbox
@@ -1604,7 +1604,7 @@ func TestVolumeClaimRejectsShapeBeforePlacement(t *testing.T) {
 }
 
 func TestOwnerEndpoint(t *testing.T) {
-	mgr := &fakeManager{socket: func(id, token string) (string, error) {
+	mgr := &fakeManager{socket: func(_, token string) (string, error) {
 		if token == "good" {
 			return "/v/sock", nil
 		}

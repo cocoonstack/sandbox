@@ -124,7 +124,7 @@ func TestRunCancelKillsTheCommandItStarted(t *testing.T) {
 
 func TestUpgradeKeepsCoalescedBytes(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", func(w http.ResponseWriter, _ *http.Request) {
 		conn, _, err := http.NewResponseController(w).Hijack()
 		if err != nil {
 			t.Errorf("hijack: %v", err)

@@ -448,22 +448,22 @@ func belowFloor(v string) (below, comparable bool) {
 	return semver.Compare(v, RequiredCocoon) < 0, true
 }
 
-func readBufLine(r *bufio.Reader, max int) (string, error) {
+func readBufLine(r *bufio.Reader, limit int) (string, error) {
 	line, err := r.ReadSlice('\n')
 	if err != nil {
 		return "", err
 	}
-	if len(line) > max {
-		return "", fmt.Errorf("reply exceeds %d bytes", max)
+	if len(line) > limit {
+		return "", fmt.Errorf("reply exceeds %d bytes", limit)
 	}
 	return string(line[:len(line)-1]), nil
 }
 
 // readLine reads byte-wise so nothing past the newline is consumed.
-func readLine(conn net.Conn, max int) (string, error) {
+func readLine(conn net.Conn, limit int) (string, error) {
 	var sb strings.Builder
 	var b [1]byte
-	for sb.Len() < max {
+	for sb.Len() < limit {
 		if _, err := io.ReadFull(conn, b[:]); err != nil {
 			return "", err
 		}
@@ -472,7 +472,7 @@ func readLine(conn net.Conn, max int) (string, error) {
 		}
 		sb.WriteByte(b[0])
 	}
-	return "", fmt.Errorf("reply exceeds %d bytes", max)
+	return "", fmt.Errorf("reply exceeds %d bytes", limit)
 }
 
 func tail(s string) string {
