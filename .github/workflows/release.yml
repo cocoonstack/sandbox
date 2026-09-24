@@ -35,7 +35,7 @@ jobs:
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4.3.0
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4.3.0
+        uses: docker/setup-buildx-action@v4.4.1
       - name: Build silkd (musl static, arm64)
         # Emulated cargo build via the carrier Dockerfile — byte-consistent
         # with the image artifact; slow but release-rare.
