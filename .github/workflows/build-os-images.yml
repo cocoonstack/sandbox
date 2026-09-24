@@ -225,7 +225,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Build and push
-        uses: docker/build-push-action@v7.3.0
+        uses: docker/build-push-action@v7.4.0
         with:
           context: os-image/${{ matrix.name }}
           file: os-image/${{ matrix.name }}/${{ matrix.tag }}/Dockerfile
@@ -316,7 +316,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Build and push
-        uses: docker/build-push-action@v7.3.0
+        uses: docker/build-push-action@v7.4.0
         with:
           context: os-image/${{ matrix.name }}
           file: os-image/${{ matrix.name }}/${{ matrix.tag }}/Dockerfile
