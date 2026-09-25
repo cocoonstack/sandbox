@@ -270,7 +270,7 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 		_ = conn.Close()
 		return nil, fmt.Errorf("write port_forward: %w", err)
 	}
-	// the forwarded stream's own reader takes the handshake reply, so an over-read stays buffered.
+	// The forwarded stream's own reader takes the handshake reply, so an over-read stays buffered.
 	r := bufio.NewReaderSize(conn, portReadBuf)
 	line, readErr := readBufLine(r, portForwardMax)
 	if readErr != nil {
@@ -382,7 +382,7 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 	if _, err = conn.Write(append(probe, '\n')); err != nil {
 		return fmt.Errorf("write info: %w", err)
 	}
-	// buffered over-read is safe here: the conn is discarded after this one reply.
+	// A buffered over-read is safe here: the conn is discarded after this one reply.
 	reply, err := bufio.NewReader(io.LimitReader(conn, infoMax)).ReadBytes('\n')
 	if err != nil {
 		return fmt.Errorf("read info reply: %w", err)
