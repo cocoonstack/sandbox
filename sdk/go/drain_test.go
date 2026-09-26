@@ -1,7 +1,7 @@
 package sandbox
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,7 +17,7 @@ func TestDrainAndUncordon(t *testing.T) {
 			t.Errorf("auth = %q, want Bearer root", auth)
 		}
 		methods = append(methods, r.Method)
-		_ = json.NewEncoder(w).Encode(NodeInfo{Claimed: 3, Draining: r.Method == http.MethodPost})
+		_ = json.MarshalWrite(w, NodeInfo{Claimed: 3, Draining: r.Method == http.MethodPost})
 	}))
 	defer ts.Close()
 

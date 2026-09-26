@@ -2,7 +2,8 @@
 package utils
 
 import (
-	json "encoding/json/v2"
+	jsonv1 "encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"net"
 	"os"
@@ -85,4 +86,9 @@ func RemoveDirEntries(dir string, match func(name string) bool) error {
 // DecodeStrictJSON decodes one JSON value into v, refusing unknown fields, duplicates and trailing data.
 func DecodeStrictJSON(raw []byte, v any) error {
 	return json.Unmarshal(raw, v, json.RejectUnknownMembers(true), json.MatchCaseInsensitiveNames(true))
+}
+
+// DigestJSON encodes v with v1 semantics so a digest keeps its bytes across builds.
+func DigestJSON(v any) ([]byte, error) {
+	return json.Marshal(v, jsonv1.DefaultOptionsV1())
 }

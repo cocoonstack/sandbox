@@ -1,7 +1,7 @@
 package sandbox
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,7 +9,7 @@ import (
 
 func TestInfoReportsCapacityState(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		_ = json.MarshalWrite(w, map[string]any{
 			"pools":              []any{},
 			"claimed":            2,
 			"hibernated":         1,

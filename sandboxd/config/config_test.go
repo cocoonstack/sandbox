@@ -41,6 +41,27 @@ func TestClusterDigest(t *testing.T) {
 	}
 }
 
+func TestClusterDigestMatchesTheV1Bytes(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	tenants := []TenantSpec{{Name: "acme", Token: "t<1>&\u2028"}, {Name: "beta", Token: "t2"}}
+	for _, tt := range []struct {
+		name string
+		cfg  *Config
+		fp   string
+		want string
+	}{
+		{"keyless", &Config{APIToken: "t<o>k", PreviewSecret: "p&s", Tenants: tenants, CheckpointTTLHours: 24}, "ca<&>\u2028fp", "a1945e2f38cf6e61638bc08896a292792b1705fb860b405d8117abbf13e1c760"},
+		{"keyed", &Config{APIToken: "t<o>k&\u2029", PreviewSecret: "p&s<", Tenants: tenants, CheckpointTTLHours: 24, Mesh: &MeshConfig{ClusterKey: key}}, "ca<&>fp", "5146d3799789afbd1d1bff606d238ea75374dec8f11f5b69edd6b9fcc40164b7"},
+		{"no tenants", &Config{}, "fp", "38fc616b12f612c2c5c3f83af9d4c6caa771e1d3ffca39a6c835e522d3db49f8"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.ClusterDigest(tt.fp); got != tt.want {
+				t.Errorf("digest %s, want the encoding/json v1 digest %s", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadAppliesDefaults(t *testing.T) {
 	path := writeConfig(t, `{"pools":[{"template":"rt:24.04","net":"none","size":"small"}]}`)
 	cfg, err := Load(path)

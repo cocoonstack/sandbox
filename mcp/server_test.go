@@ -4,11 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,7 +33,7 @@ func TestServeSpeaksMCP(t *testing.T) {
 		if !strings.HasSuffix(r.URL.Path, "/checkpoint") {
 			return false
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		_ = json.MarshalWrite(w, map[string]any{
 			"checkpoint": map[string]any{"id": "ck_0011223344556677", "name": "s1", "sandbox_id": "sb_1"},
 		})
 		return true
@@ -45,9 +46,11 @@ func TestServeSpeaksMCP(t *testing.T) {
 		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"checkpoint","arguments":{"sandbox_id":"sb_1","name":"s1"}}}`,
 		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"release","arguments":{"sandbox_id":"sb_1"}}}`,
 		`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"exec","arguments":{"sandbox_id":"sb_1","command":"true"}}}`,
+		`{"jsonrpc":"2.0","id":7,"method":"ping"}`,
+		`{"jsonrpc":"2.0","id":8,"method":"ping","params":{"note":"\ud800"}}`,
 	)
-	if len(replies) != 6 {
-		t.Fatalf("got %d replies, want 6 (notification unanswered)", len(replies))
+	if len(replies) != 8 {
+		t.Fatalf("got %d replies, want 8 (notification unanswered)", len(replies))
 	}
 
 	initResult := replies[1]["result"].(map[string]any)
@@ -76,6 +79,27 @@ func TestServeSpeaksMCP(t *testing.T) {
 	}
 	if !strings.Contains(toolText(t, replies[6]), "sb_1") {
 		t.Errorf("exec error should name the released id: %q", toolText(t, replies[6]))
+	}
+	if pong, ok := replies[7]["result"].(map[string]any); !ok || len(pong) != 0 {
+		t.Errorf("ping reply %+v, want an empty result object", replies[7])
+	}
+	if _, ok := replies[8]["result"].(map[string]any); !ok {
+		t.Errorf("ping with a lone surrogate %+v, want a reply", replies[8])
+	}
+}
+
+func TestRepliesEncodeMapsInSortedOrder(t *testing.T) {
+	var out bytes.Buffer
+	in := bufio.NewReader(strings.NewReader(strings.Repeat(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`+"\n", 20)))
+	if err := newTestServer(t, nil).serve(t.Context(), in, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	lines := slices.Collect(bytes.Lines(out.Bytes()))
+	if len(lines) != 20 || slices.ContainsFunc(lines, func(l []byte) bool { return !bytes.Equal(l, lines[0]) }) {
+		t.Errorf("20 tools/list replies are not byte-identical (%d lines)", len(lines))
+	}
+	if got := jsonText(map[string]int{"b": 2, "a": 1, "d": 4, "c": 3, "f": 6, "e": 5, "h": 8, "g": 7}); got != `{"a":1,"b":2,"c":3,"d":4,"e":5,"f":6,"g":7,"h":8}` {
+		t.Errorf("jsonText = %s, want sorted keys", got)
 	}
 }
 
@@ -122,6 +146,31 @@ func TestLogsKeepsAtMostTheCap(t *testing.T) {
 	)
 	if n := strings.Count(toolText(t, replies[2]), "x"); n != execOutputCap {
 		t.Errorf("logs kept %d bytes of a 2 MiB replay, want the %d cap", n, execOutputCap)
+	}
+}
+
+func TestToolRepliesReplaceInvalidUTF8(t *testing.T) {
+	lossy := base64.StdEncoding.EncodeToString([]byte("a\xffb"))
+	srv := newTestServer(t, agentRoute(t, func(req string) (string, bool) {
+		switch {
+		case strings.Contains(req, `"op":"fs_stat"`):
+			return `{"type":"stat","info":{"kind":"file","size":3}}` + "\n", false
+		case strings.Contains(req, `"op":"logs"`):
+			return `{"type":"stdout","data":"` + lossy + `"}` + "\n" + `{"type":"done"}` + "\n", false
+		}
+		return `{"type":"data","data":"` + lossy + `"}` + "\n" + `{"type":"done"}` + "\n", false
+	}))
+	replies := serveLines(t, srv,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_sandbox","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_file","arguments":{"sandbox_id":"sb_1","path":"/bin/x"}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"logs","arguments":{"sandbox_id":"sb_1","pid":7}}}`,
+	)
+	if text := toolText(t, replies[2]); text != "a\uFFFDb" {
+		t.Errorf("read_file answered %q, want the invalid byte replaced", text)
+	}
+	var logs map[string]any
+	if err := json.Unmarshal([]byte(toolText(t, replies[3])), &logs); err != nil || logs["stdout"] != "a\uFFFDb" {
+		t.Errorf("logs answered %v (%v), want JSON with the invalid byte replaced", logs, err)
 	}
 }
 
@@ -230,7 +279,7 @@ func newTestServer(t *testing.T, extra func(http.ResponseWriter, *http.Request) 
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v1/claim":
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": "sb_1", "token": "tok"})
+			_ = json.MarshalWrite(w, map[string]any{"id": "sb_1", "token": "tok"})
 		case strings.HasSuffix(r.URL.Path, "/release"):
 			w.WriteHeader(http.StatusNoContent)
 		case extra != nil && extra(w, r):
@@ -283,11 +332,10 @@ func serveLines(t *testing.T, srv *server, lines ...string) map[int]map[string]a
 		t.Fatalf("serve: %v", err)
 	}
 	replies := map[int]map[string]any{}
-	dec := json.NewDecoder(&out)
-	for dec.More() {
+	for line := range bytes.Lines(out.Bytes()) {
 		var resp map[string]any
-		if err := dec.Decode(&resp); err != nil {
-			t.Fatalf("decode reply: %v", err)
+		if err := json.Unmarshal(line, &resp); err != nil {
+			t.Fatalf("decode reply %q: %v", line, err)
 		}
 		replies[int(resp["id"].(float64))] = resp
 	}

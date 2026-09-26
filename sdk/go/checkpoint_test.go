@@ -1,7 +1,7 @@
 package sandbox
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,17 +12,17 @@ func TestCheckpointNewFollowsRedirect(t *testing.T) {
 	var nodeACalls int
 	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req checkpointClaimRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.UnmarshalRead(r.Body, &req)
 		if !req.NoRedirect {
 			t.Error("retry did not carry no_redirect")
 		}
-		_ = json.NewEncoder(w).Encode(claimResponse{ID: "sb_ck1", Token: "tok"})
+		_ = json.MarshalWrite(w, claimResponse{ID: "sb_ck1", Token: "tok"})
 	}))
 	t.Cleanup(nodeB.Close)
 
 	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		nodeACalls++
-		_ = json.NewEncoder(w).Encode(claimResponse{
+		_ = json.MarshalWrite(w, claimResponse{
 			Redirect: []string{strings.TrimPrefix(nodeB.URL, "http://")},
 		})
 	}))
@@ -78,13 +78,13 @@ func TestCheckpointNewRedirectAllCandidatesFail(t *testing.T) {
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		entryCalls++
 		if entryCalls == 1 {
-			_ = json.NewEncoder(w).Encode(claimResponse{
+			_ = json.MarshalWrite(w, claimResponse{
 				Redirect: []string{strings.TrimPrefix(broken.URL, "http://")},
 			})
 			return
 		}
 		w.WriteHeader(http.StatusConflict)
-		_ = json.NewEncoder(w).Encode(errorResponse{Error: "origin also failed"})
+		_ = json.MarshalWrite(w, errorResponse{Error: "origin also failed"})
 	}))
 	t.Cleanup(entry.Close)
 
@@ -115,15 +115,15 @@ func TestCheckpointNewRedirectFallbackHeals(t *testing.T) {
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		entryCalls++
 		if entryCalls == 1 {
-			_ = json.NewEncoder(w).Encode(claimResponse{Redirect: []string{strings.TrimPrefix(busy.URL, "http://")}})
+			_ = json.MarshalWrite(w, claimResponse{Redirect: []string{strings.TrimPrefix(busy.URL, "http://")}})
 			return
 		}
 		var req checkpointClaimRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.UnmarshalRead(r.Body, &req)
 		if !req.NoRedirect {
 			t.Error("origin fallback did not carry no_redirect")
 		}
-		_ = json.NewEncoder(w).Encode(claimResponse{ID: "sb_healed", Token: "t"})
+		_ = json.MarshalWrite(w, claimResponse{ID: "sb_healed", Token: "t"})
 	}))
 	t.Cleanup(entry.Close)
 
@@ -143,7 +143,7 @@ func TestCheckpointNewRedirectFallbackHeals(t *testing.T) {
 
 func TestCheckpointNewRedirectNeverYieldsEmptyID(t *testing.T) {
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(claimResponse{Redirect: []string{"127.0.0.1:1"}})
+		_ = json.MarshalWrite(w, claimResponse{Redirect: []string{"127.0.0.1:1"}})
 	}))
 	t.Cleanup(entry.Close)
 
@@ -160,12 +160,12 @@ func TestCheckpointNewRedirectNeverYieldsEmptyID(t *testing.T) {
 
 func TestCheckpointNewSecondLevelRedirectFails(t *testing.T) {
 	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(claimResponse{Redirect: []string{"127.0.0.1:1"}})
+		_ = json.MarshalWrite(w, claimResponse{Redirect: []string{"127.0.0.1:1"}})
 	}))
 	t.Cleanup(nodeB.Close)
 
 	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(claimResponse{
+		_ = json.MarshalWrite(w, claimResponse{
 			Redirect: []string{strings.TrimPrefix(nodeB.URL, "http://")},
 		})
 	}))

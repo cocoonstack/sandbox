@@ -1,7 +1,8 @@
 package server
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -23,7 +24,7 @@ func TestClientAddressesInResponses(t *testing.T) {
 			r := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
 			w := httptest.NewRecorder()
 			s.Handler().ServeHTTP(w, r)
-			var body map[string]json.RawMessage
+			var body map[string]jsontext.Value
 			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 				t.Fatal(err)
 			}

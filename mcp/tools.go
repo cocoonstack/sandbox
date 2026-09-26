@@ -3,7 +3,8 @@ package main
 import (
 	"cmp"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -85,7 +86,7 @@ type tool struct {
 	name        string
 	description string
 	schema      map[string]any
-	handler     func(context.Context, *server, json.RawMessage) (string, error)
+	handler     func(context.Context, *server, jsontext.Value) (string, error)
 }
 
 func toolSpecs() []map[string]any {
@@ -96,7 +97,7 @@ func toolSpecs() []map[string]any {
 	return specs
 }
 
-func toolCreateSandbox(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+func toolCreateSandbox(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	var args struct {
 		Template   string `json:"template"`
 		Net        string `json:"net"`
@@ -135,7 +136,7 @@ func (a sandboxArg) id() string { return a.SandboxID }
 type sandboxIDer interface{ id() string }
 
 // parseAndBox decodes a tool's arguments and resolves their sandbox_id to a live handle, the prologue every sandbox-scoped tool shares.
-func parseAndBox[T sandboxIDer](s *server, raw json.RawMessage) (T, *sandbox.Sandbox, error) {
+func parseAndBox[T sandboxIDer](s *server, raw jsontext.Value) (T, *sandbox.Sandbox, error) {
 	var args T
 	if err := parse(raw, &args); err != nil {
 		return args, nil, err
@@ -150,7 +151,7 @@ type cmdArgs struct {
 	Cwd     string `json:"cwd"`
 }
 
-func parseCommand(s *server, raw json.RawMessage) (cmdArgs, *sandbox.Sandbox, error) {
+func parseCommand(s *server, raw jsontext.Value) (cmdArgs, *sandbox.Sandbox, error) {
 	args, sb, err := parseAndBox[cmdArgs](s, raw)
 	if err == nil && args.Command == "" {
 		return args, nil, errors.New("command must not be empty")
@@ -177,7 +178,7 @@ func (o *cappedOutput) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-func toolExec(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+func toolExec(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	args, sb, err := parseCommand(s, raw)
 	if err != nil {
 		return "", err
@@ -199,7 +200,7 @@ func toolExec(ctx context.Context, s *server, raw json.RawMessage) (string, erro
 	return jsonText(out), err
 }
 
-func toolSpawn(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+func toolSpawn(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	args, sb, err := parseCommand(s, raw)
 	if err != nil {
 		return "", err
@@ -211,7 +212,7 @@ func toolSpawn(ctx context.Context, s *server, raw json.RawMessage) (string, err
 	return jsonText(map[string]uint32{"pid": pid}), nil
 }
 
-func toolPs(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+func toolPs(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	sb, err := s.boxArg(raw)
 	if err != nil {
 		return "", err
@@ -229,7 +230,7 @@ type killArgs struct {
 	Signal int32  `json:"signal"`
 }
 
-func toolKill(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+func toolKill(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	args, sb, err := parseAndBox[killArgs](s, raw)
 	if err != nil {
 		return "", err
@@ -245,7 +246,7 @@ type logsArgs struct {
 	PID uint32 `json:"pid"`
 }
 
-func toolLogs(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+func toolLogs(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	args, sb, err := parseAndBox[logsArgs](s, raw)
 	if err != nil {
 		return "", err
@@ -268,7 +269,7 @@ type writeFileArgs struct {
 	Content string `json:"content"`
 }
 
-func toolWriteFile(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+func toolWriteFile(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	args, sb, err := parseAndBox[writeFileArgs](s, raw)
 	if err != nil {
 		return "", err
@@ -284,7 +285,7 @@ type pathArgs struct {
 	Path string `json:"path"`
 }
 
-func toolReadFile(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+func toolReadFile(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	args, sb, err := parseAndBox[pathArgs](s, raw)
 	if err != nil {
 		return "", err
@@ -306,7 +307,7 @@ func toolReadFile(ctx context.Context, s *server, raw json.RawMessage) (string, 
 	return out.String(), nil
 }
 
-func toolListDir(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+func toolListDir(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	args, sb, err := parseAndBox[pathArgs](s, raw)
 	if err != nil {
 		return "", err
@@ -323,7 +324,7 @@ type forkArgs struct {
 	Count int `json:"count"`
 }
 
-func toolFork(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+func toolFork(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	args, sb, err := parseAndBox[forkArgs](s, raw)
 	if err != nil {
 		return "", err
@@ -345,7 +346,7 @@ type checkpointArgs struct {
 	Name string `json:"name"`
 }
 
-func toolCheckpoint(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+func toolCheckpoint(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	args, sb, err := parseAndBox[checkpointArgs](s, raw)
 	if err != nil {
 		return "", err
@@ -358,7 +359,7 @@ func toolCheckpoint(ctx context.Context, s *server, raw json.RawMessage) (string
 	return jsonText(map[string]any{"checkpoint_id": ckpt.ID, "name": ckpt.Name}), nil
 }
 
-func toolBranchCheckpoint(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+func toolBranchCheckpoint(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	ckpt, err := s.checkpointArg(raw)
 	if err != nil {
 		return "", err
@@ -371,7 +372,7 @@ func toolBranchCheckpoint(ctx context.Context, s *server, raw json.RawMessage) (
 	return jsonText(map[string]any{"sandbox_id": sb.ID}), nil
 }
 
-func toolListCheckpoints(ctx context.Context, s *server, _ json.RawMessage) (string, error) {
+func toolListCheckpoints(ctx context.Context, s *server, _ jsontext.Value) (string, error) {
 	ckpts, err := s.client.Checkpoints(ctx)
 	if err != nil {
 		return "", err
@@ -383,7 +384,7 @@ func toolListCheckpoints(ctx context.Context, s *server, _ json.RawMessage) (str
 	return jsonText(out), nil
 }
 
-func toolDeleteCheckpoint(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+func toolDeleteCheckpoint(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	ckpt, err := s.checkpointArg(raw)
 	if err != nil {
 		return "", err
@@ -395,7 +396,7 @@ func toolDeleteCheckpoint(ctx context.Context, s *server, raw json.RawMessage) (
 	return "deleted", nil
 }
 
-func toolHibernate(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+func toolHibernate(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	sb, err := s.boxArg(raw)
 	if err != nil {
 		return "", err
@@ -411,7 +412,7 @@ type promoteArgs struct {
 	TemplateName string `json:"template_name"`
 }
 
-func toolPromote(ctx context.Context, s *server, raw json.RawMessage) (string, error) {
+func toolPromote(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	args, sb, err := parseAndBox[promoteArgs](s, raw)
 	if err != nil {
 		return "", err
@@ -423,7 +424,7 @@ func toolPromote(ctx context.Context, s *server, raw json.RawMessage) (string, e
 	return jsonText(map[string]any{"template": tpl.Name}), nil
 }
 
-func toolRelease(_ context.Context, s *server, raw json.RawMessage) (string, error) {
+func toolRelease(_ context.Context, s *server, raw jsontext.Value) (string, error) {
 	sb, err := s.boxArg(raw)
 	if err != nil {
 		return "", err
@@ -435,7 +436,7 @@ func toolRelease(_ context.Context, s *server, raw json.RawMessage) (string, err
 	return "released", nil
 }
 
-func toolNodeInfo(ctx context.Context, s *server, _ json.RawMessage) (string, error) {
+func toolNodeInfo(ctx context.Context, s *server, _ jsontext.Value) (string, error) {
 	info, err := s.client.Info(ctx)
 	if err != nil {
 		return "", err
@@ -443,13 +444,13 @@ func toolNodeInfo(ctx context.Context, s *server, _ json.RawMessage) (string, er
 	return jsonText(info), nil
 }
 
-func (s *server) boxArg(raw json.RawMessage) (*sandbox.Sandbox, error) {
+func (s *server) boxArg(raw jsontext.Value) (*sandbox.Sandbox, error) {
 	_, sb, err := parseAndBox[sandboxArg](s, raw)
 	return sb, err
 }
 
 // checkpointArg resolves a checkpoint_id argument: a handle minted in this session when available, else a fresh one, because checkpoints outlive sessions.
-func (s *server) checkpointArg(raw json.RawMessage) (*sandbox.Checkpoint, error) {
+func (s *server) checkpointArg(raw jsontext.Value) (*sandbox.Checkpoint, error) {
 	var args struct {
 		CheckpointID string `json:"checkpoint_id"`
 	}
@@ -465,18 +466,22 @@ func (s *server) checkpointArg(raw json.RawMessage) (*sandbox.Checkpoint, error)
 	return s.client.Checkpoint(args.CheckpointID), nil
 }
 
-func parse(raw json.RawMessage, v any) error {
+func parse(raw jsontext.Value, v any) error {
 	if len(raw) == 0 {
 		return nil
 	}
-	if err := json.Unmarshal(raw, v); err != nil {
+	if err := unmarshalInput(raw, v); err != nil {
 		return fmt.Errorf("invalid tool arguments: %w", err)
 	}
 	return nil
 }
 
+func unmarshalInput(raw []byte, v any) error {
+	return json.Unmarshal(raw, v, json.MatchCaseInsensitiveNames(true), jsontext.AllowInvalidUTF8(true))
+}
+
 func jsonText(v any) string {
-	out, err := json.Marshal(v)
+	out, err := json.Marshal(v, jsontext.AllowInvalidUTF8(true), json.Deterministic(true))
 	if err != nil {
 		return fmt.Sprintf("%+v", v)
 	}

@@ -13,7 +13,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"flag"
 	"fmt"
 	"io"
@@ -274,7 +275,7 @@ func readEnvelopes(r io.Reader) ([]string, error) {
 			continue
 		}
 		var end struct {
-			Error json.RawMessage `json:"error"`
+			Error jsontext.Value `json:"error"`
 		}
 		if err := json.Unmarshal(body, &end); err != nil {
 			return out, fmt.Errorf("parse end-of-stream envelope %q: %w", body, err)

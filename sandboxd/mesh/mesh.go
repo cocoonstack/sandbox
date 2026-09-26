@@ -4,7 +4,7 @@ package mesh
 import (
 	"cmp"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"maps"
 	"math/rand/v2"

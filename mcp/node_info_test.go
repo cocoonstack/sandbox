@@ -1,7 +1,7 @@
 package main
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,7 +10,7 @@ import (
 
 func TestNodeInfoReportsCapacityState(t *testing.T) {
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		_ = json.MarshalWrite(w, map[string]any{
 			"pools":              []any{},
 			"claimed":            2,
 			"hibernated":         1,

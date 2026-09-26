@@ -10,7 +10,8 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"strconv"
@@ -149,16 +150,6 @@ type respPtr[T any] interface {
 	Response
 }
 
-// B64 carries request payload bytes; a nil slice marshals as "" because silkd rejects null.
-type B64 []byte
-
-func (b B64) MarshalJSON() ([]byte, error) {
-	if b == nil {
-		b = B64{}
-	}
-	return json.Marshal([]byte(b))
-}
-
 // Exec starts a process; with Session set it runs inside that persistent
 // shell instead. Detach is emitted even when false — it is part of the
 // fixture corpus shape.
@@ -228,7 +219,7 @@ func (SessionRm) Op() string { return "session_rm" }
 
 // Stdin carries a chunk of exec stdin.
 type Stdin struct {
-	Data B64 `json:"data"`
+	Data []byte `json:"data"`
 }
 
 func (Stdin) Op() string { return "stdin" }
@@ -450,7 +441,7 @@ func (LspStop) Op() string { return "lsp_stop" }
 
 // Data carries one chunk of an upload stream (FsWrite/FsPush payloads).
 type Data struct {
-	Data B64 `json:"data"`
+	Data []byte `json:"data"`
 }
 
 func (Data) Op() string { return "data" }
@@ -773,27 +764,26 @@ func frameTag(line, head []byte, key string) ([]byte, error) {
 
 // scanTag walks the top-level keys without decoding the frame; a missing tag returns "" for the callers' unknown-tag error.
 func scanTag(line []byte, key string) (string, error) {
-	dec := json.NewDecoder(bytes.NewReader(line))
-	tok, err := dec.Token()
+	dec := jsontext.NewDecoder(bytes.NewReader(line))
+	tok, err := dec.ReadToken()
 	if err != nil {
 		return "", err
 	}
-	if d, ok := tok.(json.Delim); !ok || d != '{' {
+	if tok.Kind() != '{' {
 		return "", fmt.Errorf("frame is not an object")
 	}
-	for dec.More() {
-		if tok, err = dec.Token(); err != nil {
+	for dec.PeekKind() != '}' {
+		if tok, err = dec.ReadToken(); err != nil {
 			return "", err
 		}
-		if k, ok := tok.(string); ok && k == key {
-			if tok, err = dec.Token(); err != nil {
+		if tok.String() == key {
+			if tok, err = dec.ReadToken(); err != nil {
 				return "", err
 			}
-			s, ok := tok.(string)
-			if !ok {
+			if tok.Kind() != '"' {
 				return "", fmt.Errorf("%s tag is not a string", key)
 			}
-			return s, nil
+			return tok.String(), nil
 		}
 		if err = skipValue(dec); err != nil {
 			return "", err
@@ -803,21 +793,20 @@ func scanTag(line []byte, key string) (string, error) {
 }
 
 // skipValue consumes one JSON value; a guest cannot grow the host stack with nesting.
-func skipValue(dec *json.Decoder) error {
+func skipValue(dec *jsontext.Decoder) error {
 	depth := 0
 	for {
-		tok, err := dec.Token()
+		tok, err := dec.ReadToken()
 		if err != nil {
 			return err
 		}
-		if d, ok := tok.(json.Delim); ok {
-			if d == '{' || d == '[' {
-				if depth++; depth > maxSkipDepth {
-					return fmt.Errorf("value nested deeper than %d", maxSkipDepth)
-				}
-			} else {
-				depth--
+		switch tok.Kind() {
+		case '{', '[':
+			if depth++; depth > maxSkipDepth {
+				return fmt.Errorf("value nested deeper than %d", maxSkipDepth)
 			}
+		case '}', ']':
+			depth--
 		}
 		if depth == 0 {
 			return nil

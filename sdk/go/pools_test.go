@@ -1,7 +1,7 @@
 package sandbox
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,8 +18,8 @@ func TestSetPools(t *testing.T) {
 		if auth := r.Header.Get("Authorization"); auth != "Bearer root" {
 			t.Errorf("auth = %q, want Bearer root", auth)
 		}
-		_ = json.NewDecoder(r.Body).Decode(&got)
-		_ = json.NewEncoder(w).Encode(NodeInfo{Claimed: 2})
+		_ = json.UnmarshalRead(r.Body, &got)
+		_ = json.MarshalWrite(w, NodeInfo{Claimed: 2})
 	}))
 	defer ts.Close()
 
@@ -41,11 +41,11 @@ func TestSetPoolsClusterFansOut(t *testing.T) {
 	applied := map[string]int{}
 	pools := func(w http.ResponseWriter, r *http.Request) {
 		var body poolUpdate
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		_ = json.UnmarshalRead(r.Body, &body)
 		mu.Lock()
 		applied[r.Host] = body.Pools[0].Warm
 		mu.Unlock()
-		_ = json.NewEncoder(w).Encode(NodeInfo{})
+		_ = json.MarshalWrite(w, NodeInfo{})
 	}
 	peer := httptest.NewServer(http.HandlerFunc(pools))
 	defer peer.Close()
@@ -53,7 +53,7 @@ func TestSetPoolsClusterFansOut(t *testing.T) {
 
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/peers" {
-			_ = json.NewEncoder(w).Encode(map[string][]string{"peers": {peerAddr}})
+			_ = json.MarshalWrite(w, map[string][]string{"peers": {peerAddr}})
 			return
 		}
 		pools(w, r)
@@ -93,7 +93,7 @@ func TestSetPoolsClusterPeerDiscoveryFails(t *testing.T) {
 			return
 		}
 		applied++
-		_ = json.NewEncoder(w).Encode(NodeInfo{})
+		_ = json.MarshalWrite(w, NodeInfo{})
 	}))
 	defer entry.Close()
 

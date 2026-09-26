@@ -1,7 +1,7 @@
 package pool
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"os"
 	"path/filepath"
 	"sync"
@@ -52,6 +52,19 @@ func TestDeletingPoolsFileRestoresConfigSeed(t *testing.T) {
 	m2.mu.Unlock()
 	if !hasSeed || hasAPI {
 		t.Fatalf("deleting pools.json did not restore the config seed: seed=%v api=%v", hasSeed, hasAPI)
+	}
+}
+
+func TestPoolSeedHashMatchesTheV1Bytes(t *testing.T) {
+	specs := []config.PoolSpec{
+		{Template: "rt:24.04&<x>", Net: types.NetNone, Size: "small", Warm: 2},
+		{Template: "python:3.12", Net: types.NetEgress, Size: "large", WarmMax: 4},
+	}
+	if got, want := poolSeedHash(nil), "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"; got != want {
+		t.Errorf("seed of no pools %s, want the encoding/json v1 seed %s", got, want)
+	}
+	if got, want := poolSeedHash(specs), "8f01958ec3e7ca20e71032d3c857073614887c045887d53a8e93776a2826aad7"; got != want {
+		t.Errorf("seed %s, want the encoding/json v1 seed %s", got, want)
 	}
 }
 

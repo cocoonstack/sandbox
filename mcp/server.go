@@ -3,7 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -23,16 +24,16 @@ const (
 )
 
 type rpcRequest struct {
-	ID     json.RawMessage `json:"id"`
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params"`
+	ID     jsontext.Value `json:"id"`
+	Method string         `json:"method"`
+	Params jsontext.Value `json:"params"`
 }
 
 type rpcResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id"`
-	Result  any             `json:"result,omitempty"`
-	Error   *rpcErrorBody   `json:"error,omitempty"`
+	JSONRPC string         `json:"jsonrpc"`
+	ID      jsontext.Value `json:"id"`
+	Result  any            `json:"result,omitzero"`
+	Error   *rpcErrorBody  `json:"error,omitempty"`
 }
 
 type rpcErrorBody struct {
@@ -85,14 +86,14 @@ func (s *server) serve(ctx context.Context, r *bufio.Reader, w io.Writer) error 
 			return err
 		}
 		var req rpcRequest
-		if unmarshalErr := json.Unmarshal(line, &req); unmarshalErr != nil || req.Method == "" {
+		if unmarshalErr := unmarshalInput(line, &req); unmarshalErr != nil || req.Method == "" {
 			continue
 		}
 		if req.ID == nil {
 			continue // notification (e.g. notifications/initialized)
 		}
 		resp := s.dispatch(ctx, &req)
-		out, err := json.Marshal(resp)
+		out, err := json.Marshal(resp, jsontext.AllowInvalidUTF8(true), json.Deterministic(true))
 		if err != nil {
 			return err
 		}
@@ -114,10 +115,10 @@ func (s *server) dispatch(ctx context.Context, req *rpcRequest) rpcResponse {
 		return result(req.ID, map[string]any{"tools": toolSpecs()})
 	case "tools/call":
 		var call struct {
-			Name      string          `json:"name"`
-			Arguments json.RawMessage `json:"arguments"`
+			Name      string         `json:"name"`
+			Arguments jsontext.Value `json:"arguments"`
 		}
-		if err := json.Unmarshal(req.Params, &call); err != nil {
+		if err := unmarshalInput(req.Params, &call); err != nil {
 			return rpcError(req.ID, -32602, "invalid params")
 		}
 		text, err := s.callTool(ctx, call.Name, call.Arguments)
@@ -140,7 +141,7 @@ func (s *server) dispatch(ctx context.Context, req *rpcRequest) rpcResponse {
 	}
 }
 
-func (s *server) callTool(ctx context.Context, name string, args json.RawMessage) (string, error) {
+func (s *server) callTool(ctx context.Context, name string, args jsontext.Value) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, execTimeout)
 	defer cancel()
 	i := slices.IndexFunc(tools, func(t tool) bool { return t.name == name })
@@ -215,10 +216,10 @@ func (s *server) dropCkpt(id string) {
 	delete(s.ckpts, id)
 }
 
-func result(id json.RawMessage, v any) rpcResponse {
+func result(id jsontext.Value, v any) rpcResponse {
 	return rpcResponse{JSONRPC: "2.0", ID: id, Result: v}
 }
 
-func rpcError(id json.RawMessage, code int, msg string) rpcResponse {
+func rpcError(id jsontext.Value, code int, msg string) rpcResponse {
 	return rpcResponse{JSONRPC: "2.0", ID: id, Error: &rpcErrorBody{Code: code, Message: msg}}
 }
