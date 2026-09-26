@@ -7,9 +7,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/json/jsontext"
-	jsonv2 "encoding/json/v2"
+	"encoding/json/v2"
 	"fmt"
 	"net"
 	"net/netip"
@@ -60,13 +59,13 @@ func (s *PoolSpec) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 		return err
 	}
 	type plain PoolSpec
-	if err := jsonv2.Unmarshal(raw, (*plain)(s), dec.Options()); err != nil {
+	if err := json.Unmarshal(raw, (*plain)(s), dec.Options()); err != nil {
 		return err
 	}
 	var probe struct {
 		Warm *int `json:"warm"`
 	}
-	_ = jsonv2.Unmarshal(raw, &probe, jsonv2.MatchCaseInsensitiveNames(true))
+	_ = json.Unmarshal(raw, &probe, json.MatchCaseInsensitiveNames(true))
 	s.warmSet = probe.Warm != nil
 	return nil
 }
@@ -235,13 +234,13 @@ func (c *Config) ClusterDigest(caFingerprint string) string {
 				tenants[i] = auth{t.Name, t.Token}
 			}
 			slices.SortFunc(tenants, func(a, b auth) int { return strings.Compare(a.Name, b.Name) })
-			raw, _ := json.Marshal([]any{c.APIToken, c.PreviewSecret, caFingerprint, tenants, c.CheckpointTTLHours})
+			raw, _ := utils.DigestJSON([]any{c.APIToken, c.PreviewSecret, caFingerprint, tenants, c.CheckpointTTLHours})
 			mac := hmac.New(sha256.New, key)
 			mac.Write(raw)
 			return hex.EncodeToString(mac.Sum(nil))
 		}
 	}
-	raw, _ := json.Marshal([]any{caFingerprint, names, c.CheckpointTTLHours})
+	raw, _ := utils.DigestJSON([]any{caFingerprint, names, c.CheckpointTTLHours})
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }

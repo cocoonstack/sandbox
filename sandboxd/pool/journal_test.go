@@ -52,6 +52,20 @@ func TestJournalRotateFailureDegradesAndRecovers(t *testing.T) {
 	}
 }
 
+func TestJournalKeepsAnEventWithInvalidUTF8(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	j, err := newJournal(path)
+	if err != nil {
+		t.Fatalf("new journal: %v", err)
+	}
+	if err = j.append(map[string]string{"dest": "a\xffb"}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if got := tail(t, path); !strings.Contains(got, `"dest":"a`+"\uFFFD"+`b"`) {
+		t.Errorf("journal %q, want the event with the invalid byte as U+FFFD", got)
+	}
+}
+
 func TestJournalRotateReopenFailureKeepsWriting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "usage.jsonl")

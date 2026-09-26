@@ -5,7 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/v2"
 	"io"
 	"net"
 	"net/http"
@@ -55,6 +55,29 @@ func TestExecReturnsBufferedOutput(t *testing.T) {
 	}
 	if _, ok := gotStdinClose.(*wire.StdinClose); !ok {
 		t.Errorf("guest stdin request = %#v, want stdin_close", gotStdinClose)
+	}
+}
+
+func TestExecKeepsInvalidUTF8OutputAsReplacementCharacters(t *testing.T) {
+	ts, _ := newRelayServer(t, func(conn net.Conn) {
+		defer conn.Close()
+		r := bufio.NewReader(conn)
+		_, _ = r.ReadBytes('\n')
+		_, _ = r.ReadBytes('\n')
+		_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n")
+		_, _ = io.WriteString(conn, `{"type":"stdout","data":"`+base64.StdEncoding.EncodeToString([]byte("ok\xff\n"))+`"}`+"\n")
+		_, _ = io.WriteString(conn, `{"type":"exit","code":0}`+"\n")
+	})
+	status, body := postExec(t, ts, `{"argv":["cat","blob"],"timeout_seconds":5}`)
+	if status != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", status, body)
+	}
+	var out ExecResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode %q: %v", body, err)
+	}
+	if out.Stdout != "ok\uFFFD\n" {
+		t.Errorf("stdout %q, want the invalid byte as U+FFFD", out.Stdout)
 	}
 }
 

@@ -4,7 +4,8 @@ import (
 	"bufio"
 	"cmp"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"net"
@@ -90,7 +91,7 @@ func hijackClient(ctx context.Context, w http.ResponseWriter, guest net.Conn) (n
 
 func decodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var v T
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&v); err != nil {
+	if err := json.UnmarshalRead(http.MaxBytesReader(w, r.Body, maxBodyBytes), &v, json.MatchCaseInsensitiveNames(true)); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return v, false
 	}
@@ -100,7 +101,7 @@ func decodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 // decodeOptionalBody reads an absent body as the zero value, for verbs whose fields all default.
 func decodeOptionalBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var v T
-	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&v)
+	err := json.UnmarshalDecode(jsontext.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)), &v, json.MatchCaseInsensitiveNames(true))
 	if errors.Is(err, io.EOF) {
 		return v, true
 	}
@@ -152,7 +153,7 @@ func writeResult(w http.ResponseWriter, r *http.Request, op, id, failMsg string,
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
+	_ = json.MarshalWrite(w, v, jsontext.AllowInvalidUTF8(true))
 }
 
 func writeErr(w http.ResponseWriter, code int, msg string) {

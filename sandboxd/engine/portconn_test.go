@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/v2"
 	"io"
 	"net"
 	"os"
@@ -18,7 +18,7 @@ func TestGuestPortConnFramesBothWays(t *testing.T) {
 	silk, gc := newTestGuestPortConn(t)
 
 	go func() {
-		frame, _ := json.Marshal(map[string]string{"type": "data", "data": base64.StdEncoding.EncodeToString([]byte("HTTP/1.1 200 OK"))})
+		frame, _ := json.Marshal(map[string]string{"type": "data", "data": base64.StdEncoding.EncodeToString([]byte("HTTP/1.1 200 OK"))}, json.Deterministic(true))
 		_, _ = silk.Write(append(frame, '\n'))
 		_, _ = silk.Write([]byte(`{"type":"done"}` + "\n"))
 	}()

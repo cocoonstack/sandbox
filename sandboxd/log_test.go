@@ -2,7 +2,7 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"io"
 	"strings"
 	"testing"
@@ -67,7 +67,7 @@ func TestJournalWriterKeepsJSONRecordsBehindThePrefix(t *testing.T) {
 	logger := zerolog.New(newJournalWriter(counter, true))
 	logger.Error().Str("k", "v").Msg("boom")
 	line := counter.buf.String()
-	if counter.writes != 1 || !strings.HasPrefix(line, syslogErr+"{") || !json.Valid([]byte(line[len(syslogErr):])) {
+	if counter.writes != 1 || !strings.HasPrefix(line, syslogErr+"{") || !jsontext.Value(line[len(syslogErr):]).IsValid() {
 		t.Errorf("writes = %d, line = %q, want one write of %q and one JSON record", counter.writes, line, syslogErr)
 	}
 }
