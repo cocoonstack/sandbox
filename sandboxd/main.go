@@ -54,10 +54,11 @@ func main() {
 
 	ctx := context.Background()
 	logLevel := cmp.Or(os.Getenv("SANDBOXD_LOG_LEVEL"), "info")
-	logger := log.WithFunc("main")
 	if err := setupLog(ctx, logLevel); err != nil {
-		logger.Fatalf(ctx, err, "setup log")
+		fmt.Fprintf(os.Stderr, "setup log: %v\n", err)
+		os.Exit(1)
 	}
+	logger := log.WithFunc("main")
 	logger.Infof(ctx, "sandboxd %s", versionString())
 
 	cfg, err := config.Load(*configPath)

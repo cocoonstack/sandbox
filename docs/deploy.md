@@ -439,7 +439,9 @@ WantedBy=multi-user.target
 
 Each record carries its syslog level, so alerting keys on systemd priority:
 `journalctl -u sandboxd -p err` lists the errors and `-p warning` the
-degradations. With stderr off a terminal, as under this unit, the record
+degradations. The one line an unparsable `SANDBOXD_LOG_LEVEL` prints before
+the logger is up carries no level, so read it with `journalctl -u sandboxd` or
+`systemctl status sandboxd`. With stderr off a terminal, as under this unit, the record
 itself is one JSON object; a terminal gets the console format. `journalctl`
 answers an empty range with `-- No entries --`, so a check that counts lines
 reads one problem where there are none — count records (`-o json | wc -l`) or
