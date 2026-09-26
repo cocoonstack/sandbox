@@ -1,7 +1,7 @@
 package sandbox
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,7 +12,7 @@ func TestPromoteReturnsContentDigest(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/sandboxes/sb_1/promote" {
 			t.Errorf("got %s %s", r.Method, r.URL.Path)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		_ = json.MarshalWrite(w, map[string]any{
 			"key":            map[string]string{"template": "task:v1", "net": "none", "size": "small"},
 			"content_digest": "sha256:promoted",
 		})

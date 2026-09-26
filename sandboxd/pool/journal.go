@@ -1,7 +1,8 @@
 package pool
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"os"
 	"sync"
@@ -47,7 +48,7 @@ func newJournal(path string) (*journal, error) {
 }
 
 func (j *journal) append(v any) error {
-	line, err := json.Marshal(v)
+	line, err := json.Marshal(v, jsontext.AllowInvalidUTF8(true))
 	if err != nil {
 		return err
 	}

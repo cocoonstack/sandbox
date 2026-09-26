@@ -6,7 +6,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -267,7 +267,7 @@ func (c *Client) deleteTemplates(ctx context.Context, addr string, u url.Values)
 		return nil, nil
 	case http.StatusOK:
 		var body claimResponse
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		if err := json.UnmarshalRead(resp.Body, &body); err != nil {
 			return nil, fmt.Errorf("decode delete redirect: %w", err)
 		}
 		return body.Redirect, nil
@@ -317,7 +317,7 @@ func doJSON[T any](ctx context.Context, c *Client, method, addr, path string, bo
 	if resp.StatusCode != http.StatusOK {
 		return out, apiError(verb, resp)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &out); err != nil {
 		return out, fmt.Errorf("decode %s response: %w", verb, err)
 	}
 	return out, nil
@@ -438,7 +438,7 @@ func encodeBody(verb string, v any) ([]byte, error) {
 
 func apiError(verb string, resp *http.Response) error {
 	var er errorResponse
-	_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&er)
+	_ = json.UnmarshalRead(io.LimitReader(resp.Body, 4096), &er)
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return &APIError{Verb: verb, Status: resp.StatusCode, Message: er.Error}
 }

@@ -3,7 +3,7 @@ package sandbox
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"net"
 	"strings"
 	"testing"

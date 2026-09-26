@@ -9,7 +9,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"flag"
 	"fmt"
@@ -709,7 +710,7 @@ func lspWrite(w io.Writer, body string) error {
 // lspReadResponse reads framed server messages until the response carrying
 // id arrives (server-initiated requests also carry ids but have a method;
 // notifications have no id — both are skipped), returning its result.
-func lspReadResponse(r *bufio.Reader, id int) (json.RawMessage, error) {
+func lspReadResponse(r *bufio.Reader, id int) (jsontext.Value, error) {
 	tp := textproto.NewReader(r)
 	for {
 		hdr, err := tp.ReadMIMEHeader()
@@ -725,10 +726,10 @@ func lspReadResponse(r *bufio.Reader, id int) (json.RawMessage, error) {
 			return nil, err
 		}
 		var msg struct {
-			ID     *int            `json:"id"`
-			Method string          `json:"method"`
-			Result json.RawMessage `json:"result"`
-			Error  json.RawMessage `json:"error"`
+			ID     *int           `json:"id"`
+			Method string         `json:"method"`
+			Result jsontext.Value `json:"result"`
+			Error  jsontext.Value `json:"error"`
 		}
 		if err := json.Unmarshal(body, &msg); err != nil {
 			return nil, fmt.Errorf("lsp frame %q: %w", body, err)
