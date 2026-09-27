@@ -64,8 +64,11 @@ for the truth.
 ## The code-interpreter flavor
 
 `e2b-ci` is built from e2b's own recipe, `e2b-dev/code-interpreter`
-`template/` at `f56a1edf75`, vendored under `os-image/e2b-ci/code-interpreter/`
-with its license. On top of `e2b-rt`'s contents it runs a Jupyter server on
+`template/` at the `CI_RECIPE_SHA` the Dockerfile pins: the build fetches that
+commit's archive, checks its sha256, and applies the one local change listed in
+`os-image/e2b-ci/PATCHES`; e2b's license ships in the image under
+`/usr/share/doc/e2b-code-interpreter/`. Moving to a newer recipe is a bump of the
+two `CI_RECIPE_*` args plus a refresh of the constraints files. On top of `e2b-rt`'s contents it runs a Jupyter server on
 loopback 8888 and the code-interpreter API on 49999, both enabled at boot, and
 the guard drops off-guest traffic to 49983, 49999 and 8888. Only the python
 kernel ships: the recipe installs its javascript, R and Java kernels from
@@ -74,7 +77,10 @@ dependency, moving release archives), so they wait for a reproducible source.
 
 Every pip dependency is pinned by `constraints.txt` and `server-constraints.txt`
 beside the Dockerfile, and bytecode is compiled hash-checked at the end, so a
-rebuild of one commit against the same base yields the same layer.
+rebuild of one commit against the same base yields the same layer. That holds
+for the OCI and registry exporters with `SOURCE_DATE_EPOCH` and
+`rewrite-timestamp=true`, as the image workflow builds; the `docker` exporter
+ignores `rewrite-timestamp`, so a local reproducibility check exports OCI.
 
 The pool's warmup waits on both daemons:
 
