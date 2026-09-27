@@ -24,7 +24,7 @@ Prebuilt static linux/amd64 and linux/arm64 binaries (`sandboxd`,
 `sandboxd.dbg`, `sandbox-mcp`, `silkd`, with `checksums.txt`) ship with every
 [GitHub release](https://github.com/cocoonstack/sandbox/releases); the boot
 artifact and the `base`/`rt`/`python`/`python-rt`/`node`/`node-rt` images are
-multi-arch manifests (`browser`, `android` and `e2b-rt` remain
+multi-arch manifests (`browser`, `android`, `e2b-rt` and `e2b-ci` remain
 amd64-only). Build from source with `make sandboxd` (produces
 `dist/sandboxd`); either way `sandboxd -version` reports what you are running.
 
