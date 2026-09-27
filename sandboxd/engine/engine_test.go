@@ -141,6 +141,19 @@ func TestSnapshotListReadsAnEmptyStoreAndRejectsProse(t *testing.T) {
 	}
 }
 
+func TestListPassesNoPositionalArgsToCocoon(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\n[ \"$#\" = 4 ] || { echo \"unknown command $4 for cocoon vm list\" >&2; exit 1; }\necho '[{\"config\":{\"name\":\"sbx-1\"},\"state\":\"running\"}]'\n"
+	if err := os.WriteFile(filepath.Join(dir, "cocoon"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	vms, err := New("cocoon", nil, nil, false, false, "").List(t.Context())
+	if err != nil || len(vms) != 1 || vms[0].Config.Name != "sbx-1" {
+		t.Fatalf("List = %+v, %v; want the one VM cocoon printed", vms, err)
+	}
+}
+
 func TestProbeTimeout(t *testing.T) {
 	path := sockPath(t)
 

@@ -193,10 +193,9 @@ func (e *Engine) SnapshotList(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
-// List returns cocoon's view of local VMs, optionally filtered by name.
-func (e *Engine) List(ctx context.Context, filters ...string) ([]types.VMRecord, error) {
-	args := append([]string{"vm", "list", "--format", formatJSON}, filters...)
-	out, err := e.run(ctx, args...)
+// List returns cocoon's view of local VMs.
+func (e *Engine) List(ctx context.Context) ([]types.VMRecord, error) {
+	out, err := e.run(ctx, "vm", "list", "--format", formatJSON)
 	if err != nil {
 		return nil, err
 	}

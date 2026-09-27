@@ -91,14 +91,11 @@ func (f *fakeEngine) Restore(_ context.Context, name, _ string) (string, error) 
 	return f.create(name)
 }
 
-func (f *fakeEngine) List(_ context.Context, filters ...string) ([]types.VMRecord, error) {
+func (f *fakeEngine) List(_ context.Context) ([]types.VMRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var vms []types.VMRecord
 	for name, sock := range f.socks {
-		if len(filters) > 0 && !slices.Contains(filters, name) {
-			continue
-		}
 		vms = append(vms, types.VMRecord{State: "running", VsockSocket: sock, Config: types.VMConfig{Name: name}})
 	}
 	return vms, nil
