@@ -92,6 +92,7 @@ var (
 	// Replaying a journal takes a writable mount, so readers stay out.
 	ErrVolumeNeedsRecovery = errors.New("volume needs recovery by a writable claim")
 	ErrArchived            = errors.New("sandbox is archived; an exec or file call wakes it first")
+	ErrPaused              = errors.New("sandbox is paused; an operator port dial does not wake it")
 	ErrQuota               = errors.New("node claim quota reached")
 
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")

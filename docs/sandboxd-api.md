@@ -604,7 +604,8 @@ unknown sandbox, 502 guest unreachable.
 
 ## GET /v1/sandboxes/{id}/ports/{port}
 
-Auth: the sandbox's own token. Send `Upgrade: tcp` + `Connection: Upgrade`
+Auth: the sandbox's own token, or the root `api_token` for a control-plane
+read (below). Send `Upgrade: tcp` + `Connection: Upgrade`
 (the gate reads `Upgrade` alone, as `/agent`'s does); answers
 `101 Switching Protocols` and from then on
 the connection is a raw byte relay to `127.0.0.1:{port}` inside the guest,
@@ -618,13 +619,18 @@ guest socket, and a guest write shutdown reaches the client without ending
 the client's writes. Each direction stays open until its own EOF. A relay
 copy error closes both connections and releases the sandbox hold.
 
-An open relay holds the sandbox's idle clock exactly like the silkd relay, and
-a hibernated sandbox wakes transparently — which is why the upgrade header is
-mandatory: a bare `GET` must not consume a hibernate snapshot. 400 a port
-outside 1-65535; 401 missing bearer token; 404 unknown sandbox or wrong token;
-426 without the upgrade header; 502 when the guest cannot be reached on that
-port — no listener, or a hibernated sandbox whose restore failed. The node log
-carries which.
+With the sandbox's token, an open relay holds the sandbox's idle clock exactly
+like the silkd relay, and a hibernated sandbox wakes transparently — which is
+why the upgrade header is mandatory: a bare `GET` must not consume a hibernate
+snapshot. With the root `api_token` the relay is passive, for control-plane
+reads such as metrics: it never wakes the sandbox and never stamps activity,
+so a poll neither undoes a pause nor keeps a sandbox from idling. A hibernated
+or archived sandbox, or one with a hibernate or wake in flight, answers `409`
+at once; an open passive relay still holds the sandbox against the idle sweep.
+400 a port outside 1-65535; 401 missing bearer token; 404 unknown sandbox or
+wrong token; 409 a passive relay to a paused sandbox; 426 without the upgrade
+header; 502 when the guest cannot be reached on that port — no listener, or a
+hibernated sandbox whose restore failed. The node log carries which.
 
 ## POST /v1/sandboxes/{id}/exec
 

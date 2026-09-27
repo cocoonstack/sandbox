@@ -119,6 +119,25 @@ func TestPortRelayMapsDialErrors(t *testing.T) {
 	}
 }
 
+func TestPortRelayTakesTheRootTokenAsTheOperator(t *testing.T) {
+	var got []string
+	mgr := &fakeManager{dialPort: func(_, token string, _ uint16) (net.Conn, error) {
+		got = append(got, token)
+		return nil, pool.ErrPaused
+	}}
+	ts := newTestServer(t, "root-secret", mgr, nil)
+	for _, token := range []string{"root-secret", "sandbox-token"} {
+		resp := getPort(t, ts, "/v1/sandboxes/sb_1/ports/49983", token, true)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusConflict {
+			t.Errorf("%s: status %d, want 409 for a paused sandbox", token, resp.StatusCode)
+		}
+	}
+	if len(got) != 2 || got[0] != "" || got[1] != "sandbox-token" {
+		t.Errorf("manager saw tokens %q, want the operator credential then the sandbox token", got)
+	}
+}
+
 func TestPortRelayEndsOnGuestClose(t *testing.T) {
 	ts, _ := newPortServer(t, func(c net.Conn) {
 		_, _ = io.WriteString(c, "bye")

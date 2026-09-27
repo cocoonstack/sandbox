@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -915,6 +916,97 @@ func TestDialPortAuthorizesByToken(t *testing.T) {
 	}
 }
 
+func TestOperatorPortDialNeverWakesAPausedSandbox(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	operator := Cred{Operator: true}
+
+	hibernated := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), hibernated.ID, Cred{Token: hibernated.Token}); err != nil {
+		t.Fatalf("Hibernate: %v", err)
+	}
+	restores := len(eng.restores)
+	if _, err := m.DialPort(t.Context(), hibernated.ID, operator, 49983); !errors.Is(err, ErrPaused) {
+		t.Errorf("hibernated: %v, want ErrPaused", err)
+	}
+	if len(eng.restores) != restores || hibernated.HibernateSnap == "" {
+		t.Error("an operator dial restored a hibernated sandbox")
+	}
+
+	running := mustClaim(t, m, testKey)
+	running.Transition.Lock()
+	if _, err := m.DialPort(t.Context(), running.ID, operator, 49983); !errors.Is(err, ErrPaused) {
+		t.Errorf("mid-transition: %v, want ErrPaused at once", err)
+	}
+	running.Transition.Unlock()
+	for name, set := range map[string]func(){
+		"pending hibernate": func() { running.PendingSnap = "snap" },
+		"archived":          func() { running.PendingSnap, running.ArchiveCk = "", "ck" },
+	} {
+		set()
+		if _, err := m.DialPort(t.Context(), running.ID, operator, 49983); !errors.Is(err, ErrPaused) {
+			t.Errorf("%s: %v, want ErrPaused", name, err)
+		}
+	}
+	if _, err := m.DialPort(t.Context(), "sb_missing", operator, 49983); !errors.Is(err, ErrUnknownSandbox) {
+		t.Errorf("unknown id: %v, want ErrUnknownSandbox", err)
+	}
+}
+
+func TestOperatorPortDialStreamsWithoutStampingActivity(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	guest, host := net.Pipe()
+	t.Cleanup(func() { _ = host.Close() })
+	eng.guestDial = func() (net.Conn, error) { return guest, nil }
+	stamp := time.Now().Add(-time.Hour).Truncate(time.Second)
+	sb.TouchAt(stamp)
+
+	conn, err := m.DialPort(t.Context(), sb.ID, Cred{Operator: true}, 49983)
+	if err != nil {
+		t.Fatalf("operator dial on a running sandbox: %v", err)
+	}
+	go func() { _, _ = host.Write([]byte("metrics")) }()
+	buf := make([]byte, 7)
+	if _, readErr := io.ReadFull(conn, buf); readErr != nil || string(buf) != "metrics" {
+		t.Fatalf("stream read %q, %v", buf, readErr)
+	}
+	if !sb.Busy() {
+		t.Error("an open operator stream must hold the sandbox against the idle sweep")
+	}
+	_ = conn.Close()
+	if sb.Busy() || !sb.LastSeen().Equal(stamp) {
+		t.Errorf("after close busy=%v lastSeen=%v, want released with the stamp %v unchanged", sb.Busy(), sb.LastSeen(), stamp)
+	}
+
+	guest2, host2 := net.Pipe()
+	t.Cleanup(func() { _ = host2.Close() })
+	eng.guestDial = func() (net.Conn, error) { return guest2, nil }
+	tokenConn, err := m.DialPort(t.Context(), sb.ID, Cred{Token: sb.Token}, 49983)
+	if err != nil {
+		t.Fatalf("token dial: %v", err)
+	}
+	_ = tokenConn.Close()
+	if !sb.LastSeen().After(stamp) {
+		t.Error("a sandbox-token dial must keep stamping activity")
+	}
+}
+
+func TestTokenPortDialStillWakesAHibernatedSandbox(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("Hibernate: %v", err)
+	}
+	restores := len(eng.restores)
+	_, _ = m.DialPort(t.Context(), sb.ID, Cred{Token: sb.Token}, 49983)
+	if len(eng.restores) != restores+1 || sb.HibernateSnap != "" {
+		t.Errorf("restores %d -> %d, hibernateSnap %q: a token dial must wake the sandbox", restores, len(eng.restores), sb.HibernateSnap)
+	}
+}
+
 type plainConn struct {
 	net.Conn
 }
@@ -1036,6 +1128,7 @@ type fakeEngine struct {
 	warmupErr                         error
 	staleReconciles                   []string
 	installCAErr                      error
+	guestDial                         func() (net.Conn, error)
 	diskAttachErr                     error
 	diskAttachErrFor                  string
 	diskAttachCancel                  context.CancelFunc
@@ -1267,6 +1360,9 @@ func (f *fakeEngine) Probe(_ context.Context, _ string, timeout time.Duration) e
 }
 
 func (f *fakeEngine) DialGuestPort(context.Context, string, uint16) (net.Conn, error) {
+	if f.guestDial != nil {
+		return f.guestDial()
+	}
 	return nil, fmt.Errorf("fakeEngine has no guest port")
 }
 
