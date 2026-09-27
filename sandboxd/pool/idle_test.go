@@ -53,7 +53,7 @@ func TestIdleOncePolicyScope(t *testing.T) {
 		}
 
 		unpooled := types.PoolKey{Template: "tpl:v1", Net: types.NetNone, Size: types.SizeSmall}
-		sb2, err := m.ClaimProvision(t.Context(), unpooled, time.Hour, "", "", nil)
+		sb2, err := m.ClaimProvision(t.Context(), unpooled, time.Hour, "", "", nil, nil)
 		if err != nil {
 			t.Fatalf("provision: %v", err)
 		}

@@ -33,6 +33,7 @@ type claimDTO struct {
 	Layer          types.PolicyLayer `json:"policy_layer,omitempty"`
 	Tenant         string            `json:"tenant,omitempty"`
 	ClaimRef       string            `json:"claim_ref,omitempty"`
+	Metadata       types.Metadata    `json:"metadata,omitempty"`
 	Volumes        []types.Volume    `json:"volumes,omitempty"`
 	VsockSocket    string            `json:"vsock_socket,omitempty"`
 	TAP            string            `json:"tap,omitempty"`
@@ -182,7 +183,7 @@ func dtoOf(sb *types.Sandbox) claimDTO {
 	return claimDTO{
 		ID: sb.ID, VMName: sb.VMName, Key: sb.Key, Token: sb.Token,
 		Deadline: sb.Deadline, ClaimedAt: sb.ClaimedAt, LeaseSeconds: sb.LeaseSeconds, Layer: sb.Layer,
-		Tenant: sb.Tenant, ClaimRef: sb.ClaimRef,
+		Tenant: sb.Tenant, ClaimRef: sb.ClaimRef, Metadata: sb.Metadata,
 		Volumes: slices.Clone(sb.Volumes), VsockSocket: sb.VsockSocket,
 		TAP: sb.TAP, HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap,
 		ArchiveCk: sb.ArchiveCk, FromCheckpoint: sb.FromCheckpoint,

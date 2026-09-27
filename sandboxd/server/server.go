@@ -57,9 +57,9 @@ var poolErrHTTP = []struct {
 
 // Manager is the pool manager slice the server consumes; an empty tenant means operator (root).
 type Manager interface {
-	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error)
-	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error)
-	ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error)
+	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error)
+	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error)
+	ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error)
 	Release(ctx context.Context, id string, cred pool.Cred) error
 	Hibernate(ctx context.Context, id string, cred pool.Cred) error
 	Wake(ctx context.Context, id string, cred pool.Cred) error
@@ -72,13 +72,13 @@ type Manager interface {
 	TenantClaims() map[string]int
 	VolumePlacement(key types.PoolKey, tenant string, names []string) (bool, error)
 	Volumes(tenant string, holders map[string]int) []types.VolumeInfo
-	Sandboxes(tenant, claimRef string) []pool.SandboxSummary
+	Sandboxes(tenant, claimRef string, metadata types.Metadata) []pool.SandboxSummary
 	Sandbox(id string) (pool.SandboxSummary, bool)
 	Stats(ctx context.Context, id string) (pool.SandboxStats, bool)
 	Audit(ctx context.Context, id string, line []byte)
 	AuditEnabled() bool
-	ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error)
-	ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error)
+	ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, tenant string, metadata types.Metadata) (*types.Sandbox, error)
+	ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl time.Duration, tenant string, metadata types.Metadata) (*types.Sandbox, error)
 	Checkpoints(ctx context.Context, tenant string) ([]types.Checkpoint, error)
 	HasCheckpoint(ctx context.Context, ckptID string) bool
 	FetchCheckpoint(ctx context.Context, ckptID string) (dir string, meta []byte, release func(), err error)
@@ -223,7 +223,7 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeBody[types.ClaimRequest](w, r)
-	if !ok {
+	if !ok || !validMetadata(w, req.Metadata) {
 		return
 	}
 	key := req.Key()
@@ -233,12 +233,12 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef, nil)
+	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Metadata, nil)
 	if errors.Is(err, pool.ErrNoWarm) {
 		if s.redirectClaim(r.Context(), w, req, key, key.Hash(), tenant) {
 			return
 		}
-		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, nil)
+		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Metadata, nil)
 	}
 	if errors.Is(err, pool.ErrQuota) && s.placer != nil && !req.NoRedirect &&
 		s.writeRedirect(w, s.placer.Candidates(key.Hash())) {
@@ -266,14 +266,14 @@ func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req t
 	}
 	var sb *types.Sandbox
 	if req.RequirePromoted {
-		sb, err = s.mgr.ClaimProvisionPromoted(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Volumes)
+		sb, err = s.mgr.ClaimProvisionPromoted(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Metadata, req.Volumes)
 	} else {
-		sb, err = s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Volumes)
+		sb, err = s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Metadata, req.Volumes)
 		if errors.Is(err, pool.ErrNoWarm) {
 			if s.placer != nil && !req.NoRedirect && s.writeRedirect(w, s.placer.VolumeCandidates(hash, types.VolumeNames(req.Volumes))) {
 				return
 			}
-			sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Volumes)
+			sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Metadata, req.Volumes)
 		}
 	}
 	writeResult(w, r, "claim", key.Template, "provisioning failed", err, func() {
@@ -377,7 +377,13 @@ func (s *Server) handleSandbox(w http.ResponseWriter, r *http.Request) {
 
 // handleSandboxes lists the live claims visible to the caller — never tokens.
 func (s *Server) handleSandboxes(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, SandboxListResponse{Sandboxes: s.mgr.Sandboxes(tenantFrom(r.Context()), r.URL.Query().Get("claim_ref"))})
+	query := r.URL.Query()
+	filter, err := metadataFilter(query["metadata"])
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, SandboxListResponse{Sandboxes: s.mgr.Sandboxes(tenantFrom(r.Context()), query.Get("claim_ref"), filter)})
 }
 
 func (s *Server) handleSandboxStats(w http.ResponseWriter, r *http.Request) {
@@ -462,16 +468,16 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeBody[types.CheckpointClaimRequest](w, r)
-	if !ok {
+	if !ok || !validMetadata(w, req.Metadata) {
 		return
 	}
 	ckptID := r.PathValue("id")
-	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, req.TTL(), tenantFrom(r.Context()))
+	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, req.TTL(), tenantFrom(r.Context()), req.Metadata)
 	if errors.Is(err, pool.ErrUnknownCheckpoint) {
 		if !req.NoRedirect && s.prober != nil && s.writeRedirect(w, s.prober.Owners(r.Context(), ckptID)) {
 			return
 		}
-		sb, err = s.mgr.ClaimCheckpointHeal(r.Context(), ckptID, req.TTL(), tenantFrom(r.Context()))
+		sb, err = s.mgr.ClaimCheckpointHeal(r.Context(), ckptID, req.TTL(), tenantFrom(r.Context()), req.Metadata)
 	}
 	writeResult(w, r, "claim checkpoint", ckptID, "provisioning failed", err, func() {
 		writeJSON(w, http.StatusOK, s.claimResponse(sb))

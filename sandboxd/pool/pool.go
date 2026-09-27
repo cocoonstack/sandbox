@@ -135,7 +135,10 @@ type SandboxSummary struct {
 	FromCheckpoint string         `json:"from_checkpoint,omitempty"`
 	Volumes        []types.Volume `json:"volumes,omitempty"`
 	// ClaimRef echoes the caller reference; empty for checkpoint branches and unprefixed forks.
-	ClaimRef string `json:"claim_ref,omitempty"`
+	ClaimRef      string         `json:"claim_ref,omitempty"`
+	Metadata      types.Metadata `json:"metadata,omitempty"`
+	CPUCount      int            `json:"cpu_count,omitzero"`
+	MemTotalBytes int64          `json:"mem_total_bytes,omitzero"`
 	// Token is the sandbox's own bearer token; only the root by-id read carries it.
 	Token string `json:"token,omitempty"`
 }
@@ -553,8 +556,8 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 	return pools, g
 }
 
-// Sandboxes lists live claims visible to tenant (empty means root), narrowed to claimRef when it is set.
-func (m *Manager) Sandboxes(tenant, claimRef string) []SandboxSummary {
+// Sandboxes lists live claims visible to tenant (empty means root), narrowed to claimRef when set and to claims holding every metadata pair.
+func (m *Manager) Sandboxes(tenant, claimRef string, metadata types.Metadata) []SandboxSummary {
 	m.mu.Lock()
 	size := len(m.claimed)
 	if claimRef != "" {
@@ -562,7 +565,7 @@ func (m *Manager) Sandboxes(tenant, claimRef string) []SandboxSummary {
 	}
 	out := make([]SandboxSummary, 0, size)
 	for _, sb := range m.claimed {
-		if !tenantOwns(tenant, sb.Tenant) || (claimRef != "" && sb.ClaimRef != claimRef) {
+		if !tenantOwns(tenant, sb.Tenant) || (claimRef != "" && sb.ClaimRef != claimRef) || !sb.Metadata.Matches(metadata) {
 			continue
 		}
 		out = append(out, summarize(sb))
@@ -639,10 +642,12 @@ func (m *Manager) goldensDir() string {
 }
 
 func summarize(sb *types.Sandbox) SandboxSummary {
+	spec, _ := sb.Key.Size.Spec()
 	return SandboxSummary{
 		ID: sb.ID, Key: sb.Key, Deadline: sb.Deadline, ClaimedAt: sb.ClaimedAt,
 		Hibernated: sb.HibernateSnap != "", Archived: sb.ArchiveCk != "",
-		FromCheckpoint: sb.FromCheckpoint, ClaimRef: sb.ClaimRef,
+		FromCheckpoint: sb.FromCheckpoint, ClaimRef: sb.ClaimRef, Metadata: sb.Metadata,
+		CPUCount: spec.CPU, MemTotalBytes: spec.MemoryBytes,
 		Volumes: slices.Clone(sb.Volumes),
 	}
 }

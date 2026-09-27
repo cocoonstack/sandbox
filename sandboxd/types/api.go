@@ -28,7 +28,8 @@ type ClaimRequest struct {
 	// RequirePromoted makes the target refuse a cold-image fallback.
 	RequirePromoted bool `json:"require_promoted,omitzero"`
 	// ClaimRef is an opaque caller reference recorded on the claim.
-	ClaimRef string `json:"claim_ref,omitempty"`
+	ClaimRef string   `json:"claim_ref,omitempty"`
+	Metadata Metadata `json:"metadata,omitempty"`
 }
 
 // Key resolves the requested pool key with the wire defaults filled.
@@ -99,7 +100,8 @@ type CheckpointResponse struct {
 type CheckpointClaimRequest struct {
 	TTLField
 	// NoRedirect makes the retry resolve locally instead of bouncing between two nodes.
-	NoRedirect bool `json:"no_redirect,omitzero"`
+	NoRedirect bool     `json:"no_redirect,omitzero"`
+	Metadata   Metadata `json:"metadata,omitempty"`
 }
 
 // CheckpointListResponse is the wire reply of GET /v1/checkpoints.

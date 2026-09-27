@@ -230,6 +230,9 @@ not an error, and `Close` is bounded internally so it stays defer-friendly).
 Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Passing
 `WithVolumes` or `WithClaimRef` to `Checkpoint.New` returns a local error:
 checkpoint branches support neither volumes nor a claim reference in this version.
+`WithMetadata` applies to `New`, `Template.New`, and `Checkpoint.New`: the
+labels follow the [claim bounds](sandboxd-api.md#post-v1claim), and a branch
+never inherits its source's.
 
 `WithVolumesAttachOnly()` claims the same volumes without mounting them: the
 entries in `Sandbox.Volumes` carry an empty `Mount`, and the workload finds
@@ -636,7 +639,8 @@ sb = client.Attach(ownerAddr, id, token)  // bind a known handle, no lookup roun
 ```
 
 `Sandboxes` is scoped to the calling token, so a tenant sees only its own
-claims; the fields are those of [`GET /v1/sandboxes`](sandboxd-api.md#get-v1sandboxes).
+claims; the fields are those of [`GET /v1/sandboxes`](sandboxd-api.md#get-v1sandboxes),
+including each claim's `Metadata`, `CPUCount`, and `MemTotalBytes`.
 `Drain` leaves live claims alone — poll `Info` until `Claimed` is zero.
 
 ## Error handling

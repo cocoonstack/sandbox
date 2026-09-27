@@ -469,6 +469,42 @@ func TestClaimRefRoundTrip(t *testing.T) {
 	}
 }
 
+func TestClaimMetadataRoundTrip(t *testing.T) {
+	st := startStack(t, "node-token")
+	sb, err := st.client.New(t.Context(), "rt:24.04", sandbox.WithMetadata(map[string]string{"team": "a"}))
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	defer sb.Close()
+
+	list, err := st.client.Sandboxes(t.Context())
+	if err != nil {
+		t.Fatalf("list sandboxes: %v", err)
+	}
+	i := slices.IndexFunc(list, func(s sandbox.SandboxSummary) bool { return s.ID == sb.ID })
+	if i < 0 || list[i].Metadata["team"] != "a" || list[i].CPUCount != 1 || list[i].MemTotalBytes != 512<<20 {
+		t.Fatalf("index %+v, want %s with metadata team=a, 1 CPU, 512 MiB", list, sb.ID)
+	}
+	for _, tt := range []struct {
+		query string
+		code  int
+		hit   bool
+	}{
+		{"?metadata=team=a", http.StatusOK, true},
+		{"?metadata=team=b", http.StatusOK, false},
+		{"?metadata=team", http.StatusBadRequest, false},
+	} {
+		status, body := rawJSON(t, st, http.MethodGet, "/v1/sandboxes"+tt.query, "")
+		if status != tt.code || strings.Contains(string(body), sb.ID) != tt.hit {
+			t.Errorf("%s: %d %s, want %d with the claim listed=%t", tt.query, status, body, tt.code, tt.hit)
+		}
+	}
+	status, body := rawJSON(t, st, http.MethodPost, "/v1/claim", `{"template":"rt:24.04","metadata":{"a&b":"v"}}`)
+	if status != http.StatusBadRequest || !strings.Contains(string(body), "metadata key") {
+		t.Errorf("claim with a bad key: %d %s, want 400 naming the key bound", status, body)
+	}
+}
+
 func TestForkClaimRefPrefixWireShape(t *testing.T) {
 	st := startStack(t, "node-token")
 	status, body := rawJSON(t, st, http.MethodPost, "/v1/claim", `{"template":"rt:24.04"}`)

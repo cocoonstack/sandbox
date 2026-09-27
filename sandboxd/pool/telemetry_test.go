@@ -3,6 +3,7 @@ package pool
 import (
 	"encoding/json/v2"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -84,21 +85,21 @@ func TestTenantQuotaBindsPerTenant(t *testing.T) {
 	m := newTestManager(t, eng)
 	m.tenantMax = map[string]int{"acme": 1, "beta": 2}
 
-	first, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil)
+	first, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil, nil)
 	if err != nil {
 		t.Fatalf("acme claim: %v", err)
 	}
 	if first.Tenant != "acme" {
 		t.Errorf("tenant %q, want acme", first.Tenant)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil); !errors.Is(err, ErrQuota) {
+	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil, nil); !errors.Is(err, ErrQuota) {
 		t.Fatalf("acme past its cap: %v, want ErrQuota", err)
 	}
 
-	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "beta", "", nil); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "beta", "", nil, nil); err != nil {
 		t.Errorf("beta claim while acme is at cap: %v", err)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "", nil); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "", nil, nil); err != nil {
 		t.Errorf("root claim while acme is at cap: %v", err)
 	}
 	counts := m.TenantClaims()
@@ -108,7 +109,7 @@ func TestTenantQuotaBindsPerTenant(t *testing.T) {
 	if err := m.Release(t.Context(), first.ID, Cred{Token: first.Token}); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil, nil); err != nil {
 		t.Errorf("acme claim after release: %v", err)
 	}
 }
@@ -116,7 +117,7 @@ func TestTenantQuotaBindsPerTenant(t *testing.T) {
 func TestTenantStampedInJournals(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil)
+	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil, nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -163,7 +164,7 @@ func TestSandboxesIndexOmitsTokens(t *testing.T) {
 	sb.ClaimRef = "ns/workload"
 	m.mu.Unlock()
 
-	list := m.Sandboxes("", "")
+	list := m.Sandboxes("", "", nil)
 	if len(list) != 1 || list[0].ID != sb.ID || list[0].ClaimRef != "ns/workload" || list[0].Hibernated {
 		t.Fatalf("index %+v", list)
 	}
@@ -194,7 +195,7 @@ func TestSandboxesFilterByClaimRef(t *testing.T) {
 		{"", "", []string{a.ID, b.ID, unnamed.ID}},
 	} {
 		var got []string
-		for _, row := range m.Sandboxes(tt.tenant, tt.claimRef) {
+		for _, row := range m.Sandboxes(tt.tenant, tt.claimRef, nil) {
 			got = append(got, row.ID)
 		}
 		slices.Sort(tt.want)
@@ -251,6 +252,76 @@ func TestGuestPortDialsWriteAuditEvents(t *testing.T) {
 				t.Error("audit journal leaked the sandbox token")
 			}
 		})
+	}
+}
+
+func TestSandboxesEchoAndFilterMetadata(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	large := types.PoolKey{Template: testKey.Template, Net: types.NetNone, Size: types.SizeLarge}
+	a, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", types.Metadata{"team": "a", "env": "prod"}, nil)
+	if err != nil {
+		t.Fatalf("claim a: %v", err)
+	}
+	b, err := m.ClaimProvision(t.Context(), large, 0, "", "", types.Metadata{"team": "a", "env": "dev"}, nil)
+	if err != nil {
+		t.Fatalf("claim b: %v", err)
+	}
+	bare := mustClaim(t, m, testKey)
+
+	for _, tt := range []struct {
+		filter types.Metadata
+		want   []string
+	}{
+		{nil, []string{a.ID, b.ID, bare.ID}},
+		{types.Metadata{"team": "a"}, []string{a.ID, b.ID}},
+		{types.Metadata{"team": "a", "env": "dev"}, []string{b.ID}},
+		{types.Metadata{"team": "b"}, nil},
+	} {
+		var got []string
+		for _, row := range m.Sandboxes("", "", tt.filter) {
+			got = append(got, row.ID)
+		}
+		slices.Sort(tt.want)
+		if !slices.Equal(got, tt.want) {
+			t.Errorf("Sandboxes(metadata %v) = %v, want %v", tt.filter, got, tt.want)
+		}
+	}
+
+	row, ok := m.Sandbox(b.ID)
+	if !ok || !maps.Equal(row.Metadata, b.Metadata) || row.CPUCount != 4 || row.MemTotalBytes != 4<<30 {
+		t.Errorf("summary %+v, want the claim metadata and the large tier's 4 CPUs and 4 GiB", row)
+	}
+	if row, _ := m.Sandbox(bare.ID); row.Metadata != nil || row.CPUCount != 1 || row.MemTotalBytes != 512<<20 {
+		t.Errorf("summary %+v, want no metadata and the small tier's 1 CPU and 512 MiB", row)
+	}
+}
+
+func TestWarmClaimRecordsMetadata(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
+	m.pools[testKey].warm = append(m.pools[testKey].warm, &types.Sandbox{VMName: "sbx-warm-1", Key: testKey})
+	sb, err := m.ClaimWarm(t.Context(), testKey, 0, "", "", types.Metadata{"team": "a"}, nil)
+	if err != nil {
+		t.Fatalf("ClaimWarm: %v", err)
+	}
+	if row, ok := m.Sandbox(sb.ID); !ok || row.Metadata["team"] != "a" {
+		t.Errorf("warm claim summary %+v, want metadata team=a", row)
+	}
+}
+
+func TestClaimMetadataSurvivesARestart(t *testing.T) {
+	eng := newFakeEngine()
+	dir := t.TempDir()
+	m := newTestManagerAt(t, eng, dir)
+	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "", types.Metadata{"team": "a"}, nil)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	m2 := newTestManagerAt(t, eng, dir)
+	if err := m2.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if row, ok := m2.Sandbox(sb.ID); !ok || row.Metadata["team"] != "a" {
+		t.Errorf("after restart %+v (found %t), want metadata team=a", row, ok)
 	}
 }
 

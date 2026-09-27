@@ -42,6 +42,11 @@ const (
 	DirectIOOn   = "on"
 	DirectIOOff  = "off"
 	DirectIOAuto = "auto"
+
+	maxMetadataPairs      = 16
+	maxMetadataKeyBytes   = 128
+	maxMetadataValueBytes = 512
+	maxMetadataBytes      = 4 << 10
 )
 
 var (
@@ -97,6 +102,40 @@ type SizeSpec struct {
 func (s Size) Spec() (SizeSpec, bool) {
 	spec, ok := sizeSpecs[s]
 	return spec, ok
+}
+
+// Metadata is the caller's key-value labels on a claim.
+type Metadata map[string]string
+
+// Validate enforces the pair count, key charset, value size, and total size bounds.
+func (md Metadata) Validate() error {
+	if len(md) > maxMetadataPairs {
+		return fmt.Errorf("metadata must contain at most %d pairs, got %d", maxMetadataPairs, len(md))
+	}
+	total := 0
+	for k, v := range md {
+		if !validMetadataKey(k) {
+			return fmt.Errorf("metadata key %q must be 1..%d bytes of printable ASCII without = or &", k, maxMetadataKeyBytes)
+		}
+		if len(v) > maxMetadataValueBytes {
+			return fmt.Errorf("metadata value of key %q must be at most %d bytes, got %d", k, maxMetadataValueBytes, len(v))
+		}
+		total += len(k) + len(v)
+	}
+	if total > maxMetadataBytes {
+		return fmt.Errorf("metadata must total at most %d bytes, got %d", maxMetadataBytes, total)
+	}
+	return nil
+}
+
+// Matches reports whether md holds every pair of filter.
+func (md Metadata) Matches(filter Metadata) bool {
+	for k, v := range filter {
+		if got, ok := md[k]; !ok || got != v {
+			return false
+		}
+	}
+	return true
 }
 
 // PoolKey identifies one warm pool.
@@ -160,6 +199,8 @@ type Sandbox struct {
 
 	// ClaimRef is the opaque caller reference; empty for checkpoint branches and unprefixed forks.
 	ClaimRef string `json:"claim_ref,omitempty"`
+	// Metadata is immutable after the claim: forks, the journal, and summaries share it by reference.
+	Metadata Metadata `json:"metadata,omitempty"`
 	// Volumes records the volumes successfully applied to this claim.
 	Volumes []Volume `json:"volumes,omitempty"`
 
@@ -382,6 +423,18 @@ func validateVolumeMount(mount string) error {
 		}
 	}
 	return nil
+}
+
+func validMetadataKey(k string) bool {
+	if k == "" || len(k) > maxMetadataKeyBytes {
+		return false
+	}
+	for i := range len(k) {
+		if c := k[i]; c < ' ' || c > '~' || c == '=' || c == '&' {
+			return false
+		}
+	}
+	return true
 }
 
 func pathWithin(parent, child string) bool {

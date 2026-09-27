@@ -7,6 +7,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -124,6 +125,32 @@ func decodeBodyStrict[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 		return v, false
 	}
 	return v, true
+}
+
+func validMetadata(w http.ResponseWriter, md types.Metadata) bool {
+	if err := md.Validate(); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return false
+	}
+	return true
+}
+
+func metadataFilter(pairs []string) (types.Metadata, error) {
+	if len(pairs) == 0 {
+		return nil, nil
+	}
+	filter := make(types.Metadata, len(pairs))
+	for _, pair := range pairs {
+		k, v, ok := strings.Cut(pair, "=")
+		if !ok || k == "" {
+			return nil, fmt.Errorf("metadata filter %q must be key=value", pair)
+		}
+		if _, dup := filter[k]; dup {
+			return nil, fmt.Errorf("metadata filter repeats key %q", k)
+		}
+		filter[k] = v
+	}
+	return filter, nil
 }
 
 func writePoolErr(w http.ResponseWriter, err error) bool {

@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"maps"
 	"slices"
 	"time"
 )
@@ -91,6 +92,12 @@ func WithTimeout(d time.Duration) Option {
 // apiserver passes its k8s "<namespace>/<name>"), echoed by Client.Sandboxes.
 func WithClaimRef(ref string) Option {
 	return func(r *claimRequest) { r.ClaimRef = ref }
+}
+
+// WithMetadata records key-value labels on the claim, echoed by Client.Sandboxes.
+func WithMetadata(md map[string]string) Option {
+	md = maps.Clone(md)
+	return func(r *claimRequest) { r.Metadata = md }
 }
 
 // ttlSeconds rounds a lease up to whole wire seconds.

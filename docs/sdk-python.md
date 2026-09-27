@@ -11,9 +11,9 @@ with client.new("ghcr.io/cocoonstack/sandbox/rt:24.04") as sb:
 `pip install cocoonstack-sandbox` — stdlib-only, no dependencies, and
 synchronous by design (agent frameworks that need async wrap calls in
 `asyncio.to_thread`, exactly like the [OpenAI adapter](openai-adapter.md)
-does). It matches the [Go SDK](sdk.md) guest and data-plane surface, with three
-exceptions: operator pool retuning (`SetPools`/`SetPoolsCluster`) remains
-Go-only, `Template.new` takes no `claim_ref`, and file and tar payloads are whole `bytes` values rather than
+does). It matches the [Go SDK](sdk.md) guest and data-plane surface, with four
+exceptions: operator pool retuning (`SetPools`/`SetPoolsCluster`) and setting
+claim `metadata` remain Go-only, `Template.new` takes no `claim_ref`, and file and tar payloads are whole `bytes` values rather than
 streams (`read_file`/`pull` return them, `write_file`/`push` take them; the
 wire is chunked, the caller's copy is not). Wire fidelity is
 pinned by the shared protocol fixture corpus that the Rust guest, Go, and
