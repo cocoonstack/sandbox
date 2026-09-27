@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/json/v2"
 	"math"
 	"strings"
 	"testing"
@@ -63,9 +64,10 @@ func TestMetadataValidateNamesTheFailedBound(t *testing.T) {
 		{"absent", nil, ""},
 		{"at the bounds", Metadata{strings.Repeat("k", maxMetadataKeyBytes): strings.Repeat("v", maxMetadataValueBytes), "e": ""}, ""},
 		{"printable punctuation", Metadata{"a.b/c:d e~": "x=y&z"}, ""},
-		{"sixteen pairs", pairsOf(maxMetadataPairs, 1), ""},
-		{"exactly the total", pairsOf(8, maxMetadataBytes/8-1), ""},
-		{"pair count", pairsOf(maxMetadataPairs+1, 1), "at most 16 pairs"},
+		{"sixteen pairs", pairsOf(maxMetadataPairs, "v"), ""},
+		{"exactly the JSON total", withValue(pairsOf(8, strings.Repeat("v", 504)), "a", strings.Repeat("v", 511)), ""},
+		{"printable UTF-8 value", Metadata{"k": "caf\u00e9 \u4e2d\u6587"}, ""},
+		{"pair count", pairsOf(maxMetadataPairs+1, "v"), "at most 16 pairs"},
 		{"empty key", Metadata{"": "v"}, "metadata key"},
 		{"long key", Metadata{strings.Repeat("k", maxMetadataKeyBytes+1): "v"}, "metadata key"},
 		{"equals in key", Metadata{"a=b": "v"}, "metadata key"},
@@ -73,7 +75,12 @@ func TestMetadataValidateNamesTheFailedBound(t *testing.T) {
 		{"control byte in key", Metadata{"a\tb": "v"}, "metadata key"},
 		{"non-ASCII key", Metadata{"caf\u00e9": "v"}, "metadata key"},
 		{"long value", Metadata{"k": strings.Repeat("v", maxMetadataValueBytes+1)}, "metadata value"},
-		{"total", pairsOf(8, maxMetadataBytes/8), "total at most 4096 bytes"},
+		{"control byte in value", Metadata{"k": "a\x01b"}, "printable UTF-8"},
+		{"tab in value", Metadata{"k": "a\tb"}, "printable UTF-8"},
+		{"invalid UTF-8 value", Metadata{"k": "a\xffb"}, "printable UTF-8"},
+		{"one byte over the JSON total", withValue(pairsOf(8, strings.Repeat("v", 504)), "a", strings.Repeat("v", 512)), "at most 4096 bytes as JSON"},
+		{"quotes count as escaped", pairsOf(8, strings.Repeat(`"`, 300)), "at most 4096 bytes as JSON"},
+		{"backslashes count as escaped", pairsOf(8, strings.Repeat(`\`, 300)), "at most 4096 bytes as JSON"},
 	} {
 		err := tt.md.Validate()
 		if tt.want == "" {
@@ -84,6 +91,25 @@ func TestMetadataValidateNamesTheFailedBound(t *testing.T) {
 		}
 		if err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s: %v, want an error naming %q", tt.name, err, tt.want)
+		}
+	}
+}
+
+func TestMetadataEncodedSizeIsTheDeterministicJSONLength(t *testing.T) {
+	for _, md := range []Metadata{
+		nil,
+		{},
+		{"k": ""},
+		{"a.b/c:d e~": "x=y&z", "q\"k": `say "hi"`, "b\\k": `c:\dir\`},
+		{"k": "caf\u00e9 \u4e2d\u6587 <>&", "l": "\u2028\u2029"},
+		pairsOf(maxMetadataPairs, strings.Repeat(`"`, 40)),
+	} {
+		b, err := json.Marshal(md, json.Deterministic(true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := md.encodedSize(); got != len(b) {
+			t.Errorf("encodedSize(%v) = %d, want the %d bytes of %s", md, got, len(b), b)
 		}
 	}
 }
@@ -133,10 +159,15 @@ func TestExpireActionValidateAndOr(t *testing.T) {
 	}
 }
 
-func pairsOf(n, valueBytes int) Metadata {
+func withValue(md Metadata, k, v string) Metadata {
+	md[k] = v
+	return md
+}
+
+func pairsOf(n int, value string) Metadata {
 	md := make(Metadata, n)
 	for i := range n {
-		md[string(rune('a'+i))] = strings.Repeat("v", valueBytes)
+		md[string(rune('a'+i))] = value
 	}
 	return md
 }

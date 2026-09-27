@@ -43,8 +43,8 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   the [sandbox index](#get-v1sandboxes): at most 16 pairs, each key 1 to 128
   bytes of printable ASCII without `=` or `&` (list filters encode pairs as
   `key=value`, and the e2b list API joins them with `&`), each value at most
-  512 bytes, and at most 4 KiB in total. Labels are fixed at claim time; no
-  verb edits them
+  512 bytes of printable UTF-8, and at most 4 KiB as JSON, so quotes and
+  backslashes count twice. Labels are fixed at claim time; no verb edits them
 - `on_expire` is what the node does when the lease ends: `destroy`, the
   default, or `archive`. `archive` hibernates a running sandbox and archives it
   to the checkpoint store, whatever the pool's `archive_after_seconds`. The

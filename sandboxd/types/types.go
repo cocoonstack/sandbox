@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -135,12 +137,11 @@ func (s Size) Spec() (SizeSpec, bool) {
 // Metadata is the caller's key-value labels on a claim.
 type Metadata map[string]string
 
-// Validate enforces the pair count, key charset, value size, and total size bounds.
+// Validate enforces the pair count, key and value charsets, value size, and JSON size, in which a quote or backslash is the only escaped byte.
 func (md Metadata) Validate() error {
 	if len(md) > maxMetadataPairs {
 		return fmt.Errorf("metadata must contain at most %d pairs, got %d", maxMetadataPairs, len(md))
 	}
-	total := 0
 	for k, v := range md {
 		if !validMetadataKey(k) {
 			return fmt.Errorf("metadata key %q must be 1..%d bytes of printable ASCII without = or &", k, maxMetadataKeyBytes)
@@ -148,10 +149,12 @@ func (md Metadata) Validate() error {
 		if len(v) > maxMetadataValueBytes {
 			return fmt.Errorf("metadata value of key %q must be at most %d bytes, got %d", k, maxMetadataValueBytes, len(v))
 		}
-		total += len(k) + len(v)
+		if !validMetadataValue(v) {
+			return fmt.Errorf("metadata value of key %q must be printable UTF-8", k)
+		}
 	}
-	if total > maxMetadataBytes {
-		return fmt.Errorf("metadata must total at most %d bytes, got %d", maxMetadataBytes, total)
+	if size := md.encodedSize(); size > maxMetadataBytes {
+		return fmt.Errorf("metadata must be at most %d bytes as JSON, got %d", maxMetadataBytes, size)
 	}
 	return nil
 }
@@ -164,6 +167,14 @@ func (md Metadata) Matches(filter Metadata) bool {
 		}
 	}
 	return true
+}
+
+func (md Metadata) encodedSize() int {
+	size := 2 + max(len(md)-1, 0)
+	for k, v := range md {
+		size += escapedLen(k) + escapedLen(v) + 1
+	}
+	return size
 }
 
 // PoolKey identifies one warm pool.
@@ -452,6 +463,14 @@ func validateVolumeMount(mount string) error {
 		}
 	}
 	return nil
+}
+
+func escapedLen(s string) int {
+	return len(s) + 2 + strings.Count(s, `"`) + strings.Count(s, `\`)
+}
+
+func validMetadataValue(v string) bool {
+	return utf8.ValidString(v) && !strings.ContainsFunc(v, func(r rune) bool { return !unicode.IsPrint(r) })
 }
 
 func validMetadataKey(k string) bool {
