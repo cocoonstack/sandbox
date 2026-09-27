@@ -1,0 +1,18 @@
+[Unit]
+Description=Jupyter Server (e2b code interpreter kernel host)
+Documentation=https://jupyter-server.readthedocs.io
+Wants=code-interpreter.service
+StartLimitBurst=0
+
+[Service]
+Type=simple
+Environment=MATPLOTLIBRC=/root/.config/matplotlib/.matplotlibrc
+ExecStart=/opt/python/bin/jupyter server --IdentityProvider.token=""
+ExecStartPost=-/usr/bin/systemctl reset-failed code-interpreter
+Restart=on-failure
+RestartSec=1
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

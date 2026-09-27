@@ -21,6 +21,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,8 +31,10 @@ import (
 
 const (
 	// envdPort is envd's fixed listener; the SDK derives its host from it.
-	envdPort  = 49983
-	readyWait = 60 * time.Second
+	envdPort = 49983
+	// interpreterPort is the e2b code-interpreter API the e2b-ci flavor starts at boot.
+	interpreterPort = 49999
+	readyWait       = 60 * time.Second
 	// claimTTL outlasts the run so a lease expiry cannot look like a relay fault.
 	claimTTL = 30 * time.Minute
 
@@ -49,21 +52,23 @@ func main() {
 	template := flag.String("template", "", "e2b flavor template ref")
 	wantVersion := flag.String("envd-version", "", "version envd must report; empty only prints it")
 	hold := flag.Duration("hold", 0, "after the steps pass, print the claim and keep it alive for this long")
+	interpreter := flag.Bool("code-interpreter", false, "also drive the code-interpreter API on 49999 (the e2b-ci flavor)")
+	size := flag.String("size", "small", "size of the pool to claim from")
 	flag.Parse()
 
-	if err := run(*addr, *token, *template, *wantVersion, *hold); err != nil {
+	if err := run(*addr, *token, *template, *wantVersion, *hold, *interpreter, sandbox.Size(*size)); err != nil {
 		fmt.Fprintln(os.Stderr, "envdsmoke:", err)
 		os.Exit(1)
 	}
 	fmt.Println("ENVDSMOKE PASS")
 }
 
-func run(addr, token, template, wantVersion string, hold time.Duration) error {
+func run(addr, token, template, wantVersion string, hold time.Duration, interpreter bool, size sandbox.Size) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second+hold)
 	defer cancel()
 
 	_, sb, err := harness.Claim(ctx, addr, token, template,
-		sandbox.WithNetwork(sandbox.NetNone), sandbox.WithTimeout(claimTTL))
+		sandbox.WithNetwork(sandbox.NetNone), sandbox.WithSize(size), sandbox.WithTimeout(claimTTL))
 	if err != nil {
 		return err
 	}
@@ -78,17 +83,19 @@ func run(addr, token, template, wantVersion string, hold time.Duration) error {
 		return err
 	}
 
-	for _, step := range []struct {
-		name string
-		run  func(context.Context, *harness.PortRelay, *sandbox.Sandbox) error
-	}{
+	steps := []smokeStep{
 		{"GET /health", stepHealth},
 		{"GET /files", stepDownload},
 		{"POST /files", stepUpload},
 		{"connect unary over http/1.1", stepConnectH1},
 		{"process start under -no-cgroups", stepProcessStart},
 		{"envd serves http/1.1 only", stepProtocol},
-	} {
+		{"user account with sudo", stepUserAccount},
+	}
+	if interpreter {
+		steps = append(steps, smokeStep{"interpreter /health in guest", stepInterpreterHealth}, smokeStep{"interpreter runs 1+1", stepRunCode})
+	}
+	for _, step := range steps {
 		t0 := time.Now()
 		if err := step.run(ctx, rt, sb); err != nil {
 			return fmt.Errorf("%s: %w", step.name, err)
@@ -103,6 +110,11 @@ func run(addr, token, template, wantVersion string, hold time.Duration) error {
 		}
 	}
 	return nil
+}
+
+type smokeStep struct {
+	name string
+	run  func(context.Context, *harness.PortRelay, *sandbox.Sandbox) error
 }
 
 // reportGuest asks the guest what it runs over silkd, the native data plane that must keep working beside envd.
@@ -306,4 +318,55 @@ func stepProtocol(ctx context.Context, rt *harness.PortRelay, sb *sandbox.Sandbo
 	}
 	// an error here must mean h2c specifically, not a guest that stopped answering at all
 	return stepHealth(ctx, rt, sb)
+}
+
+// stepUserAccount checks the SDK's default user: its own home and passwordless sudo.
+func stepUserAccount(ctx context.Context, _ *harness.PortRelay, sb *sandbox.Sandbox) error {
+	out, err := sb.Exec(ctx, "sudo", "-u", "user", "sh", "-c", `id -un; echo "$HOME"; sudo -n true && echo sudo`)
+	if err != nil {
+		return err
+	}
+	if got := strings.Fields(out); !slices.Equal(got, []string{"user", "/home/user", "sudo"}) {
+		return fmt.Errorf("sudo -u user reports %q, want user, /home/user and passwordless sudo", out)
+	}
+	return nil
+}
+
+func stepInterpreterHealth(ctx context.Context, _ *harness.PortRelay, sb *sandbox.Sandbox) error {
+	out, err := sb.Exec(ctx, "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", fmt.Sprintf("http://127.0.0.1:%d/health", interpreterPort))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(out) != "200" {
+		return fmt.Errorf("in-guest /health answered %q, want 200", out)
+	}
+	return nil
+}
+
+// stepRunCode posts what the SDK's runCode posts and reads the result line out of the NDJSON stream.
+func stepRunCode(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
+	headers := http.Header{contentType: []string{"application/json"}}
+	resp, err := rt.Do(ctx, interpreterPort, http.MethodPost, "/execute", headers, strings.NewReader(`{"code":"1+1"}`))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		out, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("status %s: %s", resp.Status, out)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	for line := range strings.Lines(string(body)) {
+		var out struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal([]byte(line), &out) == nil && out.Type == "result" && out.Text == "2" {
+			return nil
+		}
+	}
+	return fmt.Errorf("no result line with text 2 in:\n%s", body)
 }

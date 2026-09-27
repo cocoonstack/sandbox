@@ -11,6 +11,11 @@ ADDR=${ADDR:-127.0.0.1:7996}
 TOKEN=${TOKEN:-e2benvd}
 TEMPLATE=${TEMPLATE:-e2b-rt:24.04}
 ENVD_VERSION=${ENVD_VERSION:-0.8.0}
+# CODE_INTERPRETER=1 is the e2b-ci pass: warmup also gates on the interpreter API, and envdsmoke drives it.
+CODE_INTERPRETER=${CODE_INTERPRETER:-}
+SIZE=${SIZE:-small}
+HEALTH="curl -sf -m 1 -o /dev/null http://127.0.0.1:49983/health"
+[[ -n $CODE_INTERPRETER ]] && HEALTH="$HEALTH && curl -sf -m 1 -o /dev/null http://127.0.0.1:49999/health"
 export PATH=$K/bin:$PATH
 DATA=$(mktemp -d /tmp/envd-e2e.XXXXXX); DAEMON_PID=""
 cleanup() {
@@ -31,8 +36,8 @@ trap cleanup EXIT
 # whose data plane is not up yet is worse than a slower clone.
 cat >"$DATA/config.json" <<EOF
 {"listen":"$ADDR","data_dir":"$DATA/state","api_token":"$TOKEN",
- "pools":[{"template":"$TEMPLATE","net":"none","size":"small","warm":2,
-   "warmup":["sh","-c","for i in \$(seq 1 200); do curl -sf -o /dev/null http://127.0.0.1:49983/health && exit 0; sleep 0.05; done; exit 1"]}]}
+ "pools":[{"template":"$TEMPLATE","net":"none","size":"$SIZE","warm":2,
+   "warmup":["sh","-c","for i in \$(seq 1 1200); do $HEALTH && exit 0; sleep 0.05; done; exit 1"]}]}
 EOF
 echo "== start sandboxd $("$K/bin/sandboxd" -version 2>/dev/null)"
 "$K/bin/sandboxd" -config "$DATA/config.json" >>"$DATA/daemon.log" 2>&1 &
@@ -48,4 +53,4 @@ for i in $(seq 1 300); do
 done
 curl -sf -H "Authorization: Bearer $TOKEN" "http://$ADDR/v1/info" | jq -c '.pools'
 echo "== envdsmoke"
-"$K/bin/envdsmoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -envd-version "$ENVD_VERSION" ${HOLD:+-hold "$HOLD"}
+"$K/bin/envdsmoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -envd-version "$ENVD_VERSION" -size "$SIZE" ${HOLD:+-hold "$HOLD"} ${CODE_INTERPRETER:+-code-interpreter}

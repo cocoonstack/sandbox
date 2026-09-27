@@ -1,0 +1,7 @@
+Vendored from e2b-dev/code-interpreter template/ at f56a1edf75 (Apache-2.0, see
+LICENSE). Local changes:
+
+- requirements.txt: e2b_charts pinned to 1.0.0 (upstream leaves it unpinned).
+- server/main.py: the default javascript context is created only when Jupyter
+  lists a javascript kernelspec; this flavor ships the python kernel alone, and
+  upstream's server otherwise fails its startup on the missing kernel.

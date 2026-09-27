@@ -1,7 +1,8 @@
 # e2b sandboxes
 
 The `e2b-rt` flavor carries [e2b](https://e2b.dev)'s `envd` alongside silkd, so
-an **unmodified e2b SDK** can drive a cocoon microVM. It is the guest half of a
+an **unmodified e2b SDK** can drive a cocoon microVM; `e2b-ci` adds e2b's code
+interpreter on top, for `@e2b/code-interpreter` and `e2b_code_interpreter`. It is the guest half of a
 compatibility layer whose other two halves live in
 [sandbox-operator](https://github.com/cocoonstack/sandbox-operator): the
 apiserver's e2b REST surface answers `Sandbox.create()`, and `envd-proxy`
@@ -56,7 +57,37 @@ for the truth.
 - Installs a pinned `envd` release, verified by SHA-256 at build time.
 - Writes `/etc/envd-version` so the deployment can read back what it shipped.
 - Enables `envd.service`, ordered after a guard unit, alongside `silkd.service`.
+- Ships the SDK's default account: `user`, home `/home/user`, passwordless
+  sudo. `envd` itself defaults to root until its `/init` names `user`.
 - **amd64 only**: e2b publishes no arm64 build of `envd`.
+
+## The code-interpreter flavor
+
+`e2b-ci` is built from e2b's own recipe, `e2b-dev/code-interpreter`
+`template/` at `f56a1edf75`, vendored under `os-image/e2b-ci/code-interpreter/`
+with its license. On top of `e2b-rt`'s contents it runs a Jupyter server on
+loopback 8888 and the code-interpreter API on 49999, both enabled at boot, and
+the guard drops off-guest traffic to 49983, 49999 and 8888. Only the python
+kernel ships: the recipe installs its javascript, R and Java kernels from
+sources that cannot be pinned (a `curl | bash` setup script, an unversioned git
+dependency, moving release archives), so they wait for a reproducible source.
+
+Every pip dependency is pinned by `constraints.txt` and `server-constraints.txt`
+beside the Dockerfile, and bytecode is compiled hash-checked at the end, so a
+rebuild of one commit against the same base yields the same layer.
+
+The pool's warmup waits on both daemons:
+
+```json
+{"template": "ghcr.io/cocoonstack/sandbox/e2b-ci:24.04",
+ "net": "none", "size": "medium", "warm": 2,
+ "warmup": ["sh", "-c",
+   "for i in $(seq 1 1200); do curl -sf -m 1 -o /dev/null http://127.0.0.1:49983/health && curl -sf -m 1 -o /dev/null http://127.0.0.1:49999/health && exit 0; sleep 0.05; done; exit 1"]}
+```
+
+`medium` (2 vCPU, 1 GiB) is e2b's own size for the interpreter. `small` runs
+it too, with about 90 MiB left once the server and its default kernel are up,
+which a heavier import (pandas, matplotlib) quickly spends.
 
 `envd` hardcodes a `0.0.0.0` listener and takes no bind address, so the image
 drops inbound traffic to 49983 from anything but loopback (`envd-guard.service`,
@@ -91,7 +122,12 @@ Connect server stream — while asserting silkd still answers on the same VM.
 
 ```bash
 K=<kit> TEMPLATE=ghcr.io/cocoonstack/sandbox/e2b-rt:24.04 bash scripts/envd-e2e.sh
+K=<kit> TEMPLATE=ghcr.io/cocoonstack/sandbox/e2b-ci:24.04 SIZE=medium CODE_INTERPRETER=1 bash scripts/envd-e2e.sh
 ```
+
+Both passes check the `user` account; `CODE_INTERPRETER=1` also gates warmup on
+49999, curls its `/health` inside the guest, and runs `1+1` through the relay
+the way the SDK's `runCode` does.
 
 `envdsmoke -hold` then keeps that sandbox alive for an out-of-tree harness that
 puts a real edge proxy in front of it.

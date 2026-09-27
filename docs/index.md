@@ -40,9 +40,10 @@ vsock-only I/O (hardened default); `net=egress` attaches a bridge/CNI NIC.
 - [Browser sandboxes](browser.md) — headless Chromium with CDP through
   the relay: Playwright/Puppeteer access, checkpoint/branch of a live
   browser
-- [e2b sandboxes](e2b.md) — the e2b-rt flavor: e2b's envd on loopback beside
-  silkd, the guest half of the e2b-compatible data plane, and the warm-pool
-  gate that keeps a claim from outrunning it
+- [e2b sandboxes](e2b.md) — the e2b-rt and e2b-ci flavors: e2b's envd on
+  loopback beside silkd, e2b's code interpreter, the guest half of the
+  e2b-compatible data plane, and the warm-pool gate that keeps a claim from
+  outrunning it
 - [Guarded egress](egress.md) — allow-listed, audited outbound access with
   host-side credential injection, on both lanes: no NIC (none) or an
   nftables-locked NIC (egress)

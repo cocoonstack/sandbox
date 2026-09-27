@@ -21,7 +21,7 @@ RUN curl -fsSL -o /usr/local/bin/envd \
     # [envd] envd hardcodes a 0.0.0.0 listener with no bind flag, so the guest
     # drops inbound 49983 from anywhere but loopback itself. The none lane has
     # no NIC at all; this is what keeps the egress lane's tap from reaching it.
-    apt-get update && apt-get install -y --no-install-recommends nftables && \
+    apt-get update && apt-get install -y --no-install-recommends nftables sudo && \
     printf '%s\n' \
       'table inet e2bguard {' \
       '  chain input {' \
@@ -67,6 +67,9 @@ RUN curl -fsSL -o /usr/local/bin/envd \
       'WantedBy=sysinit.target' \
       > /etc/systemd/system/envd.service && \
     systemctl enable envd-guard.service envd.service && \
+    # [e2b] the SDK's default user: passwordless sudo, home /home/user.
+    useradd -m -s /bin/bash user && \
+    echo 'user ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user && \
     rm -rf /var/lib/apt/lists/*
 
 FROM scratch

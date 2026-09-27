@@ -315,13 +315,21 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Commit time
+        id: epoch
+        run: echo "epoch=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
+
+      # SOURCE_DATE_EPOCH plus rewrite-timestamp clamp every file's mtime, so a
+      # rebuild of one commit writes the same layer.
       - name: Build and push
         uses: docker/build-push-action@v7.4.0
+        env:
+          SOURCE_DATE_EPOCH: ${{ steps.epoch.outputs.epoch }}
         with:
           context: os-image/${{ matrix.name }}
           file: os-image/${{ matrix.name }}/${{ matrix.tag }}/Dockerfile
           platforms: ${{ matrix.platforms }}
-          push: true
+          outputs: type=image,push=true,rewrite-timestamp=true
           pull: true
           # Fork-safe: without this, flavors would silently build FROM the
           # upstream repo's base via the Dockerfile default. Assumes the
