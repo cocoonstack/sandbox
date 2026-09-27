@@ -235,7 +235,7 @@ func TestClaimRecordsItsPolicyLayer(t *testing.T) {
 		t.Errorf("pooled claim layer %q, want %q", sb.Layer, types.LayerPooled)
 	}
 	unpooled := types.PoolKey{Template: "promoted-name", Net: types.NetNone, Size: types.SizeSmall}
-	sb, err := m.ClaimProvision(t.Context(), unpooled, time.Hour, "acme", "", nil, nil)
+	sb, err := m.ClaimProvision(t.Context(), unpooled, time.Hour, "", "acme", "", nil, nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -557,7 +557,7 @@ func TestEgressLaneCannotForkOrCheckpoint(t *testing.T) {
 	m.mu.Lock()
 	m.claimed[sb.ID] = sb
 	m.mu.Unlock()
-	if _, err := m.Fork(t.Context(), sb.ID, Cred{Token: "tok"}, 1, time.Minute, ""); !errors.Is(err, ErrNoEgressFork) {
+	if _, err := m.Fork(t.Context(), sb.ID, Cred{Token: "tok"}, 1, time.Minute, "", ""); !errors.Is(err, ErrNoEgressFork) {
 		t.Errorf("Fork on egress lane: got %v, want ErrNoEgressFork", err)
 	}
 	if _, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: "tok"}, "", ""); !errors.Is(err, ErrNoEgressFork) {

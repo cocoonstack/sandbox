@@ -30,7 +30,7 @@ func TestClaimProvisionAppliesVolumesInRequestOrder(t *testing.T) {
 		{Name: "imagenet", Mount: "/volumes/imagenet"},
 	}
 
-	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil, requested)
+	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", nil, requested)
 	if err != nil {
 		t.Fatalf("ClaimProvision: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestClaimProvisionBringsMixedVolumesUpConcurrently(t *testing.T) {
 	}
 	rendezvousAttaches(eng, len(requested))
 
-	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil, requested)
+	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", nil, requested)
 	if err != nil {
 		t.Fatalf("ClaimProvision: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestClaimProvisionOneVolumeAttachFailureFailsWholeClaim(t *testing.T) {
 		{Name: "third", Path: third},
 	})
 
-	_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil, []types.Volume{
+	_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", nil, []types.Volume{
 		{Name: "first", Mode: types.VolumeModeRW},
 		{Name: "broken", Mode: types.VolumeModeRW},
 		{Name: "third"},
@@ -171,7 +171,7 @@ func TestClaimWarmAppliesVolumesAndRefillsAfterFailure(t *testing.T) {
 			warm := &types.Sandbox{VMName: "sbx-warm", Key: testKey, VsockSocket: "/vsock/warm"}
 			m.pools[testKey].warm = append(m.pools[testKey].warm, warm)
 
-			sb, err := m.ClaimWarm(t.Context(), testKey, 0, "", "", nil, []types.Volume{{Name: "data"}})
+			sb, err := m.ClaimWarm(t.Context(), testKey, 0, "", "", "", nil, []types.Volume{{Name: "data"}})
 			if tt.wantClaim && err != nil {
 				t.Fatalf("ClaimWarm: %v", err)
 			}
@@ -227,7 +227,7 @@ func TestClaimProvisionVolumeFailureDestroysVM(t *testing.T) {
 				eng.diskAttachCancel = cancel
 			}
 
-			_, err := m.ClaimProvision(ctx, testKey, 0, "", "", nil, []types.Volume{{Name: "data"}})
+			_, err := m.ClaimProvision(ctx, testKey, 0, "", "", "", nil, []types.Volume{{Name: "data"}})
 			if err == nil {
 				t.Fatal("ClaimProvision succeeded")
 			}
@@ -269,7 +269,7 @@ func TestClaimProvisionRejectsInvalidVolumesBeforeProvision(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()
 			m := newVolumeManager(t, eng, tt.catalog)
-			if _, err := m.ClaimProvision(t.Context(), tt.key, 0, "", "", nil, tt.volumes); !errors.Is(err, ErrBadVolume) {
+			if _, err := m.ClaimProvision(t.Context(), tt.key, 0, "", "", "", nil, tt.volumes); !errors.Is(err, ErrBadVolume) {
 				t.Errorf("got %v, want ErrBadVolume", err)
 			}
 			if len(eng.colds)+len(eng.clones) != 0 {
@@ -284,7 +284,7 @@ func TestClaimProvisionPromotedRejectsMissingTemplateBeforeProvision(t *testing.
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "data", Path: path}})
 
-	_, err := m.ClaimProvisionPromoted(t.Context(), testKey, 0, "", "", nil, []types.Volume{{Name: "data"}})
+	_, err := m.ClaimProvisionPromoted(t.Context(), testKey, 0, "", "", "", nil, []types.Volume{{Name: "data"}})
 	if !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("error=%v, want ErrUnknownTemplate", err)
 	}
@@ -305,7 +305,7 @@ func TestClaimProvisionPromotedAppliesVolumesFromTemplate(t *testing.T) {
 	beforeColds, beforeClones := len(eng.colds), len(eng.clones)
 	eng.volumeOps = nil
 
-	sb, err := m.ClaimProvisionPromoted(t.Context(), key, 0, "", "", nil, []types.Volume{{Name: "data"}})
+	sb, err := m.ClaimProvisionPromoted(t.Context(), key, 0, "", "", "", nil, []types.Volume{{Name: "data"}})
 	if err != nil {
 		t.Fatalf("ClaimProvisionPromoted: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestPooledKeyOutranksPromotedTemplate(t *testing.T) {
 	if !m.HasPoolGolden(key) {
 		t.Error("the pool golden is not reported, so the server cannot pin content to it")
 	}
-	sb, err := m.ClaimProvision(t.Context(), key, 0, "", "", nil, []types.Volume{{Name: "data"}})
+	sb, err := m.ClaimProvision(t.Context(), key, 0, "", "", "", nil, []types.Volume{{Name: "data"}})
 	if err != nil {
 		t.Fatalf("ordinary volume claim: %v", err)
 	}
@@ -361,7 +361,7 @@ func TestPooledKeyOutranksPromotedTemplate(t *testing.T) {
 	if got := eng.cloneFroms; !slices.Equal(got, []string{"/goldens/pooled"}) {
 		t.Errorf("clone sources=%v, want only the pool golden", got)
 	}
-	if _, err := m.ClaimProvisionPromoted(t.Context(), key, 0, "", "", nil, []types.Volume{{Name: "data"}}); !errors.Is(err, ErrUnknownTemplate) {
+	if _, err := m.ClaimProvisionPromoted(t.Context(), key, 0, "", "", "", nil, []types.Volume{{Name: "data"}}); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("stale-peer promoted claim: %v, want ErrUnknownTemplate", err)
 	}
 }
@@ -374,8 +374,8 @@ func TestClaimProvisionVolumeACL(t *testing.T) {
 		{Name: "public", Path: path},
 	})
 
-	_, forbiddenErr := m.ClaimProvision(t.Context(), testKey, 0, "beta", "", nil, []types.Volume{{Name: "private"}})
-	_, unknownErr := m.ClaimProvision(t.Context(), testKey, 0, "beta", "", nil, []types.Volume{{Name: "unknown"}})
+	_, forbiddenErr := m.ClaimProvision(t.Context(), testKey, 0, "", "beta", "", nil, []types.Volume{{Name: "private"}})
+	_, unknownErr := m.ClaimProvision(t.Context(), testKey, 0, "", "beta", "", nil, []types.Volume{{Name: "unknown"}})
 	if forbiddenErr == nil || unknownErr == nil || forbiddenErr.Error() != unknownErr.Error() {
 		t.Fatalf("forbidden=%q unknown=%q, want byte-identical errors", forbiddenErr, unknownErr)
 	}
@@ -393,7 +393,7 @@ func TestClaimProvisionVolumeACL(t *testing.T) {
 		{"public", "beta", "public"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := m.ClaimProvision(t.Context(), testKey, 0, tt.tenant, "", nil, []types.Volume{{Name: tt.volume}}); err != nil {
+			if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", tt.tenant, "", nil, []types.Volume{{Name: tt.volume}}); err != nil {
 				t.Errorf("ClaimProvision: %v", err)
 			}
 		})
@@ -477,11 +477,11 @@ func TestVolumeClaimUsageAndScopedSummaries(t *testing.T) {
 	m := newVolumeManager(t, newFakeEngine(), []config.VolumeSpec{{Name: "data", Path: path}})
 	request := []types.Volume{{Name: "data", Mount: "/datasets"}}
 	wantApplied := []types.Volume{{Name: "data", Mount: "/datasets"}}
-	acme, err := m.ClaimProvision(t.Context(), testKey, 0, "acme", "", nil, request)
+	acme, err := m.ClaimProvision(t.Context(), testKey, 0, "", "acme", "", nil, request)
 	if err != nil {
 		t.Fatalf("acme claim: %v", err)
 	}
-	_, betaErr := m.ClaimProvision(t.Context(), testKey, 0, "beta", "", nil, request)
+	_, betaErr := m.ClaimProvision(t.Context(), testKey, 0, "", "beta", "", nil, request)
 	if betaErr != nil {
 		t.Fatalf("beta claim: %v", betaErr)
 	}
@@ -530,7 +530,7 @@ func TestClaimProvisionRefusesUnavailableVolumesIndistinguishably(t *testing.T) 
 			if principal == "" && name == "private" {
 				continue
 			}
-			_, err := m.ClaimProvision(t.Context(), testKey, 0, principal, "", nil, []types.Volume{{Name: name}})
+			_, err := m.ClaimProvision(t.Context(), testKey, 0, "", principal, "", nil, []types.Volume{{Name: name}})
 			if !errors.Is(err, ErrVolumeUnavailable) {
 				t.Fatalf("principal %q volume %q: %v, want ErrVolumeUnavailable", principal, name, err)
 			}

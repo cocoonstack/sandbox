@@ -30,7 +30,7 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
  "volumes": [{"name": "imagenet"}, {"name": "weights", "mount": "/models"},
              {"name": "scratch-db", "mode": "rw"}],
  "claim_ref": "namespace/workload", "metadata": {"team": "a"},
- "no_redirect": false, "require_promoted": false}
+ "on_expire": "archive", "no_redirect": false, "require_promoted": false}
 ```
 
 - `net` defaults to `none`, `size` to `small`; the pool key is
@@ -45,6 +45,16 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   `key=value`, and the e2b list API joins them with `&`), each value at most
   512 bytes, and at most 4 KiB in total. Labels are fixed at claim time; no
   verb edits them
+- `on_expire` is what the node does when the lease ends: `destroy`, the
+  default, or `archive`. `archive` hibernates a running sandbox and archives it
+  to the checkpoint store, whatever the pool's `archive_after_seconds`. The
+  archive is kept for `archive_delete_after_seconds`, or forever when that is
+  0, and the next call that reaches the guest restores it with a fresh lease
+  of the claim's length, so its next expiry archives it again. A failed
+  hibernate or export at expiry keeps the claim and retries on the next reap;
+  it never falls back to destroy. A volume claim or an egress-lane claim
+  cannot hibernate, so `archive` on one answers 409 with the same error as a
+  hibernate
 - `no_redirect` is set by the SDK when retrying at a redirect target
 - `require_promoted` is an internal redirect field of volume claims, the only
   path that sets or reads it. When a redirect response sets it, copy it into
@@ -178,7 +188,7 @@ name (attributed in the usage journal and counted against the tenant's
 an unknown and a forbidden volume return the same error text.
 
 Errors: 400 unknown template axis, metadata over a bound (the message names
-it), invalid/duplicate volumes,
+it), an unknown `on_expire`, invalid/duplicate volumes,
 `volumes_attach_only` with no volumes or with an entry carrying a `mount`,
 `mode: "rw"`
 against a non-writable entry, or a volume that is unknown or forbidden (the
@@ -227,7 +237,8 @@ freeing its memory; the next agent access restores it transparently
 (sessions, processes, and memory state intact — cocoon's hibernate keeps the
 snapshot point and the stop coincident). Idempotent on an already-hibernated
 sandbox. The TTL keeps running: a hibernated sandbox is still reaped (VM and
-snapshot) at its deadline. When to hibernate is the caller's policy — the
+snapshot) at its deadline, unless it claimed `on_expire: archive` or its pool
+archives. When to hibernate is the caller's policy — the
 node only provides the transition. 204 on success, 404 unknown id or wrong
 token, 409 on the egress lane or when volumes are attached (neither kind of
 sandbox hibernates; see [egress](egress.md)).
@@ -250,7 +261,7 @@ lease to `ttl_seconds` from now, so a client holding a sandbox longer than its
 claim asked for does not have to claim a new one:
 
 ```json
-{"ttl_seconds": 3600}
+{"ttl_seconds": 3600, "on_expire": "archive"}
 ```
 
 → `200 {"deadline": "2026-09-22T12:00:00Z"}`. The grant, not the request, is
@@ -258,7 +269,9 @@ authoritative: `ttl_seconds` 0 means the node default and anything past the
 24 h cap is clamped, and the reply always carries what was granted. An absent
 body means the same as `ttl_seconds` 0. The new lease also becomes the one a
 wake from the archive grants again. A renew can shorten a lease as well as
-extend it.
+extend it. `on_expire` switches the expiry action to `archive` or back to
+`destroy`; absent keeps the current one. It is refused as on a claim for a
+sandbox that cannot hibernate.
 
 An archived sandbox is refused: off-node, its deadline is the store's retention
 window rather than a lease, and a TTL written over it would schedule the
@@ -277,7 +290,8 @@ claim. The sandbox's own token rides in the body as the ownership proof:
 `claim_ref_prefix`, when set, records each child under `prefix + child id` as
 its `claim_ref`, so a control plane that names claims `<namespace>/<name>`
 addresses the children by name; without it children carry no `claim_ref`.
-Children inherit the parent's `metadata`.
+Children inherit the parent's `metadata` and `on_expire`; an `on_expire` in the
+body overrides the inherited action.
 Clones the sandbox into `count` fresh claims (1 up to the node's
 `max_fork_count`, default 16). Memory, disk, and guest
 state (sessions, processes, tmpfs) duplicate at the fork point; cocoon's
@@ -420,11 +434,12 @@ first).
 ## POST /v1/checkpoints/{id}/claim
 
 Auth: node API token; body `{"ttl_seconds": 0, "no_redirect": false,
-"metadata": {}}`. Claims a fresh sandbox branched from the checkpoint (a
+"metadata": {}, "on_expire": "destroy"}`. Claims a fresh sandbox branched from the checkpoint (a
 normal claim response, attributed to the caller); the checkpoint's recorded
 key applies — the unguessable id is the capability to branch. The branch
-carries this request's `metadata`, under the claim bounds, never the source
-sandbox's. 400 metadata over a bound.
+carries this request's `metadata` and `on_expire`, under the claim rules,
+never the source sandbox's. 400 metadata over a bound or an unknown
+`on_expire`.
 
 Checkpoints are node-local (unless the store is shared — see
 [Configuration](deploy.md#configuration)), so a miss here runs a tier order:
@@ -503,7 +518,7 @@ an SDK caller should set.
 
 Auth: node API token. Root sees every live claim; a tenant sees only its own.
 The index is `{"sandboxes": [{id, key, deadline, claimed_at?, hibernated,
-archived?, from_checkpoint?, claim_ref?, metadata?, cpu_count, mem_total_bytes,
+archived?, from_checkpoint?, claim_ref?, metadata?, on_expire?, cpu_count, mem_total_bytes,
 volumes?: [{name, mount, mode?}]}]}` — `cpu_count` and `mem_total_bytes` are the
 size tier's allocation;
 `mode` is omitted for `ro`, matching the claim echo; never sandbox tokens,

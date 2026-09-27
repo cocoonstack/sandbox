@@ -28,8 +28,9 @@ type ClaimRequest struct {
 	// RequirePromoted makes the target refuse a cold-image fallback.
 	RequirePromoted bool `json:"require_promoted,omitzero"`
 	// ClaimRef is an opaque caller reference recorded on the claim.
-	ClaimRef string   `json:"claim_ref,omitempty"`
-	Metadata Metadata `json:"metadata,omitempty"`
+	ClaimRef string       `json:"claim_ref,omitempty"`
+	Metadata Metadata     `json:"metadata,omitempty"`
+	OnExpire ExpireAction `json:"on_expire,omitempty"`
 }
 
 // Key resolves the requested pool key with the wire defaults filled.
@@ -78,6 +79,7 @@ type ForkRequest struct {
 	// ClaimRefPrefix, when set, records each child under prefix + its id.
 	ClaimRefPrefix string `json:"claim_ref_prefix,omitempty"`
 	TTLField
+	OnExpire ExpireAction `json:"on_expire,omitempty"`
 }
 
 // ForkResponse carries one claim per child.
@@ -100,8 +102,9 @@ type CheckpointResponse struct {
 type CheckpointClaimRequest struct {
 	TTLField
 	// NoRedirect makes the retry resolve locally instead of bouncing between two nodes.
-	NoRedirect bool     `json:"no_redirect,omitzero"`
-	Metadata   Metadata `json:"metadata,omitempty"`
+	NoRedirect bool         `json:"no_redirect,omitzero"`
+	Metadata   Metadata     `json:"metadata,omitempty"`
+	OnExpire   ExpireAction `json:"on_expire,omitempty"`
 }
 
 // CheckpointListResponse is the wire reply of GET /v1/checkpoints.
@@ -124,6 +127,7 @@ type PromoteResponse struct {
 // RenewRequest is the wire body of POST /v1/sandboxes/{id}/renew.
 type RenewRequest struct {
 	TTLField
+	OnExpire ExpireAction `json:"on_expire,omitempty"`
 }
 
 // RenewResponse carries the lease deadline the node granted.

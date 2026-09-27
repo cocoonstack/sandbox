@@ -127,8 +127,8 @@ func decodeBodyStrict[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	return v, true
 }
 
-func validMetadata(w http.ResponseWriter, md types.Metadata) bool {
-	if err := md.Validate(); err != nil {
+func validRequest(w http.ResponseWriter, errs ...error) bool {
+	if err := errors.Join(errs...); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return false
 	}

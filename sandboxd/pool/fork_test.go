@@ -31,7 +31,7 @@ func TestForkRacingHibernateUsesPrivateSource(t *testing.T) {
 	})
 	var children []string
 	wg.Go(func() {
-		sbs, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, time.Hour, "")
+		sbs, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, time.Hour, "", "")
 		if err != nil {
 			t.Errorf("Fork: %v", err)
 			return
@@ -62,7 +62,7 @@ func TestForkFromRunning(t *testing.T) {
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
 
-	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 3, time.Hour, "")
+	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 3, time.Hour, "", "")
 	if err != nil {
 		t.Fatalf("Fork: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestForkFromHibernatedUsesWakeImage(t *testing.T) {
 		t.Fatalf("Hibernate: %v", err)
 	}
 
-	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0, "")
+	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0, "", "")
 	if err != nil {
 		t.Fatalf("Fork: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestForkCountValidation(t *testing.T) {
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
 	for _, count := range []int{0, -1, m.maxFork + 1} {
-		if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, count, 0, ""); !errors.Is(err, ErrBadCount) {
+		if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, count, 0, "", ""); !errors.Is(err, ErrBadCount) {
 			t.Errorf("count %d: err %v, want ErrBadCount", count, err)
 		}
 	}
@@ -153,7 +153,7 @@ func TestForkUnknownSandbox(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
-	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: "wrong-token"}, 1, 0, ""); !errors.Is(err, ErrUnknownSandbox) {
+	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: "wrong-token"}, 1, 0, "", ""); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("err %v, want ErrUnknownSandbox", err)
 	}
 }
@@ -167,7 +167,7 @@ func TestForkAllOrNothing(t *testing.T) {
 	}
 	eng.cloneFailNth = 2
 
-	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 3, 0, ""); err == nil {
+	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 3, 0, "", ""); err == nil {
 		t.Fatal("Fork succeeded despite a failed clone")
 	}
 
@@ -227,7 +227,7 @@ func TestForkChildrenRecordTheClaimRefPrefix(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	parent := mustClaim(t, m, testKey)
 
-	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0, "team-a/")
+	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0, "", "team-a/")
 	if err != nil {
 		t.Fatalf("Fork: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestForkChildrenRecordTheClaimRefPrefix(t *testing.T) {
 		t.Errorf("index by claim_ref = %+v, want the first child alone", rows)
 	}
 
-	plain, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 1, 0, "")
+	plain, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 1, 0, "", "")
 	if err != nil {
 		t.Fatalf("Fork without a prefix: %v", err)
 	}
@@ -251,11 +251,11 @@ func TestForkChildrenRecordTheClaimRefPrefix(t *testing.T) {
 
 func TestForkChildrenInheritTheParentMetadata(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	parent, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", types.Metadata{"team": "a"}, nil)
+	parent, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", types.Metadata{"team": "a"}, nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0, "")
+	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0, "", "")
 	if err != nil {
 		t.Fatalf("Fork: %v", err)
 	}
@@ -273,12 +273,12 @@ func TestForkChildrenInheritTenantAndQuota(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	m.tenantMax = map[string]int{"acme": 3}
-	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil, nil)
+	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "acme", "", nil, nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 
-	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0, "")
+	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0, "", "")
 	if err != nil {
 		t.Fatalf("Fork: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestForkChildrenInheritTenantAndQuota(t *testing.T) {
 		}
 	}
 
-	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 1, 0, ""); !errors.Is(err, ErrQuota) {
+	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 1, 0, "", ""); !errors.Is(err, ErrQuota) {
 		t.Errorf("fork past the tenant cap: %v, want ErrQuota", err)
 	}
 }

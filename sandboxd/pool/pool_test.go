@@ -751,7 +751,7 @@ func TestRenewExtendsTheLease(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 	before := sb.Deadline
 
-	got, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour)
+	got, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour, "")
 	if err != nil {
 		t.Fatalf("renew: %v", err)
 	}
@@ -775,7 +775,7 @@ func TestClaimedAtIsTheFirstGrant(t *testing.T) {
 	}
 	claimed := sb.ClaimedAt
 
-	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour); err != nil {
+	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour, ""); err != nil {
 		t.Fatalf("renew: %v", err)
 	}
 	if !sb.ClaimedAt.Equal(claimed) {
@@ -802,13 +802,13 @@ func TestRenewClampsAndDefaults(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	sb := mustClaim(t, m, testKey)
 
-	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, 0); err != nil {
+	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, 0, ""); err != nil {
 		t.Fatalf("renew: %v", err)
 	}
 	if want := int(defaultTTL / time.Second); sb.LeaseSeconds != want {
 		t.Errorf("zero ttl granted %ds, want the %ds default", sb.LeaseSeconds, want)
 	}
-	got, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, 999*time.Hour)
+	got, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, 999*time.Hour, "")
 	if err != nil {
 		t.Fatalf("renew: %v", err)
 	}
@@ -827,7 +827,7 @@ func TestRenewRefusesAnArchivedClaim(t *testing.T) {
 	sb.ArchiveCk, sb.Deadline = "ck_1", time.Time{}
 	m.mu.Unlock()
 
-	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, 0); !errors.Is(err, ErrArchived) {
+	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, 0, ""); !errors.Is(err, ErrArchived) {
 		t.Fatalf("renew on an archived claim: %v, want ErrArchived", err)
 	}
 	if !sb.Deadline.IsZero() {
@@ -843,7 +843,7 @@ func TestRenewRefusesAClaimBeingArchived(t *testing.T) {
 	m.archiving[sb.ID] = struct{}{}
 	m.mu.Unlock()
 
-	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour); !errors.Is(err, ErrArchived) {
+	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour, ""); !errors.Is(err, ErrArchived) {
 		t.Fatalf("renew during an export: %v, want ErrArchived", err)
 	}
 	if !sb.Deadline.Equal(before) {
@@ -860,7 +860,7 @@ func TestRenewRollsBackOnPersistFailure(t *testing.T) {
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	_, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour)
+	_, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour, "")
 	if chmodErr := os.Chmod(dir, 0o700); chmodErr != nil {
 		t.Fatalf("restore mode: %v", chmodErr)
 	}
@@ -870,7 +870,7 @@ func TestRenewRollsBackOnPersistFailure(t *testing.T) {
 	if !sb.Deadline.Equal(before) || sb.LeaseSeconds != beforeLease {
 		t.Errorf("deadline %v lease %ds after a failed persist, want %v / %ds", sb.Deadline, sb.LeaseSeconds, before, beforeLease)
 	}
-	granted, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour)
+	granted, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour, "")
 	if err != nil {
 		t.Fatalf("renew after a rolled-back one: %v", err)
 	}
@@ -885,11 +885,11 @@ func TestRenewAuthorizesByToken(t *testing.T) {
 	before := sb.Deadline
 
 	for _, cred := range []Cred{{Token: "wrong"}, {}} {
-		if _, err := m.Renew(t.Context(), sb.ID, cred, time.Hour); !errors.Is(err, ErrUnknownSandbox) {
+		if _, err := m.Renew(t.Context(), sb.ID, cred, time.Hour, ""); !errors.Is(err, ErrUnknownSandbox) {
 			t.Errorf("cred %+v: %v, want ErrUnknownSandbox", cred, err)
 		}
 	}
-	if _, err := m.Renew(t.Context(), "sb_missing", Cred{Token: sb.Token}, time.Hour); !errors.Is(err, ErrUnknownSandbox) {
+	if _, err := m.Renew(t.Context(), "sb_missing", Cred{Token: sb.Token}, time.Hour, ""); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("unknown id: %v, want ErrUnknownSandbox", err)
 	}
 	if sb.Deadline != before {
@@ -936,9 +936,9 @@ func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Ma
 }
 
 func claimAny(ctx context.Context, m *Manager, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
-	sb, err := m.ClaimWarm(ctx, key, ttl, "", "", nil, nil)
+	sb, err := m.ClaimWarm(ctx, key, ttl, "", "", "", nil, nil)
 	if errors.Is(err, ErrNoWarm) {
-		return m.ClaimProvision(ctx, key, ttl, "", "", nil, nil)
+		return m.ClaimProvision(ctx, key, ttl, "", "", "", nil, nil)
 	}
 	return sb, err
 }

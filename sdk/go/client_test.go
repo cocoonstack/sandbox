@@ -59,11 +59,11 @@ func TestNewSendsClaim(t *testing.T) {
 	withMetadata := WithMetadata(md)
 	md["team"] = "mutated"
 	sb, err := c.New(t.Context(), "python:3.12",
-		WithNetwork(NetEgress), WithSize(Medium), WithTimeout(90*time.Second), withMetadata)
+		WithNetwork(NetEgress), WithSize(Medium), WithTimeout(90*time.Second), withMetadata, WithArchiveOnExpire())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	want := claimRequest{Template: "python:3.12", Net: "egress", Size: "medium", TTLSeconds: 90, Metadata: map[string]string{"team": "a"}}
+	want := claimRequest{Template: "python:3.12", Net: "egress", Size: "medium", TTLSeconds: 90, Metadata: map[string]string{"team": "a"}, OnExpire: "archive"}
 	if !reflect.DeepEqual(gotBody, want) {
 		t.Errorf("body %+v, want %+v", gotBody, want)
 	}

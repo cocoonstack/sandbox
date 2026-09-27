@@ -28,6 +28,7 @@ type checkpointClaimRequest struct {
 	TTLSeconds int               `json:"ttl_seconds,omitzero"`
 	NoRedirect bool              `json:"no_redirect,omitzero"`
 	Metadata   map[string]string `json:"metadata,omitempty"`
+	OnExpire   string            `json:"on_expire,omitempty"`
 }
 
 type checkpointListResponse struct {
@@ -49,7 +50,7 @@ type Checkpoint struct {
 }
 
 // New claims a sandbox cloned from the checkpoint, on the checkpoint's
-// node. The snapshot pins the key axes; WithTimeout and WithMetadata apply. A node
+// node. The snapshot pins the key axes; WithTimeout, WithMetadata and WithArchiveOnExpire apply. A node
 // that no longer holds the checkpoint redirects to a probed owner, which New
 // follows transparently; if every candidate fails transiently, New falls
 // back to the origin once so it heals (pulls the checkpoint) locally.
@@ -65,7 +66,7 @@ func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error)
 		return nil, err
 	}
 	addr, cr, err := claimFollow(ck.addr, "claim checkpoint", func(noRedirect, _ bool) ([]byte, error) {
-		return encodeBody("checkpoint claim", checkpointClaimRequest{TTLSeconds: claim.TTLSeconds, NoRedirect: noRedirect, Metadata: claim.Metadata})
+		return encodeBody("checkpoint claim", checkpointClaimRequest{TTLSeconds: claim.TTLSeconds, NoRedirect: noRedirect, Metadata: claim.Metadata, OnExpire: claim.OnExpire})
 	}, func(a string, body []byte) (claimResponse, error) {
 		return ck.claimAt(ctx, a, body)
 	})

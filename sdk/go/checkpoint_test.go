@@ -192,10 +192,10 @@ func TestCheckpointNewCarriesMetadata(t *testing.T) {
 
 	c := testClient(t, ts)
 	ck := checkpointHandle(c, c.addr, checkpointRecord{ID: "ck_1"})
-	if _, err := ck.New(t.Context(), WithMetadata(map[string]string{"role": "branch"})); err != nil {
+	if _, err := ck.New(t.Context(), WithMetadata(map[string]string{"role": "branch"}), WithArchiveOnExpire()); err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if got.Metadata["role"] != "branch" {
-		t.Errorf("checkpoint claim body %+v, want metadata role=branch", got)
+	if got.Metadata["role"] != "branch" || got.OnExpire != "archive" {
+		t.Errorf("checkpoint claim body %+v, want metadata role=branch and on_expire archive", got)
 	}
 }

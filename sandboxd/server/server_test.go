@@ -2121,6 +2121,49 @@ func TestSandboxesFilterByMetadata(t *testing.T) {
 	}
 }
 
+func TestExpireActionThreadsThroughEveryDecoder(t *testing.T) {
+	ckpt := func(string) (*types.Sandbox, error) { return &types.Sandbox{ID: "sb_1", Token: "tok"}, nil }
+	for _, tt := range []struct {
+		name, path, body string
+		setup            func(*fakeManager)
+	}{
+		{"claim", "/v1/claim", `{"template":"rt:24.04","on_expire":"archive"}`, func(*fakeManager) {}},
+		{"volume claim", "/v1/claim", `{"template":"rt:24.04","volumes":[{"name":"data"}],"on_expire":"archive"}`, func(*fakeManager) {}},
+		{"checkpoint", "/v1/checkpoints/ck_00000000000000aa/claim", `{"on_expire":"archive"}`, func(f *fakeManager) { f.claimCheckpoint = ckpt }},
+		{"checkpoint heal", "/v1/checkpoints/ck_00000000000000aa/claim", `{"on_expire":"archive"}`, func(f *fakeManager) { f.healCheckpoint = ckpt }},
+		{"fork", "/v1/sandboxes/sb_1/fork", `{"token":"tok","count":1,"on_expire":"archive"}`, func(f *fakeManager) {
+			f.fork = func(string, string, int, time.Duration) ([]*types.Sandbox, error) {
+				return []*types.Sandbox{{ID: "sb_2", Token: "tok2"}}, nil
+			}
+		}},
+		{"renew", "/v1/sandboxes/sb_1/renew", `{"on_expire":"archive"}`, func(f *fakeManager) {
+			f.renew = func(string, string, time.Duration) (time.Time, error) { return time.Now(), nil }
+		}},
+	} {
+		mgr := &fakeManager{}
+		tt.setup(mgr)
+		ts := newTestServer(t, "sekret", mgr, nil)
+		resp := postJSON(t, ts.URL+tt.path, "sekret", tt.body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || mgr.gotOnExpire != types.ExpireArchive {
+			t.Errorf("%s: status %d, manager saw on_expire %q, want 200 and archive", tt.name, resp.StatusCode, mgr.gotOnExpire)
+		}
+
+		mgr = &fakeManager{}
+		tt.setup(mgr)
+		ts = newTestServer(t, "sekret", mgr, nil)
+		resp = postJSON(t, ts.URL+tt.path, "sekret", strings.Replace(tt.body, `"archive"`, `"pause"`, 1))
+		var got struct {
+			Error string `json:"error"`
+		}
+		_ = json.UnmarshalRead(resp.Body, &got)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(got.Error, "on_expire") {
+			t.Errorf("%s with on_expire pause: status %d error %q, want 400 naming on_expire", tt.name, resp.StatusCode, got.Error)
+		}
+	}
+}
+
 func assertVolumeClaimResponse(t *testing.T, body io.Reader, wantRedirect string, wantRequirePromoted bool) {
 	t.Helper()
 	var got types.ClaimResponse
@@ -2221,6 +2264,7 @@ type fakeManager struct {
 	gotTenant          string
 	gotClaimRef        string
 	gotMetadata        types.Metadata
+	gotOnExpire        types.ExpireAction
 	gotVolumes         []types.Volume
 	gotWarmVolumes     []types.Volume
 	gotRequirePromoted bool
@@ -2237,11 +2281,12 @@ type fakeManager struct {
 	draining           bool
 }
 
-func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
 	f.warmCalls++
 	f.gotTenant = tenant
 	f.gotClaimRef = claimRef
 	f.gotMetadata = metadata
+	f.gotOnExpire = onExpire
 	f.gotWarmVolumes = slices.Clone(volumes)
 	if f.warmClaim == nil {
 		return nil, pool.ErrNoWarm
@@ -2249,12 +2294,12 @@ func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time
 	return f.warmClaim(ctx, key, ttl)
 }
 
-func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
-	return fakeClaimProvision(ctx, f, key, ttl, tenant, claimRef, metadata, volumes, false)
+func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
+	return fakeClaimProvision(ctx, f, key, ttl, onExpire, tenant, claimRef, metadata, volumes, false)
 }
 
-func (f *fakeManager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
-	return fakeClaimProvision(ctx, f, key, ttl, tenant, claimRef, metadata, volumes, true)
+func (f *fakeManager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
+	return fakeClaimProvision(ctx, f, key, ttl, onExpire, tenant, claimRef, metadata, volumes, true)
 }
 
 func (f *fakeManager) Release(_ context.Context, id string, cred pool.Cred) error {
@@ -2282,7 +2327,8 @@ func (f *fakeManager) WakeAgentSocket(_ context.Context, id, token string) (stri
 	return sock, func() {}, err
 }
 
-func (f *fakeManager) Renew(_ context.Context, id string, cred pool.Cred, ttl time.Duration) (time.Time, error) {
+func (f *fakeManager) Renew(_ context.Context, id string, cred pool.Cred, ttl time.Duration, onExpire types.ExpireAction) (time.Time, error) {
+	f.gotOnExpire = onExpire
 	if f.renew == nil {
 		return time.Time{}, pool.ErrUnknownSandbox
 	}
@@ -2303,7 +2349,8 @@ func (f *fakeManager) Hibernate(_ context.Context, id string, cred pool.Cred) er
 	return f.hibernate(id, credToken(cred))
 }
 
-func (f *fakeManager) Fork(_ context.Context, id string, cred pool.Cred, count int, ttl time.Duration, _ string) ([]*types.Sandbox, error) {
+func (f *fakeManager) Fork(_ context.Context, id string, cred pool.Cred, count int, ttl time.Duration, onExpire types.ExpireAction, _ string) ([]*types.Sandbox, error) {
+	f.gotOnExpire = onExpire
 	if f.fork == nil {
 		return nil, pool.ErrUnknownSandbox
 	}
@@ -2419,18 +2466,20 @@ func (f *fakeManager) Checkpoint(_ context.Context, id string, cred pool.Cred, n
 	return f.checkpoint(id, credToken(cred), name)
 }
 
-func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, _ time.Duration, tenant string, metadata types.Metadata) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, _ time.Duration, onExpire types.ExpireAction, tenant string, metadata types.Metadata) (*types.Sandbox, error) {
 	f.gotTenant = tenant
 	f.gotMetadata = metadata
+	f.gotOnExpire = onExpire
 	if f.claimCheckpoint == nil {
 		return nil, pool.ErrUnknownCheckpoint
 	}
 	return f.claimCheckpoint(ckptID)
 }
 
-func (f *fakeManager) ClaimCheckpointHeal(_ context.Context, ckptID string, _ time.Duration, tenant string, metadata types.Metadata) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimCheckpointHeal(_ context.Context, ckptID string, _ time.Duration, onExpire types.ExpireAction, tenant string, metadata types.Metadata) (*types.Sandbox, error) {
 	f.gotTenant = tenant
 	f.gotMetadata = metadata
+	f.gotOnExpire = onExpire
 	f.healCalls++
 	if f.healCheckpoint == nil {
 		return nil, pool.ErrUnknownCheckpoint
@@ -2572,11 +2621,12 @@ func postJSON(t *testing.T, url, token, body string) *http.Response {
 	return resp
 }
 
-func fakeClaimProvision(ctx context.Context, f *fakeManager, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume, requirePromoted bool) (*types.Sandbox, error) {
+func fakeClaimProvision(ctx context.Context, f *fakeManager, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume, requirePromoted bool) (*types.Sandbox, error) {
 	f.provisionCalls++
 	f.gotTenant = tenant
 	f.gotClaimRef = claimRef
 	f.gotMetadata = metadata
+	f.gotOnExpire = onExpire
 	f.gotVolumes = slices.Clone(volumes)
 	f.gotRequirePromoted = requirePromoted
 	if f.claim == nil {
