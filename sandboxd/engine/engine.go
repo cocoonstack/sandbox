@@ -25,8 +25,8 @@ import (
 )
 
 const (
-	// RequiredCocoon carries the snapshot/store performance baseline.
-	RequiredCocoon = "v0.5.2"
+	// RequiredCocoon carries the snapshot/store baseline and the JSON form of an empty snapshot list.
+	RequiredCocoon = "v0.6.9"
 
 	StaleCreateCollected   StaleCreateOutcome = "collected"
 	StaleCreateBusy        StaleCreateOutcome = "busy"
@@ -178,11 +178,6 @@ func (e *Engine) SnapshotList(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	// an empty store prints a human line ("No snapshots found."), not JSON.
-	out = bytes.TrimSpace(out)
-	if len(out) == 0 || out[0] != '[' {
-		return nil, nil
-	}
 	var snaps []struct {
 		Name string `json:"name"`
 	}
@@ -198,10 +193,9 @@ func (e *Engine) SnapshotList(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
-// List returns cocoon's view of local VMs, optionally filtered by name.
-func (e *Engine) List(ctx context.Context, filters ...string) ([]types.VMRecord, error) {
-	args := append([]string{"vm", "list", "--format", formatJSON}, filters...)
-	out, err := e.run(ctx, args...)
+// List returns cocoon's view of local VMs.
+func (e *Engine) List(ctx context.Context) ([]types.VMRecord, error) {
+	out, err := e.run(ctx, "vm", "list", "--format", formatJSON)
 	if err != nil {
 		return nil, err
 	}

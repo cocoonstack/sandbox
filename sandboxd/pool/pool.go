@@ -112,7 +112,7 @@ type Engine interface {
 	SnapshotList(ctx context.Context) ([]string, error)
 	Hibernate(ctx context.Context, vmName, snapName string) error
 	Restore(ctx context.Context, vmName, snapRef string) (string, error)
-	List(ctx context.Context, filters ...string) ([]types.VMRecord, error)
+	List(ctx context.Context) ([]types.VMRecord, error)
 	Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error
 	DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error)
 	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error

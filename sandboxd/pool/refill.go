@@ -448,7 +448,7 @@ func (m *Manager) vsockOf(ctx context.Context, name string) (string, error) {
 }
 
 func (m *Manager) findVM(ctx context.Context, name string) (types.VMRecord, bool, error) {
-	vms, err := m.eng.List(ctx, name)
+	vms, err := m.eng.List(ctx)
 	if err != nil {
 		return types.VMRecord{}, false, err
 	}

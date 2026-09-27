@@ -122,6 +122,38 @@ func TestDialGuestPortCtxCancel(t *testing.T) {
 	}
 }
 
+func TestSnapshotListReadsAnEmptyStoreAndRejectsProse(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\nif [ \"$COCOON_TEST_PROSE\" = 1 ]; then echo 'No snapshots found.'; else echo '[]'; fi\n"
+	if err := os.WriteFile(filepath.Join(dir, "cocoon"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	e := New("cocoon", nil, nil, false, false, "")
+
+	t.Setenv("COCOON_TEST_PROSE", "0")
+	if snaps, err := e.SnapshotList(t.Context()); err != nil || len(snaps) != 0 {
+		t.Fatalf("empty store: snaps=%v err=%v, want none and nil", snaps, err)
+	}
+	t.Setenv("COCOON_TEST_PROSE", "1")
+	if _, err := e.SnapshotList(t.Context()); err == nil || !strings.Contains(err.Error(), "parse snapshot list") {
+		t.Fatalf("prose banner: err=%v, want a parse error", err)
+	}
+}
+
+func TestListPassesNoPositionalArgsToCocoon(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\n[ \"$#\" = 4 ] || { echo \"unknown command $4 for cocoon vm list\" >&2; exit 1; }\necho '[{\"config\":{\"name\":\"sbx-1\"},\"state\":\"running\"}]'\n"
+	if err := os.WriteFile(filepath.Join(dir, "cocoon"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	vms, err := New("cocoon", nil, nil, false, false, "").List(t.Context())
+	if err != nil || len(vms) != 1 || vms[0].Config.Name != "sbx-1" {
+		t.Fatalf("List = %+v, %v; want the one VM cocoon printed", vms, err)
+	}
+}
+
 func TestProbeTimeout(t *testing.T) {
 	path := sockPath(t)
 

@@ -1230,15 +1230,12 @@ func (f *fakeEngine) Restore(_ context.Context, name, _ string) (string, error) 
 	return f.lateVsock(f.vms[name]), nil
 }
 
-func (f *fakeEngine) List(_ context.Context, filters ...string) ([]types.VMRecord, error) {
+func (f *fakeEngine) List(_ context.Context) ([]types.VMRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.listCount++
 	var vms []types.VMRecord
 	for name, sock := range f.vms {
-		if len(filters) > 0 && !slices.Contains(filters, name) {
-			continue
-		}
 		sock = f.lateVsock(sock)
 		state := vmStateRunning
 		switch {
