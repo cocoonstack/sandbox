@@ -643,8 +643,9 @@ own address, and mesh peers:
  "peers": ["10.0.0.6:7777"]}
 ```
 
-`advertise_addr` is the node's own `advertise_addr`, the same value a claim
-reports as `owner_addr`; it is omitted when the node advertises no host.
+`advertise_addr` is the address the node hands clients: its `client_advertise`
+when set, else its `advertise_addr`. It is the same value a claim reports as
+`owner_addr`, and it is omitted when the node advertises no host.
 
 `hibernated` counts claims whose VM is currently hibernated, `archived` those
 checkpointed to the store with the local VM dropped (see
