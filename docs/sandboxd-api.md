@@ -344,7 +344,9 @@ mtimes, and the template's ownership/creation metadata do not affect it. The
 digest is computed once while promoting, stored beside `meta.json` (a sibling
 digest file on the directory backend, object metadata on S3), and therefore has
 identical semantics on both. Re-promoting unchanged export bytes keeps the
-digest; changing any exported path or bytes changes it.
+digest; changing any exported path or bytes changes it. A re-promote starts the
+template with no [labels](#put-v1templateslabelstemplatenetsize): they describe
+the export they were set on, which the new one replaces.
 
 400 invalid name, 401 bad api token, 409 when the name collides with a
 configured pool, the template is owned by another tenant, or the sandbox is
@@ -364,6 +366,24 @@ hold the template but sees an owner in gossip answers `200
 delete at the owner. The retry carries `no_redirect=1`, mirroring the claim
 protocol: a node answering a `no_redirect` delete speaks only for itself.
 
+## PUT /v1/templates/labels?template=…&net=…&size=…
+
+Auth: node API token. Replaces a promoted template's labels on this node (the
+query parameters default like a claim's):
+
+```json
+{"labels": {"v1": "sha256:…", "team": "a"}}
+```
+
+Labels follow the [claim `metadata`](#post-v1claim) rules — at most 16 pairs,
+the same key and value grammar, at most 4 KiB as JSON — and replace the whole
+map; `{}` clears it. They are stored beside the template's record, so they
+survive a restart, are shared through a shared checkpoint store, and go with the
+template when it is deleted; a re-promote starts with none. A tenant may label
+only templates it promoted — anything else is 404, root labels anything. 204 on
+success, 400 bad labels or body, 404 unknown template, 409 when the key belongs
+to a configured pool. The call speaks only for the node it reaches; it does not
+follow a redirect.
 ## PUT /v1/pools
 
 Auth: root only (tenant tokens get 403). Replaces the node's desired warm
@@ -688,7 +708,7 @@ count, the node's own address, and mesh peers:
  "templates": [{"key": {"template": "myproj:v1", "net": "none", "size": "small"},
                 "content_digest": "sha256:…", "tenant": "acme",
                 "created_at": "2026-07-06T00:00:00Z", "cpu_count": 1,
-                "mem_total_bytes": 536870912}],
+                "mem_total_bytes": 536870912, "labels": {"v1": "sha256:…"}}],
  "claimed": 2,
  "hibernated": 1,
  "archived": 0,
@@ -718,7 +738,8 @@ sub-millisecond time.
 `templates` lists the [promoted templates](#post-v1sandboxesidpromote) this
 node holds: each one's full key, the `content_digest` its promote returned,
 `created_at` of its last promote, the `cpu_count` and `mem_total_bytes` of its
-size tier, and `tenant` when a tenant promoted it (omitted for the operator). A key
+size tier, its [`labels`](#put-v1templateslabelstemplatenetsize) when any are
+set, and `tenant` when a tenant promoted it (omitted for the operator). A key
 a configured pool now owns is left out, since claims of it clone the pool's
 golden. On a shared checkpoint store a node lists what it promoted plus what
 was in the store when it started. A template published by an older sandboxd is

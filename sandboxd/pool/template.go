@@ -11,18 +11,21 @@ import (
 	"slices"
 	"time"
 
+	"github.com/projecteru2/core/log"
+
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 // TemplateInfo is the ops view of one promoted template; an empty Tenant means the operator (root).
 type TemplateInfo struct {
-	Key           types.PoolKey `json:"key"`
-	ContentDigest string        `json:"content_digest"`
-	Tenant        string        `json:"tenant,omitempty"`
-	CreatedAt     time.Time     `json:"created_at"`
-	CPUCount      int           `json:"cpu_count,omitzero"`
-	MemTotalBytes int64         `json:"mem_total_bytes,omitzero"`
+	Key           types.PoolKey  `json:"key"`
+	ContentDigest string         `json:"content_digest"`
+	Tenant        string         `json:"tenant,omitempty"`
+	CreatedAt     time.Time      `json:"created_at"`
+	CPUCount      int            `json:"cpu_count,omitzero"`
+	MemTotalBytes int64          `json:"mem_total_bytes,omitzero"`
+	Labels        types.Metadata `json:"labels,omitempty"`
 }
 
 // templateRecord is a template's meta.json; an empty Tenant means the operator (root).
@@ -128,6 +131,47 @@ func (m *Manager) Templates() []TemplateInfo {
 		}
 	}
 	return out
+}
+
+// SetTemplateLabels replaces a promoted template's labels; a tenant may label only what it promoted, and empty labels clear them.
+func (m *Manager) SetTemplateLabels(ctx context.Context, key types.PoolKey, labels types.Metadata, tenant string) error {
+	if err := m.validate(key); err != nil {
+		return err
+	}
+	if m.pooled(key) {
+		return ErrPooledTemplate
+	}
+	id := store.TemplateID(key.Hash())
+	l := m.recLock(id)
+	l.Lock()
+	defer func() { l.Unlock(); m.recDone(id) }()
+	raw, err := m.tpls.ReadMeta(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return ErrUnknownTemplate
+	}
+	if err != nil {
+		return fmt.Errorf("read template: %w", err)
+	}
+	var rec templateRecord
+	if json.Unmarshal(raw, &rec) != nil || (tenant != "" && !tenantOwns(tenant, rec.Tenant)) {
+		return ErrUnknownTemplate
+	}
+	var payload []byte
+	if len(labels) == 0 {
+		labels = nil
+	} else if payload, err = json.Marshal(labels); err != nil {
+		return err
+	}
+	if err = m.tpls.SetLabels(ctx, id, payload); err != nil {
+		return fmt.Errorf("set template labels: %w", err)
+	}
+	m.tplMu.Lock()
+	if t, ok := m.tplSet[id]; ok {
+		t.Labels = labels
+		m.tplSet[id] = t
+	}
+	m.tplMu.Unlock()
+	return nil
 }
 
 // TemplateHashes lists the promoted-template key hashes for mesh gossip, sorted for its guard.
@@ -256,6 +300,9 @@ func (m *Manager) commitTemplate(ctx context.Context, staging string, key types.
 	digest, err := m.tpls.PublishDigested(ctx, staging, id)
 	if err != nil {
 		return "", fmt.Errorf("publish template: %w", err)
+	}
+	if err = m.tpls.SetLabels(ctx, id, nil); err != nil {
+		log.WithFunc("pool.commitTemplate").Warnf(ctx, "clear the previous promote's labels on %s: %v", id, err)
 	}
 	m.tplMu.Lock()
 	m.tplSet[id] = TemplateInfo{Key: key, ContentDigest: digest, Tenant: tenant, CreatedAt: rec.CreatedAt}

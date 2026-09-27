@@ -71,6 +71,7 @@ type Manager interface {
 	Fork(ctx context.Context, id string, cred pool.Cred, count int, ttl time.Duration, onExpire types.ExpireAction, claimRefPrefix string) ([]*types.Sandbox, error)
 	Promote(ctx context.Context, id string, cred pool.Cred, template, tenant string) (types.PoolKey, string, error)
 	DeleteTemplate(ctx context.Context, key types.PoolKey, tenant string) error
+	SetTemplateLabels(ctx context.Context, key types.PoolKey, labels types.Metadata, tenant string) error
 	Checkpoint(ctx context.Context, id string, cred pool.Cred, name, tenant string) (types.Checkpoint, error)
 	Counters() pool.Counters
 	TenantClaims() map[string]int
@@ -145,6 +146,11 @@ type SandboxListResponse struct {
 	Sandboxes []pool.SandboxSummary `json:"sandboxes"`
 }
 
+// TemplateLabelsRequest is the wire body of PUT /v1/templates/labels; it replaces the template's whole label map.
+type TemplateLabelsRequest struct {
+	Labels types.Metadata `json:"labels"`
+}
+
 // PoolUpdateRequest is the wire body of PUT /v1/pools; omitted pools are drained.
 type PoolUpdateRequest struct {
 	Pools []config.PoolSpec `json:"pools"`
@@ -211,6 +217,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("HEAD /v1/checkpoints/{id}/blob", s.handleCheckpointProbe)
 	mux.HandleFunc("DELETE /v1/checkpoints/{id}", s.requireToken(s.handleDeleteCheckpoint))
 	mux.HandleFunc("DELETE /v1/templates", s.requireToken(s.handleDeleteTemplate))
+	mux.HandleFunc("PUT /v1/templates/labels", s.requireToken(s.handleSetTemplateLabels))
 	mux.HandleFunc("PUT /v1/pools", s.requireRoot(s.handlePutPools))
 	mux.HandleFunc("POST /v1/drain", s.requireRoot(s.handleDrain))
 	mux.HandleFunc("DELETE /v1/drain", s.requireRoot(s.handleUncordon))
@@ -569,6 +576,19 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeResult(w, r, "delete template", key.Template, "delete template failed", err, func() {
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func (s *Server) handleSetTemplateLabels(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeBodyStrict[TemplateLabelsRequest](w, r)
+	if !ok || !validRequest(w, req.Labels.Validate()) {
+		return
+	}
+	q := r.URL.Query()
+	key := types.PoolKey{Template: q.Get("template"), Net: types.NetShape(q.Get("net")), Size: types.Size(q.Get("size"))}.Defaulted()
+	err := s.mgr.SetTemplateLabels(r.Context(), key, req.Labels, tenantFrom(r.Context()))
+	writeResult(w, r, "template labels", key.Template, "set template labels failed", err, func() {
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

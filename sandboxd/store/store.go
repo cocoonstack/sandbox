@@ -21,6 +21,8 @@ const (
 	ExportDir = "export"
 	// MetaFile is the record's metadata, written last so a lister never sees a half-published record.
 	MetaFile = "meta.json"
+	// LabelsFile holds a record's labels beside its meta, which names the export generation and so cannot change.
+	LabelsFile = "labels.json"
 )
 
 var (
@@ -32,10 +34,11 @@ var (
 	TemplateIDRe   = regexp.MustCompile(`^tp_[0-9a-f]{32}$`)
 )
 
-// Record is one published record's metadata and its export digest, empty when published undigested.
+// Record is one published record's metadata, its export digest (empty when published undigested) and its labels, nil when none are set.
 type Record struct {
 	Meta   []byte
 	Digest string
+	Labels []byte
 }
 
 // Store is one record backend.
@@ -52,6 +55,8 @@ type Store interface {
 	ReadMeta(ctx context.Context, id string) ([]byte, error)
 	// Metas lists the metadata and digest of every record in this instance's id namespace.
 	Metas(ctx context.Context) ([]Record, error)
+	// SetLabels replaces a record's labels; nil removes them. The caller holds the record lock.
+	SetLabels(ctx context.Context, id string, labels []byte) error
 	// Delete removes a record.
 	Delete(ctx context.Context, id string) error
 	// SweepStaging removes abandoned staging left by a crash mid-publish.

@@ -270,6 +270,51 @@ func TestInfoListsThePromotedTemplatesOnTheWire(t *testing.T) {
 	}
 }
 
+func TestSetTemplateLabelsReplacesTheMapForRootOrTheTenant(t *testing.T) {
+	mgr := &fakeManager{}
+	ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
+	put := func(t *testing.T, query, token, body string) int {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, ts.URL+"/v1/templates/labels?"+query, strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do: %v", err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if code := put(t, "template=app:v1&size=medium", "root", `{"labels":{"v1":"sha256:aa"}}`); code != http.StatusNoContent {
+		t.Fatalf("root set: %d, want 204", code)
+	}
+	if code := put(t, "template=app:v1", "acme-tok", `{"labels":{}}`); code != http.StatusNoContent {
+		t.Fatalf("tenant clear: %d, want 204", code)
+	}
+	want := []string{`app:v1 medium map[v1:sha256:aa] ""`, `app:v1 small map[] "acme"`}
+	if !slices.Equal(mgr.labeled, want) {
+		t.Errorf("SetTemplateLabels calls %q, want %q", mgr.labeled, want)
+	}
+	if code := put(t, "template=app:v1", "root", `{"labels":{"a=b":"x"}}`); code != http.StatusBadRequest {
+		t.Errorf("a key with '=': %d, want 400", code)
+	}
+	if code := put(t, "template=app:v1", "root", `{"tags":{}}`); code != http.StatusBadRequest {
+		t.Errorf("an unknown field: %d, want 400", code)
+	}
+	for err, want := range map[error]int{pool.ErrUnknownTemplate: http.StatusNotFound, pool.ErrPooledTemplate: http.StatusConflict} {
+		mgr.labelErr = err
+		if code := put(t, "template=app:v1", "root", `{"labels":{}}`); code != want {
+			t.Errorf("%v: %d, want %d", err, code, want)
+		}
+	}
+	if code := put(t, "template=app:v1", "nope", `{"labels":{}}`); code != http.StatusUnauthorized {
+		t.Errorf("bad token: %d, want 401", code)
+	}
+}
+
 func TestAPITokenGuard(t *testing.T) {
 	ts := newTestServer(t, "sekret", &fakeManager{}, nil)
 
@@ -2345,6 +2390,8 @@ type fakeManager struct {
 	setInstanceMetadata func(id string, doc []byte) error
 	infoPools           []pool.PoolInfo
 	infoTemplates       []pool.TemplateInfo
+	labeled             []string
+	labelErr            error
 	claimDeadline       func(id, token string) (time.Time, error)
 
 	gotTenant          string
@@ -2606,6 +2653,11 @@ func (f *fakeManager) Info() ([]pool.PoolInfo, pool.Gauges) {
 }
 
 func (f *fakeManager) Templates() []pool.TemplateInfo { return f.infoTemplates }
+
+func (f *fakeManager) SetTemplateLabels(_ context.Context, key types.PoolKey, labels types.Metadata, tenant string) error {
+	f.labeled = append(f.labeled, fmt.Sprintf("%s %s %v %q", key.Template, key.Size, labels, tenant))
+	return f.labelErr
+}
 
 func (f *fakeManager) Drain(context.Context) { f.draining = true }
 

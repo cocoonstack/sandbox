@@ -178,7 +178,11 @@ func (s *Store) Metas(ctx context.Context) ([]store.Record, error) {
 			if err != nil {
 				return err
 			}
-			recs[i] = store.Record{Meta: raw, Digest: digest}
+			labels, _, err := s.getObject(gctx, s.key(id, store.LabelsFile))
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				return err
+			}
+			recs[i] = store.Record{Meta: raw, Digest: digest, Labels: labels}
 			return nil
 		})
 	}
@@ -186,6 +190,14 @@ func (s *Store) Metas(ctx context.Context) ([]store.Record, error) {
 		return nil, err
 	}
 	return slices.DeleteFunc(recs, func(r store.Record) bool { return r.Meta == nil }), nil
+}
+
+func (s *Store) SetLabels(ctx context.Context, id string, labels []byte) error {
+	key := s.key(id, store.LabelsFile)
+	if labels == nil {
+		return s.deleteKeys(ctx, []string{key})
+	}
+	return s.uploadReader(ctx, key, bytes.NewReader(labels), int64(len(labels)), nil)
 }
 
 func (s *Store) Delete(ctx context.Context, id string) error {
@@ -211,22 +223,28 @@ func (s *Store) SweepStaging() error {
 func (s *Store) SweepGenerations() error { return nil }
 
 func (s *Store) readMeta(ctx context.Context, id string) ([]byte, string, error) {
-	out, err := s.client.GetObject(ctx, &awss3.GetObjectInput{
-		Bucket: &s.bucket, Key: aws.String(s.key(id, store.MetaFile)),
-	})
-	if err != nil {
-		apiErr, ok := errors.AsType[smithy.APIError](err)
-		if ok && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound") {
-			return nil, "", store.ErrNotFound
-		}
-		return nil, "", fmt.Errorf("record %s: %w", id, err)
-	}
-	defer func() { _ = out.Body.Close() }()
-	meta, err := io.ReadAll(out.Body)
+	meta, metadata, err := s.getObject(ctx, s.key(id, store.MetaFile))
 	if err != nil {
 		return nil, "", err
 	}
-	return meta, out.Metadata[digestMetadataKey], nil
+	return meta, metadata[digestMetadataKey], nil
+}
+
+func (s *Store) getObject(ctx context.Context, key string) ([]byte, map[string]string, error) {
+	out, err := s.client.GetObject(ctx, &awss3.GetObjectInput{Bucket: &s.bucket, Key: &key})
+	if err != nil {
+		apiErr, ok := errors.AsType[smithy.APIError](err)
+		if ok && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound") {
+			return nil, nil, store.ErrNotFound
+		}
+		return nil, nil, fmt.Errorf("object %s: %w", key, err)
+	}
+	defer func() { _ = out.Body.Close() }()
+	body, err := io.ReadAll(out.Body)
+	if err != nil {
+		return nil, nil, err
+	}
+	return body, out.Metadata, nil
 }
 
 func (s *Store) publish(ctx context.Context, staging, id string, digested bool) (string, error) {
