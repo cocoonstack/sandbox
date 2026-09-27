@@ -230,9 +230,9 @@ not an error, and `Close` is bounded internally so it stays defer-friendly).
 Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Passing
 `WithVolumes` or `WithClaimRef` to `Checkpoint.New` returns a local error:
 checkpoint branches support neither volumes nor a claim reference in this version.
-`WithMetadata` applies to `New`, `Template.New`, and `Checkpoint.New`: the
-labels follow the [claim bounds](sandboxd-api.md#post-v1claim), and a branch
-never inherits its source's.
+`WithMetadata` and `WithArchiveOnExpire` apply to `New`, `Template.New`, and
+`Checkpoint.New`: the labels follow the [claim bounds](sandboxd-api.md#post-v1claim),
+and a branch never inherits its source's labels or expiry action.
 
 `WithVolumesAttachOnly()` claims the same volumes without mounting them: the
 entries in `Sandbox.Volumes` carry an empty `Mount`, and the workload finds
@@ -300,6 +300,11 @@ transition — unless the deployment opts into `idle_hibernate_seconds` (see
 automatically with the same transparent wake. A claim with a connection live
 when the sweep checks it (a relay stream, a buffered exec, a preview dial, an
 egress request) is not swept; the idle clock restarts when that connection ends.
+
+`WithArchiveOnExpire()` makes the lease's end archive the sandbox instead of
+destroying it, whatever the deployment's archive settings: the node hibernates
+it if it is running and moves it to the checkpoint store, and the next call
+that reaches the guest restores it. `Fork` children inherit the setting.
 
 If that deployment also enables `archive_after_seconds`, archiving replaces
 the original claim deadline with the archive-retention deadline (or no

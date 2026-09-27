@@ -110,6 +110,29 @@ func TestMetadataMatchesEveryFilterPair(t *testing.T) {
 	}
 }
 
+func TestExpireActionValidateAndOr(t *testing.T) {
+	for _, a := range []ExpireAction{"", ExpireDestroy, ExpireArchive} {
+		if err := a.Validate(); err != nil {
+			t.Errorf("Validate(%q) = %v, want accepted", a, err)
+		}
+	}
+	if err := ExpireAction("pause").Validate(); err == nil || !strings.Contains(err.Error(), "on_expire") {
+		t.Errorf("Validate(pause) = %v, want an error naming on_expire", err)
+	}
+	for _, tt := range []struct {
+		requested, current, want ExpireAction
+	}{
+		{"", ExpireArchive, ExpireArchive},
+		{"", "", ""},
+		{ExpireDestroy, ExpireArchive, ""},
+		{ExpireArchive, "", ExpireArchive},
+	} {
+		if got := tt.requested.Or(tt.current); got != tt.want {
+			t.Errorf("%q.Or(%q) = %q, want %q", tt.requested, tt.current, got, tt.want)
+		}
+	}
+}
+
 func pairsOf(n, valueBytes int) Metadata {
 	md := make(Metadata, n)
 	for i := range n {

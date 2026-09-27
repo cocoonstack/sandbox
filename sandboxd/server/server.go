@@ -57,14 +57,14 @@ var poolErrHTTP = []struct {
 
 // Manager is the pool manager slice the server consumes; an empty tenant means operator (root).
 type Manager interface {
-	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error)
-	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error)
-	ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error)
+	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error)
+	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error)
+	ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error)
 	Release(ctx context.Context, id string, cred pool.Cred) error
 	Hibernate(ctx context.Context, id string, cred pool.Cred) error
 	Wake(ctx context.Context, id string, cred pool.Cred) error
-	Renew(ctx context.Context, id string, cred pool.Cred, ttl time.Duration) (time.Time, error)
-	Fork(ctx context.Context, id string, cred pool.Cred, count int, ttl time.Duration, claimRefPrefix string) ([]*types.Sandbox, error)
+	Renew(ctx context.Context, id string, cred pool.Cred, ttl time.Duration, onExpire types.ExpireAction) (time.Time, error)
+	Fork(ctx context.Context, id string, cred pool.Cred, count int, ttl time.Duration, onExpire types.ExpireAction, claimRefPrefix string) ([]*types.Sandbox, error)
 	Promote(ctx context.Context, id string, cred pool.Cred, template, tenant string) (types.PoolKey, string, error)
 	DeleteTemplate(ctx context.Context, key types.PoolKey, tenant string) error
 	Checkpoint(ctx context.Context, id string, cred pool.Cred, name, tenant string) (types.Checkpoint, error)
@@ -77,8 +77,8 @@ type Manager interface {
 	Stats(ctx context.Context, id string) (pool.SandboxStats, bool)
 	Audit(ctx context.Context, id string, line []byte)
 	AuditEnabled() bool
-	ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, tenant string, metadata types.Metadata) (*types.Sandbox, error)
-	ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl time.Duration, tenant string, metadata types.Metadata) (*types.Sandbox, error)
+	ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, onExpire types.ExpireAction, tenant string, metadata types.Metadata) (*types.Sandbox, error)
+	ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl time.Duration, onExpire types.ExpireAction, tenant string, metadata types.Metadata) (*types.Sandbox, error)
 	Checkpoints(ctx context.Context, tenant string) ([]types.Checkpoint, error)
 	HasCheckpoint(ctx context.Context, ckptID string) bool
 	FetchCheckpoint(ctx context.Context, ckptID string) (dir string, meta []byte, release func(), err error)
@@ -223,7 +223,7 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeBody[types.ClaimRequest](w, r)
-	if !ok || !validMetadata(w, req.Metadata) {
+	if !ok || !validRequest(w, req.Metadata.Validate(), req.OnExpire.Validate()) {
 		return
 	}
 	key := req.Key()
@@ -233,12 +233,12 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Metadata, nil)
+	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), req.OnExpire, tenant, req.ClaimRef, req.Metadata, nil)
 	if errors.Is(err, pool.ErrNoWarm) {
 		if s.redirectClaim(r.Context(), w, req, key, key.Hash(), tenant) {
 			return
 		}
-		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Metadata, nil)
+		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), req.OnExpire, tenant, req.ClaimRef, req.Metadata, nil)
 	}
 	if errors.Is(err, pool.ErrQuota) && s.placer != nil && !req.NoRedirect &&
 		s.writeRedirect(w, s.placer.Candidates(key.Hash())) {
@@ -266,14 +266,14 @@ func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req t
 	}
 	var sb *types.Sandbox
 	if req.RequirePromoted {
-		sb, err = s.mgr.ClaimProvisionPromoted(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Metadata, req.Volumes)
+		sb, err = s.mgr.ClaimProvisionPromoted(r.Context(), key, req.TTL(), req.OnExpire, tenant, req.ClaimRef, req.Metadata, req.Volumes)
 	} else {
-		sb, err = s.mgr.ClaimWarm(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Metadata, req.Volumes)
+		sb, err = s.mgr.ClaimWarm(r.Context(), key, req.TTL(), req.OnExpire, tenant, req.ClaimRef, req.Metadata, req.Volumes)
 		if errors.Is(err, pool.ErrNoWarm) {
 			if s.placer != nil && !req.NoRedirect && s.writeRedirect(w, s.placer.VolumeCandidates(hash, types.VolumeNames(req.Volumes))) {
 				return
 			}
-			sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), tenant, req.ClaimRef, req.Metadata, req.Volumes)
+			sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), req.OnExpire, tenant, req.ClaimRef, req.Metadata, req.Volumes)
 		}
 	}
 	writeResult(w, r, "claim", key.Template, "provisioning failed", err, func() {
@@ -416,11 +416,11 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req, ok := decodeOptionalBody[types.RenewRequest](w, r)
-	if !ok {
+	if !ok || !validRequest(w, req.OnExpire.Validate()) {
 		return
 	}
 	id := r.PathValue("id")
-	deadline, err := s.mgr.Renew(r.Context(), id, s.sandboxCred(token), req.TTL())
+	deadline, err := s.mgr.Renew(r.Context(), id, s.sandboxCred(token), req.TTL(), req.OnExpire)
 	writeResult(w, r, "renew", id, "renew failed", err, func() {
 		writeJSON(w, http.StatusOK, types.RenewResponse{Deadline: deadline})
 	})
@@ -428,11 +428,11 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeBody[types.ForkRequest](w, r)
-	if !ok {
+	if !ok || !validRequest(w, req.OnExpire.Validate()) {
 		return
 	}
 	id := r.PathValue("id")
-	children, err := s.mgr.Fork(r.Context(), id, s.bodyCred(r, req.Token), req.Count, req.TTL(), req.ClaimRefPrefix)
+	children, err := s.mgr.Fork(r.Context(), id, s.bodyCred(r, req.Token), req.Count, req.TTL(), req.OnExpire, req.ClaimRefPrefix)
 	writeResult(w, r, "fork", id, "fork failed", err, func() {
 		resp := types.ForkResponse{Children: make([]types.ClaimResponse, len(children))}
 		for i, c := range children {
@@ -468,16 +468,16 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeBody[types.CheckpointClaimRequest](w, r)
-	if !ok || !validMetadata(w, req.Metadata) {
+	if !ok || !validRequest(w, req.Metadata.Validate(), req.OnExpire.Validate()) {
 		return
 	}
 	ckptID := r.PathValue("id")
-	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, req.TTL(), tenantFrom(r.Context()), req.Metadata)
+	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, req.TTL(), req.OnExpire, tenantFrom(r.Context()), req.Metadata)
 	if errors.Is(err, pool.ErrUnknownCheckpoint) {
 		if !req.NoRedirect && s.prober != nil && s.writeRedirect(w, s.prober.Owners(r.Context(), ckptID)) {
 			return
 		}
-		sb, err = s.mgr.ClaimCheckpointHeal(r.Context(), ckptID, req.TTL(), tenantFrom(r.Context()), req.Metadata)
+		sb, err = s.mgr.ClaimCheckpointHeal(r.Context(), ckptID, req.TTL(), req.OnExpire, tenantFrom(r.Context()), req.Metadata)
 	}
 	writeResult(w, r, "claim checkpoint", ckptID, "provisioning failed", err, func() {
 		writeJSON(w, http.StatusOK, s.claimResponse(sb))

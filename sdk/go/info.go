@@ -53,6 +53,7 @@ type SandboxSummary struct {
 	Metadata       map[string]string `json:"metadata,omitempty"`
 	CPUCount       int               `json:"cpu_count,omitzero"`
 	MemTotalBytes  int64             `json:"mem_total_bytes,omitzero"`
+	OnExpire       string            `json:"on_expire,omitempty"`
 }
 
 type sandboxListResponse struct {

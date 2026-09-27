@@ -15,7 +15,7 @@ func TestAttachOnlyClaimAttachesWithoutMounting(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
 
-	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil, []types.Volume{
+	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", nil, []types.Volume{
 		{Name: "scratch", Mode: types.VolumeModeRW, AttachOnly: true},
 	})
 	if err != nil {
@@ -74,7 +74,7 @@ func TestAttachOnlyClaimAttachesEveryVolumeConcurrently(t *testing.T) {
 	}
 	rendezvousAttaches(eng, len(requested))
 
-	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil, requested)
+	sb, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", nil, requested)
 	if err != nil {
 		t.Fatalf("ClaimProvision: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestClaimProvisionAttachFailureKeepsHoldsUntilRemoval(t *testing.T) {
 
 	claimErr := make(chan error, 1)
 	go func() {
-		_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil, requested)
+		_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", nil, requested)
 		claimErr <- err
 	}()
 	attaches.Wait()
@@ -141,7 +141,7 @@ func TestClaimProvisionAttachFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	if holders := volumeHoldersOf(m, "broken"); holders != (volumeHolders{readers: 1}) {
 		t.Errorf("broken registry after failed removal=%+v, want reader retained", holders)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil, requested[:1]); !errors.Is(err, ErrVolumeBusy) {
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", nil, requested[:1]); !errors.Is(err, ErrVolumeBusy) {
 		t.Errorf("claim against surviving VM: %v, want ErrVolumeBusy", err)
 	}
 
@@ -177,7 +177,7 @@ func TestClaimWarmAttachFailureKeepsHoldsUntilRemoval(t *testing.T) {
 		{Name: "broken", AttachOnly: true},
 	}
 
-	_, err := m.ClaimWarm(t.Context(), testKey, 0, "", "", nil, requested)
+	_, err := m.ClaimWarm(t.Context(), testKey, 0, "", "", "", nil, requested)
 	if err == nil || !strings.Contains(err.Error(), `attach volume "broken"`) {
 		t.Fatalf("ClaimWarm: %v, want the failing volume's attach error", err)
 	}
@@ -187,7 +187,7 @@ func TestClaimWarmAttachFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	if holders := volumeHoldersOf(m, "broken"); holders != (volumeHolders{readers: 1}) {
 		t.Errorf("broken registry after failed removal=%+v, want reader retained", holders)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil, requested[:1]); !errors.Is(err, ErrVolumeBusy) {
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", nil, requested[:1]); !errors.Is(err, ErrVolumeBusy) {
 		t.Errorf("claim against surviving warm VM: %v, want ErrVolumeBusy", err)
 	}
 
@@ -214,7 +214,7 @@ func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
 
 	claimErr := make(chan error, 1)
 	go func() {
-		_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil, writable)
+		_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", nil, writable)
 		claimErr <- err
 	}()
 	waitFor(t, func() bool { return slices.Contains(eng.volumeOpsLog(), "attach:scratch") })
@@ -225,7 +225,7 @@ func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
 		vmName = name
 	}
 	eng.mu.Unlock()
-	filler, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil, nil)
+	filler, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", nil, nil)
 	if err != nil {
 		t.Fatalf("volume-less claim: %v", err)
 	}
@@ -254,7 +254,7 @@ func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	if err := m.Release(t.Context(), filler.ID, Cred{Token: filler.Token}); err != nil {
 		t.Fatalf("release the volume-less claim: %v", err)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil, writable); !errors.Is(err, ErrVolumeBusy) {
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", nil, writable); !errors.Is(err, ErrVolumeBusy) {
 		t.Errorf("claim against the surviving VM: %v, want ErrVolumeBusy", err)
 	}
 
@@ -272,7 +272,7 @@ func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	if volumeDirty(scratch) {
 		t.Error("the quiesced mount left its marker, 409-poisoning every later ro claim")
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil, []types.Volume{{Name: "scratch"}}); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", nil, []types.Volume{{Name: "scratch"}}); err != nil {
 		t.Errorf("ro claim after the drain: %v, want the image left clean", err)
 	}
 }
@@ -286,7 +286,7 @@ func TestFinalizeTenantQuotaFailureQuiescesAndUncountsTenant(t *testing.T) {
 
 	claimErr := make(chan error, 1)
 	go func() {
-		_, err := m.ClaimProvision(t.Context(), testKey, 0, "acme", "", nil,
+		_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "acme", "", nil,
 			[]types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}})
 		claimErr <- err
 	}()
@@ -297,7 +297,7 @@ func TestFinalizeTenantQuotaFailureQuiescesAndUncountsTenant(t *testing.T) {
 		vmName = name
 	}
 	eng.mu.Unlock()
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "acme", "", nil, nil); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "acme", "", nil, nil); err != nil {
 		t.Fatalf("volume-less tenant claim: %v", err)
 	}
 	eng.mu.Lock()
@@ -324,7 +324,7 @@ func TestFinalizeTenantQuotaFailureQuiescesAndUncountsTenant(t *testing.T) {
 	if volumeDirty(scratch) {
 		t.Error("the tenant loser left its marker, 409-poisoning every later ro claim")
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil, []types.Volume{{Name: "scratch"}}); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", nil, []types.Volume{{Name: "scratch"}}); err != nil {
 		t.Errorf("ro claim after the tenant loss: %v, want the image left clean", err)
 	}
 }
@@ -333,7 +333,7 @@ func TestAttachOnlyClaimKeepsAdmissionExclusion(t *testing.T) {
 	path := writeVolumeImage(t, "scratch.img", "data")
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil, []types.Volume{
+	if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", nil, []types.Volume{
 		{Name: "scratch", Mode: types.VolumeModeRW, AttachOnly: true},
 	}); err != nil {
 		t.Fatalf("attach-only writer: %v", err)
@@ -348,7 +348,7 @@ func TestAttachOnlyClaimKeepsAdmissionExclusion(t *testing.T) {
 		{"attach-only reader", []types.Volume{{Name: "scratch", AttachOnly: true}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil, tt.request); !errors.Is(err, ErrVolumeBusy) {
+			if _, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", nil, tt.request); !errors.Is(err, ErrVolumeBusy) {
 				t.Errorf("claim under an attach-only writer: %v, want ErrVolumeBusy", err)
 			}
 		})
@@ -362,7 +362,7 @@ func TestAttachOnlyReadOnlyClaimRefusesDirtyImage(t *testing.T) {
 		t.Fatalf("mark dirty: %v", err)
 	}
 
-	_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", nil, []types.Volume{{Name: "scratch", AttachOnly: true}})
+	_, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", nil, []types.Volume{{Name: "scratch", AttachOnly: true}})
 	if !errors.Is(err, ErrVolumeNeedsRecovery) {
 		t.Errorf("attach-only read-only claim of a dirty image: %v, want ErrVolumeNeedsRecovery", err)
 	}

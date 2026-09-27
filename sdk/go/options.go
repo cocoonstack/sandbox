@@ -100,6 +100,11 @@ func WithMetadata(md map[string]string) Option {
 	return func(r *claimRequest) { r.Metadata = md }
 }
 
+// WithArchiveOnExpire makes the node hibernate and archive the sandbox when its lease ends, instead of destroying it; a wake restores it.
+func WithArchiveOnExpire() Option {
+	return func(r *claimRequest) { r.OnExpire = "archive" }
+}
+
 // ttlSeconds rounds a lease up to whole wire seconds.
 func ttlSeconds(d time.Duration) int {
 	return int((d + time.Second - 1) / time.Second)

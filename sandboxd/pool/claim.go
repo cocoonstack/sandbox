@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"fmt"
@@ -18,14 +19,18 @@ type reapAction int
 
 const (
 	reapDestroy reapAction = iota // engine teardown + drop snapshot
-	reapArchive                   // hibernated + archive-enabled: archive, keep the claim
+	reapArchive                   // hibernated with archive enabled or on_expire archive: archive, keep the claim
 	reapPurge                     // archived past retention: delete the store checkpoint
+	reapPause
 )
 
 // ClaimWarm transfers ownership of a warm sandbox without provisioning; ErrNoWarm means empty.
-func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
+func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
 	start := time.Now()
 	if err := m.validate(key); err != nil {
+		return nil, err
+	}
+	if err := archivable(key, len(volumes) > 0, onExpire); err != nil {
 		return nil, err
 	}
 	volumeSpecs, err := m.resolveVolumes(ctx, tenant, volumes)
@@ -60,6 +65,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	sb.Tenant = tenant
 	sb.ClaimRef = claimRef
 	sb.Metadata = metadata
+	sb.OnExpire = onExpire.Or("")
 	reserved = nil
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {
@@ -70,13 +76,13 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 }
 
 // ClaimProvision creates a claim-ready sandbox (golden clone or cold boot).
-func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
-	return m.claimProvision(ctx, key, ttl, tenant, claimRef, metadata, volumes, false)
+func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
+	return m.claimProvision(ctx, key, ttl, onExpire, tenant, claimRef, metadata, volumes, false)
 }
 
 // ClaimProvisionPromoted requires key to resolve from a promoted template, never a cold boot.
-func (m *Manager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
-	return m.claimProvision(ctx, key, ttl, tenant, claimRef, metadata, volumes, true)
+func (m *Manager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
+	return m.claimProvision(ctx, key, ttl, onExpire, tenant, claimRef, metadata, volumes, true)
 }
 
 // Release destroys a claimed sandbox after authorizing cred.
@@ -105,10 +111,13 @@ func (m *Manager) DialPort(ctx context.Context, id string, cred Cred, port uint1
 }
 
 // Renew resets a claim's lease to ttl from now after authorizing cred, and reports the granted deadline.
-func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Duration) (time.Time, error) {
+func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Duration, onExpire types.ExpireAction) (time.Time, error) {
 	sb, ok := m.resolve(id, cred)
 	if !ok {
 		return time.Time{}, ErrUnknownSandbox
+	}
+	if err := archivable(sb.Key, hasAppliedVolumes(sb), onExpire); err != nil {
+		return time.Time{}, err
 	}
 	lease := clampTTL(ttl)
 	m.mu.Lock()
@@ -121,8 +130,8 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 		m.mu.Unlock()
 		return time.Time{}, ErrArchived
 	}
-	prev, prevLease := sb.Deadline, sb.LeaseSeconds
-	sb.Deadline, sb.LeaseSeconds = time.Now().Add(lease), int(lease/time.Second)
+	prev, prevLease, prevExpire := sb.Deadline, sb.LeaseSeconds, sb.OnExpire
+	sb.Deadline, sb.LeaseSeconds, sb.OnExpire = time.Now().Add(lease), int(lease/time.Second), onExpire.Or(sb.OnExpire)
 	deadline, js := sb.Deadline, m.store.set(sb)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
@@ -130,7 +139,7 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 		var rb claimSnapshot
 		// a concurrent renew that landed keeps its grant: roll back only what this call wrote
 		if m.claimed[id] == sb && sb.Deadline.Equal(deadline) {
-			sb.Deadline, sb.LeaseSeconds = prev, prevLease
+			sb.Deadline, sb.LeaseSeconds, sb.OnExpire = prev, prevLease, prevExpire
 			rb = m.store.set(sb)
 		}
 		m.mu.Unlock()
@@ -412,13 +421,17 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		switch {
 		case sb.ArchiveCk != "":
 			expired = append(expired, victim{action: reapPurge, id: id, ck: sb.ArchiveCk, tenant: sb.Tenant, sb: sb})
-		case sb.HibernateSnap != "" && m.archiveEnabledFor(sb.Key):
+		case sb.OnExpire == types.ExpireArchive, sb.HibernateSnap != "" && m.archiveEnabledFor(sb.Key):
 			// archive instead of destroy, kept in m.claimed for archive() to move
 			if _, busy := m.archiving[id]; busy {
 				continue // an archive is already exporting this sandbox
 			}
 			m.archiving[id] = struct{}{}
-			expired = append(expired, victim{action: reapArchive, id: id, sb: sb})
+			action := reapArchive
+			if sb.HibernateSnap == "" {
+				action = reapPause
+			}
+			expired = append(expired, victim{action: action, id: id, sb: sb})
 		default:
 			expired = append(expired, victim{action: reapDestroy, id: id, vmName: sb.VMName, snap: sb.HibernateSnap, tenant: sb.Tenant, sb: sb})
 			delete(m.claimed, id)
@@ -475,7 +488,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		m.mu.Lock()
 		var restored []*types.Sandbox
 		for _, v := range expired {
-			if v.action == reapArchive {
+			if v.action == reapArchive || v.action == reapPause {
 				delete(m.archiving, v.id) // never removed from m.claimed
 			} else {
 				m.claimed[v.id] = v.sb // roll back so memory matches the still-durable claim
@@ -508,6 +521,8 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			logger.Infof(ctx, "purged archived sandbox %s", v.id)
 		case reapArchive:
 			logSweepResult(ctx, logger, m.archive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
+		case reapPause:
+			logSweepResult(ctx, logger, m.pauseExpired(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
 		default:
 			td := m.quiesceVolumes(ctx, v.sb)
 			m.disarmEgress(v.id, m.removeOrRetry(ctx, v.vmName, v.id, "", td))
@@ -517,6 +532,23 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
 		}
 	})
+}
+
+func (m *Manager) pauseExpired(ctx context.Context, sb *types.Sandbox) error {
+	sb.Transition.Lock()
+	m.mu.Lock()
+	live := m.claimed[sb.ID] == sb && sb.ArchiveCk == ""
+	m.mu.Unlock()
+	var err error
+	if live {
+		err = m.hibernateLocked(ctx, sb)
+	}
+	sb.Transition.Unlock()
+	if !live || err != nil {
+		m.untrack(m.archiving, sb.ID)
+		return cmp.Or(err, errWokeMeanwhile)
+	}
+	return m.archive(ctx, sb)
 }
 
 func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
@@ -568,9 +600,12 @@ func (m *Manager) authed(id, token string) (*types.Sandbox, bool) {
 	return sb, true
 }
 
-func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume, requirePromoted bool) (*types.Sandbox, error) {
+func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume, requirePromoted bool) (*types.Sandbox, error) {
 	start := time.Now()
 	if err := m.validate(key); err != nil {
+		return nil, err
+	}
+	if err := archivable(key, len(volumes) > 0, onExpire); err != nil {
 		return nil, err
 	}
 	volumeSpecs, err := m.resolveVolumes(ctx, tenant, volumes)
@@ -604,6 +639,7 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	sb.Tenant = tenant
 	sb.ClaimRef = claimRef
 	sb.Metadata = metadata
+	sb.OnExpire = onExpire.Or("")
 	reserved = nil
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {
@@ -651,4 +687,17 @@ func (c *heldConn) CloseWrite() error {
 		return nil
 	}
 	return cw.CloseWrite()
+}
+
+func archivable(key types.PoolKey, volumes bool, onExpire types.ExpireAction) error {
+	switch {
+	case onExpire != types.ExpireArchive:
+		return nil
+	case key.Net == types.NetEgress:
+		return ErrNoEgressHibernate
+	case volumes:
+		return ErrVolumeCapture
+	default:
+		return nil
+	}
 }

@@ -11,7 +11,7 @@ import (
 )
 
 // Fork clones a claimed sandbox into count children, each a fresh claim; all-or-nothing.
-func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl time.Duration, claimRefPrefix string) ([]*types.Sandbox, error) {
+func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl time.Duration, onExpire types.ExpireAction, claimRefPrefix string) ([]*types.Sandbox, error) {
 	sb, ok := m.resolve(id, cred)
 	if !ok {
 		return nil, ErrUnknownSandbox
@@ -38,6 +38,7 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	for _, c := range children {
 		c.Tenant = sb.Tenant
 		c.Metadata = sb.Metadata
+		c.OnExpire = onExpire.Or(sb.OnExpire)
 	}
 	if err := m.finalizeBatch(ctx, children, ttl, claimRefPrefix); err != nil {
 		return nil, fmt.Errorf("fork %s: %w", sb.ID, err)

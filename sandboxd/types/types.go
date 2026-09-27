@@ -33,6 +33,9 @@ const (
 	RestoreOnDemand RestoreMode = "ondemand"
 	RestoreMmap     RestoreMode = "mmap"
 
+	ExpireDestroy ExpireAction = "destroy"
+	ExpireArchive ExpireAction = "archive"
+
 	MaxClaimVolumes = 8
 
 	// Also the guest `mount -o` option literals: renaming them changes the mount flags.
@@ -85,6 +88,31 @@ func (m RestoreMode) Validate() error {
 		return nil
 	default:
 		return fmt.Errorf("unknown restore mode %q", m)
+	}
+}
+
+// ExpireAction is what the node does with a claim whose lease ends; empty means destroy.
+type ExpireAction string
+
+// Validate accepts the empty default plus the known actions.
+func (a ExpireAction) Validate() error {
+	switch a {
+	case "", ExpireDestroy, ExpireArchive:
+		return nil
+	default:
+		return fmt.Errorf("on_expire %q must be %s or %s", a, ExpireDestroy, ExpireArchive)
+	}
+}
+
+// Or resolves a requested action against current: empty keeps current, destroy clears it.
+func (a ExpireAction) Or(current ExpireAction) ExpireAction {
+	switch a {
+	case "":
+		return current
+	case ExpireDestroy:
+		return ""
+	default:
+		return a
 	}
 }
 
@@ -200,7 +228,8 @@ type Sandbox struct {
 	// ClaimRef is the opaque caller reference; empty for checkpoint branches and unprefixed forks.
 	ClaimRef string `json:"claim_ref,omitempty"`
 	// Metadata is immutable after the claim: forks, the journal, and summaries share it by reference.
-	Metadata Metadata `json:"metadata,omitempty"`
+	Metadata Metadata     `json:"metadata,omitempty"`
+	OnExpire ExpireAction `json:"on_expire,omitempty"`
 	// Volumes records the volumes successfully applied to this claim.
 	Volumes []Volume `json:"volumes,omitempty"`
 

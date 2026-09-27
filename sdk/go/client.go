@@ -98,6 +98,7 @@ type claimRequest struct {
 	RequirePromoted   bool              `json:"require_promoted,omitzero"`
 	ClaimRef          string            `json:"claim_ref,omitempty"`
 	Metadata          map[string]string `json:"metadata,omitempty"`
+	OnExpire          string            `json:"on_expire,omitempty"`
 }
 
 func (r claimRequest) rejectPinnedAxes() error {
