@@ -41,15 +41,18 @@ type PoolStatus struct {
 // SandboxSummary is one live claim as the scoped index reports it; never a
 // token or a host path.
 type SandboxSummary struct {
-	ID             string    `json:"id"`
-	Key            PoolKey   `json:"key"`
-	Deadline       time.Time `json:"deadline"`
-	ClaimedAt      time.Time `json:"claimed_at,omitzero"`
-	Hibernated     bool      `json:"hibernated"`
-	Archived       bool      `json:"archived,omitzero"`
-	FromCheckpoint string    `json:"from_checkpoint,omitempty"`
-	Volumes        []Volume  `json:"volumes,omitempty"`
-	ClaimRef       string    `json:"claim_ref,omitempty"`
+	ID             string            `json:"id"`
+	Key            PoolKey           `json:"key"`
+	Deadline       time.Time         `json:"deadline"`
+	ClaimedAt      time.Time         `json:"claimed_at,omitzero"`
+	Hibernated     bool              `json:"hibernated"`
+	Archived       bool              `json:"archived,omitzero"`
+	FromCheckpoint string            `json:"from_checkpoint,omitempty"`
+	Volumes        []Volume          `json:"volumes,omitempty"`
+	ClaimRef       string            `json:"claim_ref,omitempty"`
+	Metadata       map[string]string `json:"metadata,omitempty"`
+	CPUCount       int               `json:"cpu_count,omitzero"`
+	MemoryBytes    int64             `json:"memory_bytes,omitzero"`
 }
 
 type sandboxListResponse struct {

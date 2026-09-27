@@ -761,7 +761,7 @@ func TestRenewExtendsTheLease(t *testing.T) {
 	if sb.Deadline != got || sb.LeaseSeconds != int(time.Hour/time.Second) {
 		t.Errorf("claim carries deadline %v lease %ds", sb.Deadline, sb.LeaseSeconds)
 	}
-	if list := m.Sandboxes("", ""); len(list) != 1 || !list[0].Deadline.Equal(got) {
+	if list := m.Sandboxes("", "", nil); len(list) != 1 || !list[0].Deadline.Equal(got) {
 		t.Errorf("index %+v does not report the granted deadline", list)
 	}
 }
@@ -781,7 +781,7 @@ func TestClaimedAtIsTheFirstGrant(t *testing.T) {
 	if !sb.ClaimedAt.Equal(claimed) {
 		t.Errorf("renew moved claimed_at to %v, want %v", sb.ClaimedAt, claimed)
 	}
-	if list := m.Sandboxes("", ""); len(list) != 1 || !list[0].ClaimedAt.Equal(claimed) {
+	if list := m.Sandboxes("", "", nil); len(list) != 1 || !list[0].ClaimedAt.Equal(claimed) {
 		t.Errorf("index %+v does not report claimed_at", list)
 	}
 }
@@ -793,7 +793,7 @@ func TestTheByIDReadCarriesTheTokenAndTheIndexDoesNot(t *testing.T) {
 	if got, ok := m.Sandbox(sb.ID); !ok || got.Token != sb.Token {
 		t.Errorf("Sandbox(%s) token %q, want the claim's %q", sb.ID, got.Token, sb.Token)
 	}
-	if list := m.Sandboxes("", ""); len(list) != 1 || list[0].Token != "" {
+	if list := m.Sandboxes("", "", nil); len(list) != 1 || list[0].Token != "" {
 		t.Errorf("index %+v carries a token", list)
 	}
 }
@@ -936,9 +936,9 @@ func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Ma
 }
 
 func claimAny(ctx context.Context, m *Manager, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
-	sb, err := m.ClaimWarm(ctx, key, ttl, "", "", nil)
+	sb, err := m.ClaimWarm(ctx, key, ttl, "", "", nil, nil)
 	if errors.Is(err, ErrNoWarm) {
-		return m.ClaimProvision(ctx, key, ttl, "", "", nil)
+		return m.ClaimProvision(ctx, key, ttl, "", "", nil, nil)
 	}
 	return sb, err
 }

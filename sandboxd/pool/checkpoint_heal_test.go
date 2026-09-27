@@ -20,7 +20,7 @@ func TestClaimCheckpointNeverPullsOnMiss(t *testing.T) {
 	ckpt := types.Checkpoint{ID: "ck_00000000000000bb", Key: testKey, CreatedAt: time.Now()}
 	m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
 
-	if _, err := m.ClaimCheckpoint(t.Context(), "ck_00000000000000cc", time.Hour, ""); !errors.Is(err, ErrUnknownCheckpoint) {
+	if _, err := m.ClaimCheckpoint(t.Context(), "ck_00000000000000cc", time.Hour, "", nil); !errors.Is(err, ErrUnknownCheckpoint) {
 		t.Errorf("claim: %v, want ErrUnknownCheckpoint", err)
 	}
 	if got := puller.count(); got != 0 {
@@ -33,12 +33,12 @@ func TestClaimCheckpointHealPullsOnce(t *testing.T) {
 	ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
 	m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
 
-	sb, err := m.ClaimCheckpointHeal(t.Context(), id, time.Hour, "")
+	sb, err := m.ClaimCheckpointHeal(t.Context(), id, time.Hour, "", types.Metadata{"role": "branch"})
 	if err != nil {
 		t.Fatalf("ClaimCheckpointHeal: %v", err)
 	}
-	if sb.FromCheckpoint != id {
-		t.Errorf("FromCheckpoint = %q, want %q", sb.FromCheckpoint, id)
+	if sb.FromCheckpoint != id || sb.Metadata["role"] != "branch" {
+		t.Errorf("FromCheckpoint = %q, metadata %v, want %q and role=branch", sb.FromCheckpoint, sb.Metadata, id)
 	}
 	if got := puller.count(); got != 1 {
 		t.Errorf("puller called %d times, want 1", got)
@@ -53,10 +53,10 @@ func TestClaimCheckpointAfterHealStaysLocal(t *testing.T) {
 	ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
 	m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
 
-	if _, err := m.ClaimCheckpointHeal(t.Context(), id, time.Hour, ""); err != nil {
+	if _, err := m.ClaimCheckpointHeal(t.Context(), id, time.Hour, "", nil); err != nil {
 		t.Fatalf("ClaimCheckpointHeal: %v", err)
 	}
-	if _, err := m.ClaimCheckpoint(t.Context(), id, time.Hour, ""); err != nil {
+	if _, err := m.ClaimCheckpoint(t.Context(), id, time.Hour, "", nil); err != nil {
 		t.Fatalf("ClaimCheckpoint after heal: %v", err)
 	}
 	if got := puller.count(); got != 1 {
@@ -76,7 +76,7 @@ func TestClaimCheckpointHealDedupsConcurrentPulls(t *testing.T) {
 		errs := make([]error, 2)
 		for i := range 2 {
 			wg.Go(func() {
-				sbs[i], errs[i] = m.ClaimCheckpointHeal(t.Context(), id, time.Hour, "")
+				sbs[i], errs[i] = m.ClaimCheckpointHeal(t.Context(), id, time.Hour, "", nil)
 			})
 		}
 		waitFor(t, func() bool { return puller.count() >= 1 })
@@ -108,7 +108,7 @@ func TestDeleteVetoesInFlightHeal(t *testing.T) {
 
 		healDone := make(chan error, 1)
 		go func() {
-			_, err := m.ClaimCheckpointHeal(t.Context(), id, time.Hour, "")
+			_, err := m.ClaimCheckpointHeal(t.Context(), id, time.Hour, "", nil)
 			healDone <- err
 		}()
 		waitFor(t, func() bool { return puller.count() >= 1 })
@@ -137,7 +137,7 @@ func TestClaimCheckpointHealCtxCancelReturnsPromptly(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
 		go func() {
-			_, err := m.ClaimCheckpointHeal(ctx, id, time.Hour, "")
+			_, err := m.ClaimCheckpointHeal(ctx, id, time.Hour, "", nil)
 			done <- err
 		}()
 		waitFor(t, func() bool { return puller.count() >= 1 })
@@ -250,10 +250,10 @@ func TestClaimCheckpointQuotaDoesNotMaskMiss(t *testing.T) {
 	}
 	m.draining = true
 
-	if _, err := m.ClaimCheckpoint(t.Context(), "ck_00000000000000ff", time.Hour, ""); !errors.Is(err, ErrUnknownCheckpoint) {
+	if _, err := m.ClaimCheckpoint(t.Context(), "ck_00000000000000ff", time.Hour, "", nil); !errors.Is(err, ErrUnknownCheckpoint) {
 		t.Errorf("claim missing id while draining: %v, want ErrUnknownCheckpoint (so the handler can redirect)", err)
 	}
-	if _, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, time.Hour, ""); !errors.Is(err, ErrQuota) {
+	if _, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, time.Hour, "", nil); !errors.Is(err, ErrQuota) {
 		t.Errorf("claim present id while draining: %v, want ErrQuota", err)
 	}
 }
@@ -264,7 +264,7 @@ func TestClaimCheckpointHealQuotaBeforePull(t *testing.T) {
 	m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
 	m.draining = true
 
-	if _, err := m.ClaimCheckpointHeal(t.Context(), id, time.Hour, ""); !errors.Is(err, ErrQuota) {
+	if _, err := m.ClaimCheckpointHeal(t.Context(), id, time.Hour, "", nil); !errors.Is(err, ErrQuota) {
 		t.Errorf("heal while draining: %v, want ErrQuota", err)
 	}
 	if got := puller.count(); got != 0 {
@@ -280,12 +280,12 @@ func TestClaimCheckpointHealConcurrencyCapRejectsExtra(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := m.ClaimCheckpointHeal(t.Context(), "ck_00000000000000aa", time.Hour, "")
+		_, err := m.ClaimCheckpointHeal(t.Context(), "ck_00000000000000aa", time.Hour, "", nil)
 		done <- err
 	}()
 	<-puller.started
 
-	if _, err := m.ClaimCheckpointHeal(t.Context(), "ck_00000000000000bb", time.Hour, ""); !errors.Is(err, ErrHealBusy) {
+	if _, err := m.ClaimCheckpointHeal(t.Context(), "ck_00000000000000bb", time.Hour, "", nil); !errors.Is(err, ErrHealBusy) {
 		t.Errorf("second heal while one is in flight: %v, want ErrHealBusy", err)
 	}
 	close(puller.release)

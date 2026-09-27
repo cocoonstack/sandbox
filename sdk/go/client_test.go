@@ -55,12 +55,15 @@ func TestNewSendsClaim(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	c := testClient(t, ts, WithAPIToken("sekret"))
+	md := map[string]string{"team": "a"}
+	withMetadata := WithMetadata(md)
+	md["team"] = "mutated"
 	sb, err := c.New(t.Context(), "python:3.12",
-		WithNetwork(NetEgress), WithSize(Medium), WithTimeout(90*time.Second))
+		WithNetwork(NetEgress), WithSize(Medium), WithTimeout(90*time.Second), withMetadata)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	want := claimRequest{Template: "python:3.12", Net: "egress", Size: "medium", TTLSeconds: 90}
+	want := claimRequest{Template: "python:3.12", Net: "egress", Size: "medium", TTLSeconds: 90, Metadata: map[string]string{"team": "a"}}
 	if !reflect.DeepEqual(gotBody, want) {
 		t.Errorf("body %+v, want %+v", gotBody, want)
 	}

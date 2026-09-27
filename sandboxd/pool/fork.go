@@ -37,6 +37,7 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	}
 	for _, c := range children {
 		c.Tenant = sb.Tenant
+		c.Metadata = sb.Metadata
 	}
 	if err := m.finalizeBatch(ctx, children, ttl, claimRefPrefix); err != nil {
 		return nil, fmt.Errorf("fork %s: %w", sb.ID, err)

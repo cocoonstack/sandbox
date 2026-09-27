@@ -239,7 +239,7 @@ func TestResolveGoldenSkipsPromotedEgressTemplate(t *testing.T) {
 func TestTemplateTenantScopedDelete(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil)
+	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil, nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestPromoteFailsClosedOnMetaError(t *testing.T) {
 	}
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil)
+	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil, nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestTemplateClaimIsTenantScoped(t *testing.T) {
 		t.Fatalf("root promote: %v", err)
 	}
 
-	if _, err := m.ClaimProvisionPromoted(t.Context(), private, time.Hour, "beta", "", nil); !errors.Is(err, ErrUnknownTemplate) {
+	if _, err := m.ClaimProvisionPromoted(t.Context(), private, time.Hour, "beta", "", nil, nil); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("beta claiming acme's template: %v, want ErrUnknownTemplate", err)
 	}
 	for _, tc := range []struct {
@@ -355,7 +355,7 @@ func TestTemplateClaimIsTenantScoped(t *testing.T) {
 		{"tenant claims a root template", shared, "beta"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			sb, err := m.ClaimProvisionPromoted(t.Context(), tc.key, time.Hour, tc.tenant, "", nil)
+			sb, err := m.ClaimProvisionPromoted(t.Context(), tc.key, time.Hour, tc.tenant, "", nil, nil)
 			if err != nil {
 				t.Fatalf("claim: %v", err)
 			}
@@ -368,7 +368,7 @@ func TestTemplateClaimIsTenantScoped(t *testing.T) {
 
 func TestHasPromotedTemplateIsTenantScoped(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil)
+	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil, nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestHasPromotedTemplateIsTenantScoped(t *testing.T) {
 
 func TestTemplateHashesAreTenantScoped(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil)
+	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil, nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestTemplateHashesSortedForMeshCompare(t *testing.T) {
 
 func claimTenant(t *testing.T, m *Manager, tenant string) *types.Sandbox {
 	t.Helper()
-	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, tenant, "", nil)
+	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, tenant, "", nil, nil)
 	if err != nil {
 		t.Fatalf("claim %q: %v", tenant, err)
 	}

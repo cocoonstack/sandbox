@@ -23,7 +23,7 @@ const (
 )
 
 // ClaimWarm transfers ownership of a warm sandbox without provisioning; ErrNoWarm means empty.
-func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
+func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
 	start := time.Now()
 	if err := m.validate(key); err != nil {
 		return nil, err
@@ -59,6 +59,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 	}
 	sb.Tenant = tenant
 	sb.ClaimRef = claimRef
+	sb.Metadata = metadata
 	reserved = nil
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {
@@ -69,13 +70,13 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 }
 
 // ClaimProvision creates a claim-ready sandbox (golden clone or cold boot).
-func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
-	return m.claimProvision(ctx, key, ttl, tenant, claimRef, volumes, false)
+func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
+	return m.claimProvision(ctx, key, ttl, tenant, claimRef, metadata, volumes, false)
 }
 
 // ClaimProvisionPromoted requires key to resolve from a promoted template, never a cold boot.
-func (m *Manager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume) (*types.Sandbox, error) {
-	return m.claimProvision(ctx, key, ttl, tenant, claimRef, volumes, true)
+func (m *Manager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
+	return m.claimProvision(ctx, key, ttl, tenant, claimRef, metadata, volumes, true)
 }
 
 // Release destroys a claimed sandbox after authorizing cred.
@@ -567,7 +568,7 @@ func (m *Manager) authed(id, token string) (*types.Sandbox, bool) {
 	return sb, true
 }
 
-func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, volumes []types.Volume, requirePromoted bool) (*types.Sandbox, error) {
+func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume, requirePromoted bool) (*types.Sandbox, error) {
 	start := time.Now()
 	if err := m.validate(key); err != nil {
 		return nil, err
@@ -602,6 +603,7 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 	sb.TemplateDigest = golden.templateDigest
 	sb.Tenant = tenant
 	sb.ClaimRef = claimRef
+	sb.Metadata = metadata
 	reserved = nil
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {

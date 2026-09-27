@@ -58,7 +58,7 @@ func (m *Manager) Checkpoint(ctx context.Context, id string, cred Cred, name, te
 }
 
 // ClaimCheckpoint provisions a fresh claim cloned from a checkpoint, attributed to tenant.
-func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error) {
+func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, tenant string, metadata types.Metadata) (*types.Sandbox, error) {
 	// a rejected id must not leave a lock-map entry, so resolve before recLock and quota
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	if err != nil {
@@ -67,11 +67,11 @@ func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.D
 	if err := m.overQuota(1, tenant); err != nil {
 		return nil, err
 	}
-	return m.claimLoaded(ctx, ckpt, ttl, tenant)
+	return m.claimLoaded(ctx, ckpt, ttl, tenant, metadata)
 }
 
 // ClaimCheckpointHeal claims a checkpoint held only by a peer, pulling it first.
-func (m *Manager) ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl time.Duration, tenant string) (*types.Sandbox, error) {
+func (m *Manager) ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl time.Duration, tenant string, metadata types.Metadata) (*types.Sandbox, error) {
 	if m.healer == nil || !store.CheckpointIDRe.MatchString(ckptID) {
 		return nil, ErrUnknownCheckpoint
 	}
@@ -83,7 +83,7 @@ func (m *Manager) ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl ti
 	if err != nil {
 		return nil, err
 	}
-	return m.claimLoaded(ctx, ckpt, ttl, tenant)
+	return m.claimLoaded(ctx, ckpt, ttl, tenant, metadata)
 }
 
 // Checkpoints lists tenant's checkpoints, newest first, hiding archive wake images.
@@ -197,7 +197,7 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 }
 
 // claimLoaded re-fetches under the record lock, so a delete racing the pre-check cannot slip in.
-func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl time.Duration, tenant string) (*types.Sandbox, error) {
+func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl time.Duration, tenant string, metadata types.Metadata) (*types.Sandbox, error) {
 	l := m.recLock(ckpt.ID)
 	l.RLock()
 	defer func() { l.RUnlock(); m.recDone(ckpt.ID) }()
@@ -220,6 +220,7 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl ti
 	}
 	sb.FromCheckpoint = ckpt.ID
 	sb.Tenant = tenant
+	sb.Metadata = metadata
 	out, err := m.finalize(ctx, sb, ttl)
 	if err == nil {
 		m.counters.claimsClone.Add(1)

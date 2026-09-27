@@ -181,3 +181,21 @@ func TestCheckpointNewSecondLevelRedirectFails(t *testing.T) {
 		t.Errorf("sb %+v, want nil", sb)
 	}
 }
+
+func TestCheckpointNewCarriesMetadata(t *testing.T) {
+	var got checkpointClaimRequest
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.UnmarshalRead(r.Body, &got)
+		_ = json.MarshalWrite(w, claimResponse{ID: "sb_ck1", Token: "tok"})
+	}))
+	t.Cleanup(ts.Close)
+
+	c := testClient(t, ts)
+	ck := checkpointHandle(c, c.addr, checkpointRecord{ID: "ck_1"})
+	if _, err := ck.New(t.Context(), WithMetadata(map[string]string{"role": "branch"})); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got.Metadata["role"] != "branch" {
+		t.Errorf("checkpoint claim body %+v, want metadata role=branch", got)
+	}
+}

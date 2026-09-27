@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 func TestForkRacingHibernateUsesPrivateSource(t *testing.T) {
@@ -234,7 +236,7 @@ func TestForkChildrenRecordTheClaimRefPrefix(t *testing.T) {
 			t.Errorf("child %d claim_ref %q, want the prefix and its own id", i, c.ClaimRef)
 		}
 	}
-	if rows := m.Sandboxes("", "team-a/"+children[0].ID); len(rows) != 1 || rows[0].ID != children[0].ID {
+	if rows := m.Sandboxes("", "team-a/"+children[0].ID, nil); len(rows) != 1 || rows[0].ID != children[0].ID {
 		t.Errorf("index by claim_ref = %+v, want the first child alone", rows)
 	}
 
@@ -247,11 +249,31 @@ func TestForkChildrenRecordTheClaimRefPrefix(t *testing.T) {
 	}
 }
 
+func TestForkChildrenInheritTheParentMetadata(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	parent, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", types.Metadata{"team": "a"}, nil)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0, "")
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	for i, c := range children {
+		if c.Metadata["team"] != "a" {
+			t.Errorf("child %d metadata %v, want the parent's", i, c.Metadata)
+		}
+	}
+	if rows := m.Sandboxes("", "", types.Metadata{"team": "a"}); len(rows) != 3 {
+		t.Errorf("filter team=a matched %d claims, want the parent and both children", len(rows))
+	}
+}
+
 func TestForkChildrenInheritTenantAndQuota(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	m.tenantMax = map[string]int{"acme": 3}
-	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil)
+	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "acme", "", nil, nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}

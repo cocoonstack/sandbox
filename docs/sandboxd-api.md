@@ -29,8 +29,8 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
  "ttl_seconds": 300,
  "volumes": [{"name": "imagenet"}, {"name": "weights", "mount": "/models"},
              {"name": "scratch-db", "mode": "rw"}],
- "claim_ref": "namespace/workload", "no_redirect": false,
- "require_promoted": false}
+ "claim_ref": "namespace/workload", "metadata": {"team": "a"},
+ "no_redirect": false, "require_promoted": false}
 ```
 
 - `net` defaults to `none`, `size` to `small`; the pool key is
@@ -39,6 +39,12 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   owning node reaps the sandbox after the TTL even if the client vanishes
 - `claim_ref` is an optional opaque caller reference echoed by the scoped
   sandbox index; the aggregated apiserver uses `<namespace>/<name>`
+- `metadata` is an optional map of caller labels, echoed and filterable by
+  the [sandbox index](#get-v1sandboxes): at most 16 pairs, each key 1 to 128
+  bytes of printable ASCII without `=` or `&` (list filters encode pairs as
+  `key=value`, and the e2b list API joins them with `&`), each value at most
+  512 bytes, and at most 4 KiB in total. Labels are fixed at claim time; no
+  verb edits them
 - `no_redirect` is set by the SDK when retrying at a redirect target
 - `require_promoted` is an internal redirect field of volume claims, the only
   path that sets or reads it. When a redirect response sets it, copy it into
@@ -171,7 +177,8 @@ name (attributed in the usage journal and counted against the tenant's
 `max_claims`). A catalog access list may restrict an entry to named tenants;
 an unknown and a forbidden volume return the same error text.
 
-Errors: 400 unknown template axis, invalid/duplicate volumes,
+Errors: 400 unknown template axis, metadata over a bound (the message names
+it), invalid/duplicate volumes,
 `volumes_attach_only` with no volumes or with an entry carrying a `mount`,
 `mode: "rw"`
 against a non-writable entry, or a volume that is unknown or forbidden (the
@@ -270,6 +277,7 @@ claim. The sandbox's own token rides in the body as the ownership proof:
 `claim_ref_prefix`, when set, records each child under `prefix + child id` as
 its `claim_ref`, so a control plane that names claims `<namespace>/<name>`
 addresses the children by name; without it children carry no `claim_ref`.
+Children inherit the parent's `metadata`.
 Clones the sandbox into `count` fresh claims (1 up to the node's
 `max_fork_count`, default 16). Memory, disk, and guest
 state (sessions, processes, tmpfs) duplicate at the fork point; cocoon's
@@ -411,10 +419,12 @@ first).
 
 ## POST /v1/checkpoints/{id}/claim
 
-Auth: node API token; body `{"ttl_seconds": 0, "no_redirect": false}`.
-Claims a fresh sandbox branched from the checkpoint (a normal claim
-response, attributed to the caller); the checkpoint's recorded key applies
-— the unguessable id is the capability to branch.
+Auth: node API token; body `{"ttl_seconds": 0, "no_redirect": false,
+"metadata": {}}`. Claims a fresh sandbox branched from the checkpoint (a
+normal claim response, attributed to the caller); the checkpoint's recorded
+key applies — the unguessable id is the capability to branch. The branch
+carries this request's `metadata`, under the claim bounds, never the source
+sandbox's. 400 metadata over a bound.
 
 Checkpoints are node-local (unless the store is shared — see
 [Configuration](deploy.md#configuration)), so a miss here runs a tier order:
@@ -493,13 +503,17 @@ an SDK caller should set.
 
 Auth: node API token. Root sees every live claim; a tenant sees only its own.
 The index is `{"sandboxes": [{id, key, deadline, claimed_at?, hibernated,
-archived?, from_checkpoint?, claim_ref?, volumes?: [{name, mount, mode?}]}]}` —
+archived?, from_checkpoint?, claim_ref?, metadata?, cpu_count, memory_bytes,
+volumes?: [{name, mount, mode?}]}]}` — `cpu_count` and `memory_bytes` are the
+size tier's allocation;
 `mode` is omitted for `ro`, matching the claim echo; never sandbox tokens,
 volume host paths, or catalog access lists. `claimed_at` is the first grant
 (renew and wake move `deadline` only) and is absent for a claim recorded before
 the field existed. `?claim_ref=<ref>` keeps only the claims recorded under
 exactly that reference, so a caller that named its claim reads its row without
-the rest of the index; an empty value lists everything.
+the rest of the index; an empty value lists everything. `?metadata=key=value`,
+repeatable, keeps only the claims holding every pair; 400 a pair without `=`,
+with an empty key, or with a key repeated.
 
 ## GET /v1/sandboxes/{id}
 

@@ -28,3 +28,20 @@ func TestInfoReportsCapacityState(t *testing.T) {
 		t.Errorf("capacity = %t/%q, want true/not enough memory", info.AtCapacity, info.AtCapacityReason)
 	}
 }
+
+func TestSandboxesDecodeMetadataAndResources(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.MarshalWrite(w, map[string]any{"sandboxes": []any{map[string]any{
+			"id": "sb_1", "metadata": map[string]string{"team": "a"}, "cpu_count": 2, "memory_bytes": 1 << 30,
+		}}})
+	}))
+	t.Cleanup(ts.Close)
+
+	list, err := testClient(t, ts).Sandboxes(t.Context())
+	if err != nil {
+		t.Fatalf("Sandboxes: %v", err)
+	}
+	if len(list) != 1 || list[0].Metadata["team"] != "a" || list[0].CPUCount != 2 || list[0].MemoryBytes != 1<<30 {
+		t.Errorf("summaries %+v, want metadata team=a, 2 CPUs, 1 GiB", list)
+	}
+}

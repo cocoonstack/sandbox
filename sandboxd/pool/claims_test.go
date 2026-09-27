@@ -78,7 +78,7 @@ func TestRecommitDrainsAChangeItWasTooBusyToSee(t *testing.T) {
 
 func TestStoreRoundTrip(t *testing.T) {
 	claims := map[string]*types.Sandbox{
-		"sb_a": {ID: "sb_a", VMName: "sbx-1", Key: testKey, Token: "t1", Deadline: time.Now().Add(time.Minute).UTC(), ClaimedAt: time.Now().Add(-time.Minute).UTC(), ClaimRef: "ns/workload", Volumes: []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}, VsockSocket: "/v/1"},
+		"sb_a": {ID: "sb_a", VMName: "sbx-1", Key: testKey, Token: "t1", Deadline: time.Now().Add(time.Minute).UTC(), ClaimedAt: time.Now().Add(-time.Minute).UTC(), ClaimRef: "ns/workload", Metadata: types.Metadata{"team": "a"}, Volumes: []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}, VsockSocket: "/v/1"},
 		"sb_b": {ID: "sb_b", VMName: "sbx-2", Key: testKey, Token: "t2"},
 	}
 	for _, sync := range []bool{false, true} {
