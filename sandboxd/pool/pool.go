@@ -135,10 +135,10 @@ type SandboxSummary struct {
 	FromCheckpoint string         `json:"from_checkpoint,omitempty"`
 	Volumes        []types.Volume `json:"volumes,omitempty"`
 	// ClaimRef echoes the caller reference; empty for checkpoint branches and unprefixed forks.
-	ClaimRef    string         `json:"claim_ref,omitempty"`
-	Metadata    types.Metadata `json:"metadata,omitempty"`
-	CPUCount    int            `json:"cpu_count,omitzero"`
-	MemoryBytes int64          `json:"memory_bytes,omitzero"`
+	ClaimRef      string         `json:"claim_ref,omitempty"`
+	Metadata      types.Metadata `json:"metadata,omitempty"`
+	CPUCount      int            `json:"cpu_count,omitzero"`
+	MemTotalBytes int64          `json:"mem_total_bytes,omitzero"`
 	// Token is the sandbox's own bearer token; only the root by-id read carries it.
 	Token string `json:"token,omitempty"`
 }
@@ -647,7 +647,7 @@ func summarize(sb *types.Sandbox) SandboxSummary {
 		ID: sb.ID, Key: sb.Key, Deadline: sb.Deadline, ClaimedAt: sb.ClaimedAt,
 		Hibernated: sb.HibernateSnap != "", Archived: sb.ArchiveCk != "",
 		FromCheckpoint: sb.FromCheckpoint, ClaimRef: sb.ClaimRef, Metadata: sb.Metadata,
-		CPUCount: spec.CPU, MemoryBytes: spec.MemoryBytes,
+		CPUCount: spec.CPU, MemTotalBytes: spec.MemoryBytes,
 		Volumes: slices.Clone(sb.Volumes),
 	}
 }

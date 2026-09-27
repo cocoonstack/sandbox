@@ -52,7 +52,7 @@ type SandboxSummary struct {
 	ClaimRef       string            `json:"claim_ref,omitempty"`
 	Metadata       map[string]string `json:"metadata,omitempty"`
 	CPUCount       int               `json:"cpu_count,omitzero"`
-	MemoryBytes    int64             `json:"memory_bytes,omitzero"`
+	MemTotalBytes  int64             `json:"mem_total_bytes,omitzero"`
 }
 
 type sandboxListResponse struct {

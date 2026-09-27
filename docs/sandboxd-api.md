@@ -503,8 +503,8 @@ an SDK caller should set.
 
 Auth: node API token. Root sees every live claim; a tenant sees only its own.
 The index is `{"sandboxes": [{id, key, deadline, claimed_at?, hibernated,
-archived?, from_checkpoint?, claim_ref?, metadata?, cpu_count, memory_bytes,
-volumes?: [{name, mount, mode?}]}]}` — `cpu_count` and `memory_bytes` are the
+archived?, from_checkpoint?, claim_ref?, metadata?, cpu_count, mem_total_bytes,
+volumes?: [{name, mount, mode?}]}]}` — `cpu_count` and `mem_total_bytes` are the
 size tier's allocation;
 `mode` is omitted for `ro`, matching the claim echo; never sandbox tokens,
 volume host paths, or catalog access lists. `claimed_at` is the first grant

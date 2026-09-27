@@ -288,10 +288,10 @@ func TestSandboxesEchoAndFilterMetadata(t *testing.T) {
 	}
 
 	row, ok := m.Sandbox(b.ID)
-	if !ok || !maps.Equal(row.Metadata, b.Metadata) || row.CPUCount != 4 || row.MemoryBytes != 4<<30 {
+	if !ok || !maps.Equal(row.Metadata, b.Metadata) || row.CPUCount != 4 || row.MemTotalBytes != 4<<30 {
 		t.Errorf("summary %+v, want the claim metadata and the large tier's 4 CPUs and 4 GiB", row)
 	}
-	if row, _ := m.Sandbox(bare.ID); row.Metadata != nil || row.CPUCount != 1 || row.MemoryBytes != 512<<20 {
+	if row, _ := m.Sandbox(bare.ID); row.Metadata != nil || row.CPUCount != 1 || row.MemTotalBytes != 512<<20 {
 		t.Errorf("summary %+v, want no metadata and the small tier's 1 CPU and 512 MiB", row)
 	}
 }

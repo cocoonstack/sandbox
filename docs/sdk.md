@@ -640,7 +640,7 @@ sb = client.Attach(ownerAddr, id, token)  // bind a known handle, no lookup roun
 
 `Sandboxes` is scoped to the calling token, so a tenant sees only its own
 claims; the fields are those of [`GET /v1/sandboxes`](sandboxd-api.md#get-v1sandboxes),
-including each claim's `Metadata`, `CPUCount`, and `MemoryBytes`.
+including each claim's `Metadata`, `CPUCount`, and `MemTotalBytes`.
 `Drain` leaves live claims alone — poll `Info` until `Claimed` is zero.
 
 ## Error handling

@@ -482,7 +482,7 @@ func TestClaimMetadataRoundTrip(t *testing.T) {
 		t.Fatalf("list sandboxes: %v", err)
 	}
 	i := slices.IndexFunc(list, func(s sandbox.SandboxSummary) bool { return s.ID == sb.ID })
-	if i < 0 || list[i].Metadata["team"] != "a" || list[i].CPUCount != 1 || list[i].MemoryBytes != 512<<20 {
+	if i < 0 || list[i].Metadata["team"] != "a" || list[i].CPUCount != 1 || list[i].MemTotalBytes != 512<<20 {
 		t.Fatalf("index %+v, want %s with metadata team=a, 1 CPU, 512 MiB", list, sb.ID)
 	}
 	for _, tt := range []struct {
