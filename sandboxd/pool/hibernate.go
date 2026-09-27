@@ -237,6 +237,9 @@ func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap,
 		sb.HibernateSnap = snap
 		sb.VsockSocket = sock
 		sb.PendingSnap = ""
+		if now := time.Now(); snap == "" && sb.OnExpire == types.ExpireArchive && now.After(sb.Deadline) {
+			sb.Deadline = now.Add(clampTTL(types.Seconds(sb.LeaseSeconds)))
+		}
 		js = m.store.set(sb)
 	}
 	m.mu.Unlock()

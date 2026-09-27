@@ -50,9 +50,10 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   to the checkpoint store, whatever the pool's `archive_after_seconds`. The
   archive is kept for `archive_delete_after_seconds`, or forever when that is
   0, and the next call that reaches the guest restores it with a fresh lease
-  of the claim's length, so its next expiry archives it again. A failed
-  hibernate or export at expiry keeps the claim and retries on the next reap;
-  it never falls back to destroy. A volume claim or an egress-lane claim
+  of the claim's length, so its next expiry archives it again; a call that
+  wakes it between the hibernate and the export grants that fresh lease too.
+  A failed hibernate or export at expiry keeps the claim and retries on every
+  reap tick (5 s); it never falls back to destroy. A volume claim or an egress-lane claim
   cannot hibernate, so `archive` on one answers 409 with the same error as a
   hibernate
 - `no_redirect` is set by the SDK when retrying at a redirect target

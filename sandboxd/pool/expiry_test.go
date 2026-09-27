@@ -164,6 +164,34 @@ func TestExpiryArchiveSurvivesAFailedReapPersist(t *testing.T) {
 	waitFor(t, func() bool { return archivedCount(m) == 1 })
 }
 
+func TestExpiryArchiveWakeBeforeTheExportGrantsAFreshLease(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, types.ExpireArchive, "", "", nil, nil)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	expire(m, sb)
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	m.mu.Lock()
+	lease := time.Until(sb.Deadline)
+	m.mu.Unlock()
+	if lease < 59*time.Minute {
+		t.Fatalf("lease after a wake from the expiry hibernate = %v, want the claim's hour again", lease)
+	}
+	m.reapOnce(t.Context())
+	m.mu.Lock()
+	_, marked := m.archiving[sb.ID]
+	m.mu.Unlock()
+	if marked {
+		t.Error("the reaper took the woken claim again")
+	}
+}
+
 func TestRenewSwitchesTheExpireAction(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	sb := mustClaim(t, m, testKey)
