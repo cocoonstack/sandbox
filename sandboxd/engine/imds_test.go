@@ -12,7 +12,7 @@ func TestWriteInstanceMetadataReplacesTheGuestDocument(t *testing.T) {
 	fake := serveFakeSilkd(t, path)
 	doc := []byte(`{"region":"local"}`)
 	if err := New("cocoon", nil, nil, false, false, "").WriteInstanceMetadata(t.Context(), path, doc); err != nil {
-		t.Fatalf("WriteMMDS: %v", err)
+		t.Fatalf("WriteInstanceMetadata: %v", err)
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
