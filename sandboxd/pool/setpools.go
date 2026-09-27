@@ -56,7 +56,6 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 		}
 		p := newPool(key)
 		p.applySpec(spec)
-		m.adoptGolden(p)
 		m.pools[key] = p
 	}
 	m.mu.Unlock()

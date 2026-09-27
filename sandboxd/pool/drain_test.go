@@ -12,7 +12,7 @@ func TestDrainRefusesClaimsTrimsWarmAndUncordonRefills(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng)
-		seedGolden(t, m)
+		seedGolden(t, m, "")
 		if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 2}}); err != nil {
 			t.Fatalf("SetPools: %v", err)
 		}

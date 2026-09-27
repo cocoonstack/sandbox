@@ -193,6 +193,26 @@ func (e *Engine) SnapshotList(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
+// ImageIDs maps each locally stored image's name to its content id.
+func (e *Engine) ImageIDs(ctx context.Context) (map[string]string, error) {
+	out, err := e.run(ctx, "image", "list", "--format", formatJSON)
+	if err != nil {
+		return nil, err
+	}
+	var images []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(out, &images); err != nil {
+		return nil, fmt.Errorf("parse image list: %w", err)
+	}
+	ids := make(map[string]string, len(images))
+	for _, img := range images {
+		ids[img.Name] = img.ID
+	}
+	return ids, nil
+}
+
 // List returns cocoon's view of local VMs.
 func (e *Engine) List(ctx context.Context) ([]types.VMRecord, error) {
 	out, err := e.run(ctx, "vm", "list", "--format", formatJSON)

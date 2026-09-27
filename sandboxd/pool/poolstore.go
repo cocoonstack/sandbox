@@ -97,7 +97,6 @@ func (m *Manager) adoptPersistedPools(ctx context.Context) error {
 		}
 		p := newPool(spec.PoolKey)
 		p.applySpec(spec)
-		m.adoptGolden(p)
 		m.pools[spec.PoolKey] = p
 	}
 	logger.Infof(ctx, "restored %d API-applied pools from pools.json", len(pf.Pools))

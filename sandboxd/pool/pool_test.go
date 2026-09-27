@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -323,7 +324,7 @@ func TestReconcile(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 	m := newTestManagerAt(t, eng, dataDir, config.PoolSpec{PoolKey: testKey, Warm: 1})
-	goldenDir := seedGolden(t, m)
+	goldenDir := seedGolden(t, m, "")
 
 	if err := m.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -370,7 +371,7 @@ func TestSetPoolsGrowShrinkAndDrain(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng)
-		seedGolden(t, m)
+		seedGolden(t, m, "")
 
 		if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 2}}); err != nil {
 			t.Fatalf("SetPools grow: %v", err)
@@ -1087,13 +1088,13 @@ func waitFor(t *testing.T, cond func() bool) {
 	t.Fatal("condition not met within 3s")
 }
 
-func seedGolden(t *testing.T, m *Manager) string {
+func seedGolden(t *testing.T, m *Manager, imageID string) string {
 	t.Helper()
 	g := filepath.Join(m.goldensDir(), testKey.Hash())
 	if err := os.MkdirAll(g, 0o750); err != nil {
 		t.Fatalf("seed golden: %v", err)
 	}
-	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(testKey, false, nil)), 0o644); err != nil {
+	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(testKey, false, nil, imageID)), 0o644); err != nil {
 		t.Fatalf("seed golden stamp: %v", err)
 	}
 	return g
@@ -1158,6 +1159,10 @@ type fakeEngine struct {
 	snapRemoveStall chan struct{}
 	snapListStall   chan struct{}
 	snapListCount   int
+
+	imageIDs   map[string]string
+	imageErr   error
+	imageLists int
 }
 
 func newFakeEngine() *fakeEngine {
@@ -1274,6 +1279,16 @@ func (f *fakeEngine) SnapshotList(_ context.Context) ([]string, error) {
 		return nil, err
 	}
 	return snaps, nil
+}
+
+func (f *fakeEngine) ImageIDs(context.Context) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.imageLists++
+	if f.imageErr != nil {
+		return nil, f.imageErr
+	}
+	return maps.Clone(f.imageIDs), nil
 }
 
 func (f *fakeEngine) SnapshotRemove(_ context.Context, snapName string) error {
