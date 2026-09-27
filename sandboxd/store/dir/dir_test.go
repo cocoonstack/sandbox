@@ -264,7 +264,11 @@ func TestSweepGenerationsPairsCurrentAndSupersededDigests(t *testing.T) {
 	secondGen := filepath.Join(root, id, store.ExportGen(secondMeta))
 	secondSidecar := filepath.Join(root, id, digestName(secondMeta))
 	secondDigest := mustPublishDigested(t, st, id, "second")
-	for _, path := range []string{firstGen, firstSidecar, secondGen, secondSidecar} {
+	if err = st.SetLabels(t.Context(), id, []byte(`{"tag":"v1"}`)); err != nil {
+		t.Fatalf("SetLabels: %v", err)
+	}
+	labels := filepath.Join(root, id, store.LabelsFile)
+	for _, path := range []string{firstGen, firstSidecar, secondGen, secondSidecar, labels} {
 		backdate(t, path)
 	}
 
@@ -276,7 +280,7 @@ func TestSweepGenerationsPairsCurrentAndSupersededDigests(t *testing.T) {
 			t.Errorf("superseded entry %s survived sweep: %v", filepath.Base(path), statErr)
 		}
 	}
-	for _, path := range []string{secondGen, secondSidecar} {
+	for _, path := range []string{secondGen, secondSidecar, labels} {
 		if _, statErr := os.Stat(path); statErr != nil {
 			t.Errorf("current entry %s was swept: %v", filepath.Base(path), statErr)
 		}

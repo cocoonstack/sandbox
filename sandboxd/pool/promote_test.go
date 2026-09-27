@@ -3,6 +3,7 @@ package pool
 import (
 	"bytes"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -487,6 +488,70 @@ func TestTemplatesListWhatTheNodeHoldsAcrossARestart(t *testing.T) {
 	pooled := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: keyB})
 	if got = pooled.Templates(); len(got) != 0 {
 		t.Errorf("Templates %+v, want none once a pool owns tpl:b's key", got)
+	}
+}
+
+func TestTemplateLabelsPersistUntilTheTemplateIsRepromotedOrDeleted(t *testing.T) {
+	eng := newFakeEngine()
+	dir := t.TempDir()
+	m := newTestManagerAt(t, eng, dir)
+	parent := mustClaim(t, m, testKey)
+	key, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:l", "")
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	labelsOf := func(m *Manager) types.Metadata {
+		t.Helper()
+		i := slices.IndexFunc(m.Templates(), func(t TemplateInfo) bool { return t.Key == key })
+		if i < 0 {
+			t.Fatalf("tpl:l not listed")
+		}
+		return m.Templates()[i].Labels
+	}
+	want := types.Metadata{"v1": "sha256:aa"}
+	if err = m.SetTemplateLabels(t.Context(), key, want, ""); err != nil {
+		t.Fatalf("SetTemplateLabels: %v", err)
+	}
+	if got := labelsOf(m); !maps.Equal(got, want) {
+		t.Errorf("labels %v, want %v", got, want)
+	}
+	restarted := newTestManagerAt(t, eng, dir)
+	if got := labelsOf(restarted); !maps.Equal(got, want) {
+		t.Errorf("labels after restart %v, want %v", got, want)
+	}
+	if err = m.SetTemplateLabels(t.Context(), key, types.Metadata{"x": "y"}, "acme"); !errors.Is(err, ErrUnknownTemplate) {
+		t.Errorf("a tenant labeling the operator's template: %v, want ErrUnknownTemplate", err)
+	}
+	if err = m.SetTemplateLabels(t.Context(), types.PoolKey{Template: "tpl:none", Net: testKey.Net, Size: testKey.Size}, want, ""); !errors.Is(err, ErrUnknownTemplate) {
+		t.Errorf("an unknown template: %v, want ErrUnknownTemplate", err)
+	}
+	if _, _, err = m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:l", ""); err != nil {
+		t.Fatalf("re-promote: %v", err)
+	}
+	if got := labelsOf(newTestManagerAt(t, eng, dir)); got != nil {
+		t.Errorf("labels %v survived a re-promote, want none", got)
+	}
+	if err = m.SetTemplateLabels(t.Context(), key, want, ""); err != nil {
+		t.Fatalf("SetTemplateLabels again: %v", err)
+	}
+	if err = m.SetTemplateLabels(t.Context(), key, types.Metadata{}, ""); err != nil || labelsOf(m) != nil {
+		t.Errorf("empty labels: %v, labels %v; want them cleared", err, labelsOf(m))
+	}
+	if err = m.SetTemplateLabels(t.Context(), key, want, ""); err != nil {
+		t.Fatalf("SetTemplateLabels before delete: %v", err)
+	}
+	if err = m.DeleteTemplate(t.Context(), key, ""); err != nil {
+		t.Fatalf("DeleteTemplate: %v", err)
+	}
+	if _, _, err = m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:l", ""); err != nil {
+		t.Fatalf("promote after delete: %v", err)
+	}
+	if got := labelsOf(newTestManagerAt(t, eng, dir)); got != nil {
+		t.Errorf("labels %v outlived the deleted template", got)
+	}
+	pooled := newTestManagerAt(t, eng, t.TempDir(), config.PoolSpec{PoolKey: key})
+	if err = pooled.SetTemplateLabels(t.Context(), key, want, ""); !errors.Is(err, ErrPooledTemplate) {
+		t.Errorf("a pooled key: %v, want ErrPooledTemplate", err)
 	}
 }
 

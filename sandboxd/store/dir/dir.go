@@ -123,9 +123,28 @@ func (d *Store) Metas(ctx context.Context) ([]store.Record, error) {
 		if err != nil {
 			return nil, err
 		}
-		recs = append(recs, store.Record{Meta: raw, Digest: digest})
+		labels, err := os.ReadFile(filepath.Join(d.root, e.Name(), store.LabelsFile))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("read labels: %w", err)
+		}
+		recs = append(recs, store.Record{Meta: raw, Digest: digest, Labels: labels})
 	}
 	return recs, nil
+}
+
+func (d *Store) SetLabels(_ context.Context, id string, labels []byte) error {
+	path := filepath.Join(d.root, id, store.LabelsFile)
+	if labels == nil {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, labels, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func (d *Store) Delete(_ context.Context, id string) error {
@@ -271,7 +290,7 @@ func (d *Store) sweepGenerations(id string) (err error) {
 	current := store.ExportGen(meta)
 	currentDigest := digestName(meta)
 	for _, e := range entries {
-		if name := e.Name(); name == store.MetaFile || name == current || name == currentDigest {
+		if name := e.Name(); name == store.MetaFile || name == store.LabelsFile || name == current || name == currentDigest {
 			continue
 		}
 		if removeErr := removeAgedEntry(final, e); removeErr != nil {

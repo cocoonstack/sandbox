@@ -110,6 +110,7 @@ func RunContract(t *testing.T, st store.Store) {
 		t.Fatalf("Metas after Delete: %d, %v", len(metas), err)
 	}
 	runDigestContract(t, st)
+	runLabelsContract(t, st)
 }
 
 func runDigestContract(t *testing.T, st store.Store) {
@@ -147,6 +148,76 @@ func runDigestContract(t *testing.T, st store.Store) {
 	rejectNonRegularReplacement(t, st, id, want)
 	if err = st.Delete(ctx, id); err != nil {
 		t.Fatalf("Delete digested: %v", err)
+	}
+}
+
+func runLabelsContract(t *testing.T, st store.Store) {
+	t.Helper()
+	ctx := t.Context()
+	const id = "ck_00000000000000dd"
+	staging, err := st.Stage(id)
+	if err != nil {
+		t.Fatalf("Stage labeled: %v", err)
+	}
+	writeExport(t, staging, "disk.img", "labeled")
+	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+id+`"}`), 0o600); err != nil {
+		t.Fatalf("write labeled meta: %v", err)
+	}
+	if err = st.Publish(ctx, staging, id); err != nil {
+		t.Fatalf("Publish labeled: %v", err)
+	}
+	labelsOf := func() []byte {
+		t.Helper()
+		recs, metasErr := st.Metas(ctx)
+		if metasErr != nil || len(recs) != 1 {
+			t.Fatalf("Metas: %d records, %v; want the labeled one", len(recs), metasErr)
+		}
+		return recs[0].Labels
+	}
+	if got := labelsOf(); got != nil {
+		t.Fatalf("labels before any set: %q, want none", got)
+	}
+	for _, want := range []string{`{"a":"1"}`, `{"b":"2"}`} {
+		if err = st.SetLabels(ctx, id, []byte(want)); err != nil {
+			t.Fatalf("SetLabels %s: %v", want, err)
+		}
+		if got := labelsOf(); string(got) != want {
+			t.Fatalf("labels %q, want %s replaced whole", got, want)
+		}
+	}
+	if _, _, _, err = st.Fetch(ctx, id); err != nil {
+		t.Fatalf("Fetch after SetLabels: %v, want the export untouched", err)
+	}
+	if err = st.SetLabels(ctx, id, nil); err != nil {
+		t.Fatalf("clear labels: %v", err)
+	}
+	if got := labelsOf(); got != nil {
+		t.Fatalf("labels after clear: %q, want none", got)
+	}
+	if err = st.SetLabels(ctx, id, []byte(`{"c":"3"}`)); err != nil {
+		t.Fatalf("SetLabels before delete: %v", err)
+	}
+	if err = st.Delete(ctx, id); err != nil {
+		t.Fatalf("Delete labeled: %v", err)
+	}
+	if recs, metasErr := st.Metas(ctx); metasErr != nil || len(recs) != 0 {
+		t.Fatalf("Metas after Delete: %d records, %v; want the labels gone with the record", len(recs), metasErr)
+	}
+	if staging, err = st.Stage(id); err != nil {
+		t.Fatalf("Stage republish: %v", err)
+	}
+	writeExport(t, staging, "disk.img", "again")
+	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+id+`","v":2}`), 0o600); err != nil {
+		t.Fatalf("write republish meta: %v", err)
+	}
+	if err = st.Publish(ctx, staging, id); err != nil {
+		t.Fatalf("republish: %v", err)
+	}
+	if got := labelsOf(); got != nil {
+		t.Fatalf("labels %q resurfaced on a record published after Delete", got)
+	}
+	if err = st.Delete(ctx, id); err != nil {
+		t.Fatalf("Delete republished: %v", err)
 	}
 }
 
