@@ -8,11 +8,11 @@ func TestBelowFloor(t *testing.T) {
 		below      bool
 		comparable bool
 	}{
-		{"v0.5.2", false, true},
-		{"v0.5.3", false, true},
-		{"v0.6.0", false, true},
-		{"v0.5.1", true, true},
-		{"v0.5.0", true, true},
+		{"v0.6.9", false, true},
+		{"v0.6.10", false, true},
+		{"v0.7.0", false, true},
+		{"v0.6.8", true, true},
+		{"v0.5.2", true, true},
 		{"v0.4.9", true, true},
 		{"v1.0.0", false, true},
 		{"v0.10.0", false, true},

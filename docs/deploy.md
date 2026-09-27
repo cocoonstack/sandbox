@@ -6,13 +6,14 @@ the cocoon CLI and needs a template image with silkd baked in.
 ## Prerequisites
 
 - Linux with KVM (`/dev/kvm`)
-- [cocoon](https://github.com/cocoonstack/cocoon) **v0.5.2 or newer** installed
-  and working (`cocoon vm run` boots a Cloud Hypervisor VM). v0.5.2 includes
+- [cocoon](https://github.com/cocoonstack/cocoon) **v0.6.9 or newer** installed
+  and working (`cocoon vm run` boots a Cloud Hypervisor VM). v0.5.2 brought
   the disk hot-attach used by read-only volumes and the parallel-clone and
   snapshot/store performance work the
-  [performance](performance.md) numbers assume. sandboxd logs a warning at
-  startup when the detected cocoon is below v0.5.2 (a dev/`master-<sha>` build
-  is assumed current)
+  [performance](performance.md) numbers assume; v0.6.9 prints `[]` for an
+  empty `snapshot list --format json`, which sandboxd's snapshot reconcile
+  reads. sandboxd logs a warning at startup when the detected cocoon is below
+  v0.6.9 (a dev/`master-<sha>` build is assumed current)
 - The sandbox boot artifact installed where cocoon finds it
   (`/boot/vmlinuz-sandbox`, `/boot/initrd.img-sandbox` — from
   `ghcr.io/cocoonstack/sandbox/boot:<kernel-ver>`)

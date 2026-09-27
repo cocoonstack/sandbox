@@ -25,8 +25,8 @@ import (
 )
 
 const (
-	// RequiredCocoon carries the snapshot/store performance baseline.
-	RequiredCocoon = "v0.5.2"
+	// RequiredCocoon carries the snapshot/store baseline and the JSON form of an empty snapshot list.
+	RequiredCocoon = "v0.6.9"
 
 	StaleCreateCollected   StaleCreateOutcome = "collected"
 	StaleCreateBusy        StaleCreateOutcome = "busy"
@@ -177,11 +177,6 @@ func (e *Engine) SnapshotList(ctx context.Context) ([]string, error) {
 	out, err := e.run(ctx, "snapshot", "list", "--format", formatJSON)
 	if err != nil {
 		return nil, err
-	}
-	// an empty store prints a human line ("No snapshots found."), not JSON.
-	out = bytes.TrimSpace(out)
-	if len(out) == 0 || out[0] != '[' {
-		return nil, nil
 	}
 	var snaps []struct {
 		Name string `json:"name"`

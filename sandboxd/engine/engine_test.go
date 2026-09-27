@@ -122,6 +122,25 @@ func TestDialGuestPortCtxCancel(t *testing.T) {
 	}
 }
 
+func TestSnapshotListReadsAnEmptyStoreAndRejectsProse(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\nif [ \"$COCOON_TEST_PROSE\" = 1 ]; then echo 'No snapshots found.'; else echo '[]'; fi\n"
+	if err := os.WriteFile(filepath.Join(dir, "cocoon"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	e := New("cocoon", nil, nil, false, false, "")
+
+	t.Setenv("COCOON_TEST_PROSE", "0")
+	if snaps, err := e.SnapshotList(t.Context()); err != nil || len(snaps) != 0 {
+		t.Fatalf("empty store: snaps=%v err=%v, want none and nil", snaps, err)
+	}
+	t.Setenv("COCOON_TEST_PROSE", "1")
+	if _, err := e.SnapshotList(t.Context()); err == nil || !strings.Contains(err.Error(), "parse snapshot list") {
+		t.Fatalf("prose banner: err=%v, want a parse error", err)
+	}
+}
+
 func TestProbeTimeout(t *testing.T) {
 	path := sockPath(t)
 
