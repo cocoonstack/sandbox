@@ -39,6 +39,7 @@ import (
 const (
 	refillInterval    = 2 * time.Second
 	reapInterval      = 5 * time.Second
+	imageInterval     = time.Minute
 	buildRetryDelay   = 30 * time.Second
 	claimProbeTimeout = 15 * time.Second
 	coldProbeTimeout  = 90 * time.Second
@@ -111,6 +112,7 @@ type Engine interface {
 	SnapshotExport(ctx context.Context, snapName, toDir string) error
 	SnapshotRemove(ctx context.Context, snapName string) error
 	SnapshotList(ctx context.Context) ([]string, error)
+	ImageIDs(ctx context.Context) (map[string]string, error)
 	Hibernate(ctx context.Context, vmName, snapName string) error
 	Restore(ctx context.Context, vmName, snapRef string) (string, error)
 	List(ctx context.Context) ([]types.VMRecord, error)
@@ -191,6 +193,7 @@ type pool struct {
 	overTargetSince time.Time
 
 	goldenDir string
+	imageID   string
 	building  bool
 	nextBuild time.Time
 	removed   bool // dropped from the desired set while building/refilling; swept by refillOnce
@@ -488,6 +491,8 @@ func (m *Manager) Run(ctx context.Context) {
 	defer refill.Stop()
 	reap := time.NewTicker(reapInterval)
 	defer reap.Stop()
+	images := time.NewTicker(imageInterval)
+	defer images.Stop()
 	// Store retention is hourly: each sweep is cluster-visible I/O on a shared root
 	storeSweep := time.NewTicker(time.Hour)
 	defer storeSweep.Stop()
@@ -508,6 +513,8 @@ func (m *Manager) Run(ctx context.Context) {
 			m.archiveOnce(ctx)
 			m.shrinkOnce(ctx)
 			go m.retryArchiveDeletes(ctx)
+		case <-images.C:
+			go m.checkImagesOnce(ctx)
 		case <-storeSweep.C:
 			go m.sweepStoreGenerations(ctx)
 			go m.sweepExpiredCheckpoints(ctx)

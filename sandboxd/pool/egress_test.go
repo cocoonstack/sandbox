@@ -132,7 +132,7 @@ func TestLaneVerdictReachesGuestOnColdBoots(t *testing.T) {
 					t.Fatalf("cold provision: %v", err)
 				}
 				m.destroy(t.Context(), sb.VMName)
-			} else if err := m.buildGoldenSteps(t.Context(), tt.key, "sbx-gb", "snap", filepath.Join(m.goldensDir(), tt.key.Hash())); err != nil {
+			} else if err := m.buildGoldenSteps(t.Context(), tt.key, "sbx-gb", "snap", filepath.Join(m.goldensDir(), tt.key.Hash()), ""); err != nil {
 				t.Fatalf("buildGoldenSteps: %v", err)
 			}
 			if !slices.Equal(eng.laneMarks, tt.want) {
@@ -149,17 +149,17 @@ func TestGoldenStampGatesAdoptionOnLane(t *testing.T) {
 	if err := os.MkdirAll(g, 0o750); err != nil {
 		t.Fatalf("stage golden: %v", err)
 	}
-	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(testKey, false, nil)), 0o644); err != nil {
+	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(testKey, false, nil, "")), 0o644); err != nil {
 		t.Fatalf("write stamp: %v", err)
 	}
-	m.adoptGolden(p)
+	m.adoptGolden(p, "")
 	if p.goldenDir != "" {
 		t.Error("adopted an egress-lane golden that never marked its guest; want rebuild")
 	}
-	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(egKey, false, nil)), 0o644); err != nil {
+	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(egKey, false, nil, "")), 0o644); err != nil {
 		t.Fatalf("write stamp: %v", err)
 	}
-	m.adoptGolden(p)
+	m.adoptGolden(p, "")
 	if p.goldenDir != g {
 		t.Error("rejected an egress-lane golden whose stamp says the guest was marked")
 	}
@@ -491,7 +491,7 @@ func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 	if err := os.MkdirAll(gd, 0o750); err != nil {
 		t.Fatalf("golden dir: %v", err)
 	}
-	if err := os.WriteFile(gd+goldenStampSuffix, []byte(m.goldenStamp(egKey, m.poolIntercepts(egKey), nil)), 0o644); err != nil {
+	if err := os.WriteFile(gd+goldenStampSuffix, []byte(m.goldenStamp(egKey, m.poolIntercepts(egKey), nil, "")), 0o644); err != nil {
 		t.Fatalf("golden stamp: %v", err)
 	}
 	m.mu.Lock()
@@ -814,9 +814,9 @@ func dialDoors(t *testing.T, sb *types.Sandbox) {
 
 func refillWarmVM(t *testing.T, m *Manager) *types.Sandbox {
 	t.Helper()
-	seedGolden(t, m)
+	seedGolden(t, m, "")
 	m.mu.Lock()
-	m.adoptGolden(m.pools[testKey])
+	m.adoptGolden(m.pools[testKey], "")
 	m.mu.Unlock()
 	m.refillOnce(t.Context())
 	var warm *types.Sandbox

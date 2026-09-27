@@ -83,6 +83,8 @@ func (f *fakeEngine) SnapshotRemove(_ context.Context, _ string) error { return 
 
 func (f *fakeEngine) SnapshotList(_ context.Context) ([]string, error) { return nil, nil }
 
+func (f *fakeEngine) ImageIDs(context.Context) (map[string]string, error) { return nil, nil }
+
 func (f *fakeEngine) Hibernate(ctx context.Context, name, _ string) error {
 	return f.Remove(ctx, name)
 }

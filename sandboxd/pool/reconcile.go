@@ -32,6 +32,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		live[vm.Config.Name] = vm
 	}
 	snaps, snapsErr := m.eng.SnapshotList(ctx)
+	imageIDs := m.imageIDs(ctx)
 
 	owned := map[string]bool{}
 	referenced := map[string]bool{}
@@ -67,7 +68,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 	saveErr := m.store.save(m.claimed)
 	for _, p := range m.pools {
-		m.adoptGolden(p)
+		m.adoptGolden(p, imageIDs[p.key.Template])
 	}
 	m.mu.Unlock()
 	for _, sb := range adopted {

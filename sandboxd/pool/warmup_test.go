@@ -17,7 +17,7 @@ func TestGoldenBuildRunsWarmupBeforeSnapshot(t *testing.T) {
 	argv := []string{"node", "-e", "0"}
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Warmup: argv})
 	final := filepath.Join(m.goldensDir(), testKey.Hash())
-	if err := m.buildGoldenSteps(t.Context(), testKey, "sbx-gb", "snap", final); err != nil {
+	if err := m.buildGoldenSteps(t.Context(), testKey, "sbx-gb", "snap", final, ""); err != nil {
 		t.Fatalf("buildGoldenSteps: %v", err)
 	}
 	if len(eng.warmups) != 1 || !slices.Equal(eng.warmups[0], argv) {
@@ -30,7 +30,7 @@ func TestGoldenBuildRunsWarmupBeforeSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read golden stamp: %v", err)
 	}
-	if want := m.goldenStamp(testKey, false, argv); string(stamp) != want {
+	if want := m.goldenStamp(testKey, false, argv, ""); string(stamp) != want {
 		t.Errorf("stamp = %q, want %q", stamp, want)
 	}
 }
@@ -39,13 +39,13 @@ func TestGoldenBuildSkipsWarmupWhenUnset(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
 	final := filepath.Join(m.goldensDir(), testKey.Hash())
-	if err := m.buildGoldenSteps(t.Context(), testKey, "sbx-gb", "snap", final); err != nil {
+	if err := m.buildGoldenSteps(t.Context(), testKey, "sbx-gb", "snap", final, ""); err != nil {
 		t.Fatalf("buildGoldenSteps: %v", err)
 	}
 	if len(eng.warmups) != 0 {
 		t.Errorf("Warmup called %d times for a pool without one", len(eng.warmups))
 	}
-	if stamp, err := os.ReadFile(final + goldenStampSuffix); err != nil || string(stamp) != m.goldenStamp(testKey, false, nil) {
+	if stamp, err := os.ReadFile(final + goldenStampSuffix); err != nil || string(stamp) != m.goldenStamp(testKey, false, nil, "") {
 		t.Errorf("stamp = %q (%v), want one without a warmup", stamp, err)
 	}
 }
@@ -56,25 +56,25 @@ func TestAdoptGoldenRequiresMatchingWarmup(t *testing.T) {
 	if err := os.MkdirAll(final, 0o755); err != nil {
 		t.Fatalf("mkdir golden: %v", err)
 	}
-	if err := os.WriteFile(final+goldenStampSuffix, []byte(m.goldenStamp(testKey, false, nil)), 0o644); err != nil {
+	if err := os.WriteFile(final+goldenStampSuffix, []byte(m.goldenStamp(testKey, false, nil, "")), 0o644); err != nil {
 		t.Fatalf("write stamp: %v", err)
 	}
 	p := m.pools[testKey]
-	m.adoptGolden(p)
+	m.adoptGolden(p, "")
 	if p.goldenDir != "" {
 		t.Error("adopted a golden built without the warmup")
 	}
-	if err := os.WriteFile(final+goldenStampSuffix, []byte(m.goldenStamp(testKey, false, []string{"python3", "-c", "0"})), 0o644); err != nil {
+	if err := os.WriteFile(final+goldenStampSuffix, []byte(m.goldenStamp(testKey, false, []string{"python3", "-c", "0"}, "")), 0o644); err != nil {
 		t.Fatalf("write stamp: %v", err)
 	}
-	m.adoptGolden(p)
+	m.adoptGolden(p, "")
 	if p.goldenDir != "" {
 		t.Error("adopted a golden built with a different warmup")
 	}
-	if err := os.WriteFile(final+goldenStampSuffix, []byte(m.goldenStamp(testKey, false, []string{"node", "-e", "0"})), 0o644); err != nil {
+	if err := os.WriteFile(final+goldenStampSuffix, []byte(m.goldenStamp(testKey, false, []string{"node", "-e", "0"}, "")), 0o644); err != nil {
 		t.Fatalf("write stamp: %v", err)
 	}
-	m.adoptGolden(p)
+	m.adoptGolden(p, "")
 	if p.goldenDir != final {
 		t.Errorf("goldenDir = %q, want %q", p.goldenDir, final)
 	}

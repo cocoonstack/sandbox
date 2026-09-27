@@ -69,7 +69,7 @@ func (m *Manager) refillOnce(ctx context.Context) {
 			case m.refillSem <- struct{}{}:
 				p.refilling++
 				inFlight++
-				go m.refillOne(ctx, p, p.goldenDir)
+				go m.refillOne(ctx, p, p.goldenDir, p.imageID)
 				spawned = true
 			default:
 				return
@@ -90,7 +90,7 @@ func (m *Manager) shrinkOnce(ctx context.Context) {
 	m.destroyAll(ctx, trim)
 }
 
-func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
+func (m *Manager) refillOne(ctx context.Context, p *pool, golden, imageID string) {
 	start := time.Now()
 	sb, err := m.startVM(ctx, p.key, func(name string) (types.VMRecord, error) {
 		return m.eng.Clone(ctx, golden, name, p.key)
@@ -115,7 +115,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string) {
 	m.mu.Lock()
 	now := time.Now()
 	p.refilling--
-	if err == nil && !m.draining && len(p.warm) < p.effectiveTarget(now) {
+	if err == nil && !m.draining && p.goldenDir != "" && p.imageID == imageID && len(p.warm) < p.effectiveTarget(now) {
 		p.warm = append(p.warm, sb)
 		p.noteLead(time.Since(start))
 		keep = true
@@ -171,8 +171,17 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 	name := vmPrefix + "gb-" + hash
 	snap := goldenPrefix + hash
 	final := filepath.Join(m.goldensDir(), hash)
+	imageID := m.imageIDs(ctx)[p.key.Template]
+	m.mu.Lock()
+	adopted := m.adoptGolden(p, imageID)
+	p.building = !adopted
+	m.mu.Unlock()
+	if adopted {
+		m.refillOnce(ctx)
+		return
+	}
 
-	err := m.buildGoldenSteps(ctx, p.key, name, snap, final)
+	err := m.buildGoldenSteps(ctx, p.key, name, snap, final, imageID)
 	if rmErr := m.eng.SnapshotRemove(ctx, snap); rmErr != nil && err == nil {
 		logger.Debugf(ctx, "drop golden snapshot %s: %v", snap, rmErr)
 	}
@@ -181,7 +190,7 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 	m.mu.Lock()
 	p.building = false
 	if err == nil {
-		p.goldenDir = final
+		p.goldenDir, p.imageID = final, imageID
 	} else {
 		p.nextBuild = time.Now().Add(buildRetryDelay)
 		// a cold boot hits the same bridge and disk as a refill, so it feeds the park too
@@ -197,7 +206,7 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 	logger.Infof(ctx, "golden ready for %s (%s)", hash, p.key.Template)
 }
 
-func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name, snap, final string) error {
+func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name, snap, final, imageID string) error {
 	rec, err := m.eng.RunCold(ctx, name, key)
 	if err != nil {
 		return err
@@ -225,7 +234,7 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 	if err := m.exportGolden(ctx, snap, final); err != nil {
 		return err
 	}
-	stamp := m.goldenStamp(key, caBaked, warmup)
+	stamp := m.goldenStamp(key, caBaked, warmup, imageID)
 	if err := os.WriteFile(final+goldenStampSuffix, []byte(stamp), 0o644); err != nil { //nolint:gosec // public stamp
 		return fmt.Errorf("write golden stamp: %w", err)
 	}
@@ -252,21 +261,56 @@ func (m *Manager) warmClone(ctx context.Context, sb *types.Sandbox) error {
 }
 
 // adoptGolden points p at an on-disk golden whose stamp matches what the pool bakes now.
-func (m *Manager) adoptGolden(p *pool) {
+func (m *Manager) adoptGolden(p *pool, imageID string) bool {
 	g := filepath.Join(m.goldensDir(), p.hash)
 	stamp, err := os.ReadFile(g + goldenStampSuffix) //nolint:gosec // node-local golden path
-	want := m.goldenStamp(p.key, m.poolEgress[p.key].Intercepts(), m.poolWarmups[p.key])
-	if err == nil && string(stamp) == want && dirExists(g) {
-		p.goldenDir = g
+	want := m.goldenStamp(p.key, m.poolEgress[p.key].Intercepts(), m.poolWarmups[p.key], imageID)
+	if err != nil || string(stamp) != want || !dirExists(g) {
+		return false
 	}
+	p.goldenDir, p.imageID = g, imageID
+	return true
 }
 
-func (m *Manager) goldenStamp(key types.PoolKey, caBaked bool, warmup []string) string {
+func (m *Manager) goldenStamp(key types.PoolKey, caBaked bool, warmup []string, imageID string) string {
 	var fp string
 	if caBaked {
 		fp = m.EgressCAFingerprint()
 	}
-	return strings.Join(append([]string{fp, string(m.laneOf(key))}, warmup...), "\x00")
+	return strings.Join(append([]string{fp, string(m.laneOf(key)), imageID}, warmup...), "\x00")
+}
+
+func (m *Manager) checkImagesOnce(ctx context.Context) {
+	m.mu.Lock()
+	empty := len(m.pools) == 0
+	m.mu.Unlock()
+	if empty {
+		return
+	}
+	ids, err := m.eng.ImageIDs(ctx)
+	if err != nil {
+		log.WithFunc("pool.checkImagesOnce").Warnf(ctx, "list images: %v", err)
+		return
+	}
+	var trim []string
+	m.mu.Lock()
+	for _, p := range m.pools {
+		if p.goldenDir == "" || ids[p.key.Template] == p.imageID {
+			continue
+		}
+		p.goldenDir, p.imageID = "", ""
+		trim = append(trim, p.trimWarm(0)...)
+	}
+	m.mu.Unlock()
+	m.destroyAll(ctx, trim)
+}
+
+func (m *Manager) imageIDs(ctx context.Context) map[string]string {
+	ids, err := m.eng.ImageIDs(ctx)
+	if err != nil {
+		log.WithFunc("pool.imageIDs").Warnf(ctx, "list images: %v", err)
+	}
+	return ids
 }
 
 // exportGolden exports snap into final through a unique sibling *.tmp dir.

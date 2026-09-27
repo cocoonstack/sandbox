@@ -21,7 +21,7 @@ func TestGoldenBuildInstallsCAForInterceptPool(t *testing.T) {
 		t.Fatal("egress CA not loaded for an intercept pool")
 	}
 	final := filepath.Join(m.goldensDir(), interceptKey.Hash())
-	if err := m.buildGoldenSteps(t.Context(), interceptKey, "sbx-gb", "snap", final); err != nil {
+	if err := m.buildGoldenSteps(t.Context(), interceptKey, "sbx-gb", "snap", final, ""); err != nil {
 		t.Fatalf("buildGoldenSteps: %v", err)
 	}
 	if len(eng.caInstalls) != 1 {
@@ -31,7 +31,7 @@ func TestGoldenBuildInstallsCAForInterceptPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read golden stamp: %v", err)
 	}
-	if want := m.goldenStamp(interceptKey, true, nil); string(stamp) != want {
+	if want := m.goldenStamp(interceptKey, true, nil, ""); string(stamp) != want {
 		t.Errorf("stamp = %q, want %q", stamp, want)
 	}
 }
@@ -44,13 +44,13 @@ func TestGoldenBuildSkipsCAForPlainPool(t *testing.T) {
 		t.Error("egress CA loaded though no pool intercepts")
 	}
 	final := filepath.Join(m.goldensDir(), interceptKey.Hash())
-	if err := m.buildGoldenSteps(t.Context(), interceptKey, "sbx-gb", "snap", final); err != nil {
+	if err := m.buildGoldenSteps(t.Context(), interceptKey, "sbx-gb", "snap", final, ""); err != nil {
 		t.Fatalf("buildGoldenSteps: %v", err)
 	}
 	if len(eng.caInstalls) != 0 {
 		t.Errorf("InstallCACert called %d times for a plain pool", len(eng.caInstalls))
 	}
-	if stamp, err := os.ReadFile(final + goldenStampSuffix); err != nil || string(stamp) != m.goldenStamp(interceptKey, false, nil) {
+	if stamp, err := os.ReadFile(final + goldenStampSuffix); err != nil || string(stamp) != m.goldenStamp(interceptKey, false, nil, "") {
 		t.Errorf("stamp = %q (%v), want one without a CA fingerprint", stamp, err)
 	}
 }
@@ -62,29 +62,29 @@ func TestGoldenCAStampRebuildsOnMismatch(t *testing.T) {
 	if err := os.MkdirAll(final, 0o750); err != nil {
 		t.Fatalf("stage golden: %v", err)
 	}
-	m.adoptGolden(p)
+	m.adoptGolden(p, "")
 	if p.goldenDir != "" {
 		t.Error("adopted an intercept golden with no stamp; want rebuild")
 	}
-	baked := m.goldenStamp(interceptKey, true, nil)
+	baked := m.goldenStamp(interceptKey, true, nil, "")
 	stale := strings.Replace(baked, m.egressCA.Fingerprint(), "deadbeef", 1)
 	if err := os.WriteFile(final+goldenStampSuffix, []byte(stale), 0o644); err != nil {
 		t.Fatalf("write stale stamp: %v", err)
 	}
-	m.adoptGolden(p)
+	m.adoptGolden(p, "")
 	if p.goldenDir != "" {
 		t.Error("adopted an intercept golden with a stale CA fingerprint; want rebuild")
 	}
 	if err := os.WriteFile(final+goldenStampSuffix, []byte(baked), 0o644); err != nil {
 		t.Fatalf("write matching stamp: %v", err)
 	}
-	m.adoptGolden(p)
+	m.adoptGolden(p, "")
 	if p.goldenDir != final {
 		t.Error("rejected an intercept golden whose CA fingerprint matches")
 	}
 	p.goldenDir = ""
 	m.poolEgress[interceptKey] = &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh"}}}
-	m.adoptGolden(p)
+	m.adoptGolden(p, "")
 	if p.goldenDir != "" {
 		t.Error("adopted a CA-baked golden for a now-plain pool; want rebuild")
 	}
