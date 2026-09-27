@@ -242,9 +242,10 @@ func TestInfoReportsTheNodeAdvertiseAddr(t *testing.T) {
 }
 
 func TestInfoListsThePromotedTemplatesOnTheWire(t *testing.T) {
+	created := time.Date(2026, 9, 28, 1, 2, 3, 0, time.UTC)
 	mgr := &fakeManager{infoTemplates: []pool.TemplateInfo{
-		{Key: types.PoolKey{Template: "app:v1", Net: types.NetNone, Size: types.SizeSmall}, ContentDigest: "sha256:aa"},
-		{Key: types.PoolKey{Template: "app:v2", Net: types.NetNone, Size: types.SizeMedium}, ContentDigest: "sha256:bb", Tenant: "acme"},
+		{Key: types.PoolKey{Template: "app:v1", Net: types.NetNone, Size: types.SizeSmall}, ContentDigest: "sha256:aa", CreatedAt: created, CPUCount: 1, MemTotalBytes: 512 << 20},
+		{Key: types.PoolKey{Template: "app:v2", Net: types.NetNone, Size: types.SizeMedium}, ContentDigest: "sha256:bb", Tenant: "acme", CreatedAt: created, CPUCount: 2, MemTotalBytes: 1 << 30},
 	}}
 	ts := newTestServer(t, "sekret", mgr, nil)
 
@@ -262,8 +263,8 @@ func TestInfoListsThePromotedTemplatesOnTheWire(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	want := `"templates":[{"key":{"template":"app:v1","net":"none","size":"small"},"content_digest":"sha256:aa"},` +
-		`{"key":{"template":"app:v2","net":"none","size":"medium"},"content_digest":"sha256:bb","tenant":"acme"}]`
+	want := `"templates":[{"key":{"template":"app:v1","net":"none","size":"small"},"content_digest":"sha256:aa","created_at":"2026-09-28T01:02:03Z","cpu_count":1,"mem_total_bytes":536870912},` +
+		`{"key":{"template":"app:v2","net":"none","size":"medium"},"content_digest":"sha256:bb","tenant":"acme","created_at":"2026-09-28T01:02:03Z","cpu_count":2,"mem_total_bytes":1073741824}]`
 	if !strings.Contains(string(body), want) {
 		t.Errorf("info body %s, want it to carry %s", body, want)
 	}

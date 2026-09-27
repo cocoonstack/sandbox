@@ -459,11 +459,21 @@ func TestTemplatesListWhatTheNodeHoldsAcrossARestart(t *testing.T) {
 		t.Fatalf("publish keyless record: %v", err)
 	}
 
-	want := []TemplateInfo{{Key: keyA, ContentDigest: digestA}, {Key: keyB, ContentDigest: digestB, Tenant: "acme"}}
+	before := m.Templates()
+	spec, _ := testKey.Size.Spec()
 	restarted := newTestManagerAt(t, eng, dir)
 	got := restarted.Templates()
-	if len(got) != 2 || !slices.Contains(got, want[0]) || !slices.Contains(got, want[1]) {
-		t.Fatalf("Templates after restart %+v, want %+v", got, want)
+	if len(got) != 2 || len(before) != 2 {
+		t.Fatalf("Templates before %+v, after restart %+v, want tpl:a and tpl:b", before, got)
+	}
+	for _, want := range []TemplateInfo{{Key: keyA, ContentDigest: digestA}, {Key: keyB, ContentDigest: digestB, Tenant: "acme"}} {
+		i := slices.IndexFunc(got, func(t TemplateInfo) bool { return t.Key == want.Key })
+		j := slices.IndexFunc(before, func(t TemplateInfo) bool { return t.Key == want.Key })
+		if i < 0 || j < 0 || got[i].ContentDigest != want.ContentDigest || got[i].Tenant != want.Tenant ||
+			got[i].CreatedAt.IsZero() || !got[i].CreatedAt.Equal(before[j].CreatedAt) ||
+			got[i].CPUCount != spec.CPU || got[i].MemTotalBytes != spec.MemoryBytes {
+			t.Errorf("after restart %+v, want %+v created %v on the %+v tier", got, want, before, spec)
+		}
 	}
 	if hashes := restarted.TemplateHashes(); len(hashes) != 3 {
 		t.Errorf("gossip %v, want the keyless record still routed", hashes)
@@ -471,8 +481,8 @@ func TestTemplatesListWhatTheNodeHoldsAcrossARestart(t *testing.T) {
 	if err = restarted.DeleteTemplate(t.Context(), keyA, ""); err != nil {
 		t.Fatalf("DeleteTemplate: %v", err)
 	}
-	if got = restarted.Templates(); !slices.Equal(got, want[1:]) {
-		t.Errorf("Templates after delete %+v, want %+v", got, want[1:])
+	if got = restarted.Templates(); len(got) != 1 || got[0].Key != keyB {
+		t.Errorf("Templates after delete %+v, want tpl:b alone", got)
 	}
 	pooled := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: keyB})
 	if got = pooled.Templates(); len(got) != 0 {

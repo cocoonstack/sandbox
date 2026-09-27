@@ -423,7 +423,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	for _, r := range metas {
 		var rec templateRecord
 		if json.Unmarshal(r.Meta, &rec) == nil && rec.ID != "" {
-			m.tplSet[rec.ID] = TemplateInfo{Key: rec.Key, ContentDigest: r.Digest, Tenant: rec.Tenant}
+			m.tplSet[rec.ID] = TemplateInfo{Key: rec.Key, ContentDigest: r.Digest, Tenant: rec.Tenant, CreatedAt: rec.CreatedAt}
 		}
 	}
 	usage, err := newJournal(filepath.Join(cfg.DataDir, "usage.jsonl"))

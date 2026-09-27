@@ -5,13 +5,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestInfoReportsCapacityState(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.MarshalWrite(w, map[string]any{
 			"pools":              []any{},
-			"templates":          []any{map[string]any{"key": map[string]any{"template": "app:v1", "net": "none", "size": "small"}, "content_digest": "sha256:aa", "tenant": "acme"}},
+			"templates":          []any{map[string]any{"key": map[string]any{"template": "app:v1", "net": "none", "size": "small"}, "content_digest": "sha256:aa", "tenant": "acme", "created_at": "2026-09-28T01:02:03Z", "cpu_count": 1, "mem_total_bytes": 536870912}},
 			"claimed":            2,
 			"hibernated":         1,
 			"archived":           0,
@@ -28,7 +29,10 @@ func TestInfoReportsCapacityState(t *testing.T) {
 	if !info.AtCapacity || info.AtCapacityReason != "not enough memory" {
 		t.Errorf("capacity = %t/%q, want true/not enough memory", info.AtCapacity, info.AtCapacityReason)
 	}
-	want := TemplateStatus{Key: PoolKey{Template: "app:v1", Net: "none", Size: "small"}, ContentDigest: "sha256:aa", Tenant: "acme"}
+	want := TemplateStatus{
+		Key: PoolKey{Template: "app:v1", Net: "none", Size: "small"}, ContentDigest: "sha256:aa", Tenant: "acme",
+		CreatedAt: time.Date(2026, 9, 28, 1, 2, 3, 0, time.UTC), CPUCount: 1, MemTotalBytes: 512 << 20,
+	}
 	if len(info.Templates) != 1 || info.Templates[0] != want {
 		t.Errorf("templates = %+v, want [%+v]", info.Templates, want)
 	}

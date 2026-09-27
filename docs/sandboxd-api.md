@@ -686,7 +686,9 @@ count, the node's own address, and mesh peers:
 {"pools": [{"key": {"template": "base:24.04", "net": "none", "size": "small"},
             "warm": 4, "refilling": 0, "target": 4, "golden": true}],
  "templates": [{"key": {"template": "myproj:v1", "net": "none", "size": "small"},
-                "content_digest": "sha256:…", "tenant": "acme"}],
+                "content_digest": "sha256:…", "tenant": "acme",
+                "created_at": "2026-07-06T00:00:00Z", "cpu_count": 1,
+                "mem_total_bytes": 536870912}],
  "claimed": 2,
  "hibernated": 1,
  "archived": 0,
@@ -714,8 +716,9 @@ reason. Both capacity fields are omitted while refill is not capacity-blocked.
 sub-millisecond time.
 
 `templates` lists the [promoted templates](#post-v1sandboxesidpromote) this
-node holds: each one's full key, the `content_digest` its promote
-returned, and `tenant` when a tenant promoted it (omitted for the operator). A key
+node holds: each one's full key, the `content_digest` its promote returned,
+`created_at` of its last promote, the `cpu_count` and `mem_total_bytes` of its
+size tier, and `tenant` when a tenant promoted it (omitted for the operator). A key
 a configured pool now owns is left out, since claims of it clone the pool's
 golden. On a shared checkpoint store a node lists what it promoted plus what
 was in the store when it started. A template published by an older sandboxd is

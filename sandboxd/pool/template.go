@@ -20,6 +20,9 @@ type TemplateInfo struct {
 	Key           types.PoolKey `json:"key"`
 	ContentDigest string        `json:"content_digest"`
 	Tenant        string        `json:"tenant,omitempty"`
+	CreatedAt     time.Time     `json:"created_at"`
+	CPUCount      int           `json:"cpu_count,omitzero"`
+	MemTotalBytes int64         `json:"mem_total_bytes,omitzero"`
 }
 
 // templateRecord is a template's meta.json; an empty Tenant means the operator (root).
@@ -119,6 +122,8 @@ func (m *Manager) Templates() []TemplateInfo {
 	out := make([]TemplateInfo, 0, len(held))
 	for _, id := range slices.Sorted(maps.Keys(held)) {
 		if t := held[id]; t.Key.Template != "" {
+			spec, _ := t.Key.Size.Spec()
+			t.CPUCount, t.MemTotalBytes = spec.CPU, spec.MemoryBytes
 			out = append(out, t)
 		}
 	}
@@ -240,7 +245,8 @@ func (m *Manager) commitTemplate(ctx context.Context, staging string, key types.
 	if ownerErr := m.checkTemplateOwner(ctx, id, tenant); ownerErr != nil {
 		return "", ownerErr
 	}
-	meta, err := json.Marshal(templateRecord{ID: id, Key: key, Tenant: tenant, CreatedAt: time.Now()})
+	rec := templateRecord{ID: id, Key: key, Tenant: tenant, CreatedAt: time.Now()}
+	meta, err := json.Marshal(rec)
 	if err != nil {
 		return "", err
 	}
@@ -252,7 +258,7 @@ func (m *Manager) commitTemplate(ctx context.Context, staging string, key types.
 		return "", fmt.Errorf("publish template: %w", err)
 	}
 	m.tplMu.Lock()
-	m.tplSet[id] = TemplateInfo{Key: key, ContentDigest: digest, Tenant: tenant}
+	m.tplSet[id] = TemplateInfo{Key: key, ContentDigest: digest, Tenant: tenant, CreatedAt: rec.CreatedAt}
 	m.tplMu.Unlock()
 	return digest, nil
 }
