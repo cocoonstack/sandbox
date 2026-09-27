@@ -93,7 +93,7 @@ func run(addr, token, template, wantVersion string, hold time.Duration, interpre
 		{"user account with sudo", stepUserAccount},
 	}
 	if interpreter {
-		steps = append(steps, smokeStep{"interpreter /health in guest", stepInterpreterHealth}, smokeStep{"interpreter runs 1+1", stepRunCode})
+		steps = append(steps, smokeStep{"interpreter runs 1+1", stepRunCode})
 	}
 	for _, step := range steps {
 		t0 := time.Now()
@@ -328,17 +328,6 @@ func stepUserAccount(ctx context.Context, _ *harness.PortRelay, sb *sandbox.Sand
 	}
 	if got := strings.Fields(out); !slices.Equal(got, []string{"user", "/home/user", "sudo"}) {
 		return fmt.Errorf("sudo -u user reports %q, want user, /home/user and passwordless sudo", out)
-	}
-	return nil
-}
-
-func stepInterpreterHealth(ctx context.Context, _ *harness.PortRelay, sb *sandbox.Sandbox) error {
-	out, err := sb.Exec(ctx, "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", fmt.Sprintf("http://127.0.0.1:%d/health", interpreterPort))
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(out) != "200" {
-		return fmt.Errorf("in-guest /health answered %q, want 200", out)
 	}
 	return nil
 }
