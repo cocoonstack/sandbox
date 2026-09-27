@@ -110,8 +110,9 @@ peer can promote what another node pools and the two resolve to different
 content. Each node then answers with its own: a node holding a pool golden
 serves it to every claim for that key and ignores peer template
 advertisements, so volume and non-volume claims there never disagree. A volume
-claim that sets `require_promoted` is refused with 404 instead of being handed
-the pool golden, which lets the SDK walk on to a node that has the template.
+claim that sets `require_promoted`, a volume claim or a plain one, is refused
+with 404 instead of being handed the pool golden or a cold boot, which lets the
+SDK walk on to a node that has the template.
 
 `GET /v1/volumes` and the SDK discovery calls return the gossiped union filtered
 through the answering node's fleet-uniform access lists. `nodes` counts members
