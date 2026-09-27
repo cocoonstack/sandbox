@@ -57,10 +57,11 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   cannot hibernate, so `archive` on one answers 409 with the same error as a
   hibernate
 - `no_redirect` is set by the SDK when retrying at a redirect target
-- `require_promoted` is an internal redirect field of volume claims, the only
-  path that sets or reads it. When a redirect response sets it, copy it into
-  the `no_redirect` retry so the target cannot cold-boot a promoted template
-  name if its gossip view is stale
+- `require_promoted` provisions only from a promoted template: a claim carrying
+  it never cold-boots, and answers 404 unknown template when no record holds
+  the key. A redirect to a template's owner sets it; copy it into the
+  `no_redirect` retry so a target whose gossip view is stale refuses instead of
+  cold-booting an image named like the template
 - `volumes` is an ordered list of at most eight unique catalog names. `mount`
   defaults to `/volumes/<name>`; a custom value must be absolute and clean,
   outside the guest OS tree, unique, and non-nesting within the request.
@@ -175,8 +176,8 @@ the key but gossip names a template owner, and when the node is at
 ```
 
 Retry the same body (+`no_redirect: true`) at each candidate until one
-answers. Preserve `require_promoted: true` when the redirect carries it;
-ordinary redirects omit the field.
+answers. Preserve `require_promoted: true` when the redirect carries it, as a
+redirect to a template's owner does; warm-candidate redirects omit the field.
 
 A volume claim may consume an ordinary warm VM; candidate ranking, the
 promoted-template intersection, and the `no_redirect`/`require_promoted` retry

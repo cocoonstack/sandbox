@@ -253,7 +253,11 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		if s.redirectClaim(r.Context(), w, req, key, key.Hash(), tenant) {
 			return
 		}
-		sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), req.OnExpire, tenant, req.ClaimRef, req.Metadata, nil)
+		provision := s.mgr.ClaimProvision
+		if req.RequirePromoted {
+			provision = s.mgr.ClaimProvisionPromoted
+		}
+		sb, err = provision(r.Context(), key, req.TTL(), req.OnExpire, tenant, req.ClaimRef, req.Metadata, nil)
 	}
 	if errors.Is(err, pool.ErrQuota) && s.placer != nil && !req.NoRedirect &&
 		s.writeRedirect(w, s.placer.Candidates(key.Hash())) {
@@ -374,7 +378,11 @@ func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req t
 		return true
 	}
 	owners := s.templateOwners(s.placer.TemplateOwners, hash, tenant)
-	return len(owners) > 0 && !s.mgr.HasGolden(ctx, key, tenant) && s.writeRedirect(w, owners)
+	if len(owners) == 0 || s.mgr.HasGolden(ctx, key, tenant) {
+		return false
+	}
+	writeJSON(w, http.StatusOK, types.ClaimResponse{Redirect: s.clientAddrs(owners), RequirePromoted: true})
+	return true
 }
 
 func (s *Server) handleSandbox(w http.ResponseWriter, r *http.Request) {

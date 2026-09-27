@@ -1687,14 +1687,47 @@ func TestForeignTemplateGossipNeverEscalates(t *testing.T) {
 			if got := len(cr.Redirect) > 0; got != tt.wantRedirect {
 				t.Errorf("redirect=%v (%v), want %v", got, cr.Redirect, tt.wantRedirect)
 			}
-			if wantPromoted := tt.wantRedirect && tt.volumes != nil; cr.RequirePromoted != wantPromoted {
-				t.Errorf("require_promoted=%v, want %v (only the volume path pins it)", cr.RequirePromoted, wantPromoted)
+			if cr.RequirePromoted != tt.wantRedirect {
+				t.Errorf("require_promoted=%v, want %v: a redirect to a template's owner pins it", cr.RequirePromoted, tt.wantRedirect)
 			}
 			if mgr.provisionCalls != tt.wantProvision {
 				t.Errorf("provisions=%d, want %d", mgr.provisionCalls, tt.wantProvision)
 			}
 			if mgr.gotRequirePromoted {
 				t.Error("a local resolution must not be forced onto the promoted path")
+			}
+		})
+	}
+}
+
+func TestAPlainClaimRequiringAPromotedTemplateNeverColdBoots(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		require      bool
+		held         bool
+		wantStatus   int
+		wantPromoted bool
+	}{
+		{"required and held clones", true, true, http.StatusOK, true},
+		{"required and absent is 404", true, false, http.StatusNotFound, true},
+		{"not required provisions as before", false, false, http.StatusOK, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+				return &types.Sandbox{ID: "sb_1", Token: "tok"}, nil
+			}}
+			if !tt.held && tt.require {
+				mgr.claim = func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+					return nil, pool.ErrUnknownTemplate
+				}
+			}
+			ts := newTestServer(t, "sekret", mgr, nil)
+
+			body, _ := json.Marshal(types.ClaimRequest{Template: "ns/app", RequirePromoted: tt.require})
+			resp := postJSON(t, ts.URL+"/v1/claim", "sekret", string(body))
+			defer resp.Body.Close()
+			if resp.StatusCode != tt.wantStatus || mgr.provisionCalls != 1 || mgr.gotRequirePromoted != tt.wantPromoted {
+				t.Errorf("status=%d provisions=%d promoted=%v, want %d 1 %v", resp.StatusCode, mgr.provisionCalls, mgr.gotRequirePromoted, tt.wantStatus, tt.wantPromoted)
 			}
 		})
 	}
