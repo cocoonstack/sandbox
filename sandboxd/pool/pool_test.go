@@ -1163,6 +1163,9 @@ type fakeEngine struct {
 	imageIDs   map[string]string
 	imageErr   error
 	imageLists int
+
+	metadataDocs map[string]string
+	metadataErr  error
 }
 
 func newFakeEngine() *fakeEngine {
@@ -1279,6 +1282,19 @@ func (f *fakeEngine) SnapshotList(_ context.Context) ([]string, error) {
 		return nil, err
 	}
 	return snaps, nil
+}
+
+func (f *fakeEngine) WriteInstanceMetadata(_ context.Context, vsockSocket string, doc []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.metadataErr != nil {
+		return f.metadataErr
+	}
+	if f.metadataDocs == nil {
+		f.metadataDocs = map[string]string{}
+	}
+	f.metadataDocs[vsockSocket] = string(doc)
+	return nil
 }
 
 func (f *fakeEngine) ImageIDs(context.Context) (map[string]string, error) {

@@ -59,6 +59,16 @@ for the truth.
 - Enables `envd.service`, ordered after a guard unit, alongside `silkd.service`.
 - Ships the SDK's default account: `user`, home `/home/user`, passwordless
   sudo. `envd` itself defaults to root until its `/init` names `user`.
+- Runs `envd` in Firecracker mode, which reads its MMDS from
+  `169.254.169.254`. The guard unit aliases that address on `lo`, so silkd
+  serves the sandbox's
+  [instance-metadata document](sandboxd-api.md#put-v1sandboxesidinstance-metadata)
+  there, `{}` until the operator sets one. `envd`'s `/init` checks a token
+  against the document's `accessTokenHash`, so a forked child can take a new
+  token; with no hash, the first `/init` sets the token. Another guard rule
+  drops traffic to the alias from anywhere but `lo`. A document without a log
+  `address` leaves `envd`'s HTTP log exporter unstarted; it holds at most 8 MiB
+  of its own lines.
 - **amd64 only**: e2b publishes no arm64 build of `envd`.
 
 ## The code-interpreter flavor

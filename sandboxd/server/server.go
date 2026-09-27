@@ -4,6 +4,7 @@ package server
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
@@ -27,6 +28,7 @@ const (
 	// upgradeProtoTCP names the guest-port passthrough: raw bytes, no framing of ours.
 	upgradeProtoTCP = "tcp"
 	maxBodyBytes    = 1 << 20
+	maxMetadataDoc  = 4 << 10
 	previewTTL      = time.Hour
 )
 
@@ -47,6 +49,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrVolumeNeedsRecovery, http.StatusConflict, ""},
 	{pool.ErrArchived, http.StatusConflict, ""},
 	{pool.ErrPaused, http.StatusConflict, ""},
+	{pool.ErrNoInstanceMetadata, http.StatusConflict, ""},
 	{pool.ErrQuota, http.StatusTooManyRequests, ""},
 	{pool.ErrHealBusy, http.StatusServiceUnavailable, ""},
 	{pool.ErrPooledTemplate, http.StatusConflict, ""},
@@ -76,6 +79,7 @@ type Manager interface {
 	Sandboxes(tenant, claimRef string, metadata types.Metadata) []pool.SandboxSummary
 	Sandbox(id string) (pool.SandboxSummary, bool)
 	Stats(ctx context.Context, id string) (pool.SandboxStats, bool)
+	SetInstanceMetadata(ctx context.Context, id string, doc []byte) error
 	Audit(ctx context.Context, id string, line []byte)
 	AuditEnabled() bool
 	ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, onExpire types.ExpireAction, tenant string, metadata types.Metadata) (*types.Sandbox, error)
@@ -194,6 +198,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sandboxes/{id}/renew", s.handleRenew)
 	mux.HandleFunc("GET /v1/sandboxes/{id}", s.requireRoot(s.handleSandbox))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/stats", s.requireRoot(s.handleSandboxStats))
+	mux.HandleFunc("PUT /v1/sandboxes/{id}/instance-metadata", s.requireRoot(s.handleInstanceMetadata))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.requireToken(s.handleFork))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/promote", s.requireToken(s.handlePromote))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/preview", s.requireToken(s.handlePreview))
@@ -395,6 +400,23 @@ func (s *Server) handleSandboxStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) handleInstanceMetadata(w http.ResponseWriter, r *http.Request) {
+	doc, err := io.ReadAll(io.LimitReader(r.Body, maxMetadataDoc+1))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if v := jsontext.Value(doc); len(doc) > maxMetadataDoc || v.Kind() != '{' || !v.IsValid() {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("instance metadata must be one JSON object of at most %d bytes", maxMetadataDoc))
+		return
+	}
+	id := r.PathValue("id")
+	err = s.mgr.SetInstanceMetadata(r.Context(), id, doc)
+	writeResult(w, r, "instance metadata", id, "instance metadata failed", err, func() {
+		w.WriteHeader(http.StatusNoContent)
+	})
 }
 
 func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id string, cred pool.Cred) error) http.HandlerFunc {

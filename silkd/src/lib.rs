@@ -5,6 +5,7 @@ pub mod find;
 pub mod forward;
 pub mod fs;
 pub mod git;
+pub mod imds;
 pub mod lsp;
 pub mod net;
 pub mod net_egress;

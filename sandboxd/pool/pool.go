@@ -93,7 +93,8 @@ var (
 	// Replaying a journal takes a writable mount, so readers stay out.
 	ErrVolumeNeedsRecovery = errors.New("volume needs recovery by a writable claim")
 	ErrArchived            = errors.New("sandbox is archived; an exec or file call wakes it first")
-	ErrPaused              = errors.New("sandbox is paused; an operator port dial does not wake it")
+	ErrPaused              = errors.New("sandbox is paused; an operator call does not wake it")
+	ErrNoInstanceMetadata  = engine.ErrNoInstanceMetadata
 	ErrQuota               = errors.New("node claim quota reached")
 
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
@@ -125,6 +126,7 @@ type Engine interface {
 	MountVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
 	UnmountVolume(ctx context.Context, vsockSocket, mount string) error
 	SyncGuest(ctx context.Context, vsockSocket string) error
+	WriteInstanceMetadata(ctx context.Context, vsockSocket string, doc []byte) error
 }
 
 // SandboxSummary is the ops view of one live claim.

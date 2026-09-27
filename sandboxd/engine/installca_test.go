@@ -3,6 +3,7 @@ package engine
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"encoding/json/v2"
 	"fmt"
 	"io"
@@ -75,6 +76,7 @@ type fakeSilkd struct {
 	execCode   int32
 	execFailAt int
 	writeErr   string
+	writeKind  string
 	execErr    string
 	block      []wire.DirEntry
 	serial     map[string][]byte
@@ -174,10 +176,10 @@ func (f *fakeSilkd) handleWrite(conn net.Conn, r *bufio.Reader, path string, mod
 	}
 	f.mu.Lock()
 	f.writePath, f.writeMode, f.writeData = path, mode, data
-	reply := f.writeErr
+	reply, kind := f.writeErr, cmp.Or(f.writeKind, wire.KindInternal)
 	f.mu.Unlock()
 	if reply != "" {
-		_, _ = io.WriteString(conn, `{"type":"error","kind":"internal","message":"`+reply+`"}`+"\n")
+		_, _ = io.WriteString(conn, `{"type":"error","kind":"`+kind+`","message":"`+reply+`"}`+"\n")
 		return
 	}
 	_, _ = io.WriteString(conn, `{"type":"done"}`+"\n")

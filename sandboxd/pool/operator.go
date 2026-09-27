@@ -35,6 +35,25 @@ func (m *Manager) Wake(ctx context.Context, id string, cred Cred) error {
 	return m.wake(ctx, sb)
 }
 
+// SetInstanceMetadata replaces a running sandbox's instance-metadata document; a paused or archived one is refused, not woken.
+func (m *Manager) SetInstanceMetadata(ctx context.Context, id string, doc []byte) error {
+	sb, ok := m.byID(id)
+	if !ok {
+		return ErrUnknownSandbox
+	}
+	if !sb.Transition.TryLock() {
+		return ErrPaused
+	}
+	defer sb.Transition.Unlock()
+	switch {
+	case sb.ArchiveCk != "":
+		return ErrArchived
+	case sb.HibernateSnap != "" || sb.PendingSnap != "":
+		return ErrPaused
+	}
+	return m.eng.WriteInstanceMetadata(ctx, sb.VsockSocket, doc)
+}
+
 // resolve authorizes id under cred; an unclaimed slot must never match an empty token.
 func (m *Manager) resolve(id string, cred Cred) (*types.Sandbox, bool) {
 	if cred.Operator {

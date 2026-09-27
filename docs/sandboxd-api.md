@@ -42,7 +42,7 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
 - `metadata` is an optional map of caller labels, echoed and filterable by
   the [sandbox index](#get-v1sandboxes): at most 16 pairs, each key 1 to 128
   bytes of printable ASCII without `=` or `&` (list filters encode pairs as
-  `key=value`, and the e2b list API joins them with `&`), each value at most
+  `key=value`, and a query string joins pairs with `&`), each value at most
   512 bytes of printable UTF-8, and at most 4 KiB as JSON, so quotes and
   backslashes count twice. Labels are fixed at claim time; no verb edits them
 - `on_expire` is what the node does when the lease ends: `destroy`, the
@@ -557,6 +557,21 @@ the host VMM process's resident set — the only usage signal available
 without a guest agent; `mem_used_measured` is false when there is no VMM
 process to read (hibernated, or the PID is not yet known), so a zero is
 never mistaken for idle. 404 unknown id.
+
+## PUT /v1/sandboxes/{id}/instance-metadata
+
+Auth: root only. Sets the sandbox's instance-metadata document: the JSON a guest
+agent reads from `169.254.169.254` in the IMDSv2 shape, as cloud-init and
+similar agents do (`PUT /latest/api/token`, then `GET /` with the
+`X-metadata-token` header). It is unrelated to the claim's `metadata` labels.
+The body is one JSON object of at most 4 KiB, stored and served verbatim, and
+guests read `{}` until the first call. The node writes it to
+`/run/silkd/instance-metadata.json` in the guest atomically, so repeating a call
+is a no-op. silkd serves the address only in images that alias it on `lo`.
+
+204 on success; 400 when the body is not one JSON object within the bound; 404
+unknown id; 409 when the sandbox is hibernated, mid-transition or archived (this
+verb never wakes one) or its image serves no instance metadata.
 
 ## GET /metrics
 
