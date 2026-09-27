@@ -16,6 +16,7 @@ type NodeInfo struct {
 	Hibernated       int          `json:"hibernated"`
 	Archived         int          `json:"archived"`
 	Draining         bool         `json:"draining,omitzero"`
+	AdvertiseAddr    string       `json:"advertise_addr,omitempty"`
 	Peers            []string     `json:"peers,omitempty"`
 	AtCapacity       bool         `json:"at_capacity,omitzero"`
 	AtCapacityReason string       `json:"at_capacity_reason,omitempty"`
