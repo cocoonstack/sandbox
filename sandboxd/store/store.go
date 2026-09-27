@@ -32,6 +32,12 @@ var (
 	TemplateIDRe   = regexp.MustCompile(`^tp_[0-9a-f]{32}$`)
 )
 
+// Record is one published record's metadata and its export digest, empty when published undigested.
+type Record struct {
+	Meta   []byte
+	Digest string
+}
+
 // Store is one record backend.
 type Store interface {
 	// Stage returns a writable staging directory whose Publish is atomic.
@@ -44,8 +50,8 @@ type Store interface {
 	Fetch(ctx context.Context, id string) (dir string, meta []byte, digest string, err error)
 	// ReadMeta returns a record's metadata, or an error when the record does not exist.
 	ReadMeta(ctx context.Context, id string) ([]byte, error)
-	// Metas lists the metadata of every record in this instance's id namespace.
-	Metas(ctx context.Context) ([][]byte, error)
+	// Metas lists the metadata and digest of every record in this instance's id namespace.
+	Metas(ctx context.Context) ([]Record, error)
 	// Delete removes a record.
 	Delete(ctx context.Context, id string) error
 	// SweepStaging removes abandoned staging left by a crash mid-publish.

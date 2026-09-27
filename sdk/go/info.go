@@ -11,15 +11,16 @@ const peersTimeout = 5 * time.Second
 
 // NodeInfo is one node's operational state from GET /v1/info.
 type NodeInfo struct {
-	Pools            []PoolStatus `json:"pools"`
-	Claimed          int          `json:"claimed"`
-	Hibernated       int          `json:"hibernated"`
-	Archived         int          `json:"archived"`
-	Draining         bool         `json:"draining,omitzero"`
-	AdvertiseAddr    string       `json:"advertise_addr,omitempty"`
-	Peers            []string     `json:"peers,omitempty"`
-	AtCapacity       bool         `json:"at_capacity,omitzero"`
-	AtCapacityReason string       `json:"at_capacity_reason,omitempty"`
+	Pools            []PoolStatus     `json:"pools"`
+	Templates        []TemplateStatus `json:"templates"`
+	Claimed          int              `json:"claimed"`
+	Hibernated       int              `json:"hibernated"`
+	Archived         int              `json:"archived"`
+	Draining         bool             `json:"draining,omitzero"`
+	AdvertiseAddr    string           `json:"advertise_addr,omitempty"`
+	Peers            []string         `json:"peers,omitempty"`
+	AtCapacity       bool             `json:"at_capacity,omitzero"`
+	AtCapacityReason string           `json:"at_capacity_reason,omitempty"`
 }
 
 // PoolKey identifies one warm pool on a node.
@@ -36,6 +37,16 @@ type PoolStatus struct {
 	Refilling int     `json:"refilling"`
 	Target    int     `json:"target"`
 	Golden    bool    `json:"golden"`
+}
+
+// TemplateStatus reports one promoted template a node holds; an empty Tenant means the operator.
+type TemplateStatus struct {
+	Key           PoolKey   `json:"key"`
+	ContentDigest string    `json:"content_digest"`
+	Tenant        string    `json:"tenant,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	CPUCount      int       `json:"cpu_count,omitzero"`
+	MemTotalBytes int64     `json:"mem_total_bytes,omitzero"`
 }
 
 // SandboxSummary is one live claim as the scoped index reports it; never a

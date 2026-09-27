@@ -86,11 +86,11 @@ func (d *Store) Fetch(ctx context.Context, id string) (string, []byte, string, e
 	case statErr != nil:
 		return "", nil, "", statErr
 	}
-	digest, err := os.ReadFile(filepath.Join(d.root, id, digestName(meta))) //nolint:gosec // id pinned by the instance idRe
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return "", nil, "", fmt.Errorf("read digest: %w", err)
+	digest, err := d.readDigest(id, meta)
+	if err != nil {
+		return "", nil, "", err
 	}
-	return dir, meta, string(digest), nil
+	return dir, meta, digest, nil
 }
 
 func (d *Store) ReadMeta(_ context.Context, id string) ([]byte, error) {
@@ -101,12 +101,12 @@ func (d *Store) ReadMeta(_ context.Context, id string) ([]byte, error) {
 	return raw, err
 }
 
-func (d *Store) Metas(ctx context.Context) ([][]byte, error) {
+func (d *Store) Metas(ctx context.Context) ([]store.Record, error) {
 	entries, err := os.ReadDir(d.root)
 	if err != nil {
 		return nil, err
 	}
-	var metas [][]byte
+	var recs []store.Record
 	for _, e := range entries {
 		if !e.IsDir() || !d.idRe.MatchString(e.Name()) {
 			continue
@@ -114,13 +114,18 @@ func (d *Store) Metas(ctx context.Context) ([][]byte, error) {
 		raw, err := d.ReadMeta(ctx, e.Name())
 		switch {
 		case err == nil:
-			metas = append(metas, raw)
 		case errors.Is(err, store.ErrNotFound): // absence mid-list is a race
+			continue
 		default:
 			return nil, err // a corrupt or unreadable meta must not vanish silently
 		}
+		digest, err := d.readDigest(e.Name(), raw)
+		if err != nil {
+			return nil, err
+		}
+		recs = append(recs, store.Record{Meta: raw, Digest: digest})
 	}
-	return metas, nil
+	return recs, nil
 }
 
 func (d *Store) Delete(_ context.Context, id string) error {
@@ -274,6 +279,14 @@ func (d *Store) sweepGenerations(id string) (err error) {
 		}
 	}
 	return nil
+}
+
+func (d *Store) readDigest(id string, meta []byte) (string, error) {
+	digest, err := os.ReadFile(filepath.Join(d.root, id, digestName(meta))) //nolint:gosec // id pinned by the instance idRe
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("read digest: %w", err)
+	}
+	return string(digest), nil
 }
 
 func touchCurrentGeneration(final string, now time.Time) error {

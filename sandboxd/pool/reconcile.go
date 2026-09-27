@@ -256,9 +256,9 @@ func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string
 		logger.Warnf(ctx, "list archive cks skipped: %v", err)
 		return
 	}
-	for _, raw := range metas {
+	for _, rec := range metas {
 		var ckpt types.Checkpoint
-		if json.Unmarshal(raw, &ckpt) != nil || !ckpt.Archive {
+		if json.Unmarshal(rec.Meta, &ckpt) != nil || !ckpt.Archive {
 			continue
 		}
 		orig, mine := claims[ckpt.SandboxID]

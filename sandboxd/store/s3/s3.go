@@ -148,7 +148,7 @@ func (s *Store) ReadMeta(ctx context.Context, id string) ([]byte, error) {
 	return meta, err
 }
 
-func (s *Store) Metas(ctx context.Context) ([][]byte, error) {
+func (s *Store) Metas(ctx context.Context) ([]store.Record, error) {
 	// delimiter listing yields one CommonPrefix per record instead of every export object.
 	var ids []string
 	p := awss3.NewListObjectsV2Paginator(s.client, &awss3.ListObjectsV2Input{
@@ -166,26 +166,26 @@ func (s *Store) Metas(ctx context.Context) ([][]byte, error) {
 			}
 		}
 	}
-	metas := make([][]byte, len(ids))
+	recs := make([]store.Record, len(ids))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(metaReadConcurrency)
 	for i, id := range ids {
 		g.Go(func() error {
-			raw, err := s.ReadMeta(gctx, id)
+			raw, digest, err := s.readMeta(gctx, id)
 			if errors.Is(err, store.ErrNotFound) {
 				return nil // absence mid-list is a race, not a failure
 			}
 			if err != nil {
 				return err
 			}
-			metas[i] = raw
+			recs[i] = store.Record{Meta: raw, Digest: digest}
 			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
-	return slices.DeleteFunc(metas, func(m []byte) bool { return m == nil }), nil
+	return slices.DeleteFunc(recs, func(r store.Record) bool { return r.Meta == nil }), nil
 }
 
 func (s *Store) Delete(ctx context.Context, id string) error {

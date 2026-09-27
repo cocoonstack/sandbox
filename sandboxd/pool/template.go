@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,11 +15,22 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+// TemplateInfo is the ops view of one promoted template; an empty Tenant means the operator (root).
+type TemplateInfo struct {
+	Key           types.PoolKey `json:"key"`
+	ContentDigest string        `json:"content_digest"`
+	Tenant        string        `json:"tenant,omitempty"`
+	CreatedAt     time.Time     `json:"created_at"`
+	CPUCount      int           `json:"cpu_count,omitzero"`
+	MemTotalBytes int64         `json:"mem_total_bytes,omitzero"`
+}
+
 // templateRecord is a template's meta.json; an empty Tenant means the operator (root).
 type templateRecord struct {
-	ID        string    `json:"id"`
-	Tenant    string    `json:"tenant,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        string        `json:"id"`
+	Key       types.PoolKey `json:"key"`
+	Tenant    string        `json:"tenant,omitempty"`
+	CreatedAt time.Time     `json:"created_at"`
 }
 
 // Promote publishes a claimed sandbox as a template under (template, parent net, parent size).
@@ -104,23 +116,27 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant 
 	return nil
 }
 
-// TemplateHashes lists the promoted-template key hashes for mesh gossip, sorted for its guard.
-func (m *Manager) TemplateHashes() []string {
-	m.mu.Lock()
-	pooled := make(map[string]struct{}, len(m.pools))
-	for _, p := range m.pools {
-		pooled[p.hash] = struct{}{}
-	}
-	m.mu.Unlock()
-	m.tplMu.Lock()
-	hashes := make([]string, 0, len(m.tplSet))
-	for id, tenant := range m.tplSet {
-		hash := store.TemplateHash(id)
-		if _, ok := pooled[hash]; !ok {
-			hashes = append(hashes, types.TemplateGossipHash(hash, tenant))
+// Templates lists the promoted templates this node holds and no pool owns, in key-hash order like Info's pools; one published before keys were recorded is listed once re-promoted.
+func (m *Manager) Templates() []TemplateInfo {
+	held := m.unpooledTemplates()
+	out := make([]TemplateInfo, 0, len(held))
+	for _, id := range slices.Sorted(maps.Keys(held)) {
+		if t := held[id]; t.Key.Template != "" {
+			spec, _ := t.Key.Size.Spec()
+			t.CPUCount, t.MemTotalBytes = spec.CPU, spec.MemoryBytes
+			out = append(out, t)
 		}
 	}
-	m.tplMu.Unlock()
+	return out
+}
+
+// TemplateHashes lists the promoted-template key hashes for mesh gossip, sorted for its guard.
+func (m *Manager) TemplateHashes() []string {
+	held := m.unpooledTemplates()
+	hashes := make([]string, 0, len(held))
+	for id, t := range held {
+		hashes = append(hashes, types.TemplateGossipHash(store.TemplateHash(id), t.Tenant))
+	}
 	slices.Sort(hashes)
 	return hashes
 }
@@ -145,8 +161,9 @@ func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, te
 	}
 	id := store.TemplateID(key.Hash())
 	m.tplMu.Lock()
-	owner, cached := m.tplSet[id]
+	held, cached := m.tplSet[id]
 	m.tplMu.Unlock()
+	owner := held.Tenant
 	if !cached {
 		// only a shared-store template promoted elsewhere after startup.
 		raw, err := m.tpls.ReadMeta(ctx, id)
@@ -160,6 +177,25 @@ func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, te
 		owner = rec.Tenant
 	}
 	return owner == "" || tenantOwns(tenant, owner)
+}
+
+// unpooledTemplates copies the held templates by id, less any key a pool now owns.
+func (m *Manager) unpooledTemplates() map[string]TemplateInfo {
+	m.mu.Lock()
+	pooled := make(map[string]struct{}, len(m.pools))
+	for _, p := range m.pools {
+		pooled[p.hash] = struct{}{}
+	}
+	m.mu.Unlock()
+	m.tplMu.Lock()
+	defer m.tplMu.Unlock()
+	held := make(map[string]TemplateInfo, len(m.tplSet))
+	for id, t := range m.tplSet {
+		if _, ok := pooled[store.TemplateHash(id)]; !ok {
+			held[id] = t
+		}
+	}
+	return held
 }
 
 func (m *Manager) pooled(key types.PoolKey) bool {
@@ -198,17 +234,19 @@ func (m *Manager) publishTemplate(ctx context.Context, snap string, key types.Po
 	if err = m.eng.SnapshotExport(ctx, snap, filepath.Join(staging, store.ExportDir)); err != nil {
 		return "", fmt.Errorf("export template: %w", err)
 	}
-	return m.commitTemplate(ctx, staging, id, tenant)
+	return m.commitTemplate(ctx, staging, key, tenant)
 }
 
-func (m *Manager) commitTemplate(ctx context.Context, staging, id, tenant string) (string, error) {
+func (m *Manager) commitTemplate(ctx context.Context, staging string, key types.PoolKey, tenant string) (string, error) {
+	id := store.TemplateID(key.Hash())
 	l := m.recLock(id)
 	l.Lock()
 	defer func() { l.Unlock(); m.recDone(id) }()
 	if ownerErr := m.checkTemplateOwner(ctx, id, tenant); ownerErr != nil {
 		return "", ownerErr
 	}
-	meta, err := json.Marshal(templateRecord{ID: id, Tenant: tenant, CreatedAt: time.Now()})
+	rec := templateRecord{ID: id, Key: key, Tenant: tenant, CreatedAt: time.Now()}
+	meta, err := json.Marshal(rec)
 	if err != nil {
 		return "", err
 	}
@@ -220,7 +258,7 @@ func (m *Manager) commitTemplate(ctx context.Context, staging, id, tenant string
 		return "", fmt.Errorf("publish template: %w", err)
 	}
 	m.tplMu.Lock()
-	m.tplSet[id] = tenant
+	m.tplSet[id] = TemplateInfo{Key: key, ContentDigest: digest, Tenant: tenant, CreatedAt: rec.CreatedAt}
 	m.tplMu.Unlock()
 	return digest, nil
 }

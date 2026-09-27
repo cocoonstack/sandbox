@@ -61,7 +61,7 @@ func RunContract(t *testing.T, st store.Store) {
 	if err != nil {
 		t.Fatalf("Metas: %v", err)
 	}
-	if !slices.ContainsFunc(metas, func(m []byte) bool { return string(m) == `{"id":"`+id+`"}` }) || len(metas) != 1 {
+	if !slices.ContainsFunc(metas, func(r store.Record) bool { return string(r.Meta) == `{"id":"`+id+`"}` }) || len(metas) != 1 {
 		t.Fatalf("Metas: %d records %q, want exactly the published one", len(metas), metas)
 	}
 
@@ -139,6 +139,10 @@ func runDigestContract(t *testing.T, st store.Store) {
 	}
 	if fetchedDigest != want {
 		t.Errorf("Fetch digest %q, want %q", fetchedDigest, want)
+	}
+	recs, err := st.Metas(ctx)
+	if err != nil || len(recs) != 1 || recs[0].Digest != want {
+		t.Errorf("Metas %+v, %v; want the one record with digest %q", recs, err, want)
 	}
 	rejectNonRegularReplacement(t, st, id, want)
 	if err = st.Delete(ctx, id); err != nil {
