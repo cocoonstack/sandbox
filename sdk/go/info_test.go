@@ -11,6 +11,7 @@ func TestInfoReportsCapacityState(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.MarshalWrite(w, map[string]any{
 			"pools":              []any{},
+			"templates":          []any{map[string]any{"key": map[string]any{"template": "app:v1", "net": "none", "size": "small"}, "content_digest": "sha256:aa", "tenant": "acme"}},
 			"claimed":            2,
 			"hibernated":         1,
 			"archived":           0,
@@ -26,6 +27,10 @@ func TestInfoReportsCapacityState(t *testing.T) {
 	}
 	if !info.AtCapacity || info.AtCapacityReason != "not enough memory" {
 		t.Errorf("capacity = %t/%q, want true/not enough memory", info.AtCapacity, info.AtCapacityReason)
+	}
+	want := TemplateStatus{Key: PoolKey{Template: "app:v1", Net: "none", Size: "small"}, ContentDigest: "sha256:aa", Tenant: "acme"}
+	if len(info.Templates) != 1 || info.Templates[0] != want {
+		t.Errorf("templates = %+v, want [%+v]", info.Templates, want)
 	}
 }
 

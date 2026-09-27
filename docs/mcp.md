@@ -42,7 +42,7 @@ in the guest, which can hold its reply up to 5 s past the cap.
 | `hibernate` | snapshot + stop, freeing memory while keeping id, files and processes; the next call that reaches the guest wakes it |
 | `promote` | publish the sandbox as a named template on its node; re-promoting replaces it |
 | `release` | destroy the sandbox and its files; the session forgets the id, so a second release is rejected as unknown |
-| `node_info` | warm pools, live claims, drain state, capacity and mesh peers |
+| `node_info` | warm pools, promoted templates, live claims, drain state, capacity and mesh peers |
 
 Sandbox handles (and their tokens) are held by the server process for the
 session, and released with it: when the MCP client disconnects or the server

@@ -223,7 +223,7 @@ func TestResolveGoldenSkipsPromotedEgressTemplate(t *testing.T) {
 	if err = os.MkdirAll(filepath.Join(staging, store.ExportDir), 0o750); err != nil {
 		t.Fatalf("mkdir export: %v", err)
 	}
-	if _, err = m.commitTemplate(t.Context(), staging, id, ""); err != nil {
+	if _, err = m.commitTemplate(t.Context(), staging, egKey, ""); err != nil {
 		t.Fatalf("seed template: %v", err)
 	}
 	golden, err := m.resolveGolden(t.Context(), egKey, "")
@@ -276,10 +276,10 @@ func TestCommitTemplateRechecksOwnerUnderLock(t *testing.T) {
 		}
 		return staging
 	}
-	if _, err := m.commitTemplate(t.Context(), stage(), id, "acme"); err != nil {
+	if _, err := m.commitTemplate(t.Context(), stage(), testKey, "acme"); err != nil {
 		t.Fatalf("acme publish: %v", err)
 	}
-	if _, err := m.commitTemplate(t.Context(), stage(), id, "beta"); !errors.Is(err, ErrTemplateOwned) {
+	if _, err := m.commitTemplate(t.Context(), stage(), testKey, "beta"); !errors.Is(err, ErrTemplateOwned) {
 		t.Errorf("beta publish over acme: %v, want ErrTemplateOwned", err)
 	}
 }
@@ -427,6 +427,56 @@ func TestTemplateHashesSortedForMeshCompare(t *testing.T) {
 	}
 	if !slices.IsSorted(hashes) {
 		t.Errorf("TemplateHashes not sorted: %v", hashes)
+	}
+}
+
+func TestTemplatesListWhatTheNodeHoldsAcrossARestart(t *testing.T) {
+	eng := newFakeEngine()
+	dir := t.TempDir()
+	m := newTestManagerAt(t, eng, dir)
+	parent := mustClaim(t, m, testKey)
+	keyA, digestA, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:a", "")
+	if err != nil {
+		t.Fatalf("Promote tpl:a: %v", err)
+	}
+	acme := claimTenant(t, m, "acme")
+	keyB, digestB, err := m.Promote(t.Context(), acme.ID, Cred{Token: acme.Token}, "tpl:b", "acme")
+	if err != nil {
+		t.Fatalf("Promote tpl:b: %v", err)
+	}
+	oldID := store.TemplateID(types.PoolKey{Template: "tpl:old", Net: testKey.Net, Size: testKey.Size}.Hash())
+	staging, err := m.tpls.Stage(oldID)
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	if err = os.MkdirAll(filepath.Join(staging, store.ExportDir), 0o750); err != nil {
+		t.Fatalf("mkdir export: %v", err)
+	}
+	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+oldID+`","created_at":"2026-01-01T00:00:00Z"}`), 0o600); err != nil {
+		t.Fatalf("write keyless meta: %v", err)
+	}
+	if _, err = m.tpls.PublishDigested(t.Context(), staging, oldID); err != nil {
+		t.Fatalf("publish keyless record: %v", err)
+	}
+
+	want := []TemplateInfo{{Key: keyA, ContentDigest: digestA}, {Key: keyB, ContentDigest: digestB, Tenant: "acme"}}
+	restarted := newTestManagerAt(t, eng, dir)
+	got := restarted.Templates()
+	if len(got) != 2 || !slices.Contains(got, want[0]) || !slices.Contains(got, want[1]) {
+		t.Fatalf("Templates after restart %+v, want %+v", got, want)
+	}
+	if hashes := restarted.TemplateHashes(); len(hashes) != 3 {
+		t.Errorf("gossip %v, want the keyless record still routed", hashes)
+	}
+	if err = restarted.DeleteTemplate(t.Context(), keyA, ""); err != nil {
+		t.Fatalf("DeleteTemplate: %v", err)
+	}
+	if got = restarted.Templates(); !slices.Equal(got, want[1:]) {
+		t.Errorf("Templates after delete %+v, want %+v", got, want[1:])
+	}
+	pooled := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: keyB})
+	if got = pooled.Templates(); len(got) != 0 {
+		t.Errorf("Templates %+v, want none once a pool owns tpl:b's key", got)
 	}
 }
 

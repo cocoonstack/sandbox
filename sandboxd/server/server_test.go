@@ -241,6 +241,34 @@ func TestInfoReportsTheNodeAdvertiseAddr(t *testing.T) {
 	}
 }
 
+func TestInfoListsThePromotedTemplatesOnTheWire(t *testing.T) {
+	mgr := &fakeManager{infoTemplates: []pool.TemplateInfo{
+		{Key: types.PoolKey{Template: "app:v1", Net: types.NetNone, Size: types.SizeSmall}, ContentDigest: "sha256:aa"},
+		{Key: types.PoolKey{Template: "app:v2", Net: types.NetNone, Size: types.SizeMedium}, ContentDigest: "sha256:bb", Tenant: "acme"},
+	}}
+	ts := newTestServer(t, "sekret", mgr, nil)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/info", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer sekret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	want := `"templates":[{"key":{"template":"app:v1","net":"none","size":"small"},"content_digest":"sha256:aa"},` +
+		`{"key":{"template":"app:v2","net":"none","size":"medium"},"content_digest":"sha256:bb","tenant":"acme"}]`
+	if !strings.Contains(string(body), want) {
+		t.Errorf("info body %s, want it to carry %s", body, want)
+	}
+}
+
 func TestAPITokenGuard(t *testing.T) {
 	ts := newTestServer(t, "sekret", &fakeManager{}, nil)
 
@@ -2315,6 +2343,7 @@ type fakeManager struct {
 	setPools            func(pools []config.PoolSpec) error
 	setInstanceMetadata func(id string, doc []byte) error
 	infoPools           []pool.PoolInfo
+	infoTemplates       []pool.TemplateInfo
 	claimDeadline       func(id, token string) (time.Time, error)
 
 	gotTenant          string
@@ -2574,6 +2603,8 @@ func (f *fakeManager) SetPools(_ context.Context, pools []config.PoolSpec) error
 func (f *fakeManager) Info() ([]pool.PoolInfo, pool.Gauges) {
 	return f.infoPools, pool.Gauges{Draining: f.draining}
 }
+
+func (f *fakeManager) Templates() []pool.TemplateInfo { return f.infoTemplates }
 
 func (f *fakeManager) Drain(context.Context) { f.draining = true }
 

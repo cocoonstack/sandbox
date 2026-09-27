@@ -314,7 +314,7 @@ type stallingMetasStore struct {
 	release chan struct{}
 }
 
-func (s *stallingMetasStore) Metas(ctx context.Context) ([][]byte, error) {
+func (s *stallingMetasStore) Metas(ctx context.Context) ([]store.Record, error) {
 	select {
 	case s.entered <- struct{}{}:
 	default:

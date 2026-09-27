@@ -315,9 +315,9 @@ type Manager struct {
 	genSweeping  atomic.Bool
 	recommitting atomic.Bool
 
-	// tplSet caches each template id against its owning tenant ("" = operator).
+	// tplSet caches each template id's key, digest and owning tenant ("" = operator).
 	tplMu  sync.Mutex
-	tplSet map[string]string
+	tplSet map[string]TemplateInfo
 
 	// recLocks serializes same-id record mutations; an entry evicts only when no holder remains, never on a bare delete, since a peer heal can republish the id.
 	recLocks   map[string]*sync.RWMutex
@@ -415,15 +415,15 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		return nil, err
 	}
 	m.ckptTTL = time.Duration(cfg.CheckpointTTLHours) * time.Hour
-	m.tplSet = map[string]string{}
+	m.tplSet = map[string]TemplateInfo{}
 	metas, listErr := m.tpls.Metas(ctx)
 	if listErr != nil {
 		log.WithFunc("pool.NewManager").Warnf(ctx, "list templates skipped: %v", listErr)
 	}
-	for _, raw := range metas {
+	for _, r := range metas {
 		var rec templateRecord
-		if json.Unmarshal(raw, &rec) == nil && rec.ID != "" {
-			m.tplSet[rec.ID] = rec.Tenant
+		if json.Unmarshal(r.Meta, &rec) == nil && rec.ID != "" {
+			m.tplSet[rec.ID] = TemplateInfo{Key: rec.Key, ContentDigest: r.Digest, Tenant: rec.Tenant}
 		}
 	}
 	usage, err := newJournal(filepath.Join(cfg.DataDir, "usage.jsonl"))

@@ -679,12 +679,14 @@ to claim and fork responses. Used by the SDK's `Lookup` scatter.
 
 ## GET /v1/info
 
-Auth: root only (tenant tokens get 403). Node pools, claim count, the node's
-own address, and mesh peers:
+Auth: root only (tenant tokens get 403). Node pools, promoted templates, claim
+count, the node's own address, and mesh peers:
 
 ```json
 {"pools": [{"key": {"template": "base:24.04", "net": "none", "size": "small"},
             "warm": 4, "refilling": 0, "target": 4, "golden": true}],
+ "templates": [{"key": {"template": "myproj:v1", "net": "none", "size": "small"},
+                "content_digest": "sha256:…", "tenant": "acme"}],
  "claimed": 2,
  "hibernated": 1,
  "archived": 0,
@@ -710,6 +712,14 @@ reason. Both capacity fields are omitted while refill is not capacity-blocked.
 `golden` reports whether the pool's snapshot exists (refill can clone);
 `warm` at `target` with `golden: true` means warm claims are served in
 sub-millisecond time.
+
+`templates` lists the [promoted templates](#post-v1sandboxesidpromote) this
+node holds: each one's full key, the `content_digest` its promote
+returned, and `tenant` when a tenant promoted it (omitted for the operator). A key
+a configured pool now owns is left out, since claims of it clone the pool's
+golden. On a shared checkpoint store a node lists what it promoted plus what
+was in the store when it started. A template published by an older sandboxd is
+listed once it is re-promoted.
 
 ## GET /v1/peers
 

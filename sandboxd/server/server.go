@@ -99,6 +99,7 @@ type Manager interface {
 	Drain(ctx context.Context)
 	Uncordon(ctx context.Context)
 	Info() ([]pool.PoolInfo, pool.Gauges)
+	Templates() []pool.TemplateInfo
 }
 
 // Dialer opens the hybrid-vsock connection to a VM's silkd.
@@ -127,15 +128,16 @@ type CheckpointProber interface {
 
 // InfoResponse is the wire reply of GET /v1/info.
 type InfoResponse struct {
-	Pools            []pool.PoolInfo `json:"pools"`
-	Claimed          int             `json:"claimed"`
-	Hibernated       int             `json:"hibernated"`
-	Archived         int             `json:"archived"`
-	Draining         bool            `json:"draining,omitzero"`
-	AdvertiseAddr    string          `json:"advertise_addr,omitempty"`
-	Peers            []string        `json:"peers,omitempty"`
-	AtCapacity       bool            `json:"at_capacity,omitzero"`
-	AtCapacityReason string          `json:"at_capacity_reason,omitempty"`
+	Pools            []pool.PoolInfo     `json:"pools"`
+	Templates        []pool.TemplateInfo `json:"templates"`
+	Claimed          int                 `json:"claimed"`
+	Hibernated       int                 `json:"hibernated"`
+	Archived         int                 `json:"archived"`
+	Draining         bool                `json:"draining,omitzero"`
+	AdvertiseAddr    string              `json:"advertise_addr,omitempty"`
+	Peers            []string            `json:"peers,omitempty"`
+	AtCapacity       bool                `json:"at_capacity,omitzero"`
+	AtCapacityReason string              `json:"at_capacity_reason,omitempty"`
 }
 
 // SandboxListResponse is the wire reply of GET /v1/sandboxes.
@@ -620,7 +622,7 @@ func (s *Server) handlePeers(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 	pools, g := s.mgr.Info()
 	resp := InfoResponse{
-		Pools: pools, Claimed: g.Claimed, Hibernated: g.Hibernated, Archived: g.Archived,
+		Pools: pools, Templates: s.mgr.Templates(), Claimed: g.Claimed, Hibernated: g.Hibernated, Archived: g.Archived,
 		Draining: g.Draining, AtCapacity: g.AtCapacity, AtCapacityReason: g.AtCapacityReason,
 		AdvertiseAddr: s.advertise,
 	}
