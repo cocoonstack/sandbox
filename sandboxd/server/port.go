@@ -6,7 +6,6 @@ import (
 
 	"github.com/projecteru2/core/log"
 
-	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
@@ -28,7 +27,7 @@ func (s *Server) handlePort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	guest, err := s.mgr.DialPort(r.Context(), id, pool.Cred{Token: token}, uint16(port))
+	guest, err := s.mgr.DialPort(r.Context(), id, s.sandboxCred(token), uint16(port))
 	switch {
 	case writePoolErr(w, err):
 		return

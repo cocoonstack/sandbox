@@ -105,8 +105,11 @@ func (m *Manager) ClaimDeadline(id, token string) (time.Time, error) {
 	return sb.Deadline, nil
 }
 
-// DialPort opens a byte stream to a guest port after authorizing cred, waking a hibernated VM first.
+// DialPort opens a byte stream to a guest port after authorizing cred, waking a hibernated VM first; the operator credential never wakes and answers ErrPaused.
 func (m *Manager) DialPort(ctx context.Context, id string, cred Cred, port uint16) (net.Conn, error) {
+	if cred.Operator {
+		return m.dialPassive(ctx, id, port)
+	}
 	return m.dialPort(ctx, id, cred, port, "port")
 }
 
@@ -187,6 +190,28 @@ func (m *Manager) dialPort(ctx context.Context, id string, cred Cred, port uint1
 		return nil, err
 	}
 	return &heldConn{Conn: conn, release: sync.OnceFunc(sb.Unhold)}, nil
+}
+
+func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.Conn, error) {
+	sb, ok := m.byID(id)
+	if !ok {
+		return nil, ErrUnknownSandbox
+	}
+	if !sb.Transition.TryLock() {
+		return nil, ErrPaused
+	}
+	defer sb.Transition.Unlock()
+	if sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "" {
+		return nil, ErrPaused
+	}
+	m.recordAudit(ctx, id, auditFrame{Op: "port", Port: port})
+	sb.Hold()
+	conn, err := m.eng.DialGuestPort(ctx, sb.VsockSocket, port)
+	if err != nil {
+		sb.UnholdIdle()
+		return nil, err
+	}
+	return &heldConn{Conn: conn, release: sync.OnceFunc(sb.UnholdIdle)}, nil
 }
 
 // releaseResolved re-checks under m.mu that sb is still the live claim: no double teardown.

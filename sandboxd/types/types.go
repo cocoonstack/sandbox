@@ -289,6 +289,9 @@ func (s *Sandbox) Unhold() {
 	s.open.Add(-1)
 }
 
+// UnholdIdle ends a Hold without restarting the idle clock.
+func (s *Sandbox) UnholdIdle() { s.open.Add(-1) }
+
 // Busy reports whether a data-plane connection is held.
 func (s *Sandbox) Busy() bool { return s.open.Load() > 0 }
 
