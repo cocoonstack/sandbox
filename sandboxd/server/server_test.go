@@ -218,6 +218,28 @@ func TestRenewRejectsWrongToken(t *testing.T) {
 	}
 }
 
+func TestInfoReportsTheNodeAdvertiseAddr(t *testing.T) {
+	ts := newTestServer(t, "sekret", &fakeManager{}, nil)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/info", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer sekret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+	var info InfoResponse
+	if err := json.UnmarshalRead(resp.Body, &info); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if info.AdvertiseAddr != "node:7777" {
+		t.Errorf("advertise_addr = %q, want node:7777", info.AdvertiseAddr)
+	}
+}
+
 func TestAPITokenGuard(t *testing.T) {
 	ts := newTestServer(t, "sekret", &fakeManager{}, nil)
 

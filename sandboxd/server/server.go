@@ -127,6 +127,7 @@ type InfoResponse struct {
 	Hibernated       int             `json:"hibernated"`
 	Archived         int             `json:"archived"`
 	Draining         bool            `json:"draining,omitzero"`
+	AdvertiseAddr    string          `json:"advertise_addr,omitempty"`
 	Peers            []string        `json:"peers,omitempty"`
 	AtCapacity       bool            `json:"at_capacity,omitzero"`
 	AtCapacityReason string          `json:"at_capacity_reason,omitempty"`
@@ -592,6 +593,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 	resp := InfoResponse{
 		Pools: pools, Claimed: g.Claimed, Hibernated: g.Hibernated, Archived: g.Archived,
 		Draining: g.Draining, AtCapacity: g.AtCapacity, AtCapacityReason: g.AtCapacityReason,
+		AdvertiseAddr: s.advertise,
 	}
 	if s.placer != nil {
 		resp.Peers = s.clientAddrs(s.placer.PeerAddrs())

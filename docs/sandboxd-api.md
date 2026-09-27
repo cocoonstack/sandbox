@@ -628,8 +628,8 @@ to claim and fork responses. Used by the SDK's `Lookup` scatter.
 
 ## GET /v1/info
 
-Auth: root only (tenant tokens get 403). Node pools, claim count, and mesh
-peers:
+Auth: root only (tenant tokens get 403). Node pools, claim count, the node's
+own address, and mesh peers:
 
 ```json
 {"pools": [{"key": {"template": "base:24.04", "net": "none", "size": "small"},
@@ -639,8 +639,12 @@ peers:
  "archived": 0,
  "at_capacity": true,
  "at_capacity_reason": "exchange full",
+ "advertise_addr": "10.0.0.5:7777",
  "peers": ["10.0.0.6:7777"]}
 ```
+
+`advertise_addr` is the node's own `advertise_addr`, the same value a claim
+reports as `owner_addr`; it is omitted when the node advertises no host.
 
 `hibernated` counts claims whose VM is currently hibernated, `archived` those
 checkpointed to the store with the local VM dropped (see
