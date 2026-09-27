@@ -45,6 +45,7 @@ RUN curl -fsSL -o /usr/local/bin/envd \
       '  chain input {' \
       '    type filter hook input priority filter; policy accept;' \
       '    iif != "lo" tcp dport { 49983, 49999, 8888 } drop' \
+      '    iif != "lo" ip daddr 169.254.169.254 tcp dport 80 drop' \
       '  }' \
       '}' \
       > /etc/nftables-envd.conf && \
@@ -52,12 +53,13 @@ RUN curl -fsSL -o /usr/local/bin/envd \
       '[Unit]' \
       'Description=drop non-loopback traffic to envd and the code interpreter' \
       'DefaultDependencies=no' \
-      'Before=envd.service' \
+      'Before=envd.service silkd.service' \
       '' \
       '[Service]' \
       'Type=oneshot' \
       'RemainAfterExit=yes' \
       'ExecStart=/usr/sbin/nft -f /etc/nftables-envd.conf' \
+      'ExecStart=/usr/sbin/ip addr replace 169.254.169.254/32 dev lo' \
       '' \
       '[Install]' \
       'WantedBy=sysinit.target' \
@@ -73,7 +75,7 @@ RUN curl -fsSL -o /usr/local/bin/envd \
       '' \
       '[Service]' \
       'Type=simple' \
-      'ExecStart=/usr/local/bin/envd -isnotfc -no-cgroups' \
+      'ExecStart=/usr/local/bin/envd -no-cgroups' \
       'Restart=always' \
       'RestartSec=2s' \
       'LimitNOFILE=65536' \

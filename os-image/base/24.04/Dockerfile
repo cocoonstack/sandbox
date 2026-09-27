@@ -71,7 +71,7 @@ RUN --mount=type=secret,id=sandbox_install_agent \
       'Environment=SILKD_PORT=2048' \
       'Environment=http_proxy=http://127.0.0.1:3128' \
       'Environment=https_proxy=http://127.0.0.1:3128' \
-      'Environment=no_proxy=localhost,127.0.0.1,::1' \
+      'Environment=no_proxy=localhost,127.0.0.1,::1,169.254.169.254' \
       'Restart=always' \
       'RestartSec=2s' \
       'LimitNOFILE=65536' \

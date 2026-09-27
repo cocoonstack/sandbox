@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use silkd::server::State;
-use silkd::{net_egress, session, vsock};
+use silkd::{imds, net_egress, session, vsock};
 
 const DEFAULT_PORT: u32 = 2048;
 
@@ -29,6 +29,11 @@ async fn main() {
         net_egress::SOCKS_LOOPBACK_PORT,
         net_egress::SOCKS_HOST_VSOCK_PORT,
     ));
+    tokio::spawn(async {
+        if let Err(e) = imds::serve().await {
+            eprintln!("silkd imds: {e}");
+        }
+    });
     if let Err(e) = vsock::serve(port, state).await {
         eprintln!("silkd: fatal: {e}");
         std::process::exit(1);

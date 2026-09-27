@@ -85,6 +85,8 @@ func (f *fakeEngine) SnapshotList(_ context.Context) ([]string, error) { return 
 
 func (f *fakeEngine) ImageIDs(context.Context) (map[string]string, error) { return nil, nil }
 
+func (f *fakeEngine) WriteInstanceMetadata(context.Context, string, []byte) error { return nil }
+
 func (f *fakeEngine) Hibernate(ctx context.Context, name, _ string) error {
 	return f.Remove(ctx, name)
 }

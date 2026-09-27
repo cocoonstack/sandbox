@@ -552,6 +552,61 @@ func TestPutPoolsRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestInstanceMetadataVerb(t *testing.T) {
+	var got []byte
+	var fail error
+	mgr := &fakeManager{setInstanceMetadata: func(id string, doc []byte) error {
+		if id != "sb_1" {
+			return pool.ErrUnknownSandbox
+		}
+		got = doc
+		return fail
+	}}
+	ts := newTenantTestServer(t, "sekret", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
+	put := func(token, id, body string) int {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, ts.URL+"/v1/sandboxes/"+id+"/instance-metadata", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do: %v", err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	valid := `{"region": "local", "tags": ["a", "b"]}`
+	if code := put("sekret", "sb_1", valid); code != http.StatusNoContent {
+		t.Fatalf("status %d, want 204", code)
+	}
+	if string(got) != valid {
+		t.Errorf("manager got %s, want the body verbatim", got)
+	}
+	for _, tt := range []struct {
+		name, token, id, body string
+		want                  int
+	}{
+		{"tenant token", "acme-tok", "sb_1", valid, http.StatusForbidden},
+		{"array", "sekret", "sb_1", `[1]`, http.StatusBadRequest},
+		{"null", "sekret", "sb_1", `null`, http.StatusBadRequest},
+		{"not JSON", "sekret", "sb_1", `{"a":`, http.StatusBadRequest},
+		{"over 4 KiB", "sekret", "sb_1", `{"a":"` + strings.Repeat("x", 4<<10) + `"}`, http.StatusBadRequest},
+		{"unknown sandbox", "sekret", "sb_2", valid, http.StatusNotFound},
+	} {
+		if code := put(tt.token, tt.id, tt.body); code != tt.want {
+			t.Errorf("%s: status %d, want %d", tt.name, code, tt.want)
+		}
+	}
+	for _, err := range []error{pool.ErrPaused, pool.ErrArchived, pool.ErrNoInstanceMetadata} {
+		fail = err
+		if code := put("sekret", "sb_1", valid); code != http.StatusConflict {
+			t.Errorf("%v: status %d, want 409", err, code)
+		}
+	}
+}
+
 func TestDrainEndpoints(t *testing.T) {
 	mgr := &fakeManager{}
 	ts := newTestServer(t, "sekret", mgr, nil)
@@ -2250,16 +2305,17 @@ type fakeManager struct {
 	hasPoolGolden bool
 	hasPromoted   bool
 
-	audited          func(id string, line []byte)
-	checkpoint       func(id, token, name string) (types.Checkpoint, error)
-	claimCheckpoint  checkpointClaimFunc
-	healCheckpoint   checkpointClaimFunc
-	healCalls        int
-	checkpoints      []types.Checkpoint
-	deleteCheckpoint idActionFunc
-	setPools         func(pools []config.PoolSpec) error
-	infoPools        []pool.PoolInfo
-	claimDeadline    func(id, token string) (time.Time, error)
+	audited             func(id string, line []byte)
+	checkpoint          func(id, token, name string) (types.Checkpoint, error)
+	claimCheckpoint     checkpointClaimFunc
+	healCheckpoint      checkpointClaimFunc
+	healCalls           int
+	checkpoints         []types.Checkpoint
+	deleteCheckpoint    idActionFunc
+	setPools            func(pools []config.PoolSpec) error
+	setInstanceMetadata func(id string, doc []byte) error
+	infoPools           []pool.PoolInfo
+	claimDeadline       func(id, token string) (time.Time, error)
 
 	gotTenant          string
 	gotClaimRef        string
@@ -2441,6 +2497,13 @@ func (f *fakeManager) Sandbox(id string) (pool.SandboxSummary, bool) {
 
 func (f *fakeManager) Stats(context.Context, string) (pool.SandboxStats, bool) {
 	return pool.SandboxStats{}, false
+}
+
+func (f *fakeManager) SetInstanceMetadata(_ context.Context, id string, doc []byte) error {
+	if f.setInstanceMetadata == nil {
+		return nil
+	}
+	return f.setInstanceMetadata(id, doc)
 }
 
 func (f *fakeManager) Wake(_ context.Context, id string, cred pool.Cred) error {
