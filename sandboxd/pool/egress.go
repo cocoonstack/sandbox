@@ -315,8 +315,6 @@ func (m *Manager) disarmEgress(id string, removed bool) {
 }
 
 func (m *Manager) poolIntercepts(key types.PoolKey) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	return m.poolEgress[key].Intercepts()
 }
 

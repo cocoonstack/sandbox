@@ -242,9 +242,7 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 }
 
 func (m *Manager) runWarmup(ctx context.Context, key types.PoolKey, sock string) ([]string, error) {
-	m.mu.Lock()
 	warmup := m.poolWarmups[key]
-	m.mu.Unlock()
 	if len(warmup) == 0 {
 		return nil, nil
 	}
@@ -361,10 +359,7 @@ func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir
 
 // trimForCapture trims a live sandbox's copy-on-write disk when its pool asks for it; a failed trim only leaves the capture larger.
 func (m *Manager) trimForCapture(ctx context.Context, sb *types.Sandbox) {
-	m.mu.Lock()
-	on := m.poolTrims[sb.PolicyKey()]
-	m.mu.Unlock()
-	if !on || sb.HibernateSnap != "" || sb.ArchiveCk != "" {
+	if !m.poolTrims[sb.PolicyKey()] || sb.HibernateSnap != "" || sb.ArchiveCk != "" {
 		return
 	}
 	if err := m.eng.TrimCow(ctx, sb.VsockSocket); err != nil {
