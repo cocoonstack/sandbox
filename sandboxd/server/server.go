@@ -591,6 +591,7 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 }
+
 func (s *Server) handleSetTemplateLabels(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeBodyStrict[TemplateLabelsRequest](w, r)
 	if !ok || !validRequest(w, req.Labels.Validate()) {
