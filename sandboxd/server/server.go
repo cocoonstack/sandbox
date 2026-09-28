@@ -73,7 +73,7 @@ type Manager interface {
 	Fork(ctx context.Context, id string, cred pool.Cred, count int, ttl time.Duration, onExpire types.ExpireAction, claimRefPrefix string) ([]*types.Sandbox, error)
 	Promote(ctx context.Context, id string, cred pool.Cred, template, tenant string) (types.PoolKey, string, error)
 	DeleteTemplate(ctx context.Context, key types.PoolKey, tenant, digest string) error
-	SetTemplateLabels(ctx context.Context, key types.PoolKey, labels types.Metadata, tenant string) error
+	SetTemplateLabels(ctx context.Context, key types.PoolKey, labels types.Metadata, tenant, digest string) error
 	Checkpoint(ctx context.Context, id string, cred pool.Cred, name, tenant string) (types.Checkpoint, error)
 	Counters() pool.Counters
 	TenantClaims() map[string]int
@@ -600,7 +600,7 @@ func (s *Server) handleSetTemplateLabels(w http.ResponseWriter, r *http.Request)
 	}
 	q := r.URL.Query()
 	key := templateKey(q)
-	err := s.mgr.SetTemplateLabels(r.Context(), key, req.Labels, tenantFrom(r.Context()))
+	err := s.mgr.SetTemplateLabels(r.Context(), key, req.Labels, tenantFrom(r.Context()), q.Get("digest"))
 	writeResult(w, r, "template labels", key.Template, "set template labels failed", err, func() {
 		w.WriteHeader(http.StatusNoContent)
 	})

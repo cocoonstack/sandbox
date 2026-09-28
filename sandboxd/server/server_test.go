@@ -1295,7 +1295,7 @@ func TestClaimRedirectsToTemplateOwner(t *testing.T) {
 	}
 }
 
-func TestDeleteTemplateWithADigestOnlyRemovesThatGeneration(t *testing.T) {
+func TestATemplateDigestGatesDeleteAndLabelWrites(t *testing.T) {
 	mgr := &fakeManager{deleteGolden: func(types.PoolKey) error { return pool.ErrTemplateReplaced }}
 	ts := newTestServer(t, "sekret", mgr, nil)
 
@@ -1308,6 +1308,18 @@ func TestDeleteTemplateWithADigestOnlyRemovesThatGeneration(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusPreconditionFailed || mgr.gotDigest != "sha256:old" {
 		t.Errorf("status=%d digest=%q, want 412 for a replaced generation and the digest passed through", resp.StatusCode, mgr.gotDigest)
+	}
+
+	mgr.labelErr, mgr.gotDigest = pool.ErrTemplateReplaced, ""
+	req, _ = http.NewRequest(http.MethodPut, ts.URL+"/v1/templates/labels?template=ns%2Fapp&digest=sha256%3Aold", strings.NewReader(`{"labels":{"v1":"sha256:new"}}`))
+	req.Header.Set("Authorization", "Bearer sekret")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPreconditionFailed || mgr.gotDigest != "sha256:old" {
+		t.Errorf("labels: status=%d digest=%q, want 412 for a replaced generation and the digest passed through", resp.StatusCode, mgr.gotDigest)
 	}
 }
 
@@ -2720,8 +2732,9 @@ func (f *fakeManager) Info() ([]pool.PoolInfo, pool.Gauges) {
 
 func (f *fakeManager) Templates() []pool.TemplateInfo { return f.infoTemplates }
 
-func (f *fakeManager) SetTemplateLabels(_ context.Context, key types.PoolKey, labels types.Metadata, tenant string) error {
+func (f *fakeManager) SetTemplateLabels(_ context.Context, key types.PoolKey, labels types.Metadata, tenant, digest string) error {
 	f.labeled = append(f.labeled, fmt.Sprintf("%s %s %v %q", key.Template, key.Size, labels, tenant))
+	f.gotDigest = digest
 	return f.labelErr
 }
 

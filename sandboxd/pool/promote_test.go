@@ -489,7 +489,10 @@ func TestTemplateLabelsPersistUntilTheTemplateIsRepromotedOrDeleted(t *testing.T
 		return m.Templates()[i].Labels
 	}
 	want := types.Metadata{"v1": "sha256:aa"}
-	if err = m.SetTemplateLabels(t.Context(), key, want, ""); err != nil {
+	if err = m.SetTemplateLabels(t.Context(), key, want, "", "sha256:observed-elsewhere"); !errors.Is(err, ErrTemplateReplaced) || labelsOf(m) != nil {
+		t.Errorf("labels with another digest: %v, want ErrTemplateReplaced and no labels written", err)
+	}
+	if err = m.SetTemplateLabels(t.Context(), key, want, "", ""); err != nil {
 		t.Fatalf("SetTemplateLabels: %v", err)
 	}
 	if got := labelsOf(m); !maps.Equal(got, want) {
@@ -499,10 +502,10 @@ func TestTemplateLabelsPersistUntilTheTemplateIsRepromotedOrDeleted(t *testing.T
 	if got := labelsOf(restarted); !maps.Equal(got, want) {
 		t.Errorf("labels after restart %v, want %v", got, want)
 	}
-	if err = m.SetTemplateLabels(t.Context(), key, types.Metadata{"x": "y"}, "acme"); !errors.Is(err, ErrUnknownTemplate) {
+	if err = m.SetTemplateLabels(t.Context(), key, types.Metadata{"x": "y"}, "acme", ""); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("a tenant labeling the operator's template: %v, want ErrUnknownTemplate", err)
 	}
-	if err = m.SetTemplateLabels(t.Context(), types.PoolKey{Template: "tpl:none", Net: testKey.Net, Size: testKey.Size}, want, ""); !errors.Is(err, ErrUnknownTemplate) {
+	if err = m.SetTemplateLabels(t.Context(), types.PoolKey{Template: "tpl:none", Net: testKey.Net, Size: testKey.Size}, want, "", ""); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("an unknown template: %v, want ErrUnknownTemplate", err)
 	}
 	if _, _, err = m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:l", ""); err != nil {
@@ -511,13 +514,13 @@ func TestTemplateLabelsPersistUntilTheTemplateIsRepromotedOrDeleted(t *testing.T
 	if got := labelsOf(newTestManagerAt(t, eng, dir)); got != nil {
 		t.Errorf("labels %v survived a re-promote, want none", got)
 	}
-	if err = m.SetTemplateLabels(t.Context(), key, want, ""); err != nil {
+	if err = m.SetTemplateLabels(t.Context(), key, want, "", ""); err != nil {
 		t.Fatalf("SetTemplateLabels again: %v", err)
 	}
-	if err = m.SetTemplateLabels(t.Context(), key, types.Metadata{}, ""); err != nil || labelsOf(m) != nil {
+	if err = m.SetTemplateLabels(t.Context(), key, types.Metadata{}, "", ""); err != nil || labelsOf(m) != nil {
 		t.Errorf("empty labels: %v, labels %v; want them cleared", err, labelsOf(m))
 	}
-	if err = m.SetTemplateLabels(t.Context(), key, want, ""); err != nil {
+	if err = m.SetTemplateLabels(t.Context(), key, want, "", ""); err != nil {
 		t.Fatalf("SetTemplateLabels before delete: %v", err)
 	}
 	if err = m.DeleteTemplate(t.Context(), key, "", ""); err != nil {
@@ -530,7 +533,7 @@ func TestTemplateLabelsPersistUntilTheTemplateIsRepromotedOrDeleted(t *testing.T
 		t.Errorf("labels %v outlived the deleted template", got)
 	}
 	pooled := newTestManagerAt(t, eng, t.TempDir(), config.PoolSpec{PoolKey: key})
-	if err = pooled.SetTemplateLabels(t.Context(), key, want, ""); !errors.Is(err, ErrPooledTemplate) {
+	if err = pooled.SetTemplateLabels(t.Context(), key, want, "", ""); !errors.Is(err, ErrPooledTemplate) {
 		t.Errorf("a pooled key: %v, want ErrPooledTemplate", err)
 	}
 }
@@ -540,7 +543,7 @@ func TestRejectedLabelWritesLeakNoRecLock(t *testing.T) {
 	base := lockCount(m)
 	for _, name := range []string{"tpl:absent", "tpl:gone", "tpl:never"} {
 		key := types.PoolKey{Template: name, Net: testKey.Net, Size: testKey.Size}
-		if err := m.SetTemplateLabels(t.Context(), key, types.Metadata{"a": "1"}, ""); !errors.Is(err, ErrUnknownTemplate) {
+		if err := m.SetTemplateLabels(t.Context(), key, types.Metadata{"a": "1"}, "", ""); !errors.Is(err, ErrUnknownTemplate) {
 			t.Errorf("labels on %q: %v, want ErrUnknownTemplate", name, err)
 		}
 	}

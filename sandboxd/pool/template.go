@@ -135,8 +135,8 @@ func (m *Manager) Templates() []TemplateInfo {
 	return out
 }
 
-// SetTemplateLabels replaces a promoted template's labels; a tenant may label only what it promoted, and empty labels clear them.
-func (m *Manager) SetTemplateLabels(ctx context.Context, key types.PoolKey, labels types.Metadata, tenant string) error {
+// SetTemplateLabels replaces a promoted template's labels; a tenant may label only what it promoted, empty labels clear them, and a digest writes only the generation it names.
+func (m *Manager) SetTemplateLabels(ctx context.Context, key types.PoolKey, labels types.Metadata, tenant, digest string) error {
 	if err := m.validate(key); err != nil {
 		return err
 	}
@@ -150,6 +150,12 @@ func (m *Manager) SetTemplateLabels(ctx context.Context, key types.PoolKey, labe
 	err := m.ownedTemplate(ctx, id, tenant)
 	if err != nil {
 		return err
+	}
+	m.tplMu.Lock()
+	held := m.tplSet[id].ContentDigest
+	m.tplMu.Unlock()
+	if digest != "" && held != digest {
+		return ErrTemplateReplaced
 	}
 	var payload []byte
 	if len(labels) == 0 {

@@ -395,7 +395,9 @@ query parameters default like a claim's):
 
 Labels follow the [claim `metadata`](#post-v1claim) rules — at most 16 pairs,
 the same key and value grammar, at most 4 KiB as JSON — and replace the whole
-map; `{}` clears it. They are stored beside the template's record, so they
+map; `{}` clears it. `digest=<content digest>` writes only while the record
+still has that digest and answers 412 otherwise, so a writer that observed an
+older build never relabels the newer one. They are stored beside the template's record, so they
 survive a restart, are listed by the node that promoted the template or loaded
 it at startup, and go with the template when it is deleted; a re-promote starts with none. A tenant may label
 only templates it promoted — anything else is 404, root labels anything. 204 on
