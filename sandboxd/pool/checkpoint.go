@@ -166,13 +166,15 @@ func (m *Manager) FetchCheckpoint(ctx context.Context, ckptID string) (string, [
 
 func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID, name, tenant string, archive bool) (types.Checkpoint, string, error) {
 	ckpt := types.Checkpoint{
-		ID:        ckID,
-		Name:      name,
-		SandboxID: sb.ID,
-		Key:       sb.Key,
-		Tenant:    tenant,
-		CreatedAt: time.Now(),
-		Archive:   archive,
+		ID:           ckID,
+		Name:         name,
+		SandboxID:    sb.ID,
+		Key:          sb.Key,
+		Tenant:       tenant,
+		CreatedAt:    time.Now(),
+		PolicySource: sb.PolicySource,
+		NoEgress:     sb.NoEgress,
+		Archive:      archive,
 	}
 	staging, err := m.ckpts.Stage(ckpt.ID)
 	if err != nil {
@@ -219,6 +221,7 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl ti
 		return nil, err
 	}
 	sb.FromCheckpoint = ckpt.ID
+	sb.PolicySource, sb.NoEgress = ckpt.PolicySource, ckpt.NoEgress
 	sb.Tenant = tenant
 	sb.Metadata = metadata
 	sb.OnExpire = onExpire.Or("")

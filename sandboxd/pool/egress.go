@@ -116,6 +116,19 @@ func (c *doorConn) Close() error {
 	return err
 }
 
+// NetRoute is how sb's guest reaches the network now: its own NIC, the proxy behind a bound door, or nothing.
+func (m *Manager) NetRoute(sb *types.Sandbox) types.NetRoute {
+	if m.laneOf(sb.Key) == engine.LaneDirect {
+		return types.NetRouteDirect
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.egressListeners[sb.ID] != nil {
+		return types.NetRouteRelay
+	}
+	return types.NetRouteNone
+}
+
 // armEgress locks the egress-lane NIC then binds the proxy: fail-closed, never a free NIC.
 func (m *Manager) armEgress(ctx context.Context, sb *types.Sandbox) error {
 	if err := m.lockEgressNIC(ctx, sb); err != nil {
@@ -201,7 +214,7 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	m.mu.Lock()
 	el := m.egressPrebound[sb.VMName]
 	delete(m.egressPrebound, sb.VMName)
-	intercepts := m.poolEgress[sb.Key].Intercepts()
+	intercepts := m.poolEgress[sb.PolicyKey()].Intercepts()
 	m.mu.Unlock()
 	// only an intercepting pool pays for the TLS transport and leaf cache
 	ca := m.egressCA
@@ -304,16 +317,19 @@ func (m *Manager) poolIntercepts(key types.PoolKey) bool {
 	return m.poolEgress[key].Intercepts()
 }
 
-// effectivePolicy resolves pool ∩ tenant; root has no tenant layer, an unpooled key no pool one.
+// effectivePolicy resolves pool ∩ tenant; root has no tenant layer, an unpooled key no pool one, a NoEgress claim none at all.
 func (m *Manager) effectivePolicy(sb *types.Sandbox) (egress.Evaluator, bool) {
+	if sb.NoEgress {
+		return nil, false
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	poolPol := m.poolEgress[sb.Key]
+	poolPol := m.poolEgress[sb.PolicyKey()]
 	tenantPol := m.tenantEgress[sb.Tenant]
 	if poolPol == nil {
 		pooled := sb.Layer == types.LayerPooled
 		if sb.Layer == "" {
-			_, pooled = m.activePool(sb.Key)
+			_, pooled = m.activePool(sb.PolicyKey())
 		}
 		if pooled || sb.Tenant == "" || tenantPol == nil {
 			return nil, false

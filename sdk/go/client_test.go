@@ -49,7 +49,7 @@ func TestNewSendsClaim(t *testing.T) {
 			t.Errorf("decode body: %v", err)
 		}
 		_ = json.MarshalWrite(w, claimResponse{
-			ID: "sb_1", Token: "tok", Deadline: time.Unix(42, 0), TemplateDigest: "sha256:template",
+			ID: "sb_1", Token: "tok", Deadline: time.Unix(42, 0), TemplateDigest: "sha256:template", NetRoute: "relay",
 		})
 	}))
 	t.Cleanup(ts.Close)
@@ -73,8 +73,8 @@ func TestNewSendsClaim(t *testing.T) {
 	if sb.ID != "sb_1" || sb.token != "tok" {
 		t.Errorf("handle %+v", sb)
 	}
-	if sb.TemplateDigest != "sha256:template" {
-		t.Errorf("template digest %q, want sha256:template", sb.TemplateDigest)
+	if sb.TemplateDigest != "sha256:template" || sb.NetRoute != "relay" {
+		t.Errorf("template digest %q route %q, want sha256:template and relay", sb.TemplateDigest, sb.NetRoute)
 	}
 }
 

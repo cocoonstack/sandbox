@@ -154,10 +154,17 @@ A missing policy on either side is an empty allow-list, not a pass: a tenant
 without its own `egress` block reaches nothing — upgrading, a tenant that
 relied on inheriting its pool's policy must now declare one — so granting a tenant egress —
 and the secret injection that rides it — is always an explicit act. Root
-claims have no tenant layer and take the pool's policy whole; a key with no
-configured pool — a promoted template, or an image cold-booted on demand — has
-no pool layer, so a tenant's claim of one takes the tenant's policy alone (a
-root claim of one stays denied). Which layers a claim has is settled when it
+claims have no tenant layer and take the pool's policy whole. A clone of a
+promoted template takes the policy of the pool its template was promoted from,
+as if it were that pool's claim: the template records its source pool, a
+re-promote records the new one, and a fork, checkpoint or branch of such a
+clone keeps it. So a clone of a template promoted from a pool with no policy
+has no egress, as that pool's claims have none, even for a tenant with its own
+policy; a template promoted from a sandbox of no pool records no source. Any other key with no configured pool — an image cold-booted on
+demand — has no pool layer, so a tenant's claim of one takes the tenant's
+policy alone (a root claim of one stays denied). A claim with `"egress": false`
+takes no policy at all, whatever its pool's: no door is bound, so the guest's
+dial is refused. Which layers a claim has is settled when it
 is made and kept for its life: a `PUT /v1/pools` that adds or drops a pool
 changes the claims made after it, never a live one (a record from before this
 rule resolves against the live pool set). Secrets are registered separately and

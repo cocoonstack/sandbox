@@ -224,7 +224,7 @@ func TestResolveGoldenSkipsPromotedEgressTemplate(t *testing.T) {
 	if err = os.MkdirAll(filepath.Join(staging, store.ExportDir), 0o750); err != nil {
 		t.Fatalf("mkdir export: %v", err)
 	}
-	if _, err = m.commitTemplate(t.Context(), staging, egKey, ""); err != nil {
+	if _, err = m.commitTemplate(t.Context(), staging, templateRecord{Key: egKey}); err != nil {
 		t.Fatalf("seed template: %v", err)
 	}
 	golden, err := m.resolveGolden(t.Context(), egKey, "")
@@ -277,10 +277,10 @@ func TestCommitTemplateRechecksOwnerUnderLock(t *testing.T) {
 		}
 		return staging
 	}
-	if _, err := m.commitTemplate(t.Context(), stage(), testKey, "acme"); err != nil {
+	if _, err := m.commitTemplate(t.Context(), stage(), templateRecord{Key: testKey, Tenant: "acme"}); err != nil {
 		t.Fatalf("acme publish: %v", err)
 	}
-	if _, err := m.commitTemplate(t.Context(), stage(), testKey, "beta"); !errors.Is(err, ErrTemplateOwned) {
+	if _, err := m.commitTemplate(t.Context(), stage(), templateRecord{Key: testKey, Tenant: "beta"}); !errors.Is(err, ErrTemplateOwned) {
 		t.Errorf("beta publish over acme: %v, want ErrTemplateOwned", err)
 	}
 }

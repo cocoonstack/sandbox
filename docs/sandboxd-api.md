@@ -30,7 +30,8 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
  "volumes": [{"name": "imagenet"}, {"name": "weights", "mount": "/models"},
              {"name": "scratch-db", "mode": "rw"}],
  "claim_ref": "namespace/workload", "metadata": {"team": "a"},
- "on_expire": "archive", "no_redirect": false, "require_promoted": false}
+ "on_expire": "archive", "no_redirect": false, "require_promoted": false,
+ "egress": true}
 ```
 
 - `net` defaults to `none`, `size` to `small`; the pool key is
@@ -62,6 +63,9 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   the key. A redirect to a template's owner sets it; copy it into the
   `no_redirect` retry so a target whose gossip view is stale refuses instead of
   cold-booting an image named like the template
+- `egress` `false` claims with no [egress policy](egress.md), whatever the
+  pool's (or, for a promoted template, its source pool's): the guest's doors are
+  never bound. Omitted or `true` keeps the policy the claim would get
 - `volumes` is an ordered list of at most eight unique catalog names. `mount`
   defaults to `/volumes/<name>`; a custom value must be absolute and clean,
   outside the guest OS tree, unique, and non-nesting within the request.
@@ -78,7 +82,7 @@ Success:
 
 ```json
 {"id": "sb_…", "token": "…", "deadline": "2026-07-06T00:05:00Z",
- "owner_addr": "10.0.0.5:7777", "template_digest": "sha256:…",
+ "owner_addr": "10.0.0.5:7777", "template_digest": "sha256:…", "net_route": "relay",
  "volumes": [{"name": "imagenet", "mount": "/volumes/imagenet"},
              {"name": "weights", "mount": "/models"},
              {"name": "scratch-db", "mount": "/volumes/scratch-db", "mode": "rw"}]}
@@ -88,6 +92,16 @@ A claim cloned from a promoted template carries `template_digest`, the exact
 export generation fetched for that clone. It is absent for configured pools,
 cold image boots, forks, checkpoints, and templates published by an older
 sandboxd until they are re-promoted.
+
+`net_route` says how the guest reaches the network, the same verdict the node
+writes to `/etc/silkd-lane`: `relay` through the host proxy behind the guest's
+bound doors, `direct` over an egress-lane NIC the node does not lock, or `none`
+(a none-lane claim whose policy allows nothing, a claim with `"egress": false`,
+or a locked egress-lane NIC with no policy). silkd hands its children the
+`http_proxy`, `https_proxy` and `no_proxy` of its unit unless the lane is
+direct; a guest agent of another kind reads `net_route` and hands its processes
+`http://127.0.0.1:3128` when it is `relay`. `"egress": false` closes the doors, not an unlocked NIC, so
+such a claim on a `direct` lane still reaches out directly.
 
 A claim branched directly from a checkpoint additionally carries
 `"from_checkpoint": "ck_…"` — the lineage edge for reconstructing the

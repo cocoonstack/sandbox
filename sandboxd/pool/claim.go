@@ -32,6 +32,7 @@ type ClaimOptions struct {
 	ClaimRef string
 	Metadata types.Metadata
 	Volumes  []types.Volume
+	NoEgress bool
 }
 
 // ClaimWarm transfers ownership of a warm sandbox without provisioning; ErrNoWarm means empty.
@@ -76,6 +77,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, o ClaimOptio
 	sb.ClaimRef = o.ClaimRef
 	sb.Metadata = o.Metadata
 	sb.OnExpire = o.OnExpire.Or("")
+	sb.NoEgress = o.NoEgress
 	reserved = nil
 	out, err := m.finalize(ctx, sb, o.TTL)
 	if err == nil {
@@ -384,7 +386,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	}
 	for _, sb := range sbs {
 		sb.Layer = types.LayerUnpooled
-		if _, pooled := m.activePool(sb.Key); pooled {
+		if _, pooled := m.activePool(sb.PolicyKey()); pooled {
 			sb.Layer = types.LayerPooled
 		}
 		m.claimed[sb.ID] = sb
@@ -671,10 +673,12 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, o Claim
 		return nil, volumeErr
 	}
 	sb.TemplateDigest = golden.templateDigest
+	sb.PolicySource = golden.source
 	sb.Tenant = o.Tenant
 	sb.ClaimRef = o.ClaimRef
 	sb.Metadata = o.Metadata
 	sb.OnExpire = o.OnExpire.Or("")
+	sb.NoEgress = o.NoEgress
 	reserved = nil
 	out, err := m.finalize(ctx, sb, o.TTL)
 	if err == nil {

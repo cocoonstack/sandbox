@@ -31,6 +31,10 @@ const (
 	LayerPooled   PolicyLayer = "pooled"
 	LayerUnpooled PolicyLayer = "unpooled"
 
+	NetRouteRelay  NetRoute = "relay"
+	NetRouteDirect NetRoute = "direct"
+	NetRouteNone   NetRoute = "none"
+
 	RestoreCopy     RestoreMode = "copy"
 	RestoreOnDemand RestoreMode = "ondemand"
 	RestoreMmap     RestoreMode = "mmap"
@@ -79,6 +83,9 @@ type NetShape string
 
 // PolicyLayer pins, at claim time, whether the key had a pool layer in its egress policy.
 type PolicyLayer string
+
+// NetRoute is how a claimed guest reaches the network: relay through the host proxy, a direct NIC, or none.
+type NetRoute string
 
 // RestoreMode selects cocoon's clone memory-restore strategy; empty is cocoon's default.
 type RestoreMode string
@@ -232,6 +239,10 @@ type Sandbox struct {
 	LeaseSeconds int `json:"lease_seconds,omitzero"`
 	// Layer is empty on a record older than the field, which resolves against the live pool set.
 	Layer PolicyLayer `json:"policy_layer,omitempty"`
+	// PolicySource is the pool whose egress policy a clone of a promoted template or its checkpoint inherits.
+	PolicySource PoolKey `json:"policy_source,omitzero"`
+	// NoEgress pins a claim that asked for no egress policy.
+	NoEgress bool `json:"no_egress,omitzero"`
 
 	// Tenant names the owning tenant; empty means the operator claimed it.
 	Tenant string `json:"tenant,omitempty"`
@@ -295,6 +306,9 @@ func (s *Sandbox) UnholdIdle() { s.open.Add(-1) }
 // Busy reports whether a data-plane connection is held.
 func (s *Sandbox) Busy() bool { return s.open.Load() > 0 }
 
+// PolicyKey is the pool key whose egress policy applies: PolicySource when set, else Key.
+func (s *Sandbox) PolicyKey() PoolKey { return cmp.Or(s.PolicySource, s.Key) }
+
 // Checkpoint is the record of a captured sandbox state; node-local, like a template.
 type Checkpoint struct {
 	ID        string    `json:"id"`
@@ -303,6 +317,9 @@ type Checkpoint struct {
 	Key       PoolKey   `json:"key"`
 	Tenant    string    `json:"tenant,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+	// PolicySource and NoEgress carry the source sandbox's egress to a branch.
+	PolicySource PoolKey `json:"policy_source,omitzero"`
+	NoEgress     bool    `json:"no_egress,omitzero"`
 
 	// Archive marks a lifecycle-internal wake image: hidden from listings and undeletable.
 	Archive bool `json:"archive,omitzero"`

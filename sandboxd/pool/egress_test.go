@@ -3,6 +3,7 @@ package pool
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -799,6 +800,172 @@ func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
 		t.Errorf("status %d after a slot freed, want 200", resp.StatusCode)
 	}
 	m.disarmEgress(sb.ID, true)
+}
+
+func TestAPromotedTemplatesCloneEgressesAsItsSourcePool(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	pol := &egress.Policy{Socks5: true, Allow: []egress.Rule{{Host: "example.com"}}}
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
+	parent := mustClaim(t, m, testKey)
+	key, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:egress", "")
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+
+	clone, err := m.ClaimProvisionPromoted(t.Context(), key, ClaimOptions{})
+	if err != nil {
+		t.Fatalf("claim the template: %v", err)
+	}
+	if clone.PolicySource != testKey || clone.Layer != types.LayerPooled || m.NetRoute(clone) != types.NetRouteRelay {
+		t.Fatalf("clone policy source %+v layer %q, want the source pool %+v and its pooled layer", clone.PolicySource, clone.Layer, testKey)
+	}
+	dialDoors(t, clone)
+	eval, ok := m.effectivePolicy(clone)
+	if !ok {
+		t.Fatal("the clone resolved no policy")
+	}
+	if _, d := eval.Eval("example.com", "GET", 443); d != egress.DecisionAllow {
+		t.Error("the clone denies what its source pool allows")
+	}
+	if _, d := eval.Eval("other.test", "GET", 443); d != egress.DecisionDeny {
+		t.Error("the clone allows what its source pool denies")
+	}
+
+	children, err := m.Fork(t.Context(), clone.ID, Cred{Token: clone.Token}, 1, 0, "", "")
+	if err != nil {
+		t.Fatalf("fork the clone: %v", err)
+	}
+	ckpt, err := m.Checkpoint(t.Context(), clone.ID, Cred{Token: clone.Token}, "c1", "")
+	if err != nil {
+		t.Fatalf("checkpoint the clone: %v", err)
+	}
+	branch, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, 0, "", "", nil)
+	if err != nil {
+		t.Fatalf("branch the checkpoint: %v", err)
+	}
+	for _, sb := range []*types.Sandbox{children[0], branch} {
+		if sb.PolicySource != testKey {
+			t.Errorf("%s policy source %+v, want %+v", sb.ID, sb.PolicySource, testKey)
+		}
+		dialDoors(t, sb)
+	}
+}
+
+func TestAPromotedTemplatesCloneInterceptsAsItsSourcePool(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()})
+	parent := mustClaim(t, m, testKey)
+	key, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:intercept", "")
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	clone, err := m.ClaimProvisionPromoted(t.Context(), key, ClaimOptions{})
+	if err != nil {
+		t.Fatalf("claim the template: %v", err)
+	}
+	conn, err := net.DialTimeout("unix", engine.EgressSocketPath(clone.VsockSocket), 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial the door: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err = fmt.Fprint(conn, "CONNECT api.github.com:443 HTTP/1.1\r\nHost: api.github.com:443\r\n\r\n"); err != nil {
+		t.Fatalf("send CONNECT: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("read the CONNECT answer: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT answered %s", resp.Status)
+	}
+	tc := tls.Client(conn, &tls.Config{ServerName: "api.github.com", InsecureSkipVerify: true})
+	if err = tc.Handshake(); err != nil {
+		t.Fatalf("handshake through the door: %v", err)
+	}
+	if issuer := tc.ConnectionState().PeerCertificates[0].Issuer.CommonName; !strings.HasSuffix(issuer, "node-test") {
+		t.Errorf("leaf issued by %q, want the node intermediate: the clone must intercept as its source pool does", issuer)
+	}
+}
+
+func TestAClaimWithoutEgressGetsNoDoorsWhateverItsPolicy(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	pol := &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
+	refillWarmVM(t, m)
+	warm, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{NoEgress: true})
+	if err != nil {
+		t.Fatalf("warm claim: %v", err)
+	}
+	parent := mustClaim(t, m, testKey)
+	key, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:closed", "")
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	clone, err := m.ClaimProvisionPromoted(t.Context(), key, ClaimOptions{NoEgress: true})
+	if err != nil {
+		t.Fatalf("claim the template: %v", err)
+	}
+	for _, sb := range []*types.Sandbox{warm, clone} {
+		m.mu.Lock()
+		el, prebound := m.egressListeners[sb.ID], m.egressPrebound[sb.VMName]
+		m.mu.Unlock()
+		if el != nil || prebound != nil || !sb.NoEgress || m.NetRoute(sb) != types.NetRouteNone {
+			t.Errorf("%s: listener %v prebound %v no_egress %v, want no door and the opt-out recorded", sb.ID, el, prebound, sb.NoEgress)
+		}
+		if conn, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
+			_ = conn.Close()
+			t.Errorf("%s: the egress door accepts", sb.ID)
+		}
+	}
+}
+
+func TestNetRouteFollowsTheLaneAndTheDoors(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	armed := &types.Sandbox{ID: "sb_armed", Key: testKey}
+	m.egressListeners[armed.ID] = &egressListener{}
+	for _, tc := range []struct {
+		lock bool
+		sb   *types.Sandbox
+		want types.NetRoute
+	}{
+		{false, armed, types.NetRouteRelay},
+		{false, &types.Sandbox{ID: "sb_closed", Key: testKey}, types.NetRouteNone},
+		{false, &types.Sandbox{ID: "sb_nic", Key: egKey}, types.NetRouteDirect},
+		{true, &types.Sandbox{ID: "sb_locked", Key: egKey}, types.NetRouteNone},
+	} {
+		m.lockEgress = tc.lock
+		if got := m.NetRoute(tc.sb); got != tc.want {
+			t.Errorf("%s (lock %v): route %q, want %q", tc.sb.ID, tc.lock, got, tc.want)
+		}
+	}
+}
+
+func TestARepromoteCarriesItsNewSourcePool(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	other := types.PoolKey{Template: "py:3.12", Net: testKey.Net, Size: testKey.Size}
+	m := egressManager(t, eng,
+		config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "a.test"}}}},
+		config.PoolSpec{PoolKey: other, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "b.test"}}}})
+	for _, source := range []types.PoolKey{testKey, other} {
+		parent := mustClaim(t, m, source)
+		key, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:moved", "")
+		if err != nil {
+			t.Fatalf("promote from %s: %v", source.Template, err)
+		}
+		clone, err := m.ClaimProvisionPromoted(t.Context(), key, ClaimOptions{})
+		if err != nil {
+			t.Fatalf("claim the template: %v", err)
+		}
+		if clone.PolicySource != source {
+			t.Errorf("clone after a promote from %s inherits %+v", source.Template, clone.PolicySource)
+		}
+	}
 }
 
 func dialDoors(t *testing.T, sb *types.Sandbox) {
