@@ -114,7 +114,6 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 
 // sweepStaleVMs removes sbx-prefixed VMs no claim owns and returns the ones confirmed gone.
 func (m *Manager) sweepStaleVMs(ctx context.Context, live map[string]types.VMRecord, owned map[string]bool) map[string]bool {
-	logger := log.WithFunc("pool.sweepStaleVMs")
 	var stale []string
 	for name := range live {
 		if strings.HasPrefix(name, vmPrefix) && !owned[name] {
@@ -125,7 +124,7 @@ func (m *Manager) sweepStaleVMs(ctx context.Context, live map[string]types.VMRec
 	m.runBounded(ctx, len(stale), func(ctx context.Context, i int) {
 		if m.removeStaleVM(ctx, stale[i], live[stale[i]]) {
 			gone[i] = true
-			logger.Infof(ctx, "removed stale VM %s", stale[i])
+			log.WithFunc("pool.sweepStaleVMs").Infof(ctx, "removed stale VM %s", stale[i])
 		}
 	}).Wait()
 	removed := make(map[string]bool, len(stale))

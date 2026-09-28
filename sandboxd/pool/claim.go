@@ -264,13 +264,14 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		delete(m.pendingCks, ck)
 		rb := m.store.set(sb)
 		m.mu.Unlock()
+		logger := log.WithFunc("pool.releaseResolved")
 		if ck != "" {
 			if clearErr := m.clearArchiveCk(ck); clearErr != nil {
-				log.WithFunc("pool.releaseResolved").Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
+				logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
 			}
 		}
 		m.recommit(ctx, rb)
-		log.WithFunc("pool.releaseResolved").Errorf(ctx, saveErr, "persist release of %s", id)
+		logger.Errorf(ctx, saveErr, "persist release of %s", id)
 		return fmt.Errorf("release %s: %w", id, saveErr)
 	}
 	// cleanup must survive the caller hanging up; the claim is already dropped.

@@ -22,10 +22,10 @@ type TemplateInfo struct {
 	Key           types.PoolKey  `json:"key"`
 	ContentDigest string         `json:"content_digest"`
 	Tenant        string         `json:"tenant,omitempty"`
-	CreatedAt     time.Time      `json:"created_at"`
+	Labels        types.Metadata `json:"labels,omitempty"`
 	CPUCount      int            `json:"cpu_count,omitzero"`
 	MemTotalBytes int64          `json:"mem_total_bytes,omitzero"`
-	Labels        types.Metadata `json:"labels,omitempty"`
+	CreatedAt     time.Time      `json:"created_at"`
 }
 
 // templateRecord is a template's meta.json; an empty Tenant means the operator (root).
@@ -33,8 +33,8 @@ type templateRecord struct {
 	ID           string        `json:"id"`
 	Key          types.PoolKey `json:"key"`
 	Tenant       string        `json:"tenant,omitempty"`
-	CreatedAt    time.Time     `json:"created_at"`
 	PolicySource types.PoolKey `json:"policy_source,omitzero"`
+	CreatedAt    time.Time     `json:"created_at"`
 }
 
 // Promote publishes a claimed sandbox as a template under (template, parent net, parent size).
