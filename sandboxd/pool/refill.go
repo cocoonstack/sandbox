@@ -350,12 +350,26 @@ func (m *Manager) sourceSnap(ctx context.Context, sb *types.Sandbox) (string, fu
 func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir string) (string, error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
+	m.trimForCapture(ctx, sb)
 	snap, cleanup, err := m.sourceSnap(ctx, sb)
 	if err != nil {
 		return "", err
 	}
 	defer cleanup()
 	return snap, m.eng.SnapshotExport(ctx, snap, exportDir)
+}
+
+// trimForCapture trims a live sandbox's copy-on-write disk when its pool asks for it; a failed trim only leaves the capture larger.
+func (m *Manager) trimForCapture(ctx context.Context, sb *types.Sandbox) {
+	m.mu.Lock()
+	on := m.poolTrims[sb.PolicyKey()]
+	m.mu.Unlock()
+	if !on || sb.HibernateSnap != "" || sb.ArchiveCk != "" {
+		return
+	}
+	if err := m.eng.TrimCow(ctx, sb.VsockSocket); err != nil {
+		log.WithFunc("pool.trimForCapture").Warnf(ctx, "trim %s before its capture: %v", sb.ID, err)
+	}
 }
 
 // provision creates one claim-ready VM, cloning from a golden when available.

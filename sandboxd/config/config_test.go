@@ -91,6 +91,16 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadReadsCaptureTrim(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `{"pools":[{"template":"rt:24.04","capture_trim":true},{"template":"py:3.12"}]}`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Pools[0].CaptureTrim || cfg.Pools[1].CaptureTrim {
+		t.Errorf("capture_trim %v/%v, want on for the pool that names it and off by default", cfg.Pools[0].CaptureTrim, cfg.Pools[1].CaptureTrim)
+	}
+}
+
 func TestAutoRefillConcurrency(t *testing.T) {
 	for _, tt := range []struct {
 		cpus int

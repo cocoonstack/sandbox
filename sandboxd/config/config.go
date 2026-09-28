@@ -44,6 +44,8 @@ type PoolSpec struct {
 
 	Egress *egress.Policy `json:"egress,omitempty"`
 	Warmup []string       `json:"warmup,omitempty"`
+	// CaptureTrim trims the guest's copy-on-write disk before a promote or checkpoint of this pool's sandboxes.
+	CaptureTrim bool `json:"capture_trim,omitzero"`
 
 	IdleHibernateSeconds      int `json:"idle_hibernate_seconds,omitzero"`
 	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitzero"`

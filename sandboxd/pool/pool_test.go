@@ -1127,6 +1127,8 @@ type fakeEngine struct {
 	warmupSocks                       []string
 	warmupAfterSnap                   bool
 	warmupErr                         error
+	trims                             []string
+	trimErr                           error
 	staleReconciles                   []string
 	installCAErr                      error
 	guestDial                         func() (net.Conn, error)
@@ -1418,6 +1420,13 @@ func (f *fakeEngine) Warmup(_ context.Context, sock string, argv []string) error
 	f.warmupSocks = append(f.warmupSocks, sock)
 	f.warmupAfterSnap = f.warmupAfterSnap || len(f.snapSaves) > 0
 	return f.warmupErr
+}
+
+func (f *fakeEngine) TrimCow(_ context.Context, sock string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.trims = append(f.trims, fmt.Sprintf("%s after %d snaps", filepath.Base(sock), len(f.snapSaves)))
+	return f.trimErr
 }
 
 func (f *fakeEngine) DiskAttach(_ context.Context, _ string, spec engine.VolumeSpec) error {

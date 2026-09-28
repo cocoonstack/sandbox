@@ -122,6 +122,7 @@ type Engine interface {
 	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error
 	MarkLane(ctx context.Context, vsockSocket string, lane engine.Lane) error
 	Warmup(ctx context.Context, vsockSocket string, argv []string) error
+	TrimCow(ctx context.Context, vsockSocket string) error
 	DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error
 	MountVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
 	UnmountVolume(ctx context.Context, vsockSocket, mount string) error
@@ -296,6 +297,7 @@ type Manager struct {
 	tenantEgress map[string]*egress.Policy // per-tenant allow-list; nil = no tenant policy
 	poolEgress   map[types.PoolKey]*egress.Policy
 	poolWarmups  map[types.PoolKey][]string
+	poolTrims    map[types.PoolKey]bool
 	usage        *journal
 	audit        *journal
 	counters     counters
@@ -447,6 +449,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	m.tenantEgress = make(map[string]*egress.Policy, len(cfg.Tenants))
 	m.poolEgress = make(map[types.PoolKey]*egress.Policy, len(cfg.Pools))
 	m.poolWarmups = make(map[types.PoolKey][]string, len(cfg.Pools))
+	m.poolTrims = make(map[types.PoolKey]bool, len(cfg.Pools))
 	for _, tn := range cfg.Tenants {
 		m.tenantMax[tn.Name] = tn.MaxClaims
 		if tn.Egress != nil {
@@ -467,6 +470,9 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		}
 		if len(spec.Warmup) > 0 {
 			m.poolWarmups[spec.PoolKey] = spec.Warmup
+		}
+		if spec.CaptureTrim {
+			m.poolTrims[spec.PoolKey] = true
 		}
 	}
 	if slices.ContainsFunc(cfg.Pools, func(s config.PoolSpec) bool { return s.Egress.Intercepts() }) {
