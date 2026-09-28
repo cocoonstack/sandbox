@@ -146,9 +146,9 @@ func TestListPassesNoPositionalArgsToCocoon(t *testing.T) {
 
 func TestImageIDsMapsNameToID(t *testing.T) {
 	fakeCocoon(t, "#!/bin/sh\n[ \"$*\" = \"image list --format json\" ] || { echo \"unexpected args $*\" >&2; exit 1; }\n"+
-		"echo '[{\"id\":\"sha256:afe6\",\"name\":\"ghcr.io/cocoonstack/sandbox/e2b-rt:24.04\",\"type\":\"oci\",\"size\":1}]'\n")
+		"echo '[{\"id\":\"sha256:afe6\",\"name\":\"ghcr.io/cocoonstack/sandbox/rt:24.04\",\"type\":\"oci\",\"size\":1}]'\n")
 	ids, err := New("cocoon", nil, nil, false, false, "").ImageIDs(t.Context())
-	if err != nil || len(ids) != 1 || ids["ghcr.io/cocoonstack/sandbox/e2b-rt:24.04"] != "sha256:afe6" {
+	if err != nil || len(ids) != 1 || ids["ghcr.io/cocoonstack/sandbox/rt:24.04"] != "sha256:afe6" {
 		t.Fatalf("ImageIDs = %v, %v; want the one image cocoon printed", ids, err)
 	}
 }

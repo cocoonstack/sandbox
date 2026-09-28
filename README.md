@@ -59,7 +59,7 @@ performance) — source in
   `smoke`, `meshsmoke`, `crossnode`, `coldproof`, `egresssmoke`,
   `interceptsmoke`, `sockssmoke`, `volumesmoke`, `lifecycle` (idle→hibernate→archive),
   `androidsmoke`, `browsersmoke`, `ringsmoke` (output ring cap, exec as a user),
-  `portsmoke` (the guest-port relay), `envdsmoke` (the e2b flavor's envd through it),
+  `portsmoke` (the guest-port relay),
   and the `pullbench`/`pushbench`/`rpcbench`/`qaab` perf drivers
 - `boot/kernel/` — kernel version pin (`VERSION` + matching tarball `SHA256`,
   bump both together) + config fragment (amd64: over `x86_64_defconfig` +
