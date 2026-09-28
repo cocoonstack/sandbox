@@ -427,9 +427,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		var rec templateRecord
 		if json.Unmarshal(r.Meta, &rec) == nil && rec.ID != "" {
 			info := TemplateInfo{Key: rec.Key, ContentDigest: r.Digest, Tenant: rec.Tenant, CreatedAt: rec.CreatedAt}
-			if r.Labels != nil && json.Unmarshal(r.Labels, &info.Labels) != nil {
-				info.Labels = nil
-			}
+			_ = json.Unmarshal(r.Labels, &info.Labels)
 			m.tplSet[rec.ID] = info
 		}
 	}
