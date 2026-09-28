@@ -723,8 +723,8 @@ func TestEgressDoorHalfCloseReachesTheGuest(t *testing.T) {
 	}
 	t.Cleanup(func() { m.disarmEgress(sb.ID, true) })
 
-	_, resp := connectDoor(t, engine.EgressSocketPath(sb.VsockSocket), origin.Addr().String())
-	body, bodyErr := io.ReadAll(resp.Body)
+	_, tunnel := connectDoor(t, engine.EgressSocketPath(sb.VsockSocket), origin.Addr().String())
+	body, bodyErr := io.ReadAll(tunnel)
 	if bodyErr != nil {
 		t.Fatalf("tunnel did not end with EOF after the origin closed: %v", bodyErr)
 	}
@@ -947,7 +947,7 @@ func dialDoors(t *testing.T, sb *types.Sandbox) {
 	}
 }
 
-func connectDoor(t *testing.T, path, target string) (net.Conn, *http.Response) {
+func connectDoor(t *testing.T, path, target string) (net.Conn, io.ReadCloser) {
 	t.Helper()
 	conn, err := net.DialTimeout("unix", path, 2*time.Second)
 	if err != nil {
@@ -966,7 +966,7 @@ func connectDoor(t *testing.T, path, target string) (net.Conn, *http.Response) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("CONNECT answered %s", resp.Status)
 	}
-	return conn, resp
+	return conn, resp.Body
 }
 
 func refillWarmVM(t *testing.T, m *Manager) *types.Sandbox {

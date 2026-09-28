@@ -1025,7 +1025,7 @@ func TestOperatorPortDialsOnOneSandboxRunConcurrently(t *testing.T) {
 		return guest, nil
 	}
 	errs := make(chan error, 2)
-	for range 2 {
+	for i := range int32(2) {
 		go func() {
 			conn, err := m.DialPort(t.Context(), sb.ID, Cred{Operator: true}, 49983)
 			if err == nil {
@@ -1033,8 +1033,8 @@ func TestOperatorPortDialsOnOneSandboxRunConcurrently(t *testing.T) {
 			}
 			errs <- err
 		}()
+		waitFor(t, func() bool { return arrived.Load() == i+1 })
 	}
-	waitFor(t, func() bool { return arrived.Load() == 2 })
 	close(release)
 	for range 2 {
 		if err := <-errs; err != nil {
