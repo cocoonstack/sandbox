@@ -1725,6 +1725,36 @@ func TestForeignTemplateGossipNeverEscalates(t *testing.T) {
 	}
 }
 
+func TestARequiredPromotedClaimIsNeverSentToAWarmPeer(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		require    bool
+		wantStatus int
+		wantWarm   bool
+	}{
+		{"a plain claim follows the warm peer", false, http.StatusOK, true},
+		{"a required promoted claim answers 404 rather than a warm peer", true, http.StatusNotFound, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+				return nil, pool.ErrUnknownTemplate
+			}}
+			srv := New("sekret", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"warm:7777"}}, nil, nil, nil)
+			ts := httptest.NewServer(srv.Handler())
+			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+			body, _ := json.Marshal(types.ClaimRequest{Template: "ns/app", RequirePromoted: tt.require})
+			resp := postJSON(t, ts.URL+"/v1/claim", "sekret", string(body))
+			defer resp.Body.Close()
+			var cr types.ClaimResponse
+			_ = json.UnmarshalRead(resp.Body, &cr)
+			if resp.StatusCode != tt.wantStatus || (len(cr.Redirect) > 0) != tt.wantWarm {
+				t.Errorf("status=%d redirect=%v, want %d and warm redirect %v", resp.StatusCode, cr.Redirect, tt.wantStatus, tt.wantWarm)
+			}
+		})
+	}
+}
+
 func TestAPlainClaimRequiringAPromotedTemplateNeverColdBoots(t *testing.T) {
 	for _, tt := range []struct {
 		name         string

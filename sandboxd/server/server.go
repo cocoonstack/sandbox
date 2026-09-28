@@ -378,7 +378,7 @@ func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req t
 	if s.placer == nil || req.NoRedirect {
 		return false
 	}
-	if s.writeRedirect(w, s.placer.Candidates(hash)) {
+	if !req.RequirePromoted && s.writeRedirect(w, s.placer.Candidates(hash)) {
 		return true
 	}
 	owners := s.templateOwners(s.placer.TemplateOwners, hash, tenant)
