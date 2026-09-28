@@ -393,8 +393,8 @@ query parameters default like a claim's):
 Labels follow the [claim `metadata`](#post-v1claim) rules — at most 16 pairs,
 the same key and value grammar, at most 4 KiB as JSON — and replace the whole
 map; `{}` clears it. They are stored beside the template's record, so they
-survive a restart, are shared through a shared checkpoint store, and go with the
-template when it is deleted; a re-promote starts with none. A tenant may label
+survive a restart, are listed by the node that promoted the template or loaded
+it at startup, and go with the template when it is deleted; a re-promote starts with none. A tenant may label
 only templates it promoted — anything else is 404, root labels anything. 204 on
 success, 400 bad labels or body, 404 unknown template, 409 when the key belongs
 to a configured pool. The call speaks only for the node it reaches; it does not
@@ -599,8 +599,9 @@ Auth: root only. Sets the sandbox's instance-metadata document: the JSON a guest
 agent reads from `169.254.169.254` in the IMDSv2 shape, as cloud-init and
 similar agents do (`PUT /latest/api/token`, then `GET /` with the
 `X-metadata-token` header). It is unrelated to the claim's `metadata` labels.
-The body is one JSON object of at most 4 KiB, stored and served verbatim, and
-guests read `{}` until the first call. The node writes it to
+The body is one JSON object of at most 4 KiB, stored and served verbatim; a
+guest with no document answers `{}`, and a fork child, checkpoint branch or
+template clone starts with the document its source held. The node writes it to
 `/run/silkd/instance-metadata.json` in the guest atomically, so repeating a call
 is a no-op. silkd serves the address only in images that alias it on `lo`.
 
@@ -675,8 +676,8 @@ why the upgrade header is mandatory: a bare `GET` must not consume a hibernate
 snapshot. With the root `api_token` the relay is passive, for control-plane
 reads such as metrics: it never wakes the sandbox and never stamps activity,
 so a poll neither undoes a pause nor keeps a sandbox from idling. A hibernated
-or archived sandbox, or one with a hibernate or wake in flight, answers `409`
-at once; an open passive relay still holds the sandbox against the idle sweep.
+or archived sandbox, or one with a hibernate, wake or capture (checkpoint,
+promote, trim) in flight, answers `409` at once; an open passive relay still holds the sandbox against the idle sweep.
 400 a port outside 1-65535; 401 missing bearer token; 404 unknown sandbox or
 wrong token; 409 a passive relay to a paused sandbox; 426 without the upgrade
 header; 502 when the guest cannot be reached on that port — no listener, or a
