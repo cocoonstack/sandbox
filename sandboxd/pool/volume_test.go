@@ -285,7 +285,7 @@ func TestClaimProvisionPromotedRejectsMissingTemplateBeforeProvision(t *testing.
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "data", Path: path}})
 
-	_, err := m.ClaimProvisionPromoted(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}})
+	_, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{RequirePromoted: true, Volumes: []types.Volume{{Name: "data"}}})
 	if !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("error=%v, want ErrUnknownTemplate", err)
 	}
@@ -306,7 +306,7 @@ func TestClaimProvisionPromotedAppliesVolumesFromTemplate(t *testing.T) {
 	beforeColds, beforeClones := len(eng.colds), len(eng.clones)
 	eng.volumeOps = nil
 
-	sb, err := m.ClaimProvisionPromoted(t.Context(), key, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}})
+	sb, err := m.ClaimProvision(t.Context(), key, ClaimOptions{RequirePromoted: true, Volumes: []types.Volume{{Name: "data"}}})
 	if err != nil {
 		t.Fatalf("ClaimProvisionPromoted: %v", err)
 	}
@@ -362,7 +362,7 @@ func TestPooledKeyOutranksPromotedTemplate(t *testing.T) {
 	if got := eng.cloneFroms; !slices.Equal(got, []string{"/goldens/pooled"}) {
 		t.Errorf("clone sources=%v, want only the pool golden", got)
 	}
-	if _, err := m.ClaimProvisionPromoted(t.Context(), key, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); !errors.Is(err, ErrUnknownTemplate) {
+	if _, err := m.ClaimProvision(t.Context(), key, ClaimOptions{RequirePromoted: true, Volumes: []types.Volume{{Name: "data"}}}); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("stale-peer promoted claim: %v, want ErrUnknownTemplate", err)
 	}
 }

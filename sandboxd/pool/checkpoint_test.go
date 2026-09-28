@@ -35,7 +35,7 @@ func TestCheckpointThenBranch(t *testing.T) {
 		t.Error("checkpoint destroyed a VM; the source must keep running")
 	}
 
-	branch, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, time.Hour, "", "", nil)
+	branch, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, ClaimOptions{TTL: time.Hour})
 	if err != nil {
 		t.Fatalf("ClaimCheckpoint: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestCheckpointThenBranch(t *testing.T) {
 	if err := m.DeleteCheckpoint(t.Context(), ckpt.ID, "", DeleteFleet); err != nil {
 		t.Fatalf("DeleteCheckpoint: %v", err)
 	}
-	if _, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, time.Hour, "", "", nil); !errors.Is(err, ErrUnknownCheckpoint) {
+	if _, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrUnknownCheckpoint) {
 		t.Errorf("claim after delete: %v, want ErrUnknownCheckpoint", err)
 	}
 }
@@ -66,14 +66,14 @@ func TestCheckpointBranchTakesItsOwnMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	branch, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, time.Hour, "", "", types.Metadata{"role": "branch"})
+	branch, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, ClaimOptions{TTL: time.Hour, Metadata: types.Metadata{"role": "branch"}})
 	if err != nil {
 		t.Fatalf("ClaimCheckpoint: %v", err)
 	}
 	if len(branch.Metadata) != 1 || branch.Metadata["role"] != "branch" {
 		t.Errorf("branch metadata %v, want the checkpoint claim's own", branch.Metadata)
 	}
-	bare, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, time.Hour, "", "", nil)
+	bare, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, ClaimOptions{TTL: time.Hour})
 	if err != nil {
 		t.Fatalf("ClaimCheckpoint without metadata: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestCheckpointValidation(t *testing.T) {
 		t.Errorf("bad name: %v, want ErrBadName", err)
 	}
 	for _, id := range []string{"../../etc", "ck_zz", "", "ck_0011223344556677x"} {
-		if _, err := m.ClaimCheckpoint(t.Context(), id, time.Hour, "", "", nil); !errors.Is(err, ErrUnknownCheckpoint) {
+		if _, err := m.ClaimCheckpoint(t.Context(), id, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrUnknownCheckpoint) {
 			t.Errorf("claim %q: %v, want ErrUnknownCheckpoint", id, err)
 		}
 		if err := m.DeleteCheckpoint(t.Context(), id, "", DeleteFleet); !errors.Is(err, ErrUnknownCheckpoint) {
@@ -283,7 +283,7 @@ func TestRejectedCheckpointOpsLeakNoRecLock(t *testing.T) {
 	base := lockCount(m)
 
 	for _, id := range []string{"../../etc", "ck_zz", "", "ck_00112233445566ff", "ck_deadbeefdeadbeef"} {
-		if _, err := m.ClaimCheckpoint(t.Context(), id, time.Hour, "", "", nil); !errors.Is(err, ErrUnknownCheckpoint) {
+		if _, err := m.ClaimCheckpoint(t.Context(), id, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrUnknownCheckpoint) {
 			t.Errorf("claim %q: %v, want ErrUnknownCheckpoint", id, err)
 		}
 		if err := m.DeleteCheckpoint(t.Context(), id, "", DeleteFleet); !errors.Is(err, ErrUnknownCheckpoint) {

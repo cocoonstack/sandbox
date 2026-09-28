@@ -284,8 +284,8 @@ func TestInfoListsThePromotedTemplatesOnTheWire(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	want := `"templates":[{"key":{"template":"app:v1","net":"none","size":"small"},"content_digest":"sha256:aa","created_at":"2026-09-28T01:02:03Z","cpu_count":1,"mem_total_bytes":536870912},` +
-		`{"key":{"template":"app:v2","net":"none","size":"medium"},"content_digest":"sha256:bb","tenant":"acme","created_at":"2026-09-28T01:02:03Z","cpu_count":2,"mem_total_bytes":1073741824}]`
+	want := `"templates":[{"key":{"template":"app:v1","net":"none","size":"small"},"content_digest":"sha256:aa","cpu_count":1,"mem_total_bytes":536870912,"created_at":"2026-09-28T01:02:03Z"},` +
+		`{"key":{"template":"app:v2","net":"none","size":"medium"},"content_digest":"sha256:bb","tenant":"acme","cpu_count":2,"mem_total_bytes":1073741824,"created_at":"2026-09-28T01:02:03Z"}]`
 	if !strings.Contains(string(body), want) {
 		t.Errorf("info body %s, want it to carry %s", body, want)
 	}
@@ -2487,11 +2487,7 @@ func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, o pool.C
 func (f *fakeManager) NetRoute(*types.Sandbox) types.NetRoute { return f.netRoute }
 
 func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {
-	return fakeClaimProvision(ctx, f, key, o, false)
-}
-
-func (f *fakeManager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {
-	return fakeClaimProvision(ctx, f, key, o, true)
+	return fakeClaimProvision(ctx, f, key, o)
 }
 
 func (f *fakeManager) Release(_ context.Context, id string, cred pool.Cred) error {
@@ -2665,7 +2661,8 @@ func (f *fakeManager) Checkpoint(_ context.Context, id string, cred pool.Cred, n
 	return f.checkpoint(id, credToken(cred), name)
 }
 
-func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, _ time.Duration, onExpire types.ExpireAction, tenant string, metadata types.Metadata) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, o pool.ClaimOptions) (*types.Sandbox, error) {
+	onExpire, tenant, metadata := o.OnExpire, o.Tenant, o.Metadata
 	f.gotTenant = tenant
 	f.gotMetadata = metadata
 	f.gotOnExpire = onExpire
@@ -2675,7 +2672,8 @@ func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, _ time.D
 	return f.claimCheckpoint(ckptID)
 }
 
-func (f *fakeManager) ClaimCheckpointHeal(_ context.Context, ckptID string, _ time.Duration, onExpire types.ExpireAction, tenant string, metadata types.Metadata) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimCheckpointHeal(_ context.Context, ckptID string, o pool.ClaimOptions) (*types.Sandbox, error) {
+	onExpire, tenant, metadata := o.OnExpire, o.Tenant, o.Metadata
 	f.gotTenant = tenant
 	f.gotMetadata = metadata
 	f.gotOnExpire = onExpire
@@ -2827,14 +2825,14 @@ func postJSON(t *testing.T, url, token, body string) *http.Response {
 	return resp
 }
 
-func fakeClaimProvision(ctx context.Context, f *fakeManager, key types.PoolKey, o pool.ClaimOptions, requirePromoted bool) (*types.Sandbox, error) {
+func fakeClaimProvision(ctx context.Context, f *fakeManager, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {
 	f.provisionCalls++
 	f.gotTenant = o.Tenant
 	f.gotClaimRef = o.ClaimRef
 	f.gotMetadata = o.Metadata
 	f.gotOnExpire = o.OnExpire
 	f.gotVolumes = slices.Clone(o.Volumes)
-	f.gotRequirePromoted = requirePromoted
+	f.gotRequirePromoted = o.RequirePromoted
 	f.gotNoEgress = o.NoEgress
 	if f.claim == nil {
 		return &types.Sandbox{ID: "sb_1", Token: "tok", Volumes: slices.Clone(o.Volumes)}, nil

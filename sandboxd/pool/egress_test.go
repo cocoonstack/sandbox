@@ -813,7 +813,7 @@ func TestAPromotedTemplatesCloneEgressesAsItsSourcePool(t *testing.T) {
 		t.Fatalf("promote: %v", err)
 	}
 
-	clone, err := m.ClaimProvisionPromoted(t.Context(), key, ClaimOptions{})
+	clone, err := m.ClaimProvision(t.Context(), key, ClaimOptions{RequirePromoted: true})
 	if err != nil {
 		t.Fatalf("claim the template: %v", err)
 	}
@@ -840,7 +840,7 @@ func TestAPromotedTemplatesCloneEgressesAsItsSourcePool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("checkpoint the clone: %v", err)
 	}
-	branch, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, 0, "", "", nil)
+	branch, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, ClaimOptions{})
 	if err != nil {
 		t.Fatalf("branch the checkpoint: %v", err)
 	}
@@ -861,7 +861,7 @@ func TestAPromotedTemplatesCloneInterceptsAsItsSourcePool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("promote: %v", err)
 	}
-	clone, err := m.ClaimProvisionPromoted(t.Context(), key, ClaimOptions{})
+	clone, err := m.ClaimProvision(t.Context(), key, ClaimOptions{RequirePromoted: true})
 	if err != nil {
 		t.Fatalf("claim the template: %v", err)
 	}
@@ -906,7 +906,7 @@ func TestAClaimWithoutEgressGetsNoDoorsWhateverItsPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("promote: %v", err)
 	}
-	clone, err := m.ClaimProvisionPromoted(t.Context(), key, ClaimOptions{NoEgress: true})
+	clone, err := m.ClaimProvision(t.Context(), key, ClaimOptions{RequirePromoted: true, NoEgress: true})
 	if err != nil {
 		t.Fatalf("claim the template: %v", err)
 	}
@@ -926,6 +926,7 @@ func TestAClaimWithoutEgressGetsNoDoorsWhateverItsPolicy(t *testing.T) {
 
 func TestNetRouteFollowsTheLaneAndTheDoors(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
+	m.guardedEgress = true
 	armed := &types.Sandbox{ID: "sb_armed", Key: testKey}
 	m.egressListeners[armed.ID] = &egressListener{}
 	for _, tc := range []struct {
@@ -958,7 +959,7 @@ func TestARepromoteCarriesItsNewSourcePool(t *testing.T) {
 		if err != nil {
 			t.Fatalf("promote from %s: %v", source.Template, err)
 		}
-		clone, err := m.ClaimProvisionPromoted(t.Context(), key, ClaimOptions{})
+		clone, err := m.ClaimProvision(t.Context(), key, ClaimOptions{RequirePromoted: true})
 		if err != nil {
 			t.Fatalf("claim the template: %v", err)
 		}

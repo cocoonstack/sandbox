@@ -1009,16 +1009,6 @@ func TestTokenPortDialStillWakesAHibernatedSandbox(t *testing.T) {
 	}
 }
 
-type plainConn struct {
-	net.Conn
-}
-
-type closeWriteConn struct {
-	net.Conn
-
-	closedWrite bool
-}
-
 func TestOperatorPortDialsOnOneSandboxRunConcurrently(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -1049,6 +1039,16 @@ func TestOperatorPortDialsOnOneSandboxRunConcurrently(t *testing.T) {
 			t.Errorf("an operator dial while another is in flight on the same sandbox: %v, want a stream", err)
 		}
 	}
+}
+
+type plainConn struct {
+	net.Conn
+}
+
+type closeWriteConn struct {
+	net.Conn
+
+	closedWrite bool
 }
 
 func (c *closeWriteConn) CloseWrite() error {

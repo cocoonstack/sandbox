@@ -343,7 +343,7 @@ func TestTemplateClaimIsTenantScoped(t *testing.T) {
 		t.Fatalf("root promote: %v", err)
 	}
 
-	if _, err := m.ClaimProvisionPromoted(t.Context(), private, ClaimOptions{TTL: time.Hour, Tenant: "beta"}); !errors.Is(err, ErrUnknownTemplate) {
+	if _, err := m.ClaimProvision(t.Context(), private, ClaimOptions{RequirePromoted: true, TTL: time.Hour, Tenant: "beta"}); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("beta claiming acme's template: %v, want ErrUnknownTemplate", err)
 	}
 	for _, tc := range []struct {
@@ -356,7 +356,7 @@ func TestTemplateClaimIsTenantScoped(t *testing.T) {
 		{"tenant claims a root template", shared, "beta"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			sb, err := m.ClaimProvisionPromoted(t.Context(), tc.key, ClaimOptions{TTL: time.Hour, Tenant: tc.tenant})
+			sb, err := m.ClaimProvision(t.Context(), tc.key, ClaimOptions{RequirePromoted: true, TTL: time.Hour, Tenant: tc.tenant})
 			if err != nil {
 				t.Fatalf("claim: %v", err)
 			}

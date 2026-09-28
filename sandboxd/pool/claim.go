@@ -26,29 +26,25 @@ const (
 
 // ClaimOptions is what a claim asks for beyond its key; the zero value takes every default.
 type ClaimOptions struct {
-	TTL      time.Duration
-	OnExpire types.ExpireAction
-	Tenant   string
-	ClaimRef string
-	Metadata types.Metadata
-	Volumes  []types.Volume
-	NoEgress bool
+	TTL             time.Duration
+	OnExpire        types.ExpireAction
+	Tenant          string
+	ClaimRef        string
+	Metadata        types.Metadata
+	Volumes         []types.Volume
+	NoEgress        bool
+	RequirePromoted bool
+}
+
+// apply stamps the options a claim carries for its life.
+func (o ClaimOptions) apply(sb *types.Sandbox) {
+	sb.Tenant, sb.ClaimRef, sb.Metadata, sb.OnExpire, sb.NoEgress = o.Tenant, o.ClaimRef, o.Metadata, o.OnExpire.Or(""), o.NoEgress
 }
 
 // ClaimWarm transfers ownership of a warm sandbox without provisioning; ErrNoWarm means empty.
 func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, o ClaimOptions) (*types.Sandbox, error) {
 	start := time.Now()
-	if err := m.validate(key); err != nil {
-		return nil, err
-	}
-	if err := archivable(key, len(o.Volumes) > 0, o.OnExpire); err != nil {
-		return nil, err
-	}
-	volumeSpecs, err := m.resolveVolumes(ctx, o.Tenant, o.Volumes)
-	if err != nil {
-		return nil, err
-	}
-	applied, err := m.admitVolumes(o.Tenant, volumeSpecs)
+	volumeSpecs, applied, err := m.admitOptions(ctx, key, o)
 	if err != nil {
 		return nil, err
 	}
@@ -73,11 +69,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, o ClaimOptio
 		m.abortVolumeClaim(ctx, sb.VMName, &reserved)
 		return nil, volumeErr
 	}
-	sb.Tenant = o.Tenant
-	sb.ClaimRef = o.ClaimRef
-	sb.Metadata = o.Metadata
-	sb.OnExpire = o.OnExpire.Or("")
-	sb.NoEgress = o.NoEgress
+	o.apply(sb)
 	reserved = nil
 	out, err := m.finalize(ctx, sb, o.TTL)
 	if err == nil {
@@ -87,14 +79,46 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, o ClaimOptio
 	return out, err
 }
 
-// ClaimProvision creates a claim-ready sandbox (golden clone or cold boot).
+// ClaimProvision creates a claim-ready sandbox, a golden clone or a cold boot; with RequirePromoted only a promoted template serves it.
 func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, o ClaimOptions) (*types.Sandbox, error) {
-	return m.claimProvision(ctx, key, o, false)
-}
-
-// ClaimProvisionPromoted requires key to resolve from a promoted template, never a cold boot.
-func (m *Manager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, o ClaimOptions) (*types.Sandbox, error) {
-	return m.claimProvision(ctx, key, o, true)
+	start := time.Now()
+	volumeSpecs, applied, err := m.admitOptions(ctx, key, o)
+	if err != nil {
+		return nil, err
+	}
+	reserved := applied
+	defer func() { m.unreserveVolumes(reserved) }()
+	golden, err := m.resolveGolden(ctx, key, o.Tenant)
+	if err != nil {
+		return nil, fmt.Errorf("resolve template: %w", err)
+	}
+	if o.RequirePromoted && !golden.promoted {
+		golden.release()
+		return nil, ErrUnknownTemplate
+	}
+	sb, err := m.provision(ctx, key, golden.dir)
+	golden.release()
+	if err != nil {
+		return nil, err
+	}
+	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs, applied); volumeErr != nil {
+		m.abortVolumeClaim(ctx, sb.VMName, &reserved)
+		return nil, volumeErr
+	}
+	sb.TemplateDigest = golden.templateDigest
+	sb.PolicySource = golden.source
+	o.apply(sb)
+	reserved = nil
+	out, err := m.finalize(ctx, sb, o.TTL)
+	if err == nil {
+		if golden.dir != "" {
+			m.counters.claimsClone.Add(1)
+		} else {
+			m.counters.claimsCold.Add(1)
+		}
+		m.counters.claimNanos.Add(uint64(time.Since(start))) //nolint:gosec // durations are positive
+	}
+	return out, err
 }
 
 // Release destroys a claimed sandbox after authorizing cred.
@@ -641,59 +665,20 @@ func (m *Manager) authed(id, token string) (*types.Sandbox, bool) {
 	return sb, true
 }
 
-func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, o ClaimOptions, requirePromoted bool) (*types.Sandbox, error) {
-	start := time.Now()
+// admitOptions validates the key and options and admits the claim's volumes, which the caller unreserves until finalize.
+func (m *Manager) admitOptions(ctx context.Context, key types.PoolKey, o ClaimOptions) ([]resolvedVolume, []types.Volume, error) {
 	if err := m.validate(key); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := archivable(key, len(o.Volumes) > 0, o.OnExpire); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	volumeSpecs, err := m.resolveVolumes(ctx, o.Tenant, o.Volumes)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	applied, err := m.admitVolumes(o.Tenant, volumeSpecs)
-	if err != nil {
-		return nil, err
-	}
-	reserved := applied
-	defer func() { m.unreserveVolumes(reserved) }()
-	golden, err := m.resolveGolden(ctx, key, o.Tenant)
-	if err != nil {
-		return nil, fmt.Errorf("resolve template: %w", err)
-	}
-	if requirePromoted && !golden.promoted {
-		golden.release()
-		return nil, ErrUnknownTemplate
-	}
-	sb, err := m.provision(ctx, key, golden.dir)
-	golden.release()
-	if err != nil {
-		return nil, err
-	}
-	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs, applied); volumeErr != nil {
-		m.abortVolumeClaim(ctx, sb.VMName, &reserved)
-		return nil, volumeErr
-	}
-	sb.TemplateDigest = golden.templateDigest
-	sb.PolicySource = golden.source
-	sb.Tenant = o.Tenant
-	sb.ClaimRef = o.ClaimRef
-	sb.Metadata = o.Metadata
-	sb.OnExpire = o.OnExpire.Or("")
-	sb.NoEgress = o.NoEgress
-	reserved = nil
-	out, err := m.finalize(ctx, sb, o.TTL)
-	if err == nil {
-		if golden.dir != "" {
-			m.counters.claimsClone.Add(1)
-		} else {
-			m.counters.claimsCold.Add(1)
-		}
-		m.counters.claimNanos.Add(uint64(time.Since(start))) //nolint:gosec // durations are positive
-	}
-	return out, err
+	return volumeSpecs, applied, err
 }
 
 func stampIdentity(sb *types.Sandbox, ttl time.Duration) {

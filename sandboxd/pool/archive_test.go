@@ -177,7 +177,7 @@ func TestClaimCheckpointRefusesArchive(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 	mustArchive(t, m, sb)
 
-	if _, err := m.ClaimCheckpoint(t.Context(), sb.ArchiveCk, 0, "", "", nil); !errors.Is(err, ErrUnknownCheckpoint) {
+	if _, err := m.ClaimCheckpoint(t.Context(), sb.ArchiveCk, ClaimOptions{}); !errors.Is(err, ErrUnknownCheckpoint) {
 		t.Errorf("branch from archive ck: %v, want ErrUnknownCheckpoint", err)
 	}
 	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {

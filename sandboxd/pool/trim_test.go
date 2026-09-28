@@ -32,7 +32,7 @@ func TestCaptureTrimRunsBeforeTheSnapOnlyForItsPool(t *testing.T) {
 	if _, err = m.Checkpoint(t.Context(), trimmed.ID, Cred{Token: trimmed.Token}, "c1", ""); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
-	clone, err := m.ClaimProvisionPromoted(t.Context(), key, ClaimOptions{})
+	clone, err := m.ClaimProvision(t.Context(), key, ClaimOptions{RequirePromoted: true})
 	if err != nil {
 		t.Fatalf("claim the template: %v", err)
 	}

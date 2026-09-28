@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"slices"
 	"sync"
 	"time"
@@ -63,7 +64,6 @@ var poolErrHTTP = []struct {
 type Manager interface {
 	ClaimWarm(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error)
 	ClaimProvision(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error)
-	ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error)
 	NetRoute(sb *types.Sandbox) types.NetRoute
 	Release(ctx context.Context, id string, cred pool.Cred) error
 	Hibernate(ctx context.Context, id string, cred pool.Cred) error
@@ -84,8 +84,8 @@ type Manager interface {
 	SetInstanceMetadata(ctx context.Context, id string, doc []byte) error
 	Audit(ctx context.Context, id string, line []byte)
 	AuditEnabled() bool
-	ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, onExpire types.ExpireAction, tenant string, metadata types.Metadata) (*types.Sandbox, error)
-	ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl time.Duration, onExpire types.ExpireAction, tenant string, metadata types.Metadata) (*types.Sandbox, error)
+	ClaimCheckpoint(ctx context.Context, ckptID string, o pool.ClaimOptions) (*types.Sandbox, error)
+	ClaimCheckpointHeal(ctx context.Context, ckptID string, o pool.ClaimOptions) (*types.Sandbox, error)
 	Checkpoints(ctx context.Context, tenant string) ([]types.Checkpoint, error)
 	HasCheckpoint(ctx context.Context, ckptID string) bool
 	FetchCheckpoint(ctx context.Context, ckptID string) (dir string, meta []byte, release func(), err error)
@@ -255,11 +255,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		if s.redirectClaim(r.Context(), w, req, key, key.Hash(), tenant) {
 			return
 		}
-		provision := s.mgr.ClaimProvision
-		if req.RequirePromoted {
-			provision = s.mgr.ClaimProvisionPromoted
-		}
-		sb, err = provision(r.Context(), key, o)
+		sb, err = s.mgr.ClaimProvision(r.Context(), key, o)
 	}
 	if errors.Is(err, pool.ErrQuota) && s.placer != nil && !req.NoRedirect &&
 		s.writeRedirect(w, s.placer.Candidates(key.Hash())) {
@@ -288,7 +284,7 @@ func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req t
 	var sb *types.Sandbox
 	o := claimOptions(req, tenant)
 	if req.RequirePromoted {
-		sb, err = s.mgr.ClaimProvisionPromoted(r.Context(), key, o)
+		sb, err = s.mgr.ClaimProvision(r.Context(), key, o)
 	} else {
 		sb, err = s.mgr.ClaimWarm(r.Context(), key, o)
 		if errors.Is(err, pool.ErrNoWarm) {
@@ -515,12 +511,13 @@ func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ckptID := r.PathValue("id")
-	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, req.TTL(), req.OnExpire, tenantFrom(r.Context()), req.Metadata)
+	o := pool.ClaimOptions{TTL: req.TTL(), OnExpire: req.OnExpire, Tenant: tenantFrom(r.Context()), Metadata: req.Metadata}
+	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, o)
 	if errors.Is(err, pool.ErrUnknownCheckpoint) {
 		if !req.NoRedirect && s.prober != nil && s.writeRedirect(w, s.prober.Owners(r.Context(), ckptID)) {
 			return
 		}
-		sb, err = s.mgr.ClaimCheckpointHeal(r.Context(), ckptID, req.TTL(), req.OnExpire, tenantFrom(r.Context()), req.Metadata)
+		sb, err = s.mgr.ClaimCheckpointHeal(r.Context(), ckptID, o)
 	}
 	writeResult(w, r, "claim checkpoint", ckptID, "provisioning failed", err, func() {
 		writeJSON(w, http.StatusOK, s.claimResponse(sb))
@@ -580,7 +577,7 @@ func (s *Server) handleDeleteCheckpoint(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	key := types.PoolKey{Template: q.Get("template"), Net: types.NetShape(q.Get("net")), Size: types.Size(q.Get("size"))}.Defaulted()
+	key := templateKey(q)
 	err := s.mgr.DeleteTemplate(r.Context(), key, tenantFrom(r.Context()))
 	if errors.Is(err, pool.ErrUnknownTemplate) && s.placer != nil && q.Get("no_redirect") == "" &&
 		s.writeRedirect(w, s.templateOwners(s.placer.TemplateOwners, key.Hash(), tenantFrom(r.Context()))) {
@@ -590,14 +587,13 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 }
-
 func (s *Server) handleSetTemplateLabels(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeBodyStrict[TemplateLabelsRequest](w, r)
 	if !ok || !validRequest(w, req.Labels.Validate()) {
 		return
 	}
 	q := r.URL.Query()
-	key := types.PoolKey{Template: q.Get("template"), Net: types.NetShape(q.Get("net")), Size: types.Size(q.Get("size"))}.Defaulted()
+	key := templateKey(q)
 	err := s.mgr.SetTemplateLabels(r.Context(), key, req.Labels, tenantFrom(r.Context()))
 	writeResult(w, r, "template labels", key.Template, "set template labels failed", err, func() {
 		w.WriteHeader(http.StatusNoContent)
@@ -738,6 +734,10 @@ func (s *Server) claimResponse(sb *types.Sandbox) types.ClaimResponse {
 func claimOptions(req types.ClaimRequest, tenant string) pool.ClaimOptions {
 	return pool.ClaimOptions{
 		TTL: req.TTL(), OnExpire: req.OnExpire, Tenant: tenant, ClaimRef: req.ClaimRef, Metadata: req.Metadata, Volumes: req.Volumes,
-		NoEgress: req.Egress != nil && !*req.Egress,
+		NoEgress: req.Egress != nil && !*req.Egress, RequirePromoted: req.RequirePromoted,
 	}
+}
+
+func templateKey(q url.Values) types.PoolKey {
+	return types.PoolKey{Template: q.Get("template"), Net: types.NetShape(q.Get("net")), Size: types.Size(q.Get("size"))}.Defaulted()
 }
