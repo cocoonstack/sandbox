@@ -196,8 +196,8 @@ func (s *Sandbox) Promote(ctx context.Context, template string) (*Template, erro
 
 // Hibernate atomically snapshots the sandbox and stops its VM, freeing its
 // memory; the next call that reaches the guest wakes it transparently with
-// sessions, processes, and memory state intact. The TTL keeps running — a
-// hibernated sandbox is still reaped at its deadline.
+// sessions, processes, and memory state intact. The TTL keeps running: at its
+// deadline a hibernated sandbox is destroyed, or archived under WithArchiveOnExpire.
 func (s *Sandbox) Hibernate(ctx context.Context) error {
 	s.pool.drain()
 	return doNoContent(ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/hibernate", nil, s.token, "hibernate")
