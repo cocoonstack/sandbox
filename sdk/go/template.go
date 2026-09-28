@@ -34,8 +34,8 @@ func (t *Template) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
 	}
 	claim.Net, claim.Size = t.net, t.size
 	noVolumes := len(claim.Volumes) == 0
-	addr, cr, err := claimFollow(t.addr, "claim", func(noRedirect, requirePromoted bool) ([]byte, error) {
-		claim.NoRedirect, claim.RequirePromoted = noRedirect || noVolumes, requirePromoted
+	addr, cr, err := claimFollow(t.addr, "claim", func(noRedirect, _ bool) ([]byte, error) {
+		claim.NoRedirect, claim.RequirePromoted = noRedirect || noVolumes, true
 		return encodeBody("claim", claim)
 	}, func(addr string, body []byte) (claimResponse, error) {
 		return t.c.claimAt(ctx, addr, body)
