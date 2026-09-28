@@ -130,23 +130,13 @@ window where that lock is absent.
 
 ## Proving it
 
-`scripts/envd-e2e.sh` runs the guest half on a node: it builds the pool with the
-warmup gate above and then drives `envdsmoke`, which claims a sandbox and
-reaches the real `envd` through the relay — health, `GET`/`POST /files`, a
-ConnectRPC unary, and a `process.Process/Start` whose output comes back over the
-Connect server stream — while asserting silkd still answers on the same VM.
-
-```bash
-K=<kit> TEMPLATE=ghcr.io/cocoonstack/sandbox/e2b-rt:24.04 bash scripts/envd-e2e.sh
-K=<kit> TEMPLATE=ghcr.io/cocoonstack/sandbox/e2b-ci:24.04 SIZE=medium CODE_INTERPRETER=1 bash scripts/envd-e2e.sh
-```
-
-Both passes check the `user` account; `CODE_INTERPRETER=1` also gates warmup on
-49999, curls its `/health` inside the guest, and runs `1+1` through the relay
-the way the SDK's `runCode` does.
-
-`envdsmoke -hold` then keeps that sandbox alive for an out-of-tree harness that
-puts a real edge proxy in front of it.
+The flavor's daemon is proved from the consumer's side: sandbox-operator's
+`scripts/envd-e2e.sh` builds the pool with the warmup gate above and drives
+`test/envdsmoke`, which claims a sandbox and reaches the real `envd` through
+the relay (health, the version the compat API reports, files, ConnectRPC, the
+`user` account, HTTP/1.1 only, and the code-interpreter API with
+`CODE_INTERPRETER=1`). sandboxd itself knows nothing of `envd`: the pool's
+warmup is a shell command like any other, and the relay carries bytes.
 
 The suite does **not** cover the guard's drop. Reaching 49983 from off the
 guest means lifting sandboxd's tap lock, which no e2e run should do. Measured
