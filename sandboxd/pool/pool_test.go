@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -1016,6 +1017,38 @@ type closeWriteConn struct {
 	net.Conn
 
 	closedWrite bool
+}
+
+func TestOperatorPortDialsOnOneSandboxRunConcurrently(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	var arrived atomic.Int32
+	release := make(chan struct{})
+	eng.guestDial = func() (net.Conn, error) {
+		arrived.Add(1)
+		<-release
+		guest, host := net.Pipe()
+		t.Cleanup(func() { _ = host.Close() })
+		return guest, nil
+	}
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			conn, err := m.DialPort(t.Context(), sb.ID, Cred{Operator: true}, 49983)
+			if err == nil {
+				_ = conn.Close()
+			}
+			errs <- err
+		}()
+	}
+	waitFor(t, func() bool { return arrived.Load() == 2 })
+	close(release)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Errorf("an operator dial while another is in flight on the same sandbox: %v, want a stream", err)
+		}
+	}
 }
 
 func (c *closeWriteConn) CloseWrite() error {

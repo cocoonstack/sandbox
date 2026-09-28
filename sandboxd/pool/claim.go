@@ -212,13 +212,16 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 	if !sb.Transition.TryLock() {
 		return nil, ErrPaused
 	}
-	defer sb.Transition.Unlock()
-	if sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "" {
+	paused, sock := sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "", sb.VsockSocket
+	if !paused {
+		sb.Hold()
+	}
+	sb.Transition.Unlock()
+	if paused {
 		return nil, ErrPaused
 	}
 	m.recordAudit(ctx, id, auditFrame{Op: "port", Port: port})
-	sb.Hold()
-	conn, err := m.eng.DialGuestPort(ctx, sb.VsockSocket, port)
+	conn, err := m.eng.DialGuestPort(ctx, sock, port)
 	if err != nil {
 		sb.UnholdIdle()
 		return nil, err
