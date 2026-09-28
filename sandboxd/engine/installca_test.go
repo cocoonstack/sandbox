@@ -179,7 +179,7 @@ func (f *fakeSilkd) handleWrite(conn net.Conn, r *bufio.Reader, path string, mod
 	reply, kind := f.writeErr, cmp.Or(f.writeKind, wire.KindInternal)
 	f.mu.Unlock()
 	if reply != "" {
-		_, _ = io.WriteString(conn, `{"type":"error","kind":"`+kind+`","message":"`+reply+`"}`+"\n")
+		writeFakeSilkdResponse(conn, &wire.ErrorResp{Kind: kind, Message: reply})
 		return
 	}
 	_, _ = io.WriteString(conn, `{"type":"done"}`+"\n")

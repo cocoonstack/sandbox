@@ -19,17 +19,7 @@ func RunContract(t *testing.T, st store.Store) {
 	ctx := t.Context()
 	const id = "ck_00000000000000aa"
 
-	staging, err := st.Stage(id)
-	if err != nil {
-		t.Fatalf("Stage: %v", err)
-	}
-	writeExport(t, staging, "disk.img", "snapshot-bytes")
-	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+id+`"}`), 0o600); err != nil {
-		t.Fatalf("write meta: %v", err)
-	}
-	if err = st.Publish(ctx, staging, id); err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
+	publishRecord(t, st, id, `{"id":"`+id+`"}`, "disk.img", "snapshot-bytes")
 
 	raw, err := st.ReadMeta(ctx, id)
 	if err != nil || string(raw) != `{"id":"`+id+`"}` {
@@ -69,17 +59,7 @@ func RunContract(t *testing.T, st store.Store) {
 		t.Fatalf("SweepStaging: %v", err)
 	}
 
-	second, err := st.Stage(id)
-	if err != nil {
-		t.Fatalf("Stage second: %v", err)
-	}
-	writeExport(t, second, "disk2.img", "second-gen")
-	if err = os.WriteFile(filepath.Join(second, store.MetaFile), []byte(`{"id":"`+id+`","gen":2}`), 0o600); err != nil {
-		t.Fatalf("write meta: %v", err)
-	}
-	if err = st.Publish(ctx, second, id); err != nil {
-		t.Fatalf("Publish second: %v", err)
-	}
+	publishRecord(t, st, id, `{"id":"`+id+`","gen":2}`, "disk2.img", "second-gen")
 	dir, meta, digest, err = st.Fetch(ctx, id)
 	if err != nil {
 		t.Fatalf("Fetch second: %v", err)
@@ -155,17 +135,7 @@ func runLabelsContract(t *testing.T, st store.Store) {
 	t.Helper()
 	ctx := t.Context()
 	const id = "ck_00000000000000dd"
-	staging, err := st.Stage(id)
-	if err != nil {
-		t.Fatalf("Stage labeled: %v", err)
-	}
-	writeExport(t, staging, "disk.img", "labeled")
-	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+id+`"}`), 0o600); err != nil {
-		t.Fatalf("write labeled meta: %v", err)
-	}
-	if err = st.Publish(ctx, staging, id); err != nil {
-		t.Fatalf("Publish labeled: %v", err)
-	}
+	publishRecord(t, st, id, `{"id":"`+id+`"}`, "disk.img", "labeled")
 	labelsOf := func() []byte {
 		t.Helper()
 		recs, metasErr := st.Metas(ctx)
@@ -178,45 +148,36 @@ func runLabelsContract(t *testing.T, st store.Store) {
 		t.Fatalf("labels before any set: %q, want none", got)
 	}
 	for _, want := range []string{`{"a":"1"}`, `{"b":"2"}`} {
-		if err = st.SetLabels(ctx, id, []byte(want)); err != nil {
+		if err := st.SetLabels(ctx, id, []byte(want)); err != nil {
 			t.Fatalf("SetLabels %s: %v", want, err)
 		}
 		if got := labelsOf(); string(got) != want {
 			t.Fatalf("labels %q, want %s replaced whole", got, want)
 		}
 	}
-	if _, _, _, err = st.Fetch(ctx, id); err != nil {
+	if _, _, _, err := st.Fetch(ctx, id); err != nil {
 		t.Fatalf("Fetch after SetLabels: %v, want the export untouched", err)
 	}
-	if err = st.SetLabels(ctx, id, nil); err != nil {
+	if err := st.SetLabels(ctx, id, nil); err != nil {
 		t.Fatalf("clear labels: %v", err)
 	}
 	if got := labelsOf(); got != nil {
 		t.Fatalf("labels after clear: %q, want none", got)
 	}
-	if err = st.SetLabels(ctx, id, []byte(`{"c":"3"}`)); err != nil {
+	if err := st.SetLabels(ctx, id, []byte(`{"c":"3"}`)); err != nil {
 		t.Fatalf("SetLabels before delete: %v", err)
 	}
-	if err = st.Delete(ctx, id); err != nil {
+	if err := st.Delete(ctx, id); err != nil {
 		t.Fatalf("Delete labeled: %v", err)
 	}
 	if recs, metasErr := st.Metas(ctx); metasErr != nil || len(recs) != 0 {
 		t.Fatalf("Metas after Delete: %d records, %v; want the labels gone with the record", len(recs), metasErr)
 	}
-	if staging, err = st.Stage(id); err != nil {
-		t.Fatalf("Stage republish: %v", err)
-	}
-	writeExport(t, staging, "disk.img", "again")
-	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+id+`","v":2}`), 0o600); err != nil {
-		t.Fatalf("write republish meta: %v", err)
-	}
-	if err = st.Publish(ctx, staging, id); err != nil {
-		t.Fatalf("republish: %v", err)
-	}
+	publishRecord(t, st, id, `{"id":"`+id+`","v":2}`, "disk.img", "again")
 	if got := labelsOf(); got != nil {
 		t.Fatalf("labels %q resurfaced on a record published after Delete", got)
 	}
-	if err = st.Delete(ctx, id); err != nil {
+	if err := st.Delete(ctx, id); err != nil {
 		t.Fatalf("Delete republished: %v", err)
 	}
 }
@@ -251,6 +212,21 @@ func rejectNonRegularReplacement(t *testing.T, st store.Store, id, wantDigest st
 	content, err := os.ReadFile(filepath.Join(dir, "nested", "a.bin")) //nolint:gosec // test path
 	if err != nil || string(content) != "a" {
 		t.Errorf("committed export after rejection = %q, %v, want a", content, err)
+	}
+}
+
+func publishRecord(t *testing.T, st store.Store, id, meta, file, content string) {
+	t.Helper()
+	staging, err := st.Stage(id)
+	if err != nil {
+		t.Fatalf("Stage %s: %v", id, err)
+	}
+	writeExport(t, staging, file, content)
+	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(meta), 0o600); err != nil {
+		t.Fatalf("write meta: %v", err)
+	}
+	if err = st.Publish(t.Context(), staging, id); err != nil {
+		t.Fatalf("Publish %s: %v", id, err)
 	}
 }
 

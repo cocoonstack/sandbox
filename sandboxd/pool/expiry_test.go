@@ -246,7 +246,7 @@ func TestCheckpointBranchTakesItsOwnExpireAction(t *testing.T) {
 		t.Fatalf("checkpoint: %v", err)
 	}
 	for _, action := range []types.ExpireAction{"", types.ExpireArchive} {
-		branch, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, time.Hour, action, "", nil)
+		branch, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, ClaimOptions{TTL: time.Hour, OnExpire: action})
 		if err != nil {
 			t.Fatalf("branch %q: %v", action, err)
 		}

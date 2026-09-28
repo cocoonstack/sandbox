@@ -85,6 +85,7 @@ var (
 	ErrUnknownTemplate   = errors.New("unknown promoted template")
 	ErrPooledTemplate    = errors.New("template belongs to a configured pool")
 	ErrTemplateOwned     = errors.New("template owned by another tenant")
+	ErrTemplateReplaced  = errors.New("template replaced since it was observed")
 	ErrNoEgress          = errors.New("node has no egress attachment (bridge or network)")
 	ErrNoEgressHibernate = errors.New("egress-lane sandboxes do not hibernate")
 	ErrNoEgressFork      = errors.New("egress-lane sandboxes cannot fork, checkpoint, or promote: a resumed guest egresses before its fresh tap can be locked")
@@ -132,22 +133,22 @@ type Engine interface {
 
 // SandboxSummary is the ops view of one live claim.
 type SandboxSummary struct {
-	ID             string         `json:"id"`
-	Key            types.PoolKey  `json:"key"`
-	Deadline       time.Time      `json:"deadline"`
-	ClaimedAt      time.Time      `json:"claimed_at,omitzero"`
-	Hibernated     bool           `json:"hibernated"`
-	Archived       bool           `json:"archived,omitzero"`
-	FromCheckpoint string         `json:"from_checkpoint,omitempty"`
-	Volumes        []types.Volume `json:"volumes,omitempty"`
-	// ClaimRef echoes the caller reference; empty for checkpoint branches and unprefixed forks.
-	ClaimRef      string             `json:"claim_ref,omitempty"`
-	Metadata      types.Metadata     `json:"metadata,omitempty"`
-	OnExpire      types.ExpireAction `json:"on_expire,omitempty"`
-	CPUCount      int                `json:"cpu_count,omitzero"`
-	MemTotalBytes int64              `json:"mem_total_bytes,omitzero"`
+	ID  string        `json:"id"`
+	Key types.PoolKey `json:"key"`
 	// Token is the sandbox's own bearer token; only the root by-id read carries it.
 	Token string `json:"token,omitempty"`
+	// ClaimRef echoes the caller reference; empty for checkpoint branches and unprefixed forks.
+	ClaimRef       string             `json:"claim_ref,omitempty"`
+	Metadata       types.Metadata     `json:"metadata,omitempty"`
+	OnExpire       types.ExpireAction `json:"on_expire,omitempty"`
+	CPUCount       int                `json:"cpu_count,omitzero"`
+	MemTotalBytes  int64              `json:"mem_total_bytes,omitzero"`
+	Volumes        []types.Volume     `json:"volumes,omitempty"`
+	Hibernated     bool               `json:"hibernated"`
+	Archived       bool               `json:"archived,omitzero"`
+	FromCheckpoint string             `json:"from_checkpoint,omitempty"`
+	ClaimedAt      time.Time          `json:"claimed_at,omitzero"`
+	Deadline       time.Time          `json:"deadline"`
 }
 
 // PoolInfo is the ops view of one pool.

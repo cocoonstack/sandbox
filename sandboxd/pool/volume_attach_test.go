@@ -286,7 +286,7 @@ func TestFinalizeTenantQuotaFailureQuiescesAndUncountsTenant(t *testing.T) {
 
 	claimErr := make(chan error, 1)
 	go func() {
-		_, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: 0, OnExpire: "", Tenant: "acme", ClaimRef: "", Metadata: nil, Volumes: []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}})
+		_, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme", Volumes: []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}})
 
 		claimErr <- err
 	}()

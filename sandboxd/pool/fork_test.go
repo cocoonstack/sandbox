@@ -251,7 +251,7 @@ func TestForkChildrenRecordTheClaimRefPrefix(t *testing.T) {
 
 func TestForkChildrenInheritTheParentMetadata(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	parent, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: 0, OnExpire: "", Tenant: "", ClaimRef: "", Metadata: types.Metadata{"team": "a"}})
+	parent, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Metadata: types.Metadata{"team": "a"}})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -291,4 +291,37 @@ func TestForkChildrenInheritTenantAndQuota(t *testing.T) {
 	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 1, 0, "", ""); !errors.Is(err, ErrQuota) {
 		t.Errorf("fork past the tenant cap: %v, want ErrQuota", err)
 	}
+}
+
+func TestForkReadsTheParentsOnExpireUnderTheLock(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	parent := mustClaim(t, m, testKey)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		expire := types.ExpireArchive
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := m.Renew(t.Context(), parent.ID, Cred{Token: parent.Token}, time.Hour, expire); err != nil {
+				t.Errorf("Renew: %v", err)
+				return
+			}
+			if expire == types.ExpireArchive {
+				expire = types.ExpireDestroy
+			} else {
+				expire = types.ExpireArchive
+			}
+		}
+	})
+	for range 5 {
+		if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 1, time.Hour, "", ""); err != nil {
+			t.Fatalf("Fork: %v", err)
+		}
+	}
+	close(stop)
+	wg.Wait()
 }

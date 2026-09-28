@@ -121,6 +121,9 @@ func (m *Manager) NetRoute(sb *types.Sandbox) types.NetRoute {
 	if m.laneOf(sb.Key) == engine.LaneDirect {
 		return types.NetRouteDirect
 	}
+	if !m.guardedEgress {
+		return types.NetRouteNone
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.egressListeners[sb.ID] != nil {

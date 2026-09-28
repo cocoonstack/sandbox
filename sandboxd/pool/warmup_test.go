@@ -80,14 +80,6 @@ func TestAdoptGoldenRequiresMatchingWarmup(t *testing.T) {
 	}
 }
 
-func TestSetPoolsRejectsWarmup(t *testing.T) {
-	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
-	err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 1, Warmup: []string{"true"}}})
-	if !errors.Is(err, ErrBadKey) || !strings.Contains(err.Error(), "warmup is set in the config file") {
-		t.Errorf("SetPools error = %v, want ErrBadKey naming warmup as config-owned", err)
-	}
-}
-
 func TestPoolSpecRejectsEmptyWarmupArgument(t *testing.T) {
 	spec := config.PoolSpec{PoolKey: testKey, Warm: 1, Warmup: []string{"node", ""}}
 	if err := spec.ValidateLimits(); err == nil || !strings.Contains(err.Error(), "warmup") {

@@ -58,32 +58,32 @@ func (m *Manager) Checkpoint(ctx context.Context, id string, cred Cred, name, te
 }
 
 // ClaimCheckpoint provisions a fresh claim cloned from a checkpoint, attributed to tenant.
-func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, ttl time.Duration, onExpire types.ExpireAction, tenant string, metadata types.Metadata) (*types.Sandbox, error) {
+func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, o ClaimOptions) (*types.Sandbox, error) {
 	// a rejected id must not leave a lock-map entry, so resolve before recLock and quota
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	if err != nil {
 		return nil, err
 	}
-	if err := m.overQuota(1, tenant); err != nil {
+	if err := m.overQuota(1, o.Tenant); err != nil {
 		return nil, err
 	}
-	return m.claimLoaded(ctx, ckpt, ttl, onExpire, tenant, metadata)
+	return m.claimLoaded(ctx, ckpt, o)
 }
 
 // ClaimCheckpointHeal claims a checkpoint held only by a peer, pulling it first.
-func (m *Manager) ClaimCheckpointHeal(ctx context.Context, ckptID string, ttl time.Duration, onExpire types.ExpireAction, tenant string, metadata types.Metadata) (*types.Sandbox, error) {
+func (m *Manager) ClaimCheckpointHeal(ctx context.Context, ckptID string, o ClaimOptions) (*types.Sandbox, error) {
 	if m.healer == nil || !store.CheckpointIDRe.MatchString(ckptID) {
 		return nil, ErrUnknownCheckpoint
 	}
 	// resolving moves a guest memory image, so quota rejects a full node before that cost
-	if err := m.overQuota(1, tenant); err != nil {
+	if err := m.overQuota(1, o.Tenant); err != nil {
 		return nil, err
 	}
 	ckpt, err := m.healCheckpoint(ctx, ckptID)
 	if err != nil {
 		return nil, err
 	}
-	return m.claimLoaded(ctx, ckpt, ttl, onExpire, tenant, metadata)
+	return m.claimLoaded(ctx, ckpt, o)
 }
 
 // Checkpoints lists tenant's checkpoints, newest first, hiding archive wake images.
@@ -199,7 +199,7 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 }
 
 // claimLoaded re-fetches under the record lock, so a delete racing the pre-check cannot slip in.
-func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl time.Duration, onExpire types.ExpireAction, tenant string, metadata types.Metadata) (*types.Sandbox, error) {
+func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, o ClaimOptions) (*types.Sandbox, error) {
 	l := m.recLock(ckpt.ID)
 	l.RLock()
 	defer func() { l.RUnlock(); m.recDone(ckpt.ID) }()
@@ -220,12 +220,10 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, ttl ti
 	if err != nil {
 		return nil, err
 	}
+	o.apply(sb)
 	sb.FromCheckpoint = ckpt.ID
 	sb.PolicySource, sb.NoEgress = ckpt.PolicySource, ckpt.NoEgress
-	sb.Tenant = tenant
-	sb.Metadata = metadata
-	sb.OnExpire = onExpire.Or("")
-	out, err := m.finalize(ctx, sb, ttl)
+	out, err := m.finalize(ctx, sb, o.TTL)
 	if err == nil {
 		m.counters.claimsClone.Add(1)
 	}

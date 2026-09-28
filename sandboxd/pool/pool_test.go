@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -294,9 +295,7 @@ func TestReapDestroysExpiredClaims(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng)
 		sb := mustClaim(t, m, testKey)
-		m.mu.Lock()
-		m.claimed[sb.ID].Deadline = time.Now().Add(-time.Second)
-		m.mu.Unlock()
+		expire(m, sb)
 
 		m.reapOnce(t.Context())
 
@@ -478,14 +477,20 @@ func TestSetPoolsRejectsInvalidSpec(t *testing.T) {
 	}
 }
 
-func TestSetPoolsRejectsEgress(t *testing.T) {
-	m := newTestManager(t, newFakeEngine())
-	err := m.SetPools(t.Context(), []config.PoolSpec{{
-		Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall,
-		Egress: &egress.Policy{},
-	}})
-	if !errors.Is(err, ErrBadKey) {
-		t.Fatalf("got %v, want ErrBadKey", err)
+func TestSetPoolsRejectsConfigOwnedFields(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
+	for _, tt := range []struct {
+		field string
+		spec  config.PoolSpec
+	}{
+		{"egress", config.PoolSpec{PoolKey: testKey, Egress: &egress.Policy{}}},
+		{"warmup", config.PoolSpec{PoolKey: testKey, Warm: 1, Warmup: []string{"true"}}},
+		{"capture_trim", config.PoolSpec{PoolKey: testKey, Warm: 1, CaptureTrim: true}},
+	} {
+		err := m.SetPools(t.Context(), []config.PoolSpec{tt.spec})
+		if !errors.Is(err, ErrBadKey) || !strings.Contains(err.Error(), tt.field+" is set in the config file") {
+			t.Errorf("SetPools error = %v, want ErrBadKey naming %s as config-owned", err, tt.field)
+		}
 	}
 }
 
@@ -689,11 +694,9 @@ func TestReapBatchDoesNotStallTheLoop(t *testing.T) {
 		for range n {
 			sbs = append(sbs, mustClaim(t, m, testKey))
 		}
-		m.mu.Lock()
 		for _, sb := range sbs {
-			m.claimed[sb.ID].Deadline = time.Now().Add(-time.Second)
+			expire(m, sb)
 		}
-		m.mu.Unlock()
 
 		stall := make(chan struct{})
 		eng.mu.Lock()
@@ -1008,6 +1011,38 @@ func TestTokenPortDialStillWakesAHibernatedSandbox(t *testing.T) {
 	}
 }
 
+func TestOperatorPortDialsOnOneSandboxRunConcurrently(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	var arrived atomic.Int32
+	release := make(chan struct{})
+	eng.guestDial = func() (net.Conn, error) {
+		arrived.Add(1)
+		<-release
+		guest, host := net.Pipe()
+		t.Cleanup(func() { _ = host.Close() })
+		return guest, nil
+	}
+	errs := make(chan error, 2)
+	for i := range int32(2) {
+		go func() {
+			conn, err := m.DialPort(t.Context(), sb.ID, Cred{Operator: true}, 49983)
+			if err == nil {
+				_ = conn.Close()
+			}
+			errs <- err
+		}()
+		waitFor(t, func() bool { return arrived.Load() == i+1 })
+	}
+	close(release)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Errorf("an operator dial while another is in flight on the same sandbox: %v, want a stream", err)
+		}
+	}
+}
+
 type plainConn struct {
 	net.Conn
 }
@@ -1174,7 +1209,7 @@ func newFakeEngine() *fakeEngine {
 	return &fakeEngine{
 		vms: map[string]string{}, stopped: map[string]bool{}, creating: map[string]bool{}, pids: map[string]int{},
 		attachDirty: map[string]bool{}, removeSeenOps: map[string][]string{}, removeSeenDirty: map[string][]string{},
-		sockRoot: "/vsock",
+		metadataDocs: map[string]string{}, sockRoot: "/vsock",
 	}
 }
 
@@ -1291,9 +1326,6 @@ func (f *fakeEngine) WriteInstanceMetadata(_ context.Context, vsockSocket string
 	defer f.mu.Unlock()
 	if f.metadataErr != nil {
 		return f.metadataErr
-	}
-	if f.metadataDocs == nil {
-		f.metadataDocs = map[string]string{}
 	}
 	f.metadataDocs[vsockSocket] = string(doc)
 	return nil

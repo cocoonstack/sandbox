@@ -285,7 +285,7 @@ func TestClaimProvisionPromotedRejectsMissingTemplateBeforeProvision(t *testing.
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "data", Path: path}})
 
-	_, err := m.ClaimProvisionPromoted(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}})
+	_, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{RequirePromoted: true, Volumes: []types.Volume{{Name: "data"}}})
 	if !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("error=%v, want ErrUnknownTemplate", err)
 	}
@@ -306,7 +306,7 @@ func TestClaimProvisionPromotedAppliesVolumesFromTemplate(t *testing.T) {
 	beforeColds, beforeClones := len(eng.colds), len(eng.clones)
 	eng.volumeOps = nil
 
-	sb, err := m.ClaimProvisionPromoted(t.Context(), key, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}})
+	sb, err := m.ClaimProvision(t.Context(), key, ClaimOptions{RequirePromoted: true, Volumes: []types.Volume{{Name: "data"}}})
 	if err != nil {
 		t.Fatalf("ClaimProvisionPromoted: %v", err)
 	}
@@ -362,7 +362,7 @@ func TestPooledKeyOutranksPromotedTemplate(t *testing.T) {
 	if got := eng.cloneFroms; !slices.Equal(got, []string{"/goldens/pooled"}) {
 		t.Errorf("clone sources=%v, want only the pool golden", got)
 	}
-	if _, err := m.ClaimProvisionPromoted(t.Context(), key, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); !errors.Is(err, ErrUnknownTemplate) {
+	if _, err := m.ClaimProvision(t.Context(), key, ClaimOptions{RequirePromoted: true, Volumes: []types.Volume{{Name: "data"}}}); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("stale-peer promoted claim: %v, want ErrUnknownTemplate", err)
 	}
 }
@@ -375,8 +375,8 @@ func TestClaimProvisionVolumeACL(t *testing.T) {
 		{Name: "public", Path: path},
 	})
 
-	_, forbiddenErr := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: 0, OnExpire: "", Tenant: "beta", ClaimRef: "", Metadata: nil, Volumes: []types.Volume{{Name: "private"}}})
-	_, unknownErr := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: 0, OnExpire: "", Tenant: "beta", ClaimRef: "", Metadata: nil, Volumes: []types.Volume{{Name: "unknown"}}})
+	_, forbiddenErr := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "beta", Volumes: []types.Volume{{Name: "private"}}})
+	_, unknownErr := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "beta", Volumes: []types.Volume{{Name: "unknown"}}})
 	if forbiddenErr == nil || unknownErr == nil || forbiddenErr.Error() != unknownErr.Error() {
 		t.Fatalf("forbidden=%q unknown=%q, want byte-identical errors", forbiddenErr, unknownErr)
 	}
@@ -394,7 +394,7 @@ func TestClaimProvisionVolumeACL(t *testing.T) {
 		{"public", "beta", "public"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: 0, OnExpire: "", Tenant: tt.tenant, ClaimRef: "", Metadata: nil, Volumes: []types.Volume{{Name: tt.volume}}}); err != nil {
+			if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: tt.tenant, Volumes: []types.Volume{{Name: tt.volume}}}); err != nil {
 				t.Errorf("ClaimProvision: %v", err)
 			}
 		})
@@ -531,7 +531,7 @@ func TestClaimProvisionRefusesUnavailableVolumesIndistinguishably(t *testing.T) 
 			if principal == "" && name == "private" {
 				continue
 			}
-			_, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: 0, OnExpire: "", Tenant: principal, ClaimRef: "", Metadata: nil, Volumes: []types.Volume{{Name: name}}})
+			_, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: principal, Volumes: []types.Volume{{Name: name}}})
 			if !errors.Is(err, ErrVolumeUnavailable) {
 				t.Fatalf("principal %q volume %q: %v, want ErrVolumeUnavailable", principal, name, err)
 			}

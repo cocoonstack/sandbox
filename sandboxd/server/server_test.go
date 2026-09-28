@@ -270,22 +270,14 @@ func TestInfoListsThePromotedTemplatesOnTheWire(t *testing.T) {
 	}}
 	ts := newTestServer(t, "sekret", mgr, nil)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/info", nil)
-	if err != nil {
-		t.Fatalf("request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer sekret")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do: %v", err)
-	}
+	resp := doReq(t, http.MethodGet, ts.URL+"/v1/info", "sekret", "")
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	want := `"templates":[{"key":{"template":"app:v1","net":"none","size":"small"},"content_digest":"sha256:aa","created_at":"2026-09-28T01:02:03Z","cpu_count":1,"mem_total_bytes":536870912},` +
-		`{"key":{"template":"app:v2","net":"none","size":"medium"},"content_digest":"sha256:bb","tenant":"acme","created_at":"2026-09-28T01:02:03Z","cpu_count":2,"mem_total_bytes":1073741824}]`
+	want := `"templates":[{"key":{"template":"app:v1","net":"none","size":"small"},"content_digest":"sha256:aa","cpu_count":1,"mem_total_bytes":536870912,"created_at":"2026-09-28T01:02:03Z"},` +
+		`{"key":{"template":"app:v2","net":"none","size":"medium"},"content_digest":"sha256:bb","tenant":"acme","cpu_count":2,"mem_total_bytes":1073741824,"created_at":"2026-09-28T01:02:03Z"}]`
 	if !strings.Contains(string(body), want) {
 		t.Errorf("info body %s, want it to carry %s", body, want)
 	}
@@ -296,15 +288,7 @@ func TestSetTemplateLabelsReplacesTheMapForRootOrTheTenant(t *testing.T) {
 	ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	put := func(t *testing.T, query, token, body string) int {
 		t.Helper()
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, ts.URL+"/v1/templates/labels?"+query, strings.NewReader(body))
-		if err != nil {
-			t.Fatalf("request: %v", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("do: %v", err)
-		}
+		resp := doReq(t, http.MethodPut, ts.URL+"/v1/templates/labels?"+query, token, body)
 		_ = resp.Body.Close()
 		return resp.StatusCode
 	}
@@ -660,15 +644,7 @@ func TestInstanceMetadataVerb(t *testing.T) {
 	ts := newTenantTestServer(t, "sekret", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	put := func(token, id, body string) int {
 		t.Helper()
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, ts.URL+"/v1/sandboxes/"+id+"/instance-metadata", strings.NewReader(body))
-		if err != nil {
-			t.Fatalf("request: %v", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("do: %v", err)
-		}
+		resp := doReq(t, http.MethodPut, ts.URL+"/v1/sandboxes/"+id+"/instance-metadata", token, body)
 		resp.Body.Close()
 		return resp.StatusCode
 	}
@@ -1319,6 +1295,34 @@ func TestClaimRedirectsToTemplateOwner(t *testing.T) {
 	}
 }
 
+func TestATemplateDigestGatesDeleteAndLabelWrites(t *testing.T) {
+	mgr := &fakeManager{deleteGolden: func(types.PoolKey) error { return pool.ErrTemplateReplaced }}
+	ts := newTestServer(t, "sekret", mgr, nil)
+
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/templates?template=ns%2Fapp&digest=sha256%3Aold", nil)
+	req.Header.Set("Authorization", "Bearer sekret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPreconditionFailed || mgr.gotDigest != "sha256:old" {
+		t.Errorf("status=%d digest=%q, want 412 for a replaced generation and the digest passed through", resp.StatusCode, mgr.gotDigest)
+	}
+
+	mgr.labelErr, mgr.gotDigest = pool.ErrTemplateReplaced, ""
+	req, _ = http.NewRequest(http.MethodPut, ts.URL+"/v1/templates/labels?template=ns%2Fapp&digest=sha256%3Aold", strings.NewReader(`{"labels":{"v1":"sha256:new"}}`))
+	req.Header.Set("Authorization", "Bearer sekret")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPreconditionFailed || mgr.gotDigest != "sha256:old" {
+		t.Errorf("labels: status=%d digest=%q, want 412 for a replaced generation and the digest passed through", resp.StatusCode, mgr.gotDigest)
+	}
+}
+
 func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 	mgr := &fakeManager{}
 	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil, nil, nil)
@@ -1726,12 +1730,14 @@ func TestAPlainClaimRequiringAPromotedTemplateNeverColdBoots(t *testing.T) {
 		name         string
 		require      bool
 		held         bool
+		warm         bool
 		wantStatus   int
 		wantPromoted bool
 	}{
-		{"required and held clones", true, true, http.StatusOK, true},
-		{"required and absent is 404", true, false, http.StatusNotFound, true},
-		{"not required provisions as before", false, false, http.StatusOK, false},
+		{"required and held clones", true, true, false, http.StatusOK, true},
+		{"required and absent is 404", true, false, false, http.StatusNotFound, true},
+		{"required with a pool golden still clones the template", true, true, true, http.StatusOK, true},
+		{"not required provisions as before", false, false, false, http.StatusOK, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
@@ -1742,6 +1748,11 @@ func TestAPlainClaimRequiringAPromotedTemplateNeverColdBoots(t *testing.T) {
 					return nil, pool.ErrUnknownTemplate
 				}
 			}
+			if tt.warm {
+				mgr.warmClaim = func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+					return &types.Sandbox{ID: "sb_warm", Token: "tok"}, nil
+				}
+			}
 			ts := newTestServer(t, "sekret", mgr, nil)
 
 			body, _ := json.Marshal(types.ClaimRequest{Template: "ns/app", RequirePromoted: tt.require})
@@ -1749,6 +1760,9 @@ func TestAPlainClaimRequiringAPromotedTemplateNeverColdBoots(t *testing.T) {
 			defer resp.Body.Close()
 			if resp.StatusCode != tt.wantStatus || mgr.provisionCalls != 1 || mgr.gotRequirePromoted != tt.wantPromoted {
 				t.Errorf("status=%d provisions=%d promoted=%v, want %d 1 %v", resp.StatusCode, mgr.provisionCalls, mgr.gotRequirePromoted, tt.wantStatus, tt.wantPromoted)
+			}
+			if tt.require && mgr.warmCalls != 0 {
+				t.Errorf("a claim requiring the promoted template asked the warm pool %d times", mgr.warmCalls)
 			}
 		})
 	}
@@ -2288,15 +2302,7 @@ func TestSandboxesFilterByMetadata(t *testing.T) {
 	} {
 		mgr := &fakeManager{}
 		ts := newTestServer(t, "root", mgr, nil)
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/sandboxes"+tt.query, nil)
-		if err != nil {
-			t.Fatalf("request: %v", err)
-		}
-		req.Header.Set("Authorization", "Bearer root")
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("sandboxes: %v", err)
-		}
+		resp := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes"+tt.query, "root", "")
 		resp.Body.Close()
 		if resp.StatusCode != tt.code || !maps.Equal(mgr.gotMetadata, tt.want) {
 			t.Errorf("%q: status %d, manager saw %v, want %d and %v", tt.query, resp.StatusCode, mgr.gotMetadata, tt.code, tt.want)
@@ -2397,6 +2403,20 @@ func newProbeAuthTestServer(t *testing.T, mgr Manager, probeKey []byte) *httptes
 	return ts
 }
 
+func doReq(t *testing.T, method, url, token, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), method, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	return resp
+}
+
 func credToken(cred pool.Cred) string {
 	if cred.Operator {
 		return ""
@@ -2449,6 +2469,7 @@ type fakeManager struct {
 	claimDeadline       func(id, token string) (time.Time, error)
 
 	gotTenant          string
+	gotDigest          string
 	gotClaimRef        string
 	gotMetadata        types.Metadata
 	gotOnExpire        types.ExpireAction
@@ -2487,11 +2508,7 @@ func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, o pool.C
 func (f *fakeManager) NetRoute(*types.Sandbox) types.NetRoute { return f.netRoute }
 
 func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {
-	return fakeClaimProvision(ctx, f, key, o, false)
-}
-
-func (f *fakeManager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {
-	return fakeClaimProvision(ctx, f, key, o, true)
+	return fakeClaimProvision(ctx, f, key, o)
 }
 
 func (f *fakeManager) Release(_ context.Context, id string, cred pool.Cred) error {
@@ -2560,8 +2577,8 @@ func (f *fakeManager) Promote(_ context.Context, id string, cred pool.Cred, temp
 	return types.PoolKey{Template: template, Net: types.NetNone, Size: types.SizeSmall}, f.promoteContentDigest, nil
 }
 
-func (f *fakeManager) DeleteTemplate(_ context.Context, key types.PoolKey, tenant string) error {
-	f.gotTenant = tenant
+func (f *fakeManager) DeleteTemplate(_ context.Context, key types.PoolKey, tenant, digest string) error {
+	f.gotTenant, f.gotDigest = tenant, digest
 	if f.deleteGolden == nil {
 		return pool.ErrUnknownTemplate
 	}
@@ -2665,7 +2682,8 @@ func (f *fakeManager) Checkpoint(_ context.Context, id string, cred pool.Cred, n
 	return f.checkpoint(id, credToken(cred), name)
 }
 
-func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, _ time.Duration, onExpire types.ExpireAction, tenant string, metadata types.Metadata) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, o pool.ClaimOptions) (*types.Sandbox, error) {
+	onExpire, tenant, metadata := o.OnExpire, o.Tenant, o.Metadata
 	f.gotTenant = tenant
 	f.gotMetadata = metadata
 	f.gotOnExpire = onExpire
@@ -2675,7 +2693,8 @@ func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, _ time.D
 	return f.claimCheckpoint(ckptID)
 }
 
-func (f *fakeManager) ClaimCheckpointHeal(_ context.Context, ckptID string, _ time.Duration, onExpire types.ExpireAction, tenant string, metadata types.Metadata) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimCheckpointHeal(_ context.Context, ckptID string, o pool.ClaimOptions) (*types.Sandbox, error) {
+	onExpire, tenant, metadata := o.OnExpire, o.Tenant, o.Metadata
 	f.gotTenant = tenant
 	f.gotMetadata = metadata
 	f.gotOnExpire = onExpire
@@ -2713,8 +2732,9 @@ func (f *fakeManager) Info() ([]pool.PoolInfo, pool.Gauges) {
 
 func (f *fakeManager) Templates() []pool.TemplateInfo { return f.infoTemplates }
 
-func (f *fakeManager) SetTemplateLabels(_ context.Context, key types.PoolKey, labels types.Metadata, tenant string) error {
+func (f *fakeManager) SetTemplateLabels(_ context.Context, key types.PoolKey, labels types.Metadata, tenant, digest string) error {
 	f.labeled = append(f.labeled, fmt.Sprintf("%s %s %v %q", key.Template, key.Size, labels, tenant))
+	f.gotDigest = digest
 	return f.labelErr
 }
 
@@ -2815,26 +2835,17 @@ func newPlacerTestServer(t *testing.T, apiToken string, mgr Manager, prober Chec
 
 func postJSON(t *testing.T, url, token, body string) *http.Response {
 	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do: %v", err)
-	}
-	return resp
+	return doReq(t, http.MethodPost, url, token, body)
 }
 
-func fakeClaimProvision(ctx context.Context, f *fakeManager, key types.PoolKey, o pool.ClaimOptions, requirePromoted bool) (*types.Sandbox, error) {
+func fakeClaimProvision(ctx context.Context, f *fakeManager, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {
 	f.provisionCalls++
 	f.gotTenant = o.Tenant
 	f.gotClaimRef = o.ClaimRef
 	f.gotMetadata = o.Metadata
 	f.gotOnExpire = o.OnExpire
 	f.gotVolumes = slices.Clone(o.Volumes)
-	f.gotRequirePromoted = requirePromoted
+	f.gotRequirePromoted = o.RequirePromoted
 	f.gotNoEgress = o.NoEgress
 	if f.claim == nil {
 		return &types.Sandbox{ID: "sb_1", Token: "tok", Volumes: slices.Clone(o.Volumes)}, nil

@@ -41,12 +41,13 @@ type PoolStatus struct {
 
 // TemplateStatus reports one promoted template a node holds; an empty Tenant means the operator.
 type TemplateStatus struct {
-	Key           PoolKey   `json:"key"`
-	ContentDigest string    `json:"content_digest"`
-	Tenant        string    `json:"tenant,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	CPUCount      int       `json:"cpu_count,omitzero"`
-	MemTotalBytes int64     `json:"mem_total_bytes,omitzero"`
+	Key           PoolKey           `json:"key"`
+	ContentDigest string            `json:"content_digest"`
+	Tenant        string            `json:"tenant,omitempty"`
+	Labels        map[string]string `json:"labels,omitempty"`
+	CPUCount      int               `json:"cpu_count,omitzero"`
+	MemTotalBytes int64             `json:"mem_total_bytes,omitzero"`
+	CreatedAt     time.Time         `json:"created_at"`
 }
 
 // SandboxSummary is one live claim as the scoped index reports it; never a

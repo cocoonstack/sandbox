@@ -177,7 +177,7 @@ func TestClaimCheckpointRefusesArchive(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 	mustArchive(t, m, sb)
 
-	if _, err := m.ClaimCheckpoint(t.Context(), sb.ArchiveCk, 0, "", "", nil); !errors.Is(err, ErrUnknownCheckpoint) {
+	if _, err := m.ClaimCheckpoint(t.Context(), sb.ArchiveCk, ClaimOptions{}); !errors.Is(err, ErrUnknownCheckpoint) {
 		t.Errorf("branch from archive ck: %v, want ErrUnknownCheckpoint", err)
 	}
 	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
@@ -327,9 +327,7 @@ func TestArchiveRetentionPurge(t *testing.T) {
 		mustArchive(t, m, sb)
 		ck := sb.ArchiveCk
 
-		m.mu.Lock()
-		sb.Deadline = time.Now().Add(-time.Second)
-		m.mu.Unlock()
+		expire(m, sb)
 
 		m.reapOnce(t.Context())
 		waitFor(t, func() bool { return archivedCount(m) == 0 })
@@ -413,9 +411,7 @@ func TestArchiveDeleteRetryAfterRestart(t *testing.T) {
 						t.Fatalf("release: %v", err)
 					}
 				case testArchiveReap:
-					m.mu.Lock()
-					sb.Deadline = time.Now().Add(-time.Second)
-					m.mu.Unlock()
+					expire(m, sb)
 					m.reapOnce(t.Context())
 					select {
 					case <-failed.attempts:
@@ -532,9 +528,7 @@ func TestArchiveRemovalCommitPinsCheckpoint(t *testing.T) {
 			mustArchive(t, m, sb)
 			id, token, ck := sb.ID, sb.Token, sb.ArchiveCk
 			if action == testArchiveReap {
-				m.mu.Lock()
-				sb.Deadline = time.Now().Add(-time.Second)
-				m.mu.Unlock()
+				expire(m, sb)
 			}
 
 			m.store.writeMu.Lock()
@@ -609,9 +603,7 @@ func TestArchiveRemovalRequiresDeleteMarker(t *testing.T) {
 					t.Fatal("release succeeded with an unwritable marker dir")
 				}
 			case testArchiveReap:
-				m.mu.Lock()
-				sb.Deadline = time.Now().Add(-time.Second)
-				m.mu.Unlock()
+				expire(m, sb)
 				m.reapOnce(t.Context())
 			}
 			if _, ok := m.claim(id, token); !ok {
@@ -822,9 +814,7 @@ func TestReapPurgeRollsBackOnPersistFailure(t *testing.T) {
 		id := sb.ID
 		mustArchive(t, m, sb)
 		ck := sb.ArchiveCk
-		m.mu.Lock()
-		sb.Deadline = time.Now().Add(-time.Second)
-		m.mu.Unlock()
+		expire(m, sb)
 		breakStore(t, m)
 
 		m.reapOnce(t.Context())
