@@ -35,12 +35,15 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	if err != nil {
 		return nil, fmt.Errorf("fork %s: %w", sb.ID, err)
 	}
+	m.mu.Lock()
+	parentExpire := sb.OnExpire
+	m.mu.Unlock()
 	for _, c := range children {
 		c.Tenant = sb.Tenant
 		c.PolicySource = sb.PolicySource
 		c.NoEgress = sb.NoEgress
 		c.Metadata = sb.Metadata
-		c.OnExpire = onExpire.Or(sb.OnExpire)
+		c.OnExpire = onExpire.Or(parentExpire)
 	}
 	if err := m.finalizeBatch(ctx, children, ttl, claimRefPrefix); err != nil {
 		return nil, fmt.Errorf("fork %s: %w", sb.ID, err)
