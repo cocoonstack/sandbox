@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"maps"
 	"net"
 	"net/http"
 	"strconv"
@@ -103,32 +102,6 @@ func (p PortRelay) Dial(ctx context.Context, port uint16) (net.Conn, error) {
 	return &portRelayConn{Conn: conn, reader: reader}, nil
 }
 
-// Do sends one request over a fresh relay connection; closing the body closes it.
-func (p PortRelay) Do(ctx context.Context, port uint16, method, path string, headers http.Header, body io.Reader) (*http.Response, error) {
-	conn, err := p.Dial(ctx, port)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, method, "http://guest"+path, body)
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	maps.Copy(req.Header, headers)
-	req.Close = true
-	if writeErr := req.Write(conn); writeErr != nil {
-		_ = conn.Close()
-		return nil, writeErr
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	resp.Body = connBody{ReadCloser: resp.Body, conn: conn}
-	return resp, nil
-}
-
 // Request builds one call to the endpoint, optionally asking for the upgrade.
 func (p PortRelay) Request(ctx context.Context, url, token string, upgrade bool) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -156,14 +129,4 @@ func (c *portRelayConn) Read(p []byte) (int, error) {
 
 func (c *portRelayConn) CloseWrite() error {
 	return c.Conn.(*net.TCPConn).CloseWrite()
-}
-
-type connBody struct {
-	io.ReadCloser
-	conn net.Conn
-}
-
-func (b connBody) Close() error {
-	_ = b.ReadCloser.Close()
-	return b.conn.Close()
 }
