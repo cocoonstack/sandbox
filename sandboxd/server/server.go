@@ -262,7 +262,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		}
 		sb, err = s.mgr.ClaimProvision(r.Context(), key, o)
 	}
-	if errors.Is(err, pool.ErrQuota) && s.placer != nil && !req.NoRedirect &&
+	if errors.Is(err, pool.ErrQuota) && s.placer != nil && !req.NoRedirect && !req.RequirePromoted &&
 		s.writeRedirect(w, s.placer.Candidates(key.Hash())) {
 		return
 	}

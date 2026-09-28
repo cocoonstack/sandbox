@@ -1729,15 +1729,18 @@ func TestARequiredPromotedClaimIsNeverSentToAWarmPeer(t *testing.T) {
 	for _, tt := range []struct {
 		name       string
 		require    bool
+		provision  error
 		wantStatus int
 		wantWarm   bool
 	}{
-		{"a plain claim follows the warm peer", false, http.StatusOK, true},
-		{"a required promoted claim answers 404 rather than a warm peer", true, http.StatusNotFound, false},
+		{"a plain claim follows the warm peer", false, pool.ErrUnknownTemplate, http.StatusOK, true},
+		{"a required promoted claim answers 404 rather than a warm peer", true, pool.ErrUnknownTemplate, http.StatusNotFound, false},
+		{"a plain claim at quota follows the warm peer", false, pool.ErrQuota, http.StatusOK, true},
+		{"a required promoted claim at quota answers 429 rather than a warm peer", true, pool.ErrQuota, http.StatusTooManyRequests, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
-				return nil, pool.ErrUnknownTemplate
+				return nil, tt.provision
 			}}
 			srv := New("sekret", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"warm:7777"}}, nil, nil, nil)
 			ts := httptest.NewServer(srv.Handler())
