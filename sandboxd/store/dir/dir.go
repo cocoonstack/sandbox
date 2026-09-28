@@ -135,16 +135,9 @@ func (d *Store) Metas(ctx context.Context) ([]store.Record, error) {
 func (d *Store) SetLabels(_ context.Context, id string, labels []byte) error {
 	path := filepath.Join(d.root, id, store.LabelsFile)
 	if labels == nil {
-		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-		return nil
+		return os.RemoveAll(path)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, labels, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return utils.WriteFileSync(path, labels, 0o600)
 }
 
 func (d *Store) Delete(_ context.Context, id string) error {

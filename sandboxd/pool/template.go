@@ -100,18 +100,8 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant 
 	l := m.recLock(id)
 	l.Lock()
 	defer func() { l.Unlock(); m.recDoneEvict(id) }()
-	raw, err := m.tpls.ReadMeta(ctx, id)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return ErrUnknownTemplate
-		}
-		return fmt.Errorf("read template: %w", err)
-	}
-	if tenant != "" {
-		var rec templateRecord
-		if json.Unmarshal(raw, &rec) != nil || !tenantOwns(tenant, rec.Tenant) {
-			return ErrUnknownTemplate
-		}
+	if err := m.ownedTemplate(ctx, id, tenant); err != nil {
+		return err
 	}
 	if err := m.tpls.Delete(ctx, id); err != nil {
 		return fmt.Errorf("delete template: %w", err)
@@ -151,16 +141,9 @@ func (m *Manager) SetTemplateLabels(ctx context.Context, key types.PoolKey, labe
 	l := m.recLock(id)
 	l.Lock()
 	defer func() { l.Unlock(); m.recDoneEvict(id) }()
-	raw, err := m.tpls.ReadMeta(ctx, id)
-	if errors.Is(err, store.ErrNotFound) {
-		return ErrUnknownTemplate
-	}
+	err := m.ownedTemplate(ctx, id, tenant)
 	if err != nil {
-		return fmt.Errorf("read template: %w", err)
-	}
-	var rec templateRecord
-	if json.Unmarshal(raw, &rec) != nil || (tenant != "" && !tenantOwns(tenant, rec.Tenant)) {
-		return ErrUnknownTemplate
+		return err
 	}
 	var payload []byte
 	if len(labels) == 0 {
@@ -182,11 +165,10 @@ func (m *Manager) SetTemplateLabels(ctx context.Context, key types.PoolKey, labe
 
 // TemplateHashes lists the promoted-template key hashes for mesh gossip, sorted for its guard.
 func (m *Manager) TemplateHashes() []string {
-	held := m.unpooledTemplates()
-	hashes := make([]string, 0, len(held))
-	for id, t := range held {
+	var hashes []string
+	m.eachUnpooledTemplate(func(id string, t TemplateInfo) {
 		hashes = append(hashes, types.TemplateGossipHash(store.TemplateHash(id), t.Tenant))
-	}
+	})
 	slices.Sort(hashes)
 	return hashes
 }
@@ -229,8 +211,33 @@ func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, te
 	return owner == "" || tenantOwns(tenant, owner)
 }
 
+// ownedTemplate is ErrUnknownTemplate for a record that is absent or that tenant does not own; root owns every record.
+func (m *Manager) ownedTemplate(ctx context.Context, id, tenant string) error {
+	raw, err := m.tpls.ReadMeta(ctx, id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return ErrUnknownTemplate
+		}
+		return fmt.Errorf("read template: %w", err)
+	}
+	if tenant != "" {
+		var rec templateRecord
+		if json.Unmarshal(raw, &rec) != nil || !tenantOwns(tenant, rec.Tenant) {
+			return ErrUnknownTemplate
+		}
+	}
+	return nil
+}
+
 // unpooledTemplates copies the held templates by id, less any key a pool now owns.
 func (m *Manager) unpooledTemplates() map[string]TemplateInfo {
+	held := map[string]TemplateInfo{}
+	m.eachUnpooledTemplate(func(id string, t TemplateInfo) { held[id] = t })
+	return held
+}
+
+// eachUnpooledTemplate visits the held templates a pool does not own, under the template lock.
+func (m *Manager) eachUnpooledTemplate(visit func(id string, t TemplateInfo)) {
 	m.mu.Lock()
 	pooled := make(map[string]struct{}, len(m.pools))
 	for _, p := range m.pools {
@@ -239,13 +246,11 @@ func (m *Manager) unpooledTemplates() map[string]TemplateInfo {
 	m.mu.Unlock()
 	m.tplMu.Lock()
 	defer m.tplMu.Unlock()
-	held := make(map[string]TemplateInfo, len(m.tplSet))
 	for id, t := range m.tplSet {
 		if _, ok := pooled[store.TemplateHash(id)]; !ok {
-			held[id] = t
+			visit(id, t)
 		}
 	}
-	return held
 }
 
 func (m *Manager) pooled(key types.PoolKey) bool {
