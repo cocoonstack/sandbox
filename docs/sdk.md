@@ -341,6 +341,9 @@ fmt.Println(tpl.ContentDigest != "" && tpl.ContentDigest == child.TemplateDigest
 err = tpl.Delete(ctx)                     // caller owns the lifecycle
 ```
 
+`New` asks for the promoted template only: once the template is deleted it
+answers 404 instead of taking a warm VM or cold-booting an image named like it.
+
 `Promote` publishes the sandbox's state as a template on its owning node,
 keyed by (name, the sandbox's network lane, its size). Claims clone on
 demand (~a golden-clone's latency); there is no warm pool for promoted
@@ -444,8 +447,11 @@ revokes it with no extra state. Answers 501 when the node has no
 ## Node info
 
 ```go
-info, err := client.Info(ctx)   // pools, claims, drain, capacity, and mesh peers
+info, err := client.Info(ctx)   // pools, promoted templates, claims, drain, capacity, and mesh peers
 ```
+
+`NodeInfo.Templates` lists the promoted templates the node holds, each with its
+`ContentDigest` and `Labels`.
 
 `NodeInfo.AtCapacity` distinguishes a refill parked by node capacity from one
 still filling its target; `AtCapacityReason` carries the engine's reason. Both

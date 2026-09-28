@@ -32,7 +32,7 @@ the same property that makes the lane the security default. No client learns a
 node address, and the guest is never given a listener the network can reach.
 
 See [sandboxd-api](sandboxd-api.md#get-v1sandboxesidportsport) for the relay
-endpoint. The edge half lives in sandbox-operator and is not released yet.
+endpoint. The edge half ships in sandbox-operator as `sandbox-envd-proxy`.
 
 ## Running a pool
 

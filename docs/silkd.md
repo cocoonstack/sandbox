@@ -81,7 +81,9 @@ the host's [guarded-egress](egress.md) proxy over vsock (`CID2:2049`), and
 has no HTTP-proxy form; when the host wired no policy, or the door-owning
 policy (the pool's, or the tenant's on a claim outside any pool) did not opt
 into the SOCKS5 door, the per-connection dial is refused, so the ports are
-inert.
+inert. Where an image aliases `169.254.169.254` on `lo`, silkd also serves the
+sandbox's [instance-metadata document](sandboxd-api.md#put-v1sandboxesidinstance-metadata)
+there in the IMDSv2 shape.
 Where nothing routes directly — the no-network lane, or a NIC whose host
 verdict in `/etc/silkd-lane` reads `relay` because it is nft-locked — silkd
 forwards the image-baked proxy variables (`http_proxy` and friends) into every

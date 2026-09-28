@@ -7,7 +7,7 @@ All bodies are JSON. Three token kinds:
   resource-creating verbs (claim, fork, promote, checkpoint create/claim,
   preview mint) and the tenant-scoped listings/deletes below; everything a
   tenant creates is stamped with its name. Operator surfaces
-  (the per-id sandbox reads, `GET /v1/info`,
+  (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `GET /v1/info`,
   `PUT /v1/pools`, `POST/DELETE /v1/drain`, `GET /metrics`,
   `GET /v1/checkpoints/{id}/blob`)
   answer a tenant token `403` — authenticated but not authorized; an unknown
@@ -59,8 +59,8 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   hibernate
 - `no_redirect` is set by the SDK when retrying at a redirect target
 - `require_promoted` provisions only from a promoted template: a claim carrying
-  it never cold-boots, and answers 404 unknown template when no record holds
-  the key. A redirect to a template's owner sets it; copy it into the
+  it never takes a warm VM or cold-boots, and answers 404 unknown template when
+  no record holds the key, a key a pool serves included. A redirect to a template's owner sets it; copy it into the
   `no_redirect` retry so a target whose gossip view is stale refuses instead of
   cold-booting an image named like the template
 - `egress` `false` claims with no [egress policy](egress.md), whatever the
@@ -93,11 +93,10 @@ export generation fetched for that clone. It is absent for configured pools,
 cold image boots, forks, checkpoints, and templates published by an older
 sandboxd until they are re-promoted.
 
-`net_route` says how the guest reaches the network, the same verdict the node
-writes to `/etc/silkd-lane`: `relay` through the host proxy behind the guest's
-bound doors, `direct` over an egress-lane NIC the node does not lock, or `none`
-(a none-lane claim whose policy allows nothing, a claim with `"egress": false`,
-or a locked egress-lane NIC with no policy). silkd hands its children the
+`net_route` says how the guest reaches the network: `relay` through the host
+proxy behind the guest's bound doors, `direct` over an egress-lane NIC the node
+does not lock, or `none` (a claim with no effective egress policy, a claim with
+`"egress": false`, or a locked egress-lane NIC with no policy). silkd hands its children the
 `http_proxy`, `https_proxy` and `no_proxy` of its unit unless the lane is
 direct; a guest agent of another kind reads `net_route` and hands its processes
 `http://127.0.0.1:3128` when it is `relay`. `"egress": false` closes the doors, not an unlocked NIC, so
@@ -306,8 +305,8 @@ claim. The sandbox's own token rides in the body as the ownership proof:
 `claim_ref_prefix`, when set, records each child under `prefix + child id` as
 its `claim_ref`, so a control plane that names claims `<namespace>/<name>`
 addresses the children by name; without it children carry no `claim_ref`.
-Children inherit the parent's `metadata` and `on_expire`; an `on_expire` in the
-body overrides the inherited action.
+Children inherit the parent's `metadata`, `on_expire` and `"egress": false`; an
+`on_expire` in the body overrides the inherited action.
 Clones the sandbox into `count` fresh claims (1 up to the node's
 `max_fork_count`, default 16). Memory, disk, and guest
 state (sessions, processes, tmpfs) duplicate at the fork point; cocoon's
@@ -681,8 +680,8 @@ why the upgrade header is mandatory: a bare `GET` must not consume a hibernate
 snapshot. With the root `api_token` the relay is passive, for control-plane
 reads such as metrics: it never wakes the sandbox and never stamps activity,
 so a poll neither undoes a pause nor keeps a sandbox from idling. A hibernated
-or archived sandbox, or one with a hibernate, wake or capture (checkpoint,
-promote, trim) in flight, answers `409` at once; an open passive relay still holds the sandbox against the idle sweep.
+or archived sandbox, or one with a hibernate, wake, checkpoint, promote or
+fork in flight, answers `409` at once; an open passive relay still holds the sandbox against the idle sweep.
 400 a port outside 1-65535; 401 missing bearer token; 404 unknown sandbox or
 wrong token; 409 a passive relay to a paused sandbox; 426 without the upgrade
 header; 502 when the guest cannot be reached on that port — no listener, or a
