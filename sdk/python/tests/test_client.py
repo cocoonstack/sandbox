@@ -131,6 +131,14 @@ def test_claim_keeps_mounting_by_default(node):
     assert "volumes_attach_only" not in seen[0]
 
 
+def test_template_claim_asks_for_the_promoted_template(node):
+    seen = recording_claim({"id": "sb_9", "token": "tok"})
+    Template(Client(node), node, "task:v1", "none", "small").new()
+    assert seen == [
+        {"template": "task:v1", "net": "none", "size": "small", "no_redirect": True, "require_promoted": True}
+    ]
+
+
 def test_template_claim_sends_volumes(node):
     seen = recording_claim(
         {"id": "sb_2", "token": "tok", "volumes": [{"name": "imagenet", "mount": "/datasets/imagenet"}]}
@@ -144,6 +152,7 @@ def test_template_claim_sends_volumes(node):
             "net": "none",
             "size": "small",
             "volumes": [{"name": "imagenet", "mount": "/datasets/imagenet"}],
+            "require_promoted": True,
         }
     ]
     assert sb.volumes == [{"name": "imagenet", "mount": "/datasets/imagenet"}]

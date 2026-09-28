@@ -36,6 +36,7 @@ class Template:
         from .client import _claim_body
 
         claim = _claim_body(self.name, self.net, self.size, ttl_seconds, volumes, mount)
+        claim["require_promoted"] = True
         if volumes:
             return self._client._claim_from(self._addr, claim, deadline=deadline)
         claim["no_redirect"] = True
