@@ -65,6 +65,7 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	ctx = context.WithoutCancel(ctx)
+	m.trimForCapture(ctx, sb)
 
 	snap, cleanup, err := m.sourceSnap(ctx, sb)
 	if err != nil {

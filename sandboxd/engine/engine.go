@@ -42,6 +42,7 @@ const (
 	egressPort     = 2049 // guest→host egress port; VMM maps it to <vsock_socket>_2049
 	socksPort      = 2050
 	cmdTimeout     = 2 * time.Minute
+	trimTimeout    = 10 * time.Second
 	probeInterval  = 20 * time.Millisecond
 	connectMax     = 64   // "OK <port>" handshake reply cap
 	infoMax        = 4096 // info response frame cap
