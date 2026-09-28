@@ -282,9 +282,6 @@ func (m *Manager) runHeal(ctx context.Context, ckptID string) (types.Checkpoint,
 	if ckpt, err := m.loadCheckpoint(ctx, ckptID); err == nil {
 		return ckpt, nil // published by another path while this one staged
 	}
-	if err := validate(staging); err != nil {
-		return types.Checkpoint{}, fmt.Errorf("validate healed checkpoint: %w", err)
-	}
 	if err := m.ckpts.Publish(ctx, staging, ckptID); err != nil {
 		return types.Checkpoint{}, fmt.Errorf("publish healed checkpoint: %w", err)
 	}

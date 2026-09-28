@@ -171,8 +171,8 @@ impl State {
                 message,
                 author,
             } => git::commit(writer, path, message, author).await,
-            Request::GitPush { path, auth } => git::push(writer, path, auth).await,
-            Request::GitPull { path, auth } => git::pull(writer, path, auth).await,
+            Request::GitPush { path, auth } => git::net_verb(writer, path, auth, "push").await,
+            Request::GitPull { path, auth } => git::net_verb(writer, path, auth, "pull").await,
             Request::GitBranch { path, action, name } => {
                 git::branch(writer, path, action, name).await
             }
