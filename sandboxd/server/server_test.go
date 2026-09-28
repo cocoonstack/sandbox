@@ -1702,12 +1702,14 @@ func TestAPlainClaimRequiringAPromotedTemplateNeverColdBoots(t *testing.T) {
 		name         string
 		require      bool
 		held         bool
+		warm         bool
 		wantStatus   int
 		wantPromoted bool
 	}{
-		{"required and held clones", true, true, http.StatusOK, true},
-		{"required and absent is 404", true, false, http.StatusNotFound, true},
-		{"not required provisions as before", false, false, http.StatusOK, false},
+		{"required and held clones", true, true, false, http.StatusOK, true},
+		{"required and absent is 404", true, false, false, http.StatusNotFound, true},
+		{"required with a pool golden still clones the template", true, true, true, http.StatusOK, true},
+		{"not required provisions as before", false, false, false, http.StatusOK, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
@@ -1718,6 +1720,11 @@ func TestAPlainClaimRequiringAPromotedTemplateNeverColdBoots(t *testing.T) {
 					return nil, pool.ErrUnknownTemplate
 				}
 			}
+			if tt.warm {
+				mgr.warmClaim = func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+					return &types.Sandbox{ID: "sb_warm", Token: "tok"}, nil
+				}
+			}
 			ts := newTestServer(t, "sekret", mgr, nil)
 
 			body, _ := json.Marshal(types.ClaimRequest{Template: "ns/app", RequirePromoted: tt.require})
@@ -1725,6 +1732,9 @@ func TestAPlainClaimRequiringAPromotedTemplateNeverColdBoots(t *testing.T) {
 			defer resp.Body.Close()
 			if resp.StatusCode != tt.wantStatus || mgr.provisionCalls != 1 || mgr.gotRequirePromoted != tt.wantPromoted {
 				t.Errorf("status=%d provisions=%d promoted=%v, want %d 1 %v", resp.StatusCode, mgr.provisionCalls, mgr.gotRequirePromoted, tt.wantStatus, tt.wantPromoted)
+			}
+			if tt.require && mgr.warmCalls != 0 {
+				t.Errorf("a claim requiring the promoted template asked the warm pool %d times", mgr.warmCalls)
 			}
 		})
 	}

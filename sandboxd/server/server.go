@@ -250,7 +250,11 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	}
 
 	o := claimOptions(req, tenant)
-	sb, err := s.mgr.ClaimWarm(r.Context(), key, o)
+	var sb *types.Sandbox
+	err := pool.ErrNoWarm
+	if !req.RequirePromoted {
+		sb, err = s.mgr.ClaimWarm(r.Context(), key, o)
+	}
 	if errors.Is(err, pool.ErrNoWarm) {
 		if s.redirectClaim(r.Context(), w, req, key, key.Hash(), tenant) {
 			return
