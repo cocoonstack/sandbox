@@ -325,13 +325,11 @@ func TestReapQuiescesWritableVolumesBeforeRemoval(t *testing.T) {
 		path := writeVolumeImage(t, "scratch.img", "data")
 		eng := newFakeEngine()
 		m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
-		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, OnExpire: "", Tenant: "", ClaimRef: "", Metadata: nil, Volumes: []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}})
+		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Volumes: []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}})
 		if err != nil {
 			t.Fatalf("ClaimProvision: %v", err)
 		}
-		m.mu.Lock()
-		sb.Deadline = time.Now().Add(-time.Second)
-		m.mu.Unlock()
+		expire(m, sb)
 
 		m.reapOnce(t.Context())
 		waitFor(t, func() bool { return volumeHoldersOf(m, "scratch") == volumeHolders{} })
@@ -458,7 +456,7 @@ func TestReconcileRebuildsVolumeAdmission(t *testing.T) {
 	catalog := []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}}
 	eng := newFakeEngine()
 	m := newVolumeManagerAt(t, eng, dataDir, catalog)
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, OnExpire: "", Tenant: "", ClaimRef: "", Metadata: nil, Volumes: []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}})
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Volumes: []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}})
 	if err != nil {
 		t.Fatalf("ClaimProvision: %v", err)
 	}

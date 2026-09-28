@@ -216,15 +216,8 @@ func TestReconcileSweepsGoldenTmpDirs(t *testing.T) {
 
 func TestResolveGoldenSkipsPromotedEgressTemplate(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	id := store.TemplateID(egKey.Hash())
-	staging, err := m.tpls.Stage(id)
-	if err != nil {
-		t.Fatalf("stage: %v", err)
-	}
-	if err = os.MkdirAll(filepath.Join(staging, store.ExportDir), 0o750); err != nil {
-		t.Fatalf("mkdir export: %v", err)
-	}
-	if _, err = m.commitTemplate(t.Context(), staging, templateRecord{Key: egKey}); err != nil {
+	staging := stageTemplate(t, m, store.TemplateID(egKey.Hash()))
+	if _, err := m.commitTemplate(t.Context(), staging, templateRecord{Key: egKey}); err != nil {
 		t.Fatalf("seed template: %v", err)
 	}
 	golden, err := m.resolveGolden(t.Context(), egKey, "")
@@ -266,21 +259,10 @@ func TestTemplateTenantScopedDelete(t *testing.T) {
 func TestCommitTemplateRechecksOwnerUnderLock(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	id := store.TemplateID(testKey.Hash())
-	stage := func() string {
-		t.Helper()
-		staging, err := m.tpls.Stage(id)
-		if err != nil {
-			t.Fatalf("stage: %v", err)
-		}
-		if err := os.MkdirAll(filepath.Join(staging, store.ExportDir), 0o750); err != nil {
-			t.Fatalf("mkdir export: %v", err)
-		}
-		return staging
-	}
-	if _, err := m.commitTemplate(t.Context(), stage(), templateRecord{Key: testKey, Tenant: "acme"}); err != nil {
+	if _, err := m.commitTemplate(t.Context(), stageTemplate(t, m, id), templateRecord{Key: testKey, Tenant: "acme"}); err != nil {
 		t.Fatalf("acme publish: %v", err)
 	}
-	if _, err := m.commitTemplate(t.Context(), stage(), templateRecord{Key: testKey, Tenant: "beta"}); !errors.Is(err, ErrTemplateOwned) {
+	if _, err := m.commitTemplate(t.Context(), stageTemplate(t, m, id), templateRecord{Key: testKey, Tenant: "beta"}); !errors.Is(err, ErrTemplateOwned) {
 		t.Errorf("beta publish over acme: %v, want ErrTemplateOwned", err)
 	}
 }
@@ -446,13 +428,7 @@ func TestTemplatesListWhatTheNodeHoldsAcrossARestart(t *testing.T) {
 		t.Fatalf("Promote tpl:b: %v", err)
 	}
 	oldID := store.TemplateID(types.PoolKey{Template: "tpl:old", Net: testKey.Net, Size: testKey.Size}.Hash())
-	staging, err := m.tpls.Stage(oldID)
-	if err != nil {
-		t.Fatalf("stage: %v", err)
-	}
-	if err = os.MkdirAll(filepath.Join(staging, store.ExportDir), 0o750); err != nil {
-		t.Fatalf("mkdir export: %v", err)
-	}
+	staging := stageTemplate(t, m, oldID)
 	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+oldID+`","created_at":"2026-01-01T00:00:00Z"}`), 0o600); err != nil {
 		t.Fatalf("write keyless meta: %v", err)
 	}
@@ -576,4 +552,16 @@ func claimTenant(t *testing.T, m *Manager, tenant string) *types.Sandbox {
 		t.Fatalf("claim %q: %v", tenant, err)
 	}
 	return sb
+}
+
+func stageTemplate(t *testing.T, m *Manager, id string) string {
+	t.Helper()
+	staging, err := m.tpls.Stage(id)
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(staging, store.ExportDir), 0o750); err != nil {
+		t.Fatalf("mkdir export: %v", err)
+	}
+	return staging
 }

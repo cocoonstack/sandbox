@@ -723,24 +723,7 @@ func TestEgressDoorHalfCloseReachesTheGuest(t *testing.T) {
 	}
 	t.Cleanup(func() { m.disarmEgress(sb.ID, true) })
 
-	door, dialErr := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket))
-	if dialErr != nil {
-		t.Fatalf("dial door: %v", dialErr)
-	}
-	t.Cleanup(func() { _ = door.Close() })
-	_ = door.SetDeadline(time.Now().Add(5 * time.Second))
-	target := origin.Addr().String()
-	if _, writeErr := fmt.Fprintf(door, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target); writeErr != nil {
-		t.Fatalf("connect: %v", writeErr)
-	}
-	resp, readErr := http.ReadResponse(bufio.NewReader(door), nil)
-	if readErr != nil {
-		t.Fatalf("read connect reply: %v", readErr)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("connect status %d, want 200", resp.StatusCode)
-	}
+	_, resp := connectDoor(t, engine.EgressSocketPath(sb.VsockSocket), origin.Addr().String())
 	body, bodyErr := io.ReadAll(resp.Body)
 	if bodyErr != nil {
 		t.Fatalf("tunnel did not end with EOF after the origin closed: %v", bodyErr)
@@ -865,23 +848,7 @@ func TestAPromotedTemplatesCloneInterceptsAsItsSourcePool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim the template: %v", err)
 	}
-	conn, err := net.DialTimeout("unix", engine.EgressSocketPath(clone.VsockSocket), 2*time.Second)
-	if err != nil {
-		t.Fatalf("dial the door: %v", err)
-	}
-	defer func() { _ = conn.Close() }()
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	if _, err = fmt.Fprint(conn, "CONNECT api.github.com:443 HTTP/1.1\r\nHost: api.github.com:443\r\n\r\n"); err != nil {
-		t.Fatalf("send CONNECT: %v", err)
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
-	if err != nil {
-		t.Fatalf("read the CONNECT answer: %v", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("CONNECT answered %s", resp.Status)
-	}
+	conn, _ := connectDoor(t, engine.EgressSocketPath(clone.VsockSocket), "api.github.com:443")
 	tc := tls.Client(conn, &tls.Config{ServerName: "api.github.com", InsecureSkipVerify: true})
 	if err = tc.Handshake(); err != nil {
 		t.Fatalf("handshake through the door: %v", err)
@@ -978,6 +945,28 @@ func dialDoors(t *testing.T, sb *types.Sandbox) {
 		}
 		_ = conn.Close()
 	}
+}
+
+func connectDoor(t *testing.T, path, target string) (net.Conn, *http.Response) {
+	t.Helper()
+	conn, err := net.DialTimeout("unix", path, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial the door: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err = fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target); err != nil {
+		t.Fatalf("send CONNECT: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("read the CONNECT answer: %v", err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT answered %s", resp.Status)
+	}
+	return conn, resp
 }
 
 func refillWarmVM(t *testing.T, m *Manager) *types.Sandbox {

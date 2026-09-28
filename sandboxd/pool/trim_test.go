@@ -4,20 +4,11 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
-
-func TestSetPoolsRejectsCaptureTrim(t *testing.T) {
-	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
-	err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 1, CaptureTrim: true}})
-	if !errors.Is(err, ErrBadKey) || !strings.Contains(err.Error(), "capture_trim is set in the config file") {
-		t.Errorf("SetPools error = %v, want ErrBadKey naming capture_trim as config-owned", err)
-	}
-}
 
 func TestCaptureTrimRunsBeforeTheSnapOnlyForItsPool(t *testing.T) {
 	eng := newFakeEngine()

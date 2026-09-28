@@ -251,7 +251,7 @@ func TestForkChildrenRecordTheClaimRefPrefix(t *testing.T) {
 
 func TestForkChildrenInheritTheParentMetadata(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	parent, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: 0, OnExpire: "", Tenant: "", ClaimRef: "", Metadata: types.Metadata{"team": "a"}})
+	parent, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Metadata: types.Metadata{"team": "a"}})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}

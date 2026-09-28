@@ -270,15 +270,7 @@ func TestInfoListsThePromotedTemplatesOnTheWire(t *testing.T) {
 	}}
 	ts := newTestServer(t, "sekret", mgr, nil)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/info", nil)
-	if err != nil {
-		t.Fatalf("request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer sekret")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do: %v", err)
-	}
+	resp := doReq(t, http.MethodGet, ts.URL+"/v1/info", "sekret", "")
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -296,15 +288,7 @@ func TestSetTemplateLabelsReplacesTheMapForRootOrTheTenant(t *testing.T) {
 	ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	put := func(t *testing.T, query, token, body string) int {
 		t.Helper()
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, ts.URL+"/v1/templates/labels?"+query, strings.NewReader(body))
-		if err != nil {
-			t.Fatalf("request: %v", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("do: %v", err)
-		}
+		resp := doReq(t, http.MethodPut, ts.URL+"/v1/templates/labels?"+query, token, body)
 		_ = resp.Body.Close()
 		return resp.StatusCode
 	}
@@ -660,15 +644,7 @@ func TestInstanceMetadataVerb(t *testing.T) {
 	ts := newTenantTestServer(t, "sekret", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	put := func(token, id, body string) int {
 		t.Helper()
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, ts.URL+"/v1/sandboxes/"+id+"/instance-metadata", strings.NewReader(body))
-		if err != nil {
-			t.Fatalf("request: %v", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("do: %v", err)
-		}
+		resp := doReq(t, http.MethodPut, ts.URL+"/v1/sandboxes/"+id+"/instance-metadata", token, body)
 		resp.Body.Close()
 		return resp.StatusCode
 	}
@@ -2288,15 +2264,7 @@ func TestSandboxesFilterByMetadata(t *testing.T) {
 	} {
 		mgr := &fakeManager{}
 		ts := newTestServer(t, "root", mgr, nil)
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/sandboxes"+tt.query, nil)
-		if err != nil {
-			t.Fatalf("request: %v", err)
-		}
-		req.Header.Set("Authorization", "Bearer root")
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("sandboxes: %v", err)
-		}
+		resp := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes"+tt.query, "root", "")
 		resp.Body.Close()
 		if resp.StatusCode != tt.code || !maps.Equal(mgr.gotMetadata, tt.want) {
 			t.Errorf("%q: status %d, manager saw %v, want %d and %v", tt.query, resp.StatusCode, mgr.gotMetadata, tt.code, tt.want)
@@ -2395,6 +2363,20 @@ func newProbeAuthTestServer(t *testing.T, mgr Manager, probeKey []byte) *httptes
 		srv.CloseRelays()
 	})
 	return ts
+}
+
+func doReq(t *testing.T, method, url, token, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), method, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	return resp
 }
 
 func credToken(cred pool.Cred) string {
@@ -2813,16 +2795,7 @@ func newPlacerTestServer(t *testing.T, apiToken string, mgr Manager, prober Chec
 
 func postJSON(t *testing.T, url, token, body string) *http.Response {
 	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do: %v", err)
-	}
-	return resp
+	return doReq(t, http.MethodPost, url, token, body)
 }
 
 func fakeClaimProvision(ctx context.Context, f *fakeManager, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {

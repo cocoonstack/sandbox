@@ -258,11 +258,11 @@ func TestGuestPortDialsWriteAuditEvents(t *testing.T) {
 func TestSandboxesEchoAndFilterMetadata(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	large := types.PoolKey{Template: testKey.Template, Net: types.NetNone, Size: types.SizeLarge}
-	a, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: 0, OnExpire: "", Tenant: "", ClaimRef: "", Metadata: types.Metadata{"team": "a", "env": "prod"}})
+	a, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Metadata: types.Metadata{"team": "a", "env": "prod"}})
 	if err != nil {
 		t.Fatalf("claim a: %v", err)
 	}
-	b, err := m.ClaimProvision(t.Context(), large, ClaimOptions{TTL: 0, OnExpire: "", Tenant: "", ClaimRef: "", Metadata: types.Metadata{"team": "a", "env": "dev"}})
+	b, err := m.ClaimProvision(t.Context(), large, ClaimOptions{Metadata: types.Metadata{"team": "a", "env": "dev"}})
 	if err != nil {
 		t.Fatalf("claim b: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestSandboxesEchoAndFilterMetadata(t *testing.T) {
 func TestWarmClaimRecordsMetadata(t *testing.T) {
 	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
 	m.pools[testKey].warm = append(m.pools[testKey].warm, &types.Sandbox{VMName: "sbx-warm-1", Key: testKey})
-	sb, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{TTL: 0, OnExpire: "", Tenant: "", ClaimRef: "", Metadata: types.Metadata{"team": "a"}})
+	sb, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{Metadata: types.Metadata{"team": "a"}})
 	if err != nil {
 		t.Fatalf("ClaimWarm: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestClaimMetadataSurvivesARestart(t *testing.T) {
 	eng := newFakeEngine()
 	dir := t.TempDir()
 	m := newTestManagerAt(t, eng, dir)
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, OnExpire: "", Tenant: "", ClaimRef: "", Metadata: types.Metadata{"team": "a"}})
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Metadata: types.Metadata{"team": "a"}})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}

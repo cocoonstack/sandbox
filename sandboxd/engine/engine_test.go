@@ -123,12 +123,7 @@ func TestDialGuestPortCtxCancel(t *testing.T) {
 }
 
 func TestSnapshotListReadsAnEmptyStoreAndRejectsProse(t *testing.T) {
-	dir := t.TempDir()
-	script := "#!/bin/sh\nif [ \"$COCOON_TEST_PROSE\" = 1 ]; then echo 'No snapshots found.'; else echo '[]'; fi\n"
-	if err := os.WriteFile(filepath.Join(dir, "cocoon"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	fakeCocoon(t, "#!/bin/sh\nif [ \"$COCOON_TEST_PROSE\" = 1 ]; then echo 'No snapshots found.'; else echo '[]'; fi\n")
 	e := New("cocoon", nil, nil, false, false, "")
 
 	t.Setenv("COCOON_TEST_PROSE", "0")
@@ -142,12 +137,7 @@ func TestSnapshotListReadsAnEmptyStoreAndRejectsProse(t *testing.T) {
 }
 
 func TestListPassesNoPositionalArgsToCocoon(t *testing.T) {
-	dir := t.TempDir()
-	script := "#!/bin/sh\n[ \"$#\" = 4 ] || { echo \"unknown command $4 for cocoon vm list\" >&2; exit 1; }\necho '[{\"config\":{\"name\":\"sbx-1\"},\"state\":\"running\"}]'\n"
-	if err := os.WriteFile(filepath.Join(dir, "cocoon"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	fakeCocoon(t, "#!/bin/sh\n[ \"$#\" = 4 ] || { echo \"unknown command $4 for cocoon vm list\" >&2; exit 1; }\necho '[{\"config\":{\"name\":\"sbx-1\"},\"state\":\"running\"}]'\n")
 	vms, err := New("cocoon", nil, nil, false, false, "").List(t.Context())
 	if err != nil || len(vms) != 1 || vms[0].Config.Name != "sbx-1" {
 		t.Fatalf("List = %+v, %v; want the one VM cocoon printed", vms, err)
@@ -155,13 +145,8 @@ func TestListPassesNoPositionalArgsToCocoon(t *testing.T) {
 }
 
 func TestImageIDsMapsNameToID(t *testing.T) {
-	dir := t.TempDir()
-	script := "#!/bin/sh\n[ \"$*\" = \"image list --format json\" ] || { echo \"unexpected args $*\" >&2; exit 1; }\n" +
-		"echo '[{\"id\":\"sha256:afe6\",\"name\":\"ghcr.io/cocoonstack/sandbox/e2b-rt:24.04\",\"type\":\"oci\",\"size\":1}]'\n"
-	if err := os.WriteFile(filepath.Join(dir, "cocoon"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	fakeCocoon(t, "#!/bin/sh\n[ \"$*\" = \"image list --format json\" ] || { echo \"unexpected args $*\" >&2; exit 1; }\n"+
+		"echo '[{\"id\":\"sha256:afe6\",\"name\":\"ghcr.io/cocoonstack/sandbox/e2b-rt:24.04\",\"type\":\"oci\",\"size\":1}]'\n")
 	ids, err := New("cocoon", nil, nil, false, false, "").ImageIDs(t.Context())
 	if err != nil || len(ids) != 1 || ids["ghcr.io/cocoonstack/sandbox/e2b-rt:24.04"] != "sha256:afe6" {
 		t.Fatalf("ImageIDs = %v, %v; want the one image cocoon printed", ids, err)
@@ -222,4 +207,13 @@ func sockPath(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return filepath.Join(dir, "mux.sock")
+}
+
+func fakeCocoon(t *testing.T, script string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cocoon"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }

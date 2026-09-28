@@ -58,7 +58,7 @@ func TestCheckpointThenBranch(t *testing.T) {
 
 func TestCheckpointBranchTakesItsOwnMetadata(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	src, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: 0, OnExpire: "", Tenant: "", ClaimRef: "", Metadata: types.Metadata{"role": "source"}})
+	src, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Metadata: types.Metadata{"role": "source"}})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
