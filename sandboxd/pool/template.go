@@ -150,7 +150,7 @@ func (m *Manager) SetTemplateLabels(ctx context.Context, key types.PoolKey, labe
 	id := store.TemplateID(key.Hash())
 	l := m.recLock(id)
 	l.Lock()
-	defer func() { l.Unlock(); m.recDone(id) }()
+	defer func() { l.Unlock(); m.recDoneEvict(id) }()
 	raw, err := m.tpls.ReadMeta(ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
 		return ErrUnknownTemplate

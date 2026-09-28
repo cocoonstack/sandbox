@@ -555,6 +555,20 @@ func TestTemplateLabelsPersistUntilTheTemplateIsRepromotedOrDeleted(t *testing.T
 	}
 }
 
+func TestRejectedLabelWritesLeakNoRecLock(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	base := lockCount(m)
+	for _, name := range []string{"tpl:absent", "tpl:gone", "tpl:never"} {
+		key := types.PoolKey{Template: name, Net: testKey.Net, Size: testKey.Size}
+		if err := m.SetTemplateLabels(t.Context(), key, types.Metadata{"a": "1"}, ""); !errors.Is(err, ErrUnknownTemplate) {
+			t.Errorf("labels on %q: %v, want ErrUnknownTemplate", name, err)
+		}
+	}
+	if got := lockCount(m); got != base {
+		t.Errorf("recLocks grew %d->%d over rejected label writes, want no growth", base, got)
+	}
+}
+
 func claimTenant(t *testing.T, m *Manager, tenant string) *types.Sandbox {
 	t.Helper()
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: tenant})
