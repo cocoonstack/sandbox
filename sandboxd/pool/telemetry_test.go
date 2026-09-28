@@ -85,21 +85,21 @@ func TestTenantQuotaBindsPerTenant(t *testing.T) {
 	m := newTestManager(t, eng)
 	m.tenantMax = map[string]int{"acme": 1, "beta": 2}
 
-	first, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "acme", "", nil, nil)
+	first, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("acme claim: %v", err)
 	}
 	if first.Tenant != "acme" {
 		t.Errorf("tenant %q, want acme", first.Tenant)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "acme", "", nil, nil); !errors.Is(err, ErrQuota) {
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"}); !errors.Is(err, ErrQuota) {
 		t.Fatalf("acme past its cap: %v, want ErrQuota", err)
 	}
 
-	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "beta", "", nil, nil); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "beta"}); err != nil {
 		t.Errorf("beta claim while acme is at cap: %v", err)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "", "", nil, nil); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour}); err != nil {
 		t.Errorf("root claim while acme is at cap: %v", err)
 	}
 	counts := m.TenantClaims()
@@ -109,7 +109,7 @@ func TestTenantQuotaBindsPerTenant(t *testing.T) {
 	if err := m.Release(t.Context(), first.ID, Cred{Token: first.Token}); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "acme", "", nil, nil); err != nil {
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"}); err != nil {
 		t.Errorf("acme claim after release: %v", err)
 	}
 }
@@ -117,7 +117,7 @@ func TestTenantQuotaBindsPerTenant(t *testing.T) {
 func TestTenantStampedInJournals(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "acme", "", nil, nil)
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -258,11 +258,11 @@ func TestGuestPortDialsWriteAuditEvents(t *testing.T) {
 func TestSandboxesEchoAndFilterMetadata(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	large := types.PoolKey{Template: testKey.Template, Net: types.NetNone, Size: types.SizeLarge}
-	a, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", types.Metadata{"team": "a", "env": "prod"}, nil)
+	a, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: 0, OnExpire: "", Tenant: "", ClaimRef: "", Metadata: types.Metadata{"team": "a", "env": "prod"}})
 	if err != nil {
 		t.Fatalf("claim a: %v", err)
 	}
-	b, err := m.ClaimProvision(t.Context(), large, 0, "", "", "", types.Metadata{"team": "a", "env": "dev"}, nil)
+	b, err := m.ClaimProvision(t.Context(), large, ClaimOptions{TTL: 0, OnExpire: "", Tenant: "", ClaimRef: "", Metadata: types.Metadata{"team": "a", "env": "dev"}})
 	if err != nil {
 		t.Fatalf("claim b: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestSandboxesEchoAndFilterMetadata(t *testing.T) {
 func TestWarmClaimRecordsMetadata(t *testing.T) {
 	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
 	m.pools[testKey].warm = append(m.pools[testKey].warm, &types.Sandbox{VMName: "sbx-warm-1", Key: testKey})
-	sb, err := m.ClaimWarm(t.Context(), testKey, 0, "", "", "", types.Metadata{"team": "a"}, nil)
+	sb, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{TTL: 0, OnExpire: "", Tenant: "", ClaimRef: "", Metadata: types.Metadata{"team": "a"}})
 	if err != nil {
 		t.Fatalf("ClaimWarm: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestClaimMetadataSurvivesARestart(t *testing.T) {
 	eng := newFakeEngine()
 	dir := t.TempDir()
 	m := newTestManagerAt(t, eng, dir)
-	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "", "", types.Metadata{"team": "a"}, nil)
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, OnExpire: "", Tenant: "", ClaimRef: "", Metadata: types.Metadata{"team": "a"}})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}

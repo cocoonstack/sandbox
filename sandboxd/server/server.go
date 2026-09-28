@@ -61,9 +61,9 @@ var poolErrHTTP = []struct {
 
 // Manager is the pool manager slice the server consumes; an empty tenant means operator (root).
 type Manager interface {
-	ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error)
-	ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error)
-	ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error)
+	ClaimWarm(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error)
+	ClaimProvision(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error)
+	ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error)
 	Release(ctx context.Context, id string, cred pool.Cred) error
 	Hibernate(ctx context.Context, id string, cred pool.Cred) error
 	Wake(ctx context.Context, id string, cred pool.Cred) error
@@ -248,7 +248,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sb, err := s.mgr.ClaimWarm(r.Context(), key, req.TTL(), req.OnExpire, tenant, req.ClaimRef, req.Metadata, nil)
+	sb, err := s.mgr.ClaimWarm(r.Context(), key, claimOptions(req, tenant))
 	if errors.Is(err, pool.ErrNoWarm) {
 		if s.redirectClaim(r.Context(), w, req, key, key.Hash(), tenant) {
 			return
@@ -257,7 +257,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		if req.RequirePromoted {
 			provision = s.mgr.ClaimProvisionPromoted
 		}
-		sb, err = provision(r.Context(), key, req.TTL(), req.OnExpire, tenant, req.ClaimRef, req.Metadata, nil)
+		sb, err = provision(r.Context(), key, claimOptions(req, tenant))
 	}
 	if errors.Is(err, pool.ErrQuota) && s.placer != nil && !req.NoRedirect &&
 		s.writeRedirect(w, s.placer.Candidates(key.Hash())) {
@@ -285,14 +285,14 @@ func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req t
 	}
 	var sb *types.Sandbox
 	if req.RequirePromoted {
-		sb, err = s.mgr.ClaimProvisionPromoted(r.Context(), key, req.TTL(), req.OnExpire, tenant, req.ClaimRef, req.Metadata, req.Volumes)
+		sb, err = s.mgr.ClaimProvisionPromoted(r.Context(), key, claimOptions(req, tenant))
 	} else {
-		sb, err = s.mgr.ClaimWarm(r.Context(), key, req.TTL(), req.OnExpire, tenant, req.ClaimRef, req.Metadata, req.Volumes)
+		sb, err = s.mgr.ClaimWarm(r.Context(), key, claimOptions(req, tenant))
 		if errors.Is(err, pool.ErrNoWarm) {
 			if s.placer != nil && !req.NoRedirect && s.writeRedirect(w, s.placer.VolumeCandidates(hash, types.VolumeNames(req.Volumes))) {
 				return
 			}
-			sb, err = s.mgr.ClaimProvision(r.Context(), key, req.TTL(), req.OnExpire, tenant, req.ClaimRef, req.Metadata, req.Volumes)
+			sb, err = s.mgr.ClaimProvision(r.Context(), key, claimOptions(req, tenant))
 		}
 	}
 	writeResult(w, r, "claim", key.Template, "provisioning failed", err, func() {
@@ -730,4 +730,8 @@ func (s *Server) claimResponse(sb *types.Sandbox) types.ClaimResponse {
 		OwnerAddr: s.advertise, FromCheckpoint: sb.FromCheckpoint, TemplateDigest: sb.TemplateDigest,
 		Volumes: sb.Volumes,
 	}
+}
+
+func claimOptions(req types.ClaimRequest, tenant string) pool.ClaimOptions {
+	return pool.ClaimOptions{TTL: req.TTL(), OnExpire: req.OnExpire, Tenant: tenant, ClaimRef: req.ClaimRef, Metadata: req.Metadata, Volumes: req.Volumes}
 }

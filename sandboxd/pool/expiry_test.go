@@ -15,7 +15,7 @@ import (
 func TestExpiryArchiveHibernatesAndArchivesARunningClaim(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, types.ExpireArchive, "", "", nil, nil)
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, OnExpire: types.ExpireArchive})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestExpiryArchiveHibernatesAndArchivesARunningClaim(t *testing.T) {
 
 func TestExpiryArchiveArchivesAHibernatedClaimWithoutPoolArchiving(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, types.ExpireArchive, "", "", nil, nil)
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, OnExpire: types.ExpireArchive})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestExpiryArchiveArchivesAHibernatedClaimWithoutPoolArchiving(t *testing.T)
 func TestExpiryDestroyStaysTheDefault(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	for _, action := range []types.ExpireAction{"", types.ExpireDestroy} {
-		sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, action, "", "", nil, nil)
+		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, OnExpire: action})
 		if err != nil {
 			t.Fatalf("claim %q: %v", action, err)
 		}
@@ -82,7 +82,7 @@ func TestExpiryArchiveRetriesOnlyTheExportAfterItFails(t *testing.T) {
 	failing := &failingPublishStore{Store: m.ckpts}
 	failing.fail.Store(true)
 	m.ckpts = failing
-	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, types.ExpireArchive, "", "", nil, nil)
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, OnExpire: types.ExpireArchive})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestExpiryArchiveRetriesOnlyTheExportAfterItFails(t *testing.T) {
 func TestExpiryArchiveRetriesTheHibernateAfterItFails(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, types.ExpireArchive, "", "", nil, nil)
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, OnExpire: types.ExpireArchive})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestExpiryArchiveRetriesTheHibernateAfterItFails(t *testing.T) {
 
 func TestExpiryArchiveSurvivesAFailedReapPersist(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, types.ExpireArchive, "acme", "", nil, nil)
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, OnExpire: types.ExpireArchive, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestExpiryArchiveSurvivesAFailedReapPersist(t *testing.T) {
 
 func TestExpiryArchiveWakeBeforeTheExportGrantsAFreshLease(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, types.ExpireArchive, "", "", nil, nil)
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, OnExpire: types.ExpireArchive})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestRenewSwitchesTheExpireAction(t *testing.T) {
 
 func TestForkChildrenInheritOrOverrideTheExpireAction(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	parent, err := m.ClaimProvision(t.Context(), testKey, 0, types.ExpireArchive, "", "", nil, nil)
+	parent, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{OnExpire: types.ExpireArchive})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestForkChildrenInheritOrOverrideTheExpireAction(t *testing.T) {
 
 func TestCheckpointBranchTakesItsOwnExpireAction(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	src, err := m.ClaimProvision(t.Context(), testKey, 0, types.ExpireArchive, "", "", nil, nil)
+	src, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{OnExpire: types.ExpireArchive})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -281,16 +281,16 @@ func TestArchiveOnExpireRefusesAVolumeClaimOnEveryPath(t *testing.T) {
 	m := newVolumePoolManager(t, eng, t.TempDir(), []config.VolumeSpec{{Name: "data", Path: path, Writable: true}})
 	m.pools[testKey].warm = append(m.pools[testKey].warm, &types.Sandbox{VMName: "sbx-warm", Key: testKey, VsockSocket: "/vsock/warm"})
 	volumes := []types.Volume{{Name: "data"}}
-	if _, err := m.ClaimWarm(t.Context(), testKey, 0, types.ExpireArchive, "", "", nil, volumes); !errors.Is(err, ErrVolumeCapture) {
+	if _, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{OnExpire: types.ExpireArchive, Volumes: volumes}); !errors.Is(err, ErrVolumeCapture) {
 		t.Errorf("warm claim: %v, want ErrVolumeCapture", err)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, 0, types.ExpireArchive, "", "", nil, volumes); !errors.Is(err, ErrVolumeCapture) {
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{OnExpire: types.ExpireArchive, Volumes: volumes}); !errors.Is(err, ErrVolumeCapture) {
 		t.Errorf("provision claim: %v, want ErrVolumeCapture", err)
 	}
 	if n := len(eng.clones) + len(eng.colds); n != 0 {
 		t.Errorf("refused claims ran %d VM operations, want 0", n)
 	}
-	sb, err := m.ClaimWarm(t.Context(), testKey, 0, "", "", "", nil, volumes)
+	sb, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{Volumes: volumes})
 	if err != nil {
 		t.Fatalf("volume claim: %v", err)
 	}

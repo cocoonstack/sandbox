@@ -251,7 +251,7 @@ func TestForkChildrenRecordTheClaimRefPrefix(t *testing.T) {
 
 func TestForkChildrenInheritTheParentMetadata(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	parent, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", types.Metadata{"team": "a"}, nil)
+	parent, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: 0, OnExpire: "", Tenant: "", ClaimRef: "", Metadata: types.Metadata{"team": "a"}})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestForkChildrenInheritTenantAndQuota(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	m.tenantMax = map[string]int{"acme": 3}
-	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "acme", "", nil, nil)
+	parent, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}

@@ -235,7 +235,7 @@ func TestClaimRecordsItsPolicyLayer(t *testing.T) {
 		t.Errorf("pooled claim layer %q, want %q", sb.Layer, types.LayerPooled)
 	}
 	unpooled := types.PoolKey{Template: "promoted-name", Net: types.NetNone, Size: types.SizeSmall}
-	sb, err := m.ClaimProvision(t.Context(), unpooled, time.Hour, "", "acme", "", nil, nil)
+	sb, err := m.ClaimProvision(t.Context(), unpooled, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}

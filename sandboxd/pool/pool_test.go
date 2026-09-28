@@ -1029,9 +1029,9 @@ func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Ma
 }
 
 func claimAny(ctx context.Context, m *Manager, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
-	sb, err := m.ClaimWarm(ctx, key, ttl, "", "", "", nil, nil)
+	sb, err := m.ClaimWarm(ctx, key, ClaimOptions{TTL: ttl})
 	if errors.Is(err, ErrNoWarm) {
-		return m.ClaimProvision(ctx, key, ttl, "", "", "", nil, nil)
+		return m.ClaimProvision(ctx, key, ClaimOptions{TTL: ttl})
 	}
 	return sb, err
 }

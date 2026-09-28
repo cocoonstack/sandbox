@@ -2447,25 +2447,25 @@ type fakeManager struct {
 	draining           bool
 }
 
-func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {
 	f.warmCalls++
-	f.gotTenant = tenant
-	f.gotClaimRef = claimRef
-	f.gotMetadata = metadata
-	f.gotOnExpire = onExpire
-	f.gotWarmVolumes = slices.Clone(volumes)
+	f.gotTenant = o.Tenant
+	f.gotClaimRef = o.ClaimRef
+	f.gotMetadata = o.Metadata
+	f.gotOnExpire = o.OnExpire
+	f.gotWarmVolumes = slices.Clone(o.Volumes)
 	if f.warmClaim == nil {
 		return nil, pool.ErrNoWarm
 	}
-	return f.warmClaim(ctx, key, ttl)
+	return f.warmClaim(ctx, key, o.TTL)
 }
 
-func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
-	return fakeClaimProvision(ctx, f, key, ttl, onExpire, tenant, claimRef, metadata, volumes, false)
+func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {
+	return fakeClaimProvision(ctx, f, key, o, false)
 }
 
-func (f *fakeManager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
-	return fakeClaimProvision(ctx, f, key, ttl, onExpire, tenant, claimRef, metadata, volumes, true)
+func (f *fakeManager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {
+	return fakeClaimProvision(ctx, f, key, o, true)
 }
 
 func (f *fakeManager) Release(_ context.Context, id string, cred pool.Cred) error {
@@ -2801,16 +2801,16 @@ func postJSON(t *testing.T, url, token, body string) *http.Response {
 	return resp
 }
 
-func fakeClaimProvision(ctx context.Context, f *fakeManager, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume, requirePromoted bool) (*types.Sandbox, error) {
+func fakeClaimProvision(ctx context.Context, f *fakeManager, key types.PoolKey, o pool.ClaimOptions, requirePromoted bool) (*types.Sandbox, error) {
 	f.provisionCalls++
-	f.gotTenant = tenant
-	f.gotClaimRef = claimRef
-	f.gotMetadata = metadata
-	f.gotOnExpire = onExpire
-	f.gotVolumes = slices.Clone(volumes)
+	f.gotTenant = o.Tenant
+	f.gotClaimRef = o.ClaimRef
+	f.gotMetadata = o.Metadata
+	f.gotOnExpire = o.OnExpire
+	f.gotVolumes = slices.Clone(o.Volumes)
 	f.gotRequirePromoted = requirePromoted
 	if f.claim == nil {
-		return &types.Sandbox{ID: "sb_1", Token: "tok", Volumes: slices.Clone(volumes)}, nil
+		return &types.Sandbox{ID: "sb_1", Token: "tok", Volumes: slices.Clone(o.Volumes)}, nil
 	}
-	return f.claim(ctx, key, ttl)
+	return f.claim(ctx, key, o.TTL)
 }
