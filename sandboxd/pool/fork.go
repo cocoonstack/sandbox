@@ -37,6 +37,8 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	}
 	for _, c := range children {
 		c.Tenant = sb.Tenant
+		c.PolicySource = sb.PolicySource
+		c.NoEgress = sb.NoEgress
 		c.Metadata = sb.Metadata
 		c.OnExpire = onExpire.Or(sb.OnExpire)
 	}

@@ -75,6 +75,27 @@ func TestClaimHappyPath(t *testing.T) {
 	}
 }
 
+func TestClaimCarriesAnEgressOptOut(t *testing.T) {
+	for body, want := range map[string]bool{
+		`{"template":"rt:24.04"}`:                false,
+		`{"template":"rt:24.04","egress":true}`:  false,
+		`{"template":"rt:24.04","egress":false}`: true,
+	} {
+		mgr := &fakeManager{netRoute: types.NetRouteRelay}
+		ts := newTestServer(t, "", mgr, nil)
+		resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		var cr types.ClaimResponse
+		decodeErr := json.UnmarshalRead(resp.Body, &cr)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || decodeErr != nil || mgr.gotNoEgress != want || cr.NetRoute != types.NetRouteRelay {
+			t.Errorf("%s: status %d no_egress %v route %q (%v), want 200, %v and the manager's route", body, resp.StatusCode, mgr.gotNoEgress, cr.NetRoute, decodeErr, want)
+		}
+	}
+}
+
 func TestClaimErrorMapping(t *testing.T) {
 	tests := []struct {
 		name string
@@ -2434,6 +2455,8 @@ type fakeManager struct {
 	gotVolumes         []types.Volume
 	gotWarmVolumes     []types.Volume
 	gotRequirePromoted bool
+	gotNoEgress        bool
+	netRoute           types.NetRoute
 	warmCalls          int
 	provisionCalls     int
 	gotNoForward       bool
@@ -2447,25 +2470,28 @@ type fakeManager struct {
 	draining           bool
 }
 
-func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
+func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {
 	f.warmCalls++
-	f.gotTenant = tenant
-	f.gotClaimRef = claimRef
-	f.gotMetadata = metadata
-	f.gotOnExpire = onExpire
-	f.gotWarmVolumes = slices.Clone(volumes)
+	f.gotTenant = o.Tenant
+	f.gotClaimRef = o.ClaimRef
+	f.gotMetadata = o.Metadata
+	f.gotOnExpire = o.OnExpire
+	f.gotWarmVolumes = slices.Clone(o.Volumes)
+	f.gotNoEgress = o.NoEgress
 	if f.warmClaim == nil {
 		return nil, pool.ErrNoWarm
 	}
-	return f.warmClaim(ctx, key, ttl)
+	return f.warmClaim(ctx, key, o.TTL)
 }
 
-func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
-	return fakeClaimProvision(ctx, f, key, ttl, onExpire, tenant, claimRef, metadata, volumes, false)
+func (f *fakeManager) NetRoute(*types.Sandbox) types.NetRoute { return f.netRoute }
+
+func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {
+	return fakeClaimProvision(ctx, f, key, o, false)
 }
 
-func (f *fakeManager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
-	return fakeClaimProvision(ctx, f, key, ttl, onExpire, tenant, claimRef, metadata, volumes, true)
+func (f *fakeManager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {
+	return fakeClaimProvision(ctx, f, key, o, true)
 }
 
 func (f *fakeManager) Release(_ context.Context, id string, cred pool.Cred) error {
@@ -2801,16 +2827,17 @@ func postJSON(t *testing.T, url, token, body string) *http.Response {
 	return resp
 }
 
-func fakeClaimProvision(ctx context.Context, f *fakeManager, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume, requirePromoted bool) (*types.Sandbox, error) {
+func fakeClaimProvision(ctx context.Context, f *fakeManager, key types.PoolKey, o pool.ClaimOptions, requirePromoted bool) (*types.Sandbox, error) {
 	f.provisionCalls++
-	f.gotTenant = tenant
-	f.gotClaimRef = claimRef
-	f.gotMetadata = metadata
-	f.gotOnExpire = onExpire
-	f.gotVolumes = slices.Clone(volumes)
+	f.gotTenant = o.Tenant
+	f.gotClaimRef = o.ClaimRef
+	f.gotMetadata = o.Metadata
+	f.gotOnExpire = o.OnExpire
+	f.gotVolumes = slices.Clone(o.Volumes)
 	f.gotRequirePromoted = requirePromoted
+	f.gotNoEgress = o.NoEgress
 	if f.claim == nil {
-		return &types.Sandbox{ID: "sb_1", Token: "tok", Volumes: slices.Clone(volumes)}, nil
+		return &types.Sandbox{ID: "sb_1", Token: "tok", Volumes: slices.Clone(o.Volumes)}, nil
 	}
-	return f.claim(ctx, key, ttl)
+	return f.claim(ctx, key, o.TTL)
 }

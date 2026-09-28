@@ -31,6 +31,8 @@ type claimDTO struct {
 	ClaimedAt      time.Time          `json:"claimed_at,omitzero"`
 	LeaseSeconds   int                `json:"lease_seconds,omitzero"`
 	Layer          types.PolicyLayer  `json:"policy_layer,omitempty"`
+	PolicySource   types.PoolKey      `json:"policy_source,omitzero"`
+	NoEgress       bool               `json:"no_egress,omitzero"`
 	Tenant         string             `json:"tenant,omitempty"`
 	ClaimRef       string             `json:"claim_ref,omitempty"`
 	Metadata       types.Metadata     `json:"metadata,omitempty"`
@@ -184,6 +186,7 @@ func dtoOf(sb *types.Sandbox) claimDTO {
 	return claimDTO{
 		ID: sb.ID, VMName: sb.VMName, Key: sb.Key, Token: sb.Token,
 		Deadline: sb.Deadline, ClaimedAt: sb.ClaimedAt, LeaseSeconds: sb.LeaseSeconds, Layer: sb.Layer,
+		PolicySource: sb.PolicySource, NoEgress: sb.NoEgress,
 		Tenant: sb.Tenant, ClaimRef: sb.ClaimRef, Metadata: sb.Metadata, OnExpire: sb.OnExpire,
 		Volumes: slices.Clone(sb.Volumes), VsockSocket: sb.VsockSocket,
 		TAP: sb.TAP, HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap,

@@ -31,6 +31,8 @@ type ClaimRequest struct {
 	ClaimRef string       `json:"claim_ref,omitempty"`
 	Metadata Metadata     `json:"metadata,omitempty"`
 	OnExpire ExpireAction `json:"on_expire,omitempty"`
+	// Egress false claims with no egress policy, whatever the pool's; unset keeps the policy.
+	Egress *bool `json:"egress,omitzero"`
 }
 
 // Key resolves the requested pool key with the wire defaults filled.
@@ -54,6 +56,8 @@ type ClaimResponse struct {
 	Redirect []string `json:"redirect,omitempty"`
 	// RequirePromoted tells a redirecting client to preserve that requirement on retry.
 	RequirePromoted bool `json:"require_promoted,omitzero"`
+	// NetRoute is how the guest reaches the network; a foreign guest agent sets its processes' proxy from it.
+	NetRoute NetRoute `json:"net_route,omitempty"`
 }
 
 // VolumeInfo is the caller-visible, host-path-free catalog projection.

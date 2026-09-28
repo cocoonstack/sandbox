@@ -67,6 +67,10 @@ type Sandbox struct {
 	// for pool and template claims.
 	FromCheckpoint string
 
+	// NetRoute is how the guest reaches the network at claim: "relay" through
+	// the host proxy, "direct" over its own NIC, or "none".
+	NetRoute string
+
 	c     *Client
 	token string
 	owner string // data-plane address (owner node), from the claim

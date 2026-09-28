@@ -130,6 +130,7 @@ type claimResponse struct {
 	Volumes         []Volume  `json:"volumes,omitempty"`
 	Redirect        []string  `json:"redirect,omitempty"`
 	RequirePromoted bool      `json:"require_promoted,omitzero"`
+	NetRoute        string    `json:"net_route,omitempty"`
 }
 
 // Client talks to one sandboxd node.
@@ -249,7 +250,7 @@ func (c *Client) ownerAt(ctx context.Context, addr, id, token string) (string, e
 func (c *Client) handleFrom(dialed string, cr claimResponse) *Sandbox {
 	return &Sandbox{
 		ID: cr.ID, Deadline: cr.Deadline, Volumes: cr.Volumes,
-		FromCheckpoint: cr.FromCheckpoint, TemplateDigest: cr.TemplateDigest,
+		FromCheckpoint: cr.FromCheckpoint, TemplateDigest: cr.TemplateDigest, NetRoute: cr.NetRoute,
 		c: c, token: cr.Token, owner: cmp.Or(cr.OwnerAddr, dialed),
 	}
 }

@@ -24,20 +24,31 @@ const (
 	reapPause
 )
 
+// ClaimOptions is what a claim asks for beyond its key; the zero value takes every default.
+type ClaimOptions struct {
+	TTL      time.Duration
+	OnExpire types.ExpireAction
+	Tenant   string
+	ClaimRef string
+	Metadata types.Metadata
+	Volumes  []types.Volume
+	NoEgress bool
+}
+
 // ClaimWarm transfers ownership of a warm sandbox without provisioning; ErrNoWarm means empty.
-func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
+func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, o ClaimOptions) (*types.Sandbox, error) {
 	start := time.Now()
 	if err := m.validate(key); err != nil {
 		return nil, err
 	}
-	if err := archivable(key, len(volumes) > 0, onExpire); err != nil {
+	if err := archivable(key, len(o.Volumes) > 0, o.OnExpire); err != nil {
 		return nil, err
 	}
-	volumeSpecs, err := m.resolveVolumes(ctx, tenant, volumes)
+	volumeSpecs, err := m.resolveVolumes(ctx, o.Tenant, o.Volumes)
 	if err != nil {
 		return nil, err
 	}
-	applied, err := m.admitVolumes(tenant, volumeSpecs)
+	applied, err := m.admitVolumes(o.Tenant, volumeSpecs)
 	if err != nil {
 		return nil, err
 	}
@@ -62,12 +73,13 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 		m.abortVolumeClaim(ctx, sb.VMName, &reserved)
 		return nil, volumeErr
 	}
-	sb.Tenant = tenant
-	sb.ClaimRef = claimRef
-	sb.Metadata = metadata
-	sb.OnExpire = onExpire.Or("")
+	sb.Tenant = o.Tenant
+	sb.ClaimRef = o.ClaimRef
+	sb.Metadata = o.Metadata
+	sb.OnExpire = o.OnExpire.Or("")
+	sb.NoEgress = o.NoEgress
 	reserved = nil
-	out, err := m.finalize(ctx, sb, ttl)
+	out, err := m.finalize(ctx, sb, o.TTL)
 	if err == nil {
 		m.counters.claimsWarm.Add(1)
 		m.counters.claimNanos.Add(uint64(time.Since(start))) //nolint:gosec // durations are positive
@@ -76,13 +88,13 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, ttl time.Dur
 }
 
 // ClaimProvision creates a claim-ready sandbox (golden clone or cold boot).
-func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
-	return m.claimProvision(ctx, key, ttl, onExpire, tenant, claimRef, metadata, volumes, false)
+func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, o ClaimOptions) (*types.Sandbox, error) {
+	return m.claimProvision(ctx, key, o, false)
 }
 
 // ClaimProvisionPromoted requires key to resolve from a promoted template, never a cold boot.
-func (m *Manager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume) (*types.Sandbox, error) {
-	return m.claimProvision(ctx, key, ttl, onExpire, tenant, claimRef, metadata, volumes, true)
+func (m *Manager) ClaimProvisionPromoted(ctx context.Context, key types.PoolKey, o ClaimOptions) (*types.Sandbox, error) {
+	return m.claimProvision(ctx, key, o, true)
 }
 
 // Release destroys a claimed sandbox after authorizing cred.
@@ -374,7 +386,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	}
 	for _, sb := range sbs {
 		sb.Layer = types.LayerUnpooled
-		if _, pooled := m.activePool(sb.Key); pooled {
+		if _, pooled := m.activePool(sb.PolicyKey()); pooled {
 			sb.Layer = types.LayerPooled
 		}
 		m.claimed[sb.ID] = sb
@@ -625,25 +637,25 @@ func (m *Manager) authed(id, token string) (*types.Sandbox, bool) {
 	return sb, true
 }
 
-func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl time.Duration, onExpire types.ExpireAction, tenant, claimRef string, metadata types.Metadata, volumes []types.Volume, requirePromoted bool) (*types.Sandbox, error) {
+func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, o ClaimOptions, requirePromoted bool) (*types.Sandbox, error) {
 	start := time.Now()
 	if err := m.validate(key); err != nil {
 		return nil, err
 	}
-	if err := archivable(key, len(volumes) > 0, onExpire); err != nil {
+	if err := archivable(key, len(o.Volumes) > 0, o.OnExpire); err != nil {
 		return nil, err
 	}
-	volumeSpecs, err := m.resolveVolumes(ctx, tenant, volumes)
+	volumeSpecs, err := m.resolveVolumes(ctx, o.Tenant, o.Volumes)
 	if err != nil {
 		return nil, err
 	}
-	applied, err := m.admitVolumes(tenant, volumeSpecs)
+	applied, err := m.admitVolumes(o.Tenant, volumeSpecs)
 	if err != nil {
 		return nil, err
 	}
 	reserved := applied
 	defer func() { m.unreserveVolumes(reserved) }()
-	golden, err := m.resolveGolden(ctx, key, tenant)
+	golden, err := m.resolveGolden(ctx, key, o.Tenant)
 	if err != nil {
 		return nil, fmt.Errorf("resolve template: %w", err)
 	}
@@ -661,12 +673,14 @@ func (m *Manager) claimProvision(ctx context.Context, key types.PoolKey, ttl tim
 		return nil, volumeErr
 	}
 	sb.TemplateDigest = golden.templateDigest
-	sb.Tenant = tenant
-	sb.ClaimRef = claimRef
-	sb.Metadata = metadata
-	sb.OnExpire = onExpire.Or("")
+	sb.PolicySource = golden.source
+	sb.Tenant = o.Tenant
+	sb.ClaimRef = o.ClaimRef
+	sb.Metadata = o.Metadata
+	sb.OnExpire = o.OnExpire.Or("")
+	sb.NoEgress = o.NoEgress
 	reserved = nil
-	out, err := m.finalize(ctx, sb, ttl)
+	out, err := m.finalize(ctx, sb, o.TTL)
 	if err == nil {
 		if golden.dir != "" {
 			m.counters.claimsClone.Add(1)

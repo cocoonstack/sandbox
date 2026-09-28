@@ -320,7 +320,7 @@ func TestArchiveRetentionPurge(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng, archivePool(3600))
-		sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "acme", "", nil, nil)
+		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
 		if err != nil {
 			t.Fatalf("claim: %v", err)
 		}
@@ -354,7 +354,7 @@ func TestArchiveRetentionPurge(t *testing.T) {
 func TestArchiveWakeRegrantsTheClaimsLease(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
-	sb, err := m.ClaimProvision(t.Context(), testKey, 2*time.Hour, "", "acme", "", nil, nil)
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: 2 * time.Hour, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}

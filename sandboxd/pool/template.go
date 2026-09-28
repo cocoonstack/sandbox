@@ -30,10 +30,11 @@ type TemplateInfo struct {
 
 // templateRecord is a template's meta.json; an empty Tenant means the operator (root).
 type templateRecord struct {
-	ID        string        `json:"id"`
-	Key       types.PoolKey `json:"key"`
-	Tenant    string        `json:"tenant,omitempty"`
-	CreatedAt time.Time     `json:"created_at"`
+	ID           string        `json:"id"`
+	Key          types.PoolKey `json:"key"`
+	Tenant       string        `json:"tenant,omitempty"`
+	CreatedAt    time.Time     `json:"created_at"`
+	PolicySource types.PoolKey `json:"policy_source,omitzero"`
 }
 
 // Promote publishes a claimed sandbox as a template under (template, parent net, parent size).
@@ -70,7 +71,11 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 		return types.PoolKey{}, "", fmt.Errorf("promote %s: %w", sb.ID, err)
 	}
 	defer cleanup()
-	digest, err := m.publishTemplate(ctx, snap, key, tenant)
+	rec := templateRecord{Key: key, Tenant: tenant}
+	if sb.Layer == types.LayerPooled {
+		rec.PolicySource = sb.PolicyKey()
+	}
+	digest, err := m.publishTemplate(ctx, snap, rec)
 	if err != nil {
 		return types.PoolKey{}, "", fmt.Errorf("promote %s: %w", sb.ID, err)
 	}
@@ -268,8 +273,8 @@ func (m *Manager) checkTemplateOwner(ctx context.Context, id, tenant string) err
 	return nil
 }
 
-func (m *Manager) publishTemplate(ctx context.Context, snap string, key types.PoolKey, tenant string) (string, error) {
-	id := store.TemplateID(key.Hash())
+func (m *Manager) publishTemplate(ctx context.Context, snap string, rec templateRecord) (string, error) {
+	id := store.TemplateID(rec.Key.Hash())
 	staging, err := m.tpls.Stage(id)
 	if err != nil {
 		return "", fmt.Errorf("stage template: %w", err)
@@ -278,18 +283,18 @@ func (m *Manager) publishTemplate(ctx context.Context, snap string, key types.Po
 	if err = m.eng.SnapshotExport(ctx, snap, filepath.Join(staging, store.ExportDir)); err != nil {
 		return "", fmt.Errorf("export template: %w", err)
 	}
-	return m.commitTemplate(ctx, staging, key, tenant)
+	return m.commitTemplate(ctx, staging, rec)
 }
 
-func (m *Manager) commitTemplate(ctx context.Context, staging string, key types.PoolKey, tenant string) (string, error) {
-	id := store.TemplateID(key.Hash())
+func (m *Manager) commitTemplate(ctx context.Context, staging string, rec templateRecord) (string, error) {
+	id := store.TemplateID(rec.Key.Hash())
 	l := m.recLock(id)
 	l.Lock()
 	defer func() { l.Unlock(); m.recDone(id) }()
-	if ownerErr := m.checkTemplateOwner(ctx, id, tenant); ownerErr != nil {
+	if ownerErr := m.checkTemplateOwner(ctx, id, rec.Tenant); ownerErr != nil {
 		return "", ownerErr
 	}
-	rec := templateRecord{ID: id, Key: key, Tenant: tenant, CreatedAt: time.Now()}
+	rec.ID, rec.CreatedAt = id, time.Now()
 	meta, err := json.Marshal(rec)
 	if err != nil {
 		return "", err
@@ -305,7 +310,7 @@ func (m *Manager) commitTemplate(ctx context.Context, staging string, key types.
 		log.WithFunc("pool.commitTemplate").Warnf(ctx, "clear the previous promote's labels on %s: %v", id, err)
 	}
 	m.tplMu.Lock()
-	m.tplSet[id] = TemplateInfo{Key: key, ContentDigest: digest, Tenant: tenant, CreatedAt: rec.CreatedAt}
+	m.tplSet[id] = TemplateInfo{Key: rec.Key, ContentDigest: digest, Tenant: rec.Tenant, CreatedAt: rec.CreatedAt}
 	m.tplMu.Unlock()
 	return digest, nil
 }
@@ -313,6 +318,7 @@ func (m *Manager) commitTemplate(ctx context.Context, staging string, key types.
 type goldenResolution struct {
 	dir            string
 	templateDigest string
+	source         types.PoolKey
 	promoted       bool
 	unlock         func()
 }
@@ -364,6 +370,7 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant s
 	return goldenResolution{
 		dir:            dir,
 		templateDigest: digest,
+		source:         rec.PolicySource,
 		promoted:       true,
 		unlock:         cleanup,
 	}, nil

@@ -224,7 +224,7 @@ func TestResolveGoldenSkipsPromotedEgressTemplate(t *testing.T) {
 	if err = os.MkdirAll(filepath.Join(staging, store.ExportDir), 0o750); err != nil {
 		t.Fatalf("mkdir export: %v", err)
 	}
-	if _, err = m.commitTemplate(t.Context(), staging, egKey, ""); err != nil {
+	if _, err = m.commitTemplate(t.Context(), staging, templateRecord{Key: egKey}); err != nil {
 		t.Fatalf("seed template: %v", err)
 	}
 	golden, err := m.resolveGolden(t.Context(), egKey, "")
@@ -240,7 +240,7 @@ func TestResolveGoldenSkipsPromotedEgressTemplate(t *testing.T) {
 func TestTemplateTenantScopedDelete(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	parent, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "acme", "", nil, nil)
+	parent, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -277,10 +277,10 @@ func TestCommitTemplateRechecksOwnerUnderLock(t *testing.T) {
 		}
 		return staging
 	}
-	if _, err := m.commitTemplate(t.Context(), stage(), testKey, "acme"); err != nil {
+	if _, err := m.commitTemplate(t.Context(), stage(), templateRecord{Key: testKey, Tenant: "acme"}); err != nil {
 		t.Fatalf("acme publish: %v", err)
 	}
-	if _, err := m.commitTemplate(t.Context(), stage(), testKey, "beta"); !errors.Is(err, ErrTemplateOwned) {
+	if _, err := m.commitTemplate(t.Context(), stage(), templateRecord{Key: testKey, Tenant: "beta"}); !errors.Is(err, ErrTemplateOwned) {
 		t.Errorf("beta publish over acme: %v, want ErrTemplateOwned", err)
 	}
 }
@@ -291,7 +291,7 @@ func TestPromoteFailsClosedOnMetaError(t *testing.T) {
 	}
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "acme", "", nil, nil)
+	a, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -343,7 +343,7 @@ func TestTemplateClaimIsTenantScoped(t *testing.T) {
 		t.Fatalf("root promote: %v", err)
 	}
 
-	if _, err := m.ClaimProvisionPromoted(t.Context(), private, time.Hour, "", "beta", "", nil, nil); !errors.Is(err, ErrUnknownTemplate) {
+	if _, err := m.ClaimProvisionPromoted(t.Context(), private, ClaimOptions{TTL: time.Hour, Tenant: "beta"}); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("beta claiming acme's template: %v, want ErrUnknownTemplate", err)
 	}
 	for _, tc := range []struct {
@@ -356,7 +356,7 @@ func TestTemplateClaimIsTenantScoped(t *testing.T) {
 		{"tenant claims a root template", shared, "beta"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			sb, err := m.ClaimProvisionPromoted(t.Context(), tc.key, time.Hour, "", tc.tenant, "", nil, nil)
+			sb, err := m.ClaimProvisionPromoted(t.Context(), tc.key, ClaimOptions{TTL: time.Hour, Tenant: tc.tenant})
 			if err != nil {
 				t.Fatalf("claim: %v", err)
 			}
@@ -369,7 +369,7 @@ func TestTemplateClaimIsTenantScoped(t *testing.T) {
 
 func TestHasPromotedTemplateIsTenantScoped(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "acme", "", nil, nil)
+	a, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -390,7 +390,7 @@ func TestHasPromotedTemplateIsTenantScoped(t *testing.T) {
 
 func TestTemplateHashesAreTenantScoped(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	a, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "acme", "", nil, nil)
+	a, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -557,7 +557,7 @@ func TestTemplateLabelsPersistUntilTheTemplateIsRepromotedOrDeleted(t *testing.T
 
 func claimTenant(t *testing.T, m *Manager, tenant string) *types.Sandbox {
 	t.Helper()
-	sb, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", tenant, "", nil, nil)
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: tenant})
 	if err != nil {
 		t.Fatalf("claim %q: %v", tenant, err)
 	}

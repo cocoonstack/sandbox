@@ -58,7 +58,7 @@ func TestCheckpointThenBranch(t *testing.T) {
 
 func TestCheckpointBranchTakesItsOwnMetadata(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	src, err := m.ClaimProvision(t.Context(), testKey, 0, "", "", "", types.Metadata{"role": "source"}, nil)
+	src, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: 0, OnExpire: "", Tenant: "", ClaimRef: "", Metadata: types.Metadata{"role": "source"}})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -212,11 +212,11 @@ func TestRunRefillsWhileTheGenerationSweepBlocks(t *testing.T) {
 func TestCheckpointTenantIsolation(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	srcA, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "acme", "", nil, nil)
+	srcA, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("acme claim: %v", err)
 	}
-	srcB, err := m.ClaimProvision(t.Context(), testKey, time.Hour, "", "beta", "", nil, nil)
+	srcB, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "beta"})
 	if err != nil {
 		t.Fatalf("beta claim: %v", err)
 	}
