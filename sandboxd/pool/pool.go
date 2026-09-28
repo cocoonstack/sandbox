@@ -85,6 +85,7 @@ var (
 	ErrUnknownTemplate   = errors.New("unknown promoted template")
 	ErrPooledTemplate    = errors.New("template belongs to a configured pool")
 	ErrTemplateOwned     = errors.New("template owned by another tenant")
+	ErrTemplateReplaced  = errors.New("template replaced since it was observed")
 	ErrNoEgress          = errors.New("node has no egress attachment (bridge or network)")
 	ErrNoEgressHibernate = errors.New("egress-lane sandboxes do not hibernate")
 	ErrNoEgressFork      = errors.New("egress-lane sandboxes cannot fork, checkpoint, or promote: a resumed guest egresses before its fresh tap can be locked")

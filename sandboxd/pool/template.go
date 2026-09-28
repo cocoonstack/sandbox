@@ -88,8 +88,8 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 	return key, digest, nil
 }
 
-// DeleteTemplate removes a promoted template; a tenant may delete only what it promoted.
-func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant string) error {
+// DeleteTemplate removes a promoted template; a tenant may delete only what it promoted, and a digest deletes only the generation it names.
+func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant, digest string) error {
 	if err := m.validate(key); err != nil {
 		return err
 	}
@@ -102,6 +102,12 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant 
 	defer func() { l.Unlock(); m.recDoneEvict(id) }()
 	if err := m.ownedTemplate(ctx, id, tenant); err != nil {
 		return err
+	}
+	m.tplMu.Lock()
+	held := m.tplSet[id].ContentDigest
+	m.tplMu.Unlock()
+	if digest != "" && held != digest {
+		return ErrTemplateReplaced
 	}
 	if err := m.tpls.Delete(ctx, id); err != nil {
 		return fmt.Errorf("delete template: %w", err)

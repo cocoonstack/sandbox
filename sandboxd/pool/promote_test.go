@@ -142,19 +142,23 @@ func TestDeleteTemplate(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 0})
 	parent := mustClaim(t, m, testKey)
-	if _, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:del", ""); err != nil {
+	_, digest, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:del", "")
+	if err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
 	key := types.PoolKey{Template: "tpl:del", Net: testKey.Net, Size: testKey.Size}
 
-	if err := m.DeleteTemplate(t.Context(), testKey, ""); !errors.Is(err, ErrPooledTemplate) {
+	if err := m.DeleteTemplate(t.Context(), testKey, "", ""); !errors.Is(err, ErrPooledTemplate) {
 		t.Errorf("pooled delete: %v, want ErrPooledTemplate", err)
 	}
-	if err := m.DeleteTemplate(t.Context(), types.PoolKey{Template: "nope", Net: testKey.Net, Size: testKey.Size}, ""); !errors.Is(err, ErrUnknownTemplate) {
+	if err := m.DeleteTemplate(t.Context(), types.PoolKey{Template: "nope", Net: testKey.Net, Size: testKey.Size}, "", ""); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("unknown delete: %v, want ErrUnknownTemplate", err)
 	}
-	if err := m.DeleteTemplate(t.Context(), key, ""); err != nil {
-		t.Fatalf("DeleteTemplate: %v", err)
+	if err := m.DeleteTemplate(t.Context(), key, "", "sha256:observed-elsewhere"); !errors.Is(err, ErrTemplateReplaced) || !m.HasGolden(t.Context(), key, "") {
+		t.Errorf("delete with another digest: %v, want ErrTemplateReplaced and the template kept", err)
+	}
+	if err := m.DeleteTemplate(t.Context(), key, "", digest); err != nil {
+		t.Fatalf("DeleteTemplate with the promote's digest: %v", err)
 	}
 	if m.HasGolden(t.Context(), key, "") {
 		t.Error("template still resolvable after delete")
@@ -188,7 +192,7 @@ func TestTemplateRecordLockEvictsWithTheRecord(t *testing.T) {
 	if !hasRecLock(m, id) {
 		t.Error("recLocks dropped the entry of a live template")
 	}
-	if err := m.DeleteTemplate(t.Context(), key, ""); err != nil {
+	if err := m.DeleteTemplate(t.Context(), key, "", ""); err != nil {
 		t.Fatalf("DeleteTemplate: %v", err)
 	}
 	if hasRecLock(m, id) {
@@ -242,16 +246,16 @@ func TestTemplateTenantScopedDelete(t *testing.T) {
 		t.Fatalf("Promote: %v", err)
 	}
 
-	if err := m.DeleteTemplate(t.Context(), key, "beta"); !errors.Is(err, ErrUnknownTemplate) {
+	if err := m.DeleteTemplate(t.Context(), key, "beta", ""); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("cross-tenant delete: %v, want ErrUnknownTemplate", err)
 	}
-	if err := m.DeleteTemplate(t.Context(), key, "acme"); err != nil {
+	if err := m.DeleteTemplate(t.Context(), key, "acme", ""); err != nil {
 		t.Errorf("own delete: %v", err)
 	}
 	if _, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:tenant", "acme"); err != nil {
 		t.Fatalf("re-promote: %v", err)
 	}
-	if err := m.DeleteTemplate(t.Context(), key, ""); err != nil {
+	if err := m.DeleteTemplate(t.Context(), key, "", ""); err != nil {
 		t.Errorf("root delete: %v", err)
 	}
 }
@@ -455,7 +459,7 @@ func TestTemplatesListWhatTheNodeHoldsAcrossARestart(t *testing.T) {
 	if hashes := restarted.TemplateHashes(); len(hashes) != 3 {
 		t.Errorf("gossip %v, want the keyless record still routed", hashes)
 	}
-	if err = restarted.DeleteTemplate(t.Context(), keyA, ""); err != nil {
+	if err = restarted.DeleteTemplate(t.Context(), keyA, "", ""); err != nil {
 		t.Fatalf("DeleteTemplate: %v", err)
 	}
 	if got = restarted.Templates(); len(got) != 1 || got[0].Key != keyB {
@@ -516,7 +520,7 @@ func TestTemplateLabelsPersistUntilTheTemplateIsRepromotedOrDeleted(t *testing.T
 	if err = m.SetTemplateLabels(t.Context(), key, want, ""); err != nil {
 		t.Fatalf("SetTemplateLabels before delete: %v", err)
 	}
-	if err = m.DeleteTemplate(t.Context(), key, ""); err != nil {
+	if err = m.DeleteTemplate(t.Context(), key, "", ""); err != nil {
 		t.Fatalf("DeleteTemplate: %v", err)
 	}
 	if _, _, err = m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:l", ""); err != nil {

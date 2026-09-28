@@ -55,6 +55,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrHealBusy, http.StatusServiceUnavailable, ""},
 	{pool.ErrPooledTemplate, http.StatusConflict, ""},
 	{pool.ErrTemplateOwned, http.StatusConflict, ""},
+	{pool.ErrTemplateReplaced, http.StatusPreconditionFailed, ""},
 	{pool.ErrUnknownSandbox, http.StatusNotFound, "unknown sandbox"},
 	{pool.ErrUnknownTemplate, http.StatusNotFound, "unknown template"},
 	{pool.ErrUnknownCheckpoint, http.StatusNotFound, "unknown checkpoint"},
@@ -71,7 +72,7 @@ type Manager interface {
 	Renew(ctx context.Context, id string, cred pool.Cred, ttl time.Duration, onExpire types.ExpireAction) (time.Time, error)
 	Fork(ctx context.Context, id string, cred pool.Cred, count int, ttl time.Duration, onExpire types.ExpireAction, claimRefPrefix string) ([]*types.Sandbox, error)
 	Promote(ctx context.Context, id string, cred pool.Cred, template, tenant string) (types.PoolKey, string, error)
-	DeleteTemplate(ctx context.Context, key types.PoolKey, tenant string) error
+	DeleteTemplate(ctx context.Context, key types.PoolKey, tenant, digest string) error
 	SetTemplateLabels(ctx context.Context, key types.PoolKey, labels types.Metadata, tenant string) error
 	Checkpoint(ctx context.Context, id string, cred pool.Cred, name, tenant string) (types.Checkpoint, error)
 	Counters() pool.Counters
@@ -582,7 +583,7 @@ func (s *Server) handleDeleteCheckpoint(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	key := templateKey(q)
-	err := s.mgr.DeleteTemplate(r.Context(), key, tenantFrom(r.Context()))
+	err := s.mgr.DeleteTemplate(r.Context(), key, tenantFrom(r.Context()), q.Get("digest"))
 	if errors.Is(err, pool.ErrUnknownTemplate) && s.placer != nil && q.Get("no_redirect") == "" &&
 		s.writeRedirect(w, s.templateOwners(s.placer.TemplateOwners, key.Hash(), tenantFrom(r.Context()))) {
 		return

@@ -1295,6 +1295,22 @@ func TestClaimRedirectsToTemplateOwner(t *testing.T) {
 	}
 }
 
+func TestDeleteTemplateWithADigestOnlyRemovesThatGeneration(t *testing.T) {
+	mgr := &fakeManager{deleteGolden: func(types.PoolKey) error { return pool.ErrTemplateReplaced }}
+	ts := newTestServer(t, "sekret", mgr, nil)
+
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/templates?template=ns%2Fapp&digest=sha256%3Aold", nil)
+	req.Header.Set("Authorization", "Bearer sekret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPreconditionFailed || mgr.gotDigest != "sha256:old" {
+		t.Errorf("status=%d digest=%q, want 412 for a replaced generation and the digest passed through", resp.StatusCode, mgr.gotDigest)
+	}
+}
+
 func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 	mgr := &fakeManager{}
 	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil, nil, nil)
@@ -2441,6 +2457,7 @@ type fakeManager struct {
 	claimDeadline       func(id, token string) (time.Time, error)
 
 	gotTenant          string
+	gotDigest          string
 	gotClaimRef        string
 	gotMetadata        types.Metadata
 	gotOnExpire        types.ExpireAction
@@ -2548,8 +2565,8 @@ func (f *fakeManager) Promote(_ context.Context, id string, cred pool.Cred, temp
 	return types.PoolKey{Template: template, Net: types.NetNone, Size: types.SizeSmall}, f.promoteContentDigest, nil
 }
 
-func (f *fakeManager) DeleteTemplate(_ context.Context, key types.PoolKey, tenant string) error {
-	f.gotTenant = tenant
+func (f *fakeManager) DeleteTemplate(_ context.Context, key types.PoolKey, tenant, digest string) error {
+	f.gotTenant, f.gotDigest = tenant, digest
 	if f.deleteGolden == nil {
 		return pool.ErrUnknownTemplate
 	}

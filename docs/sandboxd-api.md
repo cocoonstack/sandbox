@@ -375,7 +375,10 @@ Auth: node API token. Removes a promoted template (the query parameters
 default like a claim's: `net=none`, `size=small`). A tenant may delete only
 templates it promoted — anything else is 404, root deletes anything. 204 on
 success, 404 unknown template, 409 when the key belongs to a configured pool
-(those goldens are owned by the node config). On a cluster, a node that does not
+(those goldens are owned by the node config). `digest=<content digest>` deletes
+only while the record still has that digest and answers 412 otherwise, so a
+caller that observed an older build never removes the newer one that replaced
+it. On a cluster, a node that does not
 hold the template but sees an owner in gossip answers `200
 {"redirect": [addrs]}` — the claim redirect shape — and the SDK retries the
 delete at the owner. The retry carries `no_redirect=1`, mirroring the claim
