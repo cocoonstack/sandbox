@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
@@ -170,6 +171,8 @@ type Server struct {
 	advertise string
 	preview   *PreviewServer
 
+	execBudget *semaphore.Weighted
+
 	relayMu     sync.Mutex
 	relays      map[net.Conn]net.Conn // client conn → guest conn
 	relayClosed bool
@@ -194,6 +197,8 @@ func New(apiToken string, tenants []config.TenantSpec, advertise string, mgr Man
 		advertise: advertise,
 		preview:   preview,
 		relays:    map[net.Conn]net.Conn{},
+
+		execBudget: semaphore.NewWeighted(execBufferBudget),
 	}
 }
 

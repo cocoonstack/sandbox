@@ -707,7 +707,9 @@ UTF-8 are replaced with U+FFFD, so binary output belongs on the relay. 400
 empty `argv`, negative `timeout_seconds`, an unknown field, or a silkd
 `bad_request` — a command that is missing or not executable and a `cwd` that
 does not exist are the caller's, not 502s; 401 missing bearer token; 404 unknown sandbox or wrong token;
-413 when stdout+stderr exceed 8 MiB; 502 guest unreachable or any other
+413 when stdout+stderr exceed 8 MiB; 503 with `Retry-After: 1` when the
+node's buffered-exec memory is exhausted (64 MiB of output across every
+buffered exec in flight; the command is killed); 502 guest unreachable or any other
 silkd error; 504 when the command outlives `timeout_seconds`. A client that hangs up first gets no reply and the command is killed. A hibernated sandbox wakes transparently like on the relay.
 
 ## GET /v1/sandboxes/{id}/owner
