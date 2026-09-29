@@ -17,11 +17,15 @@ import (
 )
 
 const (
-	execOutputCap = 8 << 20
-	execKillWait  = 5 * time.Second
+	execOutputCap    = 8 << 20
+	execBufferBudget = 64 << 20
+	execKillWait     = 5 * time.Second
 )
 
-var errExecOutputCap = errors.New("command output exceeds the buffered exec cap")
+var (
+	errExecOutputCap = errors.New("command output exceeds the buffered exec cap")
+	errExecBudget    = errors.New("node buffered exec memory is exhausted; retry or use the relay")
+)
 
 // ExecRequest is a buffered exec: one command whose whole output comes back in the response.
 type ExecRequest struct {
@@ -80,7 +84,15 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
 		return
 	}
-	resp, pid, err := collectExec(guest)
+	var held int64
+	defer func() { s.execBudget.Release(held) }()
+	resp, pid, err := collectExec(guest, func(n int) bool {
+		if !s.execBudget.TryAcquire(int64(n)) {
+			return false
+		}
+		held += int64(n)
+		return true
+	})
 	if err != nil && pid != 0 {
 		// a dropped connection only reaches a child that writes; a silent one needs the kill
 		if killErr := s.killExec(ctx, id, token, pid); killErr != nil {
@@ -101,6 +113,9 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, silkdErr.Error())
 	case errors.Is(err, errExecOutputCap):
 		writeErr(w, http.StatusRequestEntityTooLarge, err.Error())
+	case errors.Is(err, errExecBudget):
+		w.Header().Set("Retry-After", "1")
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
 	default:
 		log.WithFunc("server.handleExec").Errorf(ctx, err, "exec relay for %s", id)
 		writeErr(w, http.StatusBadGateway, "guest agent closed before the command exited")
@@ -138,8 +153,17 @@ func (s *Server) killExec(ctx context.Context, id, token string, pid uint32) err
 	return nil
 }
 
-func collectExec(guest net.Conn) (resp ExecResponse, pid uint32, err error) {
+func collectExec(guest net.Conn, reserve func(int) bool) (resp ExecResponse, pid uint32, err error) {
 	var stdout, stderr strings.Builder
+	admit := func(n int) error {
+		if stdout.Len()+stderr.Len()+n > execOutputCap {
+			return errExecOutputCap
+		}
+		if !reserve(n) {
+			return errExecBudget
+		}
+		return nil
+	}
 	sc := wire.NewFrameScanner(guest)
 	for sc.Scan() {
 		frame, err := wire.DecodeResponse(sc.Bytes())
@@ -150,13 +174,13 @@ func collectExec(guest net.Conn) (resp ExecResponse, pid uint32, err error) {
 		case *wire.Started:
 			pid = f.PID
 		case *wire.Stdout:
-			if stdout.Len()+stderr.Len()+len(f.Data) > execOutputCap {
-				return ExecResponse{}, pid, errExecOutputCap
+			if admitErr := admit(len(f.Data)); admitErr != nil {
+				return ExecResponse{}, pid, admitErr
 			}
 			stdout.Write(f.Data)
 		case *wire.Stderr:
-			if stdout.Len()+stderr.Len()+len(f.Data) > execOutputCap {
-				return ExecResponse{}, pid, errExecOutputCap
+			if admitErr := admit(len(f.Data)); admitErr != nil {
+				return ExecResponse{}, pid, admitErr
 			}
 			stderr.Write(f.Data)
 		case *wire.Exit:

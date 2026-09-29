@@ -239,6 +239,62 @@ func TestExecTimeoutStartsAfterWake(t *testing.T) {
 	}
 }
 
+func TestExecOverTheNodeBudgetIs503AndKillsTheCommand(t *testing.T) {
+	var conns atomic.Int32
+	killed := make(chan uint32, 1)
+	ts, srv := newRelayServer(t, func(conn net.Conn) {
+		r := bufio.NewReader(conn)
+		if conns.Add(1) == 1 {
+			_, _ = r.ReadBytes('\n')
+			_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n")
+			_, _ = io.WriteString(conn, `{"type":"stdout","data":"`+base64.StdEncoding.EncodeToString([]byte("x"))+`"}`+"\n")
+			_, _ = io.Copy(io.Discard, r)
+			return
+		}
+		defer conn.Close()
+		line, _ := r.ReadBytes('\n')
+		if req, _ := wire.DecodeRequest(bytes.TrimSpace(line)); req != nil {
+			if kill, ok := req.(*wire.Kill); ok {
+				killed <- kill.PID
+			}
+		}
+		_, _ = io.WriteString(conn, `{"type":"done"}`+"\n")
+	})
+	if !srv.execBudget.TryAcquire(execBufferBudget) {
+		t.Fatal("budget not empty at start")
+	}
+	resp := postJSON(t, ts.URL+"/v1/sandboxes/sb_1/exec", "tok", `{"argv":["yes"]}`)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") != "1" {
+		t.Fatalf("status %d Retry-After %q, want 503 and 1", resp.StatusCode, resp.Header.Get("Retry-After"))
+	}
+	select {
+	case pid := <-killed:
+		if pid != 7 {
+			t.Errorf("killed pid %d, want 7", pid)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no kill reached the guest after the budget refusal")
+	}
+}
+
+func TestExecReturnsItsBudgetAfterAnswering(t *testing.T) {
+	ts, srv := newRelayServer(t, func(conn net.Conn) {
+		defer conn.Close()
+		r := bufio.NewReader(conn)
+		_, _ = r.ReadBytes('\n')
+		_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n")
+		_, _ = io.WriteString(conn, `{"type":"stdout","data":"`+base64.StdEncoding.EncodeToString([]byte("v22\n"))+`"}`+"\n")
+		_, _ = io.WriteString(conn, `{"type":"exit","code":0}`+"\n")
+	})
+	if status, body := postExec(t, ts, `{"argv":["node","-v"]}`); status != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", status, body)
+	}
+	if !srv.execBudget.TryAcquire(execBufferBudget) {
+		t.Error("the answered exec kept part of the node budget")
+	}
+}
+
 type execManager struct {
 	*fakeManager
 	wake func(context.Context, string, string) (string, error)
