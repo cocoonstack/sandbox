@@ -575,7 +575,7 @@ volumes?: [{name, mount, mode?}], restarts?, restarted_at?, failed?}]}` — `cpu
 size tier's allocation; `restarts` counts the cold boots that replaced an
 exited VMM and `restarted_at` stamps the last one (each loses guest memory and
 the instance-metadata document, so a caller re-establishes guest state when
-`restarts` moves); `failed` names why the VMM is down and was not restarted
+`restarts` moves; the claim's env is written to the guest again); `failed` names why the VMM is down and was not restarted
 (see [dead VMMs](deploy.md#dead-vmms-and-host-restarts));
 `mode` is omitted for `ro`, matching the claim echo; never sandbox tokens,
 volume host paths, or catalog access lists. `claimed_at` is the first grant

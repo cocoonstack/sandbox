@@ -118,6 +118,20 @@ func (f *fakeEngine) List(_ context.Context) ([]types.VMRecord, error) {
 	return vms, nil
 }
 
+func (f *fakeEngine) Inspect(ctx context.Context, name string) (types.VMRecord, bool, error) {
+	vms, _ := f.List(ctx)
+	i := slices.IndexFunc(vms, func(vm types.VMRecord) bool { return vm.Config.Name == name })
+	if i < 0 {
+		return types.VMRecord{}, false, nil
+	}
+	return vms[i], true, nil
+}
+
+func (f *fakeEngine) VMEvents(ctx context.Context, _ string, _ engine.VMSyncFunc, _ engine.VMChangeFunc) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func (f *fakeEngine) Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error {
 	return f.real.Probe(ctx, vsockSocket, timeout)
 }

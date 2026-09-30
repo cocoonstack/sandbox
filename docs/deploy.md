@@ -106,6 +106,7 @@ gets the intersection of the two.
 | `restore_mode` | unset | clone and wake-restore memory mode: `copy`, `ondemand`, or `mmap`; use `mmap` for dense pools |
 | `no_direct_io` | false | use buffered writable disks for Cloud Hypervisor cold boots and clones; recommended for dense ephemeral pools to avoid direct-I/O CoW journal contention |
 | `sync_claims` | false | fsync `claims.json` and its directory on every commit (claim, release, renew, hibernate, wake, fork, archive, reap), about 0.3 ms each on NVMe; without it a host power loss can leave an empty journal, which fails the next start's reconcile until the file is removed, after which hibernate snapshots are reaped as orphans and archive checkpoints stay stranded. Off by default; turn it on when running claims must come back from a power loss (see `vmm_restart`) |
+| `cocoond_socket` | unset | `cocoon daemon`'s read-only API socket (by default `<cocoon run_dir>/cocoond.sock`); set, the node detects VMM exits from its event stream and polls only as a 60 s backstop. See [dead VMMs](#dead-vmms-and-host-restarts) |
 | `vmm_restart` | `cold` | what the node does with a running claim whose VMM exited outside a transition (a VMM crash, or a host restart that took it): `cold` cold-boots the claim's own VM from its disk under the same sandbox id and token (guest memory, processes, and the instance-metadata document are lost), `none` keeps the claim listed as `failed` for the caller to release or wake. Egress-lane and volume claims, a VM record gone from cocoon, and a VMM that exits more than 3 times in 10 minutes are marked `failed` under either value. See [dead VMMs](#dead-vmms-and-host-restarts) |
 | `no_balloon` | false | boot pool and template VMs without the virtio-balloon (cocoon otherwise returns 25% of guest memory to the host); clones inherit it from the golden. A guest that thrashes before deflate-on-OOM fires — a 16G build tier running a large typecheck — needs its whole memory |
 | `advertise_addr` | = `listen` | internal HTTP host:port for peer traffic and preview forwarding; also used by clients when `client_advertise` is unset. Must be routable when `listen` is a wildcard; a node with `mesh` set refuses to load while it names an unspecified host |
@@ -458,8 +459,14 @@ sandboxes are reaped when their TTL expires (default 5m, capped at 24h).
 
 ### Dead VMMs and host restarts
 
-Every 10 s the node lists cocoon's VMs once (only while it holds a running
-claim) and compares them with the claims it expects to be running. A claim
+With `cocoond_socket` set, the node follows `cocoon daemon`'s event stream
+(`GET /v1/events` on that socket): the daemon watches every VMM through a
+pidfd, so an exit reaches sandboxd within a daemon pass and a recycled PID
+never reads as a live VMM. The node then lists cocoon's VMs only every 60 s as
+a backstop for a dropped event, and every 10 s while the stream is down (it
+reconnects with backoff) or when no socket is configured. Each list runs only
+while the node holds a running claim; each suspect is then checked with a
+single-VM `cocoon vm inspect` under its lock. A claim
 whose VMM is gone — killed, crashed, or lost with the host — is handled per
 `vmm_restart`. A VMM that exits because the guest powered off is treated the
 same way. A claim whose lease has already lapsed is left to the reap, unless it
@@ -471,7 +478,9 @@ claimed `on_expire: archive`, which needs a running VM to archive:
 | failed | `none`, an egress-lane or volume claim, the VM record gone, the restart budget spent, or 3 failed boots | `failed: "<reason>"` on the row, `vmm_exit` then `vmm_failed` usage events, `409` from exec, relays, ports, hibernate, fork, checkpoint and promote |
 
 A cold restart boots the claim's own copy-on-write disk: files the guest
-synced survive, memory and processes do not. A failed claim keeps its VM and
+synced survive, memory and processes do not. The claim's guest env entries
+are written again and its egress proxy is re-armed; the instance-metadata
+document is not kept, so re-send it when `restarts` moves. A failed claim keeps its VM and
 disk until release or lease end (it is destroyed at expiry even with
 `on_expire: archive`); `POST /v1/sandboxes/{id}/wake` cold-boots it and resets
 the restart budget. After a host restart the same rule applies to every
@@ -482,8 +491,9 @@ so a `run_dir` on tmpfs ([high-density pools](#high-density-no-network-pools)) l
 with the host: running claims then end `failed`, and hibernated ones cannot
 wake. Cold restart is verified on the direct-boot (OCI) templates
 this project ships; a cloudimg (UEFI) clone boots again without its per-clone
-cidata, and no shipped pool uses one. The check reads cocoon's liveness verdict: run `cocoon daemon`
-on the node so a recycled PID never reads as a live VMM.
+cidata, and no shipped pool uses one. Without the daemon stream the poll reads
+`cocoon vm list`, whose liveness check needs a cocoon that verifies the VMM's
+PID (cocoonstack/cocoon#274) to never read a recycled PID as a live VMM.
 
 ### Maintenance
 

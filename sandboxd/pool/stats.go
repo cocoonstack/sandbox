@@ -52,7 +52,7 @@ func (m *Manager) vmResidentBytes(ctx context.Context, vmName string) (int64, bo
 	if vmName == "" {
 		return 0, false
 	}
-	vm, ok, err := m.findVM(ctx, vmName)
+	vm, ok, err := m.eng.Inspect(ctx, vmName)
 	if err != nil || !ok || vm.PID <= 0 {
 		return 0, false
 	}

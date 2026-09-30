@@ -121,6 +121,8 @@ type Engine interface {
 	Hibernate(ctx context.Context, vmName, snapName string) error
 	Restore(ctx context.Context, vmName, snapRef string) (string, error)
 	List(ctx context.Context) ([]types.VMRecord, error)
+	Inspect(ctx context.Context, name string) (types.VMRecord, bool, error)
+	VMEvents(ctx context.Context, socket string, onSync engine.VMSyncFunc, onChange engine.VMChangeFunc) error
 	Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error
 	DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error)
 	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error
@@ -284,6 +286,10 @@ type Manager struct {
 
 	vmmRestart    types.VMMRestart
 	livenessSweep atomic.Bool
+	cocoondSocket string
+	// vmmEvents is set while the cocoon daemon stream is live; the poll is then only a backstop.
+	vmmEvents  atomic.Bool
+	lastVMPoll atomic.Int64
 
 	// archive*Default are the archive thresholds for unpooled keys.
 	archiveAfterDefault  time.Duration
@@ -383,6 +389,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		lockEgress:      len(cfg.Bridges) > 0,
 		releaseDelay:    time.Duration(cfg.ReleaseDelaySeconds) * time.Second,
 		vmmRestart:      cfg.VMMRestart,
+		cocoondSocket:   cfg.CocoondSocket,
 		maxFork:         maxFork,
 		store:           newClaimStore(cfg.DataDir, cfg.SyncClaims),
 		volumes:         make(map[string]catalogVolume, len(cfg.Volumes)),
@@ -522,6 +529,9 @@ func (m *Manager) Run(ctx context.Context) {
 	storeSweep := time.NewTicker(time.Hour)
 	defer storeSweep.Stop()
 	go m.sweepExpiredCheckpoints(ctx)
+	if m.cocoondSocket != "" {
+		go m.watchVMMs(ctx)
+	}
 	m.livenessOnce(ctx)
 	m.refillOnce(ctx)
 	for {

@@ -1,13 +1,17 @@
 package pool
 
 import (
+	"context"
 	"errors"
+	"net"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -211,6 +215,145 @@ func TestLivenessLeavesALapsedLeaseToReap(t *testing.T) {
 	}
 }
 
+func TestWakeOfAFailedClaimRearmsEgressAfterARestart(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	t.Setenv("GH_TOKEN", "s3cr3t")
+	cfg := &config.Config{
+		DataDir: t.TempDir(), Bridges: []string{"sbxbr0"}, EgressCA: writeTestEgressCA(t), VMMRestart: types.VMMRestartNone,
+		Pools: []config.PoolSpec{{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}}},
+	}
+	first, err := NewManager(t.Context(), cfg, eng, testSecrets(t))
+	if err != nil {
+		t.Fatalf("manager: %v", err)
+	}
+	sb := mustClaim(t, first, testKey)
+	door := engine.EgressSocketPath(sb.VsockSocket)
+	killVMM(eng, sb.VMName)
+	first.recoverVMM(t.Context(), sb)
+	first.disarmEgress(sb.ID, false)
+
+	second, err := NewManager(t.Context(), cfg, eng, testSecrets(t))
+	if err != nil {
+		t.Fatalf("restarted manager: %v", err)
+	}
+	if err = second.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if conn, dialErr := net.Dial("unix", door); dialErr == nil {
+		_ = conn.Close()
+		t.Fatal("a failed claim's door is served after the restart; the wake below would not prove the re-arm")
+	}
+	if err = second.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("Wake: %v", err)
+	}
+
+	conn, err := net.Dial("unix", door)
+	if err != nil {
+		t.Fatalf("egress door after the wake: %v", err)
+	}
+	_ = conn.Close()
+}
+
+func TestRestartKeepsAnEgressDoorThatSurvivedTheVMM(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}})
+	sb := mustClaim(t, m, testKey)
+	killVMM(eng, sb.VMName)
+
+	m.recoverVMM(t.Context(), sb)
+
+	conn, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket))
+	if err != nil {
+		t.Fatalf("egress door after the restart: %v", err)
+	}
+	_ = conn.Close()
+}
+
+func TestRestartRedeliversTheGuestEnv(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: types.Env{"MODE": {Value: "prod"}}})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	eng.mu.Lock()
+	delete(eng.guestEnvs, sb.VsockSocket)
+	eng.mu.Unlock()
+	killVMM(eng, sb.VMName)
+
+	m.recoverVMM(t.Context(), sb)
+
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	if doc := eng.guestEnvs[sb.VsockSocket]; !strings.Contains(doc, "MODE=") {
+		t.Errorf("guest env after the restart = %q, want the claim's entry written again", doc)
+	}
+}
+
+func TestDaemonExitEventRecoversWithoutAList(t *testing.T) {
+	eng := newFakeEngine()
+	eng.vmEvents = make(chan fakeVMEvent)
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go m.watchVMMs(ctx)
+	eng.vmEvents <- fakeVMEvent{sync: []engine.VMStatus{{Name: sb.VMName, State: "running", Live: true}}}
+	waitFor(t, m.vmmEvents.Load)
+	lists := eng.listCalls()
+
+	killVMM(eng, sb.VMName)
+	eng.vmEvents <- fakeVMEvent{change: engine.VMChange{Kind: "MODIFIED", VM: engine.VMStatus{Name: sb.VMName, State: "stopped", Reason: "unexpected-exit"}}}
+
+	waitFor(t, func() bool { got, _ := m.Sandbox(sb.ID); return got.Restarts == 1 })
+	runLiveness(t, m)
+	if got := eng.listCalls(); got != lists {
+		t.Errorf("vm list ran %d times with the stream live, want none", got-lists)
+	}
+}
+
+func TestDaemonSyncRecoversAClaimTheSnapshotShowsDown(t *testing.T) {
+	eng := newFakeEngine()
+	eng.vmEvents = make(chan fakeVMEvent)
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	killVMM(eng, sb.VMName)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go m.watchVMMs(ctx)
+
+	eng.vmEvents <- fakeVMEvent{sync: []engine.VMStatus{{Name: sb.VMName, State: "stopped"}}}
+
+	waitFor(t, func() bool { got, _ := m.Sandbox(sb.ID); return got.Restarts == 1 })
+}
+
+func TestPollBackstopsTheDaemonStream(t *testing.T) {
+	eng := newFakeEngine()
+	eng.vmEvents = make(chan fakeVMEvent)
+	m := newTestManager(t, eng)
+	mustClaim(t, m, testKey)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go m.watchVMMs(ctx)
+	eng.vmEvents <- fakeVMEvent{sync: []engine.VMStatus{}}
+	waitFor(t, m.vmmEvents.Load)
+	lists := eng.listCalls()
+
+	m.lastVMPoll.Store(time.Now().Add(-2 * livenessBackstop).UnixNano())
+	runLiveness(t, m)
+	if got := eng.listCalls(); got != lists+1 {
+		t.Errorf("vm list ran %d times past the backstop, want 1", got-lists)
+	}
+	close(eng.vmEvents)
+	waitFor(t, func() bool { return !m.vmmEvents.Load() })
+	runLiveness(t, m)
+	if got := eng.listCalls(); got != lists+2 {
+		t.Errorf("vm list ran %d times after the stream dropped, want the poll back", got-lists-1)
+	}
+}
+
 func TestRestartFailedRefusesAReleasedClaim(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -346,6 +489,11 @@ func runLiveness(t *testing.T, m *Manager) {
 	t.Helper()
 	m.livenessOnce(t.Context())
 	waitFor(t, func() bool { return !m.livenessSweep.Load() })
+}
+
+type fakeVMEvent struct {
+	sync   []engine.VMStatus
+	change engine.VMChange
 }
 
 func killVMM(eng *fakeEngine, name string) {

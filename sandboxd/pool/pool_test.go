@@ -1187,6 +1187,8 @@ type fakeEngine struct {
 	hibernateErrCompletes                                                                        bool
 	tap                                                                                          string
 	listCount                                                                                    int
+	inspects                                                                                     int
+	vmEvents                                                                                     chan fakeVMEvent
 
 	attachRendezvous *sync.WaitGroup
 
@@ -1415,27 +1417,48 @@ func (f *fakeEngine) Restore(_ context.Context, name, _ string) (string, error) 
 	return f.lateVsock(f.vms[name]), nil
 }
 
-func (f *fakeEngine) List(_ context.Context) ([]types.VMRecord, error) {
+func (f *fakeEngine) List(ctx context.Context) ([]types.VMRecord, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.listCount++
-	var vms []types.VMRecord
-	for name, sock := range f.vms {
-		sock = f.lateVsock(sock)
-		state := vmStateRunning
-		switch {
-		case f.creating[name]:
-			state = vmStateCreating
-		case f.stopped[name]:
-			state = "stopped"
-		}
-		rec := types.VMRecord{State: state, PID: f.pids[name], VsockSocket: sock, Config: types.VMConfig{Name: name}}
-		if f.tap != "" {
-			rec.NetworkConfigs = []types.VMNetConfig{{TAP: f.tap}}
-		}
-		vms = append(vms, rec)
+	f.mu.Unlock()
+	return f.list(ctx)
+}
+
+func (f *fakeEngine) Inspect(ctx context.Context, name string) (types.VMRecord, bool, error) {
+	f.mu.Lock()
+	f.inspects++
+	f.mu.Unlock()
+	vms, _ := f.list(ctx)
+	i := slices.IndexFunc(vms, func(vm types.VMRecord) bool { return vm.Config.Name == name })
+	if i < 0 {
+		return types.VMRecord{}, false, nil
 	}
-	return vms, nil
+	return vms[i], true, nil
+}
+
+func (f *fakeEngine) VMEvents(ctx context.Context, _ string, onSync engine.VMSyncFunc, onChange engine.VMChangeFunc) error {
+	f.mu.Lock()
+	events := f.vmEvents
+	f.mu.Unlock()
+	if events == nil {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case ev, ok := <-events:
+			if !ok {
+				return errors.New("stream closed")
+			}
+			if ev.sync != nil {
+				onSync(ev.sync)
+			} else {
+				onChange(ev.change)
+			}
+		}
+	}
 }
 
 func (f *fakeEngine) Probe(_ context.Context, _ string, timeout time.Duration) error {
@@ -1535,6 +1558,28 @@ func (f *fakeEngine) SyncGuest(_ context.Context, vsockSocket string) error {
 	return nil
 }
 
+func (f *fakeEngine) list(_ context.Context) ([]types.VMRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var vms []types.VMRecord
+	for name, sock := range f.vms {
+		sock = f.lateVsock(sock)
+		state := vmStateRunning
+		switch {
+		case f.creating[name]:
+			state = vmStateCreating
+		case f.stopped[name]:
+			state = "stopped"
+		}
+		rec := types.VMRecord{State: state, PID: f.pids[name], VsockSocket: sock, Config: types.VMConfig{Name: name}}
+		if f.tap != "" {
+			rec.NetworkConfigs = []types.VMNetConfig{{TAP: f.tap}}
+		}
+		vms = append(vms, rec)
+	}
+	return vms, nil
+}
+
 func (f *fakeEngine) clone(from, name string) (types.VMRecord, error) {
 	f.mu.Lock()
 	f.clones = append(f.clones, name)
@@ -1614,6 +1659,12 @@ func (f *fakeEngine) listCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.listCount
+}
+
+func (f *fakeEngine) lookupCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.listCount + f.inspects
 }
 
 func (f *fakeEngine) snapListCalls() int {

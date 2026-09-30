@@ -47,7 +47,8 @@ const (
 	connectMax     = 64   // "OK <port>" handshake reply cap
 	infoMax        = 4096 // info response frame cap
 	outputTail     = 400
-	portForwardMax = 4096 // port_forward handshake reply line cap
+	portForwardMax = 4096           // port_forward handshake reply line cap
+	vmNotFound     = "vm not found" // cocoon's hypervisor.ErrNotFound text
 )
 
 // capacitySignatures mean the node cannot attach another VM, not that this VM failed.
@@ -231,6 +232,21 @@ func (e *Engine) List(ctx context.Context) ([]types.VMRecord, error) {
 		return nil, fmt.Errorf("parse vm list: %w", err)
 	}
 	return vms, nil
+}
+
+// Inspect returns cocoon's view of one VM; ok is false when cocoon has no such VM.
+func (e *Engine) Inspect(ctx context.Context, name string) (rec types.VMRecord, ok bool, err error) {
+	out, err := e.run(ctx, "vm", "inspect", name)
+	if err != nil {
+		if strings.Contains(err.Error(), vmNotFound) {
+			return types.VMRecord{}, false, nil
+		}
+		return types.VMRecord{}, false, err
+	}
+	if err := json.Unmarshal(out, &rec); err != nil {
+		return types.VMRecord{}, false, fmt.Errorf("parse vm inspect: %w", err)
+	}
+	return rec, true, nil
 }
 
 // DialSilkd connects to a VM's silkd through the hybrid-vsock UDS.
