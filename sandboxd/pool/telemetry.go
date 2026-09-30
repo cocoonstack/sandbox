@@ -31,9 +31,6 @@ type Counters struct {
 	Unarchives     uint64
 	ArchiveDeletes uint64
 
-	VMMRestarts uint64
-	VMMFailures uint64
-
 	// nanosecond totals paired with the counters above: avg latency without histograms
 	ClaimNanos uint64
 	WakeNanos  uint64
@@ -45,7 +42,6 @@ type counters struct {
 	forks, checkpoints, promotes         atomic.Uint64
 	releases, reaps                      atomic.Uint64
 	archives, unarchives, archiveDeletes atomic.Uint64
-	vmmRestarts, vmmFailures             atomic.Uint64
 	claimNanos, wakeNanos                atomic.Uint64
 }
 
@@ -81,8 +77,6 @@ func (m *Manager) Counters() Counters {
 		Archives:       c.archives.Load(),
 		Unarchives:     c.unarchives.Load(),
 		ArchiveDeletes: c.archiveDeletes.Load(),
-		VMMRestarts:    c.vmmRestarts.Load(),
-		VMMFailures:    c.vmmFailures.Load(),
 		ClaimNanos:     c.claimNanos.Load(),
 		WakeNanos:      c.wakeNanos.Load(),
 	}

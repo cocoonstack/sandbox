@@ -666,8 +666,7 @@ gauges, a per-tenant live-claim gauge (`sandboxd_tenant_claims{tenant="…"}`,
 configured tenants only), `sandboxd_config_digest_mismatch` on a mesh, claims
 by tier (warm/clone/cold),
 wake/hibernate/fork/checkpoint/promote/release/reap counters plus
-archive/unarchive/archive-delete counters, `vmm_restarts_total` and
-`vmm_failures_total`, and claim/wake `*_seconds_total`
+archive/unarchive/archive-delete counters, and claim/wake `*_seconds_total`
 for average latency. /metrics is a derived ops view; the billing source of
 truth is the usage journal below.
 

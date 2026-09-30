@@ -249,7 +249,6 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 	}
 	sb.ExitRecorded = false
 	sb.Touch()
-	m.counters.vmmRestarts.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "vmm_restart", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
 	log.WithFunc("pool.restartLocked").Warnf(ctx, "restarted %s (%s) from its disk; guest memory is lost", sb.ID, sb.VMName)
 	return nil
@@ -271,7 +270,6 @@ func (m *Manager) failLocked(ctx context.Context, sb *types.Sandbox, reason stri
 	if err := m.store.commit(js); err != nil {
 		m.recommit(ctx, js)
 	}
-	m.counters.vmmFailures.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "vmm_failed", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Reference: reason})
 	log.WithFunc("pool.failLocked").Warnf(ctx, "sandbox %s failed: %s", sb.ID, reason)
 }

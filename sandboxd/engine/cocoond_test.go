@@ -24,7 +24,7 @@ func TestVMEventsDeliversTheSnapshotThenChanges(t *testing.T) {
 	if len(synced) != 1 || synced[0].Name != "sbx-1" || !synced[0].Live {
 		t.Errorf("sync = %+v, want sbx-1 live", synced)
 	}
-	if len(changes) != 1 || changes[0].Kind != "MODIFIED" || changes[0].VM.Live || changes[0].VM.Reason != "unexpected-exit" {
+	if len(changes) != 1 || changes[0].Kind != "MODIFIED" || changes[0].VM.Name != "sbx-1" || changes[0].VM.Live {
 		t.Errorf("changes = %+v, want one unexpected exit of sbx-1", changes)
 	}
 }

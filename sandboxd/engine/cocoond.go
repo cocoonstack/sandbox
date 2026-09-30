@@ -20,11 +20,9 @@ const (
 
 // VMStatus is cocoon daemon's view of one supervised VM.
 type VMStatus struct {
-	Name  string `json:"name"`
-	State string `json:"state"`
+	Name string `json:"name"`
 	// Live reports that the daemon holds a live VMM process for the VM.
-	Live   bool   `json:"live"`
-	Reason string `json:"last_transition_reason,omitempty"`
+	Live bool `json:"live"`
 }
 
 // VMChange is one entry of cocoon daemon's change stream.

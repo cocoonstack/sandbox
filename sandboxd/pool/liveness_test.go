@@ -37,9 +37,6 @@ func TestLivenessRestartsExitedVMM(t *testing.T) {
 	if got, want := usageEventsOf(t, m, sb.ID), "claim,vmm_exit,vmm_restart"; got != want {
 		t.Errorf("events %s, want %s", got, want)
 	}
-	if c := m.Counters(); c.VMMRestarts != 1 || c.VMMFailures != 0 {
-		t.Errorf("counters %+v, want one restart", c)
-	}
 	reloaded, err := newClaimStore(m.dataDir, false).load()
 	if err != nil || reloaded[sb.ID].Restarts != 1 {
 		t.Errorf("journal restarts %d (err %v), want 1", reloaded[sb.ID].Restarts, err)
@@ -330,12 +327,12 @@ func TestDaemonExitEventRecoversWithoutAList(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go m.watchVMMs(ctx)
-	eng.vmEvents <- fakeVMEvent{sync: []engine.VMStatus{{Name: sb.VMName, State: "running", Live: true}}}
+	eng.vmEvents <- fakeVMEvent{sync: []engine.VMStatus{{Name: sb.VMName, Live: true}}}
 	waitFor(t, m.vmmEvents.Load)
 	lists := eng.listCalls()
 
 	killVMM(eng, sb.VMName)
-	eng.vmEvents <- fakeVMEvent{change: engine.VMChange{Kind: "MODIFIED", VM: engine.VMStatus{Name: sb.VMName, State: "stopped", Reason: "unexpected-exit"}}}
+	eng.vmEvents <- fakeVMEvent{change: engine.VMChange{Kind: "MODIFIED", VM: engine.VMStatus{Name: sb.VMName}}}
 
 	waitFor(t, func() bool { got, _ := m.Sandbox(sb.ID); return got.Restarts == 1 })
 	runLiveness(t, m)
@@ -354,7 +351,7 @@ func TestDaemonSyncRecoversAClaimTheSnapshotShowsDown(t *testing.T) {
 	defer cancel()
 	go m.watchVMMs(ctx)
 
-	eng.vmEvents <- fakeVMEvent{sync: []engine.VMStatus{{Name: sb.VMName, State: "stopped"}}}
+	eng.vmEvents <- fakeVMEvent{sync: []engine.VMStatus{{Name: sb.VMName}}}
 
 	waitFor(t, func() bool { got, _ := m.Sandbox(sb.ID); return got.Restarts == 1 })
 }
