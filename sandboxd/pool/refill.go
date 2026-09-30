@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -206,7 +208,7 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 }
 
 func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name, snap, final, imageID string) error {
-	rec, err := m.eng.RunCold(ctx, name, key)
+	rec, err := m.eng.RunCold(ctx, name, key, m.poolStorage[key])
 	if err != nil {
 		return err
 	}
@@ -274,7 +276,13 @@ func (m *Manager) goldenStamp(key types.PoolKey, caBaked bool, warmup []string, 
 	if caBaked {
 		fp = m.EgressCAFingerprint()
 	}
-	return strings.Join(append([]string{fp, string(m.laneOf(key)), imageID}, warmup...), "\x00")
+	fields := []string{fp, string(m.laneOf(key)), imageID}
+	// only a sized pool stamps its disk, in bytes so "40G" and "40GiB" match and unsized goldens stay adoptable
+	if storage := m.poolStorage[key]; storage != "" {
+		n, _ := config.StorageBytes(storage)
+		fields = append(fields, "storage="+strconv.FormatInt(n, 10))
+	}
+	return strings.Join(append(fields, warmup...), "\x00")
 }
 
 func (m *Manager) checkImagesOnce(ctx context.Context) {
@@ -381,7 +389,7 @@ func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden strin
 
 func (m *Manager) provisionCold(ctx context.Context, key types.PoolKey) (*types.Sandbox, error) {
 	sb, err := m.provisionVM(ctx, key, coldProbeTimeout, func(name string) (types.VMRecord, error) {
-		return m.eng.RunCold(ctx, name, key)
+		return m.eng.RunCold(ctx, name, key, m.poolStorage[key])
 	})
 	if err != nil {
 		return nil, err

@@ -113,9 +113,9 @@ func (e *Engine) CloneSnap(ctx context.Context, snap, name string, key types.Poo
 	return e.runRecord(ctx, e.cloneSnapArgs(snap, name, key)...)
 }
 
-// RunCold boots a VM from the template image, returning its lifecycle record.
-func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey) (types.VMRecord, error) {
-	return e.runRecord(ctx, e.runColdArgs(name, key)...)
+// RunCold boots a VM from the template image with a storage-sized disk (empty = cocoon's default), returning its lifecycle record.
+func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey, storage string) (types.VMRecord, error) {
+	return e.runRecord(ctx, e.runColdArgs(name, key, storage)...)
 }
 
 // Remove force-deletes a VM.
@@ -358,9 +358,12 @@ func (e *Engine) restoreArgs() []string {
 	return []string{"--restore-mode", string(e.restoreMode)}
 }
 
-func (e *Engine) runColdArgs(name string, key types.PoolKey) []string {
+func (e *Engine) runColdArgs(name string, key types.PoolKey, storage string) []string {
 	spec, _ := key.Size.Spec()
 	args := []string{"vm", "run", argName, name, argOutput, formatJSON, "--cpu", strconv.Itoa(spec.CPU), "--memory", spec.Memory, e.directIOArg()}
+	if storage != "" {
+		args = append(args, "--storage", storage)
+	}
 	if e.noBalloon {
 		args = append(args, "--no-balloon")
 	}

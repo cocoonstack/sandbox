@@ -47,7 +47,7 @@ func TestLifecycleArgsApplyDirectIOPolicy(t *testing.T) {
 		t.Run(strconv.FormatBool(noDirectIO), func(t *testing.T) {
 			e := New("cocoon", nil, nil, noDirectIO, false, "")
 			want := "--no-direct-io=" + strconv.FormatBool(noDirectIO)
-			cold := e.runColdArgs("sbx-1", key)
+			cold := e.runColdArgs("sbx-1", key, "")
 			for _, args := range [][]string{
 				cold,
 				e.cloneArgs("/goldens/g1", "sbx-1", key),
@@ -123,12 +123,29 @@ func TestNoBalloonReachesColdBootsOnly(t *testing.T) {
 	for _, noBalloon := range []bool{false, true} {
 		t.Run(strconv.FormatBool(noBalloon), func(t *testing.T) {
 			e := New("cocoon", nil, nil, false, noBalloon, "")
-			if got := slices.Contains(e.runColdArgs("sbx-1", key), "--no-balloon"); got != noBalloon {
+			if got := slices.Contains(e.runColdArgs("sbx-1", key, ""), "--no-balloon"); got != noBalloon {
 				t.Errorf("cold args carry --no-balloon = %v, want %v", got, noBalloon)
 			}
 			if slices.Contains(e.cloneArgs("/goldens/g1", "sbx-1", key), "--no-balloon") {
 				t.Error("clone args carry --no-balloon; clones inherit it from the golden")
 			}
 		})
+	}
+}
+
+func TestColdArgsSizeTheDiskOnlyWhenAsked(t *testing.T) {
+	key := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
+	e := New("cocoon", nil, nil, false, false, "")
+	if args := e.runColdArgs("sbx-1", key, ""); slices.Contains(args, "--storage") {
+		t.Errorf("unsized cold args %v carry --storage, want cocoon's default disk", args)
+	}
+	for _, storage := range []string{"40G", "40Gi"} {
+		args := e.runColdArgs("sbx-1", key, storage)
+		if i := slices.Index(args, "--storage"); i < 0 || args[i+1] != storage {
+			t.Errorf("sized cold args %v, want --storage %s verbatim", args, storage)
+		}
+	}
+	if slices.Contains(e.cloneArgs("/goldens/g1", "sbx-1", key), "--storage") {
+		t.Error("clone args carry --storage; clones inherit the golden's disk")
 	}
 }

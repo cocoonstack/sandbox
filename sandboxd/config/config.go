@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/docker/go-units"
+
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -34,6 +36,8 @@ const (
 	defaultMaxForkCount = 16
 	refillFloor         = 4
 	refillCeiling       = 256
+	// cocoon builds a VM with a 10G disk by default, so a pool never asks for less
+	minStorageBytes = 10 << 30
 )
 
 // PoolSpec declares one warm pool and its target of claim-ready VMs.
@@ -46,6 +50,8 @@ type PoolSpec struct {
 	Warmup []string       `json:"warmup,omitempty"`
 	// CaptureTrim trims the guest's copy-on-write disk before a promote or checkpoint of this pool's sandboxes.
 	CaptureTrim bool `json:"capture_trim,omitzero"`
+	// Storage sizes the golden's copy-on-write disk in cocoon's --storage spelling; every clone inherits it, and empty keeps cocoon's default.
+	Storage string `json:"storage,omitempty"`
 
 	IdleHibernateSeconds      int `json:"idle_hibernate_seconds,omitzero"`
 	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitzero"`
@@ -88,6 +94,15 @@ func (s PoolSpec) ValidateLimits() error {
 	}
 	if slices.Contains(s.Warmup, "") {
 		return fmt.Errorf("warmup must not contain an empty argument")
+	}
+	if s.Storage != "" {
+		n, err := StorageBytes(s.Storage)
+		if err != nil {
+			return fmt.Errorf("storage %q: %w", s.Storage, err)
+		}
+		if n < minStorageBytes {
+			return fmt.Errorf("storage %q is below cocoon's default of 10G", s.Storage)
+		}
 	}
 	return validateArchiveWindow(s.IdleHibernateSeconds, s.ArchiveAfterSeconds, s.ArchiveDeleteAfterSeconds)
 }
@@ -568,6 +583,15 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
 	return cfg, nil
+}
+
+// StorageBytes parses a size the way cocoon parses --storage: Docker/Kubernetes binary units, with "Gi" read as "GiB".
+func StorageBytes(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if strings.HasSuffix(strings.ToLower(s), "i") {
+		s += "B"
+	}
+	return units.RAMInBytes(s)
 }
 
 func validatePolicy(p *egress.Policy, secrets map[string]struct{}) error {

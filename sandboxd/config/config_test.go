@@ -101,6 +101,36 @@ func TestLoadReadsCaptureTrim(t *testing.T) {
 	}
 }
 
+func TestPoolStorageFollowsCocoonsSpelling(t *testing.T) {
+	for _, tt := range []struct {
+		storage string
+		wantOK  bool
+	}{
+		{"", true},
+		{"10G", true},
+		{"40G", true},
+		{"40GiB", true},
+		{"40Gi", true},
+		{"1T", true},
+		{"9G", false},
+		{"9Gi", false},
+		{"forty", false},
+	} {
+		_, err := Load(writeConfig(t, `{"pools":[{"template":"rt:24.04","storage":"`+tt.storage+`"}]}`))
+		if (err == nil) != tt.wantOK {
+			t.Errorf("storage %q: err = %v, want ok=%v", tt.storage, err, tt.wantOK)
+		}
+	}
+}
+
+func TestStorageBytesMatchesCocoonsUnits(t *testing.T) {
+	for _, storage := range []string{"40G", "40GiB", "40Gi", "40g", " 40G "} {
+		if n, err := StorageBytes(storage); err != nil || n != 40<<30 {
+			t.Errorf("StorageBytes(%q) = %d, %v, want %d", storage, n, err, int64(40<<30))
+		}
+	}
+}
+
 func TestAutoRefillConcurrency(t *testing.T) {
 	for _, tt := range []struct {
 		cpus int

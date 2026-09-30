@@ -486,6 +486,7 @@ func TestSetPoolsRejectsConfigOwnedFields(t *testing.T) {
 		{"egress", config.PoolSpec{PoolKey: testKey, Egress: &egress.Policy{}}},
 		{"warmup", config.PoolSpec{PoolKey: testKey, Warm: 1, Warmup: []string{"true"}}},
 		{"capture_trim", config.PoolSpec{PoolKey: testKey, Warm: 1, CaptureTrim: true}},
+		{"storage", config.PoolSpec{PoolKey: testKey, Warm: 1, Storage: "40G"}},
 	} {
 		err := m.SetPools(t.Context(), []config.PoolSpec{tt.spec})
 		if !errors.Is(err, ErrBadKey) || !strings.Contains(err.Error(), tt.field+" is set in the config file") {
@@ -1141,6 +1142,7 @@ type fakeEngine struct {
 	clones          []string
 	cloneFroms      []string
 	colds           []string
+	coldStorage     []string
 	removes         []string
 	starts          []string
 	stops           []string
@@ -1226,10 +1228,11 @@ func (f *fakeEngine) CloneSnap(_ context.Context, snap, name string, _ types.Poo
 	return f.clone(snap, name)
 }
 
-func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey) (types.VMRecord, error) {
+func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey, storage string) (types.VMRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.colds = append(f.colds, name)
+	f.coldStorage = append(f.coldStorage, storage)
 	f.volumeOps = append(f.volumeOps, "provision")
 	if f.runColdErr != nil {
 		return types.VMRecord{}, f.runColdErr

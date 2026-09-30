@@ -108,7 +108,7 @@ var (
 type Engine interface {
 	Clone(ctx context.Context, fromDir, name string, key types.PoolKey) (types.VMRecord, error)
 	CloneSnap(ctx context.Context, snap, name string, key types.PoolKey) (types.VMRecord, error)
-	RunCold(ctx context.Context, name string, key types.PoolKey) (types.VMRecord, error)
+	RunCold(ctx context.Context, name string, key types.PoolKey, storage string) (types.VMRecord, error)
 	Remove(ctx context.Context, name string) error
 	Start(ctx context.Context, name string) error
 	Stop(ctx context.Context, name string) error
@@ -316,6 +316,7 @@ type Manager struct {
 	poolEgress   map[types.PoolKey]*egress.Policy
 	poolWarmups  map[types.PoolKey][]string
 	poolTrims    map[types.PoolKey]bool
+	poolStorage  map[types.PoolKey]string
 	usage        *journal
 	audit        *journal
 	counters     counters
@@ -468,6 +469,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	m.poolEgress = make(map[types.PoolKey]*egress.Policy, len(cfg.Pools))
 	m.poolWarmups = make(map[types.PoolKey][]string, len(cfg.Pools))
 	m.poolTrims = make(map[types.PoolKey]bool, len(cfg.Pools))
+	m.poolStorage = make(map[types.PoolKey]string, len(cfg.Pools))
 	for _, tn := range cfg.Tenants {
 		m.tenantMax[tn.Name] = tn.MaxClaims
 		if tn.Egress != nil {
@@ -491,6 +493,9 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		}
 		if spec.CaptureTrim {
 			m.poolTrims[spec.PoolKey] = true
+		}
+		if spec.Storage != "" {
+			m.poolStorage[spec.PoolKey] = spec.Storage
 		}
 	}
 	if slices.ContainsFunc(cfg.Pools, func(s config.PoolSpec) bool { return s.Egress.Intercepts() }) {

@@ -9,6 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.113.2
 	github.com/aws/smithy-go v1.28.2
 	github.com/cocoonstack/sandbox/protocol/wire v0.0.0-00010101000000-000000000000
+	github.com/docker/go-units v0.5.0
 	github.com/google/nftables v0.3.0
 	github.com/hashicorp/memberlist v0.7.0
 	github.com/projecteru2/core v0.1.5
@@ -37,7 +38,6 @@ require (
 	github.com/cockroachdb/errors v1.14.0 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20241215232642-bb51bb14a506 // indirect
 	github.com/cockroachdb/redact v1.1.8 // indirect
-	github.com/docker/go-units v0.5.0 // indirect
 	github.com/getsentry/sentry-go v0.49.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/btree v1.1.3 // indirect
