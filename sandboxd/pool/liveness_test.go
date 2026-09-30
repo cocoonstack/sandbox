@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -292,6 +293,35 @@ func TestRestartRedeliversTheGuestEnv(t *testing.T) {
 	}
 }
 
+func TestRestartThatCannotDeliverTheEnvFailsAndSpendsTheBudget(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: types.Env{"MODE": {Value: "prod"}}})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	killVMM(eng, sb.VMName)
+	eng.mu.Lock()
+	eng.guestEnvErr = errors.New("guest write refused")
+	eng.mu.Unlock()
+
+	assertRestartFailsUntilBudget(t, m, eng, sb)
+}
+
+func TestRestartThatCannotArmTheEgressDoorFailsAndSpendsTheBudget(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}})
+	sb := mustClaim(t, m, testKey)
+	killVMM(eng, sb.VMName)
+	if err := os.Chmod(eng.sockRoot, 0o500); err != nil {
+		t.Fatalf("lock the door directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(eng.sockRoot, 0o700) })
+
+	assertRestartFailsUntilBudget(t, m, eng, sb)
+}
+
 func TestDaemonExitEventRecoversWithoutAList(t *testing.T) {
 	eng := newFakeEngine()
 	eng.vmEvents = make(chan fakeVMEvent)
@@ -482,6 +512,30 @@ func TestReconcileKeepsRunningClaimsTheHostLost(t *testing.T) {
 				t.Errorf("summary %+v (listed %v), want failed %q restarts %d", got, ok, tt.wantFailed, tt.wantRestarts)
 			}
 		})
+	}
+}
+
+// assertRestartFailsUntilBudget runs recoveries against a guest setup step that always fails.
+func assertRestartFailsUntilBudget(t *testing.T, m *Manager, eng *fakeEngine, sb *types.Sandbox) {
+	t.Helper()
+	for attempt := range vmmRestartBudget {
+		m.recoverVMM(t.Context(), sb)
+		got, _ := m.Sandbox(sb.ID)
+		if got.Restarts != 0 {
+			t.Fatalf("attempt %d published a restart %+v whose guest setup failed", attempt+1, got)
+		}
+		if last := attempt == vmmRestartBudget-1; (got.Failed == reasonColdBootFailed) != last {
+			t.Fatalf("attempt %d: failed %q", attempt+1, got.Failed)
+		}
+	}
+	eng.mu.Lock()
+	stops := len(eng.stops)
+	eng.mu.Unlock()
+	if stops != vmmRestartBudget {
+		t.Errorf("stops %d, want every failed restart's VM stopped", stops)
+	}
+	if events := usageEventsOf(t, m, sb.ID); strings.Contains(events, "vmm_restart") {
+		t.Errorf("events %s record a restart that never completed", events)
 	}
 }
 

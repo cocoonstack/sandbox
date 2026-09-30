@@ -213,10 +213,24 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 		return fmt.Errorf("probe after cold boot: %w", err)
 	}
 	m.mu.Lock()
+	sb.VsockSocket = sock
+	m.mu.Unlock()
+	// a displaced door's close unlinks the rebound path, so the old door goes first
+	m.disarmEgress(sb.ID, false)
+	err = m.armEgressProxy(ctx, sb)
+	if err == nil {
+		err = m.deliverEnv(ctx, []*types.Sandbox{sb}, false)
+	}
+	if err != nil {
+		m.disarmEgress(sb.ID, false)
+		m.stopVM(ctx, sb.VMName)
+		return fmt.Errorf("restore egress and env after cold boot: %w", err)
+	}
+	m.mu.Lock()
 	live := m.claimed[sb.ID] == sb
 	var js claimSnapshot
 	if live {
-		sb.VsockSocket, sb.Failed = sock, ""
+		sb.Failed = ""
 		sb.Restarts++
 		sb.RestartedAt = time.Now()
 		js = m.store.set(sb)
@@ -224,28 +238,20 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 	m.mu.Unlock()
 	if !live {
 		// the release that dropped the claim owns the VM teardown
+		m.disarmEgress(sb.ID, true)
 		return ErrUnknownSandbox
 	}
 	if err := m.store.commit(js); err != nil {
 		m.recommit(ctx, js)
 	}
-	logger := log.WithFunc("pool.restartLocked")
-	// a displaced door's close unlinks the rebound path, so the old door goes first
-	m.disarmEgress(sb.ID, false)
-	if err := m.armEgressProxy(ctx, sb); err != nil {
-		logger.Errorf(ctx, err, "arm egress proxy %s", sb.ID)
-	}
 	if m.disarmIfReleased(sb) {
 		return ErrUnknownSandbox
-	}
-	if err := m.deliverEnv(ctx, []*types.Sandbox{sb}, false); err != nil {
-		logger.Errorf(ctx, err, "redeliver env to %s", sb.ID)
 	}
 	sb.ExitRecorded = false
 	sb.Touch()
 	m.counters.vmmRestarts.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "vmm_restart", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
-	logger.Warnf(ctx, "restarted %s (%s) from its disk; guest memory is lost", sb.ID, sb.VMName)
+	log.WithFunc("pool.restartLocked").Warnf(ctx, "restarted %s (%s) from its disk; guest memory is lost", sb.ID, sb.VMName)
 	return nil
 }
 
