@@ -84,6 +84,8 @@ type Manager interface {
 	Sandbox(id string) (pool.SandboxSummary, bool)
 	Stats(ctx context.Context, id string) (pool.SandboxStats, bool)
 	SetInstanceMetadata(ctx context.Context, id string, doc []byte) error
+	SetEnv(ctx context.Context, id string, env types.Env, tenant string) error
+	Env(id, tenant string) (types.Env, error)
 	Audit(ctx context.Context, id string, line []byte)
 	AuditEnabled() bool
 	ClaimCheckpoint(ctx context.Context, ckptID string, o pool.ClaimOptions) (*types.Sandbox, error)
@@ -154,6 +156,11 @@ type TemplateLabelsRequest struct {
 	Labels types.Metadata `json:"labels"`
 }
 
+// SandboxEnv is the wire body of PUT and the reply of GET /v1/sandboxes/{id}/env; PUT replaces the claim's whole env.
+type SandboxEnv struct {
+	Env types.Env `json:"env"`
+}
+
 // PoolUpdateRequest is the wire body of PUT /v1/pools; omitted pools are drained.
 type PoolUpdateRequest struct {
 	Pools []config.PoolSpec `json:"pools"`
@@ -214,6 +221,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/sandboxes/{id}", s.requireRoot(s.handleSandbox))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/stats", s.requireRoot(s.handleSandboxStats))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/instance-metadata", s.requireRoot(s.handleInstanceMetadata))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/env", s.requireToken(s.handleGetEnv))
+	mux.HandleFunc("PUT /v1/sandboxes/{id}/env", s.requireToken(s.handleSetEnv))
+	mux.HandleFunc("DELETE /v1/sandboxes/{id}/env", s.requireToken(s.handleClearEnv))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.requireToken(s.handleFork))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/promote", s.requireToken(s.handlePromote))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/preview", s.requireToken(s.handlePreview))
@@ -245,7 +255,7 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeBody[types.ClaimRequest](w, r)
-	if !ok || !validRequest(w, req.Metadata.Validate(), req.OnExpire.Validate()) {
+	if !ok || !validRequest(w, req.Metadata.Validate(), req.OnExpire.Validate(), req.Env.Validate()) {
 		return
 	}
 	key := req.Key()
@@ -445,6 +455,34 @@ func (s *Server) handleInstanceMetadata(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+func (s *Server) handleGetEnv(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	env, err := s.mgr.Env(id, tenantFrom(r.Context()))
+	writeResult(w, r, "env", id, "read env failed", err, func() {
+		writeJSON(w, http.StatusOK, SandboxEnv{Env: env})
+	})
+}
+
+func (s *Server) handleSetEnv(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeBodyStrict[SandboxEnv](w, r)
+	if !ok || !validRequest(w, req.Env.Validate()) {
+		return
+	}
+	s.setEnv(w, r, req.Env)
+}
+
+func (s *Server) handleClearEnv(w http.ResponseWriter, r *http.Request) {
+	s.setEnv(w, r, nil)
+}
+
+func (s *Server) setEnv(w http.ResponseWriter, r *http.Request, env types.Env) {
+	id := r.PathValue("id")
+	err := s.mgr.SetEnv(r.Context(), id, env, tenantFrom(r.Context()))
+	writeResult(w, r, "env", id, "set env failed", err, func() {
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
 func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id string, cred pool.Cred) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, ok := sandboxToken(w, r)
@@ -517,11 +555,11 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeBody[types.CheckpointClaimRequest](w, r)
-	if !ok || !validRequest(w, req.Metadata.Validate(), req.OnExpire.Validate()) {
+	if !ok || !validRequest(w, req.Metadata.Validate(), req.OnExpire.Validate(), req.Env.Validate()) {
 		return
 	}
 	ckptID := r.PathValue("id")
-	o := pool.ClaimOptions{TTL: req.TTL(), OnExpire: req.OnExpire, Tenant: tenantFrom(r.Context()), Metadata: req.Metadata}
+	o := pool.ClaimOptions{TTL: req.TTL(), OnExpire: req.OnExpire, Tenant: tenantFrom(r.Context()), Metadata: req.Metadata, Env: req.Env}
 	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, o)
 	if errors.Is(err, pool.ErrUnknownCheckpoint) {
 		if !req.NoRedirect && s.prober != nil && s.writeRedirect(w, s.prober.Owners(r.Context(), ckptID)) {
@@ -745,7 +783,7 @@ func (s *Server) claimResponse(sb *types.Sandbox) types.ClaimResponse {
 func claimOptions(req types.ClaimRequest, tenant string) pool.ClaimOptions {
 	return pool.ClaimOptions{
 		TTL: req.TTL(), OnExpire: req.OnExpire, Tenant: tenant, ClaimRef: req.ClaimRef, Metadata: req.Metadata, Volumes: req.Volumes,
-		NoEgress: req.Egress != nil && !*req.Egress, RequirePromoted: req.RequirePromoted,
+		NoEgress: req.Egress != nil && !*req.Egress, RequirePromoted: req.RequirePromoted, Env: req.Env,
 	}
 }
 

@@ -1203,13 +1203,15 @@ type fakeEngine struct {
 
 	metadataDocs map[string]string
 	metadataErr  error
+	guestEnvs    map[string]string
+	guestEnvErr  error
 }
 
 func newFakeEngine() *fakeEngine {
 	return &fakeEngine{
 		vms: map[string]string{}, stopped: map[string]bool{}, creating: map[string]bool{}, pids: map[string]int{},
 		attachDirty: map[string]bool{}, removeSeenOps: map[string][]string{}, removeSeenDirty: map[string][]string{},
-		metadataDocs: map[string]string{}, sockRoot: "/vsock",
+		metadataDocs: map[string]string{}, guestEnvs: map[string]string{}, sockRoot: "/vsock",
 	}
 }
 
@@ -1328,6 +1330,16 @@ func (f *fakeEngine) WriteInstanceMetadata(_ context.Context, vsockSocket string
 		return f.metadataErr
 	}
 	f.metadataDocs[vsockSocket] = string(doc)
+	return nil
+}
+
+func (f *fakeEngine) WriteGuestEnv(_ context.Context, vsockSocket string, doc []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.guestEnvErr != nil {
+		return f.guestEnvErr
+	}
+	f.guestEnvs[vsockSocket] = string(doc)
 	return nil
 }
 

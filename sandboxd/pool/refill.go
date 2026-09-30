@@ -344,17 +344,17 @@ func (m *Manager) sourceSnap(ctx context.Context, sb *types.Sandbox) (string, fu
 	return snap, func() { m.dropSnap(ctx, snap) }, nil
 }
 
-// exportSource captures a claimed sandbox's state into exportDir, returning the snapshot name.
-func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir string) (string, error) {
+// exportSource captures a claimed sandbox's state into exportDir, returning the snapshot name and whether it holds a guest env file.
+func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir string) (snap string, guestEnv bool, err error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.trimForCapture(ctx, sb)
 	snap, cleanup, err := m.sourceSnap(ctx, sb)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer cleanup()
-	return snap, m.eng.SnapshotExport(ctx, snap, exportDir)
+	return snap, m.heldGuestEnv(sb), m.eng.SnapshotExport(ctx, snap, exportDir)
 }
 
 // trimForCapture trims a live sandbox's copy-on-write disk when its pool asks for it; a failed trim only leaves the capture larger.

@@ -5,8 +5,11 @@ import (
 	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -16,6 +19,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 const (
@@ -56,6 +61,9 @@ const (
 	maxMetadataKeyBytes   = 128
 	maxMetadataValueBytes = 512
 	maxMetadataBytes      = 4 << 10
+
+	maxEnvVars       = 64
+	maxEnvValueBytes = 8 << 10
 )
 
 var (
@@ -63,6 +71,11 @@ var (
 	NameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`)
 	// VolumeNameRe is the virtio disk serial grammar shared with cocoon.
 	VolumeNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,19}$`)
+	// EnvNameRe is the portable shell variable name.
+	EnvNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+
+	// guestFileEscaper covers the characters systemd unescapes inside a double-quoted EnvironmentFile value.
+	guestFileEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "`", "\\`", `$`, `\$`)
 
 	sizeSpecs = map[Size]SizeSpec{
 		SizeSmall:   {CPU: 1, Memory: "512M", MemoryBytes: 512 << 20},
@@ -184,6 +197,125 @@ func (md Metadata) encodedSize() int {
 	return size
 }
 
+// EnvVar is one entry of a claim's environment; a nil Guest means the entry reaches the guest.
+type EnvVar struct {
+	Value string `json:"value"`
+	Guest *bool  `json:"guest,omitempty"`
+}
+
+// InGuest reports whether the entry is delivered into the guest.
+func (v EnvVar) InGuest() bool { return v.Guest == nil || *v.Guest }
+
+// UnmarshalJSON rejects unknown members and a null guest, so a mistyped host-only flag never falls back to the guest.
+func (v *EnvVar) UnmarshalJSON(b []byte) error {
+	var raw struct {
+		Value string         `json:"value"`
+		Guest jsontext.Value `json:"guest,omitzero"`
+	}
+	if err := json.Unmarshal(b, &raw, json.RejectUnknownMembers(true)); err != nil {
+		return fmt.Errorf("env entry: %w", err)
+	}
+	*v = EnvVar{Value: raw.Value}
+	if raw.Guest == nil {
+		return nil
+	}
+	var guest bool
+	if raw.Guest.Kind() == 'n' || json.Unmarshal(raw.Guest, &guest) != nil {
+		return errors.New("env entry: guest must be true or false")
+	}
+	v.Guest = &guest
+	return nil
+}
+
+func (v EnvVar) same(other EnvVar) bool {
+	return v.Value == other.Value && v.InGuest() == other.InGuest()
+}
+
+// Env is a claim's own environment: guest entries reach the guest, the others stay host-side for egress secrets.
+type Env map[string]EnvVar
+
+// Validate enforces the entry count, the name grammar, and a bounded value a header and an env file both carry.
+func (e Env) Validate() error {
+	if len(e) > maxEnvVars {
+		return fmt.Errorf("env must contain at most %d entries, got %d", maxEnvVars, len(e))
+	}
+	for name, v := range e {
+		if !EnvNameRe.MatchString(name) {
+			return fmt.Errorf("env name %q must match %s", name, EnvNameRe)
+		}
+		if len(v.Value) > maxEnvValueBytes {
+			return fmt.Errorf("env value of %s must be at most %d bytes, got %d", name, maxEnvValueBytes, len(v.Value))
+		}
+		if !httpguts.ValidHeaderFieldValue(v.Value) {
+			return fmt.Errorf("env value of %s must not hold control characters other than tab", name)
+		}
+	}
+	return nil
+}
+
+// Hidden returns the value of a host-only entry.
+func (e Env) Hidden(name string) (string, bool) {
+	v, ok := e[name]
+	if !ok || v.InGuest() {
+		return "", false
+	}
+	return v.Value, true
+}
+
+// HasGuest reports whether any entry reaches the guest.
+func (e Env) HasGuest() bool {
+	for _, v := range e {
+		if v.InGuest() {
+			return true
+		}
+	}
+	return false
+}
+
+// Equal reports whether e and other hold the same entries.
+func (e Env) Equal(other Env) bool {
+	return maps.EqualFunc(e, other, EnvVar.same)
+}
+
+// SameGuest reports whether e and other deliver the same guest entries.
+func (e Env) SameGuest(other Env) bool {
+	return maps.EqualFunc(e.guest(), other.guest(), EnvVar.same)
+}
+
+// Redacted copies e with every host-only value dropped, so a read names them without serving them.
+func (e Env) Redacted() Env {
+	if e == nil {
+		return nil
+	}
+	out := make(Env, len(e))
+	for name, v := range e {
+		if !v.InGuest() {
+			v.Value = ""
+		}
+		out[name] = v
+	}
+	return out
+}
+
+// GuestFile renders the guest entries as a systemd EnvironmentFile, sorted by name.
+func (e Env) GuestFile() []byte {
+	var b strings.Builder
+	for _, name := range slices.Sorted(maps.Keys(e.guest())) {
+		fmt.Fprintf(&b, "%s=\"%s\"\n", name, guestFileEscaper.Replace(e[name].Value))
+	}
+	return []byte(b.String())
+}
+
+func (e Env) guest() Env {
+	out := Env{}
+	for name, v := range e {
+		if v.InGuest() {
+			out[name] = v
+		}
+	}
+	return out
+}
+
 // PoolKey identifies one warm pool.
 type PoolKey struct {
 	Template string   `json:"template"`
@@ -254,6 +386,8 @@ type Sandbox struct {
 	OnExpire ExpireAction `json:"on_expire,omitempty"`
 	// Volumes records the volumes successfully applied to this claim.
 	Volumes []Volume `json:"volumes,omitempty"`
+	// Env is replaced whole under the manager mutex; host-only values are never served back.
+	Env Env `json:"env,omitempty"`
 
 	VsockSocket string `json:"vsock_socket,omitempty"`
 	// TAP is the egress-lane NIC's host tap; empty on the none lane.
@@ -320,6 +454,8 @@ type Checkpoint struct {
 	// PolicySource and NoEgress carry the source sandbox's egress to a branch.
 	PolicySource PoolKey `json:"policy_source,omitzero"`
 	NoEgress     bool    `json:"no_egress,omitzero"`
+	// GuestEnv marks a capture whose guest holds an env file a branch must replace.
+	GuestEnv bool `json:"guest_env,omitzero"`
 
 	// Archive marks a lifecycle-internal wake image: hidden from listings and undeletable.
 	Archive bool `json:"archive,omitzero"`

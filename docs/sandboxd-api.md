@@ -31,7 +31,8 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
              {"name": "scratch-db", "mode": "rw"}],
  "claim_ref": "namespace/workload", "metadata": {"team": "a"},
  "on_expire": "archive", "no_redirect": false, "require_promoted": false,
- "egress": true}
+ "egress": true,
+ "env": {"MODE": {"value": "prod"}, "GW_KEY": {"value": "Bearer …", "guest": false}}}
 ```
 
 - `net` defaults to `none`, `size` to `small`; the pool key is
@@ -63,6 +64,14 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   no record holds the key, a key a pool serves included. A redirect to a template's owner sets it; copy it into the
   `no_redirect` retry so a target whose gossip view is stale refuses instead of
   cold-booting an image named like the template
+- `env` is the claim's own environment, at most 64 entries: each name a shell
+  identifier of at most 128 bytes, each value at most 8 KiB with no control
+  characters other than tab. An entry holds only `value` and `guest`; any other
+  member, or `"guest": null`, answers 400, so a mistyped flag never lands a
+  host-only value in the guest. `guest` (default `true`) delivers the entry into the guest; a
+  `guest: false` entry never enters it and only feeds the node's egress
+  [secrets](egress.md#claim-env-and-secrets). A bad entry answers 400 before
+  any VM is touched; see [claim env](#getputdelete-v1sandboxesidenv)
 - `egress` `false` claims with no [egress policy](egress.md), whatever the
   pool's (or, for a promoted template, its source pool's): the guest's doors are
   never bound. Omitted or `true` keeps the policy the claim would get
@@ -474,12 +483,12 @@ first).
 ## POST /v1/checkpoints/{id}/claim
 
 Auth: node API token; body `{"ttl_seconds": 0, "no_redirect": false,
-"metadata": {}, "on_expire": "destroy"}`. Claims a fresh sandbox branched from the checkpoint (a
+"metadata": {}, "on_expire": "destroy", "env": {}}`. Claims a fresh sandbox branched from the checkpoint (a
 normal claim response, attributed to the caller); the checkpoint's recorded
 key applies — the unguessable id is the capability to branch. The branch
-carries this request's `metadata` and `on_expire`, under the claim rules,
-never the source sandbox's. 400 metadata over a bound or an unknown
-`on_expire`.
+carries this request's `metadata`, `on_expire` and `env`, under the claim rules,
+never the source sandbox's. 400 metadata over a bound, an unknown
+`on_expire`, or a bad `env` entry.
 
 Checkpoints are node-local (unless the store is shared — see
 [Configuration](deploy.md#configuration)), so a miss here runs a tier order:
@@ -596,6 +605,35 @@ the host VMM process's resident set — the only usage signal available
 without a guest agent; `mem_used_measured` is false when there is no VMM
 process to read (hibernated, or the PID is not yet known), so a zero is
 never mistaken for idle. 404 unknown id.
+
+## GET/PUT/DELETE /v1/sandboxes/{id}/env
+
+Auth: node API token (root or tenant). A tenant reaches only claims it owns;
+anything else is 404, like an unknown id. Each call speaks only for the node
+it reaches; on a cluster, send it to the claim's `owner_addr`.
+
+`PUT` replaces the claim's whole env with the body's map, under the claim
+rules; `DELETE` clears it. `GET` answers the same shape with every
+`guest: false` value blanked, so a control plane sees the names without the
+values:
+
+```json
+{"env": {"MODE": {"value": "prod"}, "GW_KEY": {"value": "", "guest": false}}}
+```
+
+The env is persisted with the claim. A `guest: false` change takes effect on
+the egress proxy's next request at any time, a hibernated or archived claim
+included, and never touches the guest. A change to the guest entries is
+written to the guest at once, so it needs a running guest: on a hibernated,
+archived or transitioning sandbox it answers 409 (this verb never wakes one).
+A request identical to the stored env is written to a running guest again,
+so resending it repairs a guest file that was lost or not updated. A 500
+after the store step means the env is stored and its `guest: false` values
+are already live, but the guest write failed; resend the same request to
+deliver it. The guest side is described in [silkd](silkd.md#claim-env).
+`PUT`/`DELETE` answer 204, `GET` 200; 400 a bad entry or an unknown body
+field; 404 unknown id or another tenant's claim; 409 a guest change on a
+paused sandbox.
 
 ## PUT /v1/sandboxes/{id}/instance-metadata
 

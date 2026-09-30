@@ -12,7 +12,8 @@ func TestSecretSpecValidate(t *testing.T) {
 		{"no name", SecretSpec{Header: "Authorization", ValueEnv: "GH_TOKEN"}, false},
 		{"no header", SecretSpec{Name: "gh", ValueEnv: "GH_TOKEN"}, false},
 		{"invalid header", SecretSpec{Name: "gh", Header: "Bad Header:", ValueEnv: "GH_TOKEN"}, false},
-		{"no value_env", SecretSpec{Name: "gh", Header: "Authorization"}, false},
+		{"claim-supplied", SecretSpec{Name: "gh", Header: "Authorization"}, true},
+		{"claim-supplied under a non-env name", SecretSpec{Name: "gh-token", Header: "Authorization"}, false},
 		{"inline value", SecretSpec{Name: "gh", Header: "Authorization", Value: new("tok")}, false},
 		{"value and value_env", SecretSpec{Name: "gh", Header: "Authorization", Value: new("tok"), ValueEnv: "GH_TOKEN"}, false},
 		{"empty inline value", SecretSpec{Name: "gh", Header: "Authorization", Value: new(""), ValueEnv: "GH_TOKEN"}, false},
@@ -44,6 +45,25 @@ func TestSecretStoreResolvesEnv(t *testing.T) {
 	}
 	if _, _, ok := store.Header("missing"); ok {
 		t.Error("missing secret resolved")
+	}
+}
+
+func TestSecretStoreNamesTheEnvAClaimSupplies(t *testing.T) {
+	t.Setenv("GH_TOKEN", "node-value")
+	store, err := NewSecretStore([]SecretSpec{
+		{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"},
+		{Name: "gw", Header: "Authorization"},
+	})
+	if err != nil {
+		t.Fatalf("NewSecretStore: %v", err)
+	}
+	if h, v, ok := store.Header("gw"); !ok || h != "Authorization" || v != "" {
+		t.Errorf("gw = (%q,%q,%v), want (Authorization,\"\",true)", h, v, ok)
+	}
+	for name, want := range map[string]string{"gh": "GH_TOKEN", "gw": "gw", "missing": ""} {
+		if got := store.EnvName(name); got != want {
+			t.Errorf("EnvName(%s) = %q, want %q", name, got, want)
+		}
 	}
 }
 

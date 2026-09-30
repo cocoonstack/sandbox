@@ -25,6 +25,7 @@ type fakeEngine struct {
 	socks     map[string]string
 	volumeOps []string
 	volumeVMs map[string]bool
+	guestEnvs map[string]string
 	seq       int
 }
 
@@ -35,6 +36,7 @@ func newFakeEngine(dir string) *fakeEngine {
 		listeners: map[string]io.Closer{},
 		socks:     map[string]string{},
 		volumeVMs: map[string]bool{},
+		guestEnvs: map[string]string{},
 	}
 }
 
@@ -86,6 +88,13 @@ func (f *fakeEngine) SnapshotList(_ context.Context) ([]string, error) { return 
 func (f *fakeEngine) ImageIDs(context.Context) (map[string]string, error) { return nil, nil }
 
 func (f *fakeEngine) WriteInstanceMetadata(context.Context, string, []byte) error { return nil }
+
+func (f *fakeEngine) WriteGuestEnv(_ context.Context, vsockSocket string, doc []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.guestEnvs[vsockSocket] = string(doc)
+	return nil
+}
 
 func (f *fakeEngine) Hibernate(ctx context.Context, name, _ string) error {
 	return f.Remove(ctx, name)

@@ -259,7 +259,7 @@ func (p *Proxy) inject(rule Rule, h http.Header) string {
 		return ""
 	}
 	header, value, ok := p.secrets.Header(rule.Secret)
-	if !ok {
+	if !ok || value == "" {
 		return ""
 	}
 	h.Set(header, value)

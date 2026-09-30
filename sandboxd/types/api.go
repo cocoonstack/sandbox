@@ -33,6 +33,7 @@ type ClaimRequest struct {
 	OnExpire ExpireAction `json:"on_expire,omitempty"`
 	// Egress false claims with no egress policy, whatever the pool's; unset keeps the policy.
 	Egress *bool `json:"egress,omitzero"`
+	Env    Env   `json:"env,omitempty"`
 }
 
 // Key resolves the requested pool key with the wire defaults filled.
@@ -109,6 +110,7 @@ type CheckpointClaimRequest struct {
 	NoRedirect bool         `json:"no_redirect,omitzero"`
 	Metadata   Metadata     `json:"metadata,omitempty"`
 	OnExpire   ExpireAction `json:"on_expire,omitempty"`
+	Env        Env          `json:"env,omitempty"`
 }
 
 // CheckpointListResponse is the wire reply of GET /v1/checkpoints.
