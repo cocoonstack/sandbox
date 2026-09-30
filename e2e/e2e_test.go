@@ -5,11 +5,13 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,6 +24,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/server"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -505,6 +508,78 @@ func TestClaimMetadataRoundTrip(t *testing.T) {
 	}
 }
 
+func TestClaimEnvEndToEnd(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, r.Header.Get("Authorization"))
+	}))
+	t.Cleanup(origin.Close)
+	st := startConfigStack(t, "node-token", &config.Config{
+		Secrets:             []egress.SecretSpec{{Name: "GW_KEY", Header: "Authorization"}},
+		EgressInternalAllow: []string{"127.0.0.1/32"},
+		Pools:               []config.PoolSpec{{PoolKey: testKey, Warm: 2, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "127.0.0.1", Secret: "GW_KEY"}}}}},
+	})
+	claim := func(key string) (string, string, *http.Client) {
+		t.Helper()
+		status, body := rawJSON(t, st, http.MethodPost, "/v1/claim",
+			`{"template":"rt:24.04","env":{"GW_KEY":{"value":"`+key+`","guest":false},"AGENT_MODE":{"value":"on"}}}`)
+		var claimed rawClaimResponse
+		if status != http.StatusOK || json.Unmarshal(body, &claimed) != nil {
+			t.Fatalf("claim: %d %s", status, body)
+		}
+		sock, err := st.mgr.AgentSocket(claimed.ID, claimed.Token)
+		if err != nil {
+			t.Fatalf("socket: %v", err)
+		}
+		door := engine.EgressSocketPath(sock)
+		return claimed.ID, sock, &http.Client{Transport: &http.Transport{
+			Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: "door"}),
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", door)
+			},
+		}}
+	}
+	seen := func(client *http.Client) string {
+		t.Helper()
+		resp, err := client.Get(origin.URL)
+		if err != nil {
+			t.Fatalf("egress: %v", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return string(body)
+	}
+
+	idA, sockA, a := claim("Bearer tenant-a")
+	_, _, b := claim("Bearer tenant-b")
+	if gotA, gotB := seen(a), seen(b); gotA != "Bearer tenant-a" || gotB != "Bearer tenant-b" {
+		t.Fatalf("injected %q / %q, want each claim's own value", gotA, gotB)
+	}
+	st.eng.mu.Lock()
+	file := st.eng.guestEnvs[sockA]
+	st.eng.mu.Unlock()
+	if file != "AGENT_MODE=\"on\"\n" {
+		t.Errorf("guest env file %q, want only the guest entry", file)
+	}
+	if status, body := rawJSON(t, st, http.MethodPut, "/v1/sandboxes/"+idA+"/env", `{"env":{"GW_KEY":{"value":"Bearer rotated","guest":false}}}`); status != http.StatusNoContent {
+		t.Fatalf("put env: %d %s", status, body)
+	}
+	if got := seen(a); got != "Bearer rotated" {
+		t.Errorf("after PUT: injected %q, want Bearer rotated", got)
+	}
+	status, body := rawJSON(t, st, http.MethodGet, "/v1/sandboxes/"+idA+"/env", "")
+	if status != http.StatusOK || string(body) != `{"env":{"GW_KEY":{"value":"","guest":false}}}` {
+		t.Errorf("read env: %d %s, want the host-only name without its value", status, body)
+	}
+	for _, route := range []string{"/v1/sandboxes/" + idA, "/v1/sandboxes"} {
+		if _, body := rawJSON(t, st, http.MethodGet, route, ""); strings.Contains(string(body), "Bearer") {
+			t.Errorf("GET %s serves a host-only value: %s", route, body)
+		}
+	}
+	if status, _ := rawJSON(t, st, http.MethodPut, "/v1/sandboxes/"+idA+"/env", `{"env":{"BAD NAME":{"value":"x"}}}`); status != http.StatusBadRequest {
+		t.Errorf("bad name: %d, want 400", status)
+	}
+}
+
 func TestForkClaimRefPrefixWireShape(t *testing.T) {
 	st := startStack(t, "node-token")
 	status, body := rawJSON(t, st, http.MethodPost, "/v1/claim", `{"template":"rt:24.04"}`)
@@ -681,6 +756,11 @@ func startStack(t *testing.T, apiToken string, pools ...config.PoolSpec) *stack 
 
 func startTenantStack(t *testing.T, apiToken string, tenants []config.TenantSpec, volumes []config.VolumeSpec, pools ...config.PoolSpec) *stack {
 	t.Helper()
+	return startConfigStack(t, apiToken, &config.Config{Pools: pools, Tenants: tenants, Volumes: volumes})
+}
+
+func startConfigStack(t *testing.T, apiToken string, cfg *config.Config) *stack {
+	t.Helper()
 
 	dir, err := os.MkdirTemp("", "sbx")
 	if err != nil {
@@ -689,17 +769,18 @@ func startTenantStack(t *testing.T, apiToken string, tenants []config.TenantSpec
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	eng := newFakeEngine(dir)
-	secrets, err := egress.NewSecretStore(nil)
+	secrets, err := egress.NewSecretStore(cfg.Secrets)
 	if err != nil {
 		t.Fatalf("secrets: %v", err)
 	}
-	mgr, err := pool.NewManager(t.Context(), &config.Config{DataDir: dir, Pools: pools, Tenants: tenants, Volumes: volumes}, eng, secrets)
+	cfg.DataDir = dir
+	mgr, err := pool.NewManager(t.Context(), cfg, eng, secrets)
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
 	go mgr.Run(t.Context())
 
-	ts := httptest.NewServer(server.New(apiToken, tenants, "", mgr, eng.real, nil, nil, nil, nil).Handler())
+	ts := httptest.NewServer(server.New(apiToken, cfg.Tenants, "", mgr, eng.real, nil, nil, nil, nil).Handler())
 	t.Cleanup(ts.Close)
 	addr := strings.TrimPrefix(ts.URL, "http://")
 	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(apiToken))

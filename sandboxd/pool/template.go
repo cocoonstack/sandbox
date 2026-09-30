@@ -34,6 +34,7 @@ type templateRecord struct {
 	Key          types.PoolKey `json:"key"`
 	Tenant       string        `json:"tenant,omitempty"`
 	PolicySource types.PoolKey `json:"policy_source,omitzero"`
+	GuestEnv     bool          `json:"guest_env,omitzero"`
 	CreatedAt    time.Time     `json:"created_at"`
 }
 
@@ -72,7 +73,7 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 		return types.PoolKey{}, "", fmt.Errorf("promote %s: %w", sb.ID, err)
 	}
 	defer cleanup()
-	rec := templateRecord{Key: key, Tenant: tenant}
+	rec := templateRecord{Key: key, Tenant: tenant, GuestEnv: m.heldGuestEnv(sb)}
 	if sb.Layer == types.LayerPooled {
 		rec.PolicySource = sb.PolicyKey()
 	}
@@ -338,6 +339,7 @@ type goldenResolution struct {
 	templateDigest string
 	source         types.PoolKey
 	promoted       bool
+	guestEnv       bool
 	unlock         func()
 }
 
@@ -390,6 +392,7 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant s
 		templateDigest: digest,
 		source:         rec.PolicySource,
 		promoted:       true,
+		guestEnv:       rec.GuestEnv,
 		unlock:         cleanup,
 	}, nil
 }

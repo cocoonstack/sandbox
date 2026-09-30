@@ -34,11 +34,13 @@ type ClaimOptions struct {
 	Volumes         []types.Volume
 	NoEgress        bool
 	RequirePromoted bool
+	Env             types.Env
 }
 
 // apply stamps the options a claim carries for its life.
 func (o ClaimOptions) apply(sb *types.Sandbox) {
 	sb.Tenant, sb.ClaimRef, sb.Metadata, sb.OnExpire, sb.NoEgress = o.Tenant, o.ClaimRef, o.Metadata, o.OnExpire.Or(""), o.NoEgress
+	sb.Env = o.Env
 }
 
 // ClaimWarm transfers ownership of a warm sandbox without provisioning; ErrNoWarm means empty.
@@ -71,7 +73,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, o ClaimOptio
 	}
 	o.apply(sb)
 	reserved = nil
-	out, err := m.finalize(ctx, sb, o.TTL)
+	out, err := m.finalize(ctx, sb, o.TTL, false)
 	if err == nil {
 		m.counters.claimsWarm.Add(1)
 		m.counters.claimNanos.Add(uint64(time.Since(start))) //nolint:gosec // durations are positive
@@ -109,7 +111,7 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, o Claim
 	sb.PolicySource = golden.source
 	o.apply(sb)
 	reserved = nil
-	out, err := m.finalize(ctx, sb, o.TTL)
+	out, err := m.finalize(ctx, sb, o.TTL, golden.guestEnv)
 	if err == nil {
 		if golden.dir != "" {
 			m.counters.claimsClone.Add(1)
@@ -385,15 +387,15 @@ func (m *Manager) tenantDelta(tenant string, delta int) {
 }
 
 // finalize stamps identity and persists the claim; a failed write destroys the VM.
-func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Duration) (*types.Sandbox, error) {
-	if err := m.finalizeBatch(ctx, []*types.Sandbox{sb}, ttl, ""); err != nil {
+func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Duration, inherited bool) (*types.Sandbox, error) {
+	if err := m.finalizeBatch(ctx, []*types.Sandbox{sb}, ttl, "", inherited); err != nil {
 		return nil, err
 	}
 	return sb, nil
 }
 
 // finalizeBatch persists the batch as one write, all-or-nothing; one tenant per batch.
-func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration, claimRefPrefix string) error {
+func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration, claimRefPrefix string, inherited bool) error {
 	now := time.Now()
 	for _, sb := range sbs {
 		stampIdentity(sb, clampTTL(ttl))
@@ -402,15 +404,19 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		}
 		sb.TouchAt(now)
 	}
+	err := m.deliverEnv(ctx, sbs, inherited)
 	m.mu.Lock()
-	if quotaErr := m.quotaErr(len(sbs), sbs[0].Tenant); quotaErr != nil {
+	if err == nil {
+		err = m.quotaErr(len(sbs), sbs[0].Tenant)
+	}
+	if err != nil {
 		m.mu.Unlock()
 		for _, sb := range sbs {
 			// the rw mount dirtied the journal, so the clean umount is still owed
 			td := m.quiesceVolumes(ctx, sb)
 			m.removeOrRetry(ctx, sb.VMName, "", "", td)
 		}
-		return quotaErr
+		return err
 	}
 	for _, sb := range sbs {
 		sb.Layer = types.LayerUnpooled

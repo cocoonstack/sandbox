@@ -53,6 +53,37 @@ func TestForwardAllowInjectsSecretAndOverwritesGuestHeader(t *testing.T) {
 	}
 }
 
+func TestForwardWithoutASecretValueInjectsNothing(t *testing.T) {
+	var gotAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+	}))
+	defer upstream.Close()
+
+	policy := Policy{Allow: []Rule{{Host: "api.internal", Secret: "gw"}}}
+	events := make(chan Event, 4)
+	p := New(policy, fakeSecrets{"gw": {"Authorization", ""}}, nil, fixedDial(upstream.Listener.Addr().String()), func(ev Event) { events <- ev }, nil)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://api.internal/x", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer GUEST")
+	resp, err := proxyClient(t, front.URL).Do(req)
+	if err != nil {
+		t.Fatalf("proxied GET: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || gotAuth != "Bearer GUEST" {
+		t.Errorf("got %d with Authorization %q, want 200 and the guest's own header", resp.StatusCode, gotAuth)
+	}
+	if ev := recvEvent(t, events); ev.Decision != DecisionAllow || ev.Injected != "" {
+		t.Errorf("audit event = %+v, want allow with nothing injected", ev)
+	}
+}
+
 func TestRelayKeepsTheUpstreamConnForAClosingGuest(t *testing.T) {
 	closeSeen := make(chan bool, 1)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

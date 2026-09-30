@@ -31,7 +31,7 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	// See Hibernate: a started fork must finish even if the caller hangs up.
 	ctx = context.WithoutCancel(ctx)
 
-	children, err := m.forkClones(ctx, sb, count)
+	children, inherited, err := m.forkClones(ctx, sb, count)
 	if err != nil {
 		return nil, fmt.Errorf("fork %s: %w", sb.ID, err)
 	}
@@ -45,7 +45,7 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 		c.Metadata = sb.Metadata
 		c.OnExpire = onExpire.Or(parentExpire)
 	}
-	if err := m.finalizeBatch(ctx, children, ttl, claimRefPrefix); err != nil {
+	if err := m.finalizeBatch(ctx, children, ttl, claimRefPrefix, inherited); err != nil {
 		return nil, fmt.Errorf("fork %s: %w", sb.ID, err)
 	}
 	m.counters.forks.Add(1)
@@ -58,37 +58,39 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	return children, nil
 }
 
-// forkClones clones a running source from a fresh snapshot, a hibernated one from an export.
-func (m *Manager) forkClones(ctx context.Context, sb *types.Sandbox, count int) ([]*types.Sandbox, error) {
-	create, cleanup, err := m.forkSource(ctx, sb)
+// forkClones clones a running source from a fresh snapshot, a hibernated one from an export; inherited reports a captured guest env file.
+func (m *Manager) forkClones(ctx context.Context, sb *types.Sandbox, count int) (children []*types.Sandbox, inherited bool, err error) {
+	create, cleanup, inherited, err := m.forkSource(ctx, sb)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer cleanup()
-	return m.cloneBatch(ctx, count, sb.Key, create)
+	children, err = m.cloneBatch(ctx, count, sb.Key, create)
+	return children, inherited, err
 }
 
 // forkSource captures the fork source under the transition lock, against a racing hibernate.
-func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (vmProvisioner, func(), error) {
+func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (create vmProvisioner, cleanup func(), inherited bool, err error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
+	inherited = m.heldGuestEnv(sb)
 	if sb.HibernateSnap == "" {
-		snap, cleanup, err := m.sourceSnap(ctx, sb)
-		if err != nil {
-			return nil, nil, err
+		snap, drop, snapErr := m.sourceSnap(ctx, sb)
+		if snapErr != nil {
+			return nil, nil, false, snapErr
 		}
 		return func(name string) (types.VMRecord, error) { return m.eng.CloneSnap(ctx, snap, name, sb.Key) },
-			cleanup, nil
+			drop, inherited, nil
 	}
 	dir, err := os.MkdirTemp(m.dataDir, "fork-")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	exportDir := filepath.Join(dir, "export") // cocoon wants the target absent
-	if err := m.eng.SnapshotExport(ctx, sb.HibernateSnap, exportDir); err != nil {
+	if err = m.eng.SnapshotExport(ctx, sb.HibernateSnap, exportDir); err != nil {
 		_ = os.RemoveAll(dir)
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	return func(name string) (types.VMRecord, error) { return m.eng.Clone(ctx, exportDir, name, sb.Key) },
-		func() { _ = os.RemoveAll(dir) }, nil
+		func() { _ = os.RemoveAll(dir) }, inherited, nil
 }

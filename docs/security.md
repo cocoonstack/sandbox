@@ -38,7 +38,8 @@ exposing any part of a deployment beyond a single trusted host.
   the secret host-side, so prompt injection can exfiltrate at most the
   proxy's answers, and every credentialed call is journaled. Git auth
   tokens travel as in-memory headers, never guest disk. Secrets come from
-  the host environment, never the config file.
+  the host environment or a claim's `guest: false` env, never the config
+  file; that env stays in the node-local claim record.
 - **Sandbox identity.** Every clone is reseeded (entropy, machine-id), so
   branches and forks never share an identity with their source.
 

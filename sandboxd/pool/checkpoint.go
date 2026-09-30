@@ -181,10 +181,11 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 		return types.Checkpoint{}, "", fmt.Errorf("stage checkpoint: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
-	srcSnap, err := m.exportSource(ctx, sb, filepath.Join(staging, store.ExportDir))
+	srcSnap, guestEnv, err := m.exportSource(ctx, sb, filepath.Join(staging, store.ExportDir))
 	if err != nil {
 		return types.Checkpoint{}, "", fmt.Errorf("checkpoint %s: %w", sb.ID, err)
 	}
+	ckpt.GuestEnv = guestEnv
 	meta, err := json.Marshal(ckpt)
 	if err != nil {
 		return types.Checkpoint{}, "", fmt.Errorf("encode checkpoint meta: %w", err)
@@ -223,7 +224,7 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, o Clai
 	o.apply(sb)
 	sb.FromCheckpoint = ckpt.ID
 	sb.PolicySource, sb.NoEgress = ckpt.PolicySource, ckpt.NoEgress
-	out, err := m.finalize(ctx, sb, o.TTL)
+	out, err := m.finalize(ctx, sb, o.TTL, ckpt.GuestEnv)
 	if err == nil {
 		m.counters.claimsClone.Add(1)
 	}

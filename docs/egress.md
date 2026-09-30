@@ -169,7 +169,8 @@ is made and kept for its life: a `PUT /v1/pools` that adds or drops a pool
 changes the claims made after it, never a live one (a record from before this
 rule resolves against the live pool set). Secrets are registered separately and
 referenced by name — the value comes from the environment, never the config
-file.
+file: a claim's own `guest: false` env first, the node's second
+([below](#claim-env-and-secrets)).
 
 ```jsonc
 {
@@ -224,6 +225,43 @@ Each decision is metered as an `egress` usage event and, when `audit_log` is
 on, written to `audit.jsonl` (`op:"egress"`, `dest`, `port`, `method`,
 `decision`, and the secret **name** in `secret`); an intercepted `CONNECT` is
 recorded as a decision of its own before its inner requests.
+
+## Claim env and secrets
+
+A secret's value is an environment variable: the one its `value_env` names,
+or the secret's own name when `value_env` is empty. The proxy reads it from
+the claim's [env](sandboxd-api.md#getputdelete-v1sandboxesidenv) first, from
+its `guest: false` entries only, and from the node's environment second:
+
+```jsonc
+{ "secrets": [
+    { "name": "gh", "header": "Authorization", "value_env": "GH_TOKEN" }, // a claim's GH_TOKEN, else the node's
+    { "name": "GW_KEY", "header": "Authorization" }                       // only a claim's GW_KEY
+] }
+```
+
+So each sandbox can carry its own credential for the same rule, such as one
+gateway key per user, while the guest holds a placeholder.
+
+- **Scope.** A claim cannot widen the policy: the operator's rules decide
+  which hosts receive a secret, and the claim only supplies its value. A
+  `guest: true` entry never feeds a secret.
+- **Precedence.** The claim's entry wins over the node's value for that claim;
+  an entry set to `""` suppresses the node's value. With neither, the matched
+  request passes as the guest sent it.
+- **Lifetime.** The env lives in the claim record in `claims.json` (0600
+  under `data_dir`), survives a restart, hibernate, wake, archive and
+  unarchive, and goes with the release or reap. A fork child, a checkpoint
+  branch and a promoted-template clone start with only the env their own claim
+  sets. Processes captured live in a snapshot (sessions, detached execs,
+  units) keep the source's guest values in their own environment; a
+  `guest: false` value never enters the guest, so no snapshot, checkpoint or
+  store object holds one.
+- **Audit.** An injection is recorded as the secret's name; the value is
+  never logged, listed or returned.
+
+The proxy reads the claim's env under the node's manager lock, once per
+request whose matched rule names a secret; other requests pay nothing.
 
 ## HTTPS interception
 

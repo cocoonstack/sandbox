@@ -2,6 +2,8 @@ package pool
 
 import (
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,6 +33,35 @@ func BenchmarkStorePersistContention(b *testing.B) {
 			b.Run(fmt.Sprintf("%s/n=%d", arm, n), func(b *testing.B) {
 				benchPersistContention(b, claims, arm)
 			})
+		}
+	}
+}
+
+func BenchmarkStoreCommitEnv(b *testing.B) {
+	envs := map[string]types.Env{"none": nil, "typical": benchEnv(5, 64), "cap": benchEnv(8, 64<<10/8-8)}
+	for _, n := range []int{50, 200} {
+		for _, arm := range []string{"none", "typical", "cap"} {
+			for _, durable := range []bool{false, true} {
+				b.Run(fmt.Sprintf("claims=%d/env=%s/sync=%t", n, arm, durable), func(b *testing.B) {
+					claims := benchClaims(n)
+					for _, sb := range claims {
+						sb.Env = envs[arm]
+					}
+					s := newClaimStore(b.TempDir(), durable)
+					if err := s.save(claims); err != nil {
+						b.Fatalf("save: %v", err)
+					}
+					one := claims[fmt.Sprintf("sb_%016x", 0)]
+					for b.Loop() {
+						if err := s.commit(s.set(one)); err != nil {
+							b.Fatalf("commit: %v", err)
+						}
+					}
+					if fi, err := os.Stat(s.path); err == nil {
+						b.ReportMetric(float64(fi.Size()), "file-bytes")
+					}
+				})
+			}
 		}
 	}
 }
@@ -92,4 +123,13 @@ func benchPersistContention(b *testing.B, claims map[string]*types.Sandbox, arm 
 	if w := waits.Load(); w > 0 {
 		b.ReportMetric(float64(waitNs.Load())/float64(w), "ns/acquire")
 	}
+}
+
+// benchEnv returns n guest entries whose names and values total n*(8+valueBytes) bytes.
+func benchEnv(n, valueBytes int) types.Env {
+	env := make(types.Env, n)
+	for i := range n {
+		env[fmt.Sprintf("ENV_%04d", i)] = types.EnvVar{Value: strings.Repeat("v", valueBytes)}
+	}
+	return env
 }

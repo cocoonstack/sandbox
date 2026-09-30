@@ -142,7 +142,6 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"negative tenant max_claims", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1","max_claims":-1}]}`, "max_claims"},
 		{"secret without header", `{"secrets":[{"name":"gh"}],"pools":[]}`, "not a valid header name"},
 		{"secret bad header", `{"secrets":[{"name":"gh","header":"Bad Header:","value_env":"GH_TOKEN"}],"pools":[]}`, "not a valid header name"},
-		{"secret without value_env", `{"secrets":[{"name":"gh","header":"Authorization"}],"pools":[]}`, "needs value_env"},
 		{"secret with inline value", `{"secrets":[{"name":"gh","header":"Authorization","value":"tok"}],"pools":[]}`, "value is not supported"},
 		{"secret with value and value_env", `{"secrets":[{"name":"gh","header":"Authorization","value":"tok","value_env":"GH_TOKEN"}],"pools":[]}`, "value is not supported"},
 		{"secret hop-by-hop header", `{"secrets":[{"name":"gh","header":"Connection","value_env":"GH_TOKEN"}],"pools":[]}`, "not injectable"},
@@ -243,9 +242,9 @@ func TestLoadAcceptsTenants(t *testing.T) {
 }
 
 func TestLoadAcceptsEgressPolicy(t *testing.T) {
-	path := writeConfig(t, `{"secrets":[{"name":"gh","header":"Authorization","value_env":"GH_TOKEN"}],
+	path := writeConfig(t, `{"secrets":[{"name":"gh","header":"Authorization","value_env":"GH_TOKEN"},{"name":"gw","header":"Authorization"}],
 		"pools":[{"template":"rt:24.04","net":"none","size":"small",
-			"egress":{"allow":[{"host":"api.github.com","methods":["GET"],"secret":"gh"},{"host":"*.googleapis.com"}]}}]}`)
+			"egress":{"allow":[{"host":"api.github.com","methods":["GET"],"secret":"gh"},{"host":"*.googleapis.com","secret":"gw"}]}}]}`)
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -254,7 +253,7 @@ func TestLoadAcceptsEgressPolicy(t *testing.T) {
 	if pol == nil || len(pol.Allow) != 2 || pol.Allow[0].Secret != "gh" {
 		t.Errorf("egress policy %+v", pol)
 	}
-	if len(cfg.Secrets) != 1 || cfg.Secrets[0].Name != "gh" {
+	if len(cfg.Secrets) != 2 || cfg.Secrets[0].Name != "gh" || cfg.Secrets[1].ValueEnv != "" {
 		t.Errorf("secrets %+v", cfg.Secrets)
 	}
 }

@@ -320,6 +320,67 @@ func TestSetTemplateLabelsReplacesTheMapForRootOrTheTenant(t *testing.T) {
 	}
 }
 
+func TestEnvVerbsForRootOrTheTenant(t *testing.T) {
+	mgr := &fakeManager{env: types.Env{"G": {Value: "g"}, "H": {Guest: new(false)}}}
+	ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
+	call := func(t *testing.T, method, token, body string) (int, string) {
+		t.Helper()
+		resp := doReq(t, method, ts.URL+"/v1/sandboxes/sb_1/env", token, body)
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(raw)
+	}
+
+	if code, _ := call(t, http.MethodPut, "root", `{"env":{"GW":{"value":"Bearer a","guest":false},"G":{"value":"g"}}}`); code != http.StatusNoContent {
+		t.Fatalf("root set: %d, want 204", code)
+	}
+	if code, _ := call(t, http.MethodDelete, "acme-tok", ""); code != http.StatusNoContent {
+		t.Fatalf("tenant clear: %d, want 204", code)
+	}
+	want := []string{`sb_1 2 ""`, `sb_1 0 "acme"`}
+	if !slices.Equal(mgr.envSet, want) {
+		t.Errorf("SetEnv calls %q, want %q", mgr.envSet, want)
+	}
+	code, body := call(t, http.MethodGet, "acme-tok", "")
+	var read SandboxEnv
+	if err := json.Unmarshal([]byte(body), &read); code != http.StatusOK || err != nil || !read.Env.Equal(mgr.env) || mgr.gotTenant != "acme" {
+		t.Errorf("read: %d %s as %q", code, body, mgr.gotTenant)
+	}
+	for body, want := range map[string]int{
+		`{"vars":{}}`:                       http.StatusBadRequest,
+		`{"env":{"A-B":{"value":"x"}}}`:     http.StatusBadRequest,
+		`{"env":{"A":{"value":"a\nb"}}}`:    http.StatusBadRequest,
+		`{"env":{"A":{"value":"a","x":1}}}`: http.StatusBadRequest,
+	} {
+		if code, _ := call(t, http.MethodPut, "root", body); code != want {
+			t.Errorf("%s: %d, want %d", body, code, want)
+		}
+	}
+	for err, want := range map[error]int{pool.ErrPaused: http.StatusConflict, pool.ErrUnknownSandbox: http.StatusNotFound} {
+		mgr.envErr = err
+		if code, _ := call(t, http.MethodPut, "root", `{"env":{}}`); code != want {
+			t.Errorf("%v: %d, want %d", err, code, want)
+		}
+	}
+	if code, _ := call(t, http.MethodPut, "sb-token", `{"env":{}}`); code != http.StatusUnauthorized {
+		t.Errorf("a sandbox token: %d, want 401", code)
+	}
+}
+
+func TestClaimRefusesAnAmbiguousHostOnlyFlag(t *testing.T) {
+	for _, entry := range []string{`{"value":"s","guset":false}`, `{"value":"s","host_only":true}`, `{"value":"s","guest":null}`} {
+		for _, path := range []string{"/v1/claim", "/v1/checkpoints/ck_00000000000000aa/claim"} {
+			mgr := &fakeManager{claimCheckpoint: func(string) (*types.Sandbox, error) { return &types.Sandbox{ID: "sb_1"}, nil }}
+			ts := newTestServer(t, "sekret", mgr, nil)
+			resp := postJSON(t, ts.URL+path, "sekret", `{"template":"rt:24.04","env":{"KEY":`+entry+`}}`)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest || mgr.warmCalls+mgr.provisionCalls != 0 || mgr.gotEnv != nil {
+				t.Errorf("%s %s: %d, manager called %d times, want 400 and none", path, entry, resp.StatusCode, mgr.warmCalls+mgr.provisionCalls)
+			}
+		}
+	}
+}
+
 func TestAPITokenGuard(t *testing.T) {
 	ts := newTestServer(t, "sekret", &fakeManager{}, nil)
 
@@ -2287,8 +2348,9 @@ func TestClaimRejectsMetadataOverABound(t *testing.T) {
 	}
 }
 
-func TestClaimThreadsMetadata(t *testing.T) {
+func TestClaimThreadsMetadataAndEnv(t *testing.T) {
 	want := types.Metadata{"team": "a"}
+	wantEnv := types.Env{"GW": {Value: "Bearer k", Guest: new(false)}}
 	hit := func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
 		return &types.Sandbox{ID: "sb_1", Token: "tok"}, nil
 	}
@@ -2299,21 +2361,21 @@ func TestClaimThreadsMetadata(t *testing.T) {
 		name, path, body string
 		setup            func(*fakeManager)
 	}{
-		{"warm", "/v1/claim", `{"template":"rt:24.04","metadata":{"team":"a"}}`, warm},
-		{"provision", "/v1/claim", `{"template":"rt:24.04","metadata":{"team":"a"}}`, cold},
-		{"volume warm", "/v1/claim", `{"template":"rt:24.04","volumes":[{"name":"data"}],"metadata":{"team":"a"}}`, warm},
-		{"volume provision", "/v1/claim", `{"template":"rt:24.04","volumes":[{"name":"data"}],"metadata":{"team":"a"}}`, cold},
-		{"volume promoted", "/v1/claim", `{"template":"rt:24.04","volumes":[{"name":"data"}],"require_promoted":true,"metadata":{"team":"a"}}`, func(f *fakeManager) { f.hasPromoted = true }},
-		{"checkpoint", "/v1/checkpoints/ck_00000000000000aa/claim", `{"metadata":{"team":"a"}}`, func(f *fakeManager) { f.claimCheckpoint = ckpt }},
-		{"checkpoint heal", "/v1/checkpoints/ck_00000000000000aa/claim", `{"metadata":{"team":"a"}}`, func(f *fakeManager) { f.healCheckpoint = ckpt }},
+		{"warm", "/v1/claim", `{"template":"rt:24.04","metadata":{"team":"a"},"env":{"GW":{"value":"Bearer k","guest":false}}}`, warm},
+		{"provision", "/v1/claim", `{"template":"rt:24.04","metadata":{"team":"a"},"env":{"GW":{"value":"Bearer k","guest":false}}}`, cold},
+		{"volume warm", "/v1/claim", `{"template":"rt:24.04","volumes":[{"name":"data"}],"metadata":{"team":"a"},"env":{"GW":{"value":"Bearer k","guest":false}}}`, warm},
+		{"volume provision", "/v1/claim", `{"template":"rt:24.04","volumes":[{"name":"data"}],"metadata":{"team":"a"},"env":{"GW":{"value":"Bearer k","guest":false}}}`, cold},
+		{"volume promoted", "/v1/claim", `{"template":"rt:24.04","volumes":[{"name":"data"}],"require_promoted":true,"metadata":{"team":"a"},"env":{"GW":{"value":"Bearer k","guest":false}}}`, func(f *fakeManager) { f.hasPromoted = true }},
+		{"checkpoint", "/v1/checkpoints/ck_00000000000000aa/claim", `{"metadata":{"team":"a"},"env":{"GW":{"value":"Bearer k","guest":false}}}`, func(f *fakeManager) { f.claimCheckpoint = ckpt }},
+		{"checkpoint heal", "/v1/checkpoints/ck_00000000000000aa/claim", `{"metadata":{"team":"a"},"env":{"GW":{"value":"Bearer k","guest":false}}}`, func(f *fakeManager) { f.healCheckpoint = ckpt }},
 	} {
 		mgr := &fakeManager{}
 		tt.setup(mgr)
 		ts := newTestServer(t, "sekret", mgr, nil)
 		resp := postJSON(t, ts.URL+tt.path, "sekret", tt.body)
 		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK || !maps.Equal(mgr.gotMetadata, want) {
-			t.Errorf("%s: status %d, manager saw metadata %v, want 200 and %v", tt.name, resp.StatusCode, mgr.gotMetadata, want)
+		if resp.StatusCode != http.StatusOK || !maps.Equal(mgr.gotMetadata, want) || !mgr.gotEnv.Equal(wantEnv) {
+			t.Errorf("%s: status %d, manager saw metadata %v env %v, want 200 and %v %v", tt.name, resp.StatusCode, mgr.gotMetadata, mgr.gotEnv, want, wantEnv)
 		}
 	}
 }
@@ -2499,12 +2561,16 @@ type fakeManager struct {
 	infoTemplates       []pool.TemplateInfo
 	labeled             []string
 	labelErr            error
+	envSet              []string
+	envErr              error
+	env                 types.Env
 	claimDeadline       func(id, token string) (time.Time, error)
 
 	gotTenant          string
 	gotDigest          string
 	gotClaimRef        string
 	gotMetadata        types.Metadata
+	gotEnv             types.Env
 	gotOnExpire        types.ExpireAction
 	gotVolumes         []types.Volume
 	gotWarmVolumes     []types.Volume
@@ -2529,6 +2595,7 @@ func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, o pool.C
 	f.gotTenant = o.Tenant
 	f.gotClaimRef = o.ClaimRef
 	f.gotMetadata = o.Metadata
+	f.gotEnv = o.Env
 	f.gotOnExpire = o.OnExpire
 	f.gotWarmVolumes = slices.Clone(o.Volumes)
 	f.gotNoEgress = o.NoEgress
@@ -2719,6 +2786,7 @@ func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, o pool.C
 	onExpire, tenant, metadata := o.OnExpire, o.Tenant, o.Metadata
 	f.gotTenant = tenant
 	f.gotMetadata = metadata
+	f.gotEnv = o.Env
 	f.gotOnExpire = onExpire
 	if f.claimCheckpoint == nil {
 		return nil, pool.ErrUnknownCheckpoint
@@ -2730,6 +2798,7 @@ func (f *fakeManager) ClaimCheckpointHeal(_ context.Context, ckptID string, o po
 	onExpire, tenant, metadata := o.OnExpire, o.Tenant, o.Metadata
 	f.gotTenant = tenant
 	f.gotMetadata = metadata
+	f.gotEnv = o.Env
 	f.gotOnExpire = onExpire
 	f.healCalls++
 	if f.healCheckpoint == nil {
@@ -2769,6 +2838,16 @@ func (f *fakeManager) SetTemplateLabels(_ context.Context, key types.PoolKey, la
 	f.labeled = append(f.labeled, fmt.Sprintf("%s %s %v %q", key.Template, key.Size, labels, tenant))
 	f.gotDigest = digest
 	return f.labelErr
+}
+
+func (f *fakeManager) SetEnv(_ context.Context, id string, env types.Env, tenant string) error {
+	f.envSet = append(f.envSet, fmt.Sprintf("%s %d %q", id, len(env), tenant))
+	return f.envErr
+}
+
+func (f *fakeManager) Env(_, tenant string) (types.Env, error) {
+	f.gotTenant = tenant
+	return f.env, f.envErr
 }
 
 func (f *fakeManager) Drain(context.Context) { f.draining = true }
@@ -2876,6 +2955,7 @@ func fakeClaimProvision(ctx context.Context, f *fakeManager, key types.PoolKey, 
 	f.gotTenant = o.Tenant
 	f.gotClaimRef = o.ClaimRef
 	f.gotMetadata = o.Metadata
+	f.gotEnv = o.Env
 	f.gotOnExpire = o.OnExpire
 	f.gotVolumes = slices.Clone(o.Volumes)
 	f.gotRequirePromoted = o.RequirePromoted

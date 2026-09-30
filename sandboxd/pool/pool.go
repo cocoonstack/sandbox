@@ -129,6 +129,7 @@ type Engine interface {
 	UnmountVolume(ctx context.Context, vsockSocket, mount string) error
 	SyncGuest(ctx context.Context, vsockSocket string) error
 	WriteInstanceMetadata(ctx context.Context, vsockSocket string, doc []byte) error
+	WriteGuestEnv(ctx context.Context, vsockSocket string, doc []byte) error
 }
 
 // SandboxSummary is the ops view of one live claim.
