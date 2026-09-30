@@ -367,6 +367,53 @@ func TestEnvVerbsForRootOrTheTenant(t *testing.T) {
 	}
 }
 
+func TestEnvPatchVerb(t *testing.T) {
+	mgr := &fakeManager{}
+	ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
+	call := func(t *testing.T, token, body string) int {
+		t.Helper()
+		resp := doReq(t, http.MethodPatch, ts.URL+"/v1/sandboxes/sb_1/env", token, body)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if code := call(t, "root", `{"env":{"GW":{"value":"Bearer a","guest":false},"OLD":null}}`); code != http.StatusNoContent {
+		t.Fatalf("root patch: %d, want 204", code)
+	}
+	if gw := mgr.gotPatch["GW"]; gw == nil || gw.Value != "Bearer a" || gw.InGuest() || mgr.gotPatch["OLD"] != nil || len(mgr.gotPatch) != 2 {
+		t.Errorf("manager saw %v", mgr.gotPatch)
+	}
+	if code := call(t, "acme-tok", `{"env":{"M":{"value":"x"}}}`); code != http.StatusNoContent {
+		t.Fatalf("tenant patch: %d, want 204", code)
+	}
+	if want := []string{`sb_1 [GW OLD] ""`, `sb_1 [M] "acme"`}; !slices.Equal(mgr.envPatched, want) {
+		t.Errorf("PatchEnv calls %q, want %q", mgr.envPatched, want)
+	}
+	for body, want := range map[string]int{
+		`{"vars":{}}`:                              http.StatusBadRequest,
+		`{"env":{"A-B":null}}`:                     http.StatusBadRequest,
+		`{"env":{"A":{"value":"a\nb"}}}`:           http.StatusBadRequest,
+		`{"env":{"A":{"value":"a","x":1}}}`:        http.StatusBadRequest,
+		`{"env":{"A":{"value":"s","guest":null}}}`: http.StatusBadRequest,
+	} {
+		if code := call(t, "root", body); code != want {
+			t.Errorf("%s: %d, want %d", body, code, want)
+		}
+	}
+	if len(mgr.envPatched) != 2 {
+		t.Errorf("refused bodies reached the manager: %q", mgr.envPatched)
+	}
+	for err, want := range map[error]int{pool.ErrPaused: http.StatusConflict, pool.ErrUnknownSandbox: http.StatusNotFound, pool.ErrBadEnv: http.StatusBadRequest} {
+		mgr.envErr = err
+		if code := call(t, "root", `{"env":{}}`); code != want {
+			t.Errorf("%v: %d, want %d", err, code, want)
+		}
+	}
+	if code := call(t, "sb-token", `{"env":{}}`); code != http.StatusUnauthorized {
+		t.Errorf("a sandbox token: %d, want 401", code)
+	}
+}
+
 func TestClaimRefusesAnAmbiguousHostOnlyFlag(t *testing.T) {
 	for _, entry := range []string{`{"value":"s","guset":false}`, `{"value":"s","host_only":true}`, `{"value":"s","guest":null}`} {
 		for _, path := range []string{"/v1/claim", "/v1/checkpoints/ck_00000000000000aa/claim"} {
@@ -2562,6 +2609,8 @@ type fakeManager struct {
 	labeled             []string
 	labelErr            error
 	envSet              []string
+	envPatched          []string
+	gotPatch            types.EnvPatch
 	envErr              error
 	env                 types.Env
 	claimDeadline       func(id, token string) (time.Time, error)
@@ -2842,6 +2891,13 @@ func (f *fakeManager) SetTemplateLabels(_ context.Context, key types.PoolKey, la
 
 func (f *fakeManager) SetEnv(_ context.Context, id string, env types.Env, tenant string) error {
 	f.envSet = append(f.envSet, fmt.Sprintf("%s %d %q", id, len(env), tenant))
+	return f.envErr
+}
+
+func (f *fakeManager) PatchEnv(_ context.Context, id string, patch types.EnvPatch, tenant string) error {
+	names := slices.Sorted(maps.Keys(patch))
+	f.envPatched = append(f.envPatched, fmt.Sprintf("%s %v %q", id, names, tenant))
+	f.gotPatch = patch
 	return f.envErr
 }
 

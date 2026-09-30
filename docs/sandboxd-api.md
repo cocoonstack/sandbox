@@ -71,7 +71,7 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   host-only value in the guest. `guest` (default `true`) delivers the entry into the guest; a
   `guest: false` entry never enters it and only feeds the node's egress
   [secrets](egress.md#claim-env-and-secrets). A bad entry answers 400 before
-  any VM is touched; see [claim env](#getputdelete-v1sandboxesidenv)
+  any VM is touched; see [claim env](#getputpatchdelete-v1sandboxesidenv)
 - `egress` `false` claims with no [egress policy](egress.md), whatever the
   pool's (or, for a promoted template, its source pool's): the guest's doors are
   never bound. Omitted or `true` keeps the policy the claim would get
@@ -613,14 +613,24 @@ without a guest agent; `mem_used_measured` is false when there is no VMM
 process to read (hibernated, or the PID is not yet known), so a zero is
 never mistaken for idle. 404 unknown id.
 
-## GET/PUT/DELETE /v1/sandboxes/{id}/env
+## GET/PUT/PATCH/DELETE /v1/sandboxes/{id}/env
 
 Auth: node API token (root or tenant). A tenant reaches only claims it owns;
 anything else is 404, like an unknown id. Each call speaks only for the node
 it reaches; on a cluster, send it to the claim's `owner_addr`.
 
 `PUT` replaces the claim's whole env with the body's map, under the claim
-rules; `DELETE` clears it. `GET` answers the same shape with every
+rules; `DELETE` clears it. `PATCH` merges: each entry in the body is set,
+an entry of `null` removes that name, and every other entry is kept as stored,
+host-only values included, so a control plane that cannot read those values
+back never has to send them again:
+
+```json
+{"env": {"CB_META_wake": {"value": "w2"}, "OLD": null}}
+```
+
+The claim rules apply to the merged env, so a patch that takes it past 64
+entries or 64 KiB answers 400 and changes nothing. `GET` answers the same shape with every
 `guest: false` value blanked, so a control plane sees the names without the
 values:
 
@@ -633,12 +643,15 @@ the egress proxy's next request at any time, a hibernated or archived claim
 included, and never touches the guest. A change to the guest entries is
 written to the guest at once, so it needs a running guest: on a hibernated,
 archived or transitioning sandbox it answers 409 (this verb never wakes one).
-A request identical to the stored env is written to a running guest again,
-so resending it repairs a guest file that was lost or not updated. A 500
+A `PUT` identical to the stored env is written to a running guest again,
+so resending it repairs a guest file that was lost or not updated. A `PATCH`
+writes the guest file only when it changes a guest entry or sets one, so
+resending a patch that sets a guest entry repairs the file the same way; a
+patch that changes nothing does not rewrite the claims journal. A 500
 after the store step means the env is stored and its `guest: false` values
 are already live, but the guest write failed; resend the same request to
 deliver it. The guest side is described in [silkd](silkd.md#claim-env).
-`PUT`/`DELETE` answer 204, `GET` 200; 400 a bad entry or an unknown body
+`PUT`/`PATCH`/`DELETE` answer 204, `GET` 200; 400 a bad entry or an unknown body
 field; 404 unknown id or another tenant's claim; 409 a guest change on a
 paused sandbox.
 
