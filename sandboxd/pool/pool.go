@@ -39,6 +39,7 @@ import (
 const (
 	refillInterval    = 2 * time.Second
 	reapInterval      = 5 * time.Second
+	livenessInterval  = 10 * time.Second
 	imageInterval     = time.Minute
 	buildRetryDelay   = 30 * time.Second
 	claimProbeTimeout = 15 * time.Second
@@ -95,6 +96,7 @@ var (
 	ErrVolumeNeedsRecovery = errors.New("volume needs recovery by a writable claim")
 	ErrArchived            = errors.New("sandbox is archived; an exec or file call wakes it first")
 	ErrPaused              = errors.New("sandbox is paused; an operator call does not wake it")
+	ErrFailed              = errors.New("sandbox failed: its VMM is down; release it, or wake it to cold-boot its disk")
 	ErrNoInstanceMetadata  = engine.ErrNoInstanceMetadata
 	ErrQuota               = errors.New("node claim quota reached")
 
@@ -108,6 +110,7 @@ type Engine interface {
 	CloneSnap(ctx context.Context, snap, name string, key types.PoolKey) (types.VMRecord, error)
 	RunCold(ctx context.Context, name string, key types.PoolKey) (types.VMRecord, error)
 	Remove(ctx context.Context, name string) error
+	Start(ctx context.Context, name string) error
 	Stop(ctx context.Context, name string) error
 	ReconcileStaleCreate(ctx context.Context, name string) (engine.StaleCreateOutcome, error)
 	SnapshotSave(ctx context.Context, vmName, snapName string) error
@@ -118,6 +121,8 @@ type Engine interface {
 	Hibernate(ctx context.Context, vmName, snapName string) error
 	Restore(ctx context.Context, vmName, snapRef string) (string, error)
 	List(ctx context.Context) ([]types.VMRecord, error)
+	Inspect(ctx context.Context, name string) (types.VMRecord, bool, error)
+	VMEvents(ctx context.Context, socket string, onSync engine.VMSyncFunc, onChange engine.VMChangeFunc) error
 	Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error
 	DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error)
 	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error
@@ -148,6 +153,9 @@ type SandboxSummary struct {
 	Hibernated     bool               `json:"hibernated"`
 	Archived       bool               `json:"archived,omitzero"`
 	FromCheckpoint string             `json:"from_checkpoint,omitempty"`
+	Restarts       int                `json:"restarts,omitzero"`
+	RestartedAt    time.Time          `json:"restarted_at,omitzero"`
+	Failed         string             `json:"failed,omitempty"`
 	ClaimedAt      time.Time          `json:"claimed_at,omitzero"`
 	Deadline       time.Time          `json:"deadline"`
 }
@@ -166,6 +174,7 @@ type Gauges struct {
 	Claimed    int
 	Hibernated int
 	Archived   int
+	Failed     int
 	Draining   bool
 	// AtCapacity marks refill parked because the node refused another VM.
 	AtCapacity       bool
@@ -275,6 +284,13 @@ type Manager struct {
 	idleDefault time.Duration
 	idleSweep   atomic.Bool
 
+	vmmRestart    types.VMMRestart
+	livenessSweep atomic.Bool
+	cocoondSocket string
+	// vmmEvents is set while the cocoon daemon stream is live; the poll is then only a backstop.
+	vmmEvents  atomic.Bool
+	lastVMPoll atomic.Int64
+
 	// archive*Default are the archive thresholds for unpooled keys.
 	archiveAfterDefault  time.Duration
 	archiveDeleteDefault time.Duration
@@ -372,6 +388,8 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		egress:          cfg.HasEgress(),
 		lockEgress:      len(cfg.Bridges) > 0,
 		releaseDelay:    time.Duration(cfg.ReleaseDelaySeconds) * time.Second,
+		vmmRestart:      cfg.VMMRestart,
+		cocoondSocket:   cfg.CocoondSocket,
 		maxFork:         maxFork,
 		store:           newClaimStore(cfg.DataDir, cfg.SyncClaims),
 		volumes:         make(map[string]catalogVolume, len(cfg.Volumes)),
@@ -503,12 +521,18 @@ func (m *Manager) Run(ctx context.Context) {
 	defer refill.Stop()
 	reap := time.NewTicker(reapInterval)
 	defer reap.Stop()
+	liveness := time.NewTicker(livenessInterval)
+	defer liveness.Stop()
 	images := time.NewTicker(imageInterval)
 	defer images.Stop()
 	// Store retention is hourly: each sweep is cluster-visible I/O on a shared root
 	storeSweep := time.NewTicker(time.Hour)
 	defer storeSweep.Stop()
 	go m.sweepExpiredCheckpoints(ctx)
+	if m.cocoondSocket != "" {
+		go m.watchVMMs(ctx)
+	}
+	m.livenessOnce(ctx)
 	m.refillOnce(ctx)
 	for {
 		select {
@@ -525,6 +549,8 @@ func (m *Manager) Run(ctx context.Context) {
 			m.archiveOnce(ctx)
 			m.shrinkOnce(ctx)
 			go m.retryArchiveDeletes(ctx)
+		case <-liveness.C:
+			m.livenessOnce(ctx)
 		case <-images.C:
 			go m.checkImagesOnce(ctx)
 		case <-storeSweep.C:
@@ -572,6 +598,9 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 		}
 		if sb.ArchiveCk != "" {
 			g.Archived++
+		}
+		if sb.Failed != "" {
+			g.Failed++
 		}
 	}
 	return pools, g
@@ -668,6 +697,7 @@ func summarize(sb *types.Sandbox) SandboxSummary {
 		ID: sb.ID, Key: sb.Key, Deadline: sb.Deadline, ClaimedAt: sb.ClaimedAt,
 		Hibernated: sb.HibernateSnap != "", Archived: sb.ArchiveCk != "",
 		FromCheckpoint: sb.FromCheckpoint, ClaimRef: sb.ClaimRef, Metadata: sb.Metadata, OnExpire: sb.OnExpire,
+		Restarts: sb.Restarts, RestartedAt: sb.RestartedAt, Failed: sb.Failed,
 		CPUCount: spec.CPU, MemTotalBytes: spec.MemoryBytes,
 		Volumes: slices.Clone(sb.Volumes),
 	}

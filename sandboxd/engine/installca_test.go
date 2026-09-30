@@ -40,6 +40,9 @@ func TestInstallCACertWritesCertAndUpdates(t *testing.T) {
 	if !strings.Contains(cmd, caCertGuestPath) || !strings.Contains(cmd, caBundlePath) {
 		t.Errorf("exec appends %q, want it to cat %s into %s", cmd, caCertGuestPath, caBundlePath)
 	}
+	if !strings.Contains(cmd, "&& sync "+caCertGuestPath+" "+caBundlePath) {
+		t.Errorf("exec %q does not sync the cert and bundle, so a cold boot inside the writeback window loses them", cmd)
+	}
 	if fake.execEnv["PATH"] == "" {
 		t.Errorf("exec env has no PATH; the guest command is run with an empty env")
 	}

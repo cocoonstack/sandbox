@@ -51,6 +51,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrVolumeNeedsRecovery, http.StatusConflict, ""},
 	{pool.ErrArchived, http.StatusConflict, ""},
 	{pool.ErrPaused, http.StatusConflict, ""},
+	{pool.ErrFailed, http.StatusConflict, ""},
 	{pool.ErrNoInstanceMetadata, http.StatusConflict, ""},
 	{pool.ErrQuota, http.StatusTooManyRequests, ""},
 	{pool.ErrHealBusy, http.StatusServiceUnavailable, ""},
@@ -139,6 +140,7 @@ type InfoResponse struct {
 	Claimed          int                 `json:"claimed"`
 	Hibernated       int                 `json:"hibernated"`
 	Archived         int                 `json:"archived"`
+	Failed           int                 `json:"failed,omitzero"`
 	Draining         bool                `json:"draining,omitzero"`
 	AdvertiseAddr    string              `json:"advertise_addr,omitempty"`
 	Peers            []string            `json:"peers,omitempty"`
@@ -698,7 +700,7 @@ func (s *Server) handlePeers(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 	pools, g := s.mgr.Info()
 	resp := InfoResponse{
-		Pools: pools, Templates: s.mgr.Templates(), Claimed: g.Claimed, Hibernated: g.Hibernated, Archived: g.Archived,
+		Pools: pools, Templates: s.mgr.Templates(), Claimed: g.Claimed, Hibernated: g.Hibernated, Archived: g.Archived, Failed: g.Failed,
 		Draining: g.Draining, AtCapacity: g.AtCapacity, AtCapacityReason: g.AtCapacityReason,
 		AdvertiseAddr: s.advertise,
 	}

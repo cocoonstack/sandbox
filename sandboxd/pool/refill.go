@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -334,6 +333,9 @@ func (m *Manager) sourceSnap(ctx context.Context, sb *types.Sandbox) (string, fu
 	if sb.ArchiveCk != "" {
 		return "", nil, ErrArchived
 	}
+	if sb.Failed != "" {
+		return "", nil, ErrFailed
+	}
 	if sb.HibernateSnap != "" {
 		return sb.HibernateSnap, func() {}, nil
 	}
@@ -487,7 +489,7 @@ func (m *Manager) probeReady(ctx context.Context, name, sock string, timeout tim
 }
 
 func (m *Manager) vsockOf(ctx context.Context, name string) (string, error) {
-	vm, ok, err := m.findVM(ctx, name)
+	vm, ok, err := m.eng.Inspect(ctx, name)
 	if err != nil {
 		return "", err
 	}
@@ -498,18 +500,6 @@ func (m *Manager) vsockOf(ctx context.Context, name string) (string, error) {
 		return "", fmt.Errorf("vm %s has no vsock socket", name)
 	}
 	return vm.VsockSocket, nil
-}
-
-func (m *Manager) findVM(ctx context.Context, name string) (types.VMRecord, bool, error) {
-	vms, err := m.eng.List(ctx)
-	if err != nil {
-		return types.VMRecord{}, false, err
-	}
-	i := slices.IndexFunc(vms, func(vm types.VMRecord) bool { return vm.Config.Name == name })
-	if i < 0 {
-		return types.VMRecord{}, false, nil
-	}
-	return vms[i], true, nil
 }
 
 func (m *Manager) destroyAll(ctx context.Context, names []string) *sync.WaitGroup {

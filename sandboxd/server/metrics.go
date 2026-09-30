@@ -27,6 +27,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	scalar("claimed", "live claims on this node", g.Claimed)
 	scalar("hibernated", "claims currently hibernated", g.Hibernated)
 	scalar("archived", "claims archived to the checkpoint store", g.Archived)
+	scalar("failed", "claims whose VMM is down and not restarted", g.Failed)
 	scalar("draining", "1 while the node is cordoned for maintenance", draining)
 
 	if tenants := s.mgr.TenantClaims(); len(tenants) > 0 {

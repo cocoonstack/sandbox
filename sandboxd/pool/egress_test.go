@@ -315,8 +315,8 @@ func TestLockUsesProvisionedTapWithoutList(t *testing.T) {
 		t.Fatalf("provision carried tap %q, want tap-fake0", sb.TAP)
 	}
 	lockErr := m.lockEgressNIC(t.Context(), sb)
-	if calls := eng.listCalls(); calls != 0 {
-		t.Errorf("claim-path lock consulted vm list %d times, want 0", calls)
+	if calls := eng.lookupCalls(); calls != 0 {
+		t.Errorf("claim-path lock looked the VM up %d times, want 0", calls)
 	}
 	switch {
 	case lockErr != nil && !strings.Contains(lockErr.Error(), "tap-fake0"):
@@ -331,7 +331,7 @@ func TestLockUsesProvisionedTapWithoutList(t *testing.T) {
 	}
 }
 
-func TestLockFallsBackToListForPreTapClaims(t *testing.T) {
+func TestLockFallsBackToALookupForPreTapClaims(t *testing.T) {
 	eng := newFakeEngine()
 	eng.tap = "tap-fake1"
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
@@ -341,8 +341,8 @@ func TestLockFallsBackToListForPreTapClaims(t *testing.T) {
 
 	sb := &types.Sandbox{ID: "sb_old", Key: egKey, VMName: "sbx-old"}
 	lockErr := m.lockEgressNIC(t.Context(), sb)
-	if calls := eng.listCalls(); calls != 1 {
-		t.Errorf("fallback consulted vm list %d times, want 1", calls)
+	if calls := eng.lookupCalls(); calls != 1 {
+		t.Errorf("fallback looked the VM up %d times, want 1", calls)
 	}
 	if lockErr != nil && !strings.Contains(lockErr.Error(), "tap-fake1") {
 		t.Errorf("fallback resolved no tap: %v", lockErr)

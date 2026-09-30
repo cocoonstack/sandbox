@@ -189,7 +189,7 @@ func (m *Manager) locksNIC(key types.PoolKey) bool {
 }
 
 func (m *Manager) tapOf(ctx context.Context, vmName string) (string, error) {
-	vm, ok, err := m.findVM(ctx, vmName)
+	vm, ok, err := m.eng.Inspect(ctx, vmName)
 	if err != nil {
 		return "", fmt.Errorf("list %s: %w", vmName, err)
 	}

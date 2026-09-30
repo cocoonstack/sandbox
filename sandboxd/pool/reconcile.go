@@ -57,6 +57,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			// the journaled intent names the wake image, so adopt it when the snapshot is there
 			sb.HibernateSnap, sb.PendingSnap = sb.PendingSnap, ""
 			adopted = append(adopted, sb)
+		case ok:
+			// the VMM died with the host or on its own; the liveness pass restarts or fails it
+			sb.PendingSnap = ""
 		default:
 			continue
 		}
@@ -170,7 +173,12 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 	for _, sb := range m.claimed {
 		sb.TouchAt(now)
 		// a hibernated or archived claim has no guest to serve; its wake arms the door
-		if sb.HibernateSnap != "" || sb.ArchiveCk != "" {
+		if sb.HibernateSnap != "" || sb.ArchiveCk != "" || sb.Failed != "" {
+			continue
+		}
+		// a down egress-lane VM has no guest to lock or mark; the liveness pass fails it
+		if m.locksNIC(sb.Key) && live[sb.VMName].State != vmStateRunning {
+			m.readoptEgressTap(sb, live)
 			continue
 		}
 		if m.locksNIC(sb.Key) {

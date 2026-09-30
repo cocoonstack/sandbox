@@ -184,6 +184,9 @@ type Config struct {
 	NoDirectIO  bool              `json:"no_direct_io,omitzero"`
 	NoBalloon   bool              `json:"no_balloon,omitzero"`
 	SyncClaims  bool              `json:"sync_claims,omitzero"`
+	VMMRestart  types.VMMRestart  `json:"vmm_restart,omitempty"`
+	// CocoondSocket is cocoon daemon's API socket; its event stream detects VMM exits without polling.
+	CocoondSocket string `json:"cocoond_socket,omitempty"`
 
 	APIToken string              `json:"api_token,omitempty"`
 	Tenants  []TenantSpec        `json:"tenants,omitempty"`
@@ -302,6 +305,9 @@ func (c *Config) validate() error {
 	}
 	if err := c.RestoreMode.Validate(); err != nil {
 		return fmt.Errorf("restore_mode: %w", err)
+	}
+	if err := c.VMMRestart.Validate(); err != nil {
+		return err
 	}
 	if err := c.validatePreview(); err != nil {
 		return err

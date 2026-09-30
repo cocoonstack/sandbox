@@ -26,11 +26,14 @@ func (m *Manager) Sandbox(id string) (SandboxSummary, bool) {
 	return out, true
 }
 
-// Wake restores a hibernated sandbox and leaves it running. Idempotent.
+// Wake restores a hibernated sandbox, or cold-boots a failed one, and leaves it running. Idempotent.
 func (m *Manager) Wake(ctx context.Context, id string, cred Cred) error {
 	sb, ok := m.resolve(id, cred)
 	if !ok {
 		return ErrUnknownSandbox
+	}
+	if err := m.restartFailed(ctx, sb); err != nil {
+		return err
 	}
 	return m.wake(ctx, sb)
 }
@@ -48,6 +51,8 @@ func (m *Manager) SetInstanceMetadata(ctx context.Context, id string, doc []byte
 	switch {
 	case sb.ArchiveCk != "":
 		return ErrArchived
+	case sb.Failed != "":
+		return ErrFailed
 	case sb.HibernateSnap != "" || sb.PendingSnap != "":
 		return ErrPaused
 	}

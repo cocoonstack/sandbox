@@ -47,6 +47,9 @@ const (
 	ExpireDestroy ExpireAction = "destroy"
 	ExpireArchive ExpireAction = "archive"
 
+	VMMRestartCold VMMRestart = "cold"
+	VMMRestartNone VMMRestart = "none"
+
 	MaxClaimVolumes = 8
 
 	// Also the guest `mount -o` option literals: renaming them changes the mount flags.
@@ -136,6 +139,19 @@ func (a ExpireAction) Or(current ExpireAction) ExpireAction {
 		return ""
 	default:
 		return a
+	}
+}
+
+// VMMRestart is what the node does with a claim whose VMM exited outside a transition; empty means cold.
+type VMMRestart string
+
+// Validate accepts the empty default plus the known policies.
+func (r VMMRestart) Validate() error {
+	switch r {
+	case "", VMMRestartCold, VMMRestartNone:
+		return nil
+	default:
+		return fmt.Errorf("vmm_restart %q must be %s or %s", r, VMMRestartCold, VMMRestartNone)
 	}
 }
 
@@ -409,6 +425,16 @@ type Sandbox struct {
 	FromCheckpoint string `json:"from_checkpoint,omitempty"`
 	// TemplateDigest identifies the promoted-template export this sandbox was cloned from.
 	TemplateDigest string `json:"template_digest,omitempty"`
+
+	// Restarts counts the cold boots that replaced an exited VMM; each loses guest memory.
+	Restarts    int       `json:"restarts,omitzero"`
+	RestartedAt time.Time `json:"restarted_at,omitzero"`
+	// Failed names why the VMM is down and not restarted; empty means the claim is serviceable.
+	Failed string `json:"failed,omitempty"`
+	// RestartLog holds the recent restart attempts that the loop budget counts; guarded by Transition.
+	RestartLog []time.Time `json:"-"`
+	// ExitRecorded marks a VMM exit already journaled as vmm_exit; guarded by Transition.
+	ExitRecorded bool `json:"-"`
 
 	// StaleSnap names a consumed wake snapshot a lagging journal references; guarded by Transition.
 	StaleSnap string `json:"-"`

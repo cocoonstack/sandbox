@@ -45,6 +45,9 @@ type claimDTO struct {
 	PendingSnap    string             `json:"pending_snap,omitempty"`
 	ArchiveCk      string             `json:"archive_ck,omitempty"`
 	FromCheckpoint string             `json:"from_checkpoint,omitempty"`
+	Restarts       int                `json:"restarts,omitzero"`
+	RestartedAt    time.Time          `json:"restarted_at,omitzero"`
+	Failed         string             `json:"failed,omitempty"`
 }
 
 // claimStore persists claimed sandboxes across daemon restarts; warm VMs are not persisted.
@@ -192,5 +195,6 @@ func dtoOf(sb *types.Sandbox) claimDTO {
 		Volumes: slices.Clone(sb.Volumes), Env: sb.Env, VsockSocket: sb.VsockSocket,
 		TAP: sb.TAP, HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap,
 		ArchiveCk: sb.ArchiveCk, FromCheckpoint: sb.FromCheckpoint,
+		Restarts: sb.Restarts, RestartedAt: sb.RestartedAt, Failed: sb.Failed,
 	}
 }

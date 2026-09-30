@@ -67,6 +67,10 @@ func (f *fakeEngine) Remove(_ context.Context, name string) error {
 	return nil
 }
 
+func (f *fakeEngine) Start(_ context.Context, name string) error {
+	return fmt.Errorf("fakeEngine cannot cold-boot %s", name)
+}
+
 func (f *fakeEngine) Stop(ctx context.Context, name string) error {
 	return f.Remove(ctx, name)
 }
@@ -112,6 +116,20 @@ func (f *fakeEngine) List(_ context.Context) ([]types.VMRecord, error) {
 		vms = append(vms, types.VMRecord{State: "running", VsockSocket: sock, Config: types.VMConfig{Name: name}})
 	}
 	return vms, nil
+}
+
+func (f *fakeEngine) Inspect(ctx context.Context, name string) (types.VMRecord, bool, error) {
+	vms, _ := f.List(ctx)
+	i := slices.IndexFunc(vms, func(vm types.VMRecord) bool { return vm.Config.Name == name })
+	if i < 0 {
+		return types.VMRecord{}, false, nil
+	}
+	return vms[i], true, nil
+}
+
+func (f *fakeEngine) VMEvents(ctx context.Context, _ string, _ engine.VMSyncFunc, _ engine.VMChangeFunc) error {
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func (f *fakeEngine) Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error {
