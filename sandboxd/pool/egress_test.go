@@ -335,7 +335,7 @@ func TestLockFallsBackToALookupForPreTapClaims(t *testing.T) {
 	eng := newFakeEngine()
 	eng.tap = "tap-fake1"
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
-	if _, err := eng.RunCold(t.Context(), "sbx-old", egKey); err != nil {
+	if _, err := eng.RunCold(t.Context(), "sbx-old", egKey, ""); err != nil {
 		t.Fatalf("seed vm: %v", err)
 	}
 
