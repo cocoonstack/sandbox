@@ -44,6 +44,9 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	if sb.ArchiveCk != "" {
 		return nil // already off the node
 	}
+	if sb.Failed != "" {
+		return ErrFailed
+	}
 	if hasAppliedVolumes(sb) {
 		return ErrVolumeCapture
 	}
@@ -110,6 +113,9 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	defer sb.Transition.Unlock()
 	if sb.ArchiveCk != "" {
 		return m.wakeArchived(ctx, sb)
+	}
+	if sb.Failed != "" {
+		return "", fmt.Errorf("%w: %s", ErrFailed, sb.Failed)
 	}
 	// settle a dangling intent before choosing running vs hibernated
 	if _, err := m.settlePendingSnap(ctx, sb); err != nil {
@@ -330,5 +336,5 @@ func (m *Manager) recordHibernate(ctx context.Context, sb *types.Sandbox) {
 
 func skipIdle(sb *types.Sandbox, idle time.Duration, now time.Time) bool {
 	return idle <= 0 || sb.Key.Net == types.NetEgress || hasAppliedVolumes(sb) ||
-		sb.HibernateSnap != "" || sb.ArchiveCk != "" || sb.Busy() || now.Sub(sb.LastSeen()) < idle
+		sb.HibernateSnap != "" || sb.ArchiveCk != "" || sb.Failed != "" || sb.Busy() || now.Sub(sb.LastSeen()) < idle
 }

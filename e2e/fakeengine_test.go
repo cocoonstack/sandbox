@@ -67,6 +67,10 @@ func (f *fakeEngine) Remove(_ context.Context, name string) error {
 	return nil
 }
 
+func (f *fakeEngine) Start(_ context.Context, name string) error {
+	return fmt.Errorf("fakeEngine cannot cold-boot %s", name)
+}
+
 func (f *fakeEngine) Stop(ctx context.Context, name string) error {
 	return f.Remove(ctx, name)
 }

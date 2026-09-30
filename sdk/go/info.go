@@ -16,6 +16,7 @@ type NodeInfo struct {
 	Claimed          int              `json:"claimed"`
 	Hibernated       int              `json:"hibernated"`
 	Archived         int              `json:"archived"`
+	Failed           int              `json:"failed,omitzero"`
 	Draining         bool             `json:"draining,omitzero"`
 	AdvertiseAddr    string           `json:"advertise_addr,omitempty"`
 	Peers            []string         `json:"peers,omitempty"`
@@ -66,6 +67,11 @@ type SandboxSummary struct {
 	CPUCount       int               `json:"cpu_count,omitzero"`
 	MemTotalBytes  int64             `json:"mem_total_bytes,omitzero"`
 	OnExpire       string            `json:"on_expire,omitempty"`
+	// Restarts counts cold boots that replaced an exited VMM; each loses guest memory.
+	Restarts    int       `json:"restarts,omitzero"`
+	RestartedAt time.Time `json:"restarted_at,omitzero"`
+	// Failed names why the VMM is down and was not restarted; empty means serviceable.
+	Failed string `json:"failed,omitempty"`
 }
 
 type sandboxListResponse struct {

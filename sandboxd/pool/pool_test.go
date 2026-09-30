@@ -1142,6 +1142,7 @@ type fakeEngine struct {
 	cloneFroms      []string
 	colds           []string
 	removes         []string
+	starts          []string
 	stops           []string
 	probeTimeouts   []time.Duration
 	volumeSpecs     []engine.VolumeSpec
@@ -1180,12 +1181,12 @@ type fakeEngine struct {
 	vsockLateN                        int
 	sockRoot                          string
 
-	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr, snapSaveErr, snapListErr error
-	removeErrFor                                                                       string
-	cloneFailNth                                                                       int
-	hibernateErrCompletes                                                              bool
-	tap                                                                                string
-	listCount                                                                          int
+	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr, snapSaveErr, snapListErr, startErr error
+	removeErrFor                                                                                 string
+	cloneFailNth                                                                                 int
+	hibernateErrCompletes                                                                        bool
+	tap                                                                                          string
+	listCount                                                                                    int
 
 	attachRendezvous *sync.WaitGroup
 
@@ -1258,6 +1259,20 @@ func (f *fakeEngine) Remove(ctx context.Context, name string) error {
 	}
 	f.removes = append(f.removes, name)
 	delete(f.vms, name)
+	return nil
+}
+
+func (f *fakeEngine) Start(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.starts = append(f.starts, name)
+	if f.startErr != nil {
+		return f.startErr
+	}
+	if _, ok := f.vms[name]; !ok {
+		return fmt.Errorf("vm %s not found", name)
+	}
+	f.stopped[name] = false
 	return nil
 }
 

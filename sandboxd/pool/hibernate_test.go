@@ -565,14 +565,14 @@ func TestReconcileIgnoresStaleOrphanSnapshot(t *testing.T) {
 		if err := m.Reconcile(t.Context()); err != nil {
 			t.Fatalf("Reconcile: %v", err)
 		}
-		if _, g := m.Info(); g.Claimed != 0 {
-			t.Errorf("claimed %d, want the intent-less claim dropped", g.Claimed)
+		if _, g := m.Info(); g.Claimed != 1 || g.Hibernated != 0 {
+			t.Errorf("claimed %d hibernated %d, want the intent-less claim kept as running", g.Claimed, g.Hibernated)
 		}
 		waitFor(t, func() bool { return eng.snapRemoved(hibernatePrefix + "orphan-1-old111") })
 	})
 }
 
-func TestReconcileDropsIntentWithoutImage(t *testing.T) {
+func TestReconcileKeepsIntentWithoutImageAsRunning(t *testing.T) {
 	eng := newFakeEngine()
 	eng.vms["sbx-noimg-1"] = "/vsock/noimg"
 	eng.stopped["sbx-noimg-1"] = true
@@ -591,8 +591,14 @@ func TestReconcileDropsIntentWithoutImage(t *testing.T) {
 	if err := m.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if _, g := m.Info(); g.Claimed != 0 {
-		t.Errorf("claimed %d, want the imageless intent dropped", g.Claimed)
+	if _, g := m.Info(); g.Claimed != 1 || g.Hibernated != 0 {
+		t.Errorf("claimed %d hibernated %d, want the imageless intent kept as running", g.Claimed, g.Hibernated)
+	}
+	if sb, _ := m.byID("sb_no"); sb.PendingSnap != "" {
+		t.Errorf("pending snap %q, want the dead intent cleared", sb.PendingSnap)
+	}
+	if slices.Contains(eng.removes, "sbx-noimg-1") {
+		t.Error("reconcile removed the kept claim's VM")
 	}
 }
 

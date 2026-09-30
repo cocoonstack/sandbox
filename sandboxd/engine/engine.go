@@ -123,6 +123,12 @@ func (e *Engine) Remove(ctx context.Context, name string) error {
 	return err
 }
 
+// Start cold-boots a stopped VM from its own disk; guest memory starts empty.
+func (e *Engine) Start(ctx context.Context, name string) error {
+	_, err := e.run(ctx, "vm", "start", name)
+	return err
+}
+
 func (e *Engine) Stop(ctx context.Context, name string) error {
 	_, err := e.run(ctx, "vm", "stop", "--force", name)
 	return err

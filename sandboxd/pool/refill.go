@@ -334,6 +334,9 @@ func (m *Manager) sourceSnap(ctx context.Context, sb *types.Sandbox) (string, fu
 	if sb.ArchiveCk != "" {
 		return "", nil, ErrArchived
 	}
+	if sb.Failed != "" {
+		return "", nil, ErrFailed
+	}
 	if sb.HibernateSnap != "" {
 		return sb.HibernateSnap, func() {}, nil
 	}

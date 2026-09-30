@@ -27,6 +27,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	scalar("claimed", "live claims on this node", g.Claimed)
 	scalar("hibernated", "claims currently hibernated", g.Hibernated)
 	scalar("archived", "claims archived to the checkpoint store", g.Archived)
+	scalar("failed", "claims whose VMM is down and not restarted", g.Failed)
 	scalar("draining", "1 while the node is cordoned for maintenance", draining)
 
 	if tenants := s.mgr.TenantClaims(); len(tenants) > 0 {
@@ -72,6 +73,8 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		{"archives_total", "claims archived to the store", c.Archives},
 		{"unarchives_total", "archived claims restored", c.Unarchives},
 		{"archive_deletes_total", "archived checkpoints deleted at release or retention", c.ArchiveDeletes},
+		{"vmm_restarts_total", "exited VMMs cold-booted from the claim's disk", c.VMMRestarts},
+		{"vmm_failures_total", "claims marked failed because their VMM is down", c.VMMFailures},
 	} {
 		metric(row.name, "counter", row.help)
 		_, _ = fmt.Fprintf(w, "sandboxd_%s %d\n", row.name, row.value)

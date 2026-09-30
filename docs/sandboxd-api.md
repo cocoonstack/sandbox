@@ -275,8 +275,11 @@ otherwise only a side effect of the next agent access, so this is the
 explicit form for warming a sandbox ahead of use. Idempotent on one already
 running. A hibernated sandbox retains its existing deadline. An archived
 sandbox instead uses `archive_delete_after_seconds` as its retention deadline
-while stored, and waking it starts a fresh lease of the length the claim was granted (the server default when it asked for none). 204 on
-success, 404 unknown id or wrong token.
+while stored, and waking it starts a fresh lease of the length the claim was granted (the server default when it asked for none). A
+[failed](deploy.md#dead-vmms-and-host-restarts) sandbox is cold-booted from
+its own disk (memory is lost) and its restart budget resets. 204 on
+success, 404 unknown id or wrong token, 409 a failed egress-lane or volume
+sandbox, or one whose VM record is gone, 500 when the cold boot itself fails.
 
 ## POST /v1/sandboxes/{id}/renew
 
@@ -568,8 +571,12 @@ an SDK caller should set.
 Auth: node API token. Root sees every live claim; a tenant sees only its own.
 The index is `{"sandboxes": [{id, key, deadline, claimed_at?, hibernated,
 archived?, from_checkpoint?, claim_ref?, metadata?, on_expire?, cpu_count, mem_total_bytes,
-volumes?: [{name, mount, mode?}]}]}` — `cpu_count` and `mem_total_bytes` are the
-size tier's allocation;
+volumes?: [{name, mount, mode?}], restarts?, restarted_at?, failed?}]}` — `cpu_count` and `mem_total_bytes` are the
+size tier's allocation; `restarts` counts the cold boots that replaced an
+exited VMM and `restarted_at` stamps the last one (each loses guest memory and
+the instance-metadata document, so a caller re-establishes guest state when
+`restarts` moves); `failed` names why the VMM is down and was not restarted
+(see [dead VMMs](deploy.md#dead-vmms-and-host-restarts));
 `mode` is omitted for `ro`, matching the claim echo; never sandbox tokens,
 volume host paths, or catalog access lists. `claimed_at` is the first grant
 (renew and wake move `deadline` only) and is absent for a claim recorded before
@@ -654,12 +661,13 @@ verb never wakes one) or its image serves no instance metadata.
 ## GET /metrics
 
 Auth: root only (tenant tokens get 403). Prometheus text format,
-hand-rendered: pool warm/target gauges, claimed/hibernated/archived/draining
+hand-rendered: pool warm/target gauges, claimed/hibernated/archived/failed/draining
 gauges, a per-tenant live-claim gauge (`sandboxd_tenant_claims{tenant="…"}`,
 configured tenants only), `sandboxd_config_digest_mismatch` on a mesh, claims
 by tier (warm/clone/cold),
 wake/hibernate/fork/checkpoint/promote/release/reap counters plus
-archive/unarchive/archive-delete counters, and claim/wake `*_seconds_total`
+archive/unarchive/archive-delete counters, `vmm_restarts_total` and
+`vmm_failures_total`, and claim/wake `*_seconds_total`
 for average latency. /metrics is a derived ops view; the billing source of
 truth is the usage journal below.
 
@@ -667,22 +675,25 @@ truth is the usage journal below.
 
 Always on: every lifecycle transition appends one JSONL event to
 `<data_dir>/usage.jsonl` — `{"t": <RFC3339>, "ev":
-"claim|hibernate|wake|fork|checkpoint|promote|release|reap|archive|unarchive|archive_delete|egress",
+"claim|hibernate|wake|fork|checkpoint|promote|release|reap|archive|unarchive|archive_delete|egress|vmm_exit|vmm_restart|vmm_failed",
 "id": "sb_…", "vm": "sbx-…"}` plus `key` (the pool key's stable hash, claim
 events), `tenant` (the owning tenant, on claim, egress, archive, unarchive and
 archive_delete), `children` (fork) and `ref` (the promoted
-template / checkpoint id, or the egress host). A volume claim also carries
+template / checkpoint id, the egress host, or a `vmm_failed` reason). A volume claim also carries
 `volumes`, the applied catalog names, and — omitted when empty — `volumes_rw`,
 the subset of those names claimed `rw`, so billing can discriminate write
 access (mounts and host paths are not billing dimensions). The file rotates at
 64 MiB keeping one `.1` backup, so a tailing collector never loses a window
 silently. Folding rules: billable compute seconds per sandbox =
-Σ(claim→release/reap) − Σ(hibernate→wake); hibernated storage seconds =
+Σ(claim→release/reap) − Σ(hibernate→wake) − Σ(vmm_exit→vmm_restart/release/reap);
+`vmm_exit` is stamped when the node first finds the VMM gone, so an outage
+before sandboxd runs again (a host that was down) stays billed up to that
+point, and `vmm_failed` is informational; hibernated storage seconds =
 Σ(hibernate→wake) minus the archived span; archived storage seconds =
 Σ(archive→unarchive/archive_delete), a cheaper store tier than a hibernated
 VM's RAM. An interval left open by a crash clamps to the claim's
-deadline; reconcile records nothing for the claims it drops, so a restart
-leaves those intervals without a terminal event. The `vm` name joins
+deadline; reconcile records nothing for the claims it drops (those whose VM
+record is gone), so a restart leaves those intervals without a terminal event. The `vm` name joins
 cocoon's machine-level metering ledger for audit cross-checks.
 
 ## GET /v1/sandboxes/{id}/agent
@@ -693,7 +704,7 @@ the connection is a byte-for-byte relay to the guest's silkd, carrying RPCs
 back to back (see [silkd](silkd.md)). An open relay holds the sandbox's idle
 clock, so a client that keeps a connection warm must close it when idle for
 `idle_hibernate_seconds` to apply. 426 without the upgrade header, 404
-unknown sandbox, 502 guest unreachable.
+unknown sandbox, 409 a failed sandbox, 502 guest unreachable.
 
 ## GET /v1/sandboxes/{id}/ports/{port}
 
@@ -721,7 +732,7 @@ so a poll neither undoes a pause nor keeps a sandbox from idling. A hibernated
 or archived sandbox, or one with a hibernate, wake, checkpoint, promote or
 fork in flight, answers `409` at once; an open passive relay still holds the sandbox against the idle sweep.
 400 a port outside 1-65535; 401 missing bearer token; 404 unknown sandbox or
-wrong token; 409 a passive relay to a paused sandbox; 426 without the upgrade
+wrong token; 409 a failed sandbox or a passive relay to a paused one; 426 without the upgrade
 header; 502 when the guest cannot be reached on that port — no listener, or a
 hibernated sandbox whose restore failed. The node log carries which.
 
@@ -748,7 +759,7 @@ does not exist are the caller's, not 502s; 401 missing bearer token; 404 unknown
 413 when stdout+stderr exceed 8 MiB; 503 with `Retry-After: 1` when the
 node's buffered-exec memory is exhausted (64 MiB of output across every
 buffered exec in flight; the command is killed); 502 guest unreachable or any other
-silkd error; 504 when the command outlives `timeout_seconds`. A client that hangs up first gets no reply and the command is killed. A hibernated sandbox wakes transparently like on the relay.
+silkd error; 409 a failed sandbox; 504 when the command outlives `timeout_seconds`. A client that hangs up first gets no reply and the command is killed. A hibernated sandbox wakes transparently like on the relay.
 
 ## GET /v1/sandboxes/{id}/owner
 
@@ -772,6 +783,7 @@ count, the node's own address, and mesh peers:
  "claimed": 2,
  "hibernated": 1,
  "archived": 0,
+ "failed": 0,
  "at_capacity": true,
  "at_capacity_reason": "exchange full",
  "advertise_addr": "10.0.0.5:7777",
@@ -784,7 +796,8 @@ when set, else its `advertise_addr`. It is the same value a claim reports as
 
 `hibernated` counts claims whose VM is currently hibernated, `archived` those
 checkpointed to the store with the local VM dropped (see
-[archive tiers](deploy.md#configuration)); both are included in `claimed`.
+[archive tiers](deploy.md#configuration)), `failed` those whose VMM is down
+and was not restarted (omitted at zero); all are included in `claimed`.
 A node cordoned via [`POST /v1/drain`](#post-v1drain) additionally reports
 `"draining": true`. When refill is parked because the node cannot start
 another VM, `"at_capacity": true` distinguishes a full node from one still

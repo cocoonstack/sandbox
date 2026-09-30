@@ -238,12 +238,16 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 	if !sb.Transition.TryLock() {
 		return nil, ErrPaused
 	}
+	failed := sb.Failed != ""
 	paused, sock := sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "", sb.VsockSocket
-	if !paused {
+	if !paused && !failed {
 		sb.Hold()
 	}
 	sb.Transition.Unlock()
-	if paused {
+	switch {
+	case failed:
+		return nil, ErrFailed
+	case paused:
 		return nil, ErrPaused
 	}
 	m.recordAudit(ctx, id, auditFrame{Op: "port", Port: port})
@@ -492,7 +496,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		switch {
 		case sb.ArchiveCk != "":
 			expired = append(expired, victim{action: reapPurge, id: id, ck: sb.ArchiveCk, tenant: sb.Tenant, sb: sb})
-		case sb.OnExpire == types.ExpireArchive, sb.HibernateSnap != "" && m.archiveEnabledFor(sb.Key):
+		case sb.Failed == "" && (sb.OnExpire == types.ExpireArchive || sb.HibernateSnap != "" && m.archiveEnabledFor(sb.Key)):
 			// archive instead of destroy, kept in m.claimed for archive() to move
 			if _, busy := m.archiving[id]; busy {
 				continue // an archive is already exporting this sandbox
