@@ -316,6 +316,31 @@ func TestAFailedEnvDeliveryDestroysTheClaim(t *testing.T) {
 	}
 }
 
+func BenchmarkClaimSecretsHeader(b *testing.B) {
+	b.Setenv("GH_TOKEN", "node-gh")
+	store, err := egress.NewSecretStore([]egress.SecretSpec{{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"}})
+	if err != nil {
+		b.Fatalf("secrets: %v", err)
+	}
+	m := &Manager{egressSecrets: store}
+	b.Run("node-store-only", func(b *testing.B) {
+		for b.Loop() {
+			_, _, _ = store.Header("gh")
+		}
+	})
+	for _, arm := range []string{"no-claim-env", "claim-env"} {
+		sb := &types.Sandbox{}
+		if arm == "claim-env" {
+			sb.Env = types.Env{"GH_TOKEN": {Value: "Bearer claim", Guest: hostOnly}, "MODE": {Value: "on"}}
+		}
+		b.Run(arm, func(b *testing.B) {
+			for b.Loop() {
+				_, _, _ = claimSecrets{m: m, sb: sb}.Header("gh")
+			}
+		})
+	}
+}
+
 func envManager(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	t.Setenv("GH_TOKEN", "node-gh")

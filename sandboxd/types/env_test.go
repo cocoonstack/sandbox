@@ -11,6 +11,12 @@ func TestEnvValidate(t *testing.T) {
 	for i := range maxEnvVars + 1 {
 		many["V"+strings.Repeat("X", i)] = EnvVar{}
 	}
+	full, over := Env{}, Env{}
+	for i := range 8 {
+		name := "V" + strings.Repeat("X", i)
+		full[name] = EnvVar{Value: strings.Repeat("a", maxEnvBytes/8-len(name))}
+		over[name] = EnvVar{Value: strings.Repeat("B=b", maxEnvValueBytes/3)}
+	}
 	tests := []struct {
 		name string
 		env  Env
@@ -25,6 +31,8 @@ func TestEnvValidate(t *testing.T) {
 		{"nul", Env{"A": {Value: "a\x00"}}, "control characters"},
 		{"at the bound", Env{"A": {Value: strings.Repeat("a", maxEnvValueBytes)}}, ""},
 		{"over the bound", Env{"A": {Value: strings.Repeat("a", maxEnvValueBytes+1)}}, "at most"},
+		{"total at the bound", full, ""},
+		{"total over the bound", over, "total at most"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

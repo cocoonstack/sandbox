@@ -64,6 +64,7 @@ const (
 
 	maxEnvVars       = 64
 	maxEnvValueBytes = 8 << 10
+	maxEnvBytes      = 64 << 10
 )
 
 var (
@@ -234,12 +235,14 @@ func (v EnvVar) same(other EnvVar) bool {
 // Env is a claim's own environment: guest entries reach the guest, the others stay host-side for egress secrets.
 type Env map[string]EnvVar
 
-// Validate enforces the entry count, the name grammar, and a bounded value a header and an env file both carry.
+// Validate enforces the entry count, the name grammar, a bounded value a header and an env file both carry, and a bounded total.
 func (e Env) Validate() error {
 	if len(e) > maxEnvVars {
 		return fmt.Errorf("env must contain at most %d entries, got %d", maxEnvVars, len(e))
 	}
+	total := 0
 	for name, v := range e {
+		total += len(name) + len(v.Value)
 		if !EnvNameRe.MatchString(name) {
 			return fmt.Errorf("env name %q must match %s", name, EnvNameRe)
 		}
@@ -249,6 +252,9 @@ func (e Env) Validate() error {
 		if !httpguts.ValidHeaderFieldValue(v.Value) {
 			return fmt.Errorf("env value of %s must not hold control characters other than tab", name)
 		}
+	}
+	if total > maxEnvBytes {
+		return fmt.Errorf("env names and values must total at most %d bytes, got %d", maxEnvBytes, total)
 	}
 	return nil
 }

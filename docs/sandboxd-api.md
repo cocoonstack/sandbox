@@ -66,7 +66,7 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   cold-booting an image named like the template
 - `env` is the claim's own environment, at most 64 entries: each name a shell
   identifier of at most 128 bytes, each value at most 8 KiB with no control
-  characters other than tab. An entry holds only `value` and `guest`; any other
+  characters other than tab, and names plus values at most 64 KiB in total. An entry holds only `value` and `guest`; any other
   member, or `"guest": null`, answers 400, so a mistyped flag never lands a
   host-only value in the guest. `guest` (default `true`) delivers the entry into the guest; a
   `guest: false` entry never enters it and only feeds the node's egress
