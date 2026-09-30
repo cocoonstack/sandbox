@@ -43,7 +43,7 @@ suites — a frame only one side can parse fails CI.
 
 | group | ops | response flow |
 |---|---|---|
-| exec | `exec {argv, cwd?, env?, user?, detach?, session?}` | `started{pid}` → `stdout/stderr{data}`… → `exit{code}`; the client may stream `stdin{data}` / `stdin_close`. `detach` returns after `started`; the process keeps a bounded output ring for later `logs`/`attach` and leaves the table 5 minutes after it exits, after which its pid answers `not_found`; not combinable with `session`. With `session` only `argv` is used — `cwd`, `env`, `user` and `stdin` frames are ignored (the session owns them, and its commands read `/dev/null`) — no `started` is sent, and stderr arrives merged into `stdout`. A child's environment is cleared to `PATH`, `TERM` and the lane's proxy variables plus `env`; `HOME` and `USER` are set only with `user` |
+| exec | `exec {argv, cwd?, env?, user?, detach?, session?}` | `started{pid}` → `stdout/stderr{data}`… → `exit{code}`; the client may stream `stdin{data}` / `stdin_close`. `detach` returns after `started`; the process keeps a bounded output ring for later `logs`/`attach` and leaves the table 5 minutes after it exits, after which its pid answers `not_found`; not combinable with `session`. With `session` only `argv` is used — `cwd`, `env`, `user` and `stdin` frames are ignored (the session owns them, and its commands read `/dev/null`) — no `started` is sent, and stderr arrives merged into `stdout`. A child's environment is cleared to `PATH`, `TERM` and the lane's proxy variables, then the [claim env](#claim-env), then `env`; `HOME` and `USER` are set only with `user` |
 | procs | `ps` / `kill {pid, signal?}` / `attach {pid}` / `logs {pid}` | `ps` answers one `procs{procs}` frame, `kill` a bare `done`; `logs` replays `stdout/stderr{data}`…, adds `exit{code}` once the process has exited, and closes with `done`; `attach` replays and follows `stdout/stderr{data}`… to `exit{code}`, or to `done` when the process is gone before its exit. Handles are guest pids; any connection can list, signal, replay, or re-attach live |
 | sessions | `session_create {id?, cwd?, env?}` / `session_list` / `session_rm {id}` | `session_created{id}` / `sessions{sessions}` / `done`. A session is a real persistent bash; `exec` with `session` runs inside it. Idle sessions are reaped after 30 minutes |
 | fs | `fs_write {path, mode?}` (+`data`/`data_end` frames) / `fs_read` / `fs_list` / `fs_stat` / `fs_mkdir {parents?}` / `fs_rm {recursive?}` / `fs_rename {from, to}` | `fs_read` streams `data{data}`… → `done` for a regular file and answers `bad_request` for a directory, device or FIFO, `fs_list` streams 4096-entry `entries{entries}` batches → `done`, `fs_stat` answers one `stat{info}`, and the mutating verbs terminate with `done`. Streaming runs both directions; write commits atomically via temp+rename and inherits an overwritten file's mode |
@@ -89,6 +89,24 @@ verdict in `/etc/silkd-lane` reads `relay` because it is nft-locked — silkd
 forwards the image-baked proxy variables (`http_proxy` and friends) into every
 exec, so unconfigured clients use the relay without being told; a lane with its
 own routed network never gets them.
+
+## Claim env
+
+The host writes a claim's [`guest` env entries](sandboxd-api.md#getputdelete-v1sandboxesidenv)
+to `/run/silkd.env` (root, 0600) in systemd `EnvironmentFile` syntax, one
+`NAME="value"` per line with `\`, `"`, `` ` `` and `$` escaped. silkd reads it
+at every exec, session and pty it spawns and applies it after the base
+environment above, so a request's own `env` still wins. A session's shell
+keeps the file as it was when the session started: a later change reaches new
+execs, ptys and sessions only. A long-running unit
+reads it with `EnvironmentFile=-/run/silkd.env` at start. The host writes the
+file when a claim with guest entries is made, when its guest entries change,
+and when the same env is sent again; a change to host-only entries never
+touches it. A unit that must follow a change restarts on it, for example from
+a `.path` unit. The file is in the guest's memory, so it survives hibernate
+and archive; a branch, fork child or promoted-template clone whose source had
+guest entries gets its own file rewritten at claim. An
+older silkd ignores the file; units that read it still see it.
 
 ## Limits
 

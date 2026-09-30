@@ -24,6 +24,9 @@ const FORWARDED: [&str; 6] = [
 
 const HEX: [u8; 16] = *b"0123456789abcdef";
 
+/// The claim's environment the host writes, in systemd EnvironmentFile syntax.
+const CLAIM_ENV_PATH: &str = "/run/silkd.env";
+
 /// A suffix unique within this process, enough to name a temp file; not cryptographic.
 pub fn tmp_suffix() -> String {
     format!(
@@ -72,6 +75,14 @@ pub fn base_env() -> &'static [(&'static str, &'static str)] {
     } else {
         &RELAYED
     }
+}
+
+/// The claim's environment every spawned child gets after base_env; empty when the host wrote none.
+pub async fn claim_env() -> Vec<(String, String)> {
+    tokio::fs::read_to_string(CLAIM_ENV_PATH)
+        .await
+        .map(|text| parse_env_file(&text))
+        .unwrap_or_default()
 }
 
 /// Applies base_env's lane rule to an env-inheriting child: a routed NIC drops the proxy variables.
@@ -250,6 +261,37 @@ fn snapshot_proxy(get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, St
         .collect()
 }
 
+/// Parses the subset the host writes: one `KEY="value"` per line, with systemd's double-quote escapes.
+fn parse_env_file(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.to_owned(), unquote(value)))
+        .collect()
+}
+
+fn unquote(value: &str) -> String {
+    let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) else {
+        return value.to_owned();
+    };
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some(e @ ('"' | '\\' | '$' | '`')) => out.push(e),
+            Some(e) => {
+                out.push('\\');
+                out.push(e);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
 fn lookup_user(user: &str) -> Result<(u32, u32, PathBuf), String> {
     match nix::unistd::User::from_name(user) {
         Ok(Some(pw)) => Ok((pw.uid.as_raw(), pw.gid.as_raw(), pw.dir)),
@@ -326,6 +368,23 @@ mod tests {
         let mut relayed = Command::new("true");
         align_proxy_env_for(&mut relayed, false);
         assert_eq!(removed(&relayed), 0);
+    }
+
+    #[test]
+    fn parse_env_file_reads_what_the_host_writes() {
+        let text = "A=\"plain\"\nB=\"a \\\"quoted\\\" \\$HOME \\\\ path \\`x\\`\"\nC=bare\nnot-an-entry\nD=\"keep \\n\"\n";
+        let want = vec![
+            ("A".to_owned(), "plain".to_owned()),
+            ("B".to_owned(), "a \"quoted\" $HOME \\ path `x`".to_owned()),
+            ("C".to_owned(), "bare".to_owned()),
+            ("D".to_owned(), "keep \\n".to_owned()),
+        ];
+        assert_eq!(parse_env_file(text), want);
+    }
+
+    #[test]
+    fn parse_env_file_of_an_empty_file_is_empty() {
+        assert!(parse_env_file("").is_empty());
     }
 
     #[test]

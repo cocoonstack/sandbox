@@ -45,6 +45,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
     }
     cmd.env_clear()
         .envs(sysutil::base_env().iter().copied())
+        .envs(sysutil::claim_env().await)
         .envs(&req.env);
     if let Some(user) = &req.user
         && let Err(e) = sysutil::apply_user(&mut cmd, user)

@@ -42,6 +42,7 @@ where
     }
     cmd.env_clear();
     cmd.envs(sysutil::base_env().iter().copied());
+    cmd.envs(sysutil::claim_env().await);
     cmd.envs(&req.env);
     if let Some(ref user) = req.user
         && let Err(e) = sysutil::apply_user(&mut cmd, user)
