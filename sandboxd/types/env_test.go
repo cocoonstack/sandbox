@@ -47,6 +47,32 @@ func TestEnvValidate(t *testing.T) {
 	}
 }
 
+func TestEnvPatchAppliesAndValidates(t *testing.T) {
+	base := Env{"A": {Value: "a"}, "H": {Value: "h", Guest: new(false)}}
+	got := EnvPatch{"A": nil, "B": {Value: "b"}, "Z": nil}.Apply(base)
+	if !got.Equal(Env{"B": {Value: "b"}, "H": {Value: "h", Guest: new(false)}}) || !base.Equal(Env{"A": {Value: "a"}, "H": {Value: "h", Guest: new(false)}}) {
+		t.Errorf("Apply = %v (base %v)", got, base)
+	}
+	if got := (EnvPatch{"A": nil, "H": nil}).Apply(base); got != nil {
+		t.Errorf("removing every entry = %v, want nil", got)
+	}
+	if (EnvPatch{"H": {Value: "h", Guest: new(false)}, "A": nil}).SetsGuest() || !(EnvPatch{"G": {Value: "g"}}).SetsGuest() {
+		t.Error("SetsGuest misreads which entries reach the guest")
+	}
+	for _, tt := range []struct {
+		patch EnvPatch
+		want  string
+	}{
+		{EnvPatch{"A": nil, "B": {Value: "b"}}, ""},
+		{EnvPatch{"A-B": nil}, "env name"},
+		{EnvPatch{"A": {Value: "a\nB=b"}}, "control characters"},
+	} {
+		if err := tt.patch.Validate(); (tt.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tt.want)) {
+			t.Errorf("Validate(%v) = %v, want %q", tt.patch, err, tt.want)
+		}
+	}
+}
+
 func TestEnvVarDecodesStrictly(t *testing.T) {
 	for _, tt := range []struct {
 		body  string

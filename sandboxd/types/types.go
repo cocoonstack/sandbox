@@ -338,6 +338,52 @@ func (e Env) guest() Env {
 	return out
 }
 
+// EnvPatch names the entries of a claim's env to set; a null entry removes the name.
+type EnvPatch map[string]*EnvVar
+
+// Validate enforces the name grammar on every entry and the Env rules on the entries it sets.
+func (p EnvPatch) Validate() error {
+	set := Env{}
+	for name, v := range p {
+		if !EnvNameRe.MatchString(name) {
+			return fmt.Errorf("env name %q must match %s", name, EnvNameRe)
+		}
+		if v != nil {
+			set[name] = *v
+		}
+	}
+	return set.Validate()
+}
+
+// SetsGuest reports whether p sets an entry that reaches the guest.
+func (p EnvPatch) SetsGuest() bool {
+	for _, v := range p {
+		if v != nil && v.InGuest() {
+			return true
+		}
+	}
+	return false
+}
+
+// Apply returns e with p's entries set or removed, nil when none remain; e is left unchanged.
+func (p EnvPatch) Apply(e Env) Env {
+	out := maps.Clone(e)
+	if out == nil {
+		out = Env{}
+	}
+	for name, v := range p {
+		if v == nil {
+			delete(out, name)
+		} else {
+			out[name] = *v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // PoolKey identifies one warm pool.
 type PoolKey struct {
 	Template string   `json:"template"`

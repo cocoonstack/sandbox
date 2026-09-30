@@ -80,6 +80,7 @@ var (
 	ErrBadKey            = errors.New("invalid pool key")
 	ErrBadCount          = errors.New("invalid fork count")
 	ErrBadVolume         = errors.New("invalid volume request")
+	ErrBadEnv            = errors.New("invalid env")
 	ErrVolumeUnavailable = fmt.Errorf("%w: unknown or unavailable volume", ErrBadVolume)
 	ErrNoWarm            = errors.New("no warm sandbox for key")
 	ErrUnknownSandbox    = errors.New("unknown sandbox or bad token")

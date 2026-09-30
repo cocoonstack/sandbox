@@ -230,7 +230,7 @@ recorded as a decision of its own before its inner requests.
 
 A secret's value is an environment variable: the one its `value_env` names,
 or the secret's own name when `value_env` is empty. The proxy reads it from
-the claim's [env](sandboxd-api.md#getputdelete-v1sandboxesidenv) first, from
+the claim's [env](sandboxd-api.md#getputpatchdelete-v1sandboxesidenv) first, from
 its `guest: false` entries only, and from the node's environment second:
 
 ```jsonc

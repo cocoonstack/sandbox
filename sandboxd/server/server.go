@@ -43,6 +43,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrBadVolume, http.StatusBadRequest, ""},
 	{pool.ErrBadName, http.StatusBadRequest, ""},
 	{pool.ErrBadCount, http.StatusBadRequest, ""},
+	{pool.ErrBadEnv, http.StatusBadRequest, ""},
 	{pool.ErrNoEgress, http.StatusConflict, ""},
 	{pool.ErrNoEgressHibernate, http.StatusConflict, ""},
 	{pool.ErrNoEgressFork, http.StatusConflict, ""},
@@ -86,6 +87,7 @@ type Manager interface {
 	Stats(ctx context.Context, id string) (pool.SandboxStats, bool)
 	SetInstanceMetadata(ctx context.Context, id string, doc []byte) error
 	SetEnv(ctx context.Context, id string, env types.Env, tenant string) error
+	PatchEnv(ctx context.Context, id string, patch types.EnvPatch, tenant string) error
 	Env(id, tenant string) (types.Env, error)
 	Audit(ctx context.Context, id string, line []byte)
 	AuditEnabled() bool
@@ -163,6 +165,11 @@ type SandboxEnv struct {
 	Env types.Env `json:"env"`
 }
 
+// SandboxEnvPatch is the wire body of PATCH /v1/sandboxes/{id}/env: entries to set, null to remove.
+type SandboxEnvPatch struct {
+	Env types.EnvPatch `json:"env"`
+}
+
 // PoolUpdateRequest is the wire body of PUT /v1/pools; omitted pools are drained.
 type PoolUpdateRequest struct {
 	Pools []config.PoolSpec `json:"pools"`
@@ -225,6 +232,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/instance-metadata", s.requireRoot(s.handleInstanceMetadata))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/env", s.requireToken(s.handleGetEnv))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/env", s.requireToken(s.handleSetEnv))
+	mux.HandleFunc("PATCH /v1/sandboxes/{id}/env", s.requireToken(s.handlePatchEnv))
 	mux.HandleFunc("DELETE /v1/sandboxes/{id}/env", s.requireToken(s.handleClearEnv))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.requireToken(s.handleFork))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/promote", s.requireToken(s.handlePromote))
@@ -471,6 +479,18 @@ func (s *Server) handleSetEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setEnv(w, r, req.Env)
+}
+
+func (s *Server) handlePatchEnv(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeBodyStrict[SandboxEnvPatch](w, r)
+	if !ok || !validRequest(w, req.Env.Validate()) {
+		return
+	}
+	id := r.PathValue("id")
+	err := s.mgr.PatchEnv(r.Context(), id, req.Env, tenantFrom(r.Context()))
+	writeResult(w, r, "env", id, "patch env failed", err, func() {
+		w.WriteHeader(http.StatusNoContent)
+	})
 }
 
 func (s *Server) handleClearEnv(w http.ResponseWriter, r *http.Request) {

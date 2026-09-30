@@ -2,10 +2,13 @@ package pool
 
 import (
 	"errors"
+	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -313,6 +316,98 @@ func TestAFailedEnvDeliveryDestroysTheClaim(t *testing.T) {
 	m.mu.Unlock()
 	if claimed != 0 {
 		t.Errorf("%d claims recorded, want none", claimed)
+	}
+}
+
+func TestPatchEnvMergesAndWritesTheGuestOnlyForGuestEntries(t *testing.T) {
+	eng := newFakeEngine()
+	m := envManager(t, eng, t.TempDir())
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: types.Env{"GW": {Value: "Bearer k", Guest: hostOnly}, "MODE": {Value: "a"}}})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	sock := lockedVsock(m, sb)
+	stored := func() types.Env {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return maps.Clone(sb.Env)
+	}
+	patch := func(p types.EnvPatch) error { return m.PatchEnv(t.Context(), sb.ID, p, "") }
+
+	delete(eng.guestEnvs, sock)
+	if err := patch(types.EnvPatch{"GW": {Value: "Bearer k2", Guest: hostOnly}}); err != nil {
+		t.Fatalf("host-only patch: %v", err)
+	}
+	if got, wrote := eng.guestEnvs[sock]; wrote {
+		t.Errorf("a host-only patch wrote the guest file %q", got)
+	}
+	if env := stored(); env["GW"].Value != "Bearer k2" || env["MODE"].Value != "a" {
+		t.Errorf("env after the host-only patch = %v", env)
+	}
+	if err := patch(types.EnvPatch{"META": {Value: "x"}}); err != nil {
+		t.Fatalf("guest patch: %v", err)
+	}
+	if got := eng.guestEnvs[sock]; got != "META=\"x\"\nMODE=\"a\"\n" {
+		t.Errorf("guest file after adding META = %q", got)
+	}
+	if stored()["GW"].Value != "Bearer k2" {
+		t.Error("a guest patch dropped the host-only value")
+	}
+
+	delete(eng.guestEnvs, sock)
+	seq := m.store.mark().seq
+	if err := patch(types.EnvPatch{"GW": {Value: "Bearer k2", Guest: hostOnly}, "ABSENT": nil}); err != nil {
+		t.Fatalf("no-op patch: %v", err)
+	}
+	if _, wrote := eng.guestEnvs[sock]; wrote || m.store.mark().seq != seq {
+		t.Errorf("a no-op patch wrote the guest (%t) or the journal (seq %d -> %d)", wrote, seq, m.store.mark().seq)
+	}
+	if err := patch(types.EnvPatch{"META": {Value: "x"}}); err != nil {
+		t.Fatalf("resent guest patch: %v", err)
+	}
+	if got := eng.guestEnvs[sock]; got != "META=\"x\"\nMODE=\"a\"\n" || m.store.mark().seq != seq {
+		t.Errorf("a resent guest patch left the guest file %q and moved the journal to seq %d, want it rewritten and the journal untouched", got, m.store.mark().seq)
+	}
+	if err := patch(types.EnvPatch{"MODE": nil, "META": nil}); err != nil {
+		t.Fatalf("removing patch: %v", err)
+	}
+	if got, wrote := eng.guestEnvs[sock]; !wrote || got != "" {
+		t.Errorf("guest file after removing every guest entry = %q (written %t), want emptied", got, wrote)
+	}
+	if env := stored(); len(env) != 1 || env["GW"].Value != "Bearer k2" {
+		t.Errorf("env after removals = %v, want only the host-only entry", env)
+	}
+
+	big, drop := types.EnvPatch{}, types.EnvPatch{}
+	for i := range 7 {
+		big[fmt.Sprintf("BIG_%d", i)] = &types.EnvVar{Value: strings.Repeat("v", 8190), Guest: hostOnly}
+		drop[fmt.Sprintf("BIG_%d", i)] = nil
+	}
+	if err := patch(big); err != nil {
+		t.Fatalf("a patch under the total cap: %v", err)
+	}
+	last := types.EnvPatch{"BIG_7": {Value: strings.Repeat("v", 8190), Guest: hostOnly}}
+	if err := last.Validate(); err != nil {
+		t.Fatalf("the last entry alone: %v", err)
+	}
+	if err := patch(last); !errors.Is(err, ErrBadEnv) || strings.Contains(err.Error(), "vvvv") {
+		t.Errorf("a patch that takes the merged env past the cap: %v, want ErrBadEnv without the value", err)
+	}
+	if err := patch(drop); err != nil || len(stored()) != 1 {
+		t.Fatalf("dropping the big entries: %v, env %d entries", err, len(stored()))
+	}
+	if err := m.PatchEnv(t.Context(), sb.ID, types.EnvPatch{"X": nil}, "acme"); !errors.Is(err, ErrUnknownSandbox) {
+		t.Errorf("another tenant's patch: %v, want ErrUnknownSandbox", err)
+	}
+
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("Hibernate: %v", err)
+	}
+	if err := patch(types.EnvPatch{"MODE": {Value: "b"}}); !errors.Is(err, ErrPaused) {
+		t.Errorf("guest patch while hibernated: %v, want ErrPaused", err)
+	}
+	if err := patch(types.EnvPatch{"GW": {Value: "Bearer k3", Guest: hostOnly}}); err != nil || stored()["GW"].Value != "Bearer k3" {
+		t.Errorf("host-only patch while hibernated: %v, env %v", err, stored())
 	}
 }
 

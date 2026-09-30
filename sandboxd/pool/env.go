@@ -15,9 +15,27 @@ const envWriteLimit = 8
 
 // SetEnv replaces a claim's env, an empty map clearing it; a change to its guest entries needs a running guest and is written there at once.
 func (m *Manager) SetEnv(ctx context.Context, id string, env types.Env, tenant string) error {
-	if len(env) == 0 {
-		env = nil
+	return m.writeEnv(ctx, id, tenant, "set", func(types.Env) (types.Env, bool) { return env, true })
+}
+
+// PatchEnv sets or removes the named entries of a claim's env and keeps the rest; the guest file is written only when the patch sets a guest entry or changes one.
+func (m *Manager) PatchEnv(ctx context.Context, id string, patch types.EnvPatch, tenant string) error {
+	return m.writeEnv(ctx, id, tenant, "patch", func(prev types.Env) (types.Env, bool) { return patch.Apply(prev), patch.SetsGuest() })
+}
+
+// Env reads a claim's env with host-only values dropped; a tenant reaches only its own claims.
+func (m *Manager) Env(id, tenant string) (types.Env, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sb := m.claimed[id]
+	if sb == nil || !tenantOwns(tenant, sb.Tenant) {
+		return nil, ErrUnknownSandbox
 	}
+	return sb.Env.Redacted(), nil
+}
+
+// writeEnv stores next's env for claim id; resend rewrites an unchanged guest file too, so a repeated request repairs a lost file or a failed clear.
+func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next func(prev types.Env) (types.Env, bool)) error {
 	sb, ok := m.byID(id)
 	if !ok || !tenantOwns(tenant, sb.Tenant) {
 		return ErrUnknownSandbox
@@ -33,14 +51,25 @@ func (m *Manager) SetEnv(ctx context.Context, id string, env types.Env, tenant s
 		return ErrUnknownSandbox
 	}
 	prev, sock := sb.Env, sb.VsockSocket
+	env, resend := next(prev)
+	if len(env) == 0 {
+		env = nil
+	}
+	if err := env.Validate(); err != nil {
+		m.mu.Unlock()
+		return fmt.Errorf("%w: %w", ErrBadEnv, err)
+	}
 	changed := !env.SameGuest(prev)
 	paused := !locked || sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != ""
 	if changed && paused {
 		m.mu.Unlock()
 		return ErrPaused
 	}
-	// an exact resend is rewritten too, so a repeated call repairs a lost file or a failed clear
-	deliver := !paused && (changed || env.Equal(prev))
+	deliver := !paused && (changed || resend && env.Equal(prev))
+	if env.Equal(prev) {
+		m.mu.Unlock()
+		return m.deliverGuestEnv(ctx, verb, id, sock, env, deliver)
+	}
 	sb.Env = env
 	js := m.store.set(sb)
 	m.mu.Unlock()
@@ -53,26 +82,19 @@ func (m *Manager) SetEnv(ctx context.Context, id string, env types.Env, tenant s
 		}
 		m.mu.Unlock()
 		m.recommit(ctx, rb)
-		return fmt.Errorf("set env %s: persist claims: %w", id, err)
+		return fmt.Errorf("%s env %s: persist claims: %w", verb, id, err)
 	}
+	return m.deliverGuestEnv(ctx, verb, id, sock, env, deliver)
+}
+
+func (m *Manager) deliverGuestEnv(ctx context.Context, verb, id, sock string, env types.Env, deliver bool) error {
 	if !deliver {
 		return nil
 	}
 	if err := m.eng.WriteGuestEnv(ctx, sock, env.GuestFile()); err != nil {
-		return fmt.Errorf("set env %s: write to the guest: %w", id, err)
+		return fmt.Errorf("%s env %s: write to the guest: %w", verb, id, err)
 	}
 	return nil
-}
-
-// Env reads a claim's env with host-only values dropped; a tenant reaches only its own claims.
-func (m *Manager) Env(id, tenant string) (types.Env, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	sb := m.claimed[id]
-	if sb == nil || !tenantOwns(tenant, sb.Tenant) {
-		return nil, ErrUnknownSandbox
-	}
-	return sb.Env.Redacted(), nil
 }
 
 // deliverEnv writes each claim's guest env file before it is handed out; an inherited guest holds its source's file, so it is rewritten even when empty.
