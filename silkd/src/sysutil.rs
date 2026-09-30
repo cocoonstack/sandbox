@@ -78,9 +78,8 @@ pub fn base_env() -> &'static [(&'static str, &'static str)] {
 }
 
 /// The claim's environment every spawned child gets after base_env; empty when the host wrote none.
-pub async fn claim_env() -> Vec<(String, String)> {
-    tokio::fs::read_to_string(CLAIM_ENV_PATH)
-        .await
+pub fn claim_env() -> Vec<(String, String)> {
+    std::fs::read_to_string(CLAIM_ENV_PATH)
         .map(|text| parse_env_file(&text))
         .unwrap_or_default()
 }
