@@ -2,6 +2,7 @@
 
 use std::io::Read;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::ExitStatus;
@@ -96,6 +97,19 @@ pub fn apply_user(cmd: &mut Command, user: &str) -> Result<(), String> {
     cmd.env("HOME", home);
     cmd.env("USER", user);
     Ok(())
+}
+
+pub fn apply_owner(cmd: &mut Command, path: &str) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    if meta.uid() == 0 || !nix::unistd::geteuid().is_root() {
+        return;
+    }
+    cmd.uid(meta.uid()).gid(meta.gid());
+    if let Ok(Some(pw)) = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(meta.uid())) {
+        cmd.env("HOME", pw.dir).env("USER", pw.name);
+    }
 }
 
 /// Opens a pty, returning the (master, slave) fds; the master is non-blocking for async I/O.

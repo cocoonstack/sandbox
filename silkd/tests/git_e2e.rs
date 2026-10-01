@@ -31,6 +31,18 @@ fn init_repo() -> tempfile::TempDir {
     dir
 }
 
+fn chown_tree(dir: &std::path::Path, uid: u32) {
+    std::os::unix::fs::lchown(dir, Some(uid), Some(uid)).unwrap();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() && !path.is_symlink() {
+            chown_tree(&path, uid);
+        } else {
+            std::os::unix::fs::lchown(&path, Some(uid), Some(uid)).unwrap();
+        }
+    }
+}
+
 #[tokio::test]
 async fn add_commit_status_reports_structured_state() {
     let repo = init_repo();
@@ -193,4 +205,22 @@ async fn commit_works_without_preconfigured_identity() {
         "git_commit_result",
         "commit failed: {commit:?}"
     );
+}
+
+#[tokio::test]
+async fn git_runs_as_the_repo_owner_under_root() {
+    if !nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let repo = init_repo();
+    let p = repo.path().to_str().unwrap();
+    std::fs::write(repo.path().join("a.txt"), "hello\n").unwrap();
+    chown_tree(repo.path(), 65534);
+
+    let st = exchange(&[json!({"op":"git_status","path":p}).to_string()]).await;
+    assert_eq!(type_of(&st[0]), "git_status_result", "{st:?}");
+    let add = exchange(&[json!({"op":"git_add","path":p,"files":["a.txt"]}).to_string()]).await;
+    assert_eq!(type_of(add.last().unwrap()), "done", "{add:?}");
+    let index = std::fs::metadata(repo.path().join(".git/index")).unwrap();
+    assert_eq!(std::os::unix::fs::MetadataExt::uid(&index), 65534);
 }

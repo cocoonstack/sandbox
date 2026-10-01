@@ -146,6 +146,7 @@ async fn list_branches<W: AsyncWrite + Unpin>(w: &mut W, path: &str) -> std::io:
 fn git_cmd(dir: &str, auth: Option<&str>) -> Command {
     let mut cmd = Command::new("git");
     sysutil::align_proxy_env(&mut cmd);
+    sysutil::apply_owner(&mut cmd, dir);
     cmd.arg("-C").arg(dir);
     apply_config(&mut cmd, auth);
     cmd.stdin(Stdio::null())
