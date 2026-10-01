@@ -47,6 +47,12 @@ type VolumeInfo struct {
 	Writable     bool   `json:"writable,omitzero"`
 }
 
+// EnvVar is one entry of a claim's env; a nil Guest delivers it into the guest, false keeps it host-side for the node's egress.
+type EnvVar struct {
+	Value string `json:"value"`
+	Guest *bool  `json:"guest,omitempty"`
+}
+
 // Option configures a New claim.
 type Option func(*claimRequest)
 
@@ -98,6 +104,12 @@ func WithClaimRef(ref string) Option {
 func WithMetadata(md map[string]string) Option {
 	md = maps.Clone(md)
 	return func(r *claimRequest) { r.Metadata = md }
+}
+
+// WithEnv sets the claim's own env.
+func WithEnv(env map[string]EnvVar) Option {
+	env = maps.Clone(env)
+	return func(r *claimRequest) { r.Env = env }
 }
 
 // WithArchiveOnExpire makes the node hibernate and archive the sandbox when its lease ends, instead of destroying it; a wake restores it.

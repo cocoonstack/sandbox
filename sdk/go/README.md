@@ -13,6 +13,7 @@ out, _ := sb.Exec(ctx, "echo", "hello")
 - `client.go` — claim/redirect follow, `Lookup` scatter, template delete
 - `sandbox.go` — exec/run, renew, fork, hibernate (transparent wake)
 - `session.go` — persistent shell sessions
+- `env.go` — the claim env verbs (`Env`/`SetEnv`/`PatchEnv`)
 - `files.go` / `tree.go` — streaming file verbs, tar push/pull
 - `port.go` — `DialPort`/`ProxyPort` (net.Conn over the relay), `PreviewURL`
 - `lsp.go` — `StartLsp` + the JSON-RPC byte stream to a flavor's server

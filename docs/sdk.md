@@ -230,7 +230,7 @@ not an error, and `Close` is bounded internally so it stays defer-friendly).
 Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Passing
 `WithVolumes` or `WithClaimRef` to `Checkpoint.New` returns a local error:
 checkpoint branches support neither volumes nor a claim reference in this version.
-`WithMetadata` and `WithArchiveOnExpire` apply to `New`, `Template.New`, and
+`WithMetadata`, `WithArchiveOnExpire` and `WithEnv` apply to `New`, `Template.New`, and
 `Checkpoint.New`: the labels follow the [claim bounds](sandboxd-api.md#post-v1claim),
 and a branch never inherits its source's labels or expiry action.
 
@@ -265,6 +265,29 @@ nodes advertising every requested name. A promoted-template claim prefers a
 peer advertising both the template and every volume; when that intersection is
 empty, one volume holder may self-verify access to a shared template store
 before provisioning.
+
+## Claim env
+
+```go
+sb, err := client.New(ctx, "rt:24.04", sandbox.WithEnv(map[string]sandbox.EnvVar{
+    "MODE":   {Value: "prod"},
+    "GW_KEY": {Value: "Bearer …", Guest: new(false)},
+}))
+err = sb.PatchEnv(ctx, map[string]*sandbox.EnvVar{"STAGE": {Value: "2"}, "MODE": nil})
+env, err := sb.Env(ctx)     // host-only values come back empty
+err = sb.SetEnv(ctx, nil)   // replaces the whole env; nil clears it
+```
+
+`WithEnv` sets the claim's own env under the [claim rules](sandboxd-api.md#post-v1claim).
+An entry with a nil `Guest` is delivered into the guest; `Guest: new(false)`
+keeps it host-side, where only the node's egress reads it (see
+[secrets](egress.md#claim-env-and-secrets)). `Env`, `SetEnv` and `PatchEnv`
+call [the env verbs](sandboxd-api.md#getputpatchdelete-v1sandboxesidenv) on
+the claim's owner with the client's API token, not the sandbox token.
+`PatchEnv` sets each entry, removes each nil one and keeps the rest as stored,
+so a host-only value is never resent. A host-only change applies to the next
+egress request at any time; a guest change needs a running guest and answers
+a 409 `*APIError` on a hibernated or archived sandbox.
 
 ## Renewing
 
