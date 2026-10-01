@@ -191,8 +191,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	decision, intercept := p.tunnelDecision(host, port)
-	route := p.router.Route()
-	ev := Event{Method: r.Method, Host: host, Port: port, Decision: decision, Upstream: upstreamLabel(route)}
+	ev, route := p.routeEvent(Event{Method: r.Method, Host: host, Port: port, Decision: decision})
 	p.record(ev)
 	if intercept {
 		p.serveIntercept(w, r, host, port)
@@ -256,8 +255,7 @@ func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rule, decision := p.policy.Eval(host, r.Method, port)
-	route := p.router.Route()
-	ev := Event{Method: r.Method, Host: host, Port: port, Decision: decision, Upstream: upstreamLabel(route)}
+	ev, route := p.routeEvent(Event{Method: r.Method, Host: host, Port: port, Decision: decision})
 	p.relay(w, r, ev, rule, p.transport(route, false), nil)
 }
 
@@ -293,13 +291,11 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	stripHop(w.Header())
 	w.WriteHeader(resp.StatusCode)
 	received, _ := io.Copy(w, resp.Body)
-	if p.transfer != nil {
-		var sent int64
-		if body != nil {
-			sent = body.n.Load()
-		}
-		p.transfer(ev, sent, received)
+	var sent int64
+	if body != nil {
+		sent = body.n.Load()
 	}
+	p.reportTransfer(ev, sent, received)
 }
 
 // transport returns the pool for route; the direct route keeps the base transports.
@@ -323,6 +319,17 @@ func (p *Proxy) transport(route string, mitm bool) *http.Transport {
 		p.routed[key] = tr
 	}
 	return tr
+}
+
+func (p *Proxy) routeEvent(ev Event) (Event, string) {
+	if ev.Decision != DecisionAllow {
+		return ev, ""
+	}
+	route := p.router.Route()
+	if route != "" {
+		ev.Upstream = UpstreamHost(route)
+	}
+	return ev, route
 }
 
 func (p *Proxy) reportTransfer(ev Event, sent, received int64) {
@@ -378,23 +385,15 @@ func stripHop(h http.Header) {
 
 // splice copies both ways until either side ends, half-closing the peer so EOF propagates; it returns the bytes a sent to b and b sent to a.
 func splice(a, b net.Conn) (aToB, bToA int64) {
-	done := make(chan struct{})
+	done := make(chan int64, 1)
 	go func() {
-		defer close(done)
-		bToA, _ = io.Copy(a, b)
+		n, _ := io.Copy(a, b)
 		utils.CloseWrite(a)
+		done <- n
 	}()
 	aToB, _ = io.Copy(b, a)
 	utils.CloseWrite(b)
-	<-done
-	return aToB, bToA
-}
-
-func upstreamLabel(route string) string {
-	if route == "" {
-		return ""
-	}
-	return UpstreamHost(route)
+	return aToB, <-done
 }
 
 func denied(w http.ResponseWriter, host string) {

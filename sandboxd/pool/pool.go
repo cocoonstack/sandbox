@@ -353,12 +353,11 @@ type Manager struct {
 	egressCA      *egress.CA
 	guardedEgress bool
 	lockEgress    bool
-	// dial and sweep are test seams: the SSRF guard blocks loopback, the nft sweep is netlink-only.
-	dial  egress.DialFunc
-	sweep func(map[string]bool) error
-	// destVerdict and upstreamDial are the upstream path's test seams, read-only after startup like the upstream maps.
-	destVerdict    func(netip.Addr, uint16) (bool, error)
-	upstreamDial   egress.DialFunc
+	// dial, destVerdict and sweep are test seams: the SSRF guard blocks loopback, the nft sweep is netlink-only.
+	dial        egress.DialFunc
+	destVerdict func(netip.Addr, uint16) (bool, error)
+	sweep       func(map[string]bool) error
+
 	upstreamEnv    string
 	upstreamAllow  egress.UpstreamAllow
 	poolUpstream   map[types.PoolKey]string
@@ -419,7 +418,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		egressSecrets:   secrets,
 		dial:            newEgressDialer(internalAllow).DialContext,
 		destVerdict:     func(ip netip.Addr, port uint16) (bool, error) { return destVerdict(internalAllow, ip, port) },
-		upstreamDial:    (&net.Dialer{}).DialContext,
 		poolUpstream:    map[types.PoolKey]string{},
 		tenantUpstream:  map[string]string{},
 		usageBytes:      cfg.EgressUsageBytes,

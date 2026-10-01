@@ -64,8 +64,7 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 	if intercept || port == 0 {
 		decision = DecisionDeny
 	}
-	route := p.router.Route()
-	ev := Event{Method: methodSOCKS, Host: host, Port: port, Decision: decision, Upstream: upstreamLabel(route)}
+	ev, route := p.routeEvent(Event{Method: methodSOCKS, Host: host, Port: port, Decision: decision})
 	p.record(ev)
 	if decision == DecisionDeny {
 		_ = socksReply(conn, socksDenied)

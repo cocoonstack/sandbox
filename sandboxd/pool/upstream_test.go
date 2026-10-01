@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -255,7 +256,6 @@ type tunnel struct {
 	seen     []string
 }
 
-// tunnelProxy is an http CONNECT upstream that records each tunnel's target and relays it.
 func tunnelProxy(t *testing.T) *tunnel {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -280,7 +280,7 @@ func tunnelProxy(t *testing.T) *tunnel {
 func (p *tunnel) targets() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return append([]string(nil), p.seen...)
+	return slices.Clone(p.seen)
 }
 
 func (p *tunnel) serve(conn net.Conn) {

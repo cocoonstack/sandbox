@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -212,7 +213,7 @@ func (r *switchRouter) set(route string) {
 func (r *switchRouter) dialed() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]string(nil), r.dials...)
+	return slices.Clone(r.dials)
 }
 
 func plainDial(ctx context.Context, network, addr string) (net.Conn, error) {

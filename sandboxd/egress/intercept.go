@@ -90,8 +90,7 @@ type interceptHandler struct {
 func (h *interceptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p := h.proxy
 	rule, decision := p.policy.EvalInner(h.host, r.Method, h.port)
-	route := p.router.Route()
-	ev := Event{Method: r.Method, Host: h.host, Port: h.port, Decision: decision, Upstream: upstreamLabel(route)}
+	ev, route := p.routeEvent(Event{Method: r.Method, Host: h.host, Port: h.port, Decision: decision})
 	p.relay(w, r, ev, rule, p.transport(route, true), func(out *http.Request) {
 		out.URL.Scheme = "https"
 		out.URL.Host = h.authority

@@ -308,10 +308,10 @@ an external exit cannot reach), and otherwise the tunnel is opened to the
 vetted IP, so the upstream never resolves a name the node did not check. The
 upstream's own address is dialed with the node's plain dialer. An upstream
 that fails answers the guest 502 (SOCKS5: host unreachable) and never falls
-back to a direct dial. Audit and usage records name the upstream's
-`host:port`, never its credentials, and `GET env` blanks the value like every
+back to a direct dial. An allowed connection's audit and usage records name
+the upstream's `host:port`, never its credentials, and `GET env` blanks the value like every
 `guest: false` entry. Cost: a node without `egress_upstream` pays nothing; with
-it, each connection reads the claim's env under the manager lock.
+it, each allowed connection reads the claim's env under the manager lock.
 
 `egress_usage_bytes: true` adds one `egress_bytes` usage event per allowed
 tunnel or request when it ends, with the payload bytes it moved (`tx` guest to

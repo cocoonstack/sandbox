@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -28,8 +29,9 @@ func (r claimRouter) Route() string {
 		return ""
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if v, set := r.sb.Env.Hidden(m.upstreamEnv); set {
+	v, set := r.sb.Env.Hidden(m.upstreamEnv)
+	m.mu.Unlock()
+	if set {
 		if v == upstreamDirect {
 			return ""
 		}
@@ -55,33 +57,34 @@ func (r claimRouter) Dial(ctx context.Context, route, network, addr string) (net
 		return nil, err
 	}
 	if internal {
-		return m.dial(ctx, network, addr)
+		return m.dial(ctx, network, target.String())
 	}
-	return egress.DialUpstream(ctx, u, target.String(), m.upstreamDial)
+	return egress.DialUpstream(ctx, u, target.String(), new(net.Dialer).DialContext)
 }
 
 // upstreamTarget checks every address addr resolves to: a re-admitted internal one dials direct, a blocked one fails, else the first is the tunnel target.
 func (m *Manager) upstreamTarget(ctx context.Context, addr string) (netip.AddrPort, bool, error) {
-	host, port, err := net.SplitHostPort(addr)
+	host, portText, err := net.SplitHostPort(addr)
 	if err != nil {
 		return netip.AddrPort{}, false, err
 	}
-	ips, err := lookupNetIP(ctx, host)
+	port, err := strconv.ParseUint(portText, 10, 16)
+	if err != nil {
+		return netip.AddrPort{}, false, fmt.Errorf("egress: bad port in %q: %w", addr, err)
+	}
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 	if err != nil {
 		return netip.AddrPort{}, false, err
 	}
 	var target netip.AddrPort
 	for _, ip := range ips {
-		ap, err := netip.ParseAddrPort(net.JoinHostPort(ip.Unmap().String(), port))
-		if err != nil {
-			return netip.AddrPort{}, false, err
-		}
+		ap := netip.AddrPortFrom(ip.Unmap(), uint16(port))
 		internal, err := m.destVerdict(ap.Addr(), ap.Port())
 		if err != nil {
 			return netip.AddrPort{}, false, err
 		}
 		if internal {
-			return netip.AddrPort{}, true, nil
+			return ap, true, nil
 		}
 		if !target.IsValid() {
 			target = ap
@@ -116,11 +119,4 @@ func (m *Manager) checkUpstreamEnv(env types.Env) error {
 		return fmt.Errorf("%w: %s: upstream %s is not in egress_upstream.allow", ErrBadEnv, m.upstreamEnv, u.Host)
 	}
 	return nil
-}
-
-func lookupNetIP(ctx context.Context, host string) ([]netip.Addr, error) {
-	if ip, err := netip.ParseAddr(host); err == nil {
-		return []netip.Addr{ip}, nil
-	}
-	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 }
