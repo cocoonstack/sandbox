@@ -532,8 +532,11 @@ through `/v1/tenants` on any node.
   - Create it ahead with the same DDL when the node's role has no `CREATE` right.
   - Rows hold token hashes only, never a token.
 - **Connection:**
-  - Each node opens a small pool for queries and one long-lived connection
-    that runs `LISTEN sandboxd_tenants`.
+  - Each node opens a pool for queries and one long-lived connection that
+    runs `LISTEN sandboxd_tenants`.
+  - The pool defaults to `max(4, CPUs)` connections; set `pool_max_conns` in
+    the DSN (4 suffices) so a fleet stays within the database's
+    `max_connections`.
   - LISTEN needs a session-mode connection, so a connection pooler in front
     of the database must not run in transaction mode for that DSN.
   - A write runs in one transaction with a `pg_notify`.

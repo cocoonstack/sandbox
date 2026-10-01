@@ -313,7 +313,12 @@ one PostgreSQL table that every node reads, so one tenant per end user works:
   - a node whose invalidation listener reconnects drops its cache, so it never
     serves a change it missed while disconnected;
   - a change made while a node's listener was down reaches that node at the
-    listener's next retry, at most 30 s after the database returns.
+    listener's next retry. Keepalive finds a dead connection in about 25 s and
+    retries back off to 30 s, so the change lands within about a minute of the
+    database returning;
+  - renew, fork and wake ask the database whenever the cache lacks the
+    tenant, so they never outlive a removal. While the database is down, they
+    answer 503 for a tenant the node has not cached.
 
 ### Cluster-invariant config
 

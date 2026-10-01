@@ -459,7 +459,8 @@ since tenants need it. The tenant set changes at runtime, with no restart:
   `token` keeps that tenant's. It answers the `GET` body. Use it to reconcile
   and to import many tenants at once, since every change rewrites the whole
   set; a sign-up is a single-tenant `PUT`, so concurrent sign-ups never
-  overwrite each other.
+  overwrite each other. The 1 MiB body cap holds roughly 8,000 entries; import
+  a larger set with single-tenant `PUT`s.
 - `GET /v1/tenants?after=<name>&limit=<n>` → `{"tenants": [{"name": "…", "max_claims": 50, "egress_class": "desk", "claims": 3},
   {"name": "…", "claims": 1, "removed": true}], "digest": "…", "next": "…"}`.
   - **Paging:**
