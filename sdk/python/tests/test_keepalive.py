@@ -120,12 +120,23 @@ def test_close_drains_the_parked_connection(monkeypatch):
         agent.stop()
 
 
-class FakeAgent:
-    """A relay-side silkd stand-in; proto 1 half-closes after one RPC and drains like the relay does."""
+def test_an_upload_an_old_daemon_rejects_raises_its_error_frame():
+    agent = FakeAgent(proto=1, slam=True)
+    sb = sandbox_at(agent.addr)
+    try:
+        with pytest.raises(SilkdError):
+            sb.write_file("/missing/f", bytes(64 << 20))
+    finally:
+        agent.stop()
 
-    def __init__(self, proto: int = KEEP_ALIVE_PROTO, hang_up_after: int = 0) -> None:
+
+class FakeAgent:
+    """A relay-side silkd stand-in; proto 1 half-closes after one RPC and drains; slam closes as a failed relay does."""
+
+    def __init__(self, proto: int = KEEP_ALIVE_PROTO, hang_up_after: int = 0, slam: bool = False) -> None:
         self.proto = proto
         self.hang_up_after = hang_up_after
+        self.slam = slam
         self.upgrades = 0
         self.hangups = 0
         self.closed = 0
@@ -157,6 +168,8 @@ class FakeAgent:
                 for frame in self._answer(op):
                     conn.sendall(json.dumps(frame).encode() + b"\n")
                 replies += 1
+                if self.slam:
+                    break
                 if self.proto < KEEP_ALIVE_PROTO or replies == self.hang_up_after:
                     conn.shutdown(socket.SHUT_WR)
                     self.hangups += 1

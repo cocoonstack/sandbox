@@ -184,9 +184,7 @@ class Sandbox:
         """Writes data to path atomically (temp + rename on the guest)."""
         with self._lease() as conn:
             conn.send("fs_write", path=path, mode=mode)
-            _send_chunks(conn, data)
-            conn.send("data_end")
-            _expect(conn, "done")
+            _upload(conn, data, FS_CHUNK)
 
     def read_file(self, path: str) -> bytes:
         with self._lease() as conn:
@@ -218,9 +216,7 @@ class Sandbox:
         """Extracts a tar stream into dest; a truncated stream leaves dest untouched."""
         with self._lease() as conn:
             conn.send("fs_push", dest=dest)
-            _send_chunks(conn, tar_stream, chunk=BULK_CHUNK)
-            conn.send("data_end")
-            _expect(conn, "done")
+            _upload(conn, tar_stream, BULK_CHUNK)
 
     def pull(self, path: str) -> bytes:
         """Returns path (file or tree) as a tar archive."""
@@ -644,6 +640,17 @@ def _send_chunks(conn: Conn, data: bytes, op: str = "data", chunk: int = FS_CHUN
     view = memoryview(data)
     for off in range(0, len(view), chunk):
         conn.send(op, data=view[off : off + chunk])
+
+
+def _upload(conn: Conn, data: bytes, chunk: int) -> None:
+    try:
+        _send_chunks(conn, data, chunk=chunk)
+        conn.send("data_end")
+    except ProtocolError:
+        with contextlib.suppress(ProtocolError):
+            _expect(conn, "done")
+        raise
+    _expect(conn, "done")
 
 
 def _arm_watchdog(conn: Conn, deadline: float, expired: threading.Event) -> threading.Timer:
