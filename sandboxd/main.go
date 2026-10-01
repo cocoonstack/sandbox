@@ -60,6 +60,8 @@ func main() {
 	}
 	logger := log.WithFunc("main")
 	logger.Infof(ctx, "sandboxd %s", versionString())
+	hangup := make(chan os.Signal, 1)
+	signal.Notify(hangup, syscall.SIGHUP)
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -138,7 +140,7 @@ func main() {
 		}
 		return mgr.ReloadConfig(ctx, next)
 	}
-	go reloadOnHangup(ctx, reload)
+	go reloadOnHangup(ctx, hangup, reload)
 	srv := server.New(cfg.APIToken, cmp.Or(cfg.ClientAdvertise, cfg.AdvertiseAddr), mgr, eng, placer, prober, probeKey, preview)
 	srv.SetConfigReload(reload)
 	httpSrv := &http.Server{
@@ -225,11 +227,8 @@ func gossipNodeState(ctx context.Context, msh *mesh.Mesh, mgr *pool.Manager) {
 	}
 }
 
-func reloadOnHangup(ctx context.Context, reload server.ConfigReloader) {
+func reloadOnHangup(ctx context.Context, hangup <-chan os.Signal, reload server.ConfigReloader) {
 	logger := log.WithFunc("main.reloadOnHangup")
-	hangup := make(chan os.Signal, 1)
-	signal.Notify(hangup, syscall.SIGHUP)
-	defer signal.Stop(hangup)
 	for {
 		select {
 		case <-ctx.Done():

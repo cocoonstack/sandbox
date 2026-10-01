@@ -215,6 +215,55 @@ func TestReloadIsAudited(t *testing.T) {
 	}
 }
 
+func TestAnInterruptedReloadStillDestroysTheRetiredWarmVMs(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
+	waitFor(t, func() bool { return refilledTo(m, testKey, 2) })
+	m.mu.Lock()
+	retired := []string{m.pools[testKey].warm[0].VMName, m.pools[testKey].warm[1].VMName}
+	m.mu.Unlock()
+	m.refillSem = make(chan struct{}, 1)
+	m.refillSem <- struct{}{}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	next := *m.cfg
+	next.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 2, Storage: "30G"}}
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.ReloadConfig(ctx, &next)
+		done <- err
+	}()
+	waitFor(t, func() bool { return warmLen(m, testKey) == 0 })
+	<-m.refillSem
+	if err := <-done; err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if removed := eng.removedNames(); !slices.Contains(removed, retired[0]) || !slices.Contains(removed, retired[1]) {
+		t.Errorf("removed %v, want both retired warm VMs %v destroyed after the reload's caller went away", removed, retired)
+	}
+}
+
+func TestAReloadThatUnguardsTheNodeClosesThePreboundDoors(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}})
+	warm := refillWarmVM(t, m)
+	next := *m.cfg
+	next.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 1}}
+	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	m.mu.Lock()
+	left := len(m.egressPrebound)
+	m.mu.Unlock()
+	if left != 0 {
+		t.Errorf("%d prebound doors left on a node with no egress policy", left)
+	}
+	if _, err := net.Dial("unix", engine.EgressSocketPath(warm.VsockSocket)); err == nil {
+		t.Error("a door refill bound still accepts after the reload removed every policy")
+	}
+}
+
 func refilledTo(m *Manager, key types.PoolKey, n int) bool {
 	m.refillOnce(context.Background())
 	return warmLen(m, key) == n

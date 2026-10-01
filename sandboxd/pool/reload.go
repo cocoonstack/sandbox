@@ -42,8 +42,13 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 		return ReloadResult{}, err
 	}
 	var trim []string
+	var doors []*egressListener
 	m.mu.Lock()
 	m.view.Store(view)
+	if !view.guardedEgress {
+		doors = slices.Collect(maps.Values(m.egressPrebound))
+		clear(m.egressPrebound)
+	}
 	for _, p := range m.pools {
 		if p.goldenDir != "" && m.goldenStamp(old, p.key, p.imageID) != m.goldenStamp(view, p.key, p.imageID) {
 			p.goldenDir, p.imageID = "", ""
@@ -51,7 +56,10 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 		}
 	}
 	m.mu.Unlock()
-	m.destroyAll(ctx, trim).Wait()
+	for _, el := range doors {
+		el.close()
+	}
+	m.destroyAll(context.WithoutCancel(ctx), trim).Wait()
 	m.cfg = next
 	m.recordAudit(ctx, "", auditFrame{Op: "config_reload", Changed: changed})
 	log.WithFunc("pool.ReloadConfig").Infof(ctx, "config reloaded: %s; %d warm VMs of retired goldens destroyed", strings.Join(changed, ", "), len(trim))
@@ -69,7 +77,7 @@ func (m *Manager) refuseInterceptOn(old, next *configView) error {
 		case m.egressCA == nil:
 			return fmt.Errorf("%w: pool %s turns intercept on, which needs egress_ca loaded at boot: restart", ErrReloadRefused, key.Template)
 		case m.servedKey(key):
-			return fmt.Errorf("%w: pool %s turns intercept on, but its guests do not trust the CA: restart or use a new pool key", ErrReloadRefused, key.Template)
+			return fmt.Errorf("%w: pool %s turns intercept on, but its guests do not trust the CA: use a new pool key", ErrReloadRefused, key.Template)
 		}
 	}
 	return nil
