@@ -531,9 +531,10 @@ Effects on what already runs:
 
 - **Egress changes** reach live claims on their next request or connection;
   open tunnels keep their path. A claim whose policy a reload removes is
-  denied everything.
-- **SOCKS5 door** (`socks5`): the change applies to claims armed after the
-  reload.
+  denied everything. A claim armed while it had no policy has no egress proxy,
+  so a policy a reload adds reaches it only after a release or a wake.
+- **Armed once per claim**: the SOCKS5 door (`socks5`) and
+  `egress_usage_bytes` apply to claims armed after the reload.
 - **Golden rebuilds**: a change to a key's `warmup` or `storage`, or turning
   its interception on or off, retires that key's golden and destroys its warm
   VMs, so the next clone carries the new settings. Live claims and their VMs
@@ -541,8 +542,10 @@ Effects on what already runs:
   and rebuilt.
 - **Interception**: turning `intercept` on is refused for a key this node has
   already served (its guests do not trust the CA) and on a node that loaded
-  no `egress_ca` at boot. A new pool key can turn it on. Changing which hosts
-  an already-intercepting pool intercepts reloads normally.
+  no `egress_ca` at boot. Templates and checkpoints of the key captured
+  elsewhere do not trust the CA either, so turn interception on under a new
+  pool key. Changing which hosts an already-intercepting pool intercepts
+  reloads normally.
 - **Environment values**: `value_env` and `egress_upstream_env` name variables
   in sandboxd's own environment, which only a restart changes. A reload can
   point at a different variable, but only one that was already set when
