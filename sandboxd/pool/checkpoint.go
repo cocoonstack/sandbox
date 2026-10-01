@@ -115,7 +115,7 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, s
 	}
 	l := m.recLock(ckptID)
 	l.Lock()
-	defer func() { l.Unlock(); m.recDoneEvict(ckptID) }()
+	defer func() { l.Unlock(); m.recDone(ckptID) }()
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	if err != nil {
 		m.vetoIfHealPending(ckptID)
@@ -362,7 +362,7 @@ func (m *Manager) deleteCkLocked(ctx context.Context, ckID string) error {
 		m.recDone(ckID)
 		return err
 	}
-	m.recDoneEvict(ckID)
+	m.recDone(ckID)
 	return nil
 }
 

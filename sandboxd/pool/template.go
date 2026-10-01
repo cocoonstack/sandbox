@@ -100,7 +100,7 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant,
 	id := store.TemplateID(key.Hash())
 	l := m.recLock(id)
 	l.Lock()
-	defer func() { l.Unlock(); m.recDoneEvict(id) }()
+	defer func() { l.Unlock(); m.recDone(id) }()
 	if err := m.ownedTemplate(ctx, id, tenant); err != nil {
 		return err
 	}
@@ -147,7 +147,7 @@ func (m *Manager) SetTemplateLabels(ctx context.Context, key types.PoolKey, labe
 	id := store.TemplateID(key.Hash())
 	l := m.recLock(id)
 	l.Lock()
-	defer func() { l.Unlock(); m.recDoneEvict(id) }()
+	defer func() { l.Unlock(); m.recDone(id) }()
 	err := m.ownedTemplate(ctx, id, tenant)
 	if err != nil {
 		return err
@@ -356,7 +356,7 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant s
 	dir, meta, digest, err := m.tpls.Fetch(ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
 		l.RUnlock()
-		m.recDoneEvict(id)
+		m.recDone(id)
 		return goldenResolution{}, nil
 	}
 	if err != nil {
