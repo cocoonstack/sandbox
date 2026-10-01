@@ -99,7 +99,9 @@ where
     let status = child.wait().await?;
     let msg = err_task.await.unwrap_or_default();
 
-    if let Err(fail) = feed {
+    if let Err(fail) = feed
+        && (status.success() || !matches!(fail, proto::FeedError::Io(_, "write")))
+    {
         return proto::write_feed_error(w, fail).await;
     }
     if !status.success() {

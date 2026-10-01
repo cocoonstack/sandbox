@@ -135,6 +135,27 @@ async fn push_bad_archive_reports_tar_failure() {
 }
 
 #[tokio::test]
+async fn push_large_bad_archive_reports_tar_not_the_pipe() {
+    let dest = tempfile::tempdir().unwrap();
+    let mut gzip = vec![0u8; 256 * 1024];
+    gzip[..3].copy_from_slice(&[0x1f, 0x8b, 0x08]);
+    let chunk = json!({"op":"data","data":b64(&vec![0u8; 256 * 1024])}).to_string();
+    let mut lines = vec![
+        json!({"op":"fs_push","dest":dest.path().join("p").to_str().unwrap()}).to_string(),
+        json!({"op":"data","data":b64(&gzip)}).to_string(),
+    ];
+    lines.extend(std::iter::repeat_n(chunk, 32));
+    lines.push(json!({"op":"data_end"}).to_string());
+    let frames = exchange(&lines).await;
+    let last = frames.last().unwrap();
+    assert_eq!(type_of(last), "error");
+    assert!(
+        last["message"].as_str().unwrap().starts_with("tar extract"),
+        "{last:?}"
+    );
+}
+
+#[tokio::test]
 async fn pull_missing_path_errors() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("xyz");
