@@ -466,7 +466,7 @@ The URL's life is clamped to the claim's remaining lease; an archived claim
 kept forever (`archive_delete_after_seconds: 0`) has no lease, so there the
 requested `ttl_seconds` stands unclamped and `ttl_seconds: 0` mints a one-hour
 URL; releasing the sandbox ends it early either way.
-501 when the node
+400 a port of 0, 501 when the node
 has no `preview_listen`. The signed token embeds the sandbox id, port, and
 owner `advertise_addr`, so any node's preview listener can serve it (forwarding
 to the owner's main listener) and a released sandbox's URL simply stops

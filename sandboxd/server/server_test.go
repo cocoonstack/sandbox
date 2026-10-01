@@ -2068,6 +2068,26 @@ func TestPreviewHandlerZeroDeadlineMintsLiveToken(t *testing.T) {
 	}
 }
 
+func TestPreviewHandlerRejectsPortZero(t *testing.T) {
+	mgr := &fakeManager{claimDeadline: func(string, string) (time.Time, error) {
+		return time.Now().Add(time.Hour), nil
+	}}
+	ps := NewPreviewServer("secret", "node:7777", "node:7777", &fakePreviewMgr{})
+	srv := New("", nil, "node:7777", mgr, &fakeDialer{}, nil, nil, nil, ps)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+
+	resp, err := http.Post(ts.URL+"/v1/sandboxes/sb_1/preview", "application/json",
+		strings.NewReader(`{"token":"tok","port":0}`))
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status %d, want 400 for port 0", resp.StatusCode)
+	}
+}
+
 func TestCheckpointClaimRedirectsToOwner(t *testing.T) {
 	mgr := &fakeManager{}
 	prober := &fakeProber{owners: []string{"owner-a:7777"}}

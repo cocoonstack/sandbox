@@ -185,6 +185,10 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if req.Port == 0 {
+		writeErr(w, http.StatusBadRequest, "port must be 1-65535")
+		return
+	}
 	id := r.PathValue("id")
 	deadline, err := s.mgr.ClaimDeadline(id, req.Token)
 	if err != nil {
