@@ -2,6 +2,8 @@
 package utils
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	jsonv1 "encoding/json"
 	"encoding/json/v2"
 	"fmt"
@@ -91,4 +93,11 @@ func DecodeStrictJSON(raw []byte, v any) error {
 // DigestJSON encodes v with v1 semantics so a digest keeps its bytes across builds.
 func DigestJSON(v any) ([]byte, error) {
 	return json.Marshal(v, jsonv1.DefaultOptionsV1())
+}
+
+// DigestHex is the hex SHA-256 of v's DigestJSON bytes.
+func DigestHex(v any) string {
+	raw, _ := DigestJSON(v)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }

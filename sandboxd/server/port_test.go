@@ -157,7 +157,7 @@ func TestPortRelayEndsOnGuestClose(t *testing.T) {
 }
 
 func TestSpliceTearsDownWhenTheClientDies(t *testing.T) {
-	srv := New("", nil, "node:7777", &fakeManager{}, &fakeDialer{}, nil, nil, nil, nil)
+	srv := New("", "node:7777", &fakeManager{}, &fakeDialer{}, nil, nil, nil, nil)
 	t.Cleanup(srv.CloseRelays)
 	client, clientPeer := net.Pipe()
 	t.Cleanup(func() { _ = client.Close(); _ = clientPeer.Close() })
@@ -192,7 +192,7 @@ func TestSpliceTearsDownWhenTheClientDies(t *testing.T) {
 
 func TestSpliceTearsDownWhenTheGuestFails(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		srv := New("", nil, "node:7777", &fakeManager{}, &fakeDialer{}, nil, nil, nil, nil)
+		srv := New("", "node:7777", &fakeManager{}, &fakeDialer{}, nil, nil, nil, nil)
 		t.Cleanup(srv.CloseRelays)
 		client, clientPeer := net.Pipe()
 		t.Cleanup(func() { _ = client.Close(); _ = clientPeer.Close() })
@@ -235,7 +235,7 @@ func newPortServer(t *testing.T, guest func(net.Conn)) (*httptest.Server, *Serve
 		go guest(guestEnd)
 		return relayEnd, nil
 	}}
-	srv := New("", nil, "node:7777", mgr, &fakeDialer{}, nil, nil, nil, nil)
+	srv := New("", "node:7777", mgr, &fakeDialer{}, nil, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		srv.CloseRelays()

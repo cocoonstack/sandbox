@@ -144,6 +144,13 @@ type TenantSpec struct {
 	EgressUpstreamEnv string `json:"egress_upstream_env,omitempty"`
 }
 
+// TenantRecord stores a tenant's identity and quota without its plaintext token.
+type TenantRecord struct {
+	Name        string `json:"name"`
+	TokenSHA256 string `json:"token_sha256"`
+	MaxClaims   int    `json:"max_claims,omitzero"`
+}
+
 // VolumeSpec declares one operator-managed dataset disk, held by exactly one node.
 type VolumeSpec struct {
 	Name     string   `json:"name"`
@@ -251,30 +258,22 @@ func (c *Config) HasEgress() bool {
 	return len(c.Bridges) > 0 || len(c.Networks) > 0
 }
 
-// ClusterDigest fingerprints the must-match config; without cluster_key it omits tokens.
-func (c *Config) ClusterDigest(caFingerprint string) string {
-	names := make([]string, len(c.Tenants))
-	for i, t := range c.Tenants {
-		names[i] = t.Name
-	}
-	slices.Sort(names)
+// ClusterDigest fingerprints the must-match config and live tenant records; without cluster_key it omits token hashes.
+func (c *Config) ClusterDigest(caFingerprint string, tenants []TenantRecord) string {
+	tenants = slices.Clone(tenants)
+	slices.SortFunc(tenants, func(a, b TenantRecord) int { return strings.Compare(a.Name, b.Name) })
 	if c.Mesh != nil {
 		if key, _ := c.Mesh.DecodedKey(); key != nil {
-			type auth struct{ Name, Token string }
-			tenants := make([]auth, len(c.Tenants))
-			for i, t := range c.Tenants {
-				tenants[i] = auth{t.Name, t.Token}
-			}
-			slices.SortFunc(tenants, func(a, b auth) int { return strings.Compare(a.Name, b.Name) })
 			raw, _ := utils.DigestJSON([]any{c.APIToken, c.PreviewSecret, caFingerprint, tenants, c.CheckpointTTLHours})
 			mac := hmac.New(sha256.New, key)
 			mac.Write(raw)
 			return hex.EncodeToString(mac.Sum(nil))
 		}
 	}
-	raw, _ := utils.DigestJSON([]any{caFingerprint, names, c.CheckpointTTLHours})
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
+	for i := range tenants {
+		tenants[i].TokenSHA256 = ""
+	}
+	return utils.DigestHex([]any{caFingerprint, tenants, c.CheckpointTTLHours})
 }
 
 func (c *Config) guardsEgressLane() bool {
@@ -387,10 +386,6 @@ func (c *Config) validate() error {
 func (c *Config) validateVolumes() error {
 	names := make(map[string]struct{}, len(c.Volumes))
 	paths := make(map[string]string, len(c.Volumes))
-	tenants := make(map[string]struct{}, len(c.Tenants))
-	for _, tenant := range c.Tenants {
-		tenants[tenant.Name] = struct{}{}
-	}
 	for _, volume := range c.Volumes {
 		if !types.ValidVolumeName(volume.Name) {
 			return fmt.Errorf("volume name %q must match %s and not start with cocoon-", volume.Name, types.VolumeNameRe)
@@ -408,11 +403,6 @@ func (c *Config) validateVolumes() error {
 		paths[filepath.Clean(volume.Path)] = volume.Name
 		if !types.ValidDirectIO(volume.DirectIO) {
 			return fmt.Errorf("volume %q directio must be on, off, or auto, got %q", volume.Name, volume.DirectIO)
-		}
-		for _, tenant := range volume.Tenants {
-			if _, ok := tenants[tenant]; !ok {
-				return fmt.Errorf("volume %q references unknown tenant %q", volume.Name, tenant)
-			}
 		}
 	}
 	return nil
@@ -646,6 +636,12 @@ func StorageBytes(s string) (int64, error) {
 		s += "B"
 	}
 	return units.RAMInBytes(s)
+}
+
+// TokenSHA256 is the hex SHA-256 a tenant token is kept as outside config.json.
+func TokenSHA256(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 func validatePolicy(p *egress.Policy, secrets map[string]struct{}) error {

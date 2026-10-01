@@ -140,6 +140,20 @@ func TestConfigDigestMismatch(t *testing.T) {
 	}
 }
 
+func TestUpdateDigestRepublishesUnderAFreshEpoch(t *testing.T) {
+	m := newBoundMesh(t, t.TempDir())
+	m.SetSelfDigest("d1")
+	base := m.self.Epoch
+	m.UpdateDigest(t.Context(), "d1")
+	if m.self.Epoch != base {
+		t.Errorf("an unchanged digest republished at epoch=%d", m.self.Epoch)
+	}
+	m.UpdateDigest(t.Context(), "d2")
+	if m.self.Epoch != base+1 || m.view["self"].Digest != "d2" {
+		t.Errorf("epoch=%d view digest %q, want epoch %d and d2", m.self.Epoch, m.view["self"].Digest, base+1)
+	}
+}
+
 func newBoundMesh(t *testing.T, dataDir string) *Mesh {
 	t.Helper()
 	cfg := memberlist.DefaultLocalConfig()

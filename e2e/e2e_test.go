@@ -307,6 +307,49 @@ func TestTwoTenantFlow(t *testing.T) {
 	}
 }
 
+func TestRuntimeTenantEndToEnd(t *testing.T) {
+	st := startTenantStack(t, "node-token", nil, nil)
+	if err := st.client.PutTenant(t.Context(), sandbox.TenantSpec{Name: "u:42", Token: "u42-tok", MaxClaims: 1}); err != nil {
+		t.Fatalf("PutTenant: %v", err)
+	}
+	user, err := sandbox.Connect(st.addr, sandbox.WithAPIToken("u42-tok"))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	sb, err := user.New(t.Context(), "rt:24.04")
+	if err != nil {
+		t.Fatalf("claim with a tenant added at runtime: %v", err)
+	}
+	defer sb.Close()
+	if _, err = user.New(t.Context(), "rt:24.04"); err == nil || !strings.Contains(err.Error(), "429") {
+		t.Errorf("second claim past the runtime cap: %v, want 429", err)
+	}
+	list, err := st.client.Tenants(t.Context())
+	if err != nil || len(list.Tenants) != 1 || list.Tenants[0] != (sandbox.TenantInfo{Name: "u:42", MaxClaims: 1, Claims: 1}) {
+		t.Fatalf("Tenants = %+v, %v", list, err)
+	}
+
+	if err = st.client.DeleteTenant(t.Context(), "u:42"); err != nil {
+		t.Fatalf("DeleteTenant: %v", err)
+	}
+	if _, err = user.New(t.Context(), "rt:24.04"); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Errorf("claim with a removed tenant's token: %v, want 401", err)
+	}
+	if out, execErr := sb.Exec(t.Context(), "echo", "still-here"); execErr != nil || out != "still-here\n" {
+		t.Errorf("exec on a removed tenant's claim: %q, %v", out, execErr)
+	}
+	if _, err = sb.Renew(t.Context(), time.Hour); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Errorf("renew of a removed tenant's claim: %v, want 403", err)
+	}
+	status, body := rawJSON(t, st, http.MethodGet, "/v1/sandboxes?tenant=u:42", "")
+	if status != http.StatusOK || !strings.Contains(string(body), sb.ID) || !strings.Contains(string(body), `"tenant":"u:42"`) {
+		t.Errorf("root listing of the removed tenant: %d %s", status, body)
+	}
+	if status, body := rawJSON(t, st, http.MethodGet, "/v1/tenants", ""); status != http.StatusOK || !strings.Contains(string(body), `{"name":"u:42","claims":1,"removed":true}`) || strings.Contains(string(body), "tok") {
+		t.Errorf("tenant list after removal: %d %s", status, body)
+	}
+}
+
 func TestWrongAPITokenRejected(t *testing.T) {
 	stack := startStack(t, "node-token")
 
@@ -836,14 +879,14 @@ func startConfigStack(t *testing.T, apiToken string, cfg *config.Config) *stack 
 	if err != nil {
 		t.Fatalf("secrets: %v", err)
 	}
-	cfg.DataDir = dir
+	cfg.DataDir, cfg.APIToken = dir, apiToken
 	mgr, err := pool.NewManager(t.Context(), cfg, eng, secrets)
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
 	go mgr.Run(t.Context())
 
-	ts := httptest.NewServer(server.New(apiToken, cfg.Tenants, "", mgr, eng.real, nil, nil, nil, nil).Handler())
+	ts := httptest.NewServer(server.New(apiToken, "", mgr, eng.real, nil, nil, nil, nil).Handler())
 	t.Cleanup(ts.Close)
 	addr := strings.TrimPrefix(ts.URL, "http://")
 	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(apiToken))

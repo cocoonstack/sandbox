@@ -116,7 +116,7 @@ func (m *Manager) watchedClaims() []liveSuspect {
 	defer m.mu.Unlock()
 	var out []liveSuspect
 	for _, sb := range m.claimed {
-		if _, archiving := m.archiving[sb.ID]; !archiving && runningShaped(sb) && !leaseLapsed(sb, now) {
+		if _, archiving := m.archiving[sb.ID]; !archiving && runningShaped(sb) && !m.leaseLapsed(sb, now) {
 			out = append(out, liveSuspect{sb, sb.VMName})
 		}
 	}
@@ -129,7 +129,7 @@ func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 	defer sb.Transition.Unlock()
 	now := time.Now()
 	m.mu.Lock()
-	live := m.claimed[sb.ID] == sb && runningShaped(sb) && !leaseLapsed(sb, now)
+	live := m.claimed[sb.ID] == sb && runningShaped(sb) && !m.leaseLapsed(sb, now)
 	m.mu.Unlock()
 	if !live {
 		return
@@ -254,14 +254,14 @@ func (m *Manager) failLocked(ctx context.Context, sb *types.Sandbox, reason stri
 	log.WithFunc("pool.failLocked").Warnf(ctx, "sandbox %s failed: %s", sb.ID, reason)
 }
 
+// leaseLapsed reports whether reap destroys sb instead of archiving it; callers hold m.mu.
+func (m *Manager) leaseLapsed(sb *types.Sandbox, now time.Time) bool {
+	return (sb.OnExpire != types.ExpireArchive || m.tenantGone(sb.Tenant)) && !sb.Deadline.IsZero() && now.After(sb.Deadline)
+}
+
 // runningShaped reports whether sb's VM should be up; callers hold m.mu.
 func runningShaped(sb *types.Sandbox) bool {
 	return sb.HibernateSnap == "" && sb.PendingSnap == "" && sb.ArchiveCk == "" && sb.Failed == ""
-}
-
-// leaseLapsed reports whether reap destroys sb instead of archiving it; callers hold m.mu.
-func leaseLapsed(sb *types.Sandbox, now time.Time) bool {
-	return sb.OnExpire != types.ExpireArchive && !sb.Deadline.IsZero() && now.After(sb.Deadline)
 }
 
 // coldBootBlocker names why sb's VM cannot be cold-booted, "" when it can.

@@ -227,7 +227,7 @@ func TestExecTimeoutStartsAfterWake(t *testing.T) {
 		}()
 		return relayEnd, nil
 	}}
-	srv := New("", nil, "node:7777", mgr, dialer, nil, nil, nil, nil)
+	srv := New("", "node:7777", mgr, dialer, nil, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 

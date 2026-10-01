@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"encoding/json/v2"
+	"maps"
 	"sync/atomic"
 	"time"
 
@@ -60,6 +61,9 @@ type auditFrame struct {
 	Decision string   `json:"decision,omitempty"`
 	Secret   string   `json:"secret,omitempty"`
 	Upstream string   `json:"upstream,omitempty"`
+	Added    []string `json:"added,omitempty"`
+	Changed  []string `json:"changed,omitempty"`
+	Removed  []string `json:"removed,omitempty"`
 }
 
 func (m *Manager) Counters() Counters {
@@ -83,15 +87,11 @@ func (m *Manager) Counters() Counters {
 	}
 }
 
-// TenantClaims counts live claims per configured tenant, so label cardinality stays bounded.
+// TenantClaims counts live claims per tenant that holds any, so label cardinality stays bounded by the node's claims.
 func (m *Manager) TenantClaims() map[string]int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	counts := make(map[string]int, len(m.tenantMax))
-	for name := range m.tenantMax {
-		counts[name] = m.tenantLive[name]
-	}
-	return counts
+	return maps.Clone(m.tenantLive)
 }
 
 // Audit records one relayed request frame against a sandbox: the op and addressing fields only.

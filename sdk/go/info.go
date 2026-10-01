@@ -51,11 +51,11 @@ type TemplateStatus struct {
 	CreatedAt     time.Time         `json:"created_at"`
 }
 
-// SandboxSummary is one live claim as the scoped index reports it; never a
-// token or a host path.
+// SandboxSummary is one live claim as the scoped index reports it, never a token or a host path.
 type SandboxSummary struct {
 	ID             string            `json:"id"`
 	Key            PoolKey           `json:"key"`
+	Tenant         string            `json:"tenant,omitempty"`
 	Deadline       time.Time         `json:"deadline"`
 	ClaimedAt      time.Time         `json:"claimed_at,omitzero"`
 	Hibernated     bool              `json:"hibernated"`

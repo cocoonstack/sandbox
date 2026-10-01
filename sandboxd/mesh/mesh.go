@@ -101,30 +101,24 @@ func (m *Mesh) Join(seeds []string) error {
 
 // UpdateSelf republishes this node's counts, templates, and volumes; both slices must be sorted.
 func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates, volumes []string) {
-	m.updateMu.Lock()
-	defer m.updateMu.Unlock()
-	m.mu.Lock()
-	if maps.Equal(m.self.Pools, pools) && slices.Equal(m.self.Templates, templates) && slices.Equal(m.self.Volumes, volumes) {
-		m.mu.Unlock()
-		return
-	}
-	epoch := m.self.Epoch + 1
-	m.mu.Unlock()
-	if epoch > m.leased {
-		leased := epoch + epochLease
-		if err := storeEpoch(m.epochPath, leased); err != nil {
-			log.WithFunc("mesh.UpdateSelf").Warnf(ctx, "persist epoch: %v", err)
-			return
+	m.publish(ctx, func(self *NodeState) bool {
+		if maps.Equal(self.Pools, pools) && slices.Equal(self.Templates, templates) && slices.Equal(self.Volumes, volumes) {
+			return false
 		}
-		m.leased = leased
-	}
-	m.mu.Lock()
-	m.self.Epoch = epoch
-	m.self.Pools = pools
-	m.self.Templates = templates
-	m.self.Volumes = volumes
-	m.view[m.self.NodeID] = m.self
-	m.mu.Unlock()
+		self.Pools, self.Templates, self.Volumes = pools, templates, volumes
+		return true
+	})
+}
+
+// UpdateDigest republishes this node's config digest after a runtime change to the cluster-invariant config.
+func (m *Mesh) UpdateDigest(ctx context.Context, digest string) {
+	m.publish(ctx, func(self *NodeState) bool {
+		if self.Digest == digest {
+			return false
+		}
+		self.Digest = digest
+		return true
+	})
 }
 
 // SetSelfDigest records this node's config digest; call it once before Join.
@@ -284,6 +278,33 @@ func (m *Mesh) owners(match nodeMatch) []string {
 	return owners[:min(len(owners), 2)]
 }
 
+// publish applies change under a fresh epoch; the epoch lease is persisted first so a restart never reuses one.
+func (m *Mesh) publish(ctx context.Context, change func(*NodeState) bool) {
+	m.updateMu.Lock()
+	defer m.updateMu.Unlock()
+	m.mu.Lock()
+	probe := m.self
+	if !change(&probe) {
+		m.mu.Unlock()
+		return
+	}
+	epoch := m.self.Epoch + 1
+	m.mu.Unlock()
+	if epoch > m.leased {
+		leased := epoch + epochLease
+		if err := storeEpoch(m.epochPath, leased); err != nil {
+			log.WithFunc("mesh.publish").Warnf(ctx, "persist epoch: %v", err)
+			return
+		}
+		m.leased = leased
+	}
+	m.mu.Lock()
+	change(&m.self)
+	m.self.Epoch = epoch
+	m.view[m.self.NodeID] = m.self
+	m.mu.Unlock()
+}
+
 func (m *Mesh) admit(nodeID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -313,7 +334,7 @@ func (m *Mesh) merge(states []NodeState) {
 		if ok && st.Epoch <= cur.Epoch {
 			continue
 		}
-		if m.self.Digest != "" && st.Digest != "" && st.Digest != m.self.Digest && (!ok || cur.Digest != st.Digest) {
+		if m.self.Digest != "" && st.Digest != "" && st.Digest != m.self.Digest && (!ok || cur.Digest == m.self.Digest) {
 			log.WithFunc("mesh.merge").Warnf(m.ctx,
 				"peer %s config digest %s differs from this node's %s: cluster-invariant config diverges (redirects may 401, interception may fail)",
 				st.NodeID, short(st.Digest), short(m.self.Digest))

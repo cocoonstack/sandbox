@@ -45,7 +45,7 @@ func (m *Manager) archiveOnce(ctx context.Context) {
 	var victims []*types.Sandbox
 	m.mu.Lock()
 	for _, sb := range m.claimed {
-		if sb.HibernateSnap == "" || sb.ArchiveCk != "" {
+		if sb.HibernateSnap == "" || sb.ArchiveCk != "" || m.tenantGone(sb.Tenant) {
 			continue
 		}
 		if _, busy := m.archiving[sb.ID]; busy {
@@ -146,6 +146,9 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	// egress never archives; a corrupt archived egress claim must fail closed.
 	if sb.Key.Net == types.NetEgress {
 		return "", fmt.Errorf("wake %s: egress lane cannot resume from archive", sb.ID)
+	}
+	if m.tenantGone(sb.Tenant) {
+		return "", ErrTenantRemoved
 	}
 	ctx = context.WithoutCancel(ctx)
 	ck := sb.ArchiveCk

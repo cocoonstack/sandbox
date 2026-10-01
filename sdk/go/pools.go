@@ -3,10 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"net/http"
-	"slices"
-	"sync"
 )
 
 // PoolSpec is a desired warm pool for SetPools; egress, warmup, capture_trim and storage are config-owned, so it has no field for them.
@@ -22,11 +19,7 @@ type PoolSpec struct {
 }
 
 // PoolResult is one node's outcome from SetPoolsCluster.
-type PoolResult struct {
-	Addr string
-	Info *NodeInfo
-	Err  error
-}
+type PoolResult = NodeResult
 
 type poolUpdate struct {
 	Pools []PoolSpec `json:"pools"`
@@ -43,21 +36,7 @@ func (c *Client) SetPools(ctx context.Context, pools []PoolSpec) (*NodeInfo, err
 // replace). A non-nil error means peer discovery failed and only the entry node
 // was reached — an incomplete apply to retry, not a single-node cluster (nil).
 func (c *Client) SetPoolsCluster(ctx context.Context, pools []PoolSpec) ([]PoolResult, error) {
-	peers, peersErr := c.peersOrErr(ctx)
-	addrs := slices.Compact(slices.Sorted(slices.Values(append([]string{c.addr}, peers...))))
-	results := make([]PoolResult, len(addrs))
-	var wg sync.WaitGroup
-	for i, addr := range addrs {
-		wg.Go(func() {
-			info, err := c.setPoolsAt(ctx, addr, pools)
-			results[i] = PoolResult{Addr: addr, Info: info, Err: err}
-		})
-	}
-	wg.Wait()
-	if peersErr != nil {
-		return results, fmt.Errorf("discover peers: %w", peersErr)
-	}
-	return results, nil
+	return c.eachNode(ctx, func(addr string) (*NodeInfo, error) { return c.setPoolsAt(ctx, addr, pools) })
 }
 
 func (c *Client) setPoolsAt(ctx context.Context, addr string, pools []PoolSpec) (*NodeInfo, error) {

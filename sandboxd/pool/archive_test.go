@@ -352,6 +352,7 @@ func TestArchiveRetentionPurge(t *testing.T) {
 func TestArchiveWakeRegrantsTheClaimsLease(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
+	setTenantCaps(t, m, map[string]int{"acme": 0})
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: 2 * time.Hour, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)

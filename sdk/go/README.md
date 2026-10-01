@@ -19,6 +19,7 @@ out, _ := sb.Exec(ctx, "echo", "hello")
 - `lsp.go` — `StartLsp` + the JSON-RPC byte stream to a flavor's server
 - `proc.go` — background process management (Spawn/Ps/Kill/Logs/Attach)
 - `checkpoint.go` / `template.go` — branch/rewind and promote handles
+- `pools.go` / `tenants.go` — node operations: warm targets and the tenant set, per node or cluster-wide
 - `silkd/` — the conn/stream layer over the relay; the frame types live in
   `protocol/wire`, whose tests round-trip `protocol/wire/fixtures/` (drift
   against the Rust guest fails CI); `silkdtest/` is an in-process fake guest
