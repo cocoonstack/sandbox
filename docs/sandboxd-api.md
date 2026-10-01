@@ -490,6 +490,28 @@ tenants added, changed and removed. On a cluster every node needs the change
 (see [cluster](cluster.md#tenants)). 400 a bad entry, a duplicate name or token,
 a token equal to `api_token`, or a config-owned field.
 
+## POST /v1/config/reload
+
+Auth: root only (tenant tokens get 403). Re-reads the node's config file and
+applies its reloadable settings at once, or nothing. SIGHUP runs the same
+reload and logs the result. →
+
+```json
+{"changed": ["egress_internal_allow", "pools[desktop:v13 none small].warmup"],
+ "ignored": ["pools[desktop:v13 none small] targets (PUT /v1/pools owns them)"]}
+```
+
+`changed` lists the settings that now apply. `ignored` lists differences the
+file holds for parts another API owns: pool targets and tenant identities.
+Which fields reload, and what happens to live claims and goldens, is described
+in [deploy](deploy.md#reloading-the-config). The status codes:
+
+- **400**: the file does not parse or does not validate.
+- **409**: a field needs a restart (the message names it), or intercept is
+  turned on for a key this node has served or without a CA loaded at boot.
+
+A refused reload changes nothing.
+
 ## POST /v1/drain
 
 Auth: root only (tenant tokens get 403). Cordons the node for maintenance: claim/fork/branch answer

@@ -155,6 +155,10 @@ domain policy first; the allow-list widens the IP gate only.
 
 ## Configuration
 
+A [config reload](deploy.md#reloading-the-config) applies policy, internal
+allow, secret and upstream changes without a restart: a live claim's next
+request or connection is evaluated against the new policy.
+
 Policy is per pool and per tenant; the effective policy is their intersection
 (a request must pass both, and the pool rule's secret wins on a double allow).
 A missing policy on either side is an empty allow-list, not a pass: a tenant
