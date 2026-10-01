@@ -55,10 +55,6 @@ impl Table {
         proc
     }
 
-    pub(crate) fn get(&self, pid: u32) -> Option<Arc<Proc>> {
-        sysutil::lock(&self.inner).get(&pid).cloned()
-    }
-
     /// Looks up a pid, writing a NotFound frame and returning None on a miss.
     pub async fn get_or_not_found<W: AsyncWrite + Unpin>(
         &self,
@@ -87,6 +83,10 @@ impl Table {
         if map.get(&pid).is_some_and(|cur| Arc::ptr_eq(cur, proc)) {
             map.remove(&pid);
         }
+    }
+
+    pub(crate) fn get(&self, pid: u32) -> Option<Arc<Proc>> {
+        sysutil::lock(&self.inner).get(&pid).cloned()
     }
 
     pub(crate) fn len(&self) -> usize {

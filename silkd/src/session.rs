@@ -127,10 +127,6 @@ impl Table {
         removed.is_some()
     }
 
-    pub(crate) fn len(&self) -> usize {
-        sysutil::lock(&self.inner).len()
-    }
-
     /// Removes and kills sessions idle longer than `ttl`; a session holding the io lock is never idle.
     pub fn reap_idle(&self, ttl: Duration) -> usize {
         let mut map = sysutil::lock(&self.inner);
@@ -143,6 +139,10 @@ impl Table {
             !idle
         });
         before - map.len()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        sysutil::lock(&self.inner).len()
     }
 }
 

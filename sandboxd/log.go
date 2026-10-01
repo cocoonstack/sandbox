@@ -29,6 +29,10 @@ type journalWriter struct {
 	json    bool
 }
 
+func newJournalWriter(out io.Writer, json bool) journalWriter {
+	return journalWriter{console: zerolog.ConsoleWriter{TimeFormat: time.RFC822, NoColor: true}, out: out, json: json}
+}
+
 func (j journalWriter) Write(p []byte) (int, error) { return j.WriteLevel(zerolog.NoLevel, p) }
 
 func (j journalWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
@@ -55,10 +59,6 @@ func setupLog(ctx context.Context, level string) error {
 	logger := log.GetGlobalLogger()
 	*logger = zerolog.New(newJournalWriter(os.Stderr, !stderrIsTerminal())).With().Timestamp().Logger().Level(logger.GetLevel())
 	return nil
-}
-
-func newJournalWriter(out io.Writer, json bool) journalWriter {
-	return journalWriter{console: zerolog.ConsoleWriter{TimeFormat: time.RFC822, NoColor: true}, out: out, json: json}
 }
 
 func syslogPrefix(level zerolog.Level) string {
