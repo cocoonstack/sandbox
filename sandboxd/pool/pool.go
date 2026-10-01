@@ -503,6 +503,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		return nil, err
 	}
 	m.warnVolumeTenants(ctx, cfg.Volumes)
+	m.warnMissingClasses(ctx)
 	return m, nil
 }
 

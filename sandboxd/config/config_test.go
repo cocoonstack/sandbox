@@ -201,10 +201,15 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"duplicate secret name", `{"secrets":[{"name":"gh","header":"A","value_env":"X"},{"name":"gh","header":"B","value_env":"Y"}],"pools":[]}`, "duplicate secret"},
 		{"pool egress empty host", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":""}]}}]}`, "must not be empty"},
 		{"pool egress unknown secret", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"api.github.com","secret":"gh"}]}}]}`, "unknown secret"},
-		{"tenant egress unknown secret", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x","secret":"gh"}]}}]}`, "unknown secret"},
+		{"egress class unknown secret", `{"pools":[],"egress_classes":[{"name":"desk","egress":{"allow":[{"host":"x","secret":"gh"}]}}]}`, "unknown secret"},
+		{"egress class intercepts", `{"pools":[],"egress_classes":[{"name":"desk","egress":{"allow":[{"host":"x","intercept":true}]}}]}`, "only be set on a pool rule"},
+		{"egress class without egress", `{"pools":[],"egress_classes":[{"name":"desk"}]}`, "needs egress"},
+		{"duplicate egress class", `{"pools":[],"egress_classes":[{"name":"desk","egress":{}},{"name":"desk","egress":{}}]}`, "duplicate egress class"},
+		{"tenant names an unknown class", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1","egress_class":"desk"}]}`, "unknown egress class"},
+		{"tenant egress block", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x"}]}}]}`, "unknown object member"},
 		{"guarded egress on cni pool", `{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"egress","size":"small","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
-		{"guarded egress on cni tenant", `{"api_token":"root","networks":["cni"],"pools":[{"template":"rt:24.04","net":"egress","size":"small"}],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
-		{"cni tenant egress no egress pool", `{"api_token":"root","networks":["cni"],"pools":[{"template":"rt:24.04","net":"none","size":"small"}],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
+		{"guarded egress on cni class", `{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"egress","size":"small"}],"egress_classes":[{"name":"desk","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
+		{"cni class no egress pool", `{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"none","size":"small"}],"egress_classes":[{"name":"desk","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
 		{"mesh with wildcard advertise", `{"listen":":7777","pools":[],"mesh":{"bind":"node1:7946"}}`, "routable host"},
 		{"mesh with unspecified advertise", `{"advertise_addr":"0.0.0.0:7777","pools":[],"mesh":{"bind":"node1:7946"}}`, "routable host"},
 		{"mesh bind missing port", `{"pools":[],"mesh":{"bind":"node1"}}`, "mesh bind"},
@@ -226,7 +231,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"upstream claim env name", `{"egress_upstream":{"claim_env":"bad name","allow":["res.example"]},"pools":[]}`, "claim_env"},
 		{"upstream empty allow", `{"egress_upstream":{"claim_env":"UP","allow":[]},"pools":[]}`, "at least one upstream"},
 		{"upstream bad allow entry", `{"egress_upstream":{"claim_env":"UP","allow":["res example"]},"pools":[]}`, "egress_upstream.allow"},
-		{"upstream default env unset", `{"egress_upstream":{"claim_env":"UP","allow":["res.example"]},"tenants":[{"name":"acme","token":"t","egress_upstream_env":"SANDBOX_TEST_UNSET_UPSTREAM"}],"api_token":"r","pools":[]}`, "SANDBOX_TEST_UNSET_UPSTREAM"},
+		{"upstream default env unset", `{"egress_upstream":{"claim_env":"UP","allow":["res.example"]},"egress_classes":[{"name":"desk","egress":{},"egress_upstream_env":"SANDBOX_TEST_UNSET_UPSTREAM"}],"pools":[]}`, "SANDBOX_TEST_UNSET_UPSTREAM"},
 		{"duplicate volume path", `{"pools":[],"volumes":[{"name":"models","path":"/srv/models.img"},{"name":"models-rw","path":"/srv/models.img","writable":true}]}`, "shares its path"},
 		{"bad volume name", `{"pools":[],"volumes":[{"name":"ImageNet","path":"/srv/datasets/a.img"}]}`, "volume name"},
 		{"reserved volume name", `{"pools":[],"volumes":[{"name":"cocoon-data","path":"/srv/datasets/a.img"}]}`, "not start with cocoon-"},
@@ -247,7 +252,7 @@ func TestLoadEgressUpstream(t *testing.T) {
 	t.Setenv("SANDBOX_TEST_RES", "http://user:pw@res.example:3128")
 	t.Setenv("SANDBOX_TEST_DC", "socks5://10.1.0.5:1080")
 	body := `{"egress_upstream":{"claim_env":"EGRESS_UPSTREAM","allow":["res.example","10.1.0.0/16"]},"egress_usage_bytes":true,
-		"api_token":"r","tenants":[{"name":"acme","token":"t","egress_upstream_env":"SANDBOX_TEST_DC"}],
+		"api_token":"r","egress_classes":[{"name":"desk","egress":{},"egress_upstream_env":"SANDBOX_TEST_DC"}],"tenants":[{"name":"acme","token":"t","egress_class":"desk"}],
 		"pools":[{"template":"rt:24.04","egress_upstream_env":"SANDBOX_TEST_RES"}]}`
 	cfg, err := Load(writeConfig(t, body))
 	if err != nil {

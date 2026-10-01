@@ -10,12 +10,12 @@ func editView(m *Manager, edit func(v *configView)) {
 	cur := m.view.Load()
 	next := *cur
 	next.poolEgress = maps.Clone(cur.poolEgress)
-	next.tenantEgress = maps.Clone(cur.tenantEgress)
+	next.classEgress = maps.Clone(cur.classEgress)
 	next.poolWarmups = maps.Clone(cur.poolWarmups)
 	next.poolTrims = maps.Clone(cur.poolTrims)
 	next.poolStorage = maps.Clone(cur.poolStorage)
 	next.poolUpstream = maps.Clone(cur.poolUpstream)
-	next.tenantUpstream = maps.Clone(cur.tenantUpstream)
+	next.classUpstream = maps.Clone(cur.classUpstream)
 	edit(&next)
 	m.view.Store(&next)
 }

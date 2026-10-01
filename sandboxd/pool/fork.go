@@ -42,7 +42,7 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	parentExpire := sb.OnExpire
 	m.mu.Unlock()
 	for _, c := range children {
-		c.Tenant = sb.Tenant
+		c.Tenant, c.EgressClass = sb.Tenant, sb.EgressClass
 		c.PolicySource = sb.PolicySource
 		c.NoEgress = sb.NoEgress
 		c.Metadata = sb.Metadata

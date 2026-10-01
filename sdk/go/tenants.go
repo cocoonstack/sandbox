@@ -11,19 +11,21 @@ import (
 	"sync"
 )
 
-// TenantSpec is one tenant for SetTenants and PutTenant; an empty Token keeps an existing tenant's token.
+// TenantSpec is one tenant for SetTenants and PutTenant; an empty Token keeps an existing tenant's token, and EgressClass names a node's egress class.
 type TenantSpec struct {
-	Name      string `json:"name"`
-	Token     string `json:"token,omitempty"`
-	MaxClaims int    `json:"max_claims,omitzero"`
+	Name        string `json:"name"`
+	Token       string `json:"token,omitempty"`
+	MaxClaims   int    `json:"max_claims,omitzero"`
+	EgressClass string `json:"egress_class,omitempty"`
 }
 
 // TenantInfo is one tenant on a node, never its token; Removed marks a tenant gone from the set that still owns claims there.
 type TenantInfo struct {
-	Name      string `json:"name"`
-	MaxClaims int    `json:"max_claims,omitzero"`
-	Claims    int    `json:"claims"`
-	Removed   bool   `json:"removed,omitzero"`
+	Name        string `json:"name"`
+	MaxClaims   int    `json:"max_claims,omitzero"`
+	EgressClass string `json:"egress_class,omitempty"`
+	Claims      int    `json:"claims"`
+	Removed     bool   `json:"removed,omitzero"`
 }
 
 // TenantList is a node's tenant set; two nodes with equal Digests hold the same set.
@@ -44,8 +46,9 @@ type tenantsUpdate struct {
 }
 
 type tenantUpdate struct {
-	Token     string `json:"token,omitempty"`
-	MaxClaims int    `json:"max_claims,omitzero"`
+	Token       string `json:"token,omitempty"`
+	MaxClaims   int    `json:"max_claims,omitzero"`
+	EgressClass string `json:"egress_class,omitempty"`
 }
 
 // Tenants lists the entry node's tenant set (GET /v1/tenants); requires the operator token.
@@ -101,7 +104,7 @@ func (c *Client) setTenantsAt(ctx context.Context, addr string, tenants []Tenant
 }
 
 func (c *Client) putTenantAt(ctx context.Context, addr string, tenant TenantSpec) error {
-	body, err := encodeBody("tenant", tenantUpdate{Token: tenant.Token, MaxClaims: tenant.MaxClaims})
+	body, err := encodeBody("tenant", tenantUpdate{Token: tenant.Token, MaxClaims: tenant.MaxClaims, EgressClass: tenant.EgressClass})
 	if err != nil {
 		return err
 	}

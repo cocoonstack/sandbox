@@ -24,10 +24,11 @@ const tenantsFileName = "tenants.json"
 
 // TenantInfo is one tenant's view on this node, never its token; Removed marks a tenant gone from the set that still owns live claims.
 type TenantInfo struct {
-	Name      string `json:"name"`
-	MaxClaims int    `json:"max_claims,omitzero"`
-	Claims    int    `json:"claims"`
-	Removed   bool   `json:"removed,omitzero"`
+	Name        string `json:"name"`
+	MaxClaims   int    `json:"max_claims,omitzero"`
+	EgressClass string `json:"egress_class,omitempty"`
+	Claims      int    `json:"claims"`
+	Removed     bool   `json:"removed,omitzero"`
 }
 
 type tenantsFile struct {
@@ -107,7 +108,8 @@ func (m *Manager) Tenants() ([]TenantInfo, string) {
 	m.mu.Unlock()
 	out := make([]TenantInfo, 0, len(set.names))
 	for _, name := range set.names {
-		out = append(out, TenantInfo{Name: name, MaxClaims: set.byName[name].MaxClaims, Claims: live[name]})
+		r := set.byName[name]
+		out = append(out, TenantInfo{Name: name, MaxClaims: r.MaxClaims, EgressClass: r.EgressClass, Claims: live[name]})
 	}
 	for _, name := range slices.Sorted(maps.Keys(live)) {
 		if !set.has(name) {
@@ -163,10 +165,10 @@ func (m *Manager) DeleteTenant(ctx context.Context, name string) error {
 }
 
 func (m *Manager) tenantRecordOf(spec config.TenantSpec, cur *tenantSet) (config.TenantRecord, error) {
-	if spec.Egress != nil || spec.EgressUpstreamEnv != "" {
-		return config.TenantRecord{}, fmt.Errorf("%w: tenant %q: egress and egress_upstream_env are set in the config file, not via the API", ErrBadTenant, spec.Name)
+	if _, ok := m.view.Load().classEgress[spec.EgressClass]; spec.EgressClass != "" && !ok {
+		return config.TenantRecord{}, fmt.Errorf("%w: tenant %q names unknown egress class %q", ErrBadTenant, spec.Name, spec.EgressClass)
 	}
-	r := config.TenantRecord{Name: spec.Name, MaxClaims: spec.MaxClaims}
+	r := config.TenantRecord{Name: spec.Name, MaxClaims: spec.MaxClaims, EgressClass: spec.EgressClass}
 	switch kept, ok := cur.byName[spec.Name]; {
 	case spec.Token != "":
 		r.TokenSHA256 = config.TokenSHA256(spec.Token)
@@ -273,6 +275,20 @@ func (m *Manager) adoptPersistedTenants(ctx context.Context) error {
 	return nil
 }
 
+// warnMissingClasses names each egress class tenants reference but the view lacks; those tenants reach nothing until it returns.
+func (m *Manager) warnMissingClasses(ctx context.Context) {
+	v, set := m.view.Load(), m.tenants.Load()
+	missing := map[string]int{}
+	for _, r := range set.byName {
+		if _, ok := v.classEgress[r.EgressClass]; r.EgressClass != "" && !ok {
+			missing[r.EgressClass]++
+		}
+	}
+	for _, class := range slices.Sorted(maps.Keys(missing)) {
+		log.WithFunc("pool.warnMissingClasses").Warnf(ctx, "egress class %q is not configured: its %d tenants reach nothing", class, missing[class])
+	}
+}
+
 // warnVolumeTenants only warns: the API may add the tenant later.
 func (m *Manager) warnVolumeTenants(ctx context.Context, volumes []config.VolumeSpec) {
 	set := m.tenants.Load()
@@ -285,6 +301,10 @@ func (m *Manager) warnVolumeTenants(ctx context.Context, volumes []config.Volume
 	}
 }
 
+func (m *Manager) tenantClass(tenant string) string {
+	return m.tenants.Load().byName[tenant].EgressClass
+}
+
 func (m *Manager) tenantGone(tenant string) bool {
 	return tenant != "" && !m.tenants.Load().has(tenant)
 }
@@ -292,7 +312,7 @@ func (m *Manager) tenantGone(tenant string) bool {
 func configTenantRecords(specs []config.TenantSpec) []config.TenantRecord {
 	out := make([]config.TenantRecord, len(specs))
 	for i, t := range specs {
-		out[i] = config.TenantRecord{Name: t.Name, TokenSHA256: config.TokenSHA256(t.Token), MaxClaims: t.MaxClaims}
+		out[i] = config.TenantRecord{Name: t.Name, TokenSHA256: config.TokenSHA256(t.Token), MaxClaims: t.MaxClaims, EgressClass: t.EgressClass}
 	}
 	return out
 }

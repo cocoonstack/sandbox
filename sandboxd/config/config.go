@@ -133,22 +133,28 @@ func (e *EgressCAConfig) Set() bool {
 	return e != nil && e.RootCert != "" && e.IntermediateCert != "" && e.IntermediateKey != ""
 }
 
-// TenantSpec declares one tenant: its bearer token and its live-claim quota.
-type TenantSpec struct {
-	Name      string `json:"name"`
-	Token     string `json:"token"`
-	MaxClaims int    `json:"max_claims,omitzero"`
-
-	Egress *egress.Policy `json:"egress,omitempty"`
-	// EgressUpstreamEnv names the node env holding this tenant's default upstream proxy URL.
+// EgressClass is a named tenant egress layer; a tenant names its class, so the API never defines a policy.
+type EgressClass struct {
+	Name   string         `json:"name"`
+	Egress *egress.Policy `json:"egress"`
+	// EgressUpstreamEnv names the node env holding the class's default upstream proxy URL.
 	EgressUpstreamEnv string `json:"egress_upstream_env,omitempty"`
 }
 
-// TenantRecord stores a tenant's identity and quota without its plaintext token.
+// TenantSpec declares one tenant: its bearer token, its live-claim quota and its egress class.
+type TenantSpec struct {
+	Name        string `json:"name"`
+	Token       string `json:"token"`
+	MaxClaims   int    `json:"max_claims,omitzero"`
+	EgressClass string `json:"egress_class,omitempty"`
+}
+
+// TenantRecord stores a tenant's identity, quota and egress class without its plaintext token.
 type TenantRecord struct {
 	Name        string `json:"name"`
 	TokenSHA256 string `json:"token_sha256"`
 	MaxClaims   int    `json:"max_claims,omitzero"`
+	EgressClass string `json:"egress_class,omitempty"`
 }
 
 // VolumeSpec declares one operator-managed dataset disk, held by exactly one node.
@@ -237,6 +243,7 @@ type Config struct {
 	CheckpointPeerHeal bool         `json:"checkpoint_peer_heal,omitzero"`
 	CheckpointTTLHours int          `json:"checkpoint_ttl_hours,omitzero"`
 
+	EgressClasses       []EgressClass         `json:"egress_classes,omitempty"`
 	EgressInternalAllow []string              `json:"egress_internal_allow,omitempty"`
 	EgressCA            *EgressCAConfig       `json:"egress_ca,omitempty"`
 	EgressUpstream      *EgressUpstreamConfig `json:"egress_upstream,omitempty"`
@@ -277,8 +284,7 @@ func (c *Config) ClusterDigest(caFingerprint string, tenants []TenantRecord) str
 }
 
 func (c *Config) guardsEgressLane() bool {
-	return slices.ContainsFunc(c.Tenants, func(t TenantSpec) bool { return t.Egress != nil }) ||
-		slices.ContainsFunc(c.Pools, func(p PoolSpec) bool { return p.Net == types.NetEgress && p.Egress != nil })
+	return len(c.EgressClasses) > 0 || slices.ContainsFunc(c.Pools, func(p PoolSpec) bool { return p.Net == types.NetEgress && p.Egress != nil })
 }
 
 func (c *Config) applyDefaults() {
@@ -495,12 +501,26 @@ func (c *Config) validateEgress(secrets map[string]struct{}) error {
 			return fmt.Errorf("pool %q: intercept needs egress_ca (root_cert + this node's intermediate_cert/intermediate_key)", p.Template)
 		}
 	}
-	for _, tn := range c.Tenants {
-		if err := validatePolicy(tn.Egress, secrets); err != nil {
-			return fmt.Errorf("tenant %q egress: %w", tn.Name, err)
+	names := make(map[string]struct{}, len(c.EgressClasses))
+	for _, ec := range c.EgressClasses {
+		switch _, dup := names[ec.Name]; {
+		case !types.NameRe.MatchString(ec.Name):
+			return fmt.Errorf("egress class name %q must match %s", ec.Name, types.NameRe)
+		case dup:
+			return fmt.Errorf("duplicate egress class %q", ec.Name)
+		case ec.Egress == nil:
+			return fmt.Errorf("egress class %q needs egress", ec.Name)
+		case ec.Egress.Intercepts():
+			return fmt.Errorf("egress class %q: intercept may only be set on a pool rule", ec.Name)
 		}
-		if tn.Egress.Intercepts() {
-			return fmt.Errorf("tenant %q egress: intercept may only be set on a pool rule", tn.Name)
+		if err := validatePolicy(ec.Egress, secrets); err != nil {
+			return fmt.Errorf("egress class %q: %w", ec.Name, err)
+		}
+		names[ec.Name] = struct{}{}
+	}
+	for _, tn := range c.Tenants {
+		if _, ok := names[tn.EgressClass]; tn.EgressClass != "" && !ok {
+			return fmt.Errorf("tenant %q names unknown egress class %q", tn.Name, tn.EgressClass)
 		}
 	}
 	return nil
@@ -539,7 +559,7 @@ func (c *Config) validateEgressRouting() error {
 	return c.validateEgressUpstream()
 }
 
-// validateEgressUpstream checks the allow list and resolves every pool and tenant default from the node env now.
+// validateEgressUpstream checks the allow list and resolves every pool and egress class default from the node env now.
 func (c *Config) validateEgressUpstream() error {
 	var defaults []string
 	for _, p := range c.Pools {
@@ -547,9 +567,9 @@ func (c *Config) validateEgressUpstream() error {
 			defaults = append(defaults, p.EgressUpstreamEnv)
 		}
 	}
-	for _, t := range c.Tenants {
-		if t.EgressUpstreamEnv != "" {
-			defaults = append(defaults, t.EgressUpstreamEnv)
+	for _, ec := range c.EgressClasses {
+		if ec.EgressUpstreamEnv != "" {
+			defaults = append(defaults, ec.EgressUpstreamEnv)
 		}
 	}
 	u := c.EgressUpstream

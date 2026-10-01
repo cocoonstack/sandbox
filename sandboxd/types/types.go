@@ -447,6 +447,8 @@ type Sandbox struct {
 
 	// Tenant names the owning tenant; empty means the operator claimed it.
 	Tenant string `json:"tenant,omitempty"`
+	// EgressClass is the tenant's egress class at claim time; the claim keeps it for life.
+	EgressClass string `json:"egress_class,omitempty"`
 
 	// ClaimRef is the opaque caller reference; empty for checkpoint branches and unprefixed forks.
 	ClaimRef string `json:"claim_ref,omitempty"`

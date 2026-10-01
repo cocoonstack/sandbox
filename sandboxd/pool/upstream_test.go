@@ -19,23 +19,23 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-func TestRouteTakesTheClaimThenTenantThenPoolUpstream(t *testing.T) {
+func TestRouteTakesTheClaimThenClassThenPoolUpstream(t *testing.T) {
 	m := upstreamManager(t, "127.0.0.1")
 	editView(m, func(v *configView) {
 		v.poolUpstream[testKey] = "http://127.0.0.1:3001"
-		v.tenantUpstream["acme"] = "http://127.0.0.1:3002"
+		v.classUpstream["desk"] = "http://127.0.0.1:3002"
 	})
 	for _, tc := range []struct {
-		name, tenant string
-		env          types.Env
-		want         string
+		name, class string
+		env         types.Env
+		want        string
 	}{
 		{"pool default", "", nil, "http://127.0.0.1:3001"},
-		{"tenant default", "acme", nil, "http://127.0.0.1:3002"},
-		{"claim value", "acme", types.Env{"EGRESS_UPSTREAM": {Value: "socks5://127.0.0.1:3003", Guest: hostOnly}}, "socks5://127.0.0.1:3003"},
-		{"claim direct", "acme", types.Env{"EGRESS_UPSTREAM": {Value: "direct", Guest: hostOnly}}, ""},
+		{"class default", "desk", nil, "http://127.0.0.1:3002"},
+		{"claim value", "desk", types.Env{"EGRESS_UPSTREAM": {Value: "socks5://127.0.0.1:3003", Guest: hostOnly}}, "socks5://127.0.0.1:3003"},
+		{"claim direct", "desk", types.Env{"EGRESS_UPSTREAM": {Value: "direct", Guest: hostOnly}}, ""},
 	} {
-		sb := &types.Sandbox{ID: "sb_route", Key: testKey, Tenant: tc.tenant, Env: tc.env}
+		sb := &types.Sandbox{ID: "sb_route", Key: testKey, Tenant: "acme", EgressClass: tc.class, Env: tc.env}
 		if got := (claimRouter{m: m, sb: sb}).Route(); got != tc.want {
 			t.Errorf("%s: route %q, want %q", tc.name, got, tc.want)
 		}
@@ -71,6 +71,34 @@ func TestClaimsOnOnePoolLeaveThroughTheirOwnUpstreams(t *testing.T) {
 	}
 	if direct.Load() != 1 {
 		t.Errorf("direct dials %d, want 1: only the claim without an upstream", direct.Load())
+	}
+}
+
+func TestATenantClaimUnderAClassDialsItsOwnUpstreamLikeARootClaim(t *testing.T) {
+	m := upstreamManager(t, "127.0.0.1")
+	m.destVerdict = func(netip.Addr, uint16) (bool, error) { return false, nil }
+	direct := countDial(m)
+	origin := echoListener(t)
+	own, classDefault := tunnelProxy(t), tunnelProxy(t)
+	editView(m, func(v *configView) { v.classUpstream["desk"] = "http://" + classDefault.addr })
+	tenantClaim := func(upstream string) *types.Sandbox {
+		return &types.Sandbox{ID: "sb_desk", Key: testKey, Tenant: "acme", EgressClass: "desk", Env: types.Env{"EGRESS_UPSTREAM": {Value: upstream, Guest: hostOnly}}}
+	}
+	r := claimRouter{m: m, sb: tenantClaim("http://user:pw@" + own.addr)}
+	conn, err := r.Dial(t.Context(), r.Route(), "tcp", origin)
+	if err != nil {
+		t.Fatalf("dial through the claim's own upstream: %v", err)
+	}
+	pingPong(t, conn)
+	if got := own.targets(); len(got) != 1 || got[0] != origin || classDefault.accepted.Load() != 0 {
+		t.Errorf("own upstream tunnels %v, class default saw %d: the claim value must win over the class default", got, classDefault.accepted.Load())
+	}
+	r = claimRouter{m: m, sb: tenantClaim("socks5://192.0.2.1:1080")}
+	if _, err := r.Dial(t.Context(), r.Route(), "tcp", origin); err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Errorf("a tenant claim's unlisted upstream: %v, want the allow-list refusal", err)
+	}
+	if direct.Load() != 0 {
+		t.Errorf("direct dials %d, want none", direct.Load())
 	}
 }
 

@@ -199,14 +199,13 @@ func TestTenantChangesAreValidatedAndAudited(t *testing.T) {
 		t.Fatalf("setup manager: %v", err)
 	}
 	for name, spec := range map[string]config.TenantSpec{
-		"bad name":     {Name: "-bad", Token: "x"},
-		"root scope":   {Name: types.TemplateRootScope, Token: "x"},
-		"no token":     {Name: "new"},
-		"root token":   {Name: "new", Token: "root"},
-		"reused token": {Name: "new", Token: "acme-tok"},
-		"egress":       {Name: "new", Token: "x", Egress: &egress.Policy{}},
-		"upstream":     {Name: "new", Token: "x", EgressUpstreamEnv: "UP"},
-		"negative cap": {Name: "acme", MaxClaims: -1},
+		"bad name":      {Name: "-bad", Token: "x"},
+		"root scope":    {Name: types.TemplateRootScope, Token: "x"},
+		"no token":      {Name: "new"},
+		"root token":    {Name: "new", Token: "root"},
+		"reused token":  {Name: "new", Token: "acme-tok"},
+		"unknown class": {Name: "new", Token: "x", EgressClass: "nope"},
+		"negative cap":  {Name: "acme", MaxClaims: -1},
 	} {
 		if err = m.PutTenant(t.Context(), spec); !errors.Is(err, ErrBadTenant) {
 			t.Errorf("%s: %v, want ErrBadTenant", name, err)
@@ -241,6 +240,79 @@ func TestTenantChangesAreValidatedAndAudited(t *testing.T) {
 	}
 	if err := open.PutTenant(t.Context(), config.TenantSpec{Name: "acme", Token: "t"}); !errors.Is(err, ErrBadTenant) {
 		t.Errorf("tenant on a node without api_token: %v, want ErrBadTenant", err)
+	}
+}
+
+func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{DataDir: dir, APIToken: "root", EgressClasses: []config.EgressClass{{Name: "desk", Egress: &egress.Policy{Allow: []egress.Rule{{Host: "b.test"}}}}}}
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t))
+	if err != nil {
+		t.Fatalf("setup manager: %v", err)
+	}
+	for _, spec := range []config.TenantSpec{{Name: "u-1", Token: "u1-tok", EgressClass: "desk"}, {Name: "u-2", Token: "u2-tok"}} {
+		if err = m.PutTenant(t.Context(), spec); err != nil {
+			t.Fatalf("PutTenant %s: %v", spec.Name, err)
+		}
+	}
+	unpooled := types.PoolKey{Template: "promoted-name", Net: types.NetNone, Size: types.SizeSmall}
+	classed, err := m.ClaimProvision(t.Context(), unpooled, ClaimOptions{TTL: time.Hour, Tenant: "u-1"})
+	if err != nil {
+		t.Fatalf("claim u-1: %v", err)
+	}
+	eval, ok := m.effectivePolicy(m.view.Load(), classed)
+	if !ok || classed.EgressClass != "desk" || dtoOf(classed).EgressClass != "desk" {
+		t.Fatalf("u-1 claim class %q armed %v, want the desk class stamped and journaled", classed.EgressClass, ok)
+	}
+	if _, d := eval.Eval("b.test", "GET", 443); d != egress.DecisionAllow {
+		t.Error("the class's allowed host is refused")
+	}
+	if _, d := eval.Eval("a.test", "GET", 443); d == egress.DecisionAllow {
+		t.Error("a host outside the class is allowed")
+	}
+	live := newLivePolicy(m, classed, m.view.Load(), eval)
+	next := *m.cfg
+	next.EgressClasses = []config.EgressClass{{Name: "desk", Egress: &egress.Policy{Allow: []egress.Rule{{Host: "a.test"}}}}}
+	if _, err = m.ReloadConfig(t.Context(), &next); err != nil {
+		t.Fatalf("reload the class: %v", err)
+	}
+	if _, d := live.Eval("a.test", "GET", 443); d != egress.DecisionAllow {
+		t.Error("a reload that widens the class did not reach the live claim")
+	}
+	if _, d := live.Eval("b.test", "GET", 443); d == egress.DecisionAllow {
+		t.Error("a reload that narrows the class did not reach the live claim")
+	}
+	bare, err := m.ClaimProvision(t.Context(), unpooled, ClaimOptions{TTL: time.Hour, Tenant: "u-2"})
+	if err != nil {
+		t.Fatalf("claim u-2: %v", err)
+	}
+	if _, ok = m.effectivePolicy(m.view.Load(), bare); ok {
+		t.Error("a tenant without a class gained egress")
+	}
+
+	restarted, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t))
+	if err != nil {
+		t.Fatalf("restart manager: %v", err)
+	}
+	if got := restarted.tenantClass("u-1"); got != "desk" {
+		t.Errorf("after a restart u-1 has class %q, want desk from tenants.json", got)
+	}
+
+	if err = m.PutTenant(t.Context(), config.TenantSpec{Name: "u-1"}); err != nil {
+		t.Fatalf("drop u-1's class: %v", err)
+	}
+	later, err := m.ClaimProvision(t.Context(), unpooled, ClaimOptions{TTL: time.Hour, Tenant: "u-1"})
+	if err != nil {
+		t.Fatalf("second claim u-1: %v", err)
+	}
+	if classed.EgressClass != "desk" || later.EgressClass != "" {
+		t.Errorf("classes live %q new %q: a class change reaches only claims made after it", classed.EgressClass, later.EgressClass)
+	}
+	infos, _ := m.Tenants()
+	if i := slices.IndexFunc(infos, func(ti TenantInfo) bool { return ti.Name == "u-1" }); i < 0 || infos[i].EgressClass != "" {
+		t.Errorf("tenant list %+v, want u-1 without a class", infos)
 	}
 }
 

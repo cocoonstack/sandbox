@@ -11,6 +11,7 @@ import (
 )
 
 var reloadableFields = map[string]bool{
+	"egress_classes":        true,
 	"egress_internal_allow": true,
 	"secrets":               true,
 	"egress_upstream":       true,
@@ -32,8 +33,7 @@ func (c *Config) ReloadDiff(next *Config) (changed, ignored []string, err error)
 			ch, ig := diffPools(c.Pools, next.Pools)
 			changed, ignored = append(changed, ch...), append(ignored, ig...)
 		case name == "tenants":
-			ch, ig := diffTenants(c.Tenants, next.Tenants)
-			changed, ignored = append(changed, ch...), append(ignored, ig...)
+			ignored = append(ignored, diffTenants(c.Tenants, next.Tenants)...)
 		case reflect.DeepEqual(cur.Field(i).Interface(), nxt.Field(i).Interface()):
 		case reloadableFields[name]:
 			changed = append(changed, name)
@@ -76,24 +76,15 @@ func diffPools(cur, next []PoolSpec) (changed, ignored []string) {
 	return changed, ignored
 }
 
-func diffTenants(cur, next []TenantSpec) (changed, ignored []string) {
+func diffTenants(cur, next []TenantSpec) (ignored []string) {
 	byName := func(s TenantSpec) string { return s.Name }
 	a, b := indexBy(cur, byName), indexBy(next, byName)
 	for _, name := range slices.Sorted(maps.Keys(indexBy(slices.Concat(cur, next), byName))) {
-		x, inA := a[name]
-		y, inB := b[name]
-		label := "tenants[" + name + "]"
-		if !reflect.DeepEqual(x.Egress, y.Egress) {
-			changed = append(changed, label+".egress")
-		}
-		if x.EgressUpstreamEnv != y.EgressUpstreamEnv {
-			changed = append(changed, label+".egress_upstream_env")
-		}
-		if inA != inB || x.Token != y.Token || x.MaxClaims != y.MaxClaims {
-			ignored = append(ignored, label+" identity (/v1/tenants owns it)")
+		if a[name] != b[name] {
+			ignored = append(ignored, "tenants["+name+"] identity (/v1/tenants owns it)")
 		}
 	}
-	return changed, ignored
+	return ignored
 }
 
 func targetsOf(s PoolSpec) poolTargets {

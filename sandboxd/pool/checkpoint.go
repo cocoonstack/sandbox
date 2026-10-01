@@ -224,7 +224,7 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, o Clai
 	if err != nil {
 		return nil, err
 	}
-	o.apply(sb)
+	o.apply(sb, m.tenantClass(o.Tenant))
 	sb.FromCheckpoint = ckpt.ID
 	sb.PolicySource, sb.NoEgress = ckpt.PolicySource, ckpt.NoEgress
 	out, err := m.finalize(ctx, sb, o.TTL, ckpt.GuestEnv)
