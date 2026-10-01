@@ -1165,6 +1165,7 @@ type fakeEngine struct {
 	warmupSocks                       []string
 	warmupAfterSnap                   bool
 	warmupErr                         error
+	warmupHook                        func()
 	trims                             []string
 	trimErr                           error
 	staleReconciles                   []string
@@ -1504,6 +1505,9 @@ func (f *fakeEngine) Warmup(_ context.Context, sock string, argv []string) error
 	f.warmups = append(f.warmups, argv)
 	f.warmupSocks = append(f.warmupSocks, sock)
 	f.warmupAfterSnap = f.warmupAfterSnap || len(f.snapSaves) > 0
+	if f.warmupHook != nil {
+		f.warmupHook()
+	}
 	return f.warmupErr
 }
 

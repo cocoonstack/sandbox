@@ -131,7 +131,16 @@ func main() {
 	if cfg.PreviewListen != "" {
 		preview = server.NewPreviewServer(cfg.PreviewSecret, cfg.PreviewAdvertise, cfg.AdvertiseAddr, mgr)
 	}
+	reload := func(ctx context.Context) (pool.ReloadResult, error) {
+		next, err := config.Load(*configPath)
+		if err != nil {
+			return pool.ReloadResult{}, fmt.Errorf("%w: %w", pool.ErrBadConfig, err)
+		}
+		return mgr.ReloadConfig(ctx, next)
+	}
+	go reloadOnHangup(ctx, reload)
 	srv := server.New(cfg.APIToken, cmp.Or(cfg.ClientAdvertise, cfg.AdvertiseAddr), mgr, eng, placer, prober, probeKey, preview)
+	srv.SetConfigReload(reload)
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           srv.Handler(),
@@ -212,6 +221,26 @@ func gossipNodeState(ctx context.Context, msh *mesh.Mesh, mgr *pool.Manager) {
 			return
 		case <-t.C:
 			msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
+		}
+	}
+}
+
+func reloadOnHangup(ctx context.Context, reload server.ConfigReloader) {
+	logger := log.WithFunc("main.reloadOnHangup")
+	hangup := make(chan os.Signal, 1)
+	signal.Notify(hangup, syscall.SIGHUP)
+	defer signal.Stop(hangup)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-hangup:
+			res, err := reload(ctx)
+			if err != nil {
+				logger.Error(ctx, err, "config reload")
+				continue
+			}
+			logger.Infof(ctx, "config reload: changed %v, ignored %v", res.Changed, res.Ignored)
 		}
 	}
 }

@@ -70,7 +70,7 @@ func (m *Manager) refillOnce(ctx context.Context) {
 			case m.refillSem <- struct{}{}:
 				p.refilling++
 				inFlight++
-				go m.refillOne(ctx, p, p.goldenDir, p.imageID)
+				go m.refillOne(ctx, p, p.goldenDir, p.goldenGen)
 				spawned = true
 			default:
 				return
@@ -91,7 +91,7 @@ func (m *Manager) shrinkOnce(ctx context.Context) {
 	m.destroyAll(ctx, trim)
 }
 
-func (m *Manager) refillOne(ctx context.Context, p *pool, golden, imageID string) {
+func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uint64) {
 	start := time.Now()
 	sb, err := m.startVM(ctx, p.key, func(name string) (types.VMRecord, error) {
 		return m.eng.Clone(ctx, golden, name, p.key)
@@ -116,7 +116,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden, imageID string
 	m.mu.Lock()
 	now := time.Now()
 	p.refilling--
-	if err == nil && !m.draining && p.goldenDir != "" && p.imageID == imageID && len(p.warm) < p.effectiveTarget(now) {
+	if err == nil && !m.draining && p.goldenDir != "" && p.goldenGen == gen && len(p.warm) < p.effectiveTarget(now) {
 		p.warm = append(p.warm, sb)
 		p.noteLead(time.Since(start))
 		keep = true
@@ -191,9 +191,14 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 
 	m.mu.Lock()
 	p.building = false
-	if err == nil {
+	stale := err == nil && m.goldenStamp(m.view.Load(), p.key, imageID) != m.goldenStamp(v, p.key, imageID)
+	switch {
+	case stale:
+		p.nextBuild = time.Time{}
+	case err == nil:
 		p.goldenDir, p.imageID = final, imageID
-	} else {
+		p.goldenGen++
+	default:
 		p.nextBuild = time.Now().Add(buildRetryDelay)
 		// a cold boot hits the same bridge and disk as a refill, so it feeds the park too
 		if reason := engine.CapacitySignature(err); reason != "" {
@@ -203,6 +208,11 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 	m.mu.Unlock()
 	if err != nil {
 		logger.Errorf(ctx, err, "build golden for %s", hash)
+		return
+	}
+	if stale {
+		logger.Infof(ctx, "golden for %s was built against a superseded config; rebuilding", hash)
+		m.kickRefill()
 		return
 	}
 	logger.Infof(ctx, "golden ready for %s (%s)", hash, p.key.Template)
@@ -266,6 +276,7 @@ func (m *Manager) adoptGolden(p *pool, imageID string) bool {
 		return false
 	}
 	p.goldenDir, p.imageID = g, imageID
+	p.goldenGen++
 	return true
 }
 

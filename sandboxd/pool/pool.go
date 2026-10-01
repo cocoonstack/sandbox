@@ -82,6 +82,8 @@ var (
 	ErrBadEnv            = errors.New("invalid env")
 	ErrBadTenant         = errors.New("invalid tenant")
 	ErrUnknownTenant     = errors.New("unknown tenant")
+	ErrBadConfig         = errors.New("invalid config")
+	ErrReloadRefused     = errors.New("config reload refused")
 	ErrTenantRemoved     = errors.New("the claim's tenant was removed: it runs to its deadline but cannot renew, fork, or wake from the archive")
 	ErrVolumeUnavailable = fmt.Errorf("%w: unknown or unavailable volume", ErrBadVolume)
 	ErrNoWarm            = errors.New("no warm sandbox for key")
@@ -212,6 +214,8 @@ type pool struct {
 
 	goldenDir string
 	imageID   string
+	// goldenGen counts installs, so a clone of a retired golden never lands after a rebuild at the same path.
+	goldenGen uint64
 	building  bool
 	nextBuild time.Time
 	removed   bool // dropped from the desired set while building/refilling; swept by refillOnce
@@ -322,10 +326,13 @@ type Manager struct {
 	onTenants  func()
 	tenantLive map[string]int
 	view       atomic.Pointer[configView]
-	usage      *journal
-	audit      *journal
-	counters   counters
-	ckpts      store.Store
+	// cfg is the config the view was built from; reloadMu orders reloads, the only writers of cfg and view.
+	cfg      *config.Config
+	reloadMu sync.Mutex
+	usage    *journal
+	audit    *journal
+	counters counters
+	ckpts    store.Store
 	// A cluster-wide backend makes heal and the delete broadcast no-ops
 	ckptsShared bool
 	healer      *peer.Healer
@@ -466,6 +473,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	if err := m.seedTenants(cfg); err != nil {
 		return nil, err
 	}
+	m.cfg = cfg
 	m.view.Store(newConfigView(cfg, secrets))
 	m.dial = newEgressDialer(func() []egress.InternalAllow { return m.view.Load().internalAllow }).DialContext
 	m.destVerdict = func(ip netip.Addr, port uint16) (bool, error) {

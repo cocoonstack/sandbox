@@ -1,15 +1,27 @@
 package pool
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
+)
+
+var (
+	otherKey       = types.PoolKey{Template: "other:1", Net: types.NetNone, Size: types.SizeSmall}
+	interceptOnKey = types.PoolKey{Template: "mitm:1", Net: types.NetNone, Size: types.SizeSmall}
 )
 
 func TestALiveClaimsEgressFollowsTheView(t *testing.T) {
@@ -46,4 +58,173 @@ func TestALiveClaimsEgressFollowsTheView(t *testing.T) {
 	if code := get(); code != http.StatusForbidden {
 		t.Errorf("after the pool loses its policy: %d, want 403", code)
 	}
+}
+
+func TestReloadGivesANewKeyItsSettingsBeforeItsGolden(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	next := *m.cfg
+	argv := []string{"node", "-e", "0"}
+	next.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 3, Warmup: argv, Storage: "20G"}}
+	res, err := m.ReloadConfig(t.Context(), &next)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	label := "pools[rt:24.04 none small]"
+	if want := []string{label + ".warmup", label + ".storage"}; !slices.Equal(res.Changed, want) {
+		t.Errorf("changed %v, want %v", res.Changed, want)
+	}
+	if want := []string{label + " targets (PUT /v1/pools owns them)"}; !slices.Equal(res.Ignored, want) {
+		t.Errorf("ignored %v, want %v", res.Ignored, want)
+	}
+	m.mu.Lock()
+	_, created := m.pools[testKey]
+	m.mu.Unlock()
+	if created {
+		t.Fatal("a reload created a pool: targets belong to PUT /v1/pools")
+	}
+	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 1}}); err != nil {
+		t.Fatalf("SetPools: %v", err)
+	}
+	waitFor(t, func() bool { return refilledTo(m, testKey, 1) })
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	if len(eng.coldStorage) == 0 || eng.coldStorage[0] != "20G" || len(eng.warmups) == 0 || !slices.Equal(eng.warmups[0], argv) {
+		t.Errorf("golden built with storage %v and warmups %v, want 20G and %v", eng.coldStorage, eng.warmups, argv)
+	}
+}
+
+func TestReloadRetiresAGoldenWhoseStampChangedAndLeavesClaims(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
+	waitFor(t, func() bool { return refilledTo(m, testKey, 2) })
+	sb := mustClaim(t, m, testKey)
+	vm := sb.VMName
+	next := *m.cfg
+	next.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 2, Storage: "30G"}}
+	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	m.mu.Lock()
+	golden, warm, live := m.pools[testKey].goldenDir, len(m.pools[testKey].warm), m.claimed[sb.ID]
+	m.mu.Unlock()
+	if golden != "" || warm != 0 {
+		t.Errorf("after a storage change golden %q and %d warm VMs remain, want the golden retired and its warm VMs gone", golden, warm)
+	}
+	if live == nil || live.VMName != vm {
+		t.Errorf("the reload touched a live claim: %+v", live)
+	}
+	waitFor(t, func() bool { return refilledTo(m, testKey, 2) })
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	if got := eng.coldStorage[len(eng.coldStorage)-1]; got != "30G" {
+		t.Errorf("rebuilt golden storage %q, want 30G", got)
+	}
+}
+
+func TestReloadRefusesARestartFieldAndKeepsTheView(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	before := m.view.Load()
+	next := *m.cfg
+	next.Listen = "127.0.0.1:1"
+	next.EgressInternalAllow = []string{"10.0.0.0/8"}
+	_, err := m.ReloadConfig(t.Context(), &next)
+	if !errors.Is(err, ErrReloadRefused) || !strings.Contains(err.Error(), "listen") {
+		t.Fatalf("reload with a new listen address: %v, want a refusal naming listen", err)
+	}
+	if m.view.Load() != before || len(m.view.Load().internalAllow) != 0 {
+		t.Error("a refused reload changed the view")
+	}
+}
+
+func TestReloadTurnsInterceptOnOnlyForAKeyItHasNotServedWithTheCALoaded(t *testing.T) {
+	plain := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
+	next := *plain.cfg
+	next.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 1}, {PoolKey: otherKey, Egress: interceptPolicy()}}
+	if _, err := plain.ReloadConfig(t.Context(), &next); !errors.Is(err, ErrReloadRefused) || !strings.Contains(err.Error(), "egress_ca loaded at boot") {
+		t.Errorf("intercept on a node that loaded no CA: %v, want a refusal", err)
+	}
+
+	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1}, config.PoolSpec{PoolKey: interceptOnKey, Egress: interceptPolicy()})
+	served := *m.cfg
+	served.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()}, {PoolKey: interceptOnKey, Egress: interceptPolicy()}}
+	if _, err := m.ReloadConfig(t.Context(), &served); !errors.Is(err, ErrReloadRefused) || !strings.Contains(err.Error(), "do not trust the CA") {
+		t.Errorf("intercept on a served key: %v, want a refusal", err)
+	}
+	fresh := *m.cfg
+	fresh.Pools = append(slices.Clone(m.cfg.Pools), config.PoolSpec{PoolKey: otherKey, Egress: interceptPolicy()})
+	if _, err := m.ReloadConfig(t.Context(), &fresh); err != nil {
+		t.Errorf("intercept on a key the node never served: %v", err)
+	}
+}
+
+func TestAGoldenBuiltAgainstASupersededViewIsDiscarded(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Warmup: []string{"node", "-e", "0"}})
+	eng.warmupHook = func() {
+		eng.warmupHook = nil
+		editView(m, func(v *configView) { v.poolStorage[testKey] = "30G" })
+	}
+	m.mu.Lock()
+	p := m.pools[testKey]
+	p.building = true
+	m.mu.Unlock()
+	m.buildGolden(t.Context(), p)
+	m.mu.Lock()
+	golden, next := p.goldenDir, p.nextBuild
+	m.mu.Unlock()
+	if golden != "" || !next.IsZero() {
+		t.Errorf("golden %q next build %v: a golden built against the old view must be dropped and rebuilt at once", golden, next)
+	}
+}
+
+func TestACloneOfARetiredGoldenNeverLands(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
+	waitFor(t, func() bool { return refilledTo(m, testKey, 1) })
+	m.mu.Lock()
+	p := m.pools[testKey]
+	golden, gen := p.goldenDir, p.goldenGen
+	p.warm = nil
+	p.goldenGen++
+	p.refilling++
+	m.refillSem <- struct{}{}
+	m.mu.Unlock()
+	m.refillOne(t.Context(), p, golden, gen)
+	if n := warmLen(m, testKey); n != 0 {
+		t.Errorf("%d warm VMs landed from a clone of the retired golden", n)
+	}
+}
+
+func TestReloadIsAudited(t *testing.T) {
+	dir := t.TempDir()
+	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, AuditLog: true}, newFakeEngine(), testSecrets(t))
+	if err != nil {
+		t.Fatalf("setup manager: %v", err)
+	}
+	next := *m.cfg
+	next.EgressInternalAllow = []string{"10.8.0.0/16"}
+	if _, err = m.ReloadConfig(t.Context(), &next); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
+	if err != nil || !strings.Contains(string(raw), `"op":"config_reload","changed":["egress_internal_allow"]`) {
+		t.Errorf("audit %s, %v; want a config_reload record naming egress_internal_allow", raw, err)
+	}
+	if len(m.view.Load().internalAllow) != 1 {
+		t.Error("egress_internal_allow did not reach the view")
+	}
+}
+
+func refilledTo(m *Manager, key types.PoolKey, n int) bool {
+	m.refillOnce(context.Background())
+	return warmLen(m, key) == n
+}
+
+func warmLen(m *Manager, key types.PoolKey) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p := m.pools[key]; p != nil {
+		return len(p.warm)
+	}
+	return 0
 }
