@@ -763,6 +763,40 @@ func TestEgressDoorHalfCloseReachesTheGuest(t *testing.T) {
 	}
 }
 
+func TestDoorConnHandsSpliceItsUnixConn(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "door")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	ln, err := listenUnix(filepath.Join(dir, "d"))
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	door := limitDoor(ln)
+	t.Cleanup(func() { _ = door.Close() })
+	peer, err := net.Dial("unix", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = peer.Close() })
+	conn, err := door.Accept()
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	inner, ok := conn.(interface{ NetConn() net.Conn })
+	if !ok {
+		t.Fatalf("door conn %T hides its socket from splice", conn)
+	}
+	if _, ok := inner.NetConn().(*net.UnixConn); !ok {
+		t.Fatalf("NetConn is %T, want the *net.UnixConn the kernel copy needs", inner.NetConn())
+	}
+	_ = conn.Close()
+	if n := len(door.slots); n != 0 {
+		t.Errorf("%d slots held after close", n)
+	}
+}
+
 func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "ok")

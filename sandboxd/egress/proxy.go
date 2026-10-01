@@ -399,15 +399,25 @@ func stripHop(h http.Header) {
 
 // splice copies both ways until either side ends, half-closing the peer so EOF propagates; it returns the bytes a sent to b and b sent to a.
 func splice(a, b net.Conn) (aToB, bToA int64) {
+	ra := spliceable(a)
 	done := make(chan int64, 1)
 	go func() {
-		n, _ := io.Copy(a, b)
+		n, _ := io.Copy(ra, b)
 		utils.CloseWrite(a)
 		done <- n
 	}()
-	aToB, _ = io.Copy(b, a)
+	aToB, _ = io.Copy(b, ra)
 	utils.CloseWrite(b)
 	return aToB, <-done
+}
+
+func spliceable(c net.Conn) net.Conn {
+	if d, ok := c.(interface{ NetConn() net.Conn }); ok {
+		if u, ok := d.NetConn().(*net.UnixConn); ok {
+			return u
+		}
+	}
+	return c
 }
 
 func denied(w http.ResponseWriter, host string) {

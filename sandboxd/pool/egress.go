@@ -73,7 +73,7 @@ func (e *egressListener) close() {
 	}
 }
 
-// doorListener caps a door's live connections; the accepted conn stays a *net.UnixConn so splice and half-close keep working.
+// doorListener caps a door's live connections; doorConn's NetConn hands splice the *net.UnixConn the kernel copy needs.
 type doorListener struct {
 	*net.UnixListener
 	slots chan struct{}
@@ -115,6 +115,8 @@ func (c *doorConn) Close() error {
 	c.once.Do(func() { <-c.slots })
 	return err
 }
+
+func (c *doorConn) NetConn() net.Conn { return c.UnixConn }
 
 // NetRoute is how sb's guest reaches the network now: its own NIC, the proxy behind a bound door, or nothing.
 func (m *Manager) NetRoute(sb *types.Sandbox) types.NetRoute {
