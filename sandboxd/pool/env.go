@@ -60,9 +60,12 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		return fmt.Errorf("%w: %w", ErrBadEnv, err)
 	}
 	changed := !env.SameGuest(prev)
-	paused := !locked || sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != ""
+	paused := !locked || sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "" || sb.Failed != ""
 	if changed && paused {
 		m.mu.Unlock()
+		if sb.Failed != "" {
+			return ErrFailed
+		}
 		return ErrPaused
 	}
 	deliver := !paused && (changed || resend && env.Equal(prev))
