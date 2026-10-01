@@ -252,7 +252,7 @@ func (s *Store) publish(ctx context.Context, staging, id string, digested bool) 
 	if err != nil {
 		return "", fmt.Errorf("staging has no %s: %w", store.MetaFile, err)
 	}
-	files, err := s.publishFiles(staging, id, store.ExportGen(metaRaw), digested)
+	files, err := s.publishFiles(staging, id, store.ExportGen(metaRaw))
 	if err != nil {
 		return "", err
 	}
@@ -293,11 +293,8 @@ func (s *Store) publish(ctx context.Context, staging, id string, digested bool) 
 	return digest, nil
 }
 
-func (s *Store) publishFiles(staging, id, gen string, digested bool) ([]publishFile, error) {
-	root := staging
-	if digested {
-		root = filepath.Join(staging, store.ExportDir)
-	}
+func (s *Store) publishFiles(staging, id, gen string) ([]publishFile, error) {
+	root := filepath.Join(staging, store.ExportDir)
 	var files []publishFile
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
@@ -306,16 +303,6 @@ func (s *Store) publishFiles(staging, id, gen string, digested bool) ([]publishF
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
-		}
-		if !digested {
-			if rel == store.MetaFile {
-				return nil
-			}
-			files = append(files, publishFile{
-				path: path,
-				key:  s.key(id, gen+"/"+strings.TrimPrefix(rel, store.ExportDir+"/")),
-			})
-			return nil
 		}
 		info, err := entry.Info()
 		if err != nil {

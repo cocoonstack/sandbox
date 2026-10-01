@@ -460,9 +460,7 @@ func (s *Server) handleInstanceMetadata(w http.ResponseWriter, r *http.Request) 
 	}
 	id := r.PathValue("id")
 	err = s.mgr.SetInstanceMetadata(r.Context(), id, doc)
-	writeResult(w, r, "instance metadata", id, "instance metadata failed", err, func() {
-		w.WriteHeader(http.StatusNoContent)
-	})
+	writeResult(w, r, "instance metadata", id, "instance metadata failed", err, noContent(w))
 }
 
 func (s *Server) handleGetEnv(w http.ResponseWriter, r *http.Request) {
@@ -488,9 +486,7 @@ func (s *Server) handlePatchEnv(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	err := s.mgr.PatchEnv(r.Context(), id, req.Env, tenantFrom(r.Context()))
-	writeResult(w, r, "env", id, "patch env failed", err, func() {
-		w.WriteHeader(http.StatusNoContent)
-	})
+	writeResult(w, r, "env", id, "patch env failed", err, noContent(w))
 }
 
 func (s *Server) handleClearEnv(w http.ResponseWriter, r *http.Request) {
@@ -500,9 +496,7 @@ func (s *Server) handleClearEnv(w http.ResponseWriter, r *http.Request) {
 func (s *Server) setEnv(w http.ResponseWriter, r *http.Request, env types.Env) {
 	id := r.PathValue("id")
 	err := s.mgr.SetEnv(r.Context(), id, env, tenantFrom(r.Context()))
-	writeResult(w, r, "env", id, "set env failed", err, func() {
-		w.WriteHeader(http.StatusNoContent)
-	})
+	writeResult(w, r, "env", id, "set env failed", err, noContent(w))
 }
 
 func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id string, cred pool.Cred) error) http.HandlerFunc {
@@ -513,9 +507,7 @@ func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id 
 		}
 		id := r.PathValue("id")
 		err := do(r.Context(), id, s.sandboxCred(token))
-		writeResult(w, r, verb, id, verb+" failed", err, func() {
-			w.WriteHeader(http.StatusNoContent)
-		})
+		writeResult(w, r, verb, id, verb+" failed", err, noContent(w))
 	}
 }
 
@@ -640,9 +632,7 @@ func (s *Server) handleDeleteCheckpoint(w http.ResponseWriter, r *http.Request) 
 	if s.prober != nil {
 		s.prober.Forget(id)
 	}
-	writeResult(w, r, "delete checkpoint", id, "delete checkpoint failed", err, func() {
-		w.WriteHeader(http.StatusNoContent)
-	})
+	writeResult(w, r, "delete checkpoint", id, "delete checkpoint failed", err, noContent(w))
 }
 
 func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
@@ -653,9 +643,7 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 		s.writeRedirect(w, s.templateOwners(s.placer.TemplateOwners, key.Hash(), tenantFrom(r.Context()))) {
 		return
 	}
-	writeResult(w, r, "delete template", key.Template, "delete template failed", err, func() {
-		w.WriteHeader(http.StatusNoContent)
-	})
+	writeResult(w, r, "delete template", key.Template, "delete template failed", err, noContent(w))
 }
 
 func (s *Server) handleSetTemplateLabels(w http.ResponseWriter, r *http.Request) {
@@ -666,9 +654,7 @@ func (s *Server) handleSetTemplateLabels(w http.ResponseWriter, r *http.Request)
 	q := r.URL.Query()
 	key := templateKey(q)
 	err := s.mgr.SetTemplateLabels(r.Context(), key, req.Labels, tenantFrom(r.Context()), q.Get("digest"))
-	writeResult(w, r, "template labels", key.Template, "set template labels failed", err, func() {
-		w.WriteHeader(http.StatusNoContent)
-	})
+	writeResult(w, r, "template labels", key.Template, "set template labels failed", err, noContent(w))
 }
 
 func (s *Server) handleOwner(w http.ResponseWriter, r *http.Request) {

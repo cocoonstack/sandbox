@@ -226,23 +226,14 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 		m.stopVM(ctx, sb.VMName)
 		return fmt.Errorf("restore egress and env after cold boot: %w", err)
 	}
-	m.mu.Lock()
-	live := m.claimed[sb.ID] == sb
-	var js claimSnapshot
-	if live {
+	if live, _ := m.commitIfLive(ctx, sb, func() {
 		sb.Failed = ""
 		sb.Restarts++
 		sb.RestartedAt = time.Now()
-		js = m.store.set(sb)
-	}
-	m.mu.Unlock()
-	if !live {
+	}); !live {
 		// the release that dropped the claim owns the VM teardown
 		m.disarmEgress(sb.ID, true)
 		return ErrUnknownSandbox
-	}
-	if err := m.store.commit(js); err != nil {
-		m.recommit(ctx, js)
 	}
 	if m.disarmIfReleased(sb) {
 		return ErrUnknownSandbox
@@ -256,19 +247,8 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 
 // failLocked parks sb as failed with reason; the caller holds sb.Transition.
 func (m *Manager) failLocked(ctx context.Context, sb *types.Sandbox, reason string) {
-	m.mu.Lock()
-	live := m.claimed[sb.ID] == sb
-	var js claimSnapshot
-	if live {
-		sb.Failed = reason
-		js = m.store.set(sb)
-	}
-	m.mu.Unlock()
-	if !live {
+	if live, _ := m.commitIfLive(ctx, sb, func() { sb.Failed = reason }); !live {
 		return
-	}
-	if err := m.store.commit(js); err != nil {
-		m.recommit(ctx, js)
 	}
 	m.recordUsage(ctx, usageEvent{Event: "vmm_failed", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Reference: reason})
 	log.WithFunc("pool.failLocked").Warnf(ctx, "sandbox %s failed: %s", sb.ID, reason)

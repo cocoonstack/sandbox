@@ -660,6 +660,25 @@ func (m *Manager) recommit(ctx context.Context, snap claimSnapshot) {
 	}()
 }
 
+func (m *Manager) commitIfLive(ctx context.Context, sb *types.Sandbox, mutate func()) (bool, error) {
+	m.mu.Lock()
+	live := m.claimed[sb.ID] == sb
+	var js claimSnapshot
+	if live {
+		mutate()
+		js = m.store.set(sb)
+	}
+	m.mu.Unlock()
+	if !live {
+		return false, nil
+	}
+	if err := m.store.commit(js); err != nil {
+		m.recommit(ctx, js)
+		return true, err
+	}
+	return true, nil
+}
+
 func (m *Manager) claim(id, token string) (*types.Sandbox, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
