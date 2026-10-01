@@ -125,6 +125,8 @@ func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, string, e
 	gen := filepath.Join(s.staging, "cache", id, store.ExportGenHash(meta))
 	export := filepath.Join(gen, store.ExportDir)
 	if _, statErr := os.Stat(export); statErr == nil {
+		now := time.Now()
+		_ = os.Chtimes(gen, now, now)
 		return export, meta, digest, nil
 	}
 	flight := s.fetches.DoChan(gen, func() (any, error) {
@@ -356,7 +358,11 @@ func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string
 	if err := os.MkdirAll(filepath.Dir(gen), 0o750); err != nil {
 		return err
 	}
-	return os.Rename(local, gen)
+	if err := os.Rename(local, gen); err != nil {
+		return err
+	}
+	pruneIdleGenerations(filepath.Dir(gen), gen)
+	return nil
 }
 
 func (s *Store) key(id, rest string) string {
@@ -466,4 +472,18 @@ func (s *Store) list(ctx context.Context, prefix string) ([]string, error) {
 		}
 	}
 	return keys, nil
+}
+
+// pruneIdleGenerations drops cached generations of one record that no Fetch used within the grace; a hit refreshes the mtime.
+func pruneIdleGenerations(dir, keep string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+		if info, err := entry.Info(); err == nil && path != keep && time.Since(info.ModTime()) >= store.GenerationGrace {
+			_ = os.RemoveAll(path)
+		}
+	}
 }

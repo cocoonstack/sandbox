@@ -353,8 +353,8 @@ func TestPublishSweepsGenerationsBySupersessionAge(t *testing.T) {
 		t.Fatalf("superseded generation reclaimed inside the grace: %v", statErr)
 	}
 
-	setAge(t, gen1, generationGrace+time.Minute)
-	setAge(t, gen2, generationGrace/2)
+	setAge(t, gen1, store.GenerationGrace+time.Minute)
+	setAge(t, gen2, store.GenerationGrace/2)
 	mustPublish(t, st, id, "fourth")
 	if _, statErr := os.Stat(gen1); !os.IsNotExist(statErr) {
 		t.Fatalf("generation past its supersession grace survived publish: %v", statErr)
@@ -623,7 +623,7 @@ func seedRecord(t *testing.T, dir, metaID string) {
 
 func backdate(t *testing.T, path string) {
 	t.Helper()
-	setAge(t, path, 2*generationGrace)
+	setAge(t, path, 2*store.GenerationGrace)
 }
 
 func setAge(t *testing.T, path string, age time.Duration) {

@@ -28,9 +28,6 @@ const (
 	digestPrefix         = "digest-"
 	digestWorkerLimit    = 8
 	digestReadBufferSize = 128 << 10
-
-	// generationGrace bounds the race where another node still clones a generation being re-published.
-	generationGrace = time.Hour
 )
 
 type digestSource struct {
@@ -219,7 +216,7 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 			return readErr
 		}
 		// a sweep may already have selected an expired path for removal.
-		if time.Since(genInfo.ModTime()) >= generationGrace {
+		if time.Since(genInfo.ModTime()) >= store.GenerationGrace {
 			return fmt.Errorf("generation %s expired before commit; retry after sweep", filepath.Base(genDir))
 		}
 	}
@@ -333,7 +330,7 @@ func removeAgedEntry(final string, entry fs.DirEntry) error {
 		return err
 	}
 	// Publish refreshes a generation before it becomes visible or superseded.
-	if time.Since(info.ModTime()) < generationGrace {
+	if time.Since(info.ModTime()) < store.GenerationGrace {
 		return nil
 	}
 	return os.RemoveAll(filepath.Join(final, entry.Name()))
