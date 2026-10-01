@@ -62,22 +62,22 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 	if err := m.checkTemplateOwner(ctx, store.TemplateID(key.Hash()), tenant); err != nil {
 		return types.PoolKey{}, "", err
 	}
-	// the transition lock pins the source snapshot; a started promote must finish uncanceled
-	sb.Transition.Lock()
-	defer sb.Transition.Unlock()
+	// a started promote must finish uncanceled
 	ctx = context.WithoutCancel(ctx)
-	m.trimForCapture(ctx, sb)
-
-	snap, cleanup, err := m.sourceSnap(ctx, sb)
+	staging, err := m.tpls.Stage(store.TemplateID(key.Hash()))
+	if err != nil {
+		return types.PoolKey{}, "", fmt.Errorf("stage template: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(staging) }()
+	_, guestEnv, err := m.exportSource(ctx, sb, filepath.Join(staging, store.ExportDir))
 	if err != nil {
 		return types.PoolKey{}, "", fmt.Errorf("promote %s: %w", sb.ID, err)
 	}
-	defer cleanup()
-	rec := templateRecord{Key: key, Tenant: tenant, GuestEnv: m.heldGuestEnv(sb)}
+	rec := templateRecord{Key: key, Tenant: tenant, GuestEnv: guestEnv}
 	if sb.Layer == types.LayerPooled {
 		rec.PolicySource = sb.PolicyKey()
 	}
-	digest, err := m.publishTemplate(ctx, snap, rec)
+	digest, err := m.commitTemplate(ctx, staging, rec)
 	if err != nil {
 		return types.PoolKey{}, "", fmt.Errorf("promote %s: %w", sb.ID, err)
 	}
@@ -290,19 +290,6 @@ func (m *Manager) checkTemplateOwner(ctx context.Context, id, tenant string) err
 		return ErrTemplateOwned
 	}
 	return nil
-}
-
-func (m *Manager) publishTemplate(ctx context.Context, snap string, rec templateRecord) (string, error) {
-	id := store.TemplateID(rec.Key.Hash())
-	staging, err := m.tpls.Stage(id)
-	if err != nil {
-		return "", fmt.Errorf("stage template: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(staging) }()
-	if err = m.eng.SnapshotExport(ctx, snap, filepath.Join(staging, store.ExportDir)); err != nil {
-		return "", fmt.Errorf("export template: %w", err)
-	}
-	return m.commitTemplate(ctx, staging, rec)
 }
 
 func (m *Manager) commitTemplate(ctx context.Context, staging string, rec templateRecord) (string, error) {
