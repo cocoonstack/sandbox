@@ -24,20 +24,20 @@ type claimRouter struct {
 }
 
 func (r claimRouter) Route() string {
-	m := r.m
-	if m.upstreamEnv == "" {
+	view := r.m.view.Load()
+	if view.upstreamEnv == "" {
 		return ""
 	}
-	m.mu.Lock()
-	v, set := r.sb.Env.Hidden(m.upstreamEnv)
-	m.mu.Unlock()
+	r.m.mu.Lock()
+	v, set := r.sb.Env.Hidden(view.upstreamEnv)
+	r.m.mu.Unlock()
 	if set {
 		if v == upstreamDirect {
 			return ""
 		}
 		return v
 	}
-	return cmp.Or(m.tenantUpstream[r.sb.Tenant], m.poolUpstream[r.sb.PolicyKey()])
+	return cmp.Or(view.tenantUpstream[r.sb.Tenant], view.poolUpstream[r.sb.PolicyKey()])
 }
 
 func (r claimRouter) Dial(ctx context.Context, route, network, addr string) (net.Conn, error) {
@@ -49,7 +49,7 @@ func (r claimRouter) Dial(ctx context.Context, route, network, addr string) (net
 	if err != nil {
 		return nil, err
 	}
-	if !m.upstreamAllow.Allows(u) {
+	if !m.view.Load().upstreamAllow.Allows(u) {
 		return nil, fmt.Errorf("egress: upstream %s is not allowed", u.Host)
 	}
 	target, internal, err := m.upstreamTarget(ctx, addr)
@@ -98,25 +98,27 @@ func (m *Manager) upstreamTarget(ctx context.Context, addr string) (netip.AddrPo
 
 // checkUpstreamEnv admits a claim's upstream entry only host-side, as direct or an allowed upstream URL.
 func (m *Manager) checkUpstreamEnv(env types.Env) error {
-	if m.upstreamEnv == "" {
+	view := m.view.Load()
+	name := view.upstreamEnv
+	if name == "" {
 		return nil
 	}
-	v, ok := env[m.upstreamEnv]
+	v, ok := env[name]
 	if !ok {
 		return nil
 	}
 	if v.InGuest() {
-		return fmt.Errorf("%w: %s must be guest: false, it carries the upstream's credentials", ErrBadEnv, m.upstreamEnv)
+		return fmt.Errorf("%w: %s must be guest: false, it carries the upstream's credentials", ErrBadEnv, name)
 	}
 	if v.Value == upstreamDirect {
 		return nil
 	}
 	u, err := egress.ParseUpstream(v.Value)
 	if err != nil {
-		return fmt.Errorf("%w: %s: %w", ErrBadEnv, m.upstreamEnv, err)
+		return fmt.Errorf("%w: %s: %w", ErrBadEnv, name, err)
 	}
-	if !m.upstreamAllow.Allows(u) {
-		return fmt.Errorf("%w: %s: upstream %s is not in egress_upstream.allow", ErrBadEnv, m.upstreamEnv, u.Host)
+	if !view.upstreamAllow.Allows(u) {
+		return fmt.Errorf("%w: %s: upstream %s is not in egress_upstream.allow", ErrBadEnv, name, u.Host)
 	}
 	return nil
 }

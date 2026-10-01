@@ -435,7 +435,8 @@ func BenchmarkClaimSecretsHeader(b *testing.B) {
 	if err != nil {
 		b.Fatalf("secrets: %v", err)
 	}
-	m := &Manager{egressSecrets: store}
+	m := &Manager{}
+	m.view.Store(&configView{secrets: store})
 	b.Run("node-store-only", func(b *testing.B) {
 		for b.Loop() {
 			_, _, _ = store.Header("gh")

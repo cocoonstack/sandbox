@@ -18,7 +18,7 @@ func TestGoldenBuildSizesItsDisk(t *testing.T) {
 
 	for _, key := range []types.PoolKey{testKey, other} {
 		final := filepath.Join(m.goldensDir(), key.Hash())
-		if err := m.buildGoldenSteps(t.Context(), key, "sbx-gb-"+key.Hash(), "snap", final, ""); err != nil {
+		if err := m.buildGoldenSteps(t.Context(), m.view.Load(), key, "sbx-gb-"+key.Hash(), "snap", final, ""); err != nil {
 			t.Fatalf("buildGoldenSteps %s: %v", key.Template, err)
 		}
 	}
@@ -26,10 +26,10 @@ func TestGoldenBuildSizesItsDisk(t *testing.T) {
 	if !slices.Equal(eng.coldStorage, []string{"40G", ""}) {
 		t.Errorf("cold boot disks %v, want the sized pool at 40 and the other at cocoon's default", eng.coldStorage)
 	}
-	if got := m.goldenStamp(other, false, nil, ""); got != strings.Join([]string{"", "", ""}, "\x00") {
+	if got := m.goldenStamp(m.view.Load(), other, ""); got != strings.Join([]string{"", "", ""}, "\x00") {
 		t.Errorf("unsized stamp %q changed, so goldens built before the field would rebuild", got)
 	}
-	if !strings.Contains(m.goldenStamp(testKey, false, nil, ""), "storage=42949672960") {
+	if !strings.Contains(m.goldenStamp(m.view.Load(), testKey, ""), "storage=42949672960") {
 		t.Error("sized stamp does not carry its disk size in bytes")
 	}
 }
@@ -37,7 +37,7 @@ func TestGoldenBuildSizesItsDisk(t *testing.T) {
 func TestEquivalentSizesStampTheSameGolden(t *testing.T) {
 	decimal := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Storage: "40G"})
 	binary := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Storage: "40GiB"})
-	if a, b := decimal.goldenStamp(testKey, false, nil, ""), binary.goldenStamp(testKey, false, nil, ""); a != b {
+	if a, b := decimal.goldenStamp(decimal.view.Load(), testKey, ""), binary.goldenStamp(binary.view.Load(), testKey, ""); a != b {
 		t.Errorf("40G stamps %q, 40GiB stamps %q; the same disk would rebuild its golden", a, b)
 	}
 }

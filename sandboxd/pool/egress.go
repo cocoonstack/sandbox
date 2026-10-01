@@ -123,9 +123,6 @@ func (m *Manager) NetRoute(sb *types.Sandbox) types.NetRoute {
 	if m.laneOf(sb.Key) == engine.LaneDirect {
 		return types.NetRouteDirect
 	}
-	if !m.guardedEgress {
-		return types.NetRouteNone
-	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.egressListeners[sb.ID] != nil {
@@ -206,7 +203,8 @@ func (m *Manager) tapOf(ctx context.Context, vmName string) (string, error) {
 
 // armEgressProxy serves the proxy on the pre-bound doors, binding them when refill could not, once the effective policy permits anything.
 func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
-	if !m.guardedEgress || sb.VsockSocket == "" {
+	v := m.view.Load()
+	if !v.guardedEgress || sb.VsockSocket == "" {
 		return nil
 	}
 	policy, ok := m.effectivePolicy(sb)
@@ -219,8 +217,8 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	m.mu.Lock()
 	el := m.egressPrebound[sb.VMName]
 	delete(m.egressPrebound, sb.VMName)
-	intercepts := m.poolEgress[sb.PolicyKey()].Intercepts()
 	m.mu.Unlock()
+	intercepts := v.poolEgress[sb.PolicyKey()].Intercepts()
 	// only an intercepting pool pays for the TLS transport and leaf cache
 	ca := m.egressCA
 	if !intercepts {
@@ -228,7 +226,7 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	}
 	proxy := egress.New(policy, claimSecrets{m: m, sb: sb}, ca, claimRouter{m: m, sb: sb},
 		func(ev egress.Event) { m.recordEgress(evCtx, id, tenant, ev) }, sb)
-	if m.usageBytes {
+	if v.usageBytes {
 		proxy.OnTransfer(func(ev egress.Event, sent, received int64) {
 			m.recordUsage(evCtx, usageEvent{Event: "egress_bytes", ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Sent: sent, Received: received})
 		})
@@ -261,10 +259,9 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 
 // prebindEgress binds a warm VM's doors at refill, so a claim only has to start serving them.
 func (m *Manager) prebindEgress(ctx context.Context, sb *types.Sandbox) {
-	m.mu.Lock()
-	policy := m.poolEgress[sb.Key]
-	m.mu.Unlock()
-	if !m.guardedEgress || policy == nil || sb.VsockSocket == "" {
+	v := m.view.Load()
+	policy := v.poolEgress[sb.Key]
+	if !v.guardedEgress || policy == nil || sb.VsockSocket == "" {
 		return
 	}
 	el, err := bindEgress(sb.VsockSocket, policy.ServesSocks())
@@ -301,9 +298,6 @@ func (m *Manager) disarmIfReleased(sb *types.Sandbox) bool {
 
 // disarmEgress tears down a sandbox's egress listener, and its NIC lock only when removed.
 func (m *Manager) disarmEgress(id string, removed bool) {
-	if !m.guardedEgress && !m.lockEgress {
-		return
-	}
 	m.mu.Lock()
 	el := m.egressListeners[id]
 	delete(m.egressListeners, id)
@@ -322,7 +316,7 @@ func (m *Manager) disarmEgress(id string, removed bool) {
 }
 
 func (m *Manager) poolIntercepts(key types.PoolKey) bool {
-	return m.poolEgress[key].Intercepts()
+	return m.view.Load().poolEgress[key].Intercepts()
 }
 
 // effectivePolicy resolves pool ∩ tenant; root has no tenant layer, an unpooled key no pool one, a NoEgress claim none at all.
@@ -330,10 +324,11 @@ func (m *Manager) effectivePolicy(sb *types.Sandbox) (egress.Evaluator, bool) {
 	if sb.NoEgress {
 		return nil, false
 	}
+	v := m.view.Load()
+	poolPol := v.poolEgress[sb.PolicyKey()]
+	tenantPol := v.tenantEgress[sb.Tenant]
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	poolPol := m.poolEgress[sb.PolicyKey()]
-	tenantPol := m.tenantEgress[sb.Tenant]
 	if poolPol == nil {
 		pooled := sb.Layer == types.LayerPooled
 		if sb.Layer == "" {
@@ -397,13 +392,13 @@ func reached(ln net.Listener) bool {
 	return waiting
 }
 
-func newEgressDialer(allow []egress.InternalAllow) *net.Dialer {
+func newEgressDialer(allow func() []egress.InternalAllow) *net.Dialer {
 	return &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
 		ap, err := netip.ParseAddrPort(address)
 		if err != nil {
 			return fmt.Errorf("egress: unresolved address %q: %w", address, err)
 		}
-		_, err = destVerdict(allow, ap.Addr(), ap.Port())
+		_, err = destVerdict(allow(), ap.Addr(), ap.Port())
 		return err
 	}}
 }

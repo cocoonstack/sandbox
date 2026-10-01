@@ -173,6 +173,7 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 	snap := goldenPrefix + hash
 	final := filepath.Join(m.goldensDir(), hash)
 	imageID := m.imageIDs(ctx)[p.key.Template]
+	v := m.view.Load()
 	m.mu.Lock()
 	adopted := m.adoptGolden(p, imageID)
 	p.building = !adopted
@@ -182,7 +183,7 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 		return
 	}
 
-	err := m.buildGoldenSteps(ctx, p.key, name, snap, final, imageID)
+	err := m.buildGoldenSteps(ctx, v, p.key, name, snap, final, imageID)
 	if rmErr := m.eng.SnapshotRemove(ctx, snap); rmErr != nil && err == nil {
 		logger.Debugf(ctx, "drop golden snapshot %s: %v", snap, rmErr)
 	}
@@ -207,8 +208,8 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 	logger.Infof(ctx, "golden ready for %s (%s)", hash, p.key.Template)
 }
 
-func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name, snap, final, imageID string) error {
-	rec, err := m.eng.RunCold(ctx, name, key, m.poolStorage[key])
+func (m *Manager) buildGoldenSteps(ctx context.Context, v *configView, key types.PoolKey, name, snap, final, imageID string) error {
+	rec, err := m.eng.RunCold(ctx, name, key, v.poolStorage[key])
 	if err != nil {
 		return err
 	}
@@ -219,14 +220,12 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 	if err = m.markLane(ctx, key, sock); err != nil {
 		return err
 	}
-	caBaked := m.poolIntercepts(key)
-	if caBaked {
+	if v.poolEgress[key].Intercepts() {
 		if err = m.eng.InstallCACert(ctx, sock, m.egressCA.CertPEM()); err != nil {
 			return fmt.Errorf("install egress ca: %w", err)
 		}
 	}
-	warmup, err := m.runWarmup(ctx, key, sock)
-	if err != nil {
+	if err = m.runWarmup(ctx, v.poolWarmups[key], sock); err != nil {
 		return fmt.Errorf("warmup: %w", err)
 	}
 	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
@@ -235,24 +234,23 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, key types.PoolKey, name,
 	if err := m.exportGolden(ctx, snap, final); err != nil {
 		return err
 	}
-	stamp := m.goldenStamp(key, caBaked, warmup, imageID)
+	stamp := m.goldenStamp(v, key, imageID)
 	if err := os.WriteFile(final+goldenStampSuffix, []byte(stamp), 0o644); err != nil { //nolint:gosec // public stamp
 		return fmt.Errorf("write golden stamp: %w", err)
 	}
 	return nil
 }
 
-func (m *Manager) runWarmup(ctx context.Context, key types.PoolKey, sock string) ([]string, error) {
-	warmup := m.poolWarmups[key]
+func (m *Manager) runWarmup(ctx context.Context, warmup []string, sock string) error {
 	if len(warmup) == 0 {
-		return nil, nil
+		return nil
 	}
-	return warmup, m.eng.Warmup(ctx, sock, warmup)
+	return m.eng.Warmup(ctx, sock, warmup)
 }
 
 // a restore maps the golden memory lazily, so the warmup's pages fault in here instead of under the first claim
 func (m *Manager) warmClone(ctx context.Context, sb *types.Sandbox) error {
-	if _, err := m.runWarmup(ctx, sb.Key, sb.VsockSocket); err != nil {
+	if err := m.runWarmup(ctx, m.view.Load().poolWarmups[sb.Key], sb.VsockSocket); err != nil {
 		m.destroy(ctx, sb.VMName)
 		return fmt.Errorf("clone warmup: %w", err)
 	}
@@ -263,7 +261,7 @@ func (m *Manager) warmClone(ctx context.Context, sb *types.Sandbox) error {
 func (m *Manager) adoptGolden(p *pool, imageID string) bool {
 	g := filepath.Join(m.goldensDir(), p.hash)
 	stamp, err := os.ReadFile(g + goldenStampSuffix) //nolint:gosec // node-local golden path
-	want := m.goldenStamp(p.key, m.poolEgress[p.key].Intercepts(), m.poolWarmups[p.key], imageID)
+	want := m.goldenStamp(m.view.Load(), p.key, imageID)
 	if err != nil || string(stamp) != want || !dirExists(g) {
 		return false
 	}
@@ -271,18 +269,18 @@ func (m *Manager) adoptGolden(p *pool, imageID string) bool {
 	return true
 }
 
-func (m *Manager) goldenStamp(key types.PoolKey, caBaked bool, warmup []string, imageID string) string {
+func (m *Manager) goldenStamp(v *configView, key types.PoolKey, imageID string) string {
 	var fp string
-	if caBaked {
+	if v.poolEgress[key].Intercepts() {
 		fp = m.EgressCAFingerprint()
 	}
 	fields := []string{fp, string(m.laneOf(key)), imageID}
 	// only a sized pool stamps its disk, in bytes so "40G" and "40GiB" match and unsized goldens stay adoptable
-	if storage := m.poolStorage[key]; storage != "" {
+	if storage := v.poolStorage[key]; storage != "" {
 		n, _ := config.StorageBytes(storage)
 		fields = append(fields, "storage="+strconv.FormatInt(n, 10))
 	}
-	return strings.Join(append(fields, warmup...), "\x00")
+	return strings.Join(append(fields, v.poolWarmups[key]...), "\x00")
 }
 
 func (m *Manager) checkImagesOnce(ctx context.Context) {
@@ -369,7 +367,7 @@ func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir
 
 // trimForCapture trims a live sandbox's copy-on-write disk when its pool asks for it; a failed trim only leaves the capture larger.
 func (m *Manager) trimForCapture(ctx context.Context, sb *types.Sandbox) {
-	if !m.poolTrims[sb.PolicyKey()] || sb.HibernateSnap != "" || sb.ArchiveCk != "" {
+	if !m.view.Load().poolTrims[sb.PolicyKey()] || sb.HibernateSnap != "" || sb.ArchiveCk != "" {
 		return
 	}
 	if err := m.eng.TrimCow(ctx, sb.VsockSocket); err != nil {
@@ -389,7 +387,7 @@ func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden strin
 
 func (m *Manager) provisionCold(ctx context.Context, key types.PoolKey) (*types.Sandbox, error) {
 	sb, err := m.provisionVM(ctx, key, coldProbeTimeout, func(name string) (types.VMRecord, error) {
-		return m.eng.RunCold(ctx, name, key, m.poolStorage[key])
+		return m.eng.RunCold(ctx, name, key, m.view.Load().poolStorage[key])
 	})
 	if err != nil {
 		return nil, err

@@ -1130,7 +1130,7 @@ func seedGolden(t *testing.T, m *Manager, imageID string) string {
 	if err := os.MkdirAll(g, 0o750); err != nil {
 		t.Fatalf("seed golden: %v", err)
 	}
-	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(testKey, false, nil, imageID)), 0o644); err != nil {
+	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(m.view.Load(), testKey, imageID)), 0o644); err != nil {
 		t.Fatalf("seed golden stamp: %v", err)
 	}
 	return g

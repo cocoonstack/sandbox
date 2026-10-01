@@ -21,14 +21,14 @@ func TestGoldenStampCarriesImageID(t *testing.T) {
 	eng.imageIDs = map[string]string{testKey.Template: imageA}
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
 	final := filepath.Join(m.goldensDir(), testKey.Hash())
-	if err := m.buildGoldenSteps(t.Context(), testKey, "sbx-gb", "snap", final, imageA); err != nil {
+	if err := m.buildGoldenSteps(t.Context(), m.view.Load(), testKey, "sbx-gb", "snap", final, imageA); err != nil {
 		t.Fatalf("buildGoldenSteps: %v", err)
 	}
 	stamp, err := os.ReadFile(final + goldenStampSuffix)
-	if err != nil || string(stamp) != m.goldenStamp(testKey, false, nil, imageA) {
+	if err != nil || string(stamp) != m.goldenStamp(m.view.Load(), testKey, imageA) {
 		t.Fatalf("stamp = %q (%v), want one carrying %s", stamp, err, imageA)
 	}
-	if string(stamp) == m.goldenStamp(testKey, false, nil, imageB) {
+	if string(stamp) == m.goldenStamp(m.view.Load(), testKey, imageB) {
 		t.Error("stamp matches a different image id")
 	}
 }

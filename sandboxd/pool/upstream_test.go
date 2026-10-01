@@ -21,8 +21,10 @@ import (
 
 func TestRouteTakesTheClaimThenTenantThenPoolUpstream(t *testing.T) {
 	m := upstreamManager(t, "127.0.0.1")
-	m.poolUpstream[testKey] = "http://127.0.0.1:3001"
-	m.tenantUpstream["acme"] = "http://127.0.0.1:3002"
+	editView(m, func(v *configView) {
+		v.poolUpstream[testKey] = "http://127.0.0.1:3001"
+		v.tenantUpstream["acme"] = "http://127.0.0.1:3002"
+	})
 	for _, tc := range []struct {
 		name, tenant string
 		env          types.Env
@@ -138,7 +140,7 @@ func TestUpstreamEnvIsAdmittedHostOnlyAndAllowed(t *testing.T) {
 			t.Errorf("%s: %v, want ok=%v", name, err, tc.ok)
 		}
 	}
-	m.upstreamEnv = ""
+	editView(m, func(v *configView) { v.upstreamEnv = "" })
 	if err := m.checkUpstreamEnv(types.Env{"EGRESS_UPSTREAM": {Value: "anything"}}); err != nil {
 		t.Errorf("with the feature off the name is an ordinary env entry: %v", err)
 	}
@@ -193,7 +195,7 @@ func upstreamManager(t *testing.T, allow ...string) *Manager {
 	if err != nil {
 		t.Fatalf("allow: %v", err)
 	}
-	m.upstreamEnv, m.upstreamAllow = "EGRESS_UPSTREAM", parsed
+	editView(m, func(v *configView) { v.upstreamEnv, v.upstreamAllow = "EGRESS_UPSTREAM", parsed })
 	return m
 }
 

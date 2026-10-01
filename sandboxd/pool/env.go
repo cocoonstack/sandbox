@@ -141,10 +141,11 @@ type claimSecrets struct {
 }
 
 func (c claimSecrets) Header(name string) (header, value string, ok bool) {
-	if header, value, ok = c.m.egressSecrets.Header(name); !ok {
+	secrets := c.m.view.Load().secrets
+	if header, value, ok = secrets.Header(name); !ok {
 		return "", "", false
 	}
-	env := c.m.egressSecrets.EnvName(name)
+	env := secrets.EnvName(name)
 	c.m.mu.Lock()
 	own, set := c.sb.Env.Hidden(env)
 	c.m.mu.Unlock()
