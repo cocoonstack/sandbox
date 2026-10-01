@@ -286,7 +286,15 @@ node that no longer holds the tenant as done). Until every node has it, a
 redirect to a node that lacks the tenant answers 401, which the SDK treats as
 transient and resolves at the origin. `GET /v1/tenants` reports each node's set
 `digest`, and the gossiped config digest below covers the live set, so a node
-that missed a change shows in `sandboxd_config_digest_mismatch`.
+that missed a change shows in `sandboxd_config_digest_mismatch`. A node that is
+down during a fan-out has left the peer list, so it is absent from the results
+rather than failed: when it rejoins with its old `tenants.json`, that mismatch
+names the divergence, and one apply to that node closes it.
+
+Every node holds the whole tenant set in memory and rewrites `tenants.json` on
+each change, so the set suits thousands to tens of thousands of tenants:
+control planes, organisations, services. Map end users onto them in the
+control plane (`claim_ref`, `metadata`) rather than giving each user a tenant.
 
 ### Cluster-invariant config
 
@@ -310,6 +318,32 @@ the divergent node appears — not at the first unlucky redirect — and raises 
 rotation is a legitimate transient mismatch, so a divergence never partitions
 the mesh.
 
+## Scale
+
+Every memberlist push/pull carries the whole cluster's placement state: each
+node's warm counts, template set and volume set, as one JSON document. Its
+size grows with nodes × templates per node:
+
+| nodes | templates per node | state per push/pull |
+|---|---|---|
+| 1,000 | 5 | 0.6 MB |
+| 10,000 | 5 | 6.3 MB |
+| 10,000 | 500 | 353 MB |
+
+memberlist refuses a push/pull state over 20 MiB, and above 32 nodes it
+stretches the push/pull interval with log2 of the cluster size (10 s at 10,000
+nodes), so a change takes minutes to reach every node while warm counts move
+with every claim.
+
+- **Size one mesh in the hundreds of nodes.** Split a larger fleet into
+  independent meshes (cells), each with its own `mesh.join`, and route users
+  to a cell in front of them. Redirects, heals and template lookups stay
+  inside the cell.
+- **Keep per-user data out of the gossip.** A promoted template is gossiped by
+  every node that holds it, so templates belong to pools or tenants, not to
+  end users. At 500 templates per node the state reaches the 20 MiB limit near
+  600 nodes. Checkpoints are not gossiped: their owner is probed per request.
+
 ## Cluster checklist
 
 - memberlist port (e.g. 7946) open node-to-node, TCP **and** UDP
@@ -322,6 +356,8 @@ the mesh.
 - same `api_token`, `tenants`, `preview_secret`, and `egress_ca` root everywhere
   (a mismatch warns and shows in `sandboxd_config_digest_mismatch`)
 - `cluster_key` set if the gossip network is not otherwise trusted
+- one mesh sized in the hundreds of nodes, and promoted templates per pool or
+  tenant rather than per end user (see [scale](#scale))
 - pool changes via `Client.SetPoolsCluster` (or per-node `SetPools`); the applied
   set persists to `pools.json` and survives restart
 - tenant changes via `Client.PutTenantCluster` / `DeleteTenantCluster` /
