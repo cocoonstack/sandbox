@@ -103,6 +103,15 @@ func (c *upstreamConn) CloseWrite() error {
 	return nil
 }
 
+type upstreamError struct {
+	host string
+	err  error
+}
+
+func (e *upstreamError) Error() string { return e.err.Error() }
+
+func (e *upstreamError) Unwrap() error { return e.err }
+
 // ParseUpstream reads an upstream proxy URL, http:// (CONNECT) or socks5://, with optional user:pass and a required port.
 func ParseUpstream(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
@@ -129,7 +138,7 @@ func DialUpstream(ctx context.Context, u *url.URL, target string, dial DialFunc)
 	defer cancel()
 	conn, err := dial(ctx, "tcp", u.Host)
 	if err != nil {
-		return nil, fmt.Errorf("dial upstream %s: %w", u.Host, err)
+		return nil, &upstreamError{host: u.Host, err: fmt.Errorf("dial upstream %s: %w", u.Host, err)}
 	}
 	var reader *bufio.Reader
 	if u.Scheme == "socks5" {
@@ -139,12 +148,18 @@ func DialUpstream(ctx context.Context, u *url.URL, target string, dial DialFunc)
 	}
 	if err != nil {
 		_ = conn.Close()
-		return nil, err
+		return nil, &upstreamError{host: u.Host, err: err}
 	}
 	return &upstreamConn{Conn: conn, reader: reader, host: u.Host}, nil
 }
 
-func upstreamHost(conn net.Conn) string {
+func upstreamOf(conn net.Conn, err error) string {
+	if err != nil {
+		if ue, ok := errors.AsType[*upstreamError](err); ok {
+			return ue.host
+		}
+		return ""
+	}
 	if tlsConn, ok := conn.(*tls.Conn); ok {
 		conn = tlsConn.NetConn()
 	}

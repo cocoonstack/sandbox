@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -204,7 +205,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	upstream, err := p.router.Dial(r.Context(), route, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
-	ev.Upstream = upstreamHost(upstream)
+	ev.Upstream = upstreamOf(upstream, err)
 	p.record(ev)
 	if err != nil {
 		http.Error(w, "egress: upstream unreachable", http.StatusBadGateway)
@@ -275,7 +276,7 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	if route != "" {
 		upstream = new(string)
 		ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
-			GotConn: func(info httptrace.GotConnInfo) { *upstream = upstreamHost(info.Conn) },
+			GotConn: func(info httptrace.GotConnInfo) { *upstream = upstreamOf(info.Conn, nil) },
 		})
 	}
 	out := r.Clone(ctx)
@@ -302,7 +303,7 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 
 	resp, err := p.transport(route, mitm).RoundTrip(out)
 	if upstream != nil {
-		ev.Upstream = *upstream
+		ev.Upstream = cmp.Or(*upstream, upstreamOf(nil, err))
 	}
 	p.record(ev)
 	if err != nil {

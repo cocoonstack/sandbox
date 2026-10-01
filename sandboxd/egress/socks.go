@@ -73,7 +73,7 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 	dialCtx, cancel := context.WithTimeout(ctx, socksTimeout)
 	defer cancel()
 	upstream, err := p.router.Dial(dialCtx, route, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
-	ev.Upstream = upstreamHost(upstream)
+	ev.Upstream = upstreamOf(upstream, err)
 	p.record(ev)
 	if err != nil {
 		_ = socksReply(conn, socksUnreached)

@@ -288,6 +288,52 @@ func TestTransferCountsTunnelAndRequestBytes(t *testing.T) {
 	}
 }
 
+func TestADeadUpstreamIsNamedInTheAudit(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	dead := ln.Addr().String()
+	_ = ln.Close()
+	events := make(chan Event, 4)
+	p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, upstreamRouter{route: "http://u:pw@" + dead}, func(ev Event) { events <- ev }, nil)
+	t.Cleanup(p.Close)
+	srv := httptest.NewServer(p)
+	t.Cleanup(srv.Close)
+
+	conn := dialConnect(t, srv.Listener.Addr().String(), "203.0.113.9:443")
+	if status := readStatus(t, bufio.NewReader(conn)); !strings.Contains(status, "502") {
+		t.Errorf("CONNECT through a dead upstream: %s, want 502", status)
+	}
+	_ = conn.Close()
+	if ev := recvEvent(t, events); ev.Upstream != dead {
+		t.Errorf("CONNECT audit names upstream %q, want %q", ev.Upstream, dead)
+	}
+	resp, err := proxyClient(t, srv.URL).Get("http://203.0.113.9/")
+	if err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("forward through a dead upstream: %d, want 502", resp.StatusCode)
+	}
+	if ev := recvEvent(t, events); ev.Upstream != dead {
+		t.Errorf("forward audit names upstream %q, want %q", ev.Upstream, dead)
+	}
+}
+
+type upstreamRouter struct{ route string }
+
+func (r upstreamRouter) Route() string { return r.route }
+
+func (r upstreamRouter) Dial(ctx context.Context, route, _, addr string) (net.Conn, error) {
+	u, err := ParseUpstream(route)
+	if err != nil {
+		return nil, err
+	}
+	return DialUpstream(ctx, u, addr, plainDial)
+}
+
 type switchRouter struct {
 	mu     sync.Mutex
 	route  string
