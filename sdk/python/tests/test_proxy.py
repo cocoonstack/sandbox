@@ -6,6 +6,7 @@ import socket
 import threading
 import time
 
+import pytest
 from conftest import sandbox_at
 
 
@@ -54,13 +55,14 @@ class ClosedPortConn:
         pass
 
 
-def test_proxy_port_accepts_and_pipes(monkeypatch):
+@pytest.mark.parametrize("local", ["127.0.0.1:0", "[::1]:0"])
+def test_proxy_port_accepts_and_pipes(monkeypatch, local):
     sb = sandbox_at("127.0.0.1:1")
     monkeypatch.setattr(sb, "dial_port", lambda port: FakePortConn())
 
-    listener = sb.proxy_port("127.0.0.1:0", 8080)
+    listener = sb.proxy_port(local, 8080)
     try:
-        c = socket.create_connection(listener.getsockname(), timeout=5)
+        c = socket.create_connection(listener.getsockname()[:2], timeout=5)
         c.sendall(b"hello")
         c.settimeout(5)
         got, deadline = b"", time.monotonic() + 5

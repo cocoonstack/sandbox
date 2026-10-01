@@ -352,7 +352,9 @@ class Sandbox:
     def proxy_port(self, local_addr: str, port: int) -> socket.socket:
         """Serves a guest port on a local socket; closing the listener stops new connections."""
         host, _, lport = local_addr.rpartition(":")
-        listener = socket.create_server((host or "127.0.0.1", int(lport)))
+        host = host.strip("[]") or "127.0.0.1"
+        family = socket.AF_INET6 if ":" in host else socket.AF_INET
+        listener = socket.create_server((host, int(lport)), family=family)
         threading.Thread(target=self._proxy_accept_loop, args=(listener, port), daemon=True).start()
         return listener
 
