@@ -112,6 +112,17 @@ pub fn apply_owner(cmd: &mut Command, path: &str) {
     }
 }
 
+pub fn start_in(cmd: &mut Command, dir: &OwnedFd) {
+    let fd = dir.as_raw_fd();
+    // SAFETY: fchdir is async-signal-safe and `dir` outlives the spawn that runs this hook.
+    unsafe {
+        cmd.pre_exec(move || {
+            nix::unistd::fchdir(std::os::fd::BorrowedFd::borrow_raw(fd))
+                .map_err(std::io::Error::from)
+        })
+    };
+}
+
 /// Opens a pty, returning the (master, slave) fds; the master is non-blocking for async I/O.
 pub fn openpty(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
     let ws = nix::pty::Winsize {
