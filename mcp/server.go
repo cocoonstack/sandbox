@@ -47,7 +47,6 @@ type server struct {
 	template string
 
 	mu       sync.Mutex
-	closed   bool
 	boxes    map[string]*sandbox.Sandbox
 	ckpts    map[string]*sandbox.Checkpoint
 	release  sync.Once
@@ -163,7 +162,6 @@ func (s *server) box(id string) (*sandbox.Sandbox, error) {
 func (s *server) closeBoxes() {
 	s.release.Do(func() {
 		s.mu.Lock()
-		s.closed = true
 		boxes := slices.Collect(maps.Values(s.boxes))
 		clear(s.boxes)
 		s.mu.Unlock()
@@ -179,14 +177,8 @@ func (s *server) closeBoxes() {
 
 func (s *server) trackBox(sb *sandbox.Sandbox) {
 	s.mu.Lock()
-	closed := s.closed
-	if !closed {
-		s.boxes[sb.ID] = sb
-	}
-	s.mu.Unlock()
-	if closed {
-		_ = sb.Close() // claimed after the session's release ran; nothing else would ever release it
-	}
+	defer s.mu.Unlock()
+	s.boxes[sb.ID] = sb
 }
 
 func (s *server) dropBox(id string) {

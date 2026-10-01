@@ -47,7 +47,9 @@ in the guest, which can hold its reply up to 5 s past the cap.
 Sandbox handles (and their tokens) are held by the server process for the
 session, and released with it: when the MCP client disconnects or the server
 is signalled, it destroys every sandbox that session claimed, whatever
-`ttl_seconds` asked for. `checkpoint` first if the state must survive.
+`ttl_seconds` asked for; a claim still in flight at the signal is left to its
+lease (one hour unless `ttl_seconds` says otherwise). `checkpoint` first if the
+state must survive.
 Checkpoints outlive sessions: `branch_checkpoint` accepts any known
 id without a listing round-trip. If the connected node does not hold it, the
 claim follows a live owner probe and redirect, or heals the checkpoint locally
