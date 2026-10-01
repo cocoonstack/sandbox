@@ -159,8 +159,10 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 	if !ok {
 		return time.Time{}, ErrUnknownSandbox
 	}
-	if !cred.Operator && m.tenantGone(sb.Tenant) {
-		return time.Time{}, ErrTenantRemoved
+	if !cred.Operator {
+		if err := m.tenantRemoved(ctx, sb.Tenant); err != nil {
+			return time.Time{}, err
+		}
 	}
 	if err := archivable(sb.Key, hasAppliedVolumes(sb), onExpire); err != nil {
 		return time.Time{}, err

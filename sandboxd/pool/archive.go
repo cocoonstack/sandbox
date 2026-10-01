@@ -147,8 +147,8 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	if sb.Key.Net == types.NetEgress {
 		return "", fmt.Errorf("wake %s: egress lane cannot resume from archive", sb.ID)
 	}
-	if m.tenantGone(sb.Tenant) {
-		return "", ErrTenantRemoved
+	if err := m.tenantRemoved(ctx, sb.Tenant); err != nil {
+		return "", err
 	}
 	ctx = context.WithoutCancel(ctx)
 	ck := sb.ArchiveCk

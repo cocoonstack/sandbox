@@ -325,6 +325,17 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 	}
 }
 
+func TestAFullLastPageNamesNoNext(t *testing.T) {
+	m := tenantManager(t, t.TempDir(), config.TenantSpec{Name: "a", Token: "ta"}, config.TenantSpec{Name: "b", Token: "tb"})
+	page, err := m.Tenants(t.Context(), "", 2)
+	if err != nil || len(page.Tenants) != 2 || page.Next != "" {
+		t.Errorf("page %+v %v, want both tenants and no next", page, err)
+	}
+	if page, err = m.Tenants(t.Context(), "", 1); err != nil || page.Next != "a" {
+		t.Errorf("first of two pages %+v %v, want next a", page, err)
+	}
+}
+
 func TestTwoNodesOnOneMetaStoreShareTheTenantSet(t *testing.T) {
 	t.Setenv("SANDBOX_TEST_DSN", tenantstest.PGSchema(t))
 	node := func() *Manager {
@@ -343,11 +354,19 @@ func TestTwoNodesOnOneMetaStoreShareTheTenantSet(t *testing.T) {
 	if name, ok := tenantOf(t, b, "u1-tok"); !ok || name != "u-1" {
 		t.Errorf("b resolves a's tenant: %q %v, want u-1 without a fan-out", name, ok)
 	}
-	if err := b.DeleteTenant(t.Context(), "u-1"); err != nil {
+	unpooled := types.PoolKey{Template: "promoted-name", Net: types.NetNone, Size: types.SizeSmall}
+	sb, err := a.ClaimProvision(t.Context(), unpooled, ClaimOptions{TTL: time.Hour, Tenant: "u-1"})
+	if err != nil {
+		t.Fatalf("claim on a: %v", err)
+	}
+	if err = b.DeleteTenant(t.Context(), "u-1"); err != nil {
 		t.Fatalf("delete on b: %v", err)
 	}
 	if !tenantstest.Eventually(t, func() bool { _, err := a.TenantByToken(t.Context(), "u1-tok"); return errors.Is(err, ErrUnknownTenant) }) {
 		t.Error("a still authenticates a tenant b deleted")
+	}
+	if _, err := a.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour, ""); !errors.Is(err, ErrTenantRemoved) {
+		t.Errorf("renew on a after b removed the tenant: %v, want ErrTenantRemoved even though a's cache lost the name", err)
 	}
 	if a.TenantRecords() != nil {
 		t.Error("a shared tenant set entered the cluster digest")
