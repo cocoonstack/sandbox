@@ -32,15 +32,6 @@ var hopHeaders = []string{
 	"Proxy-Connection", "TE", "Trailer", "Transfer-Encoding", "Upgrade",
 }
 
-// DialFunc opens the upstream connection for a permitted request; as a Router it sends every connection direct.
-type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
-
-func (d DialFunc) Route() string { return "" }
-
-func (d DialFunc) Dial(ctx context.Context, _, network, addr string) (net.Conn, error) {
-	return d(ctx, network, addr)
-}
-
 // TransferFunc receives the payload bytes an allowed tunnel or request moved, once it ends.
 type TransferFunc func(ev Event, sent, received int64)
 
@@ -71,6 +62,15 @@ type Event struct {
 type routeKey struct {
 	route string
 	mitm  bool
+}
+
+// DialFunc opens the upstream connection for a permitted request; as a Router it sends every connection direct.
+type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+func (d DialFunc) Route() string { return "" }
+
+func (d DialFunc) Dial(ctx context.Context, _, network, addr string) (net.Conn, error) {
+	return d(ctx, network, addr)
 }
 
 // Proxy is one sandbox's forward proxy, gated by Policy and audited per request.
