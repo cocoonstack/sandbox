@@ -9,8 +9,7 @@ import (
 	"sync"
 )
 
-// PoolSpec is a desired warm pool for SetPools. Egress is config-owned on the
-// node and rejected by the API, so it has no field here.
+// PoolSpec is a desired warm pool for SetPools; egress, warmup, capture_trim and storage are config-owned, so it has no field for them.
 type PoolSpec struct {
 	Template                  string   `json:"template"`
 	Net                       NetShape `json:"net,omitempty"`

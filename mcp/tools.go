@@ -77,7 +77,7 @@ var (
 			schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "template_name": str("template name to publish as")}, "sandbox_id", "template_name"), toolPromote,
 		},
 		{"release", "Destroy a sandbox and free its resources; files and processes inside it are lost. This session forgets the id, so a second release of it is rejected as unknown.", schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint")}, "sandbox_id"), toolRelease},
-		{"node_info", "Report the connected node's warm pools, promoted templates, live claims, drain state, capacity, and mesh peers as JSON.", schema(props{}), toolNodeInfo},
+		{"node_info", "Report the connected node's warm pools, promoted templates, live claims, drain state, capacity, and mesh peers as JSON. Needs the operator token; a tenant token is refused.", schema(props{}), toolNodeInfo},
 	}
 )
 

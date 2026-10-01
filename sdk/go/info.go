@@ -78,7 +78,7 @@ type sandboxListResponse struct {
 	Sandboxes []SandboxSummary `json:"sandboxes"`
 }
 
-// Info reports the entry node's pools, claims, capacity state, and mesh peers.
+// Info reports the entry node's pools, claims, capacity state, and mesh peers. Requires the operator token.
 func (c *Client) Info(ctx context.Context) (*NodeInfo, error) {
 	return doJSONPtr[NodeInfo](ctx, c, http.MethodGet, c.addr, "/v1/info", nil, c.apiToken, "info")
 }
