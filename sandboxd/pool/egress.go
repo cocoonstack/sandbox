@@ -270,6 +270,11 @@ func (m *Manager) prebindEgress(ctx context.Context, sb *types.Sandbox) {
 		return
 	}
 	m.mu.Lock()
+	if !m.view.Load().guardedEgress {
+		m.mu.Unlock()
+		el.close()
+		return
+	}
 	m.egressPrebound[sb.VMName] = el
 	m.mu.Unlock()
 }

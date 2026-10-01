@@ -45,6 +45,7 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 	var doors []*egressListener
 	m.mu.Lock()
 	m.view.Store(view)
+	live := slices.Collect(maps.Values(m.egressListeners))
 	if !view.guardedEgress {
 		doors = slices.Collect(maps.Values(m.egressPrebound))
 		clear(m.egressPrebound)
@@ -58,6 +59,9 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 	m.mu.Unlock()
 	for _, el := range doors {
 		el.close()
+	}
+	for _, el := range live {
+		el.proxy.CloseIdle()
 	}
 	m.destroyAll(context.WithoutCancel(ctx), trim).Wait()
 	m.cfg = next

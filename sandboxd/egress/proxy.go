@@ -149,6 +149,11 @@ func (p *Proxy) Close() {
 	for _, conn := range conns {
 		_ = conn.Close()
 	}
+	p.CloseIdle()
+}
+
+// CloseIdle drops pooled upstream connections, so the next request dials and passes the dial-time gates again.
+func (p *Proxy) CloseIdle() {
 	p.tr.CloseIdleConnections()
 	if p.mitmTr != nil {
 		p.mitmTr.CloseIdleConnections()
