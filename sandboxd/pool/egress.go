@@ -207,7 +207,7 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	if !v.guardedEgress || sb.VsockSocket == "" {
 		return nil
 	}
-	policy, ok := m.effectivePolicy(sb)
+	policy, ok := m.effectivePolicy(v, sb)
 	if !ok {
 		m.closePrebound(sb.VMName)
 		return nil
@@ -224,14 +224,14 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	if !intercepts {
 		ca = nil
 	}
-	proxy := egress.New(policy, claimSecrets{m: m, sb: sb}, ca, claimRouter{m: m, sb: sb},
+	proxy := egress.New(newLivePolicy(m, sb, v, policy), claimSecrets{m: m, sb: sb}, ca, claimRouter{m: m, sb: sb},
 		func(ev egress.Event) { m.recordEgress(evCtx, id, tenant, ev) }, sb)
 	if v.usageBytes {
 		proxy.OnTransfer(func(ev egress.Event, sent, received int64) {
 			m.recordUsage(evCtx, usageEvent{Event: "egress_bytes", ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Sent: sent, Received: received})
 		})
 	}
-	if el != nil && (reached(el.ln) || (el.socks != nil && reached(el.socks))) {
+	if el != nil && (reached(el.ln) || (el.socks != nil && reached(el.socks)) || (el.socks != nil) != policy.ServesSocks()) {
 		el.close()
 		el = nil
 	}
@@ -320,11 +320,10 @@ func (m *Manager) poolIntercepts(key types.PoolKey) bool {
 }
 
 // effectivePolicy resolves pool ∩ tenant; root has no tenant layer, an unpooled key no pool one, a NoEgress claim none at all.
-func (m *Manager) effectivePolicy(sb *types.Sandbox) (egress.Evaluator, bool) {
+func (m *Manager) effectivePolicy(v *configView, sb *types.Sandbox) (egress.Evaluator, bool) {
 	if sb.NoEgress {
 		return nil, false
 	}
-	v := m.view.Load()
 	poolPol := v.poolEgress[sb.PolicyKey()]
 	tenantPol := v.tenantEgress[sb.Tenant]
 	m.mu.Lock()

@@ -2,6 +2,7 @@ package pool
 
 import (
 	"os"
+	"sync/atomic"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
@@ -72,4 +73,54 @@ func newConfigView(cfg *config.Config, secrets *egress.SecretStore) *configView 
 		}
 	}
 	return v
+}
+
+type resolvedPolicy struct {
+	view *configView
+	eval egress.Evaluator
+}
+
+var _ egress.Evaluator = (*livePolicy)(nil)
+
+// livePolicy is a claim's egress policy that follows a reload: a new view re-resolves its pool and tenant layers once.
+type livePolicy struct {
+	m   *Manager
+	sb  *types.Sandbox
+	cur atomic.Pointer[resolvedPolicy]
+}
+
+func newLivePolicy(m *Manager, sb *types.Sandbox, v *configView, eval egress.Evaluator) *livePolicy {
+	l := &livePolicy{m: m, sb: sb}
+	l.cur.Store(&resolvedPolicy{view: v, eval: eval})
+	return l
+}
+
+func (l *livePolicy) Eval(host, method string, port uint16) (egress.Rule, egress.Decision) {
+	return l.current().Eval(host, method, port)
+}
+
+func (l *livePolicy) EvalHost(host string, port uint16) (egress.Rule, egress.Decision) {
+	return l.current().EvalHost(host, port)
+}
+
+func (l *livePolicy) EvalInner(host, method string, port uint16) (egress.Rule, egress.Decision) {
+	return l.current().EvalInner(host, method, port)
+}
+
+func (l *livePolicy) ServesSocks() bool {
+	return l.current().ServesSocks()
+}
+
+// current denies everything once a reload leaves the claim with no policy.
+func (l *livePolicy) current() egress.Evaluator {
+	v := l.m.view.Load()
+	if r := l.cur.Load(); r.view == v {
+		return r.eval
+	}
+	eval, ok := l.m.effectivePolicy(v, l.sb)
+	if !ok {
+		eval = egress.Policy{}
+	}
+	l.cur.Store(&resolvedPolicy{view: v, eval: eval})
+	return eval
 }
