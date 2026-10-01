@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -117,6 +118,25 @@ func (c *upstreamConn) Read(b []byte) (int, error) {
 	return c.Conn.Read(b)
 }
 
+func (c *upstreamConn) ReadFrom(r io.Reader) (int64, error) {
+	return io.Copy(c.Conn, r)
+}
+
+func (c *upstreamConn) WriteTo(w io.Writer) (int64, error) {
+	var n int64
+	if c.reader != nil && c.reader.Buffered() > 0 {
+		buffered, _ := c.reader.Peek(c.reader.Buffered())
+		m, err := w.Write(buffered)
+		n = int64(m)
+		_, _ = c.reader.Discard(m)
+		if err != nil {
+			return n, err
+		}
+	}
+	m, err := io.Copy(w, c.Conn)
+	return n + m, err
+}
+
 func (c *upstreamConn) CloseWrite() error {
 	if conn, ok := c.Conn.(interface{ CloseWrite() error }); ok {
 		return conn.CloseWrite()
@@ -176,6 +196,7 @@ func connectTunnel(ctx context.Context, conn net.Conn, u *url.URL, target string
 	if err != nil {
 		return nil, fmt.Errorf("upstream %s: %w", u.Host, err)
 	}
+	_ = resp.Body.Close()
 	switch {
 	case resp.StatusCode != http.StatusOK:
 		return nil, fmt.Errorf("upstream %s refused the tunnel: %s", u.Host, resp.Status)

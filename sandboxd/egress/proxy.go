@@ -260,19 +260,25 @@ func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
 	}
 	rule, decision := p.policy.Eval(host, r.Method, port)
 	ev, route := p.routeEvent(Event{Method: r.Method, Host: host, Port: port, Decision: decision})
-	p.relay(w, r, ev, rule, p.transport(route, false), nil)
+	p.relay(w, r, ev, rule, route, false, nil)
 }
 
-func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rule, tr *http.Transport, prepare func(*http.Request)) {
+func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rule, route string, mitm bool, prepare func(*http.Request)) {
 	if ev.Decision == DecisionDeny {
 		p.record(ev)
 		denied(w, ev.Host)
 		return
 	}
 
-	out := r.Clone(httptrace.WithClientTrace(r.Context(), &httptrace.ClientTrace{
-		GotConn: func(info httptrace.GotConnInfo) { ev.Upstream = upstreamHost(info.Conn) },
-	}))
+	ctx := r.Context()
+	var upstream *string
+	if route != "" {
+		upstream = new(string)
+		ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+			GotConn: func(info httptrace.GotConnInfo) { *upstream = upstreamHost(info.Conn) },
+		})
+	}
+	out := r.Clone(ctx)
 	if prepare != nil {
 		prepare(out)
 	}
@@ -294,7 +300,10 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 		p.reportTransfer(ev, sent, received)
 	}()
 
-	resp, err := tr.RoundTrip(out)
+	resp, err := p.transport(route, mitm).RoundTrip(out)
+	if upstream != nil {
+		ev.Upstream = *upstream
+	}
 	p.record(ev)
 	if err != nil {
 		http.Error(w, "egress: upstream unreachable", http.StatusBadGateway)

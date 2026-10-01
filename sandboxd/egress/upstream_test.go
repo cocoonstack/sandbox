@@ -90,6 +90,32 @@ func TestDialUpstreamThroughHTTPConnect(t *testing.T) {
 	}
 }
 
+func TestUpstreamTunnelKeepsTheZeroCopyPathAndBufferedBytes(t *testing.T) {
+	const greeting = "220 ready\r\n"
+	addr, _ := fakeConnectProxy(t, http.StatusOK, greeting)
+	u, _ := ParseUpstream("http://" + addr)
+	conn, err := DialUpstream(t.Context(), u, "203.0.113.9:25", plainDial)
+	if err != nil {
+		t.Fatalf("DialUpstream: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	rf, okFrom := conn.(io.ReaderFrom)
+	wt, okTo := conn.(io.WriterTo)
+	if !okFrom || !okTo {
+		t.Fatalf("tunnel %T hides the TCP conn's ReadFrom/WriteTo, so splice cannot run", conn)
+	}
+	if _, err := rf.ReadFrom(strings.NewReader("ping")); err != nil {
+		t.Fatalf("ReadFrom: %v", err)
+	}
+	if err := conn.(interface{ CloseWrite() error }).CloseWrite(); err != nil {
+		t.Fatalf("half-close: %v", err)
+	}
+	var got strings.Builder
+	if _, err := wt.WriteTo(&got); err != nil || got.String() != greeting+"ping" {
+		t.Fatalf("WriteTo %q, %v; want the buffered greeting before the echo", got.String(), err)
+	}
+}
+
 func TestDialUpstreamRefusedNamesNoCredentials(t *testing.T) {
 	addr, _ := fakeConnectProxy(t, http.StatusProxyAuthRequired, "")
 	u, _ := ParseUpstream("http://alice:pw-secret@" + addr)
