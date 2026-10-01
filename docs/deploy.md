@@ -120,6 +120,7 @@ gets the intersection of the two.
 | `egress_ca` | unset | [HTTPS-interception](egress.md#https-interception) PKI: `root_cert` (the cluster root baked into intercepted guests; may bundle old+new roots during rotation) plus this node's `intermediate_cert`/`intermediate_key` from `sandboxd ca issue-intermediate`. Required when any pool rule sets `intercept` |
 | `api_token` | unset | the operator (root) credential: when set, guards the node-level endpoints (Bearer) with full access, including release-by-id cleanup. Per-sandbox tokens guard ordinary sandbox-scoped calls |
 | `tenants` | unset | multi-tenant tokens next to `api_token`: `[{"name": "acme", "token": "…", "max_claims": 50, "egress_class": "desk"}]` (the optional `egress_class` names an `egress_classes` entry whose policy is intersected with the pool's, see [egress](egress.md)). A tenant token reaches the resource-creating verbs (claim, fork, promote, checkpoint, preview), catalog discovery, and its own sandbox/checkpoint listings; everything it creates is stamped with the tenant name. Root-only surfaces (per-id sandbox reads and stats, `GET /v1/checkpoints/{id}/blob`, `GET /v1/info`, `PUT /v1/pools`, `/v1/tenants`, `POST/DELETE /v1/drain`, `/metrics`) answer it 403. `max_claims` (0 = unlimited) caps that tenant's live claims next to the node-wide cap. Requires `api_token` set. Names and tokens must be unique, tokens distinct from `api_token`. This list only seeds the set: once the [tenant API](sandboxd-api.md#tenants-v1tenants) has applied a change, `<data_dir>/tenants.json` owns the tenants and this list is ignored (with a warning when it changed since),. On a cluster all nodes must carry the same tenants set (the SDK replays whichever token authorized a redirect), and per-node caps mean a tenant's effective cluster limit is `max_claims` × nodes. Empty = exactly the single-token behavior |
+| `meta_store` | unset | `{"kind": "pg", "dsn_env": "SANDBOXD_PG_DSN"}`: keep the tenant set in one shared PostgreSQL instead of each node's `tenants.json` (see [shared tenant database](#shared-tenant-database)). `dsn_env` names the node env holding the connection string. Needs `api_token`; `tenants` must then be empty. Restart only |
 | `max_fork_count` | 16 | children a single `fork` may create; each is a full-RAM VM, so this bounds one request's memory blast radius to the node's capacity |
 | `refill_concurrency` | 0 (auto) | concurrent VM provisioning budget, shared by warm-pool refills, fork clones, and the reap/hibernate/reconcile engine batches. 0 sizes it from the node: `NumCPU*2/3` clamped to [4, 256] — a 384-core node gets 256; small nodes keep a floor of 4 |
 | `release_delay_seconds` | 0 | seconds a released VM waits in the removal queue before `cocoon vm rm`. The claim is dropped and journaled and its egress listener closed at release; the VM removal, the volume hold release and the egress tap unlock run on the first reap tick (5 s) after the delay, on the `refill_concurrency` budget like every other batch teardown, so a burst of releases does not compete with the claims still running. Until then the VM holds its memory and its volume reservations without counting as a claim. 0 removes inline |
@@ -508,6 +509,40 @@ To empty a node for maintenance, cordon it first:
 drains the warm pools; poll `GET /v1/info` until `claimed` reaches zero (or
 let the leases expire), then stop sandboxd. `DELETE /v1/drain` uncordons.
 The drain is not persisted — a restarted node serves again.
+
+### Shared tenant database
+
+With `meta_store` set, every node reads tenants from one PostgreSQL table
+instead of its own `tenants.json`. Tenants are added, changed and removed
+through `/v1/tenants` on any node.
+
+- **Schema:**
+  - sandboxd creates the table at boot when it is missing:
+
+    ```sql
+    CREATE TABLE IF NOT EXISTS sandboxd_tenants (
+        name         text        PRIMARY KEY,
+        token_sha256 bytea       NOT NULL UNIQUE CHECK (length(token_sha256) = 32),
+        max_claims   integer     NOT NULL DEFAULT 0 CHECK (max_claims >= 0),
+        egress_class text        NOT NULL DEFAULT '',
+        updated_at   timestamptz NOT NULL DEFAULT now()
+    );
+    ```
+
+  - Create it ahead with the same DDL when the node's role has no `CREATE` right.
+  - Rows hold token hashes only, never a token.
+- **Connection:**
+  - Each node opens a small pool for queries and one long-lived connection
+    that runs `LISTEN sandboxd_tenants`.
+  - LISTEN needs a session-mode connection, so a connection pooler in front
+    of the database must not run in transaction mode for that DSN.
+  - A write runs in one transaction with a `pg_notify`.
+- **Outage:**
+  - running claims, exec and egress keep working;
+  - cached tenants authenticate;
+  - uncached ones answer 503, and tenant writes fail;
+  - recovery needs no restart.
+- **Quota:** `max_claims` stays a per-node cap, read from the shared row.
 
 ### Reloading the config
 

@@ -11,7 +11,9 @@ All bodies are JSON. Three token kinds:
   `PUT /v1/pools`, `POST/DELETE /v1/drain`, `GET /metrics`,
   `GET /v1/checkpoints/{id}/blob`)
   answer a tenant token `403` — authenticated but not authorized; an unknown
-  token stays `401`.
+  token stays `401`. On a node with a shared
+  [`meta_store`](deploy.md#shared-tenant-database), a tenant token the node
+  has not cached answers `503` while the database is unreachable; retry.
 - **sandbox** — every claimed sandbox carries its own bearer token guarding
   the sandbox-scoped endpoints, regardless of the other two.
 
@@ -458,11 +460,17 @@ since tenants need it. The tenant set changes at runtime, with no restart:
   and to import many tenants at once, since every change rewrites the whole
   set; a sign-up is a single-tenant `PUT`, so concurrent sign-ups never
   overwrite each other.
-- `GET /v1/tenants` → `{"tenants": [{"name": "…", "max_claims": 50, "egress_class": "desk", "claims": 3},
-  {"name": "…", "claims": 1, "removed": true}], "digest": "…"}`: every tenant
-  with its live claims on this node, then each removed tenant that still owns
-  claims here. It never carries a token. Two nodes with the same `digest` hold
-  the same set.
+- `GET /v1/tenants?after=<name>&limit=<n>` → `{"tenants": [{"name": "…", "max_claims": 50, "egress_class": "desk", "claims": 3},
+  {"name": "…", "claims": 1, "removed": true}], "digest": "…", "next": "…"}`.
+  - **Paging:**
+    - one page of tenants in name order, each with its live claims on this node;
+    - `limit` defaults to 1000, at most 10000 (400 outside);
+    - pass `next` as the following page's `after`; it is absent on the last page.
+  - **Removed tenants:** the first page also lists each removed tenant that
+    still owns claims here.
+  - **Digest:** two nodes with the same `digest` hold the same set. A node on a
+    shared [`meta_store`](deploy.md#shared-tenant-database) reports none.
+  - It never carries a token.
 
 A name follows the claim name grammar (`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`;
 escape `/` as `%2F` in the path) and is the tenant's identity: claims,
