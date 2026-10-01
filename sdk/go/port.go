@@ -55,8 +55,7 @@ func (p *PortConn) CloseWrite() error {
 func (p *PortConn) Close() error {
 	p.closeOnce.Do(func() {
 		p.stop()
-		// drain can be parked in a pipe write on an unread tail; only the
-		// reader side unblocks it.
+		// A drain parked in a pipe write on an unread tail unblocks only from the reader side.
 		_ = p.out.CloseWithError(net.ErrClosed)
 	})
 	return nil
@@ -67,8 +66,7 @@ func (p *PortConn) LocalAddr() net.Addr { return portAddr("sandbox-relay") }
 
 func (p *PortConn) RemoteAddr() net.Addr { return portAddr("sandbox-guest") }
 
-// SetDeadline implements net.Conn; deadlines are unsupported — bound the
-// DialPort ctx instead.
+// SetDeadline implements net.Conn; deadlines are unsupported, so bound the DialPort ctx instead.
 func (p *PortConn) SetDeadline(time.Time) error { return errors.ErrUnsupported }
 
 // SetReadDeadline implements net.Conn; unsupported, see SetDeadline.
@@ -77,9 +75,7 @@ func (p *PortConn) SetReadDeadline(time.Time) error { return errors.ErrUnsupport
 // SetWriteDeadline implements net.Conn; unsupported, see SetDeadline.
 func (p *PortConn) SetWriteDeadline(time.Time) error { return errors.ErrUnsupported }
 
-// drain relays guest bytes into the pipe until Done (clean server close →
-// EOF), an error frame, or teardown; a relay dropped before its terminal
-// frame surfaces as drainData's truncation error, not a clean EOF.
+// drain relays guest bytes into the pipe; a relay dropped before its terminal frame ends in drainData's truncation error, not EOF.
 func (p *PortConn) drain(ctx context.Context, pw *io.PipeWriter) {
 	_ = pw.CloseWithError(drainData(ctx, p.conn, func(b []byte) error {
 		_, err := pw.Write(b)

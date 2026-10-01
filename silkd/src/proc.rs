@@ -249,7 +249,7 @@ impl Ring {
     }
 }
 
-/// Stdout/Stderr ride the reused-buffer bulk path; serde's per-chunk allocations dominate replay otherwise.
+/// Writes a Stdout/Stderr chunk on the reused-buffer bulk path.
 pub async fn write_chunk<W: AsyncWrite + Unpin>(
     w: &mut W,
     buf: &mut Vec<u8>,

@@ -160,8 +160,7 @@ func streamRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.R
 	}
 }
 
-// drainData consumes Data frames into sink until Done; an error frame or an
-// unexpected frame is a Go error.
+// drainData consumes Data frames into sink until Done; any other frame is an error.
 func drainData(ctx context.Context, conn *silkd.Conn, sink func([]byte) error) error {
 	for {
 		resp, err := recv(ctx, conn)
@@ -188,8 +187,7 @@ func terminalErr(ctx context.Context, conn *silkd.Conn) error {
 	return err
 }
 
-// expect reads one frame and requires it to be a *T, mapping an error frame
-// to a Go error.
+// expect reads one frame as a *T; an error frame becomes a Go error.
 func expect[T any, PT respPtr[T]](ctx context.Context, conn *silkd.Conn) (*T, error) {
 	resp, err := recv(ctx, conn)
 	if err != nil {

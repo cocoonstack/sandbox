@@ -155,7 +155,6 @@ fn git_cmd(dir: &str, auth: Option<&str>) -> Command {
     cmd
 }
 
-/// Runs `git`, capturing output.
 async fn git(
     dir: &str,
     auth: Option<&str>,

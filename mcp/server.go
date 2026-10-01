@@ -72,9 +72,7 @@ func newServer(addr, token, template string) (*server, error) {
 	}, nil
 }
 
-// serve answers newline-delimited JSON-RPC 2.0 over r/w until EOF — the MCP
-// stdio transport. Requests are handled strictly in order: sandbox tools are
-// stateful, and an agent's tool calls arrive sequentially anyway.
+// serve answers the MCP stdio transport's JSON-RPC 2.0 lines until EOF, in order, since sandbox tools are stateful.
 func (s *server) serve(ctx context.Context, r *bufio.Reader, w io.Writer) error {
 	defer s.closeBoxes()
 	for {

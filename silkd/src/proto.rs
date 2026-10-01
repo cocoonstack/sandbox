@@ -23,7 +23,7 @@ pub const PROTO_VERSION: u32 = 2;
 
 /// Chunk size for streaming a file back over `fs.read`.
 pub const READ_CHUNK: usize = 32 * 1024;
-/// Bulk streams chunk larger: fewer frames and flushes per byte, still under MAX_FRAME after base64.
+/// Chunk size for bulk streams; stays under MAX_FRAME after base64.
 pub const BULK_CHUNK: usize = 256 * 1024;
 
 const DATA_FRAME_HEAD: &[u8] = b"{\"v\":1,\"op\":\"data\",\"data\":\"";

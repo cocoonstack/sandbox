@@ -682,16 +682,13 @@ func DecodeResponse(line []byte) (Response, error) {
 }
 
 // NewFrameScanner wraps r for newline-delimited frames capped at MaxFrame.
-// No pre-sized buffer: bulk frames outgrow any fixed start anyway.
 func NewFrameScanner(r io.Reader) *bufio.Scanner {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(nil, MaxFrame)
 	return sc
 }
 
-// AppendBulkRequest renders a data-carrying request frame —
-// {"v":1,"op":<op>,"data":"<base64>"} plus newline — into buf, reused across
-// calls on the bulk send paths (base64's alphabet needs no JSON escaping).
+// AppendBulkRequest renders {"v":1,"op":<op>,"data":"<base64>"} and a newline into buf's storage; base64 needs no JSON escaping.
 func AppendBulkRequest(buf []byte, op string, data []byte) []byte {
 	buf = append(buf[:0], requestHead...)
 	buf = append(buf, op...)
@@ -713,8 +710,7 @@ func IsContinuation(line []byte) bool {
 	return false
 }
 
-// fastBulk slices the base64 data out of a canonical bulk frame, skipping the
-// json.Unmarshal that dominates downloads; any other shape falls back to slow.
+// fastBulk decodes a canonical bulk frame without json.Unmarshal; any other shape falls back to slow.
 func fastBulk(tag string, slow respDecoder, mk func([]byte) Response) respDecoder {
 	head := []byte(`{"type":"` + tag + `","data":"`)
 	return func(line []byte) (Response, error) {

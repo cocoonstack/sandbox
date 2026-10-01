@@ -195,7 +195,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case !deadline.IsZero():
 		if lease := time.Until(deadline); ttl <= 0 || ttl > lease {
-			ttl = lease // never outlive the claim
+			ttl = lease
 		}
 	case ttl <= 0:
 		ttl = previewTTL

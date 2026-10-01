@@ -94,7 +94,7 @@ def main() -> int:
 
         mcp.tool("hibernate", sandbox_id=sandbox_id)
         out = mcp.tool("exec", sandbox_id=sandbox_id, command="cat /root/m.txt")
-        assert out["stdout"] == "v2", out  # transparent wake
+        assert out["stdout"] == "v2", out
         print("  hibernate + transparent wake ok")
 
         forks = mcp.tool("fork", sandbox_id=sandbox_id, count=2)["sandbox_ids"]

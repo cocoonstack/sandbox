@@ -497,7 +497,7 @@ type Sandbox struct {
 // Touch stamps last data-plane activity; lock-free, called on the relay hot path.
 func (s *Sandbox) Touch() { s.lastActivity.Store(time.Now().UnixNano()) }
 
-// TouchAt stamps last-activity at a caller-supplied instant (batch claim/adoption, tests).
+// TouchAt stamps the last data-plane activity at t.
 func (s *Sandbox) TouchAt(t time.Time) { s.lastActivity.Store(t.UnixNano()) }
 
 // LastSeen returns the last data-plane activity time.

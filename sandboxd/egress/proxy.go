@@ -223,7 +223,6 @@ func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
 	p.relay(w, r, Event{Method: r.Method, Host: host, Port: port, Decision: decision}, rule, p.tr, nil)
 }
 
-// relay forwards one policy-evaluated request upstream and mirrors the response.
 func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rule, tr *http.Transport, prepare func(*http.Request)) {
 	if ev.Decision == DecisionDeny {
 		p.record(ev)
@@ -299,7 +298,6 @@ func splice(a, b net.Conn) {
 	<-done
 }
 
-// denied answers a policy rejection with a 403 rather than a hang.
 func denied(w http.ResponseWriter, host string) {
 	http.Error(w, fmt.Sprintf("egress denied: %s", host), http.StatusForbidden)
 }
