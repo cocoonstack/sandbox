@@ -93,8 +93,5 @@ func grepLine(out, needle string) string {
 
 func tail(s string) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
-	if len(lines) > 20 {
-		lines = lines[len(lines)-20:]
-	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines[max(0, len(lines)-20):], "\n")
 }

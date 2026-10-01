@@ -2,7 +2,7 @@
 
 import threading
 import time
-from http.server import HTTPServer
+from http.server import HTTPServer, ThreadingHTTPServer
 
 import pytest
 from conftest import FakeNode, sandbox_at
@@ -340,3 +340,45 @@ def recording_claim(reply):
 
     FakeNode.routes[("POST", "/v1/claim")] = claim
     return seen
+
+
+@pytest.mark.parametrize(("keep_alive", "conns"), [(30.0, 1), (0, 2)])
+def test_control_calls_reuse_one_connection(kept_node, keep_alive, conns):
+    KeptNode.routes[("POST", "/v1/claim")] = lambda body, path: (200, {"id": "sb_1", "token": "tok"})
+    client = Client(kept_node, keep_alive=keep_alive)
+    client.new("rt:24.04")
+    client.new("rt:24.04")
+    assert KeptNode.conns == conns
+
+
+def test_a_parked_connection_the_node_closed_is_not_reused(kept_node):
+    KeptNode.routes[("POST", "/v1/claim")] = lambda body, path: (200, {"id": "sb_1", "token": "tok"})
+    KeptNode.drop_after_reply = True
+    client = Client(kept_node)
+    client.new("rt:24.04")
+    time.sleep(0.1)
+    assert client.new("rt:24.04").id == "sb_1"
+    assert KeptNode.conns == 2
+
+
+@pytest.fixture
+def kept_node():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), KeptNode)
+    KeptNode.routes, KeptNode.conns, KeptNode.drop_after_reply = {}, 0, False
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"127.0.0.1:{server.server_port}"
+    server.shutdown()
+
+
+class KeptNode(FakeNode):
+    protocol_version = "HTTP/1.1"
+    conns = 0
+    drop_after_reply = False
+
+    def setup(self):
+        super().setup()
+        KeptNode.conns += 1
+
+    def _reply(self, code, payload):
+        super()._reply(code, payload)
+        self.close_connection = self.drop_after_reply

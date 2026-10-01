@@ -23,7 +23,7 @@ pub const PROTO_VERSION: u32 = 2;
 
 /// Chunk size for streaming a file back over `fs.read`.
 pub const READ_CHUNK: usize = 32 * 1024;
-/// Bulk streams chunk larger: fewer frames and flushes per byte, still under MAX_FRAME after base64.
+/// Chunk size for bulk streams; stays under MAX_FRAME after base64.
 pub const BULK_CHUNK: usize = 256 * 1024;
 
 const DATA_FRAME_HEAD: &[u8] = b"{\"v\":1,\"op\":\"data\",\"data\":\"";
@@ -567,7 +567,7 @@ pub async fn write_feed_error<W: AsyncWrite + Unpin>(w: &mut W, err: FeedError) 
     }
 }
 
-fn decode_data_frame(frame: &[u8], out: &mut Vec<u8>) -> Option<usize> {
+pub(crate) fn decode_data_frame(frame: &[u8], out: &mut Vec<u8>) -> Option<usize> {
     let b64 = frame.strip_prefix(DATA_FRAME_HEAD)?.strip_suffix(b"\"}")?;
     out.resize(base64::decoded_len_estimate(b64.len()), 0);
     STANDARD.decode_slice(b64, out).ok()

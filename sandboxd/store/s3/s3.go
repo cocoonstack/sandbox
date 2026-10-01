@@ -92,7 +92,7 @@ func New(ctx context.Context, cfg Config, stagingRoot string, idRe *regexp.Regex
 	}
 	client := awss3.NewFromConfig(awsCfg, func(o *awss3.Options) {
 		if cfg.Endpoint != "" {
-			o.BaseEndpoint = aws.String(cfg.Endpoint)
+			o.BaseEndpoint = new(cfg.Endpoint)
 		}
 		o.UsePathStyle = cfg.ForcePathStyle
 	})
@@ -125,6 +125,8 @@ func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, string, e
 	gen := filepath.Join(s.staging, "cache", id, store.ExportGenHash(meta))
 	export := filepath.Join(gen, store.ExportDir)
 	if _, statErr := os.Stat(export); statErr == nil {
+		now := time.Now()
+		_ = os.Chtimes(gen, now, now)
 		return export, meta, digest, nil
 	}
 	flight := s.fetches.DoChan(gen, func() (any, error) {
@@ -152,7 +154,7 @@ func (s *Store) Metas(ctx context.Context) ([]store.Record, error) {
 	// delimiter listing yields one CommonPrefix per record instead of every export object.
 	var ids []string
 	p := awss3.NewListObjectsV2Paginator(s.client, &awss3.ListObjectsV2Input{
-		Bucket: &s.bucket, Prefix: &s.prefix, Delimiter: aws.String("/"),
+		Bucket: &s.bucket, Prefix: &s.prefix, Delimiter: new("/"),
 	})
 	for p.HasMorePages() {
 		page, err := p.NextPage(ctx)
@@ -252,7 +254,7 @@ func (s *Store) publish(ctx context.Context, staging, id string, digested bool) 
 	if err != nil {
 		return "", fmt.Errorf("staging has no %s: %w", store.MetaFile, err)
 	}
-	files, err := s.publishFiles(staging, id, store.ExportGen(metaRaw), digested)
+	files, err := s.publishFiles(staging, id, store.ExportGen(metaRaw))
 	if err != nil {
 		return "", err
 	}
@@ -293,11 +295,8 @@ func (s *Store) publish(ctx context.Context, staging, id string, digested bool) 
 	return digest, nil
 }
 
-func (s *Store) publishFiles(staging, id, gen string, digested bool) ([]publishFile, error) {
-	root := staging
-	if digested {
-		root = filepath.Join(staging, store.ExportDir)
-	}
+func (s *Store) publishFiles(staging, id, gen string) ([]publishFile, error) {
+	root := filepath.Join(staging, store.ExportDir)
 	var files []publishFile
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
@@ -306,16 +305,6 @@ func (s *Store) publishFiles(staging, id, gen string, digested bool) ([]publishF
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
-		}
-		if !digested {
-			if rel == store.MetaFile {
-				return nil
-			}
-			files = append(files, publishFile{
-				path: path,
-				key:  s.key(id, gen+"/"+strings.TrimPrefix(rel, store.ExportDir+"/")),
-			})
-			return nil
 		}
 		info, err := entry.Info()
 		if err != nil {
@@ -369,7 +358,11 @@ func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string
 	if err := os.MkdirAll(filepath.Dir(gen), 0o750); err != nil {
 		return err
 	}
-	return os.Rename(local, gen)
+	if err := os.Rename(local, gen); err != nil {
+		return err
+	}
+	pruneIdleGenerations(filepath.Dir(gen), gen)
+	return nil
 }
 
 func (s *Store) key(id, rest string) string {
@@ -417,7 +410,7 @@ func (s *Store) uploadReader(ctx context.Context, key string, body io.Reader, si
 		Bucket:        &s.bucket,
 		Key:           &key,
 		Body:          body,
-		ContentLength: aws.Int64(size),
+		ContentLength: new(size),
 		Metadata:      metadata,
 	}
 	if _, err := s.tm.UploadObject(ctx, input); err != nil {
@@ -450,7 +443,7 @@ func (s *Store) deleteKeys(ctx context.Context, keys []string) error {
 		}
 		out, err := s.client.DeleteObjects(ctx, &awss3.DeleteObjectsInput{
 			Bucket: &s.bucket,
-			Delete: &s3types.Delete{Objects: objs, Quiet: aws.Bool(true)},
+			Delete: &s3types.Delete{Objects: objs, Quiet: new(true)},
 		})
 		if err != nil {
 			return fmt.Errorf("delete %d objects: %w", len(chunk), err)
@@ -479,4 +472,18 @@ func (s *Store) list(ctx context.Context, prefix string) ([]string, error) {
 		}
 	}
 	return keys, nil
+}
+
+// pruneIdleGenerations drops cached generations of one record that no Fetch used within the grace; a hit refreshes the mtime.
+func pruneIdleGenerations(dir, keep string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+		if info, err := entry.Info(); err == nil && path != keep && time.Since(info.ModTime()) >= store.GenerationGrace {
+			_ = os.RemoveAll(path)
+		}
+	}
 }

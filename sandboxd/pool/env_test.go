@@ -301,6 +301,24 @@ func TestAGuestEnvChangeNeedsARunningGuest(t *testing.T) {
 	}
 }
 
+func TestAGuestEnvChangeOnAFailedClaimIsRefused(t *testing.T) {
+	eng := newFakeEngine()
+	m := envManager(t, eng, t.TempDir())
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: types.Env{"G": {Value: "1"}}})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	sb.Transition.Lock()
+	m.failLocked(t.Context(), sb, "vmm exited")
+	sb.Transition.Unlock()
+	if err := m.SetEnv(t.Context(), sb.ID, types.Env{"G": {Value: "2"}}, ""); !errors.Is(err, ErrFailed) {
+		t.Errorf("guest change on a failed claim: %v, want ErrFailed", err)
+	}
+	if got := sb.Env["G"].Value; got != "1" {
+		t.Errorf("refused change stored G=%q, want 1", got)
+	}
+}
+
 func TestAFailedEnvDeliveryDestroysTheClaim(t *testing.T) {
 	eng := newFakeEngine()
 	eng.guestEnvErr = errors.New("guest write failed")

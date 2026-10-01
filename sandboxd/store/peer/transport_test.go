@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTarUntarRoundTrip(t *testing.T) {
@@ -159,6 +160,25 @@ func TestHTTPPullerNotFound(t *testing.T) {
 	err := p.Pull(t.Context(), srv.URL, "ck_0000000000000001", t.TempDir())
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Pull error = %v, want ErrNotFound so the next owner is tried", err)
+	}
+}
+
+func TestHTTPPullerStopsReadingAfterAFailedUntar(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte("x"), 4096))
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) && r.Context().Err() == nil {
+			if _, err := w.Write(make([]byte, 64<<10)); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+		}
+	}))
+	t.Cleanup(srv.Close)
+	start := time.Now()
+	err := (&HTTPPuller{Client: srv.Client()}).Pull(t.Context(), srv.URL, "ck_0000000000000001", t.TempDir())
+	if err == nil || time.Since(start) > 5*time.Second {
+		t.Fatalf("pull of a non-tar body: %v after %s, want a prompt untar error", err, time.Since(start))
 	}
 }
 

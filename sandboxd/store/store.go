@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const (
@@ -23,6 +24,9 @@ const (
 	MetaFile = "meta.json"
 	// LabelsFile holds a record's labels beside its meta, which names the export generation and so cannot change.
 	LabelsFile = "labels.json"
+
+	// GenerationGrace bounds the race where a node still clones a generation a re-publish superseded.
+	GenerationGrace = time.Hour
 )
 
 var (

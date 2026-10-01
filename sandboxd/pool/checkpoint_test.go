@@ -56,6 +56,23 @@ func TestCheckpointThenBranch(t *testing.T) {
 	}
 }
 
+func TestCheckpointClaimsLeaveNoRecordLock(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	src := mustClaim(t, m, testKey)
+	ckpt, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "step-1", "")
+	if err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	for range 3 {
+		if _, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, ClaimOptions{TTL: time.Hour}); err != nil {
+			t.Fatalf("ClaimCheckpoint: %v", err)
+		}
+	}
+	if hasRecLock(m, ckpt.ID) {
+		t.Errorf("recLocks keeps %s after every claim released it (%d entries)", ckpt.ID, lockCount(m))
+	}
+}
+
 func TestCheckpointBranchTakesItsOwnMetadata(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	src, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Metadata: types.Metadata{"role": "source"}})

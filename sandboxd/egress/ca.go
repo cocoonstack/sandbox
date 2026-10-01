@@ -36,7 +36,7 @@ type CA struct {
 
 // LoadCA builds the node CA; the intermediate must be signed by the bundle's first cert.
 func LoadCA(rootCertPEM, interCertPEM, interKeyPEM []byte) (*CA, error) {
-	root, err := parseRootBundle(rootCertPEM)
+	root, err := parseCert(rootCertPEM, "root")
 	if err != nil {
 		return nil, err
 	}
@@ -123,23 +123,8 @@ func (c *CA) SignLeaf(host string) (*tls.Certificate, error) {
 	return &tls.Certificate{Certificate: [][]byte{der, c.interDER}, PrivateKey: c.leafKey, Leaf: leaf}, nil
 }
 
+// parseCert returns the file's first certificate and rejects any block that is not a CA certificate: guests trust the whole file.
 func parseCert(pemBytes []byte, what string) (*x509.Certificate, error) {
-	block, _ := pem.Decode(pemBytes)
-	if block == nil {
-		return nil, fmt.Errorf("%s cert: no pem block", what)
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("parse %s cert: %w", what, err)
-	}
-	if !cert.IsCA {
-		return nil, fmt.Errorf("%s cert: not a certificate authority", what)
-	}
-	return cert, nil
-}
-
-// parseRootBundle returns the anchor and rejects a non-CA block: guests trust the whole file.
-func parseRootBundle(pemBytes []byte) (*x509.Certificate, error) {
 	var anchor *x509.Certificate
 	for rest := pemBytes; ; {
 		var block *pem.Block
@@ -147,19 +132,19 @@ func parseRootBundle(pemBytes []byte) (*x509.Certificate, error) {
 			break
 		}
 		if block.Type != pemTypeCertificate {
-			return nil, fmt.Errorf("root bundle: unexpected %s pem block", block.Type)
+			return nil, fmt.Errorf("%s cert: unexpected %s pem block", what, block.Type)
 		}
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf("parse root bundle cert: %w", err)
+			return nil, fmt.Errorf("parse %s cert: %w", what, err)
 		}
 		if !cert.IsCA {
-			return nil, fmt.Errorf("root bundle: %q is not a certificate authority", cert.Subject.CommonName)
+			return nil, fmt.Errorf("%s cert: %q is not a certificate authority", what, cert.Subject.CommonName)
 		}
 		anchor = cmp.Or(anchor, cert)
 	}
 	if anchor == nil {
-		return nil, fmt.Errorf("root cert: no pem block")
+		return nil, fmt.Errorf("%s cert: no pem block", what)
 	}
 	return anchor, nil
 }

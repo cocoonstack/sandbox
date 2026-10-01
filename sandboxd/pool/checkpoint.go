@@ -115,7 +115,7 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, s
 	}
 	l := m.recLock(ckptID)
 	l.Lock()
-	defer func() { l.Unlock(); m.recDoneEvict(ckptID) }()
+	defer func() { l.Unlock(); m.recDone(ckptID) }()
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	if err != nil {
 		m.vetoIfHealPending(ckptID)
@@ -181,7 +181,7 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 		return types.Checkpoint{}, "", fmt.Errorf("stage checkpoint: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
-	srcSnap, guestEnv, err := m.exportSource(ctx, sb, filepath.Join(staging, store.ExportDir))
+	srcSnap, _, guestEnv, err := m.exportSource(ctx, sb, filepath.Join(staging, store.ExportDir))
 	if err != nil {
 		return types.Checkpoint{}, "", fmt.Errorf("checkpoint %s: %w", sb.ID, err)
 	}
@@ -362,7 +362,7 @@ func (m *Manager) deleteCkLocked(ctx context.Context, ckID string) error {
 		m.recDone(ckID)
 		return err
 	}
-	m.recDoneEvict(ckID)
+	m.recDone(ckID)
 	return nil
 }
 

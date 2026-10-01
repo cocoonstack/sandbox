@@ -1,7 +1,4 @@
-// Package egress is the host-side guarded-egress data plane: a forward proxy
-// a sandbox reaches as its only route out. Every request is evaluated against
-// a per-sandbox policy (domain allow-list, methods) before it leaves the node,
-// and a matched rule may inject a node-side credential the guest never holds.
+// Package egress is a sandbox's only route out: a forward proxy that enforces its policy and injects node-side credentials.
 package egress
 
 import (

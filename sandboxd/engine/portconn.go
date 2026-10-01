@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -32,7 +33,7 @@ func newGuestPortConn(conn net.Conn, r *bufio.Reader) *guestPortConn {
 
 func (g *guestPortConn) Read(p []byte) (int, error) {
 	for len(g.pending) == 0 {
-		line, err := g.r.ReadBytes('\n')
+		line, err := g.readFrame()
 		if err != nil {
 			return 0, err
 		}
@@ -84,6 +85,22 @@ func (g *guestPortConn) Write(p []byte) (int, error) {
 		written += n
 	}
 	return written, nil
+}
+
+func (g *guestPortConn) readFrame() ([]byte, error) {
+	line, err := g.r.ReadSlice('\n')
+	if !errors.Is(err, bufio.ErrBufferFull) {
+		return line, err
+	}
+	long := bytes.Clone(line)
+	for errors.Is(err, bufio.ErrBufferFull) {
+		line, err = g.r.ReadSlice('\n')
+		long = append(long, line...)
+		if len(long) > wire.MaxFrame {
+			return nil, fmt.Errorf("port frame exceeds %d bytes", wire.MaxFrame)
+		}
+	}
+	return long, err
 }
 
 // fastPortData slices the canonical data frame's base64 out without a JSON parse.

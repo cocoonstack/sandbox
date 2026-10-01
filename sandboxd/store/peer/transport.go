@@ -64,10 +64,7 @@ func (p *HTTPPuller) Pull(ctx context.Context, addr, id, dst string) error {
 	if err != nil {
 		return fmt.Errorf("pull %s from %s: %w", id, addr, err)
 	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-	}()
+	defer func() { _ = resp.Body.Close() }()
 
 	switch resp.StatusCode {
 	case http.StatusOK:

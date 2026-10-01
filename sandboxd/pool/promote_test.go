@@ -189,9 +189,6 @@ func TestTemplateRecordLockEvictsWithTheRecord(t *testing.T) {
 	if _, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, key.Template, ""); err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
-	if !hasRecLock(m, id) {
-		t.Error("recLocks dropped the entry of a live template")
-	}
 	if err := m.DeleteTemplate(t.Context(), key, "", ""); err != nil {
 		t.Fatalf("DeleteTemplate: %v", err)
 	}

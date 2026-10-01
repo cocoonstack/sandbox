@@ -466,7 +466,7 @@ The URL's life is clamped to the claim's remaining lease; an archived claim
 kept forever (`archive_delete_after_seconds: 0`) has no lease, so there the
 requested `ttl_seconds` stands unclamped and `ttl_seconds: 0` mints a one-hour
 URL; releasing the sandbox ends it early either way.
-501 when the node
+400 a port of 0, 501 when the node
 has no `preview_listen`. The signed token embeds the sandbox id, port, and
 owner `advertise_addr`, so any node's preview listener can serve it (forwarding
 to the owner's main listener) and a released sandbox's URL simply stops
@@ -642,7 +642,7 @@ The env is persisted with the claim. A `guest: false` change takes effect on
 the egress proxy's next request at any time, a hibernated or archived claim
 included, and never touches the guest. A change to the guest entries is
 written to the guest at once, so it needs a running guest: on a hibernated,
-archived or transitioning sandbox it answers 409 (this verb never wakes one).
+archived, failed or transitioning sandbox it answers 409 (this verb never wakes one).
 A `PUT` identical to the stored env is written to a running guest again,
 so resending it repairs a guest file that was lost or not updated. A `PATCH`
 writes the guest file only when it changes a guest entry or sets one, so
@@ -653,7 +653,7 @@ are already live, but the guest write failed; resend the same request to
 deliver it. The guest side is described in [silkd](silkd.md#claim-env).
 `PUT`/`PATCH`/`DELETE` answer 204, `GET` 200; 400 a bad entry or an unknown body
 field; 404 unknown id or another tenant's claim; 409 a guest change on a
-paused sandbox.
+paused or failed sandbox.
 
 ## PUT /v1/sandboxes/{id}/instance-metadata
 

@@ -168,7 +168,7 @@ func TestRecLockEvictionWaitsForAllHolders(t *testing.T) {
 		t.Fatalf("recLock returned a different mutex while the first holder is still outstanding")
 	}
 	l1.Unlock()
-	m.recDoneEvict(id)
+	m.recDone(id)
 	if !hasRecLock(m, id) {
 		t.Fatal("entry evicted while a second holder still references it")
 	}
@@ -179,7 +179,7 @@ func TestRecLockEvictionWaitsForAllHolders(t *testing.T) {
 	}
 
 	m.recDone(id)
-	m.recDoneEvict(id)
+	m.recDone(id)
 	if hasRecLock(m, id) {
 		t.Error("entry not evicted once every holder released")
 	}
@@ -194,7 +194,7 @@ func TestRecLockEvictDeferredToLastHolder(t *testing.T) {
 	if l2 != l1 {
 		t.Fatal("recLock diverged for the same id")
 	}
-	m.recDoneEvict(id)
+	m.recDone(id)
 	if !hasRecLock(m, id) {
 		t.Fatal("entry evicted while an ordinary holder still references it")
 	}

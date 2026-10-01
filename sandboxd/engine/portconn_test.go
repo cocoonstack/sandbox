@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
@@ -122,6 +123,22 @@ func TestPortReadBufHoldsOneBulkFrame(t *testing.T) {
 	}
 	if n := len(frame) + 1; n > portReadBuf {
 		t.Errorf("a full bulk data frame is %d bytes with its delimiter, portReadBuf %d cannot take it in one read", n, portReadBuf)
+	}
+}
+
+func TestGuestPortConnRefusesAFrameOverMaxFrame(t *testing.T) {
+	for name, tail := range map[string]string{"unterminated": "", "terminated": "\n"} {
+		t.Run(name, func(t *testing.T) {
+			silk, gc := newTestGuestPortConn(t)
+
+			go func() {
+				_, _ = silk.Write(append(bytes.Repeat([]byte("a"), wire.MaxFrame+1), tail...))
+				_ = silk.Close()
+			}()
+			if _, err := gc.Read(make([]byte, 64)); err == nil || !strings.Contains(err.Error(), "exceeds") {
+				t.Fatalf("oversized frame: %v, want a frame size error", err)
+			}
+		})
 	}
 }
 

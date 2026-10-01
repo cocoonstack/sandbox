@@ -1,6 +1,4 @@
-// Package pool owns a node's warm pools and claimed sandboxes: refill keeps
-// every configured pool topped up with claim-ready VMs (cloned, reseeded,
-// probed), so a claim is ownership transfer only.
+// Package pool owns a node's warm pools and claimed sandboxes; refill keeps pools claim-ready, so a claim is ownership transfer only.
 package pool
 
 import (
@@ -341,12 +339,10 @@ type Manager struct {
 	tplMu  sync.Mutex
 	tplSet map[string]TemplateInfo
 
-	// recLocks serializes same-id record mutations; an entry evicts only when no holder remains, never on a bare delete, since a peer heal can republish the id.
+	// recLocks serializes same-id record mutations; an entry lives exactly as long as a recLock reference to it.
 	recLocks   map[string]*sync.RWMutex
 	recLocksMu sync.Mutex
 	recRefs    map[string]int
-	// recEvict defers a delete's eviction to the last holder, else the recLocks entry leaks.
-	recEvict map[string]struct{}
 
 	// notifyTemplates is set before serving starts and fires after a promote or template delete.
 	notifyTemplates func()
@@ -408,7 +404,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		egressTaps:      map[string]string{},
 		recLocks:        map[string]*sync.RWMutex{},
 		recRefs:         map[string]int{},
-		recEvict:        map[string]struct{}{},
 		healPending:     map[string]struct{}{},
 		healAbort:       map[string]struct{}{},
 		egressSecrets:   secrets,

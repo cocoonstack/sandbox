@@ -152,8 +152,5 @@ func dialAdb(ctx context.Context, sb *sandbox.Sandbox) (string, error) {
 
 func head(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
-	if len(lines) > 12 {
-		lines = lines[:12]
-	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines[:min(len(lines), 12)], "\n")
 }

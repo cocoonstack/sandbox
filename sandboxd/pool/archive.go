@@ -149,18 +149,9 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	}
 	ctx = context.WithoutCancel(ctx)
 	ck := sb.ArchiveCk
-	// evicting while the lock is held would split a concurrent recLock onto a different mutex
 	l := m.recLock(ck)
 	l.Lock()
-	consumed := false
-	defer func() {
-		l.Unlock()
-		if consumed {
-			m.recDoneEvict(ck)
-		} else {
-			m.recDone(ck)
-		}
-	}()
+	defer func() { l.Unlock(); m.recDone(ck) }()
 	dir, _, _, err := m.ckpts.Fetch(ctx, ck)
 	if errors.Is(err, store.ErrNotFound) {
 		return "", ErrUnknownSandbox // record disagrees with the store
@@ -187,11 +178,8 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	// the pre-commit marker keeps a failed delete retryable after the journal update.
 	if delErr := m.ckpts.Delete(ctx, ck); delErr != nil {
 		log.WithFunc("pool.wakeArchived").Warnf(ctx, "delete consumed archive ck %s: %v", ck, delErr)
-	} else {
-		consumed = true
-		if clearErr := m.clearArchiveCk(ck); clearErr != nil {
-			log.WithFunc("pool.wakeArchived").Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
-		}
+	} else if clearErr := m.clearArchiveCk(ck); clearErr != nil {
+		log.WithFunc("pool.wakeArchived").Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
 	}
 	// only the none lane reaches here, so there is no NIC to re-lock
 	if proxyErr := m.armEgressProxy(ctx, sb); proxyErr != nil {
@@ -328,7 +316,7 @@ func (m *Manager) retryArchiveDelete(ctx context.Context, ckID string) {
 		log.WithFunc("pool.retryArchiveDelete").Warnf(ctx, "delete %s: %v", ckID, err)
 		return
 	}
-	m.recDoneEvict(ckID)
+	m.recDone(ckID)
 	if err := m.clearArchiveCk(ckID); err != nil {
 		log.WithFunc("pool.retryArchiveDelete").Warnf(ctx, "clear %s: %v", ckID, err)
 	}

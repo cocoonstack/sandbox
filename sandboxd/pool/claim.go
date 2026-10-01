@@ -660,6 +660,25 @@ func (m *Manager) recommit(ctx context.Context, snap claimSnapshot) {
 	}()
 }
 
+func (m *Manager) commitIfLive(ctx context.Context, sb *types.Sandbox, mutate func()) (bool, error) {
+	m.mu.Lock()
+	live := m.claimed[sb.ID] == sb
+	var js claimSnapshot
+	if live {
+		mutate()
+		js = m.store.set(sb)
+	}
+	m.mu.Unlock()
+	if !live {
+		return false, nil
+	}
+	if err := m.store.commit(js); err != nil {
+		m.recommit(ctx, js)
+		return true, err
+	}
+	return true, nil
+}
+
 func (m *Manager) claim(id, token string) (*types.Sandbox, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -691,22 +710,6 @@ func (m *Manager) admitOptions(ctx context.Context, key types.PoolKey, o ClaimOp
 	return volumeSpecs, applied, err
 }
 
-func stampIdentity(sb *types.Sandbox, ttl time.Duration) {
-	now := time.Now()
-	sb.ID = "sb_" + randHex(8)
-	sb.Token = randHex(16)
-	sb.ClaimedAt = now
-	sb.Deadline = now.Add(ttl)
-	sb.LeaseSeconds = int(ttl / time.Second)
-}
-
-func clampTTL(ttl time.Duration) time.Duration {
-	if ttl <= 0 {
-		return defaultTTL
-	}
-	return min(ttl, maxTTL)
-}
-
 // heldConn keeps its sandbox held until the guest connection closes.
 type heldConn struct {
 	net.Conn
@@ -725,6 +728,22 @@ func (c *heldConn) CloseWrite() error {
 		return nil
 	}
 	return cw.CloseWrite()
+}
+
+func stampIdentity(sb *types.Sandbox, ttl time.Duration) {
+	now := time.Now()
+	sb.ID = "sb_" + randHex(8)
+	sb.Token = randHex(16)
+	sb.ClaimedAt = now
+	sb.Deadline = now.Add(ttl)
+	sb.LeaseSeconds = int(ttl / time.Second)
+}
+
+func clampTTL(ttl time.Duration) time.Duration {
+	if ttl <= 0 {
+		return defaultTTL
+	}
+	return min(ttl, maxTTL)
 }
 
 func archivable(key types.PoolKey, volumes bool, onExpire types.ExpireAction) error {

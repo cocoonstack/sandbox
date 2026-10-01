@@ -53,8 +53,7 @@ func run(addr, token, template, netShape string, wait time.Duration) error {
 	}
 	fmt.Printf("idle-hibernated then archived in %.1fs (local VM dropped)\n", elapsed.Seconds())
 
-	// the first access on an archived id is the cold wake: fetch the
-	// checkpoint, provision a fresh local VM, keep the id/token.
+	// The first access on an archived id is the cold wake: fetch the checkpoint into a fresh VM under the same id/token.
 	wakeStart := time.Now()
 	got, err := sb.ReadFile(ctx, markerPath)
 	if err != nil {
@@ -82,8 +81,7 @@ func run(addr, token, template, netShape string, wait time.Duration) error {
 	return nil
 }
 
-// waitArchived polls the node until archived reaches n, returning how long the
-// reaper's idle→hibernate→archive ladder took.
+// waitArchived returns how long the reaper's idle→hibernate→archive ladder took to archive n claims.
 func waitArchived(ctx context.Context, client *sandbox.Client, n int, timeout time.Duration) (time.Duration, error) {
 	start := time.Now()
 	deadline := start.Add(timeout)

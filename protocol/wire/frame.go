@@ -30,9 +30,6 @@ const (
 	// PortWriteChunk keeps a port data frame (payload x4/3 base64 plus envelope) well under MaxFrame.
 	PortWriteChunk = 1 << 20
 
-	// maxSkipDepth bounds a tag scan past nested siblings; wire values nest two deep.
-	maxSkipDepth = 16
-
 	// GitBranch.Action values (silkd's GitBranchOp).
 	BranchList     = "list"
 	BranchCreate   = "create"
@@ -682,16 +679,13 @@ func DecodeResponse(line []byte) (Response, error) {
 }
 
 // NewFrameScanner wraps r for newline-delimited frames capped at MaxFrame.
-// No pre-sized buffer: bulk frames outgrow any fixed start anyway.
 func NewFrameScanner(r io.Reader) *bufio.Scanner {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(nil, MaxFrame)
 	return sc
 }
 
-// AppendBulkRequest renders a data-carrying request frame —
-// {"v":1,"op":<op>,"data":"<base64>"} plus newline — into buf, reused across
-// calls on the bulk send paths (base64's alphabet needs no JSON escaping).
+// AppendBulkRequest renders {"v":1,"op":<op>,"data":"<base64>"} and a newline into buf's storage; base64 needs no JSON escaping.
 func AppendBulkRequest(buf []byte, op string, data []byte) []byte {
 	buf = append(buf[:0], requestHead...)
 	buf = append(buf, op...)
@@ -713,8 +707,7 @@ func IsContinuation(line []byte) bool {
 	return false
 }
 
-// fastBulk slices the base64 data out of a canonical bulk frame, skipping the
-// json.Unmarshal that dominates downloads; any other shape falls back to slow.
+// fastBulk decodes a canonical bulk frame without json.Unmarshal; any other shape falls back to slow.
 func fastBulk(tag string, slow respDecoder, mk func([]byte) Response) respDecoder {
 	head := []byte(`{"type":"` + tag + `","data":"`)
 	return func(line []byte) (Response, error) {
@@ -785,33 +778,11 @@ func scanTag(line []byte, key string) (string, error) {
 			}
 			return tok.String(), nil
 		}
-		if err = skipValue(dec); err != nil {
+		if err = dec.SkipValue(); err != nil {
 			return "", err
 		}
 	}
 	return "", nil
-}
-
-// skipValue consumes one JSON value; a guest cannot grow the host stack with nesting.
-func skipValue(dec *jsontext.Decoder) error {
-	depth := 0
-	for {
-		tok, err := dec.ReadToken()
-		if err != nil {
-			return err
-		}
-		switch tok.Kind() {
-		case '{', '[':
-			if depth++; depth > maxSkipDepth {
-				return fmt.Errorf("value nested deeper than %d", maxSkipDepth)
-			}
-		case '}', ']':
-			depth--
-		}
-		if depth == 0 {
-			return nil
-		}
-	}
 }
 
 func decodeAs[T any](line []byte) (*T, error) {

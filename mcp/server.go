@@ -47,7 +47,6 @@ type server struct {
 	template string
 
 	mu       sync.Mutex
-	closed   bool
 	boxes    map[string]*sandbox.Sandbox
 	ckpts    map[string]*sandbox.Checkpoint
 	release  sync.Once
@@ -72,9 +71,7 @@ func newServer(addr, token, template string) (*server, error) {
 	}, nil
 }
 
-// serve answers newline-delimited JSON-RPC 2.0 over r/w until EOF — the MCP
-// stdio transport. Requests are handled strictly in order: sandbox tools are
-// stateful, and an agent's tool calls arrive sequentially anyway.
+// serve answers the MCP stdio transport's JSON-RPC 2.0 lines until EOF, in order, since sandbox tools are stateful.
 func (s *server) serve(ctx context.Context, r *bufio.Reader, w io.Writer) error {
 	defer s.closeBoxes()
 	for {
@@ -165,7 +162,6 @@ func (s *server) box(id string) (*sandbox.Sandbox, error) {
 func (s *server) closeBoxes() {
 	s.release.Do(func() {
 		s.mu.Lock()
-		s.closed = true
 		boxes := slices.Collect(maps.Values(s.boxes))
 		clear(s.boxes)
 		s.mu.Unlock()
@@ -181,14 +177,8 @@ func (s *server) closeBoxes() {
 
 func (s *server) trackBox(sb *sandbox.Sandbox) {
 	s.mu.Lock()
-	closed := s.closed
-	if !closed {
-		s.boxes[sb.ID] = sb
-	}
-	s.mu.Unlock()
-	if closed {
-		_ = sb.Close() // claimed after the session's release ran; nothing else would ever release it
-	}
+	defer s.mu.Unlock()
+	s.boxes[sb.ID] = sb
 }
 
 func (s *server) dropBox(id string) {

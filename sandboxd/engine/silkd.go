@@ -10,6 +10,11 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
+const (
+	silkdListMax = 4096
+	silkdReadMax = 64 << 10
+)
+
 // silkdSession is a dialed silkd conn bound to a ctx, with wire-typed request/reply helpers.
 type silkdSession struct {
 	conn net.Conn
@@ -91,6 +96,9 @@ func (e *Engine) silkdList(ctx context.Context, vsockSocket, path string) ([]wir
 			return fmt.Errorf("unexpected silkd frame %q", frame.RespType())
 		}
 		entries = append(entries, resp.Entries...)
+		if len(entries) > silkdListMax {
+			return fmt.Errorf("silkd list of %s exceeds %d entries", path, silkdListMax)
+		}
 		return nil
 	})
 	if err != nil {
@@ -107,6 +115,9 @@ func (e *Engine) silkdReadFile(ctx context.Context, vsockSocket, path string) ([
 			return fmt.Errorf("unexpected silkd frame %q", frame.RespType())
 		}
 		data = append(data, resp.Data...)
+		if len(data) > silkdReadMax {
+			return fmt.Errorf("silkd read of %s exceeds %d bytes", path, silkdReadMax)
+		}
 		return nil
 	})
 	if err != nil {

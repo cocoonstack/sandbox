@@ -235,27 +235,14 @@ func (m *Manager) idleHibernate(ctx context.Context, id, token string, sweepStar
 
 // commitTransition publishes a hibernate/wake result only if the claim is still live.
 func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap, sock string) (live bool, err error) {
-	m.mu.Lock()
-	live = m.claimed[sb.ID] == sb
-	var js claimSnapshot
-	if live {
+	return m.commitIfLive(ctx, sb, func() {
 		sb.HibernateSnap = snap
 		sb.VsockSocket = sock
 		sb.PendingSnap = ""
 		if now := time.Now(); snap == "" && sb.OnExpire == types.ExpireArchive && now.After(sb.Deadline) {
 			sb.Deadline = now.Add(clampTTL(types.Seconds(sb.LeaseSeconds)))
 		}
-		js = m.store.set(sb)
-	}
-	m.mu.Unlock()
-	if !live {
-		return false, nil
-	}
-	if err := m.store.commit(js); err != nil {
-		m.recommit(ctx, js)
-		return true, err
-	}
-	return true, nil
+	})
 }
 
 // syncClaims flushes a lagging journal so a hibernate retry cannot report a false success.

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cocoonstack/sandbox/protocol/wire"
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
@@ -77,7 +76,7 @@ var (
 			schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "template_name": str("template name to publish as")}, "sandbox_id", "template_name"), toolPromote,
 		},
 		{"release", "Destroy a sandbox and free its resources; files and processes inside it are lost. This session forgets the id, so a second release of it is rejected as unknown.", schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint")}, "sandbox_id"), toolRelease},
-		{"node_info", "Report the connected node's warm pools, promoted templates, live claims, drain state, capacity, and mesh peers as JSON.", schema(props{}), toolNodeInfo},
+		{"node_info", "Report the connected node's warm pools, promoted templates, live claims, drain state, capacity, and mesh peers as JSON. Needs the operator token; a tenant token is refused.", schema(props{}), toolNodeInfo},
 	}
 )
 
@@ -289,14 +288,6 @@ func toolReadFile(ctx context.Context, s *server, raw jsontext.Value) (string, e
 	args, sb, err := parseAndBox[pathArgs](s, raw)
 	if err != nil {
 		return "", err
-	}
-	// a device or a FIFO is not a file: /dev/null reads as empty and a writerless FIFO blocks in open
-	info, err := sb.Stat(ctx, args.Path)
-	if err != nil {
-		return "", err
-	}
-	if info.Kind != wire.FileKindFile {
-		return "", fmt.Errorf("%s is a %s; read_file reads a regular file", args.Path, info.Kind)
 	}
 	out := cappedOutput{stopAtCap: true}
 	if err := sb.ReadFileTo(ctx, args.Path, &out); errors.Is(err, errOutputCap) {

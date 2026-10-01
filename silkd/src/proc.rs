@@ -55,10 +55,6 @@ impl Table {
         proc
     }
 
-    pub(crate) fn get(&self, pid: u32) -> Option<Arc<Proc>> {
-        sysutil::lock(&self.inner).get(&pid).cloned()
-    }
-
     /// Looks up a pid, writing a NotFound frame and returning None on a miss.
     pub async fn get_or_not_found<W: AsyncWrite + Unpin>(
         &self,
@@ -87,6 +83,10 @@ impl Table {
         if map.get(&pid).is_some_and(|cur| Arc::ptr_eq(cur, proc)) {
             map.remove(&pid);
         }
+    }
+
+    pub(crate) fn get(&self, pid: u32) -> Option<Arc<Proc>> {
+        sysutil::lock(&self.inner).get(&pid).cloned()
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -249,7 +249,7 @@ impl Ring {
     }
 }
 
-/// Stdout/Stderr ride the reused-buffer bulk path; serde's per-chunk allocations dominate replay otherwise.
+/// Writes a Stdout/Stderr chunk on the reused-buffer bulk path.
 pub async fn write_chunk<W: AsyncWrite + Unpin>(
     w: &mut W,
     buf: &mut Vec<u8>,

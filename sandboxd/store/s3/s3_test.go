@@ -383,6 +383,57 @@ func TestRepublishRetainsGenerationSelectedByAnotherStore(t *testing.T) {
 	}
 }
 
+func TestFetchPrunesSupersededGenerationsIdlePastTheGrace(t *testing.T) {
+	const id = "ck_00000000000000aa"
+	st := newTestStore(t, &fakeS3{objects: map[string][]byte{}})
+	fetchGen := func(gen int) string {
+		t.Helper()
+		publishRecord(t, st, id, []byte(fmt.Sprintf(`{"id":"%s","gen":%d}`, id, gen)), fmt.Sprint(gen))
+		export, _, _, err := st.Fetch(t.Context(), id)
+		if err != nil {
+			t.Fatalf("fetch generation %d: %v", gen, err)
+		}
+		return filepath.Dir(export)
+	}
+	first := fetchGen(1)
+	second := fetchGen(2)
+	if _, err := os.Stat(first); err != nil {
+		t.Fatalf("a generation used within the grace was pruned: %v", err)
+	}
+	old := time.Now().Add(-store.GenerationGrace - time.Minute)
+	if err := os.Chtimes(first, old, old); err != nil {
+		t.Fatal(err)
+	}
+	fetchGen(3)
+	if _, err := os.Stat(first); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("an idle superseded generation survived the next fetch: %v", err)
+	}
+	if _, err := os.Stat(second); err != nil {
+		t.Errorf("a generation used within the grace was pruned: %v", err)
+	}
+}
+
+func TestFetchHitRefreshesTheGenerationsUse(t *testing.T) {
+	const id = "ck_00000000000000aa"
+	st := newTestStore(t, &fakeS3{objects: map[string][]byte{}})
+	publishRecord(t, st, id, []byte(`{"id":"`+id+`","gen":1}`), "first")
+	export, _, _, err := st.Fetch(t.Context(), id)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	old := time.Now().Add(-2 * store.GenerationGrace)
+	if err = os.Chtimes(filepath.Dir(export), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err = st.Fetch(t.Context(), id); err != nil {
+		t.Fatalf("fetch hit: %v", err)
+	}
+	info, err := os.Stat(filepath.Dir(export))
+	if err != nil || time.Since(info.ModTime()) > time.Minute {
+		t.Errorf("a cache hit left the generation looking idle: %v, %v", info, err)
+	}
+}
+
 func TestS3BackendContractRealEndpoint(t *testing.T) {
 	endpoint := os.Getenv("SANDBOX_S3_E2E")
 	if endpoint == "" {

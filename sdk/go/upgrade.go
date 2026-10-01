@@ -10,6 +10,14 @@ import (
 	"strings"
 )
 
+type upgradedConn struct {
+	net.Conn
+	tcp net.Conn // under any TLS, for the parked-connection probe
+	r   *bufio.Reader
+}
+
+func (u *upgradedConn) Read(p []byte) (int, error) { return u.r.Read(p) }
+
 func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (*upgradedConn, error) {
 	if strings.ContainsAny(id, "\r\n\x00") || strings.ContainsAny(token, "\r\n\x00") {
 		return nil, fmt.Errorf("agent upgrade: id or token contains a control character")
@@ -61,14 +69,6 @@ func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (*upgrad
 	}
 	return &upgradedConn{Conn: conn, tcp: raw, r: br}, nil
 }
-
-type upgradedConn struct {
-	net.Conn
-	tcp net.Conn // under any TLS, for the parked-connection probe
-	r   *bufio.Reader
-}
-
-func (u *upgradedConn) Read(p []byte) (int, error) { return u.r.Read(p) }
 
 func agentEndpoint(addr, scheme string) (string, string, string) {
 	authority := addr

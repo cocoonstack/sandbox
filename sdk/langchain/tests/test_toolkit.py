@@ -7,7 +7,7 @@ import threading
 import time
 
 import pytest
-from cocoonsandbox import Sandbox, SilkdError
+from cocoonsandbox import APIError, Sandbox, SilkdError
 from cocoonsandbox_langchain import CocoonToolkit
 from cocoonsandbox_langchain.toolkit import CALL_TIMEOUT
 
@@ -116,6 +116,18 @@ def test_use_after_close_raises(monkeypatch):
         kit.sandbox()
 
 
+def test_a_failed_release_never_hides_the_block_error(monkeypatch):
+    kit, fake = hooked(monkeypatch)
+    fake.close_error = APIError("release", 500, "boom")
+    with pytest.raises(ValueError), kit:
+        kit.get_tools()[0].invoke({"command": "x"})
+        raise ValueError("agent failed")
+    kit, fake = hooked(monkeypatch)
+    fake.close_error = APIError("release", 500, "boom")
+    with pytest.raises(APIError), kit:
+        kit.get_tools()[0].invoke({"command": "x"})
+
+
 def test_read_file_reports_a_missing_path_as_a_tool_error(monkeypatch):
     kit, fake = hooked(monkeypatch)
 
@@ -144,6 +156,7 @@ def test_a_stalled_agent_upgrade_comes_back_as_a_tool_error():
 class FakeSandbox:
     def __init__(self):
         self.closed = 0
+        self.close_error = None
         self.files = {}
 
     def run(self, argv, cwd="", on_stdout=None, on_stderr=None, timeout=None, **_):
@@ -169,6 +182,8 @@ class FakeSandbox:
 
     def close(self):
         self.closed += 1
+        if self.close_error is not None:
+            raise self.close_error
 
 
 def hooked(monkeypatch):

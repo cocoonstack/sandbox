@@ -177,6 +177,10 @@ func writeResult(w http.ResponseWriter, r *http.Request, op, id, failMsg string,
 	}
 }
 
+func noContent(w http.ResponseWriter) func() {
+	return func() { w.WriteHeader(http.StatusNoContent) }
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)

@@ -167,13 +167,17 @@ as if it were that pool's claim: the template records its source pool, a
 re-promote records the new one, and a fork, checkpoint or branch of such a
 clone keeps it. So a clone of a template promoted from a pool with no policy
 has no egress, as that pool's claims have none, even for a tenant with its own
-policy; a template promoted from a sandbox of no pool records no source. Any other key with no configured pool — an image cold-booted on
-demand — has no pool layer, so a tenant's claim of one takes the tenant's
-policy alone (a root claim of one stays denied). A claim with `"egress": false`
+policy; a template promoted from a sandbox of no pool records no source. A pool's
+`egress` block belongs to the config file and stays bound to its key: when a
+`PUT /v1/pools` drops a config pool that has one, the claims made after it,
+now cold-booted on demand, still take that policy. Any other key that is in
+no pool at claim time — an image cold-booted on demand — has no pool layer, so
+a tenant's claim of one takes the tenant's policy alone (a root claim of one
+stays denied). A claim with `"egress": false`
 takes no policy at all, whatever its pool's: no door is bound, so the guest's
 dial is refused. Which layers a claim has is settled when it
 is made and kept for its life: a `PUT /v1/pools` that adds or drops a pool
-changes the claims made after it, never a live one (a record from before this
+without a config-file policy changes the claims made after it, never a live one (a record from before this
 rule resolves against the live pool set). Secrets are registered separately and
 referenced by name — the value comes from the environment, never the config
 file: a claim's own `guest: false` env first, the node's second

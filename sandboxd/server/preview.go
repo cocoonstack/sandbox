@@ -185,6 +185,10 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if req.Port == 0 {
+		writeErr(w, http.StatusBadRequest, "port must be 1-65535")
+		return
+	}
 	id := r.PathValue("id")
 	deadline, err := s.mgr.ClaimDeadline(id, req.Token)
 	if err != nil {
@@ -195,7 +199,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case !deadline.IsZero():
 		if lease := time.Until(deadline); ttl <= 0 || ttl > lease {
-			ttl = lease // never outlive the claim
+			ttl = lease
 		}
 	case ttl <= 0:
 		ttl = previewTTL
