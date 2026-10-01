@@ -59,6 +59,7 @@ type auditFrame struct {
 	Port     uint16   `json:"port,omitzero"`
 	Decision string   `json:"decision,omitempty"`
 	Secret   string   `json:"secret,omitempty"`
+	Upstream string   `json:"upstream,omitempty"`
 }
 
 func (m *Manager) Counters() Counters {
@@ -132,8 +133,8 @@ func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress
 	if ev.Decision == egress.DecisionAllow {
 		decision = "allow"
 	}
-	m.recordAudit(ctx, id, auditFrame{Op: "egress", Dest: ev.Host, Port: ev.Port, Method: ev.Method, Decision: decision, Secret: ev.Injected})
-	m.recordUsage(ctx, usageEvent{Event: "egress", ID: id, Tenant: tenant, Reference: ev.Host})
+	m.recordAudit(ctx, id, auditFrame{Op: "egress", Dest: ev.Host, Port: ev.Port, Method: ev.Method, Decision: decision, Secret: ev.Injected, Upstream: ev.Upstream})
+	m.recordUsage(ctx, usageEvent{Event: "egress", ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream})
 }
 
 // recordUsage appends one billing event; failures are logged, never propagated.

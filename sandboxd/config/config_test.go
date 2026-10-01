@@ -203,6 +203,11 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"preview advertise unspecified bare ipv6", `{"preview_listen":"127.0.0.1:8443","preview_secret":"s","preview_advertise":"[::]","pools":[]}`, "routable host"},
 		{"internal allow port out of range", `{"egress_internal_allow":["10.8.0.1/32:70000"],"pools":[]}`, `egress_internal_allow "10.8.0.1/32:70000"`},
 		{"internal allow empty port", `{"egress_internal_allow":["fdc8::/16:"],"pools":[]}`, `egress_internal_allow "fdc8::/16:"`},
+		{"upstream default without egress_upstream", `{"pools":[{"template":"rt:24.04","egress_upstream_env":"RES"}]}`, "needs egress_upstream"},
+		{"upstream claim env name", `{"egress_upstream":{"claim_env":"bad name","allow":["res.example"]},"pools":[]}`, "claim_env"},
+		{"upstream empty allow", `{"egress_upstream":{"claim_env":"UP","allow":[]},"pools":[]}`, "at least one upstream"},
+		{"upstream bad allow entry", `{"egress_upstream":{"claim_env":"UP","allow":["res example"]},"pools":[]}`, "egress_upstream.allow"},
+		{"upstream default env unset", `{"egress_upstream":{"claim_env":"UP","allow":["res.example"]},"tenants":[{"name":"acme","token":"t","egress_upstream_env":"SANDBOX_TEST_UNSET_UPSTREAM"}],"api_token":"r","pools":[]}`, "SANDBOX_TEST_UNSET_UPSTREAM"},
 		{"duplicate volume path", `{"pools":[],"volumes":[{"name":"models","path":"/srv/models.img"},{"name":"models-rw","path":"/srv/models.img","writable":true}]}`, "shares its path"},
 		{"bad volume name", `{"pools":[],"volumes":[{"name":"ImageNet","path":"/srv/datasets/a.img"}]}`, "volume name"},
 		{"reserved volume name", `{"pools":[],"volumes":[{"name":"cocoon-data","path":"/srv/datasets/a.img"}]}`, "not start with cocoon-"},
@@ -217,6 +222,25 @@ func TestLoadRejectsInvalid(t *testing.T) {
 				t.Errorf("Load: %v, want error containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestLoadEgressUpstream(t *testing.T) {
+	t.Setenv("SANDBOX_TEST_RES", "http://user:pw@res.example:3128")
+	t.Setenv("SANDBOX_TEST_DC", "socks5://10.1.0.5:1080")
+	body := `{"egress_upstream":{"claim_env":"EGRESS_UPSTREAM","allow":["res.example","10.1.0.0/16"]},"egress_usage_bytes":true,
+		"api_token":"r","tenants":[{"name":"acme","token":"t","egress_upstream_env":"SANDBOX_TEST_DC"}],
+		"pools":[{"template":"rt:24.04","egress_upstream_env":"SANDBOX_TEST_RES"}]}`
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.EgressUpstream.ClaimEnv != "EGRESS_UPSTREAM" || !cfg.EgressUsageBytes || cfg.Pools[0].EgressUpstreamEnv != "SANDBOX_TEST_RES" {
+		t.Errorf("loaded %+v / %+v", cfg.EgressUpstream, cfg.Pools[0])
+	}
+	t.Setenv("SANDBOX_TEST_RES", "http://user:pw@elsewhere.example:3128")
+	if _, err := Load(writeConfig(t, body)); err == nil || !strings.Contains(err.Error(), "not in egress_upstream.allow") || strings.Contains(err.Error(), "pw") {
+		t.Errorf("unlisted default: %v, want an allow error without the password", err)
 	}
 }
 

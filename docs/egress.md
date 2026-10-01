@@ -274,6 +274,51 @@ gateway key per user, while the guest holds a placeholder.
 The proxy reads the claim's env under the node's manager lock, once per
 request whose matched rule names a secret; other requests pay nothing.
 
+## Upstream proxies
+
+A claim can leave through its own upstream proxy instead of the node's
+address: a residential or regional exit for one sandbox, the node's own exit
+for the next, freely mixed on one pool. The guest sees nothing of it — every
+sandbox still talks to its local proxy doors; the choice lives host-side.
+
+```jsonc
+{ "egress_upstream": { "claim_env": "EGRESS_UPSTREAM", "allow": ["res.example.com", "10.1.0.0/16"] } }
+```
+
+A claim names its upstream in that env entry, which must be `guest: false`
+(it carries the upstream's credentials): `http://[user:pass@]host:port`
+(an HTTP CONNECT tunnel for every destination, plain HTTP included) or
+`socks5://[user:pass@]host:port`. `direct` forces the node's own exit, and an
+absent entry falls back to the tenant's, then the pool's default:
+`egress_upstream_env` on a tenant or pool entry names a node environment
+variable holding the URL, read at startup, so no credential sits in the config
+file. A claim (a checkpoint branch included), `PUT` or `PATCH` naming an
+upstream outside `allow` (exact host
+names, IPs or CIDR prefixes), a malformed URL or a guest-visible entry answers
+400. `PATCH /v1/sandboxes/{id}/env` switches the upstream for new connections;
+open tunnels keep their path, and pooled keep-alive connections are never
+reused across a switch.
+
+Policy order does not change: the domain rules, methods, secret injection and
+interception all run on the destination the guest asked for. The proxy then
+resolves that destination itself and applies the internal-address guard to
+every address: a blocked one fails before the upstream is contacted, an
+address `egress_internal_allow` re-admits dials direct (a node-local service
+an external exit cannot reach), and otherwise the tunnel is opened to the
+vetted IP, so the upstream never resolves a name the node did not check. The
+upstream's own address is dialed with the node's plain dialer. An upstream
+that fails answers the guest 502 (SOCKS5: host unreachable) and never falls
+back to a direct dial. An allowed connection's audit and usage records name
+the upstream's `host:port`, never its credentials, and `GET env` blanks the value like every
+`guest: false` entry. Cost: a node without `egress_upstream` pays nothing; with
+it, each allowed connection reads the claim's env under the manager lock.
+
+`egress_usage_bytes: true` adds one `egress_bytes` usage event per allowed
+tunnel or request when it ends, with the payload bytes it moved (`tx` guest to
+destination, `rx` back) and its upstream, so per-exit traffic can be billed.
+The counts come from the copies the proxy already runs; the cost is one more
+usage-journal append per connection, which is why it is opt-in.
+
 ## HTTPS interception
 
 A rule with `intercept: true` makes the proxy terminate that host's TLS with a

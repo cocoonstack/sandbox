@@ -64,14 +64,17 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 	if intercept || port == 0 {
 		decision = DecisionDeny
 	}
-	p.record(Event{Method: methodSOCKS, Host: host, Port: port, Decision: decision})
+	ev, route := p.routeEvent(Event{Method: methodSOCKS, Host: host, Port: port, Decision: decision})
 	if decision == DecisionDeny {
+		p.record(ev)
 		_ = socksReply(conn, socksDenied)
 		return
 	}
 	dialCtx, cancel := context.WithTimeout(ctx, socksTimeout)
 	defer cancel()
-	upstream, err := p.dial(dialCtx, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
+	upstream, err := p.router.Dial(dialCtx, route, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
+	ev.Upstream = upstreamOf(upstream, err)
+	p.record(ev)
 	if err != nil {
 		_ = socksReply(conn, socksUnreached)
 		return
@@ -85,7 +88,8 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 		return
 	}
 	_ = conn.SetDeadline(time.Time{})
-	splice(conn, upstream)
+	sent, received := splice(conn, upstream)
+	p.reportTransfer(ev, sent, received)
 }
 
 // socksHandshake negotiates no-auth and parses one CONNECT request; a refusal is answered before it returns false.

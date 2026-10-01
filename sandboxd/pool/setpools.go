@@ -35,6 +35,9 @@ func (m *Manager) SetPools(ctx context.Context, specs []config.PoolSpec) error {
 		if spec.Storage != "" {
 			return fmt.Errorf("%w: pool %q: storage is set in the config file, not via the API", ErrBadKey, spec.Template)
 		}
+		if spec.EgressUpstreamEnv != "" {
+			return fmt.Errorf("%w: pool %q: egress_upstream_env is set in the config file, not via the API", ErrBadKey, spec.Template)
+		}
 		if _, ok := desired[spec.PoolKey]; ok {
 			return fmt.Errorf("%w: duplicate pool %q", ErrBadKey, spec.Template)
 		}

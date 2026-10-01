@@ -201,6 +201,9 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 
 // claimLoaded re-fetches under the record lock, so a delete racing the pre-check cannot slip in.
 func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, o ClaimOptions) (*types.Sandbox, error) {
+	if err := m.checkUpstreamEnv(o.Env); err != nil {
+		return nil, err
+	}
 	l := m.recLock(ckpt.ID)
 	l.RLock()
 	defer func() { l.RUnlock(); m.recDone(ckpt.ID) }()

@@ -687,11 +687,13 @@ truth is the usage journal below.
 
 Always on: every lifecycle transition appends one JSONL event to
 `<data_dir>/usage.jsonl` — `{"t": <RFC3339>, "ev":
-"claim|hibernate|wake|fork|checkpoint|promote|release|reap|archive|unarchive|archive_delete|egress|vmm_exit|vmm_restart|vmm_failed",
+"claim|hibernate|wake|fork|checkpoint|promote|release|reap|archive|unarchive|archive_delete|egress|egress_bytes|vmm_exit|vmm_restart|vmm_failed",
 "id": "sb_…", "vm": "sbx-…"}` plus `key` (the pool key's stable hash, claim
 events), `tenant` (the owning tenant, on claim, egress, archive, unarchive and
 archive_delete), `children` (fork) and `ref` (the promoted
-template / checkpoint id, the egress host, or a `vmm_failed` reason). A volume claim also carries
+template / checkpoint id, the egress host, or a `vmm_failed` reason). An egress event routed through an
+[upstream proxy](egress.md#upstream-proxies) carries `upstream` (its `host:port`), and with
+`egress_usage_bytes` on, `egress_bytes` events add the connection's payload `tx`/`rx` bytes. A volume claim also carries
 `volumes`, the applied catalog names, and — omitted when empty — `volumes_rw`,
 the subset of those names claimed `rw`, so billing can discriminate write
 access (mounts and host paths are not billing dimensions). The file rotates at
