@@ -46,7 +46,7 @@ func (s *Sandbox) uploadRPC(ctx context.Context, req wire.Request, r io.Reader) 
 		n, readErr := r.Read(buf)
 		if n > 0 {
 			if err := conn.Send(&wire.Data{Data: buf[:n]}); err != nil {
-				return err
+				return cmp.Or(<-terminal, err)
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
@@ -57,7 +57,7 @@ func (s *Sandbox) uploadRPC(ctx context.Context, req wire.Request, r io.Reader) 
 		}
 	}
 	if err := conn.Send(wire.DataEnd{}); err != nil {
-		return err
+		return cmp.Or(<-terminal, err)
 	}
 	return l.done(<-terminal)
 }

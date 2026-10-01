@@ -1,8 +1,10 @@
 package sandbox
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
+	"net"
 	"testing"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
@@ -127,6 +129,30 @@ func TestReadFileMultiChunk(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Errorf("read %d bytes, want %d", len(got), len(want))
+	}
+}
+
+func TestUploadToAnOldDaemonReturnsItsRejection(t *testing.T) {
+	sb := testSandbox(t, newAgentServer(t, func(conn net.Conn) {
+		defer func() { _ = conn.Close() }()
+		line, err := bufio.NewReader(conn).ReadBytes('\n')
+		if err != nil {
+			return
+		}
+		req, err := wire.DecodeRequest(line)
+		if err != nil {
+			return
+		}
+		var resp wire.Response = &wire.ErrorResp{Kind: wire.KindNotFound, Message: "create /missing/f: no such file or directory"}
+		if _, ok := req.(*wire.Info); ok {
+			resp = &wire.InfoResp{Proto: 1}
+		}
+		frame, _ := wire.EncodeResponse(resp)
+		_, _ = conn.Write(append(frame, '\n'))
+	}))
+	err := sb.WriteFile(t.Context(), "/missing/f", make([]byte, 64<<20), nil)
+	if e, ok := errors.AsType[*wire.ErrorResp](err); !ok || e.Kind != wire.KindNotFound {
+		t.Fatalf("upload rejected by a proto 1 daemon: %v, want its not_found frame", err)
 	}
 }
 
