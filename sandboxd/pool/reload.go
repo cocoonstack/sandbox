@@ -61,9 +61,7 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 
 // refuseInterceptOn turns intercept on only for a key whose guests can trust the CA: one the node has not served, with the CA loaded at boot.
 func (m *Manager) refuseInterceptOn(old, next *configView) error {
-	keys := slices.Collect(maps.Keys(next.poolEgress))
-	slices.SortFunc(keys, func(a, b types.PoolKey) int { return strings.Compare(a.Hash(), b.Hash()) })
-	for _, key := range keys {
+	for _, key := range slices.SortedFunc(maps.Keys(next.poolEgress), func(a, b types.PoolKey) int { return strings.Compare(a.Hash(), b.Hash()) }) {
 		if old.poolEgress[key].Intercepts() || !next.poolEgress[key].Intercepts() {
 			continue
 		}

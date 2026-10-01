@@ -315,10 +315,6 @@ func (m *Manager) disarmEgress(id string, removed bool) {
 	}
 }
 
-func (m *Manager) poolIntercepts(key types.PoolKey) bool {
-	return m.view.Load().poolEgress[key].Intercepts()
-}
-
 // effectivePolicy resolves pool ∩ tenant; root has no tenant layer, an unpooled key no pool one, a NoEgress claim none at all.
 func (m *Manager) effectivePolicy(v *configView, sb *types.Sandbox) (egress.Evaluator, bool) {
 	if sb.NoEgress {

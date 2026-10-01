@@ -408,7 +408,7 @@ func (m *Manager) provisionCold(ctx context.Context, key types.PoolKey) (*types.
 		return nil, err
 	}
 	// a pre-golden cold claim must trust the root, or intercepted hosts fail TLS for its life
-	if m.poolIntercepts(key) {
+	if m.view.Load().poolEgress[key].Intercepts() {
 		if err := m.eng.InstallCACert(ctx, sb.VsockSocket, m.egressCA.CertPEM()); err != nil {
 			m.destroy(ctx, sb.VMName)
 			return nil, fmt.Errorf("install egress ca: %w", err)

@@ -48,16 +48,10 @@ func (c *Config) ReloadDiff(next *Config) (changed, ignored []string, err error)
 }
 
 func diffPools(cur, next []PoolSpec) (changed, ignored []string) {
-	byKey := func(specs []PoolSpec) map[types.PoolKey]PoolSpec {
-		out := make(map[types.PoolKey]PoolSpec, len(specs))
-		for _, s := range specs {
-			out[s.PoolKey] = s
-		}
-		return out
-	}
-	a, b := byKey(cur), byKey(next)
-	keys := slices.SortedFunc(maps.Keys(mergeKeys(a, b)), func(x, y types.PoolKey) int { return strings.Compare(poolLabel(x), poolLabel(y)) })
-	for _, k := range keys {
+	byKey := func(s PoolSpec) types.PoolKey { return s.PoolKey }
+	a, b := indexBy(cur, byKey), indexBy(next, byKey)
+	all := indexBy(slices.Concat(cur, next), byKey)
+	for _, k := range slices.SortedFunc(maps.Keys(all), func(x, y types.PoolKey) int { return strings.Compare(poolLabel(x), poolLabel(y)) }) {
 		x, inA := a[k]
 		y, inB := b[k]
 		label := poolLabel(k)
@@ -83,15 +77,9 @@ func diffPools(cur, next []PoolSpec) (changed, ignored []string) {
 }
 
 func diffTenants(cur, next []TenantSpec) (changed, ignored []string) {
-	byName := func(specs []TenantSpec) map[string]TenantSpec {
-		out := make(map[string]TenantSpec, len(specs))
-		for _, s := range specs {
-			out[s.Name] = s
-		}
-		return out
-	}
-	a, b := byName(cur), byName(next)
-	for _, name := range slices.Sorted(maps.Keys(mergeKeys(a, b))) {
+	byName := func(s TenantSpec) string { return s.Name }
+	a, b := indexBy(cur, byName), indexBy(next, byName)
+	for _, name := range slices.Sorted(maps.Keys(indexBy(slices.Concat(cur, next), byName))) {
 		x, inA := a[name]
 		y, inB := b[name]
 		label := "tenants[" + name + "]"
@@ -116,13 +104,10 @@ func poolLabel(k types.PoolKey) string {
 	return fmt.Sprintf("pools[%s %s %s]", k.Template, k.Net, k.Size)
 }
 
-func mergeKeys[K comparable, V any](a, b map[K]V) map[K]struct{} {
-	out := make(map[K]struct{}, len(a)+len(b))
-	for k := range a {
-		out[k] = struct{}{}
-	}
-	for k := range b {
-		out[k] = struct{}{}
+func indexBy[K comparable, V any](specs []V, key func(V) K) map[K]V {
+	out := make(map[K]V, len(specs))
+	for _, s := range specs {
+		out[key(s)] = s
 	}
 	return out
 }
