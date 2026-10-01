@@ -567,7 +567,7 @@ pub async fn write_feed_error<W: AsyncWrite + Unpin>(w: &mut W, err: FeedError) 
     }
 }
 
-fn decode_data_frame(frame: &[u8], out: &mut Vec<u8>) -> Option<usize> {
+pub(crate) fn decode_data_frame(frame: &[u8], out: &mut Vec<u8>) -> Option<usize> {
     let b64 = frame.strip_prefix(DATA_FRAME_HEAD)?.strip_suffix(b"\"}")?;
     out.resize(base64::decoded_len_estimate(b64.len()), 0);
     STANDARD.decode_slice(b64, out).ok()
