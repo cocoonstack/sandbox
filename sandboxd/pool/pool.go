@@ -85,7 +85,7 @@ var (
 	ErrUnknownTenant     = errors.New("unknown tenant")
 	ErrBadConfig         = errors.New("invalid config")
 	ErrReloadRefused     = errors.New("config reload refused")
-	ErrTenantStoreDown   = errors.New("tenant source unavailable")
+	ErrTenantStoreDown   = errors.New("tenant store down")
 	ErrTenantRemoved     = errors.New("the claim's tenant was removed: it runs to its deadline but cannot renew, fork, or wake from the archive")
 	ErrVolumeUnavailable = fmt.Errorf("%w: unknown or unavailable volume", ErrBadVolume)
 	ErrNoWarm            = errors.New("no warm sandbox for key")

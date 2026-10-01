@@ -311,7 +311,9 @@ one PostgreSQL table that every node reads, so one tenant per end user works:
   - cached tenants keep authenticating and their claims keep running;
   - an uncached tenant answers 503, and writes fail;
   - a node whose invalidation listener reconnects drops its cache, so it never
-    serves a change it missed while disconnected.
+    serves a change it missed while disconnected;
+  - a change made while a node's listener was down reaches that node at the
+    listener's next retry, at most 30 s after the database returns.
 
 ### Cluster-invariant config
 
