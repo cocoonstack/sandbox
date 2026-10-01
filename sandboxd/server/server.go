@@ -44,6 +44,8 @@ var poolErrHTTP = []struct {
 	{pool.ErrBadName, http.StatusBadRequest, ""},
 	{pool.ErrBadCount, http.StatusBadRequest, ""},
 	{pool.ErrBadEnv, http.StatusBadRequest, ""},
+	{pool.ErrBadTenant, http.StatusBadRequest, ""},
+	{pool.ErrTenantRemoved, http.StatusForbidden, ""},
 	{pool.ErrNoEgress, http.StatusConflict, ""},
 	{pool.ErrNoEgressHibernate, http.StatusConflict, ""},
 	{pool.ErrNoEgressFork, http.StatusConflict, ""},
@@ -62,6 +64,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrUnknownSandbox, http.StatusNotFound, "unknown sandbox"},
 	{pool.ErrUnknownTemplate, http.StatusNotFound, "unknown template"},
 	{pool.ErrUnknownCheckpoint, http.StatusNotFound, "unknown checkpoint"},
+	{pool.ErrUnknownTenant, http.StatusNotFound, "unknown tenant"},
 }
 
 // Manager is the pool manager slice the server consumes; an empty tenant means operator (root).
@@ -105,6 +108,12 @@ type Manager interface {
 	DialPort(ctx context.Context, id string, cred pool.Cred, port uint16) (net.Conn, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, func(), error)
 	SetPools(ctx context.Context, pools []config.PoolSpec) error
+	TenantByToken(token string) (string, bool)
+	TenantNames() []string
+	Tenants() ([]pool.TenantInfo, string)
+	SetTenants(ctx context.Context, specs []config.TenantSpec) error
+	PutTenant(ctx context.Context, spec config.TenantSpec) error
+	DeleteTenant(ctx context.Context, name string) error
 	Drain(ctx context.Context)
 	Uncordon(ctx context.Context)
 	Info() ([]pool.PoolInfo, pool.Gauges)
@@ -170,6 +179,23 @@ type SandboxEnvPatch struct {
 	Env types.EnvPatch `json:"env"`
 }
 
+// TenantsRequest is the wire body of PUT /v1/tenants: the whole tenant set, an entry without a token keeping that tenant's.
+type TenantsRequest struct {
+	Tenants []config.TenantSpec `json:"tenants"`
+}
+
+// TenantRequest is the wire body of PUT /v1/tenants/{name}; an empty token keeps an existing tenant's.
+type TenantRequest struct {
+	Token     string `json:"token,omitempty"`
+	MaxClaims int    `json:"max_claims,omitzero"`
+}
+
+// TenantListResponse is the reply of GET and PUT /v1/tenants; it never carries a token.
+type TenantListResponse struct {
+	Tenants []pool.TenantInfo `json:"tenants"`
+	Digest  string            `json:"digest"`
+}
+
 // PoolUpdateRequest is the wire body of PUT /v1/pools; omitted pools are drained.
 type PoolUpdateRequest struct {
 	Pools []config.PoolSpec `json:"pools"`
@@ -183,7 +209,6 @@ type Server struct {
 	prober    CheckpointProber
 	probeKey  []byte
 	apiToken  string
-	tenants   []config.TenantSpec
 	advertise string
 	preview   *PreviewServer
 
@@ -195,8 +220,8 @@ type Server struct {
 	relayWG     sync.WaitGroup
 }
 
-// New returns a Server; an empty apiToken with no tenants leaves node-level endpoints open.
-func New(apiToken string, tenants []config.TenantSpec, advertise string, mgr Manager, dialer Dialer, placer Placer, prober CheckpointProber, probeKey []byte, preview *PreviewServer) *Server {
+// New returns a Server; an empty apiToken leaves node-level endpoints open, and tenants resolve through mgr.
+func New(apiToken, advertise string, mgr Manager, dialer Dialer, placer Placer, prober CheckpointProber, probeKey []byte, preview *PreviewServer) *Server {
 	if host, _, err := net.SplitHostPort(advertise); err == nil {
 		if ip, _ := netip.ParseAddr(host); host == "" || ip.IsUnspecified() {
 			advertise = ""
@@ -209,7 +234,6 @@ func New(apiToken string, tenants []config.TenantSpec, advertise string, mgr Man
 		prober:    prober,
 		probeKey:  probeKey,
 		apiToken:  apiToken,
-		tenants:   tenants,
 		advertise: advertise,
 		preview:   preview,
 		relays:    map[net.Conn]net.Conn{},
@@ -246,6 +270,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/templates", s.requireToken(s.handleDeleteTemplate))
 	mux.HandleFunc("PUT /v1/templates/labels", s.requireToken(s.handleSetTemplateLabels))
 	mux.HandleFunc("PUT /v1/pools", s.requireRoot(s.handlePutPools))
+	mux.HandleFunc("GET /v1/tenants", s.requireRoot(s.handleTenants))
+	mux.HandleFunc("PUT /v1/tenants", s.requireRoot(s.handlePutTenants))
+	mux.HandleFunc("PUT /v1/tenants/{name}", s.requireRoot(s.handlePutTenant))
+	mux.HandleFunc("DELETE /v1/tenants/{name}", s.requireRoot(s.handleDeleteTenant))
 	mux.HandleFunc("POST /v1/drain", s.requireRoot(s.handleDrain))
 	mux.HandleFunc("DELETE /v1/drain", s.requireRoot(s.handleUncordon))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", s.handleAgent)
@@ -382,8 +410,8 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 func (s *Server) templateOwners(query func(string) []string, hash, tenant string) []string {
 	probes := []string{types.TemplateGossipHash(hash, tenant)}
 	if tenant == "" {
-		for _, tn := range s.tenants {
-			probes = append(probes, types.TemplateGossipHash(hash, tn.Name))
+		for _, name := range s.mgr.TenantNames() {
+			probes = append(probes, types.TemplateGossipHash(hash, name))
 		}
 	} else {
 		probes = append(probes, types.TemplateGossipHash(hash, ""))
@@ -427,7 +455,6 @@ func (s *Server) handleSandbox(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sb)
 }
 
-// handleSandboxes lists the live claims visible to the caller — never tokens.
 func (s *Server) handleSandboxes(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	filter, err := metadataFilter(query["metadata"])
@@ -435,7 +462,11 @@ func (s *Server) handleSandboxes(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, SandboxListResponse{Sandboxes: s.mgr.Sandboxes(tenantFrom(r.Context()), query.Get("claim_ref"), filter)})
+	scope := tenantFrom(r.Context())
+	if scope == "" {
+		scope = query.Get("tenant")
+	}
+	writeJSON(w, http.StatusOK, SandboxListResponse{Sandboxes: s.mgr.Sandboxes(scope, query.Get("claim_ref"), filter)})
 }
 
 func (s *Server) handleSandboxStats(w http.ResponseWriter, r *http.Request) {
@@ -685,6 +716,36 @@ func (s *Server) handlePutPools(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleTenants(w http.ResponseWriter, _ *http.Request) {
+	tenants, digest := s.mgr.Tenants()
+	writeJSON(w, http.StatusOK, TenantListResponse{Tenants: tenants, Digest: digest})
+}
+
+func (s *Server) handlePutTenants(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeBodyStrict[TenantsRequest](w, r)
+	if !ok {
+		return
+	}
+	err := s.mgr.SetTenants(r.Context(), req.Tenants)
+	writeResult(w, r, "tenants", "", "set tenants failed", err, func() { s.handleTenants(w, r) })
+}
+
+func (s *Server) handlePutTenant(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeBodyStrict[TenantRequest](w, r)
+	if !ok {
+		return
+	}
+	name := r.PathValue("name")
+	err := s.mgr.PutTenant(r.Context(), config.TenantSpec{Name: name, Token: req.Token, MaxClaims: req.MaxClaims})
+	writeResult(w, r, "tenant", name, "put tenant failed", err, noContent(w))
+}
+
+func (s *Server) handleDeleteTenant(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	err := s.mgr.DeleteTenant(r.Context(), name)
+	writeResult(w, r, "tenant", name, "delete tenant failed", err, noContent(w))
+}
+
 func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request) {
 	s.mgr.Drain(r.Context())
 	s.handleInfo(w, r)
@@ -762,7 +823,7 @@ func (s *Server) bodyCred(r *http.Request, bodyToken string) pool.Cred {
 }
 
 func (s *Server) resolveScope(r *http.Request) (string, bool) {
-	if s.apiToken == "" && len(s.tenants) == 0 {
+	if s.apiToken == "" {
 		return "", true
 	}
 	token, ok := bearerToken(r)
@@ -772,12 +833,7 @@ func (s *Server) resolveScope(r *http.Request) (string, bool) {
 	if s.isRootToken(token) {
 		return "", true
 	}
-	for _, tn := range s.tenants {
-		if subtle.ConstantTimeCompare([]byte(token), []byte(tn.Token)) == 1 {
-			return tn.Name, true
-		}
-	}
-	return "", false
+	return s.mgr.TenantByToken(token)
 }
 
 func (s *Server) claimResponse(sb *types.Sandbox) types.ClaimResponse {

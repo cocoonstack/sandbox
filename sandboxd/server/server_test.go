@@ -26,7 +26,7 @@ import (
 
 func TestOwnerAddrOmitsAnUnspecifiedHost(t *testing.T) {
 	for advertise, want := range map[string]string{":7777": "", "0.0.0.0:7777": "", "[::]:7777": "", "10.0.0.5:7777": "10.0.0.5:7777"} {
-		srv := New("", nil, advertise, &fakeManager{}, &fakeDialer{}, nil, nil, nil, nil)
+		srv := New("", advertise, &fakeManager{}, &fakeDialer{}, nil, nil, nil, nil)
 		if got := srv.claimResponse(&types.Sandbox{ID: "sb_1"}).OwnerAddr; got != want {
 			t.Errorf("advertise %q: owner_addr %q, want %q", advertise, got, want)
 		}
@@ -492,7 +492,8 @@ func TestVolumeCatalogReturnsScopedFleetProjection(t *testing.T) {
 		}}
 	}}
 	placer := &fakePlacer{volumeHolders: map[string]int{"imagenet": 3}}
-	srv := New("root", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, "node:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
+	mgr.tenants = []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}
+	srv := New("root", "node:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/volumes", nil)
@@ -1337,7 +1338,7 @@ func TestClaimRedirectsOnWarmMiss(t *testing.T) {
 		provisioned = true
 		return &types.Sandbox{ID: "sb_local"}, nil
 	}}
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"node-b:7777", "node-c:7777"}}, nil, nil, nil)
+	srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"node-b:7777", "node-c:7777"}}, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -1379,7 +1380,7 @@ func TestClaimRedirectsToTemplateOwner(t *testing.T) {
 					return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
 				},
 			}
-			srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil, nil, nil)
+			srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil, nil, nil)
 			ts := httptest.NewServer(srv.Handler())
 			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -1433,7 +1434,7 @@ func TestATemplateDigestGatesDeleteAndLabelWrites(t *testing.T) {
 
 func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 	mgr := &fakeManager{}
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil, nil, nil)
+	srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{owners: []string{"node-b:7777"}}, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -1470,7 +1471,7 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 		t.Errorf("status %d, want 404 with no_redirect despite known owners", resp2.StatusCode)
 	}
 
-	srvNoOwner := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{}, nil, nil, nil)
+	srvNoOwner := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{}, nil, nil, nil)
 	ts2 := httptest.NewServer(srvNoOwner.Handler())
 	t.Cleanup(func() { ts2.Close(); srvNoOwner.CloseRelays() })
 	req3, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts2.URL+"/v1/templates?template=tpl", nil)
@@ -1491,7 +1492,7 @@ func TestClaimProvisionsWhenNoCandidate(t *testing.T) {
 	mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
 		return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
 	}}
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: nil}, nil, nil, nil)
+	srv := New("", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: nil}, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -1545,7 +1546,7 @@ func TestVolumeClaimUsesWarmBeforeRedirectOrProvision(t *testing.T) {
 			placer := &fakePlacer{
 				addrs: []string{"wrong-general-candidate:7777"}, volumeCandidates: tt.volumeCandidates,
 			}
-			srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
+			srv := New("", "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
 			ts := httptest.NewServer(srv.Handler())
 			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -1656,7 +1657,7 @@ func TestVolumeClaimUsesVolumeAndTemplateIntersections(t *testing.T) {
 				addrs: []string{"warm-peer:7777"}, owners: tt.templateOwners,
 				volumeOwners: tt.volumeOwners, templateVolumeOwners: tt.templateVolumeOwner,
 			}
-			srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
+			srv := New("", "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
 			ts := httptest.NewServer(srv.Handler())
 			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -1739,7 +1740,7 @@ func TestVolumeClaimKeepsPoolContentAgainstPeerTemplates(t *testing.T) {
 				}
 			}
 			placer := &fakePlacer{owners: []string{"template:7777"}, templateVolumeOwners: []string{"both:7777"}}
-			srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
+			srv := New("", "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
 			ts := httptest.NewServer(srv.Handler())
 			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -1798,7 +1799,8 @@ func TestForeignTemplateGossipNeverEscalates(t *testing.T) {
 			placer := &fakePlacer{ownersByProbe: map[string][]string{
 				types.TemplateGossipHash(hash, "acme"): {"peer:7777"},
 			}}
-			srv := New("root-tok", tenants, "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
+			mgr.tenants = tenants
+			srv := New("root-tok", "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
 			ts := httptest.NewServer(srv.Handler())
 			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -1850,7 +1852,7 @@ func TestARequiredPromotedClaimIsNeverSentToAWarmPeer(t *testing.T) {
 			mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
 				return nil, tt.provision
 			}}
-			srv := New("sekret", nil, "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"warm:7777"}}, nil, nil, nil)
+			srv := New("sekret", "node-a:7777", mgr, &fakeDialer{}, &fakePlacer{addrs: []string{"warm:7777"}}, nil, nil, nil)
 			ts := httptest.NewServer(srv.Handler())
 			t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -1916,7 +1918,7 @@ func TestVolumeClaimValidatesKeyBeforePlacement(t *testing.T) {
 		},
 	}
 	placer := &fakePlacer{volumeOwners: []string{"volume:7777"}}
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
+	srv := New("", "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -1942,7 +1944,7 @@ func TestVolumeClaimQuotaDoesNotRedirect(t *testing.T) {
 	placer := &fakePlacer{
 		addrs: []string{"wrong-general-candidate:7777"}, volumeCandidates: []string{"wrong-volume-candidate:7777"},
 	}
-	srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
+	srv := New("", "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -1975,7 +1977,7 @@ func TestVolumeClaimRejectsShapeBeforePlacement(t *testing.T) {
 	} {
 		mgr := &fakeManager{}
 		placer := &fakePlacer{addrs: []string{"warm-peer:7777"}, owners: []string{"owner:7777"}}
-		srv := New("", nil, "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
+		srv := New("", "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
 		ts := httptest.NewServer(srv.Handler())
 
 		resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(body))
@@ -2001,7 +2003,7 @@ func TestOwnerEndpoint(t *testing.T) {
 		}
 		return "", pool.ErrUnknownSandbox
 	}}
-	srv := New("", nil, "node-b:7777", mgr, &fakeDialer{}, nil, nil, nil, nil)
+	srv := New("", "node-b:7777", mgr, &fakeDialer{}, nil, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -2040,7 +2042,7 @@ func TestPreviewHandlerZeroDeadlineMintsLiveToken(t *testing.T) {
 		return time.Time{}, nil
 	}}
 	ps := NewPreviewServer("secret", "node:7777", "node:7777", &fakePreviewMgr{})
-	srv := New("", nil, "node:7777", mgr, &fakeDialer{}, nil, nil, nil, ps)
+	srv := New("", "node:7777", mgr, &fakeDialer{}, nil, nil, nil, ps)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -2073,7 +2075,7 @@ func TestPreviewHandlerRejectsPortZero(t *testing.T) {
 		return time.Now().Add(time.Hour), nil
 	}}
 	ps := NewPreviewServer("secret", "node:7777", "node:7777", &fakePreviewMgr{})
-	srv := New("", nil, "node:7777", mgr, &fakeDialer{}, nil, nil, nil, ps)
+	srv := New("", "node:7777", mgr, &fakeDialer{}, nil, nil, nil, ps)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
 
@@ -2360,13 +2362,13 @@ func TestCheckpointProbeRequiresValidMAC(t *testing.T) {
 func TestCheckpointClaimProbesRealPeerAndRedirects(t *testing.T) {
 	const ckptID = "ck_00000000000000aa"
 	mgrB := &fakeManager{hasCheckpoint: map[string]bool{ckptID: true}}
-	srvB := New("sekret", nil, "node-b:7777", mgrB, &fakeDialer{}, nil, nil, nil, nil)
+	srvB := New("sekret", "node-b:7777", mgrB, &fakeDialer{}, nil, nil, nil, nil)
 	tsB := httptest.NewServer(srvB.Handler())
 	t.Cleanup(tsB.Close)
 
 	prober := &peer.HTTPProber{Peers: func() []string { return []string{tsB.URL} }}
 	mgrA := &fakeManager{}
-	srvA := New("sekret", nil, "node-a:7777", mgrA, &fakeDialer{}, nil, prober, nil, nil)
+	srvA := New("sekret", "node-a:7777", mgrA, &fakeDialer{}, nil, prober, nil, nil)
 	tsA := httptest.NewServer(srvA.Handler())
 	t.Cleanup(tsA.Close)
 
@@ -2545,7 +2547,10 @@ func newTenantTestServer(t *testing.T, apiToken string, tenants []config.TenantS
 	if dialer == nil {
 		dialer = &fakeDialer{}
 	}
-	srv := New(apiToken, tenants, "node:7777", mgr, dialer, nil, nil, nil, nil)
+	if fm, ok := mgr.(*fakeManager); ok {
+		fm.tenants = tenants
+	}
+	srv := New(apiToken, "node:7777", mgr, dialer, nil, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()
@@ -2556,7 +2561,7 @@ func newTenantTestServer(t *testing.T, apiToken string, tenants []config.TenantS
 
 func newProbeAuthTestServer(t *testing.T, mgr Manager, probeKey []byte) *httptest.Server {
 	t.Helper()
-	srv := New("", nil, "node:7777", mgr, &fakeDialer{}, nil, nil, probeKey, nil)
+	srv := New("", "node:7777", mgr, &fakeDialer{}, nil, nil, probeKey, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()
@@ -2595,6 +2600,11 @@ type checkpointClaimFunc func(string) (*types.Sandbox, error)
 type idActionFunc func(string) error
 
 type fakeManager struct {
+	tenants              []config.TenantSpec
+	setTenants           func(specs []config.TenantSpec) error
+	putTenant            func(spec config.TenantSpec) error
+	deleteTenant         func(name string) error
+	tenantList           []pool.TenantInfo
 	ckptDir              string
 	hasCheckpoint        map[string]bool
 	claim                claimFunc
@@ -2782,6 +2792,47 @@ func (f *fakeManager) ClaimDeadline(id, token string) (time.Time, error) {
 func (f *fakeManager) Counters() pool.Counters { return pool.Counters{} }
 
 func (f *fakeManager) TenantClaims() map[string]int { return f.tenantClaims }
+
+func (f *fakeManager) TenantByToken(token string) (string, bool) {
+	for _, t := range f.tenants {
+		if t.Token == token {
+			return t.Name, true
+		}
+	}
+	return "", false
+}
+
+func (f *fakeManager) TenantNames() []string {
+	names := make([]string, len(f.tenants))
+	for i, t := range f.tenants {
+		names[i] = t.Name
+	}
+	slices.Sort(names)
+	return names
+}
+
+func (f *fakeManager) Tenants() ([]pool.TenantInfo, string) { return f.tenantList, "set-digest" }
+
+func (f *fakeManager) SetTenants(_ context.Context, specs []config.TenantSpec) error {
+	if f.setTenants != nil {
+		return f.setTenants(specs)
+	}
+	return nil
+}
+
+func (f *fakeManager) PutTenant(_ context.Context, spec config.TenantSpec) error {
+	if f.putTenant != nil {
+		return f.putTenant(spec)
+	}
+	return nil
+}
+
+func (f *fakeManager) DeleteTenant(_ context.Context, name string) error {
+	if f.deleteTenant != nil {
+		return f.deleteTenant(name)
+	}
+	return nil
+}
 
 func (f *fakeManager) VolumePlacement(key types.PoolKey, tenant string, names []string) (bool, error) {
 	f.placementCalls++
@@ -3015,7 +3066,7 @@ func (f *fakeProber) Forget(id string)                        { f.forgotten = ap
 
 func newPlacerTestServer(t *testing.T, apiToken string, mgr Manager, prober CheckpointProber) *httptest.Server {
 	t.Helper()
-	srv := New(apiToken, nil, "node:7777", mgr, &fakeDialer{}, nil, prober, nil, nil)
+	srv := New(apiToken, "node:7777", mgr, &fakeDialer{}, nil, prober, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts

@@ -1,0 +1,103 @@
+package server
+
+import (
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/pool"
+)
+
+func TestTenantRoutesAreRootOnlyAndNeverServeATokenBack(t *testing.T) {
+	var put config.TenantSpec
+	var set []config.TenantSpec
+	mgr := &fakeManager{
+		tenantList: []pool.TenantInfo{{Name: "acme", MaxClaims: 2, Claims: 1}},
+		putTenant:  func(spec config.TenantSpec) error { put = spec; return nil },
+		setTenants: func(specs []config.TenantSpec) error { set = specs; return nil },
+		deleteTenant: func(name string) error {
+			if name != "acme" {
+				return pool.ErrUnknownTenant
+			}
+			return nil
+		},
+	}
+	ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
+	for _, route := range []struct{ method, path, body string }{
+		{http.MethodGet, "/v1/tenants", ""},
+		{http.MethodPut, "/v1/tenants", `{"tenants":[]}`},
+		{http.MethodPut, "/v1/tenants/beta", `{"token":"b"}`},
+		{http.MethodDelete, "/v1/tenants/acme", ""},
+	} {
+		resp := doReq(t, route.method, ts.URL+route.path, "acme-tok", route.body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s %s with a tenant token: %d, want 403", route.method, route.path, resp.StatusCode)
+		}
+	}
+
+	resp := doReq(t, http.MethodGet, ts.URL+"/v1/tenants", "root", "")
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != `{"tenants":[{"name":"acme","max_claims":2,"claims":1}],"digest":"set-digest"}` {
+		t.Errorf("GET /v1/tenants: %d %s", resp.StatusCode, body)
+	}
+
+	resp = doReq(t, http.MethodPut, ts.URL+"/v1/tenants/beta", "root", `{"token":"beta-tok","max_claims":3}`)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent || put != (config.TenantSpec{Name: "beta", Token: "beta-tok", MaxClaims: 3}) {
+		t.Errorf("PUT /v1/tenants/beta: %d, manager got %+v", resp.StatusCode, put)
+	}
+	resp = doReq(t, http.MethodPut, ts.URL+"/v1/tenants/u:42%2Fwest", "root", `{"token":"w"}`)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent || put.Name != "u:42/west" {
+		t.Errorf("PUT an escaped name: %d, manager got %q", resp.StatusCode, put.Name)
+	}
+	resp = doReq(t, http.MethodPut, ts.URL+"/v1/tenants", "root", `{"tenants":[{"name":"acme","max_claims":1}]}`)
+	body, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || len(set) != 1 || set[0].Name != "acme" || strings.Contains(string(body), "tok") {
+		t.Errorf("PUT /v1/tenants: %d %s, manager got %+v", resp.StatusCode, body, set)
+	}
+	for path, want := range map[string]int{"/v1/tenants/acme": http.StatusNoContent, "/v1/tenants/nobody": http.StatusNotFound} {
+		resp = doReq(t, http.MethodDelete, ts.URL+path, "root", "")
+		_ = resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("DELETE %s: %d, want %d", path, resp.StatusCode, want)
+		}
+	}
+	resp = doReq(t, http.MethodPut, ts.URL+"/v1/tenants/beta", "root", `{"token":"b","egress":{}}`)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("PUT a tenant with an unknown field: %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestRootListsOneTenantsClaimsAndATenantCannotWiden(t *testing.T) {
+	mgr := &fakeManager{}
+	ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
+	for _, tt := range []struct{ token, query, want string }{
+		{"root", "", ""},
+		{"root", "?tenant=gone", "gone"},
+		{"acme-tok", "?tenant=gone", "acme"},
+	} {
+		resp := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes"+tt.query, tt.token, "")
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || mgr.gotTenant != tt.want {
+			t.Errorf("%s %s: %d scope %q, want %q", tt.token, tt.query, resp.StatusCode, mgr.gotTenant, tt.want)
+		}
+	}
+}
+
+func TestRenewOfARemovedTenantsClaimIsForbidden(t *testing.T) {
+	mgr := &fakeManager{renew: func(string, string, time.Duration) (time.Time, error) { return time.Time{}, pool.ErrTenantRemoved }}
+	ts := newTestServer(t, "root", mgr, nil)
+	resp := doReq(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/renew", "sandbox-tok", "")
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("renew of a removed tenant's claim: %d, want 403", resp.StatusCode)
+	}
+}

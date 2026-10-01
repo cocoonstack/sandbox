@@ -14,29 +14,37 @@ import (
 
 func TestClusterDigest(t *testing.T) {
 	base := &Config{APIToken: "tok", PreviewSecret: "ps", Tenants: []TenantSpec{{Name: "acme", Token: "t1"}}}
-	d := base.ClusterDigest("ca-fp")
-	if base.ClusterDigest("ca-fp") != d {
+	digest := func(c *Config, fp string) string { return c.ClusterDigest(fp, tokenDigests(c.Tenants)) }
+	d := digest(base, "ca-fp")
+	if digest(base, "ca-fp") != d {
 		t.Fatal("digest is not stable for identical config")
 	}
-	if (&Config{APIToken: "tok", PreviewSecret: "ps", Tenants: []TenantSpec{{Name: "beta", Token: "t1"}}}).ClusterDigest("ca-fp") == d {
+	if digest(&Config{APIToken: "tok", PreviewSecret: "ps", Tenants: []TenantSpec{{Name: "beta", Token: "t1"}}}, "ca-fp") == d {
 		t.Error("a tenant-name change is not reflected")
 	}
-	if base.ClusterDigest("other-fp") == d {
+	if digest(base, "other-fp") == d {
 		t.Error("an egress CA root change is not reflected")
 	}
 
-	if (&Config{APIToken: "other", PreviewSecret: "ps", Tenants: base.Tenants}).ClusterDigest("ca-fp") != d {
+	if digest(&Config{APIToken: "other", PreviewSecret: "ps", Tenants: base.Tenants}, "ca-fp") != d {
 		t.Error("api_token leaked into the keyless digest")
+	}
+	if digest(&Config{APIToken: "tok", PreviewSecret: "ps", Tenants: []TenantSpec{{Name: "acme", Token: "rotated"}}}, "ca-fp") != d {
+		t.Error("a tenant token leaked into the keyless digest")
 	}
 	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
 	keyed := &Config{APIToken: "tok", PreviewSecret: "ps", Tenants: base.Tenants, Mesh: &MeshConfig{ClusterKey: key}}
 	keyedDiff := &Config{APIToken: "other", PreviewSecret: "ps", Tenants: base.Tenants, Mesh: &MeshConfig{ClusterKey: key}}
-	if keyed.ClusterDigest("ca-fp") == keyedDiff.ClusterDigest("ca-fp") {
+	if digest(keyed, "ca-fp") == digest(keyedDiff, "ca-fp") {
 		t.Error("with a cluster_key the api_token must be covered by the digest")
+	}
+	rotated := &Config{APIToken: "tok", PreviewSecret: "ps", Tenants: []TenantSpec{{Name: "acme", Token: "rotated"}}, Mesh: &MeshConfig{ClusterKey: key}}
+	if digest(keyed, "ca-fp") == digest(rotated, "ca-fp") {
+		t.Error("with a cluster_key a tenant token rotation must change the digest")
 	}
 	withVolume := *base
 	withVolume.Volumes = []VolumeSpec{{Name: "imagenet", Path: "/srv/datasets/imagenet.img", DirectIO: types.DirectIOOff}}
-	if withVolume.ClusterDigest("ca-fp") != d {
+	if digest(&withVolume, "ca-fp") != d {
 		t.Error("node-local volume catalog must not change the cluster digest")
 	}
 }
@@ -51,11 +59,11 @@ func TestClusterDigestMatchesTheV1Bytes(t *testing.T) {
 		want string
 	}{
 		{"keyless", &Config{APIToken: "t<o>k", PreviewSecret: "p&s", Tenants: tenants, CheckpointTTLHours: 24}, "ca<&>\u2028fp", "a1945e2f38cf6e61638bc08896a292792b1705fb860b405d8117abbf13e1c760"},
-		{"keyed", &Config{APIToken: "t<o>k&\u2029", PreviewSecret: "p&s<", Tenants: tenants, CheckpointTTLHours: 24, Mesh: &MeshConfig{ClusterKey: key}}, "ca<&>fp", "5146d3799789afbd1d1bff606d238ea75374dec8f11f5b69edd6b9fcc40164b7"},
+		{"keyed", &Config{APIToken: "t<o>k&\u2029", PreviewSecret: "p&s<", Tenants: tenants, CheckpointTTLHours: 24, Mesh: &MeshConfig{ClusterKey: key}}, "ca<&>fp", "7b14876b0af8549cd4d212939a6195f2044b8b15fa2118fe8628536f8fc44955"},
 		{"no tenants", &Config{}, "fp", "38fc616b12f612c2c5c3f83af9d4c6caa771e1d3ffca39a6c835e522d3db49f8"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cfg.ClusterDigest(tt.fp); got != tt.want {
+			if got := tt.cfg.ClusterDigest(tt.fp, tokenDigests(tt.cfg.Tenants)); got != tt.want {
 				t.Errorf("digest %s, want the encoding/json v1 digest %s", got, tt.want)
 			}
 		})
@@ -214,7 +222,6 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"duplicate volume name", `{"pools":[],"volumes":[{"name":"data","path":"/srv/datasets/a.img"},{"name":"data","path":"/srv/datasets/b.img"}]}`, "duplicate volume"},
 		{"relative volume path", `{"pools":[],"volumes":[{"name":"data","path":"datasets/a.img"}]}`, "path must be absolute"},
 		{"bad volume directio", `{"pools":[],"volumes":[{"name":"data","path":"/srv/datasets/a.img","directio":"yes"}]}`, "directio must be"},
-		{"unknown volume tenant", `{"api_token":"root","pools":[],"tenants":[{"name":"beta","token":"b"}],"volumes":[{"name":"data","path":"/srv/datasets/a.img","tenants":["acme"]}]}`, `volume "data" references unknown tenant "acme"`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Load(writeConfig(t, tt.body))
@@ -453,4 +460,12 @@ func writeConfig(t *testing.T, body string) string {
 		t.Fatalf("setup: %v", err)
 	}
 	return path
+}
+
+func tokenDigests(tenants []TenantSpec) map[string]string {
+	out := make(map[string]string, len(tenants))
+	for _, t := range tenants {
+		out[t.Name] = TokenSHA256(t.Token)
+	}
+	return out
 }

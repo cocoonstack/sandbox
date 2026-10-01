@@ -163,6 +163,25 @@ func TestTwoNodeClusterGossipsPools(t *testing.T) {
 	t.Fatalf("node-b never learned node-a's state: view=%+v", b.mesh.Members())
 }
 
+func TestARuntimeDigestChangeReachesThePeer(t *testing.T) {
+	a := startNode(t, "127.0.0.1", 0, "node-a")
+	b := startNode(t, "127.0.0.1", 0, "node-b")
+	a.mesh.SetSelfDigest("shared")
+	b.mesh.SetSelfDigest("shared")
+	if err := b.mesh.Join([]string{a.addr}); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	a.mesh.UpdateDigest(t.Context(), "rotated")
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if b.mesh.ConfigMismatches() == 1 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("node-b never saw node-a's new digest: view=%+v", b.mesh.Members())
+}
+
 func TestVolumeOwnersRequireEveryNameAndExcludeSelf(t *testing.T) {
 	m := newTestMesh(t, "a")
 	m.UpdateSelf(t.Context(), nil, nil, []string{"dataset", "weights"})

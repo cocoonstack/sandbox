@@ -147,7 +147,7 @@ func TestPreviewForwardsToOwner(t *testing.T) {
 	ownerPS := NewPreviewServer("secret", "https://preview.example.com", ownerAddr, &fakePreviewMgr{
 		dial: func(string, uint16) (net.Conn, error) { return net.Dial("tcp", guestAddr) },
 	})
-	ownerSrv := New("", nil, ownerAddr, &fakeManager{}, &fakeDialer{}, nil, nil, nil, ownerPS)
+	ownerSrv := New("", ownerAddr, &fakeManager{}, &fakeDialer{}, nil, nil, nil, ownerPS)
 	owner.Config.Handler = ownerSrv.Handler()
 	owner.Start()
 	t.Cleanup(func() { owner.Close(); ownerSrv.CloseRelays() })

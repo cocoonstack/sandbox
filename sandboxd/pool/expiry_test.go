@@ -145,6 +145,7 @@ func TestExpiryArchiveRetriesTheHibernateAfterItFails(t *testing.T) {
 
 func TestExpiryArchiveSurvivesAFailedReapPersist(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
+	setTenantCaps(t, m, map[string]int{"acme": 0})
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, OnExpire: types.ExpireArchive, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)

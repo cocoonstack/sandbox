@@ -2,8 +2,6 @@ package pool
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -113,7 +111,5 @@ func poolSeedHash(specs []config.PoolSpec) string {
 		shaped[i].Storage = ""
 	}
 	slices.SortFunc(shaped, func(a, b config.PoolSpec) int { return strings.Compare(a.Hash(), b.Hash()) })
-	raw, _ := utils.DigestJSON(shaped)
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
+	return utils.DigestHex(shaped)
 }

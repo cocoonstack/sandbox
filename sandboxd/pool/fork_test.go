@@ -272,7 +272,7 @@ func TestForkChildrenInheritTheParentMetadata(t *testing.T) {
 func TestForkChildrenInheritTenantAndQuota(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	m.tenantMax = map[string]int{"acme": 3}
+	setTenantCaps(t, m, map[string]int{"acme": 3})
 	parent, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)

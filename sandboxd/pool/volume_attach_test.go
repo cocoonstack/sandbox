@@ -281,7 +281,7 @@ func TestFinalizeTenantQuotaFailureQuiescesAndUncountsTenant(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch")
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
-	m.tenantMax = map[string]int{"acme": 1}
+	setTenantCaps(t, m, map[string]int{"acme": 1})
 	attaches := rendezvousAttaches(eng, 2)
 
 	claimErr := make(chan error, 1)

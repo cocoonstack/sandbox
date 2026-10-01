@@ -32,12 +32,12 @@ func TestCaddyTLSCluster(t *testing.T) {
 	owner := "https://" + b
 	entry := "https://" + a
 	st := startStack(t, "node-token")
-	ownerServer := server.New(st.token, nil, owner, st.mgr, st.eng.real, nil, nil, nil, nil)
+	ownerServer := server.New(st.token, owner, st.mgr, st.eng.real, nil, nil, nil, nil)
 	backend := httptest.NewServer(ownerServer.Handler())
 	t.Cleanup(func() { backend.Close(); ownerServer.CloseRelays() })
 	origin := startStack(t, "node-token")
 	placer := &edgePlacer{internal: "owner.invalid:7777", public: owner}
-	entryServer := server.New(origin.token, nil, entry, origin.mgr, origin.eng.real, placer, nil, nil, nil)
+	entryServer := server.New(origin.token, entry, origin.mgr, origin.eng.real, placer, nil, nil, nil)
 	front := httptest.NewServer(entryServer.Handler())
 	t.Cleanup(func() { front.Close(); entryServer.CloseRelays() })
 	servers := map[string]any{}

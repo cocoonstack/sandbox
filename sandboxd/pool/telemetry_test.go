@@ -83,7 +83,7 @@ func TestQuotaRefusesClaimsPastCap(t *testing.T) {
 func TestTenantQuotaBindsPerTenant(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	m.tenantMax = map[string]int{"acme": 1, "beta": 2}
+	setTenantCaps(t, m, map[string]int{"acme": 1, "beta": 2})
 
 	first, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
 	if err != nil {

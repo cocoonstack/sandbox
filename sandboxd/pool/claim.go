@@ -157,6 +157,9 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 	if !ok {
 		return time.Time{}, ErrUnknownSandbox
 	}
+	if !cred.Operator && m.tenantGone(sb.Tenant) {
+		return time.Time{}, ErrTenantRemoved
+	}
 	if err := archivable(sb.Key, hasAppliedVolumes(sb), onExpire); err != nil {
 		return time.Time{}, err
 	}
@@ -368,7 +371,7 @@ func (m *Manager) quotaErr(extra int, tenant string) error {
 	if m.maxClaims > 0 && len(m.claimed)+extra > m.maxClaims {
 		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, len(m.claimed), m.maxClaims)
 	}
-	limit := m.tenantMax[tenant]
+	limit := m.tenants.Load().byName[tenant].MaxClaims
 	if tenant == "" || limit <= 0 {
 		return nil
 	}
@@ -496,7 +499,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		switch {
 		case sb.ArchiveCk != "":
 			expired = append(expired, victim{action: reapPurge, id: id, ck: sb.ArchiveCk, tenant: sb.Tenant, sb: sb})
-		case sb.Failed == "" && (sb.OnExpire == types.ExpireArchive || sb.HibernateSnap != "" && m.archiveEnabledFor(sb.Key)):
+		case m.archivesAtDeadline(sb):
 			// archive instead of destroy, kept in m.claimed for archive() to move
 			if _, busy := m.archiving[id]; busy {
 				continue // an archive is already exporting this sandbox
@@ -607,6 +610,10 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
 		}
 	})
+}
+
+func (m *Manager) archivesAtDeadline(sb *types.Sandbox) bool {
+	return sb.Failed == "" && !m.tenantGone(sb.Tenant) && (sb.OnExpire == types.ExpireArchive || sb.HibernateSnap != "" && m.archiveEnabledFor(sb.Key))
 }
 
 func (m *Manager) pauseExpired(ctx context.Context, sb *types.Sandbox) error {

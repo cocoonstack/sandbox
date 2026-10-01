@@ -80,6 +80,9 @@ var (
 	ErrBadCount          = errors.New("invalid fork count")
 	ErrBadVolume         = errors.New("invalid volume request")
 	ErrBadEnv            = errors.New("invalid env")
+	ErrBadTenant         = errors.New("invalid tenant")
+	ErrUnknownTenant     = errors.New("unknown tenant")
+	ErrTenantRemoved     = errors.New("the claim's tenant was removed: it runs to its deadline but cannot renew, fork, or wake from the archive")
 	ErrVolumeUnavailable = fmt.Errorf("%w: unknown or unavailable volume", ErrBadVolume)
 	ErrNoWarm            = errors.New("no warm sandbox for key")
 	ErrUnknownSandbox    = errors.New("unknown sandbox or bad token")
@@ -139,8 +142,9 @@ type Engine interface {
 
 // SandboxSummary is the ops view of one live claim.
 type SandboxSummary struct {
-	ID  string        `json:"id"`
-	Key types.PoolKey `json:"key"`
+	ID     string        `json:"id"`
+	Key    types.PoolKey `json:"key"`
+	Tenant string        `json:"tenant,omitempty"`
 	// Token is the sandbox's own bearer token; only the root by-id read carries it.
 	Token string `json:"token,omitempty"`
 	// ClaimRef echoes the caller reference; empty for checkpoint branches and unprefixed forks.
@@ -306,11 +310,16 @@ type Manager struct {
 	// egressTaps holds the nft-locked egress-lane tap per sandbox id; guarded by m.mu.
 	egressTaps map[string]string
 
-	// tenantMax doubles as the set of known tenants; a 0 cap means unlimited.
 	maxClaims    int
 	releaseDelay time.Duration
 	draining     bool // guarded by m.mu; deliberately not persisted
-	tenantMax    map[string]int
+	// tenants is read lock-free per request; tenantMu orders its writers, which persist before they publish.
+	tenants      atomic.Pointer[tenantSet]
+	tenantMu     sync.Mutex
+	tenantPath   string
+	tenantSeed   string
+	rootSum      string
+	onTenants    func()
 	tenantLive   map[string]int
 	tenantEgress map[string]*egress.Policy // per-tenant allow-list; nil = no tenant policy
 	poolEgress   map[types.PoolKey]*egress.Policy
@@ -473,7 +482,9 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		m.audit = audit
 	}
 	m.maxClaims = cfg.MaxClaims
-	m.tenantMax = make(map[string]int, len(cfg.Tenants))
+	if err := m.seedTenants(cfg); err != nil {
+		return nil, err
+	}
 	m.tenantEgress = make(map[string]*egress.Policy, len(cfg.Tenants))
 	m.poolEgress = make(map[types.PoolKey]*egress.Policy, len(cfg.Pools))
 	m.poolWarmups = make(map[types.PoolKey][]string, len(cfg.Pools))
@@ -484,7 +495,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		m.upstreamAllow, _ = egress.ParseUpstreamAllow(u.Allow) // config validation rejected a bad entry
 	}
 	for _, tn := range cfg.Tenants {
-		m.tenantMax[tn.Name] = tn.MaxClaims
 		if tn.EgressUpstreamEnv != "" {
 			m.tenantUpstream[tn.Name] = os.Getenv(tn.EgressUpstreamEnv)
 		}
@@ -528,6 +538,10 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	if err := m.adoptPersistedPools(ctx); err != nil {
 		return nil, err
 	}
+	if err := m.adoptPersistedTenants(ctx); err != nil {
+		return nil, err
+	}
+	m.warnVolumeTenants(ctx, cfg.Volumes)
 	return m, nil
 }
 
@@ -718,7 +732,7 @@ func (m *Manager) goldensDir() string {
 func summarize(sb *types.Sandbox) SandboxSummary {
 	spec, _ := sb.Key.Size.Spec()
 	return SandboxSummary{
-		ID: sb.ID, Key: sb.Key, Deadline: sb.Deadline, ClaimedAt: sb.ClaimedAt,
+		ID: sb.ID, Key: sb.Key, Tenant: sb.Tenant, Deadline: sb.Deadline, ClaimedAt: sb.ClaimedAt,
 		Hibernated: sb.HibernateSnap != "", Archived: sb.ArchiveCk != "",
 		FromCheckpoint: sb.FromCheckpoint, ClaimRef: sb.ClaimRef, Metadata: sb.Metadata, OnExpire: sb.OnExpire,
 		Restarts: sb.Restarts, RestartedAt: sb.RestartedAt, Failed: sb.Failed,
