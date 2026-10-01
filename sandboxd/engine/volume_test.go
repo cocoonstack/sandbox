@@ -254,6 +254,22 @@ func TestMountVolumeDevNodeNeverAppearsTimesOut(t *testing.T) {
 	}
 }
 
+func TestSilkdListAndReadAreBounded(t *testing.T) {
+	path := sockPath(t)
+	fake := serveFakeSilkd(t, path)
+	fake.mu.Lock()
+	fake.block = make([]wire.DirEntry, silkdListMax+1)
+	fake.serial["/sys/block/vda/serial"] = make([]byte, silkdReadMax+1)
+	fake.mu.Unlock()
+	e := New("cocoon", nil, nil, false, false, "")
+	if _, err := e.silkdList(t.Context(), path, "/sys/block"); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("list of %d entries: %v, want a bound error", silkdListMax+1, err)
+	}
+	if _, err := e.silkdReadFile(t.Context(), path, "/sys/block/vda/serial"); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("read of %d bytes: %v, want a bound error", silkdReadMax+1, err)
+	}
+}
+
 func configureVolumeDevices(f *fakeSilkd) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
