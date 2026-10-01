@@ -99,6 +99,7 @@ type claimRequest struct {
 	ClaimRef          string            `json:"claim_ref,omitempty"`
 	Metadata          map[string]string `json:"metadata,omitempty"`
 	OnExpire          string            `json:"on_expire,omitempty"`
+	Env               map[string]EnvVar `json:"env,omitempty"`
 }
 
 func (r claimRequest) rejectPinnedAxes() error {

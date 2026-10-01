@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -578,6 +579,68 @@ func TestClaimEnvEndToEnd(t *testing.T) {
 	if status, _ := rawJSON(t, st, http.MethodPut, "/v1/sandboxes/"+idA+"/env", `{"env":{"BAD NAME":{"value":"x"}}}`); status != http.StatusBadRequest {
 		t.Errorf("bad name: %d, want 400", status)
 	}
+}
+
+func TestClaimEnvThroughTheSDK(t *testing.T) {
+	st := startStack(t, "node-token", config.PoolSpec{PoolKey: testKey, Warm: 1})
+	guestFile := func(sb *sandbox.Sandbox) string {
+		t.Helper()
+		sock, err := st.mgr.AgentSocket(sb.ID, sb.Token())
+		if err != nil {
+			t.Fatalf("socket: %v", err)
+		}
+		st.eng.mu.Lock()
+		defer st.eng.mu.Unlock()
+		return st.eng.guestEnvs[sock]
+	}
+	readEnv := func(sb *sandbox.Sandbox, want map[string]sandbox.EnvVar) {
+		t.Helper()
+		got, err := sb.Env(t.Context())
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("Env = %v, %v; want %v", got, err, want)
+		}
+	}
+	sb, err := st.client.New(t.Context(), "rt:24.04", sandbox.WithEnv(map[string]sandbox.EnvVar{
+		"MODE": {Value: "on"}, "GW_KEY": {Value: "Bearer a", Guest: new(false)},
+	}))
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	defer sb.Close()
+	if got := guestFile(sb); got != "MODE=\"on\"\n" {
+		t.Errorf("guest env file %q after the claim, want only MODE", got)
+	}
+	readEnv(sb, map[string]sandbox.EnvVar{"MODE": {Value: "on"}, "GW_KEY": {Guest: new(false)}})
+
+	if err = sb.PatchEnv(t.Context(), map[string]*sandbox.EnvVar{"MODE": nil, "STAGE": {Value: "2"}}); err != nil {
+		t.Fatalf("PatchEnv: %v", err)
+	}
+	if got := guestFile(sb); got != "STAGE=\"2\"\n" {
+		t.Errorf("guest env file %q after the patch, want only STAGE", got)
+	}
+	readEnv(sb, map[string]sandbox.EnvVar{"STAGE": {Value: "2"}, "GW_KEY": {Guest: new(false)}})
+
+	if err = sb.SetEnv(t.Context(), nil); err != nil {
+		t.Fatalf("SetEnv(nil): %v", err)
+	}
+	if got := guestFile(sb); got != "" {
+		t.Errorf("guest env file %q after clearing", got)
+	}
+	readEnv(sb, map[string]sandbox.EnvVar{})
+
+	ckpt, err := sb.Checkpoint(t.Context(), "env")
+	if err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	branch, err := ckpt.New(t.Context(), sandbox.WithEnv(map[string]sandbox.EnvVar{"BRANCH": {Value: "b"}}))
+	if err != nil {
+		t.Fatalf("branch: %v", err)
+	}
+	defer branch.Close()
+	if got := guestFile(branch); got != "BRANCH=\"b\"\n" {
+		t.Errorf("branch guest env file %q, want only BRANCH", got)
+	}
+	readEnv(branch, map[string]sandbox.EnvVar{"BRANCH": {Value: "b"}})
 }
 
 func TestForkClaimRefPrefixWireShape(t *testing.T) {
