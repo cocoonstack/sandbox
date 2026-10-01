@@ -324,7 +324,7 @@ func TestRuntimeTenantEndToEnd(t *testing.T) {
 	if _, err = user.New(t.Context(), "rt:24.04"); err == nil || !strings.Contains(err.Error(), "429") {
 		t.Errorf("second claim past the runtime cap: %v, want 429", err)
 	}
-	list, err := st.client.Tenants(t.Context())
+	list, err := st.client.Tenants(t.Context(), "", 0)
 	if err != nil || len(list.Tenants) != 1 || list.Tenants[0] != (sandbox.TenantInfo{Name: "u:42", MaxClaims: 1, Claims: 1}) {
 		t.Fatalf("Tenants = %+v, %v", list, err)
 	}

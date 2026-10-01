@@ -17,7 +17,7 @@ func TestTenantVerbsSendTheOperatorTokenAndEscapeTheName(t *testing.T) {
 	got := make(chan request, 1)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		got <- request{r.Method, r.URL.EscapedPath(), r.Header.Get("Authorization"), string(body)}
+		got <- request{r.Method, r.URL.RequestURI(), r.Header.Get("Authorization"), string(body)}
 		switch r.Method {
 		case http.MethodGet, http.MethodPut:
 			if r.URL.Path == "/v1/tenants" {
@@ -30,7 +30,7 @@ func TestTenantVerbsSendTheOperatorTokenAndEscapeTheName(t *testing.T) {
 	t.Cleanup(ts.Close)
 	c := testClient(t, ts, WithAPIToken("root"))
 
-	list, err := c.Tenants(t.Context())
+	list, err := c.Tenants(t.Context(), "", 0)
 	if err != nil || list.Digest != "d" || len(list.Tenants) != 2 || !list.Tenants[1].Removed || list.Tenants[0].MaxClaims != 2 {
 		t.Fatalf("Tenants = %+v, %v", list, err)
 	}
@@ -46,6 +46,7 @@ func TestTenantVerbsSendTheOperatorTokenAndEscapeTheName(t *testing.T) {
 		{"patch cap", func() error { return c.PutTenant(t.Context(), TenantSpec{Name: "acme", MaxClaims: 1}) }, request{http.MethodPut, "/v1/tenants/acme", "Bearer root", `{"max_claims":1}`}},
 		{"class", func() error { return c.PutTenant(t.Context(), TenantSpec{Name: "acme", EgressClass: "desk"}) }, request{http.MethodPut, "/v1/tenants/acme", "Bearer root", `{"egress_class":"desk"}`}},
 		{"delete", func() error { return c.DeleteTenant(t.Context(), "acme") }, request{http.MethodDelete, "/v1/tenants/acme", "Bearer root", ""}},
+		{"page", func() error { _, err := c.Tenants(t.Context(), "u:1", 50); return err }, request{http.MethodGet, "/v1/tenants?after=u%3A1&limit=50", "Bearer root", ""}},
 		{"set", func() error {
 			_, err := c.SetTenants(t.Context(), []TenantSpec{{Name: "acme"}, {Name: "beta", Token: "b"}})
 			return err

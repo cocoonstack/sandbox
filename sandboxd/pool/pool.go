@@ -32,6 +32,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/store/dir"
 	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
 	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -84,6 +85,7 @@ var (
 	ErrUnknownTenant     = errors.New("unknown tenant")
 	ErrBadConfig         = errors.New("invalid config")
 	ErrReloadRefused     = errors.New("config reload refused")
+	ErrTenantStoreDown   = errors.New("tenant source unavailable")
 	ErrTenantRemoved     = errors.New("the claim's tenant was removed: it runs to its deadline but cannot renew, fork, or wake from the archive")
 	ErrVolumeUnavailable = fmt.Errorf("%w: unknown or unavailable volume", ErrBadVolume)
 	ErrNoWarm            = errors.New("no warm sandbox for key")
@@ -322,11 +324,8 @@ type Manager struct {
 	maxClaims    int
 	releaseDelay time.Duration
 	draining     bool // guarded by m.mu; deliberately not persisted
-	// tenants is read lock-free per request; tenantMu orders its writers, which persist before they publish.
-	tenants    atomic.Pointer[tenantSet]
-	tenantMu   sync.Mutex
-	tenantPath string
-	tenantSeed string
+
+	tenants    tenants.Source
 	rootSum    string
 	onTenants  func()
 	tenantLive map[string]int
@@ -471,7 +470,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		m.audit = audit
 	}
 	m.maxClaims = cfg.MaxClaims
-	if err := m.seedTenants(cfg); err != nil {
+	if err := m.openTenants(ctx, cfg); err != nil {
 		return nil, err
 	}
 	m.cfg = cfg
@@ -497,9 +496,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	}
 	m.configSeedHash = poolSeedHash(cfg.Pools)
 	if err := m.adoptPersistedPools(ctx); err != nil {
-		return nil, err
-	}
-	if err := m.adoptPersistedTenants(ctx); err != nil {
 		return nil, err
 	}
 	m.warnVolumeTenants(ctx, cfg.Volumes)

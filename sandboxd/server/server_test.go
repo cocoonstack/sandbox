@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -2606,6 +2607,9 @@ type fakeManager struct {
 	putTenant            func(spec config.TenantSpec) error
 	deleteTenant         func(name string) error
 	tenantList           []pool.TenantInfo
+	tenantErr            error
+	gotEgressClass       string
+	gotTenantPage        [2]string
 	ckptDir              string
 	hasCheckpoint        map[string]bool
 	claim                claimFunc
@@ -2672,7 +2676,7 @@ type fakeManager struct {
 
 func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {
 	f.warmCalls++
-	f.gotTenant = o.Tenant
+	f.gotTenant, f.gotEgressClass = o.Tenant, o.EgressClass
 	f.gotClaimRef = o.ClaimRef
 	f.gotMetadata = o.Metadata
 	f.gotEnv = o.Env
@@ -2794,16 +2798,22 @@ func (f *fakeManager) Counters() pool.Counters { return pool.Counters{} }
 
 func (f *fakeManager) TenantClaims() map[string]int { return f.tenantClaims }
 
-func (f *fakeManager) TenantByToken(token string) (string, bool) {
+func (f *fakeManager) TenantByToken(_ context.Context, token string) (*config.TenantRecord, error) {
+	if f.tenantErr != nil {
+		return nil, f.tenantErr
+	}
 	for _, t := range f.tenants {
 		if t.Token == token {
-			return t.Name, true
+			return &config.TenantRecord{Name: t.Name, MaxClaims: t.MaxClaims, EgressClass: t.EgressClass}, nil
 		}
 	}
-	return "", false
+	return nil, pool.ErrUnknownTenant
 }
 
-func (f *fakeManager) Tenants() ([]pool.TenantInfo, string) { return f.tenantList, "set-digest" }
+func (f *fakeManager) Tenants(_ context.Context, after string, limit int) (pool.TenantPage, error) {
+	f.gotTenantPage = [2]string{after, strconv.Itoa(limit)}
+	return pool.TenantPage{Tenants: f.tenantList, Digest: "set-digest"}, nil
+}
 
 func (f *fakeManager) SetTenants(_ context.Context, specs []config.TenantSpec) error {
 	if f.setTenants != nil {

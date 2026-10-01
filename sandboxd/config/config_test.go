@@ -201,6 +201,8 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"duplicate secret name", `{"secrets":[{"name":"gh","header":"A","value_env":"X"},{"name":"gh","header":"B","value_env":"Y"}],"pools":[]}`, "duplicate secret"},
 		{"pool egress empty host", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":""}]}}]}`, "must not be empty"},
 		{"pool egress unknown secret", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"api.github.com","secret":"gh"}]}}]}`, "unknown secret"},
+		{"meta_store unknown kind", `{"api_token":"r","pools":[],"meta_store":{"kind":"redis","dsn_env":"HOME"}}`, "not supported"},
+		{"meta_store dsn env unset", `{"api_token":"r","pools":[],"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_UNSET_DSN"}}`, "must name a set node env"},
 		{"egress class unknown secret", `{"pools":[],"egress_classes":[{"name":"desk","egress":{"allow":[{"host":"x","secret":"gh"}]}}]}`, "unknown secret"},
 		{"egress class intercepts", `{"pools":[],"egress_classes":[{"name":"desk","egress":{"allow":[{"host":"x","intercept":true}]}}]}`, "only be set on a pool rule"},
 		{"egress class without egress", `{"pools":[],"egress_classes":[{"name":"desk"}]}`, "needs egress"},
@@ -245,6 +247,28 @@ func TestLoadRejectsInvalid(t *testing.T) {
 				t.Errorf("Load: %v, want error containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestLoadMetaStore(t *testing.T) {
+	t.Setenv("SANDBOX_TEST_DSN", "postgres://sandboxd@db/sandboxd")
+	ms := `"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN"}`
+	cfg, err := Load(writeConfig(t, `{"api_token":"r","pools":[],`+ms+`}`))
+	if err != nil || cfg.MetaStore.DSNEnv != "SANDBOX_TEST_DSN" {
+		t.Fatalf("Load: %+v %v", cfg, err)
+	}
+	for body, want := range map[string]string{
+		`{"pools":[],` + ms + `}`: "needs api_token",
+		`{"api_token":"r","pools":[],"tenants":[{"name":"acme","token":"t"}],` + ms + `}`: "tenants live in meta_store",
+	} {
+		if _, err := Load(writeConfig(t, body)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", body, err, want)
+		}
+	}
+	next := *cfg
+	next.MetaStore = nil
+	if _, _, err := cfg.ReloadDiff(&next); err == nil || !strings.Contains(err.Error(), "meta_store") {
+		t.Errorf("a reload that drops meta_store: %v, want a restart refusal", err)
 	}
 }
 

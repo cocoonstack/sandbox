@@ -13,6 +13,8 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants/file"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -21,7 +23,7 @@ func TestRuntimeTenantAuthenticatesAndIsCapped(t *testing.T) {
 	if err := m.PutTenant(t.Context(), config.TenantSpec{Name: "acme", Token: "acme-tok", MaxClaims: 1}); err != nil {
 		t.Fatalf("PutTenant: %v", err)
 	}
-	if name, ok := m.TenantByToken("acme-tok"); !ok || name != "acme" {
+	if name, ok := tenantOf(t, m, "acme-tok"); !ok || name != "acme" {
 		t.Fatalf("TenantByToken = %q, %v; want acme without a restart", name, ok)
 	}
 	claim := func() error {
@@ -37,7 +39,7 @@ func TestRuntimeTenantAuthenticatesAndIsCapped(t *testing.T) {
 	if err := m.PutTenant(t.Context(), config.TenantSpec{Name: "acme", MaxClaims: 2}); err != nil {
 		t.Fatalf("raise the cap: %v", err)
 	}
-	if _, ok := m.TenantByToken("acme-tok"); !ok {
+	if _, ok := tenantOf(t, m, "acme-tok"); !ok {
 		t.Fatal("a put without a token dropped the stored one")
 	}
 	if err := claim(); err != nil {
@@ -59,10 +61,10 @@ func TestRotatedTenantTokenStopsTheOldOne(t *testing.T) {
 	if err := m.PutTenant(t.Context(), config.TenantSpec{Name: "acme", Token: "new"}); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
-	if _, ok := m.TenantByToken("old"); ok {
+	if _, ok := tenantOf(t, m, "old"); ok {
 		t.Error("the old token still authenticates")
 	}
-	if name, ok := m.TenantByToken("new"); !ok || name != "acme" {
+	if name, ok := tenantOf(t, m, "new"); !ok || name != "acme" {
 		t.Errorf("the new token resolves to %q, %v", name, ok)
 	}
 }
@@ -76,13 +78,13 @@ func TestRemovedTenantRunsToItsDeadlineButCannotExtend(t *testing.T) {
 	if err := m.DeleteTenant(t.Context(), "acme"); err != nil {
 		t.Fatalf("DeleteTenant: %v", err)
 	}
-	if _, ok := m.TenantByToken("acme-tok"); ok {
+	if _, ok := tenantOf(t, m, "acme-tok"); ok {
 		t.Error("a removed tenant's token still authenticates")
 	}
 	if got := m.Sandboxes("", "", nil); len(got) != 1 || got[0].Tenant != "acme" {
 		t.Fatalf("root listing %+v, want the claim kept under acme", got)
 	}
-	infos, _ := m.Tenants()
+	infos, _ := listTenants(t, m)
 	if !slices.Contains(infos, TenantInfo{Name: "acme", Claims: 1, Removed: true}) {
 		t.Errorf("Tenants %+v, want acme listed as removed with its claim", infos)
 	}
@@ -153,25 +155,25 @@ func TestTenantSetSurvivesARestartAndOverridesTheConfig(t *testing.T) {
 	if err := m.PutTenant(t.Context(), config.TenantSpec{Name: "beta", Token: "beta-tok", MaxClaims: 3}); err != nil {
 		t.Fatalf("PutTenant: %v", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, tenantsFileName))
+	raw, err := os.ReadFile(filepath.Join(dir, "tenants.json"))
 	if err != nil {
 		t.Fatalf("read tenants file: %v", err)
 	}
 	if strings.Contains(string(raw), "beta-tok") || strings.Contains(string(raw), "acme-tok") {
-		t.Fatalf("%s holds a plaintext token: %s", tenantsFileName, raw)
+		t.Fatalf("tenants.json holds a plaintext token: %s", raw)
 	}
 	restarted := tenantManager(t, dir, config.TenantSpec{Name: "acme", Token: "acme-tok"}, config.TenantSpec{Name: "gamma", Token: "gamma-tok"})
-	if name, ok := restarted.TenantByToken("beta-tok"); !ok || name != "beta" {
+	if name, ok := tenantOf(t, restarted, "beta-tok"); !ok || name != "beta" {
 		t.Errorf("after restart beta resolves to %q, %v", name, ok)
 	}
-	if _, ok := restarted.TenantByToken("gamma-tok"); ok {
+	if _, ok := tenantOf(t, restarted, "gamma-tok"); ok {
 		t.Error("a tenant added to config.json after an API apply authenticates")
 	}
-	if err := os.Remove(filepath.Join(dir, tenantsFileName)); err != nil {
+	if err := os.Remove(filepath.Join(dir, "tenants.json")); err != nil {
 		t.Fatalf("remove tenants file: %v", err)
 	}
 	configOwned := tenantManager(t, dir, config.TenantSpec{Name: "gamma", Token: "gamma-tok"})
-	if _, ok := configOwned.TenantByToken("gamma-tok"); !ok {
+	if _, ok := tenantOf(t, configOwned, "gamma-tok"); !ok {
 		t.Error("deleting the tenants file did not return the node to config-owned tenants")
 	}
 }
@@ -258,7 +260,14 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 		}
 	}
 	unpooled := types.PoolKey{Template: "promoted-name", Net: types.NetNone, Size: types.SizeSmall}
-	classed, err := m.ClaimProvision(t.Context(), unpooled, ClaimOptions{TTL: time.Hour, Tenant: "u-1"})
+	claimAs := func(token string) (*types.Sandbox, error) {
+		r, rerr := m.TenantByToken(t.Context(), token)
+		if rerr != nil {
+			return nil, rerr
+		}
+		return m.ClaimProvision(t.Context(), unpooled, ClaimOptions{TTL: time.Hour, Tenant: r.Name, EgressClass: r.EgressClass})
+	}
+	classed, err := claimAs("u1-tok")
 	if err != nil {
 		t.Fatalf("claim u-1: %v", err)
 	}
@@ -284,7 +293,7 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 	if _, d := live.Eval("b.test", "GET", 443); d == egress.DecisionAllow {
 		t.Error("a reload that narrows the class did not reach the live claim")
 	}
-	bare, err := m.ClaimProvision(t.Context(), unpooled, ClaimOptions{TTL: time.Hour, Tenant: "u-2"})
+	bare, err := claimAs("u2-tok")
 	if err != nil {
 		t.Fatalf("claim u-2: %v", err)
 	}
@@ -296,24 +305,74 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("restart manager: %v", err)
 	}
-	if got := restarted.tenantClass("u-1"); got != "desk" {
-		t.Errorf("after a restart u-1 has class %q, want desk from tenants.json", got)
+	if r, _ := restarted.tenants.Peek("u-1"); r.EgressClass != "desk" {
+		t.Errorf("after a restart u-1 has class %q, want desk from tenants.json", r.EgressClass)
 	}
 
 	if err = m.PutTenant(t.Context(), config.TenantSpec{Name: "u-1"}); err != nil {
 		t.Fatalf("drop u-1's class: %v", err)
 	}
-	later, err := m.ClaimProvision(t.Context(), unpooled, ClaimOptions{TTL: time.Hour, Tenant: "u-1"})
+	later, err := claimAs("u1-tok")
 	if err != nil {
 		t.Fatalf("second claim u-1: %v", err)
 	}
 	if classed.EgressClass != "desk" || later.EgressClass != "" {
 		t.Errorf("classes live %q new %q: a class change reaches only claims made after it", classed.EgressClass, later.EgressClass)
 	}
-	infos, _ := m.Tenants()
+	infos, _ := listTenants(t, m)
 	if i := slices.IndexFunc(infos, func(ti TenantInfo) bool { return ti.Name == "u-1" }); i < 0 || infos[i].EgressClass != "" {
 		t.Errorf("tenant list %+v, want u-1 without a class", infos)
 	}
+}
+
+func TestTwoNodesOnOneMetaStoreShareTheTenantSet(t *testing.T) {
+	t.Setenv("SANDBOX_TEST_DSN", tenantstest.PGSchema(t))
+	node := func() *Manager {
+		cfg := &config.Config{DataDir: t.TempDir(), APIToken: "root", MetaStore: &config.MetaStoreConfig{Kind: "pg", DSNEnv: "SANDBOX_TEST_DSN"}}
+		m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t))
+		if err != nil {
+			t.Fatalf("setup manager: %v", err)
+		}
+		t.Cleanup(func() { _ = m.tenants.Close() })
+		return m
+	}
+	a, b := node(), node()
+	if err := a.PutTenant(t.Context(), config.TenantSpec{Name: "u-1", Token: "u1-tok", MaxClaims: 1}); err != nil {
+		t.Fatalf("put on a: %v", err)
+	}
+	if name, ok := tenantOf(t, b, "u1-tok"); !ok || name != "u-1" {
+		t.Errorf("b resolves a's tenant: %q %v, want u-1 without a fan-out", name, ok)
+	}
+	if err := b.DeleteTenant(t.Context(), "u-1"); err != nil {
+		t.Fatalf("delete on b: %v", err)
+	}
+	if !tenantstest.Eventually(t, func() bool { _, err := a.TenantByToken(t.Context(), "u1-tok"); return errors.Is(err, ErrUnknownTenant) }) {
+		t.Error("a still authenticates a tenant b deleted")
+	}
+	if a.TenantRecords() != nil {
+		t.Error("a shared tenant set entered the cluster digest")
+	}
+	if _, err := os.Stat(filepath.Join(a.dataDir, "tenants.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a node on meta_store wrote tenants.json: %v", err)
+	}
+}
+
+func tenantOf(t *testing.T, m *Manager, token string) (string, bool) {
+	t.Helper()
+	r, err := m.TenantByToken(t.Context(), token)
+	if err != nil {
+		return "", false
+	}
+	return r.Name, true
+}
+
+func listTenants(t *testing.T, m *Manager) ([]TenantInfo, string) {
+	t.Helper()
+	page, err := m.Tenants(t.Context(), "", 1000)
+	if err != nil {
+		t.Fatalf("list tenants: %v", err)
+	}
+	return page.Tenants, page.Digest
 }
 
 func tenantManager(t *testing.T, dir string, tenants ...config.TenantSpec) *Manager {
@@ -331,9 +390,9 @@ func setTenantCaps(t *testing.T, m *Manager, caps map[string]int) {
 	for name, limit := range caps {
 		records = append(records, config.TenantRecord{Name: name, TokenSHA256: config.TokenSHA256("tok-" + name), MaxClaims: limit})
 	}
-	set, err := newTenantSet(records, "")
+	src, err := file.Open(t.Context(), t.TempDir(), records, "")
 	if err != nil {
 		t.Fatalf("tenant set: %v", err)
 	}
-	m.tenants.Store(set)
+	m.tenants = src
 }

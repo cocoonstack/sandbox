@@ -141,6 +141,13 @@ type EgressClass struct {
 	EgressUpstreamEnv string `json:"egress_upstream_env,omitempty"`
 }
 
+// MetaStoreConfig points every node at one shared PostgreSQL for its tenant set; absent keeps the set in each node's tenants.json.
+type MetaStoreConfig struct {
+	Kind string `json:"kind"`
+	// DSNEnv names the node env holding the connection string, so no credential sits in the file.
+	DSNEnv string `json:"dsn_env"`
+}
+
 // TenantSpec declares one tenant: its bearer token, its live-claim quota and its egress class.
 type TenantSpec struct {
 	Name        string `json:"name"`
@@ -226,9 +233,10 @@ type Config struct {
 	// CocoondSocket is cocoon daemon's API socket; its event stream detects VMM exits without polling.
 	CocoondSocket string `json:"cocoond_socket,omitempty"`
 
-	APIToken string              `json:"api_token,omitempty"`
-	Tenants  []TenantSpec        `json:"tenants,omitempty"`
-	Secrets  []egress.SecretSpec `json:"secrets,omitempty"`
+	APIToken  string              `json:"api_token,omitempty"`
+	Tenants   []TenantSpec        `json:"tenants,omitempty"`
+	MetaStore *MetaStoreConfig    `json:"meta_store,omitempty"`
+	Secrets   []egress.SecretSpec `json:"secrets,omitempty"`
 
 	IdleHibernateSeconds      int `json:"idle_hibernate_seconds,omitzero"`
 	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitzero"`
@@ -602,6 +610,18 @@ func (c *Config) validateEgressUpstream() error {
 }
 
 func (c *Config) validateTenants() error {
+	if ms := c.MetaStore; ms != nil {
+		switch {
+		case ms.Kind != "pg":
+			return fmt.Errorf("meta_store.kind %q is not supported; use pg", ms.Kind)
+		case !types.EnvNameRe.MatchString(ms.DSNEnv) || os.Getenv(ms.DSNEnv) == "":
+			return fmt.Errorf("meta_store.dsn_env %q must name a set node env", ms.DSNEnv)
+		case c.APIToken == "":
+			return fmt.Errorf("meta_store needs api_token: the tenant API is root-only")
+		case len(c.Tenants) > 0:
+			return fmt.Errorf("tenants live in meta_store: add them through /v1/tenants, not config.json")
+		}
+	}
 	if len(c.Tenants) > 0 && c.APIToken == "" {
 		return fmt.Errorf("tenants require api_token: the operator surfaces are unreachable without it")
 	}
