@@ -224,8 +224,13 @@ func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
 	if !intercepts {
 		ca = nil
 	}
-	proxy := egress.New(policy, claimSecrets{m: m, sb: sb}, ca, m.dial,
+	proxy := egress.New(policy, claimSecrets{m: m, sb: sb}, ca, claimRouter{m: m, sb: sb},
 		func(ev egress.Event) { m.recordEgress(evCtx, id, tenant, ev) }, sb)
+	if m.usageBytes {
+		proxy.OnTransfer(func(ev egress.Event, sent, received int64) {
+			m.recordUsage(evCtx, usageEvent{Event: "egress_bytes", ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Sent: sent, Received: received})
+		})
+	}
 	if el != nil && (reached(el.ln) || (el.socks != nil && reached(el.socks))) {
 		el.close()
 		el = nil
@@ -396,21 +401,27 @@ func newEgressDialer(allow []egress.InternalAllow) *net.Dialer {
 		if err != nil {
 			return fmt.Errorf("egress: unresolved address %q: %w", address, err)
 		}
-		ip, port := ap.Addr().Unmap(), ap.Port()
-		if nat64Range.Contains(ip) {
-			b := ip.As16()
-			ip = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
-		}
-		// after the NAT64 unwrap and before the block, so a named prefix wins
-		if slices.ContainsFunc(allow, func(a egress.InternalAllow) bool { return a.Admits(ip, port) }) {
-			return nil
-		}
-		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-			slices.ContainsFunc(internalRanges, func(p netip.Prefix) bool { return p.Contains(ip) }) {
-			return fmt.Errorf("egress: blocked internal address %s", ip)
-		}
-		return nil
+		_, err = destVerdict(allow, ap.Addr(), ap.Port())
+		return err
 	}}
+}
+
+// destVerdict reports whether ip is an internal address allow re-admits; any other internal address is an error.
+func destVerdict(allow []egress.InternalAllow, ip netip.Addr, port uint16) (bool, error) {
+	ip = ip.Unmap()
+	if nat64Range.Contains(ip) {
+		b := ip.As16()
+		ip = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
+	}
+	// after the NAT64 unwrap and before the block, so a named prefix wins
+	if slices.ContainsFunc(allow, func(a egress.InternalAllow) bool { return a.Admits(ip, port) }) {
+		return true, nil
+	}
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		slices.ContainsFunc(internalRanges, func(p netip.Prefix) bool { return p.Contains(ip) }) {
+		return false, fmt.Errorf("egress: blocked internal address %s", ip)
+	}
+	return false, nil
 }
 
 // parseInternalAllow turns the allow-list into entries; config validation already rejected bad ones.

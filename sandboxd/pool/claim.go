@@ -702,6 +702,9 @@ func (m *Manager) admitOptions(ctx context.Context, key types.PoolKey, o ClaimOp
 	if err := archivable(key, len(o.Volumes) > 0, o.OnExpire); err != nil {
 		return nil, nil, err
 	}
+	if err := m.checkUpstreamEnv(o.Env); err != nil {
+		return nil, nil, err
+	}
 	volumeSpecs, err := m.resolveVolumes(ctx, o.Tenant, o.Volumes)
 	if err != nil {
 		return nil, nil, err

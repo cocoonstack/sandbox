@@ -24,6 +24,9 @@ type usageEvent struct {
 	VolumesRW []string  `json:"volumes_rw,omitempty"`
 	Children  []string  `json:"children,omitempty"`
 	Reference string    `json:"ref,omitempty"`
+	Upstream  string    `json:"upstream,omitempty"`
+	Sent      int64     `json:"tx,omitzero"`
+	Received  int64     `json:"rx,omitzero"`
 }
 
 // journal is an append-only JSONL writer with size rotation; its lock only orders appends.

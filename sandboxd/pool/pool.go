@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -355,6 +356,14 @@ type Manager struct {
 	// dial and sweep are test seams: the SSRF guard blocks loopback, the nft sweep is netlink-only.
 	dial  egress.DialFunc
 	sweep func(map[string]bool) error
+	// destVerdict and upstreamDial are the upstream path's test seams, read-only after startup like the upstream maps.
+	destVerdict    func(netip.Addr, uint16) (bool, error)
+	upstreamDial   egress.DialFunc
+	upstreamEnv    string
+	upstreamAllow  egress.UpstreamAllow
+	poolUpstream   map[types.PoolKey]string
+	tenantUpstream map[string]string
+	usageBytes     bool
 
 	mu              sync.Mutex
 	pools           map[types.PoolKey]*pool
@@ -380,6 +389,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	if refill < 1 {
 		refill = defaultRefill
 	}
+	internalAllow := parseInternalAllow(cfg.EgressInternalAllow)
 	m := &Manager{
 		eng:             eng,
 		dataDir:         cfg.DataDir,
@@ -407,7 +417,12 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		healPending:     map[string]struct{}{},
 		healAbort:       map[string]struct{}{},
 		egressSecrets:   secrets,
-		dial:            newEgressDialer(parseInternalAllow(cfg.EgressInternalAllow)).DialContext,
+		dial:            newEgressDialer(internalAllow).DialContext,
+		destVerdict:     func(ip netip.Addr, port uint16) (bool, error) { return destVerdict(internalAllow, ip, port) },
+		upstreamDial:    (&net.Dialer{}).DialContext,
+		poolUpstream:    map[types.PoolKey]string{},
+		tenantUpstream:  map[string]string{},
+		usageBytes:      cfg.EgressUsageBytes,
 		sweep:           netfilter.SweepExcept,
 		refillSem:       make(chan struct{}, refill),
 		probeSem:        make(chan struct{}, refill),
@@ -466,8 +481,15 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	m.poolWarmups = make(map[types.PoolKey][]string, len(cfg.Pools))
 	m.poolTrims = make(map[types.PoolKey]bool, len(cfg.Pools))
 	m.poolStorage = make(map[types.PoolKey]string, len(cfg.Pools))
+	if u := cfg.EgressUpstream; u != nil {
+		m.upstreamEnv = u.ClaimEnv
+		m.upstreamAllow, _ = egress.ParseUpstreamAllow(u.Allow) // config validation rejected a bad entry
+	}
 	for _, tn := range cfg.Tenants {
 		m.tenantMax[tn.Name] = tn.MaxClaims
+		if tn.EgressUpstreamEnv != "" {
+			m.tenantUpstream[tn.Name] = os.Getenv(tn.EgressUpstreamEnv)
+		}
 		if tn.Egress != nil {
 			m.tenantEgress[tn.Name] = tn.Egress
 			m.guardedEgress = true
@@ -492,6 +514,9 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		}
 		if spec.Storage != "" {
 			m.poolStorage[spec.PoolKey] = spec.Storage
+		}
+		if spec.EgressUpstreamEnv != "" {
+			m.poolUpstream[spec.PoolKey] = os.Getenv(spec.EgressUpstreamEnv)
 		}
 	}
 	if slices.ContainsFunc(cfg.Pools, func(s config.PoolSpec) bool { return s.Egress.Intercepts() }) {

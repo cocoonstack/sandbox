@@ -48,6 +48,8 @@ type PoolSpec struct {
 
 	Egress *egress.Policy `json:"egress,omitempty"`
 	Warmup []string       `json:"warmup,omitempty"`
+	// EgressUpstreamEnv names the node env holding this pool's default upstream proxy URL.
+	EgressUpstreamEnv string `json:"egress_upstream_env,omitempty"`
 	// CaptureTrim trims the guest's copy-on-write disk before a promote or checkpoint of this pool's sandboxes.
 	CaptureTrim bool `json:"capture_trim,omitzero"`
 	// Storage sizes the golden's copy-on-write disk in cocoon's --storage spelling; every clone inherits it, and empty keeps cocoon's default.
@@ -113,6 +115,12 @@ type StoreConfig struct {
 	S3   *s3.Config `json:"s3,omitempty"`
 }
 
+// EgressUpstreamConfig lets a claim's host-only ClaimEnv entry name the proxy its egress leaves through, from the Allow list.
+type EgressUpstreamConfig struct {
+	ClaimEnv string   `json:"claim_env"`
+	Allow    []string `json:"allow"`
+}
+
 // EgressCAConfig provisions HTTPS interception; the root private key never appears here.
 type EgressCAConfig struct {
 	RootCert         string `json:"root_cert"`
@@ -132,6 +140,8 @@ type TenantSpec struct {
 	MaxClaims int    `json:"max_claims,omitzero"`
 
 	Egress *egress.Policy `json:"egress,omitempty"`
+	// EgressUpstreamEnv names the node env holding this tenant's default upstream proxy URL.
+	EgressUpstreamEnv string `json:"egress_upstream_env,omitempty"`
 }
 
 // VolumeSpec declares one operator-managed dataset disk, held by exactly one node.
@@ -220,8 +230,10 @@ type Config struct {
 	CheckpointPeerHeal bool         `json:"checkpoint_peer_heal,omitzero"`
 	CheckpointTTLHours int          `json:"checkpoint_ttl_hours,omitzero"`
 
-	EgressInternalAllow []string        `json:"egress_internal_allow,omitempty"`
-	EgressCA            *EgressCAConfig `json:"egress_ca,omitempty"`
+	EgressInternalAllow []string              `json:"egress_internal_allow,omitempty"`
+	EgressCA            *EgressCAConfig       `json:"egress_ca,omitempty"`
+	EgressUpstream      *EgressUpstreamConfig `json:"egress_upstream,omitempty"`
+	EgressUsageBytes    bool                  `json:"egress_usage_bytes,omitzero"`
 
 	MaxClaims           int  `json:"max_claims,omitzero"`
 	MaxForkCount        int  `json:"max_fork_count,omitzero"`
@@ -353,7 +365,7 @@ func (c *Config) validate() error {
 	if c.CheckpointPeerHeal && c.APIToken == "" {
 		return fmt.Errorf("checkpoint_peer_heal requires api_token: without it resolveScope leaves the raw checkpoint blob GET reachable with no credential")
 	}
-	if err := c.validateEgressAllow(); err != nil {
+	if err := c.validateEgressRouting(); err != nil {
 		return err
 	}
 	if err := c.validateTenants(); err != nil {
@@ -528,10 +540,52 @@ func (c *Config) validateAttachment() error {
 	return validateShards(c.Networks, "networks", "conflist")
 }
 
-func (c *Config) validateEgressAllow() error {
+func (c *Config) validateEgressRouting() error {
 	for _, entry := range c.EgressInternalAllow {
 		if _, err := egress.ParseInternalAllow(entry); err != nil {
 			return fmt.Errorf("egress_internal_allow %q: %w", entry, err)
+		}
+	}
+	return c.validateEgressUpstream()
+}
+
+// validateEgressUpstream checks the allow list and resolves every pool and tenant default from the node env now.
+func (c *Config) validateEgressUpstream() error {
+	var defaults []string
+	for _, p := range c.Pools {
+		if p.EgressUpstreamEnv != "" {
+			defaults = append(defaults, p.EgressUpstreamEnv)
+		}
+	}
+	for _, t := range c.Tenants {
+		if t.EgressUpstreamEnv != "" {
+			defaults = append(defaults, t.EgressUpstreamEnv)
+		}
+	}
+	u := c.EgressUpstream
+	if u == nil {
+		if len(defaults) > 0 {
+			return fmt.Errorf("egress_upstream_env needs egress_upstream: its allow list governs every upstream")
+		}
+		return nil
+	}
+	if !types.EnvNameRe.MatchString(u.ClaimEnv) {
+		return fmt.Errorf("egress_upstream.claim_env %q must match %s", u.ClaimEnv, types.EnvNameRe)
+	}
+	if len(u.Allow) == 0 {
+		return fmt.Errorf("egress_upstream.allow must name at least one upstream")
+	}
+	allow, err := egress.ParseUpstreamAllow(u.Allow)
+	if err != nil {
+		return fmt.Errorf("egress_upstream.allow: %w", err)
+	}
+	for _, name := range defaults {
+		parsed, err := egress.ParseUpstream(os.Getenv(name))
+		if err != nil {
+			return fmt.Errorf("egress_upstream_env %s: %w", name, err)
+		}
+		if !allow.Allows(parsed) {
+			return fmt.Errorf("egress_upstream_env %s: upstream %s is not in egress_upstream.allow", name, parsed.Host)
 		}
 	}
 	return nil
