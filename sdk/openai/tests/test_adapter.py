@@ -6,6 +6,7 @@ cocoonsandbox surface, not cocoon itself."""
 import asyncio
 import io
 import json
+import tarfile
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -178,7 +179,7 @@ def test_write_and_persist_use_tree_verbs(node, monkeypatch):
 
         def pull(self, path):
             calls["pull"] = path
-            return b"tar-bytes"
+            return _silkd_pull_tar("workspace", {"a.txt": b"body"})
 
         def push(self, dest, data):
             calls["push"] = (dest, data)
@@ -191,7 +192,9 @@ def test_write_and_persist_use_tree_verbs(node, monkeypatch):
         await inner.write(Path("/workspace/a.txt"), io.BytesIO(b"body"))
         assert calls["write"] == ("/workspace/a.txt", b"body")
         tar = await inner.persist_workspace()
-        assert tar.read() == b"tar-bytes" and calls["pull"] == "/workspace"
+        with tarfile.open(fileobj=tar) as archive:
+            names = sorted(archive.getnames())
+        assert calls["pull"] == "/workspace" and names == [".", "a.txt"], names
         await inner.hydrate_workspace(io.BytesIO(b"tar-in"))
         assert calls["push"] == ("/workspace", b"tar-in")
 
@@ -232,3 +235,16 @@ def test_create_releases_the_claim_when_state_construction_fails(node, monkeypat
 
     asyncio.run(go())
     assert released == ["sb_1"]
+
+
+def _silkd_pull_tar(root: str, files: dict[str, bytes]) -> bytes:
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w") as archive:
+        top = tarfile.TarInfo(root)
+        top.type = tarfile.DIRTYPE
+        archive.addfile(top)
+        for name, body in files.items():
+            info = tarfile.TarInfo(f"{root}/{name}")
+            info.size = len(body)
+            archive.addfile(info, io.BytesIO(body))
+    return out.getvalue()

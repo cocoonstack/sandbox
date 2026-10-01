@@ -20,6 +20,7 @@ from agents.sandbox.session.sandbox_session import SandboxSession
 from agents.sandbox.session.sandbox_session_state import SandboxSessionState
 from agents.sandbox.snapshot import SnapshotBase, SnapshotSpec, resolve_snapshot
 from agents.sandbox.types import ExecResult, ExposedPortEndpoint, User
+from agents.sandbox.util.tar_utils import strip_tar_member_prefix
 from cocoonsandbox import Client, Sandbox, SandboxError, SilkdError
 
 
@@ -85,8 +86,9 @@ class CocoonSandboxSession(BaseSandboxSession):
 
     async def persist_workspace(self) -> io.IOBase:
         sb = self._sandbox()
-        tar = await asyncio.to_thread(sb.pull, str(self.state.manifest.root))
-        return io.BytesIO(tar)
+        root = Path(self.state.manifest.root)
+        tar = await asyncio.to_thread(sb.pull, str(root))
+        return await asyncio.to_thread(strip_tar_member_prefix, io.BytesIO(tar), prefix=root.name)
 
     async def hydrate_workspace(self, data: io.IOBase) -> None:
         sb = self._sandbox()
