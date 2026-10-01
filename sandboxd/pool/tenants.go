@@ -30,28 +30,22 @@ type TenantInfo struct {
 	Removed   bool   `json:"removed,omitzero"`
 }
 
-type tenantRecord struct {
-	Name        string `json:"name"`
-	TokenSHA256 string `json:"token_sha256"`
-	MaxClaims   int    `json:"max_claims,omitzero"`
-}
-
 type tenantsFile struct {
-	ConfigSeed string         `json:"config_seed"`
-	Tenants    []tenantRecord `json:"tenants"`
+	ConfigSeed string                `json:"config_seed"`
+	Tenants    []config.TenantRecord `json:"tenants"`
 }
 
 type tenantSet struct {
 	byToken map[[sha256.Size]byte]string
-	byName  map[string]tenantRecord
+	byName  map[string]config.TenantRecord
 	names   []string
 	digest  string
 }
 
-func newTenantSet(records []tenantRecord, rootSum string) (*tenantSet, error) {
+func newTenantSet(records []config.TenantRecord, rootSum string) (*tenantSet, error) {
 	s := &tenantSet{
 		byToken: make(map[[sha256.Size]byte]string, len(records)),
-		byName:  make(map[string]tenantRecord, len(records)),
+		byName:  make(map[string]config.TenantRecord, len(records)),
 	}
 	for _, r := range records {
 		switch {
@@ -81,8 +75,8 @@ func newTenantSet(records []tenantRecord, rootSum string) (*tenantSet, error) {
 	return s, nil
 }
 
-func (s *tenantSet) records() []tenantRecord {
-	out := make([]tenantRecord, len(s.names))
+func (s *tenantSet) records() []config.TenantRecord {
+	out := make([]config.TenantRecord, len(s.names))
 	for i, name := range s.names {
 		out[i] = s.byName[name]
 	}
@@ -100,19 +94,9 @@ func (m *Manager) TenantByToken(token string) (string, bool) {
 	return name, ok
 }
 
-// TenantNames lists the current tenants, sorted; the slice is shared and read-only.
-func (m *Manager) TenantNames() []string {
-	return m.tenants.Load().names
-}
-
-// TenantTokenDigests maps each current tenant to its token's SHA-256, for the cluster config digest.
-func (m *Manager) TenantTokenDigests() map[string]string {
-	set := m.tenants.Load()
-	out := make(map[string]string, len(set.names))
-	for name, r := range set.byName {
-		out[name] = r.TokenSHA256
-	}
-	return out
+// TenantRecords returns the live tenant records for the cluster config digest.
+func (m *Manager) TenantRecords() []config.TenantRecord {
+	return m.tenants.Load().records()
 }
 
 // Tenants lists the tenant set with each tenant's live claims here, the removed tenants still holding claims, and the set's digest.
@@ -140,8 +124,8 @@ func (m *Manager) OnTenants(f func()) {
 
 // SetTenants replaces the whole tenant set; a tenant left out stops authenticating at once and its claims stay, and an entry may omit a kept tenant's token.
 func (m *Manager) SetTenants(ctx context.Context, specs []config.TenantSpec) error {
-	return m.applyTenants(ctx, func(cur *tenantSet) ([]tenantRecord, error) {
-		records := make([]tenantRecord, 0, len(specs))
+	return m.applyTenants(ctx, func(cur *tenantSet) ([]config.TenantRecord, error) {
+		records := make([]config.TenantRecord, 0, len(specs))
 		for _, spec := range specs {
 			r, err := m.tenantRecordOf(spec, cur)
 			if err != nil {
@@ -155,7 +139,7 @@ func (m *Manager) SetTenants(ctx context.Context, specs []config.TenantSpec) err
 
 // PutTenant adds or changes one tenant; an empty token keeps an existing tenant's token.
 func (m *Manager) PutTenant(ctx context.Context, spec config.TenantSpec) error {
-	return m.applyTenants(ctx, func(cur *tenantSet) ([]tenantRecord, error) {
+	return m.applyTenants(ctx, func(cur *tenantSet) ([]config.TenantRecord, error) {
 		r, err := m.tenantRecordOf(spec, cur)
 		if err != nil {
 			return nil, err
@@ -168,7 +152,7 @@ func (m *Manager) PutTenant(ctx context.Context, spec config.TenantSpec) error {
 
 // DeleteTenant removes one tenant; its token stops authenticating at once and its claims stay.
 func (m *Manager) DeleteTenant(ctx context.Context, name string) error {
-	return m.applyTenants(ctx, func(cur *tenantSet) ([]tenantRecord, error) {
+	return m.applyTenants(ctx, func(cur *tenantSet) ([]config.TenantRecord, error) {
 		if !cur.has(name) {
 			return nil, ErrUnknownTenant
 		}
@@ -178,24 +162,24 @@ func (m *Manager) DeleteTenant(ctx context.Context, name string) error {
 	})
 }
 
-func (m *Manager) tenantRecordOf(spec config.TenantSpec, cur *tenantSet) (tenantRecord, error) {
+func (m *Manager) tenantRecordOf(spec config.TenantSpec, cur *tenantSet) (config.TenantRecord, error) {
 	if spec.Egress != nil || spec.EgressUpstreamEnv != "" {
-		return tenantRecord{}, fmt.Errorf("%w: tenant %q: egress and egress_upstream_env are set in the config file, not via the API", ErrBadTenant, spec.Name)
+		return config.TenantRecord{}, fmt.Errorf("%w: tenant %q: egress and egress_upstream_env are set in the config file, not via the API", ErrBadTenant, spec.Name)
 	}
-	r := tenantRecord{Name: spec.Name, MaxClaims: spec.MaxClaims}
+	r := config.TenantRecord{Name: spec.Name, MaxClaims: spec.MaxClaims}
 	switch kept, ok := cur.byName[spec.Name]; {
 	case spec.Token != "":
 		r.TokenSHA256 = config.TokenSHA256(spec.Token)
 	case ok:
 		r.TokenSHA256 = kept.TokenSHA256
 	default:
-		return tenantRecord{}, fmt.Errorf("%w: tenant %q needs a token", ErrBadTenant, spec.Name)
+		return config.TenantRecord{}, fmt.Errorf("%w: tenant %q needs a token", ErrBadTenant, spec.Name)
 	}
 	return r, nil
 }
 
 // applyTenants persists the next set before it serves, so an acknowledged change survives a crash and a failed write changes nothing.
-func (m *Manager) applyTenants(ctx context.Context, next func(cur *tenantSet) ([]tenantRecord, error)) error {
+func (m *Manager) applyTenants(ctx context.Context, next func(cur *tenantSet) ([]config.TenantRecord, error)) error {
 	if m.rootSum == "" {
 		return fmt.Errorf("%w: tenants require api_token", ErrBadTenant)
 	}
@@ -305,10 +289,10 @@ func (m *Manager) tenantGone(tenant string) bool {
 	return tenant != "" && !m.tenants.Load().has(tenant)
 }
 
-func configTenantRecords(specs []config.TenantSpec) []tenantRecord {
-	out := make([]tenantRecord, len(specs))
+func configTenantRecords(specs []config.TenantSpec) []config.TenantRecord {
+	out := make([]config.TenantRecord, len(specs))
 	for i, t := range specs {
-		out[i] = tenantRecord{Name: t.Name, TokenSHA256: config.TokenSHA256(t.Token), MaxClaims: t.MaxClaims}
+		out[i] = config.TenantRecord{Name: t.Name, TokenSHA256: config.TokenSHA256(t.Token), MaxClaims: t.MaxClaims}
 	}
 	return out
 }

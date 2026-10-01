@@ -1797,7 +1797,8 @@ func TestForeignTemplateGossipNeverEscalates(t *testing.T) {
 				volumePlacement: func(types.PoolKey, string, []string) (bool, error) { return true, nil },
 			}
 			placer := &fakePlacer{ownersByProbe: map[string][]string{
-				types.TemplateGossipHash(hash, "acme"): {"peer:7777"},
+				types.TemplateGossipHash(hash, "acme"):                  {"peer:7777"},
+				types.TemplateGossipHash(hash, types.TemplateRootScope): {"peer:7777"},
 			}}
 			mgr.tenants = tenants
 			srv := New("root-tok", "node-a:7777", mgr, &fakeDialer{}, placer, nil, nil, nil)
@@ -2800,15 +2801,6 @@ func (f *fakeManager) TenantByToken(token string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func (f *fakeManager) TenantNames() []string {
-	names := make([]string, len(f.tenants))
-	for i, t := range f.tenants {
-		names[i] = t.Name
-	}
-	slices.Sort(names)
-	return names
 }
 
 func (f *fakeManager) Tenants() ([]pool.TenantInfo, string) { return f.tenantList, "set-digest" }

@@ -3,12 +3,14 @@ package server
 import (
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 func TestTenantRoutesAreRootOnlyAndNeverServeATokenBack(t *testing.T) {
@@ -99,5 +101,28 @@ func TestRenewOfARemovedTenantsClaimIsForbidden(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("renew of a removed tenant's claim: %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestRootFindsARemovedTenantsRemoteTemplate(t *testing.T) {
+	hash := types.ClaimRequest{Template: "tpl"}.Key().Hash()
+	placer := &fakePlacer{ownersByProbe: map[string][]string{
+		types.TemplateGossipHash(hash, "gone"):                  {"peer:7777"},
+		types.TemplateGossipHash(hash, types.TemplateRootScope): {"peer:7777"},
+	}}
+	srv := New("root", "node:7777", &fakeManager{}, &fakeDialer{}, placer, nil, nil, nil)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	for _, tt := range []struct{ method, path, body string }{
+		{http.MethodPost, "/v1/claim", `{"template":"tpl"}`},
+		{http.MethodPost, "/v1/claim", `{"template":"tpl","volumes":[{"name":"imagenet"}]}`},
+		{http.MethodDelete, "/v1/templates?template=tpl", ""},
+	} {
+		resp := doReq(t, tt.method, ts.URL+tt.path, "root", tt.body)
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"redirect":["peer:7777"]`) {
+			t.Errorf("%s %s: %d %s, want the retained template's owner", tt.method, tt.path, resp.StatusCode, body)
+		}
 	}
 }

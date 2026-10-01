@@ -107,7 +107,7 @@ func main() {
 			msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
 		})
 		mgr.OnTenants(func() {
-			msh.UpdateDigest(ctx, cfg.ClusterDigest(mgr.EgressCAFingerprint(), mgr.TenantTokenDigests()))
+			msh.UpdateDigest(ctx, cfg.ClusterDigest(mgr.EgressCAFingerprint(), mgr.TenantRecords()))
 		})
 		clusterKey, err := cfg.Mesh.DecodedKey()
 		if err != nil {
@@ -194,7 +194,7 @@ func startMesh(ctx context.Context, cfg *config.Config, mgr *pool.Manager) (*mes
 		return nil, err
 	}
 	msh.SetSelfClientAddr(cfg.ClientAdvertise)
-	msh.SetSelfDigest(cfg.ClusterDigest(mgr.EgressCAFingerprint(), mgr.TenantTokenDigests()))
+	msh.SetSelfDigest(cfg.ClusterDigest(mgr.EgressCAFingerprint(), mgr.TenantRecords()))
 	msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
 	if err := msh.Join(mc.Join); err != nil {
 		_ = msh.Shutdown()

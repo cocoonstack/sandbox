@@ -300,9 +300,9 @@ Some config must match on every node or the cluster fails in confusing ways:
 | `egress_ca` cluster root | a guest checkpointed/redirected across nodes trusts the root; a divergent root fails interception |
 | the engine root path (cocoon's `root_dir`) | a checkpoint or template export pins the base image blobs' absolute path under the root that captured it; a node whose root sits at another path refuses to clone a record it healed or pulled (`untrusted storage path in snapshot metadata`) — the heal succeeds, the branch fails. Not part of the gossiped digest below |
 
-Each node gossips a digest of these over its live tenant set (HMAC-keyed by
+Each node gossips a digest of these over its live tenant set and quotas (HMAC-keyed by
 `cluster_key` when set, covering each tenant token's SHA-256; otherwise a
-token-free digest of tenant names + the CA root + `checkpoint_ttl_hours`, so
+token-free digest of tenant names and quotas + the CA root + `checkpoint_ttl_hours`, so
 nothing brute-forceable rides cleartext gossip), and republishes it after every
 tenant change. A mismatch logs a warning at the moment
 the divergent node appears — not at the first unlucky redirect — and raises the

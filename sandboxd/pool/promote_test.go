@@ -372,7 +372,7 @@ func TestHasPromotedTemplateIsTenantScoped(t *testing.T) {
 }
 
 func TestTemplateHashesAreTenantScoped(t *testing.T) {
-	m := newTestManager(t, newFakeEngine())
+	m := tenantManager(t, t.TempDir(), config.TenantSpec{Name: "acme", Token: "acme-tok"})
 	a, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
@@ -381,14 +381,21 @@ func TestTemplateHashesAreTenantScoped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("promote: %v", err)
 	}
+	if err := m.DeleteTenant(t.Context(), "acme"); err != nil {
+		t.Fatalf("remove tenant: %v", err)
+	}
 
 	hashes := m.TemplateHashes()
 	if want := types.TemplateGossipHash(key.Hash(), "acme"); !slices.Contains(hashes, want) {
 		t.Errorf("gossip %v lacks the owner-scoped hash %s", hashes, want)
 	}
+	if want := types.TemplateGossipHash(key.Hash(), types.TemplateRootScope); !slices.Contains(hashes, want) {
+		t.Errorf("gossip %v lacks the root-scoped hash %s", hashes, want)
+	}
 	for name, bad := range map[string]string{
 		"raw":     key.Hash(),
 		"foreign": types.TemplateGossipHash(key.Hash(), "beta"),
+		"public":  types.TemplateGossipHash(key.Hash(), ""),
 	} {
 		if slices.Contains(hashes, bad) {
 			t.Errorf("gossip %v carries the %s hash — a foreign tenant could match it", hashes, name)
@@ -406,8 +413,8 @@ func TestTemplateHashesSortedForMeshCompare(t *testing.T) {
 		}
 	}
 	hashes := m.TemplateHashes()
-	if len(hashes) != 4 {
-		t.Fatalf("got %d hashes, want 4: %v", len(hashes), hashes)
+	if len(hashes) != 8 {
+		t.Fatalf("got %d hashes, want 8: %v", len(hashes), hashes)
 	}
 	if !slices.IsSorted(hashes) {
 		t.Errorf("TemplateHashes not sorted: %v", hashes)
@@ -453,7 +460,7 @@ func TestTemplatesListWhatTheNodeHoldsAcrossARestart(t *testing.T) {
 			t.Errorf("after restart %+v, want %+v created %v on the %+v tier", got, want, before, spec)
 		}
 	}
-	if hashes := restarted.TemplateHashes(); len(hashes) != 3 {
+	if hashes := restarted.TemplateHashes(); len(hashes) != 6 {
 		t.Errorf("gossip %v, want the keyless record still routed", hashes)
 	}
 	if err = restarted.DeleteTemplate(t.Context(), keyA, "", ""); err != nil {

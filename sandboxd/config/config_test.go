@@ -14,7 +14,7 @@ import (
 
 func TestClusterDigest(t *testing.T) {
 	base := &Config{APIToken: "tok", PreviewSecret: "ps", Tenants: []TenantSpec{{Name: "acme", Token: "t1"}}}
-	digest := func(c *Config, fp string) string { return c.ClusterDigest(fp, tokenDigests(c.Tenants)) }
+	digest := func(c *Config, fp string) string { return c.ClusterDigest(fp, tenantRecords(c.Tenants)) }
 	d := digest(base, "ca-fp")
 	if digest(base, "ca-fp") != d {
 		t.Fatal("digest is not stable for identical config")
@@ -47,6 +47,17 @@ func TestClusterDigest(t *testing.T) {
 	if digest(&withVolume, "ca-fp") != d {
 		t.Error("node-local volume catalog must not change the cluster digest")
 	}
+	for _, cfg := range []*Config{base, keyed} {
+		records := tenantRecords(cfg.Tenants)
+		before := cfg.ClusterDigest("ca-fp", records)
+		records[0].MaxClaims = 1
+		if cfg.ClusterDigest("ca-fp", records) == before {
+			t.Error("a quota-only change must change the cluster digest")
+		}
+		if records[0].TokenSHA256 != TokenSHA256("t1") {
+			t.Error("digest changed the caller's token hash")
+		}
+	}
 }
 
 func TestClusterDigestMatchesTheV1Bytes(t *testing.T) {
@@ -58,12 +69,12 @@ func TestClusterDigestMatchesTheV1Bytes(t *testing.T) {
 		fp   string
 		want string
 	}{
-		{"keyless", &Config{APIToken: "t<o>k", PreviewSecret: "p&s", Tenants: tenants, CheckpointTTLHours: 24}, "ca<&>\u2028fp", "a1945e2f38cf6e61638bc08896a292792b1705fb860b405d8117abbf13e1c760"},
-		{"keyed", &Config{APIToken: "t<o>k&\u2029", PreviewSecret: "p&s<", Tenants: tenants, CheckpointTTLHours: 24, Mesh: &MeshConfig{ClusterKey: key}}, "ca<&>fp", "7b14876b0af8549cd4d212939a6195f2044b8b15fa2118fe8628536f8fc44955"},
+		{"keyless", &Config{APIToken: "t<o>k", PreviewSecret: "p&s", Tenants: tenants, CheckpointTTLHours: 24}, "ca<&>\u2028fp", "7cbd1d42ea3b776064ef637f13ae7da345f82091e9a85cd3c4a6243f97b67a42"},
+		{"keyed", &Config{APIToken: "t<o>k&\u2029", PreviewSecret: "p&s<", Tenants: tenants, CheckpointTTLHours: 24, Mesh: &MeshConfig{ClusterKey: key}}, "ca<&>fp", "c0f2ab05aa72efdefacb1f69082eaed9e09a3ea833c1e234cdeaa26e738e609e"},
 		{"no tenants", &Config{}, "fp", "38fc616b12f612c2c5c3f83af9d4c6caa771e1d3ffca39a6c835e522d3db49f8"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cfg.ClusterDigest(tt.fp, tokenDigests(tt.cfg.Tenants)); got != tt.want {
+			if got := tt.cfg.ClusterDigest(tt.fp, tenantRecords(tt.cfg.Tenants)); got != tt.want {
 				t.Errorf("digest %s, want the encoding/json v1 digest %s", got, tt.want)
 			}
 		})
@@ -462,10 +473,10 @@ func writeConfig(t *testing.T, body string) string {
 	return path
 }
 
-func tokenDigests(tenants []TenantSpec) map[string]string {
-	out := make(map[string]string, len(tenants))
-	for _, t := range tenants {
-		out[t.Name] = TokenSHA256(t.Token)
+func tenantRecords(tenants []TenantSpec) []TenantRecord {
+	out := make([]TenantRecord, len(tenants))
+	for i, t := range tenants {
+		out[i] = TenantRecord{Name: t.Name, TokenSHA256: TokenSHA256(t.Token), MaxClaims: t.MaxClaims}
 	}
 	return out
 }

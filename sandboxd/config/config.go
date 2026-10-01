@@ -10,7 +10,6 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
-	"maps"
 	"net"
 	"net/netip"
 	"net/url"
@@ -145,6 +144,13 @@ type TenantSpec struct {
 	EgressUpstreamEnv string `json:"egress_upstream_env,omitempty"`
 }
 
+// TenantRecord stores a tenant's identity and quota without its plaintext token.
+type TenantRecord struct {
+	Name        string `json:"name"`
+	TokenSHA256 string `json:"token_sha256"`
+	MaxClaims   int    `json:"max_claims,omitzero"`
+}
+
 // VolumeSpec declares one operator-managed dataset disk, held by exactly one node.
 type VolumeSpec struct {
 	Name     string   `json:"name"`
@@ -252,24 +258,22 @@ func (c *Config) HasEgress() bool {
 	return len(c.Bridges) > 0 || len(c.Networks) > 0
 }
 
-// ClusterDigest fingerprints the must-match config and the live tenant set (name to token SHA-256); without cluster_key it omits tokens.
-func (c *Config) ClusterDigest(caFingerprint string, tenants map[string]string) string {
-	names := slices.AppendSeq(make([]string, 0, len(tenants)), maps.Keys(tenants))
-	slices.Sort(names)
+// ClusterDigest fingerprints the must-match config and live tenant records; without cluster_key it omits token hashes.
+func (c *Config) ClusterDigest(caFingerprint string, tenants []TenantRecord) string {
+	tenants = slices.Clone(tenants)
+	slices.SortFunc(tenants, func(a, b TenantRecord) int { return strings.Compare(a.Name, b.Name) })
 	if c.Mesh != nil {
 		if key, _ := c.Mesh.DecodedKey(); key != nil {
-			type auth struct{ Name, TokenSHA256 string }
-			auths := make([]auth, len(names))
-			for i, name := range names {
-				auths[i] = auth{name, tenants[name]}
-			}
-			raw, _ := utils.DigestJSON([]any{c.APIToken, c.PreviewSecret, caFingerprint, auths, c.CheckpointTTLHours})
+			raw, _ := utils.DigestJSON([]any{c.APIToken, c.PreviewSecret, caFingerprint, tenants, c.CheckpointTTLHours})
 			mac := hmac.New(sha256.New, key)
 			mac.Write(raw)
 			return hex.EncodeToString(mac.Sum(nil))
 		}
 	}
-	return utils.DigestHex([]any{caFingerprint, names, c.CheckpointTTLHours})
+	for i := range tenants {
+		tenants[i].TokenSHA256 = ""
+	}
+	return utils.DigestHex([]any{caFingerprint, tenants, c.CheckpointTTLHours})
 }
 
 func (c *Config) guardsEgressLane() bool {

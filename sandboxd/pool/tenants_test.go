@@ -187,7 +187,7 @@ func TestConcurrentTenantPutsKeepEveryTenant(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	if n := len(m.TenantNames()); n != 32 {
+	if n := len(m.TenantRecords()); n != 32 {
 		t.Errorf("%d tenants after 32 concurrent puts, want 32", n)
 	}
 }
@@ -200,6 +200,7 @@ func TestTenantChangesAreValidatedAndAudited(t *testing.T) {
 	}
 	for name, spec := range map[string]config.TenantSpec{
 		"bad name":     {Name: "-bad", Token: "x"},
+		"root scope":   {Name: types.TemplateRootScope, Token: "x"},
 		"no token":     {Name: "new"},
 		"root token":   {Name: "new", Token: "root"},
 		"reused token": {Name: "new", Token: "acme-tok"},
@@ -254,9 +255,9 @@ func tenantManager(t *testing.T, dir string, tenants ...config.TenantSpec) *Mana
 
 func setTenantCaps(t *testing.T, m *Manager, caps map[string]int) {
 	t.Helper()
-	records := make([]tenantRecord, 0, len(caps))
+	records := make([]config.TenantRecord, 0, len(caps))
 	for name, limit := range caps {
-		records = append(records, tenantRecord{Name: name, TokenSHA256: config.TokenSHA256("tok-" + name), MaxClaims: limit})
+		records = append(records, config.TenantRecord{Name: name, TokenSHA256: config.TokenSHA256("tok-" + name), MaxClaims: limit})
 	}
 	set, err := newTenantSet(records, "")
 	if err != nil {

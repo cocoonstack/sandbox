@@ -109,7 +109,6 @@ type Manager interface {
 	WakeAgentSocket(ctx context.Context, id, token string) (string, func(), error)
 	SetPools(ctx context.Context, pools []config.PoolSpec) error
 	TenantByToken(token string) (string, bool)
-	TenantNames() []string
 	Tenants() ([]pool.TenantInfo, string)
 	SetTenants(ctx context.Context, specs []config.TenantSpec) error
 	PutTenant(ctx context.Context, spec config.TenantSpec) error
@@ -408,14 +407,10 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 }
 
 func (s *Server) templateOwners(query func(string) []string, hash, tenant string) []string {
-	probes := []string{types.TemplateGossipHash(hash, tenant)}
 	if tenant == "" {
-		for _, name := range s.mgr.TenantNames() {
-			probes = append(probes, types.TemplateGossipHash(hash, name))
-		}
-	} else {
-		probes = append(probes, types.TemplateGossipHash(hash, ""))
+		return query(types.TemplateGossipHash(hash, types.TemplateRootScope))
 	}
+	probes := []string{types.TemplateGossipHash(hash, tenant), types.TemplateGossipHash(hash, "")}
 	var owners []string
 	for _, probe := range probes {
 		for _, owner := range query(probe) {

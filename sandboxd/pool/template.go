@@ -180,7 +180,8 @@ func (m *Manager) SetTemplateLabels(ctx context.Context, key types.PoolKey, labe
 func (m *Manager) TemplateHashes() []string {
 	var hashes []string
 	m.eachUnpooledTemplate(func(id string, t TemplateInfo) {
-		hashes = append(hashes, types.TemplateGossipHash(store.TemplateHash(id), t.Tenant))
+		hash := store.TemplateHash(id)
+		hashes = append(hashes, types.TemplateGossipHash(hash, t.Tenant), types.TemplateGossipHash(hash, types.TemplateRootScope))
 	})
 	slices.Sort(hashes)
 	return hashes

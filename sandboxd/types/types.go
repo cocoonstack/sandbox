@@ -50,7 +50,8 @@ const (
 	VMMRestartCold VMMRestart = "cold"
 	VMMRestartNone VMMRestart = "none"
 
-	MaxClaimVolumes = 8
+	MaxClaimVolumes   = 8
+	TemplateRootScope = "*"
 
 	// Also the guest `mount -o` option literals: renaming them changes the mount flags.
 	VolumeModeRO = "ro"
@@ -578,7 +579,7 @@ type Volume struct {
 // RW reports whether the entry asks for write access.
 func (v Volume) RW() bool { return v.Mode == VolumeModeRW }
 
-// TemplateGossipHash scopes a key hash to its owner so the tenant never travels the wire.
+// TemplateGossipHash scopes a key hash to its owner; TemplateRootScope covers every tenant.
 func TemplateGossipHash(keyHash, tenant string) string {
 	sum := sha256.Sum256([]byte(keyHash + "|" + tenant))
 	return hex.EncodeToString(sum[:16])
