@@ -26,6 +26,7 @@ pub async fn run<W: AsyncWrite + Unpin>(
             return proto::error_frame(w, kind, format!("connect {port}: {e}")).await;
         }
     };
+    let _ = stream.set_nodelay(true);
     proto::write_frame(w, &Response::Ready).await?;
 
     let (mut tr, tw) = stream.into_split();
