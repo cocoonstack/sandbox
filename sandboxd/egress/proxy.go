@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
@@ -31,8 +32,17 @@ var hopHeaders = []string{
 	"Proxy-Connection", "TE", "Trailer", "Transfer-Encoding", "Upgrade",
 }
 
-// DialFunc opens the upstream connection for a permitted request.
+// DialFunc opens the upstream connection for a permitted request; as a Router it sends every connection direct.
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+func (d DialFunc) Route() string { return "" }
+
+func (d DialFunc) Dial(ctx context.Context, _, network, addr string) (net.Conn, error) {
+	return d(ctx, network, addr)
+}
+
+// TransferFunc receives the payload bytes an allowed tunnel or request moved, once it ends.
+type TransferFunc func(ev Event, sent, received int64)
 
 // AuditFunc receives every egress decision the proxy takes.
 type AuditFunc func(Event)
@@ -48,25 +58,36 @@ type Holder interface {
 	Unhold()
 }
 
-// Event is one audited egress attempt; Injected names the credential, never its value.
+// Event is one audited egress attempt; Injected names the credential and Upstream the proxy host, never their secrets.
 type Event struct {
 	Method   string
 	Host     string
 	Port     uint16
 	Decision Decision
 	Injected string
+	Upstream string
+}
+
+type routeKey struct {
+	route string
+	mitm  bool
 }
 
 // Proxy is one sandbox's forward proxy, gated by Policy and audited per request.
 type Proxy struct {
-	policy  Evaluator
-	secrets Secrets
-	ca      *CA
-	audit   AuditFunc
-	dial    DialFunc
-	holder  Holder
-	tr      *http.Transport
-	mitmTr  *http.Transport
+	policy   Evaluator
+	secrets  Secrets
+	ca       *CA
+	audit    AuditFunc
+	transfer TransferFunc
+	router   Router
+	holder   Holder
+	tr       *http.Transport
+	mitmTr   *http.Transport
+
+	// routed pools each upstream's connections apart, so a route change never reuses another path's conn.
+	trMu   sync.Mutex
+	routed map[routeKey]*http.Transport
 
 	// leaves caches this sandbox's interception leaves; per-proxy, never shared.
 	leafMu sync.Mutex
@@ -78,18 +99,22 @@ type Proxy struct {
 	closed bool
 }
 
-// New builds a Proxy for one sandbox; secrets, ca, audit and holder may be nil, dial must not.
-func New(policy Evaluator, secrets Secrets, ca *CA, dial DialFunc, audit AuditFunc, holder Holder) *Proxy {
+// New builds a Proxy for one sandbox; secrets, ca, audit and holder may be nil, router must not.
+func New(policy Evaluator, secrets Secrets, ca *CA, router Router, audit AuditFunc, holder Holder) *Proxy {
+	direct := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return router.Dial(ctx, "", network, addr)
+	}
 	p := &Proxy{
 		policy:  policy,
 		secrets: secrets,
 		ca:      ca,
 		audit:   audit,
-		dial:    dial,
+		router:  router,
 		holder:  holder,
 		// the stdlib default of 2 idle conns per host re-dials bursty same-host traffic.
-		tr:    &http.Transport{DialContext: dial, MaxIdleConns: maxIdleConns, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout},
-		conns: map[net.Conn]struct{}{},
+		tr:     &http.Transport{DialContext: direct, MaxIdleConns: maxIdleConns, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout},
+		routed: map[routeKey]*http.Transport{},
+		conns:  map[net.Conn]struct{}{},
 	}
 	if ca != nil {
 		p.mitmTr = p.tr.Clone()
@@ -98,6 +123,9 @@ func New(policy Evaluator, secrets Secrets, ca *CA, dial DialFunc, audit AuditFu
 	}
 	return p
 }
+
+// OnTransfer reports every allowed tunnel's and request's payload bytes to f; call it before serving.
+func (p *Proxy) OnTransfer(f TransferFunc) { p.transfer = f }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer p.hold()()
@@ -121,6 +149,11 @@ func (p *Proxy) Close() {
 	p.tr.CloseIdleConnections()
 	if p.mitmTr != nil {
 		p.mitmTr.CloseIdleConnections()
+	}
+	p.trMu.Lock()
+	defer p.trMu.Unlock()
+	for _, tr := range p.routed {
+		tr.CloseIdleConnections()
 	}
 }
 
@@ -158,7 +191,9 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	decision, intercept := p.tunnelDecision(host, port)
-	p.record(Event{Method: r.Method, Host: host, Port: port, Decision: decision})
+	route := p.router.Route()
+	ev := Event{Method: r.Method, Host: host, Port: port, Decision: decision, Upstream: upstreamLabel(route)}
+	p.record(ev)
 	if intercept {
 		p.serveIntercept(w, r, host, port)
 		return
@@ -167,7 +202,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		denied(w, host)
 		return
 	}
-	upstream, err := p.dial(r.Context(), "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
+	upstream, err := p.router.Dial(r.Context(), route, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
 	if err != nil {
 		http.Error(w, "egress: upstream unreachable", http.StatusBadGateway)
 		return
@@ -190,7 +225,8 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}
-	splice(client, upstream)
+	sent, received := splice(client, upstream)
+	p.reportTransfer(ev, sent, received)
 }
 
 func (p *Proxy) tunnelDecision(host string, port uint16) (decision Decision, intercept bool) {
@@ -220,7 +256,9 @@ func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rule, decision := p.policy.Eval(host, r.Method, port)
-	p.relay(w, r, Event{Method: r.Method, Host: host, Port: port, Decision: decision}, rule, p.tr, nil)
+	route := p.router.Route()
+	ev := Event{Method: r.Method, Host: host, Port: port, Decision: decision, Upstream: upstreamLabel(route)}
+	p.relay(w, r, ev, rule, p.transport(route, false), nil)
 }
 
 func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rule, tr *http.Transport, prepare func(*http.Request)) {
@@ -239,6 +277,11 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	stripHop(out.Header)
 	ev.Injected = p.inject(rule, out.Header)
 	p.record(ev)
+	var body *countingBody
+	if p.transfer != nil && out.Body != nil && out.Body != http.NoBody {
+		body = &countingBody{ReadCloser: out.Body}
+		out.Body = body
+	}
 
 	resp, err := tr.RoundTrip(out)
 	if err != nil {
@@ -249,7 +292,43 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	maps.Copy(w.Header(), resp.Header)
 	stripHop(w.Header())
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	received, _ := io.Copy(w, resp.Body)
+	if p.transfer != nil {
+		var sent int64
+		if body != nil {
+			sent = body.n.Load()
+		}
+		p.transfer(ev, sent, received)
+	}
+}
+
+// transport returns the pool for route; the direct route keeps the base transports.
+func (p *Proxy) transport(route string, mitm bool) *http.Transport {
+	base := p.tr
+	if mitm {
+		base = p.mitmTr
+	}
+	if route == "" {
+		return base
+	}
+	p.trMu.Lock()
+	defer p.trMu.Unlock()
+	key := routeKey{route: route, mitm: mitm}
+	tr := p.routed[key]
+	if tr == nil {
+		tr = base.Clone()
+		tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return p.router.Dial(ctx, route, network, addr)
+		}
+		p.routed[key] = tr
+	}
+	return tr
+}
+
+func (p *Proxy) reportTransfer(ev Event, sent, received int64) {
+	if p.transfer != nil {
+		p.transfer(ev, sent, received)
+	}
 }
 
 // inject sets the rule's secret header, overwriting any guest-supplied value.
@@ -271,6 +350,18 @@ func (p *Proxy) record(ev Event) {
 	}
 }
 
+// countingBody counts the request body bytes the transport reads, possibly after RoundTrip returns.
+type countingBody struct {
+	io.ReadCloser
+	n atomic.Int64
+}
+
+func (c *countingBody) Read(b []byte) (int, error) {
+	n, err := c.ReadCloser.Read(b)
+	c.n.Add(int64(n))
+	return n, err
+}
+
 func stripHop(h http.Header) {
 	// Connection may name additional hop headers this hop must consume.
 	for _, v := range h.Values("Connection") {
@@ -285,17 +376,25 @@ func stripHop(h http.Header) {
 	}
 }
 
-// splice copies both ways until either side ends, half-closing the peer so EOF propagates.
-func splice(a, b net.Conn) {
+// splice copies both ways until either side ends, half-closing the peer so EOF propagates; it returns the bytes a sent to b and b sent to a.
+func splice(a, b net.Conn) (aToB, bToA int64) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = io.Copy(a, b)
+		bToA, _ = io.Copy(a, b)
 		utils.CloseWrite(a)
 	}()
-	_, _ = io.Copy(b, a)
+	aToB, _ = io.Copy(b, a)
 	utils.CloseWrite(b)
 	<-done
+	return aToB, bToA
+}
+
+func upstreamLabel(route string) string {
+	if route == "" {
+		return ""
+	}
+	return UpstreamHost(route)
 }
 
 func denied(w http.ResponseWriter, host string) {
