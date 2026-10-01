@@ -17,10 +17,10 @@ type InternalAllow struct {
 // ParseInternalAllow reads "prefix" or "prefix:port,port"; the colon after the prefix length is unambiguous in both families.
 func ParseInternalAllow(s string) (InternalAllow, error) {
 	cidr, list, scoped := s, "", false
-	if slash := strings.LastIndexByte(s, '/'); slash >= 0 {
+	if addr, rest, ok := strings.CutLast(s, "/"); ok {
 		var bits string
-		bits, list, scoped = strings.Cut(s[slash:], ":")
-		cidr = s[:slash] + bits
+		bits, list, scoped = strings.Cut(rest, ":")
+		cidr = addr + "/" + bits
 	}
 	p, err := netip.ParsePrefix(cidr)
 	if err != nil {

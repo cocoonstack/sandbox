@@ -92,7 +92,7 @@ func New(ctx context.Context, cfg Config, stagingRoot string, idRe *regexp.Regex
 	}
 	client := awss3.NewFromConfig(awsCfg, func(o *awss3.Options) {
 		if cfg.Endpoint != "" {
-			o.BaseEndpoint = aws.String(cfg.Endpoint)
+			o.BaseEndpoint = new(cfg.Endpoint)
 		}
 		o.UsePathStyle = cfg.ForcePathStyle
 	})
@@ -152,7 +152,7 @@ func (s *Store) Metas(ctx context.Context) ([]store.Record, error) {
 	// delimiter listing yields one CommonPrefix per record instead of every export object.
 	var ids []string
 	p := awss3.NewListObjectsV2Paginator(s.client, &awss3.ListObjectsV2Input{
-		Bucket: &s.bucket, Prefix: &s.prefix, Delimiter: aws.String("/"),
+		Bucket: &s.bucket, Prefix: &s.prefix, Delimiter: new("/"),
 	})
 	for p.HasMorePages() {
 		page, err := p.NextPage(ctx)
@@ -417,7 +417,7 @@ func (s *Store) uploadReader(ctx context.Context, key string, body io.Reader, si
 		Bucket:        &s.bucket,
 		Key:           &key,
 		Body:          body,
-		ContentLength: aws.Int64(size),
+		ContentLength: new(size),
 		Metadata:      metadata,
 	}
 	if _, err := s.tm.UploadObject(ctx, input); err != nil {
@@ -450,7 +450,7 @@ func (s *Store) deleteKeys(ctx context.Context, keys []string) error {
 		}
 		out, err := s.client.DeleteObjects(ctx, &awss3.DeleteObjectsInput{
 			Bucket: &s.bucket,
-			Delete: &s3types.Delete{Objects: objs, Quiet: aws.Bool(true)},
+			Delete: &s3types.Delete{Objects: objs, Quiet: new(true)},
 		})
 		if err != nil {
 			return fmt.Errorf("delete %d objects: %w", len(chunk), err)

@@ -213,10 +213,7 @@ func (t *auditTee) take(b []byte) {
 	if t.skip {
 		return
 	}
-	if room := pool.AuditLineCap + 1 - len(t.buf); len(b) > room {
-		b = b[:room]
-	}
-	t.buf = append(t.buf, b...)
+	t.buf = append(t.buf, b[:min(len(b), pool.AuditLineCap+1-len(t.buf))]...)
 	if len(t.buf) <= pool.AuditLineCap {
 		return
 	}
