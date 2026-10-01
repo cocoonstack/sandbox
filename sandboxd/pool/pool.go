@@ -314,6 +314,11 @@ type Manager struct {
 	// egressTaps holds the nft-locked egress-lane tap per sandbox id; guarded by m.mu.
 	egressTaps map[string]string
 
+	view atomic.Pointer[configView]
+	// cfg is the config the view was built from; reloadMu orders reloads, the only writers of cfg and view.
+	cfg      *config.Config
+	reloadMu sync.Mutex
+
 	maxClaims    int
 	releaseDelay time.Duration
 	draining     bool // guarded by m.mu; deliberately not persisted
@@ -325,14 +330,10 @@ type Manager struct {
 	rootSum    string
 	onTenants  func()
 	tenantLive map[string]int
-	view       atomic.Pointer[configView]
-	// cfg is the config the view was built from; reloadMu orders reloads, the only writers of cfg and view.
-	cfg      *config.Config
-	reloadMu sync.Mutex
-	usage    *journal
-	audit    *journal
-	counters counters
-	ckpts    store.Store
+	usage      *journal
+	audit      *journal
+	counters   counters
+	ckpts      store.Store
 	// A cluster-wide backend makes heal and the delete broadcast no-ops
 	ckptsShared bool
 	healer      *peer.Healer

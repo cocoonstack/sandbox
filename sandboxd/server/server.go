@@ -145,6 +145,9 @@ type CheckpointProber interface {
 	Forget(id string)
 }
 
+// ConfigReloader re-reads the node config and applies its reloadable settings.
+type ConfigReloader func(ctx context.Context) (pool.ReloadResult, error)
+
 // InfoResponse is the wire reply of GET /v1/info.
 type InfoResponse struct {
 	Pools            []pool.PoolInfo     `json:"pools"`
@@ -179,9 +182,6 @@ type SandboxEnv struct {
 type SandboxEnvPatch struct {
 	Env types.EnvPatch `json:"env"`
 }
-
-// ConfigReloader re-reads the node config and applies its reloadable settings.
-type ConfigReloader func(ctx context.Context) (pool.ReloadResult, error)
 
 // TenantsRequest is the wire body of PUT /v1/tenants: the whole tenant set, an entry without a token keeping that tenant's.
 type TenantsRequest struct {
