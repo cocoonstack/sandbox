@@ -90,6 +90,29 @@ func TestInterceptInjectsSecretIntoHTTPS(t *testing.T) {
 	}
 }
 
+func TestInterceptKeepsAClientHelloSentBeforeThe200(t *testing.T) {
+	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Methods: []string{"GET"}, Intercept: true}, nil)
+	p.mitmTr.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	raw, err := net.Dial("tcp", front.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer func() { _ = raw.Close() }()
+	_ = raw.SetDeadline(time.Now().Add(5 * time.Second))
+	tc := tls.Client(&earlyConn{Conn: raw, preamble: "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"}, &tls.Config{ServerName: "example.com", RootCAs: guestRoots})
+	if err := tc.Handshake(); err != nil {
+		t.Fatalf("handshake with the ClientHello sent alongside CONNECT: %v", err)
+	}
+	resp := roundTripTLS(t, tc, http.MethodGet)
+	defer func() { _ = resp.Body.Close() }()
+	if body, _ := io.ReadAll(resp.Body); resp.StatusCode != http.StatusOK || string(body) != "hello" {
+		t.Errorf("got %d %q, want 200 hello", resp.StatusCode, body)
+	}
+}
+
 func TestInterceptBindsInnerRequestToInterceptRule(t *testing.T) {
 	policy := Policy{Allow: []Rule{
 		{Host: "*.example.com"},
@@ -331,4 +354,36 @@ func readPreamble(tb testing.TB, conn net.Conn) string {
 		}
 	}
 	return sb.String()
+}
+
+type earlyConn struct {
+	net.Conn
+	preamble string
+	answered bool
+}
+
+func (c *earlyConn) Write(b []byte) (int, error) {
+	if c.preamble == "" {
+		return c.Conn.Write(b)
+	}
+	if _, err := io.WriteString(c.Conn, c.preamble+string(b)); err != nil {
+		return 0, err
+	}
+	c.preamble = ""
+	return len(b), nil
+}
+
+func (c *earlyConn) Read(b []byte) (int, error) {
+	if !c.answered {
+		var reply strings.Builder
+		var one [1]byte
+		for !strings.HasSuffix(reply.String(), "\r\n\r\n") {
+			if _, err := io.ReadFull(c.Conn, one[:]); err != nil {
+				return 0, err
+			}
+			reply.WriteByte(one[0])
+		}
+		c.answered = true
+	}
+	return c.Conn.Read(b)
 }

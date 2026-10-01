@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"bufio"
 	"cmp"
 	"context"
 	"crypto/tls"
@@ -216,7 +217,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer p.untrack(upstream)
-	client, _, err := http.NewResponseController(w).Hijack()
+	client, brw, err := http.NewResponseController(w).Hijack()
 	if err != nil {
 		http.Error(w, "egress: connection cannot be hijacked", http.StatusInternalServerError)
 		return
@@ -226,11 +227,16 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer p.untrack(client)
-	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+	if _, err = io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+		return
+	}
+	early, err := flushBuffered(brw.Reader, upstream)
+	if err != nil {
+		p.reportTransfer(ev, early, 0)
 		return
 	}
 	sent, received := splice(client, upstream)
-	p.reportTransfer(ev, sent, received)
+	p.reportTransfer(ev, early+sent, received)
 }
 
 func (p *Proxy) tunnelDecision(host string, port uint16) (decision Decision, intercept bool) {
@@ -384,6 +390,18 @@ func (c *countingBody) Read(b []byte) (int, error) {
 	return n, err
 }
 
+type bufferedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *bufferedConn) Read(b []byte) (int, error) {
+	if c.r.Buffered() > 0 {
+		return c.r.Read(b)
+	}
+	return c.Conn.Read(b)
+}
+
 func stripHop(h http.Header) {
 	// Connection may name additional hop headers this hop must consume.
 	for _, v := range h.Values("Connection") {
@@ -410,6 +428,22 @@ func splice(a, b net.Conn) (aToB, bToA int64) {
 	aToB, _ = io.Copy(b, ra)
 	utils.CloseWrite(b)
 	return aToB, <-done
+}
+
+func flushBuffered(r *bufio.Reader, w io.Writer) (int64, error) {
+	if r.Buffered() == 0 {
+		return 0, nil
+	}
+	b, _ := r.Peek(r.Buffered())
+	n, err := w.Write(b)
+	return int64(n), err
+}
+
+func withBuffered(c net.Conn, r *bufio.Reader) net.Conn {
+	if r.Buffered() == 0 {
+		return c
+	}
+	return &bufferedConn{Conn: c, r: r}
 }
 
 func spliceable(c net.Conn) net.Conn {
