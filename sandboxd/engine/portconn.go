@@ -94,11 +94,11 @@ func (g *guestPortConn) readFrame() ([]byte, error) {
 	}
 	long := bytes.Clone(line)
 	for errors.Is(err, bufio.ErrBufferFull) {
+		line, err = g.r.ReadSlice('\n')
+		long = append(long, line...)
 		if len(long) > wire.MaxFrame {
 			return nil, fmt.Errorf("port frame exceeds %d bytes", wire.MaxFrame)
 		}
-		line, err = g.r.ReadSlice('\n')
-		long = append(long, line...)
 	}
 	return long, err
 }

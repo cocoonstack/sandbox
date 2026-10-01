@@ -127,14 +127,18 @@ func TestPortReadBufHoldsOneBulkFrame(t *testing.T) {
 }
 
 func TestGuestPortConnRefusesAFrameOverMaxFrame(t *testing.T) {
-	silk, gc := newTestGuestPortConn(t)
+	for name, tail := range map[string]string{"unterminated": "", "terminated": "\n"} {
+		t.Run(name, func(t *testing.T) {
+			silk, gc := newTestGuestPortConn(t)
 
-	go func() {
-		_, _ = silk.Write(bytes.Repeat([]byte("a"), wire.MaxFrame+portReadBuf))
-		_ = silk.Close()
-	}()
-	if _, err := gc.Read(make([]byte, 64)); err == nil || !strings.Contains(err.Error(), "exceeds") {
-		t.Fatalf("unterminated %d-byte frame: %v, want a frame size error", wire.MaxFrame+portReadBuf, err)
+			go func() {
+				_, _ = silk.Write(append(bytes.Repeat([]byte("a"), wire.MaxFrame+1), tail...))
+				_ = silk.Close()
+			}()
+			if _, err := gc.Read(make([]byte, 64)); err == nil || !strings.Contains(err.Error(), "exceeds") {
+				t.Fatalf("oversized frame: %v, want a frame size error", err)
+			}
+		})
 	}
 }
 

@@ -50,7 +50,7 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		m.mu.Unlock()
 		return ErrUnknownSandbox
 	}
-	prev, sock := sb.Env, sb.VsockSocket
+	prev, sock, failed := sb.Env, sb.VsockSocket, sb.Failed != ""
 	env, resend := next(prev)
 	if len(env) == 0 {
 		env = nil
@@ -60,10 +60,10 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		return fmt.Errorf("%w: %w", ErrBadEnv, err)
 	}
 	changed := !env.SameGuest(prev)
-	paused := !locked || sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "" || sb.Failed != ""
+	paused := !locked || sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "" || failed
 	if changed && paused {
 		m.mu.Unlock()
-		if sb.Failed != "" {
+		if failed {
 			return ErrFailed
 		}
 		return ErrPaused

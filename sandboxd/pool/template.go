@@ -69,7 +69,7 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 		return types.PoolKey{}, "", fmt.Errorf("stage template: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
-	_, guestEnv, err := m.exportSource(ctx, sb, filepath.Join(staging, store.ExportDir))
+	_, vmName, guestEnv, err := m.exportSource(ctx, sb, filepath.Join(staging, store.ExportDir))
 	if err != nil {
 		return types.PoolKey{}, "", fmt.Errorf("promote %s: %w", sb.ID, err)
 	}
@@ -85,7 +85,7 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 		m.notifyTemplates()
 	}
 	m.counters.promotes.Add(1)
-	m.recordUsage(ctx, usageEvent{Event: "promote", ID: sb.ID, VMName: sb.VMName, Reference: key.Template})
+	m.recordUsage(ctx, usageEvent{Event: "promote", ID: sb.ID, VMName: vmName, Reference: key.Template})
 	return key, digest, nil
 }
 
