@@ -232,6 +232,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	early, err := flushBuffered(brw.Reader, upstream)
 	if err != nil {
+		p.reportTransfer(ev, early, 0)
 		return
 	}
 	sent, received := splice(client, upstream)

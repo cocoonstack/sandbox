@@ -3,6 +3,7 @@ package egress
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -287,6 +288,36 @@ func TestConnectForwardsBytesTheGuestSentBeforeThe200(t *testing.T) {
 	_, _ = io.Copy(io.Discard, br)
 	if tx := <-sent; tx != 5 {
 		t.Errorf("transfer counted %d guest bytes, want the 5 early ones", tx)
+	}
+}
+
+func TestConnectCountsTheEarlyBytesAShortWriteSent(t *testing.T) {
+	dial := DialFunc(func(context.Context, string, string) (net.Conn, error) {
+		client, server := net.Pipe()
+		go func() { _, _ = io.Copy(io.Discard, server) }()
+		return shortWriteConn{client}, nil
+	})
+	p := New(Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, nil, dial, nil, nil)
+	sent := make(chan int64, 1)
+	p.OnTransfer(func(_ Event, tx, _ int64) { sent <- tx })
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	conn, err := net.Dial("tcp", front.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := io.WriteString(conn, "CONNECT echo.internal:443 HTTP/1.1\r\nHost: echo.internal:443\r\n\r\nearly"); err != nil {
+		t.Fatalf("write CONNECT with early data: %v", err)
+	}
+	select {
+	case tx := <-sent:
+		if tx != 2 {
+			t.Errorf("transfer counted %d guest bytes, want the 2 the upstream took", tx)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a failed early write reported no transfer")
 	}
 }
 
@@ -607,4 +638,11 @@ func waitHolds(t *testing.T, held *holdCounter, want int32) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+type shortWriteConn struct{ net.Conn }
+
+func (c shortWriteConn) Write(b []byte) (int, error) {
+	n, _ := c.Conn.Write(b[:min(2, len(b))])
+	return n, errors.New("connection reset")
 }
