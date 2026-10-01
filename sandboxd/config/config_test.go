@@ -201,6 +201,8 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"preview advertise names no host", `{"preview_listen":"127.0.0.1:8443","preview_secret":"s","preview_advertise":"https://:8443","pools":[]}`, "routable host"},
 		{"preview advertise unspecified bare host", `{"preview_listen":"127.0.0.1:8443","preview_secret":"s","preview_advertise":"0.0.0.0","pools":[]}`, "routable host"},
 		{"preview advertise unspecified bare ipv6", `{"preview_listen":"127.0.0.1:8443","preview_secret":"s","preview_advertise":"[::]","pools":[]}`, "routable host"},
+		{"internal allow port out of range", `{"egress_internal_allow":["10.8.0.1/32:70000"],"pools":[]}`, `egress_internal_allow "10.8.0.1/32:70000"`},
+		{"internal allow empty port", `{"egress_internal_allow":["fdc8::/16:"],"pools":[]}`, `egress_internal_allow "fdc8::/16:"`},
 		{"duplicate volume path", `{"pools":[],"volumes":[{"name":"models","path":"/srv/models.img"},{"name":"models-rw","path":"/srv/models.img","writable":true}]}`, "shares its path"},
 		{"bad volume name", `{"pools":[],"volumes":[{"name":"ImageNet","path":"/srv/datasets/a.img"}]}`, "volume name"},
 		{"reserved volume name", `{"pools":[],"volumes":[{"name":"cocoon-data","path":"/srv/datasets/a.img"}]}`, "not start with cocoon-"},

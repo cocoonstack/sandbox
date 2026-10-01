@@ -570,7 +570,7 @@ func TestEgressLaneCannotForkOrCheckpoint(t *testing.T) {
 }
 
 func TestEgressDialerAdmitsOnlyNamedInternalPrefixes(t *testing.T) {
-	d := newEgressDialer(parsePrefixes([]string{"fdc8::/16", "10.8.0.0/16"}))
+	d := newEgressDialer(parseInternalAllow([]string{"fdc8::/16", "10.8.0.0/16"}))
 	check := func(addr string) error {
 		return d.Control("tcp", addr, nil)
 	}
@@ -603,7 +603,7 @@ func TestEgressDialerAdmitsOnlyNamedInternalPrefixes(t *testing.T) {
 }
 
 func TestEgressDialerWildcardAllowsEverything(t *testing.T) {
-	d := newEgressDialer(parsePrefixes([]string{"0.0.0.0/0", "::/0"}))
+	d := newEgressDialer(parseInternalAllow([]string{"0.0.0.0/0", "::/0"}))
 	for _, addr := range []string{
 		"93.184.216.34:443",
 		"[fdc8:17:9:200f::1]:443",
@@ -615,6 +615,36 @@ func TestEgressDialerWildcardAllowsEverything(t *testing.T) {
 		if err := d.Control("tcp", addr, nil); err != nil {
 			t.Errorf("%s blocked under a wildcard allow-list: %v", addr, err)
 		}
+	}
+}
+
+func TestEgressDialerScopesInternalAllowToPorts(t *testing.T) {
+	d := newEgressDialer(parseInternalAllow([]string{"10.8.0.1/32:18090,9000", "fdc8::/16:443", "10.9.0.0/16"}))
+	for name, tc := range map[string]struct {
+		addr    string
+		allowed bool
+	}{
+		"listed v4 port":        {"10.8.0.1:18090", true},
+		"second listed v4 port": {"10.8.0.1:9000", true},
+		"listed v6 port":        {"[fdc8:17:9:200f::1]:443", true},
+		"bare prefix any port":  {"10.9.3.4:22", true},
+		"NAT64 listed port":     {"[64:ff9b::a08:1]:18090", true},
+
+		"unlisted v4 port":   {"10.8.0.1:22", false},
+		"kubelet":            {"10.8.0.1:10250", false},
+		"unlisted v6 port":   {"[fdc8:17:9:200f::1]:22", false},
+		"NAT64 unlisted":     {"[64:ff9b::a08:1]:6443", false},
+		"outside the prefix": {"10.8.0.2:18090", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := d.Control("tcp", tc.addr, nil)
+			if tc.allowed && err != nil {
+				t.Errorf("%s was blocked: %v", tc.addr, err)
+			}
+			if !tc.allowed && (err == nil || !strings.Contains(err.Error(), "blocked internal address")) {
+				t.Errorf("%s: %v, want blocked internal address", tc.addr, err)
+			}
+		})
 	}
 }
 

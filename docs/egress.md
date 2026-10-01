@@ -111,8 +111,15 @@ sibling VM.
 whose sandboxes legitimately need internal services:
 
 ```jsonc
-{ "egress_internal_allow": ["10.8.0.0/16", "fdc8::/16"] }
+{ "egress_internal_allow": ["10.8.0.1/32:18090,9000", "fdc8::/16"] }
 ```
+
+An entry is a CIDR prefix, optionally followed by `:` and a comma-separated port
+list; the same form covers both families (`fdc8::1/128:443`), since the colon
+after the prefix length cannot be part of the address. A bare prefix admits
+every port. Prefer the port form: with a bare prefix plus a `*` rule, a guest
+reaches every port on the address — the node's sshd, the kubelet, the
+Kubernetes API, and anything that listens there later.
 
 It is node-wide (every pool and tenant on the node gets the same re-admission)
 and checked after the well-known `64:ff9b::/96` unwrap, so an IPv4 embedded in
