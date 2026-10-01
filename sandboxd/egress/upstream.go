@@ -64,6 +64,45 @@ func (a UpstreamAllow) Allows(u *url.URL) bool {
 	return slices.Contains(a.hosts, strings.ToLower(host))
 }
 
+type upstreamConn struct {
+	net.Conn
+	reader *bufio.Reader
+	host   string
+}
+
+func (c *upstreamConn) Read(b []byte) (int, error) {
+	if c.reader != nil {
+		return c.reader.Read(b)
+	}
+	return c.Conn.Read(b)
+}
+
+func (c *upstreamConn) ReadFrom(r io.Reader) (int64, error) {
+	return io.Copy(c.Conn, r)
+}
+
+func (c *upstreamConn) WriteTo(w io.Writer) (int64, error) {
+	var n int64
+	if c.reader != nil && c.reader.Buffered() > 0 {
+		buffered, _ := c.reader.Peek(c.reader.Buffered())
+		m, err := w.Write(buffered)
+		n = int64(m)
+		_, _ = c.reader.Discard(m)
+		if err != nil {
+			return n, err
+		}
+	}
+	m, err := io.Copy(w, c.Conn)
+	return n + m, err
+}
+
+func (c *upstreamConn) CloseWrite() error {
+	if conn, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return conn.CloseWrite()
+	}
+	return nil
+}
+
 // ParseUpstream reads an upstream proxy URL, http:// (CONNECT) or socks5://, with optional user:pass and a required port.
 func ParseUpstream(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
@@ -103,45 +142,6 @@ func DialUpstream(ctx context.Context, u *url.URL, target string, dial DialFunc)
 		return nil, err
 	}
 	return &upstreamConn{Conn: conn, reader: reader, host: u.Host}, nil
-}
-
-type upstreamConn struct {
-	net.Conn
-	reader *bufio.Reader
-	host   string
-}
-
-func (c *upstreamConn) Read(b []byte) (int, error) {
-	if c.reader != nil {
-		return c.reader.Read(b)
-	}
-	return c.Conn.Read(b)
-}
-
-func (c *upstreamConn) ReadFrom(r io.Reader) (int64, error) {
-	return io.Copy(c.Conn, r)
-}
-
-func (c *upstreamConn) WriteTo(w io.Writer) (int64, error) {
-	var n int64
-	if c.reader != nil && c.reader.Buffered() > 0 {
-		buffered, _ := c.reader.Peek(c.reader.Buffered())
-		m, err := w.Write(buffered)
-		n = int64(m)
-		_, _ = c.reader.Discard(m)
-		if err != nil {
-			return n, err
-		}
-	}
-	m, err := io.Copy(w, c.Conn)
-	return n + m, err
-}
-
-func (c *upstreamConn) CloseWrite() error {
-	if conn, ok := c.Conn.(interface{ CloseWrite() error }); ok {
-		return conn.CloseWrite()
-	}
-	return nil
 }
 
 func upstreamHost(conn net.Conn) string {
