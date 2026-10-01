@@ -8,7 +8,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from cocoonsandbox import Client, Sandbox, SandboxError
+from cocoonsandbox import APIError, Client, Sandbox, SandboxError
 from langchain_core.tools import StructuredTool, ToolException
 from pydantic import BaseModel, Field
 
@@ -55,7 +55,11 @@ class CocoonToolkit:
         return self
 
     def __exit__(self, *exc: object) -> None:
-        self.close()
+        try:
+            self.close()
+        except APIError:
+            if exc[0] is None:
+                raise
 
     def get_tools(self) -> list[StructuredTool]:
         """The sandbox tool set; sync-native (_run), async via to_thread."""
