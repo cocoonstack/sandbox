@@ -1,6 +1,4 @@
-// Package pool owns a node's warm pools and claimed sandboxes: refill keeps
-// every configured pool topped up with claim-ready VMs (cloned, reseeded,
-// probed), so a claim is ownership transfer only.
+// Package pool owns a node's warm pools and claimed sandboxes; refill keeps pools claim-ready, so a claim is ownership transfer only.
 package pool
 
 import (

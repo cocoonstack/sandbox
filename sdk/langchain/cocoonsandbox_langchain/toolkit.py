@@ -1,7 +1,4 @@
-"""LangChain toolkit over cocoon microVM sandboxes: one claimed sandbox
-behind a set of StructuredTools (exec, file read/write, list). The claim is
-lazy — building an agent costs nothing until a tool actually runs — and the
-toolkit is a context manager whose exit releases the sandbox."""
+"""LangChain toolkit: one lazily claimed cocoon sandbox behind StructuredTools, released when the context exits."""
 
 from __future__ import annotations
 
