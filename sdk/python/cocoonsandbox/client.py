@@ -5,12 +5,11 @@ from __future__ import annotations
 import http.client
 import json
 import queue
+import select
 import ssl
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, TypeVar, cast
 
@@ -23,6 +22,7 @@ from .sandbox import Sandbox
 T = TypeVar("T")
 
 _PEERS_TIMEOUT = 5.0
+_IDLE_CONNS = 8
 
 
 class Client:
@@ -47,7 +47,8 @@ class Client:
         self._ssl_context = ssl_context
         if ssl_context is not None:
             ssl_context.set_alpn_protocols(["http/1.1"])
-        self._opener: urllib.request.OpenerDirector | None = None
+        self._idle: dict[tuple[str, str], list[tuple[http.client.HTTPConnection, float]]] = {}
+        self._idle_lock = threading.Lock()
         self.api_token = api_token
         self.timeout = timeout
         self.keep_alive = keep_alive
@@ -200,27 +201,19 @@ class Client:
     ) -> dict[str, Any]:
         timeout = remaining_timeout(timeout or self.timeout, deadline, verb)
         data = json.dumps(body).encode() if body is not None else None
-        url = addr + path if "://" in addr else f"{self._scheme}://{addr}{path}"
-        req = urllib.request.Request(url, data=data, method=method)
-        if data is not None:
-            req.add_header("Content-Type", "application/json")
+        url = urllib.parse.urlsplit(addr + path if "://" in addr else f"{self._scheme}://{addr}{path}")
+        headers = {"Content-Type": "application/json"} if data is not None else {}
         token = bearer or self.api_token
         if token:
-            req.add_header("Authorization", f"Bearer {token}")
+            headers["Authorization"] = f"Bearer {token}"
         try:
-            with self._open(req, timeout) as resp:
-                raw = resp.read()
-        except urllib.error.HTTPError as exc:
-            try:
-                detail = _error_message(exc.read())
-            except (OSError, http.client.HTTPException) as read_exc:
-                detail = str(read_exc)
-            raise APIError(verb, exc.code, detail) from None
-        except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+            status, raw = self._roundtrip(url, method, data, headers, timeout)
+        except (OSError, http.client.HTTPException) as exc:
             if deadline is not None and time.monotonic() >= deadline:
                 raise SandboxTimeout(f"{verb} timed out") from None
-            detail = str(exc.reason) if isinstance(exc, urllib.error.URLError) else str(exc)
-            raise APIError(verb, 0, detail) from None
+            raise APIError(verb, 0, str(exc)) from None
+        if status >= 400:
+            raise APIError(verb, status, _error_message(raw))
         if not raw:
             return {}
         try:
@@ -233,18 +226,63 @@ class Client:
         context = self._tls() if origin.startswith("https://") else None
         return dial_agent(origin, sandbox_id, token, self.timeout, deadline, ssl_context=context)
 
-    def _open(self, req: urllib.request.Request, timeout: float) -> Any:
-        if req.type != "https":
-            return urllib.request.urlopen(req, timeout=timeout)
-        if self._opener is None:
-            self._opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=self._tls()))
-        return self._opener.open(req, timeout=timeout)
+    def _roundtrip(
+        self, url: urllib.parse.SplitResult, method: str, data: bytes | None, headers: dict[str, str], timeout: float
+    ) -> tuple[int, bytes]:
+        key = (url.scheme, url.netloc)
+        conn = self._take(key, timeout)
+        status = 0
+        try:
+            conn.request(method, url.path + (f"?{url.query}" if url.query else ""), body=data, headers=headers)
+            resp = conn.getresponse()
+            status = resp.status
+            raw = resp.read()
+        except (OSError, http.client.HTTPException) as exc:
+            conn.close()
+            if status < 400:
+                raise
+            return status, str(exc).encode()
+        except BaseException:
+            conn.close()
+            raise
+        with self._idle_lock:
+            idle = self._idle.setdefault(key, [])
+            if resp.will_close or not self.keep_alive or len(idle) >= _IDLE_CONNS:
+                conn.close()
+            else:
+                idle.append((conn, time.monotonic()))
+        return resp.status, raw
+
+    def _take(self, key: tuple[str, str], timeout: float) -> http.client.HTTPConnection:
+        """Reuses a parked connection the node has not closed within keep_alive, else dials."""
+        with self._idle_lock:
+            idle = self._idle.get(key, [])
+            while idle:
+                conn, parked = idle.pop()
+                if time.monotonic() - parked < self.keep_alive and _quiet(conn.sock):
+                    conn.sock.settimeout(timeout)
+                    return conn
+                conn.close()
+        scheme, netloc = key
+        if scheme == "https":
+            return http.client.HTTPSConnection(netloc, timeout=timeout, context=self._tls())
+        return http.client.HTTPConnection(netloc, timeout=timeout)
 
     def _tls(self) -> ssl.SSLContext:
         if self._ssl_context is None:
             self._ssl_context = ssl.create_default_context()
             self._ssl_context.set_alpn_protocols(["http/1.1"])
         return self._ssl_context
+
+
+def _quiet(sock: Any) -> bool:
+    if sock is None:
+        return False
+    try:
+        readable, _, _ = select.select([sock], [], [], 0)
+    except (OSError, ValueError):
+        return False
+    return not readable
 
 
 def _claim_body(
