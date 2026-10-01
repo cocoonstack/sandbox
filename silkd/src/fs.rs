@@ -26,9 +26,8 @@ where
     W: AsyncWrite + Unpin,
 {
     let path = Path::new(&path);
-    let tmp = tmp_name(path);
-    let mut file = match fs::File::create(&tmp).await {
-        Ok(f) => f,
+    let (tmp, mut file) = match create_tmp(path, mode).await {
+        Ok(created) => created,
         Err(e) => return err_frame(w, &e, "create").await,
     };
 
@@ -42,7 +41,7 @@ where
         let _ = fs::remove_file(&tmp).await;
         return proto::write_feed_error(w, fail).await;
     }
-    if let Err(e) = commit_tmp(&tmp, path, mode).await {
+    if let Err(e) = commit_tmp(&tmp, path).await {
         return err_frame(w, &e, "commit").await;
     }
     proto::write_frame(w, &Response::Done).await
@@ -100,12 +99,17 @@ pub async fn list<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
 
 /// Writes `bytes` to `path` via a sibling temp file, so a crash never leaves a truncated file.
 pub async fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let tmp = tmp_name(path);
-    if let Err(e) = fs::write(&tmp, bytes).await {
+    let (tmp, mut file) = create_tmp(path, None).await?;
+    let written = match file.write_all(bytes).await {
+        Ok(()) => file.flush().await,
+        Err(e) => Err(e),
+    };
+    drop(file);
+    if let Err(e) = written {
         let _ = fs::remove_file(&tmp).await;
         return Err(e);
     }
-    commit_tmp(&tmp, path, None).await
+    commit_tmp(&tmp, path).await
 }
 
 /// Reports metadata for `path` (following symlinks).
@@ -208,22 +212,35 @@ fn tmp_name(path: &Path) -> PathBuf {
     PathBuf::from(tmp)
 }
 
-/// Commits a temp file over `path`; without an explicit mode an overwrite inherits the destination's bits.
-async fn commit_tmp(tmp: &Path, path: &Path, mode: Option<u32>) -> io::Result<()> {
-    let outcome = async {
-        let effective = match mode {
-            Some(m) => Some(m),
-            None => fs::metadata(path)
-                .await
-                .ok()
-                .map(|meta| meta.permissions().mode() & 0o7777),
-        };
-        if let Some(m) = effective {
-            fs::set_permissions(tmp, std::fs::Permissions::from_mode(m)).await?;
-        }
-        fs::rename(tmp, path).await
+/// Creates the temp file exclusively under its final mode; without an explicit mode an overwrite inherits the destination's bits.
+async fn create_tmp(path: &Path, mode: Option<u32>) -> io::Result<(PathBuf, fs::File)> {
+    let effective = match mode {
+        Some(m) => Some(m),
+        None => fs::metadata(path)
+            .await
+            .ok()
+            .map(|meta| meta.permissions().mode() & 0o7777),
+    };
+    let tmp = tmp_name(path);
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(effective.unwrap_or(0o666))
+        .open(&tmp)
+        .await?;
+    if let Some(m) = effective
+        && let Err(e) = file
+            .set_permissions(std::fs::Permissions::from_mode(m))
+            .await
+    {
+        let _ = fs::remove_file(&tmp).await;
+        return Err(e);
     }
-    .await;
+    Ok((tmp, file))
+}
+
+async fn commit_tmp(tmp: &Path, path: &Path) -> io::Result<()> {
+    let outcome = fs::rename(tmp, path).await;
     if outcome.is_err() {
         let _ = fs::remove_file(tmp).await;
     }
@@ -240,5 +257,41 @@ fn file_kind(meta: &std::fs::Metadata) -> FileKind {
         FileKind::File
     } else {
         FileKind::Other
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn write_atomic_refuses_a_planted_temp_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "original").unwrap();
+        let target = dir.path().join("x");
+        let next: u64 = crate::sysutil::tmp_suffix()
+            .rsplit('-')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        for seq in next + 1..next + 1000 {
+            let name = format!("x.silkd-{}-{seq}.tmp", std::process::id());
+            std::os::unix::fs::symlink(&victim, dir.path().join(name)).unwrap();
+        }
+        let err = write_atomic(&target, b"planted").await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "original");
+    }
+
+    #[tokio::test]
+    async fn a_temp_file_is_born_with_its_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tmp, _file) = create_tmp(&dir.path().join("secret"), Some(0o600))
+            .await
+            .unwrap();
+        let mode = std::fs::metadata(&tmp).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode, 0o600);
     }
 }
