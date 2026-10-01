@@ -32,7 +32,7 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 		NextProtos:   []string{"http/1.1"},
 		Certificates: []tls.Certificate{*leaf},
 	}
-	client, _, err := http.NewResponseController(w).Hijack()
+	client, brw, err := http.NewResponseController(w).Hijack()
 	if err != nil {
 		http.Error(w, "egress: connection cannot be hijacked", http.StatusInternalServerError)
 		return
@@ -47,7 +47,7 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 	}
 	// a guest that never sends a ClientHello would pin this goroutine until the sandbox dies.
 	_ = client.SetDeadline(time.Now().Add(interceptTimeout))
-	tlsConn := tls.Server(client, cfg)
+	tlsConn := tls.Server(withBuffered(client, brw.Reader), cfg)
 	if err := tlsConn.HandshakeContext(r.Context()); err != nil {
 		return
 	}

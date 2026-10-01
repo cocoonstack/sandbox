@@ -258,6 +258,38 @@ func TestConnectAllowTunnels(t *testing.T) {
 	}
 }
 
+func TestConnectForwardsBytesTheGuestSentBeforeThe200(t *testing.T) {
+	echo := echoServer(t)
+	p := New(Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, nil, fixedDial(echo), nil, nil)
+	sent := make(chan int64, 1)
+	p.OnTransfer(func(_ Event, tx, _ int64) { sent <- tx })
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	conn, err := net.Dial("tcp", front.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.WriteString(conn, "CONNECT echo.internal:443 HTTP/1.1\r\nHost: echo.internal:443\r\n\r\nearly"); err != nil {
+		t.Fatalf("write CONNECT with early data: %v", err)
+	}
+	br := bufio.NewReader(conn)
+	if status := readStatus(t, br); status != "HTTP/1.1 200 Connection Established" {
+		t.Fatalf("CONNECT status = %q", status)
+	}
+	got := make([]byte, 5)
+	if _, err := io.ReadFull(br, got); err != nil || string(got) != "early" {
+		t.Fatalf("echo of the early bytes: %q, %v", got, err)
+	}
+	_ = conn.(*net.TCPConn).CloseWrite()
+	_, _ = io.Copy(io.Discard, br)
+	if tx := <-sent; tx != 5 {
+		t.Errorf("transfer counted %d guest bytes, want the 5 early ones", tx)
+	}
+}
+
 func TestCloseEndsSplicedTunnel(t *testing.T) {
 	echo := echoServer(t)
 	p := New(Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, nil, fixedDial(echo), nil, nil)
