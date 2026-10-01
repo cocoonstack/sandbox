@@ -292,7 +292,8 @@ A claim names its upstream in that env entry, which must be `guest: false`
 absent entry falls back to the tenant's, then the pool's default:
 `egress_upstream_env` on a tenant or pool entry names a node environment
 variable holding the URL, read at startup, so no credential sits in the config
-file. A claim, `PUT` or `PATCH` naming an upstream outside `allow` (exact host
+file. A claim (a checkpoint branch included), `PUT` or `PATCH` naming an
+upstream outside `allow` (exact host
 names, IPs or CIDR prefixes), a malformed URL or a guest-visible entry answers
 400. `PATCH /v1/sandboxes/{id}/env` switches the upstream for new connections;
 open tunnels keep their path, and pooled keep-alive connections are never

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -139,6 +140,24 @@ func TestUpstreamEnvIsAdmittedHostOnlyAndAllowed(t *testing.T) {
 	m.upstreamEnv = ""
 	if err := m.checkUpstreamEnv(types.Env{"EGRESS_UPSTREAM": {Value: "anything"}}); err != nil {
 		t.Errorf("with the feature off the name is an ordinary env entry: %v", err)
+	}
+}
+
+func TestCheckpointClaimAdmitsTheUpstreamEnvLikeAnyClaim(t *testing.T) {
+	m := upstreamManager(t, "127.0.0.1")
+	src := mustClaim(t, m, testKey)
+	ckpt, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "", "")
+	if err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	for name, v := range map[string]types.EnvVar{
+		"guest entry": {Value: "http://u:p@127.0.0.1:3128"},
+		"unlisted":    {Value: "http://10.0.0.1:3128", Guest: hostOnly},
+	} {
+		o := ClaimOptions{TTL: time.Hour, Env: types.Env{"EGRESS_UPSTREAM": v}}
+		if _, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, o); !errors.Is(err, ErrBadEnv) {
+			t.Errorf("%s: branch claim %v, want ErrBadEnv", name, err)
+		}
 	}
 }
 
