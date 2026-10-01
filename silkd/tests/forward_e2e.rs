@@ -4,6 +4,7 @@
 mod common;
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 use silkd::server::State;
@@ -63,6 +64,21 @@ async fn forward_round_trips_and_done_on_server_close() {
     })
     .await
     .expect("test deadline");
+}
+
+async fn request_listener(request: usize) -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move {
+        let (mut conn, _) = listener.accept().await.expect("accept");
+        let mut buf = vec![0u8; request];
+        while conn.read_exact(&mut buf).await.is_ok() {
+            if conn.write_all(b"k").await.is_err() {
+                return;
+            }
+        }
+    });
+    port
 }
 
 async fn half_close_listener() -> (u16, oneshot::Receiver<Vec<u8>>) {
@@ -171,6 +187,37 @@ async fn a_request_during_forward_ends_its_input_and_runs_after_it() {
         assert_eq!(type_of(&done), "done", "got {done}");
         let procs = next_frame(&mut lines).await;
         assert_eq!(type_of(&procs), "procs", "got {procs}");
+    })
+    .await
+    .expect("test deadline");
+}
+
+#[tokio::test]
+async fn forward_split_requests_do_not_wait_on_delayed_acks() {
+    timeout(DEADLINE, async {
+        let port = request_listener(8192 + 1024).await;
+        let state = Arc::new(State::new());
+        let (mut cw, mut lines) = forwarded(&state, port).await;
+        let start = Instant::now();
+        for _ in 0..20 {
+            send(
+                &mut cw,
+                json!({"v":1,"op":"data","data":b64(&[b'a'; 8192])}),
+            )
+            .await;
+            send(
+                &mut cw,
+                json!({"v":1,"op":"data","data":b64(&[b'b'; 1024])}),
+            )
+            .await;
+            let reply = next_frame(&mut lines).await;
+            assert_eq!(decode(&reply), b"k", "got {reply}");
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(200),
+            "20 split requests took {elapsed:?}: the guest-side write waits on delayed ACKs"
+        );
     })
     .await
     .expect("test deadline");

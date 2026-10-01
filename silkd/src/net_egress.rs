@@ -19,7 +19,10 @@ pub async fn serve(loopback_port: u16, host_vsock_port: u32) -> io::Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", loopback_port)).await?;
     loop {
         let mut tcp = match listener.accept().await {
-            Ok((conn, _)) => conn,
+            Ok((conn, _)) => {
+                let _ = conn.set_nodelay(true);
+                conn
+            }
             Err(e) => {
                 eprintln!("silkd egress: accept: {e}");
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
