@@ -302,8 +302,11 @@ sandbox that cannot hibernate.
 
 An archived sandbox is refused: off-node, its deadline is the store's retention
 window rather than a lease, and a TTL written over it would schedule the
-checkpoint for deletion. Wake it first. 400 a malformed body; 401 missing bearer
-token; 404 unknown id or wrong token; 409 archived, or being archived right now.
+checkpoint for deletion. Wake it first. A claim whose [tenant was
+removed](#tenants-v1tenants) runs to its deadline but cannot extend it: its own
+token gets 403, the root token still renews. 400 a malformed body; 401 missing
+bearer token; 403 the claim's tenant was removed; 404 unknown id or wrong
+token; 409 archived, or being archived right now.
 
 ## POST /v1/sandboxes/{id}/fork
 
@@ -439,6 +442,54 @@ negative archive duration or an `archive_after_seconds` not above the pool's
 field; 401 bad api
 token; 409 egress pool on a node without an egress attachment.
 
+## Tenants (/v1/tenants)
+
+Auth: root only (tenant tokens get 403); a node without `api_token` answers 400,
+since tenants need it. The tenant set changes at runtime, with no restart:
+
+- `PUT /v1/tenants/{name}` `{"token": "…", "max_claims": 50}` adds a tenant or
+  changes one; an omitted `token` keeps the tenant's stored one, so a cap change
+  never resends it. 204.
+- `DELETE /v1/tenants/{name}` removes one. 204; 404 unknown tenant.
+- `PUT /v1/tenants` `{"tenants": [{"name": "…", "token": "…", "max_claims": 0}]}`
+  replaces the whole set: a tenant left out is removed, and an entry without
+  `token` keeps that tenant's. It answers the `GET` body. Use it to reconcile
+  and to import many tenants at once, since every change rewrites the whole
+  set; a sign-up is a single-tenant `PUT`, so concurrent sign-ups never
+  overwrite each other.
+- `GET /v1/tenants` → `{"tenants": [{"name": "…", "max_claims": 50, "claims": 3},
+  {"name": "…", "claims": 1, "removed": true}], "digest": "…"}`: every tenant
+  with its live claims on this node, then each removed tenant that still owns
+  claims here. It never carries a token. Two nodes with the same `digest` hold
+  the same set.
+
+A name follows the claim name grammar (`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`;
+escape `/` as `%2F` in the path) and is the tenant's identity: claims,
+checkpoints and promoted templates belong to a tenant by name, so a name reused
+after a removal inherits what the old tenant left. Use an id the control plane
+never reissues, such as a user UUID. Tokens must be unique and differ from
+`api_token`. `egress` and `egress_upstream_env` stay config-owned and are
+refused here; a tenant whose name has a `config.json` entry gets them from it.
+
+A change applies to the next request: a removed or rotated token gets 401 at
+once. Lowering `max_claims` below the live count refuses new claims and evicts
+none. A removed tenant's claims keep running and stay listed for root
+(`GET /v1/sandboxes?tenant=<name>`) until they expire or root releases them,
+but they cannot extend: renew and fork answer 403 to the sandbox's own token,
+a hibernated one is never archived, one archived before the removal is not
+woken (403) and is deleted when its retention ends, and at the deadline they
+are destroyed even under `on_expire: archive`. The verbs that need a tenant
+token (promote, checkpoint, preview, branch claims) are closed to them already.
+A tenant removed from `config.json` across a restart is a removed tenant too.
+
+The node writes the applied set to `<data_dir>/tenants.json` (0600, each token
+kept only as its SHA-256) before it serves, and from then on that file seeds the
+tenants at boot over `config.json`'s `tenants`; delete it to return to
+config-owned tenants. Each change is an `op:"tenants"` audit record naming the
+tenants added, changed and removed. On a cluster every node needs the change
+(see [cluster](cluster.md#tenants)). 400 a bad entry, a duplicate name or token,
+a token equal to `api_token`, or a config-owned field.
+
 ## POST /v1/drain
 
 Auth: root only (tenant tokens get 403). Cordons the node for maintenance: claim/fork/branch answer
@@ -569,7 +620,7 @@ an SDK caller should set.
 ## GET /v1/sandboxes
 
 Auth: node API token. Root sees every live claim; a tenant sees only its own.
-The index is `{"sandboxes": [{id, key, deadline, claimed_at?, hibernated,
+The index is `{"sandboxes": [{id, key, tenant?, deadline, claimed_at?, hibernated,
 archived?, from_checkpoint?, claim_ref?, metadata?, on_expire?, cpu_count, mem_total_bytes,
 volumes?: [{name, mount, mode?}], restarts?, restarted_at?, failed?}]}` — `cpu_count` and `mem_total_bytes` are the
 size tier's allocation; `restarts` counts the cold boots that replaced an
@@ -584,7 +635,9 @@ the field existed. `?claim_ref=<ref>` keeps only the claims recorded under
 exactly that reference, so a caller that named its claim reads its row without
 the rest of the index; an empty value lists everything. `?metadata=key=value`,
 repeatable, keeps only the claims holding every pair; 400 a pair without `=`,
-with an empty key, or with a key repeated.
+with an empty key, or with a key repeated. `tenant` names the owning tenant
+(absent for root's own claims); `?tenant=<name>` lets root list one tenant's
+claims, a removed tenant's included, and is ignored for a tenant token.
 
 ## GET /v1/sandboxes/{id}
 
@@ -676,7 +729,7 @@ verb never wakes one) or its image serves no instance metadata.
 Auth: root only (tenant tokens get 403). Prometheus text format,
 hand-rendered: pool warm/target gauges, claimed/hibernated/archived/failed/draining
 gauges, a per-tenant live-claim gauge (`sandboxd_tenant_claims{tenant="…"}`,
-configured tenants only), `sandboxd_config_digest_mismatch` on a mesh, claims
+tenants holding live claims only, so the label set is bounded by the node's claims), `sandboxd_config_digest_mismatch` on a mesh, claims
 by tier (warm/clone/cold),
 wake/hibernate/fork/checkpoint/promote/release/reap counters plus
 archive/unarchive/archive-delete counters, and claim/wake `*_seconds_total`

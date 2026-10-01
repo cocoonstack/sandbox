@@ -658,9 +658,9 @@ ctx) tears the shell down.
 
 ## Node operations
 
-Verbs for operating a node — `Drain`, `Uncordon`, `SetPools` and
-`SetPoolsCluster` need the root token — plus the reference the aggregated
-apiserver claims under:
+Verbs for operating a node — `Drain`, `Uncordon`, `SetPools`,
+`SetPoolsCluster` and the tenant verbs need the root token — plus the reference
+the aggregated apiserver claims under:
 
 ```go
 sb, _ := client.New(ctx, "rt:24.04", sandbox.WithClaimRef("ns/workload"))
@@ -670,12 +670,22 @@ info, _ = client.Uncordon(ctx)
 info, _ = client.SetPools(ctx, pools)     // retune warm targets without a restart
 res, _ := client.SetPoolsCluster(ctx, pools) // per-node results; retry the failures
 sb = client.Attach(ownerAddr, id, token)  // bind a known handle, no lookup round-trip
+
+err = client.PutTenant(ctx, sandbox.TenantSpec{Name: "u:42", Token: tok, MaxClaims: 10})
+res, _ = client.PutTenantCluster(ctx, sandbox.TenantSpec{Name: "u:42", MaxClaims: 20}) // token kept
+res, _ = client.DeleteTenantCluster(ctx, "u:42")
+tenants, _ := client.Tenants(ctx)         // names, caps, live claims, removed tenants; never tokens
 ```
 
 `Sandboxes` is scoped to the calling token, so a tenant sees only its own
 claims; the fields are those of [`GET /v1/sandboxes`](sandboxd-api.md#get-v1sandboxes),
 including each claim's `Metadata`, `CPUCount`, and `MemTotalBytes`.
 `Drain` leaves live claims alone — poll `Info` until `Claimed` is zero.
+The tenant verbs follow [`/v1/tenants`](sandboxd-api.md#tenants-v1tenants): a
+`TenantSpec` without `Token` keeps the stored token, and the `*Cluster` forms
+return one `NodeResult` per node to retry (see
+[cluster](cluster.md#tenants)). `SandboxSummary.Tenant` names each claim's
+tenant.
 
 ## Error handling
 

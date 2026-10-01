@@ -245,6 +245,7 @@ fully from it:
 |---|---|---|
 | operator config (`tenants`, `volumes`, `secrets`, egress policies, `bridges`/`networks`, `mesh`, `preview_secret`, `egress_ca`) | `config.json` (human/deploy-tool owned) | re-read at boot |
 | API-applied pool targets (`PUT /v1/pools`) | `<data_dir>/pools.json` (machine owned) | yes |
+| API-applied tenants (`/v1/tenants`) | `<data_dir>/tenants.json` (machine owned; `config.json`'s `tenants` seeds it until the first apply) | yes |
 | claims | the claims journal + `Reconcile` | yes |
 | placement hints (warm counts, template and volume sets) | gossip | rebuilt |
 | checkpoint ownership | a live per-request probe (no gossip); a healed replica is this node's own persisted copy, aged out by `checkpoint_ttl_hours` | yes |
@@ -270,6 +271,23 @@ homogeneous cluster — a spec set that names an egress-lane pool is refused on 
 node without an attachment, so nodes that differ in capacity or attachment take
 a per-node `Client.SetPools`.
 
+### Tenants
+
+Tenants follow the same ownership rule: the first
+[tenant API](sandboxd-api.md#tenants-v1tenants) change writes
+`<data_dir>/tenants.json`, which then seeds the set at boot; delete it to
+return to `config.json`. Unlike pools, the set must be equal on every node,
+because the SDK replays the authorizing token across a redirect. The change is
+still a client-side fan-out: `Client.PutTenantCluster`,
+`Client.DeleteTenantCluster` and `Client.SetTenantsCluster` apply it to the
+entry node and every peer and return a per-node result, and retrying the failed
+nodes converges because each apply is idempotent (a cluster delete counts a
+node that no longer holds the tenant as done). Until every node has it, a
+redirect to a node that lacks the tenant answers 401, which the SDK treats as
+transient and resolves at the origin. `GET /v1/tenants` reports each node's set
+`digest`, and the gossiped config digest below covers the live set, so a node
+that missed a change shows in `sandboxd_config_digest_mismatch`.
+
 ### Cluster-invariant config
 
 Some config must match on every node or the cluster fails in confusing ways:
@@ -282,9 +300,11 @@ Some config must match on every node or the cluster fails in confusing ways:
 | `egress_ca` cluster root | a guest checkpointed/redirected across nodes trusts the root; a divergent root fails interception |
 | the engine root path (cocoon's `root_dir`) | a checkpoint or template export pins the base image blobs' absolute path under the root that captured it; a node whose root sits at another path refuses to clone a record it healed or pulled (`untrusted storage path in snapshot metadata`) — the heal succeeds, the branch fails. Not part of the gossiped digest below |
 
-Each node gossips a digest of these (HMAC-keyed by `cluster_key` when set;
-otherwise a token-free digest of tenant names + the CA root + `checkpoint_ttl_hours`, so nothing
-brute-forceable rides cleartext gossip). A mismatch logs a warning at the moment
+Each node gossips a digest of these over its live tenant set (HMAC-keyed by
+`cluster_key` when set, covering each tenant token's SHA-256; otherwise a
+token-free digest of tenant names + the CA root + `checkpoint_ttl_hours`, so
+nothing brute-forceable rides cleartext gossip), and republishes it after every
+tenant change. A mismatch logs a warning at the moment
 the divergent node appears — not at the first unlucky redirect — and raises the
 `sandboxd_config_digest_mismatch` gauge. It is warn-only: a rolling credential
 rotation is a legitimate transient mismatch, so a divergence never partitions
@@ -304,6 +324,9 @@ the mesh.
 - `cluster_key` set if the gossip network is not otherwise trusted
 - pool changes via `Client.SetPoolsCluster` (or per-node `SetPools`); the applied
   set persists to `pools.json` and survives restart
+- tenant changes via `Client.PutTenantCluster` / `DeleteTenantCluster` /
+  `SetTenantsCluster`, retrying the nodes that failed; the applied set persists
+  to `tenants.json`
 - declare each volume's catalog entry — name, access list, and `writable`
   — identically on every node meant to serve it (a tenant claim gets a hard
   error, not a redirect, on a node missing the entry); put the actual image
