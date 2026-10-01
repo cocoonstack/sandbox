@@ -529,9 +529,9 @@ func (c *Config) validateAttachment() error {
 }
 
 func (c *Config) validateEgressAllow() error {
-	for _, cidr := range c.EgressInternalAllow {
-		if _, err := netip.ParsePrefix(cidr); err != nil {
-			return fmt.Errorf("egress_internal_allow %q: %w", cidr, err)
+	for _, entry := range c.EgressInternalAllow {
+		if _, err := egress.ParseInternalAllow(entry); err != nil {
+			return fmt.Errorf("egress_internal_allow %q: %w", entry, err)
 		}
 	}
 	return nil

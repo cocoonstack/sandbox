@@ -390,23 +390,19 @@ func reached(ln net.Listener) bool {
 	return waiting
 }
 
-func newEgressDialer(allow []netip.Prefix) *net.Dialer {
+func newEgressDialer(allow []egress.InternalAllow) *net.Dialer {
 	return &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
-		host, _, err := net.SplitHostPort(address)
+		ap, err := netip.ParseAddrPort(address)
 		if err != nil {
-			return err
+			return fmt.Errorf("egress: unresolved address %q: %w", address, err)
 		}
-		ip, err := netip.ParseAddr(host)
-		if err != nil {
-			return fmt.Errorf("egress: unresolved address %q: %w", host, err)
-		}
-		ip = ip.Unmap()
+		ip, port := ap.Addr().Unmap(), ap.Port()
 		if nat64Range.Contains(ip) {
 			b := ip.As16()
 			ip = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
 		}
 		// after the NAT64 unwrap and before the block, so a named prefix wins
-		if slices.ContainsFunc(allow, func(p netip.Prefix) bool { return p.Contains(ip) }) {
+		if slices.ContainsFunc(allow, func(a egress.InternalAllow) bool { return a.Admits(ip, port) }) {
 			return nil
 		}
 		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
@@ -417,12 +413,12 @@ func newEgressDialer(allow []netip.Prefix) *net.Dialer {
 	}}
 }
 
-// parsePrefixes turns the allow-list into prefixes; config validation already rejected bad ones.
-func parsePrefixes(cidrs []string) []netip.Prefix {
-	out := make([]netip.Prefix, 0, len(cidrs))
-	for _, c := range cidrs {
-		if p, err := netip.ParsePrefix(c); err == nil {
-			out = append(out, p)
+// parseInternalAllow turns the allow-list into entries; config validation already rejected bad ones.
+func parseInternalAllow(entries []string) []egress.InternalAllow {
+	out := make([]egress.InternalAllow, 0, len(entries))
+	for _, e := range entries {
+		if a, err := egress.ParseInternalAllow(e); err == nil {
+			out = append(out, a)
 		}
 	}
 	return out
