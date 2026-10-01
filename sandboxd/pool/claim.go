@@ -15,14 +15,14 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-type reapAction int
-
 const (
 	reapDestroy reapAction = iota // engine teardown + drop snapshot
 	reapArchive                   // hibernated with archive enabled or on_expire archive: archive, keep the claim
 	reapPurge                     // archived past retention: delete the store checkpoint
 	reapPause
 )
+
+type reapAction int
 
 // ClaimOptions is what a claim asks for beyond its key; the zero value takes every default.
 type ClaimOptions struct {
@@ -510,7 +510,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		case m.archivesAtDeadline(sb):
 			// archive instead of destroy, kept in m.claimed for archive() to move
 			if _, busy := m.archiving[id]; busy {
-				continue // an archive is already exporting this sandbox
+				continue
 			}
 			m.archiving[id] = struct{}{}
 			action := reapArchive
