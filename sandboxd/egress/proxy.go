@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/netip"
 	"net/textproto"
 	"slices"
@@ -192,16 +193,19 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	decision, intercept := p.tunnelDecision(host, port)
 	ev, route := p.routeEvent(Event{Method: r.Method, Host: host, Port: port, Decision: decision})
-	p.record(ev)
 	if intercept {
+		p.record(ev)
 		p.serveIntercept(w, r, host, port)
 		return
 	}
 	if decision == DecisionDeny {
+		p.record(ev)
 		denied(w, host)
 		return
 	}
 	upstream, err := p.router.Dial(r.Context(), route, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
+	ev.Upstream = upstreamHost(upstream)
+	p.record(ev)
 	if err != nil {
 		http.Error(w, "egress: upstream unreachable", http.StatusBadGateway)
 		return
@@ -266,7 +270,9 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 		return
 	}
 
-	out := r.Clone(r.Context())
+	out := r.Clone(httptrace.WithClientTrace(r.Context(), &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) { ev.Upstream = upstreamHost(info.Conn) },
+	}))
 	if prepare != nil {
 		prepare(out)
 	}
@@ -274,14 +280,22 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	out.Close = false // the guest's Connection: close is its own; the upstream pool keeps the conn
 	stripHop(out.Header)
 	ev.Injected = p.inject(rule, out.Header)
-	p.record(ev)
 	var body *countingBody
 	if p.transfer != nil && out.Body != nil && out.Body != http.NoBody {
 		body = &countingBody{ReadCloser: out.Body}
 		out.Body = body
 	}
+	var received int64
+	defer func() {
+		var sent int64
+		if body != nil {
+			sent = body.n.Load()
+		}
+		p.reportTransfer(ev, sent, received)
+	}()
 
 	resp, err := tr.RoundTrip(out)
+	p.record(ev)
 	if err != nil {
 		http.Error(w, "egress: upstream unreachable", http.StatusBadGateway)
 		return
@@ -290,12 +304,7 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	maps.Copy(w.Header(), resp.Header)
 	stripHop(w.Header())
 	w.WriteHeader(resp.StatusCode)
-	received, _ := io.Copy(w, resp.Body)
-	var sent int64
-	if body != nil {
-		sent = body.n.Load()
-	}
-	p.reportTransfer(ev, sent, received)
+	received, _ = io.Copy(w, resp.Body)
 }
 
 // transport returns the pool for route; the direct route keeps the base transports.
@@ -325,11 +334,7 @@ func (p *Proxy) routeEvent(ev Event) (Event, string) {
 	if ev.Decision != DecisionAllow {
 		return ev, ""
 	}
-	route := p.router.Route()
-	if route != "" {
-		ev.Upstream = UpstreamHost(route)
-	}
-	return ev, route
+	return ev, p.router.Route()
 }
 
 func (p *Proxy) reportTransfer(ev Event, sent, received int64) {

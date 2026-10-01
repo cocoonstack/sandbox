@@ -3,6 +3,7 @@ package egress
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
@@ -14,15 +15,17 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 )
 
 func TestParseUpstream(t *testing.T) {
-	for _, raw := range []string{"http://res.example.com:8080", "socks5://u:p@10.0.0.1:1080", "http://u:p%40x@h:3128/"} {
+	for _, raw := range []string{"http://res.example.com:8080", "socks5://u:p@10.0.0.1:1080", "http://u:p%40x@h:3128/", "http://h:1", "socks5://h:65535"} {
 		if _, err := ParseUpstream(raw); err != nil {
 			t.Errorf("ParseUpstream(%q): %v", raw, err)
 		}
 	}
-	for _, raw := range []string{"ftp://h:21", "http://u:secret@h", "http://:80", "http://h:80/path", "http://h:80?x=1", "http://h:80#f", "%zz", "h:80"} {
+	for _, raw := range []string{"ftp://h:21", "http://u:secret@h", "http://:80", "http://h:80/path", "http://h:80?x=1", "http://h:80#f", "%zz", "h:80", "http://h:0", "http://h:70000", "socks5://h:65536"} {
 		_, err := ParseUpstream(raw)
 		if err == nil {
 			t.Errorf("ParseUpstream(%q) accepted", raw)
@@ -61,14 +64,25 @@ func TestUpstreamAllow(t *testing.T) {
 }
 
 func TestDialUpstreamThroughHTTPConnect(t *testing.T) {
-	addr, seen := fakeConnectProxy(t, http.StatusOK)
+	const greeting = "SSH-2.0-test\r\n"
+	addr, seen := fakeConnectProxy(t, http.StatusOK, greeting)
 	u, _ := ParseUpstream("http://alice:pw@" + addr)
 	conn, err := DialUpstream(t.Context(), u, "203.0.113.9:443", plainDial)
 	if err != nil {
 		t.Fatalf("DialUpstream: %v", err)
 	}
 	defer func() { _ = conn.Close() }()
+	buf := make([]byte, len(greeting))
+	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != greeting {
+		t.Fatalf("greeting %q, %v", buf, err)
+	}
 	assertEcho(t, conn)
+	if err := conn.(interface{ CloseWrite() error }).CloseWrite(); err != nil {
+		t.Fatalf("half-close: %v", err)
+	}
+	if tail, err := io.ReadAll(conn); err != nil || len(tail) != 0 {
+		t.Fatalf("after half-close: %q, %v", tail, err)
+	}
 	got := <-seen
 	want := "CONNECT 203.0.113.9:443 Basic " + base64.StdEncoding.EncodeToString([]byte("alice:pw"))
 	if got != want {
@@ -77,7 +91,7 @@ func TestDialUpstreamThroughHTTPConnect(t *testing.T) {
 }
 
 func TestDialUpstreamRefusedNamesNoCredentials(t *testing.T) {
-	addr, _ := fakeConnectProxy(t, http.StatusProxyAuthRequired)
+	addr, _ := fakeConnectProxy(t, http.StatusProxyAuthRequired, "")
 	u, _ := ParseUpstream("http://alice:pw-secret@" + addr)
 	_, err := DialUpstream(t.Context(), u, "203.0.113.9:443", plainDial)
 	if err == nil || !strings.Contains(err.Error(), "407") || strings.Contains(err.Error(), "pw-secret") {
@@ -102,35 +116,79 @@ func TestDialUpstreamThroughSOCKS5WithAuth(t *testing.T) {
 	}
 }
 
+func TestDialUpstreamTimesOutAndCloses(t *testing.T) {
+	for _, stage := range []string{"dial", "http", "socks5"} {
+		t.Run(stage, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				u, _ := ParseUpstream("http://proxy.example:80")
+				if stage == "socks5" {
+					u.Scheme = stage
+				}
+				closed := make(chan struct{})
+				dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
+					if stage == "dial" {
+						<-ctx.Done()
+						close(closed)
+						return nil, ctx.Err()
+					}
+					client, server := net.Pipe()
+					go func() {
+						_, _ = io.Copy(io.Discard, server)
+						_ = server.Close()
+						close(closed)
+					}()
+					return client, nil
+				}
+				start := time.Now()
+				if _, err := DialUpstream(t.Context(), u, "203.0.113.9:443", dial); err == nil {
+					t.Fatal("silent upstream did not time out")
+				}
+				if elapsed := time.Since(start); elapsed != upstreamTimeout {
+					t.Errorf("timeout after %v, want %v", elapsed, upstreamTimeout)
+				}
+				<-closed
+			})
+		})
+	}
+}
+
 func TestProxyDialsEachConnectionOnTheCurrentRoute(t *testing.T) {
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, "ok")
-	}))
-	t.Cleanup(origin.Close)
-	router := &switchRouter{route: "http://user:pw@up1.example:3128", target: origin.Listener.Addr().String()}
-	events := make(chan Event, 8)
-	p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, router, func(ev Event) { events <- ev }, nil)
-	srv := httptest.NewServer(p)
-	t.Cleanup(srv.Close)
-	client := proxyClient(t, srv.URL)
-	get := func() {
-		t.Helper()
-		resp, err := client.Get(origin.URL)
-		if err != nil {
-			t.Fatalf("get: %v", err)
-		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-	}
-	get()
-	get()
-	if ev := recvEvent(t, events); ev.Upstream != "up1.example:3128" {
-		t.Errorf("event upstream %q, want the host without credentials", ev.Upstream)
-	}
-	router.set("socks5://up2.example:1080")
-	get()
-	if got := router.dialed(); strings.Join(got, ",") != "http://user:pw@up1.example:3128,socks5://up2.example:1080" {
-		t.Errorf("dials %v, want one per route: a route change must not reuse the old path's conn", got)
+	for _, direct := range []bool{false, true} {
+		t.Run(fmt.Sprintf("direct=%t", direct), func(t *testing.T) {
+			origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(w, "ok")
+			}))
+			t.Cleanup(origin.Close)
+			router := &switchRouter{route: "http://user:pw@up1.example:3128", target: origin.Listener.Addr().String(), direct: direct}
+			events := make(chan Event, 8)
+			p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, router, func(ev Event) { events <- ev }, nil)
+			t.Cleanup(p.Close)
+			p.tr.TLSClientConfig = &tls.Config{RootCAs: trustUpstream(origin), MinVersion: tls.VersionTLS12}
+			p.OnTransfer(func(ev Event, _, _ int64) { events <- ev })
+			get := func(want string) {
+				t.Helper()
+				w := httptest.NewRecorder()
+				p.ServeHTTP(w, httptest.NewRequest(http.MethodGet, origin.URL, nil))
+				if w.Code != http.StatusOK || w.Body.String() != "ok" {
+					t.Fatalf("get: %d %q", w.Code, w.Body.String())
+				}
+				if direct {
+					want = ""
+				}
+				for range 2 {
+					if ev := recvEvent(t, events); ev.Upstream != want {
+						t.Errorf("event upstream %q, want %q", ev.Upstream, want)
+					}
+				}
+			}
+			get("up1.example:3128")
+			get("up1.example:3128")
+			router.set("socks5://up2.example:1080")
+			get("up2.example:1080")
+			if got := router.dialed(); strings.Join(got, ",") != "http://user:pw@up1.example:3128,socks5://up2.example:1080" {
+				t.Errorf("dials %v, want one per route: a route change must not reuse the old path's conn", got)
+			}
+		})
 	}
 }
 
@@ -138,6 +196,15 @@ func TestTransferCountsTunnelAndRequestBytes(t *testing.T) {
 	echo := echoServer(t)
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
+		if r.URL.Path == "/fail" {
+			conn, _, err := http.NewResponseController(w).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = conn.Close()
+			return
+		}
 		_, _ = io.WriteString(w, "seven!!")
 	}))
 	t.Cleanup(origin.Close)
@@ -151,6 +218,7 @@ func TestTransferCountsTunnelAndRequestBytes(t *testing.T) {
 		return d.DialContext(ctx, network, origin.Listener.Addr().String())
 	})
 	p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, router, nil, nil)
+	t.Cleanup(p.Close)
 	p.OnTransfer(func(_ Event, sent, received int64) { got <- transfer{sent, received} })
 	srv := httptest.NewServer(p)
 	t.Cleanup(srv.Close)
@@ -181,12 +249,24 @@ func TestTransferCountsTunnelAndRequestBytes(t *testing.T) {
 	if tr := <-got; tr != (transfer{11, 7}) {
 		t.Errorf("request transfer %+v, want 11 sent and 7 received", tr)
 	}
+	resp, err = proxyClient(t, srv.URL).Post(origin.URL+"/fail", "text/plain", strings.NewReader("eleven char"))
+	if err != nil {
+		t.Fatalf("failed post: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("failed post: %d, want 502", resp.StatusCode)
+	}
+	if tr := <-got; tr != (transfer{11, 0}) {
+		t.Errorf("failed request transfer %+v, want 11 sent and 0 received", tr)
+	}
 }
 
 type switchRouter struct {
 	mu     sync.Mutex
 	route  string
 	target string
+	direct bool
 	dials  []string
 }
 
@@ -201,7 +281,12 @@ func (r *switchRouter) Dial(ctx context.Context, route, network, _ string) (net.
 	r.dials = append(r.dials, route)
 	r.mu.Unlock()
 	var d net.Dialer
-	return d.DialContext(ctx, network, r.target)
+	conn, err := d.DialContext(ctx, network, r.target)
+	if err != nil || r.direct || route == "" {
+		return conn, err
+	}
+	u, _ := ParseUpstream(route)
+	return &upstreamConn{Conn: conn, host: u.Host}, nil
 }
 
 func (r *switchRouter) set(route string) {
@@ -233,7 +318,7 @@ func assertEcho(t *testing.T, conn net.Conn) {
 }
 
 // fakeConnectProxy answers one CONNECT with status and, on 200, echoes the tunnel.
-func fakeConnectProxy(t *testing.T, status int) (string, <-chan string) {
+func fakeConnectProxy(t *testing.T, status int, greeting string) (string, <-chan string) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -253,7 +338,7 @@ func fakeConnectProxy(t *testing.T, status int) (string, <-chan string) {
 			return
 		}
 		seen <- req.Method + " " + req.Host + " " + req.Header.Get("Proxy-Authorization")
-		_, _ = fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\n\r\n", status, http.StatusText(status))
+		_, _ = fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\n\r\n%s", status, http.StatusText(status), greeting)
 		if status == http.StatusOK {
 			_, _ = io.Copy(conn, br)
 		}

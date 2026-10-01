@@ -3,6 +3,7 @@ package egress
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -11,11 +12,14 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/net/proxy"
 )
+
+const upstreamTimeout = 30 * time.Second
 
 // Router picks each connection's path: Route names it and Dial opens a connection over it.
 type Router interface {
@@ -65,42 +69,69 @@ func ParseUpstream(raw string) (*url.URL, error) {
 	if err != nil {
 		return nil, errors.New("upstream is not a URL")
 	}
+	port, portErr := strconv.ParseUint(u.Port(), 10, 16)
 	switch {
 	case u.Scheme != "http" && u.Scheme != "socks5":
 		return nil, errors.New("upstream scheme must be http or socks5")
 	case u.Hostname() == "" || u.Port() == "":
 		return nil, errors.New("upstream needs a host and a port")
+	case portErr != nil || port == 0:
+		return nil, errors.New("upstream port must be in 1-65535")
 	case u.Opaque != "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "":
 		return nil, errors.New("upstream takes no path or query")
 	}
 	return u, nil
 }
 
-// UpstreamHost names an upstream for audit: its host and port, never its credentials.
-func UpstreamHost(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	return u.Host
-}
-
 // DialUpstream opens a tunnel to target through the upstream proxy u; dial reaches the proxy itself.
 func DialUpstream(ctx context.Context, u *url.URL, target string, dial DialFunc) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, upstreamTimeout)
+	defer cancel()
 	conn, err := dial(ctx, "tcp", u.Host)
 	if err != nil {
 		return nil, fmt.Errorf("dial upstream %s: %w", u.Host, err)
 	}
+	var reader *bufio.Reader
 	if u.Scheme == "socks5" {
 		err = socksTunnel(ctx, conn, u, target)
 	} else {
-		err = connectTunnel(ctx, conn, u, target)
+		reader, err = connectTunnel(ctx, conn, u, target)
 	}
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
-	return conn, nil
+	return &upstreamConn{Conn: conn, reader: reader, host: u.Host}, nil
+}
+
+type upstreamConn struct {
+	net.Conn
+	reader *bufio.Reader
+	host   string
+}
+
+func (c *upstreamConn) Read(b []byte) (int, error) {
+	if c.reader != nil {
+		return c.reader.Read(b)
+	}
+	return c.Conn.Read(b)
+}
+
+func (c *upstreamConn) CloseWrite() error {
+	if conn, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return conn.CloseWrite()
+	}
+	return nil
+}
+
+func upstreamHost(conn net.Conn) string {
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		conn = tlsConn.NetConn()
+	}
+	if conn, ok := conn.(*upstreamConn); ok {
+		return conn.host
+	}
+	return ""
 }
 
 // socksTunnel handshakes on conn itself, so the tunnel keeps the TCP conn's CloseWrite.
@@ -126,7 +157,7 @@ func socksTunnel(ctx context.Context, conn net.Conn, u *url.URL, target string) 
 	return nil
 }
 
-func connectTunnel(ctx context.Context, conn net.Conn, u *url.URL, target string) error {
+func connectTunnel(ctx context.Context, conn net.Conn, u *url.URL, target string) (*bufio.Reader, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
@@ -138,23 +169,26 @@ func connectTunnel(ctx context.Context, conn net.Conn, u *url.URL, target string
 		req.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(u.User.Username()+":"+pass)))
 	}
 	if err := req.Write(conn); err != nil {
-		return fmt.Errorf("upstream %s: %w", u.Host, err)
+		return nil, fmt.Errorf("upstream %s: %w", u.Host, err)
 	}
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, req)
 	if err != nil {
-		return fmt.Errorf("upstream %s: %w", u.Host, err)
+		return nil, fmt.Errorf("upstream %s: %w", u.Host, err)
 	}
-	_ = resp.Body.Close()
 	switch {
 	case resp.StatusCode != http.StatusOK:
-		return fmt.Errorf("upstream %s refused the tunnel: %s", u.Host, resp.Status)
-	case br.Buffered() > 0:
-		return fmt.Errorf("upstream %s sent bytes before the tunnel opened", u.Host)
+		return nil, fmt.Errorf("upstream %s refused the tunnel: %s", u.Host, resp.Status)
 	case !stop():
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
-	return conn.SetDeadline(time.Time{})
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		return nil, err
+	}
+	if br.Buffered() == 0 {
+		br = nil
+	}
+	return br, nil
 }
 
 func validHostName(s string) bool {
