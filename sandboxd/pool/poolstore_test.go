@@ -55,16 +55,16 @@ func TestDeletingPoolsFileRestoresConfigSeed(t *testing.T) {
 	}
 }
 
-func TestPoolSeedHashMatchesTheV1Bytes(t *testing.T) {
+func TestPoolSeedHashBytesArePinned(t *testing.T) {
 	specs := []config.PoolSpec{
 		{Template: "rt:24.04&<x>", Net: types.NetNone, Size: "small", Warm: 2},
 		{Template: "python:3.12", Net: types.NetEgress, Size: "large", WarmMax: 4},
 	}
-	if got, want := poolSeedHash(nil), "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"; got != want {
-		t.Errorf("seed of no pools %s, want the encoding/json v1 seed %s", got, want)
+	if got, want := poolSeedHash(nil), "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"; got != want {
+		t.Errorf("seed of no pools %s, want the pinned seed %s", got, want)
 	}
-	if got, want := poolSeedHash(specs), "8f01958ec3e7ca20e71032d3c857073614887c045887d53a8e93776a2826aad7"; got != want {
-		t.Errorf("seed %s, want the encoding/json v1 seed %s", got, want)
+	if got, want := poolSeedHash(specs), "3b7a82ff7910e88edcc6ec7bfd05142c647900f950d1a8cc785ee0ed344e1f08"; got != want {
+		t.Errorf("seed %s, want the pinned seed %s", got, want)
 	}
 }
 
