@@ -145,8 +145,6 @@ func Untar(r io.Reader, dst string) error {
 			if err := writeFile(target, tr, os.FileMode(hdr.Mode).Perm()); err != nil { //nolint:gosec // Perm masks to 0777
 				return err
 			}
-		default:
-			continue
 		}
 	}
 }

@@ -354,18 +354,15 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant s
 	id := store.TemplateID(key.Hash())
 	l := m.recLock(id)
 	l.RLock()
+	cleanup := func() { l.RUnlock(); m.recDone(id) }
 	dir, meta, digest, err := m.tpls.Fetch(ctx, id)
-	if errors.Is(err, store.ErrNotFound) {
-		l.RUnlock()
-		m.recDone(id)
-		return goldenResolution{}, nil
-	}
 	if err != nil {
-		l.RUnlock()
-		m.recDone(id)
+		cleanup()
+		if errors.Is(err, store.ErrNotFound) {
+			return goldenResolution{}, nil
+		}
 		return goldenResolution{}, err
 	}
-	cleanup := func() { l.RUnlock(); m.recDone(id) }
 	var rec templateRecord
 	if err := json.Unmarshal(meta, &rec); err != nil {
 		cleanup()

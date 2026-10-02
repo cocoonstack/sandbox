@@ -384,14 +384,7 @@ type Manager struct {
 
 // NewManager builds a manager from the node config; ctx bounds backend construction.
 func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *egress.SecretStore) (*Manager, error) {
-	maxFork := cfg.MaxForkCount
-	if maxFork < 1 {
-		maxFork = defaultMaxFork
-	}
-	refill := cfg.RefillConcurrency
-	if refill < 1 {
-		refill = defaultRefill
-	}
+	refill := cmp.Or(cfg.RefillConcurrency, defaultRefill)
 	m := &Manager{
 		eng:             eng,
 		dataDir:         cfg.DataDir,
@@ -400,7 +393,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		releaseDelay:    time.Duration(cfg.ReleaseDelaySeconds) * time.Second,
 		vmmRestart:      cfg.VMMRestart,
 		cocoondSocket:   cfg.CocoondSocket,
-		maxFork:         maxFork,
+		maxFork:         cmp.Or(cfg.MaxForkCount, defaultMaxFork),
 		store:           newClaimStore(cfg.DataDir, cfg.SyncClaims),
 		volumes:         make(map[string]catalogVolume, len(cfg.Volumes)),
 		volumeAdmission: map[string]volumeHolders{},

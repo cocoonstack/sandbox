@@ -80,15 +80,13 @@ func (p Policy) Validate() error {
 		case "*.":
 			return fmt.Errorf("allow[%d]: host %q needs a domain after the wildcard", i, r.Host)
 		}
-		seen := make(map[uint16]struct{}, len(r.Ports))
-		for _, port := range r.Ports {
+		for j, port := range r.Ports {
 			if port == 0 {
 				return fmt.Errorf("allow[%d]: port 0 is not a destination", i)
 			}
-			if _, dup := seen[port]; dup {
+			if slices.Contains(r.Ports[:j], port) {
 				return fmt.Errorf("allow[%d]: port %d repeated", i, port)
 			}
-			seen[port] = struct{}{}
 		}
 	}
 	if p.Socks5 && !p.admitsTunnel() {
