@@ -862,7 +862,13 @@ func startStack(t *testing.T, apiToken string, pools ...config.PoolSpec) *stack 
 
 func startTenantStack(t *testing.T, apiToken string, tenants []config.TenantSpec, volumes []config.VolumeSpec, pools ...config.PoolSpec) *stack {
 	t.Helper()
-	return startConfigStack(t, apiToken, &config.Config{Pools: pools, Tenants: tenants, Volumes: volumes})
+	st := startConfigStack(t, apiToken, &config.Config{Pools: pools, Volumes: volumes})
+	if len(tenants) > 0 {
+		if err := st.mgr.SetTenants(t.Context(), tenants); err != nil {
+			t.Fatalf("set tenants: %v", err)
+		}
+	}
+	return st
 }
 
 func startConfigStack(t *testing.T, apiToken string, cfg *config.Config) *stack {

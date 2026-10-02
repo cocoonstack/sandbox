@@ -142,7 +142,7 @@ func (s *Source) Resolve(ctx context.Context, sum [sha256.Size]byte) (*config.Te
 		}
 		return nil, tenants.ErrUnknown
 	case err != nil:
-		return nil, fmt.Errorf("%w: %w", tenants.ErrUnavailable, err)
+		return nil, unavailable(err)
 	}
 	if s.fresh(r.Name, start) {
 		s.cache(&r, sum)
@@ -330,7 +330,7 @@ func (s *Source) lookupNow(ctx context.Context, name string) (config.TenantRecor
 	case errors.Is(err, pgx.ErrNoRows):
 		return config.TenantRecord{}, false, nil
 	case err != nil:
-		return config.TenantRecord{}, false, fmt.Errorf("%w: %w", tenants.ErrUnavailable, err)
+		return config.TenantRecord{}, false, unavailable(err)
 	}
 	return r, true, nil
 }

@@ -92,7 +92,7 @@ own routed network never gets them.
 
 ## Claim env
 
-The host writes a claim's [`guest` env entries](sandboxd-api.md#getputpatchdelete-v1sandboxesidenv)
+The host writes a claim's [`guest` env entries](sandboxd-api.md#getputpatch-v1sandboxesidenv)
 to `/run/silkd.env` (root, 0600) in systemd `EnvironmentFile` syntax, one
 `NAME="value"` per line with `\`, `"`, `` ` `` and `$` escaped. silkd reads it
 at every exec, session and pty it spawns and applies it after the base

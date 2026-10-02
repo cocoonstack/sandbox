@@ -78,7 +78,6 @@ sandboxd reads one JSON file (`-config`, default
     {"name": "acme-corpus", "path": "/srv/datasets/acme.img", "tenants": ["acme"]}
   ],
   "api_token": "…",
-  "tenants": [{"name": "acme", "token": "…"}],
   "mesh": {
     "node_id": "node-a",
     "bind": "10.0.0.5:7946",
@@ -119,8 +118,7 @@ gets the intersection of the two.
 | `egress_usage_bytes` | `false` | append an `egress_bytes` usage event with the payload bytes of every allowed egress tunnel or request when it ends; one extra usage-journal write per connection |
 | `egress_ca` | unset | [HTTPS-interception](egress.md#https-interception) PKI: `root_cert` (the cluster root baked into intercepted guests; may bundle old+new roots during rotation) plus this node's `intermediate_cert`/`intermediate_key` from `sandboxd ca issue-intermediate`. Required when any pool rule sets `intercept` |
 | `api_token` | unset | the operator (root) credential: when set, guards the node-level endpoints (Bearer) with full access, including release-by-id cleanup. Per-sandbox tokens guard ordinary sandbox-scoped calls |
-| `tenants` | unset | multi-tenant tokens next to `api_token`: `[{"name": "acme", "token": "…", "max_claims": 50, "egress_class": "desk"}]` (the optional `egress_class` names an `egress_classes` entry whose policy is intersected with the pool's, see [egress](egress.md)). A tenant token reaches the resource-creating verbs (claim, fork, promote, checkpoint, preview), catalog discovery, and its own sandbox/checkpoint listings; everything it creates is stamped with the tenant name. Root-only surfaces (per-id sandbox reads and stats, `GET /v1/checkpoints/{id}/blob`, `GET /v1/info`, `PUT /v1/pools`, `/v1/tenants`, `POST/DELETE /v1/drain`, `/metrics`) answer it 403. `max_claims` (0 = unlimited) caps that tenant's live claims next to the node-wide cap. Requires `api_token` set. Names and tokens must be unique, tokens distinct from `api_token`. This list only seeds the set: once the [tenant API](sandboxd-api.md#tenants-v1tenants) has applied a change, `<data_dir>/tenants.json` owns the tenants and this list is ignored (with a warning when it changed since),. On a cluster all nodes must carry the same tenants set (the SDK replays whichever token authorized a redirect), and per-node caps mean a tenant's effective cluster limit is `max_claims` × nodes. Empty = exactly the single-token behavior |
-| `meta_store` | unset | `{"kind": "pg", "dsn_env": "SANDBOXD_PG_DSN"}`: keep the tenant set in one shared PostgreSQL instead of each node's `tenants.json` (see [shared tenant database](#shared-tenant-database)). `dsn_env` names the node env holding the connection string. Needs `api_token`; `tenants` must then be empty. Restart only |
+| `meta_store` | unset | `{"kind": "pg", "dsn_env": "SANDBOXD_PG_DSN"}`: keep the tenant set in one shared PostgreSQL instead of each node's `tenants.json` (see [shared tenant database](#shared-tenant-database)). `dsn_env` names the node env holding the connection string. Needs `api_token`. Restart only |
 | `max_fork_count` | 16 | children a single `fork` may create; each is a full-RAM VM, so this bounds one request's memory blast radius to the node's capacity |
 | `refill_concurrency` | 0 (auto) | concurrent VM provisioning budget, shared by warm-pool refills, fork clones, and the reap/hibernate/reconcile engine batches. 0 sizes it from the node: `NumCPU*2/3` clamped to [4, 256] — a 384-core node gets 256; small nodes keep a floor of 4 |
 | `release_delay_seconds` | 0 | seconds a released VM waits in the removal queue before `cocoon vm rm`. The claim is dropped and journaled and its egress listener closed at release; the VM removal, the volume hold release and the egress tap unlock run on the first reap tick (5 s) after the delay, on the `refill_concurrency` budget like every other batch teardown, so a burst of releases does not compete with the claims still running. Until then the VM holds its memory and its volume reservations without counting as a claim. 0 removes inline |
@@ -134,7 +132,7 @@ gets the intersection of the two.
 | `warm_max` (pool entry) | 0 (static) | turns on the demand-adaptive watermark for that pool: the warm target rises from `warm` toward `warm_max` while claims arrive faster than the measured provision lead covers, and decays back over ~a minute of silence. The pool follows the target down: warm VMs above it are destroyed once the count has stayed above it for a full decay period, so a burst does not leave the pool parked at its high-water mark |
 | `warmup` (pool entry) | unset | argv run in the golden VM after readiness and before its snapshot, so the files it touches are page-cache-resident in every clone, and again in every clone before it joins the warm pool, so those pages are already faulted into the restored VM when the first command runs — e.g. `["node", "-e", "0"]` on a Node flavor. It runs under the engine's 2-minute command timeout in silkd's base environment (`PATH`, `TERM`, and the guest image's proxy variables wherever nothing routes directly — the none lane and the locked bridge egress lane — with the proxy not yet serving, since a door pre-bound at refill only starts serving at claim); a non-zero exit or a timeout fails the golden build, so the pool stays unfilled until the config is fixed. Config-owned like `egress`: `PUT /v1/pools` rejects it, and a golden built with a different warmup is rebuilt |
 | `capture_trim` (pool entry) | `false` | Trim the guest's copy-on-write disk before a promote or checkpoint of this pool's sandboxes (and of the clones of a template promoted from it), so the record carries only live data: blocks a build deleted — a `COPY` step's archive, a `RUN` step's caches — are no longer captured. sandboxd mounts the disk init resolved from `cocoon.cow` a second time at `/run/sandboxd-trim` through silkd as root, runs `fstrim` and unmounts, under the capture's transition lock (about 15 ms on a warm clone). A failed trim is logged and the capture proceeds, larger. A hibernated or archived sandbox is captured untrimmed. Config-owned like `egress`: `PUT /v1/pools` rejects it |
-| `egress_classes` | unset | named tenant egress layers: `[{"name": "desk", "egress": {…}, "egress_upstream_env": "DESK_UPSTREAM"}]`. A tenant names one with `egress_class` (in `tenants` or through the tenant API) and its claims take that policy intersected with the pool's. `egress` is required; `intercept` stays a pool-rule flag. Reloadable: a class's policy reaches live claims on their next request. A class removed while tenants still name it leaves them with no egress and is logged at load and at reload |
+| `egress_classes` | unset | named tenant egress layers: `[{"name": "desk", "egress": {…}, "egress_upstream_env": "DESK_UPSTREAM"}]`. A tenant names one with `egress_class` through the [tenant API](sandboxd-api.md#tenants-v1tenants) and its claims take that policy intersected with the pool's. `egress` is required; `intercept` stays a pool-rule flag. Reloadable: a class's policy reaches live claims on their next request. A class removed while tenants still name it leaves them with no egress and is logged at load and at reload |
 | `egress_upstream_env` (pool or egress class entry) | unset | names a node environment variable holding the default upstream proxy URL for the pool's or class's claims (class before pool, a claim's own entry before both); needs `egress_upstream`, and the URL must be on its `allow`. Read and checked at startup. Config-owned like `egress`: `PUT /v1/pools` rejects it |
 | `storage` (pool entry) | unset (cocoon's default, 10G) | size of the copy-on-write disk the pool's golden is cold-booted with, in cocoon's own `--storage` spelling (`"40G"`, `"40GiB"`, `"40Gi"`: Docker/Kubernetes units, all binary) and passed to it verbatim; every clone, fork, checkpoint branch and promoted template of the pool inherits it. At least cocoon's default of 10G. Equal sizes spelled differently build the same golden; a changed size rebuilds the golden on the next build, and claims already out keep their disk. Config-owned like `egress`: `PUT /v1/pools` rejects it |
 | `max_claims` | 0 (unlimited) | node-wide cap on live claims; claim/fork/branch requests beyond it answer 429 with the pool state unharmed (on a cluster a non-volume claim tries a warm-peer redirect first; a volume claim answers the 429 with no redirect) |
@@ -277,7 +275,7 @@ Whoever hands out attach-only `rw` access owns that trade; see
 
 ### A fuller config
 
-The block above is the minimum. A production node with tenants, guarded
+The block above is the minimum. A production node with guarded
 egress + HTTPS interception, previews, an object-store checkpoint backend,
 the idle→hibernate→archive tiers, and a mesh looks like this — every field
 here validates on load:
@@ -292,9 +290,6 @@ here validates on load:
   "no_direct_io": true,
 
   "api_token": "op-root-token",
-  "tenants": [
-    {"name": "acme", "token": "acme-token", "max_claims": 50}
-  ],
 
   "secrets": [
     {"name": "gh", "header": "Authorization", "value_env": "GH_TOKEN"}
@@ -343,8 +338,8 @@ here validates on load:
 Secret values come from the environment named by `value_env` (here
 `GH_TOKEN`), never the file. The `egress_ca` files are provisioned with
 `sandboxd ca` — see [Guarded egress](egress.md#https-interception). On a
-cluster, `api_token`, `tenants`, `preview_secret`, and `cluster_key` must
-match on every node.
+cluster, `api_token`, `preview_secret`, and `cluster_key` must match on
+every node, and so must the tenant set.
 
 ### High-density no-network pools
 
@@ -399,18 +394,25 @@ docs cover validation semantics and the per-VM knobs.
 ### Auth model
 
 Three token kinds. The root `api_token` has full access — operators and
-single-tenant deployments need nothing else. Tenant tokens (the `tenants`
-list) create and manage their own resources: claims, forks, checkpoints,
+single-tenant deployments need nothing else. Tenant tokens, added through
+the [tenant API](sandboxd-api.md#tenants-v1tenants) and kept in
+`<data_dir>/tenants.json` (or the [shared tenant database](#shared-tenant-database)),
+create and manage their own resources: claims, forks, checkpoints,
 promoted templates, and preview URLs are stamped with the tenant name;
 sandbox and checkpoint listings filter to the caller's tenant, and a tenant
 can delete only its own checkpoints and templates (root sees everything).
-Operator surfaces stay root-only — a tenant token there is authenticated but
-not authorized, so it answers 403 (a wrong token stays 401). Per-sandbox
+Operator surfaces stay root-only — per-id sandbox reads and stats,
+`GET /v1/checkpoints/{id}/blob`, `GET /v1/info`, `PUT /v1/pools`,
+`/v1/tenants`, `/v1/config/reload`, `POST/DELETE /v1/drain`, `/metrics`; a
+tenant token there is authenticated but not authorized, so it answers 403 (a
+wrong token stays 401). Per-sandbox
 tokens are unchanged: whoever holds a sandbox's token drives that sandbox.
 Fork children inherit the parent's tenant and count against its
-`max_claims`; a tenant at its cap gets 429 exactly like a node at
+`max_claims` (0 = unlimited, a per-node cap, so a tenant's cluster limit is
+`max_claims` × nodes); a tenant at its cap gets 429 exactly like a node at
 `max_claims`, and the usage journal's claim events carry the tenant for
-per-tenant billing.
+per-tenant billing. `config.json` has no `tenants` field: a node starts with
+no tenants until the API adds them.
 
 ## Running
 
@@ -559,9 +561,8 @@ all at once or not at all. Every field falls into one of three classes:
   - `egress_classes`: each class's `egress` and `egress_upstream_env`;
   - node-wide: `egress_internal_allow`, `secrets`, `egress_upstream` and `egress_usage_bytes`.
 - **Left to their API**: a pool's targets (`warm`, `warm_max`, idle and archive
-  durations) belong to `PUT /v1/pools`, and a tenant's token, `max_claims`
-  and `egress_class` to `/v1/tenants`. A reload never changes them and lists them
-  as `ignored`. A pool key new in the file gets its settings at once and stays
+  durations) belong to `PUT /v1/pools`. A reload never changes them and lists
+  them as `ignored`. A pool key new in the file gets its settings at once and stays
   at no warm VMs until `PUT /v1/pools` names it.
 - **Restart only**: every other field. A reload that changes one is refused
   with the field names, and nothing applies.

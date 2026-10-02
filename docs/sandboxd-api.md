@@ -3,7 +3,7 @@
 All bodies are JSON. Three token kinds:
 
 - **root** — the node-level `api_token`: full access to every endpoint.
-- **tenant** — a token from the `tenants` config list: accepted by the
+- **tenant** — a token the [tenant API](#tenants-v1tenants) added: accepted by the
   resource-creating verbs (claim, fork, promote, checkpoint create/claim,
   preview mint) and the tenant-scoped listings/deletes below; everything a
   tenant creates is stamped with its name. Operator surfaces
@@ -73,7 +73,7 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   host-only value in the guest. `guest` (default `true`) delivers the entry into the guest; a
   `guest: false` entry never enters it and only feeds the node's egress
   [secrets](egress.md#claim-env-and-secrets). A bad entry answers 400 before
-  any VM is touched; see [claim env](#getputpatchdelete-v1sandboxesidenv)
+  any VM is touched; see [claim env](#getputpatch-v1sandboxesidenv)
 - `egress` `false` claims with no [egress policy](egress.md), whatever the
   pool's (or, for a promoted template, its source pool's): the guest's doors are
   never bound. Omitted or `true` keeps the policy the claim would get
@@ -447,7 +447,9 @@ token; 409 egress pool on a node without an egress attachment.
 ## Tenants (/v1/tenants)
 
 Auth: root only (tenant tokens get 403); a node without `api_token` answers 400,
-since tenants need it. The tenant set changes at runtime, with no restart:
+since tenants need it. The API is the only way in: `config.json` has no
+`tenants` field, and a node starts with no tenants. The set changes at
+runtime, with no restart:
 
 - `PUT /v1/tenants/{name}` `{"token": "…", "max_claims": 50, "egress_class": "desk"}`
   adds a tenant or changes one; an omitted `token` keeps the tenant's stored
@@ -492,12 +494,10 @@ a hibernated one is never archived, one archived before the removal is not
 woken (403) and is deleted when its retention ends, and at the deadline they
 are destroyed even under `on_expire: archive`. The verbs that need a tenant
 token (promote, checkpoint, preview, branch claims) are closed to them already.
-A tenant removed from `config.json` across a restart is a removed tenant too.
 
 The node writes the applied set to `<data_dir>/tenants.json` (0600, each token
-kept only as its SHA-256) before it serves, and from then on that file seeds the
-tenants at boot over `config.json`'s `tenants`; delete it to return to
-config-owned tenants. Each change is an `op:"tenants"` audit record naming the
+kept only as its SHA-256) before it serves, and loads that file at boot. Each
+change is an `op:"tenants"` audit record naming the
 tenants added, changed and removed. On a cluster every node needs the change
 (see [cluster](cluster.md#tenants)). 400 a bad entry, a duplicate name or token,
 a token equal to `api_token`, or a config-owned field.
@@ -700,14 +700,14 @@ without a guest agent; `mem_used_measured` is false when there is no VMM
 process to read (hibernated, or the PID is not yet known), so a zero is
 never mistaken for idle. 404 unknown id.
 
-## GET/PUT/PATCH/DELETE /v1/sandboxes/{id}/env
+## GET/PUT/PATCH /v1/sandboxes/{id}/env
 
 Auth: node API token (root or tenant). A tenant reaches only claims it owns;
 anything else is 404, like an unknown id. Each call speaks only for the node
 it reaches; on a cluster, send it to the claim's `owner_addr`.
 
 `PUT` replaces the claim's whole env with the body's map, under the claim
-rules; `DELETE` clears it. `PATCH` merges: each entry in the body is set,
+rules; `{"env": {}}` clears it. `PATCH` merges: each entry in the body is set,
 an entry of `null` removes that name, and every other entry is kept as stored,
 host-only values included, so a control plane that cannot read those values
 back never has to send them again:

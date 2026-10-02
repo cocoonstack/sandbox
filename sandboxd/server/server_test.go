@@ -335,7 +335,7 @@ func TestEnvVerbsForRootOrTheTenant(t *testing.T) {
 	if code, _ := call(t, http.MethodPut, "root", `{"env":{"GW":{"value":"Bearer a","guest":false},"G":{"value":"g"}}}`); code != http.StatusNoContent {
 		t.Fatalf("root set: %d, want 204", code)
 	}
-	if code, _ := call(t, http.MethodDelete, "acme-tok", ""); code != http.StatusNoContent {
+	if code, _ := call(t, http.MethodPut, "acme-tok", `{"env":{}}`); code != http.StatusNoContent {
 		t.Fatalf("tenant clear: %d, want 204", code)
 	}
 	want := []string{`sb_1 2 ""`, `sb_1 0 "acme"`}

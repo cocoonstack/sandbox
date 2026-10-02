@@ -35,7 +35,7 @@ Give every node a `mesh` block:
   encryption; all members must share it
 
 Two constraints, fine for a homogeneous cluster: all nodes share the same
-`api_token` and `tenants` set (the SDK replays whichever token authorized a
+`api_token` and tenant set (the SDK replays whichever token authorized a
 call across a redirect; a peer missing that tenant answers 401), and only
 egress-capable nodes redirect egress claims.
 
@@ -243,9 +243,9 @@ fully from it:
 
 | state | source of truth | survives restart |
 |---|---|---|
-| operator config (`tenants`, `volumes`, `secrets`, egress policies, `bridges`/`networks`, `mesh`, `preview_secret`, `egress_ca`) | `config.json` (human/deploy-tool owned) | re-read at boot; its reloadable part on a per-node [reload](deploy.md#reloading-the-config) |
+| operator config (`volumes`, `secrets`, egress policies, `bridges`/`networks`, `mesh`, `preview_secret`, `egress_ca`) | `config.json` (human/deploy-tool owned) | re-read at boot; its reloadable part on a per-node [reload](deploy.md#reloading-the-config) |
 | API-applied pool targets (`PUT /v1/pools`) | `<data_dir>/pools.json` (machine owned) | yes |
-| API-applied tenants (`/v1/tenants`) | `<data_dir>/tenants.json` (machine owned; `config.json`'s `tenants` seeds it until the first apply) | yes |
+| API-applied tenants (`/v1/tenants`) | `<data_dir>/tenants.json` (machine owned), or the shared `meta_store` table | yes |
 | claims | the claims journal + `Reconcile` | yes |
 | placement hints (warm counts, template and volume sets) | gossip | rebuilt |
 | checkpoint ownership | a live per-request probe (no gossip); a healed replica is this node's own persisted copy, aged out by `checkpoint_ttl_hours` | yes |
@@ -273,10 +273,11 @@ a per-node `Client.SetPools`.
 
 ### Tenants
 
-Tenants follow the same ownership rule: the first
-[tenant API](sandboxd-api.md#tenants-v1tenants) change writes
-`<data_dir>/tenants.json`, which then seeds the set at boot; delete it to
-return to `config.json`. Unlike pools, the set must be equal on every node,
+Tenants are API-only: `config.json` has no `tenants` field, a node starts
+with an empty set, and each
+[tenant API](sandboxd-api.md#tenants-v1tenants) change rewrites
+`<data_dir>/tenants.json`, which the node loads at boot. Unlike pools, the set
+must be equal on every node,
 because the SDK replays the authorizing token across a redirect. The change is
 still a client-side fan-out: `Client.PutTenantCluster`,
 `Client.DeleteTenantCluster` and `Client.SetTenantsCluster` apply it to the
@@ -326,7 +327,7 @@ Some config must match on every node or the cluster fails in confusing ways:
 
 | config | what breaks on mismatch |
 |---|---|
-| `api_token`, `tenants` | the SDK replays the authorizing token across a redirect; a mid-rotation peer missing that tenant/token answers 401, which the SDK treats as transient — the claim falls back to the origin node (which already authorized it) and resolves there |
+| `api_token`, the tenant set | the SDK replays the authorizing token across a redirect; a mid-rotation peer missing that tenant/token answers 401, which the SDK treats as transient — the claim falls back to the origin node (which already authorized it) and resolves there |
 | `preview_secret` | a preview URL signed on one node fails verification on another |
 | `mesh.cluster_key` | nodes cannot join / decrypt gossip at all |
 | `egress_ca` cluster root | a guest checkpointed/redirected across nodes trusts the root; a divergent root fails interception |
@@ -377,7 +378,7 @@ with every claim.
   never a wildcard)
 - the same engine root path (cocoon's `root_dir`) on every node; it is not in
   the digest, so a mismatch shows only at the first cross-node branch
-- same `api_token`, `tenants`, `preview_secret`, and `egress_ca` root everywhere
+- same `api_token`, tenant set, `preview_secret`, and `egress_ca` root everywhere
 - with `meta_store`, every node's DSN points at the same database: the tenant
   set is not in the gossiped digest, so nodes on different databases serve
   diverging tenants without a warning

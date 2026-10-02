@@ -307,15 +307,11 @@ func (e Env) SameGuest(other Env) bool {
 
 // Redacted copies e with every host-only value dropped, so a read names them without serving them.
 func (e Env) Redacted() Env {
-	if e == nil {
-		return nil
-	}
-	out := make(Env, len(e))
-	for name, v := range e {
+	out := maps.Clone(e)
+	for name, v := range out {
 		if !v.InGuest() {
-			v.Value = ""
+			out[name] = EnvVar{Guest: v.Guest}
 		}
-		out[name] = v
 	}
 	return out
 }
@@ -368,10 +364,8 @@ func (p EnvPatch) SetsGuest() bool {
 
 // Apply returns e with p's entries set or removed, nil when none remain; e is left unchanged.
 func (p EnvPatch) Apply(e Env) Env {
-	out := maps.Clone(e)
-	if out == nil {
-		out = Env{}
-	}
+	out := Env{}
+	maps.Copy(out, e)
 	for name, v := range p {
 		if v == nil {
 			delete(out, name)

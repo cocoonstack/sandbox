@@ -282,7 +282,7 @@ err = sb.SetEnv(ctx, nil)   // replaces the whole env; nil clears it
 An entry with a nil `Guest` is delivered into the guest; `Guest: new(false)`
 keeps it host-side, where only the node's egress reads it (see
 [secrets](egress.md#claim-env-and-secrets)). `Env`, `SetEnv` and `PatchEnv`
-call [the env verbs](sandboxd-api.md#getputpatchdelete-v1sandboxesidenv) on
+call [the env verbs](sandboxd-api.md#getputpatch-v1sandboxesidenv) on
 the claim's owner with the client's API token, not the sandbox token.
 `PatchEnv` sets each entry, removes each nil one and keeps the rest as stored,
 so a host-only value is never resent. A host-only change applies to the next

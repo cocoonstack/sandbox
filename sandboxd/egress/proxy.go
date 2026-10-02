@@ -153,11 +153,11 @@ func (p *Proxy) Close() {
 	for _, conn := range conns {
 		_ = conn.Close()
 	}
-	p.CloseIdle()
+	p.ResetPools()
 }
 
-// CloseIdle moves new requests to fresh pools; the old ones close each connection as its in-flight request ends.
-func (p *Proxy) CloseIdle() {
+// ResetPools moves new requests to fresh pools; the old ones close each connection as its in-flight request ends.
+func (p *Proxy) ResetPools() {
 	cur := p.pools.Load()
 	next := &connPools{tr: cur.tr.Clone(), routed: map[routeKey]*http.Transport{}}
 	if cur.mitm != nil {

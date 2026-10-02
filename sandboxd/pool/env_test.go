@@ -462,11 +462,12 @@ func envManager(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.P
 		egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"},
 		egress.SecretSpec{Name: "gw", Header: "Authorization"},
 	)
-	cfg := &config.Config{DataDir: dataDir, Pools: pools, Tenants: []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}}
+	cfg := &config.Config{DataDir: dataDir, APIToken: "root", Pools: pools}
 	m, err := NewManager(t.Context(), cfg, eng, secrets)
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}
+	putTenants(t, m, config.TenantSpec{Name: "acme", Token: "acme-tok"})
 	return m
 }
 

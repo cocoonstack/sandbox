@@ -81,11 +81,11 @@ var (
 	ErrBadCount          = errors.New("invalid fork count")
 	ErrBadVolume         = errors.New("invalid volume request")
 	ErrBadEnv            = errors.New("invalid env")
-	ErrBadTenant         = errors.New("invalid tenant")
-	ErrUnknownTenant     = errors.New("unknown tenant")
+	ErrBadTenant         = tenants.ErrInvalid
+	ErrUnknownTenant     = tenants.ErrUnknown
 	ErrBadConfig         = errors.New("invalid config")
 	ErrReloadRefused     = errors.New("config reload refused")
-	ErrTenantStoreDown   = errors.New("tenant store down")
+	ErrTenantStoreDown   = tenants.ErrUnavailable
 	ErrTenantRemoved     = errors.New("the claim's tenant was removed: it runs to its deadline but cannot renew, fork, or wake from the archive")
 	ErrVolumeUnavailable = fmt.Errorf("%w: unknown or unavailable volume", ErrBadVolume)
 	ErrNoWarm            = errors.New("no warm sandbox for key")

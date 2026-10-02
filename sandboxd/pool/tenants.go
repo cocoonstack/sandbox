@@ -3,7 +3,6 @@ package pool
 import (
 	"context"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -35,11 +34,7 @@ type TenantPage struct {
 
 // TenantByToken resolves a tenant bearer token to its tenant's shared, read-only record.
 func (m *Manager) TenantByToken(ctx context.Context, token string) (*config.TenantRecord, error) {
-	r, err := m.tenants.Resolve(ctx, sha256.Sum256([]byte(token)))
-	if err != nil {
-		return nil, tenantErr(err)
-	}
-	return r, nil
+	return m.tenants.Resolve(ctx, sha256.Sum256([]byte(token)))
 }
 
 // TenantRecords returns a node-local tenant set for the cluster config digest; a shared set returns nil.
@@ -51,7 +46,7 @@ func (m *Manager) TenantRecords() []config.TenantRecord {
 func (m *Manager) Tenants(ctx context.Context, after string, limit int) (TenantPage, error) {
 	records, err := m.tenants.List(ctx, after, limit+1)
 	if err != nil {
-		return TenantPage{}, tenantErr(err)
+		return TenantPage{}, err
 	}
 	more := len(records) > limit
 	records = records[:min(len(records), limit)]
@@ -116,7 +111,7 @@ func (m *Manager) tenantRecordOf(spec config.TenantSpec) (config.TenantRecord, e
 		r.TokenSHA256 = config.TokenSHA256(spec.Token)
 	}
 	if err := tenants.Validate(r, m.rootSum); err != nil {
-		return config.TenantRecord{}, tenantErr(err)
+		return config.TenantRecord{}, err
 	}
 	return r, nil
 }
@@ -127,7 +122,7 @@ func (m *Manager) applyTenants(ctx context.Context, write func() (tenants.Change
 	}
 	c, err := write()
 	if err != nil {
-		return tenantErr(err)
+		return err
 	}
 	if !c.Empty() {
 		m.recordAudit(ctx, "", auditFrame{Op: "tenants", Added: c.Added, Changed: c.Changed, Removed: c.Removed})
@@ -147,7 +142,7 @@ func (m *Manager) openTenants(ctx context.Context, cfg *config.Config) error {
 		m.tenants, err = pg.Open(ctx, os.Getenv(ms.DSNEnv))
 		return err
 	}
-	m.tenants, err = file.Open(ctx, cfg.DataDir, configTenantRecords(cfg.Tenants), m.rootSum)
+	m.tenants, err = file.Open(ctx, cfg.DataDir, m.rootSum)
 	return err
 }
 
@@ -186,7 +181,7 @@ func (m *Manager) tenantRemoved(ctx context.Context, tenant string) error {
 	_, ok, err := m.tenants.Lookup(ctx, tenant)
 	switch {
 	case err != nil:
-		return tenantErr(err)
+		return err
 	case !ok:
 		return ErrTenantRemoved
 	}
@@ -200,24 +195,4 @@ func (m *Manager) tenantGone(tenant string) bool {
 	}
 	_, p := m.tenants.Peek(tenant)
 	return p == tenants.Absent
-}
-
-func tenantErr(err error) error {
-	switch {
-	case errors.Is(err, tenants.ErrInvalid):
-		return fmt.Errorf("%w: %w", ErrBadTenant, err)
-	case errors.Is(err, tenants.ErrUnknown):
-		return fmt.Errorf("%w: %w", ErrUnknownTenant, err)
-	case errors.Is(err, tenants.ErrUnavailable):
-		return fmt.Errorf("%w: %w", ErrTenantStoreDown, err)
-	}
-	return err
-}
-
-func configTenantRecords(specs []config.TenantSpec) []config.TenantRecord {
-	out := make([]config.TenantRecord, len(specs))
-	for i, t := range specs {
-		out[i] = config.TenantRecord{Name: t.Name, TokenSHA256: config.TokenSHA256(t.Token), MaxClaims: t.MaxClaims, EgressClass: t.EgressClass}
-	}
-	return out
 }

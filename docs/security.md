@@ -94,7 +94,7 @@ rather than confirming existence, and operator surfaces answer tenants 403.
 The volume catalog is an operator-owned data boundary. A volume name and its
 access list must mean the same thing fleet-wide, although membership is
 node-local. An empty entry `tenants` list permits every authenticated scope; a
-nonempty list permits only those configured tenants, while the root token always
+nonempty list permits only those named tenants, while the root token always
 has access. Config load rejects an access-list name that is not a configured
 tenant. Claim lookup returns byte-identical errors for an unknown and a
 forbidden name, and catalog discovery filters before replying, so a tenant

@@ -25,7 +25,7 @@ var (
 	// ErrUnknown answers a token or name no tenant holds.
 	ErrUnknown = errors.New("unknown tenant")
 	// ErrUnavailable answers a lookup or write the backend cannot serve now; a retry may succeed.
-	ErrUnavailable = errors.New("tenant source unavailable")
+	ErrUnavailable = errors.New("tenant store down")
 	// ErrInvalid answers a record the set refuses: a bad field, a reused token, or a new tenant without one.
 	ErrInvalid = errors.New("invalid tenant")
 )
