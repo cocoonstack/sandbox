@@ -133,7 +133,7 @@ func TestLaneVerdictReachesGuestOnColdBoots(t *testing.T) {
 					t.Fatalf("cold provision: %v", err)
 				}
 				m.destroy(t.Context(), sb.VMName)
-			} else if err := m.buildGoldenSteps(t.Context(), tt.key, "sbx-gb", "snap", filepath.Join(m.goldensDir(), tt.key.Hash()), ""); err != nil {
+			} else if err := m.buildGoldenSteps(t.Context(), m.view.Load(), tt.key, "sbx-gb", "snap", filepath.Join(m.goldensDir(), tt.key.Hash()), ""); err != nil {
 				t.Fatalf("buildGoldenSteps: %v", err)
 			}
 			if !slices.Equal(eng.laneMarks, tt.want) {
@@ -150,14 +150,14 @@ func TestGoldenStampGatesAdoptionOnLane(t *testing.T) {
 	if err := os.MkdirAll(g, 0o750); err != nil {
 		t.Fatalf("stage golden: %v", err)
 	}
-	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(testKey, false, nil, "")), 0o644); err != nil {
+	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(m.view.Load(), testKey, "")), 0o644); err != nil {
 		t.Fatalf("write stamp: %v", err)
 	}
 	m.adoptGolden(p, "")
 	if p.goldenDir != "" {
 		t.Error("adopted an egress-lane golden that never marked its guest; want rebuild")
 	}
-	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(egKey, false, nil, "")), 0o644); err != nil {
+	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(m.view.Load(), egKey, "")), 0o644); err != nil {
 		t.Fatalf("write stamp: %v", err)
 	}
 	m.adoptGolden(p, "")
@@ -217,15 +217,17 @@ func TestEgressLaneWakeFailsClosed(t *testing.T) {
 
 func TestEffectivePolicyKeepsTheLayerPinnedAtClaim(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	m.tenantEgress = map[string]*egress.Policy{"acme": {Allow: []egress.Rule{{Host: "b.test"}}}}
-	m.poolEgress = map[types.PoolKey]*egress.Policy{}
+	editView(m, func(v *configView) {
+		v.tenantEgress = map[string]*egress.Policy{"acme": {Allow: []egress.Rule{{Host: "b.test"}}}}
+		v.poolEgress = map[types.PoolKey]*egress.Policy{}
+	})
 
 	m.pools = map[types.PoolKey]*pool{testKey: newPool(testKey)}
-	if _, ok := m.effectivePolicy(&types.Sandbox{Key: testKey, Tenant: "acme", Layer: types.LayerUnpooled}); !ok {
+	if _, ok := m.effectivePolicy(m.view.Load(), &types.Sandbox{Key: testKey, Tenant: "acme", Layer: types.LayerUnpooled}); !ok {
 		t.Error("a claim made on an unpooled key lost its tenant policy when the key gained a pool")
 	}
 	m.pools = map[types.PoolKey]*pool{}
-	if _, ok := m.effectivePolicy(&types.Sandbox{Key: testKey, Tenant: "acme", Layer: types.LayerPooled}); ok {
+	if _, ok := m.effectivePolicy(m.view.Load(), &types.Sandbox{Key: testKey, Tenant: "acme", Layer: types.LayerPooled}); ok {
 		t.Error("a claim made on a policy-less pool gained the tenant policy when the pool was dropped")
 	}
 }
@@ -276,16 +278,18 @@ func TestEffectivePolicyComposition(t *testing.T) {
 				m.pools[testKey] = newPool(testKey)
 				m.pools[testKey].removed = tc.removed
 			}
-			m.poolEgress = map[types.PoolKey]*egress.Policy{}
-			if tc.pool != nil {
-				m.poolEgress[testKey] = tc.pool
-			}
-			m.tenantEgress = map[string]*egress.Policy{}
-			if tc.tnPol != nil {
-				m.tenantEgress["acme"] = tc.tnPol
-			}
+			editView(m, func(v *configView) {
+				v.poolEgress = map[types.PoolKey]*egress.Policy{}
+				if tc.pool != nil {
+					v.poolEgress[testKey] = tc.pool
+				}
+				v.tenantEgress = map[string]*egress.Policy{}
+				if tc.tnPol != nil {
+					v.tenantEgress["acme"] = tc.tnPol
+				}
+			})
 			sb := &types.Sandbox{Key: testKey, Tenant: tc.tenant}
-			eval, ok := m.effectivePolicy(sb)
+			eval, ok := m.effectivePolicy(m.view.Load(), sb)
 			if ok != tc.wantArmed {
 				t.Fatalf("armed=%v, want %v", ok, tc.wantArmed)
 			}
@@ -446,7 +450,7 @@ func TestEgressLaneLocksWithNoPolicyAnywhere(t *testing.T) {
 	eng := newFakeEngine()
 	eng.tap = "tap-nopol"
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey})
-	if m.guardedEgress {
+	if m.view.Load().guardedEgress {
 		t.Fatal("no policy configured; guardedEgress should be false")
 	}
 	sb := &types.Sandbox{ID: "sb_np", Key: egKey, VMName: "sbx-np", TAP: "tap-nopol"}
@@ -492,14 +496,14 @@ func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 	if err := os.MkdirAll(gd, 0o750); err != nil {
 		t.Fatalf("golden dir: %v", err)
 	}
-	if err := os.WriteFile(gd+goldenStampSuffix, []byte(m.goldenStamp(egKey, m.poolIntercepts(egKey), nil, "")), 0o644); err != nil {
+	if err := os.WriteFile(gd+goldenStampSuffix, []byte(m.goldenStamp(m.view.Load(), egKey, "")), 0o644); err != nil {
 		t.Fatalf("golden stamp: %v", err)
 	}
 	m.mu.Lock()
 	m.pools[egKey].goldenDir = gd
 	m.mu.Unlock()
 	policyLive := func() bool {
-		_, ok := m.effectivePolicy(&types.Sandbox{Key: egKey})
+		_, ok := m.effectivePolicy(m.view.Load(), &types.Sandbox{Key: egKey})
 		return ok
 	}
 	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: egKey, WarmMax: 3}}); err != nil {
@@ -540,13 +544,13 @@ func TestEgressDialerBlocksInternal(t *testing.T) {
 		"[64:ff9b::a00:1]:80",
 	}
 	for _, addr := range blocked {
-		if err := newEgressDialer(nil).Control("tcp", addr, nil); err == nil {
+		if err := newEgressDialer(func() []egress.InternalAllow { return nil }).Control("tcp", addr, nil); err == nil {
 			t.Errorf("dial to internal %s allowed; SSRF not blocked", addr)
 		}
 	}
 
 	for _, addr := range []string{"93.184.216.34:443", "[2606:4700:4700::1111]:443", "[64:ff9b::5db8:d822]:443"} {
-		if err := newEgressDialer(nil).Control("tcp", addr, nil); err != nil {
+		if err := newEgressDialer(func() []egress.InternalAllow { return nil }).Control("tcp", addr, nil); err != nil {
 			t.Errorf("dial to public %s blocked: %v", addr, err)
 		}
 	}
@@ -570,7 +574,7 @@ func TestEgressLaneCannotForkOrCheckpoint(t *testing.T) {
 }
 
 func TestEgressDialerAdmitsOnlyNamedInternalPrefixes(t *testing.T) {
-	d := newEgressDialer(parseInternalAllow([]string{"fdc8::/16", "10.8.0.0/16"}))
+	d := newEgressDialer(func() []egress.InternalAllow { return parseInternalAllow([]string{"fdc8::/16", "10.8.0.0/16"}) })
 	check := func(addr string) error {
 		return d.Control("tcp", addr, nil)
 	}
@@ -603,7 +607,7 @@ func TestEgressDialerAdmitsOnlyNamedInternalPrefixes(t *testing.T) {
 }
 
 func TestEgressDialerWildcardAllowsEverything(t *testing.T) {
-	d := newEgressDialer(parseInternalAllow([]string{"0.0.0.0/0", "::/0"}))
+	d := newEgressDialer(func() []egress.InternalAllow { return parseInternalAllow([]string{"0.0.0.0/0", "::/0"}) })
 	for _, addr := range []string{
 		"93.184.216.34:443",
 		"[fdc8:17:9:200f::1]:443",
@@ -619,7 +623,9 @@ func TestEgressDialerWildcardAllowsEverything(t *testing.T) {
 }
 
 func TestEgressDialerScopesInternalAllowToPorts(t *testing.T) {
-	d := newEgressDialer(parseInternalAllow([]string{"10.8.0.1/32:18090,9000", "fdc8::/16:443", "10.9.0.0/16"}))
+	d := newEgressDialer(func() []egress.InternalAllow {
+		return parseInternalAllow([]string{"10.8.0.1/32:18090,9000", "fdc8::/16:443", "10.9.0.0/16"})
+	})
 	for name, tc := range map[string]struct {
 		addr    string
 		allowed bool
@@ -868,7 +874,7 @@ func TestAPromotedTemplatesCloneEgressesAsItsSourcePool(t *testing.T) {
 		t.Fatalf("clone policy source %+v layer %q, want the source pool %+v and its pooled layer", clone.PolicySource, clone.Layer, testKey)
 	}
 	dialDoors(t, clone)
-	eval, ok := m.effectivePolicy(clone)
+	eval, ok := m.effectivePolicy(m.view.Load(), clone)
 	if !ok {
 		t.Fatal("the clone resolved no policy")
 	}
@@ -957,7 +963,7 @@ func TestAClaimWithoutEgressGetsNoDoorsWhateverItsPolicy(t *testing.T) {
 
 func TestNetRouteFollowsTheLaneAndTheDoors(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	m.guardedEgress = true
+	editView(m, func(v *configView) { v.guardedEgress = true })
 	armed := &types.Sandbox{ID: "sb_armed", Key: testKey}
 	m.egressListeners[armed.ID] = &egressListener{}
 	for _, tc := range []struct {

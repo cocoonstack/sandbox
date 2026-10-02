@@ -82,6 +82,8 @@ var (
 	ErrBadEnv            = errors.New("invalid env")
 	ErrBadTenant         = errors.New("invalid tenant")
 	ErrUnknownTenant     = errors.New("unknown tenant")
+	ErrBadConfig         = errors.New("invalid config")
+	ErrReloadRefused     = errors.New("config reload refused")
 	ErrTenantRemoved     = errors.New("the claim's tenant was removed: it runs to its deadline but cannot renew, fork, or wake from the archive")
 	ErrVolumeUnavailable = fmt.Errorf("%w: unknown or unavailable volume", ErrBadVolume)
 	ErrNoWarm            = errors.New("no warm sandbox for key")
@@ -212,6 +214,8 @@ type pool struct {
 
 	goldenDir string
 	imageID   string
+	// goldenGen counts installs, so a clone of a retired golden never lands after a rebuild at the same path.
+	goldenGen uint64
 	building  bool
 	nextBuild time.Time
 	removed   bool // dropped from the desired set while building/refilling; swept by refillOnce
@@ -310,26 +314,26 @@ type Manager struct {
 	// egressTaps holds the nft-locked egress-lane tap per sandbox id; guarded by m.mu.
 	egressTaps map[string]string
 
+	view atomic.Pointer[configView]
+	// cfg is the config the view was built from; reloadMu orders reloads, the only writers of cfg and view.
+	cfg      *config.Config
+	reloadMu sync.Mutex
+
 	maxClaims    int
 	releaseDelay time.Duration
 	draining     bool // guarded by m.mu; deliberately not persisted
 	// tenants is read lock-free per request; tenantMu orders its writers, which persist before they publish.
-	tenants      atomic.Pointer[tenantSet]
-	tenantMu     sync.Mutex
-	tenantPath   string
-	tenantSeed   string
-	rootSum      string
-	onTenants    func()
-	tenantLive   map[string]int
-	tenantEgress map[string]*egress.Policy // per-tenant allow-list; nil = no tenant policy
-	poolEgress   map[types.PoolKey]*egress.Policy
-	poolWarmups  map[types.PoolKey][]string
-	poolTrims    map[types.PoolKey]bool
-	poolStorage  map[types.PoolKey]string
-	usage        *journal
-	audit        *journal
-	counters     counters
-	ckpts        store.Store
+	tenants    atomic.Pointer[tenantSet]
+	tenantMu   sync.Mutex
+	tenantPath string
+	tenantSeed string
+	rootSum    string
+	onTenants  func()
+	tenantLive map[string]int
+	usage      *journal
+	audit      *journal
+	counters   counters
+	ckpts      store.Store
 	// A cluster-wide backend makes heal and the delete broadcast no-ops
 	ckptsShared bool
 	healer      *peer.Healer
@@ -357,21 +361,13 @@ type Manager struct {
 	// notifyTemplates is set before serving starts and fires after a promote or template delete.
 	notifyTemplates func()
 
-	// egressSecrets is read-only after startup; egressCA is nil unless a pool rule intercepts.
-	egressSecrets *egress.SecretStore
-	egressCA      *egress.CA
-	guardedEgress bool
-	lockEgress    bool
+	// egressCA is nil unless a pool rule intercepted at boot.
+	egressCA   *egress.CA
+	lockEgress bool
 	// dial, destVerdict and sweep are test seams: the SSRF guard blocks loopback, the nft sweep is netlink-only.
 	dial        egress.DialFunc
 	destVerdict func(netip.Addr, uint16) (bool, error)
 	sweep       func(map[string]bool) error
-
-	upstreamEnv    string
-	upstreamAllow  egress.UpstreamAllow
-	poolUpstream   map[types.PoolKey]string
-	tenantUpstream map[string]string
-	usageBytes     bool
 
 	mu              sync.Mutex
 	pools           map[types.PoolKey]*pool
@@ -397,7 +393,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	if refill < 1 {
 		refill = defaultRefill
 	}
-	internalAllow := parseInternalAllow(cfg.EgressInternalAllow)
 	m := &Manager{
 		eng:             eng,
 		dataDir:         cfg.DataDir,
@@ -424,12 +419,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		recRefs:         map[string]int{},
 		healPending:     map[string]struct{}{},
 		healAbort:       map[string]struct{}{},
-		egressSecrets:   secrets,
-		dial:            newEgressDialer(internalAllow).DialContext,
-		destVerdict:     func(ip netip.Addr, port uint16) (bool, error) { return destVerdict(internalAllow, ip, port) },
-		poolUpstream:    map[types.PoolKey]string{},
-		tenantUpstream:  map[string]string{},
-		usageBytes:      cfg.EgressUsageBytes,
 		sweep:           netfilter.SweepExcept,
 		refillSem:       make(chan struct{}, refill),
 		probeSem:        make(chan struct{}, refill),
@@ -485,23 +474,11 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	if err := m.seedTenants(cfg); err != nil {
 		return nil, err
 	}
-	m.tenantEgress = make(map[string]*egress.Policy, len(cfg.Tenants))
-	m.poolEgress = make(map[types.PoolKey]*egress.Policy, len(cfg.Pools))
-	m.poolWarmups = make(map[types.PoolKey][]string, len(cfg.Pools))
-	m.poolTrims = make(map[types.PoolKey]bool, len(cfg.Pools))
-	m.poolStorage = make(map[types.PoolKey]string, len(cfg.Pools))
-	if u := cfg.EgressUpstream; u != nil {
-		m.upstreamEnv = u.ClaimEnv
-		m.upstreamAllow, _ = egress.ParseUpstreamAllow(u.Allow) // config validation rejected a bad entry
-	}
-	for _, tn := range cfg.Tenants {
-		if tn.EgressUpstreamEnv != "" {
-			m.tenantUpstream[tn.Name] = os.Getenv(tn.EgressUpstreamEnv)
-		}
-		if tn.Egress != nil {
-			m.tenantEgress[tn.Name] = tn.Egress
-			m.guardedEgress = true
-		}
+	m.cfg = cfg
+	m.view.Store(newConfigView(cfg, secrets))
+	m.dial = newEgressDialer(func() []egress.InternalAllow { return m.view.Load().internalAllow }).DialContext
+	m.destVerdict = func(ip netip.Addr, port uint16) (bool, error) {
+		return destVerdict(m.view.Load().internalAllow, ip, port)
 	}
 	m.idleDefault = time.Duration(cfg.IdleHibernateSeconds) * time.Second
 	m.archiveAfterDefault = time.Duration(cfg.ArchiveAfterSeconds) * time.Second
@@ -510,22 +487,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		p := newPool(spec.PoolKey)
 		p.applySpec(spec)
 		m.pools[spec.PoolKey] = p
-		if spec.Egress != nil {
-			m.poolEgress[spec.PoolKey] = spec.Egress
-			m.guardedEgress = true
-		}
-		if len(spec.Warmup) > 0 {
-			m.poolWarmups[spec.PoolKey] = spec.Warmup
-		}
-		if spec.CaptureTrim {
-			m.poolTrims[spec.PoolKey] = true
-		}
-		if spec.Storage != "" {
-			m.poolStorage[spec.PoolKey] = spec.Storage
-		}
-		if spec.EgressUpstreamEnv != "" {
-			m.poolUpstream[spec.PoolKey] = os.Getenv(spec.EgressUpstreamEnv)
-		}
 	}
 	if slices.ContainsFunc(cfg.Pools, func(s config.PoolSpec) bool { return s.Egress.Intercepts() }) {
 		ca, err := loadEgressCA(cfg.EgressCA)

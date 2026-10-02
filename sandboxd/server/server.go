@@ -45,6 +45,8 @@ var poolErrHTTP = []struct {
 	{pool.ErrBadCount, http.StatusBadRequest, ""},
 	{pool.ErrBadEnv, http.StatusBadRequest, ""},
 	{pool.ErrBadTenant, http.StatusBadRequest, ""},
+	{pool.ErrBadConfig, http.StatusBadRequest, ""},
+	{pool.ErrReloadRefused, http.StatusConflict, ""},
 	{pool.ErrTenantRemoved, http.StatusForbidden, ""},
 	{pool.ErrNoEgress, http.StatusConflict, ""},
 	{pool.ErrNoEgressHibernate, http.StatusConflict, ""},
@@ -143,6 +145,9 @@ type CheckpointProber interface {
 	Forget(id string)
 }
 
+// ConfigReloader re-reads the node config and applies its reloadable settings.
+type ConfigReloader func(ctx context.Context) (pool.ReloadResult, error)
+
 // InfoResponse is the wire reply of GET /v1/info.
 type InfoResponse struct {
 	Pools            []pool.PoolInfo     `json:"pools"`
@@ -210,6 +215,7 @@ type Server struct {
 	apiToken  string
 	advertise string
 	preview   *PreviewServer
+	reload    ConfigReloader
 
 	execBudget *semaphore.Weighted
 
@@ -241,6 +247,11 @@ func New(apiToken, advertise string, mgr Manager, dialer Dialer, placer Placer, 
 	}
 }
 
+// SetConfigReload wires the reload POST /v1/config/reload runs; set it before serving.
+func (s *Server) SetConfigReload(f ConfigReloader) {
+	s.reload = f
+}
+
 // Handler builds the route table.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -269,6 +280,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/templates", s.requireToken(s.handleDeleteTemplate))
 	mux.HandleFunc("PUT /v1/templates/labels", s.requireToken(s.handleSetTemplateLabels))
 	mux.HandleFunc("PUT /v1/pools", s.requireRoot(s.handlePutPools))
+	mux.HandleFunc("POST /v1/config/reload", s.requireRoot(s.handleReload))
 	mux.HandleFunc("GET /v1/tenants", s.requireRoot(s.handleTenants))
 	mux.HandleFunc("PUT /v1/tenants", s.requireRoot(s.handlePutTenants))
 	mux.HandleFunc("PUT /v1/tenants/{name}", s.requireRoot(s.handlePutTenant))
@@ -709,6 +721,15 @@ func (s *Server) handlePutPools(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.handleInfo(w, r)
 	}
+}
+
+func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
+	if s.reload == nil {
+		writeErr(w, http.StatusNotImplemented, "config reload is not wired on this node")
+		return
+	}
+	res, err := s.reload(r.Context())
+	writeResult(w, r, "config reload", "", "config reload failed", err, func() { writeJSON(w, http.StatusOK, res) })
 }
 
 func (s *Server) handleTenants(w http.ResponseWriter, _ *http.Request) {

@@ -508,6 +508,53 @@ drains the warm pools; poll `GET /v1/info` until `claimed` reaches zero (or
 let the leases expire), then stop sandboxd. `DELETE /v1/drain` uncordons.
 The drain is not persisted — a restarted node serves again.
 
+### Reloading the config
+
+`kill -HUP <sandboxd pid>` or a root `POST /v1/config/reload`
+([API](sandboxd-api.md#post-v1configreload)) re-reads `config.json`,
+validates it with the same code as boot, and applies the reloadable settings
+all at once or not at all. Every field falls into one of three classes:
+
+- **Reloaded**:
+  - per pool: `egress`, `warmup`, `capture_trim`, `storage`, `egress_upstream_env`, for existing keys and for keys new in the file;
+  - per tenant: `egress` and `egress_upstream_env`;
+  - node-wide: `egress_internal_allow`, `secrets`, `egress_upstream` and `egress_usage_bytes`.
+- **Left to their API**: a pool's targets (`warm`, `warm_max`, idle and archive
+  durations) belong to `PUT /v1/pools`, and a tenant's token and
+  `max_claims` to `/v1/tenants`. A reload never changes them and lists them
+  as `ignored`. A pool key new in the file gets its settings at once and stays
+  at no warm VMs until `PUT /v1/pools` names it.
+- **Restart only**: every other field. A reload that changes one is refused
+  with the field names, and nothing applies.
+
+Effects on what already runs:
+
+- **Egress changes** reach live claims on their next request or connection;
+  open tunnels keep their path. A claim whose policy a reload removes is
+  denied everything. A claim armed while it had no policy has no egress proxy,
+  so a policy a reload adds reaches it only after a release or a wake.
+- **Armed once per claim**: the SOCKS5 door (`socks5`) and
+  `egress_usage_bytes` apply to claims armed after the reload.
+- **Golden rebuilds**: a change to a key's `warmup` or `storage`, or turning
+  its interception on or off, retires that key's golden and destroys its warm
+  VMs, so the next clone carries the new settings. Live claims and their VMs
+  are untouched. A golden that was building during the reload is discarded
+  and rebuilt.
+- **Interception**: turning `intercept` on is refused for a key this node has
+  already served (its guests do not trust the CA) and on a node that loaded
+  no `egress_ca` at boot. Templates and checkpoints of the key captured
+  elsewhere do not trust the CA either, so turn interception on under a new
+  pool key. Changing which hosts an already-intercepting pool intercepts
+  reloads normally.
+- **Environment values**: `value_env` and `egress_upstream_env` name variables
+  in sandboxd's own environment, which only a restart changes. A reload can
+  point at a different variable, but only one that was already set when
+  sandboxd started.
+
+A successful reload writes an `op:"config_reload"` audit record listing what
+changed. Each node reloads its own file; on a cluster, distribute the file and
+reload every node.
+
 ## Verifying a node
 
 ```bash

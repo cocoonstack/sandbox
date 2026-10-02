@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -123,6 +125,47 @@ func TestRootFindsARemovedTenantsRemoteTemplate(t *testing.T) {
 		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"redirect":["peer:7777"]`) {
 			t.Errorf("%s %s: %d %s, want the retained template's owner", tt.method, tt.path, resp.StatusCode, body)
+		}
+	}
+}
+
+func TestConfigReloadIsRootOnlyAndNamesWhatChanged(t *testing.T) {
+	calls := 0
+	reload := func(context.Context) (pool.ReloadResult, error) {
+		calls++
+		switch calls {
+		case 1:
+			return pool.ReloadResult{Changed: []string{"egress_internal_allow"}}, nil
+		case 2:
+			return pool.ReloadResult{}, fmt.Errorf("%w: listen change only at a restart", pool.ErrReloadRefused)
+		default:
+			return pool.ReloadResult{}, fmt.Errorf("%w: parse config", pool.ErrBadConfig)
+		}
+	}
+	mgr := &fakeManager{tenants: []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}}
+	srv := New("root", "node:7777", mgr, &fakeDialer{}, nil, nil, nil, nil)
+	srv.SetConfigReload(reload)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	resp := doReq(t, http.MethodPost, ts.URL+"/v1/config/reload", "acme-tok", "")
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || calls != 0 {
+		t.Errorf("tenant token: %d after %d reloads, want 403 and none", resp.StatusCode, calls)
+	}
+	for _, want := range []struct {
+		code int
+		body string
+	}{
+		{http.StatusOK, `{"changed":["egress_internal_allow"]}`},
+		{http.StatusConflict, "listen change only at a restart"},
+		{http.StatusBadRequest, "parse config"},
+	} {
+		resp = doReq(t, http.MethodPost, ts.URL+"/v1/config/reload", "root", "")
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != want.code || !strings.Contains(string(body), want.body) {
+			t.Errorf("reload: %d %s, want %d with %q", resp.StatusCode, body, want.code, want.body)
 		}
 	}
 }

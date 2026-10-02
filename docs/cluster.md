@@ -243,7 +243,7 @@ fully from it:
 
 | state | source of truth | survives restart |
 |---|---|---|
-| operator config (`tenants`, `volumes`, `secrets`, egress policies, `bridges`/`networks`, `mesh`, `preview_secret`, `egress_ca`) | `config.json` (human/deploy-tool owned) | re-read at boot |
+| operator config (`tenants`, `volumes`, `secrets`, egress policies, `bridges`/`networks`, `mesh`, `preview_secret`, `egress_ca`) | `config.json` (human/deploy-tool owned) | re-read at boot; its reloadable part on a per-node [reload](deploy.md#reloading-the-config) |
 | API-applied pool targets (`PUT /v1/pools`) | `<data_dir>/pools.json` (machine owned) | yes |
 | API-applied tenants (`/v1/tenants`) | `<data_dir>/tenants.json` (machine owned; `config.json`'s `tenants` seeds it until the first apply) | yes |
 | claims | the claims journal + `Reconcile` | yes |
