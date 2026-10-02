@@ -863,10 +863,10 @@ func TestPutPoolsUpdatesTargets(t *testing.T) {
 func TestSandboxVerbFlows(t *testing.T) {
 	verbs := []struct {
 		name string
-		hook func(f *fakeManager, h func(id, token string) error)
+		hook func(f *fakeManager, h sandboxVerbFunc)
 	}{
-		{"release", func(f *fakeManager, h func(id, token string) error) { f.release = h }},
-		{"hibernate", func(f *fakeManager, h func(id, token string) error) { f.hibernate = h }},
+		{"release", func(f *fakeManager, h sandboxVerbFunc) { f.release = h }},
+		{"hibernate", func(f *fakeManager, h sandboxVerbFunc) { f.hibernate = h }},
 	}
 	tests := []struct {
 		name string

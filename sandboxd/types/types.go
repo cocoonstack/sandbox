@@ -711,15 +711,7 @@ func validMetadataValue(v string) bool {
 }
 
 func validMetadataKey(k string) bool {
-	if k == "" || len(k) > maxMetadataKeyBytes {
-		return false
-	}
-	for i := range len(k) {
-		if c := k[i]; c < ' ' || c > '~' || c == '=' || c == '&' {
-			return false
-		}
-	}
-	return true
+	return k != "" && len(k) <= maxMetadataKeyBytes && !strings.ContainsFunc(k, func(r rune) bool { return r < ' ' || r > '~' || r == '=' || r == '&' })
 }
 
 func pathWithin(parent, child string) bool {

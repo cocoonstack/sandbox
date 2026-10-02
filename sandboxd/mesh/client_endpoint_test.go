@@ -7,7 +7,6 @@ import (
 
 func TestClientAddressesDoNotReplaceInternalAddresses(t *testing.T) {
 	m := newBoundMesh(t, t.TempDir())
-	m.SetSelfClientAddr("https://self.example")
 	if m.Members()[0].ClientAddr != "https://self.example" {
 		t.Fatal("self client address was not published")
 	}

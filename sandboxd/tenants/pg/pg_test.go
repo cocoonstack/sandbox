@@ -1,8 +1,12 @@
 package pg
 
 import (
+	"context"
 	"errors"
+	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest"
@@ -76,6 +80,61 @@ func TestACachedTenantOutlivesTheDatabase(t *testing.T) {
 	}
 }
 
+func TestARoleWithoutCreateServesAPreCreatedTable(t *testing.T) {
+	dsn := tenantstest.PGSchema(t)
+	owner := openIn(t, dsn)
+	if err := owner.Close(); err != nil {
+		t.Fatalf("close owner: %v", err)
+	}
+	schema := dsn[strings.LastIndex(dsn, "=")+1:]
+	role := "r" + schema
+	admin, err := pgx.Connect(t.Context(), dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = admin.Close(context.Background()) }()
+	for _, sql := range []string{
+		"CREATE ROLE " + role + " LOGIN PASSWORD 'p'",
+		"GRANT USAGE ON SCHEMA " + schema + " TO " + role,
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON " + schema + ".sandboxd_tenants TO " + role,
+	} {
+		if _, err = admin.Exec(t.Context(), sql); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	t.Cleanup(func() {
+		if c, cerr := pgx.Connect(context.Background(), dsn); cerr == nil {
+			_, _ = c.Exec(context.Background(), "DROP OWNED BY "+role)
+			_, _ = c.Exec(context.Background(), "DROP ROLE "+role)
+			_ = c.Close(context.Background())
+		}
+	})
+	s := openIn(t, restricted(dsn, role))
+	if _, err = s.Put(t.Context(), tenantstest.Record("u-1", "t1", 0, "")); err != nil {
+		t.Errorf("a write as the restricted role: %v", err)
+	}
+}
+
+func TestAnUnrelatedEvictionKeepsALookupCacheable(t *testing.T) {
+	s := &Source{evicted: map[string]uint64{}}
+	start := s.seq
+	s.seq++
+	s.evicted["other"] = s.seq
+	if !s.fresh("u-1", start) {
+		t.Error("another tenant's eviction discarded a read of u-1")
+	}
+	s.seq++
+	s.evicted["u-1"] = s.seq
+	if s.fresh("u-1", start) {
+		t.Error("a read that raced u-1's own eviction stays cacheable")
+	}
+	s.seq++
+	s.floor = s.seq
+	if s.fresh("u-2", start) {
+		t.Error("a read that raced a full flush stays cacheable")
+	}
+}
+
 func openIn(t *testing.T, dsn string) *Source {
 	t.Helper()
 	s, err := Open(t.Context(), dsn)
@@ -84,4 +143,10 @@ func openIn(t *testing.T, dsn string) *Source {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+func restricted(dsn, role string) string {
+	scheme, rest, _ := strings.Cut(dsn, "://")
+	_, host, _ := strings.Cut(rest, "@")
+	return scheme + "://" + role + ":p@" + host
 }

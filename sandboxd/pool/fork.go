@@ -16,8 +16,10 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
-	if !cred.Operator && m.tenantGone(sb.Tenant) {
-		return nil, ErrTenantRemoved
+	if !cred.Operator {
+		if err := m.tenantRemoved(ctx, sb.Tenant); err != nil {
+			return nil, err
+		}
 	}
 	if count < 1 || count > m.maxFork {
 		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, m.maxFork)

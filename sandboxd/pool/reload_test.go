@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -86,7 +87,7 @@ func TestReloadGivesANewKeyItsSettingsBeforeItsGolden(t *testing.T) {
 	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 1}}); err != nil {
 		t.Fatalf("SetPools: %v", err)
 	}
-	waitFor(t, func() bool { return refilledTo(m, testKey, 1) })
+	waitFor(t, func() bool { return refilledTo(t, m, testKey, 1) })
 	eng.mu.Lock()
 	defer eng.mu.Unlock()
 	if len(eng.coldStorage) == 0 || eng.coldStorage[0] != "20G" || len(eng.warmups) == 0 || !slices.Equal(eng.warmups[0], argv) {
@@ -97,7 +98,7 @@ func TestReloadGivesANewKeyItsSettingsBeforeItsGolden(t *testing.T) {
 func TestReloadRetiresAGoldenWhoseStampChangedAndLeavesClaims(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
-	waitFor(t, func() bool { return refilledTo(m, testKey, 2) })
+	waitFor(t, func() bool { return refilledTo(t, m, testKey, 2) })
 	sb := mustClaim(t, m, testKey)
 	vm := sb.VMName
 	next := *m.cfg
@@ -114,7 +115,7 @@ func TestReloadRetiresAGoldenWhoseStampChangedAndLeavesClaims(t *testing.T) {
 	if live == nil || live.VMName != vm {
 		t.Errorf("the reload touched a live claim: %+v", live)
 	}
-	waitFor(t, func() bool { return refilledTo(m, testKey, 2) })
+	waitFor(t, func() bool { return refilledTo(t, m, testKey, 2) })
 	eng.mu.Lock()
 	defer eng.mu.Unlock()
 	if got := eng.coldStorage[len(eng.coldStorage)-1]; got != "30G" {
@@ -180,7 +181,7 @@ func TestAGoldenBuiltAgainstASupersededViewIsDiscarded(t *testing.T) {
 
 func TestACloneOfARetiredGoldenNeverLands(t *testing.T) {
 	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
-	waitFor(t, func() bool { return refilledTo(m, testKey, 1) })
+	waitFor(t, func() bool { return refilledTo(t, m, testKey, 1) })
 	m.mu.Lock()
 	p := m.pools[testKey]
 	golden, gen := p.goldenDir, p.goldenGen
@@ -192,6 +193,66 @@ func TestACloneOfARetiredGoldenNeverLands(t *testing.T) {
 	m.refillOne(t.Context(), p, golden, gen)
 	if n := warmLen(m, testKey); n != 0 {
 		t.Errorf("%d warm VMs landed from a clone of the retired golden", n)
+	}
+}
+
+func TestAReloadDropsTheLiveProxiesPooledConnections(t *testing.T) {
+	var conns, closed atomic.Int32
+	started, release := make(chan struct{}), make(chan struct{})
+	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/slow" {
+			close(started)
+			<-release
+		}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	origin.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		switch s {
+		case http.StateNew:
+			conns.Add(1)
+		case http.StateClosed:
+			closed.Add(1)
+		}
+	}
+	origin.Start()
+	t.Cleanup(origin.Close)
+	host := mustHostname(t, origin.URL)
+	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: host}}}})
+	m.dial = (&net.Dialer{}).DialContext
+	sb := vsockSandbox(t, "sb_pool")
+	if err := m.armEgress(t.Context(), sb); err != nil {
+		t.Fatalf("arm egress: %v", err)
+	}
+	client := egressClient(engine.EgressSocketPath(sb.VsockSocket))
+	get := func(path string) error {
+		resp, err := client.Get(origin.URL + path)
+		if err != nil {
+			return err
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return resp.Body.Close()
+	}
+	inflight := make(chan error, 1)
+	go func() { inflight <- get("/slow") }()
+	<-started
+	next := *m.cfg
+	next.EgressInternalAllow = []string{"10.8.0.0/16"}
+	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if err := get("/"); err != nil {
+		t.Fatalf("get after the reload: %v", err)
+	}
+	close(release)
+	if err := <-inflight; err != nil {
+		t.Fatalf("in-flight get: %v", err)
+	}
+	waitFor(t, func() bool { return closed.Load() == 1 })
+	if err := get("/"); err != nil {
+		t.Fatalf("get after the in-flight one ended: %v", err)
+	}
+	if n := conns.Load(); n != 2 {
+		t.Errorf("%d origin connections, want the in-flight one closed when it ended and one fresh dial after the reload", n)
 	}
 }
 
@@ -218,7 +279,7 @@ func TestReloadIsAudited(t *testing.T) {
 func TestAnInterruptedReloadStillDestroysTheRetiredWarmVMs(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
-	waitFor(t, func() bool { return refilledTo(m, testKey, 2) })
+	waitFor(t, func() bool { return refilledTo(t, m, testKey, 2) })
 	m.mu.Lock()
 	retired := []string{m.pools[testKey].warm[0].VMName, m.pools[testKey].warm[1].VMName}
 	m.mu.Unlock()
@@ -264,8 +325,8 @@ func TestAReloadThatUnguardsTheNodeClosesThePreboundDoors(t *testing.T) {
 	}
 }
 
-func refilledTo(m *Manager, key types.PoolKey, n int) bool {
-	m.refillOnce(context.Background())
+func refilledTo(t *testing.T, m *Manager, key types.PoolKey, n int) bool {
+	m.refillOnce(t.Context())
 	return warmLen(m, key) == n
 }
 

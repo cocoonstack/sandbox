@@ -313,7 +313,12 @@ one PostgreSQL table that every node reads, so one tenant per end user works:
   - a node whose invalidation listener reconnects drops its cache, so it never
     serves a change it missed while disconnected;
   - a change made while a node's listener was down reaches that node at the
-    listener's next retry, at most 30 s after the database returns.
+    listener's next retry. Keepalive finds a dead connection in about 25 s and
+    retries back off to 30 s, so the change lands within about a minute of the
+    database returning;
+  - renew, fork and wake ask the database whenever the cache lacks the
+    tenant, so they never outlive a removal. While the database is down, they
+    answer 503 for a tenant the node has not cached.
 
 ### Cluster-invariant config
 
@@ -372,7 +377,10 @@ with every claim.
   never a wildcard)
 - the same engine root path (cocoon's `root_dir`) on every node; it is not in
   the digest, so a mismatch shows only at the first cross-node branch
-- same `api_token`, `tenants` (or the same `meta_store`), `preview_secret`, and `egress_ca` root everywhere
+- same `api_token`, `tenants`, `preview_secret`, and `egress_ca` root everywhere
+- with `meta_store`, every node's DSN points at the same database: the tenant
+  set is not in the gossiped digest, so nodes on different databases serve
+  diverging tenants without a warning
   (a mismatch warns and shows in `sandboxd_config_digest_mismatch`)
 - `cluster_key` set if the gossip network is not otherwise trusted
 - one mesh sized in the hundreds of nodes, and promoted templates per pool or

@@ -299,21 +299,21 @@ func TestForkReadsTheParentsOnExpireUnderTheLock(t *testing.T) {
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		expire := types.ExpireArchive
+		action := types.ExpireArchive
 		for {
 			select {
 			case <-stop:
 				return
 			default:
 			}
-			if _, err := m.Renew(t.Context(), parent.ID, Cred{Token: parent.Token}, time.Hour, expire); err != nil {
+			if _, err := m.Renew(t.Context(), parent.ID, Cred{Token: parent.Token}, time.Hour, action); err != nil {
 				t.Errorf("Renew: %v", err)
 				return
 			}
-			if expire == types.ExpireArchive {
-				expire = types.ExpireDestroy
+			if action == types.ExpireArchive {
+				action = types.ExpireDestroy
 			} else {
-				expire = types.ExpireArchive
+				action = types.ExpireArchive
 			}
 		}
 	})

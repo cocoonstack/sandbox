@@ -49,10 +49,12 @@ func (m *Manager) TenantRecords() []config.TenantRecord {
 
 // Tenants lists up to limit tenants after the cursor with each one's live claims here; the first page also names the removed tenants still holding claims.
 func (m *Manager) Tenants(ctx context.Context, after string, limit int) (TenantPage, error) {
-	records, err := m.tenants.List(ctx, after, limit)
+	records, err := m.tenants.List(ctx, after, limit+1)
 	if err != nil {
 		return TenantPage{}, tenantErr(err)
 	}
+	more := len(records) > limit
+	records = records[:min(len(records), limit)]
 	m.mu.Lock()
 	live := maps.Clone(m.tenantLive)
 	m.mu.Unlock()
@@ -60,12 +62,12 @@ func (m *Manager) Tenants(ctx context.Context, after string, limit int) (TenantP
 	for _, r := range records {
 		page.Tenants = append(page.Tenants, TenantInfo{Name: r.Name, MaxClaims: r.MaxClaims, EgressClass: r.EgressClass, Claims: live[r.Name]})
 	}
-	if len(records) == limit {
+	if more {
 		page.Next = records[len(records)-1].Name
 	}
 	if after == "" {
 		for _, name := range slices.Sorted(maps.Keys(live)) {
-			if _, p := m.tenants.Peek(name); p == tenants.Absent {
+			if m.tenantGone(name) {
 				page.Tenants = append(page.Tenants, TenantInfo{Name: name, Claims: live[name], Removed: true})
 			}
 		}
@@ -169,11 +171,26 @@ func (m *Manager) warnMissingClasses(ctx context.Context) {
 func (m *Manager) warnVolumeTenants(ctx context.Context, volumes []config.VolumeSpec) {
 	for _, v := range volumes {
 		for _, name := range v.Tenants {
-			if _, p := m.tenants.Peek(name); p == tenants.Absent {
+			if m.tenantGone(name) {
 				log.WithFunc("pool.warnVolumeTenants").Warnf(ctx, "volume %q names tenant %q, which the tenant set does not hold", v.Name, name)
 			}
 		}
 	}
+}
+
+// tenantRemoved asks the set itself, past a cache that has not seen the tenant, so a renew, fork or wake never outlives a removal.
+func (m *Manager) tenantRemoved(ctx context.Context, tenant string) error {
+	if tenant == "" {
+		return nil
+	}
+	_, ok, err := m.tenants.Lookup(ctx, tenant)
+	switch {
+	case err != nil:
+		return tenantErr(err)
+	case !ok:
+		return ErrTenantRemoved
+	}
+	return nil
 }
 
 // tenantGone is true only once the set answers that the tenant is absent; a cached set that has not seen the name yet keeps the claim.

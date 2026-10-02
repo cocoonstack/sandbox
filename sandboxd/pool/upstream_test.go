@@ -102,6 +102,15 @@ func TestATenantClaimUnderAClassDialsItsOwnUpstreamLikeARootClaim(t *testing.T) 
 	}
 }
 
+func TestTheTunnelTargetPrefersIPv4(t *testing.T) {
+	m := upstreamManager(t, "127.0.0.1")
+	m.destVerdict = func(netip.Addr, uint16) (bool, error) { return false, nil }
+	target, internal, err := m.upstreamTarget(t.Context(), "localhost:80")
+	if err != nil || internal || target != netip.MustParseAddrPort("127.0.0.1:80") {
+		t.Errorf("target %v internal %v err %v, want 127.0.0.1:80 over ::1", target, internal, err)
+	}
+}
+
 func TestBlockedDestinationNeverReachesTheUpstream(t *testing.T) {
 	m := upstreamManager(t, "127.0.0.1")
 	up := tunnelProxy(t)

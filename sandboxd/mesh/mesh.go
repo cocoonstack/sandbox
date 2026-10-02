@@ -53,21 +53,18 @@ type Mesh struct {
 }
 
 // New starts a mesh member listening per cfg.
-func New(ctx context.Context, cfg *memberlist.Config, nodeID, selfAddr string, secretKey []byte, dataDir string) (*Mesh, error) {
+func New(ctx context.Context, cfg *memberlist.Config, self NodeState, secretKey []byte, dataDir string) (*Mesh, error) {
 	epochPath := filepath.Join(dataDir, "mesh-epoch")
-	epoch := max(uint64(time.Now().UnixNano()), loadEpoch(epochPath)+1)
+	self.Epoch = max(uint64(time.Now().UnixNano()), loadEpoch(epochPath)+1)
+	self.Pools = map[string]int{}
+	nodeID := self.NodeID
 	m := &Mesh{
 		ctx:       ctx,
 		epochPath: epochPath,
-		leased:    epoch + epochLease,
-		self: NodeState{
-			NodeID: nodeID,
-			Addr:   selfAddr,
-			Epoch:  epoch,
-			Pools:  map[string]int{},
-		},
-		view: map[string]NodeState{},
-		live: map[string]struct{}{},
+		leased:    self.Epoch + epochLease,
+		self:      self,
+		view:      map[string]NodeState{},
+		live:      map[string]struct{}{},
 	}
 	if err := storeEpoch(m.epochPath, m.leased); err != nil {
 		return nil, fmt.Errorf("persist mesh epoch: %w", err)
@@ -119,22 +116,6 @@ func (m *Mesh) UpdateDigest(ctx context.Context, digest string) {
 		self.Digest = digest
 		return true
 	})
-}
-
-// SetSelfDigest records this node's config digest; call it once before Join.
-func (m *Mesh) SetSelfDigest(digest string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.self.Digest = digest
-	m.view[m.self.NodeID] = m.self
-}
-
-// SetSelfClientAddr sets the client origin before Join publishes this node.
-func (m *Mesh) SetSelfClientAddr(addr string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.self.ClientAddr = addr
-	m.view[m.self.NodeID] = m.self
 }
 
 // ClientAddr resolves an internal address to its advertised client origin.

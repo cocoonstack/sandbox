@@ -104,7 +104,7 @@ type claimRequest struct {
 
 func (r claimRequest) rejectPinnedAxes() error {
 	if r.Net != "" || r.Size != "" {
-		return fmt.Errorf("network and size are pinned by the snapshot; WithNetwork/WithSize are not accepted here")
+		return errors.New("network and size are pinned by the snapshot; WithNetwork/WithSize are not accepted here")
 	}
 	return nil
 }
@@ -149,7 +149,7 @@ func Connect(addr string, opts ...ClientOption) (*Client, error) {
 	first, _, _ := strings.Cut(addr, ",")
 	first = strings.TrimSpace(first)
 	if first == "" {
-		return nil, fmt.Errorf("empty sandboxd address")
+		return nil, errors.New("empty sandboxd address")
 	}
 	u, err := endpointURL(first, "http")
 	if err != nil {

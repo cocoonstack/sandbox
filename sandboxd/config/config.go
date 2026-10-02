@@ -567,7 +567,6 @@ func (c *Config) validateEgressRouting() error {
 	return c.validateEgressUpstream()
 }
 
-// validateEgressUpstream checks the allow list and resolves every pool and egress class default from the node env now.
 func (c *Config) validateEgressUpstream() error {
 	var defaults []string
 	for _, p := range c.Pools {

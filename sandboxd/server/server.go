@@ -727,10 +727,6 @@ func (s *Server) handlePutPools(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
-	if s.reload == nil {
-		writeErr(w, http.StatusNotImplemented, "config reload is not wired on this node")
-		return
-	}
 	res, err := s.reload(r.Context())
 	writeResult(w, r, "config reload", "", "config reload failed", err, func() { writeJSON(w, http.StatusOK, res) })
 }
@@ -815,7 +811,8 @@ func (s *Server) requireToken(next http.HandlerFunc) http.HandlerFunc {
 		tenant, err := s.resolveScope(r)
 		switch {
 		case errors.Is(err, pool.ErrTenantStoreDown):
-			writeErr(w, http.StatusServiceUnavailable, "tenant source unavailable; retry")
+			w.Header().Set("Retry-After", retryAfterSeconds)
+			writeErr(w, http.StatusServiceUnavailable, "tenant store down; retry")
 			return
 		case err != nil:
 			writeErr(w, http.StatusUnauthorized, "invalid api token")

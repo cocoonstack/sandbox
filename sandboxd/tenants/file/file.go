@@ -1,6 +1,4 @@
-// Package file keeps the tenant set in <data_dir>/tenants.json; config.json's
-// tenants seed it until the first API write, and every write persists before
-// it serves, so an acknowledged change survives a crash.
+// Package file keeps the tenant set in <data_dir>/tenants.json, seeded by config.json until the first API write.
 package file
 
 import (
@@ -26,6 +24,11 @@ import (
 )
 
 const fileName = "tenants.json"
+
+type persisted struct {
+	ConfigSeed string                `json:"config_seed"`
+	Tenants    []config.TenantRecord `json:"tenants"`
+}
 
 var _ tenants.Source = (*Source)(nil)
 
@@ -86,6 +89,11 @@ func (s *Source) Peek(name string) (config.TenantRecord, tenants.Presence) {
 		return r, tenants.Present
 	}
 	return config.TenantRecord{}, tenants.Absent
+}
+
+func (s *Source) Lookup(_ context.Context, name string) (config.TenantRecord, bool, error) {
+	r, p := s.Peek(name)
+	return r, p == tenants.Present, nil
 }
 
 func (s *Source) List(_ context.Context, after string, limit int) ([]config.TenantRecord, error) {
@@ -183,12 +191,7 @@ func (s *Source) apply(next func(cur *set) ([]config.TenantRecord, error)) (tena
 		return tenants.Change{}, fmt.Errorf("persist tenants: %w", err)
 	}
 	s.set.Store(updated)
-	return diff(cur, updated), nil
-}
-
-type persisted struct {
-	ConfigSeed string                `json:"config_seed"`
-	Tenants    []config.TenantRecord `json:"tenants"`
+	return tenants.Diff(cur.byName, updated.byName), nil
 }
 
 type set struct {
@@ -244,22 +247,4 @@ func (s *set) keepToken(r config.TenantRecord) (config.TenantRecord, error) {
 	}
 	r.TokenSHA256 = kept.TokenSHA256
 	return r, nil
-}
-
-func diff(prev, next *set) tenants.Change {
-	var c tenants.Change
-	for _, name := range next.names {
-		switch old, ok := prev.byName[name]; {
-		case !ok:
-			c.Added = append(c.Added, name)
-		case old != next.byName[name]:
-			c.Changed = append(c.Changed, name)
-		}
-	}
-	for _, name := range prev.names {
-		if _, ok := next.byName[name]; !ok {
-			c.Removed = append(c.Removed, name)
-		}
-	}
-	return c
 }

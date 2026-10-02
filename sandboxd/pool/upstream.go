@@ -62,7 +62,7 @@ func (r claimRouter) Dial(ctx context.Context, route, network, addr string) (net
 	return egress.DialUpstream(ctx, u, target.String(), new(net.Dialer).DialContext)
 }
 
-// upstreamTarget checks every address addr resolves to: a re-admitted internal one dials direct, a blocked one fails, else the first is the tunnel target.
+// upstreamTarget checks every address addr resolves to: a re-admitted internal one dials direct, a blocked one fails, else the first IPv4 (or the first) is the tunnel target.
 func (m *Manager) upstreamTarget(ctx context.Context, addr string) (netip.AddrPort, bool, error) {
 	host, portText, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -86,7 +86,7 @@ func (m *Manager) upstreamTarget(ctx context.Context, addr string) (netip.AddrPo
 		if internal {
 			return ap, true, nil
 		}
-		if !target.IsValid() {
+		if !target.IsValid() || target.Addr().Is6() && ap.Addr().Is4() {
 			target = ap
 		}
 	}

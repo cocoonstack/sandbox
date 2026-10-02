@@ -1,6 +1,4 @@
-// Package tenants holds the tenant set a node authenticates against behind one
-// interface: the file backend keeps it in <data_dir>/tenants.json on each node,
-// the pg backend reads one shared PostgreSQL table through a per-node cache.
+// Package tenants holds the tenant set a node authenticates against behind one interface.
 package tenants
 
 import (
@@ -9,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -51,6 +51,8 @@ type Source interface {
 	Resolve(ctx context.Context, sum [sha256.Size]byte) (*config.TenantRecord, error)
 	// Peek answers from memory only, so a caller holding a lock never waits on the backend.
 	Peek(name string) (config.TenantRecord, Presence)
+	// Lookup answers whether name is in the set, asking the backend when a cache has not seen it.
+	Lookup(ctx context.Context, name string) (config.TenantRecord, bool, error)
 	// List returns up to limit tenants named after the cursor, in name order, without token hashes.
 	List(ctx context.Context, after string, limit int) ([]config.TenantRecord, error)
 	// Put adds or changes one tenant; an empty TokenSHA256 keeps the stored token.
@@ -84,4 +86,23 @@ func Validate(r config.TenantRecord, rootSum string) error {
 		return fmt.Errorf("%w: tenant %q token_sha256 must be %d hex bytes", ErrInvalid, r.Name, sha256.Size)
 	}
 	return nil
+}
+
+// Diff names the tenants next adds, changes and removes against cur, each list in name order.
+func Diff(cur, next map[string]config.TenantRecord) Change {
+	var c Change
+	for _, name := range slices.Sorted(maps.Keys(next)) {
+		switch old, ok := cur[name]; {
+		case !ok:
+			c.Added = append(c.Added, name)
+		case old != next[name]:
+			c.Changed = append(c.Changed, name)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(cur)) {
+		if _, ok := next[name]; !ok {
+			c.Removed = append(c.Removed, name)
+		}
+	}
+	return c
 }

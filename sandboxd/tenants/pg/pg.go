@@ -1,9 +1,4 @@
-// Package pg reads the tenant set from one PostgreSQL table every node shares,
-// through a per-node cache of the tenants that node has seen. A write commits
-// with a NOTIFY that evicts the name on every node; a node whose listener
-// reconnects drops its whole cache, so it never serves a change it missed.
-// While the database is down a cached tenant keeps working and an uncached
-// one fails closed.
+// Package pg keeps the tenant set in one shared PostgreSQL table behind a per-node cache that NOTIFY invalidates.
 package pg
 
 import (
@@ -14,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"slices"
 	"sync"
 	"time"
@@ -29,14 +25,16 @@ import (
 )
 
 const (
+	table    = "sandboxd_tenants"
 	channel  = "sandboxd_tenants"
 	flushAll = "*"
 
 	queryTimeout = 3 * time.Second
+	dialTimeout  = 10 * time.Second
 	negativeTTL  = 10 * time.Second
 	// maxCached bounds the per-node cache; a node serves far fewer distinct tenants.
 	maxCached = 100_000
-	// coldLookups caps backend queries per second for tokens and names the cache lacks, so random tokens cannot load the database.
+	// coldLookups caps token queries per second the cache cannot answer, so random tokens cannot load the database.
 	coldLookups = 200
 
 	listenRetryFirst = time.Second
@@ -49,22 +47,33 @@ var (
 	//go:embed schema.sql
 	schema string
 
-	_ tenants.Source = (*Source)(nil)
+	// keepAlive finds a dead connection in about 25 s, so a listener on a vanished primary reconnects and re-syncs.
+	keepAlive = net.KeepAliveConfig{Enable: true, Idle: 10 * time.Second, Interval: 5 * time.Second, Count: 3}
 )
+
+type entry struct {
+	rec     *config.TenantRecord
+	sum     [sha256.Size]byte
+	present bool
+}
+
+var _ tenants.Source = (*Source)(nil)
 
 // Source is the shared tenant table behind this node's cache.
 type Source struct {
-	pool *pgxpool.Pool
-	dsn  string
-	cold *rate.Limiter
+	pool      *pgxpool.Pool
+	listenCfg *pgx.ConnConfig
+	cold      *rate.Limiter
 
 	mu       sync.RWMutex
 	byToken  map[[sha256.Size]byte]string
 	byName   map[string]entry
 	misses   map[[sha256.Size]byte]time.Time
 	inflight map[string]struct{}
-	// gen moves on every eviction, so a lookup that raced one does not cache what it read.
-	gen uint64
+	// seq counts evictions; a read caches only if neither its name nor the whole cache was evicted after it started.
+	seq     uint64
+	evicted map[string]uint64
+	floor   uint64
 
 	stop context.CancelFunc
 	done chan struct{}
@@ -72,27 +81,33 @@ type Source struct {
 
 // Open connects, creates the table when it is missing, and starts the invalidation listener.
 func Open(ctx context.Context, dsn string) (*Source, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	dialer := &net.Dialer{Timeout: dialTimeout, KeepAliveConfig: keepAlive}
+	poolCfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse tenant database dsn: %w", err)
+	}
+	poolCfg.ConnConfig.DialFunc = dialer.DialContext
+	listenCfg := poolCfg.ConnConfig.Copy()
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return nil, fmt.Errorf("open tenant database: %w", err)
 	}
-	qctx, cancel := context.WithTimeout(ctx, queryTimeout)
-	defer cancel()
-	if _, err = pool.Exec(qctx, schema); err != nil {
+	if err = ensureTable(ctx, pool); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("create tenant table: %w", err)
+		return nil, err
 	}
 	lctx, stop := context.WithCancel(context.WithoutCancel(ctx))
 	s := &Source{
-		pool:     pool,
-		dsn:      dsn,
-		cold:     rate.NewLimiter(coldLookups, coldLookups),
-		byToken:  map[[sha256.Size]byte]string{},
-		byName:   map[string]entry{},
-		misses:   map[[sha256.Size]byte]time.Time{},
-		inflight: map[string]struct{}{},
-		stop:     stop,
-		done:     make(chan struct{}),
+		pool:      pool,
+		listenCfg: listenCfg,
+		cold:      rate.NewLimiter(coldLookups, coldLookups),
+		byToken:   map[[sha256.Size]byte]string{},
+		byName:    map[string]entry{},
+		misses:    map[[sha256.Size]byte]time.Time{},
+		inflight:  map[string]struct{}{},
+		evicted:   map[string]uint64{},
+		stop:      stop,
+		done:      make(chan struct{}),
 	}
 	go s.listen(lctx)
 	return s, nil
@@ -102,7 +117,7 @@ func (s *Source) Resolve(ctx context.Context, sum [sha256.Size]byte) (*config.Te
 	s.mu.RLock()
 	e := s.byName[s.byToken[sum]]
 	until, negative := s.misses[sum]
-	gen := s.gen
+	start := s.seq
 	s.mu.RUnlock()
 	switch {
 	case e.present && e.sum == sum:
@@ -115,19 +130,23 @@ func (s *Source) Resolve(ctx context.Context, sum [sha256.Size]byte) (*config.Te
 	qctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 	r, err := scanRecord(s.pool.QueryRow(qctx, `SELECT name, token_sha256, max_claims, egress_class FROM sandboxd_tenants WHERE token_sha256 = $1`, sum[:]))
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		s.remember(gen, func() {
+		if s.seq == start {
 			if len(s.misses) >= maxCached {
 				clear(s.misses)
 			}
 			s.misses[sum] = time.Now().Add(negativeTTL)
-		})
+		}
 		return nil, tenants.ErrUnknown
 	case err != nil:
 		return nil, fmt.Errorf("%w: %w", tenants.ErrUnavailable, err)
 	}
-	s.remember(gen, func() { s.cache(&r, sum) })
+	if s.fresh(r.Name, start) {
+		s.cache(&r, sum)
+	}
 	return &r, nil
 }
 
@@ -144,6 +163,24 @@ func (s *Source) Peek(name string) (config.TenantRecord, tenants.Presence) {
 	default:
 		return config.TenantRecord{}, tenants.Absent
 	}
+}
+
+func (s *Source) Lookup(ctx context.Context, name string) (config.TenantRecord, bool, error) {
+	s.mu.RLock()
+	e, cached := s.byName[name]
+	start := s.seq
+	s.mu.RUnlock()
+	if cached {
+		if e.present {
+			return *e.rec, true, nil
+		}
+		return config.TenantRecord{}, false, nil
+	}
+	r, ok, err := s.lookupNow(ctx, name)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.settle(name, start, r, ok, err)
+	return r, ok, err
 }
 
 func (s *Source) List(ctx context.Context, after string, limit int) ([]config.TenantRecord, error) {
@@ -164,12 +201,9 @@ func (s *Source) Put(ctx context.Context, r config.TenantRecord) (tenants.Change
 		if r.TokenSHA256 == "" {
 			return keepTokenUpdate(ctx, tx, r, &c)
 		}
-		sum, err := hex.DecodeString(r.TokenSHA256)
-		if err != nil {
-			return fmt.Errorf("%w: tenant %q token_sha256 is not hex", tenants.ErrInvalid, r.Name)
-		}
+		sum, _ := hex.DecodeString(r.TokenSHA256)
 		var inserted bool
-		err = tx.QueryRow(ctx, `INSERT INTO sandboxd_tenants AS t (name, token_sha256, max_claims, egress_class) VALUES ($1, $2, $3, $4)
+		err := tx.QueryRow(ctx, `INSERT INTO sandboxd_tenants AS t (name, token_sha256, max_claims, egress_class) VALUES ($1, $2, $3, $4)
 			ON CONFLICT (name) DO UPDATE SET token_sha256 = EXCLUDED.token_sha256, max_claims = EXCLUDED.max_claims, egress_class = EXCLUDED.egress_class, updated_at = now()
 			WHERE (t.token_sha256, t.max_claims, t.egress_class) IS DISTINCT FROM (EXCLUDED.token_sha256, EXCLUDED.max_claims, EXCLUDED.egress_class)
 			RETURNING xmax = 0`, r.Name, sum, r.MaxClaims, r.EgressClass).Scan(&inserted)
@@ -215,18 +249,19 @@ func (s *Source) Replace(ctx context.Context, records []config.TenantRecord) (te
 		if err != nil {
 			return err
 		}
-		next, err := keepTokens(indexByName(cur), records)
+		byName := indexByName(cur)
+		next, err := keepTokens(byName, records)
 		if err != nil {
 			return err
 		}
-		c = diff(indexByName(cur), next)
+		c = tenants.Diff(byName, next)
 		if _, err = tx.Exec(ctx, `DELETE FROM sandboxd_tenants WHERE NOT (name = ANY($1))`, slices.AppendSeq([]string{}, maps.Keys(next))); err != nil {
 			return err
 		}
 		var batch pgx.Batch
 		for _, name := range slices.Concat(c.Added, c.Changed) {
 			r := next[name]
-			sum, _ := hex.DecodeString(r.TokenSHA256) // keepTokens validated it
+			sum, _ := hex.DecodeString(r.TokenSHA256)
 			batch.Queue(`INSERT INTO sandboxd_tenants (name, token_sha256, max_claims, egress_class) VALUES ($1, $2, $3, $4)
 				ON CONFLICT (name) DO UPDATE SET token_sha256 = EXCLUDED.token_sha256, max_claims = EXCLUDED.max_claims, egress_class = EXCLUDED.egress_class, updated_at = now()`,
 				r.Name, sum, r.MaxClaims, r.EgressClass)
@@ -268,6 +303,38 @@ func (s *Source) Close() error {
 	return nil
 }
 
+// fetch loads one name in the background for Peek, once per name at a time.
+func (s *Source) fetch(name string) {
+	s.mu.Lock()
+	if _, busy := s.inflight[name]; busy {
+		s.mu.Unlock()
+		return
+	}
+	s.inflight[name] = struct{}{}
+	start := s.seq
+	s.mu.Unlock()
+	go func() {
+		r, ok, err := s.lookupNow(context.Background(), name)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.inflight, name)
+		s.settle(name, start, r, ok, err)
+	}()
+}
+
+func (s *Source) lookupNow(ctx context.Context, name string) (config.TenantRecord, bool, error) {
+	qctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+	r, err := scanRecord(s.pool.QueryRow(qctx, `SELECT name, token_sha256, max_claims, egress_class FROM sandboxd_tenants WHERE name = $1`, name))
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return config.TenantRecord{}, false, nil
+	case err != nil:
+		return config.TenantRecord{}, false, fmt.Errorf("%w: %w", tenants.ErrUnavailable, err)
+	}
+	return r, true, nil
+}
+
 // write runs f in one transaction that notifies every node to evict key, then evicts it here at once.
 func (s *Source) write(ctx context.Context, key string, f func(tx pgx.Tx) error) error {
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
@@ -290,69 +357,52 @@ func (s *Source) write(ctx context.Context, key string, f func(tx pgx.Tx) error)
 	return nil
 }
 
-func (s *Source) remember(gen uint64, f func()) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.gen == gen {
-		f()
+// fresh reports whether a read started at start may cache name; callers hold s.mu.
+func (s *Source) fresh(name string, start uint64) bool {
+	return start >= s.floor && s.evicted[name] <= start
+}
+
+// settle caches a by-name read that no eviction overtook; callers hold s.mu.
+func (s *Source) settle(name string, start uint64, r config.TenantRecord, ok bool, err error) {
+	switch {
+	case err != nil || !s.fresh(name, start):
+	case ok:
+		sum, _ := hex.DecodeString(r.TokenSHA256)
+		s.cache(&r, [sha256.Size]byte(sum))
+	default:
+		s.byName[name] = entry{}
 	}
 }
 
 // cache stores a present record; callers hold s.mu.
 func (s *Source) cache(r *config.TenantRecord, sum [sha256.Size]byte) {
 	if len(s.byName) >= maxCached {
-		s.clear()
+		s.clearCache()
 	}
 	s.byName[r.Name] = entry{rec: r, sum: sum, present: true}
 	s.byToken[sum] = r.Name
 }
 
-// fetch loads one name in the background for Peek, once per name at a time.
-func (s *Source) fetch(name string) {
-	s.mu.Lock()
-	if _, busy := s.inflight[name]; busy || !s.cold.Allow() {
-		s.mu.Unlock()
-		return
-	}
-	s.inflight[name] = struct{}{}
-	gen := s.gen
-	s.mu.Unlock()
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
-		defer cancel()
-		r, err := scanRecord(s.pool.QueryRow(ctx, `SELECT name, token_sha256, max_claims, egress_class FROM sandboxd_tenants WHERE name = $1`, name))
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		delete(s.inflight, name)
-		switch {
-		case s.gen != gen:
-		case errors.Is(err, pgx.ErrNoRows):
-			s.byName[name] = entry{}
-		case err == nil:
-			sum, _ := hex.DecodeString(r.TokenSHA256)
-			s.cache(&r, [sha256.Size]byte(sum))
-		}
-	}()
-}
-
 func (s *Source) evict(key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.gen++
-	if key == flushAll {
-		s.clear()
+	s.seq++
+	if key == flushAll || len(s.evicted) >= maxCached {
+		s.clearCache()
+		clear(s.evicted)
+		s.floor = s.seq
 		return
 	}
 	if e := s.byName[key]; e.present {
 		delete(s.byToken, e.sum)
 	}
 	delete(s.byName, key)
+	s.evicted[key] = s.seq
 	clear(s.misses)
 }
 
-// clear drops the whole cache; callers hold s.mu.
-func (s *Source) clear() {
-	s.gen++
+// clearCache drops every cached answer; callers hold s.mu.
+func (s *Source) clearCache() {
 	clear(s.byToken)
 	clear(s.byName)
 	clear(s.misses)
@@ -382,7 +432,7 @@ func (s *Source) listen(ctx context.Context) {
 }
 
 func (s *Source) listenOnce(ctx context.Context) error {
-	conn, err := pgx.Connect(ctx, s.dsn)
+	conn, err := pgx.ConnectConfig(ctx, s.listenCfg.Copy())
 	if err != nil {
 		return err
 	}
@@ -400,10 +450,21 @@ func (s *Source) listenOnce(ctx context.Context) error {
 	}
 }
 
-type entry struct {
-	rec     *config.TenantRecord
-	sum     [sha256.Size]byte
-	present bool
+// ensureTable runs the DDL only when the table is missing, so a role without CREATE serves a pre-created table.
+func ensureTable(ctx context.Context, pool *pgxpool.Pool) error {
+	qctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+	var exists bool
+	if err := pool.QueryRow(qctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists); err != nil {
+		return fmt.Errorf("find tenant table: %w", err)
+	}
+	if exists {
+		return nil
+	}
+	if _, err := pool.Exec(qctx, schema); err != nil {
+		return fmt.Errorf("create tenant table: %w", err)
+	}
+	return nil
 }
 
 func keepTokenUpdate(ctx context.Context, tx pgx.Tx, r config.TenantRecord, c *tenants.Change) error {
@@ -434,30 +495,9 @@ func keepTokens(cur map[string]config.TenantRecord, records []config.TenantRecor
 			}
 			r.TokenSHA256 = kept.TokenSHA256
 		}
-		if sum, err := hex.DecodeString(r.TokenSHA256); err != nil || len(sum) != sha256.Size {
-			return nil, fmt.Errorf("%w: tenant %q token_sha256 must be %d hex bytes", tenants.ErrInvalid, r.Name, sha256.Size)
-		}
 		next[r.Name] = r
 	}
 	return next, nil
-}
-
-func diff(cur, next map[string]config.TenantRecord) tenants.Change {
-	var c tenants.Change
-	for _, name := range slices.Sorted(maps.Keys(next)) {
-		switch old, ok := cur[name]; {
-		case !ok:
-			c.Added = append(c.Added, name)
-		case old != next[name]:
-			c.Changed = append(c.Changed, name)
-		}
-	}
-	for _, name := range slices.Sorted(maps.Keys(cur)) {
-		if _, ok := next[name]; !ok {
-			c.Removed = append(c.Removed, name)
-		}
-	}
-	return c
 }
 
 func indexByName(records []config.TenantRecord) map[string]config.TenantRecord {

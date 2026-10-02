@@ -147,8 +147,8 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	if sb.Key.Net == types.NetEgress {
 		return "", fmt.Errorf("wake %s: egress lane cannot resume from archive", sb.ID)
 	}
-	if m.tenantGone(sb.Tenant) {
-		return "", ErrTenantRemoved
+	if err := m.tenantRemoved(ctx, sb.Tenant); err != nil {
+		return "", err
 	}
 	ctx = context.WithoutCancel(ctx)
 	ck := sb.ArchiveCk
@@ -178,15 +178,16 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		}
 		return "", fmt.Errorf("wake %s: persist claims", sb.ID)
 	}
+	logger := log.WithFunc("pool.wakeArchived")
 	// the pre-commit marker keeps a failed delete retryable after the journal update.
 	if delErr := m.ckpts.Delete(ctx, ck); delErr != nil {
-		log.WithFunc("pool.wakeArchived").Warnf(ctx, "delete consumed archive ck %s: %v", ck, delErr)
+		logger.Warnf(ctx, "delete consumed archive ck %s: %v", ck, delErr)
 	} else if clearErr := m.clearArchiveCk(ck); clearErr != nil {
-		log.WithFunc("pool.wakeArchived").Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
+		logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
 	}
 	// only the none lane reaches here, so there is no NIC to re-lock
 	if proxyErr := m.armEgressProxy(ctx, sb); proxyErr != nil {
-		log.WithFunc("pool.wakeArchived").Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
+		logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 	}
 	if m.disarmIfReleased(sb) {
 		return "", ErrUnknownSandbox

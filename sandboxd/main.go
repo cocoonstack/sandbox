@@ -200,12 +200,11 @@ func startMesh(ctx context.Context, cfg *config.Config, mgr *pool.Manager) (*mes
 	if err != nil {
 		return nil, err
 	}
-	msh, err := mesh.New(ctx, mlCfg, nodeID, cfg.AdvertiseAddr, key, cfg.DataDir)
+	self := mesh.NodeState{NodeID: nodeID, Addr: cfg.AdvertiseAddr, ClientAddr: cfg.ClientAdvertise, Digest: cfg.ClusterDigest(mgr.EgressCAFingerprint(), mgr.TenantRecords())}
+	msh, err := mesh.New(ctx, mlCfg, self, key, cfg.DataDir)
 	if err != nil {
 		return nil, err
 	}
-	msh.SetSelfClientAddr(cfg.ClientAdvertise)
-	msh.SetSelfDigest(cfg.ClusterDigest(mgr.EgressCAFingerprint(), mgr.TenantRecords()))
 	msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
 	if err := msh.Join(mc.Join); err != nil {
 		_ = msh.Shutdown()

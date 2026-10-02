@@ -74,7 +74,7 @@ func benchFront(b *testing.B, intercept bool) (proxyAddr string, roots *x509.Cer
 	}
 	p := New(Policy{Allow: []Rule{rule}}, nil, ca, fixedDial(upstream.Listener.Addr().String()), nil, nil)
 	if ca != nil {
-		p.mitmTr.TLSClientConfig.RootCAs = trustUpstream(upstream)
+		p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	}
 	front := httptest.NewServer(p)
 	b.Cleanup(front.Close)

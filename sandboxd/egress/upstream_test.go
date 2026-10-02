@@ -189,7 +189,7 @@ func TestProxyDialsEachConnectionOnTheCurrentRoute(t *testing.T) {
 			events := make(chan Event, 8)
 			p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, router, func(ev Event) { events <- ev }, nil)
 			t.Cleanup(p.Close)
-			p.tr.TLSClientConfig = &tls.Config{RootCAs: trustUpstream(origin), MinVersion: tls.VersionTLS12}
+			p.pools.Load().tr.TLSClientConfig = &tls.Config{RootCAs: trustUpstream(origin), MinVersion: tls.VersionTLS12}
 			p.OnTransfer(func(ev Event, _, _ int64) { events <- ev })
 			get := func(want string) {
 				t.Helper()

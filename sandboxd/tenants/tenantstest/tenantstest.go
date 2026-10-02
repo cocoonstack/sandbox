@@ -34,6 +34,8 @@ func Run(t *testing.T, open Opener) {
 	t.Run("keep and rotate tokens", func(t *testing.T) { testTokens(t, open(t)) })
 	t.Run("list pages by name", func(t *testing.T) { testList(t, open(t)) })
 	t.Run("delete and replace", func(t *testing.T) { testDeleteReplace(t, open(t)) })
+	t.Run("replace swaps tokens", func(t *testing.T) { testReplaceSwap(t, open(t)) })
+	t.Run("lookup", func(t *testing.T) { testLookup(t, open(t)) })
 }
 
 // Record builds a tenant record whose token is token.
@@ -216,5 +218,39 @@ func testDeleteReplace(t *testing.T, s tenants.Source) {
 	}
 	if _, err = s.Resolve(ctx, Sum("tc")); !errors.Is(err, tenants.ErrUnknown) {
 		t.Errorf("a tenant the replace dropped: %v, want ErrUnknown", err)
+	}
+}
+
+func testReplaceSwap(t *testing.T, s tenants.Source) {
+	ctx := t.Context()
+	for _, r := range []config.TenantRecord{Record("a", "ta", 0, ""), Record("b", "tb", 0, "")} {
+		if _, err := s.Put(ctx, r); err != nil {
+			t.Fatalf("put %s: %v", r.Name, err)
+		}
+	}
+	if _, err := s.Replace(ctx, []config.TenantRecord{Record("a", "tb", 0, ""), Record("b", "ta", 0, "")}); err != nil {
+		t.Fatalf("replace swapping a's and b's tokens: %v", err)
+	}
+	if r, err := s.Resolve(ctx, Sum("ta")); err != nil || r.Name != "b" {
+		t.Errorf("ta after the swap: %+v %v, want b", r, err)
+	}
+}
+
+func testLookup(t *testing.T, s tenants.Source) {
+	ctx := t.Context()
+	if _, err := s.Put(ctx, Record(tenantOne, "t1", 3, classDesk)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if r, ok, err := s.Lookup(ctx, tenantOne); err != nil || !ok || r.MaxClaims != 3 {
+		t.Errorf("lookup %s: %+v %v %v", tenantOne, r, ok, err)
+	}
+	if _, err := s.Delete(ctx, tenantOne); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, ok, err := s.Lookup(ctx, tenantOne); err != nil || ok {
+		t.Errorf("lookup after delete: %v %v, want absent", ok, err)
+	}
+	if _, ok, err := s.Lookup(ctx, "never"); err != nil || ok {
+		t.Errorf("lookup of a name never put: %v %v, want absent", ok, err)
 	}
 }
