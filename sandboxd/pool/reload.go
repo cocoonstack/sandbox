@@ -61,7 +61,7 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 		el.close()
 	}
 	for _, el := range live {
-		el.proxy.CloseIdle()
+		el.proxy.ResetPools()
 	}
 	m.destroyAll(context.WithoutCancel(ctx), trim).Wait()
 	m.cfg = next
