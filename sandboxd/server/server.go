@@ -267,7 +267,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/sandboxes/{id}/env", s.requireToken(s.handleGetEnv))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/env", s.requireToken(s.handleSetEnv))
 	mux.HandleFunc("PATCH /v1/sandboxes/{id}/env", s.requireToken(s.handlePatchEnv))
-	mux.HandleFunc("DELETE /v1/sandboxes/{id}/env", s.requireToken(s.handleClearEnv))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.requireToken(s.handleFork))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/promote", s.requireToken(s.handlePromote))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/preview", s.requireToken(s.handlePreview))
@@ -514,7 +513,9 @@ func (s *Server) handleSetEnv(w http.ResponseWriter, r *http.Request) {
 	if !ok || !validRequest(w, req.Env.Validate()) {
 		return
 	}
-	s.setEnv(w, r, req.Env)
+	id := r.PathValue("id")
+	err := s.mgr.SetEnv(r.Context(), id, req.Env, tenantFrom(r.Context()))
+	writeResult(w, r, "env", id, "set env failed", err, noContent(w))
 }
 
 func (s *Server) handlePatchEnv(w http.ResponseWriter, r *http.Request) {
@@ -525,16 +526,6 @@ func (s *Server) handlePatchEnv(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	err := s.mgr.PatchEnv(r.Context(), id, req.Env, tenantFrom(r.Context()))
 	writeResult(w, r, "env", id, "patch env failed", err, noContent(w))
-}
-
-func (s *Server) handleClearEnv(w http.ResponseWriter, r *http.Request) {
-	s.setEnv(w, r, nil)
-}
-
-func (s *Server) setEnv(w http.ResponseWriter, r *http.Request, env types.Env) {
-	id := r.PathValue("id")
-	err := s.mgr.SetEnv(r.Context(), id, env, tenantFrom(r.Context()))
-	writeResult(w, r, "env", id, "set env failed", err, noContent(w))
 }
 
 func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id string, cred pool.Cred) error) http.HandlerFunc {
