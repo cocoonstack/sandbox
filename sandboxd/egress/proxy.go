@@ -152,15 +152,18 @@ func (p *Proxy) Close() {
 	p.CloseIdle()
 }
 
-// CloseIdle drops pooled upstream connections, so the next request dials and passes the dial-time gates again.
+// CloseIdle moves new requests to fresh pools; the old ones close each connection as its in-flight request ends, so no reused connection skips the dial-time gates.
 func (p *Proxy) CloseIdle() {
-	p.tr.CloseIdleConnections()
-	if p.mitmTr != nil {
-		p.mitmTr.CloseIdleConnections()
-	}
 	p.trMu.Lock()
-	defer p.trMu.Unlock()
-	for _, tr := range p.routed {
+	old := append(slices.Collect(maps.Values(p.routed)), p.tr)
+	p.tr = p.tr.Clone()
+	if p.mitmTr != nil {
+		old = append(old, p.mitmTr)
+		p.mitmTr = p.mitmTr.Clone()
+	}
+	clear(p.routed)
+	p.trMu.Unlock()
+	for _, tr := range old {
 		tr.CloseIdleConnections()
 	}
 }
@@ -330,6 +333,8 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 
 // transport returns the pool for route; the direct route keeps the base transports.
 func (p *Proxy) transport(route string, mitm bool) *http.Transport {
+	p.trMu.Lock()
+	defer p.trMu.Unlock()
 	base := p.tr
 	if mitm {
 		base = p.mitmTr
@@ -337,8 +342,6 @@ func (p *Proxy) transport(route string, mitm bool) *http.Transport {
 	if route == "" {
 		return base
 	}
-	p.trMu.Lock()
-	defer p.trMu.Unlock()
 	key := routeKey{route: route, mitm: mitm}
 	tr := p.routed[key]
 	if tr == nil {

@@ -197,13 +197,21 @@ func TestACloneOfARetiredGoldenNeverLands(t *testing.T) {
 }
 
 func TestAReloadDropsTheLiveProxiesPooledConnections(t *testing.T) {
-	var conns atomic.Int32
-	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var conns, closed atomic.Int32
+	started, release := make(chan struct{}), make(chan struct{})
+	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/slow" {
+			close(started)
+			<-release
+		}
 		_, _ = io.WriteString(w, "ok")
 	}))
 	origin.Config.ConnState = func(_ net.Conn, s http.ConnState) {
-		if s == http.StateNew {
+		switch s {
+		case http.StateNew:
 			conns.Add(1)
+		case http.StateClosed:
+			closed.Add(1)
 		}
 	}
 	origin.Start()
@@ -216,28 +224,35 @@ func TestAReloadDropsTheLiveProxiesPooledConnections(t *testing.T) {
 		t.Fatalf("arm egress: %v", err)
 	}
 	client := egressClient(engine.EgressSocketPath(sb.VsockSocket))
-	get := func() {
-		t.Helper()
-		resp, err := client.Get(origin.URL + "/")
+	get := func(path string) error {
+		resp, err := client.Get(origin.URL + path)
 		if err != nil {
-			t.Fatalf("get: %v", err)
+			return err
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
+		return resp.Body.Close()
 	}
-	get()
-	get()
-	if n := conns.Load(); n != 1 {
-		t.Fatalf("%d origin connections before the reload, want one reused", n)
-	}
+	inflight := make(chan error, 1)
+	go func() { inflight <- get("/slow") }()
+	<-started
 	next := *m.cfg
 	next.EgressInternalAllow = []string{"10.8.0.0/16"}
 	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	get()
+	if err := get("/"); err != nil {
+		t.Fatalf("get after the reload: %v", err)
+	}
+	close(release)
+	if err := <-inflight; err != nil {
+		t.Fatalf("in-flight get: %v", err)
+	}
+	waitFor(t, func() bool { return closed.Load() == 1 })
+	if err := get("/"); err != nil {
+		t.Fatalf("get after the in-flight one ended: %v", err)
+	}
 	if n := conns.Load(); n != 2 {
-		t.Errorf("%d origin connections after the reload, want a fresh dial that passes the new gates", n)
+		t.Errorf("%d origin connections, want the in-flight one closed when it ended and one fresh dial after the reload", n)
 	}
 }
 
