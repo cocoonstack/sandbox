@@ -201,22 +201,42 @@ func TestAHostOnlyChangeLeavesTheGuestFileAlone(t *testing.T) {
 }
 
 func TestAFailedClearIsRepairedByResendingIt(t *testing.T) {
-	eng := newFakeEngine()
-	m := envManager(t, eng, t.TempDir())
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: types.Env{"G": {Value: "g"}}})
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	eng.guestEnvErr = errors.New("guest write failed")
-	if err = m.SetEnv(t.Context(), sb.ID, nil, ""); err == nil {
-		t.Fatal("clear reported success with a failed guest write")
-	}
-	eng.guestEnvErr = nil
-	if err = m.SetEnv(t.Context(), sb.ID, nil, ""); err != nil {
-		t.Fatalf("resent clear: %v", err)
-	}
-	if got := eng.guestEnvs[sb.VsockSocket]; got != "" {
-		t.Errorf("guest file after the resent clear %q, want it emptied", got)
+	for _, tt := range []struct {
+		name  string
+		patch types.EnvPatch
+	}{
+		{"put", nil},
+		{"remove", types.EnvPatch{"G": nil}},
+		{"host-only", types.EnvPatch{"G": {Value: "h", Guest: hostOnly}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := envManager(t, eng, t.TempDir())
+			sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: types.Env{"G": {Value: "g"}}})
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			sock := lockedVsock(m, sb)
+			write := func() error { return m.SetEnv(t.Context(), sb.ID, nil, "") }
+			if tt.patch != nil {
+				write = func() error { return m.PatchEnv(t.Context(), sb.ID, tt.patch, "") }
+			}
+			writeErr := errors.New("guest write failed")
+			eng.guestEnvErr = writeErr
+			for range 2 {
+				if err := write(); !errors.Is(err, writeErr) {
+					t.Fatalf("clear with a failed guest write: %v, want %v", err, writeErr)
+				}
+			}
+			eng.guestEnvErr = nil
+			seq := m.store.mark().seq
+			if err := write(); err != nil {
+				t.Fatalf("resent clear: %v", err)
+			}
+			if got := eng.guestEnvs[sock]; got != "" || m.store.mark().seq != seq {
+				t.Errorf("resent clear left guest env %q and journal seq %d, want empty env and seq %d", got, m.store.mark().seq, seq)
+			}
+		})
 	}
 }
 
@@ -337,7 +357,7 @@ func TestAFailedEnvDeliveryDestroysTheClaim(t *testing.T) {
 	}
 }
 
-func TestPatchEnvMergesAndWritesTheGuestOnlyForGuestEntries(t *testing.T) {
+func TestPatchEnvMergesAndRepairsTheGuest(t *testing.T) {
 	eng := newFakeEngine()
 	m := envManager(t, eng, t.TempDir())
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: types.Env{"GW": {Value: "Bearer k", Guest: hostOnly}, "MODE": {Value: "a"}}})
@@ -377,9 +397,10 @@ func TestPatchEnvMergesAndWritesTheGuestOnlyForGuestEntries(t *testing.T) {
 	if err := patch(types.EnvPatch{"GW": {Value: "Bearer k2", Guest: hostOnly}, "ABSENT": nil}); err != nil {
 		t.Fatalf("no-op patch: %v", err)
 	}
-	if _, wrote := eng.guestEnvs[sock]; wrote || m.store.mark().seq != seq {
-		t.Errorf("a no-op patch wrote the guest (%t) or the journal (seq %d -> %d)", wrote, seq, m.store.mark().seq)
+	if got := eng.guestEnvs[sock]; got != "META=\"x\"\nMODE=\"a\"\n" || m.store.mark().seq != seq {
+		t.Errorf("a no-op patch left guest env %q and journal seq %d, want repaired env and seq %d", got, m.store.mark().seq, seq)
 	}
+	delete(eng.guestEnvs, sock)
 	if err := patch(types.EnvPatch{"META": {Value: "x"}}); err != nil {
 		t.Fatalf("resent guest patch: %v", err)
 	}

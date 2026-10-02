@@ -15,12 +15,12 @@ const envWriteLimit = 8
 
 // SetEnv replaces a claim's env, an empty map clearing it; a change to its guest entries needs a running guest and is written there at once.
 func (m *Manager) SetEnv(ctx context.Context, id string, env types.Env, tenant string) error {
-	return m.writeEnv(ctx, id, tenant, "set", func(types.Env) (types.Env, bool) { return env, true })
+	return m.writeEnv(ctx, id, tenant, "set", func(types.Env) types.Env { return env })
 }
 
-// PatchEnv sets or removes the named entries of a claim's env and keeps the rest; the guest file is written only when the patch sets a guest entry or changes one.
+// PatchEnv sets or removes the named entries of a claim's env and keeps the rest; an unchanged result repairs a running guest's env file.
 func (m *Manager) PatchEnv(ctx context.Context, id string, patch types.EnvPatch, tenant string) error {
-	return m.writeEnv(ctx, id, tenant, "patch", func(prev types.Env) (types.Env, bool) { return patch.Apply(prev), patch.SetsGuest() })
+	return m.writeEnv(ctx, id, tenant, "patch", patch.Apply)
 }
 
 // Env reads a claim's env with host-only values dropped; a tenant reaches only its own claims.
@@ -34,8 +34,8 @@ func (m *Manager) Env(id, tenant string) (types.Env, error) {
 	return sb.Env.Redacted(), nil
 }
 
-// writeEnv stores next's env for claim id; resend rewrites an unchanged guest file too, so a repeated request repairs a lost file or a failed clear.
-func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next func(prev types.Env) (types.Env, bool)) error {
+// An unchanged result must reach the guest again to repair a failed write after the store step.
+func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next func(types.Env) types.Env) error {
 	sb, ok := m.byID(id)
 	if !ok || !tenantOwns(tenant, sb.Tenant) {
 		return ErrUnknownSandbox
@@ -51,7 +51,7 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		return ErrUnknownSandbox
 	}
 	prev, sock, failed := sb.Env, sb.VsockSocket, sb.Failed != ""
-	env, resend := next(prev)
+	env := next(prev)
 	if len(env) == 0 {
 		env = nil
 	}
@@ -72,7 +72,7 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		}
 		return ErrPaused
 	}
-	deliver := !paused && (changed || resend && env.Equal(prev))
+	deliver := !paused && (changed || env.Equal(prev))
 	if env.Equal(prev) {
 		m.mu.Unlock()
 		return m.deliverGuestEnv(ctx, verb, id, sock, env, deliver)
