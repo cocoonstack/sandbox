@@ -132,7 +132,6 @@ func TestUpdateSelfBumpsOnlyWhenVolumesChange(t *testing.T) {
 
 func TestConfigDigestMismatch(t *testing.T) {
 	m := newTestMesh(t, "self")
-	m.SetSelfDigest("self-digest")
 	mergeStates(t, m, []NodeState{{NodeID: "peerA", Addr: "a:1", Epoch: 1, Digest: "self-digest"}})
 	mergeStates(t, m, []NodeState{{NodeID: "peerB", Addr: "b:1", Epoch: 1, Digest: "other-digest"}})
 	if n := m.ConfigMismatches(); n != 1 {
@@ -142,7 +141,6 @@ func TestConfigDigestMismatch(t *testing.T) {
 
 func TestUpdateDigestRepublishesUnderAFreshEpoch(t *testing.T) {
 	m := newBoundMesh(t, t.TempDir())
-	m.SetSelfDigest("d1")
 	base := m.self.Epoch
 	m.UpdateDigest(t.Context(), "d1")
 	if m.self.Epoch != base {
@@ -159,7 +157,7 @@ func newBoundMesh(t *testing.T, dataDir string) *Mesh {
 	cfg := memberlist.DefaultLocalConfig()
 	cfg.BindPort = 0
 	cfg.Logger = discardLogger()
-	m, err := New(t.Context(), cfg, "self", "self:7777", nil, dataDir)
+	m, err := New(t.Context(), cfg, NodeState{NodeID: "self", Addr: "self:7777", ClientAddr: "https://self.example", Digest: "d1"}, nil, dataDir)
 	if err != nil {
 		t.Fatalf("new mesh: %v", err)
 	}

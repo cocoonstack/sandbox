@@ -166,8 +166,6 @@ func TestTwoNodeClusterGossipsPools(t *testing.T) {
 func TestARuntimeDigestChangeReachesThePeer(t *testing.T) {
 	a := startNode(t, "127.0.0.1", 0, "node-a")
 	b := startNode(t, "127.0.0.1", 0, "node-b")
-	a.mesh.SetSelfDigest("shared")
-	b.mesh.SetSelfDigest("shared")
 	if err := b.mesh.Join([]string{a.addr}); err != nil {
 		t.Fatalf("join: %v", err)
 	}
@@ -260,7 +258,7 @@ func newTestMesh(t *testing.T, id string) *Mesh {
 	t.Helper()
 	return &Mesh{
 		epochPath: filepath.Join(t.TempDir(), "mesh-epoch"),
-		self:      NodeState{NodeID: id, Addr: id + ":7777", Pools: map[string]int{}},
+		self:      NodeState{NodeID: id, Addr: id + ":7777", Pools: map[string]int{}, Digest: id + "-digest"},
 		view:      map[string]NodeState{id: {NodeID: id, Addr: id + ":7777"}},
 		live:      map[string]struct{}{},
 	}
@@ -281,7 +279,7 @@ func startNode(t *testing.T, host string, port int, id string) *node {
 	cfg.AdvertiseAddr = host
 	cfg.PushPullInterval = 200 * time.Millisecond
 	cfg.Logger = discardLogger()
-	m, err := New(t.Context(), cfg, id, id+":7777", nil, t.TempDir())
+	m, err := New(t.Context(), cfg, NodeState{NodeID: id, Addr: id + ":7777", Digest: "shared"}, nil, t.TempDir())
 	if err != nil {
 		t.Fatalf("new mesh %s: %v", id, err)
 	}
