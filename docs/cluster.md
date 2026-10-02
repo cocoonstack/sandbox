@@ -291,10 +291,29 @@ down during a fan-out has left the peer list, so it is absent from the results
 rather than failed: when it rejoins with its old `tenants.json`, that mismatch
 names the divergence, and one apply to that node closes it.
 
-Every node holds the whole tenant set in memory and rewrites `tenants.json` on
-each change, so the set suits thousands to tens of thousands of tenants:
-control planes, organisations, services. Map end users onto them in the
-control plane (`claim_ref`, `metadata`) rather than giving each user a tenant.
+Without a shared store, every node holds the whole tenant set in memory and
+rewrites `tenants.json` on each change, so the set suits thousands to tens of
+thousands of tenants: control planes, organisations, services. Map end users
+onto them in the control plane (`claim_ref`, `metadata`) rather than giving
+each user a tenant.
+
+With [`meta_store`](deploy.md#shared-tenant-database), the tenant set lives in
+one PostgreSQL table that every node reads, so one tenant per end user works:
+- **Writes:** a `/v1/tenants` write on any node commits there with a `NOTIFY`
+  that evicts the name on every node. There is no fan-out, no `tenants.json`,
+  and the set is not part of the gossiped digest; `GET /v1/tenants` reports no
+  `digest`.
+- **Cache:** each node caches the tenants it has seen. A tenant's first request
+  on a node is one indexed query; later ones are a map hit. Unknown tokens are
+  cached as misses for 10 s, and a node sends at most 200 cold lookups per
+  second, so random tokens cannot load the database.
+- **Database down:**
+  - cached tenants keep authenticating and their claims keep running;
+  - an uncached tenant answers 503, and writes fail;
+  - a node whose invalidation listener reconnects drops its cache, so it never
+    serves a change it missed while disconnected;
+  - a change made while a node's listener was down reaches that node at the
+    listener's next retry, at most 30 s after the database returns.
 
 ### Cluster-invariant config
 
@@ -353,7 +372,7 @@ with every claim.
   never a wildcard)
 - the same engine root path (cocoon's `root_dir`) on every node; it is not in
   the digest, so a mismatch shows only at the first cross-node branch
-- same `api_token`, `tenants`, `preview_secret`, and `egress_ca` root everywhere
+- same `api_token`, `tenants` (or the same `meta_store`), `preview_secret`, and `egress_ca` root everywhere
   (a mismatch warns and shows in `sandboxd_config_digest_mismatch`)
 - `cluster_key` set if the gossip network is not otherwise trusted
 - one mesh sized in the hundreds of nodes, and promoted templates per pool or
@@ -362,7 +381,7 @@ with every claim.
   set persists to `pools.json` and survives restart
 - tenant changes via `Client.PutTenantCluster` / `DeleteTenantCluster` /
   `SetTenantsCluster`, retrying the nodes that failed; the applied set persists
-  to `tenants.json`
+  to `tenants.json`. With `meta_store`, one write to any node reaches all of them
 - declare each volume's catalog entry — name, access list, and `writable`
   — identically on every node meant to serve it (a tenant claim gets a hard
   error, not a redirect, on a node missing the entry); put the actual image

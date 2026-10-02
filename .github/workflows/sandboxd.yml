@@ -35,6 +35,18 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: sbxci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -54,6 +66,14 @@ jobs:
 
       - name: Test
         run: make go-test
+
+      - name: Test the PostgreSQL tenant source
+        working-directory: sandboxd
+        env:
+          SANDBOXD_TEST_PG_URL: postgres://postgres:sbxci@localhost:5432/postgres?sslmode=disable
+        run: |
+          GOWORK=off go test -race -count=1 -v -run 'TestContract|TestAWriteOnOneNode|TestACachedTenant|TestTwoNodesOnOneMetaStore' ./tenants/... ./pool/ | tee "$RUNNER_TEMP/pg-test.log"
+          ! grep -- '--- SKIP' "$RUNNER_TEMP/pg-test.log"
 
       - name: Set up Python
         uses: actions/setup-python@v7.0.0

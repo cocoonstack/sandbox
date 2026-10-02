@@ -35,12 +35,14 @@ type ClaimOptions struct {
 	NoEgress        bool
 	RequirePromoted bool
 	Env             types.Env
+	// EgressClass is the tenant's egress class as its token resolved for this request.
+	EgressClass string
 }
 
-// apply stamps the options a claim carries for its life, with the tenant's egress class as of now.
-func (o ClaimOptions) apply(sb *types.Sandbox, class string) {
+// apply stamps the options a claim carries for its life.
+func (o ClaimOptions) apply(sb *types.Sandbox) {
 	sb.Tenant, sb.ClaimRef, sb.Metadata, sb.OnExpire, sb.NoEgress = o.Tenant, o.ClaimRef, o.Metadata, o.OnExpire.Or(""), o.NoEgress
-	sb.EgressClass, sb.Env = class, o.Env
+	sb.EgressClass, sb.Env = o.EgressClass, o.Env
 }
 
 // ClaimWarm transfers ownership of a warm sandbox without provisioning; ErrNoWarm means empty.
@@ -71,7 +73,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, o ClaimOptio
 		m.abortVolumeClaim(ctx, sb.VMName, &reserved)
 		return nil, volumeErr
 	}
-	o.apply(sb, m.tenantClass(o.Tenant))
+	o.apply(sb)
 	reserved = nil
 	out, err := m.finalize(ctx, sb, o.TTL, false)
 	if err == nil {
@@ -109,7 +111,7 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, o Claim
 	}
 	sb.TemplateDigest = golden.templateDigest
 	sb.PolicySource = golden.source
-	o.apply(sb, m.tenantClass(o.Tenant))
+	o.apply(sb)
 	reserved = nil
 	out, err := m.finalize(ctx, sb, o.TTL, golden.guestEnv)
 	if err == nil {
@@ -371,8 +373,12 @@ func (m *Manager) quotaErr(extra int, tenant string) error {
 	if m.maxClaims > 0 && len(m.claimed)+extra > m.maxClaims {
 		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, len(m.claimed), m.maxClaims)
 	}
-	limit := m.tenants.Load().byName[tenant].MaxClaims
-	if tenant == "" || limit <= 0 {
+	if tenant == "" {
+		return nil
+	}
+	r, _ := m.tenants.Peek(tenant)
+	limit := r.MaxClaims
+	if limit <= 0 {
 		return nil
 	}
 	if live := m.tenantLive[tenant]; live+extra > limit {

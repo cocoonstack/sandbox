@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -32,6 +33,9 @@ const (
 	maxBodyBytes    = 1 << 20
 	maxMetadataDoc  = 4 << 10
 	previewTTL      = time.Hour
+
+	defaultTenantPage = 1000
+	maxTenantPage     = 10000
 )
 
 var poolErrHTTP = []struct {
@@ -48,6 +52,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrBadConfig, http.StatusBadRequest, ""},
 	{pool.ErrReloadRefused, http.StatusConflict, ""},
 	{pool.ErrTenantRemoved, http.StatusForbidden, ""},
+	{pool.ErrTenantStoreDown, http.StatusServiceUnavailable, ""},
 	{pool.ErrNoEgress, http.StatusConflict, ""},
 	{pool.ErrNoEgressHibernate, http.StatusConflict, ""},
 	{pool.ErrNoEgressFork, http.StatusConflict, ""},
@@ -110,8 +115,8 @@ type Manager interface {
 	DialPort(ctx context.Context, id string, cred pool.Cred, port uint16) (net.Conn, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, func(), error)
 	SetPools(ctx context.Context, pools []config.PoolSpec) error
-	TenantByToken(token string) (string, bool)
-	Tenants() ([]pool.TenantInfo, string)
+	TenantByToken(ctx context.Context, token string) (*config.TenantRecord, error)
+	Tenants(ctx context.Context, after string, limit int) (pool.TenantPage, error)
 	SetTenants(ctx context.Context, specs []config.TenantSpec) error
 	PutTenant(ctx context.Context, spec config.TenantSpec) error
 	DeleteTenant(ctx context.Context, name string) error
@@ -193,12 +198,6 @@ type TenantRequest struct {
 	Token       string `json:"token,omitempty"`
 	MaxClaims   int    `json:"max_claims,omitzero"`
 	EgressClass string `json:"egress_class,omitempty"`
-}
-
-// TenantListResponse is the reply of GET and PUT /v1/tenants; it never carries a token.
-type TenantListResponse struct {
-	Tenants []pool.TenantInfo `json:"tenants"`
-	Digest  string            `json:"digest"`
 }
 
 // PoolUpdateRequest is the wire body of PUT /v1/pools; omitted pools are drained.
@@ -315,7 +314,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	o := claimOptions(req, tenant)
+	o := claimOptions(req, tenantRecordFrom(r.Context()))
 	var sb *types.Sandbox
 	err := pool.ErrNoWarm
 	if !req.RequirePromoted {
@@ -352,7 +351,7 @@ func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req t
 		return
 	}
 	var sb *types.Sandbox
-	o := claimOptions(req, tenant)
+	o := claimOptions(req, tenantRecordFrom(r.Context()))
 	if req.RequirePromoted {
 		sb, err = s.mgr.ClaimProvision(r.Context(), key, o)
 	} else {
@@ -612,7 +611,10 @@ func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ckptID := r.PathValue("id")
-	o := pool.ClaimOptions{TTL: req.TTL(), OnExpire: req.OnExpire, Tenant: tenantFrom(r.Context()), Metadata: req.Metadata, Env: req.Env}
+	o := pool.ClaimOptions{TTL: req.TTL(), OnExpire: req.OnExpire, Metadata: req.Metadata, Env: req.Env}
+	if tenant := tenantRecordFrom(r.Context()); tenant != nil {
+		o.Tenant, o.EgressClass = tenant.Name, tenant.EgressClass
+	}
 	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, o)
 	if errors.Is(err, pool.ErrUnknownCheckpoint) {
 		if !req.NoRedirect && s.prober != nil && s.writeRedirect(w, s.prober.Owners(r.Context(), ckptID)) {
@@ -733,9 +735,19 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 	writeResult(w, r, "config reload", "", "config reload failed", err, func() { writeJSON(w, http.StatusOK, res) })
 }
 
-func (s *Server) handleTenants(w http.ResponseWriter, _ *http.Request) {
-	tenants, digest := s.mgr.Tenants()
-	writeJSON(w, http.StatusOK, TenantListResponse{Tenants: tenants, Digest: digest})
+func (s *Server) handleTenants(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit := defaultTenantPage
+	if raw := q.Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > maxTenantPage {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("limit must be 1..%d", maxTenantPage))
+			return
+		}
+		limit = n
+	}
+	page, err := s.mgr.Tenants(r.Context(), q.Get("after"), limit)
+	writeResult(w, r, "tenants", "", "list tenants failed", err, func() { writeJSON(w, http.StatusOK, page) })
 }
 
 func (s *Server) handlePutTenants(w http.ResponseWriter, r *http.Request) {
@@ -800,8 +812,12 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) requireToken(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenant, ok := s.resolveScope(r)
-		if !ok {
+		tenant, err := s.resolveScope(r)
+		switch {
+		case errors.Is(err, pool.ErrTenantStoreDown):
+			writeErr(w, http.StatusServiceUnavailable, "tenant source unavailable; retry")
+			return
+		case err != nil:
 			writeErr(w, http.StatusUnauthorized, "invalid api token")
 			return
 		}
@@ -839,18 +855,18 @@ func (s *Server) bodyCred(r *http.Request, bodyToken string) pool.Cred {
 	return pool.Cred{Token: bodyToken, Operator: bodyToken == "" && s.rootRequest(r)}
 }
 
-func (s *Server) resolveScope(r *http.Request) (string, bool) {
+func (s *Server) resolveScope(r *http.Request) (*config.TenantRecord, error) {
 	if s.apiToken == "" {
-		return "", true
+		return nil, nil
 	}
 	token, ok := bearerToken(r)
 	if !ok {
-		return "", false
+		return nil, pool.ErrUnknownTenant
 	}
 	if s.isRootToken(token) {
-		return "", true
+		return nil, nil
 	}
-	return s.mgr.TenantByToken(token)
+	return s.mgr.TenantByToken(r.Context(), token)
 }
 
 func (s *Server) claimResponse(sb *types.Sandbox) types.ClaimResponse {
@@ -861,11 +877,15 @@ func (s *Server) claimResponse(sb *types.Sandbox) types.ClaimResponse {
 	}
 }
 
-func claimOptions(req types.ClaimRequest, tenant string) pool.ClaimOptions {
-	return pool.ClaimOptions{
-		TTL: req.TTL(), OnExpire: req.OnExpire, Tenant: tenant, ClaimRef: req.ClaimRef, Metadata: req.Metadata, Volumes: req.Volumes,
+func claimOptions(req types.ClaimRequest, tenant *config.TenantRecord) pool.ClaimOptions {
+	o := pool.ClaimOptions{
+		TTL: req.TTL(), OnExpire: req.OnExpire, ClaimRef: req.ClaimRef, Metadata: req.Metadata, Volumes: req.Volumes,
 		NoEgress: req.Egress != nil && !*req.Egress, RequirePromoted: req.RequirePromoted, Env: req.Env,
 	}
+	if tenant != nil {
+		o.Tenant, o.EgressClass = tenant.Name, tenant.EgressClass
+	}
+	return o
 }
 
 func templateKey(q url.Values) types.PoolKey {

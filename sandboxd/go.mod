@@ -12,12 +12,14 @@ require (
 	github.com/docker/go-units v0.5.0
 	github.com/google/nftables v0.3.0
 	github.com/hashicorp/memberlist v0.7.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/projecteru2/core v0.1.5
 	github.com/rs/zerolog v1.35.1
 	golang.org/x/mod v0.41.0
 	golang.org/x/net v0.59.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/sys v0.48.0
+	golang.org/x/time v0.16.0
 )
 
 require (
@@ -49,6 +51,9 @@ require (
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/go-sockaddr v1.0.7 // indirect
 	github.com/hashicorp/golang-lru v1.0.2 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/mattn/go-colorable v0.1.15 // indirect

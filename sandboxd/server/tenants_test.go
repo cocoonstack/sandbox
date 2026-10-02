@@ -169,3 +169,55 @@ func TestConfigReloadIsRootOnlyAndNamesWhatChanged(t *testing.T) {
 		}
 	}
 }
+
+func TestATenantClaimCarriesItsTokensEgressClassAndADownSourceIs503(t *testing.T) {
+	mgr := &fakeManager{warmClaim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+		return &types.Sandbox{ID: "sb_1", Token: "sb-tok"}, nil
+	}}
+	ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "acme", Token: "acme-tok", EgressClass: "desk"}}, mgr, nil)
+	claim := `{"template":"rt:24.04"}`
+	resp := doReq(t, http.MethodPost, ts.URL+"/v1/claim", "acme-tok", claim)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || mgr.gotTenant != "acme" || mgr.gotEgressClass != "desk" {
+		t.Errorf("tenant claim: %d tenant %q class %q, want acme under desk", resp.StatusCode, mgr.gotTenant, mgr.gotEgressClass)
+	}
+	resp = doReq(t, http.MethodPost, ts.URL+"/v1/claim", "root", claim)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || mgr.gotEgressClass != "" {
+		t.Errorf("root claim: %d class %q, want none", resp.StatusCode, mgr.gotEgressClass)
+	}
+	mgr.tenantErr = fmt.Errorf("%w: connection refused", pool.ErrTenantStoreDown)
+	resp = doReq(t, http.MethodPost, ts.URL+"/v1/claim", "acme-tok", claim)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("claim with the tenant source down: %d, want 503", resp.StatusCode)
+	}
+	mgr.tenantErr = pool.ErrUnknownTenant
+	resp = doReq(t, http.MethodPost, ts.URL+"/v1/claim", "acme-tok", claim)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("claim with an unknown token: %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestTenantListPagesByCursor(t *testing.T) {
+	mgr := &fakeManager{tenantList: []pool.TenantInfo{{Name: "u-2"}}}
+	ts := newTenantTestServer(t, "root", nil, mgr, nil)
+	resp := doReq(t, http.MethodGet, ts.URL+"/v1/tenants?after=u-1&limit=2", "root", "")
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || mgr.gotTenantPage != [2]string{"u-1", "2"} {
+		t.Errorf("paged list: %d, manager got %v", resp.StatusCode, mgr.gotTenantPage)
+	}
+	resp = doReq(t, http.MethodGet, ts.URL+"/v1/tenants", "root", "")
+	_ = resp.Body.Close()
+	if mgr.gotTenantPage != [2]string{"", "1000"} {
+		t.Errorf("default page: manager got %v, want the first 1000", mgr.gotTenantPage)
+	}
+	for _, q := range []string{"limit=0", "limit=10001", "limit=x"} {
+		resp = doReq(t, http.MethodGet, ts.URL+"/v1/tenants?"+q, "root", "")
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: %d, want 400", q, resp.StatusCode)
+		}
+	}
+}

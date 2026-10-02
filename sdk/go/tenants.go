@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"sync"
 )
 
@@ -28,10 +29,11 @@ type TenantInfo struct {
 	Removed     bool   `json:"removed,omitzero"`
 }
 
-// TenantList is a node's tenant set; two nodes with equal Digests hold the same set.
+// TenantList is one page of a node's tenant set; Next is the cursor of the following page, and two nodes with equal Digests hold the same set (a node on a shared meta_store reports none).
 type TenantList struct {
 	Tenants []TenantInfo `json:"tenants"`
-	Digest  string       `json:"digest"`
+	Digest  string       `json:"digest,omitempty"`
+	Next    string       `json:"next,omitempty"`
 }
 
 // NodeResult is one node's outcome from a cluster-wide call; only SetPoolsCluster sets Info.
@@ -51,9 +53,20 @@ type tenantUpdate struct {
 	EgressClass string `json:"egress_class,omitempty"`
 }
 
-// Tenants lists the entry node's tenant set (GET /v1/tenants); requires the operator token.
-func (c *Client) Tenants(ctx context.Context) (*TenantList, error) {
-	return doJSONPtr[TenantList](ctx, c, http.MethodGet, c.addr, "/v1/tenants", nil, c.apiToken, "tenants")
+// Tenants lists up to limit tenants named after the cursor (GET /v1/tenants); a zero limit takes the node's default page, and it requires the operator token.
+func (c *Client) Tenants(ctx context.Context, after string, limit int) (*TenantList, error) {
+	q := url.Values{}
+	if after != "" {
+		q.Set("after", after)
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	path := "/v1/tenants"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	return doJSONPtr[TenantList](ctx, c, http.MethodGet, c.addr, path, nil, c.apiToken, "tenants")
 }
 
 // SetTenants replaces the entry node's whole tenant set (PUT /v1/tenants); a tenant left out stops authenticating, its claims stay.
