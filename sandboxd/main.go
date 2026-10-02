@@ -195,12 +195,11 @@ func startMesh(ctx context.Context, cfg *config.Config, mgr *pool.Manager) (*mes
 	mlCfg.PushPullInterval = gossipInterval
 	mlCfg.LogOutput = io.Discard // memberlist's own logs bypass core/log
 
-	nodeID := cmp.Or(mc.NodeID, mc.Bind)
 	key, err := mc.DecodedKey()
 	if err != nil {
 		return nil, err
 	}
-	self := mesh.NodeState{NodeID: nodeID, Addr: cfg.AdvertiseAddr, ClientAddr: cfg.ClientAdvertise, Digest: cfg.ClusterDigest(mgr.EgressCAFingerprint(), mgr.TenantRecords())}
+	self := mesh.NodeState{NodeID: cmp.Or(mc.NodeID, mc.Bind), Addr: cfg.AdvertiseAddr, ClientAddr: cfg.ClientAdvertise, Digest: cfg.ClusterDigest(mgr.EgressCAFingerprint(), mgr.TenantRecords())}
 	msh, err := mesh.New(ctx, mlCfg, self, key, cfg.DataDir)
 	if err != nil {
 		return nil, err

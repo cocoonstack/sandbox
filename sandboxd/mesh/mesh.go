@@ -57,21 +57,19 @@ func New(ctx context.Context, cfg *memberlist.Config, self NodeState, secretKey 
 	epochPath := filepath.Join(dataDir, "mesh-epoch")
 	self.Epoch = max(uint64(time.Now().UnixNano()), loadEpoch(epochPath)+1)
 	self.Pools = map[string]int{}
-	nodeID := self.NodeID
 	m := &Mesh{
 		ctx:       ctx,
 		epochPath: epochPath,
 		leased:    self.Epoch + epochLease,
 		self:      self,
-		view:      map[string]NodeState{},
+		view:      map[string]NodeState{self.NodeID: self},
 		live:      map[string]struct{}{},
 	}
 	if err := storeEpoch(m.epochPath, m.leased); err != nil {
 		return nil, fmt.Errorf("persist mesh epoch: %w", err)
 	}
-	m.view[nodeID] = m.self
 
-	cfg.Name = nodeID
+	cfg.Name = self.NodeID
 	cfg.Delegate = (*delegate)(m)
 	cfg.Events = (*eventDelegate)(m)
 	if len(secretKey) > 0 {

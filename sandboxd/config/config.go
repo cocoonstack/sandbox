@@ -564,10 +564,6 @@ func (c *Config) validateEgressRouting() error {
 			return fmt.Errorf("egress_internal_allow %q: %w", entry, err)
 		}
 	}
-	return c.validateEgressUpstream()
-}
-
-func (c *Config) validateEgressUpstream() error {
 	var defaults []string
 	for _, p := range c.Pools {
 		if p.EgressUpstreamEnv != "" {
