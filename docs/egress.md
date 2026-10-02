@@ -165,7 +165,7 @@ both). The pool rule's secret is the only one injected on a composed claim; a
 class rule's `secret` applies only to a tenant claim of an unpooled key, where
 the class policy stands alone. `egress_classes`
 names each tenant layer in the config file, and a tenant references one by
-`egress_class`, in `tenants` or through the [tenant API](sandboxd-api.md#tenants-v1tenants).
+`egress_class` through the [tenant API](sandboxd-api.md#tenants-v1tenants).
 The API only references a class the operator wrote, never defines one, so a
 tenant added at runtime gets egress without a config edit. A missing policy on
 either side is an empty allow-list, not a pass: a tenant without a class
@@ -211,12 +211,12 @@ file: a claim's own `guest: false` env first, the node's second
   ],
   "egress_classes": [
     { "name": "desk", "egress": { "allow": [{ "host": "api.github.com" }] } }
-  ],
-  "tenants": [
-    { "name": "acme", "token": "…", "egress_class": "desk" }
   ]
 }
 ```
+
+A tenant joins the `desk` class with
+`PUT /v1/tenants/acme {"token": "…", "egress_class": "desk"}`.
 
 Both pools serve the proxy the same way, and the first also opens the SOCKS5
 door; the egress-lane pool additionally gets its NIC locked at claim, so its
@@ -255,7 +255,7 @@ recorded as a decision of its own before its inner requests.
 
 A secret's value is an environment variable: the one its `value_env` names,
 or the secret's own name when `value_env` is empty. The proxy reads it from
-the claim's [env](sandboxd-api.md#getputpatchdelete-v1sandboxesidenv) first, from
+the claim's [env](sandboxd-api.md#getputpatch-v1sandboxesidenv) first, from
 its `guest: false` entries only, and from the node's environment second:
 
 ```jsonc
