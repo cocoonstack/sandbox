@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -65,6 +66,24 @@ func TestPoolSeedHashBytesArePinned(t *testing.T) {
 	}
 	if got, want := poolSeedHash(specs), "3b7a82ff7910e88edcc6ec7bfd05142c647900f950d1a8cc785ee0ed344e1f08"; got != want {
 		t.Errorf("seed %s, want the pinned seed %s", got, want)
+	}
+}
+
+func TestPoolSeedHashIgnoresConfigOwnedFields(t *testing.T) {
+	base := config.PoolSpec{PoolKey: seedKey, Warm: 2}
+	want := poolSeedHash([]config.PoolSpec{base})
+	for name, edit := range map[string]func(*config.PoolSpec){
+		"egress":              func(s *config.PoolSpec) { s.Egress = &egress.Policy{Allow: []egress.Rule{{Host: "api.example.com"}}} },
+		"warmup":              func(s *config.PoolSpec) { s.Warmup = []string{"true"} },
+		"capture_trim":        func(s *config.PoolSpec) { s.CaptureTrim = true },
+		"storage":             func(s *config.PoolSpec) { s.Storage = "20G" },
+		"egress_upstream_env": func(s *config.PoolSpec) { s.EgressUpstreamEnv = "POOL_UPSTREAM" },
+	} {
+		spec := base
+		edit(&spec)
+		if got := poolSeedHash([]config.PoolSpec{spec}); got != want {
+			t.Errorf("a %s edit changed the seed: the API cannot carry it, so a restart would warn of an override", name)
+		}
 	}
 }
 
