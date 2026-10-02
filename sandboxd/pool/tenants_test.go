@@ -107,14 +107,11 @@ func TestRemovedTenantRunsToItsDeadlineButCannotExtend(t *testing.T) {
 }
 
 func TestRemovedTenantsClaimIsNeitherArchivedNorWokenNorForked(t *testing.T) {
-	m, err := NewManager(t.Context(), &config.Config{
-		DataDir: t.TempDir(), APIToken: "root",
-		Tenants: []config.TenantSpec{{Name: "acme", Token: "acme-tok"}},
-		Pools:   []config.PoolSpec{archivePool(0)},
-	}, newFakeEngine(), testSecrets(t))
+	m, err := NewManager(t.Context(), &config.Config{DataDir: t.TempDir(), APIToken: "root", Pools: []config.PoolSpec{archivePool(0)}}, newFakeEngine(), testSecrets(t))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
+	putTenants(t, m, config.TenantSpec{Name: "acme", Token: "acme-tok"})
 	claim := func() *types.Sandbox {
 		t.Helper()
 		sb, claimErr := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
@@ -149,7 +146,7 @@ func TestRemovedTenantsClaimIsNeitherArchivedNorWokenNorForked(t *testing.T) {
 	}
 }
 
-func TestTenantSetSurvivesARestartAndOverridesTheConfig(t *testing.T) {
+func TestTenantSetSurvivesARestart(t *testing.T) {
 	dir := t.TempDir()
 	m := tenantManager(t, dir, config.TenantSpec{Name: "acme", Token: "acme-tok"})
 	if err := m.PutTenant(t.Context(), config.TenantSpec{Name: "beta", Token: "beta-tok", MaxClaims: 3}); err != nil {
@@ -162,19 +159,11 @@ func TestTenantSetSurvivesARestartAndOverridesTheConfig(t *testing.T) {
 	if strings.Contains(string(raw), "beta-tok") || strings.Contains(string(raw), "acme-tok") {
 		t.Fatalf("tenants.json holds a plaintext token: %s", raw)
 	}
-	restarted := tenantManager(t, dir, config.TenantSpec{Name: "acme", Token: "acme-tok"}, config.TenantSpec{Name: "gamma", Token: "gamma-tok"})
-	if name, ok := tenantOf(t, restarted, "beta-tok"); !ok || name != "beta" {
-		t.Errorf("after restart beta resolves to %q, %v", name, ok)
-	}
-	if _, ok := tenantOf(t, restarted, "gamma-tok"); ok {
-		t.Error("a tenant added to config.json after an API apply authenticates")
-	}
-	if err := os.Remove(filepath.Join(dir, "tenants.json")); err != nil {
-		t.Fatalf("remove tenants file: %v", err)
-	}
-	configOwned := tenantManager(t, dir, config.TenantSpec{Name: "gamma", Token: "gamma-tok"})
-	if _, ok := tenantOf(t, configOwned, "gamma-tok"); !ok {
-		t.Error("deleting the tenants file did not return the node to config-owned tenants")
+	restarted := tenantManager(t, dir)
+	for token, want := range map[string]string{"acme-tok": "acme", "beta-tok": "beta"} {
+		if name, ok := tenantOf(t, restarted, token); !ok || name != want {
+			t.Errorf("after restart %s resolves to %q, %v", token, name, ok)
+		}
 	}
 }
 
@@ -196,10 +185,11 @@ func TestConcurrentTenantPutsKeepEveryTenant(t *testing.T) {
 
 func TestTenantChangesAreValidatedAndAudited(t *testing.T) {
 	dir := t.TempDir()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, APIToken: "root", AuditLog: true, Tenants: []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}}, newFakeEngine(), testSecrets(t))
+	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, APIToken: "root", AuditLog: true}, newFakeEngine(), testSecrets(t))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
+	putTenants(t, m, config.TenantSpec{Name: "acme", Token: "acme-tok"})
 	for name, spec := range map[string]config.TenantSpec{
 		"bad name":      {Name: "-bad", Token: "x"},
 		"root scope":    {Name: types.TemplateRootScope, Token: "x"},
@@ -396,11 +386,22 @@ func listTenants(t *testing.T, m *Manager) ([]TenantInfo, string) {
 
 func tenantManager(t *testing.T, dir string, tenants ...config.TenantSpec) *Manager {
 	t.Helper()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, APIToken: "root", Tenants: tenants}, newFakeEngine(), testSecrets(t))
+	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, APIToken: "root"}, newFakeEngine(), testSecrets(t))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
+	putTenants(t, m, tenants...)
 	return m
+}
+
+func putTenants(t *testing.T, m *Manager, tenants ...config.TenantSpec) {
+	t.Helper()
+	if len(tenants) == 0 {
+		return
+	}
+	if err := m.SetTenants(t.Context(), tenants); err != nil {
+		t.Fatalf("set tenants: %v", err)
+	}
 }
 
 func setTenantCaps(t *testing.T, m *Manager, caps map[string]int) {
@@ -409,9 +410,12 @@ func setTenantCaps(t *testing.T, m *Manager, caps map[string]int) {
 	for name, limit := range caps {
 		records = append(records, config.TenantRecord{Name: name, TokenSHA256: config.TokenSHA256("tok-" + name), MaxClaims: limit})
 	}
-	src, err := file.Open(t.Context(), t.TempDir(), records, "")
+	src, err := file.Open(t.Context(), t.TempDir(), "")
 	if err != nil {
 		t.Fatalf("tenant set: %v", err)
+	}
+	if _, err = src.Replace(t.Context(), records); err != nil {
+		t.Fatalf("tenant records: %v", err)
 	}
 	m.tenants = src
 }

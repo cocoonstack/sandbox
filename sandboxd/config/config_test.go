@@ -13,42 +13,45 @@ import (
 )
 
 func TestClusterDigest(t *testing.T) {
-	base := &Config{APIToken: "tok", PreviewSecret: "ps", Tenants: []TenantSpec{{Name: "acme", Token: "t1"}}}
-	digest := func(c *Config, fp string) string { return c.ClusterDigest(fp, tenantRecords(c.Tenants)) }
-	d := digest(base, "ca-fp")
-	if digest(base, "ca-fp") != d {
+	acme := []TenantSpec{{Name: "acme", Token: "t1"}}
+	rotated := []TenantSpec{{Name: "acme", Token: "rotated"}}
+	base := &Config{APIToken: "tok", PreviewSecret: "ps"}
+	digest := func(c *Config, fp string, tenants []TenantSpec) string {
+		return c.ClusterDigest(fp, tenantRecords(tenants))
+	}
+	d := digest(base, "ca-fp", acme)
+	if digest(base, "ca-fp", acme) != d {
 		t.Fatal("digest is not stable for identical config")
 	}
-	if digest(&Config{APIToken: "tok", PreviewSecret: "ps", Tenants: []TenantSpec{{Name: "beta", Token: "t1"}}}, "ca-fp") == d {
+	if digest(base, "ca-fp", []TenantSpec{{Name: "beta", Token: "t1"}}) == d {
 		t.Error("a tenant-name change is not reflected")
 	}
-	if digest(base, "other-fp") == d {
+	if digest(base, "other-fp", acme) == d {
 		t.Error("an egress CA root change is not reflected")
 	}
 
-	if digest(&Config{APIToken: "other", PreviewSecret: "ps", Tenants: base.Tenants}, "ca-fp") != d {
+	if digest(&Config{APIToken: "other", PreviewSecret: "ps"}, "ca-fp", acme) != d {
 		t.Error("api_token leaked into the keyless digest")
 	}
-	if digest(&Config{APIToken: "tok", PreviewSecret: "ps", Tenants: []TenantSpec{{Name: "acme", Token: "rotated"}}}, "ca-fp") != d {
+	if digest(base, "ca-fp", rotated) != d {
 		t.Error("a tenant token leaked into the keyless digest")
 	}
 	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
-	keyed := &Config{APIToken: "tok", PreviewSecret: "ps", Tenants: base.Tenants, Mesh: &MeshConfig{ClusterKey: key}}
-	keyedDiff := &Config{APIToken: "other", PreviewSecret: "ps", Tenants: base.Tenants, Mesh: &MeshConfig{ClusterKey: key}}
-	if digest(keyed, "ca-fp") == digest(keyedDiff, "ca-fp") {
+	keyed := &Config{APIToken: "tok", PreviewSecret: "ps", Mesh: &MeshConfig{ClusterKey: key}}
+	keyedDiff := &Config{APIToken: "other", PreviewSecret: "ps", Mesh: &MeshConfig{ClusterKey: key}}
+	if digest(keyed, "ca-fp", acme) == digest(keyedDiff, "ca-fp", acme) {
 		t.Error("with a cluster_key the api_token must be covered by the digest")
 	}
-	rotated := &Config{APIToken: "tok", PreviewSecret: "ps", Tenants: []TenantSpec{{Name: "acme", Token: "rotated"}}, Mesh: &MeshConfig{ClusterKey: key}}
-	if digest(keyed, "ca-fp") == digest(rotated, "ca-fp") {
+	if digest(keyed, "ca-fp", acme) == digest(keyed, "ca-fp", rotated) {
 		t.Error("with a cluster_key a tenant token rotation must change the digest")
 	}
 	withVolume := *base
 	withVolume.Volumes = []VolumeSpec{{Name: "imagenet", Path: "/srv/datasets/imagenet.img", DirectIO: types.DirectIOOff}}
-	if digest(&withVolume, "ca-fp") != d {
+	if digest(&withVolume, "ca-fp", acme) != d {
 		t.Error("node-local volume catalog must not change the cluster digest")
 	}
 	for _, cfg := range []*Config{base, keyed} {
-		records := tenantRecords(cfg.Tenants)
+		records := tenantRecords(acme)
 		before := cfg.ClusterDigest("ca-fp", records)
 		records[0].MaxClaims = 1
 		if cfg.ClusterDigest("ca-fp", records) == before {
@@ -64,17 +67,18 @@ func TestClusterDigestBytesArePinned(t *testing.T) {
 	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
 	tenants := []TenantSpec{{Name: "acme", Token: "t<1>&\u2028"}, {Name: "beta", Token: "t2"}}
 	for _, tt := range []struct {
-		name string
-		cfg  *Config
-		fp   string
-		want string
+		name    string
+		cfg     *Config
+		tenants []TenantSpec
+		fp      string
+		want    string
 	}{
-		{"keyless", &Config{APIToken: "t<o>k", PreviewSecret: "p&s", Tenants: tenants, CheckpointTTLHours: 24}, "ca<&>\u2028fp", "889dd395d66341236c2e073bea4b9455e48a48eb7ea79a69f60bda9b914f40f9"},
-		{"keyed", &Config{APIToken: "t<o>k&\u2029", PreviewSecret: "p&s<", Tenants: tenants, CheckpointTTLHours: 24, Mesh: &MeshConfig{ClusterKey: key}}, "ca<&>fp", "1bf87485f6d3a2e097ffa0835127601520725185d06ed960b441888e2538a6c8"},
-		{"no tenants", &Config{}, "fp", "38fc616b12f612c2c5c3f83af9d4c6caa771e1d3ffca39a6c835e522d3db49f8"},
+		{"keyless", &Config{APIToken: "t<o>k", PreviewSecret: "p&s", CheckpointTTLHours: 24}, tenants, "ca<&>\u2028fp", "889dd395d66341236c2e073bea4b9455e48a48eb7ea79a69f60bda9b914f40f9"},
+		{"keyed", &Config{APIToken: "t<o>k&\u2029", PreviewSecret: "p&s<", CheckpointTTLHours: 24, Mesh: &MeshConfig{ClusterKey: key}}, tenants, "ca<&>fp", "1bf87485f6d3a2e097ffa0835127601520725185d06ed960b441888e2538a6c8"},
+		{"no tenants", &Config{}, nil, "fp", "38fc616b12f612c2c5c3f83af9d4c6caa771e1d3ffca39a6c835e522d3db49f8"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cfg.ClusterDigest(tt.fp, tenantRecords(tt.cfg.Tenants)); got != tt.want {
+			if got := tt.cfg.ClusterDigest(tt.fp, tenantRecords(tt.tenants)); got != tt.want {
 				t.Errorf("digest %s, want the pinned digest %s: a change splits a rolling cluster", got, tt.want)
 			}
 		})
@@ -181,14 +185,6 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"egress without attachment", `{"pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`, "egress lane needs"},
 		{"egress idle hibernate", `{"bridges":["br0"],"pools":[{"template":"rt:24.04","net":"egress","size":"small","idle_hibernate_seconds":1}]}`, "not supported for egress"},
 		{"negative warm", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","warm":-2}]}`, "negative"},
-		{"tenants without api_token", `{"pools":[],"tenants":[{"name":"acme","token":"t1"}]}`, "require api_token"},
-		{"empty tenant name", `{"api_token":"root","pools":[],"tenants":[{"name":"","token":"t1"}]}`, "tenant name"},
-		{"bad tenant name", `{"api_token":"root","pools":[],"tenants":[{"name":"_bad","token":"t1"}]}`, "tenant name"},
-		{"duplicate tenant name", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1"},{"name":"acme","token":"t2"}]}`, "duplicate tenant"},
-		{"empty tenant token", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":""}]}`, "needs a token"},
-		{"tenant token equals api token", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"root"}]}`, "differ from api_token"},
-		{"duplicate tenant token", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1"},{"name":"beta","token":"t1"}]}`, "token reused"},
-		{"negative tenant max_claims", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1","max_claims":-1}]}`, "max_claims"},
 		{"secret without header", `{"secrets":[{"name":"gh"}],"pools":[]}`, "not a valid header name"},
 		{"secret bad header", `{"secrets":[{"name":"gh","header":"Bad Header:","value_env":"GH_TOKEN"}],"pools":[]}`, "not a valid header name"},
 		{"secret with inline value", `{"secrets":[{"name":"gh","header":"Authorization","value":"tok"}],"pools":[]}`, "value is not supported"},
@@ -207,8 +203,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"egress class intercepts", `{"pools":[],"egress_classes":[{"name":"desk","egress":{"allow":[{"host":"x","intercept":true}]}}]}`, "only be set on a pool rule"},
 		{"egress class without egress", `{"pools":[],"egress_classes":[{"name":"desk"}]}`, "needs egress"},
 		{"duplicate egress class", `{"pools":[],"egress_classes":[{"name":"desk","egress":{}},{"name":"desk","egress":{}}]}`, "duplicate egress class"},
-		{"tenant names an unknown class", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1","egress_class":"desk"}]}`, "unknown egress class"},
-		{"tenant egress block", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1","egress":{"allow":[{"host":"x"}]}}]}`, "unknown object member"},
+		{"tenants in config.json", `{"api_token":"root","pools":[],"tenants":[{"name":"acme","token":"t1"}]}`, "unknown object member"},
 		{"guarded egress on cni pool", `{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"egress","size":"small","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
 		{"guarded egress on cni class", `{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"egress","size":"small"}],"egress_classes":[{"name":"desk","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
 		{"cni class no egress pool", `{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"none","size":"small"}],"egress_classes":[{"name":"desk","egress":{"allow":[{"host":"x"}]}}]}`, "needs a bridge lane"},
@@ -257,13 +252,8 @@ func TestLoadMetaStore(t *testing.T) {
 	if err != nil || cfg.MetaStore.DSNEnv != "SANDBOX_TEST_DSN" {
 		t.Fatalf("Load: %+v %v", cfg, err)
 	}
-	for body, want := range map[string]string{
-		`{"pools":[],` + ms + `}`: "needs api_token",
-		`{"api_token":"r","pools":[],"tenants":[{"name":"acme","token":"t"}],` + ms + `}`: "tenants live in meta_store",
-	} {
-		if _, err := Load(writeConfig(t, body)); err == nil || !strings.Contains(err.Error(), want) {
-			t.Errorf("%s: %v, want %q", body, err, want)
-		}
+	if _, err := Load(writeConfig(t, `{"pools":[],`+ms+`}`)); err == nil || !strings.Contains(err.Error(), "needs api_token") {
+		t.Errorf("meta_store without api_token: %v, want a refusal", err)
 	}
 	next := *cfg
 	next.MetaStore = nil
@@ -276,7 +266,7 @@ func TestLoadEgressUpstream(t *testing.T) {
 	t.Setenv("SANDBOX_TEST_RES", "http://user:pw@res.example:3128")
 	t.Setenv("SANDBOX_TEST_DC", "socks5://10.1.0.5:1080")
 	body := `{"egress_upstream":{"claim_env":"EGRESS_UPSTREAM","allow":["res.example","10.1.0.0/16"]},"egress_usage_bytes":true,
-		"api_token":"r","egress_classes":[{"name":"desk","egress":{},"egress_upstream_env":"SANDBOX_TEST_DC"}],"tenants":[{"name":"acme","token":"t","egress_class":"desk"}],
+		"api_token":"r","egress_classes":[{"name":"desk","egress":{},"egress_upstream_env":"SANDBOX_TEST_DC"}],
 		"pools":[{"template":"rt:24.04","egress_upstream_env":"SANDBOX_TEST_RES"}]}`
 	cfg, err := Load(writeConfig(t, body))
 	if err != nil {
@@ -318,7 +308,6 @@ func TestLoadAcceptsVolumes(t *testing.T) {
 
 func TestLoadAcceptsVolumeTenantAccessList(t *testing.T) {
 	path := writeConfig(t, `{"api_token":"root","pools":[],
-		"tenants":[{"name":"acme","token":"a"},{"name":"beta","token":"b"}],
 		"volumes":[{"name":"corpus","path":"/srv/datasets/corpus.img","tenants":["acme"]}]}`)
 	cfg, err := Load(path)
 	if err != nil {
@@ -326,21 +315,6 @@ func TestLoadAcceptsVolumeTenantAccessList(t *testing.T) {
 	}
 	if got := cfg.Volumes[0].Tenants; !slices.Equal(got, []string{"acme"}) {
 		t.Errorf("volume tenants = %v, want [acme]", got)
-	}
-}
-
-func TestLoadAcceptsTenants(t *testing.T) {
-	path := writeConfig(t, `{"api_token":"root","pools":[],
-		"tenants":[{"name":"acme","token":"t1","max_claims":50},{"name":"beta","token":"t2"}]}`)
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if len(cfg.Tenants) != 2 || cfg.Tenants[0].Name != "acme" || cfg.Tenants[0].MaxClaims != 50 {
-		t.Errorf("tenants %+v", cfg.Tenants)
-	}
-	if cfg.Tenants[1].MaxClaims != 0 {
-		t.Errorf("beta max_claims %d, want 0 (unlimited)", cfg.Tenants[1].MaxClaims)
 	}
 }
 
@@ -395,13 +369,6 @@ func TestLoadRejectsInterceptWithoutCA(t *testing.T) {
 	path := writeConfig(t, `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"x","intercept":true}]}}]}`)
 	if _, err := Load(path); err == nil {
 		t.Error("Load accepted an intercept pool without egress_ca; want rejection")
-	}
-}
-
-func TestLoadRejectsTenantIntercept(t *testing.T) {
-	path := writeConfig(t, `{"tenants":[{"name":"acme","token":"t","egress":{"allow":[{"host":"x","intercept":true}]}}],"pools":[]}`)
-	if _, err := Load(path); err == nil {
-		t.Error("Load accepted an intercept rule on a tenant policy; want rejection")
 	}
 }
 

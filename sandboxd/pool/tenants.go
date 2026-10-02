@@ -142,7 +142,7 @@ func (m *Manager) openTenants(ctx context.Context, cfg *config.Config) error {
 		m.tenants, err = pg.Open(ctx, os.Getenv(ms.DSNEnv))
 		return err
 	}
-	m.tenants, err = file.Open(ctx, cfg.DataDir, configTenantRecords(cfg.Tenants), m.rootSum)
+	m.tenants, err = file.Open(ctx, cfg.DataDir, m.rootSum)
 	return err
 }
 
@@ -195,12 +195,4 @@ func (m *Manager) tenantGone(tenant string) bool {
 	}
 	_, p := m.tenants.Peek(tenant)
 	return p == tenants.Absent
-}
-
-func configTenantRecords(specs []config.TenantSpec) []config.TenantRecord {
-	out := make([]config.TenantRecord, len(specs))
-	for i, t := range specs {
-		out[i] = config.TenantRecord{Name: t.Name, TokenSHA256: config.TokenSHA256(t.Token), MaxClaims: t.MaxClaims, EgressClass: t.EgressClass}
-	}
-	return out
 }

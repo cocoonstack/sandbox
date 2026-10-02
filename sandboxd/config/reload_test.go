@@ -2,7 +2,6 @@ package config
 
 import (
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
@@ -13,9 +12,8 @@ func TestReloadDiffSortsReloadableOwnedAndRestartFields(t *testing.T) {
 	key := types.PoolKey{Template: "desktop:v12", Net: types.NetNone, Size: types.SizeSmall}
 	v13 := types.PoolKey{Template: "desktop:v13", Net: types.NetNone, Size: types.SizeSmall}
 	cur := &Config{
-		Listen:  "127.0.0.1:7777",
-		Pools:   []PoolSpec{{PoolKey: key, Warm: 2}},
-		Tenants: []TenantSpec{{Name: "acme", Token: "a"}},
+		Listen: "127.0.0.1:7777",
+		Pools:  []PoolSpec{{PoolKey: key, Warm: 2}},
 	}
 	next := *cur
 	next.EgressInternalAllow = []string{"10.8.0.0/16"}
@@ -24,7 +22,6 @@ func TestReloadDiffSortsReloadableOwnedAndRestartFields(t *testing.T) {
 		{PoolKey: v13, Warmup: []string{"node", "-e", "0"}, Storage: "40G"},
 	}
 	next.EgressClasses = []EgressClass{{Name: "desk", Egress: &egress.Policy{}}}
-	next.Tenants = []TenantSpec{{Name: "acme", Token: "rotated", EgressClass: "desk"}}
 	changed, ignored, err := cur.ReloadDiff(&next)
 	if err != nil {
 		t.Fatalf("ReloadDiff: %v", err)
@@ -40,15 +37,11 @@ func TestReloadDiffSortsReloadableOwnedAndRestartFields(t *testing.T) {
 		t.Errorf("changed %v, want %v", changed, wantChanged)
 	}
 	wantIgnored := []string{
-		"tenants[acme] identity (/v1/tenants owns it)",
 		"pools[desktop:v12 none small] targets (PUT /v1/pools owns them)",
 		"pools[desktop:v13 none small] targets (PUT /v1/pools owns them)",
 	}
 	if !slices.Equal(ignored, wantIgnored) {
 		t.Errorf("ignored %v, want %v", ignored, wantIgnored)
-	}
-	if strings.Contains(strings.Join(ignored, " "), "rotated") {
-		t.Error("the ignored list names a token")
 	}
 
 	restart := *cur

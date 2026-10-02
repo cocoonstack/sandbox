@@ -1,4 +1,4 @@
-// Package file keeps the tenant set in <data_dir>/tenants.json, seeded by config.json until the first API write.
+// Package file keeps the tenant set the tenant API writes in <data_dir>/tenants.json.
 package file
 
 import (
@@ -26,8 +26,7 @@ import (
 const fileName = "tenants.json"
 
 type persisted struct {
-	ConfigSeed string                `json:"config_seed"`
-	Tenants    []config.TenantRecord `json:"tenants"`
+	Tenants []config.TenantRecord `json:"tenants"`
 }
 
 var _ tenants.Source = (*Source)(nil)
@@ -35,7 +34,6 @@ var _ tenants.Source = (*Source)(nil)
 // Source is a node-local tenant set; reads load one snapshot lock-free.
 type Source struct {
 	path    string
-	seed    string
 	rootSum string
 
 	// mu orders writers, which persist before they publish.
@@ -43,17 +41,14 @@ type Source struct {
 	set atomic.Pointer[set]
 }
 
-// Open seeds the set from config.json's tenants, then adopts tenants.json when an API write left one.
-func Open(ctx context.Context, dataDir string, seed []config.TenantRecord, rootSum string) (*Source, error) {
-	initial, err := newSet(seed, rootSum)
-	if err != nil {
-		return nil, fmt.Errorf("config tenants: %w", err)
-	}
-	s := &Source{path: filepath.Join(dataDir, fileName), seed: initial.digest, rootSum: rootSum}
-	s.set.Store(initial)
+// Open loads tenants.json; a node without one starts with no tenants.
+func Open(ctx context.Context, dataDir, rootSum string) (*Source, error) {
+	s := &Source{path: filepath.Join(dataDir, fileName), rootSum: rootSum}
 	raw, err := os.ReadFile(s.path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
+		empty, _ := newSet(nil, rootSum)
+		s.set.Store(empty)
 		return s, nil
 	case err != nil:
 		return nil, fmt.Errorf("read tenants file: %w", err)
@@ -68,12 +63,8 @@ func Open(ctx context.Context, dataDir string, seed []config.TenantRecord, rootS
 	if err != nil {
 		return nil, fmt.Errorf("restore tenants from %s: %w", s.path, err)
 	}
-	logger := log.WithFunc("file.Open")
-	if pf.ConfigSeed != s.seed {
-		logger.Warnf(ctx, "config.json tenants differ from the API-applied set and are overridden; delete %s to return to config-owned tenants", s.path)
-	}
 	s.set.Store(restored)
-	logger.Infof(ctx, "restored %d API-applied tenants from %s", len(restored.names), fileName)
+	log.WithFunc("file.Open").Infof(ctx, "restored %d tenants from %s", len(restored.names), fileName)
 	return s, nil
 }
 
@@ -183,7 +174,7 @@ func (s *Source) apply(next func(cur *set) ([]config.TenantRecord, error)) (tena
 	if err != nil {
 		return tenants.Change{}, err
 	}
-	raw, err := json.Marshal(persisted{ConfigSeed: s.seed, Tenants: updated.records()})
+	raw, err := json.Marshal(persisted{Tenants: updated.records()})
 	if err != nil {
 		return tenants.Change{}, fmt.Errorf("encode tenants file: %w", err)
 	}

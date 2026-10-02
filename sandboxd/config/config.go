@@ -148,7 +148,7 @@ type MetaStoreConfig struct {
 	DSNEnv string `json:"dsn_env"`
 }
 
-// TenantSpec declares one tenant: its bearer token, its live-claim quota and its egress class.
+// TenantSpec is one tenant as the tenant API takes it: its bearer token, its live-claim quota and its egress class.
 type TenantSpec struct {
 	Name        string `json:"name"`
 	Token       string `json:"token"`
@@ -234,7 +234,6 @@ type Config struct {
 	CocoondSocket string `json:"cocoond_socket,omitempty"`
 
 	APIToken  string              `json:"api_token,omitempty"`
-	Tenants   []TenantSpec        `json:"tenants,omitempty"`
 	MetaStore *MetaStoreConfig    `json:"meta_store,omitempty"`
 	Secrets   []egress.SecretSpec `json:"secrets,omitempty"`
 
@@ -381,7 +380,7 @@ func (c *Config) validate() error {
 	if err := c.validateEgressRouting(); err != nil {
 		return err
 	}
-	if err := c.validateTenants(); err != nil {
+	if err := c.validateMetaStore(); err != nil {
 		return err
 	}
 	if err := c.validateVolumes(); err != nil {
@@ -526,11 +525,6 @@ func (c *Config) validateEgress(secrets map[string]struct{}) error {
 		}
 		names[ec.Name] = struct{}{}
 	}
-	for _, tn := range c.Tenants {
-		if _, ok := names[tn.EgressClass]; tn.EgressClass != "" && !ok {
-			return fmt.Errorf("tenant %q names unknown egress class %q", tn.Name, tn.EgressClass)
-		}
-	}
 	return nil
 }
 
@@ -604,45 +598,17 @@ func (c *Config) validateEgressRouting() error {
 	return nil
 }
 
-func (c *Config) validateTenants() error {
-	if ms := c.MetaStore; ms != nil {
-		switch {
-		case ms.Kind != "pg":
-			return fmt.Errorf("meta_store.kind %q is not supported; use pg", ms.Kind)
-		case !types.EnvNameRe.MatchString(ms.DSNEnv) || os.Getenv(ms.DSNEnv) == "":
-			return fmt.Errorf("meta_store.dsn_env %q must name a set node env", ms.DSNEnv)
-		case c.APIToken == "":
-			return fmt.Errorf("meta_store needs api_token: the tenant API is root-only")
-		case len(c.Tenants) > 0:
-			return fmt.Errorf("tenants live in meta_store: add them through /v1/tenants, not config.json")
-		}
-	}
-	if len(c.Tenants) > 0 && c.APIToken == "" {
-		return fmt.Errorf("tenants require api_token: the operator surfaces are unreachable without it")
-	}
-	names := make(map[string]struct{}, len(c.Tenants))
-	tokens := make(map[string]struct{}, len(c.Tenants))
-	for _, tn := range c.Tenants {
-		if !types.NameRe.MatchString(tn.Name) {
-			return fmt.Errorf("tenant name %q must match %s", tn.Name, types.NameRe)
-		}
-		if _, ok := names[tn.Name]; ok {
-			return fmt.Errorf("duplicate tenant name %q", tn.Name)
-		}
-		names[tn.Name] = struct{}{}
-		switch tn.Token {
-		case "":
-			return fmt.Errorf("tenant %q needs a token", tn.Name)
-		case c.APIToken:
-			return fmt.Errorf("tenant %q token must differ from api_token", tn.Name)
-		}
-		if _, ok := tokens[tn.Token]; ok {
-			return fmt.Errorf("tenant %q token reused by another tenant", tn.Name)
-		}
-		tokens[tn.Token] = struct{}{}
-		if tn.MaxClaims < 0 {
-			return fmt.Errorf("tenant %q max_claims must not be negative, got %d", tn.Name, tn.MaxClaims)
-		}
+func (c *Config) validateMetaStore() error {
+	ms := c.MetaStore
+	switch {
+	case ms == nil:
+		return nil
+	case ms.Kind != "pg":
+		return fmt.Errorf("meta_store.kind %q is not supported; use pg", ms.Kind)
+	case !types.EnvNameRe.MatchString(ms.DSNEnv) || os.Getenv(ms.DSNEnv) == "":
+		return fmt.Errorf("meta_store.dsn_env %q must name a set node env", ms.DSNEnv)
+	case c.APIToken == "":
+		return fmt.Errorf("meta_store needs api_token: the tenant API is root-only")
 	}
 	return nil
 }
