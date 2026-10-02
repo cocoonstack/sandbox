@@ -69,6 +69,7 @@ jobs:
 
       - name: Test the PostgreSQL tenant source
         working-directory: sandboxd
+        shell: bash
         env:
           SANDBOXD_TEST_PG_URL: postgres://postgres:sbxci@localhost:5432/postgres?sslmode=disable
         run: |
