@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"cmp"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -111,6 +112,8 @@ type Proxy struct {
 	// leaves caches this sandbox's interception leaves; per-proxy, never shared.
 	leafMu sync.Mutex
 	leaves map[string]*tls.Certificate
+	// tickets lets a guest resume an intercepted TLS session on its next CONNECT.
+	tickets [][32]byte
 
 	// conns tracks both halves of every tunnel and SOCKS5 connection, which http.Server.Close does not reach.
 	connMu sync.Mutex
@@ -138,6 +141,8 @@ func New(policy Evaluator, secrets Secrets, ca *CA, router Router, audit AuditFu
 		pools.mitm = pools.tr.Clone()
 		pools.mitm.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		p.leaves = map[string]*tls.Certificate{}
+		p.tickets = make([][32]byte, 1)
+		_, _ = rand.Read(p.tickets[0][:])
 	}
 	p.pools.Store(pools)
 	return p

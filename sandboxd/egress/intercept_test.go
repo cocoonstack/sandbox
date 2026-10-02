@@ -314,6 +314,24 @@ func TestInterceptStreamsAnEventStreamAsItArrives(t *testing.T) {
 	}
 }
 
+func TestInterceptResumesTheGuestsTLSSession(t *testing.T) {
+	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Intercept: true}, nil)
+	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	front := httptest.NewServer(p)
+	defer front.Close()
+	cache := tls.NewLRUClientSessionCache(4)
+	for i := range 2 {
+		tc := connectTLSCached(t, front.Listener.Addr().String(), "example.com:443", "example.com", guestRoots, cache)
+		resp := roundTripTLS(t, tc, http.MethodGet)
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resumed := tc.ConnectionState().DidResume; resumed != (i == 1) {
+			t.Errorf("connection %d resumed=%v, want only the second to resume", i, resumed)
+		}
+		_ = tc.Close()
+	}
+}
+
 func interceptProxy(t *testing.T, rule Rule, events chan Event) (*Proxy, *x509.CertPool, *httptest.Server) {
 	return interceptProxyPolicy(t, Policy{Allow: []Rule{rule}}, events)
 }
@@ -357,6 +375,11 @@ func trustUpstream(upstream *httptest.Server) *x509.CertPool {
 
 func connectTLS(tb testing.TB, proxyAddr, target, serverName string, roots *x509.CertPool) *tls.Conn {
 	tb.Helper()
+	return connectTLSCached(tb, proxyAddr, target, serverName, roots, nil)
+}
+
+func connectTLSCached(tb testing.TB, proxyAddr, target, serverName string, roots *x509.CertPool, cache tls.ClientSessionCache) *tls.Conn {
+	tb.Helper()
 	conn, err := net.Dial("tcp", proxyAddr)
 	if err != nil {
 		tb.Fatalf("dial proxy: %v", err)
@@ -367,7 +390,7 @@ func connectTLS(tb testing.TB, proxyAddr, target, serverName string, roots *x509
 	if status := readPreamble(tb, conn); !strings.Contains(status, "200") {
 		tb.Fatalf("CONNECT status = %q, want 200", status)
 	}
-	tc := tls.Client(conn, &tls.Config{ServerName: serverName, RootCAs: roots})
+	tc := tls.Client(conn, &tls.Config{ServerName: serverName, RootCAs: roots, ClientSessionCache: cache})
 	if err := tc.Handshake(); err != nil {
 		tb.Fatalf("guest tls handshake: %v", err)
 	}

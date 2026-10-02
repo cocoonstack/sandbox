@@ -379,7 +379,9 @@ A rule with `intercept: true` makes the proxy terminate that host's TLS with a
 leaf it signs, so it sees the request's method and path and can inject the
 secret into HTTPS — the same guarantees plaintext already has. Upstream is
 re-originated and verified against the host's real root store; the proxy never
-trusts an unverified origin. A response that is an event stream or has no length
+trusts an unverified origin. A guest that caches TLS sessions resumes them on
+its next CONNECT through the same sandbox, which skips the leaf signature and
+chain check. A response that is an event stream or has no length
 reaches the guest as each chunk arrives, on intercepted and forward requests
 alike.
 
