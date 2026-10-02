@@ -97,7 +97,6 @@ func (v *configView) injectGap(eval egress.Evaluator, ok bool, sb *types.Sandbox
 	return gap
 }
 
-// secretSets reports whether a pool intercept rule covering host injects a secret into header.
 func (v *configView) secretSets(pool *egress.Policy, host, header string) bool {
 	if pool == nil {
 		return false

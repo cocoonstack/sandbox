@@ -79,7 +79,6 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 	return res, nil
 }
 
-// warnLostInjects names each claim whose inject hosts the reloaded egress no longer intercepts; the proxy stops sending them.
 func (m *Manager) warnLostInjects(ctx context.Context, v *configView, sbs []*types.Sandbox) {
 	for _, sb := range sbs {
 		m.mu.Lock()

@@ -146,7 +146,6 @@ func (m *Manager) checkEnv(env types.Env) error {
 	return m.checkUpstreamEnv(env)
 }
 
-// checkInjects refuses a claim batch whose inject hosts a claim's egress does not intercept.
 func (m *Manager) checkInjects(v *configView, sbs []*types.Sandbox) error {
 	for _, sb := range sbs {
 		if !sb.Env.HasInject() {

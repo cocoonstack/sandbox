@@ -208,7 +208,6 @@ func (c composite) ServesSocks() bool {
 	return c.pool.ServesSocks()
 }
 
-// InterceptsHost needs the pool to intercept the pattern and the tenant to allow it.
 func (c composite) InterceptsHost(pattern string) bool {
 	return c.pool.InterceptsHost(pattern) && slices.ContainsFunc(c.tenant.Allow, func(r Rule) bool { return r.Covers(pattern) })
 }

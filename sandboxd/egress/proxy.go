@@ -396,7 +396,7 @@ func (p *Proxy) reportTransfer(ev Event, sent, received int64) {
 	}
 }
 
-// inject sets the rule's secret header, then on an intercepted request each claim credential for host on a header still unset by this hop; guest values are overwritten.
+// inject sets the rule's secret, then on an intercepted request each claim credential whose header is still unset; guest values are overwritten.
 func (p *Proxy) inject(rule Rule, h http.Header, host string, mitm bool) string {
 	if p.secrets == nil {
 		return ""
