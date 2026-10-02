@@ -730,11 +730,11 @@ the egress proxy's next request at any time, a hibernated or archived claim
 included, and never touches the guest. A change to the guest entries is
 written to the guest at once, so it needs a running guest: on a hibernated,
 archived, failed or transitioning sandbox it answers 409 (this verb never wakes one).
-A `PUT` identical to the stored env is written to a running guest again,
-so resending it repairs a guest file that was lost or not updated. A `PATCH`
-writes the guest file only when it changes a guest entry or sets one, so
-resending a patch that sets a guest entry repairs the file the same way; a
-patch that changes nothing does not rewrite the claims journal. A 500
+A `PUT` or `PATCH` whose result equals the stored env rewrites a running
+guest's file, so resending repairs a failed write, including a removal or
+a change from guest to host-only. This also applies to an unchanged
+host-only patch; the file contains only the guest entries. An unchanged
+result does not rewrite the claims journal. A 500
 after the store step means the env is stored and its `guest: false` values
 are already live, but the guest write failed; resend the same request to
 deliver it. The guest side is described in [silkd](silkd.md#claim-env).

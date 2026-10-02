@@ -352,16 +352,6 @@ func (p EnvPatch) Validate() error {
 	return set.Validate()
 }
 
-// SetsGuest reports whether p sets an entry that reaches the guest.
-func (p EnvPatch) SetsGuest() bool {
-	for _, v := range p {
-		if v != nil && v.InGuest() {
-			return true
-		}
-	}
-	return false
-}
-
 // Apply returns e with p's entries set or removed, nil when none remain; e is left unchanged.
 func (p EnvPatch) Apply(e Env) Env {
 	out := Env{}

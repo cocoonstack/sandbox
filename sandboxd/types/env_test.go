@@ -56,9 +56,6 @@ func TestEnvPatchAppliesAndValidates(t *testing.T) {
 	if got := (EnvPatch{"A": nil, "H": nil}).Apply(base); got != nil {
 		t.Errorf("removing every entry = %v, want nil", got)
 	}
-	if (EnvPatch{"H": {Value: "h", Guest: new(false)}, "A": nil}).SetsGuest() || !(EnvPatch{"G": {Value: "g"}}).SetsGuest() {
-		t.Error("SetsGuest misreads which entries reach the guest")
-	}
 	for _, tt := range []struct {
 		patch EnvPatch
 		want  string
