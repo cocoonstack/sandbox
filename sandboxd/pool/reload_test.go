@@ -276,6 +276,19 @@ func TestReloadIsAudited(t *testing.T) {
 	}
 }
 
+func TestAReloadOfTheEgressLayerChangesTheClusterDigest(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	before := m.ClusterDigest()
+	next := *m.cfg
+	next.EgressInternalAllow = []string{"10.8.0.0/16"}
+	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if m.ClusterDigest() == before {
+		t.Error("the digest still covers the boot config after an egress reload")
+	}
+}
+
 func TestAnInterruptedReloadStillDestroysTheRetiredWarmVMs(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})

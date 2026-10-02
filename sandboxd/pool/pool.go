@@ -503,6 +503,14 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	return m, nil
 }
 
+// ClusterDigest fingerprints this node's must-match config as last loaded, with its egress root and tenant set.
+func (m *Manager) ClusterDigest() string {
+	m.reloadMu.Lock()
+	cfg := m.cfg
+	m.reloadMu.Unlock()
+	return cfg.ClusterDigest(m.EgressCAFingerprint(), m.TenantRecords())
+}
+
 // EgressCAFingerprint is the egress root's fingerprint, or "" when the node intercepts nothing.
 func (m *Manager) EgressCAFingerprint() string {
 	if m.egressCA == nil {

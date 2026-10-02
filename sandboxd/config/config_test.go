@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -73,15 +74,54 @@ func TestClusterDigestBytesArePinned(t *testing.T) {
 		fp      string
 		want    string
 	}{
-		{"keyless", &Config{APIToken: "t<o>k", PreviewSecret: "p&s", CheckpointTTLHours: 24}, tenants, "ca<&>\u2028fp", "889dd395d66341236c2e073bea4b9455e48a48eb7ea79a69f60bda9b914f40f9"},
-		{"keyed", &Config{APIToken: "t<o>k&\u2029", PreviewSecret: "p&s<", CheckpointTTLHours: 24, Mesh: &MeshConfig{ClusterKey: key}}, tenants, "ca<&>fp", "1bf87485f6d3a2e097ffa0835127601520725185d06ed960b441888e2538a6c8"},
-		{"no tenants", &Config{}, nil, "fp", "38fc616b12f612c2c5c3f83af9d4c6caa771e1d3ffca39a6c835e522d3db49f8"},
+		{"keyless", &Config{APIToken: "t<o>k", PreviewSecret: "p&s", CheckpointTTLHours: 24}, tenants, "ca<&>\u2028fp", "ad397b4d6752991094c96a38e2e3a18bc220a5e68b315a625236f5147d9d0924"},
+		{"keyed", &Config{APIToken: "t<o>k&\u2029", PreviewSecret: "p&s<", CheckpointTTLHours: 24, Mesh: &MeshConfig{ClusterKey: key}}, tenants, "ca<&>fp", "848ffb9bbcaa14b59074f0753cc2aff33f72494722059f27587d6fe61eb74ad2"},
+		{"no tenants", &Config{}, nil, "fp", "4bf6489cb7c229d99dad45b7c8eb8a070a4fd7040cf43c1b49f103ae3107b10b"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.cfg.ClusterDigest(tt.fp, tenantRecords(tt.tenants)); got != tt.want {
 				t.Errorf("digest %s, want the pinned digest %s: a change splits a rolling cluster", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestClusterDigestCoversTheEgressLayerInAnyOrder(t *testing.T) {
+	key := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
+	desk := EgressClass{Name: "desk", Egress: &egress.Policy{Allow: []egress.Rule{{Host: "api.example.com"}}}}
+	ops := EgressClass{Name: "ops", Egress: &egress.Policy{Allow: []egress.Rule{{Host: "ops.example.com"}}}}
+	base := func() *Config {
+		return &Config{
+			EgressClasses:       []EgressClass{desk, ops},
+			Secrets:             []egress.SecretSpec{{Name: "gh", Header: "Authorization", ValueEnv: "GH_A"}, {Name: "gw", Header: "X-Key"}},
+			EgressInternalAllow: []string{"10.0.0.0/8", "172.16.0.0/12"},
+			EgressUpstream:      &EgressUpstreamConfig{ClaimEnv: "EGRESS_UPSTREAM", Allow: []string{"a.example", "b.example"}},
+			Pools:               []PoolSpec{{PoolKey: key, Warm: 2, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "api.example.com", Intercept: true}}}}},
+		}
+	}
+	d := base().ClusterDigest("fp", nil)
+	same := base()
+	same.EgressClasses = []EgressClass{ops, desk}
+	same.Secrets = []egress.SecretSpec{{Name: "gw", Header: "X-Key"}, {Name: "gh", Header: "Authorization", ValueEnv: "GH_A"}}
+	same.EgressInternalAllow = []string{"172.16.0.0/12", "10.0.0.0/8"}
+	same.EgressUpstream.Allow = []string{"b.example", "a.example"}
+	same.Pools[0].Warm = 9
+	if same.ClusterDigest("fp", nil) != d {
+		t.Error("order or a pool target changed the digest")
+	}
+	for name, change := range map[string]func(c *Config){
+		"class rule":     func(c *Config) { c.EgressClasses[0].Egress = &egress.Policy{} },
+		"secret header":  func(c *Config) { c.Secrets[0].Header = "X-Other" },
+		"secret env":     func(c *Config) { c.Secrets[0].ValueEnv = "GH_B" },
+		"internal allow": func(c *Config) { c.EgressInternalAllow = nil },
+		"upstream allow": func(c *Config) { c.EgressUpstream.Allow = []string{"a.example"} },
+		"pool egress":    func(c *Config) { c.Pools[0].Egress = &egress.Policy{} },
+	} {
+		c := base()
+		change(c)
+		if c.ClusterDigest("fp", nil) == d {
+			t.Errorf("a %s change left the digest unchanged", name)
+		}
 	}
 }
 
