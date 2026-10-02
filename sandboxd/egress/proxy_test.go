@@ -204,6 +204,27 @@ func TestForwardNeverInjectsClaimCredentials(t *testing.T) {
 	}
 }
 
+func TestForwardStreamsAnEventStreamAsItArrives(t *testing.T) {
+	release := make(chan struct{})
+	upstream := httptest.NewServer(sseHandler(release))
+	defer upstream.Close()
+	defer close(release)
+	p := New(Policy{Allow: []Rule{{Host: "sse.internal"}}}, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	client := proxyClient(t, front.URL)
+	client.Timeout = 2 * time.Second
+	resp, err := client.Get("http://sse.internal/")
+	if err != nil {
+		t.Fatalf("headers did not arrive before the origin ended the stream: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if line, err := bufio.NewReader(resp.Body).ReadString('\n'); err != nil || line != "data: one\n" {
+		t.Errorf("first event %q, %v; want it before the origin ends the stream", line, err)
+	}
+}
+
 func TestForwardStripsHopHeaders(t *testing.T) {
 	var gotHop, gotConn string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -573,6 +594,15 @@ type holdCounter struct{ atomic.Int32 }
 func (h *holdCounter) Hold() { h.Add(1) }
 
 func (h *holdCounter) Unhold() { h.Add(-1) }
+
+func sseHandler(release <-chan struct{}) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: one\n\n")
+		w.(http.Flusher).Flush()
+		<-release
+	})
+}
 
 func fixedDial(target string) DialFunc {
 	return func(ctx context.Context, network, _ string) (net.Conn, error) {

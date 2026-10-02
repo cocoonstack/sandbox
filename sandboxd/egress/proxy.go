@@ -29,11 +29,15 @@ const (
 	maxIdleConns = 64
 )
 
-// hopHeaders are hop-by-hop and proxy-scoped headers this hop owns, never passed on.
-var hopHeaders = []string{
-	"Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
-	"Proxy-Connection", "TE", "Trailer", "Transfer-Encoding", "Upgrade",
-}
+var (
+	// hopHeaders are hop-by-hop and proxy-scoped headers this hop owns, never passed on.
+	hopHeaders = []string{
+		"Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
+		"Proxy-Connection", "TE", "Trailer", "Transfer-Encoding", "Upgrade",
+	}
+
+	copyBufs = sync.Pool{New: func() any { b := make([]byte, 32<<10); return &b }}
+)
 
 // TransferFunc receives the payload bytes an allowed tunnel or request moved, once it ends.
 type TransferFunc func(ev Event, sent, received int64)
@@ -343,6 +347,10 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	maps.Copy(w.Header(), resp.Header)
 	stripHop(w.Header())
 	w.WriteHeader(resp.StatusCode)
+	if streamed(resp) {
+		received = copyFlushing(w, resp.Body)
+		return
+	}
 	received, _ = io.Copy(w, resp.Body)
 }
 
@@ -489,6 +497,35 @@ func spliceable(c net.Conn) net.Conn {
 		}
 	}
 	return c
+}
+
+func streamed(resp *http.Response) bool {
+	mediaType, _, _ := strings.Cut(resp.Header.Get("Content-Type"), ";")
+	return resp.ContentLength < 0 || strings.EqualFold(strings.TrimSpace(mediaType), "text/event-stream")
+}
+
+func copyFlushing(w http.ResponseWriter, body io.Reader) int64 {
+	rc := http.NewResponseController(w)
+	if rc.Flush() != nil {
+		n, _ := io.Copy(w, body)
+		return n
+	}
+	buf := copyBufs.Get().(*[]byte)
+	defer copyBufs.Put(buf)
+	var total int64
+	for {
+		n, err := body.Read(*buf)
+		if n > 0 {
+			written, werr := w.Write((*buf)[:n])
+			total += int64(written)
+			if werr != nil || rc.Flush() != nil {
+				return total
+			}
+		}
+		if err != nil {
+			return total
+		}
+	}
 }
 
 func denied(w http.ResponseWriter, host string) {

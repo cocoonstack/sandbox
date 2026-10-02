@@ -291,6 +291,29 @@ func TestInterceptInjectsClaimCredentialsBelowThePoolSecret(t *testing.T) {
 	}
 }
 
+func TestInterceptStreamsAnEventStreamAsItArrives(t *testing.T) {
+	release := make(chan struct{})
+	upstream := httptest.NewTLSServer(sseHandler(release))
+	defer upstream.Close()
+	defer close(release)
+	ca, _ := testCA(t)
+	p := New(Policy{Allow: []Rule{{Host: "example.com", Intercept: true}}}, nil, ca, fixedDial(upstream.Listener.Addr().String()), nil, nil)
+	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	guestRoots := x509.NewCertPool()
+	guestRoots.AppendCertsFromPEM(ca.CertPEM())
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	tc := connectTLS(t, front.Listener.Addr().String(), "example.com:443", "example.com", guestRoots)
+	defer func() { _ = tc.Close() }()
+	_ = tc.SetReadDeadline(time.Now().Add(2 * time.Second))
+	resp := roundTripTLS(t, tc, http.MethodGet)
+	defer func() { _ = resp.Body.Close() }()
+	if line, err := bufio.NewReader(resp.Body).ReadString('\n'); err != nil || line != "data: one\n" {
+		t.Errorf("first event %q, %v; want it before the origin ends the stream", line, err)
+	}
+}
+
 func interceptProxy(t *testing.T, rule Rule, events chan Event) (*Proxy, *x509.CertPool, *httptest.Server) {
 	return interceptProxyPolicy(t, Policy{Allow: []Rule{rule}}, events)
 }
