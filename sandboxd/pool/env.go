@@ -34,7 +34,7 @@ func (m *Manager) Env(id, tenant string) (types.Env, error) {
 	return sb.Env.Redacted(), nil
 }
 
-// An unchanged result must reach the guest again to repair a failed write after the store step.
+// writeEnv stores next's env for claim id; an unchanged result reaches a running guest again, so a resend repairs a failed write.
 func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next func(types.Env) types.Env) error {
 	sb, ok := m.byID(id)
 	if !ok || !tenantOwns(tenant, sb.Tenant) {
@@ -72,10 +72,9 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		}
 		return ErrPaused
 	}
-	deliver := !paused && (changed || env.Equal(prev))
 	if env.Equal(prev) {
 		m.mu.Unlock()
-		return m.deliverGuestEnv(ctx, verb, id, sock, env, deliver)
+		return m.deliverGuestEnv(ctx, verb, id, sock, env, !paused)
 	}
 	sb.Env = env
 	js := m.store.set(sb)
@@ -91,7 +90,7 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		m.recommit(ctx, rb)
 		return fmt.Errorf("%s env %s: persist claims: %w", verb, id, err)
 	}
-	return m.deliverGuestEnv(ctx, verb, id, sock, env, deliver)
+	return m.deliverGuestEnv(ctx, verb, id, sock, env, changed)
 }
 
 func (m *Manager) deliverGuestEnv(ctx context.Context, verb, id, sock string, env types.Env, deliver bool) error {
