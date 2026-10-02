@@ -47,10 +47,17 @@ type VolumeInfo struct {
 	Writable     bool   `json:"writable,omitzero"`
 }
 
+// EnvInject makes the node's egress proxy send a host-only entry's value as Header on intercepted requests to Hosts, each exact or "*." suffix.
+type EnvInject struct {
+	Hosts  []string `json:"hosts"`
+	Header string   `json:"header"`
+}
+
 // EnvVar is one entry of a claim's env; a nil Guest delivers it into the guest, false keeps it host-side for the node's egress.
 type EnvVar struct {
-	Value string `json:"value"`
-	Guest *bool  `json:"guest,omitempty"`
+	Value  string     `json:"value"`
+	Guest  *bool      `json:"guest,omitempty"`
+	Inject *EnvInject `json:"inject,omitempty"`
 }
 
 // Option configures a New claim.

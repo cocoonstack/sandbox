@@ -95,6 +95,34 @@ func TestCompositeEvalInnerIntersectsTenant(t *testing.T) {
 	}
 }
 
+func TestInterceptsHostCoversPatterns(t *testing.T) {
+	pool := Policy{Allow: []Rule{
+		{Host: "api.example.com", Intercept: true},
+		{Host: "*.Corp.Test", Intercept: true},
+		{Host: "plain.example.com"},
+	}}
+	for pattern, want := range map[string]bool{
+		"api.example.com":   true,
+		"*.example.com":     false,
+		"git.corp.test":     true,
+		"*.corp.test":       true,
+		"*.eu.corp.test":    true,
+		"corp.test":         false,
+		"plain.example.com": false,
+	} {
+		if got := pool.InterceptsHost(pattern); got != want {
+			t.Errorf("pool InterceptsHost(%q) = %v, want %v", pattern, got, want)
+		}
+	}
+	if !(Policy{Allow: []Rule{{Host: "*", Intercept: true}}}).InterceptsHost("*.anything.test") {
+		t.Error("a bare * intercept rule does not cover a wildcard pattern")
+	}
+	composed := Compose(pool, Policy{Allow: []Rule{{Host: "*.corp.test"}}})
+	if composed.InterceptsHost("api.example.com") || !composed.InterceptsHost("git.corp.test") {
+		t.Error("a composed policy must need the pool to intercept and the tenant to allow the pattern")
+	}
+}
+
 func TestWildcardApexIsNotMatched(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "*.example.com"}}}
 	if _, d := policy.Eval("example.com", "GET", 443); d != DecisionDeny {

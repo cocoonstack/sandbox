@@ -68,12 +68,16 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   cold-booting an image named like the template
 - `env` is the claim's own environment, at most 64 entries: each name a shell
   identifier of at most 128 bytes, each value at most 8 KiB with no control
-  characters other than tab, and names plus values at most 64 KiB in total. An entry holds only `value` and `guest`; any other
+  characters other than tab, and names plus values at most 64 KiB in total. An entry holds only `value`, `guest` and `inject`; any other
   member, or `"guest": null`, answers 400, so a mistyped flag never lands a
   host-only value in the guest. `guest` (default `true`) delivers the entry into the guest; a
   `guest: false` entry never enters it and only feeds the node's egress
-  [secrets](egress.md#claim-env-and-secrets). A bad entry answers 400 before
-  any VM is touched; see [claim env](#getputpatch-v1sandboxesidenv)
+  [secrets](egress.md#claim-env-and-secrets), or, with `inject`
+  (`{"hosts": [...], "header": "..."}`), becomes a
+  [claim credential](egress.md#claim-credentials) the proxy sends to those
+  hosts. A bad entry answers 400, and an `inject` host the claim's egress does
+  not intercept answers 400 with the claim's VM released; see
+  [claim env](#getputpatch-v1sandboxesidenv)
 - `egress` `false` claims with no [egress policy](egress.md), whatever the
   pool's (or, for a promoted template, its source pool's): the guest's doors are
   never bound. Omitted or `true` keeps the policy the claim would get
@@ -725,6 +729,11 @@ values:
 {"env": {"MODE": {"value": "prod"}, "GW_KEY": {"value": "", "guest": false}}}
 ```
 
+An entry with `inject` comes back with its hosts and header, value blanked.
+An `inject` host the claim's pool does not intercept, or its tenant class does
+not allow, and a header the pool rule's own secret already sets on that host,
+answer 400 and store nothing.
+
 The env is persisted with the claim. A `guest: false` change takes effect on
 the egress proxy's next request at any time, a hibernated or archived claim
 included, and never touches the guest. A change to the guest entries is
@@ -738,8 +747,8 @@ result does not rewrite the claims journal. A 500
 after the store step means the env is stored and its `guest: false` values
 are already live, but the guest write failed; resend the same request to
 deliver it. The guest side is described in [silkd](silkd.md#claim-env).
-`PUT`/`PATCH`/`DELETE` answer 204, `GET` 200; 400 a bad entry or an unknown body
-field; 404 unknown id or another tenant's claim; 409 a guest change on a
+`PUT`/`PATCH` answer 204, `GET` 200; 400 a bad entry, an unknown body
+field or an `inject` outside the claim's intercepted hosts; 404 unknown id or another tenant's claim; 409 a guest change on a
 paused or failed sandbox.
 
 ## PUT /v1/sandboxes/{id}/instance-metadata

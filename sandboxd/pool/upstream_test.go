@@ -35,7 +35,8 @@ func TestRouteTakesTheClaimThenClassThenPoolUpstream(t *testing.T) {
 		{"claim value", "desk", types.Env{"EGRESS_UPSTREAM": {Value: "socks5://127.0.0.1:3003", Guest: hostOnly}}, "socks5://127.0.0.1:3003"},
 		{"claim direct", "desk", types.Env{"EGRESS_UPSTREAM": {Value: "direct", Guest: hostOnly}}, ""},
 	} {
-		sb := &types.Sandbox{ID: "sb_route", Key: testKey, Tenant: "acme", EgressClass: tc.class, Env: tc.env}
+		sb := &types.Sandbox{ID: "sb_route", Key: testKey, Tenant: "acme", EgressClass: tc.class}
+		sb.SetEnv(tc.env)
 		if got := (claimRouter{m: m, sb: sb}).Route(); got != tc.want {
 			t.Errorf("%s: route %q, want %q", tc.name, got, tc.want)
 		}
@@ -51,7 +52,7 @@ func TestClaimsOnOnePoolLeaveThroughTheirOwnUpstreams(t *testing.T) {
 	claim := func(upstream string) *types.Sandbox {
 		sb := &types.Sandbox{ID: "sb_" + upstream, Key: testKey}
 		if upstream != "" {
-			sb.Env = types.Env{"EGRESS_UPSTREAM": {Value: "http://user:pw@" + upstream, Guest: hostOnly}}
+			sb.SetEnv(types.Env{"EGRESS_UPSTREAM": {Value: "http://user:pw@" + upstream, Guest: hostOnly}})
 		}
 		return sb
 	}
@@ -82,7 +83,9 @@ func TestATenantClaimUnderAClassDialsItsOwnUpstreamLikeARootClaim(t *testing.T) 
 	own, classDefault := tunnelProxy(t), tunnelProxy(t)
 	editView(m, func(v *configView) { v.classUpstream["desk"] = "http://" + classDefault.addr })
 	tenantClaim := func(upstream string) *types.Sandbox {
-		return &types.Sandbox{ID: "sb_desk", Key: testKey, Tenant: "acme", EgressClass: "desk", Env: types.Env{"EGRESS_UPSTREAM": {Value: upstream, Guest: hostOnly}}}
+		sb := &types.Sandbox{ID: "sb_desk", Key: testKey, Tenant: "acme", EgressClass: "desk"}
+		sb.SetEnv(types.Env{"EGRESS_UPSTREAM": {Value: upstream, Guest: hostOnly}})
+		return sb
 	}
 	r := claimRouter{m: m, sb: tenantClaim("http://user:pw@" + own.addr)}
 	conn, err := r.Dial(t.Context(), r.Route(), "tcp", origin)

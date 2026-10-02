@@ -1,7 +1,11 @@
 package pool
 
 import (
+	"fmt"
+	"maps"
 	"os"
+	"slices"
+	"strings"
 	"sync/atomic"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -73,6 +77,39 @@ func newConfigView(cfg *config.Config, secrets *egress.SecretStore) *configView 
 	return v
 }
 
+// injectGap names, in env order, each inject host sb's egress does not intercept and each header a covering pool secret already sets.
+func (v *configView) injectGap(eval egress.Evaluator, ok bool, sb *types.Sandbox, env types.Env) []string {
+	var gap []string
+	pool := v.poolEgress[sb.PolicyKey()]
+	for _, name := range slices.Sorted(maps.Keys(env)) {
+		inj := env[name].Inject
+		if inj == nil {
+			continue
+		}
+		for _, h := range inj.Hosts {
+			if !ok || !eval.InterceptsHost(h) {
+				gap = append(gap, fmt.Sprintf("%s: %s is not intercepted", name, h))
+			} else if v.secretSets(pool, h, inj.Header) {
+				gap = append(gap, fmt.Sprintf("%s: the pool's secret already sets %s on %s", name, inj.Header, h))
+			}
+		}
+	}
+	return gap
+}
+
+func (v *configView) secretSets(pool *egress.Policy, host, header string) bool {
+	if pool == nil {
+		return false
+	}
+	return slices.ContainsFunc(pool.Allow, func(r egress.Rule) bool {
+		if !r.Intercept || r.Secret == "" || !r.Covers(host) {
+			return false
+		}
+		h, _, known := v.secrets.Header(r.Secret)
+		return known && strings.EqualFold(h, header)
+	})
+}
+
 type resolvedPolicy struct {
 	view *configView
 	eval egress.Evaluator
@@ -107,6 +144,10 @@ func (l *livePolicy) EvalInner(host, method string, port uint16) (egress.Rule, e
 
 func (l *livePolicy) ServesSocks() bool {
 	return l.current().ServesSocks()
+}
+
+func (l *livePolicy) InterceptsHost(pattern string) bool {
+	return l.current().InterceptsHost(pattern)
 }
 
 // current denies everything once a reload leaves the claim with no policy.

@@ -25,6 +25,16 @@ type Rule struct {
 	Intercept bool     `json:"intercept,omitzero"`
 }
 
+// Covers reports whether the rule matches every host the pattern, exact or "*." suffix, matches.
+func (r Rule) Covers(pattern string) bool {
+	suffix, wild := strings.CutPrefix(pattern, "*")
+	if !wild {
+		return r.matchHost(pattern)
+	}
+	rule, ruleWild := strings.CutPrefix(strings.ToLower(r.Host), "*")
+	return ruleWild && strings.HasSuffix(suffix, rule)
+}
+
 // matches expects host already lowercased by Eval.
 func (r Rule) matches(host, method string, port uint16) bool {
 	return r.matchHost(host) && r.matchMethod(method) && r.matchPort(port)
@@ -133,6 +143,11 @@ func (p Policy) ServesSocks() bool {
 	return p.Socks5
 }
 
+// InterceptsHost reports whether an intercept rule covers the host pattern, so a claim credential for it can be injected.
+func (p Policy) InterceptsHost(pattern string) bool {
+	return slices.ContainsFunc(p.Allow, func(r Rule) bool { return r.Intercept && r.Covers(pattern) })
+}
+
 func (p Policy) admitsTunnel() bool {
 	return slices.ContainsFunc(p.Allow, func(r Rule) bool { return !r.Intercept && r.matchMethod(http.MethodConnect) })
 }
@@ -143,6 +158,7 @@ type Evaluator interface {
 	EvalHost(host string, port uint16) (Rule, Decision)
 	EvalInner(host, method string, port uint16) (Rule, Decision)
 	ServesSocks() bool
+	InterceptsHost(pattern string) bool
 }
 
 type composite struct {
@@ -190,4 +206,8 @@ func (c composite) EvalInner(host, method string, port uint16) (Rule, Decision) 
 // ServesSocks is the pool's call: the tenant's rules already gate every tunnel through Eval.
 func (c composite) ServesSocks() bool {
 	return c.pool.ServesSocks()
+}
+
+func (c composite) InterceptsHost(pattern string) bool {
+	return c.pool.InterceptsHost(pattern) && slices.ContainsFunc(c.tenant.Allow, func(r Rule) bool { return r.Covers(pattern) })
 }

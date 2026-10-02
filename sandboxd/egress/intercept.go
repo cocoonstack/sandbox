@@ -32,6 +32,7 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 		NextProtos:   []string{"http/1.1"},
 		Certificates: []tls.Certificate{*leaf},
 	}
+	cfg.SetSessionTicketKeys(p.tickets)
 	client, brw, err := http.NewResponseController(w).Hijack()
 	if err != nil {
 		http.Error(w, "egress: connection cannot be hijacked", http.StatusInternalServerError)

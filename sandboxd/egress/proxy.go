@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"cmp"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -29,11 +30,15 @@ const (
 	maxIdleConns = 64
 )
 
-// hopHeaders are hop-by-hop and proxy-scoped headers this hop owns, never passed on.
-var hopHeaders = []string{
-	"Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
-	"Proxy-Connection", "TE", "Trailer", "Transfer-Encoding", "Upgrade",
-}
+var (
+	// hopHeaders are hop-by-hop and proxy-scoped headers this hop owns, never passed on.
+	hopHeaders = []string{
+		"Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
+		"Proxy-Connection", "TE", "Trailer", "Transfer-Encoding", "Upgrade",
+	}
+
+	copyBufs = sync.Pool{New: func() any { b := make([]byte, 32<<10); return &b }}
+)
 
 // TransferFunc receives the payload bytes an allowed tunnel or request moved, once it ends.
 type TransferFunc func(ev Event, sent, received int64)
@@ -41,9 +46,17 @@ type TransferFunc func(ev Event, sent, received int64)
 // AuditFunc receives every egress decision the proxy takes.
 type AuditFunc func(Event)
 
-// Secrets resolves a rule's Secret name to the header it injects.
+// Credential is a claim-supplied header the proxy sets on an intercepted request.
+type Credential struct {
+	Name   string
+	Header string
+	Value  string
+}
+
+// Secrets resolves a rule's Secret name to the header it injects, and a host to the claim's own credentials for it.
 type Secrets interface {
 	Header(name string) (header, value string, ok bool)
+	Credentials(host string) []Credential
 }
 
 // Holder is held for the life of every request and tunnel the proxy serves.
@@ -52,7 +65,7 @@ type Holder interface {
 	Unhold()
 }
 
-// Event is one audited egress attempt; Injected names the credential and Upstream the proxy host, never their secrets.
+// Event is one audited egress attempt; Injected lists the credentials set, comma-separated, and Upstream the proxy host, never their secrets.
 type Event struct {
 	Method   string
 	Host     string
@@ -99,6 +112,8 @@ type Proxy struct {
 	// leaves caches this sandbox's interception leaves; per-proxy, never shared.
 	leafMu sync.Mutex
 	leaves map[string]*tls.Certificate
+	// tickets lets a guest resume an intercepted TLS session on its next CONNECT.
+	tickets [][32]byte
 
 	// conns tracks both halves of every tunnel and SOCKS5 connection, which http.Server.Close does not reach.
 	connMu sync.Mutex
@@ -126,6 +141,8 @@ func New(policy Evaluator, secrets Secrets, ca *CA, router Router, audit AuditFu
 		pools.mitm = pools.tr.Clone()
 		pools.mitm.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		p.leaves = map[string]*tls.Certificate{}
+		p.tickets = make([][32]byte, 1)
+		_, _ = rand.Read(p.tickets[0][:])
 	}
 	p.pools.Store(pools)
 	return p
@@ -307,7 +324,7 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	out.RequestURI = ""
 	out.Close = false // the guest's Connection: close is its own; the upstream pool keeps the conn
 	stripHop(out.Header)
-	ev.Injected = p.inject(rule, out.Header)
+	ev.Injected = p.inject(rule, out.Header, ev.Host, mitm)
 	var body *countingBody
 	if p.transfer != nil && out.Body != nil && out.Body != http.NoBody {
 		body = &countingBody{ReadCloser: out.Body}
@@ -335,6 +352,10 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	maps.Copy(w.Header(), resp.Header)
 	stripHop(w.Header())
 	w.WriteHeader(resp.StatusCode)
+	if streamed(resp) {
+		received = copyFlushing(w, resp.Body)
+		return
+	}
 	received, _ = io.Copy(w, resp.Body)
 }
 
@@ -375,17 +396,29 @@ func (p *Proxy) reportTransfer(ev Event, sent, received int64) {
 	}
 }
 
-// inject sets the rule's secret header, overwriting any guest-supplied value.
-func (p *Proxy) inject(rule Rule, h http.Header) string {
-	if rule.Secret == "" || p.secrets == nil {
+// inject sets the rule's secret, then on an intercepted request each claim credential whose header is still unset; guest values are overwritten.
+func (p *Proxy) inject(rule Rule, h http.Header, host string, mitm bool) string {
+	if p.secrets == nil {
 		return ""
 	}
-	header, value, ok := p.secrets.Header(rule.Secret)
-	if !ok || value == "" {
-		return ""
+	var names, set []string
+	if rule.Secret != "" {
+		if header, value, ok := p.secrets.Header(rule.Secret); ok && value != "" {
+			h.Set(header, value)
+			names, set = append(names, rule.Secret), append(set, header)
+		}
 	}
-	h.Set(header, value)
-	return rule.Secret
+	if !mitm {
+		return strings.Join(names, ",")
+	}
+	for _, c := range p.secrets.Credentials(strings.ToLower(host)) {
+		if c.Value == "" || slices.ContainsFunc(set, func(s string) bool { return strings.EqualFold(s, c.Header) }) {
+			continue
+		}
+		h.Set(c.Header, c.Value)
+		names, set = append(names, "claim:"+c.Name), append(set, c.Header)
+	}
+	return strings.Join(names, ",")
 }
 
 func (p *Proxy) record(ev Event) {
@@ -469,6 +502,35 @@ func spliceable(c net.Conn) net.Conn {
 		}
 	}
 	return c
+}
+
+func streamed(resp *http.Response) bool {
+	mediaType, _, _ := strings.Cut(resp.Header.Get("Content-Type"), ";")
+	return resp.ContentLength < 0 || strings.EqualFold(strings.TrimSpace(mediaType), "text/event-stream")
+}
+
+func copyFlushing(w http.ResponseWriter, body io.Reader) int64 {
+	rc := http.NewResponseController(w)
+	if rc.Flush() != nil {
+		n, _ := io.Copy(w, body)
+		return n
+	}
+	buf := copyBufs.Get().(*[]byte)
+	defer copyBufs.Put(buf)
+	var total int64
+	for {
+		n, err := body.Read(*buf)
+		if n > 0 {
+			written, werr := w.Write((*buf)[:n])
+			total += int64(written)
+			if werr != nil || rc.Flush() != nil {
+				return total
+			}
+		}
+		if err != nil {
+			return total
+		}
+	}
 }
 
 func denied(w http.ResponseWriter, host string) {

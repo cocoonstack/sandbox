@@ -9,6 +9,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	"path/filepath"
 	"regexp"
@@ -69,6 +70,7 @@ const (
 	maxEnvVars       = 64
 	maxEnvValueBytes = 8 << 10
 	maxEnvBytes      = 64 << 10
+	maxInjectHosts   = 8
 )
 
 var (
@@ -78,6 +80,8 @@ var (
 	VolumeNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,19}$`)
 	// EnvNameRe is the portable shell variable name.
 	EnvNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+	// injectHostRe is a lowercase DNS name or IPv4 literal, optionally under a "*." wildcard.
+	injectHostRe = regexp.MustCompile(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 	// guestFileEscaper covers the characters systemd unescapes inside a double-quoted EnvironmentFile value.
 	guestFileEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "`", "\\`", `$`, `\$`)
@@ -215,10 +219,58 @@ func (md Metadata) encodedSize() int {
 	return size
 }
 
+// EnvInject sends a host-only entry's value as Header on intercepted requests to Hosts, each exact or "*." suffix.
+type EnvInject struct {
+	Hosts  []string `json:"hosts"`
+	Header string   `json:"header"`
+}
+
+// Matches reports whether the lowercased host is one of the inject hosts.
+func (i *EnvInject) Matches(host string) bool {
+	return slices.ContainsFunc(i.Hosts, func(h string) bool {
+		if suffix, wild := strings.CutPrefix(h, "*"); wild {
+			return strings.HasSuffix(host, suffix)
+		}
+		return host == h
+	})
+}
+
+func (i *EnvInject) validate(name string) error {
+	if len(i.Hosts) == 0 || len(i.Hosts) > maxInjectHosts {
+		return fmt.Errorf("env %s: inject needs 1 to %d hosts, got %d", name, maxInjectHosts, len(i.Hosts))
+	}
+	if !httpguts.ValidHeaderFieldName(i.Header) {
+		return fmt.Errorf("env %s: inject header %q is not a valid header name", name, i.Header)
+	}
+	for _, h := range i.Hosts {
+		if len(h) > 253 || !injectHostRe.MatchString(h) {
+			return fmt.Errorf("env %s: inject host %q must be a lowercase host name or *.suffix", name, h)
+		}
+	}
+	return nil
+}
+
+func (i *EnvInject) size() int {
+	n := len(i.Header)
+	for _, h := range i.Hosts {
+		n += len(h)
+	}
+	return n
+}
+
+func (i *EnvInject) equal(other *EnvInject) bool {
+	if i == nil || other == nil {
+		return i == other
+	}
+	return i.Header == other.Header && slices.Equal(i.Hosts, other.Hosts)
+}
+
 // EnvVar is one entry of a claim's environment; a nil Guest means the entry reaches the guest.
 type EnvVar struct {
 	Value string `json:"value"`
 	Guest *bool  `json:"guest,omitempty"`
+	// Inject, on a host-only entry, makes the egress proxy send Value to the named hosts.
+	Inject *EnvInject `json:"inject,omitempty"`
 }
 
 // InGuest reports whether the entry is delivered into the guest.
@@ -227,13 +279,14 @@ func (v EnvVar) InGuest() bool { return v.Guest == nil || *v.Guest }
 // UnmarshalJSON rejects unknown members and a null guest, so a mistyped host-only flag never falls back to the guest.
 func (v *EnvVar) UnmarshalJSON(b []byte) error {
 	var raw struct {
-		Value string         `json:"value"`
-		Guest jsontext.Value `json:"guest,omitzero"`
+		Value  string         `json:"value"`
+		Guest  jsontext.Value `json:"guest,omitzero"`
+		Inject *EnvInject     `json:"inject,omitempty"`
 	}
 	if err := json.Unmarshal(b, &raw, json.RejectUnknownMembers(true)); err != nil {
 		return fmt.Errorf("env entry: %w", err)
 	}
-	*v = EnvVar{Value: raw.Value}
+	*v = EnvVar{Value: raw.Value, Inject: raw.Inject}
 	if raw.Guest == nil {
 		return nil
 	}
@@ -246,7 +299,7 @@ func (v *EnvVar) UnmarshalJSON(b []byte) error {
 }
 
 func (v EnvVar) same(other EnvVar) bool {
-	return v.Value == other.Value && v.InGuest() == other.InGuest()
+	return v.Value == other.Value && v.InGuest() == other.InGuest() && v.Inject.equal(other.Inject)
 }
 
 // Env is a claim's own environment: guest entries reach the guest, the others stay host-side for egress secrets.
@@ -269,9 +322,19 @@ func (e Env) Validate() error {
 		if !httpguts.ValidHeaderFieldValue(v.Value) {
 			return fmt.Errorf("env value of %s must not hold control characters other than tab", name)
 		}
+		if v.Inject == nil {
+			continue
+		}
+		if v.InGuest() {
+			return fmt.Errorf("env %s: inject needs guest: false, or the guest holds the value", name)
+		}
+		if err := v.Inject.validate(name); err != nil {
+			return err
+		}
+		total += v.Inject.size()
 	}
 	if total > maxEnvBytes {
-		return fmt.Errorf("env names and values must total at most %d bytes, got %d", maxEnvBytes, total)
+		return fmt.Errorf("env names, values and injects must total at most %d bytes, got %d", maxEnvBytes, total)
 	}
 	return nil
 }
@@ -283,6 +346,30 @@ func (e Env) Hidden(name string) (string, bool) {
 		return "", false
 	}
 	return v.Value, true
+}
+
+// HasInject reports whether any entry injects into egress requests.
+func (e Env) HasInject() bool {
+	for _, v := range e {
+		if v.Inject != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// InjectsChanged returns the entries of e that inject and that prev lacks or holds differently.
+func (e Env) InjectsChanged(prev Env) Env {
+	var out Env
+	for name, v := range e {
+		if old, ok := prev[name]; v.Inject != nil && (!ok || !v.same(old)) {
+			if out == nil {
+				out = Env{}
+			}
+			out[name] = v
+		}
+	}
+	return out
 }
 
 // HasGuest reports whether any entry reaches the guest.
@@ -310,7 +397,8 @@ func (e Env) Redacted() Env {
 	out := maps.Clone(e)
 	for name, v := range out {
 		if !v.InGuest() {
-			out[name] = EnvVar{Guest: v.Guest}
+			v.Value = ""
+			out[name] = v
 		}
 	}
 	return out
@@ -410,6 +498,12 @@ func (k PoolKey) Validate() error {
 	return nil
 }
 
+// envView is an immutable env with its inject entries named in order.
+type envView struct {
+	env     Env
+	injects []string
+}
+
 // Sandbox is the node-local record of one pooled or claimed VM.
 type Sandbox struct {
 	ID     string  `json:"id"`
@@ -441,7 +535,7 @@ type Sandbox struct {
 	OnExpire ExpireAction `json:"on_expire,omitempty"`
 	// Volumes records the volumes successfully applied to this claim.
 	Volumes []Volume `json:"volumes,omitempty"`
-	// Env is replaced whole under the manager mutex; host-only values are never served back.
+	// Env is replaced whole through SetEnv under the manager mutex; host-only values are never served back.
 	Env Env `json:"env,omitempty"`
 
 	VsockSocket string `json:"vsock_socket,omitempty"`
@@ -476,6 +570,8 @@ type Sandbox struct {
 	lastActivity atomic.Int64
 	// open counts the data-plane connections held right now.
 	open atomic.Int32
+	// live is the env as of the last SetEnv, read by the egress proxy without the manager mutex.
+	live atomic.Pointer[envView]
 
 	// Transition serializes hibernate/wake; lock it before (never under) the manager mutex.
 	Transition sync.Mutex `json:"-"`
@@ -504,6 +600,42 @@ func (s *Sandbox) UnholdIdle() { s.open.Add(-1) }
 
 // Busy reports whether a data-plane connection is held.
 func (s *Sandbox) Busy() bool { return s.open.Load() > 0 }
+
+// SetEnv replaces the env and publishes it to the egress proxy.
+func (s *Sandbox) SetEnv(e Env) {
+	s.Env = e
+	view := &envView{env: e}
+	for name, v := range e {
+		if v.Inject != nil && !v.InGuest() {
+			view.injects = append(view.injects, name)
+		}
+	}
+	slices.Sort(view.injects)
+	s.live.Store(view)
+}
+
+// HiddenEnv returns a host-only entry's value as last published.
+func (s *Sandbox) HiddenEnv(name string) (string, bool) {
+	if view := s.live.Load(); view != nil {
+		return view.env.Hidden(name)
+	}
+	return "", false
+}
+
+// Injections yields, in name order, the published host-only entries that inject into host.
+func (s *Sandbox) Injections(host string) iter.Seq2[string, EnvVar] {
+	return func(yield func(string, EnvVar) bool) {
+		view := s.live.Load()
+		if view == nil {
+			return
+		}
+		for _, name := range view.injects {
+			if v := view.env[name]; v.Inject.Matches(host) && !yield(name, v) {
+				return
+			}
+		}
+	}
+}
 
 // PolicyKey is the pool key whose egress policy applies: PolicySource when set, else Key.
 func (s *Sandbox) PolicyKey() PoolKey { return cmp.Or(s.PolicySource, s.Key) }

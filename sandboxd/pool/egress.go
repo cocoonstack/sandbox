@@ -322,13 +322,17 @@ func (m *Manager) disarmEgress(id string, removed bool) {
 
 // effectivePolicy resolves pool ∩ tenant; root has no tenant layer, an unpooled key no pool one, a NoEgress claim none at all.
 func (m *Manager) effectivePolicy(v *configView, sb *types.Sandbox) (egress.Evaluator, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.effectivePolicyLocked(v, sb)
+}
+
+func (m *Manager) effectivePolicyLocked(v *configView, sb *types.Sandbox) (egress.Evaluator, bool) {
 	if sb.NoEgress {
 		return nil, false
 	}
 	poolPol := v.poolEgress[sb.PolicyKey()]
 	tenantPol := v.classEgress[sb.EgressClass]
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if poolPol == nil {
 		pooled := sb.Layer == types.LayerPooled
 		if sb.Layer == "" {

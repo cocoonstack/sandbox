@@ -28,12 +28,11 @@ func (s SecretSpec) Validate() error {
 		return fmt.Errorf("secret name must not be empty")
 	case s.Value != nil:
 		return fmt.Errorf("secret %q: value is not supported, use value_env", s.Name)
-	case !httpguts.ValidHeaderFieldName(s.Header):
-		return fmt.Errorf("secret %q: header %q is not a valid header name", s.Name, s.Header)
 	case s.ValueEnv == "" && !types.EnvNameRe.MatchString(s.Name):
 		return fmt.Errorf("secret %q: without value_env the name is the claim env to read, so it must match %s", s.Name, types.EnvNameRe)
-	case slices.ContainsFunc(nonInjectable, func(h string) bool { return strings.EqualFold(h, s.Header) }):
-		return fmt.Errorf("secret %q: header %s is not injectable", s.Name, s.Header)
+	}
+	if err := CheckInjectHeader(s.Header); err != nil {
+		return fmt.Errorf("secret %q: %w", s.Name, err)
 	}
 	return nil
 }
@@ -78,4 +77,15 @@ func (s *SecretStore) Header(name string) (header, value string, ok bool) {
 // EnvName names the env a claim sets to supply the secret's value.
 func (s *SecretStore) EnvName(name string) string {
 	return s.byName[name].env
+}
+
+// CheckInjectHeader rejects a header name the proxy cannot set: an invalid one, or one the transport owns or strips.
+func CheckInjectHeader(header string) error {
+	switch {
+	case !httpguts.ValidHeaderFieldName(header):
+		return fmt.Errorf("header %q is not a valid header name", header)
+	case slices.ContainsFunc(nonInjectable, func(h string) bool { return strings.EqualFold(h, header) }):
+		return fmt.Errorf("header %s is not injectable", header)
+	}
+	return nil
 }

@@ -47,6 +47,28 @@ func BenchmarkInterceptedHandshake(b *testing.B) {
 	}
 }
 
+func BenchmarkInterceptedConnection(b *testing.B) {
+	for _, arm := range []string{"fresh", "session-cache"} {
+		b.Run(arm, func(b *testing.B) {
+			addr, roots := benchFront(b, true)
+			var cache tls.ClientSessionCache
+			if arm == "session-cache" {
+				cache = tls.NewLRUClientSessionCache(8)
+			}
+			resumed := 0
+			for b.Loop() {
+				tc := connectTLSCached(b, addr, "example.com:443", "example.com", roots, cache)
+				benchRoundTrip(b, tc, bufio.NewReader(tc))
+				if tc.ConnectionState().DidResume {
+					resumed++
+				}
+				_ = tc.Close()
+			}
+			b.ReportMetric(float64(resumed)/float64(b.N), "resumed/op")
+		})
+	}
+}
+
 func BenchmarkSplicedHandshake(b *testing.B) {
 	addr, roots := benchFront(b, false)
 	for b.Loop() {

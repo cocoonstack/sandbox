@@ -98,6 +98,7 @@ func main() {
 	var placer server.Placer
 	var prober server.CheckpointProber
 	var probeKey []byte
+	var republish func()
 	if cfg.Mesh != nil {
 		msh, err := startMesh(ctx, cfg, mgr)
 		if err != nil {
@@ -108,9 +109,8 @@ func main() {
 		mgr.SetTemplateNotifier(func() {
 			msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
 		})
-		mgr.OnTenants(func() {
-			msh.UpdateDigest(ctx, cfg.ClusterDigest(mgr.EgressCAFingerprint(), mgr.TenantRecords()))
-		})
+		republish = func() { msh.UpdateDigest(ctx, mgr.ClusterDigest()) }
+		mgr.OnTenants(republish)
 		clusterKey, err := cfg.Mesh.DecodedKey()
 		if err != nil {
 			logger.Fatalf(ctx, err, "decode mesh cluster key")
@@ -138,7 +138,11 @@ func main() {
 		if err != nil {
 			return pool.ReloadResult{}, fmt.Errorf("%w: %w", pool.ErrBadConfig, err)
 		}
-		return mgr.ReloadConfig(ctx, next)
+		res, err := mgr.ReloadConfig(ctx, next)
+		if err == nil && republish != nil {
+			republish()
+		}
+		return res, err
 	}
 	go reloadOnHangup(ctx, hangup, reload)
 	srv := server.New(cfg.APIToken, cmp.Or(cfg.ClientAdvertise, cfg.AdvertiseAddr), mgr, eng, placer, prober, probeKey, preview)
@@ -199,7 +203,7 @@ func startMesh(ctx context.Context, cfg *config.Config, mgr *pool.Manager) (*mes
 	if err != nil {
 		return nil, err
 	}
-	self := mesh.NodeState{NodeID: cmp.Or(mc.NodeID, mc.Bind), Addr: cfg.AdvertiseAddr, ClientAddr: cfg.ClientAdvertise, Digest: cfg.ClusterDigest(mgr.EgressCAFingerprint(), mgr.TenantRecords())}
+	self := mesh.NodeState{NodeID: cmp.Or(mc.NodeID, mc.Bind), Addr: cfg.AdvertiseAddr, ClientAddr: cfg.ClientAdvertise, Digest: mgr.ClusterDigest()}
 	msh, err := mesh.New(ctx, mlCfg, self, key, cfg.DataDir)
 	if err != nil {
 		return nil, err
