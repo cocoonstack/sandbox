@@ -161,7 +161,9 @@ request or connection is evaluated against the new policy.
 
 Policy is per pool and per egress class; a tenant claim's effective policy is
 the intersection of its pool's and its tenant's class (a request must pass
-both, and the pool rule's secret wins on a double allow). `egress_classes`
+both). The pool rule's secret is the only one injected on a composed claim; a
+class rule's `secret` applies only to a tenant claim of an unpooled key, where
+the class policy stands alone. `egress_classes`
 names each tenant layer in the config file, and a tenant references one by
 `egress_class`, in `tenants` or through the [tenant API](sandboxd-api.md#tenants-v1tenants).
 The API only references a class the operator wrote, never defines one, so a
@@ -318,6 +320,8 @@ every address: a blocked one fails before the upstream is contacted, an
 address `egress_internal_allow` re-admits dials direct (a node-local service
 an external exit cannot reach), and otherwise the tunnel is opened to the
 vetted IP, so the upstream never resolves a name the node did not check. The
+first IPv4 address is preferred, since many upstream proxies have no IPv6
+exit. The
 upstream's own address is dialed with the node's plain dialer. An upstream
 that fails answers the guest 502 (SOCKS5: host unreachable) and never falls
 back to a direct dial. An allowed connection's audit and usage records name
