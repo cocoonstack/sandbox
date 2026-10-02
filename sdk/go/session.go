@@ -53,7 +53,7 @@ func (s *Sandbox) NewSession(ctx context.Context, opts ...SessionOption) (*Sessi
 	for _, opt := range opts {
 		opt(req)
 	}
-	created, err := oneShotRPC[wire.SessionCreated](ctx, s, req)
+	created, err := s.oneShotRPC[wire.SessionCreated](ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +62,7 @@ func (s *Sandbox) NewSession(ctx context.Context, opts ...SessionOption) (*Sessi
 
 // Sessions lists the sandbox's live session ids.
 func (s *Sandbox) Sessions(ctx context.Context) ([]string, error) {
-	list, err := oneShotRPC[wire.Sessions](ctx, s, wire.SessionList{})
+	list, err := s.oneShotRPC[wire.Sessions](ctx, wire.SessionList{})
 	if err != nil {
 		return nil, err
 	}

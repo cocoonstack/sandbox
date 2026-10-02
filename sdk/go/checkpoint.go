@@ -84,11 +84,11 @@ func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error)
 // replica until the node's checkpoint_ttl_hours ages it out; a node later run
 // with healing off and that TTL back at 0 keeps the replica until a delete.
 func (ck *Checkpoint) Delete(ctx context.Context) error {
-	return doNoContent(ctx, ck.c, http.MethodDelete, ck.addr, "/v1/checkpoints/"+ck.ID, nil, ck.c.apiToken, "delete checkpoint")
+	return ck.c.doNoContent(ctx, http.MethodDelete, ck.addr, "/v1/checkpoints/"+ck.ID, nil, ck.c.apiToken, "delete checkpoint")
 }
 
 func (ck *Checkpoint) claimAt(ctx context.Context, addr string, body []byte) (claimResponse, error) {
-	return doJSON[claimResponse](ctx, ck.c, http.MethodPost, addr, "/v1/checkpoints/"+ck.ID+"/claim", bytes.NewReader(body), ck.c.apiToken, "claim checkpoint")
+	return ck.c.doJSON[claimResponse](ctx, http.MethodPost, addr, "/v1/checkpoints/"+ck.ID+"/claim", bytes.NewReader(body), ck.c.apiToken, "claim checkpoint")
 }
 
 // Checkpoint captures the sandbox's full state (memory, disk, running processes) without stopping it and returns a handle that branches new sandboxes from that moment.
@@ -97,7 +97,7 @@ func (s *Sandbox) Checkpoint(ctx context.Context, name string) (*Checkpoint, err
 	if err != nil {
 		return nil, err
 	}
-	cr, err := doJSON[checkpointResponse](ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/checkpoint", bytes.NewReader(body), s.c.apiToken, "checkpoint")
+	cr, err := s.c.doJSON[checkpointResponse](ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/checkpoint", bytes.NewReader(body), s.c.apiToken, "checkpoint")
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func (s *Sandbox) Checkpoint(ctx context.Context, name string) (*Checkpoint, err
 // Checkpoints lists the CONNECTED node's checkpoints, newest first; the
 // returned handles are bound to that node.
 func (c *Client) Checkpoints(ctx context.Context) ([]*Checkpoint, error) {
-	lr, err := doJSON[checkpointListResponse](ctx, c, http.MethodGet, c.addr, "/v1/checkpoints", nil, c.apiToken, "list checkpoints")
+	lr, err := c.doJSON[checkpointListResponse](ctx, http.MethodGet, c.addr, "/v1/checkpoints", nil, c.apiToken, "list checkpoints")
 	if err != nil {
 		return nil, err
 	}

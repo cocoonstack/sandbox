@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -26,7 +27,7 @@ func TestDialPortEchoAndHalfClose(t *testing.T) {
 	if err := pc.CloseWrite(); err != nil {
 		t.Fatalf("close write: %v", err)
 	}
-	if _, err := pc.Read(buf); err != io.EOF {
+	if _, err := pc.Read(buf); !errors.Is(err, io.EOF) {
 		t.Errorf("read after close: %v, want EOF", err)
 	}
 }

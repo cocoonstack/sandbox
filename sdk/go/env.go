@@ -16,7 +16,7 @@ type envPatchBody struct {
 
 // Env reads the claim's env with the node API token; a host-only entry comes back with an empty Value.
 func (s *Sandbox) Env(ctx context.Context) (map[string]EnvVar, error) {
-	resp, err := doJSON[envBody](ctx, s.c, http.MethodGet, s.owner, "/v1/sandboxes/"+s.ID+"/env", nil, s.c.apiToken, "read env")
+	resp, err := s.c.doJSON[envBody](ctx, http.MethodGet, s.owner, "/v1/sandboxes/"+s.ID+"/env", nil, s.c.apiToken, "read env")
 	if err != nil {
 		return nil, err
 	}
@@ -29,7 +29,7 @@ func (s *Sandbox) SetEnv(ctx context.Context, env map[string]EnvVar) error {
 	if err != nil {
 		return err
 	}
-	return doNoContent(ctx, s.c, http.MethodPut, s.owner, "/v1/sandboxes/"+s.ID+"/env", bytes.NewReader(body), s.c.apiToken, "set env")
+	return s.c.doNoContent(ctx, http.MethodPut, s.owner, "/v1/sandboxes/"+s.ID+"/env", bytes.NewReader(body), s.c.apiToken, "set env")
 }
 
 // PatchEnv sets each entry of patch, removes each nil one and keeps the rest as stored, host-only values included.
@@ -38,5 +38,5 @@ func (s *Sandbox) PatchEnv(ctx context.Context, patch map[string]*EnvVar) error 
 	if err != nil {
 		return err
 	}
-	return doNoContent(ctx, s.c, http.MethodPatch, s.owner, "/v1/sandboxes/"+s.ID+"/env", bytes.NewReader(body), s.c.apiToken, "patch env")
+	return s.c.doNoContent(ctx, http.MethodPatch, s.owner, "/v1/sandboxes/"+s.ID+"/env", bytes.NewReader(body), s.c.apiToken, "patch env")
 }

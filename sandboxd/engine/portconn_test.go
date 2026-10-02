@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json/v2"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -28,7 +29,7 @@ func TestGuestPortConnFramesBothWays(t *testing.T) {
 	if err != nil || string(got[:n]) != "HTTP/1.1 200 OK" {
 		t.Fatalf("read %q, %v", got[:n], err)
 	}
-	if _, err := gc.Read(got); err != io.EOF {
+	if _, err := gc.Read(got); !errors.Is(err, io.EOF) {
 		t.Errorf("after done: %v, want EOF", err)
 	}
 }
@@ -93,7 +94,7 @@ func TestGuestPortConnRoundTripsFixtures(t *testing.T) {
 	if err != nil || string(buf[:n]) != "hello" {
 		t.Fatalf("fixture data frame read %q, %v", buf[:n], err)
 	}
-	if _, err := gc.Read(buf); err != io.EOF {
+	if _, err := gc.Read(buf); !errors.Is(err, io.EOF) {
 		t.Errorf("fixture done frame: %v, want EOF", err)
 	}
 
@@ -101,7 +102,7 @@ func TestGuestPortConnRoundTripsFixtures(t *testing.T) {
 	t.Cleanup(func() { _ = client2.Close(); _ = silk2.Close() })
 	gc2 := newGuestPortConn(client2, bufio.NewReaderSize(client2, portReadBuf))
 	go func() { _, _ = silk2.Write(fixture("resp_error.json")) }()
-	if _, err := gc2.Read(buf); err == nil || err == io.EOF {
+	if _, err := gc2.Read(buf); err == nil || errors.Is(err, io.EOF) {
 		t.Errorf("fixture error frame: %v, want a typed error", err)
 	}
 

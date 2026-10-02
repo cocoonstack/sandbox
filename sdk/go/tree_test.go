@@ -3,6 +3,7 @@ package sandbox
 import (
 	"archive/tar"
 	"bytes"
+	"errors"
 	"io"
 	"testing"
 )
@@ -36,7 +37,7 @@ func TestPushPullRoundTrip(t *testing.T) {
 	found := false
 	for {
 		hdr, err := tr.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

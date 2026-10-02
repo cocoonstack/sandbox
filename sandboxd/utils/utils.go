@@ -4,7 +4,6 @@ package utils
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	jsonv1 "encoding/json"
 	"encoding/json/v2"
 	"fmt"
 	"net"
@@ -90,9 +89,9 @@ func DecodeStrictJSON(raw []byte, v any) error {
 	return json.Unmarshal(raw, v, json.RejectUnknownMembers(true), json.MatchCaseInsensitiveNames(true))
 }
 
-// DigestJSON encodes v with v1 semantics so a digest keeps its bytes across builds.
+// DigestJSON encodes v with sorted map keys, so equal values always digest equal.
 func DigestJSON(v any) ([]byte, error) {
-	return json.Marshal(v, jsonv1.DefaultOptionsV1())
+	return json.Marshal(v, json.Deterministic(true))
 }
 
 // DigestHex is the hex SHA-256 of v's DigestJSON bytes.

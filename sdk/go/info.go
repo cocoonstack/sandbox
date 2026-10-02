@@ -80,12 +80,12 @@ type sandboxListResponse struct {
 
 // Info reports the entry node's pools, claims, capacity state, and mesh peers. Requires the operator token.
 func (c *Client) Info(ctx context.Context) (*NodeInfo, error) {
-	return doJSONPtr[NodeInfo](ctx, c, http.MethodGet, c.addr, "/v1/info", nil, c.apiToken, "info")
+	return c.doJSONPtr[NodeInfo](ctx, http.MethodGet, c.addr, "/v1/info", nil, c.apiToken, "info")
 }
 
 // Sandboxes lists the live claims this token may see.
 func (c *Client) Sandboxes(ctx context.Context) ([]SandboxSummary, error) {
-	reply, err := doJSON[sandboxListResponse](ctx, c, http.MethodGet, c.addr, "/v1/sandboxes", nil, c.apiToken, "list sandboxes")
+	reply, err := c.doJSON[sandboxListResponse](ctx, http.MethodGet, c.addr, "/v1/sandboxes", nil, c.apiToken, "list sandboxes")
 	if err != nil {
 		return nil, err
 	}
@@ -96,9 +96,9 @@ func (c *Client) Sandboxes(ctx context.Context) ([]SandboxSummary, error) {
 func (c *Client) peersOrErr(ctx context.Context) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, peersTimeout)
 	defer cancel()
-	reply, err := doJSON[struct {
+	reply, err := c.doJSON[struct {
 		Peers []string `json:"peers"`
-	}](ctx, c, http.MethodGet, c.addr, "/v1/peers", nil, c.apiToken, "peers")
+	}](ctx, http.MethodGet, c.addr, "/v1/peers", nil, c.apiToken, "peers")
 	if err != nil {
 		return nil, err
 	}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -85,7 +86,7 @@ func TestRelayRoundTrip(t *testing.T) {
 			t.Errorf("frame %d: got %q, want %q", i, got, want)
 		}
 	}
-	if _, err := r.ReadString('\n'); err != io.EOF {
+	if _, err := r.ReadString('\n'); !errors.Is(err, io.EOF) {
 		t.Errorf("got %v after terminal frame, want EOF", err)
 	}
 }

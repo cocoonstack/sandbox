@@ -188,7 +188,7 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 
 // Volumes lists the caller-visible fleet catalog; availability is local.
 func (c *Client) Volumes(ctx context.Context) ([]VolumeInfo, error) {
-	resp, err := doJSON[volumeListResponse](ctx, c, http.MethodGet, c.addr, "/v1/volumes", nil, c.apiToken, "list volumes")
+	resp, err := c.doJSON[volumeListResponse](ctx, http.MethodGet, c.addr, "/v1/volumes", nil, c.apiToken, "list volumes")
 	if err != nil {
 		return nil, err
 	}
@@ -239,9 +239,9 @@ func (c *Client) DeleteTemplate(ctx context.Context, template string, opts ...Op
 }
 
 func (c *Client) ownerAt(ctx context.Context, addr, id, token string) (string, error) {
-	body, err := doJSON[struct {
+	body, err := c.doJSON[struct {
 		OwnerAddr string `json:"owner_addr"`
-	}](ctx, c, http.MethodGet, addr, "/v1/sandboxes/"+id+"/owner", nil, token, "owner")
+	}](ctx, http.MethodGet, addr, "/v1/sandboxes/"+id+"/owner", nil, token, "owner")
 	if err != nil {
 		return "", err
 	}
@@ -257,7 +257,7 @@ func (c *Client) handleFrom(dialed string, cr claimResponse) *Sandbox {
 }
 
 func (c *Client) claimAt(ctx context.Context, addr string, body []byte) (claimResponse, error) {
-	return doJSON[claimResponse](ctx, c, http.MethodPost, addr, "/v1/claim", bytes.NewReader(body), c.apiToken, "claim")
+	return c.doJSON[claimResponse](ctx, http.MethodPost, addr, "/v1/claim", bytes.NewReader(body), c.apiToken, "claim")
 }
 
 func (c *Client) deleteTemplates(ctx context.Context, addr string, u url.Values) ([]string, error) {
@@ -301,17 +301,7 @@ func (c *Client) roundTrip(ctx context.Context, method, addr, path string, body 
 	return c.hc.Do(req)
 }
 
-// WithAPIToken sets the bearer for node-scoped calls.
-func WithAPIToken(token string) ClientOption {
-	return func(c *Client) { c.apiToken = token }
-}
-
-// WithHTTPClient replaces the control-plane HTTP client, for callers that need their own transport, proxy, or timeout.
-func WithHTTPClient(hc *http.Client) ClientOption {
-	return func(c *Client) { c.hc = hc }
-}
-
-func doJSON[T any](ctx context.Context, c *Client, method, addr, path string, body io.Reader, bearer, verb string) (T, error) {
+func (c *Client) doJSON[T any](ctx context.Context, method, addr, path string, body io.Reader, bearer, verb string) (T, error) {
 	var out T
 	resp, err := c.roundTrip(ctx, method, addr, path, body, bearer)
 	if err != nil {
@@ -327,15 +317,15 @@ func doJSON[T any](ctx context.Context, c *Client, method, addr, path string, bo
 	return out, nil
 }
 
-func doJSONPtr[T any](ctx context.Context, c *Client, method, addr, path string, body io.Reader, bearer, verb string) (*T, error) {
-	out, err := doJSON[T](ctx, c, method, addr, path, body, bearer, verb)
+func (c *Client) doJSONPtr[T any](ctx context.Context, method, addr, path string, body io.Reader, bearer, verb string) (*T, error) {
+	out, err := c.doJSON[T](ctx, method, addr, path, body, bearer, verb)
 	if err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
-func doNoContent(ctx context.Context, c *Client, method, addr, path string, body io.Reader, bearer, verb string) error {
+func (c *Client) doNoContent(ctx context.Context, method, addr, path string, body io.Reader, bearer, verb string) error {
 	resp, err := c.roundTrip(ctx, method, addr, path, body, bearer)
 	if err != nil {
 		return err
@@ -345,6 +335,16 @@ func doNoContent(ctx context.Context, c *Client, method, addr, path string, body
 		return apiError(verb, resp)
 	}
 	return nil
+}
+
+// WithAPIToken sets the bearer for node-scoped calls.
+func WithAPIToken(token string) ClientOption {
+	return func(c *Client) { c.apiToken = token }
+}
+
+// WithHTTPClient replaces the control-plane HTTP client, for callers that need their own transport, proxy, or timeout.
+func WithHTTPClient(hc *http.Client) ClientOption {
+	return func(c *Client) { c.hc = hc }
 }
 
 func retryTransient(err error) bool {

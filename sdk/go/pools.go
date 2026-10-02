@@ -44,5 +44,5 @@ func (c *Client) setPoolsAt(ctx context.Context, addr string, pools []PoolSpec) 
 	if err != nil {
 		return nil, err
 	}
-	return doJSONPtr[NodeInfo](ctx, c, http.MethodPut, addr, "/v1/pools", bytes.NewReader(body), c.apiToken, "pools")
+	return c.doJSONPtr[NodeInfo](ctx, http.MethodPut, addr, "/v1/pools", bytes.NewReader(body), c.apiToken, "pools")
 }

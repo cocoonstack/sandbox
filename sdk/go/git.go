@@ -15,13 +15,13 @@ func (s *Sandbox) GitClone(ctx context.Context, url, path, branch string, depth 
 
 // GitStatus returns the structured status of the repo at path.
 func (s *Sandbox) GitStatus(ctx context.Context, path string) (*wire.GitStatusResult, error) {
-	return oneShotRPC[wire.GitStatusResult](ctx, s, &wire.GitStatus{Path: path})
+	return s.oneShotRPC[wire.GitStatusResult](ctx, &wire.GitStatus{Path: path})
 }
 
 // GitCommit stages nothing (call GitAdd first); it commits the index with
 // message and author ("Name <email>") and returns the new commit hash.
 func (s *Sandbox) GitCommit(ctx context.Context, path, message, author string) (string, error) {
-	c, err := oneShotRPC[wire.GitCommitResult](ctx, s, &wire.GitCommit{Path: path, Message: message, Author: author})
+	c, err := s.oneShotRPC[wire.GitCommitResult](ctx, &wire.GitCommit{Path: path, Message: message, Author: author})
 	if err != nil {
 		return "", err
 	}
@@ -46,7 +46,7 @@ func (s *Sandbox) GitPull(ctx context.Context, path, auth string) error {
 
 // GitBranches lists the repo's branches and the current one.
 func (s *Sandbox) GitBranches(ctx context.Context, path string) (*wire.GitBranches, error) {
-	return oneShotRPC[wire.GitBranches](ctx, s, &wire.GitBranch{Path: path, Action: wire.BranchList})
+	return s.oneShotRPC[wire.GitBranches](ctx, &wire.GitBranch{Path: path, Action: wire.BranchList})
 }
 
 // GitCreateBranch creates branch name.

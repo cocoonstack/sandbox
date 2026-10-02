@@ -71,39 +71,7 @@ func (s *Sandbox) downloadRPC(ctx context.Context, req wire.Request, sink func([
 	return l.done(drainData(ctx, conn, sink))
 }
 
-// pumpStdio copies stdout/stderr frames to the writers until the terminal frame: exit carries the code, done means the stream ended without one; pid is the one started reported, zero before it.
-func pumpStdio(ctx context.Context, conn *silkd.Conn, stdout, stderr io.Writer) (pid uint32, code int32, exited bool, err error) {
-	stdout = cmp.Or(stdout, io.Discard)
-	stderr = cmp.Or(stderr, io.Discard)
-	for {
-		resp, err := recv(ctx, conn)
-		if err != nil {
-			return pid, 0, false, err
-		}
-		switch resp := resp.(type) {
-		case *wire.Started:
-			pid = resp.PID
-		case *wire.Stdout:
-			if _, err := stdout.Write(resp.Data); err != nil {
-				return pid, 0, false, err
-			}
-		case *wire.Stderr:
-			if _, err := stderr.Write(resp.Data); err != nil {
-				return pid, 0, false, err
-			}
-		case *wire.Exit:
-			return pid, resp.Code, true, nil
-		case *wire.Done:
-			return pid, 0, false, nil
-		case *wire.ErrorResp:
-			return pid, 0, false, resp
-		default:
-			return pid, 0, false, unexpected(resp)
-		}
-	}
-}
-
-func oneShotRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.Request) (*T, error) {
+func (s *Sandbox) oneShotRPC[T any, PT respPtr[T]](ctx context.Context, req wire.Request) (*T, error) {
 	conn, l, err := s.call(ctx, req)
 	if err != nil {
 		return nil, err
@@ -113,9 +81,9 @@ func oneShotRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.
 	return v, l.done(err)
 }
 
-func collectRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.Request) ([]T, error) {
+func (s *Sandbox) collectRPC[T any, PT respPtr[T]](ctx context.Context, req wire.Request) ([]T, error) {
 	var out []T
-	for v, err := range streamRPC[T, PT](ctx, s, req) {
+	for v, err := range s.streamRPC[T, PT](ctx, req) {
 		if err != nil {
 			return nil, err
 		}
@@ -125,7 +93,7 @@ func collectRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.
 }
 
 // streamRPC sends req and yields each streamed frame of type T until Done; breaking out closes the connection, which ends the guest-side producer.
-func streamRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.Request) iter.Seq2[T, error] {
+func (s *Sandbox) streamRPC[T any, PT respPtr[T]](ctx context.Context, req wire.Request) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		var zero T
 		conn, l, err := s.call(ctx, req)
@@ -156,6 +124,38 @@ func streamRPC[T any, PT respPtr[T]](ctx context.Context, s *Sandbox, req wire.R
 				yield(zero, unexpected(resp))
 			}
 			return
+		}
+	}
+}
+
+// pumpStdio copies stdout/stderr frames to the writers until the terminal frame: exit carries the code, done means the stream ended without one; pid is the one started reported, zero before it.
+func pumpStdio(ctx context.Context, conn *silkd.Conn, stdout, stderr io.Writer) (pid uint32, code int32, exited bool, err error) {
+	stdout = cmp.Or(stdout, io.Discard)
+	stderr = cmp.Or(stderr, io.Discard)
+	for {
+		resp, err := recv(ctx, conn)
+		if err != nil {
+			return pid, 0, false, err
+		}
+		switch resp := resp.(type) {
+		case *wire.Started:
+			pid = resp.PID
+		case *wire.Stdout:
+			if _, err := stdout.Write(resp.Data); err != nil {
+				return pid, 0, false, err
+			}
+		case *wire.Stderr:
+			if _, err := stderr.Write(resp.Data); err != nil {
+				return pid, 0, false, err
+			}
+		case *wire.Exit:
+			return pid, resp.Code, true, nil
+		case *wire.Done:
+			return pid, 0, false, nil
+		case *wire.ErrorResp:
+			return pid, 0, false, resp
+		default:
+			return pid, 0, false, unexpected(resp)
 		}
 	}
 }

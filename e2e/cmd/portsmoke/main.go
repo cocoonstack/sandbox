@@ -207,7 +207,7 @@ func stepGuestHalfClose(ctx context.Context, rt *harness.PortRelay, _ *sandbox.S
 	if _, err := io.ReadFull(conn, greeting); err != nil {
 		return fmt.Errorf("read greeting: %w", err)
 	}
-	if n, err := conn.Read(make([]byte, 1)); err != io.EOF {
+	if n, err := conn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
 		return fmt.Errorf("after the guest shut its write side: read %d, %v, want EOF", n, err)
 	}
 	if _, err := io.WriteString(conn, "after-done"); err != nil {

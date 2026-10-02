@@ -60,7 +60,7 @@ func TestClusterDigest(t *testing.T) {
 	}
 }
 
-func TestClusterDigestMatchesTheV1Bytes(t *testing.T) {
+func TestClusterDigestBytesArePinned(t *testing.T) {
 	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
 	tenants := []TenantSpec{{Name: "acme", Token: "t<1>&\u2028"}, {Name: "beta", Token: "t2"}}
 	for _, tt := range []struct {
@@ -69,13 +69,13 @@ func TestClusterDigestMatchesTheV1Bytes(t *testing.T) {
 		fp   string
 		want string
 	}{
-		{"keyless", &Config{APIToken: "t<o>k", PreviewSecret: "p&s", Tenants: tenants, CheckpointTTLHours: 24}, "ca<&>\u2028fp", "7cbd1d42ea3b776064ef637f13ae7da345f82091e9a85cd3c4a6243f97b67a42"},
-		{"keyed", &Config{APIToken: "t<o>k&\u2029", PreviewSecret: "p&s<", Tenants: tenants, CheckpointTTLHours: 24, Mesh: &MeshConfig{ClusterKey: key}}, "ca<&>fp", "c0f2ab05aa72efdefacb1f69082eaed9e09a3ea833c1e234cdeaa26e738e609e"},
+		{"keyless", &Config{APIToken: "t<o>k", PreviewSecret: "p&s", Tenants: tenants, CheckpointTTLHours: 24}, "ca<&>\u2028fp", "889dd395d66341236c2e073bea4b9455e48a48eb7ea79a69f60bda9b914f40f9"},
+		{"keyed", &Config{APIToken: "t<o>k&\u2029", PreviewSecret: "p&s<", Tenants: tenants, CheckpointTTLHours: 24, Mesh: &MeshConfig{ClusterKey: key}}, "ca<&>fp", "1bf87485f6d3a2e097ffa0835127601520725185d06ed960b441888e2538a6c8"},
 		{"no tenants", &Config{}, "fp", "38fc616b12f612c2c5c3f83af9d4c6caa771e1d3ffca39a6c835e522d3db49f8"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.cfg.ClusterDigest(tt.fp, tenantRecords(tt.cfg.Tenants)); got != tt.want {
-				t.Errorf("digest %s, want the encoding/json v1 digest %s", got, tt.want)
+				t.Errorf("digest %s, want the pinned digest %s: a change splits a rolling cluster", got, tt.want)
 			}
 		})
 	}
