@@ -11,47 +11,45 @@ import (
 
 // configView is the config-owned state a reload replaces whole; readers load it once and never see a half-applied reload.
 type configView struct {
-	poolEgress   map[types.PoolKey]*egress.Policy
-	tenantEgress map[string]*egress.Policy
-	poolWarmups  map[types.PoolKey][]string
-	poolTrims    map[types.PoolKey]bool
-	poolStorage  map[types.PoolKey]string
+	poolEgress  map[types.PoolKey]*egress.Policy
+	classEgress map[string]*egress.Policy
+	poolWarmups map[types.PoolKey][]string
+	poolTrims   map[types.PoolKey]bool
+	poolStorage map[types.PoolKey]string
 
-	poolUpstream   map[types.PoolKey]string
-	tenantUpstream map[string]string
-	upstreamEnv    string
-	upstreamAllow  egress.UpstreamAllow
-	internalAllow  []egress.InternalAllow
-	secrets        *egress.SecretStore
-	guardedEgress  bool
-	usageBytes     bool
+	poolUpstream  map[types.PoolKey]string
+	classUpstream map[string]string
+	upstreamEnv   string
+	upstreamAllow egress.UpstreamAllow
+	internalAllow []egress.InternalAllow
+	secrets       *egress.SecretStore
+	guardedEgress bool
+	usageBytes    bool
 }
 
 func newConfigView(cfg *config.Config, secrets *egress.SecretStore) *configView {
 	v := &configView{
-		poolEgress:     map[types.PoolKey]*egress.Policy{},
-		tenantEgress:   map[string]*egress.Policy{},
-		poolWarmups:    map[types.PoolKey][]string{},
-		poolTrims:      map[types.PoolKey]bool{},
-		poolStorage:    map[types.PoolKey]string{},
-		poolUpstream:   map[types.PoolKey]string{},
-		tenantUpstream: map[string]string{},
-		internalAllow:  parseInternalAllow(cfg.EgressInternalAllow),
-		secrets:        secrets,
-		usageBytes:     cfg.EgressUsageBytes,
+		poolEgress:    map[types.PoolKey]*egress.Policy{},
+		classEgress:   map[string]*egress.Policy{},
+		poolWarmups:   map[types.PoolKey][]string{},
+		poolTrims:     map[types.PoolKey]bool{},
+		poolStorage:   map[types.PoolKey]string{},
+		poolUpstream:  map[types.PoolKey]string{},
+		classUpstream: map[string]string{},
+		internalAllow: parseInternalAllow(cfg.EgressInternalAllow),
+		secrets:       secrets,
+		usageBytes:    cfg.EgressUsageBytes,
 	}
 	if u := cfg.EgressUpstream; u != nil {
 		v.upstreamEnv = u.ClaimEnv
 		v.upstreamAllow, _ = egress.ParseUpstreamAllow(u.Allow) // config validation rejected a bad entry
 	}
-	for _, tn := range cfg.Tenants {
-		if tn.EgressUpstreamEnv != "" {
-			v.tenantUpstream[tn.Name] = os.Getenv(tn.EgressUpstreamEnv)
+	for _, ec := range cfg.EgressClasses {
+		if ec.EgressUpstreamEnv != "" {
+			v.classUpstream[ec.Name] = os.Getenv(ec.EgressUpstreamEnv)
 		}
-		if tn.Egress != nil {
-			v.tenantEgress[tn.Name] = tn.Egress
-			v.guardedEgress = true
-		}
+		v.classEgress[ec.Name] = ec.Egress
+		v.guardedEgress = true
 	}
 	for _, spec := range cfg.Pools {
 		key := spec.PoolKey

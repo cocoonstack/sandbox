@@ -12,7 +12,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// upstreamDirect is the claim value that dials direct even where a pool or tenant names a default upstream.
+// upstreamDirect is the claim value that dials direct even where a pool or egress class names a default upstream.
 const upstreamDirect = "direct"
 
 var _ egress.Router = claimRouter{}
@@ -37,7 +37,7 @@ func (r claimRouter) Route() string {
 		}
 		return v
 	}
-	return cmp.Or(view.tenantUpstream[r.sb.Tenant], view.poolUpstream[r.sb.PolicyKey()])
+	return cmp.Or(view.classUpstream[r.sb.EgressClass], view.poolUpstream[r.sb.PolicyKey()])
 }
 
 func (r claimRouter) Dial(ctx context.Context, route, network, addr string) (net.Conn, error) {

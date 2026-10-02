@@ -321,7 +321,7 @@ func (m *Manager) effectivePolicy(v *configView, sb *types.Sandbox) (egress.Eval
 		return nil, false
 	}
 	poolPol := v.poolEgress[sb.PolicyKey()]
-	tenantPol := v.tenantEgress[sb.Tenant]
+	tenantPol := v.classEgress[sb.EgressClass]
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if poolPol == nil {

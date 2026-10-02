@@ -190,8 +190,9 @@ type TenantsRequest struct {
 
 // TenantRequest is the wire body of PUT /v1/tenants/{name}; an empty token keeps an existing tenant's.
 type TenantRequest struct {
-	Token     string `json:"token,omitempty"`
-	MaxClaims int    `json:"max_claims,omitzero"`
+	Token       string `json:"token,omitempty"`
+	MaxClaims   int    `json:"max_claims,omitzero"`
+	EgressClass string `json:"egress_class,omitempty"`
 }
 
 // TenantListResponse is the reply of GET and PUT /v1/tenants; it never carries a token.
@@ -752,7 +753,7 @@ func (s *Server) handlePutTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
-	err := s.mgr.PutTenant(r.Context(), config.TenantSpec{Name: name, Token: req.Token, MaxClaims: req.MaxClaims})
+	err := s.mgr.PutTenant(r.Context(), config.TenantSpec{Name: name, Token: req.Token, MaxClaims: req.MaxClaims, EgressClass: req.EgressClass})
 	writeResult(w, r, "tenant", name, "put tenant failed", err, noContent(w))
 }
 

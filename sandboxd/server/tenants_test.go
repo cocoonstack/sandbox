@@ -50,9 +50,9 @@ func TestTenantRoutesAreRootOnlyAndNeverServeATokenBack(t *testing.T) {
 		t.Errorf("GET /v1/tenants: %d %s", resp.StatusCode, body)
 	}
 
-	resp = doReq(t, http.MethodPut, ts.URL+"/v1/tenants/beta", "root", `{"token":"beta-tok","max_claims":3}`)
+	resp = doReq(t, http.MethodPut, ts.URL+"/v1/tenants/beta", "root", `{"token":"beta-tok","max_claims":3,"egress_class":"desk"}`)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent || put != (config.TenantSpec{Name: "beta", Token: "beta-tok", MaxClaims: 3}) {
+	if resp.StatusCode != http.StatusNoContent || put != (config.TenantSpec{Name: "beta", Token: "beta-tok", MaxClaims: 3, EgressClass: "desk"}) {
 		t.Errorf("PUT /v1/tenants/beta: %d, manager got %+v", resp.StatusCode, put)
 	}
 	resp = doReq(t, http.MethodPut, ts.URL+"/v1/tenants/u:42%2Fwest", "root", `{"token":"w"}`)

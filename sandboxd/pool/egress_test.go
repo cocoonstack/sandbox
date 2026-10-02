@@ -218,16 +218,16 @@ func TestEgressLaneWakeFailsClosed(t *testing.T) {
 func TestEffectivePolicyKeepsTheLayerPinnedAtClaim(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	editView(m, func(v *configView) {
-		v.tenantEgress = map[string]*egress.Policy{"acme": {Allow: []egress.Rule{{Host: "b.test"}}}}
+		v.classEgress = map[string]*egress.Policy{"desk": {Allow: []egress.Rule{{Host: "b.test"}}}}
 		v.poolEgress = map[types.PoolKey]*egress.Policy{}
 	})
 
 	m.pools = map[types.PoolKey]*pool{testKey: newPool(testKey)}
-	if _, ok := m.effectivePolicy(m.view.Load(), &types.Sandbox{Key: testKey, Tenant: "acme", Layer: types.LayerUnpooled}); !ok {
+	if _, ok := m.effectivePolicy(m.view.Load(), &types.Sandbox{Key: testKey, Tenant: "acme", EgressClass: "desk", Layer: types.LayerUnpooled}); !ok {
 		t.Error("a claim made on an unpooled key lost its tenant policy when the key gained a pool")
 	}
 	m.pools = map[types.PoolKey]*pool{}
-	if _, ok := m.effectivePolicy(m.view.Load(), &types.Sandbox{Key: testKey, Tenant: "acme", Layer: types.LayerPooled}); ok {
+	if _, ok := m.effectivePolicy(m.view.Load(), &types.Sandbox{Key: testKey, Tenant: "acme", EgressClass: "desk", Layer: types.LayerPooled}); ok {
 		t.Error("a claim made on a policy-less pool gained the tenant policy when the pool was dropped")
 	}
 }
@@ -283,12 +283,15 @@ func TestEffectivePolicyComposition(t *testing.T) {
 				if tc.pool != nil {
 					v.poolEgress[testKey] = tc.pool
 				}
-				v.tenantEgress = map[string]*egress.Policy{}
+				v.classEgress = map[string]*egress.Policy{}
 				if tc.tnPol != nil {
-					v.tenantEgress["acme"] = tc.tnPol
+					v.classEgress["desk"] = tc.tnPol
 				}
 			})
 			sb := &types.Sandbox{Key: testKey, Tenant: tc.tenant}
+			if tc.tenant != "" {
+				sb.EgressClass = "desk"
+			}
 			eval, ok := m.effectivePolicy(m.view.Load(), sb)
 			if ok != tc.wantArmed {
 				t.Fatalf("armed=%v, want %v", ok, tc.wantArmed)

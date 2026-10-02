@@ -426,7 +426,7 @@ whether a key is pooled decides which [policy layers](egress.md) a claim of it
 gets; that is settled when the claim is made, so adding or dropping a pool here
 changes only claims made afterwards — a key that gains a pool with no `egress`
 block leaves new tenant claims without egress, a key that loses such a pool
-gives new tenant claims the tenant's policy alone:
+gives new tenant claims their egress class's policy alone:
 
 ```json
 {"pools": [{"template": "base:24.04", "net": "none", "size": "small",
@@ -447,17 +447,18 @@ token; 409 egress pool on a node without an egress attachment.
 Auth: root only (tenant tokens get 403); a node without `api_token` answers 400,
 since tenants need it. The tenant set changes at runtime, with no restart:
 
-- `PUT /v1/tenants/{name}` `{"token": "…", "max_claims": 50}` adds a tenant or
-  changes one; an omitted `token` keeps the tenant's stored one, so a cap change
-  never resends it. 204.
+- `PUT /v1/tenants/{name}` `{"token": "…", "max_claims": 50, "egress_class": "desk"}`
+  adds a tenant or changes one; an omitted `token` keeps the tenant's stored
+  one, so a cap change never resends it, while `max_claims` and `egress_class`
+  take the values sent. 204.
 - `DELETE /v1/tenants/{name}` removes one. 204; 404 unknown tenant.
-- `PUT /v1/tenants` `{"tenants": [{"name": "…", "token": "…", "max_claims": 0}]}`
+- `PUT /v1/tenants` `{"tenants": [{"name": "…", "token": "…", "max_claims": 0, "egress_class": "desk"}]}`
   replaces the whole set: a tenant left out is removed, and an entry without
   `token` keeps that tenant's. It answers the `GET` body. Use it to reconcile
   and to import many tenants at once, since every change rewrites the whole
   set; a sign-up is a single-tenant `PUT`, so concurrent sign-ups never
   overwrite each other.
-- `GET /v1/tenants` → `{"tenants": [{"name": "…", "max_claims": 50, "claims": 3},
+- `GET /v1/tenants` → `{"tenants": [{"name": "…", "max_claims": 50, "egress_class": "desk", "claims": 3},
   {"name": "…", "claims": 1, "removed": true}], "digest": "…"}`: every tenant
   with its live claims on this node, then each removed tenant that still owns
   claims here. It never carries a token. Two nodes with the same `digest` hold
@@ -468,8 +469,10 @@ escape `/` as `%2F` in the path) and is the tenant's identity: claims,
 checkpoints and promoted templates belong to a tenant by name, so a name reused
 after a removal inherits what the old tenant left. Use an id the control plane
 never reissues, such as a user UUID. Tokens must be unique and differ from
-`api_token`. `egress` and `egress_upstream_env` stay config-owned and are
-refused here; a tenant whose name has a `config.json` entry gets them from it.
+`api_token`. `egress_class` names one of the node's `egress_classes` (400 when
+unknown) and gives the tenant's claims that egress layer; without one they
+reach nothing on a pool with a policy. The API references a class and never
+defines one. A claim keeps the class its tenant had when it was made.
 
 A change applies to the next request: a removed or rotated token gets 401 at
 once. Lowering `max_claims` below the live count refuses new claims and evicts

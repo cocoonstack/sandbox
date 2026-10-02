@@ -44,6 +44,7 @@ func TestTenantVerbsSendTheOperatorTokenAndEscapeTheName(t *testing.T) {
 	}{
 		{"put", func() error { return c.PutTenant(t.Context(), TenantSpec{Name: "u:42/west", Token: "w", MaxClaims: 3}) }, request{http.MethodPut, "/v1/tenants/u:42%2Fwest", "Bearer root", `{"token":"w","max_claims":3}`}},
 		{"patch cap", func() error { return c.PutTenant(t.Context(), TenantSpec{Name: "acme", MaxClaims: 1}) }, request{http.MethodPut, "/v1/tenants/acme", "Bearer root", `{"max_claims":1}`}},
+		{"class", func() error { return c.PutTenant(t.Context(), TenantSpec{Name: "acme", EgressClass: "desk"}) }, request{http.MethodPut, "/v1/tenants/acme", "Bearer root", `{"egress_class":"desk"}`}},
 		{"delete", func() error { return c.DeleteTenant(t.Context(), "acme") }, request{http.MethodDelete, "/v1/tenants/acme", "Bearer root", ""}},
 		{"set", func() error {
 			_, err := c.SetTenants(t.Context(), []TenantSpec{{Name: "acme"}, {Name: "beta", Token: "b"}})

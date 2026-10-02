@@ -142,9 +142,9 @@ domain policy first; the allow-list widens the IP gate only.
 - **Bridge lane only (egress lane).** A CNI network's tap lives in the VM netns,
   out of reach of the root-netns lock, so a guarded egress *lane* needs the
   `bridges` form (those taps stay in the root netns) and is rejected on CNI
-  `networks`. A none-lane *pool* policy rides the proxy and works on either; a
-  tenant policy does not, because it could land on an egress-lane claim, so
-  `networks` plus any tenant `egress` block is rejected at load. A bridge
+  `networks`. A none-lane *pool* policy rides the proxy and works on either; an
+  egress class does not, because its tenants could land on an egress-lane
+  claim, so `networks` plus any `egress_classes` entry is rejected at load. A bridge
   egress lane locks every NIC default-deny, even with no policy configured.
 - **No custom NAT64/DNS64 prefix routed to the host.** The SSRF guard folds the
   standard NAT64 forms (RFC 6052 well-known `64:ff9b::/96`, RFC 8215 local-use
@@ -159,24 +159,29 @@ A [config reload](deploy.md#reloading-the-config) applies policy, internal
 allow, secret and upstream changes without a restart: a live claim's next
 request or connection is evaluated against the new policy.
 
-Policy is per pool and per tenant; the effective policy is their intersection
-(a request must pass both, and the pool rule's secret wins on a double allow).
-A missing policy on either side is an empty allow-list, not a pass: a tenant
-without its own `egress` block reaches nothing — upgrading, a tenant that
-relied on inheriting its pool's policy must now declare one — so granting a tenant egress —
-and the secret injection that rides it — is always an explicit act. Root
-claims have no tenant layer and take the pool's policy whole. A clone of a
+Policy is per pool and per egress class; a tenant claim's effective policy is
+the intersection of its pool's and its tenant's class (a request must pass
+both, and the pool rule's secret wins on a double allow). `egress_classes`
+names each tenant layer in the config file, and a tenant references one by
+`egress_class`, in `tenants` or through the [tenant API](sandboxd-api.md#tenants-v1tenants).
+The API only references a class the operator wrote, never defines one, so a
+tenant added at runtime gets egress without a config edit. A missing policy on
+either side is an empty allow-list, not a pass: a tenant without a class
+reaches nothing, so granting a tenant egress — and the secret injection that
+rides it — is always an explicit act. A claim takes its tenant's class when it
+is made and keeps it for life: a class's policy follows a reload, and a tenant
+moved to another class takes it on its next claim. Root claims have no tenant
+layer and take the pool's policy whole. A clone of a
 promoted template takes the policy of the pool its template was promoted from,
 as if it were that pool's claim: the template records its source pool, a
 re-promote records the new one, and a fork, checkpoint or branch of such a
 clone keeps it. So a clone of a template promoted from a pool with no policy
-has no egress, as that pool's claims have none, even for a tenant with its own
-policy; a template promoted from a sandbox of no pool records no source. A pool's
+has no egress, as that pool's claims have none, even for a tenant with a class; a template promoted from a sandbox of no pool records no source. A pool's
 `egress` block belongs to the config file and stays bound to its key: when a
 `PUT /v1/pools` drops a config pool that has one, the claims made after it,
 now cold-booted on demand, still take that policy. Any other key that is in
 no pool at claim time — an image cold-booted on demand — has no pool layer, so
-a tenant's claim of one takes the tenant's policy alone (a root claim of one
+a tenant's claim of one takes its class's policy alone (a root claim of one
 stays denied). A claim with `"egress": false`
 takes no policy at all, whatever its pool's: no door is bound, so the guest's
 dial is refused. Which layers a claim has is settled when it
@@ -202,8 +207,11 @@ file: a claim's own `guest: false` env first, the node's second
     { "template": "rt:24.04", "net": "egress", "size": "small", "warm": 2,
       "egress": { "allow": [{ "host": "api.github.com", "secret": "gh" }] } }
   ],
+  "egress_classes": [
+    { "name": "desk", "egress": { "allow": [{ "host": "api.github.com" }] } }
+  ],
   "tenants": [
-    { "name": "acme", "token": "…", "egress": { "allow": [{ "host": "api.github.com" }] } }
+    { "name": "acme", "token": "…", "egress_class": "desk" }
   ]
 }
 ```
@@ -293,8 +301,8 @@ A claim names its upstream in that env entry, which must be `guest: false`
 (it carries the upstream's credentials): `http://[user:pass@]host:port`
 (an HTTP CONNECT tunnel for every destination, plain HTTP included) or
 `socks5://[user:pass@]host:port`. `direct` forces the node's own exit, and an
-absent entry falls back to the tenant's, then the pool's default:
-`egress_upstream_env` on a tenant or pool entry names a node environment
+absent entry falls back to the claim's egress class, then the pool's default:
+`egress_upstream_env` on an egress class or pool entry names a node environment
 variable holding the URL, read at startup, so no credential sits in the config
 file. A claim (a checkpoint branch included), `PUT` or `PATCH` naming an
 upstream outside `allow` (exact host

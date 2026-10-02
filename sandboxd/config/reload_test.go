@@ -23,13 +23,14 @@ func TestReloadDiffSortsReloadableOwnedAndRestartFields(t *testing.T) {
 		{PoolKey: key, Warm: 5, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "pypi.org"}}}},
 		{PoolKey: v13, Warmup: []string{"node", "-e", "0"}, Storage: "40G"},
 	}
-	next.Tenants = []TenantSpec{{Name: "acme", Token: "rotated", Egress: &egress.Policy{}}}
+	next.EgressClasses = []EgressClass{{Name: "desk", Egress: &egress.Policy{}}}
+	next.Tenants = []TenantSpec{{Name: "acme", Token: "rotated", EgressClass: "desk"}}
 	changed, ignored, err := cur.ReloadDiff(&next)
 	if err != nil {
 		t.Fatalf("ReloadDiff: %v", err)
 	}
 	wantChanged := []string{
-		"tenants[acme].egress",
+		"egress_classes",
 		"egress_internal_allow",
 		"pools[desktop:v12 none small].egress",
 		"pools[desktop:v13 none small].warmup",

@@ -63,6 +63,7 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 	m.cfg = next
 	m.recordAudit(ctx, "", auditFrame{Op: "config_reload", Changed: changed})
 	log.WithFunc("pool.ReloadConfig").Infof(ctx, "config reloaded: %s; %d warm VMs of retired goldens destroyed", strings.Join(changed, ", "), len(trim))
+	m.warnMissingClasses(ctx)
 	m.kickRefill()
 	return res, nil
 }

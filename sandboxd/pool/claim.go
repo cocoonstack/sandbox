@@ -37,10 +37,10 @@ type ClaimOptions struct {
 	Env             types.Env
 }
 
-// apply stamps the options a claim carries for its life.
-func (o ClaimOptions) apply(sb *types.Sandbox) {
+// apply stamps the options a claim carries for its life, with the tenant's egress class as of now.
+func (o ClaimOptions) apply(sb *types.Sandbox, class string) {
 	sb.Tenant, sb.ClaimRef, sb.Metadata, sb.OnExpire, sb.NoEgress = o.Tenant, o.ClaimRef, o.Metadata, o.OnExpire.Or(""), o.NoEgress
-	sb.Env = o.Env
+	sb.EgressClass, sb.Env = class, o.Env
 }
 
 // ClaimWarm transfers ownership of a warm sandbox without provisioning; ErrNoWarm means empty.
@@ -71,7 +71,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, o ClaimOptio
 		m.abortVolumeClaim(ctx, sb.VMName, &reserved)
 		return nil, volumeErr
 	}
-	o.apply(sb)
+	o.apply(sb, m.tenantClass(o.Tenant))
 	reserved = nil
 	out, err := m.finalize(ctx, sb, o.TTL, false)
 	if err == nil {
@@ -109,7 +109,7 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, o Claim
 	}
 	sb.TemplateDigest = golden.templateDigest
 	sb.PolicySource = golden.source
-	o.apply(sb)
+	o.apply(sb, m.tenantClass(o.Tenant))
 	reserved = nil
 	out, err := m.finalize(ctx, sb, o.TTL, golden.guestEnv)
 	if err == nil {
