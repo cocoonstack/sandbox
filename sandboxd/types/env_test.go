@@ -83,12 +83,87 @@ func TestEnvVarDecodesStrictly(t *testing.T) {
 		{`{"value":"s","host_only":true}`, false, false},
 		{`{"value":"s","guest":null}`, false, false},
 		{`{"value":"s","guest":"false"}`, false, false},
+		{`{"value":"s","guest":false,"inject":{"hosts":["a.test"],"header":"X-Key"}}`, false, true},
+		{`{"value":"s","guest":false,"inject":{"hosts":["a.test"],"heder":"X-Key"}}`, false, false},
 	} {
 		var v EnvVar
 		err := json.Unmarshal([]byte(tt.body), &v)
 		if (err == nil) != tt.ok || (err == nil && v.InGuest() != tt.guest) {
 			t.Errorf("%s: err=%v guest=%t, want ok=%t guest=%t", tt.body, err, v.InGuest(), tt.ok, tt.guest)
 		}
+	}
+}
+
+func TestEnvInjectValidates(t *testing.T) {
+	inject := func(header string, hosts ...string) Env {
+		return Env{"K": {Value: "v", Guest: new(false), Inject: &EnvInject{Hosts: hosts, Header: header}}}
+	}
+	tests := []struct {
+		name string
+		env  Env
+		want string
+	}{
+		{"host-only exact and wildcard", inject("X-Api-Key", "api.example.com", "*.corp.test", "10.0.0.5"), ""},
+		{"guest entry", Env{"K": {Value: "v", Inject: &EnvInject{Hosts: []string{"a.test"}, Header: "X-Key"}}}, "needs guest: false"},
+		{"no hosts", inject("X-Key"), "1 to 8 hosts"},
+		{"too many hosts", inject("X-Key", "a", "b", "c", "d", "e", "f", "g", "h", "i"), "1 to 8 hosts"},
+		{"uppercase host", inject("X-Key", "API.example.com"), "lowercase host name"},
+		{"bare wildcard", inject("X-Key", "*"), "lowercase host name"},
+		{"host with a port", inject("X-Key", "a.test:443"), "lowercase host name"},
+		{"bad header", inject("X Key", "a.test"), "not a valid header name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.env.Validate()
+			if (tt.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tt.want)) {
+				t.Errorf("Validate = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnvInjectMatchesAndCompares(t *testing.T) {
+	inj := &EnvInject{Hosts: []string{"api.example.com", "*.corp.test"}, Header: "X-Key"}
+	for host, want := range map[string]bool{"api.example.com": true, "git.corp.test": true, "corp.test": false, "example.com": false} {
+		if got := inj.Matches(host); got != want {
+			t.Errorf("Matches(%q) = %v, want %v", host, got, want)
+		}
+	}
+	a := Env{"K": {Value: "v", Guest: new(false), Inject: inj}}
+	b := Env{"K": {Value: "v", Guest: new(false), Inject: &EnvInject{Hosts: []string{"api.example.com"}, Header: "X-Key"}}}
+	if a.Equal(b) || !a.Equal(Env{"K": {Value: "v", Guest: new(false), Inject: inj}}) || !a.SameGuest(b) {
+		t.Error("Equal must see an inject change, and SameGuest must not")
+	}
+	if red := a.Redacted(); red["K"].Value != "" || red["K"].Inject != inj {
+		t.Errorf("Redacted = %+v, want the value dropped and the inject kept", red["K"])
+	}
+}
+
+func TestSandboxPublishesItsEnvToTheProxy(t *testing.T) {
+	sb := &Sandbox{}
+	if _, ok := sb.HiddenEnv("K"); ok {
+		t.Fatal("a sandbox without SetEnv served a hidden value")
+	}
+	to := func(hosts ...string) *EnvInject { return &EnvInject{Hosts: hosts, Header: "X-Key"} }
+	sb.SetEnv(Env{
+		"B":     {Value: "b", Guest: new(false), Inject: to("a.test")},
+		"A":     {Value: "a", Guest: new(false), Inject: to("*.test")},
+		"OTHER": {Value: "o", Guest: new(false), Inject: to("b.example")},
+		"PLAIN": {Value: "p", Guest: new(false)},
+	})
+	var names []string
+	for name := range sb.Injections("a.test") {
+		names = append(names, name)
+	}
+	if strings.Join(names, ",") != "A,B" {
+		t.Errorf("Injections(a.test) = %v, want A,B in name order", names)
+	}
+	if v, ok := sb.HiddenEnv("PLAIN"); !ok || v != "p" {
+		t.Errorf("HiddenEnv(PLAIN) = %q %v, want p", v, ok)
+	}
+	sb.SetEnv(nil)
+	if _, ok := sb.HiddenEnv("PLAIN"); ok {
+		t.Error("a cleared env still serves a hidden value")
 	}
 }
 

@@ -43,9 +43,15 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 	}
 	var trim []string
 	var doors []*egressListener
+	var injecting []*types.Sandbox
 	m.mu.Lock()
 	m.view.Store(view)
 	live := slices.Collect(maps.Values(m.egressListeners))
+	for _, sb := range m.claimed {
+		if sb.Env.HasInject() {
+			injecting = append(injecting, sb)
+		}
+	}
 	if !view.guardedEgress {
 		doors = slices.Collect(maps.Values(m.egressPrebound))
 		clear(m.egressPrebound)
@@ -68,8 +74,22 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 	m.recordAudit(ctx, "", auditFrame{Op: "config_reload", Changed: changed})
 	log.WithFunc("pool.ReloadConfig").Infof(ctx, "config reloaded: %s; %d warm VMs of retired goldens destroyed", strings.Join(changed, ", "), len(trim))
 	m.warnMissingClasses(ctx)
+	m.warnLostInjects(ctx, view, injecting)
 	m.kickRefill()
 	return res, nil
+}
+
+// warnLostInjects names each claim whose inject hosts the reloaded egress no longer intercepts; the proxy stops sending them.
+func (m *Manager) warnLostInjects(ctx context.Context, v *configView, sbs []*types.Sandbox) {
+	for _, sb := range sbs {
+		m.mu.Lock()
+		env := sb.Env
+		m.mu.Unlock()
+		eval, ok := m.effectivePolicy(v, sb)
+		if gap := v.injectGap(eval, ok, sb, env); len(gap) > 0 {
+			log.WithFunc("pool.warnLostInjects").Warnf(ctx, "claim %s: inject no longer intercepted: %s", sb.ID, strings.Join(gap, ", "))
+		}
+	}
 }
 
 // refuseInterceptOn turns intercept on only for a key whose guests can trust the CA: one the node has not served, with the CA loaded at boot.

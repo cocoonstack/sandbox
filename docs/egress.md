@@ -285,8 +285,46 @@ gateway key per user, while the guest holds a placeholder.
 - **Audit.** An injection is recorded as the secret's name; the value is
   never logged, listed or returned.
 
-The proxy reads the claim's env under the node's manager lock, once per
-request whose matched rule names a secret; other requests pay nothing.
+The proxy reads a snapshot of the claim's env that each env write publishes,
+without a lock, once per request whose matched rule names a secret or whose
+host has a claim credential; other requests pay nothing.
+
+### Claim credentials
+
+A `guest: false` env entry can also name where its value goes, so a control
+plane binds each sandbox's own credential to a host without editing the node
+config:
+
+```jsonc
+{ "env": {
+    "API_TOKEN": { "value": "Bearer …", "guest": false,
+                   "inject": { "hosts": ["api.example.com", "*.git.example.com"], "header": "Authorization" } }
+} }
+```
+
+On an intercepted request to one of `hosts`, the proxy sets `header` to the
+entry's value, overwriting whatever the guest sent, so the guest can hold a
+placeholder. The entry rides the claim request or any `/env` write, and
+rotation is the same `PATCH`, accepted on a hibernated or archived claim
+without waking it.
+
+- **Envelope.** The operator still decides which hosts can carry a
+  credential: every host must be covered by an `intercept: true` rule of the
+  claim's pool and allowed by its tenant class, or the write answers 400 and
+  nothing is stored. A credential never widens egress and never rides a
+  plaintext forward request.
+- **Precedence.** The pool rule's own `secret` is set first and wins: a
+  credential naming that header for a host the rule covers is a 400. Among
+  credentials for the same header, the first by entry name wins. An empty
+  value injects nothing.
+- **Shape.** `hosts` holds 1 to 8 lowercase names or `*.suffix` patterns
+  (no bare `*`, no port); `header` is any header name except `Host`,
+  `Content-Length` and the hop-by-hop ones. `GET /env` returns `inject` with
+  the value blanked.
+- **Reload.** A reload that drops the covering intercept rule stops that
+  injection on the next request and logs which claims lost which hosts.
+- **Audit.** An injection is recorded as `claim:<entry name>` next to the
+  pool secret's name, comma-separated.
 
 ## Upstream proxies
 

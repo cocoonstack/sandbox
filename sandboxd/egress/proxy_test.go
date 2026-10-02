@@ -174,6 +174,36 @@ func TestForwardNeverInjectsInterceptSecret(t *testing.T) {
 	}
 }
 
+func TestForwardNeverInjectsClaimCredentials(t *testing.T) {
+	var seen string
+	upstream := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get("X-Api-Key")
+	}))
+	defer upstream.Close()
+	events := make(chan Event, 1)
+	secrets := credSecrets{creds: map[string][]Credential{"api.internal": {{Name: "API", Header: "X-Api-Key", Value: "k1"}}}}
+	p := New(Policy{Allow: []Rule{{Host: "api.internal"}}}, secrets, nil, fixedDial(upstream.Listener.Addr().String()), func(ev Event) { events <- ev }, nil)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://api.internal/x", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("X-Api-Key", "placeholder")
+	resp, err := proxyClient(t, front.URL).Do(req)
+	if err != nil {
+		t.Fatalf("proxied GET: %v", err)
+	}
+	_ = resp.Body.Close()
+	if seen != "placeholder" {
+		t.Errorf("upstream saw X-Api-Key %q, want the guest's value: a claim credential never rides a cleartext forward", seen)
+	}
+	if ev := recvEvent(t, events); ev.Injected != "" {
+		t.Errorf("audit Injected %q, want none", ev.Injected)
+	}
+}
+
 func TestForwardStripsHopHeaders(t *testing.T) {
 	var gotHop, gotConn string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -523,6 +553,19 @@ type fakeSecrets map[string][2]string
 func (f fakeSecrets) Header(name string) (string, string, bool) {
 	hv, ok := f[name]
 	return hv[0], hv[1], ok
+}
+
+func (f fakeSecrets) Credentials(string) []Credential {
+	return nil
+}
+
+type credSecrets struct {
+	fakeSecrets
+	creds map[string][]Credential
+}
+
+func (c credSecrets) Credentials(host string) []Credential {
+	return c.creds[host]
 }
 
 type holdCounter struct{ atomic.Int32 }

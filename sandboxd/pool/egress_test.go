@@ -1075,9 +1075,14 @@ func egressClient(path string) *http.Client {
 
 func egressManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
 	t.Helper()
+	return egressManagerAt(t, eng, t.TempDir(), pools...)
+}
+
+func egressManagerAt(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
+	t.Helper()
 	t.Setenv("GH_TOKEN", "s3cr3t")
 	secrets := testSecrets(t, egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"})
-	cfg := &config.Config{DataDir: t.TempDir(), Bridges: []string{"sbxbr0"}, EgressCA: writeTestEgressCA(t), Pools: pools}
+	cfg := &config.Config{DataDir: dataDir, Bridges: []string{"sbxbr0"}, EgressCA: writeTestEgressCA(t), Pools: pools}
 	m, err := NewManager(t.Context(), cfg, eng, secrets)
 	if err != nil {
 		t.Fatalf("manager: %v", err)

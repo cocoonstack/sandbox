@@ -42,7 +42,8 @@ type ClaimOptions struct {
 // apply stamps the options a claim carries for its life.
 func (o ClaimOptions) apply(sb *types.Sandbox) {
 	sb.Tenant, sb.ClaimRef, sb.Metadata, sb.OnExpire, sb.NoEgress = o.Tenant, o.ClaimRef, o.Metadata, o.OnExpire.Or(""), o.NoEgress
-	sb.EgressClass, sb.Env = o.EgressClass, o.Env
+	sb.EgressClass = o.EgressClass
+	sb.SetEnv(o.Env)
 }
 
 // ClaimWarm transfers ownership of a warm sandbox without provisioning; ErrNoWarm means empty.
@@ -419,7 +420,10 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		}
 		sb.TouchAt(now)
 	}
-	err := m.deliverEnv(ctx, sbs, inherited)
+	err := m.checkInjects(m.view.Load(), sbs)
+	if err == nil {
+		err = m.deliverEnv(ctx, sbs, inherited)
+	}
 	m.mu.Lock()
 	if err == nil {
 		err = m.quotaErr(len(sbs), sbs[0].Tenant)
@@ -717,7 +721,7 @@ func (m *Manager) admitOptions(ctx context.Context, key types.PoolKey, o ClaimOp
 	if err := archivable(key, len(o.Volumes) > 0, o.OnExpire); err != nil {
 		return nil, nil, err
 	}
-	if err := m.checkUpstreamEnv(o.Env); err != nil {
+	if err := m.checkEnv(o.Env); err != nil {
 		return nil, nil, err
 	}
 	volumeSpecs, err := m.resolveVolumes(ctx, o.Tenant, o.Volumes)

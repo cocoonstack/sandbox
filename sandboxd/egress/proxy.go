@@ -41,9 +41,17 @@ type TransferFunc func(ev Event, sent, received int64)
 // AuditFunc receives every egress decision the proxy takes.
 type AuditFunc func(Event)
 
-// Secrets resolves a rule's Secret name to the header it injects.
+// Credential is a claim-supplied header the proxy sets on an intercepted request.
+type Credential struct {
+	Name   string
+	Header string
+	Value  string
+}
+
+// Secrets resolves a rule's Secret name to the header it injects, and a host to the claim's own credentials for it.
 type Secrets interface {
 	Header(name string) (header, value string, ok bool)
+	Credentials(host string) []Credential
 }
 
 // Holder is held for the life of every request and tunnel the proxy serves.
@@ -52,7 +60,7 @@ type Holder interface {
 	Unhold()
 }
 
-// Event is one audited egress attempt; Injected names the credential and Upstream the proxy host, never their secrets.
+// Event is one audited egress attempt; Injected lists the credentials set, comma-separated, and Upstream the proxy host, never their secrets.
 type Event struct {
 	Method   string
 	Host     string
@@ -307,7 +315,7 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	out.RequestURI = ""
 	out.Close = false // the guest's Connection: close is its own; the upstream pool keeps the conn
 	stripHop(out.Header)
-	ev.Injected = p.inject(rule, out.Header)
+	ev.Injected = p.inject(rule, out.Header, ev.Host, mitm)
 	var body *countingBody
 	if p.transfer != nil && out.Body != nil && out.Body != http.NoBody {
 		body = &countingBody{ReadCloser: out.Body}
@@ -375,17 +383,29 @@ func (p *Proxy) reportTransfer(ev Event, sent, received int64) {
 	}
 }
 
-// inject sets the rule's secret header, overwriting any guest-supplied value.
-func (p *Proxy) inject(rule Rule, h http.Header) string {
-	if rule.Secret == "" || p.secrets == nil {
+// inject sets the rule's secret header, then on an intercepted request each claim credential for host on a header still unset by this hop; guest values are overwritten.
+func (p *Proxy) inject(rule Rule, h http.Header, host string, mitm bool) string {
+	if p.secrets == nil {
 		return ""
 	}
-	header, value, ok := p.secrets.Header(rule.Secret)
-	if !ok || value == "" {
-		return ""
+	var names, set []string
+	if rule.Secret != "" {
+		if header, value, ok := p.secrets.Header(rule.Secret); ok && value != "" {
+			h.Set(header, value)
+			names, set = append(names, rule.Secret), append(set, header)
+		}
 	}
-	h.Set(header, value)
-	return rule.Secret
+	if !mitm {
+		return strings.Join(names, ",")
+	}
+	for _, c := range p.secrets.Credentials(strings.ToLower(host)) {
+		if c.Value == "" || slices.ContainsFunc(set, func(s string) bool { return strings.EqualFold(s, c.Header) }) {
+			continue
+		}
+		h.Set(c.Header, c.Value)
+		names, set = append(names, "claim:"+c.Name), append(set, c.Header)
+	}
+	return strings.Join(names, ",")
 }
 
 func (p *Proxy) record(ev Event) {

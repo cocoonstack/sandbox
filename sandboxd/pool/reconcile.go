@@ -39,6 +39,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	var adopted []*types.Sandbox
 	m.mu.Lock()
 	for id, sb := range claims {
+		sb.SetEnv(sb.Env)
 		rec, ok := live[sb.VMName]
 		switch {
 		case sb.ArchiveCk != "":

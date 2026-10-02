@@ -28,10 +28,7 @@ func (r claimRouter) Route() string {
 	if view.upstreamEnv == "" {
 		return ""
 	}
-	r.m.mu.Lock()
-	v, set := r.sb.Env.Hidden(view.upstreamEnv)
-	r.m.mu.Unlock()
-	if set {
+	if v, set := r.sb.HiddenEnv(view.upstreamEnv); set {
 		if v == upstreamDirect {
 			return ""
 		}

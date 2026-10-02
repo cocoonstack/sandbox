@@ -450,6 +450,150 @@ func TestPatchEnvMergesAndRepairsTheGuest(t *testing.T) {
 	}
 }
 
+func TestAnInjectNeedsAHostThePoolIntercepts(t *testing.T) {
+	pol := &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh", Intercept: true}, {Host: "*.corp.test", Intercept: true}, {Host: "plain.test"}}}
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
+	sb := mustClaim(t, m, testKey)
+	for name, patch := range map[string]types.EnvPatch{
+		"a plain host":             injectPatch("X-Api-Key", "plain.test"),
+		"an unlisted host":         injectPatch("X-Api-Key", "other.test"),
+		"the pool secret's header": injectPatch("authorization", "api.github.com"),
+		"a transport header":       injectPatch("Content-Length", "git.corp.test"),
+	} {
+		if err := m.PatchEnv(t.Context(), sb.ID, patch, ""); !errors.Is(err, ErrBadEnv) {
+			t.Errorf("%s: %v, want ErrBadEnv", name, err)
+		}
+	}
+	if env, _ := m.Env(sb.ID, ""); env != nil {
+		t.Errorf("a refused inject left env %v", env)
+	}
+	if err := m.PatchEnv(t.Context(), sb.ID, injectPatch("X-Api-Key", "api.github.com", "*.corp.test"), ""); err != nil {
+		t.Fatalf("an intercepted inject: %v", err)
+	}
+	if got := credentialsFor(m, sb, "git.corp.test"); got != "KEY:X-Api-Key=k" {
+		t.Errorf("credentials for git.corp.test %q, want KEY:X-Api-Key=k", got)
+	}
+}
+
+func TestAnInjectNeedsTheTenantClassToAllowTheHost(t *testing.T) {
+	pol := &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Intercept: true}, {Host: "*.corp.test", Intercept: true}}}
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
+	editView(m, func(v *configView) {
+		v.classEgress = map[string]*egress.Policy{"desk": {Allow: []egress.Rule{{Host: "*.corp.test"}}}}
+	})
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme", EgressClass: "desk"})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if err = m.PatchEnv(t.Context(), sb.ID, injectPatch("X-Api-Key", "api.github.com"), "acme"); !errors.Is(err, ErrBadEnv) {
+		t.Errorf("a host the class denies: %v, want ErrBadEnv", err)
+	}
+	if err = m.PatchEnv(t.Context(), sb.ID, injectPatch("X-Api-Key", "git.corp.test"), "acme"); err != nil {
+		t.Errorf("a host the pool intercepts and the class allows: %v", err)
+	}
+}
+
+func TestAClaimWithAnUninterceptedInjectIsRefused(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()})
+	env := types.Env{"KEY": {Value: "k", Guest: hostOnly, Inject: &types.EnvInject{Hosts: []string{"other.test"}, Header: "X-Api-Key"}}}
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: env}); !errors.Is(err, ErrBadEnv) {
+		t.Fatalf("claim: %v, want ErrBadEnv", err)
+	}
+	m.mu.Lock()
+	claimed := len(m.claimed)
+	m.mu.Unlock()
+	if claimed != 0 || len(eng.removedNames()) != 1 {
+		t.Errorf("%d claims left and %v removed, want none kept and the VM destroyed", claimed, eng.removedNames())
+	}
+}
+
+func TestEachClaimInjectsItsOwnCredentialAndAHostOnlyChangeNeedsNoGuest(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()})
+	claim := func(value string) *types.Sandbox {
+		t.Helper()
+		env := types.Env{"KEY": {Value: value, Guest: hostOnly, Inject: &types.EnvInject{Hosts: []string{"api.github.com"}, Header: "X-Api-Key"}}}
+		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: env})
+		if err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		return sb
+	}
+	a, b, plain := claim("a"), claim("b"), mustClaim(t, m, testKey)
+	if got := credentialsFor(m, a, "api.github.com") + "|" + credentialsFor(m, b, "api.github.com") + "|" + credentialsFor(m, plain, "api.github.com"); got != "KEY:X-Api-Key=a|KEY:X-Api-Key=b|" {
+		t.Errorf("credentials %q, want each claim's own and none for the plain claim", got)
+	}
+	m.mu.Lock()
+	a.HibernateSnap = "snap"
+	m.mu.Unlock()
+	if err := m.PatchEnv(t.Context(), a.ID, types.EnvPatch{"KEY": {Value: "a2", Guest: hostOnly, Inject: &types.EnvInject{Hosts: []string{"api.github.com"}, Header: "X-Api-Key"}}}, ""); err != nil {
+		t.Fatalf("rotate on a hibernated claim: %v", err)
+	}
+	if got, wrote := eng.guestEnvs[a.VsockSocket]; wrote || credentialsFor(m, a, "api.github.com") != "KEY:X-Api-Key=a2" {
+		t.Errorf("guest file %q (written %v), credentials %q; want no guest write and the rotated value", got, wrote, credentialsFor(m, a, "api.github.com"))
+	}
+	if err := m.SetEnv(t.Context(), b.ID, types.Env{}, ""); err != nil || credentialsFor(m, b, "api.github.com") != "" {
+		t.Errorf("clear: %v, credentials %q; want none", err, credentialsFor(m, b, "api.github.com"))
+	}
+}
+
+func TestInjectsSurviveARestartAndAReloadThatDropsTheInterceptStopsThem(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	dataDir := t.TempDir()
+	pool := config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Intercept: true}}}}
+	m := egressManagerAt(t, eng, dataDir, pool)
+	env := types.Env{"KEY": {Value: "k", Guest: hostOnly, Inject: &types.EnvInject{Hosts: []string{"api.github.com"}, Header: "X-Api-Key"}}}
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: env})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	m2 := egressManagerAt(t, eng, dataDir, pool)
+	if err = m2.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	m2.mu.Lock()
+	restored := m2.claimed[sb.ID]
+	m2.mu.Unlock()
+	if got := credentialsFor(m2, restored, "api.github.com"); got != "KEY:X-Api-Key=k" {
+		t.Errorf("credentials after a restart %q, want the persisted inject", got)
+	}
+	editView(m2, func(v *configView) {
+		v.poolEgress[testKey] = &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com"}}}
+	})
+	v := m2.view.Load()
+	eval, ok := m2.effectivePolicy(v, restored)
+	if gap := v.injectGap(eval, ok, restored, env); len(gap) != 1 {
+		t.Errorf("gap after the intercept rule went %v, want the inject named", gap)
+	}
+}
+
+func TestALostInterceptRefusesOnlyAChangedInject(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()})
+	sb := mustClaim(t, m, testKey)
+	if err := m.PatchEnv(t.Context(), sb.ID, injectPatch("X-Api-Key", "api.github.com"), ""); err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	editView(m, func(v *configView) {
+		v.poolEgress[testKey] = &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com"}}}
+	})
+	if err := m.PatchEnv(t.Context(), sb.ID, types.EnvPatch{"OTHER": {Value: "o", Guest: hostOnly}}, ""); err != nil {
+		t.Errorf("an unrelated patch after the intercept went: %v", err)
+	}
+	if err := m.PatchEnv(t.Context(), sb.ID, injectPatch("X-Other", "api.github.com"), ""); !errors.Is(err, ErrBadEnv) {
+		t.Errorf("a changed inject after the intercept went: %v, want ErrBadEnv", err)
+	}
+}
+
 func BenchmarkClaimSecretsHeader(b *testing.B) {
 	b.Setenv("GH_TOKEN", "node-gh")
 	store, err := egress.NewSecretStore([]egress.SecretSpec{{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"}})
@@ -466,14 +610,38 @@ func BenchmarkClaimSecretsHeader(b *testing.B) {
 	for _, arm := range []string{"no-claim-env", "claim-env"} {
 		sb := &types.Sandbox{}
 		if arm == "claim-env" {
-			sb.Env = types.Env{"GH_TOKEN": {Value: "Bearer claim", Guest: hostOnly}, "MODE": {Value: "on"}}
+			sb.SetEnv(types.Env{"GH_TOKEN": {Value: "Bearer claim", Guest: hostOnly}, "MODE": {Value: "on"}})
 		}
 		b.Run(arm, func(b *testing.B) {
 			for b.Loop() {
 				_, _, _ = claimSecrets{m: m, sb: sb}.Header("gh")
 			}
 		})
+		b.Run(arm+"/credentials", func(b *testing.B) {
+			for b.Loop() {
+				_ = claimSecrets{m: m, sb: sb}.Credentials("api.example.com")
+			}
+		})
 	}
+	sb := &types.Sandbox{}
+	sb.SetEnv(types.Env{"KEY": {Value: "k", Guest: hostOnly, Inject: &types.EnvInject{Hosts: []string{"api.example.com"}, Header: "X-Key"}}})
+	b.Run("inject/credentials", func(b *testing.B) {
+		for b.Loop() {
+			_ = claimSecrets{m: m, sb: sb}.Credentials("api.example.com")
+		}
+	})
+}
+
+func injectPatch(header string, hosts ...string) types.EnvPatch {
+	return types.EnvPatch{"KEY": {Value: "k", Guest: hostOnly, Inject: &types.EnvInject{Hosts: hosts, Header: header}}}
+}
+
+func credentialsFor(m *Manager, sb *types.Sandbox, host string) string {
+	var out []string
+	for _, c := range (claimSecrets{m: m, sb: sb}).Credentials(host) {
+		out = append(out, c.Name+":"+c.Header+"="+c.Value)
+	}
+	return strings.Join(out, ",")
 }
 
 func envManager(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {

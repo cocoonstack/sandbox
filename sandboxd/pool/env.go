@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"golang.org/x/sync/errgroup"
 
@@ -59,9 +60,17 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		m.mu.Unlock()
 		return fmt.Errorf("%w: %w", ErrBadEnv, err)
 	}
-	if err := m.checkUpstreamEnv(env); err != nil {
+	if err := m.checkEnv(env); err != nil {
 		m.mu.Unlock()
 		return err
+	}
+	if fresh := env.InjectsChanged(prev); fresh != nil {
+		v := m.view.Load()
+		eval, ok := m.effectivePolicyLocked(v, sb)
+		if gap := v.injectGap(eval, ok, sb, fresh); len(gap) > 0 {
+			m.mu.Unlock()
+			return fmt.Errorf("%w: inject %s", ErrBadEnv, strings.Join(gap, ", "))
+		}
 	}
 	changed := !env.SameGuest(prev)
 	paused := !locked || sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "" || failed
@@ -76,14 +85,14 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		m.mu.Unlock()
 		return m.deliverGuestEnv(ctx, verb, id, sock, env, !paused)
 	}
-	sb.Env = env
+	sb.SetEnv(env)
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
 		m.mu.Lock()
 		var rb claimSnapshot
 		if m.claimed[id] == sb && sb.Env.Equal(env) {
-			sb.Env = prev
+			sb.SetEnv(prev)
 			rb = m.store.set(sb)
 		}
 		m.mu.Unlock()
@@ -124,6 +133,33 @@ func (m *Manager) deliverEnv(ctx context.Context, sbs []*types.Sandbox, inherite
 	return group.Wait()
 }
 
+// checkEnv admits an env this node can serve: its upstream entry, and inject headers the proxy may set.
+func (m *Manager) checkEnv(env types.Env) error {
+	for name, v := range env {
+		if v.Inject == nil {
+			continue
+		}
+		if err := egress.CheckInjectHeader(v.Inject.Header); err != nil {
+			return fmt.Errorf("%w: env %s: inject %w", ErrBadEnv, name, err)
+		}
+	}
+	return m.checkUpstreamEnv(env)
+}
+
+// checkInjects refuses a claim batch whose inject hosts a claim's egress does not intercept.
+func (m *Manager) checkInjects(v *configView, sbs []*types.Sandbox) error {
+	for _, sb := range sbs {
+		if !sb.Env.HasInject() {
+			continue
+		}
+		eval, ok := m.effectivePolicy(v, sb)
+		if gap := v.injectGap(eval, ok, sb, sb.Env); len(gap) > 0 {
+			return fmt.Errorf("%w: inject %s", ErrBadEnv, strings.Join(gap, ", "))
+		}
+	}
+	return nil
+}
+
 // heldGuestEnv reports whether sb's guest holds an env file; the caller holds sb.Transition, so no guest write races its capture.
 func (m *Manager) heldGuestEnv(sb *types.Sandbox) bool {
 	m.mu.Lock()
@@ -144,12 +180,16 @@ func (c claimSecrets) Header(name string) (header, value string, ok bool) {
 	if header, value, ok = secrets.Header(name); !ok {
 		return "", "", false
 	}
-	env := secrets.EnvName(name)
-	c.m.mu.Lock()
-	own, set := c.sb.Env.Hidden(env)
-	c.m.mu.Unlock()
-	if set {
+	if own, set := c.sb.HiddenEnv(secrets.EnvName(name)); set {
 		value = own
 	}
 	return header, value, true
+}
+
+func (c claimSecrets) Credentials(host string) []egress.Credential {
+	var out []egress.Credential
+	for name, v := range c.sb.Injections(host) {
+		out = append(out, egress.Credential{Name: name, Header: v.Inject.Header, Value: v.Value})
+	}
+	return out
 }
