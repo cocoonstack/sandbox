@@ -63,7 +63,7 @@ func TestInterceptLeafCacheBounded(t *testing.T) {
 func TestInterceptInjectsSecretIntoHTTPS(t *testing.T) {
 	events := make(chan Event, 4)
 	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Methods: []string{"GET"}, Secret: "gh", Intercept: true}, events)
-	p.mitmTr.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -92,7 +92,7 @@ func TestInterceptInjectsSecretIntoHTTPS(t *testing.T) {
 
 func TestInterceptKeepsAClientHelloSentBeforeThe200(t *testing.T) {
 	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Methods: []string{"GET"}, Intercept: true}, nil)
-	p.mitmTr.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -119,7 +119,7 @@ func TestInterceptBindsInnerRequestToInterceptRule(t *testing.T) {
 		{Host: "api.example.com", Secret: "gh", Intercept: true},
 	}}
 	p, guestRoots, upstream := interceptProxyPolicy(t, policy, nil)
-	p.mitmTr.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -139,7 +139,7 @@ func TestInterceptCaptureEnforcesRuleMethod(t *testing.T) {
 		{Host: "api.example.com", Methods: []string{"GET"}, Intercept: true},
 	}}
 	p, guestRoots, upstream := interceptProxyPolicy(t, policy, nil)
-	p.mitmTr.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -159,7 +159,7 @@ func TestInterceptReachesLaterInterceptRuleByMethod(t *testing.T) {
 		{Host: "api.example.com", Methods: []string{"POST"}, Intercept: true},
 	}}
 	p, guestRoots, upstream := interceptProxyPolicy(t, policy, nil)
-	p.mitmTr.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -175,7 +175,7 @@ func TestInterceptReachesLaterInterceptRuleByMethod(t *testing.T) {
 
 func TestInterceptForcesAuthorityOnForeignHost(t *testing.T) {
 	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Intercept: true}, nil)
-	p.mitmTr.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -191,7 +191,7 @@ func TestInterceptForcesAuthorityOnForeignHost(t *testing.T) {
 
 func TestCloseRevokesInterceptedSession(t *testing.T) {
 	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Intercept: true}, nil)
-	p.mitmTr.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -217,7 +217,7 @@ func TestCloseRevokesInterceptedSession(t *testing.T) {
 
 func TestInterceptFiltersByMethod(t *testing.T) {
 	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Methods: []string{"GET"}, Intercept: true}, nil)
-	p.mitmTr.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	front := httptest.NewServer(p)
 	defer front.Close()
 

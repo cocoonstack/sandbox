@@ -67,6 +67,15 @@ type routeKey struct {
 	mitm  bool
 }
 
+type connPools struct {
+	tr   *http.Transport
+	mitm *http.Transport
+
+	// routed pools each upstream's connections apart, so a route change never reuses another path's conn.
+	mu     sync.Mutex
+	routed map[routeKey]*http.Transport
+}
+
 // DialFunc opens the upstream connection for a permitted request; as a Router it sends every connection direct.
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
@@ -85,12 +94,7 @@ type Proxy struct {
 	transfer TransferFunc
 	router   Router
 	holder   Holder
-	tr       *http.Transport
-	mitmTr   *http.Transport
-
-	// routed pools each upstream's connections apart, so a route change never reuses another path's conn.
-	trMu   sync.Mutex
-	routed map[routeKey]*http.Transport
+	pools    atomic.Pointer[connPools]
 
 	// leaves caches this sandbox's interception leaves; per-proxy, never shared.
 	leafMu sync.Mutex
@@ -114,16 +118,16 @@ func New(policy Evaluator, secrets Secrets, ca *CA, router Router, audit AuditFu
 		audit:   audit,
 		router:  router,
 		holder:  holder,
-		// the stdlib default of 2 idle conns per host re-dials bursty same-host traffic.
-		tr:     &http.Transport{DialContext: direct, MaxIdleConns: maxIdleConns, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout},
-		routed: map[routeKey]*http.Transport{},
-		conns:  map[net.Conn]struct{}{},
+		conns:   map[net.Conn]struct{}{},
 	}
+	// the stdlib default of 2 idle conns per host re-dials bursty same-host traffic.
+	pools := &connPools{tr: &http.Transport{DialContext: direct, MaxIdleConns: maxIdleConns, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout}, routed: map[routeKey]*http.Transport{}}
 	if ca != nil {
-		p.mitmTr = p.tr.Clone()
-		p.mitmTr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		pools.mitm = pools.tr.Clone()
+		pools.mitm.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		p.leaves = map[string]*tls.Certificate{}
 	}
+	p.pools.Store(pools)
 	return p
 }
 
@@ -152,18 +156,21 @@ func (p *Proxy) Close() {
 	p.CloseIdle()
 }
 
-// CloseIdle moves new requests to fresh pools; the old ones close each connection as its in-flight request ends, so no reused connection skips the dial-time gates.
+// CloseIdle moves new requests to fresh pools; the old ones close each connection as its in-flight request ends.
 func (p *Proxy) CloseIdle() {
-	p.trMu.Lock()
-	old := append(slices.Collect(maps.Values(p.routed)), p.tr)
-	p.tr = p.tr.Clone()
-	if p.mitmTr != nil {
-		old = append(old, p.mitmTr)
-		p.mitmTr = p.mitmTr.Clone()
+	cur := p.pools.Load()
+	next := &connPools{tr: cur.tr.Clone(), routed: map[routeKey]*http.Transport{}}
+	if cur.mitm != nil {
+		next.mitm = cur.mitm.Clone()
 	}
-	clear(p.routed)
-	p.trMu.Unlock()
-	for _, tr := range old {
+	old := p.pools.Swap(next)
+	old.mu.Lock()
+	idle := append(slices.Collect(maps.Values(old.routed)), old.tr)
+	old.mu.Unlock()
+	if old.mitm != nil {
+		idle = append(idle, old.mitm)
+	}
+	for _, tr := range idle {
 		tr.CloseIdleConnections()
 	}
 }
@@ -333,23 +340,24 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 
 // transport returns the pool for route; the direct route keeps the base transports.
 func (p *Proxy) transport(route string, mitm bool) *http.Transport {
-	p.trMu.Lock()
-	defer p.trMu.Unlock()
-	base := p.tr
+	pools := p.pools.Load()
+	base := pools.tr
 	if mitm {
-		base = p.mitmTr
+		base = pools.mitm
 	}
 	if route == "" {
 		return base
 	}
+	pools.mu.Lock()
+	defer pools.mu.Unlock()
 	key := routeKey{route: route, mitm: mitm}
-	tr := p.routed[key]
+	tr := pools.routed[key]
 	if tr == nil {
 		tr = base.Clone()
 		tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return p.router.Dial(ctx, route, network, addr)
 		}
-		p.routed[key] = tr
+		pools.routed[key] = tr
 	}
 	return tr
 }
