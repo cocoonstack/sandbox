@@ -134,16 +134,6 @@ func (a sandboxArg) id() string { return a.SandboxID }
 
 type sandboxIDer interface{ id() string }
 
-// parseAndBox decodes a tool's arguments and resolves their sandbox_id to a live handle, the prologue every sandbox-scoped tool shares.
-func parseAndBox[T sandboxIDer](s *server, raw jsontext.Value) (T, *sandbox.Sandbox, error) {
-	var args T
-	if err := parse(raw, &args); err != nil {
-		return args, nil, err
-	}
-	sb, err := s.box(args.id())
-	return args, sb, err
-}
-
 type cmdArgs struct {
 	sandboxArg
 	Command string `json:"command"`
@@ -151,7 +141,7 @@ type cmdArgs struct {
 }
 
 func parseCommand(s *server, raw jsontext.Value) (cmdArgs, *sandbox.Sandbox, error) {
-	args, sb, err := parseAndBox[cmdArgs](s, raw)
+	args, sb, err := s.parseAndBox[cmdArgs](raw)
 	if err == nil && args.Command == "" {
 		return args, nil, errors.New("command must not be empty")
 	}
@@ -230,7 +220,7 @@ type killArgs struct {
 }
 
 func toolKill(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
-	args, sb, err := parseAndBox[killArgs](s, raw)
+	args, sb, err := s.parseAndBox[killArgs](raw)
 	if err != nil {
 		return "", err
 	}
@@ -246,7 +236,7 @@ type logsArgs struct {
 }
 
 func toolLogs(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
-	args, sb, err := parseAndBox[logsArgs](s, raw)
+	args, sb, err := s.parseAndBox[logsArgs](raw)
 	if err != nil {
 		return "", err
 	}
@@ -269,7 +259,7 @@ type writeFileArgs struct {
 }
 
 func toolWriteFile(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
-	args, sb, err := parseAndBox[writeFileArgs](s, raw)
+	args, sb, err := s.parseAndBox[writeFileArgs](raw)
 	if err != nil {
 		return "", err
 	}
@@ -285,7 +275,7 @@ type pathArgs struct {
 }
 
 func toolReadFile(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
-	args, sb, err := parseAndBox[pathArgs](s, raw)
+	args, sb, err := s.parseAndBox[pathArgs](raw)
 	if err != nil {
 		return "", err
 	}
@@ -299,7 +289,7 @@ func toolReadFile(ctx context.Context, s *server, raw jsontext.Value) (string, e
 }
 
 func toolListDir(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
-	args, sb, err := parseAndBox[pathArgs](s, raw)
+	args, sb, err := s.parseAndBox[pathArgs](raw)
 	if err != nil {
 		return "", err
 	}
@@ -316,7 +306,7 @@ type forkArgs struct {
 }
 
 func toolFork(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
-	args, sb, err := parseAndBox[forkArgs](s, raw)
+	args, sb, err := s.parseAndBox[forkArgs](raw)
 	if err != nil {
 		return "", err
 	}
@@ -338,7 +328,7 @@ type checkpointArgs struct {
 }
 
 func toolCheckpoint(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
-	args, sb, err := parseAndBox[checkpointArgs](s, raw)
+	args, sb, err := s.parseAndBox[checkpointArgs](raw)
 	if err != nil {
 		return "", err
 	}
@@ -404,7 +394,7 @@ type promoteArgs struct {
 }
 
 func toolPromote(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
-	args, sb, err := parseAndBox[promoteArgs](s, raw)
+	args, sb, err := s.parseAndBox[promoteArgs](raw)
 	if err != nil {
 		return "", err
 	}
@@ -435,8 +425,18 @@ func toolNodeInfo(ctx context.Context, s *server, _ jsontext.Value) (string, err
 	return jsonText(info), nil
 }
 
+// parseAndBox decodes a tool's arguments and resolves their sandbox_id to a live handle, the prologue every sandbox-scoped tool shares.
+func (s *server) parseAndBox[T sandboxIDer](raw jsontext.Value) (T, *sandbox.Sandbox, error) {
+	var args T
+	if err := parse(raw, &args); err != nil {
+		return args, nil, err
+	}
+	sb, err := s.box(args.id())
+	return args, sb, err
+}
+
 func (s *server) boxArg(raw jsontext.Value) (*sandbox.Sandbox, error) {
-	_, sb, err := parseAndBox[sandboxArg](s, raw)
+	_, sb, err := s.parseAndBox[sandboxArg](raw)
 	return sb, err
 }
 

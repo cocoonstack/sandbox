@@ -388,7 +388,7 @@ func TestFetchPrunesSupersededGenerationsIdlePastTheGrace(t *testing.T) {
 	st := newTestStore(t, &fakeS3{objects: map[string][]byte{}})
 	fetchGen := func(gen int) string {
 		t.Helper()
-		publishRecord(t, st, id, []byte(fmt.Sprintf(`{"id":"%s","gen":%d}`, id, gen)), fmt.Sprint(gen))
+		publishRecord(t, st, id, fmt.Appendf(nil, `{"id":"%s","gen":%d}`, id, gen), fmt.Sprint(gen))
 		export, _, _, err := st.Fetch(t.Context(), id)
 		if err != nil {
 			t.Fatalf("fetch generation %d: %v", gen, err)

@@ -42,7 +42,7 @@ func (s *Sandbox) ReadFileTo(ctx context.Context, path string, w io.Writer) erro
 
 // ListDir returns the entries of a directory (batched frames are concatenated).
 func (s *Sandbox) ListDir(ctx context.Context, path string) ([]wire.DirEntry, error) {
-	frames, err := collectRPC[wire.Entries](ctx, s, &wire.FsList{Path: path})
+	frames, err := s.collectRPC[wire.Entries](ctx, &wire.FsList{Path: path})
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +55,7 @@ func (s *Sandbox) ListDir(ctx context.Context, path string) ([]wire.DirEntry, er
 
 // Stat returns metadata for path.
 func (s *Sandbox) Stat(ctx context.Context, path string) (wire.FileInfo, error) {
-	st, err := oneShotRPC[wire.Stat](ctx, s, &wire.FsStat{Path: path})
+	st, err := s.oneShotRPC[wire.Stat](ctx, &wire.FsStat{Path: path})
 	if err != nil {
 		return wire.FileInfo{}, err
 	}

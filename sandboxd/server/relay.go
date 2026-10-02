@@ -28,6 +28,7 @@ const (
 
 var (
 	switchingProtocols = []byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n")
+	newline            = []byte{'\n'}
 
 	// silkd delimits input with terminal frames, so a TCP half-close carries no meaning here.
 	silkdEnds = relayEnds{guest: func(c net.Conn) { _ = c.Close() }, client: drainClient}
@@ -196,14 +197,13 @@ func (t *auditTee) Read(p []byte) (int, error) {
 	n, err := t.r.Read(p)
 	rest := p[:n]
 	for len(rest) > 0 {
-		i := bytes.IndexByte(rest, '\n')
-		if i < 0 {
-			t.take(rest)
+		line, after, found := bytes.Cut(rest, newline)
+		t.take(line)
+		if !found {
 			break
 		}
-		t.take(rest[:i])
 		t.endLine()
-		rest = rest[i+1:]
+		rest = after
 	}
 	return n, err
 }

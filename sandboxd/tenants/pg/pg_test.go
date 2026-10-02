@@ -86,7 +86,7 @@ func TestARoleWithoutCreateServesAPreCreatedTable(t *testing.T) {
 	if err := owner.Close(); err != nil {
 		t.Fatalf("close owner: %v", err)
 	}
-	schema := dsn[strings.LastIndex(dsn, "=")+1:]
+	_, schema, _ := strings.CutLast(dsn, "=")
 	role := "r" + schema
 	admin, err := pgx.Connect(t.Context(), dsn)
 	if err != nil {

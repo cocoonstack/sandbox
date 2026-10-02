@@ -20,7 +20,7 @@ func (s *Sandbox) Spawn(ctx context.Context, cmd Cmd) (uint32, error) {
 		return 0, fmt.Errorf("spawn does not support session")
 	}
 	req := &wire.Exec{Argv: cmd.Argv, Cwd: cmd.Cwd, Env: cmd.Env, User: cmd.User, Detach: true}
-	started, err := oneShotRPC[wire.Started](ctx, s, req)
+	started, err := s.oneShotRPC[wire.Started](ctx, req)
 	if err != nil {
 		return 0, err
 	}
@@ -30,7 +30,7 @@ func (s *Sandbox) Spawn(ctx context.Context, cmd Cmd) (uint32, error) {
 // Ps lists the guest's tracked processes — execs, spawns, and ptys — with
 // state and exit codes.
 func (s *Sandbox) Ps(ctx context.Context) ([]wire.ProcInfo, error) {
-	procs, err := oneShotRPC[wire.Procs](ctx, s, wire.Ps{})
+	procs, err := s.oneShotRPC[wire.Procs](ctx, wire.Ps{})
 	if err != nil {
 		return nil, err
 	}

@@ -160,7 +160,7 @@ func (s *Sandbox) Fork(ctx context.Context, count int, ttl time.Duration) ([]*Sa
 	if err != nil {
 		return nil, err
 	}
-	fr, err := doJSON[forkResponse](ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/fork", bytes.NewReader(body), s.c.apiToken, "fork")
+	fr, err := s.c.doJSON[forkResponse](ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/fork", bytes.NewReader(body), s.c.apiToken, "fork")
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +184,7 @@ func (s *Sandbox) Promote(ctx context.Context, template string) (*Template, erro
 	if err != nil {
 		return nil, err
 	}
-	pr, err := doJSON[promoteResponse](ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/promote", bytes.NewReader(body), s.c.apiToken, "promote")
+	pr, err := s.c.doJSON[promoteResponse](ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/promote", bytes.NewReader(body), s.c.apiToken, "promote")
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +200,7 @@ func (s *Sandbox) Promote(ctx context.Context, template string) (*Template, erro
 // deadline a hibernated sandbox is destroyed, or archived under WithArchiveOnExpire.
 func (s *Sandbox) Hibernate(ctx context.Context) error {
 	s.pool.drain()
-	return doNoContent(ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/hibernate", nil, s.token, "hibernate")
+	return s.c.doNoContent(ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/hibernate", nil, s.token, "hibernate")
 }
 
 // Renew resets the lease to ttl from now (zero means the server default) and records the granted deadline in Deadline.
@@ -209,7 +209,7 @@ func (s *Sandbox) Renew(ctx context.Context, ttl time.Duration) (time.Time, erro
 	if err != nil {
 		return time.Time{}, err
 	}
-	rr, err := doJSON[renewResponse](ctx, s.c, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/renew", bytes.NewReader(body), s.token, "renew")
+	rr, err := s.c.doJSON[renewResponse](ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/renew", bytes.NewReader(body), s.token, "renew")
 	if err != nil {
 		return time.Time{}, err
 	}

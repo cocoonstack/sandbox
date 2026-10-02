@@ -66,7 +66,7 @@ func (c *Client) Tenants(ctx context.Context, after string, limit int) (*TenantL
 	if len(q) > 0 {
 		path += "?" + q.Encode()
 	}
-	return doJSONPtr[TenantList](ctx, c, http.MethodGet, c.addr, path, nil, c.apiToken, "tenants")
+	return c.doJSONPtr[TenantList](ctx, http.MethodGet, c.addr, path, nil, c.apiToken, "tenants")
 }
 
 // SetTenants replaces the entry node's whole tenant set (PUT /v1/tenants); a tenant left out stops authenticating, its claims stay.
@@ -113,7 +113,7 @@ func (c *Client) setTenantsAt(ctx context.Context, addr string, tenants []Tenant
 	if err != nil {
 		return nil, err
 	}
-	return doJSONPtr[TenantList](ctx, c, http.MethodPut, addr, "/v1/tenants", bytes.NewReader(body), c.apiToken, "tenants")
+	return c.doJSONPtr[TenantList](ctx, http.MethodPut, addr, "/v1/tenants", bytes.NewReader(body), c.apiToken, "tenants")
 }
 
 func (c *Client) putTenantAt(ctx context.Context, addr string, tenant TenantSpec) error {
@@ -121,11 +121,11 @@ func (c *Client) putTenantAt(ctx context.Context, addr string, tenant TenantSpec
 	if err != nil {
 		return err
 	}
-	return doNoContent(ctx, c, http.MethodPut, addr, "/v1/tenants/"+url.PathEscape(tenant.Name), bytes.NewReader(body), c.apiToken, "tenant")
+	return c.doNoContent(ctx, http.MethodPut, addr, "/v1/tenants/"+url.PathEscape(tenant.Name), bytes.NewReader(body), c.apiToken, "tenant")
 }
 
 func (c *Client) deleteTenantAt(ctx context.Context, addr, name string) error {
-	return doNoContent(ctx, c, http.MethodDelete, addr, "/v1/tenants/"+url.PathEscape(name), nil, c.apiToken, "delete tenant")
+	return c.doNoContent(ctx, http.MethodDelete, addr, "/v1/tenants/"+url.PathEscape(name), nil, c.apiToken, "delete tenant")
 }
 
 // eachNode runs do on the entry node and every peer at once; a non-nil error means peer discovery failed and only the entry node was reached.
