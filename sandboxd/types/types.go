@@ -71,6 +71,7 @@ const (
 	maxEnvValueBytes = 8 << 10
 	maxEnvBytes      = 64 << 10
 	maxInjectHosts   = 8
+	maxPlaceholder   = 256
 )
 
 var (
@@ -219,10 +220,11 @@ func (md Metadata) encodedSize() int {
 	return size
 }
 
-// EnvInject sends a host-only entry's value as Header on intercepted requests to Hosts, each exact or "*." suffix.
+// EnvInject sends a host-only entry's value as Header on intercepted requests to Hosts, each exact or "*." suffix; a set Placeholder limits it to requests whose Header carries exactly that value.
 type EnvInject struct {
-	Hosts  []string `json:"hosts"`
-	Header string   `json:"header"`
+	Hosts       []string `json:"hosts"`
+	Header      string   `json:"header"`
+	Placeholder string   `json:"placeholder,omitempty"`
 }
 
 // Matches reports whether the lowercased host is one of the inject hosts.
@@ -247,11 +249,14 @@ func (i *EnvInject) validate(name string) error {
 			return fmt.Errorf("env %s: inject host %q must be a lowercase host name or *.suffix", name, h)
 		}
 	}
+	if len(i.Placeholder) > maxPlaceholder || !httpguts.ValidHeaderFieldValue(i.Placeholder) || strings.TrimSpace(i.Placeholder) != i.Placeholder {
+		return fmt.Errorf("env %s: inject placeholder must be at most %d bytes of header value without control characters or surrounding space", name, maxPlaceholder)
+	}
 	return nil
 }
 
 func (i *EnvInject) size() int {
-	n := len(i.Header)
+	n := len(i.Header) + len(i.Placeholder)
 	for _, h := range i.Hosts {
 		n += len(h)
 	}
@@ -262,7 +267,7 @@ func (i *EnvInject) equal(other *EnvInject) bool {
 	if i == nil || other == nil {
 		return i == other
 	}
-	return i.Header == other.Header && slices.Equal(i.Hosts, other.Hosts)
+	return i.Header == other.Header && i.Placeholder == other.Placeholder && slices.Equal(i.Hosts, other.Hosts)
 }
 
 // EnvVar is one entry of a claim's environment; a nil Guest means the entry reaches the guest.

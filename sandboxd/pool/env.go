@@ -188,7 +188,7 @@ func (c claimSecrets) Header(name string) (header, value string, ok bool) {
 func (c claimSecrets) Credentials(host string) []egress.Credential {
 	var out []egress.Credential
 	for name, v := range c.sb.Injections(host) {
-		out = append(out, egress.Credential{Name: name, Header: v.Inject.Header, Value: v.Value})
+		out = append(out, egress.Credential{Name: name, Header: v.Inject.Header, Value: v.Value, Placeholder: v.Inject.Placeholder})
 	}
 	return out
 }

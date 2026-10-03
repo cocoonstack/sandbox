@@ -145,6 +145,10 @@ func run(addr, token, template, echo, secret, sse string) error {
 	if env, err = b.Env(ctx); err != nil || len(env) != 1 {
 		return fmt.Errorf("env after refused patches %v %v, want only the original entry", env, err)
 	}
+	if err = expectPlaceholder(ctx, b, echo, "ph-"+stamp); err != nil {
+		return err
+	}
+	fmt.Println("  a placeholder credential reached the origin only on the request that carried its placeholder")
 	if err = b.SetEnv(ctx, map[string]sandbox.EnvVar{}); err != nil {
 		return fmt.Errorf("clear: %w", err)
 	}
@@ -193,6 +197,27 @@ func recheck(addr, token, echo, reattach string) error {
 
 func credential(echo, value string) map[string]sandbox.EnvVar {
 	return map[string]sandbox.EnvVar{entry: {Value: value, Guest: new(false), Inject: &sandbox.EnvInject{Hosts: []string{echo}, Header: header}}}
+}
+
+func expectPlaceholder(ctx context.Context, sb *sandbox.Sandbox, echo, value string) error {
+	entry := &sandbox.EnvVar{Value: value, Guest: new(false), Inject: &sandbox.EnvInject{Hosts: []string{echo}, Header: "X-Ph-Key", Placeholder: "@PH_KEY@"}}
+	if err := sb.PatchEnv(ctx, map[string]*sandbox.EnvVar{"PH_KEY": entry}); err != nil {
+		return fmt.Errorf("placeholder inject: %w", err)
+	}
+	for sent, want := range map[string]bool{"": false, "@PH_KEY@": true, "@OTHER@": false} {
+		header := ""
+		if sent != "" {
+			header = fmt.Sprintf("-H 'X-Ph-Key: %s' ", sent)
+		}
+		out, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -sS -x %s %shttps://%s/headers", proxy, header, echo))
+		if err != nil {
+			return fmt.Errorf("placeholder exec: %w (%s)", err, out)
+		}
+		if strings.Contains(out, value) != want {
+			return fmt.Errorf("guest sent X-Ph-Key %q: origin saw the credential %v, want %v:\n%s", sent, !want, want, out)
+		}
+	}
+	return nil
 }
 
 func expectHeader(ctx context.Context, sb *sandbox.Sandbox, echo, want, not, secret string) error {

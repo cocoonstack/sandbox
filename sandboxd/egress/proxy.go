@@ -46,11 +46,12 @@ type TransferFunc func(ev Event, sent, received int64)
 // AuditFunc receives every egress decision the proxy takes.
 type AuditFunc func(Event)
 
-// Credential is a claim-supplied header the proxy sets on an intercepted request.
+// Credential is a claim-supplied header the proxy sets on an intercepted request; a set Placeholder must be the guest's value for that header.
 type Credential struct {
-	Name   string
-	Header string
-	Value  string
+	Name        string
+	Header      string
+	Value       string
+	Placeholder string
 }
 
 // Secrets resolves a rule's Secret name to the header it injects, and a host to the claim's own credentials for it.
@@ -396,7 +397,7 @@ func (p *Proxy) reportTransfer(ev Event, sent, received int64) {
 	}
 }
 
-// inject sets the rule's secret, then on an intercepted request each claim credential whose header is still unset; guest values are overwritten.
+// inject sets the rule's secret, then on an intercepted request each claim credential whose header is still unset and whose placeholder, if any, the guest sent.
 func (p *Proxy) inject(rule Rule, h http.Header, host string, mitm bool) string {
 	if p.secrets == nil {
 		return ""
@@ -412,7 +413,8 @@ func (p *Proxy) inject(rule Rule, h http.Header, host string, mitm bool) string 
 		return strings.Join(names, ",")
 	}
 	for _, c := range p.secrets.Credentials(strings.ToLower(host)) {
-		if c.Value == "" || slices.ContainsFunc(set, func(s string) bool { return strings.EqualFold(s, c.Header) }) {
+		if c.Value == "" || (c.Placeholder != "" && h.Get(c.Header) != c.Placeholder) ||
+			slices.ContainsFunc(set, func(s string) bool { return strings.EqualFold(s, c.Header) }) {
 			continue
 		}
 		h.Set(c.Header, c.Value)

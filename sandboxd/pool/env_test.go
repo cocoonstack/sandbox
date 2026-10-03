@@ -575,6 +575,20 @@ func TestInjectsSurviveARestartAndAReloadThatDropsTheInterceptStopsThem(t *testi
 	}
 }
 
+func TestAPlaceholderRidesTheEnvWriteIntoTheCredential(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()})
+	sb := mustClaim(t, m, testKey)
+	patch := types.EnvPatch{"KEY": {Value: "k", Guest: hostOnly, Inject: &types.EnvInject{Hosts: []string{"api.github.com"}, Header: "X-Api-Key", Placeholder: "@KEY@"}}}
+	if err := m.PatchEnv(t.Context(), sb.ID, patch, ""); err != nil {
+		t.Fatalf("inject with a placeholder: %v", err)
+	}
+	if creds := (claimSecrets{m: m, sb: sb}).Credentials("api.github.com"); len(creds) != 1 || creds[0].Placeholder != "@KEY@" {
+		t.Errorf("credentials %+v, want one carrying the placeholder", creds)
+	}
+}
+
 func TestALostInterceptRefusesOnlyAChangedInject(t *testing.T) {
 	eng := newFakeEngine()
 	eng.sockRoot = sockRoot(t)

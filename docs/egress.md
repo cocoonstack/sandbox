@@ -303,10 +303,23 @@ config:
 ```
 
 On an intercepted request to one of `hosts`, the proxy sets `header` to the
-entry's value, overwriting whatever the guest sent, so the guest can hold a
-placeholder. The entry rides the claim request or any `/env` write, and
-rotation is the same `PATCH`, accepted on a hibernated or archived claim
-without waking it.
+entry's value, overwriting whatever the guest sent. With `placeholder` set,
+it does so only on requests whose `header` carries exactly that value and
+leaves every other request to those hosts untouched, so a tool opts in per
+request while a browser on the same host gets nothing:
+
+```jsonc
+"GH_GIT": { "value": "Basic …", "guest": false,
+            "inject": { "hosts": ["github.com"], "header": "Authorization", "placeholder": "Basic @GH_GIT@" } }
+```
+
+```sh
+git config --global http.https://github.com/.extraHeader "Authorization: Basic @GH_GIT@"
+```
+
+The placeholder is not a secret: it stays in the guest and in `GET /env`.
+The entry rides the claim request or any `/env` write, and rotation is the
+same `PATCH`, accepted on a hibernated or archived claim without waking it.
 
 - **Envelope.** The operator still decides which hosts can carry a
   credential: every host must be covered by an `intercept: true` rule of the
@@ -315,12 +328,13 @@ without waking it.
   plaintext forward request.
 - **Precedence.** The pool rule's own `secret` is set first and wins: a
   credential naming that header for a host the rule covers is a 400. Among
-  credentials for the same header, the first by entry name wins. An empty
-  value injects nothing.
+  credentials for the same header, the first by entry name whose placeholder
+  (if any) the request carries wins. An empty value injects nothing.
 - **Shape.** `hosts` holds 1 to 8 lowercase names or `*.suffix` patterns
   (no bare `*`, no port); `header` is any header name except `Host`,
-  `Content-Length` and the hop-by-hop ones. `GET /env` returns `inject` with
-  the value blanked.
+  `Content-Length` and the hop-by-hop ones; `placeholder`, when set, is at most
+  256 bytes of header value without control characters or surrounding space.
+  `GET /env` returns `inject` with the value blanked.
 - **Reload.** A reload that drops the covering intercept rule stops that
   injection on the next request and logs which claims lost which hosts.
 - **Audit.** An injection is recorded as `claim:<entry name>` next to the
