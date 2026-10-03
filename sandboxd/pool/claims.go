@@ -51,21 +51,29 @@ type claimDTO struct {
 	Failed         string             `json:"failed,omitempty"`
 }
 
+// claimRow is one claim's projection and, once a commit has encoded it, its JSON member; set replaces a row, never edits it.
+type claimRow struct {
+	dto claimDTO
+	raw []byte
+}
+
 // claimStore persists claimed sandboxes across daemon restarts; warm VMs are not persisted.
 type claimStore struct {
 	path string
 	sync bool
 
+	// writeMu orders commits and guards every row's raw and buf.
 	writeMu sync.Mutex
+	buf     []byte
 
 	mu      sync.Mutex
-	dtos    map[string]claimDTO
+	rows    map[string]*claimRow
 	seq     uint64
 	written uint64
 }
 
 func newClaimStore(dataDir string, sync bool) *claimStore {
-	return &claimStore{path: filepath.Join(dataDir, "claims.json"), sync: sync, dtos: map[string]claimDTO{}}
+	return &claimStore{path: filepath.Join(dataDir, "claims.json"), sync: sync, rows: map[string]*claimRow{}}
 }
 
 func (s *claimStore) load() (map[string]*types.Sandbox, error) {
@@ -88,7 +96,7 @@ func (s *claimStore) set(sbs ...*types.Sandbox) claimSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, sb := range sbs {
-		s.dtos[sb.ID] = dtoOf(sb)
+		s.rows[sb.ID] = &claimRow{dto: dtoOf(sb)}
 	}
 	s.seq++
 	return claimSnapshot{seq: s.seq}
@@ -99,7 +107,7 @@ func (s *claimStore) del(ids ...string) claimSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, id := range ids {
-		delete(s.dtos, id)
+		delete(s.rows, id)
 	}
 	s.seq++
 	return claimSnapshot{seq: s.seq}
@@ -122,15 +130,15 @@ func (s *claimStore) pending(snap claimSnapshot) bool {
 func (s *claimStore) reset(claims map[string]*types.Sandbox) claimSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.dtos = make(map[string]claimDTO, len(claims))
+	s.rows = make(map[string]*claimRow, len(claims))
 	for id, sb := range claims {
-		s.dtos[id] = dtoOf(sb)
+		s.rows[id] = &claimRow{dto: dtoOf(sb)}
 	}
 	s.seq++
 	return claimSnapshot{seq: s.seq}
 }
 
-// commit atomically replaces claims.json; fsync is opt-in (sync_claims) so the claim path stays fast by default.
+// commit atomically replaces claims.json, encoding only the rows changed since the last commit; fsync is opt-in (sync_claims).
 func (s *claimStore) commit(snap claimSnapshot) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -139,13 +147,24 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 		s.mu.Unlock()
 		return nil
 	}
-	dtos, seq := maps.Clone(s.dtos), s.seq
+	rows, seq := slices.Collect(maps.Values(s.rows)), s.seq
 	s.mu.Unlock()
-	raw, err := json.Marshal(dtos)
-	if err != nil {
-		return fmt.Errorf("encode claims: %w", err)
+	s.buf = append(s.buf[:0], '{')
+	for i, row := range rows {
+		if row.raw == nil {
+			raw, err := encodeRow(row.dto)
+			if err != nil {
+				return err
+			}
+			row.raw = raw
+		}
+		if i > 0 {
+			s.buf = append(s.buf, ',')
+		}
+		s.buf = append(s.buf, row.raw...)
 	}
-	if err := s.replace(raw); err != nil {
+	s.buf = append(s.buf, '}')
+	if err := s.replace(s.buf); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -185,6 +204,18 @@ func (s *claimStore) synced() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.written == s.seq
+}
+
+func encodeRow(dto claimDTO) ([]byte, error) {
+	key, err := json.Marshal(dto.ID)
+	if err != nil {
+		return nil, fmt.Errorf("encode claim %s: %w", dto.ID, err)
+	}
+	val, err := json.Marshal(dto)
+	if err != nil {
+		return nil, fmt.Errorf("encode claim %s: %w", dto.ID, err)
+	}
+	return slices.Concat(key, []byte{':'}, val), nil
 }
 
 func dtoOf(sb *types.Sandbox) claimDTO {
