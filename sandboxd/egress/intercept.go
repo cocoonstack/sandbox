@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 const (
@@ -48,7 +50,7 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 	}
 	// a guest that never sends a ClientHello would pin this goroutine until the sandbox dies.
 	_ = client.SetDeadline(time.Now().Add(interceptTimeout))
-	tlsConn := tls.Server(withBuffered(client, brw.Reader), cfg)
+	tlsConn := tls.Server(utils.WithBuffered(client, brw.Reader), cfg)
 	if err := tlsConn.HandshakeContext(r.Context()); err != nil {
 		return
 	}

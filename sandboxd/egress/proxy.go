@@ -439,18 +439,6 @@ func (c *countingBody) Read(b []byte) (int, error) {
 	return n, err
 }
 
-type bufferedConn struct {
-	net.Conn
-	r *bufio.Reader
-}
-
-func (c *bufferedConn) Read(b []byte) (int, error) {
-	if c.r.Buffered() > 0 {
-		return c.r.Read(b)
-	}
-	return c.Conn.Read(b)
-}
-
 func stripHop(h http.Header) {
 	// Connection may name additional hop headers this hop must consume.
 	for _, v := range h.Values("Connection") {
@@ -486,13 +474,6 @@ func flushBuffered(r *bufio.Reader, w io.Writer) (int64, error) {
 	b, _ := r.Peek(r.Buffered())
 	n, err := w.Write(b)
 	return int64(n), err
-}
-
-func withBuffered(c net.Conn, r *bufio.Reader) net.Conn {
-	if r.Buffered() == 0 {
-		return c
-	}
-	return &bufferedConn{Conn: c, r: r}
 }
 
 func spliceable(c net.Conn) net.Conn {

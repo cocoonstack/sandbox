@@ -22,6 +22,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 const (
@@ -275,10 +276,7 @@ func (e *Engine) DialSilkd(ctx context.Context, vsockSocket string) (net.Conn, e
 		_ = conn.Close()
 		return nil, fmt.Errorf("hybrid vsock CONNECT %d: %s", silkdPort, strings.TrimSpace(reply))
 	}
-	if r.Buffered() > 0 {
-		return &bufferedConn{Conn: conn, r: r}, nil
-	}
-	return conn, nil
+	return utils.WithBuffered(conn, r), nil
 }
 
 // Probe polls until silkd completes an info round-trip — the claim-ready signal.
@@ -440,14 +438,6 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 	}
 	return nil
 }
-
-// bufferedConn serves bytes read past the handshake line before the socket's own.
-type bufferedConn struct {
-	net.Conn
-	r *bufio.Reader
-}
-
-func (b *bufferedConn) Read(p []byte) (int, error) { return b.r.Read(p) }
 
 // EgressSocketPath is the host UDS the VMM connects when the guest dials CID2:egressPort.
 func EgressSocketPath(vsockSocket string) string {

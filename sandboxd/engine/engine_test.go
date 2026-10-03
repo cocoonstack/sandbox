@@ -63,10 +63,10 @@ func TestDialSilkdReturnsRawConnWithoutOverRead(t *testing.T) {
 
 func TestDialSilkdRejectsOverlongReply(t *testing.T) {
 	path := sockPath(t)
-	listenMuxer(t, path, strings.Repeat("O", connectMax)+"\n")
+	listenMuxer(t, path, "OK "+strings.Repeat("0", connectMax)+"\n")
 
-	if _, err := New("cocoon", nil, nil, false, false, "").DialSilkd(t.Context(), path); err == nil {
-		t.Error("got nil, want overlong reply rejection")
+	if _, err := New("cocoon", nil, nil, false, false, "").DialSilkd(t.Context(), path); !errors.Is(err, bufio.ErrBufferFull) {
+		t.Errorf("got %v, want bufio.ErrBufferFull", err)
 	}
 }
 
