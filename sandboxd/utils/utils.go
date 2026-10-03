@@ -2,6 +2,7 @@
 package utils
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
@@ -11,11 +12,31 @@ import (
 	"path/filepath"
 )
 
+type bufferedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *bufferedConn) Read(b []byte) (int, error) {
+	if c.r.Buffered() > 0 {
+		return c.r.Read(b)
+	}
+	return c.Conn.Read(b)
+}
+
 // CloseWrite signals EOF to the peer without tearing down the read direction.
 func CloseWrite(conn net.Conn) {
 	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
 		_ = cw.CloseWrite()
 	}
+}
+
+// WithBuffered returns c reading r's buffered bytes first; c itself when r holds none.
+func WithBuffered(c net.Conn, r *bufio.Reader) net.Conn {
+	if r.Buffered() == 0 {
+		return c
+	}
+	return &bufferedConn{Conn: c, r: r}
 }
 
 // WriteFileSync durably replaces path with data (temp + fsync + rename + dir fsync).

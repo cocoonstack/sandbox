@@ -22,6 +22,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 const (
@@ -262,7 +263,8 @@ func (e *Engine) DialSilkd(ctx context.Context, vsockSocket string) (net.Conn, e
 		_ = conn.Close()
 		return nil, fmt.Errorf("write CONNECT: %w", err)
 	}
-	reply, err := readLine(conn, connectMax)
+	r := bufio.NewReaderSize(conn, connectMax)
+	reply, err := readBufLine(r, connectMax)
 	if err != nil {
 		_ = conn.Close()
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -274,7 +276,7 @@ func (e *Engine) DialSilkd(ctx context.Context, vsockSocket string) (net.Conn, e
 		_ = conn.Close()
 		return nil, fmt.Errorf("hybrid vsock CONNECT %d: %s", silkdPort, strings.TrimSpace(reply))
 	}
-	return conn, nil
+	return utils.WithBuffered(conn, r), nil
 }
 
 // Probe polls until silkd completes an info round-trip — the claim-ready signal.
@@ -497,22 +499,6 @@ func readBufLine(r *bufio.Reader, limit int) (string, error) {
 		return "", fmt.Errorf("reply exceeds %d bytes", limit)
 	}
 	return string(line[:len(line)-1]), nil
-}
-
-// readLine reads byte-wise so nothing past the newline is consumed.
-func readLine(conn net.Conn, limit int) (string, error) {
-	var sb strings.Builder
-	var b [1]byte
-	for sb.Len() < limit {
-		if _, err := io.ReadFull(conn, b[:]); err != nil {
-			return "", err
-		}
-		if b[0] == '\n' {
-			return sb.String(), nil
-		}
-		sb.WriteByte(b[0])
-	}
-	return "", fmt.Errorf("reply exceeds %d bytes", limit)
 }
 
 func tail(s string) string {
