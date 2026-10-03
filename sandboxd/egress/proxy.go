@@ -343,8 +343,10 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	ev.Injected, used = p.inject(rule, out, ev.Host, mitm)
 	olds, news := echoes(used)
 	if len(olds) > 0 {
-		// the transport then negotiates and decodes compression itself, so the body reaches the scrub as plain bytes.
-		out.Header.Del("Accept-Encoding")
+		// the transport then decodes compression itself, and no range splits a value, so the scrub sees every echo whole.
+		for _, h := range []string{"Accept-Encoding", "Range", "If-Range"} {
+			out.Header.Del(h)
+		}
 	}
 	var body *countingBody
 	if p.transfer != nil && out.Body != nil && out.Body != http.NoBody {
@@ -626,14 +628,14 @@ func replaceParam(raw, name, placeholder, value string) (string, bool) {
 	return strings.Join(pairs, "&"), true
 }
 
-// replaceMember swaps each string member named name whose value is placeholder, at any depth, leaving every other byte as sent.
+// replaceMember swaps each top-level string member named name whose value is placeholder, leaving every other byte as sent.
 func replaceMember(b []byte, name, placeholder, value string) ([]byte, bool) {
 	dec := jsontext.NewDecoder(bytes.NewReader(b))
 	var ends []int64
 	var lens []int
 	for {
 		kind, n := dec.StackIndex(dec.StackDepth())
-		if kind != '{' || n%2 == 0 || dec.PeekKind() != '"' {
+		if dec.StackDepth() != 1 || kind != '{' || n%2 == 0 || dec.PeekKind() != '"' {
 			if _, err := dec.ReadToken(); err != nil {
 				break
 			}
@@ -687,16 +689,22 @@ func substituteBody(out *http.Request, creds []Credential) []Credential {
 	return used
 }
 
-// echoes pairs each used query credential's value, as sent, URL-escaped and JSON-escaped, with its placeholder in the same form, so a response that reflects the URL cannot hand the guest the value.
+// echoes pairs each used query credential's value, as sent, URL-escaped and JSON-escaped in their common forms, with its placeholder in the same form, so a response that reflects the URL cannot hand the guest the value.
 func echoes(used []Credential) (olds, news [][]byte) {
 	for _, c := range used {
 		if c.Query == "" {
 			continue
 		}
-		pairs := [][2]string{{c.Value, c.Placeholder}, {url.QueryEscape(c.Value), url.QueryEscape(c.Placeholder)}}
+		pairs := [][2]string{
+			{c.Value, c.Placeholder},
+			{url.QueryEscape(c.Value), url.QueryEscape(c.Placeholder)},
+			{url.PathEscape(c.Value), url.PathEscape(c.Placeholder)},
+		}
 		if v, err := jsontext.AppendQuote(nil, c.Value); err == nil {
 			ph, _ := jsontext.AppendQuote(nil, c.Placeholder)
-			pairs = append(pairs, [2]string{string(v[1 : len(v)-1]), string(ph[1 : len(ph)-1])})
+			v, ph = v[1:len(v)-1], ph[1:len(ph)-1]
+			pairs = append(pairs, [2]string{string(v), string(ph)},
+				[2]string{strings.ReplaceAll(string(v), "/", `\/`), strings.ReplaceAll(string(ph), "/", `\/`)})
 		}
 		for _, p := range pairs {
 			if !slices.ContainsFunc(olds, func(o []byte) bool { return string(o) == p[0] }) {

@@ -327,8 +327,8 @@ A key that a client sends as a query parameter takes `query` instead of
 `<query>=<placeholder>` pair of the URL gets the value, URL-escaped; the
 placeholder may arrive percent-encoded, and every other byte of the query
 stays as sent. With `body: true`, the same parameter of an
-`application/x-www-form-urlencoded` body, and every string member of that name,
-at any depth, of an `application/json` body, are filled too when they carry the
+`application/x-www-form-urlencoded` body, and a top-level string member of that
+name in an `application/json` body, are filled too when they carry the
 placeholder and the body has a known length of at most 64 KiB; any other body
 streams unchanged:
 
@@ -357,19 +357,24 @@ same `PATCH`, accepted on a hibernated or archived claim without waking it.
   credential: every host must be covered by an `intercept` rule (`true` or
   `"inject"`) of the claim's pool and allowed by its tenant class, or the write answers 400 and
   nothing is stored. A credential never widens egress and never rides a
-  plaintext forward request.
+  plaintext forward request. Keep a credential's `hosts` to the vendor's own
+  names: under a `*` rule, a pattern such as `*.amazonaws.com` or
+  `*.vercel.app` also matches subdomains a guest can own.
 - **Precedence.** The pool rule's own `secret` is set first and wins: a
   credential naming that header for a host the rule covers is a 400. Among
   credentials for the same header, the first by entry name whose placeholder
   (if any) the request carries wins. An empty value injects nothing.
 - **Echo.** Origins reflect the request URL: a redirect's `Location`, a
   paging link, an echoed query. On a request that carried a `query`
-  credential, its value, as sent, URL-escaped or JSON-escaped, reaches the
-  guest as the placeholder in every response header and in the response body.
-  The proxy drops the guest's `Accept-Encoding` on such a request so it reads
-  the body uncompressed, and streams it holding back only a tail that may begin
-  a match, so event streams stay live. A value the origin transforms otherwise
-  is beyond the scrub. `header` credentials, which origins do not reflect, are
+  credential, its value, as sent, query- or path-escaped, or JSON-escaped
+  (with or without `\/`), reaches the guest as the placeholder in every
+  response header and in the response body. The proxy drops the guest's
+  `Accept-Encoding`, `Range` and `If-Range` on such a request, so it reads the
+  whole body uncompressed, and streams it holding back only a tail that may
+  begin a match, so event streams stay live. A value the origin transforms
+  otherwise is beyond the scrub, and so is a value the origin stored earlier
+  and returns on a later request that carries no credential: the scrub covers
+  only the response to the request that sent the value. `header` credentials, which origins do not reflect, are
   not scrubbed and add no work to the response.
 - **Shape.** `hosts` holds 1 to 8 lowercase names or `*.suffix` patterns
   (no bare `*`, no port); exactly one of `header` and `query`; `header` is any

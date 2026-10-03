@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -379,7 +380,7 @@ func TestInterceptSubstitutesABodyCredentialInASmallFormOrJSONBody(t *testing.T)
 		name, ctype, body, want string
 	}{
 		{"form", "application/x-www-form-urlencoded", "a=1&access_token=%40FB%40&key=%40URL%40", "a=1&access_token=real+%22tok%22%26&key=%40URL%40"},
-		{"json", "application/json; charset=utf-8", `{"access_token":"@FB@", "message":"@FB@","n":{"access_token": "@FB@"},"a":["@FB@"]}`, `{"access_token":"real \"tok\"&", "message":"@FB@","n":{"access_token": "real \"tok\"&"},"a":["@FB@"]}`},
+		{"json", "application/json; charset=utf-8", `{"access_token":"@FB@", "message":"@FB@","n":{"access_token": "@FB@"},"a":["@FB@"]}`, `{"access_token":"real \"tok\"&", "message":"@FB@","n":{"access_token": "@FB@"},"a":["@FB@"]}`},
 		{"other type", "text/plain", "access_token=%40FB%40", "access_token=%40FB%40"},
 		{"oversized", "application/x-www-form-urlencoded", big, big},
 	} {
@@ -422,6 +423,47 @@ func TestAnAlwaysRuleKeepsItsHostUnderAnEarlierInjectRule(t *testing.T) {
 	}
 	if d, intercept := p.tunnelDecision("graph.test", 443, false); d != DecisionAllow || intercept {
 		t.Errorf("the SOCKS door on an inject rule: decision %v intercept %t, want a splice", d, intercept)
+	}
+}
+
+func TestARangeCannotSplitAScrubbedQueryValue(t *testing.T) {
+	secrets := credSecrets{creds: map[string][]Credential{"example.com": {{Name: "K", Query: "api_key", Value: "SECRETVALUE0123456789", Placeholder: "@K@"}}}}
+	p, guestRoots, upstream := interceptProxySecrets(t, Policy{Allow: []Rule{{Host: "*", Intercept: InterceptInject}}}, secrets, nil)
+	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	for _, r := range []string{"bytes=0-9", "bytes=10-20", "bytes=0-3,10-13"} {
+		conn := connectTLS(t, front.Listener.Addr().String(), "example.com:443", "example.com", guestRoots)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com/range?api_key=%40K%40", nil)
+		if err != nil {
+			t.Fatalf("build request: %v", err)
+		}
+		req.Header.Set("Range", r)
+		if err = req.Write(conn); err != nil {
+			t.Fatalf("write request: %v", err)
+		}
+		resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+		if err != nil {
+			t.Fatalf("read response: %v", err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		_ = conn.Close()
+		if resp.StatusCode != http.StatusOK || string(body) != "@K@" {
+			t.Errorf("Range %s: guest got %d %q, want the whole value scrubbed to its placeholder", r, resp.StatusCode, body)
+		}
+	}
+}
+
+func TestEchoesCoverTheCommonEscapings(t *testing.T) {
+	value := "ab cd/ef<g"
+	olds, news := echoes([]Credential{{Name: "K", Query: "k", Value: value, Placeholder: "@K@"}, {Name: "H", Header: "X-Key", Value: "hdr"}})
+	forms := []string{value, url.QueryEscape(value), url.PathEscape(value), `ab cd\/ef<g`}
+	s := &scrubReader{src: strings.NewReader(strings.Join(forms, "|") + "|hdr"), olds: olds, news: news, chunk: make([]byte, 64)}
+	out, _ := io.ReadAll(s)
+	if strings.Contains(string(out), "cd") || !strings.HasSuffix(string(out), "|hdr") {
+		t.Errorf("scrubbed %q, want every escaping of the query value replaced and the header credential untouched", out)
 	}
 }
 
@@ -506,6 +548,10 @@ func interceptProxySecrets(t *testing.T, policy Policy, secrets Secrets, events 
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Auth-Seen", r.Header.Get("Authorization"))
 		w.Header().Set("X-Host-Seen", r.Host)
+		if r.URL.Path == "/range" {
+			http.ServeContent(w, r, "", time.Time{}, strings.NewReader(r.URL.Query().Get("api_key")))
+			return
+		}
 		if r.URL.Path != "/echo" {
 			_, _ = io.WriteString(w, "hello")
 			return
