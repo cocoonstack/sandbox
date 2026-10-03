@@ -93,6 +93,11 @@ handshake carries no network RTT — a client across a WAN saves more, not
 less. An old daemon reporting proto 1 makes the SDK dial per call, which is
 the plain dial-per-RPC row.
 
+The node's own hybrid-vsock `CONNECT` handshake read its `OK <port>` reply one
+byte per `read(2)` until #304 moved it to one buffered read: 13 fewer syscalls
+per dial, dial-per-RPC p50 0.317 → 0.300 ms over 12 interleaved runs
+(bare metal, 2026-10-03, d5d7887 vs #304); the kept connection is unaffected.
+
 ## Boot chain
 
 Kernel entry → rootfs handoff (custom all-builtin kernel + Rust initramfs,
@@ -147,10 +152,15 @@ snapshot paths.
 
 `claim`/`release`/`hibernate`/`wake` persist `claims.json`, but the write is
 kept off the manager mutex — the lock every data-plane op contends. `set`/`del`
-update a projection map and bump a sequence under the store's own mutex;
-`commit()` clones that map under it, then marshals, writes, and renames off
-both the manager and the store mutex, serialized by its own write lock and
-coalescing by sequence so an older snapshot never overwrites a newer one. The
+replace a claim's row and bump a sequence under the store's own mutex;
+`commit()` collects the row pointers under it, then encodes only the rows
+changed since the last commit (each row keeps its encoded JSON member),
+concatenates the members, writes, and renames off both the manager and the
+store mutex, serialized by its own write lock and coalescing by sequence so an
+older snapshot never overwrites a newer one. Encoding only the changed rows
+took one commit at 5000 claims from 22.3 ms to 0.58 ms and 64 concurrent
+writers from ~320 to ~4400 commits/s (bare metal, xfs on NVMe, 2026-10-03,
+d5d7887 vs #305, arms A,B,B,A,A,B); the file write and rename are what remain. The
 write is unsynced by default: `sync_claims` adds an fsync of the file and its
 directory, about 0.3 ms per commit on NVMe (2000 claims, 280 KB) against
 0.05 ms, for a fleet that must keep its hibernated and archived sandboxes
