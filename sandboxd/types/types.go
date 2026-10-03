@@ -220,7 +220,7 @@ func (md Metadata) encodedSize() int {
 	return size
 }
 
-// EnvInject sends a host-only entry's value on intercepted requests to Hosts, exact or "*." suffix, as Header or as the Query parameter (with Body also in a small form or JSON body), only where the guest sent a set Placeholder.
+// EnvInject sends a host-only entry's value to Hosts, exact or "*." suffix, as Header or as the Query parameter, where the guest sent a set Placeholder.
 type EnvInject struct {
 	Hosts       []string `json:"hosts"`
 	Header      string   `json:"header,omitempty"`

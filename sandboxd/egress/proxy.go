@@ -32,6 +32,7 @@ const (
 	// maxIdleConns bounds the upstream pool per sandbox; a guest walking many hosts cannot park a descriptor per host.
 	maxIdleConns  = 64
 	maxInjectBody = 64 << 10
+	scrubChunk    = 8 << 10
 )
 
 var (
@@ -50,7 +51,7 @@ type TransferFunc func(ev Event, sent, received int64)
 // AuditFunc receives every egress decision the proxy takes.
 type AuditFunc func(Event)
 
-// Credential is a claim-supplied value the proxy sets on an intercepted request as Header, or in place of the Placeholder value of Query (and with Body in the request body); a set Placeholder must be what the guest sent.
+// Credential is a claim-supplied value the proxy sets on an intercepted request where the guest sent its Placeholder.
 type Credential struct {
 	Name        string
 	Header      string
@@ -232,7 +233,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		denied(w, host)
 		return
 	}
-	decision, intercept := p.tunnelDecision(host, port)
+	decision, intercept := p.tunnelDecision(host, port, true)
 	ev, route := p.routeEvent(Event{Method: r.Method, Host: host, Port: port, Decision: decision})
 	if intercept {
 		p.record(ev)
@@ -278,18 +279,22 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	p.reportTransfer(ev, early+sent, received)
 }
 
-func (p *Proxy) tunnelDecision(host string, port uint16) (decision Decision, intercept bool) {
+// tunnelDecision gates a tunnel by host; injects is false on a door that never injects, where an inject rule is a plain one.
+func (p *Proxy) tunnelDecision(host string, port uint16, injects bool) (decision Decision, intercept bool) {
 	// host-gate interception: the tunnel's CONNECT verb is not the request method.
 	if p.ca != nil {
 		switch rule, d := p.policy.EvalHost(host, port); {
 		case d != DecisionAllow:
-		case rule.Intercept == InterceptAlways,
-			rule.Intercept == InterceptInject && p.secrets != nil && len(p.secrets.Credentials(strings.ToLower(host))) > 0:
+		case rule.Intercept == InterceptAlways, rule.Intercept == InterceptInject && injects && p.holdsCredential(host):
 			return DecisionAllow, true
 		}
 	}
 	_, decision = p.policy.Eval(host, http.MethodConnect, port)
 	return decision, false
+}
+
+func (p *Proxy) holdsCredential(host string) bool {
+	return p.secrets != nil && slices.ContainsFunc(p.secrets.Credentials(strings.ToLower(host)), func(c Credential) bool { return c.Value != "" })
 }
 
 func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
@@ -336,6 +341,11 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	stripHop(out.Header)
 	var used []Credential
 	ev.Injected, used = p.inject(rule, out, ev.Host, mitm)
+	olds, news := echoes(used)
+	if len(olds) > 0 {
+		// the transport then negotiates and decodes compression itself, so the body reaches the scrub as plain bytes.
+		out.Header.Del("Accept-Encoding")
+	}
 	var body *countingBody
 	if p.transfer != nil && out.Body != nil && out.Body != http.NoBody {
 		body = &countingBody{ReadCloser: out.Body}
@@ -362,13 +372,18 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	defer func() { _ = resp.Body.Close() }()
 	maps.Copy(w.Header(), resp.Header)
 	stripHop(w.Header())
-	scrub(w.Header(), used)
+	var src io.Reader = resp.Body
+	if len(olds) > 0 {
+		scrubHeader(w.Header(), olds, news)
+		w.Header().Del("Content-Length")
+		src = &scrubReader{src: resp.Body, olds: olds, news: news, chunk: make([]byte, scrubChunk)}
+	}
 	w.WriteHeader(resp.StatusCode)
 	if streamed(resp) {
-		received = copyFlushing(w, resp.Body)
+		received = copyFlushing(w, src)
 		return
 	}
-	received, _ = io.Copy(w, resp.Body)
+	received, _ = io.Copy(w, src)
 }
 
 // transport returns the pool for route; the direct route keeps the base transports.
@@ -408,7 +423,7 @@ func (p *Proxy) reportTransfer(ev Event, sent, received int64) {
 	}
 }
 
-// inject sets the rule's secret, then on an intercepted request each claim credential where the guest asked for it; it returns the names set and the claim credentials used.
+// inject sets the rule's secret, then on an intercepted request the claim credentials the guest asked for, and returns the names set and the credentials used.
 func (p *Proxy) inject(rule Rule, out *http.Request, host string, mitm bool) (string, []Credential) {
 	if p.secrets == nil {
 		return "", nil
@@ -431,7 +446,7 @@ func (p *Proxy) inject(rule Rule, out *http.Request, host string, mitm bool) (st
 			if c.Body {
 				body = append(body, c)
 			}
-			if q, ok := replaceParam(out.URL.RawQuery, c.Query, c.Placeholder, url.QueryEscape(c.Value)); ok {
+			if q, ok := replaceParam(out.URL.RawQuery, c.Query, c.Placeholder, c.Value); ok {
 				out.URL.RawQuery = q
 				used = append(used, c)
 			}
@@ -469,6 +484,68 @@ func (c *countingBody) Read(b []byte) (int, error) {
 	n, err := c.ReadCloser.Read(b)
 	c.n.Add(int64(n))
 	return n, err
+}
+
+// scrubReader replaces each of olds with its news as a response body streams; it holds back only a tail that may begin a match.
+type scrubReader struct {
+	src        io.Reader
+	olds, news [][]byte
+	chunk      []byte
+	pending    []byte
+	out        []byte
+	off        int
+	err        error
+}
+
+func (s *scrubReader) Read(b []byte) (int, error) {
+	for s.off == len(s.out) && s.err == nil {
+		s.out, s.off = s.out[:0], 0
+		n, err := s.src.Read(s.chunk)
+		s.pending, s.err = append(s.pending, s.chunk[:n]...), err
+		s.scan()
+	}
+	if s.off == len(s.out) {
+		return 0, s.err
+	}
+	n := copy(b, s.out[s.off:])
+	s.off += n
+	return n, nil
+}
+
+func (s *scrubReader) scan() {
+	buf, i := s.pending, 0
+	for {
+		at, k := -1, 0
+		for j, old := range s.olds {
+			if idx := bytes.Index(buf[i:], old); idx >= 0 && (at < 0 || idx < at) {
+				at, k = idx, j
+			}
+		}
+		if at < 0 {
+			break
+		}
+		s.out = append(append(s.out, buf[i:i+at]...), s.news[k]...)
+		i += at + len(s.olds[k])
+	}
+	hold := 0
+	if s.err == nil {
+		hold = s.partial(buf[i:])
+	}
+	s.out = append(s.out, buf[i:len(buf)-hold]...)
+	s.pending = s.pending[:copy(s.pending, buf[len(buf)-hold:])]
+}
+
+func (s *scrubReader) partial(tail []byte) int {
+	longest := 0
+	for _, old := range s.olds {
+		longest = max(longest, len(old))
+	}
+	for k := min(len(tail), longest-1); k > 0; k-- {
+		if slices.ContainsFunc(s.olds, func(old []byte) bool { return len(old) > k && bytes.HasPrefix(old, tail[len(tail)-k:]) }) {
+			return k
+		}
+	}
+	return 0
 }
 
 func stripHop(h http.Header) {
@@ -526,26 +603,62 @@ func mediaType(h http.Header) string {
 	return strings.ToLower(strings.TrimSpace(mt))
 }
 
-// replaceParam swaps the value of each name=placeholder pair of a query or form string for escaped, leaving every other byte as sent.
-func replaceParam(raw, name, placeholder, escaped string) (string, bool) {
+// replaceParam swaps the value of each name=placeholder pair of a query or form string for the escaped value, leaving every other byte as sent.
+func replaceParam(raw, name, placeholder, value string) (string, bool) {
+	if raw == "" {
+		return raw, false
+	}
 	pairs := strings.Split(raw, "&")
-	found := false
+	escaped := ""
 	for i, pair := range pairs {
 		k, v, _ := strings.Cut(pair, "=")
 		if uk, err := url.QueryUnescape(k); err != nil || uk != name {
 			continue
 		}
 		if uv, err := url.QueryUnescape(v); err == nil && uv == placeholder {
-			pairs[i], found = k+"="+escaped, true
+			escaped = cmp.Or(escaped, url.QueryEscape(value))
+			pairs[i] = k + "=" + escaped
 		}
 	}
-	if !found {
+	if escaped == "" {
 		return raw, false
 	}
 	return strings.Join(pairs, "&"), true
 }
 
-// substituteBody swaps each credential's placeholder in a form or JSON body of known size up to maxInjectBody and returns the credentials it set.
+// replaceMember swaps each string member named name whose value is placeholder, at any depth, leaving every other byte as sent.
+func replaceMember(b []byte, name, placeholder, value string) ([]byte, bool) {
+	dec := jsontext.NewDecoder(bytes.NewReader(b))
+	var ends []int64
+	var lens []int
+	for {
+		kind, n := dec.StackIndex(dec.StackDepth())
+		if kind != '{' || n%2 == 0 || dec.PeekKind() != '"' {
+			if _, err := dec.ReadToken(); err != nil {
+				break
+			}
+			continue
+		}
+		raw, err := dec.ReadValue()
+		if err != nil {
+			break
+		}
+		if v, err := jsontext.AppendUnquote(nil, raw); err == nil && string(v) == placeholder && dec.StackPointer().LastToken() == name {
+			ends, lens = append(ends, dec.InputOffset()), append(lens, len(raw))
+		}
+	}
+	if len(ends) == 0 {
+		return b, false
+	}
+	quoted, _ := jsontext.AppendQuote(nil, value)
+	out, at := make([]byte, 0, len(b)+len(ends)*len(quoted)), int64(0)
+	for i, end := range ends {
+		out = append(append(out, b[at:end-int64(lens[i])]...), quoted...)
+		at = end
+	}
+	return append(out, b[at:]...), true
+}
+
 func substituteBody(out *http.Request, creds []Credential) []Credential {
 	if len(creds) == 0 || out.ContentLength <= 0 || out.ContentLength > maxInjectBody {
 		return nil
@@ -555,41 +668,49 @@ func substituteBody(out *http.Request, creds []Credential) []Credential {
 	if !form && mt != "application/json" {
 		return nil
 	}
-	b, err := io.ReadAll(out.Body)
-	if err != nil {
-		out.Body = io.NopCloser(io.MultiReader(bytes.NewReader(b), out.Body))
+	b := make([]byte, out.ContentLength)
+	if n, err := io.ReadFull(out.Body, b); err != nil {
+		out.Body = io.NopCloser(io.MultiReader(bytes.NewReader(b[:n]), out.Body))
 		return nil
 	}
 	var used []Credential
 	for _, c := range creds {
 		if form {
-			s, ok := replaceParam(string(b), c.Query, c.Placeholder, url.QueryEscape(c.Value))
-			if ok {
+			if s, ok := replaceParam(string(b), c.Query, c.Placeholder, c.Value); ok {
 				b, used = []byte(s), append(used, c)
 			}
-			continue
-		}
-		ph, _ := jsontext.AppendQuote(nil, c.Placeholder)
-		if bytes.Contains(b, ph) {
-			value, _ := jsontext.AppendQuote(nil, c.Value)
-			b, used = bytes.ReplaceAll(b, ph, value), append(used, c)
+		} else if nb, ok := replaceMember(b, c.Query, c.Placeholder, c.Value); ok {
+			b, used = nb, append(used, c)
 		}
 	}
 	out.Body, out.ContentLength = io.NopCloser(bytes.NewReader(b)), int64(len(b))
 	return used
 }
 
-// scrub turns an echo of a used credential's value in the response headers back into its placeholder, so a redirect cannot hand the guest the value.
-func scrub(h http.Header, used []Credential) {
-	if len(used) == 0 {
-		return
-	}
-	pairs := make([]string, 0, 4*len(used))
+// echoes pairs each used query credential's value, as sent, URL-escaped and JSON-escaped, with its placeholder in the same form, so a response that reflects the URL cannot hand the guest the value.
+func echoes(used []Credential) (olds, news [][]byte) {
 	for _, c := range used {
-		pairs = append(pairs, c.Value, c.Placeholder)
-		if c.Query != "" {
-			pairs = append(pairs, url.QueryEscape(c.Value), url.QueryEscape(c.Placeholder))
+		if c.Query == "" {
+			continue
 		}
+		pairs := [][2]string{{c.Value, c.Placeholder}, {url.QueryEscape(c.Value), url.QueryEscape(c.Placeholder)}}
+		if v, err := jsontext.AppendQuote(nil, c.Value); err == nil {
+			ph, _ := jsontext.AppendQuote(nil, c.Placeholder)
+			pairs = append(pairs, [2]string{string(v[1 : len(v)-1]), string(ph[1 : len(ph)-1])})
+		}
+		for _, p := range pairs {
+			if !slices.ContainsFunc(olds, func(o []byte) bool { return string(o) == p[0] }) {
+				olds, news = append(olds, []byte(p[0])), append(news, []byte(p[1]))
+			}
+		}
+	}
+	return olds, news
+}
+
+func scrubHeader(h http.Header, olds, news [][]byte) {
+	pairs := make([]string, 0, 2*len(olds))
+	for i := range olds {
+		pairs = append(pairs, string(olds[i]), string(news[i]))
 	}
 	r := strings.NewReplacer(pairs...)
 	for _, vs := range h {

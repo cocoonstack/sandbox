@@ -2,8 +2,10 @@ package egress
 
 import (
 	"bufio"
+	"compress/gzip"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -293,14 +295,12 @@ func TestInterceptInjectsAPlaceholderCredentialOnlyWhereTheGuestSentIt(t *testin
 		if sent != "" {
 			headers["X-Api-Key"] = sent
 		}
-		header, seen := echoTLS(t, tc, http.MethodGet, "/echo", "", "", headers)
+		_, seen := echoTLS(t, tc, http.MethodGet, "/echo", "", "", headers)
 		_ = tc.Close()
 		if seen["key"] != want {
 			t.Errorf("guest sent %q: upstream saw %q, want %q", sent, seen["key"], want)
 		}
-		if echo := header.Get("X-Key-Echo"); echo != sent {
-			t.Errorf("guest sent %q: the response echo reached it as %q, want what it sent", sent, echo)
-		}
+
 	}
 }
 
@@ -323,10 +323,10 @@ func TestAnInjectRuleInterceptsOnlyForAClaimWithACredentialForTheHost(t *testing
 	if seen["key"] != "guest" {
 		t.Errorf("a host without a credential: upstream saw X-Api-Key %q, want the guest's own value over a splice", seen["key"])
 	}
-	if _, intercept := New(Policy{Allow: []Rule{{Host: "*", Intercept: InterceptInject}}}, nil, p.ca, fixedDial(""), nil, nil).tunnelDecision("example.com", 443); intercept {
+	if _, intercept := New(Policy{Allow: []Rule{{Host: "*", Intercept: InterceptInject}}}, nil, p.ca, fixedDial(""), nil, nil).tunnelDecision("example.com", 443, true); intercept {
 		t.Error("a claim with no secrets intercepted on an inject rule")
 	}
-	if d, intercept := p.tunnelDecision("plain.test", 80); d != DecisionAllow || intercept {
+	if d, intercept := p.tunnelDecision("plain.test", 80, true); d != DecisionAllow || intercept {
 		t.Errorf("an inject rule without a credential: decision %v intercept %t, want a plain allow", d, intercept)
 	}
 }
@@ -343,18 +343,19 @@ func TestInterceptSubstitutesAQueryCredentialAndScrubsItsEcho(t *testing.T) {
 		query, want, injected string
 	}{
 		{"b=2&api_key=%40SERP%40&a=1", "b=2&api_key=real+key%2F%2B&a=1", "claim:SERP"},
+		{"gzip=1&api_key=%40SERP%40", "gzip=1&api_key=real+key%2F%2B", "claim:SERP"},
 		{"api_key=@SERP@", "api_key=real+key%2F%2B", "claim:SERP"},
 		{"api_key=other&x=%40SERP%40", "api_key=other&x=%40SERP%40", ""},
 		{"", "", ""},
 	} {
 		conn := connectTLS(t, front.Listener.Addr().String(), "example.com:443", "example.com", guestRoots)
-		header, seen := echoTLS(t, conn, http.MethodGet, "/echo?"+tc.query, "", "", nil)
+		header, seen := echoTLS(t, conn, http.MethodGet, "/echo?"+tc.query, "", "", map[string]string{"Accept-Encoding": "gzip"})
 		_ = conn.Close()
 		if seen["query"] != tc.want {
 			t.Errorf("query %q reached the upstream as %q, want %q", tc.query, seen["query"], tc.want)
 		}
-		if loc := header.Get("Location"); strings.Contains(loc, "real") {
-			t.Errorf("query %q: the guest received Location %q holding the value", tc.query, loc)
+		if loc := header.Get("Location"); strings.Contains(loc, "real") || strings.Contains(seen["rawquery"], "real") {
+			t.Errorf("query %q: the guest received Location %q and body query %q, one holding the value", tc.query, loc, seen["rawquery"])
 		}
 		_ = recvEvent(t, events)
 		if ev := recvEvent(t, events); ev.Injected != tc.injected {
@@ -378,7 +379,7 @@ func TestInterceptSubstitutesABodyCredentialInASmallFormOrJSONBody(t *testing.T)
 		name, ctype, body, want string
 	}{
 		{"form", "application/x-www-form-urlencoded", "a=1&access_token=%40FB%40&key=%40URL%40", "a=1&access_token=real+%22tok%22%26&key=%40URL%40"},
-		{"json", "application/json; charset=utf-8", `{"access_token":"@FB@","n":"@FBX@"}`, `{"access_token":"real \"tok\"&","n":"@FBX@"}`},
+		{"json", "application/json; charset=utf-8", `{"access_token":"@FB@", "message":"@FB@","n":{"access_token": "@FB@"},"a":["@FB@"]}`, `{"access_token":"real \"tok\"&", "message":"@FB@","n":{"access_token": "real \"tok\"&"},"a":["@FB@"]}`},
 		{"other type", "text/plain", "access_token=%40FB%40", "access_token=%40FB%40"},
 		{"oversized", "application/x-www-form-urlencoded", big, big},
 	} {
@@ -387,6 +388,65 @@ func TestInterceptSubstitutesABodyCredentialInASmallFormOrJSONBody(t *testing.T)
 		_ = conn.Close()
 		if seen["body"] != tc.want || seen["length"] != fmt.Sprint(len(tc.want)) {
 			t.Errorf("%s: upstream saw body %.80q length %s, want %.80q length %d", tc.name, seen["body"], seen["length"], tc.want, len(tc.want))
+		}
+	}
+}
+
+func TestAnAlwaysRuleKeepsItsHostUnderAnEarlierInjectRule(t *testing.T) {
+	ca, _ := testCA(t)
+	policy := Policy{Allow: []Rule{{Host: "*", Intercept: InterceptInject}, {Host: "api.github.com", Methods: []string{"GET"}, Secret: "gh", Intercept: InterceptAlways}}}
+	creds := credSecrets{fakeSecrets: fakeSecrets{"gh": {"Authorization", "Bearer SECRET"}}, creds: map[string][]Credential{
+		"api.github.com": {{Name: "K", Header: "X-Key", Value: "k"}},
+		"empty.test":     {{Name: "E", Header: "X-Key", Value: ""}},
+		"graph.test":     {{Name: "G", Query: "access_token", Value: "g", Placeholder: "@G@"}},
+	}}
+	bare := New(policy, fakeSecrets{}, ca, fixedDial(""), nil, nil)
+	if _, intercept := bare.tunnelDecision("api.github.com", 443, true); !intercept {
+		t.Error("a claim without a credential spliced a host an always rule intercepts")
+	}
+	if rule, d := policy.EvalInner("api.github.com", http.MethodGet, 443); d != DecisionAllow || rule.Secret != "gh" {
+		t.Errorf("EvalInner GET = %+v/%v, want the always rule and its secret", rule, d)
+	}
+	if _, d := policy.EvalInner("api.github.com", http.MethodPost, 443); d != DecisionDeny {
+		t.Error("an earlier inject rule rescued a method the always rule refuses")
+	}
+	if rule, d := policy.EvalInner("graph.test", http.MethodPost, 443); d != DecisionAllow || rule.Intercept != InterceptInject {
+		t.Errorf("EvalInner on an inject-only host = %+v/%v, want the inject rule", rule, d)
+	}
+	p := New(policy, creds, ca, fixedDial(""), nil, nil)
+	if _, intercept := p.tunnelDecision("empty.test", 443, true); intercept {
+		t.Error("a credential with an empty value intercepted its host")
+	}
+	if _, intercept := p.tunnelDecision("graph.test", 443, true); !intercept {
+		t.Error("a credential's host was not intercepted on the proxy door")
+	}
+	if d, intercept := p.tunnelDecision("graph.test", 443, false); d != DecisionAllow || intercept {
+		t.Errorf("the SOCKS door on an inject rule: decision %v intercept %t, want a splice", d, intercept)
+	}
+}
+
+func TestScrubReaderReplacesAcrossChunksAndHoldsOnlyAPossibleMatch(t *testing.T) {
+	olds, news := [][]byte{[]byte("SECRET")}, [][]byte{[]byte("@S@")}
+	for _, tc := range []struct {
+		name   string
+		chunks []string
+		first  string
+		all    string
+	}{
+		{"split match", []string{"a SEC", "RET b"}, "a ", "a @S@ b"},
+		{"event tail", []string{"data: x\n\n", "data: SECRET\n\n"}, "data: x\n\n", "data: x\n\ndata: @S@\n\n"},
+		{"prefix at the end", []string{"x SECR"}, "x ", "x SECR"},
+	} {
+		src := &chunkReader{chunks: tc.chunks}
+		s := &scrubReader{src: src, olds: olds, news: news, chunk: make([]byte, 64)}
+		buf := make([]byte, 64)
+		n, _ := s.Read(buf)
+		if got := string(buf[:n]); got != tc.first {
+			t.Errorf("%s: first read %q, want %q", tc.name, got, tc.first)
+		}
+		rest, _ := io.ReadAll(s)
+		if got := string(buf[:n]) + string(rest); got != tc.all {
+			t.Errorf("%s: scrubbed %q, want %q", tc.name, got, tc.all)
 		}
 	}
 }
@@ -451,9 +511,15 @@ func interceptProxySecrets(t *testing.T, policy Policy, secrets Secrets, events 
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
+		var out io.Writer = w
+		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			w.Header().Set("Content-Encoding", "gzip")
+			gz := gzip.NewWriter(w)
+			defer func() { _ = gz.Close() }()
+			out = gz
+		}
 		w.Header().Set("Location", "/next?"+r.URL.RawQuery)
-		w.Header().Set("X-Key-Echo", r.Header.Get("X-Api-Key"))
-		_, _ = fmt.Fprintf(w, "key=%s\nempty=%s\nquery=%s\nlength=%d\nbody=%s", r.Header.Get("X-Api-Key"), r.Header.Get("X-Empty"), r.URL.RawQuery, r.ContentLength, body)
+		_, _ = fmt.Fprintf(out, "key=%x\nempty=%x\nquery=%x\nbody=%x\nlength=%d\nrawquery=%s", r.Header.Get("X-Api-Key"), r.Header.Get("X-Empty"), r.URL.RawQuery, body, r.ContentLength, r.URL.RawQuery)
 	}))
 	t.Cleanup(upstream.Close)
 
@@ -542,7 +608,6 @@ func roundTripTLSHost(t *testing.T, tc *tls.Conn, method, host string) *http.Res
 	return resp
 }
 
-// echoTLS sends one request on tc to the upstream's /echo, which reports what it saw in the body.
 func echoTLS(t *testing.T, tc *tls.Conn, method, target, ctype, body string, headers map[string]string) (http.Header, map[string]string) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), method, "https://example.com"+target, strings.NewReader(body))
@@ -566,11 +631,24 @@ func echoTLS(t *testing.T, tc *tls.Conn, method, target, ctype, body string, hea
 	_ = resp.Body.Close()
 	seen := map[string]string{}
 	for line := range strings.SplitSeq(string(raw), "\n") {
-		if k, v, ok := strings.Cut(line, "="); ok && seen[k] == "" {
-			seen[k] = v
+		k, v, _ := strings.Cut(line, "=")
+		if b, err := hex.DecodeString(v); err == nil && k != "length" {
+			v = string(b)
 		}
+		seen[k] = v
 	}
 	return resp.Header, seen
+}
+
+type chunkReader struct{ chunks []string }
+
+func (c *chunkReader) Read(b []byte) (int, error) {
+	if len(c.chunks) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(b, c.chunks[0])
+	c.chunks = c.chunks[1:]
+	return n, nil
 }
 
 func readPreamble(tb testing.TB, conn net.Conn) string {

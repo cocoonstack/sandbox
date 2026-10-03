@@ -146,30 +146,36 @@ func (p Policy) Eval(host, method string, port uint16) (Rule, Decision) {
 	return Rule{}, DecisionDeny
 }
 
-// EvalHost matches by host and port only, preferring an intercept rule over an earlier plain match.
+// EvalHost matches by host and port only, preferring an always-intercept rule, then an inject rule, over an earlier plain match.
 func (p Policy) EvalHost(host string, port uint16) (Rule, Decision) {
 	host = strings.ToLower(host)
-	first := -1
+	best := -1
 	for i, r := range p.Allow {
 		switch {
 		case !r.matchHost(host) || !r.matchPort(port):
-		case r.Intercept != InterceptOff:
+		case r.Intercept == InterceptAlways:
 			return r, DecisionAllow
-		case first < 0:
-			first = i
+		case best < 0, r.Intercept == InterceptInject && p.Allow[best].Intercept == InterceptOff:
+			best = i
 		}
 	}
-	if first >= 0 {
-		return p.Allow[first], DecisionAllow
+	if best >= 0 {
+		return p.Allow[best], DecisionAllow
 	}
 	return Rule{}, DecisionDeny
 }
 
-// EvalInner matches only intercept rules, so a plain rule cannot shadow or rescue one.
+// EvalInner matches only intercept rules, so a plain rule cannot shadow or rescue one; an always-intercept rule for the host shadows every inject rule.
 func (p Policy) EvalInner(host, method string, port uint16) (Rule, Decision) {
 	host = strings.ToLower(host)
+	mode := InterceptInject
+	if slices.ContainsFunc(p.Allow, func(r Rule) bool {
+		return r.Intercept == InterceptAlways && r.matchHost(host) && r.matchPort(port)
+	}) {
+		mode = InterceptAlways
+	}
 	for _, r := range p.Allow {
-		if r.Intercept != InterceptOff && r.matches(host, method, port) {
+		if r.Intercept == mode && r.matches(host, method, port) {
 			return r, DecisionAllow
 		}
 	}

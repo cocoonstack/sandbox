@@ -89,7 +89,7 @@ func BenchmarkTunnelDecision(b *testing.B) {
 			b.Run(arm.name+"/"+host, func(b *testing.B) {
 				b.ReportAllocs()
 				for b.Loop() {
-					_, _ = p.tunnelDecision(host, 443)
+					_, _ = p.tunnelDecision(host, 443, true)
 				}
 			})
 		}
