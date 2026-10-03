@@ -25,6 +25,7 @@ type usageEvent struct {
 	Children  []string  `json:"children,omitempty"`
 	Reference string    `json:"ref,omitempty"`
 	Upstream  string    `json:"upstream,omitempty"`
+	Secret    string    `json:"secret,omitempty"`
 	Sent      int64     `json:"tx,omitzero"`
 	Received  int64     `json:"rx,omitzero"`
 }

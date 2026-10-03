@@ -62,7 +62,7 @@ func TestInterceptLeafCacheBounded(t *testing.T) {
 
 func TestInterceptInjectsSecretIntoHTTPS(t *testing.T) {
 	events := make(chan Event, 4)
-	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Methods: []string{"GET"}, Secret: "gh", Intercept: true}, events)
+	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Methods: []string{"GET"}, Secret: "gh", Intercept: InterceptAlways}, events)
 	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	front := httptest.NewServer(p)
 	defer front.Close()
@@ -91,7 +91,7 @@ func TestInterceptInjectsSecretIntoHTTPS(t *testing.T) {
 }
 
 func TestInterceptKeepsAClientHelloSentBeforeThe200(t *testing.T) {
-	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Methods: []string{"GET"}, Intercept: true}, nil)
+	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Methods: []string{"GET"}, Intercept: InterceptAlways}, nil)
 	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	front := httptest.NewServer(p)
 	defer front.Close()
@@ -116,7 +116,7 @@ func TestInterceptKeepsAClientHelloSentBeforeThe200(t *testing.T) {
 func TestInterceptBindsInnerRequestToInterceptRule(t *testing.T) {
 	policy := Policy{Allow: []Rule{
 		{Host: "*.example.com"},
-		{Host: "api.example.com", Secret: "gh", Intercept: true},
+		{Host: "api.example.com", Secret: "gh", Intercept: InterceptAlways},
 	}}
 	p, guestRoots, upstream := interceptProxyPolicy(t, policy, nil)
 	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
@@ -136,7 +136,7 @@ func TestInterceptBindsInnerRequestToInterceptRule(t *testing.T) {
 func TestInterceptCaptureEnforcesRuleMethod(t *testing.T) {
 	policy := Policy{Allow: []Rule{
 		{Host: "*.example.com"},
-		{Host: "api.example.com", Methods: []string{"GET"}, Intercept: true},
+		{Host: "api.example.com", Methods: []string{"GET"}, Intercept: InterceptAlways},
 	}}
 	p, guestRoots, upstream := interceptProxyPolicy(t, policy, nil)
 	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
@@ -155,8 +155,8 @@ func TestInterceptCaptureEnforcesRuleMethod(t *testing.T) {
 
 func TestInterceptReachesLaterInterceptRuleByMethod(t *testing.T) {
 	policy := Policy{Allow: []Rule{
-		{Host: "*.example.com", Methods: []string{"GET"}, Intercept: true},
-		{Host: "api.example.com", Methods: []string{"POST"}, Intercept: true},
+		{Host: "*.example.com", Methods: []string{"GET"}, Intercept: InterceptAlways},
+		{Host: "api.example.com", Methods: []string{"POST"}, Intercept: InterceptAlways},
 	}}
 	p, guestRoots, upstream := interceptProxyPolicy(t, policy, nil)
 	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
@@ -174,7 +174,7 @@ func TestInterceptReachesLaterInterceptRuleByMethod(t *testing.T) {
 }
 
 func TestInterceptForcesAuthorityOnForeignHost(t *testing.T) {
-	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Intercept: true}, nil)
+	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Intercept: InterceptAlways}, nil)
 	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	front := httptest.NewServer(p)
 	defer front.Close()
@@ -190,7 +190,7 @@ func TestInterceptForcesAuthorityOnForeignHost(t *testing.T) {
 }
 
 func TestCloseRevokesInterceptedSession(t *testing.T) {
-	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Intercept: true}, nil)
+	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Intercept: InterceptAlways}, nil)
 	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	front := httptest.NewServer(p)
 	defer front.Close()
@@ -216,7 +216,7 @@ func TestCloseRevokesInterceptedSession(t *testing.T) {
 }
 
 func TestInterceptFiltersByMethod(t *testing.T) {
-	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Methods: []string{"GET"}, Intercept: true}, nil)
+	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Methods: []string{"GET"}, Intercept: InterceptAlways}, nil)
 	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	front := httptest.NewServer(p)
 	defer front.Close()
@@ -232,7 +232,7 @@ func TestInterceptFiltersByMethod(t *testing.T) {
 }
 
 func TestInterceptRejectsUntrustedUpstream(t *testing.T) {
-	p, guestRoots, _ := interceptProxy(t, Rule{Host: "example.com", Intercept: true}, nil)
+	p, guestRoots, _ := interceptProxy(t, Rule{Host: "example.com", Intercept: InterceptAlways}, nil)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
@@ -254,36 +254,23 @@ func TestInterceptInjectsClaimCredentialsBelowThePoolSecret(t *testing.T) {
 		{Name: "EMPTY", Header: "X-Empty", Value: ""},
 		{Name: "LATER", Header: "X-Api-Key", Value: "k2"},
 	}}}
-	p, guestRoots, upstream := interceptProxySecrets(t, Policy{Allow: []Rule{{Host: "example.com", Secret: "gh", Intercept: true}}}, secrets, events)
+	p, guestRoots, upstream := interceptProxySecrets(t, Policy{Allow: []Rule{{Host: "example.com", Secret: "gh", Intercept: InterceptAlways}}}, secrets, events)
 	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
 	tc := connectTLS(t, front.Listener.Addr().String(), "Example.com:443", "example.com", guestRoots)
 	defer func() { _ = tc.Close() }()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com/x", nil)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	req.Header.Set("X-Api-Key", "placeholder")
-	req.Header.Set("X-Empty", "guest")
-	if err = req.Write(tc); err != nil {
-		t.Fatalf("write request: %v", err)
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(tc), req)
-	if err != nil {
-		t.Fatalf("read response: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+	header, seen := echoTLS(t, tc, http.MethodGet, "/echo", "", "", map[string]string{"X-Api-Key": "placeholder", "X-Empty": "guest"})
 
-	if got := resp.Header.Get("X-Key-Seen"); got != "k1" {
-		t.Errorf("upstream saw X-Api-Key %q, want the first claim credential in order", got)
+	if seen["key"] != "k1" {
+		t.Errorf("upstream saw X-Api-Key %q, want the first claim credential in order", seen["key"])
 	}
-	if got := resp.Header.Get("X-Auth-Seen"); got != "Bearer SECRET" {
+	if got := header.Get("X-Auth-Seen"); got != "Bearer SECRET" {
 		t.Errorf("upstream saw Authorization %q, want the pool secret kept over the claim's", got)
 	}
-	if got := resp.Header.Get("X-Empty-Seen"); got != "guest" {
-		t.Errorf("upstream saw X-Empty %q, want the guest's value kept for an empty credential", got)
+	if seen["empty"] != "guest" {
+		t.Errorf("upstream saw X-Empty %q, want the guest's value kept for an empty credential", seen["empty"])
 	}
 	_ = recvEvent(t, events)
 	if ev := recvEvent(t, events); ev.Injected != "gh,claim:API" {
@@ -295,31 +282,111 @@ func TestInterceptInjectsAPlaceholderCredentialOnlyWhereTheGuestSentIt(t *testin
 	secrets := credSecrets{creds: map[string][]Credential{"example.com": {
 		{Name: "GIT", Header: "X-Api-Key", Value: "real", Placeholder: "@GIT@"},
 	}}}
-	p, guestRoots, upstream := interceptProxySecrets(t, Policy{Allow: []Rule{{Host: "example.com", Intercept: true}}}, secrets, nil)
+	p, guestRoots, upstream := interceptProxySecrets(t, Policy{Allow: []Rule{{Host: "example.com", Intercept: InterceptAlways}}}, secrets, nil)
 	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	front := httptest.NewServer(p)
 	defer front.Close()
 
 	for sent, want := range map[string]string{"@GIT@": "real", "": "", "@OTHER@": "@OTHER@"} {
 		tc := connectTLS(t, front.Listener.Addr().String(), "example.com:443", "example.com", guestRoots)
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com/x", nil)
-		if err != nil {
-			t.Fatalf("build request: %v", err)
-		}
+		headers := map[string]string{}
 		if sent != "" {
-			req.Header.Set("X-Api-Key", sent)
+			headers["X-Api-Key"] = sent
 		}
-		if err = req.Write(tc); err != nil {
-			t.Fatalf("write request: %v", err)
-		}
-		resp, err := http.ReadResponse(bufio.NewReader(tc), req)
-		if err != nil {
-			t.Fatalf("read response: %v", err)
-		}
-		_ = resp.Body.Close()
+		header, seen := echoTLS(t, tc, http.MethodGet, "/echo", "", "", headers)
 		_ = tc.Close()
-		if got := resp.Header.Get("X-Key-Seen"); got != want {
-			t.Errorf("guest sent %q: upstream saw %q, want %q", sent, got, want)
+		if seen["key"] != want {
+			t.Errorf("guest sent %q: upstream saw %q, want %q", sent, seen["key"], want)
+		}
+		if echo := header.Get("X-Key-Echo"); echo != sent {
+			t.Errorf("guest sent %q: the response echo reached it as %q, want what it sent", sent, echo)
+		}
+	}
+}
+
+func TestAnInjectRuleInterceptsOnlyForAClaimWithACredentialForTheHost(t *testing.T) {
+	secrets := credSecrets{creds: map[string][]Credential{"example.com": {{Name: "KEY", Header: "X-Api-Key", Value: "real"}}}}
+	p, guestRoots, upstream := interceptProxySecrets(t, Policy{Allow: []Rule{{Host: "*", Intercept: InterceptInject}}}, secrets, nil)
+	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	tc := connectTLS(t, front.Listener.Addr().String(), "Example.com:443", "example.com", guestRoots)
+	_, seen := echoTLS(t, tc, http.MethodGet, "/echo", "", "", nil)
+	_ = tc.Close()
+	if seen["key"] != "real" {
+		t.Errorf("a host with a credential: upstream saw X-Api-Key %q, want it intercepted and injected", seen["key"])
+	}
+	tc = connectTLS(t, front.Listener.Addr().String(), "other.test:443", "example.com", trustUpstream(upstream))
+	_, seen = echoTLS(t, tc, http.MethodGet, "/echo", "", "", map[string]string{"X-Api-Key": "guest"})
+	_ = tc.Close()
+	if seen["key"] != "guest" {
+		t.Errorf("a host without a credential: upstream saw X-Api-Key %q, want the guest's own value over a splice", seen["key"])
+	}
+	if _, intercept := New(Policy{Allow: []Rule{{Host: "*", Intercept: InterceptInject}}}, nil, p.ca, fixedDial(""), nil, nil).tunnelDecision("example.com", 443); intercept {
+		t.Error("a claim with no secrets intercepted on an inject rule")
+	}
+	if d, intercept := p.tunnelDecision("plain.test", 80); d != DecisionAllow || intercept {
+		t.Errorf("an inject rule without a credential: decision %v intercept %t, want a plain allow", d, intercept)
+	}
+}
+
+func TestInterceptSubstitutesAQueryCredentialAndScrubsItsEcho(t *testing.T) {
+	secrets := credSecrets{creds: map[string][]Credential{"example.com": {{Name: "SERP", Query: "api_key", Value: "real key/+", Placeholder: "@SERP@"}}}}
+	events := make(chan Event, 8)
+	p, guestRoots, upstream := interceptProxySecrets(t, Policy{Allow: []Rule{{Host: "example.com", Intercept: InterceptAlways}}}, secrets, events)
+	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	for _, tc := range []struct {
+		query, want, injected string
+	}{
+		{"b=2&api_key=%40SERP%40&a=1", "b=2&api_key=real+key%2F%2B&a=1", "claim:SERP"},
+		{"api_key=@SERP@", "api_key=real+key%2F%2B", "claim:SERP"},
+		{"api_key=other&x=%40SERP%40", "api_key=other&x=%40SERP%40", ""},
+		{"", "", ""},
+	} {
+		conn := connectTLS(t, front.Listener.Addr().String(), "example.com:443", "example.com", guestRoots)
+		header, seen := echoTLS(t, conn, http.MethodGet, "/echo?"+tc.query, "", "", nil)
+		_ = conn.Close()
+		if seen["query"] != tc.want {
+			t.Errorf("query %q reached the upstream as %q, want %q", tc.query, seen["query"], tc.want)
+		}
+		if loc := header.Get("Location"); strings.Contains(loc, "real") {
+			t.Errorf("query %q: the guest received Location %q holding the value", tc.query, loc)
+		}
+		_ = recvEvent(t, events)
+		if ev := recvEvent(t, events); ev.Injected != tc.injected {
+			t.Errorf("query %q: audit Injected %q, want %q", tc.query, ev.Injected, tc.injected)
+		}
+	}
+}
+
+func TestInterceptSubstitutesABodyCredentialInASmallFormOrJSONBody(t *testing.T) {
+	secrets := credSecrets{creds: map[string][]Credential{"example.com": {
+		{Name: "FB", Query: "access_token", Body: true, Value: `real "tok"&`, Placeholder: "@FB@"},
+		{Name: "URLONLY", Query: "key", Value: "other", Placeholder: "@URL@"},
+	}}}
+	p, guestRoots, upstream := interceptProxySecrets(t, Policy{Allow: []Rule{{Host: "example.com", Intercept: InterceptAlways}}}, secrets, nil)
+	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	big := "access_token=%40FB%40&pad=" + strings.Repeat("x", maxInjectBody)
+	for _, tc := range []struct {
+		name, ctype, body, want string
+	}{
+		{"form", "application/x-www-form-urlencoded", "a=1&access_token=%40FB%40&key=%40URL%40", "a=1&access_token=real+%22tok%22%26&key=%40URL%40"},
+		{"json", "application/json; charset=utf-8", `{"access_token":"@FB@","n":"@FBX@"}`, `{"access_token":"real \"tok\"&","n":"@FBX@"}`},
+		{"other type", "text/plain", "access_token=%40FB%40", "access_token=%40FB%40"},
+		{"oversized", "application/x-www-form-urlencoded", big, big},
+	} {
+		conn := connectTLS(t, front.Listener.Addr().String(), "example.com:443", "example.com", guestRoots)
+		_, seen := echoTLS(t, conn, http.MethodPost, "/echo", tc.ctype, tc.body, nil)
+		_ = conn.Close()
+		if seen["body"] != tc.want || seen["length"] != fmt.Sprint(len(tc.want)) {
+			t.Errorf("%s: upstream saw body %.80q length %s, want %.80q length %d", tc.name, seen["body"], seen["length"], tc.want, len(tc.want))
 		}
 	}
 }
@@ -330,7 +397,7 @@ func TestInterceptStreamsAnEventStreamAsItArrives(t *testing.T) {
 	defer upstream.Close()
 	defer close(release)
 	ca, _ := testCA(t)
-	p := New(Policy{Allow: []Rule{{Host: "example.com", Intercept: true}}}, nil, ca, fixedDial(upstream.Listener.Addr().String()), nil, nil)
+	p := New(Policy{Allow: []Rule{{Host: "example.com", Intercept: InterceptAlways}}}, nil, ca, fixedDial(upstream.Listener.Addr().String()), nil, nil)
 	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	guestRoots := x509.NewCertPool()
 	guestRoots.AppendCertsFromPEM(ca.CertPEM())
@@ -348,7 +415,7 @@ func TestInterceptStreamsAnEventStreamAsItArrives(t *testing.T) {
 }
 
 func TestInterceptResumesTheGuestsTLSSession(t *testing.T) {
-	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Intercept: true}, nil)
+	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Intercept: InterceptAlways}, nil)
 	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	front := httptest.NewServer(p)
 	defer front.Close()
@@ -378,10 +445,15 @@ func interceptProxySecrets(t *testing.T, policy Policy, secrets Secrets, events 
 	t.Helper()
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Auth-Seen", r.Header.Get("Authorization"))
-		w.Header().Set("X-Key-Seen", r.Header.Get("X-Api-Key"))
-		w.Header().Set("X-Empty-Seen", r.Header.Get("X-Empty"))
 		w.Header().Set("X-Host-Seen", r.Host)
-		_, _ = io.WriteString(w, "hello")
+		if r.URL.Path != "/echo" {
+			_, _ = io.WriteString(w, "hello")
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Location", "/next?"+r.URL.RawQuery)
+		w.Header().Set("X-Key-Echo", r.Header.Get("X-Api-Key"))
+		_, _ = fmt.Fprintf(w, "key=%s\nempty=%s\nquery=%s\nlength=%d\nbody=%s", r.Header.Get("X-Api-Key"), r.Header.Get("X-Empty"), r.URL.RawQuery, r.ContentLength, body)
 	}))
 	t.Cleanup(upstream.Close)
 
@@ -468,6 +540,37 @@ func roundTripTLSHost(t *testing.T, tc *tls.Conn, method, host string) *http.Res
 		t.Fatalf("read response: %v", err)
 	}
 	return resp
+}
+
+// echoTLS sends one request on tc to the upstream's /echo, which reports what it saw in the body.
+func echoTLS(t *testing.T, tc *tls.Conn, method, target, ctype, body string, headers map[string]string) (http.Header, map[string]string) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), method, "https://example.com"+target, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if ctype != "" {
+		req.Header.Set("Content-Type", ctype)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	if err = req.Write(tc); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(tc), req)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	seen := map[string]string{}
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		if k, v, ok := strings.Cut(line, "="); ok && seen[k] == "" {
+			seen[k] = v
+		}
+	}
+	return resp.Header, seen
 }
 
 func readPreamble(tb testing.TB, conn net.Conn) string {

@@ -2,10 +2,12 @@ package egress
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/json/jsontext"
 	"fmt"
 	"io"
 	"maps"
@@ -14,6 +16,7 @@ import (
 	"net/http/httptrace"
 	"net/netip"
 	"net/textproto"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,7 +30,8 @@ import (
 const (
 	idleConnTimeout = 90 * time.Second
 	// maxIdleConns bounds the upstream pool per sandbox; a guest walking many hosts cannot park a descriptor per host.
-	maxIdleConns = 64
+	maxIdleConns  = 64
+	maxInjectBody = 64 << 10
 )
 
 var (
@@ -46,10 +50,12 @@ type TransferFunc func(ev Event, sent, received int64)
 // AuditFunc receives every egress decision the proxy takes.
 type AuditFunc func(Event)
 
-// Credential is a claim-supplied header the proxy sets on an intercepted request; a set Placeholder must be the guest's value for that header.
+// Credential is a claim-supplied value the proxy sets on an intercepted request as Header, or in place of the Placeholder value of Query (and with Body in the request body); a set Placeholder must be what the guest sent.
 type Credential struct {
 	Name        string
 	Header      string
+	Query       string
+	Body        bool
 	Value       string
 	Placeholder string
 }
@@ -275,7 +281,10 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 func (p *Proxy) tunnelDecision(host string, port uint16) (decision Decision, intercept bool) {
 	// host-gate interception: the tunnel's CONNECT verb is not the request method.
 	if p.ca != nil {
-		if rule, d := p.policy.EvalHost(host, port); d == DecisionAllow && rule.Intercept {
+		switch rule, d := p.policy.EvalHost(host, port); {
+		case d != DecisionAllow:
+		case rule.Intercept == InterceptAlways,
+			rule.Intercept == InterceptInject && p.secrets != nil && len(p.secrets.Credentials(strings.ToLower(host))) > 0:
 			return DecisionAllow, true
 		}
 	}
@@ -325,7 +334,8 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	out.RequestURI = ""
 	out.Close = false // the guest's Connection: close is its own; the upstream pool keeps the conn
 	stripHop(out.Header)
-	ev.Injected = p.inject(rule, out.Header, ev.Host, mitm)
+	var used []Credential
+	ev.Injected, used = p.inject(rule, out, ev.Host, mitm)
 	var body *countingBody
 	if p.transfer != nil && out.Body != nil && out.Body != http.NoBody {
 		body = &countingBody{ReadCloser: out.Body}
@@ -352,6 +362,7 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	defer func() { _ = resp.Body.Close() }()
 	maps.Copy(w.Header(), resp.Header)
 	stripHop(w.Header())
+	scrub(w.Header(), used)
 	w.WriteHeader(resp.StatusCode)
 	if streamed(resp) {
 		received = copyFlushing(w, resp.Body)
@@ -397,30 +408,49 @@ func (p *Proxy) reportTransfer(ev Event, sent, received int64) {
 	}
 }
 
-// inject sets the rule's secret, then on an intercepted request each claim credential whose header is still unset and whose placeholder, if any, the guest sent.
-func (p *Proxy) inject(rule Rule, h http.Header, host string, mitm bool) string {
+// inject sets the rule's secret, then on an intercepted request each claim credential where the guest asked for it; it returns the names set and the claim credentials used.
+func (p *Proxy) inject(rule Rule, out *http.Request, host string, mitm bool) (string, []Credential) {
 	if p.secrets == nil {
-		return ""
+		return "", nil
 	}
 	var names, set []string
 	if rule.Secret != "" {
 		if header, value, ok := p.secrets.Header(rule.Secret); ok && value != "" {
-			h.Set(header, value)
+			out.Header.Set(header, value)
 			names, set = append(names, rule.Secret), append(set, header)
 		}
 	}
 	if !mitm {
-		return strings.Join(names, ",")
+		return strings.Join(names, ","), nil
 	}
+	var used, body []Credential
 	for _, c := range p.secrets.Credentials(strings.ToLower(host)) {
-		if c.Value == "" || (c.Placeholder != "" && h.Get(c.Header) != c.Placeholder) ||
-			slices.ContainsFunc(set, func(s string) bool { return strings.EqualFold(s, c.Header) }) {
-			continue
+		switch {
+		case c.Value == "":
+		case c.Query != "":
+			if c.Body {
+				body = append(body, c)
+			}
+			if q, ok := replaceParam(out.URL.RawQuery, c.Query, c.Placeholder, url.QueryEscape(c.Value)); ok {
+				out.URL.RawQuery = q
+				used = append(used, c)
+			}
+		case c.Placeholder != "" && out.Header.Get(c.Header) != c.Placeholder,
+			slices.ContainsFunc(set, func(s string) bool { return strings.EqualFold(s, c.Header) }):
+		default:
+			out.Header.Set(c.Header, c.Value)
+			set, used = append(set, c.Header), append(used, c)
 		}
-		h.Set(c.Header, c.Value)
-		names, set = append(names, "claim:"+c.Name), append(set, c.Header)
 	}
-	return strings.Join(names, ",")
+	for _, c := range substituteBody(out, body) {
+		if !slices.ContainsFunc(used, func(u Credential) bool { return u.Name == c.Name }) {
+			used = append(used, c)
+		}
+	}
+	for _, c := range used {
+		names = append(names, "claim:"+c.Name)
+	}
+	return strings.Join(names, ","), used
 }
 
 func (p *Proxy) record(ev Event) {
@@ -488,8 +518,85 @@ func spliceable(c net.Conn) net.Conn {
 }
 
 func streamed(resp *http.Response) bool {
-	mediaType, _, _ := strings.Cut(resp.Header.Get("Content-Type"), ";")
-	return resp.ContentLength < 0 || strings.EqualFold(strings.TrimSpace(mediaType), "text/event-stream")
+	return resp.ContentLength < 0 || mediaType(resp.Header) == "text/event-stream"
+}
+
+func mediaType(h http.Header) string {
+	mt, _, _ := strings.Cut(h.Get("Content-Type"), ";")
+	return strings.ToLower(strings.TrimSpace(mt))
+}
+
+// replaceParam swaps the value of each name=placeholder pair of a query or form string for escaped, leaving every other byte as sent.
+func replaceParam(raw, name, placeholder, escaped string) (string, bool) {
+	pairs := strings.Split(raw, "&")
+	found := false
+	for i, pair := range pairs {
+		k, v, _ := strings.Cut(pair, "=")
+		if uk, err := url.QueryUnescape(k); err != nil || uk != name {
+			continue
+		}
+		if uv, err := url.QueryUnescape(v); err == nil && uv == placeholder {
+			pairs[i], found = k+"="+escaped, true
+		}
+	}
+	if !found {
+		return raw, false
+	}
+	return strings.Join(pairs, "&"), true
+}
+
+// substituteBody swaps each credential's placeholder in a form or JSON body of known size up to maxInjectBody and returns the credentials it set.
+func substituteBody(out *http.Request, creds []Credential) []Credential {
+	if len(creds) == 0 || out.ContentLength <= 0 || out.ContentLength > maxInjectBody {
+		return nil
+	}
+	mt := mediaType(out.Header)
+	form := mt == "application/x-www-form-urlencoded"
+	if !form && mt != "application/json" {
+		return nil
+	}
+	b, err := io.ReadAll(out.Body)
+	if err != nil {
+		out.Body = io.NopCloser(io.MultiReader(bytes.NewReader(b), out.Body))
+		return nil
+	}
+	var used []Credential
+	for _, c := range creds {
+		if form {
+			s, ok := replaceParam(string(b), c.Query, c.Placeholder, url.QueryEscape(c.Value))
+			if ok {
+				b, used = []byte(s), append(used, c)
+			}
+			continue
+		}
+		ph, _ := jsontext.AppendQuote(nil, c.Placeholder)
+		if bytes.Contains(b, ph) {
+			value, _ := jsontext.AppendQuote(nil, c.Value)
+			b, used = bytes.ReplaceAll(b, ph, value), append(used, c)
+		}
+	}
+	out.Body, out.ContentLength = io.NopCloser(bytes.NewReader(b)), int64(len(b))
+	return used
+}
+
+// scrub turns an echo of a used credential's value in the response headers back into its placeholder, so a redirect cannot hand the guest the value.
+func scrub(h http.Header, used []Credential) {
+	if len(used) == 0 {
+		return
+	}
+	pairs := make([]string, 0, 4*len(used))
+	for _, c := range used {
+		pairs = append(pairs, c.Value, c.Placeholder)
+		if c.Query != "" {
+			pairs = append(pairs, url.QueryEscape(c.Value), url.QueryEscape(c.Placeholder))
+		}
+	}
+	r := strings.NewReplacer(pairs...)
+	for _, vs := range h {
+		for i, v := range vs {
+			vs[i] = r.Replace(v)
+		}
+	}
 }
 
 func copyFlushing(w http.ResponseWriter, body io.Reader) int64 {

@@ -136,7 +136,7 @@ func (m *Manager) deliverEnv(ctx context.Context, sbs []*types.Sandbox, inherite
 // checkEnv admits an env this node can serve: its upstream entry, and inject headers the proxy may set.
 func (m *Manager) checkEnv(env types.Env) error {
 	for name, v := range env {
-		if v.Inject == nil {
+		if v.Inject == nil || v.Inject.Header == "" {
 			continue
 		}
 		if err := egress.CheckInjectHeader(v.Inject.Header); err != nil {
@@ -188,7 +188,7 @@ func (c claimSecrets) Header(name string) (header, value string, ok bool) {
 func (c claimSecrets) Credentials(host string) []egress.Credential {
 	var out []egress.Credential
 	for name, v := range c.sb.Injections(host) {
-		out = append(out, egress.Credential{Name: name, Header: v.Inject.Header, Value: v.Value, Placeholder: v.Inject.Placeholder})
+		out = append(out, egress.Credential{Name: name, Header: v.Inject.Header, Query: v.Inject.Query, Body: v.Inject.Body, Value: v.Value, Placeholder: v.Inject.Placeholder})
 	}
 	return out
 }

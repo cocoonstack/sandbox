@@ -2,6 +2,7 @@
 package egress
 
 import (
+	"encoding/json/jsontext"
 	"fmt"
 	"net/http"
 	"slices"
@@ -11,18 +12,54 @@ import (
 const (
 	DecisionDeny Decision = iota
 	DecisionAllow
+
+	InterceptOff    InterceptMode = 0
+	InterceptAlways InterceptMode = 1
+	InterceptInject InterceptMode = 2
 )
 
 // Decision is the policy verdict for one request.
 type Decision int
 
+// InterceptMode is a rule's "intercept": false, true, or "inject" for only the claims that inject on the host.
+type InterceptMode uint8
+
+func (m InterceptMode) MarshalJSONTo(enc *jsontext.Encoder) error {
+	switch m {
+	case InterceptAlways:
+		return enc.WriteToken(jsontext.True)
+	case InterceptInject:
+		return enc.WriteToken(jsontext.String("inject"))
+	default:
+		return enc.WriteToken(jsontext.False)
+	}
+}
+
+func (m *InterceptMode) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	tok, err := dec.ReadToken()
+	if err != nil {
+		return err
+	}
+	switch {
+	case tok.Kind() == 'f':
+		*m = InterceptOff
+	case tok.Kind() == 't':
+		*m = InterceptAlways
+	case tok.Kind() == '"' && tok.String() == "inject":
+		*m = InterceptInject
+	default:
+		return fmt.Errorf("intercept must be true, false or \"inject\", got %s", tok)
+	}
+	return nil
+}
+
 // Rule allows requests matching Host (exact, "*." suffix, or "*"), Methods and Ports; empty means any.
 type Rule struct {
-	Host      string   `json:"host"`
-	Methods   []string `json:"methods,omitempty"`
-	Ports     []uint16 `json:"ports,omitempty"`
-	Secret    string   `json:"secret,omitempty"`
-	Intercept bool     `json:"intercept,omitzero"`
+	Host      string        `json:"host"`
+	Methods   []string      `json:"methods,omitempty"`
+	Ports     []uint16      `json:"ports,omitempty"`
+	Secret    string        `json:"secret,omitempty"`
+	Intercept InterceptMode `json:"intercept,omitzero"`
 }
 
 // Covers reports whether the rule matches every host the pattern, exact or "*." suffix, matches.
@@ -66,9 +103,9 @@ type Policy struct {
 	Socks5 bool   `json:"socks5,omitzero"` // opts the SOCKS5 door in; a rule must still admit CONNECT
 }
 
-// Intercepts reports whether any rule terminates HTTPS; nil is false.
+// Intercepts reports whether any rule may terminate HTTPS; nil is false.
 func (p *Policy) Intercepts() bool {
-	return p != nil && slices.ContainsFunc(p.Allow, func(r Rule) bool { return r.Intercept })
+	return p != nil && slices.ContainsFunc(p.Allow, func(r Rule) bool { return r.Intercept != InterceptOff })
 }
 
 // Validate rejects a policy the proxy could never honor; an empty allow-list is valid and denies everything.
@@ -79,6 +116,9 @@ func (p Policy) Validate() error {
 			return fmt.Errorf("allow[%d]: host must not be empty", i)
 		case "*.":
 			return fmt.Errorf("allow[%d]: host %q needs a domain after the wildcard", i, r.Host)
+		}
+		if r.Intercept == InterceptInject && r.Secret != "" {
+			return fmt.Errorf("allow[%d]: an intercept \"inject\" rule splices for claims without a credential, so it must not carry a secret", i)
 		}
 		for j, port := range r.Ports {
 			if port == 0 {
@@ -95,11 +135,11 @@ func (p Policy) Validate() error {
 	return nil
 }
 
-// Eval returns the first matching non-intercept rule; matching one here would leak its secret.
+// Eval returns the first matching rule that may carry a request unintercepted; an always-intercept rule here would leak its secret.
 func (p Policy) Eval(host, method string, port uint16) (Rule, Decision) {
 	host = strings.ToLower(host)
 	for _, r := range p.Allow {
-		if !r.Intercept && r.matches(host, method, port) {
+		if r.Intercept != InterceptAlways && r.matches(host, method, port) {
 			return r, DecisionAllow
 		}
 	}
@@ -113,7 +153,7 @@ func (p Policy) EvalHost(host string, port uint16) (Rule, Decision) {
 	for i, r := range p.Allow {
 		switch {
 		case !r.matchHost(host) || !r.matchPort(port):
-		case r.Intercept:
+		case r.Intercept != InterceptOff:
 			return r, DecisionAllow
 		case first < 0:
 			first = i
@@ -129,7 +169,7 @@ func (p Policy) EvalHost(host string, port uint16) (Rule, Decision) {
 func (p Policy) EvalInner(host, method string, port uint16) (Rule, Decision) {
 	host = strings.ToLower(host)
 	for _, r := range p.Allow {
-		if r.Intercept && r.matches(host, method, port) {
+		if r.Intercept != InterceptOff && r.matches(host, method, port) {
 			return r, DecisionAllow
 		}
 	}
@@ -143,11 +183,11 @@ func (p Policy) ServesSocks() bool {
 
 // InterceptsHost reports whether an intercept rule covers the host pattern, so a claim credential for it can be injected.
 func (p Policy) InterceptsHost(pattern string) bool {
-	return slices.ContainsFunc(p.Allow, func(r Rule) bool { return r.Intercept && r.Covers(pattern) })
+	return slices.ContainsFunc(p.Allow, func(r Rule) bool { return r.Intercept != InterceptOff && r.Covers(pattern) })
 }
 
 func (p Policy) admitsTunnel() bool {
-	return slices.ContainsFunc(p.Allow, func(r Rule) bool { return !r.Intercept && r.matchMethod(http.MethodConnect) })
+	return slices.ContainsFunc(p.Allow, func(r Rule) bool { return r.Intercept != InterceptAlways && r.matchMethod(http.MethodConnect) })
 }
 
 // Evaluator is what the proxy consults per request.

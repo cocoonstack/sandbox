@@ -47,7 +47,7 @@ func TestSocksDecisionMirrorsConnect(t *testing.T) {
 		{"bare host", Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, false},
 		{"methods-restricted rule", Policy{Allow: []Rule{{Host: "echo.internal", Methods: []string{"GET"}}}}, nil, false},
 		{"explicit CONNECT method", Policy{Allow: []Rule{{Host: "echo.internal", Methods: []string{"CONNECT"}}}}, nil, false},
-		{"intercept rule is the one exception", Policy{Allow: []Rule{{Host: "echo.internal", Intercept: true}}}, ca, true},
+		{"intercept rule is the one exception", Policy{Allow: []Rule{{Host: "echo.internal", Intercept: InterceptAlways}}}, ca, true},
 		{"secret rule tunnels without injection", Policy{Allow: []Rule{{Host: "echo.internal", Secret: "s"}}}, nil, false},
 		{"unknown host", Policy{Allow: []Rule{{Host: "other.internal"}}}, nil, false},
 	}

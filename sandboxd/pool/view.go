@@ -102,7 +102,7 @@ func (v *configView) secretSets(pool *egress.Policy, host, header string) bool {
 		return false
 	}
 	return slices.ContainsFunc(pool.Allow, func(r egress.Rule) bool {
-		if !r.Intercept || r.Secret == "" || !r.Covers(host) {
+		if r.Intercept == egress.InterceptOff || r.Secret == "" || !r.Covers(host) {
 			return false
 		}
 		h, _, known := v.secrets.Header(r.Secret)

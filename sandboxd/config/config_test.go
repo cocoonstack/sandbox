@@ -96,7 +96,7 @@ func TestClusterDigestCoversTheEgressLayerInAnyOrder(t *testing.T) {
 			Secrets:             []egress.SecretSpec{{Name: "gh", Header: "Authorization", ValueEnv: "GH_A"}, {Name: "gw", Header: "X-Key"}},
 			EgressInternalAllow: []string{"10.0.0.0/8", "172.16.0.0/12"},
 			EgressUpstream:      &EgressUpstreamConfig{ClaimEnv: "EGRESS_UPSTREAM", Allow: []string{"a.example", "b.example"}},
-			Pools:               []PoolSpec{{PoolKey: key, Warm: 2, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "api.example.com", Intercept: true}}}}},
+			Pools:               []PoolSpec{{PoolKey: key, Warm: 2, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "api.example.com", Intercept: egress.InterceptAlways}}}}},
 		}
 	}
 	d := base().ClusterDigest("fp", nil)
@@ -394,21 +394,25 @@ func TestLoadAcceptsNoneLanePolicyOnCNI(t *testing.T) {
 }
 
 func TestLoadAcceptsPoolIntercept(t *testing.T) {
-	path := writeConfig(t, `{"egress_ca":{"root_cert":"/x/root.crt","intermediate_cert":"/x/n.crt","intermediate_key":"/x/n.key"},
-		"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"api.github.com","intercept":true}]}}]}`)
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if pol := cfg.Pools[0].Egress; pol == nil || len(pol.Allow) != 1 || !pol.Allow[0].Intercept {
-		t.Errorf("intercept rule not parsed: %+v", cfg.Pools[0].Egress)
+	for mode, want := range map[string]egress.InterceptMode{"true": egress.InterceptAlways, `"inject"`: egress.InterceptInject} {
+		path := writeConfig(t, `{"egress_ca":{"root_cert":"/x/root.crt","intermediate_cert":"/x/n.crt","intermediate_key":"/x/n.key"},
+		"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"api.github.com","intercept":`+mode+`}]}}]}`)
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load intercept %s: %v", mode, err)
+		}
+		if pol := cfg.Pools[0].Egress; pol == nil || len(pol.Allow) != 1 || pol.Allow[0].Intercept != want {
+			t.Errorf("intercept %s rule not parsed: %+v", mode, cfg.Pools[0].Egress)
+		}
 	}
 }
 
 func TestLoadRejectsInterceptWithoutCA(t *testing.T) {
-	path := writeConfig(t, `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"x","intercept":true}]}}]}`)
-	if _, err := Load(path); err == nil {
-		t.Error("Load accepted an intercept pool without egress_ca; want rejection")
+	for _, mode := range []string{"true", `"inject"`} {
+		path := writeConfig(t, `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"x","intercept":`+mode+`}]}}]}`)
+		if _, err := Load(path); err == nil {
+			t.Errorf("Load accepted an intercept %s pool without egress_ca; want rejection", mode)
+		}
 	}
 }
 

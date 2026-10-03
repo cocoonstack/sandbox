@@ -155,7 +155,7 @@ func TestForwardNeverInjectsInterceptSecret(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	policy := Policy{Allow: []Rule{{Host: "api.internal", Secret: "gh", Intercept: true}}}
+	policy := Policy{Allow: []Rule{{Host: "api.internal", Secret: "gh", Intercept: InterceptAlways}}}
 	secrets := fakeSecrets{"gh": {"Authorization", "Bearer SECRET"}}
 	p := New(policy, secrets, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
 	front := httptest.NewServer(p)
