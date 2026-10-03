@@ -98,6 +98,9 @@ func TestEnvInjectValidates(t *testing.T) {
 	inject := func(header string, hosts ...string) Env {
 		return Env{"K": {Value: "v", Guest: new(false), Inject: &EnvInject{Hosts: hosts, Header: header}}}
 	}
+	placeholder := func(p string) Env {
+		return Env{"K": {Value: "v", Guest: new(false), Inject: &EnvInject{Hosts: []string{"a.test"}, Header: "Authorization", Placeholder: p}}}
+	}
 	tests := []struct {
 		name string
 		env  Env
@@ -111,6 +114,10 @@ func TestEnvInjectValidates(t *testing.T) {
 		{"bare wildcard", inject("X-Key", "*"), "lowercase host name"},
 		{"host with a port", inject("X-Key", "a.test:443"), "lowercase host name"},
 		{"bad header", inject("X Key", "a.test"), "not a valid header name"},
+		{"placeholder", placeholder("Bearer @GH_TOKEN@"), ""},
+		{"placeholder with a newline", placeholder("@A@\r\nX-Evil: 1"), "inject placeholder"},
+		{"placeholder with surrounding space", placeholder(" @A@"), "inject placeholder"},
+		{"placeholder too long", placeholder(strings.Repeat("p", 257)), "inject placeholder"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -131,8 +138,12 @@ func TestEnvInjectMatchesAndCompares(t *testing.T) {
 	}
 	a := Env{"K": {Value: "v", Guest: new(false), Inject: inj}}
 	b := Env{"K": {Value: "v", Guest: new(false), Inject: &EnvInject{Hosts: []string{"api.example.com"}, Header: "X-Key"}}}
-	if a.Equal(b) || !a.Equal(Env{"K": {Value: "v", Guest: new(false), Inject: inj}}) || !a.SameGuest(b) {
-		t.Error("Equal must see an inject change, and SameGuest must not")
+	c := Env{"K": {Value: "v", Guest: new(false), Inject: &EnvInject{Hosts: inj.Hosts, Header: "X-Key", Placeholder: "@K@"}}}
+	if a.Equal(b) || a.Equal(c) || !a.Equal(Env{"K": {Value: "v", Guest: new(false), Inject: inj}}) || !a.SameGuest(b) {
+		t.Error("Equal must see an inject or placeholder change, and SameGuest must not")
+	}
+	if fresh := c.InjectsChanged(a); len(fresh) != 1 {
+		t.Errorf("InjectsChanged = %v, want the entry whose placeholder changed", fresh)
 	}
 	if red := a.Redacted(); red["K"].Value != "" || red["K"].Inject != inj {
 		t.Errorf("Redacted = %+v, want the value dropped and the inject kept", red["K"])

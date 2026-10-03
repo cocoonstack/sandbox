@@ -73,7 +73,8 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   host-only value in the guest. `guest` (default `true`) delivers the entry into the guest; a
   `guest: false` entry never enters it and only feeds the node's egress
   [secrets](egress.md#claim-env-and-secrets), or, with `inject`
-  (`{"hosts": [...], "header": "..."}`), becomes a
+  (`{"hosts": [...], "header": "...", "placeholder": "..."}`, `placeholder`
+  optional), becomes a
   [claim credential](egress.md#claim-credentials) the proxy sends to those
   hosts. A bad entry answers 400, and an `inject` host the claim's egress does
   not intercept answers 400 with the claim's VM released; see
@@ -729,7 +730,7 @@ values:
 {"env": {"MODE": {"value": "prod"}, "GW_KEY": {"value": "", "guest": false}}}
 ```
 
-An entry with `inject` comes back with its hosts and header, value blanked.
+An entry with `inject` comes back with its hosts, header and placeholder, value blanked.
 An `inject` host the claim's pool does not intercept, or its tenant class does
 not allow, and a header the pool rule's own secret already sets on that host,
 answer 400 and store nothing.
