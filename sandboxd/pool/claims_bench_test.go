@@ -27,7 +27,7 @@ func BenchmarkStoreSaveScaling(b *testing.B) {
 }
 
 func BenchmarkStorePersistContention(b *testing.B) {
-	for _, n := range []int{100, 1000} {
+	for _, n := range []int{100, 1000, 5000} {
 		claims := benchClaims(n)
 		for _, arm := range []string{"under-lock", "rebuild", "incremental"} {
 			b.Run(fmt.Sprintf("%s/n=%d", arm, n), func(b *testing.B) {
@@ -39,7 +39,7 @@ func BenchmarkStorePersistContention(b *testing.B) {
 
 func BenchmarkStoreCommitEnv(b *testing.B) {
 	envs := map[string]types.Env{"none": nil, "typical": benchEnv(5, 64), "cap": benchEnv(8, 64<<10/8-8)}
-	for _, n := range []int{50, 200} {
+	for _, n := range []int{50, 200, 5000} {
 		for _, arm := range []string{"none", "typical", "cap"} {
 			for _, durable := range []bool{false, true} {
 				b.Run(fmt.Sprintf("claims=%d/env=%s/sync=%t", n, arm, durable), func(b *testing.B) {
