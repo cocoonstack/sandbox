@@ -6,7 +6,7 @@ import (
 	"net/http"
 )
 
-// PoolSpec is a desired warm pool for SetPools; egress, warmup, capture_trim and storage are config-owned, so it has no field for them.
+// PoolSpec is a desired warm pool for SetPools; egress, warmup, capture_trim, storage and egress_upstream_env are config-owned, so it has no field for them.
 type PoolSpec struct {
 	Template                  string   `json:"template"`
 	Net                       NetShape `json:"net,omitempty"`

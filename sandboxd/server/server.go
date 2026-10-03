@@ -2,6 +2,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"encoding/json/jsontext"
@@ -468,10 +469,7 @@ func (s *Server) handleSandboxes(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	scope := tenantFrom(r.Context())
-	if scope == "" {
-		scope = query.Get("tenant")
-	}
+	scope := cmp.Or(tenantFrom(r.Context()), query.Get("tenant"))
 	writeJSON(w, http.StatusOK, SandboxListResponse{Sandboxes: s.mgr.Sandboxes(scope, query.Get("claim_ref"), filter)})
 }
 

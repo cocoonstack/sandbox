@@ -668,8 +668,7 @@ def _arm_watchdog(conn: Conn, deadline: float, expired: threading.Event) -> thre
 
 def _feed_stdin(conn: Conn, stdin: bytes) -> None:
     with contextlib.suppress(SandboxError, OSError):  # the reader reports the real failure
-        if stdin:
-            _send_chunks(conn, stdin, op="stdin")
+        _send_chunks(conn, stdin, op="stdin")
         conn.send("stdin_close")
 
 

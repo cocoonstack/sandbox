@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import json
 import sys
 from typing import Any
@@ -41,10 +42,8 @@ def decode_response(line: bytes) -> dict[str, Any]:
         if te > 0 and line[9:te] in (b"stdout", b"stderr", b"data") and line.startswith(b'","data":"', te):
             de = line.find(b'"', te + 10)
             if de > 0 and line[de:] in (b'"}', b'"}\n'):
-                try:
+                with contextlib.suppress(binascii.Error):
                     return {"type": line[9:te].decode(), "data": base64.b64decode(line[te + 10 : de], validate=True)}
-                except binascii.Error:
-                    pass
     frame = json.loads(line)
     if not isinstance(frame, dict) or "type" not in frame:
         raise ValueError(f"frame without a type tag: {line[:80]!r}")

@@ -361,12 +361,8 @@ func (m *Manager) deleteCkLocked(ctx context.Context, ckID string) error {
 	l.Lock()
 	err := m.ckpts.Delete(ctx, ckID)
 	l.Unlock()
-	if err != nil {
-		m.recDone(ckID)
-		return err
-	}
 	m.recDone(ckID)
-	return nil
+	return err
 }
 
 func (m *Manager) loadCheckpoint(ctx context.Context, ckptID string) (types.Checkpoint, error) {

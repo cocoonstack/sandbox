@@ -779,10 +779,7 @@ func ValidateVolumes(volumes []Volume, attachOnly bool) ([]Volume, error) {
 			applied[i] = Volume{Name: volume.Name, Mode: mode, AttachOnly: true}
 			continue
 		}
-		mount := volume.Mount
-		if mount == "" {
-			mount = DefaultVolumeMount(volume.Name)
-		}
+		mount := cmp.Or(volume.Mount, DefaultVolumeMount(volume.Name))
 		if err := validateVolumeMount(mount); err != nil {
 			return nil, fmt.Errorf("volumes[%d] mount %q: %w", i, mount, err)
 		}

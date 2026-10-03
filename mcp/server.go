@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -120,11 +121,8 @@ func (s *server) dispatch(ctx context.Context, req *rpcRequest) rpcResponse {
 		}
 		text, err := s.callTool(ctx, call.Name, call.Arguments)
 		if err != nil {
-			if text == "" {
-				text = err.Error()
-			}
 			return result(req.ID, map[string]any{
-				"content": []map[string]any{{"type": "text", "text": text}},
+				"content": []map[string]any{{"type": "text", "text": cmp.Or(text, err.Error())}},
 				"isError": true,
 			})
 		}
