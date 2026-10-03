@@ -2,7 +2,6 @@ package pool
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -11,7 +10,6 @@ import (
 	"runtime"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -218,66 +216,4 @@ func TestClaimStoreConcurrentCommits(t *testing.T) {
 	if got, err := s.load(); err != nil || len(got) != 1 {
 		t.Fatalf("after concurrent commits: %+v, %v", got, err)
 	}
-}
-
-func BenchmarkClaimStoreCommit(b *testing.B) {
-	for _, n := range []int{1000, 5000, 10000} {
-		b.Run(fmt.Sprintf("claims=%d", n), func(b *testing.B) {
-			s, sbs := claimFixture(b, n)
-			for i := 0; b.Loop(); i++ {
-				sb := sbs[i%n]
-				sb.Deadline = sb.Deadline.Add(time.Second)
-				if err := s.commit(s.set(sb)); err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-		b.Run(fmt.Sprintf("claims=%d/writers=64", n), func(b *testing.B) {
-			s, sbs := claimFixture(b, n)
-			var mu sync.Mutex
-			var next atomic.Int64
-			b.SetParallelism(64 / max(runtime.GOMAXPROCS(0), 1))
-			b.RunParallel(func(pb *testing.PB) {
-				sb := sbs[int(next.Add(1))%n]
-				for pb.Next() {
-					mu.Lock()
-					sb.Deadline = sb.Deadline.Add(time.Second)
-					snap := s.set(sb)
-					mu.Unlock()
-					if err := s.commit(snap); err != nil {
-						b.Error(err)
-						return
-					}
-				}
-			})
-		})
-	}
-}
-
-// claimFixture commits n claims shaped like real ones: labels, a host-only inject entry, a tap on half.
-func claimFixture(b *testing.B, n int) (*claimStore, []*types.Sandbox) {
-	b.Helper()
-	s := newClaimStore(b.TempDir(), false)
-	sbs := make([]*types.Sandbox, n)
-	for i := range sbs {
-		key := types.PoolKey{Template: "python:3.12", Net: types.NetNone, Size: types.SizeMedium}
-		sbs[i] = &types.Sandbox{
-			ID: "sb_" + randHex(8), VMName: vmName(key), Key: key, Token: randHex(16),
-			ClaimedAt: time.Now(), Deadline: time.Now().Add(time.Hour), LeaseSeconds: 3600, Layer: types.LayerPooled,
-			Tenant: fmt.Sprintf("tenant-%04d", i%200), EgressClass: "standard", ClaimRef: "ci/run-" + randHex(4),
-			Metadata: types.Metadata{"team": "infra", "run": "run-" + randHex(4), "branch": "feature/x"},
-			Env: types.Env{
-				"LANG":    {Value: "C.UTF-8"},
-				"API_KEY": {Value: "Bearer sk-" + randHex(24), Guest: new(false), Inject: &types.EnvInject{Hosts: []string{"api.example.com"}, Header: "Authorization"}},
-			},
-			VsockSocket: "/var/lib/cocoon/run/cloudhypervisor/" + randHex(16) + "/vsock.sock",
-		}
-		if i%2 == 0 {
-			sbs[i].TAP = "tap" + randHex(5)
-		}
-	}
-	if err := s.commit(s.set(sbs...)); err != nil {
-		b.Fatal(err)
-	}
-	return s, sbs
 }

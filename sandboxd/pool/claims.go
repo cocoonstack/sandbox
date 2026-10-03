@@ -51,7 +51,7 @@ type claimDTO struct {
 	Failed         string             `json:"failed,omitempty"`
 }
 
-// claimRow is one claim's projection and, once a commit has encoded it, its JSON member; set replaces a row, never edits it.
+// claimRow keeps its encoded member until set replaces the row; set never edits one.
 type claimRow struct {
 	dto claimDTO
 	raw []byte
@@ -147,16 +147,16 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 		s.mu.Unlock()
 		return nil
 	}
-	rows, seq := slices.Collect(maps.Values(s.rows)), s.seq
+	rows, seq := slices.AppendSeq(make([]*claimRow, 0, len(s.rows)), maps.Values(s.rows)), s.seq
 	s.mu.Unlock()
 	s.buf = append(s.buf[:0], '{')
 	for i, row := range rows {
 		if row.raw == nil {
-			raw, err := encodeRow(row.dto)
+			raw, err := encodeRow(&row.dto)
 			if err != nil {
 				return err
 			}
-			row.raw = raw
+			row.raw, row.dto = raw, claimDTO{}
 		}
 		if i > 0 {
 			s.buf = append(s.buf, ',')
@@ -206,16 +206,12 @@ func (s *claimStore) synced() bool {
 	return s.written == s.seq
 }
 
-func encodeRow(dto claimDTO) ([]byte, error) {
-	key, err := json.Marshal(dto.ID)
+func encodeRow(dto *claimDTO) ([]byte, error) {
+	raw, err := json.Marshal(map[string]*claimDTO{dto.ID: dto})
 	if err != nil {
 		return nil, fmt.Errorf("encode claim %s: %w", dto.ID, err)
 	}
-	val, err := json.Marshal(dto)
-	if err != nil {
-		return nil, fmt.Errorf("encode claim %s: %w", dto.ID, err)
-	}
-	return slices.Concat(key, []byte{':'}, val), nil
+	return raw[1 : len(raw)-1], nil
 }
 
 func dtoOf(sb *types.Sandbox) claimDTO {
