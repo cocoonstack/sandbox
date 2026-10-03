@@ -47,6 +47,29 @@ func TestDialSilkdRejectedHandshake(t *testing.T) {
 	}
 }
 
+func TestDialSilkdReturnsRawConnWithoutOverRead(t *testing.T) {
+	path := sockPath(t)
+	listenMuxer(t, path, "OK 2048\n")
+
+	conn, err := New("cocoon", nil, nil, false, false, "").DialSilkd(t.Context(), path)
+	if err != nil {
+		t.Fatalf("DialSilkd: %v", err)
+	}
+	defer conn.Close()
+	if _, ok := conn.(*net.UnixConn); !ok {
+		t.Errorf("got %T, want *net.UnixConn", conn)
+	}
+}
+
+func TestDialSilkdRejectsOverlongReply(t *testing.T) {
+	path := sockPath(t)
+	listenMuxer(t, path, strings.Repeat("O", connectMax)+"\n")
+
+	if _, err := New("cocoon", nil, nil, false, false, "").DialSilkd(t.Context(), path); err == nil {
+		t.Error("got nil, want overlong reply rejection")
+	}
+}
+
 func TestProbeSucceeds(t *testing.T) {
 	path := sockPath(t)
 	listenMuxer(t, path, "OK 2048\n", infoFrame)

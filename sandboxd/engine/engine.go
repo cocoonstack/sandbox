@@ -262,7 +262,8 @@ func (e *Engine) DialSilkd(ctx context.Context, vsockSocket string) (net.Conn, e
 		_ = conn.Close()
 		return nil, fmt.Errorf("write CONNECT: %w", err)
 	}
-	reply, err := readLine(conn, connectMax)
+	r := bufio.NewReaderSize(conn, connectMax)
+	reply, err := readBufLine(r, connectMax)
 	if err != nil {
 		_ = conn.Close()
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -273,6 +274,9 @@ func (e *Engine) DialSilkd(ctx context.Context, vsockSocket string) (net.Conn, e
 	if !strings.HasPrefix(reply, "OK ") {
 		_ = conn.Close()
 		return nil, fmt.Errorf("hybrid vsock CONNECT %d: %s", silkdPort, strings.TrimSpace(reply))
+	}
+	if r.Buffered() > 0 {
+		return &bufferedConn{Conn: conn, r: r}, nil
 	}
 	return conn, nil
 }
@@ -437,6 +441,14 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
 	return nil
 }
 
+// bufferedConn serves bytes read past the handshake line before the socket's own.
+type bufferedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (b *bufferedConn) Read(p []byte) (int, error) { return b.r.Read(p) }
+
 // EgressSocketPath is the host UDS the VMM connects when the guest dials CID2:egressPort.
 func EgressSocketPath(vsockSocket string) string {
 	return fmt.Sprintf("%s_%d", vsockSocket, egressPort)
@@ -497,22 +509,6 @@ func readBufLine(r *bufio.Reader, limit int) (string, error) {
 		return "", fmt.Errorf("reply exceeds %d bytes", limit)
 	}
 	return string(line[:len(line)-1]), nil
-}
-
-// readLine reads byte-wise so nothing past the newline is consumed.
-func readLine(conn net.Conn, limit int) (string, error) {
-	var sb strings.Builder
-	var b [1]byte
-	for sb.Len() < limit {
-		if _, err := io.ReadFull(conn, b[:]); err != nil {
-			return "", err
-		}
-		if b[0] == '\n' {
-			return sb.String(), nil
-		}
-		sb.WriteByte(b[0])
-	}
-	return "", fmt.Errorf("reply exceeds %d bytes", limit)
 }
 
 func tail(s string) string {
