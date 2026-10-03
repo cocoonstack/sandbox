@@ -2,10 +2,12 @@ package egress
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/json/jsontext"
 	"fmt"
 	"io"
 	"maps"
@@ -14,6 +16,7 @@ import (
 	"net/http/httptrace"
 	"net/netip"
 	"net/textproto"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,7 +30,9 @@ import (
 const (
 	idleConnTimeout = 90 * time.Second
 	// maxIdleConns bounds the upstream pool per sandbox; a guest walking many hosts cannot park a descriptor per host.
-	maxIdleConns = 64
+	maxIdleConns  = 64
+	maxInjectBody = 64 << 10
+	scrubChunk    = 8 << 10
 )
 
 var (
@@ -46,10 +51,12 @@ type TransferFunc func(ev Event, sent, received int64)
 // AuditFunc receives every egress decision the proxy takes.
 type AuditFunc func(Event)
 
-// Credential is a claim-supplied header the proxy sets on an intercepted request; a set Placeholder must be the guest's value for that header.
+// Credential is a claim-supplied value the proxy sets on an intercepted request where the guest sent its Placeholder.
 type Credential struct {
 	Name        string
 	Header      string
+	Query       string
+	Body        bool
 	Value       string
 	Placeholder string
 }
@@ -226,7 +233,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		denied(w, host)
 		return
 	}
-	decision, intercept := p.tunnelDecision(host, port)
+	decision, intercept := p.tunnelDecision(host, port, true)
 	ev, route := p.routeEvent(Event{Method: r.Method, Host: host, Port: port, Decision: decision})
 	if intercept {
 		p.record(ev)
@@ -272,15 +279,22 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	p.reportTransfer(ev, early+sent, received)
 }
 
-func (p *Proxy) tunnelDecision(host string, port uint16) (decision Decision, intercept bool) {
+// tunnelDecision gates a tunnel by host; injects is false on a door that never injects, where an inject rule is a plain one.
+func (p *Proxy) tunnelDecision(host string, port uint16, injects bool) (decision Decision, intercept bool) {
 	// host-gate interception: the tunnel's CONNECT verb is not the request method.
 	if p.ca != nil {
-		if rule, d := p.policy.EvalHost(host, port); d == DecisionAllow && rule.Intercept {
+		switch rule, d := p.policy.EvalHost(host, port); {
+		case d != DecisionAllow:
+		case rule.Intercept == InterceptAlways, rule.Intercept == InterceptInject && injects && p.holdsCredential(host):
 			return DecisionAllow, true
 		}
 	}
 	_, decision = p.policy.Eval(host, http.MethodConnect, port)
 	return decision, false
+}
+
+func (p *Proxy) holdsCredential(host string) bool {
+	return p.secrets != nil && slices.ContainsFunc(p.secrets.Credentials(strings.ToLower(host)), func(c Credential) bool { return c.Value != "" })
 }
 
 func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
@@ -325,7 +339,15 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	out.RequestURI = ""
 	out.Close = false // the guest's Connection: close is its own; the upstream pool keeps the conn
 	stripHop(out.Header)
-	ev.Injected = p.inject(rule, out.Header, ev.Host, mitm)
+	var used []Credential
+	ev.Injected, used = p.inject(rule, out, ev.Host, mitm)
+	olds, news := echoes(used)
+	if len(olds) > 0 {
+		// the transport then decodes compression itself, and no range splits a value, so the scrub sees every echo whole.
+		for _, h := range []string{"Accept-Encoding", "Range", "If-Range"} {
+			out.Header.Del(h)
+		}
+	}
 	var body *countingBody
 	if p.transfer != nil && out.Body != nil && out.Body != http.NoBody {
 		body = &countingBody{ReadCloser: out.Body}
@@ -352,12 +374,18 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	defer func() { _ = resp.Body.Close() }()
 	maps.Copy(w.Header(), resp.Header)
 	stripHop(w.Header())
+	var src io.Reader = resp.Body
+	if len(olds) > 0 {
+		scrubHeader(w.Header(), olds, news)
+		w.Header().Del("Content-Length")
+		src = &scrubReader{src: resp.Body, olds: olds, news: news, chunk: make([]byte, scrubChunk)}
+	}
 	w.WriteHeader(resp.StatusCode)
 	if streamed(resp) {
-		received = copyFlushing(w, resp.Body)
+		received = copyFlushing(w, src)
 		return
 	}
-	received, _ = io.Copy(w, resp.Body)
+	received, _ = io.Copy(w, src)
 }
 
 // transport returns the pool for route; the direct route keeps the base transports.
@@ -397,30 +425,49 @@ func (p *Proxy) reportTransfer(ev Event, sent, received int64) {
 	}
 }
 
-// inject sets the rule's secret, then on an intercepted request each claim credential whose header is still unset and whose placeholder, if any, the guest sent.
-func (p *Proxy) inject(rule Rule, h http.Header, host string, mitm bool) string {
+// inject sets the rule's secret, then on an intercepted request the claim credentials the guest asked for, and returns the names set and the credentials used.
+func (p *Proxy) inject(rule Rule, out *http.Request, host string, mitm bool) (string, []Credential) {
 	if p.secrets == nil {
-		return ""
+		return "", nil
 	}
 	var names, set []string
 	if rule.Secret != "" {
 		if header, value, ok := p.secrets.Header(rule.Secret); ok && value != "" {
-			h.Set(header, value)
+			out.Header.Set(header, value)
 			names, set = append(names, rule.Secret), append(set, header)
 		}
 	}
 	if !mitm {
-		return strings.Join(names, ",")
+		return strings.Join(names, ","), nil
 	}
+	var used, body []Credential
 	for _, c := range p.secrets.Credentials(strings.ToLower(host)) {
-		if c.Value == "" || (c.Placeholder != "" && h.Get(c.Header) != c.Placeholder) ||
-			slices.ContainsFunc(set, func(s string) bool { return strings.EqualFold(s, c.Header) }) {
-			continue
+		switch {
+		case c.Value == "":
+		case c.Query != "":
+			if c.Body {
+				body = append(body, c)
+			}
+			if q, ok := replaceParam(out.URL.RawQuery, c.Query, c.Placeholder, c.Value); ok {
+				out.URL.RawQuery = q
+				used = append(used, c)
+			}
+		case c.Placeholder != "" && out.Header.Get(c.Header) != c.Placeholder,
+			slices.ContainsFunc(set, func(s string) bool { return strings.EqualFold(s, c.Header) }):
+		default:
+			out.Header.Set(c.Header, c.Value)
+			set, used = append(set, c.Header), append(used, c)
 		}
-		h.Set(c.Header, c.Value)
-		names, set = append(names, "claim:"+c.Name), append(set, c.Header)
 	}
-	return strings.Join(names, ",")
+	for _, c := range substituteBody(out, body) {
+		if !slices.ContainsFunc(used, func(u Credential) bool { return u.Name == c.Name }) {
+			used = append(used, c)
+		}
+	}
+	for _, c := range used {
+		names = append(names, "claim:"+c.Name)
+	}
+	return strings.Join(names, ","), used
 }
 
 func (p *Proxy) record(ev Event) {
@@ -439,6 +486,68 @@ func (c *countingBody) Read(b []byte) (int, error) {
 	n, err := c.ReadCloser.Read(b)
 	c.n.Add(int64(n))
 	return n, err
+}
+
+// scrubReader replaces each of olds with its news as a response body streams; it holds back only a tail that may begin a match.
+type scrubReader struct {
+	src        io.Reader
+	olds, news [][]byte
+	chunk      []byte
+	pending    []byte
+	out        []byte
+	off        int
+	err        error
+}
+
+func (s *scrubReader) Read(b []byte) (int, error) {
+	for s.off == len(s.out) && s.err == nil {
+		s.out, s.off = s.out[:0], 0
+		n, err := s.src.Read(s.chunk)
+		s.pending, s.err = append(s.pending, s.chunk[:n]...), err
+		s.scan()
+	}
+	if s.off == len(s.out) {
+		return 0, s.err
+	}
+	n := copy(b, s.out[s.off:])
+	s.off += n
+	return n, nil
+}
+
+func (s *scrubReader) scan() {
+	buf, i := s.pending, 0
+	for {
+		at, k := -1, 0
+		for j, old := range s.olds {
+			if idx := bytes.Index(buf[i:], old); idx >= 0 && (at < 0 || idx < at) {
+				at, k = idx, j
+			}
+		}
+		if at < 0 {
+			break
+		}
+		s.out = append(append(s.out, buf[i:i+at]...), s.news[k]...)
+		i += at + len(s.olds[k])
+	}
+	hold := 0
+	if s.err == nil {
+		hold = s.partial(buf[i:])
+	}
+	s.out = append(s.out, buf[i:len(buf)-hold]...)
+	s.pending = s.pending[:copy(s.pending, buf[len(buf)-hold:])]
+}
+
+func (s *scrubReader) partial(tail []byte) int {
+	longest := 0
+	for _, old := range s.olds {
+		longest = max(longest, len(old))
+	}
+	for k := min(len(tail), longest-1); k > 0; k-- {
+		if slices.ContainsFunc(s.olds, func(old []byte) bool { return len(old) > k && bytes.HasPrefix(old, tail[len(tail)-k:]) }) {
+			return k
+		}
+	}
+	return 0
 }
 
 func stripHop(h http.Header) {
@@ -488,8 +597,135 @@ func spliceable(c net.Conn) net.Conn {
 }
 
 func streamed(resp *http.Response) bool {
-	mediaType, _, _ := strings.Cut(resp.Header.Get("Content-Type"), ";")
-	return resp.ContentLength < 0 || strings.EqualFold(strings.TrimSpace(mediaType), "text/event-stream")
+	return resp.ContentLength < 0 || mediaType(resp.Header) == "text/event-stream"
+}
+
+func mediaType(h http.Header) string {
+	mt, _, _ := strings.Cut(h.Get("Content-Type"), ";")
+	return strings.ToLower(strings.TrimSpace(mt))
+}
+
+// replaceParam swaps the value of each name=placeholder pair of a query or form string for the escaped value, leaving every other byte as sent.
+func replaceParam(raw, name, placeholder, value string) (string, bool) {
+	if raw == "" {
+		return raw, false
+	}
+	pairs := strings.Split(raw, "&")
+	escaped := ""
+	for i, pair := range pairs {
+		k, v, _ := strings.Cut(pair, "=")
+		if uk, err := url.QueryUnescape(k); err != nil || uk != name {
+			continue
+		}
+		if uv, err := url.QueryUnescape(v); err == nil && uv == placeholder {
+			escaped = cmp.Or(escaped, url.QueryEscape(value))
+			pairs[i] = k + "=" + escaped
+		}
+	}
+	if escaped == "" {
+		return raw, false
+	}
+	return strings.Join(pairs, "&"), true
+}
+
+// replaceMember swaps each top-level string member named name whose value is placeholder, leaving every other byte as sent.
+func replaceMember(b []byte, name, placeholder, value string) ([]byte, bool) {
+	dec := jsontext.NewDecoder(bytes.NewReader(b))
+	var ends []int64
+	var lens []int
+	for {
+		kind, n := dec.StackIndex(dec.StackDepth())
+		if dec.StackDepth() != 1 || kind != '{' || n%2 == 0 || dec.PeekKind() != '"' {
+			if _, err := dec.ReadToken(); err != nil {
+				break
+			}
+			continue
+		}
+		raw, err := dec.ReadValue()
+		if err != nil {
+			break
+		}
+		if v, err := jsontext.AppendUnquote(nil, raw); err == nil && string(v) == placeholder && dec.StackPointer().LastToken() == name {
+			ends, lens = append(ends, dec.InputOffset()), append(lens, len(raw))
+		}
+	}
+	if len(ends) == 0 {
+		return b, false
+	}
+	quoted, _ := jsontext.AppendQuote(nil, value)
+	out, at := make([]byte, 0, len(b)+len(ends)*len(quoted)), int64(0)
+	for i, end := range ends {
+		out = append(append(out, b[at:end-int64(lens[i])]...), quoted...)
+		at = end
+	}
+	return append(out, b[at:]...), true
+}
+
+func substituteBody(out *http.Request, creds []Credential) []Credential {
+	if len(creds) == 0 || out.ContentLength <= 0 || out.ContentLength > maxInjectBody {
+		return nil
+	}
+	mt := mediaType(out.Header)
+	form := mt == "application/x-www-form-urlencoded"
+	if !form && mt != "application/json" {
+		return nil
+	}
+	b := make([]byte, out.ContentLength)
+	if n, err := io.ReadFull(out.Body, b); err != nil {
+		out.Body = io.NopCloser(io.MultiReader(bytes.NewReader(b[:n]), out.Body))
+		return nil
+	}
+	var used []Credential
+	for _, c := range creds {
+		if form {
+			if s, ok := replaceParam(string(b), c.Query, c.Placeholder, c.Value); ok {
+				b, used = []byte(s), append(used, c)
+			}
+		} else if nb, ok := replaceMember(b, c.Query, c.Placeholder, c.Value); ok {
+			b, used = nb, append(used, c)
+		}
+	}
+	out.Body, out.ContentLength = io.NopCloser(bytes.NewReader(b)), int64(len(b))
+	return used
+}
+
+// echoes pairs each used query credential's value, as sent, URL-escaped and JSON-escaped in their common forms, with its placeholder in the same form, so a response that reflects the URL cannot hand the guest the value.
+func echoes(used []Credential) (olds, news [][]byte) {
+	for _, c := range used {
+		if c.Query == "" {
+			continue
+		}
+		pairs := [][2]string{
+			{c.Value, c.Placeholder},
+			{url.QueryEscape(c.Value), url.QueryEscape(c.Placeholder)},
+			{url.PathEscape(c.Value), url.PathEscape(c.Placeholder)},
+		}
+		if v, err := jsontext.AppendQuote(nil, c.Value); err == nil {
+			ph, _ := jsontext.AppendQuote(nil, c.Placeholder)
+			v, ph = v[1:len(v)-1], ph[1:len(ph)-1]
+			pairs = append(pairs, [2]string{string(v), string(ph)},
+				[2]string{strings.ReplaceAll(string(v), "/", `\/`), strings.ReplaceAll(string(ph), "/", `\/`)})
+		}
+		for _, p := range pairs {
+			if !slices.ContainsFunc(olds, func(o []byte) bool { return string(o) == p[0] }) {
+				olds, news = append(olds, []byte(p[0])), append(news, []byte(p[1]))
+			}
+		}
+	}
+	return olds, news
+}
+
+func scrubHeader(h http.Header, olds, news [][]byte) {
+	pairs := make([]string, 0, 2*len(olds))
+	for i := range olds {
+		pairs = append(pairs, string(olds[i]), string(news[i]))
+	}
+	r := strings.NewReplacer(pairs...)
+	for _, vs := range h {
+		for i, v := range vs {
+			vs[i] = r.Replace(v)
+		}
+	}
 }
 
 func copyFlushing(w http.ResponseWriter, body io.Reader) int64 {

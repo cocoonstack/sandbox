@@ -134,7 +134,7 @@ func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress
 		decision = "allow"
 	}
 	m.recordAudit(ctx, id, auditFrame{Op: "egress", Dest: ev.Host, Port: ev.Port, Method: ev.Method, Decision: decision, Secret: ev.Injected, Upstream: ev.Upstream})
-	m.recordUsage(ctx, usageEvent{Event: "egress", ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream})
+	m.recordUsage(ctx, usageEvent{Event: "egress", ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Secret: ev.Injected})
 }
 
 // recordUsage appends one billing event; failures are logged, never propagated.

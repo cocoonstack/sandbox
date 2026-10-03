@@ -101,6 +101,10 @@ func TestEnvInjectValidates(t *testing.T) {
 	placeholder := func(p string) Env {
 		return Env{"K": {Value: "v", Guest: new(false), Inject: &EnvInject{Hosts: []string{"a.test"}, Header: "Authorization", Placeholder: p}}}
 	}
+	shaped := func(i EnvInject) Env {
+		i.Hosts = []string{"a.test"}
+		return Env{"K": {Value: "v", Guest: new(false), Inject: &i}}
+	}
 	tests := []struct {
 		name string
 		env  Env
@@ -118,6 +122,12 @@ func TestEnvInjectValidates(t *testing.T) {
 		{"placeholder with a newline", placeholder("@A@\r\nX-Evil: 1"), "inject placeholder"},
 		{"placeholder with surrounding space", placeholder(" @A@"), "inject placeholder"},
 		{"placeholder too long", placeholder(strings.Repeat("p", 257)), "inject placeholder"},
+		{"query", shaped(EnvInject{Query: "api_key", Placeholder: "@K@"}), ""},
+		{"query with body", shaped(EnvInject{Query: "access_token", Body: true, Placeholder: "@K@"}), ""},
+		{"neither header nor query", shaped(EnvInject{Placeholder: "@K@"}), "exactly one of header and query"},
+		{"header and query", shaped(EnvInject{Header: "X-Key", Query: "key", Placeholder: "@K@"}), "exactly one of header and query"},
+		{"query without a placeholder", shaped(EnvInject{Query: "key"}), "query needs a placeholder"},
+		{"body on a header", shaped(EnvInject{Header: "X-Key", Body: true}), "body needs query"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -141,6 +151,11 @@ func TestEnvInjectMatchesAndCompares(t *testing.T) {
 	c := Env{"K": {Value: "v", Guest: new(false), Inject: &EnvInject{Hosts: inj.Hosts, Header: "X-Key", Placeholder: "@K@"}}}
 	if a.Equal(b) || a.Equal(c) || !a.Equal(Env{"K": {Value: "v", Guest: new(false), Inject: inj}}) || !a.SameGuest(b) {
 		t.Error("Equal must see an inject or placeholder change, and SameGuest must not")
+	}
+	q := Env{"K": {Value: "v", Guest: new(false), Inject: &EnvInject{Hosts: inj.Hosts, Query: "key", Placeholder: "@K@"}}}
+	qb := Env{"K": {Value: "v", Guest: new(false), Inject: &EnvInject{Hosts: inj.Hosts, Query: "key", Body: true, Placeholder: "@K@"}}}
+	if c.Equal(q) || q.Equal(qb) {
+		t.Error("Equal must see a header-to-query or body change")
 	}
 	if fresh := c.InjectsChanged(a); len(fresh) != 1 {
 		t.Errorf("InjectsChanged = %v, want the entry whose placeholder changed", fresh)

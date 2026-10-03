@@ -73,8 +73,9 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   host-only value in the guest. `guest` (default `true`) delivers the entry into the guest; a
   `guest: false` entry never enters it and only feeds the node's egress
   [secrets](egress.md#claim-env-and-secrets), or, with `inject`
-  (`{"hosts": [...], "header": "...", "placeholder": "..."}`, `placeholder`
-  optional), becomes a
+  (`{"hosts": [...], "header": "...", "placeholder": "..."}` with `placeholder`
+  optional, or `{"hosts": [...], "query": "...", "body": true, "placeholder": "..."}`
+  with `body` optional), becomes a
   [claim credential](egress.md#claim-credentials) the proxy sends to those
   hosts. A bad entry answers 400, and an `inject` host the claim's egress does
   not intercept answers 400 with the claim's VM released; see
@@ -730,7 +731,7 @@ values:
 {"env": {"MODE": {"value": "prod"}, "GW_KEY": {"value": "", "guest": false}}}
 ```
 
-An entry with `inject` comes back with its hosts, header and placeholder, value blanked.
+An entry with `inject` comes back with its hosts, header or query, body flag and placeholder, value blanked.
 An `inject` host the claim's pool does not intercept, or its tenant class does
 not allow, and a header the pool rule's own secret already sets on that host,
 answer 400 and store nothing.
@@ -788,7 +789,8 @@ Always on: every lifecycle transition appends one JSONL event to
 "id": "sb_…", "vm": "sbx-…"}` plus `key` (the pool key's stable hash, claim
 events), `tenant` (the owning tenant, on claim, egress, archive, unarchive and
 archive_delete), `children` (fork) and `ref` (the promoted
-template / checkpoint id, the egress host, or a `vmm_failed` reason). An egress event routed through an
+template / checkpoint id, the egress host, or a `vmm_failed` reason). An egress event that injected credentials names
+them in `secret` (`gh,claim:<entry>`, never a value). An egress event routed through an
 [upstream proxy](egress.md#upstream-proxies) carries `upstream` (its `host:port`), and with
 `egress_usage_bytes` on, `egress_bytes` events add the connection's payload `tx`/`rx` bytes. A volume claim also carries
 `volumes`, the applied catalog names, and — omitted when empty — `volumes_rw`,

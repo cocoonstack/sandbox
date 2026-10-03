@@ -20,7 +20,7 @@ func BenchmarkSignLeaf(b *testing.B) {
 }
 
 func BenchmarkInterceptedRequest(b *testing.B) {
-	addr, roots := benchFront(b, true)
+	addr, roots := benchFront(b, InterceptAlways)
 	tc := connectTLS(b, addr, "example.com:443", "example.com", roots)
 	defer func() { _ = tc.Close() }()
 	br := bufio.NewReader(tc)
@@ -30,7 +30,7 @@ func BenchmarkInterceptedRequest(b *testing.B) {
 }
 
 func BenchmarkSplicedRequest(b *testing.B) {
-	addr, roots := benchFront(b, false)
+	addr, roots := benchFront(b, InterceptOff)
 	tc := connectTLS(b, addr, "example.com:443", "example.com", roots)
 	defer func() { _ = tc.Close() }()
 	br := bufio.NewReader(tc)
@@ -40,7 +40,7 @@ func BenchmarkSplicedRequest(b *testing.B) {
 }
 
 func BenchmarkInterceptedHandshake(b *testing.B) {
-	addr, roots := benchFront(b, true)
+	addr, roots := benchFront(b, InterceptAlways)
 	for b.Loop() {
 		tc := connectTLS(b, addr, "example.com:443", "example.com", roots)
 		_ = tc.Close()
@@ -50,7 +50,7 @@ func BenchmarkInterceptedHandshake(b *testing.B) {
 func BenchmarkInterceptedConnection(b *testing.B) {
 	for _, arm := range []string{"fresh", "session-cache"} {
 		b.Run(arm, func(b *testing.B) {
-			addr, roots := benchFront(b, true)
+			addr, roots := benchFront(b, InterceptAlways)
 			var cache tls.ClientSessionCache
 			if arm == "session-cache" {
 				cache = tls.NewLRUClientSessionCache(8)
@@ -70,14 +70,33 @@ func BenchmarkInterceptedConnection(b *testing.B) {
 }
 
 func BenchmarkSplicedHandshake(b *testing.B) {
-	addr, roots := benchFront(b, false)
+	addr, roots := benchFront(b, InterceptOff)
 	for b.Loop() {
 		tc := connectTLS(b, addr, "example.com:443", "example.com", roots)
 		_ = tc.Close()
 	}
 }
 
-func benchFront(b *testing.B, intercept bool) (proxyAddr string, roots *x509.CertPool) {
+func BenchmarkTunnelDecision(b *testing.B) {
+	ca := testCAOnly(b)
+	creds := map[string][]Credential{"api.example.com": {{Name: "KEY", Header: "X-Key", Value: "k"}}}
+	for _, arm := range []struct {
+		name string
+		mode InterceptMode
+	}{{"plain", InterceptOff}, {"inject", InterceptInject}, {"always", InterceptAlways}} {
+		p := New(Policy{Allow: []Rule{{Host: "*", Intercept: arm.mode}}}, credSecrets{creds: creds}, ca, fixedDial(""), nil, nil)
+		for _, host := range []string{"other.example.com", "api.example.com"} {
+			b.Run(arm.name+"/"+host, func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					_, _ = p.tunnelDecision(host, 443, true)
+				}
+			})
+		}
+	}
+}
+
+func benchFront(b *testing.B, intercept InterceptMode) (proxyAddr string, roots *x509.CertPool) {
 	b.Helper()
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "hello")
@@ -86,7 +105,7 @@ func benchFront(b *testing.B, intercept bool) (proxyAddr string, roots *x509.Cer
 	rule := Rule{Host: "example.com", Intercept: intercept}
 	var ca *CA
 	roots = x509.NewCertPool()
-	if intercept {
+	if intercept == InterceptAlways {
 		ca = testCAOnly(b)
 		if !roots.AppendCertsFromPEM(ca.CertPEM()) {
 			b.Fatal("append cluster root")

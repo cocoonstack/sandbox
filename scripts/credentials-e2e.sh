@@ -2,7 +2,9 @@
 # Bare-metal acceptance for claim credentials: claims on one intercept pool each
 # send their own env-injected header to an HTTPS echo, the guest never holds the
 # value, an open event stream reaches the guest event by event, and a credential
-# survives a sandboxd restart. Runs a dedicated sandboxd on $ADDR.
+# survives a sandboxd restart; a pool whose only rule is intercept "inject"
+# intercepts only the claims that hold a credential for a host and fills query
+# and body placeholders. Runs a dedicated sandboxd on $ADDR.
 # Needs outbound to $ECHO and a $TEMPLATE whose silkd binds the egress relay.
 set -euo pipefail
 
@@ -10,6 +12,7 @@ TEMPLATE=${TEMPLATE:-rt:24.04}
 ADDR=${ADDR:-127.0.0.1:7882}
 TOKEN=${TOKEN:-e2e}
 ECHO=${ECHO:-postman-echo.com}
+OTHER=${OTHER:-example.com}
 SSE_PORT=${SSE_PORT:-18998}
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 PROBE=${EGRESS_PROBE_TOKEN:-probe-$(date +%s)}
@@ -81,7 +84,9 @@ cat >"$DATA/config.json" <<EOF
   "egress_internal_allow": ["127.0.0.1/32:$SSE_PORT"],
   "pools": [
     {"template": "$TEMPLATE", "net": "none", "size": "small", "warm": 2,
-     "egress": {"allow": [{"host": "$ECHO", "secret": "probe", "intercept": true}, {"host": "127.0.0.1"}]}}
+     "egress": {"allow": [{"host": "$ECHO", "secret": "probe", "intercept": true}, {"host": "127.0.0.1"}]}},
+    {"template": "$TEMPLATE", "net": "none", "size": "medium", "warm": 2,
+     "egress": {"allow": [{"host": "*", "intercept": "inject"}]}}
   ]
 }
 EOF
@@ -96,7 +101,7 @@ echo "== start sandboxd (intercept pool)"
 start
 for i in $(seq 1 300); do
   curl -sf -H "Authorization: Bearer $TOKEN" "http://$ADDR/v1/info" 2>/dev/null |
-    jq -e '.pools[0].warm >= 1' >/dev/null 2>&1 && break
+    jq -e 'all(.pools[]; .warm >= 1)' >/dev/null 2>&1 && break
   [[ $i == 300 ]] && { echo "pool never became warm"; exit 1; }
   sleep 1
 done
@@ -114,6 +119,18 @@ if grep -q "$value" "$DATA/state/audit.jsonl" "$DATA/state/usage.jsonl" 2>/dev/n
   exit 1
 fi
 grep -q "$value" "$DATA/state/claims.json" || { echo "claims.json lost the credential"; exit 1; }
+
+echo "== inject pool: conditional interception, query and body placeholders"
+"$DATA/credsmoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -echo "$ECHO" -other "$OTHER" \
+  -inject-size medium | tee "$DATA/inject.log"
+grep -q '"ev":"egress".*"secret":"claim:SERP"' "$DATA/state/usage.jsonl" || { echo "usage names no claim:SERP"; exit 1; }
+vault=$(awk '/^VAULT / {sub(/^VAULT /, ""); print}' "$DATA/inject.log")
+for v in "${vault%%|*}" "${vault##*|}"; do
+  if grep '"op":"egress"' "$DATA/state/audit.jsonl" | grep -qF "$v" || grep -qF "$v" "$DATA/state/usage.jsonl"; then
+    echo "an inject value reached an egress audit record or the usage journal"
+    exit 1
+  fi
+done
 
 echo "== restart sandboxd, recheck the surviving claim"
 kill "$DAEMON_PID"

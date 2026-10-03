@@ -134,7 +134,8 @@ Facts to plan around, stated so the boundary is honest:
   cocoonstack/cocoon#83). Compensate with dedicated sandbox nodes and a
   minimal host.
 - **HTTPS interception is HTTP/1.1 only and breaks certificate-pinning
-  clients** — scope `intercept` rules to hosts you control
+  clients** — scope `intercept` rules to hosts you control, or use
+  `"inject"` so only claims holding a credential for a host are intercepted
   ([egress](egress.md#https-interception)).
 - **The audit and usage journals are local JSONL** with size rotation —
   no tamper-evidence. Ship them off-node if integrity against a host

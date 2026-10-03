@@ -451,7 +451,7 @@ func TestPatchEnvMergesAndRepairsTheGuest(t *testing.T) {
 }
 
 func TestAnInjectNeedsAHostThePoolIntercepts(t *testing.T) {
-	pol := &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh", Intercept: true}, {Host: "*.corp.test", Intercept: true}, {Host: "plain.test"}}}
+	pol := &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh", Intercept: egress.InterceptAlways}, {Host: "*.corp.test", Intercept: egress.InterceptAlways}, {Host: "plain.test"}}}
 	eng := newFakeEngine()
 	eng.sockRoot = sockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
@@ -478,7 +478,7 @@ func TestAnInjectNeedsAHostThePoolIntercepts(t *testing.T) {
 }
 
 func TestAnInjectNeedsTheTenantClassToAllowTheHost(t *testing.T) {
-	pol := &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Intercept: true}, {Host: "*.corp.test", Intercept: true}}}
+	pol := &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Intercept: egress.InterceptAlways}, {Host: "*.corp.test", Intercept: egress.InterceptAlways}}}
 	eng := newFakeEngine()
 	eng.sockRoot = sockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
@@ -548,7 +548,7 @@ func TestInjectsSurviveARestartAndAReloadThatDropsTheInterceptStopsThem(t *testi
 	eng := newFakeEngine()
 	eng.sockRoot = sockRoot(t)
 	dataDir := t.TempDir()
-	pool := config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Intercept: true}}}}
+	pool := config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Intercept: egress.InterceptAlways}}}}
 	m := egressManagerAt(t, eng, dataDir, pool)
 	env := types.Env{"KEY": {Value: "k", Guest: hostOnly, Inject: &types.EnvInject{Hosts: []string{"api.github.com"}, Header: "X-Api-Key"}}}
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: env})
@@ -586,6 +586,21 @@ func TestAPlaceholderRidesTheEnvWriteIntoTheCredential(t *testing.T) {
 	}
 	if creds := (claimSecrets{m: m, sb: sb}).Credentials("api.github.com"); len(creds) != 1 || creds[0].Placeholder != "@KEY@" {
 		t.Errorf("credentials %+v, want one carrying the placeholder", creds)
+	}
+}
+
+func TestAQueryInjectOnAnInjectRuleRidesIntoTheCredential(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = sockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "*", Intercept: egress.InterceptInject}}}})
+	sb := mustClaim(t, m, testKey)
+	patch := types.EnvPatch{"FB": {Value: "k", Guest: hostOnly, Inject: &types.EnvInject{Hosts: []string{"graph.example.com"}, Query: "access_token", Body: true, Placeholder: "@FB@"}}}
+	if err := m.PatchEnv(t.Context(), sb.ID, patch, ""); err != nil {
+		t.Fatalf("a query inject on an inject rule: %v", err)
+	}
+	creds := (claimSecrets{m: m, sb: sb}).Credentials("graph.example.com")
+	if len(creds) != 1 || creds[0].Query != "access_token" || !creds[0].Body || creds[0].Header != "" {
+		t.Errorf("credentials %+v, want one query credential with body", creds)
 	}
 }
 
