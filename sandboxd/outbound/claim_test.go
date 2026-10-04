@@ -40,7 +40,7 @@ func TestRouteTakesTheClaimThenClassThenPoolUpstream(t *testing.T) {
 	} {
 		sb := &types.Sandbox{ID: "sb_route", Key: testKey, Tenant: "acme", EgressClass: tc.class}
 		sb.SetEnv(tc.env)
-		if got := (claimRouter{h: h, sb: sb}).Route(); got != tc.want {
+		if got := newClaim(h, sb, nil, nil).Route(); got != tc.want {
 			t.Errorf("%s: route %q, want %q", tc.name, got, tc.want)
 		}
 	}
@@ -62,7 +62,7 @@ func TestClaimsOnOnePoolLeaveThroughTheirOwnUpstreams(t *testing.T) {
 		return sb
 	}
 	for _, sb := range []*types.Sandbox{claim(up1.addr), claim(up2.addr), claim("")} {
-		r := claimRouter{h: h, sb: sb}
+		r := newClaim(h, sb, nil, nil)
 		conn, err := r.Dial(t.Context(), r.Route(), "tcp", origin)
 		if err != nil {
 			t.Fatalf("%s: dial: %v", sb.ID, err)
@@ -94,7 +94,7 @@ func TestATenantClaimUnderAClassDialsItsOwnUpstreamLikeARootClaim(t *testing.T) 
 		sb.SetEnv(types.Env{"EGRESS_UPSTREAM": {Value: upstream, Guest: hostOnly}})
 		return sb
 	}
-	r := claimRouter{h: h, sb: tenantClaim("http://user:pw@" + own.addr)}
+	r := newClaim(h, tenantClaim("http://user:pw@"+own.addr), nil, nil)
 	conn, err := r.Dial(t.Context(), r.Route(), "tcp", origin)
 	if err != nil {
 		t.Fatalf("dial through the claim's own upstream: %v", err)
@@ -103,7 +103,7 @@ func TestATenantClaimUnderAClassDialsItsOwnUpstreamLikeARootClaim(t *testing.T) 
 	if got := own.targets(); len(got) != 1 || got[0] != origin || classDefault.accepted.Load() != 0 {
 		t.Errorf("own upstream tunnels %v, class default saw %d: the claim value must win over the class default", got, classDefault.accepted.Load())
 	}
-	r = claimRouter{h: h, sb: tenantClaim("socks5://192.0.2.1:1080")}
+	r = newClaim(h, tenantClaim("socks5://192.0.2.1:1080"), nil, nil)
 	if _, err := r.Dial(t.Context(), r.Route(), "tcp", origin); err == nil || !strings.Contains(err.Error(), "not allowed") {
 		t.Errorf("a tenant claim's unlisted upstream: %v, want the allow-list refusal", err)
 	}
@@ -115,7 +115,7 @@ func TestATenantClaimUnderAClassDialsItsOwnUpstreamLikeARootClaim(t *testing.T) 
 func TestBlockedDestinationNeverReachesTheUpstream(t *testing.T) {
 	h := upstreamHost(t, &config.Config{}, nil)
 	up := tunnelProxy(t)
-	r := claimRouter{h: h}
+	r := newClaim(h, nil, nil, nil)
 	_, err := r.Dial(t.Context(), "http://"+up.addr, "tcp", "169.254.169.254:80")
 	if err == nil || !strings.Contains(err.Error(), "blocked internal address") {
 		t.Fatalf("metadata dial: %v, want the SSRF block", err)
@@ -133,7 +133,7 @@ func TestInternallyAllowedDestinationDialsDirect(t *testing.T) {
 	})
 	up := tunnelProxy(t)
 	origin := echoListener(t)
-	conn, err := (claimRouter{h: h}).Dial(t.Context(), "http://"+up.addr, "tcp", origin)
+	conn, err := newClaim(h, nil, nil, nil).Dial(t.Context(), "http://"+up.addr, "tcp", origin)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestDeadOrUnlistedUpstreamNeverFallsBackToDirect(t *testing.T) {
 		"socks5://192.0.2.1:1080":     "not allowed",
 		"http://upstream.example:443": "not allowed",
 	} {
-		if _, err := (claimRouter{h: h}).Dial(t.Context(), route, "tcp", origin); err == nil || !strings.Contains(err.Error(), want) {
+		if _, err := newClaim(h, nil, nil, nil).Dial(t.Context(), route, "tcp", origin); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v, want %q", route, err, want)
 		}
 	}
@@ -181,7 +181,7 @@ func TestAnInjectShapeRidesIntoTheCredential(t *testing.T) {
 			sb := &types.Sandbox{}
 			sb.SetEnv(types.Env{"KEY": {Value: "k", Guest: hostOnly, Inject: &inject}})
 			want := egress.Credential{Name: "KEY", Header: inject.Header, Query: inject.Query, Body: inject.Body, Value: "k", Placeholder: inject.Placeholder}
-			if creds := (claimSecrets{h: h, sb: sb}).Credentials(tt.host); len(creds) != 1 || creds[0] != want {
+			if creds := newClaim(h, sb, nil, nil).Credentials(tt.host); len(creds) != 1 || creds[0] != want {
 				t.Errorf("credentials %+v, want [%+v]", creds, want)
 			}
 		})
@@ -208,12 +208,12 @@ func BenchmarkClaimSecretsHeader(b *testing.B) {
 		}
 		b.Run(arm, func(b *testing.B) {
 			for b.Loop() {
-				_, _, _ = claimSecrets{h: h, sb: sb}.Header("gh")
+				_, _, _ = newClaim(h, sb, nil, nil).Header("gh")
 			}
 		})
 		b.Run(arm+"/credentials", func(b *testing.B) {
 			for b.Loop() {
-				_ = claimSecrets{h: h, sb: sb}.Credentials("api.example.com")
+				_ = newClaim(h, sb, nil, nil).Credentials("api.example.com")
 			}
 		})
 	}
@@ -221,7 +221,7 @@ func BenchmarkClaimSecretsHeader(b *testing.B) {
 	sb.SetEnv(types.Env{"KEY": {Value: "k", Guest: hostOnly, Inject: &types.EnvInject{Hosts: []string{"api.example.com"}, Header: "X-Key"}}})
 	b.Run("inject/credentials", func(b *testing.B) {
 		for b.Loop() {
-			_ = claimSecrets{h: h, sb: sb}.Credentials("api.example.com")
+			_ = newClaim(h, sb, nil, nil).Credentials("api.example.com")
 		}
 	})
 	many := types.Env{}
@@ -233,7 +233,7 @@ func BenchmarkClaimSecretsHeader(b *testing.B) {
 	b.Run("64-injects/miss", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			_ = claimSecrets{h: h, sb: sb}.Credentials("other.example.com")
+			_ = newClaim(h, sb, nil, nil).Credentials("other.example.com")
 		}
 	})
 }

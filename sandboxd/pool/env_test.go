@@ -17,6 +17,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -27,23 +28,23 @@ func TestClaimEnvFeedsTheLiveProxysSecrets(t *testing.T) {
 		_, _ = io.WriteString(w, r.Header.Get("Authorization"))
 	}))
 	t.Cleanup(origin.Close)
-	host := mustHostname(t, origin.URL)
+	host := outboundtest.Hostname(t, origin.URL)
 
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	pol := &egress.Policy{Allow: []egress.Rule{
 		{Host: host, Methods: []string{http.MethodGet}, Secret: "gh"},
 		{Host: host, Secret: "gw"},
 	}}
 	m := envManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
-	withOutbound(m, func(o *outbound.Options) { o.Dial = (&net.Dialer{}).DialContext })
+	withOutbound(t, m, func(o *outbound.Options) { o.Dial = (&net.Dialer{}).DialContext })
 	refillWarmVM(t, m)
 
 	sb, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{Env: types.Env{"GH_TOKEN": {Value: "Bearer claim", Guest: hostOnly}}})
 	if err != nil {
 		t.Fatalf("ClaimWarm: %v", err)
 	}
-	client := egressClient(engine.EgressSocketPath(sb.VsockSocket))
+	client := outboundtest.EgressClient(engine.EgressSocketPath(sb.VsockSocket))
 	send := func(method string) string {
 		t.Helper()
 		req, _ := http.NewRequestWithContext(t.Context(), method, origin.URL+"/", nil)
@@ -455,7 +456,7 @@ func TestPatchEnvMergesAndRepairsTheGuest(t *testing.T) {
 func TestAnInjectNeedsAHostThePoolIntercepts(t *testing.T) {
 	pol := &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh", Intercept: egress.InterceptAlways}, {Host: "*.corp.test", Intercept: egress.InterceptAlways}, {Host: "plain.test"}}}
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
 	sb := mustClaim(t, m, testKey)
 	for name, patch := range map[string]types.EnvPatch{
@@ -482,7 +483,7 @@ func TestAnInjectNeedsAHostThePoolIntercepts(t *testing.T) {
 func TestAnInjectNeedsTheTenantClassToAllowTheHost(t *testing.T) {
 	pol := &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Intercept: egress.InterceptAlways}, {Host: "*.corp.test", Intercept: egress.InterceptAlways}}}
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
 	editEgress(t, m, func(cfg *config.Config) {
 		cfg.EgressClasses = []config.EgressClass{{Name: "desk", Egress: &egress.Policy{Allow: []egress.Rule{{Host: "*.corp.test"}}}}}
@@ -501,7 +502,7 @@ func TestAnInjectNeedsTheTenantClassToAllowTheHost(t *testing.T) {
 
 func TestAClaimWithAnUninterceptedInjectIsRefused(t *testing.T) {
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()})
 	env := types.Env{"KEY": {Value: "k", Guest: hostOnly, Inject: &types.EnvInject{Hosts: []string{"other.test"}, Header: "X-Api-Key"}}}
 	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: env}); !errors.Is(err, ErrBadEnv) {
@@ -517,7 +518,7 @@ func TestAClaimWithAnUninterceptedInjectIsRefused(t *testing.T) {
 
 func TestEachClaimInjectsItsOwnCredentialAndAHostOnlyChangeNeedsNoGuest(t *testing.T) {
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()})
 	claim := func(value string) *types.Sandbox {
 		t.Helper()
@@ -548,7 +549,7 @@ func TestEachClaimInjectsItsOwnCredentialAndAHostOnlyChangeNeedsNoGuest(t *testi
 
 func TestInjectsSurviveARestartAndAReloadThatDropsTheInterceptStopsThem(t *testing.T) {
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	dataDir := t.TempDir()
 	pool := config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Intercept: egress.InterceptAlways}}}}
 	m := egressManagerAt(t, eng, dataDir, pool)
@@ -571,8 +572,7 @@ func TestInjectsSurviveARestartAndAReloadThatDropsTheInterceptStopsThem(t *testi
 		cfg.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com"}}}}}
 	})
 	v := m2.view.Load()
-	eval, ok := m2.policyOf(v, restored)
-	if gap := v.out.InjectGap(eval, ok, restored, env); len(gap) != 1 {
+	if gap := v.out.InjectGap(restored, env, m2.claimPooled); len(gap) != 1 {
 		t.Errorf("gap after the intercept rule went %v, want the inject named", gap)
 	}
 }
@@ -589,7 +589,7 @@ func TestAnInjectShapeRidesTheEnvWriteIntoTheCredential(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()
-			eng.sockRoot = sockRoot(t)
+			eng.sockRoot = outboundtest.SockRoot(t)
 			m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: tt.policy})
 			sb := mustClaim(t, m, testKey)
 			inject := tt.inject
@@ -613,7 +613,7 @@ func TestAnInjectShapeRidesTheEnvWriteIntoTheCredential(t *testing.T) {
 
 func TestALostInterceptRefusesOnlyAChangedInject(t *testing.T) {
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()})
 	sb := mustClaim(t, m, testKey)
 	if err := m.PatchEnv(t.Context(), sb.ID, injectPatch("X-Api-Key", "api.github.com"), ""); err != nil {

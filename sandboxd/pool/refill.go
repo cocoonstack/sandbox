@@ -227,13 +227,8 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, v *configView, key types
 	if err != nil {
 		return err
 	}
-	if err = m.out.MarkLane(ctx, key, sock); err != nil {
+	if err = m.out.PrepareGuest(ctx, v.out, key, sock); err != nil {
 		return err
-	}
-	if v.out.Intercepts(key) {
-		if err = m.eng.InstallCACert(ctx, sock, m.out.CA().CertPEM()); err != nil {
-			return fmt.Errorf("install egress ca: %w", err)
-		}
 	}
 	if err = m.runWarmup(ctx, v.poolWarmups[key], sock); err != nil {
 		return fmt.Errorf("warmup: %w", err)
@@ -403,16 +398,10 @@ func (m *Manager) provisionCold(ctx context.Context, key types.PoolKey) (*types.
 	if err != nil {
 		return nil, err
 	}
-	if err := m.out.MarkLane(ctx, key, sb.VsockSocket); err != nil {
+	// a pre-golden cold claim must trust the root, or intercepted hosts fail TLS for its life
+	if err := m.out.PrepareGuest(ctx, m.view.Load().out, key, sb.VsockSocket); err != nil {
 		m.destroy(ctx, sb.VMName)
 		return nil, err
-	}
-	// a pre-golden cold claim must trust the root, or intercepted hosts fail TLS for its life
-	if m.view.Load().out.Intercepts(key) {
-		if err := m.eng.InstallCACert(ctx, sb.VsockSocket, m.out.CA().CertPEM()); err != nil {
-			m.destroy(ctx, sb.VMName)
-			return nil, fmt.Errorf("install egress ca: %w", err)
-		}
 	}
 	return sb, nil
 }

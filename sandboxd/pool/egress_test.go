@@ -1,19 +1,13 @@
 package pool
 
 import (
-	"bufio"
-	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
 	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +15,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -48,7 +43,7 @@ func TestLaneVerdictReachesGuestOnColdBoots(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()
 			m := egressManager(t, eng, config.PoolSpec{PoolKey: tt.key, Warm: 1, Egress: egPolicy})
-			withOutbound(m, func(o *outbound.Options) { o.LockNIC = tt.locked })
+			withOutbound(t, m, func(o *outbound.Options) { o.LockNIC = tt.locked })
 			if tt.cold {
 				sb, err := m.provision(t.Context(), tt.key, "")
 				if err != nil {
@@ -124,11 +119,11 @@ func TestEffectivePolicyKeepsTheLayerPinnedAtClaim(t *testing.T) {
 	})
 
 	m.pools = map[types.PoolKey]*pool{testKey: newPool(testKey)}
-	if _, ok := m.policyOf(m.view.Load(), &types.Sandbox{Key: testKey, Tenant: "acme", EgressClass: "desk", Layer: types.LayerUnpooled}); !ok {
+	if _, ok := m.view.Load().out.Resolve(&types.Sandbox{Key: testKey, Tenant: "acme", EgressClass: "desk", Layer: types.LayerUnpooled}, m.claimPooled); !ok {
 		t.Error("a claim made on an unpooled key lost its tenant policy when the key gained a pool")
 	}
 	m.pools = map[types.PoolKey]*pool{}
-	if _, ok := m.policyOf(m.view.Load(), &types.Sandbox{Key: testKey, Tenant: "acme", EgressClass: "desk", Layer: types.LayerPooled}); ok {
+	if _, ok := m.view.Load().out.Resolve(&types.Sandbox{Key: testKey, Tenant: "acme", EgressClass: "desk", Layer: types.LayerPooled}, m.claimPooled); ok {
 		t.Error("a claim made on a policy-less pool gained the tenant policy when the pool was dropped")
 	}
 }
@@ -189,7 +184,7 @@ func TestEffectivePolicyComposition(t *testing.T) {
 			if tc.tenant != "" {
 				sb.EgressClass = "desk"
 			}
-			eval, ok := m.policyOf(m.view.Load(), sb)
+			eval, ok := m.view.Load().out.Resolve(sb, m.claimPooled)
 			if ok != tc.wantArmed {
 				t.Fatalf("armed=%v, want %v", ok, tc.wantArmed)
 			}
@@ -209,10 +204,10 @@ func TestEffectivePolicyComposition(t *testing.T) {
 func TestLockUsesProvisionedTapWithoutList(t *testing.T) {
 	eng := newFakeEngine()
 	eng.tap = "tap-fake0"
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
-	var taps tapLog
-	withOutbound(m, taps.record)
+	var taps outboundtest.TapLog
+	withOutbound(t, m, func(o *outbound.Options) { o.Lock, o.Unlock = taps.Lock, taps.Unlock })
 
 	sb, err := m.provision(t.Context(), egKey, "")
 	if err != nil {
@@ -228,7 +223,7 @@ func TestLockUsesProvisionedTapWithoutList(t *testing.T) {
 		t.Errorf("claim-path lock looked the VM up %d times, want 0", calls)
 	}
 	m.out.Disarm(sb.ID, true)
-	if locked, unlocked := taps.locked(), taps.unlocked(); !slices.Equal(locked, []string{"tap-fake0"}) || !slices.Equal(unlocked, locked) {
+	if locked, unlocked := taps.Locked(), taps.Unlocked(); !slices.Equal(locked, []string{"tap-fake0"}) || !slices.Equal(unlocked, locked) {
 		t.Errorf("locked %v and unlocked %v at removal, want tap-fake0 recorded", locked, unlocked)
 	}
 }
@@ -267,8 +262,8 @@ func TestRollbackKeepsLockWhenRemoveFails(t *testing.T) {
 	eng.vms["sbx-r1"] = "/run/sbx-r1.sock"
 	eng.vms["sbx-r2"] = "/run/sbx-r2.sock"
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
-	var taps tapLog
-	withOutbound(m, taps.record)
+	var taps outboundtest.TapLog
+	withOutbound(t, m, func(o *outbound.Options) { o.Lock, o.Unlock = taps.Lock, taps.Unlock })
 
 	sbs := []*types.Sandbox{
 		{ID: "sb_r1", VMName: "sbx-r1", Key: egKey},
@@ -291,14 +286,14 @@ func TestRollbackKeepsLockWhenRemoveFails(t *testing.T) {
 	if claimed != 0 {
 		t.Errorf("rollback left %d claims", claimed)
 	}
-	if slices.Contains(taps.unlocked(), "tap-r1") {
+	if slices.Contains(taps.Unlocked(), "tap-r1") {
 		t.Error("rollback unlocked a VM whose remove failed")
 	}
-	if !slices.Contains(taps.unlocked(), "tap-r2") {
+	if !slices.Contains(taps.Unlocked(), "tap-r2") {
 		t.Error("rollback kept a confirmed-removed VM locked")
 	}
 	m.out.Disarm("sb_r1", true)
-	if !slices.Contains(taps.unlocked(), "tap-r1") {
+	if !slices.Contains(taps.Unlocked(), "tap-r1") {
 		t.Error("rollback dropped the lock record of a VM whose remove failed")
 	}
 }
@@ -317,7 +312,7 @@ func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
 	removed := map[string]bool{}
 
 	var gotKeep map[string]bool
-	m.sweep = func(keep map[string]bool) error { gotKeep = keep; return nil }
+	withOutbound(t, m, func(o *outbound.Options) { o.Sweep = func(keep map[string]bool) error { gotKeep = keep; return nil } })
 	m.resyncEgress(t.Context(), live, removed)
 
 	if removed["sbx-q1"] {
@@ -346,7 +341,7 @@ func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 	m.pools[egKey].goldenDir = gd
 	m.mu.Unlock()
 	policyLive := func() bool {
-		_, ok := m.policyOf(m.view.Load(), &types.Sandbox{Key: egKey})
+		_, ok := m.view.Load().out.Resolve(&types.Sandbox{Key: egKey}, m.claimPooled)
 		return ok
 	}
 	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: egKey, WarmMax: 3}}); err != nil {
@@ -385,7 +380,7 @@ func TestEgressLaneCannotForkOrCheckpoint(t *testing.T) {
 
 func TestWarmClaimServesTheDoorsRefillBound(t *testing.T) {
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	pol := &egress.Policy{Socks5: true, Allow: []egress.Rule{{Host: "example.com"}}}
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
 	warm := refillWarmVM(t, m)
@@ -405,7 +400,7 @@ func TestWarmClaimServesTheDoorsRefillBound(t *testing.T) {
 
 func TestWarmClaimRebindsADoorTheGuestReachedEarly(t *testing.T) {
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	pol := &egress.Policy{Socks5: true, Allow: []egress.Rule{{Host: "example.com"}}}
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
 	warm := refillWarmVM(t, m)
@@ -430,7 +425,7 @@ func TestWarmClaimRebindsADoorTheGuestReachedEarly(t *testing.T) {
 
 func TestTrimmedWarmVMClosesItsDoors(t *testing.T) {
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: egPolicy})
 	warm := refillWarmVM(t, m)
 	path := engine.EgressSocketPath(warm.VsockSocket)
@@ -454,7 +449,7 @@ func TestTrimmedWarmVMClosesItsDoors(t *testing.T) {
 
 func TestAPromotedTemplatesCloneEgressesAsItsSourcePool(t *testing.T) {
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	pol := &egress.Policy{Socks5: true, Allow: []egress.Rule{{Host: "example.com"}}}
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
 	parent := mustClaim(t, m, testKey)
@@ -471,7 +466,7 @@ func TestAPromotedTemplatesCloneEgressesAsItsSourcePool(t *testing.T) {
 		t.Fatalf("clone policy source %+v layer %q, want the source pool %+v and its pooled layer", clone.PolicySource, clone.Layer, testKey)
 	}
 	dialDoors(t, clone)
-	eval, ok := m.policyOf(m.view.Load(), clone)
+	eval, ok := m.view.Load().out.Resolve(clone, m.claimPooled)
 	if !ok {
 		t.Fatal("the clone resolved no policy")
 	}
@@ -504,7 +499,7 @@ func TestAPromotedTemplatesCloneEgressesAsItsSourcePool(t *testing.T) {
 
 func TestAPromotedTemplatesCloneInterceptsAsItsSourcePool(t *testing.T) {
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()})
 	parent := mustClaim(t, m, testKey)
 	key, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:intercept", "")
@@ -515,7 +510,7 @@ func TestAPromotedTemplatesCloneInterceptsAsItsSourcePool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim the template: %v", err)
 	}
-	conn := connectDoor(t, engine.EgressSocketPath(clone.VsockSocket), "api.github.com:443")
+	conn, _ := outboundtest.ConnectDoor(t, engine.EgressSocketPath(clone.VsockSocket), "api.github.com:443")
 	tc := tls.Client(conn, &tls.Config{ServerName: "api.github.com", InsecureSkipVerify: true})
 	if err = tc.Handshake(); err != nil {
 		t.Fatalf("handshake through the door: %v", err)
@@ -527,7 +522,7 @@ func TestAPromotedTemplatesCloneInterceptsAsItsSourcePool(t *testing.T) {
 
 func TestAClaimWithoutEgressGetsNoDoorsWhateverItsPolicy(t *testing.T) {
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	pol := &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
 	pin := pinDoor(t, engine.EgressSocketPath(refillWarmVM(t, m).VsockSocket))
@@ -561,7 +556,7 @@ func TestAClaimWithoutEgressGetsNoDoorsWhateverItsPolicy(t *testing.T) {
 
 func TestARepromoteCarriesItsNewSourcePool(t *testing.T) {
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	other := types.PoolKey{Template: "py:3.12", Net: testKey.Net, Size: testKey.Size}
 	m := egressManager(t, eng,
 		config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "a.test"}}}},
@@ -634,28 +629,6 @@ func servesPinned(t *testing.T, sb *types.Sandbox, pins []string) bool {
 	return true
 }
 
-func connectDoor(t *testing.T, path, target string) net.Conn {
-	t.Helper()
-	conn, err := net.DialTimeout("unix", path, 2*time.Second)
-	if err != nil {
-		t.Fatalf("dial the door: %v", err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	if _, err = fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target); err != nil {
-		t.Fatalf("send CONNECT: %v", err)
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
-	if err != nil {
-		t.Fatalf("read the CONNECT answer: %v", err)
-	}
-	t.Cleanup(func() { _ = resp.Body.Close() })
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("CONNECT answered %s", resp.Status)
-	}
-	return conn
-}
-
 func refillWarmVM(t *testing.T, m *Manager) *types.Sandbox {
 	t.Helper()
 	seedGolden(t, m, "")
@@ -673,18 +646,6 @@ func refillWarmVM(t *testing.T, m *Manager) *types.Sandbox {
 		return warm != nil
 	})
 	return warm
-}
-
-func egressClient(path string) *http.Client {
-	return &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: "proxy.internal:3128"}),
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, "unix", path)
-			},
-		},
-	}
 }
 
 func egressManager(t testing.TB, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
@@ -728,68 +689,13 @@ func writeTestEgressCA(t testing.TB) *config.EgressCAConfig {
 	return ca
 }
 
-func vsockSandbox(t *testing.T, id string) *types.Sandbox {
+func withOutbound(t *testing.T, m *Manager, edit func(*outbound.Options)) {
 	t.Helper()
-	return &types.Sandbox{ID: id, Key: testKey, VsockSocket: filepath.Join(sockRoot(t), "v")}
-}
-
-func sockRoot(t testing.TB) string {
-	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "eg")
+	ca, err := outbound.LoadCA(m.cfg)
 	if err != nil {
-		t.Fatalf("sockdir: %v", err)
+		t.Fatalf("load egress ca: %v", err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	return dir
-}
-
-func mustHostname(t *testing.T, raw string) string {
-	t.Helper()
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatalf("parse %q: %v", raw, err)
-	}
-	return u.Hostname()
-}
-
-func withOutbound(m *Manager, edit func(*outbound.Options)) {
-	o := m.outboundOptions(m.out.CA())
+	o := m.outboundOptions(ca)
 	edit(&o)
 	m.out = outbound.New(o)
-}
-
-type tapLog struct {
-	mu      sync.Mutex
-	locks   []string
-	unlocks []string
-}
-
-func (l *tapLog) record(o *outbound.Options) {
-	o.Lock, o.Unlock = l.lock, l.unlock
-}
-
-func (l *tapLog) lock(tap string) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.locks = append(l.locks, tap)
-	return nil
-}
-
-func (l *tapLog) unlock(tap string) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.unlocks = append(l.unlocks, tap)
-	return nil
-}
-
-func (l *tapLog) locked() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return slices.Clone(l.locks)
-}
-
-func (l *tapLog) unlocked() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return slices.Clone(l.unlocks)
 }

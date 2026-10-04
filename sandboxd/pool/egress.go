@@ -24,15 +24,6 @@ func (m *Manager) disarmIfReleased(sb *types.Sandbox) bool {
 	return !live
 }
 
-// policyOf resolves sb's effective egress policy against v; it takes m.mu only for a claim from before layers were recorded.
-func (m *Manager) policyOf(v *configView, sb *types.Sandbox) (egress.Evaluator, bool) {
-	return v.out.Resolve(sb, func() bool { return m.claimPooled(sb) })
-}
-
-func (m *Manager) policyOfLocked(v *configView, sb *types.Sandbox) (egress.Evaluator, bool) {
-	return v.out.Resolve(sb, func() bool { return m.claimPooledLocked(sb) })
-}
-
 func (m *Manager) claimPooled(sb *types.Sandbox) bool {
 	if sb.Layer != "" {
 		return sb.Layer == types.LayerPooled

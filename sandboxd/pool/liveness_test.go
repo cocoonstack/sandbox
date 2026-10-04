@@ -13,6 +13,8 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -215,7 +217,7 @@ func TestLivenessLeavesALapsedLeaseToReap(t *testing.T) {
 
 func TestWakeOfAFailedClaimRearmsEgressAfterARestart(t *testing.T) {
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	t.Setenv("GH_TOKEN", "s3cr3t")
 	cfg := &config.Config{
 		DataDir: t.TempDir(), Bridges: []string{"sbxbr0"}, EgressCA: writeTestEgressCA(t), VMMRestart: types.VMMRestartNone,
@@ -255,7 +257,7 @@ func TestWakeOfAFailedClaimRearmsEgressAfterARestart(t *testing.T) {
 
 func TestRestartKeepsAnEgressDoorThatSurvivedTheVMM(t *testing.T) {
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}})
 	sb := mustClaim(t, m, testKey)
 	killVMM(eng, sb.VMName)
@@ -307,7 +309,7 @@ func TestRestartThatCannotDeliverTheEnvFailsAndSpendsTheBudget(t *testing.T) {
 
 func TestRestartThatCannotArmTheEgressDoorFailsAndSpendsTheBudget(t *testing.T) {
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}})
 	sb := mustClaim(t, m, testKey)
 	killVMM(eng, sb.VMName)
@@ -411,9 +413,11 @@ func TestResyncRecordsADownEgressLaneTap(t *testing.T) {
 		Config: types.VMConfig{Name: "sbx-down"}, State: "stopped",
 		NetworkConfigs: []types.VMNetConfig{{TAP: "tap-down"}},
 	}}
-	m.sweep = func(map[string]bool) error { return nil }
-	var taps tapLog
-	withOutbound(m, taps.record)
+	var taps outboundtest.TapLog
+	withOutbound(t, m, func(o *outbound.Options) {
+		o.Lock, o.Unlock = taps.Lock, taps.Unlock
+		o.Sweep = func(map[string]bool) error { return nil }
+	})
 
 	m.resyncEgress(t.Context(), live, map[string]bool{})
 
@@ -424,7 +428,7 @@ func TestResyncRecordsADownEgressLaneTap(t *testing.T) {
 		t.Fatal("down egress-lane claim quarantined, want it kept for the liveness pass")
 	}
 	m.out.Disarm(sb.ID, true)
-	if got := taps.unlocked(); !slices.Equal(got, []string{"tap-down"}) {
+	if got := taps.Unlocked(); !slices.Equal(got, []string{"tap-down"}) {
 		t.Errorf("release unlocked %v, want tap-down recorded so release unlocks it", got)
 	}
 }

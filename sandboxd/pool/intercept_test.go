@@ -15,7 +15,7 @@ import (
 func TestGoldenBuildInstallsCAForInterceptPool(t *testing.T) {
 	eng := newFakeEngine()
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()})
-	if m.out.CA() == nil {
+	if m.out.CAFingerprint() == "" {
 		t.Fatal("egress CA not loaded for an intercept pool")
 	}
 	final := filepath.Join(m.goldensDir(), testKey.Hash())
@@ -38,7 +38,7 @@ func TestGoldenBuildSkipsCAForPlainPool(t *testing.T) {
 	eng := newFakeEngine()
 	plain := &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh"}}}
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: plain})
-	if m.out.CA() != nil {
+	if m.out.CAFingerprint() != "" {
 		t.Error("egress CA loaded though no pool intercepts")
 	}
 	final := filepath.Join(m.goldensDir(), testKey.Hash())

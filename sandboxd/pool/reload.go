@@ -71,8 +71,7 @@ func (m *Manager) warnLostInjects(ctx context.Context, v *configView, sbs []*typ
 		m.mu.Lock()
 		env := sb.Env
 		m.mu.Unlock()
-		eval, ok := m.policyOf(v, sb)
-		if gap := v.out.InjectGap(eval, ok, sb, env); len(gap) > 0 {
+		if gap := v.out.InjectGap(sb, env, m.claimPooled); len(gap) > 0 {
 			log.WithFunc("pool.warnLostInjects").Warnf(ctx, "claim %s: inject no longer intercepted: %s", sb.ID, strings.Join(gap, ", "))
 		}
 	}

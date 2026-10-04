@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -16,7 +17,7 @@ func BenchmarkArmEgress(b *testing.B) {
 	for _, contended := range []bool{false, true} {
 		b.Run(fmt.Sprintf("contended=%v", contended), func(b *testing.B) {
 			m := egressManager(b, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: egPolicy})
-			root := sockRoot(b)
+			root := outboundtest.SockRoot(b)
 			stop := make(chan struct{})
 			var wg sync.WaitGroup
 			if contended {

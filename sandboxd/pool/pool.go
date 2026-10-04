@@ -26,7 +26,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
-	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/poolset"
 	poolpg "github.com/cocoonstack/sandbox/sandboxd/poolset/pg"
@@ -362,8 +361,6 @@ type Manager struct {
 	notifyTemplates func()
 
 	out *outbound.Host
-	// sweep is a test seam: the nft sweep is netlink-only.
-	sweep func(map[string]bool) error
 
 	mu              sync.Mutex
 	pools           map[types.PoolKey]*pool
@@ -404,7 +401,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		recRefs:         map[string]int{},
 		healPending:     map[string]struct{}{},
 		healAbort:       map[string]struct{}{},
-		sweep:           netfilter.SweepExcept,
 		refillSem:       make(chan struct{}, refill),
 		probeSem:        make(chan struct{}, refill),
 		refillKick:      make(chan struct{}, 1),
@@ -469,13 +465,9 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		p.applySpec(spec)
 		m.pools[spec.PoolKey] = p
 	}
-	var ca *egress.CA
-	if slices.ContainsFunc(cfg.Pools, func(s config.PoolSpec) bool { return s.Egress.Intercepts() }) {
-		loaded, err := outbound.LoadCA(cfg.EgressCA)
-		if err != nil {
-			return nil, fmt.Errorf("load egress ca: %w", err)
-		}
-		ca = loaded
+	ca, caErr := outbound.LoadCA(cfg)
+	if caErr != nil {
+		return nil, fmt.Errorf("load egress ca: %w", caErr)
 	}
 	m.out = outbound.New(m.outboundOptions(ca))
 	m.configSeedHash = poolSeedHash(cfg.Pools)
@@ -499,12 +491,7 @@ func (m *Manager) ClusterDigest() string {
 	m.reloadMu.Lock()
 	cfg := m.cfg
 	m.reloadMu.Unlock()
-	return cfg.ClusterDigest(m.EgressCAFingerprint(), m.TenantRecords())
-}
-
-// EgressCAFingerprint is the outbound host's CA fingerprint.
-func (m *Manager) EgressCAFingerprint() string {
-	return m.out.CAFingerprint()
+	return cfg.ClusterDigest(m.out.CAFingerprint(), m.TenantRecords())
 }
 
 // Run drives the refill and reap loops until ctx is canceled.

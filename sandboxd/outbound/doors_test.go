@@ -1,9 +1,7 @@
 package outbound
 
 import (
-	"bufio"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -16,6 +14,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 )
 
 func TestEgressDoorHalfCloseReachesTheGuest(t *testing.T) {
@@ -34,13 +33,13 @@ func TestEgressDoorHalfCloseReachesTheGuest(t *testing.T) {
 	}()
 	pol := &egress.Policy{Allow: []egress.Rule{{Host: "127.0.0.1"}}}
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, pol), func(o *Options) { o.Dial = (&net.Dialer{}).DialContext })
-	sb := vsockSandbox(t, "sb_halfclose")
+	sb := outboundtest.VsockSandbox(t, "sb_halfclose", testKey)
 	if err := h.Arm(t.Context(), sb); err != nil {
 		t.Fatalf("arm egress: %v", err)
 	}
 	t.Cleanup(func() { h.Disarm(sb.ID, true) })
 
-	tunnel := connectDoor(t, engine.EgressSocketPath(sb.VsockSocket), origin.Addr().String())
+	_, tunnel := outboundtest.ConnectDoor(t, engine.EgressSocketPath(sb.VsockSocket), origin.Addr().String())
 	body, bodyErr := io.ReadAll(tunnel)
 	if bodyErr != nil {
 		t.Fatalf("tunnel did not end with EOF after the origin closed: %v", bodyErr)
@@ -89,9 +88,9 @@ func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
 		_, _ = io.WriteString(w, "ok")
 	}))
 	t.Cleanup(origin.Close)
-	pol := &egress.Policy{Allow: []egress.Rule{{Host: mustHostname(t, origin.URL)}}}
+	pol := &egress.Policy{Allow: []egress.Rule{{Host: outboundtest.Hostname(t, origin.URL)}}}
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, pol), func(o *Options) { o.Dial = (&net.Dialer{}).DialContext })
-	sb := vsockSandbox(t, "sb_cap")
+	sb := outboundtest.VsockSandbox(t, "sb_cap", testKey)
 	if err := h.Arm(t.Context(), sb); err != nil {
 		t.Fatalf("arm egress: %v", err)
 	}
@@ -115,7 +114,7 @@ func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
 		}
 	})
 
-	client := egressClient(path)
+	client := outboundtest.EgressClient(path)
 	client.Timeout = 500 * time.Millisecond
 	if resp, err := client.Get(origin.URL + "/"); err == nil {
 		resp.Body.Close()
@@ -133,26 +132,4 @@ func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
 		t.Errorf("status %d after a slot freed, want 200", resp.StatusCode)
 	}
 	h.Disarm(sb.ID, true)
-}
-
-func connectDoor(t *testing.T, path, target string) io.ReadCloser {
-	t.Helper()
-	conn, err := net.DialTimeout("unix", path, 2*time.Second)
-	if err != nil {
-		t.Fatalf("dial the door: %v", err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	if _, err = fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target); err != nil {
-		t.Fatalf("send CONNECT: %v", err)
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
-	if err != nil {
-		t.Fatalf("read the CONNECT answer: %v", err)
-	}
-	t.Cleanup(func() { _ = resp.Body.Close() })
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("CONNECT answered %s", resp.Status)
-	}
-	return resp.Body
 }

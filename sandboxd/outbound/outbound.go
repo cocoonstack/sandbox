@@ -22,31 +22,35 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// Engine is the VM engine surface the host needs: a guest's lane verdict and a VM's tap.
+// Engine is the VM engine surface the host needs: a VM's tap, and a guest's lane verdict and egress root.
 type Engine interface {
 	Inspect(ctx context.Context, name string) (types.VMRecord, bool, error)
 	MarkLane(ctx context.Context, vsockSocket string, lane engine.Lane) error
+	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error
 }
+
+// PooledFunc reports whether sb's key had a pool when it was claimed; it may take the caller's lock.
+type PooledFunc func(sb *types.Sandbox) bool
 
 // TapFunc applies or drops the nft lock on one tap.
 type TapFunc func(tap string) error
 
 // Options wires a Host to the node: its engine, the live egress view, and where events go.
 type Options struct {
-	Engine Engine
-	View   func() *View
-	// Pooled reports whether sb's key had a pool when it was claimed; it may take the caller's lock.
-	Pooled   func(sb *types.Sandbox) bool
+	Engine   Engine
+	View     func() *View
+	Pooled   PooledFunc
 	Record   func(ctx context.Context, id, tenant string, ev egress.Event)
 	Transfer func(ctx context.Context, id, tenant string, ev egress.Event, sent, received int64)
 	CA       *egress.CA
 	// LockNIC nft-locks egress-lane NICs, which only a node with bridges has.
 	LockNIC bool
-	// Dial, Verdict, Lock and Unlock default to the internal-address guard and netfilter; tests swap them.
+	// Dial, Verdict, Lock, Unlock and Sweep default to the internal-address guard and netfilter; tests swap them.
 	Dial    egress.DialFunc
 	Verdict func(ip netip.Addr, port uint16) (bool, error)
 	Lock    TapFunc
 	Unlock  TapFunc
+	Sweep   func(keep map[string]bool) error
 }
 
 // Host holds every sandbox's doors and NIC lock; it guards its own state, never the caller's.
@@ -67,6 +71,9 @@ func New(o Options) *Host {
 	}
 	if h.o.Unlock == nil {
 		h.o.Unlock = netfilter.Unlock
+	}
+	if h.o.Sweep == nil {
+		h.o.Sweep = netfilter.SweepExcept
 	}
 	if h.o.Dial == nil {
 		h.o.Dial = newDialer(func() []egress.InternalAllow { return h.o.View().internalAllow }).DialContext
@@ -91,7 +98,7 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	if !v.guarded || sb.VsockSocket == "" {
 		return nil
 	}
-	policy, ok := v.Resolve(sb, func() bool { return h.o.Pooled(sb) })
+	policy, ok := v.Resolve(sb, h.o.Pooled)
 	if !ok {
 		h.ClosePrebound(sb.VMName)
 		return nil
@@ -107,8 +114,8 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	if !v.Intercepts(sb.PolicyKey()) {
 		ca = nil
 	}
-	proxy := egress.New(newLivePolicy(h, sb, v, policy), claimSecrets{h: h, sb: sb}, ca, claimRouter{h: h, sb: sb},
-		func(ev egress.Event) { h.o.Record(evCtx, id, tenant, ev) }, sb)
+	c := newClaim(h, sb, v, policy)
+	proxy := egress.New(c, c, ca, c, func(ev egress.Event) { h.o.Record(evCtx, id, tenant, ev) }, sb)
 	if v.usageBytes {
 		proxy.OnTransfer(func(ev egress.Event, sent, received int64) { h.o.Transfer(evCtx, id, tenant, ev, sent, received) })
 	}
@@ -215,11 +222,6 @@ func (h *Host) KeepLock(id, tap string) {
 	h.mu.Unlock()
 }
 
-// LockTap nft-locks tap's guest egress to the proxy.
-func (h *Host) LockTap(tap string) error {
-	return h.o.Lock(tap)
-}
-
 // UnlockTap drops tap's lock, for a removed VM no sandbox tracks.
 func (h *Host) UnlockTap(tap string) error {
 	return h.o.Unlock(tap)
@@ -255,26 +257,38 @@ func (h *Host) LocksNIC(key types.PoolKey) bool {
 	return h.o.LockNIC && key.Net == types.NetEgress
 }
 
-// LocksNICs reports whether this node nft-locks egress-lane NICs at all.
-func (h *Host) LocksNICs() bool {
-	return h.o.LockNIC
+// LockedTaps lists the taps a lock already holds, nil when this node locks no NIC.
+func (h *Host) LockedTaps() (map[string]bool, error) {
+	if !h.o.LockNIC {
+		return nil, nil
+	}
+	return netfilter.LockedTaps()
 }
 
-// MarkLane tells key's guest at sock its lane verdict; a non-egress key gets none.
-func (h *Host) MarkLane(ctx context.Context, key types.PoolKey, sock string) error {
-	lane := h.Lane(key)
-	if lane == "" {
-		return nil
+// Relock locks a restarted node's egress-lane claim to tap again and re-marks its guest's lane.
+func (h *Host) Relock(ctx context.Context, sb *types.Sandbox, tap string) error {
+	if err := h.o.Lock(tap); err != nil {
+		return err
 	}
-	if err := h.o.Engine.MarkLane(ctx, sock, lane); err != nil {
-		return fmt.Errorf("mark lane: %w", err)
+	return h.markLane(ctx, sb.Key, sb.VsockSocket)
+}
+
+// Sweep drops every egress table whose tap keep does not name.
+func (h *Host) Sweep(keep map[string]bool) error {
+	return h.o.Sweep(keep)
+}
+
+// PrepareGuest tells a new guest its lane and, when v intercepts key, installs the egress root.
+func (h *Host) PrepareGuest(ctx context.Context, v *View, key types.PoolKey, sock string) error {
+	if err := h.markLane(ctx, key, sock); err != nil {
+		return err
+	}
+	if v.Intercepts(key) {
+		if err := h.o.Engine.InstallCACert(ctx, sock, h.o.CA.CertPEM()); err != nil {
+			return fmt.Errorf("install egress ca: %w", err)
+		}
 	}
 	return nil
-}
-
-// CA is the egress root the node intercepts with, nil when no pool intercepted at boot.
-func (h *Host) CA() *egress.CA {
-	return h.o.CA
 }
 
 // CAFingerprint is the egress root's fingerprint, or "" when the node intercepts nothing.
@@ -297,6 +311,17 @@ func (h *Host) RefuseInterceptOn(old, next *View, served func(types.PoolKey) boo
 		case served(key):
 			return fmt.Errorf("pool %s turns intercept on, but its guests do not trust the CA: use a new pool key", key.Template)
 		}
+	}
+	return nil
+}
+
+func (h *Host) markLane(ctx context.Context, key types.PoolKey, sock string) error {
+	lane := h.Lane(key)
+	if lane == "" {
+		return nil
+	}
+	if err := h.o.Engine.MarkLane(ctx, sock, lane); err != nil {
+		return fmt.Errorf("mark lane: %w", err)
 	}
 	return nil
 }
@@ -333,17 +358,21 @@ func (h *Host) tapOf(ctx context.Context, vmName string) (string, error) {
 	return "", fmt.Errorf("no tap for %s", vmName)
 }
 
-// LoadCA reads the egress root and this node's intermediate.
-func LoadCA(cfg *config.EgressCAConfig) (*egress.CA, error) {
-	root, err := os.ReadFile(cfg.RootCert)
+// LoadCA reads cfg's egress root and this node's intermediate, nil when no pool intercepts.
+func LoadCA(cfg *config.Config) (*egress.CA, error) {
+	if !slices.ContainsFunc(cfg.Pools, func(s config.PoolSpec) bool { return s.Egress.Intercepts() }) {
+		return nil, nil
+	}
+	ca := cfg.EgressCA
+	root, err := os.ReadFile(ca.RootCert)
 	if err != nil {
 		return nil, fmt.Errorf("read root cert: %w", err)
 	}
-	interCert, err := os.ReadFile(cfg.IntermediateCert)
+	interCert, err := os.ReadFile(ca.IntermediateCert)
 	if err != nil {
 		return nil, fmt.Errorf("read intermediate cert: %w", err)
 	}
-	interKey, err := os.ReadFile(cfg.IntermediateKey)
+	interKey, err := os.ReadFile(ca.IntermediateKey)
 	if err != nil {
 		return nil, fmt.Errorf("read intermediate key: %w", err)
 	}

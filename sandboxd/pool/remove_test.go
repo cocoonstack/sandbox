@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -73,10 +74,10 @@ func TestRemovalRetryConvergesConfirmedSurvivor(t *testing.T) {
 func TestRemovalRetryFinishesEgressCleanup(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	var taps tapLog
-	withOutbound(m, func(o *outbound.Options) {
+	var taps outboundtest.TapLog
+	withOutbound(t, m, func(o *outbound.Options) {
 		o.LockNIC = true
-		taps.record(o)
+		o.Lock, o.Unlock = taps.Lock, taps.Unlock
 	})
 	eng.vms["survivor"] = "/run/survivor.sock"
 	eng.removeErrFor = "survivor"
@@ -95,7 +96,7 @@ func TestRemovalRetryFinishesEgressCleanup(t *testing.T) {
 	m.mu.Lock()
 	_, pending := m.pendingRemovals["survivor"]
 	m.mu.Unlock()
-	if unlocked := taps.unlocked(); pending || !slices.Equal(unlocked, []string{"tap-survivor"}) || !eng.removed("survivor") {
+	if unlocked := taps.Unlocked(); pending || !slices.Equal(unlocked, []string{"tap-survivor"}) || !eng.removed("survivor") {
 		t.Fatalf("egress cleanup incomplete: pending=%v unlocked=%v removed=%v",
 			pending, unlocked, eng.removed("survivor"))
 	}

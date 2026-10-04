@@ -21,6 +21,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/metastore/metastoretest"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/file"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -251,12 +252,12 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir, APIToken: "root", EgressClasses: []config.EgressClass{{Name: "desk", Egress: &egress.Policy{Allow: []egress.Rule{{Host: "b.test"}}}}}}
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
-	withOutbound(m, func(o *outbound.Options) {
+	withOutbound(t, m, func(o *outbound.Options) {
 		o.Dial = func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, origin.Listener.Addr().String())
 		}
@@ -278,7 +279,7 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim u-1: %v", err)
 	}
-	eval, ok := m.policyOf(m.view.Load(), classed)
+	eval, ok := m.view.Load().out.Resolve(classed, m.claimPooled)
 	if !ok || classed.EgressClass != "desk" || dtoOf(classed).EgressClass != "desk" {
 		t.Fatalf("u-1 claim class %q armed %v, want the desk class stamped and journaled", classed.EgressClass, ok)
 	}
@@ -288,7 +289,7 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 	if _, d := eval.Eval("a.test", "GET", 443); d == egress.DecisionAllow {
 		t.Error("a host outside the class is allowed")
 	}
-	client := egressClient(engine.EgressSocketPath(classed.VsockSocket))
+	client := outboundtest.EgressClient(engine.EgressSocketPath(classed.VsockSocket))
 	status := func(host string) int {
 		t.Helper()
 		resp, getErr := client.Get("http://" + host + "/")
@@ -317,7 +318,7 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim u-2: %v", err)
 	}
-	if _, ok = m.policyOf(m.view.Load(), bare); ok {
+	if _, ok = m.view.Load().out.Resolve(bare, m.claimPooled); ok {
 		t.Error("a tenant without a class gained egress")
 	}
 

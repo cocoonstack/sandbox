@@ -19,6 +19,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -182,14 +183,14 @@ func TestAReloadDropsTheLiveProxiesPooledConnections(t *testing.T) {
 	}
 	origin.Start()
 	t.Cleanup(origin.Close)
-	host := mustHostname(t, origin.URL)
+	host := outboundtest.Hostname(t, origin.URL)
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: host}}}})
-	withOutbound(m, func(o *outbound.Options) { o.Dial = (&net.Dialer{}).DialContext })
-	sb := vsockSandbox(t, "sb_pool")
+	withOutbound(t, m, func(o *outbound.Options) { o.Dial = (&net.Dialer{}).DialContext })
+	sb := outboundtest.VsockSandbox(t, "sb_pool", testKey)
 	if err := m.out.Arm(t.Context(), sb); err != nil {
 		t.Fatalf("arm egress: %v", err)
 	}
-	client := egressClient(engine.EgressSocketPath(sb.VsockSocket))
+	client := outboundtest.EgressClient(engine.EgressSocketPath(sb.VsockSocket))
 	get := func(path string) error {
 		resp, err := client.Get(origin.URL + path)
 		if err != nil {
@@ -285,7 +286,7 @@ func TestAnInterruptedReloadStillDestroysTheRetiredWarmVMs(t *testing.T) {
 
 func TestAReloadThatUnguardsTheNodeClosesThePreboundDoors(t *testing.T) {
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}})
 	warm := refillWarmVM(t, m)
 	pin := pinDoor(t, engine.EgressSocketPath(warm.VsockSocket))
