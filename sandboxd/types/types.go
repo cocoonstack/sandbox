@@ -220,10 +220,12 @@ func (md Metadata) encodedSize() int {
 	return size
 }
 
-// EnvInject sends a host-only entry's value as Header on intercepted requests to Hosts, each exact or "*." suffix; a set Placeholder limits it to requests whose Header carries exactly that value.
+// EnvInject sends a host-only entry's value to Hosts, exact or "*." suffix, as Header or as the Query parameter, where the guest sent a set Placeholder.
 type EnvInject struct {
 	Hosts       []string `json:"hosts"`
-	Header      string   `json:"header"`
+	Header      string   `json:"header,omitempty"`
+	Query       string   `json:"query,omitempty"`
+	Body        bool     `json:"body,omitzero"`
 	Placeholder string   `json:"placeholder,omitempty"`
 }
 
@@ -241,8 +243,15 @@ func (i *EnvInject) validate(name string) error {
 	if len(i.Hosts) == 0 || len(i.Hosts) > maxInjectHosts {
 		return fmt.Errorf("env %s: inject needs 1 to %d hosts, got %d", name, maxInjectHosts, len(i.Hosts))
 	}
-	if !httpguts.ValidHeaderFieldName(i.Header) {
+	switch {
+	case (i.Header == "") == (i.Query == ""):
+		return fmt.Errorf("env %s: inject needs exactly one of header and query", name)
+	case i.Header != "" && !httpguts.ValidHeaderFieldName(i.Header):
 		return fmt.Errorf("env %s: inject header %q is not a valid header name", name, i.Header)
+	case i.Query != "" && i.Placeholder == "":
+		return fmt.Errorf("env %s: inject query needs a placeholder, so a value is never added to a request", name)
+	case i.Body && i.Query == "":
+		return fmt.Errorf("env %s: inject body needs query", name)
 	}
 	for _, h := range i.Hosts {
 		if len(h) > 253 || !injectHostRe.MatchString(h) {
@@ -256,7 +265,7 @@ func (i *EnvInject) validate(name string) error {
 }
 
 func (i *EnvInject) size() int {
-	n := len(i.Header) + len(i.Placeholder)
+	n := len(i.Header) + len(i.Query) + len(i.Placeholder)
 	for _, h := range i.Hosts {
 		n += len(h)
 	}
@@ -267,7 +276,7 @@ func (i *EnvInject) equal(other *EnvInject) bool {
 	if i == nil || other == nil {
 		return i == other
 	}
-	return i.Header == other.Header && i.Placeholder == other.Placeholder && slices.Equal(i.Hosts, other.Hosts)
+	return i.Header == other.Header && i.Query == other.Query && i.Body == other.Body && i.Placeholder == other.Placeholder && slices.Equal(i.Hosts, other.Hosts)
 }
 
 // EnvVar is one entry of a claim's environment; a nil Guest means the entry reaches the guest.
@@ -503,10 +512,15 @@ func (k PoolKey) Validate() error {
 	return nil
 }
 
-// envView is an immutable env with its inject entries named in order.
+// envView is an immutable env with its inject entries in name order.
 type envView struct {
 	env     Env
-	injects []string
+	injects []namedVar
+}
+
+type namedVar struct {
+	name string
+	v    EnvVar
 }
 
 // Sandbox is the node-local record of one pooled or claimed VM.
@@ -612,10 +626,10 @@ func (s *Sandbox) SetEnv(e Env) {
 	view := &envView{env: e}
 	for name, v := range e {
 		if v.Inject != nil && !v.InGuest() {
-			view.injects = append(view.injects, name)
+			view.injects = append(view.injects, namedVar{name, v})
 		}
 	}
-	slices.Sort(view.injects)
+	slices.SortFunc(view.injects, func(a, b namedVar) int { return strings.Compare(a.name, b.name) })
 	s.live.Store(view)
 }
 
@@ -634,8 +648,8 @@ func (s *Sandbox) Injections(host string) iter.Seq2[string, EnvVar] {
 		if view == nil {
 			return
 		}
-		for _, name := range view.injects {
-			if v := view.env[name]; v.Inject.Matches(host) && !yield(name, v) {
+		for _, e := range view.injects {
+			if e.v.Inject.Matches(host) && !yield(e.name, e.v) {
 				return
 			}
 		}

@@ -89,7 +89,7 @@ func (v *configView) injectGap(eval egress.Evaluator, ok bool, sb *types.Sandbox
 		for _, h := range inj.Hosts {
 			if !ok || !eval.InterceptsHost(h) {
 				gap = append(gap, fmt.Sprintf("%s: %s is not intercepted", name, h))
-			} else if v.secretSets(pool, h, inj.Header) {
+			} else if inj.Header != "" && v.secretSets(pool, h, inj.Header) {
 				gap = append(gap, fmt.Sprintf("%s: the pool's secret already sets %s on %s", name, inj.Header, h))
 			}
 		}
@@ -102,7 +102,7 @@ func (v *configView) secretSets(pool *egress.Policy, host, header string) bool {
 		return false
 	}
 	return slices.ContainsFunc(pool.Allow, func(r egress.Rule) bool {
-		if !r.Intercept || r.Secret == "" || !r.Covers(host) {
+		if r.Intercept == egress.InterceptOff || r.Secret == "" || !r.Covers(host) {
 			return false
 		}
 		h, _, known := v.secrets.Header(r.Secret)

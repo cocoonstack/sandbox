@@ -1,6 +1,9 @@
 package egress
 
-import "testing"
+import (
+	"encoding/json/v2"
+	"testing"
+)
 
 func TestPolicyEval(t *testing.T) {
 	policy := Policy{Allow: []Rule{
@@ -36,9 +39,9 @@ func TestPolicyEval(t *testing.T) {
 	}
 }
 
-func TestEvalSkipsInterceptRules(t *testing.T) {
+func TestEvalSkipsOnlyAlwaysInterceptRules(t *testing.T) {
 	p := Policy{Allow: []Rule{
-		{Host: "api.github.com", Secret: "gh", Intercept: true},
+		{Host: "api.github.com", Secret: "gh", Intercept: InterceptAlways},
 		{Host: "plain.github.com"},
 	}}
 
@@ -51,18 +54,47 @@ func TestEvalSkipsInterceptRules(t *testing.T) {
 	if _, d := p.EvalHost("api.github.com", 443); d != DecisionAllow {
 		t.Error("EvalHost must still allow the intercepted CONNECT path")
 	}
+	inject := Policy{Allow: []Rule{{Host: "*", Intercept: InterceptInject}}}
+	if _, d := inject.Eval("any.test", "CONNECT", 443); d != DecisionAllow {
+		t.Error("Eval skipped an inject rule, which splices or forwards for a claim without a credential")
+	}
+}
+
+func TestInterceptModeRoundTripsFalseTrueAndInjectAndRefusesOthers(t *testing.T) {
+	var p Policy
+	if err := json.Unmarshal([]byte(`{"allow":[{"host":"a"},{"host":"b","intercept":false},{"host":"c","intercept":true},{"host":"d","intercept":"inject"}]}`), &p); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	for i, mode := range []InterceptMode{InterceptOff, InterceptOff, InterceptAlways, InterceptInject} {
+		if p.Allow[i].Intercept != mode {
+			t.Errorf("rule %s intercept = %d, want %d", p.Allow[i].Host, p.Allow[i].Intercept, mode)
+		}
+	}
+	out, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	want := `{"allow":[{"host":"a"},{"host":"b"},{"host":"c","intercept":true},{"host":"d","intercept":"inject"}]}`
+	if got := string(out); got != want {
+		t.Errorf("Marshal = %s, want %s", got, want)
+	}
+	for _, bad := range []string{`"always"`, `1`, `null`} {
+		if err := json.Unmarshal([]byte(`{"allow":[{"host":"a","intercept":`+bad+`}]}`), &p); err == nil {
+			t.Errorf("intercept %s decoded", bad)
+		}
+	}
 }
 
 func TestEvalHostPrefersInterceptRule(t *testing.T) {
 	p := Policy{Allow: []Rule{
 		{Host: "api.github.com", Methods: []string{"GET"}},
-		{Host: "api.github.com", Intercept: true},
+		{Host: "api.github.com", Intercept: InterceptAlways},
 	}}
 	rule, d := p.EvalHost("api.github.com", 443)
-	if d != DecisionAllow || !rule.Intercept {
+	if d != DecisionAllow || rule.Intercept != InterceptAlways {
 		t.Errorf("EvalHost = %+v/%v, want the intercept rule over the earlier plain match", rule, d)
 	}
-	if rule, d := p.EvalHost("other.com", 443); d != DecisionDeny || rule.Intercept {
+	if rule, d := p.EvalHost("other.com", 443); d != DecisionDeny || rule.Intercept != InterceptOff {
 		t.Errorf("EvalHost(other.com) = %+v/%v, want deny", rule, d)
 	}
 }
@@ -70,8 +102,8 @@ func TestEvalHostPrefersInterceptRule(t *testing.T) {
 func TestEvalInnerMatchesOnlyInterceptRulesByMethod(t *testing.T) {
 	p := Policy{Allow: []Rule{
 		{Host: "*.example.com"},
-		{Host: "api.example.com", Methods: []string{"GET"}, Secret: "gh", Intercept: true},
-		{Host: "api.example.com", Methods: []string{"POST"}, Intercept: true},
+		{Host: "api.example.com", Methods: []string{"GET"}, Secret: "gh", Intercept: InterceptAlways},
+		{Host: "api.example.com", Methods: []string{"POST"}, Intercept: InterceptAlways},
 	}}
 	if rule, d := p.EvalInner("api.example.com", "GET", 443); d != DecisionAllow || rule.Secret != "gh" {
 		t.Errorf("EvalInner GET = %+v/%v, want the GET intercept rule with secret gh", rule, d)
@@ -85,7 +117,7 @@ func TestEvalInnerMatchesOnlyInterceptRulesByMethod(t *testing.T) {
 }
 
 func TestCompositeEvalInnerIntersectsTenant(t *testing.T) {
-	pool := Policy{Allow: []Rule{{Host: "api.example.com", Secret: "gh", Intercept: true}}}
+	pool := Policy{Allow: []Rule{{Host: "api.example.com", Secret: "gh", Intercept: InterceptAlways}}}
 	ev := Compose(pool, Policy{Allow: []Rule{{Host: "api.example.com", Methods: []string{"GET"}}}})
 	if rule, d := ev.EvalInner("api.example.com", "GET", 443); d != DecisionAllow || rule.Secret != "gh" {
 		t.Errorf("EvalInner GET = %+v/%v, want allow with the pool secret", rule, d)
@@ -97,8 +129,8 @@ func TestCompositeEvalInnerIntersectsTenant(t *testing.T) {
 
 func TestInterceptsHostCoversPatterns(t *testing.T) {
 	pool := Policy{Allow: []Rule{
-		{Host: "api.example.com", Intercept: true},
-		{Host: "*.Corp.Test", Intercept: true},
+		{Host: "api.example.com", Intercept: InterceptAlways},
+		{Host: "*.Corp.Test", Intercept: InterceptAlways},
 		{Host: "plain.example.com"},
 	}}
 	for pattern, want := range map[string]bool{
@@ -114,7 +146,7 @@ func TestInterceptsHostCoversPatterns(t *testing.T) {
 			t.Errorf("pool InterceptsHost(%q) = %v, want %v", pattern, got, want)
 		}
 	}
-	if !(Policy{Allow: []Rule{{Host: "*", Intercept: true}}}).InterceptsHost("*.anything.test") {
+	if !(Policy{Allow: []Rule{{Host: "*", Intercept: InterceptAlways}}}).InterceptsHost("*.anything.test") {
 		t.Error("a bare * intercept rule does not cover a wildcard pattern")
 	}
 	composed := Compose(pool, Policy{Allow: []Rule{{Host: "*.corp.test"}}})
@@ -148,6 +180,9 @@ func TestPolicyValidate(t *testing.T) {
 		{"ports", Policy{Allow: []Rule{{Host: "api.github.com", Ports: []uint16{443, 993}}}}, false},
 		{"port 0", Policy{Allow: []Rule{{Host: "api.github.com", Ports: []uint16{0}}}}, true},
 		{"repeated port", Policy{Allow: []Rule{{Host: "api.github.com", Ports: []uint16{443, 443}}}}, true},
+		{"inject rule with a secret", Policy{Allow: []Rule{{Host: "*", Secret: "gh", Intercept: InterceptInject}}}, true},
+		{"socks5 with only an inject rule", Policy{Socks5: true, Allow: []Rule{{Host: "*", Intercept: InterceptInject}}}, false},
+		{"socks5 with only an intercept rule", Policy{Socks5: true, Allow: []Rule{{Host: "*", Intercept: InterceptAlways}}}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -175,7 +210,7 @@ func TestPolicyServesSocks(t *testing.T) {
 func TestRulePorts(t *testing.T) {
 	policy := Policy{Allow: []Rule{
 		{Host: "db.internal", Ports: []uint16{5432}},
-		{Host: "mail.internal", Ports: []uint16{993, 465}, Intercept: true},
+		{Host: "mail.internal", Ports: []uint16{993, 465}, Intercept: InterceptAlways},
 		{Host: "*.open.internal"},
 	}}
 	tests := []struct {
@@ -195,7 +230,7 @@ func TestRulePorts(t *testing.T) {
 			}
 		})
 	}
-	if rule, d := policy.EvalHost("mail.internal", 993); d != DecisionAllow || !rule.Intercept {
+	if rule, d := policy.EvalHost("mail.internal", 993); d != DecisionAllow || rule.Intercept != InterceptAlways {
 		t.Errorf("EvalHost(mail.internal, 993) = %+v/%v, want the intercept rule", rule, d)
 	}
 	if _, d := policy.EvalHost("mail.internal", 143); d != DecisionDeny {

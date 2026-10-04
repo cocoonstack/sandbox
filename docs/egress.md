@@ -53,14 +53,15 @@ through the same code: a rule with a nonempty `methods` list that omits
 `CONNECT` denies it, and a rule with a `secret` opens it without injecting anything, on
 both ports. The one difference is `intercept`: on 3128 such a rule terminates
 the TLS and filters the requests inside, on 1080 there is no HTTP to filter, so
-the tunnel is refused. The door is opt-in: the pool policy sets
+the tunnel is refused. An `"inject"` rule is a plain one on 1080: the door never
+injects, so it splices whatever credentials the claim holds. The door is opt-in: the pool policy sets
 `"socks5": true`, otherwise the host side stays unwired and the guest's dial
 is refused like the HTTP one with no policy. The tenant policy's rules gate
 every tunnel through the door as they gate `CONNECT`, so the tenant does not
 opt in separately; its own `socks5` counts only on a claim outside any
 configured pool, where the tenant policy is the whole policy. A policy that
 opts in with rules that all carry a nonempty `methods` list without
-`CONNECT`, or all `intercept`, is rejected at load. A pool whose policy does
+`CONNECT`, or all `intercept: true`, is rejected at load. A pool whose policy does
 not opt in pays
 nothing for the door on the claim path, whatever its tenants' policies say.
 Audit lines (with `audit_log` on) carry `"method":"SOCKS5"`.
@@ -242,11 +243,16 @@ woken sandbox binds at arm time.
   injection needs `intercept`; an absolute-form `https://` request on the
   forward door needs none — the proxy dials the origin over verified TLS
   itself, checks the method, and injects.
-- `intercept`: terminate a matched HTTPS CONNECT so the request is filtered by
-  method and the secret injected (see below). Only a pool rule may set it.
+- `intercept`: `true` terminates a matched HTTPS CONNECT so the request is
+  filtered by method and the secret injected (see below). `"inject"` terminates
+  it only for a claim with a [credential](#claim-credentials) for that host; for
+  every other claim the rule is a plain one, so its tunnels splice and HTTP/2,
+  WebSocket and pinned clients keep working. An `"inject"` rule cannot carry a
+  `secret`. Only a pool rule may set `intercept`.
 - No policy on a claim ⇒ no egress at all (the proxy is not started).
 
-Each decision is metered as an `egress` usage event and, when `audit_log` is
+Each decision is metered as an `egress` usage event, which names the injected
+secrets in `secret` as the audit line does, and, when `audit_log` is
 on, written to `audit.jsonl` (`op:"egress"`, `dest`, `port`, `method`,
 `decision`, and the secret **name** in `secret`); an intercepted `CONNECT` is
 recorded as a decision of its own before its inner requests.
@@ -287,7 +293,8 @@ gateway key per user, while the guest holds a placeholder.
 
 The proxy reads a snapshot of the claim's env that each env write publishes,
 without a lock, once per request whose matched rule names a secret or whose
-host has a claim credential; other requests pay nothing.
+host has a claim credential, and once per `CONNECT` an `"inject"` rule covers;
+other requests pay nothing.
 
 ### Claim credentials
 
@@ -317,23 +324,68 @@ request while a browser on the same host gets nothing:
 git config --global http.https://github.com/.extraHeader "Authorization: Basic @GH_GIT@"
 ```
 
+A key that a client sends as a query parameter takes `query` instead of
+`header`, and a placeholder is required. On an intercepted request, the first
+`<query>=<placeholder>` pair of the URL gets the value, URL-escaped; the
+placeholder may arrive percent-encoded, and every other byte of the query
+stays as sent. With `body: true` and no placeholder in the URL, the first such
+pair of an `application/x-www-form-urlencoded` body, or the first top-level
+string member of that name holding the placeholder in an `application/json`
+body, is filled instead, when the body has a known length of at most 64 KiB;
+any other body streams unchanged. One fill per credential bounds what a
+request can grow by:
+
+```jsonc
+"FB": { "value": "EAAB…", "guest": false,
+        "inject": { "hosts": ["graph.facebook.com"], "query": "access_token", "body": true, "placeholder": "@FB@" } }
+```
+
+```sh
+curl "https://graph.facebook.com/me?access_token=@FB@"
+curl https://graph.facebook.com/me/feed -d access_token=@FB@ -d message=hi
+```
+
+Pair the credential with an `"inject"` pool rule, for example
+`{ "host": "*", "intercept": "inject" }`, and only the claims that hold a
+credential for a host have it intercepted: the operator decides which hosts may
+be intercepted, the claim's entries decide which of them are. The decision is
+taken per CONNECT, so a write that adds or removes an entry applies to the
+guest's next connection; a tunnel the guest keeps open stays as it was.
+
 The placeholder is not a secret: it stays in the guest and in `GET /env`.
 The entry rides the claim request or any `/env` write, and rotation is the
 same `PATCH`, accepted on a hibernated or archived claim without waking it.
 
 - **Envelope.** The operator still decides which hosts can carry a
-  credential: every host must be covered by an `intercept: true` rule of the
-  claim's pool and allowed by its tenant class, or the write answers 400 and
+  credential: every host must be covered by an `intercept` rule (`true` or
+  `"inject"`) of the claim's pool and allowed by its tenant class, or the write answers 400 and
   nothing is stored. A credential never widens egress and never rides a
-  plaintext forward request.
+  plaintext forward request. Keep a credential's `hosts` to the vendor's own
+  names: under a `*` rule, a pattern such as `*.amazonaws.com` or
+  `*.vercel.app` also matches subdomains a guest can own.
 - **Precedence.** The pool rule's own `secret` is set first and wins: a
   credential naming that header for a host the rule covers is a 400. Among
   credentials for the same header, the first by entry name whose placeholder
   (if any) the request carries wins. An empty value injects nothing.
+- **Echo.** Origins reflect the request URL: a redirect's `Location`, a
+  paging link, an echoed query. On a request that carried a `query`
+  credential, its value, as sent, query- or path-escaped, or with `/` written
+  `\/` as JSON may, reaches the guest as the placeholder in every
+  response header and in the response body. The proxy drops the guest's
+  `Accept-Encoding`, `Range` and `If-Range` on such a request, so it reads the
+  whole body uncompressed, and streams it holding back only a tail that may
+  begin a match, so event streams stay live. A value the origin transforms
+  otherwise is beyond the scrub, such as the JSON escape of a quote, backslash
+  or tab inside a value, and so is a value the origin stored earlier
+  and returns on a later request that carries no credential: the scrub covers
+  only the response to the request that sent the value. `header` credentials, which origins do not reflect, are
+  not scrubbed and add no work to the response.
 - **Shape.** `hosts` holds 1 to 8 lowercase names or `*.suffix` patterns
-  (no bare `*`, no port); `header` is any header name except `Host`,
-  `Content-Length` and the hop-by-hop ones; `placeholder`, when set, is at most
-  256 bytes of header value without control characters or surrounding space.
+  (no bare `*`, no port); exactly one of `header` and `query`; `header` is any
+  header name except `Host`, `Content-Length` and the hop-by-hop ones; `query`
+  needs a `placeholder`, and `body` needs `query`; `placeholder`, when set, is
+  at most 256 bytes of header value without control characters or surrounding
+  space.
   `GET /env` returns `inject` with the value blanked.
 - **Reload.** A reload that drops the covering intercept rule stops that
   injection on the next request and logs which claims lost which hosts.
@@ -389,8 +441,8 @@ usage-journal append per connection, which is why it is opt-in.
 
 ## HTTPS interception
 
-A rule with `intercept: true` makes the proxy terminate that host's TLS with a
-leaf it signs, so it sees the request's method and path and can inject the
+A rule with `intercept: true`, or `"inject"` for a claim with a credential for
+the host, makes the proxy terminate that host's TLS with a leaf it signs, so it sees the request's method and path and can inject the
 secret into HTTPS — the same guarantees plaintext already has. Upstream is
 re-originated and verified against the host's real root store; the proxy never
 trusts an unverified origin. A guest that caches TLS sessions resumes them on
@@ -501,5 +553,6 @@ Swapping the intermediate while old-root guests are alive breaks interception
 for them, with no re-claim path to fix it.
 
 Limitations: interception is HTTP/1.1 only and breaks clients that pin
-certificates, so scope it to hosts you control. A host that speaks a non-HTTP
+certificates, so scope it to hosts you control, or use `"inject"` so only the
+claims that inject on a host are affected. A host that speaks a non-HTTP
 protocol over TLS must not be given an intercept rule.

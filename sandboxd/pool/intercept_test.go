@@ -139,5 +139,5 @@ func TestInterceptPoolAllowsPromote(t *testing.T) {
 }
 
 func interceptPolicy() *egress.Policy {
-	return &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh", Intercept: true}}}
+	return &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh", Intercept: egress.InterceptAlways}}}
 }

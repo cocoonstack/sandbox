@@ -4,6 +4,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -322,6 +324,22 @@ func TestClaimMetadataSurvivesARestart(t *testing.T) {
 	}
 	if row, ok := m2.Sandbox(sb.ID); !ok || row.Metadata["team"] != "a" {
 		t.Errorf("after restart %+v (found %t), want metadata team=a", row, ok)
+	}
+}
+
+func TestEgressUsageEventNamesTheInjectedCredentials(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey})
+	m.recordEgress(t.Context(), "sb_v", "acme", egress.Event{Method: http.MethodGet, Host: "graph.example.com", Port: 443, Decision: egress.DecisionAllow, Injected: "claim:FB"})
+	raw, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
+	if err != nil {
+		t.Fatalf("read journal: %v", err)
+	}
+	var ev usageEvent
+	if err = json.Unmarshal(raw, &ev); err != nil {
+		t.Fatalf("decode %q: %v", raw, err)
+	}
+	if ev.Event != "egress" || ev.Reference != "graph.example.com" || ev.Secret != "claim:FB" {
+		t.Errorf("usage event %+v, want egress to graph.example.com naming claim:FB", ev)
 	}
 }
 

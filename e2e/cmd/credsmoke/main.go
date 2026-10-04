@@ -1,6 +1,6 @@
-// credsmoke is the claim-credential acceptance: claims on one intercept pool each
-// send their own env-injected header to an HTTPS echo through the proxy, the guest
-// never holds the value, and rotation, refusal, clearing and forks behave as the API says.
+// credsmoke is the claim-credential acceptance: claims each send their own env-injected header,
+// query or body credential through the proxy (-inject-size: on an "inject" pool), the guest never
+// holds the value, and rotation, refusal, clearing and forks behave as the API says.
 package main
 
 import (
@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -22,6 +23,9 @@ const (
 	proxy  = "http://127.0.0.1:3128"
 	header = "X-Api-Key"
 	entry  = "API_KEY"
+	tsPH   = "@TS@"
+	serpPH = "@SERP@"
+	fbPH   = "@FB@"
 )
 
 func main() {
@@ -32,22 +36,27 @@ func main() {
 	secret := flag.String("secret", "", "the pool secret's value the origin should also observe")
 	reattach := flag.String("reattach", "", "id:token:value of a claim to recheck after a restart")
 	sse := flag.String("sse", "", "plain HTTP event stream that sends one event, then holds")
+	injectSize := flag.String("inject-size", "", "size of the template's pool whose only rule is intercept \"inject\"; empty skips that leg")
+	other := flag.String("other", "example.com", "a second HTTPS host the inject pool must splice")
 	flag.Parse()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	var err error
-	if *reattach != "" {
-		err = recheck(*addr, *token, *echo, *reattach)
-	} else {
-		err = run(*addr, *token, *template, *echo, *secret, *sse)
+	switch {
+	case *reattach != "":
+		err = recheck(ctx, *addr, *token, *echo, *reattach)
+	case *injectSize != "":
+		err = conditional(ctx, *addr, *token, *template, sandbox.Size(*injectSize), *echo, *other)
+	default:
+		err = run(ctx, *addr, *token, *template, *echo, *secret, *sse)
 	}
+	cancel()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "credsmoke:", err)
 		os.Exit(1)
 	}
 }
 
-func run(addr, token, template, echo, secret, sse string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+func run(ctx context.Context, addr, token, template, echo, secret, sse string) error {
 	stamp := strconv.FormatInt(time.Now().UnixNano(), 10)
 	valueA, valueB := "key-a-"+stamp, "key-b-"+stamp
 
@@ -171,9 +180,7 @@ func run(addr, token, template, echo, secret, sse string) error {
 	return nil
 }
 
-func recheck(addr, token, echo, reattach string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
+func recheck(ctx context.Context, addr, token, echo, reattach string) error {
 	parts := strings.SplitN(reattach, ":", 3)
 	if len(parts) != 3 {
 		return fmt.Errorf("-reattach %q, want id:token:value", reattach)
@@ -192,6 +199,87 @@ func recheck(addr, token, echo, reattach string) error {
 	}
 	fmt.Println("  the credential survived a sandboxd restart")
 	fmt.Println("CREDSMOKE REATTACH PASS")
+	return nil
+}
+
+func conditional(ctx context.Context, addr, token, template string, size sandbox.Size, echo, other string) error {
+	claim := func() (*sandbox.Sandbox, error) {
+		_, sb, err := harness.Claim(ctx, addr, token, template, sandbox.WithNetwork(sandbox.NetNone), sandbox.WithSize(size))
+		return sb, err
+	}
+	vault, err := claim()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = vault.Close() }()
+	bare, err := claim()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = bare.Close() }()
+	fmt.Printf("  claimed %s (vault) and %s (bare) on the inject pool\n", vault.ID, bare.ID)
+	for _, host := range []string{echo, other} {
+		if err = expectTunnel(ctx, vault, host, false); err != nil {
+			return fmt.Errorf("before any credential: %w", err)
+		}
+	}
+	fmt.Println("  with no credential both hosts splice: origin certificates, HTTP/2")
+
+	stamp := strconv.FormatInt(time.Now().UnixNano(), 10)
+	serp, fb := "serp "+stamp+"/+", "fb-"+stamp
+	if err = vault.PatchEnv(ctx, map[string]*sandbox.EnvVar{
+		"TS":   {Value: "2016-10-10", Guest: new(false), Inject: &sandbox.EnvInject{Hosts: []string{echo}, Query: "timestamp", Placeholder: tsPH}},
+		"SERP": {Value: serp, Guest: new(false), Inject: &sandbox.EnvInject{Hosts: []string{echo}, Query: "api_key", Placeholder: serpPH}},
+		"FB":   {Value: fb, Guest: new(false), Inject: &sandbox.EnvInject{Hosts: []string{echo}, Query: "access_token", Body: true, Placeholder: fbPH}},
+	}); err != nil {
+		return fmt.Errorf("add credentials: %w", err)
+	}
+	for _, tt := range []struct {
+		sb          *sandbox.Sandbox
+		host        string
+		intercepted bool
+	}{{vault, echo, true}, {vault, other, false}, {bare, echo, false}} {
+		if err = expectTunnel(ctx, tt.sb, tt.host, tt.intercepted); err != nil {
+			return fmt.Errorf("after the credentials: %w", err)
+		}
+	}
+	fmt.Println("  the claim with credentials is intercepted on their host only; the other claim still splices it")
+
+	base := "https://" + echo
+	form, doc := "access_token="+fb+"&m=hi", `{"access_token":"`+fb+`"}`
+	for _, tt := range []struct {
+		name, args, want, not string
+	}{
+		{"query", "'" + base + "/time/valid?timestamp=" + url.QueryEscape(tsPH) + "'", `"valid":true`, "2016"},
+		{"other query value", "'" + base + "/time/valid?timestamp=bogus'", `"valid":false`, "2016"},
+		{"echoed query", "'" + base + "/get?b=2&api_key=" + url.QueryEscape(serpPH) + "&a=1'", serpPH, stamp},
+		{"form body", base + "/post -d access_token=" + fbPH + " -d m=hi", fmt.Sprintf(`"content-length":"%d"`, len(form)), fb},
+		{"json body", base + `/post -H 'Content-Type: application/json' -d '{"access_token":"` + fbPH + `"}'`, fmt.Sprintf(`"content-length":"%d"`, len(doc)), fb},
+		{"response header echo", "-D - -o /dev/null '" + base + "/response-headers?api_key=" + url.QueryEscape(serpPH) + "'", serpPH, stamp},
+	} {
+		out, execErr := vault.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -sS -x %s %s", proxy, tt.args))
+		if execErr != nil {
+			return fmt.Errorf("%s exec: %w (%s)", tt.name, execErr, out)
+		}
+		if !strings.Contains(out, tt.want) || strings.Contains(out, tt.not) {
+			return fmt.Errorf("%s: guest saw %q, want %q and not %q", tt.name, out, tt.want, tt.not)
+		}
+	}
+	fmt.Println("  query and form/JSON body placeholders filled at the origin; every echo of a value reached the guest as its placeholder")
+
+	leak, err := vault.Exec(ctx, "sh", "-c", fmt.Sprintf("grep -rlsF %q /proc/[0-9]*/environ /run /etc 2>/dev/null; env | grep -cF %q; true", fb, fb))
+	if err != nil || strings.TrimSpace(leak) != "0" {
+		return fmt.Errorf("the credential reached the guest: %q %v", leak, err)
+	}
+	if err = vault.SetEnv(ctx, map[string]sandbox.EnvVar{}); err != nil {
+		return fmt.Errorf("clear: %w", err)
+	}
+	if err = expectTunnel(ctx, vault, echo, false); err != nil {
+		return fmt.Errorf("after a clear: %w", err)
+	}
+	fmt.Println("  value absent from the guest; a cleared env splices the next connection")
+	fmt.Printf("VAULT %s\nVAULT %s\n", serp, fb)
+	fmt.Println("CREDSMOKE INJECT PASS")
 	return nil
 }
 
@@ -216,6 +304,22 @@ func expectPlaceholder(ctx context.Context, sb *sandbox.Sandbox, echo, value str
 		if strings.Contains(out, value) != want {
 			return fmt.Errorf("guest sent X-Ph-Key %q: origin saw the credential %v, want %v:\n%s", sent, !want, want, out)
 		}
+	}
+	return nil
+}
+
+// expectTunnel reads the issuer and HTTP version the guest gets from host; an intercepted tunnel shows the e2e CA and HTTP/1.1.
+func expectTunnel(ctx context.Context, sb *sandbox.Sandbox, host string, intercepted bool) error {
+	out, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -sSv -o /dev/null -w 'version=%%{http_version}\\n' -x %s https://%s/ 2>&1", proxy, host))
+	if err != nil {
+		return fmt.Errorf("%s exec: %w (%s)", host, err, out)
+	}
+	_, rest, found := strings.Cut(out, "issuer:")
+	issuer, _, _ := strings.Cut(rest, "\n")
+	mitm := strings.Contains(issuer, "e2e")
+	h2 := strings.Contains(out, "version=2")
+	if !found || mitm != intercepted || h2 == intercepted {
+		return fmt.Errorf("%s on %s: issuer %q, HTTP/2 %t, want intercepted %t:\n%s", host, sb.ID, issuer, h2, intercepted, out)
 	}
 	return nil
 }
