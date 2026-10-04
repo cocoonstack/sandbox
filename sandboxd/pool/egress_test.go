@@ -690,12 +690,12 @@ func egressClient(path string) *http.Client {
 	}
 }
 
-func egressManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
+func egressManager(t testing.TB, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	return egressManagerAt(t, eng, t.TempDir(), pools...)
 }
 
-func egressManagerAt(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
+func egressManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	t.Setenv("GH_TOKEN", "s3cr3t")
 	secrets := testSecrets(t, egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"})
@@ -707,7 +707,7 @@ func egressManagerAt(t *testing.T, eng *fakeEngine, dataDir string, pools ...con
 	return m
 }
 
-func writeTestEgressCA(t *testing.T) *config.EgressCAConfig {
+func writeTestEgressCA(t testing.TB) *config.EgressCAConfig {
 	t.Helper()
 	rootCert, rootKey, err := egress.GenerateRoot("test cluster ca")
 	if err != nil {
@@ -736,7 +736,7 @@ func vsockSandbox(t *testing.T, id string) *types.Sandbox {
 	return &types.Sandbox{ID: id, Key: testKey, VsockSocket: filepath.Join(sockRoot(t), "v")}
 }
 
-func sockRoot(t *testing.T) string {
+func sockRoot(t testing.TB) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "eg")
 	if err != nil {

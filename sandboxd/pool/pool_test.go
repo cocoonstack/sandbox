@@ -1090,7 +1090,7 @@ func newTestManagerAt(t *testing.T, eng *fakeEngine, dataDir string, pools ...co
 	return m
 }
 
-func testSecrets(t *testing.T, specs ...egress.SecretSpec) *egress.SecretStore {
+func testSecrets(t testing.TB, specs ...egress.SecretSpec) *egress.SecretStore {
 	t.Helper()
 	s, err := egress.NewSecretStore(specs)
 	if err != nil {
