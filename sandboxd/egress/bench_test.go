@@ -113,6 +113,7 @@ func BenchmarkInjectAndScrubHeaders(b *testing.B) {
 		{"query", "a=1&access_token=%40K%40", "", "", Credential{Name: "K", Query: "access_token", Value: key, Placeholder: "@K@"}},
 		{"form-body", "", "application/x-www-form-urlencoded", "m=hi&access_token=%40K%40", Credential{Name: "K", Query: "access_token", Body: true, Value: key, Placeholder: "@K@"}},
 		{"json-body", "", "application/json", `{"m":"hi","access_token":"@K@"}`, Credential{Name: "K", Query: "access_token", Body: true, Value: key, Placeholder: "@K@"}},
+		{"json-body-escaped-unnamed", "", "application/json", `{"message":"` + strings.Repeat(`hello\nworld `, 150) + `"}`, Credential{Name: "K", Query: "access_token", Body: true, Value: key, Placeholder: "@K@"}},
 	} {
 		creds := map[string][]Credential{}
 		if arm.cred.Name != "" {

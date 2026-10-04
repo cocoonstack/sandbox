@@ -155,7 +155,11 @@ func (p Policy) EvalHost(host string, port uint16) (Rule, Decision) {
 	host = strings.ToLower(host)
 	best := -1
 	for i, r := range p.Allow {
-		if r.matchHost(host) && r.matchPort(port) && (best < 0 || r.Intercept > p.Allow[best].Intercept) {
+		switch {
+		case !r.matchHost(host) || !r.matchPort(port):
+		case r.Intercept == InterceptAlways:
+			return r, DecisionAllow
+		case best < 0 || r.Intercept > p.Allow[best].Intercept:
 			best = i
 		}
 	}

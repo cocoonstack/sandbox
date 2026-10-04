@@ -53,7 +53,8 @@ through the same code: a rule with a nonempty `methods` list that omits
 `CONNECT` denies it, and a rule with a `secret` opens it without injecting anything, on
 both ports. The one difference is `intercept`: on 3128 such a rule terminates
 the TLS and filters the requests inside, on 1080 there is no HTTP to filter, so
-the tunnel is refused. The door is opt-in: the pool policy sets
+the tunnel is refused. An `"inject"` rule is a plain one on 1080: the door never
+injects, so it splices whatever credentials the claim holds. The door is opt-in: the pool policy sets
 `"socks5": true`, otherwise the host side stays unwired and the guest's dial
 is refused like the HTTP one with no policy. The tenant policy's rules gate
 every tunnel through the door as they gate `CONNECT`, so the tenant does not
@@ -367,8 +368,8 @@ same `PATCH`, accepted on a hibernated or archived claim without waking it.
   (if any) the request carries wins. An empty value injects nothing.
 - **Echo.** Origins reflect the request URL: a redirect's `Location`, a
   paging link, an echoed query. On a request that carried a `query`
-  credential, its value, as sent, query- or path-escaped, or JSON-escaped
-  (with or without `\/`), reaches the guest as the placeholder in every
+  credential, its value, as sent, query- or path-escaped, or with `/` written
+  `\/` as JSON may, reaches the guest as the placeholder in every
   response header and in the response body. The proxy drops the guest's
   `Accept-Encoding`, `Range` and `If-Range` on such a request, so it reads the
   whole body uncompressed, and streams it holding back only a tail that may

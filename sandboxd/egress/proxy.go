@@ -772,8 +772,7 @@ func substituteBody(out *http.Request, creds []Credential) []Credential {
 		return nil
 	}
 	b := make([]byte, out.ContentLength)
-	if n, err := io.ReadFull(out.Body, b); err != nil {
-		out.Body = io.NopCloser(io.MultiReader(bytes.NewReader(b[:n]), out.Body))
+	if _, err := io.ReadFull(out.Body, b); err != nil {
 		return nil
 	}
 	body := string(b)
@@ -787,13 +786,7 @@ func substituteBody(out *http.Request, creds []Credential) []Credential {
 	return filled
 }
 
-// escapings lists s as sent, query- and path-escaped, and JSON-escaped with and without \/; newScrubber pairs a value's list with its placeholder's by index.
-func escapings(s string) [5]string {
-	j := s
-	if strings.ContainsAny(s, "\"\\\t") {
-		if q, err := jsontext.AppendQuote(nil, s); err == nil {
-			j = string(q[1 : len(q)-1])
-		}
-	}
-	return [5]string{s, url.QueryEscape(s), url.PathEscape(s), j, strings.ReplaceAll(j, "/", `\/`)}
+// escapings lists s as sent, query- and path-escaped, and with \/; newScrubber pairs a value's list with its placeholder's by index.
+func escapings(s string) [4]string {
+	return [4]string{s, url.QueryEscape(s), url.PathEscape(s), strings.ReplaceAll(s, "/", `\/`)}
 }
