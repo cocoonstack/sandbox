@@ -605,7 +605,7 @@ func mediaType(h http.Header) string {
 	return strings.ToLower(strings.TrimSpace(mt))
 }
 
-// replaceParam swaps the value of each name=placeholder pair of a query or form string for the escaped value, leaving every other byte as sent.
+// replaceParam swaps the value of the first name=placeholder pair of a query or form string for the escaped value, leaving every other byte as sent.
 func replaceParam(raw, name, placeholder, value string) (string, bool) {
 	if raw == "" {
 		return raw, false
@@ -618,8 +618,9 @@ func replaceParam(raw, name, placeholder, value string) (string, bool) {
 			continue
 		}
 		if uv, err := url.QueryUnescape(v); err == nil && uv == placeholder {
-			escaped = cmp.Or(escaped, url.QueryEscape(value))
+			escaped = url.QueryEscape(value)
 			pairs[i] = k + "=" + escaped
+			break
 		}
 	}
 	if escaped == "" {
@@ -628,7 +629,7 @@ func replaceParam(raw, name, placeholder, value string) (string, bool) {
 	return strings.Join(pairs, "&"), true
 }
 
-// replaceMember swaps each top-level string member named name whose value is placeholder, leaving every other byte as sent.
+// replaceMember swaps the first top-level string member named name whose value is placeholder, leaving every other byte as sent.
 func replaceMember(b []byte, name, placeholder, value string) ([]byte, bool) {
 	dec := jsontext.NewDecoder(bytes.NewReader(b))
 	var ends []int64
@@ -647,6 +648,7 @@ func replaceMember(b []byte, name, placeholder, value string) ([]byte, bool) {
 		}
 		if v, err := jsontext.AppendUnquote(nil, raw); err == nil && string(v) == placeholder && dec.StackPointer().LastToken() == name {
 			ends, lens = append(ends, dec.InputOffset()), append(lens, len(raw))
+			break
 		}
 	}
 	if len(ends) == 0 {

@@ -426,6 +426,18 @@ func TestAnAlwaysRuleKeepsItsHostUnderAnEarlierInjectRule(t *testing.T) {
 	}
 }
 
+func TestACredentialFillsOnlyTheFirstMatchingParameter(t *testing.T) {
+	value := strings.Repeat("v", 8<<10)
+	form := strings.Repeat("access_token=%40FB%40&", 3600)
+	if got, _ := replaceParam(form, "access_token", "@FB@", value); len(got) != len(form)-len("%40FB%40")+len(value) {
+		t.Errorf("3600 repeated pairs grew the form to %d bytes, want one fill on %d", len(got), len(form))
+	}
+	doc := `{"access_token":"@FB@","access_token":"@FB@"}`
+	if got, _ := replaceMember([]byte(doc), "access_token", "@FB@", "v"); string(got) != `{"access_token":"v","access_token":"@FB@"}` {
+		t.Errorf("a repeated member filled as %s, want only the first", got)
+	}
+}
+
 func TestARangeCannotSplitAScrubbedQueryValue(t *testing.T) {
 	secrets := credSecrets{creds: map[string][]Credential{"example.com": {{Name: "K", Query: "api_key", Value: "SECRETVALUE0123456789", Placeholder: "@K@"}}}}
 	p, guestRoots, upstream := interceptProxySecrets(t, Policy{Allow: []Rule{{Host: "*", Intercept: InterceptInject}}}, secrets, nil)
