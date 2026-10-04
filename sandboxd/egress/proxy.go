@@ -557,7 +557,7 @@ func (s *scrubReader) Read(b []byte) (int, error) {
 }
 
 func (s *scrubReader) scan() {
-	buf, i, held := s.pending, 0, false
+	buf, i := s.pending, 0
 	for {
 		at, k := -1, 0
 		for j, e := range s.sc.echoes {
@@ -568,30 +568,20 @@ func (s *scrubReader) scan() {
 		if at < 0 {
 			break
 		}
-		s.out.Write(buf[i : i+at])
-		i += at
-		if s.err == nil && s.longerMayFollow(buf[i:], len(s.sc.echoes[k].raw)) {
-			held = true
+		at += i
+		if s.err == nil && at > len(buf)-s.sc.longest && len(buf)-s.partial(buf[i:]) <= at {
 			break
 		}
+		s.out.Write(buf[i:at])
 		s.out.WriteString(s.sc.echoes[k].placeholder)
-		i += len(s.sc.echoes[k].raw)
+		i = at + len(s.sc.echoes[k].raw)
 	}
 	hold := 0
-	switch {
-	case held:
-		hold = len(buf) - i
-	case s.err == nil:
+	if s.err == nil {
 		hold = s.partial(buf[i:])
 	}
 	s.out.Write(buf[i : len(buf)-hold])
 	s.pending = s.pending[:copy(s.pending, buf[len(buf)-hold:])]
-}
-
-func (s *scrubReader) longerMayFollow(rest []byte, n int) bool {
-	return slices.ContainsFunc(s.sc.echoes, func(e echoForm) bool {
-		return len(e.raw) > n && len(rest) < len(e.raw) && bytes.HasPrefix(e.raw, rest)
-	})
 }
 
 func (s *scrubReader) partial(tail []byte) int {

@@ -375,7 +375,8 @@ same `PATCH`, accepted on a hibernated or archived claim without waking it.
   `Accept-Encoding`, `Range` and `If-Range` on such a request, so it reads the
   whole body uncompressed, and streams it holding back only a tail that may
   begin a match, so event streams stay live. A value the origin transforms
-  otherwise is beyond the scrub, and so is a value the origin stored earlier
+  otherwise is beyond the scrub, such as the JSON escape of a quote, backslash
+  or tab inside a value, and so is a value the origin stored earlier
   and returns on a later request that carries no credential: the scrub covers
   only the response to the request that sent the value. `header` credentials, which origins do not reflect, are
   not scrubbed and add no work to the response.

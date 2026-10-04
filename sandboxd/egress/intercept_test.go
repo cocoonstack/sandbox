@@ -484,16 +484,27 @@ func TestAValueThatContainsAnotherIsScrubbedWhole(t *testing.T) {
 	}
 }
 
-func TestAContainedValueEndingAReadWaitsForTheLongerOne(t *testing.T) {
-	sc := newScrubber([]Credential{
-		{Name: "FB_APP_ID", Query: "app_id", Value: "1234567890", Placeholder: "@ID@"},
-		{Name: "FB_TOKEN", Query: "access_token", Value: "1234567890|SECRET", Placeholder: "@TOK@"},
-	})
-	for _, chunks := range [][]string{{"x 1234567890", "|SECRET y"}, {"x 1234567890", " y"}, {"x 1234567890"}} {
-		out, _ := io.ReadAll(&scrubReader{src: chunked(chunks...), sc: sc})
-		if strings.Contains(string(out), "SECRET") || strings.Contains(string(out), "1234567890") {
-			t.Errorf("chunks %q scrubbed to %q, want every value replaced", chunks, out)
-		}
+func TestAContainedValueSplitByAReadIsScrubbedWhole(t *testing.T) {
+	for _, tt := range []struct {
+		name, short, long string
+	}{
+		{"prefix", "1234567890", "1234567890|s3cr3tvalue"},
+		{"middle", "id", "s3cr3t|id|t41l"},
+		{"suffix", "s3cr3tvalue", "1234567890|s3cr3tvalue"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sc := newScrubber([]Credential{
+				{Name: "SHORT", Query: "a", Value: tt.short, Placeholder: "@A@"},
+				{Name: "LONG", Query: "b", Value: tt.long, Placeholder: "@B@"},
+			})
+			body := "next=" + tt.long + "&x"
+			for cut := range len(body) + 1 {
+				out, _ := io.ReadAll(&scrubReader{src: chunked(body[:cut], body[cut:]), sc: sc})
+				if string(out) != "next=@B@&x" {
+					t.Errorf("cut at %d scrubbed to %q, want next=@B@&x", cut, out)
+				}
+			}
+		})
 	}
 }
 
