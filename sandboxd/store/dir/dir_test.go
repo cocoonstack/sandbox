@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -553,6 +554,68 @@ func TestMetasSurfacesReadError(t *testing.T) {
 	}
 }
 
+func TestMetasReadsEveryRecordAndSkipsOnesWithoutMeta(t *testing.T) {
+	root := t.TempDir()
+	st, err := New(root, store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	want := map[string]string{}
+	for i := range 100 {
+		id := fmt.Sprintf("ck_%016x", i)
+		mustPublish(t, st, id, id)
+		want[metaJSON(id)] = ""
+		if i%3 == 0 {
+			labels := `{"n":"` + id + `"}`
+			if err = st.SetLabels(t.Context(), id, []byte(labels)); err != nil {
+				t.Fatalf("SetLabels: %v", err)
+			}
+			want[metaJSON(id)] = labels
+		}
+	}
+	if err = os.MkdirAll(filepath.Join(root, "ck_00000000000fffff"), 0o750); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if _, err = st.Stage("ck_0000000000000000"); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	recs, err := st.Metas(t.Context())
+	if err != nil {
+		t.Fatalf("Metas: %v", err)
+	}
+	got := map[string]string{}
+	for _, r := range recs {
+		got[string(r.Meta)] = string(r.Labels)
+	}
+	if len(recs) != len(want) || !maps.Equal(got, want) {
+		t.Errorf("Metas returned %d records, want the %d published ones with their labels", len(recs), len(want))
+	}
+}
+
+func BenchmarkMetas(b *testing.B) {
+	st, err := New(b.TempDir(), store.CheckpointIDRe)
+	if err != nil {
+		b.Fatalf("New: %v", err)
+	}
+	for i := range 2000 {
+		id := fmt.Sprintf("ck_%016x", i)
+		staging, stageErr := st.Stage(id)
+		if stageErr != nil {
+			b.Fatalf("Stage: %v", stageErr)
+		}
+		seedRecord(b, staging, id)
+		if err = st.Publish(b.Context(), staging, id); err != nil {
+			b.Fatalf("Publish: %v", err)
+		}
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if recs, err := st.Metas(b.Context()); err != nil || len(recs) != 2000 {
+			b.Fatalf("Metas: %d, %v", len(recs), err)
+		}
+	}
+}
+
 func metaJSON(metaID string) string {
 	return `{"id":"` + metaID + `"}`
 }
@@ -608,7 +671,7 @@ func mustPublishDigested(t *testing.T, st *Store, id, metaID string) string {
 	return digest
 }
 
-func seedRecord(t *testing.T, dir, metaID string) {
+func seedRecord(t testing.TB, dir, metaID string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(dir, store.ExportDir), 0o750); err != nil {
 		t.Fatalf("mkdir: %v", err)
