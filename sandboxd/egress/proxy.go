@@ -486,11 +486,15 @@ func (c *countingBody) Read(b []byte) (int, error) {
 	return n, err
 }
 
+type echo struct {
+	old         string
+	raw         []byte
+	placeholder string
+}
+
 // scrubber turns each filled query credential's value, in the escapings a reflected URL carries, back into its placeholder.
 type scrubber struct {
-	olds    []string
-	oldRaw  [][]byte
-	news    []string
+	echoes  []echo
 	first   [256]bool
 	longest int
 }
@@ -503,21 +507,22 @@ func newScrubber(filled []Credential) *scrubber {
 	for _, c := range filled {
 		values, placeholders := escapings(c.Value), escapings(c.Placeholder)
 		for i, old := range values {
-			if !slices.Contains(sc.olds, old) {
-				sc.olds, sc.oldRaw, sc.news = append(sc.olds, old), append(sc.oldRaw, []byte(old)), append(sc.news, placeholders[i])
+			if !slices.ContainsFunc(sc.echoes, func(e echo) bool { return e.old == old }) {
+				sc.echoes = append(sc.echoes, echo{old: old, raw: []byte(old), placeholder: placeholders[i]})
 				sc.first[old[0]], sc.longest = true, max(sc.longest, len(old))
 			}
 		}
 	}
+	slices.SortStableFunc(sc.echoes, func(a, b echo) int { return cmp.Compare(len(b.old), len(a.old)) })
 	return sc
 }
 
 func (sc *scrubber) header(h http.Header) {
 	for _, vs := range h {
 		for i, v := range vs {
-			for j, old := range sc.olds {
-				if strings.Contains(v, old) {
-					v = strings.ReplaceAll(v, old, sc.news[j])
+			for _, e := range sc.echoes {
+				if strings.Contains(v, e.old) {
+					v = strings.ReplaceAll(v, e.old, e.placeholder)
 				}
 			}
 			vs[i] = v
@@ -558,8 +563,8 @@ func (s *scrubReader) scan() {
 	buf, i := s.pending, 0
 	for {
 		at, k := -1, 0
-		for j, old := range s.sc.oldRaw {
-			if idx := bytes.Index(buf[i:], old); idx >= 0 && (at < 0 || idx < at) {
+		for j, e := range s.sc.echoes {
+			if idx := bytes.Index(buf[i:], e.raw); idx >= 0 && (at < 0 || idx < at) {
 				at, k = idx, j
 			}
 		}
@@ -567,8 +572,8 @@ func (s *scrubReader) scan() {
 			break
 		}
 		s.out.Write(buf[i : i+at])
-		s.out.WriteString(s.sc.news[k])
-		i += at + len(s.sc.oldRaw[k])
+		s.out.WriteString(s.sc.echoes[k].placeholder)
+		i += at + len(s.sc.echoes[k].raw)
 	}
 	hold := 0
 	if s.err == nil {
@@ -580,8 +585,8 @@ func (s *scrubReader) scan() {
 
 func (s *scrubReader) partial(tail []byte) int {
 	for k := min(len(tail), s.sc.longest-1); k > 0; k-- {
-		if s.sc.first[tail[len(tail)-k]] && slices.ContainsFunc(s.sc.oldRaw, func(old []byte) bool {
-			return len(old) > k && bytes.HasPrefix(old, tail[len(tail)-k:])
+		if s.sc.first[tail[len(tail)-k]] && slices.ContainsFunc(s.sc.echoes, func(e echo) bool {
+			return len(e.raw) > k && bytes.HasPrefix(e.raw, tail[len(tail)-k:])
 		}) {
 			return k
 		}
@@ -690,9 +695,6 @@ func hostPort(authority string, def uint16) (host string, port uint16, ok bool) 
 
 // replaceParam fills the first name=placeholder pair of a query or form string, leaving every other byte as sent.
 func replaceParam(raw, name, placeholder, value string) string {
-	if !strings.Contains(raw, name) {
-		return raw
-	}
 	for rest, at := raw, 0; rest != ""; {
 		pair, next, _ := strings.Cut(rest, "&")
 		k, v, _ := strings.Cut(pair, "=")

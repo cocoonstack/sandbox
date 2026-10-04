@@ -463,6 +463,29 @@ func TestACredentialFillsOnlyTheFirstMatchingParameter(t *testing.T) {
 	}
 }
 
+func TestAValueThatContainsAnotherIsScrubbedWhole(t *testing.T) {
+	sc := newScrubber([]Credential{
+		{Name: "FB_APP_ID", Query: "app_id", Value: "1234567890", Placeholder: "@ID@"},
+		{Name: "FB_SECRET", Query: "secret", Value: "s3cr3tAppSecret", Placeholder: "@SEC@"},
+		{Name: "FB_TOKEN", Query: "access_token", Value: "1234567890|s3cr3tAppSecret", Placeholder: "@TOK@"},
+	})
+	echo := "access_token=1234567890%7Cs3cr3tAppSecret&raw=1234567890|s3cr3tAppSecret"
+	h := http.Header{"Location": {"/next?" + echo}}
+	sc.header(h)
+	body, _ := io.ReadAll(&scrubReader{src: strings.NewReader(echo), sc: sc})
+	for _, got := range []string{h.Get("Location"), string(body)} {
+		if strings.Contains(got, "s3cr3t") || strings.Contains(got, "@ID@") {
+			t.Errorf("scrubbed %q, want the token replaced whole", got)
+		}
+	}
+}
+
+func TestAnEncodedParameterNameIsFilled(t *testing.T) {
+	if got := replaceParam("a=1&user%5Btoken%5D=%40K%40", "user[token]", "@K@", "v"); got != "a=1&user%5Btoken%5D=v" {
+		t.Errorf("an encoded name filled as %q, want its value replaced", got)
+	}
+}
+
 func TestARangeCannotSplitAScrubbedQueryValue(t *testing.T) {
 	secrets := credSecrets{creds: map[string][]Credential{"example.com": {{Name: "K", Query: "api_key", Value: "SECRETVALUE0123456789", Placeholder: "@K@"}}}}
 	p, guestRoots, upstream := interceptProxySecrets(t, Policy{Allow: []Rule{{Host: "*", Intercept: InterceptInject}}}, secrets, nil)
