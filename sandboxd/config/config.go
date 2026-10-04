@@ -306,12 +306,9 @@ func (c *Config) egressFingerprint() egressFingerprint {
 	fp := egressFingerprint{
 		Classes:  slices.SortedFunc(slices.Values(c.EgressClasses), func(a, b EgressClass) int { return strings.Compare(a.Name, b.Name) }),
 		Internal: slices.Sorted(slices.Values(c.EgressInternalAllow)),
+		Secrets:  slices.SortedFunc(slices.Values(c.Secrets), func(a, b egress.SecretSpec) int { return strings.Compare(a.Name, b.Name) }),
 		Pools:    map[string]PoolSpec{},
 	}
-	for _, s := range c.Secrets {
-		fp.Secrets = append(fp.Secrets, egress.SecretSpec{Name: s.Name, Header: s.Header, ValueEnv: s.ValueEnv})
-	}
-	slices.SortFunc(fp.Secrets, func(a, b egress.SecretSpec) int { return strings.Compare(a.Name, b.Name) })
 	if u := c.EgressUpstream; u != nil {
 		fp.Upstream = &EgressUpstreamConfig{ClaimEnv: u.ClaimEnv, Allow: slices.Sorted(slices.Values(u.Allow))}
 	}

@@ -586,9 +586,11 @@ the tenant set.
 - **Boot:** a node applies the cell's row over the `pools` section of
   `config.json`. Until the cell's first `PUT`, nodes run their config pools,
   and a `pools.json` left from before the node joined the cell is ignored with
-  a warning; `PUT` its set once to share it. Each node still writes the set it
-  applied to its `pools.json`, which it serves when the row cannot be read at
-  boot.
+  a warning; `PUT` its set once to share it. A node with `meta_store` needs the
+  database at boot, since both shared sets open it there. Each node still
+  writes the set it applied to its `pools.json`, which it serves when the row
+  read fails after the connection succeeds, and which it keeps if it leaves
+  the cell.
 - **Connection:** the pool set has its own query pool, idle between writes,
   and its own `LISTEN sandboxd_pool_sets` session, so each node holds two
   LISTEN sessions; count them in the database's `max_connections`.

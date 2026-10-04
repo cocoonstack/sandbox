@@ -41,9 +41,8 @@ const (
 var schema string
 
 type entry struct {
-	rec     *config.TenantRecord
-	sum     [sha256.Size]byte
-	present bool
+	rec *config.TenantRecord
+	sum [sha256.Size]byte
 }
 
 var _ tenants.Source = (*Source)(nil)
@@ -99,7 +98,7 @@ func (s *Source) Resolve(ctx context.Context, sum [sha256.Size]byte) (*config.Te
 	start := s.seq
 	s.mu.RUnlock()
 	switch {
-	case e.present && e.sum == sum:
+	case e.rec != nil && e.sum == sum:
 		return e.rec, nil
 	case negative && time.Now().Before(until):
 		return nil, tenants.ErrUnknown
@@ -137,7 +136,7 @@ func (s *Source) Peek(name string) (config.TenantRecord, tenants.Presence) {
 	case !ok:
 		s.fetch(name)
 		return config.TenantRecord{}, tenants.Unknown
-	case e.present:
+	case e.rec != nil:
 		return *e.rec, tenants.Present
 	default:
 		return config.TenantRecord{}, tenants.Absent
@@ -150,7 +149,7 @@ func (s *Source) Lookup(ctx context.Context, name string) (config.TenantRecord, 
 	start := s.seq
 	s.mu.RUnlock()
 	if cached {
-		if e.present {
+		if e.rec != nil {
 			return *e.rec, true, nil
 		}
 		return config.TenantRecord{}, false, nil
@@ -358,7 +357,7 @@ func (s *Source) cache(r *config.TenantRecord, sum [sha256.Size]byte) {
 	if len(s.byName) >= maxCached {
 		s.clearCache()
 	}
-	s.byName[r.Name] = entry{rec: r, sum: sum, present: true}
+	s.byName[r.Name] = entry{rec: r, sum: sum}
 	s.byToken[sum] = r.Name
 }
 
@@ -372,7 +371,7 @@ func (s *Source) evict(key string) {
 		s.floor = s.seq
 		return
 	}
-	if e := s.byName[key]; e.present {
+	if e := s.byName[key]; e.rec != nil {
 		delete(s.byToken, e.sum)
 	}
 	delete(s.byName, key)

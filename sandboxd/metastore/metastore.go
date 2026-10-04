@@ -48,10 +48,28 @@ func Open(ctx context.Context, dsn, table, schema string) (*pgxpool.Pool, *pgx.C
 // Listen calls synced on each listener connection and notified on each notify, reconnecting with backoff until ctx ends.
 func Listen(ctx context.Context, cfg *pgx.ConnConfig, channel string, synced func(), notified func(payload string)) {
 	logger := log.WithFunc("metastore.Listen")
+	listenOnce := func() error {
+		conn, err := pgx.ConnectConfig(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+		if _, err = conn.Exec(ctx, "LISTEN "+channel); err != nil {
+			return err
+		}
+		synced()
+		for {
+			n, err := conn.WaitForNotification(ctx)
+			if err != nil {
+				return err
+			}
+			notified(n.Payload)
+		}
+	}
 	backoff := listenRetryFirst
 	for {
 		started := time.Now()
-		err := listenOnce(ctx, cfg, channel, synced, notified)
+		err := listenOnce()
 		if ctx.Err() != nil {
 			return
 		}
@@ -65,25 +83,6 @@ func Listen(ctx context.Context, cfg *pgx.ConnConfig, channel string, synced fun
 		case <-time.After(backoff):
 		}
 		backoff = min(backoff*2, listenRetryCap)
-	}
-}
-
-func listenOnce(ctx context.Context, cfg *pgx.ConnConfig, channel string, synced func(), notified func(payload string)) error {
-	conn, err := pgx.ConnectConfig(ctx, cfg.Copy())
-	if err != nil {
-		return err
-	}
-	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
-	if _, err = conn.Exec(ctx, "LISTEN "+channel); err != nil {
-		return err
-	}
-	synced()
-	for {
-		n, err := conn.WaitForNotification(ctx)
-		if err != nil {
-			return err
-		}
-		notified(n.Payload)
 	}
 }
 

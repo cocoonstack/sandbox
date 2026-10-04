@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -277,7 +278,7 @@ func TestSweepGenerationsPairsCurrentAndSupersededDigests(t *testing.T) {
 		t.Fatalf("SweepGenerations: %v", err)
 	}
 	for _, path := range []string{firstGen, firstSidecar} {
-		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		if _, statErr := os.Stat(path); !errors.Is(statErr, fs.ErrNotExist) {
 			t.Errorf("superseded entry %s survived sweep: %v", filepath.Base(path), statErr)
 		}
 	}
@@ -322,7 +323,7 @@ func TestPublishRetriesAfterExpiredInstall(t *testing.T) {
 	if sweepErr := st.SweepGenerations(); sweepErr != nil {
 		t.Fatalf("sweep expired generation: %v", sweepErr)
 	}
-	if _, statErr := os.Stat(gen); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(gen); !errors.Is(statErr, fs.ErrNotExist) {
 		t.Fatalf("expired generation survived sweep: %v", statErr)
 	}
 
@@ -357,7 +358,7 @@ func TestPublishSweepsGenerationsBySupersessionAge(t *testing.T) {
 	setAge(t, gen1, store.GenerationGrace+time.Minute)
 	setAge(t, gen2, store.GenerationGrace/2)
 	mustPublish(t, st, id, "fourth")
-	if _, statErr := os.Stat(gen1); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(gen1); !errors.Is(statErr, fs.ErrNotExist) {
 		t.Fatalf("generation past its supersession grace survived publish: %v", statErr)
 	}
 	if _, statErr := os.Stat(gen2); statErr != nil {
@@ -461,7 +462,7 @@ func TestSweepReclaimsOnlyAgedUncommittedGenerations(t *testing.T) {
 	if sweepErr := sweeper.SweepStaging(); sweepErr != nil {
 		t.Fatalf("sweep old: %v", sweepErr)
 	}
-	if _, statErr := os.Stat(orphan); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(orphan); !errors.Is(statErr, fs.ErrNotExist) {
 		t.Fatalf("aged uncommitted generation survived: %v", statErr)
 	}
 	if _, statErr := os.Stat(filepath.Join(root, orphanID)); statErr != nil {
@@ -599,14 +600,7 @@ func BenchmarkMetas(b *testing.B) {
 	}
 	for i := range 2000 {
 		id := fmt.Sprintf("ck_%016x", i)
-		staging, stageErr := st.Stage(id)
-		if stageErr != nil {
-			b.Fatalf("Stage: %v", stageErr)
-		}
-		seedRecord(b, staging, id)
-		if err = st.Publish(b.Context(), staging, id); err != nil {
-			b.Fatalf("Publish: %v", err)
-		}
+		mustPublish(b, st, id, id)
 	}
 	b.ReportAllocs()
 	for b.Loop() {
@@ -645,7 +639,7 @@ func installUncommitted(t *testing.T, st *Store, root, id, metaID string) (meta 
 	return meta, gen
 }
 
-func mustPublish(t *testing.T, st *Store, id, metaID string) {
+func mustPublish(t testing.TB, st *Store, id, metaID string) {
 	t.Helper()
 	staging, err := st.Stage(id)
 	if err != nil {

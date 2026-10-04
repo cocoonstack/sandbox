@@ -1,6 +1,4 @@
-// Package dir is the directory record backend: plain files under a
-// root whose filesystem is the operator's choice — local disk keeps
-// records node-local, a shared FUSE mount makes them cluster-wide.
+// Package dir keeps records as plain files under a root: local disk keeps them node-local, a shared FUSE mount makes them cluster-wide.
 package dir
 
 import (
@@ -94,7 +92,7 @@ func (d *Store) Fetch(ctx context.Context, id string) (string, []byte, string, e
 
 func (d *Store) ReadMeta(_ context.Context, id string) ([]byte, error) {
 	raw, err := os.ReadFile(filepath.Join(d.root, id, store.MetaFile)) //nolint:gosec // id pinned by the instance idRe before any call
-	if os.IsNotExist(err) {
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil, store.ErrNotFound
 	}
 	return raw, err
@@ -260,30 +258,20 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 // sweepGenerations reclaims only entries whose install or supersession time is outside the grace.
 func (d *Store) sweepGenerations(id string) (err error) {
 	final := filepath.Join(d.root, id)
+	var keep []string
 	metaFile, err := os.Open(filepath.Join(final, store.MetaFile)) //nolint:gosec // id pinned by the instance idRe
-	if errors.Is(err, fs.ErrNotExist) {
-		entries, readErr := os.ReadDir(final)
-		if errors.Is(readErr, fs.ErrNotExist) {
-			return nil
-		}
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		return err
+	default:
+		defer func() { err = errors.Join(err, metaFile.Close()) }()
+		// the open file pins one inode across a concurrent meta rename.
+		meta, readErr := io.ReadAll(metaFile)
 		if readErr != nil {
 			return readErr
 		}
-		for _, e := range entries {
-			if removeErr := removeAgedEntry(final, e); removeErr != nil {
-				return removeErr
-			}
-		}
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, metaFile.Close()) }()
-	// the open file pins one inode across a concurrent meta rename.
-	meta, err := io.ReadAll(metaFile)
-	if err != nil {
-		return err
+		keep = []string{store.MetaFile, store.LabelsFile, store.ExportGen(meta), digestName(meta)}
 	}
 	entries, err := os.ReadDir(final)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -292,10 +280,8 @@ func (d *Store) sweepGenerations(id string) (err error) {
 	if err != nil {
 		return err
 	}
-	current := store.ExportGen(meta)
-	currentDigest := digestName(meta)
 	for _, e := range entries {
-		if name := e.Name(); name == store.MetaFile || name == store.LabelsFile || name == current || name == currentDigest {
+		if slices.Contains(keep, e.Name()) {
 			continue
 		}
 		if removeErr := removeAgedEntry(final, e); removeErr != nil {
@@ -378,15 +364,8 @@ func hashExport(ctx context.Context, root string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	totalChunks := 0
-	for i := range sources {
-		totalChunks += len(sources[i].digest.Chunks)
-	}
-	if totalChunks > 0 {
-		workers := min(totalChunks, runtime.GOMAXPROCS(0), digestWorkerLimit)
-		if err := hashChunks(ctx, sources, workers, hashChunk); err != nil {
-			return "", err
-		}
+	if err := hashChunks(ctx, sources, min(runtime.GOMAXPROCS(0), digestWorkerLimit), hashChunk); err != nil {
+		return "", err
 	}
 	files := make([]store.DigestFile, len(sources))
 	for i := range sources {
