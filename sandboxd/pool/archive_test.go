@@ -193,8 +193,10 @@ func TestArchiveLifecycleRoundTrip(t *testing.T) {
 		id, token, origVM := sb.ID, sb.Token, sb.VMName
 
 		backdate(m, sb, 5*time.Second)
-		m.idleOnce(t.Context())
-		waitFor(t, func() bool { return hibernated(m) == 1 })
+		sweepIdle(t, m)
+		if hibernated(m) != 1 {
+			t.Fatal("idle claim was not hibernated")
+		}
 
 		m.archiveOnce(t.Context())
 		waitFor(t, func() bool { return archivedCount(m) == 1 })
@@ -695,8 +697,7 @@ func TestIdleOnceSkipsArchived(t *testing.T) {
 		hibBefore := eng.hibernateCount()
 		backdate(m, sb, time.Hour)
 
-		m.idleOnce(t.Context())
-		waitFor(t, func() bool { return !m.idleSweep.Load() })
+		sweepIdle(t, m)
 		if got := eng.hibernateCount(); got != hibBefore {
 			t.Errorf("idle sweep hibernated an archived claim: %d→%d", hibBefore, got)
 		}

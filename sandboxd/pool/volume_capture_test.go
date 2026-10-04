@@ -125,8 +125,7 @@ func TestIdleOnceSkipsVolumeClaim(t *testing.T) {
 		sb.Volumes = []types.Volume{{Name: "dataset", Mount: "/datasets"}}
 		backdate(m, sb, 2*time.Second)
 
-		m.idleOnce(t.Context())
-		waitFor(t, func() bool { return !m.idleSweep.Load() })
+		sweepIdle(t, m)
 		if len(eng.hibernates) != 0 || hibernated(m) != 0 {
 			t.Errorf("idle sweep hibernated volume claim: engine=%v count=%d", eng.hibernates, hibernated(m))
 		}
