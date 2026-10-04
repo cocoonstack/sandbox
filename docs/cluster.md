@@ -262,7 +262,10 @@ by pool key at boot.
 
 With [`meta_store.cell`](deploy.md#shared-pool-set), the set belongs to the
 node's cell: one `PUT /v1/pools` on any node of the cell reaches every node in
-it, and no fan-out is needed; every node of the cell runs the same targets.
+it, and no fan-out is needed; every node of the cell runs the same targets. This
+pool cell is only a name for nodes that share one pool set in the database. It
+is not a mesh cell (see [scale](#scale)): a pool cell may cover part of a mesh
+or nodes of several meshes, and gossip, redirects and heals ignore it.
 
 Without it, cluster-wide pool changes are a client-side fan-out, not a gossiped desired
 state (pools are legitimately heterogeneous per node): `Client.SetPoolsCluster`
@@ -369,7 +372,9 @@ with every claim.
 - **Size one mesh in the hundreds of nodes.** Split a larger fleet into
   independent meshes (cells), each with its own `mesh.join`, and route users
   to a cell in front of them. Redirects, heals and template lookups stay
-  inside the cell.
+  inside the cell. A mesh cell is not configured by `meta_store.cell`, which
+  only names the nodes that share a pool set (see
+  [state ownership](#state-ownership)).
 - **Keep per-user data out of the gossip.** A promoted template is gossiped by
   every node that holds it, so templates belong to pools or tenants, not to
   end users. At 500 templates per node the state reaches the 20 MiB limit near
