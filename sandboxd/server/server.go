@@ -54,6 +54,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrReloadRefused, http.StatusConflict, ""},
 	{pool.ErrTenantRemoved, http.StatusForbidden, ""},
 	{pool.ErrTenantStoreDown, http.StatusServiceUnavailable, ""},
+	{pool.ErrPoolStoreDown, http.StatusServiceUnavailable, ""},
 	{pool.ErrNoEgress, http.StatusConflict, ""},
 	{pool.ErrNoEgressHibernate, http.StatusConflict, ""},
 	{pool.ErrNoEgressFork, http.StatusConflict, ""},

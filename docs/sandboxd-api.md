@@ -429,7 +429,9 @@ follow a redirect.
 ## PUT /v1/pools
 
 Auth: root only (tenant tokens get 403). Replaces the node's desired warm
-targets online — no restart, and no live claim's VM is touched. On a node with egress policies,
+targets online — no restart, and no live claim's VM is touched. With
+[`meta_store`](deploy.md#shared-pool-set), it replaces them on every node of
+the node's `cell`. On a node with egress policies,
 whether a key is pooled decides which [policy layers](egress.md) a claim of it
 gets; that is settled when the claim is made, so adding or dropping a pool here
 changes only claims made afterwards — a key that gains a pool with no `egress`
@@ -448,7 +450,8 @@ Answers the fresh `GET /v1/info` payload. 400 bad key, negative warm/idle,
 negative archive duration or an `archive_after_seconds` not above the pool's
 `idle_hibernate_seconds`, duplicate pool, or a config-owned `egress`/`warmup`/`capture_trim`/`storage`/`egress_upstream_env`
 field; 401 bad api
-token; 409 egress pool on a node without an egress attachment.
+token; 409 egress pool on a node without an egress attachment; 503 the
+`meta_store` cannot take the write.
 
 ## Tenants (/v1/tenants)
 

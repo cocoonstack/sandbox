@@ -13,6 +13,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/metastore/metastoretest"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/file"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -327,7 +328,7 @@ func TestAFullLastPageNamesNoNext(t *testing.T) {
 }
 
 func TestTwoNodesOnOneMetaStoreShareTheTenantSet(t *testing.T) {
-	t.Setenv("SANDBOX_TEST_DSN", tenantstest.PGSchema(t))
+	t.Setenv("SANDBOX_TEST_DSN", metastoretest.PGSchema(t))
 	node := func() *Manager {
 		cfg := &config.Config{DataDir: t.TempDir(), APIToken: "root", MetaStore: &config.MetaStoreConfig{Kind: "pg", DSNEnv: "SANDBOX_TEST_DSN"}}
 		m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t))

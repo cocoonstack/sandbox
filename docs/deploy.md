@@ -118,7 +118,7 @@ gets the intersection of the two.
 | `egress_usage_bytes` | `false` | append an `egress_bytes` usage event with the payload bytes of every allowed egress tunnel or request when it ends; one extra usage-journal write per connection |
 | `egress_ca` | unset | [HTTPS-interception](egress.md#https-interception) PKI: `root_cert` (the cluster root baked into intercepted guests; may bundle old+new roots during rotation) plus this node's `intermediate_cert`/`intermediate_key` from `sandboxd ca issue-intermediate`. Required when any pool rule sets `intercept` |
 | `api_token` | unset | the operator (root) credential: when set, guards the node-level endpoints (Bearer) with full access, including release-by-id cleanup. Per-sandbox tokens guard ordinary sandbox-scoped calls |
-| `meta_store` | unset | `{"kind": "pg", "dsn_env": "SANDBOXD_PG_DSN"}`: keep the tenant set in one shared PostgreSQL instead of each node's `tenants.json` (see [shared tenant database](#shared-tenant-database)). `dsn_env` names the node env holding the connection string. Needs `api_token`. Restart only |
+| `meta_store` | unset | `{"kind": "pg", "dsn_env": "SANDBOXD_PG_DSN", "cell": "default"}`: keep the tenant set in one shared PostgreSQL instead of each node's `tenants.json` (see [shared tenant database](#shared-tenant-database)), and the API-applied pool set there per `cell` instead of in each node's `pools.json` (see [shared pool set](#shared-pool-set)). `dsn_env` names the node env holding the connection string; `cell` defaults to `default`. Needs `api_token`. Restart only |
 | `max_fork_count` | 16 | children a single `fork` may create; each is a full-RAM VM, so this bounds one request's memory blast radius to the node's capacity |
 | `refill_concurrency` | 0 (auto) | concurrent VM provisioning budget, shared by warm-pool refills, fork clones, and the reap/hibernate/reconcile engine batches. 0 sizes it from the node: `NumCPU*2/3` clamped to [4, 256] — a 384-core node gets 256; small nodes keep a floor of 4 |
 | `release_delay_seconds` | 0 | seconds a released VM waits in the removal queue before `cocoon vm rm`. The claim is dropped and journaled and its egress listener closed at release; the VM removal, the volume hold release and the egress tap unlock run on the first reap tick (5 s) after the delay, on the `refill_concurrency` budget like every other batch teardown, so a burst of releases does not compete with the claims still running. Until then the VM holds its memory and its volume reservations without counting as a claim. 0 removes inline |
@@ -141,7 +141,7 @@ gets the intersection of the two.
 | `archive_after_seconds` | 0 (off) | tier below hibernation: a hibernated claim idle this long is checkpointed to the store and its local VM dropped, freeing the node entirely; the next call that reaches the guest restores it transparently (a checkpoint restore's latency) with a fresh lease of the length the claim was granted (the server default of 5m when it asked for none); a lease moves only when a client calls [`/renew`](sandboxd-api.md#post-v1sandboxesidrenew). Keep `idle_hibernate_seconds` under the leases your claims use, or a woken sandbox that idles again is destroyed by the reap before it can hibernate, its archive already consumed by the wake; one still in use when its lease ends is destroyed the same way, unless it claimed `on_expire: archive`, which archives at the lease end whatever this setting. Requires `idle_hibernate_seconds > 0` and must exceed it. Node-wide for unpooled keys; per-pool overrides for that pool |
 | `archive_delete_after_seconds` | 0 (keep) | purge an archived claim's store checkpoint this long after it was archived, reclaiming storage; the claim is then gone for good. On archive this retention window replaces the live claim deadline; 0 clears the deadline so the archive is kept forever. Same node-wide/per-pool split |
 | `mesh` | unset | join a cluster ([Clusters](cluster.md)); unset = single node |
-| `pools[]` | — | warm pools, keyed by `(template, net, size)`. `warm` defaults to 4 only when both `warm` and `warm_max` are omitted; an explicit `warm: 0` is kept, so `warm: 0` under a `warm_max` starts the pool empty and grows it on demand, and `warm: 0` alone registers the key with no warm VMs (`PUT /v1/pools` never defaults `warm`); `net` is `none` or `egress`; `size` is a tier, below. Retune online without a restart via [`PUT /v1/pools`](sandboxd-api.md#put-v1pools) — omitted pools drain. This is the **first-boot seed**: once a node takes a `PUT /v1/pools`, the applied set persists to `<data_dir>/pools.json` and overrides this section on every later boot (a startup log notes it); delete `pools.json` to return to config-owned pools. Egress stays config-owned either way. A template re-pulled or re-imported under the same ref is picked up within a minute: the pool rebuilds its golden and replaces its warm VMs. See [state ownership](cluster.md#state-ownership) |
+| `pools[]` | — | warm pools, keyed by `(template, net, size)`. `warm` defaults to 4 only when both `warm` and `warm_max` are omitted; an explicit `warm: 0` is kept, so `warm: 0` under a `warm_max` starts the pool empty and grows it on demand, and `warm: 0` alone registers the key with no warm VMs (`PUT /v1/pools` never defaults `warm`); `net` is `none` or `egress`; `size` is a tier, below. Retune online without a restart via [`PUT /v1/pools`](sandboxd-api.md#put-v1pools) — omitted pools drain. This is the **first-boot seed**: once a node takes a `PUT /v1/pools`, the applied set persists to `<data_dir>/pools.json` and overrides this section on every later boot (a startup log notes it); delete `pools.json` to return to config-owned pools. With `meta_store`, the cell's set overrides it instead (see [shared pool set](#shared-pool-set)). Egress stays config-owned either way. A template re-pulled or re-imported under the same ref is picked up within a minute: the pool rebuilds its golden and replaces its warm VMs. See [state ownership](cluster.md#state-ownership) |
 
 Size tiers (free-form CPU/memory is deliberately not accepted — it would
 fragment the warm pools):
@@ -548,6 +548,49 @@ through `/v1/tenants` on any node.
   - uncached ones answer 503, and tenant writes fail;
   - recovery needs no restart.
 - **Quota:** `max_claims` stays a per-node cap, read from the shared row.
+
+### Shared pool set
+
+With `meta_store` set, the pool set applied through `PUT /v1/pools` belongs to
+the node's `cell` rather than to the node: a `PUT` on any node of the cell
+replaces the warm targets of every node in it. Each pool's `warm`, `warm_max`
+and other targets apply per node, as they do with `pools.json`; nodes that
+differ in capacity or attachment go in different cells.
+
+- **Schema:** sandboxd creates the table at boot when it is missing; create it
+  ahead with the same DDL when the node's role has no `CREATE` right:
+
+  ```sql
+  CREATE TABLE IF NOT EXISTS sandboxd_pool_sets (
+      cell        text        PRIMARY KEY,
+      config_seed text        NOT NULL DEFAULT '',
+      pools       jsonb       NOT NULL,
+      version     bigint      NOT NULL CHECK (version > 0),
+      updated_at  timestamptz NOT NULL DEFAULT now()
+  );
+  ```
+
+- **Writes:** a `PUT` commits the cell's row with a `NOTIFY` on
+  `sandboxd_pool_sets`, then applies it on the node that took it. Every other
+  node of the cell reloads the row on the notify and applies it, and also
+  reloads it each time its listener reconnects, so a missed notify is caught
+  up; a read that fails is retried every 5 s. A node applies a version only
+  once and never an older one. A node the set does not fit, such as one
+  without an egress attachment for an `egress` pool, logs a warning and keeps
+  its pools, at runtime and at boot.
+- **Boot:** a node applies the cell's row over the `pools` section of
+  `config.json`. Until the cell's first `PUT`, nodes run their config pools,
+  and a `pools.json` left from before `meta_store` is ignored with a warning;
+  `PUT` its set once to share it. Each node still writes the set it applied to
+  its `pools.json`, which it serves when the row cannot be read at boot.
+- **Connection:** the pool set has its own query pool, idle between writes,
+  and its own `LISTEN sandboxd_pool_sets` session, so each node holds two
+  LISTEN sessions; count them in the database's `max_connections`.
+- **Outage:** the applied pools keep serving and refilling; a `PUT` that
+  cannot reach the database answers 503. Retry it: a `PUT` is a declarative
+  replace, so a retry after a timeout that did commit changes nothing more.
+- **Reverting** to config-owned pools is a `PUT` of the config pools; changing
+  a node's `cell` takes a restart.
 
 ### Reloading the config
 

@@ -34,6 +34,7 @@ const (
 	defaultCocoonBin    = "cocoon"
 	defaultWarm         = 4
 	defaultMaxForkCount = 16
+	defaultCell         = "default"
 	refillFloor         = 4
 	refillCeiling       = 256
 	// cocoon builds a VM with a 10G disk by default, so a pool never asks for less
@@ -141,11 +142,13 @@ type EgressClass struct {
 	EgressUpstreamEnv string `json:"egress_upstream_env,omitempty"`
 }
 
-// MetaStoreConfig points every node at one shared PostgreSQL for its tenant set; absent keeps the set in each node's tenants.json.
+// MetaStoreConfig points every node at one shared PostgreSQL for its tenant set and its cell's pool set; absent keeps both in each node's files.
 type MetaStoreConfig struct {
 	Kind string `json:"kind"`
 	// DSNEnv names the node env holding the connection string, so no credential sits in the file.
 	DSNEnv string `json:"dsn_env"`
+	// Cell names the pool set the node shares; nodes of one cell apply the same API-applied pools.
+	Cell string `json:"cell,omitempty"`
 }
 
 // TenantSpec is one tenant as the tenant API takes it: its bearer token, its live-claim quota and its egress class.
@@ -343,6 +346,9 @@ func (c *Config) applyDefaults() {
 	}
 	for i := range c.Volumes {
 		c.Volumes[i].DirectIO = cmp.Or(c.Volumes[i].DirectIO, types.DirectIOOff)
+	}
+	if c.MetaStore != nil {
+		c.MetaStore.Cell = cmp.Or(c.MetaStore.Cell, defaultCell)
 	}
 }
 
@@ -638,6 +644,8 @@ func (c *Config) validateMetaStore() error {
 		return fmt.Errorf("meta_store.kind %q is not supported; use pg", ms.Kind)
 	case !types.EnvNameRe.MatchString(ms.DSNEnv) || os.Getenv(ms.DSNEnv) == "":
 		return fmt.Errorf("meta_store.dsn_env %q must name a set node env", ms.DSNEnv)
+	case !types.NameRe.MatchString(ms.Cell):
+		return fmt.Errorf("meta_store.cell %q must match %s", ms.Cell, types.NameRe)
 	case c.APIToken == "":
 		return fmt.Errorf("meta_store needs api_token: the tenant API is root-only")
 	}
