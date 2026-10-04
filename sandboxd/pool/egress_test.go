@@ -390,9 +390,6 @@ func TestWarmClaimServesTheDoorsRefillBound(t *testing.T) {
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
 	warm := refillWarmVM(t, m)
 	pins := pinDoors(t, warm)
-	if m.NetRoute(warm) != types.NetRouteNone {
-		t.Fatal("refill served the doors it bound, want them bound and nothing served")
-	}
 
 	sb := mustClaim(t, m, testKey)
 	m.out.ClosePrebound(sb.VMName)

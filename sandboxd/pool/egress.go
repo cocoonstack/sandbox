@@ -8,7 +8,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// NetRoute is how sb's guest reaches the network now: its own NIC, the proxy behind a bound door, or nothing.
+// NetRoute reports sb's route as its outbound host sees it.
 func (m *Manager) NetRoute(sb *types.Sandbox) types.NetRoute {
 	return m.out.Route(sb)
 }

@@ -502,7 +502,7 @@ func (m *Manager) ClusterDigest() string {
 	return cfg.ClusterDigest(m.EgressCAFingerprint(), m.TenantRecords())
 }
 
-// EgressCAFingerprint is the egress root's fingerprint, or "" when the node intercepts nothing.
+// EgressCAFingerprint is the outbound host's CA fingerprint.
 func (m *Manager) EgressCAFingerprint() string {
 	return m.out.CAFingerprint()
 }

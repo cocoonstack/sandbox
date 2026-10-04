@@ -20,7 +20,7 @@ func editView(m *Manager, edit func(v *configView)) {
 	m.view.Store(&next)
 }
 
-// editEgress swaps in an egress view built from m.cfg as edit changes it; the view has no secrets.
+// editEgress builds the view without secrets.
 func editEgress(t *testing.T, m *Manager, edit func(cfg *config.Config)) {
 	t.Helper()
 	cfg := *m.cfg

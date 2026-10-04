@@ -36,7 +36,7 @@ func (m *Manager) confirmGone(ctx context.Context, name string) bool {
 		return false
 	}
 	if present {
-		logger.Errorf(ctx, fmt.Errorf("vm %s survived removal", name), "remove did not take effect; leaving it accounted for retry")
+		logger.Error(ctx, fmt.Errorf("vm %s survived removal", name), "remove did not take effect; leaving it accounted for retry")
 		return false
 	}
 	return true

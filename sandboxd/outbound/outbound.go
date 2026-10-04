@@ -28,6 +28,9 @@ type Engine interface {
 	MarkLane(ctx context.Context, vsockSocket string, lane engine.Lane) error
 }
 
+// TapFunc applies or drops the nft lock on one tap.
+type TapFunc func(tap string) error
+
 // Options wires a Host to the node: its engine, the live egress view, and where events go.
 type Options struct {
 	Engine Engine
@@ -36,15 +39,14 @@ type Options struct {
 	Pooled   func(sb *types.Sandbox) bool
 	Record   func(ctx context.Context, id, tenant string, ev egress.Event)
 	Transfer func(ctx context.Context, id, tenant string, ev egress.Event, sent, received int64)
-	// CA is nil unless a pool rule intercepted at boot.
-	CA *egress.CA
+	CA       *egress.CA
 	// LockNIC nft-locks egress-lane NICs, which only a node with bridges has.
 	LockNIC bool
 	// Dial, Verdict, Lock and Unlock default to the internal-address guard and netfilter; tests swap them.
 	Dial    egress.DialFunc
 	Verdict func(ip netip.Addr, port uint16) (bool, error)
-	Lock    func(tap string) error
-	Unlock  func(tap string) error
+	Lock    TapFunc
+	Unlock  TapFunc
 }
 
 // Host holds every sandbox's doors and NIC lock; it guards its own state, never the caller's.
