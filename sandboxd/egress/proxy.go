@@ -560,7 +560,7 @@ func (s *scrubReader) Read(b []byte) (int, error) {
 }
 
 func (s *scrubReader) scan() {
-	buf, i := s.pending, 0
+	buf, i, held := s.pending, 0, false
 	for {
 		at, k := -1, 0
 		for j, e := range s.sc.echoes {
@@ -572,15 +572,29 @@ func (s *scrubReader) scan() {
 			break
 		}
 		s.out.Write(buf[i : i+at])
+		i += at
+		if s.err == nil && s.longerMayFollow(buf[i:], len(s.sc.echoes[k].raw)) {
+			held = true
+			break
+		}
 		s.out.WriteString(s.sc.echoes[k].placeholder)
-		i += at + len(s.sc.echoes[k].raw)
+		i += len(s.sc.echoes[k].raw)
 	}
 	hold := 0
-	if s.err == nil {
+	switch {
+	case held:
+		hold = len(buf) - i
+	case s.err == nil:
 		hold = s.partial(buf[i:])
 	}
 	s.out.Write(buf[i : len(buf)-hold])
 	s.pending = s.pending[:copy(s.pending, buf[len(buf)-hold:])]
+}
+
+func (s *scrubReader) longerMayFollow(rest []byte, n int) bool {
+	return slices.ContainsFunc(s.sc.echoes, func(e echo) bool {
+		return len(e.raw) > n && len(rest) < len(e.raw) && bytes.HasPrefix(e.raw, rest)
+	})
 }
 
 func (s *scrubReader) partial(tail []byte) int {
@@ -710,7 +724,7 @@ func replaceParam(raw, name, placeholder, value string) string {
 
 // replaceMember fills the first top-level string member name holding placeholder, leaving every other byte as sent.
 func replaceMember(doc, name, placeholder, value string) string {
-	if !strings.Contains(doc, name) {
+	if !strings.Contains(doc, `\`) && (!strings.Contains(doc, name) || !strings.Contains(doc, placeholder)) {
 		return doc
 	}
 	dec := jsontext.NewDecoder(strings.NewReader(doc))

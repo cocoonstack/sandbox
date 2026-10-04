@@ -480,9 +480,29 @@ func TestAValueThatContainsAnotherIsScrubbedWhole(t *testing.T) {
 	}
 }
 
+func TestAContainedValueEndingAReadWaitsForTheLongerOne(t *testing.T) {
+	sc := newScrubber([]Credential{
+		{Name: "FB_APP_ID", Query: "app_id", Value: "1234567890", Placeholder: "@ID@"},
+		{Name: "FB_TOKEN", Query: "access_token", Value: "1234567890|SECRET", Placeholder: "@TOK@"},
+	})
+	for _, chunks := range [][]string{{"x 1234567890", "|SECRET y"}, {"x 1234567890", " y"}, {"x 1234567890"}} {
+		readers := make([]io.Reader, len(chunks))
+		for i, c := range chunks {
+			readers[i] = strings.NewReader(c)
+		}
+		out, _ := io.ReadAll(&scrubReader{src: io.MultiReader(readers...), sc: sc})
+		if strings.Contains(string(out), "SECRET") || strings.Contains(string(out), "1234567890") {
+			t.Errorf("chunks %q scrubbed to %q, want every value replaced", chunks, out)
+		}
+	}
+}
+
 func TestAnEncodedParameterNameIsFilled(t *testing.T) {
 	if got := replaceParam("a=1&user%5Btoken%5D=%40K%40", "user[token]", "@K@", "v"); got != "a=1&user%5Btoken%5D=v" {
 		t.Errorf("an encoded name filled as %q, want its value replaced", got)
+	}
+	if got := replaceMember(`{"access\u005ftoken":"@FB@"}`, "access_token", "@FB@", "v"); got != `{"access\u005ftoken":"v"}` {
+		t.Errorf("an escaped JSON name filled as %s, want its value replaced", got)
 	}
 }
 
