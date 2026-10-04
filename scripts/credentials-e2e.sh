@@ -124,13 +124,12 @@ echo "== inject pool: conditional interception, query and body placeholders"
 "$DATA/credsmoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -echo "$ECHO" -other "$OTHER" \
   -inject-size medium | tee "$DATA/inject.log"
 grep -q '"ev":"egress".*"secret":"claim:SERP"' "$DATA/state/usage.jsonl" || { echo "usage names no claim:SERP"; exit 1; }
-vault=$(awk '/^VAULT / {sub(/^VAULT /, ""); print}' "$DATA/inject.log")
-for v in "${vault%%|*}" "${vault##*|}"; do
+while IFS= read -r v; do
   if grep '"op":"egress"' "$DATA/state/audit.jsonl" | grep -qF "$v" || grep -qF "$v" "$DATA/state/usage.jsonl"; then
     echo "an inject value reached an egress audit record or the usage journal"
     exit 1
   fi
-done
+done < <(sed -n 's/^VAULT //p' "$DATA/inject.log")
 
 echo "== restart sandboxd, recheck the surviving claim"
 kill "$DAEMON_PID"

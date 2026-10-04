@@ -512,10 +512,15 @@ func (k PoolKey) Validate() error {
 	return nil
 }
 
-// envView is an immutable env with its inject entries named in order.
+// envView is an immutable env with its inject entries in name order.
 type envView struct {
 	env     Env
-	injects []string
+	injects []namedVar
+}
+
+type namedVar struct {
+	name string
+	v    EnvVar
 }
 
 // Sandbox is the node-local record of one pooled or claimed VM.
@@ -621,10 +626,10 @@ func (s *Sandbox) SetEnv(e Env) {
 	view := &envView{env: e}
 	for name, v := range e {
 		if v.Inject != nil && !v.InGuest() {
-			view.injects = append(view.injects, name)
+			view.injects = append(view.injects, namedVar{name, v})
 		}
 	}
-	slices.Sort(view.injects)
+	slices.SortFunc(view.injects, func(a, b namedVar) int { return strings.Compare(a.name, b.name) })
 	s.live.Store(view)
 }
 
@@ -643,8 +648,8 @@ func (s *Sandbox) Injections(host string) iter.Seq2[string, EnvVar] {
 		if view == nil {
 			return
 		}
-		for _, name := range view.injects {
-			if v := view.env[name]; v.Inject.Matches(host) && !yield(name, v) {
+		for _, e := range view.injects {
+			if e.v.Inject.Matches(host) && !yield(e.name, e.v) {
 				return
 			}
 		}

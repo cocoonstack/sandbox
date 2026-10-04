@@ -335,7 +335,7 @@ func TestEgressUsageEventNamesTheInjectedCredentials(t *testing.T) {
 		t.Fatalf("read journal: %v", err)
 	}
 	var ev usageEvent
-	if err := json.Unmarshal(raw, &ev); err != nil {
+	if err = json.Unmarshal(raw, &ev); err != nil {
 		t.Fatalf("decode %q: %v", raw, err)
 	}
 	if ev.Event != "egress" || ev.Reference != "graph.example.com" || ev.Secret != "claim:FB" {

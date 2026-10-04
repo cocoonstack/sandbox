@@ -323,14 +323,15 @@ git config --global http.https://github.com/.extraHeader "Authorization: Basic @
 ```
 
 A key that a client sends as a query parameter takes `query` instead of
-`header`, and a placeholder is required. On an intercepted request, each
+`header`, and a placeholder is required. On an intercepted request, the first
 `<query>=<placeholder>` pair of the URL gets the value, URL-escaped; the
 placeholder may arrive percent-encoded, and every other byte of the query
-stays as sent. With `body: true`, the same parameter of an
-`application/x-www-form-urlencoded` body, and a top-level string member of that
-name in an `application/json` body, are filled too when they carry the
-placeholder and the body has a known length of at most 64 KiB; any other body
-streams unchanged:
+stays as sent. With `body: true` and no placeholder in the URL, the first such
+pair of an `application/x-www-form-urlencoded` body, or the first top-level
+string member of that name holding the placeholder in an `application/json`
+body, is filled instead, when the body has a known length of at most 64 KiB;
+any other body streams unchanged. One fill per credential bounds what a
+request can grow by:
 
 ```jsonc
 "FB": { "value": "EAAB…", "guest": false,

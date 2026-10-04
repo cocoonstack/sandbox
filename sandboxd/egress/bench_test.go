@@ -2,11 +2,13 @@ package egress
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -96,16 +98,90 @@ func BenchmarkTunnelDecision(b *testing.B) {
 	}
 }
 
-func benchFront(b *testing.B, intercept InterceptMode) (proxyAddr string, roots *x509.CertPool) {
+func BenchmarkInjectAndScrubHeaders(b *testing.B) {
+	key := "EAABsbCS1iHgBAKZBZCx9ZAZBe7ZAZCYqZBfZC0ZD"
+	base, err := http.NewRequestWithContext(b.Context(), http.MethodPost, "https://example.com/v19.0/me", nil)
+	if err != nil {
+		b.Fatalf("build request: %v", err)
+	}
+	for _, arm := range []struct {
+		name, query, ctype, body string
+		cred                     Credential
+	}{
+		{"no-credential", "a=1", "", "", Credential{}},
+		{"header", "a=1", "", "", Credential{Name: "K", Header: "X-Key", Value: key, Placeholder: "@K@"}},
+		{"query", "a=1&access_token=%40K%40", "", "", Credential{Name: "K", Query: "access_token", Value: key, Placeholder: "@K@"}},
+		{"form-body", "", "application/x-www-form-urlencoded", "m=hi&access_token=%40K%40", Credential{Name: "K", Query: "access_token", Body: true, Value: key, Placeholder: "@K@"}},
+		{"json-body", "", "application/json", `{"m":"hi","access_token":"@K@"}`, Credential{Name: "K", Query: "access_token", Body: true, Value: key, Placeholder: "@K@"}},
+	} {
+		creds := map[string][]Credential{}
+		if arm.cred.Name != "" {
+			creds["example.com"] = []Credential{arm.cred}
+		}
+		p := New(Policy{}, credSecrets{creds: creds}, nil, fixedDial(""), nil, nil)
+		b.Run(arm.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				out := base.Clone(b.Context())
+				out.URL.RawQuery = arm.query
+				if arm.ctype != "" {
+					out.Header.Set("Content-Type", arm.ctype)
+					out.Body, out.ContentLength = io.NopCloser(strings.NewReader(arm.body)), int64(len(arm.body))
+				}
+				if _, sc := p.inject(Rule{}, out, "example.com", true); sc != nil {
+					sc.header(http.Header{"Location": {"/next?access_token=" + key}, "Content-Type": {"application/json"}, "Date": {"x"}})
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkScrubBody(b *testing.B) {
+	key := "EAABsbCS1iHgBAKZBZCx9ZAZBe7ZAZCYqZBfZC0ZD"
+	sc := newScrubber([]Credential{{Name: "K", Query: "access_token", Value: key, Placeholder: "@K@"}})
+	page := bytes.Repeat([]byte(`{"id":"1234567890","message":"hello world","created_time":"2026-10-04T00:00:00+0000"},`), 64<<10/88)
+	page = append(page, `"paging":{"next":"https:\/\/graph.facebook.com\/v19.0\/me\/feed?access_token=`+key+`&after=x"}`...)
+	event := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"hello there\"}}]}\n\n")
+	for _, arm := range []struct {
+		name string
+		src  func() io.Reader
+	}{
+		{"64KiB-page", func() io.Reader { return bytes.NewReader(page) }},
+		{"sse-256-events", func() io.Reader {
+			events := make([]io.Reader, 256)
+			for i := range events {
+				events[i] = bytes.NewReader(event)
+			}
+			return io.MultiReader(events...)
+		}},
+	} {
+		b.Run(arm.name+"/plain", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_, _ = io.Copy(io.Discard, arm.src())
+			}
+		})
+		b.Run(arm.name+"/scrubbed", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				buf := copyBufs.Get().(*[]byte)
+				_, _ = io.Copy(io.Discard, newScrubReader(arm.src(), sc, *buf))
+				copyBufs.Put(buf)
+			}
+		})
+	}
+}
+
+func benchFront(b *testing.B, mode InterceptMode) (proxyAddr string, roots *x509.CertPool) {
 	b.Helper()
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "hello")
 	}))
 	b.Cleanup(upstream.Close)
-	rule := Rule{Host: "example.com", Intercept: intercept}
+	rule := Rule{Host: "example.com", Intercept: mode}
 	var ca *CA
 	roots = x509.NewCertPool()
-	if intercept == InterceptAlways {
+	if mode == InterceptAlways {
 		ca = testCAOnly(b)
 		if !roots.AppendCertsFromPEM(ca.CertPEM()) {
 			b.Fatal("append cluster root")

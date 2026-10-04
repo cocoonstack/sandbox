@@ -1,7 +1,6 @@
 // credsmoke is the claim-credential acceptance: claims on one intercept pool each
 // send their own env-injected header to an HTTPS echo through the proxy, the guest
 // never holds the value, and rotation, refusal, clearing and forks behave as the API says.
-// With -inject-size it also drives a pool whose only rule is {"host":"*","intercept":"inject"}.
 package main
 
 import (
@@ -10,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -23,7 +23,9 @@ const (
 	proxy  = "http://127.0.0.1:3128"
 	header = "X-Api-Key"
 	entry  = "API_KEY"
+	tsPH   = "@TS@"
 	serpPH = "@SERP@"
+	fbPH   = "@FB@"
 )
 
 func main() {
@@ -230,40 +232,41 @@ func conditional(addr, token, template string, size sandbox.Size, echo, other st
 	stamp := strconv.FormatInt(time.Now().UnixNano(), 10)
 	serp, fb := "serp "+stamp+"/+", "fb-"+stamp
 	if err = vault.PatchEnv(ctx, map[string]*sandbox.EnvVar{
-		"TS":   {Value: "2016-10-10", Guest: new(false), Inject: &sandbox.EnvInject{Hosts: []string{echo}, Query: "timestamp", Placeholder: "@TS@"}},
+		"TS":   {Value: "2016-10-10", Guest: new(false), Inject: &sandbox.EnvInject{Hosts: []string{echo}, Query: "timestamp", Placeholder: tsPH}},
 		"SERP": {Value: serp, Guest: new(false), Inject: &sandbox.EnvInject{Hosts: []string{echo}, Query: "api_key", Placeholder: serpPH}},
-		"FB":   {Value: fb, Guest: new(false), Inject: &sandbox.EnvInject{Hosts: []string{echo}, Query: "access_token", Body: true, Placeholder: "@FB@"}},
+		"FB":   {Value: fb, Guest: new(false), Inject: &sandbox.EnvInject{Hosts: []string{echo}, Query: "access_token", Body: true, Placeholder: fbPH}},
 	}); err != nil {
 		return fmt.Errorf("add credentials: %w", err)
 	}
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		sb          *sandbox.Sandbox
 		host        string
 		intercepted bool
 	}{{vault, echo, true}, {vault, other, false}, {bare, echo, false}} {
-		if err = expectTunnel(ctx, tc.sb, tc.host, tc.intercepted); err != nil {
+		if err = expectTunnel(ctx, tt.sb, tt.host, tt.intercepted); err != nil {
 			return fmt.Errorf("after the credentials: %w", err)
 		}
 	}
 	fmt.Println("  the claim with credentials is intercepted on their host only; the other claim still splices it")
 
+	base := "https://" + echo
 	form, doc := "access_token="+fb+"&m=hi", `{"access_token":"`+fb+`"}`
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name, args, want, not string
 	}{
-		{"query", fmt.Sprintf("'https://%s/time/valid?timestamp=%%40TS%%40'", echo), `"valid":true`, "2016"},
-		{"other query value", fmt.Sprintf("'https://%s/time/valid?timestamp=bogus'", echo), `"valid":false`, "2016"},
-		{"echoed query", fmt.Sprintf("'https://%s/get?b=2&api_key=%%40SERP%%40&a=1'", echo), serpPH, stamp},
-		{"form body", fmt.Sprintf("https://%s/post -d access_token=@FB@ -d m=hi", echo), fmt.Sprintf(`"content-length":"%d"`, len(form)), fb},
-		{"json body", fmt.Sprintf(`https://%s/post -H 'Content-Type: application/json' -d '{"access_token":"@FB@"}'`, echo), fmt.Sprintf(`"content-length":"%d"`, len(doc)), fb},
-		{"response header echo", fmt.Sprintf("-D - -o /dev/null 'https://%s/response-headers?api_key=%%40SERP%%40'", echo), serpPH, stamp},
+		{"query", "'" + base + "/time/valid?timestamp=" + url.QueryEscape(tsPH) + "'", `"valid":true`, "2016"},
+		{"other query value", "'" + base + "/time/valid?timestamp=bogus'", `"valid":false`, "2016"},
+		{"echoed query", "'" + base + "/get?b=2&api_key=" + url.QueryEscape(serpPH) + "&a=1'", serpPH, stamp},
+		{"form body", base + "/post -d access_token=" + fbPH + " -d m=hi", fmt.Sprintf(`"content-length":"%d"`, len(form)), fb},
+		{"json body", base + `/post -H 'Content-Type: application/json' -d '{"access_token":"` + fbPH + `"}'`, fmt.Sprintf(`"content-length":"%d"`, len(doc)), fb},
+		{"response header echo", "-D - -o /dev/null '" + base + "/response-headers?api_key=" + url.QueryEscape(serpPH) + "'", serpPH, stamp},
 	} {
-		out, execErr := vault.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -sS -x %s %s", proxy, tc.args))
+		out, execErr := vault.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -sS -x %s %s", proxy, tt.args))
 		if execErr != nil {
-			return fmt.Errorf("%s exec: %w (%s)", tc.name, execErr, out)
+			return fmt.Errorf("%s exec: %w (%s)", tt.name, execErr, out)
 		}
-		if !strings.Contains(out, tc.want) || strings.Contains(out, tc.not) {
-			return fmt.Errorf("%s: guest saw %q, want %q and not %q", tc.name, out, tc.want, tc.not)
+		if !strings.Contains(out, tt.want) || strings.Contains(out, tt.not) {
+			return fmt.Errorf("%s: guest saw %q, want %q and not %q", tt.name, out, tt.want, tt.not)
 		}
 	}
 	fmt.Println("  query and form/JSON body placeholders filled at the origin; every echo of a value reached the guest as its placeholder")
@@ -279,7 +282,7 @@ func conditional(addr, token, template string, size sandbox.Size, echo, other st
 		return fmt.Errorf("after a clear: %w", err)
 	}
 	fmt.Println("  value absent from the guest; a cleared env splices the next connection")
-	fmt.Printf("VAULT %s|%s\n", serp, fb)
+	fmt.Printf("VAULT %s\nVAULT %s\n", serp, fb)
 	fmt.Println("CREDSMOKE INJECT PASS")
 	return nil
 }
@@ -315,15 +318,11 @@ func expectTunnel(ctx context.Context, sb *sandbox.Sandbox, host string, interce
 	if err != nil {
 		return fmt.Errorf("%s exec: %w (%s)", host, err, out)
 	}
-	var issuer string
-	for line := range strings.SplitSeq(out, "\n") {
-		if _, v, ok := strings.Cut(line, "issuer:"); ok && issuer == "" {
-			issuer = v
-		}
-	}
+	_, rest, found := strings.Cut(out, "issuer:")
+	issuer, _, _ := strings.Cut(rest, "\n")
 	mitm := strings.Contains(issuer, "e2e")
 	h2 := strings.Contains(out, "version=2")
-	if issuer == "" || mitm != intercepted || h2 == intercepted {
+	if !found || mitm != intercepted || h2 == intercepted {
 		return fmt.Errorf("%s on %s: issuer %q, HTTP/2 %t, want intercepted %t:\n%s", host, sb.ID, issuer, h2, intercepted, out)
 	}
 	return nil

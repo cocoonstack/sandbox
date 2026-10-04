@@ -60,23 +60,23 @@ func TestEvalSkipsInterceptRules(t *testing.T) {
 	}
 }
 
-func TestInterceptModeJSON(t *testing.T) {
+func TestInterceptModeRoundTripsFalseTrueAndInjectAndRefusesOthers(t *testing.T) {
 	var p Policy
 	if err := json.Unmarshal([]byte(`{"allow":[{"host":"a"},{"host":"b","intercept":false},{"host":"c","intercept":true},{"host":"d","intercept":"inject"}]}`), &p); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	want := []InterceptMode{InterceptOff, InterceptOff, InterceptAlways, InterceptInject}
-	for i, r := range p.Allow {
-		if r.Intercept != want[i] {
-			t.Errorf("rule %s intercept = %d, want %d", r.Host, r.Intercept, want[i])
+	for i, mode := range []InterceptMode{InterceptOff, InterceptOff, InterceptAlways, InterceptInject} {
+		if p.Allow[i].Intercept != mode {
+			t.Errorf("rule %s intercept = %d, want %d", p.Allow[i].Host, p.Allow[i].Intercept, mode)
 		}
 	}
 	out, err := json.Marshal(p)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	if got := string(out); got != `{"allow":[{"host":"a"},{"host":"b"},{"host":"c","intercept":true},{"host":"d","intercept":"inject"}]}` {
-		t.Errorf("Marshal = %s", got)
+	want := `{"allow":[{"host":"a"},{"host":"b"},{"host":"c","intercept":true},{"host":"d","intercept":"inject"}]}`
+	if got := string(out); got != want {
+		t.Errorf("Marshal = %s, want %s", got, want)
 	}
 	for _, bad := range []string{`"always"`, `1`, `null`} {
 		if err := json.Unmarshal([]byte(`{"allow":[{"host":"a","intercept":`+bad+`}]}`), &p); err == nil {

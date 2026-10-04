@@ -89,7 +89,7 @@ func (v *configView) injectGap(eval egress.Evaluator, ok bool, sb *types.Sandbox
 		for _, h := range inj.Hosts {
 			if !ok || !eval.InterceptsHost(h) {
 				gap = append(gap, fmt.Sprintf("%s: %s is not intercepted", name, h))
-			} else if v.secretSets(pool, h, inj.Header) {
+			} else if inj.Header != "" && v.secretSets(pool, h, inj.Header) {
 				gap = append(gap, fmt.Sprintf("%s: the pool's secret already sets %s on %s", name, inj.Header, h))
 			}
 		}

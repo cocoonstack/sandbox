@@ -14,14 +14,14 @@ const (
 	DecisionAllow
 
 	InterceptOff    InterceptMode = 0
-	InterceptAlways InterceptMode = 1
-	InterceptInject InterceptMode = 2
+	InterceptInject InterceptMode = 1
+	InterceptAlways InterceptMode = 2
 )
 
 // Decision is the policy verdict for one request.
 type Decision int
 
-// InterceptMode is a rule's "intercept": false, true, or "inject" for only the claims that inject on the host.
+// InterceptMode is a rule's "intercept": false, true, or "inject" for only the claims that inject on the host; a higher mode outranks a lower one for the same host.
 type InterceptMode uint8
 
 func (m InterceptMode) MarshalJSONTo(enc *jsontext.Encoder) error {
@@ -40,13 +40,17 @@ func (m *InterceptMode) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	if err != nil {
 		return err
 	}
-	switch {
-	case tok.Kind() == 'f':
+	switch tok.Kind() {
+	case 'f':
 		*m = InterceptOff
-	case tok.Kind() == 't':
+	case 't':
 		*m = InterceptAlways
-	case tok.Kind() == '"' && tok.String() == "inject":
-		*m = InterceptInject
+	case '"':
+		if tok.String() == "inject" {
+			*m = InterceptInject
+			return nil
+		}
+		fallthrough
 	default:
 		return fmt.Errorf("intercept must be true, false or \"inject\", got %s", tok)
 	}
@@ -146,36 +150,30 @@ func (p Policy) Eval(host, method string, port uint16) (Rule, Decision) {
 	return Rule{}, DecisionDeny
 }
 
-// EvalHost matches by host and port only, preferring an always-intercept rule, then an inject rule, over an earlier plain match.
+// EvalHost matches by host and port only; the highest intercept mode wins, the first rule on a tie.
 func (p Policy) EvalHost(host string, port uint16) (Rule, Decision) {
 	host = strings.ToLower(host)
 	best := -1
 	for i, r := range p.Allow {
-		switch {
-		case !r.matchHost(host) || !r.matchPort(port):
-		case r.Intercept == InterceptAlways:
-			return r, DecisionAllow
-		case best < 0, r.Intercept == InterceptInject && p.Allow[best].Intercept == InterceptOff:
+		if r.matchHost(host) && r.matchPort(port) && (best < 0 || r.Intercept > p.Allow[best].Intercept) {
 			best = i
 		}
 	}
-	if best >= 0 {
-		return p.Allow[best], DecisionAllow
+	if best < 0 {
+		return Rule{}, DecisionDeny
 	}
-	return Rule{}, DecisionDeny
+	return p.Allow[best], DecisionAllow
 }
 
-// EvalInner matches only intercept rules, so a plain rule cannot shadow or rescue one; an always-intercept rule for the host shadows every inject rule.
+// EvalInner matches only rules of the mode EvalHost picks for the host, so a plain rule cannot shadow or rescue an intercept rule and an always rule shadows an inject rule.
 func (p Policy) EvalInner(host, method string, port uint16) (Rule, Decision) {
-	host = strings.ToLower(host)
-	mode := InterceptInject
-	if slices.ContainsFunc(p.Allow, func(r Rule) bool {
-		return r.Intercept == InterceptAlways && r.matchHost(host) && r.matchPort(port)
-	}) {
-		mode = InterceptAlways
+	top, d := p.EvalHost(host, port)
+	if d == DecisionDeny || top.Intercept == InterceptOff {
+		return Rule{}, DecisionDeny
 	}
+	host = strings.ToLower(host)
 	for _, r := range p.Allow {
-		if r.Intercept == mode && r.matches(host, method, port) {
+		if r.Intercept == top.Intercept && r.matches(host, method, port) {
 			return r, DecisionAllow
 		}
 	}
