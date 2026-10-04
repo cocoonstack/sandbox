@@ -3,6 +3,7 @@ package pg
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,7 +46,8 @@ func TestStoreVersionsTheCellsSet(t *testing.T) {
 
 func TestWatchFiresOnConnectAndOnItsCellsWrites(t *testing.T) {
 	dsn := metastoretest.PGSchema(t)
-	a, b, other := openIn(t, dsn, "c1"), openIn(t, dsn, "c1"), openIn(t, dsn, "c2")
+	_, cell, _ := strings.CutLast(dsn, "=")
+	a, b, other := openIn(t, dsn, cell), openIn(t, dsn, cell), openIn(t, dsn, cell+"-other")
 	ctx, cancel := context.WithCancel(t.Context())
 	fired := make(chan struct{}, 8)
 	done := make(chan struct{})
@@ -56,10 +58,10 @@ func TestWatchFiresOnConnectAndOnItsCellsWrites(t *testing.T) {
 	defer func() { cancel(); <-done }()
 	waitFire(t, fired, "the listener connect")
 	if _, err := other.Store(t.Context(), poolset.Set{}); err != nil {
-		t.Fatalf("store on c2: %v", err)
+		t.Fatalf("store on the other cell: %v", err)
 	}
 	if _, err := b.Store(t.Context(), poolset.Set{}); err != nil {
-		t.Fatalf("store on c1: %v", err)
+		t.Fatalf("store on the cell: %v", err)
 	}
 	waitFire(t, fired, "a write by another node of the cell")
 	select {
