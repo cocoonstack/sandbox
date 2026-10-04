@@ -141,11 +141,13 @@ type EgressClass struct {
 	EgressUpstreamEnv string `json:"egress_upstream_env,omitempty"`
 }
 
-// MetaStoreConfig points every node at one shared PostgreSQL for its tenant set; absent keeps the set in each node's tenants.json.
+// MetaStoreConfig points every node at one shared PostgreSQL for its tenant set and, with a cell, its pool set; absent keeps both in each node's files.
 type MetaStoreConfig struct {
 	Kind string `json:"kind"`
 	// DSNEnv names the node env holding the connection string, so no credential sits in the file.
 	DSNEnv string `json:"dsn_env"`
+	// Cell opts the node into one pool set for every node of the cell; empty keeps the pool set per node.
+	Cell string `json:"cell,omitempty"`
 }
 
 // TenantSpec is one tenant as the tenant API takes it: its bearer token, its live-claim quota and its egress class.
@@ -638,6 +640,8 @@ func (c *Config) validateMetaStore() error {
 		return fmt.Errorf("meta_store.kind %q is not supported; use pg", ms.Kind)
 	case !types.EnvNameRe.MatchString(ms.DSNEnv) || os.Getenv(ms.DSNEnv) == "":
 		return fmt.Errorf("meta_store.dsn_env %q must name a set node env", ms.DSNEnv)
+	case ms.Cell != "" && !types.NameRe.MatchString(ms.Cell):
+		return fmt.Errorf("meta_store.cell %q must match %s", ms.Cell, types.NameRe)
 	case c.APIToken == "":
 		return fmt.Errorf("meta_store needs api_token: the tenant API is root-only")
 	}

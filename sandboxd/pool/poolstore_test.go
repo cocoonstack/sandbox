@@ -1,14 +1,22 @@
 package pool
 
 import (
+	"context"
 	"encoding/json/v2"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/metastore/metastoretest"
+	"github.com/cocoonstack/sandbox/sandboxd/poolset"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -114,7 +122,7 @@ func TestConcurrentSetPoolsPersistLatest(t *testing.T) {
 
 func TestRestoredEgressPoolNeedsAttachment(t *testing.T) {
 	dir := t.TempDir()
-	pf := poolsFile{Pools: []config.PoolSpec{
+	pf := poolset.Set{Pools: []config.PoolSpec{
 		{Template: "eg:24.04", Net: types.NetEgress, Size: types.SizeSmall, Warm: 1},
 	}}
 	raw, err := json.Marshal(pf)
@@ -128,4 +136,195 @@ func TestRestoredEgressPoolNeedsAttachment(t *testing.T) {
 	if _, err := NewManager(t.Context(), &config.Config{DataDir: dir}, newFakeEngine(), testSecrets(t)); err == nil {
 		t.Error("NewManager accepted a restored egress-lane pool without an attachment")
 	}
+}
+
+func TestNodesOfACellShareThePoolSet(t *testing.T) {
+	t.Setenv("SANDBOX_TEST_DSN", metastoretest.PGSchema(t))
+	a, b, other := metaStoreNode(t, "c1"), metaStoreNode(t, "c1"), metaStoreNode(t, "c2")
+	if err := a.SetPools(t.Context(), []config.PoolSpec{{PoolKey: apiKey, Warm: 3}}); err != nil {
+		t.Fatalf("put on a: %v", err)
+	}
+	if !tenantstest.Eventually(t, func() bool { return hasAPISet(b) }) {
+		t.Fatal("b never applied the pool set put on a")
+	}
+	if hasAPISet(other) {
+		t.Error("a node of another cell applied the pool set")
+	}
+	cached := func(m *Manager) bool {
+		set, err := m.poolStore.load()
+		return err == nil && set != nil && len(set.Pools) == 1 && set.Pools[0].PoolKey == apiKey
+	}
+	if !tenantstest.Eventually(t, func() bool { return cached(b) }) {
+		t.Error("b never cached the cell set in pools.json")
+	}
+	if joiner := metaStoreNode(t, "c1"); !hasAPISet(joiner) || !cached(joiner) {
+		t.Error("a node joining the cell did not boot with its pool set and cache it")
+	}
+}
+
+func TestAMetaStoreNodeWithoutACellKeepsItsOwnPools(t *testing.T) {
+	t.Setenv("SANDBOX_TEST_DSN", metastoretest.PGSchema(t))
+	x, y := metaStoreNode(t, ""), metaStoreNode(t, "")
+	if x.poolShared != nil || y.poolShared != nil {
+		t.Fatal("a node without a cell opened the shared pool set")
+	}
+	for warm, m := range map[int]*Manager{3: x, 1: y} {
+		if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: apiKey, Warm: warm}}); err != nil {
+			t.Fatalf("put warm %d: %v", warm, err)
+		}
+	}
+	if !hasAPISet(x) {
+		t.Error("a per-node put on y overrode x's target")
+	}
+	if set, err := y.poolStore.load(); err != nil || set == nil || set.Pools[0].Warm != 1 {
+		t.Errorf("y persisted %+v %v, want its own warm 1 in pools.json", set, err)
+	}
+}
+
+func TestAFailedCellLoadIsRetried(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: seedKey, Warm: 1})
+		m.poolShared = &fakeShared{set: &poolset.Set{Pools: []config.PoolSpec{{PoolKey: apiKey, Warm: 3}}}, version: 1, failLoads: 1}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go m.followCellPools(ctx)
+		synctest.Wait()
+		if hasAPISet(m) {
+			t.Fatal("applied a set its load could not read")
+		}
+		time.Sleep(cellRetry)
+		synctest.Wait()
+		if !hasAPISet(m) {
+			t.Error("a failed cell load was not retried while the listener stayed up")
+		}
+	})
+}
+
+func TestAStaleCellVersionIsNotApplied(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: seedKey, Warm: 1})
+	m.poolShared = &fakeShared{}
+	for _, apply := range []struct {
+		warm    int
+		version int64
+	}{{3, 5}, {2, 4}, {1, 5}} {
+		if err := m.applyPools(t.Context(), map[types.PoolKey]config.PoolSpec{apiKey: {PoolKey: apiKey, Warm: apply.warm}}, apply.version); err != nil {
+			t.Fatalf("apply version %d: %v", apply.version, err)
+		}
+	}
+	m.mu.Lock()
+	floor := m.pools[apiKey].floor
+	m.mu.Unlock()
+	if floor != 3 {
+		t.Errorf("warm floor %d after an older and a repeated version, want 3 from version 5", floor)
+	}
+}
+
+func TestAPutTheCellCannotStoreChangesNothing(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: seedKey, Warm: 1})
+	m.poolShared = &fakeShared{err: fmt.Errorf("%w: connection refused", poolset.ErrUnavailable)}
+	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: apiKey, Warm: 3}}); !errors.Is(err, ErrPoolStoreDown) {
+		t.Fatalf("put with the cell store down: %v, want ErrPoolStoreDown", err)
+	}
+	if hasAPISet(m) {
+		t.Error("a put the cell did not store was applied")
+	}
+	if set, err := m.poolStore.load(); set != nil || err != nil {
+		t.Errorf("a put the cell did not store reached pools.json: %+v %v", set, err)
+	}
+}
+
+func TestBootPrefersTheCellSetOverPoolsJSON(t *testing.T) {
+	cached := poolset.Set{Pools: []config.PoolSpec{{PoolKey: apiKey, Warm: 3}}}
+	unfit := poolset.Set{Pools: []config.PoolSpec{{Template: "eg:24.04", Net: types.NetEgress, Size: types.SizeSmall, Warm: 1}}}
+	for name, tc := range map[string]struct {
+		shared   *fakeShared
+		wantAPI  bool
+		version  int64
+		recached bool
+	}{
+		"unreadable cell set serves the cache":    {shared: &fakeShared{err: poolset.ErrUnavailable}, wantAPI: true},
+		"empty cell keeps the config seed":        {shared: &fakeShared{}},
+		"cell set wins and is cached":             {shared: &fakeShared{set: &cached, version: 7}, wantAPI: true, version: 7, recached: true},
+		"a cell set that does not fit warns only": {shared: &fakeShared{set: &unfit, version: 7}, wantAPI: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: seedKey, Warm: 1})
+			if err := m.poolStore.commit(m.poolStore.seq.Add(1), cached); err != nil {
+				t.Fatalf("seed pools.json: %v", err)
+			}
+			m.poolShared = tc.shared
+			if err := m.adoptPools(t.Context()); err != nil {
+				t.Fatalf("adoptPools: %v", err)
+			}
+			if got := hasAPISet(m); got != tc.wantAPI {
+				t.Errorf("API set adopted = %v, want %v", got, tc.wantAPI)
+			}
+			if m.poolVersion != tc.version {
+				t.Errorf("applied version %d, want %d", m.poolVersion, tc.version)
+			}
+			if set, err := m.poolStore.load(); err != nil || (set.ConfigSeed == m.configSeedHash) != tc.recached {
+				t.Errorf("pools.json %+v %v, want recached=%v", set, err, tc.recached)
+			}
+		})
+	}
+}
+
+func metaStoreNode(t *testing.T, cell string) *Manager {
+	t.Helper()
+	cfg := &config.Config{
+		DataDir:   t.TempDir(),
+		Pools:     []config.PoolSpec{{PoolKey: seedKey, Warm: 1}},
+		MetaStore: &config.MetaStoreConfig{Kind: "pg", DSNEnv: "SANDBOX_TEST_DSN", Cell: cell},
+	}
+	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t))
+	if err != nil {
+		t.Fatalf("setup manager: %v", err)
+	}
+	t.Cleanup(func() { _ = m.tenants.Close() })
+	if m.poolShared != nil {
+		t.Cleanup(func() { _ = m.poolShared.Close() })
+		go m.followCellPools(t.Context())
+	}
+	return m
+}
+
+func hasAPISet(m *Manager) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, api := m.activePool(apiKey)
+	_, seed := m.activePool(seedKey)
+	return api && p.floor == 3 && !seed
+}
+
+type fakeShared struct {
+	set       *poolset.Set
+	version   int64
+	err       error
+	failLoads int
+}
+
+func (f *fakeShared) Load(context.Context) (*poolset.Set, int64, error) {
+	if f.failLoads > 0 {
+		f.failLoads--
+		return nil, 0, poolset.ErrUnavailable
+	}
+	return f.set, f.version, f.err
+}
+
+func (f *fakeShared) Store(_ context.Context, set poolset.Set) (int64, error) {
+	if f.err != nil {
+		return 0, f.err
+	}
+	f.set = &set
+	f.version++
+	return f.version, nil
+}
+
+func (f *fakeShared) Watch(ctx context.Context, changed func()) {
+	changed()
+	<-ctx.Done()
+}
+
+func (f *fakeShared) Close() error {
+	return nil
 }

@@ -28,6 +28,8 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
+	"github.com/cocoonstack/sandbox/sandboxd/poolset"
+	poolpg "github.com/cocoonstack/sandbox/sandboxd/poolset/pg"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/dir"
 	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
@@ -48,6 +50,7 @@ const (
 	warmProbeTimeout = 5 * time.Second
 	// One list; a wrong answer only costs an extra sweep.
 	removeVerifyTimeout = 15 * time.Second
+	cellRetry           = 5 * time.Second
 	// A full node clears only when VMs go away; retrying sooner buys nothing.
 	capacityBackoff    = buildRetryDelay
 	vsockPollInterval  = 100 * time.Millisecond
@@ -86,6 +89,7 @@ var (
 	ErrBadConfig         = errors.New("invalid config")
 	ErrReloadRefused     = errors.New("config reload refused")
 	ErrTenantStoreDown   = tenants.ErrUnavailable
+	ErrPoolStoreDown     = poolset.ErrUnavailable
 	ErrTenantRemoved     = errors.New("the claim's tenant was removed: it runs to its deadline but cannot renew, fork, or wake from the archive")
 	ErrVolumeUnavailable = fmt.Errorf("%w: unknown or unavailable volume", ErrBadVolume)
 	ErrNoWarm            = errors.New("no warm sandbox for key")
@@ -287,7 +291,10 @@ type Manager struct {
 	// volumeAdmission counts the live holders of each volume name; guarded by m.mu.
 	volumeAdmission map[string]volumeHolders
 
-	poolStore      *poolStore
+	poolStore *poolStore
+	// poolShared is the cell's pool set with a meta store; poolVersion, under m.mu, is its newest version applied.
+	poolShared     poolset.Shared
+	poolVersion    int64
 	configSeedHash string // config pools' hash, to warn when a file edit is overridden
 
 	// idleDefault is the idle-hibernate threshold for unpooled keys; zero disables.
@@ -488,7 +495,14 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		m.egressCA = ca
 	}
 	m.configSeedHash = poolSeedHash(cfg.Pools)
-	if err := m.adoptPersistedPools(ctx); err != nil {
+	if ms := cfg.MetaStore; ms != nil && ms.Cell != "" {
+		shared, err := poolpg.Open(ctx, os.Getenv(ms.DSNEnv), ms.Cell)
+		if err != nil {
+			return nil, err
+		}
+		m.poolShared = shared
+	}
+	if err := m.adoptPools(ctx); err != nil {
 		return nil, err
 	}
 	m.warnVolumeTenants(ctx, cfg.Volumes)
@@ -528,6 +542,9 @@ func (m *Manager) Run(ctx context.Context) {
 	go m.sweepExpiredCheckpoints(ctx)
 	if m.cocoondSocket != "" {
 		go m.watchVMMs(ctx)
+	}
+	if m.poolShared != nil {
+		go m.followCellPools(ctx)
 	}
 	m.livenessOnce(ctx)
 	m.refillOnce(ctx)

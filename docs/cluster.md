@@ -244,7 +244,7 @@ fully from it:
 | state | source of truth | survives restart |
 |---|---|---|
 | operator config (`volumes`, `secrets`, egress policies, `bridges`/`networks`, `mesh`, `preview_secret`, `egress_ca`) | `config.json` (human/deploy-tool owned) | re-read at boot; its reloadable part on a per-node [reload](deploy.md#reloading-the-config) |
-| API-applied pool targets (`PUT /v1/pools`) | `<data_dir>/pools.json` (machine owned) | yes |
+| API-applied pool targets (`PUT /v1/pools`) | `<data_dir>/pools.json` (machine owned), or the cell's row in the shared `meta_store` when the node sets `meta_store.cell` | yes |
 | API-applied tenants (`/v1/tenants`) | `<data_dir>/tenants.json` (machine owned), or the shared `meta_store` table | yes |
 | claims | the claims journal + `Reconcile` | yes |
 | placement hints (warm counts, template and volume sets) | gossip | rebuilt |
@@ -260,7 +260,14 @@ Egress stays config-owned regardless: the API rejects egress specs, so
 `pools.json` never carries them, and egress policies re-merge from `config.json`
 by pool key at boot.
 
-Cluster-wide pool changes are a client-side fan-out, not a gossiped desired
+With [`meta_store.cell`](deploy.md#shared-pool-set), the set belongs to the
+node's cell: one `PUT /v1/pools` on any node of the cell reaches every node in
+it, and no fan-out is needed; every node of the cell runs the same targets. This
+pool cell is only a name for nodes that share one pool set in the database. It
+is not a mesh cell (see [scale](#scale)): a pool cell may cover part of a mesh
+or nodes of several meshes, and gossip, redirects and heals ignore it.
+
+Without it, cluster-wide pool changes are a client-side fan-out, not a gossiped desired
 state (pools are legitimately heterogeneous per node): `Client.SetPoolsCluster`
 PUTs the set to the entry node and every peer and returns a per-node result;
 retrying the failed nodes is the whole protocol, because the apply is an
@@ -365,7 +372,9 @@ with every claim.
 - **Size one mesh in the hundreds of nodes.** Split a larger fleet into
   independent meshes (cells), each with its own `mesh.join`, and route users
   to a cell in front of them. Redirects, heals and template lookups stay
-  inside the cell.
+  inside the cell. A mesh cell is not configured by `meta_store.cell`, which
+  only names the nodes that share a pool set (see
+  [state ownership](#state-ownership)).
 - **Keep per-user data out of the gossip.** A promoted template is gossiped by
   every node that holds it, so templates belong to pools or tenants, not to
   end users. At 500 templates per node the state reaches the 20 MiB limit near
@@ -389,7 +398,8 @@ with every claim.
 - one mesh sized in the hundreds of nodes, and promoted templates per pool or
   tenant rather than per end user (see [scale](#scale))
 - pool changes via `Client.SetPoolsCluster` (or per-node `SetPools`); the applied
-  set persists to `pools.json` and survives restart
+  set persists to `pools.json` and survives restart. With `meta_store.cell`,
+  one `SetPools` on any node reaches every node of the cell
 - tenant changes via `Client.PutTenantCluster` / `DeleteTenantCluster` /
   `SetTenantsCluster`, retrying the nodes that failed; the applied set persists
   to `tenants.json`. With `meta_store`, one write to any node reaches all of them

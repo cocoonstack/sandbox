@@ -8,16 +8,17 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cocoonstack/sandbox/sandboxd/metastore/metastoretest"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest"
 )
 
 func TestContract(t *testing.T) {
-	tenantstest.Run(t, func(t *testing.T) tenants.Source { return openIn(t, tenantstest.PGSchema(t)) })
+	tenantstest.Run(t, func(t *testing.T) tenants.Source { return openIn(t, metastoretest.PGSchema(t)) })
 }
 
 func TestAWriteOnOneNodeReachesTheOtherNodesCache(t *testing.T) {
-	dsn := tenantstest.PGSchema(t)
+	dsn := metastoretest.PGSchema(t)
 	a, b := openIn(t, dsn), openIn(t, dsn)
 	ctx := t.Context()
 	if _, err := b.Resolve(ctx, tenantstest.Sum("late")); !errors.Is(err, tenants.ErrUnknown) {
@@ -53,7 +54,7 @@ func TestAWriteOnOneNodeReachesTheOtherNodesCache(t *testing.T) {
 }
 
 func TestACachedTenantOutlivesTheDatabase(t *testing.T) {
-	dsn := tenantstest.PGSchema(t)
+	dsn := metastoretest.PGSchema(t)
 	s := openIn(t, dsn)
 	ctx := t.Context()
 	if _, err := s.Put(ctx, tenantstest.Record("u-1", "warm", 0, "")); err != nil {
@@ -81,7 +82,7 @@ func TestACachedTenantOutlivesTheDatabase(t *testing.T) {
 }
 
 func TestARoleWithoutCreateServesAPreCreatedTable(t *testing.T) {
-	dsn := tenantstest.PGSchema(t)
+	dsn := metastoretest.PGSchema(t)
 	owner := openIn(t, dsn)
 	if err := owner.Close(); err != nil {
 		t.Fatalf("close owner: %v", err)

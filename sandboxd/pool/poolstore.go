@@ -16,14 +16,9 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/poolset"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
-
-// poolsFile records the last API-applied pool set so a restart rebuilds from operator intent.
-type poolsFile struct {
-	ConfigSeed string            `json:"config_seed"`
-	Pools      []config.PoolSpec `json:"pools"`
-}
 
 type poolStore struct {
 	path string
@@ -37,8 +32,8 @@ func newPoolStore(dataDir string) *poolStore {
 	return &poolStore{path: filepath.Join(dataDir, "pools.json")}
 }
 
-// load returns the persisted pool file, or nil when the node has never taken a PUT /v1/pools.
-func (s *poolStore) load() (*poolsFile, error) {
+// load returns the last applied set, or nil when the node has never applied one.
+func (s *poolStore) load() (*poolset.Set, error) {
 	raw, err := os.ReadFile(s.path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -46,21 +41,21 @@ func (s *poolStore) load() (*poolsFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read pools file: %w", err)
 	}
-	var pf poolsFile
-	if err := json.Unmarshal(raw, &pf); err != nil {
+	var set poolset.Set
+	if err := json.Unmarshal(raw, &set); err != nil {
 		return nil, fmt.Errorf("parse pools file: %w", err)
 	}
-	return &pf, nil
+	return &set, nil
 }
 
 // commit durably writes the applied set; a seq no newer than the last written is a no-op.
-func (s *poolStore) commit(seq uint64, pf poolsFile) error {
+func (s *poolStore) commit(seq uint64, set poolset.Set) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if seq <= s.written {
 		return nil
 	}
-	raw, err := json.Marshal(pf)
+	raw, err := json.Marshal(set)
 	if err != nil {
 		return fmt.Errorf("encode pools file: %w", err)
 	}
@@ -71,33 +66,55 @@ func (s *poolStore) commit(seq uint64, pf poolsFile) error {
 	return nil
 }
 
-// adoptPersistedPools rebuilds the pools from pools.json over the config seed when present.
-func (m *Manager) adoptPersistedPools(ctx context.Context) error {
-	pf, err := m.poolStore.load()
+// adoptPools lays the API-applied set over the config seed: the cell's set with a meta store, else pools.json.
+func (m *Manager) adoptPools(ctx context.Context) error {
+	logger := log.WithFunc("pool.adoptPools")
+	set, err := m.poolStore.load()
 	if err != nil {
 		return err
 	}
-	if pf == nil {
+	from := m.poolStore.path
+	if m.poolShared != nil {
+		shared, version, err := m.poolShared.Load(ctx)
+		switch {
+		case err != nil:
+			logger.Warnf(ctx, "cell pool set unreadable (%v); serving %s until it syncs", err, from)
+		case shared == nil:
+			if set != nil {
+				logger.Warnf(ctx, "%s is ignored: the cell has no API-applied pool set yet; PUT /v1/pools to share one", from)
+			}
+			return nil
+		default:
+			if _, err := m.desiredPools(shared.Pools); err != nil {
+				logger.Warnf(ctx, "the cell pool set does not fit this node (%v); serving %s", err, from)
+				break
+			}
+			if err := m.poolStore.commit(m.poolStore.seq.Add(1), poolset.Set{ConfigSeed: m.configSeedHash, Pools: shared.Pools}); err != nil {
+				return err
+			}
+			set, m.poolVersion, from = shared, version, "the cell pool set"
+		}
+	}
+	if set == nil {
 		return nil
 	}
-	logger := log.WithFunc("pool.adoptPersistedPools")
-	if pf.ConfigSeed != m.configSeedHash {
-		logger.Warnf(ctx, "config.json pools differ from the API-applied set and are overridden; delete %s to return to config-owned pools", m.poolStore.path)
+	if set.ConfigSeed != m.configSeedHash {
+		logger.Warnf(ctx, "config.json pools differ from the API-applied set in %s, which overrides them", from)
 	}
 	clear(m.pools)
-	for _, spec := range pf.Pools {
+	for _, spec := range set.Pools {
 		spec = normalizePoolSpec(spec)
 		if err := m.validate(spec.PoolKey); err != nil {
-			return fmt.Errorf("restore pool %q from %s: %w", spec.Template, m.poolStore.path, err)
+			return fmt.Errorf("restore pool %q from %s: %w", spec.Template, from, err)
 		}
 		if err := spec.ValidateLimits(); err != nil {
-			return fmt.Errorf("restore pool %q from %s: %w", spec.Template, m.poolStore.path, err)
+			return fmt.Errorf("restore pool %q from %s: %w", spec.Template, from, err)
 		}
 		p := newPool(spec.PoolKey)
 		p.applySpec(spec)
 		m.pools[spec.PoolKey] = p
 	}
-	logger.Infof(ctx, "restored %d API-applied pools from pools.json", len(pf.Pools))
+	logger.Infof(ctx, "restored %d API-applied pools from %s", len(set.Pools), from)
 	return nil
 }
 

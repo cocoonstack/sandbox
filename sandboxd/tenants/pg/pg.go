@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"net"
 	"slices"
 	"sync"
 	"time"
@@ -17,10 +16,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/projecteru2/core/log"
 	"golang.org/x/time/rate"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/metastore"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 )
 
@@ -29,27 +28,17 @@ const (
 	channel  = "sandboxd_tenants"
 	flushAll = "*"
 
-	queryTimeout = 3 * time.Second
-	dialTimeout  = 10 * time.Second
-	negativeTTL  = 10 * time.Second
+	negativeTTL = 10 * time.Second
 	// maxCached bounds the per-node cache; a node serves far fewer distinct tenants.
 	maxCached = 100_000
 	// coldLookups caps token queries per second the cache cannot answer, so random tokens cannot load the database.
 	coldLookups = 200
 
-	listenRetryFirst = time.Second
-	listenRetryCap   = 30 * time.Second
-
 	uniqueViolation = "23505"
 )
 
-var (
-	//go:embed schema.sql
-	schema string
-
-	// keepAlive finds a dead connection in about 25 s, so a listener on a vanished primary reconnects and re-syncs.
-	keepAlive = net.KeepAliveConfig{Enable: true, Idle: 10 * time.Second, Interval: 5 * time.Second, Count: 3}
-)
+//go:embed schema.sql
+var schema string
 
 type entry struct {
 	rec     *config.TenantRecord
@@ -61,9 +50,8 @@ var _ tenants.Source = (*Source)(nil)
 
 // Source is the shared tenant table behind this node's cache.
 type Source struct {
-	pool      *pgxpool.Pool
-	listenCfg *pgx.ConnConfig
-	cold      *rate.Limiter
+	pool *pgxpool.Pool
+	cold *rate.Limiter
 
 	mu       sync.RWMutex
 	byToken  map[[sha256.Size]byte]string
@@ -81,35 +69,26 @@ type Source struct {
 
 // Open connects, creates the table when it is missing, and starts the invalidation listener.
 func Open(ctx context.Context, dsn string) (*Source, error) {
-	dialer := &net.Dialer{Timeout: dialTimeout, KeepAliveConfig: keepAlive}
-	poolCfg, err := pgxpool.ParseConfig(dsn)
+	pool, listenCfg, err := metastore.Open(ctx, dsn, table, schema)
 	if err != nil {
-		return nil, fmt.Errorf("parse tenant database dsn: %w", err)
-	}
-	poolCfg.ConnConfig.DialFunc = dialer.DialContext
-	listenCfg := poolCfg.ConnConfig.Copy()
-	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
-	if err != nil {
-		return nil, fmt.Errorf("open tenant database: %w", err)
-	}
-	if err = ensureTable(ctx, pool); err != nil {
-		pool.Close()
 		return nil, err
 	}
 	lctx, stop := context.WithCancel(context.WithoutCancel(ctx))
 	s := &Source{
-		pool:      pool,
-		listenCfg: listenCfg,
-		cold:      rate.NewLimiter(coldLookups, coldLookups),
-		byToken:   map[[sha256.Size]byte]string{},
-		byName:    map[string]entry{},
-		misses:    map[[sha256.Size]byte]time.Time{},
-		inflight:  map[string]struct{}{},
-		evicted:   map[string]uint64{},
-		stop:      stop,
-		done:      make(chan struct{}),
+		pool:     pool,
+		cold:     rate.NewLimiter(coldLookups, coldLookups),
+		byToken:  map[[sha256.Size]byte]string{},
+		byName:   map[string]entry{},
+		misses:   map[[sha256.Size]byte]time.Time{},
+		inflight: map[string]struct{}{},
+		evicted:  map[string]uint64{},
+		stop:     stop,
+		done:     make(chan struct{}),
 	}
-	go s.listen(lctx)
+	go func() {
+		defer close(s.done)
+		metastore.Listen(lctx, listenCfg, channel, func() { s.evict(flushAll) }, s.evict)
+	}()
 	return s, nil
 }
 
@@ -127,7 +106,7 @@ func (s *Source) Resolve(ctx context.Context, sum [sha256.Size]byte) (*config.Te
 	case !s.cold.Allow():
 		return nil, fmt.Errorf("%w: cold lookups over %d/s", tenants.ErrUnavailable, coldLookups)
 	}
-	qctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
 	defer cancel()
 	r, err := scanRecord(s.pool.QueryRow(qctx, `SELECT name, token_sha256, max_claims, egress_class FROM sandboxd_tenants WHERE token_sha256 = $1`, sum[:]))
 	s.mu.Lock()
@@ -323,7 +302,7 @@ func (s *Source) fetch(name string) {
 }
 
 func (s *Source) lookupNow(ctx context.Context, name string) (config.TenantRecord, bool, error) {
-	qctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
 	defer cancel()
 	r, err := scanRecord(s.pool.QueryRow(qctx, `SELECT name, token_sha256, max_claims, egress_class FROM sandboxd_tenants WHERE name = $1`, name))
 	switch {
@@ -406,65 +385,6 @@ func (s *Source) clearCache() {
 	clear(s.byToken)
 	clear(s.byName)
 	clear(s.misses)
-}
-
-func (s *Source) listen(ctx context.Context) {
-	defer close(s.done)
-	logger := log.WithFunc("pg.listen")
-	backoff := listenRetryFirst
-	for {
-		started := time.Now()
-		err := s.listenOnce(ctx)
-		if ctx.Err() != nil {
-			return
-		}
-		if time.Since(started) > listenRetryCap {
-			backoff = listenRetryFirst
-		}
-		logger.Warnf(ctx, "tenant invalidation listener lost (%v); cached tenants keep serving, retrying in %s", err, backoff)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(backoff):
-		}
-		backoff = min(backoff*2, listenRetryCap)
-	}
-}
-
-func (s *Source) listenOnce(ctx context.Context) error {
-	conn, err := pgx.ConnectConfig(ctx, s.listenCfg.Copy())
-	if err != nil {
-		return err
-	}
-	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
-	if _, err = conn.Exec(ctx, "LISTEN "+channel); err != nil {
-		return err
-	}
-	s.evict(flushAll)
-	for {
-		n, err := conn.WaitForNotification(ctx)
-		if err != nil {
-			return err
-		}
-		s.evict(n.Payload)
-	}
-}
-
-// ensureTable runs the DDL only when the table is missing, so a role without CREATE serves a pre-created table.
-func ensureTable(ctx context.Context, pool *pgxpool.Pool) error {
-	qctx, cancel := context.WithTimeout(ctx, queryTimeout)
-	defer cancel()
-	var exists bool
-	if err := pool.QueryRow(qctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists); err != nil {
-		return fmt.Errorf("find tenant table: %w", err)
-	}
-	if exists {
-		return nil
-	}
-	if _, err := pool.Exec(qctx, schema); err != nil {
-		return fmt.Errorf("create tenant table: %w", err)
-	}
-	return nil
 }
 
 func keepTokenUpdate(ctx context.Context, tx pgx.Tx, r config.TenantRecord, c *tenants.Change) error {
