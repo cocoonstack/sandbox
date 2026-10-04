@@ -45,6 +45,15 @@ type Record struct {
 	Labels []byte
 }
 
+// S3Config selects the bucket of the s3 backend; credentials come from the standard AWS chain, never this config.
+type S3Config struct {
+	Bucket         string `json:"bucket"`
+	Prefix         string `json:"prefix,omitempty"`
+	Endpoint       string `json:"endpoint,omitempty"`
+	Region         string `json:"region,omitempty"`
+	ForcePathStyle bool   `json:"force_path_style,omitzero"`
+}
+
 // Store is one record backend.
 type Store interface {
 	// Stage returns a writable staging directory whose Publish is atomic.
