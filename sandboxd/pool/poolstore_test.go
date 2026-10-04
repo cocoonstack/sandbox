@@ -140,21 +140,7 @@ func TestRestoredEgressPoolNeedsAttachment(t *testing.T) {
 
 func TestNodesOfACellShareThePoolSet(t *testing.T) {
 	t.Setenv("SANDBOX_TEST_DSN", metastoretest.PGSchema(t))
-	node := func(cell string) *Manager {
-		cfg := &config.Config{
-			DataDir:   t.TempDir(),
-			Pools:     []config.PoolSpec{{PoolKey: seedKey, Warm: 1}},
-			MetaStore: &config.MetaStoreConfig{Kind: "pg", DSNEnv: "SANDBOX_TEST_DSN", Cell: cell},
-		}
-		m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t))
-		if err != nil {
-			t.Fatalf("setup manager: %v", err)
-		}
-		t.Cleanup(func() { _, _ = m.tenants.Close(), m.poolShared.Close() })
-		go m.followCellPools(t.Context())
-		return m
-	}
-	a, b, other := node("c1"), node("c1"), node("c2")
+	a, b, other := metaStoreNode(t, "c1"), metaStoreNode(t, "c1"), metaStoreNode(t, "c2")
 	if err := a.SetPools(t.Context(), []config.PoolSpec{{PoolKey: apiKey, Warm: 3}}); err != nil {
 		t.Fatalf("put on a: %v", err)
 	}
@@ -171,8 +157,27 @@ func TestNodesOfACellShareThePoolSet(t *testing.T) {
 	if !tenantstest.Eventually(t, func() bool { return cached(b) }) {
 		t.Error("b never cached the cell set in pools.json")
 	}
-	if joiner := node("c1"); !hasAPISet(joiner) || !cached(joiner) {
+	if joiner := metaStoreNode(t, "c1"); !hasAPISet(joiner) || !cached(joiner) {
 		t.Error("a node joining the cell did not boot with its pool set and cache it")
+	}
+}
+
+func TestAMetaStoreNodeWithoutACellKeepsItsOwnPools(t *testing.T) {
+	t.Setenv("SANDBOX_TEST_DSN", metastoretest.PGSchema(t))
+	x, y := metaStoreNode(t, ""), metaStoreNode(t, "")
+	if x.poolShared != nil || y.poolShared != nil {
+		t.Fatal("a node without a cell opened the shared pool set")
+	}
+	for warm, m := range map[int]*Manager{3: x, 1: y} {
+		if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: apiKey, Warm: warm}}); err != nil {
+			t.Fatalf("put warm %d: %v", warm, err)
+		}
+	}
+	if !hasAPISet(x) {
+		t.Error("a per-node put on y overrode x's target")
+	}
+	if set, err := y.poolStore.load(); err != nil || set == nil || set.Pools[0].Warm != 1 {
+		t.Errorf("y persisted %+v %v, want its own warm 1 in pools.json", set, err)
 	}
 }
 
@@ -262,6 +267,25 @@ func TestBootPrefersTheCellSetOverPoolsJSON(t *testing.T) {
 			}
 		})
 	}
+}
+
+func metaStoreNode(t *testing.T, cell string) *Manager {
+	t.Helper()
+	cfg := &config.Config{
+		DataDir:   t.TempDir(),
+		Pools:     []config.PoolSpec{{PoolKey: seedKey, Warm: 1}},
+		MetaStore: &config.MetaStoreConfig{Kind: "pg", DSNEnv: "SANDBOX_TEST_DSN", Cell: cell},
+	}
+	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t))
+	if err != nil {
+		t.Fatalf("setup manager: %v", err)
+	}
+	t.Cleanup(func() { _ = m.tenants.Close() })
+	if m.poolShared != nil {
+		t.Cleanup(func() { _ = m.poolShared.Close() })
+		go m.followCellPools(t.Context())
+	}
+	return m
 }
 
 func hasAPISet(m *Manager) bool {

@@ -495,7 +495,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		m.egressCA = ca
 	}
 	m.configSeedHash = poolSeedHash(cfg.Pools)
-	if ms := cfg.MetaStore; ms != nil {
+	if ms := cfg.MetaStore; ms != nil && ms.Cell != "" {
 		shared, err := poolpg.Open(ctx, os.Getenv(ms.DSNEnv), ms.Cell)
 		if err != nil {
 			return nil, err

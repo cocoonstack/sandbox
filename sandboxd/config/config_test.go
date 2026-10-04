@@ -290,8 +290,8 @@ func TestLoadMetaStore(t *testing.T) {
 	t.Setenv("SANDBOX_TEST_DSN", "postgres://sandboxd@db/sandboxd")
 	ms := `"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN"}`
 	cfg, err := Load(writeConfig(t, `{"api_token":"r","pools":[],`+ms+`}`))
-	if err != nil || cfg.MetaStore.DSNEnv != "SANDBOX_TEST_DSN" || cfg.MetaStore.Cell != "default" {
-		t.Fatalf("Load: %+v %v, want the default cell", cfg, err)
+	if err != nil || cfg.MetaStore.DSNEnv != "SANDBOX_TEST_DSN" || cfg.MetaStore.Cell != "" {
+		t.Fatalf("Load: %+v %v, want no cell unless one is set", cfg, err)
 	}
 	if _, err := Load(writeConfig(t, `{"pools":[],`+ms+`}`)); err == nil || !strings.Contains(err.Error(), "needs api_token") {
 		t.Errorf("meta_store without api_token: %v, want a refusal", err)

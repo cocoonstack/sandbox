@@ -244,7 +244,7 @@ fully from it:
 | state | source of truth | survives restart |
 |---|---|---|
 | operator config (`volumes`, `secrets`, egress policies, `bridges`/`networks`, `mesh`, `preview_secret`, `egress_ca`) | `config.json` (human/deploy-tool owned) | re-read at boot; its reloadable part on a per-node [reload](deploy.md#reloading-the-config) |
-| API-applied pool targets (`PUT /v1/pools`) | `<data_dir>/pools.json` (machine owned), or the cell's row in the shared `meta_store` | yes |
+| API-applied pool targets (`PUT /v1/pools`) | `<data_dir>/pools.json` (machine owned), or the cell's row in the shared `meta_store` when the node sets `meta_store.cell` | yes |
 | API-applied tenants (`/v1/tenants`) | `<data_dir>/tenants.json` (machine owned), or the shared `meta_store` table | yes |
 | claims | the claims journal + `Reconcile` | yes |
 | placement hints (warm counts, template and volume sets) | gossip | rebuilt |
@@ -260,9 +260,9 @@ Egress stays config-owned regardless: the API rejects egress specs, so
 `pools.json` never carries them, and egress policies re-merge from `config.json`
 by pool key at boot.
 
-With [`meta_store`](deploy.md#shared-pool-set), the set belongs to the node's
-`cell`: one `PUT /v1/pools` on any node of the cell reaches every node in it,
-and no fan-out is needed.
+With [`meta_store.cell`](deploy.md#shared-pool-set), the set belongs to the
+node's cell: one `PUT /v1/pools` on any node of the cell reaches every node in
+it, and no fan-out is needed; every node of the cell runs the same targets.
 
 Without it, cluster-wide pool changes are a client-side fan-out, not a gossiped desired
 state (pools are legitimately heterogeneous per node): `Client.SetPoolsCluster`
@@ -393,8 +393,8 @@ with every claim.
 - one mesh sized in the hundreds of nodes, and promoted templates per pool or
   tenant rather than per end user (see [scale](#scale))
 - pool changes via `Client.SetPoolsCluster` (or per-node `SetPools`); the applied
-  set persists to `pools.json` and survives restart. With `meta_store`, one
-  `SetPools` on any node reaches every node of its `cell`
+  set persists to `pools.json` and survives restart. With `meta_store.cell`,
+  one `SetPools` on any node reaches every node of the cell
 - tenant changes via `Client.PutTenantCluster` / `DeleteTenantCluster` /
   `SetTenantsCluster`, retrying the nodes that failed; the applied set persists
   to `tenants.json`. With `meta_store`, one write to any node reaches all of them

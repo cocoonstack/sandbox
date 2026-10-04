@@ -74,7 +74,7 @@ jobs:
           SANDBOXD_TEST_PG_URL: postgres://postgres:sbxci@localhost:5432/postgres?sslmode=disable
         run: |
           GOWORK=off go test -race -count=1 -v ./tenants/... ./poolset/... | tee "$RUNNER_TEMP/pg-test.log"
-          GOWORK=off go test -race -count=1 -v -run 'TestTwoNodesOnOneMetaStore|TestNodesOfACell' ./pool/ | tee -a "$RUNNER_TEMP/pg-test.log"
+          GOWORK=off go test -race -count=1 -v -run 'TestTwoNodesOnOneMetaStore|TestNodesOfACell|TestAMetaStoreNodeWithoutACell' ./pool/ | tee -a "$RUNNER_TEMP/pg-test.log"
           ! grep -- '--- SKIP' "$RUNNER_TEMP/pg-test.log"
 
       - name: Set up Python
