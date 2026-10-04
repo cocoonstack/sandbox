@@ -61,7 +61,7 @@ every tunnel through the door as they gate `CONNECT`, so the tenant does not
 opt in separately; its own `socks5` counts only on a claim outside any
 configured pool, where the tenant policy is the whole policy. A policy that
 opts in with rules that all carry a nonempty `methods` list without
-`CONNECT`, or all `intercept`, is rejected at load. A pool whose policy does
+`CONNECT`, or all `intercept: true`, is rejected at load. A pool whose policy does
 not opt in pays
 nothing for the door on the claim path, whatever its tenants' policies say.
 Audit lines (with `audit_log` on) carry `"method":"SOCKS5"`.
@@ -293,7 +293,8 @@ gateway key per user, while the guest holds a placeholder.
 
 The proxy reads a snapshot of the claim's env that each env write publishes,
 without a lock, once per request whose matched rule names a secret or whose
-host has a claim credential; other requests pay nothing.
+host has a claim credential, and once per `CONNECT` an `"inject"` rule covers;
+other requests pay nothing.
 
 ### Claim credentials
 

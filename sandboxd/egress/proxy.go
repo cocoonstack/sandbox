@@ -42,7 +42,7 @@ var (
 		"Proxy-Connection", "TE", "Trailer", "Transfer-Encoding", "Upgrade",
 	}
 
-	copyBufs = sync.Pool{New: func() any { b := make([]byte, 32<<10); return &b }}
+	copyBufs = sync.Pool{New: func() any { b := make([]byte, 2*scrubChunk); return &b }}
 )
 
 // TransferFunc receives the payload bytes an allowed tunnel or request moved, once it ends.
@@ -283,9 +283,8 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 func (p *Proxy) tunnelDecision(host string, port uint16, injects bool) (decision Decision, intercept bool) {
 	// host-gate interception: the tunnel's CONNECT verb is not the request method.
 	if p.ca != nil {
-		switch rule, d := p.policy.EvalHost(host, port); {
-		case d != DecisionAllow:
-		case rule.Intercept == InterceptAlways, rule.Intercept == InterceptInject && injects && p.holdsCredential(host):
+		if rule, d := p.policy.EvalHost(host, port); d == DecisionAllow &&
+			(rule.Intercept == InterceptAlways || rule.Intercept == InterceptInject && injects && p.holdsCredential(host)) {
 			return DecisionAllow, true
 		}
 	}
@@ -479,9 +478,7 @@ func (sc *scrubber) header(h http.Header) {
 	for _, vs := range h {
 		for i, v := range vs {
 			for _, e := range sc.echoes {
-				if strings.Contains(v, e.old) {
-					v = strings.ReplaceAll(v, e.old, e.placeholder)
-				}
+				v = strings.ReplaceAll(v, e.old, e.placeholder)
 			}
 			vs[i] = v
 		}

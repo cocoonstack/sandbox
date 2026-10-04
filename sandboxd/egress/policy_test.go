@@ -39,7 +39,7 @@ func TestPolicyEval(t *testing.T) {
 	}
 }
 
-func TestEvalSkipsInterceptRules(t *testing.T) {
+func TestEvalSkipsOnlyAlwaysInterceptRules(t *testing.T) {
 	p := Policy{Allow: []Rule{
 		{Host: "api.github.com", Secret: "gh", Intercept: InterceptAlways},
 		{Host: "plain.github.com"},

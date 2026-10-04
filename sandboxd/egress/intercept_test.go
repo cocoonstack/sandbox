@@ -356,10 +356,12 @@ func TestTunnelDecisionOnAnInjectRule(t *testing.T) {
 		{"a credential on the proxy door", creds, "graph.test", true, true},
 		{"a credential on the SOCKS door", creds, "graph.test", false, false},
 	} {
-		p := New(Policy{Allow: []Rule{{Host: "*", Intercept: InterceptInject}}}, tt.secrets, ca, fixedDial(""), nil, nil)
-		if d, intercept := p.tunnelDecision(tt.host, 443, tt.injects); d != DecisionAllow || intercept != tt.intercept {
-			t.Errorf("%s: decision %v intercept %t, want an allow with intercept %t", tt.name, d, intercept, tt.intercept)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			p := New(Policy{Allow: []Rule{{Host: "*", Intercept: InterceptInject}}}, tt.secrets, ca, fixedDial(""), nil, nil)
+			if d, intercept := p.tunnelDecision(tt.host, 443, tt.injects); d != DecisionAllow || intercept != tt.intercept {
+				t.Errorf("decision %v intercept %t, want an allow with intercept %t", d, intercept, tt.intercept)
+			}
+		})
 	}
 }
 
@@ -440,14 +442,16 @@ func TestInterceptSubstitutesABodyCredentialInASmallFormOrJSONBody(t *testing.T)
 		{"other type", "text/plain", "access_token=%40FB%40", "access_token=%40FB%40"},
 		{"oversized", "application/x-www-form-urlencoded", big, big},
 	} {
-		tc := connectTLS(t, front.Listener.Addr().String(), "example.com:443", "example.com", guestRoots)
-		req := newRequest(t, http.MethodPost, "/echo", tt.body)
-		req.Header.Set("Content-Type", tt.ctype)
-		seen, _ := send(t, tc, req).seen(t)
-		_ = tc.Close()
-		if seen.Body != tt.want || seen.Length != int64(len(tt.want)) {
-			t.Errorf("%s: upstream saw body %.80q length %d, want %.80q length %d", tt.name, seen.Body, seen.Length, tt.want, len(tt.want))
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			tc := connectTLS(t, front.Listener.Addr().String(), "example.com:443", "example.com", guestRoots)
+			req := newRequest(t, http.MethodPost, "/echo", tt.body)
+			req.Header.Set("Content-Type", tt.ctype)
+			seen, _ := send(t, tc, req).seen(t)
+			_ = tc.Close()
+			if seen.Body != tt.want || seen.Length != int64(len(tt.want)) {
+				t.Errorf("upstream saw body %.80q length %d, want %.80q length %d", seen.Body, seen.Length, tt.want, len(tt.want))
+			}
+		})
 	}
 }
 
@@ -486,11 +490,7 @@ func TestAContainedValueEndingAReadWaitsForTheLongerOne(t *testing.T) {
 		{Name: "FB_TOKEN", Query: "access_token", Value: "1234567890|SECRET", Placeholder: "@TOK@"},
 	})
 	for _, chunks := range [][]string{{"x 1234567890", "|SECRET y"}, {"x 1234567890", " y"}, {"x 1234567890"}} {
-		readers := make([]io.Reader, len(chunks))
-		for i, c := range chunks {
-			readers[i] = strings.NewReader(c)
-		}
-		out, _ := io.ReadAll(&scrubReader{src: io.MultiReader(readers...), sc: sc})
+		out, _ := io.ReadAll(&scrubReader{src: chunked(chunks...), sc: sc})
 		if strings.Contains(string(out), "SECRET") || strings.Contains(string(out), "1234567890") {
 			t.Errorf("chunks %q scrubbed to %q, want every value replaced", chunks, out)
 		}
@@ -549,20 +549,18 @@ func TestScrubReaderReplacesAcrossChunksAndHoldsOnlyAPossibleMatch(t *testing.T)
 		{"event tail", []string{"data: x\n\n", "data: SECRET\n\n"}, "data: x\n\n", "data: x\n\ndata: @S@\n\n"},
 		{"prefix at the end", []string{"x SECR"}, "x ", "x SECR"},
 	} {
-		readers := make([]io.Reader, len(tt.chunks))
-		for i, c := range tt.chunks {
-			readers[i] = strings.NewReader(c)
-		}
-		s := &scrubReader{src: io.MultiReader(readers...), sc: sc}
-		buf := make([]byte, 64)
-		n, _ := s.Read(buf)
-		if got := string(buf[:n]); got != tt.first {
-			t.Errorf("%s: first read %q, want %q", tt.name, got, tt.first)
-		}
-		rest, _ := io.ReadAll(s)
-		if got := string(buf[:n]) + string(rest); got != tt.all {
-			t.Errorf("%s: scrubbed %q, want %q", tt.name, got, tt.all)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			s := &scrubReader{src: chunked(tt.chunks...), sc: sc}
+			buf := make([]byte, 64)
+			n, _ := s.Read(buf)
+			if got := string(buf[:n]); got != tt.first {
+				t.Errorf("first read %q, want %q", got, tt.first)
+			}
+			rest, _ := io.ReadAll(s)
+			if got := string(buf[:n]) + string(rest); got != tt.all {
+				t.Errorf("scrubbed %q, want %q", got, tt.all)
+			}
+		})
 	}
 }
 
@@ -771,6 +769,14 @@ func send(t *testing.T, tc *tls.Conn, req *http.Request) reply {
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	return reply{status: resp.StatusCode, header: resp.Header, body: string(body)}
+}
+
+func chunked(chunks ...string) io.Reader {
+	readers := make([]io.Reader, len(chunks))
+	for i, c := range chunks {
+		readers[i] = strings.NewReader(c)
+	}
+	return io.MultiReader(readers...)
 }
 
 func readPreamble(tb testing.TB, conn net.Conn) string {

@@ -149,11 +149,11 @@ func BenchmarkScrubBody(b *testing.B) {
 	}{
 		{"64KiB-page", func() io.Reader { return bytes.NewReader(page) }},
 		{"sse-256-events", func() io.Reader {
-			events := make([]io.Reader, 256)
+			events := make([]string, 256)
 			for i := range events {
-				events[i] = bytes.NewReader(event)
+				events[i] = string(event)
 			}
-			return io.MultiReader(events...)
+			return chunked(events...)
 		}},
 	} {
 		b.Run(arm.name+"/plain", func(b *testing.B) {

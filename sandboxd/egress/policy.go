@@ -40,17 +40,13 @@ func (m *InterceptMode) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	if err != nil {
 		return err
 	}
-	switch tok.Kind() {
-	case 'f':
+	switch k := tok.Kind(); {
+	case k == 'f':
 		*m = InterceptOff
-	case 't':
+	case k == 't':
 		*m = InterceptAlways
-	case '"':
-		if tok.String() == "inject" {
-			*m = InterceptInject
-			return nil
-		}
-		fallthrough
+	case k == '"' && tok.String() == "inject":
+		*m = InterceptInject
 	default:
 		return fmt.Errorf("intercept must be true, false or \"inject\", got %s", tok)
 	}

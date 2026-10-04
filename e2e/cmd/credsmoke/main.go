@@ -1,6 +1,6 @@
-// credsmoke is the claim-credential acceptance: claims on one intercept pool each
-// send their own env-injected header to an HTTPS echo through the proxy, the guest
-// never holds the value, and rotation, refusal, clearing and forks behave as the API says.
+// credsmoke is the claim-credential acceptance: claims each send their own env-injected header,
+// query or body credential through the proxy (-inject-size: on an "inject" pool), the guest never
+// holds the value, and rotation, refusal, clearing and forks behave as the API says.
 package main
 
 import (
@@ -39,24 +39,24 @@ func main() {
 	injectSize := flag.String("inject-size", "", "size of the template's pool whose only rule is intercept \"inject\"; empty skips that leg")
 	other := flag.String("other", "example.com", "a second HTTPS host the inject pool must splice")
 	flag.Parse()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	var err error
 	switch {
 	case *reattach != "":
-		err = recheck(*addr, *token, *echo, *reattach)
+		err = recheck(ctx, *addr, *token, *echo, *reattach)
 	case *injectSize != "":
-		err = conditional(*addr, *token, *template, sandbox.Size(*injectSize), *echo, *other)
+		err = conditional(ctx, *addr, *token, *template, sandbox.Size(*injectSize), *echo, *other)
 	default:
-		err = run(*addr, *token, *template, *echo, *secret, *sse)
+		err = run(ctx, *addr, *token, *template, *echo, *secret, *sse)
 	}
+	cancel()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "credsmoke:", err)
 		os.Exit(1)
 	}
 }
 
-func run(addr, token, template, echo, secret, sse string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+func run(ctx context.Context, addr, token, template, echo, secret, sse string) error {
 	stamp := strconv.FormatInt(time.Now().UnixNano(), 10)
 	valueA, valueB := "key-a-"+stamp, "key-b-"+stamp
 
@@ -180,9 +180,7 @@ func run(addr, token, template, echo, secret, sse string) error {
 	return nil
 }
 
-func recheck(addr, token, echo, reattach string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
+func recheck(ctx context.Context, addr, token, echo, reattach string) error {
 	parts := strings.SplitN(reattach, ":", 3)
 	if len(parts) != 3 {
 		return fmt.Errorf("-reattach %q, want id:token:value", reattach)
@@ -204,9 +202,7 @@ func recheck(addr, token, echo, reattach string) error {
 	return nil
 }
 
-func conditional(addr, token, template string, size sandbox.Size, echo, other string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+func conditional(ctx context.Context, addr, token, template string, size sandbox.Size, echo, other string) error {
 	claim := func() (*sandbox.Sandbox, error) {
 		_, sb, err := harness.Claim(ctx, addr, token, template, sandbox.WithNetwork(sandbox.NetNone), sandbox.WithSize(size))
 		return sb, err
