@@ -103,7 +103,7 @@ func (m *Manager) DeleteTenant(ctx context.Context, name string) error {
 }
 
 func (m *Manager) tenantRecordOf(spec config.TenantSpec) (config.TenantRecord, error) {
-	if _, ok := m.view.Load().classEgress[spec.EgressClass]; spec.EgressClass != "" && !ok {
+	if spec.EgressClass != "" && !m.view.Load().out.HasClass(spec.EgressClass) {
 		return config.TenantRecord{}, fmt.Errorf("%w: tenant %q names unknown egress class %q", ErrBadTenant, spec.Name, spec.EgressClass)
 	}
 	r := config.TenantRecord{Name: spec.Name, MaxClaims: spec.MaxClaims, EgressClass: spec.EgressClass}
@@ -156,7 +156,7 @@ func (m *Manager) warnMissingClasses(ctx context.Context) {
 	}
 	v := m.view.Load()
 	for _, class := range slices.Sorted(maps.Keys(classes)) {
-		if _, ok := v.classEgress[class]; !ok {
+		if !v.out.HasClass(class) {
 			logger.Warnf(ctx, "egress class %q is not configured: its %d tenants reach nothing", class, classes[class])
 		}
 	}

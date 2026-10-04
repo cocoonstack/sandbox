@@ -2,292 +2,15 @@ package pool
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"net"
-	"net/http"
-	"net/netip"
-	"os"
-	"slices"
-	"sync"
-	"syscall"
-	"time"
-
-	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
-	"github.com/cocoonstack/sandbox/sandboxd/engine"
-	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// egressDoorConns bounds one sandbox's open connections per door; the guest's next dial waits in the backlog.
-const egressDoorConns = 256
-
-var (
-	nat64Range = netip.MustParsePrefix("64:ff9b::/96") // RFC 6052 NAT64; the embedded v4 is checked instead
-
-	// internalRanges lists the IANA special-purpose prefixes IsGlobalUnicast/IsPrivate leave in.
-	internalRanges = []netip.Prefix{
-		netip.MustParsePrefix("0.0.0.0/8"),       // "this network"
-		netip.MustParsePrefix("100.64.0.0/10"),   // RFC 6598 CGNAT; some clouds host metadata here
-		netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments
-		netip.MustParsePrefix("192.0.2.0/24"),    // TEST-NET-1
-		netip.MustParsePrefix("192.88.99.2/32"),  // 6a44-relay anycast
-		netip.MustParsePrefix("198.18.0.0/15"),   // benchmarking
-		netip.MustParsePrefix("198.51.100.0/24"), // TEST-NET-2
-		netip.MustParsePrefix("203.0.113.0/24"),  // TEST-NET-3
-		netip.MustParsePrefix("240.0.0.0/4"),     // reserved
-
-		netip.MustParsePrefix("::/96"),          // deprecated IPv4-compatible; embeds a v4 unmapped
-		netip.MustParsePrefix("64:ff9b:1::/48"), // RFC 8215 local-use NAT64; embeds a v4
-		netip.MustParsePrefix("100::/64"),       // discard-only
-		netip.MustParsePrefix("100:0:0:1::/64"), // dummy prefix
-		netip.MustParsePrefix("2001::/23"),      // IETF protocol assignments (Teredo, benchmarking, ORCHID)
-		netip.MustParsePrefix("2001:db8::/32"),  // documentation
-		netip.MustParsePrefix("2002::/16"),      // 6to4; embeds a v4
-		netip.MustParsePrefix("3fff::/20"),      // documentation
-		netip.MustParsePrefix("5f00::/16"),      // SRv6 SIDs
-	}
-)
-
-type egressListener struct {
-	srv       *http.Server
-	proxy     *egress.Proxy
-	ln        net.Listener
-	socks     net.Listener
-	path      string
-	socksPath string
-}
-
-func (e *egressListener) close() {
-	if e.srv != nil {
-		_ = e.srv.Close()
-		e.proxy.Close()
-	}
-	_ = e.ln.Close()
-	_ = os.Remove(e.path)
-	if e.socks != nil {
-		_ = e.socks.Close()
-		_ = os.Remove(e.socksPath)
-	}
-}
-
-// doorListener caps a door's live connections; doorConn's NetConn hands splice the *net.UnixConn the kernel copy needs.
-type doorListener struct {
-	*net.UnixListener
-	slots chan struct{}
-	done  chan struct{}
-	once  sync.Once
-}
-
-func limitDoor(ln *net.UnixListener) *doorListener {
-	return &doorListener{UnixListener: ln, slots: make(chan struct{}, egressDoorConns), done: make(chan struct{})}
-}
-
-func (l *doorListener) Accept() (net.Conn, error) {
-	select {
-	case l.slots <- struct{}{}:
-	case <-l.done:
-		return nil, net.ErrClosed
-	}
-	conn, err := l.AcceptUnix()
-	if err != nil {
-		<-l.slots
-		return nil, err
-	}
-	return &doorConn{UnixConn: conn, slots: l.slots}, nil
-}
-
-func (l *doorListener) Close() error {
-	l.once.Do(func() { close(l.done) })
-	return l.UnixListener.Close()
-}
-
-type doorConn struct {
-	*net.UnixConn
-	slots chan struct{}
-	once  sync.Once
-}
-
-func (c *doorConn) Close() error {
-	err := c.UnixConn.Close()
-	c.once.Do(func() { <-c.slots })
-	return err
-}
-
-func (c *doorConn) NetConn() net.Conn { return c.UnixConn }
-
 // NetRoute is how sb's guest reaches the network now: its own NIC, the proxy behind a bound door, or nothing.
 func (m *Manager) NetRoute(sb *types.Sandbox) types.NetRoute {
-	if m.laneOf(sb.Key) == engine.LaneDirect {
-		return types.NetRouteDirect
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.egressListeners[sb.ID] != nil {
-		return types.NetRouteRelay
-	}
-	return types.NetRouteNone
-}
-
-// armEgress locks the egress-lane NIC then binds the proxy: fail-closed, never a free NIC.
-func (m *Manager) armEgress(ctx context.Context, sb *types.Sandbox) error {
-	if err := m.lockEgressNIC(ctx, sb); err != nil {
-		return err
-	}
-	return m.armEgressProxy(ctx, sb)
-}
-
-// lockEgressNIC nft-locks the egress-lane NIC and records the tap for unlock.
-func (m *Manager) lockEgressNIC(ctx context.Context, sb *types.Sandbox) error {
-	if !m.locksNIC(sb.Key) {
-		return nil
-	}
-	tap := sb.TAP
-	if tap == "" {
-		var err error
-		if tap, err = m.tapOf(ctx, sb.VMName); err != nil {
-			return err
-		}
-	}
-	if err := netfilter.Lock(tap); err != nil {
-		return fmt.Errorf("nft lock %s: %w", tap, err)
-	}
-	m.mu.Lock()
-	m.egressTaps[sb.ID] = tap
-	m.mu.Unlock()
-	return nil
-}
-
-func (m *Manager) markLane(ctx context.Context, key types.PoolKey, sock string) error {
-	lane := m.laneOf(key)
-	if lane == "" {
-		return nil
-	}
-	if err := m.eng.MarkLane(ctx, sock, lane); err != nil {
-		return fmt.Errorf("mark lane: %w", err)
-	}
-	return nil
-}
-
-// laneOf is the verdict a guest receives; the none lane has no NIC to route through and gets none.
-func (m *Manager) laneOf(key types.PoolKey) engine.Lane {
-	switch {
-	case key.Net != types.NetEgress:
-		return ""
-	case m.locksNIC(key):
-		return engine.LaneRelay
-	default:
-		return engine.LaneDirect
-	}
-}
-
-func (m *Manager) locksNIC(key types.PoolKey) bool {
-	return m.lockEgress && key.Net == types.NetEgress
-}
-
-func (m *Manager) tapOf(ctx context.Context, vmName string) (string, error) {
-	vm, ok, err := m.eng.Inspect(ctx, vmName)
-	if err != nil {
-		return "", fmt.Errorf("list %s: %w", vmName, err)
-	}
-	if !ok {
-		return "", fmt.Errorf("no NIC config for %s", vmName)
-	}
-	if tap := vm.TapDevice(); tap != "" {
-		return tap, nil
-	}
-	return "", fmt.Errorf("no tap for %s", vmName)
-}
-
-// armEgressProxy serves the proxy on the pre-bound doors, binding them when refill could not, once the effective policy permits anything.
-func (m *Manager) armEgressProxy(ctx context.Context, sb *types.Sandbox) error {
-	v := m.view.Load()
-	if !v.guardedEgress || sb.VsockSocket == "" {
-		return nil
-	}
-	policy, ok := m.effectivePolicy(v, sb)
-	if !ok {
-		m.closePrebound(sb.VMName)
-		return nil
-	}
-	id, tenant := sb.ID, sb.Tenant
-	evCtx := context.WithoutCancel(ctx)
-	m.mu.Lock()
-	el := m.egressPrebound[sb.VMName]
-	delete(m.egressPrebound, sb.VMName)
-	m.mu.Unlock()
-	intercepts := v.poolEgress[sb.PolicyKey()].Intercepts()
-	// only an intercepting pool pays for the TLS transport and leaf cache
-	ca := m.egressCA
-	if !intercepts {
-		ca = nil
-	}
-	proxy := egress.New(newLivePolicy(m, sb, v, policy), claimSecrets{m: m, sb: sb}, ca, claimRouter{m: m, sb: sb},
-		func(ev egress.Event) { m.recordEgress(evCtx, id, tenant, ev) }, sb)
-	if v.usageBytes {
-		proxy.OnTransfer(func(ev egress.Event, sent, received int64) {
-			m.recordUsage(evCtx, usageEvent{Event: "egress_bytes", ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Sent: sent, Received: received})
-		})
-	}
-	if el != nil && (reached(el.ln) || (el.socks != nil && reached(el.socks)) || (el.socks != nil) != policy.ServesSocks()) {
-		el.close()
-		el = nil
-	}
-	if el == nil {
-		var err error
-		if el, err = bindEgress(sb.VsockSocket, policy.ServesSocks()); err != nil {
-			return err
-		}
-	}
-	el.srv = &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}
-	el.proxy = proxy
-	m.mu.Lock()
-	displaced := m.egressListeners[id]
-	m.egressListeners[id] = el
-	m.mu.Unlock()
-	if displaced != nil {
-		displaced.close()
-	}
-	go func() { _ = el.srv.Serve(el.ln) }()
-	if el.socks != nil {
-		go proxy.ServeSOCKS(evCtx, el.socks)
-	}
-	return nil
-}
-
-// prebindEgress binds a warm VM's doors at refill, so a claim only has to start serving them.
-func (m *Manager) prebindEgress(ctx context.Context, sb *types.Sandbox) {
-	v := m.view.Load()
-	policy := v.poolEgress[sb.Key]
-	if !v.guardedEgress || policy == nil || sb.VsockSocket == "" {
-		return
-	}
-	el, err := bindEgress(sb.VsockSocket, policy.ServesSocks())
-	if err != nil {
-		log.WithFunc("pool.prebindEgress").Warnf(ctx, "pre-bind %s: %v; the claim binds instead", sb.VMName, err)
-		return
-	}
-	m.mu.Lock()
-	if !m.view.Load().guardedEgress {
-		m.mu.Unlock()
-		el.close()
-		return
-	}
-	m.egressPrebound[sb.VMName] = el
-	m.mu.Unlock()
-}
-
-// closePrebound drops the doors bound for a warm VM that is going away or will not be served.
-func (m *Manager) closePrebound(name string) {
-	m.mu.Lock()
-	el := m.egressPrebound[name]
-	delete(m.egressPrebound, name)
-	m.mu.Unlock()
-	if el != nil {
-		el.close()
-	}
+	return m.out.Route(sb)
 }
 
 // disarmIfReleased tears down a wake-path proxy if Release dropped the claim in the arm window.
@@ -296,142 +19,47 @@ func (m *Manager) disarmIfReleased(sb *types.Sandbox) bool {
 	live := m.claimed[sb.ID] == sb
 	m.mu.Unlock()
 	if !live {
-		m.disarmEgress(sb.ID, true)
+		m.out.Disarm(sb.ID, true)
 	}
 	return !live
 }
 
-// disarmEgress tears down a sandbox's egress listener, and its NIC lock only when removed.
-func (m *Manager) disarmEgress(id string, removed bool) {
-	m.mu.Lock()
-	el := m.egressListeners[id]
-	delete(m.egressListeners, id)
-	var tap string
-	if removed {
-		tap = m.egressTaps[id]
-		delete(m.egressTaps, id)
-	}
-	m.mu.Unlock()
-	if el != nil {
-		el.close()
-	}
-	if tap != "" {
-		_ = netfilter.Unlock(tap)
-	}
+// policyOf resolves sb's effective egress policy against v; it takes m.mu only for a claim from before layers were recorded.
+func (m *Manager) policyOf(v *configView, sb *types.Sandbox) (egress.Evaluator, bool) {
+	return v.out.Resolve(sb, func() bool { return m.claimPooled(sb) })
 }
 
-// effectivePolicy resolves pool ∩ tenant; root has no tenant layer, an unpooled key no pool one, a NoEgress claim none at all.
-func (m *Manager) effectivePolicy(v *configView, sb *types.Sandbox) (egress.Evaluator, bool) {
+func (m *Manager) policyOfLocked(v *configView, sb *types.Sandbox) (egress.Evaluator, bool) {
+	return v.out.Resolve(sb, func() bool { return m.claimPooledLocked(sb) })
+}
+
+func (m *Manager) claimPooled(sb *types.Sandbox) bool {
+	if sb.Layer != "" {
+		return sb.Layer == types.LayerPooled
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.effectivePolicyLocked(v, sb)
+	return m.claimPooledLocked(sb)
 }
 
-func (m *Manager) effectivePolicyLocked(v *configView, sb *types.Sandbox) (egress.Evaluator, bool) {
-	if sb.NoEgress {
-		return nil, false
+func (m *Manager) claimPooledLocked(sb *types.Sandbox) bool {
+	if sb.Layer != "" {
+		return sb.Layer == types.LayerPooled
 	}
-	poolPol := v.poolEgress[sb.PolicyKey()]
-	tenantPol := v.classEgress[sb.EgressClass]
-	if poolPol == nil {
-		pooled := sb.Layer == types.LayerPooled
-		if sb.Layer == "" {
-			_, pooled = m.activePool(sb.PolicyKey())
-		}
-		if pooled || sb.Tenant == "" || tenantPol == nil {
-			return nil, false
-		}
-		return *tenantPol, true
-	}
-	if sb.Tenant == "" {
-		return *poolPol, true
-	}
-	if tenantPol == nil {
-		return nil, false
-	}
-	return egress.Compose(*poolPol, *tenantPol), true
+	_, ok := m.activePool(sb.PolicyKey())
+	return ok
 }
 
-func bindEgress(vsock string, socks bool) (*egressListener, error) {
-	el := &egressListener{path: engine.EgressSocketPath(vsock)}
-	ln, err := listenUnix(el.path)
-	if err != nil {
-		return nil, fmt.Errorf("listen egress: %w", err)
+func (m *Manager) outboundOptions(ca *egress.CA) outbound.Options {
+	return outbound.Options{
+		Engine: m.eng,
+		View:   func() *outbound.View { return m.view.Load().out },
+		Pooled: m.claimPooled,
+		Record: m.recordEgress,
+		Transfer: func(ctx context.Context, id, tenant string, ev egress.Event, sent, received int64) {
+			m.recordUsage(ctx, usageEvent{Event: "egress_bytes", ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Sent: sent, Received: received})
+		},
+		CA:      ca,
+		LockNIC: len(m.cfg.Bridges) > 0,
 	}
-	el.ln = limitDoor(ln)
-	if socks {
-		el.socksPath = engine.SocksSocketPath(vsock)
-		if ln, err = listenUnix(el.socksPath); err != nil {
-			el.close()
-			return nil, fmt.Errorf("listen socks: %w", err)
-		}
-		el.socks = limitDoor(ln)
-	}
-	return el, nil
-}
-
-// listenUnix binds path after clearing a stale socket from a prior life that would block the bind.
-func listenUnix(path string) (*net.UnixListener, error) {
-	_ = os.Remove(path)
-	return net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
-}
-
-// reached reports whether a guest connected to a door before it was armed; only a clean EAGAIN says no.
-func reached(ln net.Listener) bool {
-	rc, err := ln.(syscall.Conn).SyscallConn()
-	if err != nil {
-		return true
-	}
-	waiting := true
-	_ = rc.Control(func(fd uintptr) {
-		syscall.ForkLock.RLock()
-		defer syscall.ForkLock.RUnlock()
-		nfd, _, err := syscall.Accept(int(fd))
-		if err == nil {
-			_ = syscall.Close(nfd)
-			return
-		}
-		waiting = !errors.Is(err, syscall.EAGAIN)
-	})
-	return waiting
-}
-
-func newEgressDialer(allow func() []egress.InternalAllow) *net.Dialer {
-	return &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
-		ap, err := netip.ParseAddrPort(address)
-		if err != nil {
-			return fmt.Errorf("egress: unresolved address %q: %w", address, err)
-		}
-		_, err = destVerdict(allow(), ap.Addr(), ap.Port())
-		return err
-	}}
-}
-
-// destVerdict reports whether ip is an internal address allow re-admits; any other internal address is an error.
-func destVerdict(allow []egress.InternalAllow, ip netip.Addr, port uint16) (bool, error) {
-	ip = ip.Unmap()
-	if nat64Range.Contains(ip) {
-		b := ip.As16()
-		ip = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
-	}
-	// after the NAT64 unwrap and before the block, so a named prefix wins
-	if slices.ContainsFunc(allow, func(a egress.InternalAllow) bool { return a.Admits(ip, port) }) {
-		return true, nil
-	}
-	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		slices.ContainsFunc(internalRanges, func(p netip.Prefix) bool { return p.Contains(ip) }) {
-		return false, fmt.Errorf("egress: blocked internal address %s", ip)
-	}
-	return false, nil
-}
-
-// parseInternalAllow turns the allow-list into entries; config validation already rejected bad ones.
-func parseInternalAllow(entries []string) []egress.InternalAllow {
-	out := make([]egress.InternalAllow, 0, len(entries))
-	for _, e := range entries {
-		if a, err := egress.ParseInternalAllow(e); err == nil {
-			out = append(out, a)
-		}
-	}
-	return out
 }

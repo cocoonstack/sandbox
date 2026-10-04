@@ -6,22 +6,21 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -29,83 +28,6 @@ var (
 	egKey    = types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}
 	egPolicy = &egress.Policy{Allow: []egress.Rule{{Host: "example.com", Secret: "gh"}}}
 )
-
-func TestEgressProxyInjectsAndGates(t *testing.T) {
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Seen-Auth", r.Header.Get("Authorization"))
-		_, _ = io.WriteString(w, "ok")
-	}))
-	t.Cleanup(origin.Close)
-	host := mustHostname(t, origin.URL)
-
-	pol := &egress.Policy{Allow: []egress.Rule{{Host: host, Secret: "gh"}}}
-	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
-	m.dial = (&net.Dialer{}).DialContext
-
-	sb := vsockSandbox(t, "sb_egress")
-	if armErr := m.armEgress(t.Context(), sb); armErr != nil {
-		t.Fatalf("arm egress: %v", armErr)
-	}
-	path := engine.EgressSocketPath(sb.VsockSocket)
-	client := egressClient(path)
-
-	resp, err := client.Get(origin.URL + "/")
-	if err != nil {
-		t.Fatalf("allowed request: %v", err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if string(body) != "ok" || resp.Header.Get("X-Seen-Auth") != "s3cr3t" {
-		t.Errorf("allowed request body=%q injected=%q, want ok/s3cr3t", body, resp.Header.Get("X-Seen-Auth"))
-	}
-
-	req, _ := http.NewRequest(http.MethodGet, "http://blocked.example/", nil)
-	deny, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("denied request: %v", err)
-	}
-	deny.Body.Close()
-	if deny.StatusCode != http.StatusForbidden {
-		t.Errorf("denied status %d, want 403", deny.StatusCode)
-	}
-
-	m.disarmEgress(sb.ID, true)
-	if _, err := net.Dial("unix", path); err == nil {
-		t.Error("egress socket still accepts after disarm")
-	}
-}
-
-func TestArmEgressBindsSocksOnlyWhenOptedIn(t *testing.T) {
-	tests := []struct {
-		name   string
-		policy *egress.Policy
-		want   bool
-	}{
-		{"opted in with a bare host rule", &egress.Policy{Socks5: true, Allow: []egress.Rule{{Host: "example.com"}}}, true},
-		{"bare host rule without opting in", &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: tt.policy})
-			sb := vsockSandbox(t, "sb_socks")
-			if armErr := m.armEgressProxy(t.Context(), sb); armErr != nil {
-				t.Fatalf("arm proxy: %v", armErr)
-			}
-			path := engine.SocksSocketPath(sb.VsockSocket)
-			conn, err := net.Dial("unix", path)
-			if (err == nil) != tt.want {
-				t.Fatalf("socks listener bound = %v, want %v", err == nil, tt.want)
-			}
-			if conn != nil {
-				_ = conn.Close()
-			}
-			m.disarmEgress(sb.ID, true)
-			if _, err := net.Dial("unix", path); err == nil {
-				t.Error("socks socket still accepts after disarm")
-			}
-		})
-	}
-}
 
 func TestLaneVerdictReachesGuestOnColdBoots(t *testing.T) {
 	tests := []struct {
@@ -126,7 +48,7 @@ func TestLaneVerdictReachesGuestOnColdBoots(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()
 			m := egressManager(t, eng, config.PoolSpec{PoolKey: tt.key, Warm: 1, Egress: egPolicy})
-			m.lockEgress = tt.locked
+			withOutbound(m, func(o *outbound.Options) { o.LockNIC = tt.locked })
 			if tt.cold {
 				sb, err := m.provision(t.Context(), tt.key, "")
 				if err != nil {
@@ -166,26 +88,6 @@ func TestGoldenStampGatesAdoptionOnLane(t *testing.T) {
 	}
 }
 
-func TestArmEgressFailsClosedWhenNICUnlockable(t *testing.T) {
-	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
-
-	sb := &types.Sandbox{ID: "sb_eg_no_tap", Key: egKey, VMName: "sbx-no-tap-1"}
-	if armErr := m.armEgress(t.Context(), sb); armErr == nil {
-		t.Fatal("armEgress must fail closed when the egress-lane NIC cannot be locked")
-	}
-}
-
-func TestArmEgressLocksEgressLaneWithoutPolicy(t *testing.T) {
-	m := egressManager(t, newFakeEngine(),
-		config.PoolSpec{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "a.test"}}}},
-		config.PoolSpec{PoolKey: egKey},
-	)
-	sb := &types.Sandbox{ID: "sb_eg_np", Key: egKey, VMName: "sbx-np-1"}
-	if armErr := m.armEgress(t.Context(), sb); armErr == nil {
-		t.Fatal("policyless egress-lane claim must still lock the NIC, not skip it")
-	}
-}
-
 func TestEgressLaneDoesNotHibernate(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	sb := &types.Sandbox{ID: "sb_eg_h", Key: types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}}
@@ -217,17 +119,16 @@ func TestEgressLaneWakeFailsClosed(t *testing.T) {
 
 func TestEffectivePolicyKeepsTheLayerPinnedAtClaim(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	editView(m, func(v *configView) {
-		v.classEgress = map[string]*egress.Policy{"desk": {Allow: []egress.Rule{{Host: "b.test"}}}}
-		v.poolEgress = map[types.PoolKey]*egress.Policy{}
+	editEgress(t, m, func(cfg *config.Config) {
+		cfg.EgressClasses = []config.EgressClass{{Name: "desk", Egress: &egress.Policy{Allow: []egress.Rule{{Host: "b.test"}}}}}
 	})
 
 	m.pools = map[types.PoolKey]*pool{testKey: newPool(testKey)}
-	if _, ok := m.effectivePolicy(m.view.Load(), &types.Sandbox{Key: testKey, Tenant: "acme", EgressClass: "desk", Layer: types.LayerUnpooled}); !ok {
+	if _, ok := m.policyOf(m.view.Load(), &types.Sandbox{Key: testKey, Tenant: "acme", EgressClass: "desk", Layer: types.LayerUnpooled}); !ok {
 		t.Error("a claim made on an unpooled key lost its tenant policy when the key gained a pool")
 	}
 	m.pools = map[types.PoolKey]*pool{}
-	if _, ok := m.effectivePolicy(m.view.Load(), &types.Sandbox{Key: testKey, Tenant: "acme", EgressClass: "desk", Layer: types.LayerPooled}); ok {
+	if _, ok := m.policyOf(m.view.Load(), &types.Sandbox{Key: testKey, Tenant: "acme", EgressClass: "desk", Layer: types.LayerPooled}); ok {
 		t.Error("a claim made on a policy-less pool gained the tenant policy when the pool was dropped")
 	}
 }
@@ -278,21 +179,17 @@ func TestEffectivePolicyComposition(t *testing.T) {
 				m.pools[testKey] = newPool(testKey)
 				m.pools[testKey].removed = tc.removed
 			}
-			editView(m, func(v *configView) {
-				v.poolEgress = map[types.PoolKey]*egress.Policy{}
-				if tc.pool != nil {
-					v.poolEgress[testKey] = tc.pool
-				}
-				v.classEgress = map[string]*egress.Policy{}
+			editEgress(t, m, func(cfg *config.Config) {
+				cfg.Pools = []config.PoolSpec{{PoolKey: testKey, Egress: tc.pool}}
 				if tc.tnPol != nil {
-					v.classEgress["desk"] = tc.tnPol
+					cfg.EgressClasses = []config.EgressClass{{Name: "desk", Egress: tc.tnPol}}
 				}
 			})
 			sb := &types.Sandbox{Key: testKey, Tenant: tc.tenant}
 			if tc.tenant != "" {
 				sb.EgressClass = "desk"
 			}
-			eval, ok := m.effectivePolicy(m.view.Load(), sb)
+			eval, ok := m.policyOf(m.view.Load(), sb)
 			if ok != tc.wantArmed {
 				t.Fatalf("armed=%v, want %v", ok, tc.wantArmed)
 			}
@@ -312,7 +209,10 @@ func TestEffectivePolicyComposition(t *testing.T) {
 func TestLockUsesProvisionedTapWithoutList(t *testing.T) {
 	eng := newFakeEngine()
 	eng.tap = "tap-fake0"
+	eng.sockRoot = sockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
+	var taps tapLog
+	withOutbound(m, taps.record)
 
 	sb, err := m.provision(t.Context(), egKey, "")
 	if err != nil {
@@ -321,38 +221,15 @@ func TestLockUsesProvisionedTapWithoutList(t *testing.T) {
 	if sb.TAP != "tap-fake0" {
 		t.Fatalf("provision carried tap %q, want tap-fake0", sb.TAP)
 	}
-	lockErr := m.lockEgressNIC(t.Context(), sb)
+	if err := m.out.Arm(t.Context(), sb); err != nil {
+		t.Fatalf("arm egress: %v", err)
+	}
 	if calls := eng.lookupCalls(); calls != 0 {
 		t.Errorf("claim-path lock looked the VM up %d times, want 0", calls)
 	}
-	switch {
-	case lockErr != nil && !strings.Contains(lockErr.Error(), "tap-fake0"):
-		t.Errorf("lock failed outside nft: %v", lockErr)
-	case lockErr == nil:
-		m.mu.Lock()
-		got := m.egressTaps[sb.ID]
-		m.mu.Unlock()
-		if got != "tap-fake0" {
-			t.Errorf("recorded tap %q, want tap-fake0", got)
-		}
-	}
-}
-
-func TestLockFallsBackToALookupForPreTapClaims(t *testing.T) {
-	eng := newFakeEngine()
-	eng.tap = "tap-fake1"
-	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
-	if _, err := eng.RunCold(t.Context(), "sbx-old", egKey, ""); err != nil {
-		t.Fatalf("seed vm: %v", err)
-	}
-
-	sb := &types.Sandbox{ID: "sb_old", Key: egKey, VMName: "sbx-old"}
-	lockErr := m.lockEgressNIC(t.Context(), sb)
-	if calls := eng.lookupCalls(); calls != 1 {
-		t.Errorf("fallback looked the VM up %d times, want 1", calls)
-	}
-	if lockErr != nil && !strings.Contains(lockErr.Error(), "tap-fake1") {
-		t.Errorf("fallback resolved no tap: %v", lockErr)
+	m.out.Disarm(sb.ID, true)
+	if locked, unlocked := taps.locked(), taps.unlocked(); !slices.Equal(locked, []string{"tap-fake0"}) || !slices.Equal(unlocked, locked) {
+		t.Errorf("locked %v and unlocked %v at removal, want tap-fake0 recorded", locked, unlocked)
 	}
 }
 
@@ -390,6 +267,8 @@ func TestRollbackKeepsLockWhenRemoveFails(t *testing.T) {
 	eng.vms["sbx-r1"] = "/run/sbx-r1.sock"
 	eng.vms["sbx-r2"] = "/run/sbx-r2.sock"
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
+	var taps tapLog
+	withOutbound(m, taps.record)
 
 	sbs := []*types.Sandbox{
 		{ID: "sb_r1", VMName: "sbx-r1", Key: egKey},
@@ -399,23 +278,28 @@ func TestRollbackKeepsLockWhenRemoveFails(t *testing.T) {
 	for _, sb := range sbs {
 		m.claimed[sb.ID] = sb
 	}
-	m.egressTaps["sb_r1"] = "tap-r1"
-	m.egressTaps["sb_r2"] = "tap-r2"
 	m.mu.Unlock()
+	m.out.KeepLock("sb_r1", "tap-r1")
+	m.out.KeepLock("sb_r2", "tap-r2")
 
 	m.rollbackClaim(t.Context(), sbs)
 	waitFor(t, m.store.synced)
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.claimed) != 0 {
-		t.Errorf("rollback left %d claims", len(m.claimed))
+	claimed := len(m.claimed)
+	m.mu.Unlock()
+	if claimed != 0 {
+		t.Errorf("rollback left %d claims", claimed)
 	}
-	if _, locked := m.egressTaps["sb_r1"]; !locked {
+	if slices.Contains(taps.unlocked(), "tap-r1") {
 		t.Error("rollback unlocked a VM whose remove failed")
 	}
-	if _, locked := m.egressTaps["sb_r2"]; locked {
+	if !slices.Contains(taps.unlocked(), "tap-r2") {
 		t.Error("rollback kept a confirmed-removed VM locked")
+	}
+	m.out.Disarm("sb_r1", true)
+	if !slices.Contains(taps.unlocked(), "tap-r1") {
+		t.Error("rollback dropped the lock record of a VM whose remove failed")
 	}
 }
 
@@ -449,50 +333,6 @@ func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
 	}
 }
 
-func TestEgressLaneLocksWithNoPolicyAnywhere(t *testing.T) {
-	eng := newFakeEngine()
-	eng.tap = "tap-nopol"
-	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey})
-	if m.view.Load().guardedEgress {
-		t.Fatal("no policy configured; guardedEgress should be false")
-	}
-	sb := &types.Sandbox{ID: "sb_np", Key: egKey, VMName: "sbx-np", TAP: "tap-nopol"}
-	lockErr := m.lockEgressNIC(t.Context(), sb)
-	m.mu.Lock()
-	attempted := m.egressTaps[sb.ID] == "tap-nopol"
-	m.mu.Unlock()
-	if lockErr != nil {
-		attempted = strings.Contains(lockErr.Error(), "tap-nopol")
-	}
-	if !attempted {
-		t.Fatalf("policyless egress lane skipped the NIC lock: err=%v", lockErr)
-	}
-}
-
-func TestDisarmKeepsLockWhenRemoveFailed(t *testing.T) {
-	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Egress: egPolicy})
-	m.dial = (&net.Dialer{}).DialContext
-	sb := vsockSandbox(t, "sb_dz")
-	if armErr := m.armEgressProxy(t.Context(), sb); armErr != nil {
-		t.Fatalf("arm proxy: %v", armErr)
-	}
-	m.mu.Lock()
-	m.egressTaps[sb.ID] = "tap-dz"
-	m.mu.Unlock()
-	path := engine.EgressSocketPath(sb.VsockSocket)
-
-	m.disarmEgress(sb.ID, false)
-	if _, err := net.Dial("unix", path); err == nil {
-		t.Error("proxy listener still accepts after a failed-remove disarm")
-	}
-	m.mu.Lock()
-	tap := m.egressTaps[sb.ID]
-	m.mu.Unlock()
-	if tap != "tap-dz" {
-		t.Error("failed remove dropped the NIC lock; a still-running VM must stay locked")
-	}
-}
-
 func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 	gd := filepath.Join(m.goldensDir(), egKey.Hash())
@@ -506,7 +346,7 @@ func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 	m.pools[egKey].goldenDir = gd
 	m.mu.Unlock()
 	policyLive := func() bool {
-		_, ok := m.effectivePolicy(m.view.Load(), &types.Sandbox{Key: egKey})
+		_, ok := m.policyOf(m.view.Load(), &types.Sandbox{Key: egKey})
 		return ok
 	}
 	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: egKey, WarmMax: 3}}); err != nil {
@@ -523,39 +363,6 @@ func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 	}
 	if !policyLive() {
 		t.Fatal("drain + re-add wiped the pool egress policy")
-	}
-}
-
-func TestEgressDialerBlocksInternal(t *testing.T) {
-	blocked := []string{
-		"127.0.0.1:80", "169.254.169.254:80", "10.0.0.5:443", "192.168.1.1:22",
-		"172.16.0.1:80", "255.255.255.255:80", "[::1]:80", "[::ffff:127.0.0.1]:80",
-		"[fe80::1]:80", "[fc00::1]:80", "[ff02::1]:80",
-
-		"0.6.6.6:80", "100.100.100.200:80", "192.0.0.1:80", "192.0.2.1:80",
-		"192.88.99.2:80", "198.18.0.1:80", "198.19.255.255:80", "198.51.100.1:80",
-		"203.0.113.1:80", "240.1.2.3:80",
-
-		"[100::1]:80", "[100:0:0:1::1]:80", "[2001:db8::1]:80", "[3fff::1]:80",
-		"[5f00::1]:80", "[::127.0.0.1]:80",
-		"[2001::a9fe:a9fe]:80",
-		"[2001:2::1]:80",
-		"[2001:10::1]:80",
-		"[64:ff9b:1::8.8.8.8]:80",
-		"[2002:a9fe:a9fe::]:80",
-		"[64:ff9b::a9fe:a9fe]:80",
-		"[64:ff9b::a00:1]:80",
-	}
-	for _, addr := range blocked {
-		if err := newEgressDialer(func() []egress.InternalAllow { return nil }).Control("tcp", addr, nil); err == nil {
-			t.Errorf("dial to internal %s allowed; SSRF not blocked", addr)
-		}
-	}
-
-	for _, addr := range []string{"93.184.216.34:443", "[2606:4700:4700::1111]:443", "[64:ff9b::5db8:d822]:443"} {
-		if err := newEgressDialer(func() []egress.InternalAllow { return nil }).Control("tcp", addr, nil); err != nil {
-			t.Errorf("dial to public %s blocked: %v", addr, err)
-		}
 	}
 }
 
@@ -576,109 +383,24 @@ func TestEgressLaneCannotForkOrCheckpoint(t *testing.T) {
 	}
 }
 
-func TestEgressDialerAdmitsOnlyNamedInternalPrefixes(t *testing.T) {
-	d := newEgressDialer(func() []egress.InternalAllow { return parseInternalAllow([]string{"fdc8::/16", "10.8.0.0/16"}) })
-	check := func(addr string) error {
-		return d.Control("tcp", addr, nil)
-	}
-	for name, tc := range map[string]struct {
-		addr    string
-		allowed bool
-	}{
-		"public v4":    {"93.184.216.34:443", true},
-		"public v6":    {"[2606:2800:220:1:248:1893:25c8:1946]:443", true},
-		"corporate v6": {"[fdc8:17:9:200f::1]:443", true},
-		"corporate v4": {"10.8.7.149:443", true},
-
-		"another sandbox on the bridge": {"[fd00:c0c0:38::5]:443", false},
-		"the host's bridge gateway":     {"[fd00:c0c0:38::1]:443", false},
-		"other private v4":              {"192.168.1.1:443", false},
-		"loopback":                      {"127.0.0.1:443", false},
-		"cloud metadata":                {"169.254.169.254:80", false},
-		"CGNAT metadata":                {"100.100.100.200:80", false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			err := check(tc.addr)
-			if tc.allowed && err != nil {
-				t.Errorf("%s was blocked: %v", tc.addr, err)
-			}
-			if !tc.allowed && err == nil {
-				t.Errorf("%s was allowed; it must not be reachable from a guest", tc.addr)
-			}
-		})
-	}
-}
-
-func TestEgressDialerWildcardAllowsEverything(t *testing.T) {
-	d := newEgressDialer(func() []egress.InternalAllow { return parseInternalAllow([]string{"0.0.0.0/0", "::/0"}) })
-	for _, addr := range []string{
-		"93.184.216.34:443",
-		"[fdc8:17:9:200f::1]:443",
-		"10.8.7.149:443",
-		"[fd00:c0c0:38::5]:443",
-		"127.0.0.1:7777",
-		"169.254.169.254:80",
-	} {
-		if err := d.Control("tcp", addr, nil); err != nil {
-			t.Errorf("%s blocked under a wildcard allow-list: %v", addr, err)
-		}
-	}
-}
-
-func TestEgressDialerScopesInternalAllowToPorts(t *testing.T) {
-	d := newEgressDialer(func() []egress.InternalAllow {
-		return parseInternalAllow([]string{"10.8.0.1/32:18090,9000", "fdc8::/16:443", "10.9.0.0/16"})
-	})
-	for name, tc := range map[string]struct {
-		addr    string
-		allowed bool
-	}{
-		"listed v4 port":        {"10.8.0.1:18090", true},
-		"second listed v4 port": {"10.8.0.1:9000", true},
-		"listed v6 port":        {"[fdc8:17:9:200f::1]:443", true},
-		"bare prefix any port":  {"10.9.3.4:22", true},
-		"NAT64 listed port":     {"[64:ff9b::a08:1]:18090", true},
-
-		"unlisted v4 port":   {"10.8.0.1:22", false},
-		"kubelet":            {"10.8.0.1:10250", false},
-		"unlisted v6 port":   {"[fdc8:17:9:200f::1]:22", false},
-		"NAT64 unlisted":     {"[64:ff9b::a08:1]:6443", false},
-		"outside the prefix": {"10.8.0.2:18090", false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			err := d.Control("tcp", tc.addr, nil)
-			if tc.allowed && err != nil {
-				t.Errorf("%s was blocked: %v", tc.addr, err)
-			}
-			if !tc.allowed && (err == nil || !strings.Contains(err.Error(), "blocked internal address")) {
-				t.Errorf("%s: %v, want blocked internal address", tc.addr, err)
-			}
-		})
-	}
-}
-
 func TestWarmClaimServesTheDoorsRefillBound(t *testing.T) {
 	eng := newFakeEngine()
 	eng.sockRoot = sockRoot(t)
 	pol := &egress.Policy{Socks5: true, Allow: []egress.Rule{{Host: "example.com"}}}
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
 	warm := refillWarmVM(t, m)
-	m.mu.Lock()
-	el := m.egressPrebound[warm.VMName]
-	m.mu.Unlock()
-	if el == nil || el.socks == nil || el.srv != nil {
-		t.Fatalf("refill left prebound=%+v, want both doors bound and nothing served", el)
+	pins := pinDoors(t, warm)
+	if m.NetRoute(warm) != types.NetRouteNone {
+		t.Fatal("refill served the doors it bound, want them bound and nothing served")
 	}
 
 	sb := mustClaim(t, m, testKey)
-	m.mu.Lock()
-	armed, left := m.egressListeners[sb.ID], len(m.egressPrebound)
-	m.mu.Unlock()
-	if armed != el || left != 0 {
-		t.Fatalf("claim armed %p from prebound %p with %d left, want the refill-bound pair", armed, el, left)
+	m.out.ClosePrebound(sb.VMName)
+	if !servesPinned(t, sb, pins) || m.NetRoute(sb) != types.NetRouteRelay {
+		t.Fatalf("claim route %q, want the refill-bound pair served with none left prebound", m.NetRoute(sb))
 	}
 	dialDoors(t, sb)
-	m.disarmEgress(sb.ID, true)
+	m.out.Disarm(sb.ID, true)
 	if _, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
 		t.Error("egress socket still accepts after disarm")
 	}
@@ -690,9 +412,7 @@ func TestWarmClaimRebindsADoorTheGuestReachedEarly(t *testing.T) {
 	pol := &egress.Policy{Socks5: true, Allow: []egress.Rule{{Host: "example.com"}}}
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
 	warm := refillWarmVM(t, m)
-	m.mu.Lock()
-	prebound := m.egressPrebound[warm.VMName]
-	m.mu.Unlock()
+	pins := pinDoors(t, warm)
 	early, err := net.Dial("unix", engine.SocksSocketPath(warm.VsockSocket))
 	if err != nil {
 		t.Fatalf("pre-claim dial: %v", err)
@@ -700,10 +420,7 @@ func TestWarmClaimRebindsADoorTheGuestReachedEarly(t *testing.T) {
 	defer early.Close()
 
 	sb := mustClaim(t, m, testKey)
-	m.mu.Lock()
-	armed := m.egressListeners[sb.ID]
-	m.mu.Unlock()
-	if armed == prebound {
+	if servesPinned(t, sb, pins) {
 		t.Fatal("claim served the pair a guest had already reached")
 	}
 	_ = early.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -711,7 +428,7 @@ func TestWarmClaimRebindsADoorTheGuestReachedEarly(t *testing.T) {
 		t.Fatalf("a connection queued before the claim was kept: read err=%v, want closed", err)
 	}
 	dialDoors(t, sb)
-	m.disarmEgress(sb.ID, true)
+	m.out.Disarm(sb.ID, true)
 }
 
 func TestTrimmedWarmVMClosesItsDoors(t *testing.T) {
@@ -723,139 +440,19 @@ func TestTrimmedWarmVMClosesItsDoors(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("refill did not bind the door: %v", err)
 	}
+	pin := pinDoor(t, path)
 
 	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey}}); err != nil {
 		t.Fatalf("SetPools: %v", err)
 	}
 	waitFor(t, func() bool { return eng.removed(warm.VMName) })
-	m.mu.Lock()
-	left := len(m.egressPrebound)
-	m.mu.Unlock()
-	if left != 0 {
-		t.Errorf("%d prebound doors survive their VM", left)
+	if conn, err := net.Dial("unix", pin); err == nil {
+		_ = conn.Close()
+		t.Error("prebound door survives its VM")
 	}
 	if _, err := os.Stat(path); err == nil {
 		t.Error("door socket survives its VM")
 	}
-}
-
-func TestEgressDoorHalfCloseReachesTheGuest(t *testing.T) {
-	origin, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("origin: %v", err)
-	}
-	t.Cleanup(func() { _ = origin.Close() })
-	go func() {
-		conn, acceptErr := origin.Accept()
-		if acceptErr != nil {
-			return
-		}
-		_, _ = io.WriteString(conn, "hello")
-		_ = conn.Close()
-	}()
-	pol := &egress.Policy{Allow: []egress.Rule{{Host: "127.0.0.1"}}}
-	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
-	m.dial = (&net.Dialer{}).DialContext
-	sb := vsockSandbox(t, "sb_halfclose")
-	if err := m.armEgress(t.Context(), sb); err != nil {
-		t.Fatalf("arm egress: %v", err)
-	}
-	t.Cleanup(func() { m.disarmEgress(sb.ID, true) })
-
-	_, tunnel := connectDoor(t, engine.EgressSocketPath(sb.VsockSocket), origin.Addr().String())
-	body, bodyErr := io.ReadAll(tunnel)
-	if bodyErr != nil {
-		t.Fatalf("tunnel did not end with EOF after the origin closed: %v", bodyErr)
-	}
-	if string(body) != "hello" {
-		t.Errorf("tunnel body %q, want hello", body)
-	}
-}
-
-func TestDoorConnHandsSpliceItsUnixConn(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "door")
-	if err != nil {
-		t.Fatalf("temp dir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	ln, err := listenUnix(filepath.Join(dir, "d"))
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	door := limitDoor(ln)
-	t.Cleanup(func() { _ = door.Close() })
-	peer, err := net.Dial("unix", ln.Addr().String())
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	t.Cleanup(func() { _ = peer.Close() })
-	conn, err := door.Accept()
-	if err != nil {
-		t.Fatalf("accept: %v", err)
-	}
-	inner, ok := conn.(interface{ NetConn() net.Conn })
-	if !ok {
-		t.Fatalf("door conn %T hides its socket from splice", conn)
-	}
-	if _, ok := inner.NetConn().(*net.UnixConn); !ok {
-		t.Fatalf("NetConn is %T, want the *net.UnixConn the kernel copy needs", inner.NetConn())
-	}
-	_ = conn.Close()
-	if n := len(door.slots); n != 0 {
-		t.Errorf("%d slots held after close", n)
-	}
-}
-
-func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, "ok")
-	}))
-	t.Cleanup(origin.Close)
-	pol := &egress.Policy{Allow: []egress.Rule{{Host: mustHostname(t, origin.URL)}}}
-	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
-	m.dial = (&net.Dialer{}).DialContext
-	sb := vsockSandbox(t, "sb_cap")
-	if err := m.armEgress(t.Context(), sb); err != nil {
-		t.Fatalf("arm egress: %v", err)
-	}
-	path := engine.EgressSocketPath(sb.VsockSocket)
-
-	idle := make([]net.Conn, 0, egressDoorConns)
-	for len(idle) < egressDoorConns {
-		conn, err := net.Dial("unix", path)
-		if errors.Is(err, syscall.ECONNREFUSED) {
-			time.Sleep(10 * time.Millisecond)
-			continue
-		}
-		if err != nil {
-			t.Fatalf("idle dial %d: %v", len(idle), err)
-		}
-		idle = append(idle, conn)
-	}
-	t.Cleanup(func() {
-		for _, conn := range idle {
-			_ = conn.Close()
-		}
-	})
-
-	client := egressClient(path)
-	client.Timeout = 500 * time.Millisecond
-	if resp, err := client.Get(origin.URL + "/"); err == nil {
-		resp.Body.Close()
-		t.Fatal("a request past the door cap was served")
-	}
-
-	_ = idle[0].Close()
-	client.Timeout = 5 * time.Second
-	resp, err := client.Get(origin.URL + "/")
-	if err != nil {
-		t.Fatalf("request after a slot freed: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status %d after a slot freed, want 200", resp.StatusCode)
-	}
-	m.disarmEgress(sb.ID, true)
 }
 
 func TestAPromotedTemplatesCloneEgressesAsItsSourcePool(t *testing.T) {
@@ -877,7 +474,7 @@ func TestAPromotedTemplatesCloneEgressesAsItsSourcePool(t *testing.T) {
 		t.Fatalf("clone policy source %+v layer %q, want the source pool %+v and its pooled layer", clone.PolicySource, clone.Layer, testKey)
 	}
 	dialDoors(t, clone)
-	eval, ok := m.effectivePolicy(m.view.Load(), clone)
+	eval, ok := m.policyOf(m.view.Load(), clone)
 	if !ok {
 		t.Fatal("the clone resolved no policy")
 	}
@@ -921,7 +518,7 @@ func TestAPromotedTemplatesCloneInterceptsAsItsSourcePool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim the template: %v", err)
 	}
-	conn, _ := connectDoor(t, engine.EgressSocketPath(clone.VsockSocket), "api.github.com:443")
+	conn := connectDoor(t, engine.EgressSocketPath(clone.VsockSocket), "api.github.com:443")
 	tc := tls.Client(conn, &tls.Config{ServerName: "api.github.com", InsecureSkipVerify: true})
 	if err = tc.Handshake(); err != nil {
 		t.Fatalf("handshake through the door: %v", err)
@@ -936,7 +533,7 @@ func TestAClaimWithoutEgressGetsNoDoorsWhateverItsPolicy(t *testing.T) {
 	eng.sockRoot = sockRoot(t)
 	pol := &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
-	refillWarmVM(t, m)
+	pin := pinDoor(t, engine.EgressSocketPath(refillWarmVM(t, m).VsockSocket))
 	warm, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{NoEgress: true})
 	if err != nil {
 		t.Fatalf("warm claim: %v", err)
@@ -950,38 +547,17 @@ func TestAClaimWithoutEgressGetsNoDoorsWhateverItsPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim the template: %v", err)
 	}
+	if conn, err := net.Dial("unix", pin); err == nil {
+		_ = conn.Close()
+		t.Error("the warm VM's prebound door accepts")
+	}
 	for _, sb := range []*types.Sandbox{warm, clone} {
-		m.mu.Lock()
-		el, prebound := m.egressListeners[sb.ID], m.egressPrebound[sb.VMName]
-		m.mu.Unlock()
-		if el != nil || prebound != nil || !sb.NoEgress || m.NetRoute(sb) != types.NetRouteNone {
-			t.Errorf("%s: listener %v prebound %v no_egress %v, want no door and the opt-out recorded", sb.ID, el, prebound, sb.NoEgress)
+		if !sb.NoEgress || m.NetRoute(sb) != types.NetRouteNone {
+			t.Errorf("%s: route %q no_egress %v, want no door and the opt-out recorded", sb.ID, m.NetRoute(sb), sb.NoEgress)
 		}
 		if conn, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
 			_ = conn.Close()
 			t.Errorf("%s: the egress door accepts", sb.ID)
-		}
-	}
-}
-
-func TestNetRouteFollowsTheLaneAndTheDoors(t *testing.T) {
-	m := newTestManager(t, newFakeEngine())
-	editView(m, func(v *configView) { v.guardedEgress = true })
-	armed := &types.Sandbox{ID: "sb_armed", Key: testKey}
-	m.egressListeners[armed.ID] = &egressListener{}
-	for _, tc := range []struct {
-		lock bool
-		sb   *types.Sandbox
-		want types.NetRoute
-	}{
-		{false, armed, types.NetRouteRelay},
-		{false, &types.Sandbox{ID: "sb_closed", Key: testKey}, types.NetRouteNone},
-		{false, &types.Sandbox{ID: "sb_nic", Key: egKey}, types.NetRouteDirect},
-		{true, &types.Sandbox{ID: "sb_locked", Key: egKey}, types.NetRouteNone},
-	} {
-		m.lockEgress = tc.lock
-		if got := m.NetRoute(tc.sb); got != tc.want {
-			t.Errorf("%s (lock %v): route %q, want %q", tc.sb.ID, tc.lock, got, tc.want)
 		}
 	}
 }
@@ -1011,7 +587,7 @@ func TestARepromoteCarriesItsNewSourcePool(t *testing.T) {
 
 func dialDoors(t *testing.T, sb *types.Sandbox) {
 	t.Helper()
-	for _, path := range []string{engine.EgressSocketPath(sb.VsockSocket), engine.SocksSocketPath(sb.VsockSocket)} {
+	for _, path := range doorPaths(sb) {
 		conn, err := net.Dial("unix", path)
 		if err != nil {
 			t.Fatalf("door %s: %v", path, err)
@@ -1020,7 +596,48 @@ func dialDoors(t *testing.T, sb *types.Sandbox) {
 	}
 }
 
-func connectDoor(t *testing.T, path, target string) (net.Conn, io.ReadCloser) {
+func doorPaths(sb *types.Sandbox) []string {
+	return []string{engine.EgressSocketPath(sb.VsockSocket), engine.SocksSocketPath(sb.VsockSocket)}
+}
+
+func pinDoors(t *testing.T, sb *types.Sandbox) []string {
+	t.Helper()
+	var pins []string
+	for _, path := range doorPaths(sb) {
+		pins = append(pins, pinDoor(t, path))
+	}
+	return pins
+}
+
+// pinDoor hard-links a door's socket file, so a rebind cannot reuse its inode and a leaked listener still answers there.
+func pinDoor(t *testing.T, path string) string {
+	t.Helper()
+	pin := path + ".pin"
+	if err := os.Link(path, pin); err != nil {
+		t.Fatalf("pin door %s: %v", path, err)
+	}
+	return pin
+}
+
+func servesPinned(t *testing.T, sb *types.Sandbox, pins []string) bool {
+	t.Helper()
+	for i, path := range doorPaths(sb) {
+		door, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("door %s: %v", path, err)
+		}
+		pin, err := os.Stat(pins[i])
+		if err != nil {
+			t.Fatalf("pin %s: %v", pins[i], err)
+		}
+		if !os.SameFile(door, pin) {
+			return false
+		}
+	}
+	return true
+}
+
+func connectDoor(t *testing.T, path, target string) net.Conn {
 	t.Helper()
 	conn, err := net.DialTimeout("unix", path, 2*time.Second)
 	if err != nil {
@@ -1039,7 +656,7 @@ func connectDoor(t *testing.T, path, target string) (net.Conn, io.ReadCloser) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("CONNECT answered %s", resp.Status)
 	}
-	return conn, resp.Body
+	return conn
 }
 
 func refillWarmVM(t *testing.T, m *Manager) *types.Sandbox {
@@ -1136,4 +753,46 @@ func mustHostname(t *testing.T, raw string) string {
 		t.Fatalf("parse %q: %v", raw, err)
 	}
 	return u.Hostname()
+}
+
+func withOutbound(m *Manager, edit func(*outbound.Options)) {
+	o := m.outboundOptions(m.out.CA())
+	edit(&o)
+	m.out = outbound.New(o)
+}
+
+type tapLog struct {
+	mu      sync.Mutex
+	locks   []string
+	unlocks []string
+}
+
+func (l *tapLog) record(o *outbound.Options) {
+	o.Lock, o.Unlock = l.lock, l.unlock
+}
+
+func (l *tapLog) lock(tap string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.locks = append(l.locks, tap)
+	return nil
+}
+
+func (l *tapLog) unlock(tap string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.unlocks = append(l.unlocks, tap)
+	return nil
+}
+
+func (l *tapLog) locked() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.locks)
+}
+
+func (l *tapLog) unlocked() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.unlocks)
 }

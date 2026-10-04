@@ -8,7 +8,6 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -66,8 +65,8 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 	}
 	if fresh := env.InjectsChanged(prev); fresh != nil {
 		v := m.view.Load()
-		eval, ok := m.effectivePolicyLocked(v, sb)
-		if gap := v.injectGap(eval, ok, sb, fresh); len(gap) > 0 {
+		eval, ok := m.policyOfLocked(v, sb)
+		if gap := v.out.InjectGap(eval, ok, sb, fresh); len(gap) > 0 {
 			m.mu.Unlock()
 			return fmt.Errorf("%w: inject %s", ErrBadEnv, strings.Join(gap, ", "))
 		}
@@ -133,17 +132,11 @@ func (m *Manager) deliverEnv(ctx context.Context, sbs []*types.Sandbox, inherite
 	return group.Wait()
 }
 
-// checkEnv admits an env this node can serve: its upstream entry, and inject headers the proxy may set.
 func (m *Manager) checkEnv(env types.Env) error {
-	for name, v := range env {
-		if v.Inject == nil || v.Inject.Header == "" {
-			continue
-		}
-		if err := egress.CheckInjectHeader(v.Inject.Header); err != nil {
-			return fmt.Errorf("%w: env %s: inject %w", ErrBadEnv, name, err)
-		}
+	if err := m.view.Load().out.CheckEnv(env); err != nil {
+		return fmt.Errorf("%w: %w", ErrBadEnv, err)
 	}
-	return m.checkUpstreamEnv(env)
+	return nil
 }
 
 func (m *Manager) checkInjects(v *configView, sbs []*types.Sandbox) error {
@@ -151,8 +144,8 @@ func (m *Manager) checkInjects(v *configView, sbs []*types.Sandbox) error {
 		if !sb.Env.HasInject() {
 			continue
 		}
-		eval, ok := m.effectivePolicy(v, sb)
-		if gap := v.injectGap(eval, ok, sb, sb.Env); len(gap) > 0 {
+		eval, ok := m.policyOf(v, sb)
+		if gap := v.out.InjectGap(eval, ok, sb, sb.Env); len(gap) > 0 {
 			return fmt.Errorf("%w: inject %s", ErrBadEnv, strings.Join(gap, ", "))
 		}
 	}
@@ -164,31 +157,4 @@ func (m *Manager) heldGuestEnv(sb *types.Sandbox) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return sb.Env.HasGuest()
-}
-
-var _ egress.Secrets = claimSecrets{}
-
-// claimSecrets resolves a rule's secret to the claim's host-only env first, the node's value second.
-type claimSecrets struct {
-	m  *Manager
-	sb *types.Sandbox
-}
-
-func (c claimSecrets) Header(name string) (header, value string, ok bool) {
-	secrets := c.m.view.Load().secrets
-	if header, value, ok = secrets.Header(name); !ok {
-		return "", "", false
-	}
-	if own, set := c.sb.HiddenEnv(secrets.EnvName(name)); set {
-		value = own
-	}
-	return header, value, true
-}
-
-func (c claimSecrets) Credentials(host string) []egress.Credential {
-	var out []egress.Credential
-	for name, v := range c.sb.Injections(host) {
-		out = append(out, egress.Credential{Name: name, Header: v.Inject.Header, Query: v.Inject.Query, Body: v.Inject.Body, Value: v.Value, Placeholder: v.Inject.Placeholder})
-	}
-	return out
 }

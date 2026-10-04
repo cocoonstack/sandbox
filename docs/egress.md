@@ -103,7 +103,7 @@ those four verbs are refused (409) on it.
 The proxy also refuses to connect to internal addresses — every IANA
 special-purpose range that is not globally reachable (loopback, link-local
 incl. cloud metadata, private, carrier-grade NAT, benchmarking, documentation,
-reserved, per the registry snapshot in `sandboxd/pool/egress.go`) plus the IPv4-embedding
+reserved, per the registry snapshot in `sandboxd/outbound/dial.go`) plus the IPv4-embedding
 IPv6 forms (NAT64, 6to4, Teredo, IPv4-compatible) — so an allow-listed host
 that resolves, or is rebound, to one cannot reach the sandboxd host or a
 sibling VM.

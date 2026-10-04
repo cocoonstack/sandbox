@@ -167,7 +167,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 	now := time.Now()
 	var locked map[string]bool
 	var lockedErr error
-	if m.lockEgress {
+	if m.out.LocksNICs() {
 		locked, lockedErr = netfilter.LockedTaps()
 	}
 	var quarantine []*types.Sandbox
@@ -178,11 +178,11 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 			continue
 		}
 		// a down egress-lane VM has no guest to lock or mark; the liveness pass fails it
-		if m.locksNIC(sb.Key) && live[sb.VMName].State != vmStateRunning {
+		if m.out.LocksNIC(sb.Key) && live[sb.VMName].State != vmStateRunning {
 			m.readoptEgressTap(sb, live)
 			continue
 		}
-		if m.locksNIC(sb.Key) {
+		if m.out.LocksNIC(sb.Key) {
 			tap := m.readoptEgressTap(sb, live)
 			if tap == "" {
 				logger.Errorf(ctx, errNoEgressTap, "egress claim %s has no lockable tap; quarantining", sb.ID)
@@ -191,10 +191,10 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 			}
 			err := lockedErr
 			if err == nil && !locked[tap] {
-				err = netfilter.Lock(tap)
+				err = m.out.LockTap(tap)
 			}
 			if err == nil && !locked[tap] {
-				err = m.markLane(ctx, sb.Key, sb.VsockSocket)
+				err = m.out.MarkLane(ctx, sb.Key, sb.VsockSocket)
 			}
 			if err != nil {
 				logger.Errorf(ctx, err, "ensure egress lock %s; quarantining", sb.ID)
@@ -202,7 +202,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 				continue
 			}
 		}
-		if proxyErr := m.armEgressProxy(ctx, sb); proxyErr != nil {
+		if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
 			logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 		}
 	}
@@ -248,8 +248,8 @@ func (m *Manager) readoptEgressTap(sb *types.Sandbox, live map[string]types.VMRe
 	if !ok || tap == "" {
 		return ""
 	}
+	m.out.KeepLock(sb.ID, tap)
 	m.mu.Lock()
-	m.egressTaps[sb.ID] = tap
 	sb.TAP = tap
 	m.store.set(sb)
 	m.mu.Unlock()

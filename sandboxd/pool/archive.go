@@ -131,7 +131,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		return fmt.Errorf("archive %s: persist claims: %w", sb.ID, saveErr)
 	}
 	// disarm under Transition so a wake right after the release is not clobbered by a late disarm
-	m.disarmEgress(sb.ID, true)
+	m.out.Disarm(sb.ID, true)
 	sb.Transition.Unlock()
 	// the store ck is authoritative from here
 	m.destroy(ctx, vmName)
@@ -186,7 +186,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
 	}
 	// only the none lane reaches here, so there is no NIC to re-lock
-	if proxyErr := m.armEgressProxy(ctx, sb); proxyErr != nil {
+	if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
 		logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 	}
 	if m.disarmIfReleased(sb) {

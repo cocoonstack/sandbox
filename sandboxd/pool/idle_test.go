@@ -12,6 +12,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -123,13 +124,13 @@ func TestEgressRequestInFlightBlocksIdleSweep(t *testing.T) {
 	t.Cleanup(origin.Close)
 	pol := &egress.Policy{Allow: []egress.Rule{{Host: mustHostname(t, origin.URL)}}}
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, IdleHibernateSeconds: 1, Egress: pol})
-	m.dial = (&net.Dialer{}).DialContext
+	withOutbound(m, func(o *outbound.Options) { o.Dial = (&net.Dialer{}).DialContext })
 	sb := vsockSandbox(t, "sb_inflight")
 	sb.VMName = "sbx-inflight-1"
 	m.mu.Lock()
 	m.claimed[sb.ID] = sb
 	m.mu.Unlock()
-	if armErr := m.armEgressProxy(t.Context(), sb); armErr != nil {
+	if armErr := m.out.ArmProxy(t.Context(), sb); armErr != nil {
 		t.Fatalf("arm proxy: %v", armErr)
 	}
 	result := make(chan error, 1)

@@ -107,7 +107,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 		err = m.warmClone(ctx, sb)
 	}
 	if err == nil {
-		m.prebindEgress(ctx, sb)
+		m.out.Prebind(ctx, sb)
 	}
 	keep := false
 	var fails int
@@ -227,11 +227,11 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, v *configView, key types
 	if err != nil {
 		return err
 	}
-	if err = m.markLane(ctx, key, sock); err != nil {
+	if err = m.out.MarkLane(ctx, key, sock); err != nil {
 		return err
 	}
-	if v.poolEgress[key].Intercepts() {
-		if err = m.eng.InstallCACert(ctx, sock, m.egressCA.CertPEM()); err != nil {
+	if v.out.Intercepts(key) {
+		if err = m.eng.InstallCACert(ctx, sock, m.out.CA().CertPEM()); err != nil {
 			return fmt.Errorf("install egress ca: %w", err)
 		}
 	}
@@ -282,10 +282,10 @@ func (m *Manager) adoptGolden(p *pool, imageID string) bool {
 
 func (m *Manager) goldenStamp(v *configView, key types.PoolKey, imageID string) string {
 	var fp string
-	if v.poolEgress[key].Intercepts() {
-		fp = m.EgressCAFingerprint()
+	if v.out.Intercepts(key) {
+		fp = m.out.CAFingerprint()
 	}
-	fields := []string{fp, string(m.laneOf(key)), imageID}
+	fields := []string{fp, string(m.out.Lane(key)), imageID}
 	// only a sized pool stamps its disk, in bytes so "40G" and "40GiB" match and unsized goldens stay adoptable
 	if storage := v.poolStorage[key]; storage != "" {
 		n, _ := config.StorageBytes(storage)
@@ -403,13 +403,13 @@ func (m *Manager) provisionCold(ctx context.Context, key types.PoolKey) (*types.
 	if err != nil {
 		return nil, err
 	}
-	if err := m.markLane(ctx, key, sb.VsockSocket); err != nil {
+	if err := m.out.MarkLane(ctx, key, sb.VsockSocket); err != nil {
 		m.destroy(ctx, sb.VMName)
 		return nil, err
 	}
 	// a pre-golden cold claim must trust the root, or intercepted hosts fail TLS for its life
-	if m.view.Load().poolEgress[key].Intercepts() {
-		if err := m.eng.InstallCACert(ctx, sb.VsockSocket, m.egressCA.CertPEM()); err != nil {
+	if m.view.Load().out.Intercepts(key) {
+		if err := m.eng.InstallCACert(ctx, sb.VsockSocket, m.out.CA().CertPEM()); err != nil {
 			m.destroy(ctx, sb.VMName)
 			return nil, fmt.Errorf("install egress ca: %w", err)
 		}

@@ -1,8 +1,10 @@
 package pool
 
 import (
+	"slices"
 	"testing"
 
+	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -71,13 +73,17 @@ func TestRemovalRetryConvergesConfirmedSurvivor(t *testing.T) {
 func TestRemovalRetryFinishesEgressCleanup(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	m.lockEgress = true
+	var taps tapLog
+	withOutbound(m, func(o *outbound.Options) {
+		o.LockNIC = true
+		taps.record(o)
+	})
 	eng.vms["survivor"] = "/run/survivor.sock"
 	eng.removeErrFor = "survivor"
-	m.egressTaps["sb_survivor"] = "tap-survivor"
+	m.out.KeepLock("sb_survivor", "tap-survivor")
 
 	removed := m.removeOrRetry(t.Context(), "survivor", "sb_survivor", "", volumeTeardown{})
-	m.disarmEgress("sb_survivor", removed)
+	m.out.Disarm("sb_survivor", removed)
 	if removed {
 		t.Fatal("surviving VM reported gone")
 	}
@@ -88,11 +94,10 @@ func TestRemovalRetryFinishesEgressCleanup(t *testing.T) {
 	m.retryRemovals(t.Context()).Wait()
 	m.mu.Lock()
 	_, pending := m.pendingRemovals["survivor"]
-	_, locked := m.egressTaps["sb_survivor"]
 	m.mu.Unlock()
-	if pending || locked || !eng.removed("survivor") {
-		t.Fatalf("egress cleanup incomplete: pending=%v locked=%v removed=%v",
-			pending, locked, eng.removed("survivor"))
+	if unlocked := taps.unlocked(); pending || !slices.Equal(unlocked, []string{"tap-survivor"}) || !eng.removed("survivor") {
+		t.Fatalf("egress cleanup incomplete: pending=%v unlocked=%v removed=%v",
+			pending, unlocked, eng.removed("survivor"))
 	}
 }
 

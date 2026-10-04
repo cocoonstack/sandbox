@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -34,7 +36,7 @@ func TestClaimEnvFeedsTheLiveProxysSecrets(t *testing.T) {
 		{Host: host, Secret: "gw"},
 	}}
 	m := envManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
-	m.dial = (&net.Dialer{}).DialContext
+	withOutbound(m, func(o *outbound.Options) { o.Dial = (&net.Dialer{}).DialContext })
 	refillWarmVM(t, m)
 
 	sb, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{Env: types.Env{"GH_TOKEN": {Value: "Bearer claim", Guest: hostOnly}}})
@@ -472,7 +474,7 @@ func TestAnInjectNeedsAHostThePoolIntercepts(t *testing.T) {
 	if err := m.PatchEnv(t.Context(), sb.ID, injectPatch("X-Api-Key", "api.github.com", "*.corp.test"), ""); err != nil {
 		t.Fatalf("an intercepted inject: %v", err)
 	}
-	if got := credentialsFor(m, sb, "git.corp.test"); got != "KEY:X-Api-Key=k" {
+	if got := credentialsFor(sb, "git.corp.test"); got != "KEY:X-Api-Key=k" {
 		t.Errorf("credentials for git.corp.test %q, want KEY:X-Api-Key=k", got)
 	}
 }
@@ -482,8 +484,8 @@ func TestAnInjectNeedsTheTenantClassToAllowTheHost(t *testing.T) {
 	eng := newFakeEngine()
 	eng.sockRoot = sockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
-	editView(m, func(v *configView) {
-		v.classEgress = map[string]*egress.Policy{"desk": {Allow: []egress.Rule{{Host: "*.corp.test"}}}}
+	editEgress(t, m, func(cfg *config.Config) {
+		cfg.EgressClasses = []config.EgressClass{{Name: "desk", Egress: &egress.Policy{Allow: []egress.Rule{{Host: "*.corp.test"}}}}}
 	})
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme", EgressClass: "desk"})
 	if err != nil {
@@ -527,7 +529,7 @@ func TestEachClaimInjectsItsOwnCredentialAndAHostOnlyChangeNeedsNoGuest(t *testi
 		return sb
 	}
 	a, b, plain := claim("a"), claim("b"), mustClaim(t, m, testKey)
-	if got := credentialsFor(m, a, "api.github.com") + "|" + credentialsFor(m, b, "api.github.com") + "|" + credentialsFor(m, plain, "api.github.com"); got != "KEY:X-Api-Key=a|KEY:X-Api-Key=b|" {
+	if got := credentialsFor(a, "api.github.com") + "|" + credentialsFor(b, "api.github.com") + "|" + credentialsFor(plain, "api.github.com"); got != "KEY:X-Api-Key=a|KEY:X-Api-Key=b|" {
 		t.Errorf("credentials %q, want each claim's own and none for the plain claim", got)
 	}
 	m.mu.Lock()
@@ -536,11 +538,11 @@ func TestEachClaimInjectsItsOwnCredentialAndAHostOnlyChangeNeedsNoGuest(t *testi
 	if err := m.PatchEnv(t.Context(), a.ID, types.EnvPatch{"KEY": {Value: "a2", Guest: hostOnly, Inject: &types.EnvInject{Hosts: []string{"api.github.com"}, Header: "X-Api-Key"}}}, ""); err != nil {
 		t.Fatalf("rotate on a hibernated claim: %v", err)
 	}
-	if got, wrote := eng.guestEnvs[a.VsockSocket]; wrote || credentialsFor(m, a, "api.github.com") != "KEY:X-Api-Key=a2" {
-		t.Errorf("guest file %q (written %v), credentials %q; want no guest write and the rotated value", got, wrote, credentialsFor(m, a, "api.github.com"))
+	if got, wrote := eng.guestEnvs[a.VsockSocket]; wrote || credentialsFor(a, "api.github.com") != "KEY:X-Api-Key=a2" {
+		t.Errorf("guest file %q (written %v), credentials %q; want no guest write and the rotated value", got, wrote, credentialsFor(a, "api.github.com"))
 	}
-	if err := m.SetEnv(t.Context(), b.ID, types.Env{}, ""); err != nil || credentialsFor(m, b, "api.github.com") != "" {
-		t.Errorf("clear: %v, credentials %q; want none", err, credentialsFor(m, b, "api.github.com"))
+	if err := m.SetEnv(t.Context(), b.ID, types.Env{}, ""); err != nil || credentialsFor(b, "api.github.com") != "" {
+		t.Errorf("clear: %v, credentials %q; want none", err, credentialsFor(b, "api.github.com"))
 	}
 }
 
@@ -562,15 +564,15 @@ func TestInjectsSurviveARestartAndAReloadThatDropsTheInterceptStopsThem(t *testi
 	m2.mu.Lock()
 	restored := m2.claimed[sb.ID]
 	m2.mu.Unlock()
-	if got := credentialsFor(m2, restored, "api.github.com"); got != "KEY:X-Api-Key=k" {
+	if got := credentialsFor(restored, "api.github.com"); got != "KEY:X-Api-Key=k" {
 		t.Errorf("credentials after a restart %q, want the persisted inject", got)
 	}
-	editView(m2, func(v *configView) {
-		v.poolEgress[testKey] = &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com"}}}
+	editEgress(t, m2, func(cfg *config.Config) {
+		cfg.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com"}}}}}
 	})
 	v := m2.view.Load()
-	eval, ok := m2.effectivePolicy(v, restored)
-	if gap := v.injectGap(eval, ok, restored, env); len(gap) != 1 {
+	eval, ok := m2.policyOf(v, restored)
+	if gap := v.out.InjectGap(eval, ok, restored, env); len(gap) != 1 {
 		t.Errorf("gap after the intercept rule went %v, want the inject named", gap)
 	}
 }
@@ -595,9 +597,15 @@ func TestAnInjectShapeRidesTheEnvWriteIntoTheCredential(t *testing.T) {
 			if err := m.PatchEnv(t.Context(), sb.ID, types.EnvPatch{"KEY": {Value: "k", Guest: hostOnly, Inject: &inject}}, ""); err != nil {
 				t.Fatalf("patch: %v", err)
 			}
-			want := egress.Credential{Name: "KEY", Header: inject.Header, Query: inject.Query, Body: inject.Body, Value: "k", Placeholder: inject.Placeholder}
-			if creds := (claimSecrets{m: m, sb: sb}).Credentials(tt.host); len(creds) != 1 || creds[0] != want {
-				t.Errorf("credentials %+v, want [%+v]", creds, want)
+			var names []string
+			for name, v := range sb.Injections(tt.host) {
+				names = append(names, name)
+				if in := v.Inject; v.Value != "k" || in.Header != inject.Header || in.Query != inject.Query || in.Body != inject.Body || in.Placeholder != inject.Placeholder {
+					t.Errorf("%s injects %q with %+v, want k with %+v", name, v.Value, *in, inject)
+				}
+			}
+			if !slices.Equal(names, []string{"KEY"}) {
+				t.Errorf("injections into %s %v, want KEY", tt.host, names)
 			}
 		})
 	}
@@ -611,8 +619,8 @@ func TestALostInterceptRefusesOnlyAChangedInject(t *testing.T) {
 	if err := m.PatchEnv(t.Context(), sb.ID, injectPatch("X-Api-Key", "api.github.com"), ""); err != nil {
 		t.Fatalf("inject: %v", err)
 	}
-	editView(m, func(v *configView) {
-		v.poolEgress[testKey] = &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com"}}}
+	editEgress(t, m, func(cfg *config.Config) {
+		cfg.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com"}}}}}
 	})
 	if err := m.PatchEnv(t.Context(), sb.ID, types.EnvPatch{"OTHER": {Value: "o", Guest: hostOnly}}, ""); err != nil {
 		t.Errorf("an unrelated patch after the intercept went: %v", err)
@@ -622,64 +630,14 @@ func TestALostInterceptRefusesOnlyAChangedInject(t *testing.T) {
 	}
 }
 
-func BenchmarkClaimSecretsHeader(b *testing.B) {
-	b.Setenv("GH_TOKEN", "node-gh")
-	store, err := egress.NewSecretStore([]egress.SecretSpec{{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"}})
-	if err != nil {
-		b.Fatalf("secrets: %v", err)
-	}
-	m := &Manager{}
-	m.view.Store(&configView{secrets: store})
-	b.Run("node-store-only", func(b *testing.B) {
-		for b.Loop() {
-			_, _, _ = store.Header("gh")
-		}
-	})
-	for _, arm := range []string{"no-claim-env", "claim-env"} {
-		sb := &types.Sandbox{}
-		if arm == "claim-env" {
-			sb.SetEnv(types.Env{"GH_TOKEN": {Value: "Bearer claim", Guest: hostOnly}, "MODE": {Value: "on"}})
-		}
-		b.Run(arm, func(b *testing.B) {
-			for b.Loop() {
-				_, _, _ = claimSecrets{m: m, sb: sb}.Header("gh")
-			}
-		})
-		b.Run(arm+"/credentials", func(b *testing.B) {
-			for b.Loop() {
-				_ = claimSecrets{m: m, sb: sb}.Credentials("api.example.com")
-			}
-		})
-	}
-	sb := &types.Sandbox{}
-	sb.SetEnv(types.Env{"KEY": {Value: "k", Guest: hostOnly, Inject: &types.EnvInject{Hosts: []string{"api.example.com"}, Header: "X-Key"}}})
-	b.Run("inject/credentials", func(b *testing.B) {
-		for b.Loop() {
-			_ = claimSecrets{m: m, sb: sb}.Credentials("api.example.com")
-		}
-	})
-	many := types.Env{}
-	for i := range 64 {
-		many[fmt.Sprintf("KEY_%d", i)] = types.EnvVar{Value: "k", Guest: hostOnly, Inject: &types.EnvInject{Hosts: []string{fmt.Sprintf("api%d.example.com", i), "*.vendor.example"}, Header: "X-Key"}}
-	}
-	sb = &types.Sandbox{}
-	sb.SetEnv(many)
-	b.Run("64-injects/miss", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			_ = claimSecrets{m: m, sb: sb}.Credentials("other.example.com")
-		}
-	})
-}
-
 func injectPatch(header string, hosts ...string) types.EnvPatch {
 	return types.EnvPatch{"KEY": {Value: "k", Guest: hostOnly, Inject: &types.EnvInject{Hosts: hosts, Header: header}}}
 }
 
-func credentialsFor(m *Manager, sb *types.Sandbox, host string) string {
+func credentialsFor(sb *types.Sandbox, host string) string {
 	var out []string
-	for _, c := range (claimSecrets{m: m, sb: sb}).Credentials(host) {
-		out = append(out, c.Name+":"+c.Header+"="+c.Value)
+	for name, v := range sb.Injections(host) {
+		out = append(out, name+":"+v.Inject.Header+"="+v.Value)
 	}
 	return strings.Join(out, ",")
 }

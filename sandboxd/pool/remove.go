@@ -11,11 +11,10 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
-	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 )
 
 func (m *Manager) removeVM(ctx context.Context, name string) bool {
-	m.closePrebound(name)
+	m.out.ClosePrebound(name)
 	// cancellation-immune: on a canceled ctx `cocoon vm rm` no-ops and orphans.
 	ctx = context.WithoutCancel(ctx)
 	err := m.eng.Remove(ctx, name)
@@ -108,9 +107,9 @@ func (m *Manager) retryRemoval(ctx context.Context, name string, pending pending
 func (m *Manager) finishRemoval(ctx context.Context, pending pendingRemoval) {
 	m.finishVolumeTeardown(ctx, pending.volumes)
 	if pending.sandboxID != "" {
-		m.disarmEgress(pending.sandboxID, true)
+		m.out.Disarm(pending.sandboxID, true)
 	} else if pending.tap != "" {
-		_ = netfilter.Unlock(pending.tap)
+		_ = m.out.UnlockTap(pending.tap)
 	}
 }
 

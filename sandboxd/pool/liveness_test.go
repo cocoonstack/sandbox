@@ -229,7 +229,7 @@ func TestWakeOfAFailedClaimRearmsEgressAfterARestart(t *testing.T) {
 	door := engine.EgressSocketPath(sb.VsockSocket)
 	killVMM(eng, sb.VMName)
 	first.recoverVMM(t.Context(), sb)
-	first.disarmEgress(sb.ID, false)
+	first.out.Disarm(sb.ID, false)
 
 	second, err := NewManager(t.Context(), cfg, eng, testSecrets(t))
 	if err != nil {
@@ -412,16 +412,20 @@ func TestResyncRecordsADownEgressLaneTap(t *testing.T) {
 		NetworkConfigs: []types.VMNetConfig{{TAP: "tap-down"}},
 	}}
 	m.sweep = func(map[string]bool) error { return nil }
+	var taps tapLog
+	withOutbound(m, taps.record)
 
 	m.resyncEgress(t.Context(), live, map[string]bool{})
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.claimed[sb.ID] != sb {
+	kept := m.claimed[sb.ID] == sb
+	m.mu.Unlock()
+	if !kept {
 		t.Fatal("down egress-lane claim quarantined, want it kept for the liveness pass")
 	}
-	if m.egressTaps[sb.ID] != "tap-down" {
-		t.Errorf("egress tap %q, want tap-down recorded so release unlocks it", m.egressTaps[sb.ID])
+	m.out.Disarm(sb.ID, true)
+	if got := taps.unlocked(); !slices.Equal(got, []string{"tap-down"}) {
+		t.Errorf("release unlocked %v, want tap-down recorded so release unlocks it", got)
 	}
 }
 
