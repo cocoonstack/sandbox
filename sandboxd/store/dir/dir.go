@@ -1,6 +1,4 @@
-// Package dir is the directory record backend: plain files under a
-// root whose filesystem is the operator's choice — local disk keeps
-// records node-local, a shared FUSE mount makes them cluster-wide.
+// Package dir keeps records as plain files under a root: local disk keeps them node-local, a shared FUSE mount makes them cluster-wide.
 package dir
 
 import (
@@ -94,7 +92,7 @@ func (d *Store) Fetch(ctx context.Context, id string) (string, []byte, string, e
 
 func (d *Store) ReadMeta(_ context.Context, id string) ([]byte, error) {
 	raw, err := os.ReadFile(filepath.Join(d.root, id, store.MetaFile)) //nolint:gosec // id pinned by the instance idRe before any call
-	if os.IsNotExist(err) {
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil, store.ErrNotFound
 	}
 	return raw, err

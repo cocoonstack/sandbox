@@ -693,7 +693,7 @@ func (m *Manager) activePool(key types.PoolKey) (*pool, bool) {
 
 func (m *Manager) validate(key types.PoolKey) error {
 	if err := key.Validate(); err != nil {
-		return fmt.Errorf("%w: %v", ErrBadKey, err)
+		return fmt.Errorf("%w: %w", ErrBadKey, err)
 	}
 	if key.Net == types.NetEgress && !m.egress {
 		return ErrNoEgress

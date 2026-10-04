@@ -93,7 +93,7 @@ func TestARoleWithoutCreateServesAPreCreatedTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer func() { _ = admin.Close(context.Background()) }()
+	defer func() { _ = admin.Close(t.Context()) }()
 	for _, sql := range []string{
 		"CREATE ROLE " + role + " LOGIN PASSWORD 'p'",
 		"GRANT USAGE ON SCHEMA " + schema + " TO " + role,
