@@ -600,14 +600,7 @@ func BenchmarkMetas(b *testing.B) {
 	}
 	for i := range 2000 {
 		id := fmt.Sprintf("ck_%016x", i)
-		staging, stageErr := st.Stage(id)
-		if stageErr != nil {
-			b.Fatalf("Stage: %v", stageErr)
-		}
-		seedRecord(b, staging, id)
-		if err = st.Publish(b.Context(), staging, id); err != nil {
-			b.Fatalf("Publish: %v", err)
-		}
+		mustPublish(b, st, id, id)
 	}
 	b.ReportAllocs()
 	for b.Loop() {
@@ -646,7 +639,7 @@ func installUncommitted(t *testing.T, st *Store, root, id, metaID string) (meta 
 	return meta, gen
 }
 
-func mustPublish(t *testing.T, st *Store, id, metaID string) {
+func mustPublish(t testing.TB, st *Store, id, metaID string) {
 	t.Helper()
 	staging, err := st.Stage(id)
 	if err != nil {

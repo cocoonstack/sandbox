@@ -645,12 +645,9 @@ func (s *Server) handleCheckpointProbe(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListCheckpoints(w http.ResponseWriter, r *http.Request) {
 	ckpts, err := s.mgr.Checkpoints(r.Context(), tenantFrom(r.Context()))
-	if err != nil {
-		log.WithFunc("server.handleListCheckpoints").Error(r.Context(), err, "list checkpoints")
-		writeErr(w, http.StatusInternalServerError, "list checkpoints failed")
-		return
-	}
-	writeJSON(w, http.StatusOK, types.CheckpointListResponse{Checkpoints: ckpts})
+	writeResult(w, r, "list checkpoints", "", "list checkpoints failed", err, func() {
+		writeJSON(w, http.StatusOK, types.CheckpointListResponse{Checkpoints: ckpts})
+	})
 }
 
 func (s *Server) handleDeleteCheckpoint(w http.ResponseWriter, r *http.Request) {
@@ -706,14 +703,7 @@ func (s *Server) handlePutPools(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.mgr.SetPools(r.Context(), req.Pools)
-	switch {
-	case writePoolErr(w, err):
-	case err != nil:
-		log.WithFunc("server.handlePutPools").Error(r.Context(), err, "set pools")
-		writeErr(w, http.StatusInternalServerError, "set pools failed")
-	default:
-		s.handleInfo(w, r)
-	}
+	writeResult(w, r, "set pools", "", "set pools failed", err, func() { s.handleInfo(w, r) })
 }
 
 func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
