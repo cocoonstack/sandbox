@@ -737,20 +737,6 @@ func newRequest(t *testing.T, method, target, body string) *http.Request {
 	return req
 }
 
-func send(t *testing.T, tc *tls.Conn, req *http.Request) reply {
-	t.Helper()
-	if err := req.Write(tc); err != nil {
-		t.Fatalf("write request: %v", err)
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(tc), req)
-	if err != nil {
-		t.Fatalf("read response: %v", err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	return reply{status: resp.StatusCode, header: resp.Header, body: string(body)}
-}
-
 type echoed struct {
 	Key, Empty, Query, Body string
 	Length                  int64
@@ -771,6 +757,20 @@ func (r reply) seen(t *testing.T) (echoed, string) {
 		t.Fatalf("echo report %q", r.body)
 	}
 	return e, reflected
+}
+
+func send(t *testing.T, tc *tls.Conn, req *http.Request) reply {
+	t.Helper()
+	if err := req.Write(tc); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(tc), req)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	return reply{status: resp.StatusCode, header: resp.Header, body: string(body)}
 }
 
 func readPreamble(tb testing.TB, conn net.Conn) string {

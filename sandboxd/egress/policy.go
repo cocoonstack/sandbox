@@ -21,7 +21,7 @@ const (
 // Decision is the policy verdict for one request.
 type Decision int
 
-// InterceptMode is a rule's "intercept": false, true, or "inject" for only the claims that inject on the host; a higher mode outranks a lower one for the same host.
+// InterceptMode is a rule's "intercept"; "inject" intercepts only for a claim that injects on the host, and a higher mode outranks a lower one.
 type InterceptMode uint8
 
 func (m InterceptMode) MarshalJSONTo(enc *jsontext.Encoder) error {
@@ -169,7 +169,7 @@ func (p Policy) EvalHost(host string, port uint16) (Rule, Decision) {
 	return p.Allow[best], DecisionAllow
 }
 
-// EvalInner matches only rules of the mode EvalHost picks for the host, so a plain rule cannot shadow or rescue an intercept rule and an always rule shadows an inject rule.
+// EvalInner matches only rules of the mode EvalHost picks for the host, so a lower mode never shadows or rescues it.
 func (p Policy) EvalInner(host, method string, port uint16) (Rule, Decision) {
 	top, d := p.EvalHost(host, port)
 	if d == DecisionDeny || top.Intercept == InterceptOff {
