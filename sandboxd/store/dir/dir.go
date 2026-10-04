@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ const (
 	digestPrefix         = "digest-"
 	digestWorkerLimit    = 8
 	digestReadBufferSize = 128 << 10
+	metaWorkerLimit      = 32
 )
 
 type digestSource struct {
@@ -103,30 +105,23 @@ func (d *Store) Metas(ctx context.Context) ([]store.Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	var recs []store.Record
-	for _, e := range entries {
+	recs := make([]store.Record, len(entries))
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(metaWorkerLimit)
+	for i, e := range entries {
 		if !e.IsDir() || !d.idRe.MatchString(e.Name()) {
 			continue
 		}
-		raw, err := d.ReadMeta(ctx, e.Name())
-		switch {
-		case err == nil:
-		case errors.Is(err, store.ErrNotFound): // absence mid-list is a race
-			continue
-		default:
-			return nil, err // a corrupt or unreadable meta must not vanish silently
-		}
-		digest, err := d.readDigest(e.Name(), raw)
-		if err != nil {
-			return nil, err
-		}
-		labels, err := os.ReadFile(filepath.Join(d.root, e.Name(), store.LabelsFile))
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("read labels: %w", err)
-		}
-		recs = append(recs, store.Record{Meta: raw, Digest: digest, Labels: labels})
+		g.Go(func() error {
+			rec, err := d.readRecord(ctx, e.Name())
+			recs[i] = rec
+			return err
+		})
 	}
-	return recs, nil
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(recs, func(r store.Record) bool { return r.Meta == nil }), nil
 }
 
 func (d *Store) SetLabels(_ context.Context, id string, labels []byte) error {
@@ -179,6 +174,26 @@ func (d *Store) SweepGenerations() error {
 		}
 	}
 	return nil
+}
+
+func (d *Store) readRecord(ctx context.Context, id string) (store.Record, error) {
+	raw, err := d.ReadMeta(ctx, id)
+	switch {
+	case err == nil:
+	case errors.Is(err, store.ErrNotFound): // absence mid-list is a race
+		return store.Record{}, nil
+	default:
+		return store.Record{}, err // a corrupt or unreadable meta must not vanish silently
+	}
+	digest, err := d.readDigest(id, raw)
+	if err != nil {
+		return store.Record{}, err
+	}
+	labels, err := os.ReadFile(filepath.Join(d.root, id, store.LabelsFile)) //nolint:gosec // id pinned by the instance idRe
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return store.Record{}, fmt.Errorf("read labels: %w", err)
+	}
+	return store.Record{Meta: raw, Digest: digest, Labels: labels}, nil
 }
 
 func (d *Store) publish(_ context.Context, staging, id, digest string) error {
