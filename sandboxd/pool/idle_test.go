@@ -21,17 +21,18 @@ func TestIdleOnceHibernatesPastThreshold(t *testing.T) {
 		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, IdleHibernateSeconds: 1})
 		sb := mustClaim(t, m, testKey)
 
-		m.idleOnce(t.Context())
+		sweepIdle(t, m)
 		if hibernated(m) != 0 {
 			t.Fatal("fresh claim hibernated before its threshold")
 		}
 
 		backdate(m, sb, 2*time.Second)
-		m.idleOnce(t.Context())
-		waitFor(t, func() bool { return hibernated(m) == 1 })
+		sweepIdle(t, m)
+		if hibernated(m) != 1 {
+			t.Fatal("idle claim was not hibernated")
+		}
 
-		m.idleOnce(t.Context())
-		waitFor(t, func() bool { return !m.idleSweep.Load() })
+		sweepIdle(t, m)
 		if hibernated(m) != 1 {
 			t.Error("second sweep disturbed the hibernated claim")
 		}
@@ -46,8 +47,7 @@ func TestIdleOncePolicyScope(t *testing.T) {
 
 		sb := mustClaim(t, m, testKey)
 		backdate(m, sb, time.Hour)
-		m.idleOnce(t.Context())
-		waitFor(t, func() bool { return !m.idleSweep.Load() })
+		sweepIdle(t, m)
 		if hibernated(m) != 0 {
 			t.Fatal("pooled key without the policy was idle-hibernated by the node default")
 		}
@@ -58,8 +58,10 @@ func TestIdleOncePolicyScope(t *testing.T) {
 			t.Fatalf("provision: %v", err)
 		}
 		backdate(m, sb2, time.Hour)
-		m.idleOnce(t.Context())
-		waitFor(t, func() bool { return hibernated(m) == 1 })
+		sweepIdle(t, m)
+		if hibernated(m) != 1 {
+			t.Fatal("idle claim was not hibernated")
+		}
 	})
 }
 
@@ -75,8 +77,7 @@ func TestActivityStampsBlockIdleSweep(t *testing.T) {
 			t.Fatalf("WakeAgentSocket: %v", err)
 		}
 		done()
-		m.idleOnce(t.Context())
-		waitFor(t, func() bool { return !m.idleSweep.Load() })
+		sweepIdle(t, m)
 		if hibernated(m) != 0 {
 			t.Fatal("active claim hibernated despite a fresh data-plane stamp")
 		}
@@ -94,22 +95,22 @@ func TestHeldConnectionBlocksIdleSweep(t *testing.T) {
 		}
 
 		backdate(m, sb, time.Hour)
-		m.idleOnce(t.Context())
-		waitFor(t, func() bool { return !m.idleSweep.Load() })
+		sweepIdle(t, m)
 		if hibernated(m) != 0 {
 			t.Fatal("claim with an open connection was idle-hibernated")
 		}
 
 		done()
-		m.idleOnce(t.Context())
-		waitFor(t, func() bool { return !m.idleSweep.Load() })
+		sweepIdle(t, m)
 		if hibernated(m) != 0 {
 			t.Fatal("idle clock did not restart when the connection closed")
 		}
 
 		backdate(m, sb, 2*time.Second)
-		m.idleOnce(t.Context())
-		waitFor(t, func() bool { return hibernated(m) == 1 })
+		sweepIdle(t, m)
+		if hibernated(m) != 1 {
+			t.Fatal("idle claim was not hibernated")
+		}
 	})
 }
 
@@ -141,8 +142,7 @@ func TestEgressRequestInFlightBlocksIdleSweep(t *testing.T) {
 	}()
 	waitFor(t, sb.Busy)
 	backdate(m, sb, time.Hour)
-	m.idleOnce(t.Context())
-	waitFor(t, func() bool { return !m.idleSweep.Load() })
+	sweepIdle(t, m)
 	if hibernated(m) != 0 {
 		t.Fatal("claim with an egress request in flight was idle-hibernated")
 	}
@@ -152,14 +152,21 @@ func TestEgressRequestInFlightBlocksIdleSweep(t *testing.T) {
 		t.Fatalf("request through the proxy: %v", err)
 	}
 	waitFor(t, func() bool { return !sb.Busy() })
-	m.idleOnce(t.Context())
-	waitFor(t, func() bool { return !m.idleSweep.Load() })
+	sweepIdle(t, m)
 	if hibernated(m) != 0 {
 		t.Fatal("idle clock did not restart when the egress request ended")
 	}
 	backdate(m, sb, time.Hour)
+	sweepIdle(t, m)
+	if hibernated(m) != 1 {
+		t.Fatal("idle claim was not hibernated")
+	}
+}
+
+func sweepIdle(t *testing.T, m *Manager) {
+	t.Helper()
 	m.idleOnce(t.Context())
-	waitFor(t, func() bool { return hibernated(m) == 1 })
+	waitFor(t, func() bool { return !m.idleSweep.Load() })
 }
 
 func backdate(m *Manager, sb *types.Sandbox, by time.Duration) {
