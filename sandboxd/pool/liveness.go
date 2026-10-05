@@ -38,7 +38,7 @@ func (m *Manager) livenessOnce(ctx context.Context) {
 	if !m.livenessSweep.CompareAndSwap(false, true) {
 		return
 	}
-	watched := m.watchedClaims()
+	watched := m.watchedClaims("")
 	if len(watched) == 0 {
 		m.livenessSweep.Store(false)
 		return
@@ -93,15 +93,14 @@ func (m *Manager) onVMSync(ctx context.Context, vms []engine.VMStatus) {
 	}
 	m.vmmEvents.Store(true)
 	m.lastVMPoll.Store(time.Now().UnixNano())
-	m.recoverDown(ctx, m.watchedClaims(), up)
+	m.recoverDown(ctx, m.watchedClaims(""), up)
 }
 
 func (m *Manager) onVMChange(ctx context.Context, change engine.VMChange) {
 	if change.VM.Live && change.Kind != engine.VMDeleted {
 		return
 	}
-	watched := slices.DeleteFunc(m.watchedClaims(), func(s liveSuspect) bool { return s.vmName != change.VM.Name })
-	m.recoverDown(ctx, watched, nil)
+	m.recoverDown(ctx, m.watchedClaims(change.VM.Name), nil)
 }
 
 func (m *Manager) recoverDown(ctx context.Context, watched []liveSuspect, up map[string]bool) *sync.WaitGroup {
@@ -109,14 +108,17 @@ func (m *Manager) recoverDown(ctx context.Context, watched []liveSuspect, up map
 	return m.runBounded(ctx, len(down), func(ctx context.Context, i int) { m.recoverVMM(ctx, down[i].sb) })
 }
 
-// watchedClaims lists the claims whose VM should be up, with the VM name read under m.mu.
-func (m *Manager) watchedClaims() []liveSuspect {
+// watchedClaims lists the claims whose VM should be up, only vmName's when it is set, with the VM name read under m.mu.
+func (m *Manager) watchedClaims(vmName string) []liveSuspect {
 	now := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []liveSuspect
 	for _, sb := range m.claimed {
-		if _, archiving := m.archiving[sb.ID]; !archiving && runningShaped(sb) && !m.leaseLapsed(sb, now) {
+		if vmName != "" && sb.VMName != vmName || !runningShaped(sb) {
+			continue
+		}
+		if _, archiving := m.archiving[sb.ID]; !archiving && !m.leaseLapsed(sb, now) {
 			out = append(out, liveSuspect{sb, sb.VMName})
 		}
 	}

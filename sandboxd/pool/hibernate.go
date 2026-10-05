@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -191,12 +192,20 @@ func (m *Manager) idleOnce(ctx context.Context) {
 	type victim struct{ id, token string }
 	var victims []victim
 	m.mu.Lock()
+	if m.idleDefault <= 0 && !slices.ContainsFunc(slices.Collect(maps.Values(m.pools)), func(p *pool) bool { return p.idle > 0 }) {
+		m.mu.Unlock()
+		m.idleSweep.Store(false)
+		return
+	}
 	for _, sb := range m.claimed {
+		if skipIdle(sb) {
+			continue
+		}
 		idle := m.idleDefault
 		if p, pooled := m.activePool(sb.Key); pooled {
 			idle = p.idle
 		}
-		if skipIdle(sb, idle, now) {
+		if idle <= 0 || now.Sub(sb.LastSeen()) < idle {
 			continue
 		}
 		victims = append(victims, victim{sb.ID, sb.Token})
@@ -321,7 +330,7 @@ func (m *Manager) recordHibernate(ctx context.Context, sb *types.Sandbox) {
 	m.recordUsage(ctx, usageEvent{Event: "hibernate", ID: sb.ID, VMName: sb.VMName})
 }
 
-func skipIdle(sb *types.Sandbox, idle time.Duration, now time.Time) bool {
-	return idle <= 0 || sb.Key.Net == types.NetEgress || hasAppliedVolumes(sb) ||
-		sb.HibernateSnap != "" || sb.ArchiveCk != "" || sb.Failed != "" || sb.Busy() || now.Sub(sb.LastSeen()) < idle
+func skipIdle(sb *types.Sandbox) bool {
+	return sb.Key.Net == types.NetEgress || hasAppliedVolumes(sb) ||
+		sb.HibernateSnap != "" || sb.ArchiveCk != "" || sb.Failed != "" || sb.Busy()
 }
