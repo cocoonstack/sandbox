@@ -117,8 +117,7 @@ func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hell
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		// the wrappers hide ReadFrom/WriteTo so the copy keeps silkd's frame size instead of io.Copy's 32 KiB
-		_, err := io.CopyBuffer(struct{ io.Writer }{guest}, struct{ io.Reader }{clientR}, make([]byte, wire.BulkChunk))
+		_, err := io.Copy(guest, clientR)
 		if err != nil {
 			// the client died rather than half-closing, so nothing is left to answer it
 			_ = guest.Close()
