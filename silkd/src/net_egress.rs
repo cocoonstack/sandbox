@@ -10,6 +10,9 @@ pub const HOST_VSOCK_PORT: u32 = 2049;
 pub const SOCKS_LOOPBACK_PORT: u16 = 1080;
 /// Host vsock port of the SOCKS5 proxy, mapped like `HOST_VSOCK_PORT`.
 pub const SOCKS_HOST_VSOCK_PORT: u32 = 2050;
+/// Copy buffer per direction; tokio's 8 KiB default costs a syscall pair per 8 KiB in a one-vCPU guest.
+#[cfg(target_os = "linux")]
+const RELAY_BUF: usize = 64 << 10;
 
 #[cfg(target_os = "linux")]
 pub async fn serve(loopback_port: u16, host_vsock_port: u32) -> io::Result<()> {
@@ -38,7 +41,9 @@ pub async fn serve(loopback_port: u16, host_vsock_port: u32) -> io::Result<()> {
                     return;
                 }
             };
-            let _ = tokio::io::copy_bidirectional(&mut tcp, &mut host).await;
+            let _ =
+                tokio::io::copy_bidirectional_with_sizes(&mut tcp, &mut host, RELAY_BUF, RELAY_BUF)
+                    .await;
         });
     }
 }
