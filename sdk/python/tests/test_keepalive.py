@@ -16,17 +16,18 @@ from cocoonsandbox.frames import KEEP_ALIVE_PROTO
 INPUT_OPS = ("stdin", "stdin_close", "data", "data_end")
 
 
-def test_calls_share_one_connection():
+def test_calls_share_one_connection(fd_floor):
     agent = FakeAgent()
     sb = sandbox_at(agent.addr)
     try:
         for _ in range(3):
             assert sb.stat("/")["kind"] == "dir"
         assert sb.exec("echo", "42") == "42\n"
+        assert sb._pool._parked[0][1]._sock.fileno() >= fd_floor
     finally:
         sb._pool.drain()
         agent.stop()
-    assert agent.upgrades == 1
+    assert agent.upgrades == 1, agent.upgrades
 
 
 def test_a_refused_stream_open_keeps_its_connection():
@@ -75,7 +76,7 @@ def test_idle_connection_closes():
         agent.stop()
 
 
-def test_peer_hang_up_is_noticed_before_reuse():
+def test_peer_hang_up_is_noticed_before_reuse(fd_floor):
     agent = FakeAgent(hang_up_after=2)
     sb = sandbox_at(agent.addr)
     try:

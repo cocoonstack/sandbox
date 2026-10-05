@@ -2,6 +2,8 @@
 that refuse a connection, and the relay-side upgrade handshake."""
 
 import json
+import os
+import resource
 import socket
 import threading
 import time
@@ -68,6 +70,19 @@ def wait_until(cond: Callable[[], bool], message: str) -> None:
             return
         time.sleep(0.01)
     raise AssertionError(message)
+
+
+@pytest.fixture(params=[0, 1024], ids=["low_fd", "high_fd"])
+def fd_floor(request):
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (max(soft, min(4096, hard)), hard))
+    fds = [os.open(os.devnull, os.O_RDONLY)]
+    while fds[-1] < request.param:
+        fds.append(os.open(os.devnull, os.O_RDONLY))
+    yield request.param
+    for fd in fds:
+        os.close(fd)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
 
 
 @pytest.fixture

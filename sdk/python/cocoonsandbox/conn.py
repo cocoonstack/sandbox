@@ -16,6 +16,7 @@ from .errors import APIError, ProtocolError, SandboxError, SandboxTimeout, Silkd
 from .frames import MAX_FRAME, decode_response, encode_request
 
 KEEP_ALIVE_CONNS = 8
+_FD_SETSIZE = 1024
 
 _CloseableT = TypeVar("_CloseableT", bound="_Closeable")
 
@@ -81,11 +82,7 @@ class Conn(_Closeable):
 
     def quiet(self) -> bool:
         """Reports whether the peer has neither hung up nor spoken since the last frame."""
-        try:
-            readable, _, _ = select.select([self._sock], [], [], 0)
-        except (OSError, ValueError):
-            return False
-        return not readable
+        return is_quiet(self._sock)
 
     def close(self) -> None:
         self.abort()
@@ -235,6 +232,20 @@ def remaining_timeout(timeout: float, deadline: float | None, what: str = "agent
     if remaining <= 0:
         raise SandboxTimeout(f"{what} timed out")
     return min(timeout, remaining)
+
+
+def is_quiet(sock: socket.socket | None) -> bool:
+    """Reports whether a parked socket's peer has neither hung up nor spoken, for any fd number."""
+    if sock is None:
+        return False
+    try:
+        if sock.fileno() < _FD_SETSIZE or not hasattr(select, "poll"):
+            return not select.select([sock], [], [], 0)[0]
+        poller = select.poll()
+        poller.register(sock, select.POLLIN)
+        return not poller.poll(0)
+    except (OSError, ValueError):
+        return False
 
 
 def _handshake_error(what: str, exc: OSError) -> SandboxError:

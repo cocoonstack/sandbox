@@ -343,15 +343,15 @@ def recording_claim(reply):
 
 
 @pytest.mark.parametrize(("keep_alive", "conns"), [(30.0, 1), (0, 2)])
-def test_control_calls_reuse_one_connection(kept_node, keep_alive, conns):
+def test_control_calls_reuse_one_connection(kept_node, keep_alive, conns, fd_floor):
     KeptNode.routes[("POST", "/v1/claim")] = lambda body, path: (200, {"id": "sb_1", "token": "tok"})
     client = Client(kept_node, keep_alive=keep_alive)
     client.new("rt:24.04")
     client.new("rt:24.04")
-    assert KeptNode.conns == conns
+    assert KeptNode.conns == conns, KeptNode.conns
 
 
-def test_a_parked_connection_the_node_closed_is_not_reused(kept_node):
+def test_a_parked_connection_the_node_closed_is_not_reused(kept_node, fd_floor):
     KeptNode.routes[("POST", "/v1/claim")] = lambda body, path: (200, {"id": "sb_1", "token": "tok"})
     KeptNode.drop_after_reply = True
     client = Client(kept_node)
