@@ -24,7 +24,8 @@ vsock-only I/O (hardened default); `net=egress` attaches a bridge/CNI NIC.
   placement works, relocating handles
 - [sandboxd HTTP API](sandboxd-api.md) — every endpoint: claim/release,
   renew, hibernate, fork, promote, checkpoints, preview, the guest-port
-  relay, online pool reconfigure, metrics, the usage journal
+  relay, claim env, runtime tenants, config reload, online pool
+  reconfigure, metrics, the usage journal
 - [Go SDK](sdk.md) — connecting (single node and clusters), every option,
   the full sandbox surface, error handling
 - [Python SDK](sdk-python.md) — the guest and data-plane surface for the

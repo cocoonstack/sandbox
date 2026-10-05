@@ -36,8 +36,11 @@ performance) — source in
   snapshot exports (online-retunable), claim/release/renew/hibernate/fork/
   promote/checkpoint HTTP API, operator-catalog dataset volumes (read-only or
   writable), signed preview URLs, the HTTP-upgrade byte relays to silkd and
-  to any guest port, usage + audit journals, /metrics, reap + restart
-  reconcile, memberlist mesh with redirect placement
+  to any guest port, claim env with host-side credential injection and
+  per-claim upstream proxies, runtime tenants, config reload (SIGHUP),
+  usage + audit journals, /metrics, reap + restart reconcile with VMM
+  cold restart, memberlist mesh with redirect placement, and an optional
+  shared PostgreSQL meta store for tenants and pools
 - `sdk/go/` — Go SDK: `Connect/New/Lookup`, `Exec/Run`, files,
   `Push/Pull`, sessions, `Find/Replace`, `Watch`, git verbs, `OpenPty`,
   `Renew/Fork/Hibernate/Promote/Checkpoint`, claim env, `DialPort/ProxyPort/PreviewURL`,
@@ -59,7 +62,7 @@ performance) — source in
   `smoke`, `meshsmoke`, `crossnode`, `coldproof`, `egresssmoke`,
   `interceptsmoke`, `sockssmoke`, `volumesmoke`, `lifecycle` (idle→hibernate→archive),
   `androidsmoke`, `browsersmoke`, `ringsmoke` (output ring cap, exec as a user),
-  `portsmoke` (the guest-port relay),
+  `portsmoke` (the guest-port relay), `credsmoke` (claim credential injection),
   and the `pullbench`/`pushbench`/`rpcbench`/`qaab` perf drivers
 - `boot/kernel/` — kernel version pin (`VERSION` + matching tarball `SHA256`,
   bump both together) + config fragment (amd64: over `x86_64_defconfig` +
