@@ -27,9 +27,9 @@ func ServeConnOnce(conn net.Conn) {
 	serveConn(conn, bufio.NewReader(conn), 1, serveStateless)
 }
 
-// Upgrade hijacks an agent request and answers the 101, handing back the relay connection.
+// Upgrade hijacks an agent request and answers the 101, handing back the relay connection with any frames sent ahead of the 101.
 func Upgrade(w http.ResponseWriter) (net.Conn, error) {
-	conn, _, err := http.NewResponseController(w).Hijack()
+	conn, brw, err := http.NewResponseController(w).Hijack()
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +37,7 @@ func Upgrade(w http.ResponseWriter) (net.Conn, error) {
 		_ = conn.Close()
 		return nil, err
 	}
-	return conn, nil
+	return &hijackedConn{Conn: conn, r: brw.Reader}, nil
 }
 
 // ListenHybrid serves the muxer handshake on a UDS: each connection must open with "CONNECT <port>", is answered "OK <port>", then speaks the Serve protocol.
@@ -61,6 +61,13 @@ func ListenHybrid(sockPath string, port int) (io.Closer, error) {
 	})
 	return l, nil
 }
+
+type hijackedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *hijackedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 // serveConn answers info with proto and dispatches the other requests until the peer closes, or after one when proto predates keep-alive; input frames outside an RPC are dropped as silkd drops them.
 func serveConn(conn net.Conn, r *bufio.Reader, proto uint32, serve func(net.Conn, *bufio.Reader, wire.Request)) {

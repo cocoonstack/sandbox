@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -153,6 +154,43 @@ func TestUpgradeKeepsCoalescedBytes(t *testing.T) {
 	}
 }
 
+func TestFirstCallSendsItsFramesAheadOfThe101(t *testing.T) {
+	ops := make(chan []string, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", func(w http.ResponseWriter, _ *http.Request) {
+		conn, brw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		var got []string
+		for range 2 {
+			line, readErr := brw.ReadBytes('\n')
+			if readErr != nil {
+				break
+			}
+			if req, decodeErr := wire.DecodeRequest(line); decodeErr == nil {
+				got = append(got, req.Op())
+			}
+		}
+		ops <- got
+		_, _ = io.WriteString(conn, upgrade101+`{"type":"info","proto":2}`+"\n"+`{"type":"done"}`+"\n")
+		_ = conn.SetReadDeadline(time.Time{})
+		_, _ = io.Copy(io.Discard, brw)
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	if err := testSandbox(t, ts).Mkdir(t.Context(), "/w", false); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	if got := <-ops; !slices.Equal(got, []string{"info", "fs_mkdir"}) {
+		t.Errorf("frames ahead of the 101 = %q, want [info fs_mkdir]", got)
+	}
+}
+
 func TestRunRejectedUpgrade(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", func(w http.ResponseWriter, _ *http.Request) {
@@ -163,8 +201,8 @@ func TestRunRejectedUpgrade(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	_, err := testSandbox(t, ts).Run(t.Context(), Cmd{Argv: []string{"echo"}})
-	if err == nil || !strings.Contains(err.Error(), "unknown sandbox") {
-		t.Errorf("got %v, want rejected upgrade", err)
+	if apiErr, ok := errors.AsType[*APIError](err); !ok || apiErr.Status != http.StatusNotFound || apiErr.Message != "unknown sandbox" {
+		t.Errorf("got %v, want the 404 APIError", err)
 	}
 }
 
