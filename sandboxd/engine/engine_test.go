@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -173,6 +174,40 @@ func TestImageIDsMapsNameToID(t *testing.T) {
 	ids, err := New("cocoon", nil, nil, false, false, "").ImageIDs(t.Context())
 	if err != nil || len(ids) != 1 || ids["ghcr.io/cocoonstack/sandbox/rt:24.04"] != "sha256:afe6" {
 		t.Fatalf("ImageIDs = %v, %v; want the one image cocoon printed", ids, err)
+	}
+}
+
+func TestMemoryDumpsRunAtMostEightAtOnce(t *testing.T) {
+	trace := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("COCOON_TEST_TRACE", trace)
+	fakeCocoon(t, "#!/bin/sh\necho + >> \"$COCOON_TEST_TRACE\"\nsleep 0.1\necho - >> \"$COCOON_TEST_TRACE\"\n")
+	e := New("cocoon", nil, nil, false, false, "")
+	var wg sync.WaitGroup
+	for i := range 40 {
+		wg.Go(func() {
+			if i%2 == 0 {
+				_ = e.Hibernate(t.Context(), "vm", "snap")
+			} else {
+				_ = e.SnapshotSave(t.Context(), "vm", "snap")
+			}
+		})
+	}
+	wg.Wait()
+	data, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, peak := 0, 0
+	for line := range strings.FieldsSeq(string(data)) {
+		if line == "+" {
+			running++
+		} else {
+			running--
+		}
+		peak = max(peak, running)
+	}
+	if peak > memoryDumps || peak < 2 {
+		t.Errorf("peak concurrent dumps = %d, want 2..%d", peak, memoryDumps)
 	}
 }
 
