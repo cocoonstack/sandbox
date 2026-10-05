@@ -104,7 +104,16 @@ class Sandbox:
         expired = threading.Event()
         started: deque[int] = deque(maxlen=1)
         try:
-            conn = self._connect(deadline)
+            conn = self._connect(
+                "exec",
+                deadline,
+                argv=argv,
+                cwd=cwd or None,
+                env=env,
+                user=user or None,
+                detach=False,
+                session=session or None,
+            )
         except (ProtocolError, TimeoutError):
             if deadline is not None and time.monotonic() >= deadline:
                 raise SandboxTimeout(f"command did not finish within {timeout}s") from None
@@ -113,15 +122,6 @@ class Sandbox:
             watchdog = None if deadline is None else _arm_watchdog(conn, deadline, expired)
             pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True) if stdin else None
             try:
-                conn.send(
-                    "exec",
-                    argv=argv,
-                    cwd=cwd or None,
-                    env=env,
-                    user=user or None,
-                    detach=False,
-                    session=session or None,
-                )
                 if pump is not None:
                     pump.start()
                 else:
@@ -182,18 +182,15 @@ class Sandbox:
 
     def write_file(self, path: str, data: bytes, mode: int | None = None) -> None:
         """Writes data to path atomically (temp + rename on the guest)."""
-        with self._lease() as conn:
-            conn.send("fs_write", path=path, mode=mode)
+        with self._lease(self._connect("fs_write", path=path, mode=mode)) as conn:
             _upload(conn, data, FS_CHUNK)
 
     def read_file(self, path: str) -> bytes:
-        with self._lease() as conn:
-            conn.send("fs_read", path=path)
+        with self._lease(self._connect("fs_read", path=path)) as conn:
             return _drain_data(conn)
 
     def list_dir(self, path: str) -> list[dict[str, Any]]:
-        with self._lease() as conn:
-            conn.send("fs_list", path=path)
+        with self._lease(self._connect("fs_list", path=path)) as conn:
             entries: list[dict[str, Any]] = []
             for frame in conn.recv_until("done"):
                 entries.extend(frame.get("entries") or [])
@@ -214,14 +211,12 @@ class Sandbox:
 
     def push(self, dest: str, tar_stream: bytes) -> None:
         """Extracts a tar stream into dest; a truncated stream leaves dest untouched."""
-        with self._lease() as conn:
-            conn.send("fs_push", dest=dest)
+        with self._lease(self._connect("fs_push", dest=dest)) as conn:
             _upload(conn, tar_stream, BULK_CHUNK)
 
     def pull(self, path: str) -> bytes:
         """Returns path (file or tree) as a tar archive."""
-        with self._lease() as conn:
-            conn.send("fs_pull", path=path)
+        with self._lease(self._connect("fs_pull", path=path)) as conn:
             return _drain_data(conn)
 
     def find(self, path: str, pattern: str, glob: str = "") -> list[dict[str, Any]]:
@@ -229,15 +224,13 @@ class Sandbox:
 
     def find_iter(self, path: str, pattern: str, glob: str = "") -> Iterator[dict[str, Any]]:
         """Yields matches as they stream."""
-        with self._lease() as conn:
-            conn.send("fs_find", path=path, pattern=pattern, glob=glob or None)
+        with self._lease(self._connect("fs_find", path=path, pattern=pattern, glob=glob or None)) as conn:
             for f in conn.recv_until("done"):
                 if f["type"] == "match":
                     yield f
 
     def replace(self, files: list[str], pattern: str, replacement: str) -> list[dict[str, Any]]:
-        with self._lease() as conn:
-            conn.send("fs_replace", files=files, pattern=pattern, replacement=replacement)
+        with self._lease(self._connect("fs_replace", files=files, pattern=pattern, replacement=replacement)) as conn:
             return [f for f in conn.recv_until("done") if f["type"] == "replaced"]
 
     def git_clone(self, url: str, path: str, branch: str = "", depth: int = 0, auth: str = "") -> None:
@@ -385,33 +378,34 @@ class Sandbox:
     def _dial(self, deadline: float | None = None) -> Conn:
         return self._client._dial(self.owner, self.id, self.token, deadline)
 
-    def _connect(self, deadline: float | None = None) -> Conn:
-        """Takes a parked connection or dials one, asking the daemon's proto on a handle's first kept dial."""
+    def _connect(self, op: str, deadline: float | None = None, /, **fields: object) -> Conn:
+        """Sends the request on a parked or new connection, behind an info probe on a handle's first kept dial."""
         conn = self._pool.take()
-        if conn is not None:
-            return conn
-        conn = self._dial(deadline)
-        if self._proto or self._client.keep_alive <= 0:
-            return conn
+        if conn is None:
+            conn = self._dial(deadline)
+        probe = not self._proto and self._client.keep_alive > 0
+        bounded = probe or deadline is not None
         try:
-            conn.settimeout(remaining_timeout(self._client.timeout, deadline, "agent probe"))
-            conn.send("info")
-            proto = int(_expect(conn, "info").get("proto") or 1)
-            conn.settimeout(None)
+            if bounded:
+                conn.settimeout(remaining_timeout(self._client.timeout, deadline, "agent request"))
+            if probe:
+                conn.send("info")
+            conn.send(op, **fields)
+            if probe:
+                self._proto = int(_expect(conn, "info").get("proto") or 1)
+            if bounded:
+                conn.settimeout(None)
         except BaseException:
             conn.close()
             raise
-        self._proto = proto
-        if proto >= KEEP_ALIVE_PROTO:
+        if not probe or self._proto >= KEEP_ALIVE_PROTO:
             return conn
         conn.close()
-        return self._dial(deadline)
+        return self._connect(op, deadline, **fields)
 
     @contextlib.contextmanager
-    def _lease(self, conn: Conn | None = None) -> Iterator[Conn]:
-        """Runs one RPC on conn, dialed when absent; a terminal frame parks it and anything else drops it."""
-        if conn is None:
-            conn = self._connect()
+    def _lease(self, conn: Conn) -> Iterator[Conn]:
+        """Runs one RPC on conn; a terminal frame parks it and anything else drops it."""
         try:
             yield conn
         except SilkdError:
@@ -429,9 +423,8 @@ class Sandbox:
             conn.close()
 
     def _open_stream(self, op: str, expect: str = "ready", **fields: object) -> tuple[Conn, dict[str, Any]]:
-        conn = self._connect()
+        conn = self._connect(op, **fields)
         try:
-            conn.send(op, **fields)
             frame = _expect(conn, expect)
         except SilkdError:
             self._park(conn)
@@ -487,8 +480,7 @@ class Sandbox:
                 local.close()
 
     def _call(self, op: str, expect: str, **fields: object) -> dict[str, Any]:
-        with self._lease() as conn:
-            conn.send(op, **fields)
+        with self._lease(self._connect(op, **fields)) as conn:
             return _expect(conn, expect)
 
     def _done_rpc(self, op: str, **fields: object) -> None:
@@ -502,8 +494,7 @@ class Sandbox:
         on_stderr: Callable[[bytes], object] | None,
         trailing_done: bool = False,
     ) -> int | None:
-        with self._lease() as conn:
-            conn.send(op, pid=pid)
+        with self._lease(self._connect(op, pid=pid)) as conn:
             code = _pump_stdio(conn, on_stdout, on_stderr)
             if trailing_done and code is not None:
                 _expect(conn, "done")
@@ -511,10 +502,9 @@ class Sandbox:
 
     def _kill_after_cut(self, pid: int) -> None:
         deadline = time.monotonic() + _KILL_WAIT_SECONDS
-        with contextlib.suppress(SandboxError, OSError), self._lease(self._connect(deadline)) as conn:
+        with contextlib.suppress(SandboxError, OSError), self._lease(self._connect("kill", deadline, pid=pid)) as conn:
             watchdog = _arm_watchdog(conn, deadline, threading.Event())
             try:
-                conn.send("kill", pid=pid)
                 _expect(conn, "done")
             finally:
                 watchdog.cancel()

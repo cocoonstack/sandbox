@@ -54,6 +54,17 @@ def test_old_daemon_dials_per_call():
     assert agent.upgrades == 4, "the proto probe plus one dial per call"
 
 
+def test_old_daemon_that_closes_after_info_gets_the_request_on_a_redial():
+    agent = FakeAgent(proto=1, slam=True)
+    sb = sandbox_at(agent.addr)
+    try:
+        for _ in range(2):
+            assert sb.stat("/")["kind"] == "dir"
+    finally:
+        agent.stop()
+    assert agent.upgrades == 3, "the proto probe plus one dial per call"
+
+
 def test_keep_alive_off_dials_per_call():
     agent = FakeAgent()
     sb = sandbox_at(agent.addr, keep_alive=0)

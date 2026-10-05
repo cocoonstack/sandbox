@@ -21,10 +21,11 @@ REJECT = b"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length:
 
 
 class EarlyFrameAgent:
-    """Answers the 101 only after a frame has arrived behind the request, then serves frames until the peer leaves."""
+    """Answers the 101 only once its frames arrive behind the request, then serves frames until the peer leaves."""
 
-    def __init__(self, reply: bytes = b"HTTP/1.1 101 Switching Protocols\r\n\r\n") -> None:
+    def __init__(self, reply: bytes = b"HTTP/1.1 101 Switching Protocols\r\n\r\n", frames: int = 1) -> None:
         self.reply = reply
+        self.frames = frames
         self.early: list[str] = []
         self._server = socket.create_server(("127.0.0.1", 0))
         self.addr = f"127.0.0.1:{self._server.getsockname()[1]}"
@@ -40,19 +41,19 @@ class EarlyFrameAgent:
             while reader.readline() not in (b"\r\n", b""):
                 pass
             conn.settimeout(1)
-            op = json.loads(reader.readline())["op"]
-            self.early.append(op)
+            for _ in range(self.frames):
+                self.early.append(json.loads(reader.readline())["op"])
             conn.settimeout(None)
-            conn.sendall(self.reply)
-            while op:
-                conn.sendall(json.dumps(REPLIES[op]).encode() + b"\n")
-                line = reader.readline()
-                op = json.loads(line)["op"] if line else ""
+            conn.sendall(self.reply + b"".join(json.dumps(REPLIES[op]).encode() + b"\n" for op in self.early))
+            for line in iter(reader.readline, b""):
+                conn.sendall(json.dumps(REPLIES[json.loads(line)["op"]]).encode() + b"\n")
 
 
-@pytest.mark.parametrize(("keep_alive", "early"), [(0, ["fs_mkdir"]), (30, ["info"])], ids=["no probe", "proto probe"])
-def test_first_frame_rides_ahead_of_the_101(keep_alive, early):
-    agent = EarlyFrameAgent()
+@pytest.mark.parametrize(
+    ("keep_alive", "early"), [(0, ["fs_mkdir"]), (30, ["info", "fs_mkdir"])], ids=["no probe", "proto probe"]
+)
+def test_first_frames_ride_ahead_of_the_101(keep_alive, early):
+    agent = EarlyFrameAgent(frames=len(early))
     sb = sandbox_at(agent.addr, timeout=5, keep_alive=keep_alive)
     try:
         sb.mkdir("/w")
