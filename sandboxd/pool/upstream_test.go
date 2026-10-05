@@ -1,167 +1,14 @@
 package pool
 
 import (
-	"bufio"
-	"context"
 	"errors"
-	"io"
-	"net"
-	"net/http"
-	"net/netip"
-	"slices"
-	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
-
-func TestRouteTakesTheClaimThenClassThenPoolUpstream(t *testing.T) {
-	m := upstreamManager(t, "127.0.0.1")
-	editView(m, func(v *configView) {
-		v.poolUpstream[testKey] = "http://127.0.0.1:3001"
-		v.classUpstream["desk"] = "http://127.0.0.1:3002"
-	})
-	for _, tc := range []struct {
-		name, class string
-		env         types.Env
-		want        string
-	}{
-		{"pool default", "", nil, "http://127.0.0.1:3001"},
-		{"class default", "desk", nil, "http://127.0.0.1:3002"},
-		{"claim value", "desk", types.Env{"EGRESS_UPSTREAM": {Value: "socks5://127.0.0.1:3003", Guest: hostOnly}}, "socks5://127.0.0.1:3003"},
-		{"claim direct", "desk", types.Env{"EGRESS_UPSTREAM": {Value: "direct", Guest: hostOnly}}, ""},
-	} {
-		sb := &types.Sandbox{ID: "sb_route", Key: testKey, Tenant: "acme", EgressClass: tc.class}
-		sb.SetEnv(tc.env)
-		if got := (claimRouter{m: m, sb: sb}).Route(); got != tc.want {
-			t.Errorf("%s: route %q, want %q", tc.name, got, tc.want)
-		}
-	}
-}
-
-func TestClaimsOnOnePoolLeaveThroughTheirOwnUpstreams(t *testing.T) {
-	m := upstreamManager(t, "127.0.0.1")
-	m.destVerdict = func(netip.Addr, uint16) (bool, error) { return false, nil }
-	direct := countDial(m)
-	origin := echoListener(t)
-	up1, up2 := tunnelProxy(t), tunnelProxy(t)
-	claim := func(upstream string) *types.Sandbox {
-		sb := &types.Sandbox{ID: "sb_" + upstream, Key: testKey}
-		if upstream != "" {
-			sb.SetEnv(types.Env{"EGRESS_UPSTREAM": {Value: "http://user:pw@" + upstream, Guest: hostOnly}})
-		}
-		return sb
-	}
-	for _, sb := range []*types.Sandbox{claim(up1.addr), claim(up2.addr), claim("")} {
-		r := claimRouter{m: m, sb: sb}
-		conn, err := r.Dial(t.Context(), r.Route(), "tcp", origin)
-		if err != nil {
-			t.Fatalf("%s: dial: %v", sb.ID, err)
-		}
-		pingPong(t, conn)
-	}
-	if got := up1.targets(); len(got) != 1 || got[0] != origin {
-		t.Errorf("upstream 1 tunnels %v, want only the first claim's %s", got, origin)
-	}
-	if got := up2.targets(); len(got) != 1 || got[0] != origin {
-		t.Errorf("upstream 2 tunnels %v, want only the second claim's %s", got, origin)
-	}
-	if direct.Load() != 1 {
-		t.Errorf("direct dials %d, want 1: only the claim without an upstream", direct.Load())
-	}
-}
-
-func TestATenantClaimUnderAClassDialsItsOwnUpstreamLikeARootClaim(t *testing.T) {
-	m := upstreamManager(t, "127.0.0.1")
-	m.destVerdict = func(netip.Addr, uint16) (bool, error) { return false, nil }
-	direct := countDial(m)
-	origin := echoListener(t)
-	own, classDefault := tunnelProxy(t), tunnelProxy(t)
-	editView(m, func(v *configView) { v.classUpstream["desk"] = "http://" + classDefault.addr })
-	tenantClaim := func(upstream string) *types.Sandbox {
-		sb := &types.Sandbox{ID: "sb_desk", Key: testKey, Tenant: "acme", EgressClass: "desk"}
-		sb.SetEnv(types.Env{"EGRESS_UPSTREAM": {Value: upstream, Guest: hostOnly}})
-		return sb
-	}
-	r := claimRouter{m: m, sb: tenantClaim("http://user:pw@" + own.addr)}
-	conn, err := r.Dial(t.Context(), r.Route(), "tcp", origin)
-	if err != nil {
-		t.Fatalf("dial through the claim's own upstream: %v", err)
-	}
-	pingPong(t, conn)
-	if got := own.targets(); len(got) != 1 || got[0] != origin || classDefault.accepted.Load() != 0 {
-		t.Errorf("own upstream tunnels %v, class default saw %d: the claim value must win over the class default", got, classDefault.accepted.Load())
-	}
-	r = claimRouter{m: m, sb: tenantClaim("socks5://192.0.2.1:1080")}
-	if _, err := r.Dial(t.Context(), r.Route(), "tcp", origin); err == nil || !strings.Contains(err.Error(), "not allowed") {
-		t.Errorf("a tenant claim's unlisted upstream: %v, want the allow-list refusal", err)
-	}
-	if direct.Load() != 0 {
-		t.Errorf("direct dials %d, want none", direct.Load())
-	}
-}
-
-func TestTheTunnelTargetPrefersIPv4(t *testing.T) {
-	m := upstreamManager(t, "127.0.0.1")
-	m.destVerdict = func(netip.Addr, uint16) (bool, error) { return false, nil }
-	target, internal, err := m.upstreamTarget(t.Context(), "localhost:80")
-	if err != nil || internal || target != netip.MustParseAddrPort("127.0.0.1:80") {
-		t.Errorf("target %v internal %v err %v, want 127.0.0.1:80 over ::1", target, internal, err)
-	}
-}
-
-func TestBlockedDestinationNeverReachesTheUpstream(t *testing.T) {
-	m := upstreamManager(t, "127.0.0.1")
-	up := tunnelProxy(t)
-	r := claimRouter{m: m}
-	_, err := r.Dial(t.Context(), "http://"+up.addr, "tcp", "169.254.169.254:80")
-	if err == nil || !strings.Contains(err.Error(), "blocked internal address") {
-		t.Fatalf("metadata dial: %v, want the SSRF block", err)
-	}
-	if n := up.accepted.Load(); n != 0 {
-		t.Errorf("the upstream saw %d connections before the block", n)
-	}
-}
-
-func TestInternallyAllowedDestinationDialsDirect(t *testing.T) {
-	m := upstreamManager(t, "127.0.0.1")
-	m.destVerdict = func(netip.Addr, uint16) (bool, error) { return true, nil }
-	direct := countDial(m)
-	up := tunnelProxy(t)
-	origin := echoListener(t)
-	conn, err := (claimRouter{m: m}).Dial(t.Context(), "http://"+up.addr, "tcp", origin)
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	pingPong(t, conn)
-	if direct.Load() != 1 || up.accepted.Load() != 0 {
-		t.Errorf("direct %d, upstream %d: a re-admitted internal service must dial direct", direct.Load(), up.accepted.Load())
-	}
-}
-
-func TestDeadOrUnlistedUpstreamNeverFallsBackToDirect(t *testing.T) {
-	m := upstreamManager(t, "127.0.0.1")
-	m.destVerdict = func(netip.Addr, uint16) (bool, error) { return false, nil }
-	direct := countDial(m)
-	dead := closedPort(t)
-	origin := echoListener(t)
-	for route, want := range map[string]string{
-		"http://" + dead:              "dial upstream",
-		"socks5://192.0.2.1:1080":     "not allowed",
-		"http://upstream.example:443": "not allowed",
-	} {
-		if _, err := (claimRouter{m: m}).Dial(t.Context(), route, "tcp", origin); err == nil || !strings.Contains(err.Error(), want) {
-			t.Errorf("%s: %v, want %q", route, err, want)
-		}
-	}
-	if direct.Load() != 0 {
-		t.Errorf("direct dials %d after upstream failures, want none", direct.Load())
-	}
-}
 
 func TestUpstreamEnvIsAdmittedHostOnlyAndAllowed(t *testing.T) {
 	m := upstreamManager(t, "127.0.0.1")
@@ -175,13 +22,13 @@ func TestUpstreamEnvIsAdmittedHostOnlyAndAllowed(t *testing.T) {
 		"unlisted":    {types.EnvVar{Value: "http://10.0.0.1:3128", Guest: hostOnly}, false},
 		"malformed":   {types.EnvVar{Value: "ftp://127.0.0.1:21", Guest: hostOnly}, false},
 	} {
-		err := m.checkUpstreamEnv(types.Env{"EGRESS_UPSTREAM": tc.v})
+		err := m.checkEnv(types.Env{"EGRESS_UPSTREAM": tc.v})
 		if tc.ok != (err == nil) || (err != nil && !errors.Is(err, ErrBadEnv)) {
 			t.Errorf("%s: %v, want ok=%v", name, err, tc.ok)
 		}
 	}
-	editView(m, func(v *configView) { v.upstreamEnv = "" })
-	if err := m.checkUpstreamEnv(types.Env{"EGRESS_UPSTREAM": {Value: "anything"}}); err != nil {
+	editEgress(t, m, func(cfg *config.Config) { cfg.EgressUpstream = nil })
+	if err := m.checkEnv(types.Env{"EGRESS_UPSTREAM": {Value: "anything"}}); err != nil {
 		t.Errorf("with the feature off the name is an ordinary env entry: %v", err)
 	}
 }
@@ -210,15 +57,18 @@ func TestPatchSwitchesTheUpstreamForNewConnections(t *testing.T) {
 	if err := m.PatchEnv(t.Context(), sb.ID, types.EnvPatch{"EGRESS_UPSTREAM": {Value: "http://127.0.0.1:3001", Guest: hostOnly}}, ""); err != nil {
 		t.Fatalf("patch: %v", err)
 	}
-	r := claimRouter{m: m, sb: sb}
-	if got := r.Route(); got != "http://127.0.0.1:3001" {
-		t.Fatalf("route %q after the first patch", got)
+	upstream := func() string {
+		v, _ := sb.HiddenEnv("EGRESS_UPSTREAM")
+		return v
+	}
+	if got := upstream(); got != "http://127.0.0.1:3001" {
+		t.Fatalf("upstream %q after the first patch", got)
 	}
 	if err := m.PatchEnv(t.Context(), sb.ID, types.EnvPatch{"EGRESS_UPSTREAM": nil}, ""); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
-	if got := r.Route(); got != "" {
-		t.Errorf("route %q after clearing, want direct", got)
+	if got := upstream(); got != "" {
+		t.Errorf("upstream %q after clearing, want direct", got)
 	}
 	if err := m.PatchEnv(t.Context(), sb.ID, types.EnvPatch{"EGRESS_UPSTREAM": {Value: "http://10.9.9.9:1", Guest: hostOnly}}, ""); !errors.Is(err, ErrBadEnv) {
 		t.Errorf("patch to an unlisted upstream: %v, want ErrBadEnv", err)
@@ -231,117 +81,11 @@ func TestPatchSwitchesTheUpstreamForNewConnections(t *testing.T) {
 func upstreamManager(t *testing.T, allow ...string) *Manager {
 	t.Helper()
 	m := newTestManager(t, newFakeEngine())
-	parsed, err := egress.ParseUpstreamAllow(allow)
-	if err != nil {
+	if _, err := egress.ParseUpstreamAllow(allow); err != nil {
 		t.Fatalf("allow: %v", err)
 	}
-	editView(m, func(v *configView) { v.upstreamEnv, v.upstreamAllow = "EGRESS_UPSTREAM", parsed })
+	editEgress(t, m, func(cfg *config.Config) {
+		cfg.EgressUpstream = &config.EgressUpstreamConfig{ClaimEnv: "EGRESS_UPSTREAM", Allow: allow}
+	})
 	return m
-}
-
-func countDial(m *Manager) *atomic.Int32 {
-	var n atomic.Int32
-	m.dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		n.Add(1)
-		var d net.Dialer
-		return d.DialContext(ctx, network, addr)
-	}
-	return &n
-}
-
-func echoListener(t *testing.T) string {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func() { _, _ = io.Copy(conn, conn); _ = conn.Close() }()
-		}
-	}()
-	return ln.Addr().String()
-}
-
-func closedPort(t *testing.T) string {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	addr := ln.Addr().String()
-	_ = ln.Close()
-	return addr
-}
-
-func pingPong(t *testing.T, conn net.Conn) {
-	t.Helper()
-	defer func() { _ = conn.Close() }()
-	if _, err := io.WriteString(conn, "ping"); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	buf := make([]byte, 4)
-	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "ping" {
-		t.Fatalf("echo %q, %v", buf, err)
-	}
-}
-
-type tunnel struct {
-	addr     string
-	accepted atomic.Int32
-	mu       sync.Mutex
-	seen     []string
-}
-
-func tunnelProxy(t *testing.T) *tunnel {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
-	p := &tunnel{addr: ln.Addr().String()}
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			p.accepted.Add(1)
-			go p.serve(conn)
-		}
-	}()
-	return p
-}
-
-func (p *tunnel) targets() []string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return slices.Clone(p.seen)
-}
-
-func (p *tunnel) serve(conn net.Conn) {
-	defer func() { _ = conn.Close() }()
-	br := bufio.NewReader(conn)
-	req, err := http.ReadRequest(br)
-	if err != nil {
-		return
-	}
-	p.mu.Lock()
-	p.seen = append(p.seen, req.Host)
-	p.mu.Unlock()
-	target, err := net.Dial("tcp", req.Host)
-	if err != nil {
-		_, _ = io.WriteString(conn, "HTTP/1.1 502 Bad Gateway\r\n\r\n")
-		return
-	}
-	defer func() { _ = target.Close() }()
-	_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\n\r\n")
-	go func() { _, _ = io.Copy(target, br) }()
-	_, _ = io.Copy(conn, target)
 }

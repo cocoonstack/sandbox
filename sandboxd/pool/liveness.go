@@ -216,13 +216,13 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 	sb.VsockSocket = sock
 	m.mu.Unlock()
 	// a displaced door's close unlinks the rebound path, so the old door goes first
-	m.disarmEgress(sb.ID, false)
-	err = m.armEgressProxy(ctx, sb)
+	m.out.Disarm(sb.ID, false)
+	err = m.out.ArmProxy(ctx, sb)
 	if err == nil {
 		err = m.deliverEnv(ctx, []*types.Sandbox{sb}, false)
 	}
 	if err != nil {
-		m.disarmEgress(sb.ID, false)
+		m.out.Disarm(sb.ID, false)
 		m.stopVM(ctx, sb.VMName)
 		return fmt.Errorf("restore egress and env after cold boot: %w", err)
 	}
@@ -232,7 +232,7 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 		sb.RestartedAt = time.Now()
 	}); !live {
 		// the release that dropped the claim owns the VM teardown
-		m.disarmEgress(sb.ID, true)
+		m.out.Disarm(sb.ID, true)
 		return ErrUnknownSandbox
 	}
 	if m.disarmIfReleased(sb) {

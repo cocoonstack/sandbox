@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -17,6 +18,8 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -24,42 +27,6 @@ var (
 	otherKey       = types.PoolKey{Template: "other:1", Net: types.NetNone, Size: types.SizeSmall}
 	interceptOnKey = types.PoolKey{Template: "mitm:1", Net: types.NetNone, Size: types.SizeSmall}
 )
-
-func TestALiveClaimsEgressFollowsTheView(t *testing.T) {
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, "ok")
-	}))
-	t.Cleanup(origin.Close)
-	host := mustHostname(t, origin.URL)
-	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "other.test"}}}})
-	m.dial = (&net.Dialer{}).DialContext
-	sb := vsockSandbox(t, "sb_live")
-	if err := m.armEgress(t.Context(), sb); err != nil {
-		t.Fatalf("arm egress: %v", err)
-	}
-	client := egressClient(engine.EgressSocketPath(sb.VsockSocket))
-	get := func() int {
-		t.Helper()
-		resp, err := client.Get(origin.URL + "/")
-		if err != nil {
-			t.Fatalf("get: %v", err)
-		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-		return resp.StatusCode
-	}
-	if code := get(); code != http.StatusForbidden {
-		t.Fatalf("before the change: %d, want 403", code)
-	}
-	editView(m, func(v *configView) { v.poolEgress[testKey] = &egress.Policy{Allow: []egress.Rule{{Host: host}}} })
-	if code := get(); code != http.StatusOK {
-		t.Errorf("after the allow-list admits the host: %d, want 200 on the same armed claim", code)
-	}
-	editView(m, func(v *configView) { delete(v.poolEgress, testKey) })
-	if code := get(); code != http.StatusForbidden {
-		t.Errorf("after the pool loses its policy: %d, want 403", code)
-	}
-}
 
 func TestReloadGivesANewKeyItsSettingsBeforeItsGolden(t *testing.T) {
 	eng := newFakeEngine()
@@ -133,7 +100,7 @@ func TestReloadRefusesARestartFieldAndKeepsTheView(t *testing.T) {
 	if !errors.Is(err, ErrReloadRefused) || !strings.Contains(err.Error(), "listen") {
 		t.Fatalf("reload with a new listen address: %v, want a refusal naming listen", err)
 	}
-	if m.view.Load() != before || len(m.view.Load().internalAllow) != 0 {
+	if m.view.Load() != before || !reflect.DeepEqual(m.view.Load().out, outbound.NewView(m.cfg, testSecrets(t))) {
 		t.Error("a refused reload changed the view")
 	}
 }
@@ -216,14 +183,14 @@ func TestAReloadDropsTheLiveProxiesPooledConnections(t *testing.T) {
 	}
 	origin.Start()
 	t.Cleanup(origin.Close)
-	host := mustHostname(t, origin.URL)
+	host := outboundtest.Hostname(t, origin.URL)
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: host}}}})
-	m.dial = (&net.Dialer{}).DialContext
-	sb := vsockSandbox(t, "sb_pool")
-	if err := m.armEgress(t.Context(), sb); err != nil {
+	withOutbound(t, m, func(o *outbound.Options) { o.Dial = (&net.Dialer{}).DialContext })
+	sb := outboundtest.VsockSandbox(t, "sb_pool", testKey)
+	if err := m.out.Arm(t.Context(), sb); err != nil {
 		t.Fatalf("arm egress: %v", err)
 	}
-	client := egressClient(engine.EgressSocketPath(sb.VsockSocket))
+	client := outboundtest.EgressClient(engine.EgressSocketPath(sb.VsockSocket))
 	get := func(path string) error {
 		resp, err := client.Get(origin.URL + path)
 		if err != nil {
@@ -271,7 +238,7 @@ func TestReloadIsAudited(t *testing.T) {
 	if err != nil || !strings.Contains(string(raw), `"op":"config_reload","changed":["egress_internal_allow"]`) {
 		t.Errorf("audit %s, %v; want a config_reload record naming egress_internal_allow", raw, err)
 	}
-	if len(m.view.Load().internalAllow) != 1 {
+	if !reflect.DeepEqual(m.view.Load().out, outbound.NewView(&next, testSecrets(t))) {
 		t.Error("egress_internal_allow did not reach the view")
 	}
 }
@@ -319,19 +286,18 @@ func TestAnInterruptedReloadStillDestroysTheRetiredWarmVMs(t *testing.T) {
 
 func TestAReloadThatUnguardsTheNodeClosesThePreboundDoors(t *testing.T) {
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}})
 	warm := refillWarmVM(t, m)
+	pin := pinDoor(t, engine.EgressSocketPath(warm.VsockSocket))
 	next := *m.cfg
 	next.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 1}}
 	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	m.mu.Lock()
-	left := len(m.egressPrebound)
-	m.mu.Unlock()
-	if left != 0 {
-		t.Errorf("%d prebound doors left on a node with no egress policy", left)
+	if conn, err := net.Dial("unix", pin); err == nil {
+		_ = conn.Close()
+		t.Error("a prebound door is left open on a node with no egress policy")
 	}
 	if _, err := net.Dial("unix", engine.EgressSocketPath(warm.VsockSocket)); err == nil {
 		t.Error("a door refill bound still accepts after the reload removed every policy")

@@ -439,7 +439,7 @@ func TestS3BackendContractRealEndpoint(t *testing.T) {
 	if endpoint == "" {
 		t.Skip("SANDBOX_S3_E2E not set (export it to a MinIO endpoint to run)")
 	}
-	st, err := New(t.Context(), Config{
+	st, err := New(t.Context(), store.S3Config{
 		Bucket:         cmp.Or(os.Getenv("SANDBOX_S3_E2E_BUCKET"), "sbx-checkpoints"),
 		Prefix:         "contract/",
 		Endpoint:       endpoint,
@@ -488,7 +488,7 @@ func newTestStore(t *testing.T, fake *fakeS3) *Store {
 
 	t.Setenv("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
 	t.Setenv("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
-	st, err := New(t.Context(), Config{
+	st, err := New(t.Context(), store.S3Config{
 		Bucket: "testbucket", Prefix: "ck/", Endpoint: ts.URL,
 		Region: "us-east-1", ForcePathStyle: true,
 	}, t.TempDir(), store.CheckpointIDRe)

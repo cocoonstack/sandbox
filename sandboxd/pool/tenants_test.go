@@ -1,8 +1,13 @@
 package pool
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,7 +18,10 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/metastore/metastoretest"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/file"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -237,14 +245,23 @@ func TestTenantChangesAreValidatedAndAudited(t *testing.T) {
 }
 
 func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	t.Cleanup(origin.Close)
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir, APIToken: "root", EgressClasses: []config.EgressClass{{Name: "desk", Egress: &egress.Policy{Allow: []egress.Rule{{Host: "b.test"}}}}}}
 	eng := newFakeEngine()
-	eng.sockRoot = sockRoot(t)
+	eng.sockRoot = outboundtest.SockRoot(t)
 	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
+	withOutbound(t, m, func(o *outbound.Options) {
+		o.Dial = func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, origin.Listener.Addr().String())
+		}
+	})
 	for _, spec := range []config.TenantSpec{{Name: "u-1", Token: "u1-tok", EgressClass: "desk"}, {Name: "u-2", Token: "u2-tok"}} {
 		if err = m.PutTenant(t.Context(), spec); err != nil {
 			t.Fatalf("PutTenant %s: %v", spec.Name, err)
@@ -262,7 +279,7 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim u-1: %v", err)
 	}
-	eval, ok := m.effectivePolicy(m.view.Load(), classed)
+	eval, ok := m.view.Load().out.Resolve(classed, m.claimPooled)
 	if !ok || classed.EgressClass != "desk" || dtoOf(classed).EgressClass != "desk" {
 		t.Fatalf("u-1 claim class %q armed %v, want the desk class stamped and journaled", classed.EgressClass, ok)
 	}
@@ -272,23 +289,36 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 	if _, d := eval.Eval("a.test", "GET", 443); d == egress.DecisionAllow {
 		t.Error("a host outside the class is allowed")
 	}
-	live := newLivePolicy(m, classed, m.view.Load(), eval)
+	client := outboundtest.EgressClient(engine.EgressSocketPath(classed.VsockSocket))
+	status := func(host string) int {
+		t.Helper()
+		resp, getErr := client.Get("http://" + host + "/")
+		if getErr != nil {
+			t.Fatalf("get %s: %v", host, getErr)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	if status("b.test") != http.StatusOK || status("a.test") != http.StatusForbidden {
+		t.Fatal("the live claim's door does not serve the class it was claimed under")
+	}
 	next := *m.cfg
 	next.EgressClasses = []config.EgressClass{{Name: "desk", Egress: &egress.Policy{Allow: []egress.Rule{{Host: "a.test"}}}}}
 	if _, err = m.ReloadConfig(t.Context(), &next); err != nil {
 		t.Fatalf("reload the class: %v", err)
 	}
-	if _, d := live.Eval("a.test", "GET", 443); d != egress.DecisionAllow {
+	if status("a.test") != http.StatusOK {
 		t.Error("a reload that widens the class did not reach the live claim")
 	}
-	if _, d := live.Eval("b.test", "GET", 443); d == egress.DecisionAllow {
+	if status("b.test") == http.StatusOK {
 		t.Error("a reload that narrows the class did not reach the live claim")
 	}
 	bare, err := claimAs("u2-tok")
 	if err != nil {
 		t.Fatalf("claim u-2: %v", err)
 	}
-	if _, ok = m.effectivePolicy(m.view.Load(), bare); ok {
+	if _, ok = m.view.Load().out.Resolve(bare, m.claimPooled); ok {
 		t.Error("a tenant without a class gained egress")
 	}
 

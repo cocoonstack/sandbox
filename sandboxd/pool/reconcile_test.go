@@ -11,6 +11,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -129,7 +130,7 @@ func TestReconcileBusyStaleCreateKeepsTap(t *testing.T) {
 	m := newTestManager(t, eng)
 
 	var gotKeep map[string]bool
-	m.sweep = func(keep map[string]bool) error { gotKeep = keep; return nil }
+	withOutbound(t, m, func(o *outbound.Options) { o.Sweep = func(keep map[string]bool) error { gotKeep = keep; return nil } })
 	if err := m.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}

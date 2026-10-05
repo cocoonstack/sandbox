@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"maps"
 	"net"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,7 +26,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
-	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/poolset"
 	poolpg "github.com/cocoonstack/sandbox/sandboxd/poolset/pg"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
@@ -316,12 +315,6 @@ type Manager struct {
 	// archiving holds ids with an export in flight; pendingCks pins ids mid-commit; both under m.mu.
 	archiving  map[string]struct{}
 	pendingCks map[string]struct{}
-	// egressListeners holds the per-sandbox egress proxy accept point; guarded by m.mu.
-	egressListeners map[string]*egressListener
-	// egressPrebound holds the doors refill bound for warm VMs, by VM name; guarded by m.mu.
-	egressPrebound map[string]*egressListener
-	// egressTaps holds the nft-locked egress-lane tap per sandbox id; guarded by m.mu.
-	egressTaps map[string]string
 
 	view atomic.Pointer[configView]
 	// cfg is the config the view was built from; reloadMu orders reloads, the only writers of cfg and view.
@@ -367,13 +360,7 @@ type Manager struct {
 	// notifyTemplates is set before serving starts and fires after a promote or template delete.
 	notifyTemplates func()
 
-	// egressCA is nil unless a pool rule intercepted at boot.
-	egressCA   *egress.CA
-	lockEgress bool
-	// dial, destVerdict and sweep are test seams: the SSRF guard blocks loopback, the nft sweep is netlink-only.
-	dial        egress.DialFunc
-	destVerdict func(netip.Addr, uint16) (bool, error)
-	sweep       func(map[string]bool) error
+	out *outbound.Host
 
 	mu              sync.Mutex
 	pools           map[types.PoolKey]*pool
@@ -396,7 +383,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		eng:             eng,
 		dataDir:         cfg.DataDir,
 		egress:          cfg.HasEgress(),
-		lockEgress:      len(cfg.Bridges) > 0,
 		releaseDelay:    time.Duration(cfg.ReleaseDelaySeconds) * time.Second,
 		vmmRestart:      cfg.VMMRestart,
 		cocoondSocket:   cfg.CocoondSocket,
@@ -411,14 +397,10 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		tenantLive:      map[string]int{},
 		archiving:       map[string]struct{}{},
 		pendingCks:      map[string]struct{}{},
-		egressListeners: map[string]*egressListener{},
-		egressPrebound:  map[string]*egressListener{},
-		egressTaps:      map[string]string{},
 		recLocks:        map[string]*sync.RWMutex{},
 		recRefs:         map[string]int{},
 		healPending:     map[string]struct{}{},
 		healAbort:       map[string]struct{}{},
-		sweep:           netfilter.SweepExcept,
 		refillSem:       make(chan struct{}, refill),
 		probeSem:        make(chan struct{}, refill),
 		refillKick:      make(chan struct{}, 1),
@@ -475,10 +457,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	}
 	m.cfg = cfg
 	m.view.Store(newConfigView(cfg, secrets))
-	m.dial = newEgressDialer(func() []egress.InternalAllow { return m.view.Load().internalAllow }).DialContext
-	m.destVerdict = func(ip netip.Addr, port uint16) (bool, error) {
-		return destVerdict(m.view.Load().internalAllow, ip, port)
-	}
 	m.idleDefault = time.Duration(cfg.IdleHibernateSeconds) * time.Second
 	m.archiveAfterDefault = time.Duration(cfg.ArchiveAfterSeconds) * time.Second
 	m.archiveDeleteDefault = time.Duration(cfg.ArchiveDeleteAfterSeconds) * time.Second
@@ -487,13 +465,11 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		p.applySpec(spec)
 		m.pools[spec.PoolKey] = p
 	}
-	if slices.ContainsFunc(cfg.Pools, func(s config.PoolSpec) bool { return s.Egress.Intercepts() }) {
-		ca, err := loadEgressCA(cfg.EgressCA)
-		if err != nil {
-			return nil, fmt.Errorf("load egress ca: %w", err)
-		}
-		m.egressCA = ca
+	ca, caErr := outbound.LoadCA(cfg)
+	if caErr != nil {
+		return nil, fmt.Errorf("load egress ca: %w", caErr)
 	}
+	m.out = outbound.New(m.outboundOptions(ca))
 	m.configSeedHash = poolSeedHash(cfg.Pools)
 	if ms := cfg.MetaStore; ms != nil && ms.Cell != "" {
 		shared, err := poolpg.Open(ctx, os.Getenv(ms.DSNEnv), ms.Cell)
@@ -515,15 +491,7 @@ func (m *Manager) ClusterDigest() string {
 	m.reloadMu.Lock()
 	cfg := m.cfg
 	m.reloadMu.Unlock()
-	return cfg.ClusterDigest(m.EgressCAFingerprint(), m.TenantRecords())
-}
-
-// EgressCAFingerprint is the egress root's fingerprint, or "" when the node intercepts nothing.
-func (m *Manager) EgressCAFingerprint() string {
-	if m.egressCA == nil {
-		return ""
-	}
-	return m.egressCA.Fingerprint()
+	return cfg.ClusterDigest(m.out.CAFingerprint(), m.TenantRecords())
 }
 
 // Run drives the refill and reap loops until ctx is canceled.
@@ -715,22 +683,6 @@ func summarize(sb *types.Sandbox) SandboxSummary {
 		CPUCount: spec.CPU, MemTotalBytes: spec.MemoryBytes,
 		Volumes: slices.Clone(sb.Volumes),
 	}
-}
-
-func loadEgressCA(cfg *config.EgressCAConfig) (*egress.CA, error) {
-	root, err := os.ReadFile(cfg.RootCert)
-	if err != nil {
-		return nil, fmt.Errorf("read root cert: %w", err)
-	}
-	interCert, err := os.ReadFile(cfg.IntermediateCert)
-	if err != nil {
-		return nil, fmt.Errorf("read intermediate cert: %w", err)
-	}
-	interKey, err := os.ReadFile(cfg.IntermediateKey)
-	if err != nil {
-		return nil, fmt.Errorf("read intermediate key: %w", err)
-	}
-	return egress.LoadCA(root, interCert, interKey)
 }
 
 // The dir default lives here, not config.applyDefaults: tests build Config directly

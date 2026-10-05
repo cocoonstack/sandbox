@@ -13,7 +13,6 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
-	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -165,11 +164,7 @@ func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRe
 func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMRecord, removed map[string]bool) {
 	logger := log.WithFunc("pool.resyncEgress")
 	now := time.Now()
-	var locked map[string]bool
-	var lockedErr error
-	if m.lockEgress {
-		locked, lockedErr = netfilter.LockedTaps()
-	}
+	locked, lockedErr := m.out.LockedTaps()
 	var quarantine []*types.Sandbox
 	for _, sb := range m.claimed {
 		sb.TouchAt(now)
@@ -177,13 +172,12 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 		if sb.HibernateSnap != "" || sb.ArchiveCk != "" || sb.Failed != "" {
 			continue
 		}
-		// a down egress-lane VM has no guest to lock or mark; the liveness pass fails it
-		if m.locksNIC(sb.Key) && live[sb.VMName].State != vmStateRunning {
-			m.readoptEgressTap(sb, live)
-			continue
-		}
-		if m.locksNIC(sb.Key) {
+		if m.out.LocksNIC(sb.Key) {
 			tap := m.readoptEgressTap(sb, live)
+			// a down egress-lane VM has no guest to lock or mark; the liveness pass fails it
+			if live[sb.VMName].State != vmStateRunning {
+				continue
+			}
 			if tap == "" {
 				logger.Errorf(ctx, errNoEgressTap, "egress claim %s has no lockable tap; quarantining", sb.ID)
 				quarantine = append(quarantine, sb)
@@ -191,10 +185,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 			}
 			err := lockedErr
 			if err == nil && !locked[tap] {
-				err = netfilter.Lock(tap)
-			}
-			if err == nil && !locked[tap] {
-				err = m.markLane(ctx, sb.Key, sb.VsockSocket)
+				err = m.out.Relock(ctx, sb, tap)
 			}
 			if err != nil {
 				logger.Errorf(ctx, err, "ensure egress lock %s; quarantining", sb.ID)
@@ -202,7 +193,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 				continue
 			}
 		}
-		if proxyErr := m.armEgressProxy(ctx, sb); proxyErr != nil {
+		if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
 			logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 		}
 	}
@@ -221,7 +212,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 			keep[tap] = true
 		}
 	}
-	if sweepErr := m.sweep(keep); sweepErr != nil {
+	if sweepErr := m.out.Sweep(keep); sweepErr != nil {
 		logger.Warnf(ctx, "sweep orphan egress tables: %v", sweepErr)
 	}
 }
@@ -248,8 +239,8 @@ func (m *Manager) readoptEgressTap(sb *types.Sandbox, live map[string]types.VMRe
 	if !ok || tap == "" {
 		return ""
 	}
+	m.out.KeepLock(sb.ID, tap)
 	m.mu.Lock()
-	m.egressTaps[sb.ID] = tap
 	sb.TAP = tap
 	m.store.set(sb)
 	m.mu.Unlock()

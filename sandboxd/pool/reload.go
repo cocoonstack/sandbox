@@ -3,8 +3,6 @@ package pool
 import (
 	"context"
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
 
 	"github.com/projecteru2/core/log"
@@ -38,23 +36,17 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 		return ReloadResult{}, fmt.Errorf("%w: secrets: %w", ErrBadConfig, err)
 	}
 	old, view := m.view.Load(), newConfigView(next, secrets)
-	if err := m.refuseInterceptOn(old, view); err != nil {
-		return ReloadResult{}, err
+	if err := m.out.RefuseInterceptOn(old.out, view.out, m.servedKey); err != nil {
+		return ReloadResult{}, fmt.Errorf("%w: %w", ErrReloadRefused, err)
 	}
 	var trim []string
-	var doors []*egressListener
 	var injecting []*types.Sandbox
 	m.mu.Lock()
 	m.view.Store(view)
-	live := slices.Collect(maps.Values(m.egressListeners))
 	for _, sb := range m.claimed {
 		if sb.Env.HasInject() {
 			injecting = append(injecting, sb)
 		}
-	}
-	if !view.guardedEgress {
-		doors = slices.Collect(maps.Values(m.egressPrebound))
-		clear(m.egressPrebound)
 	}
 	for _, p := range m.pools {
 		if p.goldenDir != "" && m.goldenStamp(old, p.key, p.imageID) != m.goldenStamp(view, p.key, p.imageID) {
@@ -63,12 +55,7 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 		}
 	}
 	m.mu.Unlock()
-	for _, el := range doors {
-		el.close()
-	}
-	for _, el := range live {
-		el.proxy.ResetPools()
-	}
+	m.out.Reloaded(view.out)
 	m.destroyAll(context.WithoutCancel(ctx), trim).Wait()
 	m.cfg = next
 	m.recordAudit(ctx, "", auditFrame{Op: "config_reload", Changed: changed})
@@ -84,27 +71,10 @@ func (m *Manager) warnLostInjects(ctx context.Context, v *configView, sbs []*typ
 		m.mu.Lock()
 		env := sb.Env
 		m.mu.Unlock()
-		eval, ok := m.effectivePolicy(v, sb)
-		if gap := v.injectGap(eval, ok, sb, env); len(gap) > 0 {
+		if gap := v.out.InjectGap(sb, env, m.claimPooled); len(gap) > 0 {
 			log.WithFunc("pool.warnLostInjects").Warnf(ctx, "claim %s: inject no longer intercepted: %s", sb.ID, strings.Join(gap, ", "))
 		}
 	}
-}
-
-// refuseInterceptOn turns intercept on only for a key whose guests can trust the CA: one the node has not served, with the CA loaded at boot.
-func (m *Manager) refuseInterceptOn(old, next *configView) error {
-	for _, key := range slices.SortedFunc(maps.Keys(next.poolEgress), func(a, b types.PoolKey) int { return strings.Compare(a.Hash(), b.Hash()) }) {
-		if old.poolEgress[key].Intercepts() || !next.poolEgress[key].Intercepts() {
-			continue
-		}
-		switch {
-		case m.egressCA == nil:
-			return fmt.Errorf("%w: pool %s turns intercept on, which needs egress_ca loaded at boot: restart", ErrReloadRefused, key.Template)
-		case m.servedKey(key):
-			return fmt.Errorf("%w: pool %s turns intercept on, but its guests do not trust the CA: use a new pool key", ErrReloadRefused, key.Template)
-		}
-	}
-	return nil
 }
 
 func (m *Manager) servedKey(key types.PoolKey) bool {

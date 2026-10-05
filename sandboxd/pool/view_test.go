@@ -2,22 +2,33 @@ package pool
 
 import (
 	"maps"
+	"slices"
+	"testing"
 
+	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 func editView(m *Manager, edit func(v *configView)) {
 	cur := m.view.Load()
 	next := *cur
-	next.poolEgress = maps.Clone(cur.poolEgress)
-	next.classEgress = maps.Clone(cur.classEgress)
 	next.poolWarmups = maps.Clone(cur.poolWarmups)
 	next.poolTrims = maps.Clone(cur.poolTrims)
 	next.poolStorage = maps.Clone(cur.poolStorage)
-	next.poolUpstream = maps.Clone(cur.poolUpstream)
-	next.classUpstream = maps.Clone(cur.classUpstream)
 	edit(&next)
 	m.view.Store(&next)
+}
+
+// editEgress builds the view without secrets.
+func editEgress(t *testing.T, m *Manager, edit func(cfg *config.Config)) {
+	t.Helper()
+	cfg := *m.cfg
+	cfg.Pools = slices.Clone(cfg.Pools)
+	cfg.EgressClasses = slices.Clone(cfg.EgressClasses)
+	edit(&cfg)
+	out := outbound.NewView(&cfg, testSecrets(t))
+	editView(m, func(v *configView) { v.out = out })
 }
 
 func stampWithWarmup(m *Manager, key types.PoolKey, warmup []string, imageID string) string {

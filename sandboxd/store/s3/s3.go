@@ -41,15 +41,6 @@ const (
 	deleteBatch         = 1000 // DeleteObjects caps one request at 1000 keys
 )
 
-// Config selects the bucket; credentials come from the standard AWS chain, never this config.
-type Config struct {
-	Bucket         string `json:"bucket"`
-	Prefix         string `json:"prefix,omitempty"`
-	Endpoint       string `json:"endpoint,omitempty"`
-	Region         string `json:"region,omitempty"`
-	ForcePathStyle bool   `json:"force_path_style,omitzero"`
-}
-
 type publishFile struct {
 	path       string
 	key        string
@@ -75,7 +66,7 @@ type Store struct {
 }
 
 // New builds the backend; ctx bounds the credential-chain resolution.
-func New(ctx context.Context, cfg Config, stagingRoot string, idRe *regexp.Regexp) (*Store, error) {
+func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *regexp.Regexp) (*Store, error) {
 	if cfg.Bucket == "" {
 		return nil, fmt.Errorf("s3 checkpoint store needs a bucket")
 	}

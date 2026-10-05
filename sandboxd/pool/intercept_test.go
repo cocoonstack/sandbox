@@ -15,7 +15,7 @@ import (
 func TestGoldenBuildInstallsCAForInterceptPool(t *testing.T) {
 	eng := newFakeEngine()
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()})
-	if m.egressCA == nil {
+	if m.out.CAFingerprint() == "" {
 		t.Fatal("egress CA not loaded for an intercept pool")
 	}
 	final := filepath.Join(m.goldensDir(), testKey.Hash())
@@ -38,7 +38,7 @@ func TestGoldenBuildSkipsCAForPlainPool(t *testing.T) {
 	eng := newFakeEngine()
 	plain := &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh"}}}
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: plain})
-	if m.egressCA != nil {
+	if m.out.CAFingerprint() != "" {
 		t.Error("egress CA loaded though no pool intercepts")
 	}
 	final := filepath.Join(m.goldensDir(), testKey.Hash())
@@ -65,7 +65,7 @@ func TestGoldenCAStampRebuildsOnMismatch(t *testing.T) {
 		t.Error("adopted an intercept golden with no stamp; want rebuild")
 	}
 	baked := m.goldenStamp(m.view.Load(), testKey, "")
-	stale := strings.Replace(baked, m.egressCA.Fingerprint(), "deadbeef", 1)
+	stale := strings.Replace(baked, m.out.CAFingerprint(), "deadbeef", 1)
 	if err := os.WriteFile(final+goldenStampSuffix, []byte(stale), 0o644); err != nil {
 		t.Fatalf("write stale stamp: %v", err)
 	}
@@ -81,8 +81,8 @@ func TestGoldenCAStampRebuildsOnMismatch(t *testing.T) {
 		t.Error("rejected an intercept golden whose CA fingerprint matches")
 	}
 	p.goldenDir = ""
-	editView(m, func(v *configView) {
-		v.poolEgress[testKey] = &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh"}}}
+	editEgress(t, m, func(cfg *config.Config) {
+		cfg.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh"}}}}}
 	})
 	m.adoptGolden(p, "")
 	if p.goldenDir != "" {

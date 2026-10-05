@@ -23,7 +23,7 @@ import (
 	"github.com/docker/go-units"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
-	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
+	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
@@ -111,8 +111,8 @@ func (s PoolSpec) ValidateLimits() error {
 
 // StoreConfig selects a checkpoint backend.
 type StoreConfig struct {
-	Kind string     `json:"kind"`
-	S3   *s3.Config `json:"s3,omitempty"`
+	Kind string          `json:"kind"`
+	S3   *store.S3Config `json:"s3,omitempty"`
 }
 
 // EgressUpstreamConfig lets a claim's host-only ClaimEnv entry name the proxy its egress leaves through, from the Allow list.

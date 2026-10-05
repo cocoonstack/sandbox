@@ -331,7 +331,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 			err = fmt.Errorf("vm %s survived removal", vmName)
 		}
 	}
-	m.disarmEgress(id, removed)
+	m.out.Disarm(id, removed)
 	m.dropSnap(ctx, snap)
 	m.counters.releases.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "release", ID: id, VMName: vmName})
@@ -452,7 +452,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		return fmt.Errorf("persist claim: %w", saveErr)
 	}
 	for _, sb := range sbs {
-		if armErr := m.armEgress(ctx, sb); armErr != nil {
+		if armErr := m.out.Arm(ctx, sb); armErr != nil {
 			m.rollbackClaim(ctx, sbs)
 			return fmt.Errorf("arm egress %s: %w", sb.ID, armErr)
 		}
@@ -483,7 +483,7 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	m.recommit(ctx, rb)
 	for _, sb := range sbs {
 		td := m.quiesceVolumes(ctx, sb)
-		m.disarmEgress(sb.ID, m.removeOrRetry(ctx, sb.VMName, sb.ID, "", td))
+		m.out.Disarm(sb.ID, m.removeOrRetry(ctx, sb.VMName, sb.ID, "", td))
 	}
 }
 
@@ -603,7 +603,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		v := expired[i]
 		switch v.action {
 		case reapPurge:
-			m.disarmEgress(v.id, true)
+			m.out.Disarm(v.id, true)
 			m.purgeArchiveCk(ctx, v.id, v.ck, v.tenant)
 			m.untrack(m.pendingCks, v.ck)
 			m.counters.reaps.Add(1)
@@ -615,7 +615,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			logSweepResult(ctx, logger, m.pauseExpired(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
 		default:
 			td := m.quiesceVolumes(ctx, v.sb)
-			m.disarmEgress(v.id, m.removeOrRetry(ctx, v.vmName, v.id, "", td))
+			m.out.Disarm(v.id, m.removeOrRetry(ctx, v.vmName, v.id, "", td))
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)
 			m.recordUsage(ctx, usageEvent{Event: "reap", ID: v.id, VMName: v.vmName})
