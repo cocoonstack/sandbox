@@ -1199,6 +1199,7 @@ type fakeEngine struct {
 	probeStall      chan struct{}
 	hibernateStall  chan struct{}
 	removeStall     chan struct{}
+	exportStall     chan struct{}
 	snapRemoveStall chan struct{}
 	snapListStall   chan struct{}
 	snapListCount   int
@@ -1318,7 +1319,11 @@ func (f *fakeEngine) SnapshotExport(_ context.Context, snapName, toDir string) e
 	f.mu.Lock()
 	f.exports = append(f.exports, snapName)
 	content := slices.Clone(f.exportContent)
+	stall := f.exportStall
 	f.mu.Unlock()
+	if stall != nil {
+		<-stall
+	}
 	if err := os.MkdirAll(toDir, 0o750); err != nil {
 		return err
 	}

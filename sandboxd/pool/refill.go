@@ -361,14 +361,21 @@ func (m *Manager) sourceSnap(ctx context.Context, sb *types.Sandbox) (string, fu
 // exportSource captures a claimed sandbox into exportDir and returns its snapshot, VM name and guest-env presence.
 func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir string) (snap, vmName string, guestEnv bool, err error) {
 	sb.Transition.Lock()
-	defer sb.Transition.Unlock()
 	m.trimForCapture(ctx, sb)
 	snap, cleanup, err := m.sourceSnap(ctx, sb)
 	if err != nil {
+		sb.Transition.Unlock()
 		return "", "", false, err
 	}
 	defer cleanup()
-	return snap, sb.VMName, m.heldGuestEnv(sb), m.eng.SnapshotExport(ctx, snap, exportDir)
+	vmName, guestEnv = sb.VMName, m.heldGuestEnv(sb)
+	// a fresh snapshot is this capture's alone, so dials need not wait out its export; a wake consumes a hibernate snapshot
+	if snap != sb.HibernateSnap {
+		sb.Transition.Unlock()
+	} else {
+		defer sb.Transition.Unlock()
+	}
+	return snap, vmName, guestEnv, m.eng.SnapshotExport(ctx, snap, exportDir)
 }
 
 // trimForCapture trims a live sandbox's copy-on-write disk when its pool asks for it; a failed trim only leaves the capture larger.
