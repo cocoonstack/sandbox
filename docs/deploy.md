@@ -378,6 +378,17 @@ dominates fill throughput:
   pressure, it collapses — on a quiet host RC 256 halves the fill rate RC 64
   achieves.
 
+### A caching resolver for egress
+
+The egress proxy resolves the destination of every new upstream connection
+(a CONNECT tunnel, a direct dial, and the proxy host on a routed `upstream`)
+with Go's resolver, which reads `/etc/resolv.conf` and caches nothing. Against
+a network resolver one lookup measured 3.2–3.6 ms, about a fifth of a new
+HTTPS tunnel's setup. Run a caching resolver on the node — the
+systemd-resolved stub, dnsmasq or unbound; node-local-dns on Kubernetes — and
+point `/etc/resolv.conf` at it. It honors record TTLs, and the internal-address
+guard still checks every address it returns.
+
 ### Reserving CPU for the control plane
 
 A saturated node can leave clone/wake execution and sandboxd itself nothing
