@@ -5,7 +5,6 @@ from __future__ import annotations
 import http.client
 import json
 import queue
-import select
 import ssl
 import threading
 import time
@@ -14,7 +13,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, TypeVar, cast
 
 from .checkpoint import Checkpoint
-from .conn import Conn, dial_agent, remaining_timeout
+from .conn import Conn, dial_agent, is_quiet, remaining_timeout
 from .endpoint import _endpoint_url
 from .errors import APIError, SandboxTimeout, require_field
 from .sandbox import Sandbox
@@ -259,7 +258,7 @@ class Client:
             idle = self._idle.get(key, [])
             while idle:
                 conn, parked = idle.pop()
-                if time.monotonic() - parked < self.keep_alive and _quiet(conn.sock):
+                if time.monotonic() - parked < self.keep_alive and is_quiet(conn.sock):
                     conn.sock.settimeout(timeout)
                     return conn
                 conn.close()
@@ -273,16 +272,6 @@ class Client:
             self._ssl_context = ssl.create_default_context()
             self._ssl_context.set_alpn_protocols(["http/1.1"])
         return self._ssl_context
-
-
-def _quiet(sock: Any) -> bool:
-    if sock is None:
-        return False
-    try:
-        readable, _, _ = select.select([sock], [], [], 0)
-    except (OSError, ValueError):
-        return False
-    return not readable
 
 
 def _claim_body(
