@@ -56,6 +56,44 @@ func TestCheckpointThenBranch(t *testing.T) {
 	}
 }
 
+func TestCheckpointExportLetsADialReachTheRunningSource(t *testing.T) {
+	eng := newFakeEngine()
+	eng.exportStall = make(chan struct{})
+	m := newTestManager(t, eng)
+	src := mustClaim(t, m, testKey)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.Checkpoint(context.WithoutCancel(t.Context()), src.ID, Cred{Token: src.Token}, "", "")
+		done <- err
+	}()
+	waitFor(t, func() bool {
+		eng.mu.Lock()
+		defer eng.mu.Unlock()
+		return len(eng.exports) == 1
+	})
+	dialed := make(chan error, 1)
+	go func() {
+		_, release, err := m.WakeAgentSocket(t.Context(), src.ID, src.Token)
+		if err == nil {
+			release()
+		}
+		dialed <- err
+	}()
+	select {
+	case err := <-dialed:
+		if err != nil {
+			t.Errorf("dial during the export: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("a dial to the running source waited on its checkpoint export")
+	}
+	close(eng.exportStall)
+	if err := <-done; err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+}
+
 func TestCheckpointClaimsLeaveNoRecordLock(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	src := mustClaim(t, m, testKey)
