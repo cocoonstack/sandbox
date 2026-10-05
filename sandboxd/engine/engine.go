@@ -50,6 +50,8 @@ const (
 	outputTail     = 400
 	portForwardMax = 4096           // port_forward handshake reply line cap
 	vmNotFound     = "vm not found" // cocoon's hypervisor.ErrNotFound text
+	// at 16 concurrent memory dumps cocoon's sqlite writers already time out on its 5 s lock wait; 8 measured clean
+	memoryDumps = 8
 )
 
 // capacitySignatures mean the node cannot attach another VM, not that this VM failed.
@@ -69,11 +71,12 @@ type Engine struct {
 	noDirectIO  bool
 	noBalloon   bool
 	restoreMode types.RestoreMode
+	dumps       chan struct{}
 }
 
 // New returns a cocoon engine with node-wide network and disk policy.
 func New(bin string, bridges, networks []string, noDirectIO, noBalloon bool, restoreMode types.RestoreMode) *Engine {
-	return &Engine{bin: bin, bridges: bridges, networks: networks, noDirectIO: noDirectIO, noBalloon: noBalloon, restoreMode: restoreMode}
+	return &Engine{bin: bin, bridges: bridges, networks: networks, noDirectIO: noDirectIO, noBalloon: noBalloon, restoreMode: restoreMode, dumps: make(chan struct{}, memoryDumps)}
 }
 
 // Version reports cocoon's version string: a "vX.Y.Z" release or a "master-<sha>" dev build.
@@ -153,14 +156,12 @@ func (e *Engine) ReconcileStaleCreate(ctx context.Context, name string) (StaleCr
 
 // SnapshotSave snapshots a running VM under snapName.
 func (e *Engine) SnapshotSave(ctx context.Context, vmName, snapName string) error {
-	_, err := e.run(ctx, "snapshot", "save", argName, snapName, vmName)
-	return err
+	return e.runDump(ctx, "snapshot", "save", argName, snapName, vmName)
 }
 
 // Hibernate atomically snapshots a running VM under snapName and stops it.
 func (e *Engine) Hibernate(ctx context.Context, vmName, snapName string) error {
-	_, err := e.run(ctx, "vm", "hibernate", argName, snapName, vmName)
-	return err
+	return e.runDump(ctx, "vm", "hibernate", argName, snapName, vmName)
 }
 
 // Restore resumes a VM from a snapshot, returning its vsock UDS.
@@ -397,6 +398,17 @@ func (e *Engine) run(ctx context.Context, args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("cocoon %s: %w: %s", strings.Join(args[:min(len(args), 2)], " "), err, tail(stderr.String()))
 	}
 	return stdout.Bytes(), nil
+}
+
+func (e *Engine) runDump(ctx context.Context, args ...string) error {
+	select {
+	case e.dumps <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-e.dumps }()
+	_, err := e.run(ctx, args...)
+	return err
 }
 
 func (e *Engine) runRecord(ctx context.Context, args ...string) (types.VMRecord, error) {
