@@ -325,18 +325,22 @@ func TestDaemonExitEventRecoversWithoutAList(t *testing.T) {
 	eng := newFakeEngine()
 	eng.vmEvents = make(chan fakeVMEvent)
 	m := newTestManager(t, eng)
-	sb := mustClaim(t, m, testKey)
+	sb, other := mustClaim(t, m, testKey), mustClaim(t, m, testKey)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go m.watchVMMs(ctx)
-	eng.vmEvents <- fakeVMEvent{sync: []engine.VMStatus{{Name: sb.VMName, Live: true}}}
+	eng.vmEvents <- fakeVMEvent{sync: []engine.VMStatus{{Name: sb.VMName, Live: true}, {Name: other.VMName, Live: true}}}
 	waitFor(t, m.vmmEvents.Load)
 	lists := eng.listCalls()
 
 	killVMM(eng, sb.VMName)
+	killVMM(eng, other.VMName)
 	eng.vmEvents <- fakeVMEvent{change: engine.VMChange{Kind: "MODIFIED", VM: engine.VMStatus{Name: sb.VMName}}}
 
 	waitFor(t, func() bool { got, _ := m.Sandbox(sb.ID); return got.Restarts == 1 })
+	if got, _ := m.Sandbox(other.ID); got.Restarts != 0 {
+		t.Errorf("an event for %s restarted %s too", sb.VMName, other.VMName)
+	}
 	runLiveness(t, m)
 	if got := eng.listCalls(); got != lists {
 		t.Errorf("vm list ran %d times with the stream live, want none", got-lists)

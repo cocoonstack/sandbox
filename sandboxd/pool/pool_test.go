@@ -1059,7 +1059,7 @@ func (c *closeWriteConn) CloseWrite() error {
 	return nil
 }
 
-func newTestManager(t *testing.T, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
+func newTestManager(t testing.TB, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	return newTestManagerAt(t, eng, t.TempDir(), pools...)
 }
@@ -1081,7 +1081,7 @@ func mustClaim(t *testing.T, m *Manager, key types.PoolKey) *types.Sandbox {
 	return sb
 }
 
-func newTestManagerAt(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
+func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	m, err := NewManager(t.Context(), &config.Config{DataDir: dataDir, Pools: pools}, eng, testSecrets(t))
 	if err != nil {
