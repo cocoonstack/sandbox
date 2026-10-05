@@ -1,9 +1,12 @@
 //! exec handler: a detached exec returns after `started` and stays in the table for attach/logs.
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use nix::unistd::{AccessFlags, access};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -31,8 +34,15 @@ pub async fn run<W>(
 where
     W: AsyncWrite + Unpin,
 {
-    let mut cmd = Command::new(&req.argv[0]);
-    cmd.args(&req.argv[1..])
+    let claim = sysutil::claim_env();
+    let program = if req.user.is_none() {
+        resolve_program(&req.argv[0], effective_path(&req.env, &claim))
+    } else {
+        None
+    };
+    let mut cmd = Command::new(program.as_deref().unwrap_or(Path::new(&req.argv[0])));
+    cmd.arg0(&req.argv[0])
+        .args(&req.argv[1..])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -42,7 +52,7 @@ where
     }
     cmd.env_clear();
     cmd.envs(sysutil::base_env().iter().copied());
-    cmd.envs(sysutil::claim_env());
+    cmd.envs(claim);
     cmd.envs(&req.env);
     if let Some(ref user) = req.user
         && let Err(e) = sysutil::apply_user(&mut cmd, user)
@@ -218,4 +228,91 @@ async fn pump_stdin(
         }
     }
     let _ = sink.shutdown().await;
+}
+
+/// The PATH the child sees: the request's, else the claim's, else the base environment's.
+fn effective_path<'a>(
+    req: &'a HashMap<String, String>,
+    claim: &'a [(String, String)],
+) -> Option<&'a str> {
+    req.get("PATH")
+        .map(String::as_str)
+        .or_else(|| {
+            claim
+                .iter()
+                .rev()
+                .find(|(k, _)| k == "PATH")
+                .map(|(_, v)| v.as_str())
+        })
+        .or_else(|| {
+            sysutil::base_env()
+                .iter()
+                .find(|(k, _)| *k == "PATH")
+                .map(|(_, v)| *v)
+        })
+}
+
+/// Finds a bare program on path as execvp would, so std can posix_spawn an absolute path instead of forking; a relative entry leaves the search to execvp.
+fn resolve_program(name: &str, path: Option<&str>) -> Option<PathBuf> {
+    if name.is_empty() || name.contains('/') {
+        return None;
+    }
+    for dir in path?.split(':') {
+        if !dir.starts_with('/') {
+            return None;
+        }
+        let candidate = Path::new(dir).join(name);
+        if candidate.is_file() && access(&candidate, AccessFlags::X_OK).is_ok() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    fn program(dir: &Path, name: &str, mode: u32) {
+        let path = dir.join(name);
+        std::fs::write(&path, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[test]
+    fn resolve_program_takes_the_first_executable_on_path() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        program(a.path(), "tool", 0o644);
+        program(b.path(), "tool", 0o755);
+        let path = format!("{}:{}", a.path().display(), b.path().display());
+        assert_eq!(
+            resolve_program("tool", Some(&path)),
+            Some(b.path().join("tool"))
+        );
+        assert_eq!(resolve_program("missing", Some(&path)), None);
+    }
+
+    #[test]
+    fn resolve_program_leaves_paths_and_relative_entries_to_execvp() {
+        let dir = tempfile::tempdir().unwrap();
+        program(dir.path(), "tool", 0o755);
+        let after_relative = format!("bin:{}", dir.path().display());
+        assert_eq!(resolve_program("tool", Some(&after_relative)), None);
+        assert_eq!(
+            resolve_program("./tool", Some(&dir.path().display().to_string())),
+            None
+        );
+        assert_eq!(resolve_program("tool", None), None);
+    }
+
+    #[test]
+    fn effective_path_prefers_the_request_then_the_claim() {
+        let req = HashMap::from([("PATH".to_string(), "/req".to_string())]);
+        let claim = vec![("PATH".to_string(), "/claim".to_string())];
+        assert_eq!(effective_path(&req, &claim), Some("/req"));
+        assert_eq!(effective_path(&HashMap::new(), &claim), Some("/claim"));
+        assert!(effective_path(&HashMap::new(), &[]).is_some_and(|p| p.contains("/usr/bin")));
+    }
 }

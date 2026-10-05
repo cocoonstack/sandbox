@@ -23,23 +23,13 @@ where
     W: AsyncWrite + Unpin,
 {
     let (tx, mut rx) = mpsc::channel::<Response>(256);
-    let mut tx = Some(tx);
-    let mut frames = Vec::new();
-    let mut watcher = match notify::recommended_watcher(move |res| {
-        to_frames(res, &mut frames);
-        forward_frames(&mut tx, &mut frames);
-    }) {
-        Ok(watcher) => watcher,
+    // arming walks the tree and adds a watch per directory, so it must not hold a runtime worker
+    let armed = tokio::task::spawn_blocking(move || arm(tx, &path, recursive)).await;
+    let _watcher = match armed {
+        Ok(Ok(watcher)) => watcher,
+        Ok(Err((kind, message))) => return proto::error_frame(w, kind, message).await,
         Err(e) => return proto::error_frame(w, ErrorKind::Internal, e.to_string()).await,
     };
-    let mode = if recursive {
-        RecursiveMode::Recursive
-    } else {
-        RecursiveMode::NonRecursive
-    };
-    if let Err(e) = watcher.watch(std::path::Path::new(&path), mode) {
-        return proto::error_frame(w, map_kind(&e), e.to_string()).await;
-    }
     proto::write_frame(w, &Response::Ready).await?;
     let mut batch = Vec::new();
     let mut buf = Vec::new();
@@ -63,6 +53,29 @@ where
             _ = reader.fill_buf() => return Ok(()),
         }
     }
+}
+
+fn arm(
+    tx: mpsc::Sender<Response>,
+    path: &str,
+    recursive: bool,
+) -> Result<notify::RecommendedWatcher, (ErrorKind, String)> {
+    let mut tx = Some(tx);
+    let mut frames = Vec::new();
+    let mut watcher = notify::recommended_watcher(move |res| {
+        to_frames(res, &mut frames);
+        forward_frames(&mut tx, &mut frames);
+    })
+    .map_err(|e| (ErrorKind::Internal, e.to_string()))?;
+    let mode = if recursive {
+        RecursiveMode::Recursive
+    } else {
+        RecursiveMode::NonRecursive
+    };
+    watcher
+        .watch(std::path::Path::new(path), mode)
+        .map_err(|e| (map_kind(&e), e.to_string()))?;
+    Ok(watcher)
 }
 
 fn forward_frames(tx: &mut Option<mpsc::Sender<Response>>, frames: &mut Vec<Response>) {
