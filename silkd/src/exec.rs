@@ -35,7 +35,11 @@ where
     W: AsyncWrite + Unpin,
 {
     let claim = sysutil::claim_env();
-    let program = resolve_program(&req.argv[0], effective_path(&req.env, &claim));
+    let program = if req.user.is_none() {
+        resolve_program(&req.argv[0], effective_path(&req.env, &claim))
+    } else {
+        None
+    };
     let mut cmd = Command::new(program.as_deref().unwrap_or(Path::new(&req.argv[0])));
     cmd.arg0(&req.argv[0])
         .args(&req.argv[1..])
