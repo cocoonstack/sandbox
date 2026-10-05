@@ -105,15 +105,15 @@ var (
 	// responseDecoders dispatches on the type tag first: one key differs in shape across variants.
 	responseDecoders = map[string]respDecoder{
 		"started":           decodeResp[Started],
-		"stdout":            fastBulk("stdout", decodeResp[Stdout], func(d []byte) Response { return &Stdout{Data: d} }),
-		"stderr":            fastBulk("stderr", decodeResp[Stderr], func(d []byte) Response { return &Stderr{Data: d} }),
+		"stdout":            decodeResp[Stdout],
+		"stderr":            decodeResp[Stderr],
 		"exit":              decodeResp[Exit],
 		"done":              decodeResp[Done],
 		"ready":             decodeResp[Ready],
 		"error":             decodeResp[ErrorResp],
 		"info":              decodeResp[InfoResp],
 		"procs":             decodeResp[Procs],
-		"data":              fastBulk("data", decodeResp[DataResp], func(d []byte) Response { return &DataResp{Data: d} }),
+		"data":              decodeResp[DataResp],
 		"entries":           decodeResp[Entries],
 		"stat":              decodeResp[Stat],
 		"session_created":   decodeResp[SessionCreated],
@@ -126,6 +126,13 @@ var (
 		"git_commit_result": decodeResp[GitCommitResult],
 		"git_branches":      decodeResp[GitBranches],
 	}
+
+	// bulkResponses decode their canonical shape without json.Unmarshal; any other shape takes responseDecoders.
+	bulkResponses = bulkDecoders(
+		func(d []byte) Response { return &Stdout{Data: d} },
+		func(d []byte) Response { return &Stderr{Data: d} },
+		func(d []byte) Response { return &DataResp{Data: d} },
+	)
 )
 
 // Request is a client→server frame; Op is its wire tag.
@@ -135,6 +142,11 @@ type Request interface{ Op() string }
 type Response interface{ RespType() string }
 
 type respDecoder func([]byte) (Response, error)
+
+type bulkResponse struct {
+	head []byte
+	mk   func([]byte) Response
+}
 
 // reqPtr and respPtr turn a mistyped decoder table entry into a compile error.
 type reqPtr[T any] interface {
@@ -667,15 +679,12 @@ func DecodeRequest(line []byte) (Request, error) {
 // DecodeResponse parses one frame into its type's concrete Go type. Byte
 // fields are freshly allocated per frame, so callers may retain them.
 func DecodeResponse(line []byte) (Response, error) {
-	typ, err := frameTag(line, respTagHead, "type")
-	if err != nil {
-		return nil, fmt.Errorf("parse response frame: %w", err)
-	}
-	dec, ok := responseDecoders[string(typ)]
-	if !ok {
-		return nil, fmt.Errorf("unknown response type %q", typ)
-	}
-	return dec(line)
+	return decodeResponse(line, nil)
+}
+
+// DecodeResponseInto is DecodeResponse for a streaming consumer: a bulk frame's bytes land in *scratch, grown as needed, and stay valid only until the next call with it.
+func DecodeResponseInto(line []byte, scratch *[]byte) (Response, error) {
+	return decodeResponse(line, scratch)
 }
 
 // NewFrameScanner wraps r for newline-delimited frames capped at MaxFrame.
@@ -707,26 +716,58 @@ func IsContinuation(line []byte) bool {
 	return false
 }
 
-// fastBulk decodes a canonical bulk frame without json.Unmarshal; any other shape falls back to slow.
-func fastBulk(tag string, slow respDecoder, mk func([]byte) Response) respDecoder {
-	head := []byte(`{"type":"` + tag + `","data":"`)
-	return func(line []byte) (Response, error) {
-		after, ok := bytes.CutPrefix(line, head)
-		if !ok {
-			return slow(line)
-		}
-		b64, rest, ok := bytes.Cut(after, []byte(`"`))
-		if !ok || !bytes.Equal(rest, []byte(`}`)) {
-			return slow(line)
-		}
-		out := make([]byte, base64.StdEncoding.DecodedLen(len(b64)))
-		n, err := base64.StdEncoding.Decode(out, b64)
-		// Decode skips CR/LF, so a length mismatch means non-canonical input.
-		if err != nil || base64.StdEncoding.EncodedLen(n) != len(b64) {
-			return slow(line)
-		}
-		return mk(out[:n]), nil
+func bulkDecoders(mks ...func([]byte) Response) map[string]bulkResponse {
+	out := make(map[string]bulkResponse, len(mks))
+	for _, mk := range mks {
+		tag := mk(nil).RespType()
+		out[tag] = bulkResponse{head: []byte(`{"type":"` + tag + `","data":"`), mk: mk}
 	}
+	return out
+}
+
+func decodeResponse(line []byte, scratch *[]byte) (Response, error) {
+	typ, err := frameTag(line, respTagHead, "type")
+	if err != nil {
+		return nil, fmt.Errorf("parse response frame: %w", err)
+	}
+	if bulk, ok := bulkResponses[string(typ)]; ok {
+		if data, ok := decodeBulk(line, bulk.head, scratch); ok {
+			return bulk.mk(data), nil
+		}
+	}
+	dec, ok := responseDecoders[string(typ)]
+	if !ok {
+		return nil, fmt.Errorf("unknown response type %q", typ)
+	}
+	return dec(line)
+}
+
+// decodeBulk decodes a canonical bulk frame's payload into scratch, or a fresh buffer when scratch is nil; ok is false for any other shape.
+func decodeBulk(line, head []byte, scratch *[]byte) ([]byte, bool) {
+	after, ok := bytes.CutPrefix(line, head)
+	if !ok {
+		return nil, false
+	}
+	b64, rest, ok := bytes.Cut(after, []byte(`"`))
+	if !ok || !bytes.Equal(rest, []byte(`}`)) {
+		return nil, false
+	}
+	size := base64.StdEncoding.DecodedLen(len(b64))
+	var out []byte
+	if scratch == nil {
+		out = make([]byte, size)
+	} else {
+		if cap(*scratch) < size {
+			*scratch = make([]byte, size)
+		}
+		out = (*scratch)[:size]
+	}
+	n, err := base64.StdEncoding.Decode(out, b64)
+	// Decode skips CR/LF, so a length mismatch means non-canonical input.
+	if err != nil || base64.StdEncoding.EncodedLen(n) != len(b64) {
+		return nil, false
+	}
+	return out[:n], true
 }
 
 // encodeTagged splices the tag head in front of v's fields, so wire tags never live on the structs; the spare capacity byte lets Conn.Send append the newline without a copy.

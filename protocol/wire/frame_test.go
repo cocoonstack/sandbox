@@ -247,6 +247,56 @@ func TestBulkDecodeStrictShape(t *testing.T) {
 	}
 }
 
+func TestDecodeResponseIntoReusesScratch(t *testing.T) {
+	var scratch []byte
+	first, err := DecodeResponseInto([]byte(`{"type":"data","data":"aGVsbG8="}`), &scratch)
+	if err != nil || string(first.(*DataResp).Data) != "hello" {
+		t.Fatalf("first frame: %#v, %v", first, err)
+	}
+	second, err := DecodeResponseInto([]byte(`{"type":"stdout","data":"d29ybGQ="}`), &scratch)
+	if err != nil || string(second.(*Stdout).Data) != "world" {
+		t.Fatalf("second frame: %#v, %v", second, err)
+	}
+	if &first.(*DataResp).Data[0] != &second.(*Stdout).Data[0] {
+		t.Error("second frame did not reuse the scratch buffer")
+	}
+	shadowed, err := DecodeResponseInto([]byte(`{"type":"stdout","meta":{"data":"WFhY"},"data":"aGk="}`), &scratch)
+	if err != nil || string(shadowed.(*Stdout).Data) != "hi" {
+		t.Errorf("non-canonical frame: %#v, %v", shadowed, err)
+	}
+	for _, frame := range []string{
+		`{"type":"stdout","data":"aGk="}garbage`,
+		"{\"type\":\"stdout\",\"data\":\"Q\nQ==\"}",
+	} {
+		if _, err := DecodeResponseInto([]byte(frame), &scratch); err == nil {
+			t.Errorf("malformed frame accepted: %s", frame)
+		}
+	}
+}
+
+func TestDecodeResponseIntoMatchesDecodeResponse(t *testing.T) {
+	entries, err := os.ReadDir(fixtureDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var scratch []byte
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "resp_") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(fixtureDir, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw = bytes.TrimSpace(raw)
+		want, wantErr := DecodeResponse(raw)
+		got, gotErr := DecodeResponseInto(raw, &scratch)
+		if (wantErr == nil) != (gotErr == nil) || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: Into = %#v, %v; DecodeResponse = %#v, %v", entry.Name(), got, gotErr, want, wantErr)
+		}
+	}
+}
+
 func TestTagAfterOtherKeys(t *testing.T) {
 	resp, err := DecodeResponse([]byte(`{"data":"aGk=","type":"stdout"}`))
 	if err != nil {
