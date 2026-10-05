@@ -512,18 +512,20 @@ func (m *Manager) destroyAll(ctx context.Context, names []string) *sync.WaitGrou
 	return m.runBounded(ctx, len(names), func(ctx context.Context, i int) { m.destroy(ctx, names[i]) })
 }
 
-// runBounded fans f over n items on the refill semaphore, sharing the node-wide budget.
+// runBounded fans f over n items on the refill semaphore, sharing the node-wide budget but never the share maintSem leaves to refill.
 func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context, int)) *sync.WaitGroup {
 	var wg sync.WaitGroup
 	for i := range n {
 		// acquire inside the goroutine so a batch larger than the budget cannot block the caller
 		wg.Go(func() {
-			select {
-			case m.refillSem <- struct{}{}:
-			case <-ctx.Done():
-				return
+			for _, sem := range [...]chan struct{}{m.maintSem, m.refillSem} {
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				defer func() { <-sem }()
 			}
-			defer func() { <-m.refillSem }()
 			f(ctx, i)
 		})
 	}

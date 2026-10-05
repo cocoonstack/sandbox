@@ -372,6 +372,7 @@ type Manager struct {
 	atCapacityReason string
 
 	refillSem  chan struct{}
+	maintSem   chan struct{}
 	probeSem   chan struct{}
 	refillKick chan struct{}
 }
@@ -402,6 +403,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		healPending:     map[string]struct{}{},
 		healAbort:       map[string]struct{}{},
 		refillSem:       make(chan struct{}, refill),
+		maintSem:        make(chan struct{}, max(1, refill-max(1, refill/4))),
 		probeSem:        make(chan struct{}, refill),
 		refillKick:      make(chan struct{}, 1),
 		healSem:         make(chan struct{}, maxConcurrentHeals),
