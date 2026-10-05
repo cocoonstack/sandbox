@@ -80,7 +80,9 @@ def test_raw_replies_surface_as_typed_errors(raw_reply, response, call, raises, 
     addr = raw_reply(response)
     with pytest.raises(raises) as exc_info:
         if call == "dial":
-            dial_agent(addr, "sb_1", "tok", 0.5)
+            with dial_agent(addr, "sb_1", "tok", 0.5) as conn:
+                conn.send("info")
+                conn.recv()
         else:
             Client(addr).info()
     if status is not None:
@@ -192,8 +194,9 @@ def test_dial_timeout_bounds_the_whole_upgrade() -> None:
     threading.Thread(target=slow_headers, daemon=True).start()
     addr = f"127.0.0.1:{server.getsockname()[1]}"
     started = time.monotonic()
-    with pytest.raises(SandboxTimeout):
-        dial_agent(addr, "sb_x", "tok", timeout=0.2)
+    with pytest.raises(SandboxTimeout), dial_agent(addr, "sb_x", "tok", timeout=0.2) as conn:
+        conn.send("info")
+        conn.recv()
     assert time.monotonic() - started < 0.6, (
         "each header arrived under the per-read timeout; only a whole-dial budget stops this"
     )

@@ -9,7 +9,7 @@ import ssl
 import threading
 import time
 import urllib.parse
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any, BinaryIO, Protocol, TypeVar
 
 from .errors import APIError, ProtocolError, SandboxError, SandboxTimeout, SilkdError
@@ -33,15 +33,22 @@ class _Closeable(Protocol):
 
 
 class Conn(_Closeable):
-    """A live frame stream to one sandbox's silkd, via the owner node."""
+    """A frame stream to one sandbox's silkd; a plain-HTTP upgrade rides the first send, its 101 the first recv."""
 
-    def __init__(self, sock: socket.socket, reader: BinaryIO) -> None:
+    def __init__(
+        self, sock: socket.socket, reader: BinaryIO, request: bytes = b"", upgrade_timeout: float | None = None
+    ) -> None:
         self._sock = sock
         self._reader = reader
+        self._request = request
+        self._upgrade_timeout = upgrade_timeout
 
     def send(self, op: str, **fields: object) -> None:
+        frame = encode_request(op, **fields)
+        if self._request:
+            frame, self._request = self._request + frame, b""
         try:
-            self._sock.sendall(encode_request(op, **fields))
+            self._sock.sendall(frame)
         except OSError as exc:
             raise ProtocolError(f"write failed: {exc}") from exc
 
@@ -55,6 +62,8 @@ class Conn(_Closeable):
 
     def recv(self) -> dict[str, Any]:
         """Reads one frame or raises a typed protocol or guest error."""
+        if self._upgrade_timeout is not None:
+            self._finish_upgrade(self._upgrade_timeout)
         try:
             line = self._reader.readline(MAX_FRAME + 1)
         except (OSError, ValueError) as exc:
@@ -93,6 +102,22 @@ class Conn(_Closeable):
             self._reader.close()
         finally:
             self._sock.close()
+
+    def _finish_upgrade(self, timeout: float) -> None:
+        self._upgrade_timeout = None
+        caller = self._sock.gettimeout()
+        limit = timeout if caller is None else min(caller, timeout)
+        deadline = time.monotonic() + limit
+        try:
+            _read_upgrade(
+                self._reader, lambda: self._sock.settimeout(remaining_timeout(limit, deadline, "agent upgrade"))
+            )
+            self._sock.settimeout(caller)
+        except Exception as exc:
+            self.close()
+            if isinstance(exc, OSError) and not isinstance(exc, SandboxError):
+                raise _handshake_error("agent upgrade", exc) from exc
+            raise
 
 
 class ConnPool:
@@ -172,49 +197,31 @@ def dial_agent(
     except OSError as exc:
         raise _handshake_error(f"dial {addr}", exc) from exc
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    request = (
+        f"GET /v1/sandboxes/{sandbox_id}/agent HTTP/1.1\r\n"
+        f"Host: {endpoint.netloc}\r\n"
+        "Connection: Upgrade\r\n"
+        "Upgrade: silkd\r\n"
+        f"Authorization: Bearer {token}\r\n"
+        "\r\n"
+    ).encode()
     reader = None
     try:
-        if endpoint.scheme == "https":
-            context = ssl_context or ssl.create_default_context()
-            sock = context.wrap_socket(sock, server_hostname=host, do_handshake_on_connect=False)
-            sock.settimeout(remaining_timeout(timeout, deadline))
-            try:
-                sock.do_handshake()
-            except OSError as exc:
-                raise _handshake_error(f"tls handshake {addr}", exc) from exc
-        request = (
-            f"GET /v1/sandboxes/{sandbox_id}/agent HTTP/1.1\r\n"
-            f"Host: {endpoint.netloc}\r\n"
-            "Connection: Upgrade\r\n"
-            "Upgrade: silkd\r\n"
-            f"Authorization: Bearer {token}\r\n"
-            "\r\n"
-        )
+        if endpoint.scheme != "https":
+            sock.settimeout(None)
+            return Conn(sock, sock.makefile("rb"), request, timeout)
+        context = ssl_context or ssl.create_default_context()
+        sock = context.wrap_socket(sock, server_hostname=host, do_handshake_on_connect=False)
         sock.settimeout(remaining_timeout(timeout, deadline))
-        sock.sendall(request.encode())
+        try:
+            sock.do_handshake()
+        except OSError as exc:
+            raise _handshake_error(f"tls handshake {addr}", exc) from exc
+        # a TLS edge may be a proxy that drops bytes sent ahead of the 101
+        sock.settimeout(remaining_timeout(timeout, deadline))
+        sock.sendall(request)
         reader = sock.makefile("rb")
-        sock.settimeout(remaining_timeout(timeout, deadline))
-        status = reader.readline(1024).decode(errors="replace")
-        parts = status.split(" ", 2)
-        code = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
-        body_len = 0
-        while True:
-            sock.settimeout(remaining_timeout(timeout, deadline))
-            header = reader.readline(4096)
-            if header in (b"\r\n", b"\n", b""):
-                break
-            name, _, value = header.decode(errors="replace").partition(":")
-            if name.strip().lower() == "content-length":
-                try:
-                    body_len = int(value.strip())
-                    if body_len < 0:
-                        raise ValueError("negative content-length")
-                except ValueError as exc:
-                    raise ProtocolError("invalid content-length in upgrade reply") from exc
-        if code != 101:
-            sock.settimeout(remaining_timeout(timeout, deadline))
-            body = reader.read(min(body_len, MAX_FRAME)).decode(errors="replace") if body_len else ""
-            raise APIError("agent upgrade", code, body.strip() or status.strip())
+        _read_upgrade(reader, lambda: sock.settimeout(remaining_timeout(timeout, deadline)))
         remaining_timeout(timeout, deadline)
         sock.settimeout(None)
         return Conn(sock, reader)
@@ -241,3 +248,30 @@ def _handshake_error(what: str, exc: OSError) -> SandboxError:
     if isinstance(exc, (TimeoutError, socket.timeout)):
         return SandboxTimeout(f"{what} timed out")
     return ProtocolError(f"{what}: {exc}")
+
+
+def _read_upgrade(reader: BinaryIO, arm: Callable[[], None]) -> None:
+    arm()
+    status = reader.readline(1024).decode(errors="replace")
+    if not status:
+        raise ProtocolError("connection closed before the upgrade reply")
+    parts = status.split(" ", 2)
+    code = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+    body_len = 0
+    while True:
+        arm()
+        header = reader.readline(4096)
+        if header in (b"\r\n", b"\n", b""):
+            break
+        name, _, value = header.decode(errors="replace").partition(":")
+        if name.strip().lower() == "content-length":
+            try:
+                body_len = int(value.strip())
+                if body_len < 0:
+                    raise ValueError("negative content-length")
+            except ValueError as exc:
+                raise ProtocolError("invalid content-length in upgrade reply") from exc
+    if code != 101:
+        arm()
+        body = reader.read(min(body_len, MAX_FRAME)).decode(errors="replace") if body_len else ""
+        raise APIError("agent upgrade", code, body.strip() or status.strip())

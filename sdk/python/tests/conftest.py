@@ -54,6 +54,7 @@ def sandbox_at(addr: str, **client_kwargs) -> Sandbox:
 
 
 def accept_upgrade(conn: socket.socket) -> BinaryIO:
+    conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     reader = conn.makefile("rb")
     while reader.readline() not in (b"\r\n", b""):
         pass
