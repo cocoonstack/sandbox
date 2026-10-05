@@ -214,29 +214,30 @@ fn tmp_name(path: &Path) -> PathBuf {
 
 /// Creates the temp file exclusively under its final mode; without an explicit mode an overwrite inherits the destination's bits.
 async fn create_tmp(path: &Path, mode: Option<u32>) -> io::Result<(PathBuf, fs::File)> {
-    let effective = match mode {
-        Some(m) => Some(m),
-        None => fs::metadata(path)
-            .await
-            .ok()
-            .map(|meta| meta.permissions().mode() & 0o7777),
-    };
-    let tmp = tmp_name(path);
-    let file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(effective.unwrap_or(0o666))
-        .open(&tmp)
-        .await?;
-    if let Some(m) = effective
-        && let Err(e) = file
-            .set_permissions(std::fs::Permissions::from_mode(m))
-            .await
-    {
-        let _ = fs::remove_file(&tmp).await;
-        return Err(e);
-    }
-    Ok((tmp, file))
+    let path = path.to_path_buf();
+    let (tmp, file) = tokio::task::spawn_blocking(move || {
+        let effective = mode.or_else(|| {
+            std::fs::metadata(&path)
+                .ok()
+                .map(|meta| meta.permissions().mode() & 0o7777)
+        });
+        let tmp = tmp_name(&path);
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(effective.unwrap_or(0o666))
+            .open(&tmp)?;
+        if let Some(m) = effective
+            && let Err(e) = file.set_permissions(std::fs::Permissions::from_mode(m))
+        {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        Ok((tmp, file))
+    })
+    .await
+    .map_err(io::Error::other)??;
+    Ok((tmp, fs::File::from_std(file)))
 }
 
 async fn commit_tmp(tmp: &Path, path: &Path) -> io::Result<()> {
