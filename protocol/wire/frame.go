@@ -143,9 +143,11 @@ type Response interface{ RespType() string }
 
 type respDecoder func([]byte) (Response, error)
 
+type bulkMaker func([]byte) Response
+
 type bulkResponse struct {
 	head []byte
-	mk   func([]byte) Response
+	mk   bulkMaker
 }
 
 // reqPtr and respPtr turn a mistyped decoder table entry into a compile error.
@@ -159,15 +161,13 @@ type respPtr[T any] interface {
 	Response
 }
 
-// Exec starts a process; with Session set it runs inside that persistent
-// shell instead. Detach is emitted even when false — it is part of the
-// fixture corpus shape.
+// Exec starts a process; with Session set it runs inside that persistent shell instead.
 type Exec struct {
 	Argv    []string          `json:"argv"`
 	Cwd     string            `json:"cwd,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
 	User    string            `json:"user,omitempty"`
-	Detach  bool              `json:"detach"`
+	Detach  bool              `json:"detach"` // emitted even when false: the fixture corpus carries it
 	Session string            `json:"session,omitempty"`
 }
 
@@ -716,7 +716,7 @@ func IsContinuation(line []byte) bool {
 	return false
 }
 
-func bulkDecoders(mks ...func([]byte) Response) map[string]bulkResponse {
+func bulkDecoders(mks ...bulkMaker) map[string]bulkResponse {
 	out := make(map[string]bulkResponse, len(mks))
 	for _, mk := range mks {
 		tag := mk(nil).RespType()

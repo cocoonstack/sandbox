@@ -1,5 +1,4 @@
-"""The relay upgrade: over plain HTTP the request leaves with the first frame and
-the 101 is read on the first recv; a refusal surfaces as an APIError."""
+"""Over plain HTTP the upgrade request leaves with the first frame; a refusal surfaces as an APIError."""
 
 import contextlib
 import json

@@ -101,7 +101,7 @@ func (e *Engine) VersionWarning(ctx context.Context) (version, warning string) {
 	if err != nil {
 		return "", fmt.Sprintf("cannot determine cocoon version (need >= %s): %v", RequiredCocoon, err)
 	}
-	if below, comparable := belowFloor(v); comparable && below {
+	if below, known := belowFloor(v); known && below {
 		return v, fmt.Sprintf("cocoon %s is below the required %s — upgrade cocoon", v, RequiredCocoon)
 	}
 	return v, ""
@@ -493,8 +493,8 @@ func respFail(resp wire.Response) string {
 	return "unexpected frame " + resp.RespType()
 }
 
-// belowFloor reports whether v is below RequiredCocoon; comparable is false for a dev build.
-func belowFloor(v string) (below, comparable bool) {
+// belowFloor reports whether v is below RequiredCocoon; known is false for a dev build.
+func belowFloor(v string) (below, known bool) {
 	v = "v" + strings.TrimPrefix(v, "v")
 	if semver.Canonical(v) != v {
 		return false, false

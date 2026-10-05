@@ -16,6 +16,65 @@ from cocoonsandbox.frames import KEEP_ALIVE_PROTO
 INPUT_OPS = ("stdin", "stdin_close", "data", "data_end")
 
 
+class FakeAgent:
+    """A relay-side silkd stand-in; proto 1 half-closes after one RPC and drains; slam closes as a failed relay does."""
+
+    def __init__(self, proto: int = KEEP_ALIVE_PROTO, hang_up_after: int = 0, slam: bool = False) -> None:
+        self.proto = proto
+        self.hang_up_after = hang_up_after
+        self.slam = slam
+        self.upgrades = 0
+        self.hangups = 0
+        self.closed = 0
+        self._server = socket.create_server(("127.0.0.1", 0))
+        self.addr = f"127.0.0.1:{self._server.getsockname()[1]}"
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def stop(self) -> None:
+        self._server.close()
+
+    def _accept(self) -> None:
+        with contextlib.suppress(OSError):
+            while True:
+                conn, _ = self._server.accept()
+                self.upgrades += 1
+                threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
+
+    def _serve(self, conn: socket.socket) -> None:
+        with conn, contextlib.suppress(OSError):
+            reader = accept_upgrade(conn)
+            replies = 0
+            while True:
+                line = reader.readline()
+                if not line:
+                    break
+                op = json.loads(line)["op"]
+                if op in INPUT_OPS:
+                    continue
+                for frame in self._answer(op):
+                    conn.sendall(json.dumps(frame).encode() + b"\n")
+                replies += 1
+                if self.slam:
+                    break
+                if self.proto < KEEP_ALIVE_PROTO or replies == self.hang_up_after:
+                    conn.shutdown(socket.SHUT_WR)
+                    self.hangups += 1
+                    while reader.readline():
+                        pass
+                    break
+        self.closed += 1
+
+    def _answer(self, op: str) -> list:
+        if op == "info":
+            return [{"type": "info", "version": "fake", "proto": self.proto, "uptime_secs": 0, "procs": 0}]
+        if op == "fs_stat":
+            return [{"type": "stat", "info": {"kind": "dir", "size": 0, "mode": 0o755, "mtime_epoch_secs": 0}}]
+        if op == "exec":
+            out = base64.b64encode(b"42\n").decode()
+            return [{"type": "started", "pid": 1}, {"type": "stdout", "data": out}, {"type": "exit", "code": 0}]
+        return [{"type": "error", "kind": "unimplemented", "message": op}]
+
+
 def test_calls_share_one_connection(fd_floor):
     agent = FakeAgent()
     sb = sandbox_at(agent.addr)
@@ -140,62 +199,3 @@ def test_an_upload_an_old_daemon_rejects_raises_its_error_frame():
             sb.write_file("/missing/f", bytes(64 << 20))
     finally:
         agent.stop()
-
-
-class FakeAgent:
-    """A relay-side silkd stand-in; proto 1 half-closes after one RPC and drains; slam closes as a failed relay does."""
-
-    def __init__(self, proto: int = KEEP_ALIVE_PROTO, hang_up_after: int = 0, slam: bool = False) -> None:
-        self.proto = proto
-        self.hang_up_after = hang_up_after
-        self.slam = slam
-        self.upgrades = 0
-        self.hangups = 0
-        self.closed = 0
-        self._server = socket.create_server(("127.0.0.1", 0))
-        self.addr = f"127.0.0.1:{self._server.getsockname()[1]}"
-        threading.Thread(target=self._accept, daemon=True).start()
-
-    def stop(self) -> None:
-        self._server.close()
-
-    def _accept(self) -> None:
-        with contextlib.suppress(OSError):
-            while True:
-                conn, _ = self._server.accept()
-                self.upgrades += 1
-                threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
-
-    def _serve(self, conn: socket.socket) -> None:
-        with conn, contextlib.suppress(OSError):
-            reader = accept_upgrade(conn)
-            replies = 0
-            while True:
-                line = reader.readline()
-                if not line:
-                    break
-                op = json.loads(line)["op"]
-                if op in INPUT_OPS:
-                    continue
-                for frame in self._answer(op):
-                    conn.sendall(json.dumps(frame).encode() + b"\n")
-                replies += 1
-                if self.slam:
-                    break
-                if self.proto < KEEP_ALIVE_PROTO or replies == self.hang_up_after:
-                    conn.shutdown(socket.SHUT_WR)
-                    self.hangups += 1
-                    while reader.readline():
-                        pass
-                    break
-        self.closed += 1
-
-    def _answer(self, op: str) -> list:
-        if op == "info":
-            return [{"type": "info", "version": "fake", "proto": self.proto, "uptime_secs": 0, "procs": 0}]
-        if op == "fs_stat":
-            return [{"type": "stat", "info": {"kind": "dir", "size": 0, "mode": 0o755, "mtime_epoch_secs": 0}}]
-        if op == "exec":
-            out = base64.b64encode(b"42\n").decode()
-            return [{"type": "started", "pid": 1}, {"type": "stdout", "data": out}, {"type": "exit", "code": 0}]
-        return [{"type": "error", "kind": "unimplemented", "message": op}]

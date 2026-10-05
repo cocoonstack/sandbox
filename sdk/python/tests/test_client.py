@@ -10,6 +10,20 @@ from conftest import FakeNode, sandbox_at
 from cocoonsandbox import APIError, Client, Template
 
 
+class KeptNode(FakeNode):
+    protocol_version = "HTTP/1.1"
+    conns = 0
+    drop_after_reply = False
+
+    def setup(self):
+        super().setup()
+        KeptNode.conns += 1
+
+    def _reply(self, code, payload):
+        super()._reply(code, payload)
+        self.close_connection = self.drop_after_reply
+
+
 @pytest.fixture
 def node():
     server = HTTPServer(("127.0.0.1", 0), FakeNode)
@@ -368,17 +382,3 @@ def kept_node():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"127.0.0.1:{server.server_port}"
     server.shutdown()
-
-
-class KeptNode(FakeNode):
-    protocol_version = "HTTP/1.1"
-    conns = 0
-    drop_after_reply = False
-
-    def setup(self):
-        super().setup()
-        KeptNode.conns += 1
-
-    def _reply(self, code, payload):
-        super()._reply(code, payload)
-        self.close_connection = self.drop_after_reply

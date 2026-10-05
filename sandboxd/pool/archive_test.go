@@ -562,7 +562,7 @@ func TestArchiveRemovalCommitPinsCheckpoint(t *testing.T) {
 			if !ckExists(t, m, ck) {
 				t.Error("retry deleted the checkpoint before the claims commit")
 			}
-			m.store.path = filepath.Join(t.TempDir(), "gone", "claims.json")
+			breakStore(t, m)
 			m.store.writeMu.Unlock()
 			locked = false
 			if err := <-done; action == testArchiveRelease && err == nil {
@@ -667,7 +667,7 @@ func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 		defer m.recLocksMu.Unlock()
 		return m.recRefs[ck] >= 2
 	})
-	m.store.path = filepath.Join(t.TempDir(), "gone", "claims.json")
+	breakStore(t, m)
 	m.store.writeMu.Unlock()
 	locked = false
 	if err := <-woke; err == nil {
