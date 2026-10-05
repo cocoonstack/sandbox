@@ -17,27 +17,6 @@ from cocoonsandbox import sandbox as sandbox_module
 TIMEOUT = 0.2
 
 
-class BlockedSendConn:
-    def __init__(self) -> None:
-        self.aborted = threading.Event()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc) -> None:
-        pass
-
-    def send(self, op: str, **fields) -> None:
-        assert self.aborted.wait(5 * TIMEOUT), "exec send was not aborted"
-        raise OSError("connection cut")
-
-    def abort(self) -> None:
-        self.aborted.set()
-
-    def close(self) -> None:
-        pass
-
-
 def legacy_sandbox(addr: str) -> Sandbox:
     return sandbox_at(addr, timeout=TIMEOUT, keep_alive=0)
 
@@ -135,13 +114,12 @@ def test_run_timeout_bounds_the_kill_it_sends(monkeypatch):
     assert kills == [{"v": 1, "op": "kill", "pid": 7}], kills
 
 
-def test_run_timeout_cuts_a_blocked_exec_send(monkeypatch):
-    sb = legacy_sandbox("127.0.0.1:1")
-    conn = BlockedSendConn()
-    monkeypatch.setattr(sb, "_dial", lambda deadline=None: conn)
+def test_run_timeout_cuts_a_blocked_exec_send(black_hole):
+    sb = sandbox_at(black_hole, timeout=30, keep_alive=0)
+    started = time.monotonic()
     with pytest.raises(TimeoutError):
-        sb.run(["echo", "hello"], timeout=TIMEOUT)
-    assert conn.aborted.is_set()
+        sb.run(["echo", "x" * (7 << 20)], timeout=TIMEOUT)
+    assert time.monotonic() - started < 5 * TIMEOUT
 
 
 def test_run_rejects_a_non_positive_timeout():
