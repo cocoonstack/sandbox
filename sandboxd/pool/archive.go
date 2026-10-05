@@ -234,17 +234,43 @@ func (m *Manager) deleteOrphanArchiveCk(ctx context.Context, ckID string) {
 
 // markArchiveCk records durable delete intent before the journal drops its reference.
 func (m *Manager) markArchiveCk(ckID string) error {
-	if !store.CheckpointIDRe.MatchString(ckID) {
-		return fmt.Errorf("invalid checkpoint id %q", ckID)
+	return m.markArchiveCks([]string{ckID})[ckID]
+}
+
+// markArchiveCks writes a delete marker per checkpoint and syncs the directory once; failed holds each id whose marker is not durable.
+func (m *Manager) markArchiveCks(ckIDs []string) (failed map[string]error) {
+	if len(ckIDs) == 0 {
+		return nil
 	}
+	failed = map[string]error{}
 	dir := filepath.Join(m.dataDir, archiveDeleteDir)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return err
+		for _, id := range ckIDs {
+			failed[id] = err
+		}
+		return failed
 	}
-	if err := os.WriteFile(filepath.Join(dir, ckID), nil, 0o600); err != nil {
-		return err
+	written := make([]string, 0, len(ckIDs))
+	for _, id := range ckIDs {
+		if !store.CheckpointIDRe.MatchString(id) {
+			failed[id] = fmt.Errorf("invalid checkpoint id %q", id)
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(dir, id), nil, 0o600); err != nil {
+			failed[id] = err
+			continue
+		}
+		written = append(written, id)
 	}
-	return syncDir(dir)
+	if len(written) == 0 {
+		return failed
+	}
+	if err := syncDir(dir); err != nil {
+		for _, id := range written {
+			failed[id] = err
+		}
+	}
+	return failed
 }
 
 func (m *Manager) archiveDeleteMarkers() ([]string, error) {
