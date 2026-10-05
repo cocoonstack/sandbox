@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"io"
 	"net"
 	"testing"
 	"testing/iotest"
@@ -91,6 +92,36 @@ func TestAnUploadFillsEachFrameFromSmallReads(t *testing.T) {
 	}
 	if got := <-frames; got != 1 {
 		t.Errorf("a 4 KiB upload read a byte at a time went out in %d data frames, want 1", got)
+	}
+}
+
+func TestAnUploadStopsOnItsReadersError(t *testing.T) {
+	ended := make(chan bool, 1)
+	sb := testSandbox(t, newAgentServer(t, func(conn net.Conn) {
+		defer conn.Close()
+		sc := wire.NewFrameScanner(conn)
+		for sc.Scan() {
+			req, err := wire.DecodeRequest(sc.Bytes())
+			if err != nil {
+				break
+			}
+			switch req.(type) {
+			case *wire.Info:
+				line, _ := wire.EncodeResponse(&wire.InfoResp{Proto: wire.KeepAliveProto})
+				_, _ = conn.Write(append(line, '\n'))
+			case *wire.DataEnd:
+				ended <- true
+				return
+			}
+		}
+		ended <- false
+	}))
+	truncated := io.MultiReader(bytes.NewReader(make([]byte, 4096)), iotest.ErrReader(io.ErrUnexpectedEOF))
+	if err := sb.Push(t.Context(), "/d", truncated); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Errorf("push = %v, want the reader's io.ErrUnexpectedEOF", err)
+	}
+	if <-ended {
+		t.Error("a truncated stream was committed with data_end")
 	}
 }
 

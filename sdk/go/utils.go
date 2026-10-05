@@ -238,9 +238,16 @@ func sendChunks(conn *silkd.Conn, size int, frame func([]byte) wire.Request, b [
 
 // readChunk fills buf from r, so a reader that yields small reads still sends full frames; last is true at EOF.
 func readChunk(r io.Reader, buf []byte) (int, bool, error) {
-	n, err := io.ReadFull(r, buf)
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-		return n, true, nil
+	n := 0
+	for n < len(buf) {
+		m, err := r.Read(buf[n:])
+		n += m
+		if errors.Is(err, io.EOF) {
+			return n, true, nil
+		}
+		if err != nil {
+			return n, false, err
+		}
 	}
-	return n, false, err
+	return n, false, nil
 }
