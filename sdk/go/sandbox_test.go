@@ -239,7 +239,7 @@ func TestRenewRefusalLeavesTheDeadline(t *testing.T) {
 	}
 }
 
-func newAgentServer(t *testing.T, serve func(net.Conn)) *httptest.Server {
+func newAgentServer(t testing.TB, serve func(net.Conn)) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", func(w http.ResponseWriter, r *http.Request) {
@@ -259,7 +259,7 @@ func newAgentServer(t *testing.T, serve func(net.Conn)) *httptest.Server {
 	return ts
 }
 
-func testSandbox(t *testing.T, ts *httptest.Server, opts ...ClientOption) *Sandbox {
+func testSandbox(t testing.TB, ts *httptest.Server, opts ...ClientOption) *Sandbox {
 	t.Helper()
 	c := testClient(t, ts, opts...)
 	sb := &Sandbox{ID: "sb_1", c: c, token: "tok", owner: c.addr}
