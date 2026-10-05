@@ -143,9 +143,11 @@ type Response interface{ RespType() string }
 
 type respDecoder func([]byte) (Response, error)
 
+type bulkMaker func([]byte) Response
+
 type bulkResponse struct {
 	head []byte
-	mk   func([]byte) Response
+	mk   bulkMaker
 }
 
 // reqPtr and respPtr turn a mistyped decoder table entry into a compile error.
@@ -159,15 +161,13 @@ type respPtr[T any] interface {
 	Response
 }
 
-// Exec starts a process; with Session set it runs inside that persistent
-// shell instead. Detach is emitted even when false — it is part of the
-// fixture corpus shape.
+// Exec starts a process; with Session set it runs inside that persistent shell instead.
 type Exec struct {
 	Argv    []string          `json:"argv"`
 	Cwd     string            `json:"cwd,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
 	User    string            `json:"user,omitempty"`
-	Detach  bool              `json:"detach"`
+	Detach  bool              `json:"detach"` // emitted even when false: the fixture corpus carries it
 	Session string            `json:"session,omitempty"`
 }
 
@@ -679,12 +679,25 @@ func DecodeRequest(line []byte) (Request, error) {
 // DecodeResponse parses one frame into its type's concrete Go type. Byte
 // fields are freshly allocated per frame, so callers may retain them.
 func DecodeResponse(line []byte) (Response, error) {
-	return decodeResponse(line, nil)
+	return DecodeResponseInto(line, nil)
 }
 
 // DecodeResponseInto is DecodeResponse for a streaming consumer: a bulk frame's bytes land in *scratch, grown as needed, and stay valid only until the next call with it.
 func DecodeResponseInto(line []byte, scratch *[]byte) (Response, error) {
-	return decodeResponse(line, scratch)
+	typ, err := frameTag(line, respTagHead, "type")
+	if err != nil {
+		return nil, fmt.Errorf("parse response frame: %w", err)
+	}
+	if bulk, ok := bulkResponses[string(typ)]; ok {
+		if data, ok := decodeBulk(line, bulk.head, scratch); ok {
+			return bulk.mk(data), nil
+		}
+	}
+	dec, ok := responseDecoders[string(typ)]
+	if !ok {
+		return nil, fmt.Errorf("unknown response type %q", typ)
+	}
+	return dec(line)
 }
 
 // NewFrameScanner wraps r for newline-delimited frames capped at MaxFrame.
@@ -716,30 +729,13 @@ func IsContinuation(line []byte) bool {
 	return false
 }
 
-func bulkDecoders(mks ...func([]byte) Response) map[string]bulkResponse {
+func bulkDecoders(mks ...bulkMaker) map[string]bulkResponse {
 	out := make(map[string]bulkResponse, len(mks))
 	for _, mk := range mks {
 		tag := mk(nil).RespType()
 		out[tag] = bulkResponse{head: []byte(`{"type":"` + tag + `","data":"`), mk: mk}
 	}
 	return out
-}
-
-func decodeResponse(line []byte, scratch *[]byte) (Response, error) {
-	typ, err := frameTag(line, respTagHead, "type")
-	if err != nil {
-		return nil, fmt.Errorf("parse response frame: %w", err)
-	}
-	if bulk, ok := bulkResponses[string(typ)]; ok {
-		if data, ok := decodeBulk(line, bulk.head, scratch); ok {
-			return bulk.mk(data), nil
-		}
-	}
-	dec, ok := responseDecoders[string(typ)]
-	if !ok {
-		return nil, fmt.Errorf("unknown response type %q", typ)
-	}
-	return dec(line)
 }
 
 // decodeBulk decodes a canonical bulk frame's payload into scratch, or a fresh buffer when scratch is nil; ok is false for any other shape.
@@ -826,26 +822,18 @@ func scanTag(line []byte, key string) (string, error) {
 	return "", nil
 }
 
-func decodeAs[T any](line []byte) (*T, error) {
-	v := new(T)
+func decodeReq[T any, PT reqPtr[T]](line []byte) (Request, error) {
+	v := PT(new(T))
 	if err := json.Unmarshal(line, v); err != nil {
 		return nil, err
 	}
 	return v, nil
 }
 
-func decodeReq[T any, PT reqPtr[T]](line []byte) (Request, error) {
-	v, err := decodeAs[T](line)
-	if err != nil {
-		return nil, err
-	}
-	return PT(v), nil
-}
-
 func decodeResp[T any, PT respPtr[T]](line []byte) (Response, error) {
-	v, err := decodeAs[T](line)
-	if err != nil {
+	v := PT(new(T))
+	if err := json.Unmarshal(line, v); err != nil {
 		return nil, err
 	}
-	return PT(v), nil
+	return v, nil
 }

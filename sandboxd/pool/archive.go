@@ -33,10 +33,6 @@ func (m *Manager) archiveDeleteFor(key types.PoolKey) time.Duration {
 	return m.archiveDeleteDefault
 }
 
-func (m *Manager) archiveEnabledFor(key types.PoolKey) bool {
-	return m.archiveAfterFor(key) > 0
-}
-
 func (m *Manager) archiveOnce(ctx context.Context) {
 	if !m.archiveSweep.CompareAndSwap(false, true) {
 		return // the previous sweep's archives are still draining

@@ -1,5 +1,4 @@
-"""The client timeout bounds the dial and the upgrade, not the frames that
-follow: a guest stream outlives it."""
+"""The client timeout bounds the dial and the upgrade, not the guest stream that follows."""
 
 import contextlib
 import json

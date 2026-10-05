@@ -524,7 +524,6 @@ func TestReconcileKeepsRunningClaimsTheHostLost(t *testing.T) {
 	}
 }
 
-// assertRestartFailsUntilBudget runs recoveries against a guest setup step that always fails.
 func assertRestartFailsUntilBudget(t *testing.T, m *Manager, eng *fakeEngine, sb *types.Sandbox) {
 	t.Helper()
 	for attempt := range vmmRestartBudget {

@@ -17,7 +17,7 @@ import (
 
 func TestPtyEchoAndExit(t *testing.T) {
 	sb := fakeSandbox(t)
-	pty, err := sb.OpenPty(t.Context(), PtyOpts{Cols: 80, Rows: 24})
+	pty, err := sb.OpenPty(t.Context(), wire.PtyOpen{Cols: 80, Rows: 24})
 	if err != nil {
 		t.Fatalf("OpenPty: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestPtyReleasesTheRelayWhenTheShellExits(t *testing.T) {
 		_, _ = r.ReadByte()
 		close(released)
 	})
-	pty, err := legacySandbox(t, ts).OpenPty(t.Context(), PtyOpts{Cols: 80, Rows: 24})
+	pty, err := legacySandbox(t, ts).OpenPty(t.Context(), wire.PtyOpen{Cols: 80, Rows: 24})
 	if err != nil {
 		t.Fatalf("OpenPty: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestPtyReleasesTheRelayWhenTheShellExits(t *testing.T) {
 func TestPtyCtxCancelIsTyped(t *testing.T) {
 	sb := fakeSandbox(t)
 	ctx, cancel := context.WithCancel(t.Context())
-	pty, err := sb.OpenPty(ctx, PtyOpts{Cols: 80, Rows: 24})
+	pty, err := sb.OpenPty(ctx, wire.PtyOpen{Cols: 80, Rows: 24})
 	if err != nil {
 		t.Fatalf("OpenPty: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestPtyCtxCancelIsTyped(t *testing.T) {
 
 func TestPtyCloseUnblocksUnreadOutput(t *testing.T) {
 	sb := fakeSandbox(t)
-	pty, err := sb.OpenPty(t.Context(), PtyOpts{Cols: 80, Rows: 24})
+	pty, err := sb.OpenPty(t.Context(), wire.PtyOpen{Cols: 80, Rows: 24})
 	if err != nil {
 		t.Fatalf("OpenPty: %v", err)
 	}

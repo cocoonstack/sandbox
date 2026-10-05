@@ -645,7 +645,7 @@ error pointing at `Push`.
 ## Terminals
 
 ```go
-pty, err := sb.OpenPty(ctx, sandbox.PtyOpts{Cols: 120, Rows: 40})
+pty, err := sb.OpenPty(ctx, wire.PtyOpen{Cols: 120, Rows: 40})
 defer pty.Close()
 pty.Write([]byte("make test\n"))
 io.Copy(os.Stdout, pty)                   // EOF when the shell exits

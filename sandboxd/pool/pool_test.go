@@ -426,14 +426,7 @@ func TestRefillServicesEveryPoolUnderTightBudget(t *testing.T) {
 			infos, _ := m.Info()
 			return len(infos) == 2 && infos[0].Warm == 3 && infos[1].Warm == 3
 		}
-		deadline := time.Now().Add(3 * time.Second)
-		for !both() && time.Now().Before(deadline) {
-			time.Sleep(5 * time.Millisecond)
-		}
-		if !both() {
-			infos, _ := m.Info()
-			t.Fatalf("one refill tick did not chain both pools to target: %+v", infos)
-		}
+		waitFor(t, both)
 	})
 }
 

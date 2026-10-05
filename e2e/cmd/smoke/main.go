@@ -417,7 +417,7 @@ func smokePromote(ctx context.Context, client *sandbox.Client, sb *sandbox.Sandb
 }
 
 func smokePty(ctx context.Context, sb *sandbox.Sandbox) error {
-	pty, err := sb.OpenPty(ctx, sandbox.PtyOpts{Cols: 80, Rows: 24})
+	pty, err := sb.OpenPty(ctx, wire.PtyOpen{Cols: 80, Rows: 24})
 	if err != nil {
 		return err
 	}

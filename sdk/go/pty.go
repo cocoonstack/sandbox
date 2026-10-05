@@ -9,15 +9,6 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
-// PtyOpts configures OpenPty.
-type PtyOpts struct {
-	Cols uint16
-	Rows uint16
-	Cwd  string
-	Env  map[string]string
-	User string
-}
-
 // Pty is an open pseudo-terminal in the sandbox.
 type Pty struct {
 	PID uint32
@@ -68,7 +59,7 @@ func (p *Pty) ExitCode() (code int, ok bool) {
 func (p *Pty) drain(ctx context.Context, pw *io.PipeWriter, stop func()) {
 	defer stop()
 	for {
-		resp, err := recvTransient(ctx, p.conn)
+		resp, err := recv(ctx, p.conn)
 		if err != nil {
 			_ = pw.CloseWithError(err)
 			return
@@ -96,9 +87,8 @@ func (p *Pty) drain(ctx context.Context, pw *io.PipeWriter, stop func()) {
 }
 
 // OpenPty starts a shell whose lifetime is governed by ctx or Close.
-func (s *Sandbox) OpenPty(ctx context.Context, opts PtyOpts) (*Pty, error) {
-	req := &wire.PtyOpen{Cols: opts.Cols, Rows: opts.Rows, Cwd: opts.Cwd, Env: opts.Env, User: opts.User}
-	conn, l, err := s.call(ctx, req)
+func (s *Sandbox) OpenPty(ctx context.Context, opts wire.PtyOpen) (*Pty, error) {
+	conn, l, err := s.call(ctx, &opts)
 	if err != nil {
 		return nil, err
 	}

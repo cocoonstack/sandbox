@@ -1,5 +1,4 @@
-"""Fixtures and helpers shared by the suites: in-process fake nodes, addresses
-that refuse a connection, and the relay-side upgrade handshake."""
+"""Shared fixtures: in-process fake nodes, refusing addresses, and the relay-side upgrade handshake."""
 
 import json
 import os

@@ -8,23 +8,18 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-// WriteFile writes data to path in the sandbox, atomically (silkd renames a
-// temp file into place). mode, when non-nil, sets the file's permission bits.
+// WriteFile atomically writes data to path in the sandbox; a non-nil mode sets the file's permission bits.
 func (s *Sandbox) WriteFile(ctx context.Context, path string, data []byte, mode *uint32) error {
 	return s.uploadRPC(ctx, &wire.FsWrite{Path: path, Mode: mode}, bytes.NewReader(data))
 }
 
 // ReadFile returns the contents of path.
 func (s *Sandbox) ReadFile(ctx context.Context, path string) ([]byte, error) {
-	var out []byte
-	err := s.downloadRPC(ctx, &wire.FsRead{Path: path}, func(b []byte) error {
-		out = append(out, b...)
-		return nil
-	})
-	if err != nil {
+	var buf bytes.Buffer
+	if err := s.ReadFileTo(ctx, path, &buf); err != nil {
 		return nil, err
 	}
-	return out, nil
+	return buf.Bytes(), nil
 }
 
 // ReadFileTo streams path into w; an error from w ends the read there.

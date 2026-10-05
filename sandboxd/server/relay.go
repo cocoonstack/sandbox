@@ -34,6 +34,11 @@ var (
 	silkdEnds = relayEnds{guest: func(c net.Conn) { _ = c.Close() }, client: drainClient}
 )
 
+// relayEnds is what a finished direction means to the peer that did not end it.
+type relayEnds struct {
+	guest, client func(net.Conn)
+}
+
 // CloseRelays force-closes in-flight relays; http.Server.Shutdown does not track hijacked conns.
 func (s *Server) CloseRelays() {
 	s.relayMu.Lock()
@@ -94,12 +99,6 @@ func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBu
 	s.splice(client, clientR, guest, switchingProtocols, silkdEnds)
 }
 
-// relayEnds is what a finished direction means to the peer that did not end it.
-type relayEnds struct {
-	guest  func(net.Conn)
-	client func(net.Conn)
-}
-
 func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hello []byte, ends relayEnds) {
 	release, ok := s.trackRelay(client, guest)
 	if !ok {
@@ -157,33 +156,6 @@ func (s *Server) trackRelay(client, guest net.Conn) (func(), bool) {
 	}, true
 }
 
-func keepAlive(client net.Conn) {
-	tcp, ok := client.(*net.TCPConn)
-	if !ok {
-		return
-	}
-	_ = tcp.SetKeepAliveConfig(net.KeepAliveConfig{
-		Enable:   true,
-		Idle:     keepAliveIdle,
-		Interval: keepAliveInterval,
-		Count:    keepAliveCount,
-	})
-}
-
-// drainClient half-closes; the read deadline is what unblocks the splice goroutine.
-func drainClient(client net.Conn) {
-	utils.CloseWrite(client)
-	_ = client.SetReadDeadline(time.Now().Add(drainGrace))
-}
-
-// clientReader replays what the http server already buffered; reading the bufio past Buffered() would race the direct conn reads.
-func clientReader(client net.Conn, clientBuf *bufio.Reader) io.Reader {
-	if n := clientBuf.Buffered(); n > 0 {
-		return io.MultiReader(io.LimitReader(clientBuf, int64(n)), client)
-	}
-	return client
-}
-
 // auditTee records each request line it relays; input frames and the bytes past the cap pass unrecorded.
 type auditTee struct {
 	r      io.Reader
@@ -229,4 +201,31 @@ func (t *auditTee) endLine() {
 	}
 	t.buf = t.buf[:0]
 	t.skip = false
+}
+
+func keepAlive(client net.Conn) {
+	tcp, ok := client.(*net.TCPConn)
+	if !ok {
+		return
+	}
+	_ = tcp.SetKeepAliveConfig(net.KeepAliveConfig{
+		Enable:   true,
+		Idle:     keepAliveIdle,
+		Interval: keepAliveInterval,
+		Count:    keepAliveCount,
+	})
+}
+
+// drainClient half-closes; the read deadline is what unblocks the splice goroutine.
+func drainClient(client net.Conn) {
+	utils.CloseWrite(client)
+	_ = client.SetReadDeadline(time.Now().Add(drainGrace))
+}
+
+// clientReader replays what the http server already buffered; reading the bufio past Buffered() would race the direct conn reads.
+func clientReader(client net.Conn, clientBuf *bufio.Reader) io.Reader {
+	if n := clientBuf.Buffered(); n > 0 {
+		return io.MultiReader(io.LimitReader(clientBuf, int64(n)), client)
+	}
+	return client
 }
