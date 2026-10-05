@@ -27,7 +27,7 @@ func (s *Sandbox) doneRPC(ctx context.Context, req wire.Request) error {
 	return l.done(terminalErr(ctx, conn))
 }
 
-// uploadRPC streams r as Data frames after req and expects Done; an early terminal frame is the guest rejecting the upload and stops the stream.
+// uploadRPC streams r as full Data frames after req and expects Done; an early terminal frame is the guest rejecting the upload and stops the stream.
 func (s *Sandbox) uploadRPC(ctx context.Context, req wire.Request, r io.Reader) error {
 	conn, l, err := s.call(ctx, req)
 	if err != nil {
@@ -36,27 +36,28 @@ func (s *Sandbox) uploadRPC(ctx context.Context, req wire.Request, r io.Reader) 
 	defer l.close()
 	terminal := make(chan error, 1)
 	go func() { terminal <- terminalErr(ctx, conn) }()
-	buf := make([]byte, wire.BulkChunk)
-	for {
+	size := wire.BulkChunk
+	if sized, ok := r.(interface{ Len() int }); ok {
+		size = max(min(size, sized.Len()), 1)
+	}
+	buf := make([]byte, size)
+	for last := false; !last; {
 		select {
-		case err := <-terminal:
-			return l.done(err)
+		case termErr := <-terminal:
+			return l.done(termErr)
 		default:
 		}
-		n, readErr := r.Read(buf)
+		var n int
+		if n, last, err = readChunk(r, buf); err != nil {
+			return err
+		}
 		if n > 0 {
-			if err := conn.Send(&wire.Data{Data: buf[:n]}); err != nil {
-				return cmp.Or(<-terminal, err)
+			if sendErr := conn.Send(&wire.Data{Data: buf[:n]}); sendErr != nil {
+				return cmp.Or(<-terminal, sendErr)
 			}
 		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return readErr
-		}
 	}
-	if err := conn.Send(wire.DataEnd{}); err != nil {
+	if err = conn.Send(wire.DataEnd{}); err != nil {
 		return cmp.Or(<-terminal, err)
 	}
 	return l.done(<-terminal)
@@ -233,4 +234,13 @@ func sendChunks(conn *silkd.Conn, size int, frame func([]byte) wire.Request, b [
 		b = b[len(chunk):]
 	}
 	return sent, nil
+}
+
+// readChunk fills buf from r, so a reader that yields small reads still sends full frames; last is true at EOF.
+func readChunk(r io.Reader, buf []byte) (int, bool, error) {
+	n, err := io.ReadFull(r, buf)
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return n, true, nil
+	}
+	return n, false, err
 }

@@ -529,7 +529,7 @@ func TestAPIErrorDrainsOversizedBody(t *testing.T) {
 	}
 }
 
-func testClient(t *testing.T, ts *httptest.Server, opts ...ClientOption) *Client {
+func testClient(t testing.TB, ts *httptest.Server, opts ...ClientOption) *Client {
 	t.Helper()
 	c, err := Connect(strings.TrimPrefix(ts.URL, "http://"), opts...)
 	if err != nil {

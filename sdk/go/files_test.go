@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"testing/iotest"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
@@ -55,6 +56,41 @@ func TestFilesRoundTrip(t *testing.T) {
 	}
 	if _, err := sb.ReadFile(ctx, "/work/b.txt"); err == nil {
 		t.Error("read of removed file succeeded")
+	}
+}
+
+func TestAnUploadFillsEachFrameFromSmallReads(t *testing.T) {
+	frames := make(chan int, 1)
+	sb := testSandbox(t, newAgentServer(t, func(conn net.Conn) {
+		defer conn.Close()
+		sc := wire.NewFrameScanner(conn)
+		data := 0
+		for sc.Scan() {
+			req, err := wire.DecodeRequest(sc.Bytes())
+			if err != nil {
+				return
+			}
+			var resp wire.Response
+			switch req.(type) {
+			case *wire.Info:
+				resp = &wire.InfoResp{Proto: wire.KeepAliveProto}
+			case *wire.Data:
+				data++
+			case *wire.DataEnd:
+				frames <- data
+				resp = wire.Done{}
+			}
+			if resp != nil {
+				line, _ := wire.EncodeResponse(resp)
+				_, _ = conn.Write(append(line, '\n'))
+			}
+		}
+	}))
+	if err := sb.Push(t.Context(), "/d", iotest.OneByteReader(bytes.NewReader(make([]byte, 4096)))); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if got := <-frames; got != 1 {
+		t.Errorf("a 4 KiB upload read a byte at a time went out in %d data frames, want 1", got)
 	}
 }
 
@@ -156,7 +192,7 @@ func TestUploadToAnOldDaemonReturnsItsRejection(t *testing.T) {
 	}
 }
 
-func fakeSandbox(t *testing.T) *Sandbox {
+func fakeSandbox(t testing.TB) *Sandbox {
 	t.Helper()
 	fake := silkdtest.NewFake(t.TempDir())
 	return testSandbox(t, newAgentServer(t, fake.ServeConn))
