@@ -2,6 +2,7 @@ package pool
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -63,5 +64,28 @@ func TestNodeAtCapacityParksRefillInsteadOfRetrying(t *testing.T) {
 			infos, _ := m.Info()
 			return infos[0].Warm == 4
 		})
+	})
+}
+
+func TestRefillKeepsItsShareWhileTeardownsQueue(t *testing.T) {
+	eng := newFakeEngine()
+	eng.removeStall = make(chan struct{})
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	m.pools[testKey].goldenDir = "/goldens/x"
+	names := make([]string, 2*cap(m.refillSem))
+	for i := range names {
+		names[i] = fmt.Sprintf("sbx-gone-%d", i)
+	}
+	teardown := m.destroyAll(t.Context(), names)
+	defer func() {
+		close(eng.removeStall)
+		teardown.Wait()
+	}()
+	waitFor(t, func() bool { return len(m.maintSem) == cap(m.maintSem) })
+
+	m.refillOnce(t.Context())
+	waitFor(t, func() bool {
+		infos, _ := m.Info()
+		return infos[0].Warm == 1
 	})
 }
