@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -875,6 +876,40 @@ func TestArchiveWakeEvictsRecLock(t *testing.T) {
 	}
 	if got := lockCount(m); got != base {
 		t.Errorf("recLocks grew %d->%d over an archive+wake cycle, want no growth", base, got)
+	}
+}
+
+func TestMarkArchiveCksKeepsOnlyTheIDsItCouldNotMark(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	good := []string{"ck_00000000000000a1", "ck_00000000000000a2"}
+	failed := m.markArchiveCks([]string{good[0], "not-a-ck", good[1]})
+	if len(failed) != 1 || failed["not-a-ck"] == nil {
+		t.Fatalf("failed %v, want only the invalid id", failed)
+	}
+	for _, ck := range good {
+		if !archiveCkMarked(m, ck) {
+			t.Errorf("%s not marked: an invalid id beside it blocked the batch", ck)
+		}
+	}
+	if failed := m.markArchiveCks(nil); failed != nil {
+		t.Errorf("an empty batch reported %v", failed)
+	}
+}
+
+func BenchmarkReapPurgesArchivedClaims(b *testing.B) {
+	m := newTestManager(b, newFakeEngine())
+	b.ReportAllocs()
+	for b.Loop() {
+		b.StopTimer()
+		past := time.Now().Add(-time.Minute)
+		m.mu.Lock()
+		for i := range 500 {
+			sb := &types.Sandbox{ID: fmt.Sprintf("sb_p%05d", i), Key: testKey, Deadline: past, ArchiveCk: fmt.Sprintf("ck_%016x", i), OnExpire: types.ExpireArchive}
+			m.claimed[sb.ID] = sb
+		}
+		m.mu.Unlock()
+		b.StartTimer()
+		m.reapOnce(b.Context())
 	}
 }
 

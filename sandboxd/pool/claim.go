@@ -538,15 +538,19 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	}
 
 	logger := log.WithFunc("pool.reapOnce")
-	expired = slices.DeleteFunc(expired, func(v victim) bool {
-		if v.action != reapPurge {
-			return false
+	var purges []string
+	for _, v := range expired {
+		if v.action == reapPurge {
+			purges = append(purges, v.ck)
 		}
-		markErr := m.markArchiveCk(v.ck)
-		if markErr != nil {
+	}
+	failed := m.markArchiveCks(purges)
+	expired = slices.DeleteFunc(expired, func(v victim) bool {
+		markErr, bad := failed[v.ck]
+		if bad && v.action == reapPurge {
 			logger.Errorf(ctx, markErr, "mark archive ck %s; keeping %s", v.ck, v.id)
 		}
-		return markErr != nil
+		return bad && v.action == reapPurge
 	})
 	if len(expired) == 0 {
 		return
