@@ -74,18 +74,9 @@ def test_rejected_upgrade_is_an_api_error():
     assert agent.early == ["fs_mkdir"], agent.early
 
 
-def test_run_timeout_cuts_an_unanswered_upgrade():
-    server = socket.create_server(("127.0.0.1", 0))
-    addr = f"127.0.0.1:{server.getsockname()[1]}"
-    held: list[socket.socket] = []
-    threading.Thread(target=lambda: held.append(server.accept()[0]), daemon=True).start()
-    sb = sandbox_at(addr, timeout=30, keep_alive=0)
+def test_run_timeout_cuts_an_unanswered_upgrade(black_hole):
+    sb = sandbox_at(black_hole, timeout=30, keep_alive=0)
     started = time.monotonic()
-    try:
-        with pytest.raises(SandboxTimeout):
-            sb.run(["true"], timeout=0.2)
-    finally:
-        server.close()
-        for conn in held:
-            conn.close()
+    with pytest.raises(SandboxTimeout):
+        sb.run(["true"], timeout=0.2)
     assert time.monotonic() - started < 2, "the run deadline must cut a hung upgrade under a long client timeout"

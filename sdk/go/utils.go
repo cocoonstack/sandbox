@@ -136,7 +136,7 @@ func pumpStdio(ctx context.Context, conn *silkd.Conn, stdout, stderr io.Writer) 
 	stdout = cmp.Or(stdout, io.Discard)
 	stderr = cmp.Or(stderr, io.Discard)
 	for {
-		resp, err := recvTransient(ctx, conn)
+		resp, err := recv(ctx, conn)
 		if err != nil {
 			return pid, 0, false, err
 		}
@@ -166,7 +166,7 @@ func pumpStdio(ctx context.Context, conn *silkd.Conn, stdout, stderr io.Writer) 
 // drainData consumes Data frames into sink until Done; sink must not retain its argument.
 func drainData(ctx context.Context, conn *silkd.Conn, sink chunkSink) error {
 	for {
-		resp, err := recvTransient(ctx, conn)
+		resp, err := recv(ctx, conn)
 		if err != nil {
 			return err
 		}
@@ -205,18 +205,9 @@ func expect[T any, PT respPtr[T]](ctx context.Context, conn *silkd.Conn) (*T, er
 	return nil, unexpected(resp)
 }
 
+// recv reads one frame, translating a canceled ctx and an early EOF; a bulk frame's Data is valid until the next read.
 func recv(ctx context.Context, conn *silkd.Conn) (wire.Response, error) {
-	return recvWith(ctx, conn.Recv)
-}
-
-// recvTransient is recv for a consumer done with a bulk frame's Data before its next read.
-func recvTransient(ctx context.Context, conn *silkd.Conn) (wire.Response, error) {
-	return recvWith(ctx, conn.RecvTransient)
-}
-
-// recvWith reads one frame, translating a canceled ctx and an early EOF.
-func recvWith(ctx context.Context, next func() (wire.Response, error)) (wire.Response, error) {
-	resp, err := next()
+	resp, err := conn.RecvTransient()
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr

@@ -61,32 +61,7 @@ func TestFilesRoundTrip(t *testing.T) {
 }
 
 func TestAnUploadFillsEachFrameFromSmallReads(t *testing.T) {
-	frames := make(chan int, 1)
-	sb := testSandbox(t, newAgentServer(t, func(conn net.Conn) {
-		defer conn.Close()
-		sc := wire.NewFrameScanner(conn)
-		data := 0
-		for sc.Scan() {
-			req, err := wire.DecodeRequest(sc.Bytes())
-			if err != nil {
-				return
-			}
-			var resp wire.Response
-			switch req.(type) {
-			case *wire.Info:
-				resp = &wire.InfoResp{Proto: wire.KeepAliveProto}
-			case *wire.Data:
-				data++
-			case *wire.DataEnd:
-				frames <- data
-				resp = wire.Done{}
-			}
-			if resp != nil {
-				line, _ := wire.EncodeResponse(resp)
-				_, _ = conn.Write(append(line, '\n'))
-			}
-		}
-	}))
+	sb, frames := uploadAgent(t)
 	if err := sb.Push(t.Context(), "/d", iotest.OneByteReader(bytes.NewReader(make([]byte, 4096)))); err != nil {
 		t.Fatalf("push: %v", err)
 	}
@@ -96,32 +71,13 @@ func TestAnUploadFillsEachFrameFromSmallReads(t *testing.T) {
 }
 
 func TestAnUploadStopsOnItsReadersError(t *testing.T) {
-	ended := make(chan bool, 1)
-	sb := testSandbox(t, newAgentServer(t, func(conn net.Conn) {
-		defer conn.Close()
-		sc := wire.NewFrameScanner(conn)
-		for sc.Scan() {
-			req, err := wire.DecodeRequest(sc.Bytes())
-			if err != nil {
-				break
-			}
-			switch req.(type) {
-			case *wire.Info:
-				line, _ := wire.EncodeResponse(&wire.InfoResp{Proto: wire.KeepAliveProto})
-				_, _ = conn.Write(append(line, '\n'))
-			case *wire.DataEnd:
-				ended <- true
-				return
-			}
-		}
-		ended <- false
-	}))
+	sb, frames := uploadAgent(t)
 	truncated := io.MultiReader(bytes.NewReader(make([]byte, 4096)), iotest.ErrReader(io.ErrUnexpectedEOF))
 	if err := sb.Push(t.Context(), "/d", truncated); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Errorf("push = %v, want the reader's io.ErrUnexpectedEOF", err)
 	}
-	if <-ended {
-		t.Error("a truncated stream was committed with data_end")
+	if got := <-frames; got != -1 {
+		t.Errorf("a truncated stream was committed with data_end after %d data frames", got)
 	}
 }
 
@@ -221,6 +177,41 @@ func TestUploadToAnOldDaemonReturnsItsRejection(t *testing.T) {
 	if e, ok := errors.AsType[*wire.ErrorResp](err); !ok || e.Kind != wire.KindNotFound {
 		t.Fatalf("upload rejected by a proto 1 daemon: %v, want its not_found frame", err)
 	}
+}
+
+func uploadAgent(t *testing.T) (*Sandbox, <-chan int) {
+	t.Helper()
+	frames := make(chan int, 1)
+	sb := testSandbox(t, newAgentServer(t, func(conn net.Conn) {
+		defer conn.Close()
+		sc := wire.NewFrameScanner(conn)
+		data := 0
+		for sc.Scan() {
+			req, err := wire.DecodeRequest(sc.Bytes())
+			if err != nil {
+				break
+			}
+			var resp wire.Response
+			switch req.(type) {
+			case *wire.Info:
+				resp = &wire.InfoResp{Proto: wire.KeepAliveProto}
+			case *wire.Data:
+				data++
+			case *wire.DataEnd:
+				frames <- data
+				resp = wire.Done{}
+			}
+			if resp != nil {
+				line, _ := wire.EncodeResponse(resp)
+				_, _ = conn.Write(append(line, '\n'))
+			}
+			if _, end := req.(*wire.DataEnd); end {
+				return
+			}
+		}
+		frames <- -1
+	}))
+	return sb, frames
 }
 
 func fakeSandbox(t testing.TB) *Sandbox {

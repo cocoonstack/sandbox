@@ -502,7 +502,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	}
 	m.mu.Lock()
 	var expired []victim
-	var dropped []string
+	var dropped, purges []string
 	for id, sb := range m.claimed {
 		// a zero deadline means no expiry (an archived claim kept forever).
 		if sb.Deadline.IsZero() || !now.After(sb.Deadline) {
@@ -511,6 +511,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		switch {
 		case sb.ArchiveCk != "":
 			expired = append(expired, victim{action: reapPurge, id: id, ck: sb.ArchiveCk, tenant: sb.Tenant, sb: sb})
+			purges = append(purges, sb.ArchiveCk)
 		case m.archivesAtDeadline(sb):
 			// archive instead of destroy, kept in m.claimed for archive() to move
 			if _, busy := m.archiving[id]; busy {
@@ -538,19 +539,13 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	}
 
 	logger := log.WithFunc("pool.reapOnce")
-	var purges []string
-	for _, v := range expired {
-		if v.action == reapPurge {
-			purges = append(purges, v.ck)
-		}
-	}
 	failed := m.markArchiveCks(purges)
 	expired = slices.DeleteFunc(expired, func(v victim) bool {
 		markErr, bad := failed[v.ck]
-		if bad && v.action == reapPurge {
+		if bad {
 			logger.Errorf(ctx, markErr, "mark archive ck %s; keeping %s", v.ck, v.id)
 		}
-		return bad && v.action == reapPurge
+		return bad
 	})
 	if len(expired) == 0 {
 		return
@@ -629,7 +624,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 }
 
 func (m *Manager) archivesAtDeadline(sb *types.Sandbox) bool {
-	return sb.Failed == "" && !m.tenantGone(sb.Tenant) && (sb.OnExpire == types.ExpireArchive || sb.HibernateSnap != "" && m.archiveEnabledFor(sb.Key))
+	return sb.Failed == "" && !m.tenantGone(sb.Tenant) && (sb.OnExpire == types.ExpireArchive || sb.HibernateSnap != "" && m.archiveAfterFor(sb.Key) > 0)
 }
 
 func (m *Manager) pauseExpired(ctx context.Context, sb *types.Sandbox) error {

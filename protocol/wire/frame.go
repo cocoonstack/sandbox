@@ -679,12 +679,25 @@ func DecodeRequest(line []byte) (Request, error) {
 // DecodeResponse parses one frame into its type's concrete Go type. Byte
 // fields are freshly allocated per frame, so callers may retain them.
 func DecodeResponse(line []byte) (Response, error) {
-	return decodeResponse(line, nil)
+	return DecodeResponseInto(line, nil)
 }
 
 // DecodeResponseInto is DecodeResponse for a streaming consumer: a bulk frame's bytes land in *scratch, grown as needed, and stay valid only until the next call with it.
 func DecodeResponseInto(line []byte, scratch *[]byte) (Response, error) {
-	return decodeResponse(line, scratch)
+	typ, err := frameTag(line, respTagHead, "type")
+	if err != nil {
+		return nil, fmt.Errorf("parse response frame: %w", err)
+	}
+	if bulk, ok := bulkResponses[string(typ)]; ok {
+		if data, ok := decodeBulk(line, bulk.head, scratch); ok {
+			return bulk.mk(data), nil
+		}
+	}
+	dec, ok := responseDecoders[string(typ)]
+	if !ok {
+		return nil, fmt.Errorf("unknown response type %q", typ)
+	}
+	return dec(line)
 }
 
 // NewFrameScanner wraps r for newline-delimited frames capped at MaxFrame.
@@ -723,23 +736,6 @@ func bulkDecoders(mks ...bulkMaker) map[string]bulkResponse {
 		out[tag] = bulkResponse{head: []byte(`{"type":"` + tag + `","data":"`), mk: mk}
 	}
 	return out
-}
-
-func decodeResponse(line []byte, scratch *[]byte) (Response, error) {
-	typ, err := frameTag(line, respTagHead, "type")
-	if err != nil {
-		return nil, fmt.Errorf("parse response frame: %w", err)
-	}
-	if bulk, ok := bulkResponses[string(typ)]; ok {
-		if data, ok := decodeBulk(line, bulk.head, scratch); ok {
-			return bulk.mk(data), nil
-		}
-	}
-	dec, ok := responseDecoders[string(typ)]
-	if !ok {
-		return nil, fmt.Errorf("unknown response type %q", typ)
-	}
-	return dec(line)
 }
 
 // decodeBulk decodes a canonical bulk frame's payload into scratch, or a fresh buffer when scratch is nil; ok is false for any other shape.
@@ -826,26 +822,18 @@ func scanTag(line []byte, key string) (string, error) {
 	return "", nil
 }
 
-func decodeAs[T any](line []byte) (*T, error) {
-	v := new(T)
+func decodeReq[T any, PT reqPtr[T]](line []byte) (Request, error) {
+	v := PT(new(T))
 	if err := json.Unmarshal(line, v); err != nil {
 		return nil, err
 	}
 	return v, nil
 }
 
-func decodeReq[T any, PT reqPtr[T]](line []byte) (Request, error) {
-	v, err := decodeAs[T](line)
-	if err != nil {
-		return nil, err
-	}
-	return PT(v), nil
-}
-
 func decodeResp[T any, PT respPtr[T]](line []byte) (Response, error) {
-	v, err := decodeAs[T](line)
-	if err != nil {
+	v := PT(new(T))
+	if err := json.Unmarshal(line, v); err != nil {
 		return nil, err
 	}
-	return PT(v), nil
+	return v, nil
 }
