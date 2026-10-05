@@ -84,6 +84,36 @@ func TestConnExecStdinEcho(t *testing.T) {
 	}
 }
 
+func TestRecvKeepsDataWhileRecvTransientReusesIt(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() { client.Close(); server.Close() })
+	go func() {
+		for _, payload := range []string{"aGVsbG8=", "d29ybGQ=", "Zmlyc3Q=", "c2Vjb25k"} {
+			_, _ = io.WriteString(server, `{"type":"data","data":"`+payload+`"}`+"\n")
+		}
+	}()
+	conn := silkd.NewConn(client)
+	recvData := func(recv func() (wire.Response, error)) []byte {
+		t.Helper()
+		resp, err := recv()
+		if err != nil {
+			t.Fatalf("recv: %v", err)
+		}
+		return resp.(*wire.DataResp).Data
+	}
+	kept := recvData(conn.Recv)
+	if got := recvData(conn.Recv); string(kept) != "hello" || string(got) != "world" {
+		t.Errorf("Recv frames = %q, %q; want hello, world", kept, got)
+	}
+	first := recvData(conn.RecvTransient)
+	if string(first) != "first" {
+		t.Errorf("first transient frame = %q", first)
+	}
+	if second := recvData(conn.RecvTransient); string(second) != "second" || &first[0] != &second[0] {
+		t.Errorf("second transient frame = %q at a fresh buffer, want second in the reused one", second)
+	}
+}
+
 func TestConnRejectsOversizedFrame(t *testing.T) {
 	client, server := net.Pipe()
 	t.Cleanup(func() { client.Close(); server.Close() })

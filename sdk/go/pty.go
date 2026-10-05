@@ -68,7 +68,7 @@ func (p *Pty) ExitCode() (code int, ok bool) {
 func (p *Pty) drain(ctx context.Context, pw *io.PipeWriter, stop func()) {
 	defer stop()
 	for {
-		resp, err := recv(ctx, p.conn)
+		resp, err := recvTransient(ctx, p.conn)
 		if err != nil {
 			_ = pw.CloseWithError(err)
 			return

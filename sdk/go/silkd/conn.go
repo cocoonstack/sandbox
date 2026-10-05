@@ -3,6 +3,7 @@ package silkd
 
 import (
 	"bufio"
+	"cmp"
 	"fmt"
 	"io"
 	"sync"
@@ -16,6 +17,7 @@ import (
 type Conn struct {
 	wmu  sync.Mutex
 	wbuf []byte
+	rbuf []byte
 	rwc  io.ReadWriteCloser
 	sc   *bufio.Scanner
 }
@@ -46,17 +48,29 @@ func (c *Conn) Send(r wire.Request) error {
 
 // Recv reads the next response frame; io.EOF signals a clean close.
 func (c *Conn) Recv() (wire.Response, error) {
-	if !c.sc.Scan() {
-		if err := c.sc.Err(); err != nil {
-			return nil, err
-		}
-		return nil, io.EOF
+	if err := c.scan(); err != nil {
+		return nil, err
 	}
 	return wire.DecodeResponse(c.sc.Bytes())
 }
 
+// RecvTransient is Recv for a streaming consumer: a bulk frame's Data is valid only until the next RecvTransient.
+func (c *Conn) RecvTransient() (wire.Response, error) {
+	if err := c.scan(); err != nil {
+		return nil, err
+	}
+	return wire.DecodeResponseInto(c.sc.Bytes(), &c.rbuf)
+}
+
 func (c *Conn) Close() error {
 	return c.rwc.Close()
+}
+
+func (c *Conn) scan() error {
+	if c.sc.Scan() {
+		return nil
+	}
+	return cmp.Or(c.sc.Err(), io.EOF)
 }
 
 // sendBulk renders a data/stdin frame into the reused buffer.

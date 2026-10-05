@@ -19,6 +19,16 @@ func BenchmarkDecodeBulk(b *testing.B) {
 				}
 			}
 		})
+		b.Run(fmt.Sprintf("%dKiB-into", size>>10), func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(size))
+			var scratch []byte
+			for b.Loop() {
+				if _, err := DecodeResponseInto(frame, &scratch); err != nil {
+					b.Fatalf("decode: %v", err)
+				}
+			}
+		})
 		b.Run(fmt.Sprintf("%dKiB-json", size>>10), func(b *testing.B) {
 			b.SetBytes(int64(size))
 			for b.Loop() {

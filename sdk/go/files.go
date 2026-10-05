@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"slices"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
@@ -17,19 +16,15 @@ func (s *Sandbox) WriteFile(ctx context.Context, path string, data []byte, mode 
 
 // ReadFile returns the contents of path.
 func (s *Sandbox) ReadFile(ctx context.Context, path string) ([]byte, error) {
-	// Retaining b is safe: fastBulk decodes each frame into a fresh buffer.
-	var chunks [][]byte
+	var out []byte
 	err := s.downloadRPC(ctx, &wire.FsRead{Path: path}, func(b []byte) error {
-		chunks = append(chunks, b)
+		out = append(out, b...)
 		return nil
 	})
-	if err != nil || len(chunks) == 0 {
+	if err != nil {
 		return nil, err
 	}
-	if len(chunks) == 1 {
-		return chunks[0], nil
-	}
-	return slices.Concat(chunks...), nil
+	return out, nil
 }
 
 // ReadFileTo streams path into w; an error from w ends the read there.
