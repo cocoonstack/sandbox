@@ -85,7 +85,7 @@ func (m *Manager) warnLostInjects(ctx context.Context, v *configView, sbs []*typ
 
 func (m *Manager) refusePolicyDrop(old, next *outbound.View) error {
 	denied := m.deniedClaims(next)
-	for _, key := range slices.SortedFunc(maps.Keys(denied), comparePoolKeys) {
+	for _, key := range slices.SortedFunc(maps.Keys(denied), types.PoolKey.Compare) {
 		if old.HasPolicy(key) {
 			return fmt.Errorf("pool %s drops the egress policy of %d live claims: keep it until they are released", key.Template, denied[key])
 		}

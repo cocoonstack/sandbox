@@ -639,7 +639,7 @@ Effects on what already runs:
   everything. A claim armed while it had no policy has no egress proxy, so a
   policy a reload adds reaches it only after a release or a wake. A restart
   cannot refuse, so it logs a warning for each pool whose live claims have no
-  policy and reach nothing.
+  policy and reach nothing, on a node that still holds any egress policy.
 - **Armed once per claim**: the SOCKS5 door (`socks5`) and
   `egress_usage_bytes` apply to claims armed after the reload.
 - **Golden rebuilds**: a change to a key's `warmup` or `storage`, or turning

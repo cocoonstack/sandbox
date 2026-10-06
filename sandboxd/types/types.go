@@ -490,6 +490,11 @@ func (k PoolKey) Defaulted() PoolKey {
 	return k
 }
 
+// Compare orders keys by Hash, for a deterministic walk over a key set.
+func (k PoolKey) Compare(o PoolKey) int {
+	return strings.Compare(k.Hash(), o.Hash())
+}
+
 // Hash is a stable 128-bit digest for naming; a shorter tag would be brute-forceable.
 func (k PoolKey) Hash() string {
 	sum := sha256.Sum256([]byte(k.Template + "|" + string(k.Net) + "|" + string(k.Size)))

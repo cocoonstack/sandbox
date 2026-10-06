@@ -4,7 +4,6 @@ import (
 	"context"
 	"maps"
 	"slices"
-	"strings"
 
 	"github.com/projecteru2/core/log"
 
@@ -69,7 +68,7 @@ func (m *Manager) warnDeniedClaims(ctx context.Context) {
 		return
 	}
 	denied := m.deniedClaims(v)
-	for _, key := range slices.SortedFunc(maps.Keys(denied), comparePoolKeys) {
+	for _, key := range slices.SortedFunc(maps.Keys(denied), types.PoolKey.Compare) {
 		log.WithFunc("pool.warnDeniedClaims").Warnf(ctx, "pool %s has no egress policy: its %d live claims reach nothing", key.Template, denied[key])
 	}
 }
@@ -86,8 +85,4 @@ func (m *Manager) outboundOptions(ca *egress.CA) outbound.Options {
 		CA:      ca,
 		LockNIC: len(m.cfg.Bridges) > 0,
 	}
-}
-
-func comparePoolKeys(a, b types.PoolKey) int {
-	return strings.Compare(a.Hash(), b.Hash())
 }

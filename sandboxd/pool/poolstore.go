@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -128,6 +127,6 @@ func poolSeedHash(specs []config.PoolSpec) string {
 		shaped[i].Storage = ""
 		shaped[i].EgressUpstreamEnv = ""
 	}
-	slices.SortFunc(shaped, func(a, b config.PoolSpec) int { return strings.Compare(a.Hash(), b.Hash()) })
+	slices.SortFunc(shaped, func(a, b config.PoolSpec) int { return a.Compare(b.PoolKey) })
 	return utils.DigestHex(shaped)
 }
