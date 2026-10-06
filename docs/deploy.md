@@ -632,9 +632,14 @@ all at once or not at all. Every field falls into one of three classes:
 Effects on what already runs:
 
 - **Egress changes** reach live claims on their next request or connection;
-  open tunnels keep their path. A claim whose policy a reload removes is
-  denied everything. A claim armed while it had no policy has no egress proxy,
-  so a policy a reload adds reaches it only after a release or a wake.
+  open tunnels keep their path. A reload that removes the pool policy live
+  claims still use, by dropping the pool's entry or its `egress` block, is
+  refused with the pool and the claim count: keep the entry until those claims
+  are released. A claim whose tenant class a reload removes is denied
+  everything. A claim armed while it had no policy has no egress proxy, so a
+  policy a reload adds reaches it only after a release or a wake. A restart
+  cannot refuse, so it logs a warning for each pool whose live claims have no
+  policy and reach nothing.
 - **Armed once per claim**: the SOCKS5 door (`socks5`) and
   `egress_usage_bytes` apply to claims armed after the reload.
 - **Golden rebuilds**: a change to a key's `warmup` or `storage`, or turning

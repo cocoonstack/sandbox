@@ -66,6 +66,16 @@ func (v *View) Intercepts(key types.PoolKey) bool {
 	return v.poolEgress[key].Intercepts()
 }
 
+// HasPolicy reports whether key's pool has an egress policy.
+func (v *View) HasPolicy(key types.PoolKey) bool {
+	return v.poolEgress[key] != nil
+}
+
+// Guarded reports whether the view holds any egress policy.
+func (v *View) Guarded() bool {
+	return v.guarded
+}
+
 // HasClass reports whether the egress class name is configured.
 func (v *View) HasClass(name string) bool {
 	_, ok := v.classEgress[name]
