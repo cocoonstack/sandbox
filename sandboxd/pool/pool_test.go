@@ -459,6 +459,104 @@ func TestSetPoolsRemovalShedsArchivePolicy(t *testing.T) {
 	}
 }
 
+func TestSetPoolsRemovalDeletesTheIdlePoolsGolden(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 0})
+	g := seedGolden(t, m, "")
+	if err := os.WriteFile(filepath.Join(g, "memory"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	if err := m.SetPools(t.Context(), nil); err != nil {
+		t.Fatalf("SetPools: %v", err)
+	}
+	for _, path := range []string{g, g + goldenStampSuffix} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s survived the removal of its idle pool: %v", path, err)
+		}
+	}
+	waitFor(t, func() bool {
+		tmps, _ := filepath.Glob(filepath.Join(m.goldensDir(), "*.tmp"))
+		return len(tmps) == 0
+	})
+}
+
+func TestAReaddedPoolRebuildsTheGoldenItsRemovalDeleted(t *testing.T) {
+	eng := newFakeEngine()
+	spec := config.PoolSpec{PoolKey: testKey, Warm: 1}
+	m := newTestManager(t, eng, spec)
+	waitFor(t, func() bool { return refilledTo(t, m, testKey, 1) })
+
+	if err := m.SetPools(t.Context(), nil); err != nil {
+		t.Fatalf("SetPools remove: %v", err)
+	}
+	if err := m.SetPools(t.Context(), []config.PoolSpec{spec}); err != nil {
+		t.Fatalf("SetPools re-add: %v", err)
+	}
+	waitFor(t, func() bool { return refilledTo(t, m, testKey, 1) })
+	if n := eng.coldCount(); n != 2 {
+		t.Errorf("cold boots=%d, want 2: the re-added key must rebuild, not adopt the deleted golden", n)
+	}
+	m.mu.Lock()
+	golden := m.pools[testKey].goldenDir
+	m.mu.Unlock()
+	if !dirExists(golden) {
+		t.Errorf("golden %q of the re-added pool is missing on disk", golden)
+	}
+}
+
+func TestARemovedPoolKeepsItsGoldenUntilItSettles(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		busy func(p *pool)
+	}{
+		{"build", func(p *pool) { p.building = true }},
+		{"refill", func(p *pool) { p.refilling = 1 }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 0})
+			g := seedGolden(t, m, "")
+			m.mu.Lock()
+			p := m.pools[testKey]
+			tt.busy(p)
+			m.mu.Unlock()
+
+			if err := m.SetPools(t.Context(), nil); err != nil {
+				t.Fatalf("SetPools: %v", err)
+			}
+			if !dirExists(g) {
+				t.Fatalf("golden deleted while the removed pool's %s was in flight", tt.name)
+			}
+			m.mu.Lock()
+			p.building, p.refilling = false, 0
+			m.mu.Unlock()
+			m.refillOnce(t.Context())
+			for _, path := range []string{g, g + goldenStampSuffix} {
+				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("%s survived the sweep of its settled pool: %v", path, err)
+				}
+			}
+		})
+	}
+}
+
+func TestSetPoolsWarmZeroKeepsTheGolden(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
+	g := seedGolden(t, m, "")
+	marker := filepath.Join(g, "memory")
+	if err := os.WriteFile(marker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 0}}); err != nil {
+		t.Fatalf("SetPools: %v", err)
+	}
+	for _, path := range []string{marker, g + goldenStampSuffix} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("%s of a key kept at warm 0 is gone: %v", path, err)
+		}
+	}
+}
+
 func TestSetPoolsRejectsInvalidSpec(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	err := m.SetPools(t.Context(), []config.PoolSpec{{

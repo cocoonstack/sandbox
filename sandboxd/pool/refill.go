@@ -38,12 +38,12 @@ func (m *Manager) refillOnce(ctx context.Context) {
 	// spawning VMs into a full node still takes the global rtnl lock even when doomed to fail
 	parked := now.Before(m.atCapacityUntil)
 	inFlight := 0
-	for key, p := range m.pools {
+	for _, p := range m.pools {
 		inFlight += p.refilling
 		// SetPools leaves a removed pool in place while a build or refill is in flight
 		if p.removed {
 			if !p.building && p.refilling == 0 {
-				delete(m.pools, key)
+				m.dropPool(ctx, p)
 			}
 			continue
 		}
@@ -273,6 +273,22 @@ func (m *Manager) adoptGolden(p *pool, imageID string) bool {
 	p.goldenDir, p.imageID = g, imageID
 	p.goldenGen++
 	return true
+}
+
+// dropPool runs under m.mu: the rename hides the golden from adoptGolden, and the slow unlink runs off the lock.
+func (m *Manager) dropPool(ctx context.Context, p *pool) {
+	delete(m.pools, p.key)
+	g := filepath.Join(m.goldensDir(), p.hash)
+	_ = os.Remove(g + goldenStampSuffix)
+	doomed := g + "-" + randHex(4) + ".tmp"
+	if os.Rename(g, doomed) != nil {
+		return
+	}
+	go func() {
+		if os.RemoveAll(doomed) == nil {
+			log.WithFunc("pool.dropPool").Infof(ctx, "removed the golden of dropped pool %s", p.key.Template)
+		}
+	}()
 }
 
 func (m *Manager) goldenStamp(v *configView, key types.PoolKey, imageID string) string {

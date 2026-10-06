@@ -200,6 +200,41 @@ func TestReconcileSweepsInterruptedForkExports(t *testing.T) {
 	}
 }
 
+func TestReconcileSweepsGoldensNoPoolUses(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
+	pooled := seedGolden(t, m, "")
+	orphan := filepath.Join(m.goldensDir(), otherKey.Hash())
+	staging := filepath.Join(m.goldensDir(), "x.tmp")
+	for _, d := range []string{orphan, staging} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(orphan, "memory"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(orphan+goldenStampSuffix, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	for _, path := range []string{orphan, orphan + goldenStampSuffix, staging} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s no pool uses survived Reconcile: %v", path, err)
+		}
+	}
+	for _, path := range []string{pooled, pooled + goldenStampSuffix} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("%s of a pooled key was swept: %v", path, err)
+		}
+	}
+	if got := m.pools[testKey].goldenDir; got != pooled {
+		t.Errorf("golden dir %q, want the pooled golden %q adopted", got, pooled)
+	}
+}
+
 type staleCreateCase struct {
 	name        string
 	outcome     engine.StaleCreateOutcome
