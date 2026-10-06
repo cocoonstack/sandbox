@@ -70,16 +70,15 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		referenced[sb.HibernateSnap] = true
 	}
 	saveErr := m.store.save(m.claimed)
+	pooled := make(map[string]bool, len(m.pools))
 	for _, p := range m.pools {
 		m.adoptGolden(p, imageIDs[p.key.Template])
+		pooled[p.hash] = true
 	}
 	m.mu.Unlock()
 	for _, sb := range adopted {
 		m.recordHibernate(ctx, sb)
 	}
-	// a crash mid-export leaves a golden *.tmp or a fork-* staging dir nothing in this life reuses
-	tmps, _ := filepath.Glob(filepath.Join(m.goldensDir(), "*.tmp"))
-	forks, _ := filepath.Glob(filepath.Join(m.dataDir, "fork-*"))
 	logger := log.WithFunc("pool.Reconcile")
 	if err := m.ckpts.SweepStaging(); err != nil {
 		logger.Error(ctx, err, "sweep checkpoint staging")
@@ -87,8 +86,21 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err := m.tpls.SweepStaging(); err != nil {
 		logger.Error(ctx, err, "sweep template staging")
 	}
-	for _, tmp := range slices.Concat(tmps, forks) {
-		_ = os.RemoveAll(tmp)
+	dir := m.goldensDir()
+	goldens, _ := os.ReadDir(dir)
+	for _, e := range goldens {
+		name := e.Name()
+		if pooled[strings.TrimSuffix(name, goldenStampSuffix)] {
+			continue
+		}
+		if os.RemoveAll(filepath.Join(dir, name)) == nil && filepath.Ext(name) == "" {
+			logger.Infof(ctx, "removed orphan golden %s", name)
+		}
+	}
+	// a crash mid-export leaves a fork-* staging dir nothing in this life reuses
+	forks, _ := filepath.Glob(filepath.Join(m.dataDir, "fork-*"))
+	for _, fork := range forks {
+		_ = os.RemoveAll(fork)
 	}
 
 	m.reclaimOrphanArchiveCks(ctx, claims)

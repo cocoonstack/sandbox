@@ -444,7 +444,9 @@ gives new tenant claims their egress class's policy alone:
 ```
 
 Pools omitted from the list are drained: their unclaimed warm VMs are
-destroyed and the pool entry retires. `net`/`size` default like a claim's.
+destroyed and the pool entry retires. Once such a pool is idle, its golden
+is deleted; a pool kept with `warm: 0` keeps its golden.
+`net`/`size` default like a claim's.
 Answers the fresh `GET /v1/info` payload. 400 bad key, negative warm/idle,
 `warm_max` below `warm`, `idle_hibernate_seconds` on an egress pool, a
 negative archive duration or an `archive_after_seconds` not above the pool's

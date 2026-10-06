@@ -83,7 +83,7 @@ func (m *Manager) applyPools(ctx context.Context, desired map[types.PoolKey]conf
 		p.removed = !ok
 		trim = append(trim, p.trimWarm(p.effectiveTarget(now))...)
 		if !ok && !p.building && p.refilling == 0 {
-			delete(m.pools, key)
+			m.dropPool(ctx, p)
 		}
 	}
 	for key, spec := range desired {
