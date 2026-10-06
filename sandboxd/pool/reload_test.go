@@ -200,7 +200,7 @@ func TestACloneOfARetiredGoldenNeverLands(t *testing.T) {
 	golden, gen := p.goldenDir, p.goldenGen
 	p.warm = nil
 	p.goldenGen++
-	p.refilling++
+	p.refilling += 2
 	m.refillSem <- struct{}{}
 	m.mu.Unlock()
 	m.refillOne(t.Context(), p, golden, gen)
