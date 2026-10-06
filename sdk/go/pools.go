@@ -25,8 +25,8 @@ type poolUpdate struct {
 	Pools []PoolSpec `json:"pools"`
 }
 
-// SetPools replaces the entry node's desired warm pools (PUT /v1/pools): a
-// declarative full replace, so omitted pools drain. Requires the operator token.
+// SetPools replaces the entry node's desired warm pools (PUT /v1/pools): omitted
+// pools drain and lose their golden once idle. Requires the operator token.
 func (c *Client) SetPools(ctx context.Context, pools []PoolSpec) (*NodeInfo, error) {
 	return c.setPoolsAt(ctx, c.addr, pools)
 }

@@ -47,8 +47,9 @@ performance) — source in
   `StartLsp`, `Spawn/Ps/Kill/Logs/Attach`; `protocol/wire` carries the frame
   vocabulary, `sdk/go/silkd` the conn layer, `silkdtest` a test fake
 - `sdk/python/` — Python SDK (stdlib-only, sync), matching the Go guest and
-  data-plane surface for the Python-first agent ecosystem; node pool retuning
-  remains Go-only; round-trips the shared fixture corpus
+  data-plane surface for the Python-first agent ecosystem; node pool and
+  tenant administration and the claim env remain Go-only; round-trips the
+  shared fixture corpus
 - `mcp/` — `sandbox-mcp`, an MCP stdio server exposing the surface as tools
   for Claude Code / Cursor / agent frameworks
 - `sdk/openai/` — `cocoonstack-sandbox-openai`, a custom sandbox provider
@@ -62,7 +63,8 @@ performance) — source in
   `smoke`, `meshsmoke`, `crossnode`, `coldproof`, `egresssmoke`,
   `interceptsmoke`, `sockssmoke`, `volumesmoke`, `lifecycle` (idle→hibernate→archive),
   `androidsmoke`, `browsersmoke`, `ringsmoke` (output ring cap, exec as a user),
-  `portsmoke` (the guest-port relay), `credsmoke` (claim credential injection),
+  `portsmoke` (the guest-port relay, with `guestserver` as its guest listener),
+  `credsmoke` (claim credential injection),
   and the `pullbench`/`pushbench`/`rpcbench`/`qaab` perf drivers
 - `boot/kernel/` — kernel version pin (`VERSION` + matching tarball `SHA256`,
   bump both together) + config fragment (amd64: over `x86_64_defconfig` +
@@ -78,7 +80,7 @@ performance) — source in
   e2b-compatible data plane), and `e2b-ci` (e2b-rt plus e2b's code interpreter)
 - `scripts/` — `boot-bench.sh` (boot phase timing), `bench.sh` (the published
   benchmark procedure), `sandboxd-e2e.sh` (bare-metal e2e, below), plus the
-  `archive`/`egress`/`intercept`/`socks`/`port` e2e drivers
+  `archive`/`egress`/`intercept`/`socks`/`credentials`/`port` e2e drivers
 - `packaging/` — the systemd unit deploy installs
 
 ## Build & test
@@ -126,7 +128,8 @@ TEMPLATE=rt:24.04 scripts/sandboxd-e2e.sh
 
 - `silkd.yml` / `sandboxd.yml` — Rust and Go test+lint suites
 - `boot-init.yml` — the boot/init crate's own fmt+clippy+test gate
-- `python.yml` — ruff + pytest for the three Python packages
+- `python.yml` — ruff + pytest for the three Python packages, mypy for the
+  base SDK
 - `shell.yml` — shellcheck over every tracked shell script
 - `images.yml` — the single image entry point: on a push touching
   `boot/**`, `silkd/**`, `protocol/**`, or `os-image/**` it builds the
