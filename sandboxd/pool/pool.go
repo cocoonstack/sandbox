@@ -220,12 +220,13 @@ type pool struct {
 	goldenDir string
 	imageID   string
 	// goldenGen counts installs, so a clone of a retired golden never lands after a rebuild at the same path.
-	goldenGen uint64
-	building  bool
-	nextBuild time.Time
-	removed   bool // dropped from the desired set while building/refilling; swept by refillOnce
-	warm      []*types.Sandbox
-	refilling int
+	goldenGen   uint64
+	building    bool
+	nextBuild   time.Time
+	removed     bool // dropped from the desired set while unsettled; swept by refillOnce
+	warm        []*types.Sandbox
+	refilling   int
+	claimClones int
 
 	// Without a streak gate a node-wide dead cause is retried every tick at full concurrency
 	refillFails int
@@ -234,6 +235,10 @@ type pool struct {
 
 func newPool(key types.PoolKey) *pool {
 	return &pool{key: key, hash: key.Hash()}
+}
+
+func (p *pool) settled() bool {
+	return !p.building && p.refilling == 0 && p.claimClones == 0
 }
 
 // refillGated reports whether a refill may not spawn: backoff wait, or one probe in flight.

@@ -40,9 +40,9 @@ func (m *Manager) refillOnce(ctx context.Context) {
 	inFlight := 0
 	for _, p := range m.pools {
 		inFlight += p.refilling
-		// SetPools leaves a removed pool in place while a build or refill is in flight
+		// SetPools leaves a removed pool in place while a build, refill or claim clone is in flight
 		if p.removed {
-			if !p.building && p.refilling == 0 {
+			if p.settled() {
 				m.dropPool(ctx, p)
 			}
 			continue

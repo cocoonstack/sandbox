@@ -82,7 +82,7 @@ func (m *Manager) applyPools(ctx context.Context, desired map[types.PoolKey]conf
 		p.applySpec(spec)
 		p.removed = !ok
 		trim = append(trim, p.trimWarm(p.effectiveTarget(now))...)
-		if !ok && !p.building && p.refilling == 0 {
+		if !ok && p.settled() {
 			m.dropPool(ctx, p)
 		}
 	}
