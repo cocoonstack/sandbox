@@ -70,7 +70,7 @@ func RunContract(t *testing.T, st store.Store) {
 	if digest != "" {
 		t.Fatalf("Fetch digest after plain re-publish: %q, want empty", digest)
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, "disk.img")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(dir, "disk.img")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("first-generation file survived re-publish: %v", statErr)
 	}
 	if got, readErr := os.ReadFile(filepath.Join(dir, "disk2.img")); readErr != nil || string(got) != "second-gen" { //nolint:gosec // test path

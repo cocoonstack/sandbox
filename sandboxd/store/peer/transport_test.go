@@ -288,7 +288,7 @@ func TestTarRecordUntarRoundTripComplete(t *testing.T) {
 	if err := Untar(&buf, dst); err != nil {
 		t.Fatalf("Untar: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dst, recordTrailer)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dst, recordTrailer)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("completion marker was written to disk (%v); it must be consumed, not stored", err)
 	}
 	if _, err := os.Stat(filepath.Join(dst, "export", "mem")); err != nil {

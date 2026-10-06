@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/store"
 )
 
 const (
@@ -25,8 +27,7 @@ const (
 
 	maxRecordBytes = 1 << 40 // 1 TiB
 
-	metaFile     = "meta.json"
-	exportPrefix = "export/"
+	exportPrefix = store.ExportDir + "/"
 
 	// recordTrailer is written last, so EOF without it means the transfer stopped early.
 	recordTrailer = ".record-complete"
@@ -82,7 +83,7 @@ func TarRecord(exportDir string, meta []byte, w io.Writer) error {
 	defer func() { _ = tw.Close() }()
 
 	if err := tw.WriteHeader(&tar.Header{
-		Name: metaFile, Mode: 0o600, Size: int64(len(meta)), Typeflag: tar.TypeReg,
+		Name: store.MetaFile, Mode: 0o600, Size: int64(len(meta)), Typeflag: tar.TypeReg,
 	}); err != nil {
 		return fmt.Errorf("tar record meta: %w", err)
 	}

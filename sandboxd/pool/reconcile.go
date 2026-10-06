@@ -14,6 +14,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 // Reconcile aligns claims and VMs after a restart; it runs before the server because it swaps in fresh records that would bypass in-flight Transition locks.
@@ -98,10 +99,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 	}
 	// a crash mid-export leaves a fork-* staging dir nothing in this life reuses
-	forks, _ := filepath.Glob(filepath.Join(m.dataDir, "fork-*"))
-	for _, fork := range forks {
-		_ = os.RemoveAll(fork)
-	}
+	_ = utils.RemoveDirEntries(m.dataDir, func(name string) bool { return strings.HasPrefix(name, "fork-") })
 
 	m.reclaimOrphanArchiveCks(ctx, claims)
 	m.retryArchiveDeletes(ctx)
