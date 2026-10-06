@@ -2,6 +2,10 @@ package pool
 
 import (
 	"context"
+	"maps"
+	"slices"
+
+	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
@@ -39,6 +43,34 @@ func (m *Manager) claimPooledLocked(sb *types.Sandbox) bool {
 	}
 	_, ok := m.activePool(sb.PolicyKey())
 	return ok
+}
+
+// deniedClaims counts per policy key the live claims v denies for lack of a pool policy.
+func (m *Manager) deniedClaims(v *outbound.View) map[types.PoolKey]int {
+	denied := map[types.PoolKey]int{}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, sb := range m.claimed {
+		key := sb.PolicyKey()
+		if sb.NoEgress || v.HasPolicy(key) {
+			continue
+		}
+		if _, ok := v.Resolve(sb, m.claimPooledLocked); !ok {
+			denied[key]++
+		}
+	}
+	return denied
+}
+
+func (m *Manager) warnDeniedClaims(ctx context.Context) {
+	v := m.view.Load().out
+	if !v.Guarded() {
+		return
+	}
+	denied := m.deniedClaims(v)
+	for _, key := range slices.SortedFunc(maps.Keys(denied), types.PoolKey.Compare) {
+		log.WithFunc("pool.warnDeniedClaims").Warnf(ctx, "pool %s has no egress policy: its %d live claims reach nothing", key.Template, denied[key])
+	}
 }
 
 func (m *Manager) outboundOptions(ca *egress.CA) outbound.Options {

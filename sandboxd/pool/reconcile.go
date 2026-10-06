@@ -111,6 +111,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}).Wait()
 	}
 	m.resyncEgress(ctx, live, removed)
+	m.warnDeniedClaims(ctx)
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
 	return saveErr
 }

@@ -9,7 +9,6 @@ import (
 	"net/netip"
 	"os"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -301,7 +300,7 @@ func (h *Host) CAFingerprint() string {
 
 // RefuseInterceptOn turns intercept on only for a key whose guests can trust the CA: one the node has not served, with the CA loaded at boot.
 func (h *Host) RefuseInterceptOn(old, next *View, served func(types.PoolKey) bool) error {
-	for _, key := range slices.SortedFunc(maps.Keys(next.poolEgress), func(a, b types.PoolKey) int { return strings.Compare(a.Hash(), b.Hash()) }) {
+	for _, key := range slices.SortedFunc(maps.Keys(next.poolEgress), types.PoolKey.Compare) {
 		if old.Intercepts(key) || !next.Intercepts(key) {
 			continue
 		}

@@ -3,12 +3,15 @@ package pool
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -37,6 +40,9 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 	}
 	old, view := m.view.Load(), newConfigView(next, secrets)
 	if err := m.out.RefuseInterceptOn(old.out, view.out, m.servedKey); err != nil {
+		return ReloadResult{}, fmt.Errorf("%w: %w", ErrReloadRefused, err)
+	}
+	if err := m.refusePolicyDrop(old.out, view.out); err != nil {
 		return ReloadResult{}, fmt.Errorf("%w: %w", ErrReloadRefused, err)
 	}
 	var trim []string
@@ -75,6 +81,16 @@ func (m *Manager) warnLostInjects(ctx context.Context, v *configView, sbs []*typ
 			log.WithFunc("pool.warnLostInjects").Warnf(ctx, "claim %s: inject no longer intercepted: %s", sb.ID, strings.Join(gap, ", "))
 		}
 	}
+}
+
+func (m *Manager) refusePolicyDrop(old, next *outbound.View) error {
+	denied := m.deniedClaims(next)
+	for _, key := range slices.SortedFunc(maps.Keys(denied), types.PoolKey.Compare) {
+		if old.HasPolicy(key) {
+			return fmt.Errorf("pool %s drops the egress policy of %d live claims: keep it until they are released", key.Template, denied[key])
+		}
+	}
+	return nil
 }
 
 func (m *Manager) servedKey(key types.PoolKey) bool {

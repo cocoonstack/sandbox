@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -126,6 +127,51 @@ func TestReloadTurnsInterceptOnOnlyForAKeyItHasNotServedWithTheCALoaded(t *testi
 	}
 }
 
+func TestReloadRefusesDroppingAPolicyLiveClaimsUse(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = outboundtest.SockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}})
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{NoEgress: true}); err != nil {
+		t.Fatalf("claim without egress: %v", err)
+	}
+	sb := mustClaim(t, m, testKey)
+	before := m.view.Load()
+	for _, pools := range [][]config.PoolSpec{{{PoolKey: testKey, Warm: 1}}, nil} {
+		next := *m.cfg
+		next.Pools = pools
+		if _, err := m.ReloadConfig(t.Context(), &next); !errors.Is(err, ErrReloadRefused) || !strings.Contains(err.Error(), "drops the egress policy of 1 live claims") {
+			t.Errorf("reload to pools %v: %v, want a refusal counting the one claim with egress", pools, err)
+		}
+	}
+	if m.view.Load() != before {
+		t.Error("a refused reload changed the view")
+	}
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	next := *m.cfg
+	next.Pools = nil
+	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
+		t.Errorf("reload once only a claim without egress remains: %v", err)
+	}
+}
+
+func TestARestartWithoutAClaimsPoolPolicyCountsTheClaimDenied(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = outboundtest.SockRoot(t)
+	dataDir := t.TempDir()
+	policy := &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}
+	m := egressManagerAt(t, eng, dataDir, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: policy})
+	mustClaim(t, m, testKey)
+	m2 := egressManagerAt(t, eng, dataDir, config.PoolSpec{PoolKey: otherKey, Warm: 1, Egress: policy})
+	if err := m2.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := m2.deniedClaims(m2.view.Load().out); !maps.Equal(got, map[types.PoolKey]int{testKey: 1}) {
+		t.Errorf("denied claims after a restart without the pool %v, want the one claim of %s", got, testKey.Template)
+	}
+}
+
 func TestAGoldenBuiltAgainstASupersededViewIsDiscarded(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Warmup: []string{"node", "-e", "0"}})
@@ -154,7 +200,7 @@ func TestACloneOfARetiredGoldenNeverLands(t *testing.T) {
 	golden, gen := p.goldenDir, p.goldenGen
 	p.warm = nil
 	p.goldenGen++
-	p.refilling++
+	p.refilling += 2
 	m.refillSem <- struct{}{}
 	m.mu.Unlock()
 	m.refillOne(t.Context(), p, golden, gen)
