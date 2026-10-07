@@ -221,6 +221,5 @@ async fn read_manifest(language: &str) -> Option<Vec<String>> {
         .ok()?;
     let mut raw = String::new();
     f.read_to_string(&mut raw).await.ok()?;
-    let argv: Vec<String> = raw.split_whitespace().map(str::to_string).collect();
-    (!argv.is_empty()).then_some(argv)
+    Some(raw.split_whitespace().map(str::to_string).collect())
 }

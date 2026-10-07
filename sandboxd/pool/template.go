@@ -196,8 +196,8 @@ func (m *Manager) HasGolden(ctx context.Context, key types.PoolKey, tenant strin
 func (m *Manager) HasPoolGolden(key types.PoolKey) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	p := m.pools[key]
-	return p != nil && p.goldenDir != ""
+	p, ok := m.activePool(key)
+	return ok && p.goldenDir != ""
 }
 
 // HasPromotedTemplate is resolveGolden's test exactly, so routing never promises a refused golden.
@@ -341,12 +341,14 @@ func (g goldenResolution) release() {
 func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant string) (goldenResolution, error) {
 	m.mu.Lock()
 	var dir string
-	if p := m.pools[key]; p != nil {
+	p, ok := m.activePool(key)
+	if ok && p.goldenDir != "" {
 		dir = p.goldenDir
+		p.claimClones++
 	}
 	m.mu.Unlock()
 	if dir != "" {
-		return goldenResolution{dir: dir}, nil
+		return goldenResolution{dir: dir, unlock: func() { m.mu.Lock(); p.claimClones--; m.mu.Unlock() }}, nil
 	}
 	if key.Net == types.NetEgress {
 		return goldenResolution{}, nil // never resume a live-captured template on the egress lane; cold-boot instead

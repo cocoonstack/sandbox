@@ -511,6 +511,7 @@ func TestARemovedPoolKeepsItsGoldenUntilItSettles(t *testing.T) {
 	}{
 		{"build", func(p *pool) { p.building = true }},
 		{"refill", func(p *pool) { p.refilling = 1 }},
+		{"claim clone", func(p *pool) { p.claimClones = 1 }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 0})
@@ -527,7 +528,7 @@ func TestARemovedPoolKeepsItsGoldenUntilItSettles(t *testing.T) {
 				t.Fatalf("golden deleted while the removed pool's %s was in flight", tt.name)
 			}
 			m.mu.Lock()
-			p.building, p.refilling = false, 0
+			p.building, p.refilling, p.claimClones = false, 0, 0
 			m.mu.Unlock()
 			m.refillOnce(t.Context())
 			for _, path := range []string{g, g + goldenStampSuffix} {
@@ -536,6 +537,44 @@ func TestARemovedPoolKeepsItsGoldenUntilItSettles(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAClaimCloneHoldsTheGoldenOfItsRemovedPool(t *testing.T) {
+	eng := newFakeEngine()
+	eng.cloneStall = make(chan struct{})
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 0})
+	g := seedGolden(t, m, "")
+	m.mu.Lock()
+	m.pools[testKey].goldenDir = g
+	m.mu.Unlock()
+
+	cloned := make(chan error, 1)
+	go func() {
+		_, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{})
+		cloned <- err
+	}()
+	waitFor(t, func() bool { return eng.cloneCount() == 1 })
+	if err := m.SetPools(t.Context(), nil); err != nil {
+		t.Fatalf("SetPools: %v", err)
+	}
+	if !dirExists(g) {
+		t.Fatal("golden deleted under a claim that is cloning from it")
+	}
+	close(eng.cloneStall)
+	if err := <-cloned; err != nil {
+		t.Fatalf("claim across the removal of its pool: %v", err)
+	}
+
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{}); err != nil {
+		t.Fatalf("claim of the removed key: %v", err)
+	}
+	if clones, colds := eng.cloneCount(), eng.coldCount(); clones != 1 || colds != 1 {
+		t.Errorf("clones=%d colds=%d, want a claim after the removal to cold-boot, not clone the retiring golden", clones, colds)
+	}
+	m.refillOnce(t.Context())
+	if dirExists(g) {
+		t.Error("golden survived the sweep of its settled pool")
 	}
 }
 

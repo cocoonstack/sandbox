@@ -12,6 +12,7 @@ on:
   pull_request:
     paths:
       - "boot/init/**"
+      - ".github/workflows/boot-init.yml"
   workflow_dispatch:
 
 permissions:

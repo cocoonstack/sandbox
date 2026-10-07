@@ -426,6 +426,7 @@ only templates it promoted — anything else is 404, root labels anything. 204 o
 success, 400 bad labels or body, 404 unknown template, 409 when the key belongs
 to a configured pool. The call speaks only for the node it reaches; it does not
 follow a redirect.
+
 ## PUT /v1/pools
 
 Auth: root only (tenant tokens get 403). Replaces the node's desired warm
@@ -530,8 +531,9 @@ Which fields reload, and what happens to live claims and goldens, is described
 in [deploy](deploy.md#reloading-the-config). The status codes:
 
 - **400**: the file does not parse or does not validate.
-- **409**: a field needs a restart (the message names it), or intercept is
-  turned on for a key this node has served or without a CA loaded at boot.
+- **409**: a field needs a restart (the message names it), intercept is
+  turned on for a key this node has served or without a CA loaded at boot, or
+  a pool's egress policy is removed while live claims still use it.
 
 A refused reload changes nothing.
 

@@ -21,7 +21,7 @@ type ReloadResult struct {
 	Ignored []string `json:"ignored,omitempty"`
 }
 
-// ReloadConfig applies next's reloadable settings at once or not at all: a field that needs a restart, or intercept turned on for a key this node has served, refuses the whole reload.
+// ReloadConfig applies next's reloadable settings at once or not at all.
 func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (ReloadResult, error) {
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()

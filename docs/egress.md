@@ -523,7 +523,8 @@ install is off the claim path). It is
 **not** re-installed on re-claim: a clone, checkpoint restore, archive wake, or
 reconcile adopts the guest with whatever root it was born with. Each golden's
 `.stamp` file records what it baked (the root fingerprint, the lane verdict,
-and the warmup argv), and a golden is adopted only when its stamp exists and
+the image id, a sized pool's disk size, and the warmup argv), and a golden is
+adopted only when its stamp exists and
 matches, so a changed root rebuilds goldens; a golden from before the stamp
 has none and is rebuilt once. Nothing rebuilds an existing checkpoint,
 archive, promoted template, or live/hibernated claim. Because the baked cert
