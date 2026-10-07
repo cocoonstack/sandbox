@@ -60,14 +60,10 @@ func TestACachedTenantOutlivesTheDatabase(t *testing.T) {
 	if _, err := s.Put(ctx, tenantstest.Record("u-1", "warm", 0, "")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	cached := func() bool {
-		_, err := s.Resolve(ctx, tenantstest.Sum("warm"))
-		s.mu.RLock()
-		defer s.mu.RUnlock()
-		return err == nil && s.byToken[tenantstest.Sum("warm")] == "u-1"
-	}
-	if !tenantstest.Eventually(t, cached) {
-		t.Fatal("u-1 never landed in the cache")
+	s.stop()
+	<-s.done
+	if r, err := s.Resolve(ctx, tenantstest.Sum("warm")); err != nil || r.Name != "u-1" {
+		t.Fatalf("resolve before the database goes: %+v %v", r, err)
 	}
 	s.pool.Close()
 	if r, err := s.Resolve(ctx, tenantstest.Sum("warm")); err != nil || r.Name != "u-1" {
