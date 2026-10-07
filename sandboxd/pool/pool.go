@@ -226,7 +226,7 @@ type pool struct {
 	removed     bool // dropped from the desired set while unsettled; swept by refillOnce
 	warm        []*types.Sandbox
 	refilling   int
-	claimClones int
+	claimClones atomic.Int32
 
 	// Without a streak gate a node-wide dead cause is retried every tick at full concurrency
 	refillFails int
@@ -238,7 +238,7 @@ func newPool(key types.PoolKey) *pool {
 }
 
 func (p *pool) settled() bool {
-	return !p.building && p.refilling == 0 && p.claimClones == 0
+	return !p.building && p.refilling == 0 && p.claimClones.Load() == 0
 }
 
 // refillGated reports whether a refill may not spawn: backoff wait, or one probe in flight.

@@ -511,7 +511,7 @@ func TestARemovedPoolKeepsItsGoldenUntilItSettles(t *testing.T) {
 	}{
 		{"build", func(p *pool) { p.building = true }},
 		{"refill", func(p *pool) { p.refilling = 1 }},
-		{"claim clone", func(p *pool) { p.claimClones = 1 }},
+		{"claim clone", func(p *pool) { p.claimClones.Store(1) }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 0})
@@ -528,7 +528,8 @@ func TestARemovedPoolKeepsItsGoldenUntilItSettles(t *testing.T) {
 				t.Fatalf("golden deleted while the removed pool's %s was in flight", tt.name)
 			}
 			m.mu.Lock()
-			p.building, p.refilling, p.claimClones = false, 0, 0
+			p.building, p.refilling = false, 0
+			p.claimClones.Store(0)
 			m.mu.Unlock()
 			m.refillOnce(t.Context())
 			for _, path := range []string{g, g + goldenStampSuffix} {
