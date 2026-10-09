@@ -208,7 +208,7 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 
 // quiesceVolumes unmounts a claim's writable mounts in reverse; a failed unmount keeps the marker.
 func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeTeardown {
-	td := volumeTeardown{holds: sb.Volumes}
+	td := volumeTeardown{holds: heldVolumes(sb)}
 	mounts := writableMounts(sb.Volumes)
 	if mounts == 0 {
 		return td

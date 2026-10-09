@@ -24,9 +24,6 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	if count < 1 || count > m.maxFork {
 		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, m.maxFork)
 	}
-	if hasAppliedVolumes(sb) {
-		return nil, ErrVolumeCapture
-	}
 	if !sb.Key.Capturable() {
 		return nil, ErrNoEgressFork
 	}
@@ -78,6 +75,9 @@ func (m *Manager) forkClones(ctx context.Context, sb *types.Sandbox, count int) 
 func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (create vmProvisioner, cleanup func(), inherited bool, err error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
+	if err = m.captureAllowed(sb); err != nil {
+		return nil, nil, false, err
+	}
 	inherited = m.heldGuestEnv(sb)
 	if sb.HibernateSnap == "" {
 		snap, drop, snapErr := m.sourceSnap(ctx, sb)

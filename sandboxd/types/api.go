@@ -77,6 +77,21 @@ type VolumeListResponse struct {
 	Volumes []VolumeInfo `json:"volumes"`
 }
 
+// AttachVolumesRequest adds read-only mounts to a running sandbox.
+type AttachVolumesRequest struct {
+	Volumes []Volume `json:"volumes"`
+}
+
+// DetachVolumesRequest removes read-only volumes by catalog name.
+type DetachVolumesRequest struct {
+	Names []string `json:"names"`
+}
+
+// SandboxVolumesResponse reports the full committed set after a mutation.
+type SandboxVolumesResponse struct {
+	Volumes []Volume `json:"volumes"`
+}
+
 // ForkRequest is the wire body of POST /v1/sandboxes/{id}/fork.
 type ForkRequest struct {
 	Token string `json:"token"`

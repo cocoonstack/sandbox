@@ -23,32 +23,33 @@ type claimSnapshot struct {
 
 // claimDTO is the persisted projection of a Sandbox, copied so commit marshals off m.mu.
 type claimDTO struct {
-	ID             string             `json:"id"`
-	VMName         string             `json:"vm_name"`
-	Key            types.PoolKey      `json:"key"`
-	Token          string             `json:"token,omitempty"`
-	Deadline       time.Time          `json:"deadline,omitzero"`
-	ClaimedAt      time.Time          `json:"claimed_at,omitzero"`
-	LeaseSeconds   int                `json:"lease_seconds,omitzero"`
-	Layer          types.PolicyLayer  `json:"policy_layer,omitempty"`
-	PolicySource   types.PoolKey      `json:"policy_source,omitzero"`
-	NoEgress       bool               `json:"no_egress,omitzero"`
-	Tenant         string             `json:"tenant,omitempty"`
-	EgressClass    string             `json:"egress_class,omitempty"`
-	ClaimRef       string             `json:"claim_ref,omitempty"`
-	Metadata       types.Metadata     `json:"metadata,omitempty"`
-	OnExpire       types.ExpireAction `json:"on_expire,omitempty"`
-	Volumes        []types.Volume     `json:"volumes,omitempty"`
-	Env            types.Env          `json:"env,omitempty"`
-	VsockSocket    string             `json:"vsock_socket,omitempty"`
-	TAP            string             `json:"tap,omitempty"`
-	HibernateSnap  string             `json:"hibernate_snap,omitempty"`
-	PendingSnap    string             `json:"pending_snap,omitempty"`
-	ArchiveCk      string             `json:"archive_ck,omitempty"`
-	FromCheckpoint string             `json:"from_checkpoint,omitempty"`
-	Restarts       int                `json:"restarts,omitzero"`
-	RestartedAt    time.Time          `json:"restarted_at,omitzero"`
-	Failed         string             `json:"failed,omitempty"`
+	ID             string                `json:"id"`
+	VMName         string                `json:"vm_name"`
+	Key            types.PoolKey         `json:"key"`
+	Token          string                `json:"token,omitempty"`
+	Deadline       time.Time             `json:"deadline,omitzero"`
+	ClaimedAt      time.Time             `json:"claimed_at,omitzero"`
+	LeaseSeconds   int                   `json:"lease_seconds,omitzero"`
+	Layer          types.PolicyLayer     `json:"policy_layer,omitempty"`
+	PolicySource   types.PoolKey         `json:"policy_source,omitzero"`
+	NoEgress       bool                  `json:"no_egress,omitzero"`
+	Tenant         string                `json:"tenant,omitempty"`
+	EgressClass    string                `json:"egress_class,omitempty"`
+	ClaimRef       string                `json:"claim_ref,omitempty"`
+	Metadata       types.Metadata        `json:"metadata,omitempty"`
+	OnExpire       types.ExpireAction    `json:"on_expire,omitempty"`
+	Volumes        []types.Volume        `json:"volumes,omitempty"`
+	PendingVolume  *types.VolumeMutation `json:"pending_volume,omitempty"`
+	Env            types.Env             `json:"env,omitempty"`
+	VsockSocket    string                `json:"vsock_socket,omitempty"`
+	TAP            string                `json:"tap,omitempty"`
+	HibernateSnap  string                `json:"hibernate_snap,omitempty"`
+	PendingSnap    string                `json:"pending_snap,omitempty"`
+	ArchiveCk      string                `json:"archive_ck,omitempty"`
+	FromCheckpoint string                `json:"from_checkpoint,omitempty"`
+	Restarts       int                   `json:"restarts,omitzero"`
+	RestartedAt    time.Time             `json:"restarted_at,omitzero"`
+	Failed         string                `json:"failed,omitempty"`
 }
 
 // claimRow keeps its encoded member until set replaces the row; set never edits one.
@@ -220,7 +221,7 @@ func dtoOf(sb *types.Sandbox) claimDTO {
 		Deadline: sb.Deadline, ClaimedAt: sb.ClaimedAt, LeaseSeconds: sb.LeaseSeconds, Layer: sb.Layer,
 		PolicySource: sb.PolicySource, NoEgress: sb.NoEgress,
 		Tenant: sb.Tenant, EgressClass: sb.EgressClass, ClaimRef: sb.ClaimRef, Metadata: sb.Metadata, OnExpire: sb.OnExpire,
-		Volumes: slices.Clone(sb.Volumes), Env: sb.Env, VsockSocket: sb.VsockSocket,
+		Volumes: slices.Clone(sb.Volumes), PendingVolume: sb.PendingVolume, Env: sb.Env, VsockSocket: sb.VsockSocket,
 		TAP: sb.TAP, HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap,
 		ArchiveCk: sb.ArchiveCk, FromCheckpoint: sb.FromCheckpoint,
 		Restarts: sb.Restarts, RestartedAt: sb.RestartedAt, Failed: sb.Failed,

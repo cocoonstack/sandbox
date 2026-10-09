@@ -2602,6 +2602,8 @@ type checkpointClaimFunc func(string) (*types.Sandbox, error)
 type idActionFunc func(string) error
 
 type fakeManager struct {
+	attachVolumes        func(string, pool.Cred, []types.Volume) ([]types.Volume, error)
+	detachVolumes        func(string, pool.Cred, []string) ([]types.Volume, error)
 	tenants              []config.TenantSpec
 	setTenants           func(specs []config.TenantSpec) error
 	putTenant            func(spec config.TenantSpec) error
@@ -2672,6 +2674,14 @@ type fakeManager struct {
 	sandboxIndex       func(tenant, claimRef string) []pool.SandboxSummary
 	sandboxByID        func(id string) (pool.SandboxSummary, bool)
 	draining           bool
+}
+
+func (f *fakeManager) AttachVolumes(_ context.Context, id string, cred pool.Cred, volumes []types.Volume) ([]types.Volume, error) {
+	return f.attachVolumes(id, cred, volumes)
+}
+
+func (f *fakeManager) DetachVolumes(_ context.Context, id string, cred pool.Cred, names []string) ([]types.Volume, error) {
+	return f.detachVolumes(id, cred, names)
 }
 
 func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {
