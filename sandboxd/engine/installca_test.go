@@ -78,6 +78,7 @@ type fakeSilkd struct {
 	execEnv    map[string]string
 	execCode   int32
 	execFailAt int
+	execHook   func([]string)
 	writeErr   string
 	writeKind  string
 	execErr    string
@@ -196,6 +197,9 @@ func (f *fakeSilkd) handleExec(conn net.Conn, argv []string, env map[string]stri
 	code, reply := f.execCode, f.execErr
 	if f.execFailAt > 0 && len(f.execCalls) != f.execFailAt {
 		code, reply = 0, ""
+	}
+	if code == 0 && reply == "" && f.execHook != nil {
+		f.execHook(argv)
 	}
 	f.mu.Unlock()
 	if reply != "" {

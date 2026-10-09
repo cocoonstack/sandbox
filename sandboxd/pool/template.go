@@ -47,9 +47,6 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 	if !types.NameRe.MatchString(template) {
 		return types.PoolKey{}, "", fmt.Errorf("%w: template %q must match %s", ErrBadKey, template, types.NameRe)
 	}
-	if hasAppliedVolumes(sb) {
-		return types.PoolKey{}, "", ErrVolumeCapture
-	}
 	if !sb.Key.Capturable() {
 		return types.PoolKey{}, "", ErrNoEgressFork
 	}

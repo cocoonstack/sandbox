@@ -177,6 +177,23 @@ func (f *fakeEngine) SyncGuest(_ context.Context, _ string) error {
 	return nil
 }
 
+func (f *fakeEngine) AttachVolume(ctx context.Context, vmName, sock string, spec engine.VolumeSpec, mount string) error {
+	if err := f.DiskAttach(ctx, vmName, spec); err != nil {
+		return err
+	}
+	return f.MountVolume(ctx, sock, spec.Name, mount, spec.RW)
+}
+
+func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount string) error {
+	if err := f.UnmountVolume(ctx, sock, mount); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumeOps = append(f.volumeOps, "detach:"+name)
+	return nil
+}
+
 func (f *fakeEngine) volumeOpsLog() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

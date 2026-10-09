@@ -559,6 +559,9 @@ type Sandbox struct {
 	OnExpire ExpireAction `json:"on_expire,omitempty"`
 	// Volumes records the volumes successfully applied to this claim.
 	Volumes []Volume `json:"volumes,omitempty"`
+	// PendingVolume is written before a live device change and cleared only
+	// after its result is committed. Retry it, detach its name, or release.
+	PendingVolume *VolumeMutation `json:"pending_volume,omitempty"`
 	// Env is replaced whole through SetEnv under the manager mutex; host-only values are never served back.
 	Env Env `json:"env,omitempty"`
 
@@ -597,8 +600,18 @@ type Sandbox struct {
 	// live is the env as of the last SetEnv, read by the egress proxy without the manager mutex.
 	live atomic.Pointer[envView]
 
-	// Transition serializes hibernate/wake; lock it before (never under) the manager mutex.
+	// VolumeMu keeps release/reap and expiry-policy changes out of a live volume
+	// operation. Lock it before Transition, and never under the manager mutex.
+	VolumeMu sync.Mutex `json:"-"`
+	// Transition serializes captures and live volume changes; lock it before (never under) the manager mutex.
 	Transition sync.Mutex `json:"-"`
+}
+
+// VolumeMutation is a recoverable, node-local live volume operation.
+// Values are immutable once published; they carry no operator filesystem paths.
+type VolumeMutation struct {
+	Volume Volume `json:"volume"`
+	Detach bool   `json:"detach,omitzero"`
 }
 
 // Touch stamps last data-plane activity; lock-free, called on the relay hot path.

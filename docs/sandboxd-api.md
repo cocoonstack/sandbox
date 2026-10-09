@@ -255,6 +255,77 @@ list; the field is emitted (as `true`) only for a writable entry this node
 declares and omitted otherwise (peer-only rows never carry it), so a read-only
 entry's response is byte-identical to v1.
 
+## POST /v1/sandboxes/{id}/volumes/attach
+
+Adds read-only catalog volumes to an already running sandbox without creating
+a new claim. Auth: the sandbox's own bearer token, or the root token by id.
+The owning tenant's catalog access list still applies, including for root;
+an attach is refused if that tenant has been removed. Images must be present
+on the owner node; this operation does not redirect or move the sandbox.
+
+```json
+{"volumes": [{"name": "imagenet", "mount": "/datasets/training"}]}
+```
+
+The claim-time name, mount and eight-volume limits apply to the resulting
+set. An omitted mount defaults to `/volumes/<name>`. Only mounted read-only
+entries are accepted (`mode` omitted or `ro`); existing writable and
+attach-only entries are preserved. An identical attached name/mount/mode is
+a no-op; changing an existing name's mount or mode is a 400 error.
+Claims with `on_expire: archive` must change that policy before attaching.
+
+200 returns the **full committed set**:
+
+```json
+{"volumes": [{"name": "imagenet", "mount": "/datasets/training"}]}
+```
+
+The sandbox must be running. Paused, archived and failed sandboxes return
+409 without waking. Missing bearer returns 401; unknown id or wrong token
+returns 404; an invalid, inaccessible or non-local volume returns 400;
+a removed tenant returns 403; a writer holding the image or a dirty image
+needing recovery returns 409.
+
+## POST /v1/sandboxes/{id}/volumes/detach
+
+Auth and successful response match attach. Unmounts the named read-only
+volumes and waits for cocoon to confirm hot-unplug; backing files are kept.
+
+```json
+{"names": ["imagenet"]}
+```
+
+An absent valid name is a no-op. Duplicate or invalid names, and requests
+to detach a writable volume, return 400 before changing any devices.
+An attach-only read-only disk can be detached after its workload has
+unmounted it. A busy or foreign mount is refused; no lazy or forced unmount
+is used. Detach remains available after the owning tenant is removed.
+
+### Partial failure and recovery
+
+Both operations validate their batch first, then commit one volume at a
+time. They are **not batch transactions**: an error may leave earlier
+entries completed and the current entry pending. Retry the same request
+to converge, or detach the pending name to cancel an interrupted attach.
+An unrelated mutation while an operation is pending returns 409.
+Release is also available and waits for an in-flight volume call to finish.
+
+Before each device change, sandboxd writes `pending_volume` to the claim
+journal. The sandbox index exposes it as
+`{"volume":{"name":"imagenet","mount":"/datasets/training"},"detach":true}`
+(`detach` omitted means attach). Pending devices retain their admission
+holds and block hibernate, fork, checkpoint and promote. Startup adopts
+these holds; the caller retries or detaches to finish recovery. There is no
+automatic attach replay during startup. `volumes` contains committed
+entries; during a pending operation the actual device state may differ.
+
+Each engine operation has a 30-second ceiling and honors cancellation.
+An engine or journal failure returns 500 with a recovery hint and logs the
+underlying error server-side. Journal writes are atomic; host-crash
+durability follows the existing `sync_claims` setting. Complete or cancel
+pending operations before downgrading to a version without this journal
+field. Once every volume is detached, normal capture operations are allowed.
+
 ## POST /v1/sandboxes/{id}/release
 
 Auth: the sandbox's own token, or the root token for operator cleanup by id.
@@ -669,7 +740,7 @@ an SDK caller should set.
 Auth: node API token. Root sees every live claim; a tenant sees only its own.
 The index is `{"sandboxes": [{id, key, tenant?, deadline, claimed_at?, hibernated,
 archived?, from_checkpoint?, claim_ref?, metadata?, on_expire?, cpu_count, mem_total_bytes,
-volumes?: [{name, mount, mode?}], restarts?, restarted_at?, failed?}]}` — `cpu_count` and `mem_total_bytes` are the
+volumes?: [{name, mount, mode?}], pending_volume?: {volume, detach?}, restarts?, restarted_at?, failed?}]}` — `cpu_count` and `mem_total_bytes` are the
 size tier's allocation; `restarts` counts the cold boots that replaced an
 exited VMM and `restarted_at` stamps the last one (each loses guest memory and
 the instance-metadata document, so a caller re-establishes guest state when

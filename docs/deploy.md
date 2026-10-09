@@ -156,6 +156,15 @@ fragment the warm pools):
 
 ### Dataset volumes
 
+Running claims can add and remove read-only catalog volumes through the
+[live volume API](sandboxd-api.md#post-v1sandboxesidvolumesattach) and Go SDK.
+The image must already exist on the owner node. Interrupted operations keep
+a `pending_volume` journal entry and admission hold until retried, detached
+or released; drain these entries before downgrading sandboxd. The existing
+`e2e/cmd/volumesmoke` command also exercises live attach/detach and retries
+on a new claim without initial volumes. Run it on the target VMM/guest;
+unit tests do not validate guest hotplug support.
+
 Each catalog path must name a disk image containing a mountable whole-device
 filesystem. A read-only entry's image must stay immutable: do not replace,
 truncate, or delete it while attached; publish a new catalog name or path

@@ -1307,6 +1307,8 @@ type fakeEngine struct {
 	diskAttachCancel                  context.CancelFunc
 	mountVolumeErr                    error
 	unmountVolumeErr                  error
+	detachVolumeErr                   error
+	liveVolumeHook                    func(string) error
 	stopped                           map[string]bool
 	creating                          map[string]bool
 	staleOutcome                      engine.StaleCreateOutcome
@@ -1684,6 +1686,41 @@ func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw bo
 	f.volumeMounts = append(f.volumeMounts, types.Volume{Name: name, Mount: mount, Mode: mode})
 	f.volumeOps = append(f.volumeOps, "mount:"+name+":"+mount)
 	return f.mountVolumeErr
+}
+
+func (f *fakeEngine) AttachVolume(ctx context.Context, vmName, sock string, spec engine.VolumeSpec, mount string) error {
+	if f.liveVolumeHook != nil {
+		if err := f.liveVolumeHook("attach"); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := f.DiskAttach(ctx, vmName, spec); err != nil {
+		return err
+	}
+	return f.MountVolume(ctx, sock, spec.Name, mount, spec.RW)
+}
+
+func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount string) error {
+	if f.liveVolumeHook != nil {
+		if err := f.liveVolumeHook("detach"); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if mount != "" {
+		if err := f.UnmountVolume(ctx, sock, mount); err != nil {
+			return err
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumeOps = append(f.volumeOps, "detach:"+name)
+	return f.detachVolumeErr
 }
 
 func (f *fakeEngine) UnmountVolume(_ context.Context, _, mount string) error {

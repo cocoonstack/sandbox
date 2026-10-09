@@ -160,6 +160,8 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 	if !ok {
 		return time.Time{}, ErrUnknownSandbox
 	}
+	sb.VolumeMu.Lock()
+	defer sb.VolumeMu.Unlock()
 	if !cred.Operator {
 		if err := m.tenantRemoved(ctx, sb.Tenant); err != nil {
 			return time.Time{}, err
@@ -269,6 +271,8 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 
 // releaseResolved re-checks under m.mu that sb is still the live claim: no double teardown.
 func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sandbox) error {
+	sb.VolumeMu.Lock()
+	defer sb.VolumeMu.Unlock()
 	var marked string
 	m.mu.Lock()
 	for {
@@ -494,6 +498,14 @@ func (m *Manager) abortVolumeClaim(ctx context.Context, vmName string, reserved 
 }
 
 func (m *Manager) reapOnce(ctx context.Context) {
+	// Take volume locks outside m.mu. Busy claims are retried on the next tick;
+	// a volume intent must not be deleted while its device call is in flight.
+	locked := m.lockReapClaims()
+	defer func() {
+		for sb := range locked {
+			sb.VolumeMu.Unlock()
+		}
+	}()
 	now := time.Now()
 	type victim struct {
 		action                       reapAction
@@ -504,6 +516,9 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	var expired []victim
 	var dropped, purges []string
 	for id, sb := range m.claimed {
+		if !locked[sb] {
+			continue
+		}
 		// a zero deadline means no expiry (an archived claim kept forever).
 		if sb.Deadline.IsZero() || !now.After(sb.Deadline) {
 			continue
@@ -621,6 +636,24 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
 		}
 	})
+}
+
+func (m *Manager) lockReapClaims() map[*types.Sandbox]bool {
+	m.mu.Lock()
+	var candidates []*types.Sandbox
+	for _, sb := range m.claimed {
+		if !sb.Deadline.IsZero() && time.Now().After(sb.Deadline) {
+			candidates = append(candidates, sb)
+		}
+	}
+	m.mu.Unlock()
+	locked := make(map[*types.Sandbox]bool, len(candidates))
+	for _, sb := range candidates {
+		if sb.VolumeMu.TryLock() {
+			locked[sb] = true
+		}
+	}
+	return locked
 }
 
 func (m *Manager) archivesAtDeadline(sb *types.Sandbox) bool {

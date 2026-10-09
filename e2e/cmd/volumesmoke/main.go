@@ -118,10 +118,52 @@ func run(addr, token, template, volume, rwVolume, probe string) error {
 	}
 	released = true
 	fmt.Printf("VOLUME PASS concurrent_read_bytes=%d read_only=true released=true\n", len(outputs[0]))
+	if err := runLive(ctx, client, template, volume, probe, outputs[0]); err != nil {
+		return err
+	}
 	if rwVolume == "" {
 		return nil
 	}
 	return runWritable(ctx, client, template, rwVolume)
+}
+
+// runLive starts without volumes, adds a dataset, then removes it without
+// replacing the claim. Run this on the target VMM before deploying live mounts.
+func runLive(ctx context.Context, client *sandbox.Client, template, volume, probe, want string) error {
+	const mount = "/datasets/live"
+	sb, err := client.New(ctx, template, sandbox.WithNetwork(sandbox.NetNone))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sb.Close() }()
+	for range 2 {
+		if _, err = sb.AttachVolumes(ctx, sandbox.Volume{Name: volume, Mount: mount}); err != nil {
+			return fmt.Errorf("live attach: %w", err)
+		}
+	}
+	got, err := sb.Exec(ctx, "cat", path.Join(mount, probe))
+	if err != nil {
+		return fmt.Errorf("live volume read: %w", err)
+	}
+	if got != want {
+		return fmt.Errorf("live volume read: bytes=%d want=%d", len(got), len(want))
+	}
+	if _, err = sb.Exec(ctx, "touch", path.Join(mount, ".sandboxd-write-probe")); err == nil {
+		return errors.New("live read-only mount accepted a write")
+	}
+	if exitErr, ok := errors.AsType[*sandbox.ExitError](err); !ok || !strings.Contains(strings.ToLower(exitErr.Stderr), "read-only file system") {
+		return fmt.Errorf("live write probe failed without EROFS: %w", err)
+	}
+	for range 2 {
+		if _, err = sb.DetachVolumes(ctx, volume); err != nil {
+			return fmt.Errorf("live detach: %w", err)
+		}
+	}
+	if _, err = sb.Exec(ctx, "test", "!", "-e", path.Join(mount, probe)); err != nil {
+		return fmt.Errorf("detached volume probe should be absent: %w", err)
+	}
+	fmt.Printf("LIVE VOLUME PASS read_bytes=%d repeated_attach=true repeated_detach=true\n", len(got))
+	return nil
 }
 
 // runWritable proves the publish workflow: a writer's bytes survive its own
