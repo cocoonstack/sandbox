@@ -234,6 +234,25 @@ checkpoint branches support neither volumes nor a claim reference in this versio
 `Checkpoint.New`: the labels follow the [claim bounds](sandboxd-api.md#post-v1claim),
 and a branch never inherits its source's labels or expiry action.
 
+For datasets chosen after the sandbox starts, add or remove read-only mounts
+on the same claim:
+
+```go
+volumes, err := sb.AttachVolumes(ctx,
+    sandbox.Volume{Name: "imagenet", Mount: "/datasets/training"})
+// Use the dataset in the running guest, then detach it.
+volumes, err = sb.DetachVolumes(ctx, "imagenet")
+```
+
+Both methods use the sandbox token on its owner node, return the full set,
+and update `sb.Volumes` on success. Serialize updates to the handle's public
+fields, as with `Renew`. On error `sb.Volumes` remains the last successful
+response and may be stale: a batch can partially complete. Retry the same
+request, or detach the pending name to recover. `Client.Sandboxes` exposes
+`PendingVolume` for inspection with an API token. A paused sandbox is not
+woken, writable mutations are refused, and images must exist in the owner
+node's catalog. See the [API recovery contract](sandboxd-api.md#partial-failure-and-recovery).
+
 `WithVolumesAttachOnly()` claims the same volumes without mounting them: the
 entries in `Sandbox.Volumes` carry an empty `Mount`, and the workload finds
 each device by polling `/sys/block/*/serial` for the catalog name — not
