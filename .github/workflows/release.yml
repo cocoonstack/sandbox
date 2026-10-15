@@ -47,7 +47,7 @@ jobs:
           tar -C /tmp/silkd-dist -czf "dist-extra/silkd_${GITHUB_REF_NAME#v}_Linux_arm64.tar.gz" silkd
           tar -C /tmp/silkd-dist -czf "dist-extra/silkd_Linux_arm64.tar.gz" silkd
       - name: goreleaser
-        uses: goreleaser/goreleaser-action@v7.2.3
+        uses: goreleaser/goreleaser-action@v7.3.0
         with:
           version: v2.18.2
           args: release --clean
