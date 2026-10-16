@@ -9,17 +9,18 @@ PATH = "/v1/sandboxes/sb_1/volumes"
 VIEW = {
     "volumes_want": [{"name": "data", "mount": "/data"}],
     "volumes": [{"name": "data", "mount": "/data"}],
+    "converging": True,
     "states": [{"name": "data", "state": "attached"}],
 }
 
 
 @pytest.mark.parametrize("method", ["GET", "PUT", "PATCH"])
-def test_volume_requests_use_owner_and_sandbox_token(spawn_node, method):
+def test_volume_requests_use_owner_and_api_token(spawn_node, method):
     seen = []
 
     def reply(body, path):
         seen.append(body)
-        assert FakeNode.last_headers["Authorization"] == "Bearer tok"
+        assert FakeNode.last_headers["Authorization"] == "Bearer operator-token"
         return 200, VIEW
 
     addr = spawn_node({(method, PATH): reply})
@@ -47,6 +48,7 @@ def test_volume_error_preserves_typed_partial_view(spawn_node, method):
     partial = {
         "volumes_want": [{"name": "new", "mount": "/new"}],
         "volumes": [{"name": "old", "mount": "/old"}],
+        "converging": False,
         "states": [
             {"name": "new", "state": "pending", "error": "retry"},
             {"name": "old", "state": "detaching"},
@@ -86,7 +88,7 @@ def test_explicit_empty_set_and_omitted_patch(spawn_node):
 
     def reply(body, path):
         seen.append(body)
-        return 200, {"volumes_want": [], "volumes": [], "states": []}
+        return 200, {"volumes_want": [], "volumes": [], "converging": False, "states": []}
 
     sb = sandbox_at(spawn_node({("PUT", PATH): reply, ("PATCH", PATH): reply}))
     with pytest.raises(TypeError, match="explicit"):
@@ -107,6 +109,7 @@ def test_identical_put_retries_partial_failure(spawn_node):
             return 500, {
                 "volumes_want": [{"name": "data", "mount": "/data"}],
                 "volumes": [],
+                "converging": False,
                 "states": [{"name": "data", "state": "pending"}],
                 "error": "retry",
             }
@@ -126,3 +129,24 @@ def test_volume_timeout_uses_client_deadline(black_hole):
     with pytest.raises(APIError) as caught:
         sb.get_volumes(timeout=0.02)
     assert caught.value.status == 0
+
+
+@pytest.mark.parametrize("status", [200, 409])
+def test_incomplete_volume_view_preserves_handle(spawn_node, status):
+    incomplete = {"volumes_want": [], "volumes": [], "states": []}
+    sb = sandbox_at(spawn_node({("GET", PATH): lambda body, path: (status, incomplete)}))
+    sb.volumes = [{"name": "old"}]
+    sb.volumes_want = [{"name": "wanted"}]
+    with pytest.raises(APIError) as caught:
+        sb.get_volumes()
+    assert sb.volumes == [{"name": "old"}]
+    assert sb.volumes_want == [{"name": "wanted"}]
+    if status == 409:
+        assert isinstance(caught.value, VolumeError)
+        assert caught.value.response is None
+
+
+def test_volume_error_export():
+    from cocoonsandbox.errors import VolumeError as Error
+
+    assert Error is VolumeError

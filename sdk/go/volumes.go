@@ -11,11 +11,20 @@ import (
 	"slices"
 )
 
+// VolumePhase is the progress of a desired or applied volume.
+type VolumePhase string
+
+const (
+	VolumeAttached  VolumePhase = "attached"
+	VolumePending   VolumePhase = "pending"
+	VolumeDetaching VolumePhase = "detaching"
+)
+
 // VolumeState reports the progress of one desired or applied volume.
 type VolumeState struct {
-	Name  string `json:"name"`
-	State string `json:"state"` // attached, pending, or detaching
-	Error string `json:"error,omitempty"`
+	Name  string      `json:"name"`
+	State VolumePhase `json:"state"`
+	Error string      `json:"error,omitempty"`
 }
 
 // SandboxVolumesResponse separates persisted intent from confirmed applied mounts.
@@ -23,6 +32,7 @@ type SandboxVolumesResponse struct {
 	VolumesWant []Volume      `json:"volumes_want"`
 	Volumes     []Volume      `json:"volumes"`
 	States      []VolumeState `json:"states"`
+	Converging  bool          `json:"converging"`
 	Error       string        `json:"error,omitempty"`
 }
 
@@ -32,8 +42,7 @@ type VolumePatch struct {
 	Remove []string `json:"remove,omitzero"`
 }
 
-// VolumeError retains the server's view after a failed volume request.
-// Response is nil if the server did not return a complete volume view.
+// VolumeError retains a complete server view after a failed volume request.
 type VolumeError struct {
 	*APIError
 	Response *SandboxVolumesResponse
@@ -41,15 +50,12 @@ type VolumeError struct {
 
 func (e *VolumeError) Unwrap() error { return e.APIError }
 
-// GetVolumes reads desired and applied volumes from the owning node.
-// Like Renew, volume methods update public fields and must be serialized by callers.
+// GetVolumes reads the owning node's view and updates public fields; callers must serialize volume methods.
 func (s *Sandbox) GetVolumes(ctx context.Context) (SandboxVolumesResponse, error) {
 	return s.requestVolumes(ctx, http.MethodGet, nil, "get volumes")
 }
 
-// SetVolumes replaces the full desired set and waits for convergence.
-// An empty non-nil slice clears mutable mounts. A nil slice is rejected.
-// Retry the same set after a partial failure, or set a new target to recover.
+// SetVolumes converges the full desired set; an explicit empty slice clears mutable mounts, and nil is rejected.
 func (s *Sandbox) SetVolumes(ctx context.Context, volumes []Volume) (SandboxVolumesResponse, error) {
 	if volumes == nil {
 		return SandboxVolumesResponse{}, errors.New("set volumes: use an explicit empty slice to clear volumes")
@@ -59,8 +65,7 @@ func (s *Sandbox) SetVolumes(ctx context.Context, volumes []Volume) (SandboxVolu
 	}{Volumes: volumes}, "set volumes")
 }
 
-// PatchVolumes adds or removes read-only mounted catalog entries by name.
-// Existing writable and attach-only entries cannot be changed live.
+// PatchVolumes adds or removes read-only mounted entries by name, retaining immutable entries.
 func (s *Sandbox) PatchVolumes(ctx context.Context, patch VolumePatch) (SandboxVolumesResponse, error) {
 	return s.requestVolumes(ctx, http.MethodPatch, patch, "patch volumes")
 }
@@ -75,7 +80,7 @@ func (s *Sandbox) requestVolumes(ctx context.Context, method string, request any
 		}
 		body = bytes.NewReader(encoded)
 	}
-	resp, err := s.c.roundTrip(ctx, method, s.owner, "/v1/sandboxes/"+s.ID+"/volumes", body, s.token)
+	resp, err := s.c.roundTrip(ctx, method, s.owner, "/v1/sandboxes/"+s.ID+"/volumes", body, s.c.apiToken)
 	if err != nil {
 		return out, err
 	}
@@ -84,12 +89,13 @@ func (s *Sandbox) requestVolumes(ctx context.Context, method string, request any
 		VolumesWant *[]Volume      `json:"volumes_want"`
 		Volumes     *[]Volume      `json:"volumes"`
 		States      *[]VolumeState `json:"states"`
+		Converging  *bool          `json:"converging"`
 		Error       string         `json:"error"`
 	}
 	decodeErr := json.UnmarshalRead(resp.Body, &wire)
-	complete := decodeErr == nil && wire.VolumesWant != nil && wire.Volumes != nil && wire.States != nil
+	complete := decodeErr == nil && wire.VolumesWant != nil && wire.Volumes != nil && wire.States != nil && wire.Converging != nil
 	if complete {
-		out = SandboxVolumesResponse{VolumesWant: *wire.VolumesWant, Volumes: *wire.Volumes, States: *wire.States, Error: wire.Error}
+		out = SandboxVolumesResponse{VolumesWant: *wire.VolumesWant, Volumes: *wire.Volumes, States: *wire.States, Converging: *wire.Converging, Error: wire.Error}
 		s.VolumesWant = slices.Clone(out.VolumesWant)
 		s.Volumes = slices.Clone(out.Volumes)
 	}

@@ -17,7 +17,7 @@ from .conn import Conn, dial_agent, is_quiet, remaining_timeout
 from .endpoint import _endpoint_url
 from .errors import APIError, SandboxTimeout, require_field
 from .sandbox import Sandbox
-from .volumes import volume_body
+from .volumes import _volume_body
 
 T = TypeVar("T")
 
@@ -296,7 +296,7 @@ def _claim_body(
     if ttl_seconds:
         claim["ttl_seconds"] = ttl_seconds
     if volumes:
-        claim["volumes"] = [volume_body(volume, mount) for volume in volumes]
+        claim["volumes"] = [_volume_body(volume, mount) for volume in volumes]
     if not mount:
         claim["volumes_attach_only"] = True
     if claim_ref:

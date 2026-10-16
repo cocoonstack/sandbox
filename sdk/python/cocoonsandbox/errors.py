@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .volumes import SandboxVolumesResponse
 
 
 class SandboxError(Exception):
@@ -22,6 +25,14 @@ class APIError(SandboxError):
         self.status = status
         self.message = message
         self.reply = reply
+
+
+class VolumeError(APIError):
+    """Failed convergence with the server's complete view, when returned."""
+
+    def __init__(self, error: APIError, response: SandboxVolumesResponse | None) -> None:
+        super().__init__(error.verb, error.status, error.message, reply=error.reply)
+        self.response = response
 
 
 class SilkdError(SandboxError):
