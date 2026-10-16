@@ -219,6 +219,20 @@ func TestLiveVolumeRunStampsActivityBeforeDeviceCalls(t *testing.T) {
 	}
 }
 
+func TestRejectedVolumeRequestLeavesActivityUntouched(t *testing.T) {
+	eng := newFakeEngine()
+	m := newVolumeManager(t, eng, liveCatalog(t))
+	sb := mustClaim(t, m, testKey)
+	idleSince := time.Now().Add(-time.Hour)
+	sb.TouchAt(idleSince)
+	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}, {Name: "data"}}); !errors.Is(err, ErrBadVolume) {
+		t.Fatalf("duplicate target: %v", err)
+	}
+	if !sb.LastSeen().Equal(idleSince) {
+		t.Fatalf("a rejected request stamped activity: %v", sb.LastSeen())
+	}
+}
+
 func TestRejectedVolumeTargetPreservesConvergenceDiagnostics(t *testing.T) {
 	for _, priorConflict := range []bool{false, true} {
 		name := "settled"
