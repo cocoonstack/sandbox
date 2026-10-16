@@ -52,8 +52,7 @@ func TestRejectedVolumeTargetExplainsRefusalWithoutChangingState(t *testing.T) {
 		t.Fatal(checkErr)
 	}
 	_, err = sb.SetVolumes(t.Context(), []sandbox.Volume{{Name: "dataset"}, {Name: "dataset"}})
-	var refusal *sandbox.VolumeError
-	if !errors.As(err, &refusal) || refusal.Status != http.StatusBadRequest || !strings.Contains(refusal.Message, "duplicate volume") {
+	if refusal, ok := errors.AsType[*sandbox.VolumeError](err); !ok || refusal.Status != http.StatusBadRequest || !strings.Contains(refusal.Message, "duplicate volume") {
 		t.Errorf("invalid target explanation: %v", err)
 	}
 	view, err := sb.GetVolumes(t.Context())

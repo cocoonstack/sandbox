@@ -76,9 +76,9 @@ func TestLiveVolumeFailureRetainsPartialView(t *testing.T) {
 		case http.MethodPatch:
 			got, err = sb.PatchVolumes(t.Context(), VolumePatch{Remove: []string{"old"}})
 		}
-		var failure *VolumeError
-		var api *APIError
-		if !errors.As(err, &failure) || !errors.As(err, &api) || api.Status != 500 || failure.Response == nil {
+		failure, isVolume := errors.AsType[*VolumeError](err)
+		api, isAPI := errors.AsType[*APIError](err)
+		if !isVolume || !isAPI || api.Status != 500 || failure.Response == nil {
 			t.Fatalf("%s error lost response or APIError: %v", method, err)
 		}
 		if !reflect.DeepEqual(got, *failure.Response) || got.States[0].State != "pending" || got.States[1].State != "detaching" || sb.VolumesWant[0].Name != "new" || sb.Volumes[0].Name != "old" {
@@ -100,8 +100,7 @@ func TestLiveVolumeValidationFailurePreservesLastKnownSet(t *testing.T) {
 	c := testClient(t, ts)
 	sb := &Sandbox{ID: "sb_1", token: "tok", owner: c.addr, c: c, Volumes: []Volume{{Name: "old"}}, VolumesWant: []Volume{{Name: "wanted"}}}
 	_, err := sb.SetVolumes(t.Context(), []Volume{{Name: "new"}})
-	var failure *VolumeError
-	if !errors.As(err, &failure) || failure.Response != nil || failure.Status != 400 {
+	if failure, ok := errors.AsType[*VolumeError](err); !ok || failure.Response != nil || failure.Status != 400 {
 		t.Fatalf("error=%v", err)
 	}
 	if sb.Volumes[0].Name != "old" || sb.VolumesWant[0].Name != "wanted" {
@@ -189,8 +188,7 @@ func TestLiveVolumeIncompleteViewPreservesHandle(t *testing.T) {
 			if err == nil || sb.Volumes[0].Name != "old" || sb.VolumesWant[0].Name != "wanted" {
 				t.Fatalf("handle overwritten: %+v, %v", sb, err)
 			}
-			var failure *VolumeError
-			if status == http.StatusConflict && (!errors.As(err, &failure) || failure.Response != nil) {
+			if failure, ok := errors.AsType[*VolumeError](err); status == http.StatusConflict && (!ok || failure.Response != nil) {
 				t.Fatalf("partial view accepted: %v", err)
 			}
 		})

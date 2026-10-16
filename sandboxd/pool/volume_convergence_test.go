@@ -145,7 +145,7 @@ func TestVolumeDiagnosticsTrackActualWorkerAndRetry(t *testing.T) {
 	base := newFakeEngine()
 	m := newVolumeManager(t, base, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
-	eng := &gatedVolumeEngine{fakeEngine: base, entered: make(chan struct{}), resume: make(chan struct{})}
+	eng := newGatedVolumeEngine(base)
 	m.eng = eng
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -340,6 +340,13 @@ func TestUncertainTargetCommitReleasesOnlyConfirmedPrecleanedHolds(t *testing.T)
 			if !slices.Contains(eng.volumeOpsLog(), "detach:data") || len(eng.volumeSpecs) != 1 {
 				t.Fatalf("device calls before uncertain target: attaches=%v detaches=%v", eng.volumeSpecs, eng.volumeOpsLog())
 			}
+			if durable == "old" {
+				m.store.writeMu.Lock()
+				t.Cleanup(func() {
+					m.store.writeMu.Unlock()
+					waitFor(t, func() bool { return !m.recommitting.Load() })
+				})
+			}
 			if checkErr := os.Remove(m.store.path + ".tmp"); checkErr != nil {
 				t.Fatal(checkErr)
 			}
@@ -348,6 +355,7 @@ func TestUncertainTargetCommitReleasesOnlyConfirmedPrecleanedHolds(t *testing.T)
 				if checkErr := m.store.commit(m.store.mark()); checkErr != nil {
 					t.Fatal(checkErr)
 				}
+				waitFor(t, func() bool { return !m.recommitting.Load() })
 			}
 			m2 := newVolumeManagerAt(t, eng, m.dataDir, catalog)
 			if checkErr := m2.Reconcile(t.Context()); checkErr != nil {

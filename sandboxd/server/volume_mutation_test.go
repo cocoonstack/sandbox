@@ -54,15 +54,7 @@ func TestLiveVolumeRoutesAuthorizeAndDecode(t *testing.T) {
 				if method == http.MethodPatch {
 					body = `{"remove":["data"]}`
 				}
-				req, err := http.NewRequestWithContext(t.Context(), method, ts.URL+"/v1/sandboxes/sb_1/volumes", strings.NewReader(body))
-				if err != nil {
-					t.Fatal(err)
-				}
-				req.Header.Set("Authorization", "Bearer "+token)
-				resp, err := ts.Client().Do(req)
-				if err != nil {
-					t.Fatal(err)
-				}
+				resp := doReq(t, method, ts.URL+"/v1/sandboxes/sb_1/volumes", token, body)
 				defer resp.Body.Close()
 				var got types.SandboxVolumesResponse
 				if err := json.UnmarshalRead(resp.Body, &got); err != nil {
@@ -106,17 +98,7 @@ func TestLiveVolumeRoutesErrors(t *testing.T) {
 				return types.SandboxVolumesResponse{VolumesWant: []types.Volume{{Name: "data"}}, States: []types.VolumeState{{Name: "data", State: "pending", Error: "volume operation failed; retry after resolving the runtime error"}}}, tt.err
 			}}
 			ts := newTestServer(t, "root", mgr, nil)
-			req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, ts.URL+"/v1/sandboxes/sb_1/volumes", strings.NewReader(tt.body))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if tt.token != "" {
-				req.Header.Set("Authorization", "Bearer "+tt.token)
-			}
-			resp, err := ts.Client().Do(req)
-			if err != nil {
-				t.Fatal(err)
-			}
+			resp := doReq(t, http.MethodPut, ts.URL+"/v1/sandboxes/sb_1/volumes", tt.token, tt.body)
 			defer resp.Body.Close()
 			body, _ := io.ReadAll(resp.Body)
 			if resp.StatusCode != tt.code || strings.Contains(string(body), "/private") {
@@ -135,9 +117,11 @@ func TestLiveVolumeRoutesErrors(t *testing.T) {
 func TestLiveVolumeRoutesHideOtherTenants(t *testing.T) {
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodPatch} {
 		t.Run(method, func(t *testing.T) {
+			called := false
 			check := func(id, tenant string) (types.SandboxVolumesResponse, error) {
+				called = true
 				if id != "sb_1" || tenant != "other" {
-					t.Fatalf("scope %s %q", id, tenant)
+					t.Errorf("scope %s %q", id, tenant)
 				}
 				return types.SandboxVolumesResponse{}, pool.ErrUnknownSandbox
 			}
@@ -155,18 +139,10 @@ func TestLiveVolumeRoutesHideOtherTenants(t *testing.T) {
 			if method == http.MethodPatch {
 				body = `{}`
 			}
-			req, err := http.NewRequestWithContext(t.Context(), method, ts.URL+"/v1/sandboxes/sb_1/volumes", strings.NewReader(body))
-			if err != nil {
-				t.Fatal(err)
-			}
-			req.Header.Set("Authorization", "Bearer other-token")
-			resp, err := ts.Client().Do(req)
-			if err != nil {
-				t.Fatal(err)
-			}
+			resp := doReq(t, method, ts.URL+"/v1/sandboxes/sb_1/volumes", "other-token", body)
 			defer resp.Body.Close()
-			if resp.StatusCode != http.StatusNotFound {
-				t.Fatalf("status %d", resp.StatusCode)
+			if resp.StatusCode != http.StatusNotFound || !called {
+				t.Fatalf("status=%d called=%v", resp.StatusCode, called)
 			}
 		})
 	}
