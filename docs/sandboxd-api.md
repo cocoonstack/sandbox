@@ -299,7 +299,9 @@ array. An explicit empty array removes all mutable entries.
 Only mounted read-only catalog entries can change live (`mode` omitted or
 `ro`). A PUT must retain every existing writable or attach-only entry unchanged.
 The claim-time name, mount, and eight-volume limits apply to the desired set.
-An omitted mount defaults to `/volumes/<name>`. To change an existing name's
+An omitted mount defaults to `/volumes/<name>`, except that a held attach-only
+entry is retained by sending it as the claim returned it, without `mount`. To
+change an existing name's
 mount or mode, first remove that name and wait for successful convergence.
 An identical target can be retried. Claims with `on_expire: archive` must change
 that policy before adding a volume.
@@ -310,7 +312,7 @@ exits; PUT with an empty target cannot restore its processes. Missing, invalid,
 or sandbox bearer tokens return 401. Another tenant's sandbox and an unknown id
 return 404. Invalid, inaccessible, or non-local entries return 400. Removed
 tenant tokens are rejected at authentication. Root can still repair or remove
-held entries, but cannot admit new names for a removed tenant. A conflicting
+held entries, but admitting a new name for a removed tenant returns 403. A conflicting
 writer or dirty image returns 409.
 
 ## PATCH /v1/sandboxes/{id}/volumes
@@ -335,15 +337,17 @@ timeouts return 504 and cancellation returns 408.
 
 PUT and PATCH return the GET response shape on success. A convergence error
 returns a non-2xx status with the same view, so callers can inspect desired,
-applied, and per-volume state. Validation, authentication and unknown-sandbox
-errors carry only `error`. A failed request may already have persisted its target and
+applied, and per-volume state; semantic validation 400s carry it too. A
+malformed body, a missing `volumes` array, authentication and an unknown sandbox
+carry only `error`. A failed request may already have persisted its target and
 completed some device changes. GET reads the last confirmed set, rather than
 probing the devices. Resolve guest mount references or runtime failures before
 retrying. Retry the same PUT to converge, or send a new
 target to abandon unfinished additions. Concurrent requests serialize per
 sandbox without blocking renewals or new exec, file, and port connections.
 
-Before applying a target, sandboxd journals `VolumesWant` beside `Volumes`. A
+Before applying a target, sandboxd journals `VolumesWant` beside `Volumes`,
+storing it only while it differs from `Volumes`. A
 superseding request may first clean up an older desired-only attachment while
 the old target stays recorded. If that cleanup fails, the response retains the
 old view; retry the same PUT to finish accepting the new target. Admission
@@ -355,14 +359,17 @@ for a blocked device call. Capture operations (hibernate, fork, checkpoint, and
 promote) are refused while either set is nonempty or a convergence request
 still owns admitted volume holds.
 
-Device calls honor cancellation and have a 30-second ceiling. Journal writes
+Device calls honor cancellation and have a 30-second ceiling per volume; a
+caller that disconnects cancels the run, leaving interrupted states to retry. Journal writes
 are atomic. Host-crash durability follows `sync_claims`. An older daemon
 ignores `VolumesWant`; finish pending volume changes before downgrading.
 
 Live convergence requires Cocoon v0.7.2 or newer for idempotent matching
 attach and absent detach. PUT and PATCH reject an older release, or a runtime
 whose version cannot be queried, with 503 before changing intent, holds, or
-devices; a dev build is assumed current. GET and release remain available.
+devices; a dev build is assumed current. sandboxd caches the first successful
+version read, so restart it after upgrading cocoon. GET and release remain
+available.
 
 Catalog names must keep the same backing image while held, including pending
 holds. Publish changes under versioned names such as `dataset-v1` and
@@ -788,7 +795,7 @@ an SDK caller should set.
 Auth: node API token. Root sees every live claim; a tenant sees only its own.
 The index is `{"sandboxes": [{id, key, tenant?, deadline, claimed_at?, hibernated,
 archived?, from_checkpoint?, claim_ref?, metadata?, on_expire?, cpu_count, mem_total_bytes,
-volumes?: [{name, mount, mode?}], volumes_want?: [{name, mount, mode?}], restarts?, restarted_at?, failed?}]}` — `cpu_count` and `mem_total_bytes` are the
+volumes?: [{name, mount?, mode?}], volumes_want?: [{name, mount?, mode?}], restarts?, restarted_at?, failed?}]}` — `cpu_count` and `mem_total_bytes` are the
 size tier's allocation; `restarts` counts the cold boots that replaced an
 exited VMM and `restarted_at` stamps the last one (each loses guest memory and
 the instance-metadata document, so a caller re-establishes guest state when

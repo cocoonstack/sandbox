@@ -166,7 +166,8 @@ with 503 before any intent, hold, or device change; a dev build is assumed
 current. sandboxd reads the version once, so restart it after upgrading cocoon.
 GET and release remain available.
 
-The claim journal stores desired `VolumesWant` and confirmed applied `Volumes`.
+The claim journal stores confirmed applied `Volumes`, plus desired
+`VolumesWant` while it differs.
 Admission holds cover their union across daemon restart and teardown. Retry
 an interrupted operation with the same PUT target. Release cancels convergence
 and transfers holds to teardown. Capture is refused while either set is
@@ -709,7 +710,8 @@ using prebuilt binaries, also set `VOLUME_SMOKE_BIN` beside `SANDBOXD_BIN`,
 
 Add `VOLUME_RW_IMAGE=/srv/datasets/scratch.img` (a second, writable image) to
 also run the writable leg: a durable write across release, second-writer
-exclusion, and a clean read-only claim afterward.
+exclusion, and a clean read-only claim afterward. `VOLUME_LIVE=1` adds the live
+volume leg on cocoon v0.7.2 or newer.
 
 ## TLS for SDK clients
 

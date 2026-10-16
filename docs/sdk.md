@@ -268,7 +268,8 @@ and update both public sets from each complete response, including a partial fai
 Go returns `*sandbox.VolumeError` with a `Response` alongside the returned view.
 It wraps `*sandbox.APIError`, so `errors.As` can inspect the status. Python raises
 `VolumeError`, a subclass of `APIError`, with `.response`. A response is absent
-if the server returned only an authentication or validation error. In that case
+when the reply carries no complete view (a malformed request, authentication,
+an unknown sandbox, or a non-JSON proxy reply). In that case
 the handle retains its last known sets. Retry an interrupted operation with the
 same full PUT target, or set a new target to recover. `Client.Sandboxes` exposes
 `VolumesWant` and `Volumes` for inspection with an API token.

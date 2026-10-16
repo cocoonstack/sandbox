@@ -121,7 +121,8 @@ TEMPLATE=rt:24.04 scripts/sandboxd-e2e.sh
 #   without a Go toolchain.
 # VOLUME_IMAGE=/absolute/dataset.img enables the volumes proof (ro sharing;
 #   the image contains volume-e2e.txt); VOLUME_RW_IMAGE=/absolute/scratch.img
-#   adds the rw claim/release leg. Prebuilt runs also set VOLUME_SMOKE_BIN.
+#   adds the rw claim/release leg; VOLUME_LIVE=1 adds the live volume leg.
+#   Prebuilt runs also set VOLUME_SMOKE_BIN.
 ```
 
 ## CI

@@ -168,6 +168,9 @@ Use `sb.get_volumes()`, `sb.set_volumes([...])`, and
 methods use the client's API token on the owning node; a sandbox token cannot
 manage datasets. `set_volumes([])` clears mutable entries; `None` is rejected.
 PUT must retain writable and attach-only entries. PATCH retains omitted names.
+Each method takes `timeout=` (default: the client timeout, 120 s); a large
+replacement can need longer, and a call that times out cancels the server run,
+so retry the same target.
 
 Responses include `volumes_want`, `volumes`, `states`, and `converging`.
 `VolumePhase` and `VOLUME_ATTACHED`, `VOLUME_PENDING`, and `VOLUME_DETACHING`
