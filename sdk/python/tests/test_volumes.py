@@ -20,7 +20,6 @@ def test_volume_requests_use_owner_and_api_token(spawn_node, method):
 
     def reply(body, path):
         seen.append(body)
-        assert FakeNode.last_headers["Authorization"] == "Bearer operator-token"
         return 200, VIEW
 
     addr = spawn_node({(method, PATH): reply})
@@ -35,6 +34,7 @@ def test_volume_requests_use_owner_and_api_token(spawn_node, method):
     else:
         got = sb.patch_volumes(add=["data"], remove=["old"])
         assert seen == [{"add": [{"name": "data"}], "remove": ["old"]}]
+    assert FakeNode.last_headers["Authorization"] == "Bearer operator-token"
     assert got == VIEW
     assert sb.volumes == VIEW["volumes"]
     assert sb.volumes_want == VIEW["volumes_want"]

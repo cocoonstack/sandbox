@@ -16,6 +16,8 @@ class _VolumeName(TypedDict):
 
 
 class Volume(_VolumeName, total=False):
+    """A catalog volume by name, with its guest mount point and an `rw` mode for writable claims."""
+
     mount: str
     mode: str
 
@@ -26,6 +28,8 @@ class _VolumeState(TypedDict):
 
 
 class VolumeState(_VolumeState, total=False):
+    """One held volume's convergence phase and its last failure, if any."""
+
     error: str
 
 
@@ -37,6 +41,8 @@ class _SandboxVolumesResponse(TypedDict):
 
 
 class SandboxVolumesResponse(_SandboxVolumesResponse, total=False):
+    """The desired and applied sets of a sandbox, with per-volume states; error names a refused request."""
+
     error: str
 
 

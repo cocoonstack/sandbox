@@ -70,13 +70,13 @@ class Sandbox:
                 raise
 
     def get_volumes(self, *, timeout: float | None = None) -> SandboxVolumesResponse:
-        """Read desired and applied volumes from the owning node."""
+        """Reads the desired and applied volumes from the owning node."""
         return self._volumes_request("GET", None, "get volumes", timeout)
 
     def set_volumes(
         self, volumes: Sequence[str | Mapping[str, str] | Volume], *, timeout: float | None = None
     ) -> SandboxVolumesResponse:
-        """Replace the desired set and converge. An explicit empty list clears mutable mounts."""
+        """Replaces the desired set and converges; an explicit empty list clears mutable mounts."""
         if volumes is None:
             raise TypeError("set volumes requires an explicit list; use [] to clear volumes")
         return self._volumes_request(
@@ -90,7 +90,7 @@ class Sandbox:
         remove: Sequence[str] | None = None,
         timeout: float | None = None,
     ) -> SandboxVolumesResponse:
-        """Add or remove mounted read-only entries by name. Omitted arguments leave the set unchanged."""
+        """Adds or removes mounted read-only entries by name; omitted arguments leave the set unchanged."""
         body: dict[str, Any] = {}
         if add is not None:
             body["add"] = [_volume_body(volume, True) for volume in add]
