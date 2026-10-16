@@ -1,7 +1,10 @@
 package e2e
 
 import (
+	"errors"
+	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -34,5 +37,27 @@ func TestLiveVolumesEndToEnd(t *testing.T) {
 	want := []string{"attach:dataset:ro", "mount:dataset:/volumes/dataset:ro", "umount:/volumes/dataset", "detach:dataset"}
 	if ops := stack.eng.volumeOpsLog(); !slices.Equal(ops, want) {
 		t.Fatalf("device operations=%v want=%v", ops, want)
+	}
+}
+
+func TestRejectedVolumeTargetExplainsRefusalWithoutChangingState(t *testing.T) {
+	image := writeVolumeImage(t, "dataset.img", "dataset-bytes")
+	stack := startTenantStack(t, "node-token", nil, []config.VolumeSpec{{Name: "dataset", Path: image}})
+	sb, err := stack.client.New(t.Context(), "rt:24.04")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sb.Close()
+	if _, err := sb.SetVolumes(t.Context(), []sandbox.Volume{{Name: "dataset"}}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = sb.SetVolumes(t.Context(), []sandbox.Volume{{Name: "dataset"}, {Name: "dataset"}})
+	var refusal *sandbox.VolumeError
+	if !errors.As(err, &refusal) || refusal.Status != http.StatusBadRequest || !strings.Contains(refusal.Message, "duplicate volume") {
+		t.Errorf("invalid target explanation: %v", err)
+	}
+	view, err := sb.GetVolumes(t.Context())
+	if err != nil || view.Error != "" || view.Converging || len(view.States) != 1 || view.States[0].Error != "" || view.States[0].State != sandbox.VolumeAttached {
+		t.Fatalf("rejected request changed settled state: %+v err=%v", view, err)
 	}
 }

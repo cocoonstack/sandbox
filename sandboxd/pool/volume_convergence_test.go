@@ -180,6 +180,40 @@ func TestVolumeDiagnosticsTrackActualWorkerAndRetry(t *testing.T) {
 	}
 }
 
+func TestRejectedVolumeTargetPreservesConvergenceDiagnostics(t *testing.T) {
+	for _, priorConflict := range []bool{false, true} {
+		name := "settled"
+		if priorConflict {
+			name = "conflict"
+		}
+		t.Run(name, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newVolumeManager(t, eng, liveCatalog(t))
+			sb := mustClaim(t, m, testKey)
+			if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); err != nil {
+				t.Fatal(err)
+			}
+			if priorConflict {
+				eng.detachVolumeErr = &engine.VolumeMountConflict{Kind: engine.VolumeMountUnmountRefused, Mount: "/volumes/data"}
+				if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{}); err == nil {
+					t.Fatal("expected mount conflict")
+				}
+			}
+			before, err := m.GetVolumes(sb.ID, sb.Tenant)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}, {Name: "data"}}); !errors.Is(err, ErrBadVolume) {
+				t.Fatalf("invalid target: %v", err)
+			}
+			after, err := m.GetVolumes(sb.ID, sb.Tenant)
+			if err != nil || after.Error != before.Error || !slices.Equal(after.States, before.States) || !slices.Equal(after.Volumes, before.Volumes) || !slices.Equal(after.VolumesWant, before.VolumesWant) {
+				t.Fatalf("rejected request changed convergence view: before=%+v after=%+v err=%v", before, after, err)
+			}
+		})
+	}
+}
+
 func TestUnsupportedRuntimeDoesNotChangeVolumeIntent(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))

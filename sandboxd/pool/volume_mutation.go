@@ -74,17 +74,25 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	}
 	if err = m.eng.CheckLiveVolumeSupport(ctx); err != nil {
 		view, _ = m.GetVolumes(id, tenant)
+		view.Error = ""
 		return view, err
 	}
 	ctx, run, err := m.beginVolumeRun(ctx, sb)
 	if err != nil {
 		view, _ = m.GetVolumes(id, tenant)
+		view.Error = ""
 		return view, err
 	}
 	failedName := ""
+	recordOutcome := false
 	defer func() {
-		m.recordVolumeError(sb, run, failedName, err)
+		if recordOutcome {
+			m.recordVolumeError(sb, run, failedName, err)
+		}
 		view = m.finishVolumeRun(sb, run)
+		if !recordOutcome {
+			view.Error = ""
+		}
 	}()
 	m.mu.Lock()
 	current, held := slices.Clone(sb.VolumesWant), heldVolumes(sb)
@@ -113,6 +121,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	if err = m.checkVolumeRun(ctx, sb, run); err != nil {
 		return view, err
 	}
+	recordOutcome = true
 	m.mu.Lock()
 	uncertain := volumeDifference(volumeDifference(sb.VolumesWant, sb.Volumes), target)
 	m.mu.Unlock()
