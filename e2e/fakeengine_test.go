@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -139,7 +140,7 @@ func (f *fakeEngine) Probe(ctx context.Context, vsockSocket string, timeout time
 }
 
 func (f *fakeEngine) DialGuestPort(context.Context, string, uint16) (net.Conn, error) {
-	return nil, fmt.Errorf("fakeEngine has no guest port")
+	return nil, errors.New("fakeEngine has no guest port")
 }
 
 func (f *fakeEngine) InstallCACert(context.Context, string, []byte) error { return nil }

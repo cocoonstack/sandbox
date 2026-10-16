@@ -42,15 +42,7 @@ func TestSettledVolumesDoNotCallDevicesOrResolveCatalog(t *testing.T) {
 
 func TestRemovedTenantRetainsAndRepairsHeldVolumes(t *testing.T) {
 	eng := newFakeEngine()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: t.TempDir(), APIToken: "root", Volumes: liveCatalog(t)}, eng, testSecrets(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	putTenants(t, m, config.TenantSpec{Name: "acme", Token: "acme-token"})
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	m, sb := newTenantVolumeManager(t, eng, liveCatalog(t))
 	if _, err := m.SetVolumes(t.Context(), sb.ID, "acme", []types.Volume{{Name: "data"}, {Name: "other"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +162,7 @@ func TestVolumeDiagnosticsTrackActualWorkerAndRetry(t *testing.T) {
 	if err != nil || view.States[0].Error != "" || view.Converging {
 		t.Fatalf("successful retry retained errors: %+v %v", view, err)
 	}
-	conflict := &engine.VolumeMountConflict{Message: `cannot unmount "/volumes/data"; close guest references and retry`}
+	conflict := unmountConflict()
 	base.detachVolumeErr = conflict
 	view, err = m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{})
 	if !errors.Is(err, conflict) || view.States[0].Error != conflict.Error() {
@@ -189,7 +181,7 @@ func TestReleaseDropsVolumeDiagnostics(t *testing.T) {
 	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); err != nil {
 		t.Fatal(err)
 	}
-	eng.detachVolumeErr = &engine.VolumeMountConflict{Message: `cannot unmount "/volumes/data"; close guest references and retry`}
+	eng.detachVolumeErr = unmountConflict()
 	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{}); err == nil {
 		t.Fatal("expected mount conflict")
 	}
@@ -241,7 +233,7 @@ func TestRejectedVolumeTargetPreservesConvergenceDiagnostics(t *testing.T) {
 				t.Fatal(err)
 			}
 			if priorConflict {
-				eng.detachVolumeErr = &engine.VolumeMountConflict{Message: `cannot unmount "/volumes/data"; close guest references and retry`}
+				eng.detachVolumeErr = unmountConflict()
 				if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{}); err == nil {
 					t.Fatal("expected mount conflict")
 				}
@@ -307,11 +299,12 @@ func TestVolumeHoldsRejectCaptureBeforeTrim(t *testing.T) {
 					t.Fatal(err)
 				}
 				m.mu.Lock()
-				if err := m.reserveVolumes(held); err != nil {
-					t.Fatal(err)
-				}
+				err = m.reserveVolumes(held)
 				run.holds = held
 				m.mu.Unlock()
+				if err != nil {
+					t.Fatal(err)
+				}
 				defer m.finishVolumeRun(sb, run)
 			}
 			if _, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "blocked", ""); !errors.Is(err, ErrVolumeCapture) {
@@ -404,4 +397,8 @@ type unsupportedVolumeEngine struct{ *fakeEngine }
 
 func (e *unsupportedVolumeEngine) CheckLiveVolumeSupport(context.Context) error {
 	return &engine.LiveVolumeUnsupported{}
+}
+
+func unmountConflict() *engine.VolumeMountConflict {
+	return &engine.VolumeMountConflict{Message: `cannot unmount "/volumes/data"; close guest references and retry`}
 }

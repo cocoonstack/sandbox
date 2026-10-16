@@ -9,9 +9,9 @@ import (
 
 func TestBelowFloor(t *testing.T) {
 	tests := []struct {
-		v          string
-		below      bool
-		comparable bool
+		v     string
+		below bool
+		known bool
 	}{
 		{"v0.6.9", false, true},
 		{"v0.6.10", false, true},
@@ -27,9 +27,9 @@ func TestBelowFloor(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.v, func(t *testing.T) {
-			below, comparable := belowFloor(tt.v, RequiredCocoon)
-			if below != tt.below || comparable != tt.comparable {
-				t.Errorf("belowFloor(%q) = (%v, %v), want (%v, %v)", tt.v, below, comparable, tt.below, tt.comparable)
+			below, known := belowFloor(tt.v, RequiredCocoon)
+			if below != tt.below || known != tt.known {
+				t.Errorf("belowFloor(%q) = (%v, %v), want (%v, %v)", tt.v, below, known, tt.below, tt.known)
 			}
 		})
 	}

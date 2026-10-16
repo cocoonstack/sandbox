@@ -50,25 +50,27 @@ func TestLiveVolumesCommitAndRetry(t *testing.T) {
 
 func TestLiveAttachPreservesWritableAndAttachOnlyVolumes(t *testing.T) {
 	for _, attachOnly := range []bool{false, true} {
-		eng := newFakeEngine()
-		m := newVolumeManager(t, eng, liveCatalog(t))
-		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "other", Mode: "rw", AttachOnly: attachOnly}}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		original := sb.Volumes[0]
-		if _, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Add: []types.Volume{{Name: "data"}}}); err != nil {
-			t.Fatal(err)
-		}
-		if sb.Volumes[0] != original {
-			t.Fatalf("changed existing volume: %v -> %v", original, sb.Volumes[0])
-		}
-		if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "other", Mount: original.Mount}}); !errors.Is(err, ErrBadVolume) {
-			t.Fatalf("accepted mode change: %v", err)
-		}
-		if _, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data", "other"}}); !errors.Is(err, ErrBadVolume) || len(sb.Volumes) != 2 {
-			t.Fatalf("writable detach changed the batch: %v", err)
-		}
+		t.Run(fmt.Sprintf("attach_only=%t", attachOnly), func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newVolumeManager(t, eng, liveCatalog(t))
+			sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "other", Mode: "rw", AttachOnly: attachOnly}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := sb.Volumes[0]
+			if _, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Add: []types.Volume{{Name: "data"}}}); err != nil {
+				t.Fatal(err)
+			}
+			if sb.Volumes[0] != original {
+				t.Fatalf("changed existing volume: %v -> %v", original, sb.Volumes[0])
+			}
+			if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "other", Mount: original.Mount}}); !errors.Is(err, ErrBadVolume) {
+				t.Fatalf("accepted mode change: %v", err)
+			}
+			if _, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data", "other"}}); !errors.Is(err, ErrBadVolume) || len(sb.Volumes) != 2 {
+				t.Fatalf("writable detach changed the batch: %v", err)
+			}
+		})
 	}
 }
 
@@ -351,15 +353,7 @@ func TestLiveVolumesRespectOwningTenantAndRemoval(t *testing.T) {
 	eng := newFakeEngine()
 	catalog := liveCatalog(t)
 	catalog[1].Tenants = []string{"beta"}
-	m, err := NewManager(t.Context(), &config.Config{DataDir: t.TempDir(), APIToken: "root", Volumes: catalog}, eng, testSecrets(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	putTenants(t, m, config.TenantSpec{Name: "acme", Token: "acme-token"})
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	m, sb := newTenantVolumeManager(t, eng, catalog)
 	for _, auth := range []string{sb.Tenant, ""} {
 		if _, err := m.SetVolumes(t.Context(), sb.ID, auth, []types.Volume{{Name: "other"}}); !errors.Is(err, ErrVolumeUnavailable) {
 			t.Fatalf("catalog ACL: %v", err)
@@ -382,9 +376,11 @@ func TestLiveVolumesRespectOwningTenantAndRemoval(t *testing.T) {
 func TestDesiredVolumesJournalMigration(t *testing.T) {
 	for _, tt := range []struct {
 		name, field string
-		want        int
+		want        []types.Volume
 	}{
-		{"legacy", "", 1}, {"explicit empty", `,"volumes_want":[]`, 0}, {"desired", `,"volumes_want":[{"name":"other","mount":"/other"}]`, 1},
+		{"legacy", "", []types.Volume{{Name: "data", Mount: "/data"}}},
+		{"explicit empty", `,"volumes_want":[]`, nil},
+		{"desired", `,"volumes_want":[{"name":"other","mount":"/other"}]`, []types.Volume{{Name: "other", Mount: "/other"}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			store := newClaimStore(t.TempDir(), false)
@@ -396,12 +392,8 @@ func TestDesiredVolumesJournalMigration(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			sb := claims["sb_1"]
-			if len(sb.VolumesWant) != tt.want {
-				t.Fatalf("want=%v", sb.VolumesWant)
-			}
-			if tt.name == "desired" && sb.VolumesWant[0].Name != "other" {
-				t.Fatalf("target replaced by applied: %v", sb.VolumesWant)
+			if got := claims["sb_1"].VolumesWant; !slices.Equal(got, tt.want) {
+				t.Fatalf("loaded target %v, want %v", got, tt.want)
 			}
 			if err = store.save(claims); err != nil {
 				t.Fatal(err)
@@ -737,19 +729,11 @@ func TestLivenessRefusesAdmittedVolumeRun(t *testing.T) {
 
 func TestRemovedTenantCanRemoveReadOnlyVolumeBesideImmutableVolume(t *testing.T) {
 	eng := newFakeEngine()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: t.TempDir(), APIToken: "root", Volumes: liveCatalog(t)}, eng, testSecrets(t))
-	if err != nil {
+	m, sb := newTenantVolumeManager(t, eng, liveCatalog(t), types.Volume{Name: "other", Mode: "rw"})
+	if _, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Add: []types.Volume{{Name: "data"}}}); err != nil {
 		t.Fatal(err)
 	}
-	putTenants(t, m, config.TenantSpec{Name: "acme", Token: "acme-token"})
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme", Volumes: []types.Volume{{Name: "other", Mode: "rw"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Add: []types.Volume{{Name: "data"}}}); err != nil {
-		t.Fatal(err)
-	}
-	if err = m.DeleteTenant(t.Context(), "acme"); err != nil {
+	if err := m.DeleteTenant(t.Context(), "acme"); err != nil {
 		t.Fatal(err)
 	}
 	view, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data"}})
@@ -758,32 +742,6 @@ func TestRemovedTenantCanRemoveReadOnlyVolumeBesideImmutableVolume(t *testing.T)
 	}
 	if volumeHoldersOf(m, "data") != (volumeHolders{}) || volumeHoldersOf(m, "other").writers != 1 {
 		t.Fatal("cleanup altered immutable hold")
-	}
-}
-
-func liveCatalog(t *testing.T) []config.VolumeSpec {
-	t.Helper()
-	return []config.VolumeSpec{
-		{Name: "data", Path: writeVolumeImage(t, "data.img", "data"), Writable: true},
-		{Name: "other", Path: writeVolumeImage(t, "other.img", "other"), Writable: true},
-	}
-}
-
-func assertLiveJournal(t *testing.T, m *Manager, sb *types.Sandbox) {
-	t.Helper()
-	claims, err := newClaimStore(m.dataDir, false).load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := claims[sb.ID]
-	if got == nil || !slices.Equal(got.Volumes, sb.Volumes) {
-		t.Fatalf("journal volumes: %+v", got)
-	}
-	if !slices.Equal(got.VolumesWant, sb.VolumesWant) {
-		t.Fatalf("journal target: %+v, want %+v", got.VolumesWant, sb.VolumesWant)
-	}
-	if _, err := os.Stat(m.store.path); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -816,6 +774,46 @@ func (e *deadlineVolumeEngine) DiskAttach(ctx context.Context, vmName string, sp
 	deadline, _ := ctx.Deadline()
 	e.deadlines <- deadline
 	return e.fakeEngine.DiskAttach(ctx, vmName, spec)
+}
+
+func liveCatalog(t *testing.T) []config.VolumeSpec {
+	t.Helper()
+	return []config.VolumeSpec{
+		{Name: "data", Path: writeVolumeImage(t, "data.img", "data"), Writable: true},
+		{Name: "other", Path: writeVolumeImage(t, "other.img", "other"), Writable: true},
+	}
+}
+
+func newTenantVolumeManager(t *testing.T, eng *fakeEngine, catalog []config.VolumeSpec, volumes ...types.Volume) (*Manager, *types.Sandbox) {
+	t.Helper()
+	m, err := NewManager(t.Context(), &config.Config{DataDir: t.TempDir(), APIToken: "root", Volumes: catalog}, eng, testSecrets(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	putTenants(t, m, config.TenantSpec{Name: "acme", Token: "acme-token"})
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme", Volumes: volumes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m, sb
+}
+
+func assertLiveJournal(t *testing.T, m *Manager, sb *types.Sandbox) {
+	t.Helper()
+	claims, err := newClaimStore(m.dataDir, false).load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := claims[sb.ID]
+	if got == nil || !slices.Equal(got.Volumes, sb.Volumes) {
+		t.Fatalf("journal volumes: %+v", got)
+	}
+	if !slices.Equal(got.VolumesWant, sb.VolumesWant) {
+		t.Fatalf("journal target: %+v, want %+v", got.VolumesWant, sb.VolumesWant)
+	}
+	if _, err := os.Stat(m.store.path); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func beginAdmittedVolumeRun(t *testing.T, m *Manager, sb *types.Sandbox) *volumeRun {

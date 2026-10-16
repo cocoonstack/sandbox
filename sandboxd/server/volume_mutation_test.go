@@ -19,12 +19,12 @@ import (
 
 func TestLiveVolumeRoutesAuthorizeAndDecode(t *testing.T) {
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodPatch} {
-		for _, token := range []string{"acme-token", "root-token"} {
-			t.Run(method+"/"+token, func(t *testing.T) {
+		for _, cred := range []struct{ token, tenant string }{{"acme-token", "acme"}, {"root-token", ""}} {
+			t.Run(method+"/"+cred.token, func(t *testing.T) {
 				called := false
 				check := func(id, tenant string) {
 					called = true
-					if id != "sb_1" || tenant != map[string]string{"root-token": "", "acme-token": "acme"}[token] {
+					if id != "sb_1" || tenant != cred.tenant {
 						t.Errorf("scope %s %q", id, tenant)
 					}
 				}
@@ -54,7 +54,7 @@ func TestLiveVolumeRoutesAuthorizeAndDecode(t *testing.T) {
 				if method == http.MethodPatch {
 					body = `{"remove":["data"]}`
 				}
-				resp := doReq(t, method, ts.URL+"/v1/sandboxes/sb_1/volumes", token, body)
+				resp := doReq(t, method, ts.URL+"/v1/sandboxes/sb_1/volumes", cred.token, body)
 				defer resp.Body.Close()
 				var got types.SandboxVolumesResponse
 				if err := json.UnmarshalRead(resp.Body, &got); err != nil {

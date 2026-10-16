@@ -85,7 +85,7 @@ func TestGoldenStampGatesAdoptionOnLane(t *testing.T) {
 
 func TestEgressLaneDoesNotHibernate(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	sb := &types.Sandbox{ID: "sb_eg_h", Key: types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}}
+	sb := &types.Sandbox{ID: "sb_eg_h", Key: egKey}
 	sb.Transition.Lock()
 	err := m.hibernateLocked(t.Context(), sb)
 	sb.Transition.Unlock()
@@ -359,12 +359,7 @@ func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 	if !policyLive() {
 		t.Fatal("drain + re-add wiped the pool egress policy")
 	}
-	waitFor(t, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		p := m.pools[egKey]
-		return p != nil && !p.building && p.refilling == 0
-	})
+	waitPoolSettled(t, m, egKey)
 }
 
 func TestEgressLaneCannotForkOrCheckpoint(t *testing.T) {

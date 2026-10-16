@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -185,12 +186,13 @@ func TestLiveDetachKeepsBusyAndUnobservableDevices(t *testing.T) {
 				t.Fatal("detach must fail closed")
 			}
 			conflict, isConflict := errors.AsType[*VolumeMountConflict](err)
-			conflictExpected := mode == "busy" || mode == "second mount"
+			wantPath := map[string]string{"busy": "/data", "second mount": "/other"}[mode]
+			conflictExpected := wantPath != ""
 			if isConflict != conflictExpected {
 				t.Fatalf("conflict=%v error=%v", conflictExpected, err)
 			}
-			if conflictExpected && (!strings.Contains(conflict.Error(), "/data") && !strings.Contains(conflict.Error(), "/other") || strings.Contains(conflict.Error(), "/private")) {
-				t.Fatalf("unsafe or missing guest path: %v", conflict)
+			if conflictExpected && (!strings.Contains(conflict.Error(), strconv.Quote(wantPath)) || strings.Contains(conflict.Error(), "/private")) {
+				t.Fatalf("unsafe or missing guest path %s: %v", wantPath, conflict)
 			}
 			if mode == "busy" && !strings.HasPrefix(conflict.Error(), "cannot unmount") {
 				t.Fatalf("busy conflict: %v", conflict)

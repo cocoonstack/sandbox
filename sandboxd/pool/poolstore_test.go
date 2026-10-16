@@ -217,12 +217,7 @@ func TestAStaleCellVersionIsNotApplied(t *testing.T) {
 	if floor != 3 {
 		t.Errorf("warm floor %d after an older and a repeated version, want 3 from version 5", floor)
 	}
-	waitFor(t, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		p := m.pools[apiKey]
-		return p != nil && !p.building && p.refilling == 0
-	})
+	waitPoolSettled(t, m, apiKey)
 }
 
 func TestAPutTheCellCannotStoreChangesNothing(t *testing.T) {
@@ -275,33 +270,6 @@ func TestBootPrefersTheCellSetOverPoolsJSON(t *testing.T) {
 	}
 }
 
-func metaStoreNode(t *testing.T, cell string) *Manager {
-	t.Helper()
-	cfg := &config.Config{
-		DataDir:   t.TempDir(),
-		Pools:     []config.PoolSpec{{PoolKey: seedKey, Warm: 1}},
-		MetaStore: &config.MetaStoreConfig{Kind: "pg", DSNEnv: "SANDBOX_TEST_DSN", Cell: cell},
-	}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
-	t.Cleanup(func() { _ = m.tenants.Close() })
-	if m.poolShared != nil {
-		t.Cleanup(func() { _ = m.poolShared.Close() })
-		go m.followCellPools(t.Context())
-	}
-	return m
-}
-
-func hasAPISet(m *Manager) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	p, api := m.activePool(apiKey)
-	_, seed := m.activePool(seedKey)
-	return api && p.floor == 3 && !seed
-}
-
 type fakeShared struct {
 	set       *poolset.Set
 	version   int64
@@ -333,4 +301,31 @@ func (f *fakeShared) Watch(ctx context.Context, changed func()) {
 
 func (f *fakeShared) Close() error {
 	return nil
+}
+
+func metaStoreNode(t *testing.T, cell string) *Manager {
+	t.Helper()
+	cfg := &config.Config{
+		DataDir:   t.TempDir(),
+		Pools:     []config.PoolSpec{{PoolKey: seedKey, Warm: 1}},
+		MetaStore: &config.MetaStoreConfig{Kind: "pg", DSNEnv: "SANDBOX_TEST_DSN", Cell: cell},
+	}
+	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t))
+	if err != nil {
+		t.Fatalf("setup manager: %v", err)
+	}
+	t.Cleanup(func() { _ = m.tenants.Close() })
+	if m.poolShared != nil {
+		t.Cleanup(func() { _ = m.poolShared.Close() })
+		go m.followCellPools(t.Context())
+	}
+	return m
+}
+
+func hasAPISet(m *Manager) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, api := m.activePool(apiKey)
+	_, seed := m.activePool(seedKey)
+	return api && p.floor == 3 && !seed
 }
