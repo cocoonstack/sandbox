@@ -692,6 +692,7 @@ func TestRollbackClaimTakesOverAdmittedRunHolds(t *testing.T) {
 	run := beginAdmittedVolumeRun(t, m, sb)
 	m.rollbackClaim(t.Context(), []*types.Sandbox{sb})
 	m.finishVolumeRun(sb, run)
+	waitFor(t, m.store.synced)
 	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{}) {
 		t.Fatalf("rolled-back claim leaked its admitted hold: %+v", got)
 	}
