@@ -48,8 +48,8 @@ func TestRejectedVolumeTargetExplainsRefusalWithoutChangingState(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sb.Close()
-	if _, err := sb.SetVolumes(t.Context(), []sandbox.Volume{{Name: "dataset"}}); err != nil {
-		t.Fatal(err)
+	if _, checkErr := sb.SetVolumes(t.Context(), []sandbox.Volume{{Name: "dataset"}}); checkErr != nil {
+		t.Fatal(checkErr)
 	}
 	_, err = sb.SetVolumes(t.Context(), []sandbox.Volume{{Name: "dataset"}, {Name: "dataset"}})
 	var refusal *sandbox.VolumeError

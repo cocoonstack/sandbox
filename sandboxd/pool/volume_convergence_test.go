@@ -203,8 +203,8 @@ func TestRejectedVolumeTargetPreservesConvergenceDiagnostics(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}, {Name: "data"}}); !errors.Is(err, ErrBadVolume) {
-				t.Fatalf("invalid target: %v", err)
+			if _, checkErr := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}, {Name: "data"}}); !errors.Is(checkErr, ErrBadVolume) {
+				t.Fatalf("invalid target: %v", checkErr)
 			}
 			after, err := m.GetVolumes(sb.ID, sb.Tenant)
 			if err != nil || after.Error != before.Error || !slices.Equal(after.States, before.States) || !slices.Equal(after.Volumes, before.Volumes) || !slices.Equal(after.VolumesWant, before.VolumesWant) {
