@@ -191,8 +191,7 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 	if err := group.Wait(); err != nil {
 		return err
 	}
-	sb.Volumes = applied
-	sb.VolumesWant = slices.Clone(applied)
+	sb.Volumes, sb.VolumesWant = applied, applied
 	return nil
 }
 

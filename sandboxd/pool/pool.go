@@ -163,7 +163,7 @@ type SandboxSummary struct {
 	CPUCount       int                `json:"cpu_count,omitzero"`
 	MemTotalBytes  int64              `json:"mem_total_bytes,omitzero"`
 	Volumes        []types.Volume     `json:"volumes,omitempty"`
-	VolumesWant    []types.Volume     `json:"volumes_want"`
+	VolumesWant    []types.Volume     `json:"volumes_want,omitempty"`
 	Hibernated     bool               `json:"hibernated"`
 	Archived       bool               `json:"archived,omitzero"`
 	FromCheckpoint string             `json:"from_checkpoint,omitempty"`

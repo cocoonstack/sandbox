@@ -422,8 +422,8 @@ func TestDesiredVolumesJournalMigration(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(rawBytes), `"volumes_want":`) {
-				t.Fatalf("target presence lost: %s", rawBytes)
+			if strings.Contains(string(rawBytes), `"volumes_want":`) != (tt.field != "") {
+				t.Fatalf("persisted target %s, want field only when it differs", rawBytes)
 			}
 		})
 	}
