@@ -164,7 +164,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 			return view, resolveErr
 		}
 		applyCtx, cancel := context.WithTimeout(ctx, engine.VolumeMutationTimeout)
-		err = m.applyVolume(applyCtx, sb, repair)
+		err = m.applyVolume(applyCtx, sb, repair, true)
 		cancel()
 		if err != nil {
 			return view, err

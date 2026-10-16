@@ -6,14 +6,15 @@ the cocoon CLI and needs a template image with silkd baked in.
 ## Prerequisites
 
 - Linux with KVM (`/dev/kvm`)
-- [cocoon](https://github.com/cocoonstack/cocoon) **v0.7.2 or newer** installed
+- [cocoon](https://github.com/cocoonstack/cocoon) **v0.6.9 or newer** installed
   and working (`cocoon vm run` boots a Cloud Hypervisor VM). v0.5.2 brought
   the disk hot-attach used by read-only volumes and the parallel-clone and
   snapshot/store performance work the
   [performance](performance.md) numbers assume; v0.6.9 prints `[]` for an
   empty `snapshot list --format json`, which sandboxd's snapshot reconcile
   reads. sandboxd logs a warning at startup when the detected cocoon is below
-  v0.7.2. Live volume mutation also rejects unknown and development builds
+  v0.6.9 (a dev/`master-<sha>` build is assumed current); changing volumes on
+  a running claim needs v0.7.2
 - The sandbox boot artifact installed where cocoon finds it
   (`/boot/vmlinuz-sandbox`, `/boot/initrd.img-sandbox` — from
   `ghcr.io/cocoonstack/sandbox/boot:<kernel-ver>`)
@@ -160,8 +161,10 @@ Running claims can change mounted read-only catalog entries through the
 [GET, PUT, and PATCH volume API](sandboxd-api.md#get-v1sandboxesidvolumes)
 and both SDKs. The image must already exist on the owner node. Live changes
 require Cocoon v0.7.2 or newer for idempotent disk attach and detach. PUT and
-PATCH reject older, unknown, development, or unqueryable versions with 503
-before any intent, hold, or device change. GET and release remain available.
+PATCH reject an older release, or a runtime whose version cannot be queried,
+with 503 before any intent, hold, or device change; a dev build is assumed
+current. sandboxd reads the version once, so restart it after upgrading cocoon.
+GET and release remain available.
 
 The claim journal stores desired `VolumesWant` and confirmed applied `Volumes`.
 Admission holds cover their union across daemon restart and teardown. Retry

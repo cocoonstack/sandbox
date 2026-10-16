@@ -360,9 +360,9 @@ are atomic. Host-crash durability follows `sync_claims`. An older daemon
 ignores `VolumesWant`; finish pending volume changes before downgrading.
 
 Live convergence requires Cocoon v0.7.2 or newer for idempotent matching
-attach and absent detach. PUT and PATCH reject older, unknown, development,
-or unqueryable runtime versions with 503 before changing intent, holds, or
-devices. GET and release remain available.
+attach and absent detach. PUT and PATCH reject an older release, or a runtime
+whose version cannot be queried, with 503 before changing intent, holds, or
+devices; a dev build is assumed current. GET and release remain available.
 
 Catalog names must keep the same backing image while held, including pending
 holds. Publish changes under versioned names such as `dataset-v1` and

@@ -1698,6 +1698,10 @@ func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw bo
 	return f.mountVolumeErr
 }
 
+func (f *fakeEngine) MountLiveVolume(ctx context.Context, sock, name, mount string, rw bool) error {
+	return f.MountVolume(ctx, sock, name, mount, rw)
+}
+
 func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount string) error {
 	if f.liveVolumeHook != nil {
 		if err := f.liveVolumeHook("detach"); err != nil {

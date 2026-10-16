@@ -35,7 +35,7 @@ func TestLiveVolumeConvergesMountAndDetach(t *testing.T) {
 		if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
 			t.Fatal(err)
 		}
-		if err := e.MountVolume(t.Context(), sock, spec.Name, "/data", false); err != nil {
+		if err := e.MountLiveVolume(t.Context(), sock, spec.Name, "/data", false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -69,7 +69,7 @@ func TestLiveAttachRejectsForeignMounts(t *testing.T) {
 			fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
 			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + row)
 			fake.mu.Unlock()
-			err := New("cocoon", nil, nil, false, false, "").MountVolume(t.Context(), sock, spec.Name, "/data", false)
+			err := New("cocoon", nil, nil, false, false, "").MountLiveVolume(t.Context(), sock, spec.Name, "/data", false)
 			if err == nil {
 				t.Fatal("accepted a foreign mount")
 			}

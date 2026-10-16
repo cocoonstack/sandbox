@@ -165,6 +165,10 @@ func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw bo
 	return nil
 }
 
+func (f *fakeEngine) MountLiveVolume(ctx context.Context, sock, name, mount string, rw bool) error {
+	return f.MountVolume(ctx, sock, name, mount, rw)
+}
+
 func (f *fakeEngine) UnmountVolume(_ context.Context, _, mount string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

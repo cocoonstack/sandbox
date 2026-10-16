@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -26,8 +27,10 @@ import (
 )
 
 const (
-	// RequiredCocoon includes idempotent live disk attach and detach.
-	RequiredCocoon = "v0.7.2"
+	// RequiredCocoon carries the snapshot/store baseline and the JSON form of an empty snapshot list.
+	RequiredCocoon = "v0.6.9"
+	// LiveVolumeCocoon adds idempotent disk attach and detach for live volume changes.
+	LiveVolumeCocoon = "v0.7.2"
 
 	StaleCreateCollected   StaleCreateOutcome = "collected"
 	StaleCreateBusy        StaleCreateOutcome = "busy"
@@ -72,6 +75,8 @@ type Engine struct {
 	noBalloon   bool
 	restoreMode types.RestoreMode
 	dumps       chan struct{}
+	// version caches the first successful query; replacing cocoon takes a restart.
+	version atomic.Pointer[string]
 }
 
 // New returns a cocoon engine with node-wide network and disk policy.
@@ -81,6 +86,9 @@ func New(bin string, bridges, networks []string, noDirectIO, noBalloon bool, res
 
 // Version reports cocoon's version string: a "vX.Y.Z" release or a "master-<sha>" dev build.
 func (e *Engine) Version(ctx context.Context) (string, error) {
+	if v := e.version.Load(); v != nil {
+		return *v, nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	out, err := e.run(ctx, "version")
@@ -89,7 +97,9 @@ func (e *Engine) Version(ctx context.Context) (string, error) {
 	}
 	for line := range strings.SplitSeq(string(out), "\n") {
 		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "Version:"); ok {
-			return strings.TrimSpace(v), nil
+			v = strings.TrimSpace(v)
+			e.version.Store(&v)
+			return v, nil
 		}
 	}
 	return "", fmt.Errorf("cocoon version: no Version line in output")
@@ -101,7 +111,7 @@ func (e *Engine) VersionWarning(ctx context.Context) (version, warning string) {
 	if err != nil {
 		return "", fmt.Sprintf("cannot determine cocoon version (need >= %s): %v", RequiredCocoon, err)
 	}
-	if below, known := belowFloor(v); known && below {
+	if below, known := belowFloor(v, RequiredCocoon); known && below {
 		return v, fmt.Sprintf("cocoon %s is below the required %s — upgrade cocoon", v, RequiredCocoon)
 	}
 	return v, ""
@@ -493,13 +503,13 @@ func respFail(resp wire.Response) string {
 	return "unexpected frame " + resp.RespType()
 }
 
-// belowFloor reports whether v is below RequiredCocoon; known is false for a dev build.
-func belowFloor(v string) (below, known bool) {
+// belowFloor reports whether v is below floor; known is false for a dev build.
+func belowFloor(v, floor string) (below, known bool) {
 	v = "v" + strings.TrimPrefix(v, "v")
 	if semver.Canonical(v) != v {
 		return false, false
 	}
-	return semver.Compare(v, RequiredCocoon) < 0, true
+	return semver.Compare(v, floor) < 0, true
 }
 
 func readBufLine(r *bufio.Reader, limit int) (string, error) {

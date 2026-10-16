@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -87,7 +86,6 @@ func TestMountVolumeUsesSysfsAndRequestedMode(t *testing.T) {
 				"/sys/block/vda/serial",
 				"/sys/block/vdb/serial",
 				"/sys/block/vdc/serial",
-				"/sys/block/vdc/dev", "/proc/self/mountinfo", "/sys/block/vdc/dev", "/proc/self/mountinfo",
 			}
 			if fake.listCalls != 1 || !slices.Equal(fake.readCalls, wantReads) {
 				t.Errorf("sysfs calls = list:%d read:%v, want list:1 read:%v", fake.listCalls, fake.readCalls, wantReads)
@@ -161,8 +159,8 @@ func TestMountVolumeWaitsForDelayedSysfsSerial(t *testing.T) {
 	if fake.listCalls != 2 {
 		t.Errorf("fs_list calls = %d, want 2", fake.listCalls)
 	}
-	if !slices.Contains(fake.readCalls, "/sys/block/vdc/serial") {
-		t.Error("target serial was not read")
+	if got := fake.readCalls[len(fake.readCalls)-1]; got != "/sys/block/vdc/serial" {
+		t.Errorf("last fs_read = %q, want target serial", got)
 	}
 }
 
@@ -283,11 +281,4 @@ func configureVolumeDevices(f *fakeSilkd) {
 	f.serial["/sys/block/vda/serial"] = []byte("root\n")
 	f.serial["/sys/block/vdc/serial"] = []byte("imagenet\n")
 	f.stat["/dev/vdc"] = true
-	f.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
-	f.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
-	f.execHook = func(argv []string) {
-		if argv[0] == "mount" {
-			f.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + fmt.Sprintf("2 1 8:32 / %s %s - ext4 /dev/vdc %s\n", argv[len(argv)-1], argv[2], argv[2]))
-		}
-	}
 }

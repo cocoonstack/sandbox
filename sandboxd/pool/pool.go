@@ -143,6 +143,7 @@ type Engine interface {
 	DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error
 	DetachVolume(ctx context.Context, vmName, sock, name, mount string) error
 	MountVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
+	MountLiveVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
 	UnmountVolume(ctx context.Context, vsockSocket, mount string) error
 	SyncGuest(ctx context.Context, vsockSocket string) error
 	WriteInstanceMetadata(ctx context.Context, vsockSocket string, doc []byte) error

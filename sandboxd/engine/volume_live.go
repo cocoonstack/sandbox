@@ -7,10 +7,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
-)
 
-const VolumeMutationTimeout = 30 * time.Second
+	"github.com/projecteru2/core/log"
+)
 
 // VolumeMountConflictKind identifies the guest condition that prevents a volume change.
 type VolumeMountConflictKind string
@@ -41,32 +40,41 @@ func (e *VolumeMountConflict) Error() string {
 // LiveVolumeUnsupported reports a runtime that cannot safely change live volumes.
 type LiveVolumeUnsupported struct {
 	Version string
-	Err     error
 }
 
 func (e *LiveVolumeUnsupported) Error() string {
 	if e.Version != "" {
-		return fmt.Sprintf("live volume changes require Cocoon >= %s; installed version is %s", RequiredCocoon, e.Version)
+		return fmt.Sprintf("live volume changes require Cocoon >= %s; installed version is %s", LiveVolumeCocoon, e.Version)
 	}
-	return "live volume changes require a verified Cocoon release >= " + RequiredCocoon + "; runtime version unavailable or unknown"
+	return "live volume changes require Cocoon >= " + LiveVolumeCocoon + "; runtime version unavailable"
 }
 
-func (e *LiveVolumeUnsupported) Unwrap() error { return e.Err }
-
-// CheckLiveVolumeSupport rejects runtimes without confirmed live disk semantics.
+// CheckLiveVolumeSupport rejects runtimes without idempotent live disk attach and detach.
 func (e *Engine) CheckLiveVolumeSupport(ctx context.Context) error {
 	version, err := e.Version(ctx)
 	if err != nil {
-		return &LiveVolumeUnsupported{Err: err}
-	}
-	below, known := belowFloor(version)
-	if !known {
+		log.WithFunc("engine.CheckLiveVolumeSupport").Warnf(ctx, "query cocoon version: %v", err)
 		return &LiveVolumeUnsupported{}
 	}
-	if below {
+	if below, known := belowFloor(version, LiveVolumeCocoon); known && below {
 		return &LiveVolumeUnsupported{Version: version}
 	}
 	return nil
+}
+
+// MountLiveVolume mounts an attached disk unless the same mount already exists.
+func (e *Engine) MountLiveVolume(ctx context.Context, sock, name, mount string, rw bool) error {
+	ctx, cancel := context.WithTimeout(ctx, volumeSetupTimeout)
+	defer cancel()
+	device, err := e.waitForVolumeDevice(ctx, sock, name)
+	if err != nil {
+		return fmt.Errorf("wait for volume device %s: %w", name, err)
+	}
+	mounted, err := e.volumeMounted(ctx, sock, device, mount, rw)
+	if err != nil || mounted {
+		return err
+	}
+	return e.mountDevice(ctx, sock, device, name, mount, rw)
 }
 
 // DetachVolume unmounts a guest volume before confirming host removal.

@@ -186,7 +186,7 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 	}
 	group, groupCtx := errgroup.WithContext(ctx)
 	for _, volume := range volumes {
-		group.Go(func() error { return m.applyVolume(groupCtx, sb, volume) })
+		group.Go(func() error { return m.applyVolume(groupCtx, sb, volume, false) })
 	}
 	if err := group.Wait(); err != nil {
 		return err
@@ -196,7 +196,7 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 }
 
 // applyVolume keeps one volume's steps strictly ordered; siblings overlap freely.
-func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume resolvedVolume) error {
+func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume resolvedVolume, live bool) error {
 	// attach-only mounts nothing, so there is no umount to verify and no marker.
 	attachOnly := volume.applied.Mount == ""
 	// write-ahead: the marker must be durable before any guest write can be.
@@ -214,7 +214,11 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := m.eng.MountVolume(ctx, sb.VsockSocket, volume.applied.Name, volume.applied.Mount, volume.disk.RW); err != nil {
+	mount := m.eng.MountVolume
+	if live {
+		mount = m.eng.MountLiveVolume
+	}
+	if err := mount(ctx, sb.VsockSocket, volume.applied.Name, volume.applied.Mount, volume.disk.RW); err != nil {
 		return fmt.Errorf("setup volume %q: %w", volume.applied.Name, err)
 	}
 	return nil

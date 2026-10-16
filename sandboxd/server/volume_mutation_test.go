@@ -95,7 +95,7 @@ func TestLiveVolumeRoutesErrors(t *testing.T) {
 		{"bind mount", "root", `{"volumes":[]}`, &engine.VolumeMountConflict{Kind: engine.VolumeMountBind, Mount: "/other"}, http.StatusConflict},
 		{"unmount refused", "root", `{"volumes":[]}`, &engine.VolumeMountConflict{Kind: engine.VolumeMountUnmountRefused, Mount: "/data"}, http.StatusConflict},
 		{"unsupported runtime", "root", `{"volumes":[]}`, &engine.LiveVolumeUnsupported{Version: "v0.7.1"}, http.StatusServiceUnavailable},
-		{"unknown runtime", "root", `{"volumes":[]}`, &engine.LiveVolumeUnsupported{Err: errors.New("host /private/version failed")}, http.StatusServiceUnavailable},
+		{"unknown runtime", "root", `{"volumes":[]}`, &engine.LiveVolumeUnsupported{}, http.StatusServiceUnavailable},
 		{"timeout", "root", `{"volumes":[]}`, context.DeadlineExceeded, http.StatusGatewayTimeout},
 		{"cancel", "root", `{"volumes":[]}`, context.Canceled, http.StatusRequestTimeout},
 		{"engine", "root", `{"volumes":[]}`, errors.New("host /private/image failed"), http.StatusInternalServerError},
