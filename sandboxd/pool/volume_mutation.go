@@ -242,6 +242,7 @@ func (m *Manager) checkVolumeRunLocked(ctx context.Context, sb *types.Sandbox, r
 }
 
 func (m *Manager) cancelVolumeRun(sb *types.Sandbox) []types.Volume {
+	delete(m.volumeErrors, sb)
 	if run := m.volumeRuns[sb]; run != nil {
 		run.cancel()
 		return slices.Clone(run.holds)

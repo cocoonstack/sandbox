@@ -180,6 +180,28 @@ func TestVolumeDiagnosticsTrackActualWorkerAndRetry(t *testing.T) {
 	}
 }
 
+func TestReleaseDropsVolumeDiagnostics(t *testing.T) {
+	eng := newFakeEngine()
+	m := newVolumeManager(t, eng, liveCatalog(t))
+	sb := mustClaim(t, m, testKey)
+	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); err != nil {
+		t.Fatal(err)
+	}
+	eng.detachVolumeErr = &engine.VolumeMountConflict{Kind: engine.VolumeMountUnmountRefused, Mount: "/volumes/data"}
+	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{}); err == nil {
+		t.Fatal("expected mount conflict")
+	}
+	eng.detachVolumeErr = nil
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.volumeErrors) != 0 {
+		t.Fatalf("released claim kept diagnostics: %v", m.volumeErrors)
+	}
+}
+
 func TestRejectedVolumeTargetPreservesConvergenceDiagnostics(t *testing.T) {
 	for _, priorConflict := range []bool{false, true} {
 		name := "settled"
