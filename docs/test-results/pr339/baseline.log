@@ -1,4 +1,0 @@
-volume=dataset-v1 claim_a=389.0ms claim_b=371.8ms
-VOLUME PASS concurrent_read_bytes=3 read_only=true released=true
-CONTINUITY before={"Sandbox":"sb_7d252ce9de32e3e7","Session":"sess-69-0","Boot":"4cd81a72-ea89-4282-a36d-2e3e4965755e","PID":177,"Start":"1738"}
-volumesmoke: cwd busy removal must return 409 and guest path: view={VolumesWant:[{Name:dataset-v2 Mount:/datasets/current Mode:}] Volumes:[{Name:dataset-v1 Mount:/datasets/current Mode:}] States:[{Name:dataset-v1 State:detaching Error:volume convergence failed; retry the desired set} {Name:dataset-v2 State:pending Error:}] Error:volume convergence failed; retry the desired set} error=set volumes: volume convergence failed; retry the desired set (http 500)

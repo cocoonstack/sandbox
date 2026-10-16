@@ -1,2 +1,0 @@
-go version go1.27.2 linux/amd64
-rustc 1.99.1 (58cf8f9c3 2026-10-13)
