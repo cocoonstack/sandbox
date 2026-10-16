@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -121,7 +122,7 @@ func TestLiveVolumeRoutesErrors(t *testing.T) {
 			if resp.StatusCode != tt.code || strings.Contains(string(body), "/private") {
 				t.Fatalf("status=%d body=%s", resp.StatusCode, body)
 			}
-			if tt.err != nil {
+			if tt.err != nil && tt.code != http.StatusNotFound {
 				var got types.SandboxVolumesResponse
 				if err := json.Unmarshal(body, &got); err != nil || len(got.VolumesWant) != 1 || len(got.States) != 1 || got.Error == "" || got.States[0].Error != "volume operation failed; retry after resolving the runtime error" {
 					t.Fatalf("lost partial state: %s %v", body, err)
@@ -171,28 +172,23 @@ func TestLiveVolumeRoutesHideOtherTenants(t *testing.T) {
 	}
 }
 
-func TestLiveVolumeRoutesPreserveSafeTargetOutcome(t *testing.T) {
-	const message = "new volume target not accepted; cleanup of the previous pending volume failed"
+func TestLiveVolumeRoutesReportRefusalsOverRecordedDiagnostics(t *testing.T) {
 	const cause = "cannot unmount /data; close guest references and retry"
-	mgr := &fakeManager{setVolumes: func(string, string, []types.Volume) (types.SandboxVolumesResponse, error) {
-		return types.SandboxVolumesResponse{VolumesWant: []types.Volume{{Name: "old"}}, States: []types.VolumeState{{Name: "old", State: "pending", Error: cause}}, Error: message}, &engine.VolumeMountConflict{Kind: engine.VolumeMountUnmountRefused, Mount: "/data"}
-	}}
-	ts := newTestServer(t, "root", mgr, nil)
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, ts.URL+"/v1/sandboxes/sb_1/volumes", strings.NewReader(`{"volumes":[]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Authorization", "Bearer root")
-	resp, err := ts.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	var got types.SandboxVolumesResponse
-	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusConflict || got.Error != message || len(got.States) != 1 || got.States[0].Error != cause {
-		t.Fatalf("status=%d view=%+v", resp.StatusCode, got)
+	for _, refusal := range []error{pool.ErrVolumeBusy, pool.ErrVolumeCapture} {
+		t.Run(refusal.Error(), func(t *testing.T) {
+			mgr := &fakeManager{setVolumes: func(string, string, []types.Volume) (types.SandboxVolumesResponse, error) {
+				return types.SandboxVolumesResponse{VolumesWant: []types.Volume{{Name: "old"}}, States: []types.VolumeState{{Name: "old", State: "pending", Error: cause}}, Error: "volume change failed; retry the desired target"}, fmt.Errorf("%w: volume %q", refusal, "data")
+			}}
+			ts := newTestServer(t, "root", mgr, nil)
+			resp := doReq(t, http.MethodPut, ts.URL+"/v1/sandboxes/sb_1/volumes", "root", `{"volumes":[]}`)
+			defer resp.Body.Close()
+			var got types.SandboxVolumesResponse
+			if err := json.UnmarshalRead(resp.Body, &got); err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != http.StatusConflict || !strings.HasPrefix(got.Error, refusal.Error()) || len(got.States) != 1 || got.States[0].Error != cause {
+				t.Fatalf("status=%d view=%+v", resp.StatusCode, got)
+			}
+		})
 	}
 }

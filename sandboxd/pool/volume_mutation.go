@@ -4,20 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-var errVolumeTargetNotAccepted = errors.New("new volume target not accepted")
-
 type volumeEdit func([]types.Volume) ([]types.Volume, error)
-
-type volumeDiagnostics struct {
-	error   string
-	volumes map[string]string
-}
 
 type volumeRun struct {
 	cancel context.CancelFunc
@@ -72,27 +66,18 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	if !ok || !tenantOwns(tenant, sb.Tenant) {
 		return view, ErrUnknownSandbox
 	}
-	if err = m.eng.CheckLiveVolumeSupport(ctx); err != nil {
-		view, _ = m.GetVolumes(id, tenant)
-		view.Error = ""
-		return view, err
+	var run *volumeRun
+	if err = m.eng.CheckLiveVolumeSupport(ctx); err == nil {
+		ctx, run, err = m.beginVolumeRun(ctx, sb)
 	}
-	ctx, run, err := m.beginVolumeRun(ctx, sb)
 	if err != nil {
 		view, _ = m.GetVolumes(id, tenant)
-		view.Error = ""
 		return view, err
 	}
 	failedName := ""
-	recordOutcome := false
 	defer func() {
-		if recordOutcome {
-			m.recordVolumeError(sb, run, failedName, err)
-		}
+		m.recordVolumeError(sb, run, failedName, err)
 		view = m.finishVolumeRun(sb, run)
-		if !recordOutcome {
-			view.Error = ""
-		}
 	}()
 	m.mu.Lock()
 	current, held := slices.Clone(sb.VolumesWant), heldVolumes(sb)
@@ -121,14 +106,12 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	if err = m.checkVolumeRun(ctx, sb, run); err != nil {
 		return view, err
 	}
-	recordOutcome = true
 	m.mu.Lock()
 	uncertain := volumeDifference(volumeDifference(sb.VolumesWant, sb.Volumes), target)
 	m.mu.Unlock()
 	for _, v := range uncertain {
 		failedName = v.Name
 		if err = m.detachVolumeRun(ctx, sb, run, v); err != nil {
-			err = fmt.Errorf("%w: %w", errVolumeTargetNotAccepted, err)
 			return view, err
 		}
 	}
@@ -383,8 +366,6 @@ func (m *Manager) hasVolumeHolds(sb *types.Sandbox) bool {
 
 func (m *Manager) volumeView(sb *types.Sandbox) types.SandboxVolumesResponse {
 	view := types.SandboxVolumesResponse{Volumes: slices.Clone(sb.Volumes), VolumesWant: slices.Clone(sb.VolumesWant), States: []types.VolumeState{}, Converging: m.volumeRuns[sb] != nil}
-	diagnostic := m.volumeErrors[sb]
-	view.Error = diagnostic.error
 	for _, v := range heldVolumes(sb) {
 		state := types.VolumeAttached
 		if volumeIndex(sb.VolumesWant, v.Name) < 0 {
@@ -392,7 +373,7 @@ func (m *Manager) volumeView(sb *types.Sandbox) types.SandboxVolumesResponse {
 		} else if volumeIndex(sb.Volumes, v.Name) < 0 {
 			state = types.VolumePending
 		}
-		message := diagnostic.volumes[v.Name]
+		message := m.volumeErrors[sb][v.Name]
 		if message == "" && state != types.VolumeAttached && !view.Converging {
 			message = "volume change interrupted; retry the desired target"
 		}
@@ -407,15 +388,8 @@ func (m *Manager) recordVolumeError(sb *types.Sandbox, run *volumeRun, name stri
 	if m.claimed[sb.ID] != sb || m.volumeRuns[sb] != run {
 		return
 	}
-	if m.volumeErrors == nil {
-		m.volumeErrors = make(map[*types.Sandbox]volumeDiagnostics)
-	}
-	diagnostic := m.volumeErrors[sb]
-	diagnostic.error = ""
-	if diagnostic.volumes == nil {
-		diagnostic.volumes = make(map[string]string)
-	}
-	if err != nil {
+	errs := m.volumeErrors[sb]
+	if err != nil && name != "" {
 		message := "volume change failed; retry the desired target"
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			message = "volume change interrupted; retry the desired target"
@@ -423,27 +397,28 @@ func (m *Manager) recordVolumeError(sb *types.Sandbox, run *volumeRun, name stri
 		if conflict, ok := errors.AsType[*engine.VolumeMountConflict](err); ok {
 			message = conflict.Error()
 		}
-		diagnostic.error = message
-		if errors.Is(err, errVolumeTargetNotAccepted) {
-			diagnostic.error = errVolumeTargetNotAccepted.Error() + ": " + message
+		if errs == nil {
+			errs = map[string]string{}
 		}
-		if name != "" {
-			diagnostic.volumes[name] = message
-		}
+		errs[name] = message
 	}
-	for name := range diagnostic.volumes {
-		if volumeIndex(heldVolumes(sb), name) < 0 {
-			delete(diagnostic.volumes, name)
-		}
+	held := heldVolumes(sb)
+	maps.DeleteFunc(errs, func(name, _ string) bool { return volumeIndex(held, name) < 0 })
+	if len(errs) == 0 {
+		delete(m.volumeErrors, sb)
+		return
 	}
-	m.volumeErrors[sb] = diagnostic
+	if m.volumeErrors == nil {
+		m.volumeErrors = map[*types.Sandbox]map[string]string{}
+	}
+	m.volumeErrors[sb] = errs
 }
 
 func (m *Manager) clearVolumeError(sb *types.Sandbox, run *volumeRun, name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.claimed[sb.ID] == sb && m.volumeRuns[sb] == run {
-		delete(m.volumeErrors[sb].volumes, name)
+		delete(m.volumeErrors[sb], name)
 	}
 }
 

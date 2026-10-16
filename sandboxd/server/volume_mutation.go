@@ -9,6 +9,7 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -36,29 +37,32 @@ func (s *Server) handleSandboxVolumes(w http.ResponseWriter, r *http.Request) {
 		}
 		view, err = s.mgr.PatchVolumes(r.Context(), id, tenant, req)
 	}
+	if errors.Is(err, pool.ErrUnknownSandbox) {
+		writePoolErr(w, err)
+		return
+	}
 	code := http.StatusOK
 	if err != nil {
-		message := view.Error
 		code, view.Error = http.StatusInternalServerError, "volume convergence failed; inspect the volume states before retrying"
-		for _, rule := range poolErrHTTP {
-			if errors.Is(err, rule.err) {
-				code, view.Error = rule.code, cmp.Or(rule.msg, err.Error())
-				break
-			}
-		}
-		var conflict *engine.VolumeMountConflict
-		var unsupported *engine.LiveVolumeUnsupported
+		conflict, isConflict := errors.AsType[*engine.VolumeMountConflict](err)
+		unsupported, isUnsupported := errors.AsType[*engine.LiveVolumeUnsupported](err)
 		switch {
-		case errors.As(err, &conflict):
+		case isConflict:
 			code, view.Error = http.StatusConflict, conflict.Error()
-		case errors.As(err, &unsupported):
+		case isUnsupported:
 			code, view.Error = http.StatusServiceUnavailable, unsupported.Error()
 		case errors.Is(err, context.DeadlineExceeded):
 			code, view.Error = http.StatusGatewayTimeout, "volume change timed out; inspect the volume states before retrying"
 		case errors.Is(err, context.Canceled):
 			code, view.Error = http.StatusRequestTimeout, "volume change canceled; inspect the volume states before retrying"
+		default:
+			for _, rule := range poolErrHTTP {
+				if errors.Is(err, rule.err) {
+					code, view.Error = rule.code, cmp.Or(rule.msg, err.Error())
+					break
+				}
+			}
 		}
-		view.Error = cmp.Or(message, view.Error)
 		if code >= http.StatusInternalServerError {
 			log.WithFunc("server.handleSandboxVolumes").Errorf(r.Context(), err, "converge volumes for %s", id)
 		}

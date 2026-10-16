@@ -276,8 +276,8 @@ All three arrays are present, including when empty. A state is `attached`
 when the volume is in both sets, `pending` when desired but not yet confirmed,
 or `detaching` when applied but no longer desired. An interrupted device call
 can leave the actual guest state different from the confirmed set. A failed
-convergence also includes a top-level `error` and may include an `error` on
-the affected state. `converging` is true only while a request worker is running.
+PUT or PATCH adds a top-level `error` naming the refusal, and the affected
+state may carry its own `error`. `converging` is true only while a request worker is running.
 `pending` with `converging: false` requires an explicit retry; there is no
 background convergence. GET retains the last safe per-volume error for the
 current daemon lifetime. After daemon restart, unfinished states report an
@@ -335,8 +335,8 @@ timeouts return 504 and cancellation returns 408.
 
 PUT and PATCH return the GET response shape on success. A convergence error
 returns a non-2xx status with the same view, so callers can inspect desired,
-applied, and per-volume state. Validation and authentication errors may carry
-only `error`. A failed request may already have persisted its target and
+applied, and per-volume state. Validation, authentication and unknown-sandbox
+errors carry only `error`. A failed request may already have persisted its target and
 completed some device changes. GET reads the last confirmed set, rather than
 probing the devices. Resolve guest mount references or runtime failures before
 retrying. Retry the same PUT to converge, or send a new

@@ -161,11 +161,11 @@ func TestVolumeDiagnosticsTrackActualWorkerAndRetry(t *testing.T) {
 		t.Fatal(checkErr)
 	}
 	view, err = m.GetVolumes(sb.ID, sb.Tenant)
-	if err != nil || view.Converging || view.Error == "" || view.States[0].Error == "" {
+	if err != nil || view.Converging || view.States[0].Error == "" {
 		t.Fatalf("completed worker diagnostics: %+v %v", view, err)
 	}
 	view, err = m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}})
-	if err != nil || view.Error != "" || view.States[0].Error != "" || view.Converging {
+	if err != nil || view.States[0].Error != "" || view.Converging {
 		t.Fatalf("successful retry retained errors: %+v %v", view, err)
 	}
 	conflict := &engine.VolumeMountConflict{Kind: engine.VolumeMountUnmountRefused, Mount: "/volumes/data"}
@@ -207,7 +207,7 @@ func TestRejectedVolumeTargetPreservesConvergenceDiagnostics(t *testing.T) {
 				t.Fatalf("invalid target: %v", checkErr)
 			}
 			after, err := m.GetVolumes(sb.ID, sb.Tenant)
-			if err != nil || after.Error != before.Error || !slices.Equal(after.States, before.States) || !slices.Equal(after.Volumes, before.Volumes) || !slices.Equal(after.VolumesWant, before.VolumesWant) {
+			if err != nil || !slices.Equal(after.States, before.States) || !slices.Equal(after.Volumes, before.Volumes) || !slices.Equal(after.VolumesWant, before.VolumesWant) {
 				t.Fatalf("rejected request changed convergence view: before=%+v after=%+v err=%v", before, after, err)
 			}
 		})
