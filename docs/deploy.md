@@ -177,10 +177,9 @@ create a new sandbox. Daemon restart recovery assumes the original VMM remains
 alive and does not recreate guest processes. Unfinished changes report an
 interrupted diagnostic after restart and require a caller retry.
 
-`e2e/cmd/volumesmoke` exercises GET, repeated full-set PUT, PATCH add and remove,
-and clearing a new claim. Its [hardware validation instructions](../e2e/cmd/volumesmoke/README.md)
-cover same-path replacement, guest mount conflicts, daemon restart and
-cancellation on an isolated node.
+`e2e/cmd/volumesmoke -live` (`VOLUME_LIVE=1` for `scripts/sandboxd-e2e.sh`)
+exercises GET, repeated full-set PUT, PATCH add and remove, and clearing a new
+claim.
 
 Each catalog path must name a disk image containing a mountable whole-device
 filesystem. Keep catalog names bound to the same image while any claim holds

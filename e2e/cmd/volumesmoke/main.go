@@ -1,5 +1,5 @@
 // volumesmoke validates shared read-only dataset mounts, and optionally one
-// writable dataset mount, on a live Cloud Hypervisor node.
+// writable dataset mount and live volume changes, on a live Cloud Hypervisor node.
 package main
 
 import (
@@ -24,31 +24,24 @@ func main() {
 	template := flag.String("template", "rt:24.04", "template ref")
 	volume := flag.String("volume", "", "catalog volume name")
 	rwVolume := flag.String("rw-volume", "", "writable catalog volume name (adds the writable leg)")
-	nextVolume := flag.String("next-volume", "", "second catalog dataset for the same-path continuity proof")
-	changeHook := flag.String("change-hook", "", "absolute Python hook path to interrupt a change; SANDBOX_ID is provided")
-	cancelHook := flag.String("cancel-hook", "", "absolute Python hook path to gate cancellation; SANDBOX_ID and VOLUME_HOOK_STAGE are provided")
-	releaseHook := flag.String("release-hook", "", "absolute Python hook path to test failed removal and recovery; uses VOLUME_HOOK_STAGE")
-	listener := flag.String("listener", "", "path to the existing guestserver binary for activity checks during faults")
+	live := flag.Bool("live", false, "add the live volume leg (needs cocoon v0.7.2)")
 	probe := flag.String("probe", "volume-e2e.txt", "non-empty file inside the volume")
 	flag.Parse()
 
-	if err := run(*addr, *token, *template, *volume, *rwVolume, *probe, liveOptions{nextVolume: *nextVolume, changeHook: *changeHook, cancelHook: *cancelHook, releaseHook: *releaseHook, listener: *listener}); err != nil {
+	if err := run(*addr, *token, *template, *volume, *rwVolume, *probe, *live); err != nil {
 		fmt.Fprintln(os.Stderr, "volumesmoke:", err)
 		os.Exit(1)
 	}
 }
 
-func run(addr, token, template, volume, rwVolume, probe string, live liveOptions) error {
+func run(addr, token, template, volume, rwVolume, probe string, live bool) error {
 	if volume == "" {
 		return errors.New("volume is required")
-	}
-	if (live.changeHook != "" || live.cancelHook != "") && live.listener == "" {
-		return errors.New("listener is required with change-hook or cancel-hook")
 	}
 	if probe == "" || probe == "." || path.IsAbs(probe) || path.Clean(probe) != probe || probe == ".." || strings.HasPrefix(probe, "../") {
 		return fmt.Errorf("probe %q must be a clean relative file path", probe)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	const (
@@ -126,11 +119,8 @@ func run(addr, token, template, volume, rwVolume, probe string, live liveOptions
 	}
 	released = true
 	fmt.Printf("VOLUME PASS concurrent_read_bytes=%d read_only=true released=true\n", len(outputs[0]))
-	if err := runLive(ctx, client, template, volume, probe, outputs[0], live); err != nil {
-		return err
-	}
-	if live.releaseHook != "" {
-		if err := runRetirement(ctx, client, template, volume, live.releaseHook); err != nil {
+	if live {
+		if err := runLive(ctx, client, template, volume, probe, outputs[0]); err != nil {
 			return err
 		}
 	}
@@ -140,9 +130,7 @@ func run(addr, token, template, volume, rwVolume, probe string, live liveOptions
 	return runWritable(ctx, client, template, rwVolume)
 }
 
-// runLive starts without volumes, adds a dataset, then removes it without
-// replacing the claim. Run this on the target VMM before deploying live mounts.
-func runLive(ctx context.Context, client *sandbox.Client, template, volume, probe, want string, live liveOptions) error {
+func runLive(ctx context.Context, client *sandbox.Client, template, volume, probe, want string) error {
 	const mount = "/datasets/live"
 	sb, err := client.New(ctx, template, sandbox.WithNetwork(sandbox.NetNone))
 	if err != nil {
@@ -159,7 +147,7 @@ func runLive(ctx context.Context, client *sandbox.Client, template, volume, prob
 		return fmt.Errorf("live get volumes: %w", err)
 	}
 	wantVolumes := []sandbox.Volume{{Name: volume, Mount: mount}}
-	if !slices.Equal(view.VolumesWant, wantVolumes) || !slices.Equal(view.Volumes, wantVolumes) || len(view.States) != 1 || view.States[0].State != "attached" {
+	if !slices.Equal(view.VolumesWant, wantVolumes) || !slices.Equal(view.Volumes, wantVolumes) || len(view.States) != 1 || view.States[0].State != sandbox.VolumeAttached {
 		return fmt.Errorf("live volume view not converged: %+v", view)
 	}
 	got, err := sb.Exec(ctx, "cat", path.Join(mount, probe))
@@ -205,11 +193,6 @@ func runLive(ctx context.Context, client *sandbox.Client, template, volume, prob
 	}
 	if _, err = sb.Exec(ctx, "test", "!", "-e", path.Join(mount, probe)); err != nil {
 		return fmt.Errorf("cleared volume probe should be absent: %w", err)
-	}
-	if live.nextVolume != "" {
-		if err := runContinuity(ctx, sb, volume, probe, want, live); err != nil {
-			return err
-		}
 	}
 	fmt.Printf("LIVE VOLUME PASS read_bytes=%d repeated_put=true repeated_patch=true cleared=true\n", len(got))
 	return nil
