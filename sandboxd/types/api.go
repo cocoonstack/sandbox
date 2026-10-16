@@ -87,10 +87,18 @@ type VolumePatch struct {
 	Remove []string `json:"remove,omitempty"`
 }
 
+type VolumePhase string
+
+const (
+	VolumeAttached  VolumePhase = "attached"
+	VolumePending   VolumePhase = "pending"
+	VolumeDetaching VolumePhase = "detaching"
+)
+
 type VolumeState struct {
-	Name  string `json:"name"`
-	State string `json:"state"`
-	Error string `json:"error,omitempty"`
+	Name  string      `json:"name"`
+	State VolumePhase `json:"state"`
+	Error string      `json:"error,omitempty"`
 }
 
 // SandboxVolumesResponse retains the desired and applied sets after a failure.
@@ -98,6 +106,7 @@ type SandboxVolumesResponse struct {
 	VolumesWant []Volume      `json:"volumes_want"`
 	Volumes     []Volume      `json:"volumes"`
 	States      []VolumeState `json:"states"`
+	Converging  bool          `json:"converging"`
 	Error       string        `json:"error,omitempty"`
 }
 

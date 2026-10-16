@@ -139,6 +139,7 @@ type Engine interface {
 	MarkLane(ctx context.Context, vsockSocket string, lane engine.Lane) error
 	Warmup(ctx context.Context, vsockSocket string, argv []string) error
 	TrimCow(ctx context.Context, vsockSocket string) error
+	CheckLiveVolumeSupport(ctx context.Context) error
 	DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error
 	DetachVolume(ctx context.Context, vmName, sock, name, mount string) error
 	MountVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
@@ -297,6 +298,7 @@ type Manager struct {
 	// volumeAdmission counts the live holders of each volume name; guarded by m.mu.
 	volumeAdmission map[string]volumeHolders
 	volumeRuns      map[*types.Sandbox]*volumeRun
+	volumeErrors    map[*types.Sandbox]volumeDiagnostics
 
 	poolStore *poolStore
 	// poolShared is the cell's pool set with a meta store; poolVersion, under m.mu, is its newest version applied.

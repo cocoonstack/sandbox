@@ -2602,9 +2602,9 @@ type checkpointClaimFunc func(string) (*types.Sandbox, error)
 type idActionFunc func(string) error
 
 type fakeManager struct {
-	getVolumes           func(string, pool.Cred) (types.SandboxVolumesResponse, error)
-	setVolumes           func(string, pool.Cred, []types.Volume) (types.SandboxVolumesResponse, error)
-	patchVolumes         func(string, pool.Cred, types.VolumePatch) (types.SandboxVolumesResponse, error)
+	getVolumes           func(string, string) (types.SandboxVolumesResponse, error)
+	setVolumes           func(string, string, []types.Volume) (types.SandboxVolumesResponse, error)
+	patchVolumes         func(string, string, types.VolumePatch) (types.SandboxVolumesResponse, error)
 	tenants              []config.TenantSpec
 	setTenants           func(specs []config.TenantSpec) error
 	putTenant            func(spec config.TenantSpec) error
@@ -2677,16 +2677,16 @@ type fakeManager struct {
 	draining           bool
 }
 
-func (f *fakeManager) GetVolumes(id string, cred pool.Cred) (types.SandboxVolumesResponse, error) {
-	return f.getVolumes(id, cred)
+func (f *fakeManager) GetVolumes(id, tenant string) (types.SandboxVolumesResponse, error) {
+	return f.getVolumes(id, tenant)
 }
 
-func (f *fakeManager) SetVolumes(_ context.Context, id string, cred pool.Cred, v []types.Volume) (types.SandboxVolumesResponse, error) {
-	return f.setVolumes(id, cred, v)
+func (f *fakeManager) SetVolumes(_ context.Context, id, tenant string, v []types.Volume) (types.SandboxVolumesResponse, error) {
+	return f.setVolumes(id, tenant, v)
 }
 
-func (f *fakeManager) PatchVolumes(_ context.Context, id string, cred pool.Cred, p types.VolumePatch) (types.SandboxVolumesResponse, error) {
-	return f.patchVolumes(id, cred, p)
+func (f *fakeManager) PatchVolumes(_ context.Context, id, tenant string, p types.VolumePatch) (types.SandboxVolumesResponse, error) {
+	return f.patchVolumes(id, tenant, p)
 }
 
 func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {

@@ -20,10 +20,9 @@ func TestLiveVolumesCommitAndRetry(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
-	cred := Cred{Token: sb.Token}
 	request := []types.Volume{{Name: "data"}, {Name: "other", Mount: "/models"}}
 	for range 2 {
-		got, err := m.SetVolumes(t.Context(), sb.ID, cred, request)
+		got, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request)
 		if err != nil || len(got.Volumes) != 2 || !slices.Equal(sb.VolumesWant, sb.Volumes) {
 			t.Fatalf("attach = %v, %v; pending=%v", got, err, sb.VolumesWant)
 		}
@@ -34,7 +33,7 @@ func TestLiveVolumesCommitAndRetry(t *testing.T) {
 	}
 	assertLiveJournal(t, m, sb)
 	for range 2 {
-		got, err := m.PatchVolumes(t.Context(), sb.ID, cred, types.VolumePatch{Remove: []string{"data", "other"}})
+		got, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data", "other"}})
 		if err != nil || len(got.Volumes) != 0 {
 			t.Fatalf("detach = %v, %v", got, err)
 		}
@@ -43,7 +42,7 @@ func TestLiveVolumesCommitAndRetry(t *testing.T) {
 	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{}) {
 		t.Fatalf("leaked holds: %+v", got)
 	}
-	if _, err := m.Checkpoint(t.Context(), sb.ID, cred, "after-detach", ""); err != nil {
+	if _, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "after-detach", ""); err != nil {
 		t.Fatalf("capture after detach: %v", err)
 	}
 }
@@ -57,17 +56,16 @@ func TestLiveAttachPreservesWritableAndAttachOnlyVolumes(t *testing.T) {
 			t.Fatal(err)
 		}
 		original := sb.Volumes[0]
-		cred := Cred{Token: sb.Token}
-		if _, err := m.PatchVolumes(t.Context(), sb.ID, cred, types.VolumePatch{Add: []types.Volume{{Name: "data"}}}); err != nil {
+		if _, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Add: []types.Volume{{Name: "data"}}}); err != nil {
 			t.Fatal(err)
 		}
 		if sb.Volumes[0] != original {
 			t.Fatalf("changed existing volume: %v -> %v", original, sb.Volumes[0])
 		}
-		if _, err := m.SetVolumes(t.Context(), sb.ID, cred, []types.Volume{{Name: "other", Mount: original.Mount}}); !errors.Is(err, ErrBadVolume) {
+		if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "other", Mount: original.Mount}}); !errors.Is(err, ErrBadVolume) {
 			t.Fatalf("accepted mode change: %v", err)
 		}
-		if _, err := m.PatchVolumes(t.Context(), sb.ID, cred, types.VolumePatch{Remove: []string{"data", "other"}}); !errors.Is(err, ErrBadVolume) || len(sb.Volumes) != 2 {
+		if _, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data", "other"}}); !errors.Is(err, ErrBadVolume) || len(sb.Volumes) != 2 {
 			t.Fatalf("writable detach changed the batch: %v", err)
 		}
 	}
@@ -77,7 +75,6 @@ func TestLiveVolumeValidationPrecedesDeviceCalls(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
-	cred := Cred{Token: sb.Token}
 	for _, request := range [][]types.Volume{
 		{{Name: "data", Mode: "rw"}},
 		{{Name: "data", AttachOnly: true}},
@@ -86,14 +83,14 @@ func TestLiveVolumeValidationPrecedesDeviceCalls(t *testing.T) {
 		{{Name: "data", Mount: "/a"}, {Name: "other", Mount: "/a/b"}},
 		{{Name: "missing"}},
 	} {
-		if _, err := m.SetVolumes(t.Context(), sb.ID, cred, request); !errors.Is(err, ErrBadVolume) {
+		if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request); !errors.Is(err, ErrBadVolume) {
 			t.Fatalf("request %v: %v", request, err)
 		}
 	}
-	if _, err := m.SetVolumes(t.Context(), sb.ID, Cred{Token: "wrong"}, []types.Volume{{Name: "data"}}); !errors.Is(err, ErrUnknownSandbox) {
-		t.Fatalf("wrong token: %v", err)
+	if _, err := m.SetVolumes(t.Context(), sb.ID, "wrong", []types.Volume{{Name: "data"}}); !errors.Is(err, ErrUnknownSandbox) {
+		t.Fatalf("wrong tenant: %v", err)
 	}
-	if _, err := m.PatchVolumes(t.Context(), sb.ID, cred, types.VolumePatch{Remove: []string{"data", "data"}}); !errors.Is(err, ErrBadVolume) {
+	if _, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data", "data"}}); !errors.Is(err, ErrBadVolume) {
 		t.Fatalf("duplicate detach: %v", err)
 	}
 	if len(eng.volumeSpecs) != 0 || !slices.Equal(sb.VolumesWant, sb.Volumes) {
@@ -107,7 +104,7 @@ func TestLiveAttachFailureSurvivesRestartAndCanBeDetached(t *testing.T) {
 	m := newVolumeManager(t, eng, catalog)
 	sb := mustClaim(t, m, testKey)
 	eng.mountVolumeErr = errors.New("guest unavailable after host attach")
-	if _, err := m.SetVolumes(t.Context(), sb.ID, Cred{Token: sb.Token}, []types.Volume{{Name: "data"}}); err == nil {
+	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); err == nil {
 		t.Fatal("want mount failure")
 	}
 	assertLiveJournal(t, m, sb)
@@ -121,16 +118,15 @@ func TestLiveAttachFailureSurvivesRestartAndCanBeDetached(t *testing.T) {
 	if volumeHoldersOf(m2, "data").readers != 1 {
 		t.Fatal("restart lost pending hold")
 	}
-	cred := Cred{Token: sb.Token}
-	if _, err := m2.Checkpoint(t.Context(), sb.ID, cred, "pending", ""); !errors.Is(err, ErrVolumeCapture) {
+	if _, err := m2.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "pending", ""); !errors.Is(err, ErrVolumeCapture) {
 		t.Fatalf("captured pending device: %v", err)
 	}
 	eng.detachVolumeErr = errors.New("host detach failed")
-	if _, err := m2.PatchVolumes(t.Context(), sb.ID, cred, types.VolumePatch{Remove: []string{"data"}}); err == nil || volumeHoldersOf(m2, "data").readers != 1 {
+	if _, err := m2.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data"}}); err == nil || volumeHoldersOf(m2, "data").readers != 1 {
 		t.Fatal("failed detach released its hold")
 	}
 	eng.detachVolumeErr = nil
-	if _, err := m2.PatchVolumes(t.Context(), sb.ID, cred, types.VolumePatch{Remove: []string{"data"}}); err != nil {
+	if _, err := m2.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data"}}); err != nil {
 		t.Fatal(err)
 	}
 	if volumeHoldersOf(m2, "data") != (volumeHolders{}) {
@@ -144,10 +140,9 @@ func TestLiveVolumePersistenceFailureRetainsRecoverableState(t *testing.T) {
 			eng := newFakeEngine()
 			m := newVolumeManager(t, eng, liveCatalog(t))
 			sb := mustClaim(t, m, testKey)
-			cred := Cred{Token: sb.Token}
 			request := []types.Volume{{Name: "data"}}
 			if stage == "detach result" {
-				if _, err := m.SetVolumes(t.Context(), sb.ID, cred, request); err != nil {
+				if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -166,9 +161,9 @@ func TestLiveVolumePersistenceFailureRetainsRecoverableState(t *testing.T) {
 			}
 			var err error
 			if stage == "detach result" {
-				_, err = m.PatchVolumes(t.Context(), sb.ID, cred, types.VolumePatch{Remove: []string{"data"}})
+				_, err = m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data"}})
 			} else {
-				_, err = m.SetVolumes(t.Context(), sb.ID, cred, request)
+				_, err = m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request)
 			}
 			if err == nil {
 				t.Fatal("expected persistence failure")
@@ -180,6 +175,7 @@ func TestLiveVolumePersistenceFailureRetainsRecoverableState(t *testing.T) {
 				t.Fatal(removeErr)
 			}
 			eng.liveVolumeHook = nil
+			waitFor(t, func() bool { return !m.recommitting.Load() })
 			if stage == "intent" {
 				if !slices.Equal(sb.VolumesWant, sb.Volumes) || len(eng.volumeSpecs) != 0 || volumeHoldersOf(m, "data") != (volumeHolders{}) {
 					t.Fatal("failed intent must not reach the engine or retain a hold")
@@ -190,9 +186,9 @@ func TestLiveVolumePersistenceFailureRetainsRecoverableState(t *testing.T) {
 				t.Fatal("uncommitted physical result lost its intent or hold")
 			}
 			if stage == "detach result" {
-				_, err = m.PatchVolumes(t.Context(), sb.ID, cred, types.VolumePatch{Remove: []string{"data"}})
+				_, err = m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data"}})
 			} else {
-				_, err = m.SetVolumes(t.Context(), sb.ID, cred, request)
+				_, err = m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -206,17 +202,16 @@ func TestLiveBatchPartialFailureRetriesWithoutDoubleHolds(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
-	cred := Cred{Token: sb.Token}
 	request := []types.Volume{{Name: "data"}, {Name: "other"}}
 	eng.diskAttachErrFor = "other"
-	if _, err := m.SetVolumes(t.Context(), sb.ID, cred, request); err == nil {
+	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request); err == nil {
 		t.Fatal("want partial failure")
 	}
 	if len(sb.Volumes) != 1 || slices.Equal(sb.VolumesWant, sb.Volumes) || len(sb.VolumesWant) != 2 {
 		t.Fatalf("partial state: %v %v", sb.Volumes, sb.VolumesWant)
 	}
 	eng.diskAttachErrFor = ""
-	if _, err := m.SetVolumes(t.Context(), sb.ID, cred, request); err != nil {
+	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"data", "other"} {
@@ -232,12 +227,11 @@ func TestLiveVolumeDoesNotBlockLifecycle(t *testing.T) {
 			eng := newFakeEngine()
 			m := newVolumeManager(t, eng, liveCatalog(t))
 			sb := mustClaim(t, m, testKey)
-			cred := Cred{Token: sb.Token}
 			entered, resume := make(chan struct{}), make(chan struct{})
 			eng.liveVolumeHook = func(string) error { close(entered); <-resume; return nil }
 			attached := make(chan error, 1)
 			go func() {
-				_, err := m.SetVolumes(t.Context(), sb.ID, cred, []types.Volume{{Name: "data"}})
+				_, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}})
 				attached <- err
 			}()
 			<-entered
@@ -247,24 +241,24 @@ func TestLiveVolumeDoesNotBlockLifecycle(t *testing.T) {
 				var err error
 				switch action {
 				case "release":
-					err = m.Release(t.Context(), sb.ID, cred)
+					err = m.Release(t.Context(), sb.ID, Cred{Token: sb.Token})
 				case "checkpoint":
-					_, err = m.Checkpoint(t.Context(), sb.ID, cred, "race", "")
+					_, err = m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "race", "")
 				case "fork":
-					_, err = m.Fork(t.Context(), sb.ID, cred, 1, 0, "", "")
+					_, err = m.Fork(t.Context(), sb.ID, Cred{Token: sb.Token}, 1, 0, "", "")
 				case "promote":
-					_, _, err = m.Promote(t.Context(), sb.ID, cred, "race", "")
+					_, _, err = m.Promote(t.Context(), sb.ID, Cred{Token: sb.Token}, "race", "")
 				case "hibernate":
-					err = m.Hibernate(t.Context(), sb.ID, cred)
+					err = m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token})
 				case "reap":
 					m.mu.Lock()
 					sb.Deadline = time.Now().Add(-time.Second)
 					m.mu.Unlock()
 					m.reapOnce(t.Context())
 				case "renew":
-					_, err = m.Renew(t.Context(), sb.ID, cred, time.Minute, "")
+					_, err = m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Minute, "")
 				case "get":
-					_, err = m.GetVolumes(sb.ID, cred)
+					_, err = m.GetVolumes(sb.ID, sb.Tenant)
 				case "relay":
 					var unhold func()
 					_, unhold, err = m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
@@ -318,7 +312,7 @@ func TestLiveVolumeCanceledRequestRetainsIntent(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 	ctx, cancel := context.WithCancel(t.Context())
 	eng.liveVolumeHook = func(string) error { cancel(); return nil }
-	_, err := m.SetVolumes(ctx, sb.ID, Cred{Token: sb.Token}, []types.Volume{{Name: "data"}})
+	_, err := m.SetVolumes(ctx, sb.ID, sb.Tenant, []types.Volume{{Name: "data"}})
 	if !errors.Is(err, context.Canceled) || slices.Equal(sb.VolumesWant, sb.Volumes) {
 		t.Fatalf("canceled attach: %v, pending=%v", err, sb.VolumesWant)
 	}
@@ -357,7 +351,7 @@ func TestLiveVolumeAdmissionAndState(t *testing.T) {
 				want = ErrVolumeBusy
 			}
 			before := len(eng.volumeSpecs)
-			_, err := m.SetVolumes(t.Context(), sb.ID, Cred{Token: sb.Token}, []types.Volume{{Name: "data"}})
+			_, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}})
 			if !errors.Is(err, want) || len(eng.volumeSpecs) != before || !slices.Equal(sb.VolumesWant, sb.Volumes) {
 				t.Fatalf("got %v want %v", err, want)
 			}
@@ -378,22 +372,21 @@ func TestLiveVolumesRespectOwningTenantAndRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cred := Cred{Token: sb.Token}
-	for _, auth := range []Cred{cred, {Operator: true}} {
+	for _, auth := range []string{sb.Tenant, ""} {
 		if _, err := m.SetVolumes(t.Context(), sb.ID, auth, []types.Volume{{Name: "other"}}); !errors.Is(err, ErrVolumeUnavailable) {
 			t.Fatalf("catalog ACL: %v", err)
 		}
 	}
-	if _, err := m.SetVolumes(t.Context(), sb.ID, cred, []types.Volume{{Name: "data"}}); err != nil {
+	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.DeleteTenant(t.Context(), "acme"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.SetVolumes(t.Context(), sb.ID, cred, []types.Volume{{Name: "data"}}); !errors.Is(err, ErrTenantRemoved) {
-		t.Fatalf("removed tenant: %v", err)
+	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data"}}); err != nil {
+		t.Fatalf("held volume after tenant removal: %v", err)
 	}
-	if _, err := m.PatchVolumes(t.Context(), sb.ID, cred, types.VolumePatch{Remove: []string{"data"}}); err != nil {
+	if _, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data"}}); err != nil {
 		t.Fatalf("cleanup after tenant removal: %v", err)
 	}
 }
@@ -467,13 +460,12 @@ func TestFailedDetachReaddRepairsAppliedMountAfterRestart(t *testing.T) {
 	catalog := liveCatalog(t)
 	m := newVolumeManager(t, eng, catalog)
 	sb := mustClaim(t, m, testKey)
-	cred := Cred{Token: sb.Token}
 	target := []types.Volume{{Name: "data"}}
-	if _, err := m.SetVolumes(t.Context(), sb.ID, cred, target); err != nil {
+	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, target); err != nil {
 		t.Fatal(err)
 	}
 	eng.detachVolumeErr = errors.New("eject did not complete")
-	view, err := m.SetVolumes(t.Context(), sb.ID, cred, nil)
+	view, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, nil)
 	if err == nil || len(view.Volumes) != 1 || len(view.VolumesWant) != 0 || view.States[0].State != "detaching" || view.States[0].Error == "" {
 		t.Fatalf("detach state=%+v error=%v", view, err)
 	}
@@ -483,7 +475,7 @@ func TestFailedDetachReaddRepairsAppliedMountAfterRestart(t *testing.T) {
 	}
 	before := len(eng.volumeMounts)
 	eng.detachVolumeErr = nil
-	view, err = m2.SetVolumes(t.Context(), sb.ID, cred, target)
+	view, err = m2.SetVolumes(t.Context(), sb.ID, sb.Tenant, target)
 	if err != nil || len(eng.volumeMounts) != before+1 || view.States[0].State != "attached" {
 		t.Fatalf("readd did not repair: %+v %v", view, err)
 	}
@@ -496,9 +488,8 @@ func TestSupersedingTargetPrecleansUncertainAddBeforeJournaling(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
-	cred := Cred{Token: sb.Token}
 	eng.mountVolumeErr = errors.New("mount interrupted")
-	if _, err := m.SetVolumes(t.Context(), sb.ID, cred, []types.Volume{{Name: "data"}}); err == nil {
+	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); err == nil {
 		t.Fatal("expected attach failure")
 	}
 	eng.mountVolumeErr = nil
@@ -511,9 +502,12 @@ func TestSupersedingTargetPrecleansUncertainAddBeforeJournaling(t *testing.T) {
 		return nil
 	}
 	done := make(chan error, 1)
-	go func() { _, err := m.SetVolumes(t.Context(), sb.ID, cred, []types.Volume{{Name: "other"}}); done <- err }()
+	go func() {
+		_, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "other"}})
+		done <- err
+	}()
 	<-entered
-	view, err := m.GetVolumes(sb.ID, cred)
+	view, err := m.GetVolumes(sb.ID, sb.Tenant)
 	if err != nil || len(view.VolumesWant) != 1 || view.VolumesWant[0].Name != "data" || volumeHoldersOf(m, "data").readers != 1 {
 		t.Errorf("forgot uncertain disk before detach: %+v %v", view, err)
 	}
@@ -547,17 +541,16 @@ func TestCanceledVolumeWriterOwnsHardwareUntilReturn(t *testing.T) {
 	base := newFakeEngine()
 	m := newVolumeManager(t, base, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
-	cred := Cred{Token: sb.Token}
 	eng := &gatedVolumeEngine{fakeEngine: base, entered: make(chan struct{}), resume: make(chan struct{})}
 	m.eng = eng
 	ctx, cancel := context.WithCancel(t.Context())
 	first := make(chan error, 1)
-	go func() { _, err := m.SetVolumes(ctx, sb.ID, cred, []types.Volume{{Name: "data"}}); first <- err }()
+	go func() { _, err := m.SetVolumes(ctx, sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); first <- err }()
 	<-eng.entered
 	cancel()
 	waitingCtx, stopWaiting := context.WithTimeout(t.Context(), 25*time.Millisecond)
 	defer stopWaiting()
-	_, err := m.PatchVolumes(waitingCtx, sb.ID, cred, types.VolumePatch{Add: []types.Volume{{Name: "other"}}})
+	_, err := m.PatchVolumes(waitingCtx, sb.ID, sb.Tenant, types.VolumePatch{Add: []types.Volume{{Name: "other"}}})
 	if !errors.Is(err, context.DeadlineExceeded) || eng.calls.Load() != 1 {
 		t.Fatalf("new writer overtook canceled device call: %v calls=%d", err, eng.calls.Load())
 	}
@@ -568,7 +561,7 @@ func TestCanceledVolumeWriterOwnsHardwareUntilReturn(t *testing.T) {
 	if len(base.volumeMounts) != 0 {
 		t.Fatal("canceled writer issued another device call")
 	}
-	view, err := m.PatchVolumes(t.Context(), sb.ID, cred, types.VolumePatch{Add: []types.Volume{{Name: "other"}}})
+	view, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Add: []types.Volume{{Name: "other"}}})
 	if err != nil || len(view.Volumes) != 2 {
 		t.Fatalf("retry lost prior desired state: %+v %v", view, err)
 	}
@@ -578,18 +571,17 @@ func TestReleaseOwnsUncertainHoldsUntilVMRemoval(t *testing.T) {
 	base := newFakeEngine()
 	m := newVolumeManager(t, base, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
-	cred := Cred{Token: sb.Token}
 	eng := &gatedVolumeEngine{fakeEngine: base, entered: make(chan struct{}), resume: make(chan struct{})}
 	m.eng = eng
 	base.removeErrFor = sb.VMName
 	changed := make(chan error, 1)
 	go func() {
-		_, err := m.SetVolumes(t.Context(), sb.ID, cred, []types.Volume{{Name: "data"}})
+		_, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}})
 		changed <- err
 	}()
 	<-eng.entered
 	released := make(chan error, 1)
-	go func() { released <- m.Release(t.Context(), sb.ID, cred) }()
+	go func() { released <- m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}) }()
 	select {
 	case err := <-released:
 		if err == nil {
@@ -624,18 +616,17 @@ func TestConcurrentVolumePatchesUseLatestDesiredSet(t *testing.T) {
 	base := newFakeEngine()
 	m := newVolumeManager(t, base, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
-	cred := Cred{Token: sb.Token}
 	eng := &gatedVolumeEngine{fakeEngine: base, entered: make(chan struct{}), resume: make(chan struct{})}
 	m.eng = eng
 	first := make(chan error, 1)
 	go func() {
-		_, err := m.PatchVolumes(t.Context(), sb.ID, cred, types.VolumePatch{Add: []types.Volume{{Name: "data"}}})
+		_, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Add: []types.Volume{{Name: "data"}}})
 		first <- err
 	}()
 	<-eng.entered
 	second := make(chan error, 1)
 	go func() {
-		_, err := m.PatchVolumes(t.Context(), sb.ID, cred, types.VolumePatch{Add: []types.Volume{{Name: "other"}}})
+		_, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Add: []types.Volume{{Name: "other"}}})
 		second <- err
 	}()
 	close(eng.resume)
@@ -645,7 +636,7 @@ func TestConcurrentVolumePatchesUseLatestDesiredSet(t *testing.T) {
 	if err := <-second; err != nil {
 		t.Fatal(err)
 	}
-	view, err := m.GetVolumes(sb.ID, cred)
+	view, err := m.GetVolumes(sb.ID, sb.Tenant)
 	if err != nil || len(view.Volumes) != 2 || len(view.VolumesWant) != 2 {
 		t.Fatalf("lost concurrent patch: %+v %v", view, err)
 	}
@@ -660,19 +651,18 @@ func TestSyncIntentFailureRetainsConservativeDesiredHold(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
-	cred := Cred{Token: sb.Token}
 	m.store.sync = true
 	if err := os.Mkdir(m.store.path+".tmp", 0o700); err != nil {
 		t.Fatal(err)
 	}
-	view, err := m.SetVolumes(t.Context(), sb.ID, cred, []types.Volume{{Name: "data"}})
+	view, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}})
 	if err == nil || len(view.VolumesWant) != 1 || len(view.Volumes) != 0 || len(eng.volumeSpecs) != 0 || volumeHoldersOf(m, "data").readers != 1 {
 		t.Fatalf("ambiguous write lost recovery state: %+v %v", view, err)
 	}
 	if err := os.Remove(m.store.path + ".tmp"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.SetVolumes(t.Context(), sb.ID, cred, nil); err != nil {
+	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, nil); err != nil {
 		t.Fatal(err)
 	}
 	if volumeHoldersOf(m, "data") != (volumeHolders{}) {
@@ -687,7 +677,6 @@ func TestFailedReleaseRestoresVolumeHoldOwnership(t *testing.T) {
 				eng := newFakeEngine()
 				m := newVolumeManager(t, eng, liveCatalog(t))
 				sb := mustClaim(t, m, testKey)
-				cred := Cred{Token: sb.Token}
 				_, run, err := m.beginVolumeRun(t.Context(), sb)
 				if err != nil {
 					t.Fatal(err)
@@ -712,7 +701,7 @@ func TestFailedReleaseRestoresVolumeHoldOwnership(t *testing.T) {
 						m.reapOnce(t.Context())
 						done <- nil
 					} else {
-						done <- m.Release(t.Context(), sb.ID, cred)
+						done <- m.Release(t.Context(), sb.ID, Cred{Token: sb.Token})
 					}
 				}()
 				waitFor(t, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.claimed[sb.ID] == nil })
@@ -743,7 +732,7 @@ func TestFailedReleaseRestoresVolumeHoldOwnership(t *testing.T) {
 					t.Fatal(err)
 				}
 				waitFor(t, func() bool { return !m.recommitting.Load() })
-				if _, err := m.SetVolumes(t.Context(), sb.ID, cred, []types.Volume{{Name: "data"}}); err != nil {
+				if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); err != nil {
 					t.Fatal(err)
 				}
 				if volumeHoldersOf(m, "data").readers != 1 {
@@ -758,7 +747,6 @@ func TestArchiveRenewRejectsAdmittedUnpublishedVolumes(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
-	cred := Cred{Token: sb.Token}
 	_, run, err := m.beginVolumeRun(t.Context(), sb)
 	if err != nil {
 		t.Fatal(err)
@@ -770,11 +758,11 @@ func TestArchiveRenewRejectsAdmittedUnpublishedVolumes(t *testing.T) {
 	}
 	run.holds = append(run.holds, transient...)
 	m.mu.Unlock()
-	if _, err := m.Renew(t.Context(), sb.ID, cred, time.Minute, types.ExpireArchive); !errors.Is(err, ErrVolumeCapture) {
+	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Minute, types.ExpireArchive); !errors.Is(err, ErrVolumeCapture) {
 		t.Fatalf("archive admitted during volume intent: %v", err)
 	}
 	m.finishVolumeRun(sb, run)
-	if _, err := m.Renew(t.Context(), sb.ID, cred, time.Minute, types.ExpireArchive); err != nil {
+	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Minute, types.ExpireArchive); err != nil {
 		t.Fatalf("archive still blocked after abandoned intent: %v", err)
 	}
 }
@@ -797,7 +785,7 @@ func TestLiveAttachBoundsWholeDeviceOperation(t *testing.T) {
 	eng := &deadlineVolumeEngine{fakeEngine: base, deadlines: make(chan time.Time, 1)}
 	m.eng = eng
 	start := time.Now()
-	if _, err := m.SetVolumes(t.Context(), sb.ID, Cred{Token: sb.Token}, []types.Volume{{Name: "data"}}); err != nil {
+	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := <-eng.deadlines
@@ -840,14 +828,13 @@ func TestRemovedTenantCanRemoveReadOnlyVolumeBesideImmutableVolume(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cred := Cred{Token: sb.Token}
-	if _, err = m.PatchVolumes(t.Context(), sb.ID, cred, types.VolumePatch{Add: []types.Volume{{Name: "data"}}}); err != nil {
+	if _, err = m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Add: []types.Volume{{Name: "data"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err = m.DeleteTenant(t.Context(), "acme"); err != nil {
 		t.Fatal(err)
 	}
-	view, err := m.PatchVolumes(t.Context(), sb.ID, cred, types.VolumePatch{Remove: []string{"data"}})
+	view, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data"}})
 	if err != nil || len(view.Volumes) != 1 || view.Volumes[0].Name != "other" || !view.Volumes[0].RW() {
 		t.Fatalf("removed tenant cleanup=%+v %v", view, err)
 	}

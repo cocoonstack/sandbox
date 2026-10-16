@@ -392,6 +392,10 @@ func (m *Manager) captureAllowed(sb *types.Sandbox) error {
 // exportSource captures a claimed sandbox into exportDir and returns its snapshot, VM name and guest-env presence.
 func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir string) (snap, vmName string, guestEnv bool, err error) {
 	sb.Transition.Lock()
+	if captureErr := m.captureAllowed(sb); captureErr != nil {
+		sb.Transition.Unlock()
+		return "", "", false, captureErr
+	}
 	m.trimForCapture(ctx, sb)
 	snap, cleanup, err := m.sourceSnap(ctx, sb)
 	if err != nil {

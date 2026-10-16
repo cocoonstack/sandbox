@@ -1656,6 +1656,8 @@ func (f *fakeEngine) TrimCow(_ context.Context, sock string) error {
 	return f.trimErr
 }
 
+func (f *fakeEngine) CheckLiveVolumeSupport(context.Context) error { return nil }
+
 func (f *fakeEngine) DiskAttach(ctx context.Context, _ string, spec engine.VolumeSpec) error {
 	if f.liveVolumeHook != nil {
 		if err := f.liveVolumeHook("attach"); err != nil {

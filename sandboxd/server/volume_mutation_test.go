@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"io"
@@ -9,48 +10,53 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 func TestLiveVolumeRoutesAuthorizeAndDecode(t *testing.T) {
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodPatch} {
-		for _, token := range []string{"sandbox-token", "root-token"} {
+		for _, token := range []string{"acme-token", "root-token"} {
 			t.Run(method+"/"+token, func(t *testing.T) {
 				called := false
-				check := func(id string, cred pool.Cred) {
+				check := func(id, tenant string) {
 					called = true
-					if id != "sb_1" || cred.Operator != (token == "root-token") || !cred.Operator && cred.Token != token {
-						t.Errorf("credentials %s %+v", id, cred)
+					if id != "sb_1" || tenant != map[string]string{"root-token": "", "acme-token": "acme"}[token] {
+						t.Errorf("scope %s %q", id, tenant)
 					}
 				}
 				view := types.SandboxVolumesResponse{VolumesWant: []types.Volume{{Name: "data"}}, States: []types.VolumeState{{Name: "data", State: "pending"}}}
 				mgr := &fakeManager{
-					getVolumes: func(id string, cred pool.Cred) (types.SandboxVolumesResponse, error) {
-						check(id, cred)
+					getVolumes: func(id, tenant string) (types.SandboxVolumesResponse, error) {
+						check(id, tenant)
 						return view, nil
 					},
-					setVolumes: func(id string, cred pool.Cred, v []types.Volume) (types.SandboxVolumesResponse, error) {
-						check(id, cred)
+					setVolumes: func(id, tenant string, v []types.Volume) (types.SandboxVolumesResponse, error) {
+						check(id, tenant)
 						if !slices.Equal(v, []types.Volume{{Name: "data"}}) {
 							t.Errorf("volumes %v", v)
 						}
 						return view, nil
 					},
-					patchVolumes: func(id string, cred pool.Cred, p types.VolumePatch) (types.SandboxVolumesResponse, error) {
-						check(id, cred)
+					patchVolumes: func(id, tenant string, p types.VolumePatch) (types.SandboxVolumesResponse, error) {
+						check(id, tenant)
 						if !slices.Equal(p.Remove, []string{"data"}) {
 							t.Errorf("patch %v", p)
 						}
 						return view, nil
 					},
 				}
-				ts := newTestServer(t, "root-token", mgr, nil)
+				ts := newTenantTestServer(t, "root-token", []config.TenantSpec{{Name: "acme", Token: "acme-token"}}, mgr, nil)
 				body := `{"volumes":[{"name":"data"}]}`
 				if method == http.MethodPatch {
 					body = `{"remove":["data"]}`
 				}
-				req, _ := http.NewRequest(method, ts.URL+"/v1/sandboxes/sb_1/volumes", strings.NewReader(body))
+				req, err := http.NewRequestWithContext(t.Context(), method, ts.URL+"/v1/sandboxes/sb_1/volumes", strings.NewReader(body))
+				if err != nil {
+					t.Fatal(err)
+				}
 				req.Header.Set("Authorization", "Bearer "+token)
 				resp, err := ts.Client().Do(req)
 				if err != nil {
@@ -76,21 +82,33 @@ func TestLiveVolumeRoutesErrors(t *testing.T) {
 		code              int
 	}{
 		{"missing token", "", `{"volumes":[]}`, nil, http.StatusUnauthorized},
-		{"unknown field", "tok", `{"volumes":[],"path":"/host"}`, nil, http.StatusBadRequest},
-		{"missing volumes", "tok", `{}`, nil, http.StatusBadRequest},
-		{"null volumes", "tok", `{"volumes":null}`, nil, http.StatusBadRequest},
-		{"wrong sandbox", "tok", `{"volumes":[]}`, pool.ErrUnknownSandbox, http.StatusNotFound},
-		{"bad volume", "tok", `{"volumes":[]}`, pool.ErrBadVolume, http.StatusBadRequest},
-		{"paused", "tok", `{"volumes":[]}`, pool.ErrPaused, http.StatusConflict},
-		{"failed", "tok", `{"volumes":[]}`, pool.ErrFailed, http.StatusConflict},
-		{"engine", "tok", `{"volumes":[]}`, errors.New("host /private/image failed"), http.StatusInternalServerError},
+		{"unknown field", "root", `{"volumes":[],"path":"/host"}`, nil, http.StatusBadRequest},
+		{"missing volumes", "root", `{}`, nil, http.StatusBadRequest},
+		{"null volumes", "root", `{"volumes":null}`, nil, http.StatusBadRequest},
+		{"wrong sandbox", "root", `{"volumes":[]}`, pool.ErrUnknownSandbox, http.StatusNotFound},
+		{"bad volume", "root", `{"volumes":[]}`, pool.ErrBadVolume, http.StatusBadRequest},
+		{"paused", "root", `{"volumes":[]}`, pool.ErrPaused, http.StatusConflict},
+		{"failed", "root", `{"volumes":[]}`, pool.ErrFailed, http.StatusConflict},
+		{"sandbox token", "sandbox-token", `{"volumes":[]}`, nil, http.StatusUnauthorized},
+		{"invalid token", "invalid", `{"volumes":[]}`, nil, http.StatusUnauthorized},
+		{"foreign mount", "root", `{"volumes":[]}`, &engine.VolumeMountConflict{Kind: engine.VolumeMountForeign, Mount: "/data"}, http.StatusConflict},
+		{"bind mount", "root", `{"volumes":[]}`, &engine.VolumeMountConflict{Kind: engine.VolumeMountBind, Mount: "/other"}, http.StatusConflict},
+		{"unmount refused", "root", `{"volumes":[]}`, &engine.VolumeMountConflict{Kind: engine.VolumeMountUnmountRefused, Mount: "/data"}, http.StatusConflict},
+		{"unsupported runtime", "root", `{"volumes":[]}`, &engine.LiveVolumeUnsupported{Version: "v0.7.1"}, http.StatusServiceUnavailable},
+		{"unknown runtime", "root", `{"volumes":[]}`, &engine.LiveVolumeUnsupported{Err: errors.New("host /private/version failed")}, http.StatusServiceUnavailable},
+		{"timeout", "root", `{"volumes":[]}`, context.DeadlineExceeded, http.StatusGatewayTimeout},
+		{"cancel", "root", `{"volumes":[]}`, context.Canceled, http.StatusRequestTimeout},
+		{"engine", "root", `{"volumes":[]}`, errors.New("host /private/image failed"), http.StatusInternalServerError},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			mgr := &fakeManager{setVolumes: func(string, pool.Cred, []types.Volume) (types.SandboxVolumesResponse, error) {
-				return types.SandboxVolumesResponse{VolumesWant: []types.Volume{{Name: "data"}}, States: []types.VolumeState{{Name: "data", State: "pending", Error: "host /private/image failed"}}}, tt.err
+			mgr := &fakeManager{setVolumes: func(string, string, []types.Volume) (types.SandboxVolumesResponse, error) {
+				return types.SandboxVolumesResponse{VolumesWant: []types.Volume{{Name: "data"}}, States: []types.VolumeState{{Name: "data", State: "pending", Error: "volume operation failed; retry after resolving the runtime error"}}}, tt.err
 			}}
 			ts := newTestServer(t, "root", mgr, nil)
-			req, _ := http.NewRequest(http.MethodPut, ts.URL+"/v1/sandboxes/sb_1/volumes", strings.NewReader(tt.body))
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, ts.URL+"/v1/sandboxes/sb_1/volumes", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatal(err)
+			}
 			if tt.token != "" {
 				req.Header.Set("Authorization", "Bearer "+tt.token)
 			}
@@ -105,10 +123,76 @@ func TestLiveVolumeRoutesErrors(t *testing.T) {
 			}
 			if tt.err != nil {
 				var got types.SandboxVolumesResponse
-				if err := json.Unmarshal(body, &got); err != nil || len(got.VolumesWant) != 1 || len(got.States) != 1 || got.Error == "" {
+				if err := json.Unmarshal(body, &got); err != nil || len(got.VolumesWant) != 1 || len(got.States) != 1 || got.Error == "" || got.States[0].Error != "volume operation failed; retry after resolving the runtime error" {
 					t.Fatalf("lost partial state: %s %v", body, err)
 				}
 			}
 		})
+	}
+}
+
+func TestLiveVolumeRoutesHideOtherTenants(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			check := func(id, tenant string) (types.SandboxVolumesResponse, error) {
+				if id != "sb_1" || tenant != "other" {
+					t.Fatalf("scope %s %q", id, tenant)
+				}
+				return types.SandboxVolumesResponse{}, pool.ErrUnknownSandbox
+			}
+			mgr := &fakeManager{
+				getVolumes: check,
+				setVolumes: func(id, tenant string, _ []types.Volume) (types.SandboxVolumesResponse, error) {
+					return check(id, tenant)
+				},
+				patchVolumes: func(id, tenant string, _ types.VolumePatch) (types.SandboxVolumesResponse, error) {
+					return check(id, tenant)
+				},
+			}
+			ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "other", Token: "other-token"}}, mgr, nil)
+			body := `{"volumes":[]}`
+			if method == http.MethodPatch {
+				body = `{}`
+			}
+			req, err := http.NewRequestWithContext(t.Context(), method, ts.URL+"/v1/sandboxes/sb_1/volumes", strings.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", "Bearer other-token")
+			resp, err := ts.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusNotFound {
+				t.Fatalf("status %d", resp.StatusCode)
+			}
+		})
+	}
+}
+
+func TestLiveVolumeRoutesPreserveSafeTargetOutcome(t *testing.T) {
+	const message = "new volume target not accepted; cleanup of the previous pending volume failed"
+	const cause = "cannot unmount /data; close guest references and retry"
+	mgr := &fakeManager{setVolumes: func(string, string, []types.Volume) (types.SandboxVolumesResponse, error) {
+		return types.SandboxVolumesResponse{VolumesWant: []types.Volume{{Name: "old"}}, States: []types.VolumeState{{Name: "old", State: "pending", Error: cause}}, Error: message}, &engine.VolumeMountConflict{Kind: engine.VolumeMountUnmountRefused, Mount: "/data"}
+	}}
+	ts := newTestServer(t, "root", mgr, nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, ts.URL+"/v1/sandboxes/sb_1/volumes", strings.NewReader(`{"volumes":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer root")
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got types.SandboxVolumesResponse
+	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusConflict || got.Error != message || len(got.States) != 1 || got.States[0].Error != cause {
+		t.Fatalf("status=%d view=%+v", resp.StatusCode, got)
 	}
 }
