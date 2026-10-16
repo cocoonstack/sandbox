@@ -31,7 +31,7 @@ func TestLiveVolumesEndToEnd(t *testing.T) {
 			t.Fatalf("detach: %v %v", got, err)
 		}
 	}
-	want := []string{"attach:dataset:ro", "mount:dataset:/volumes/dataset:ro", "attach:dataset:ro", "mount:dataset:/volumes/dataset:ro", "umount:/volumes/dataset", "detach:dataset"}
+	want := []string{"attach:dataset:ro", "mount:dataset:/volumes/dataset:ro", "umount:/volumes/dataset", "detach:dataset"}
 	if ops := stack.eng.volumeOpsLog(); !slices.Equal(ops, want) {
 		t.Fatalf("device operations=%v want=%v", ops, want)
 	}
