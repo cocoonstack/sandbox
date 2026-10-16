@@ -693,6 +693,18 @@ func TestArchiveRenewRejectsAdmittedUnpublishedVolumes(t *testing.T) {
 	}
 }
 
+func TestRollbackClaimTakesOverAdmittedRunHolds(t *testing.T) {
+	eng := newFakeEngine()
+	m := newVolumeManager(t, eng, liveCatalog(t))
+	sb := mustClaim(t, m, testKey)
+	run := beginAdmittedVolumeRun(t, m, sb)
+	m.rollbackClaim(t.Context(), []*types.Sandbox{sb})
+	m.finishVolumeRun(sb, run)
+	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{}) {
+		t.Fatalf("rolled-back claim leaked its admitted hold: %+v", got)
+	}
+}
+
 func TestLiveAttachBoundsWholeDeviceOperation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		base := newFakeEngine()

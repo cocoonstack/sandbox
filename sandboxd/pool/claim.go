@@ -477,7 +477,9 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	m.mu.Lock()
 	ids := make([]string, len(sbs))
+	holds := make([][]types.Volume, len(sbs))
 	for i, sb := range sbs {
+		holds[i] = m.cancelVolumeRun(sb)
 		delete(m.claimed, sb.ID)
 		m.tenantDelta(sb.Tenant, -1)
 		ids[i] = sb.ID
@@ -485,8 +487,9 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	rb := m.store.del(ids...)
 	m.mu.Unlock()
 	m.recommit(ctx, rb)
-	for _, sb := range sbs {
+	for i, sb := range sbs {
 		td := m.quiesceVolumes(ctx, sb)
+		td.holds = holds[i]
 		m.out.Disarm(sb.ID, m.removeOrRetry(ctx, sb.VMName, sb.ID, "", td))
 	}
 }
